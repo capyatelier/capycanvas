@@ -1,4 +1,4 @@
-import {dropdownChoice} from './dropdown-fixture.mjs';
+import {clickDropdownChoice} from './dropdown-fixture.mjs';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {readPackage,packageOccurrences} from './package-fixture.test.mjs';
@@ -49,7 +49,7 @@ export async function checkGradientDefinitions({call,evaluate,settle}) {
   const invoke=command=>send({type:'invoke',command});
   const key=async(key,code=key,windowsVirtualKeyCode)=>{for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key,code,windowsVirtualKeyCode});await settle();};
   const click=async selector=>{const p=await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});if(!n)throw Error(${JSON.stringify(selector)});n.scrollIntoView({block:'nearest'});const r=n.getBoundingClientRect();if(!r.width||!r.height)throw Error('Hidden '+${JSON.stringify(selector)});const x=r.x+r.width/2,y=r.y+r.height/2,hit=document.elementFromPoint(x,y);if(!hit||!(n===hit||n.contains(hit)))throw Error('Obstructed '+${JSON.stringify(selector)});return{x,y}})()`);for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});await settle();};
-  const select=async(selector,index)=>{await evaluate(dropdownChoice(selector,index,'index'));await settle();};
+  const select=async(selector,index)=>{const enclosing=await evaluate(`!!document.querySelector(${JSON.stringify(selector)}).closest('.toolbar-editor-popover:popover-open')`);await clickDropdownChoice({call,evaluate,settle},selector,index,'index');if(enclosing)assert.equal(await evaluate(`!!document.querySelector('.toolbar-editor-popover:popover-open')`),true,'Interpolation choice retains the enclosing gradient popup');};
   const typeValue=async(selector,text,finish='Enter')=>{await click(selector);for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});await call('Input.insertText',{text});await key(finish,finish,finish==='Tab'?9:finish==='Escape'?27:13);};
   const capture=async name=>{const {data}=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/${name}.png`,Buffer.from(data,'base64'));};
   const phase=process.env.LAYER_GRADIENT_PHASE;
@@ -233,6 +233,7 @@ export async function checkGradientDefinitions({call,evaluate,settle}) {
     await click('.toolbar-gradient > button');
     assert.equal(await evaluate(`!!document.querySelector('.toolbar-editor-popover:popover-open .gradient-editor')`),true,'Toolbar popup presents the common gradient editor');
     assert.equal(await evaluate(`!!document.querySelector('.toolbar-editor-popover:popover-open [data-toolbar-choice]')`),false,'Toolbar shape remains outside the gradient popup');
+    const interpolationBefore=(await definition()).interpolation;for(const [index,value] of ['Oklab','LinearRgb','Classic'].entries()){await select('.toolbar-editor-popover:popover-open [data-gradient-interpolation]',index);assert.equal((await definition()).interpolation,value);}await select('.toolbar-editor-popover:popover-open [data-gradient-interpolation]',['Oklab','LinearRgb','Classic'].indexOf(interpolationBefore));
     const popupOriginal=await definition();await click('.toolbar-editor-popover:popover-open [data-gradient-action=reverse]');assert.deepEqual((await definition()).stops.map(stop=>stop.color),popupOriginal.stops.map(stop=>stop.color).reverse());await click('.toolbar-editor-popover:popover-open [data-gradient-action=reverse]');assert.deepEqual(await definition(),popupOriginal);
     await capture(`toolbar-popup-${width}-${theme}`);
     await key('Tab','Tab',9);await key('Tab','Tab',9);

@@ -1,3 +1,4 @@
+import {dropdownFactory,dropdownChoices,chooseDropdown} from './dropdown-test-fixture.mjs';
 import { bindCopy,refreshCopy,refreshBindings } from "./localization.js";
 import { FakeElement as SharedElement } from "./fake-dom.mjs";
 import assert from "node:assert/strict";
@@ -23,7 +24,6 @@ class FakeElement extends SharedElement {
   getContext(){return {putImageData:image=>{this.image=image;}};}
   set ariaLabel(value){this.setAttribute("aria-label",value);}
   get ariaLabel(){return this.getAttribute("aria-label");}
-  get options() { return this.children.filter(n => n.tagName === "OPTION"); }
   replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
   closest(selector) { for (let n = this; n; n = n.parentNode) if (n.tagName === selector.toUpperCase()) return n; return null; }
   querySelectorAll(selector) {
@@ -122,10 +122,10 @@ function fakeApp({ extent = [20000, 400], photo = false } = {}) {
 
 async function openDialog(app) {
   let form;
-  const result = chooseExport({ app, element, button, numberField, id: 7, gpuOperation: run => run(),
+  const result = chooseExport({ app, element, button, dropdown:dropdownFactory({element,button}), numberField, id: 7, gpuOperation: run => run(),
     dialog: (title, build) => new Promise(resolve => { form = element("form"); build(form, resolve); }) });
   while (!form) await new Promise(resolve => setImmediate(resolve));
-  const labelled = name => form.querySelectorAll("select,input").find(n => n.getAttribute("aria-label") === name);
+  const labelled = name => form.querySelectorAll("button,input").find(n => n.getAttribute("aria-label") === name);
   const pressed = name => form.querySelectorAll("button").find(n => n.textContent === name);
   const error = form.children.find(n => n.className === "error-message");
   return { form, result, labelled, pressed, error };
@@ -142,12 +142,12 @@ test("choosing WebP drafts 8-bit output through the shared recipe", async () => 
   const app = fakeApp({ extent: [800, 600] });
   const dialog = await openDialog(app);
   const format = dialog.labelled("Format"), depth = dialog.labelled("Bit depth");
-  assert.deepEqual(format.options.map(o => [o.value, o.textContent]), sdrLabels);
-  format.value = "Webp"; format.onchange();
+  assert.deepEqual(dropdownChoices(format).map(o => [o.command, o.label]), sdrLabels);
+  chooseDropdown(format,"Webp");
   assert.deepEqual(app.calls.drafts.at(-1), { type: "format", value: "Webp" });
   assert.equal(format.value, "Webp");
   assert.equal(depth.value, "U8");
-  assert.deepEqual(depth.options.filter(o => !o.disabled).map(o => o.value), ["U8"], "WebP is 8-bit only");
+  assert.deepEqual(dropdownChoices(depth).filter(o => o.enabled).map(o => o.command), ["U8"], "WebP is 8-bit only");
   assert.equal(dialog.labelled("Quality").closest("label").hidden, true, "lossless WebP has no quality");
   dialog.pressed("Choose File…").click();
   const choice = await dialog.result;
@@ -159,13 +159,13 @@ test("a WebP too large for its encoder is refused before any rendering", async (
   const app = fakeApp();
   const dialog = await openDialog(app);
   const format = dialog.labelled("Format");
-  format.value = "Webp"; format.onchange();
+  chooseDropdown(format,"Webp");
   dialog.pressed("Preview Output").click();
   assert.equal(dialog.error.textContent, WEBP_LIMIT);
   dialog.pressed("Choose File…").click();
   assert.equal(dialog.error.textContent, WEBP_LIMIT);
   assert.equal(app.calls.rendered, 0, "the refusal comes from validation, not the renderer");
-  dialog.labelled("Pixel size").value = "Fit";
+  chooseDropdown(dialog.labelled("Pixel size"),"Fit");
   dialog.pressed("Choose File…").click();
   const choice = await dialog.result;
   assert.deepEqual(choice.recipe.size, { Fit: { bounds: [2048, 2048], enlarge: false } });
@@ -177,20 +177,20 @@ test("a photo's Metadata row drafts the kept fields and location through the sha
   const dialog = await openDialog(app);
   const metadata = dialog.labelled("Metadata"), location = dialog.labelled("Remove location");
   const note = dialog.form.children.find(n => n.className === "export-metadata-note");
-  assert.deepEqual(metadata.options.map(o => [o.value, o.textContent]), METADATA_CHOICES, "labels come from the shared view");
+  assert.deepEqual(dropdownChoices(metadata).map(o => [o.command, o.label]), METADATA_CHOICES, "labels come from the shared view");
   assert.equal(metadata.value, "All");
   assert.equal(location.checked, true, "location is removed by default");
   assert.equal(metadata.closest("label").hidden, false);
   assert.equal(location.closest("label").hidden, false);
   assert.equal(note.hidden, true);
-  metadata.value = "CopyrightContact"; metadata.onchange();
+  chooseDropdown(metadata,"CopyrightContact");
   assert.deepEqual(app.calls.drafts.at(-1), { type: "metadata", value: { keep: "CopyrightContact", remove_location: true } });
   assert.equal(location.closest("label").hidden, true, "Copyright & Contact never keeps a location");
-  metadata.value = "All"; metadata.onchange();
+  chooseDropdown(metadata,"All");
   location.checked = false; location.onchange();
   assert.deepEqual(app.calls.drafts.at(-1), { type: "metadata", value: { keep: "All", remove_location: false } });
   const format = dialog.labelled("Format");
-  format.value = "Jpeg"; format.onchange();
+  chooseDropdown(format,"Jpeg");
   assert.equal(location.checked, false, "a format change keeps the metadata choice");
   dialog.pressed("Choose File…").click();
   const choice = await dialog.result;
@@ -202,7 +202,7 @@ test("OpenEXR explains that it keeps no metadata, and drawings show no Metadata 
   app.document_color = () => ({ space: "Srgb", depth: "F32" });
   const dialog = await openDialog(app);
   const range = dialog.labelled("Dynamic range");
-  range.value = "exr"; range.onchange();
+  chooseDropdown(range,"exr");
   const note = dialog.form.children.find(n => n.className === "export-metadata-note");
   assert.equal(dialog.labelled("Metadata").closest("label").hidden, true);
   assert.equal(dialog.labelled("Remove location").closest("label").hidden, true);
@@ -216,7 +216,7 @@ test("OpenEXR explains that it keeps no metadata, and drawings show no Metadata 
 
 test("export refuses unfinished numeric text before validating or rendering", async () => {
   const app = fakeApp({ extent: [800, 600] }), dialog = await openDialog(app);
-  const size = dialog.labelled("Pixel size"); size.value = "Fit"; size.onchange();
+  const size = dialog.labelled("Pixel size"); chooseDropdown(size,"Fit");
   const width = dialog.labelled(exportCopy.maximum_width);
   const before = app.calls.validated.length;
   for (const literal of ["bad", "Infinity", "２０４８"]) {
@@ -237,16 +237,16 @@ test("export refuses unfinished numeric text before validating or rendering", as
 
 test("language publication retains export drafts and projects bounded labels without storage or validation work",async()=>{
   const app=fakeApp({extent:[800,600],photo:true}),dialog=await openDialog(app);
-  const controls=dialog.form.querySelectorAll("select,input,button"),format=dialog.labelled("Format"),destination=dialog.labelled("Destination"),metadata=dialog.labelled("Metadata");
-  const options=[...format.options,...destination.options,...metadata.options];
-  const size=dialog.labelled("Pixel size");size.value="Fit";size.onchange();
+  const controls=dialog.form.querySelectorAll("input,button"),format=dialog.labelled("Format"),destination=dialog.labelled("Destination"),metadata=dialog.labelled("Metadata");
+  const captions=[format,destination,metadata].map(node=>node.children[0]);
+  const size=dialog.labelled("Pixel size");chooseDropdown(size,"Fit");
   const width=dialog.labelled(exportCopy.maximum_width),name=dialog.labelled(exportCopy.preset_name);
   width.value="２０４８ unfinished";width.selectionStart=2;width.selectionEnd=7;width.composing=true;name.value="İı ไทย Tiếng Việt { $name } 🎨";
   const before={drafts:app.calls.drafts.length,validated:app.calls.validated.length,rendered:app.calls.rendered,reads:app.calls.reads};
   app.language("tr");refreshCopy(app);dialog.form.localize();refreshBindings();
-  assert.deepEqual(dialog.form.querySelectorAll("select,input,button"),controls);assert.deepEqual([...format.options,...destination.options,...metadata.options],options);
+  assert.deepEqual(dialog.form.querySelectorAll("input,button"),controls);assert.deepEqual([format,destination,metadata].map(node=>node.children[0]),captions);
   assert.equal(width.value,"２０４８ unfinished");assert.equal(width.selectionStart,2);assert.equal(width.selectionEnd,7);assert.equal(width.composing,true);assert.equal(name.value,"İı ไทย Tiếng Việt { $name } 🎨");
-  assert.equal(format.ariaLabel,"tr:Format");assert.equal(format.options[0].textContent,`tr:${exportCopy.format_png}`);assert.equal(destination.options[0].textContent,"tr:Web");assert.equal(metadata.ariaLabel,"tr:Metadata");assert.equal(metadata.options[1].textContent,"tr:Copyright & Contact");
+  assert.equal(format.ariaLabel,"tr:Format");assert.equal(dropdownChoices(format)[0].label,`tr:${exportCopy.format_png}`);assert.equal(dropdownChoices(destination)[0].label,"tr:Web");assert.equal(metadata.ariaLabel,"tr:Metadata");assert.equal(dropdownChoices(metadata)[1].label,"tr:Copyright & Contact");
   assert.deepEqual({drafts:app.calls.drafts.length,validated:app.calls.validated.length,rendered:app.calls.rendered,reads:app.calls.reads},before);
   dialog.form.querySelectorAll("button").find(node=>node.textContent==="Cancel").click();await dialog.result;
 });
@@ -278,19 +278,19 @@ test("retained export refusals project the raw shared reason without repeating v
 });
 
 
-test("retained original-profile option reprojects its descriptor while profile bytes and literal layer names remain unchanged",async()=>{
+test("retained original-profile choice reprojects its descriptor while profile bytes and literal layer names remain unchanged",async()=>{
   const app=fakeApp({extent:[800,600]}),literal="İı ไทย Tiếng Việt { $name } 🎨",profile={name:literal,channels:"Rgb",profile:{Icc:[0,1,2,3]}};
   const originalForm=app.export_form;app.export_form=()=>({...originalForm(),profiles:[base.profile,profile],profile_captions:[{type:"literal",name:"sRGB"},{type:"original",name:literal}]});
-  const dialog=await openDialog(app),select=dialog.labelled("Output profile"),option=select.options[1];select.value="1";
-  assert.equal(option.textContent,`Original: ${literal}`);const bytes=profile.profile.Icc,before=app.calls.drafts.length;
+  const dialog=await openDialog(app),select=dialog.labelled("Output profile"),caption=select.children[0];chooseDropdown(select,"1");
+  assert.equal(dropdownChoices(select)[1].label,`Original: ${literal}`);const bytes=profile.profile.Icc,before=app.calls.drafts.length;
   app.language("tr");refreshCopy(app);dialog.form.localize();refreshBindings();
-  assert.equal(select.options[1],option);assert.equal(option.textContent,`tr:Original: ${literal}`);assert.equal(select.value,"1");assert.equal(profile.name,literal);assert.equal(profile.profile.Icc,bytes);assert.equal(app.calls.drafts.length,before);assert.equal(app.calls.reads,1);assert.equal(app.calls.rendered,0);
+  assert.equal(select.children[0],caption);assert.equal(dropdownChoices(select)[1].label,`tr:Original: ${literal}`);assert.equal(select.value,"1");assert.equal(profile.name,literal);assert.equal(profile.profile.Icc,bytes);assert.equal(app.calls.drafts.length,before);assert.equal(app.calls.reads,1);assert.equal(app.calls.rendered,0);
   dialog.form.querySelectorAll("button").find(node=>node.textContent==="Cancel").click();await dialog.result;
 });
 
 test('fit enlargement follows the visible option into the validated export recipe',async()=>{
   const app=fakeApp(),dialog=await openDialog(app);
-  const size=dialog.labelled(exportCopy.pixel_size);size.value='Fit';size.onchange();
+  const size=dialog.labelled(exportCopy.pixel_size);chooseDropdown(size,'Fit');
   const enlarge=dialog.labelled(exportCopy.enlarge);assert.equal(enlarge.closest('label').hidden,false);enlarge.checked=true;
   dialog.pressed(exportCopy.choose_file).click();
   const chosen=await dialog.result;assert.equal(chosen.recipe.size.Fit.enlarge,true);

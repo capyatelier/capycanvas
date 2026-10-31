@@ -1,3 +1,4 @@
+import {dropdownChoice,clickDropdownChoice,captureDropdowns} from './dropdown-fixture.mjs';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {createDrawing} from './new-drawing-fixture.mjs';
@@ -30,7 +31,7 @@ export async function checkNewDrawing({call,evaluate,settle}) {
     await call('Input.insertText',{text:value});await settle();
   };
   const choose=async(selector,label)=>{
-    await evaluate(`(()=>{const s=${node(selector)};const o=[...s.options].find(o=>o.textContent===${JSON.stringify(label)});if(!o)throw Error('Missing option '+${JSON.stringify(label)});s.value=o.value;s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await evaluate(dropdownChoice(selector,label,'label'));
     await settle();
   };
   const menuItem=label=>`[...document.querySelectorAll('${dialog} .new-drawing-menu:popover-open button')].find(n=>n.firstChild.textContent===${JSON.stringify(label)})`;
@@ -67,6 +68,16 @@ export async function checkNewDrawing({call,evaluate,settle}) {
       return{equal:Math.abs(w.width-h.width)<.5,height:[w.height,h.height,box('#new-drawing-name').height,box('#new-drawing-unit').height,box('#new-drawing-resolution-field').height],preview:[Math.round(p.width),Math.round(p.height)],right:Math.round(f.right-o.right)}})()`);
     assert.deepEqual(layout,{equal:true,height:[34,34,34,34,34],preview:[232,250],right:0},`Main page geometry ${JSON.stringify(layout)}`);
     await capture(`${theme}-1-main`);
+    await captureDropdowns({call,evaluate,settle},dialog,directory,`${theme}-main`);
+    const nextUnit=opened.units.findIndex(unit=>unit.value!==opened.setup.unit);
+    await click('#new-drawing-unit');
+    assert.equal(await evaluate(`document.querySelector('.panel-context-menu:popover-open').closest('dialog')===document.querySelector('${dialog}')`),true,'The menu belongs to the active modal');
+    await key('Escape','Escape',27);await clickDropdownChoice({call,evaluate,settle},'#new-drawing-unit',nextUnit);
+    assert.equal((await view()).setup.unit,opened.units[nextUnit].value,'A real Chrome row click changes the modal value');
+    assert.equal(await evaluate(`document.querySelector('.panel-context-menu').parentElement.id`),'workspace','Selecting returns the menu to the workspace');
+    await choose('#new-drawing-unit',opened.units.find(unit=>unit.value===opened.setup.unit).label);
+    await click('#new-drawing-unit');await key('Escape','Escape',27);
+    assert.equal(await evaluate(`!!document.querySelector('${dialog}')&&document.activeElement.id==='new-drawing-unit'&&!document.querySelector('.panel-context-menu:popover-open')`),true,'Escape closes only the menu and focuses its trigger');
 
     await click('#new-drawing-resolution-choices');await wait(`!!document.querySelector('${dialog} .new-drawing-menu:popover-open')`);
     assert.deepEqual(await evaluate(`[...document.querySelectorAll('${dialog} .new-drawing-menu button')].map(n=>[n.firstChild.textContent,n.lastChild.textContent,n.classList.contains('selected')])`),
@@ -298,8 +309,9 @@ export async function checkNewDrawing({call,evaluate,settle}) {
     assert.equal((await view()).page.paper_color,(await view()).copy.transparent,'Use Color keeps the transparent sheet');
     assert.equal(await evaluate('document.activeElement.id'),'new-drawing-paper-color');
 
-    await click('#new-drawing-cancel');
+    await click('#new-drawing-unit');await evaluate(`document.querySelector('#new-drawing-cancel').click()`);await settle();
     await wait(`!document.querySelector('${dialog}')&&!layerApp.state().new_drawing&&!layerApp.state().requests.some(r=>r.kind.type==='document')`);
+    assert.equal(await evaluate(`document.querySelector('.panel-context-menu').parentElement.id==='workspace'&&!document.querySelector('.panel-context-menu:popover-open')`),true,'Closing a dialog with a menu open returns it to the workspace');
     assert.equal(await evaluate('layerApp.app.document_tabs(0).tabs.length'),tabs,'Cancel creates nothing');
 
     await open();

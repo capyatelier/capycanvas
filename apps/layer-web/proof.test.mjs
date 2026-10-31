@@ -19,7 +19,7 @@ export async function checkProof({call,evaluate,settle}, {profileUrl='/pkg/proof
     await evaluate(`(()=>{const b=[...document.querySelectorAll(':is(dialog[open],.proof-panel) button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b||b.disabled)throw Error('Missing enabled button '+${JSON.stringify(label)});b.click();})()`);
   };
   const invoke=async command=>{await wait(`!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);if(command==='export_document')console.log('Proof export pre-dispatch',await evaluate(`({enabled:layerApp.state().commands.find(c=>c.id==='export_document').enabled,documentsBusy:layerApp.documents.busy(),fileBusy:layerApp.state().document_file.busy,mode:layerApp.app.proof_form().mode})`));await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);if(command==='export_document')console.log('Proof export dispatched',await evaluate(`({documentsBusy:layerApp.documents.busy(),fileBusy:layerApp.state().document_file.busy,modal:!!document.querySelector('dialog:modal')})`));};
-  const set=async(label,value)=>{const selector=':is(dialog[open],.proof-panel) [aria-label="'+label+'"]';if(await evaluate(`document.querySelector(${JSON.stringify(selector)})?.matches('.dropdown')`))await evaluate(dropdownChoice(selector,value));else await evaluate(`(()=>{const s=document.querySelector(${JSON.stringify(selector)});s.value=${JSON.stringify(value)};s.dispatchEvent(new Event('change'));})()`);};
+  const set=(label,value)=>evaluate(dropdownChoice(':is(dialog[open],.proof-panel) [aria-label="'+label+'"]',value));
   const setup=async()=>{await invoke('soft_proof_setup');await wait(`!!document.querySelector('.proof-panel .dropdown[aria-label="Proof profile"]')`);if(await evaluate('layerApp.app.proof_form().mode')!=='print')await click('Print');};
   const ready=async()=>{const expected=await evaluate(`document.querySelector('.proof-panel [aria-label="Proof profile"]')?.querySelector('.dropdown-label')?.textContent`);await wait(`${expected?`layerApp.app.proof_form().recipe.name===${JSON.stringify(expected)} &&`:''} !document.querySelector('.proof-panel [role="status"]')?.textContent && layerApp.app.proof_status().text.startsWith('Proof:') && !layerApp.app.proof_status().needed`);if(await evaluate(`!!document.querySelector('.proof-panel')`))await click('Close');};
   const choose=async name=>{await evaluate(dropdownChoice('.proof-panel .dropdown[aria-label="Proof profile"]',name,'label'));await settle();};
@@ -27,7 +27,7 @@ export async function checkProof({call,evaluate,settle}, {profileUrl='/pkg/proof
   const save=async()=>{await invoke('save_document_as');await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');return readPackage(evaluate, '[...proofTest.files.values()].at(-1)');};
   const backing=m=>({objects:m.objects.filter(o=>o.type!=='capy.output/2'),resources:m.resources.filter(r=>r.type!=='capy.icc/1').map(r=>resourceIdentity(m,{ref:r.id}))});
   const exportPng=async()=>{
-    await invoke('export_document');await wait(`!!document.querySelector('dialog[open] select[aria-label="Format"]')`);
+    await invoke('export_document');await wait(`!!document.querySelector('dialog[open] .dropdown[aria-label="Format"]')`);
     await set('Format','Png');await set('Output profile','0');await set('Bit depth','U8');await set('Dither','None');
     await click('Choose File…');await wait('!layerApp.state().document_file.busy');
     return evaluate(`(async()=>{const bytes=[...proofTest.files.entries()].findLast(([k])=>k.endsWith('.png'))[1];return [...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))]})()`);
@@ -54,7 +54,7 @@ export async function checkProof({call,evaluate,settle}, {profileUrl='/pkg/proof
     await evaluate(`(async()=>{proofTest.original=await layerApp.app.profile_library('import',undefined,new Uint8Array(await(await fetch(${JSON.stringify(originalUrl)})).arrayBuffer()));proofTest.target=await layerApp.app.profile_library('import',undefined,new Uint8Array(await(await fetch(${JSON.stringify(profileUrl)})).arrayBuffer()));})()`);
     const names=await evaluate('[proofTest.original.name,proofTest.target.name]');
     await setup();await choose(names[0]);
-    await invoke('export_document');await wait(`!!document.querySelector('dialog[open] select[aria-label="Format"]')`);
+    await invoke('export_document');await wait(`!!document.querySelector('dialog[open] .dropdown[aria-label="Format"]')`);
     assert.equal(await evaluate('layerApp.app.proof_form().recipe.name'),names[0],'Export waits for the selected print target');
     await click('Cancel');await ready();
     // The embedded original remains usable after its local entry is removed.

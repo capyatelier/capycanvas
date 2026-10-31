@@ -1,3 +1,4 @@
+import {chooseDropdown,captureDropdowns} from './dropdown-fixture.mjs';
 import assert from "node:assert/strict";
 import {mkdir, writeFile} from "node:fs/promises";
 import {checkTextEntry} from './control-style-fixture.mjs';
@@ -10,11 +11,11 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
   const view = () => evaluate('JSON.parse(layerApp.app.workspace_view())');
   const editing = () => evaluate("JSON.parse(layerApp.app.editing_state())");
   const capture = () => evaluate('JSON.parse(layerApp.app.workspace_capture())');
-  const idle = () => wait('JSON.parse(layerApp.app.workspace_view()).ready && !JSON.parse(layerApp.app.workspace_view()).busy && !JSON.parse(layerApp.app.workspace_view()).dirty');
+  const idle = () => wait('!layerApp.documents.busy() && JSON.parse(layerApp.app.workspace_view()).ready && !JSON.parse(layerApp.app.workspace_view()).busy && !JSON.parse(layerApp.app.workspace_view()).dirty');
   const click = async selector => {
-    await evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)throw Error('Missing '+${JSON.stringify(selector)});const scroll=e.closest('.workspace-list,.workspace-details');if(scroll){const row=e.getBoundingClientRect(),area=scroll.getBoundingClientRect();if(row.top<area.top)scroll.scrollTop+=row.top-area.top;else if(row.bottom>area.bottom)scroll.scrollTop+=row.bottom-area.bottom;}})()`);
-    await settle();
-    const point = await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+    await evaluate(`(()=>{const e=[...document.querySelectorAll(${JSON.stringify(selector)})].find(node=>node.checkVisibility());if(!e)throw Error('Missing '+${JSON.stringify(selector)});const scroll=e.closest('.workspace-list,.workspace-details');if(scroll){const row=e.getBoundingClientRect(),area=scroll.getBoundingClientRect();if(row.top<area.top)scroll.scrollTop+=row.top-area.top;else if(row.bottom>area.bottom)scroll.scrollTop+=row.bottom-area.bottom;}})()`);
+    await settle();await wait("!document.querySelector('.document-transition')");
+    const point = await evaluate(`(()=>{const node=[...document.querySelectorAll(${JSON.stringify(selector)})].find(node=>node.checkVisibility()),r=node.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2,hit=document.elementFromPoint(x,y);if(!node.contains(hit))throw Error('Obstructed '+${JSON.stringify(selector)}+': '+hit?.outerHTML);return{x,y}})()`);
     if (touch) {
       await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:1,...point}]});
       await new Promise(r=>setTimeout(r,60));
@@ -70,13 +71,14 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     await wait(`JSON.parse(layerApp.app.workspace_view()).details?.description===${JSON.stringify(description)}`);
     await click('.workspace-details [data-action=update_toolbar]');
     const options=(await view()).prompt.choices;assert.ok(options.length);
+    for(const theme of ['light','dark']){const settings=await evaluate('layerApp.state().settings');await send({type:'restore_saved_settings',saved:JSON.stringify({...settings,theme})});await captureDropdowns({call,evaluate,settle},'.workspace-form[open]',directory,`workspace-choice-${theme}`);}
     const choice=options.at(-1).id;
-    await evaluate(`(()=>{const field=document.querySelector('#workspace-item-choice');field.value=${JSON.stringify(choice)};field.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await evaluate(`(()=>{const field=document.querySelector('#workspace-item-choice');(${chooseDropdown})(field,${JSON.stringify(choice)});})()`);
     await click('.workspace-form .suggested-action');await idle();
     await click('.workspace-manager-tabs [data-page=this_workspace]');await click('.workspace-add');
     await wait('!!document.querySelector("#workspace-item-choice")');
     assert.ok((await view()).prompt.choices.some(value=>value.id===item.id));
-    await evaluate(`(()=>{const field=document.querySelector('#workspace-item-choice');field.value=${JSON.stringify(item.id)};field.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await evaluate(`(()=>{const field=document.querySelector('#workspace-item-choice');(${chooseDropdown})(field,${JSON.stringify(item.id)});})()`);
     await text('#workspace-item-name','Applied reusable toolbar');await click('.workspace-form .suggested-action');await idle();
     assert.equal(await evaluate('layerApp.state().workspace.layout.panels.length'),count+1);
     if((await view()).page)await click('.workspace-manager .dialog-close');await send({type:'invoke',command:'undo_workspace'});
@@ -195,7 +197,7 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     const deleteForm=async()=>{
       await click('.workspace-delete');
       assert.equal(await evaluate('document.querySelector(".workspace-form[open] > p").textContent'),'Delete “Web Inking Acceptance”? This is permanent. This window will switch to an available default workspace.');
-      assert.equal(await evaluate('document.querySelectorAll(".workspace-form[open] select").length'),0);
+      assert.equal(await evaluate('document.querySelectorAll(".workspace-form[open] .dropdown").length'),0);
     };
     await deleteForm(); await click('.workspace-form footer button'); await idle();
     assert.equal((await view()).id,deleted);

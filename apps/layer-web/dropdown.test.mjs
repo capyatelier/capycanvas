@@ -7,8 +7,8 @@ import {refreshBindings} from './localization.js';
 function harness(label=()=> 'Category') {
   const element=(tag,className='')=>Object.assign(new FakeElement(),{tagName:tag.toUpperCase(),className,children:[],attributes:new Map(),listeners:{}});
   const button=(text,action,className)=>{const node=element('button',className);node.click=action;return node;};
-  const menu=element('div'),changes=[];
-  const node=createDropdown({element,button,icon:()=>element('svg'),openMenu:node=>{menu.model=node.menuModel();menu.menuOwner=node;return menu;}},label,value=>changes.push(value));
+  const menu=element('div'),changes=[];menu.matches=()=>!!menu.open;menu.hidePopover=()=>{menu.open=false;};
+  const node=createDropdown({element,button,icon:()=>element('svg'),openMenu:node=>{menu.model=node.menuModel();menu.menuOwner=node;menu.open=true;return menu;}},label,value=>changes.push(value));
   return {node,changes,menu,caption:node.children[0]};
 }
 
@@ -27,5 +27,5 @@ test('Rust menu queries follow live state without replacing the trigger',()=>{
   h.node.click();assert.equal(reads,1);assert.equal(h.menu.model,model);
   const children=[...h.node.children];model={title:'Blend',sections:[[{label:'Multiply',selected:true,enabled:true,action:{type:'set_blend',blend:'Multiply'}}]]};
   h.node.update({text:'Multiply'});assert.equal(h.node.menuModel(),model);assert.equal(h.caption.textContent,'Multiply');assert.deepEqual(h.node.children,children);
-  h.node.listeners.pointerdown[0]();h.node.click();assert.equal(reads,2,'re-click does not reopen the dismissed menu');
+  h.node.click();assert.equal(reads,2,'re-click closes the menu');assert.equal(h.menu.open,false);
 });

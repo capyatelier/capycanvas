@@ -1,7 +1,7 @@
 import {composingKey} from './text-input.js';
 import {bindCopy,liveCopy} from "./localization.js";
 import { createWorkspaceSwitcher } from "./workspace-switcher.js";
-export function createWorkspaceManager({ app, store, applyChange, element, button, icon, message }) {
+export function createWorkspaceManager({ app, store, applyChange, element, button, icon, dropdown, message }) {
   let view, inline;
   const copy=liveCopy(app,"catalog").native_copy.header,common=liveCopy(app,"bootstrap_view").common;
   const localizedButton=(read,run,classes)=>bindCopy(button("",run,classes),read);
@@ -169,9 +169,8 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
           bindCopy(formDescription,()=>copy.description,"ariaLabel");label.append(formDescription);formDialog.append(label);
         }
         if(form.choices?.length){
-          const label=element("label");bindCopy(label,()=>view?.prompt?.choice_label??"");formChoice=element("select");formChoice.id="workspace-item-choice";
-          for(const choice of form.choices){const option=element("option");option.value=choice.id;bindCopy(option,()=>view?.prompt?.choices.find(item=>item.id===choice.id)?.label??choice.label);formChoice.append(option);}
-          formChoice.value=form.selected??form.choices[0].id;label.append(formChoice);formDialog.append(label);
+          const label=element("label");bindCopy(label,()=>view?.prompt?.choice_label??"");formChoice=dropdown(()=>view?.prompt?.choice_label??'');formChoice.id="workspace-item-choice";
+          formChoice.update({choices:form.choices.map(choice=>({value:choice.id,label:()=>view?.prompt?.choices.find(item=>item.id===choice.id)?.label??choice.label})),value:form.selected??form.choices[0].id});label.append(formChoice);formDialog.append(label);
         }
         formError = element("p", "workspace-error"); const footer = element("footer");
         formSubmit = button(form.confirm, () => {if(formKey!==key||!view?.prompt||!validatePrompt())return;send({ type: "submit", name: formName?.value || "",description:formDescription?.value??null,choice:formChoice?.value??null });}, "suggested-action");

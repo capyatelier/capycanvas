@@ -323,14 +323,14 @@ try {
       await checkLiveHistogramLanguage({call,evaluate,settle});
       await checkLiveWorkspaceLanguage({call,evaluate,settle});
     }, checkRasterErrors],
-    [process.argv.includes('--export-presets'), () => checkExportPresets({evaluate}), checkRasterErrors],
+    [process.argv.includes('--export-presets'), () => checkExportPresets({call,evaluate,settle}), checkRasterErrors],
     [process.argv.includes('--profile-library'), () => checkProfileLibrary({evaluate}), checkRasterErrors],
     [process.argv.includes("--shared-workflows"), async () => {
       await checkSdrColor({call,evaluate,settle});
       await checkColorEdits({call,evaluate,settle});
       await checkSourceImports({call,evaluate,settle});
       await checkSourceEdits({call,evaluate,settle});
-      await checkExportPresets({evaluate});
+      await checkExportPresets({call,evaluate,settle});
       await checkProfileLibrary({evaluate});
       await checkPhotoCorrections({evaluate,settle});
       await checkFlattenedCopy({evaluate});

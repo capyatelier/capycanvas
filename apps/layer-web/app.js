@@ -1953,14 +1953,14 @@ try {
   panelNames = Object.fromEntries(catalog.panels.map((p) => [p.id, p.label]));
   // Issue the first storage request before constructing panel controls. Replies
   // run in later tasks, after this synchronous UI construction is complete.
-  workspaceManager = createWorkspaceManager({ app, store: workspaceStore, applyChange, element, button, icon, message });
+  workspaceManager = createWorkspaceManager({ app, store: workspaceStore, applyChange, element, button, icon, dropdown, message });
   selectionUi = createSelectionUi({app,state:()=>state,element,button,icon,numberField,dispatch,workspace,layout:()=>layout,bar:()=>canvasBar?.bounds()??null});
   const separate=action=>dispatch({type:'frequency_separation',action});
   frequencySeparationUi = createPreviewPanel({app,name:'frequency-separation',view:()=>state.layer_tools.frequency_separation,kind:v=>v.label,
     value:radius=>separate({op:'radius',radius}),apply:()=>separate({op:'apply'}),cancel:()=>separate({op:'cancel'}),
     element,button,numberField,workspace,layout:()=>layout,bar:()=>canvasBar?.bounds()??null});
-  canvasSizeUi = createCanvasSizeUi({state:()=>state,element,button,icon,numberField,resolve:request=>app.number_input(request),dispatch});
-  imageSizeUi = createImageSizeUi({state:()=>state,element,button,numberField,resolve:request=>app.number_input(request),dispatch});
+  canvasSizeUi = createCanvasSizeUi({state:()=>state,element,button,dropdown,icon,numberField,resolve:request=>app.number_input(request),dispatch});
+  imageSizeUi = createImageSizeUi({state:()=>state,element,button,dropdown,numberField,resolve:request=>app.number_input(request),dispatch});
   configureColorEditor({dispatch,icon,wasmModule});
   editor = createEditorPanels({selectionUi,app,wasmModule,state:()=>state,workspace,canvas,element,button,icon,dropdown,numberField,dispatch,asset,wake,applyChange,contentChanged:panelContentChanged,showContext:(node,point)=>customization.showContext(node,point)});
   palettes = createPalettes({ app, state: () => state, workspace, element, button, icon, panelFrame, applyChange, rasterWorker,

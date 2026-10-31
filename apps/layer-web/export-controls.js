@@ -3,36 +3,37 @@ import { liveCopy, bindCopy } from './localization.js';
 const profileLibraries=new Set();
 export function localizeProfileLibraries(){for(const render of profileLibraries)render();}
 export const SDR_FORMATS=["Png","Tiff","Jpeg","Webp"];
-export async function chooseExport({app,dialog,element,button,numberField,gpuOperation,id}) {
+export async function chooseExport({app,dialog,element,button,dropdown,numberField,gpuOperation,id}) {
   let control,running,closed=false;
   const model=app.export_form(),copy=liveCopy(app,"export_copy"),profilesCopy=liveCopy(app,"profile_copy");
   let library=await app.export_presets({type:"get",index:0});
   const localizeLibrary=()=>{library.names=app.localize_export_presets({names:library.names,index:null,recipe:null,changed:false}).names;};localizeLibrary();
   try { const result=await dialog(()=>copy.title,(form,finish)=>{
-    let recipe=library.recipe,currentPreset=0;
+    let recipe=library.recipe,currentPreset=0;const choiceSets=new Map();
     const field=(label,node)=>{const root=element("label","document-size",label);if(typeof label==="function")bindCopy(node,label,"ariaLabel");else node.setAttribute("aria-label",label);root.append(node);form.append(root);return node;};
-    const select=(label,choices)=>{const node=element("select");for(const[id,name]of choices){const option=element("option","",name);option.value=id;node.append(option);}return field(label,node);};
+    const select=(label,choices,change)=>{const node=dropdown(label,value=>{if(node!==previewMode)invalidate();change?.(value);}),items=choices.map(([value,label])=>({value,label}));choiceSets.set(node,items);node.update({choices:items,value:items[0]?.value});return field(label,node);};
     const number=(label,value,control)=>{
       const node=numberField(control,label,next=>{node.numericValue=next;});node.numericValue=value;node.update(value);return field(label,node);
     };
     const setNumber=(node,value)=>{node.cancelEditing();node.numericValue=value;node.update(value);};
     form.append(element("p","",()=>copy.help));
-    const destination=select(()=>copy.destination,library.names.map((name,i)=>[i,()=>library.names[i]]));
-    const range=select(()=>copy.range,["F16","F32"].includes(app.document_color().depth)?[["sdr",()=>copy.sdr_rendition],["jpeg",()=>copy.jpeg_gainmap],["avif",()=>copy.avif_gainmap],["hdr",()=>copy.format_pq],["exr",()=>copy.format_exr]]:[["sdr","SDR"]]);
+    const destination=select(()=>copy.destination,library.names.map((name,i)=>[i,()=>library.names[i]]),value=>preference({type:"get",index:Number(value)}));
+    const range=select(()=>copy.range,["F16","F32"].includes(app.document_color().depth)?[["sdr",()=>copy.sdr_rendition],["jpeg",()=>copy.jpeg_gainmap],["avif",()=>copy.avif_gainmap],["hdr",()=>copy.format_pq],["exr",()=>copy.format_exr]]:[["sdr","SDR"]],()=>updateDraft({type:"format",value:rangeFormat()}));
     const clip=field(()=>copy.clip_hdr,element("input"));clip.type="checkbox";
-    const format=select(()=>copy.format,SDR_FORMATS.map(id=>[id,()=>({Png:copy.format_png,Tiff:copy.format_tiff,Jpeg:copy.format_jpeg,Webp:copy.format_webp})[id]]));
-    const profile=select(()=>copy.profile,model.profiles.map((p,i)=>[i,()=>model.profile_captions?.[i]?app.export_profile_caption_copy(model.profile_captions[i]):app.profile_name_copy(p.name)]));
-    const depth=select(()=>copy.depth,[["U8",()=>copy.depth_8],["U16",()=>copy.depth_16],["F32",()=>copy.depth_float32]]);
-    const background=select(()=>copy.transparency,[["Preserve",()=>copy.preserve],["White",()=>copy.white_background],["Black",()=>copy.black_background]]);
+    const format=select(()=>copy.format,SDR_FORMATS.map(id=>[id,()=>({Png:copy.format_png,Tiff:copy.format_tiff,Jpeg:copy.format_jpeg,Webp:copy.format_webp})[id]]),value=>updateDraft({type:"format",value}));
+    const profileChoices=()=>model.profiles.map((p,value)=>({value,label:()=>model.profile_captions?.[value]?app.export_profile_caption_copy(model.profile_captions[value]):app.profile_name_copy(p.name)}));
+    const profile=select(()=>copy.profile,[],value=>updateDraft({type:"profile",value:model.profiles[Number(value)]}));
+    const depth=select(()=>copy.depth,[["U8",()=>copy.depth_8],["U16",()=>copy.depth_16],["F32",()=>copy.depth_float32]],value=>updateDraft({type:"depth",value}));
+    const background=select(()=>copy.transparency,[["Preserve",()=>copy.preserve],["White",()=>copy.white_background],["Black",()=>copy.black_background]],value=>updateDraft({type:"background",value}));
     const intent=select(()=>copy.intent,[["RelativeColorimetric",()=>copy.relative],["Perceptual",()=>copy.perceptual],["Saturation",()=>copy.saturation],["AbsoluteColorimetric",()=>copy.absolute]]);
     const dither=select(()=>copy.dither,[["None",()=>copy.dither_none],["Stochastic8",()=>copy.dither_stochastic]]);
     const quality=number(()=>copy.quality,90,model.numeric.quality);
-    const size=select(()=>copy.pixel_size,[["Original",()=>copy.original_size],["Fit",()=>copy.fit_bounds]]);
+    const size=select(()=>copy.pixel_size,[["Original",()=>copy.original_size],["Fit",()=>copy.fit_bounds]],()=>visible());
     const width=number(()=>copy.maximum_width,2048,model.numeric.dimension),height=number(()=>copy.maximum_height,2048,model.numeric.dimension);
     const enlarge=field(()=>copy.enlarge,element("input"));enlarge.type="checkbox";
-    const resolution=select(()=>copy.resolution,[["Master",()=>copy.keep_resolution],["Ppi",()=>copy.ppi],["Omit",()=>copy.omit]]),ppi=number(()=>copy.ppi,300,model.numeric.ppi);
+    const resolution=select(()=>copy.resolution,[["Master",()=>copy.keep_resolution],["Ppi",()=>copy.ppi],["Omit",()=>copy.omit]],()=>visible()),ppi=number(()=>copy.ppi,300,model.numeric.ppi);
     let metadataView=app.export_draft(recipe,{type:"refresh"}).metadata;
-    const metadata=select(()=>metadataView.label,metadataView.choices.map(c=>[c.value,()=>metadataView.choices.find(choice=>choice.value===c.value).label]));
+    const metadata=select(()=>metadataView.label,metadataView.choices.map(c=>[c.value,()=>metadataView.choices.find(choice=>choice.value===c.value).label]),()=>updateDraft({type:"metadata",value:readMetadata()}));
     const removeLocation=field(()=>metadataView.remove_location,element("input"));removeLocation.type="checkbox";
     const metadataNote=element("p","export-metadata-note");form.append(metadataNote);
     const readMetadata=()=>({keep:metadata.value,remove_location:removeLocation.checked});
@@ -41,34 +42,27 @@ export async function chooseExport({app,dialog,element,button,numberField,gpuOpe
       metadata.closest("label").hidden=!model.metadata||!metadataView.available;removeLocation.closest("label").hidden=!model.metadata||!metadataView.location;
       bindCopy(metadataNote,()=>metadataView.note??"");metadataNote.hidden=!model.metadata||!metadataView.note;};
     const load=()=>{
-      if(!model.profiles.some(p=>p.name===recipe.profile.name&&JSON.stringify(p.profile)===JSON.stringify(recipe.profile.profile))){model.profiles.push(recipe.profile);const selectedProfile=recipe.profile;const option=element("option","",()=>app.profile_name_copy(selectedProfile.name));option.value=model.profiles.length-1;profile.append(option);}
-      range.value=recipe.format==="Exr"?"exr":recipe.format.startsWith("PngHdr")?"hdr":recipe.format.startsWith("JpegHdr")?"jpeg":recipe.format.startsWith("AvifHdr")?"avif":"sdr";clip.checked=recipe.format.endsWith("Mapped");format.value=range.value!=="sdr"?"Png":recipe.format;profile.value=String(Math.max(0,model.profiles.findIndex(p=>p.name===recipe.profile.name&&JSON.stringify(p.profile)===JSON.stringify(recipe.profile.profile))));depth.value=recipe.depth;background.value=recipe.background;
-      intent.value=recipe.encoding.conversion.intent;dither.value=recipe.encoding.dither;setNumber(quality,recipe.jpeg_quality);size.value=recipe.size.Fit?"Fit":"Original";
-      enlarge.checked=recipe.size.Fit?.enlarge??false;if(recipe.size.Fit){setNumber(width,recipe.size.Fit.bounds[0]);setNumber(height,recipe.size.Fit.bounds[1]);};resolution.value=recipe.resolution.Ppi?"Ppi":recipe.resolution;if(recipe.resolution.Ppi)setNumber(ppi,recipe.resolution.Ppi);
-      metadata.value=recipe.metadata.keep;removeLocation.checked=recipe.metadata.remove_location;visible();
+      if(!model.profiles.some(p=>p.name===recipe.profile.name&&JSON.stringify(p.profile)===JSON.stringify(recipe.profile.profile)))model.profiles.push(recipe.profile);
+      range.update({value:recipe.format==="Exr"?"exr":recipe.format.startsWith("PngHdr")?"hdr":recipe.format.startsWith("JpegHdr")?"jpeg":recipe.format.startsWith("AvifHdr")?"avif":"sdr"});clip.checked=recipe.format.endsWith("Mapped");format.update({value:range.value!=="sdr"?"Png":recipe.format});profile.update({choices:profileChoices(),value:Math.max(0,model.profiles.findIndex(p=>p.name===recipe.profile.name&&JSON.stringify(p.profile)===JSON.stringify(recipe.profile.profile)))});depth.update({value:recipe.depth});background.update({value:recipe.background});
+      intent.update({value:recipe.encoding.conversion.intent});dither.update({value:recipe.encoding.dither});setNumber(quality,recipe.jpeg_quality);size.update({value:recipe.size.Fit?"Fit":"Original"});
+      enlarge.checked=recipe.size.Fit?.enlarge??false;if(recipe.size.Fit){setNumber(width,recipe.size.Fit.bounds[0]);setNumber(height,recipe.size.Fit.bounds[1]);};resolution.update({value:recipe.resolution.Ppi?"Ppi":recipe.resolution});if(recipe.resolution.Ppi)setNumber(ppi,recipe.resolution.Ppi);
+      metadata.update({value:recipe.metadata.keep});removeLocation.checked=recipe.metadata.remove_location;visible();
     };
-    destination.onchange=()=>preference({type:"get",index:Number(destination.value)});
     const updateDraft=action=>{
       const draft=app.export_draft(readRecipe(),action);recipe=draft.recipe;metadataView=draft.metadata;
       for(const[node,allowed]of[[format,draft.formats],[depth,draft.depths],[background,draft.backgrounds],[dither,draft.dithers]]) {
-        for(const option of node.options)option.disabled=!allowed.includes(option.value);
+        node.update({choices:choiceSets.get(node).map(choice=>({...choice,enabled:allowed.includes(String(choice.value))}))});
       }
       load();
     };
-    range.onchange=()=>updateDraft({type:"format",value:rangeFormat()});
     clip.onchange=()=>updateDraft({type:"format",value:rangeFormat()});
-    format.onchange=()=>updateDraft({type:"format",value:format.value});
-    profile.onchange=()=>updateDraft({type:"profile",value:model.profiles[Number(profile.value)]});
-    depth.onchange=()=>updateDraft({type:"depth",value:depth.value});
-    background.onchange=()=>updateDraft({type:"background",value:background.value});
-    metadata.onchange=removeLocation.onchange=()=>updateDraft({type:"metadata",value:readMetadata()});
-    size.onchange=resolution.onchange=visible;load();
+    removeLocation.onchange=()=>updateDraft({type:"metadata",value:readMetadata()});load();
     let failure=null;const error=element("p","error-message"),fail=(value,profile)=>{failure=value;bindCopy(error,()=>failure==null?"":app.color_feature_error_copy(failure,profile));};form.append(error);
     form.append(button(()=>profilesCopy.import,async()=>{
-      try {const imported=await importProfile(app,element);if(!imported)return;model.profiles.push(imported);const option=element("option","",()=>app.profile_name_copy(imported.name));option.value=model.profiles.length-1;profile.append(option);profile.value=option.value;updateDraft({type:"profile",value:imported});fail(null);}
+      try {const imported=await importProfile(app,element);if(!imported)return;model.profiles.push(imported);profile.update({choices:profileChoices(),value:model.profiles.length-1});updateDraft({type:"profile",value:imported});fail(null);}
       catch(e){fail(e,true);}
     }));
-    form.append(button(()=>profilesCopy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;model.profiles.push(imported);const option=element("option","",()=>app.profile_name_copy(imported.name));option.value=model.profiles.length-1;profile.append(option);profile.value=option.value;updateDraft({type:"profile",value:imported});invalidate();}catch(e){fail(e,true);}}));
+    form.append(button(()=>profilesCopy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;model.profiles.push(imported);profile.update({choices:profileChoices(),value:model.profiles.length-1});updateDraft({type:"profile",value:imported});invalidate();}catch(e){fail(e,true);}}));
     const readRecipe=()=>({format:rangeFormat(),profile:model.profiles[Number(profile.value)],depth:depth.value,background:background.value,
       encoding:{conversion:{intent:intent.value,black_point_compensation:false},dither:dither.value},jpeg_quality:quality.numericValue,
       size:size.value==="Original"?"Original":{Fit:{bounds:[width.numericValue,height.numericValue],enlarge:enlarge.checked}},
@@ -87,11 +81,11 @@ export async function chooseExport({app,dialog,element,button,numberField,gpuOpe
     let preferenceBusy=false;
     async function preference(action){
       if(preferenceBusy||running)return;preferenceBusy=true;const inputs=[...form.querySelectorAll('input,select,button')];inputs.forEach(n=>n.disabled=true);
-      try{library=await app.export_presets(action);localizeLibrary();destination.replaceChildren();library.names.forEach((name,i)=>{const option=element("option","",()=>library.names[i]);option.value=i;destination.append(option);});currentPreset=library.index??0;destination.value=String(currentPreset);if(library.recipe){recipe=library.recipe;load();updateDraft({type:"refresh"});}invalidate();fail(null);}
-      catch(e){destination.value=String(currentPreset);fail(e,false);}finally{preferenceBusy=false;inputs.forEach(n=>n.disabled=false);presetAvailability();}
+      try{library=await app.export_presets(action);localizeLibrary();currentPreset=library.index??0;destination.update({choices:library.names.map((name,value)=>({value,label:()=>library.names[value]})),value:currentPreset});if(library.recipe){recipe=library.recipe;load();updateDraft({type:"refresh"});}invalidate();fail(null);}
+      catch(e){destination.update({value:currentPreset});fail(e,false);}finally{preferenceBusy=false;inputs.forEach(n=>n.disabled=false);presetAvailability();}
     }
     const comparison=element("div","color-comparison"),status=element("p"),footer=element("footer");
-    const previewMode=select(()=>copy.preview_rendition,[["hdr",()=>copy.hdr_preview],["sdr",()=>copy.sdr_base]]);previewMode.closest("label").hidden=true;
+    const previewMode=select(()=>copy.preview_rendition,[["hdr",()=>copy.hdr_preview],["sdr",()=>copy.sdr_base]],()=>{if(completed)drawComparison();});previewMode.closest("label").hidden=true;
     let rangeBlocked=false,completed,completedRecipe,phase="idle";
     const presentStatus=()=>bindCopy(status,()=>phase==="preparing"?copy.preparing_comparison:completed?app.export_preview_copy(completedRecipe.format,Boolean(completed.sdr_preview),completed.clipped_channels>0):"");
     const invalidate=()=>{completed=null;comparison.replaceChildren();previewMode.closest("label").hidden=true;phase="idle";presentStatus();rangeBlocked=false;choose.disabled=false;};
@@ -107,7 +101,6 @@ export async function chooseExport({app,dialog,element,button,numberField,gpuOpe
         const caption=()=>index?(output.sdr_preview?(previewMode.value==="sdr"?copy.sdr_base:copy.hdr_preview):copy.output):copy.artwork;
         figure.append(canvas,element("figcaption","",caption));comparison.append(figure);});
     };
-    previewMode.onchange=()=>{if(completed)drawComparison();};
     const cancel=button(()=>copy.common.cancel,()=>{control?.cancel();finish(null);});
     const commitNumbers=()=>[quality,width,height,ppi].filter(node=>!node.closest("label").hidden).every(node=>node.commit());
     const choose=button(()=>copy.choose_file,()=>{if(!commitNumbers()||!form.reportValidity())return;try{finish({recipe:selected(),destination:Number(destination.value)});}catch(e){fail(e);}},"suggested-action");
@@ -145,16 +138,16 @@ export function importProfile(app,element) {
   });
 }
 
-export function chooseSourceProfile({app,dialog,element,button}) {
+export function chooseSourceProfile({app,dialog,element,button,dropdown}) {
   const copy=liveCopy(app,"profile_copy");
   return dialog(()=>copy.interpret_title,(form,finish)=>{
     form.append(element("p","",()=>copy.interpret_help));
     const profiles=["Srgb","DisplayP3","AdobeRgb","ProPhoto"].map(space=>({Builtin:space}));
-    const select=element("select");bindCopy(select,()=>copy.interpret_as,"ariaLabel");
-    ["sRGB","Display P3","Adobe RGB (1998)","ProPhoto RGB"].forEach((name,i)=>{const option=element("option","",name);option.value=i;select.append(option);});form.append(select);
+    const select=dropdown(()=>copy.interpret_as),choices=["sRGB","Display P3","Adobe RGB (1998)","ProPhoto RGB"].map((label,value)=>({value,label}));select.update({choices,value:0});form.append(select);
+    const append=imported=>{profiles.push(imported.profile);choices.push({value:profiles.length-1,label:()=>app.profile_name_copy(imported.name)});select.update({choices,value:profiles.length-1});};
     let failure=null;const error=element("p","error-message"),fail=(value,profile)=>{failure=value;bindCopy(error,()=>failure==null?"":app.color_feature_error_copy(failure,profile));};form.append(error);
-    form.append(button(()=>copy.import,async()=>{try{const imported=await importProfile(app,element);if(!imported)return;profiles.push(imported.profile);const option=element("option","",()=>app.profile_name_copy(imported.name));option.value=profiles.length-1;select.append(option);select.value=option.value;fail(null);}catch(e){fail(e,true);}}));
-    form.append(button(()=>copy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;profiles.push(imported.profile);const option=element("option","",()=>app.profile_name_copy(imported.name));option.value=profiles.length-1;select.append(option);select.value=option.value;}catch(e){fail(e,true);}}));
+    form.append(button(()=>copy.import,async()=>{try{const imported=await importProfile(app,element);if(!imported)return;append(imported);fail(null);}catch(e){fail(e,true);}}));
+    form.append(button(()=>copy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;append(imported);}catch(e){fail(e,true);}}));
     const footer=element("footer");footer.append(button(()=>copy.common.cancel,()=>finish(null)),button(()=>copy.use_profile,()=>finish(profiles[Number(select.value)]),"suggested-action"));form.append(footer);
   });
 }

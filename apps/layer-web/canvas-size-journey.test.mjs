@@ -1,3 +1,4 @@
+import {chooseDropdown,captureDropdowns} from './dropdown-fixture.mjs';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 
@@ -61,6 +62,7 @@ export async function checkCanvasSize({call,evaluate,settle,device=false}) {
     await invoke(command);
   };
   const sample=async(p,test,label)=>{
+    assert.equal(await evaluate(`document.elementFromPoint(${p.x},${p.y})===layerApp.canvas`),true,`${label}: sample point belongs to the canvas`);
     if(await evaluate("layerApp.state().layer_tools.tool!=='pick_visible'"))await invoke('eyedropper');
     await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:p.x+1,y:p.y,buttons:0,pointerType:'mouse'});
     await call('Input.dispatchMouseEvent',{type:'mouseMoved',...p,buttons:0,pointerType:'mouse'});await settle();
@@ -89,17 +91,36 @@ export async function checkCanvasSize({call,evaluate,settle,device=false}) {
     if(await evaluate('layerApp.state().layer_tools.has_selection'))await invoke('deselect');
     await invoke('fit_canvas');
     const [width,height]=await size();
+    for(const current of ['light','dark']) {
+      await send({type:'set_theme',theme:current});await invoke('canvas_size');
+      await wait('!!layerApp.state().layer_tools.canvas_size');
+      await captureDropdowns({call,evaluate,settle},dialog,directory,`canvas-size-${current}`);
+      const currentUnit=(await view()).unit,nextUnit=(await view()).units.find(choice=>choice.unit!==currentUnit).unit;
+      await evaluate(`(${chooseDropdown.toString()})('${dialog} .dropdown',${JSON.stringify(nextUnit)})`);await settle();
+      assert.equal((await view()).unit,nextUnit,'The modal unit menu forwards its selected value');
+      await evaluate(`(${chooseDropdown.toString()})('${dialog} .dropdown',${JSON.stringify(currentUnit)})`);await settle();
+      await send({type:'canvas_size',action:{op:'cancel'}});
+      await invoke('image_size');await wait('!!layerApp.state().layer_tools.image_size');
+      await captureDropdowns({call,evaluate,settle},'#image-size-dialog',directory,`image-size-${current}`);
+      const image=await evaluate('layerApp.state().layer_tools.image_size'),next=image.resamples.find(choice=>choice.resample!==image.resample).resample;
+      await evaluate(`(${chooseDropdown.toString()})('#image-size-dialog .size-dialog-row:last-of-type .dropdown',${JSON.stringify(next)})`);await settle();
+      assert.equal(await evaluate('layerApp.state().layer_tools.image_size.resample'),next,'The modal resample menu forwards its selected value');
+      await send({type:'image_size',action:{op:'cancel'}});
+    }
+    if(theme)await send({type:'set_theme',theme});
 
     const strokeAt=async(points,rgba)=>{
       await tool('pen');await send({type:'select_brush',id:1});await send({type:'set_brush_size',value:40});await send({type:'set_color',rgba});
+      assert.equal(await evaluate(`document.elementFromPoint(${points[0].x},${points[0].y})===layerApp.canvas`),true,'Stroke starts on the canvas');
       await drag(points,'pen');
     };
     let refused=0;
     for(let attempt=0;attempt<4;attempt++) {
       await strokeAt(line(await screen(width*.6,height*.6),await screen(width*.8,height*.62)),COLORS.pen);
-      const outcome=await evaluate(`(()=>{const send=action=>layerApp.dispatch({type:'canvas_size',action});
+      const outcome=await evaluate(`(async()=>{const send=action=>layerApp.dispatch({type:'canvas_size',action});
         layerApp.dispatch({type:'invoke',command:'canvas_size'});
         send({op:'anchor',anchor:'bottom_right'});send({op:'width',value:${width+300}});send({op:'height',value:${height+300}});
+        await new Promise((resolve,reject)=>{const end=performance.now()+30000;function published(){if(layerApp.state().layer_tools.canvas_size)resolve();else if(performance.now()>end)reject(Error('Canvas Size view was not published'));else requestAnimationFrame(published);}published();});
         const ready=layerApp.state().layer_tools.canvas_size.can_apply,message=layerApp.state().layer_tools.canvas_size.message;
         send({op:'apply'});
         const tab=layerApp.state().tabs[0];return{ready,message,size:[tab.width,tab.height],status:document.querySelector('#status').textContent,open:!!layerApp.state().layer_tools.canvas_size};})()`);
@@ -155,7 +176,7 @@ export async function checkCanvasSize({call,evaluate,settle,device=false}) {
         await wait(`layerApp.state().layer_tools.canvas_size.relative`);
         values=[width-cropped[0],height-cropped[1]];
       } else if(kind==='pen') {
-        await evaluate(`(s=>{s.value='percent';s.dispatchEvent(new Event('change',{bubbles:true}));})(document.querySelector('${dialog} .size-dialog-select'))`);await settle();
+        await evaluate(`(s=>{(${chooseDropdown})(s,'percent');})(document.querySelector('${dialog} .size-dialog-select'))`);await settle();
         await wait(`layerApp.state().layer_tools.canvas_size.unit==='percent'`);
         values=[width/cropped[0]*100,height/cropped[1]*100].map(v=>Math.round(v*100)/100);
       }

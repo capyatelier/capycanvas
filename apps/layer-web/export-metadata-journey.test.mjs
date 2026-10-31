@@ -1,3 +1,4 @@
+import {chooseDropdown} from './dropdown-fixture.mjs';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 
@@ -8,7 +9,7 @@ export async function checkExportMetadata({call,evaluate,settle}) {
   const invoke=async command=>{await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
   const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await settle();};
   const click=label=>evaluate(`(()=>{const b=[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b||b.disabled)throw Error('Missing enabled '+${JSON.stringify(label)});b.click()})()`);
-  const set=(label,value)=>evaluate(`(()=>{const n=document.querySelector('dialog[open] [aria-label="'+${JSON.stringify(label)}+'"]');n.value=${JSON.stringify(value)};n.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+  const set=(label,value)=>evaluate(`(()=>{const n=document.querySelector('dialog[open] [aria-label="'+${JSON.stringify(label)}+'"]');(${chooseDropdown})(n,${JSON.stringify(value)});})()`);
   const shown=label=>evaluate(`(()=>{const n=document.querySelector('dialog[open] [aria-label="'+${JSON.stringify(label)}+'"]');return !!n&&!n.closest('label').hidden})()`);
   const idle=()=>wait('!layerApp.state().document_file.busy&&!layerApp.documents.busy()&&layerApp.app.brush_ready()');
   const open=async name=>{
@@ -132,7 +133,7 @@ export async function checkExportMetadata({call,evaluate,settle}) {
     for(const [format,name] of [['Jpeg','copy.jpg'],['Webp','copy.webp']]) {
       await invoke('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Metadata"]')`);
       await set('Format',format);await settle();
-      assert.deepEqual(await evaluate(`[...document.querySelector('dialog[open] [aria-label="Metadata"]').options].map(o=>o.textContent)`),['All','Copyright & Contact','None']);
+      assert.deepEqual(await evaluate(`document.querySelector('dialog[open] [aria-label="Metadata"]').menuModel().sections.flat().map(o=>o.label)`),['All','Copyright & Contact','None']);
       assert.equal(await evaluate(`document.querySelector('dialog[open] [aria-label="Metadata"]').value`),'All');
       assert.ok(await shown('Metadata')&&await shown('Remove location'));
       assert.equal(await evaluate(`document.querySelector('dialog[open] [aria-label="Remove location"]').checked`),true,'location is removed by default');

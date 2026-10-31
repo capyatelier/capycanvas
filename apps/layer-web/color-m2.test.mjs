@@ -1,6 +1,8 @@
+import {dropdownChoice,chooseDropdown,captureDropdowns} from './dropdown-fixture.mjs';
 import {histogramJourney} from './histogram-journey.mjs';
 import {createDrawing} from './new-drawing-fixture.mjs';
 import assert from 'node:assert/strict';
+import {mkdir} from 'node:fs/promises';
 import {checkTextEntry} from './control-style-fixture.mjs';
 import {paintBaseImage,authoredIdentity,readPackage,packageObject,packageComposition,packageOccurrences,packageResources,packageResourceIdentity,resourceIdentity,sourceIdentity,rasterIdentity,sourceContent,sourceSamples,packageObjects,imageIdentity,imageContent} from './package-fixture.test.mjs';
 const rasterResources=m=>packageResources(m,'capy.raster-tile/1').map(resource=>resourceIdentity(m,{ref:resource.id}));
@@ -9,6 +11,14 @@ const wireColor=c=>({space:{Srgb:'srgb',DisplayP3:'display_p3',AdobeRgb:'adobe_r
 const activeOccurrence=async(evaluate,m)=>packageOccurrences(m)[await evaluate('layerApp.state().layers.findIndex(l=>l.editing)')];
 const runtimeId=async(evaluate,m,portable)=>evaluate(`Number(layerApp.state().layers[${packageOccurrences(m).findIndex(o=>o.id===portable)}].id)`);
 
+
+async function captureDialogChoices({call,evaluate,settle},name) {
+  const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/document-color/web';await mkdir(directory,{recursive:true});
+  const settings=await evaluate('layerApp.state().settings');
+  const restore=theme=>evaluate(`layerApp.dispatch({type:'restore_saved_settings',saved:${JSON.stringify(JSON.stringify({...settings,theme}))}})`);
+  try {for(const theme of ['light','dark']){await restore(theme);await settle();await captureDropdowns({call,evaluate,settle},'dialog[open]',directory,`${name}-${theme}`);}}
+  finally {await restore(settings.theme);await settle();}
+}
 
 const helpers=(evaluate,{timeout=60000,enabled=false}={})=>{
   const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>${timeout})reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1400)));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
@@ -27,6 +37,7 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
   await invoke('new_document');await evaluate(createDrawing({width:513,height:257,space:'DisplayP3',depth:'U16'}));
   await wait('!layerApp.state().document_file.busy && layerApp.app.document_color().space==="DisplayP3" && layerApp.app.brush_ready()');
   assert.deepEqual(await evaluate('layerApp.app.document_color()'),{space:'DisplayP3',depth:'U16'});
+  for(const command of ['assign_profile','convert_color_space','change_bit_depth']){await invoke(command);await wait(`!!document.querySelector('dialog[open] .dropdown')`);await captureDialogChoices({call,evaluate,settle},command);await click('Cancel');await wait('!layerApp.documents.busy()&&!layerApp.state().document_file.busy');}
   await evaluate(`layerApp.dispatch({type:'color',action:{op:'set_slot',slot:'foreground',color:{space:'ProPhoto',rgba:[.85,.021,.6,.33333334]}}});window.sdrColor=JSON.stringify(layerApp.state().colors.foreground);`);
   await evaluate(`[...document.querySelectorAll('button[aria-label="Edit Color"]')].find(b=>b.getBoundingClientRect().width>0).click()`);
   await wait(`!!document.querySelector('.color-dialog[open] .color-format')`);
@@ -41,6 +52,7 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
   const paint=await readPackage(evaluate,'[...sdrFiles.values()].at(-1)');assert.equal(compositionColor(paint).depth,'u16');assert.equal(compositionColor(paint).space,'display_p3');assert.ok(packageResources(paint,'capy.raster-tile/1').length>0);assert.ok(packageResources(paint,'capy.raster-tile/1').every(b=>b.data.depth==='u16'));
   await evaluate(`(async()=>{window.sdrPhotoBytes=new Uint8Array(await (await fetch(${JSON.stringify(photoUrl)})).arrayBuffer());window.showOpenFilePicker=async()=>[{name:'prophoto16.png',async getFile(){return new File([sdrPhotoBytes],'prophoto16.png')}}];})()`);
   await invoke('open_document');await wait('!layerApp.state().document_file.busy && layerApp.app.document_color().space==="ProPhoto" && layerApp.app.brush_ready()');
+  await invoke('repair_source_profile');await wait(`!!document.querySelector('dialog[open] .dropdown')`);await captureDialogChoices({call,evaluate,settle},'source-profile');await click('Cancel');await wait('!layerApp.documents.busy()&&!layerApp.state().document_file.busy');
   assert.deepEqual(await evaluate('layerApp.app.document_color()'),{space:'ProPhoto',depth:'U16'});assert.equal(await evaluate('layerApp.state().document_file.location??null'),null);
   await invoke('save_document_as');await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');
   const source=await readPackage(evaluate,'[...sdrFiles.values()].at(-1)');assert.equal(sourceIdentity(source).length,1);assert.equal(sourceIdentity(source)[0].interpretation.depth,'u16');assert.ok(sourceIdentity(source)[0].tiles.length>0);assert.equal(packageResources(source,'capy.icc/1').length,1);
@@ -49,8 +61,8 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
   await invoke('save_document_as');await wait('!layerApp.state().document_file.busy');
   const restored=await readPackage(evaluate,'sdrFiles.get("photo-master.capy")');assert.deepEqual(sourceIdentity(restored),sourceIdentity(source));assert.deepEqual(packageResourceIdentity(restored),packageResourceIdentity(source));assert.deepEqual(compositionColor(restored),compositionColor(source));
   const exported = async(format,profile,depth='U16',resize=false)=>{
-    await invoke('export_document');await wait(`!!document.querySelector('dialog[open] select[aria-label="Format"]')`);
-    await evaluate(`(()=>{const d=document.querySelector('dialog[open]');const set=(label,value)=>{const s=d.querySelector('select[aria-label="'+label+'"]');s.value=value;s.dispatchEvent(new Event('change'));};
+    await invoke('export_document');await wait(`!!document.querySelector('dialog[open] .dropdown[aria-label="Format"]')`);
+    await evaluate(`(()=>{const d=document.querySelector('dialog[open]');const set=(label,value)=>{const s=d.querySelector('.dropdown[aria-label="'+label+'"]');(${chooseDropdown})(s,value);};
       set('Format',${JSON.stringify(format)});set('Output profile',${JSON.stringify(profile)});set('Bit depth',${JSON.stringify(depth)});set('Pixel size','Original');set('Dither','None');
       if(${resize}){const number=(label,value)=>{const entry=d.querySelector('input.number-entry[aria-label="'+label+'"]');entry.closest('.number-control').querySelector('.number-value').click();entry.value=value;entry.dispatchEvent(new Event('input',{bubbles:true}));};set('Pixel size','Fit');number('Maximum width (px)','257');number('Maximum height (px)','257');set('Resolution metadata','Ppi');number('Pixels per inch','300');}})()`);
     if(resize){await click('Preview Output');await wait(`!!document.querySelector('canvas[aria-label="Output preview"]')`);
@@ -88,11 +100,12 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
     window.sdrUntagged=(()=>{const parts=[sdrPhotoBytes.slice(0,8)];for(let offset=8;offset<sdrPhotoBytes.length;){const size=new DataView(sdrPhotoBytes.buffer,sdrPhotoBytes.byteOffset+offset,4).getUint32(0),tag=new TextDecoder().decode(sdrPhotoBytes.slice(offset+4,offset+8));if(!['iCCP','sRGB','gAMA','cHRM','cICP'].includes(tag))parts.push(sdrPhotoBytes.slice(offset,offset+size+12));offset+=size+12;}return new Blob(parts);})();
     window.showOpenFilePicker=async()=>[{name:'untagged.png',async getFile(){return new File([sdrUntagged],'untagged.png')}}];`);
   const beforeAssumption=await evaluate('Number(layerApp.state().document_file.epoch)');
-  await invoke('open_document');await wait(`!!document.querySelector('dialog[open] select[aria-label="Interpret as"]')`);
+  await invoke('open_document');await wait(`!!document.querySelector('dialog[open] .dropdown[aria-label="Interpret as"]')`);
+  await captureDialogChoices({call,evaluate,settle},'interpret-source');
   assert.equal(await evaluate('Number(layerApp.state().document_file.epoch)'),beforeAssumption);await click('Cancel');await wait('!layerApp.state().document_file.busy');
   assert.equal(await evaluate('Number(layerApp.state().document_file.epoch)'),beforeAssumption);
-  await invoke('open_document');await wait(`!!document.querySelector('dialog[open] select[aria-label="Interpret as"]')`);
-  await evaluate(`document.querySelector('select[aria-label="Interpret as"]').value='2'`);await click('Use Profile');await wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
+  await invoke('open_document');await wait(`!!document.querySelector('dialog[open] .dropdown[aria-label="Interpret as"]')`);
+  await evaluate(dropdownChoice('.dropdown[aria-label="Interpret as"]','2'));await click('Use Profile');await wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
   assert.deepEqual(await evaluate('layerApp.app.document_color()'),{space:'AdobeRgb',depth:'U16'});
   await invoke('save_document_as');await wait('!layerApp.state().document_file.busy');
   const assumed=await readPackage(evaluate,'sdrFiles.get("untagged.capy")');
@@ -107,12 +120,12 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
   assert.ok((await scope.cancel()).retired);
   assert.deepEqual(await scope.exact(),inspection.histogram,'Revealing a retired subscription recaptures the same source');
   await scope.hide();
-  await invoke('export_document');await wait(`!!document.querySelector('dialog[open] select[aria-label="Format"]')`);
+  await invoke('export_document');await wait(`!!document.querySelector('dialog[open] .dropdown[aria-label="Format"]')`);
   await click('Preview Output');await click('Cancel');await wait('!layerApp.state().document_file.busy');
   assert.equal(await evaluate('layerApp.state().host_error??null'),null);
   const fileCount=await evaluate('sdrFiles.size');
   await evaluate(`window.sdrCancelObserver=new MutationObserver(()=>{const b=document.querySelector('.file-progress button');if(b){b.click();sdrCancelObserver.disconnect();}});sdrCancelObserver.observe(document.body,{childList:true,subtree:true});`);
-  await invoke('export_document');await wait(`!!document.querySelector('dialog[open] select[aria-label="Format"]')`);await click('Choose File…');await wait('!layerApp.state().document_file.busy');
+  await invoke('export_document');await wait(`!!document.querySelector('dialog[open] .dropdown[aria-label="Format"]')`);await click('Choose File…');await wait('!layerApp.state().document_file.busy');
   assert.equal(await evaluate('layerApp.state().host_error??null'),null);assert.equal(await evaluate('sdrFiles.size'),fileCount);
   console.log('Cancelled export publishes no image and leaves the master usable');
   console.log('Full-resolution histogram excludes transparent pixels; nonmodal UI and cancellation passed');
@@ -134,13 +147,13 @@ export async function checkColorEdits({call,evaluate,settle}) {
   for(const [type,dx,buttons] of [['mousePressed',0,1],['mouseMoved',45,1],['mouseReleased',45,0]]){await call('Input.dispatchMouseEvent',{type,x:point.x+dx,y:point.y,button:'left',buttons,clickCount:1,pointerType:'pen',force:buttons?.65:0});await settle();}
   await wait('layerApp.state().document_file.modified');const original=await save();
   async function change(command,label,value,apply=true){
-    await invoke(command);await wait(`!!document.querySelector('dialog[open] select[aria-label=${JSON.stringify(label)}]')`);
-    await evaluate(`(()=>{const s=document.querySelector('dialog[open] select[aria-label=${JSON.stringify(label)}]');s.value=${JSON.stringify(value)};s.dispatchEvent(new Event('change'));})()`);
+    await invoke(command);await wait(`!!document.querySelector('dialog[open] .dropdown[aria-label=${JSON.stringify(label)}]')`);
+    await evaluate(`(()=>{const s=document.querySelector('dialog[open] .dropdown[aria-label=${JSON.stringify(label)}]');(${chooseDropdown})(s,${JSON.stringify(value)});})()`);
     await wait(`document.querySelectorAll('.color-comparison canvas').length===2`);
     assert.ok(await evaluate(`[...document.querySelectorAll('.color-comparison canvas')].every(c=>c.width<=512&&c.height<=384)`));
     await click(apply?'Apply':'Cancel');await wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');assert.equal(await evaluate('layerApp.state().host_error??null'),null);
   }
-  await invoke('assign_profile');await wait(`!!document.querySelector('dialog[open] select[aria-label="Color space"]')`);
+  await invoke('assign_profile');await wait(`!!document.querySelector('dialog[open] .dropdown[aria-label="Color space"]')`);
   await click('Cancel');await wait('!layerApp.state().document_file.busy');assert.deepEqual(backing(await save()),backing(original));
   const paintedHistogram={histogram:await histogramJourney({evaluate,settle}).exact()};
   assert.equal(paintedHistogram.histogram.pixels+paintedHistogram.histogram.transparent,513*257);
@@ -156,7 +169,7 @@ export async function checkColorEdits({call,evaluate,settle}) {
   await history('undo',converted);await history('redo',reduced);
   await evaluate(`window.sdrColorMaster=sdrFiles.get('untagged.capy').slice();window.showOpenFilePicker=async()=>[{name:'untagged.capy',async getFile(){return new File([sdrColorMaster],'untagged.capy')}}];`);
   await invoke('open_document');await wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');assert.deepEqual(backing(await save()),backing(reduced));
-  await invoke('export_document');await wait(`!!document.querySelector('dialog[open] select[aria-label="Format"]')`);await evaluate(`(()=>{const f=document.querySelector('select[aria-label="Format"]');f.value='Png';f.dispatchEvent(new Event('change'))})()`);await click('Choose File…');await wait('!layerApp.state().document_file.busy');
+  await invoke('export_document');await wait(`!!document.querySelector('dialog[open] .dropdown[aria-label="Format"]')`);await evaluate(`(()=>{const f=document.querySelector('.dropdown[aria-label="Format"]');(${chooseDropdown})(f,'Png');})()`);await click('Choose File…');await wait('!layerApp.state().document_file.busy');
   assert.equal(await evaluate('layerApp.state().host_error??null'),null);assert.ok(await evaluate('sdrFiles.get("untagged.png")?.length>100'));
   console.log('Full-image comparison, canceled/committed assignment, conversion, depth change, exact undo/redo and native reopen passed; retained source samples/profile unchanged');
 }
@@ -210,7 +223,7 @@ export async function checkSourceEdits({call,evaluate,settle}) {
   const source=async m=>paintBaseImage(m,(await activeOccurrence(evaluate,m)).data.content.paint);
   async function change(command,profile,apply=true){
     await invoke(command);await wait('!!document.querySelector("dialog[open]")');
-    if(profile!==null)await evaluate(`(()=>{const select=document.querySelector('select[aria-label="Correct source profile"]');select.value=${JSON.stringify(profile)};select.dispatchEvent(new Event('change'));})()`);
+    if(profile!==null)await evaluate(`(()=>{const select=document.querySelector('.dropdown[aria-label="Correct source profile"]');(${chooseDropdown})(select,${JSON.stringify(profile)});})()`);
     await wait(`!!document.querySelector('canvas[aria-label="Prepared composition"]')`);
     const adds=await evaluate('!![...document.querySelectorAll("dialog[open] button")].find(b=>b.textContent==="Add Corrected Source")');
     await click(!apply?'Cancel':command==='rasterize_source'?'Rasterize':adds?'Add Corrected Source':'Apply Profile');await idle();
@@ -237,34 +250,34 @@ export async function checkSourceEdits({call,evaluate,settle}) {
   console.log('Source repair/rasterize full-composition comparisons, exact undo/redo, worker/preview cancellation, baked-paint preservation and save/reopen passed');
 }
 
-export async function checkExportPresets({evaluate}) {
+export async function checkExportPresets({call,evaluate,settle}) {
   const {wait,click}=helpers(evaluate);
   await evaluate(`window.presetSavePicker=window.showSaveFilePicker;window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){return{async write(bytes){if(!(bytes.size??bytes.byteLength))throw Error('Empty export')},async close(){},async abort(){}}}})`);
   try {
-  const invoke=async()=>{await wait('!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id==="export_document")?.enabled');await evaluate(`layerApp.dispatch({type:'invoke',command:'export_document'})`);await wait(`!!document.querySelector('select[aria-label="Destination"]')`);};
+  const invoke=async()=>{await wait('!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id==="export_document")?.enabled');await evaluate(`layerApp.dispatch({type:'invoke',command:'export_document'})`);await wait(`!!document.querySelector('.dropdown[aria-label="Destination"]')`);};
   const preset=index=>evaluate(`(async()=>JSON.parse(JSON.stringify(await layerApp.app.export_presets({type:'get',index:${index}}),(_,v)=>typeof v==='bigint'?Number(v):v)))()`);
   const name='Tablet delivery '+Date.now();
-  await invoke();await checkTextEntry(evaluate,'input[aria-label="Preset name"]');
-  await evaluate(`(()=>{const d=document.querySelector('dialog[open]');const select=(label,value)=>{const node=d.querySelector('select[aria-label="'+label+'"]');node.value=value;node.dispatchEvent(new Event('change'));};
+  await invoke();await captureDialogChoices({call,evaluate,settle},'export');await checkTextEntry(evaluate,'input[aria-label="Preset name"]');
+  await evaluate(`(()=>{const d=document.querySelector('dialog[open]');const select=(label,value)=>{const node=d.querySelector('.dropdown[aria-label="'+label+'"]');(${chooseDropdown})(node,value);};
     select('Format','Png');select('Output profile','1');select('Bit depth','U16');select('Pixel size','Fit');select('Resolution metadata','Ppi');
     for(const[label,value]of[['Maximum width (px)','321'],['Maximum height (px)','123'],['Pixels per inch','287']]){const entry=d.querySelector('input.number-entry[aria-label="'+label+'"]');entry.closest('.number-control').querySelector('.number-value').click();entry.value=value;entry.dispatchEvent(new Event('input',{bubbles:true}));}d.querySelector('input[aria-label="Preset name"]').value=${JSON.stringify(name)};})()`);
-  await click('Save Preset');await wait(`document.querySelector('select[aria-label="Destination"]')?.selectedOptions[0]?.textContent===${JSON.stringify(name)}`);
-  const index=await evaluate('Number(document.querySelector(\'select[aria-label="Destination"]\').value)');
+  await click('Save Preset');await wait(`document.querySelector('.dropdown[aria-label="Destination"]')?.querySelector('.dropdown-label')?.textContent===${JSON.stringify(name)}`);
+  const index=await evaluate('Number(document.querySelector(\'.dropdown[aria-label="Destination"]\').value)');
   const saved=await preset(index);
   assert.equal(saved.recipe.profile.profile.Builtin,'DisplayP3');assert.equal(saved.recipe.depth,'U16');assert.deepEqual(saved.recipe.size,{Fit:{bounds:[321,123],enlarge:false}});assert.deepEqual(saved.recipe.resolution,{Ppi:287});
   await click('Cancel');await wait('!layerApp.state().document_file.busy');await invoke();
-  await evaluate(`(()=>{const node=document.querySelector('select[aria-label="Destination"]');node.value=${JSON.stringify(String(index))};node.dispatchEvent(new Event('change'));})()`);
-  await wait(`document.querySelector('select[aria-label="Bit depth"]').value==='U16' && document.querySelector('input[aria-label="Maximum width (px)"]').value==='321'`);
+  await evaluate(`(()=>{const node=document.querySelector('.dropdown[aria-label="Destination"]');(${chooseDropdown})(node,${JSON.stringify(String(index))});})()`);
+  await wait(`document.querySelector('.dropdown[aria-label="Bit depth"]').value==='U16' && document.querySelector('input[aria-label="Maximum width (px)"]').value==='321'`);
   assert.equal(await evaluate('document.querySelector(\'input[aria-label="Pixels per inch"]\').value'),'287');
-  await evaluate(`const node=document.querySelector('select[aria-label="Transparency"]');node.value='White';node.dispatchEvent(new Event('change'));`);await click('Update Preset');
-  await wait(`!document.querySelector('select[aria-label="Destination"]').disabled`);
+  await evaluate(`const node=document.querySelector('.dropdown[aria-label="Transparency"]');(${chooseDropdown})(node,'White');`);await click('Update Preset');
+  await wait(`!document.querySelector('.dropdown[aria-label="Destination"]').disabled`);
   assert.equal((await preset(index)).recipe.background,'White');
   await click('Choose File…');await wait('!layerApp.state().document_file.busy');
   const remembered=await preset(3);assert.equal(remembered.recipe.background,'White');assert.deepEqual(remembered.recipe.resolution,{Ppi:287});
-  await invoke();await evaluate(`(()=>{const node=document.querySelector('select[aria-label="Destination"]');node.value=${JSON.stringify(String(index))};node.dispatchEvent(new Event('change'));})()`);
-  await wait(`!document.querySelector('select[aria-label="Destination"]').disabled`);await click('Delete Preset');
-  await wait(`![...document.querySelector('select[aria-label="Destination"]').options].some(o=>o.textContent===${JSON.stringify(name)})`);
-  await click('Reset Destination');await wait(`!document.querySelector('select[aria-label="Destination"]').disabled`);
+  await invoke();await evaluate(`(()=>{const node=document.querySelector('.dropdown[aria-label="Destination"]');(${chooseDropdown})(node,${JSON.stringify(String(index))});})()`);
+  await wait(`!document.querySelector('.dropdown[aria-label="Destination"]').disabled`);await click('Delete Preset');
+  await wait(`!document.querySelector('.dropdown[aria-label="Destination"]').menuModel().sections.flat().some(o=>o.label===${JSON.stringify(name)})`);
+  await click('Reset Destination');await wait(`!document.querySelector('.dropdown[aria-label="Destination"]').disabled`);
   const reset=await preset(0);assert.equal(reset.recipe.format,'Png');assert.equal(reset.recipe.profile.profile.Builtin,'Srgb');assert.equal(reset.recipe.size,'Original');
   await click('Cancel');await wait('!layerApp.state().document_file.busy');
   console.log('Named export presets save/update/delete, restore all size/profile/depth/DPI choices across dialog reopen, remember successful delivery and reset destinations passed');
@@ -295,7 +308,7 @@ export async function checkProfileLibrary({evaluate}) {
   assert.deepEqual(report,{exact:true,corrupt:true,rejected:true,retained:true,count:1});
   await evaluate(`(async()=>{window.librarySearchIds=[];for(let year=2021;year<2030;year++){const bytes=libraryBytes.slice();new DataView(bytes.buffer).setUint16(24,year);await layerApp.app.profile_library('import',undefined,bytes);librarySearchIds.push([...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(value=>value.toString(16).padStart(2,'0')).join(''));}})()`);
 
-  await invoke('export_document');await wait(`!!document.querySelector('select[aria-label="Output profile"]')`);await click('Saved Profiles…');
+  await invoke('export_document');await wait(`!!document.querySelector('.dropdown[aria-label="Output profile"]')`);await click('Saved Profiles…');
   await wait(`!![...document.querySelectorAll('.profile-library .profile-entry')].find(e=>e.textContent.includes(libraryId.slice(0,12)))`);
   assert.equal(await evaluate('document.querySelector("#profile-library-search").hidden'),false);
   await checkTextEntry(evaluate,'#profile-library-search');
@@ -306,7 +319,7 @@ export async function checkProfileLibrary({evaluate}) {
   // close() clears `open` before the queued close event resolves the picker.
   // Wait for that event's removal before inspecting its selected result.
   await wait(`!document.querySelector('.profile-library')`);
-  const chosen=await evaluate(`document.querySelector('select[aria-label="Output profile"]').selectedOptions[0].textContent`);assert.match(chosen,/ProPhoto/i);
+  const chosen=await evaluate(`document.querySelector('.dropdown[aria-label="Output profile"]').querySelector('.dropdown-label').textContent`);assert.match(chosen,/ProPhoto/i);
   await click('Cancel');await idle();
   await evaluate(`layerApp.dispatch({type:'open_settings',page:'color'})`);
   await wait(`!![...document.querySelectorAll('#settings button')].find(b=>b.textContent==='Manage Profiles…')`);
@@ -327,8 +340,8 @@ export async function checkFlattenedCopy({evaluate}) {
   const master=await readPackage(evaluate,`sdrFiles.get(${JSON.stringify(saved.file.location.name)})`);
   const createLabel=await evaluate('layerApp.app.document_color_copy().create_copy');
   const prepare=async()=>{
-    await invoke('convert_color_space');await wait(`!!document.querySelector('dialog[open] select[aria-label="Result"]')`);
-    await evaluate(`(()=>{for(const [label,value]of [['Result','copy'],['Color space','Srgb']]){const s=document.querySelector('dialog[open] select[aria-label="'+label+'"]');s.value=value;s.dispatchEvent(new Event('change'));}})()`);
+    await invoke('convert_color_space');await wait(`!!document.querySelector('dialog[open] .dropdown[aria-label="Result"]')`);
+    await evaluate(`(()=>{for(const [label,value]of [['Result','copy'],['Color space','Srgb']]){const s=document.querySelector('dialog[open] .dropdown[aria-label="'+label+'"]');(${chooseDropdown})(s,value);}})()`);
     await wait(`!!document.querySelector('canvas[aria-label="Prepared composition"]')`);
     assert.ok(await evaluate(`!![...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(createLabel)}&&!b.disabled)`));
   };

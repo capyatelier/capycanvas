@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {writeFile} from 'node:fs/promises';
 
-export function chooseDropdown(selector,value,by='value') {
+export function chooseDropdown(selector,value,by='value',activate=row=>row.click()) {
   const node=typeof selector==='string'?document.querySelector(selector):selector;
   if(!node||node.disabled)throw Error(`Missing enabled dropdown ${selector}`);
   node.click();
@@ -10,11 +10,17 @@ export function chooseDropdown(selector,value,by='value') {
   const rows=[...menu.querySelectorAll('button')];
   const row=by==='index'?rows[Number(value)]:rows.find(row=>String(by==='label'?row.menuItem.label:row.menuItem.command)===String(value));
   if(!row||row.disabled)throw Error(`Missing enabled choice ${value} in ${selector}`);
-  row.click();
+  return activate(row);
 }
 
 export const dropdownChoice=(selector,value,by='value')=>`(${chooseDropdown.toString()})(${JSON.stringify(selector)},${JSON.stringify(value)},${JSON.stringify(by)})`;
+export async function clickDropdownChoice({call,evaluate,settle},selector,value,by='value') {
+  const point=await evaluate(`(${chooseDropdown.toString()})(${JSON.stringify(selector)},${JSON.stringify(value)},${JSON.stringify(by)},row=>{row.scrollIntoView({block:'nearest'});const r=row.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2,hit=document.elementFromPoint(x,y);if(hit!==row&&!row.contains(hit))throw Error('Dropdown row is obstructed');return{x,y}})`);
+  for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...point,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});await settle();
+}
 export async function captureDropdowns({call,evaluate,settle},selector,directory,name) {
+  const theme=name.match(/(?:^|-)(light|dark)(?:-|$)/)?.[1];
+  if(theme)assert.equal(await evaluate('document.body.dataset.theme'),theme,`${name} capture theme`);
   const count=await evaluate(`document.querySelector(${JSON.stringify(selector)}).querySelectorAll('.dropdown').length`);
   const key=async()=>{for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await settle();};
   const click=async()=>{const p=await evaluate(`(()=>{const r=dropdownTestTrigger.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});await settle();};
@@ -22,7 +28,7 @@ export async function captureDropdowns({call,evaluate,settle},selector,directory
     if(!await evaluate(`(()=>{window.dropdownTestTrigger=document.querySelector(${JSON.stringify(selector)}).querySelectorAll('.dropdown')[${index}];return dropdownTestTrigger.checkVisibility()&&!dropdownTestTrigger.disabled})()`))continue;
     await evaluate(`dropdownTestTrigger.scrollIntoView({block:'nearest'})`);await settle();
     for(const state of ['closed','open']) {
-      if(state==='open'){await click();assert.equal(await evaluate(`!!document.querySelector('.panel-context-menu:popover-open')`),true,`${name} dropdown opens`);}
+      if(state==='open'){await click();assert.equal(await evaluate(`!!document.querySelector('.panel-context-menu:popover-open')`),true,`${name} dropdown opens`);assert.equal(await evaluate(`document.querySelector('.panel-context-menu:popover-open').getBoundingClientRect().width+.1>=dropdownTestTrigger.getBoundingClientRect().width`),true,`${name} menu is at least its trigger width`);}
       const {data}=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/${name}-dropdown-${index}-${state}.png`,Buffer.from(data,'base64'));
     }
     await click();assert.equal(await evaluate(`!!document.querySelector('.panel-context-menu:popover-open')`),false,`${name} clicking the trigger again closes its menu`);

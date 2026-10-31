@@ -19,21 +19,32 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     }
   });
   const displayColors=()=>state().layer_tools.mask_editing?.colors??state().colors;
-  let anchor = [320, 120], expanded = null, animation = 0, popupControl = null, menuCommand = null;
+  let anchor = [320, 120], expanded = null, animation = 0, popupControl = null, menuCommand = null, menuHost=null;
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
   const context = element("div", "panel-context-menu");
   // A context menu opens during a press/hold, before release. Automatic
   // popovers light-dismiss that same release as an outside click in Chromium.
   context.popover = "manual"; context.setAttribute("role", "menu"); workspace.append(context);
   const popup = element("div", "tile-popover"); popup.popover = "auto"; workspace.append(popup);
-  context.addEventListener("toggle", e=>{context.menuOwner?.setAttribute('aria-expanded',e.newState==='open');updateZen();});
+  const closeMenuHost=event=>{if(event.type==='close'||event.newState==='closed')dismissContext();};
+  function closeContext(restoreFocus=false) {
+    const focus=context.menuFocus;
+    if(context.matches(':popover-open'))context.hidePopover();
+    context.menuOwner?.setAttribute('aria-expanded','false');context.menuOwner=null;context.menuFocus=null;
+    for(const type of ['close','beforetoggle'])menuHost?.removeEventListener(type,closeMenuHost);menuHost=null;
+    if(context.parentNode!==workspace)workspace.append(context);
+    if(restoreFocus&&focus?.isConnected)focus.focus({preventScroll:true});
+  }
+  const closeDropdown=()=>closeContext(context.menuOwner?.classList.contains('dropdown'));
+  context.addEventListener("toggle", e=>{if(e.newState==='closed')closeContext();else context.menuOwner?.setAttribute('aria-expanded','true');updateZen();});
   window.addEventListener("pointerdown", (e) => {
-    if (context.matches(":popover-open") && !context.contains(e.target)) context.hidePopover();
+    const trigger=context.menuOwner?.classList.contains('dropdown')&&context.menuOwner.contains(e.target);
+    if (context.matches(":popover-open") && !context.contains(e.target)&&!trigger) closeContext();
   }, { capture: true });
   window.addEventListener("keydown", (e) => {
     if (composingKey(e)) return;
     if (e.key === "Escape" && context.matches(":popover-open")) {
-      context.hidePopover(); context.menuFocus?.focus({preventScroll:true}); e.preventDefault(); e.stopPropagation();
+      closeContext(true); e.preventDefault(); e.stopPropagation();
     }
   }, { capture: true });
   popup.addEventListener("toggle", () => {
@@ -125,7 +136,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     if(!context.matches(':popover-open') || !context.menuOwner)return;
     const owner=context.menuOwner;
     const model=owner.menuModel?owner.menuModel():app.context_menu(JSON.parse(owner.dataset.context));
-    refreshMenu(context,model,()=>context.hidePopover());
+    refreshMenu(context,model,closeDropdown);
   }
   function showContext(node, point, focus = node) {
     const claimed = new Event("workspace-context-claimed", { bubbles: true, cancelable: true });
@@ -133,9 +144,12 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     node.prepareMenu?.();
     const model = node.menuModel ? node.menuModel() : app.context_menu(JSON.parse(node.dataset.context));
     menuCommand = node.menuCommand ?? null;
-    context.menuOwner?.setAttribute('aria-expanded','false');
+    closeContext();
+    menuHost=node.closest('dialog[open],[popover]:popover-open');
+    if(menuHost){menuHost.append(context);for(const type of ['close','beforetoggle'])menuHost.addEventListener(type,closeMenuHost);}
+    context.style.minWidth=node.classList.contains('dropdown')&&point[2]!=null?`${node.getBoundingClientRect().width}px`:'';
     anchor = point; context.menuOwner = node; context.menuFocus = focus;
-    renderMenu(context, model, () => context.hidePopover());
+    renderMenu(context, model, closeDropdown);
     context.showPopover(); positionPopup(context);
   }
   function openMenu(node, point, focus = node) {
@@ -161,7 +175,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     const items = [...context.querySelectorAll("button:not(:disabled)")], current = items.indexOf(document.activeElement);
     const next = {ArrowDown:(current+1)%items.length, ArrowUp:(current-1+items.length)%items.length, Home:0, End:items.length-1}[e.key];
     if (next != null) { e.preventDefault(); items[next]?.focus({preventScroll:true}); }
-    if (e.key === "Tab") context.hidePopover();
+    if (e.key === "Tab") closeDropdown();
   });
   function contextTarget(node) {
     if (node.closest("input,select,textarea,.dropdown,[contenteditable=true],.scroll-thumb,[data-toolbar-field]")) return null;
@@ -184,7 +198,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
   const cancelHold = () => { if (hold) clearTimeout(hold.timer); hold = null; };
   function dismissContext() {
     cancelHold();
-    if (context.matches(":popover-open")) context.hidePopover();
+    closeContext();
   }
   workspace.addEventListener("pointerdown", (e) => {
     cancelHold(); heldPointer = null;

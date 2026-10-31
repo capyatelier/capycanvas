@@ -62,7 +62,7 @@ export function screenInfo() {
 
 // Presents the session's New drawing dialog: every input is a NewDrawingAction,
 // and every label, choice and state comes from `state().new_drawing`.
-export function createNewDrawing({app, state, applyChange, element, button, icon, numberField, importPaper}) {
+export function createNewDrawing({app, state, applyChange, element, button, icon, dropdown, numberField, importPaper}) {
   let ui = null, finish = null, creating = false;
   const view = () => state().new_drawing ?? null;
   function send(action) {
@@ -111,19 +111,8 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
       const r = node.getBoundingClientRect();
       popup(items(), e.clientX || r.left, e.clientY || r.bottom);
     });
-    const choice = (id, action) => {
-      const node = element('select', 'new-drawing-select'); node.id = id;
-      node.addEventListener('change', () => { const next = action(Number(node.value)); if (next) send(next); });
-      return node;
-    };
-    const fill = (node, choices, index) => {
-      const key = json(choices.map(entry => entry.label));
-      if (node.shownChoices !== key) {
-        node.shownChoices = key;
-        node.replaceChildren(...choices.map((entry, i) => { const option = element('option', '', entry.label); option.value = String(i); return option; }));
-      }
-      node.value = String(Math.max(0, index));
-    };
+    const choice=(id,action)=>{const node=dropdown('',value=>{const next=action(Number(value));if(next)send(next);});node.id=id;return node;};
+    const fill=(node,choices,index,label)=>node.update({choices:choices.map((entry,value)=>({value,label:entry.label})),value:Math.max(0,index),label});
     const keyGrid = (grid, tiles, pick, use) => grid.addEventListener('keydown', e => {
       const index = tiles().indexOf(document.activeElement);
       if (index < 0) return;
@@ -321,7 +310,7 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
       numbers.show(2, v.resolution_numeric, c.resolution, v.setup.resolution, () => view().setup.resolution);
       named(link, c.link); link.setAttribute('aria-pressed', String(v.linked));
       if (link.dataset.linked !== String(v.linked)) { link.dataset.linked = String(v.linked); link.replaceChildren(icon(v.linked ? 'link' : 'unlink')); }
-      fill(unit, v.units, v.units.findIndex(entry => entry.value === v.setup.unit)); unit.setAttribute('aria-label', c.unit);
+      fill(unit,v.units,v.units.findIndex(entry=>entry.value===v.setup.unit),c.unit);
       for (const [node, label, value] of [[portrait, c.portrait, 'portrait'], [landscape, c.landscape, 'landscape']]) {
         named(node, label); const on = v.page.orientation === value; node.setAttribute('aria-pressed', String(on)); node.classList.toggle('selected', on);
       }
@@ -329,7 +318,7 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
       text(size, v.page.size); size.classList.toggle('error', v.page.problem);
       text(colorHeading, c.color);
       for (const [entry, label, choices, current] of [[space, c.space, v.spaces, v.setup.color.space], [depth, c.depth, v.depths, v.setup.color.depth], [blending, c.blending, v.blendings, v.setup.blend_space]]) {
-        text(entry.label, label); fill(entry.select, choices, choices.findIndex(item => item.value === current));
+        text(entry.label, label); fill(entry.select,choices,choices.findIndex(item=>item.value===current),label);
       }
       blending.select.disabled = v.blending_note != null; blending.cell.title = v.blending_note ?? '';
       text(paperHeading, c.paper); texture.title = c.paper; paperColor.title = c.paper_color;
@@ -375,13 +364,13 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
       text(browserCancel, c.cancel); text(saveAs, b.save_label); text(select, c.select); select.disabled = !b.can_select;
       actionPages.show(b.save == null?actions:saving);
       const starting = b.save != null && !naming;
-      naming = b.save != null;
-      if (!b.save) return;
+      if(!b.save){if(naming)search.focus();naming=false;return;}
+      naming=true;
       const save = b.save;
       if (saveName.value !== save.name) saveName.value = save.name;
       saveName.placeholder = c.preset_name; saveName.setAttribute('aria-label', c.preset_name);
       saveName.classList.toggle('error', !save.can_save); saveName.toggleAttribute('aria-invalid', !save.can_save);
-      fill(saveGroup, save.groups, save.groups.findIndex(group => group.value === save.group)); named(saveGroup, c.preset_category);
+      fill(saveGroup,save.groups,save.groups.findIndex(group=>group.value===save.group),c.preset_category);
       text(saveCancel, c.cancel); text(saveConfirm, save.confirm); saveConfirm.disabled = !save.can_save;
       if (starting) { saveName.focus(); saveName.select(); }
     }

@@ -64,7 +64,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     if(request){nativeDeliveries.set(request.id,Promise.resolve(files));event.preventDefault();applyChange(change);}
   });
   const images=createImageImport({app,canvas,applyChange,wake,element,button,icon,message,gpuOperation,
-    openClipboard,openFiles,interpret:()=>chooseSourceProfile({app,dialog,element,button})});
+    openClipboard,openFiles,interpret:()=>chooseSourceProfile({app,dialog,element,button,dropdown})});
   const pruneHandles=()=>{const live=new Set(app.document_tabs(0).tabs.flatMap(t=>[t.uri,t.export_uri]));for(const key of handles.keys())if(!live.has(key))handles.delete(key);};
   const location=(name,handle)=>{const uri=`browser:${crypto.randomUUID()}`;if(handle)handles.set(uri,handle);return{uri,name};};
   const openDialogs=new Set();
@@ -212,7 +212,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
       const change=app.paper_adopt(task,result,false);if(change)applyChange(change);
     } finally {result?.free();task.free();}
   }
-  const newDrawing=createNewDrawing({app,state,applyChange,element,button,icon,numberField,importPaper:()=>runPaper(undefined,app.paper_library_import())});
+  const newDrawing=createNewDrawing({app,state,applyChange,element,button,icon,dropdown,numberField,importPaper:()=>runPaper(undefined,app.paper_library_import())});
   async function handle(request) {
     if(active.has(request.id))return;active.add(request.id);
     let candidate;
@@ -244,7 +244,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
         applyChange(app.finish_document(id,true));
         if(appearance)proof.run(id);
       } else if(["change_color","color_history","repair_source_profile","rasterize_source"].includes(r.type)) {
-        candidate=await chooseDocumentColor({app,dialog,element,button,gpuOperation,request:r,id});
+        candidate=await chooseDocumentColor({app,dialog,element,button,dropdown,gpuOperation,request:r,id});
         if(candidate?.is_copy?.()) {
           const prepared=await gpuOperation(()=>app.prepare_color_copy(candidate));
           candidate.free();candidate=null;
@@ -297,7 +297,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
           } catch(error) { message(error); }
           return;
         }
-        const choice=r.repeat?{recipe:r.repeat.recipe}:r.type==="export"?await chooseExport({app,dialog,element,button,numberField,gpuOperation,id}):null;
+        const choice=r.repeat?{recipe:r.repeat.recipe}:r.type==="export"?await chooseExport({app,dialog,element,button,dropdown,numberField,gpuOperation,id}):null;
         const recipe=choice?.recipe??null;
         if(r.type==="export"&&!recipe){applyChange(app.finish_document(id,false));return;}
         const target=await destination(r.repeat?{...r,location:r.repeat.location}:r,recipe);
@@ -425,7 +425,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     try{
       const original=file?.file??(bytes instanceof Blob?bytes:new Blob([bytes]));
       app.admit_document_input(BigInt(original.size),new Uint8Array(await original.slice(0,4).arrayBuffer()));
-      candidate=await gpuOperation(()=>app.prepare_document(id,bytes==null&&!file?undefined:original,fileState.epoch,fileState.revision,target?.name,()=>chooseSourceProfile({app,dialog,element,button}),()=>cancelled));
+      candidate=await gpuOperation(()=>app.prepare_document(id,bytes==null&&!file?undefined:original,fileState.epoch,fileState.revision,target?.name,()=>chooseSourceProfile({app,dialog,element,button,dropdown}),()=>cancelled));
       if(cancelled)throw new DOMException('Opening cancelled','AbortError');
       if(app.package_view(candidate)){
         progress.remove();

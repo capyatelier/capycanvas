@@ -1,3 +1,4 @@
+import {dropdownFactory,dropdownChoices,chooseDropdown} from './dropdown-test-fixture.mjs';
 import { FakeElement as SharedElement } from "./fake-dom.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -10,7 +11,6 @@ class FakeElement extends SharedElement {
     this.tagName = tag.toUpperCase(); this.className = className; this.children = []; this.parentNode = null;
     this.attributes = new Map(); this.dataset = {}; this.listeners = {}; this.textContent = ""; this.disabled = false; this.open = false;
   }
-  get options() { return this.children.filter(n=>n.tagName==="OPTION"); }
   get classList() {
     const names = () => new Set(this.className.split(/\s+/).filter(Boolean));
     return {
@@ -80,7 +80,7 @@ function harness({ create = createCanvasSizeUi, key = "canvas_size", data = "can
   const resolve = ({ operation }) => { const value = Number(operation.text); if (!operation.text || !Number.isFinite(value)) throw Error("Enter a number"); return { value }; };
   let ui;
   const dispatch = action => { assert.equal(action.type, key); sent.push(action.action); ui.refresh(); };
-  ui = create({ state: () => state, element, button, icon: name => element("svg", name), numberField, resolve, dispatch, host: () => body });
+  ui = create({ dropdown:dropdownFactory({element,button}), state: () => state, element, button, icon: name => element("svg", name), numberField, resolve, dispatch, host: () => body });
   const dialog = () => ui.dialog();
   const find = test => dialog()?.find(test);
   return {
@@ -88,8 +88,8 @@ function harness({ create = createCanvasSizeUi, key = "canvas_size", data = "can
     set(next) { state.layer_tools[key] = next && model(next); ui.refresh(); },
     field: name => find(n => n.dataset[data] === name),
     anchor: name => find(n => n.dataset.anchor === name),
-    select: label => find(n => n.className === "size-dialog-select" && n.getAttribute("aria-label") === label),
-    unit: () => find(n => n.className === "size-dialog-select"),
+    select: label => find(n => !!n.menuModel && n.getAttribute("aria-label") === label),
+    unit: () => find(n => !!n.menuModel),
     check: () => find(n => n.tagName === "INPUT" && n.type === "checkbox"),
     title: () => find(n => n.tagName === "H2"),
     apply: () => find(n => n.tagName === "BUTTON" && n.textContent === "Apply"),
@@ -98,7 +98,7 @@ function harness({ create = createCanvasSizeUi, key = "canvas_size", data = "can
   };
 }
 const imageHarness = () => harness({ create: createImageSizeUi, key: "image_size", data: "imageSize", model: imageView });
-const choose = (select, value) => { select.value = value; select.dispatch("change"); };
+const choose = chooseDropdown;
 
 function applyTest(name, create, ready, invalid) {
   test(`${name} keeps Apply disabled while the view cannot apply`, () => {
@@ -135,7 +135,7 @@ test("Canvas Size projects the shared view and closes when the view is gone", ()
   assert.equal(h.field("width").label, "Width");
   assert.equal(h.field("height").label, "Height");
   assert.deepEqual([h.field("width").value, h.field("height").value], [800, 600]);
-  assert.deepEqual(h.unit().children.map(o => [o.value, o.textContent]), [["pixels", "Pixels"], ["percent", "Percent"]]);
+  assert.deepEqual(dropdownChoices(h.unit()).map(o => [o.command, o.label]), [["pixels", "Pixels"], ["percent", "Percent"]]);
   assert.equal(h.unit().value, "pixels");
   assert.equal(h.check().checked, false);
   assert.equal(h.check().parentNode.children[1].textContent, "Relative");
@@ -163,8 +163,7 @@ test("Canvas Size commits typed text before an anchor, unit, Relative or Apply a
   assert.deepEqual(h.sent, [{ op: "width", value: 1024 }, { op: "anchor", anchor: "top_left" }]);
   h.sent.length = 0;
   h.field("height").pending = "700";
-  h.unit().value = "percent";
-  h.unit().dispatch("change");
+  chooseDropdown(h.unit(),"percent");
   assert.deepEqual(h.sent, [{ op: "height", value: 700 }, { op: "unit", unit: "percent" }], "the chosen unit survives the commit's refresh");
   h.sent.length = 0;
   h.field("width").pending = "900";
@@ -236,10 +235,10 @@ test("Image Size projects the shared view, opens without taking the keyboard, an
   assert.deepEqual(["width", "height", "resolution"].map(name => [h.field(name).label, h.field(name).value]),
     [["Width", 800], ["Height", 600], ["Resolution", 72]]);
   assert.equal(h.field("resolution").control.unit, "ppi");
-  assert.deepEqual(h.unit().children.map(o => [o.value, o.textContent]), [["pixels", "Pixels"], ["percent", "Percent"]]);
+  assert.deepEqual(dropdownChoices(h.unit()).map(o => [o.command, o.label]), [["pixels", "Pixels"], ["percent", "Percent"]]);
   assert.equal(h.check().checked, true);
   assert.equal(h.check().parentNode.children[1].textContent, "Constrain proportions");
-  assert.deepEqual(h.select("Resample").children.map(o => o.textContent), ["Automatic", "Bicubic", "Lanczos", "Bilinear", "Nearest neighbor"]);
+  assert.deepEqual(dropdownChoices(h.select("Resample")).map(o => o.label), ["Automatic", "Bicubic", "Lanczos", "Bilinear", "Nearest neighbor"]);
   assert.equal(h.select("Resample").value, "automatic");
   assert.equal(h.select("Resample").parentNode.children[0].textContent, "Resample");
   assert.equal(h.message().textContent, "Current size: 800 × 600 px");
@@ -321,5 +320,5 @@ cancelTest("Image Size", imageHarness);
 for(const [name,create] of [["Canvas Size",harness],["Image Size",imageHarness]])test(`${name} relabels without replacing dirty fields`,()=>{
   const h=create();h.ui.refresh();const width=h.field("width");width.pending="１２+";
   h.set({title:"サイズ",labels:["幅","高さ"],apply_label:"適用",cancel_label:"キャンセル",units:[{unit:"pixels",label:"ピクセル"},{unit:"percent",label:"割合"}]});
-  assert.equal(h.field("width"),width);assert.equal(width.pending,"１２+");assert.equal(width.label,"幅");assert.equal(h.title().textContent,"サイズ");assert.equal(h.unit().options[0].textContent,"ピクセル");
+  assert.equal(h.field("width"),width);assert.equal(width.pending,"１２+");assert.equal(width.label,"幅");assert.equal(h.title().textContent,"サイズ");assert.equal(dropdownChoices(h.unit())[0].label,"ピクセル");
 });

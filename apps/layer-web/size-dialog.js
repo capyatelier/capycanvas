@@ -13,14 +13,6 @@ export function openSizeDialog({element,button,host,name,body,copy,apply,cancel}
   return {dialog,title,message,apply:applyButton,relabel(copy){applyButton.textContent=copy.apply_label;cancelButton.textContent=copy.cancel_label;},close(){dialog.close();dialog.remove();}};
 }
 
-export function sizeSelect({element,label,choices,key,act}) {
-  const select=element('select','size-dialog-select');select.setAttribute('aria-label',label);
-  for(const choice of choices){const option=element('option','',choice.label);option.value=choice[key];select.append(option);}
-  select.relabel=choices=>{for(const choice of choices){const option=[...select.options].find(o=>o.value===choice[key]);if(option)option.textContent=choice.label;}};
-  select.addEventListener('change',()=>{const next=select.value;act({op:key,[key]:next});});
-  return select;
-}
-
 export function sizeCheck({element,key,act}) {
   const input=element('input');input.type='checkbox';
   input.addEventListener('change',()=>{const next=input.checked;act({op:key,[key]:next});});

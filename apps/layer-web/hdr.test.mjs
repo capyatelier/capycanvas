@@ -1,3 +1,4 @@
+import {chooseDropdown} from './dropdown-fixture.mjs';
 import {histogramJourney} from './histogram-journey.mjs';
 import {packageManifest,packageObjects,readPackage,packageResourceIdentity} from './package-fixture.test.mjs';
 import assert from 'node:assert/strict';
@@ -15,7 +16,7 @@ export async function checkHdr({call,evaluate,settle}) {
   const capture=async name=>writeFile(`${directory}/${name}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false})).data,'base64'));
   const wait=c=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${c})resolve(true);else if(performance.now()-start>55000)reject(Error(${JSON.stringify(c)}+': '+document.body.innerText.slice(-1800)));else setTimeout(poll,30)}catch(e){reject(e)}}poll()})`);
   const click=(label,root='dialog[open]')=>evaluate(`(()=>{const b=[...document.querySelectorAll(${JSON.stringify(root+' button')})].find(b=>b.textContent===${JSON.stringify(label)});if(!b||b.disabled)throw Error('Missing enabled '+${JSON.stringify(label)});b.click()})()`);
-  const set=(label,value,root='dialog[open]')=>evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(root+' [aria-label="'+label+'"]')});if(!n)throw Error('Missing '+${JSON.stringify(label)});n.value=${JSON.stringify(value)};n.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+  const set=(label,value,root='dialog[open]')=>evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(root+' [aria-label="'+label+'"]')});if(!n)throw Error('Missing '+${JSON.stringify(label)});(${chooseDropdown})(n,${JSON.stringify(value)});})()`);
   const invoke=async command=>{await wait(`!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
   const hist=histogramJourney({evaluate,settle}).exact;
   const save=async()=>{await invoke('save_document_as');await wait('!layerApp.state().document_file.busy&&!layerApp.state().document_file.modified');return readPackage(evaluate, 'hdrTest.last');};
@@ -191,7 +192,7 @@ export async function checkHdr({call,evaluate,settle}) {
     await output(hdrDisplay);
     results.recoveredOutput=await checkHdrDisplay({evaluate},hdrDisplay);await showProof();
     await evaluate(`document.querySelector('.proof-modes button[value="print"]').click()`);
-    await evaluate(`(()=>{const p=document.querySelector('.proof-panel [aria-label="Proof profile"]');p.value=p.querySelector('optgroup[label="Standard Color Spaces"] option').value;p.dispatchEvent(new Event('change'))})()`);
+    await evaluate(`(()=>{const p=document.querySelector('.proof-panel [aria-label="Proof profile"]');const rows=p.menuModel().sections.flat(),heading=rows.map(row=>row.is_heading).lastIndexOf(true);(${chooseDropdown})(p,rows[heading+1].command)})()`);
     await wait(`layerApp.app.proof_status().text.startsWith('Proof:')&&!layerApp.app.proof_status().needed`);
     await output(false);assert.deepEqual(await hist(),original,'Print proof preserves HDR artwork');await showProof();
     await evaluate(`document.querySelector('.proof-modes button[value="off"]').click()`);

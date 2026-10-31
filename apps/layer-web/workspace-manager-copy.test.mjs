@@ -1,3 +1,4 @@
+import {dropdownFactory,chooseDropdown} from './dropdown-test-fixture.mjs';
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {FakeElement as SharedElement} from './fake-dom.mjs';
@@ -41,7 +42,7 @@ function harness(t,{failure=false}={}) {
   let override={};const view=()=>({ready:true,busy:false,switcher_busy:false,dirty:false,id:'literal-id',name:'İı ไทย Tiếng Việt { $name } 🎨',page:failure?null:'workspaces',rows:failure?[]:[row()],switcher:[],switcher_display:[],switcher_options_label:`${tag}:workspace-options`,switcher_options:{title:`${tag}:workspace-options`,sections:[]},switcher_menu:{title:`${tag}:workspaces`,sections:[]},order:['literal-id'],switcher_revision:1,selected:'literal-id',title:`${tag}:title`,intro:`${tag}:intro`,primary:`${tag}:primary`,enabled:true,error:failure?`${tag}:write-failed`:null,switcher_error:null,focus_window:null,retry:failure,prompt:failure?null:{title:`${tag}:prompt-title`,message:`${tag}:prompt-message`,name:'Original literal name',confirm:`${tag}:confirm`,destructive:false},prompt_action:failure?null:{type:'new'},...override});
   const app={catalog:()=>({native_copy:{header:Object.fromEntries(headerFields.map(name=>[name,`${tag}:${name}`]))}}),bootstrap_view:()=>({common:Object.fromEntries(['close','cancel','name','keep_open','delete'].map(name=>[name,`${tag}:${name}`]))}),workspace_name_validation:name=>name.trim()?null:`${tag}:invalid-name`,workspace_view:()=>JSON.stringify(view()),workspace_start:()=>{},workspace_tick:()=>{ticks++;return {};},workspace_observe:()=>{observes++;},workspace_input:value=>{inputs.push(JSON.parse(value));return {};},native_caption:({type,title})=>`${tag}:${type}:${title}`};
   const element=(tag,cls,text)=>{const node=new Element(tag,doc);node.className=cls??'';if(text!=null)node.textContent=text;return node;};const button=(text,run,cls)=>{const node=element('button',cls,text);node.click=run;return node;};
-  const manager=createWorkspaceManager({app,store:{execute:()=>{},holdOwner:()=>{}},applyChange:()=>{},element,button,icon:()=>element('span','icon'),message:()=>{}});
+  const manager=createWorkspaceManager({dropdown:dropdownFactory({element,button}),app,store:{execute:()=>{},holdOwner:()=>{}},applyChange:()=>{},element,button,icon:()=>element('span','icon'),message:()=>{}});
   return {manager,doc,inputs,setView(next){override=next;manager.localize();},switch(next){tag=next;refreshCopy(app);manager.localize();refreshBindings();},tick(){timers[0]();},stats:()=>({ticks,observes}),nodes:()=>({dialog:doc.body.querySelector('.workspace-manager'),form:doc.body.querySelectorAll('.workspace-form').find(node=>node.open)??doc.body.querySelector('.workspace-form'),row:doc.body.querySelector('.workspace-row'),input:doc.body.querySelector('#workspace-item-name')})};
 }
 
@@ -66,7 +67,7 @@ test('workspace prompts gate invalid names and submit descriptions and stable ch
   h.setView({page:'toolbar_library',prompt:{title:'Rename toolbar',message:'',name:'Toolbar',description:'Original',choice_label:'Start with',choices:[{id:'one',label:'One'},{id:'two',label:'Two'}],selected:'one',confirm:'Rename'},prompt_action:{type:'rename',value:'toolbar'}});
   const form=h.nodes().form,name=form.querySelector('#workspace-item-name'),description=form.querySelector('#workspace-item-description'),choice=form.querySelector('#workspace-item-choice'),confirm=form.querySelector('.suggested-action');
   name.value=' ';name.dispatchEvent({type:'input'});assert.equal(confirm.disabled,true);confirm.click();assert.deepEqual(h.inputs,[]);
-  name.value='Authored toolbar';name.dispatchEvent({type:'input'});description.value='My description';choice.value='two';assert.equal(confirm.disabled,false);
+  name.value='Authored toolbar';name.dispatchEvent({type:'input'});description.value='My description';chooseDropdown(choice,'two');assert.equal(confirm.disabled,false);
   h.switch('fr');assert.equal(form.querySelector('#workspace-item-description'),description);assert.equal(description.value,'My description');assert.equal(choice.value,'two');
   confirm.click();assert.deepEqual(h.inputs.at(-1),{type:'submit',name:'Authored toolbar',description:'My description',choice:'two'});
 });

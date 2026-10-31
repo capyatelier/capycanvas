@@ -2,23 +2,23 @@ import { liveCopy, bindCopy } from './localization.js';
 import {importProfile,chooseProfileLibrary} from './export-controls.js';
 // A comparison owns one immutable candidate. Cancel drains its work before the
 // document request is released; Apply publishes that exact prepared result.
-export async function chooseDocumentColor({app,dialog,element,button,gpuOperation,request,id}) {
+export async function chooseDocumentColor({app,dialog,element,button,dropdown,gpuOperation,request,id}) {
   const copy=liveCopy(app,"document_color_copy"),exportCopy=liveCopy(app,"export_copy"),profilesCopy=liveCopy(app,"profile_copy");
   const history=request.type==="color_history",source=["repair_source_profile","rasterize_source"].includes(request.type),rasterize=request.type==="rasterize_source";
   const operation=source?(rasterize?"rasterize":"repair"):request.operation,current=app.document_color();
-  const profiles=["Srgb","DisplayP3","AdobeRgb","ProPhoto"].map(Builtin=>({Builtin}));
+  const profiles=["Srgb","DisplayP3","AdobeRgb","ProPhoto"].map(Builtin=>({Builtin})),profileChoices=[["0","sRGB"],["1","Display P3"],["2","Adobe RGB (1998)"],["3","ProPhoto RGB"]];
   let candidate,control,running,closed=false,accepted=false,pending=false;
   try {
     await dialog(()=>history?(request.redo?copy.redo_title:copy.undo_title):{assign:copy.assign_title,convert:copy.convert_title,depth:copy.depth_title,repair:copy.repair_title,rasterize:copy.rasterize_title}[operation],(form,finish)=>{
       const inputs=[];
       const select=(title,choices,value)=>{
-        const label=element("label","document-size",title),node=element("select");if(typeof title==="function")bindCopy(node,title,"ariaLabel");else node.setAttribute("aria-label",title);
-        for(const [id,name] of choices){const option=element("option","",name);option.value=id;node.append(option);}node.value=value;
+        const label=element("label","document-size",title),node=dropdown(title,()=>schedule());
+        node.update({choices:choices.map(([value,label])=>({value,label})),value});
         label.append(node);form.append(label);inputs.push(node);return node;
       };
       if(!history&&!source)form.append(element("p","",()=>operation==="assign"?copy.assign_help:operation==="depth"?copy.depth_help:copy.convert_help));
       if(source)form.append(element("p","",()=>rasterize?copy.rasterize_help:copy.repair_help));
-      const profile=source&&!rasterize?select(()=>copy.correct_profile,[["0","sRGB"],["1","Display P3"],["2","Adobe RGB (1998)"],["3","ProPhoto RGB"]],"0"):null;
+      const profile=source&&!rasterize?select(()=>copy.correct_profile,profileChoices,"0"):null;
       const space=!history&&!source&&operation!=="depth"?select(()=>copy.space,[["Srgb","sRGB"],["DisplayP3","Display P3"],["AdobeRgb","Adobe RGB"],["ProPhoto","ProPhoto RGB"]],current.space):null;
       const depth=operation==="depth"?select(()=>copy.depth,[["U8",()=>copy.depth_8],["U16",()=>copy.depth_16],["F16",()=>copy.depth_float16],["F32",()=>copy.depth_float32]],current.depth):null;
       const dither=operation==="depth"?select(()=>copy.dither,[["None",()=>exportCopy.metadata_none],["Stochastic8",()=>copy.dither_stochastic]],"None"):null;
@@ -33,9 +33,8 @@ export async function chooseDocumentColor({app,dialog,element,button,gpuOperatio
       const present=()=>{bindCopy(status,statusLabel);bindCopy(apply,applyLabel);};
       const fail=error=>{failure=error;present();};
       const invalidate=()=>{candidate?.free();candidate=null;presentation=null;failure=null;phase="draft";apply.disabled=true;comparison.replaceChildren();present();};
-      if(profile){const load=button(()=>profilesCopy.import,async()=>{try{const imported=await importProfile(app,element);if(closed||!imported)return;profiles.push(imported.profile);const option=element("option","",()=>app.profile_name_copy(imported.name));option.value=profiles.length-1;profile.append(option);profile.value=option.value;schedule();}catch(error){if(!closed)fail(error);}});const saved=button(()=>profilesCopy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(closed||!imported)return;profiles.push(imported.profile);const option=element("option","",()=>app.profile_name_copy(imported.name));option.value=profiles.length-1;profile.append(option);profile.value=option.value;schedule();}catch(error){if(!closed)fail(error);}});inputs.push(load,saved);form.append(load,saved);}
+      if(profile){const load=button(()=>profilesCopy.import,async()=>{try{const imported=await importProfile(app,element);if(closed||!imported)return;profiles.push(imported.profile);profileChoices.push([String(profiles.length-1),()=>app.profile_name_copy(imported.name)]);profile.update({choices:profileChoices.map(([value,label])=>({value,label})),value:profiles.length-1});schedule();}catch(error){if(!closed)fail(error);}});const saved=button(()=>profilesCopy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(closed||!imported)return;profiles.push(imported.profile);profileChoices.push([String(profiles.length-1),()=>app.profile_name_copy(imported.name)]);profile.update({choices:profileChoices.map(([value,label])=>({value,label})),value:profiles.length-1});schedule();}catch(error){if(!closed)fail(error);}});inputs.push(load,saved);form.append(load,saved);}
       const schedule=()=>{if(closed)return;invalidate();pending=true;control?.cancel();if(!running)queueMicrotask(prepare);};
-      inputs.forEach(node=>node.onchange=schedule);
       const prepare=()=>{
         if(running||closed||!pending)return;pending=false;invalidate();control?.free();control=app.capture_control();
         phase="preparing";present();
