@@ -167,7 +167,9 @@ impl PaletteGrid {
     }
     fn parent_child(&self, child: &gtk::Widget) {
         child.set_parent(self);
-        child.connect_state_flags_changed(|child, _| crate::workspace::update_hover(child));
+        child.connect_state_flags_changed(|child, _| {
+            if let Some(grid) = child.parent() { grid.queue_allocate(); }
+        });
     }
     pub fn reconcile(&self, children: Vec<gtk::Widget>) {
         self.clear_reorder();

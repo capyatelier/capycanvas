@@ -561,7 +561,7 @@ impl Documents {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         row.set_widget_name(&format!("document-tab-{id}"));
         row.add_css_class("document-tab");
-        row.connect_state_flags_changed(|row, _| crate::workspace::update_hover(row));
+        row.connect_state_flags_changed(glib::clone!(#[weak] w, move |_, _| w.queue_header_allocate()));
         row.set_hexpand(true);
         let title = gtk::Label::new(None);
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);

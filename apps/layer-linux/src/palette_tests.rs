@@ -25,6 +25,7 @@ fn check_palette_reorder(devices: &[&str]) {
     use layer_core::color::{RgbColor, RgbSpace};
     let mut d = Driver::new("art.capycanvas.PaletteReorder");
     set_transparency(&d.w, "LAYER_MOTION_TRANSPARENCY");
+    if devices.contains(&"pen") { check_pen_hover(&mut d); }
     let settings = gtk::Settings::default().unwrap();
     for surface in ["drawer", "dock", "float"] {
         d.w.dispatch(UiAction::RestoreWorkspace {
@@ -387,6 +388,85 @@ fn check_palette_reorder(devices: &[&str]) {
     }
     d.w.window.destroy();
     pump(100);
+}
+
+fn check_pen_hover(d: &mut Driver) {
+    glib::MainContext::default().block_on(d.w.documents.open(&d.w, (
+        new_drawing(128, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None,
+    ))).unwrap();
+    new_photo::ready(&d.w);
+    let mut workspace = WorkspaceState::default();
+    workspace.layout.set_panel_visible(Panel::Palettes, true).unwrap();
+    let group = workspace.layout.panel_group(Panel::Palettes).unwrap();
+    d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+    d.w.dispatch(UiAction::SelectPanelTab { group, panel: Panel::Palettes });
+    d.w.window.unmaximize();
+    d.w.window.set_default_size(1200, 800);
+    pump(400);
+    let observed = Rc::new(Cell::new(None));
+    let motion = gtk::EventControllerMotion::new();
+    motion.set_propagation_phase(gtk::PropagationPhase::Capture);
+    motion.connect_motion(glib::clone!(#[strong] observed, #[weak(rename_to = w)] d.w, move |_, x, y| {
+        observed.set(w.window.compute_point(&w.surface, &gtk::graphene::Point::new(x as f32, y as f32)));
+    }));
+    d.w.window.add_controller(motion.clone());
+    d.input.perform(serde_json::json!([{"point":[799.,499.]},{"point":[800.,500.]}]));
+    let local = observed.get().expect("mouse calibrates the window origin");
+    let origin = [800. - local.x(), 500. - local.y()];
+    d.w.window.remove_controller(&motion);
+    let panel = d.w.groups.borrow().iter().flat_map(|group| &group.tabs)
+        .find(|(panel, _)| *panel == Panel::Adjustments).unwrap().1.clone().upcast::<gtk::Widget>();
+    let document = d.named("document-tab-1");
+    let palette = state(&d.w).color_library.active_palette().swatches[1].id;
+    let swatch = d.named(&format!("palette-swatch-{palette}"));
+    let settings = gtk::Settings::default().unwrap();
+    let animations = settings.is_gtk_enable_animations();
+    settings.set_gtk_enable_animations(false);
+    let mut missing = Vec::new();
+    for (name, child, at) in [("panel", panel, [0.5, 0.75]), ("document", document, [0.5, 0.75]), ("swatch", swatch, [0.5, 0.025])] {
+        let container = child.parent().unwrap();
+        let bounds = child.compute_bounds(&container).unwrap();
+        let point = child.compute_bounds(&d.w.surface).unwrap().center();
+        d.input.perform(serde_json::json!([{"point":[1590.,990.]}]));
+        let idle = idle_hover_pixel(&d.w, &container, &child, at);
+        d.input.perform(serde_json::json!([{"point":[origin[0]+point.x(),origin[1]+point.y()]}]));
+        let hovered = idle_hover_pixel(&d.w, &container, &child, at);
+        assert_ne!(hovered, idle, "{name}: mouse hover changes the painted tint");
+        d.input.perform(serde_json::json!([{"point":[1590.,990.]}]));
+        let pointer = gtk::prelude::WidgetExt::display(&d.w.window).default_seat().unwrap().pointer().unwrap();
+        assert!(d.w.window.surface().unwrap().device_position(&pointer).is_none(), "mouse is outside the native window");
+        let point = child.compute_bounds(&d.w.window).unwrap().center();
+        let (dx, dy) = d.w.window.surface_transform();
+        let frames = sample_after_paint(&container, || ());
+        d.input.perform(serde_json::json!([{"pen":"move","point":[point.x()+dx as f32,point.y()+dy as f32]}]));
+        assert!(child.state_flags().contains(gtk::StateFlags::PRELIGHT), "{name}: GTK owns pen hover");
+        let frame = frames.finish().pop().expect("pen hover paints a frame");
+        let pixel = frame.pixel(&d.w.window, [bounds.x()+bounds.width()*at[0],bounds.y()+bounds.height()*at[1]]);
+        if pixel.iter().zip(hovered).any(|(a,b)|a.abs_diff(b)>1) { missing.push((name, pixel, hovered)); }
+        d.input.perform(serde_json::json!([{"pen":"leave"}]));
+    }
+    assert!(missing.is_empty(), "painted pen hover with mouse outside: {missing:?}");
+    let palette = state(&d.w).color_library.active_palette().clone();
+    let neighbor = d.named(&format!("palette-swatch-{}", palette.swatches[2].id));
+    let grid = neighbor.parent().unwrap();
+    let idle = idle_hover_pixel(&d.w, &grid, &neighbor, [0.5, 0.025]);
+    let point = neighbor.compute_bounds(&d.w.surface).unwrap().center();
+    d.input.perform(serde_json::json!([{"point":[origin[0]+point.x()-1.,origin[1]+point.y()]},
+        {"point":[origin[0]+point.x(),origin[1]+point.y()]}]));
+    let point = neighbor.compute_bounds(&d.w.window).unwrap().center();
+    let frames = hover_frames(&d.w, &grid, [point.x(), point.y()]);
+    d.w.dispatch(UiAction::Color { action: layer_ui::ColorAction::Library {
+        action: layer_ui::ColorLibraryAction::Reorder { palette: palette.id,
+            id: palette.swatches[2].id, before: Some(palette.swatches[1].id) },
+    }});
+    pump(150);
+    assert_hover_frames(&d.w, frames.finish(), idle, [0.5, 0.025]);
+    d.w.dispatch(UiAction::Color { action: layer_ui::ColorAction::Library {
+        action: layer_ui::ColorLibraryAction::UndoReorder { palette: palette.id },
+    }});
+    settings.set_gtk_enable_animations(animations);
+    d.w.window.maximize();
+    pump(300);
 }
 
 #[test]

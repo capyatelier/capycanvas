@@ -512,11 +512,11 @@ pub(crate) fn allocate_at(child: &gtk::Widget, b: Bounds) {
 pub(crate) fn hovered(widget: &impl IsA<gtk::Widget>) -> bool {
     let widget = widget.as_ref();
     widget.state_flags().contains(gtk::StateFlags::PRELIGHT)
-        && widget.native().and_then(|native| {
-            let device = native.display().default_seat()?.pointer()?;
-            let (x, y, _) = native.surface()?.device_position(&device)?;
-            crate::input::widget_point(widget, x, y)
-        }).is_some_and(|point| widget.contains(point.x() as f64, point.y() as f64))
+        && widget.ancestor(DockSurface::static_type()).and_downcast::<DockSurface>()
+            .and_then(|surface| surface.imp().owner.borrow().upgrade())
+            .and_then(|w| w.pointer_position.get()
+                .and_then(|position| w.window.compute_point(widget, &position)))
+            .is_some_and(|point| widget.contains(point.x() as f64, point.y() as f64))
 }
 
 pub(crate) fn update_hover(widget: &impl IsA<gtk::Widget>) {
@@ -916,6 +916,7 @@ pub struct Workspace {
     system_status: Rc<crate::system_status::SystemStatus>,
     popovers: RefCell<Vec<glib::WeakRef<gtk::Popover>>>,
     chrome_contacts: RefCell<std::collections::HashMap<ChromeContact, gdk::Event>>,
+    pointer_position: Cell<Option<gtk::graphene::Point>>,
     dragging: Cell<bool>,
     drag_targets: RefCell<Vec<(glib::WeakRef<gtk::Widget>, DragTarget)>>,
     workspace_drag: RefCell<Option<NativeWorkspaceDrag>>,
@@ -1275,6 +1276,7 @@ impl Workspace {
             system_status,
             popovers: RefCell::new(Vec::new()),
             chrome_contacts: RefCell::default(),
+            pointer_position: Cell::new(None),
             dragging: Cell::new(false),
             drag_targets: RefCell::new(Vec::new()),
             workspace_drag: RefCell::new(None),
@@ -1424,6 +1426,7 @@ impl Workspace {
         crate::recovery::install(&this);
         this.reconcile_layout(&DockLayout::default());
         this.install_drop_target();
+        this.install_pointer_motion();
         this
     }
 
@@ -1760,12 +1763,19 @@ impl Workspace {
             }
         ));
         self.window.add_controller(hold);
+    }
+
+    fn install_pointer_motion(self: &Rc<Self>) {
         let motion = gtk::EventControllerMotion::new();
         motion.set_propagation_phase(gtk::PropagationPhase::Capture);
+        motion.connect_enter(glib::clone!(#[weak(rename_to = this)] self, move |_, x, y| {
+            this.pointer_position.set(Some(gtk::graphene::Point::new(x as f32, y as f32)));
+        }));
         motion.connect_motion(glib::clone!(
             #[weak(rename_to = this)]
             self,
-            move |_, _, _| {
+            move |_, x, y| {
+                this.pointer_position.set(Some(gtk::graphene::Point::new(x as f32, y as f32)));
                 this.chrome_event(ChromeEvent::Motion);
             }
         ));
@@ -1773,10 +1783,15 @@ impl Workspace {
             #[weak(rename_to = this)]
             self,
             move |_| {
+                this.pointer_position.set(None);
                 this.chrome_event(ChromeEvent::Refresh);
             }
         ));
         self.window.add_controller(motion);
+    }
+
+    pub(crate) fn queue_header_allocate(&self) {
+        self.header.root.queue_allocate();
     }
 
     fn chrome_menu(self: &Rc<Self>, id: ApplicationMenu) -> gtk::MenuButton {

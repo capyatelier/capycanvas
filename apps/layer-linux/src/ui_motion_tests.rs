@@ -165,6 +165,9 @@ fn native_panel_tab_feedback_preserves_join() {
     }
     let original = layer_ui::WorkspaceState::default();
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let settings = gtk::Settings::default().unwrap();
+    let animations = settings.is_gtk_enable_animations();
+    settings.set_gtk_enable_animations(false);
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         for level in [layer_ui::Transparency::Off, layer_ui::Transparency::Low, layer_ui::Transparency::Medium, layer_ui::Transparency::High] {
@@ -206,6 +209,7 @@ fn native_panel_tab_feedback_preserves_join() {
             }
         }
     }
+    settings.set_gtk_enable_animations(animations);
     input.finish();
 }
 
