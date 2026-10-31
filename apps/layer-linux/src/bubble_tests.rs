@@ -1,6 +1,53 @@
 use super::workspace_header::Driver;
 use super::*;
 
+#[test]
+#[ignore = "private display: workspace-motion.sh gtk --native-test=native_layers_unit_uses_plain_row_at_large_font"]
+fn native_layers_unit_uses_plain_row_at_large_font() {
+    let d = Driver::new("art.capycanvas.LayersUnit");
+    let css = gtk::CssProvider::new();
+    gtk::style_context_add_provider_for_display(&d.w.surface.display(), &css, gtk::STYLE_PROVIDER_PRIORITY_USER);
+    d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
+        layout: WorkspacePreset::Illustrator.layout(Platform::Gtk), ..WorkspaceState::default()
+    }) });
+    d.w.dispatch(UiAction::SetLayerOpacity { id: None, opacity: 0.5 });
+    for _ in 0..80 { d.w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::New { group: false, clipped: false } }); }
+    pump(500);
+    let mut samples = Vec::new();
+    for scale in [1.0f32, 1.3] {
+        css.load_from_string(&format!("window.capy-workspace {{ --ui-text-size: {}pt; }}", UI_TEXT_PT as f32 * scale));
+        pump(250);
+        let width = d.w.layer_panel.root.width();
+        for theme in [Theme::Light, Theme::Dark] {
+            d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+            for end in [false, true, false] {
+                let adjustment = d.w.layer_panel.list.vadjustment();
+                adjustment.set_value(if end { adjustment.upper() - adjustment.page_size() } else { 0. });
+                pump(250);
+                let rows: Vec<_> = widgets(d.w.layer_panel.root.upcast_ref()).filter(|w| w.has_css_class("layer-row") && w.is_mapped())
+                    .map(|w| (w.widget_name().to_string(), w.height(), w.measure(gtk::Orientation::Vertical, width).1)).collect();
+                let measurement = d.w.layer_panel.scroll_measurement(width);
+                let unit = measurement.unit_height;
+                let metric = widgets(d.w.layer_panel.root.upcast_ref()).find(|widget| widget.has_css_class("layer-row")
+                    && widget.parent().is_some_and(|parent| parent.is::<gtk::Overlay>())).unwrap();
+                assert!(!metric.is_mapped() && !metric.is_child_visible(), "the metric row never paints");
+                let overlay = metric.parent().unwrap().downcast::<gtk::Overlay>().unwrap();
+                assert!(!overlay.is_measure_overlay(&metric));
+                metric.set_visible(false);
+                let without_metric = d.w.layer_panel.scroll_measurement(width).fixed_height;
+                metric.set_visible(true);
+                assert_eq!(measurement.fixed_height, without_metric, "the metric row contributes no panel chrome height");
+                println!("Layers unit scale={scale} {theme:?} end={end}: unit={unit}, fixed={}, rows={rows:?}", measurement.fixed_height);
+                let plain = rows.iter().filter(|(name, _, _)| name.starts_with("art-layer-")).map(|(_, _, natural)| *natural).min().unwrap();
+                samples.push((unit, plain));
+            }
+        }
+    }
+    gtk::style_context_remove_provider_for_display(&d.w.surface.display(), &css);
+    d.finish();
+    assert!(samples.iter().all(|(unit, plain)| (*unit - *plain as f32).abs() <= 1.), "mixed rows preserve the measured plain-row unit: {samples:?}");
+}
+
 fn views(d: &Driver) -> Vec<BubbleView> {
     ui_session(&d.w).bubbles()
 }

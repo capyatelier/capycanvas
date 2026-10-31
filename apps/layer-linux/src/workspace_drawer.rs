@@ -66,7 +66,6 @@ glib::wrapper! {
 pub(super) struct LayerInspector {
     pub(super) root: gtk::Box,
     pages: [Columns; 2],
-    row_height: Cell<f32>,
     target: Cell<Option<(u64, Option<u64>)>>,
     anchor: Rc<Cell<Option<(u64, f32)>>>,
     restore: Rc<RefCell<Option<(gdk::FrameClock, glib::SignalHandlerId)>>>,
@@ -143,7 +142,7 @@ impl LayerInspector {
         content.append(&icon_slot(&chevron, "layer-properties-chevron-slot"));
         button.set_child(Some(&content)); footer.append(&button);
         root.append(&stack); root.append(&footer);
-        Self {root, pages, row_height:Cell::new(layer_ui::TILE_SIZE), target:Cell::new(None), anchor, restore:Rc::new(RefCell::new(None)), rows:Cell::new(0),
+        Self {root, pages, target:Cell::new(None), anchor, restore:Rc::new(RefCell::new(None)), rows:Cell::new(0),
             properties:Cell::new(false), layers, effects, stack, footer, button, label, summary}
     }
     pub(super) fn refresh(&self, w: &Rc<Workspace>, state: &UiState, regions: u32, open: bool) {
@@ -178,9 +177,7 @@ impl LayerInspector {
         if open { self.button.add_css_class("open"); } else { self.button.remove_css_class("open"); }
     }
     pub(super) fn measure(&self, width: i32, viewport_height: f32) -> [f32; 2] {
-        let mut measurement = self.layers.scroll_measurement(width);
-        if measurement.unit_height > 0. { self.row_height.set(measurement.unit_height); }
-        else { measurement.unit_height = self.row_height.get(); }
+        let measurement = self.layers.scroll_measurement(width);
         let properties_height = self.effects.properties.measure(gtk::Orientation::Vertical, width).1 as f32;
         let heights = layer_ui::LayerDrawerSizing::pages(measurement, self.rows.get(), viewport_height, properties_height);
         for (page, height) in self.pages.iter().zip(heights) {

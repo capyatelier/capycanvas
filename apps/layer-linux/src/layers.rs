@@ -52,7 +52,7 @@ pub struct LayerPanel {
     lock: gtk::ToggleButton,
     mask_action: gtk::Button,
     add_filter: gtk::MenuButton,
-    add_paper: Rc<glib::WeakRef<gtk::Box>>,
+    unit_row: gtk::Box,
     delete: gtk::Button,
     reference: gtk::ToggleButton,
     attachment: gtk::ToggleButton,
@@ -175,6 +175,21 @@ fn thumbnail(tooltip: &str) -> (gtk::Button, gtk::Picture, gtk::Overlay) {
     overlay.set_measure_overlay(&picture, false);
     button.set_child(Some(&overlay));
     (button, picture, overlay)
+}
+fn row_frame() -> gtk::Box {
+    let root=gtk::Box::new(gtk::Orientation::Horizontal,2);
+    root.add_css_class("layer-row");
+    root.add_css_class("customizable-target");
+    root
+}
+fn row_name() -> gtk::Label {
+    let name=gtk::Label::new(None);
+    name.add_css_class("layer-name");
+    name.set_xalign(0.);
+    name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    name.set_width_chars(1);
+    name.set_hexpand(true);
+    name
 }
 fn toggle(icon: &str, tooltip: &str) -> gtk::ToggleButton {
     let button = gtk::ToggleButton::new();
@@ -495,7 +510,6 @@ impl LayerPanel {
             actions.append(b);
         }
         header.append(&actions);
-        let add_paper = Rc::new(glib::WeakRef::new());
         let model = gio::ListStore::new::<glib::BoxedAnyObject>();
         let factory = gtk::SignalListItemFactory::new();
         let rows: Rc<RefCell<HashMap<usize, Row>>> = Rc::default();
@@ -518,9 +532,7 @@ impl LayerPanel {
             owner,
             move |_, item| {
                 let item = item.downcast_ref::<gtk::ListItem>().unwrap();
-                let root = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-                root.add_css_class("layer-row");
-                root.add_css_class("customizable-target");
+                let root = row_frame();
                 let eye = button("layer-eye-symbolic", copy.borrow().layer.show.as_ref());
                 eye.add_css_class("layer-column");
                 root.append(&eye);
@@ -571,12 +583,7 @@ impl LayerPanel {
                 text.set_hexpand(true);
                 text.set_valign(gtk::Align::Center);
                 text.set_margin_start(6);
-                let name = gtk::Label::new(None);
-                name.add_css_class("layer-name");
-                name.set_xalign(0.);
-                name.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                name.set_width_chars(1);
-                name.set_hexpand(true);
+                let name = row_name();
                 let name_entry = gtk::Entry::builder()
                     .width_chars(1)
                     .max_width_chars(16)
@@ -974,8 +981,6 @@ impl LayerPanel {
             #[weak]
             connections,
             #[strong]
-            add_paper,
-            #[strong]
             owner,
             #[strong]
             rows,
@@ -996,7 +1001,6 @@ impl LayerPanel {
                     let controls = paper_row(&action, owner.clone());
                     item.set_accessible_label(&action.label);
                     item.set_accessible_description("");
-                    add_paper.set(Some(&controls));
                     item.set_child(Some(&controls));
                 }
                 connections.queue_draw();
@@ -1041,6 +1045,14 @@ impl LayerPanel {
         let overlay = gtk::Overlay::new();
         touch::install(&list, owner.clone(), rows.clone());
         overlay.set_child(Some(&list));
+        let unit_row=row_frame();
+        unit_row.append(&button("layer-eye-symbolic", ""));
+        unit_row.append(&thumbnail("").0);
+        unit_row.append(&row_name());
+        unit_row.set_can_target(false);
+        overlay.add_overlay(&unit_row);
+        unit_row.set_child_visible(false);
+        overlay.set_measure_overlay(&unit_row,false);
         overlay.add_overlay(&connections);
         overlay.set_measure_overlay(&connections, false);
         overlay.set_clip_overlay(&connections, true);
@@ -1065,7 +1077,7 @@ impl LayerPanel {
             header,
             footer,
             list,
-            add_paper,
+            unit_row,
             connections,
             opacity,
             opacity_popup,
@@ -1100,27 +1112,15 @@ impl LayerPanel {
             renderer: Cell::new(0),
         }
     }
-    /// The virtual ListView's request describes its viewport, not all rows.
-    /// Layer rows have a uniform height; sample realized rows and multiply by
-    /// the visible model count, without instantiating a large document's rows.
     pub fn content_measurement(&self, width: i32) -> (f32, layer_ui::PanelScrollMeasurement) {
-        let mut measurement = self.scroll_measurement(width);
-        if measurement.unit_height == 0. { measurement.unit_height = layer_ui::TILE_SIZE; }
+        let measurement = self.scroll_measurement(width);
         ((measurement.fixed_height + measurement.unit_height * self.model.n_items() as f32).min(999_999.), measurement)
     }
     pub fn scroll_measurement(&self, width: i32) -> layer_ui::PanelScrollMeasurement {
         let fixed_height = (self.root.measure(gtk::Orientation::Vertical, width).1
             - self.list.measure(gtk::Orientation::Vertical, width).1)
             .max(0) as f32;
-        let unit_height = self
-            .rows
-            .borrow()
-            .values()
-            .filter(|row| row.bound.get())
-            .map(|row| row.root.measure(gtk::Orientation::Vertical, width).1)
-            .chain(self.add_paper.upgrade().map(|row| row.measure(gtk::Orientation::Vertical, width).1))
-            .max()
-            .unwrap_or(0) as f32;
+        let unit_height = self.unit_row.measure(gtk::Orientation::Vertical,width).1 as f32;
         layer_ui::PanelScrollMeasurement { fixed_height, unit_height }
     }
     pub fn reveal_row(&self, position: u32) {
