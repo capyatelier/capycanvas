@@ -73,6 +73,7 @@ These rules cover tests, benchmark harnesses and tools as much as production cod
 
 ### Working alongside other sessions
 
+- Run Windows fixture matrices on CPU runners within the pool budget and release them when done.
 - Other people and agents commit, build and use devices on this machine and push
   to `origin/main` while you work. Use the worktree named by the user or task.
   Create another only when none is assigned or the user asks, under `/home`,

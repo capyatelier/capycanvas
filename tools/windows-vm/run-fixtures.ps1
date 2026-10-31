@@ -3,6 +3,8 @@ param(
     [Parameter(Mandatory)][string]$Output,
     [string]$Name,
     [string]$DebuggerPath,
+    [string]$BuildRecord,
+    [switch]$List,
     [ValidateSet('release','dev-perf')][string]$RustProfile='release',
     [ValidateRange(1,1440)][int]$TimeoutMinutes = 20,
     [switch]$HardwareGpu
@@ -19,8 +21,10 @@ function Write-FixtureResult([string]$Path,[string]$Json){
     try{$null=$stream.Seek(0,[IO.SeekOrigin]::End);$writer.WriteLine($Json);$writer.Flush()}finally{$writer.Dispose();$stream.Dispose()}
 }
 $runnerStarted = Get-Date
-$Executable = (Resolve-Path -LiteralPath $Executable).Path
+$Executable = if($List){[IO.Path]::GetFullPath($Executable)}else{(Resolve-Path -LiteralPath $Executable).Path}
 $editorExecutable=$Executable
+$buildManifest=if($BuildRecord){Get-Content -LiteralPath $BuildRecord -Raw|ConvertFrom-Json}else{$null}
+if($buildManifest -and ($buildManifest.profile -ne $RustProfile -or [bool]$buildManifest.hardware_gpu -ne [bool]$HardwareGpu)){throw 'The fixture build record has a different profile or adapter mode'}
 $controlBuilds=@{}
 $scripts = (Resolve-Path (Join-Path $PSScriptRoot '../../apps/layer-windows/scripts')).Path
 function Get-FixtureVariantArguments([string]$Fixture,[string]$Option,[string]$Choice){
@@ -66,6 +70,14 @@ function Get-FixtureCompanionArguments([string]$Fixture,[string[]]$Arguments,[sc
 $selected = if ($Name) { $Name -split ',' } else { @() }
 $planned = @(Select-Fixtures $runs.Keys $selected)
 if (!$planned.Count) { throw 'No fixtures selected.' }
+if($List){
+    $controls=@(@(foreach($name in $planned){
+        $fixture=($name -split ':')[0]
+        Control-Fixture $fixture $runs[$name]
+        Get-FixtureCompanionArguments $fixture $runs[$name] {param($kind)$kind}|Where-Object {$_ -notlike '-*'}
+    })|Where-Object {$_}|Sort-Object -Unique)
+    @{runs=$planned;controls=$controls}|ConvertTo-Json -Compress;exit
+}
 function Get-FixtureTimeoutSeconds([int]$Count,[int]$Minutes){
     [int][Math]::Min(86400,[long]$Count*($Minutes*60+120))
 }
@@ -169,11 +181,21 @@ function Start-Shortcuts {
     @('-File', (Join-Path $scripts 'exercise-shortcuts.ps1'), '-ProcessId', $review.Id, '-StateFile', $state.FullName)
 }
 
+function Assert-FixtureFiles([string]$Directory,$Files){
+    if(!$Files -or !$Files.'CapyCanvas.exe' -or !$Files.'layer_windows.dll'){throw 'The control fixture has no complete build record'}
+    foreach($entry in $Files.PSObject.Properties){
+        $path=Join-Path $Directory $entry.Name
+        if(!(Test-Path -LiteralPath $path) -or (Get-FileHash -LiteralPath $path).Hash -cne $entry.Value){throw "Control fixture binary differs from its build record: $($entry.Name)"}
+    }
+}
 function Build-ControlFixture([string]$controlFixture){
     if(!$controlBuilds.ContainsKey($controlFixture)){
         $directory=(Split-Path $editorExecutable)+'-'+$controlFixture
-        $intermediate=(Split-Path $editorExecutable) -replace '-dev-perf$',''
-        & (Join-Path $scripts 'build.ps1') -Configuration Release -RustProfile $RustProfile -ControlFixture $controlFixture -SoftwareAdapterTests:(!$HardwareGpu) -SkipRust -SkipRestore -OutputDirectory $directory -IntermediateDirectory ($intermediate+'.obj') *> (Join-Path $Output ('build-'+$controlFixture+'.log'))
+        if($buildManifest){Assert-FixtureFiles $directory $buildManifest.controls.$controlFixture}
+        else{
+            $intermediate=(Split-Path $editorExecutable) -replace '-dev-perf$',''
+            & (Join-Path $scripts 'build.ps1') -Configuration Release -RustProfile $RustProfile -ControlFixture $controlFixture -SoftwareAdapterTests:(!$HardwareGpu) -SkipRust -SkipRestore -OutputDirectory $directory -IntermediateDirectory ($intermediate+'.obj') *> (Join-Path $Output ('build-'+$controlFixture+'.log'))
+        }
         $controlBuilds[$controlFixture]=Join-Path $directory 'CapyCanvas.exe'
         @($controlBuilds.GetEnumerator()|ForEach-Object {
             $binaryDirectory=Split-Path $_.Value
@@ -214,6 +236,7 @@ foreach ($run in $runs.GetEnumerator()) {
         if ($DebuggerPath) { $arguments += @('-DebuggerPath', $DebuggerPath) }
         $process = Start-Process (Get-Process -Id $PID).Path -ArgumentList (ConvertTo-FixtureCommandLine (@('-NoProfile', '-Sta') + $arguments)) -NoNewWindow -PassThru -RedirectStandardOutput "$log.log" -RedirectStandardError "$log.err"
         $null = $process.Handle
+        $process.PriorityClass='High'
         $finished = $process.WaitForExit($TimeoutMinutes * 60000)
         if (!$finished) {
             Save-Screen "$log.png"

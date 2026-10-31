@@ -22,6 +22,10 @@ configured state/artifact directories and prefer `/mnt/localssd` when available.
 
 Builds and model/input checks use ordinary `check`; software UI journeys use
 `fixtures`. WARP results do not establish hardware rendering or performance.
+For fixture lists with more than a few selectors, use `fixtures --runners N`
+within the CPU pool budget shown by `runners`; reserve only what the list needs.
+The run releases its runners on completion. Stop retained `--keep-runners` VMs
+when finished; keep the GPU pool for checks that require hardware.
 
 For hardware rendering:
 

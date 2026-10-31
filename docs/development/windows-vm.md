@@ -72,6 +72,7 @@ tools/windows-vm/windows-vm.py ssh 'cd C:\capycanvas; cargo clippy --locked -p l
 | `ssh [command]` | Open PowerShell, or run a command, as the `capy` administrator. |
 | `sync` | Copy the working tree without building. |
 | `fixtures [name ...]` | Run UI fixtures on WARP; see below. |
+| `fixtures --runners N [name ...]`, `runners [--reset]` | Shard WARP fixtures over reserved CPU runners; list reservations or delete stopped runners owned by this worktree. |
 | `screenshot <file.png>` | Save the VM display. |
 | `reset` | Delete the VM; the next `start` makes a fresh one. |
 | `destroy` | Delete the base image and every VM; the ISO stays. Stop the VMs first. |
@@ -93,6 +94,47 @@ directory for diagnosis.
 Windows Update is disabled so the VMs keep the ISO's build. The evaluation
 licence expires 90 days after `create`; stop every VM, then run `destroy` and
 `create` to renew it.
+
+## CPU runner pool
+
+Use pooled CPU runners for fixture lists with more than a few selectors:
+
+```sh
+tools/windows-vm/windows-vm.py runners
+tools/windows-vm/windows-vm.py fixtures --runners 3 button-feedback:default navigator:default popup:default
+tools/windows-vm/windows-vm.py fixtures --runners 6 --no-build layers palettes proof header selection editor
+```
+
+The primary VM builds the app and only the Feedback, Popup or LayerDrop controls
+needed by the planned selectors. The helper ships their runtime files, assets and build record to owned
+`<primary>-r1` … runner VMs, validates every recorded hash, and runs balanced
+shards in parallel. Previous successful fixture durations guide assignments;
+without measurements the helper uses round-robin assignments. Bare names and
+`:default` keep the same selection rules as ordinary `fixtures`.
+
+`cpu-pool.json` in the VM state directory sets `vcpu_budget`,
+`memory_budget_gib`, `runner_cpus`, `runner_memory_gib` and `per_owner_limit`.
+Defaults reserve half the host's logical CPUs and physical memory for runners,
+with 4 vCPU / 8 GiB per runner and at most six per worktree, limited by capacity.
+Pool size settings apply to CPU runners independently of ordinary VM environment
+overrides. Change the configuration only after all runner reservations are free.
+
+Slot locks are host-wide, including across VM state directories. QEMU inherits
+each reservation descriptor and holds it until shutdown or a crash, even if the
+launcher disconnects. A full pool supplies fewer runners when possible; zero
+available runners fails clearly. Existing ordinary or foreign VMs are never
+adopted as runners. Concurrent commands cannot use the same runner.
+
+The merged output under `<artifacts>/<primary>/shards-<timestamp>` records the
+full plan, each shard's evidence path and provenance, every result and total wall
+time. A missing selector or shard fails the run. Runners stop on success or
+failure; `--keep-runners` retains their reservations for another round. Their
+prepared disks persist. Stop retained runners with `--vm <runner> stop`, and use
+`runners --reset` to delete this primary VM's stopped runner disks.
+
+CPU runners use WARP and cannot claim GPUs. They check UI structure, shared state
+and injected input; hardware rendering and performance still need the checks
+below.
 
 ## Hardware GPU pool
 
@@ -279,6 +321,8 @@ For repeated code edits, `fixtures --profile dev-perf` selects optimized
 incremental Rust compilation. Its first build prepares a separate Cargo cache.
 App outputs and build records are separate for each profile and adapter mode;
 `--no-build` validates the selected profile as well as source and binary hashes.
+Control fixtures reuse the same build record and validate runtime resources as
+well as their executables; shipped builds never invoke a control rebuild.
 The per-VM lock serializes profile switches, which reuse the same adapter mode's
 native Release intermediates. Ordinary `fixtures`, `check` and `gpu-check` retain
 their Release defaults.
@@ -293,8 +337,7 @@ full dark/light pair. A bare `canvas-editing` includes the focused variants too.
 
 Name fixtures (`layers`) or single variants (`header:pen`). A bare name includes all its variants;
 `localization:default` selects only the default dark, normal-text run. Split long
-matrices across separate owned VMs with `localization:default localization:LargeText`
-on one and `localization:light localization:light-large` on the other.
+matrices with `fixtures --runners N` within the [CPU pool](#cpu-runner-pool) budget.
 With no names it runs `shortcuts`
 and every fixture that launches its own app, once with its defaults and once for
 each switch and each other `ValidateSet` choice, including document GPU recovery
@@ -320,13 +363,6 @@ Each fixture has a 20-minute deadline. For longer language matrices, pass
 minutes. `layers:Paper` walks both themes and needs `--timeout-minutes 60` on
 the software renderer. `plan.json` records that deadline and the monitor uses it for each
 expected result. Input waits and assertions keep their existing limits.
-
-To use several VMs, give each a share of the names:
-
-```sh
-tools/windows-vm/windows-vm.py --vm fixtures-a fixtures layers palettes proof &
-tools/windows-vm/windows-vm.py --vm fixtures-b fixtures header selection editor &
-```
 
 Only builds with the `software-adapter-tests` feature of `layer-windows` accept a
 software adapter, and only while `LAYER_TEST_SOFTWARE_GPU` is set. Shipped builds

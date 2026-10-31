@@ -435,6 +435,8 @@ The [VM runner](windows-vm.md#ui-fixtures-on-the-software-adapter) discovers
 the same scripts: `fixtures <area>` runs every variant of a fixture,
 `<area>:default` only its default, and `<area>:<choice>` one switch or
 `ValidateSet` choice, such as `tool-bubbles:light-pen` or `layers:Relationships`.
+Use `fixtures --runners N <areas>` for matrices across the reserved
+[CPU runner pool](windows-vm.md#cpu-runner-pool).
 Run changed UI in both themes, and input changes with each device.
 
 `exercise-edge-reach.ps1 -SweepOnly` samples edge reach bands, group gaps and

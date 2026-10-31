@@ -6,7 +6,8 @@ See docs/development/windows-vm.md.
 
 import argparse
 import base64
-from contextlib import nullcontext
+from contextlib import nullcontext, ExitStack
+from concurrent.futures import ThreadPoolExecutor
 import fcntl
 import getpass
 import hashlib
@@ -28,6 +29,8 @@ from urllib.parse import unquote, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gpu_pool
+import cpu_pool
+import fixture_shards
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -93,6 +96,7 @@ class Machine:
         self.ssh_port = self.runtime / "ssh-port"
         self.prepared = directory / "prepared"
         self.gpu = directory / "gpu"
+        self.runner = directory / "runner.json"
 
 
 def installer():
@@ -285,7 +289,7 @@ def free_port():
         return probe.getsockname()[1]
 
 
-def launch(machine, cdroms=(), gui=False, gpu=None, reservation=None):
+def launch(machine, cdroms=(), gui=False, gpu=None, reservation=None, cpus=None, memory=None):
     for directory in (RUNTIME, machine.runtime):
         directory.mkdir(mode=0o700, exist_ok=True)
     terminate(machine.tpm_pid, "swtpm")
@@ -298,8 +302,8 @@ def launch(machine, cdroms=(), gui=False, gpu=None, reservation=None):
     command = [
         "qemu-system-x86_64", "-name", f"capycanvas-windows-{machine.name.lstrip('.')}", "-nodefaults",
         "-machine", "q35,accel=kvm,smm=on", "-global", "driver=cfi.pflash01,property=secure,value=on",
-        "-cpu", f"host,{HYPERV}", "-smp", f"cpus={CPUS},sockets=1,cores={CPUS},threads=1",
-        "-m", MEMORY, "-rtc", "base=utc",
+        "-cpu", f"host,{HYPERV}", "-smp", f"cpus={cpus or CPUS},sockets=1,cores={cpus or CPUS},threads=1",
+        "-m", memory or MEMORY, "-rtc", "base=utc",
         "-drive", f"if=pflash,unit=0,readonly=on,format={selected_firmware['code_format']},"
                   f"file={selected_firmware['code']}",
         "-drive", f"if=pflash,unit=1,format={selected_firmware['vars_format']},file={machine.directory / 'efivars'}",
@@ -318,16 +322,18 @@ def launch(machine, cdroms=(), gui=False, gpu=None, reservation=None):
     if gpu:
         command += ["-global", "q35-pcihost.pci-hole64-size=256G",
                     "-fw_cfg", "name=opt/ovmf/X-PciMmio64Mb,string=262144",
-                    "-device", "pcie-root-port,id=gpuroot,bus=pcie.0,addr=0x10,chassis=1",
-                    "-add-fd", f"fd={reservation.fileno()},set=99,opaque=capycanvas-gpu-{machine.name}"]
+                    "-device", "pcie-root-port,id=gpuroot,bus=pcie.0,addr=0x10,chassis=1"]
         for function in gpu.functions:
             slot = function.rsplit(".", 1)[1]
             command += ["-device", f"vfio-pci,host={function},bus=gpuroot,addr=0x0.{slot},multifunction=on"]
         machine.gpu.write_text(gpu.address + "\n")
     else:
         machine.gpu.unlink(missing_ok=True)
+    if reservation is not None:
+        kind = "gpu" if gpu else "runner"
+        command += ["-add-fd", f"fd={reservation.fileno()},set=99,opaque=capycanvas-{kind}-{machine.name}"]
     try:
-        run(*command, **({"pass_fds": (reservation.fileno(),)} if gpu else {}))
+        run(*command, **({"pass_fds": (reservation.fileno(),)} if reservation is not None else {}))
     except subprocess.CalledProcessError:
         terminate(machine.tpm_pid, "swtpm")
         raise
@@ -449,6 +455,11 @@ def boot(machine, gui, gpu=None):
 
 
 def boot_locked(machine, gui, gpu):
+    runner = getattr(machine, "runner_owner", None)
+    if machine.runner.exists():
+        runner = json.loads(machine.runner.read_text())
+    if runner and (runner.get("worktree") != str(ROOT.resolve()) or gpu):
+        sys.exit("CPU runners belong to their creating worktree and cannot claim a GPU.")
     if running(machine):
         if gpu and not machine.gpu.exists():
             sys.exit(f"The {machine.name} VM is running without a reserved GPU; stop it before using --gpu.")
@@ -461,15 +472,24 @@ def boot_locked(machine, gui, gpu):
         sys.exit(f"The base image does not exist; run `{PROGRAM} create`.")
     if gpu and resource.getrlimit(resource.RLIMIT_MEMLOCK)[0] != resource.RLIM_INFINITY:
         sys.exit("GPU VMs require unlimited locked memory; use start --gpu after the host GPU setup.")
-    with gpu_pool.reserve(STATE, machine.name, gpu) if gpu else nullcontext((None, None)) as (device, reservation):
+    reservation_context = (cpu_pool.reserve(STATE, machine.name, ROOT) if runner else
+                           gpu_pool.reserve(STATE, machine.name, gpu) if gpu else nullcontext((None, None)))
+    with reservation_context as (device, reservation):
         if not machine.directory.exists():
             fresh = machine.directory.with_name(f"{machine.name}.partial")
+            if runner and fresh.exists():
+                sys.exit(f"An unfinished runner disk exists at {fresh}; inspect it before starting again.")
             remove(fresh)
             shutil.copytree(BASE, fresh, ignore=shutil.ignore_patterns("disk.qcow2"))
             run("qemu-img", "create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", BASE / "disk.qcow2",
                 fresh / "disk.qcow2")
             fresh.rename(machine.directory)
-        launch(machine, gui=gui, gpu=device, reservation=reservation)
+        if runner:
+            machine.runner.write_text(json.dumps(runner, indent=2))
+            launch(machine, gui=gui, reservation=reservation, cpus=device.cpus, memory=device.memory)
+            machine.launched_pid = int(machine.qemu_pid.read_text())
+        else:
+            launch(machine, gui=gui, gpu=device, reservation=reservation)
     wait_for_ssh(machine, 10 * 60)
     prepare(machine)
     if gpu:
@@ -634,7 +654,8 @@ def stop_machine(machine):
         if machine.gpu.exists():
             sys.exit("The GPU VM did not shut down cleanly; it and its GPU reservation remain running.")
         qmp(machine, "quit")
-        wait_for_exit(pid, 30)
+        if not wait_for_exit(pid, 30):
+            raise RuntimeError(f"The {machine.name} VM is still running after shutdown; its reservation remains held.")
 
 
 def stop(args):
@@ -655,6 +676,55 @@ def gpus(args):
         print(f"{row['address']}\t{row['status']}{detail}")
 
 
+def runner_machine(primary, index):
+    suffix = f"-r{index}"
+    prefix = primary.name
+    if len(prefix + suffix) > 32:
+        prefix = prefix[:23 - len(suffix)] + "-" + hashlib.sha256(primary.name.encode()).hexdigest()[:8]
+    name = prefix + suffix
+    machine = Machine(name, VMS / name)
+    if machine.directory.exists() and not machine.runner.exists():
+        sys.exit(f"The existing {name} VM is not an owned CPU runner.")
+    machine.runner_owner = {"worktree": str(ROOT.resolve()), "primary": primary.name}
+    return machine
+
+
+def runners(args):
+    if args.reset:
+        primary = selected(args)
+        owned = [machine for machine in machines() if machine.runner.exists()
+                 and json.loads(machine.runner.read_text()) == {"worktree": str(ROOT.resolve()), "primary": primary.name}]
+        with ExitStack() as locks:
+            for machine in owned:
+                machine.runtime.mkdir(mode=0o700, parents=True, exist_ok=True)
+                boot_lock = locks.enter_context(open(machine.runtime / "boot-lock", "a"))
+                try:
+                    fcntl.flock(boot_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    sys.exit(f"The {machine.name} runner is starting; stop it before resetting.")
+                locks.enter_context(claim(machine))
+                if running(machine) or runner_reserved(machine):
+                    sys.exit(f"Stop the {machine.name} runner before resetting it.")
+            for machine in owned:
+                remove(machine.directory)
+                print(f"Reset {machine.name}")
+    settings, rows = cpu_pool.describe(STATE)
+    print(f"CPU runner budget: {settings['vcpu_budget']} vCPU / {settings['memory_budget_gib']} GiB; "
+          f"runner {settings['runner_cpus']} vCPU / {settings['runner_memory_gib']} GiB; "
+          f"per owner {settings['per_owner_limit']}")
+    for row in rows:
+        owner = row["owner"]
+        detail = f" {owner['vm']} in {owner['worktree']} since {owner['started']}" if owner else ""
+        print(f"{row['slot']}\t{row['status']}{detail}")
+    print(f"{sum(row['status'] == 'free' for row in rows)} free, "
+          f"{sum(row['status'] == 'reserved' for row in rows)} reserved")
+
+
+def runner_reserved(machine):
+    return any(row["owner"] and row["owner"].get("vm") == machine.name
+               and row["owner"].get("state") == str(STATE.resolve()) for row in cpu_pool.describe(STATE)[1])
+
+
 def ssh(args):
     machine = selected(args)
     require_running(machine)
@@ -662,10 +732,10 @@ def ssh(args):
 
 
 def claim(machine):
-    lock = open(machine.directory / "lock", "w")
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+    directory = machine.directory.resolve()
+    directory.parent.mkdir(parents=True, exist_ok=True)
+    lock = cpu_pool.lock_file(directory.with_name("." + directory.name + ".lock"))
+    if lock is None:
         sys.exit(f"Another command is using the {machine.name} VM; pass --vm to use another one.")
     return lock
 
@@ -750,7 +820,8 @@ def build_inputs(hashes):
 def build_files(machine, directory=SOFTWARE_BUILD):
     result = guest(machine, f"$ErrorActionPreference='Stop'; $build='{directory}'; "
                    "ConvertTo-Json -Compress -InputObject @(Get-ChildItem $build -Recurse -File | "
-                   "Where-Object { $_.Extension -In '.exe','.dll' -or $_.FullName.StartsWith($build+'\\Assets\\') } | "
+                   "Where-Object { $_.Extension -In '.exe','.dll','.pri','.winmd','.manifest','.xbf','.mui','.xml','.dat' "
+                   "-or $_.Name -match '\\.(deps|runtimeconfig)\\.json$' -or $_.FullName.StartsWith($build+'\\Assets\\') } | "
                    "ForEach-Object { @{name=$_.FullName.Substring($build.Length+1);"
                    "sha256=(Get-FileHash -LiteralPath $_.FullName).Hash} })",
                    capture_output=True, text=True, timeout=60)
@@ -762,23 +833,59 @@ def validate_build(record, inputs, files, profile="release"):
         sys.exit("The build does not match the synced source or binaries; rerun without --no-build.")
 
 
-def fixture_build(machine, hashes, no_build, hardware, profile="release"):
-    inputs = build_inputs(hashes)
-    directory = HARDWARE_BUILD if hardware else SOFTWARE_BUILD
-    intermediate = directory + ".obj"
+def build_record_path(machine, hardware, profile):
     suffix = "" if profile == "release" else f"-{profile}"
-    directory += suffix
-    build_record = machine.directory / f"{'hardware' if hardware else 'software'}-build{suffix}.json"
+    return machine.directory / f"{'hardware' if hardware else 'software'}-build{suffix}.json"
+
+
+def publish_build_record(machine, directory, record):
+    payload = base64.b64encode(json.dumps(record).encode()).decode()
+    guest_script(machine, f"[IO.File]::WriteAllBytes('{directory}\\fixture-build.json',"
+                 f"[Convert]::FromBase64String('{payload}'))")
+
+
+def validate_controls(machine, directory, record, hardware, required):
+    controls = record.get("controls", {})
+    if not set(required) <= set(controls) or record.get("hardware_gpu") != hardware:
+        sys.exit("Missing control-fixture build record; rerun without --no-build.")
+    for kind in required:
+        files = controls[kind]
+        if not files or files != build_files(machine, directory + "-" + kind):
+            sys.exit(f"The {kind} control fixture does not match its build record; rerun without --no-build.")
+
+
+def fixture_directory(hardware, profile):
+    return (HARDWARE_BUILD if hardware else SOFTWARE_BUILD) + ("" if profile == "release" else f"-{profile}")
+
+
+def fixture_build(machine, hashes, no_build, hardware, profile="release", controls=None):
+    inputs = build_inputs(hashes)
+    directory = fixture_directory(hardware, profile)
+    intermediate = (HARDWARE_BUILD if hardware else SOFTWARE_BUILD) + ".obj"
+    build_record = build_record_path(machine, hardware, profile)
     if no_build:
         record = json.loads(build_record.read_text()) if build_record.exists() else None
         validate_build(record, inputs, build_files(machine, directory), profile)
+        if controls is not None:
+            validate_controls(machine, directory, record, hardware, controls)
     else:
         build_record.unlink(missing_ok=True)
         feature = "" if hardware else "-SoftwareAdapterTests "
         guest(machine, f"& '{GUEST_PWSH}' -NoProfile -File '{GUEST_REPO}\\apps\\layer-windows\\scripts\\build.ps1' -Configuration Release "
                        f"-RustProfile {profile} {feature}-OutputDirectory '{directory}' -IntermediateDirectory '{intermediate}'")
         record = {"profile": profile, "inputs": inputs, "files": build_files(machine, directory)}
+        if controls is not None:
+            record.update(controls={}, hardware_gpu=hardware)
+            for kind in controls:
+                target = directory + "-" + kind
+                guest(machine, f"& '{GUEST_PWSH}' -NoProfile -File '{GUEST_REPO}\\apps\\layer-windows\\scripts\\build.ps1' "
+                      f"-Configuration Release -RustProfile {profile} {feature}-SkipRust -SkipRestore -ControlFixture {kind} "
+                      f"-OutputDirectory '{target}' -IntermediateDirectory '{intermediate}'")
+                record["controls"][kind] = build_files(machine, target)
         build_record.write_text(json.dumps(record))
+    if controls is not None:
+        record = dict(record, controls={kind: record["controls"][kind] for kind in controls})
+        publish_build_record(machine, directory, record)
     return directory, record
 
 
@@ -856,39 +963,211 @@ def wait_for_fixtures(machine, output):
     return results, plan, failure
 
 
+def fixture_selection(names):
+    if any(not re.fullmatch(r"[a-zA-Z0-9:-]+", item) for item in names):
+        raise ValueError("Fixture names use letters, numbers, hyphens and a variant colon.")
+    return f" -Name {','.join(names)}" if names else ""
+
+
+def execute_fixtures(machine, args, directory, provenance, names):
+    name = time.strftime("%Y%m%d-%H%M%S")
+    output = f"{GUEST_REPO}\\artifacts\\windows\\vm-fixtures\\{name}"
+    selection = fixture_selection(names)
+    mode = " -HardwareGpu" if provenance["hardware_gpu"] else ""
+    desktop(machine, f"-File {GUEST_REPO}\\tools\\windows-vm\\run-fixtures.ps1 "
+                     f"-Executable {directory}\\CapyCanvas.exe -Output {output} "
+                     f"-TimeoutMinutes {args.timeout_minutes} -RustProfile {args.profile} "
+                     f"-BuildRecord {directory}\\fixture-build.json{selection}{mode}")
+    results, plan, failure = wait_for_fixtures(machine, output)
+    local = retrieve(machine, f"{GUEST_REPO}\\artifacts\\windows\\vm-fixtures", name)
+    (local / "provenance.json").write_text(json.dumps(provenance, indent=2))
+    failed = [result["name"] for result in results if result["exit"] != 0]
+    print(f"{len(results) - len(failed)} passed, {len(failed)} failed. Logs: {local}")
+    return {"vm": machine.name, "results": results, "plan": plan, "failure": failure,
+            "complete": (local / "complete").exists(), "evidence": str(local)}
+
+
 def fixtures(args):
+    if getattr(args, "runners", None) is not None:
+        return sharded_fixtures(args)
+    if getattr(args, "keep_runners", False):
+        raise ValueError("--keep-runners requires --runners")
+    fixture_selection(args.names)
     machine = selected(args)
     hardware = getattr(args, "hardware_gpu", False)
     if hardware:
         start(argparse.Namespace(vm=args.vm, gui=False, gpu="auto"))
     else:
         boot(machine, gui=False)
-    lock = claim(machine)
-    revision = run("git", "rev-parse", "HEAD", cwd=ROOT, capture_output=True, text=True).stdout.strip()
-    hashes = sync_machine(machine)
-    directory, record = fixture_build(machine, hashes, args.no_build, hardware, args.profile)
-    name = time.strftime("%Y%m%d-%H%M%S")
-    output = f"{GUEST_REPO}\\artifacts\\windows\\vm-fixtures\\{name}"
-    if any(not re.fullmatch(r"[a-zA-Z0-9:-]+", item) for item in args.names):
-        sys.exit("Fixture names use letters, numbers, hyphens and a variant colon.")
-    selection = f" -Name {','.join(args.names)}" if args.names else ""
-    mode = " -HardwareGpu" if hardware else ""
-    desktop(machine, f"-File {GUEST_REPO}\\tools\\windows-vm\\run-fixtures.ps1 "
-                     f"-Executable {directory}\\CapyCanvas.exe -Output {output} "
-                     f"-TimeoutMinutes {args.timeout_minutes} -RustProfile {args.profile}{selection}{mode}")
-    results, plan, failure = wait_for_fixtures(machine, output)
-    local = retrieve(machine, f"{GUEST_REPO}\\artifacts\\windows\\vm-fixtures", name)
-    provenance = {"revision": revision, "source": hashes, "build": record, "hardware_gpu": hardware}
-    (local / "provenance.json").write_text(json.dumps(provenance, indent=2))
-    failed = [result["name"] for result in results if result["exit"] != 0]
-    print(f"{len(results) - len(failed)} passed, {len(failed)} failed. Logs: {local}")
-    if failure:
-        sys.exit(failure)
-    if not (local / "complete").exists():
-        sys.exit("The fixture runner stopped before finishing.")
-    validate_results(plan, results)
-    if failed:
+    with claim(machine):
+        revision = run("git", "rev-parse", "HEAD", cwd=ROOT, capture_output=True, text=True).stdout.strip()
+        hashes = sync_machine(machine)
+        plan = planned_fixtures(machine, args, fixture_directory(hardware, args.profile))
+        directory, record = fixture_build(machine, hashes, args.no_build, hardware, args.profile, controls=plan["controls"])
+        result = execute_fixtures(machine, args, directory,
+                                  {"revision": revision, "source": hashes, "build": record, "hardware_gpu": hardware}, args.names)
+    if result["failure"] or not result["complete"]:
+        sys.exit(result["failure"] or "The fixture runner stopped before finishing.")
+    validate_results(result["plan"], result["results"])
+    if any(row["exit"] != 0 for row in result["results"]):
         sys.exit(1)
+
+
+def planned_fixtures(machine, args, directory):
+    result = guest(machine, f"& '{GUEST_PWSH}' -NoProfile -File '{GUEST_REPO}\\tools\\windows-vm\\run-fixtures.ps1' "
+                   f"-Executable '{directory}\\CapyCanvas.exe' -Output '{directory}' -List"
+                   + fixture_selection(args.names), capture_output=True, text=True)
+    plan = json.loads(result.stdout)
+    selectors = plan["runs"]
+    if not isinstance(selectors, list) or not selectors or len(set(selectors)) != len(selectors):
+        raise ValueError("The guest returned an empty or duplicate fixture plan")
+    fixture_selection(selectors)
+    return plan
+
+
+def fixture_durations():
+    durations = {}
+    roots = {ARTIFACTS, Path(SETTINGS.get("artifacts") or ARTIFACTS)}
+    files = sorted({path for root in roots for path in root.glob("*/*/results.jsonl")},
+                   key=lambda path: path.stat().st_mtime)
+    for path in files:
+        for line in path.read_text(encoding="utf-8-sig").splitlines():
+            try:
+                row = json.loads(line)
+                if row.get("exit") == 0:
+                    durations[row["name"]] = row["seconds"]
+            except (ValueError, KeyError):
+                continue
+    return durations
+
+
+def fixture_roots(directory, record):
+    root = directory.rsplit("\\", 1)[-1]
+    return [root, *[root + "-" + kind for kind in record["controls"]]]
+
+
+def export_fixture_build(machine, directory, record, local):
+    archive = local / "build.tar.gz"
+    roots = " ".join(fixture_roots(directory, record))
+    with archive.open("wb") as stream:
+        run(*ssh_command(machine, f"tar -czf - -C {GUEST_REPO}\\artifacts\\windows {roots}"), stdout=stream)
+    return archive
+
+
+def import_fixture_build(machine, directory, record, archive, hashes, profile):
+    for name in fixture_roots(directory, record):
+        target = f"{GUEST_REPO}\\artifacts\\windows\\{name}"
+        guest(machine, f"if(Test-Path -LiteralPath '{target}'){{Remove-Item -LiteralPath '{target}' -Recurse -Force}}")
+    build_record_path(machine, False, profile).unlink(missing_ok=True)
+    guest(machine, f"New-Item -ItemType Directory -Force '{GUEST_REPO}\\artifacts\\windows'|Out-Null")
+    with archive.open("rb") as stream:
+        run(*ssh_command(machine, f"tar -xzmf - -C {GUEST_REPO}\\artifacts\\windows"), stdin=stream)
+    validate_build(record, build_inputs(hashes), build_files(machine, directory), profile)
+    validate_controls(machine, directory, record, False, record["controls"])
+    publish_build_record(machine, directory, record)
+    build_record_path(machine, False, profile).write_text(json.dumps(record))
+
+
+def sharded_fixtures(args):
+    if args.hardware_gpu:
+        raise ValueError("CPU runners cannot be used with --hardware-gpu")
+    fixture_selection(args.names)
+    primary = selected(args)
+    if primary.runner.exists():
+        raise ValueError("Build and shard from the worktree's primary VM")
+    boot(primary, gui=False)
+    local = ARTIFACTS / primary.name / ("shards-" + time.strftime("%Y%m%d-%H%M%S"))
+    local.mkdir(parents=True, exist_ok=False)
+    started = time.monotonic()
+    with claim(primary):
+        hashes = sync_machine(primary)
+        plan = planned_fixtures(primary, args, fixture_directory(False, args.profile))
+        selectors = plan["runs"]
+        directory, record = fixture_build(primary, hashes, args.no_build, False, args.profile, controls=plan["controls"])
+        provenance = {"revision": run("git", "rev-parse", "HEAD", cwd=ROOT, capture_output=True, text=True).stdout.strip(),
+                      "source": hashes, "build": record, "hardware_gpu": False}
+        archive = export_fixture_build(primary, directory, record, local)
+    settings = cpu_pool.configuration(STATE)
+    candidates = [runner_machine(primary, index + 1) for index in range(min(args.runners, len(selectors), settings["per_owner_limit"]))]
+    used = []
+    locks = {}
+    shards = []
+    def start_runner(machine):
+        lock = claim(machine)
+        try:
+            boot(machine, gui=False)
+            return machine, lock, None
+        except cpu_pool.Unavailable as error:
+            lock.close()
+            return None, None, str(error)
+        except (Exception, SystemExit):
+            try:
+                if getattr(machine, "launched_pid", None) is not None and machine.qemu_pid.exists() and int(machine.qemu_pid.read_text()) == machine.launched_pid:
+                    stop_machine(machine)
+            finally:
+                lock.close()
+            raise
+    def run_shard(machine, selection):
+        try:
+            synced = sync_machine(machine)
+            if synced != hashes:
+                raise ValueError("The source tree changed while preparing fixture runners")
+            import_fixture_build(machine, directory, record, archive, synced, args.profile)
+            names = [name if ":" in name else name + ":default" for name in selection]
+            result = execute_fixtures(machine, args, directory, provenance, names)
+            return dict(result, selectors=selection)
+        except (Exception, SystemExit) as error:
+            return {"vm": machine.name, "selectors": selection, "results": [], "complete": False, "failure": str(error)}
+    try:
+        with ThreadPoolExecutor(max_workers=len(candidates)) as executor:
+            futures = [executor.submit(start_runner, machine) for machine in candidates]
+            failures = []
+            for future in futures:
+                try:
+                    machine, lock, error = future.result()
+                except (Exception, SystemExit) as error:
+                    failures.append(str(error))
+                    continue
+                if machine:
+                    used.append(machine)
+                    locks[machine.name] = lock
+                else:
+                    print(error, flush=True)
+            if failures:
+                raise RuntimeError("; ".join(failures))
+        if not used:
+            raise RuntimeError("No CPU runner slot was available; see `runners`")
+        assignments = fixture_shards.balance(selectors, len(used), fixture_durations())
+        (local / "plan.json").write_text(json.dumps({"runs": selectors, "shards": dict(zip([machine.name for machine in used], assignments))}, indent=2))
+        with ThreadPoolExecutor(max_workers=len(used)) as executor:
+            shards = list(executor.map(run_shard, used, assignments))
+        results, errors = fixture_shards.merge(selectors, shards)
+        (local / "results.jsonl").write_text("".join(json.dumps(row) + "\n" for row in results))
+        (local / "shards.json").write_text(json.dumps(shards, indent=2))
+        (local / "provenance.json").write_text(json.dumps(provenance, indent=2))
+        (local / "summary.json").write_text(json.dumps({"wall_seconds": time.monotonic() - started, "errors": errors}, indent=2))
+        print(f"{sum(row['exit'] == 0 for row in results)}/{len(selectors)} passed on {len(used)} CPU runners. Logs: {local}")
+        if errors:
+            raise RuntimeError("; ".join(errors))
+    finally:
+        cleanup_errors = []
+        for machine in used:
+            try:
+                if not args.keep_runners:
+                    stop_machine(machine)
+            except (Exception, SystemExit) as error:
+                cleanup_errors.append(f"{machine.name}: {error}")
+            finally:
+                locks[machine.name].close()
+        summary_path = local / "summary.json"
+        if summary_path.exists():
+            summary = json.loads(summary_path.read_text())
+            summary["wall_seconds"] = time.monotonic() - started
+            summary_path.write_text(json.dumps(summary, indent=2))
+        if cleanup_errors:
+            (local / "shutdown-errors.json").write_text(json.dumps(cleanup_errors, indent=2))
+            raise RuntimeError("Could not stop CPU runners: " + "; ".join(cleanup_errors))
+    (local / "complete").touch()
 
 
 def screenshot(args):
@@ -899,7 +1178,9 @@ def screenshot(args):
 
 def reset(args):
     machine = selected(args)
-    if running(machine):
+    if machine.runner.exists() and json.loads(machine.runner.read_text()).get("worktree") != str(ROOT.resolve()):
+        sys.exit(f"The {machine.name} runner belongs to another worktree.")
+    if running(machine) or machine.runner.exists() and runner_reserved(machine):
         sys.exit(f"Stop the VM first with `{PROGRAM} --vm {machine.name} stop`.")
     remove(machine.directory)
 
@@ -922,6 +1203,13 @@ def destroy(args):
         sys.exit(f"Stop these VMs first: {', '.join(active)}")
     for path in (INSTALL, BASE, VMS, LEGACY_RUN, STATE / "run.partial", FIRMWARE, PASSWORD, KNOWN_HOSTS):
         remove(path)
+
+
+def positive_int(value):
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("Expected a positive integer")
+    return number
 
 
 def fixture_timeout(value):
@@ -949,6 +1237,8 @@ def main():
     start_command.add_argument("--gui", action="store_true", help="show the VM display in a window")
     start_command.add_argument("--gpu", nargs="?", const="auto", help="claim one free GPU, or the specified pool PCI address")
     command("gpus", gpus, "show the hardware GPU pool and its reservations")
+    command("runners", runners, "show CPU runner reservations").add_argument(
+        "--reset", action="store_true", help="delete this owner's stopped runner disks")
     command("gpu-check", gpu_check, "run the hardware renderer and Windows D3D12 tests").add_argument(
         "--no-build", action="store_true", help="reuse a validated hardware app build")
     command("stop", stop, "shut the VM down")
@@ -964,6 +1254,8 @@ def main():
     fixture.add_argument("--profile", choices=("release", "dev-perf"), default="release",
                          help="Rust build profile (default: release; dev-perf enables incremental development builds)")
     fixture.add_argument("--hardware-gpu", action="store_true", help="claim a GPU and test a hardware-only app build")
+    fixture.add_argument("--runners", type=positive_int, help="run WARP fixtures on up to N pooled CPU VMs")
+    fixture.add_argument("--keep-runners", action="store_true", help="retain CPU runners and their reservations after a sharded run")
     fixture.add_argument("--timeout-minutes", type=fixture_timeout, default=20,
                          help="deadline for each fixture, 1–1440 minutes (default: 20)")
     command("screenshot", screenshot, "save the VM display as a PNG").add_argument("file", type=Path)

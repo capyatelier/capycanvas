@@ -2,7 +2,7 @@ $ErrorActionPreference='Stop'
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'run-fixtures.ps1'),[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw ($errors|Out-String)}
-foreach($name in 'Select-Fixtures','Control-Fixture','Reviews','Get-FixtureTimeoutSeconds','Get-FixtureVariantArguments','Get-FixtureCompanionArguments','Write-FixtureResult','ConvertTo-FixtureCommandLine'){
+foreach($name in 'Select-Fixtures','Control-Fixture','Reviews','Get-FixtureTimeoutSeconds','Get-FixtureVariantArguments','Get-FixtureCompanionArguments','Write-FixtureResult','ConvertTo-FixtureCommandLine','Assert-FixtureFiles','Build-ControlFixture'){
     $function=$ast.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$false)
     . ([scriptblock]::Create($function.Extent.Text))
 }
@@ -71,4 +71,36 @@ try{
     $owned=@(Reviews)
     if($owned.Count -ne 1 -or $owned[0].Id -ne 41 -or ($queried -join ',') -ne '41,42'){throw 'Cleanup escaped recorded owners or accepted another executable'}
 }finally{Remove-Item Function:\Get-Process;Remove-Item -LiteralPath $Output -Recurse -Force}
+$cacheRun=Join-Path ([IO.Path]::GetTempPath()) ('capy-fixture-cache-'+[guid]::NewGuid().ToString('N'))
+[IO.Directory]::CreateDirectory($cacheRun)|Out-Null
+try{
+    $Output=$cacheRun;$scripts=$cacheRun;$editorExecutable=Join-Path $cacheRun 'editor/CapyCanvas.exe'
+    $directory=(Split-Path $editorExecutable)+'-Feedback'
+    [IO.Directory]::CreateDirectory($directory)|Out-Null
+    'throw "A shipped control fixture must never rebuild"'|Set-Content (Join-Path $scripts 'build.ps1')
+    $files=@{}
+    foreach($name in 'CapyCanvas.exe','layer_windows.dll','resources.pri'){
+        $file=Join-Path $directory $name;$name|Set-Content -LiteralPath $file
+        $files[$name]=(Get-FileHash -LiteralPath $file).Hash
+    }
+    $buildManifest=@{controls=@{Feedback=$files}}|ConvertTo-Json -Depth 5|ConvertFrom-Json
+    $controlBuilds=@{};$RustProfile='dev-perf';$HardwareGpu=$false
+    $first=Build-ControlFixture 'Feedback';$second=Build-ControlFixture 'Feedback'
+    if($first -ne (Join-Path $directory 'CapyCanvas.exe') -or $second -ne $first){throw 'Shipped control fixture did not reuse its executable'}
+    'stale'|Set-Content (Join-Path $directory 'resources.pri');$controlBuilds=@{};$rejected=$false
+    try{Build-ControlFixture 'Feedback'}catch{if($_.Exception.Message -notlike 'Control fixture binary differs*'){throw};$rejected=$true}
+    if(!$rejected){throw 'A stale shipped resource silently rebuilt or passed'}
+    $priorityAssignments=@($ast.FindAll({param($node)$node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -like '*PriorityClass'},$true))
+    if($priorityAssignments.Count -ne 1 -or $priorityAssignments[0].Left.Extent.Text -ne '$process.PriorityClass'){throw 'Only the fixture input driver process should receive High priority'}
+    foreach($case in @(@{names='navigator:default';controls=''},@{names='button-feedback:default,popup:default';controls='Feedback,Popup'},@{names='layer-pickup:default';controls='LayerDrop'})){
+        $json=& (Get-Process -Id $PID).Path -NoProfile -File (Join-Path $PSScriptRoot 'run-fixtures.ps1') -Executable 'C:\not-built\CapyCanvas.exe' -Output $cacheRun -Name $case.names -List
+        if($LASTEXITCODE){throw 'Listing fixture controls required a build or desktop'}
+        $plan=$json|ConvertFrom-Json
+        if(($plan.controls -join ',') -ne $case.controls -or !$plan.runs.Count){throw 'Fixture plan selected unnecessary controls or lost its selectors'}
+    }
+    $process=[Diagnostics.Process]::GetCurrentProcess();$previous=$process.PriorityClass
+    try{
+        foreach($assignment in $priorityAssignments){. ([scriptblock]::Create($assignment.Extent.Text));$process.Refresh();if($process.PriorityClass -ne 'High'){throw 'A fixture input driver did not receive High priority'}}
+    }finally{$process.PriorityClass=$previous}
+}finally{Remove-Item -LiteralPath $cacheRun -Recurse -Force}
 'Fixture selection and control entry-point routing passed'
