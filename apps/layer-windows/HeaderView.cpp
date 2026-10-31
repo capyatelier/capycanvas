@@ -529,7 +529,6 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             if(kind==L"capy")setIcon(native.view.as<Image>(),str(object(view,L"capy"),L"icon"),data->theme(),num(size,L"capy_icon"));
             AutomationProperties::SetName(native.editor,label);
             tooltip(native.frame,!reason.empty()?reason:kind==L"tool"&&pickerControl(object(item,L"control"))&&!editing?pickerTooltip(label):label);
-            AutomationProperties::SetHelpText(native.frame,reason);
             native.content.ColumnDefinitions().GetAt(0).Width({editing?20.:0.,GridUnitType::Pixel});
             native.grip.Visibility(editing?Visibility::Visible:Visibility::Collapsed);native.editor.Visibility(editing?Visibility::Visible:Visibility::Collapsed);
             native.view.IsHitTestVisible(!editing);native.editor.IsTabStop(editing);

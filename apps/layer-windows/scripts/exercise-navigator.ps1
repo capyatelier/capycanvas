@@ -27,12 +27,7 @@ function Navigator-Document{
     $file=(Model).state.document_file
     @($file.epoch,$file.revision,$file.modified)|ConvertTo-Json -Compress
 }
-function Navigator-Tooltips{
-    $condition=[System.Windows.Automation.AndCondition]::new(
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ToolTip),
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
-    @([System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)|Where-Object {!$_.Current.IsOffscreen})
-}
+function Navigator-Tooltips{Capy-Tooltips $review.Id}
 function Navigator {
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
     $menuCondition=[System.Windows.Automation.AndCondition]::new(
@@ -155,7 +150,8 @@ try {
                 $finish=if($fresh){'up'}else{$ending}
                 $stimulus=if($finish -eq 'up'){'normal native Up'}elseif($device -eq 'pen'){'synthetic pen device removal'}else{'synthetic touch canceled Up'}
                 $tooltipBefore=$null
-                if($device -eq 'mouse' -and !$fresh){
+                if($ending -eq 'up' -and !$fresh){
+                    [CapyRowPointer]::Hover($x0,$y)
                     Focus-Keyboard (Control 'navigator-zoom_out' -Arranged)
                     [CapyRowPointer]::Key([uint32]$review.Id,0x09)
                     Wait-Until {(Control 'navigator-zoom_in').Current.HasKeyboardFocus} 'Tab did not focus Zoom in'
@@ -174,6 +170,10 @@ try {
                         [CapyRowPointer]::Down($device,$x0,$y)
                         Wait-Until {(Model).state.camera.revision -gt $row.before.revision} "$device Navigator Down was not acknowledged"
                         $row.down=(Model).state.camera
+                        if($tooltipBefore){
+                            $row.uia_during_contact=$true
+                            if((Navigator-Tooltips).Count){throw "$device focused tooltip did not close on Navigator Down"}
+                        }
                         for($step=1;$step -le 6;$step++){
                             [CapyRowPointer]::Move([int]($x0+($x1-$x0)*$step/6),$y)
                             Start-Sleep -Milliseconds 25

@@ -11,6 +11,7 @@ $CapyTraceDirectory=$run
 $checks=[ordered]@{}
 $CapyPopups=$true
 function Owned([string]$Value,$Type){
+ if($Type -eq [System.Windows.Automation.ControlType]::ToolTip){return (Capy-Tooltips $review.Id|Where-Object {$_.Current.Name -eq $Value}|Select-Object -First 1)}
  $condition=[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$Value),
   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
  if($Type){$condition=[System.Windows.Automation.AndCondition]::new($condition,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$Type))}

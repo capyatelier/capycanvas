@@ -555,81 +555,91 @@ inline void segmentColors(std::shared_ptr<WorkspaceData> const& data,Primitives:
     buttonColors(data,button,20,data->brush(L"header_selection"));
 }
 inline bool& touchContact(){thread_local bool touch=false;return touch;}
-struct TooltipOwner {weak_ref<DependencyObject> owner;ToolTip tip{nullptr};};
+struct TooltipOwner {weak_ref<FrameworkElement> owner;hstring text;};
 inline std::unordered_map<void*,TooltipOwner>& tooltipOwners(){thread_local std::unordered_map<void*,TooltipOwner> owners;return owners;}
+struct TooltipPresentation {
+    weak_ref<FrameworkElement> owner;
+    Primitives::Popup popup{nullptr};Border frame{nullptr};TextBlock text{nullptr};UIElement root{nullptr};
+    Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};
+    Windows::Foundation::IInspectable pressed{nullptr},escape{nullptr};bool pending=false,revealed=false;
+    void Hide(){
+        if(timer)timer.Stop();pending=false;revealed=false;
+        if(popup){popup.IsOpen(false);popup.Child(nullptr);popup=nullptr;}frame=nullptr;text=nullptr;
+        if(root){root.RemoveHandler(UIElement::PointerPressedEvent(),pressed);root.RemoveHandler(UIElement::KeyDownEvent(),escape);}
+        root=nullptr;pressed=nullptr;escape=nullptr;owner={};
+    }
+    void Watch(FrameworkElement const& view){
+        root=view.XamlRoot().Content();
+        pressed=box_value(PointerEventHandler([this](auto&&,auto&&){Hide();}));
+        escape=box_value(KeyEventHandler([this](auto&&,KeyRoutedEventArgs const& event){if(event.Key()==Windows::System::VirtualKey::Escape)Hide();}));
+        root.AddHandler(UIElement::PointerPressedEvent(),pressed,true);root.AddHandler(UIElement::KeyDownEvent(),escape,true);
+    }
+    void Refresh(FrameworkElement const& view,hstring const& value){
+        text.Text(value);AutomationProperties::SetName(frame,value);
+        auto size=view.XamlRoot().Size();frame.MaxWidth(std::min(320.,std::max(1.,double(size.Width)-8)));
+        frame.Measure({float(frame.MaxWidth()),std::numeric_limits<float>::infinity()});auto extent=frame.DesiredSize();
+        auto bounds=view.TransformToVisual(root).TransformBounds({0,0,float(view.ActualWidth()),float(view.ActualHeight())});
+        popup.HorizontalOffset(std::clamp(double(bounds.X+(bounds.Width-extent.Width)/2),0.,std::max(0.,double(size.Width-extent.Width))));
+        auto y=bounds.Y-extent.Height-8;if(y<0)y=bounds.Y+bounds.Height+8;
+        popup.VerticalOffset(std::clamp(double(y),0.,std::max(0.,double(size.Height-extent.Height))));
+    }
+    void Show(FrameworkElement const& view,bool reveal=false){
+        auto found=tooltipOwners().find(get_abi(view.as<DependencyObject>()));
+        if(found==tooltipOwners().end()||found->second.owner.get()!=view||found->second.text.empty()||!view.IsLoaded()||!view.XamlRoot())return;
+        Hide();owner=make_weak(view);revealed=reveal;Watch(view);
+        popup=Primitives::Popup();popup.ShouldConstrainToRootBounds(true);popup.XamlRoot(view.XamlRoot());
+        frame=Markup::XamlReader::Load(LR"(<Border xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" IsHitTestVisible="False" Background="{ThemeResource ToolTipBackgroundBrush}" BackgroundSizing="InnerBorderEdge" BorderBrush="{ThemeResource ToolTipBorderBrush}" BorderThickness="{ThemeResource ToolTipBorderThemeThickness}" CornerRadius="{ThemeResource ControlCornerRadius}" Padding="{StaticResource ToolTipBorderPadding}"><TextBlock Foreground="{ThemeResource ToolTipForegroundBrush}" FontSize="{ThemeResource ToolTipContentThemeFontSize}" FontFamily="{ThemeResource ContentControlThemeFontFamily}" TextWrapping="Wrap"/></Border>)").as<Border>();
+        text=frame.Child().as<TextBlock>();popup.Child(frame);popup.IsHitTestVisible(false);
+        AutomationProperties::SetAutomationId(frame,L"capy-tooltip");
+        AutomationProperties::SetAccessibilityView(frame,Automation::Peers::AccessibilityView::Control);
+        frame.RequestedTheme(view.ActualTheme()==ElementTheme::Dark?ElementTheme::Dark:ElementTheme::Light);
+        Refresh(view,found->second.text);
+        popup.IsOpen(true);
+    }
+    void After(FrameworkElement const& view,std::chrono::milliseconds delay,bool reveal=false){
+        if(!view.IsLoaded()||!view.XamlRoot())return;
+        if(!reveal&&owner.get()==view&&(pending||(popup&&popup.IsOpen())))return;
+        if(reveal)Show(view,true);else{Hide();owner=make_weak(view);Watch(view);pending=true;}
+        if(!timer){timer=view.DispatcherQueue().CreateTimer();timer.IsRepeating(false);timer.Tick([this](auto&&,auto&&){if(pending){auto view=owner.get();pending=false;if(view)Show(view);}else Hide();});}
+        timer.Interval(delay);timer.Start();
+    }
+};
+inline TooltipPresentation& tooltipPresentation(){thread_local TooltipPresentation value;return value;}
+inline void hideTooltip(){tooltipPresentation().Hide();}
 inline void setTouchContact(bool touch){
     if(touchContact()==touch)return;
-    touchContact()=touch;
-    std::erase_if(tooltipOwners(),[touch](auto const& entry){
-        auto owner=entry.second.owner.get();if(!owner)return true;
-        if(touch){entry.second.tip.IsOpen(false);ToolTipService::SetToolTip(owner,nullptr);}
-        else ToolTipService::SetToolTip(owner,entry.second.tip);
-        return false;
-    });
-}
-inline void dismissTooltipOnDeparture(ToolTip const& tip,DependencyObject const& owner){
-    auto host=std::make_shared<weak_ref<UIElement>>();
-    auto depart=box_value(PointerEventHandler([host,owner=make_weak(owner),tip=make_weak(tip)](auto&&,PointerRoutedEventArgs const& event){
-        if(event.IsGenerated())return;
-        auto target=owner.get();
-        for(auto node=event.OriginalSource().try_as<DependencyObject>();node;node=VisualTreeHelper::GetParent(node))if(node==target)return;
-        if(auto root=host->get())if(auto tooltip=tip.get();tooltip&&tooltip.IsOpen()){
-            auto popups=VisualTreeHelper::GetOpenPopupsForXamlRoot(root.XamlRoot());tooltip.IsOpen(false);
-            for(auto popup:popups)if(popup.Child()==tooltip)popup.IsOpen(false);
-        }
-    }));
-    tip.Opened([host,depart,owner=make_weak(owner)](auto&&,auto&&){
-        if(host->get())return;
-        if(auto target=owner.get())if(auto view=target.try_as<UIElement>();view&&view.XamlRoot()){
-            auto root=view.XamlRoot().Content();*host=make_weak(root);
-            for(auto event:{UIElement::PointerEnteredEvent(),UIElement::PointerMovedEvent()})root.AddHandler(event,depart,true);
-        }
-    });
-    tip.Closed([host,depart](auto&& sender,auto&&){
-        if(sender.template as<ToolTip>().IsOpen())return;
-        if(auto root=host->get())for(auto event:{UIElement::PointerEnteredEvent(),UIElement::PointerMovedEvent()})root.RemoveHandler(event,depart);
-        *host=weak_ref<UIElement>{};
-    });
+    touchContact()=touch;if(touch)tooltipPresentation().Hide();
 }
 inline void tooltip(DependencyObject const& target,hstring const& text){
+    AutomationProperties::SetHelpText(target,text);
+    auto view=target.try_as<FrameworkElement>();if(!view)return;
     auto& owners=tooltipOwners();
-    if(auto found=owners.find(get_abi(target));found!=owners.end()&&found->second.owner.get()==target){
-        if(unbox_value_or<hstring>(found->second.tip.Content(),L"")!=text)found->second.tip.Content(box_value(text));
-        if(!touchContact())ToolTipService::SetToolTip(target,found->second.tip);
-        return;
+    if(auto found=owners.find(get_abi(target));found!=owners.end()&&found->second.owner.get()==view){
+        bool changed=found->second.text!=text;found->second.text=text;
+        auto& shown=tooltipPresentation();if(shown.owner.get()==view){if(text.empty())shown.Hide();else if(changed&&shown.popup&&shown.popup.IsOpen())shown.Refresh(view,text);}return;
     }
     if(owners.size()>=1024)std::erase_if(owners,[](auto const& entry){return !entry.second.owner.get();});
-    ToolTip tip;tip.Content(box_value(text));dismissTooltipOnDeparture(tip,target);
-    if(!touchContact())ToolTipService::SetToolTip(target,tip);
-    owners.insert_or_assign(get_abi(target),TooltipOwner{make_weak(target),tip});
+    owners.insert_or_assign(get_abi(target),TooltipOwner{make_weak(view),text});
+    view.PointerEntered([weak=make_weak(view)](auto&&,PointerRoutedEventArgs const& event){
+        if(event.IsGenerated()||event.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Touch)return;
+        if(auto view=weak.get();view&&!event.GetCurrentPoint(view).IsInContact()){
+            DWORD delay=400;SystemParametersInfoW(SPI_GETMOUSEHOVERTIME,0,&delay,0);
+            setTouchContact(false);tooltipPresentation().After(view,std::chrono::milliseconds(uint64_t(delay)*2));
+        }
+    });
+    view.PointerExited([weak=make_weak(view)](auto&&,auto&&){auto& shown=tooltipPresentation();if(!shown.revealed&&shown.owner.get()==weak.get())shown.Hide();});
+    view.GotFocus([weak=make_weak(view)](auto&&,auto&&){
+        if(auto view=weak.get();view&&view.XamlRoot())if(auto focus=FocusManager::GetFocusedElement(view.XamlRoot()).try_as<Control>();focus&&focus.FocusState()==FocusState::Keyboard){setTouchContact(false);tooltipPresentation().Show(view);}
+    });
+    view.LostFocus([weak=make_weak(view)](auto&&,auto&&){if(tooltipPresentation().owner.get()==weak.get())tooltipPresentation().Hide();});
+    view.Unloaded([weak=make_weak(view)](auto&&,auto&&){if(tooltipPresentation().owner.get()==weak.get())tooltipPresentation().Hide();});
 }
 inline void copyName(std::shared_ptr<WorkspaceData> const& data,FrameworkElement const& target,LocalizedCopy const& text,bool tip=false){
     auto present=[tip](FrameworkElement const& view,hstring const& value){AutomationProperties::SetName(view,value);if(tip)tooltip(view,value);};
     present(target,text);
     data->copyView([weak=make_weak(target),resolve=text.current,present]{if(auto view=weak.get()){present(view,resolve());return true;}return false;});
 }
-struct TooltipReveal {weak_ref<FrameworkElement> owner;ToolTip tip{nullptr};Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};};
-inline TooltipReveal& tooltipReveal(){thread_local TooltipReveal reveal;return reveal;}
-inline void hideRevealedTooltip(){
-    auto& reveal=tooltipReveal();if(!reveal.tip)return;
-    if(reveal.timer)reveal.timer.Stop();
-    reveal.tip.IsOpen(false);
-    if(auto owner=reveal.owner.get();owner&&touchContact())ToolTipService::SetToolTip(owner,nullptr);
-    reveal.tip=nullptr;reveal.owner={};
-}
-inline void revealTooltip(FrameworkElement const& target){
-    hideRevealedTooltip();
-    DependencyObject key=target;
-    auto found=tooltipOwners().find(get_abi(key));
-    if(found==tooltipOwners().end()||found->second.owner.get()!=target)return;
-    auto& reveal=tooltipReveal();reveal.owner=make_weak(target);reveal.tip=found->second.tip;
-    ToolTipService::SetToolTip(target,reveal.tip);reveal.tip.IsOpen(true);
-    if(!reveal.timer){
-        reveal.timer=target.DispatcherQueue().CreateTimer();reveal.timer.IsRepeating(false);reveal.timer.Interval(std::chrono::milliseconds(4000));
-        reveal.timer.Tick([](auto&&,auto&&){hideRevealedTooltip();});
-    }
-    reveal.timer.Start();
-}
+inline void revealTooltip(FrameworkElement const& target){tooltipPresentation().After(target,std::chrono::milliseconds(4000),true);}
 inline Grid explainable(Control const& control);
 inline Brush paletteResource(wchar_t const* name){
     auto resources=Application::Current().Resources();auto key=box_value(hstring(name));

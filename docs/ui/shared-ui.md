@@ -885,10 +885,10 @@ Adwaita-styled fallback; GTK 4.22's native timeout queries the seat mouse instea
 Web uses one inert tooltip for mouse/pen hover, with the same compact styling,
 editor text size and 4px below-center placement (flip/slide at screen edges).
 Both wait 500ms, dismiss on contact/exit/cancellation, and preserve shared shortcut
-text. Windows keeps native WinUI tooltips for mouse and pen hover and closes any
-tooltip that opens while the latest contact is touch
-(`apps/layer-windows/scripts/exercise-tooltips.ps1`). Tooltip controllers never
-consume touch holds or request model refreshes.
+text. Windows uses one inert popup inside the window for mouse/pen hover and
+keyboard focus, styled with WinUI tooltip resources. Disabled-reason taps use the
+same surface (`apps/layer-windows/scripts/exercise-tooltips.ps1`). Tooltip
+controllers never consume touch holds or request model refreshes.
 `tools/performance/workspace-motion.sh gtk --tooltips` (or `web`) checks them.
 
 Applied settings emit a durable `HostRequest::SaveSettings`; GTK writes atomically

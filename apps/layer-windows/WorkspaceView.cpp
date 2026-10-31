@@ -1282,7 +1282,7 @@ bool WorkspaceView::CancelGesture(){
 bool WorkspaceView::CancelNativeContacts(){return impl->data->pointerCancels.CancelAll();}
 void WorkspaceView::SetWindowId(uint64_t id){impl->data->windowId=id;}
 void WorkspaceView::SetGlassChanged(std::function<void()> changed){impl->glassChanged=std::move(changed);}
-void WorkspaceView::CanvasContact(bool active){impl->canvasBar->Contact(active);impl->bubbles->Wake();if(active){impl->notice->Hide();hideRevealedTooltip();}}
+void WorkspaceView::CanvasContact(bool active){impl->canvasBar->Contact(active);impl->bubbles->Wake();if(active){impl->notice->Hide();hideTooltip();}}
 void WorkspaceView::AttachOverlays(UIElement const& root,std::function<void()> cancelHeader){
     auto weak=std::weak_ptr<Impl>(impl);root.as<Panel>().Children().Append(impl->utilities);Canvas::SetZIndex(impl->utilities,1100);impl->pressure->attach(impl->utilities);
     auto sync=[weak](auto&&,auto&&){if(auto self=weak.lock()){self->utilities.Visibility(self->root.Visibility());self->utilities.IsHitTestVisible(self->root.IsHitTestVisible());}};

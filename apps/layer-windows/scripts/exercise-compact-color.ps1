@@ -200,6 +200,11 @@ function Pair-Setup{
     $origin=[CapyRowPointer+Point]::new()
     if(![CapyRowPointer]::ClientToScreen([IntPtr]$root.Current.NativeWindowHandle,[ref]$origin)){throw 'Header fixture origin is unavailable'}
     $scale=[CapyRowPointer]::GetDpiForWindow([IntPtr]$root.Current.NativeWindowHandle)/96.
+    $labels=@((Model).header.model.zones|ForEach-Object {$_}|Where-Object {$_.item.kind -eq 'menu_labels'})[0]
+    [CapyRowPointer]::Hover([int]($from.X+$from.Width/2),[int]($from.Y+$from.Height/2))
+    Focus-Keyboard (Control ('header-select-'+$labels.id) -Arranged)
+    $tip=@{element=$null}
+    Wait-Until {$tip.element=@(Capy-Tooltips $review.Id|Where-Object {$_.Current.Name -eq (Control ('header-item-'+$labels.id)).Current.Name})[0];$tip.element -and $tip.element.Current.BoundingRectangle.Contains([double]($from.X+$from.Width/2),[double]($from.Y+$from.Height/2))} 'Menu Labels tooltip did not cover the Add Tools press'
     [CapyRowPointer]::Down('mouse',[int]($from.X+$from.Width/2),[int]($from.Y+$from.Height/2))
     [CapyRowPointer]::Move([int]($origin.x+($zone.x+$zone.width/2)*$scale),[int]($origin.y+($zone.y+$zone.height/2)*$scale))
     Wait-Until {try{$gesture=(Control 'title-bar').Current.HelpText|ConvertFrom-Json;$gesture.phase -eq 'dragging' -and $gesture.preview.target}catch{$false}} 'Header color insertion has no target'

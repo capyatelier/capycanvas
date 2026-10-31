@@ -175,7 +175,7 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
         results.Visibility(entering?Visibility::Collapsed:Visibility::Visible);
         empty.Visibility(!entering&&!array(view,L"results").Size()?Visibility::Visible:Visibility::Collapsed);
         auto text=str(view,L"detail");
-        detail.Text(text);if(text.empty())ToolTipService::SetToolTip(detail,nullptr);else tooltip(detail,text);
+        detail.Text(text);tooltip(detail,text);
         if(!open){
             previousFocus=FocusManager::GetFocusedElement(host.XamlRoot()).try_as<Control>();
             double width=std::clamp(host.ActualWidth()-num(style(),L"inset",12)*4,240.,num(style(),L"width",560));

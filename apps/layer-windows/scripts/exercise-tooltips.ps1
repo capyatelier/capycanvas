@@ -7,14 +7,7 @@ Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path;$directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/tooltips/'+[Guid]::NewGuid().ToString('N'));[IO.Directory]::CreateDirectory($run)|Out-Null
-function Tooltip {
- $condition=[System.Windows.Automation.AndCondition]::new(
-  [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ToolTip),
-  [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
- $found=[System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
- if(!$found){$found=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)}
- $found
-}
+function Tooltip {Capy-Tooltips $review.Id|Select-Object -First 1}
 function Center([string]$Id,[switch]$Name){
  $property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}
  $element=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new($property,$Id))
@@ -56,6 +49,10 @@ try{
  try{Wait-Until {$tip=Tooltip;$shown.text=if($tip){$tip.Current.Name}else{''};$shown.text -eq $expected} 'shortcut' 5}catch{throw "Hovering Move showed '$($shown.text)', expected '$expected'"}
  [CapyRowPointer]::Hover($away.x,$away.y)
  Wait-Until {!(Tooltip)} 'The shortcut tooltip did not dismiss'
+ Focus-Keyboard $move.item
+ Wait-Until {$tip=Tooltip;$tip -and $tip.Current.Name -eq $expected} 'Keyboard focus did not show the shortcut tooltip'
+ [CapyRowPointer]::Key([uint32]$review.Id,[uint16]0x1B)
+ Wait-Until {!(Tooltip)} 'Escape did not dismiss the keyboard tooltip'
  [CapyRowPointer]::Down('touch',$target.x,$target.y)
  try{
   $watch=[Diagnostics.Stopwatch]::StartNew()
@@ -64,7 +61,7 @@ try{
  Start-Sleep -Milliseconds 400
  if(Tooltip){throw 'A tooltip appeared after the touch hold'}
  [CapyRowPointer]::Key([uint32]$review.Id,[uint16]0x1B)
- @{theme=$Theme;mouse_hover='passed';touch_hold_without_tooltip='passed';action_shortcut_hint=$shown.text;target=$target.name}|ConvertTo-Json|Set-Content (Join-Path $run 'results.json')
+ @{theme=$Theme;mouse_hover='passed';keyboard_focus='passed';escape='passed';touch_hold_without_tooltip='passed';action_shortcut_hint=$shown.text;target=$target.name}|ConvertTo-Json|Set-Content (Join-Path $run 'results.json')
  Get-Content (Join-Path $run 'results.json')
 }catch{
  if($review -and !$review.HasExited){try{Capture 'failure' -WithModel}catch{}}

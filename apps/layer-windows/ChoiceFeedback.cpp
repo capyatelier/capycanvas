@@ -142,7 +142,7 @@ void CapyUi::refreshControlPalette(WorkspaceData& data){
     for(auto name:{L"ToggleSwitchFillOff",L"ToggleSwitchFillOffPointerOver",L"ToggleSwitchFillOffPressed"})put(name,data.tint(L"text",51));
     for(auto name:{L"CheckBoxCheckGlyphForegroundChecked",L"CheckBoxCheckGlyphForegroundCheckedPointerOver",L"CheckBoxCheckGlyphForegroundCheckedPressed"})put(name,data.brush(L"accent_foreground"));
     for(auto name:{L"CheckBoxCheckBackgroundStrokeUnchecked",L"CheckBoxCheckBackgroundStrokeUncheckedPointerOver",L"CheckBoxCheckBackgroundStrokeUncheckedPressed",L"RadioButtonOuterEllipseStroke"})put(name,data.tint(L"text",128));
-    put(L"ToolTipBackground",fill({204,0,0,6}));put(L"ToolTipForeground",fill({255,255,255,255}));put(L"ToolTipBorderBrush",transparent);
+    put(L"ToolTipBorderBrush",transparent);
     put(L"ContentDialogBackground",data.brush(L"settings"));put(L"ContentDialogBorderBrush",data.line(L"settings",L"border"));put(L"ContentDialogSmokeFill",fill({82,0,0,0}));put(L"ContentDialogTopOverlay",transparent);
     put(L"SystemControlFocusVisualPrimaryBrush",data.tint(L"accent",128));put(L"SystemControlFocusVisualSecondaryBrush",transparent);
     put(L"FocusVisualPrimaryBrush",data.tint(L"accent",128));put(L"FocusVisualSecondaryBrush",transparent);
@@ -153,7 +153,6 @@ void CapyUi::refreshControlPalette(WorkspaceData& data){
     put(L"ListViewItemSelectionIndicatorVisualEnabled",box_value(false));
     put(L"CheckBoxSize",box_value(16.));put(L"CheckBoxCornerRadius",box_value(CornerRadius{4,4,4,4}));
     put(L"TextControlBorderThemeThicknessFocused",box_value(Thickness{0}));put(L"TextControlBorderThemeThickness",box_value(Thickness{0}));
-    put(L"ToolTipCornerRadius",box_value(CornerRadius{9,9,9,9}));put(L"ToolTipContentThemePadding",box_value(Thickness{10,6,10,6}));
     previous=key;
 }
 bool CapyUi::selectIndex(ComboBox const& control,int32_t index){

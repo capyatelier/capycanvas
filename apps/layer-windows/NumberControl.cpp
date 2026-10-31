@@ -59,9 +59,8 @@ bool shifted(PointerRoutedEventArgs const& e){
     using Windows::System::VirtualKeyModifiers;return (e.KeyModifiers()&VirtualKeyModifiers::Shift)==VirtualKeyModifiers::Shift;
 }
 void showNumericError(TextBox const& entry,hstring const& text){
-    AutomationProperties::SetHelpText(entry,text);
     entry.BorderBrush().as<SolidColorBrush>().Color(text.empty()?Windows::UI::Color{}:InvalidFieldColor);
-    if(text.empty())ToolTipService::SetToolTip(entry,nullptr);else tooltip(entry,text);
+    tooltip(entry,text);
 }
 }
 StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& title,J const& spec,
