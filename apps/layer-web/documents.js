@@ -3,6 +3,7 @@ import {createDrawingTabs} from './drawing-tabs.js';
 import {createDocumentRecovery} from './document-recovery.js';
 import {chooseDocumentColor} from './document-color.js';
 import {createProof} from './proof.js';
+import {latinKey} from './text-input.js';
 import {chooseExport,chooseSourceProfile,localizeProfileLibraries} from './export-controls.js';
 
 export const exportFormats={
@@ -505,7 +506,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     canOffer:()=>canvasReady()&&!document.hidden&&!active.size&&!batching&&!changing&&!closing&&!document.querySelector('dialog[open]')&&app.document_park_ready()});
   const tabs=createDrawingTabs({app,element,button,icon,applyChange,select,close,openFiles,message,busy:()=>changing||batching||closing});
   return {title:tabs.root,key(event,send){
-    if(!event.altKey&&((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='v'
+    if(!event.altKey&&((event.ctrlKey||event.metaKey)&&app.shortcut_key_is(event.key,latinKey(event),'v')
       ||event.shiftKey&&!event.ctrlKey&&!event.metaKey&&event.key==='Insert')){
       keyboardPaste=true;setTimeout(()=>{keyboardPaste=false;},0);
       if(!navigator.clipboard?.read){

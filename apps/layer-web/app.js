@@ -31,7 +31,7 @@ import { createDocuments } from "./documents.js";
 import { createSystemStatus } from "./system-status.js";
 import { createHeader } from "./header.js";
 import { createNumberField } from "./numeric.js";
-import { captureTextComposition, composingKey } from "./text-input.js";
+import { captureTextComposition, composingKey, latinKey } from "./text-input.js";
 import { createSelectionUi } from "./selection-masks.js";
 import { createPreviewPanel } from "./preview-panel.js";
 import { createCanvasSizeUi } from "./canvas-size.js";
@@ -1781,6 +1781,7 @@ function keyInput(e, pressed, divider = null) {
   const reply = input({
     type: "key",
     key: e.key,
+    latin: latinKey(e),
     pressed,
     repeat: e.repeat,
     modifiers: {

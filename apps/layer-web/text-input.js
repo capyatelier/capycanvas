@@ -1,6 +1,15 @@
 const preedit = new WeakSet(), ended = new WeakMap(), held = new WeakMap(), owned = new WeakSet();
 let compositionRoot;
 
+const latinPairs = {Backquote:'`~', Minus:'-_', Equal:'=+', BracketLeft:'[{', BracketRight:']}',
+  Backslash:'\\|', IntlBackslash:'\\|', Semicolon:';:', Quote:'\'"', Comma:',<', Period:'.>', Slash:'/?'};
+export function latinKey({key, code, shiftKey}) {
+  const pair = /^Key[A-Z]$/.test(code) ? code[3].toLowerCase() + code[3]
+    : /^Digit[0-9]$/.test(code) ? code[5] + ')!@#$%^&*('[Number(code[5])] : latinPairs[code];
+  const latin = pair?.[shiftKey ? 1 : 0];
+  return latin && latin !== key ? latin : null;
+}
+
 export function captureTextComposition(root) {
   compositionRoot = root;
   root.addEventListener("cancel", event => {

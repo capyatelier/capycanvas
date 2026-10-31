@@ -114,6 +114,7 @@ function documentsHarness(t,{refreshInputContext,clipboardItem}={}){
   t.after(()=>{for(const[key,descriptor]of Object.entries(previous))if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];});
   let language='en',inspections=0,copyCalls=0,resolveInspection,rejectInspection;const info={sources:[{name:'Literal Éİı 雪 {draft}'}]},requests=[],completed=[],responses=[],messages=[];
   const app={catalog:()=>({native_copy:{color:{},header:{}}}),bootstrap_view:()=>({preparing_document:language+':Preparing',common:{cancel:language+':Cancel',save:language+':Save',done:language+':Done'}}),document_delivery_copy:()=>({cancelling:language+':Cancelling'}),export_copy:()=>({}),document_color_copy:()=>({}),proof_copy:()=>({}),profile_copy:()=>({}),proof_choices_copy:()=>({}),session_checkpoint_interval:()=>0,gpu_ready:()=>false,proof_status:()=>({text:'',needed:false}),state:()=>({requests,commands:[{id:'paste_image',enabled:true}],document_file:{epoch:1},customization:{header_editing:false}}),document_tabs:()=>({selected:1,tabs:[],compact:false}),
+    shortcut_key_is:(key,_latin,expected)=>key.toLowerCase()===expected,
     editor_models:()=>({document_options:{unsaved_description:language+':Unsaved',discard_label:language+':Discard'}}),
     document_properties(){inspections++;return new Promise((resolve,reject)=>{resolveInspection=resolve;rejectInspection=reject;});},document_properties_copy(value){assert.equal(value,info);copyCalls++;return{title:language+':Properties',done:language+':Done',rows:[[language+':Canvas','96 × 96 px']],sources:[[info.sources[0].name,language+':Source']]};},
     finish_document(id,success,error){assert.ok(requests.some(request=>request.id===id));completed.push({id,success,error});requests.splice(requests.findIndex(request=>request.id===id),1);return{};},respond_document(id,decision){responses.push({id,decision});return{};}};
@@ -210,8 +211,9 @@ test('external images replace stale private copies and ignore unrelated clipboar
   assert.equal(prepared,1);assert.equal(received.length,1);assert.equal(await received[0].text(),'fresh');assert.equal(h.completed.at(-1).success,true);
 });
 
-for(const shortcut of [{ctrlKey:true,key:'v'},{shiftKey:true,key:'Insert'}])test(`native keyboard ${shortcut.key} paste delivers only requests authorized by shared shortcuts`,async t=>{
+for(const [shortcut,latin] of [[{ctrlKey:true,key:'v'},null],[{ctrlKey:true,key:'м',code:'KeyV'},'v'],[{shiftKey:true,key:'Insert'},null]])test(`native keyboard ${shortcut.key} paste delivers only requests authorized by shared shortcuts`,async t=>{
   const h=documentsHarness(t);let received,task,prevented=0;
+  h.app.shortcut_key_is=(...args)=>{assert.deepEqual(args,[shortcut.key,latin,'v']);return true;};
   h.app.capture_image_import=()=>({free(){}});h.app.capture_control=()=>({cancel(){},cancelled:()=>false,free(){}});
   h.app.prepare_images=async(request,files)=>{received=files;return {};};h.app.adopt_images=()=>h.app.finish_document(101,true);
   const files=[new File(['pixels'],'screenshot.png',{type:'image/png'})],event={target:{closest:()=>null},clipboardData:{files},preventDefault(){prevented++;}};

@@ -1,5 +1,5 @@
 import { bindCopy } from './localization.js';
-import { composingKey } from "./text-input.js";
+import { composingKey, latinKey } from "./text-input.js";
 export function createShortcutPage({ app, element, button, icon, send, view, scroller, settingsGroup: group, dropdown, copy, common }) {
   const panes = new Map(), active = new Map(), rows = new Map();
   let keymapChoice, keymapOutdated, contextChoice, showChoice, shortcutSearch, categoryList, emptyStatus;
@@ -135,11 +135,12 @@ export function createShortcutPage({ app, element, button, icon, send, view, scr
     shortcutSearch.addEventListener("input", () => send({ type: "search_shortcuts", query: shortcutSearch.value }));
     shortcutSearch.addEventListener("keydown", e => {
       if (composingKey(e)) return;
-      const editing = (e.ctrlKey || e.metaKey) && !e.altKey && !(e.ctrlKey && e.metaKey) && ["a", "c", "v", "x", "Backspace", "Delete", "ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key.length === 1 ? e.key.toLowerCase() : e.key);
+      const latin = latinKey(e);
+      const editing = (e.ctrlKey || e.metaKey) && !e.altKey && !(e.ctrlKey && e.metaKey) && ["a", "c", "v", "x", "Backspace", "Delete", "ArrowLeft", "ArrowRight", "Home", "End"].some(key => app.shortcut_key_is(e.key, latin, key));
       const named = /^F\d+$/.test(e.key) || e.key.startsWith("Audio") || e.key.startsWith("Media");
       if (editing || !(e.ctrlKey || e.altKey || e.metaKey || named) || ["Control", "Shift", "Alt", "Meta"].includes(e.key)) return;
       e.preventDefault(); e.stopPropagation();
-      send({ type: "search_shortcut_key", chord: { key: e.key, command: e.ctrlKey || e.metaKey, shift: e.shiftKey, alt: e.altKey } });
+      send({ type: "search_shortcut_key", chord: { key: e.key, latin, command: e.ctrlKey || e.metaKey, shift: e.shiftKey, alt: e.altKey } });
       shortcutSearch.select();
     });
     searchBox.append(icon("search"), shortcutSearch);

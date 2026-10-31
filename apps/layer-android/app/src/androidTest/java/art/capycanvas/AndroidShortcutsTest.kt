@@ -15,6 +15,11 @@ import org.junit.Test
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
+private class LayoutKeyEvent(phase: Int, code: Int, meta: Int, private val text: String) :
+    KeyEvent(SystemClock.uptimeMillis(), SystemClock.uptimeMillis(), phase, code, 0, meta) {
+    override fun getUnicodeChar(metaState: Int): Int = text.codePointAt(0)
+}
+
 /** Keyboard shortcuts, modifier keys, pen buttons and taps on the tablet. */
 class AndroidShortcutsTest {
     companion object { private val runId = System.currentTimeMillis().toString() }
@@ -23,7 +28,7 @@ class AndroidShortcutsTest {
     private val host get() = compose.activity.host
     @Before fun ready() {
         compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
-        host.awaitReady()
+        host.awaitReady(compose = compose)
         compose.runOnIdle {
             host.dispatch(obj("type" to "set_theme", "theme" to "light"))
             host.dispatch(obj("type" to "open_settings", "page" to "shortcuts"))
@@ -55,10 +60,12 @@ class AndroidShortcutsTest {
         node.performClick()
         compose.waitForIdle()
     }
-    private fun press(code: Int, meta: Int = 0) {
+    private fun press(code: Int, meta: Int = 0, text: String? = null) {
         val now = SystemClock.uptimeMillis()
-        for (action in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP))
-            assertTrue(instrumentation.uiAutomation.injectInputEvent(KeyEvent(now, SystemClock.uptimeMillis(), action, code, 0, meta), true))
+        for (phase in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) {
+            if (text == null) assertTrue(instrumentation.uiAutomation.injectInputEvent(KeyEvent(now, SystemClock.uptimeMillis(), phase, code, 0, meta), true))
+            else instrumentation.runOnMainSync { compose.activity.dispatchKeyEvent(LayoutKeyEvent(phase, code, meta, text)) }
+        }
         compose.waitForIdle()
     }
     private fun capture(name: String) {
@@ -84,6 +91,43 @@ class AndroidShortcutsTest {
             resolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
         }
         action(obj("type" to "set_theme", "theme" to "light"))
+    }
+
+    @Test fun nonLatinLayoutsUseLatinShortcutsWithoutChangingText() {
+        val control = KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON
+        val missing = LayoutKeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_Z, control, "я")
+        assertNull(latinKey(missing, "я", null))
+        assertEquals("я", keyName(missing))
+        assertNotNull(host.latinKeyMap)
+        assertNull(host.searchChord(LayoutKeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_C, control, "с")))
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            val layers = state().array("layers").length()
+            repeat(2) { action(obj("type" to "invoke", "command" to "add_layer")) }
+            press(KeyEvent.KEYCODE_Z, control, "я")
+            compose.waitUntil(10_000) { state().array("layers").length() == layers + 1 }
+            press(KeyEvent.KEYCODE_Z, control or KeyEvent.META_SHIFT_ON, "Я")
+            compose.waitUntil(10_000) { state().array("layers").length() == layers + 2 }
+            action(obj("type" to "invoke", "command" to "eraser"))
+            press(KeyEvent.KEYCODE_B, text = "и")
+            compose.waitUntil(10_000) { state().array("commands").objects().first { it.getString("id") == "brush" }.getBoolean("selected") }
+            open("shortcuts")
+            compose.onNodeWithTag("shortcuts-search").performClick()
+            press(KeyEvent.KEYCODE_Z, control, "я")
+            compose.waitUntil(10_000) { page().optString("key") == "Ctrl+Z" }
+            val field = compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("shortcuts-search")))
+            field.performTextClearance(); field.performTextInput("я")
+            compose.waitUntil(10_000) { preferences().optString("shortcut_query") == "я" && page().isNull("key") }
+            preference(obj("type" to "edit_shortcut", "id" to "command.ZenMode"))
+            tap("add-shortcut")
+            press(KeyEvent.KEYCODE_Z, control, "я")
+            compose.waitUntil(10_000) { preferences().objectOrNull("capture")?.optString("shortcut") == "Ctrl+Z" }
+            tap("confirm-shortcut")
+            compose.waitUntil(10_000) { state().getJSONObject("settings").getJSONObject("shortcuts").array("command.ZenMode").objects().any { it.optString("key") == "z" } }
+            preference(obj("type" to "reset_all_shortcuts"))
+            preference(obj("type" to "close_shortcut_editor"))
+            action(obj("type" to "close_settings"))
+        }
     }
 
     @Test fun categoriesSlideAndFiltersShareOneLine() {

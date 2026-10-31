@@ -4,6 +4,7 @@ import { runInNewContext } from "node:vm";
 import test from "node:test";
 import {headerButtonHint, presentCapy} from './header.js';
 import {colorDialogDom} from './color-dialog-fixture.mjs';
+import {latinKey} from './text-input.js';
 
 const source = readFileSync(new URL("app.js", import.meta.url), "utf8");
 test('header buttons present shared refusal hints without replacing layout-editing hints', () => {
@@ -57,17 +58,18 @@ test('live preferences publish while document dialogs retain exclusive editing i
   assert.deepEqual(received,[restore,invoke]);assert.deepEqual(published,[change,change]);
 });
 
-test('nested dialogs own keys after recording even without a focused descendant', () => {
+test('native key input retains dialog ownership, text and Latin candidates', () => {
   const received = [];
   let modal = {};
   class Element { closest() { return null; } }
   const context = {Element, document:{querySelector:() => modal}, state:{preferences:{capture:null}},
-    composingKey:() => false, updateZen() {}, keyboardFocused:new WeakSet(),
+    composingKey:() => false, latinKey, updateZen() {}, keyboardFocused:new WeakSet(),
     app:{control_takes_key:() => false}, documents:{allowNativePaste:() => false},
     input:event => { received.push(event); return {handled:true}; }};
   runInNewContext(source.slice(source.indexOf('function keyInput('), source.indexOf('const keyboardFocused =')), context);
-  const key = pressed => {
+  const key = (pressed, properties = {}) => {
     const event = {target:new Element(), key:'Escape', defaultPrevented:false, stopped:false,
+      ...properties,
       preventDefault() { this.defaultPrevented=true; }, stopPropagation() { this.stopped=true; }};
     context.keyInput(event, pressed);
     return event;
@@ -85,6 +87,16 @@ test('nested dialogs own keys after recording even without a focused descendant'
   modal = null;
   assert.equal(key(true).defaultPrevented, true);
   assert.equal(received.length, 3, 'Main Preferences retains shared key handling');
+  for (const [name, code, shiftKey, latin] of [['я','KeyZ',false,'z'], ['Я','KeyZ',true,'Z'],
+    ['и','KeyB',false,'b'], ['é','Digit2',false,'2'], ['х','BracketLeft',true,'{'],
+    ['a','KeyQ',false,'q'], ['z','KeyZ',false,null], ['Escape','Escape',false,null]]) {
+    for (const pressed of [true, false]) {
+      key(pressed, {key:name, code, shiftKey});
+      assert.equal(received.at(-1).key, name);
+      assert.equal(received.at(-1).latin, latin, `${name}/${code}/shift=${shiftKey}/pressed=${pressed}`);
+      assert.equal(received.at(-1).pressed, pressed);
+    }
+  }
 });
 
 function harness(moving = false) {

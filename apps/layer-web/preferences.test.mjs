@@ -10,7 +10,14 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   const preference = (value) => action({ type: "preferences", action: value });
   const click = async (selector) => { await evaluate(`(() => {const node=document.querySelector(${JSON.stringify(selector)});if(node.matches('input:not([type=hidden]),textarea,select'))node.focus();node.click()})()`); await settle(); };
   const key = async (name, modifiers = {}) => {
-    await evaluate(`(() => {for(const type of ['keydown','keyup']) document.activeElement.dispatchEvent(new KeyboardEvent(type,{key:${JSON.stringify(name)},bubbles:true,cancelable:true,...${JSON.stringify(modifiers)}}))})()`);
+    if (modifiers.code) {
+      await call('Input.setIgnoreInputEvents', {ignore:false});
+      try {
+        for (const type of ['keyDown','keyUp']) await call('Input.dispatchKeyEvent', {type, key:name, code:modifiers.code,
+          windowsVirtualKeyCode:modifiers.code[3].charCodeAt(0),
+          modifiers:(modifiers.altKey?1:0)|(modifiers.ctrlKey?2:0)|(modifiers.metaKey?4:0)|(modifiers.shiftKey?8:0)});
+      } finally { await call('Input.setIgnoreInputEvents', {ignore:true}); }
+    } else await evaluate(`(() => {for(const type of ['keydown','keyup']) document.activeElement.dispatchEvent(new KeyboardEvent(type,{key:${JSON.stringify(name)},bubbles:true,cancelable:true,...${JSON.stringify(modifiers)}}))})()`);
     await settle();
   };
   const escape = async () => {
@@ -91,6 +98,24 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   assert.equal(await evaluate("layerApp.state().workspace.zen_mode"), true);
   await key('Tab');
   assert.equal(await evaluate("layerApp.state().workspace.zen_mode"), false);
+  const layoutDefaults = await evaluate('({theme:layerApp.state().settings.theme,brush:layerApp.state().brush.preset})');
+  for (const theme of ['light','dark']) {
+    await action({type:'set_theme',theme});
+    const layers = await evaluate('layerApp.state().layers.length');
+    for (let i=0;i<2;i++) await action({type:'invoke',command:'add_layer'});
+    await evaluate('layerApp.canvas.focus()');
+    await key('я',{code:'KeyZ',ctrlKey:true});
+    assert.equal(await evaluate('layerApp.state().layers.length'),layers+1,'Russian Ctrl+Z undoes exactly one layer');
+    await key('Я',{code:'KeyZ',ctrlKey:true,shiftKey:true});
+    assert.equal(await evaluate('layerApp.state().layers.length'),layers+2,'Russian Ctrl+Shift+Z redoes exactly one layer');
+    await action({type:'invoke',command:'eraser'});
+    await key('и',{code:'KeyB'});
+    assert.ok(await evaluate("layerApp.state().commands.find(c=>c.id==='brush').selected"),'Russian B selects Paint');
+    for (let i=0;i<2;i++) await key('я',{code:'KeyZ',ctrlKey:true});
+    assert.equal(await evaluate('layerApp.state().layers.length'),layers);
+  }
+  await action({type:'select_brush',id:layoutDefaults.brush});
+  await action({type:'set_theme',theme:layoutDefaults.theme});
   await capture('typography');
   assert.equal(await evaluate("getComputedStyle(document.querySelector('#size-number .number-labels')).paddingLeft"), '0px', 'panel labels align with the row edge');
   assert.ok(await evaluate(`(() => {
@@ -423,10 +448,16 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   await evaluate(`(() => { const node=document.querySelector('#shortcuts-search'); node.focus(); node.dispatchEvent(new CompositionEvent('compositionstart',{data:'字',bubbles:true})); node.dispatchEvent(new KeyboardEvent('keydown',{key:'z',ctrlKey:true,isComposing:false,bubbles:true,cancelable:true})); })()`);
   assert.equal(await prefs('view.shortcut_page.key'), shortcutKeyBeforePreedit, 'candidate modifiers do not record a shortcut lookup');
   await evaluate(`document.querySelector('#shortcuts-search').dispatchEvent(new CompositionEvent('compositionend',{data:'字',bubbles:true}))`);
-  await evaluate("(() => { const node=document.querySelector('#shortcuts-search'); node.focus(); node.dispatchEvent(new KeyboardEvent('keydown',{key:'z',ctrlKey:true,bubbles:true,cancelable:true})); })()"); await settle();
+  await evaluate("document.querySelector('#shortcuts-search').focus()");
+  await key('я',{code:'KeyZ',ctrlKey:true});
   assert.equal(await prefs("view.shortcut_page.key"), "Ctrl+Z", "pressing a shortcut in search looks it up");
   assert.ok(await visible('[data-shortcut="command.Undo"]'));
   assert.equal(await visible('[data-shortcut="command.Redo"]'), false);
+  await key('ф',{code:'KeyA',ctrlKey:true});
+  assert.equal(await prefs('view.shortcut_page.key'),'Ctrl+Z','Native Select All is not captured as shortcut search');
+  await call('Input.insertText',{text:'я'}); await settle();
+  assert.equal(await prefs('view.shortcut_query'),'я','Native text keeps its original character');
+  assert.equal(await prefs('view.shortcut_page.key ?? null'),null);
   await type('#shortcuts-search', 'eraser');
   assert.ok(await evaluate("[...document.querySelectorAll('[data-shortcut]')].filter(r=>r.getClientRects().length).every(row=>row.textContent.toLowerCase().includes('eraser'))"));
   assert.equal(await evaluate(`document.querySelector('[data-shortcut="brush.3"] p').textContent`), "Brush for the Eraser tool", "same-named brushes say what they are");
@@ -449,7 +480,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   assert.equal(await prefs("view.capture.chord ?? null"), null);
   await key("w", { ctrlKey: true });
   assert.equal(await evaluate("document.querySelector('#confirm-shortcut').disabled"), true);
-  await key("e");
+  await key("у", {code:'KeyE'});
   assert.equal(await prefs("view.capture.conflict"), "Eraser");
   assert.equal(await evaluate("document.querySelector('#confirm-shortcut').textContent"), "Reassign");
   await capture("shortcut-conflict");

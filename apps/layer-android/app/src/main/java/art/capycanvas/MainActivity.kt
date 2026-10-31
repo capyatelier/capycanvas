@@ -7,6 +7,7 @@ import android.graphics.ColorSpace
 import androidx.activity.OnBackPressedCallback
 import android.os.Bundle
 import android.view.KeyEvent
+import android.view.KeyCharacterMap
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.ReportDrawnWhen
 import androidx.activity.compose.setContent
@@ -210,10 +211,14 @@ internal fun CanvasHost.key(event: KeyEvent) {
         KeyEvent.KEYCODE_MOVE_HOME, KeyEvent.KEYCODE_MOVE_END, KeyEvent.KEYCODE_ESCAPE)) return
     if (colorControlFocus != null && event.keyCode in listOf(KeyEvent.KEYCODE_SPACE, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER)) return
     val key = keyName(event)
-    if (key != null) input(obj("type" to "key", "key" to key, "pressed" to (event.action == KeyEvent.ACTION_DOWN),
+    if (key != null) input(obj("type" to "key", "key" to key, "latin" to latinKey(event, key, latinKeyMap), "pressed" to (event.action == KeyEvent.ACTION_DOWN),
             "repeat" to (event.repeatCount > 0), "editing" to editingText, "divider" to (dividerFocus ?: org.json.JSONObject.NULL),
             "modifiers" to obj("command" to (event.isCtrlPressed || event.isMetaPressed), "shift" to event.isShiftPressed, "alt" to event.isAltPressed)))
 }
+
+internal fun latinKey(event: KeyEvent, key: String, map: KeyCharacterMap?): String? =
+    map?.get(event.keyCode, event.metaState and KeyEvent.META_SHIFT_MASK)?.takeIf { it in 33..126 }
+        ?.toChar()?.toString()?.takeUnless { it == key }
 
 /** The shared key names the core records and matches. */
 internal fun keyName(event: KeyEvent): String? = when (event.keyCode) {

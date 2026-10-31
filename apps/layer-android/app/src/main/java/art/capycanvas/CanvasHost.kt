@@ -9,6 +9,7 @@ import android.os.Process
 import android.os.SystemClock
 import android.util.Log
 import android.view.Choreographer
+import android.view.KeyCharacterMap
 import android.view.MotionEvent
 import android.view.Surface
 import androidx.compose.runtime.getValue
@@ -370,6 +371,8 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
     private val main = Handler(Looper.getMainLooper())
     private val thread = HandlerThread("capy-canvas", Process.THREAD_PRIORITY_DISPLAY).apply { start() }
     private val worker = Handler(thread.looper)
+    @Volatile internal var latinKeyMap: KeyCharacterMap? = null
+        private set
     @Volatile internal var documentInputBlocked = false
         set(value) { field = value; lastPenDevice = null; calibrationPenContact = null }
     internal fun documentCanvasFailure(message: String?) { failure=message }
@@ -437,6 +440,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
         PhotoReader.context = application
         worker.post {
             attempt {
+                latinKeyMap = runCatching { KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD) }.getOrNull()
                 val workspaces = storage.workspaces.absolutePath
                 val savedSettings = runCatching { saved.getString("settings", null).orEmpty() }.getOrElse {
                     Log.e("CapyCanvas", "Could not read saved settings", it); ""

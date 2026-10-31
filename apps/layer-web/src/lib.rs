@@ -949,6 +949,9 @@ impl WebApp {
     pub fn control_takes_key(&self, key: &str, command: bool, alt: bool, keyboard_focus: bool) -> bool {
         layer_ui::control_takes_key(key, layer_ui::Modifiers { command, shift: false, alt }, keyboard_focus)
     }
+    pub fn shortcut_key_is(&self, key: &str, latin: Option<String>, expected: &str) -> bool {
+        layer_ui::shortcut_key(key, latin.as_deref()).eq_ignore_ascii_case(expected)
+    }
     pub fn input(&mut self, input: JsValue) -> Result<JsValue, JsValue> {
         let input = serde_wasm_bindgen::from_value(input).map_err(js)?;
         if !self.gpu_ready() && matches!(input, layer_ui::UiInput::Pointer { .. }) {

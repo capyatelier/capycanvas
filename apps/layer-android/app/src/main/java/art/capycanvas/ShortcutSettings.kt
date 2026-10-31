@@ -1,5 +1,7 @@
 package art.capycanvas
 
+import android.view.KeyEvent
+
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -43,10 +45,12 @@ import org.json.JSONObject
 
 internal const val MODIFIER_SECTION = "Modifier keys"
 private const val MODIFIER_CAPTURE = "modifier"
-private val textEditing = setOf("a", "c", "v", "x", "backspace", "delete", "arrowleft", "arrowright", "home", "end")
+private val textEditing = setOf(KeyEvent.KEYCODE_A, KeyEvent.KEYCODE_C, KeyEvent.KEYCODE_V, KeyEvent.KEYCODE_X,
+    KeyEvent.KEYCODE_DEL, KeyEvent.KEYCODE_FORWARD_DEL, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
+    KeyEvent.KEYCODE_MOVE_HOME, KeyEvent.KEYCODE_MOVE_END)
 
 /** A pressed chord for looking up shortcuts; plain typing stays in the field. */
-internal fun searchChord(event: android.view.KeyEvent): JSONObject? {
+internal fun CanvasHost.searchChord(event: android.view.KeyEvent): JSONObject? {
     if (event.action != android.view.KeyEvent.ACTION_DOWN) return null
     val name = keyName(event) ?: return null
     if (name in listOf("shift", "alt", "control", "meta")) return null
@@ -54,8 +58,8 @@ internal fun searchChord(event: android.view.KeyEvent): JSONObject? {
     val named = Regex("f\\d+").matches(name) || deviceKey(event.keyCode) != null || name.startsWith("pad_button_")
     if (!chorded && !named) return null
     val onlyControl = event.isCtrlPressed && !event.isAltPressed && !event.isMetaPressed && !event.isShiftPressed
-    if (onlyControl && name in textEditing) return null
-    return obj("key" to name, "command" to (event.isCtrlPressed || event.isMetaPressed), "shift" to event.isShiftPressed, "alt" to event.isAltPressed)
+    if (onlyControl && event.keyCode in textEditing) return null
+    return obj("key" to name, "latin" to latinKey(event, name, latinKeyMap), "command" to (event.isCtrlPressed || event.isMetaPressed), "shift" to event.isShiftPressed, "alt" to event.isAltPressed)
 }
 
 private fun subtitle(row: JSONObject): String =
@@ -168,7 +172,7 @@ private fun subtitle(row: JSONObject): String =
         CoreTextField(view.optString("shortcut_query"), { host.preference(obj("type" to "search_shortcuts", "query" to it)) },
             modifier = Modifier.weight(1f).testTag("shortcuts-search").onPreviewKeyEvent { event ->
                 if (host.textComposition.owns(event.nativeKeyEvent)) return@onPreviewKeyEvent false
-                val chord = searchChord(event.nativeKeyEvent) ?: return@onPreviewKeyEvent false
+                val chord = host.searchChord(event.nativeKeyEvent) ?: return@onPreviewKeyEvent false
                 host.preference(obj("type" to "search_shortcut_key", "chord" to chord))
                 true
             }, height = 48.dp, focusRequest = keySearch,
