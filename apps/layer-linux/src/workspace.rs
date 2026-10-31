@@ -195,6 +195,9 @@ mod allocation {
         fn size_allocate(&self, width: i32, height: i32, _: i32) {
             if let Some(owner) = self.owner.borrow().upgrade() {
                 owner.present_toolbars();
+                owner.header.root.set_child_visible(true);
+                allocate_at(owner.header.root.upcast_ref(), Bounds {x:0., y:0., width:width as f32, height:owner.header.height()});
+                owner.measure_panels();
             }
             let mut resolved = self.layout.borrow().workspace(
                 width as f32,
@@ -233,7 +236,7 @@ mod allocation {
             for (slot, child) in self.children.borrow().iter() {
                 if matches!(
                     slot,
-                    Slot::Drawer(0) | Slot::DrawerConnection(0) | Slot::DrawerShadow(0) | Slot::CanvasBar | Slot::PressureCalibration | Slot::ZenCapy
+                    Slot::Header | Slot::Drawer(0) | Slot::DrawerConnection(0) | Slot::DrawerShadow(0) | Slot::CanvasBar | Slot::PressureCalibration | Slot::ZenCapy
                 ) {
                     continue; // Allocate parents before measuring child origins.
                 }
@@ -244,16 +247,6 @@ mod allocation {
                         y: 0.0,
                         width: width as f32,
                         height: height as f32,
-                    }),
-                    Slot::Header => Some(Bounds {
-                        x: 0.0,
-                        y: 0.0,
-                        width: width as f32,
-                        height: self
-                            .owner
-                            .borrow()
-                            .upgrade()
-                            .map_or(HEADER_HEIGHT, |w| w.header.height()),
                     }),
                     Slot::Status => {
                         // HDR/proof status remains operable when the optional
@@ -305,7 +298,7 @@ mod allocation {
                         .find(|g| g.id == *group && expansion.is_none_or(|e| e.group != *group))
                         .and_then(|g| g.resize_handles.iter().find(|h| h.edge == *edge))
                         .map(|h| h.bounds),
-                    Slot::CanvasBar | Slot::PressureCalibration | Slot::ZenCapy => unreachable!("allocated after its owner"),
+                    Slot::Header | Slot::CanvasBar | Slot::PressureCalibration | Slot::ZenCapy => unreachable!("allocated separately"),
                 };
                 child.set_child_visible(bounds.is_some());
                 if let Some(b) = bounds {
@@ -336,7 +329,6 @@ mod allocation {
                     }
                 }
                 owner.columns.present_connections(&owner, &resolved);
-                owner.queue_panel_measurements();
                 owner.present_popovers();
                 let scale = owner.area.scale_factor() as u32;
                 let extent = [
@@ -1283,7 +1275,6 @@ impl Workspace {
             edge_grabs: Default::default(),
             publication: workspace_update::Publication::default(),
             drop_hint: RefCell::new(None),
-            measuring_panels: Cell::new(false),
             panel_metric_context: RefCell::new(None),
             panel_measurement_report: RefCell::new(None),
             toolbar: toolbar.clone(),
@@ -3137,21 +3128,6 @@ impl Workspace {
             STATUS_HEIGHT,
         ).with_panel_bridges()
     }
-    fn queue_panel_measurements(self: &Rc<Self>) {
-        if self.measuring_panels.replace(true) {
-            return;
-        }
-        glib::idle_add_local_once(glib::clone!(
-            #[weak(rename_to = w)]
-            self,
-            move || {
-                w.measuring_panels.set(false);
-                w.measure_panels();
-            }
-        ));
-    }
-    // Also run synchronously at release: an idle measurement from before a
-    // tear-off may describe a different width or an older layer count.
     fn measure_panels(self: &Rc<Self>) {
         let Some(layout) = self
             .gpu
@@ -3867,9 +3843,6 @@ impl Workspace {
         } else {
             Vec::new()
         };
-        if phase == ContactPhase::Up && matches!(target, DragTarget::Dock(_)) {
-            self.measure_panels();
-        }
         if let Some(action) = target.action(
             phase,
             position,
