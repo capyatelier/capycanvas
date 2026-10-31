@@ -2398,6 +2398,63 @@ class AndroidInteractionTest {
         }
     }
 
+    @Test fun columnDrawerTilesAnchorNestedContentDrawers() {
+        val layout = fixture.getJSONObject("layout")
+        val first = layout.getInt("next_tile_id")
+        val ids = listOf(first, first + 1)
+        layout.put("next_tile_id", first + 2)
+        layout.array("panels").objects().first { it.getString("id") == "toolbar" }.apply {
+            put("tile_style", "small")
+            getJSONObject("content").put("tiles", JSONArray(ids.mapIndexed { index, id ->
+                obj("id" to id, "control" to obj("kind" to "panel", "panel" to if (index == 0) "color" else "sizes"))
+            }))
+        }
+        tool = MotionEvent.TOOL_TYPE_FINGER
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            restore()
+            action(obj("type" to "move_panel", "panel" to "toolbar", "target" to obj("kind" to "tab", "group" to 41),
+                "viewport" to JSONArray(listOf(bounds("workspace").width / density, bounds("workspace").height / density))))
+            customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
+            customize(obj("type" to "set_column_drawers", "column" to 41, "drawers" to true))
+            tap(bounds("column-icon-toolbar").center)
+            waitFor("$theme toolbar column drawer presents both complete tiles") {
+                shown("column-drawer-41") && ids.all { id ->
+                    tagged("tile-toolbar-$id")?.second?.boundsInRoot?.let { it.width >= 35f * density && it.height >= 35f * density } == true
+                }
+            }
+            for (id in ids.reversed()) {
+                tap(bounds("tile-toolbar-$id").center)
+                waitFor("$theme tile $id opens its nested content drawer") {
+                    state().getJSONObject("customization").objectOrNull("drawer")?.getJSONObject("anchor")?.optInt("tile") == id &&
+                        shown("tool-drawer") && host.workspaceInteraction?.tileDrawerSource("toolbar", id) != null
+                }
+                val source = bounds("tile-toolbar-$id").intersect(bounds("column-drawer-41"))
+                lateinit var expected: Rect
+                lateinit var actual: Rect
+                var tolerance = 0f
+                onMain {
+                    val dock = checkNotNull(host.workspaceInteraction)
+                    expected = source.translate(-dock.origin).let {
+                        Rect(it.left / dock.density, it.top / dock.density, it.right / dock.density, it.bottom / dock.density)
+                    }
+                    actual = checkNotNull(dock.drawer).getJSONObject("placement").getJSONObject("anchor").rect()
+                    tolerance = 1f / dock.density
+                }
+                File(activity.getExternalFilesDir(null), "validation/batch2/column-tiles-$theme-$id.json").apply {
+                    parentFile!!.mkdirs()
+                    writeText(obj("tile" to id, "source_px" to source.toString(), "expected_anchor" to expected.toString(),
+                        "actual_anchor" to actual.toString()).toString(2))
+                }
+                assertEquals("$theme tile $id anchor left", expected.left, actual.left, tolerance)
+                assertEquals("$theme tile $id anchor top", expected.top, actual.top, tolerance)
+                assertEquals("$theme tile $id anchor right", expected.right, actual.right, tolerance)
+                assertEquals("$theme tile $id anchor bottom", expected.bottom, actual.bottom, tolerance)
+                screenshot("validation/batch2/column-tiles-$theme-$id.png")
+            }
+        }
+    }
+
     @Test fun toolbarDrawersSwitchToolsOnFirstTap() {
         val originalPreset = state().getJSONObject("brush").getInt("preset")
         val toolCommands = setOf("pen", "pencil", "brush", "eraser", "airbrush", "retouch", "blend", "liquify",

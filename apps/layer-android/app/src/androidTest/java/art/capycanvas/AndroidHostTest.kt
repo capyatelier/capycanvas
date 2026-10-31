@@ -4070,6 +4070,53 @@ class AndroidHostTest {
         compose.onNodeWithTag("settings-done").performClick()
     }
 
+    @Test fun drawerTileMeasurementsPublishOncePerComposition() {
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            val dock = compose.runOnIdle { DockInteraction(host).apply { density = compose.activity.resources.displayMetrics.density } }
+            val tiles = host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }
+                .array("tiles").objects().take(3).map { it.getInt("id") }
+            assertEquals("$theme fixture supplies three distinct drawer tiles", 3, tiles.distinct().size)
+            val stage = androidx.compose.runtime.mutableIntStateOf(0)
+            lateinit var view: androidx.compose.ui.platform.ComposeView
+            compose.runOnIdle {
+                view = androidx.compose.ui.platform.ComposeView(compose.activity)
+                compose.activity.addContentView(view, android.widget.FrameLayout.LayoutParams(1, 1).apply {
+                    gravity = android.view.Gravity.BOTTOM or android.view.Gravity.END
+                })
+                view.setContent {
+                    val current = stage.intValue
+                    androidx.compose.runtime.SideEffect {
+                        tiles.forEachIndexed { index, tile ->
+                            val bounds = if (current == 1 || current == 2)
+                                androidx.compose.ui.geometry.Rect(index * 36f, 0f, (index + 1) * 36f, 36f) else null
+                            dock.measureDrawerTile(41, "toolbar", tile, bounds)
+                        }
+                    }
+                    dock.publishMeasurements()
+                }
+            }
+            try {
+                compose.waitForIdle(); host.drain()
+                val initial = compose.runOnIdle { dock.drawerTileRevision }
+                compose.runOnIdle { stage.intValue = 1 }
+                compose.waitForIdle(); host.drain()
+                compose.runOnIdle { assertEquals("$theme three measurements publish one revision", initial + 1, dock.drawerTileRevision) }
+                compose.runOnIdle { stage.intValue = 2 }
+                compose.waitForIdle(); host.drain()
+                compose.runOnIdle { assertEquals("$theme unchanged reports do not republish", initial + 1, dock.drawerTileRevision) }
+                compose.runOnIdle { stage.intValue = 3 }
+                compose.waitForIdle(); host.drain()
+                compose.runOnIdle { assertEquals("$theme three removals publish one revision", initial + 2, dock.drawerTileRevision) }
+            } finally {
+                compose.runOnIdle { view.disposeComposition(); (view.parent as? android.view.ViewGroup)?.removeView(view) }
+                host.drain()
+            }
+        }
+    }
+
+
+
     @Test fun layersStandardUnitHeightDoesNotFollowVisibleMixedRows() {
         val original = android.content.res.Configuration(compose.activity.resources.configuration)
         fun configuration(value: android.content.res.Configuration) = compose.activityRule.scenario.onActivity { activity ->

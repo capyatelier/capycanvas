@@ -74,6 +74,8 @@ internal class DockInteraction(val host: CanvasHost) {
     fun tileDrawerSource(panel: String, tile: Int) =
         drawerSources["tool"]?.takeIf { it.anchor?.optString("panel") == panel && it.anchor.optInt("tile") == tile }
     private val drawerTiles = mutableMapOf<String, JSONObject>()
+    private var drawerMeasurementsRevision by mutableIntStateOf(0)
+    private var lastDrawerReport = "[]"
     private val columnDrawers = mutableMapOf<Int, JSONObject>()
     data class Anchor(val target: String, val bounds: Rect)
     val anchors = mutableMapOf<Any, Anchor>()
@@ -228,7 +230,7 @@ internal class DockInteraction(val host: CanvasHost) {
     }
 
     fun clearDrawerTiles(column: Int) {
-        if (drawerTiles.entries.removeAll { it.value.getInt("column") == column }) publishDrawerTiles()
+        if (drawerTiles.entries.removeAll { it.value.getInt("column") == column }) drawerMeasurementsRevision++
     }
     fun measureDrawerTile(column: Int, panel: String, tile: Int, bounds: Rect?) {
         val key = "$column:$panel:$tile"
@@ -238,10 +240,14 @@ internal class DockInteraction(val host: CanvasHost) {
         }
         if (drawerTiles[key]?.toString() == next?.toString()) return
         if (next == null) drawerTiles.remove(key) else drawerTiles[key] = next
-        publishDrawerTiles()
+        drawerMeasurementsRevision++
     }
     private fun publishDrawerTiles() {
-        host.dispatch(obj("type" to "measure_drawer_tiles", "measurements" to JSONArray(drawerTiles.values.toList())))
+        val reports = JSONArray(drawerTiles.values.toList())
+        val encoded = reports.toString()
+        if (lastDrawerReport == encoded) return
+        lastDrawerReport = encoded
+        host.dispatch(obj("type" to "measure_drawer_tiles", "measurements" to reports))
         drawerTileRevision++
     }
     fun measure(panel: String, origin: PanelMeasurementOrigin?, tabWidths: List<Float>? = null, content: PanelContentSize? = null, actualWidth: Float = 0f) {
@@ -272,9 +278,10 @@ internal class DockInteraction(val host: CanvasHost) {
         return obj("context" to context, "reports" to JSONArray(reports))
     }
     @Composable fun publishMeasurements() {
-        val publish: () -> Unit = remember(measurementRevision, panelMetrics) {
-            { measurementBatch()?.let(::publishMeasurements) }
+        val publish: () -> Unit = remember(measurementRevision, panelMetrics, drawerMeasurementsRevision) {
+            { measurementBatch()?.let(::publishMeasurements); publishDrawerTiles() }
         }
+        DisposableEffect(this) { onDispose { drawerTiles.clear(); publishDrawerTiles() } }
         SideEffect(publish)
     }
     private fun publishMeasurements(batch: JSONObject) {
