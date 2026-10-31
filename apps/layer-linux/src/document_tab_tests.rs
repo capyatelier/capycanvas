@@ -38,7 +38,7 @@ fn native_canvas_background_during_startup_and_tab_switch() {
     pump(400);
     let mut input = RemoteInput::new().settle_ms(0).timeout_secs(30);
     input.ready();
-    let mut capture = |name: &str, expected: Option<[u8; 3]>| -> [u8; 3] {
+    let capture = |input: &mut RemoteInput, name: &str, expected: Option<[u8; 3]>| -> [u8; 3] {
         input.perform(serde_json::json!([{"wait_ms":250}, {"capture":name}]));
         let mut reader =
             png::Decoder::new(std::fs::File::open(captures.join(format!("{name}.png"))).unwrap())
@@ -120,22 +120,50 @@ fn native_canvas_background_during_startup_and_tab_switch() {
         }
         expected
     };
-    let sentinel = capture("behind", None);
+    let sentinel = capture(&mut input, "behind", None);
     assert!(
         sentinel[0] > 250 && sentinel[1] < 20 && sentinel[2] > 250,
         "the capture shows the sentinel window: {sentinel:?}"
     );
+    let mut palette_failures = Vec::new();
+    let surround = [[behind.width() as f32 * 0.5, behind.height() as f32 * 0.8]];
+    let check_palette = |name: &str, frames: &[[[u8; 3]; 1]], expected: [u8; 3], failures: &mut Vec<String>| {
+        let mut visible = 0;
+        for (index, [pixel]) in frames.iter().enumerate() {
+            let delta = std::array::from_fn::<_, 3, _>(|c| expected[c] as f32 - sentinel[c] as f32);
+            let length = delta.iter().map(|v| v * v).sum::<f32>();
+            let opacity = (0..3).map(|c| (pixel[c] as f32 - sentinel[c] as f32) * delta[c]).sum::<f32>() / length;
+            if opacity < 0.05 { continue; }
+            visible += 1;
+            if (0..3).any(|c| (pixel[c] as f32 - (sentinel[c] as f32 + opacity * delta[c])).abs() > 4.) {
+                failures.push(format!("{name} frame {index}: startup/reveal surround {pixel:?}, expected {expected:?} over {sentinel:?}"));
+            }
+        }
+        if visible == 0 { failures.push(format!("{name}: no presented editor surround")); }
+    };
+    let prepare = |w: &Rc<Workspace>, theme| {
+        w.dispatch(UiAction::RestoreSettings { settings: Box::new(layer_ui::Settings {theme:Some(theme),..Default::default()}) });
+        w.window.maximize();
+        gtk::prelude::WidgetExt::realize(&w.window);
+        w.surface.realize();
+        w.area.realize();
+        wait_workspaces(w);
+        w.dispatch(UiAction::SetZoom { zoom: 0.1 });
+    };
+    let light = Workspace::with_project(&app, Some((new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
+    prepare(&light, Theme::Light);
+    let frames = super::ui_motion::record_pixels(&light, &mut input, "first-startup-light", surround, || { light.window.present(); new_photo::ready(&light); });
+    check_palette("first-startup-light", &frames, [184; 3], &mut palette_failures);
+    light.window.destroy();
+    pump(400);
     let pause = crate::render_thread::pause_next_startup();
     let w = Workspace::with_project(&app, Some((new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
-    w.window.maximize();
+    prepare(&w, Theme::Dark);
     w.window.present();
-    w.dispatch(UiAction::SetTheme {
-        theme: Some(Theme::Dark),
-    });
     // Allow the compositor's window-opening fade to finish; the GPU remains
     // paused, so this cannot hide a missing application background.
     pump(600);
-    capture("startup-wait", Some([51; 3]));
+    capture(&mut input, "startup-wait", Some([51; 3]));
     assert!(
         !ui_session(&w)
             .engine()
@@ -143,9 +171,47 @@ fn native_canvas_background_during_startup_and_tab_switch() {
             .startup
             .complete
     );
-    pause.store(false, Ordering::Release);
-    new_photo::ready(&w);
-    capture("startup-ready", Some([255; 3]));
+    w.dispatch(UiAction::SetZoom { zoom: 0.1 });
+    let frames = super::ui_motion::record_pixels(&w, &mut input, "first-startup-dark", surround, || {
+        pause.store(false, Ordering::Release);
+        new_photo::ready(&w);
+    });
+    check_palette("first-startup-dark", &frames, [51; 3], &mut palette_failures);
+    let tab = {
+        let groups = w.groups.borrow();
+        let group = groups.iter().find(|group| group.tabs_visible).unwrap();
+        let tab = group.tabs.iter().find(|(_, tab)| tab.has_css_class("selected-tool")).unwrap().1.compute_bounds(&w.surface).unwrap();
+        [tab.x() + 4., tab.y() + tab.height() - 3.]
+    };
+    w.window.set_visible(false);
+    pump(400);
+    w.dispatch(UiAction::SetTheme { theme: Some(Theme::Light) });
+    let hidden = super::ui_motion::record_pixels(&w, &mut input, "hidden-theme-reveal", [surround[0], tab], || w.window.present());
+    behind.present();
+    pump(200);
+    assert!(!w.window.is_active(), "sentinel takes focus before the unfocused theme change");
+    w.dispatch(UiAction::SetTheme { theme: Some(Theme::Dark) });
+    let unfocused = super::ui_motion::record_pixels(&w, &mut input, "unfocused-theme-reveal", [surround[0], tab], || w.window.present());
+    let light_panel = hidden.last().unwrap()[1];
+    let dark_panel = unfocused.last().unwrap()[1];
+    for (name, frames, expected, new_panel, old_panel) in [
+        ("hidden-theme-reveal", &hidden, [184; 3], light_panel, dark_panel),
+        ("unfocused-theme-reveal", &unfocused, [51; 3], dark_panel, light_panel),
+    ] {
+        let mut checked = 0;
+        for (index, [pixel, panel]) in frames.iter().enumerate() {
+            let distance = |a: [u8; 3], b: [u8; 3]| a.into_iter().zip(b).map(|(a, b)| u32::from(a.abs_diff(b)).pow(2)).sum::<u32>();
+            if distance(*panel, new_panel) > 12 || distance(*panel, old_panel) < 100 { continue; }
+            checked += 1;
+            if pixel.into_iter().zip(expected).any(|(actual, expected)| actual.abs_diff(expected) > 4) {
+                palette_failures.push(format!("{name} frame {index}: new native palette {panel:?} with surround {pixel:?}, expected {expected:?}"));
+            }
+        }
+        if checked == 0 { palette_failures.push(format!("{name}: no new native palette frame with distinct theme endpoints")); }
+    }
+    w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
+    pump(300);
+    capture(&mut input, "startup-ready", Some([255; 3]));
 
     let pause = crate::render_thread::pause_next_startup();
     glib::MainContext::default()
@@ -154,34 +220,34 @@ fn native_canvas_background_during_startup_and_tab_switch() {
                 .open(&w, (new_drawing(128, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)),
         )
         .unwrap();
-    capture("new-tab-wait", Some([51; 3]));
+    capture(&mut input, "new-tab-wait", Some([51; 3]));
     assert!(
         w.documents.parked_memory().1,
         "inactive GPU worker still stops"
     );
     pause.store(false, Ordering::Release);
     new_photo::ready(&w);
-    capture("new-tab-ready", Some([255; 3]));
+    capture(&mut input, "new-tab-ready", Some([255; 3]));
 
     let pause = crate::render_thread::pause_next_startup();
     glib::MainContext::default()
         .block_on(w.documents.activate(&w, 1))
         .unwrap();
-    capture("switch-wait", Some([51; 3]));
+    capture(&mut input, "switch-wait", Some([51; 3]));
     w.window.unmaximize();
     w.window.set_default_size(1100, 750);
     pump(350);
-    capture("switch-resized", Some([51; 3]));
+    capture(&mut input, "switch-resized", Some([51; 3]));
     w.dispatch(UiAction::SetTheme {
         theme: Some(Theme::Light),
     });
-    capture("switch-light", Some([184; 3]));
+    capture(&mut input, "switch-light", Some([184; 3]));
     pause.store(false, Ordering::Release);
     new_photo::ready(&w);
-    capture("switch-ready", Some([255; 3]));
+    capture(&mut input, "switch-ready", Some([255; 3]));
     corner.set(36);
     css.load_from_string(&window_style(corner.get()));
-    capture("radius-changed", Some([255; 3]));
+    capture(&mut input, "radius-changed", Some([255; 3]));
 
     ui_session(&w)
         .engine()
@@ -195,20 +261,21 @@ fn native_canvas_background_during_startup_and_tab_switch() {
         },
         "failed GPU worker",
     );
-    capture("failed-worker", Some([184; 3]));
+    capture(&mut input, "failed-worker", Some([184; 3]));
     // Simulate the opaque GTK fallback after a background transport failure.
     // A successful restart must reveal the new drawing again, not mask it.
     w.window.remove_css_class("native-canvas-background");
     let pause = crate::render_thread::pause_next_startup();
     w.restart_gpu();
-    capture("restart-wait", Some([184; 3]));
+    capture(&mut input, "restart-wait", Some([184; 3]));
     pause.store(false, Ordering::Release);
     new_photo::ready(&w);
-    capture("restart-ready", Some([255; 3]));
+    capture(&mut input, "restart-ready", Some([255; 3]));
     w.window.destroy();
-    capture("closed", Some(sentinel));
+    capture(&mut input, "closed", Some(sentinel));
     behind.destroy();
     input.finish();
+    assert!(palette_failures.is_empty(), "{}", palette_failures.join("\n"));
 }
 
 #[test]

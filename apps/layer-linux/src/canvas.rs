@@ -172,8 +172,6 @@ impl GpuCanvas {
             [area.width().max(1) as f32, area.height().max(1) as f32],
             extent(area),
         )?;
-        let surround = self.session.state().palette.surround_linear;
-        self.session.renderer_mut().surround = surround;
         let presentation_ns = self.session.engine().backend().clock.presentation(now_ns);
         let clock = &self.session.engine().backend().clock;
         let period = clock.period();

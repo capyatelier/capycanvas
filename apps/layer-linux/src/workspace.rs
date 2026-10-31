@@ -361,7 +361,6 @@ mod allocation {
             let snapshot = &composed;
             let owner = self.owner.borrow().upgrade();
             let mut nodes = Vec::new();
-            let column_surfaces = owner.as_ref().map(|w| w.columns.snapshot(w)).unwrap_or_default();
             let mut holes = Vec::new();
             let mut projections = Vec::new();
             for (order, (slot, child)) in self.children.borrow().iter().enumerate() {
@@ -390,13 +389,19 @@ mod allocation {
                 }
                 nodes.push((*slot, node));
             }
+            let column_surfaces = owner.as_ref().map(|w| w.columns.snapshot(w, &nodes)).unwrap_or_default();
             let mut connectors = Vec::new();
             let mut chrome_changed = false;
             if let Some(owner) = &owner {
+                let palette=owner.palette.get();
+                let style=palette.map(|p|(p.surround_linear,layer_render_wgpu::BackdropBlurStyle {
+                    levels:p.glass.blur.levels,offset:p.glass.blur.offset,
+                }));
+                chrome_changed|=owner.chrome_style.replace(style)!=style;
                 let panels_changed=*owner.panel_surfaces.borrow()!=column_surfaces;
                 chrome_changed|=panels_changed;
                 let mut regions = Vec::new();
-                if let Some(glass) = owner.palette.get().map(|p| p.glass).filter(|g| g.transparency.enabled()) {
+                if let Some(glass) = palette.map(|p| p.glass).filter(|g| g.transparency.enabled()) {
                     let surfaces = glass.surfaces();
                     for (slot, node) in &nodes {
                         if let (false, Some(node)) = (matches!(slot, Slot::Canvas), node) {
@@ -957,6 +962,7 @@ pub struct Workspace {
     navigator_overviews: Rc<crate::navigator::Overviews>,
     glass: RefCell<Vec<layer_render_wgpu::BackdropRegion>>,
     panel_surfaces: RefCell<Vec<layer_render_wgpu::PanelSurface>>,
+    chrome_style: Cell<Option<([f32;4],layer_render_wgpu::BackdropBlurStyle)>>,
     chrome: crate::glass::Chrome,
     chrome_released: Cell<u64>,
     chrome_presented: Cell<bool>,
@@ -1343,6 +1349,7 @@ impl Workspace {
             navigator_overviews,
             glass: RefCell::new(Vec::new()),
             panel_surfaces: RefCell::new(Vec::new()),
+            chrome_style: Cell::new(None),
             chrome: Default::default(),
             chrome_released: Cell::new(0),
             chrome_presented: Cell::new(false),
@@ -2546,11 +2553,12 @@ impl Workspace {
                         let scale = area.scale_factor() as f32;
                         g.session.renderer_mut().panel_surfaces=this.panel_surfaces.borrow().iter().cloned()
                             .map(|surface|surface.scaled(scale)).collect();
-                        let blur = g.session.state().palette.glass.blur;
-                        g.session.renderer_mut().backdrop_style = layer_render_wgpu::BackdropBlurStyle {
-                            levels: blur.levels,
-                            offset: blur.offset,
-                        };
+                        let (surround, style)=this.chrome_style.get().unwrap_or_else(|| {
+                            let p=&g.session.state().palette;
+                            (p.surround_linear,layer_render_wgpu::BackdropBlurStyle {levels:p.glass.blur.levels,offset:p.glass.blur.offset})
+                        });
+                        g.session.renderer_mut().surround=surround;
+                        g.session.renderer_mut().backdrop_style=style;
                         g.session.renderer_mut().backdrop_hold = g.session.hold_canvas_backdrop();
                         let command_bar = g.session.state().palette.glass.transparency.enabled()
                             .then(|| this.command_bar.glass(&this))

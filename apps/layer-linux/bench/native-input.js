@@ -45,7 +45,8 @@ const startRecording = name => {
         throw Error('Invalid native recording request');
     recording.name = name;
     captureSink.try_pull_sample(0);
-    recording.samples = [];
+    const sample = captureSink.last_sample;
+    recording.samples = sample ? [{sample, ns: GLib.get_monotonic_time() * 1000}] : [];
     recording.events = [];
     captureSink.set_property('max-buffers', 600);
     recording.timer = GLib.timeout_add(GLib.PRIORITY_HIGH, 2, () => {

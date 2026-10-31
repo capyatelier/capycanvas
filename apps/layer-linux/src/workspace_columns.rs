@@ -77,9 +77,11 @@ impl Columns {
         }
     }
 
-    pub fn snapshot(&self, w: &Workspace) -> Vec<layer_render_wgpu::PanelSurface> {
+    pub fn snapshot(&self, w: &Workspace, nodes: &[(Slot, Option<gtk::gsk::RenderNode>)]) -> Vec<layer_render_wgpu::PanelSurface> {
         let rect = |b: gtk::graphene::Rect| [b.x(),b.y(),b.width(),b.height()];
-        let rgba = |c: gdk::RGBA| [c.red(),c.green(),c.blue(),c.alpha()];
+        let rgba = |c: gdk::RGBA, opacity: f32| [c.red(),c.green(),c.blue(),c.alpha()*opacity];
+        let opacity = |slot| nodes.iter().find(|(candidate,_)| *candidate==slot)
+            .and_then(|(_,node)| node.as_ref()).map_or(0., crate::glass::opacity);
         let strips=self.strips.borrow();
         let geometry=self.connection_geometry.borrow();
         let groups=w.groups.borrow();
@@ -87,13 +89,15 @@ impl Columns {
         for strip in strips.iter() {
             let Some((_,_,first))=geometry.iter().find(|(id,..)|*id==strip.id) else { continue; };
             let Some(sidebar)=strip.root.compute_bounds(&w.surface) else { continue; };
-            let source_visible=!strip.root.has_css_class("zen-hidden");
-            let color=rgba(strip.tint.color());
+            let source_opacity=opacity(Slot::Column(strip.id));
+            let tint=strip.tint.color();
+            let color=rgba(tint,source_opacity);
             let mut panels=Vec::new();
             for receiver in &first.receivers {
                 let bounds=receiver.bounds;
                 let Some(group)=groups.iter().find(|g|g.id==receiver.group) else { continue; };
-                if group.root.has_css_class("zen-hidden") { continue; }
+                let receiver_opacity=opacity(Slot::Group(group.id));
+                if receiver_opacity==0. { continue; }
                 let mut bar=group.tab_strip.parent();
                 while bar.as_ref().is_some_and(|b|b.widget_name()!="panel-tab-bar") { bar=bar.and_then(|b|b.parent()); }
                 let bar=bar.filter(|b|group.tabs_visible && b.is_mapped()).and_then(|b|b.compute_bounds(&w.surface));
@@ -108,16 +112,16 @@ impl Columns {
                 panels.push(layer_render_wgpu::PanelSurfaceGroup {
                     bounds:[bounds.x,bounds.y,bounds.width,bounds.height],radii:receiver.radii,
                     tab_bar:bar.map_or([0.;4],rect),active_tab:active.map_or([0.;4],rect),tab_clip:clip.map_or([0.;4],rect),
-                    color,strip_color:if bar.is_some() {rgba(colors[0])} else {color},
+                    color:rgba(tint,receiver_opacity),strip_color:rgba(if bar.is_some() {colors[0]} else {tint},receiver_opacity),
                 });
             }
-            if panels.is_empty() && !source_visible { continue; }
-            let anchors=if source_visible && !panels.is_empty() {
+            if panels.is_empty() && source_opacity==0. { continue; }
+            let anchors=if source_opacity>0. && !panels.is_empty() {
                 geometry.iter().filter(|(id,..)|*id==strip.id).map(|(_,_,g)|[g.anchor.x,g.anchor.y,g.anchor.width,g.anchor.height]).collect()
             } else {Vec::new()};
             let radii=w.column_corner_styles.borrow().iter().find(|(name,_)|name==&format!("column-strip-{}",strip.id))
                 .map_or([SURFACE_RADIUS;4],|(_,r)|*r);
-            surfaces.push(layer_render_wgpu::PanelSurface { sidebar:if source_visible {rect(sidebar)} else {[0.;4]},sidebar_radii:radii,
+            surfaces.push(layer_render_wgpu::PanelSurface { sidebar:if source_opacity>0. {rect(sidebar)} else {[0.;4]},sidebar_radii:radii,
                 plane:first.plane,bridge_width:first.width(),direction:if first.direction==Edge::Right {1.} else {-1.},scale:1.,
                 color,groups:panels,anchors,
             });

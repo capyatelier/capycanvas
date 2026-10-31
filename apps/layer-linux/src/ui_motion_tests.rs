@@ -2,12 +2,66 @@
 use super::*;
 
 fn capture_point(w: &Workspace, texture: &gdk::Texture) -> impl Fn(f32, f32) -> [f32; 2] {
+    capture_point_size(w, [texture.width(), texture.height()])
+}
+
+fn capture_point_size(w: &Workspace, size: [i32; 2]) -> impl Fn(f32, f32) -> [f32; 2] {
     let monitor = w.area.display().monitor_at_surface(&w.window.surface().unwrap()).unwrap().geometry();
-    let scale = [texture.width() as f32 / monitor.width() as f32, texture.height() as f32 / monitor.height() as f32];
+    let scale = [size[0] as f32 / monitor.width() as f32, size[1] as f32 / monitor.height() as f32];
     let origin = w.surface.compute_point(&w.window, &gtk::graphene::Point::zero()).unwrap();
     let (wx, wy) = w.window.surface_transform();
     let offset = [origin.x() + wx as f32 - monitor.x() as f32, origin.y() + wy as f32 - monitor.y() as f32];
     move |x, y| [(x + offset[0]) * scale[0], (y + offset[1]) * scale[1]]
+}
+
+pub(super) fn record_pixels<const N: usize>(w: &Rc<Workspace>, input: &mut RemoteInput, name: &str, points: [[f32; 2]; N], change: impl FnOnce()) -> Vec<[[u8; 3]; N]> {
+    input.perform(serde_json::json!([{"record_start":name},{"wait_ms":80}]));
+    let painted = sample_after_paint(&w.surface, || ());
+    let changed_ns=glib::monotonic_time() as u64*1000;
+    change();
+    pump(350);
+    let painted = painted.finish();
+    assert!(!painted.is_empty(), "{name}: transition paints a frame");
+    input.perform(serde_json::json!([{"wait_ms":80},{"record_stop":true}]));
+    let directory = std::path::PathBuf::from(std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").unwrap()).join(name);
+    let frames: Vec<serde_json::Value> = serde_json::from_slice(&std::fs::read(directory.join("frames.json")).unwrap()).unwrap();
+    let initial=frames.iter().rposition(|frame| frame["pulled_ns"].as_u64().is_some_and(|time|time<=changed_ns)).unwrap_or(0);
+    let samples: Vec<_> = frames.iter().enumerate().skip(initial).map(|(index, frame)| {
+        let [width, height, stride] = ["width", "height", "stride"].map(|key| frame[key].as_u64().unwrap() as usize);
+        let point = capture_point_size(w, [width as i32, height as i32]);
+        let bytes = std::fs::read(directory.join(format!("{index:04}.rgb"))).unwrap();
+        points.map(|[x, y]| {
+            let [x, y] = point(x, y);
+            assert!(x >= 0. && y >= 0. && x < width as f32 && y < height as f32, "{name}: sample outside recording");
+            let offset = y.floor() as usize * stride + x.floor() as usize * 3;
+            bytes[offset..offset + 3].try_into().unwrap()
+        })
+    }).collect();
+    let rgb: Vec<_> = samples.iter().map(|frame| frame.to_vec()).collect();
+    std::fs::write(directory.join("sampled-rgb.json"), serde_json::to_vec_pretty(&serde_json::json!({
+        "points":points.to_vec(), "rgb":rgb, "after_paint_us":painted.iter().map(|frame| frame.time).collect::<Vec<_>>()
+    })).unwrap()).unwrap();
+    assert!(!samples.is_empty(), "{name}: compositor recording is empty");
+    samples
+}
+
+fn transition_pixels<const N: usize>(name: &str, frames: &[[[u8; 3]; N]], mismatches: &mut Vec<String>) {
+    let (first, last) = (frames.first().unwrap(), frames.last().unwrap());
+    let progress = |pixel: [u8; 3], index: usize| {
+        let delta = std::array::from_fn::<_, 3, _>(|c| last[index][c] as f32 - first[index][c] as f32);
+        let length = delta.iter().map(|v| v * v).sum::<f32>();
+        (length > 100.).then(|| (0..3).map(|c| (pixel[c] as f32 - first[index][c] as f32) * delta[c]).sum::<f32>() / length)
+    };
+    for (frame, pixels) in frames.iter().enumerate() {
+        let phases: Vec<_> = pixels.iter().enumerate().filter_map(|(i, pixel)| progress(*pixel, i)).collect();
+        if phases.len() != N {
+            mismatches.push(format!("{name}: transition endpoints do not distinguish all {N} sample points: {first:?} -> {last:?}"));
+            break;
+        }
+        if phases.iter().copied().fold(f32::NEG_INFINITY, f32::max) - phases.iter().copied().fold(f32::INFINITY, f32::min) > 0.25 {
+            mismatches.push(format!("{name} frame {frame}: incoherent transition {pixels:?}, progress {phases:?}"));
+        }
+    }
 }
 
 #[test]
@@ -227,6 +281,45 @@ fn native_active_tab_matches_panel() {
     pump(300);
     let mut mismatches = Vec::new();
     let mut reports = Vec::new();
+    use_transparency(&w, layer_ui::Transparency::Off);
+    w.dispatch(UiAction::SetTheme { theme: Some(Theme::Dark) });
+    w.dispatch(UiAction::SetZoom { zoom: 0.1 });
+    pump(400);
+    let (tab_point, body_point) = {
+        let groups = w.groups.borrow();
+        let group = groups.iter().find(|g| g.tabs_visible && g.tabs.iter().any(|(_, tab)| tab.has_css_class("selected-tool"))).unwrap();
+        let tab = group.tabs.iter().find(|(_, tab)| tab.has_css_class("selected-tool")).unwrap().1.compute_bounds(&w.surface).unwrap();
+        let body = group.stack.compute_bounds(&w.surface).unwrap();
+        ([tab.x() + 4., tab.y() + tab.height() - 3.], [body.x() + 3., body.y() + 3.])
+    };
+    let canvas = w.area.compute_bounds(&w.surface).unwrap();
+    let surround = [canvas.x() + canvas.width() * 0.5, canvas.y() + canvas.height() * 0.8];
+    for level in [layer_ui::Transparency::Off, layer_ui::Transparency::Medium] {
+        use_transparency(&w, level);
+        for theme in [Theme::Light, Theme::Dark] {
+            let name = format!("theme-transition-{theme:?}-{level:?}").to_lowercase();
+            let frames = record_pixels(&w, &mut input, &name, [tab_point, body_point, surround], || {
+                w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+            });
+            transition_pixels(&name, &frames, &mut mismatches);
+        }
+    }
+    use_transparency(&w, layer_ui::Transparency::Off);
+    stripes(&w);
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(300);
+        for level in [layer_ui::Transparency::Medium, layer_ui::Transparency::Off] {
+            let name = format!("transparency-transition-{theme:?}-{level:?}").to_lowercase();
+            let frames = record_pixels(&w, &mut input, &name, [tab_point, body_point], || {
+                let index = layer_ui::Transparency::CHOICES.iter().position(|(value, _)| *value == level).unwrap();
+                w.dispatch(UiAction::Preferences { action: layer_ui::PreferenceAction::Edit {
+                    id: layer_ui::PreferenceId::Transparency, value: layer_ui::PreferenceValue::Choice(index as u32),
+                } });
+            });
+            transition_pixels(&name, &frames, &mut mismatches);
+        }
+    }
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         for level in [layer_ui::Transparency::Off, layer_ui::Transparency::Low, layer_ui::Transparency::Medium, layer_ui::Transparency::High] {

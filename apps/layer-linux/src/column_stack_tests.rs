@@ -76,14 +76,14 @@ fn native_column_panel_bridge_configuration() {
             let panel = panels[2];
             let button = w.columns.button(4, panel).unwrap().compute_bounds(&w.surface).unwrap();
             input.click([button.x() + button.width() * 0.5, button.y() + button.height() * 0.5]);
-            assert!(!w.columns.snapshot(&w).is_empty(), "configuration begins on a GPU-connected column");
+            assert!(!w.panel_surfaces.borrow().is_empty(), "configuration begins on a GPU-connected column");
             let before = layer_ui::durable_layout(&state(&w).workspace.layout);
             w.dispatch(UiAction::Customize { action: CustomizationAction::ShowAllControls { panel } }); pump(300);
             assert!(w.customization.placement().is_some());
             let root = w.groups.borrow().iter().find(|group| group.id == 5).unwrap().root.clone();
             assert!(!root.has_css_class("gpu-panel-surface") && root.has_css_class("expanded-panel"));
             assert!(w.columns.button(4, panel).is_none(), "configuration retires its compact source strip");
-            until(|| w.columns.snapshot(&w).is_empty() && ui_session(&w).engine().backend().panel_surfaces.is_empty(),
+            until(|| w.panel_surfaces.borrow().is_empty() && ui_session(&w).engine().backend().panel_surfaces.is_empty(),
                 "configuration must retire uploaded GPU panel surfaces");
             let preview = root.imp().preview.borrow().clone().unwrap().compute_bounds(&w.surface).unwrap();
             let configuration = root.imp().configuration.borrow().clone().unwrap().compute_bounds(&w.surface).unwrap();
@@ -133,6 +133,7 @@ fn native_column_panel_bridge_transitions() {
     std::fs::create_dir_all(&output).unwrap();
     let mut samples = Vec::new();
     input.ready();
+    zen_bridge_paint_frames(&w, &mut input);
     for theme in [Theme::Light, Theme::Dark] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         for edge in [Edge::Left, Edge::Right] {
@@ -177,6 +178,57 @@ fn native_column_panel_bridge_transitions() {
     input.finish();
     w.window.destroy();
     pump(100);
+}
+
+fn zen_bridge_paint_frames(w: &Rc<Workspace>, input: &mut RemoteInput) {
+    let settings = gtk::Settings::default().unwrap();
+    let animations = settings.is_gtk_enable_animations();
+    settings.set_gtk_enable_animations(true);
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let mut failures = Vec::new();
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for level in [layer_ui::Transparency::Off, layer_ui::Transparency::Medium] {
+            use_transparency(w, level);
+            let (mut fixture, panels) = native_bridge_fixture(viewport, 84.5);
+            let panel = fixture.layout.add_toolbar(None, "Zen fade", &[ToolbarControl::Command { command: CommandId::Brush }]).unwrap();
+            fixture.layout.add_panel_to_group(panel, 6).unwrap();
+            w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(fixture) });
+            pump(250);
+            let button = w.columns.button(4, panels[2]).unwrap();
+            input.click(screen_point(button.upcast_ref(), &w.window, [0.5, 0.5]));
+            w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
+            for _ in 0..2 { w.dispatch(UiAction::Invoke { command: CommandId::ZoomOut }); }
+            input.perform(serde_json::json!([{"point":[viewport[0]*0.5,viewport[1]*0.5]}]));
+            pump(250);
+            let root = w.groups.borrow().iter().find(|group| group.id == 6).unwrap().root.clone();
+            assert!(root.is_mapped() && root.has_css_class("gpu-panel-surface"), "fixture exposes a docked GPU group");
+            let bounds = root.compute_bounds(&w.surface).unwrap();
+            let point = [bounds.x() + bounds.width() * 0.75, bounds.y() + bounds.height() - 16.];
+            let shadow = [bounds.x() + bounds.width() + 3., bounds.y() + bounds.height() * 0.5];
+            for entering in [true, false] {
+                let name = format!("zen-panel-{theme:?}-{level:?}-{entering}").to_lowercase();
+                let frames = super::ui_motion::record_pixels(w, input, &name, [point, shadow], || {
+                    w.dispatch(UiAction::Invoke { command: CommandId::ZenMode });
+                });
+                assert_eq!(root.has_css_class("zen-hidden"), entering, "fixture hides the connected panel");
+                let first = frames.first().unwrap()[0];
+                let last = frames.last().unwrap()[0];
+                let difference = |a: [u8; 3], b: [u8; 3]| a.into_iter().zip(b).map(|(a,b)| a.abs_diff(b)).max().unwrap();
+                assert!(difference(first, last) >= 8, "{name}: panel sample distinguishes visible and hidden paint: {first:?}/{last:?}");
+                let intermediate = frames.iter().filter(|frame| difference(frame[0], first) > 2 && difference(frame[0], last) > 2).count();
+                eprintln!("{name}: {} compositor frames, {intermediate} intermediate panel colors, {first:?}->{last:?}", frames.len());
+                if intermediate == 0 { failures.push(format!("{name}: GPU panel skips the painted zen fade ({first:?}->{last:?})")); }
+                let first=frames.first().unwrap()[1];
+                let last=frames.last().unwrap()[1];
+                if difference(first,last)>=4 && !frames.iter().any(|frame| difference(frame[1],first)>0 && difference(frame[1],last)>0) {
+                    failures.push(format!("{name}: GPU shadow skips the painted zen fade ({first:?}->{last:?})"));
+                }
+            }
+        }
+    }
+    settings.set_gtk_enable_animations(animations);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 fn native_bridge_fixture(viewport: [f32; 2], height: f32) -> (layer_ui::WorkspaceState, Vec<Panel>) {
@@ -243,7 +295,7 @@ fn column_panel_bridge_cases(devices: &[&str], measure: bool, themes: &[Theme], 
                     .save_to_png(output.join(format!("gpu-bridge-{theme:?}-{edge:?}-{device}-{index}.png"))).unwrap();
                 let reference = column_bridge_pixel(&image, viewport,
                     [bridge.plane + direction * 24., target.bounds.y + target.bounds.height - 18.]);
-                for group in w.columns.snapshot(&w).iter().flat_map(|surface| &surface.groups) {
+                for group in w.panel_surfaces.borrow().iter().flat_map(|surface| &surface.groups) {
                     let pixel = column_bridge_pixel(&image, viewport,
                         [bridge.plane + direction * 24., group.bounds[1] + group.bounds[3] * 0.5]);
                     assert!(pixel[..3].iter().zip(&reference[..3]).all(|(a, b)| a.abs_diff(*b) <= 2),
@@ -270,7 +322,7 @@ fn column_panel_bridge_cases(devices: &[&str], measure: bool, themes: &[Theme], 
                 if w.palette.get().unwrap().glass.transparency.enabled() {
                     let bounds = bar.compute_bounds(&w.surface).unwrap();
                     let p = [bounds.x() + bounds.width() * 0.5, bounds.y() + bounds.height() * 0.5];
-                    let surfaces = w.columns.snapshot(&w);
+                    let surfaces = w.panel_surfaces.borrow();
                     assert!(surfaces.iter().flat_map(|surface| &surface.groups).any(|group|
                         p[0] >= group.tab_bar[0] && p[1] >= group.tab_bar[1]
                             && p[0] < group.tab_bar[0] + group.tab_bar[2] && p[1] < group.tab_bar[1] + group.tab_bar[3]),
@@ -316,7 +368,7 @@ fn column_panel_bridge_cases(devices: &[&str], measure: bool, themes: &[Theme], 
 
 fn column_bridge_capture(w: &Workspace) -> layer_render::ReadbackImage {
     until(|| {
-        let expected = w.columns.snapshot(w);
+        let expected = w.panel_surfaces.borrow().clone();
         let scale = w.area.scale_factor() as f32;
         let uploaded: Vec<_> = expected.iter().cloned().map(|surface| surface.scaled(scale)).collect();
         !expected.is_empty() && ui_session(w).engine().backend().panel_surfaces == uploaded

@@ -4549,6 +4549,48 @@ comparison does not qualify a reference tablet or tier canvas.
 [Metrics, full-contact rates, onset and longest gaps](../../artifacts/gtk-layout-ca.local/summary.json)
 retain all values, frozen binaries and invocation provenance.
 
+## GTK panel fade and theme publication
+
+Measured 2026-10-31 UTC against `99605b214`, with default glass and the startup
+drawing on the same RTX PRO 6000 Blackwell Max-Q, driver 615.71.09,
+GTK 4.22.5/libadwaita 1.9.4 Vulkan, private 1600 × 1000 display at 120 Hz and
+scale 1. Identical temporary harnesses use one priming and two measured contacts
+per process: five-second divider/tab drags and 34 zen toggles over 6.8 seconds.
+Zen samples require changed cached nodes inside each 180 ms fade; presentation
+gaps never join separate fades. The final source rebases onto `7639a6e04`.
+
+The table gives control → E contact medians and the worst contact gap p99.
+ABBA rows have four contacts per variant, or eight where a bounded confirmation
+was required (dark zen and both divider themes). Light divider also has a
+separate reversed BAAB block with four contacts per variant.
+
+| Case | Theme/order | Paint CPU p95 median, ms | Moving Hz median | Worst contact gap p99, ms |
+| --- | --- | --- | --- | --- |
+| zen | light ABBA | 4.046 → 3.470 | 119.74 → 119.84 | 8.775 → 10.555 |
+| zen | dark ABBA | 3.621 → 3.558 | 119.10 → 119.55 | 17.985 → 20.771 |
+| right divider | light ABBA | 3.912 → 4.556 | 114.47 → 112.68 | 25.086 → 41.663 |
+| right divider | light BAAB | 4.170 → 3.447 | 113.38 → 115.56 | 25.007 → 24.964 |
+| right divider | dark ABBA | 4.657 → 4.820 | 107.41 → 105.76 | 41.520 → 41.654 |
+| tab drag | light ABBA | 0.946 → 0.910 | 119.91 → 119.81 | 8.537 → 8.618 |
+| tab drag | dark ABBA | 0.576 → 0.728 | 119.91 → 119.91 | 8.491 → 8.533 |
+
+The original dark-divider CPU increase reverses in its bounded confirmation.
+Both light-divider ABBAs put the slower candidate process third; reversing the
+order reverses the CPU contrast. Mean process paint-p95 contrasts are
++0.225/+0.286 ms in ABBA and −0.434 ms in BAAB. Equal weighting of the two
+orders estimates −0.089 ms for the binary effect and +0.345 ms for position.
+No reproducible material added cost is isolated. All slow contacts remain,
+including candidate light-divider rates of 70.69/74.73 and 86.40 Hz. Divider
+cadence is bimodal in both builds; control rate/gap misses remain.
+
+Zen full-contact rates are 109.13 → 103.20 Hz in light and 109.58 → 102.93 Hz
+in dark; moving-only rates above exclude unchanged endpoints. Onset p95 medians
+are 45.47 → 47.36 ms and 45.67 → 47.60 ms. This short desktop comparison does
+not qualify the reference tablet or tier canvas. One incomplete dark-zen block
+failed a sampling-validity gate and is excluded; its diagnostic restart retains
+the same collection and filters. [Raw comparisons and provenance](../../artifacts/gtk-chrome-e.local/performance.json)
+retain every block, validity exclusion, full-contact count and timing.
+
 ## GTK Tool Set density
 
 The 2026-10-26 UTC release diagnostic includes the compact Tool Set changes on

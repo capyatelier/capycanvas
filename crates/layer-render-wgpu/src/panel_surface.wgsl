@@ -233,7 +233,7 @@ fn pnl_coverage(point: vec2<f32>,header: u32) -> vec2<f32> {
     let origin=max(floor(panel_data[in.header].xy),vec2(0.));
     let mask=textureLoad(panel_coverage,vec2<i32>(floor(point-origin)),0).xy;
     let coverage=mask.x;
-    let shadow=mask.y;
+    let shadow=mask.y*panel_data[in.header+4u].a;
     var tint=pnl_tint(point,in.header);
     if panel_data[0].z>0. {
         let transform=panel_data[1];

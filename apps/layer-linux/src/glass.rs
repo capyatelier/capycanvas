@@ -91,6 +91,22 @@ pub fn collect(node: &gsk::RenderNode, surfaces: &[GlassColor], out: &mut Vec<Ba
     visit(node, context, surfaces, out);
 }
 
+pub fn opacity(node: &gsk::RenderNode) -> f32 {
+    let mut node = node.clone();
+    let mut opacity = 1.;
+    loop {
+        node = if let Some(n) = node.downcast_ref::<gsk::OpacityNode>() {
+            opacity *= n.opacity(); n.child()
+        } else if let Some(n) = node.downcast_ref::<gsk::TransformNode>() { n.child()
+        } else if let Some(n) = node.downcast_ref::<gsk::ClipNode>() { n.child()
+        } else if let Some(n) = node.downcast_ref::<gsk::RoundedClipNode>() { n.child()
+        } else if let Some(n) = node.downcast_ref::<gsk::ShadowNode>() { n.child()
+        } else if let Some(n) = node.downcast_ref::<gsk::DebugNode>() { n.child()
+        } else if let Some(n) = node.downcast_ref::<gsk::IsolationNode>() { n.child()
+        } else { return opacity; };
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Context {
     place: Place,
