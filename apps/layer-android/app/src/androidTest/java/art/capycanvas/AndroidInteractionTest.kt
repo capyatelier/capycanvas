@@ -2177,11 +2177,16 @@ class AndroidInteractionTest {
                 assertNotEquals("$theme/$pointer moved control does not retain resize", PointerIcon.getSystemIcon(activity, PointerIcon.TYPE_VERTICAL_DOUBLE_ARROW), input.resolved(divider))
                 input.hover(canvas)
                 input.assertIcon("$theme/$pointer canvas after moved control", canvas, PointerIcon.TYPE_NULL)
-                input.hover(bounds("divider-42").center)
-                input.assertIcon("$theme/$pointer remaining divider activates resize", bounds("divider-42").center, PointerIcon.TYPE_VERTICAL_DOUBLE_ARROW)
+                val removedDivider = bounds("divider-42").center
+                input.hover(removedDivider)
+                input.assertIcon("$theme/$pointer remaining divider activates resize", removedDivider, PointerIcon.TYPE_VERTICAL_DOUBLE_ARROW)
                 action(obj("type" to "move_group", "group" to 43, "target" to obj("kind" to "tab", "group" to 41),
                     "viewport" to JSONArray(listOf(bounds("workspace").width / density, bounds("workspace").height / density))))
                 assertFalse("$theme/$pointer merged groups remove the divider", exists("divider-42"))
+                onMain { assertTrue("$theme/$pointer removed control leaves the gesture hit map", host.workspaceInteraction!!.regions.values.none {
+                    it.action?.optString("type") == "drag_divider" && it.action.optInt("id") == 42
+                }) }
+                assertNotEquals("$theme/$pointer removed control does not resolve resize at its old point", PointerIcon.getSystemIcon(activity, PointerIcon.TYPE_VERTICAL_DOUBLE_ARROW), input.resolved(removedDivider))
                 input.hover(canvas)
                 input.assertIcon("$theme/$pointer removed control leaves bare canvas hidden", canvas, PointerIcon.TYPE_NULL)
             } finally { input.cancel() }
