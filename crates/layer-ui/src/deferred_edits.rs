@@ -210,7 +210,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 && !(configures_transform(action) && self.files.pending.is_none() && !self.region_tools.publishing_edit()))
             || (self.engine.has_pending_input() && !held_actions::selects_tool(action) && !configures_brush(action))
     }
-    pub(super) fn defers(&self, action: &UiAction) -> bool {
+    pub fn defers(&self, action: &UiAction) -> bool {
         self.deferrable(action) && self.edits_pending(action)
     }
     pub(super) fn defer_document_action(&mut self, action: &UiAction) -> bool {

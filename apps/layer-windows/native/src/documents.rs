@@ -550,13 +550,14 @@ impl DocumentService {
         if self.open_queue.is_empty() || !self.open_idle(host) {
             return;
         }
-        if host.session.require_document_snapshot_idle().is_err() {
+        let open = layer_ui::UiAction::Invoke { command: layer_ui::CommandId::OpenDocument };
+        if host.session.defers(&open) || host.session.require_document_snapshot_idle().is_err() {
             host.dirty = true;
             return;
         }
         let path = self.open_queue.pop_front().unwrap();
         let result = (|| {
-            host.dispatch(layer_ui::UiAction::Invoke { command: layer_ui::CommandId::OpenDocument })?;
+            host.dispatch(open)?;
             let id = host.session.state().requests.iter()
                 .find(|r| matches!(r.kind, HostRequestKind::Document { request: DocumentRequest::Open }))
                 .ok_or("Open the current drawing's pending dialog first")?.id;
@@ -1485,6 +1486,38 @@ mod tests {
         assert!(std::fs::read(&path).unwrap().starts_with(layer_engine::recording::MAGIC));
         assert_eq!(status(&mut f, None)["ready"], false);
         assert!(f.host.error.is_none());
+    }
+    #[test]
+    fn launch_drawing_stays_queued_until_the_session_can_open_it() {
+        let mut f = Fixture::new();
+        let project = layer_ui::new_drawing(32, 24, f.host.session.localization()).unwrap();
+        let path = f.path("Launch 日本語.capy");
+        write_document(&project, File::create(&path).unwrap()).unwrap();
+        let gpu = layer_render_wgpu::WgpuRasterizer::new_native_headless(project.composition().color).unwrap();
+        *f.host.session = UiSession::from_project(Renderer(Some(gpu.into())), project, None, [32, 24], Platform::Windows).unwrap();
+        f.invoke(CommandId::SelectAll);
+        f.invoke(CommandId::FillSelection);
+        let open = UiAction::Invoke { command: CommandId::OpenDocument };
+        assert!(f.host.session.defers(&open));
+        f.host.session.require_document_snapshot_idle().unwrap();
+        assert!(f.service.open_idle(&f.host));
+        f.act(DocumentAction::OpenPaths { paths: vec![path.clone()] });
+        f.service.poll(&mut f.host).unwrap();
+        assert!(f.host.error.is_none(), "{:?}", f.host.error);
+        assert!(f.host.session.state().requests.is_empty());
+        assert_eq!(f.service.open_queue, std::slice::from_ref(&path));
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while f.host.session.defers(&open) {
+            f.host.session.frame(0, 0).unwrap();
+            assert!(Instant::now() < deadline, "Pending edits did not settle");
+        }
+        f.finish();
+        assert_eq!(f.host.session.state().document_file.location.as_ref().unwrap().uri, path);
+        assert!(f.service.open_queue.is_empty());
+        assert!(f.host.error.is_none());
+        assert!(f.host.session.state().host_error.is_none());
+        assert!(f.host.session.state().requests.is_empty());
+        assert!(!f.host.session.state().document_file.busy);
     }
     #[test]
     fn dropped_drawings_queue_opens_while_mixed_and_layer_drops_are_refused() {

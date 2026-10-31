@@ -135,7 +135,20 @@ try {
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved -StateDirectory $run
     if(!$review.WaitForExit(20000)){throw 'File activation review did not close'}
     if((Get-Item (Join-Path $run 'stderr.log')).Length){throw 'Native stderr requires review'}
-    [pscustomobject]@{forwarded_in_order='passed';relative_path='passed';launch_opens_window='passed';storage_isolated='passed';tab_drop='passed';canvas_photo_drop_place_and_undo='passed';theme=$Theme;evidence=$run}|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'results.json')
+    $env:CAPY_STORAGE_DIR=Join-Path $run 'cold-profile'
+    [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
+    $review=Start-Process -FilePath $Executable -WorkingDirectory $run -ArgumentList ('"'+$saved+'"') -PassThru -RedirectStandardError (Join-Path $run 'cold-stderr.log')
+    $null=$review.Handle
+    Wait-Until {$m=Model;$m.state.document_file.location.uri -eq $saved -and $m.brush_ready -and $m.state.theme -eq $Theme -and $m.windows_workspace.ready} 'Launching the closed app with a saved drawing did not open it' 90
+    $opened=Model
+    if($opened.error -or $opened.state.host_error -or @($opened.state.requests).Count -or $opened.state.document_file.busy){throw 'The drawing passed at launch left an error or pending file operation'}
+    Wait-Until {$drawing.window=Owned-DrawingWindow $review;$null -ne $drawing.window} 'The launched drawing window is unavailable'
+    $root=$drawing.window.Root
+    Capture 'cold-launch' -WithModel -Composed
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -StateDirectory $run
+    if(!$review.WaitForExit(20000)){throw 'The app launched with a saved drawing did not close'}
+    if((Get-Item (Join-Path $run 'cold-stderr.log')).Length){throw 'Cold launch stderr requires review'}
+    [pscustomobject]@{cold_launch_drawing='passed';forwarded_in_order='passed';relative_path='passed';launch_opens_window='passed';storage_isolated='passed';tab_drop='passed';canvas_photo_drop_place_and_undo='passed';theme=$Theme;evidence=$run}|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'results.json')
 } finally {
     if($other -and !$other.HasExited){Stop-Process -Id $other.Id -Force}
     if($review){$review.Refresh();if(!$review.HasExited){Stop-Process -Id $review.Id -Force}}

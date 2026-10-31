@@ -190,8 +190,9 @@ message-only window named for its storage folders, then exits. Files open in the
 frontmost window; a launch without files opens a new window. A launch waits up to
 a minute for an instance that is still starting or closing. Builds with different
 storage never hand launches to each other; `exercise-file-activation.ps1` checks
-both cases. It also drags an image and a saved drawing from another window onto
-the drawing tabs, which opens each as a new drawing.
+both cases, and that a closed app opens a drawing passed at launch. It also
+drags an image and a saved drawing from another window onto the drawing tabs,
+which opens each as a new drawing.
 `-Theme dark` and `-Theme light` also cover canvas photo placement and Undo.
 
 ### Environment switches
@@ -314,7 +315,7 @@ The check verifies the installed files, Apps entry, shortcut and registered file
 type command, starts the test app directly, checks that setup refuses to replace
 a running app and reinstalls a closed one, then uninstalls it. This same-version
 replacement does not verify updating from the preceding release.
-Opening the drawing itself needs a hardware GPU;
+Launching a closed app with a drawing needs a hardware GPU;
 `exercise-file-activation.ps1` covers it. After the repeat-build check,
 `-SignArguments` builds the setup program once more with NSIS signing its
 uninstaller, then signs the setup program, with the same `signtool` values as the
