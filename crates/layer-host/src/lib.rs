@@ -836,6 +836,7 @@ impl NativeHost {
                 #[serde(default)]
                 closing: bool,
             },
+            DrawerMeasure {column:Option<u32>,#[serde(default)] tiles:Vec<layer_ui::DrawerTileMeasurement>},
             LayerDrawerSizing {
                 measurement: layer_ui::PanelScrollMeasurement,
                 properties_height: f32,
@@ -1068,6 +1069,19 @@ impl NativeHost {
                     let placement = end.interpolate_from(&from, progress);
                     json!({"connection": placement.connection(), "placement": placement})
                 }))
+            }
+            Query::DrawerMeasure {column,tiles} => {
+                let state=self.session.state();
+                let drawer=match column {
+                    None=>state.customization.drawer.as_ref(),
+                    Some(id)=>state.customization.column_drawers.iter().find(|d|
+                        matches!(d.anchor,layer_ui::DrawerAnchor::Column {column,..} if column==id)),
+                };
+                match drawer {
+                    Some(drawer)=>self.session.layout_resolve_input().drawer_geometry(self.logical,&json!({"model":drawer,
+                        "column_drawers":state.customization.column_drawers,"tiles":tiles,"toolbars":true}).to_string())?,
+                    None=>json!({"measure":null,"toolbars":[]}),
+                }
             }
             Query::LayerDrawerSizing {measurement, properties_height} => {
                 let state = self.session.state();
@@ -2130,6 +2144,57 @@ mod tests {
         }
     }
     #[test]
+    fn drawer_measure_query_prepares_every_width_and_toolbar_without_heights() {
+        use layer_ui::{Bounds, HeaderItem, HeaderZone, Panel, ToolbarControl};
+        let mut host=NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        for viewport in [[1600.,1000.],[640.,500.]] {
+            for panel in [Panel::Toolbar,Panel::Color,Panel::Layers] {
+                let mut workspace=layer_ui::WorkspaceState::default();
+                let group=workspace.layout.panel_group(Panel::Brushes).unwrap();
+                let header=if panel==Panel::Toolbar {
+                    workspace.layout.move_panel(viewport,panel,layer_ui::DockTarget::Tab {group,index:None}).unwrap();
+                    workspace.layout.set_column_collapsed(group,true,viewport).unwrap();
+                    None
+                } else {
+                    workspace.layout.header.add(HeaderZone::Right,None,&[HeaderItem::Tool {control:ToolbarControl::Panel {panel}}]).unwrap();
+                    Some(workspace.layout.header.entries().last().unwrap().id)
+                };
+                host.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(workspace)}).unwrap();
+                host.resize(viewport[0] as u32,viewport[1] as u32,1.).unwrap();
+                let column=if let Some(id)=header {
+                    host.dispatch(UiAction::MeasureHeader {height:48.,items:vec![layer_ui::HeaderItemBounds {id,
+                        bounds:Bounds {x:viewport[0]-60.,y:0.,width:36.,height:48.}}]}).unwrap();
+                    host.dispatch(UiAction::ActivateHeaderItem {id}).unwrap();
+                    None
+                } else {
+                    let column=host.session.layout(viewport).collapsed.into_iter().find(|c|c.groups.iter().any(|g|g.group==group)).unwrap().id;
+                    host.dispatch(UiAction::Customize {action:layer_ui::CustomizationAction::SetColumnDrawers {column,drawers:true}}).unwrap();
+                    host.dispatch(UiAction::Customize {action:layer_ui::CustomizationAction::ToggleColumnDrawer {group,panel}}).unwrap();
+                    let layer_ui::DrawerAnchor::Column {column,..}=host.session.state().customization.column_drawers[0].anchor else {panic!()};
+                    Some(column)
+                };
+                let prepared=host.query(json!({"type":"drawer_measure","column":column})).unwrap();
+                assert!(prepared["measure"].is_object());
+                if panel==Panel::Toolbar {assert!(prepared["toolbars"].as_array().unwrap().iter().any(|toolbar|toolbar["panel"]=="toolbar" && toolbar["layout"]["content_height"].as_f64().unwrap()>0.));}
+                for height in [60.,800.] {
+                    let count=prepared["measure"]["placement"]["columns"].as_array().unwrap().len();
+                    let heights=vec![height;count];
+                    let placed=layer_ui::drawer_frame(&json!({"measure":prepared["measure"],"heights":heights,"progress":1}).to_string()).unwrap();
+                    let expected=host.query(json!({"type":"drawer","column":column,"heights":heights,"progress":1})).unwrap();
+                    assert_eq!(placed,expected);
+                    assert_eq!(host.query(json!({"type":"drawer_measure","column":column})).unwrap(),prepared);
+                }
+                if panel==Panel::Layers {
+                    let metric=json!({"fixed_height":80,"unit_height":40});
+                    let sizes=layer_ui::drawer_frame(&json!({"measure":prepared["measure"],"progress":1,
+                        "layer":{"measurement":metric,"rows":host.session.state().layers.len(),"viewport_height":viewport[1],"properties_height":120}}).to_string()).unwrap();
+                    assert_eq!(sizes["sizes"],host.query(json!({"type":"layer_drawer_sizing","measurement":metric,"properties_height":120})).unwrap());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn drawer_queries_measure_and_close_after_the_model_is_removed() {
         use layer_ui::{CustomizationAction, Panel, ToolbarControl};
         let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
@@ -2230,6 +2295,12 @@ mod tests {
         let first = app.query(query.clone()).unwrap();
         assert_eq!(first["placement"]["anchor"]["y"], 100.);
         assert!(first["connection"].is_object());
+        let projected=app.query(json!({"type":"drawer_measure","tiles":[{"column":column,
+            "anchor":{"panel":"toolbar","tile":tile},"bounds":{"x":90.,"y":40.,"width":36.,"height":36.}}]})).unwrap();
+        assert_eq!(projected["measure"]["placement"]["anchor"]["x"],90.);
+        assert_eq!(projected["measure"]["placement"]["anchor"]["y"],40.);
+        assert_eq!(app.query(query.clone()).unwrap()["placement"]["anchor"]["y"],100.);
+
         app.dispatch(serde_json::from_value(json!({"type":"measure_drawer_tiles", "measurements":[{"column":column,"anchor":{"panel":"toolbar","tile":tile},"bounds":{"x":80.,"y":60.,"width":36.,"height":20.}}]})).unwrap()).unwrap();
         assert_eq!(
             app.query(query.clone()).unwrap()["placement"]["anchor"]["height"],

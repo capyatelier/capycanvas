@@ -116,7 +116,7 @@ mod panel_bridges;
 pub use panel_bridges::{PanelBridge, PanelBridgeReceiver, PanelBridgeMeasure, PanelColumnMeasure, PanelBridgeFrame, PanelBridgePath, PanelColumnGeometry, PanelVectorSurface, PanelVectorCache};
 pub use drawers::{
     ColumnDrawerMeasurement, ContentDrawer, DrawerAnchor, DrawerConnection, DrawerDismissal,
-    DrawerPlacement, DrawerTabs, DrawerTileMeasurement, TileAnchor, drawer_frame,
+    DrawerMeasure, DrawerPlacement, DrawerTabs, DrawerTileMeasurement, TileAnchor, drawer_frame,
 };
 mod interaction;
 mod layout;

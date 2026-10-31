@@ -30,7 +30,7 @@ struct Request {
     model:Geometry,
     column_drawers:Vec<Geometry>,
     tiles:Vec<DrawerTileMeasurement>,
-    heights:Vec<f32>,
+    heights:Option<Vec<f32>>,
     toolbars:bool,
     layer:Option<Layer>,
 }
@@ -38,15 +38,23 @@ struct Request {
 impl CustomizationState {
     pub fn layer_drawer_sizing(&self,drawer:Option<&ContentDrawer>,layout:&DockLayout,viewport:[f32;2],
         measurement:PanelScrollMeasurement,rows:usize,properties_height:f32)->Result<Value,String> {
-        if ![measurement.fixed_height,measurement.unit_height,properties_height].into_iter()
-            .all(|value|value.is_finite()&&value>=0.)
-            ||drawer.is_some_and(|drawer|drawer.columns.len()!=1||drawer.layer_properties.is_none()) {
+        if drawer.is_some_and(|drawer|drawer.columns.len()!=1||drawer.layer_properties.is_none()) {
             return Err("Invalid layer drawer measurements".into());
         }
-        let heights=LayerDrawerSizing::pages(measurement,rows,viewport[1],properties_height);
-        let placements=heights.map(|height|drawer.and_then(|drawer|self.drawer_placement(drawer,layout,viewport,&[height])));
-        Ok(json!({"heights":heights,"placements":placements,"footer_height":LayerDrawerSizing::FOOTER_HEIGHT}))
+        let measure=drawer.and_then(|drawer|self.drawer_measure(drawer,layout,viewport));
+        layer_sizes(measure.as_ref(),measurement,rows,viewport[1],properties_height)
     }
+}
+
+pub(crate) fn layer_sizes(measure:Option<&DrawerMeasure>,measurement:PanelScrollMeasurement,rows:usize,
+    viewport_height:f32,properties_height:f32)->Result<Value,String> {
+    if ![measurement.fixed_height,measurement.unit_height,viewport_height,properties_height].into_iter()
+        .all(|value|value.is_finite()&&value>=0.) {
+        return Err("Invalid layer drawer measurements".into());
+    }
+    let heights=LayerDrawerSizing::pages(measurement,rows,viewport_height,properties_height);
+    let placements=heights.map(|height|measure.and_then(|measure|measure.placement(&[height])));
+    Ok(json!({"heights":heights,"placements":placements,"footer_height":LayerDrawerSizing::FOOTER_HEIGHT}))
 }
 
 impl LayoutResolveInput<'_> {
@@ -54,18 +62,19 @@ impl LayoutResolveInput<'_> {
         let request:Request=serde_json::from_str(source).map_err(|error|error.to_string())?;
         if !viewport.into_iter().all(|value|value.is_finite()&&value>0.)
             ||request.model.columns.is_empty()||request.model.columns.iter().any(Vec::is_empty)
-            ||request.heights.len()!=request.model.columns.len()
-            ||request.heights.iter().any(|height|!height.is_finite()||*height<0.) {
+            ||request.heights.as_ref().is_some_and(|heights|heights.len()!=request.model.columns.len()
+                ||heights.iter().any(|height|!height.is_finite()||*height<0.)) {
             return Err("Invalid drawer measurements".into());
         }
         let drawer=request.model.drawer();
         let layout=self.measured_layout(viewport);
         let mut customization=CustomizationState {column_drawers:request.column_drawers.into_iter().map(Geometry::drawer).collect(),..Default::default()};
         customization.measure_drawer_tiles(&layout,request.tiles)?;
-        let placement=customization.drawer_placement(&drawer,&layout,viewport,&request.heights);
+        let measure=customization.drawer_measure(&drawer,&layout,viewport);
+        let placement=measure.as_ref().and_then(|measure|request.heights.as_ref().and_then(|heights|measure.placement(heights)));
         let mut toolbars=Vec::new();
-        if request.toolbars&&let Some(placement)=&placement {
-            for (panels,column) in drawer.columns.iter().zip(&placement.columns) {
+        if request.toolbars&&let Some(measure)=&measure {
+            for (panels,column) in drawer.columns.iter().zip(&measure.placement.columns) {
                 for &panel in panels {
                     if !layout.panel(panel)?.tiles().is_empty() {
                         toolbars.push(json!({"panel":panel,"width":column.width,"layout":layout.drawer_toolbar(panel,column.width)?}));
@@ -76,7 +85,7 @@ impl LayoutResolveInput<'_> {
         let sizes=if let Some(layer)=request.layer {
             customization.layer_drawer_sizing(Some(&drawer),&layout,viewport,layer.measurement,layer.rows,layer.properties_height)?
         }else{Value::Null};
-        Ok(json!({"placement":placement,"toolbars":toolbars,"sizes":sizes}))
+        Ok(json!({"measure":measure,"placement":placement,"toolbars":toolbars,"sizes":sizes}))
     }
 }
 

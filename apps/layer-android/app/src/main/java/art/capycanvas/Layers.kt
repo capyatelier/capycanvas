@@ -101,18 +101,19 @@ internal class LayerSwipe {
     val controls = view.getJSONObject("controls")
     val layers = state.array("layers").objects()
     val addPaper = view.objectOrNull("add_paper")
-    var headerHeight by remember { mutableFloatStateOf(0f) }
-    var footerHeight by remember { mutableFloatStateOf(0f) }
+    val fixedHeights = remember { FloatArray(2) }
     var footerWidth by remember { mutableFloatStateOf(Float.MAX_VALUE) }
     val footer = view.array("footer").objects()
     val overflow = footer.filter { footerWidth + .5f < it.getDouble("min_width") }
     fun shown(button: String) = overflow.none { it.getString("button") == button }
     val rowHeight = maxOf(40f, panelMetrics().height.value + 4f,
         androidx.compose.ui.text.rememberTextMeasurer().measure("", LocalTextStyle.current).size.height / density.density + 4f)
-    val fixedHeight = if (full) headerHeight + footerHeight else 0f
-    val measured = if (!full || headerHeight > 0f && footerHeight > 0f)
-        PanelContentSize(fixedHeight + (layers.size + if (addPaper != null) 1 else 0) * rowHeight, fixedHeight, rowHeight) else null
-    SideEffect { measured?.let(onContent) }
+    fun reportContent() {
+        val fixedHeight=if(full)fixedHeights.sum() else 0f
+        if(!full || fixedHeights.all { it>0f })
+            onContent(PanelContentSize(fixedHeight+(layers.size+if(addPaper!=null)1 else 0)*rowHeight,fixedHeight,rowHeight))
+    }
+    SideEffect { reportContent() }
     val currentLayers by rememberUpdatedState(layers)
     val list = listState
     val epoch = state.getJSONObject("document_file").optLong("epoch")
@@ -188,7 +189,7 @@ internal class LayerSwipe {
     }
     Box(modifier.fillMaxSize().onGloballyPositioned { panelOrigin = it.boundsInRoot().topLeft }) {
         Column(Modifier.fillMaxSize()) {
-            if (full) Column(Modifier.wrapContentHeight(unbounded = true).onSizeChanged { headerHeight = it.height / density.density }.padding(horizontal = LayerEdge, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(panelMetrics().spacing)) {
+            if (full) Column(Modifier.wrapContentHeight(unbounded = true).onSizeChanged { fixedHeights[0] = it.height / density.density; reportContent() }.padding(horizontal = LayerEdge, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(panelMetrics().spacing)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(panelMetrics().spacing)) {
                     var blendMenu by remember { mutableStateOf<JSONObject?>(null) }
                     var blendRequest by remember { mutableStateOf<JSONObject?>(null) }
@@ -263,7 +264,7 @@ internal class LayerSwipe {
                 }
                 LayerConnections(layers,view.array("connections").objects(),thumbnails,Modifier.matchParentSize())
             }
-            if (full) Row(Modifier.fillMaxWidth().wrapContentHeight(unbounded = true).onSizeChanged { footerHeight = it.height / density.density; footerWidth = it.width / density.density }.padding(horizontal=LayerEdge,vertical=4.dp),horizontalArrangement=Arrangement.spacedBy(panelMetrics().compound)) {
+            if (full) Row(Modifier.fillMaxWidth().wrapContentHeight(unbounded = true).onSizeChanged { fixedHeights[1] = it.height / density.density; footerWidth = it.width / density.density; reportContent() }.padding(horizontal=LayerEdge,vertical=4.dp),horizontalArrangement=Arrangement.spacedBy(panelMetrics().compound)) {
                 val copy = host.catalog.getJSONObject("native_copy").getJSONObject("layers")
                 if (shown("new_layer")) LayerButton(host,"add-layer",copy.getString("new_layer"),action=obj("type" to "layer","action" to obj("op" to "new","group" to false,"clipped" to false)))
                 if (shown("new_vector_layer")) LayerButton(host,"add-vector-layer",copy.getString("new_vector_layer"),action=obj("type" to "invoke","command" to "new_vector_layer"))

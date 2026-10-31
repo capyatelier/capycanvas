@@ -722,13 +722,18 @@ fn native_sketch_layer_drawer_auto_height() {
     let mut heights = Vec::new();
     let touch_motion = std::env::var("LAYER_DRAWER_SCROLL_INPUT").is_ok_and(|input|input=="touch");
     for count in [2, 6, 12, 32, 1000] {
-        {
+        let change = {
             let mut session = ui_session_mut(&d.w);
+            let mut change = layer_ui::UiChange::default();
             while session.state().layers.len() < count {
-                session.dispatch(UiAction::Layer {action:layer_ui::LayerAction::New {group:false,clipped:false}}).unwrap();
+                let next = session.dispatch(UiAction::Layer {action:layer_ui::LayerAction::New {group:false,clipped:false}}).unwrap();
+                change.revision = next.revision;
+                change.regions |= next.regions;
+                change.canvas_wake |= next.canvas_wake;
             }
-        }
-        d.w.refresh_document_view(); pump(450);
+            change
+        };
+        d.w.changed(Ok(change)); pump(450);
         until(||!ui_session(&d.w).engine().has_pending_document_edits(), "layer fixture edits settle");
         assert_eq!(state(&d.w).layers.len(), count);
         for theme in [Theme::Light, Theme::Dark] {

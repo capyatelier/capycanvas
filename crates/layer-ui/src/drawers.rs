@@ -120,7 +120,11 @@ pub fn drawer_frame(source: &str) -> Result<serde_json::Value, String> {
     #[serde(deny_unknown_fields)]
     struct Request {
         from: Option<DrawerPlacement>,
-        to: DrawerPlacement,
+        to: Option<DrawerPlacement>,
+        measure: Option<DrawerMeasure>,
+        #[serde(default)]
+        heights: Vec<f32>,
+        layer: Option<Layer>,
         progress: f32,
         #[serde(default)]
         closing: bool,
@@ -128,9 +132,17 @@ pub fn drawer_frame(source: &str) -> Result<serde_json::Value, String> {
         clip_contents: bool,
         pixel_scale: Option<f32>,
     }
+    #[derive(Deserialize)]
+    struct Layer {measurement:crate::PanelScrollMeasurement,rows:usize,viewport_height:f32,properties_height:f32}
     let request: Request = serde_json::from_str(source).map_err(|error| error.to_string())?;
-    let from = request.from.unwrap_or_else(|| request.to.closed());
-    let end = if request.closing { request.to.closed() } else { request.to };
+    if let Some(layer)=request.layer {
+        return Ok(serde_json::json!({"sizes":crate::drawer_geometry::layer_sizes(request.measure.as_ref(),
+            layer.measurement,layer.rows,layer.viewport_height,layer.properties_height)?}));
+    }
+    let to=request.to.or_else(||request.measure.as_ref().and_then(|measure|measure.placement(&request.heights)))
+        .ok_or("Missing drawer geometry")?;
+    let from = request.from.unwrap_or_else(|| to.closed());
+    let end = if request.closing { to.closed() } else { to };
     let mut placement = end.interpolate_from(&from, request.progress);
     if !request.clip_contents {
         for (column, start) in placement.columns.iter_mut().zip(&from.columns) {
@@ -529,22 +541,13 @@ impl ContentDrawer {
         self.place(layout, viewport, heights, None)
     }
 
-    fn place(
-        &self,
-        layout: &DockLayout,
-        viewport: [f32; 2],
-        heights: &[f32],
-        measured_tile: Option<Bounds>,
-    ) -> Option<DrawerPlacement> {
-        if heights.len() != self.columns.len()
-            || self.columns.is_empty()
-            || !viewport
-                .into_iter()
-                .chain(heights.iter().copied())
-                .all(f32::is_finite)
-            || viewport[0] <= 2.0 * WORKSPACE_SPACING
-            || viewport[1] <= HEADER_HEIGHT + WORKSPACE_SPACING
-        {
+    fn place(&self, layout: &DockLayout, viewport: [f32; 2], heights: &[f32], measured_tile: Option<Bounds>) -> Option<DrawerPlacement> {
+        self.measure(layout, viewport, measured_tile)?.placement(heights)
+    }
+
+    fn measure(&self, layout: &DockLayout, viewport: [f32; 2], measured_tile: Option<Bounds>) -> Option<DrawerMeasure> {
+        if self.columns.is_empty() || !viewport.into_iter().all(f32::is_finite)
+            || viewport[0] <= 2.0 * WORKSPACE_SPACING || viewport[1] <= HEADER_HEIGHT + WORKSPACE_SPACING {
             return None;
         }
         let resolved = layout.resolved(viewport);
@@ -658,10 +661,51 @@ impl ContentDrawer {
             _ => available.width,
         };
         width = width.min(room.max(1.0));
+        let bounds = Bounds {x:0., y:0., width, height:available.height};
+        let scale = (width - gaps).max(0.0) / total;
+        let mut x = 0.0;
+        let columns = natural_widths
+            .into_iter()
+            .map(|width| {
+                let bounds = Bounds {
+                    x,
+                    y: 0.0,
+                    width: width * scale,
+                    height:available.height,
+                };
+                x += bounds.width + 1.0;
+                bounds
+            })
+            .collect();
+        Some(DrawerMeasure {
+            placement:DrawerPlacement {
+                bounds, anchor, direction, columns,
+                tab_presentations:self.tabs.as_ref().map_or_else(Vec::new,|tabs|layout.tab_presentations(tabs.group,bounds.width)),
+            },
+            available, viewport_height:viewport[1], options:options.is_some(),
+            fits_content:self.compact || self.layer_properties.is_some(), layer_properties:self.layer_properties.is_some(),
+        })
+    }
+
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DrawerMeasure {
+    pub placement:DrawerPlacement,
+    available:Bounds,
+    viewport_height:f32,
+    options:bool,
+    fits_content:bool,
+    layer_properties:bool,
+}
+impl DrawerMeasure {
+    pub fn placement(&self, heights:&[f32])->Option<DrawerPlacement> {
+        if heights.len()!=self.placement.columns.len() || !heights.iter().copied().all(f32::is_finite) {return None;}
+        let DrawerPlacement {anchor,direction,bounds,..}=&self.placement;
+        let anchor=*anchor; let direction=*direction; let width=bounds.width; let available=self.available;
         let height = heights.iter().copied().fold(TILE_SIZE, f32::max);
-        let height = if self.layer_properties.is_some() { height.min(viewport[1] * crate::LayerDrawerSizing::MAX_HEIGHT_FRACTION) } else { height };
-        let fits_content = self.compact || self.layer_properties.is_some();
-        let horizontal_x = if options.is_some() { anchor.x + anchor.width - width } else { anchor.x };
+        let height = if self.layer_properties { height.min(self.viewport_height * crate::LayerDrawerSizing::MAX_HEIGHT_FRACTION) } else { height };
+        let horizontal_x = if self.options { anchor.x + anchor.width - width } else { anchor.x };
         let (x, y, height) = match direction {
             Edge::Bottom => {
                 let y = (anchor.y + anchor.height + WORKSPACE_SPACING)
@@ -671,11 +715,11 @@ impl ContentDrawer {
             }
             Edge::Top => {
                 let bottom = (anchor.y - WORKSPACE_SPACING).max(available.y + 1.0);
-                let height = (if fits_content { height } else { 800. }).min(available.height).min(bottom - available.y);
+                let height = (if self.fits_content { height } else { 800. }).min(available.height).min(bottom - available.y);
                 (horizontal_x, bottom - height, height)
             }
             Edge::Left | Edge::Right => {
-                let y = (if fits_content { anchor.y + anchor.height - height } else { anchor.y - 500.0 }).max(available.y);
+                let y = (if self.fits_content { anchor.y + anchor.height - height } else { anchor.y - 500.0 }).max(available.y);
                 let height = height
                     .max(anchor.y + anchor.height - y)
                     .min(available.y + available.height - y);
@@ -696,28 +740,10 @@ impl ContentDrawer {
             width,
             height,
         };
-        let scale = (width - gaps).max(0.0) / total;
-        let mut x = 0.0;
-        let columns = natural_widths
-            .into_iter()
-            .map(|width| {
-                let bounds = Bounds {
-                    x,
-                    y: 0.0,
-                    width: width * scale,
-                    height,
-                };
-                x += bounds.width + 1.0;
-                bounds
-            })
-            .collect();
-        Some(DrawerPlacement {
-            bounds,
-            anchor,
-            direction,
-            columns,
-            tab_presentations:self.tabs.as_ref().map_or_else(Vec::new,|tabs|layout.tab_presentations(tabs.group,bounds.width)),
-        })
+        let mut placement=self.placement.clone();
+        placement.bounds=bounds;
+        for column in &mut placement.columns {column.height=bounds.height;}
+        Some(placement)
     }
 }
 
@@ -841,12 +867,12 @@ impl CustomizationState {
         viewport: [f32; 2],
         heights: &[f32],
     ) -> Option<DrawerPlacement> {
-        let measured = drawer.anchor.tile().and_then(|anchor| {
-            self.drawer_tiles
-                .iter()
-                .find(|m| m.anchor == anchor && self.accepts_drawer_tile(m))
-        });
-        drawer.place(layout, viewport, heights, measured.map(|m| m.bounds))
+        self.drawer_measure(drawer,layout,viewport)?.placement(heights)
+    }
+    pub fn drawer_measure(&self,drawer:&ContentDrawer,layout:&DockLayout,viewport:[f32;2])->Option<DrawerMeasure> {
+        let measured=drawer.anchor.tile().and_then(|anchor|self.drawer_tiles.iter()
+            .find(|m|m.anchor==anchor && self.accepts_drawer_tile(m)));
+        drawer.measure(layout,viewport,measured.map(|m|m.bounds))
     }
 }
 

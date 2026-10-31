@@ -242,8 +242,9 @@ internal class DockInteraction(val host: CanvasHost) {
         if (next == null) drawerTiles.remove(key) else drawerTiles[key] = next
         drawerMeasurementsRevision++
     }
+    fun drawerTileMeasurements() = JSONArray(drawerTiles.values.toList())
     private fun publishDrawerTiles() {
-        val reports = JSONArray(drawerTiles.values.toList())
+        val reports = drawerTileMeasurements()
         val encoded = reports.toString()
         if (lastDrawerReport == encoded) return
         lastDrawerReport = encoded
@@ -725,9 +726,6 @@ internal val LocalDrawerClip = staticCompositionLocalOf { Rect.Zero }
 
 @Composable internal fun Modifier.drawerTile(dock: DockInteraction, panel: String, tile: Int): Modifier {
     val column = LocalDrawerColumn.current ?: return this
-    val clip = LocalDrawerClip.current
-    var bounds by remember { mutableStateOf(Rect.Zero) }
-    SideEffect { dock.measureDrawerTile(column, panel, tile, bounds.intersect(clip)) }
     DisposableEffect(column, panel, tile) { onDispose { dock.measureDrawerTile(column, panel, tile, null) } }
-    return onGloballyPositioned { bounds = it.boundsInRoot().translate(-dock.origin) }
+    return onGloballyPositioned { dock.measureDrawerTile(column, panel, tile, it.boundsInRoot().translate(-dock.origin)) }
 }
