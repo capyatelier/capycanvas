@@ -61,6 +61,18 @@ class DevicesTest(unittest.TestCase):
         self.devices("alpha", "release")
         self.assertEqual(self.devices("beta", "reserve", "movinkpad14").returncode, 0)
 
+    def test_disconnected_tablet_reservation_can_be_released_by_serial(self):
+        self.assertEqual(self.devices("alpha", "reserve", "movinkpad14").returncode, 0)
+        self.assertEqual(self.devices("beta", "reserve", "movinkpad11").returncode, 0)
+        adb = self.state / "adb"
+        adb.write_text("#!/bin/sh\nprintf 'List of devices attached\\n'\n")
+        other = (self.state / "capy-MID0001.reservation.json").read_text()
+        self.assertEqual(self.devices("beta", "release", "TOP0001").returncode, 0)
+        self.assertTrue((self.state / "capy-TOP0001.reservation.json").exists())
+        self.assertEqual(self.devices("alpha", "release", "TOP0001").returncode, 0)
+        self.assertFalse((self.state / "capy-TOP0001.reservation.json").exists())
+        self.assertEqual((self.state / "capy-MID0001.reservation.json").read_text(), other)
+
     def test_tier_reservation_picks_a_free_tablet_of_that_tier(self):
         self.assertIn("movinkpad11", self.devices("alpha", "reserve", "--tier", "mid").stdout)
         refused = self.devices("beta", "reserve", "--tier", "mid")

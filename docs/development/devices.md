@@ -53,7 +53,8 @@ tools/devices/devices.py release
 
 - **Reserve before use and release when done.** A reservation names its owner,
   the worktree directory by default, and expires after `--hours` (4 by default).
-  Subagents working in the same worktree share it.
+  Subagents working in the same worktree share it. Release a disconnected tablet
+  by its serial.
 - **Pick by tier, not by name**, unless you were assigned a tablet. If the user
   assigns one, use only that one. If they say a tablet belongs to someone else,
   leave it alone even when `list` shows it free.

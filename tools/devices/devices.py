@@ -175,7 +175,12 @@ def reserve(args):
 
 
 def release(args):
-    for device in attached(args.platform):
+    devices = attached(args.platform)
+    for path in STATE.glob("capy-*.reservation.json"):
+        serial = path.name.removeprefix("capy-").removesuffix(".reservation.json")
+        if args.device == serial and all(device.serial != serial for device in devices):
+            devices.append(Device(serial, "", args.platform))
+    for device in devices:
         if args.device and args.device not in (device.name, device.serial, device.model):
             continue
         record = device.reservation()
