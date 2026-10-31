@@ -23,7 +23,7 @@ impl ZoomDirection {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct ZoomToolSettings {
     pub zoom_out: bool,
     pub drag: ZoomDrag,

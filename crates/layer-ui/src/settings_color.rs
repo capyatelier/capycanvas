@@ -11,7 +11,7 @@ pub enum MissingProfilePolicy {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct PhotoOpenPolicy {
     pub promote_to_16: bool,
     pub missing_profile: MissingProfilePolicy,

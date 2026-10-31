@@ -65,7 +65,7 @@ impl ZenIcon {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Settings {
     pub version: u32,
     pub new_document: NewDocumentSettings,
@@ -182,7 +182,7 @@ impl Default for Settings {
 }
 /// What the pen's eraser end does, beside the keyboard and button bindings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct EraserEnd {
     /// `None` keeps the current tool.
     pub tool: Option<CommandId>,
@@ -223,25 +223,12 @@ impl Settings {
     }
     pub fn restore_localized(saved: &str, localization: &Localizer) -> Self {
         if saved.len() > Self::MAX_FILE_BYTES { return Self::default(); }
-        let valid = |value: &serde_json::Value| {
-            serde_json::from_value::<Self>(value.clone())
-                .ok()
-                .filter(|settings| settings.validate_localized(localization).is_ok())
-        };
-        let mut kept = serde_json::Value::Object(Default::default());
-        if let Ok(serde_json::Value::Object(saved)) = serde_json::from_str(saved) {
-            if let Some(settings) = valid(&serde_json::Value::Object(saved.clone())) {
-                return settings;
-            }
-            for (key, value) in saved {
-                let mut candidate = kept.clone();
-                candidate[key] = value;
-                if valid(&candidate).is_some() {
-                    kept = candidate;
-                }
-            }
-        }
-        valid(&kept).unwrap_or_default()
+        let mut restored = crate::saved_state::restore_fields(
+            serde_json::from_str(saved).unwrap_or_default(), Self::default,
+            |settings| settings.validate_localized(localization).is_ok(),
+        );
+        restored.version = 1;
+        restored
     }
     #[cfg(test)]
     pub(crate) fn validate(&self) -> Result<(), String> {
@@ -259,9 +246,6 @@ impl Settings {
             marks.validate().map_err(|reason| reason.message(localization))?;
         }
         self.new_document.validate().map_err(|error| error.message(localization))?;
-        if self.version != 1 {
-            return Err("Unsupported settings version".into());
-        }
         for id in [PreferenceId::PanSpeed, PreferenceId::ZoomSpeed, PreferenceId::PredictionHorizon] {
             let (control, value, label) = self.numeric_field(id).unwrap();
             control.validate(value, label).map_err(|reason| reason.message(localization))?;

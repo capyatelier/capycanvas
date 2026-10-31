@@ -51,7 +51,6 @@ impl Measure {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct PaperSetup {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub texture: Option<Arc<str>>,
@@ -68,7 +67,6 @@ impl PaperSetup {
 /// A complete New drawing choice. `blend_space` is the blending the drawing
 /// gets, so float depths always store linear light.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct DrawingSetup {
     pub unit: LengthUnit,
     pub width: Measure,
@@ -232,7 +230,6 @@ pub enum PresetKey {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct SavedSetup {
     pub name: String,
     pub group: PresetGroup,

@@ -138,7 +138,6 @@ pub enum ColorAction {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ColorState {
     pub foreground: RgbColor,
     pub background: RgbColor,
@@ -160,7 +159,6 @@ pub struct ColorState {
     editor: ColorEditorMemory,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct ColorCoordinates {
     rgb: [f32; 3],
     hsv: [f32; 3],

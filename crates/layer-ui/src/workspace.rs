@@ -8,7 +8,6 @@ pub(crate) mod description;
 pub use description::{layout_change_description, LayoutChange, LayoutPanelName, LayoutPanelAction};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct WorkspaceState {
     pub version: u32,
     pub layout: DockLayout,
@@ -36,9 +35,6 @@ impl WorkspaceState {
     /// Validate before replacing live state. Storage/transport belongs to the
     /// host; accepted topology and versioning never do.
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 2 {
-            return Err("Unsupported workspace version".into());
-        }
         self.layout.validate()
     }
 }
@@ -72,7 +68,6 @@ pub mod counter {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LayoutRevision {
     /// Scoped to this workspace's history; packages remap references on import.
     pub id: String,
@@ -83,7 +78,6 @@ pub struct LayoutRevision {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LayoutHistory {
     pub version: u32,
     #[serde(with = "counter")]
@@ -114,9 +108,6 @@ impl LayoutHistory {
         &self.revisions[&self.current].layout
     }
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 2 {
-            return Err("Unsupported layout history version".into());
-        }
         if self.generation == u64::MAX
             || self.revisions.len() > 100_000
             || self.undo.len() > 100
@@ -319,7 +310,6 @@ impl WorkspaceHistory {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct EditingState {
     pub version: u32,
     pub preset: u32,
@@ -332,15 +322,17 @@ pub struct EditingState {
     pub selection: crate::SelectionOptions,
     pub region_values: std::collections::BTreeMap<String, f32>,
     pub region_sources: [crate::RegionSource; 3],
+    #[serde(default = "default_enabled")]
     pub region_stop_at_colors: bool,
+    #[serde(default)]
     pub fill_scope: crate::FillScope,
+    #[serde(default = "default_enabled")]
     pub region_smooth_edges: bool,
     pub gradient: crate::GradientToolSettings,
     pub figure: (crate::FigureShape, crate::FigurePaint),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct WorkspaceWorkingState {
     pub version: u32,
     pub zen_mode: bool,
@@ -348,6 +340,17 @@ pub struct WorkspaceWorkingState {
 impl Default for WorkspaceWorkingState {
     fn default() -> Self { Self { version: 1, zen_mode: false } }
 }
+impl WorkspaceWorkingState {
+    pub fn restore(value: serde_json::Value) -> Self {
+        let mut restored = crate::saved_state::restore_fields(value, Self::default, |_| true);
+        restored.version = 1;
+        restored
+    }
+    pub fn deserialize_option<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Self>, D::Error> {
+        Ok(Option::<serde_json::Value>::deserialize(deserializer)?.map(Self::restore))
+    }
+}
+fn default_enabled() -> bool { true }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

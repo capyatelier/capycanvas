@@ -16,7 +16,7 @@ pub enum SelectionMenu {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct SelectionDisplayOptions {
     pub outline: bool,
     pub overlay: bool,

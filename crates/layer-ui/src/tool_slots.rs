@@ -6,7 +6,7 @@ variants! {
     #[serde(rename_all = "snake_case")]
     pub enum ToolSlotId {
         Drawing, Marquee, Lasso, AutomaticSelection, ManualSelection, Healing,
-        PhotoFill, Fill, Blend, Retouch, Operation, Figure, Ruler, Gradient,
+        PhotoFill, #[serde(alias = "lasso_fill")] Fill, Blend, Retouch, Operation, Figure, Ruler, Gradient,
     }
 }
 
@@ -361,7 +361,6 @@ impl ToolVariant {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ToolSlotMemory {
     pub choices: BTreeMap<ToolSlotId, ToolVariant>,
 }

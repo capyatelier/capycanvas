@@ -66,7 +66,7 @@ pub enum SelectionConstraint {
     Size,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct SelectionOptions {
     pub tool: SelectionTool,
     pub tonal: super::tonal_selection::TonalOptions,

@@ -15,7 +15,6 @@ pub enum TonalAction {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct TonalOptions {
     pub tone: usize,
     pub custom: [f32; 2],

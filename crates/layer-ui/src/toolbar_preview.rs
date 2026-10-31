@@ -5,7 +5,7 @@ use layer_render::{CanvasRenderer, BrushStampRequest, DabStyle};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct SliderBookmarks {
     size: Vec<f32>,
     strength: Vec<f32>,

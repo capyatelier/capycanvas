@@ -135,6 +135,7 @@ pub use session::{ToolSlotId, ToolVariant, ToolSlotMemory, GradientToolSettings,
 pub use session::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarLayout, CanvasBarMenu, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar, COMMAND_SEARCH_STYLE, CommandSearchStyle, CommandDescriptor, CommandFocus, CommandParameter, CommandSearchAction, CommandSearchView, ToolCategory};
 pub mod keymaps;
 mod settings;
+mod saved_state;
 mod shortcut_page;
 mod shortcuts;
 mod theme;

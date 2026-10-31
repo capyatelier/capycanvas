@@ -1,0 +1,2353 @@
+{
+  "version": 1,
+  "preset": 2,
+  "tools": {
+    "tools": {
+      "pen": 7,
+      "pencil": 17,
+      "brush": 9,
+      "eraser": 3,
+      "airbrush": 8,
+      "blend": 55,
+      "liquify": 64,
+      "clone": 40,
+      "heal": 41,
+      "spot_heal": 42
+    },
+    "groups": {
+      "pen": 7,
+      "pencil": 26,
+      "pastel": 17,
+      "paint": 9,
+      "watercolor": 21,
+      "oil": 59,
+      "eraser": 3,
+      "airbrush": 8,
+      "blend": 62,
+      "wet_paint": 47,
+      "effects": 55,
+      "liquify": 64,
+      "retouch": 42
+    },
+    "drawing": 9,
+    "sculpt": 42,
+    "overrides": {
+      "1": {
+        "size": 37.0
+      },
+      "2": {
+        "size": 37.0
+      },
+      "3": {
+        "size": 37.0
+      },
+      "4": {
+        "size": 37.0
+      },
+      "5": {
+        "size": 37.0
+      },
+      "6": {
+        "size": 37.0
+      },
+      "7": {
+        "size": 37.0
+      },
+      "8": {
+        "size": 37.0
+      },
+      "9": {
+        "size": 37.0
+      },
+      "10": {
+        "size": 37.0
+      },
+      "11": {
+        "size": 37.0
+      },
+      "12": {
+        "size": 37.0
+      },
+      "13": {
+        "size": 37.0
+      },
+      "14": {
+        "size": 37.0
+      },
+      "15": {
+        "size": 37.0
+      },
+      "16": {
+        "size": 37.0
+      },
+      "17": {
+        "size": 37.0
+      },
+      "18": {
+        "size": 37.0
+      },
+      "19": {
+        "size": 37.0
+      },
+      "20": {
+        "size": 37.0
+      },
+      "21": {
+        "size": 37.0
+      },
+      "22": {
+        "size": 37.0
+      },
+      "23": {
+        "size": 37.0
+      },
+      "24": {
+        "size": 37.0
+      },
+      "25": {
+        "size": 37.0
+      },
+      "26": {
+        "size": 37.0
+      },
+      "27": {
+        "size": 37.0
+      },
+      "28": {
+        "size": 37.0
+      },
+      "29": {
+        "size": 37.0
+      },
+      "30": {
+        "size": 37.0
+      },
+      "31": {
+        "size": 37.0
+      },
+      "32": {
+        "size": 37.0
+      },
+      "33": {
+        "size": 37.0
+      },
+      "34": {
+        "size": 37.0
+      },
+      "35": {
+        "size": 37.0
+      },
+      "36": {
+        "size": 37.0
+      },
+      "37": {
+        "size": 37.0
+      },
+      "38": {
+        "size": 37.0
+      },
+      "39": {
+        "size": 37.0
+      },
+      "40": {
+        "size": 37.0
+      },
+      "41": {
+        "size": 37.0
+      },
+      "42": {
+        "size": 37.0
+      },
+      "43": {
+        "size": 37.0
+      },
+      "44": {
+        "size": 37.0
+      },
+      "45": {
+        "size": 37.0
+      },
+      "46": {
+        "size": 37.0
+      },
+      "47": {
+        "size": 37.0
+      },
+      "48": {
+        "size": 37.0
+      },
+      "49": {
+        "size": 37.0
+      },
+      "50": {
+        "size": 37.0
+      },
+      "51": {
+        "size": 37.0
+      },
+      "52": {
+        "size": 37.0
+      },
+      "53": {
+        "size": 37.0
+      },
+      "55": {
+        "size": 37.0
+      },
+      "56": {
+        "size": 37.0
+      },
+      "57": {
+        "size": 37.0
+      },
+      "58": {
+        "size": 37.0
+      },
+      "59": {
+        "size": 37.0
+      },
+      "60": {
+        "size": 37.0
+      },
+      "61": {
+        "size": 37.0
+      },
+      "62": {
+        "size": 37.0
+      },
+      "63": {
+        "size": 37.0
+      },
+      "64": {
+        "size": 37.0
+      },
+      "65": {
+        "size": 37.0
+      },
+      "66": {
+        "size": 37.0
+      }
+    }
+  },
+  "tool_slots": {
+    "choices": {
+      "drawing": {
+        "type": "command",
+        "command": "airbrush"
+      },
+      "marquee": {
+        "type": "command",
+        "command": "ellipse_select"
+      },
+      "lasso": {
+        "type": "command",
+        "command": "polygon_select"
+      },
+      "automatic_selection": {
+        "type": "command",
+        "command": "tonal_select"
+      },
+      "manual_selection": {
+        "type": "command",
+        "command": "selection_brush"
+      },
+      "healing": {
+        "type": "command",
+        "command": "heal"
+      },
+      "photo_fill": {
+        "type": "command",
+        "command": "enclose_fill"
+      },
+      "fill": {
+        "type": "command",
+        "command": "enclose_fill"
+      },
+      "lasso_fill": {
+        "type": "command",
+        "command": "enclose_fill"
+      },
+      "blend": {
+        "type": "brush_group",
+        "group": "effects"
+      },
+      "retouch": {
+        "type": "brush_preset",
+        "id": 42
+      },
+      "operation": {
+        "type": "command",
+        "command": "crop"
+      },
+      "figure": {
+        "type": "figure",
+        "shape": "path"
+      },
+      "ruler": {
+        "type": "ruler",
+        "kind": "radial"
+      },
+      "gradient": {
+        "type": "gradient",
+        "shape": "Reflected"
+      }
+    }
+  },
+  "colors": {
+    "foreground": {
+      "space": "Srgb",
+      "rgba": [
+        0.2,
+        0.3,
+        0.4,
+        1.0
+      ]
+    },
+    "background": {
+      "space": "Srgb",
+      "rgba": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "temporary": {
+      "space": "Srgb",
+      "rgba": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    "rgb_space": "Srgb",
+    "slot": "foreground",
+    "shape": "circle",
+    "readout": "shape",
+    "paint_slot": "foreground",
+    "hues": [
+      210.0,
+      0.0,
+      0.0
+    ],
+    "coordinates": [
+      {
+        "rgb": [
+          0.2,
+          0.3,
+          0.4
+        ],
+        "hsv": [
+          210.0,
+          50.0,
+          40.0
+        ],
+        "hls": [
+          210.0,
+          30.000002,
+          33.333332
+        ],
+        "okhsv": [
+          249.24023,
+          48.211117,
+          41.76053
+        ]
+      },
+      null,
+      null
+    ],
+    "hdr_depth": "F16",
+    "editor": {
+      "forms": [
+        "rgb",
+        "hsb",
+        "oklch"
+      ],
+      "search": ""
+    }
+  },
+  "mask_colors": {
+    "foreground": {
+      "space": "Srgb",
+      "rgba": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    "background": {
+      "space": "Srgb",
+      "rgba": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "temporary": {
+      "space": "Srgb",
+      "rgba": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    "rgb_space": "Srgb",
+    "slot": "foreground",
+    "shape": "circle",
+    "readout": "shape",
+    "paint_slot": "foreground",
+    "hues": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "coordinates": [
+      null,
+      null,
+      null
+    ],
+    "hdr_depth": "U8",
+    "editor": {
+      "forms": [
+        "rgb",
+        "hsb",
+        "oklch"
+      ],
+      "search": ""
+    }
+  },
+  "color_library": {
+    "palettes": [
+      {
+        "id": 2,
+        "name": "Ocean Study",
+        "swatches": [
+          {
+            "id": 3,
+            "name": "Deep Water",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.15686275,
+                0.22745098,
+                0.2627451,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 4,
+            "name": "Tidal Blue",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.22352941,
+                0.36078432,
+                0.39607844,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 5,
+            "name": "Sea Glass",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.34901962,
+                0.5058824,
+                0.5176471,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 6,
+            "name": "Mist",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.5764706,
+                0.67058825,
+                0.63529414,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 7,
+            "name": "Pale Sage",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.7647059,
+                0.79607844,
+                0.7058824,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 8,
+            "name": "Sand",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.89411765,
+                0.8627451,
+                0.76862746,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 9,
+            "name": "Burgundy",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.27450982,
+                0.1764706,
+                0.19607843,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 10,
+            "name": "Burnt Umber",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.45882353,
+                0.25490198,
+                0.23529412,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 11,
+            "name": "Terracotta",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.7254902,
+                0.40784314,
+                0.3019608,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 12,
+            "name": "Clay",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.8352941,
+                0.5803922,
+                0.41960785,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 13,
+            "name": "Apricot",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.9137255,
+                0.7176471,
+                0.53333336,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 14,
+            "name": "Warm Light",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.9490196,
+                0.83137256,
+                0.6862745,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 15,
+            "name": "Pine Shadow",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.1764706,
+                0.21568628,
+                0.1882353,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 16,
+            "name": "Olive",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.29411766,
+                0.34901962,
+                0.25490198,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 17,
+            "name": "Meadow",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.44313726,
+                0.50980395,
+                0.35686275,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 18,
+            "name": "Lichen",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.6156863,
+                0.65882355,
+                0.45490196,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 19,
+            "name": "Straw",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.77254903,
+                0.7764706,
+                0.5921569,
+                1.0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": 20,
+        "name": "Pixel Arcade",
+        "swatches": [
+          {
+            "id": 21,
+            "name": "Wine",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.4509804,
+                0.14901961,
+                0.2901961,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 22,
+            "name": "Red",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.92941177,
+                0.23137255,
+                0.33333334,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 23,
+            "name": "Orange",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                1.0,
+                0.53333336,
+                0.27058825,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 24,
+            "name": "Gold",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                1.0,
+                0.8,
+                0.27058825,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 25,
+            "name": "Peach",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.9647059,
+                0.7137255,
+                0.5529412,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 26,
+            "name": "Cream",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                1.0,
+                0.9411765,
+                0.79607844,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 27,
+            "name": "Forest",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.09019608,
+                0.41960785,
+                0.33333334,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 28,
+            "name": "Green",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.2627451,
+                0.74509805,
+                0.4117647,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 29,
+            "name": "Lime",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.7019608,
+                0.9019608,
+                0.35686275,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 30,
+            "name": "Navy",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.1254902,
+                0.16078432,
+                0.30980393,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 31,
+            "name": "Blue",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.21960784,
+                0.3882353,
+                0.8509804,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 32,
+            "name": "Cyan",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.31764707,
+                0.78431374,
+                0.92156863,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 33,
+            "name": "Purple",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.52156866,
+                0.30980393,
+                0.76862746,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 34,
+            "name": "Black",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.08627451,
+                0.09019608,
+                0.13725491,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 35,
+            "name": "Slate",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.4117647,
+                0.4627451,
+                0.56078434,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 36,
+            "name": "White",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.95686275,
+                0.95686275,
+                0.92941177,
+                1.0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": 37,
+        "name": "Dark Fantasy",
+        "swatches": [
+          {
+            "id": 38,
+            "name": "Coal",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.07058824,
+                0.08235294,
+                0.11372549,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 39,
+            "name": "Blue Black",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.1254902,
+                0.16470589,
+                0.21960784,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 40,
+            "name": "Iron",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.20784314,
+                0.26666668,
+                0.3254902,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 41,
+            "name": "Slate",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.34509805,
+                0.40392157,
+                0.4745098,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 42,
+            "name": "Ash",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.5294118,
+                0.5764706,
+                0.6,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 43,
+            "name": "Bone",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.84313726,
+                0.81960785,
+                0.7176471,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 44,
+            "name": "Black Cherry",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.16078432,
+                0.09803922,
+                0.13725491,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 45,
+            "name": "Oxblood",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.29411766,
+                0.1254902,
+                0.1764706,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 46,
+            "name": "Blood Red",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.5058824,
+                0.18431373,
+                0.23921569,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 47,
+            "name": "Rust",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.6784314,
+                0.30980393,
+                0.27058825,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 48,
+            "name": "Black Green",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.09411765,
+                0.16078432,
+                0.13725491,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 49,
+            "name": "Moss",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.20392157,
+                0.29803923,
+                0.22745098,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 50,
+            "name": "Olive",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.4,
+                0.42352942,
+                0.27058825,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 51,
+            "name": "Bronze",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.5686275,
+                0.5019608,
+                0.29803923,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 52,
+            "name": "Old Gold",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.7372549,
+                0.6392157,
+                0.4117647,
+                1.0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": 53,
+        "name": "Pop Art",
+        "swatches": [
+          {
+            "id": 54,
+            "name": "Deep Red",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.7176471,
+                0.08235294,
+                0.14117648,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 55,
+            "name": "Red",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.94509804,
+                0.15686275,
+                0.1764706,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 56,
+            "name": "Orange",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                1.0,
+                0.45490196,
+                0.10980392,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 57,
+            "name": "Yellow",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                1.0,
+                0.8666667,
+                0.0,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 58,
+            "name": "Lemon",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                1.0,
+                0.94509804,
+                0.4627451,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 59,
+            "name": "Pink",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                1.0,
+                0.44313726,
+                0.6039216,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 60,
+            "name": "Royal Blue",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.08235294,
+                0.23529412,
+                0.6117647,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 61,
+            "name": "Blue",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.09019608,
+                0.42745098,
+                0.8980392,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 62,
+            "name": "Sky Blue",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.4392157,
+                0.7882353,
+                0.9254902,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 63,
+            "name": "Ink",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.08235294,
+                0.08235294,
+                0.08235294,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 64,
+            "name": "Paper",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                1.0,
+                0.9843137,
+                0.9372549,
+                1.0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": 65,
+        "name": "Candy Pastels",
+        "swatches": [
+          {
+            "id": 66,
+            "name": "Rose",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.9490196,
+                0.59607846,
+                0.70980394,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 67,
+            "name": "Pink",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.972549,
+                0.7411765,
+                0.83137256,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 68,
+            "name": "Peach",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                1.0,
+                0.7921569,
+                0.7176471,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 69,
+            "name": "Apricot",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.98039216,
+                0.84705883,
+                0.6862745,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 70,
+            "name": "Butter",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.972549,
+                0.9019608,
+                0.61960787,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 71,
+            "name": "Pale Yellow",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                1.0,
+                0.9490196,
+                0.7764706,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 72,
+            "name": "Pistachio",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.8,
+                0.8980392,
+                0.7058824,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 73,
+            "name": "Mint",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.7019608,
+                0.89411765,
+                0.8156863,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 74,
+            "name": "Aqua",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.7176471,
+                0.9098039,
+                0.8980392,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 75,
+            "name": "Baby Blue",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.7176471,
+                0.84705883,
+                0.95686275,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 76,
+            "name": "Periwinkle",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.7882353,
+                0.78431374,
+                0.94509804,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 77,
+            "name": "Lilac",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.8784314,
+                0.7647059,
+                0.9372549,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 78,
+            "name": "Plum",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.4117647,
+                0.33333334,
+                0.4745098,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 79,
+            "name": "Mauve",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.6627451,
+                0.52156866,
+                0.69411767,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 80,
+            "name": "Lavender",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.8235294,
+                0.7058824,
+                0.8745098,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 81,
+            "name": "Pink White",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.9843137,
+                0.91764706,
+                0.9529412,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 82,
+            "name": "Cream",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                1.0,
+                0.98039216,
+                0.9411765,
+                1.0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": 83,
+        "name": "Riso Print",
+        "swatches": [
+          {
+            "id": 84,
+            "name": "Hot Pink",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                1.0,
+                0.3019608,
+                0.6431373,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 85,
+            "name": "Pink",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                1.0,
+                0.5764706,
+                0.76862746,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 86,
+            "name": "Pale Pink",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                1.0,
+                0.8156863,
+                0.8666667,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 87,
+            "name": "Navy",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.13333334,
+                0.20784314,
+                0.41568628,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 88,
+            "name": "Blue",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.28627452,
+                0.42352942,
+                0.6509804,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 89,
+            "name": "Pale Blue",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.64705884,
+                0.7529412,
+                0.81960785,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 90,
+            "name": "Violet",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.40784314,
+                0.2784314,
+                0.49019608,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 91,
+            "name": "Mauve",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.6784314,
+                0.53333336,
+                0.67058825,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 92,
+            "name": "Ink",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.16078432,
+                0.14901961,
+                0.20392157,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 93,
+            "name": "Paper",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.94509804,
+                0.8901961,
+                0.7882353,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 94,
+            "name": "Cream",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.9882353,
+                0.9529412,
+                0.8666667,
+                1.0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": 95,
+        "name": "Synthwave",
+        "swatches": [
+          {
+            "id": 96,
+            "name": "Night",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.05882353,
+                0.0627451,
+                0.14901961,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 97,
+            "name": "Deep Purple",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.15294118,
+                0.06666667,
+                0.27450982,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 98,
+            "name": "Violet",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.3019608,
+                0.09803922,
+                0.4862745,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 99,
+            "name": "Purple",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.49411765,
+                0.15294118,
+                0.72156864,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 100,
+            "name": "Magenta",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.7294118,
+                0.16470589,
+                0.8666667,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 101,
+            "name": "Neon Pink",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.9372549,
+                0.29411766,
+                0.8117647,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 102,
+            "name": "Deep Blue",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.03529412,
+                0.16078432,
+                0.2509804,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 103,
+            "name": "Petrol",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.078431375,
+                0.3137255,
+                0.44313726,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 104,
+            "name": "Electric Blue",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.07058824,
+                0.41568628,
+                0.7490196,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 105,
+            "name": "Bright Blue",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.20392157,
+                0.5411765,
+                1.0,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 106,
+            "name": "Cyan",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.14901961,
+                0.8117647,
+                0.9098039,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 107,
+            "name": "Ice",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.60784316,
+                0.9647059,
+                0.9490196,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 108,
+            "name": "Hot Rose",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.87058824,
+                0.15686275,
+                0.42745098,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 109,
+            "name": "Coral",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                1.0,
+                0.32156864,
+                0.39215687,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 110,
+            "name": "Orange",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                1.0,
+                0.5294118,
+                0.23921569,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 111,
+            "name": "Amber",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                1.0,
+                0.75686276,
+                0.2901961,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 112,
+            "name": "Sunlight",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                1.0,
+                0.8901961,
+                0.627451,
+                1.0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": 113,
+        "name": "Seventies Print",
+        "swatches": [
+          {
+            "id": 114,
+            "name": "Cocoa",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.30588236,
+                0.1764706,
+                0.14117648,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 115,
+            "name": "Brick",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.56078434,
+                0.23921569,
+                0.17254902,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 116,
+            "name": "Burnt Orange",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.76862746,
+                0.34509805,
+                0.16862746,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 117,
+            "name": "Tangerine",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.90588236,
+                0.5058824,
+                0.21568628,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 118,
+            "name": "Mustard",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.83137256,
+                0.654902,
+                0.18039216,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 119,
+            "name": "Cream",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.9529412,
+                0.8509804,
+                0.627451,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 120,
+            "name": "Dark Olive",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.27450982,
+                0.3137255,
+                0.1882353,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 121,
+            "name": "Avocado",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.48235294,
+                0.5137255,
+                0.21960784,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 122,
+            "name": "Olive Gold",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.72156864,
+                0.7019608,
+                0.3529412,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 123,
+            "name": "Dusty Rose",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.7294118,
+                0.4,
+                0.3764706,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 124,
+            "name": "Faded Pink",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.7882353,
+                0.5529412,
+                0.5019608,
+                1.0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": 125,
+        "name": "Woodblock",
+        "swatches": [
+          {
+            "id": 126,
+            "name": "Ink",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.078431375,
+                0.12156863,
+                0.17254902,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 127,
+            "name": "Indigo",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.09019608,
+                0.21176471,
+                0.30980393,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 128,
+            "name": "Prussian Blue",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.1254902,
+                0.34117648,
+                0.49411765,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 129,
+            "name": "Blue",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.18431373,
+                0.48235294,
+                0.6117647,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 130,
+            "name": "Sky Blue",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.4392157,
+                0.6784314,
+                0.7254902,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 131,
+            "name": "Pale Blue",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.7254902,
+                0.8352941,
+                0.8117647,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 132,
+            "name": "Red Brown",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.5058824,
+                0.20392157,
+                0.1764706,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 133,
+            "name": "Vermilion",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.7921569,
+                0.29411766,
+                0.20784314,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 134,
+            "name": "Ochre",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.78039217,
+                0.62352943,
+                0.39607844,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 135,
+            "name": "Buff",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.8784314,
+                0.7764706,
+                0.6039216,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 136,
+            "name": "Paper",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.9490196,
+                0.8980392,
+                0.7882353,
+                1.0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": 137,
+        "name": "Ink",
+        "swatches": [
+          {
+            "id": 138,
+            "name": "Black",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 139,
+            "name": "Dark Charcoal",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.08627451,
+                0.08627451,
+                0.08627451,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 140,
+            "name": "Charcoal",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.1882353,
+                0.1882353,
+                0.1882353,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 141,
+            "name": "Dark Gray",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.3019608,
+                0.3019608,
+                0.3019608,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 142,
+            "name": "Middle Gray",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.40784314,
+                0.40784314,
+                0.40784314,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 143,
+            "name": "Gray",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.52156866,
+                0.52156866,
+                0.52156866,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 144,
+            "name": "Light Gray",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.6313726,
+                0.6313726,
+                0.6313726,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 145,
+            "name": "Pale Gray",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.7411765,
+                0.7411765,
+                0.7411765,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 146,
+            "name": "Light Wash",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.8509804,
+                0.8509804,
+                0.8509804,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 147,
+            "name": "Paper White",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.9254902,
+                0.9254902,
+                0.9254902,
+                1.0
+              ]
+            }
+          },
+          {
+            "id": 148,
+            "name": "White",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": 149,
+        "name": "Release palette",
+        "swatches": [
+          {
+            "id": 150,
+            "name": "Release blue",
+            "color": {
+              "space": "Srgb",
+              "rgba": [
+                0.2,
+                0.4,
+                0.6,
+                1.0
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "active": 149,
+    "selected": 150,
+    "history": [],
+    "starters_installed": true,
+    "next_id": 151
+  },
+  "canvas_tool": "paint",
+  "selection": {
+    "tool": "lasso",
+    "tonal": {
+      "tone": 4,
+      "custom": [
+        -3.5,
+        -1.5
+      ],
+      "softness": 1.0
+    },
+    "brush": {
+      "subtract": false,
+      "pressure_size": false,
+      "size": 32.0,
+      "hardness": 1.0,
+      "opacity": 1.0
+    },
+    "display": {
+      "outline": true,
+      "overlay": true,
+      "color": [
+        1.0,
+        0.0,
+        0.0,
+        0.5
+      ]
+    },
+    "constraint": "free",
+    "from_center": false,
+    "mode": "new",
+    "antialias": true,
+    "feather": 0.0,
+    "constrain_angles": false,
+    "ratio": [
+      1.0,
+      1.0
+    ],
+    "size": [
+      256.0,
+      256.0
+    ]
+  },
+  "region_values": {
+    "expansion": 2.0,
+    "gap_closing": 2.0,
+    "smoothing": 1.0,
+    "tolerance": 0.4
+  },
+  "region_sources": [
+    "visible",
+    "editing"
+  ],
+  "gradient": {
+    "definition": null,
+    "shape": "Linear"
+  },
+  "figure": [
+    "line",
+    "outline"
+  ]
+}

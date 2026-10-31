@@ -316,7 +316,6 @@ impl ItemKind {
     }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Metadata {
     pub kind: ItemKind,
     pub name: String,
@@ -369,7 +368,6 @@ impl Metadata {
 
 /// A library toolbar deliberately has no panel/group identity or screen position.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ToolbarDefinition {
     pub name: String,
     pub tiles: Vec<ToolbarTile>,
@@ -408,7 +406,7 @@ impl ToolbarDefinition {
     }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum ItemContent {
     Workspace {
         history: LayoutHistory,
@@ -443,11 +441,11 @@ fn validate_stored_layout(layout: &DockLayout) -> Result<(), StoreError> {
     Ok(())
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Entity {
     pub id: String,
     pub metadata: Metadata,
     pub content: ItemContent,
+    #[serde(default, deserialize_with = "WorkspaceWorkingState::deserialize_option")]
     pub working: Option<WorkspaceWorkingState>,
 }
 impl Entity {

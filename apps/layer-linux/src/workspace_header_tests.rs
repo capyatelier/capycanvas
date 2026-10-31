@@ -1529,7 +1529,7 @@ fn native_unreadable_workspace_storage_input() {
     d.w.window.close();
     until(|| !d.w.window.is_visible(), "workspace close");
     assert_eq!(
-        sql("UPDATE items SET working=json_set(working,'$.zen_mode',json('{}')); SELECT changes()"),
+        sql("UPDATE items SET content='{}'; SELECT changes()"),
         "3"
     );
     let settings = crate::storage::roots().unwrap().settings();
@@ -1560,12 +1560,12 @@ fn native_unreadable_workspace_storage_input() {
     assert_eq!(state(&d.w).settings.pan_speed, 2.0);
     assert_eq!(state(&d.w).settings.zoom_speed, 1.0);
     assert_eq!(
-        sql("SELECT count(*) FROM items WHERE json_type(working,'$.zen_mode')='object'"),
+        sql("SELECT count(*) FROM items WHERE content='{}'"),
         "0"
     );
     let kept = std::process::Command::new("sqlite3")
         .arg(database.with_file_name("workspaces.unreadable.sqlite3"))
-        .arg("SELECT count(*) FROM items WHERE json_type(working,'$.zen_mode')='object'")
+        .arg("SELECT count(*) FROM items WHERE content='{}'")
         .output()
         .unwrap();
     assert_eq!(String::from_utf8(kept.stdout).unwrap().trim(), "3");
@@ -1597,6 +1597,32 @@ fn native_unreadable_workspace_storage_input() {
         &d.w,
         d.input.dir.join("replaced-storage.png").to_str().unwrap(),
     );
+    d.finish();
+}
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_released_app_state_upgrade_input --native-storage"]
+fn native_released_app_state_upgrade_input() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates/layer-workspace/tests/compat/1.0.15");
+    let workspaces = crate::storage::workspaces().unwrap();
+    std::fs::create_dir_all(&workspaces).unwrap();
+    let database = workspaces.join("workspaces.sqlite3");
+    assert!(!database.exists());
+    std::fs::copy(fixtures.join("workspaces.sqlite3"),database).unwrap();
+    let roots = crate::storage::roots().unwrap();
+    std::fs::create_dir_all(roots.settings().parent().unwrap()).unwrap();
+    std::fs::copy(fixtures.join("settings.json"),roots.settings()).unwrap();
+    std::fs::copy(fixtures.join("export-presets"),roots.export_presets()).unwrap();
+    let d = Driver::managed("art.capycanvas.ReleasedAppStateUpgrade");
+    for theme in [Theme::Light,Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme {theme:Some(theme)});
+        let restored = state(&d.w);
+        assert_eq!(restored.brush.diameter,37.);
+        assert_eq!(restored.settings.pan_speed,1.5);
+        assert!(restored.notice.is_none());
+        assert!(restored.color_library.palettes.iter().any(|p|p.name=="Release palette" && p.swatches.iter().any(|s|s.name=="Release blue")));
+    }
+    until(|| state(&d.w).requests.is_empty(), "upgraded preferences saved");
     d.finish();
 }
 

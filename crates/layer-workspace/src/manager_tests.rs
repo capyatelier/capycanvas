@@ -218,7 +218,7 @@ fn startup_write_failure_does_not_switch_elsewhere_or_create_a_workspace() {
 }
 
 #[test]
-fn an_unreadable_item_uses_an_available_builtin_without_replacing_storage() {
+fn an_unreadable_working_field_keeps_the_workspace_available() {
     pollster::block_on(async {
         let f = Fixture::new();
         f.manager.close().await.unwrap();
@@ -233,7 +233,7 @@ fn an_unreadable_item_uses_an_available_builtin_without_replacing_storage() {
         let incoming = m.initialize(2_000).await.unwrap();
         assert_eq!(incoming.entity.id, DEFAULT_WORKSPACES[1].0);
         assert_eq!(m.items().len(), DEFAULT_WORKSPACES.len());
-        assert!(m.load(unreadable).await.is_err());
+        assert!(!m.load(unreadable).await.unwrap().entity.working.unwrap().zen_mode);
         assert!(!m.in_memory());
         assert!(m.error().is_none());
         m.activate(incoming);
@@ -758,6 +758,8 @@ fn package_validation_and_failed_publication_never_expose_partial_imports() {
         );
         let mut newer: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         newer["version"] = 99.into();
+        assert!(import_package(&serde_json::to_vec(&newer).unwrap(),PackageKind::WorkspaceBackup,2000).is_ok());
+        newer["version"] = "invalid".into();
         assert_eq!(
             import_package(
                 &serde_json::to_vec(&newer).unwrap(),

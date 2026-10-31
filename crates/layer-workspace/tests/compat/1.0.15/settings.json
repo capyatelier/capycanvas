@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "new_document": {},
+  "photo_open": {
+    "promote_to_16": false,
+    "missing_profile": "assume_srgb"
+  },
+  "language": "System",
+  "theme": "dark",
+  "transparency": "low",
+  "dark_base": "#333333",
+  "light_base": "#b8b8b8",
+  "zen_icon": "looking_up",
+  "zen_show_capy": true,
+  "selection_painting": "color_transparency",
+  "pressure_curve": [
+    [
+      0.0,
+      0.125
+    ],
+    [
+      0.25,
+      1.0
+    ],
+    [
+      1.0,
+      1.0
+    ]
+  ],
+  "tilt_calibrations": {},
+  "cursor": "brush_size",
+  "hide_cursor_while_drawing": true,
+  "pan_speed": 1.5,
+  "zoom_speed": 0.75,
+  "zoom_tool": {
+    "zoom_out": false,
+    "drag": "smooth",
+    "direction": "horizontal",
+    "center_clicked_point": false
+  },
+  "wheel_zoom": false,
+  "rotate_with_two_fingers": true,
+  "quick_pinch_fit": false,
+  "quick_pinch_restore": true,
+  "snap_rotation": true,
+  "pass_through_groups": false,
+  "feedback": true,
+  "platform_prediction": true,
+  "prediction_ms": 16.0,
+  "shortcuts": {
+    "command.Undo": []
+  },
+  "slider_bookmarks": {}
+}

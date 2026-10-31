@@ -1988,14 +1988,13 @@ fn start<S: WorkspaceStore + 'static>(
 }
 
 #[test]
-fn obsolete_or_incomplete_editing_states_start_with_defaults_without_a_notice() {
-    for version in [1, 2, 3] {
-        let obsolete = version < 3;
+fn released_or_incomplete_editing_states_keep_readable_fields_without_a_notice() {
+    for version in [1, 3, 999] {
+        let obsolete = version == 1;
         let mut editing = layer_ui::EditingState::default();
         editing.version = version;
         if obsolete {
             editing.region_values.insert("smoothing".into(), 0.5);
-            assert_eq!(editing.validate(), Err("Unsupported editing-state version".into()));
         }
         let mut editing = serde_json::to_value(editing).unwrap();
         for field in if obsolete { &["fill_scope", "region_smooth_edges"][..] } else { &["preset"][..] } {
@@ -2008,7 +2007,7 @@ fn obsolete_or_incomplete_editing_states_start_with_defaults_without_a_notice() 
         let (controller, mut host) = start(Store(backend), Platform::Web);
         assert_started(&controller, &mut host, "invalid editing state");
         assert_eq!(notice(&host), None);
-        assert!(controller.manager.editing().is_none());
+        assert!(controller.manager.editing().is_some());
         assert_eq!(host.session.editing_state().version, 3);
         assert_eq!(host.session.editing_state().fill_scope, layer_ui::FillScope::Connected);
         assert!(host.session.editing_state().region_smooth_edges);
@@ -2017,7 +2016,21 @@ fn obsolete_or_incomplete_editing_states_start_with_defaults_without_a_notice() 
 }
 
 #[test]
-fn unknown_saved_slots_use_a_builtin_layout_without_aliasing_or_resetting_storage() {
+fn released_browser_store_starts_without_loss() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/compat");
+    let backend = Rc::new(Backend::default());
+    *backend.database.borrow_mut() = BrowserDatabase::decode(&std::fs::read_to_string(root.join("1.0.15/browser.json")).unwrap()).unwrap();
+    let (controller,host) = start(Store(backend),Platform::Web);
+    assert!(controller.view.ready, "{:?}",controller.view.error);
+    assert!(controller.view.error.is_none());
+    assert!(!controller.manager.in_memory());
+    assert_eq!(notice(&host),None);
+    let expected: serde_json::Value = serde_json::from_slice(&std::fs::read(root.join("expected/1.0.15/editing.json.expected.json")).unwrap()).unwrap();
+    assert_eq!(serde_json::to_value(controller.manager.editing()).unwrap(),expected);
+}
+
+#[test]
+fn saved_slots_alias_released_ids_and_keep_unknown_layouts_without_resetting_storage() {
     for slot in ["lasso_fill", "unknown_slot"] {
         let backend = Rc::new(Backend::default());
         let layout = layer_ui::WorkspacePreset::Illustrator.layout(Platform::Web);
@@ -2029,10 +2042,20 @@ fn unknown_saved_slots_use_a_builtin_layout_without_aliasing_or_resetting_storag
         let stored = backend.database.borrow().encoded().unwrap().replace("\"slot\":\"fill\"", &format!("\"slot\":\"{slot}\""));
         *backend.database.borrow_mut() = BrowserDatabase::decode(&stored).unwrap();
         let (controller, mut host) = start(Store(backend), Platform::Web);
-        assert_started(&controller, &mut host, slot);
+        if slot == "unknown_slot" { assert_started(&controller, &mut host, slot); }
+        assert!(controller.view.ready);
+        assert!(controller.view.error.is_none());
+        assert!(host.session.state().workspace_ready);
         assert_eq!(notice(&host), None);
         assert_eq!(host.session.capture_workspace().unwrap().history.layout(), &layer_ui::WorkspacePreset::Illustrator.layout(Platform::Web));
-        assert!(pollster::block_on(controller.manager.load(&id)).is_err());
+        let loaded = pollster::block_on(controller.manager.load(&id));
+        if slot == "lasso_fill" {
+            assert_eq!(controller.manager.current().unwrap().id, id);
+            assert_eq!(loaded.unwrap().entity.capture().unwrap().history.layout(), &layer_ui::WorkspacePreset::Illustrator.layout(Platform::Web));
+            assert_eq!(serde_json::from_str::<layer_ui::ToolSlotId>("\"lasso_fill\"").unwrap(), layer_ui::ToolSlotId::Fill);
+        } else {
+            assert!(loaded.is_err());
+        }
         assert_eq!(controller.manager.items().len(), DEFAULT_WORKSPACES.len() + 1);
         assert!(!controller.manager.in_memory());
     }
@@ -2272,7 +2295,7 @@ fn startup_replaces_only_storage_it_cannot_read() {
     }
 }
 
-fn start_native(
+pub(crate) fn start_native(
     directory: &std::path::Path,
 ) -> (WorkspaceController<StoreWorker>, layer_host::NativeHost) {
     let mut host = layer_host::NativeHost::new(Platform::Gtk).unwrap();
@@ -2285,7 +2308,7 @@ fn start_native(
     }
     (controller, host)
 }
-fn close_native(
+pub(crate) fn close_native(
     mut controller: WorkspaceController<StoreWorker>,
     host: &mut layer_host::NativeHost,
 ) {
@@ -2309,7 +2332,7 @@ fn sqlite_startup_replaces_workspaces_of_the_same_version_it_cannot_read() {
     let db = rusqlite::Connection::open(directory.join("workspaces.sqlite3")).unwrap();
     let stale = db
         .execute(
-            "UPDATE items SET working=json_set(working,'$.zen_mode',json('{}'))",
+            "UPDATE items SET content='{}'",
             [],
         )
         .unwrap();

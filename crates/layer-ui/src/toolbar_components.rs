@@ -4,7 +4,7 @@ use crate::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct ToolbarSliderStyle {
     pub show_value: bool,
     pub expand: bool,

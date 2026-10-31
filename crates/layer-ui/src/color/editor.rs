@@ -29,7 +29,7 @@ pub const COLOR_FORM_FAMILIES: [&[ColorForm]; 3] = [
 ];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct ColorEditorMemory {
     pub forms: [ColorForm; 3],
     pub search: String,

@@ -2,7 +2,6 @@
 use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(super) struct HdrPaint {
     pub base: RgbColor,
     pub stops: f32,

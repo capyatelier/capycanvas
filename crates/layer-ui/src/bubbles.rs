@@ -113,7 +113,7 @@ impl BubbleSource {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct BubbleOptions {
     pub size: f32,
     pub recent: bool,
@@ -155,7 +155,6 @@ impl Corner {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ToolBubble {
     pub id: u32,
     pub source: BubbleSource,
@@ -210,21 +209,19 @@ impl ToolBubble {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct RingSettings {
     pub brush: u32,
     pub settings: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct KeptOptions {
     pub source: BubbleSource,
     pub options: BubbleOptions,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct BubbleLayout {
     pub show_sliders: bool,
     pub bubbles: Vec<ToolBubble>,

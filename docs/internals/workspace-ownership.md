@@ -75,8 +75,11 @@ check the presets for every `Platform`. The transports fail rather than wait:
 SQLite has a busy timeout, and the web store rejects on IndexedDB errors,
 blocked upgrades and worker failures.
 
-Formats are not migrated while they are unstable. `SCHEMA_VERSION` only
-identifies a store: a store of any other version serves nothing but `Reset`.
+Editing state written by 1.0.15 is converted on read; unreadable editing and
+working-state fields use their defaults. App-state documents accept unknown
+option fields and do not reject a readable document for its version number.
+`SCHEMA_VERSION` identifies the tables: a store of any other schema version
+serves nothing but `Reset`.
 Startup maintenance decodes every item and pending delivery, so a store this
 build cannot fully read fails stage 1 whether or not the version was bumped.
 `Reset` refuses a store written by a newer build. A window still running an

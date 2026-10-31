@@ -669,7 +669,7 @@ fn load(connection: &Connection, id: &str) -> Result<StoredEntity> {
         id: id.into(),
         metadata: serde_json::from_str(&row.metadata)?,
         content: unpack(&content, |id| component(connection, id))?,
-        working: working.map(|v| serde_json::from_str(&v)).transpose()?,
+        working: working.map(|v| layer_ui::WorkspaceWorkingState::restore(serde_json::from_str(&v).unwrap_or_default())),
     };
     entity.validate()?;
     Ok(StoredEntity {

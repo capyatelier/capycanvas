@@ -540,7 +540,6 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool, localizer: 
 /// Latest semantic overrides. Built-in defaults are resolved by this installation;
 /// merely loading or remembering a brush never rewrites an explicit override.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ToolMemory {
     tools: BTreeMap<Tool, u32>,
     groups: BTreeMap<ToolGroup, u32>,

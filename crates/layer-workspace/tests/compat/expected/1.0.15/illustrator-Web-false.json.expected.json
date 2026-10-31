@@ -1,0 +1,1681 @@
+{
+  "content": {
+    "baseline": {
+      "bands": [
+        {
+          "edge": "left",
+          "extent": 42.0,
+          "id": 1,
+          "root": {
+            "active": "toolbar",
+            "id": 2,
+            "kind": "tabs",
+            "panels": [
+              "toolbar"
+            ],
+            "tab_style": "automatic"
+          }
+        },
+        {
+          "edge": "left",
+          "extent": 0.0,
+          "id": 3,
+          "root": {
+            "axis": "vertical",
+            "first": {
+              "axis": "vertical",
+              "first": {
+                "active": "brushes",
+                "id": 6,
+                "kind": "tabs",
+                "panels": [
+                  "brushes",
+                  "stats"
+                ],
+                "tab_style": "automatic"
+              },
+              "fraction": 0.5,
+              "id": 5,
+              "kind": "split",
+              "second": {
+                "active": "tool_settings",
+                "id": 7,
+                "kind": "tabs",
+                "panels": [
+                  "tool_settings",
+                  "sizes"
+                ],
+                "tab_style": "automatic"
+              }
+            },
+            "fraction": 0.6528000235557556,
+            "id": 4,
+            "kind": "split",
+            "second": {
+              "active": "color",
+              "id": 10,
+              "kind": "tabs",
+              "panels": [
+                "color",
+                "palettes"
+              ],
+              "tab_style": "automatic"
+            }
+          }
+        },
+        {
+          "edge": "right",
+          "extent": 42.0,
+          "id": 11,
+          "root": {
+            "axis": "vertical",
+            "first": {
+              "active": "navigator",
+              "id": 14,
+              "kind": "tabs",
+              "panels": [
+                "navigator",
+                "proof"
+              ],
+              "tab_style": "automatic"
+            },
+            "fraction": 0.25,
+            "id": 12,
+            "kind": "split",
+            "second": {
+              "axis": "vertical",
+              "first": {
+                "active": "properties",
+                "id": 15,
+                "kind": "tabs",
+                "panels": [
+                  "properties"
+                ],
+                "tab_style": "automatic"
+              },
+              "fraction": 0.4000000059604645,
+              "id": 13,
+              "kind": "split",
+              "second": {
+                "active": "layers",
+                "id": 16,
+                "kind": "tabs",
+                "panels": [
+                  "layers",
+                  "adjustments"
+                ],
+                "tab_style": "automatic"
+              }
+            }
+          }
+        },
+        {
+          "edge": "top",
+          "extent": 42.0,
+          "id": 17,
+          "root": {
+            "active": "commands",
+            "id": 18,
+            "kind": "tabs",
+            "panels": [
+              "commands"
+            ],
+            "tab_style": "automatic"
+          }
+        }
+      ],
+      "canvas_bar": true,
+      "canvas_info": {
+        "visible": true
+      },
+      "collapsed": [
+        {
+          "expanded_width": 0.0,
+          "root": 12
+        }
+      ],
+      "column_stacks": [
+        {
+          "auto_hide": false,
+          "column": 4,
+          "drawers": false,
+          "members": [
+            4
+          ]
+        },
+        {
+          "auto_hide": false,
+          "column": 12,
+          "drawers": false,
+          "members": [
+            12
+          ]
+        }
+      ],
+      "fit_height_groups": [
+        10,
+        14
+      ],
+      "fit_tab_groups": [
+        10,
+        14,
+        6,
+        16
+      ],
+      "floating": [],
+      "header": {
+        "next_id": 9,
+        "size": "small",
+        "zones": [
+          [
+            {
+              "id": 1,
+              "item": {
+                "kind": "capy"
+              }
+            },
+            {
+              "id": 2,
+              "item": {
+                "kind": "menu_labels"
+              }
+            }
+          ],
+          [
+            {
+              "id": 3,
+              "item": {
+                "kind": "document_title"
+              }
+            }
+          ],
+          [
+            {
+              "id": 4,
+              "item": {
+                "kind": "workspaces"
+              }
+            },
+            {
+              "id": 5,
+              "item": {
+                "kind": "clock"
+              }
+            },
+            {
+              "id": 6,
+              "item": {
+                "kind": "battery"
+              }
+            },
+            {
+              "id": 8,
+              "item": {
+                "kind": "fullscreen"
+              }
+            },
+            {
+              "id": 7,
+              "item": {
+                "kind": "settings"
+              }
+            }
+          ]
+        ]
+      },
+      "next_id": 24,
+      "next_tile_id": 57,
+      "panels": [
+        {
+          "content": {
+            "kind": "toolbar",
+            "name": null,
+            "tiles": [
+              {
+                "control": {
+                  "command": "pen",
+                  "kind": "command"
+                },
+                "id": 34,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "command": "pencil",
+                  "kind": "command"
+                },
+                "id": 35,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "command": "brush",
+                  "kind": "command"
+                },
+                "id": 36,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "command": "eraser",
+                  "kind": "command"
+                },
+                "id": 37,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "command": "airbrush",
+                  "kind": "command"
+                },
+                "id": 38,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "kind": "tool_slot",
+                  "slot": "blend"
+                },
+                "id": 39,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "command": "liquify",
+                  "kind": "command"
+                },
+                "id": 40,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "kind": "tool_slot",
+                  "slot": "retouch"
+                },
+                "id": 41,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "kind": "divider"
+                },
+                "id": 42,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "kind": "tool_slot",
+                  "slot": "manual_selection"
+                },
+                "id": 43,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "kind": "tool_slot",
+                  "slot": "automatic_selection"
+                },
+                "id": 44,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "kind": "tool_slot",
+                  "slot": "fill"
+                },
+                "id": 45,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "kind": "tool_slot",
+                  "slot": "gradient"
+                },
+                "id": 46,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "kind": "divider"
+                },
+                "id": 47,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "kind": "tool_slot",
+                  "slot": "operation"
+                },
+                "id": 48,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "kind": "tool_slot",
+                  "slot": "figure"
+                },
+                "id": 49,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "kind": "tool_slot",
+                  "slot": "ruler"
+                },
+                "id": 50,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "command": "hand",
+                  "kind": "command"
+                },
+                "id": 51,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "command": "zoom",
+                  "kind": "command"
+                },
+                "id": 52,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "command": "eyedropper",
+                  "kind": "command"
+                },
+                "id": 53,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "kind": "color"
+                },
+                "id": 54,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              }
+            ]
+          },
+          "hide_tab": false,
+          "id": "toolbar",
+          "tile_style": "small"
+        },
+        {
+          "content": {
+            "kind": "controls",
+            "visible": [
+              "brushes"
+            ]
+          },
+          "hide_tab": false,
+          "id": "brushes",
+          "tile_style": "small"
+        },
+        {
+          "content": {
+            "kind": "controls",
+            "visible": [
+              "tool_settings"
+            ]
+          },
+          "hide_tab": false,
+          "id": "tool_settings",
+          "tile_style": "small"
+        },
+        {
+          "content": {
+            "kind": "controls",
+            "visible": [
+              "color_wheel"
+            ]
+          },
+          "hide_tab": false,
+          "id": "color",
+          "tile_style": "small"
+        },
+        {
+          "content": {
+            "kind": "controls",
+            "visible": []
+          },
+          "hide_tab": false,
+          "id": "palettes",
+          "tile_style": "small"
+        },
+        {
+          "content": {
+            "kind": "controls",
+            "visible": [
+              "size_presets"
+            ]
+          },
+          "hide_tab": false,
+          "id": "sizes",
+          "tile_style": "small"
+        },
+        {
+          "content": {
+            "kind": "controls",
+            "visible": [
+              "layer_actions",
+              "layers",
+              "layer_opacity"
+            ]
+          },
+          "hide_tab": false,
+          "id": "layers",
+          "tile_style": "small"
+        },
+        {
+          "content": {
+            "kind": "controls",
+            "visible": [
+              "adjustments"
+            ]
+          },
+          "hide_tab": false,
+          "id": "adjustments",
+          "tile_style": "small"
+        },
+        {
+          "content": {
+            "kind": "controls",
+            "visible": [
+              "properties"
+            ]
+          },
+          "hide_tab": false,
+          "id": "properties",
+          "tile_style": "small"
+        },
+        {
+          "content": {
+            "kind": "controls",
+            "visible": [
+              "stats"
+            ]
+          },
+          "hide_tab": false,
+          "id": "stats",
+          "tile_style": "small"
+        },
+        {
+          "content": {
+            "kind": "controls",
+            "visible": [
+              "navigator"
+            ]
+          },
+          "hide_tab": false,
+          "id": "navigator",
+          "tile_style": "small"
+        },
+        {
+          "content": {
+            "kind": "controls",
+            "visible": []
+          },
+          "hide_tab": false,
+          "id": "proof",
+          "tile_style": "small"
+        },
+        {
+          "content": {
+            "kind": "controls",
+            "visible": [
+              "histogram"
+            ]
+          },
+          "hide_tab": false,
+          "id": "histogram",
+          "tile_style": "small"
+        },
+        {
+          "content": {
+            "kind": "controls",
+            "visible": [
+              "waveform"
+            ]
+          },
+          "hide_tab": false,
+          "id": "waveform",
+          "tile_style": "small"
+        },
+        {
+          "content": {
+            "kind": "controls",
+            "visible": [
+              "brush_sets"
+            ]
+          },
+          "hide_tab": false,
+          "id": "brush_sets",
+          "tile_style": "small"
+        },
+        {
+          "content": {
+            "kind": "controls",
+            "visible": [
+              "tools"
+            ]
+          },
+          "hide_tab": false,
+          "id": "tools",
+          "tile_style": "small"
+        },
+        {
+          "content": {
+            "kind": "controls",
+            "visible": [
+              "sculpt_sets"
+            ]
+          },
+          "hide_tab": false,
+          "id": "sculpt_sets",
+          "tile_style": "small"
+        },
+        {
+          "content": {
+            "kind": "controls",
+            "visible": [
+              "filter_types"
+            ]
+          },
+          "hide_tab": false,
+          "id": "filter_types",
+          "tile_style": "small"
+        },
+        {
+          "content": {
+            "kind": "toolbar",
+            "name": null,
+            "tiles": [
+              {
+                "control": {
+                  "command": "new_document",
+                  "kind": "command"
+                },
+                "id": 22,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "command": "open_document",
+                  "kind": "command"
+                },
+                "id": 23,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "command": "save_document",
+                  "kind": "command"
+                },
+                "id": 24,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "kind": "divider"
+                },
+                "id": 25,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "command": "undo",
+                  "kind": "command"
+                },
+                "id": 26,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "command": "redo",
+                  "kind": "command"
+                },
+                "id": 27,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "kind": "divider"
+                },
+                "id": 28,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "command": "clear_layer",
+                  "kind": "command"
+                },
+                "id": 29,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "command": "fill_selection",
+                  "kind": "command"
+                },
+                "id": 30,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "command": "scale_rotate",
+                  "kind": "command"
+                },
+                "id": 31,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "kind": "divider"
+                },
+                "id": 32,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              },
+              {
+                "control": {
+                  "command": "flip_horizontal",
+                  "kind": "command"
+                },
+                "id": 33,
+                "slider_style": {
+                  "expand": false,
+                  "show_value": false
+                }
+              }
+            ]
+          },
+          "hide_tab": false,
+          "id": "commands",
+          "tile_style": "small"
+        },
+        {
+          "content": {
+            "kind": "toolbar",
+            "name": "Brush controls",
+            "tiles": [
+              {
+                "control": {
+                  "kind": "brush_size_slider"
+                },
+                "id": 55,
+                "slider_style": {
+                  "expand": true,
+                  "show_value": true
+                }
+              },
+              {
+                "control": {
+                  "kind": "brush_strength_slider"
+                },
+                "id": 56,
+                "slider_style": {
+                  "expand": true,
+                  "show_value": true
+                }
+              }
+            ]
+          },
+          "hide_tab": false,
+          "id": "toolbar:21",
+          "tile_style": "small"
+        }
+      ]
+    },
+    "history": {
+      "current": "r0",
+      "generation": "0",
+      "redo": [],
+      "revisions": {
+        "r0": {
+          "description": {
+            "change": "starting"
+          },
+          "id": "r0",
+          "layout": {
+            "bands": [
+              {
+                "edge": "left",
+                "extent": 42.0,
+                "id": 1,
+                "root": {
+                  "active": "toolbar",
+                  "id": 2,
+                  "kind": "tabs",
+                  "panels": [
+                    "toolbar"
+                  ],
+                  "tab_style": "automatic"
+                }
+              },
+              {
+                "edge": "left",
+                "extent": 0.0,
+                "id": 3,
+                "root": {
+                  "axis": "vertical",
+                  "first": {
+                    "axis": "vertical",
+                    "first": {
+                      "active": "brushes",
+                      "id": 6,
+                      "kind": "tabs",
+                      "panels": [
+                        "brushes",
+                        "stats"
+                      ],
+                      "tab_style": "automatic"
+                    },
+                    "fraction": 0.5,
+                    "id": 5,
+                    "kind": "split",
+                    "second": {
+                      "active": "tool_settings",
+                      "id": 7,
+                      "kind": "tabs",
+                      "panels": [
+                        "tool_settings",
+                        "sizes"
+                      ],
+                      "tab_style": "automatic"
+                    }
+                  },
+                  "fraction": 0.6528000235557556,
+                  "id": 4,
+                  "kind": "split",
+                  "second": {
+                    "active": "color",
+                    "id": 10,
+                    "kind": "tabs",
+                    "panels": [
+                      "color",
+                      "palettes"
+                    ],
+                    "tab_style": "automatic"
+                  }
+                }
+              },
+              {
+                "edge": "right",
+                "extent": 42.0,
+                "id": 11,
+                "root": {
+                  "axis": "vertical",
+                  "first": {
+                    "active": "navigator",
+                    "id": 14,
+                    "kind": "tabs",
+                    "panels": [
+                      "navigator",
+                      "proof"
+                    ],
+                    "tab_style": "automatic"
+                  },
+                  "fraction": 0.25,
+                  "id": 12,
+                  "kind": "split",
+                  "second": {
+                    "axis": "vertical",
+                    "first": {
+                      "active": "properties",
+                      "id": 15,
+                      "kind": "tabs",
+                      "panels": [
+                        "properties"
+                      ],
+                      "tab_style": "automatic"
+                    },
+                    "fraction": 0.4000000059604645,
+                    "id": 13,
+                    "kind": "split",
+                    "second": {
+                      "active": "layers",
+                      "id": 16,
+                      "kind": "tabs",
+                      "panels": [
+                        "layers",
+                        "adjustments"
+                      ],
+                      "tab_style": "automatic"
+                    }
+                  }
+                }
+              },
+              {
+                "edge": "top",
+                "extent": 42.0,
+                "id": 17,
+                "root": {
+                  "active": "commands",
+                  "id": 18,
+                  "kind": "tabs",
+                  "panels": [
+                    "commands"
+                  ],
+                  "tab_style": "automatic"
+                }
+              }
+            ],
+            "canvas_bar": true,
+            "canvas_info": {
+              "visible": true
+            },
+            "collapsed": [
+              {
+                "expanded_width": 0.0,
+                "root": 12
+              }
+            ],
+            "column_stacks": [
+              {
+                "auto_hide": false,
+                "column": 4,
+                "drawers": false,
+                "members": [
+                  4
+                ]
+              },
+              {
+                "auto_hide": false,
+                "column": 12,
+                "drawers": false,
+                "members": [
+                  12
+                ]
+              }
+            ],
+            "fit_height_groups": [
+              10,
+              14
+            ],
+            "fit_tab_groups": [
+              10,
+              14,
+              6,
+              16
+            ],
+            "floating": [],
+            "header": {
+              "next_id": 9,
+              "size": "small",
+              "zones": [
+                [
+                  {
+                    "id": 1,
+                    "item": {
+                      "kind": "capy"
+                    }
+                  },
+                  {
+                    "id": 2,
+                    "item": {
+                      "kind": "menu_labels"
+                    }
+                  }
+                ],
+                [
+                  {
+                    "id": 3,
+                    "item": {
+                      "kind": "document_title"
+                    }
+                  }
+                ],
+                [
+                  {
+                    "id": 4,
+                    "item": {
+                      "kind": "workspaces"
+                    }
+                  },
+                  {
+                    "id": 5,
+                    "item": {
+                      "kind": "clock"
+                    }
+                  },
+                  {
+                    "id": 6,
+                    "item": {
+                      "kind": "battery"
+                    }
+                  },
+                  {
+                    "id": 8,
+                    "item": {
+                      "kind": "fullscreen"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "item": {
+                      "kind": "settings"
+                    }
+                  }
+                ]
+              ]
+            },
+            "next_id": 24,
+            "next_tile_id": 57,
+            "panels": [
+              {
+                "content": {
+                  "kind": "toolbar",
+                  "name": null,
+                  "tiles": [
+                    {
+                      "control": {
+                        "command": "pen",
+                        "kind": "command"
+                      },
+                      "id": 34,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "command": "pencil",
+                        "kind": "command"
+                      },
+                      "id": 35,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "command": "brush",
+                        "kind": "command"
+                      },
+                      "id": 36,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "command": "eraser",
+                        "kind": "command"
+                      },
+                      "id": 37,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "command": "airbrush",
+                        "kind": "command"
+                      },
+                      "id": 38,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "kind": "tool_slot",
+                        "slot": "blend"
+                      },
+                      "id": 39,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "command": "liquify",
+                        "kind": "command"
+                      },
+                      "id": 40,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "kind": "tool_slot",
+                        "slot": "retouch"
+                      },
+                      "id": 41,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "kind": "divider"
+                      },
+                      "id": 42,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "kind": "tool_slot",
+                        "slot": "manual_selection"
+                      },
+                      "id": 43,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "kind": "tool_slot",
+                        "slot": "automatic_selection"
+                      },
+                      "id": 44,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "kind": "tool_slot",
+                        "slot": "fill"
+                      },
+                      "id": 45,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "kind": "tool_slot",
+                        "slot": "gradient"
+                      },
+                      "id": 46,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "kind": "divider"
+                      },
+                      "id": 47,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "kind": "tool_slot",
+                        "slot": "operation"
+                      },
+                      "id": 48,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "kind": "tool_slot",
+                        "slot": "figure"
+                      },
+                      "id": 49,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "kind": "tool_slot",
+                        "slot": "ruler"
+                      },
+                      "id": 50,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "command": "hand",
+                        "kind": "command"
+                      },
+                      "id": 51,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "command": "zoom",
+                        "kind": "command"
+                      },
+                      "id": 52,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "command": "eyedropper",
+                        "kind": "command"
+                      },
+                      "id": 53,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "kind": "color"
+                      },
+                      "id": 54,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    }
+                  ]
+                },
+                "hide_tab": false,
+                "id": "toolbar",
+                "tile_style": "small"
+              },
+              {
+                "content": {
+                  "kind": "controls",
+                  "visible": [
+                    "brushes"
+                  ]
+                },
+                "hide_tab": false,
+                "id": "brushes",
+                "tile_style": "small"
+              },
+              {
+                "content": {
+                  "kind": "controls",
+                  "visible": [
+                    "tool_settings"
+                  ]
+                },
+                "hide_tab": false,
+                "id": "tool_settings",
+                "tile_style": "small"
+              },
+              {
+                "content": {
+                  "kind": "controls",
+                  "visible": [
+                    "color_wheel"
+                  ]
+                },
+                "hide_tab": false,
+                "id": "color",
+                "tile_style": "small"
+              },
+              {
+                "content": {
+                  "kind": "controls",
+                  "visible": []
+                },
+                "hide_tab": false,
+                "id": "palettes",
+                "tile_style": "small"
+              },
+              {
+                "content": {
+                  "kind": "controls",
+                  "visible": [
+                    "size_presets"
+                  ]
+                },
+                "hide_tab": false,
+                "id": "sizes",
+                "tile_style": "small"
+              },
+              {
+                "content": {
+                  "kind": "controls",
+                  "visible": [
+                    "layer_actions",
+                    "layers",
+                    "layer_opacity"
+                  ]
+                },
+                "hide_tab": false,
+                "id": "layers",
+                "tile_style": "small"
+              },
+              {
+                "content": {
+                  "kind": "controls",
+                  "visible": [
+                    "adjustments"
+                  ]
+                },
+                "hide_tab": false,
+                "id": "adjustments",
+                "tile_style": "small"
+              },
+              {
+                "content": {
+                  "kind": "controls",
+                  "visible": [
+                    "properties"
+                  ]
+                },
+                "hide_tab": false,
+                "id": "properties",
+                "tile_style": "small"
+              },
+              {
+                "content": {
+                  "kind": "controls",
+                  "visible": [
+                    "stats"
+                  ]
+                },
+                "hide_tab": false,
+                "id": "stats",
+                "tile_style": "small"
+              },
+              {
+                "content": {
+                  "kind": "controls",
+                  "visible": [
+                    "navigator"
+                  ]
+                },
+                "hide_tab": false,
+                "id": "navigator",
+                "tile_style": "small"
+              },
+              {
+                "content": {
+                  "kind": "controls",
+                  "visible": []
+                },
+                "hide_tab": false,
+                "id": "proof",
+                "tile_style": "small"
+              },
+              {
+                "content": {
+                  "kind": "controls",
+                  "visible": [
+                    "histogram"
+                  ]
+                },
+                "hide_tab": false,
+                "id": "histogram",
+                "tile_style": "small"
+              },
+              {
+                "content": {
+                  "kind": "controls",
+                  "visible": [
+                    "waveform"
+                  ]
+                },
+                "hide_tab": false,
+                "id": "waveform",
+                "tile_style": "small"
+              },
+              {
+                "content": {
+                  "kind": "controls",
+                  "visible": [
+                    "brush_sets"
+                  ]
+                },
+                "hide_tab": false,
+                "id": "brush_sets",
+                "tile_style": "small"
+              },
+              {
+                "content": {
+                  "kind": "controls",
+                  "visible": [
+                    "tools"
+                  ]
+                },
+                "hide_tab": false,
+                "id": "tools",
+                "tile_style": "small"
+              },
+              {
+                "content": {
+                  "kind": "controls",
+                  "visible": [
+                    "sculpt_sets"
+                  ]
+                },
+                "hide_tab": false,
+                "id": "sculpt_sets",
+                "tile_style": "small"
+              },
+              {
+                "content": {
+                  "kind": "controls",
+                  "visible": [
+                    "filter_types"
+                  ]
+                },
+                "hide_tab": false,
+                "id": "filter_types",
+                "tile_style": "small"
+              },
+              {
+                "content": {
+                  "kind": "toolbar",
+                  "name": null,
+                  "tiles": [
+                    {
+                      "control": {
+                        "command": "new_document",
+                        "kind": "command"
+                      },
+                      "id": 22,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "command": "open_document",
+                        "kind": "command"
+                      },
+                      "id": 23,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "command": "save_document",
+                        "kind": "command"
+                      },
+                      "id": 24,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "kind": "divider"
+                      },
+                      "id": 25,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "command": "undo",
+                        "kind": "command"
+                      },
+                      "id": 26,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "command": "redo",
+                        "kind": "command"
+                      },
+                      "id": 27,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "kind": "divider"
+                      },
+                      "id": 28,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "command": "clear_layer",
+                        "kind": "command"
+                      },
+                      "id": 29,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "command": "fill_selection",
+                        "kind": "command"
+                      },
+                      "id": 30,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "command": "scale_rotate",
+                        "kind": "command"
+                      },
+                      "id": 31,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "kind": "divider"
+                      },
+                      "id": 32,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    },
+                    {
+                      "control": {
+                        "command": "flip_horizontal",
+                        "kind": "command"
+                      },
+                      "id": 33,
+                      "slider_style": {
+                        "expand": false,
+                        "show_value": false
+                      }
+                    }
+                  ]
+                },
+                "hide_tab": false,
+                "id": "commands",
+                "tile_style": "small"
+              },
+              {
+                "content": {
+                  "kind": "toolbar",
+                  "name": "Brush controls",
+                  "tiles": [
+                    {
+                      "control": {
+                        "kind": "brush_size_slider"
+                      },
+                      "id": 55,
+                      "slider_style": {
+                        "expand": true,
+                        "show_value": true
+                      }
+                    },
+                    {
+                      "control": {
+                        "kind": "brush_strength_slider"
+                      },
+                      "id": 56,
+                      "slider_style": {
+                        "expand": true,
+                        "show_value": true
+                      }
+                    }
+                  ]
+                },
+                "hide_tab": false,
+                "id": "toolbar:21",
+                "tile_style": "small"
+              }
+            ]
+          },
+          "timestamp_ms": "1000"
+        }
+      },
+      "undo": [],
+      "version": 2
+    },
+    "type": "workspace"
+  },
+  "id": "builtin:workspace:illustrator",
+  "metadata": {
+    "builtin": true,
+    "created_at_ms": "1000",
+    "description": "",
+    "kind": "workspace",
+    "last_used_ms": "1000",
+    "modified_at_ms": "1000",
+    "name": "Paint"
+  },
+  "working": {
+    "version": 1,
+    "zen_mode": false
+  }
+}

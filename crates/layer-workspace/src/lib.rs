@@ -35,3 +35,6 @@ pub use sqlite::{Clock, SqliteStore};
 mod worker;
 #[cfg(feature = "native")]
 pub use worker::{StoreReply, StoreWorker, validate_database_export_destination};
+
+#[cfg(all(test, feature = "native"))]
+mod compat_tests;

@@ -300,7 +300,6 @@ impl PanelControl {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ToolbarTile {
     pub id: u32,
     pub control: ToolbarControl,
@@ -309,7 +308,7 @@ pub struct ToolbarTile {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PanelContent {
     Controls {
         visible: Vec<PanelControl>,
@@ -321,7 +320,6 @@ pub enum PanelContent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct PanelConfig {
     pub id: Panel,
     pub hide_tab: bool,

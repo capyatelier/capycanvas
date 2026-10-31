@@ -6,14 +6,12 @@ use serde::{Deserialize, Serialize};
 use crate::ColorFeatureError;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Named {
     name: String,
     recipe: ExportRecipe<usize>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ExportPresets<P = ColorProfile> {
     profiles: Vec<ExportProfile<P>>,
     destinations: [Option<ExportRecipe<usize>>; 4],
@@ -247,22 +245,34 @@ impl ExportPresets {
         };
         binary_payload::encode(b"CAPYPRESETS\x01", &metadata, &payloads, Self::MAX_FILE_BYTES).map_err(ColorFeatureError::from)
     }
-    /// Presets saved by any build. A copy this build cannot read counts as
-    /// empty, and the next save replaces it.
+    /// Restore readable metadata fields within a validated binary envelope.
     pub fn restore(bytes: &[u8]) -> Self {
-        Self::decode(bytes).unwrap_or_default()
+        let Ok((value, payloads)) = Self::decode_envelope::<serde_json::Value>(bytes) else { return Self::default() };
+        let defaults = ExportPresets {
+            profiles: serde_json::from_value(value["profiles"].clone()).unwrap_or_default(),
+            destinations: Default::default(), named: Vec::new(),
+        };
+        let metadata = crate::saved_state::restore_fields(value, || defaults,
+            |metadata| Self::decode_metadata(metadata.clone(), &payloads).is_ok());
+        Self::decode_metadata(metadata, &payloads).unwrap_or_default()
     }
     pub fn decode(bytes: &[u8]) -> Result<Self, ColorFeatureError> {
+        let (metadata, payloads) = Self::decode_envelope(bytes)?;
+        Self::decode_metadata(metadata, &payloads)
+    }
+    fn decode_envelope<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<(T, Vec<std::sync::Arc<[u8]>>), ColorFeatureError> {
         if bytes.len() > Self::MAX_FILE_BYTES {
             return Err(ColorFeatureError::PresetFileLimit);
         }
-        let (metadata, blocks): (ExportPresets<ProfileReference>, _) =
+        let (metadata, blocks) =
             binary_payload::decode(b"CAPYPRESETS\x01", bytes, Self::MAX_FILE_BYTES)?;
         if blocks.len() > Self::MAX_NAMES + 4
             || blocks.iter().map(|b| b.len()).sum::<usize>() > Self::MAX_PROFILE_BYTES {
             return Err(ColorFeatureError::PresetProfileBytesLimit);
         }
-        let payloads: Vec<std::sync::Arc<[u8]>> = blocks.into_iter().map(Into::into).collect();
+        Ok((metadata, blocks.into_iter().map(Into::into).collect()))
+    }
+    fn decode_metadata(metadata: ExportPresets<ProfileReference>, payloads: &[std::sync::Arc<[u8]>]) -> Result<Self, ColorFeatureError> {
         let mut used = std::collections::BTreeSet::new();
         let profiles = metadata.profiles.into_iter().map(|p| {
             if let ProfileReference::Embedded(id) = &p.profile { used.insert(*id); }
@@ -299,6 +309,26 @@ mod localized_name_tests {
 mod tests {
     use super::*;
     use layer_core::color::{SampleDepth, RgbSpace};
+    #[test]
+    fn unreadable_preset_metadata_keeps_independent_fields_and_profile_references() {
+        let mut saved = ExportPresets::default();
+        saved.save("Delivery",ExportRecipe::wide_color()).unwrap();
+        saved.remember(0,ExportRecipe::web_share()).unwrap();
+        let bytes = saved.encode().unwrap();
+        let (value,blocks): (serde_json::Value,_) = binary_payload::decode(b"CAPYPRESETS\x01",&bytes,ExportPresets::MAX_FILE_BYTES).unwrap();
+        for field in ["profiles","destinations","named"] {
+            let mut damaged = value.clone();
+            damaged[field] = true.into();
+            damaged["future_option"] = true.into();
+            let restored = ExportPresets::restore(&binary_payload::encode(b"CAPYPRESETS\x01",&damaged,&blocks,ExportPresets::MAX_FILE_BYTES).unwrap());
+            restored.validate().unwrap();
+            match field {
+                "profiles" => assert_eq!(restored,ExportPresets::default()),
+                "destinations" => { assert_eq!(restored.named,saved.named); assert_eq!(restored.destinations,[None,None,None,None]); },
+                _ => { assert_eq!(restored.destinations,saved.destinations); assert!(restored.named.is_empty()); },
+            }
+        }
+    }
     #[test]
     fn binary_profiles_are_compact_and_lossless() {
         let mut library = ExportPresets::default();

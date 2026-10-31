@@ -1,0 +1,61 @@
+{
+  "destinations": [
+    {
+      "background": "Preserve",
+      "depth": "U8",
+      "encoding": {
+        "conversion": {
+          "black_point_compensation": false,
+          "intent": "RelativeColorimetric"
+        },
+        "dither": "None"
+      },
+      "format": "Png",
+      "jpeg_quality": 90,
+      "metadata": {
+        "keep": "All",
+        "remove_location": true
+      },
+      "profile": 0,
+      "resolution": "Master",
+      "size": "Original"
+    },
+    null,
+    null,
+    null
+  ],
+  "named": [
+    {
+      "name": "Release delivery",
+      "recipe": {
+        "background": "Preserve",
+        "depth": "U8",
+        "encoding": {
+          "conversion": {
+            "black_point_compensation": false,
+            "intent": "RelativeColorimetric"
+          },
+          "dither": "None"
+        },
+        "format": "Png",
+        "jpeg_quality": 90,
+        "metadata": {
+          "keep": "All",
+          "remove_location": true
+        },
+        "profile": 0,
+        "resolution": "Master",
+        "size": "Original"
+      }
+    }
+  ],
+  "profiles": [
+    {
+      "channels": "Rgb",
+      "name": "Display P3",
+      "profile": {
+        "Builtin": "DisplayP3"
+      }
+    }
+  ]
+}

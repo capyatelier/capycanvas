@@ -9,7 +9,7 @@ use layer_render::{Dab, SelectionOverlay, SelectionPaint, SelectionPaintMode};
 use std::{collections::VecDeque, sync::Arc};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct SelectionBrushOptions {
     pub subtract: bool,
     pub pressure_size: bool,

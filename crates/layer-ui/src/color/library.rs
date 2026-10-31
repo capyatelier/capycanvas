@@ -8,21 +8,18 @@ pub use reorder::ColorReorderPreview;
 mod starters;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct SavedColor {
     pub id: u64,
     pub name: String,
     pub color: RgbColor,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ColorPalette {
     pub id: u64,
     pub name: String,
     pub swatches: Vec<SavedColor>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ColorLibrary {
     pub palettes: Vec<ColorPalette>,
     pub active: u64,

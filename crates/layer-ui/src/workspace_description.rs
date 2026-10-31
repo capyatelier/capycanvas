@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use crate::{Localizer, FluentArgs, MessageId};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LayoutPanelName {
     pub panel: Panel,
     pub custom_name: Option<String>,
@@ -28,7 +27,7 @@ impl LayoutPanelName {
 #[serde(rename_all = "snake_case")]
 pub enum LayoutPanelAction { Added, Deleted, Moved, Resized, Collapsed, Expanded, Hidden, Shown, Rearranged, TabReordered, TabsChanged, ToolsAdded, ToolsRemoved, ToolsChanged, Customized, Replaced, Selected }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "change", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "change", rename_all = "snake_case")]
 pub enum LayoutChange {
     Automatic, Starting, HeaderSize { size: crate::HeaderSize }, HeaderAdded { item: crate::HeaderItem }, HeaderRemoved { item: crate::HeaderItem }, HeaderRearranged, CanvasInfo, CanvasBar, Restored, RestoredEarlier,
     Panels { action: LayoutPanelAction, panels: Vec<LayoutPanelName> },

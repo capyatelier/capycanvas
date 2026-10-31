@@ -352,16 +352,19 @@ settings in the platform's config folder; the web client uses browser storage
 ([where the app keeps its files](../internals/storage.md)). A failed write must
 be reported without blocking pen input.
 
-Stored data may come from any build, older or newer, and is never migrated.
-Reading it never fails and never shows a message:
+Stored data may come from any build, older or newer. Editing state written by
+1.0.15 is converted in memory before validation; loading does not rewrite it.
+Preferences, editing and working state restore each readable top-level field
+and use defaults for fields they cannot read:
 
 - Preferences: hosts pass the saved text to `UiAction::RestoreSavedSettings`, or
   to `Settings::restore` when they need settings before a session exists. Each
   field this build reads and validates is kept, and every other field keeps its
   default. Loading does not rewrite the saved copy; the next change replaces it.
-- Export presets load through `ExportPresets::restore`, and the hidden-profile
-  list keeps the IDs this build reads. A copy this build cannot read counts as
-  empty, and the next change replaces it. The web color-preference database
+- Export presets load through `ExportPresets::restore`. An unreadable metadata
+  field uses its default while independent fields and valid profile references
+  survive. The binary envelope, digest and size limits remain strict. The
+  hidden-profile list keeps the IDs this build reads. The web color-preference database
   adds missing stores when its version changes and never deletes stored data.
 - Workspaces: startup replaces a store it cannot read, after keeping a copy; see
   [workspace startup](../internals/workspace-ownership.md#startup-always-adopts-a-workspace).

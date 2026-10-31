@@ -132,7 +132,8 @@ export async function checkStaleStorageStartup({evaluate, reload}) {
   const reset = "Saved workspaces couldn't be opened, so they were reset.";
   await wait(ready);
   await evaluate('layerApp.documents.startRecovery()');
-  const stale = await evaluate(snapshot(`database => Object.values(database.items).map(item => { item.entity.working.zen_mode = {}; return item.entity.id; })`));
+  await wait('(() => { const workspace = JSON.parse(layerApp.app.workspace_view()); return !workspace.dirty && !workspace.saving; })()');
+  const stale = await evaluate(snapshot(`database => Object.values(database.items).map(item => { item.entity.content = {}; item.claim = null; return item.entity.id; })`));
   assert.ok(stale.length >= 3);
   const unreadable = await evaluate(workspaceRecord("database"));
   await evaluate(`localStorage.setItem("layer.preferences.v1", JSON.stringify({...layerApp.state().settings, pan_speed: 2, tip_lock: true, prediction_algorithm: "kalman", zoom_speed: "fast"}))`);
@@ -156,7 +157,7 @@ export async function checkStaleStorageStartup({evaluate, reload}) {
   assert.deepEqual(await evaluate(keptProfile), [1, 2, 3], "Upgrading color preferences keeps stored profiles");
   await wait('!layerApp.documents.busy() && layerApp.state().commands.find(c => c.id === "export_document")?.enabled');
   await evaluate("layerApp.dispatch({type: 'invoke', command: 'export_document'})");
-  await wait('!!document.querySelector(\'dialog[open] select[aria-label="Format"]\')');
+  await wait('!!document.querySelector(\'dialog[open] .dropdown[aria-label="Format"]\')');
   await evaluate(`[...document.querySelectorAll("dialog[open]")].forEach(d => d.close())`);
   await evaluate(`new Promise((resolve, reject) => {
     const open = indexedDB.open("capy-color-preferences", 2);
@@ -176,5 +177,12 @@ export async function checkStaleStorageStartup({evaluate, reload}) {
   assert.equal(await evaluate('document.querySelector(".canvas-notice-text")?.textContent || ""'), "");
   assert.equal(await evaluate('document.querySelector("#status").textContent'), "");
   assert.equal(await evaluate("layerApp.state().settings.pan_speed"), 2);
+  const released = JSON.parse(await readFile(new URL("../../crates/layer-workspace/tests/compat/1.0.15/browser.json", import.meta.url), "utf8"));
+  await evaluate(snapshot(`database => { Object.assign(database, ${JSON.stringify(released)}); return true; }`));
+  await reload();
+  await wait(ready);
+  assert.equal(await evaluate('layerApp.state().color_library.palettes.some(p => p.name === "Release palette" && p.swatches.some(s => s.name === "Release blue"))'), true);
+  assert.equal(await evaluate('layerApp.state().brush.diameter'), 37);
+  assert.equal(await evaluate('!!layerApp.state().notice'), false);
   console.log(`PASS: startup read stale preferences, replaced ${stale.length} unreadable workspaces and kept a copy, upgraded older color preferences without losing data, and opened Export without a message`);
 }

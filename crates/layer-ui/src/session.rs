@@ -8121,7 +8121,7 @@ mod tests {
         let mut s = session(Platform::Gtk);
         let captured = s.capture_workspace().unwrap();
         let mut invalid = captured.clone();
-        invalid.working.version = 0;
+        invalid.history.current = "missing".into();
         assert!(PreparedWorkspace::new(invalid).is_err());
         let before = s.editing_state();
         let mut invalid = before.clone();
@@ -15293,9 +15293,6 @@ mod tests {
         let valid = serde_json::to_value(&app.state.workspace).unwrap();
         let mut invalid = Vec::new();
         let mut value = valid.clone();
-        value["version"] = 3.into();
-        invalid.push(value);
-        let mut value = valid.clone();
         value["layout"]["next_id"] = 1.into();
         invalid.push(value);
         let mut value = valid.clone();
@@ -18095,7 +18092,7 @@ mod tests {
         assert!(s.state.requests.is_empty(), "restore must not echo a save");
         for invalid in [
             Settings {
-                version: 2,
+                zoom_speed: -1.0,
                 ..old.clone()
             },
             Settings {
@@ -18107,7 +18104,7 @@ mod tests {
             assert!(s.dispatch(restore).is_err());
             assert_eq!(s.state.settings, old);
         }
-        assert!(serde_json::from_str::<Settings>(r#"{"unknown_setting":true}"#).is_err());
+        assert_eq!(serde_json::from_str::<Settings>(r#"{"unknown_setting":true}"#).unwrap(), Settings::default());
         let action: UiAction = serde_json::from_str(
             r#"{"type":"preferences","action":{"type":"edit","id":"theme","value":2}}"#,
         )

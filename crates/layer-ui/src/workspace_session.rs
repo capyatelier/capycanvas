@@ -5,6 +5,21 @@ impl Default for EditingState {
     fn default() -> Self { Self::new_localized(&Localizer::shared(UiLanguage::English)) }
 }
 impl EditingState {
+    pub fn restore(saved: &str, localization: &Localizer) -> Self {
+        let mut value: serde_json::Value = serde_json::from_str(saved).unwrap_or_default();
+        if value["version"].as_u64() == Some(1) {
+            if let Some(sources) = value["region_sources"].as_array_mut().filter(|sources| sources.len() == 2) {
+                sources.push(serde_json::to_value(RegionSource::Auto).unwrap());
+            }
+            if let Some(values) = value["region_values"].as_object_mut()
+                && let Some(smoothing) = values.remove("smoothing").and_then(|v| v.as_f64()) {
+                value["region_smooth_edges"] = (smoothing > 0.).into();
+            }
+        }
+        let mut restored = crate::saved_state::restore_fields(value, || Self::new_localized(localization), |state| state.validate().is_ok());
+        restored.version = 3;
+        restored
+    }
     pub fn new_localized(localization: &Localizer) -> Self {
         let region = region_tools::RegionTools::default();
         let layer = art_layers::LayerInteraction::default();
@@ -34,7 +49,6 @@ impl EditingState {
         }
     }
     pub fn validate(&self) -> Result<(), WorkspaceValidationError> {
-        if self.version != 3 { return Err("Unsupported editing-state version".into()); }
         self.tools.validate()?;
         for (slot, variant) in &self.tool_slots.choices {
             if slot.member(*variant).is_none() { return Err("Invalid remembered tool variant".into()); }
@@ -76,7 +90,6 @@ pub struct PreparedWorkspace {
 impl PreparedWorkspace {
     pub fn new(capture: WorkspaceCapture) -> Result<Self, WorkspaceValidationError> {
         capture.history.validate()?;
-        if capture.working.version != 1 { return Err("Unsupported workspace working-state version".into()); }
         Ok(Self { capture })
     }
 }

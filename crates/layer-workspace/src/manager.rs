@@ -162,8 +162,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub fn editing(&self) -> Option<Box<layer_ui::EditingState>> { self.state.borrow().editing.clone() }
     pub async fn load_editing(&self) -> Result<()> {
         if let StoreResponse::Editing(json) = self.execute(StoreRequest::Editing).await? {
-            let editing = json.and_then(|json| serde_json::from_str::<Box<layer_ui::EditingState>>(&json).ok())
-                .filter(|editing| editing.validate().is_ok());
+            let editing = json.map(|json| Box::new(layer_ui::EditingState::restore(&json, &self.localization())));
             let mut state = self.state.borrow_mut();
             state.saved_editing = editing.clone();
             state.editing = editing;

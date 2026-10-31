@@ -1,0 +1,3961 @@
+{
+  "content": {
+    "definition": {
+      "hide_tab": true,
+      "name": "Release toolbar",
+      "tile_style": "large",
+      "tiles": [
+        {
+          "control": {
+            "command": "search_commands",
+            "kind": "command"
+          },
+          "id": 1,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "pen_pressure",
+            "kind": "command"
+          },
+          "id": 2,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "pen_tilt",
+            "kind": "command"
+          },
+          "id": 3,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "drawing_brush",
+            "kind": "command"
+          },
+          "id": 4,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "sculpt",
+            "kind": "command"
+          },
+          "id": 5,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "sdr_rendition",
+            "kind": "command"
+          },
+          "id": 6,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "preview_sdr",
+            "kind": "command"
+          },
+          "id": 7,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "soft_proof_setup",
+            "kind": "command"
+          },
+          "id": 8,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "soft_proof",
+            "kind": "command"
+          },
+          "id": 9,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "gamut_warning",
+            "kind": "command"
+          },
+          "id": 10,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "histogram",
+            "kind": "command"
+          },
+          "id": 11,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "waveform",
+            "kind": "command"
+          },
+          "id": 12,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "import_image",
+            "kind": "command"
+          },
+          "id": 13,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "paste_image",
+            "kind": "command"
+          },
+          "id": 14,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "document_properties",
+            "kind": "command"
+          },
+          "id": 15,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "assign_profile",
+            "kind": "command"
+          },
+          "id": 16,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "convert_color_space",
+            "kind": "command"
+          },
+          "id": 17,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "change_bit_depth",
+            "kind": "command"
+          },
+          "id": 18,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "repair_source_profile",
+            "kind": "command"
+          },
+          "id": 19,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "rasterize_source",
+            "kind": "command"
+          },
+          "id": 20,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "rasterize_layer",
+            "kind": "command"
+          },
+          "id": 21,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "convert_to_object",
+            "kind": "command"
+          },
+          "id": 22,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "new_document",
+            "kind": "command"
+          },
+          "id": 23,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "open_document",
+            "kind": "command"
+          },
+          "id": 24,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "save_document",
+            "kind": "command"
+          },
+          "id": 25,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "save_document_as",
+            "kind": "command"
+          },
+          "id": 26,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "export_document",
+            "kind": "command"
+          },
+          "id": 27,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "export_again",
+            "kind": "command"
+          },
+          "id": 28,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "close_document",
+            "kind": "command"
+          },
+          "id": 29,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "pen",
+            "kind": "command"
+          },
+          "id": 30,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "pencil",
+            "kind": "command"
+          },
+          "id": 31,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "brush",
+            "kind": "command"
+          },
+          "id": 32,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "eraser",
+            "kind": "command"
+          },
+          "id": 33,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "airbrush",
+            "kind": "command"
+          },
+          "id": 34,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "blend",
+            "kind": "command"
+          },
+          "id": 35,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "liquify",
+            "kind": "command"
+          },
+          "id": 36,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "liquify_reset",
+            "kind": "command"
+          },
+          "id": 37,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "liquify_adjust",
+            "kind": "command"
+          },
+          "id": 38,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "lasso",
+            "kind": "command"
+          },
+          "id": 39,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "select",
+            "kind": "command"
+          },
+          "id": 40,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "rectangle_select",
+            "kind": "command"
+          },
+          "id": 41,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "ellipse_select",
+            "kind": "command"
+          },
+          "id": 42,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "polygon_select",
+            "kind": "command"
+          },
+          "id": 43,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "color_select",
+            "kind": "command"
+          },
+          "id": 44,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "selection_brush",
+            "kind": "command"
+          },
+          "id": 45,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "tonal_select",
+            "kind": "command"
+          },
+          "id": 46,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "quick_mask",
+            "kind": "command"
+          },
+          "id": 47,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "return_to_artwork",
+            "kind": "command"
+          },
+          "id": 48,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "new_selection_layer",
+            "kind": "command"
+          },
+          "id": 49,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "save_selection_layer",
+            "kind": "command"
+          },
+          "id": 50,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "reselect",
+            "kind": "command"
+          },
+          "id": 51,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "selection_outline",
+            "kind": "command"
+          },
+          "id": 52,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "mask_overlay",
+            "kind": "command"
+          },
+          "id": 53,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "mask_overlay_protected",
+            "kind": "command"
+          },
+          "id": 54,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "reset_mask_colors",
+            "kind": "command"
+          },
+          "id": 55,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "swap_mask_colors",
+            "kind": "command"
+          },
+          "id": 56,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "fill_selection_mask",
+            "kind": "command"
+          },
+          "id": 57,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "clear_selection_mask",
+            "kind": "command"
+          },
+          "id": 58,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "selection_brush_pressure",
+            "kind": "command"
+          },
+          "id": 59,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "selection_new",
+            "kind": "command"
+          },
+          "id": 60,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "selection_add",
+            "kind": "command"
+          },
+          "id": 61,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "selection_subtract",
+            "kind": "command"
+          },
+          "id": 62,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "selection_intersect",
+            "kind": "command"
+          },
+          "id": 63,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "selection_antialias",
+            "kind": "command"
+          },
+          "id": 64,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "selection_constrain_angles",
+            "kind": "command"
+          },
+          "id": 65,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "selection_fixed_ratio",
+            "kind": "command"
+          },
+          "id": 66,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "selection_fixed_size",
+            "kind": "command"
+          },
+          "id": 67,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "selection_from_center",
+            "kind": "command"
+          },
+          "id": 68,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "complete_selection",
+            "kind": "command"
+          },
+          "id": 69,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "cancel_selection",
+            "kind": "command"
+          },
+          "id": 70,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "selection_visible",
+            "kind": "command"
+          },
+          "id": 71,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "selection_editing",
+            "kind": "command"
+          },
+          "id": 72,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "selection_reference",
+            "kind": "command"
+          },
+          "id": 73,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "move",
+            "kind": "command"
+          },
+          "id": 74,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "scale_rotate",
+            "kind": "command"
+          },
+          "id": 75,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "transform_again",
+            "kind": "command"
+          },
+          "id": 76,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "transform_snapping",
+            "kind": "command"
+          },
+          "id": 77,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "apply_transform",
+            "kind": "command"
+          },
+          "id": 78,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "cancel_transform",
+            "kind": "command"
+          },
+          "id": 79,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "placement_original_size",
+            "kind": "command"
+          },
+          "id": 80,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "hand",
+            "kind": "command"
+          },
+          "id": 81,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "zoom",
+            "kind": "command"
+          },
+          "id": 82,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "center_zoom_clicks",
+            "kind": "command"
+          },
+          "id": 83,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "rotate_view",
+            "kind": "command"
+          },
+          "id": 84,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "eyedropper",
+            "kind": "command"
+          },
+          "id": 85,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "gradient",
+            "kind": "command"
+          },
+          "id": 86,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "figure",
+            "kind": "command"
+          },
+          "id": 87,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "ruler",
+            "kind": "command"
+          },
+          "id": 88,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "show_rulers",
+            "kind": "command"
+          },
+          "id": 89,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "snap_rulers",
+            "kind": "command"
+          },
+          "id": 90,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "delete_ruler",
+            "kind": "command"
+          },
+          "id": 91,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "auto_select",
+            "kind": "command"
+          },
+          "id": 92,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "fill",
+            "kind": "command"
+          },
+          "id": 93,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "undo",
+            "kind": "command"
+          },
+          "id": 94,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "redo",
+            "kind": "command"
+          },
+          "id": 95,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "clear_layer",
+            "kind": "command"
+          },
+          "id": 96,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "fill_selection",
+            "kind": "command"
+          },
+          "id": 97,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "select_all",
+            "kind": "command"
+          },
+          "id": 98,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "deselect",
+            "kind": "command"
+          },
+          "id": 99,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "invert_selection",
+            "kind": "command"
+          },
+          "id": 100,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "undo_workspace",
+            "kind": "command"
+          },
+          "id": 101,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "redo_workspace",
+            "kind": "command"
+          },
+          "id": 102,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "new_toolbar",
+            "kind": "command"
+          },
+          "id": 103,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "manage_toolbars",
+            "kind": "command"
+          },
+          "id": 104,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "customize_workspace_ui",
+            "kind": "command"
+          },
+          "id": 105,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "fit_canvas",
+            "kind": "command"
+          },
+          "id": 106,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "fit_width",
+            "kind": "command"
+          },
+          "id": 107,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "fill_view",
+            "kind": "command"
+          },
+          "id": 108,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "zoom_selection",
+            "kind": "command"
+          },
+          "id": 109,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "reset_rotation",
+            "kind": "command"
+          },
+          "id": 110,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "reset_view",
+            "kind": "command"
+          },
+          "id": 111,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "previous_view",
+            "kind": "command"
+          },
+          "id": 112,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "save_view",
+            "kind": "command"
+          },
+          "id": 113,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "restore_view",
+            "kind": "command"
+          },
+          "id": 114,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "next_drawing",
+            "kind": "command"
+          },
+          "id": 115,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "previous_drawing",
+            "kind": "command"
+          },
+          "id": 116,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "zoom_in",
+            "kind": "command"
+          },
+          "id": 117,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "zoom_out",
+            "kind": "command"
+          },
+          "id": 118,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "rotate_left",
+            "kind": "command"
+          },
+          "id": 119,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "rotate_right",
+            "kind": "command"
+          },
+          "id": 120,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "flip_horizontal",
+            "kind": "command"
+          },
+          "id": 121,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "flip_vertical",
+            "kind": "command"
+          },
+          "id": 122,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "toggle_theme",
+            "kind": "command"
+          },
+          "id": 123,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "settings",
+            "kind": "command"
+          },
+          "id": 124,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "add_layer",
+            "kind": "command"
+          },
+          "id": 125,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "new_vector_layer",
+            "kind": "command"
+          },
+          "id": 126,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "delete_layer",
+            "kind": "command"
+          },
+          "id": 127,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "raise_layer",
+            "kind": "command"
+          },
+          "id": 128,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "edit_points",
+            "kind": "command"
+          },
+          "id": 129,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "join_paths",
+            "kind": "command"
+          },
+          "id": 130,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "close_path",
+            "kind": "command"
+          },
+          "id": 131,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "split_path",
+            "kind": "command"
+          },
+          "id": 132,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "reverse_path",
+            "kind": "command"
+          },
+          "id": 133,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "make_compound_path",
+            "kind": "command"
+          },
+          "id": 134,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "release_compound_path",
+            "kind": "command"
+          },
+          "id": 135,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "finish_path",
+            "kind": "command"
+          },
+          "id": 136,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "cancel_path",
+            "kind": "command"
+          },
+          "id": 137,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "bring_to_front",
+            "kind": "command"
+          },
+          "id": 138,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "bring_forward",
+            "kind": "command"
+          },
+          "id": 139,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "send_backward",
+            "kind": "command"
+          },
+          "id": 140,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "send_to_back",
+            "kind": "command"
+          },
+          "id": 141,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "lower_layer",
+            "kind": "command"
+          },
+          "id": 142,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "reset_layout",
+            "kind": "command"
+          },
+          "id": 143,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "put_back_bubbles",
+            "kind": "command"
+          },
+          "id": 144,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "zen_mode",
+            "kind": "command"
+          },
+          "id": 145,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "fullscreen",
+            "kind": "command"
+          },
+          "id": 146,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "new_window",
+            "kind": "command"
+          },
+          "id": 147,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "keyboard_shortcuts",
+            "kind": "command"
+          },
+          "id": 148,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "about",
+            "kind": "command"
+          },
+          "id": 149,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "website",
+            "kind": "command"
+          },
+          "id": 150,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "source_code",
+            "kind": "command"
+          },
+          "id": 151,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "drawings",
+            "kind": "command"
+          },
+          "id": 152,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "show_canvas_action_bar",
+            "kind": "command"
+          },
+          "id": 153,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "transform_flip_horizontal",
+            "kind": "command"
+          },
+          "id": 154,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "transform_flip_vertical",
+            "kind": "command"
+          },
+          "id": 155,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "transform_rotate_left",
+            "kind": "command"
+          },
+          "id": 156,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "transform_rotate_right",
+            "kind": "command"
+          },
+          "id": 157,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "reset_transform",
+            "kind": "command"
+          },
+          "id": 158,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "remove_selection_point",
+            "kind": "command"
+          },
+          "id": 159,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "mask_selection",
+            "kind": "command"
+          },
+          "id": 160,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "transform_free",
+            "kind": "command"
+          },
+          "id": 161,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "transform_uniform",
+            "kind": "command"
+          },
+          "id": 162,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "transform_distort",
+            "kind": "command"
+          },
+          "id": 163,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "transform_perspective",
+            "kind": "command"
+          },
+          "id": 164,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "transform_nearest",
+            "kind": "command"
+          },
+          "id": 165,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "transform_bilinear",
+            "kind": "command"
+          },
+          "id": 166,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "transform_bicubic",
+            "kind": "command"
+          },
+          "id": 167,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "transform_warp",
+            "kind": "command"
+          },
+          "id": 168,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "warp_grid_three",
+            "kind": "command"
+          },
+          "id": 169,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "warp_grid_four",
+            "kind": "command"
+          },
+          "id": 170,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "warp_grid_five",
+            "kind": "command"
+          },
+          "id": 171,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "warp_split_vertical",
+            "kind": "command"
+          },
+          "id": 172,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "warp_split_horizontal",
+            "kind": "command"
+          },
+          "id": 173,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "warp_split_cross",
+            "kind": "command"
+          },
+          "id": 174,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "warp_select_points",
+            "kind": "command"
+          },
+          "id": 175,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "warp_reset_grid",
+            "kind": "command"
+          },
+          "id": 176,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "use_reference_below",
+            "kind": "command"
+          },
+          "id": 177,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "clear_selected",
+            "kind": "command"
+          },
+          "id": 178,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "clear_outside",
+            "kind": "command"
+          },
+          "id": 179,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "copy_selection_to_layer",
+            "kind": "command"
+          },
+          "id": 180,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "cut_selection_to_layer",
+            "kind": "command"
+          },
+          "id": 181,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "actual_pixels",
+            "kind": "command"
+          },
+          "id": 182,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "discard_paint_edits",
+            "kind": "command"
+          },
+          "id": 183,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "load_selection_layer",
+            "kind": "command"
+          },
+          "id": 184,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "invert_selection_layer",
+            "kind": "command"
+          },
+          "id": 185,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "invert_layer_mask",
+            "kind": "command"
+          },
+          "id": 186,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "layer_mask_enabled",
+            "kind": "command"
+          },
+          "id": 187,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "apply_layer_mask",
+            "kind": "command"
+          },
+          "id": 188,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "edit_layer_mask",
+            "kind": "command"
+          },
+          "id": 189,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "edit_layer_content",
+            "kind": "command"
+          },
+          "id": 190,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "lasso_fill",
+            "kind": "command"
+          },
+          "id": 191,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "enclose_fill",
+            "kind": "command"
+          },
+          "id": 192,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "canvas_size",
+            "kind": "command"
+          },
+          "id": 193,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "crop_canvas_to_selection",
+            "kind": "command"
+          },
+          "id": 194,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "grow_selection",
+            "kind": "command"
+          },
+          "id": 195,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "shrink_selection",
+            "kind": "command"
+          },
+          "id": 196,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "feather_selection",
+            "kind": "command"
+          },
+          "id": 197,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "border_selection",
+            "kind": "command"
+          },
+          "id": 198,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "smooth_selection",
+            "kind": "command"
+          },
+          "id": 199,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "transform_selection_outline",
+            "kind": "command"
+          },
+          "id": 200,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "crop",
+            "kind": "command"
+          },
+          "id": 201,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "crop_ratio_free",
+            "kind": "command"
+          },
+          "id": 202,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "crop_ratio_original",
+            "kind": "command"
+          },
+          "id": 203,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "crop_ratio_square",
+            "kind": "command"
+          },
+          "id": 204,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "crop_ratio_four_five",
+            "kind": "command"
+          },
+          "id": 205,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "crop_ratio_two_three",
+            "kind": "command"
+          },
+          "id": 206,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "crop_ratio_five_seven",
+            "kind": "command"
+          },
+          "id": 207,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "crop_ratio_sixteen_nine",
+            "kind": "command"
+          },
+          "id": 208,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "crop_swap_orientation",
+            "kind": "command"
+          },
+          "id": 209,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "crop_overlay_thirds",
+            "kind": "command"
+          },
+          "id": 210,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "crop_overlay_grid",
+            "kind": "command"
+          },
+          "id": 211,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "crop_overlay_diagonal",
+            "kind": "command"
+          },
+          "id": 212,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "crop_overlay_golden",
+            "kind": "command"
+          },
+          "id": 213,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "crop_cycle_overlay",
+            "kind": "command"
+          },
+          "id": 214,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "crop_straighten",
+            "kind": "command"
+          },
+          "id": 215,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "crop_delete_cropped_pixels",
+            "kind": "command"
+          },
+          "id": 216,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "straighten_to_guide",
+            "kind": "command"
+          },
+          "id": 217,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "image_size",
+            "kind": "command"
+          },
+          "id": 218,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "rotate_image_left",
+            "kind": "command"
+          },
+          "id": 219,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "rotate_image_right",
+            "kind": "command"
+          },
+          "id": 220,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "rotate_image180",
+            "kind": "command"
+          },
+          "id": 221,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "flip_image_horizontal",
+            "kind": "command"
+          },
+          "id": 222,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "flip_image_vertical",
+            "kind": "command"
+          },
+          "id": 223,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "trim",
+            "kind": "command"
+          },
+          "id": 224,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "reveal_all",
+            "kind": "command"
+          },
+          "id": 225,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "crop_fit_content",
+            "kind": "command"
+          },
+          "id": 226,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "transform_lanczos",
+            "kind": "command"
+          },
+          "id": 227,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "move_leave_copy",
+            "kind": "command"
+          },
+          "id": 228,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "copy",
+            "kind": "command"
+          },
+          "id": 229,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "cut",
+            "kind": "command"
+          },
+          "id": 230,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "copy_merged",
+            "kind": "command"
+          },
+          "id": 231,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "copy_pixels",
+            "kind": "command"
+          },
+          "id": 232,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "paste_as_new_image",
+            "kind": "command"
+          },
+          "id": 233,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "paste_in_place",
+            "kind": "command"
+          },
+          "id": 234,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "paste_at_view",
+            "kind": "command"
+          },
+          "id": 235,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "paste_at_cursor",
+            "kind": "command"
+          },
+          "id": 236,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "paste_into",
+            "kind": "command"
+          },
+          "id": 237,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "merge_down",
+            "kind": "command"
+          },
+          "id": 238,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "merge_visible",
+            "kind": "command"
+          },
+          "id": 239,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "flatten_image",
+            "kind": "command"
+          },
+          "id": 240,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "stamp_visible",
+            "kind": "command"
+          },
+          "id": 241,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "merge_group",
+            "kind": "command"
+          },
+          "id": 242,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "clone_source_arm",
+            "kind": "command"
+          },
+          "id": 243,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "clone",
+            "kind": "command"
+          },
+          "id": 244,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "clone_aligned",
+            "kind": "command"
+          },
+          "id": 245,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "clone_flip_horizontal",
+            "kind": "command"
+          },
+          "id": 246,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "clone_flip_vertical",
+            "kind": "command"
+          },
+          "id": 247,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "clone_reset_offset",
+            "kind": "command"
+          },
+          "id": 248,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "color_mix_oklab",
+            "kind": "command"
+          },
+          "id": 249,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "color_mix_linear",
+            "kind": "command"
+          },
+          "id": 250,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "color_mix_classic",
+            "kind": "command"
+          },
+          "id": 251,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "erase_touched_part",
+            "kind": "command"
+          },
+          "id": 252,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "erase_whole_paths",
+            "kind": "command"
+          },
+          "id": 253,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "erase_to_intersection",
+            "kind": "command"
+          },
+          "id": 254,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "scale_outline_widths",
+            "kind": "command"
+          },
+          "id": 255,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "heal",
+            "kind": "command"
+          },
+          "id": 256,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "spot_heal",
+            "kind": "command"
+          },
+          "id": 257,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "blend_perceptual",
+            "kind": "command"
+          },
+          "id": 258,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "blend_linear",
+            "kind": "command"
+          },
+          "id": 259,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "new_dodge_burn_layer",
+            "kind": "command"
+          },
+          "id": 260,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "command": "frequency_separation",
+            "kind": "command"
+          },
+          "id": 261,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "tool_slot",
+            "slot": "drawing"
+          },
+          "id": 262,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "tool_slot",
+            "slot": "marquee"
+          },
+          "id": 263,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "tool_slot",
+            "slot": "lasso"
+          },
+          "id": 264,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "tool_slot",
+            "slot": "automatic_selection"
+          },
+          "id": 265,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "tool_slot",
+            "slot": "manual_selection"
+          },
+          "id": 266,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "tool_slot",
+            "slot": "healing"
+          },
+          "id": 267,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "tool_slot",
+            "slot": "photo_fill"
+          },
+          "id": 268,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "tool_slot",
+            "slot": "fill"
+          },
+          "id": 269,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "tool_slot",
+            "slot": "fill"
+          },
+          "id": 270,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "tool_slot",
+            "slot": "blend"
+          },
+          "id": 271,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "tool_slot",
+            "slot": "retouch"
+          },
+          "id": 272,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "tool_slot",
+            "slot": "operation"
+          },
+          "id": 273,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "tool_slot",
+            "slot": "figure"
+          },
+          "id": 274,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "tool_slot",
+            "slot": "ruler"
+          },
+          "id": 275,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "tool_slot",
+            "slot": "gradient"
+          },
+          "id": 276,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "panel",
+            "panel": "brushes"
+          },
+          "id": 277,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "panel",
+            "panel": "tool_settings"
+          },
+          "id": 278,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "panel",
+            "panel": "color"
+          },
+          "id": 279,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "panel",
+            "panel": "palettes"
+          },
+          "id": 280,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "panel",
+            "panel": "sizes"
+          },
+          "id": 281,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "panel",
+            "panel": "layers"
+          },
+          "id": 282,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "panel",
+            "panel": "adjustments"
+          },
+          "id": 283,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "panel",
+            "panel": "properties"
+          },
+          "id": 284,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "panel",
+            "panel": "stats"
+          },
+          "id": 285,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "panel",
+            "panel": "navigator"
+          },
+          "id": 286,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "panel",
+            "panel": "proof"
+          },
+          "id": 287,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "panel",
+            "panel": "histogram"
+          },
+          "id": 288,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "panel",
+            "panel": "waveform"
+          },
+          "id": 289,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "panel",
+            "panel": "brush_sets"
+          },
+          "id": 290,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "panel",
+            "panel": "tools"
+          },
+          "id": 291,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "panel",
+            "panel": "sculpt_sets"
+          },
+          "id": 292,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "kind": "panel",
+            "panel": "filter_types"
+          },
+          "id": 293,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 1,
+            "kind": "brush"
+          },
+          "id": 294,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 44,
+            "kind": "brush"
+          },
+          "id": 295,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 28,
+            "kind": "brush"
+          },
+          "id": 296,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 33,
+            "kind": "brush"
+          },
+          "id": 297,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 29,
+            "kind": "brush"
+          },
+          "id": 298,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 30,
+            "kind": "brush"
+          },
+          "id": 299,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 31,
+            "kind": "brush"
+          },
+          "id": 300,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 32,
+            "kind": "brush"
+          },
+          "id": 301,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 34,
+            "kind": "brush"
+          },
+          "id": 302,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 7,
+            "kind": "brush"
+          },
+          "id": 303,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 2,
+            "kind": "brush"
+          },
+          "id": 304,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 25,
+            "kind": "brush"
+          },
+          "id": 305,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 26,
+            "kind": "brush"
+          },
+          "id": 306,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 27,
+            "kind": "brush"
+          },
+          "id": 307,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 43,
+            "kind": "brush"
+          },
+          "id": 308,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 6,
+            "kind": "brush"
+          },
+          "id": 309,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 17,
+            "kind": "brush"
+          },
+          "id": 310,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 4,
+            "kind": "brush"
+          },
+          "id": 311,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 35,
+            "kind": "brush"
+          },
+          "id": 312,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 15,
+            "kind": "brush"
+          },
+          "id": 313,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 16,
+            "kind": "brush"
+          },
+          "id": 314,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 18,
+            "kind": "brush"
+          },
+          "id": 315,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 19,
+            "kind": "brush"
+          },
+          "id": 316,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 14,
+            "kind": "brush"
+          },
+          "id": 317,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 20,
+            "kind": "brush"
+          },
+          "id": 318,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 21,
+            "kind": "brush"
+          },
+          "id": 319,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 22,
+            "kind": "brush"
+          },
+          "id": 320,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 23,
+            "kind": "brush"
+          },
+          "id": 321,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 11,
+            "kind": "brush"
+          },
+          "id": 322,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 59,
+            "kind": "brush"
+          },
+          "id": 323,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 3,
+            "kind": "brush"
+          },
+          "id": 324,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 5,
+            "kind": "brush"
+          },
+          "id": 325,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 8,
+            "kind": "brush"
+          },
+          "id": 326,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 9,
+            "kind": "brush"
+          },
+          "id": 327,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 10,
+            "kind": "brush"
+          },
+          "id": 328,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 45,
+            "kind": "brush"
+          },
+          "id": 329,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 46,
+            "kind": "brush"
+          },
+          "id": 330,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 65,
+            "kind": "brush"
+          },
+          "id": 331,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 66,
+            "kind": "brush"
+          },
+          "id": 332,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 48,
+            "kind": "brush"
+          },
+          "id": 333,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 61,
+            "kind": "brush"
+          },
+          "id": 334,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 62,
+            "kind": "brush"
+          },
+          "id": 335,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 24,
+            "kind": "brush"
+          },
+          "id": 336,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 57,
+            "kind": "brush"
+          },
+          "id": 337,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 58,
+            "kind": "brush"
+          },
+          "id": 338,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 56,
+            "kind": "brush"
+          },
+          "id": 339,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 47,
+            "kind": "brush"
+          },
+          "id": 340,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 50,
+            "kind": "brush"
+          },
+          "id": 341,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 53,
+            "kind": "brush"
+          },
+          "id": 342,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 49,
+            "kind": "brush"
+          },
+          "id": 343,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 60,
+            "kind": "brush"
+          },
+          "id": 344,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 52,
+            "kind": "brush"
+          },
+          "id": 345,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 51,
+            "kind": "brush"
+          },
+          "id": 346,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 55,
+            "kind": "brush"
+          },
+          "id": 347,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 12,
+            "kind": "brush"
+          },
+          "id": 348,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 13,
+            "kind": "brush"
+          },
+          "id": 349,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 36,
+            "kind": "brush"
+          },
+          "id": 350,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 37,
+            "kind": "brush"
+          },
+          "id": 351,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 38,
+            "kind": "brush"
+          },
+          "id": 352,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 39,
+            "kind": "brush"
+          },
+          "id": 353,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 63,
+            "kind": "brush"
+          },
+          "id": 354,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 64,
+            "kind": "brush"
+          },
+          "id": 355,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 40,
+            "kind": "brush"
+          },
+          "id": 356,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 41,
+            "kind": "brush"
+          },
+          "id": 357,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        },
+        {
+          "control": {
+            "id": 42,
+            "kind": "brush"
+          },
+          "id": 358,
+          "slider_style": {
+            "expand": false,
+            "show_value": false
+          }
+        }
+      ]
+    },
+    "type": "toolbar"
+  },
+  "id": "",
+  "metadata": {
+    "builtin": false,
+    "created_at_ms": "1000",
+    "description": "",
+    "kind": "toolbar",
+    "last_used_ms": "0",
+    "modified_at_ms": "1000",
+    "name": "Release toolbar"
+  },
+  "working": null
+}

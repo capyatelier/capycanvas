@@ -32,13 +32,13 @@ impl PackageKind {
 /// Portable JSON plus hash-verified, package-local immutable components. No
 /// ownership, bindings, write generations, pending operations or artwork.
 #[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Package {
     format: String,
     version: u32,
     kind: PackageKind,
     metadata: Metadata,
     content: serde_json::Value,
+    #[serde(default, deserialize_with = "layer_ui::WorkspaceWorkingState::deserialize_option")]
     working: Option<layer_ui::WorkspaceWorkingState>,
     components: BTreeMap<String, String>,
 }
@@ -81,7 +81,7 @@ pub fn import_package(bytes: &[u8], expected: PackageKind, now: u64) -> Result<E
     }
     let header: serde_json::Value = serde_json::from_slice(bytes)?;
     if header.get("format").and_then(|v| v.as_str()) != Some("capycanvas-workspace")
-        || header.get("version").and_then(|v| v.as_u64()) != Some(3)
+        || header.get("version").and_then(|v| v.as_u64()).is_none()
     {
         return Err(StoreError::new(
             ErrorKind::UnsupportedSchema,
