@@ -3,6 +3,42 @@ $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyWaitSeconds=20;$CapyPopups=$true
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public sealed class CapyShortcutLayout : IDisposable {
+ [DllImport("user32.dll")] static extern IntPtr GetKeyboardLayout(uint thread);
+ [DllImport("user32.dll")] static extern int GetKeyboardLayoutList(int count,[Out] IntPtr[] layouts);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr LoadKeyboardLayout(string name,uint flags);
+ [DllImport("user32.dll")] static extern bool UnloadKeyboardLayout(IntPtr layout);
+ [DllImport("user32.dll")] static extern bool IsWindow(IntPtr window);
+ [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window,uint message,IntPtr wparam,IntPtr lparam);
+ [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window,out uint process);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int ToUnicodeEx(uint key,uint scan,byte[] state,StringBuilder text,int count,uint flags,IntPtr layout);
+ readonly IntPtr window,previous,layout; readonly uint thread; readonly bool loaded;
+ public CapyShortcutLayout(IntPtr window) {
+  this.window=window;uint process;thread=GetWindowThreadProcessId(window,out process);previous=GetKeyboardLayout(thread);
+  var existing=new IntPtr[GetKeyboardLayoutList(0,null)];GetKeyboardLayoutList(existing.Length,existing);
+  layout=LoadKeyboardLayout("00000419",0);loaded=Array.IndexOf(existing,layout)<0;
+  try {
+   if(layout==IntPtr.Zero)throw new InvalidOperationException("Russian keyboard layout unavailable");
+   SendMessage(window,0x50,IntPtr.Zero,layout);
+   var text=new StringBuilder(8);
+   if(GetKeyboardLayout(thread)!=layout||ToUnicodeEx(0x5A,0x2C,new byte[256],text,8,4,layout)!=1||text[0]!=0x44F)
+    throw new InvalidOperationException("Owned app did not activate Russian Z");
+  } catch { Dispose();throw; }
+ }
+ public void Dispose() {
+  try {
+   if(IsWindow(window)){
+    SendMessage(window,0x50,IntPtr.Zero,previous);
+    if(GetKeyboardLayout(thread)!=previous)throw new InvalidOperationException("Owned app keyboard layout was not restored");
+   }
+  } finally { if(loaded&&layout!=IntPtr.Zero&&!UnloadKeyboardLayout(layout))throw new InvalidOperationException("Fixture Russian keyboard layout was not unloaded"); }
+ }
+}
+'@
 Add-Type -AssemblyName System.Drawing
 $inkHelpers=[System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'capture-number-controls.ps1'),[ref]$null,[ref]$null)
 foreach($helper in @('Measure-RenderedInk','Assert-ControlCaptionInk','Save-ControlCaptionInk')){
@@ -65,6 +101,21 @@ try {
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  [CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null
  (Control 'drawing-canvas').SetFocus()
+ $layers=(Model).state.layers.Count
+ for($i=1;$i -le 2;$i++){
+  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11,0x10),[uint16]0x4E)
+  Wait-Until {(Model).state.layers.Count -eq $layers+$i} 'Seed layer shortcut did not finish'
+ }
+ $russian=[CapyShortcutLayout]::new($drawingWindow)
+ [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x5A)
+ Wait-Until {(Model).state.layers.Count -eq $layers+1} 'Russian Ctrl+Z must undo exactly one layer'
+ [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11,0x10),[uint16]0x5A)
+ Wait-Until {(Model).state.layers.Count -eq $layers+2} 'Russian Ctrl+Shift+Z must redo exactly one layer'
+ foreach($tool in @(@{key=0x45;id='eraser'},@{key=0x42;id='brush'})){
+  Press $tool.key
+  Wait-Until {@((Model).state.commands|Where-Object id -eq $tool.id)[0].selected} 'Russian tool key did not select the tool'
+ }
+ $checks.russian_canvas_shortcuts='Undo/Redo once and B selects Paint'
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0xBC)
  Wait-Until {(Prefs) -and (Shown 'CloseButton')} 'Ctrl+, did not open Preferences'
  $originalTransparency=(Model).state.settings.transparency
@@ -243,6 +294,7 @@ try {
  Wait-Until {!(Prefs)} 'Escape on the root page did not close Preferences'
  $checks.escape_closes_preferences='passed'
 
+ $russian.Dispose();$russian=$null
  [CapyRowPointer]::Dispose()
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved -StateDirectory $run
  if((Get-Item (Join-Path $run 'stderr.log')).Length){throw 'Native stderr requires review'}
@@ -252,6 +304,7 @@ try {
  if($review -and !$review.HasExited){try{Capture 'failure' -WithModel}catch{}}
  [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 } finally {
+ if($russian){$russian.Dispose()}
  [CapyRowPointer]::Dispose()
  if($review -and !$review.HasExited){Stop-Process -Id $review.Id -Force}
  Exit-CapyEnvironment

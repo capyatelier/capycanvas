@@ -950,12 +950,13 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
     auto focused=FocusManager::GetFocusedElement(root.XamlRoot());
 
     std::wstring name=CapyUi::KeyName(key,e.KeyStatus().ScanCode);
+    auto latin=CapyUi::LatinKey(key,(GetKeyState(VK_SHIFT)&0x8000)!=0,name);
     if(CapyUi::DeviceKey(key)&&!heldKeys.contains(uint32_t(key))&&!(pressed&&ClaimsDeviceKey(name)))return;
     // Release the same key identity even when Shift/layout changes while held.
     auto held=heldKeys.find(uint32_t(key));
-    if(held!=heldKeys.end())name=held->second;
+    if(held!=heldKeys.end()){name=held->second.first;latin=held->second.second;}
     if(name.empty())return;
-    if(pressed)heldKeys.try_emplace(uint32_t(key),name);
+    if(pressed)heldKeys.try_emplace(uint32_t(key),std::pair{name,latin});
     else heldKeys.erase(uint32_t(key));
     bool canvas=focused&&focused==canvasFocus;
     std::optional<uint32_t> divider;
@@ -993,6 +994,7 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
     JsonObject input;
     input.Insert(L"type",JsonValue::CreateStringValue(L"key"));
     input.Insert(L"key",JsonValue::CreateStringValue(name));
+    if(!latin.empty())input.Insert(L"latin",JsonValue::CreateStringValue(latin));
     input.Insert(L"pressed",JsonValue::CreateBooleanValue(pressed));
     input.Insert(L"editing",JsonValue::CreateBooleanValue(editing));
     input.Insert(L"modifiers",modifiers);

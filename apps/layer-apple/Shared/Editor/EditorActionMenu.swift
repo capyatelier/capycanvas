@@ -139,10 +139,10 @@ struct EditorActionMenu: View {
             if !item.sections.isEmpty { Image(systemName: "chevron.right").font(.caption) }
         }.padding(.horizontal, 10).frame(minHeight: 36).contentShape(Rectangle())
     }
-    private func key(_ key: String, command: Bool, shift: Bool, alt: Bool) {
+    private func key(_ key: String, latin: String?, command: Bool, shift: Bool, alt: Bool) {
         if let item = model.actions.first(where: { item in
             item.enabled && item.bindings.contains { binding in
-                binding["key"].string == key.lowercased() && (binding["command"].bool || binding["control"].bool) == command
+                NativeTextContext.shortcutKeyIs(key, latin: latin, binding["key"].string) && (binding["command"].bool || binding["control"].bool) == command
                     && binding["shift"].bool == shift && binding["alt"].bool == alt
             }
         }) { if !item.keepOpen { dismiss() }; item.action?(); return }

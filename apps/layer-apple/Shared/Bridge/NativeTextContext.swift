@@ -44,6 +44,13 @@ extension KeyPress {
     }
 }
 @MainActor enum NativeTextContext {
+    nonisolated static func shortcutKeyIs(_ key: String, latin: String?, _ expected: String) -> Bool {
+        key.withCString { key in
+            (latin ?? "").withCString { latin in
+                expected.withCString { capy_apple_shortcut_key_is(key, latin, $0) }
+            }
+        }
+    }
     static func numericLabels(_ label: String, language: String) -> JSON {
         do {
             let text = try JSON(["language": language, "request": ["label": label]]).encoded()

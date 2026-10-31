@@ -294,6 +294,16 @@ pub unsafe extern "C" fn capy_apple_control_takes_key(key: *const c_char, comman
     let key = unsafe { std::ffi::CStr::from_ptr(key) }.to_str().unwrap_or("");
     layer_ui::control_takes_key(key, layer_ui::Modifiers { command, alt, shift: false }, keyboard_focus)
 }
+/// # Safety
+/// Strings are readable NUL-terminated UTF-8 for this call; `latin` may be null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_shortcut_key_is(key: *const c_char, latin: *const c_char, expected: *const c_char) -> bool {
+    let key = unsafe { std::ffi::CStr::from_ptr(key) }.to_str().unwrap_or("");
+    let latin = (!latin.is_null()).then(|| unsafe { std::ffi::CStr::from_ptr(latin) }.to_str().unwrap_or(""))
+        .filter(|latin| !latin.is_empty());
+    let expected = unsafe { std::ffi::CStr::from_ptr(expected) }.to_str().unwrap_or("");
+    layer_ui::KeyChord::new(layer_ui::shortcut_key(key, latin), layer_ui::Modifiers::default()).key.eq_ignore_ascii_case(expected)
+}
 /// Shared tagged color forms, display previews and sampled gradient ramps.
 /// # Safety
 /// `json` is a NUL-terminated UTF-8 color request, valid for this call.

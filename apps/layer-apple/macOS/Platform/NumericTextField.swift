@@ -88,7 +88,7 @@ struct NumericTextField: NSViewRepresentable {
         override func performKeyEquivalent(with event: NSEvent) -> Bool {
             let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
             guard let editor = currentEditor() as? NSTextView, !editor.hasMarkedText(),
-                event.charactersIgnoringModifiers?.lowercased() == "z",
+                NativeTextContext.shortcutKeyIs(AppleKeyName.name(event), latin: AppleKeyName.latin(event), "z"),
                 flags == .command || flags == [.command, .shift] else {
                 return super.performKeyEquivalent(with: event)
             }

@@ -1,8 +1,27 @@
 #pragma once
-#include "pch.h"
+#include <windows.h>
+#include <winrt/Windows.System.h>
 #include <string>
 
 namespace CapyUi {
+inline std::wstring LatinKey(winrt::Windows::System::VirtualKey key,bool shift,std::wstring const& name){
+    auto code=uint32_t(key);wchar_t latin=0;
+    if(code>='A'&&code<='Z')latin=wchar_t(code+(shift?0:'a'-'A'));
+    else if(code>='0'&&code<='9')latin=shift?L")!@#$%^&*("[code-'0']:wchar_t(code);
+    else{
+        wchar_t const* pair=nullptr;
+        switch(code){
+        case VK_OEM_1:pair=L";:";break;case VK_OEM_PLUS:pair=L"=+";break;
+        case VK_OEM_COMMA:pair=L",<";break;case VK_OEM_MINUS:pair=L"-_";break;
+        case VK_OEM_PERIOD:pair=L".>";break;case VK_OEM_2:pair=L"/?";break;
+        case VK_OEM_3:pair=L"`~";break;case VK_OEM_4:pair=L"[{";break;
+        case VK_OEM_5:case VK_OEM_102:pair=L"\\|";break;
+        case VK_OEM_6:pair=L"]}";break;case VK_OEM_7:pair=L"'\"";break;
+        }
+        if(pair)latin=pair[shift?1:0];
+    }
+    return latin&&name!=std::wstring(1,latin)?std::wstring(1,latin):std::wstring();
+}
 inline std::wstring KeyName(winrt::Windows::System::VirtualKey key,uint32_t scanCode){
     using winrt::Windows::System::VirtualKey;
     switch(key){

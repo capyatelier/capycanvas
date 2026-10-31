@@ -1,9 +1,18 @@
+#include "../KeyNames.h"
 #include "../CanvasModelUpdate.h"
 #include <cassert>
 #include "../NativeJson.h"
 
 int main(){
     winrt::init_apartment();
+    using winrt::Windows::System::VirtualKey;
+    assert(CapyUi::LatinKey(VirtualKey::Z,false,L"\u044f")==L"z");
+    assert(CapyUi::LatinKey(VirtualKey::Z,true,L"\u042f")==L"Z");
+    assert(CapyUi::LatinKey(VirtualKey::Q,false,L"a")==L"q");
+    assert(CapyUi::LatinKey(VirtualKey::Z,false,L"z").empty());
+    assert(CapyUi::LatinKey(VirtualKey::Number2,true,L"\u00e9")==L"@");
+    assert(CapyUi::LatinKey(VirtualKey(VK_OEM_4),true,L"\u0445")==L"{");
+    assert(CapyUi::LatinKey(VirtualKey::Escape,false,L"escape").empty());
     using J=winrt::Windows::Data::Json::JsonObject;
     CanvasModelUpdate models;
     auto initial=J::Parse(LR"({"state":{"revision":1,"histogram":{"status":"old"},"workspace":{"layout":{"extent":240}}},"catalog":{"01":"literal","a/b":"key"},"rows":[{"value":1},{"value":2}]})");

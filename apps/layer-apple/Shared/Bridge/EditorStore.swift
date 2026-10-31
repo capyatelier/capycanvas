@@ -385,10 +385,10 @@ import Darwin
     }
     /// A captured chord is a complete input pair; closing its sheet cannot leave
     /// a held key in the canvas interaction state.
-    func captureShortcut(key: String, command: Bool, shift: Bool, alt: Bool) {
+    func captureShortcut(key: String, latin: String? = nil, command: Bool, shift: Bool, alt: Bool) {
         guard !snapshot["preferences"]["capture"].isNull else { return }
         for pressed in [true, false] {
-            input(["type": "key", "key": key, "pressed": pressed, "repeat": false,
+            input(["type": "key", "key": key, "latin": latin as Any? ?? NSNull(), "pressed": pressed, "repeat": false,
                 "modifiers": ["command": command, "shift": shift, "alt": alt]])
         }
     }

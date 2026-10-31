@@ -111,6 +111,27 @@ if($LASTEXITCODE -ne 0){throw 'Model update replay failed.'}
   $rejected=$false;try{Select-Fixtures $available @($request)|Out-Null}catch{$rejected=$true}
   if(!$rejected){throw "Unknown fixture selector was accepted: $request"}
  }
+ $start=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Start-Shortcuts'},$true)
+ Invoke-Expression $start.Extent.Text
+ $traces=Join-Path $OutputDirectory ('shortcut-traces-'+[Guid]::NewGuid().ToString('N'))
+ New-Item -ItemType Directory $traces|Out-Null
+ $priorContext=$env:CAPY_FIXTURE_CONTEXT
+ try{
+  $Executable=Join-Path $traces 'CapyCanvas.exe';$Output=$traces;$scripts=$traces
+  Set-Content (Join-Path $traces 'CapyUia.ps1') 'function Owned-DrawingWindow {[pscustomobject]@{Handle=[IntPtr]2}}'
+  $env:CAPY_FIXTURE_CONTEXT=Join-Path $traces 'context.json'
+  $shortcutProcess=[pscustomobject]@{Id=4242;MainWindowHandle=[IntPtr]1;StartTime=(Get-Date).AddSeconds(-1)}
+  $shortcutProcess|Add-Member -MemberType ScriptMethod -Name Refresh -Value {}
+  function Start-Process {$shortcutProcess}
+  $retired=Join-Path $traces 'ui-state-4242-1.json';$current=Join-Path $traces 'ui-state-4242-2.json'
+  Set-Content $retired '{}';Set-Content $current '{}'
+  function Get-ChildItem {Get-Item $retired;Get-Item $current}
+  $arguments=@(Start-Shortcuts)
+  if($arguments[-1] -ne $current){throw 'Shortcut fixture selected a retired window trace'}
+ }finally{
+  $env:CAPY_FIXTURE_CONTEXT=$priorContext
+  Remove-Item -LiteralPath $traces -Recurse -Force
+ }
 }
 
 & (Join-Path $PSScriptRoot '../tests/workspace-publisher-query.ps1')

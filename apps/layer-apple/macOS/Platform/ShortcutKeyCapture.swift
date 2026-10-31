@@ -1,14 +1,15 @@
 import AppKit
+import Carbon
 import SwiftUI
 
 struct ShortcutKeyCapture: NSViewRepresentable {
-    let captured: (String, Bool, Bool, Bool) -> Bool
+    let captured: (String, String?, Bool, Bool, Bool) -> Bool
     private let selective: Bool
-    init(captured: @escaping (String, Bool, Bool, Bool) -> Void) {
-        self.captured = { key, command, shift, alt in captured(key, command, shift, alt); return true }
+    init(captured: @escaping (String, String?, Bool, Bool, Bool) -> Void) {
+        self.captured = { key, latin, command, shift, alt in captured(key, latin, command, shift, alt); return true }
         selective = false
     }
-    init(consuming: @escaping (String, Bool, Bool, Bool) -> Bool) {
+    init(consuming: @escaping (String, String?, Bool, Bool, Bool) -> Bool) {
         captured = consuming; selective = true
     }
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -26,13 +27,13 @@ struct ShortcutKeyCapture: NSViewRepresentable {
                 coordinator?.flags = flags
                 for (flag, name): (NSEvent.ModifierFlags, String) in [(.shift, "Shift"), (.control, "Control"), (.option, "Alt"), (.command, "Meta")]
                     where flags.contains(flag) && !previous.contains(flag) {
-                    _ = coordinator?.captured?(name, !flags.intersection([.command, .control]).isEmpty, flags.contains(.shift), flags.contains(.option))
+                    _ = coordinator?.captured?(name, nil, !flags.intersection([.command, .control]).isEmpty, flags.contains(.shift), flags.contains(.option))
                 }
             } else if !event.isARepeat {
                 let key = AppleKeyName.name(event)
                 let flags = event.modifierFlags
                 if !key.isEmpty {
-                    let consumed = coordinator?.captured?(key, !flags.intersection([.command, .control]).isEmpty,
+                    let consumed = coordinator?.captured?(key, AppleKeyName.latin(event), !flags.intersection([.command, .control]).isEmpty,
                         flags.contains(.shift), flags.contains(.option)) == true
                     if coordinator?.selective == true { return consumed ? nil : event }
                 }
@@ -52,11 +53,28 @@ struct ShortcutKeyCapture: NSViewRepresentable {
         var monitor: Any?
         var selective = false
         var flags: NSEvent.ModifierFlags = []
-        var captured: ((String, Bool, Bool, Bool) -> Bool)?
+        var captured: ((String, String?, Bool, Bool, Bool) -> Bool)?
     }
 }
 
 enum AppleKeyName {
+    static func latin(_ event: NSEvent) -> String? {
+        guard let source = TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue(),
+            let property = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return nil }
+        let data = Unmanaged<CFData>.fromOpaque(property).takeUnretainedValue()
+        guard let bytes = CFDataGetBytePtr(data) else { return nil }
+        let layout = UnsafeRawPointer(bytes).assumingMemoryBound(to: UCKeyboardLayout.self)
+        var dead: UInt32 = 0
+        var length: UniCharCount = 0
+        var characters = [UniChar](repeating: 0, count: 4)
+        let modifiers = event.modifierFlags.contains(.shift) ? UInt32(shiftKey >> 8) : 0
+        let status = UCKeyTranslate(layout, event.keyCode, UInt16(kUCKeyActionDown), modifiers,
+            UInt32(LMGetKbdType()), OptionBits(1 << kUCKeyTranslateNoDeadKeysBit), &dead,
+            UniCharCount(characters.count), &length, &characters)
+        guard status == noErr, length == 1, (33...126).contains(characters[0]) else { return nil }
+        let latin = String(utf16CodeUnits: characters, count: Int(length))
+        return latin == name(event) ? nil : latin
+    }
     static func name(_ event: NSEvent) -> String {
         let names: [UInt16: String] = [36: "enter", 48: "tab", 51: "backspace", 53: "escape",
             76: "enter", 114: "insert", 115: "home", 116: "pageup", 117: "delete", 119: "end", 121: "pagedown",

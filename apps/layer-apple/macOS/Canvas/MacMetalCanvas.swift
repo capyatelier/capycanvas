@@ -211,7 +211,8 @@ final class MacCanvasView: NSView {
         // Control-Command-F and other native Control-Command chords belong to
         // AppKit; the shared keymap represents Command and Control as one flag.
         guard !event.modifierFlags.contains(.control) else { return false }
-        if ["q", "w", "n", "m", "h"].contains(event.charactersIgnoringModifiers?.lowercased() ?? "") { return false }
+        let key = AppleKeyName.name(event), latin = AppleKeyName.latin(event)
+        if ["q", "w", "n", "m", "h"].contains(where: { NativeTextContext.shortcutKeyIs(key, latin: latin, $0) }) { return false }
         // The shared keymap owns canvas shortcuts; focused native text editors
         // retain the system's command-key handling.
         input.key(event, pressed: true)

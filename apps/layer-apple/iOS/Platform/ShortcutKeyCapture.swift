@@ -2,12 +2,12 @@ import UIKit
 import SwiftUI
 
 struct ShortcutKeyCapture: UIViewRepresentable {
-    let captured: (String, Bool, Bool, Bool) -> Void
+    let captured: (String, String?, Bool, Bool, Bool) -> Void
     func makeUIView(context: Context) -> CaptureView { CaptureView() }
     func updateUIView(_ view: CaptureView, context: Context) { view.captured = captured }
     static func dismantleUIView(_ view: CaptureView, coordinator: ()) { view.restoreFocus(); view.captured = nil }
     final class CaptureView: UIView {
-        var captured: ((String, Bool, Bool, Bool) -> Void)?
+        var captured: ((String, String?, Bool, Bool, Bool) -> Void)?
         private weak var previousResponder: UIView?
         override var canBecomeFirstResponder: Bool { true }
         override func didMoveToWindow() {
@@ -32,7 +32,7 @@ struct ShortcutKeyCapture: UIViewRepresentable {
                 guard let key = press.key else { continue }
                 let name = AppleKeyName.name(key)
                 let flags = key.modifierFlags
-                if !name.isEmpty { captured?(name, !flags.intersection([.command, .control]).isEmpty,
+                if !name.isEmpty { captured?(name, AppleKeyName.latin(key), !flags.intersection([.command, .control]).isEmpty,
                     flags.contains(.shift), flags.contains(.alternate)) }
             }
         }
@@ -41,6 +41,18 @@ struct ShortcutKeyCapture: UIViewRepresentable {
 }
 
 enum AppleKeyName {
+    static func latin(_ key: UIKey) -> String? {
+        let code = key.keyCode.rawValue, shifted = key.modifierFlags.contains(.shift)
+        let pairs = [45: "-_", 46: "=+", 47: "[{", 48: "]}", 49: "\\|", 51: ";:",
+            52: "'\"", 53: "`~", 54: ",<", 55: ".>", 56: "/?", 100: "\\|"]
+        let latin: String
+        if (4...29).contains(code) { latin = String(UnicodeScalar((shifted ? 65 : 97) + code - 4)!) }
+        else if (30...39).contains(code) {
+            latin = String(Array(shifted ? "!@#$%^&*()" : "1234567890")[code - 30])
+        } else if let pair = pairs[code] { latin = String(Array(pair)[shifted ? 1 : 0]) }
+        else { return nil }
+        return latin == name(key) ? nil : latin
+    }
     static func name(_ key: UIKey) -> String {
         let names: [Int: String] = [40: "enter", 41: "escape", 42: "backspace", 43: "tab",
             73: "insert", 74: "home", 75: "pageup", 76: "delete", 77: "end", 78: "pagedown",

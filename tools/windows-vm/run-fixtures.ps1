@@ -148,6 +148,7 @@ function Save-Evidence([string]$Log) {
 }
 
 function Start-Shortcuts {
+    . (Join-Path $scripts 'CapyUia.ps1')
     $saved = @{}
     foreach ($variable in 'CAPY_SMOKE_TEST', 'CAPY_TRACE_UI', 'CAPY_STORAGE_DIR') { $saved[$variable] = [Environment]::GetEnvironmentVariable($variable) }
     $env:CAPY_SMOKE_TEST = '1'
@@ -157,7 +158,11 @@ function Start-Shortcuts {
     $directory = Split-Path $Executable
     @{process_id=$review.Id;trace_directory=$directory;profile=(Join-Path $Output 'shortcuts-profile')} | ConvertTo-Json | Set-Content -LiteralPath $env:CAPY_FIXTURE_CONTEXT
     $deadline = (Get-Date).AddMinutes(2)
-    while (!($state = Get-ChildItem (Join-Path $directory "ui-state-$($review.Id)-*.json") -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+    while ($true) {
+        $review.Refresh()
+        $drawing = Owned-DrawingWindow $review -TraceDirectory $directory
+        $state = if ($drawing) { Get-Item -LiteralPath (Join-Path $directory "ui-state-$($review.Id)-$($drawing.Handle.ToInt64()).json") -ErrorAction SilentlyContinue }
+        if ($state -and $state.LastWriteTimeUtc -ge $review.StartTime.ToUniversalTime()) { break }
         if ((Get-Date) -gt $deadline) { throw 'The shortcuts review did not publish its UI state.' }
         Start-Sleep -Milliseconds 250
     }

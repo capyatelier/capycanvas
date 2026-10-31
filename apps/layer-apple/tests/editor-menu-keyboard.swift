@@ -152,7 +152,7 @@ private struct MenuSourceView: View {
         try require(!fixture.presented && fixture.actions == ["Nested", "Direct"],
             "Escape must dismiss without executing an action")
         fixture.presented = true; try await drain()
-        try await shortcut("Z", 6, [.command, .shift])
+        try await shortcut("Я", 6, [.command, .shift])
         try require(!fixture.presented && fixture.actions == ["Nested", "Direct", "Direct"],
             "Shifted letters must match the shared shortcut's normalized key")
         fixture.selected = "Direct"

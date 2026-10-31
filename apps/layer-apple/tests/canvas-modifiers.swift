@@ -1,14 +1,17 @@
 import UIKit
 import ImageIO
 
-private final class EscapeKey: UIKey {
-    override var keyCode: UIKeyboardHIDUsage { .keyboardEscape }
-    override var characters: String { "\u{1b}" }
+private final class FixtureKey: UIKey {
+    var code: UIKeyboardHIDUsage = .keyboardEscape
+    var text = "\u{1b}"
+    var flags: UIKeyModifierFlags = []
+    override var keyCode: UIKeyboardHIDUsage { code }
+    override var characters: String { text }
     override var charactersIgnoringModifiers: String { characters }
-    override var modifierFlags: UIKeyModifierFlags { [] }
+    override var modifierFlags: UIKeyModifierFlags { flags }
 }
-private final class EscapePress: UIPress {
-    private let suppliedKey = EscapeKey()
+private final class FixturePress: UIPress {
+    let suppliedKey = FixtureKey()
     override var key: UIKey? { suppliedKey }
 }
 
@@ -112,10 +115,18 @@ private final class NativeRotation: UIRotationGestureRecognizer {
         try require(StorageLocations.installation != nil, "Prepare private process temporary storage")
         let capture = ShortcutKeyCapture.CaptureView()
         var escaped = false
-        capture.captured = { key, command, shift, alt in escaped = key == "escape" && !command && !shift && !alt }
-        try require(AppleKeyName.name(EscapeKey()) == "escape", "UIKit hardware Escape must use the shared key name")
-        capture.pressesBegan([EscapePress()], with: nil)
+        capture.captured = { key, _, command, shift, alt in escaped = key == "escape" && !command && !shift && !alt }
+        try require(AppleKeyName.name(FixtureKey()) == "escape", "UIKit hardware Escape must use the shared key name")
+        capture.pressesBegan([FixturePress()], with: nil)
         try require(escaped, "UIKit hardware Escape must reach the native menu key handler")
+        let russian = FixturePress()
+        russian.suppliedKey.code = .keyboardZ; russian.suppliedKey.text = "Я"; russian.suppliedKey.flags = [.command, .shift]
+        var recorded = false
+        capture.captured = { key, latin, command, shift, alt in
+            recorded = key == "Я" && latin == "Z" && command && shift && !alt
+        }
+        capture.pressesBegan([russian], with: nil)
+        try require(recorded, "UIKit recording must forward original text and the shifted Latin key")
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("capy-modifiers-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: root) }

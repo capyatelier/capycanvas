@@ -282,7 +282,9 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
         if(editing||!(control||alt||named))return;
         auto name=KeyName(key,e.KeyStatus().ScanCode);if(name.empty())return;
         e.Handled(true);
-        send(data,act(L"search_shortcut_key",{{L"chord",O({{L"key",S(hstring(name))},{L"command",B(control)},{L"shift",B(shift)},{L"alt",B(alt)}})}}));
+        auto chord=O({{L"key",S(hstring(name))},{L"command",B(control)},{L"shift",B(shift)},{L"alt",B(alt)}});
+        auto latin=LatinKey(key,shift,name);if(!latin.empty())chord.Insert(L"latin",S(hstring(latin)));
+        send(data,act(L"search_shortcut_key",{{L"chord",chord}}));
         search.SelectAll();
     }
     J preferences()const{return object(model,L"preferences");}

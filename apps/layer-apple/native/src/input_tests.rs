@@ -962,6 +962,20 @@ fn control_activation_uses_keyboard_arrival() {
 }
 
 #[test]
+fn shortcut_predicate_uses_shared_layout_identity() {
+    for (key, latin, expected, matches) in [("я", "z", "z", true), ("Я", "Z", "z", true),
+        ("й", "q", "q", true), ("и", "b", "b", true), ("é", "2", "2", true),
+        ("a", "q", "a", true), ("a", "q", "q", false), ("я", "", "z", false), ("Я", "", "я", true)] {
+        let key = std::ffi::CString::new(key).unwrap();
+        let latin = std::ffi::CString::new(latin).unwrap();
+        let expected = std::ffi::CString::new(expected).unwrap();
+        assert_eq!(unsafe { capy_apple_shortcut_key_is(key.as_ptr(), latin.as_ptr(), expected.as_ptr()) }, matches);
+    }
+    let key = std::ffi::CString::new("Escape").unwrap();
+    assert!(unsafe { capy_apple_shortcut_key_is(key.as_ptr(), std::ptr::null(), key.as_ptr()) });
+}
+
+#[test]
 fn apple_mixing_and_retouch_presets_change_local_pixels_with_exact_history() {
     use layer_core::DefaultBrushPreset as Brush;
     for platform in [0, 1] {

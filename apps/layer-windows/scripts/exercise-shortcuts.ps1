@@ -5,8 +5,9 @@ Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 $review=Get-Process -Id $ProcessId
 if($review.ProcessName -ne 'CapyCanvas'){throw 'Expected an owned CapyCanvas review'}
 $CapyStateFile=$StateFile
-Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Isolated review did not become ready' 45
-$root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+$native=@{window=$null}
+Wait-Until {$native.window=Owned-DrawingWindow $review; $native.window -and (Model).brush_ready} 'Isolated review did not become ready' 45
+$root=$native.window.Root
 function Key([int]$Code,[switch]$Ctrl,[switch]$Shift){
     $modifiers=[Collections.Generic.List[uint16]]::new()
     if($Ctrl){$modifiers.Add(0x11)};if($Shift){$modifiers.Add(0x10)}
@@ -32,7 +33,7 @@ function Check-Undo([string]$Button){
  }
 }
 [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
-[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
+[CapyRowPointer]::SetForegroundWindow($native.window.Handle)|Out-Null
 [CapyRowPointer]::Initialize([uint32]$ProcessId)
 try{
  if((Model).state.document_file.modified){throw 'Use a clean isolated document for shortcut acceptance'}

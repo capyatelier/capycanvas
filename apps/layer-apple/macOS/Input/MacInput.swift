@@ -271,7 +271,7 @@ extension NSEvent {
         let key = AppleKeyName.name(event)
         guard !key.isEmpty else { return }
         modifiers = event.modifierFlags
-        sendKey(key, pressed: pressed, repeatKey: event.isARepeat, flags: event.modifierFlags)
+        sendKey(key, latin: AppleKeyName.latin(event), pressed: pressed, repeatKey: event.isARepeat, flags: event.modifierFlags)
     }
     func updateModifiers(_ next: NSEvent.ModifierFlags, force: Bool = false) {
         // Controls can forward keys without updating the canvas cache. A new
@@ -283,8 +283,8 @@ extension NSEvent {
         }
         modifiers = next
     }
-    private func sendKey(_ key: String, pressed: Bool, repeatKey: Bool, flags: NSEvent.ModifierFlags) {
-        store.input(["type": "key", "key": key, "pressed": pressed, "repeat": repeatKey,
+    private func sendKey(_ key: String, latin: String? = nil, pressed: Bool, repeatKey: Bool, flags: NSEvent.ModifierFlags) {
+        store.input(["type": "key", "key": key, "latin": latin as Any? ?? NSNull(), "pressed": pressed, "repeat": repeatKey,
             "modifiers": ["command": !flags.intersection([.command, .control]).isEmpty,
                 "alt": flags.contains(.option), "shift": flags.contains(.shift)]])
     }

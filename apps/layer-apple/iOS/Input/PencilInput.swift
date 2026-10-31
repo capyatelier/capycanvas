@@ -331,9 +331,10 @@ extension CanvasView {
             if pressed { guard acceptsKeys else { continue } }
             modifiers = key.modifierFlags
             let name = AppleKeyName.name(key)
-            sendKey(name, pressed: pressed, flags: modifiers)
+            let latin = AppleKeyName.latin(key)
+            sendKey(name, latin: latin, pressed: pressed, flags: modifiers)
             let modifier = (224...231).contains(key.keyCode.rawValue) || key.keyCode == .keyboardCapsLock
-            if pressed && !modifier { repeatKey(key.keyCode, name: name) }
+            if pressed && !modifier { repeatKey(key.keyCode, name: name, latin: latin) }
             else if modifier || keyRepeat?.code == key.keyCode { endKeyRepeat() }
         }
     }
@@ -341,13 +342,13 @@ extension CanvasView {
         isFirstResponder && window?.isKeyWindow == true
             && window?.rootViewController?.presentedViewController == nil && !NativeTextContext.composing
     }
-    private func repeatKey(_ code: UIKeyboardHIDUsage, name: String) {
+    private func repeatKey(_ code: UIKeyboardHIDUsage, name: String, latin: String?) {
         endKeyRepeat()
         let timer = Timer(timeInterval: KeyRepeat.interval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 guard self.acceptsKeys else { self.endKeyRepeat(); return }
-                self.sendKey(name, pressed: true, repeatKey: true, flags: self.modifiers)
+                self.sendKey(name, latin: latin, pressed: true, repeatKey: true, flags: self.modifiers)
             }
         }
         timer.fireDate = Date(timeIntervalSinceNow: KeyRepeat.delay)
@@ -369,8 +370,8 @@ extension CanvasView {
         }
         modifiers = next
     }
-    private func sendKey(_ key: String, pressed: Bool, repeatKey: Bool = false, flags: UIKeyModifierFlags) {
-        store.input(["type": "key", "key": key, "pressed": pressed, "repeat": repeatKey,
+    private func sendKey(_ key: String, latin: String? = nil, pressed: Bool, repeatKey: Bool = false, flags: UIKeyModifierFlags) {
+        store.input(["type": "key", "key": key, "latin": latin as Any? ?? NSNull(), "pressed": pressed, "repeat": repeatKey,
             "modifiers": ["command": !flags.intersection([.command, .control]).isEmpty,
                 "alt": flags.contains(.alternate), "shift": flags.contains(.shift)]])
     }

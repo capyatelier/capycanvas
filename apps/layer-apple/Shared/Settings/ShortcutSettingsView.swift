@@ -404,17 +404,19 @@ private struct ShortcutSearchField: View {
         }
             .editorSearchInput().textFieldStyle(.roundedBorder).accessibilityIdentifier("shortcut-search")
             .focused($focused)
+            #if os(iOS)
             .onKeyPress(phases: .down) { press in
                 guard let chord = ShortcutSearchChord(press) else { return .ignored }
                 action(["type": "search_shortcut_key", "chord": chord.raw])
                 return .handled
             }
+            #endif
             .background {
                 #if os(macOS)
-                ShortcutKeyCapture(consuming: { key, command, shift, alt in
+                ShortcutKeyCapture(consuming: { key, latin, command, shift, alt in
                     guard focused else { return false }
                     let function = key.first == "f" && (Int(key.dropFirst()).map { (1...20).contains($0) } == true)
-                    guard let chord = ShortcutSearchChord(key: key, command: command, shift: shift, alt: alt, function: function) else { return false }
+                    guard let chord = ShortcutSearchChord(key: key, latin: latin, command: command, shift: shift, alt: alt, function: function) else { return false }
                     action(["type": "search_shortcut_key", "chord": chord.raw])
                     return true
                 }).frame(width: 0, height: 0)
@@ -430,12 +432,11 @@ private struct ShortcutSearchChord {
         self.init(key: press.editorKey, command: command, shift: press.modifiers.contains(.shift), alt: alt,
             function: press.editorFunctionKey)
     }
-    init?(key: String, command: Bool, shift: Bool, alt: Bool, function: Bool) {
-        let key = key.lowercased()
+    init?(key: String, latin: String? = nil, command: Bool, shift: Bool, alt: Bool, function: Bool) {
         let editing = command && !shift && !alt
-            && ["a", "c", "v", "x", "z", "backspace", "delete", "arrowleft", "arrowright", "home", "end"].contains(key)
+            && ["a", "c", "v", "x", "z", "backspace", "delete", "arrowleft", "arrowright", "home", "end"].contains { NativeTextContext.shortcutKeyIs(key, latin: latin, $0) }
         guard !key.isEmpty, !editing, command || alt || function else { return nil }
-        raw = ["key": key, "command": command, "shift": shift, "alt": alt]
+        raw = ["key": key, "latin": latin as Any? ?? NSNull(), "command": command, "shift": shift, "alt": alt]
     }
 }
 
@@ -459,8 +460,8 @@ private struct RecordingRow: View {
                 action(["type": "confirm_shortcut", "replace": !capture["conflict"].isNull])
             }.buttonStyle(.borderedProminent).disabled(capture["chord"].isNull || !capture["error"].isNull)
                 .accessibilityIdentifier("shortcut-confirm")
-        }.background(ShortcutKeyCapture { key, command, shift, alt in
-            store.captureShortcut(key: key, command: command, shift: shift, alt: alt)
+        }.background(ShortcutKeyCapture { key, latin, command, shift, alt in
+            store.captureShortcut(key: key, latin: latin, command: command, shift: shift, alt: alt)
         }.frame(width: 1, height: 1))
     }
 }

@@ -149,6 +149,7 @@ void capy_project_free(CapyProjectTask task);
    either the shared numeric response or {"error": ...}. */
 CapyText capy_apple_numeric(const char *json);
 bool capy_apple_control_takes_key(const char *key, bool command, bool alt, bool keyboard_focus);
+bool capy_apple_shortcut_key_is(const char *key, const char *latin, const char *expected);
 CapyText capy_apple_native_caption(const char *json);
 CapyText capy_apple_numeric_labels(const char *json);
 /* Stateless shared tagged-color forms, previews in the requested display space and gradient
