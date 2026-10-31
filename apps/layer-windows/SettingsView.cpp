@@ -69,6 +69,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
     Dispatch report;
     std::function<void()> changed;
     XamlRoot xamlRoot{nullptr};
+    XamlRoot::Changed_revoker rootChanged;
     hstring theme,resultsKey,revealed;
     double searchFocus=-1;
     bool showing=false,closing=false,built=false,stopping=false,showFailed=false,dismissing=false;
@@ -90,6 +91,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
     }
     void init(){
         dialog.XamlRoot(xamlRoot);inheritLanguage(dialog,data);
+        rootChanged=xamlRoot.Changed(auto_revoke,[weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock();self&&self->showing&&!self->closing)self->fit();});
         for(auto [resource,value]:{std::pair{L"ContentDialogMaxWidth",DialogWidth},std::pair{L"ContentDialogMinWidth",0.},
             std::pair{L"ContentDialogMaxHeight",DialogHeight},std::pair{L"ContentDialogMinHeight",0.}})
             dialog.Resources().Insert(box_value(resource),box_value(value));
@@ -466,6 +468,12 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         showing=false;closing=false;
         changed();
     }
+    void fit(){
+        auto size=xamlRoot.Size();frame.Width(std::max(320.,std::min(DialogWidth,double(size.Width)-60)));
+        auto insets=array(data->model,L"titlebar_insets");
+        auto captionHeight=insets.Size()==3?insets.GetAt(2).GetNumber():0.;
+        frame.Height(std::max(240.,std::min(DialogHeight,double(size.Height)-40-2*captionHeight)));
+    }
     void apply(J const& snapshot){
         data->adoptLocalization(snapshot);
         if(!snapshot.HasKey(L"state"))return;
@@ -481,10 +489,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         if(!built)build(model);
         dialogSurface(data,dialog);
         sidebarSurface.Background(data->brush(L"sidebar"));sidebarSurface.BorderBrush(data->line(L"sidebar_border"));
-        auto size=xamlRoot.Size();frame.Width(std::max(320.,std::min(DialogWidth,double(size.Width)-60)));
-        auto insets=array(snapshot,L"titlebar_insets");
-        auto captionHeight=insets.Size()==3?insets.GetAt(2).GetNumber():0.;
-        frame.Height(std::max(240.,std::min(DialogHeight,double(size.Height)-40-2*captionHeight)));
+        fit();
         shortcutPage->Apply(snapshot);
         auto page=str(model,L"page"),query=str(model,L"query");
         bool opening=search.Visibility()==Visibility::Collapsed&&(flag(model,L"searching")||!query.empty());

@@ -4,6 +4,7 @@
 #include "ChromeVisibility.h"
 #include "WorkspaceManagerView.h"
 #include "WorkspaceView.h"
+#include "SettingsView.h"
 #include <msctf.h>
 #pragma comment(lib,"uuid.lib")
 #include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
@@ -200,6 +201,40 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
     FrameworkElement workspaceElement(hstring const& id){
         for(auto const& popup:VisualTreeHelper::GetOpenPopupsForXamlRoot(root.XamlRoot()))if(auto node=findElement(popup.Child(),id))return node;
         return findElement(root,id);
+    }
+    winrt::Windows::Foundation::IAsyncAction settingsResize(){
+        auto previous=window.AppWindow().Size();auto scale=root.XamlRoot().RasterizationScale();
+        Windows::Graphics::SizeInt32 wide{int32_t(1280*scale),int32_t(840*scale)},narrow{int32_t(720*scale),int32_t(576*scale)};window.AppWindow().Resize(wide);
+        co_await wait([this]{return root.XamlRoot().Size().Width>1000;},L"Preferences wide native window did not arrange");
+        auto model=J::Parse(LR"({"state":{"theme":"dark"},"titlebar_insets":[0,0,0],"preferences":{"page":"appearance","query":"","searching":true,"search_focus":0,"pages":[{"id":"appearance","title":"Appearance","icon":"settings","groups":[{"title":"Interface","rows":[{"id":"language","title":"Language","description":"Choose the interface language","enabled":true,"visible":true,"kind":{"type":"choice","selected":0,"options":["System language","English","Japanese"]}}]}]}]}})");
+        object(model,L"state").Insert(L"theme",S(root.RequestedTheme()==ElementTheme::Light?L"light":L"dark"));
+        auto bootstrap=J::Parse(to_hstring(context.bootstrap)),catalog=O({{L"bootstrap",bootstrap}});
+        model.Insert(L"localization",O({{L"generation",N(0)},{L"catalog",J{}},{L"bootstrap",bootstrap}}));
+        auto actions=std::make_shared<std::vector<std::string>>(),errors=std::make_shared<std::vector<std::string>>();
+        auto send=[actions](std::string value){actions->push_back(std::move(value));};
+        auto settings=std::make_unique<SettingsView>(send,catalog,context.localization,root.XamlRoot(),[](auto const&,bool){},[errors](std::string value){errors->push_back(std::move(value));},[]{},send);
+        settings->Apply(model);
+        co_await wait([this,&settings]{return settings->IsOpen()&&workspaceElement(L"preference-choice-language")&&workspaceElement(L"CloseButton")&&workspaceElement(L"settings-search");},L"Real Preferences controls did not open");
+        auto language=workspaceElement(L"preference-choice-language").as<ComboBox>();
+        auto close=workspaceElement(L"CloseButton").as<Button>();auto edit=workspaceElement(L"settings-search").as<TextBox>();
+        co_await wait([&]{return language.IsLoaded()&&language.ActualWidth()>0&&close.ActualWidth()>0&&edit.IsLoaded();},L"Preferences native controls did not arrange");
+        edit.Text(L"retained resize draft");edit.Focus(FocusState::Programmatic);edit.Select(2,5);
+        co_await wait([&]{return FocusManager::GetFocusedElement(root.XamlRoot())==edit&&edit.SelectionStart()==2&&edit.SelectionLength()==5;},L"Preferences native draft/focus prerequisite failed");
+        co_await wait([&]{for(auto const& value:*actions){auto sent=J::Parse(to_hstring(value));if(str(sent,L"type")==L"preferences"){auto action=object(sent,L"action");if(str(action,L"type")==L"search"&&str(action,L"query")==L"retained resize draft")return true;}}return false;},L"Preferences initial native draft action did not acknowledge");
+        auto selected=language.SelectedIndex();auto languageFocus=language.FocusState(),closeFocus=close.FocusState();
+        auto bounds=[](FrameworkElement const& node){auto point=node.TransformToVisual(nullptr).TransformPoint({0,0});return Windows::Foundation::Rect{point.X,point.Y,float(node.ActualWidth()),float(node.ActualHeight())};};
+        auto inside=[&](FrameworkElement const& node){auto box=bounds(node);auto size=root.XamlRoot().Size();return node.IsLoaded()&&node.Visibility()==Visibility::Visible&&box.Width>0&&box.Height>0&&box.X>=-1&&box.Y>=-1&&box.X+box.Width<=size.Width+1&&box.Y+box.Height<=size.Height+1;};
+        auto retained=[&]{require(workspaceElement(L"preference-choice-language")==language&&workspaceElement(L"CloseButton")==close&&workspaceElement(L"settings-search")==edit,L"Preferences resize replaced a native control");require(language.SelectedIndex()==selected&&language.FocusState()==languageFocus&&close.FocusState()==closeFocus,L"Preferences resize changed native choice or button focus");require(FocusManager::GetFocusedElement(root.XamlRoot())==edit&&edit.Text()==L"retained resize draft"&&edit.SelectionStart()==2&&edit.SelectionLength()==5,L"Preferences resize changed native edit text, focus or selection");require(actions->empty()&&errors->empty(),L"Preferences resize dispatched a settings action or error");};
+        co_await wait([&]{return inside(language)&&inside(close);},L"Wide Preferences language or Close is outside XamlRoot");
+        require(errors->empty(),L"Preferences opening reported an error");auto languageWide=bounds(language),closeWide=bounds(close);auto sizeWide=root.XamlRoot().Size();actions->clear();
+        window.AppWindow().Resize(narrow);
+        co_await wait([&]{auto size=root.XamlRoot().Size();return size.Width<sizeWide.Width&&size.Height<sizeWide.Height;},L"Preferences narrow native resize did not acknowledge");
+        co_await wait([&]{return inside(language)&&inside(close);},L"Resized Preferences language or Close escaped current XamlRoot bounds");retained();
+        window.AppWindow().Resize(wide);
+        auto stable=[](Windows::Foundation::Rect const& a,Windows::Foundation::Rect const& b){return a.X>=b.X-1&&a.X<=b.X+1&&a.Y>=b.Y-1&&a.Y<=b.Y+1&&a.Width>=b.Width-1&&a.Width<=b.Width+1&&a.Height>=b.Height-1&&a.Height<=b.Height+1;};
+        co_await wait([&]{auto size=root.XamlRoot().Size();return size.Width==sizeWide.Width&&size.Height==sizeWide.Height&&inside(language)&&inside(close)&&stable(bounds(language),languageWide)&&stable(bounds(close),closeWide);},L"Preferences growth did not restore native bounds");retained();
+        settings->Hide();co_await wait([&]{return !settings->IsOpen()&&!workspaceElement(L"preference-choice-language");},L"Preferences Hide did not finish native dialog close");
+        settings.reset();window.AppWindow().Resize(previous);++checks;
     }
     winrt::Windows::Foundation::IAsyncAction layerLanguageDraft(){
         auto theme=root.RequestedTheme();std::string snapshot,catalog,translated;NativeLayoutInput layout;
@@ -507,6 +542,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             phase=L"workspace-ime";co_await workspaceIme();
             phase=L"native-default-ime";co_await defaultIme();
             phase=L"layer-language-draft";co_await layerLanguageDraft();
+            phase=L"settings-resize";co_await settingsResize();
             phase=L"window-close";auto closed=owner.Begin(data,anchor,menu());window.Close();co_await settle();
             require(!closed.Current()&&!closed.Show(anchor,{}),L"Reply reopened canceled owner");empty();++checks;
         } catch(hresult_error const& e){resultCode=1;error=e.message();}catch(...){resultCode=1;error=L"Unhandled popup fixture failure";}
