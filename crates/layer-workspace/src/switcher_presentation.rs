@@ -10,6 +10,7 @@ fn command(label: String, command: WorkspaceCommand, selected: Option<bool>) -> 
 impl WorkspaceView {
     pub(crate) fn present_manager_rows(&mut self, localization: &Localizer, pins: &[String]) {
         if self.page != Some(ManagerPage::Workspaces) { return; }
+        self.rows.sort_by_key(|row| self.order.iter().position(|id| id == &row.id).unwrap_or(usize::MAX));
         for row in &mut self.rows {
             row.options = row.actions.iter().filter(|button| button.enabled && matches!(button.action, ManagerAction::Rename(_) | ManagerAction::Delete(_))).cloned().collect();
             let selected = pins.contains(&row.id);

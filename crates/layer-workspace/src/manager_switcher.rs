@@ -11,6 +11,20 @@ pub enum SwitcherEdit {
     Move { id: String, before: Option<String> },
 }
 
+impl SwitcherEdit {
+    pub(crate) fn apply_order(&self, ids: &mut Vec<String>) -> Result<bool> {
+        let Self::Move { id, before } = self else { return Ok(false); };
+        if !ids.contains(id) || before.as_ref().is_some_and(|target| !ids.contains(target)) {
+            return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ThisWorkspaceIsNoLongerAvailable));
+        }
+        if before.as_ref() == Some(id) { return Ok(false); }
+        ids.retain(|candidate| candidate != id);
+        let index = before.as_ref().and_then(|target| ids.iter().position(|candidate| candidate == target)).unwrap_or(ids.len());
+        ids.insert(index, id.clone());
+        Ok(true)
+    }
+}
+
 pub(crate) fn validate_ids(ids: &[String]) -> Result<()> {
     let mut seen = std::collections::BTreeSet::new();
     if ids.len() > 10_000
@@ -69,22 +83,30 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     /// Persistently pinned choices. None in storage is the original three defaults.
     /// Visibility never changes the dialog order.
     pub fn switcher_ids(&self) -> Vec<String> {
+        self.switcher_ids_in(&self.workspace_ids())
+    }
+
+    pub(crate) fn switcher_ids_in(&self, order: &[String]) -> Vec<String> {
         let state = self.state.borrow();
         let defaults = DEFAULT_WORKSPACES
             .iter()
             .map(|(id, _)| (*id).into())
             .collect();
         let pinned = state.switcher.as_ref().unwrap_or(&defaults);
-        self.workspace_ids()
-            .into_iter()
+        order.iter()
             .filter(|id| pinned.contains(id))
+            .cloned()
             .collect()
     }
 
     /// Header choices include the current workspace while it is unpinned.
     /// This does not change saved visibility or order; previews do not change it.
     pub fn switcher_display_ids(&self) -> Vec<String> {
-        let mut ids = self.switcher_ids();
+        self.switcher_display_ids_in(&self.workspace_ids())
+    }
+
+    pub(crate) fn switcher_display_ids_in(&self, order: &[String]) -> Vec<String> {
+        let mut ids = self.switcher_ids_in(order);
         if let Some(active) = self.active_id()
             && !ids.contains(&active)
         {
@@ -126,22 +148,10 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 let visible = !self.switcher_ids().contains(&id);
                 self.switcher_visibility_request(id, visible).await?
             }
-            SwitcherEdit::Move { id, before } => {
+            edit @ SwitcherEdit::Move { .. } => {
                 let expected = self.state.borrow().workspace_order.clone();
                 let mut ids = self.workspace_ids();
-                if !ids.contains(&id) || before.as_ref().is_some_and(|target| !ids.contains(target))
-                {
-                    return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ThisWorkspaceIsNoLongerAvailable));
-                }
-                if before.as_ref() == Some(&id) {
-                    return Ok(());
-                }
-                ids.retain(|i| i != &id);
-                let index = before
-                    .as_ref()
-                    .and_then(|target| ids.iter().position(|i| i == target))
-                    .unwrap_or(ids.len());
-                ids.insert(index, id);
+                if !edit.apply_order(&mut ids)? { return Ok(()); }
                 StoreRequest::UpdateWorkspaceOrder { expected, ids }
             }
         };

@@ -202,6 +202,7 @@ impl ManagerUi {
                 row.remove_css_class("workspace-row-dragging");
                 *w.workspaces.ui.dragged.borrow_mut() = None;
                 w.workspaces.ui.clear_reorder_hint();
+                w.workspaces.render(&w);
             }
         ));
         row.add_controller(source.clone());

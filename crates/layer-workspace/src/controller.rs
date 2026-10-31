@@ -628,6 +628,9 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         self.view.id = m.active_id();
         self.view.name = m.active_name().unwrap_or_default();
         self.view.order = m.workspace_ids();
+        for edit in self.preference_edit.iter().chain(&self.preference_edits) {
+            let _ = edit.apply_order(&mut self.view.order);
+        }
         let items = m.items();
         let active = self.view.id.clone();
         let switcher_rows = |ids: Vec<String>| {
@@ -646,8 +649,8 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 })
                 .collect()
         };
-        self.view.switcher = switcher_rows(m.switcher_ids());
-        self.view.switcher_display = switcher_rows(m.switcher_display_ids());
+        self.view.switcher = switcher_rows(m.switcher_ids_in(&self.view.order));
+        self.view.switcher_display = switcher_rows(m.switcher_display_ids_in(&self.view.order));
         self.view.present_switcher_menus(&self.localization, switcher_rows(self.view.order.clone()));
         let page = self.view.page;
         let (title, intro) = match page {

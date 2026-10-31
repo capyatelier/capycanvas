@@ -16,13 +16,18 @@ struct Backend {
     load_gate: RefCell<Option<async_channel::Receiver<()>>>,
     commit_gate: RefCell<Option<async_channel::Receiver<()>>>,
     switcher_gate: RefCell<Option<async_channel::Receiver<()>>>,
+    order_gate: RefCell<Option<async_channel::Receiver<()>>>,
     fail_renew: RefCell<Option<ErrorKind>>,
 }
 #[derive(Clone)]
 struct Store(Rc<Backend>);
 impl WorkspaceStore for Store {
     async fn execute(&self, request: StoreRequest) -> Result<StoreResponse, StoreError> {
-        if self.0.fail_preferences.get() && matches!(request, StoreRequest::UpdateSwitcher { .. }) {
+        if matches!(request, StoreRequest::UpdateWorkspaceOrder { .. }) {
+            let gate = self.0.order_gate.borrow_mut().take();
+            if let Some(gate) = gate { let _ = gate.recv().await; }
+        }
+        if self.0.fail_preferences.get() && matches!(request, StoreRequest::UpdateSwitcher { .. } | StoreRequest::UpdateWorkspaceOrder { .. }) {
             return Err(StoreError::new(ErrorKind::StorageFull, "Storage full"));
         }
         if matches!(request, StoreRequest::Load { .. }) {
@@ -1240,6 +1245,93 @@ fn closing_before_adoption_drains_claims() {
         "A closing host must not wait for a canvas adoption"
     );
     assert!(closing.view.error.is_none());
+}
+
+#[test]
+fn workspace_order_presents_accepted_moves_until_store_completion() {
+    let mut f = Fixture::new();
+    f.input(serde_json::json!({"type":"open","page":"workspaces"}));
+    let [p, i, h] = DEFAULT_WORKSPACES.map(|(id, _)| id.to_string());
+    f.input(serde_json::json!({"type":"select","id":h}));
+    let original = f.controller.manager.current_record().unwrap();
+    let preview = f.host.session.state().workspace.layout.clone();
+    let revision = f.controller.view.switcher_revision;
+    let initial = f.controller.manager.workspace_ids();
+    let custom = initial.iter().find(|id| ![&p, &i, &h].contains(id)).unwrap().clone();
+    let ids = |rows: &[WorkspaceRow]| rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
+    let assert_order = |f: &Fixture, order: &[String]| {
+        assert_eq!(f.controller.view.order, order, "accepted order is visible before its store acknowledgement");
+        assert_eq!(ids(&f.controller.view.rows), order, "manager rows follow the accepted order");
+        let pins = f.controller.manager.switcher_ids();
+        let mut display: Vec<_> = order.iter().filter(|id| pins.contains(id)).cloned().collect();
+        assert_eq!(ids(&f.controller.view.switcher), display);
+        if let Some(active) = f.controller.manager.active_id() && !display.contains(&active) { display.insert(0, active); }
+        assert_eq!(ids(&f.controller.view.switcher_display), display);
+        assert_eq!(f.controller.view.selected.as_ref(), Some(&h));
+        assert_eq!(f.host.session.state().workspace.layout, preview);
+        assert_eq!(f.controller.manager.current_record().unwrap(), original);
+    };
+    let edit = |f: &mut Fixture, id: &str, before: Option<&str>| {
+        f.controller.input(&mut f.host.session, WorkspaceInput::EditSwitcher {
+            edit: SwitcherEdit::Move { id: id.into(), before: before.map(str::to_string) },
+        }, f.backend.now.get()).unwrap();
+    };
+    let (first, gate) = async_channel::bounded(1);
+    *f.backend.order_gate.borrow_mut() = Some(gate);
+    edit(&mut f, &h, Some(&p));
+    let first_order = [h.clone(), p.clone(), i.clone(), custom.clone()];
+    assert_order(&f, &first_order);
+    f.pump();
+    assert!(f.controller.view.switcher_busy);
+    assert_eq!(f.controller.manager.workspace_ids(), initial);
+    edit(&mut f, &p, None);
+    let second_order = [h.clone(), i.clone(), custom.clone(), p.clone()];
+    assert_order(&f, &second_order);
+    f.pump();
+    assert_order(&f, &second_order);
+    let (second, gate) = async_channel::bounded(1);
+    *f.backend.order_gate.borrow_mut() = Some(gate);
+    first.try_send(()).unwrap();
+    f.pump();
+    assert_eq!(f.controller.manager.workspace_ids(), first_order);
+    assert_order(&f, &second_order);
+    second.try_send(()).unwrap();
+    f.pump();
+    assert_eq!(f.controller.manager.workspace_ids(), second_order);
+    assert_order(&f, &second_order);
+    assert!(!f.controller.view.switcher_busy);
+    assert_eq!(f.controller.view.switcher_revision, revision + 2);
+
+    let (failed, gate) = async_channel::bounded(1);
+    *f.backend.order_gate.borrow_mut() = Some(gate);
+    edit(&mut f, &p, Some(&h));
+    let retried_order = [p.clone(), h.clone(), i.clone(), custom];
+    assert_order(&f, &retried_order);
+    f.pump();
+    f.backend.fail_preferences.set(true);
+    failed.try_send(()).unwrap();
+    f.pump();
+    assert_order(&f, &second_order);
+    assert_eq!(f.controller.manager.workspace_ids(), second_order);
+    assert!(f.controller.view.switcher_error.is_some());
+    assert!(f.controller.view.error.is_none());
+    assert!(!f.controller.view.switcher_busy);
+    assert_eq!(f.controller.view.switcher_revision, revision + 2);
+    f.backend.fail_preferences.set(false);
+    let (retry, gate) = async_channel::bounded(1);
+    *f.backend.order_gate.borrow_mut() = Some(gate);
+    edit(&mut f, &p, Some(&h));
+    assert_order(&f, &retried_order);
+    assert!(f.controller.view.switcher_error.is_none());
+    f.pump();
+    retry.try_send(()).unwrap();
+    f.pump();
+    assert_order(&f, &retried_order);
+    assert_eq!(f.controller.manager.workspace_ids(), retried_order);
+    assert_eq!(f.controller.view.switcher_revision, revision + 3);
+    assert!(!f.controller.view.switcher_busy);
+    f.pump();
+    assert_order(&f, &retried_order);
 }
 
 #[test]

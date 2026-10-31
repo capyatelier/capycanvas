@@ -44,7 +44,11 @@ class AndroidWorkspaceManagerTest {
         if (tag.startsWith("workspace-switch-")) {
             idle(); node.performScrollTo(); compose.waitForIdle(); node.assertIsEnabled().assertIsDisplayed()
         }
-        node.performTouchInput { click() }; Thread.sleep(250); compose.waitForIdle()
+        node.performTouchInput { click() }
+        if (tag.startsWith("workspace-row-")) compose.waitUntil(15000) {
+            view().optString("selected") == tag.removePrefix("workspace-row-") && !view().optBoolean("loading")
+        } else Thread.sleep(250)
+        compose.waitForIdle()
     }
     private fun menu(label: String) {
         if (compose.onAllNodesWithTag("application-menu-window", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()) tap("application-menu-window")
@@ -54,7 +58,7 @@ class AndroidWorkspaceManagerTest {
             tap(if (compact) "header-menu-labels-compact" else "header-control-${item.getInt("id")}")
             compose.onNodeWithText("Window", useUnmergedTree = true).performTouchInput { click() }
         }
-        compose.onNodeWithText("Workspaces", useUnmergedTree = true).performTouchInput { click() }
+        compose.onNode(hasText("Workspaces") and hasAnyAncestor(hasTestTag("workspace-menu")), useUnmergedTree = true).performTouchInput { click() }
         compose.onNodeWithText(label, useUnmergedTree = true).assertIsEnabled().performTouchInput { click() }
         Thread.sleep(300); idle()
     }
@@ -145,9 +149,13 @@ class AndroidWorkspaceManagerTest {
         assertEquals(normalized(beforeRestart), normalized(capture()))
         menu("Manage Workspaces…")
         compose.onNodeWithTag("workspace-name-$painting", useUnmergedTree = true).performTouchInput { doubleClick() }
-        compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("workspace-name-$painting")), useUnmergedTree = true).performTextReplacement("Tablet Inking")
+        val editor = hasSetTextAction() and (hasTestTag("workspace-name-$painting") or hasAnyAncestor(hasTestTag("workspace-name-$painting")))
+        compose.waitUntil(15000) { compose.onAllNodes(editor, useUnmergedTree = true).fetchSemanticsNodes().size == 1 }
+        compose.onNode(editor, useUnmergedTree = true).performTextReplacement("Tablet Inking")
         instrumentation.sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_ENTER)
-        idle(); tap("workspace-cancel")
+        compose.waitUntil(15000) { view().getString("name") == "Tablet Inking" && view().isNull("prompt") && !view().optBoolean("busy") }
+        tap("workspace-cancel")
+        compose.waitUntil(15000) { view().isNull("page") }
         assertEquals("Tablet Inking", view().getString("name"))
         for (id in listOf("builtin:workspace:painter", "builtin:workspace:illustrator", "builtin:workspace:photographer")) {
             shot("before-header-switch")

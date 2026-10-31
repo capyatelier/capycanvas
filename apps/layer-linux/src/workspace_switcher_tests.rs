@@ -553,6 +553,109 @@ fn switcher_input() -> RemoteInput {
     RemoteInput::new().settle_ms(200).timeout_secs(8)
 }
 
+fn grip_drop_painted_order(w: &Rc<Workspace>, input: &mut RemoteInput, output: &std::path::Path) {
+    use std::io::Write;
+    let manager = w.workspaces.manager().unwrap();
+    let initial_theme = state(w).theme;
+    let [p, i, f] = DEFAULT_WORKSPACES.map(|(id, _)| id.to_string());
+    let order = manager.workspace_ids();
+    let mut moved = order.clone();
+    moved[..3].clone_from_slice(&[i.clone(), f.clone(), p.clone()]);
+    let provider = gtk::CssProvider::new();
+    provider.load_from_string(".grip-paint-source { background: #ff00ff; } .grip-paint-next { background: #00ff00; } .grip-paint-last { background: #0000ff; }");
+    gtk::style_context_add_provider_for_display(&w.surface.display(), &provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
+    let mut failures = Vec::new();
+    for (theme, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        w.workspaces.ui.show(w, ManagerPage::Workspaces);
+        wait_switcher(w);
+        let source = named::<gtk::Label>(&row(w, &p), &format!("workspace-name-{p}"));
+        let next = named::<gtk::Label>(&row(w, &i), &format!("workspace-name-{i}"));
+        source.add_css_class("grip-paint-source");
+        next.add_css_class("grip-paint-next");
+        let last = named::<gtk::Label>(&row(w, &f), &format!("workspace-name-{f}"));
+        last.add_css_class("grip-paint-last");
+        for pending in [true, false] {
+            let timing = if pending { "pending-after-end" } else { "same-move-ack-before-end" };
+            let list = named::<gtk::ListBox>(w.window.upcast_ref(), "workspace-manager-items");
+            let source_row = row(w, &p);
+            let released = Rc::new(Cell::new(false));
+            let frames = sample_after_paint(&list, glib::clone!(#[weak] w, #[weak] source_row, #[strong] released,
+                #[upgrade_or_default] move || (released.get(), source_row.has_css_class("workspace-row-dragging"),
+                    w.workspaces.view().switcher_busy, w.workspaces.view().rows.iter().map(|row|row.id.clone()).collect::<Vec<_>>())));
+            let mut lock = pending.then(|| {
+                let ready = input.dir.join(format!("drop-paint-lock-{name}"));
+                let database = crate::storage::workspaces().unwrap().join("workspaces.sqlite3");
+                let lock = std::process::Command::new("python3").arg("-c")
+                    .arg("import pathlib,sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('BEGIN IMMEDIATE'); pathlib.Path(sys.argv[2]).touch(); sys.stdin.readline(); c.rollback()")
+                    .arg(database).arg(&ready).stdin(std::process::Stdio::piped()).spawn().unwrap();
+                until(|| ready.exists(), "drop paint storage lock acquired");
+                lock
+            });
+            let grip = find_named(&source_row, &format!("workspace-reorder-handle-{p}")).unwrap();
+            let start = screen_point(&grip, &w.window, [0.5, 0.5]);
+            let end = [start[0], screen_point(&row(w, &f), &w.window, [0.35, 0.85])[1]];
+            let mut events = vec![contact("mouse", "down", start)];
+            for t in [0.2, 0.5, 0.8, 1.] { events.push(contact("mouse", "move", [start[0], start[1] + (end[1]-start[1])*t])); }
+            input.perform(serde_json::Value::Array(events));
+            assert!(source_row.has_css_class("workspace-row-dragging"), "{name}/{timing}: real native drag remains active");
+            if !pending {
+                w.workspaces.send(w, layer_workspace::WorkspaceInput::EditSwitcher {
+                    edit: layer_workspace::SwitcherEdit::Move { id: p.clone(), before: order.get(3).cloned() },
+                });
+                until(|| manager.workspace_ids()==moved && !w.workspaces.view().switcher_busy, "same move acknowledged while native contact held");
+                assert!(source_row.has_css_class("workspace-row-dragging"), "acknowledgement precedes native drag_end");
+            }
+            released.set(true);
+            input.perform(serde_json::json!([contact("mouse", "up", end)]));
+            assert!(!source_row.has_css_class("workspace-row-dragging"), "native release completes drag_end");
+            let pending_at_end = w.workspaces.view().switcher_busy;
+            let frames = frames.finish();
+            if let Some(lock) = lock.as_mut() {
+                lock.stdin.take().unwrap().write_all(b"release\n").unwrap();
+                assert!(lock.wait().unwrap().success());
+            }
+            let initial = frames.iter().find(|frame| !frame.state.0 && !frame.state.1
+                && frame.color_bounds(&w.window, [255,0,255,255]).is_some()
+                && frame.color_bounds(&w.window, [0,255,0,255]).is_some()
+                && frame.color_bounds(&w.window, [255,0,0,255]).is_some());
+            let first = frames.iter().find(|frame| frame.state.0 && !frame.state.1);
+            let bounds = |frame: &PaintedSample<_>, color| frame.color_bounds(&w.window, color)
+                .map(|b|[b.x(),b.y(),b.width(),b.height()]);
+            let initial_bounds = initial.map(|frame|[bounds(frame,[255,0,255,255]),bounds(frame,[0,255,0,255]),bounds(frame,[255,0,0,255])]);
+            let painted_bounds = first.map(|frame|[bounds(frame,[255,0,255,255]),bounds(frame,[0,255,0,255]),bounds(frame,[255,0,0,255])]);
+            let correct = painted_bounds.is_some_and(|b| matches!(b,[Some(source),Some(next),Some(last)] if next[1]<last[1] && last[1]<source[1]));
+            std::fs::write(output.join(format!("drop-paint-{name}-{timing}.json")),serde_json::to_vec_pretty(&serde_json::json!({
+                "timing":timing,"pending_at_end":pending_at_end,"expected_order":moved,"initial_marker_bounds":initial_bounds,
+                "first_post_end_marker_bounds":painted_bounds,"first_post_end_state":first.map(|frame|&frame.state),
+                "first_post_end_time":first.map(|frame|frame.time),"painted_order_correct":correct,
+                "frames":frames.iter().map(|frame|serde_json::json!({"time":frame.time,"state":frame.state})).collect::<Vec<_>>()
+            })).unwrap()).unwrap();
+            if let Some(frame) = first {
+                w.window.renderer().unwrap().render_texture(&frame.node,Some(&frame.bounds))
+                    .save_to_png(output.join(format!("drop-paint-{name}-{timing}.png"))).unwrap();
+            }
+            assert!(initial_bounds.is_some_and(|b| matches!(b,[Some(source),Some(next),Some(last)] if source[1]<next[1] && next[1]<last[1])), "{name}/{timing}: mapped initial cached list paints source/next/last identities in original order: {initial_bounds:?}");
+            assert!(!pending || pending_at_end, "storage acknowledgement stays pending after drag_end");
+            if !correct { failures.push(format!("{name}/{timing}: first post-drop painted order must be next,last,source; actual {painted_bounds:?}, state {:?}",first.map(|frame|&frame.state))); }
+            until(|| manager.workspace_ids()==moved && !w.workspaces.view().switcher_busy, "drop move stored before fixture restore");
+            w.workspaces.send(w, layer_workspace::WorkspaceInput::EditSwitcher {
+                edit: layer_workspace::SwitcherEdit::Move { id: p.clone(), before: Some(i.clone()) },
+            });
+            until(|| manager.workspace_ids()==order && !w.workspaces.view().switcher_busy, "original order restored between painted drop cases");
+        }
+        source.remove_css_class("grip-paint-source");
+        next.remove_css_class("grip-paint-next");
+        last.remove_css_class("grip-paint-last");
+    }
+    gtk::style_context_remove_provider_for_display(&w.surface.display(), &provider);
+    w.workspaces.ui.close(w);
+    until(|| w.workspaces.view().page.is_none() && !w.workspaces.ui.dialog.is_mapped()
+        && !w.workspaces.busy() && !w.workspaces.view().loading, "painted drop fixture closes before legacy grip journey");
+    w.dispatch(UiAction::SetTheme { theme: Some(initial_theme) });
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 #[test]
 #[ignore = "isolated native input and SQLite; workspace-motion.sh gtk --native-test=native_workspace_grip_menus --native-storage"]
 fn native_workspace_grip_menus() {
@@ -569,6 +672,7 @@ fn native_workspace_grip_menus() {
     std::fs::create_dir_all(&output).unwrap();
     let manager = w.workspaces.manager().unwrap();
     let original = manager.current().unwrap().capture().unwrap();
+    grip_drop_painted_order(&w, &mut input, &output);
     let [p, i, f] = DEFAULT_WORKSPACES.map(|(id, _)| id.to_string());
     let grip = |id: &str| find_named(&row(&w, id), &format!("workspace-reorder-handle-{id}")).unwrap();
     let popup = |id: &str| grip(id).downcast::<gtk::MenuButton>().unwrap().popover().unwrap();
