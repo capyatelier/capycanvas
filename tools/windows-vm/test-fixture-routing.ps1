@@ -60,14 +60,20 @@ function Get-Process([int]$Id,[string]$ErrorAction){
 }
 try{
     $resultsFile=Join-Path $Output 'results.jsonl'
-    $snapshot=[IO.File]::Open($resultsFile,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    $source=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'windows-vm.py'))
+    $command=[regex]::Match($source,'(?s)def fixture_status_command\(output\):\s+return r"""(?<script>.*?)"""\.replace\("\{output\}", output\)')
+    if(!$command.Success){throw 'Cannot extract the actual fixture progress command'}
+    $status=[scriptblock]::Create($command.Groups['script'].Value.Replace('{output}',$Output))
+    $writer=[IO.File]::Open($resultsFile,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::Write,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
     try{
         Write-FixtureResult $resultsFile '{"name":"first","exit":0}'
+        $first=& $status|ConvertFrom-Json
+        if(($first.log|ConvertFrom-Json).name -ne 'first'){throw 'The live monitor did not read the first appended fixture result'}
         Write-FixtureResult $resultsFile '{"name":"second","exit":1}'
-        $reader=[IO.StreamReader]::new($snapshot,[Text.Encoding]::UTF8)
-        try{$rows=@($reader.ReadToEnd().TrimEnd().Split([char]10)|ForEach-Object {$_|ConvertFrom-Json})}finally{$reader.Dispose()}
+        $last=& $status|ConvertFrom-Json
+        $rows=@($last.log.TrimEnd().Split([char]10)|ForEach-Object {$_|ConvertFrom-Json})
         if($rows.Count -ne 2 -or $rows[0].name -ne 'first' -or $rows[0].exit -ne 0 -or $rows[1].name -ne 'second' -or $rows[1].exit -ne 1){throw 'Live result snapshots lost or changed an appended fixture result'}
-    }finally{$snapshot.Dispose()}
+    }finally{$writer.Dispose()}
     if(@(Reviews).Count -or $queried.Count){throw 'Missing ownership receipt searched for processes'}
     @{process_id=41;windows=@(@{process_id=42},@{process_id=41})}|ConvertTo-Json|Set-Content (Join-Path $Output 'owned-context.json')
     $owned=@(Reviews)

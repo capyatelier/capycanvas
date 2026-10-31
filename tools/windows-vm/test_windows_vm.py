@@ -722,5 +722,38 @@ class FixtureRunnerTests(unittest.TestCase):
                 self.assertEqual(vm.desktop_running(None), running)
 
 
+    def test_progress_transport_errors_preserve_remote_diagnostics(self):
+        for stdout, stderr in (("", "ReadAllText sharing violation"), ("#< CLIXML", "guest error")):
+            with self.subTest(stdout=stdout), patch.object(vm.time, "sleep"), patch.object(vm, "desktop_running", return_value=True), \
+                    patch.object(vm, "guest", return_value=subprocess.CompletedProcess([], 0, stdout, stderr)):
+                _, _, failure = vm.wait_for_fixtures(None, "review")
+            self.assertIn(repr(stdout), failure)
+            self.assertIn(repr(stderr), failure)
+        def denied(machine, command, **kwargs):
+            if "Stop-ScheduledTask" not in command:
+                raise subprocess.CalledProcessError(1, "progress", output="partial stdout", stderr="access denied")
+            return subprocess.CompletedProcess([], 0)
+        with patch.object(vm.time, "sleep"), patch.object(vm, "desktop_running", return_value=True), patch.object(vm, "guest", side_effect=denied):
+            _, _, failure = vm.wait_for_fixtures(None, "review")
+        self.assertIn("'partial stdout'", failure)
+        self.assertIn("'access denied'", failure)
+
+    def test_partial_jsonl_tail_does_not_stop_a_live_runner(self):
+        plan = {"runs": ["layers", "palettes"], "timeout_minutes": 20}
+        rows = [{"name": name, "exit": 0, "seconds": 1} for name in plan["runs"]]
+        snapshots = [json.dumps({"plan": plan, "log": json.dumps(rows[0])+"\n"+json.dumps(rows[1])[:9], "complete": False}),
+                     json.dumps({"plan": plan, "log": "\n".join(map(json.dumps, rows)), "complete": True})]
+        calls = []
+        def guest(machine, command, **kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess([], 0, snapshots.pop(0), "")
+        with patch.object(vm.time, "sleep"), patch.object(vm, "guest", side_effect=guest), patch.object(vm, "desktop_running", return_value=True):
+            results, actual, failure = vm.wait_for_fixtures(None, "review")
+        self.assertEqual(results, rows)
+        self.assertEqual(actual, plan)
+        self.assertIsNone(failure)
+        self.assertFalse(any("Stop-ScheduledTask" in command for command in calls))
+
+
 if __name__ == "__main__":
     unittest.main()

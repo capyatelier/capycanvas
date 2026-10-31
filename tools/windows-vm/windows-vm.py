@@ -925,6 +925,20 @@ def validate_results(plan, results):
         sys.exit(f"Incomplete fixture coverage: expected {expected}, received {actual}.")
 
 
+def fixture_status_command(output):
+    return r"""$ErrorActionPreference='Stop'
+function Read-FixtureText([string]$Path){
+    $stream=[IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    $reader=[IO.StreamReader]::new($stream)
+    try{$reader.ReadToEnd()}finally{$reader.Dispose();$stream.Dispose()}
+}
+@{plan=$(if(Test-Path '{output}\plan.json'){Read-FixtureText '{output}\plan.json'|ConvertFrom-Json});
+log=$(if(Test-Path '{output}\results.jsonl'){Read-FixtureText '{output}\results.jsonl'});
+error=$(if(Test-Path '{output}\runner-error.txt'){Read-FixtureText '{output}\runner-error.txt'});
+complete=(Test-Path '{output}\complete')}|ConvertTo-Json -Depth 5 -Compress
+""".replace("{output}", output)
+
+
 def wait_for_fixtures(machine, output):
     results = []
     deadline = time.monotonic() + 180
@@ -934,12 +948,11 @@ def wait_for_fixtures(machine, output):
         while True:
             time.sleep(5)
             running = desktop_running(machine)
-            status = guest(machine, f"@{{plan=$(if(Test-Path '{output}\\plan.json'){{Get-Content '{output}\\plan.json' -Raw|ConvertFrom-Json}});"
-                           f"log=$(if(Test-Path '{output}\\results.jsonl'){{[IO.File]::ReadAllText('{output}\\results.jsonl')}});"
-                           f"error=$(if(Test-Path '{output}\\runner-error.txt'){{[IO.File]::ReadAllText('{output}\\runner-error.txt')}});"
-                           f"complete=(Test-Path '{output}\\complete')}}|ConvertTo-Json -Depth 5 -Compress",
-                           capture_output=True, text=True, timeout=60)
-            progress = json.loads(status.stdout)
+            status = guest(machine, fixture_status_command(output), capture_output=True, text=True, timeout=60)
+            try:
+                progress = json.loads(status.stdout)
+            except json.JSONDecodeError as error:
+                raise RuntimeError(f"Invalid fixture progress JSON: {error}; stdout={status.stdout!r}; stderr={status.stderr!r}") from error
             if plan is None and progress["plan"]:
                 plan = progress["plan"]
                 deadline = time.monotonic() + plan["timeout_minutes"] * 60 + 120
@@ -959,6 +972,8 @@ def wait_for_fixtures(machine, output):
                 raise RuntimeError(progress.get("error") or "The desktop task stopped before completing the fixture plan.")
     except (RuntimeError, TimeoutError, ValueError, TypeError, subprocess.SubprocessError) as error:
         failure = str(error)
+        if isinstance(error, subprocess.CalledProcessError):
+            failure += f"; stdout={error.stdout!r}; stderr={error.stderr!r}"
         guest(machine, f"Stop-ScheduledTask {DESKTOP_TASK}", check=False, timeout=60)
     return results, plan, failure
 
