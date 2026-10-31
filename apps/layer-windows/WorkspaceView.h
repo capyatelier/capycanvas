@@ -19,6 +19,7 @@ public:
     void Resize(float width,float height);
     static void MergeLayout(Json const& model,Json const& patch);
     Json ChromeFacts(bool popupOpen);
+    Json ChromeDocument()const;
     void SetWindowResizing(bool value);
     bool CancelGesture();
     bool CancelNativeContacts();

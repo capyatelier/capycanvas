@@ -741,6 +741,7 @@ try{
   $old=$before.groups|Where-Object id -eq $navigator.id
   $g.bounds.x -gt $old.bounds.x+30
  } 'Native Navigator stopped moving'
+ Wait-OverviewProjection
  $after=Presentation
  $afterModel=Model|Select-Object shaders_ready,canvas_ready,brush_ready,windows_gpu_generation,windows_surface_ready,windows_display,windows_workspace,windows_recovery
  [IO.File]::WriteAllText((Join-Path $run 'navigator-motion.json'),(@{before=$before;camera_applied=$cameraApplied;after=$after;camera_model=$cameraModel;after_model=$afterModel}|ConvertTo-Json -Depth 60))

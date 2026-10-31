@@ -430,6 +430,9 @@ void CanvasWindow::CollectGlass(){
     if(self->header)self->header->AppendGlass(regions,self->panel);
     Windows::Data::Json::JsonObject request;request.Insert(L"regions",regions);request.Insert(L"connections",connections);request.Insert(L"arcs",arcs);request.Insert(L"color_bubbles",colors);
     request.Insert(L"panels",panels);Windows::Data::Json::JsonObject packet;packet.Insert(L"glass",request);packet.Insert(L"overviews",overviews);
+    auto source=self->workspace->ChromeDocument();Windows::Data::Json::JsonArray document;
+    for(auto field:{L"width",L"height"})document.Append(CapyUi::N(CapyUi::num(source,field)));
+    packet.Insert(L"document",document);
     auto json=to_string(packet.Stringify());
     if(json==self->lastGlass){self->workspace->ChromeSent(self->chromeRevision);return;}
     self->lastGlass=json;packet.Insert(L"revision",CapyUi::N(double(++self->chromeRevision)));self->workspace->ChromeSent(self->chromeRevision);

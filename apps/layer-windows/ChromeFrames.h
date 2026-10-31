@@ -39,12 +39,12 @@ struct ChromeFrames {
         sentRevision=next;sent.insert_or_assign(next,current);
         while(sent.size()>16&&sent.begin()->first<next)sent.erase(sent.begin());
         if(next!=revision||(current.elements==presented.elements&&current.groups==presented.groups&&current.columns==presented.columns))return false;
-        return Present(next);
+        return Present(next,presented.document);
     }
-    bool Present(uint64_t next){
+    bool Present(uint64_t next,Object document){
         if(closed)return false;
         auto found=sent.find(next);if(found==sent.end()||next<revision)return false;
-        presented=found->second;revision=next;
+        presented=found->second;presented.document=document;revision=next;
         sent.erase(sent.begin(),found);
         std::vector<std::function<void()>> release;
         for(auto it=retiring.begin();it!=retiring.end();)if(!RetainsId(it->first)){

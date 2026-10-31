@@ -452,18 +452,23 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         data->updating=true;struct Reset {bool& value;~Reset(){value=false;}} reset{data->updating};
         applyLayout(data->model,false);data->updating=false;presentBackgrounds();
     }
-    void applyGlass(double previous){
-        auto value=num(object(data->model,L"windows_glass"),L"chrome_revision",-1);if(previous==value)return;
-        if(value<0)data->chromeFrames->Reset();else data->chromeFrames->Present(uint64_t(value));
+    bool applyGlass(){
+        auto value=num(object(data->model,L"windows_glass"),L"chrome_revision",-1);
+        if(value<0){if(!data->chromeFrames->revision)return false;data->chromeFrames->Reset();}else{
+            auto document=array(object(data->model,L"windows_glass"),L"document");
+            if(document.Size()!=2)throw hresult_invalid_argument();
+            if(data->chromeFrames->revision==uint64_t(value))return false;
+            if(!data->chromeFrames->Present(uint64_t(value),O({{L"width",N(document.GetNumberAt(0))},{L"height",N(document.GetNumberAt(1))}})))return false;
+        }
         presentBackgrounds();drawers->PresentChrome();
         overviewOcclusion.Apply(root,data->chromeFrames->presented.overviews,data->chromeFrames->presented.document);
         tracePresentation();
+        return true;
     }
     bool applyFields(J const& model,bool scopes){
         auto update=object(model,L"workspace_update");
         if(!publication.Accept(true,revision(update,L"revision"),revision(update,L"model_revision"),revision(update,L"content_revision")))return false;
         workspaceUpdate=update;
-        auto previousGlass=num(object(data->model,L"windows_glass"),L"chrome_revision",-1);
         model.Insert(L"layout",data->model.GetNamedValue(L"layout"));
         data->model=model;data->state=object(model,L"state");
         if(scopes){
@@ -473,7 +478,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             }
             queueMeasurements();
         }
-        applyGlass(previousGlass);
+        applyGlass();
         tracePresentation();return true;
     }
     bool apply(J const& snapshot,NativeLayoutInput preparedInput){
@@ -491,9 +496,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             workspaceUpdate=update;
         }
         if(!full&&!reflow&&snapshot.HasKey(L"windows_glass")){
-            auto previous=num(object(data->model,L"windows_glass"),L"chrome_revision",-1);
             data->model.Insert(L"windows_glass",snapshot.GetNamedValue(L"windows_glass"));
-            applyGlass(previous);
+            applyGlass();
             if(snapshot.Size()==1){tracePresentation();return true;}
         }
         if(!full&&snapshot.HasKey(L"command_search")){
@@ -539,7 +543,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             auto viewport=array(object(model,L"layout"),L"viewport");
             if(viewport.Size()==2){viewportWidth=float(viewport.GetNumberAt(0));viewportHeight=float(viewport.GetNumberAt(1));}
         }
-        resolveLayout();applyLayout(data->model,full);if(full&&needsPanelMeasurements())preparePanels();data->updating=false;presentBackgrounds();tracePresentation();if(full)colorRequests();return true;
+        resolveLayout();applyLayout(data->model,full);if(full&&needsPanelMeasurements())preparePanels();data->updating=false;if(!applyGlass())presentBackgrounds();tracePresentation();if(full)colorRequests();return true;
     }
     bool applyLayout(J const& model,bool full){
         bool rebuilt=false;
@@ -1273,6 +1277,7 @@ void WorkspaceView::SetWindowResizing(bool value){
     impl->presentBackgrounds();impl->tracePresentation();impl->queueMeasurements();
 }
 WorkspaceView::Json WorkspaceView::ChromeFacts(bool popupOpen){impl->data->externalPopup=popupOpen;return J::Parse(impl->data->chrome.Stringify());}
+WorkspaceView::Json WorkspaceView::ChromeDocument()const{return impl->data->chromeFrames->current.document;}
 void WorkspaceView::CancelPreviews(){for(auto const& panel:impl->previewPanels)panel->Cancel();}
 bool WorkspaceView::CancelGesture(){
     bool closed=impl->data->dismissTransients();
