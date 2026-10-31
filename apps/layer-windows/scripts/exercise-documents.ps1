@@ -1531,6 +1531,7 @@ $custom=@{item=$null};Wait-Until {
 $custom.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 $entry=Named-Control 'Dark theme base color' ([System.Windows.Automation.ControlType]::Edit)
 $entry.SetFocus();$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('#223344')
+$reopenedDrawing=@((Model).state.tabs|Where-Object active)[0].id
 Request-Close -WithPreferences
 Wait-Closed 'Session close did not finish'
 if((Get-Item -LiteralPath $stderr).Length){throw 'Native review reported stderr'}
@@ -1538,7 +1539,7 @@ $stderr=Join-Path $run 'reopened.stderr.log'
 $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
 $null=$review.Handle
 Bind-ReviewWindow 'No restarted review window'
-Wait-Until {(Model).brush_ready -and !(Model).windows_recovery.busy -and !(Model).windows_recovery.restoring} 'Session did not reopen' 120
+Wait-Until {$m=Model;$m.brush_ready -and @($m.state.tabs|Where-Object active)[0].id -eq $reopenedDrawing -and !$m.windows_recovery.busy -and !$m.windows_recovery.restoring} 'Session did not reopen' 120
 if((Model).state.settings.dark_base -ne '#223344' -or !(Model).state.document_file.modified){throw 'Window close lost the focused Preferences draft or unsaved drawing'}
 Request-Close;Wait-Closed 'Restarted session close did not finish'
 if((Get-Item -LiteralPath $stderr).Length){throw 'Restarted native review reported stderr'}
