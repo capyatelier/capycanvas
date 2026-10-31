@@ -4242,41 +4242,43 @@ class AndroidHostTest {
             activity.onConfigurationChanged(value)
         }
         try {
-            configuration(android.content.res.Configuration(original).apply { fontScale = 1.3f })
-            for (theme in listOf("light", "dark")) {
-                action(obj("type" to "set_theme", "theme" to theme))
-                action(obj("type" to "restore_workspace", "workspace" to JSONObject(defaultWorkspace)))
-                repeat(24) { action(obj("type" to "layer", "action" to obj("op" to "new", "group" to false, "clipped" to false))) }
-                val rows = state().array("layers").objects().take(24)
-                val ids = rows.map { it.getLong("id") }
-                for (id in ids.drop(12)) action(obj("type" to "set_layer_opacity", "id" to id, "opacity" to .5))
-                floatPanel("layers", 100f, 100f)
-                val fixture = JSONObject(state().getJSONObject("workspace").toString())
-                fixture.getJSONObject("layout").array("floating").objects().first { it.getJSONObject("root").array("panels").values().contains("layers") }
-                    .put("height", 220).put("width", 300)
-                fixture.getJSONObject("layout").put("fit_height_groups", JSONArray())
-                action(obj("type" to "restore_workspace", "workspace" to fixture))
-                fun unit(): Float = host.snapshot!!.array("panel_measurements").objects().first { it.getString("panel") == "layers" }
-                    .getJSONObject("scroll").number("unit_height")
-                compose.onNodeWithTag("layer-rows").performScrollToIndex(0)
-                settle()
-                val ordinary = bounds("layer-row-${ids[0]}").height / compose.activity.resources.displayMetrics.density
-                val expected = unit()
-                assertEquals("$theme standard unit follows the ordinary native row", ordinary, expected, 1f)
-                compose.onNodeWithTag("layer-rows").performScrollToIndex(18)
-                settle()
-                val described = bounds("layer-row-${ids[18]}").height / compose.activity.resources.displayMetrics.density
-                assertTrue("$theme font scale 1.3 produces a taller described row", described > ordinary + 1f)
-                val units = mutableListOf<Float>()
-                for (index in listOf(0, 18, 2, 20)) {
-                    compose.onNodeWithTag("layer-rows").performScrollToIndex(index)
-                    settle(); units.add(unit())
+            for (fontScale in listOf(1f, 1.3f)) {
+                configuration(android.content.res.Configuration(original).apply { this.fontScale = fontScale })
+                for (theme in listOf("light", "dark")) {
+                    action(obj("type" to "set_theme", "theme" to theme))
+                    action(obj("type" to "restore_workspace", "workspace" to JSONObject(defaultWorkspace)))
+                    repeat(24) { action(obj("type" to "layer", "action" to obj("op" to "new", "group" to false, "clipped" to false))) }
+                    val rows = state().array("layers").objects().take(24)
+                    val ids = rows.map { it.getLong("id") }
+                    for (id in ids.drop(12)) action(obj("type" to "set_layer_opacity", "id" to id, "opacity" to .5))
+                    floatPanel("layers", 100f, 100f)
+                    val fixture = JSONObject(state().getJSONObject("workspace").toString())
+                    fixture.getJSONObject("layout").array("floating").objects().first { it.getJSONObject("root").array("panels").values().contains("layers") }
+                        .put("height", 220).put("width", 300)
+                    fixture.getJSONObject("layout").put("fit_height_groups", JSONArray())
+                    action(obj("type" to "restore_workspace", "workspace" to fixture))
+                    fun unit(): Float = host.snapshot!!.array("panel_measurements").objects().first { it.getString("panel") == "layers" }
+                        .getJSONObject("scroll").number("unit_height")
+                    compose.onNodeWithTag("layer-rows").performScrollToIndex(0)
+                    settle()
+                    val ordinary = bounds("layer-row-${ids[0]}").height / compose.activity.resources.displayMetrics.density
+                    val expected = unit()
+                    assertEquals("$theme/$fontScale standard unit follows the ordinary native row", ordinary, expected, 1f / compose.activity.resources.displayMetrics.density)
+                    compose.onNodeWithTag("layer-rows").performScrollToIndex(18)
+                    settle()
+                    val described = bounds("layer-row-${ids[18]}").height / compose.activity.resources.displayMetrics.density
+                    if (fontScale == 1.3f) assertTrue("$theme font scale 1.3 produces a taller described row", described > ordinary + 1f)
+                    val units = mutableListOf<Float>()
+                    for (index in listOf(0, 18, 2, 20)) {
+                        compose.onNodeWithTag("layer-rows").performScrollToIndex(index)
+                        settle(); units.add(unit())
+                    }
+                    File(compose.activity.getExternalFilesDir(null), "validation/batch2/layers-$theme-$fontScale-unit.json").apply {
+                        parentFile!!.mkdirs(); writeText(obj("font_scale" to compose.activity.resources.configuration.fontScale,
+                            "ordinary" to ordinary, "described" to described, "units" to JSONArray(units)).toString(2))
+                    }
+                    assertTrue("$theme/$fontScale visible row composition cannot change the standard unit: $units", units.all { kotlin.math.abs(it - expected) <= 1f / compose.activity.resources.displayMetrics.density })
                 }
-                File(compose.activity.getExternalFilesDir(null), "validation/batch2/layers-$theme-unit.json").apply {
-                    parentFile!!.mkdirs(); writeText(obj("font_scale" to compose.activity.resources.configuration.fontScale,
-                        "ordinary" to ordinary, "described" to described, "units" to JSONArray(units)).toString(2))
-                }
-                assertTrue("$theme visible row composition cannot change the standard unit: $units", units.all { kotlin.math.abs(it - expected) <= 1f })
             }
         } finally { configuration(original) }
     }
