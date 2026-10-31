@@ -35,9 +35,19 @@ export async function checkToolbarDrawerSwitching({call,evaluate,settle}) {
     }
     assert.equal(await evaluate('document.querySelectorAll(\'.content-drawer[data-drawer="tool"] > .drawer-column\').length'),i===0?2:1);
     if(i===2)assert.ok(await evaluate('(()=>{const column=document.querySelector(\'.content-drawer[data-drawer="tool"] > .drawer-column\').getBoundingClientRect(),footer=document.querySelector(\'.content-drawer[data-drawer="tool"] .palette-footer\').getBoundingClientRect();return footer.top>=column.top&&footer.bottom<=column.bottom+1})()'),'The color drawer must show the complete Palette footer');
+    await measuredWidths(`toolbar opener ${i}`);
   };
   const toolCommands=['pen','pencil','brush','eraser','airbrush','retouch','blend','liquify','lasso','move','hand','eyedropper','gradient','figure','ruler','auto_select','fill'];
   const originalTool=saved.commands.find(c=>c.selected&&toolCommands.includes(c.id))?.id;
+  await evaluate(`window.drawerMeasurements={query:layerApp.app.drawer,plan:layerApp.app.drawer_measure,samples:[],plans:0};layerApp.app.drawer=function(q){const result=drawerMeasurements.query.call(this,q);if(result&&!q.closing){const root=document.querySelector('.content-drawer[data-drawer="'+(q.column??'tool')+'"]');drawerMeasurements.samples.push({widths:[...root.querySelectorAll(':scope > .drawer-column')].map(n=>parseFloat(n.style.width)),target:result.placement.columns.map(c=>c.width)});}return result;};if(drawerMeasurements.plan)layerApp.app.drawer_measure=function(q){drawerMeasurements.plans++;return drawerMeasurements.plan.call(this,q);};`);
+  const measuredWidths=async label=>{
+    const result=await evaluate(`(()=>{const result={samples:drawerMeasurements.samples.splice(0),plans:drawerMeasurements.plans,reduced:matchMedia('(prefers-reduced-motion: reduce)').matches};drawerMeasurements.plans=0;return result;})()`);
+    assert.ok(result.samples.length,`${label}: native drawer placement was queried`);
+    for(const sample of result.samples)assert.deepEqual(sample.widths,sample.target,`${label}: heights are measured at Rust's current target widths`);
+    if(!result.reduced&&result.samples.length>1)assert.ok(result.plans<result.samples.length,`${label}: width plans are retained between animation placements`);
+    console.log('Drawer widths',JSON.stringify({label,queries:result.samples.length,plans:result.plans,widths:result.samples[0].widths}));
+  };
+
   try {
     await send({type:'restore_workspace',workspace:fixture});
     for(const motion of ['no-preference','reduce']) {
@@ -85,8 +95,19 @@ export async function checkToolbarDrawerSwitching({call,evaluate,settle}) {
     await send({type:'customize',action:{type:'set_column_drawers',column:41,drawers:true}});
     await send({type:'customize',action:{type:'toggle_column_drawer',group:41,panel:'toolbar'}});
     await click(2);await check(2);await click(1,2);await check(1);await click(0,1);await check(0);
+    const columns=structuredClone(fixture);
+    columns.layout.bands=[{id:40,edge:'left',extent:252,root:{kind:'split',id:46,axis:'vertical',fraction:.5,first:tabs(41,['brushes','sizes']),second:tabs(43,['layers','properties'])}}];columns.layout.next_id=Math.max(47,columns.layout.next_id);
+    await call('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'no-preference'}]});
+    for(const device of ['mouse','touch','pen']){
+      await send({type:'restore_workspace',workspace:columns});await send({type:'customize',action:{type:'set_column_collapsed',group:46,collapsed:true}});await send({type:'customize',action:{type:'set_column_drawers',column:46,drawers:true}});
+      await evaluate('drawerMeasurements.samples.length=0;drawerMeasurements.plans=0');
+      await contact('.collapsed-column .column-tab[data-panel="brushes"]',device);await measuredWidths(`${device} first column opener`);
+      await contact('.collapsed-column .column-tab[data-panel="layers"]',device);await measuredWidths(`${device} switched column opener`);
+      await contact('.collapsed-column .column-tab[data-panel="layers"]',device);
+    }
     console.log('PASS: first-click drawer switching on all toolbar edges and inside a collapsed drawer; mouse/touch/pen outside dismissal, menu activation and no canvas marks');
   } finally {
+    await evaluate('layerApp.app.drawer=drawerMeasurements.query;if(drawerMeasurements.plan)layerApp.app.drawer_measure=drawerMeasurements.plan;delete window.drawerMeasurements');
     await call('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:reducedMotion?'reduce':'no-preference'}]});
     await send({type:'restore_workspace',workspace:saved.workspace});
     await send({type:'select_brush',id:saved.brush.preset});

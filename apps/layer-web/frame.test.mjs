@@ -258,3 +258,27 @@ test('panel frames keep one scroll owner through body overflow, scroll movement 
   assert.equal(viewport.scrollHeight,viewport.clientHeight,'chrome contributes no extent to the content viewport');
   const excluded=context.panelFrame(new Node(),false);assert.equal(excluded.children.length,1);assert.ok(!excluded.classes.has('scrollable'),'dedicated layer and toolbar scroll policies remain excluded');
 });
+
+test('drawer plans follow exact native tile facts and retire missing sources',()=>{
+  const chrome=readFileSync(new URL('workspace-chrome.js',import.meta.url),'utf8');
+  const native={column:41,anchor:{panel:'toolbar',tile:2},bounds:{x:12,y:24,width:36,height:36}};
+  let plans=0,placements=0,disposed=0;
+  const body={style:{},querySelectorAll:()=>[]},record={column:null,drawer:{anchor:{kind:'tile',panel:'toolbar',tile:2}},bodies:[body],root:{style:{}},shadow:{style:{}},started:0};
+  const bounds={x:0,y:0,width:242,height:120},drawers=new Map([['tool',record]]);
+  const context={drawers,tiles:[structuredClone(native)],animating:false,catalog:{panel_expansion_ms:200},
+    workspace:{clientWidth:1200,clientHeight:900,querySelectorAll:()=>[]},
+    app:{drawer_measure(){plans++;return{measure:context.tiles.length?{placement:{columns:[bounds]}}:null,toolbars:[]};},drawer(){placements++;return{placement:{bounds,columns:[bounds],direction:'right'},connection:null};}},
+    contentHeight:()=>120,matchMedia:()=>({matches:false}),place(){},dispose(){disposed++;},dispatch(){},measureColumnDrawers(){},editor:{queuePositions(){}},
+    requestAnimationFrame(){assert.fail('A completed drawer does not schedule another callback');}};
+  const start=chrome.indexOf('  function animate(now) {'),end=chrome.indexOf('  workspace.addEventListener("scroll"',start);
+  assert.ok(start>=0&&end>start);runInNewContext(chrome.slice(start,end)+'\nglobalThis.step=()=>animate(200);',context);
+  const step=facts=>{context.tiles=facts?[structuredClone(facts)]:[];context.step();};
+  step(native);assert.equal(plans,1);
+  step(native);assert.equal(plans,1,'Identical native facts retain the width plan');
+  for(const key of ['column','x','y','width','height']){
+    const changed=structuredClone(native);if(key==='column')changed.column++;else changed.bounds[key]++;
+    const before=plans;step(changed);assert.equal(plans,before+1,`${key} changes invalidate the old plan`);
+    step(changed);assert.equal(plans,before+1,`${key} unchanged across placements retains the plan`);
+  }
+  const before=placements;step(null);assert.equal(disposed,1);assert.equal(drawers.has('tool'),false,'A missing native source leaves no drawer record');assert.equal(placements,before,'Missing sources are not placed from a stale plan');
+});

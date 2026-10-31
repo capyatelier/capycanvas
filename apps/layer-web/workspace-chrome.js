@@ -79,7 +79,7 @@ export function tabHover(tab, presentation) {
 }
 export function createWorkspaceChrome({app,state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,draggable,grip,contentPanel,tabLabel,releaseTabs}) {
   const columns=new Map(),drawers=new Map(),catalog=liveCopy(app,"catalog");
-  let resolved,animating=false;
+  let resolved,animating=false,tiles=[];
   const send=action=>dispatch({type:"customize",action});
   const local=(b,origin)=>({...b,x:b.x-origin.x,y:b.y-origin.y});
   function contentHeight(body) {
@@ -128,7 +128,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
     return root;
   }
   function arrange(layout,layoutOnly=false) {
-    resolved=layout;const live=new Set();
+    resolved=layout;for(const r of drawers.values())r.measure=null;const live=new Set();
     for(const column of layout.collapsed) {
       live.add(column.id);let root=columns.get(column.id);
       // Keep held tiles and their capture alive while geometry or selection changes.
@@ -230,7 +230,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
         });
         record=Object.assign(record??{},{key,root,shadow,bodies,column,drawer,inspector,from,started:performance.now()-(switching?catalog.panel_expansion_ms:0),placement:from});drawers.set(id,record);
       }
-      record.drawer=drawer;
+      record.drawer=drawer;record.measure=null;
       record.tabStyle=drawer.tabs?app.group_tab_style(drawer.tabs.group):null;
       const header=record.root.querySelector(':scope > .drawer-tabs');
       if(header&&drawer.tabs&&header.dataset.tabStyle!==record.tabStyle){releaseTabs(header);header.remove();}
@@ -249,14 +249,19 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
     for(const node of workspace.querySelectorAll('[data-drawer-facing]'))delete node.dataset.drawerFacing;
     for(const node of workspace.querySelectorAll('[data-drawer-source-corners]'))delete node.dataset.drawerSourceCorners;
     for(const[id,r]of drawers) {
-      const measured=r.placement;
-      if(!r.closing) for(const [index,body] of r.bodies.entries()) {
-        const width=measured?.columns?.[index]?.width||232;
-        body.style.width=`${width}px`;
-        for(const strip of body.querySelectorAll("[data-drawer-toolbar]")) {
-          const geometry=app.drawer_toolbar(strip.dataset.drawerToolbar,width);
-          strip.style.height=`${geometry.content_height}px`;
-          [...strip.children].forEach((tile,i)=>customization.layoutTile(tile,geometry.tiles[i],strip.dataset.axis,geometry.tile_style));
+      if(!r.closing) {
+        const anchor=r.drawer.anchor,tile=anchor.kind==='tile'?tiles.find(m=>m.anchor.panel===anchor.panel&&m.anchor.tile===anchor.tile):undefined,previous=r.measuredTile;
+        if(tile?.column!==previous?.column||tile&&(!previous||tile.bounds.x!==previous.bounds.x||tile.bounds.y!==previous.bounds.y||tile.bounds.width!==previous.bounds.width||tile.bounds.height!==previous.bounds.height))r.measure=null;
+        r.measuredTile=tile;
+        r.measure??=app.drawer_measure({viewport:[workspace.clientWidth,workspace.clientHeight],column:r.column,tiles});
+        if(!r.measure.measure){dispose(r);drawers.delete(id);continue;}
+        for(const [index,body] of r.bodies.entries()) {
+          body.style.width=`${r.measure.measure.placement.columns[index].width}px`;
+          for(const strip of body.querySelectorAll("[data-drawer-toolbar]")) {
+            const geometry=r.measure.toolbars.find(t=>t.panel===strip.dataset.drawerToolbar).layout;
+            strip.style.height=`${geometry.content_height}px`;
+            [...strip.children].forEach((tile,i)=>customization.layoutTile(tile,geometry.tiles[i],strip.dataset.axis,geometry.tile_style));
+          }
         }
       }
       const page=r.inspector?.measure(now);
@@ -282,7 +287,6 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
 
       r.root.style.zIndex=r.column==null?"1900":"1800";
       r.placement.columns.forEach((bounds,i)=>{
-        more ||= bounds.width!==(measured?.columns?.[i]?.width||232);
         place(r.bodies[i],bounds);
       });
       r.inspector?.layout();
@@ -320,6 +324,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       more ||= progress<1||!!page?.running;
     }
     // Geometry is transient and Rust suppresses identical measurement updates.
+    tiles=measurements;
     dispatch({type:"measure_drawer_tiles",measurements});
     measureColumnDrawers();
     editor.queuePositions();

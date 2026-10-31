@@ -229,29 +229,27 @@ impl WebApp {
             "footer_height": layer_ui::LayerDrawerSizing::FOOTER_HEIGHT,
         }))
     }
-    pub fn drawer_toolbar(&self, panel: JsValue, width: f32) -> Result<JsValue, JsValue> {
-        if !width.is_finite() || width <= 0. {
-            return Err(js("Invalid drawer width"));
+    pub fn drawer_measure(&self, query: JsValue) -> Result<JsValue, JsValue> {
+        #[derive(Deserialize)]
+        struct Query {
+            viewport: [f32; 2],
+            column: Option<u32>,
+            tiles: Vec<layer_ui::DrawerTileMeasurement>,
         }
-        let panel = serde_wasm_bindgen::from_value(panel).map_err(js)?;
-        let config = self
-            .session
-            .state()
-            .workspace
-            .layout
-            .panel(panel)
-            .map_err(js)?;
-        let height = layer_ui::toolbar_content_height(width, config.tiles(), config.tile_style);
-        let geometry = layer_ui::toolbar_tile_layout(
-            width,
-            height,
-            layer_ui::Axis::Vertical,
-            config.tiles(),
-            false,
-            config.tile_style,
-        );
-        let mut value = json!(geometry);
-        value["content_height"] = json!(height);
+        let q: Query = serde_wasm_bindgen::from_value(query).map_err(js)?;
+        let state = self.session.state();
+        let drawer = match q.column {
+            None => state.customization.drawer.as_ref(),
+            Some(id) => state.customization.column_drawers.iter().find(|d|
+                matches!(d.anchor, layer_ui::DrawerAnchor::Column { column, .. } if column == id)),
+        };
+        let value = match drawer {
+            Some(drawer) => self.session.layout_resolve_input().drawer_geometry(q.viewport, &json!({
+                "model":drawer,"column_drawers":state.customization.column_drawers,
+                "tiles":q.tiles,"toolbars":true,
+            }).to_string()).map_err(js)?,
+            None => json!({"measure":null,"toolbars":[]}),
+        };
         serialize(&value)
     }
     pub fn application_link(&self, link: JsValue) -> Result<String, JsValue> {
