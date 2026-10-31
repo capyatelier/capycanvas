@@ -914,7 +914,6 @@ pub struct Workspace {
     workspace_drag: RefCell<Option<NativeWorkspaceDrag>>,
     edge_grabs: edge_grab::EdgeGrabs,
     publication: workspace_update::Publication,
-    measuring_panels: Cell<bool>,
     panel_metric_context: RefCell<Option<layer_ui::PanelMetricContext>>,
     panel_measurement_report: RefCell<Option<layer_ui::PanelMeasurementBatch>>,
     drop_hint: RefCell<Option<DropHint>>,
