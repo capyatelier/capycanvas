@@ -2314,7 +2314,7 @@ mod tests {
         let context=layer_ui::PanelMetricContext {generation:1,scale:2.,text_scale:1.,style:"host-test".into()};
         app.dispatch(UiAction::MeasurePanels {
             measurements: layer_ui::PanelMeasurementBatch {context:context.clone(),reports:vec![layer_ui::PanelMeasurementReport {
-                request:request.clone(),context,tab_width:Some(76.),body:Some(layer_ui::PanelBodyMeasurement {
+                request:request.clone(),context,tab_widths:Some([76.,36.]),body:Some(layer_ui::PanelBodyMeasurement {
                     actual_width:request.width,content_height:480.,scroll:None,
                 }),
             }]},
@@ -2323,7 +2323,7 @@ mod tests {
         let snapshot = app.snapshot();
         let brushes=snapshot["panel_measurements"].as_array().unwrap().iter()
             .find(|measurement|measurement["panel"]=="brushes").unwrap();
-        assert_eq!(brushes["tab_width"], 76.0);
+        assert_eq!(brushes["tab_widths"], serde_json::json!([76.,36.]));
         assert!(
             snapshot["state"]["workspace"]["layout"]
                 .get("measurements")

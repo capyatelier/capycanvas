@@ -14,7 +14,7 @@ struct PanelMeasurementOrigin: Hashable {
 
 @MainActor final class PanelMeasurements {
     private weak var store: EditorStore?
-    private struct Tab { let origin: PanelMeasurementOrigin; let width: CGFloat }
+    private struct Tab { let origin: PanelMeasurementOrigin; var widths: [CGFloat] = [0, 0] }
     private struct Body {
         let origin: PanelMeasurementOrigin
         var width: CGFloat = 0
@@ -58,7 +58,9 @@ struct PanelMeasurementOrigin: Hashable {
         for (key, value) in facts where value.isFinite && value >= 0 {
             guard let origin = key.origin, accepts(origin, tab: key.kind == .tab) else { continue }
             if key.kind == .tab {
-                widths[key.panel] = Tab(origin: origin, width: value)
+                var tab = widths[key.panel].flatMap { $0.origin.request["tab"].string == origin.request["tab"].string && $0.origin.context.stableKey == origin.context.stableKey ? $0 : nil } ?? Tab(origin: origin)
+                tab.widths[key.part == "icon" ? 1 : 0] = value
+                widths[key.panel] = tab
                 continue
             }
             let token = origin.key
@@ -109,9 +111,9 @@ struct PanelMeasurementOrigin: Hashable {
             } ?? candidates.first
             guard tab != nil || body != nil else { return nil }
             let origin = body?.origin ?? tab!.origin
-            let measuredTab = tab.flatMap { tab in tab.origin.request["tab"].string == origin.request["tab"].string ? quantize(tab.width) : nil }
+            let measuredTab: [Double]? = tab.flatMap { tab in tab.origin.request["tab"].string == origin.request["tab"].string && tab.widths.allSatisfy { $0 > 0 } ? tab.widths.map(quantize) : nil }
             var report: [String: Any] = ["request": origin.request.raw, "context": origin.context.raw,
-                "tab_width": measuredTab as Any? ?? NSNull(), "body": NSNull()]
+                "tab_widths": measuredTab as Any? ?? NSNull(), "body": NSNull()]
             if let body {
                 var measured: [String: Any] = ["actual_width": quantize(body.width), "content_height": quantize(body.height)]
                 if let scroll = body.scrollHeight {
@@ -212,11 +214,13 @@ struct WorkspacePanelLabelMeasurements: View {
     var body: some View {
         ZStack {
             ForEach(store.snapshot["panels"].array, id: \.measurementPanelID) { panel in
-                WorkspaceTabLabel(tab: panel, selected: false, palette: EditorPalette(source: store.state["palette"]))
-                    .background(GeometryReader { allocation in
-                        Color.clear.preference(key: PanelSizeFacts.self,
-                            value: [PanelSizeKey(panel: panel["id"].string, part: "tab", kind: .tab, origin: origins[panel["id"].string]): allocation.size.width])
-                    })
+                ForEach(0..<2) { index in
+                    WorkspaceTabLabel(tab: panel.replacing("tab", with: JSON(["show_icon": true, "show_name": index == 0])), selected: false, palette: EditorPalette(source: store.state["palette"]))
+                        .background(GeometryReader { allocation in
+                            Color.clear.preference(key: PanelSizeFacts.self,
+                                value: [PanelSizeKey(panel: panel["id"].string, part: index == 0 ? "tab" : "icon", kind: .tab, origin: origins[panel["id"].string]): allocation.size.width])
+                        })
+                }
             }
         }.hidden().allowsHitTesting(false).accessibilityHidden(true)
     }

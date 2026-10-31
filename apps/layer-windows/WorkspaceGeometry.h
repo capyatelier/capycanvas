@@ -114,14 +114,13 @@ inline std::array<bool,4> sourceCorners(std::shared_ptr<WorkspaceData> const& da
     auto list=value.GetArray();for(uint32_t i=0;i<4&&i<list.Size();++i)result[i]=list.GetBooleanAt(i);
     return result;
 }
-struct AutomaticTab{Button tab{nullptr};TextBlock name{nullptr};std::wstring key;};
 inline std::vector<hstring> panelTabIds(A const& panels){
     std::vector<hstring> ids;ids.reserve(panels.Size());
     for(auto value:panels)ids.push_back(value.GetString());
     std::sort(ids.begin(),ids.end());return ids;
 }
-inline bool orderPanelTabs(StackPanel const& row,A const& order,std::map<std::wstring,Grid> const& tabs,std::vector<AutomaticTab>& automatic){
-    uint32_t index=0,automaticIndex=0;
+inline bool orderPanelTabs(StackPanel const& row,A const& order,std::map<std::wstring,Grid> const& tabs){
+    uint32_t index=0;
     bool reordered=false;
     for(auto value:order){
         auto found=tabs.find(std::wstring(value.GetString()));if(found==tabs.end())continue;
@@ -133,33 +132,13 @@ inline bool orderPanelTabs(StackPanel const& row,A const& order,std::map<std::ws
             if(children.IndexOf(shell,previous))children.RemoveAt(previous);
             children.InsertAt(index,shell);
         }
-        auto start=automatic.begin()+automaticIndex;
-        auto item=std::find_if(start,automatic.end(),[&](auto const& entry){return entry.tab==tab;});
-        if(item!=automatic.end()){std::rotate(start,item,item+1);++automaticIndex;}
         ++index;
     }
     return reordered;
 }
-inline bool automaticTabs(std::shared_ptr<WorkspaceData> const& data,double group){
-    return str(object(data->model,L"windows_tab_styles"),to_hstring(uint32_t(group)).c_str())==L"automatic";
-}
-inline void fitAutomaticTabs(std::shared_ptr<WorkspaceData> const& data,std::vector<AutomaticTab> const& tabs,double available,std::map<std::wstring,double>& widths){
-    if(tabs.empty()||available<=0)return;
-    A pairs;
-    for(auto const& t:tabs){
-        auto found=widths.find(t.key);
-        if(found==widths.end()){
-            auto shown=t.name.Visibility();t.name.Visibility(Visibility::Visible);
-            t.tab.Measure({std::numeric_limits<float>::infinity(),std::numeric_limits<float>::infinity()});
-            found=widths.emplace(t.key,t.tab.DesiredSize().Width).first;t.name.Visibility(shown);
-        }
-        A pair;pair.Append(N(found->second));pair.Append(N(data->panelMetric(L"tab_bar_height")));pairs.Append(pair);
-    }
-    auto request=O({{L"type",S(L"automatic_tab_names")},{L"available",N(available)},{L"widths",pairs}});
-    NativeString reply(capy_toolbar_ui(data->localization.get(),to_string(request.Stringify()).c_str()),capy_string_free);
-    if(!reply)return;auto names=JsonValue::Parse(to_hstring(reply.get()));if(names.ValueType()!=JsonValueType::Array)return;
-    auto list=names.GetArray();
-    for(uint32_t i=0;i<tabs.size()&&i<list.Size();++i)tabs[i].name.Visibility(list.GetBooleanAt(i)?Visibility::Visible:Visibility::Collapsed);
+inline J panelTabPresentation(A const& panels,A const& presentations,hstring const& panel){
+    for(uint32_t i=0;i<panels.Size()&&i<presentations.Size();++i)if(panels.GetStringAt(i)==panel)return presentations.GetObjectAt(i);
+    return J{};
 }
 inline PathGeometry roundedRectangle(float width,float height,std::array<float,4> radii){
     for(auto& radius:radii)radius=std::min(radius,std::max(0.f,std::min(width,height)*.5f));

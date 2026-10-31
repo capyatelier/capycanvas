@@ -78,7 +78,9 @@ import Darwin
                 guard let origin = origins[key.panel] else { preconditionFailure("Missing measurement request for \(key.panel)") }
                 tagged[PanelSizeKey(panel: key.panel, part: key.part, kind: key.kind,
                     origin: origin)] = value
-                if key.kind != .tab { bodies.insert(key.panel) }
+                if key.kind == .tab {
+                    tagged[PanelSizeKey(panel: key.panel, part: "icon", kind: .tab, origin: origin)] = 36
+                } else { bodies.insert(key.panel) }
             }
             for panel in bodies {
                 guard let origin = origins[panel] else { continue }
@@ -128,13 +130,14 @@ import Darwin
                 context: requested.context)
             retainedUnits.receive([
                 PanelSizeKey(panel: "layers", part: "tab", kind: .tab, origin: requested): 86,
+                PanelSizeKey(panel: "layers", part: "icon", kind: .tab, origin: requested): 36,
                 PanelSizeKey(panel: "layers", part: "width", kind: .width, origin: requested): requestedWidth,
                 PanelSizeKey(panel: "layers", part: "header", origin: requested): 70,
                 PanelSizeKey(panel: "layers", part: "width", kind: .width, origin: other): otherWidth,
                 PanelSizeKey(panel: "layers", part: "header", origin: other): 130,
             ])
             try await wait("Two origins for one panel do not sum body fragments or retag width") {
-                measuredUnitPanel()["tab_width"].number == 86
+                measuredUnitPanel()["tab_widths"][0].number == 86
                     && measuredUnitPanel()["content_height"].number == 70
             }
             let rowUnits: [(CGFloat?, CGFloat)] = [(40, 40), (nil, 40), (32, 32), (0, 32)]
@@ -149,7 +152,7 @@ import Darwin
                 if let unit { facts[PanelSizeKey(panel: "layers", part: "row-unit", kind: .unit)] = unit }
                 receive(retainedUnits, from: unitStore, facts: facts)
                 try await wait("Measured row units survive lazy absence and adopt actual smaller rows") {
-                    measuredUnitPanel()["tab_width"].number == Double(tabWidth)
+                    measuredUnitPanel()["tab_widths"][0].number == Double(tabWidth)
                         && measuredUnitPanel()["scroll"]["unit_height"].number == expected
                         && measuredUnitPanel()["content_height"].number == 212
                 }
@@ -197,7 +200,7 @@ import Darwin
             }
             receive(cache, from: cacheStore, facts: rowFacts(40, tab: 190))
             try await wait("Known row unit is measured before the presentation change") {
-                cacheMeasured("layers")["tab_width"].number == 190 && cacheMeasured("layers")["scroll"]["unit_height"].number == 40
+                cacheMeasured("layers")["tab_widths"][0].number == 190 && cacheMeasured("layers")["scroll"]["unit_height"].number == 40
             }
             let illustratorLayersTab = cache.origins(scale: 1, style: "panel-measurements-test")["layers"]!.request["tab"].string
             try await cacheStore.workspaces!.perform(["type": "switch", "id": "builtin:workspace:painter"])
@@ -218,8 +221,8 @@ import Darwin
             let painterLayersTab = cache.origins(scale: 1, style: "panel-measurements-test")["layers"]!.request["tab"].string
             let retainedLayerTab = illustratorLayersTab == painterLayersTab ? 190.0 : 0.0
             try await wait("Hidden workspace keeps the registered Layers tab fact") {
-                cacheMeasured(painterPanel)["tab_width"].number == 191
-                    && cacheMeasured("layers")["tab_width"].number == retainedLayerTab
+                cacheMeasured(painterPanel)["tab_widths"][0].number == 191
+                    && cacheMeasured("layers")["tab_widths"][0].number == retainedLayerTab
             }
             let layerHeader = cacheStore.snapshot["header"]["items"].array.first {
                 $0["resolved_control"]["kind"].string == "panel" && $0["resolved_control"]["panel"].string == "layers"
@@ -231,13 +234,13 @@ import Darwin
             try await wait("Layers is presented again with the same registration") { registered("layers") && presented("layers") }
             receive(cache, from: cacheStore, facts: rowFacts(40, tab: 192))
             try await wait("Reopened Layers publishes a fresh body fact") {
-                cacheMeasured("layers")["tab_width"].number == 192
+                cacheMeasured("layers")["tab_widths"][0].number == 192
                     && cacheMeasured("layers")["scroll"]["unit_height"].number == 40
                     && cacheMeasured("layers")["content_height"].number == 212
             }
             receive(cache, from: cacheStore, facts: rowFacts(32, tab: 193))
             try await wait("Actual smaller rows replace the retained unit after reopening") {
-                cacheMeasured("layers")["tab_width"].number == 193 && cacheMeasured("layers")["scroll"]["unit_height"].number == 32
+                cacheMeasured("layers")["tab_widths"][0].number == 193 && cacheMeasured("layers")["scroll"]["unit_height"].number == 32
             }
             let before = Set(cacheStore.state["workspace"]["layout"]["panels"].array.map { $0["id"].string })
             try await cacheStore.apply(["type": "customize", "action": ["type": "duplicate_toolbar", "panel": "toolbar"]])
@@ -248,7 +251,7 @@ import Darwin
             receive(cache, from: cacheStore, facts: [PanelSizeKey(panel: custom, part: "tab", kind: .tab): 194,
                 PanelSizeKey(panel: custom, part: "body"): 99])
             try await wait("The new toolbar has cached width and body facts") {
-                cacheMeasured(custom)["tab_width"].number == 194 && cacheMeasured(custom)["content_height"].number == 99
+                cacheMeasured(custom)["tab_widths"][0].number == 194 && cacheMeasured(custom)["content_height"].number == 99
             }
             try await cacheStore.apply(["type": "customize", "action": ["type": "delete_toolbar", "panel": custom]])
             try await cacheStore.apply(["type": "customize", "action": ["type": "confirm_toolbar"]])
@@ -256,19 +259,19 @@ import Darwin
             let remaining = painterPanel
             receive(cache, from: cacheStore, facts: [PanelSizeKey(panel: remaining, part: "tab", kind: .tab): 195])
             try await wait("Removed-config cache pruning is published") {
-                cacheMeasured(remaining)["tab_width"].number == 195 && cacheMeasured(custom).isNull
+                cacheMeasured(remaining)["tab_widths"][0].number == 195 && cacheMeasured(custom).isNull
             }
             try await cacheStore.apply(["type": "invoke", "command": "undo_workspace"])
             try await wait("Undo restores the same toolbar registration") { registered(custom) && presented(custom) }
             receive(cache, from: cacheStore, facts: [PanelSizeKey(panel: remaining, part: "tab", kind: .tab): 196])
             try await wait("Restored toolbar reuses its matching shared identity") {
-                cacheMeasured(remaining)["tab_width"].number == 196
-                    && cacheMeasured(custom)["tab_width"].number == 194
+                cacheMeasured(remaining)["tab_widths"][0].number == 196
+                    && cacheMeasured(custom)["tab_widths"][0].number == 194
                     && cacheMeasured(custom)["content_height"].number == 99
             }
             receive(cache, from: cacheStore, facts: [PanelSizeKey(panel: custom, part: "tab", kind: .tab): 197])
             try await wait("A fresh tab measurement keeps the matching body width") {
-                cacheMeasured(custom)["tab_width"].number == 197 && cacheMeasured(custom)["content_height"].number == 99
+                cacheMeasured(custom)["tab_widths"][0].number == 197 && cacheMeasured(custom)["content_height"].number == 99
             }
             await cacheStore.workspaces!.detached()
             print("PASS: platform \(platform), registered row facts are remeasured at a new origin, smaller rows replace older units, and undo reuses matching shared facts")
@@ -286,7 +289,7 @@ import Darwin
             store.snapshot["panel_measurements"].array.count == store.snapshot["panels"].array.count
                 && measured("sizes")["content_height"].number > 20 && geometry.navigators.count == 1
         }
-        precondition(store.snapshot["panel_measurements"].array.allSatisfy { $0["tab_width"].number >= 36 })
+        precondition(store.snapshot["panel_measurements"].array.allSatisfy { $0["tab_widths"][0].number >= 36 })
         try await wait("Native scrolling measurements") {
             measured("layers")["scroll"]["unit_height"].number >= 40
                 && measured("layers")["scroll"]["fixed_height"].number > 24
@@ -348,7 +351,7 @@ import Darwin
 
         try await store.apply(["type": "move_panel", "panel": "stats", "target": ["kind": "tab", "group": group("sizes")["id"].raw], "viewport": [1200, 900]])
         try await wait("Tabbed floating group fits both native labels") {
-            let width = measured("sizes")["tab_width"].number + measured("stats")["tab_width"].number + 22
+            let width = measured("sizes")["tab_widths"][0].number + measured("stats")["tab_widths"][0].number + 22
             return abs(group("sizes")["bounds"].rect.width - width) < 0.02 && fitted("stats")
         }
         try await store.apply(["type": "select_panel_tab", "group": group("sizes")["id"].raw, "panel": "sizes"])

@@ -1012,7 +1012,7 @@ pub struct PanelScrollMeasurement {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PanelMeasurement {
     pub panel: Panel,
-    pub tab_width: f32,
+    pub tab_widths: [f32;2],
     /// Natural body height including all scroll content and fixed controls, but
     /// excluding the workspace tab bar/footer grip. Zero means not yet measured.
     pub content_height: f32,
@@ -1114,12 +1114,8 @@ impl<'a> LayoutResolveInput<'a> {
         let mut layout=self.layout.as_ref().clone();
         if let Some(cache)=self.cache.as_ref().filter(|cache|cache.context.is_some()) {
             layout.measurements=cache.project(&cache.identities.iter().map(|identity|cache.request(identity,0.)).collect::<Vec<_>>());
-            for _ in 0..4 {
-                let requests=self.requests(cache,&layout.resolved(viewport));
-                let measurements=cache.project(&requests);
-                if measurements==layout.measurements {break;}
-                layout.measurements=measurements;
-            }
+            let requests=self.requests(cache,&layout.resolved(viewport));
+            layout.measurements=cache.project(&requests);
         }
         layout
     }
@@ -1392,6 +1388,7 @@ pub struct GroupPlacement {
     pub bounds: Bounds,
     pub corner_radii: [f32; 4],
     pub panels: Vec<Panel>,
+    pub tab_presentations: Vec<crate::TabPresentation>,
     pub active: Panel,
     pub axis: Axis,
     pub tabs_visible: bool,
@@ -2666,7 +2663,11 @@ impl DockLayout {
                         self.measurements
                             .iter()
                             .find(|m| m.panel == *p)
-                            .map_or(0.0, |m| m.tab_width)
+                            .map_or(0.0, |m| {
+                                let style=self.group_tab_style(group).unwrap();
+                                if style==crate::TabStyle::Automatic {m.tab_widths[0]}
+                                else {self.tab_presentation(*p).width(m.tab_widths)}
+                            })
                     })
                     .sum::<f32>()
                     + 20.0
@@ -3535,7 +3536,7 @@ impl DockLayout {
                 parent,
                 reversed: matches!(band.edge, Edge::Bottom | Edge::Right),
             });
-            resolve_node(&band.root, bounds, axis, self, &mut result, open_columns);
+            resolve_node(&band.root, bounds, bounds.height, axis, self, &mut result, open_columns);
         }
         for divider in &mut result.dividers {
             divider.fixed = self.fixed_stack_divider(divider) && !self.divider_opens_member(divider);
@@ -3673,7 +3674,7 @@ impl DockLayout {
                 width,
                 height,
             };
-            resolve_node(&floating.root, bounds, axis, self, &mut result, false);
+            resolve_node(&floating.root, bounds, max_height, axis, self, &mut result, false);
             let group = result.groups.last_mut().unwrap();
             group.floating = true;
             group.resize_handles = ResizeEdge::handles(bounds);
@@ -4696,6 +4697,7 @@ fn tabs_placement(
         bounds,
         corner_radii: [SURFACE_RADIUS; 4],
         panels: panels.clone(),
+        tab_presentations: layout.tab_presentations(*id,bounds.width),
         active: *active,
         axis: orientation,
         tabs_visible,
@@ -4726,6 +4728,7 @@ fn tabs_placement(
 fn resolve_node(
     node: &DockNode,
     bounds: Bounds,
+    width_stage_height: f32,
     orientation: Axis,
     layout: &DockLayout,
     result: &mut ResolvedLayout,
@@ -4777,7 +4780,7 @@ fn resolve_node(
                             if orientation == Axis::Horizontal {
                                 bounds.width
                             } else {
-                                bounds.height
+                                width_stage_height
                             },
                             layout,
                             open_columns,
@@ -4831,8 +4834,11 @@ fn resolve_node(
                 parent: bounds,
                 reversed: false,
             });
-            resolve_node(first, a, orientation, layout, result, open_columns);
-            resolve_node(second, rest, orientation, layout, result, open_columns);
+            let stage_usable=(width_stage_height-WORKSPACE_SPACING).max(0.);
+            let first_height=if *axis==Axis::Vertical {stage_usable*fraction}else{width_stage_height};
+            let second_height=if *axis==Axis::Vertical {stage_usable*(1.-fraction)}else{width_stage_height};
+            resolve_node(first, a, first_height, orientation, layout, result, open_columns);
+            resolve_node(second, rest, second_height, orientation, layout, result, open_columns);
         }
     }
 }
@@ -5206,7 +5212,7 @@ mod tests {
                 let mut initial = DockLayout::default();
                 initial.set_panel_visible(panel, true).unwrap();
                 initial.panel_mut(panel).unwrap().hide_tab = footer;
-                initial.measurements = vec![PanelMeasurement { panel, tab_width: 0., content_height: natural, scroll: measurement }];
+                initial.measurements = vec![PanelMeasurement { panel, tab_widths:[0.;2], content_height: natural, scroll: measurement }];
                 initial.move_panel(viewport, panel, DockTarget::Float { position: [400., 100.] }).unwrap();
                 let id = initial.panel_group(panel).unwrap();
                 let placement = |l: &DockLayout| l.resolved(viewport).groups.into_iter().find(|g| g.id == id).unwrap();
@@ -5450,7 +5456,7 @@ mod tests {
         layout.fit_tabs(103);
         layout.measurements.push(PanelMeasurement {
             panel: Panel::Sizes,
-            tab_width: 80.0,
+            tab_widths:[80.0,36.],
             content_height: 100.0,
             scroll: None,
         });
@@ -6279,7 +6285,7 @@ mod tests {
             assert!(default_height > TAB_BAR_HEIGHT);
             layout.measurements.push(PanelMeasurement {
                 panel,
-                tab_width: 140.0,
+                tab_widths:[140.0,36.],
                 content_height: 0.0,
                 scroll: None,
             });
@@ -6299,13 +6305,13 @@ mod tests {
             measurements: vec![
                 PanelMeasurement {
                     panel: Panel::Brushes,
-                    tab_width: 200.0,
+                    tab_widths:[200.0,36.],
                     content_height: 1000.0,
                     scroll: None,
                 },
                 PanelMeasurement {
                     panel: Panel::Layers,
-                    tab_width: 140.0,
+                    tab_widths:[140.0,36.],
                     content_height: 100.0,
                     scroll: None,
                 },
@@ -6464,7 +6470,7 @@ mod tests {
                 (Panel::Layers, 220.),
             ].into_iter().map(|(panel, width)| PanelMeasurement {
                 panel,
-                tab_width: width * text_scale,
+                tab_widths:[width * text_scale,36.],
                 content_height: 200.,
                 scroll: None,
             }).collect();
@@ -6510,7 +6516,7 @@ mod tests {
         for scale in [1., 1.5] {
             layout.measurements = [(Panel::Color, 70.), (Panel::Palettes, 95.), (Panel::Navigator, 140.)]
                 .into_iter().map(|(panel, width)| PanelMeasurement {
-                    panel, tab_width: width * scale, content_height: 200., scroll: None,
+                    panel, tab_widths:[width * scale,36.], content_height: 200., scroll: None,
                 }).collect();
             let saved = serde_json::to_value(&layout).unwrap();
             for reversed in [false, true] {
@@ -6563,13 +6569,13 @@ mod tests {
         layout.measurements = vec![
             PanelMeasurement {
                 panel: Panel::Brushes,
-                tab_width: 150.0,
+                tab_widths:[150.0,36.],
                 content_height: 200.0,
                 scroll: None,
             },
             PanelMeasurement {
                 panel: Panel::Layers,
-                tab_width: 180.0,
+                tab_widths:[180.0,36.],
                 content_height: 200.0,
                 scroll: None,
             },

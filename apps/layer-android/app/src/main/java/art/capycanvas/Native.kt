@@ -189,7 +189,6 @@ internal object Native {
     @JvmStatic external fun number(request: String, language: String = ""): String
     @JvmStatic external fun numericLabels(label: String, language: String = ""): String
     @JvmStatic external fun toolbarUi(request: String, language: String = ""): String
-    @JvmStatic external fun automaticTabNames(request: String): String
     /** Pure shared color-wheel hit geometry, independent of the render thread. */
     @JvmStatic external fun bubbleUi(request: String): String
     @JvmStatic external fun colorWheelHit(request: String): String

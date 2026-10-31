@@ -1,12 +1,12 @@
 #[test]
 fn layer_drawer_frames_resize_retained_pages_and_bridge_together() {
-    let from = DrawerPlacement {
+    let from = DrawerPlacement {tab_presentations:Vec::new(),
         bounds: Bounds {x:700., y:56., width:280., height:300.},
         anchor: Bounds {x:800., y:12., width:36., height:36.},
         direction: Edge::Bottom,
         columns: vec![Bounds {x:0., y:0., width:280., height:300.}],
     };
-    let to = DrawerPlacement {
+    let to = DrawerPlacement {tab_presentations:Vec::new(),
         bounds: Bounds {height:700., ..from.bounds},
         columns: vec![Bounds {height:700., ..from.columns[0]}],
         ..from.clone()

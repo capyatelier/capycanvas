@@ -59,18 +59,23 @@ export async function checkDragCursors({ call, evaluate, settle }) {
         await evaluate(`document.querySelector('.collapsed-column[data-column="43"] [data-panel="${first}"]').click()`);await wait();
       }
       const strip=drawer?'.drawer-tab-strip':'[data-group="43"] .tab-list';
-      const names=()=>evaluate(`Object.fromEntries([...document.querySelector(${JSON.stringify(strip)}).children].map(tab=>[tab.dataset.panel,!tab.lastElementChild.hidden]))`);
-      const before=await names(),extent=await rect(strip);
+      const names=()=>evaluate(`Object.fromEntries([...document.querySelector(${JSON.stringify(strip)}).children].map(tab=>[tab.dataset.panel,!!tab.querySelector('span:not([hidden])')]))`);
+      const before=await names();
       assert.equal(before[first],true,`${theme} drawer=${drawer}: first automatic tab is named`);
       assert.equal(before[second],false,`${theme} drawer=${drawer}: next tab starts icon-only`);
       const source=`${strip} [data-panel="${first}"]`,start=center(await rect(source));
       const neighbor=await rect(`${strip} [data-panel="${second}"]`);
       await press(start);await move({x:start.x+neighbor.width/2+2,y:start.y});await release();await clean();
-      const reordered=await names();
+      const reordered=await names(),extent=await rect(strip);
       assert.deepEqual(await evaluate(`[...document.querySelector(${JSON.stringify(strip)}).children].map(tab=>tab.dataset.panel)`),[second,first,...panels.slice(2)]);
+      for(let resolve=0;resolve<3;resolve++){
+        await evaluate('layerApp.app.layout(innerWidth,innerHeight)');await settle();
+        assert.equal((await rect(strip)).width,extent.width,`${theme} drawer=${drawer}: the committed automatic extent survives repeated resolves`);
+        assert.deepEqual(await names(),reordered,`${theme} drawer=${drawer}: repeated resolves preserve the committed names`);
+      }
       await send({type:'customize',action:{type:'set_tab_style',group:43,style:'icon'}});
       await send({type:'customize',action:{type:'set_tab_style',group:43,style:'automatic'}});
-      assert.equal((await rect(strip)).width,extent.width,'The fresh automatic strip has the same extent');
+      assert.equal((await rect(strip)).width,extent.width,`${theme} drawer=${drawer}: the fresh automatic strip has the same extent`);
       assert.notDeepEqual(await names(),before,'Reordering changes automatic name priority');
       assert.deepEqual(reordered,await names(),`${theme} drawer=${drawer}: post-drop names match a fresh build of the same order`);
     }

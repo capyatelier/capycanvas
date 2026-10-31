@@ -48,7 +48,7 @@ pub struct PanelBodyMeasurement {
 pub struct PanelMeasurementReport {
     pub request:PanelMeasurementRequest,
     pub context:PanelMetricContext,
-    pub tab_width:Option<f32>,
+    pub tab_widths:Option<[f32;2]>,
     pub body:Option<PanelBodyMeasurement>,
 }
 
@@ -68,7 +68,7 @@ pub(crate) struct PanelMeasurementCache {
 }
 
 #[derive(Clone,Debug,PartialEq,Serialize,Deserialize)]
-struct MeasuredTab {panel:Panel,key:String,context:PanelMetricContext,width:f32}
+struct MeasuredTab {panel:Panel,key:String,context:PanelMetricContext,widths:[f32;2]}
 #[derive(Clone,Debug,PartialEq,Serialize,Deserialize)]
 struct MeasuredBody {panel:Panel,key:String,context:PanelMetricContext,width:f32,body:PanelBodyMeasurement,verified:bool}
 
@@ -102,24 +102,24 @@ impl PanelMeasurementCache {
             report.context.validate()?;
             let finite=|v:f32|v.is_finite()&&(0.0..1_000_000.0).contains(&v);
             if !finite(report.request.width)||report.request.width<=0.
-                ||report.tab_width.is_some_and(|v|!finite(v)||v<=0.)
+                ||report.tab_widths.is_some_and(|widths|widths.into_iter().any(|v|!finite(v)||v<=0.))
                 ||report.body.is_some_and(|b|!finite(b.actual_width)||!finite(b.content_height)
                     ||b.scroll.is_some_and(|s|!finite(s.fixed_height)||!finite(s.unit_height)||s.fixed_height>b.content_height)) {
                 return Err("Invalid panel measurement".into());
             }
             if cache.context.as_ref().is_some_and(|c|!report.context.same_metrics(c)){continue;}
             let Some(identity)=cache.identities.iter().find(|i|i.panel==report.request.identity.panel) else {continue;};
-            if report.request.identity.tab!=identity.tab {report.tab_width=None;}
+            if report.request.identity.tab!=identity.tab {report.tab_widths=None;}
             if report.request.identity.body!=identity.body||report.body.is_some_and(|body|body.actual_width==0.
                 ||(body.actual_width-report.request.width).abs()*report.context.scale>1.) {report.body=None;}
-            if report.tab_width.is_none()&&report.body.is_none(){continue;}
+            if report.tab_widths.is_none()&&report.body.is_none(){continue;}
             cache.context=Some(report.context.clone());
             report.request.width=panel_measurement_width(report.request.width);
             if let Some(body)=&mut report.body {body.actual_width=panel_measurement_width(body.actual_width);}
             let panel=identity.panel;
-            if let Some(width)=report.tab_width {
+            if let Some(widths)=report.tab_widths {
                 cache.tabs.retain(|entry|entry.panel!=panel||entry.key!=identity.tab||!entry.context.same_metrics(&report.context));
-                cache.tabs.push(MeasuredTab {panel,key:identity.tab.clone(),context:report.context.clone(),width});
+                cache.tabs.push(MeasuredTab {panel,key:identity.tab.clone(),context:report.context.clone(),widths});
                 if cache.tabs.len()>192 {cache.tabs.remove(0);}
             }
             if let Some(body)=report.body {
@@ -142,12 +142,12 @@ impl PanelMeasurementCache {
             tab_measured:false,body_measured:false};
         request.tab_measured=self.tab(&request).is_some();request.body_measured=self.body_entry(&request,Some(request.width)).is_some_and(|entry|identity.cacheable||entry.verified);request
     }
-    fn tab(&self,request:&PanelMeasurementRequest)->Option<f32> {
+    fn tab(&self,request:&PanelMeasurementRequest)->Option<[f32;2]> {
         let context=self.context.as_ref()?;
         let identity=self.identities.iter().find(|identity|identity.panel==request.identity.panel)?;
         if identity.tab!=request.identity.tab {return None;}
         Some(self.tabs.iter().rev().find(|entry|entry.panel==request.identity.panel
-            &&entry.key==request.identity.tab&&entry.context.same_metrics(context))?.width)
+            &&entry.key==request.identity.tab&&entry.context.same_metrics(context))?.widths)
     }
     fn body_entry(&self,request:&PanelMeasurementRequest,width:Option<f32>)->Option<&MeasuredBody> {
         let context=self.context.as_ref()?;
@@ -162,7 +162,7 @@ impl PanelMeasurementCache {
         requests.iter().filter_map(|request| {
             let body=self.body(request);let tab=self.tab(request);
             if body.is_none()&&tab.is_none(){return None;}
-            Some(PanelMeasurement {panel:request.identity.panel,tab_width:tab.unwrap_or(0.),
+            Some(PanelMeasurement {panel:request.identity.panel,tab_widths:tab.unwrap_or([0.;2]),
                 content_height:body.map_or(0.,|b|b.content_height),scroll:body.and_then(|b|b.scroll)})
         }).collect()
     }
@@ -177,7 +177,7 @@ mod tests {
     fn request(cache:&PanelMeasurementCache,width:f32)->PanelMeasurementRequest {cache.request(&cache.identities[0],width)}
     fn report(cache:&PanelMeasurementCache,width:f32,height:f32)->PanelMeasurementReport {
         PanelMeasurementReport {request:request(cache,width),context:PanelMetricContext {generation:1,scale:1.25,text_scale:1.,style:"native".into()},
-            tab_width:Some(110.),body:Some(PanelBodyMeasurement {actual_width:width,content_height:height,scroll:None})}
+            tab_widths:Some([110.,36.]),body:Some(PanelBodyMeasurement {actual_width:width,content_height:height,scroll:None})}
     }
     #[test]
     fn width_changes_select_only_matching_body_facts_and_keep_tabs() {
@@ -225,11 +225,11 @@ mod tests {
         let cache=cache();let mut measured=report(&cache,200.,600.);measured.context.scale=2.;
         let cache=cache.with_reports(vec![measured.clone()]).unwrap();
         for (actual_width,expected) in [(0.,600.),(196.,600.),(200.5,620.),(200.515625,600.)] {
-            let mut next=measured.clone();next.tab_width=Some(120.);
+            let mut next=measured.clone();next.tab_widths=Some([120.,36.]);
             next.body=Some(PanelBodyMeasurement {actual_width,content_height:620.,scroll:None});
             let updated=cache.with_reports(vec![next.clone()]).unwrap().with_reports(vec![next]).unwrap();
             let projected=updated.project(&[request(&updated,200.)]);
-            assert_eq!(projected[0].content_height,expected);assert_eq!(projected[0].tab_width,120.);
+            assert_eq!(projected[0].content_height,expected);assert_eq!(projected[0].tab_widths,[120.,36.]);
         }
     }
     #[test]

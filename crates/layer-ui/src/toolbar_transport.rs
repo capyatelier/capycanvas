@@ -63,10 +63,6 @@ pub enum ToolbarUiRequest {
         #[serde(default)]
         style: TileStyle,
     },
-    AutomaticTabNames {
-        available: f32,
-        widths: Vec<[f32; 2]>,
-    },
     DrawerSourceCorners {
         anchor: Bounds,
         direction: Edge,
@@ -165,11 +161,8 @@ pub fn toolbar_ui(request: ToolbarUiRequest, localizer: &Localizer) -> Result<se
         ToolbarUiRequest::ChoiceStyle { labeled, style } => toolbar_ui(
             ToolbarUiRequest::Style {style: tool_choice_style(labeled, style)}, localizer
         )?,
-        ToolbarUiRequest::AutomaticTabNames { available, widths } => {
-            json!(TabStyle::automatic_names(available, &widths))
-        }
         ToolbarUiRequest::DrawerSourceCorners { anchor, direction, container } => json!(
-            DrawerPlacement { bounds: anchor, anchor, direction, columns: Vec::new() }.source_corners(container)
+            DrawerPlacement {tab_presentations:Vec::new(), bounds: anchor, anchor, direction, columns: Vec::new() }.source_corners(container)
         ),
     })
 }
@@ -209,24 +202,6 @@ fn drawer_source_corners_are_a_stateless_toolbar_query() {
     assert_eq!(corners, serde_json::json!([false, false, true, true]));
 }
 
-#[test]
-fn automatic_tab_names_are_a_stateless_toolbar_query() {
-    let request = |available: f32| {
-        toolbar_ui(
-            serde_json::from_value(serde_json::json!({
-                "type": "automatic_tab_names",
-                "available": available,
-                "widths": [[120., 36.], [90., 36.], [140., 36.]],
-            }))
-            .unwrap(),
-         &Localizer::shared(UiLanguage::English))
-        .unwrap()
-    };
-    assert_eq!(request(108.), serde_json::json!([false, false, false]));
-    assert_eq!(request(192.), serde_json::json!([true, false, false]));
-    assert_eq!(request(246.), serde_json::json!([true, true, false]));
-    assert_eq!(request(400.), serde_json::json!([true, true, true]));
-}
 
 #[test]
 fn labeled_choices_keep_compact_icons_and_unlabeled_choices_keep_the_workspace_style() {

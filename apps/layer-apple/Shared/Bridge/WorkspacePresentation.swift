@@ -10,10 +10,11 @@ import SwiftUI
     let tabSlide: WorkspaceTabSlide
     let sliderPreview = ToolbarSliderPreview()
     var tabFrames: [String: WorkspaceTabFrame] = [:]
-    var fittedTabs: [UInt64: [Bool]] = [:]
-    func presentedTabs(group: UInt64, panels: [JSON]) -> [JSON] {
-        guard let fitted = fittedTabs[group], fitted.count == panels.count else { return panels }
-        return zip(panels, fitted).map { $0.replacing("tab", with: JSON(["show_icon": true, "show_name": $1])) }
+    func presentedTabs(group: JSON, panels: [JSON]) -> [JSON] {
+        panels.map { panel in
+            let index = group["panels"].array.firstIndex { $0.string == panel["id"].string } ?? 0
+            return panel.replacing("tab", with: group["tab_presentations"][index])
+        }
     }
     private weak var store: EditorStore?
     private var shownPanel: String?

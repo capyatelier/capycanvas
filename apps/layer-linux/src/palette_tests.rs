@@ -822,6 +822,8 @@ fn native_adaptive_panel_tabs() {
                 .collect::<Vec<_>>()
         };
         let before = names();
+        assert_eq!(before,d.w.resolved().groups.iter().find(|g|g.id==group).unwrap()
+            .tab_presentations.iter().map(|tab|tab.show_name).collect::<Vec<_>>());
         if width == 700. {
             assert!(
                 before.iter().all(|n| *n),
@@ -830,10 +832,6 @@ fn native_adaptive_panel_tabs() {
         } else if width <= 280. {
             assert!(before[0]);
             assert!(before.iter().any(|n| !n));
-            assert!(
-                before.iter().filter(|n| **n).count() >= if width == 280. { 2 } else { 1 },
-                "available width retains complete names: {before:?}"
-            );
         }
         d.click(buttons.first().unwrap().1.upcast_ref());
         assert_eq!(names(), before, "selection does not reorder name priority");

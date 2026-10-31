@@ -48,7 +48,7 @@ fn drop_panel(
     };
     layout.measurements = vec![PanelMeasurement {
         panel,
-        tab_width: 100.,
+        tab_widths:[100.,36.],
         content_height: natural - chrome,
         scroll: scroll.then_some(PanelScrollMeasurement {
             fixed_height: 72.,
@@ -178,10 +178,10 @@ fn footer_anchor_and_small_viewports_are_fitted() {
 #[test]
 fn group_drop_fits_every_tab_whichever_is_active() {
     let viewport = [1200., 1000.];
-    let compact = |panel, content_height| PanelMeasurement { panel, tab_width: 100., content_height, scroll: None };
+    let compact = |panel, content_height| PanelMeasurement { panel, tab_widths:[100.,36.], content_height, scroll: None };
     let layers = PanelMeasurement {
         panel: Panel::Layers,
-        tab_width: 100.,
+        tab_widths:[100.,36.],
         content_height: 900.,
         scroll: Some(PanelScrollMeasurement { fixed_height: 72., unit_height: 40. }),
     };

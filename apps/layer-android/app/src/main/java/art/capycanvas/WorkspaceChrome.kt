@@ -257,12 +257,9 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                             Row(Modifier.fillMaxWidth().height(tabHeight.dp).testTag("column-drawer-header-$id")
                                 .then(if (current != null) Modifier.dragSource(dock, item, cursor = AndroidPointerIcon.TYPE_ARROW) else Modifier),
                                 verticalAlignment = Alignment.CenterVertically) {
-                                var strip by remember { mutableFloatStateOf(0f) }
-                                val names = automaticTabNames(host, group, tabs.array("panels").values().map { bodies[it.toString()] }, strip)
                                 val cutout = remember { TabStrip() }
                                 Box(Modifier.weight(1f).clipToBounds().onGloballyPositioned {
                                     tabClip = it.boundsInRoot().translate(-dock.origin); dock.tabClips[group] = tabClip
-                                    strip = it.size.width / dock.density
                                 }.tabStrip(cutout, LocalPalette.current.strip, LocalPalette.current.panelFill)) {
                                     Row(Modifier.horizontalScroll(rememberScrollState()).testTag("column-drawer-tabs-$id")) {
                                         tabs.array("panels").values().forEachIndexed { tabIndex, panelId ->
@@ -273,7 +270,7 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                                                     Modifier.testTag("drawer-tab-$panelId")
                                                         .then(if (current != null) Modifier.dragSource(dock, obj("kind" to "panel", "panel" to panelId), cursor = AndroidPointerIcon.TYPE_ARROW) else Modifier)
                                                         .drawerTabHit(dock, columnId, group, tabIndex, panelId.toString(), tabClip, current != null),
-                                                    enabled = current != null, fittedName = names?.getOrNull(tabIndex))
+                                                    presentation = placement.array("tab_presentations").getJSONObject(tabIndex), enabled = current != null)
                                             }
                                         }
                                     }

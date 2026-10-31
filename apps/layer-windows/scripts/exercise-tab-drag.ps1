@@ -1,5 +1,5 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','preview-dark','preview-light','release-dark','release-light','drawer-dark','drawer-light','chrome-dark','chrome-light')][string]$Journey='full')
-if($Journey -ne 'full'){$Theme=$Journey -replace '^(preview|release|drawer|chrome)-',''}
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','preview-dark','preview-light','release-dark','release-light','drawer-dark','drawer-light','chrome-dark','chrome-light','cold-dark','cold-light')][string]$Journey='full')
+if($Journey -ne 'full'){$Theme=$Journey -replace '^(preview|release|drawer|chrome|cold)-',''}
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyCacheModel=$true;$CapyEach={if($env:CAPY_PRIVATE_DESKTOP){[CapyRowPointer]::VerifyPrivateDesktop($env:CAPY_PRIVATE_DESKTOP)};[CapyCanvasTouch]::Verify()}
@@ -187,10 +187,72 @@ function Drawer-Widths([string[]]$Panels){
  foreach($panel in $Panels){$result[$panel]=[Math]::Round((Control ('drawer-tab-'+$panel) -Arranged).Current.BoundingRectangle.Width/$scale,2)}
  $result
 }
-function Tab-Order([string]$Panel){
+function Workspace-Group([string]$Panel,[uint32]$Group=0){
  $layout=(Model).state.workspace.layout
- $visit={param($node) if(!$node){return};if($node.kind -eq 'tabs'){if($node.panels -contains $Panel){$node.panels}}else{& $visit $node.first;& $visit $node.second}}
+ $visit={param($node) if(!$node){return};if($node.kind -eq 'tabs'){if($node.panels -contains $Panel -or $node.id -eq $Group){$node}}else{& $visit $node.first;& $visit $node.second}}
  foreach($node in @($layout.bands.root)+@($layout.floating.root)){& $visit $node}
+}
+function Tab-Order([string]$Panel){(Workspace-Group $Panel).panels}
+function Assert-DrawerTabs([uint32]$Group){
+ $model=Model;$drawer=Drawer-Group $Group
+ $placement=((Control ('column-drawer-'+$drawer.anchor.column) -Arranged).Current.ItemStatus|ConvertFrom-Json).placement
+ if($placement.tab_presentations.Count -ne $drawer.tabs.panels.Count){throw 'Drawer tab presentations do not match its panel order'}
+ for($i=0;$i -lt $drawer.tabs.panels.Count;$i++){
+  $panel=$drawer.tabs.panels[$i];$flags=$placement.tab_presentations[$i]
+  $tab=Control ('drawer-tab-'+$panel) -Arranged
+  $title=@($model.panels|Where-Object id -eq $panel)[0].title
+  $labels=@($tab.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)|Where-Object {$_.Current.ControlType -eq $ControlType::Text -and $_.Current.Name -eq $title -and !$_.Current.IsOffscreen -and $_.Current.BoundingRectangle.Width -gt 0})
+  if(($labels.Count -gt 0) -ne [bool]$flags.show_name){throw "Drawer $panel label disagrees with its shared presentation"}
+  $measure=@($model.panel_measurements|Where-Object panel -eq $panel)[0]
+  $expected=if($flags.show_name){$measure.tab_widths[0]}else{$measure.tab_widths[1]}
+  if(!$flags.show_icon -and $flags.show_name){$expected=[Math]::Max(36,$expected-22)}
+  if([Math]::Abs($tab.Current.BoundingRectangle.Width/$scale-$expected) -gt 1.5){throw "Drawer $panel width disagrees with its shared name/icon presentation"}
+ }
+}
+function Cold-Review {
+ $close={
+  if((Model).state.document_file.modified){throw 'Cold tab review modified the drawing'}
+  if(![CapyWindowApi]::PostMessage($drawingWindow,0x10,[UIntPtr]::Zero,[IntPtr]::Zero)){throw 'Cold tab review did not accept Close'}
+  if(!$review.WaitForExit(15000) -or $review.ExitCode -ne 0){throw 'Cold tab review did not close cleanly'}
+ }
+ Use-Workspace 'builtin:workspace:photographer' 'Photo'
+ & $close
+ [CapyRowPointer]::Dispose();[CapyCanvasTouch]::Dispose()
+ $script:stderr=Join-Path $run 'cold-stderr.log'
+ $script:review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
+ $null=$review.Handle;$fresh=@{window=$null}
+ Wait-Until {$startup=Model;if($startup.windows_workspace.id -ne 'builtin:workspace:photographer' -or !$startup.brush_ready -or !$startup.windows_workspace.ready -or $startup.windows_workspace.busy){return $false};$fresh.window=Owned-DrawingWindow $review;$null -ne $fresh.window} 'Cold Photo process did not restore its workspace' 75
+ $script:drawingWindow=$fresh.window.Handle;$script:root=$fresh.window.Root
+ [CapyWindowApi]::ShowWindow($drawingWindow,3)|Out-Null
+ [CapyCanvasTouch]::SetForegroundWindow($drawingWindow)|Out-Null
+ [CapyCanvasTouch]::Initialize([uint32]$review.Id);[CapyRowPointer]::Initialize([uint32]$review.Id)
+ $script:scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+ $proof=@{}
+ try{Wait-Until {
+  $model=Model;$registered=@($model.panels|Where-Object {$_.title -and $_.icon})
+  $proof.panels=@($registered|ForEach-Object {
+   $panel=$_.id;$request=@($model.layout.measurement_requests|Where-Object panel -eq $panel)[0]
+   $measure=@($model.panel_measurements|Where-Object panel -eq $panel)[0]
+   @{panel=$panel;docked=@($model.layout.groups|Where-Object {$_.panels -contains $panel}).Count -gt 0;request=$request;measurement=$measure}
+  })
+  $registered.Count -gt 0 -and @($proof.panels|Where-Object {!$_.request.tab_measured -or $_.measurement.tab_widths.Count -ne 2 -or $_.measurement.tab_widths[0] -le 0 -or $_.measurement.tab_widths[1] -le 0}).Count -eq 0
+ } 'Cold startup did not measure every registered tab'}
+ finally{$proof|ConvertTo-Json -Depth 20|Set-Content (Join-Path $run 'cold-tab-measurements.json')}
+ if(!@($proof.panels|Where-Object {!$_.docked}).Count){throw 'Cold startup did not cover a panel absent from dock groups'}
+ $collapsed=@((Model).layout.collapsed.groups|Where-Object {$_.icons.Count -gt 0}|Select-Object -First 1)
+ if(!$collapsed.Count){throw 'Cold Photo startup did not retain a collapsed group'}
+ $group=$collapsed[0].group;$panel=$collapsed[0].icons[0].panel
+ (Control ('column-icon-'+$panel) -Arranged).SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
+ $toggle=(Control 'Open individual panels' -Name -Type $ControlType::MenuItem).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+ if($toggle.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::Off){$toggle.Toggle()}
+ [CapyRowPointer]::Key(0x1b)
+ Invoke ('column-icon-'+$panel)
+ Wait-Until {(Drawer-Group $group) -and $null -ne (Find ('drawer-tab-'+$panel) -Visible)} 'Cold collapsed group did not open its drawer tabs'
+ Assert-DrawerTabs $group
+ Capture 'cold-drawer' -Composed
+ @{group=$group;drawer=Drawer-Group $group;geometry=((Control ('column-drawer-'+(Drawer-Group $group).anchor.column) -Arranged).Current.ItemStatus|ConvertFrom-Json);layout=(Model).state.workspace.layout}|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'cold-drawer.json')
+ & $close
+ [pscustomobject]@{theme=$Theme;cold_registered_tab_measurements='passed';cold_drawer='passed';zero_exit='passed'}|ConvertTo-Json
 }
 function Check-Foot([string]$Name,[string]$Before,$From,[string]$After,$To){
  $a=[Drawing.Bitmap]::new($Before);$b=[Drawing.Bitmap]::new($After)
@@ -436,8 +498,9 @@ function Drawer-Style([uint32]$Group,[string]$Name,[string]$Value){
  $grip=(Control ('drawer-grip-'+$Group) -Arranged).Current.BoundingRectangle
  [CapyRowPointer]::RightClick([int]($grip.Left+$grip.Width/2),[int]($grip.Top+$grip.Height/2))
  (Control $Name -Name -Type $ControlType::MenuItem).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
- Wait-Until {(Model).windows_tab_styles.$Group -eq $Value -and $null -ne (Find 'drawer-tab-brushes' -Visible) -and ((Control 'drawer-tab-brushes' -Arranged).GetRuntimeId() -join ':') -ne $previous} "Drawer did not rebuild with $Name style"
- Start-Sleep -Milliseconds 150
+ Wait-Until {(Workspace-Group '' $Group).tab_style -eq $Value -and $null -ne (Find 'drawer-tab-brushes' -Visible)} "Drawer did not apply $Name style"
+ Assert-DrawerTabs $Group
+ if(((Control 'drawer-tab-brushes' -Arranged).GetRuntimeId() -join ':') -ne $previous){throw 'Drawer style replaced its retained tab control'}
 }
 function Drawer-Review {
  $panels=@('layers','adjustments','brushes','sizes')
@@ -470,7 +533,8 @@ function Drawer-Review {
  [CapyRowPointer]::Key(0x1b)
  Invoke 'column-icon-layers'
  Wait-Until {$null -ne (Find 'drawer-tab-brushes' -Visible) -and (Drawer-Group $group)} 'Drawer setup did not open its individual panel tabs'
- if((Model).windows_tab_styles.$group -ne 'automatic'){throw 'Drawer setup did not retain Automatic tab style'}
+ if((Workspace-Group '' $group).tab_style -ne 'automatic'){throw 'Drawer setup did not retain Automatic tab style'}
+ Assert-DrawerTabs $group
  $before=Drawer-Widths $panels
  $before|ConvertTo-Json|Set-Content (Join-Path $run 'drawer-before-widths.json')
  if(@($before.Values|Where-Object {$_ -gt 45}).Count -eq 0 -or @($before.Values|Where-Object {$_ -le 45}).Count -eq 0){throw 'Drawer setup did not fit a mixture of named and icon tabs'}
@@ -496,7 +560,7 @@ function Drawer-Review {
  Wait-Until {((Drawer-Group $group).tabs.panels -join ',') -eq ($committed -join ',')} 'Fresh Automatic drawer changed the committed order'
  $fresh=Drawer-Widths $panels
  $freshWidth=[Math]::Round((Control ('column-drawer-'+(Drawer-Group $group).anchor.column) -Arranged).Current.BoundingRectangle.Width/$scale,2)
- $evidence=@{theme=$Theme;group=$group;order=$committed;before=$before;after=$after;fresh=$fresh;drawer_width=$width;fresh_drawer_width=$freshWidth;layout=(Model).state.workspace.layout;fresh_build='Icons only then Automatic reconstructs the native tab strip'}
+ $evidence=@{theme=$Theme;group=$group;order=$committed;before=$before;after=$after;fresh=$fresh;drawer_width=$width;fresh_drawer_width=$freshWidth;layout=(Model).state.workspace.layout;style_round_trip='Icons only then Automatic retains the native tab strip'}
  $evidence|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'drawer-automatic.json')
  if([Math]::Abs($width-$freshWidth) -gt 1){throw 'Fresh drawer width differs from the post-drop width'}
  if(@($panels|Where-Object {[Math]::Abs($before[$_]-$fresh[$_]) -gt 1}).Count -eq 0){throw 'Fresh Automatic names did not change priority after the reorder'}
@@ -543,6 +607,7 @@ try{
  $script:frameFailures=@()
  $normal=$baseline.state.workspace.layout|ConvertTo-Json -Depth 80 -Compress
  $baseline|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'before-model.json')
+ if($Journey -like 'cold-*'){Cold-Review;return}
  if($Journey -in @('chrome-dark','chrome-light')){Chrome-Review;return}
  if($Journey -like 'drawer-*'){Drawer-Review;return}
  if($Journey -like 'release-*'){

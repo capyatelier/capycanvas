@@ -214,7 +214,7 @@ fn native_workspace_drag_edges() {
                         .find(|request|request.identity.panel==panel).unwrap();
                     let context=w.panel_metrics();
                     let measurements=layer_ui::PanelMeasurementBatch {context:context.clone(),reports:vec![layer_ui::PanelMeasurementReport {
-                        request:request.clone(),context,tab_width:(measurement.tab_width>0.).then_some(measurement.tab_width),
+                        request:request.clone(),context,tab_widths:(measurement.tab_widths[0]>0.).then_some(measurement.tab_widths),
                         body:Some(layer_ui::PanelBodyMeasurement {actual_width:request.width,
                             content_height:measurement.content_height,scroll:measurement.scroll}),
                     }]};

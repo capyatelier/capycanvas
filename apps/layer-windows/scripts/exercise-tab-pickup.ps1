@@ -19,7 +19,10 @@ function Point([string]$Id,[switch]$Name) {
 
 function Gesture {try{(Workspace-Root).Current.HelpText|ConvertFrom-Json}catch{}}
 function Presentation {try{(Workspace-Root).Current.ItemStatus|ConvertFrom-Json}catch{}}
-function Layout {(Model).layout|ConvertTo-Json -Depth 80 -Compress}
+function Layout {
+    $model=Model
+    [ordered]@{authored=$model.state.workspace.layout;resolved=($model.layout|Select-Object * -ExcludeProperty measurement_requests)}|ConvertTo-Json -Depth 80 -Compress
+}
 function Tab-Placement {((Model).state.workspace.layout|ConvertTo-Json -Depth 80 -Compress) -replace '"active":"[^"]*"','"active":null'}
 function Panel-Group([string]$Panel) {(Model).layout.groups|Where-Object {$_.panels -contains $Panel}}
 function Workspace-History([string]$Id) {

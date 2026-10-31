@@ -275,6 +275,7 @@ private val HiddenChromeShape=object:Shape {
 @Composable private fun Workspace(host: CanvasHost, snapshot: JSONObject?) {
     val dock = remember(host) { DockInteraction(host) }
     CompositionLocalProvider(LocalDock provides dock) { Workspace(host, snapshot, dock) }
+    dock.publishMeasurements()
 }
 
 @Composable private fun Workspace(host: CanvasHost, snapshot: JSONObject?, dock: DockInteraction) {
@@ -648,14 +649,15 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
 }
 
 internal class PanelContent(val id: Int, val active: String, val panels: JSONArray, val tabs: Boolean,
-    val minimumBody: Float, val tiles: JSONObject?, val vertical: Boolean, val footer: Float?)
+    val minimumBody: Float, val tiles: JSONObject?, val vertical: Boolean, val footer: Float?, val tabPresentations: JSONArray)
 
 @Composable private fun panelContent(group: JSONObject): PanelContent {
     val id=group.getInt("id"); val active=group.getString("active"); val panels=group.array("panels")
     val tabs=group.getBoolean("tabs_visible"); val minimum=group.number("min_body_height")
     val tiles=group.objectOrNull("tiles"); val vertical=group.optString("axis")=="vertical"
     val footer=group.objectOrNull("footer_grip")?.number("height")
-    return remember(id,active,panels,tabs,minimum,tiles,vertical,footer) { PanelContent(id,active,panels,tabs,minimum,tiles,vertical,footer) }
+    val tabPresentations=group.array("tab_presentations")
+    return remember(id,active,panels,tabs,minimum,tiles,vertical,footer,tabPresentations) { PanelContent(id,active,panels,tabs,minimum,tiles,vertical,footer,tabPresentations) }
 }
 
 @Composable internal fun PanelGroup(host: CanvasHost, state: JSONObject, group: PanelContent,
@@ -673,7 +675,7 @@ internal class PanelContent(val id: Int, val active: String, val panels: JSONArr
     }
     Surface(modifier, color = if (group.tabs || vector) Color.Transparent else colors.panelFill) {
         Column {
-            if (group.tabs) PanelGroupTabs(host,dock,group.id,group.panels,panels,active,panel.optBoolean("expanded"))
+            if (group.tabs) PanelGroupTabs(host,dock,group.id,group.panels,group.tabPresentations,panels,active,panel.optBoolean("expanded"))
             BoxWithConstraints(Modifier.weight(1f).testTag("panel-body-$active").then(if (group.tabs && !vector) Modifier.background(colors.panelFill) else Modifier)) {
                 PanelGroupBody(host, state, group, panel, dock, group.tiles == null && maxHeight < group.minimumBody.dp)
             }
@@ -702,20 +704,20 @@ internal class PanelContent(val id: Int, val active: String, val panels: JSONArr
     }
         .then(if (constrained) Modifier.panelScroll(scroll) else Modifier)) {
         if (group.tiles != null) ToolRibbon(host, panel, group.tiles, dock, Modifier.fillMaxSize(), group.vertical)
-        else key(origin?.key) {
+        else key(group.active) {
             PanelControls(host, state, panel, Modifier.fillMaxWidth().then(if (constrained) Modifier.height(group.minimumBody.dp) else Modifier.fillMaxHeight())
                 .contextSource(dock, contextItem),
                 onContent = onContent)
         }
     }
-    for ((panel, companion) in origins) if (panel != group.active) key(companion?.key) {
+    for ((panel, companion) in origins) if (panel != group.active) key(panel) {
         val report = { content: PanelContentSize -> dock.measure(panel, companion, content = content) }
         when (panel) { "palettes" -> PaletteMeasurement(host, report); "color" -> ColorMeasurement(host, report) }
     }
 }
 
 @Composable private fun PanelGroupTabs(host: CanvasHost, dock: DockInteraction, groupId: Int,
-    panelIds: JSONArray, panels: Map<String,JSONObject>, active: String, expanded: Boolean) {
+    panelIds: JSONArray, presentations: JSONArray, panels: Map<String,JSONObject>, active: String, expanded: Boolean) {
     val vector=LocalVectorPanel.current
     val colors=LocalPalette.current
     val visible=LocalWorkspaceVisible.current
@@ -724,10 +726,8 @@ internal class PanelContent(val id: Int, val active: String, val panels: JSONArr
                 Row(Modifier.fillMaxWidth().height(36.dp).testTag("group-header-${groupId}").dragSource(dock, groupItem, cursor = AndroidPointerIcon.TYPE_ARROW)
                     .combinedClickable(onClick = { if (expanded) host.customize(obj("type" to "close_expanded")) },
                         onLongClick = { dock.holdContext(groupItem) }), verticalAlignment = Alignment.CenterVertically) {
-                    var strip by remember { mutableFloatStateOf(0f) }
-                    val names = automaticTabNames(host, groupId, panelIds.values().map { panels[it.toString()] }, strip)
                     val cutout = remember { TabStrip() }
-                    Row(Modifier.weight(1f).onGloballyPositioned { if(!visible) return@onGloballyPositioned;dock.tabClips[groupId] = it.boundsInRoot().translate(-dock.origin); strip = it.size.width / dock.density }
+                    Row(Modifier.weight(1f).onGloballyPositioned { if(!visible) return@onGloballyPositioned;dock.tabClips[groupId] = it.boundsInRoot().translate(-dock.origin) }
                         .tabStrip(cutout, colors.strip, colors.panelFill).horizontalScroll(rememberScrollState()).clickable(enabled = expanded) { host.customize(obj("type" to "close_expanded")) }) {
                         panelIds.values().forEachIndexed { index, id ->
                             val p = panels[id.toString()] ?: return@forEachIndexed
@@ -743,7 +743,7 @@ internal class PanelContent(val id: Int, val active: String, val panels: JSONArr
                                         dock.tabSlots["${groupId}:$index"] = obj("group" to groupId, "index" to index, "panel" to id,
                                             "bounds" to obj("x" to natural.x, "y" to natural.y, "width" to coords.size.width / dock.density, "height" to coords.size.height / dock.density))
                                     }
-                                WorkspaceTab(host, dock, p, groupId, index, id == active, cutout, tab, fittedName = names?.getOrNull(index))
+                                WorkspaceTab(host, dock, p, groupId, index, id == active, cutout, tab, presentation = presentations.getJSONObject(index))
                             }
                         }
                     }

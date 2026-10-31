@@ -58,13 +58,10 @@ impl TabStyle {
         }
     }
 
-    // Unmeasured fallback for hosts awaiting the allocation-aware projection.
-    // GTK refines Automatic with automatic_names and native measurements.
-    fn presentation(self, active: bool, tab_count: usize) -> TabPresentation {
+    fn presentation(self, active: bool) -> TabPresentation {
         TabPresentation {
             show_icon: self != Self::Name,
             show_name: matches!(self, Self::Name | Self::IconName)
-                || (self == Self::Automatic && (tab_count <= 2 || active))
                 || (self == Self::ActiveName && active),
             hover_bottom: [0; 2],
         }
@@ -86,11 +83,16 @@ fn automatic_tab_names_follow_measured_space_and_left_priority() {
 }
 
 /// Resolved in Rust from the group's style and selection; hosts only render it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TabPresentation {
     pub show_icon: bool,
     pub show_name: bool,
     pub hover_bottom: [i8; 2],
+}
+impl TabPresentation {
+    pub(crate) fn width(self,widths:[f32;2])->f32 {
+        if !self.show_name {widths[1]}else{(widths[0]-if self.show_icon {0.}else{22.}).max(0.)}
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1061,7 +1063,7 @@ impl DockLayout {
     }
     pub fn tab_presentation(&self, panel: Panel) -> TabPresentation {
         let Some(group) = self.panel_group(panel) else {
-            return TabStyle::default().presentation(true, 1);
+            return TabStyle::default().presentation(true);
         };
         let DockNode::Tabs {
             active,
@@ -1072,7 +1074,7 @@ impl DockLayout {
         else {
             unreachable!()
         };
-        let mut tab = tab_style.presentation(*active == panel, panels.len());
+        let mut tab = tab_style.presentation(*active == panel);
         if *active != panel {
             let index = panels.iter().position(|p| *p == panel).unwrap();
             tab.hover_bottom = [index.checked_sub(1), (index + 1 < panels.len()).then_some(index + 1)]
@@ -1083,6 +1085,23 @@ impl DockLayout {
                 });
         }
         tab
+    }
+    pub fn tab_presentations(&self,group:u32,width:f32)->Vec<TabPresentation> {
+        let Some(DockNode::Tabs {panels,active,tab_style,..})=self.node(group) else{return Vec::new();};
+        let names=if *tab_style==TabStyle::Automatic {
+            let widths=panels.iter().map(|panel|self.measurements.iter().find(|m|m.panel==*panel)
+                .map_or([f32::MAX,36.],|m|if m.tab_widths[0]>0. {m.tab_widths}else{[f32::MAX,36.]})).collect::<Vec<_>>();
+            TabStyle::automatic_names((width-PANEL_CONTROL_METRICS.tab_grip_width).max(0.),&widths)
+        }else{Vec::new()};
+        panels.iter().enumerate().map(|(index,panel)| {
+            let mut tab=tab_style.presentation(*panel==*active);
+            if *tab_style==TabStyle::Automatic {tab.show_name=names[index];}
+            if *panel!=*active {
+                tab.hover_bottom=[index.checked_sub(1),(index+1<panels.len()).then_some(index+1)]
+                    .map(|neighbor|match neighbor.map(|i|panels[i]) {Some(p) if p==*active=>6,Some(_)=>-6,None=>0});
+            }
+            tab
+        }).collect()
     }
     fn hide_tab_items(&self, target: ContextTarget, localization: &Localizer) -> Result<Vec<ContextMenuItem>, String> {
         let group = match target {
@@ -1589,7 +1608,6 @@ pub struct PanelView {
     pub id: Panel,
     pub title: String,
     pub icon: &'static str,
-    pub tab: TabPresentation,
     #[serde(flatten)]
     pub tile: TilePresentation,
     pub toolbar_options: Vec<Vec<ContextMenuItem>>,
@@ -1704,7 +1722,6 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel, copy: &PanelCopy) -> Res
         id: panel,
         title: copy.title.to_string(),
         icon: config.icon(),
-        tab: state.workspace.layout.tab_presentation(panel),
         tile: config.tile_style.into(),
         toolbar_options: copy.toolbar_options.clone(),
         expanded,
@@ -3090,7 +3107,7 @@ mod tests {
                 for &panel in &panels {
                     assert_eq!(
                         (layout.tab_presentation(panel).show_icon, layout.tab_presentation(panel).show_name),
-                        (true, panels.len() <= 2 || panel == active)
+                        (true, false)
                     );
                 }
             }
@@ -3125,7 +3142,7 @@ mod tests {
     #[test]
     fn all_tab_styles_apply_to_the_whole_group_and_persist() {
         let styles = [
-            (TabStyle::Automatic, [true, true], [true, false]),
+            (TabStyle::Automatic, [true, false], [true, false]),
             (TabStyle::ActiveName, [true, true], [true, false]),
             (TabStyle::IconName, [true, true], [true, true]),
             (TabStyle::Name, [false, true], [false, true]),

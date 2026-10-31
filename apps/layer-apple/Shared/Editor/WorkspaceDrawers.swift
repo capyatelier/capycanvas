@@ -155,7 +155,7 @@ private struct WorkspaceContentDrawer: View {
                         let bounds = placement["columns"][index]
                         VStack(spacing: 0) {
                             if !tabs.isNull {
-                                WorkspacePanelHeader(store: store, group: tabs.replacing("id", with: tabs["group"]), panels: panels, drawer: true)
+                                WorkspacePanelHeader(store: store, group: tabs.replacing("id", with: tabs["group"]).replacing("tab_presentations", with: placement["tab_presentations"]), panels: panels, drawer: true)
                             }
                             GeometryReader { clip in
                                 if !drawer.model["layer_properties"].isNull {

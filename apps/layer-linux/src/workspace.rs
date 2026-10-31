@@ -202,6 +202,9 @@ mod allocation {
                 HEADER_HEIGHT,
                 STATUS_HEIGHT,
             ).with_panel_bridges();
+            if let Some(owner)=self.owner.borrow().upgrade() {
+                owner.present_tab_presentations(&resolved);
+            }
             if let Some((id, from, progress)) = self.transition.get()
                 && let Some(group) = resolved.groups.iter_mut().find(|g| g.id == id)
             {
@@ -3136,20 +3139,18 @@ impl Workspace {
     // Also run synchronously at release: an idle measurement from before a
     // tear-off may describe a different width or an older layer count.
     fn measure_panels(self: &Rc<Self>) {
-        for _ in 0..3 {
-            let Some(layout) = self
-                .gpu
-                .borrow()
-                .as_ref()
-                .map(|g| g.session.state().workspace.layout.clone())
-            else {
-                return;
-            };
-            let measurements=self.panel_measurements(&layout,[self.surface.width().max(1) as f32,self.surface.height().max(1) as f32]);
-            if self.panel_measurement_report.borrow().as_ref()==Some(&measurements){return;}
-            *self.panel_measurement_report.borrow_mut()=Some(measurements.clone());
-            self.dispatch(UiAction::MeasurePanels { measurements });
-        }
+        let Some(layout) = self
+            .gpu
+            .borrow()
+            .as_ref()
+            .map(|g| g.session.state().workspace.layout.clone())
+        else {
+            return;
+        };
+        let measurements=self.panel_measurements(&layout,[self.surface.width().max(1) as f32,self.surface.height().max(1) as f32]);
+        if self.panel_measurement_report.borrow().as_ref()==Some(&measurements){return;}
+        *self.panel_measurement_report.borrow_mut()=Some(measurements.clone());
+        self.dispatch(UiAction::MeasurePanels { measurements });
     }
     fn panel_metrics(&self)->layer_ui::PanelMetricContext {
         let scale=self.area.scale_factor().max(1) as f32;
@@ -3175,16 +3176,9 @@ impl Workspace {
             .filter_map(|config| {
                 let request=requests.iter().find(|request|request.identity.panel==config.id)?.clone();
                 let widget=self.panel_view(config.id)?;
-                let tab_width = groups
-                    .iter()
-                    .flat_map(|g| &g.tabs)
-                    .find(|(id, _)| *id == config.id)
-                    .map_or(0.0, |(_, tab)| {
-                        tab.measure(gtk::Orientation::Horizontal, -1).1 as f32
-                    });
-                let tab_width=if tab_width>0. {tab_width} else if request.tab_measured {
-                    layout.measurements.iter().find(|measurement|measurement.panel==config.id).map_or(0.,|measurement|measurement.tab_width)
-                } else {0.};
+                let tab_widths=groups.iter().flat_map(|group|&group.tabs).find(|(id,_)|*id==config.id)
+                    .map(|(_,tab)|crate::panel_tabs::tab_widths(tab))
+                    .or_else(||self.drawers().iter().find_map(|drawer|drawer.tab_widths(config.id)));
                 let width=request.width;
                 let content = widget
                     .downcast_ref::<gtk::ScrolledWindow>()
@@ -3220,7 +3214,7 @@ impl Workspace {
                         }),
                     ),
                 };
-                Some(layer_ui::PanelMeasurementReport {request,context:context.clone(),tab_width:(tab_width>0.).then_some(tab_width),
+                Some(layer_ui::PanelMeasurementReport {request,context:context.clone(),tab_widths,
                     body:Some(layer_ui::PanelBodyMeasurement {actual_width:width as f32,content_height,scroll})})
             })
             .collect();
@@ -3314,7 +3308,7 @@ impl Workspace {
                 header.add_css_class("dock-tabs");
                 header.set_height_request(layer_ui::TAB_BAR_HEIGHT as i32);
                 let labels =
-                    crate::panel_tabs::PanelTabs::new(layout.group_tab_style(group.id).unwrap());
+                    crate::panel_tabs::PanelTabs::new();
                 let mut tabs = Vec::new();
                 if group.tabs_visible {
                     for &panel in &group.panels {
@@ -3531,35 +3525,30 @@ impl Workspace {
             {
                 toolbar.strip.configure(group.axis, !group.tabs_visible);
             }
-            let tab_style = layout.group_tab_style(group.id).unwrap();
             for (panel, button) in &view.tabs {
                 let config = layout.panel(*panel).expect("validated panel");
                 let title = config.title_localized(&self.localization());
                 let content = button.child().and_downcast::<gtk::Box>().unwrap();
-                let icon = self.customization.replace_icon(self, &content, config.icon(), 14);
+                self.customization.replace_icon(self, &content, config.icon(), 16);
                 let label = content.last_child().and_downcast::<gtk::Label>().unwrap();
                 label.set_label(&title);
-                if tab_style != TabStyle::Automatic {
-                    let tab = layout.tab_presentation(*panel);
-                    icon.set_visible(tab.show_icon);
-                    label.set_visible(tab.show_name);
-                    if tab.show_name {
-                        button.remove_css_class("icon-only-tab");
-                    } else {
-                        button.add_css_class("icon-only-tab");
-                    }
-                }
                 button.set_tooltip_text(Some(&title));
                 button.update_property(&[gtk::accessible::Property::Label(&title)]);
                 selected(button, *panel == group.active);
             }
-            view.tab_strip.set_hover_bottom(group.panels.iter().map(|panel| layout.tab_presentation(*panel).hover_bottom));
-            view.tab_strip.set_style(tab_style);
+            view.tab_strip.set_presentations(&group.tab_presentations);
             view.tab_strip.queue_resize();
             view.tab_strip.queue_draw();
         }
         self.columns.reconcile(self, layout, &resolved, rebuilt);
         self.surface.queue_allocate();
+    }
+    fn present_tab_presentations(&self,resolved:&ResolvedLayout) {
+        for view in self.groups.borrow().iter() {
+            if let Some(group)=resolved.groups.iter().find(|group|group.id==view.id) {
+                view.tab_strip.set_presentations(&group.tab_presentations);
+            }
+        }
     }
     fn present_column_corners(&self, resolved: &ResolvedLayout) {
         let styles: Vec<_> = resolved.groups.iter()

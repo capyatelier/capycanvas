@@ -162,7 +162,7 @@ fn layer_drawer_width_is_stable_across_scaled_viewports() {
 
 #[test]
 fn native_drawer_frames_snap_columns_and_the_connection_to_the_same_edges() {
-    let placement=DrawerPlacement {bounds:Bounds {x:100.3,y:76.2,width:240.4,height:360.3},
+    let placement=DrawerPlacement {tab_presentations:Vec::new(),bounds:Bounds {x:100.3,y:76.2,width:240.4,height:360.3},
         anchor:Bounds {x:140.2,y:40.1,width:36.,height:36.1},direction:Edge::Bottom,
         columns:vec![Bounds {x:0.,y:0.,width:120.2,height:360.3},Bounds {x:120.2,y:0.,width:120.2,height:360.3}]};
     for scale in [1.,1.25,1.5,2.] {

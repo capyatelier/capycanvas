@@ -1,7 +1,6 @@
 //! Retained tab buttons adapt to their actual allocation and native font metrics.
 //! Shared Rust chooses which complete labels fit; native input targets survive.
 use gtk::{glib, prelude::*, subclass::prelude::*};
-use layer_ui::TabStyle;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use gtk::{gdk, graphene, gsk};
@@ -12,7 +11,6 @@ mod imp {
     #[derive(Default)]
     pub struct Strip {
         pub buttons: RefCell<Vec<gtk::Button>>,
-        pub style: Cell<TabStyle>,
         pub hover_bottom: RefCell<Vec<[i8; 2]>>,
         pub tints: RefCell<Option<[gtk::Box; 2]>>,
         pub gpu_background: Cell<bool>,
@@ -38,15 +36,6 @@ mod imp {
     }
     impl WidgetImpl for Strip {
         fn measure(&self, axis: gtk::Orientation, size: i32) -> (i32, i32, i32, i32) {
-            if axis == gtk::Orientation::Horizontal && self.style.get() == TabStyle::Automatic {
-                let widths = self.obj().widths();
-                return (
-                    widths.iter().map(|w| w[1]).sum::<f32>().ceil() as i32,
-                    widths.iter().map(|w| w[0]).sum::<f32>().ceil() as i32,
-                    -1,
-                    -1,
-                );
-            }
             let mut min = 0;
             let mut natural = 0;
             for button in self.buttons.borrow().iter() {
@@ -61,25 +50,10 @@ mod imp {
             }
             (min, natural, -1, -1)
         }
-        fn size_allocate(&self, width: i32, height: i32, _: i32) {
-            let widths = self.obj().widths();
-            let automatic = self.style.get() == TabStyle::Automatic;
-            let names = TabStyle::automatic_names(width as f32, &widths);
+        fn size_allocate(&self, _: i32, height: i32, _: i32) {
             let mut x = 0.;
-            for (i, button) in self.buttons.borrow().iter().enumerate() {
-                let w = if automatic {
-                    let content = button.child().unwrap();
-                    content.first_child().unwrap().set_visible(true);
-                    content.last_child().unwrap().set_visible(names[i]);
-                    if names[i] {
-                        button.remove_css_class("icon-only-tab");
-                    } else {
-                        button.add_css_class("icon-only-tab");
-                    }
-                    widths[i][usize::from(!names[i])]
-                } else {
-                    button.measure(gtk::Orientation::Horizontal, -1).1 as f32
-                };
+            for button in self.buttons.borrow().iter() {
+                let w=button.measure(gtk::Orientation::Horizontal,-1).1 as f32;
                 let end = x + w;
                 button.allocate(
                     (end.round() - x.round()) as i32,
@@ -388,9 +362,8 @@ impl PanelTabs {
     pub fn surface_colors(&self) -> [gtk::gdk::RGBA;2] {
         self.imp().tints.borrow().as_ref().map_or([gtk::gdk::RGBA::TRANSPARENT;2],|tints|tints.each_ref().map(|t|t.color()))
     }
-    pub fn new(style: TabStyle) -> Self {
+    pub fn new() -> Self {
         let tabs: Self = glib::Object::new();
-        tabs.imp().style.set(style);
         tabs.set_hexpand(true);
         let tints = ["tab-strip-tint", "tab-foot-tint"].map(|class| {
             let tint = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -402,10 +375,15 @@ impl PanelTabs {
         *tabs.imp().tints.borrow_mut() = Some(tints);
         tabs
     }
-    pub fn set_style(&self, style: TabStyle) {
-        if self.imp().style.replace(style) != style {
-            self.queue_resize();
+    pub fn set_presentations(&self,presentations:&[layer_ui::TabPresentation]) {
+        for (button,presentation) in self.imp().buttons.borrow().iter().zip(presentations) {
+            let content=button.child().unwrap();
+            content.first_child().unwrap().set_visible(presentation.show_icon);
+            content.last_child().unwrap().set_visible(presentation.show_name);
+            if presentation.show_name {button.remove_css_class("icon-only-tab");}
+            else {button.add_css_class("icon-only-tab");}
         }
+        self.set_hover_bottom(presentations.iter().map(|tab|tab.hover_bottom));
     }
     pub fn set_hover_bottom(&self, corners: impl Iterator<Item = [i8; 2]>) {
         let corners: Vec<_> = corners.collect();
@@ -433,36 +411,6 @@ impl PanelTabs {
             }
         }
         self.queue_allocate();
-    }
-    fn widths(&self) -> Vec<[f32; 2]> {
-        self.imp()
-            .buttons
-            .borrow()
-            .iter()
-            .map(|button| {
-                let content = button.child().unwrap().downcast::<gtk::Box>().unwrap();
-                let icon = content.first_child().unwrap();
-                let label = content
-                    .last_child()
-                    .unwrap()
-                    .downcast::<gtk::Label>()
-                    .unwrap();
-                let text = label.layout().pixel_size().0;
-                let face = content.measure(gtk::Orientation::Horizontal, -1).0;
-                let minimum = if button.has_css_class("icon-only-tab") {
-                    20
-                } else {
-                    0
-                };
-                let inset =
-                    (button.measure(gtk::Orientation::Horizontal, -1).0 - face.max(minimum)).max(0);
-                let icon = icon.measure(gtk::Orientation::Horizontal, -1).1.max(14);
-                [
-                    (inset + icon + content.spacing() + text) as f32,
-                    (inset + icon.max(20)) as f32,
-                ]
-            })
-            .collect()
     }
 }
 
@@ -586,3 +534,10 @@ mod tests {
 #[cfg(test)]
 #[path = "native_panel_tab_pixel_tests.rs"]
 mod native_rgba_pixels;
+
+pub(crate) fn tab_widths(button:&gtk::Button)->[f32;2] {
+    let content=button.child().unwrap().downcast::<gtk::Box>().unwrap();
+    let label=content.last_child().unwrap().downcast::<gtk::Label>().unwrap();
+    let icon=content.first_child().unwrap().width_request().max(16);
+    [16.+icon as f32+content.spacing() as f32+label.layout().pixel_size().0 as f32,36.]
+}

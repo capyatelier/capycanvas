@@ -40,8 +40,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     std::map<std::wstring,J> panels;
     struct Body {hstring key;bool splitFilters=false;std::unique_ptr<PanelBody> view;};
     std::map<std::wstring,Body> bodies;
-    struct Column {Grid frame;Grid header{nullptr};WorkspaceTabSurface strip;Border divider;double naturalHeight=0;std::array<float,9> stripShape{};Windows::UI::Color stripColor{},panelColor{};bool stripValid=false;std::map<std::wstring,Grid> tabs;ScrollView scroll;StackPanel stack;std::vector<std::wstring> panels;std::vector<AutomaticTab> automatic;Bindings paintIcons;};
-    std::map<std::wstring,double> tabWidths;
+    struct Column {Grid frame;Grid header{nullptr};WorkspaceTabSurface strip;Border divider;double naturalHeight=0;std::array<float,9> stripShape{};Windows::UI::Color stripColor{},panelColor{};bool stripValid=false;std::map<std::wstring,Grid> tabs;ScrollView scroll;StackPanel stack;std::vector<std::wstring> panels;Bindings paintIcons;};
     std::vector<Column> columns;
     std::map<std::wstring,J> toolbarLayouts;
     CompositionTarget::Rendering_revoker frames;
@@ -100,8 +99,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         rebuild();
         if(changedModel&&!closing)for(auto& column:columns)if(column.header){
             auto strip=column.header.Children().GetAt(0).as<ScrollView>();
-            if(orderPanelTabs(strip.Content().as<StackPanel>(),array(object(model,L"tabs"),L"panels"),column.tabs,column.automatic))
-                fitAutomaticTabs(data,column.automatic,strip.ActualWidth(),tabWidths);
+            orderPanelTabs(strip.Content().as<StackPanel>(),array(object(model,L"tabs"),L"panels"),column.tabs);
         }
         for(auto const& column:columns)for(auto const& update:column.paintIcons)update();
         for(auto& [panel,body]:bodies)if(body.view)body.view->Apply(active(panel));
@@ -202,7 +200,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
             headers.Append(O({{L"title",S(str(panel->second,L"title"))},{L"icon",S(str(panel->second,L"icon"))}}));
         }
         if(tabStructure.Size())tabStructure.Insert(L"panels",ids);
-        auto nextTabsKey=O({{L"tabs",tabStructure},{L"headers",headers},{L"style",S(str(object(data->model,L"windows_tab_styles"),to_hstring(uint32_t(num(tabs,L"group"))).c_str()))}}).Stringify();
+        auto nextTabsKey=O({{L"tabs",tabStructure},{L"headers",headers}}).Stringify();
         auto key=O({{L"columns",signature},{L"tabs",S(nextTabsKey)}}).Stringify();
         if(key==columnsKey){placeColumns();return;}
         columnsKey=key;
@@ -211,7 +209,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         auto previous=std::move(columns);columns.clear();
         for(auto& column:previous){
             column.stack.Children().Clear();column.scroll.Content(nullptr);column.panels.clear();
-            if(tabsKey!=nextTabsKey){if(column.header){uint32_t at;if(column.header.Children().IndexOf(column.strip.Root(),at))column.header.Children().RemoveAt(at);}column.stripValid=false;column.frame.Children().Clear();column.header=nullptr;column.tabs.clear();column.automatic.clear();column.paintIcons.clear();}
+            if(tabsKey!=nextTabsKey){if(column.header){uint32_t at;if(column.header.Children().IndexOf(column.strip.Root(),at))column.header.Children().RemoveAt(at);}column.stripValid=false;column.frame.Children().Clear();column.header=nullptr;column.tabs.clear();column.paintIcons.clear();}
             else while(column.frame.Children().Size()>(column.header?1u:0u))column.frame.Children().RemoveAtEnd();
         }
         tabsKey=nextTabsKey;std::set<std::wstring> keep;auto weak=weak_from_this();
@@ -235,12 +233,10 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                 for(auto value:array(tabs,L"panels")){
                     auto panelId=value.GetString();auto found=panels.find(std::wstring(panelId));if(found==panels.end())continue;
                     auto panel=found->second;
-                    auto presentation=object(panel,L"tab");bool fitted=automaticTabs(data,group);
+                    auto presentation=panelTabPresentation(array(tabs,L"panels"),array(object(geometry,L"placement"),L"tab_presentations"),panelId);
                     auto pick=panelTabButton(data,str(panel,L"title"),panelIcon(data,str(panel,L"icon"),column.paintIcons),presentation,[data=data,group=num(tabs,L"group"),panelId]{
                         data->dispatch(O({{L"type",S(L"select_panel_tab")},{L"group",N(group)},{L"panel",S(panelId)}}));
                     });
-                    auto name=pick.Content().as<StackPanel>().Children().GetAt(1).as<TextBlock>();
-                    if(fitted)column.automatic.push_back({pick,name,std::wstring(panelId)+L"\n"+std::wstring(str(panel,L"title"))+L"\n"+std::to_wstring(data->textSize())});
                     AutomationProperties::SetAutomationId(pick,L"drawer-tab-"+panelId);
                     auto item=O({{L"kind",S(L"panel")},{L"panel",S(panelId)}});
                     gestures->Source(pick,O({{L"type",S(L"drag_workspace")},{L"item",item}}),item,false,
@@ -249,7 +245,6 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                     shell.RegisterPropertyChangedCallback(UIElement::OpacityProperty(),[paint](auto&&,auto&&){paint();});
                     column.tabs.emplace(std::wstring(panelId),shell);row.Children().Append(shell);
                 }
-                strip.SizeChanged([weak,index=columns.size()](auto&& sender,auto&&){if(auto self=weak.lock();self&&index<self->columns.size())fitAutomaticTabs(self->data,self->columns[index].automatic,sender.template as<ScrollView>().ActualWidth(),self->tabWidths);});
                 strip.ViewChanged([paint](auto&&,auto&&){paint();});
                 gestures->Source(strip,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem,false,{},WorkspaceGestures::Pickup::Sideways);
                 gestures->Source(grip,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem);
@@ -298,12 +293,12 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         placeColumns();wake();
     }
     void placeColumns(){
-        auto tabs=object(model,L"tabs");bool fitted=automaticTabs(data,num(tabs,L"group"));
+        auto tabs=object(model,L"tabs");
         for(auto& column:columns)for(auto const& [id,shell]:column.tabs){
             auto tab=shell.Children().GetAt(1).as<Button>();
-            auto panel=panels.find(id);if(panel==panels.end())continue;auto presentation=object(panel->second,L"tab");
-            auto labels=tab.Content().as<StackPanel>();labels.Children().GetAt(0).Visibility(fitted||flag(presentation,L"show_icon")?Visibility::Visible:Visibility::Collapsed);
-            if(!fitted)labels.Children().GetAt(1).Visibility(flag(presentation,L"show_name")?Visibility::Visible:Visibility::Collapsed);
+            auto panel=panels.find(id);if(panel==panels.end())continue;auto presentation=panelTabPresentation(array(tabs,L"panels"),array(object(geometry,L"placement"),L"tab_presentations"),hstring(id));
+            auto labels=tab.Content().as<StackPanel>();labels.Children().GetAt(0).Visibility(flag(presentation,L"show_icon")?Visibility::Visible:Visibility::Collapsed);
+            labels.Children().GetAt(1).Visibility(flag(presentation,L"show_name")?Visibility::Visible:Visibility::Collapsed);
             selectPanelTabShell(shell,hstring(id)==str(tabs,L"active"),nullptr,presentation);
         }
         auto placements=array(object(geometry,L"placement"),L"columns");

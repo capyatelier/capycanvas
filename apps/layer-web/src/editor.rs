@@ -212,10 +212,12 @@ impl WebApp {
                 )
             })
         };
+        #[derive(Serialize)]
+        struct Frame {connection:Option<layer_ui::DrawerConnection>,placement:layer_ui::DrawerPlacement}
         serialize(&end.map(|end| {
             let from = q.from.unwrap_or_else(|| end.closed());
             let placement = end.interpolate_from(&from, q.progress);
-            json!({"connection":placement.connection(), "placement":placement})
+            Frame {connection:placement.connection(),placement}
         }))
     }
     pub fn layer_drawer_sizing(&self, query: JsValue) -> Result<JsValue, JsValue> {

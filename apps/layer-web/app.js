@@ -2,7 +2,7 @@ import { addScrollbar } from "./scrollbars.js";
 import { observeButtonFeedback } from "./button-feedback.js";
 import { edgeContactClass, edgeResetClass } from "./edge-reach.js";
 import { brushSizeGrid } from "./brush-sizes.js";
-import init, { WebApp, WebGpu, configure_raster_worker, configure_gpu_diagnostics, automatic_tab_names } from "./pkg/layer_web.js";
+import init, { WebApp, WebGpu, configure_raster_worker, configure_gpu_diagnostics } from "./pkg/layer_web.js";
 import { createRasterWorker } from "./raster-worker-client.js";
 import { createPaintPairIcon } from './color-controls.js';
 import { chooseColor, configureColorEditor, refreshColorEditors } from './color-editor.js';
@@ -536,34 +536,13 @@ function place(node, rect) {
   })) if (node.style[property] !== value) node.style[property] = value;
   glass?.queue();
 }
-function tabLabel(tab, view, automatic = false) {
-  tabHover(tab,view.tab);
-  tab.classList.toggle("icon-only-tab", !view.tab.show_name);
-  if (view.tab.show_icon || automatic) tab.append(icon(view.icon, true));
-  if (view.tab.show_name || automatic) { const label = element("span", "", view.title); label.hidden = !view.tab.show_name; tab.append(label); }
+function tabLabel(tab, view, presentation) {
+  tabHover(tab,presentation);
+  tab.classList.toggle("icon-only-tab", !presentation.show_name);
+  if (presentation.show_icon) tab.append(icon(view.icon, true));
+  if (presentation.show_name) tab.append(element("span", "", view.title));
 }
-const fullTabWidths = new Map(), pendingTabFits = new Set();
-let tabFitFrame = 0;
-const tabFit = new ResizeObserver(entries => {
-  for (const { target } of entries) pendingTabFits.add(target);
-  tabFitFrame ||= requestAnimationFrame(fitTabs);
-});
-function automaticTabs(list) { list.dataset.automatic = "true"; tabFit.observe(list); pendingTabFits.add(list); tabFitFrame ||= requestAnimationFrame(fitTabs); }
-function releaseTabs(root) { releaseTabSurfaces(root); for (const list of root.querySelectorAll("[data-automatic]")) tabFit.unobserve(list); }
-function fitTabs() {
-  tabFitFrame = 0;
-  const lists = [...pendingTabFits].filter(list => list.isConnected && list.dataset.automatic); pendingTabFits.clear();
-  const size = document.documentElement.style.getPropertyValue("--ui-text-size");
-  const key = tab => `${tab.dataset.panel}\n${tab.getAttribute("aria-label")}\n${size}`;
-  const missing = lists.flatMap(list => [...list.children]).filter(tab => !fullTabWidths.has(key(tab)));
-  for (const tab of missing) { tab.classList.remove("icon-only-tab"); tab.lastElementChild.hidden = false; }
-  for (const tab of missing) fullTabWidths.set(key(tab), tab.getBoundingClientRect().width);
-  const fits = lists.map(list => [list, list.clientWidth]).filter(([, width]) => width > 0).map(([list, width]) => {
-    const tabs = [...list.children];
-    return [tabs, automatic_tab_names(width, new Float32Array(tabs.flatMap(tab => [fullTabWidths.get(key(tab)), 36])))];
-  });
-  for (const [tabs, names] of fits) tabs.forEach((tab, i) => { tab.classList.toggle("icon-only-tab", !names[i]); tab.lastElementChild.hidden = !names[i]; });
-}
+function releaseTabs(root) { releaseTabSurfaces(root); }
 function arrange(nextLayout, layoutOnly = false) {
   if (!app || !panelVectors) return;
   const resolved=layoutOnly?nextLayout:app.layout(...workspaceViewport);
@@ -629,7 +608,6 @@ function presentWorkspaceLayout(resolved,layoutOnly) {
             tab.setAttribute("aria-selected", String(panel === group.active));
             labels.append(draggable(tab, { kind: "panel", panel }));
           });
-          if (tabStyle === "automatic") automaticTabs(labels);
           tabs.append(labels, grip({ kind: "group", group: group.id }));
           preview.replaceChildren(tabs, body);
         } else {
@@ -645,7 +623,7 @@ function presentWorkspaceLayout(resolved,layoutOnly) {
       }
       const preview = node.querySelector(".panel-preview");
       const strip=preview.querySelector('.tab-list');
-      if(orderPanelTabs(strip,group.panels)&&strip.dataset.automatic)automaticTabs(strip);
+      orderPanelTabs(strip,group.panels);
       const previous = preview.querySelector(":scope > .panel-frame");
       if (previous !== body) previous ? previous.replaceWith(body) : preview.append(body);
       node.dataset.panel = group.active;
@@ -654,14 +632,13 @@ function presentWorkspaceLayout(resolved,layoutOnly) {
       for(const tab of node.querySelectorAll('.dock-tab')) {
         const view=customization.view(tab.dataset.panel),title=view.title;
         tab.setAttribute('aria-selected',String(tab.dataset.panel===group.active));
-        tabHover(tab,view.tab);
-        const labelKey=JSON.stringify([view.title,view.icon,tabStyle==='automatic'?null:[view.tab.show_icon,view.tab.show_name]]);
+        const presentation=group.tab_presentations[group.panels.indexOf(tab.dataset.panel)];
+        tabHover(tab,presentation);
+        const labelKey=JSON.stringify([view.title,view.icon,presentation]);
         if(tab.dataset.labelKey===labelKey)continue;
-        tab.dataset.labelKey=labelKey;tab.replaceChildren();tabLabel(tab,view,tabStyle==='automatic');
+        tab.dataset.labelKey=labelKey;tab.replaceChildren();tabLabel(tab,view,presentation);
         tab.title=title;tab.setAttribute('aria-label',title);
         const label=tab.querySelector('span');if(label)label.textContent=title;
-        const list=tab.parentElement;
-        if(list.dataset.automatic)automaticTabs(list);
       }
       node.classList.toggle("floating-panel", group.floating);
       node.classList.toggle("tool-strip", !!group.tiles && !group.tabs_visible);
@@ -812,7 +789,7 @@ function measurePanels() {
       const root = element("div");
       const tab = element("button", "dock-tab");
       tab.style.width = "max-content";
-      tabLabel(tab, view);
+      tabLabel(tab, view, {show_icon:true,show_name:true,hover_bottom:[0,0]});
       root.append(tab);
       const content = config.content.kind === "toolbar" ? null : panels.get(config.id).cloneNode(true);
       if (content) {
@@ -846,7 +823,7 @@ function measurePanels() {
       } : null;
       cached.value = {
         request: {...cached.request, width: cached.width}, context: cached.context,
-        tab_width: cached.tab.getBoundingClientRect().width,
+        tab_widths: [cached.tab.getBoundingClientRect().width, 36],
         body: {actual_width: cached.content?.getBoundingClientRect().width || cached.width, content_height, scroll},
       };
     }
@@ -1992,7 +1969,7 @@ try {
   customization = createCustomization({ app, rasterWorker, catalog, state: () => state, paintPair: () => paintPairView, workspace, panels, groups,
     element, button, icon, numberField, panelFrame,
     dispatch, draggable, grip, place, updateZen, editor });
-  workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel,tabLabel,automaticTabs,releaseTabs});
+  workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel,tabLabel,releaseTabs});
   bubbles = createBubbles({app,workspace,element,button,icon,state:()=>state,dispatch,applyChange,wake,glassChanged:()=>glass?.queueBubbles(),customization,contentPanel,rasterWorker,asset,cancelWorkspace:()=>endWorkspaceGesture(null,true),viewport:()=>workspaceViewport,leaveCanvas:()=>cursorInput(null)});
   panelVectors=createPanelVectors({workspace,groups,place,
     project:metadata=>rasterWorker({operation:'panel-vectors',metadata,buffers:[]}),

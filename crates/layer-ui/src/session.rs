@@ -6564,7 +6564,7 @@ mod tests {
         let context=PanelMetricContext {generation:1,scale:1.,text_scale:1.,style:"session-test".into()};
         let reports=measurements.into_iter().map(|measurement| {
             let request=requests.iter().find(|request|request.identity.panel==measurement.panel).unwrap().clone();
-            PanelMeasurementReport {request:request.clone(),context:context.clone(),tab_width:(measurement.tab_width>0.).then_some(measurement.tab_width),
+            PanelMeasurementReport {request:request.clone(),context:context.clone(),tab_widths:(measurement.tab_widths[0]>0.).then_some(measurement.tab_widths),
                 body:Some(PanelBodyMeasurement {actual_width:request.width,
                     content_height:measurement.content_height,scroll:measurement.scroll})}
         }).collect();
@@ -12352,7 +12352,7 @@ mod tests {
         app.dispatch(UiAction::MeasurePanels {
             measurements: measured_batch(&app,viewport,vec![PanelMeasurement {
                 panel: Panel::Brushes,
-                tab_width: 120.,
+                tab_widths:[120.,36.],
                 content_height: 1800.,
                 scroll: None,
             }]),
@@ -12396,7 +12396,7 @@ mod tests {
         let group = app.state.workspace.layout.panel_group(Panel::Histogram).unwrap();
         app.state.workspace.layout.move_panel(viewport, Panel::Layers, DockTarget::Tab { group, index: None }).unwrap();
         app.state.workspace.layout.move_panel(viewport, Panel::Proof, DockTarget::Tab { group, index: None }).unwrap();
-        let measurement = |panel, content_height| PanelMeasurement { panel, tab_width: 100., content_height, scroll: None };
+        let measurement = |panel, content_height| PanelMeasurement { panel, tab_widths:[100.,36.], content_height, scroll: None };
         app.dispatch(UiAction::MeasurePanels { measurements: measured_batch(&app,viewport,vec![
             measurement(Panel::Histogram, 320.), measurement(Panel::Waveform, 0.),
             measurement(Panel::Layers, 0.), measurement(Panel::Proof, 0.),
@@ -12455,7 +12455,7 @@ mod tests {
             app.dispatch(UiAction::MeasurePanels {
                 measurements: measured_batch(&app,viewport,vec![PanelMeasurement {
                     panel,
-                    tab_width: 120.,
+                    tab_widths:[120.,36.],
                     content_height: 1800.,
                     scroll: None,
                 }]),
@@ -12891,13 +12891,13 @@ mod tests {
                 })
                 .unwrap();
                 for panel in [Panel::Brushes, Panel::Sizes] {
-                    let tab = app.panel_view(panel).unwrap().tab;
+                    let tab = app.state.workspace.layout.tab_presentation(panel);
                     assert_eq!(tab.show_icon, style != TabStyle::Name);
                     assert_eq!(
                         tab.show_name,
                         matches!(
                             style,
-                            TabStyle::Name | TabStyle::IconName | TabStyle::Automatic
+                            TabStyle::Name | TabStyle::IconName
                         ) || (style == TabStyle::ActiveName && active == panel)
                     );
                 }
@@ -12941,7 +12941,7 @@ mod tests {
         .unwrap();
         for panel in [Panel::Brushes, Panel::Sizes, Panel::Layers] {
             assert_eq!(
-                (app.panel_view(panel).unwrap().tab.show_icon, app.panel_view(panel).unwrap().tab.show_name),
+                (app.state.workspace.layout.tab_presentation(panel).show_icon, app.state.workspace.layout.tab_presentation(panel).show_name),
                 (false, true)
             );
         }
@@ -14081,7 +14081,7 @@ mod tests {
                         if cycle == 0 {
                             let measurements=measured_batch(&t.session,t.viewport,vec![crate::PanelMeasurement {
                                 panel: Panel::Brushes,
-                                tab_width: 120.,
+                                tab_widths:[120.,36.],
                                 content_height: 200.,
                                 scroll: None,
                             }]);

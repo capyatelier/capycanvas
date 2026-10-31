@@ -71,7 +71,7 @@ internal fun resizePointerIcon(edge: String) = when (edge) {
 /** Native content facts in logical pixels; Rust chooses the dropped height. */
 internal data class PanelContentSize(val height: Float, val fixedHeight: Float? = null, val unitHeight: Float = 0f)
 internal data class PanelMeasurementOrigin(val key: String, val request: String, val context: String)
-private data class MeasuredTab(val origin: PanelMeasurementOrigin, val width: Float)
+private data class MeasuredTab(val origin: PanelMeasurementOrigin, val widths: List<Float>)
 private data class MeasuredBody(val origin: PanelMeasurementOrigin, val width: Float = 0f, val content: PanelContentSize? = null)
 private data class PanelMeasurement(val tab: MeasuredTab? = null, val body: MeasuredBody? = null)
 
@@ -207,6 +207,7 @@ internal class DockInteraction(val host: CanvasHost) {
     private val measurements = mutableMapOf<String, PanelMeasurement>()
     private var panelMetrics by mutableStateOf<JSONObject?>(null)
     private var lastPanelReport: String? = null
+    private var measurementRevision by mutableIntStateOf(0)
     fun panelMetrics(scale: Float, textScale: Float, style: String) {
         val old = panelMetrics
         if (old == null || old.number("scale") != scale || old.number("text_scale") != textScale || old.getString("style") != style)
@@ -253,16 +254,16 @@ internal class DockInteraction(val host: CanvasHost) {
         host.dispatch(obj("type" to "measure_drawer_tiles", "measurements" to JSONArray(drawerTiles.values.toList())))
         drawerTileRevision++
     }
-    fun measure(panel: String, origin: PanelMeasurementOrigin?, tabWidth: Float? = null, content: PanelContentSize? = null, actualWidth: Float = 0f) {
+    fun measure(panel: String, origin: PanelMeasurementOrigin?, tabWidths: List<Float>? = null, content: PanelContentSize? = null, actualWidth: Float = 0f) {
         if (origin == null) return
         val old = measurements[panel] ?: PanelMeasurement()
         val body = (old.body?.takeIf { it.origin == origin } ?: MeasuredBody(origin)).let {
             it.copy(width = if (actualWidth > 0f) actualWidth else it.width, content = content ?: it.content)
         }
-        val next = PanelMeasurement(tabWidth?.let { MeasuredTab(origin, it) } ?: old.tab, body)
+        val next = PanelMeasurement(tabWidths?.let { MeasuredTab(origin, it) } ?: old.tab, body)
         if (next == old) return
         measurements[panel] = next
-        if (tabWidth != null || (body.width > 0f && body.content != null)) publishMeasurements()
+        measurementRevision++
     }
     private fun measurementBatch(): JSONObject? {
         val context = panelMetrics ?: return null
@@ -273,15 +274,20 @@ internal class DockInteraction(val host: CanvasHost) {
             val origin = body?.origin ?: tab?.origin ?: return@mapNotNull null
             val request = JSONObject(origin.request)
             val measuredTab = tab?.takeIf { JSONObject(it.origin.request).getString("tab") == request.getString("tab") }
-            obj("request" to request, "context" to JSONObject(origin.context), "tab_width" to measuredTab?.width,
+            obj("request" to request, "context" to JSONObject(origin.context), "tab_widths" to measuredTab?.widths?.let(::JSONArray),
                 "body" to body?.let { measured -> obj("actual_width" to measured.width,
                     "content_height" to measured.content!!.height.coerceAtMost(999_999f), "scroll" to measured.content!!.fixedHeight?.let {
                         obj("fixed_height" to it, "unit_height" to measured.content!!.unitHeight) }) })
         }
         return obj("context" to context, "reports" to JSONArray(reports))
     }
-    private fun publishMeasurements() {
-        val batch = measurementBatch() ?: return
+    @Composable fun publishMeasurements() {
+        val publish: () -> Unit = remember(measurementRevision, panelMetrics) {
+            { measurementBatch()?.let(::publishMeasurements) }
+        }
+        SideEffect(publish)
+    }
+    private fun publishMeasurements(batch: JSONObject) {
         if (batch.toString() == lastPanelReport) return
         lastPanelReport = batch.toString()
         host.dispatch(obj("type" to "measure_panels", "measurements" to batch))

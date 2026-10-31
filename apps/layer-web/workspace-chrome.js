@@ -77,7 +77,7 @@ export function tabHover(tab, presentation) {
   tab.style.setProperty('--hover-left-foot',hoverFeet[0]);
   tab.style.setProperty('--hover-right-foot',hoverFeet[1]);
 }
-export function createWorkspaceChrome({app,state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,draggable,grip,contentPanel,tabLabel,automaticTabs,releaseTabs}) {
+export function createWorkspaceChrome({app,state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,draggable,grip,contentPanel,tabLabel,releaseTabs}) {
   const columns=new Map(),drawers=new Map(),catalog=liveCopy(app,"catalog");
   let resolved,animating=false;
   const send=action=>dispatch({type:"customize",action});
@@ -234,7 +234,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       record.tabStyle=drawer.tabs?app.group_tab_style(drawer.tabs.group):null;
       const header=record.root.querySelector(':scope > .drawer-tabs');
       if(header&&drawer.tabs&&header.dataset.tabStyle!==record.tabStyle){releaseTabs(header);header.remove();}
-      else if(header&&drawer.tabs&&orderPanelTabs(header.firstElementChild,drawer.tabs.panels)&&record.tabStyle==='automatic')automaticTabs(header.firstElementChild);
+      else if(header&&drawer.tabs)orderPanelTabs(header.firstElementChild,drawer.tabs.panels);
       record.closing=false;
       record.root.inert=false;
       record.inspector?.refresh(layer_properties);
@@ -292,22 +292,20 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
           const item={kind:"group",group:r.drawer.tabs.group};
           tabs=draggable(element("nav","drawer-tabs"),item);customization.target(tabs,item);r.root.append(tabs);
           tabs.dataset.tabStyle=r.tabStyle;
-          const strip=element("div","drawer-tab-strip"),automatic=tabs.dataset.tabStyle==="automatic";tabs.append(strip);
+          const strip=element("div","drawer-tab-strip");tabs.append(strip);
           for(const panel of r.drawer.tabs.panels){
             const v=customization.view(panel),b=button("",()=>dispatch({type:"select_panel_tab",group:r.drawer.tabs.group,panel}),"dock-tab");
             b.dataset.panel=panel;b.dataset.group=r.drawer.tabs.group;b.setAttribute("aria-label",v.title);
             customization.target(b,{kind:"panel",panel});strip.append(draggable(b,{kind:"panel",panel}));
           }
-          if(automatic)automaticTabs(strip);
           const handle=grip(item);handle.classList.add("column-drawer-grip");tabs.append(handle);
         }
         if(tabs) {
-        const automatic=tabs.dataset.tabStyle==="automatic";
         if(!r.closing)for(const b of tabs.querySelectorAll('.dock-tab')) {
-          const v=customization.view(b.dataset.panel),key=JSON.stringify([v.title,v.icon,automatic?null:[v.tab.show_icon,v.tab.show_name]]);
+          const v=customization.view(b.dataset.panel),presentation=r.placement.tab_presentations[r.drawer.tabs.panels.indexOf(b.dataset.panel)],key=JSON.stringify([v.title,v.icon,presentation]);
           b.setAttribute('aria-selected',String(b.dataset.panel===r.drawer.tabs.active));
-          tabHover(b,v.tab);
-          if(b.dataset.labelKey!==key){b.dataset.labelKey=key;b.replaceChildren();tabLabel(b,v,automatic);b.title=v.title;b.setAttribute('aria-label',v.title);if(automatic)automaticTabs(b.parentElement);}
+          tabHover(b,presentation);
+          if(b.dataset.labelKey!==key){b.dataset.labelKey=key;b.replaceChildren();tabLabel(b,v,presentation);b.title=v.title;b.setAttribute('aria-label',v.title);}
         }
         // Shared placement includes tabs in the first column body.
         const body=r.bodies[0],b=r.placement.columns[0];place(tabs,{...b,height:resolved.tab_bar_height});

@@ -474,14 +474,7 @@ impl View {
                 let header = gtk::Box::new(gtk::Orientation::Horizontal, 0);
                 header.add_css_class("dock-tabs");
                 header.set_height_request(TAB_BAR_HEIGHT as i32);
-                let labels = crate::panel_tabs::PanelTabs::new(
-                    w.surface
-                        .imp()
-                        .layout
-                        .borrow()
-                        .group_tab_style(tabs.group)
-                        .unwrap(),
-                );
+                let labels = crate::panel_tabs::PanelTabs::new();
                 w.install_panel_drag(&header, DockItem::Group { group: tabs.group });
                 w.install_context(
                     &header,
@@ -632,6 +625,11 @@ impl Drawer {
         let bounds = self.placement()?.bounds;
         (bounds.width > 0. && bounds.height > 0.)
             .then_some(layer_ui::ColumnDrawerMeasurement { group, bounds })
+    }
+    pub fn tab_widths(&self,panel:Panel)->Option<[f32;2]> {
+        let view=self.view.borrow();let view=view.as_ref()?;
+        let tabs=view.tabs.borrow();
+        tabs.iter().find(|(id,_)|*id==panel).map(|(_,button)|crate::panel_tabs::tab_widths(button))
     }
     pub fn tab_hits(&self, w: &Workspace) -> Vec<TabHit> {
         let Some(measurement) = self.measurement() else {
@@ -860,6 +858,7 @@ impl Drawer {
             |from| end.interpolate_from(from, self.progress.get()),
         );
         if let Some(view) = self.view.borrow().as_ref() {
+            if let Some(strip)=&view.tab_strip {strip.set_presentations(&result.tab_presentations);}
             let geometry = result.columns.clone();
             if *view.root.imp().geometry.borrow() != geometry {
                 *view.root.imp().geometry.borrow_mut() = geometry;
@@ -1074,7 +1073,6 @@ impl Drawer {
         if let Some(view) = self.view.borrow().as_ref() {
             if let Some(tabs) = &next.tabs {
                 let layout = w.surface.imp().layout.borrow();
-                let style = layout.group_tab_style(tabs.group).unwrap();
                 let mut buttons = view.tabs.borrow_mut();
                 if !buttons.iter().map(|(panel, _)| panel).eq(&tabs.panels) {
                     buttons.sort_unstable_by_key(|(panel, _)| tabs.panels.iter().position(|p| p == panel));
@@ -1084,19 +1082,9 @@ impl Drawer {
                 }
                 for (panel, button) in buttons.iter() {
                     selected(button, *panel == tabs.active);
-                    if style != TabStyle::Automatic {
-                        let presentation = layout.tab_presentation(*panel);
-                        if presentation.show_name { button.remove_css_class("icon-only-tab"); }
-                        else { button.add_css_class("icon-only-tab"); }
-                        if let Some(content) = button.child().and_downcast::<gtk::Box>() {
-                            if let Some(icon) = content.first_child() { icon.set_visible(presentation.show_icon); }
-                            if let Some(label) = content.last_child() { label.set_visible(presentation.show_name); }
-                        }
-                    }
                 }
                 if let Some(labels) = view.tab_strip.as_ref() {
                     labels.set_hover_bottom(tabs.panels.iter().map(|panel| layout.tab_presentation(*panel).hover_bottom));
-                    labels.set_style(style);
                     if changed { labels.queue_resize(); labels.queue_draw(); }
                 }
             }

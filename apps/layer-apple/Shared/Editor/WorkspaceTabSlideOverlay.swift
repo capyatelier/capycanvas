@@ -9,10 +9,10 @@ struct WorkspaceTabSlideOverlay: View {
         Group {
             if let grab = slide.grab, !slide.preview.isNull {
                 let groups = store.snapshot["layout"]["groups"].array
-                    + store.state["customization"]["column_drawers"].array.map { $0["tabs"].replacing("id", with: $0["tabs"]["group"]) }
+                    + store.contentDrawers.items.values.map { $0.model["tabs"].replacing("id", with: $0.model["tabs"]["group"]).replacing("tab_presentations", with: $0.geometry["placement"]["tab_presentations"]) }
                 let active = groups.first { $0["id"].uint == grab.group }?["active"].string ?? ""
                 let drawer = store.state["customization"]["column_drawers"].array.contains { $0["tabs"]["group"].uint == grab.group }
-                let panels = store.workspace.presentedTabs(group: grab.group, panels: grab.panels.map { store.panel($0) })
+                let panels = store.workspace.presentedTabs(group: groups.first { $0["id"].uint == grab.group } ?? JSON(), panels: grab.panels.map { store.panel($0) })
                 WorkspaceTabSlideContent(slide: slide, grab: grab, panels: panels, active: active, drawer: drawer, palette: EditorPalette(source: store.state["palette"]))
                     .id(grab.id)
             }

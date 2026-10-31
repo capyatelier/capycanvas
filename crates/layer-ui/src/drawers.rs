@@ -94,6 +94,8 @@ pub struct DrawerPlacement {
     pub direction: Edge,
     /// Column bounds are local to the drawer; scroll overflow within each one.
     pub columns: Vec<Bounds>,
+    #[serde(default,skip_serializing_if="Vec::is_empty")]
+    pub tab_presentations: Vec<TabPresentation>,
 }
 
 #[derive(Serialize)]
@@ -715,6 +717,7 @@ impl ContentDrawer {
             anchor,
             direction,
             columns,
+            tab_presentations:self.tabs.as_ref().map_or_else(Vec::new,|tabs|layout.tab_presentations(tabs.group,bounds.width)),
         })
     }
 }
@@ -770,6 +773,7 @@ impl CustomizationState {
                     bounds,
                     corner_radii: [SURFACE_RADIUS; 4],
                     panels: panels.to_vec(),
+                    tab_presentations:layout.tab_presentations(group,bounds.width),
                     active,
                     axis: Axis::Vertical,
                     tabs_visible: true,
@@ -1032,7 +1036,7 @@ mod tests {
                         height: 200.0,
                     },
                 };
-                let p = DrawerPlacement {
+                let p = DrawerPlacement {tab_presentations:Vec::new(),
                     bounds,
                     anchor,
                     direction,

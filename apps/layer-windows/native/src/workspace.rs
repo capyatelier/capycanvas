@@ -212,7 +212,7 @@ mod tests {
         let request=before.measurement_requests.iter().find(|request|request.identity.panel==layer_ui::Panel::Histogram).unwrap().clone();
         let context=layer_ui::PanelMetricContext {generation:1,scale:1.,text_scale:1.,style:"native-test".into()};
         let measurements=layer_ui::PanelMeasurementBatch {context:context.clone(),reports:vec![layer_ui::PanelMeasurementReport {
-            request:request.clone(),context,tab_width:Some(110.),body:Some(layer_ui::PanelBodyMeasurement {
+            request:request.clone(),context,tab_widths:Some([110.,36.]),body:Some(layer_ui::PanelBodyMeasurement {
                 actual_width:request.width,content_height:385.,scroll:None,
             }),
         }]};
@@ -223,7 +223,7 @@ mod tests {
         assert_eq!(json!(resolve_layout(prepared,1400.,900.).unwrap().as_ref()),json!(host.session.layout([1400.,900.])));
         assert!(Arc::ptr_eq(&before,&resolve_layout(original,1400.,900.).unwrap()));
         assert_eq!(host.session.engine().document().revision,document_revision);
-        let invalid=c"[{\"panel\":\"histogram\",\"tab_width\":0,\"content_height\":-1}]";
+        let invalid=c"[{\"panel\":\"histogram\",\"tab_widths\":[0,0],\"content_height\":-1}]";
         assert_eq!(unsafe {capy_layout_input_measure(original,invalid.as_ptr())},0);
         assert_eq!(unsafe {capy_layout_input_measure(original,std::ptr::null())},0);
         capy_layout_input_free(prepared);capy_layout_input_free(original);

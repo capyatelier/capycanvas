@@ -145,7 +145,7 @@ fn group_gaps_take_the_foot_of_the_panel_above_the_gap_and_a_sliver_of_the_tabs_
     assert_eq!(contact_edge(&r, row, PointerKind::Touch, EdgeContact::Pickup, Axis::Horizontal), None);
     assert!(r.edge_grab_at(row, PointerKind::Touch, EdgeContact::Input).is_none(), "sliders keep every swipe");
 
-    layout.measurements.push(PanelMeasurement { panel: above.active, tab_width: 0., content_height: TILE_SIZE, scroll: None });
+    layout.measurements.push(PanelMeasurement { panel: above.active, tab_widths:[0.;2], content_height: TILE_SIZE, scroll: None });
     let r = layout.resolved(VIEW);
     let gap = r.dividers.iter().find(|d| d.id == gap.id).unwrap();
     assert!(!r.groups.iter().find(|g| g.id == above.id).unwrap().scrolls);

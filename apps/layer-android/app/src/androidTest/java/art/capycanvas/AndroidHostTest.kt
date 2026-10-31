@@ -2387,7 +2387,11 @@ class AndroidHostTest {
         fun automaticNames(panels: List<String>): List<Boolean> {
             for (panel in panels) compose.onNodeWithTag("tab-icon-$panel", useUnmergedTree = true).assertExists()
             val names = panels.map { compose.onAllNodesWithTag("tab-name-$it", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
-            assertEquals("Automatic names fill tabs from the left: $names", names.sortedDescending(), names)
+            val resolved = group(panels.first())
+            val members = resolved.array("panels").values()
+            assertEquals("Automatic names follow the resolved layout", panels.map { panel ->
+                resolved.array("tab_presentations").getJSONObject(members.indexOf(panel)).getBoolean("show_name")
+            }, names)
             return names
         }
         for (theme in listOf("dark", "light")) {
@@ -2425,6 +2429,79 @@ class AndroidHostTest {
         compose.onNodeWithText("Icons only").assertDoesNotExist()
         compose.onNodeWithText("Configure Layers panel…").performClick()
         customize(obj("type" to "close_expanded"))
+    }
+
+    @Test fun crowdedTabReordersKeepPanelWidthsAndBodies() {
+        val members=listOf("brushes","stats","sizes","color","palettes","tool_settings")
+        val fixture=JSONObject(defaultWorkspace)
+        fun tabs(id:Int,panels:List<String>,active:String=panels.first())=obj("kind" to "tabs","id" to id,
+            "panels" to JSONArray(panels),"active" to active,"tab_style" to "automatic")
+        fixture.getJSONObject("layout").apply {
+            put("bands",JSONArray(listOf(
+                obj("id" to 200,"edge" to "left","extent" to 252,"root" to obj("kind" to "split","id" to 202,
+                    "axis" to "vertical","fraction" to .65,"first" to tabs(201,members,"tool_settings"),"second" to tabs(203,listOf("navigator")))),
+                obj("id" to 210,"edge" to "right","extent" to 252,"root" to tabs(211,listOf("layers"))))))
+            put("floating",JSONArray());put("collapsed",JSONArray());put("column_stacks",JSONArray())
+            put("fit_tab_groups",JSONArray(listOf(201)));put("fit_height_groups",JSONArray(listOf(201)))
+            put("next_id",maxOf(212,getInt("next_id")))
+        }
+        fun nativeTabsReady():Boolean {
+            val requests=host.snapshot!!.getJSONObject("layout").array("measurement_requests").objects()
+            if(!members.all {panel->requests.any {it.getString("panel")==panel && it.getBoolean("tab_measured")}} ||
+                requests.none {it.getString("panel")=="tool_settings" && it.getBoolean("body_measured")})return false
+            return members.map {panel->
+                compose.onAllNodesWithTag("tab-$panel").fetchSemanticsNodes().singleOrNull()?.boundsInRoot?.left
+            }.let {positions->positions.all {it!=null} && positions.filterNotNull().zipWithNext().all {(a,b)->a<b}}
+        }
+        for(tag in listOf("en","ru"))for(theme in listOf("light","dark")) {
+            val language=host.bootstrap!!.array("shipped_tags").values().indexOf(tag)+1
+            action(obj("type" to "preferences","action" to obj("type" to "edit","id" to "language","value" to language)))
+            host.awaitMain("tab language $tag",30_000,{host.languageTag},compose){host.languageTag==tag}
+            action(obj("type" to "set_theme","theme" to theme))
+            action(obj("type" to "restore_workspace","workspace" to fixture))
+            host.awaitMain("crowded tab fixture $tag $theme",10_000,{state().getJSONObject("workspace").toString()},compose) {
+                state().getString("theme")==theme && state().getJSONObject("workspace").getJSONObject("layout").array("fit_tab_groups").values()==listOf(201) &&
+                    groups().any {it.getInt("id")==201 && it.array("panels").values()==members}
+            }
+            compose.waitUntil(10_000){nativeTabsReady()}
+            val body=compose.onNodeWithTag("panel-body-tool_settings",useUnmergedTree=true)
+            val controls=compose.onNodeWithTag("tool-setting-size",useUnmergedTree=true)
+            val identity=controls.fetchSemanticsNode().id
+            val divider=compose.onNodeWithTag("divider-200")
+            divider.performSemanticsAction(SemanticsActions.RequestFocus){it()}
+            compose.runOnIdle {assertEquals(200,host.dividerFocus)}
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_LEFT)
+            host.awaitMain("crowded tab resize $tag $theme",10_000,{
+                state().getJSONObject("workspace").getJSONObject("layout").array("fit_tab_groups").toString()
+            },compose){201 !in state().getJSONObject("workspace").getJSONObject("layout").array("fit_tab_groups").values()}
+            compose.waitUntil(10_000){nativeTabsReady()}
+            assertEquals(identity,controls.fetchSemanticsNode().id)
+            val before=group("tool_settings").array("panels").values()
+            val source=compose.onNodeWithTag("tab-tool_settings")
+            val origin=source.fetchSemanticsNode().boundsInRoot.topLeft
+            val target=compose.onNodeWithTag("tab-${before.first()}").fetchSemanticsNode().boundsInRoot.center
+            source.performTouchInput { swipe(center,target-origin,700) }
+            compose.waitUntil(10_000){groups().any {
+                it.getInt("id")==201 && it.array("panels").values().let {order->order.toSet()==before.toSet() && order!=before}
+            }}
+            assertEquals(identity,controls.fetchSemanticsNode().id)
+            val widths=mutableListOf<Float>()
+            val finished=CountDownLatch(1)
+            compose.runOnIdle {
+                val clock=Choreographer.getInstance()
+                clock.postFrameCallback(object:Choreographer.FrameCallback {
+                    override fun doFrame(time:Long) {
+                        widths.add(group("tool_settings").getJSONObject("bounds").number("width"))
+                        if(widths.size==90)finished.countDown() else clock.postFrameCallback(this)
+                    }
+                })
+            }
+            assertTrue(finished.await(10,TimeUnit.SECONDS))
+            assertEquals("$tag $theme widths after internal drop: $widths",1,widths.distinct().size)
+            val native=body.fetchSemanticsNode().boundsInRoot.width
+            assertEquals(widths.first()*compose.activity.resources.displayMetrics.density,native,1f)
+            capture("crowded-tabs-$tag-$theme")
+        }
     }
 
     @Test fun activeTabsMatchTheirPanelsAtEveryTransparency() {

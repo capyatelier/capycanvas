@@ -99,7 +99,7 @@ function Check-Editor {
         if($group.tabs_visible){
             $first=$group.panels[0];$tab=Control "panel-tab-$first"
             $measure=$model.panel_measurements|Where-Object panel -eq $first
-            Check-Rect $tab @{x=0;y=0;width=$measure.tab_width;height=36} $group.bounds.x $group.bounds.y
+            Check-Rect $tab @{x=0;y=0;width=$measure.tab_widths[0];height=36} $group.bounds.x $group.bounds.y
             Check-Rect (Control "group-grip-$($group.id)") @{x=($group.bounds.width-20);y=0;width=20;height=36} $group.bounds.x $group.bounds.y
         }
         if($group.tiles){

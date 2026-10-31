@@ -1400,7 +1400,7 @@ mod tests {
         layout.fit_tab_groups.push(44);
         layout.measurements.push(PanelMeasurement {
             panel: Panel::Brushes,
-            tab_width: 600.,
+            tab_widths:[600.,36.],
             content_height: 0.,
             scroll: None,
         });
@@ -1516,7 +1516,7 @@ mod tests {
         layout.fit_tab_groups.push(5);
         layout.measurements.push(PanelMeasurement {
             panel: Panel::Brushes,
-            tab_width: 300.,
+            tab_widths:[300.,36.],
             content_height: 0.,
             scroll: None,
         });

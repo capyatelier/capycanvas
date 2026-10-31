@@ -1252,7 +1252,6 @@ struct WindowsMetadata<'a> {
     windows_glass: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     layout_input: Option<layer_ui::LayoutResolveInput<'a>>,
-    windows_tab_styles: serde_json::Map<String, serde_json::Value>,
     windows_isolated_settings: bool,
     windows_adapter: Option<String>,
     windows_workspace: Option<serde_json::Value>,
@@ -1288,15 +1287,6 @@ pub unsafe extern "C" fn capy_snapshot(host: u64, info: *mut CapySnapshotInfo) -
             windows_tabs: host.documents.as_ref().map(|d| d.tabs_view(&host.native)),
             windows_palettes: host.documents.as_ref().map(|d| d.palettes.status()),
             windows_papers: host.documents.as_ref().map(|d| d.papers.status()),
-            windows_tab_styles: {
-                let layout = &host.native.session.state().workspace.layout;
-                layout
-                    .panels
-                    .iter()
-                    .filter_map(|p| layout.panel_group(p.id))
-                    .filter_map(|g| Some((g.to_string(), serde_json::to_value(layout.group_tab_style(g).ok()?).ok()?)))
-                    .collect()
-            },
             windows_glass: serde_json::json!({
                 "regions": host.chrome.glass.count(),
                 "chrome_revision": host.chrome.presented_revision,

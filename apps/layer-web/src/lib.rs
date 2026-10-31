@@ -119,14 +119,6 @@ fn js(value: impl std::fmt::Display) -> JsValue {
 fn numeric_error(reason: layer_ui::NumericError, localizer: &layer_ui::Localizer) -> JsValue {
     serialize(&serde_json::json!({"message":reason.message(localizer),"numeric_error":reason})).unwrap_or_else(std::convert::identity)
 }
-#[wasm_bindgen]
-pub fn automatic_tab_names(available: f32, widths: &[f32]) -> Vec<u8> {
-    let widths: Vec<[f32; 2]> = widths.chunks_exact(2).map(|w| [w[0], w[1]]).collect();
-    layer_ui::TabStyle::automatic_names(available, &widths)
-        .into_iter()
-        .map(u8::from)
-        .collect()
-}
 fn serialize(value: &impl Serialize) -> Result<JsValue, JsValue> {
     value
         .serialize(

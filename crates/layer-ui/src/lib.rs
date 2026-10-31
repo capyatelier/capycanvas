@@ -121,6 +121,8 @@ pub use drawers::{
 mod interaction;
 mod layout;
 mod panel_measurements;
+#[cfg(test)]
+mod tab_measurement_tests;
 mod measurement_shape;
 pub use panel_measurements::{PanelMeasurementIdentity,PanelMeasurementRequest,PanelMetricContext,PanelBodyMeasurement,PanelMeasurementReport,PanelMeasurementBatch};
 mod tab_drag;

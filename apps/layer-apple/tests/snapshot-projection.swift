@@ -220,7 +220,7 @@ private final class Changes: @unchecked Sendable {
                 "workspace_layout": ["bands": [["id": 1, "extent": width]], "floating": [], "collapsed": [], "fit_tab_groups": [7], "fit_height_groups": [],
                     "column_stacks": [["column": 7, "members": [7], "drawers": false, "auto_hide": false]]],
                 "header_presentation": ["height": 44, "items": [["id": 7, "bounds": bounds]]],
-                "camera": ["zoom": 2, "revision": 1], "panel_measurements": [["panel": "brushes", "tab_width": 90, "content_height": 300]]])
+                "camera": ["zoom": 2, "revision": 1], "panel_measurements": [["panel": "brushes", "tab_widths": [90, 36], "content_height": 300]]])
         }
         func full(_ revision: Int, width: Int) -> JSON {
             let reflow = packet(revision, model: revision, content: revision, width: width)

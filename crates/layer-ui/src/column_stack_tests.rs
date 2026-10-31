@@ -990,7 +990,7 @@ fn layout_resolve_input_roundtrips_runtime_geometry_and_zen_across_viewports() {
             id:42,bounds:Bounds{x:30.,y:4.,width:250.,height:32.},
         }]};
         layout.column_scroll=vec![(layout.collapsed.first().map_or(group,|c|c.root),17.)];
-        layout.measurements=vec![PanelMeasurement {panel:Panel::Layers,tab_width:173.,content_height:463.,
+        layout.measurements=vec![PanelMeasurement {panel:Panel::Layers,tab_widths:[173.,36.],content_height:463.,
             scroll:Some(PanelScrollMeasurement {fixed_height:13.,unit_height:25.})}];
         layout.titlebar_insets=[41.,117.,32.];layout.bottom_inset=23.;
         for peek in [false,true] {
@@ -1307,7 +1307,7 @@ fn replacing_the_workspace_keeps_host_measurements_and_follows_the_header_size()
     let paint = preset(crate::WorkspacePreset::Illustrator);
     adopt(&mut s, &paint);
     let measurements = [(Panel::Color, 300.), (Panel::Navigator, 180.)]
-        .map(|(panel, content_height)| PanelMeasurement { panel, tab_width: 0., content_height, scroll: None })
+        .map(|(panel, content_height)| PanelMeasurement { panel, tab_widths:[0.;2], content_height, scroll: None })
         .to_vec();
     s.dispatch(UiAction::MeasurePanels { measurements:measured_batch(&s,STACK_VIEW,measurements) }).unwrap();
     s.dispatch(UiAction::MeasureHeader { height: paint.header.size.height(), items: Vec::new() }).unwrap();

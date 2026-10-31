@@ -423,14 +423,14 @@ impl DockLayout {
                 };
                 let mut expanded = self.clone();
                 expanded.collapsed.retain(|c| c.root != member.id());
-                resolve_node(member, body, Axis::Vertical, &expanded, result, false);
+                resolve_node(member, body, body.height, Axis::Vertical, &expanded, result, false);
                 let connections = c
                     .groups
                     .iter()
                     .filter_map(|g| {
                         let icon = g.icons.iter().find(|i| i.panel == g.active)?;
                         let anchor = icon.bounds.intersection(c.content)?;
-                        crate::DrawerPlacement {
+                        crate::DrawerPlacement {tab_presentations:Vec::new(),
                             bounds: body,
                             anchor,
                             direction,

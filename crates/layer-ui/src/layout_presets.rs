@@ -658,7 +658,7 @@ mod tests {
             layout.measurements = [(first, 300.), (second, 200.)]
                 .map(|(panel, content_height)| PanelMeasurement {
                     panel,
-                    tab_width: 0.,
+                    tab_widths:[0.;2],
                     content_height,
                     scroll: None,
                 })
@@ -694,7 +694,7 @@ mod tests {
             layout.add_panel_to_group(Panel::Layers, group).unwrap();
             layout.measurements.push(PanelMeasurement {
                 panel: Panel::Layers,
-                tab_width: 0.,
+                tab_widths:[0.;2],
                 content_height: 10_000.,
                 scroll: Some(PanelScrollMeasurement {
                     fixed_height: 40.,
@@ -741,11 +741,11 @@ mod tests {
         for platform in Platform::ALL {
             let mut layout=WorkspacePreset::Photographer.layout(platform);layout.open_default_columns(platform);
             layout.measurements=[
-                PanelMeasurement{panel:Panel::Histogram,content_height:260.,tab_width:111.,scroll:None},
-                PanelMeasurement{panel:Panel::Waveform,content_height:260.,tab_width:110.,scroll:None},
-                PanelMeasurement{panel:Panel::Properties,content_height:160.,tab_width:111.,scroll:Some(PanelScrollMeasurement{fixed_height:0.,unit_height:0.})},
-                PanelMeasurement{panel:Panel::Adjustments,content_height:3720.,tab_width:111.,scroll:Some(PanelScrollMeasurement{fixed_height:40.,unit_height:64.})},
-                PanelMeasurement{panel:Panel::Layers,content_height:172.,tab_width:85.,scroll:Some(PanelScrollMeasurement{fixed_height:92.,unit_height:40.})},
+                PanelMeasurement{panel:Panel::Histogram,content_height:260.,tab_widths:[111.,36.],scroll:None},
+                PanelMeasurement{panel:Panel::Waveform,content_height:260.,tab_widths:[110.,36.],scroll:None},
+                PanelMeasurement{panel:Panel::Properties,content_height:160.,tab_widths:[111.,36.],scroll:Some(PanelScrollMeasurement{fixed_height:0.,unit_height:0.})},
+                PanelMeasurement{panel:Panel::Adjustments,content_height:3720.,tab_widths:[111.,36.],scroll:Some(PanelScrollMeasurement{fixed_height:40.,unit_height:64.})},
+                PanelMeasurement{panel:Panel::Layers,content_height:172.,tab_widths:[85.,36.],scroll:Some(PanelScrollMeasurement{fixed_height:92.,unit_height:40.})},
             ].to_vec();
             for width in [744.,960.,1200.] {
                 for height in [600.,660.,800.,1000.,1600.] {
@@ -784,7 +784,7 @@ mod tests {
             (Panel::Color, 300., None),
             (Panel::Palettes, 500., scroll(60., 38.)),
             (Panel::Brushes, 900., scroll(0., 0.)),
-        ].map(|(panel, content_height, scroll)| PanelMeasurement { panel, content_height, scroll, tab_width: 0. }).to_vec();
+        ].map(|(panel, content_height, scroll)| PanelMeasurement { panel, content_height, scroll, tab_widths:[0.;2]}).to_vec();
         layout
     }
 
@@ -870,8 +870,8 @@ mod tests {
             };
             layout.fit_height_groups = if fitted { vec![14] } else { vec![] };
             layout.measurements = [
-                PanelMeasurement { panel: Panel::Navigator, tab_width: 100., content_height: 100., scroll: None },
-                PanelMeasurement { panel: Panel::Layers, tab_width: 86., content_height: 200.,
+                PanelMeasurement { panel: Panel::Navigator, tab_widths:[100.,36.], content_height: 100., scroll: None },
+                PanelMeasurement { panel: Panel::Layers, tab_widths:[86.,36.], content_height: 200.,
                     scroll: Some(PanelScrollMeasurement { fixed_height: 0., unit_height: 40. }) },
             ].to_vec();
             let resolved = layout.resolve(1180., 256.);
@@ -912,7 +912,7 @@ mod tests {
             };
             assert!((bounds(&layout, 1000., Panel::Color).height - bounds(&proportional, 1000., Panel::Color).height).abs() < WORKSPACE_SPACING);
             layout.measurements = [(Panel::Color, 300.), (Panel::Navigator, 180.), (Panel::Brushes, 900.)]
-                .map(|(panel, content_height)| PanelMeasurement { panel, tab_width: 0., content_height,
+                .map(|(panel, content_height)| PanelMeasurement { panel, tab_widths:[0.;2], content_height,
                     scroll: (panel == Panel::Brushes).then_some(PanelScrollMeasurement { fixed_height: 0., unit_height: 0. }) })
                 .to_vec();
             for height in [640., 1000., 1600.] {

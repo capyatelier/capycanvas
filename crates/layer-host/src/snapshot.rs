@@ -899,7 +899,7 @@ mod tests {
         let context=layer_ui::PanelMetricContext {generation:1,scale:2.,text_scale:1.,style:"snapshot-test".into()};
         host.dispatch(UiAction::MeasurePanels {
             measurements: layer_ui::PanelMeasurementBatch {context:context.clone(),reports:vec![layer_ui::PanelMeasurementReport {
-                request:request.clone(),context,tab_width:Some(80.),body:Some(layer_ui::PanelBodyMeasurement {
+                request:request.clone(),context,tab_widths:Some([80.,36.]),body:Some(layer_ui::PanelBodyMeasurement {
                     actual_width:request.width,content_height:500.,scroll:None,
                 }),
             }]},

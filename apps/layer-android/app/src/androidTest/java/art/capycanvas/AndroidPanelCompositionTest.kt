@@ -56,7 +56,7 @@ class AndroidPanelCompositionTest {
         val authored=rows.map { it.toString() }
         val palette=Palette(state.getString("theme")=="dark",state.getJSONObject("palette"))
         val panels=mapOf("layers" to obj("id" to "layers"))
-        val group=PanelContent(1,"layers",org.json.JSONArray(listOf("layers")),false,0f,null,false,null)
+        val group=PanelContent(1,"layers",org.json.JSONArray(listOf("layers")),false,0f,null,false,null,org.json.JSONArray())
         val dock=compose.runOnIdle { DockInteraction(host) }
         val epoch=state.getJSONObject("document_file").getLong("epoch")
         val thumbnails=rows.flatMap { row -> listOf(false,true).mapNotNull { mask ->

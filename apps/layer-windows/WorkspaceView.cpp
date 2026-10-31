@@ -108,7 +108,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         Grid layout{nullptr},header{nullptr},bodyViewport{nullptr};
         StackPanel tabLabels{nullptr};
         Grid activeTab{nullptr};
-        std::vector<AutomaticTab> automatic;
         Bindings paintIcons;
         ScrollView tabScroll{nullptr};
         ScrollView bodyScroll{nullptr};
@@ -158,7 +157,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     Bindings popupBindings;
     std::shared_ptr<ZoomReadout> zoom=std::make_shared<ZoomReadout>();
     Grid cameraSlot;
-    Border cameraSurface;std::function<void()> glassChanged;std::map<std::wstring,double> tabWidths;
+    Border cameraSurface;std::function<void()> glassChanged;
     Impl(Dispatch send,J catalog,NativeLocalization localization,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document,Dispatch input,EdgeTransport edges){
         data->input=std::move(input);data->edges=std::move(edges);gestures=std::make_shared<WorkspaceGestures>(data,root);
         data->document=std::move(document);
@@ -262,19 +261,17 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             auto model=find(array(data->model,L"panels"),L"id",id);
             members.Append(O({{L"id",S(id)},{L"icon",S(str(model,L"icon"))}}));
         }
-        auto tabKey=O({{L"members",members},{L"style",S(str(object(data->model,L"windows_tab_styles"),to_hstring(uint32_t(num(geometry,L"id"))).c_str()))}}).Stringify();
+        auto tabKey=members.Stringify();
         if(group.tabKey!=tabKey){
-            group.tabKey=tabKey;group.tabs.clear();group.activeTab=nullptr;group.automatic.clear();group.paintIcons.clear();
+            group.tabKey=tabKey;group.tabs.clear();group.activeTab=nullptr;group.paintIcons.clear();
             auto tabs=group.tabLabels;tabs.Children().Clear();
-            uint32_t index=0;bool fitted=automaticTabs(data,num(geometry,L"id"));
+            uint32_t index=0;
             for(auto value:array(geometry,L"panels")){
                 auto id=value.GetString();auto model=find(array(data->model,L"panels"),L"id",id);
-                auto tabStyle=object(model,L"tab");
+                auto tabStyle=panelTabPresentation(array(geometry,L"panels"),array(geometry,L"tab_presentations"),id);
                 auto tab=panelTabButton(data,str(model,L"title"),panelIcon(data,str(model,L"icon"),group.paintIcons),tabStyle,[data=data,id,groupId=num(geometry,L"id")]{
                     data->dispatch(O({{L"type",S(L"select_panel_tab")},{L"group",N(groupId)},{L"panel",S(id)}}));
                 });
-                auto name=tab.Content().as<StackPanel>().Children().GetAt(1).as<TextBlock>();
-                if(fitted)group.automatic.push_back({tab,name,std::wstring(id)+L"\n"+std::wstring(str(model,L"title"))+L"\n"+std::to_wstring(data->textSize())});
                 auto item=O({{L"kind",S(L"panel")},{L"panel",S(id)}});
                 gestures->Source(tab,O({{L"type",S(L"drag_workspace")},{L"item",item}}),item,false,
                     O({{L"group",N(num(geometry,L"id"))},{L"index",N(index++)},{L"panel",S(id)}}));
@@ -290,7 +287,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             if(!group.tabScroll){
                 group.tabScroll=ScrollView();auto tabScroll=group.tabScroll;Border handle;group.header=panelHeader(data,tabs,tabScroll,handle);auto header=group.header;
                 gestures->Source(tabScroll,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem,true,{},WorkspaceGestures::Pickup::Sideways);
-                tabScroll.SizeChanged([weak=weak_from_this(),id=uint32_t(num(geometry,L"id"))](auto&&,auto&&){if(auto self=weak.lock()){self->fitTabs(id);self->cutStrip(id);}});
+                tabScroll.SizeChanged([weak=weak_from_this(),id=uint32_t(num(geometry,L"id"))](auto&&,auto&&){if(auto self=weak.lock()){self->cutStrip(id);}});
                 tabScroll.ViewChanged([weak=weak_from_this(),id=uint32_t(num(geometry,L"id"))](auto&&,auto&&){if(auto self=weak.lock())self->cutStrip(id);});
                 tabs.SizeChanged([weak=weak_from_this(),id=uint32_t(num(geometry,L"id"))](auto&&,auto&&){if(auto self=weak.lock())self->cutStrip(id);});
                 gestures->Source(handle,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem,true);
@@ -302,23 +299,22 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 frame.Children().Append(header);
             }
         }
+    }
+    void presentTabs(Group& group,J const& geometry){
         group.header.Visibility(flag(geometry,L"tabs_visible")?Visibility::Visible:Visibility::Collapsed);
         group.activeTab=nullptr;
-        bool fitted=automaticTabs(data,num(geometry,L"id"));
         for(auto const& [id,shell]:group.tabs){
             auto tab=shell.Children().GetAt(1).as<Button>();
-            auto model=find(array(data->model,L"panels"),L"id",hstring(id));auto presentation=object(model,L"tab");
+            auto model=find(array(data->model,L"panels"),L"id",hstring(id));auto presentation=panelTabPresentation(array(geometry,L"panels"),array(geometry,L"tab_presentations"),hstring(id));
             auto title=str(model,L"title");AutomationProperties::SetName(tab,title);tooltip(tab,title);
             auto label=tab.Content().as<StackPanel>();label.Children().GetAt(1).as<TextBlock>().Text(title);
-            for(auto& automatic:group.automatic)if(automatic.tab==tab)automatic.key=id+L"\n"+std::wstring(title)+L"\n"+std::to_wstring(data->textSize());
-            label.Children().GetAt(0).Visibility(fitted||flag(presentation,L"show_icon")?Visibility::Visible:Visibility::Collapsed);
-            if(!fitted)label.Children().GetAt(1).Visibility(flag(presentation,L"show_name")?Visibility::Visible:Visibility::Collapsed);
+            label.Children().GetAt(0).Visibility(flag(presentation,L"show_icon")?Visibility::Visible:Visibility::Collapsed);
+            label.Children().GetAt(1).Visibility(flag(presentation,L"show_name")?Visibility::Visible:Visibility::Collapsed);
             bool selected=hstring(id)==str(geometry,L"active");
             selectPanelTabShell(shell,selected,nullptr,presentation);
             if(selected)group.activeTab=shell;
         }
-        orderPanelTabs(group.tabLabels,array(geometry,L"panels"),group.tabs,group.automatic);
-        if(group.tabScroll&&group.tabScroll.ActualWidth()>0)fitAutomaticTabs(data,group.automatic,group.tabScroll.ActualWidth(),tabWidths);
+        orderPanelTabs(group.tabLabels,array(geometry,L"panels"),group.tabs);
     }
     void build(Group& group,J const& geometry,J const& panel){
         group.body.reset();group.footer=nullptr;group.backgroundKey=L"";
@@ -570,15 +566,15 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             // Geometry-only changes retain controls, focus, capture and scroll.
             if(full||added||!group.body){
             auto structure=J::Parse(geometry.Stringify());
-            for(auto field:{L"bounds",L"resize_handles",L"tiles",L"footer_grip",L"min_body_height",L"zen_kept",L"scrolls",L"panels"})if(structure.HasKey(field))structure.Remove(field);
+            for(auto field:{L"bounds",L"resize_handles",L"tiles",L"footer_grip",L"min_body_height",L"zen_kept",L"scrolls",L"panels",L"tab_presentations"})if(structure.HasKey(field))structure.Remove(field);
             if(auto tiles=object(geometry,L"tiles");tiles.Size())structure.Insert(L"tile_style",S(str(tiles,L"tile_style")));
             structure.Insert(L"footer",B(object(geometry,L"footer_grip").Size()!=0));
             J signature=O({{L"geometry",structure},{L"panel",panelStructure(panel)},{L"metrics",S(panelMetricKey)}});
             A headers;for(auto member:array(geometry,L"panels")){
                 auto model=find(array(data->model,L"panels"),L"id",member.GetString());
-                headers.Append(O({{L"id",member},{L"title",S(str(model,L"title"))},{L"icon",S(str(model,L"icon"))},{L"tab",object(model,L"tab")}}));
+                headers.Append(O({{L"id",member},{L"title",S(str(model,L"title"))},{L"icon",S(str(model,L"icon"))},{L"tab",panelTabPresentation(array(geometry,L"panels"),array(geometry,L"tab_presentations"),member.GetString())}}));
             }
-            auto tabsPresentationKey=O({{L"headers",headers},{L"style",S(str(object(data->model,L"windows_tab_styles"),to_hstring(id).c_str()))},
+            auto tabsPresentationKey=O({{L"headers",headers},
                 {L"text_size",N(data->textSize())}}).Stringify();
             std::wstring key=signature.Stringify().c_str();
             if(group.key!=key||!group.body){
@@ -587,6 +583,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             }else if(group.tabsPresentationKey!=tabsPresentationKey){buildTabs(group,geometry);rebuilt=true;group.tabsPresentationKey=tabsPresentationKey;}
             for(auto const& update:group.paintIcons)update();
             }
+            presentTabs(group,geometry);
             bool hidden=flag(model,L"chrome_hidden")&&!flag(geometry,L"floating")&&!flag(geometry,L"zen_kept");
             group.hidden=hidden;
             int z=flag(geometry,L"floating")?100+2*order:0;++order;
@@ -831,10 +828,11 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     bool needsPanelMeasurements()const{
         for(auto value:measurementRequests()){
             auto request=value.GetObject();bool visible=false;
+            if(!flag(request,L"tab_measured"))return true;
             for(auto const& [id,group]:groups)if(!group.hidden&&!group.presented.Size())
                 for(auto panel:array(group.geometry,L"panels"))if(panel.GetString()==str(request,L"panel"))visible=true;
             if(!visible)continue;
-            if(!flag(request,L"tab_measured")||!flag(request,L"body_measured"))return true;
+            if(!flag(request,L"body_measured"))return true;
         }
         return false;
     }
@@ -848,57 +846,54 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             it=offscreen.erase(it);
         }
         auto stable=[](double value){return std::round(std::clamp(value,0.,999999.)*64.)/64.;};
-        for(auto const& [id,group]:groups){
-            if(group.hidden||group.presented.Size()||(!preparing&&!group.frame.IsLoaded()))continue;
-            auto active=str(group.geometry,L"active");
-            for(auto value:array(group.geometry,L"panels")){
-                auto panelId=value.GetString();auto request=find(requests,L"panel",panelId);
-                if(!request.Size()||(flag(request,L"tab_measured")&&flag(request,L"body_measured")))continue;
-                auto panel=find(array(data->model,L"panels"),L"id",panelId);if(!panel.Size())continue;
-                V tabWidth=JsonValue::CreateNullValue(),body=JsonValue::CreateNullValue();
-                if(!flag(request,L"tab_measured")){
-                    auto found=group.tabs.find(std::wstring(panelId));
-                    if(found!=group.tabs.end()){
-                        auto tab=found->second.Children().GetAt(1).as<Button>();
-                        tab.Measure({INFINITY,INFINITY});double width=tab.DesiredSize().Width;
-                        for(auto const& automatic:group.automatic)if(automatic.tab==tab)
-                            if(auto cached=tabWidths.find(automatic.key);cached!=tabWidths.end()){width=cached->second;break;}
-                        if(width>0)tabWidth=N(stable(width));
-                    }
-                }
-                if(!flag(request,L"body_measured")){
-                    double width=num(request,L"width"),actualWidth=width;double height=-1;J scroll;
-                    if(array(panel,L"tiles").Size())height=0;
-                    else if(panelId==active){
-                        actualWidth=group.body->Root().ActualWidth();
-                        height=group.body->ContentHeight(actualWidth);scroll=group.body->ScrollMetrics();
-                    }
-                    else {
-                        auto& copy=offscreen[std::wstring(panelId)];
-                        auto key=std::wstring(str(request,L"body"))+std::wstring(panelMetricKey);
-                        if(!copy.body||copy.key!=key){
-                            if(copy.body){uint32_t at=0;if(measureHost.Children().IndexOf(copy.body->Root(),at))measureHost.Children().RemoveAt(at);}
-                            auto inert=std::make_shared<WorkspaceData>(*data);inert->updating=false;
-                            inert->send=[](std::string){};inert->document=[](std::string){};inert->input=[](std::string){};
-                            inert->query=nullptr;inert->previews.reset();inert->thumbnails.reset();inert->scopes.reset();
-                            inert->popupChanged=nullptr;inert->takeBubble=nullptr;inert->bubbleContact=nullptr;inert->edgeHolding=nullptr;inert->cancelEdge=nullptr;inert->pointerCancels.Clear();inert->transients.clear();inert->colorViews.clear();inert->copyViews.clear();
-                            copy.body=std::make_unique<PanelBody>(inert,panel,O({{L"bounds",O({{L"width",N(width)}})}}),[]{},nullptr,false);
-                            copy.data=inert;copy.key=key;copy.body->Root().Width(width);copy.body->Apply(true);measureHost.Children().Append(copy.body->Root());
-                        }
-                        if(copy.data){copy.data->state=data->state;copy.data->model=data->model;}
-                        if(!flag(request,L"cacheable"))copy.body->Apply(true);
-                        copy.body->Root().Width(width);
-                        copy.body->Root().Measure({float(width),INFINITY});
-                        copy.body->Root().Arrange({0,0,float(width),copy.body->Root().DesiredSize().Height});
-                        actualWidth=copy.body->Root().ActualWidth();
-                        height=copy.body->ContentHeight(actualWidth);scroll=copy.body->ScrollMetrics();
-                    }
-                    if(std::isfinite(height)&&height>=0)body=O({{L"actual_width",N(stable(actualWidth))},{L"content_height",N(stable(height))},
-                        {L"scroll",scroll.Size()?V(scroll):JsonValue::CreateNullValue()}});
-                }
-                if(tabWidth.ValueType()!=JsonValueType::Null||body.ValueType()!=JsonValueType::Null)
-                    reports.Append(O({{L"request",request},{L"context",context},{L"tab_width",tabWidth},{L"body",body}}));
+        for(auto value:requests){
+            auto request=value.GetObject();auto panelId=str(request,L"panel");
+            auto found=std::find_if(groups.begin(),groups.end(),[&](auto const& entry){
+                auto const& group=entry.second;
+                if(group.hidden||group.presented.Size()||(!preparing&&!group.frame.IsLoaded()))return false;
+                for(auto member:array(group.geometry,L"panels"))if(member.GetString()==panelId)return true;
+                return false;
+            });
+            if(flag(request,L"tab_measured")&&(flag(request,L"body_measured")||found==groups.end()))continue;
+            auto panel=find(array(data->model,L"panels"),L"id",panelId);if(!panel.Size())continue;
+            V tabWidths=JsonValue::CreateNullValue(),body=JsonValue::CreateNullValue();
+            if(!flag(request,L"tab_measured")){
+                auto name=label(data,str(panel,L"title"),true);name.Measure({INFINITY,INFINITY});
+                A widths;widths.Append(N(stable(38.+name.DesiredSize().Width)));widths.Append(N(36.));tabWidths=widths;
             }
+            if(!flag(request,L"body_measured")&&found!=groups.end()){
+                auto const& group=found->second;auto active=str(group.geometry,L"active");
+                double width=num(request,L"width"),actualWidth=width;double height=-1;J scroll;
+                if(array(panel,L"tiles").Size())height=0;
+                else if(panelId==active){
+                    actualWidth=group.body->Root().ActualWidth();
+                    height=group.body->ContentHeight(actualWidth);scroll=group.body->ScrollMetrics();
+                }
+                else {
+                    auto& copy=offscreen[std::wstring(panelId)];
+                    auto key=std::wstring(str(request,L"body"))+std::wstring(panelMetricKey);
+                    if(!copy.body||copy.key!=key){
+                        if(copy.body){uint32_t at=0;if(measureHost.Children().IndexOf(copy.body->Root(),at))measureHost.Children().RemoveAt(at);}
+                        auto inert=std::make_shared<WorkspaceData>(*data);inert->updating=false;
+                        inert->send=[](std::string){};inert->document=[](std::string){};inert->input=[](std::string){};
+                        inert->query=nullptr;inert->previews.reset();inert->thumbnails.reset();inert->scopes.reset();
+                        inert->popupChanged=nullptr;inert->takeBubble=nullptr;inert->bubbleContact=nullptr;inert->edgeHolding=nullptr;inert->cancelEdge=nullptr;inert->pointerCancels.Clear();inert->transients.clear();inert->colorViews.clear();inert->copyViews.clear();
+                        copy.body=std::make_unique<PanelBody>(inert,panel,O({{L"bounds",O({{L"width",N(width)}})}}),[]{},nullptr,false);
+                        copy.data=inert;copy.key=key;copy.body->Root().Width(width);copy.body->Apply(true);measureHost.Children().Append(copy.body->Root());
+                    }
+                    if(copy.data){copy.data->state=data->state;copy.data->model=data->model;}
+                    if(!flag(request,L"cacheable"))copy.body->Apply(true);
+                    copy.body->Root().Width(width);
+                    copy.body->Root().Measure({float(width),INFINITY});
+                    copy.body->Root().Arrange({0,0,float(width),copy.body->Root().DesiredSize().Height});
+                    actualWidth=copy.body->Root().ActualWidth();
+                    height=copy.body->ContentHeight(actualWidth);scroll=copy.body->ScrollMetrics();
+                }
+                if(std::isfinite(height)&&height>=0)body=O({{L"actual_width",N(stable(actualWidth))},{L"content_height",N(stable(height))},
+                    {L"scroll",scroll.Size()?V(scroll):JsonValue::CreateNullValue()}});
+            }
+            if(tabWidths.ValueType()!=JsonValueType::Null||body.ValueType()!=JsonValueType::Null)
+                reports.Append(O({{L"request",request},{L"context",context},{L"tab_widths",tabWidths},{L"body",body}}));
         }
         return reports;
     }
@@ -918,14 +913,18 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     }
     void preparePanels(){
         if(nativeResize()||object(workspaceUpdate,L"drag").Size()||!root.IsLoaded()||root.ActualWidth()<=0||!needsPanelMeasurements())return;
-        root.UpdateLayout();A reports;
-        for(int pass=0;pass<2&&needsPanelMeasurements();++pass){
-            auto measured=collectPanelMeasurements(true);if(!measured.Size())break;
-            projectPanelMeasurements(measured);
-            for(auto value:measured){
+        root.UpdateLayout();auto reports=collectPanelMeasurements(true);if(!reports.Size())return;
+        projectPanelMeasurements(reports);
+        auto bodies=collectPanelMeasurements(true);
+        if(bodies.Size()){
+            projectPanelMeasurements(bodies);
+            for(auto value:bodies){
                 auto report=value.GetObject();uint32_t replace=reports.Size();
                 for(uint32_t at=0;at<reports.Size();++at)if(str(object(reports.GetObjectAt(at),L"request"),L"panel")==str(object(report,L"request"),L"panel")){replace=at;break;}
-                if(replace<reports.Size())reports.SetAt(replace,report);else reports.Append(report);
+                if(replace<reports.Size()){
+                    if(report.GetNamedValue(L"tab_widths").ValueType()==JsonValueType::Null)report.Insert(L"tab_widths",reports.GetObjectAt(replace).GetNamedValue(L"tab_widths"));
+                    reports.SetAt(replace,report);
+                }else reports.Append(report);
             }
         }
         publishPanelMeasurements(reports);
@@ -1196,7 +1195,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         AutomationProperties::SetAutomationId(handle,hstring(key));
         AutomationProperties::SetAutomationControlType(handle,Automation::Peers::AutomationControlType::Thumb);
     }
-    void fitTabs(uint32_t id){if(auto found=groups.find(id);found!=groups.end()&&found->second.tabScroll)fitAutomaticTabs(data,found->second.automatic,found->second.tabScroll.ActualWidth(),tabWidths);}
     void publishDrawerSources(){
         if(drawers){
             auto sources=drawers->Sources();
@@ -1303,7 +1301,7 @@ void WorkspaceView::SetTitlebarInsets(float left,float right,float height){
 
 void WorkspaceView::MergeLayout(Json const& model,Json const& patch){
     using namespace CapyUi;
-    for(auto field:{L"layout",L"layout_input",L"panel_measurements",L"workspace_update",L"windows_tab_styles",L"windows_glass"})
+    for(auto field:{L"layout",L"layout_input",L"panel_measurements",L"workspace_update",L"windows_glass"})
         if(patch.HasKey(field))model.Insert(field,patch.GetNamedValue(field));
     auto state=object(model,L"state"),layout=object(object(state,L"workspace"),L"layout");
     for(auto const& item:object(patch,L"workspace_layout"))layout.Insert(item.Key(),item.Value());

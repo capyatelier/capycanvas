@@ -63,9 +63,8 @@ fn body(state:&UiState,panel:Panel)->(Value,bool) {
 }
 pub(crate) fn identities(state:&UiState)->Vec<PanelMeasurementIdentity> {
     state.workspace.layout.panels.iter().map(|panel| {
-        let tab=state.workspace.layout.tab_presentation(panel.id);
         let style=(state.theme,state.localization.language());
-        let tab=key(&(panel.title_localized(&state.localization),panel.icon(),tab.show_icon,tab.show_name,style));
+        let tab=key(&(panel.title_localized(&state.localization),panel.icon(),style));
         let (body,cacheable)=body(state,panel.id);
         let body=key(&(&panel.content,panel.tile_style,style,body));
         PanelMeasurementIdentity {panel:panel.id,tab,body,cacheable}
