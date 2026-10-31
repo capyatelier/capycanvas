@@ -64,25 +64,44 @@ import Observation
     /// integers and signed zero. Foundation container equality alone conflates
     /// true with 1, which would suppress a real transport change.
     static func equal(_ left: Any, _ right: Any) -> Bool {
-        if left is NSNull { return right is NSNull }
-        if let left = left as? NSNumber, let right = right as? NSNumber {
-            guard (CFGetTypeID(left) == CFBooleanGetTypeID()) == (CFGetTypeID(right) == CFBooleanGetTypeID()) else { return false }
-            if left.doubleValue == 0 && right.doubleValue == 0 && left.doubleValue.sign != right.doubleValue.sign { return false }
-            return left == right
-        }
-        if let left = left as? NSString, let right = right as? NSString { return left == right }
-        if let left = left as? NSDictionary, let right = right as? NSDictionary {
+        compare(left as AnyObject, right as AnyObject)
+    }
+    private static func object(_ pointer: UnsafeRawPointer) -> AnyObject {
+        Unmanaged<AnyObject>.fromOpaque(pointer).takeUnretainedValue()
+    }
+    private static func compare(_ left: AnyObject, _ right: AnyObject) -> Bool {
+        let type = CFGetTypeID(left)
+        guard type == CFGetTypeID(right) else { return false }
+        switch type {
+        case CFNullGetTypeID(): return true
+        case CFBooleanGetTypeID(), CFStringGetTypeID(): return CFEqual(left, right)
+        case CFNumberGetTypeID():
+            let a = unsafeDowncast(left, to: NSNumber.self), b = unsafeDowncast(right, to: NSNumber.self)
+            if a.doubleValue == 0 && b.doubleValue == 0 && a.doubleValue.sign != b.doubleValue.sign { return false }
+            return a == b
+        case CFArrayGetTypeID():
             if left === right { return true }
-            guard left.count == right.count else { return false }
-            for key in left.allKeys {
-                guard let key = key as? String, let value = right[key], let original = left[key], equal(original, value) else { return false }
+            let a = unsafeBitCast(left, to: CFArray.self), b = unsafeBitCast(right, to: CFArray.self)
+            let count = CFArrayGetCount(a)
+            guard count == CFArrayGetCount(b) else { return false }
+            return (0..<count).allSatisfy {
+                compare(object(CFArrayGetValueAtIndex(a, $0)!), object(CFArrayGetValueAtIndex(b, $0)!))
             }
-            return true
-        }
-        if let left = left as? NSArray, let right = right as? NSArray {
+        case CFDictionaryGetTypeID():
             if left === right { return true }
-            return left.count == right.count && (0..<left.count).allSatisfy { equal(left[$0], right[$0]) }
+            let a = unsafeBitCast(left, to: CFDictionary.self), b = unsafeBitCast(right, to: CFDictionary.self)
+            let count = CFDictionaryGetCount(a)
+            guard count == CFDictionaryGetCount(b) else { return false }
+            return withUnsafeTemporaryAllocation(of: UnsafeRawPointer?.self, capacity: count) { keys in
+                CFDictionaryGetKeysAndValues(a, keys.baseAddress, nil)
+                for key in keys {
+                    guard let key, CFGetTypeID(object(key)) == CFStringGetTypeID(),
+                        let original = CFDictionaryGetValue(a, key), let value = CFDictionaryGetValue(b, key),
+                        compare(object(original), object(value)) else { return false }
+                }
+                return true
+            }
+        default: return false
         }
-        return false
     }
 }

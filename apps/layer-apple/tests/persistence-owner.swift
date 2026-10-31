@@ -14,15 +14,17 @@ private final class State: @unchecked Sendable {
     private var snapshot = JSON()
     private var storage = JSON()
     private var failure: String?
+    private var publications = 0
     func receive(_ next: JSON?, _ error: String?) {
         lock.lock(); defer { lock.unlock() }
         if let error { failure = error }
         if let next {
-            if !next["state"].isNull { snapshot = next }
+            if !next["state"].isNull { snapshot = next; publications += 1 }
             if !next["persistence"].isNull { storage = next["persistence"] }
         }
     }
     func read() -> (JSON, JSON, String?) { lock.lock(); defer { lock.unlock() }; return (snapshot, storage, failure) }
+    func publicationCount() -> Int { lock.lock(); defer { lock.unlock() }; return publications }
 }
 @main struct OwnerPersistenceChecks {
     static func main() throws {
@@ -40,6 +42,87 @@ private final class State: @unchecked Sendable {
             state.read().0["preferences"]["pages"].array.flatMap { page in
                 page["groups"].array.flatMap { $0["rows"].array }
             }
+        }
+        func checkBubblePublication(platform: UInt32) throws {
+            let state = State()
+            let owner = try NativeOwner(platform: platform, persistence: EditorPersistence(root: nil),
+                receive: { state.receive($0, $1) })
+            owner.resize(width: 1200, height: 870, scale: 1)
+            send(owner, ["type": "set_theme", "theme": "light"])
+            send(owner, ["type": "customize", "action": ["type": "header", "action": ["type": "add", "zone": "center",
+                "before": NSNull(), "item": ["kind": "tool", "control": ["kind": "command", "command": "drawing_brush"]]]]])
+            send(owner, ["type": "customize", "action": ["type": "header", "action": ["type": "edit", "editing": false]]])
+            func query(_ value: [String: Any]) -> JSON {
+                let reply = Reply<JSON?>(); owner.submit(2, JSON(value)) { reply.set($0) }
+                return reply.get()!
+            }
+            func frame() {
+                let reply = Reply<Bool>(), now = FrameTrace.now()
+                owner.frame(now: now, target: now + 16_666_667) { _, _, _ in reply.set(true) }
+                precondition(reply.get() && state.read().2 == nil)
+            }
+            guard let source = state.read().0["header"]["model"]["zones"].array.flatMap(\.array).first(where: {
+                $0["item"]["control"]["command"].string == "drawing_brush"
+            }) else { throw HostFailure(message: "Windowless owner must expose the drawing brush header source") }
+            for phase in ["down", "up"] {
+                send(owner, ["type": "bubble", "action": ["type": "drag", "grab": ["kind": "header", "id": source["id"].uint],
+                    "phase": phase, "position": [420, 340], "viewport": [1200, 870]]])
+            }
+            let bubble = query(["type": "bubbles"])[0]["view"], id = bubble["id"].uint
+            guard let ring = bubble["rings"].array.first(where: { $0["enabled"].bool }) else {
+                throw HostFailure(message: "Windowless owner must expose an enabled brush bubble ring")
+            }
+            let arc = ring["arc"]
+            func action(_ phase: String, _ fraction: Double) {
+                let angle = (arc["start"].number + arc["sweep"].number * fraction) * .pi / 180
+                send(owner, ["type": "bubble", "action": ["type": "ring", "id": id, "phase": phase,
+                    "position": [cos(angle) * arc["radius"].number, sin(angle) * arc["radius"].number]]])
+            }
+            let before = state.read().0["state"]["tool_settings"].stableKey
+            func history() -> [JSON] { state.read().0["state"]["commands"].array.filter { ["undo", "redo"].contains($0["id"].string) } }
+            precondition(history().count == 2 && history().allSatisfy { !$0["enabled"].bool })
+            owner.framePublication(active: true)
+            let initial = state.publicationCount()
+            action("down", 0.2)
+            precondition(state.publicationCount() == initial + 1, "Ring Down must publish before acknowledgment")
+            let down = state.publicationCount()
+            for index in 0..<12 { action("move", 0.3 + Double(index) * 0.04) }
+            let latest = query(["type": "bubbles"])[0]["view"]["rings"].stableKey
+            _ = query(["type": "catalog"])
+            guard state.publicationCount() == down else {
+                throw HostFailure(message: "Moves and pure queries must wait for the display frame")
+            }
+            frame()
+            precondition(state.publicationCount() == down + 1
+                && state.read().0["bubbles"][0]["view"]["rings"].stableKey == latest,
+                "One frame must publish the latest ordered ring value")
+            frame()
+            precondition(state.publicationCount() == down + 1, "An empty frame must not republish the ring")
+            let edited = state.read().0["state"]["tool_settings"].stableKey
+            action("up", 0.74)
+            precondition(state.publicationCount() == down + 2
+                && state.read().0["state"]["tool_settings"].stableKey == edited && edited != before
+                && history().allSatisfy { !$0["enabled"].bool },
+                "Ring Up must publish immediately and retain the last move value")
+            action("down", 0.4); action("move", 0.6); action("cancel", 0.6)
+            precondition(state.read().0["state"]["tool_settings"].stableKey == edited && state.read().2 == nil,
+                "Cancel must immediately restore the exact value from before Down")
+            action("down", 0.4); action("move", 0.6)
+            let pending = query(["type": "bubbles"])[0]["view"]["rings"].stableKey, active = state.publicationCount()
+            owner.framePublication(active: false)
+            _ = query(["type": "catalog"])
+            precondition(state.publicationCount() == active + 1
+                && state.read().0["bubbles"][0]["view"]["rings"].stableKey == pending,
+                "Stopping display frames must immediately publish the pending move")
+            action("move", 0.7)
+            precondition(state.publicationCount() == active + 2
+                && state.read().0["bubbles"][0]["view"]["rings"].stableKey != pending,
+                "Moves without display frames must publish before acknowledgment")
+            action("cancel", 0.7)
+            precondition(state.read().0["state"]["tool_settings"].stableKey == edited && state.read().2 == nil
+                && history().allSatisfy { !$0["enabled"].bool },
+                "Cancel must restore the exact value without adding document Undo")
+            print("PASS bubble ring publication platform \(platform): ordered moves, query isolation, frame stop, Up, Cancel and no document Undo")
         }
         func checkCatalogTrace(platform: UInt32) throws {
             let output = directory.appendingPathComponent("trace-\(platform)")
@@ -224,6 +307,7 @@ private final class State: @unchecked Sendable {
             print("PASS tilt platform \(platform) \(theme): cold sensor binding, Cancel/Reset rollback, Apply/flush and fresh-owner stable-source persistence")
         }
         for platform: UInt32 in [0,1] {
+            try checkBubblePublication(platform: platform)
             try checkCatalogTrace(platform: platform)
             try checkPreferenceRows(platform: platform)
             try checkPressure(platform: platform)

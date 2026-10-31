@@ -131,6 +131,8 @@ final class NativeOwner: @unchecked Sendable {
         perform { [self] in try check(capy_apple_redraw(nativeValue(handle))) }
     }
     private var lastSnapshotTime: UInt64 = 0
+    private var motionPublicationPending = false
+    private var framePublicationActive = false
     private var canvasReady = false
     private var shadersReady = false
     private var catalogLoaded = false
@@ -270,6 +272,7 @@ final class NativeOwner: @unchecked Sendable {
         return try JSON.decode(result)
     }
     private func publish() throws {
+        defer { motionPublicationPending = false }
         if let snapshot = try request(7) {
             if !snapshot["catalog"].isNull {
                 catalogLoaded = true
@@ -779,11 +782,21 @@ final class NativeOwner: @unchecked Sendable {
             do { try work() } catch { receive(nil, error.localizedDescription) }
         }
     }
+    func framePublication(active: Bool) {
+        perform { [self] in
+            framePublicationActive = active
+            if !active && motionPublicationPending { try publish() }
+        }
+    }
     func submit(_ kind: UInt32, _ value: JSON, completion: (@Sendable (JSON?) -> Void)? = nil) {
         queue.async { [self] in
             do {
                 let result = try request(kind, value)
-                do { try publish() } catch { receive(nil, error.localizedDescription) }
+                if framePublicationActive && kind == 0 && value["type"].string == "bubble" && value["action"]["phase"].string == "move" {
+                    motionPublicationPending = true
+                } else if kind != 2 || !motionPublicationPending {
+                    do { try publish() } catch { receive(nil, error.localizedDescription) }
+                }
                 completion?(result)
             } catch {
                 receive(nil, error.localizedDescription)
@@ -1103,7 +1116,7 @@ final class NativeOwner: @unchecked Sendable {
                 // Always flush the final state before the display link sleeps.
                 // Throttling the pen-up frame can otherwise leave Undo/layers
                 // stale indefinitely, until an unrelated action wakes the UI.
-                if result == 0 || now >= lastSnapshotTime + 33_000_000 {
+                if motionPublicationPending || result == 0 || now >= lastSnapshotTime + 33_000_000 {
                     try publish(); lastSnapshotTime = now
                 }
                 #if DEBUG

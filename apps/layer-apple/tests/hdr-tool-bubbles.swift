@@ -104,6 +104,13 @@ private struct HDRBubbleRoot: View {
             try await drain(0.02)
         }
         func apply(_ action: [String: Any]) async throws { try await store.apply(action); try await tick() }
+        func checkPaintHistory(_ steps: [(String, String)]) async throws {
+            for (op, expected) in steps {
+                try await apply(["type": "color", "action": ["op": op]])
+                try require(store.state["colors"]["foreground"].stableKey == expected,
+                    "Each completed color scrub must add exactly one paint Undo step")
+            }
+        }
         func bubble(_ action: [String: Any]) async throws { try await apply(["type": "bubble", "action": action]) }
         func ready(_ name: String, _ predicate: () -> Bool) async throws {
             try await wait(name, seconds: 60, failure: { store.failure ?? store.projectFiles.error }, step: tick, predicate)
@@ -128,6 +135,7 @@ private struct HDRBubbleRoot: View {
             try event(.leftMouseUp, at: end, marker: input, number: 10 + index); try await tick()
         }
         try await apply(["type": "set_color", "rgba": [0.2, 0.8, 0.4, 1]])
+        let precedingDefinition = store.state["colors"]["foreground"].stableKey
         try await apply(["type": "color", "action": ["op": "hdr_intensity", "stops": -1]])
         guard let source = store.snapshot["header"]["items"].array.first(where: { $0["resolved_control"]["kind"].string == "color" }) else {
             throw HostFailure(message: "The workspace must expose its real color source")
@@ -218,10 +226,20 @@ private struct HDRBubbleRoot: View {
         try await native(.leftMouseDragged, 0.75, 2)
         try await native(.leftMouseUp, 0.75, 2)
         try await ev(4, "Native intensity commit")
+        let committedDefinition = store.state["colors"]["foreground"].stableKey
+        try await checkPaintHistory([("undo", definition), ("undo", precedingDefinition),
+            ("redo", definition), ("redo", committedDefinition)])
         let wheel = global(CGPoint(x: 20, y: -10))
         try event(.leftMouseDown, at: wheel, marker: input, number: 3); try await tick()
-        try event(.leftMouseUp, at: wheel, marker: input, number: 3); try await tick()
+        for x in [10.0, 0.0] {
+            try event(.leftMouseDragged, at: global(CGPoint(x: x, y: -10)), marker: input, number: 3); try await tick()
+        }
+        try event(.leftMouseUp, at: global(CGPoint(x: 0, y: -10)), marker: input, number: 3); try await tick()
         try await ev(4, "Wheel edits retain committed intensity")
+        let wheelDefinition = store.state["colors"]["foreground"].stableKey
+        try require(wheelDefinition != committedDefinition, "The native wheel scrub must change its paint definition")
+        try await checkPaintHistory([("undo", committedDefinition), ("undo", definition),
+            ("redo", committedDefinition), ("redo", wheelDefinition)])
         try await set(-1)
         let beforePair = store.state["colors"]["foreground"].stableKey
         let start = global(point(0.25)), end = global(point(0.75))

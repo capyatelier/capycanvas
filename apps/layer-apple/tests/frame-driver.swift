@@ -15,6 +15,8 @@ import Foundation
 @MainActor final class NativeOwner {
     var admissions: [Bool] = []
     var denials: [UInt64] = []
+    var framePublicationActive = false
+    func framePublication(active: Bool) { framePublicationActive = active }
     func observeTick(now: UInt64, target: UInt64, admitted: Bool, denial: UInt64) {
         admissions.append(admitted); denials.append(denial)
     }
@@ -52,7 +54,9 @@ import Foundation
         var paused = true, submissions = 0
         frames.setPaused = { paused = $0 }
         frames.submittedViewport = { submissions += 1 }
+        assert(!store.native!.framePublicationActive, "Unattached canvases must publish without a display frame")
         frames.activate()
+        assert(store.native!.framePublicationActive, "An active display link can publish motion on its next frame")
         frames.tick(target: 1); frames.tick(target: 2)
         assert(store.native!.completions.count == 1, "Only one frame may be queued")
         assert(store.native!.denials.suffix(2) == [0, 2])
@@ -70,6 +74,7 @@ import Foundation
 
         frames.tick(target: 3)
         frames.deactivate()
+        assert(!store.native!.framePublicationActive, "Detaching must flush pending motion without another frame")
         store.native!.complete(revision: 2)
         await drainMainQueue()
         assert(paused && !store.canvasSubmitted, "Detached views must stay asleep")
@@ -89,6 +94,7 @@ import Foundation
         var visible = false
         frames.canPresent = { visible }
         frames.wake(); frames.tick(target: 6)
+        assert(!store.native!.framePublicationActive, "Occluded canvases must publish without a display frame")
         assert(paused && store.native!.completions.isEmpty, "Hidden wake and stale ticks must not submit frames")
         assert(store.canvasSubmitted && store.cameraRevision == 4 && submissions == 2,
             "Visibility changes must retain the submitted canvas and camera")
@@ -142,6 +148,7 @@ import Foundation
             sceneActive = false
             native.complete(again: true)
             await drainMainQueue()
+            assert(!native.framePublicationActive, "Scene deactivation must flush pending motion without another tick")
             assert(paused && native.admissions == [true] && native.completions.isEmpty,
                 "A pending completion must stay paused after scene deactivation without another tick")
             sceneActive = true

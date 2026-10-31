@@ -35,6 +35,7 @@ import QuartzCore
         if paused != value {
             store?.native?.observeActivity(active: !value)
             paused = value
+            store?.native?.framePublication(active: !value)
         }
         setPaused(value)
     }
