@@ -25,7 +25,7 @@ export function captureTextComposition(root, releaseKey = () => {}) {
     const key = event.code || event.key, keys = held.get(event.target) ?? new Map();
     if (!event.repeat && keys.get(key) !== event.timeStamp) keys.delete(key);
     if (!composingKey(event)) return;
-    if (event.key === "Escape" && !event.isComposing && event.keyCode !== 229
+    if ((event.key === "Escape" || event.key === "Enter") && !event.isComposing && event.keyCode !== 229
         && !preedit.has(event.target) && !preedit.has(root.activeElement)) event.preventDefault();
     owned.add(event);
     if (event.key !== "Process" && event.keyCode !== 229) keys.set(key, event.timeStamp);

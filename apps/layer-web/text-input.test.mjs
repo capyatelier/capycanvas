@@ -79,6 +79,33 @@ test('candidate Escape preserves committed search text before its native default
   assert.deepEqual(releases, ['Process', 'Escape']);
 });
 
+test('candidate Enter preserves textarea text before its native default', () => {
+  const field = {value:'mc0001 한글', selectionStart:9, selectionEnd:9}, releases = [];
+  const {send} = editor(field, event => {
+    assert.ok(composingKey(event));
+    releases.push(event.key);
+  }, field, event => {
+    if (event.type === 'keydown' && event.key === 'Enter') {
+      field.value += '\n';
+      field.selectionStart = field.selectionEnd = field.value.length;
+    }
+  });
+  send('compositionstart', {timeStamp:32050});
+  assert.equal(send('keydown', {key:'Process', code:'', keyCode:229, isComposing:true, timeStamp:32066.2}).defaultPrevented, false);
+  send('compositionend', {data:'글', timeStamp:32067});
+  const candidate = send('keydown', {key:'Enter', code:'', keyCode:13, isComposing:false, timeStamp:32066.7});
+  assert.deepEqual([field.value, field.selectionStart, field.selectionEnd], ['mc0001 한글', 9, 9]);
+  assert.equal(candidate.defaultPrevented, true);
+  assert.equal(send('keyup', {key:'Process', code:'', keyCode:229, timeStamp:32067.5}).defaultPrevented, false);
+  assert.equal(send('keyup', {key:'Enter', code:'', keyCode:13, timeStamp:32067.6}).defaultPrevented, false);
+  assert.deepEqual(releases, ['Process', 'Enter']);
+  assert.ok(!composingKey({target:field, timeStamp:32080}));
+  assert.equal(send('keydown', {key:'Enter', code:'', keyCode:13, timeStamp:32090}).defaultPrevented, false);
+  assert.deepEqual([field.value, field.selectionStart, field.selectionEnd], ['mc0001 한글\n', 10, 10]);
+  send('keyup', {key:'Enter', code:'', keyCode:13, timeStamp:32091});
+  assert.deepEqual(releases, ['Process', 'Enter']);
+});
+
 test('pointer confirmation does not consume the next ordinary key', () => {
   const {send} = editor();
   send('compositionstart', {timeStamp:10});
