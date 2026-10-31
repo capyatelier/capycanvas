@@ -70,6 +70,10 @@ and how parity is checked.
   awaits review before the other hosts.
 - [Texture programs](texture-programs.md) defines the WGSL language for paper
   surfaces, its bake and the programs behind the built-in papers.
+- [Saved data compatibility](saved-data-compatibility.md) keeps workspaces,
+  palettes, brush settings, preferences, drawings and recovery copies across
+  upgrades: tolerant readers, upgrade steps, version snapshots and release
+  fixtures.
 - [Photo editing roadmap](photo-editing-roadmap.md) collects deferred inspection,
   presets, export, masking, retouching and host qualification work. Current
   measurements and remaining targets belong in the
