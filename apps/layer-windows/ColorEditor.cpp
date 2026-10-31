@@ -479,7 +479,7 @@ struct Editor:std::enable_shared_from_this<Editor>{
         recentFrame.Visibility(open?Visibility::Collapsed:Visibility::Visible);mini.Visibility(open?Visibility::Visible:Visibility::Collapsed);
         moreGlyph.RenderTransform().as<RotateTransform>().Angle(open?0:180);relabel();
         if(open){
-            updating=true;search.Text(str(object(object(editor,L"picker"),L"editor"),L"search"));updating=false;
+            updating=true;updateText(search,str(object(object(editor,L"picker"),L"editor"),L"search"));updating=false;
             fillSheet();sheetScroll.ChangeView(nullptr,0.,nullptr,true);sheet.Visibility(Visibility::Visible);
         }
         animateSheet(open);

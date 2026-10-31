@@ -552,8 +552,6 @@ impl Preferences {
                 }
             }
         ));
-        crate::input::guard_editable_activation(&self.search);
-        crate::input::guard_editable_activation(&self.shortcut_search);
         self.search.connect_changed(glib::clone!(
             #[weak]
             w,
@@ -685,7 +683,6 @@ impl Preferences {
                                     )
                                 ),
                             );
-                            crate::input::guard_entry_activation(&selector.entry);
                             let weak = Rc::downgrade(&selector);
                             selector.entry.connect_activate(glib::clone!(
                                 #[weak]
@@ -792,7 +789,6 @@ impl Preferences {
                             spin.set_digits(control.digits);
                             spin.set_numeric(false);
                             spin.set_update_policy(gtk::SpinButtonUpdatePolicy::IfValid);
-                            crate::input::guard_editable_activation(&spin);
                             let format = control.clone();
                             spin.connect_output(move |spin| {
                                 let value = format

@@ -40,6 +40,84 @@ fn third_row_shows(grid: &gtk::FlowBox) -> bool {
     last.compute_bounds(&scroller).is_some_and(|bounds| bounds.y() >= 0. && bounds.y() + bounds.height() <= scroller.height() as f32)
 }
 
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
+fn native_new_drawing_search_composition_snapshots() { new_drawing_composition_snapshots(false); }
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
+fn native_new_drawing_preset_name_composition_snapshots() { new_drawing_composition_snapshots(true); }
+
+fn new_drawing_composition_snapshots(saving: bool) {
+    let app = native_test_app("art.capycanvas.NewDrawingComposition");
+    crate::text_language::install(&app, &Localizer::shared(UiLanguage::English));
+    gtk::Settings::default().unwrap().set_gtk_enable_animations(false);
+    let w = Workspace::with_project(&app, Some((new_drawing_at(256, 256, layer_core::color::SampleDepth::U8), None)));
+    w.window.maximize();
+    w.window.present();
+    ready(&w);
+    let mut input = RemoteInput::new();
+    input.ready();
+    let query = || match state(&w).new_drawing.unwrap().drawer.unwrap() {
+        NewDrawingDrawerView::Presets(browser) => browser.query,
+        _ => panic!("Preset browser"),
+    };
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        open_new_drawing(&w);
+        new_drawing_action(&w, NewDrawingAction::Presets);
+        if saving { new_drawing_action(&w, NewDrawingAction::SaveAs); }
+        let name = if saving { "new-drawing-save-name" } else { "new-drawing-search" };
+        let field = part::<gtk::Widget>(&w, name);
+        let edit = field.clone().dynamic_cast::<gtk::Editable>().unwrap();
+        let text = descendant::<gtk::Text>(&field).unwrap();
+        input.click(screen_point(&field, &w.window, [0.5, 0.5]));
+        assert!(text.grab_focus());
+        until(|| text.has_focus(), "Native text focus");
+        edit.set_text("한");
+        if !saving { until(|| query() == "한", "Committed preset query"); }
+        edit.set_position(1);
+        text.emit_preedit_changed("글");
+        let before = w.localization().language();
+        let target = if before == UiLanguage::Japanese { UiLanguage::English } else { UiLanguage::Japanese };
+        let choice = 1 + layer_ui::localization::SHIPPED_LANGUAGES.iter().position(|language| *language == target).unwrap() as u32;
+        w.dispatch(UiAction::SetBrushSize { value: state(&w).brush.diameter + 1. });
+        w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::Language, value: PreferenceValue::Choice(choice) } });
+        pump(100);
+        assert_eq!(w.localization().language(), before);
+        assert!(text.has_focus(), "{theme:?} {name}: snapshot moved focus during preedit");
+        assert_eq!(edit.text(), "한");
+        assert_eq!(edit.position(), 1);
+        text.emit_preedit_changed("");
+        let mut position = 1;
+        edit.insert_text("글", &mut position);
+        edit.set_position(2);
+        if !saving { assert_eq!(query(), "한", "Native query is still debounced"); }
+        w.new_drawing.borrow().upgrade().unwrap().render();
+        assert_eq!(edit.text(), "한글", "{theme:?} {name}: snapshot replaced the pending native commit");
+        until(|| w.localization().language() == target, "Deferred language publication");
+        if !saving { until(|| query() == "한글", "Complete committed preset query"); }
+        assert_eq!(part::<gtk::Widget>(&w, name), field);
+        assert_eq!(edit.text(), "한글");
+        assert_eq!(edit.position(), 2);
+        assert_eq!(edit.selection_bounds(), None);
+        assert!(text.has_focus(), "{theme:?} {name}: language publication moved focus");
+        if saving {
+            let model = part::<gtk::DropDown>(&w, "new-drawing-save-group").model().unwrap().downcast::<gtk::StringList>().unwrap();
+            let labels: Vec<_> = (0..model.n_items()).map(|index| model.string(index).unwrap().to_string()).collect();
+            let expected: Vec<_> = match state(&w).new_drawing.unwrap().drawer.unwrap() {
+                NewDrawingDrawerView::Presets(browser) => browser.save.unwrap().groups.into_iter().map(|group| group.label.to_string()).collect(),
+                _ => panic!("Preset browser"),
+            };
+            assert_eq!(labels, expected);
+        }
+        close_new_drawing(&w, "new-drawing-cancel");
+        super::new_photo::finish(&w);
+    }
+    w.window.destroy();
+    pump(100);
+}
+
 fn assert_startup_sheet(w: &Workspace) {
     let opened = ui_session(w).engine().document().clone();
     let screen = crate::new_drawing::screen(&w.window.surface().unwrap()).unwrap();

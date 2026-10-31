@@ -50,6 +50,7 @@ struct ColorStrip;
 struct PaperPreviewCache;
 void captureTextComposition(TextBox const& entry,std::function<void(bool)> localizationInput={});
 bool textComposing(DependencyObject element);
+void updateText(TextBox const& entry,hstring const& value);
 bool focusedTextComposing(XamlRoot const& root);
 bool composingKey(KeyRoutedEventArgs const& event);
 template<class Handler>

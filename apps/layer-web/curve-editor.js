@@ -1,4 +1,3 @@
-import {composingKey} from './text-input.js';
 import {gestureNumberField} from './numeric.js';
 
 export function createCurveEditor({element,button,icon,numberField,dispatch,target,initial,label,enabled=()=>true,histogram,footer,reset=false}) {
@@ -46,7 +45,7 @@ export function createCurveEditor({element,button,icon,numberField,dispatch,targ
   graph.ondblclick=e=>{e.preventDefault();e.stopPropagation();remove(e,clickCount);};
   graph.oncontextmenu=e=>{e.preventDefault();e.stopPropagation();cancel();remove(e);};
   const keyEvent=(e,pressed)=>{
-    if(composingKey(e)||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Delete','Backspace','Escape'].includes(e.key))return;
+    if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Delete','Backspace','Escape'].includes(e.key))return;
     if(pressed&&(e.ctrlKey||e.metaKey||e.altKey||!enabled()))return;
     e.preventDefault();e.stopPropagation();const owner=held?.key_event===e.key?held:current();
     if(pressed)held={...owner,key_event:e.key};

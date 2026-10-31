@@ -1,4 +1,3 @@
-import { composingKey } from "./text-input.js";
 import {chooseProfileLibrary} from './export-controls.js';
 import { liveCopy } from './localization.js';
 import {createShortcutPage} from './shortcut-page.js';
@@ -83,7 +82,6 @@ export function createPreferences({ app, element, button, icon, numberField, pan
     if (heldPointer !== null && (e.pointerId == null || heldPointer === e.pointerId)) { heldPointer = null; e.preventDefault(); e.stopImmediatePropagation(); }
   }, { capture: true });
   dialog.addEventListener("keydown", e => {
-    if (composingKey(e)) return;
     if (e.key === "Escape" && context.matches(":popover-open")) { dismissContext(); e.preventDefault(); e.stopImmediatePropagation(); }
     else if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
       const line = e.target.closest("[data-preference]");
@@ -150,7 +148,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
   search.type = "search"; search.placeholder = ""; search.id = "settings-search";
   search.setAttribute("aria-label", "");
   search.addEventListener("input", () => send({ type: "search", query: search.value }));
-  search.addEventListener("keydown", e => { if (!composingKey(e) && e.key === "Escape") { e.preventDefault(); e.stopPropagation(); send({ type: "toggle_search", open: false }); } });
+  search.addEventListener("keydown", e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); send({ type: "toggle_search", open: false }); } });
   const searchResults = element("div", "preferences-search-results");
   const empty = element("p", "preferences-empty");
   sidebar.append(sidebarHeader, search, navigation, searchResults, empty);
@@ -238,7 +236,6 @@ export function createPreferences({ app, element, button, icon, numberField, pan
                 if (!view()?.error) input.value = current().custom;
               };
               input.addEventListener("keydown", e => {
-                if (composingKey(e)) return;
                 if (e.key === "Enter") { e.preventDefault(); commit(); }
               });
               input.addEventListener("change", () => { if (input.value.trim() !== current().custom) commit(); });

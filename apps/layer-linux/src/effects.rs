@@ -422,7 +422,7 @@ impl EffectPanels {
                 }
             }
         ));
-        self.search_entry.connect_stop_search(glib::clone!(
+        crate::input::stop_search(&self.search_entry, glib::clone!(
             #[weak]
             w,
             move |_| w.dispatch(UiAction::FilterPicker {

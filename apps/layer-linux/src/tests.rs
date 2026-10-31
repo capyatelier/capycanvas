@@ -14166,10 +14166,23 @@ fn native_text_language() {
             assert_eq!(added.layout().context().language(), Some(expected.clone()));
             let other = adw::Window::builder().transient_for(&window).build();
             content.remove(&added);
-            other.set_content(Some(&added));
+            let transient = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            let fresh = gtk::Entry::new();
+            transient.append(&added);
+            transient.append(&fresh);
+            other.set_content(Some(&transient));
             other.present();
             pump(20);
             assert_eq!(added.layout().context().language(), Some(expected.clone()));
+            let text = fresh.delegate().and_downcast::<gtk::Text>().unwrap();
+            let ownership = unsafe { text.data::<Rc<crate::input::EntryComposition>>("capy-entry-composition").unwrap().as_ref().clone() };
+            text.emit_preedit_changed("にほんご");
+            assert!(crate::input::localization_input_busy(&window));
+            assert!(ownership.capture(36));
+            text.emit_preedit_changed("");
+            assert!(crate::input::localization_input_busy(&window));
+            assert!(ownership.release(36));
+            assert!(!crate::input::localization_input_busy(&window));
             other.close();
         }
         window.close();

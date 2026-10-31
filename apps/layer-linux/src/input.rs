@@ -48,47 +48,57 @@ pub(crate) struct EntryComposition {
 }
 impl EntryComposition {
     pub(crate) fn active(&self) -> bool { self.composing.get() || self.keys.active() }
-    fn clear(&self) { self.composing.set(false); self.keys.clear(); }
+    pub(crate) fn marked(&self) -> bool { self.composing.get() }
+    pub(crate) fn capture(&self, keycode: u32) -> bool { self.keys.capture(keycode, self.composing.get()) }
+    pub(crate) fn release(&self, keycode: u32) -> bool { self.keys.release(keycode) }
+    pub(crate) fn clear(&self) { self.composing.set(false); self.keys.clear(); }
 }
 pub(crate) fn guard_entry_activation(entry: &gtk::Entry) -> Rc<EntryComposition> {
     guard_editable_activation(entry)
 }
 
 pub(crate) fn guard_editable_activation(entry: &(impl IsA<gtk::Widget> + IsA<gtk::Editable>)) -> Rc<EntryComposition> {
-    let ownership = Rc::new(EntryComposition::default());
+    if let Some(ownership) = unsafe { entry.data::<Rc<EntryComposition>>("capy-entry-composition") } {
+        return unsafe { ownership.as_ref() }.clone();
+    }
     let mut editable = entry.upcast_ref::<gtk::Editable>().clone();
     while let Some(delegate) = editable.delegate() { editable = delegate; }
+    if let Some(ownership) = unsafe { editable.data::<Rc<EntryComposition>>("capy-entry-composition") } {
+        let ownership = unsafe { ownership.as_ref() }.clone();
+        unsafe { entry.set_data("capy-entry-composition", ownership.clone()); }
+        return ownership;
+    }
+    let ownership = Rc::new(EntryComposition::default());
     if let Some(text) = editable.downcast_ref::<gtk::Text>() {
         text.connect_preedit_changed(glib::clone!(#[strong] ownership, move |_, preedit| ownership.composing.set(!preedit.is_empty())));
-        text.connect_activate(glib::clone!(#[strong] ownership, move |text| {
-            if ownership.active() { text.stop_signal_emission_by_name("activate"); }
-        }));
     }
     let keys = gtk::EventControllerKey::new();
     keys.set_propagation_phase(gtk::PropagationPhase::Capture);
     keys.connect_key_pressed(glib::clone!(#[strong] ownership, move |_, _, keycode, _| {
-        ownership.keys.capture(keycode, ownership.composing.get());
+        ownership.capture(keycode);
         glib::Propagation::Proceed
     }));
-    keys.connect_key_released(glib::clone!(#[strong] ownership, move |_, _, keycode, _| { ownership.keys.release(keycode); }));
-    entry.add_controller(keys);
+    keys.connect_key_released(glib::clone!(#[strong] ownership, move |_, _, keycode, _| { ownership.release(keycode); }));
+    editable.add_controller(keys);
     let bubble = gtk::EventControllerKey::new();
     bubble.set_propagation_phase(gtk::PropagationPhase::Bubble);
     bubble.connect_key_pressed(glib::clone!(#[strong] ownership, move |_, _, _, _| {
         if ownership.active() { glib::Propagation::Stop } else { glib::Propagation::Proceed }
     }));
-    entry.add_controller(bubble);
-    if let Some(entry) = entry.upcast_ref::<gtk::Widget>().downcast_ref::<gtk::Entry>() {
-        entry.connect_activate(glib::clone!(#[strong] ownership, move |entry| {
-            if ownership.active() { entry.stop_signal_emission_by_name("activate"); }
-        }));
-    }
+    editable.add_controller(bubble);
     let focus = gtk::EventControllerFocus::new();
     focus.connect_leave(glib::clone!(#[strong] ownership, move |_| ownership.clear()));
-    entry.connect_unmap(glib::clone!(#[strong] ownership, move |_| ownership.clear()));
-    entry.add_controller(focus);
+    editable.connect_unmap(glib::clone!(#[strong] ownership, move |_| ownership.clear()));
+    editable.add_controller(focus);
     unsafe { entry.set_data("capy-entry-composition", ownership.clone()); }
+    unsafe { editable.set_data("capy-entry-composition", ownership.clone()); }
     ownership
+}
+
+pub(crate) fn stop_search(entry: &gtk::SearchEntry, handler: impl Fn(&gtk::SearchEntry) + 'static) {
+    entry.connect_stop_search(move |search| {
+        if !guard_editable_activation(search).active() { handler(search); }
+    });
 }
 
 pub(crate) fn localization_input_busy(window: &impl IsA<gtk::Window>) -> bool {

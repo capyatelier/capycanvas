@@ -13,7 +13,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -162,7 +161,6 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
         if (!cancel && dirty && text.text != shown.getString(displayKey) && !apply(obj("type" to "expression", "text" to text.text))) return false
         editing = keepEditing; dirty = false
         error = null; text = TextFieldValue(shown.getString(displayKey))
-        host.textComposition.clear(requester)
         return true
     }
     val numericOperation by rememberUpdatedState<(JSONObject) -> Boolean>({ apply(it) })
@@ -241,8 +239,6 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
     LaunchedEffect(editing) { if (editing) requester.requestFocus() }
     DisposableEffect(Unit) { onDispose {
         endEdit(cancel = true)
-        if (focused) host.editingText = false
-        host.textComposition.clear(requester)
         if (toolbar && host.toolbarEditorBounds == fieldBounds) host.toolbarEditorBounds = null
     } }
     val contact = if (onEditPhase == null || !enabled) Modifier else Modifier.edgeControl().pointerInput(enabled) {
@@ -279,19 +275,17 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
                 } }
             }
     val field: @Composable () -> Unit = {
-        BasicTextField(text, {
+        CoreTextField(text, {
             if (editing && active != 2) {
                 if (it.text != text.text || it.composition != null) dirty = true
                 text = it
-                host.textComposition.update(requester, text, focused)
                 if (dirty) onText(it)
             }
         }, Modifier.edgeControl().then(if (panel) Modifier.width(68.dp) else if (inline && valueOnly && !toolbar) Modifier.fillMaxWidth() else if (inline) Modifier.width(fixedWidth) else if (ranged) Modifier.widthIn(min = 48.dp, max = 100.dp).width(IntrinsicSize.Min) else if(compact) Modifier.width(fixedWidth) else Modifier.width(if (presentedText != null || control.optString("unit").isNotEmpty()) 80.dp else 60.dp)).height(height).textCursorRegion(enabled)
             .onGloballyPositioned { fieldBounds = it.boundsInRoot(); if (toolbar && focused) host.toolbarEditorBounds = fieldBounds }
             .focusRequester(requester).onFocusChanged {
                 if (focused && !it.isFocused) { finish(); if (heldKey != null) endEdit() }
-                focused = it.isFocused; host.editingText = focused; onTyping(focused)
-                host.textComposition.update(requester, text, focused)
+                focused = it.isFocused; onTyping(focused)
                 if (toolbar) {
                     if (focused) host.toolbarEditorBounds = fieldBounds
                     else if (host.toolbarEditorBounds == fieldBounds) host.toolbarEditorBounds = null

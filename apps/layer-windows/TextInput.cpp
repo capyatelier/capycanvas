@@ -57,6 +57,9 @@ void captureTextComposition(TextBox const& entry,std::function<void(bool)> local
     entry.TextCompositionEnded([weak](auto&&,auto&&){if(auto state=weak.get();state&&!state->source){state->keys.Update(false,uint32_t(GetMessageTime()));state->Notify();}});
     entry.LostFocus([weak](auto&&,auto&&){if(auto state=weak.get())state->Clear();});
     entry.Unloaded([weak](auto&&,auto&&){if(auto state=weak.get())state->Clear();});
+    entry.PreviewKeyDown([](auto&&,KeyRoutedEventArgs const& event){
+        if(composingKey(event))event.Handled(true);
+    });
     entry.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler([weak](auto&&,auto&&){if(auto state=weak.get()){state->keys.Pointer();state->Notify();}})),true);
     entry.AddHandler(UIElement::KeyUpEvent(),box_value(KeyEventHandler([weak](auto&&,KeyRoutedEventArgs const& event){
         if(auto state=weak.get()){
@@ -68,6 +71,10 @@ void captureTextComposition(TextBox const& entry,std::function<void(bool)> local
 }
 bool textComposing(DependencyObject element){
     auto state=composition(element);return state&&state->keys.Active();
+}
+void updateText(TextBox const& entry,hstring const& value){
+    captureTextComposition(entry);
+    if(!textComposing(entry)&&entry.Text()!=value)entry.Text(value);
 }
 bool focusedTextComposing(XamlRoot const& root){
     return root&&textComposing(FocusManager::GetFocusedElement(root).try_as<DependencyObject>());

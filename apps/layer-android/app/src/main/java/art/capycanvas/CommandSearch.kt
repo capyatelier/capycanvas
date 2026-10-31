@@ -13,7 +13,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -68,9 +67,8 @@ import org.json.JSONObject
     fun close() = send(obj("type" to "close"))
     fun back() = send(obj("type" to "back"))
     fun commit() { if (text.composition == null) send(obj("type" to "commit", "text" to text.text)) }
-    DisposableEffect(focus) { onDispose { host.textComposition.clear(focus) } }
+
     LaunchedEffect(parameterId) {
-        host.textComposition.clear(focus)
         val value = parameter?.getJSONObject("parameter")?.getString("text") ?: view.optString("query")
         text = TextFieldValue(value, if (parameter != null) TextRange(0, value.length) else TextRange(value.length))
     }
@@ -80,7 +78,7 @@ import org.json.JSONObject
         if (configuration.keyboard == Configuration.KEYBOARD_NOKEYS) keyboard?.show()
     }
     LaunchedEffect(selected, parameterId) { if (parameter == null && selected in results.indices) list.scrollToItem(selected) }
-    Dialog(onDismissRequest = { if (text.composition == null) back() }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+    Dialog(onDismissRequest = { back() }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         val root = LocalView.current
         val window = (root.parent as DialogWindowProvider).window
         DisposableEffect(window) {
@@ -123,13 +121,12 @@ import org.json.JSONObject
                         Row(Modifier.weight(1f).heightIn(min = rowHeight).background(colors.input, RoundedCornerShape(8.dp)).padding(horizontal = inset),
                             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(gap)) {
                             SharedIcon("search", null)
-                            BasicTextField(text, onValueChange = {
+                            CoreTextField(text, onValueChange = {
                                 text = it
-                                host.textComposition.update(focus, text, entryFocused)
                                 if (parameter == null) send(obj("type" to "query", "text" to it.text))
                             }, singleLine = true, textStyle = LocalTextStyle.current.copy(color = colors.text), cursorBrush = SolidColor(colors.accent),
                                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search, autoCorrectEnabled = false), keyboardActions = KeyboardActions(onSearch = { commit() }),
-                                modifier = Modifier.weight(1f).textCursorRegion().focusRequester(focus).onFocusChanged { entryFocused = it.isFocused; host.textComposition.update(focus, text, entryFocused) }.testTag("command-search").semantics { contentDescription = parameter?.getString("label") ?: copy.getString("search_commands") },
+                                modifier = Modifier.weight(1f).textCursorRegion().focusRequester(focus).onFocusChanged { entryFocused = it.isFocused; }.testTag("command-search").semantics { contentDescription = parameter?.getString("label") ?: copy.getString("search_commands") },
                                 decorationBox = { inner -> Box { if (text.text.isEmpty()) Text(if (parameter == null) copy.getString("search_commands") else copy.getString("enter_value"), color = colors.secondary); inner() } })
                             parameter?.getJSONObject("parameter")?.getJSONObject("numeric")?.optString("unit")?.takeIf { it.isNotEmpty() }?.let { Text(it, color = colors.secondary) }
                         }

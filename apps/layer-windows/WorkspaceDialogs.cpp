@@ -33,7 +33,7 @@ struct WorkspaceDialogs::Impl:std::enable_shared_from_this<Impl>{
     std::optional<hstring> nameDraft,searchDraft;
     static void sync(TextBox const& entry,hstring const& value,std::optional<hstring>& draft){
         if(draft&&*draft==value)draft.reset();
-        if(!draft&&entry.Text()!=value)entry.Text(value);
+        if(!draft)updateText(entry,value);
     }
     std::function<void()> changed;
     Dispatch report;

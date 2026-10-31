@@ -10,7 +10,7 @@ export function latinKey({key, code, shiftKey}) {
   return latin && latin !== key ? latin : null;
 }
 
-export function captureTextComposition(root) {
+export function captureTextComposition(root, releaseKey = () => {}) {
   compositionRoot = root;
   root.addEventListener("cancel", event => {
     if (!composingKey(event)) return;
@@ -28,9 +28,10 @@ export function captureTextComposition(root) {
     owned.add(event);
     if (event.key !== "Process" && event.keyCode !== 229) keys.set(key, event.timeStamp);
     held.set(event.target, keys);
+    event.stopImmediatePropagation();
   }, true);
   root.addEventListener("keyup", event => {
-    if (composingKey(event)) owned.add(event);
+    if (composingKey(event)) { owned.add(event); releaseKey(event); event.stopImmediatePropagation(); }
     held.get(event.target)?.delete(event.code || event.key);
   }, true);
   root.addEventListener("pointerdown", () => held.delete(root.activeElement), true);

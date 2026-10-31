@@ -297,7 +297,6 @@ pub(crate) async fn manage_for_window(
         .build();
     body.append(&intro);
     let search = gtk::SearchEntry::new();
-    crate::input::guard_editable_activation(&search);
     search.set_placeholder_text(Some(copy.search.as_ref()));
     search.set_widget_name("profile-library-search");
     body.append(&search);

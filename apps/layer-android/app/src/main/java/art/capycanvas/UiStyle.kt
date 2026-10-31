@@ -23,6 +23,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.CornerBasedShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardActionScope
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.SideEffect
@@ -60,6 +62,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -186,9 +191,45 @@ private data class ChromeFocusIndication(val color: Color) : IndicationNodeFacto
     }
 }
 
-/** Editing/composition is native widget state. Rust remains authoritative for
- * accepted values, but an asynchronous acknowledgement must not reset an IME's
- * current edit before the next key arrives. */
+private tailrec fun inputActivity(context: android.content.Context): android.app.Activity = when (context) {
+    is android.app.Activity -> context
+    is android.content.ContextWrapper -> inputActivity(context.baseContext)
+    else -> error("Text input has no native window")
+}
+
+@Composable internal fun CoreTextField(value: TextFieldValue, onValueChange: (TextFieldValue) -> Unit,
+    modifier: Modifier = Modifier, enabled: Boolean = true, singleLine: Boolean = true,
+    textStyle: TextStyle = LocalTextStyle.current, cursorBrush: Brush = SolidColor(LocalPalette.current.accent),
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default, keyboardActions: KeyboardActions = KeyboardActions.Default,
+    decorationBox: @Composable (@Composable () -> Unit) -> Unit = { it() }) {
+    val host = LocalCanvasHost.current
+    val owner = remember { Any() }
+    var focused by remember { mutableStateOf(false) }
+    val view = LocalView.current
+    val window = remember(view) { (view.parent as? DialogWindowProvider)?.window ?: inputActivity(view.context).window }
+    DisposableEffect(window, owner) {
+        val release = host.textComposition.window(window)
+        onDispose { release(); host.textComposition.clear(owner); if (focused) host.editingText = false }
+    }
+    SideEffect { host.textComposition.update(owner, value, focused) }
+    fun action(ime: ImeAction, callback: (KeyboardActionScope.() -> Unit)?): KeyboardActionScope.() -> Unit = {
+        if (host.textComposition.canAct(window)) {
+            if (callback == null) defaultKeyboardAction(ime) else callback()
+        }
+    }
+    BasicTextField(value, { next -> host.textComposition.update(owner, next, focused); onValueChange(next) },
+        Modifier.onFocusChanged {
+            if (focused != it.isFocused) host.editingText = it.isFocused
+            focused = it.isFocused
+            host.textComposition.update(owner, value, focused)
+        }.then(modifier), enabled = enabled, singleLine = singleLine, textStyle = textStyle, cursorBrush = cursorBrush,
+        keyboardOptions = keyboardOptions, keyboardActions = KeyboardActions(
+            onDone = action(ImeAction.Done, keyboardActions.onDone), onGo = action(ImeAction.Go, keyboardActions.onGo),
+            onNext = action(ImeAction.Next, keyboardActions.onNext), onPrevious = action(ImeAction.Previous, keyboardActions.onPrevious),
+            onSearch = action(ImeAction.Search, keyboardActions.onSearch), onSend = action(ImeAction.Send, keyboardActions.onSend)),
+        decorationBox = decorationBox)
+}
+
 @Composable internal fun CoreTextField(value: String, onChange: (String) -> Unit,
     modifier: Modifier = Modifier, label: (@Composable () -> Unit)? = null,
     placeholder: (@Composable () -> Unit)? = null, leadingIcon: (@Composable () -> Unit)? = null,
@@ -200,7 +241,6 @@ private data class ChromeFocusIndication(val color: Color) : IndicationNodeFacto
     var text by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
     var focused by remember { mutableStateOf(false) }
     val requester = remember { FocusRequester() }
-    val host = LocalCanvasHost.current
     val focusManager = LocalFocusManager.current
     LaunchedEffect(value, focused) { if (!focused) text = TextFieldValue(value, TextRange(value.length)) }
     // A core type-to-search request carries text as well as focus. Apply it
@@ -208,29 +248,25 @@ private data class ChromeFocusIndication(val color: Color) : IndicationNodeFacto
     LaunchedEffect(focusRequest) {
         if (focusRequest != 0L) {
             text = TextFieldValue(value, if (selectAllOnFocusRequest) TextRange(0, value.length) else TextRange(value.length))
-            host.textComposition.clear(requester)
             requester.requestFocus()
         }
     }
-    DisposableEffect(Unit) { onDispose { if (focused) host.editingText = false; host.textComposition.clear(requester) } }
     val colors = LocalPalette.current
     Column(modifier.edgeControl().background(background ?: colors.input, shape)) {
         label?.let { Box(Modifier.padding(start = 10.dp, top = 6.dp)) { it() } }
-        BasicTextField(text, { next ->
+        CoreTextField(text, { next ->
             val previous = text.text
             text = next
             if (next.composition == null && next.text.length > maxLength) text = TextFieldValue(next.text.take(maxLength))
-            host.textComposition.update(requester, text, focused)
             if (text.text != previous && onCommit == null) onChange(text.text)
         },
             Modifier.fillMaxWidth().height(height).textCursorRegion(enabled).focusRequester(requester).onFocusChanged {
                 if (focused && !it.isFocused) onCommit?.invoke(text.text)
-                focused = it.isFocused; host.editingText = focused
-                host.textComposition.update(requester, text, focused)
+                focused = it.isFocused
             },
             enabled = enabled, singleLine = true, textStyle = textStyle.copy(color = colors.text),
             cursorBrush = SolidColor(colors.accent), keyboardOptions = keyboardOptions.copy(imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { if (text.composition == null) focusManager.clearFocus() }),
+            keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
             decorationBox = { field ->
                 Row(Modifier.fillMaxSize().padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)) {

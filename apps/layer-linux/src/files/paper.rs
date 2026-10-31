@@ -97,7 +97,6 @@ pub(crate) async fn rename(w: &Rc<Workspace>, id: String, name: String) {
     let localization = w.localization();
     let entry = adw::EntryRow::builder().title(localization.text(layer_ui::MessageId::COMMON_NAME).as_ref()).text(&name).build();
     entry.set_widget_name("paper-rename-name");
-    crate::input::guard_editable_activation(&entry);
     let group = adw::PreferencesGroup::new();
     group.add(&entry);
     let dialog = adw::AlertDialog::builder()

@@ -24,6 +24,10 @@ impl TextLanguage {
                 language = unsafe { active.as_ref() }.clone();
             }
             if root.application().as_ref() == Some(app.upcast_ref()) {
+                if widget.ancestor(crate::number_control::NumberControl::static_type()).is_none()
+                    && let Ok(editable) = widget.clone().dynamic_cast::<gtk::Editable>() {
+                    crate::input::guard_editable_activation(&editable);
+                }
                 let context = widget.pango_context();
                 if context.language().as_ref() != Some(&language) {
                     context.set_language(Some(&language));

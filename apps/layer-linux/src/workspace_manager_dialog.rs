@@ -210,7 +210,6 @@ impl ManagerUi {
         }));
         self.dialog.add_controller(keys);
         self.bind_reorder_drop(w);
-        crate::input::guard_editable_activation(&self.search);
         self.dialog.connect_closed(glib::clone!(
             #[weak]
             w,
@@ -682,7 +681,6 @@ fn prompt_dialog(
             .activates_default(true)
             .build();
         entry.set_widget_name("workspace-item-name");
-        crate::input::guard_entry_activation(&entry);
         let localization = Rc::new(RefCell::new(localization.clone()));
         unsafe { dialog.set_data("capy-prompt-localization", localization.clone()); }
         entry.connect_changed(glib::clone!(
@@ -714,7 +712,6 @@ fn prompt_dialog(
             .placeholder_text(&*localization.text(layer_ui::MessageId::COMMON_DESCRIPTION))
             .build();
         entry.set_widget_name("workspace-item-description");
-        crate::input::guard_entry_activation(&entry);
         form.append(&entry);
     }
     if !prompt.choices.is_empty() {

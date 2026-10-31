@@ -1,6 +1,5 @@
 import {createScope,scopeGraph,scopeFooter} from './histogram.js';
 import {liveCopy,bindCopy} from './localization.js';
-import {composingKey} from "./text-input.js";
 import {gestureNumberField} from "./numeric.js";
 import {createCurveEditor} from "./curve-editor.js";
 import {strokeRecordingControl} from './stroke-recording.js';
@@ -17,7 +16,7 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
   const pickerHeader=element("div","filter-picker-header"),category=dropdown(()=>state().filter_categories.find(c=>c.id===state().filter_picker.category)?.label??'',value=>pickerAction({op:'category',category:value||null})),search=element("input"),list=element("div","filter-picker-list");
   const searchButton=button("",()=>{pickerAction({op:"toggle_search"});if(!search.hidden)search.focus();});searchButton.append(icon("search"));
   search.type="search";search.maxLength=120;search.oninput=()=>pickerAction({op:"search",query:search.value});
-  search.onkeydown=e=>{if(composingKey(e))return;e.stopPropagation();if(e.key==="Escape"){e.preventDefault();pickerAction({op:"toggle_search"});}};
+  search.onkeydown=e=>{e.stopPropagation();if(e.key==="Escape"){e.preventDefault();pickerAction({op:"toggle_search"});}};
   const categoryIcon=element("span","filter-category-icon");
   pickerHeader.append(categoryIcon,category,search,searchButton);adjustments.append(pickerHeader,list);
   const types=element("div","filter-types");types.dataset.control="filter_types";

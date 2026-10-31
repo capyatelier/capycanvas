@@ -103,7 +103,6 @@ export function createNumberField({ control, label, labels: captions, resolve, e
   },true);
   root.addEventListener('lostpointercapture',()=>{if(gesture&&!releaseTimer)finishGesture('cancel');});
   root.addEventListener('keydown',e=>{
-    if(composingKey(e))return;
     if(e.key==='Escape'&&gesture){
       e.preventDefault();e.stopPropagation();
       if(scrub){finishScrub(true);return;}
@@ -220,7 +219,7 @@ export function createNumberField({ control, label, labels: captions, resolve, e
       for(const type of ['pointerup','pointercancel','lostpointercapture'])dial.addEventListener(type,()=>{contact=null;});
       dial.addEventListener('dblclick',reset);
       const dialKey=e=>{
-        if(composingKey(e) || disabled || e.ctrlKey || e.metaKey || e.altKey)return null;
+        if(disabled || e.ctrlKey || e.metaKey || e.altKey)return null;
         const stride=e.shiftKey?15:1;
         return {ArrowRight:stride,ArrowUp:stride,ArrowLeft:-stride,ArrowDown:-stride,PageUp:45,PageDown:-45,Home:0}[e.key]??null;
       };
@@ -236,7 +235,6 @@ export function createNumberField({ control, label, labels: captions, resolve, e
   entry.addEventListener("input", () => { editing = true; });
   entry.addEventListener("blur", () => finish());
   entry.addEventListener("keydown", e => {
-    if (composingKey(e)) return;
     if (e.key === "Enter" || e.key === "Escape") {
       e.preventDefault(); e.stopPropagation();
       if (finish(e.key === "Escape")) { entry.blur(); if (buttonValue) valueButton.focus(); }

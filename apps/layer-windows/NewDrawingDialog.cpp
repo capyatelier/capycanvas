@@ -731,7 +731,7 @@ Grid searchField;search.Padding({34,0,10,0});entryBaseline(search);searchField.C
     void renderPage(J const& view){
         auto setup=object(view,L"setup"),pageView=object(view,L"page"),sheet=object(view,L"sheet");
         name.PlaceholderText(str(view,L"untitled"));
-        if(name.Text()!=str(view,L"name")&&name.FocusState()==FocusState::Unfocused)name.Text(str(view,L"name"));
+        if(name.FocusState()==FocusState::Unfocused)updateText(name,str(view,L"name"));
         numbers(view);for(auto const& bind:numberBinds)bind();
         bool linked=flag(view,L"linked");link.Background(clear());AutomationProperties::SetItemStatus(link,linked?data->caption(L"search",L"selected"):hstring());auto linkedIcon=icon(linked?L"link":L"unlink",data->theme(),12);linkedIcon.Opacity(linked?1:AffixOpacity);link.Content(linkedIcon);
         items(unit,unitsKey,array(view,L"units"),labelOf,valued(setup.GetNamedValue(L"unit")),L"new-drawing-unit");
@@ -802,7 +802,7 @@ Grid searchField;search.Padding({34,0,10,0});entryBaseline(search);searchField.C
 
     void renderPresets(J const& view,bool opening){
         auto weak=weak_from_this();
-        if(search.Text()!=str(view,L"query")&&(opening||search.FocusState()==FocusState::Unfocused))search.Text(str(view,L"query"));
+        if(opening||search.FocusState()==FocusState::Unfocused)updateText(search,str(view,L"query"));
         auto tabList=array(view,L"tabs");
         if(auto key=tabList.Stringify();key!=tabsKey){
             tabsKey=key;tabs.Children().Clear();
@@ -840,7 +840,7 @@ Grid searchField;search.Padding({34,0,10,0});entryBaseline(search);searchField.C
         if(!saving){footerPages->show(0);return;}
         auto save=saveValue.GetObject();
         items(saveGroup,groupsKey,array(save,L"groups"),labelOf,valued(save.GetNamedValue(L"group")),L"new-drawing-save-group");
-        if(saveName.Text()!=str(save,L"name")&&(starting||saveName.FocusState()==FocusState::Unfocused))saveName.Text(str(save,L"name"));
+        if(starting||saveName.FocusState()==FocusState::Unfocused)updateText(saveName,str(save,L"name"));
         pickerLabel(saveConfirm,str(save,L"confirm"));
         bool valid=flag(save,L"can_save");saveConfirm.IsEnabled(valid);
         saveName.BorderBrush().as<SolidColorBrush>().Color(valid?Windows::UI::Color{}:InvalidFieldColor);

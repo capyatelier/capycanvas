@@ -151,6 +151,7 @@ Reuse these native helpers instead of writing another:
 | Preview images (scopes, filters, layers, paper, gradients) | `BitmapUpload` |
 | Immediate flyouts; menus filled by an asynchronous query | `TrackPopup` and `OwnedPopup` in `NativeMenus.h`; check the ticket before showing |
 | Shortcuts on ancestors of native editors | `ShortcutKeys` in `UiControls.h` |
+| Shared-state `TextBox` text updates | `updateText` in `TextInput.cpp` |
 | Custom pointer gestures with rollback | `PointerGesture::OnCompleted`, `PrimaryContact` and `OnLeaving`; native Button and Slider use `PointerCaptureLoss::CompleteLift` |
 | Scrub buttons | `PointerGesture::Clicks` with `Suppress(pointerId)` and `SuppressClick()` |
 

@@ -17,7 +17,7 @@ export function createPreviewPanel({app,name,view,kind,value,apply,cancel,elemen
     panel.addEventListener('mousedown',e=>{if(!e.target.closest('input'))e.preventDefault();});
     panel.addEventListener('contextmenu',e=>e.preventDefault());
     panel.addEventListener('keydown',e=>{
-      if(e.isComposing||e.defaultPrevented||!['Enter','Escape'].includes(e.key))return;
+      if(e.defaultPrevented||!['Enter','Escape'].includes(e.key))return;
       e.preventDefault();e.stopPropagation();
       (e.key==='Enter'?apply:cancel)();
     });

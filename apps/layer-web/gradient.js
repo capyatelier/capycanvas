@@ -1,7 +1,6 @@
 import {colorButton} from './color-controls.js';
 import {createNumberField} from './numeric.js';
 import {liveCopy,bindCopy} from './localization.js';
-import {composingKey} from './text-input.js';
 
 const key=value=>JSON.stringify(value,(_,v)=>typeof v==='bigint'?String(v):v);
 
@@ -84,7 +83,7 @@ export function gradientEditor({app,element,button,icon,dropdown,dispatch}) {
   strip.addEventListener('pointerup',e=>{if(contact?.id!==e.pointerId)return;move(e);const c=contact;contact=null;send({kind:'position',index:c.index,operation:{type:'step',steps:0}},'up',c.owner);strip.releasePointerCapture(e.pointerId);});
   for(const type of ['pointercancel','lostpointercapture'])strip.addEventListener(type,cancel);
   strip.addEventListener('keydown',e=>{
-    if(composingKey(e)||disabled)return;
+    if(disabled)return;
     if(e.key==='Escape'&&(contact||held)){e.preventDefault();e.stopPropagation();cancel();}
     else if(['Delete','Backspace'].includes(e.key)){e.preventDefault();cancel();remove.click();}
     else if(['ArrowLeft','ArrowRight'].includes(e.key)){e.preventDefault();e.stopPropagation();const phase=held?'move':'down';held??={owner:target(),index:selected};send({kind:'position',index:held.index,operation:{type:'step',steps:(e.key==='ArrowLeft'?-1:1)*(e.shiftKey?10:1)}},phase,held.owner);}

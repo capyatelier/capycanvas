@@ -15,6 +15,8 @@ verifies this while retaining the signing identity for updates.
 The native Gradle build tracks shared Rust, filter assets and Fluent catalogs as
 inputs. Catalog-only changes rebuild the embedded native UI text.
 
+Use `CoreTextField` for `String` and `TextFieldValue` inputs; both overloads guard native composition, IME actions and containing-window keys.
+
 ## Storage
 
 External photos decode in `PhotoReaderService`, an isolated process with no

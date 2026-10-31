@@ -248,7 +248,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,ControlSurface surf
                     peer.RaisePropertyChangedEvent(Automation::RangeValuePatternIdentifiers::ValueProperty(),box_value(shown*scale),box_value(local->value*scale));
         }
         if(auto control=weak.get()){
-            if(control.Text()!=value)control.Text(value);
+            updateText(control,value);
             if(auto display=readout.get()){
                 bool reading=control.FocusState()==FocusState::Unfocused&&!local->editing;
                 if(auto box=panelValueBox.get())box.Width(reading?measureText(value)+12:68);

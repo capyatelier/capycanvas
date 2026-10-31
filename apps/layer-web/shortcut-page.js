@@ -1,5 +1,5 @@
 import { bindCopy } from './localization.js';
-import { composingKey, latinKey } from "./text-input.js";
+import { latinKey } from "./text-input.js";
 export function createShortcutPage({ app, element, button, icon, send, view, scroller, settingsGroup: group, dropdown, copy, common }) {
   const panes = new Map(), active = new Map(), rows = new Map();
   let keymapChoice, keymapOutdated, contextChoice, showChoice, shortcutSearch, categoryList, emptyStatus;
@@ -85,7 +85,7 @@ export function createShortcutPage({ app, element, button, icon, send, view, scr
   const pickerSearch = element("input", "preferences-search"); pickerSearch.type = "search"; pickerSearch.id = "action-picker-search";
   bindCopy(pickerSearch,()=>copy.search_actions,"placeholder"); bindCopy(pickerSearch,()=>copy.search_actions,"ariaLabel");
   pickerSearch.addEventListener("input", () => send({ type: "search_action_picker", query: pickerSearch.value }));
-  pickerSearch.addEventListener("keydown", e => { if (!composingKey(e) && e.key === "Escape") { e.preventDefault(); e.stopPropagation(); send({ type: "close_action_picker" }); } });
+  pickerSearch.addEventListener("keydown", e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); send({ type: "close_action_picker" }); } });
   const pickerList = element("div", "picker-list");
   picker.body.append(pickerDescription, pickerSearch, pickerList);
   const details = sheet("keymap-details", () => send({ type: "keymap_details", open: false }));
@@ -134,7 +134,6 @@ export function createShortcutPage({ app, element, button, icon, send, view, scr
     bindCopy(shortcutSearch,()=>copy.search_or_press,"placeholder"); bindCopy(shortcutSearch,()=>copy.search_shortcuts,"ariaLabel");
     shortcutSearch.addEventListener("input", () => send({ type: "search_shortcuts", query: shortcutSearch.value }));
     shortcutSearch.addEventListener("keydown", e => {
-      if (composingKey(e)) return;
       const latin = latinKey(e);
       const editing = (e.ctrlKey || e.metaKey) && !e.altKey && !(e.ctrlKey && e.metaKey) && ["a", "c", "v", "x", "Backspace", "Delete", "ArrowLeft", "ArrowRight", "Home", "End"].some(key => app.shortcut_key_is(e.key, latin, key));
       const named = /^F\d+$/.test(e.key) || e.key.startsWith("Audio") || e.key.startsWith("Media");

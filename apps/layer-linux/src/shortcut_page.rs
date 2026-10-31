@@ -782,7 +782,7 @@ impl ShortcutPage {
             }
         ));
         let picker = self.picker.dialog.clone();
-        self.picker_search.connect_stop_search(move |_| {
+        crate::input::stop_search(&self.picker_search, move |_| {
             picker.close();
         });
         self.picker_reset.connect_clicked(glib::clone!(

@@ -181,7 +181,6 @@ export function colorForm({app, root, element, button, open, rendition, copyable
   for (const entry of fields) {
     entry.show.addEventListener('click', () => { if (entry.suppress) { entry.suppress = false; return; } begin(entry); });
     entry.input.addEventListener('keydown', e => {
-      if (e.isComposing) return;
       if (e.key === 'Enter') { e.preventDefault(); commit(entry); }
       else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); end(entry); }
     });

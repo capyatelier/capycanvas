@@ -107,7 +107,7 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
         AutomationProperties::SetName(toggle,str(picker,L"search_label"));CapyUi::tooltip(toggle,str(picker,L"search_label"));
         auto query=str(picker,L"search");
         if(!open||(searchDraft&&query==*searchDraft))searchDraft.reset();
-        if(!searchDraft&&search.Text()!=query)search.Text(query);
+        if(!searchDraft)updateText(search,query);
         if(open&&!wasOpen)search.Focus(FocusState::Programmatic);
         auto choices=array(data->state,L"adjustments");A schema;
         for(auto value:choices){auto item=value.GetObject();schema.Append(O({{L"id",S(str(item,L"id"))},{L"category",S(str(item,L"category"))},{L"icon",S(str(item,L"icon"))},{L"category_icon",S(str(item,L"category_icon"))},{L"animated",B(flag(item,L"animated"))},{L"action",object(item,L"action")}}));}

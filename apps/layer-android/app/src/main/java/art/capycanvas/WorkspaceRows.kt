@@ -4,7 +4,6 @@ import android.view.KeyEvent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.ui.focus.FocusRequester
@@ -330,12 +329,12 @@ private fun JSONObject.offers(type: String) =
     val commit=remember(id) {{finish()}}
     SideEffect {host.workspaceNameCommit=commit}
     LaunchedEffect(view.optBoolean("busy"),view.optString("error")) {if(!view.optBoolean("busy"))submitted=false}
-    BasicTextField(name,{name=it;host.textComposition.update(focus,name,hadFocus)},Modifier.fillMaxWidth().textCursorRegion().testTag("workspace-name-$id").focusRequester(focus).onPreviewKeyEvent {event->
+    CoreTextField(name,{name=it;},Modifier.fillMaxWidth().textCursorRegion().testTag("workspace-name-$id").focusRequester(focus).onPreviewKeyEvent {event->
         val key=event.nativeKeyEvent
         if(key.keyCode==KeyEvent.KEYCODE_ESCAPE){if(name.composition==null&&!host.textComposition.owns(key)&&key.action==KeyEvent.ACTION_DOWN)finish(true);true}else false
-    }.onFocusChanged {if(hadFocus&&!it.isFocused)finish();hadFocus=it.isFocused;host.editingText=it.isFocused;host.textComposition.update(focus,name,hadFocus)},
+    }.onFocusChanged {if(hadFocus&&!it.isFocused)finish();hadFocus=it.isFocused;},
         textStyle=LocalTextStyle.current.copy(color=colors.text),singleLine=true,cursorBrush=androidx.compose.ui.graphics.SolidColor(colors.accent),keyboardOptions=KeyboardOptions(imeAction=ImeAction.Done),keyboardActions=KeyboardActions(onDone={if(name.composition==null)finish()}),
         decorationBox={field->Box(Modifier.fillMaxWidth().heightIn(min=metrics.height).clip(ControlShape).background(colors.input).padding(horizontal=metrics.padding),contentAlignment=Alignment.CenterStart){field()}})
     LaunchedEffect(id){focus.requestFocus()}
-    DisposableEffect(id){onDispose {if(host.workspaceNameCommit===commit)host.workspaceNameCommit=null;host.editingText=false;host.textComposition.clear(focus)}}
+    DisposableEffect(id){onDispose {if(host.workspaceNameCommit===commit)host.workspaceNameCommit=null;}}
 }

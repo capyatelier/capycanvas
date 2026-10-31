@@ -12,7 +12,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -563,17 +562,17 @@ internal class LayerSwipe {
                 var name by remember { mutableStateOf(TextFieldValue(layer.getString("label"),TextRange(0,layer.getString("label").length))) }
                 val focus=remember { FocusRequester() }; var hadFocus by remember { mutableStateOf(false) }; var done by remember { mutableStateOf(false) }
                 fun finish(cancel: Boolean = false) { if(!done) { done=true; host.layer(if(cancel || name.text.isBlank())obj("op" to "cancel_rename") else obj("op" to "rename","id" to id,"name" to name.text)) } }
-                BasicTextField(name,{name=it;host.textComposition.update(focus,name,hadFocus)},Modifier.edgeControl().fillMaxWidth().textCursorRegion().testTag("layer-name-editor-$id").focusRequester(focus).onPreviewKeyEvent { event ->
+                CoreTextField(name,{name=it;},Modifier.edgeControl().fillMaxWidth().textCursorRegion().testTag("layer-name-editor-$id").focusRequester(focus).onPreviewKeyEvent { event ->
                     val key = event.nativeKeyEvent
                     if (key.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE) {
                         val owned=name.composition != null || host.textComposition.owns(key)
                         if (!owned && key.action == android.view.KeyEvent.ACTION_DOWN) finish(true)
                         true
                     } else false
-                }.onFocusChanged { if(hadFocus && !it.isFocused)finish(); hadFocus=it.isFocused; host.editingText=it.isFocused;host.textComposition.update(focus,name,hadFocus) },
+                }.onFocusChanged { if(hadFocus && !it.isFocused)finish(); hadFocus=it.isFocused; },
                     textStyle=LocalTextStyle.current.copy(color=colors.text),singleLine=true,keyboardOptions=KeyboardOptions(imeAction=ImeAction.Done),keyboardActions=KeyboardActions(onDone={if(name.composition==null)finish()}))
                 LaunchedEffect(id) { focus.requestFocus() }
-                DisposableEffect(id) { onDispose { host.editingText=false;host.textComposition.clear(focus) } }
+
             } else Text(layer.getString("label"),Modifier.combinedClickable(onClick={select()},onDoubleClick={if(layer.optBoolean("can_rename"))host.layer(obj("op" to "begin_rename","id" to id))},onLongClick={openContext(false)}),
                 maxLines=1,overflow=TextOverflow.Ellipsis)
             val meta=layer.getString("description")

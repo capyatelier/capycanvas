@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -648,8 +647,7 @@ private fun DrawScope.checker(colors: Palette) {
     var hadFocus by remember { mutableStateOf(false) }
     SideEffect { controller.editText = value.text }
     LaunchedEffect(Unit) { focus.requestFocus() }
-    DisposableEffect(Unit) { onDispose { host.editingText = false; host.textComposition.clear(focus) } }
-    BasicTextField(value, { value = it; host.textComposition.update(focus, value, hadFocus) },
+    CoreTextField(value, { value = it },
         Modifier.edgeControl().widthIn(min = 64.dp, max = 180.dp).height(panelMetrics().height).textCursorRegion().paletteFocus(controller).focusRequester(focus).testTag("palette-name-editor")
             .background(colors.input, ControlShape)
             .then(if (controller.message?.second == true) Modifier.border(1.dp, Color(0xffee5555), ControlShape) else Modifier)
@@ -659,8 +657,7 @@ private fun DrawScope.checker(colors: Palette) {
             }
             .onFocusChanged {
                 if (hadFocus && !it.isFocused) controller.commitName(value.text)
-                hadFocus = it.isFocused; host.editingText = it.isFocused
-                host.textComposition.update(focus, value, hadFocus)
+                hadFocus = it.isFocused
             }.padding(horizontal = 6.dp, vertical = 3.dp),
         singleLine = true, textStyle = LocalTextStyle.current.copy(color = colors.text), cursorBrush = SolidColor(colors.accent),
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done), keyboardActions = KeyboardActions(onDone = { if (value.composition == null) controller.commitName(value.text) }))

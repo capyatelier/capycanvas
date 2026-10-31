@@ -26,7 +26,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -451,26 +450,21 @@ private class DrawerMemory { var shown: JSONObject? = null; var open = false; va
         actions.register(requester, NumberDraft({ typing() }, { committing() }))
         onDispose {
             actions.register(requester, null)
-            if (focused) host.editingText = false
-            host.textComposition.clear(requester)
         }
     }
     Row(modifier.height(height).clip(ControlShape).background(fieldColor())
         .then(if (invalid) Modifier.border(1.5.dp, MaterialTheme.colorScheme.error, ControlShape) else Modifier).testTag(tag),
         verticalAlignment = Alignment.CenterVertically) {
         prefix?.let { Text(it, Modifier.padding(start = 10.dp), color = colors.text.copy(alpha = .62f), fontSize = smallSize(), maxLines = 1) }
-        BasicTextField(text, { next ->
+        CoreTextField(text, { next ->
             if (next.text != text.text || next.composition != null) { dirty = true; invalid = false }
             text = next
-            host.textComposition.update(requester, next, focused)
         }, Modifier.weight(1f).textCursorRegion(enabled).padding(start = 4.dp, end = if (suffix == null) 10.dp else 2.dp).focusRequester(requester)
             .onFocusChanged { state ->
                 val was = focused
                 focused = state.isFocused
                 if (!was && focused) awaiting = null
                 if (was && !focused) commit()
-                host.editingText = focused
-                host.textComposition.update(requester, text, focused)
             }.onPreviewKeyEvent { event ->
                 if (host.textComposition.owns(event.nativeKeyEvent) || event.type != KeyEventType.KeyDown) false
                 else when (event.key) {

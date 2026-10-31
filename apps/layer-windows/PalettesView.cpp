@@ -127,19 +127,16 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         if(show&&editing){commitName();if(editing)return;}
         expanded.Visibility(Visibility::Collapsed);chooser.Visibility(show?Visibility::Visible:Visibility::Collapsed);normal.IsHitTestVisible(!show);normal.Opacity(show?0:1);
         if(!show){selector.Focus(FocusState::Programmatic);return;}
-        filter(true,typing);
+        Control target=search;
+        if(!typing)for(auto child:list.Children())if(auto row=child.try_as<Button>();row&&flag(row.Tag().try_as<J>(),L"palette_active"))target=row;
+        target.Focus(FocusState::Programmatic);
     }
-    void filter(bool focus=false,bool typing=true){
+    void filter(){
         auto query=search.Text();auto weak=weak_from_this();
-        QueryWorkspace(data->query,O({{L"type",S(L"palette_panel")},{L"query",S(query)}}),[weak,query,focus,typing](J reply){
+        QueryWorkspace(data->query,O({{L"type",S(L"palette_panel")},{L"query",S(query)}}),[weak,query](J reply){
             auto self=weak.lock();if(!self||self->search.Text()!=query)return;
             auto error=str(reply,L"error");if(!error.empty()){self->report(error);return;}
             self->choices(array(object(reply,L"result"),L"palettes"));
-            if(focus&&self->chooser.Visibility()==Visibility::Visible){
-                Control target=self->search;
-                if(!typing)for(auto child:self->list.Children())if(auto row=child.try_as<Button>();row&&flag(row.Tag().try_as<J>(),L"palette_active"))target=row;
-                target.Focus(FocusState::Programmatic);
-            }
         });
     }
     void editName(){

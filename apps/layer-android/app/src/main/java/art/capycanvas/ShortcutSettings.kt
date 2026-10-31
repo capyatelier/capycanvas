@@ -375,7 +375,7 @@ private fun subtitle(row: JSONObject): String =
 @Composable private fun SheetFrame(title: String, tag: String, close: () -> Unit, keys: (androidx.compose.ui.input.key.KeyEvent) -> Boolean,
     content: @Composable ColumnScope.() -> Unit) {
     val host = LocalCanvasHost.current
-    Dialog({ if (!host.textComposition.active) close() }) {
+    Dialog(close) {
         val focus = remember { FocusRequester() }
         LaunchedEffect(Unit) { focus.requestFocus() }
         Surface(shape = RoundedCornerShape(16.dp), color = LocalPalette.current.settingsBackground) {

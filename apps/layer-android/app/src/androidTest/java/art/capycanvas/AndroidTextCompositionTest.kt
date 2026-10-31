@@ -4,6 +4,8 @@ import android.view.KeyEvent
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
@@ -15,6 +17,111 @@ import org.json.JSONObject
 class AndroidTextCompositionTest {
     @get:Rule(order = 0) val device = CapyDeviceRule()
     @get:Rule(order = 1) val compose = createEmptyComposeRule()
+
+    private fun editable(node: SemanticsNode): SemanticsNode? = if (node.config.getOrNull(SemanticsActions.SetText) != null) node else node.children.firstNotNullOfOrNull(::editable)
+    private fun literal(tag: String): String {
+        var text = ""
+        compose.runOnIdle { text = checkNotNull(editable(findTag(tag)!!.second)).config[SemanticsProperties.EditableText].text }
+        return text
+    }
+    private fun connection(tag: String, text: String, marked: Boolean, beforeConnect: () -> Unit = {}): android.view.inputmethod.InputConnection {
+        compose.onNode(hasSetTextAction() and (hasTestTag(tag) or hasAnyAncestor(hasTestTag(tag))), useUnmergedTree = true).performClick()
+        val length = literal(tag).length
+        beforeConnect()
+        lateinit var input: android.view.inputmethod.InputConnection
+        compose.runOnIdle {
+            input = findTag(tag)!!.first.view.onCreateInputConnection(android.view.inputmethod.EditorInfo())!!
+            assertTrue(input.setSelection(0, length))
+            assertTrue(if (marked) input.setComposingText(text, 1) else input.commitText(text, 1))
+        }
+        compose.waitForIdle()
+        return input
+    }
+    private fun nativeKey(input: android.view.inputmethod.InputConnection, code: Int, flags: Int = 0) {
+        compose.runOnIdle {
+            val down = android.os.SystemClock.uptimeMillis()
+            for (phase in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP))
+                assertTrue("Native key $code/$phase is delivered", input.sendKeyEvent(KeyEvent(down, android.os.SystemClock.uptimeMillis(), phase, code, 0, 0, 0, 0, flags)))
+        }
+        compose.waitForIdle()
+    }
+
+    @Test fun colorDoneEscapeAndSearchClearingUseNativeCompositionOwnership() {
+        launchCapy(compose = compose).use { scenario ->
+            val host = scenario.activity().host
+            host.drain(obj("type" to "close_settings"))
+            for (theme in listOf("light", "dark")) for (windowed in listOf(false, true)) {
+                host.drain(obj("type" to "set_theme", "theme" to theme))
+                var used = 0
+                compose.runOnIdle { host.colorEditor = ColorEditorRequest(null, obj("space" to "Srgb", "rgba" to org.json.JSONArray(listOf(1, 1, 1, 1))), false, windowed) { _, _ -> used++ } }
+                compose.waitUntil(10_000) { findTag("color-value-hex") != null }
+                for ((field, text) in listOf("hex" to "#123456", "0-0" to "12")) {
+                    val tag = "color-value-$field-input"
+                    compose.onNodeWithTag("color-value-$field").performClick()
+                    val input = connection(tag, text, true)
+                    compose.runOnIdle { assertTrue(host.textComposition.active); assertTrue(input.performEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_DONE)) }
+                    compose.waitForIdle()
+                    assertEquals(text, literal(tag)); assertEquals(0, used)
+                    compose.runOnIdle { assertTrue(input.finishComposingText()) }
+                    compose.waitForIdle()
+                    compose.runOnIdle { assertTrue(input.performEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_DONE)) }
+                    compose.waitUntil(10_000) { findTag(tag) == null }
+                    compose.onNodeWithTag("color-value-$field").performClick()
+                    val candidate = connection(tag, text, true)
+                    nativeKey(candidate, KeyEvent.KEYCODE_ESCAPE)
+                    assertEquals(text, literal(tag)); assertEquals(0, used)
+                    compose.runOnIdle { assertTrue(candidate.finishComposingText()) }
+                    compose.waitForIdle()
+                    nativeKey(candidate, KeyEvent.KEYCODE_ESCAPE)
+                    compose.waitUntil(10_000) { findTag(tag) == null }
+                    compose.onNodeWithTag("color-value-$field").performClick()
+                    nativeKey(connection(tag, text, false), KeyEvent.KEYCODE_ENTER, KeyEvent.FLAG_SOFT_KEYBOARD)
+                    compose.waitUntil(10_000) { findTag(tag) == null }
+                }
+                compose.onNodeWithTag("color-swatches").performClick()
+                val search = connection("color-sheet-search", "keep ", false)
+                compose.runOnIdle { assertTrue(search.setComposingText("日本", 1)) }
+                compose.waitForIdle()
+                nativeKey(search, KeyEvent.KEYCODE_ESCAPE)
+                assertTrue(literal("color-sheet-search").startsWith("keep "))
+                compose.onNodeWithTag("color-sheet-close").performClick()
+                compose.waitUntil(10_000) { findTag("color-sheet-search") == null }
+                compose.onNodeWithTag("color-value-hex").performClick()
+                connection("color-value-hex-input", "#abcdef", true)
+                compose.onNodeWithTag("color-use").performClick()
+                compose.waitUntil(10_000) { host.colorEditor == null }
+                assertEquals(1, used)
+                compose.runOnIdle { assertFalse(host.textComposition.active) }
+            }
+        }
+    }
+
+    @Test fun ordinaryNameDialogsInheritCandidateEscapeAndPointerCancellation() {
+        launchCapy(compose = compose).use { scenario ->
+            val host = scenario.activity().host
+            host.drain(obj("type" to "close_settings"))
+            for (theme in listOf("light", "dark")) {
+                host.drain(obj("type" to "set_theme", "theme" to theme))
+                host.drain(obj("type" to "customize", "action" to obj("type" to "new_toolbar", "group" to JSONObject.NULL)))
+                compose.waitUntil(10_000) { findTag("toolbar-name") != null }
+                val nativeView = findTag("toolbar-name")!!.first.view
+                val window = generateSequence(nativeView.parent) { it.parent }.filterIsInstance<androidx.compose.ui.window.DialogWindowProvider>().first().window
+                var flags = 0
+                compose.runOnIdle { flags = window.attributes.flags; window.addFlags(android.view.WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM) }
+                try {
+                    val input = connection("toolbar-name", "日本 toolbar", true) {
+                        compose.waitUntil(10_000) { !nativeView.context.getSystemService(android.view.inputmethod.InputMethodManager::class.java).isActive(nativeView) }
+                    }
+                    compose.runOnIdle { assertTrue("Name field has native preedit before Escape", host.textComposition.active) }
+                    nativeKey(input, KeyEvent.KEYCODE_ESCAPE)
+                    assertEquals("日本 toolbar", literal("toolbar-name"))
+                    compose.onNodeWithTag("tool-picker-cancel").performClick()
+                    compose.waitUntil(10_000) { findTag("tool-picker") == null }
+                    compose.runOnIdle { assertFalse(host.textComposition.active) }
+                } finally { compose.runOnIdle { window.setFlags(flags, -1) } }
+            }
+        }
+    }
 
     @Test fun sizeChoicesRequireEveryRetainedDraftAndCancelDiscardsThem() {
         val sent = mutableListOf<String>()
@@ -77,7 +184,7 @@ class AndroidTextCompositionTest {
                     compose.waitUntil(10_000) { panel()!!.getJSONArray("values").getDouble(0) == 15.0 }
                     val label = panel()!!.getJSONArray("labels").getString(0)
                     val captions = JSONObject(Native.numericLabels(label))
-                    for (refused in listOf("12+", "２＋３", "1/0", "{ $" + "label }日本")) {
+                    for (refused in listOf("12+", "２＋", "1/0", "{ $" + "label }日本")) {
                         replace(refused)
                         compose.onNodeWithContentDescription(captions.getString("increase")).performClick()
                         compose.onNodeWithTag("canvas-size-apply").performClick()
@@ -111,7 +218,7 @@ class AndroidTextCompositionTest {
                     compose.waitUntil(10_000) { width() == originalWidth }
                     host.drain(obj("type" to "invoke", "command" to "canvas_size"))
                     compose.waitUntil(10_000) { panel() != null }
-                    replace("２＋３")
+                    replace("２＋")
                     compose.onNodeWithTag("canvas-size-cancel").performClick()
                     compose.waitUntil(10_000) { panel() == null }
                     assertEquals(originalWidth, width())
@@ -156,11 +263,7 @@ class AndroidTextCompositionTest {
                 return connection!!
             }
             fun nativeEnter(connection: android.view.inputmethod.InputConnection) {
-                for (phase in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) compose.runOnIdle {
-                    val now = android.os.SystemClock.uptimeMillis()
-                    connection.sendKeyEvent(KeyEvent(now, now, phase, KeyEvent.KEYCODE_ENTER, 0, 0, 0, 0, KeyEvent.FLAG_SOFT_KEYBOARD))
-                }
-                compose.waitForIdle()
+                nativeKey(connection, KeyEvent.KEYCODE_ENTER, KeyEvent.FLAG_SOFT_KEYBOARD)
             }
             for (theme in listOf("light", "dark")) {
                 host.drain(obj("type" to "set_theme", "theme" to theme))
@@ -205,11 +308,7 @@ class AndroidTextCompositionTest {
                 assertEquals("A valid dirty field has not committed before Escape", original, points())
                 assertEquals("123.4567890123", literal("output"))
                 assertEquals(androidx.compose.ui.text.TextRange(3, 8), findTag(field("output"))!!.second.config[SemanticsProperties.TextSelectionRange])
-                for (phase in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) compose.runOnIdle {
-                    val time = android.os.SystemClock.uptimeMillis()
-                    connection.sendKeyEvent(KeyEvent(time, time, phase, KeyEvent.KEYCODE_ESCAPE, 0))
-                }
-                compose.waitForIdle()
+                nativeKey(connection, KeyEvent.KEYCODE_ESCAPE)
                 assertEquals("Native Escape cancels valid dirty text; composition=${host.textComposition.active}", original, points())
                 connection = open("output")
                 compose.runOnIdle {
@@ -245,11 +344,7 @@ class AndroidTextCompositionTest {
                 compose.waitForIdle()
                 assertEquals("A retired InputConnection cannot edit the recreated controls", original, points())
                 compose.runOnIdle { connection = findTag(field("output"))!!.first.view.onCreateInputConnection(android.view.inputmethod.EditorInfo())!! }
-                val now = android.os.SystemClock.uptimeMillis()
-                for (phase in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) compose.runOnIdle {
-                    connection.sendKeyEvent(KeyEvent(now, now, phase, KeyEvent.KEYCODE_ESCAPE, 0))
-                }
-                compose.waitForIdle()
+                nativeKey(connection, KeyEvent.KEYCODE_ESCAPE)
                 assertEquals(original, points())
                 compose.onNodeWithTag("number-error-curve-$key-output").assertDoesNotExist()
                 assertNull(host.failure); assertNull(host.actionError)
@@ -313,7 +408,7 @@ class AndroidTextCompositionTest {
                     host.drain(obj("type" to "invoke", "command" to "undo"))
                     compose.waitUntil(10_000) { drawing().getInt("width") == originalWidth }
 
-                    for (refused in listOf("12+", "２＋３")) {
+                    for (refused in listOf("12+", "２＋")) {
                         open()
                         replace(widthField(), refused)
                         compose.onNodeWithTag(heightField()).performClick()

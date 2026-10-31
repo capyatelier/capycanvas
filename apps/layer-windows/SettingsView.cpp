@@ -380,7 +380,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
                 for(auto value:swatches){auto swatch=value.GetObject();for(auto field:{L"value",L"icon",L"custom"})key=key+swatch.GetNamedValue(field,JsonValue::CreateNullValue()).Stringify()+L"|";}
                 bool custom=chosen<swatches.Size()&&chosen==customIndex;
                 entryPages->show(custom?1:0,true,!inlineRow);
-                if(!draft->changed&&entry.FocusState()==FocusState::Unfocused)entry.Text(str(current,L"custom"));
+                if(!draft->changed&&entry.FocusState()==FocusState::Unfocused)updateText(entry,str(current,L"custom"));
                 if(key!=draft->key){
                     draft->key=key;circles.Children().Clear();draft->buttons.clear();draft->rings.clear();draft->colors.clear();
                     for(uint32_t i=0;i<swatches.Size();++i){
@@ -490,7 +490,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         bool opening=search.Visibility()==Visibility::Collapsed&&(flag(model,L"searching")||!query.empty());
         searchToggle.IsChecked(flag(model,L"searching"));searchToggle.Background(flag(model,L"searching")?data->tint(L"text",26):clear());
         search.Visibility(flag(model,L"searching")||!query.empty()?Visibility::Visible:Visibility::Collapsed);
-        if(search.Text()!=query)search.Text(query);
+        updateText(search,query);
         auto focus=num(model,L"search_focus");
         if(opening||(searchFocus>=0&&focus!=searchFocus)){search.Focus(FocusState::Programmatic);search.Select(int32_t(search.Text().size()),0);}
         searchFocus=focus;

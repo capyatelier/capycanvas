@@ -366,7 +366,6 @@ impl PalettePanel {
         panel
     }
     pub fn bind(self: &Rc<Self>, workspace: &Rc<Workspace>) {
-        crate::input::guard_editable_activation(&self.search);
         workspace.on_localization(glib::clone!(#[weak(rename_to=panel)] self, #[upgrade_or] false, move |localization| {
             let copy = layer_ui::NativeCopy::new(localization).palettes;
             panel.search.set_placeholder_text(Some(&copy.find));
@@ -958,7 +957,6 @@ impl PalettePanel {
             .max_length(64)
             .activates_default(true)
             .build();
-        crate::input::guard_entry_activation(&entry);
         entry.set_widget_name("palette-library-name");
         let library = self.library.borrow().clone().unwrap();
         let callback_library = library.clone();
@@ -1191,12 +1189,21 @@ mod activation_tests {
     #[test]
     #[ignore = "private display native_palette_entry_composition"]
     fn native_palette_entry_composition() {
-        adw::init().unwrap();
+        let app = crate::workspace::tests::native_test_app("art.capycanvas.PaletteEntryComposition");
+        crate::text_language::install(&app, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
         for theme in [adw::ColorScheme::ForceLight, adw::ColorScheme::ForceDark] {
             adw::StyleManager::default().set_color_scheme(theme);
             let panel = PalettePanel::new();
+            panel.name_stack.set_visible_child_name("edit");
             let default_entry = gtk::Entry::builder().activates_default(true).build();
-            crate::input::guard_entry_activation(&default_entry);
+            let fresh = gtk::Entry::new();
+            let search = gtk::SearchEntry::new();
+            let row = adw::EntryRow::new();
+            let stopped = Rc::new(Cell::new(0));
+            crate::input::stop_search(&search, glib::clone!(#[strong] stopped, move |search| {
+                stopped.set(stopped.get() + 1);
+                search.set_text("");
+            }));
             let default_actions = Rc::new(Cell::new(0));
             let default_activations = Rc::new(Cell::new(0));
             let save = gtk::Button::with_label("Save");
@@ -1204,66 +1211,111 @@ mod activation_tests {
             save.connect_clicked(glib::clone!(#[strong] default_actions, move |_| default_actions.set(default_actions.get() + 1)));
             let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
             body.append(&default_entry);
+            body.append(&fresh);
+            body.append(&search);
+            body.append(&row);
+            body.append(&panel.root);
             body.append(&save);
-            let window = gtk::Window::builder().child(&body).build();
+            let fields = [panel.editor.clone().upcast::<gtk::Widget>(), default_entry.clone().upcast(), fresh.upcast(), search.clone().upcast(), row.upcast()].map(|field| {
+                let activated = Rc::new(Cell::new(0));
+                field.connect_local(if field.is::<adw::EntryRow>() { "entry-activated" } else { "activate" }, false, glib::clone!(#[strong] activated, move |_| {
+                    activated.set(activated.get() + 1);
+                    None
+                }));
+                (field, activated)
+            });
+            let window = gtk::Window::builder().application(&*app).child(&body).build();
             window.set_default_widget(Some(&save));
             window.present();
-            default_entry.grab_focus();
-            while glib::MainContext::default().pending() { glib::MainContext::default().iteration(false); }
-            for entry in [&panel.editor, &default_entry] {
-                let activated = Rc::new(Cell::new(0));
-                entry.connect_activate(glib::clone!(#[strong] activated, move |_| activated.set(activated.get() + 1)));
-                let text = entry.delegate().and_downcast::<gtk::Text>().unwrap();
-                let controllers = entry.observe_controllers();
+            crate::workspace::tests::until(|| window.is_mapped(), "composition window mapped");
+            for (field, activated) in fields {
+                let mut editable = field.clone().dynamic_cast::<gtk::Editable>().unwrap();
+                while let Some(delegate) = editable.delegate() { editable = delegate; }
+                let text = editable.downcast::<gtk::Text>().unwrap();
+                let controllers = text.observe_controllers();
                 let keys = (0..controllers.n_items()).find_map(|index| controllers.item(index)
                     .and_downcast::<gtk::EventControllerKey>()
-                    .filter(|keys| keys.propagation_phase() == gtk::PropagationPhase::Capture)).unwrap();
+                    .filter(|keys| keys.propagation_phase() == gtk::PropagationPhase::Capture));
                 let bubble = (0..controllers.n_items()).find_map(|index| controllers.item(index)
                     .and_downcast::<gtk::EventControllerKey>()
-                    .filter(|keys| keys.propagation_phase() == gtk::PropagationPhase::Bubble)).unwrap();
+                    .filter(|keys| keys.propagation_phase() == gtk::PropagationPhase::Bubble));
+                let controller_counts = (field.observe_controllers().n_items(), controllers.n_items());
+                text.grab_focus();
+                while glib::MainContext::default().pending() { glib::MainContext::default().iteration(false); }
                 for preedit in ["にほんご", "简体", "繁體", "한국어"] {
+                    field.clone().dynamic_cast::<gtk::Editable>().unwrap().set_text("한");
                     let before = activated.get();
                     let default_before = default_actions.get();
                     let activation_before = default_activations.get();
                     text.emit_preedit_changed(preedit);
-                    assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
+                    let busy = crate::input::localization_input_busy(&window);
+                    if let Some(keys) = &keys {
+                        assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
+                    }
                     text.emit_preedit_changed("");
-                    text.emit_by_name::<()>("activate", &[]);
-                    assert_eq!(activated.get(), before);
-                    assert_eq!(default_actions.get(), default_before);
-                    assert_eq!(default_activations.get(), activation_before);
-                    assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
-                    text.emit_by_name::<()>("activate", &[]);
-                    assert_eq!(activated.get(), before);
-                    assert_eq!(default_actions.get(), default_before);
-                    assert_eq!(default_activations.get(), activation_before);
-                    keys.emit_by_name::<()>("key-released", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]);
-                    assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
-                    text.emit_by_name::<()>("activate", &[]);
-                    assert_eq!(activated.get(), before + 1);
-                    assert_eq!(default_activations.get(), activation_before + u32::from(entry == &default_entry));
-                    if entry == &default_entry {
-                        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
-                        while default_actions.get() == default_before && std::time::Instant::now() < deadline {
-                            glib::MainContext::default().iteration(false);
-                            std::thread::sleep(std::time::Duration::from_millis(1));
+                    for _ in 0..2 {
+                        let stopped = bubble.as_ref().is_some_and(|bubble| bubble.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
+                        if !stopped { text.emit_by_name::<()>("activate", &[]); }
+                        assert_eq!(activated.get(), before, "{} candidate activated", field.type_().name());
+                        assert_eq!(default_actions.get(), default_before);
+                        assert_eq!(default_activations.get(), activation_before);
+                        assert!(stopped);
+                        if let Some(keys) = &keys {
+                            assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
                         }
                     }
-                    assert_eq!(default_actions.get(), default_before + u32::from(entry == &default_entry));
+                    assert!(busy);
+                    let keys = keys.as_ref().unwrap();
+                    let bubble = bubble.as_ref().unwrap();
+                    assert_eq!(keys.widget().as_ref(), Some(text.upcast_ref()));
+                    assert_eq!(bubble.widget().as_ref(), Some(text.upcast_ref()));
+                    keys.emit_by_name::<()>("key-released", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]);
+                    assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
+                    assert!(!bubble.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
+                    text.emit_by_name::<()>("activate", &[]);
+                    assert_eq!(activated.get(), before + 1, "{} ordinary activation", field.type_().name());
+                    let defaults = u32::from(field == default_entry.clone().upcast::<gtk::Widget>());
+                    assert_eq!(default_activations.get(), activation_before + defaults);
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+                    while default_actions.get() < default_before + defaults && std::time::Instant::now() < deadline {
+                        glib::MainContext::default().iteration(false);
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                    assert_eq!(default_actions.get(), default_before + defaults);
                     keys.emit_by_name::<()>("key-released", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]);
                     text.emit_preedit_changed(preedit);
                     assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
                     assert!(bubble.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
                     text.emit_preedit_changed("");
                     assert!(bubble.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+                    let stopped_before = stopped.get();
+                    if field.is::<gtk::SearchEntry>() {
+                        search.emit_by_name::<()>("stop-search", &[]);
+                        assert_eq!(search.text(), "한");
+                        assert_eq!(stopped.get(), stopped_before);
+                    }
                     keys.emit_by_name::<()>("key-released", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]);
                     assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
                     assert!(!bubble.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+                    if field.is::<gtk::SearchEntry>() {
+                        search.emit_by_name::<()>("stop-search", &[]);
+                        assert!(search.text().is_empty());
+                        assert_eq!(stopped.get(), stopped_before + 1);
+                    }
                     keys.emit_by_name::<()>("key-released", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]);
                 }
+                let ownership = unsafe { text.data::<Rc<crate::input::EntryComposition>>("capy-entry-composition").unwrap().as_ref().clone() };
+                let outer = unsafe { field.data::<Rc<crate::input::EntryComposition>>("capy-entry-composition").unwrap().as_ref().clone() };
+                assert!(Rc::ptr_eq(&ownership, &outer));
+                field.set_visible(false);
+                field.set_visible(true);
+                while glib::MainContext::default().pending() { glib::MainContext::default().iteration(false); }
+                let remapped = unsafe { text.data::<Rc<crate::input::EntryComposition>>("capy-entry-composition").unwrap().as_ref().clone() };
+                assert!(Rc::ptr_eq(&ownership, &remapped));
+                assert_eq!((field.observe_controllers().n_items(), text.observe_controllers().n_items()), controller_counts);
             }
             let text = panel.editor.delegate().and_downcast::<gtk::Text>().unwrap();
-            let controllers = panel.editor.observe_controllers();
+            let controllers = text.observe_controllers();
             let keys = (0..controllers.n_items()).find_map(|index| controllers.item(index)
                 .and_downcast::<gtk::EventControllerKey>()
                 .filter(|keys| keys.propagation_phase() == gtk::PropagationPhase::Capture)).unwrap();

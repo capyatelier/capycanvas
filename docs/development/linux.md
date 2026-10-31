@@ -129,13 +129,13 @@ folder. Session journeys run with `--native-recovery` ([tests](#journeys-with-ex
 
 ## Native text input
 
-Editable submission paths use `input::guard_entry_activation` for entries and
-`input::guard_editable_activation` for editable rows before attaching activate
-callbacks or enabling a default dialog action. The guard preserves native IME
-delivery and retains the physical key through commit, activation and release.
-Candidate confirmation or cancellation must not also submit or dismiss the app
-view. Existing Escape handlers consult the same ownership state; focus loss and
-unmapping retire it.
+`text_language::install` guards every app-owned editable on realize and map;
+`NumberControl` provides its own guard. Use `input::guard_editable_activation`
+when a callback needs the ownership state, and `input::stop_search` for
+SearchEntry cancellation. Keep ancestor Escape controllers in the bubble phase.
+Focus loss and unmapping retire ownership. Run
+`native_palette_entry_composition` for editable and default-action guards.
+`native_new_drawing_search_composition_snapshots` and `native_new_drawing_preset_name_composition_snapshots` cover pending search commits and focus during language publication.
 
 ## Language changes
 

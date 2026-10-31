@@ -63,6 +63,23 @@ export async function checkLayers({ call, evaluate, settle }) {
   assert.equal(await evaluate("document.querySelector('.layer-more svg').dataset.asset"),"more-small");
   const gripSize=await evaluate("(()=>{const n=document.querySelector('.layer-grip'),r=n.getBoundingClientRect(),s=n.querySelector('svg').getBoundingClientRect();return{width:r.width,iconWidth:s.width,iconHeight:s.height}})()");
   assert.deepEqual(gripSize,{width:16,iconWidth:16,iconHeight:16},"layer-row grip retains the shared icon canvas");
+  const theme=await evaluate('layerApp.state().settings.theme');
+  const space=type=>call('Input.dispatchKeyEvent',{type,key:' ',code:'Space',windowsVirtualKeyCode:32,nativeVirtualKeyCode:32});
+  try { for(const value of ['light','dark']) {
+    await evaluate(`layerApp.dispatch({type:'set_theme',theme:'${value}'});layerApp.canvas.focus()`);await settle();
+    await space('keyDown');await settle();
+    assert.equal(await evaluate('layerApp.canvas.style.cursor'),'grab',`${value}: Space holds canvas pan`);
+    const point=await evaluate(`(()=>{const node=[...document.querySelectorAll('.layer-row.selected .layer-name')].find(n=>n.getBoundingClientRect().width>0),r=node.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+    await call('Input.dispatchMouseEvent',{type:'mouseMoved',...point,button:'none'});
+    for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...point,button:'left',buttons:type==='mousePressed'?1:0,clickCount:2});await settle();
+    assert.equal(await evaluate(`document.activeElement===document.querySelector('.layer-name-entry')`),true,`${value}: native double-click starts layer rename`);
+    assert.equal(await evaluate('layerApp.canvas.style.cursor'),'grab',`${value}: native editor focus retains the existing hold`);
+    await evaluate(`document.activeElement.dispatchEvent(new CompositionEvent('compositionstart',{data:'１',bubbles:true}))`);
+    await space('keyUp');await settle();
+    assert.equal(await evaluate('layerApp.canvas.style.cursor'),'',`${value}: composition cannot swallow an existing canvas hold release`);
+    await evaluate(`document.activeElement.dispatchEvent(new CompositionEvent('compositionend',{data:'１',bubbles:true}));document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',code:'Escape',bubbles:true,cancelable:true}));layerApp.canvas.focus()`);await settle();
+    assert.equal(await evaluate('layerApp.canvas.style.cursor'),'',`${value}: returning to the canvas leaves no retired hold`);
+  }} finally {await space('keyUp');await send({op:'cancel_rename'});await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);}
   const initialCount = await evaluate("layerApp.state().layers.length");
   await send({op:"new",group:false,clipped:false});
   await evaluate(`document.querySelector('.layer-footer [aria-label="Delete selected layers"]').click()`);

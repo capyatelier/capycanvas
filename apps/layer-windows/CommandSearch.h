@@ -158,7 +158,7 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
         AutomationProperties::SetName(entry,entering?str(input,L"label"):data->caption(L"search",L"search_commands"));
         auto nextParameter=str(input,L"id");
         if(!open||nextParameter!=parameterId){
-            entry.Text(entering?str(object(input,L"parameter"),L"text"):str(view,L"query"));
+            updateText(entry,entering?str(object(input,L"parameter"),L"text"):str(view,L"query"));
             if(entering)entry.SelectAll();
         }
         parameterId=nextParameter;

@@ -353,7 +353,7 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
         auto shows=array(spec,L"shows");labels.clear();selected=-1;
         for(uint32_t i=0;i<shows.Size();++i){auto choice=shows.GetObjectAt(i);labels.push_back(str(choice,L"label"));if(str(choice,L"show")==str(spec,L"show"))selected=int32_t(i);}
         choices(showChoice,labels,selected);
-        if(search.Text()!=str(preferences(),L"shortcut_query"))search.Text(str(preferences(),L"shortcut_query"));
+        updateText(search,str(preferences(),L"shortcut_query"));
     }
     void refreshCategories(){
         auto spec=page();auto list=array(spec,L"categories");std::wstring ids;
@@ -523,7 +523,7 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
     void refreshPicker(){
         auto spec=pickerModel();if(!spec.Size()){show(picker,false);return;}
         picker.title.Text(str(spec,L"title"));pickerDescription.Text(str(spec,L"description"));picker.start.Visibility(flag(spec,L"modified")?Visibility::Visible:Visibility::Collapsed);
-        auto query=str(spec,L"query");if(pickerSearch.Text()!=query)pickerSearch.Text(query);
+        auto query=str(spec,L"query");updateText(pickerSearch,query);
         auto signature=str(spec,L"trigger")+(flag(spec,L"nothing_visible")?L"|nothing":L"");
         for(auto value:array(spec,L"sections")){signature=signature+L"#";for(auto action:array(value.GetObject(),L"actions"))signature=signature+L","+str(action.GetObject(),L"id");}
         if(picker.signature!=signature){

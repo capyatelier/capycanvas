@@ -1016,7 +1016,7 @@ impl Editor {
             let result = editor.draft.borrow_mut().apply(ColorEditorAction::Search { text: search.text().into() });
             if result.is_ok() { editor.fill_sheet(); }
         }));
-        self.search.connect_stop_search(glib::clone!(#[strong] weak, move |search| {
+        crate::input::stop_search(&self.search, glib::clone!(#[strong] weak, move |search| {
             let Some(editor) = weak.upgrade() else { return; };
             if search.text().is_empty() { editor.show_sheet(false); } else { search.set_text(""); }
         }));

@@ -346,7 +346,6 @@ impl NewDrawing {
         let name_label = row_label();
         let name = gtk::Entry::builder().hexpand(true).build();
         name.set_widget_name("new-drawing-name");
-        crate::input::guard_editable_activation(&name);
         let name_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         name_row.append(&name_label);
         name_row.append(&name);
@@ -581,7 +580,6 @@ impl NewDrawing {
             buttons.append(&select);
             let save_name = gtk::Entry::builder().width_chars(10).build();
             save_name.set_widget_name("new-drawing-save-name");
-            crate::input::guard_editable_activation(&save_name);
             let save_group = gtk::DropDown::from_strings(&[]);
             save_group.set_widget_name("new-drawing-save-group");
             let save_cancel = footer_button("new-drawing-save-cancel", false);
@@ -942,7 +940,9 @@ impl NewDrawing {
 
     fn render_browser(&self, w: &Workspace, view: &PresetBrowserView, previous: Option<&PresetBrowserView>) {
         let browser = &self.browser;
-        if browser.search.text() != view.query { browser.search.set_text(&view.query); }
+        if previous.is_none_or(|previous| previous.query != view.query) && browser.search.text() != view.query {
+            browser.search.set_text(&view.query);
+        }
         if previous.is_none_or(|previous| previous.tabs != view.tabs) { self.fill_tabs(view); }
         browser.tabs.set_sensitive(view.tabs_enabled);
         let content = |tiles: &[PresetTileView]| tiles.iter().map(|tile| PresetTileView { selected: false, ..tile.clone() }).collect::<Vec<_>>();
@@ -963,8 +963,9 @@ impl NewDrawing {
             browser.actions.set_visible_child_name("buttons");
             return;
         };
-        let starting = previous.is_none_or(|previous| previous.save.is_none());
-        if starting {
+        let previous_save = previous.and_then(|previous| previous.save.as_ref());
+        let starting = previous_save.is_none();
+        if previous_save.is_none_or(|previous| previous.groups != save.groups) {
             browser.save_group.set_model(Some(&gtk::StringList::new(&save.groups.iter().map(|group| group.label.as_ref()).collect::<Vec<_>>())));
         }
         if browser.save_name.text() != save.name { browser.save_name.set_text(&save.name); }
@@ -1268,7 +1269,7 @@ impl NewDrawing {
         let weak = self.this.clone();
         browser.search.connect_search_changed(move |search| if let Some(dialog) = weak.upgrade() { dialog.send(NewDrawingAction::Search { query: search.text().into() }); });
         let weak = self.this.clone();
-        browser.search.connect_stop_search(move |_| {
+        crate::input::stop_search(&browser.search, move |_| {
             let Some(dialog) = weak.upgrade() else { return };
             dialog.send(NewDrawingAction::Back);
         });
@@ -1337,7 +1338,7 @@ impl NewDrawing {
         }
 
         let keys = gtk::EventControllerKey::new();
-        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        keys.set_propagation_phase(gtk::PropagationPhase::Bubble);
         let weak = self.this.clone();
         keys.connect_key_pressed(move |_, key, _, _| {
             let Some(dialog) = weak.upgrade().filter(|dialog| key == gdk::Key::Escape && dialog.shown.borrow().as_ref().is_some_and(|view| view.drawer.is_some())) else {
@@ -1364,7 +1365,6 @@ impl NewDrawing {
             let Some(dialog) = weak.upgrade().filter(|dialog| !dialog.done.borrow().0) else { return false };
             *dialog.localization.borrow_mut() = localization.clone();
             if let Some(form) = dialog.colors.form.borrow().clone() { form.set_localization(localization); form.relabel(); form.refresh(); }
-            dialog.shown.borrow_mut().take();
             dialog.render();
             true
         });

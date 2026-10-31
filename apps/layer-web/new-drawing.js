@@ -3,7 +3,6 @@ import {colorForm} from './color-editor.js';
 import {paperThumbnail} from './paper-picker.js';
 import {sizeFields} from './size-dialog.js';
 import {addScrollbar} from './scrollbars.js';
-import {composingKey} from './text-input.js';
 import {rgba,json} from './color-wheel.js';
 
 const PREVIEW = [[232, 250], [196, 214]], NARROW_PREVIEW = [[348, 140], [312, 104]];
@@ -141,7 +140,7 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
     const nameLabel = element('span'), name = element('input', 'new-drawing-entry');
     name.id = 'new-drawing-name'; name.type = 'text'; name.autocomplete = 'off'; name.spellcheck = false;
     name.addEventListener('input', () => send({op:'name', text:name.value}));
-    name.addEventListener('keydown', e => { if (e.key === 'Enter' && !composingKey(e)) { e.preventDefault(); create(); } });
+    name.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); create(); } });
     const nameRow = element('label', 'new-drawing-row new-drawing-name-row'); nameRow.append(nameLabel, name);
 
     const numbers = sizeFields({element, numberField, resolve:request => app.number_input(request), key:'newDrawing', names:['width', 'height', 'resolution'], send, inline:true});
@@ -207,7 +206,7 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
     const search = element('input'); search.id = 'new-drawing-search'; search.type = 'search'; search.autocomplete = 'off'; search.spellcheck = false;
     search.addEventListener('input', () => send({op:'search', query:search.value}));
     search.addEventListener('keydown', e => {
-      if (e.key !== 'Escape' || composingKey(e)) return;
+      if (e.key !== 'Escape') return;
       e.preventDefault(); e.stopPropagation(); send({op:'back'});
     });
     const searchBox = element('label', 'new-drawing-search'); searchBox.append(icon('search'), search);
@@ -227,7 +226,7 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
     const actions = element('div', 'new-drawing-actions'); actions.append(browserCancel, saveAs, select);
     const saveName = element('input', 'new-drawing-entry'); saveName.id = 'new-drawing-save-name'; saveName.type = 'text'; saveName.autocomplete = 'off'; saveName.spellcheck = false;
     saveName.addEventListener('input', () => send({op:'preset_name', text:saveName.value}));
-    saveName.addEventListener('keydown', e => { if (e.key === 'Enter' && !composingKey(e)) { e.preventDefault(); if (!saveConfirm.disabled) send({op:'save_preset'}); } });
+    saveName.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); if (!saveConfirm.disabled) send({op:'save_preset'}); } });
     const saveGroup = choice('new-drawing-save-group', index => shown.drawer?.save?.groups[index] && {op:'preset_group', group:shown.drawer.save.groups[index].value});
     const saveCancel = button('', () => send({op:'cancel_save'}), 'dialog-button'); saveCancel.id = 'new-drawing-save-cancel';
     const saveConfirm = button('', () => send({op:'save_preset'}), 'suggested-action'); saveConfirm.id = 'new-drawing-save-confirm';

@@ -1,4 +1,5 @@
 import {liveCopy,bindCopy} from './localization.js';
+import {composingKey} from './text-input.js';
 // Retained DOM projection of Rust's title bar. DOM measurements are inputs;
 // allocation, overflow, drag slots, validation and publication stay in Rust.
 import { pickerButtonAction, updatePaintPairIcon } from './color-controls.js';
@@ -440,11 +441,12 @@ export function createHeader({app, state, paintPair, workspace, element, button,
     }
   },{capture:true});
   window.addEventListener('keydown',e=>{
-    if(e.key==='Escape'&&!e.isComposing) {
+    if(composingKey(e))return;
+    if(e.key==='Escape') {
       const open=root.querySelector('details[open]');
       if(open){open.open=false;open.querySelector('summary').focus({preventScroll:true});updateZen();e.preventDefault();e.stopImmediatePropagation();return;}
     }
-    if(e.isComposing||e.target.closest('input,select,textarea,[contenteditable=true],dialog[open],.popover,.panel-context-menu'))return;
+    if(e.target.closest('input,select,textarea,[contenteditable=true],dialog[open],.popover,.panel-context-menu'))return;
     if(e.key==='Escape'&&contact){end(null,true);e.preventDefault();e.stopImmediatePropagation();return;}
     if((e.key==='ContextMenu'||e.key==='F10'&&e.shiftKey)&&e.target.closest('[data-workspace-options]'))return;
     if(!editing||!(root.contains(e.target)||e.target===root)||selected==null)return;

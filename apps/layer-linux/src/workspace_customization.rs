@@ -530,7 +530,7 @@ impl Customization {
             }
         ));
         self.catalog.search.set_widget_name("tool-search");
-        self.catalog.search.connect_stop_search(glib::clone!(
+        crate::input::stop_search(&self.catalog.search, glib::clone!(
             #[weak]
             w,
             move |_| {

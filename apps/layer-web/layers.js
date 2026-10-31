@@ -1,5 +1,4 @@
 import {liveCopy,bindCopy} from './localization.js';
-import { composingKey } from "./text-input.js";
 import { chooseColor } from "./color-editor.js";
 import { chooseTexture, paperThumbnail } from "./paper-picker.js";
 import { addScrollbar } from "./scrollbars.js";
@@ -382,7 +381,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
   const closeOnClick = e => { if (!e.target.closest(".layer-swipe-actions")) for (const r of records.values()) r.closeSwipe(); };
   document.addEventListener("click", closeOnClick);
   window.addEventListener("blur", cancelDrags);
-  const cancelOnEscape = e => { if (!composingKey(e) && e.key === "Escape") cancelDrags(); };
+  const cancelOnEscape = e => { if (e.key === "Escape") cancelDrags(); };
   window.addEventListener("keydown", cancelOnEscape);
   function refresh() {
     const epoch=String(state().document_file.epoch);
@@ -484,7 +483,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
         r.closeRename = () => { finished = true; input.remove(); r.entry = null; r.name.hidden = false; };
         const done = cancel => { if (finished) return; r.closeRename();
           send(cancel || !input.value.trim() ? { op: "cancel_rename" } : { op: "rename", id: layer.id, name: input.value }); };
-        input.onblur = () => done(false); input.onkeydown = e => { e.stopPropagation(); if (composingKey(e)) return; if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); done(e.key === "Escape"); } };
+        input.onblur = () => done(false); input.onkeydown = e => { e.stopPropagation(); if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); done(e.key === "Escape"); } };
         input.focus(); input.select();
       }
     });

@@ -187,7 +187,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     e.preventDefault(); showContext(node, [e.clientX, e.clientY]);
   });
   workspace.addEventListener("keydown", e => {
-    if (e.defaultPrevented || composingKey(e) || !(e.key === "ContextMenu" || e.key === "F10" && e.shiftKey)) return;
+    if (e.defaultPrevented || !(e.key === "ContextMenu" || e.key === "F10" && e.shiftKey)) return;
     const node = contextTarget(e.target); if (!node) return;
     const r = e.target.getBoundingClientRect();
     e.preventDefault(); e.stopPropagation(); openMenu(node, [r.left, r.bottom, r.top], e.target);
@@ -220,7 +220,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
   for (const event of ["pointerup", "pointercancel", "dragstart", "scroll"])
     window.addEventListener(event, cancelHold, { capture: true });
   window.addEventListener("blur", dismissContext);
-  window.addEventListener("keydown", e => { if (!composingKey(e) && e.key === "Escape") cancelHold(); });
+  window.addEventListener("keydown", e => { if (e.key === "Escape") cancelHold(); });
   workspace.addEventListener("pointercancel", dismissContext, { capture: true });
   workspace.addEventListener("click", (e) => {
     if (heldPointer === e.pointerId) { heldPointer = null; e.preventDefault(); e.stopImmediatePropagation(); }
@@ -485,7 +485,6 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
   prompt.addEventListener("cancel", e => { e.preventDefault(); cancelPrompt(); });
   prompt.addEventListener("close", () => { if (app.toolbar_prompt()) cancelPrompt(); });
   promptName.addEventListener("keydown", e => {
-    if (composingKey(e)) return;
     if (e.key === "Enter" && !promptConfirm.disabled) { e.preventDefault(); promptConfirm.click(); }
   });
   function refreshPrompt() {

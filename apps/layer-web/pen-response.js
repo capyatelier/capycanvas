@@ -1,5 +1,4 @@
 import {createCurveEditor} from './curve-editor.js';
-import {composingKey} from './text-input.js';
 
 export function createPenResponse({state,workspace,element,button,icon,numberField,dispatch}) {
   let panel,editor,heading,device,close,firmer,lighter,sensitivityTitle,reset,cancel,apply,direction,circle,arrows,axes,drag,mode,measured,measureFrame,initialized=false;
@@ -72,7 +71,7 @@ export function createPenResponse({state,workspace,element,button,icon,numberFie
       title.onpointermove=e=>{if(drag===e.pointerId)contact('move',e);};
       title.onpointerup=e=>{if(drag===e.pointerId){contact('up',e);drag=null;title.releasePointerCapture(e.pointerId);}};
       title.onpointercancel=title.onlostpointercapture=()=>{if(drag!=null){drag=null;contact('cancel');}};
-      panel.onkeydown=e=>{if(!composingKey(e)&&e.key==='Escape'){e.preventDefault();e.stopPropagation();dispatch({type:'curve_editor',target,action:{kind:'key',epoch:model().editor.controls.epoch,key_event:e.key,pressed:true,repeat:e.repeat,modifiers:{command:false,shift:false,alt:false}}});}};
+      panel.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();dispatch({type:'curve_editor',target,action:{kind:'key',epoch:model().editor.controls.epoch,key_event:e.key,pressed:true,repeat:e.repeat,modifiers:{command:false,shift:false,alt:false}}});}};
       panel.addEventListener('pointerdown',e=>e.stopPropagation());
     }
     heading.textContent=view.title;close.title=view.close;close.setAttribute('aria-label',view.close);

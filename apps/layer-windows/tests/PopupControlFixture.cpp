@@ -203,6 +203,39 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         privacy();INPUT event{};event.type=INPUT_KEYBOARD;event.ki.wVk=key;event.ki.dwFlags=released?KEYEVENTF_KEYUP:0;
         require(SendInput(1,&event,sizeof(INPUT))==1,L"Workspace IME key injection failed");
     }
+    winrt::Windows::Foundation::IAsyncAction defaultIme(){
+        ContentDialog dialog;TextBox entry;entry.Text(L"Draft");captureTextComposition(entry);
+        dialog.XamlRoot(root.XamlRoot());dialog.RequestedTheme(root.RequestedTheme());dialog.Title(box_value(L"Native default action"));dialog.Content(entry);
+        dialog.PrimaryButtonText(L"Save");dialog.CloseButtonText(L"Cancel");dialog.DefaultButton(ContentDialogButton::Primary);
+        auto primary=std::make_shared<unsigned>(0),events=std::make_shared<unsigned>(0);auto closed=std::make_shared<bool>(false);
+        dialog.PrimaryButtonClick([primary](auto&&,ContentDialogButtonClickEventArgs const& e){++*primary;e.Cancel(true);});
+        dialog.Closed([closed](auto&&,auto&&){*closed=true;});
+        dialog.AddHandler(UIElement::KeyDownEvent(),box_value(KeyEventHandler([events](auto&&,KeyRoutedEventArgs const&){++*events;})),true);
+        dialog.AddHandler(UIElement::KeyUpEvent(),box_value(KeyEventHandler([events](auto&&,KeyRoutedEventArgs const&){++*events;})),true);
+        auto shown=dialog.ShowAsync();bool heldKey=false;
+        try{
+            co_await wait([entry]{return entry.IsLoaded()&&entry.ActualWidth()>0;},L"Native default TextBox did not become arranged");
+            entry.Focus(FocusState::Keyboard);entry.Select(0,0);privacy();
+            auto trace=imeTrace;
+            ScopedComposition composition(*textServices,[trace](hstring api,HRESULT result,uintptr_t pointer){
+                trace->push_back(O({{L"case",S(L"native-default-enter")},{L"api",S(api)},{L"code",N(int32_t(result))},{L"pointer",N(double(pointer))}}));
+            });
+            co_await wait([this,entry,&composition]{return composition.focused(entry,root.XamlRoot());},L"Native default TextBox did not acquire its TSF context");
+            composition.begin();co_await wait([entry]{return textComposing(entry)&&std::wstring(entry.Text().c_str()).find(L"\u5019\u88dc")!=std::wstring::npos;},L"Native default TextBox did not acquire marked text");
+            nativeKey(VK_RETURN,false);heldKey=true;
+            co_await wait([events]{return *events>0;},L"Candidate Enter did not reach the native dialog route");
+            require(*primary==0,L"Composition-owned Enter invoked the native default button");
+            composition.end();co_await wait([entry]{return !textComposing(entry);},L"Native default composition did not finish");
+            auto release=*events;nativeKey(VK_RETURN,true);heldKey=false;
+            co_await wait([events,release]{return *events>release;},L"Candidate Enter release did not reach the native dialog route");
+            require(*primary==0,L"Composition-owned Enter release invoked the native default button");
+            nativeKey(VK_RETURN,false);nativeKey(VK_RETURN,true);
+            co_await wait([primary]{return *primary>0;},L"Ordinary Enter did not recover the native default button");
+            require(*primary==1,L"Ordinary Enter invoked duplicate native default actions");composition.finish();
+            trace->push_back(O({{L"case",S(L"native-default-enter")},{L"passed",B(true)}}));++imeChecks;
+            dialog.Hide();co_await wait([closed]{return *closed;},L"Native default dialog did not close");co_await shown;
+        }catch(...){if(heldKey)try{nativeKey(VK_RETURN,true);}catch(...){}dialog.Hide();throw;}
+    }
     winrt::Windows::Foundation::IAsyncAction workspaceIme(){
         auto dark=root.RequestedTheme()!=ElementTheme::Light;
         auto header=O({{L"this_workspace",S(L"This workspace")},{L"saved_toolbars",S(L"Saved toolbars")},{L"toolbar_actions",S(L"Actions")},
@@ -258,6 +291,10 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
                 co_await wait([this,entry,&composition]{return composition.focused(entry,root.XamlRoot());},L"Owned TextBox real TSF document/context did not become focused within the existing five-second prerequisite");
                 trace->push_back(O({{L"case",S(label)},{L"focus_probes",N(composition.probes)},{L"context_ready",B(true)}}));composition.begin();
                 co_await wait([entry]{return textComposing(entry);},L"Actual TSF composition did not reach the production TextBox observer");
+                auto draft=entry.Text();auto selection=entry.SelectionStart();auto length=entry.SelectionLength();
+                updateText(entry,L"Stale shared snapshot");
+                require(entry.Text()==draft&&entry.SelectionStart()==selection&&entry.SelectionLength()==length,
+                    L"Shared snapshot replaced a native composition or its selection");
                 require(focusedTextComposing(root.XamlRoot()),L"Workspace TSF composition is not on the focused owned TextBox");
                 trace->push_back(O({{L"case",S(label)},{L"composition_context",N(double(reinterpret_cast<uintptr_t>(composition.context.get())))},{L"preedit",S(entry.Text())},{L"started",B(true)}}));
                 if(key){
@@ -342,6 +379,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             require(data->dismissTransients(),L"Visible popup ignored cancellation registry");co_await wait([this,beforeClosed]{return closedCount==beforeClosed+1&&!visiblePopup();},L"Native popup Closed acknowledgement or visible-popup retirement timed out");
             require(!shown.Current()&&!shown.Show(anchor,{}),L"Reply reopened closed popup");empty();++checks;
             phase=L"workspace-ime";co_await workspaceIme();
+            phase=L"native-default-ime";co_await defaultIme();
             phase=L"window-close";auto closed=owner.Begin(data,anchor,menu());window.Close();co_await settle();
             require(!closed.Current()&&!closed.Show(anchor,{}),L"Reply reopened canceled owner");empty();++checks;
         } catch(hresult_error const& e){resultCode=1;error=e.message();}catch(...){resultCode=1;error=L"Unhandled popup fixture failure";}

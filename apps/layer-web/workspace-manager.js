@@ -1,4 +1,3 @@
-import {composingKey} from './text-input.js';
 import {bindCopy,liveCopy} from "./localization.js";
 import { createWorkspaceSwitcher } from "./workspace-switcher.js";
 export function createWorkspaceManager({ app, store, applyChange, element, button, icon, dropdown, message }) {
@@ -64,7 +63,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
     inline.submitted=true;send(cancel?{type:"cancel"}:{type:"submit",name,description:null,choice:null});return true;
   }
   for (const node of [dialog, formDialog]) {
-    node.addEventListener("cancel", e => { if(composingKey(e))return;e.preventDefault();switcher.cancel();send({type:node===dialog?"dismiss":"cancel"}); });
+    node.addEventListener("cancel", e => { e.preventDefault();switcher.cancel();send({type:node===dialog?"dismiss":"cancel"}); });
     node.addEventListener("close", () => {
       const expected = expectedCloses.get(node) || 0;
       if (expected) expectedCloses.set(node, expected - 1);
@@ -146,7 +145,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
       if(title){
         const input=element("input","workspace-name-entry");input.value=view.prompt.name;bindCopy(input,()=>common.name,"ariaLabel");
         inline={id:renameId,input,title,submitted:false};title.replaceWith(input);
-        input.addEventListener("keydown",event=>{event.stopPropagation();if(composingKey(event))return;if(event.key==="Enter"||event.key==="Escape"){event.preventDefault();finishName(event.key==="Escape");}});
+        input.addEventListener("keydown",event=>{event.stopPropagation();if(event.key==="Enter"||event.key==="Escape"){event.preventDefault();finishName(event.key==="Escape");}});
         input.addEventListener("blur",()=>setTimeout(()=>{if(inline?.input===input)finishName();},0));
         input.focus({preventScroll:true});input.select();
       }
@@ -174,7 +173,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
         }
         formError = element("p", "workspace-error"); const footer = element("footer");
         formSubmit = button(form.confirm, () => {if(formKey!==key||!view?.prompt||!validatePrompt())return;send({ type: "submit", name: formName?.value || "",description:formDescription?.value??null,choice:formChoice?.value??null });}, "suggested-action");
-        formName?.addEventListener("keydown",event=>{if(event.key==="Enter"&&!composingKey(event)){event.preventDefault();if(validatePrompt())formSubmit.click();}});
+        formName?.addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();if(validatePrompt())formSubmit.click();}});
         if (form.destructive) formSubmit.classList.add("destructive-action");
         footer.append(localizedButton(()=>common.cancel,cancel), formSubmit); formDialog.append(formError, footer);
       }

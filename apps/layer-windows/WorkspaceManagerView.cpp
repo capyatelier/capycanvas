@@ -108,7 +108,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
     }
     static void sync(TextBox const& text,hstring value,std::optional<hstring>& draft) {
         if(draft&&*draft==value)draft.reset();
-        if(!draft&&text.Text()!=value)text.Text(value);
+        if(!draft)updateText(text,value);
     }
     void validateName(){
         if(!prompt()||name.Visibility()!=Visibility::Visible)return;

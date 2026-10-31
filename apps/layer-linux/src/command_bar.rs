@@ -21,13 +21,12 @@ pub struct CommandBar {
     view: RefCell<Option<CommandSearchView>>,
     signature: RefCell<String>,
     updating: Cell<bool>,
-    composing: Cell<bool>,
-    composition_keys: crate::input::CompositionKeys,
+    composition: Rc<crate::input::EntryComposition>,
     previous_focus: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
 }
 
 impl CommandBar {
-    pub(crate) fn composition_busy(&self) -> bool { self.composing.get() || self.composition_keys.active() }
+    pub(crate) fn composition_busy(&self) -> bool { self.composition.active() }
 
     pub fn is_open(&self) -> bool {
         self.view.borrow().is_some()
@@ -90,6 +89,7 @@ impl CommandBar {
         detail.set_height_request(20);
         body.append(&detail);
         popup.set_child(Some(&body));
+        let composition = crate::input::guard_editable_activation(&entry);
         Self {
             copy: RefCell::new(copy),
             close,
@@ -102,8 +102,7 @@ impl CommandBar {
             view: Default::default(),
             signature: Default::default(),
             updating: Cell::new(false),
-            composing: Cell::new(false),
-            composition_keys: Default::default(),
+            composition,
             previous_focus: Default::default(),
         }
     }
@@ -163,15 +162,8 @@ impl CommandBar {
         self.popup.connect_unmap(glib::clone!(
             #[weak]
             w,
-            move |_| { w.command_bar.composition_keys.clear(); w.wake(); }
+            move |_| { w.command_bar.composition.clear(); w.wake(); }
         ));
-        if let Some(text) = self.entry.delegate().and_downcast::<gtk::Text>() {
-            text.connect_preedit_changed(glib::clone!(
-                #[weak]
-                w,
-                move |_, preedit| w.command_bar.composing.set(!preedit.is_empty())
-            ));
-        }
         self.entry.connect_changed(glib::clone!(
             #[weak]
             w,
@@ -195,7 +187,7 @@ impl CommandBar {
             #[weak]
             w,
             move |_| {
-                if !w.command_bar.composing.get() && !w.command_bar.composition_keys.active() { w.command_bar.execute(&w, None); }
+                if !w.command_bar.composition.active() { w.command_bar.execute(&w, None); }
             }
         ));
         self.list.connect_row_activated(glib::clone!(
@@ -212,7 +204,7 @@ impl CommandBar {
             #[upgrade_or]
             glib::Propagation::Proceed,
             move |_, key, keycode, _| {
-                if w.command_bar.composition_keys.capture(keycode, w.command_bar.composing.get()) { return glib::Propagation::Proceed; }
+                if w.command_bar.composition.capture(keycode) { return glib::Propagation::Proceed; }
                 let action = match key {
                     gdk::Key::Up => Some(CommandSearchAction::Move { delta: -1 }),
                     gdk::Key::Down => Some(CommandSearchAction::Move { delta: 1 }),
@@ -243,8 +235,8 @@ impl CommandBar {
             #[weak]
             w,
             move |_, key, keycode, modifiers| {
-                let preedit = w.command_bar.composition_keys.release(keycode);
-                if preedit || w.command_bar.composing.get() { return; }
+                let preedit = w.command_bar.composition.release(keycode);
+                if preedit || w.command_bar.composition.marked() { return; }
                 w.interact(crate::input::key_input(key, keycode, false, modifiers, true, None));
             }
         ));
@@ -253,18 +245,17 @@ impl CommandBar {
         composed.set_name(Some("command-search-composed-key"));
         composed.set_propagation_phase(gtk::PropagationPhase::Bubble);
         composed.connect_key_pressed(glib::clone!(#[weak] w, #[upgrade_or] glib::Propagation::Proceed, move |_, _, _, _| {
-            if w.command_bar.composition_keys.active() { glib::Propagation::Stop } else { glib::Propagation::Proceed }
+            if w.command_bar.composition.active() { glib::Propagation::Stop } else { glib::Propagation::Proceed }
         }));
         self.popup.add_controller(composed);
         let focus = gtk::EventControllerFocus::new();
-        focus.connect_leave(glib::clone!(#[weak] w, move |_| w.command_bar.composition_keys.clear()));
+        focus.connect_leave(glib::clone!(#[weak] w, move |_| w.command_bar.composition.clear()));
         self.popup.add_controller(focus);
         self.popup.connect_closed(glib::clone!(
             #[weak]
             w,
             move |_| {
-                w.command_bar.composing.set(false);
-                w.command_bar.composition_keys.clear();
+                w.command_bar.composition.clear();
                 let canceled = w.command_bar.view.borrow().is_some();
                 if canceled {
                     w.dispatch(UiAction::CommandSearch {

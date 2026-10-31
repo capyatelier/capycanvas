@@ -56,7 +56,7 @@ const $ = (id) =>
   [...panels.values()]
     .map((panel) => panel.querySelector(`#${id}`))
     .find(Boolean);
-captureTextComposition(document);
+captureTextComposition(document, event => { if (state) keyInput(event, false); });
 const workspace = $("workspace"),
   canvas = $("canvas"),
   center = $("center");
@@ -1756,7 +1756,7 @@ window.addEventListener(
   { capture: true, passive: false },
 );
 function keyInput(e, pressed, divider = null) {
-  if (pressed && (e.defaultPrevented || composingKey(e))) return;
+  if (pressed && e.defaultPrevented) return;
   const nativeDialog=!!document.querySelector("dialog:modal:not(#settings)") && !state.preferences.capture;
   if (pressed && nativeDialog) return;
   updateZen();
@@ -1778,7 +1778,7 @@ function keyInput(e, pressed, divider = null) {
           (!!e.target.closest("button,summary") && app.control_takes_key(e.key, e.ctrlKey || e.metaKey, e.altKey, keyboardFocused.has(e.target))))),
     divider,
   });
-  if (reply.handled && !nativeDialog) {
+  if (reply.handled && !nativeDialog && !composingKey(e)) {
     if(!documents?.allowNativePaste())e.preventDefault();
     e.stopPropagation();
   }
@@ -1792,7 +1792,7 @@ window.addEventListener("keydown", e => {
   if (!composingKey(e) && e.key === "Escape" && workspaceGesture) { endWorkspaceGesture(null, true); e.preventDefault(); e.stopPropagation(); }
 }, {capture:true});
 window.addEventListener("keydown", (e) => {
-  if(!composingKey(e) && documents?.key(e,()=>keyInput(e,true)))return;
+  if(documents?.key(e,()=>keyInput(e,true)))return;
   keyInput(e, true);
 });
 window.addEventListener("keyup", (e) => keyInput(e, false));
