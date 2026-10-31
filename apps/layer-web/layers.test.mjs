@@ -53,7 +53,43 @@ export async function checkSelectedPainting({call, evaluate, settle}) {
   console.log("PASS: WebGPU selected/inverted painting, deselect and stroke replay");
 }
 
+async function checkLayerUnit({evaluate, settle}) {
+  await evaluate(`window.layerUnitCase={workspace:structuredClone(layerApp.state().workspace),theme:layerApp.state().settings.theme};layerApp.dispatch({type:'layer',action:{op:'new',group:false,clipped:false}});layerUnitCase.described=layerApp.state().layers[0].id;layerUnitCase.plain=layerApp.state().layers.find(layer=>layer.id!==layerUnitCase.described&&!layer.description).id;layerApp.dispatch({type:'set_layer_opacity',id:layerUnitCase.described,opacity:.5});`);
+  await settle();
+  await evaluate(`layerUnitCase.dispatch=layerApp.app.dispatch;layerApp.app.dispatch=function(action){if(action.type==='measure_panels')layerUnitCase.report=structuredClone(action.measurements.reports.find(item=>item.request.panel==='layers'));return layerUnitCase.dispatch.call(this,action);};layerUnitCase.rect=Element.prototype.getBoundingClientRect;layerUnitCase.reads=0;Element.prototype.getBoundingClientRect=function(){if(this.classList.contains('layer-row-unit'))layerUnitCase.reads++;return layerUnitCase.rect.call(this);};`);
+  try {
+    await evaluate(`(()=>{const name=document.querySelector('.layer-row .layer-name'),font=parseFloat(getComputedStyle(name).fontSize);layerUnitCase.style=document.createElement('style');layerUnitCase.style.textContent=':root{--ui-text-size:'+font*1.3+'px!important}';document.head.append(layerUnitCase.style);})()`);
+    for (const width of [280,380]) {
+      await evaluate(`(()=>{const workspace=structuredClone(layerUnitCase.workspace),tabs=(id,panels)=>({kind:'tabs',id,panels,active:panels[0],tab_style:'name'});Object.assign(workspace.layout,{bands:[{id:40,edge:'left',extent:252,root:tabs(41,['brushes','sizes'])},{id:42,edge:'right',extent:${width},root:tabs(43,['layers','properties','adjustments'])}],floating:[],collapsed:[],column_scroll:[],fit_tab_groups:[],fit_height_groups:[],column_stacks:[],next_id:Math.max(44,workspace.layout.next_id)});workspace.zen_mode=false;layerApp.dispatch({type:'restore_workspace',workspace});})()`);
+      await settle();
+      for (const theme of ['light', 'dark']) {
+        await evaluate(`layerApp.dispatch({type:'set_theme',theme:'${theme}'})`);
+        await settle();
+        const result=await evaluate(`(()=>{const rows=document.querySelector('.dock-group[data-group="43"] .layer-rows'),described=rows.querySelector('.layer-row[data-layer="'+layerUnitCase.described+'"]'),plain=rows.querySelector('.layer-row[data-layer="'+layerUnitCase.plain+'"]');return{first:rows.querySelector('.layer-row')===described,description:described.querySelector('.layer-meta').textContent,described:described.getBoundingClientRect().height,plain:plain.getBoundingClientRect().height,measurement:layerApp.app.panel_measurements().find(item=>item.panel==='layers'),requested:layerApp.app.layout(innerWidth,innerHeight).measurement_requests.find(item=>item.panel==='layers'),reported:layerUnitCase.report?.request,actualWidth:layerUnitCase.report?.body?.actual_width,rows:rows.children.length,expectedRows:layerApp.state().layers.length+(layerApp.state().layer_tools.add_paper?1:0),probe:(()=>{const probe=rows.parentElement.querySelector('.layer-row-unit');if(!probe)return null;const style=getComputedStyle(probe),before=[rows.clientHeight,rows.scrollHeight];probe.hidden=true;const after=[rows.clientHeight,rows.scrollHeight];probe.hidden=false;return{inert:probe.inert,aria:probe.getAttribute('aria-hidden'),visibility:style.visibility,position:style.position,insideRows:rows.contains(probe),before,after};})()};})()`);
+        const identity=({panel,tab,body,width,split_filters=false})=>({panel,tab,body,width,split_filters});
+        assert.deepEqual(identity(result.reported),identity(result.requested),`${theme}/${width}: report identity is current`);
+        assert.equal(result.requested.body_measured,true,`${theme}/${width}: current body report is accepted`);
+        assert.equal(result.actualWidth,result.requested.width,`${theme}/${width}: reported native width matches request`);
+        assert.ok(result.first && result.description, `${theme}: a described row is first`);
+        assert.ok(result.described>result.plain, `${theme}: larger font makes the described row taller`);
+        assert.equal(result.measurement.scroll.unit_height,result.plain,`${theme}: Layers unit equals a real plain row`);
+        assert.equal(result.rows,result.expectedRows,`${theme}: intrinsic probe adds no list item`);
+        assert.ok(result.probe.inert && result.probe.aria==='true' && result.probe.visibility==='hidden' && result.probe.position==='absolute' && !result.probe.insideRows,`${theme}: intrinsic probe stays inert outside the rows`);
+        assert.deepEqual(result.probe.before,result.probe.after,`${theme}: intrinsic probe contributes no scrolling extent`);
+        const dirty=await evaluate('layerUnitCase.reads');
+        const idle=await evaluate(`new Promise(resolve=>{layerUnitCase.reads=0;let frames=120;function frame(){if(--frames)requestAnimationFrame(frame);else resolve(layerUnitCase.reads);}requestAnimationFrame(frame);})`);
+        assert.equal(idle,0,`${theme}: stable frames do not read the intrinsic unit`);
+        console.log('Layers unit',JSON.stringify({theme,width,unit:result.measurement.scroll.unit_height,plain:result.plain,described:result.described,dirtyUnitReads:dirty,stableUnitReads:idle,stableFrames:120}));
+      }
+    }
+  } finally {
+    await evaluate(`layerApp.app.dispatch=layerUnitCase.dispatch;Element.prototype.getBoundingClientRect=layerUnitCase.rect;layerUnitCase.style?.remove();layerApp.dispatch({type:'invoke',command:'undo'});layerApp.dispatch({type:'invoke',command:'undo'});layerApp.dispatch({type:'restore_workspace',workspace:layerUnitCase.workspace});layerApp.dispatch({type:'set_theme',theme:layerUnitCase.theme});delete window.layerUnitCase;`);
+    await settle();
+  }
+}
+
 export async function checkLayers({ call, evaluate, settle }) {
+  await checkLayerUnit({evaluate,settle});
   const send = action => evaluate(`layerApp.dispatch({type:'layer',action:${JSON.stringify(action)}})`);
   const screenshot = async name => {
     await settle(); const shot = await call("Page.captureScreenshot", { format: "png" });

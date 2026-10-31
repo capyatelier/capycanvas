@@ -22,6 +22,9 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     if (getAction) b.onpointerenter = () => { b.title = app.action_tooltip(b.getAttribute("aria-label"), { type: "layer", action: getAction() }); };
     return b;
   };
+  const rowFrame = () => element("div", "layer-row");
+  const rowName = () => element("span", "layer-name");
+  const rowThumbnails = () => element("div", "layer-thumbnails");
   const flags = element("div", "layer-flags"), toggles = [];
   for (const [glyph, label, property, op, capability] of [
     ["alpha-lock", ()=>copy.alpha_lock, "alpha_locked", "alpha_lock", "alpha_lock"],
@@ -53,7 +56,15 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
   const list = element("div", "layer-list");
   const connections = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   connections.classList.add("layer-connections"); connections.setAttribute("aria-hidden", "true");
-  list.append(rows, connections);
+  const unit = rowFrame(), unitIcons = rowThumbnails(), unitText = element("div", "layer-text"), unitName = rowName();
+  unit.classList.add("layer-row-unit");
+  unit.style.cssText = "position:absolute;inset:0 0 auto;visibility:hidden;pointer-events:none";
+  unit.inert = true; unit.setAttribute("aria-hidden", "true");
+  bindCopy(unitName, () => copy.show, "textContent"); unitText.append(unitName);
+  unitIcons.append(glyphButton("eye", () => copy.show, () => {}),
+    glyphButton("mask", () => copy.edit_content, () => {}, "layer-thumbnail"));
+  unit.append(unitIcons, unitText);
+  list.append(rows, connections, unit);
   addScrollbar(rows, list);
   const records = new Map();
   let documentEpoch, measurementKey;
@@ -161,13 +172,13 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
   rows.addEventListener("scroll", scheduleConnections, { passive: true });
   const connectionResize = new ResizeObserver(scheduleConnections); connectionResize.observe(list);
   function makeRow(layer) {
-    const root = element("div", "layer-swipe"), row = element("div", "layer-row"), record = { root, row, layer }; row.dataset.layer = String(layer.id);
+    const root = element("div", "layer-swipe"), row = rowFrame(), record = { root, row, layer }; row.dataset.layer = String(layer.id);
     const get = () => record.layer;
     const eye = glyphButton("eye", ()=>get().selection_layer?(get().visible?copy.hide_selection:copy.show_selection):(get().visible?copy.hide:copy.show), () => dispatch({ type: "set_layer_visibility", id: get().id, visible: !get().visible }));
     eye.onpointerenter = () => { eye.title = app.action_tooltip(eye.getAttribute("aria-label"), { type: "set_layer_visibility", id: get().id, visible: !get().visible }); };
     const selection = (e = {}) => ({ op: "select_row", id: get().id, extend: !!e.shiftKey, toggle: true });
     const check = glyphButton("selection-empty", ()=>copy.select_row_help, e => send(selection(e)), "", selection);
-    const thumbnails = element("div", "layer-thumbnails"), gutter = element("span", "layer-connection-gutter");
+    const thumbnails = rowThumbnails(), gutter = element("span", "layer-connection-gutter");
     const thumb = (mask) => {
       const getAction = () => !mask && get().group ? { op: "collapse", id: get().id } : { op: "select", id: get().id, mask };
       const readLabel = ()=>mask?copy.edit_mask:get().group?(get().collapsed?copy.expand:copy.collapse):get().selection_layer?copy.edit_selection:copy.edit_content;
@@ -200,7 +211,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     texture.id = `layer-texture-${layer.id}`;
     const texturePreview = paperThumbnail({ app, element, icon, size: 28 }); texture.replaceChildren(texturePreview.node);
     thumbnails.append(gutter, content.b, link, mask.b, texture);
-    const text = element("div", "layer-text"), name = element("span", "layer-name"), meta = element("span", "layer-meta"); text.append(name, meta);
+    const text = element("div", "layer-text"), name = rowName(), meta = element("span", "layer-meta"); text.append(name, meta);
     const lock = element("span", "layer-lock"), grip = element("span", "layer-grip"); grip.append(icon("grip"));
     const load=button('',e=>{e.stopPropagation();dispatch({type:'selection',action:{op:'load_layer',id:get().id,mode:'new',inverted:false}});},'layer-icon selection-layer-load');
     load.append(icon('selection-load'));thumbnails.insertBefore(load,link);
@@ -514,7 +525,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       }
     } catch (error) { message(error); }
   }, 120);
-  return { refresh, dispose(){touchInput.dispose();cancelDrags();opacityEditor.dispose?.();opacityPopup.remove();cancelAnimationFrame(connectionFrame);connectionResize.disconnect();footerResize.disconnect();document.removeEventListener("pointerdown",closeSwipes,true);document.removeEventListener("click",closeOnClick);window.removeEventListener("blur",cancelDrags);window.removeEventListener("keydown",cancelOnEscape);clearInterval(thumbnailTimer); thumbnails.dispose();} };
+  return { refresh, measureUnit: () => unit.getBoundingClientRect().height, dispose(){touchInput.dispose();cancelDrags();opacityEditor.dispose?.();opacityPopup.remove();cancelAnimationFrame(connectionFrame);connectionResize.disconnect();footerResize.disconnect();document.removeEventListener("pointerdown",closeSwipes,true);document.removeEventListener("click",closeOnClick);window.removeEventListener("blur",cancelDrags);window.removeEventListener("keydown",cancelOnEscape);clearInterval(thumbnailTimer); thumbnails.dispose();} };
 }
 
 export function createLayerThumbnails(app, wake) {

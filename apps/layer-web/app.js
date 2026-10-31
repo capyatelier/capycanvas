@@ -818,7 +818,7 @@ function measurePanels() {
       // The unconstrained copy lays out every row, including offscreen rows.
       // Subtract the list itself to keep headers/footers outside the scroll budget.
       const list = cached.content?.querySelector(".layer-rows, .filter-picker-list, .palette-scroll, .navigator-overview");
-      const row = list?.querySelector(".layer-row, .filter-row, .palette-tile");
+      const row = id === "layers" ? cached.content?.querySelector(".layer-row-unit") : list?.querySelector(".filter-row, .palette-tile");
       const scroll = cached.content && !["color","proof","histogram","waveform"].includes(id) ? {
         fixed_height: list ? Math.max(0, content_height - list.getBoundingClientRect().height) : 0,
         unit_height: row ? row.getBoundingClientRect().height + (row.matches(".palette-tile") ? 4 : 0) : 0,
@@ -884,7 +884,7 @@ function contentPanel(id, splitPicker=false, readToolSet=null) {
     const view=palettes.mount(panel);panel.refreshPanel=view.refresh;panel.disposePanel=view.dispose;
   } else if(id==="layers") {
     const view=createLayerPanel({app,catalog,state:()=>state,panel,element,button,icon,dropdown,dispatch,applyChange,message,numberField,wake,dismissContext:()=>customization.dismissContext(),openMenu:node=>customization.openMenu(node)});
-    panel.refreshPanel=view.refresh; panel.disposePanel=view.dispose;
+    panel.refreshPanel=view.refresh; panel.disposePanel=view.dispose; panel.measureUnit=view.measureUnit;
   } else if(["filter_types","adjustments","properties","stats"].includes(id)) {
     const copies=new Map(["filter_types","adjustments","properties","stats"].map(name=>[name,name===id?panel:element("div","panel")]));
     const view=createEffectPanels({app,wake,catalog,state:()=>state,panels:copies,element,button,icon,dropdown,dispatch,numberField,message,asset,contentChanged:()=>{},splitPicker});
@@ -896,6 +896,7 @@ function contentPanel(id, splitPicker=false, readToolSet=null) {
   panel.refreshPanel();return panel;
 }
 function update(regions) {
+  const themeChanged = !!(regions & 16) && document.body.dataset.theme !== state.theme;
   document.body.toggleAttribute("data-workspace-ready", state.workspace_ready);
   if(regions & (4096 | 16384 | 16)) penResponse?.refresh();
   commandBar?.refresh(state.command_search);
@@ -920,7 +921,7 @@ function update(regions) {
   if (regions & 16) effectPanels.refresh();
   if (regions & 2048) effectPanels.refreshHistograms();
   if (regions & (1 | 2 | 4 | 8 | 16 | 32 | 128 | 2048)) { editor.refresh(); selectionUi.refresh(); frequencySeparationUi.refresh(); canvasSizeUi.refresh(); imageSizeUi.refresh(); workspaceChrome?.refresh(); }
-  if (regions & (1 | 4 | 128)) arrange();
+  if (regions & (1 | 4 | 128) || themeChanged) arrange();
   if (regions & (1 | 8 | 1024)) canvasBar?.refresh(state.canvas_bar);
   if (regions & (1 | 128)) persistWorkspace();
   if (regions & (1 | 4 | 8 | 128)) refreshWorkspaceMenu();
