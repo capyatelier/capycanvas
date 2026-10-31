@@ -243,7 +243,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Android tool bubble drag through four neighbours | 120 | **Unqualified after the bubble release fixes.** Previous parity build: 115.00–116.55 actual app-window presents/s; p99 ≤16.667447 ms, default glass, 61 MP photo at Fit | [Native tool bubbles](#native-tool-bubbles), 2026-10-24 |
 | Web tool bubble drag through four neighbours | 120 | Unmeasured after the bubble release fixes; desktop browser journeys do not qualify the reference tablet | [Web checks](../development/web.md#tests), 2026-10-24 |
 | GTK Tool Set hover and press animation | 120 | Desktop diagnostic: **117.76 changing-color presents/s**, 116.67–118.08 per case; pooled gap p99 16.646 ms. Reference hardware unmeasured | [GTK tool caption hover](#gtk-tool-caption-hover), 2026-10-26 |
-| Panel or column resize | 120 | Android shared vectors and Web SVG projection are unmeasured on this reference tier. **Desktop GTK pacing target still missed.** Bundled Vulkan memory reuse improves column drags **106.23–106.42 → 117.06–117.24** changing-geometry presents/s at 1× and **61.30 → 110.27** at 2×; worst candidate p99 **25.014 / 28.416 ms**. Panel drags stay near 118 presents/s. Reference-tier qualification remains unset. Web Navigator: 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms. Windows glass VM diagnostic (main → candidate): stack 42.26 → 44.07 observed bounds changes/s, 21.40 → 20.14 ms UI CPU/change; column width 12.57 → 13.32/s, 66.32 → 68.69 ms. Displayed FPS remains unqualified. Windows chrome rail scrolling and edge arbitration are unmeasured on reference hardware (2026-10-28). | `artifacts/glass-motion/phase-3/`, 2026-10-30; [GTK exact tab surfaces](#gtk-exact-panel-tab-surfaces), [GTK Vulkan memory reuse](#gtk-vulkan-memory-reuse), 2026-10-28; [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](#gtk-toolbar-divider-resize), 2026-10-26; [Windows GPU VM column resize](#windows-gpu-vm-column-resize), 2026-10-26 |
+| Panel or column resize | 120 | The 2026-10-31 allocation-report regression is reverted to the measured GTK parent path; the stored comparisons are below. Android shared vectors and Web SVG projection are unmeasured on this reference tier. **Desktop GTK pacing target still missed.** Bundled Vulkan memory reuse improves column drags **106.23–106.42 → 117.06–117.24** changing-geometry presents/s at 1× and **61.30 → 110.27** at 2×; worst candidate p99 **25.014 / 28.416 ms**. Panel drags stay near 118 presents/s. Reference-tier qualification remains unset. Web Navigator: 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms. Windows glass VM diagnostic (main → candidate): stack 42.26 → 44.07 observed bounds changes/s, 21.40 → 20.14 ms UI CPU/change; column width 12.57 → 13.32/s, 66.32 → 68.69 ms. Displayed FPS remains unqualified. Windows chrome rail scrolling and edge arbitration are unmeasured on reference hardware (2026-10-28). | `artifacts/glass-motion/phase-3/`, 2026-10-30; [GTK exact tab surfaces](#gtk-exact-panel-tab-surfaces), [GTK Vulkan memory reuse](#gtk-vulkan-memory-reuse), 2026-10-28; [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](#gtk-toolbar-divider-resize), 2026-10-26; [Windows GPU VM column resize](#windows-gpu-vm-column-resize), 2026-10-26 |
 | Windows window resize | 120 | Unqualified; Windows glass VM diagnostic (main → candidate): 31.42 → 33.08 observed native changes/s and 27.47 → 28.49 ms UI CPU/change. Pooled candidate medians stay within main contact spread; displayed FPS and reference hardware remain unmeasured | `artifacts/glass-motion/phase-3/`, 2026-10-30; [Windows window resize](#windows-window-resize) |
 | GTK window resize | 120 | **Desktop SDR pacing target still missed.** Bundled Vulkan memory reuse improves light 1× **91.73 → 117.79**, dark 1× **77.77 → 116.84** and dark 2× **44.74 → 109.99** changing-window presents/s. Worst candidate p99 is **16.650 / 16.712 / 17.146 ms**. Reference-tier qualification remains open | [GTK exact tab surfaces](#gtk-exact-panel-tab-surfaces), [GTK Vulkan memory reuse](#gtk-vulkan-memory-reuse), 2026-10-28 |
 | Pen pressure utility and curve drag | 120 | **Unqualified.** Current GTK desktop panel 119.20–119.40 presents/s, p99 up to 9.207 ms; curve 120.00, p99 up to 8.470 ms; reference tablet unmeasured | [GTK pen pressure utility](#gtk-pen-pressure-utility), 2026-10-10 UTC |
@@ -4496,6 +4496,25 @@ when narrowed. Input slots and drop targets keep their dimensions.
 [run log](../../artifacts/paint-toolbar-csp-order/workspace-resize.log) and
 [source and executable provenance](../../artifacts/paint-toolbar-csp-order/resize-provenance.json)
 identify the measured build and invocation.
+
+
+The 2026-10-31 revert restores the GTK measurement code in `c825d0181`
+exactly. Existing matched release captures on the same workstation use default
+panel glass, a 1600 × 1000 private display at 120 Hz and scale 1, and the startup
+drawing. No new timing is inferred for the revert. The original candidate is
+`aea0346de` plus its compile-only field deletion; fix 1 adds synchronous retained
+geometry publication and request reuse. The latter comparison uses ABBA order.
+
+| Candidate against parent | Dark right presents/s, parent → candidate | Dark Navigator presents/s | Right paint CPU ms | Navigator paint CPU ms |
+| --- | ---: | ---: | ---: | ---: |
+| `aea0346de`, three contacts each | 92.081 → 59.456 | 103.361 → 59.147 | 4.723 → 6.846 | 4.772 → 6.877 |
+| Fix 1, six contacts each | 105.824 → 63.700 | 103.523 → 74.822 | 4.397 → 6.394 | 4.586 → 6.275 |
+
+Rates pool changing-geometry presentation intervals over their summed spans.
+CPU figures are medians of contact paint-thread p95 values. Both comparisons
+retain the parent's shared target misses and remain desktop diagnostics, with
+reference-tier qualification open. The [stored evidence](../../artifacts/cursor-race/review-2/perf-interrupt/revert-perf-evidence/evidence.json)
+retains contact medians, interval counts, spans, executable hashes and raw paths.
 
 ## GTK Tool Set density
 

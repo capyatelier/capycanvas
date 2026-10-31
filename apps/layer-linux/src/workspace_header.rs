@@ -120,6 +120,7 @@ pub(super) struct Header {
     model: RefCell<Option<HeaderLayout>>,
     pub editing: Cell<bool>,
     geometry: RefCell<HeaderGeometry>,
+    measuring: Cell<bool>,
     drop: Cell<Option<(HeaderZone, Option<u32>)>>,
     drag: RefCell<Option<drag::NativeHeaderDrag>>,
     insets: Cell<[f32; 2]>,
@@ -191,6 +192,7 @@ impl Header {
             model: RefCell::new(None),
             editing: Cell::new(false),
             geometry: RefCell::new(HeaderGeometry::default()),
+            measuring: Cell::new(false),
             drop: Cell::new(None),
             drag: RefCell::new(None),
             insets: Cell::new([0.; 2]),
@@ -1063,7 +1065,20 @@ impl Header {
         }
         *self.geometry.borrow_mut() = geometry;
         w.update_zen();
-        w.dispatch(UiAction::MeasureHeader {height:self.height(), items:self.measurements()});
+        if !self.measuring.replace(true) {
+            glib::idle_add_local_once(glib::clone!(
+                #[weak]
+                w,
+                move || {
+                    w.header.measuring.set(false);
+                    let items = w.header.measurements();
+                    w.dispatch(UiAction::MeasureHeader {
+                        height: w.header.height(),
+                        items,
+                    });
+                }
+            ));
+        }
     }
     fn measurements(&self) -> Vec<HeaderItemBounds> {
         let geometry = self.geometry.borrow();
@@ -1217,6 +1232,10 @@ impl Header {
         };
         match entry.item {
             HeaderItem::Tool { .. } => {
+                w.dispatch(UiAction::MeasureHeader {
+                    height: self.height(),
+                    items: self.measurements(),
+                });
                 w.dispatch(UiAction::ActivateHeaderItem { id });
             }
             HeaderItem::Capy | HeaderItem::Settings | HeaderItem::Fullscreen => {

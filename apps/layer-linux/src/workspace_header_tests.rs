@@ -710,30 +710,6 @@ fn native_sketch_layer_drawer_immediate_audit() {
 }
 
 #[test]
-#[ignore = "isolated native-input.js --native-test=native_header_drawer_anchor_updates_in_one_allocation"]
-fn native_header_drawer_anchor_updates_in_one_allocation() {
-    let mut d = Driver::new("art.capycanvas.HeaderDrawerAllocation");
-    let layers = ToolbarControl::Panel {panel:Panel::Layers};
-    let mut layout = WorkspacePreset::Painter.layout(Platform::Gtk);
-    layout.header.zones = Default::default();
-    layout.header.add(HeaderZone::Right,None,&[HeaderItem::Tool {control:layers}]).unwrap();
-    d.w.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(WorkspaceState {layout,..Default::default()})});
-    pump(300);
-    let opener = d.named(&d.header_tool(layers));
-    d.click(&opener); pump(300);
-    let width = d.w.surface.width();
-    let height = d.w.surface.height();
-    d.w.surface.queue_allocate();
-    d.w.surface.allocate(width-40,height,-1,None);
-    let button = opener.compute_bounds(&d.w.surface).unwrap();
-    let anchor = d.w.drawer.placement().unwrap().anchor;
-    assert!((anchor.x-button.x()).abs()<=1. && (anchor.y-button.y()).abs()<=1.,
-        "one allocation publishes the current header anchor without idle: anchor={anchor:?}, button={button:?}");
-    d.input.finish(); d.w.window.destroy(); pump(100);
-}
-
-
-#[test]
 #[ignore = "isolated native-input.js --native-test=native_sketch_layer_drawer_auto_height"]
 fn native_sketch_layer_drawer_auto_height() {
     let mut d = Driver::new("art.capycanvas.LayerDrawerGrowth");
