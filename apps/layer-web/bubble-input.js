@@ -1,5 +1,5 @@
 export function createBubbleInput({app, workspace, records, send, wake, menu, dismiss, cancelWorkspace, viewport,leaveCanvas,colorTouch}) {
-  let contact, source, lastRing, suppressClick=false;
+  let contact, source, lastRing, hover, hovered, hoverCursor='', suppressClick=false;
   const point=e=>[e.clientX,e.clientY];
   const distance=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
   const local=(record,p)=>p.map((v,i)=>v-record.center[i]);
@@ -7,9 +7,33 @@ export function createBubbleInput({app, workspace, records, send, wake, menu, di
   const grab=(id,rim=false)=>({kind:rim?'rim':'bubble',id});
   const drag=(g,phase,p)=>{send({type:'drag',grab:g,phase,position:p,viewport:viewport()});wake();};
   const hit=(r,p)=>app.bubble_hit(r.view.id,...local(r,p));
-  const native=e=>e.target.closest?.('.bubble-card :is(.layer-row,.layer-swipe-actions,.scroll-thumb,input,textarea,select,[contenteditable=true],.numeric-field,.range-control,.curve-editor)');
+  const native=e=>e.target?.closest?.('.bubble-card :is(.layer-row,.layer-swipe-actions,.scroll-thumb,input,textarea,select,[contenteditable=true],.numeric-field,.range-control,.curve-editor)');
   function target(p) {
     for(const r of [...records.values()].reverse())if(r.center&&!r.faded&&hit(r,p)!=null)return r;
+  }
+  function hoverCursorTo(next) {
+    if(hoverCursor===next)return;
+    if(next)leaveCanvas();
+    workspace.classList.toggle('bubble-pointer',!!next);
+    workspace.style.cursor=next;hoverCursor=next;
+  }
+  function clearHover(e) {
+    if(e&&hover?.id!==e.pointerId)return;
+    hover=null;
+    if(hovered){hovered.mark?.(null,false);hovered=null;}
+    hoverCursorTo('');
+  }
+  function updateHover(node,r=target(hover.point)) {
+    if(hovered&&hovered!==r)hovered.mark?.(null,false);
+    hovered=r;
+    r?.mark?.(hit(r,hover.point),false);
+    hoverCursorTo(r&&!native({target:node})?(hover.device==='pen'?'none':'default'):'');
+    return !!hoverCursor;
+  }
+  function refreshHover(changed) {
+    if(!changed||!hover||contact||source?.moving)return;
+    const r=target(hover.point);
+    updateHover(r?document.elementFromPoint(...hover.point):null,r);
   }
   function stopHold(c=contact){if(c?.timer){clearTimeout(c.timer);c.timer=null;}}
   function restore(c) {
@@ -61,7 +85,7 @@ export function createBubbleInput({app, workspace, records, send, wake, menu, di
     return {mid:a.map((v,i)=>(v+b[i])/2),distance:distance(a,b)};
   }
   function down(e) {
-    suppressClick=false;
+    suppressClick=false;clearHover();
     if(e.button!==0||e.target.closest?.('[popover]:popover-open,dialog[open],.popover'))return;
     const p=point(e);
     if(contact&&e.pointerType==='touch') {
@@ -115,12 +139,10 @@ export function createBubbleInput({app, workspace, records, send, wake, menu, di
     const c=contact;
     if(!c) {
       if(e.buttons)return;
-      const r=target(p);
-      for(const record of records.values())record.mark?.(record===r?hit(record,p):null,false);
-      workspace.style.setProperty('--bubble-pointer',r&&e.pointerType==='pen'?'none':'');
-      if(r&&!native(e)){leaveCanvas();workspace.classList.add('bubble-pointer');if(e.pointerType==='pen')workspace.style.cursor='none';else workspace.style.cursor='default';return consume(e);}
-      workspace.classList.remove('bubble-pointer');
-      workspace.style.cursor='';return;
+      if(e.pointerType==='touch'){clearHover();return;}
+      hover={id:e.pointerId,device:e.pointerType,point:p};
+      if(updateHover(e.target))return consume(e);
+      return;
     }
     if(!c.fingers.has(e.pointerId))return;
     c.fingers.set(e.pointerId,p);c.last=p;
@@ -195,7 +217,9 @@ export function createBubbleInput({app, workspace, records, send, wake, menu, di
   workspace.addEventListener('workspace-drag-held',()=>{if(source)source.held=true;});
   workspace.addEventListener('touchstart',e=>{if(contact?.hit==='card'&&contact.mode!=='native')e.preventDefault();},{passive:false});
   workspace.addEventListener('workspace-context-claimed',()=>{if(source)source.held=true;});
-  window.addEventListener('blur',()=>end(null,true));
+  workspace.addEventListener('pointerleave',clearHover);
+  workspace.addEventListener('pointerout',e=>{if(!e.relatedTarget)clearHover(e);});
+  window.addEventListener('blur',()=>{end(null,true);clearHover();});
   window.addEventListener('keydown',e=>{if(e.key==='Escape'&&(contact||source)){end(null,true);consume(e);}},true);
   return {
     handle(e) {
@@ -203,7 +227,7 @@ export function createBubbleInput({app, workspace, records, send, wake, menu, di
       if(e.type==='pointerdown')return down(e);
       if(e.type==='pointermove')return move(e);
       if(e.type==='pointerup')return end(e);
-      if(e.type==='pointercancel')return end(e,true);
+      if(e.type==='pointercancel'){const handled=end(e,true);clearHover(e);return handled;}
       if(e.type==='lostpointercapture'&&e.target===workspace)return end(e,true);
       if(e.type==='click'&&suppressClick){suppressClick=false;return consume(e);}
       if(e.type==='contextmenu') {const r=target(point(e));if(r&&!native(e)){menu(r,point(e));return consume(e);}}
@@ -213,6 +237,7 @@ export function createBubbleInput({app, workspace, records, send, wake, menu, di
       const c=contact;stopHold();contact=null;dismiss();
       for(const id of c.fingers.keys())if(workspace.hasPointerCapture(id))workspace.releasePointerCapture(id);
     }},
+    refreshHover,
     turning:id=>contact?.r.view.id===id&&contact.mode==='beads'&&distance(contact.start,contact.last)>8,
     busy:()=>!!contact||!!source?.moving,
   };

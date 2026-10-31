@@ -221,6 +221,7 @@ export function createBubbles({app,workspace,element,button,icon,state,dispatch,
   }
   function tick(now) {
     if(!active&&!dirty)return false;
+    let hoverChanged=dirty;
     if(dirty) {
       dirty=false;const stampOwner=stampWanted?.record;stampWanted=null;const packets=app.bubbles(),live=new Set(packets.map(p=>p.view.id));
       for(const[id,r]of records)if(!live.has(id)){r.painter?.dispose();r.card?.inspector.root.disposePanel();thumbnails.forget(`bubble:${id}`);r.root.remove();records.delete(id);}
@@ -230,12 +231,13 @@ export function createBubbles({app,workspace,element,button,icon,state,dispatch,
     }
     const motion=app.bubble_motion(now,reduced.matches);active=motion.moving;
     const [down,faded]=motion.fade;
-    if(down){restoreAt=null;for(const r of records.values()){r.faded=faded.includes(r.view.id);fade(r,r.faded?.2:1);}}
+    if(down){restoreAt=null;for(const r of records.values()){const fadedNow=faded.includes(r.view.id);hoverChanged||=r.faded!==fadedNow;r.faded=fadedNow;fade(r,r.faded?.2:1);}}
     else if(stroke)restoreAt=now+180;
     stroke=down;
-    if(restoreAt!=null){active=true;if(now>=restoreAt){restoreAt=null;for(const r of records.values()){r.faded=false;fade(r,1);}}}
+    if(restoreAt!=null){active=true;if(now>=restoreAt){restoreAt=null;for(const r of records.values()){hoverChanged||=r.faded;r.faded=false;fade(r,1);}}}
     for(const p of motion.placements) {
       const r=records.get(p.id);if(!r)continue;
+      hoverChanged||=r.center[0]!==p.center[0]||r.center[1]!==p.center[1]||r.scale!==(p.homing?.82:p.lifted?1.04:1)*r.pinch;
       r.center=p.center;r.scale=(p.homing?.82:p.lifted?1.04:1)*r.pinch;r.homeAlpha=p.homing?.55:1;
       r.root.style.transform=`translate(${p.center[0]}px,${p.center[1]}px)`;r.body.style.transform=`scale(${r.scale})`;
       r.root.classList.toggle('bubble-lifted',p.lifted);r.color?.shadow(p.lifted);
@@ -244,7 +246,7 @@ export function createBubbles({app,workspace,element,button,icon,state,dispatch,
       r.root.style.opacity=r.fade*r.homeAlpha;
       for(const[key,t]of r.transitions) {
         t.start??=now;const progress=t.ms?Math.max(0,Math.min(1,(now-t.start-t.delay)/t.ms)):1;
-        t.value=t.from+(t.to-t.from)*ease(progress);t.node.style.opacity=t.value*enabledAlpha(t.node);t.node.style.scale=(t.fromScale+(1-t.fromScale)*t.value)*itemScale(t.node);
+        const value=t.from+(t.to-t.from)*ease(progress);hoverChanged||=t.value!==value;t.value=value;t.node.style.opacity=t.value*enabledAlpha(t.node);t.node.style.scale=(t.fromScale+(1-t.fromScale)*t.value)*itemScale(t.node);
         if(progress<1)active=true;
         else if(!t.show){t.node.hidden=true;if(key==='card'&&r.face.hidden){r.face.hidden=false;transition(r,'face',r.face,true,180,.6);}if(key==='halo'){r.arcs=[];}}
       }
@@ -254,7 +256,7 @@ export function createBubbles({app,workspace,element,button,icon,state,dispatch,
         const t=slot.tween;
         if(t) {
           t.start??=now;const progress=Math.min(1,(now-t.start)/220),amount=ease(progress),mix=(a,b)=>a+(b-a)*amount;
-          slot.shown={center:t.from.center.map((v,i)=>mix(v,t.to.center[i])),size:mix(t.from.size,t.to.size),alpha:mix(t.from.alpha,t.to.alpha)};
+          hoverChanged=true;slot.shown={center:t.from.center.map((v,i)=>mix(v,t.to.center[i])),size:mix(t.from.size,t.to.size),alpha:mix(t.from.alpha,t.to.alpha)};
           if(progress===1){slot.tween=null;if(slot.gone){slot.node.remove();r.beadNodes.delete(id);continue;}}else active=true;
         }
         const p=slot.shown;place(slot.node,p.center,[p.size,p.size]);slot.node.style.opacity=p.alpha;slot.node.bubbleAlpha=p.alpha;
@@ -262,10 +264,11 @@ export function createBubbles({app,workspace,element,button,icon,state,dispatch,
         if(slot.node.bubbleSurface)Object.assign(slot.node.bubbleSurface,{center:p.center,size:[p.size,p.size],radius:p.size/2});
       }
       if(r.view.card) {
-        const measurement=r.card.inspector.measure(now);r.card.inspector.layout();active||=measurement.running;
+        const measurement=r.card.inspector.measure(now);r.card.inspector.layout();active||=measurement.running;hoverChanged||=measurement.running;
         if(json(r.view.card.metrics)!==json([measurement.measurement,measurement.properties_height]))send({type:'measure_card',id:p.id,measurement:measurement.measurement,properties_height:measurement.properties_height});
       }
     }
+    input.refreshHover(hoverChanged);
     stampCanvas.hidden=!stampWanted||!stamp;
     if(stampWanted) {
       refreshStamp();if(stampPending)active=true;const s=stampWanted;if(!s)return active||dirty;const diameter=s.diameter*(stamp?.extent||1);
