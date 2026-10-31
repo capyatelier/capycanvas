@@ -65,12 +65,12 @@ enum AppleKeyName {
         guard let bytes = CFDataGetBytePtr(data) else { return nil }
         let layout = UnsafeRawPointer(bytes).assumingMemoryBound(to: UCKeyboardLayout.self)
         var dead: UInt32 = 0
-        var length: UniCharCount = 0
+        var length = 0
         var characters = [UniChar](repeating: 0, count: 4)
         let modifiers = event.modifierFlags.contains(.shift) ? UInt32(shiftKey >> 8) : 0
         let status = UCKeyTranslate(layout, event.keyCode, UInt16(kUCKeyActionDown), modifiers,
             UInt32(LMGetKbdType()), OptionBits(1 << kUCKeyTranslateNoDeadKeysBit), &dead,
-            UniCharCount(characters.count), &length, &characters)
+            characters.count, &length, &characters)
         guard status == noErr, length == 1, (33...126).contains(characters[0]) else { return nil }
         let latin = String(utf16CodeUnits: characters, count: Int(length))
         return latin == name(event) ? nil : latin
