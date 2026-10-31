@@ -12,11 +12,13 @@ fn layer_drawer_frames_resize_retained_pages_and_bridge_together() {
         ..from.clone()
     };
     for (progress, height) in [(0.,300.), (0.25,400.), (0.5,500.), (1.,700.)] {
-        let frame = crate::drawer_frame(&serde_json::json!({"from":from,"to":to,"progress":progress}).to_string()).unwrap();
-        assert_eq!(frame["placement"]["bounds"]["height"], height);
-        assert_eq!(frame["placement"]["columns"][0]["height"], height);
-        assert_eq!(frame["connection"]["bounds"]["y"], 48.);
-        assert_eq!(frame["connection"]["bounds"]["height"], 8.);
+        for clip_contents in [false, true] {
+            let frame = crate::drawer_frame(&serde_json::json!({"from":from,"to":to,"progress":progress,"clip_contents":clip_contents}).to_string()).unwrap();
+            assert_eq!(frame["placement"]["bounds"]["height"], height);
+            assert_eq!(frame["placement"]["columns"][0]["height"], if clip_contents {700.} else {height});
+            assert_eq!(frame["connection"]["bounds"]["y"], 48.);
+            assert_eq!(frame["connection"]["bounds"]["height"], 8.);
+        }
     }
     let mid = crate::drawer_frame(&serde_json::json!({"from":from,"to":to,"progress":0.5}).to_string()).unwrap();
     let reversed = crate::drawer_frame(&serde_json::json!({"from":mid["placement"],"to":from,"progress":0.5}).to_string()).unwrap();

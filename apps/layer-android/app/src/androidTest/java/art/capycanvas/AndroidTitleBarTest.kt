@@ -2079,10 +2079,10 @@ class AndroidTitleBarTest {
             val labelLeft=bounds("layer-properties-disclosure-label").left
             observe(obj("theme" to theme,"floor_dp" to floor,"grown_dp" to grown,"density" to density,
                 "first_action_center_x" to first.x,"last_action_center_x" to last.x,"first_disclosure_slot_center_x" to firstSlot,"last_disclosure_slot_center_x" to lastSlot,
-                "label_left" to labelLeft,"expected_label_left" to (disclosure.left+38*density)))
+                "label_left" to labelLeft,"expected_label_left" to (bounds("layer-properties-icon-slot").right+6*density)))
             assertEquals("First footer slot aligns with New Layer",first.x,firstSlot,1f)
             assertEquals("Last footer slot aligns with Actions",last.x,lastSlot,1f)
-            assertEquals("Disclosure label follows the 6 dp edge, the 26 dp slot and a 6 dp gap",disclosure.left+38*density,labelLeft,1f)
+            assertEquals("Disclosure label follows the properties slot by 6 dp",bounds("layer-properties-icon-slot").right+6*density,labelLeft,1f)
             fun inDrawer(tag:String):Rect { var r:Rect?=null; instrumentation.runOnMainSync { r=node("layer-inspector")?.second?.find(hasTag(tag))?.boundsInRoot }; return checkNotNull(r) { "Missing $tag in the drawer" } }
             val inspector=bounds("layer-inspector");val row=inDrawer("layer-row-${rows().first().getLong("id")}")
             val control=host.catalog.getJSONObject("panel_metrics").getDouble("control_height").toFloat()*density

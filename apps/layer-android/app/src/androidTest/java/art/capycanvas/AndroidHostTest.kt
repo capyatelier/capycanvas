@@ -4070,6 +4070,122 @@ class AndroidHostTest {
         compose.onNodeWithTag("settings-done").performClick()
     }
 
+    private fun prepareControlledLayersDrawer(theme: String, minimumLayers: Int = 5) {
+        compose.mainClock.autoAdvance = true
+        customize(obj("type" to "close_expanded"))
+        compose.waitUntil(10_000) { findTag("tool-drawer") == null }
+        action(obj("type" to "set_theme", "theme" to theme))
+        val fixture = JSONObject(defaultWorkspace)
+        fixture.getJSONObject("layout").put("header", obj("size" to "medium", "next_id" to 3,
+            "zones" to JSONArray(listOf(JSONArray(), JSONArray(listOf(obj("id" to 2,
+                "item" to obj("kind" to "tool", "control" to obj("kind" to "panel", "panel" to "layers"))))), JSONArray()))))
+        action(obj("type" to "restore_workspace", "workspace" to fixture))
+        customize(obj("type" to "set_panel_visible", "panel" to "layers", "visible" to false))
+        repeat((minimumLayers - state().array("layers").length()).coerceAtLeast(0)) {
+            action(obj("type" to "layer", "action" to obj("op" to "new", "group" to false, "clipped" to false)))
+        }
+    }
+
+    private fun controlledDrawerFrameHeight(): Float? {
+        host.drain()
+        compose.mainClock.advanceTimeByFrame()
+        compose.waitForIdle()
+        host.drain()
+        compose.waitForIdle()
+        return compose.runOnIdle {
+            findTag("tool-drawer")?.second?.takeIf { it.layoutInfo.isPlaced }?.boundsInRoot?.height
+        }
+    }
+
+    @Test fun controlledDrawerOpeningAndRetargetPreserveMeasuredContent() {
+        val originalAdvance = compose.mainClock.autoAdvance
+        try {
+            for (theme in listOf("light", "dark")) {
+                prepareControlledLayersDrawer(theme, minimumLayers = 7)
+                val beforeCount = state().array("layers").length()
+                val heights = mutableListOf<Float>()
+                val placed = mutableListOf<Boolean>()
+                val times = mutableListOf<Long>()
+                var positive = 0
+                var retarget = -1
+                var initialTarget = 0f
+                compose.mainClock.autoAdvance = false
+                compose.runOnIdle { host.dispatch(obj("type" to "activate_header_item", "id" to 2)) }
+                repeat(60) { index ->
+                    val height = controlledDrawerFrameHeight()
+                    heights.add(height ?: 0f); placed.add(height != null); times.add(compose.mainClock.currentTime)
+                    if (height != null && height > 0f && ++positive == 3) {
+                        retarget = index
+                        compose.runOnIdle {
+                            initialTarget = host.workspaceInteraction!!.drawer!!.getJSONObject("placement").array("columns").getJSONObject(0).number("height")
+                            host.dispatch(obj("type" to "layer", "action" to obj("op" to "new", "group" to false, "clipped" to false)))
+                        }
+                    }
+                }
+                File(compose.activity.getExternalFilesDir(null), "validation/batch2/controlled-drawer-$theme.json").apply {
+                    parentFile!!.mkdirs()
+                    writeText(obj("clock_ms" to JSONArray(times), "placed" to JSONArray(placed), "height_px" to JSONArray(heights),
+                        "retarget_frame" to retarget, "initial_target_dp" to initialTarget, "before_layers" to beforeCount, "after_layers" to state().array("layers").length()).toString(2))
+                }
+                assertTrue("$theme measured drawer is actually placed", placed.any { it })
+                assertTrue("$theme never places a zero-height placeholder: $heights", heights.indices.all { !placed[it] || heights[it] > 0f })
+                val growing = heights.zipWithNext().count { (a, b) -> b - a > 1f }
+                assertTrue("$theme has at least four growing controlled frames: $heights", growing >= 4)
+                val final = heights.last()
+                assertTrue("$theme opens a complete measured drawer", final > 120f * compose.activity.resources.displayMetrics.density)
+                assertTrue("$theme has no snap larger than half the final drawer: $heights", heights.zipWithNext().all { (a, b) -> b - a <= final * .5f })
+                assertEquals("$theme retarget adds exactly one real layer", beforeCount + 1, state().array("layers").length())
+                assertTrue("$theme added layer grows the measured target: $initialTarget -> $final px", initialTarget > 0f && final / compose.activity.resources.displayMetrics.density > initialTarget + 1f)
+                assertTrue("$theme retarget starts during opening", retarget >= 0 && heights[retarget] < final)
+                assertTrue("$theme retarget continues from current geometry: $heights", heights.drop(retarget).all { it >= heights[retarget] - 1f })
+                compose.runOnIdle { host.customize(obj("type" to "close_expanded")) }
+                val closing = listOf(final) + List(30) { controlledDrawerFrameHeight() ?: 0f }
+                File(compose.activity.getExternalFilesDir(null), "validation/batch2/controlled-close-$theme.json").apply {
+                    parentFile!!.mkdirs(); writeText(obj("height_px" to JSONArray(closing)).toString(2))
+                }
+                assertTrue("$theme closes through at least four shrinking controlled frames: $closing", closing.zipWithNext().count { (a, b) -> a - b > 1f } >= 4)
+                assertTrue("$theme closing never snaps by more than half its starting height: $closing", closing.zipWithNext().all { (a, b) -> a - b <= final * .5f })
+                assertEquals("$theme closing removes the native drawer", 0f, closing.last(), 0f)
+            }
+        } finally { compose.mainClock.autoAdvance = originalAdvance }
+    }
+
+    @Test fun layersDrawerKeepsMeasuredSizeAfterStateEdits() {
+        val originalAdvance = compose.mainClock.autoAdvance
+        try {
+            for (theme in listOf("light", "dark")) {
+                prepareControlledLayersDrawer(theme)
+                compose.mainClock.autoAdvance = false
+                compose.runOnIdle { host.dispatch(obj("type" to "activate_header_item", "id" to 2)) }
+                val opening = List(60) { controlledDrawerFrameHeight() ?: 0f }
+                val initial = opening.last()
+                assertTrue("$theme settled drawer contains measured rows", initial > 120f * compose.activity.resources.displayMetrics.density)
+                val selected = state().getJSONObject("layer_tools").getJSONObject("editing_layer").getLong("id")
+                val target = state().array("layers").objects().first { it.getLong("id") != selected && it.optBoolean("can_rename") }.getLong("id")
+                val name = "Controlled $theme row"
+                val opacity = if (theme == "light") .5 else .6
+                val edits = listOf("select" to obj("type" to "layer", "action" to obj("op" to "select", "id" to target, "mask" to false)),
+                    "rename" to obj("type" to "layer", "action" to obj("op" to "rename", "id" to target, "name" to name)),
+                    "opacity" to obj("type" to "set_layer_opacity", "id" to target, "opacity" to opacity))
+                for ((edit, value) in edits) {
+                    compose.runOnIdle { host.dispatch(value) }
+                    val heights = List(20) { controlledDrawerFrameHeight() ?: 0f }
+                    val layer = state().array("layers").objects().single { it.getLong("id") == target }
+                    File(compose.activity.getExternalFilesDir(null), "validation/batch2/controlled-layers-$theme-$edit.json").apply {
+                        parentFile!!.mkdirs()
+                        writeText(obj("initial_height_px" to initial, "height_px" to JSONArray(heights), "layer" to layer).toString(2))
+                    }
+                    when (edit) {
+                        "select" -> assertEquals("$theme selection actually changes row", target, state().getJSONObject("layer_tools").getJSONObject("editing_layer").getLong("id"))
+                        "rename" -> assertEquals("$theme rename actually changes row text", name, layer.getString("label"))
+                        "opacity" -> assertEquals("$theme opacity actually changes row metadata", opacity, layer.getDouble("opacity"), .0001)
+                    }
+                    assertTrue("$theme/$edit keeps its settled measured height: $initial -> $heights", heights.all { it >= initial - 1f })
+                }
+            }
+        } finally { compose.mainClock.autoAdvance = originalAdvance }
+    }
+
     @Test fun drawerTileMeasurementsPublishOncePerComposition() {
         for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme))

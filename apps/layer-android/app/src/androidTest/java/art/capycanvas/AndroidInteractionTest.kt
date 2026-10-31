@@ -2423,6 +2423,15 @@ class AndroidInteractionTest {
                     tagged("tile-toolbar-$id")?.second?.boundsInRoot?.let { it.width >= 35f * density && it.height >= 35f * density } == true
                 }
             }
+            val small = bounds("tile-toolbar-${ids.first()}").size
+            customize(obj("type" to "set_tile_style", "panel" to "toolbar", "style" to "large"))
+            waitFor("$theme open drawer responds to larger tile style") {
+                tagged("tile-toolbar-${ids.first()}")?.second?.boundsInRoot?.let { it.width > small.width + 1f || it.height > small.height + 1f } == true
+            }
+            customize(obj("type" to "set_tile_style", "panel" to "toolbar", "style" to "small"))
+            waitFor("$theme open drawer restores its small tile geometry") {
+                tagged("tile-toolbar-${ids.first()}")?.second?.boundsInRoot?.let { kotlin.math.abs(it.width - small.width) <= 1f && kotlin.math.abs(it.height - small.height) <= 1f } == true
+            }
             for (id in ids.reversed()) {
                 tap(bounds("tile-toolbar-$id").center)
                 waitFor("$theme tile $id opens its nested content drawer") {
