@@ -270,6 +270,10 @@ try{
   Select-Tool 'scale_rotate';Origin;Wait-Until {$a=(Model).state.canvas_bar.anchor;$a -and [Math]::Abs((Value 'transform_x')-($a[0]+$a[2])/2) -lt .5} 'The transform bounds did not match the centred position';$bounds=(Model).state.canvas_bar.anchor
   $scale=[CapyEditingCapture]::GetDpiForWindow($handle)/96;$grid=Control 'tool-choice-transform-reference'
   $cells=@(0..8|ForEach-Object {Control "tool-choice-transform-reference-$_"})
+  Focus-Keyboard $cells[0]
+  Wait-Until {$tip=@(Capy-Tooltips $review.Id)[0];$tip -and $tip.Current.Name -eq $cells[0].Current.Name} 'The nested position anchor tooltip was replaced by its group label'
+  Focus-Keyboard $cells[1]
+  Wait-Until {$tip=@(Capy-Tooltips $review.Id)[0];$tip -and $tip.Current.Name -eq $cells[1].Current.Name} 'Keyboard focus did not replace the nested position anchor tooltip'
   if(@($cells|Where-Object {[Math]::Abs($_.Current.BoundingRectangle.Width-18*$scale) -gt 1.5}).Count){throw 'Position anchor cells are not 18 pixels'}
   $field=(Control 'tool-setting-transform_x').Current.BoundingRectangle;$area=$grid.Current.BoundingRectangle
   if($field.Left -le $area.Right -or $field.Top -gt $area.Bottom -or $field.Bottom -lt $area.Top){throw 'X is not beside the position anchor'}
@@ -316,6 +320,8 @@ try{
   Wait-Until {$a=(Model).state.canvas_bar.anchor;[Math]::Abs((Value 'transform_x')-$a[0]) -lt .5 -and [Math]::Abs((Value 'transform_y')-$a[1]) -lt .5} 'The Tool Options anchor did not set the reference'
   Capture 'transform-tool-options';Pass 'Tool Options position anchor'
   Invoke 'canvas-bar-cancel_transform';Wait-Until {(Model).state.layer_tools.tool -ne 'transform'} 'Transform cancel did not finish'
+  [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
+  Wait-Until {!(Find 'tool-drawer' -Visible)} 'Tool Options did not close before artwork sampling'
   Invoke 'Undo' -Name;Invoke 'Undo' -Name;Wait-Until {!(Model).state.document_file.modified -and (Pixels) -eq $empty} 'The transform journey did not undo to a clean drawing'
  }
  if((Model).state.document_file.modified){throw 'Editing journey did not restore a clean drawing'}

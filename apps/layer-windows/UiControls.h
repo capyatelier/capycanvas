@@ -557,6 +557,14 @@ inline void segmentColors(std::shared_ptr<WorkspaceData> const& data,Primitives:
 inline bool& touchContact(){thread_local bool touch=false;return touch;}
 struct TooltipOwner {weak_ref<FrameworkElement> owner;hstring text;};
 inline std::unordered_map<void*,TooltipOwner>& tooltipOwners(){thread_local std::unordered_map<void*,TooltipOwner> owners;return owners;}
+inline bool tooltipFocusOwner(FrameworkElement const& owner,RoutedEventArgs const& event){
+    for(auto node=event.OriginalSource().try_as<DependencyObject>();node;node=VisualTreeHelper::GetParent(node)){
+        if(node==owner)return true;
+        auto found=tooltipOwners().find(get_abi(node));
+        if(found!=tooltipOwners().end()&&found->second.owner.get()==node&&!found->second.text.empty())return false;
+    }
+    return false;
+}
 struct TooltipPresentation {
     weak_ref<FrameworkElement> owner;
     Primitives::Popup popup{nullptr};Border frame{nullptr};TextBlock text{nullptr};UIElement root{nullptr};
@@ -628,10 +636,10 @@ inline void tooltip(DependencyObject const& target,hstring const& text){
         }
     });
     view.PointerExited([weak=make_weak(view)](auto&&,auto&&){auto& shown=tooltipPresentation();if(!shown.revealed&&shown.owner.get()==weak.get())shown.Hide();});
-    view.GotFocus([weak=make_weak(view)](auto&&,auto&&){
-        if(auto view=weak.get();view&&view.XamlRoot())if(auto focus=FocusManager::GetFocusedElement(view.XamlRoot()).try_as<Control>();focus&&focus.FocusState()==FocusState::Keyboard){setTouchContact(false);tooltipPresentation().Show(view);}
+    view.GotFocus([weak=make_weak(view)](auto&&,RoutedEventArgs const& event){
+        if(auto view=weak.get();view&&view.XamlRoot()&&tooltipFocusOwner(view,event))if(auto focus=FocusManager::GetFocusedElement(view.XamlRoot()).try_as<Control>();focus&&focus.FocusState()==FocusState::Keyboard){setTouchContact(false);tooltipPresentation().Show(view);}
     });
-    view.LostFocus([weak=make_weak(view)](auto&&,auto&&){if(tooltipPresentation().owner.get()==weak.get())tooltipPresentation().Hide();});
+    view.LostFocus([weak=make_weak(view)](auto&&,RoutedEventArgs const& event){if(auto view=weak.get();view&&tooltipFocusOwner(view,event)&&tooltipPresentation().owner.get()==view)tooltipPresentation().Hide();});
     view.Unloaded([weak=make_weak(view)](auto&&,auto&&){if(tooltipPresentation().owner.get()==weak.get())tooltipPresentation().Hide();});
 }
 inline void copyName(std::shared_ptr<WorkspaceData> const& data,FrameworkElement const& target,LocalizedCopy const& text,bool tip=false){
