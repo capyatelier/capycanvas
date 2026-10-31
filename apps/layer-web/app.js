@@ -1107,7 +1107,16 @@ function updateTabSlide(drag, presentation) {
     tab.preview.style.transform = `translateX(${x})`;
   }
 }
-function workspaceCursor(cursor) {
+let workspaceCapture = null;
+function workspacePointer() {
+  const drag = workspaceGesture, edge = edgeContact;
+  const capture = edge?.cursor ? edge.pointerId : drag?.started || drag?.held ? drag.id : null;
+  const previous = workspaceCapture;
+  workspaceCapture = capture;
+  if (previous !== capture && previous != null && workspace.hasPointerCapture(previous)) workspace.releasePointerCapture(previous);
+  if (capture != null && !workspace.hasPointerCapture(capture)) workspace.setPointerCapture(capture);
+  const cursor = edge?.cursor ?? (drag?.started ? drag.tile || drag.action.type === "drag_workspace" ? "grabbing" : drag.cursor
+    : drag?.waitForHold && drag.held && ["mouse", "pen"].includes(drag.start.pointerType) ? "grab" : null);
   if ((workspace.dataset.workspaceCursor || null) === (cursor || null)) return;
   if (cursor) {
     workspace.dataset.workspaceCursor = cursor;
@@ -1232,25 +1241,33 @@ function endWorkspaceGesture(e, cancel = false) {
   if(!cancel&&drag.tabSlide){
     workspaceTabDrop=drag;finishWorkspaceTabDrop();
   }else clearTabSlide(drag);
-  workspaceCursor(null);
-  if (workspace.hasPointerCapture(drag.id)) workspace.releasePointerCapture(drag.id);
+  workspacePointer();
   dropIndicator.hidden = true;
   if (!cancel && (drag.started || drag.held || drag.context)) { e?.preventDefault(); e?.stopPropagation(); }
   updateZen();
 }
 let edgeContact = null, edgeContacts = 0, lastPointerKind = "mouse";
+function edgeReply(reply, ended = false) {
+  const edge = edgeContact;
+  if (!edge) return;
+  edge.cursor = ended ? null : reply.edge_cursor ?? null;
+  edge.hold = !!reply.edge_hold || !!reply.edge_select_on_release;
+  edge.selectOnRelease = !!reply.edge_select_on_release;
+  if (ended || reply.edge_retired || !edge.cursor && !reply.edge_pending) edgeContact = null;
+  workspacePointer();
+}
 function edgeInput(phase, e, contact = "free") {
-  return input({ type: "edge_contact", id: BigInt(edgeContact.id), phase, kind: e.pointerType || "mouse", contact,
+  const reply = input({ type: "edge_contact", id: BigInt(edgeContact.id), phase, kind: e.pointerType || "mouse", contact,
     position: [e.clientX, e.clientY], viewport: workspaceViewport, time_ns: BigInt(Math.round(performance.now() * 1e6)) });
+  edgeReply(reply, phase === "up" || phase === "cancel");
+  return reply;
 }
 function endEdgeContact(e, phase) {
   const edge = edgeContact;
   if (!edge || !e.isTrusted || edge.pointerId !== e.pointerId) return;
+  const claimed = !!edge.cursor;
   edgeInput(phase, e);
-  edgeContact = null;
-  if (!edge.claimed) return;
-  if (workspace.hasPointerCapture(e.pointerId)) workspace.releasePointerCapture(e.pointerId);
-  workspaceCursor(null);
+  if (!claimed) return;
   e.preventDefault(); e.stopImmediatePropagation();
 }
 workspace.addEventListener("pointerdown", e => {
@@ -1258,32 +1275,25 @@ workspace.addEventListener("pointerdown", e => {
   lastPointerKind = e.pointerType || "mouse";
   if (e.button !== 0) return;
   if (edgeContact) {
-    if (!edgeContact.claimed && e.pointerType === "touch") { edgeInput("cancel", e); edgeContact = null; }
+    if (!edgeContact.cursor && e.pointerType === "touch") edgeInput("cancel", e);
     return;
   }
   const contact = e.isPrimary ? edgeContactClass(e.target, canvas) : null;
   if (!contact) return;
-  edgeContact = { id: ++edgeContacts, pointerId: e.pointerId, canvas: e.target === canvas, claimed: false, hold: false };
-  const reply = edgeInput("down", e, contact);
-  edgeContact.selectOnRelease = edgeContact.hold = !!reply.edge_select_on_release;
-  if (!reply.edge_pending) edgeContact = null;
+  edgeContact = { id: ++edgeContacts, pointerId: e.pointerId, canvas: e.target === canvas, cursor: null, hold: false };
+  edgeInput("down", e, contact);
 }, { capture: true });
 workspace.addEventListener("pointermove", e => {
   const edge = edgeContact;
   if (!edge || !e.isTrusted || edge.pointerId !== e.pointerId) return;
-  if (!edge.claimed && (workspaceGesture?.started || workspaceGesture?.held)) { edgeInput("cancel", e); edgeContact = null; return; }
+  if (!edge.cursor && (workspaceGesture?.started || workspaceGesture?.held)) { edgeInput("cancel", e); return; }
+  const claimed = !!edge.cursor;
   const reply = edgeInput("move", e);
-  if (!reply.edge_cursor && !reply.edge_pending) { edgeContact = null; return; }
-  edge.hold = !!reply.edge_hold;
-  if (reply.edge_cursor) {
-    if (!edge.claimed) {
-      edge.claimed = true;
-      if (workspaceGesture && !workspaceGesture.started) endWorkspaceGesture(null, true);
-      customization.dismissContext();
-      if (edge.canvas) canvas.dispatchEvent(new PointerEvent("pointercancel", { pointerId: e.pointerId, pointerType: e.pointerType, clientX: e.clientX, clientY: e.clientY, bubbles: true }));
-      workspace.setPointerCapture(e.pointerId);
-    }
-    workspaceCursor(reply.edge_cursor);
+  if (!edgeContact) return;
+  if (edge.cursor && !claimed) {
+    if (workspaceGesture && !workspaceGesture.started) endWorkspaceGesture(null, true);
+    customization.dismissContext();
+    if (edge.canvas) canvas.dispatchEvent(new PointerEvent("pointercancel", { pointerId: e.pointerId, pointerType: e.pointerType, clientX: e.clientX, clientY: e.clientY, bubbles: true }));
   }
   if (reply.edge_cursor || reply.edge_hold) { e.preventDefault(); e.stopImmediatePropagation(); }
 }, { capture: true });
@@ -1323,8 +1333,7 @@ workspace.addEventListener("pointermove", e => {
     customization.dismissContext();
     drag.started = true;
     workspaceGestureSourceObserver.disconnect();
-    // Capture on the stable workspace before Rust tears off/rebuilds a tab.
-    workspace.setPointerCapture(e.pointerId);
+    workspacePointer();
     groups.forEach(node => node.getAnimations().forEach(a => a.cancel()));
     if (drag.tile) {
       dragItem = drag.action.item; drag.node.classList.add("drag-source"); updateZen();
@@ -1337,19 +1346,16 @@ workspace.addEventListener("pointermove", e => {
   }
   if (drag.tile) showDropHint(dropHint(e, drag.action.item));
   else workspaceGestureEvent("move", e);
-  if (drag.action.type === "drag_workspace") {
-    workspaceCursor("grabbing");
-  } else {
-    workspaceCursor(drag.cursor);
-  }
+  workspacePointer();
   e.preventDefault(); e.stopPropagation();
 }, { capture: true });
 workspace.addEventListener("touchmove", e => {
-  if ((workspaceGesture?.context || edgeContact?.hold || edgeContact?.claimed) && e.touches.length === 1 && e.cancelable) e.preventDefault();
+  if ((workspaceGesture?.context || edgeContact?.hold || edgeContact?.cursor) && e.touches.length === 1 && e.cancelable) e.preventDefault();
 }, { passive: false });
 window.addEventListener("pointerup", e => endWorkspaceGesture(e), { capture: true });
 window.addEventListener("pointercancel", e => endWorkspaceGesture(e, true), { capture: true });
 workspace.addEventListener("lostpointercapture", e => {
+  if (e.target === workspace && edgeContact?.pointerId === e.pointerId) endEdgeContact(e, "cancel");
   // Touch starts with implicit capture on the tab. Transferring capture to the
   // stable workspace releases that child; only losing our own capture cancels.
   if (e.target === workspace || (!workspace.hasPointerCapture(e.pointerId)
@@ -1357,10 +1363,7 @@ workspace.addEventListener("lostpointercapture", e => {
 });
 function armWorkspaceDrag(drag) {
   drag.held = true;
-  if (drag.waitForHold && ["mouse", "pen"].includes(drag.start.pointerType))
-    workspaceCursor("grab");
-  // Keep this contact even when a context menu covers the original tile/tab.
-  workspace.setPointerCapture(drag.id);
+  workspacePointer();
 }
 workspace.addEventListener("workspace-context-claimed", e => {
   const drag = workspaceGesture;
@@ -1845,7 +1848,9 @@ window.addEventListener("blur", () => {
   endWorkspaceGesture(null, true);
   cursorInput(null);
   heldPointers.clear();
-  if (input({ type: "blur" }).cancel_paint && lastPenEvent)
+  const reply = input({ type: "blur" });
+  edgeReply(reply);
+  if (reply.cancel_paint && lastPenEvent)
     queuePen(lastPenEvent, 4);
 });
 function tabHits() {

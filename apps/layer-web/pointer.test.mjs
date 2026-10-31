@@ -185,7 +185,7 @@ function harness({ raw = false, prediction = false, paint: allowPaint = true } =
       if (contact?.id === event.id && ["up", "cancel"].includes(event.phase)) contact = null;
       return { paint, handled };
     },
-    cursorInput(event) { cursors.push(event?.type ?? null); }, wake() {},
+    cursorInput(event) { cursors.push(event?.type ?? null); }, edgeReply() {}, wake() {},
     heldPointers: new Map(), workspaceGesture: null,
     workspace: {setPointerCapture: id => captures.push(id),classList:{contains:()=>false}},
     document: {documentElement: {hasAttribute: name => attributes.has(name), toggleAttribute: (name, value) => value ? attributes.add(name) : attributes.delete(name)}, addEventListener() {}},

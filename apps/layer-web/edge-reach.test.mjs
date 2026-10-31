@@ -28,6 +28,26 @@ export async function checkEdgeReach({call,evaluate,settle}) {
   const extent=async id=>(await snapshot()).layout.bands.find(b=>b.id===id).extent;
   try {
     await call('Page.bringToFront');
+    const blurred=[];
+    for(const theme of ['light','dark']) {
+      await send({type:'set_theme',theme});
+      await restore([{id:40,edge:'left',extent:320,root:tabs(41,['stats'])}]);
+      const layout=await resolved(),edge=layout.dividers.find(d=>d.id===40),group=layout.groups.find(g=>g.id===41);
+      const start={x:edge.bounds.x-20,y:group.bounds.y+group.bounds.height-60},moved={x:start.x+60,y:start.y};
+      const feedback=()=>evaluate(`(()=>{const workspace=document.querySelector('#workspace');return{cursor:workspace.dataset.workspaceCursor??null,captured:workspace.hasPointerCapture(1),canvasResize:getComputedStyle(document.querySelector('#canvas')).cursor==='col-resize'}})()`);
+      await call('Input.dispatchMouseEvent',{type:'mouseMoved',...start});
+      await input('down',start);await input('move',moved);await settle();
+      assert.deepEqual(await feedback(),{cursor:'col-resize',captured:true,canvasResize:true},`${theme}: the column edge owns resize feedback and capture`);
+      await evaluate("window.dispatchEvent(new Event('blur'))");
+      const afterBlur=await feedback();
+      await input('move',{...moved,x:moved.x+1});await settle();
+      const afterMove=await feedback();
+      await input('up',moved);await settle();
+      blurred.push({theme,afterBlur,afterMove,afterRelease:await feedback()});
+    }
+    const retired={cursor:null,captured:false,canvasResize:false};
+    assert.deepEqual(blurred,['light','dark'].map(theme=>({theme,afterBlur:retired,afterMove:retired,afterRelease:retired})),
+      'Blur retires claimed column-edge cursor and capture before further pointer input');
     for(const theme of ['light','dark']) for(device of ['mouse','pen','touch']) {
       await send({type:'set_theme',theme});
       await restore([{id:40,edge:'left',extent:320,root:tabs(41,['stats'])}]);
