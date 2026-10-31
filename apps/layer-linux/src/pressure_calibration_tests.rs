@@ -11,6 +11,7 @@ fn native_pressure_calibration() {
     opaque_surfaces_own_their_translucent_controls();
     let w = Workspace::with_project(&app, Some((new_drawing_at(256,256,SampleDepth::F32), None)));
     w.window.set_default_size(1100,800); w.window.maximize(); w.window.present(); ready(&w);
+    set_transparency(&w, "LAYER_MOTION_TRANSPARENCY");
     let theme = if std::env::var("CAPY_NATIVE_TEST_THEME").is_ok_and(|v|v=="dark") { Theme::Dark } else { Theme::Light };
     w.dispatch(UiAction::SetTheme{theme:Some(theme)});
     w.dispatch(UiAction::SetBrushSize{value:8.});
@@ -23,8 +24,23 @@ fn native_pressure_calibration() {
         let adjust=find_named(w.preferences.dialog.upcast_ref(),"setting-pen-pressure-action").unwrap();
         super::histogram::scroll_to(&adjust);pump(100);
         let at=screen_point(&adjust,&w.window,[0.5,0.5]);
+        let css = gtk::CssProvider::new();
+        css.load_from_string(".painted-calibration-opening { background-color: #ff00ff; background-image: none; }");
+        w.pressure_calibration.root.add_css_class("painted-calibration-opening");
+        gtk::style_context_add_provider_for_display(&w.surface.display(), &css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
+        let frames = sample_after_paint(&w.surface, || ());
         native.perform(json!([contact(device,"down",at),contact(device,"up",at)]));
         until(|| !w.preferences.dialog.is_mapped(),"preferences closes before calibration");pump(250);
+        let frames = frames.finish();
+        let final_bounds = frames.last().and_then(|frame| frame.color_bounds(&w.window, [255, 0, 255, 255]))
+            .expect("opening pressure calibration paints its panel");
+        for frame in frames {
+            if let Some(bounds) = frame.color_bounds(&w.window, [255, 0, 255, 255]) {
+                assert_eq!(bounds, final_bounds, "pressure calibration first paint has its measured extent in frame {}", frame.time);
+            }
+        }
+        w.pressure_calibration.root.remove_css_class("painted-calibration-opening");
+        gtk::style_context_remove_provider_for_display(&w.surface.display(), &css);
         let panel = w.pressure_calibration.root.upcast_ref::<gtk::Widget>();
         assert!(panel.is_mapped()); assert!(!state(&w).settings_open);
         if device=="mouse" {
@@ -277,6 +293,7 @@ fn native_tilt_calibration() {
     untouched_tilt_first_contact(&app,&mut native,&std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap()));
     let w=Workspace::with_project(&app,Some((new_drawing_at(256,256,SampleDepth::F32),None)));
     w.window.set_default_size(1100,800);w.window.maximize();w.window.present();ready(&w);
+    set_transparency(&w, "LAYER_MOTION_TRANSPARENCY");
     let theme=if std::env::var("CAPY_NATIVE_TEST_THEME").is_ok_and(|v|v=="dark"){Theme::Dark}else{Theme::Light};
     w.dispatch(UiAction::SetTheme{theme:Some(theme)});
     native.ready();
@@ -487,16 +504,65 @@ fn artwork_history(w:&Workspace)->(u64,bool,bool,u64) {
 
 fn measured_extent_recovers(w:&Rc<Workspace>,tilt:bool) {
     let panel=w.pressure_calibration.root.upcast_ref::<gtk::Widget>();
+    let original_bounds=response_view(w,tilt).bounds;
+    let dispatch=|action| w.dispatch(if tilt {UiAction::TiltCalibration {action:layer_ui::TiltCalibrationAction::Panel {action}}}else{UiAction::PressureCalibration {action}});
+    let css = gtk::CssProvider::new();
+    css.load_from_string(".painted-calibration-panel { background-color: #ff00ff; background-image: none; }");
+    panel.add_css_class("painted-calibration-panel");
+    gtk::style_context_add_provider_for_display(&w.surface.display(), &css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
+    assert!(idle_paint(panel).color_bounds(&w.window, [255, 0, 255, 255]).is_some(),
+        "calibration panel paints before resizing");
+    let maximized = w.window.is_maximized();
+    let previous = [w.window.width(), w.window.height()];
+    let frames = sample_after_paint(panel, glib::clone!(#[weak] w, #[upgrade_or_default] move ||
+        ([w.surface.width(), w.surface.height()], w.pressure_calibration.root.compute_bounds(&w.surface))));
+    w.window.unmaximize();
+    w.window.set_default_size(900, 650);
+    pump(300);
+    let frames = frames.finish();
+    let size = [w.surface.width(), w.surface.height()];
+    assert_ne!(size, previous, "calibration resize changes the native viewport");
+    let final_bounds = frames.last().and_then(|frame| frame.color_bounds(&w.window, [255, 0, 255, 255]))
+        .expect("resized calibration panel paints its marked background");
+    let placement = panel.compute_bounds(&w.surface).unwrap();
+    assert!(placement.x() >= 0. && placement.y() >= 0.
+        && placement.x() + placement.width() <= size[0] as f32 + 1.
+        && placement.y() + placement.height() <= size[1] as f32 + 1., "resized calibration fits its viewport");
+    for frame in frames.iter().filter(|frame| frame.state.0 == size) {
+        assert_eq!(frame.color_bounds(&w.window, [255, 0, 255, 255]), Some(final_bounds),
+            "calibration real resize paints its measured extent immediately: frame {}, viewport {size:?}", frame.time);
+        assert_eq!(frame.state.1, Some(placement), "painted calibration uses its current viewport placement: frame {}", frame.time);
+    }
+    if maximized { w.window.maximize(); } else { w.window.set_default_size(previous[0], previous[1]); }
+    pump(300);
     let native=panel.compute_bounds(&w.surface).unwrap();let view=response_view(w,tilt);
     let action=layer_ui::PressureCalibrationAction::Measure {
         extent:[native.width()-8.,native.height()-8.],viewport:[w.surface.width() as f32,w.surface.height() as f32],
     };
-    w.dispatch(if tilt {UiAction::TiltCalibration {action:layer_ui::TiltCalibrationAction::Panel {action}}}else{UiAction::PressureCalibration {action}});
+    let reference = idle_paint(panel).color_bounds(&w.window, [255, 0, 255, 255])
+        .expect("calibration panel paints its marked background");
+    let frames = sample_after_paint(panel, || ());
+    dispatch(action);
     pump(300);
+    let frames = frames.finish();
+    assert!(!frames.is_empty(), "calibration remeasurement paints a frame");
+    for frame in frames {
+        let bounds = frame.color_bounds(&w.window, [255, 0, 255, 255]);
+        assert_eq!(bounds, Some(reference), "calibration remeasurement preserves its painted extent in frame {}", frame.time);
+    }
+    panel.remove_css_class("painted-calibration-panel");
+    gtk::style_context_remove_provider_for_display(&w.surface.display(), &css);
     assert!(panel.is_mapped(),"cached native extent heals a mismatched shared measurement");
     assert_eq!(panel.compute_bounds(&w.surface).unwrap(),native,"healing preserves native extent and placement");
     assert_eq!(response_view(w,tilt).bounds,view.bounds,"native remeasurement restores the actual shared extent");
     assert_eq!(response_view(w,tilt).editor.points,view.editor.points);
+    let position=[original_bounds.x,original_bounds.y];
+    let viewport=[w.surface.width() as f32,w.surface.height() as f32];
+    for (phase,position) in [(ContactPhase::Down,[view.bounds.x,view.bounds.y]),(ContactPhase::Move,position),(ContactPhase::Up,position)] {
+        dispatch(layer_ui::PressureCalibrationAction::Drag {phase,position,viewport});
+    }
+    pump(100);
+    assert_eq!(response_view(w,tilt).bounds,original_bounds,"resize probe restores the utility placement");
 }
 
 fn untouched_tilt_first_contact(app:&NativeTestApp,native:&mut RemoteInput,output:&std::path::Path) {

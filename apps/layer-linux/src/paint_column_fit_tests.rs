@@ -39,6 +39,36 @@ fn native_default_workspace_panel_groups() {
     w.window.destroy();pump(100);
 }
 
+fn painted_layer_footer_width(w: &Rc<Workspace>) {
+    let settings = gtk::Settings::default().unwrap();
+    let animations = settings.is_gtk_enable_animations();
+    settings.set_gtk_enable_animations(false);
+    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState::default()) });
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    w.dispatch(UiAction::MovePanel { panel: Panel::Layers, target: DockTarget::Float { position: [500., 200.] }, viewport });
+    let mut fixture = state(w).workspace;
+    fixture.layout.floating.last_mut().unwrap().width = 420.;
+    fixture.layout.floating.last_mut().unwrap().height = Some(400.);
+    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(fixture.clone()) });
+    pump(200);
+    let more = find_named(w.layer_panel.footer.upcast_ref(), "layer-actions").unwrap();
+    let room = w.layer_panel.footer.parent().unwrap();
+    let css = paint_color(&more, "#ff00ff");
+    assert!(idle_paint(&room).color_bounds(&w.window, [255, 0, 255, 255]).is_some(), "wide Layers paints its actions button");
+    let frames = sample_after_paint(&room, || ());
+    fixture.layout.floating.last_mut().unwrap().width = 220.;
+    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(fixture) });
+    pump(200);
+    let frames = frames.finish();
+    assert!(frames.last().unwrap().color_bounds(&w.window, [255, 0, 255, 255]).is_some(), "settled narrow Layers paints its actions button");
+    for frame in frames {
+        assert!(frame.color_bounds(&w.window, [255, 0, 255, 255]).is_some(),
+            "narrow Layers paints its actions button in the first allocation: frame {}", frame.time);
+    }
+    gtk::style_context_remove_provider_for_display(&w.surface.display(), &css);
+    settings.set_gtk_enable_animations(animations);
+}
+
 #[test]
 #[ignore = "private Wayland display and GPU"]
 fn native_paint_fitted_columns() {
@@ -53,6 +83,8 @@ fn native_paint_fitted_columns() {
         let w = Workspace::with_project(&app, Some((project, None)));
         w.window.present();
         ready(&w);
+        set_transparency(&w, "LAYER_MOTION_TRANSPARENCY");
+        if !hdr { painted_layer_footer_width(&w); }
         w.dispatch(UiAction::RestoreWorkspace {
             workspace: Box::new(layer_ui::WorkspaceState {
                 layout: layer_ui::WorkspacePreset::Illustrator.layout(Platform::Gtk),

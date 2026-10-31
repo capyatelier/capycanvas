@@ -39,6 +39,7 @@ fn start(id: &str) -> (NativeTestApp, Rc<Workspace>, RemoteInput) {
     w.window.maximize();
     w.window.present();
     pump(1200);
+    set_transparency(&w, "LAYER_MOTION_TRANSPARENCY");
     w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
     pump(200);
     let input = RemoteInput::new().settle_ms(150);
@@ -71,6 +72,28 @@ fn native_notice_move_on_locked_layer() {
         "Move on a locked layer shows the notice",
     );
     assert!(notice_action(&w).is_none(), "the refusal has no action");
+    let css = paint_color(&w.notice.root, "#ff00ff");
+    assert!(idle_paint(&w.window).color_bounds(&w.window, [255, 0, 255, 255]).is_some(), "shown notice paints before resizing");
+    let frames = sample_after_paint(&w.window, glib::clone!(#[weak] w, #[upgrade_or_default] move || {
+        let placement = w.notice_placement();
+        let point = w.surface.compute_point(&w.window, &gtk::graphene::Point::new(placement.x, placement.y)).unwrap();
+        (point.x(), point.y())
+    }));
+    w.window.unmaximize();
+    w.window.set_default_size(1100, 700);
+    pump(300);
+    let frames = frames.finish();
+    assert!(!frames.is_empty(), "resizing paints the notice");
+    assert!(frames.last().unwrap().color_bounds(&w.window, [255, 0, 255, 255]).is_some(), "notice paints after resizing settles");
+    for frame in frames {
+        let bounds = frame.color_bounds(&w.window, [255, 0, 255, 255]).expect("a shown notice stays painted during resize");
+        assert!((bounds.x() + bounds.width() * 0.5 - frame.state.0).abs() <= 2.
+            && (bounds.y() + bounds.height() - frame.state.1).abs() <= 2.,
+            "notice paints at the current viewport anchor: frame {}, bounds {bounds:?}, anchor {:?}", frame.time, frame.state);
+    }
+    gtk::style_context_remove_provider_for_display(&w.surface.display(), &css);
+    w.window.maximize();
+    pump(300);
     assert!(!w.status.is_visible(), "refusals are not host errors");
     let first = state(&w).notice.unwrap().id;
     input.click(point);

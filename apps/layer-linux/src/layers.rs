@@ -11,6 +11,40 @@ use std::{
 mod connections;
 mod touch;
 
+mod footer {
+    use super::*;
+    use gtk::subclass::prelude::*;
+    #[derive(Default)]
+    pub struct Footer;
+    #[glib::object_subclass]
+    impl ObjectSubclass for Footer {
+        const NAME: &'static str = "CapyLayerFooter";
+        type Type = super::Footer;
+        type ParentType = gtk::Widget;
+    }
+    impl ObjectImpl for Footer {
+        fn dispose(&self) {
+            if let Some(child) = self.obj().first_child() { child.unparent(); }
+        }
+    }
+    impl WidgetImpl for Footer {
+        fn measure(&self, axis: gtk::Orientation, size: i32) -> (i32, i32, i32, i32) {
+            let Some(child) = self.obj().first_child() else { return (0, 0, -1, -1) };
+            let (minimum, natural, lower, upper) = child.measure(axis, size);
+            (if axis == gtk::Orientation::Horizontal { 0 } else { minimum }, natural, lower, upper)
+        }
+        fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
+            let child = self.obj().first_child().and_downcast::<gtk::Box>().unwrap();
+            fit_footer(&child, width);
+            child.allocate(width, height, baseline, None);
+        }
+    }
+}
+glib::wrapper! {
+    pub struct Footer(ObjectSubclass<footer::Footer>) @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+
 struct LayerCopy {
     layer: layer_ui::native_copy::LayerCopy,
     choose_texture: std::sync::Arc<str>,
@@ -1060,16 +1094,9 @@ impl LayerPanel {
         root.append(&overlay);
         let footer = gtk::Box::new(gtk::Orientation::Horizontal, layer_ui::PANEL_CONTROL_METRICS.compound_spacing as i32);
         footer.add_css_class("layer-footer");
-        let footer_room = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::External)
-            .vscrollbar_policy(gtk::PolicyType::Never)
-            .child(&footer)
-            .build();
-        let fitted = Cell::new(-1);
-        footer_room.add_tick_callback(glib::clone!(#[weak] footer, #[upgrade_or] glib::ControlFlow::Break, move |room, _| {
-            if fitted.replace(room.width()) != room.width() { fit_footer(&footer, room.width()); }
-            glib::ControlFlow::Continue
-        }));
+        let footer_room: Footer = glib::Object::new();
+        footer_room.set_overflow(gtk::Overflow::Hidden);
+        footer.set_parent(&footer_room);
         root.append(&footer_room);
         Self {
             copy: copy.clone(),

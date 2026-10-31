@@ -195,6 +195,7 @@ mod allocation {
         fn size_allocate(&self, width: i32, height: i32, _: i32) {
             if let Some(owner) = self.owner.borrow().upgrade() {
                 owner.present_toolbars();
+                owner.pressure_calibration.measure(&owner);
             }
             let mut resolved = self.layout.borrow().workspace(
                 width as f32,
@@ -337,6 +338,7 @@ mod allocation {
                 }
                 owner.columns.present_connections(&owner, &resolved);
                 owner.queue_panel_measurements();
+                if owner.notice.root.is_visible() { owner.place_notice(); }
                 owner.present_popovers();
                 let scale = owner.area.scale_factor() as u32;
                 let extent = [
@@ -1375,12 +1377,6 @@ impl Workspace {
         *this.surface.imp().owner.borrow_mut() = Rc::downgrade(&this);
         this.build_controls(&brushes, &sizes);
         this.canvas_bar.bind(&this);
-        let placed = Cell::new([0; 2]);
-        this.notice.root.add_tick_callback(glib::clone!(#[weak] this, #[upgrade_or] glib::ControlFlow::Break, move |_, _| {
-            let size = [this.surface.width(), this.surface.height()];
-            if placed.replace(size) != size { this.place_notice(); }
-            glib::ControlFlow::Continue
-        }));
         this.view_info.bind(&this);
         this.selection_refine.bind(&this, |apply| UiAction::Selection {
             action: if apply { layer_ui::SelectionAction::ApplyResize } else { layer_ui::SelectionAction::CancelResize },
@@ -3165,6 +3161,14 @@ impl Workspace {
         if self.panel_measurement_report.borrow().as_ref()==Some(&measurements){return;}
         *self.panel_measurement_report.borrow_mut()=Some(measurements.clone());
         self.dispatch(UiAction::MeasurePanels { measurements });
+    }
+    pub(crate) fn measure(self: &Rc<Self>, action: UiAction) {
+        let result = self.gpu.borrow_mut().as_mut().map(|gpu| gpu.measure(action));
+        match result {
+            Some(Ok(change)) if change.regions != 0 || change.canvas_wake => self.wake(),
+            Some(Err(error)) => eprintln!("Native measurement: {error}"),
+            _ => {}
+        }
     }
     fn panel_metrics(&self)->layer_ui::PanelMetricContext {
         let scale=self.area.scale_factor().max(1) as f32;

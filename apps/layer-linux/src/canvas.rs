@@ -14,6 +14,7 @@ pub struct GpuCanvas {
     // Alive until the worker and its borrowed Wayland handles are gone.
     _parent: gtk::gdk::Surface,
     pub needs_present: bool,
+    pending_regions: u32,
 }
 impl GpuCanvas {
     pub fn reattach(&mut self, area: &gtk::Picture) -> Result<(), String> {
@@ -96,6 +97,7 @@ impl GpuCanvas {
             view_color: Default::default(),
             _parent: parent,
             needs_present: true,
+            pending_regions: 0,
         })
     }
     pub async fn prepare_import(&mut self, cancelled: impl Fn() -> bool) -> Result<(), String> {
@@ -124,6 +126,11 @@ impl GpuCanvas {
             if std::time::Instant::now() >= deadline { return Err("Project canvas preparation timed out".into()); }
             gtk::glib::timeout_future(std::time::Duration::from_millis(2)).await;
         }
+    }
+    pub fn measure(&mut self, action: layer_ui::UiAction) -> Result<UiChange, String> {
+        let change = self.session.dispatch(action)?;
+        self.pending_regions |= change.regions;
+        Ok(change)
     }
     pub fn stroke_pacing(&self) -> bool {
         let engine = self.session.engine();
@@ -181,7 +188,7 @@ impl GpuCanvas {
             });
         self.session.renderer_mut().stroke_target = target;
         let mut changed = self.session.frame(now_ns, presentation_ns)?;
-        changed.regions |= resized.regions;
+        changed.regions |= resized.regions | std::mem::take(&mut self.pending_regions);
         if view_color_changed {
             changed.regions |= layer_ui::regions::BRUSH
                 | layer_ui::regions::SETTINGS

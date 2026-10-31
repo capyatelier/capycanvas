@@ -216,16 +216,26 @@ impl PressurePanel {
             self.body.prepend(&editor.root); *self.editor.borrow_mut() = Some(editor);
         }
         self.editor.borrow().as_ref().unwrap().update(&view.editor, &w.localization());
+        self.root.set_visible(true);
+        w.surface.queue_allocate();
+    }
+    pub(super) fn measure(&self, w: &Rc<Workspace>) {
+        let Some(bounds) = self.bounds.get() else { return };
+        if !self.root.is_visible() { return; }
+        let viewport = [w.surface.width() as f32, w.surface.height() as f32];
         let width = 384f32.max(self.column.measure(gtk::Orientation::Horizontal,-1).0 as f32).min(viewport[0]);
         let extent = [width,360f32.max(self.column.measure(gtk::Orientation::Vertical,width as i32).1 as f32).min(viewport[1])];
-        let fitted=fits(extent);
-        if !fitted || self.measured.get() != Some((extent, viewport)) {
-            self.measured.set(Some((extent, viewport)));
-            let action=self.panel_action(PressureCalibrationAction::Measure{extent,viewport});
-            glib::idle_add_local_once(glib::clone!(#[weak] w, move || {w.dispatch(action);}));
+        if self.measured.replace(Some((extent, viewport))) != Some((extent, viewport))
+            || (bounds.width-extent[0]).abs() >= 0.5 || (bounds.height-extent[1]).abs() >= 0.5 {
+            w.measure(self.panel_action(PressureCalibrationAction::Measure{extent,viewport}));
+            let bounds = w.gpu.borrow().as_ref().and_then(|gpu| {
+                let state = gpu.session.state();
+                state.tilt_calibration.as_ref().map(|view| view.panel.bounds)
+                    .or_else(|| state.pressure_calibration.as_ref().map(|view| view.bounds))
+            });
+            self.bounds.set(bounds);
+            self.pending_bounds.set(None);
         }
-        self.root.set_visible(fitted);
-        if !fitted {self.bounds.set(None);self.pending_bounds.set(None);}
     }
     pub(super) fn present_motion(&self, w: &Workspace) {
         if let Some(bounds) = self.pending_bounds.take() {

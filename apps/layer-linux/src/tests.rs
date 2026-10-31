@@ -140,6 +140,21 @@ struct PaintedSample<T> {
     state: T,
 }
 impl<T> PaintedSample<T> {
+    fn color_bounds(&self, window: &adw::ApplicationWindow, color: [u8; 4]) -> Option<gtk::graphene::Rect> {
+        let texture = window.renderer().unwrap().render_texture(&self.node, Some(&self.bounds));
+        let (width, height) = (texture.width() as usize, texture.height() as usize);
+        let mut pixels = vec![0; width * height * 4];
+        texture.download(&mut pixels, width * 4);
+        let mut bounds = None::<[usize; 4]>;
+        for (i, pixel) in pixels.chunks_exact(4).enumerate() {
+            if pixel.iter().zip(color).all(|(a, b)| a.abs_diff(b) <= 1) {
+                let (x, y) = (i % width, i / width);
+                bounds = Some(bounds.map_or([x, y, x, y], |b| [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)]));
+            }
+        }
+        bounds.map(|b| gtk::graphene::Rect::new(self.bounds.x() + b[0] as f32, self.bounds.y() + b[1] as f32,
+            (b[2] - b[0] + 1) as f32, (b[3] - b[1] + 1) as f32))
+    }
     fn pixel(&self, window: &adw::ApplicationWindow, point: [f32; 2]) -> [u8; 4] {
         let texture = window.renderer().unwrap().render_texture(&self.node, Some(
             &gtk::graphene::Rect::new(self.bounds.x() + point[0], self.bounds.y() + point[1], 1., 1.)));
@@ -181,6 +196,13 @@ fn idle_paint(widget: &impl IsA<gtk::Widget>) -> PaintedSample<()> {
     let frames = sample_after_paint(widget, || ());
     widget.queue_draw(); pump(30);
     frames.finish().pop().unwrap()
+}
+
+fn paint_color(widget: &impl IsA<gtk::Widget>, color: &str) -> gtk::CssProvider {
+    let provider = gtk::CssProvider::new();
+    provider.load_from_string(&format!("#{} {{ background-color: {color}; background-image: none; border-color: {color}; box-shadow: none; transition: none; }}", widget.widget_name()));
+    gtk::style_context_add_provider_for_display(&widget.display(), &provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2);
+    provider
 }
 
 fn idle_hover_pixel(w: &Workspace, container: &impl IsA<gtk::Widget>, child: &impl IsA<gtk::Widget>, at: [f32; 2]) -> [u8; 4] {
