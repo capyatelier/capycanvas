@@ -571,7 +571,7 @@ try {
  Wait-Until {!(Model).state.workspace.zen_mode} 'Tab did not leave Zen' 5
  $checks.visible_in_zen='passed'
 
- Invoke-Id $selectionTile;Subtool 'polygon_select'
+ Subtool 'polygon_select'
  foreach($point in @(@(($cx-120),($cy-80)),@(($cx+120),($cy-80)),@(($cx+140),($cy+90)))){
   [CapyRowPointer]::Down('mouse',$point[0],$point[1]);Start-Sleep -Milliseconds 30;[CapyRowPointer]::Up();Start-Sleep -Milliseconds 120
  }
