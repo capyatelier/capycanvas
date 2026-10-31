@@ -1,8 +1,9 @@
 param([Parameter(Mandatory)][string]$Executable,
-    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen','edge-dark-mouse','edge-dark-touch','edge-dark-pen','edge-light-mouse','edge-light-touch','edge-light-pen','row-pair-dark','row-pair-light','inertia-dark','inertia-light','native-controls-dark','native-controls-light','blenders-dark','blenders-light','sliders-dark','sliders-light','blender-controls-dark','blender-controls-light','hdr-f16-dark','hdr-f16-light','slider-preference-dark','slider-preference-light','retire-dark-mouse')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$ZenOnly,[switch]$SlidersOnly,[switch]$BlendersOnly,[switch]$EraserOnly,[switch]$EraserLightOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[switch]$HdrPreviewOnly,[switch]$HdrContactsOnly,[switch]$ColorUndoOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
+    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen','edge-dark-mouse','edge-dark-touch','edge-dark-pen','edge-light-mouse','edge-light-touch','edge-light-pen','row-pair-dark','row-pair-light','card-metrics-dark','card-metrics-light','inertia-dark','inertia-light','native-controls-dark','native-controls-light','blenders-dark','blenders-light','sliders-dark','sliders-light','blender-controls-dark','blender-controls-light','hdr-f16-dark','hdr-f16-light','slider-preference-dark','slider-preference-light','retire-dark-mouse')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$ZenOnly,[switch]$SlidersOnly,[switch]$BlendersOnly,[switch]$EraserOnly,[switch]$EraserLightOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[switch]$HdrPreviewOnly,[switch]$HdrContactsOnly,[switch]$ColorUndoOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
 $ErrorActionPreference='Stop'
 $retireOnly=$Variant -eq 'retire-dark-mouse';if($retireOnly){$Variant='dark-mouse'}
 $edgeOnly=$Variant.StartsWith('edge-');if($edgeOnly){$Variant=$Variant.Substring(5)}
+$cardMetricsOnly=$Variant.StartsWith('card-metrics-');if($cardMetricsOnly){$Variant=$Variant.Substring(13)+'-mouse'}
 $rowPairOnly=$Variant.StartsWith('row-pair-');if($rowPairOnly){$NativeControlsOnly=$true;$Variant=$Variant.Substring(9)+'-touch'}
 $inertiaOnly=$Variant.StartsWith('inertia-');if($inertiaOnly){$NativeControlsOnly=$true;$Variant=$Variant.Substring(8)+'-touch'}
 if($Variant -match '^native-controls-(dark|light)$'){$NativeControlsOnly=$true;$Variant=$Matches[1]+'-touch'}
@@ -88,6 +89,49 @@ function Center([long]$Id,$Presentation=$null){
     if(!$Presentation){$Presentation=Packet $Id};$color=$Presentation.color
     if($color){$b=(Control "tool-bubble-$Id" -Arranged).Current.BoundingRectangle;return @{x=[int][Math]::Round($b.X-$color.bounds.x*$scale);y=[int][Math]::Round($b.Y-$color.bounds.y*$scale)}}
     At "tool-bubble-$Id"
+}
+function Card-MetricReceipt([long]$Id,[string]$Stage){
+    Wait-Until {@((View $Id).card.metrics).Count -eq 2} 'Layers card did not acknowledge its raw native measurements'
+    $card=Card $Id;$view=View $Id
+    $list=(Control 'layer-list' -Within $card -Arranged).Current.BoundingRectangle
+    $footer=(Control "bubble-properties-$Id" -Within $card -Arranged).Current.BoundingRectangle
+    $rows=@((Model).state.layers).Count
+    $metrics=$view.card.metrics
+    if($metrics[0].fixed_height -lt 0 -or $metrics[0].unit_height -le 0 -or $metrics[1] -le 0){throw 'Layers card published invalid raw native measurements'}
+    if($view.layers -ne $rows -or $list.Height -le 0 -or $footer.Top -le $list.Top){throw 'Layers card lost its current native list allocation or row count'}
+    $receipt=@{stage=$Stage;id=$Id;rows=$rows;view=$view;native_list=@($list.X,$list.Y,$list.Width,$list.Height);native_footer=@($footer.X,$footer.Y,$footer.Width,$footer.Height);native_page_span=$footer.Top-$list.Top}
+    $receipt|ConvertTo-Json -Depth 20|Set-Content (Join-Path $run ($Stage+'.json'))
+    Capture $Stage -Composed -WithModel
+    $receipt
+}
+function Check-CardMetrics{
+    $id=Take 'panel' 'layers' ($width*.38) ($height*.56)
+    Wait-Until {$null -ne (View $id).card} 'Layers metric card did not open'
+    $before=Card-MetricReceipt $id 'card-metrics-before'
+    Invoke "bubble-properties-$id";Wait-Until {(View $id).card.properties} 'Metric card Properties did not open'
+    $null=Card $id
+    Capture 'card-metrics-properties-before' -Composed -WithModel
+    Invoke "bubble-properties-$id";Wait-Until {!(View $id).card.properties} 'Metric card did not return to Layers'
+    Tap (Screen ($width*.9) ($height*.8));Wait-Until {$null -eq (View $id).card} 'Metric card did not close'
+    for($added=1;$added -le 10;$added++){
+        & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Layer'
+        (Control 'New' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+        Invoke 'New layer' -Name
+        Wait-Until {@((Model).state.layers).Count -eq $before.rows+$added -and $null -eq (View $id).card} 'Closed metric card layer creation did not acknowledge the new row'
+    }
+    Tap (Center $id);Wait-Until {$null -ne (View $id).card} 'Metric card did not reopen'
+    $after=Card-MetricReceipt $id 'card-metrics-after'
+    $sharedGrowth=($after.view.card.size[1]-$before.view.card.size[1])*$scale
+    $nativeGrowth=$after.native_page_span-$before.native_page_span
+    if($after.rows -ne $before.rows+10 -or $sharedGrowth -le 1 -or $nativeGrowth -le 1 -or [Math]::Abs($nativeGrowth-$sharedGrowth) -gt 2){throw 'Reopened Layers card did not size its native viewport for the current rows'}
+    Invoke "bubble-properties-$id";Wait-Until {(View $id).card.properties} 'Reopened metric card Properties did not open'
+    $null=Card $id
+    Capture 'card-metrics-properties-after' -Composed -WithModel
+    Invoke "bubble-properties-$id";Wait-Until {!(View $id).card.properties} 'Reopened metric card did not return to Layers'
+    $returned=Card-MetricReceipt $id 'card-metrics-returned'
+    if([Math]::Abs($returned.view.card.size[1]-$after.view.card.size[1])*$scale -gt 2 -or [Math]::Abs($returned.native_page_span-$after.native_page_span) -gt 2){throw 'Properties round trip changed the current Layers card viewport'}
+    @{theme=$Theme;before=$before;after=$after;returned=$returned;shared_growth_px=$sharedGrowth;native_growth_px=$nativeGrowth}|ConvertTo-Json -Depth 24|Set-Content (Join-Path $run 'card-metrics-results.json')
+    $checks.Add('layers-card-close-add-rows-reopen-properties-native-viewport')
 }
 function Card-Metrics{
     $path=State-File;$state=Read-Snapshot $path
@@ -1383,6 +1427,12 @@ try{
     $w=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle;$width=(Model).layout.viewport[0];$height=(Model).layout.viewport[1]
     $revision=Revision
     $initial=Model;$camera=$initial.state.camera;$document=@($initial.state.tabs|Where-Object active)[0]
+    if($cardMetricsOnly){
+        Check-CardMetrics
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved|Out-Null
+        @{variant=$Variant;checks=@($checks)}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'results.json')
+        return
+    }
     if($retireOnly){
         $layers=Take 'panel' 'layers' ($width*.38) ($height*.56)
         Wait-Until {$null -ne (View $layers).card} 'Retirement Layers bubble did not open'

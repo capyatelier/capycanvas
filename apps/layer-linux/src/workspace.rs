@@ -196,6 +196,7 @@ mod allocation {
             if let Some(owner) = self.owner.borrow().upgrade() {
                 owner.present_toolbars();
                 owner.pressure_calibration.measure(&owner);
+                owner.bubbles.measure_cards(&owner);
             }
             let mut resolved = self.layout.borrow().workspace(
                 width as f32,

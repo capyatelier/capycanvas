@@ -176,7 +176,7 @@ impl LayerInspector {
         self.button.update_property(&[gtk::accessible::Property::Label(label), gtk::accessible::Property::Description(if open {""} else {&disclosure.summary})]);
         if open { self.button.add_css_class("open"); } else { self.button.remove_css_class("open"); }
     }
-    pub(super) fn measure(&self, width: i32, viewport_height: f32) -> [f32; 2] {
+    pub(super) fn measure(&self, width: i32, viewport_height: f32) -> (PanelScrollMeasurement,f32) {
         let measurement = self.layers.scroll_measurement(width);
         let properties_height = self.effects.properties.measure(gtk::Orientation::Vertical, width).1 as f32;
         let heights = layer_ui::LayerDrawerSizing::pages(measurement, self.rows.get(), viewport_height, properties_height);
@@ -186,7 +186,7 @@ impl LayerInspector {
             let mut geometry = page.imp().geometry.borrow_mut();
             if geometry[0].width != width as f32 { geometry[0].width = width as f32; page.queue_allocate(); }
         }
-        heights
+        (measurement,properties_height)
     }
     fn restore_anchor(&self, w: &Rc<Workspace>) {
         let Some(clock) = self.root.frame_clock() else { self.anchor.set(None); return; };

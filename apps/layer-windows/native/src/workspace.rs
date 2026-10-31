@@ -111,6 +111,7 @@ fn request(json: &str) -> Result<Value, String> {
             | "bubble_grab"
             | "can_take_bubble"
             | "bubble_wheel_color"
+            | "layer_drawer_sizing"
             | "expansion"
             | "renderer_stats"
             | "application_menu"
@@ -550,12 +551,15 @@ mod tests {
     #[test]
     fn workspace_queries_follow_shared_policy_without_mutating_the_document() {
         let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        host.resize(1200,900,1.).unwrap();
+        let measurement=layer_ui::PanelScrollMeasurement {fixed_height:80.,unit_height:40.};
         let revision = host.session.engine().document().revision;
         for query in [
             json!({"type":"application_menu","menu":"edit"}),
             json!({"type":"application_link","link":"website"}),
             json!({"type":"application_link","link":"source_code"}),
             json!({"type":"renderer_stats"}),
+            json!({"type":"layer_drawer_sizing","measurement":measurement,"properties_height":120}),
             json!({"type":"panel_handle_target","item":{"kind":"panel","panel":"layers"}}),
             json!({"type":"expansion","panel":"toolbar","heights":[0,420],"progress":1}),
             json!({"type":"header","request":{"op":"geometry","model":host.session.state().workspace.layout.header.projected_for(layer_ui::Platform::Windows),"editing":false,"documents":1,"width":1400,"insets":[0,0],"metrics":[]}}),
@@ -566,8 +570,13 @@ mod tests {
         ] {
             let expected = host.query(query.clone()).unwrap();
             let result = metadata(super::query(&mut host, &query.to_string()).unwrap());
+            assert!(result["error"].is_null(),"{result}");
             assert_eq!(result["result"], expected);
-            assert!(result["error"].is_null());
+            if query["type"]=="layer_drawer_sizing" {
+                assert_eq!(result["result"]["measurement"],json!(measurement));
+                assert_eq!(result["result"]["properties_height"],json!(120.));
+                assert_eq!(result["result"]["heights"],json!(layer_ui::LayerDrawerSizing::pages(measurement,host.session.state().layers.len(),900.,120.)));
+            }
         }
         assert_eq!(revision, host.session.engine().document().revision);
     }
@@ -650,7 +659,6 @@ mod tests {
             r#"{"type":"invoke","command":"new_layer"}"#.to_owned(),
             r#"{"type":"drawer_toolbar","panel":"layers","width":320,"height":480}"#.to_owned(),
             r#"{"type":"drawer","column":null,"heights":[],"progress":1}"#.to_owned(),
-            r#"{"type":"layer_drawer_sizing","measurement":{"fixed_height":0,"unit_height":1},"properties_height":0}"#.to_owned(),
             " ".repeat(8193),
             "{".to_owned(),
         ] {

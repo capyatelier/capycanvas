@@ -263,7 +263,7 @@ export function createBubbles({app,workspace,element,button,icon,state,dispatch,
       }
       if(r.view.card) {
         const measurement=r.card.inspector.measure(now);r.card.inspector.layout();active||=measurement.running;
-        const key=json(measurement.heights);if(r.card.measurement!==key){r.card.measurement=key;send({type:'measure_card',id:p.id,heights:measurement.heights});}
+        if(json(r.view.card.metrics)!==json([measurement.measurement,measurement.properties_height]))send({type:'measure_card',id:p.id,measurement:measurement.measurement,properties_height:measurement.properties_height});
       }
     }
     stampCanvas.hidden=!stampWanted||!stamp;

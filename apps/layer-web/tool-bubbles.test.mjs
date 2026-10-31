@@ -32,7 +32,7 @@ export function installBubbleInputTrace() {
   window.bubbleRestoreInputTrace=()=>{abort.abort();for(const [method,original]of originals)Event.prototype[method]=original;};
 }
 
-export async function checkToolBubbles({call,evaluate,settle,pickupOnly=false}) {
+export async function checkToolBubbles({call,evaluate,settle,pickupOnly=false,layersOnly=false}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS||'artifacts/bubbles';
   await mkdir(directory,{recursive:true});
   const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -249,14 +249,51 @@ export async function checkToolBubbles({call,evaluate,settle,pickupOnly=false}) 
       throw error;
     } finally {await call('Emulation.setDeviceMetricsOverride',original);await settle();await send({type:'customize',action:{type:'close_expanded'}});await evaluate('delete window.bubbleSourceScroll');}
   };
+  const layersJourney=async(theme,spot,bounds)=>{
+    const layers=await take(4,spot),layerRoot=`.tool-bubble[data-bubble="${layers}"]`;const v=await view(layers);assert.ok(v.card&&!v.card.full,'Layers tears out as simple open card');await primitives(layers,`${theme}-layers-simple`);
+    await dragLayerGap(layers);await dragLayerRowWithPair(layers,theme);
+    const count=await evaluate('layerApp.state().layers.length');await tap(await rect(`${layerRoot} [data-footer-button="new_layer"]`));await wait(`layerApp.state().layers.length===${count+1}`);assert.equal(await evaluate('layerApp.state().layers.length'),count+1,'simple footer adds a layer');
+    await tap(await rect(`${layerRoot} [data-layer-properties]`));assert.ok((await view(layers)).card.properties,'Properties slides over layer rows');await pause(250);await shot(`${theme}-${device}-layer-properties`);await tap(await rect(`${layerRoot} [data-layer-properties]`));assert.equal((await view(layers)).card.properties,false,'Properties returns to layers');await send({type:'invoke',command:'undo'});await wait(`layerApp.state().layers.length===${count}`);
+    await stable(layers);const cardBounds=await evaluate(`(()=>{const r=document.querySelector('${layerRoot} .bubble-card').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})()`),edge=[cardBounds.x+cardBounds.width/2,cardBounds.y+cardBounds.height*.6];await pointer('down',edge);await pause(650);await pointer('up');await wait(`!!document.querySelector('.panel-context-menu:popover-open')`);
+    const full=(await evaluate(`layerApp.app.context_menu({kind:'bubble',id:${layers}})`)).sections.flat().find(row=>row.action?.action?.option?.full===true);assert.ok(full,'card menu exposes Full');await evaluate(`(()=>{const b=[...document.querySelectorAll('.panel-context-menu button')].find(n=>n.querySelector('.menu-label')?.textContent===${JSON.stringify(full.label)});b.dataset.bubbleFull='true'})()`);await tap(await rect('[data-bubble-full]'));await escape();assert.ok((await view(layers)).card.full,'Full menu choice uses full inspector');await primitives(layers,`${theme}-layers-full`);await shot(`${theme}-${device}-layers-full`);
+    await dragLayerGap(layers);await dragLayerRowWithPair(layers,theme);const insets=await evaluate(`(()=>{const root=document.querySelector('${layerRoot} .bubble-card').getBoundingClientRect(),blend=document.querySelector('${layerRoot} .layer-blend').getBoundingClientRect();return [blend.x-root.x,blend.y-root.y]})()`);assert.ok(Math.abs(insets[0]-insets[1])<1,'full Layers card has equal top and side insets');
+    const originalHeight=(await view(layers)).card.size[1],originalLayers=await evaluate('layerApp.state().layers.length');
+    await tap([bounds.x+bounds.width*.85,bounds.y+100]);await wait(`!layerApp.app.bubbles().find(p=>p.view.id===${layers}).view.card`);await pause(250);
+    if(await evaluate(`!!document.querySelector('.collapsed-column .column-tab[data-panel="layers"]')`))await tap(await rect('.collapsed-column .column-tab[data-panel="layers"]'));
+    else await tap(await rect('.dock-tab[data-panel="layers"]'));
+    for(let n=0;n<10;n++){
+      const add=await evaluate(`(()=>{const node=[...document.querySelectorAll('[data-footer-button="new_layer"]')].find(n=>!n.closest('.tool-bubble')&&n.checkVisibility());if(!node)throw Error('Native Layers footer is not visible');const r=node.getBoundingClientRect();return [r.x+r.width/2,r.y+r.height/2]})()`);
+      await tap(add);await wait(`layerApp.state().layers.length===${originalLayers+n+1}`);
+    }
+    await tap([bounds.x+bounds.width*.85,bounds.y+100]);
+    await wait(`Number(layerApp.app.bubbles().find(p=>p.view.id===${layers}).view.layers)===${originalLayers+10}`);
+    await primitives(layers,`${theme}-layers-count-grown`);await shot(`${theme}-${device}-layers-count-grown`);
+    await tap(await center(layers));await wait(`!!layerApp.app.bubbles().find(p=>p.view.id===${layers}).view.card`);await stable(layers);
+    const reopened=await primitives(layers,`${theme}-layers-reopened`);assert.ok(reopened.packet.view.card.size[1]>originalHeight,'Reopening sizes the card from the current layer count');
+    await tap(await rect(`${layerRoot} [data-layer-properties]`));assert.ok((await view(layers)).card.properties,'Reopened Properties uses the current page');await primitives(layers,`${theme}-layers-reopened-properties`);
+    await tap(await rect(`${layerRoot} [data-layer-properties]`));assert.equal((await view(layers)).card.properties,false,'Reopened Properties returns to current rows');await stable(layers);
+    near((await view(layers)).card.size[1],reopened.packet.view.card.size[1],'Returning from Properties preserves the reopened row height');
+    const measured=(await view(layers)).card;assert.ok(measured.metrics,'The open inspector has authoritative raw measurements');
+    await tap([bounds.x+bounds.width*.85,bounds.y+100]);await wait(`!layerApp.app.bubbles().find(p=>p.view.id===${layers}).view.card`);await pause(250);
+    await send({type:'restore_workspace',workspace:structuredClone(await evaluate('layerApp.app.workspace_persistence()'))});
+    await tap(await rect(`${layerRoot} .bubble-face`));await wait(`!!layerApp.app.bubbles().find(p=>p.view.id===${layers}).view.card`);await stable(layers);
+    const restored=await primitives(layers,`${theme}-layers-same-id-restored`);
+    near(restored.packet.view.card.size[1],measured.size[1],'Same-id restore and reopen preserves the current measured card height');
+    assert.deepEqual(restored.packet.view.card.metrics,measured.metrics,'The retained inspector republishes unchanged raw facts after workspace restoration');await shot(`${theme}-${device}-layers-same-id-restored`);
+
+    await tap([bounds.x+bounds.width*.85,bounds.y+100]);await wait(`!layerApp.app.bubbles().find(p=>p.view.id===${layers}).view.card`);
+    for(let n=10;n>0;n--){await send({type:'invoke',command:'undo'});await wait(`layerApp.state().layers.length===${originalLayers+n-1}`);}
+    await wait(`Number(layerApp.app.bubbles().find(p=>p.view.id===${layers}).view.layers)===${originalLayers}`);await primitives(layers,`${theme}-layers-count-restored`);await putBack(layers);
+  };
   try {
     for(const theme of (process.env.LAYER_BUBBLE_THEMES?.split(',')||['light','dark']))for(device of (process.env.LAYER_BUBBLE_DEVICES?.split(',')||['mouse','touch','pen'])) {
       console.log(`Tool bubbles: ${theme}/${device}`);await call('Emulation.setTouchEmulationEnabled',{enabled:device==='touch',maxTouchPoints:5});
       await send({type:'restore_workspace',workspace:fixture});await send({type:'set_theme',theme});await pause(250);
-      if(!pickupOnly)await edgeJourney(theme);
-      if(!pickupOnly&&!sliderThemes.has(theme)){await globalSliders(theme);sliderThemes.add(theme);}
+      if(!pickupOnly&&!layersOnly)await edgeJourney(theme);
+      if(!pickupOnly&&!layersOnly&&!sliderThemes.has(theme)){await globalSliders(theme);sliderThemes.add(theme);}
       const bounds=await evaluate('(()=>{const r=document.querySelector("#workspace").getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})()');
       const spot=[bounds.x+bounds.width*.4,bounds.y+bounds.height*.5];
+      if(layersOnly){await layersJourney(theme,spot,bounds);assert.equal((await packets()).length,0,'Layers returns to its source');console.log(`PASS Layers bubble sizing: ${theme}/${device}`);continue;}
       if(pickupOnly) {
         for(let index=0;index<controls.length;index++) {
           await take(index,spot);assert.equal((await packets()).length,1,'canvas entry creates one bubble');
@@ -326,14 +363,7 @@ export async function checkToolBubbles({call,evaluate,settle,pickupOnly=false}) 
       await writeFile(`${directory}/${theme}-${device}-history-opacity.json`,JSON.stringify(historyOpacity,null,2));
       await shot(`${theme}-${device}-history`);await putBack(history);
       const toolbar=fixture.layout.panels.find(p=>p.content?.tiles?.some(t=>t.control.command==='undo')),undoTile=toolbar?.content.tiles.find(t=>t.control.command==='undo');assert.ok(undoTile,'fixture has toolbar Undo');await send({type:'customize',action:{type:'set_panel_visible',panel:toolbar.id,visible:true}});await send({type:'move_panel',panel:toolbar.id,target:{kind:'float',position:[bounds.width*.72,bounds.height*.65]}});await pause(250);const tileSelector=`.toolbar-controls[data-panel="${toolbar.id}"] > [data-tile="${undoTile.id}"]`,tilePoint=await rect(tileSelector);await pointer('down',tilePoint);await pause(650);await pointer('move',[tilePoint[0]+35,tilePoint[1]]);await pointer('move',spot);await pointer('up');await settle();await wait(`layerApp.app.bubbles().some(p=>p.view.kind==='history')`);const heldHistory=(await packets()).find(p=>p.view.kind==='history').view.id;await stable(heldHistory);await send({type:'invoke',command:'undo_workspace'});await wait('layerApp.app.bubbles().length===0');await send({type:'invoke',command:'redo_workspace'});await wait(`layerApp.app.bubbles().some(p=>p.view.id===${heldHistory})`);await putBack(heldHistory);
-      const layers=await take(4,spot),layerRoot=`.tool-bubble[data-bubble="${layers}"]`;v=await view(layers);assert.ok(v.card&&!v.card.full,'Layers tears out as simple open card');await primitives(layers,`${theme}-layers-simple`);
-      await dragLayerGap(layers);await dragLayerRowWithPair(layers,theme);
-      const count=await evaluate('layerApp.state().layers.length');await tap(await rect(`${layerRoot} [data-footer-button="new_layer"]`));await wait(`layerApp.state().layers.length===${count+1}`);assert.equal(await evaluate('layerApp.state().layers.length'),count+1,'simple footer adds a layer');
-      await tap(await rect(`${layerRoot} [data-layer-properties]`));assert.ok((await view(layers)).card.properties,'Properties slides over layer rows');await pause(250);await shot(`${theme}-${device}-layer-properties`);await tap(await rect(`${layerRoot} [data-layer-properties]`));assert.equal((await view(layers)).card.properties,false,'Properties returns to layers');await send({type:'invoke',command:'undo'});await wait(`layerApp.state().layers.length===${count}`);
-      await stable(layers);const cardBounds=await evaluate(`(()=>{const r=document.querySelector('${layerRoot} .bubble-card').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})()`),edge=[cardBounds.x+cardBounds.width/2,cardBounds.y+cardBounds.height*.6];await pointer('down',edge);await pause(650);await pointer('up');await wait(`!!document.querySelector('.panel-context-menu:popover-open')`);
-      const full=(await evaluate(`layerApp.app.context_menu({kind:'bubble',id:${layers}})`)).sections.flat().find(row=>row.action?.action?.option?.full===true);assert.ok(full,'card menu exposes Full');await evaluate(`(()=>{const b=[...document.querySelectorAll('.panel-context-menu button')].find(n=>n.querySelector('.menu-label')?.textContent===${JSON.stringify(full.label)});b.dataset.bubbleFull='true'})()`);await tap(await rect('[data-bubble-full]'));await escape();assert.ok((await view(layers)).card.full,'Full menu choice uses full inspector');await primitives(layers,`${theme}-layers-full`);await shot(`${theme}-${device}-layers-full`);
-      await dragLayerGap(layers);await dragLayerRowWithPair(layers,theme);const insets=await evaluate(`(()=>{const root=document.querySelector('${layerRoot} .bubble-card').getBoundingClientRect(),blend=document.querySelector('${layerRoot} .layer-blend').getBoundingClientRect();return [blend.x-root.x,blend.y-root.y]})()`);assert.ok(Math.abs(insets[0]-insets[1])<1,'full Layers card has equal top and side insets');
-      await tap([bounds.x+bounds.width*.85,bounds.y+100]);await wait(`!layerApp.app.bubbles().find(p=>p.view.id===${layers}).view.card`);await pause(250);const originalLayers=await evaluate('layerApp.state().layers.length');for(let n=originalLayers;n<12;n++)await send({type:'layer',action:{op:'new',group:false,clipped:false}});await wait(`layerApp.app.bubbles().find(p=>p.view.id===${layers}).view.layers>=12`);await primitives(layers,`${theme}-layers-count-12`);await shot(`${theme}-${device}-layers-count-12`);for(let n=12;n>originalLayers;n--){await send({type:'invoke',command:'undo'});await wait(`layerApp.state().layers.length===${n-1}`);}await wait(`Number(layerApp.app.bubbles().find(p=>p.view.id===${layers}).view.layers)===${originalLayers}`);await primitives(layers,`${theme}-layers-count-restored`);await putBack(layers);
+      await layersJourney(theme,spot,bounds);
       await sourceJourney(theme);if(process.env.LAYER_BUBBLE_INPUT_TRACE==='1')await writeFile(`${directory}/native-input-${theme}-${device}.json`,JSON.stringify(await evaluate('window.bubbleNativeEvents??null'),null,2));assert.equal((await packets()).length,0,'dropping on titlebar returns every source home');console.log(`PASS tool bubbles: ${theme}/${device}`);
     }
   } catch(error) {await shot('failure');if(process.env.LAYER_BUBBLE_INPUT_TRACE==='1')await writeFile(`${directory}/native-input-failure.json`,JSON.stringify(await evaluate('window.bubbleNativeEvents??null'),null,2));throw error;} finally {await call('Emulation.setTouchEmulationEnabled',{enabled:touchPoints>0,...(touchPoints>0?{maxTouchPoints:touchPoints}:{})});await evaluate('window.bubbleRestoreInputTrace?.();layerApp.app.set_glass=window.bubbleJourneyOriginalGlass;layerApp.app.bubble_motion=window.bubbleJourneyOriginalMotion;delete window.bubbleJourneyMotion');await send({type:'preferences',action:{type:'edit',id:'transparency',value:['off','low','medium','high'].indexOf(transparency)}});await escape();await send({type:'restore_workspace',workspace:saved});}

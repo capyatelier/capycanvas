@@ -224,6 +224,7 @@ impl WebApp {
     pub fn layer_drawer_sizing(&self, query: JsValue) -> Result<JsValue, JsValue> {
         let q: LayerDrawerQuery = serde_wasm_bindgen::from_value(query).map_err(js)?;
         serialize(&json!({
+            "measurement":q.measurement,"properties_height":q.properties_height,
             "heights": layer_ui::LayerDrawerSizing::pages(q.measurement, self.session.state().layers.len(), q.viewport_height, q.properties_height),
             "footer_height": layer_ui::LayerDrawerSizing::FOOTER_HEIGHT,
         }))

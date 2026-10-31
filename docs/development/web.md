@@ -176,6 +176,8 @@ Desktop browser journeys, including those that record frame callbacks, don't
 qualify a performance tier; use the reference hardware, canvas and
 completed-update rules in [performance measuring](../performance/measuring.md).
 
+`--layer-bubble-sizing` checks Layers card reopening after row additions and Properties in both themes.
+
 `--export-presets` and `--profile-library` check delivery controls independently of `--shared-workflows`.
 
 On macOS, enable Safari's Develop > Allow Remote Automation once, start

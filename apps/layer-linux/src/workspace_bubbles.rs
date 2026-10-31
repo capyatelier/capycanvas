@@ -111,7 +111,6 @@ struct Card {
     add: gtk::Button,
     disclosure: gtk::Button,
     disclosure_label: gtk::Label,
-    measured: Cell<Option<[f32; 2]>>,
 }
 
 mod imp {
@@ -773,20 +772,15 @@ impl Card {
         footer.append(&row);
         root.append(&footer);
         root.set_parent(bubble);
-        Self { root, full, inspector, add, disclosure, disclosure_label, measured: Cell::new(None) }
+        Self { root, full, inspector, add, disclosure, disclosure_label }
     }
-    fn refresh(&self, w: &Rc<Workspace>, state: &UiState, card: &BubbleCard, id: u32) {
+    fn refresh(&self, w: &Rc<Workspace>, state: &UiState, card: &BubbleCard) {
         self.inspector.refresh(w, state, regions::ALL, card.properties);
         self.disclosure_label.set_label(&card.disclosure);
         set_class(&self.disclosure, "open", card.properties);
         self.disclosure.set_sensitive(state.layer_properties.drawer_toggle_enabled(card.properties));
         self.add.set_opacity(if card.properties { 0. } else { 1. });
         self.add.set_can_target(!card.properties);
-        let heights = self.inspector.measure(card.size[0] as i32, w.surface.height() as f32);
-        if self.measured.replace(Some(heights)) != Some(heights) {
-            let w = w.clone();
-            glib::idle_add_local_once(move || w.dispatch(UiAction::Bubble { action: BubbleAction::MeasureCard { id, heights } }));
-        }
     }
     fn within(&self, picked: Option<&gtk::Widget>, matches: impl Fn(&gtk::Widget) -> bool) -> bool {
         std::iter::successors(picked.cloned(), |w| w.parent()).take_while(|w| w != self.root.upcast_ref::<gtk::Widget>()).any(|w| matches(&w))
@@ -1230,11 +1224,10 @@ impl Bubble {
         if imp.card.borrow().is_none() {
             *imp.card.borrow_mut() = Some(Card::new(w, self, view.id, card.full));
         }
-        imp.card_size.set(card.size);
         let opening = !imp.card.borrow().as_ref().is_some_and(|c| c.root.is_child_visible()) || folding;
         if let Some(body) = imp.card.borrow().as_ref() {
             body.root.set_child_visible(true);
-            body.refresh(w, state, card, view.id);
+            body.refresh(w, state, card);
         }
         if opening {
             self.animate_fold(true);
@@ -1243,6 +1236,7 @@ impl Bubble {
 
     fn set_view(&self, view: BubbleView) {
         let imp = self.imp();
+        if let Some(card) = &view.card { imp.card_size.set(card.size); }
         if let Some(icon) = imp.icon.borrow().as_ref() {
             crate::icons::set(icon, Some(&format!("layer-{}-symbolic", view.icon)));
         }
@@ -1905,6 +1899,7 @@ impl Layer {
 
 pub(crate) struct Bubbles {
     pub(super) layer: Layer,
+    active_card: RefCell<Option<Bubble>>,
     tick: RefCell<Option<gtk::TickCallbackId>>,
     restore: Rc<RefCell<Option<glib::SourceId>>>,
     theme: Cell<Option<Theme>>,
@@ -1914,10 +1909,29 @@ impl Bubbles {
     pub(super) fn new() -> Self {
         let layer: Layer = glib::Object::new();
         layer.set_widget_name("tool-bubbles");
-        Self { layer, tick: RefCell::new(None), restore: Rc::default(), theme: Cell::new(None) }
+        Self { layer, active_card: RefCell::new(None), tick: RefCell::new(None), restore: Rc::default(), theme: Cell::new(None) }
+    }
+
+    pub(super) fn measure_cards(&self, w: &Rc<Workspace>) {
+        let Some(bubble) = self.active_card.borrow().clone() else { return };
+        let metrics = {
+            let view = bubble.imp().view.borrow();
+            let Some(card) = view.as_ref().and_then(|view| view.card.as_ref()) else { return };
+            let body = bubble.imp().card.borrow();
+            let Some(body) = body.as_ref() else { return };
+            let (measurement, properties_height) = body.inspector.measure(card.size[0].round() as i32, w.surface.height() as f32);
+            (bubble.id(), card.full, measurement, properties_height)
+        };
+        if w.gpu.borrow().as_ref().is_none_or(|gpu| gpu.session.bubble_card_metrics() == Some(metrics)) { return; }
+        let (id, _, measurement, properties_height) = metrics;
+        w.measure(UiAction::Bubble { action: BubbleAction::MeasureCard { id, measurement, properties_height } });
+        let view = w.gpu.borrow().as_ref().and_then(|gpu|
+            gpu.session.bubbles().into_iter().find(|view| view.id == id));
+        if let Some(view) = view { bubble.set_view(view); }
     }
 
     pub(super) fn refresh(&self, w: &Rc<Workspace>, state: &UiState) {
+        self.active_card.borrow_mut().take();
         let animations = gtk::Settings::default().is_none_or(|s| s.is_gtk_enable_animations());
         let Some((views, (stroke, faded))) = w.gpu.borrow_mut().as_mut().map(|g| {
             g.session.reduce_bubble_motion(!animations);
@@ -1959,6 +1973,7 @@ impl Bubbles {
                 thumbnail.set_paintable(w.layer_panel.preview(layer).as_ref());
             }
             bubble.set_card(w, state, &view);
+            if view.card.is_some() { *self.active_card.borrow_mut() = Some(bubble.clone()); }
             bubble.set_stamp(w, &view);
             if bubble.imp().view.borrow().as_ref() != Some(&view) || retheme {
                 bubble.set_beads(w, &view);

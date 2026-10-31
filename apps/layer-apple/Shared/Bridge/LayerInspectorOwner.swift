@@ -27,22 +27,24 @@ extension ContentDrawerPresentation: LayerInspectorOwner {
     @Published private(set) var footerHeight: CGFloat = 49
     @Published private(set) var pagePosition: CGFloat = 0
     @Published private(set) var disclosure: String?
+    @Published private var metricsReady = false
     private weak var store: EditorStore?
     private weak var item: BubblePresentation?
     private let drawing: String
     private var panels: [String: JSON] = [:]
-    private var measured = ""
     var reduceMotion = false
-    var sizingContext: String { "\(simple)" }
+    var sizingContext: String { "\(simple):\(metricsReady)" }
     init(store: EditorStore, item: BubblePresentation) { self.store = store; self.item = item; drawing = store.drawingIdentity }
     private var current: Bool {
         guard let store, let item else { return false }
         return store.drawingIdentity == drawing && store.bubbles.items.contains { $0 === item } && !item.view["card"].isNull
     }
     func receive(_ card: JSON) {
+        let ready = !card["metrics"].isNull
+        if metricsReady != ready { metricsReady = ready }
         if disclosure != card["disclosure"].string { disclosure = card["disclosure"].string }
         let simple = !card["full"].bool
-        if self.simple != simple { self.simple = simple; measured = "" }
+        if self.simple != simple { self.simple = simple }
         let open = card["properties"].bool
         if propertiesOpen != open {
             propertiesOpen = open
@@ -57,8 +59,8 @@ extension ContentDrawerPresentation: LayerInspectorOwner {
     func measureLayerPages(_ next: JSON) {
         guard current, let item, next["heights"].array.count == 2 else { return }
         if footerHeight != next["footer_height"].number { footerHeight = next["footer_height"].number }
-        let key = next["heights"].stableKey
-        guard measured != key else { return }; measured = key
-        store?.bubbles.action(["type": "measure_card", "id": item.id, "heights": next["heights"].raw])
+        let accepted = item.view["card"]["metrics"]
+        guard accepted.isNull || accepted[0].stableKey != next["measurement"].stableKey || accepted[1].number != next["properties_height"].number else { return }
+        store?.bubbles.action(["type": "measure_card", "id": item.id, "measurement": next["measurement"].raw, "properties_height": next["properties_height"].raw])
     }
 }

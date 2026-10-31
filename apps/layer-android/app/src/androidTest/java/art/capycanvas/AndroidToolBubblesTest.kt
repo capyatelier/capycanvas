@@ -999,6 +999,48 @@ class AndroidToolBubblesTest {
         stroke(blank, blank + Offset(-30 * density, 0f), blank + Offset(-60 * density, -15 * density))
         assertTrue("Unused list space moves its owner", (stable(id) - before).getDistance() > 25 * density)
     }
+    @Test fun layersBubbleReopensWithCurrentRowsAndPropertiesAcrossThemes() {
+        for (theme in listOf("light", "dark")) {
+            tool = MotionEvent.TOOL_TYPE_FINGER; root = null; case = "$theme-reopen"
+            action(obj("type" to "restore_workspace", "workspace" to JSONObject(fixture.toString())))
+            action(obj("type" to "set_theme", "theme" to theme))
+            while (state().getJSONArray("layers").length() > 1) action(obj("type" to "layer", "action" to obj("op" to "delete", "id" to state().getJSONArray("layers").getJSONObject(0).getLong("id"))))
+            val id = take(6, workspace().let { Offset(it.left + it.width * .4f, it.top + it.height * .5f) })
+            fun measuredCard() {
+                waitFor("$theme native Layers card follows current shared size") {
+                    val card = view(id).objectOrNull("card") ?: return@waitFor false
+                    if (card.isNull("metrics")) return@waitFor false
+                    val size = card.getJSONArray("size")
+                    var native: Rect? = null
+                    instrumentation.runOnMainSync { native = findTag("bubble-card-$id")?.second?.boundsInRoot }
+                    native?.let { kotlin.math.abs(it.width - size.getDouble(0) * density) < 2 && kotlin.math.abs(it.height - size.getDouble(1) * density) < 2 } == true
+                }
+            }
+            measuredCard()
+            val initial = bounds("bubble-card-$id").height
+            tap(workspace().let { Offset(it.right - 30 * density, it.top + 100 * density) })
+            waitFor("$theme outside contact closes Layers") { view(id).isNull("card") && findTag("bubble-card-$id") == null }
+            repeat(10) { action(obj("type" to "layer", "action" to obj("op" to "new", "group" to false, "clipped" to false))) }
+            assertEquals("$theme closed card receives ten new rows", 11, state().getJSONArray("layers").length())
+            waitFor("$theme folded Layers face is interactive") { findTag("tool-bubble-$id") != null }
+            tap(bounds("tool-bubble-$id").center)
+            measuredCard()
+            assertTrue("$theme reopened Layers uses the new row count", bounds("bubble-card-$id").height > initial + density)
+            cardShot(id, "layers-reopened")
+            tap(bounds("bubble-properties-$id").center)
+            waitFor("$theme reopened Layers opens Properties") { view(id).objectOrNull("card")?.optBoolean("properties") == true }
+            measuredCard()
+            cardShot(id, "layers-reopened-properties")
+            tap(bounds("bubble-properties-$id").center)
+            waitFor("$theme Properties returns to Layers") { view(id).objectOrNull("card")?.optBoolean("properties") == false }
+            measuredCard()
+            assertTrue("$theme returned Layers retains all rows", bounds("bubble-card-$id").height > initial + density)
+            tap(workspace().let { Offset(it.right - 30 * density, it.top + 100 * density) })
+            waitFor("$theme returned Layers folds before returning home") { view(id).isNull("card") && findTag("bubble-card-$id") == null }
+            putBack(id)
+            repeat(10) { invoke("undo") }
+        }
+    }
     @Test fun layersBubbleBackgroundAcrossThemesAndDevices() {
         for (theme in listOf("light", "dark")) for (input in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
             tool = input; root = null; case = "$theme-$input"

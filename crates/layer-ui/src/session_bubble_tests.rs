@@ -14,6 +14,43 @@ fn act(s: &mut UiSession<Recorder>, action: BubbleAction) -> Result<UiChange, St
     s.dispatch(UiAction::Bubble { action })
 }
 
+#[test]
+fn reopening_layers_card_sizes_current_rows_from_intrinsic_measurements() {
+    let mut s = desk();
+    take_control(&mut s, ToolbarControl::Panel { panel: Panel::Layers }, FAR);
+    let id = s.bubbles().into_iter().find(|v| v.kind == BubbleKind::Layers).unwrap().id;
+    let measurement=PanelScrollMeasurement {fixed_height:77.,unit_height:47.};
+    assert_eq!(s.bubble_card_metrics(), None);
+    assert_eq!(view(&s,id).card.unwrap().metrics, None);
+    let metrics=Some((id,view(&s,id).options.full,measurement,222.));
+    act(&mut s, BubbleAction::MeasureCard {id,measurement,properties_height:222.}).unwrap();
+    assert_eq!(s.bubble_card_metrics(), metrics);
+    assert_eq!(view(&s,id).card.unwrap().metrics, Some((measurement,222.)));
+    let expected=|rows,viewport:[f32;2]|[Panel::Layers.default_width(viewport[0]),LayerDrawerSizing::pages(measurement,rows,viewport[1],222.)[0]];
+    assert_eq!(view(&s,id).card.unwrap().size,expected(s.state.layers.len(),VIEW));
+    act(&mut s, BubbleAction::Close { id }).unwrap();
+    assert_eq!(s.bubble_card_metrics(), None);
+    tap(&mut s, id);
+    assert_eq!(s.bubble_card_metrics(), metrics);
+    act(&mut s, BubbleAction::Close { id }).unwrap();
+    assert_eq!(s.bubble_card_metrics(), None);
+    for _ in 0..10 { s.dispatch(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } }).unwrap(); }
+    tap(&mut s, id);
+    assert_eq!(s.bubble_card_metrics(), metrics);
+    assert_eq!(view(&s,id).card.unwrap().size,expected(s.state.layers.len(),VIEW));
+    for viewport in [[VIEW[0],420.],VIEW] {
+        s.set_viewport(viewport,viewport.map(|value|value as u32)).unwrap();
+        assert_eq!(view(&s,id).card.unwrap().size,expected(s.state.layers.len(),viewport));
+    }
+    let workspace=s.state.workspace.clone();
+    s.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(workspace)}).unwrap();
+    assert_eq!(s.bubble_card_metrics(), None);
+    tap(&mut s,id);
+    assert!(view(&s,id).card.is_some());
+    assert_eq!(s.bubble_card_metrics(), None);
+    assert_eq!(view(&s,id).card.unwrap().metrics, None);
+}
+
 fn contact(s: &mut UiSession<Recorder>, grab: BubbleGrab, phase: ContactPhase, position: [f32; 2]) -> Result<UiChange, String> {
     act(s, BubbleAction::Drag { grab, phase, position, viewport: VIEW })
 }
@@ -1549,7 +1586,7 @@ fn the_layers_card_unfolds_flips_to_properties_and_folds() {
     assert_eq!(folded.layer, s.state.layers.iter().find(|l| l.selected).map(|l| l.id), "the folded card shows the current layer");
     tap(&mut s, layers);
     let card = view(&s, layers).card.unwrap();
-    assert_eq!(card, BubbleCard { size: layers_card(VIEW, s.state.layers.len(), None, false), full: false, properties: false, disclosure: "Properties".into() });
+    assert_eq!(card, BubbleCard { size: layers_card(VIEW, s.state.layers.len(), None, false), metrics: None, full: false, properties: false, disclosure: "Properties".into() });
     act(&mut s, BubbleAction::Properties { id: layers }).unwrap();
     assert!(view(&s, layers).card.unwrap().properties);
     assert_ne!(view(&s, layers).card.unwrap().disclosure, "Properties", "the footer then goes back to all layers");
@@ -1565,9 +1602,9 @@ fn the_layers_card_unfolds_flips_to_properties_and_folds() {
     assert!(view(&s, layers).options.full && !view(&s, layers).options.fold);
     tap(&mut s, layers);
     assert_eq!(view(&s, layers).card.unwrap().size, layers_card(VIEW, s.state.layers.len(), None, false), "Full keeps the drawer's size");
-    act(&mut s, BubbleAction::MeasureCard { id: layers, heights: [333., 444.] }).unwrap();
+    act(&mut s, BubbleAction::MeasureCard { id:layers, measurement:PanelScrollMeasurement {fixed_height:44.,unit_height:40.}, properties_height:395. }).unwrap();
     assert_eq!(view(&s, layers).card.unwrap().size[1], 333., "the host's measurement sizes the card");
-    assert!(act(&mut s, BubbleAction::MeasureCard { id: layers, heights: [f32::NAN, 1.] }).is_err());
+    assert!(act(&mut s, BubbleAction::MeasureCard { id:layers, measurement:PanelScrollMeasurement {fixed_height:0.,unit_height:f32::NAN}, properties_height:1. }).is_err());
     chrome(&mut s, ChromeEvent::Contact { position: [100., 120.], canvas: true }, ChromeFacts::default());
     assert!(view(&s, layers).card.is_some(), "a card that doesn't fold stays open");
     s.dispatch(item(&s, "Close").unwrap()).unwrap();

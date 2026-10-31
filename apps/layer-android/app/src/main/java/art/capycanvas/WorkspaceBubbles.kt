@@ -221,7 +221,7 @@ internal class BubbleRecord(packet: JSONObject) {
                             LayerInspector(host, state, card.getBoolean("properties"), position, part.size.height, 49f,
                                 "bubble:${record.id}:${card.getBoolean("full")}", full = card.getBoolean("full"), labelOverride = card.getString("disclosure").takeUnless { card.getBoolean("full") }, bubbleId = record.id,
                                 toggle = { input.send(obj("type" to "properties", "id" to record.id)) }) { size ->
-                                if (record.view.objectOrNull("card") != null) input.send(obj("type" to "measure_card", "id" to record.id, "heights" to size.array("heights")))
+                                if (record.view.objectOrNull("card") != null) input.send(obj("type" to "measure_card", "id" to record.id, "measurement" to size.getJSONObject("measurement"), "properties_height" to size.getDouble("properties_height")))
                             }
                             }
                         }

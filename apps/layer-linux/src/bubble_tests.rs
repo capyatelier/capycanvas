@@ -2,6 +2,61 @@ use super::workspace_header::Driver;
 use super::*;
 
 #[test]
+#[ignore = "private display: workspace-motion.sh gtk --native-test=native_layers_card_first_paint_has_measured_height"]
+fn native_layers_card_first_paint_has_measured_height() {
+    let d = Driver::new("art.capycanvas.LayersCardFirstPaint");
+    let settings = gtk::Settings::default().unwrap();
+    let animations = settings.is_gtk_enable_animations();
+    settings.set_gtk_enable_animations(false);
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        let header = state(&d.w).workspace.layout.header.entries().find(|e| e.item == HeaderItem::Tool {
+            control: ToolbarControl::Panel { panel: Panel::Layers }
+        }).unwrap().id;
+        for stage in ["first", "same-content", "more-rows"] {
+            let previous = views(&d).last().map(|view| view.id);
+            if let Some(id) = previous {
+                d.w.dispatch(UiAction::Bubble { action: BubbleAction::Close { id } });
+                pump(250);
+                if stage == "more-rows" {
+                    for _ in 0..10 { d.w.dispatch(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } }); }
+                    pump(250);
+                }
+            }
+            let frames = sample_after_paint(&d.w.bubbles.layer, || ());
+            if let Some(id) = previous {
+                d.w.dispatch(UiAction::Bubble { action: BubbleAction::Tap { id, position: [0., 0.] } });
+            } else {
+                let position = canvas_spot(&d, 0.4, 0.5);
+                let viewport = [d.w.surface.width() as f32, d.w.surface.height() as f32];
+                for phase in [ContactPhase::Down, ContactPhase::Up] {
+                    d.w.dispatch(UiAction::Bubble { action: BubbleAction::Drag {
+                        grab: BubbleGrab::Header { id: header }, phase, position, viewport
+                    } });
+                }
+            }
+            let css = paint_color(&d.named("bubble-card"), "#ff00ff");
+            pump(250);
+            let frames = frames.finish();
+            let expected = frames.last().and_then(|frame| frame.color_bounds(&d.w.window, [255, 0, 255, 255]))
+                .expect("the opened Layers card paints its background");
+            let painted: Vec<_> = frames.iter().filter_map(|frame| frame.color_bounds(&d.w.window, [255, 0, 255, 255])
+                .map(|bounds| (frame.time, bounds))).collect();
+            assert!(!painted.is_empty(), "{theme:?}/{stage}: a visible card paints");
+            println!("Layers painted {theme:?}/{stage}: expected={expected:?}, painted={painted:?}");
+            for (time, bounds) in painted {
+                assert_eq!(bounds, expected, "{theme:?}/{stage}: first visible paint uses current card bounds at {time}");
+            }
+            gtk::style_context_remove_provider_for_display(&d.w.surface.display(), &css);
+        }
+        d.w.dispatch(UiAction::Bubble { action: BubbleAction::PutBackAll });
+        pump(200);
+    }
+    settings.set_gtk_enable_animations(animations);
+    d.finish();
+}
+
+#[test]
 #[ignore = "private display: workspace-motion.sh gtk --native-test=native_layers_unit_uses_plain_row_at_large_font"]
 fn native_layers_unit_uses_plain_row_at_large_font() {
     let d = Driver::new("art.capycanvas.LayersUnit");
@@ -357,6 +412,7 @@ fn native_layers_bubble_background_pen() {
 
 fn layers_bubble_background(devices: &[&str]) {
     let mut d = Driver::new("art.capycanvas.LayersBubbleBackground");
+    set_transparency(&d.w, "LAYER_MOTION_TRANSPARENCY");
     for theme in [Theme::Light, Theme::Dark] {
         d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
@@ -373,6 +429,7 @@ fn layers_bubble_background(devices: &[&str]) {
         tap(&mut d, "mouse", spot);
         let id = take(&mut d, BubbleGrab::Header { id }, spot);
         let bubble = find_id(&d, id).unwrap();
+        painted_layer_card(&mut d, bubble.id);
         for full in [false, true] {
             d.w.dispatch(UiAction::Bubble { action: BubbleAction::SetOptions { id: bubble.id, options: BubbleOptions { full, ..bubble.options } } });
             pump(500);
@@ -381,6 +438,46 @@ fn layers_bubble_background(devices: &[&str]) {
         }
     }
     d.finish();
+}
+
+fn painted_layer_card(d: &mut Driver, id: u32) {
+    let rows = state(&d.w).layers.len();
+    let settings = gtk::Settings::default().unwrap();
+    let animations = settings.is_gtk_enable_animations();
+    settings.set_gtk_enable_animations(false);
+    while state(&d.w).layers.len() < 6 {
+        d.w.dispatch(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } });
+    }
+    pump(250);
+    let card = d.named("bubble-card");
+    let css = paint_color(&card, "#ff00ff");
+    let mut previous = idle_paint(&d.w.bubbles.layer).color_bounds(&d.w.window, [255, 0, 255, 255]).expect("initial Layers card paints");
+    let mut resized = false;
+    for action in [UiAction::Layer { action: LayerAction::New { group: false, clipped: false } },
+        UiAction::Layer { action: LayerAction::DeleteSelected },
+        UiAction::Bubble { action: BubbleAction::Properties { id } },
+        UiAction::Bubble { action: BubbleAction::Properties { id } }] {
+        let frames = sample_after_paint(&d.w.bubbles.layer, || ());
+        d.w.dispatch(action);
+        pump(250);
+        let frames = frames.finish();
+        let expected = frames.last().and_then(|frame| frame.color_bounds(&d.w.window, [255, 0, 255, 255]))
+            .expect("Layers card paints its measured background");
+        resized |= expected != previous;
+        for frame in frames {
+            let bounds = frame.color_bounds(&d.w.window, [255, 0, 255, 255]);
+            assert_eq!(bounds, Some(expected), "Layers card paints its current page measurement immediately: frame {}", frame.time);
+        }
+        previous = expected;
+    }
+    assert!(resized, "changing Layers card content changes its painted extent");
+    for _ in rows..state(&d.w).layers.len() {
+        d.w.dispatch(UiAction::Layer { action: LayerAction::DeleteSelected });
+    }
+    assert_eq!(state(&d.w).layers.len(), rows);
+    pump(300);
+    gtk::style_context_remove_provider_for_display(&d.w.surface.display(), &css);
+    settings.set_gtk_enable_animations(animations);
 }
 
 #[test]

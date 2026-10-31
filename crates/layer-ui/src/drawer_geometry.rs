@@ -54,7 +54,7 @@ pub(crate) fn layer_sizes(measure:Option<&DrawerMeasure>,measurement:PanelScroll
     }
     let heights=LayerDrawerSizing::pages(measurement,rows,viewport_height,properties_height);
     let placements=heights.map(|height|measure.and_then(|measure|measure.placement(&[height])));
-    Ok(json!({"heights":heights,"placements":placements,"footer_height":LayerDrawerSizing::FOOTER_HEIGHT}))
+    Ok(json!({"measurement":measurement,"properties_height":properties_height,"heights":heights,"placements":placements,"footer_height":LayerDrawerSizing::FOOTER_HEIGHT}))
 }
 
 impl LayoutResolveInput<'_> {

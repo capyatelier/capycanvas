@@ -45,7 +45,7 @@ export function createLayerInspector({app, state, workspace, element, button, ic
     }
     const size=measurement;
     footerRow.style.height=`${size.footer_height}px`;
-    return {height:size.heights[0]*(1-position)+size.heights[1]*position,heights:size.heights,running:progress<1};
+    return {height:size.heights[0]*(1-position)+size.heights[1]*position,heights:size.heights,measurement:size.measurement,properties_height:size.properties_height,running:progress<1};
   },layout() {
     const height=stage.clientHeight;
     const key=`${height}:${position}`;if(layoutKey===key)return;layoutKey=key;

@@ -284,7 +284,7 @@ void WorkspaceBubbles::Impl::content(std::shared_ptr<Record> const& r,std::share
                 if(!QueryWorkspace(self->data->query,request,[weak,owner,part,key,epoch](J reply){auto self=weak.lock();auto r=owner.lock();auto p=part.lock();
                     if(!self||!r||!p||self->epoch!=epoch||p->retired||p->inspector->sizingKey!=key||!object(r->view,L"card").Size())return;
                     auto found=self->records.find(r->id);if(found==self->records.end()||found->second!=r)return;
-                    auto heights=array(object(reply,L"result"),L"heights");if(heights.Size()==2)self->send(O({{L"type",S(L"measure_card")},{L"id",N(r->id)},{L"heights",heights}}));
+                    auto result=object(reply,L"result");if(array(result,L"heights").Size()==2)self->send(O({{L"type",S(L"measure_card")},{L"id",N(r->id)},{L"measurement",object(result,L"measurement")},{L"properties_height",N(num(result,L"properties_height"))}}));
                 }))p->inspector->sizingKey=L"";
             });
         }

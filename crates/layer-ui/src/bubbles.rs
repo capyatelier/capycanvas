@@ -896,7 +896,7 @@ pub enum BubbleAction {
     Resize { id: u32, scale: f32 },
     Properties { id: u32 },
     Close { id: u32 },
-    MeasureCard { id: u32, heights: [f32; 2] },
+    MeasureCard { id: u32, measurement: PanelScrollMeasurement, properties_height: f32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -992,6 +992,7 @@ impl ChooserItem {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct BubbleCard {
     pub size: [f32; 2],
+    pub metrics: Option<(PanelScrollMeasurement, f32)>,
     pub full: bool,
     pub properties: bool,
     pub disclosure: String,

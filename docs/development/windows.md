@@ -524,6 +524,7 @@ pen and touch contacts. Run its six `<theme>-<device>` variants, such as
 `tool-bubbles:light-pen`, through the VM or private-desktop runner. Its switches
 select focused scopes; use `-HdrOnly` with `-HdrDepth F16` and `F32` after
 changing HDR color bubbles, and `-BlendersOnly` after changing blender bubbles.
+Use `tool-bubbles:card-metrics-dark` and `tool-bubbles:card-metrics-light` for Layers card close, add rows, reopen and Properties sizing.
 The `tool-bubbles:native-controls-dark` and `tool-bubbles:native-controls-light`
 variants cover native card controls, scrolling, touch takeover and inertia.
 Use `tool-bubbles:inertia-dark` and `tool-bubbles:inertia-light` to isolate live
