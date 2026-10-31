@@ -30,7 +30,8 @@ internal class CanvasContent(context: Context, private val host: CanvasHost) : A
         val dock = host.workspaceInteraction
         val mouse = event.getToolType(pointerIndex) == MotionEvent.TOOL_TYPE_MOUSE
         fun icon(type: Int) = PointerIcon.getSystemIcon(context, type)
-        dock?.activePointerIcon()?.let { return icon(it) }
+        fun hover(type: Int) = if (!mouse && (type == PointerIcon.TYPE_ARROW || type == PointerIcon.TYPE_GRAB || type == PointerIcon.TYPE_GRABBING)) null else icon(type)
+        dock?.activePointerIcon()?.let { return if (it == PointerIcon.TYPE_GRAB) hover(it) else icon(it) }
         if (host.palettes.contactHeld && host.palettes.drag?.started == true) return icon(PointerIcon.TYPE_GRABBING)
         val local = point - (dock?.origin ?: Offset.Zero)
         val bubble = dock?.bubbles?.pointerTarget(local)
@@ -41,12 +42,12 @@ internal class CanvasContent(context: Context, private val host: CanvasHost) : A
         if (dock != null && dock.bounds.contains(point)) {
             dock.hit(local)?.let { region ->
                 val cursor = if (region.holdToDrag) PointerIcon.TYPE_ARROW else region.cursor
-                return icon(if (!mouse && (cursor == PointerIcon.TYPE_GRAB || cursor == PointerIcon.TYPE_GRABBING)) PointerIcon.TYPE_NULL else cursor)
+                return hover(cursor)
             }
-            if (dock.chromeRegions.values.any { it.bounds.contains(local) }) return icon(PointerIcon.TYPE_ARROW)
-            return dock.canvas?.pointerIconAt(local.x, local.y) ?: icon(PointerIcon.TYPE_ARROW)
+            if (dock.chromeRegions.values.any { it.bounds.contains(local) }) return hover(PointerIcon.TYPE_ARROW)
+            return dock.canvas?.pointerIconAt(local.x, local.y) ?: hover(PointerIcon.TYPE_ARROW)
         }
-        return icon(PointerIcon.TYPE_ARROW)
+        return hover(PointerIcon.TYPE_ARROW)
     }
 }
 

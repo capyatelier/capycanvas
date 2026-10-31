@@ -623,16 +623,13 @@ class AndroidHostTest {
             }
             runCatching { compose.waitUntil(5_000) {
                 val actual = resolved()
-                actual == expected || (type == null && tool == MotionEvent.TOOL_TYPE_STYLUS &&
-                    (actual == PointerIcon.getSystemIcon(native.context, PointerIcon.TYPE_ARROW) || actual == PointerIcon.getSystemIcon(native.context, PointerIcon.TYPE_NULL)))
+                actual == expected
             } }
             val actual = resolved()
             val actualType = listOf(PointerIcon.TYPE_ARROW, PointerIcon.TYPE_HAND, PointerIcon.TYPE_GRAB, PointerIcon.TYPE_GRABBING, PointerIcon.TYPE_NULL).firstOrNull { PointerIcon.getSystemIcon(native.context, it) == actual }
-            if (type == null && tool == MotionEvent.TOOL_TYPE_STYLUS)
-                assertTrue("Native default pen cursor at $point (resolved type=$actualType)", actual == null || actualType == PointerIcon.TYPE_ARROW || actualType == PointerIcon.TYPE_NULL)
-            else assertEquals("Native cursor at $point for tool $tool (expected type=$type, resolved type=$actualType)", expected, actual)
+            assertEquals("Native cursor at $point for tool $tool (expected type=$type, resolved type=$actualType)", expected, actual)
         }
-        fun hover(point: androidx.compose.ui.geometry.Offset, type: Int, penType: Int? = if (type == PointerIcon.TYPE_GRAB || type == PointerIcon.TYPE_GRABBING) null else type) {
+        fun hover(point: androidx.compose.ui.geometry.Offset, type: Int, penType: Int? = if (type in listOf(PointerIcon.TYPE_ARROW, PointerIcon.TYPE_GRAB, PointerIcon.TYPE_GRABBING)) null else type) {
             root.performMouseInput { moveTo(point) }; settle(); icon(point, type)
             root.performMouseInput { exit() }
             val event = event(point, MotionEvent.TOOL_TYPE_STYLUS)

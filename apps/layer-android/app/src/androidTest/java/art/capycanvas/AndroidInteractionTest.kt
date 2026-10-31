@@ -789,17 +789,33 @@ class AndroidInteractionTest {
         }
     }
 
+    private fun prepareTileDrop(): List<Int> {
+        val layout = fixture.getJSONObject("layout")
+        val first = layout.getInt("next_tile_id")
+        val ids = (first until first + 5).toList()
+        val controls = listOf(obj("kind" to "command", "command" to "brush"), obj("kind" to "command", "command" to "eraser"),
+            obj("kind" to "divider"), obj("kind" to "command", "command" to "lasso"), obj("kind" to "command", "command" to "hand"))
+        layout.put("next_tile_id", first + 5)
+        layout.array("panels").objects().first { it.getString("id") == "toolbar" }.apply {
+            put("tile_style", "small")
+            getJSONObject("content").put("tiles", JSONArray(ids.mapIndexed { index, id -> obj("id" to id, "control" to controls[index]) }))
+        }
+        layout.put("bands", JSONArray(listOf(obj("id" to 40, "edge" to "top", "extent" to 36, "root" to tabs(41, "toolbar")))))
+        restore()
+        return ids
+    }
+
+    private fun toolbarTileOrder() = state().getJSONObject("workspace").getJSONObject("layout").array("panels").objects()
+        .first { it.getString("id") == "toolbar" }.getJSONObject("content").array("tiles").objects().map { it.getInt("id") }
+
     @Test fun tileDropLosingWindowFocusRetiresDragState() {
         for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme))
-            val tiles = snapshot().array("panels").objects().first { it.getString("id") == "toolbar" }
-                .array("tiles").objects()
-            val source = tiles.first().getInt("id")
-            val destination = tiles[1].getInt("id")
-            assertNotEquals("The fixture has distinct toolbar tiles", source, destination)
+            val ids = prepareTileDrop()
+            val source = ids[0]
             val area = bounds("workspace")
             val start = (bounds("tile-toolbar-$source").center - area.topLeft) / density
-            val end = (bounds("tile-toolbar-$destination").center - area.topLeft) / density
+            val end = (bounds("tile-toolbar-${ids[2]}").center + Offset(8f * density, 0f) - area.topLeft) / density
             val item = obj("kind" to "tile", "panel" to "toolbar", "tile" to source)
             val dock = DockInteraction(host)
             try {
@@ -813,7 +829,10 @@ class AndroidInteractionTest {
                 onMain {
                     assertTrue("$theme tile drag is active", dock.dragging)
                     assertTrue("$theme chrome facts report the tile drag", dock.facts().getBoolean("dragging"))
+                    assertEquals("$theme release has a real tile destination", "tile", dock.hint?.optJSONObject("target")?.optString("kind"))
                     dock.finish(false)
+                    assertFalse("$theme release retires dragging synchronously", dock.dragging)
+                    assertFalse("$theme release retires the dragging fact synchronously", dock.facts().getBoolean("dragging"))
                     dock.windowFocus(false)
                 }
                 host.drain()
@@ -821,6 +840,9 @@ class AndroidInteractionTest {
                     assertFalse("$theme focus loss retires a released tile drag", dock.dragging)
                     assertFalse("$theme late drop reply cannot retain the dragging fact", dock.facts().getBoolean("dragging"))
                     assertNull("$theme retired tile drop clears feedback", dock.hint)
+                }
+                waitFor("$theme focused release still applies after focus loss") { toolbarTileOrder() == listOf(ids[1], ids[2], ids[0], ids[3], ids[4]) }
+                onMain {
                     dock.windowFocus(true)
                     val target = obj("kind" to "panel", "panel" to "toolbar")
                     dock.anchors[Any()] = DockInteraction.Anchor(dock.anchorKey(target), area)

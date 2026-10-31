@@ -305,7 +305,6 @@ internal class DockInteraction(val host: CanvasHost) {
     fun windowFocus(value: Boolean) {
         if (focused == value) return
         focused = value
-        if (!value) gestureGeneration++
         if (!value && contextMenu == null) closeContext()
     }
     fun context(target: JSONObject) {
@@ -402,13 +401,13 @@ internal class DockInteraction(val host: CanvasHost) {
         val point = position
         if (action.getString("type") == "tile_drag" && !cancel) {
             host.query(query()) { result ->
-                if (request == gestureGeneration && focused) {
+                if (request == gestureGeneration) {
                     val target = (result as? JSONObject)?.optJSONObject("target")
                     val item = action.getJSONObject("item")
                     if (target != null) {
                         host.dispatch(obj("type" to "move_tile", "panel" to item.getString("panel"),
                             "tile" to item.getInt("tile"), "target" to target, "viewport" to viewport))
-                    } else bubbles?.takeTile(item, point) { request == gestureGeneration && focused }
+                    } else bubbles?.takeTile(item, point) { request == gestureGeneration }
                 }
             }
         } else send(if (cancel) "cancel" else "up")
