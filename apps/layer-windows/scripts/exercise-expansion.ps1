@@ -4,6 +4,7 @@ $ResizeOnly=$ResizeOnly -or $ResizeTailOnly -or $ResizeStackOnly
 $script:ResizeVerticalScrollStatus='not-run'
 $script:ResizeMixedInputStatus='not-run'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
+. (Join-Path $PSScriptRoot 'ComposedFrames.ps1')
 $CapyCacheModel=$true
 Add-Type -AssemblyName System.Drawing
 if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
@@ -408,16 +409,80 @@ function DialogButton([string]$Id,[string]$Name){
     $found.item
 }
 function InvokeDialog([string]$Id,[string]$Name){(DialogButton $Id $Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
-function Configure([string]$Panel,[string]$Source="panel-tab-$Panel"){
+function Configuration-Menu([string]$Panel,[string]$Source="panel-tab-$Panel"){
     Wait-Until {$null -ne ((Model).panels|Where-Object id -eq $Panel)} "Missing shared panel $Panel"
     $model=(Model).panels|Where-Object id -eq $Panel
     ToolbarContext $Source
-    Invoke ($model.configuration_title+'…') -Name
+    (Control ($model.configuration_title+'…') -Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+}
+function Configure([string]$Panel,[string]$Source="panel-tab-$Panel"){
+    (Configuration-Menu $Panel $Source).Invoke()
     Wait-Until {(Model).state.customization.expanded -eq $Panel} "Core did not expand $Panel"
     $configuration=Control "panel-configuration-$Panel"
     Wait-Until {$configuration.Current.BoundingRectangle.Width -gt 100} "Configuration $Panel has no native bounds"
     Start-Sleep -Milliseconds 400
     $configuration
+}
+function Check-NarrowExpansion([string]$Panel){
+    $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Normal)
+    $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width ([int](640*$scale)) -Height ([int](1000*$scale))
+    Expand-PanelColumn $Panel;Resize-Settled
+    $model=Model;$placement=@($model.layout.groups|Where-Object active -eq $Panel)
+    if($placement.Count -ne 1){throw "Narrow expansion has no unique active $Panel group"}
+    $group=Control ('workspace-group-'+$placement[0].id) -Arranged
+    $docked=$group.Current.BoundingRectangle
+    $folder=Join-Path $run ('narrow-expansion-'+$Panel);[IO.Directory]::CreateDirectory($folder)|Out-Null
+    $model|ConvertTo-Json -Depth 90|Set-Content (Join-Path $folder 'before-model.json')
+    $area=$root.Current.BoundingRectangle
+    $menu=Configuration-Menu $Panel
+    $cache=[System.Windows.Automation.CacheRequest]::new()
+    $cache.Add([System.Windows.Automation.AutomationElement]::ItemStatusProperty)
+    $cache.Add([System.Windows.Automation.AutomationElement]::BoundingRectangleProperty)
+    $receipts=[Collections.Generic.List[object]]::new()
+    $sample=Sample-Frames $area {
+        param($i)
+        if($i -eq 3){$menu.Invoke()}
+        $native=$group.GetUpdatedCache($cache).Cached
+        $receipts.Add([ordered]@{frame=$i;expansion=$(if($native.ItemStatus){$native.ItemStatus|ConvertFrom-Json}else{$null});native_bounds=$native.BoundingRectangle})
+    }
+    try{
+        for($i=0;$i -lt $sample.frames.Count;$i++){$sample.frames[$i].Save((Join-Path $folder ('frame-{0:D3}.png' -f $i)))}
+        @{panel=$Panel;theme=$Theme;scale=$scale;viewport=$model.layout.viewport;docked=$docked;area=$area;action_frame=3;sample_count=$sample.frames.Count;receipts=$receipts;times=$sample.times;frequency=[Diagnostics.Stopwatch]::Frequency}|ConvertTo-Json -Depth 18|Set-Content (Join-Path $folder 'frames.json')
+        Capture ('narrow-expansion-'+$Panel+'-final') -WithModel -Composed
+        $expanded=@($receipts|Where-Object {$_.expansion})
+        if(!$expanded.Count){throw 'Narrow expansion produced no native geometry samples'}
+        $final=$expanded[-1].expansion
+        if(@($receipts|Select-Object -Last 3|Where-Object { !$_.expansion -or ($_.expansion|ConvertTo-Json -Depth 12 -Compress) -cne ($final|ConvertTo-Json -Depth 12 -Compress)}).Count){throw 'Narrow expansion did not finish within the composed sample window'}
+        $width=$final.bounds.width*$scale-$docked.Width
+        if($width -le 2){throw 'Narrow expansion has no horizontal animation range'}
+        $trajectory=@(foreach($receipt in $expanded){
+            $bounds=$receipt.expansion.bounds
+            $progress=($bounds.width*$scale-$docked.Width)/$width
+            $expected=$docked.Height+$progress*($final.bounds.height*$scale-$docked.Height)
+            $possible=@(foreach($startError in -1,1){foreach($endError in -1,1){foreach($sampleError in -1,1){
+                [Math]::Max(0.0,[Math]::Min(1.0,($bounds.width*$scale+$sampleError-$docked.Width-$startError)/($width+$endError-$startError)))
+            }}})
+            $range=$possible|Measure-Object -Minimum -Maximum
+            $minimum=$docked.Height+$range.Minimum*($final.bounds.height*$scale-$docked.Height)-2
+            $maximum=$docked.Height+$range.Maximum*($final.bounds.height*$scale-$docked.Height)+2
+            [ordered]@{frame=$receipt.frame;progress=$progress;height=$bounds.height*$scale;expected_height=$expected;minimum_height=$minimum;maximum_height=$maximum;error=[Math]::Abs($bounds.height*$scale-$expected);configuration_width=$receipt.expansion.configuration.width*$scale}
+        })
+        $intermediate=@($trajectory|Where-Object {$_.progress -gt 0 -and $_.progress -lt 1}|ForEach-Object {$_.progress}|Select-Object -Unique)
+        $proof=@{final=$final;intermediate_samples=$intermediate.Count;trajectory=$trajectory};$proof|ConvertTo-Json -Depth 14|Set-Content (Join-Path $folder 'trajectory.json')
+        if($intermediate.Count -lt 2){throw 'Narrow expansion did not capture two distinct intermediate geometry samples'}
+        if(@($trajectory|Where-Object {$_.height -lt $_.minimum_height-.001 -or $_.height -gt $_.maximum_height+.001}).Count){throw 'Narrow expansion height departed from its width-derived shared trajectory'}
+        if(@($trajectory|Where-Object {[Math]::Abs($_.configuration_width-$final.configuration.width*$scale) -gt 2}).Count){throw 'Narrow expansion changed its resolved configuration width while opening'}
+        $configuration=Control "panel-configuration-$Panel"
+        if([Math]::Abs($configuration.Current.BoundingRectangle.Width-$final.configuration.width*$scale) -gt 2){throw 'Narrow configuration allocation differs from its shared width'}
+        $scroll=Scroll-Pattern $configuration
+        $proof.scroll_view_size=$scroll.Current.VerticalViewSize;$proof.scrollable=$scroll.Current.VerticallyScrollable
+        $proof.overflow_px=if($proof.scroll_view_size -gt 0){$configuration.Current.BoundingRectangle.Height*(100/$proof.scroll_view_size-1)}else{[double]::PositiveInfinity}
+        $proof|ConvertTo-Json -Depth 14|Set-Content (Join-Path $folder 'trajectory.json')
+        if($proof.overflow_px -gt 2){throw 'Narrow expansion clips configuration content and cannot prove its natural height trajectory'}
+    }finally{foreach($image in $sample.frames){$image.Dispose()}}
+    Dismiss $Panel
+    Maximize-DrawingWindow;Resize-Settled
 }
 function Dismiss([string]$Panel,[string]$Source="panel-tab-$Panel"){
     (Control $Source).SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x1B)
@@ -529,6 +594,8 @@ try{
         [pscustomobject]@{scope=$(if($ResizeStackOnly){'native two-member stack edge'}elseif($ResizeTailOnly){'native workspace resize tail'}else{'native workspace resize'});device=$Device;theme=$Theme;floating_edges=$(if($ResizeTailOnly -or $ResizeStackOnly){'not-run'}else{'passed'});actual_tab_top_six=$(if($ResizeTailOnly -or $ResizeStackOnly){'not-run'}else{'pickup-vertical-resize-and-release-selection-passed'});toolbar_lanes=$(if($ResizeStackOnly){'not-run'}else{'passed'});column_reversal=$(if($ResizeStackOnly){'not-run'}else{'passed'});actual_two_member_stack='closed-open-close-reversal-passed';adjacent_width=$(if($ResizeStackOnly){'not-run'}else{'unchanged'});workspace_undo=$(if($ResizeStackOnly){'not-run'}else{'exact'});cursor=$(if($Device -eq 'mouse'){if($ResizeTailOnly -or $ResizeStackOnly){'claimed-drag-passed'}else{'hover-and-drag-passed'}}else{'not-applicable'});artwork_revision_before=$resizeArtwork.before;artwork_revision_after=$resizeArtwork.after;native_vertical_scroll=$script:ResizeVerticalScrollStatus;mixed_input_after_cancel=$script:ResizeMixedInputStatus;evidence=$run}|ConvertTo-Json|Set-Content (Join-Path $run 'results.json')
         Get-Content (Join-Path $run 'results.json');return
     }
+    Check-NarrowExpansion 'sizes'
+    Check-NarrowExpansion 'navigator'
     if(Shown 'sizes' 'brush_size'){throw 'Sizes shows the Brush Size slider by default'}
     if((Model).state.customization.drawer -or !@((Model).layout.groups|Where-Object active -eq 'sizes').Count){Invoke-Id 'panel-tab-sizes'}
     $docked=Check-SizeGrid $root 'mouse' '1.5'
@@ -634,7 +701,7 @@ try{
     if((Model).state.customization.expanded){Dismiss 'toolbar' 'ribbon-grip-toolbar'}
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
-    [pscustomobject]@{size_grid=@($docked)+$configured;shared_expansion_width='passed';live_brush_size='passed';control_visibility='passed';retained_configuration='passed';resize='passed';escape_close='passed';layers='passed';editing_layer_selection='passed';targeted_opacity='passed';navigator_configuration='passed';gpu_preview_occlusion_and_restore='passed';theme='passed';toolbar_add_tools='passed';zero_exit='passed';scope='native configuration projection; full visual parity, physical input and presentation are separate'}|ConvertTo-Json
+    [pscustomobject]@{narrow_expansion='width-derived-height-trajectory-passed';size_grid=@($docked)+$configured;shared_expansion_width='passed';live_brush_size='passed';control_visibility='passed';retained_configuration='passed';resize='passed';escape_close='passed';layers='passed';editing_layer_selection='passed';targeted_opacity='passed';navigator_configuration='passed';gpu_preview_occlusion_and_restore='passed';theme='passed';toolbar_add_tools='passed';zero_exit='passed';scope='native configuration projection; full visual parity, physical input and presentation are separate'}|ConvertTo-Json
 }catch{
     [IO.File]::WriteAllText((Join-Path $run 'failure-exception.txt'),$_.Exception.ToString())
     if($ResizeOnly -and $review -and !$review.HasExited){try{@{model=(Model);gesture=(Resize-Gesture)}|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'resize-failure.json')}catch{}}

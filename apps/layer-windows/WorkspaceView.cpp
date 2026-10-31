@@ -215,7 +215,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         collapsed=std::make_unique<CollapsedColumns>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->queueMeasurements();});
         commandSearch->data=data;commandSearch->changed=[weak=weak_from_this()]{if(auto self=weak.lock())self->queueMeasurements();};commandSearch->init(root);
         drawers=std::make_unique<WorkspaceDrawers>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock()){self->publishDrawerSources();self->queueMeasurements();}});
-        expansion=std::make_unique<WorkspaceExpansion>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->present();});
+        expansion=std::make_unique<WorkspaceExpansion>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->present();},
+            [weak=weak_from_this()](double width){if(auto self=weak.lock())return self->configurationHeight(width);return 0.;});
         bubbles=std::make_unique<WorkspaceBubbles>(data,root,[weak=weak_from_this()]{if(auto self=weak.lock())self->queueMeasurements();});
         measureGate.Content(measureHost);measureGate.IsEnabled(false);measureGate.IsTabStop(false);measureGate.IsHitTestVisible(false);measureGate.Visibility(Visibility::Collapsed);Canvas::SetLeft(measureGate,-100000);root.Children().Append(measureGate);
         root.LayoutUpdated([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->layoutUpdated();});
@@ -793,11 +794,11 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         if(value!=lastPresentation){lastPresentation=value;AutomationProperties::SetItemStatus(root,value);}
     }
 
-    double configurationHeight()const{
+    double configurationHeight(double width=0)const{
         auto panel=str(object(data->state,L"customization"),L"expanded");
         if(panel.empty())panel=expansion->Panel();
         for(auto const& [id,group]:groups)if(group.configuration&&group.configuration->Panel()==panel)
-            return group.configuration->ContentHeight();
+            return group.configuration->ContentHeight(width);
         return 0;
     }
     void updateConfiguration(){
@@ -994,8 +995,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 group.configuration->SetVisible(!group.hidden);
                 AutomationProperties::SetItemStatus(group.configuration->Root(),expanded.Stringify());
             }else{
-                // Measure full natural content before the first shared geometry reply.
-                place(group.configurationFrame,rectangle({box.Width,0,std::min(float(data->panelMetric(L"configuration_width")),float(root.ActualWidth())),box.Height}));
                 group.configurationFrame.Opacity(0);group.configurationFrame.IsHitTestVisible(false);
                 if(group.configuration){group.configuration->SetVisible(false);AutomationProperties::SetItemStatus(group.configuration->Root(),L"");}
             }

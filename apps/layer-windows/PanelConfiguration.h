@@ -9,7 +9,7 @@ public:
     winrt::Microsoft::UI::Xaml::FrameworkElement Root()const;
     winrt::hstring Panel()const;
     void Apply(CapyUi::J const& panel,bool visible);
-    double ContentHeight()const;
+    double ContentHeight(double width=0)const;
     void SetVisible(bool visible);
     winrt::Microsoft::UI::Xaml::FrameworkElement Anchor(std::wstring const& control)const;
     void AppendOverviews(CapyUi::A& slots,winrt::Microsoft::UI::Xaml::UIElement const& reference,

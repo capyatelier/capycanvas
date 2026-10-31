@@ -95,7 +95,7 @@ struct PanelConfiguration::Impl:std::enable_shared_from_this<Impl>{
         if(kind==L"adjustments"){auto body=FiltersPanel(data,bindings);body.Height(data->panelMetric(L"drawer_filters_min_height"));return body;}
         if(kind==L"navigator"){
             navigator=std::make_unique<NavigatorView>(data,[weak=weak_from_this()]{if(auto self=weak.lock())self->measured();});
-            navigator->Root().Height(navigator->NaturalHeight(data->panelMetric(L"configuration_width")-24));return navigator->Root();
+            return navigator->Root();
         }
         if(kind==L"brush_size"||kind==L"brush_opacity"){
             bool size=kind==L"brush_size";
@@ -209,7 +209,10 @@ PanelConfiguration::~PanelConfiguration()=default;
 FrameworkElement PanelConfiguration::Root()const{return impl->root;}
 hstring PanelConfiguration::Panel()const{return impl->panelId;}
 void PanelConfiguration::Apply(J const& panel,bool visible){impl->apply(panel,visible);}
-double PanelConfiguration::ContentHeight()const{return impl->content.IsLoaded()?impl->content.ActualHeight():0;}
+double PanelConfiguration::ContentHeight(double width)const{
+    if(width>0){impl->content.Width(width);impl->content.Measure({float(width),std::numeric_limits<float>::infinity()});}
+    return impl->content.DesiredSize().Height;
+}
 void PanelConfiguration::SetVisible(bool visible){if(impl->navigator)impl->navigator->Apply(visible);}
 FrameworkElement PanelConfiguration::Anchor(std::wstring const& control)const{
     auto found=impl->anchors.find(control);return found==impl->anchors.end()?nullptr:found->second;

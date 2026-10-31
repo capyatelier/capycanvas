@@ -7,7 +7,8 @@ class WorkspaceExpansion {
 public:
     WorkspaceExpansion(std::shared_ptr<CapyUi::WorkspaceData> data,
         winrt::Microsoft::UI::Xaml::Controls::Canvas root,
-        std::shared_ptr<WorkspaceGestures> gestures,std::function<void()> changed);
+        std::shared_ptr<WorkspaceGestures> gestures,std::function<void()> changed,
+        std::function<double(double)> measure);
     ~WorkspaceExpansion();
     void Apply(double configurationHeight);
     CapyUi::J Geometry()const;

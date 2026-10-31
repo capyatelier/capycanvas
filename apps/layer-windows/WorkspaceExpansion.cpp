@@ -12,12 +12,13 @@ struct WorkspaceExpansion::Impl:std::enable_shared_from_this<Impl>{
     Canvas root{nullptr};
     std::shared_ptr<WorkspaceGestures> gestures;
     std::function<void()> changed;
+    std::function<double(double)> measure;
     Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};
     hstring panel,layoutKey,lastFacts;
     J geometry,from;
     Clock::time_point started;
     double height=0;
-    bool closing=false,animating=false,dirty=false,busy=false,disposed=false;
+    bool closing=false,animating=false,dirty=false,busy=false,disposed=false,measurePending=false,startPending=false;
     uint64_t generation=0;
     void init(){
         timer=root.DispatcherQueue().CreateTimer();timer.Interval(std::chrono::milliseconds(16));
@@ -41,7 +42,8 @@ struct WorkspaceExpansion::Impl:std::enable_shared_from_this<Impl>{
         measured=std::max(0.,measured);
         bool transition=next!=panel||closing!=wanted.empty();
         if(transition||layout!=layoutKey||std::abs(measured-height)>.5){
-            if(transition){from=geometry;started=Clock::now();animating=true;}
+            if(transition){from=geometry;started=Clock::now();animating=true;measurePending=startPending=!wanted.empty();}
+            if(!wanted.empty()&&(transition||layout!=layoutKey))measurePending=true;
             panel=next;closing=wanted.empty();layoutKey=layout;height=measured;
             dirty=true;++generation;timer.Start();
         }
@@ -50,15 +52,23 @@ struct WorkspaceExpansion::Impl:std::enable_shared_from_this<Impl>{
         if(disposed||(!dirty&&!animating)){timer.Stop();return;}
         if(busy||!root.IsLoaded()||root.ActualWidth()<=0||root.ActualHeight()<=0)return;
         auto duration=std::max(1.,num(data->catalog,L"panel_expansion_ms",200))/1000.;
-        double progress=animating&&Windows::UI::ViewManagement::UISettings().AnimationsEnabled()?std::clamp(std::chrono::duration<double>(Clock::now()-started).count()/duration,0.,1.):1.;
-        A heights;heights.Append(N(0));heights.Append(N(height));
+        bool measuring=measurePending;
+        double progress=!measuring&&animating&&Windows::UI::ViewManagement::UISettings().AnimationsEnabled()?std::clamp(std::chrono::duration<double>(Clock::now()-started).count()/duration,0.,1.):1.;
+        A heights;heights.Append(N(0));heights.Append(N(measuring?0:height));
         auto request=O({{L"type",S(L"expansion")},{L"panel",S(panel)},{L"heights",heights},{L"progress",N(progress)},
-            {L"from",from.Size()?V(from):JsonValue::CreateNullValue()},{L"closing",B(closing)}});
+            {L"from",!measuring&&from.Size()?V(from):JsonValue::CreateNullValue()},{L"closing",B(!measuring&&closing)}});
         auto serial=generation;busy=true;dirty=false;
-        if(!QueryWorkspace(data->query,request,[weak=weak_from_this(),serial,progress](J reply){
+        if(!QueryWorkspace(data->query,request,[weak=weak_from_this(),serial,progress,measuring](J reply){
             if(auto self=weak.lock()){
                 self->busy=false;if(self->disposed||serial!=self->generation)return;
-                self->geometry=object(reply,L"result");
+                auto geometry=object(reply,L"result");
+                self->measurePending=false;
+                if(measuring&&geometry.Size()){
+                    self->height=std::max(0.,self->measure(num(object(geometry,L"configuration"),L"width")));
+                    if(self->startPending){self->started=Clock::now();self->startPending=false;}
+                    self->dirty=true;return;
+                }
+                self->geometry=std::move(geometry);
                 for(auto key:{L"bounds",L"preview",L"configuration"})if(auto box=object(self->geometry,key);box.Size())self->geometry.Insert(key,rectangle(pixelBounds(rectangle(box),self->root)));
                 if(progress>=1||!self->geometry.Size())self->animating=false;
                 if(!self->geometry.Size()||(self->closing&&progress>=1)){
@@ -71,9 +81,9 @@ struct WorkspaceExpansion::Impl:std::enable_shared_from_this<Impl>{
     }
 };
 WorkspaceExpansion::WorkspaceExpansion(std::shared_ptr<WorkspaceData> data,Canvas root,
-    std::shared_ptr<WorkspaceGestures> gestures,std::function<void()> changed):impl(std::make_shared<Impl>()){
+    std::shared_ptr<WorkspaceGestures> gestures,std::function<void()> changed,std::function<double(double)> measure):impl(std::make_shared<Impl>()){
     impl->data=std::move(data);impl->root=root;impl->gestures=std::move(gestures);
-    impl->changed=std::move(changed);impl->init();
+    impl->changed=std::move(changed);impl->measure=std::move(measure);impl->init();
 }
 WorkspaceExpansion::~WorkspaceExpansion(){impl->disposed=true;impl->timer.Stop();++impl->generation;}
 void WorkspaceExpansion::Apply(double height){impl->apply(height);}
