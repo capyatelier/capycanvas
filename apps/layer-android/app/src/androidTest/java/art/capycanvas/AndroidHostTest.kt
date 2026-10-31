@@ -4118,6 +4118,64 @@ class AndroidHostTest {
         } finally { configuration(original) }
     }
 
+    @Test fun mouseScrollbarThumbUsesTheNativeViewport() {
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "transparency", "value" to 0)))
+            action(obj("type" to "restore_workspace", "workspace" to JSONObject(defaultWorkspace)))
+            action(obj("type" to "select_brush", "id" to 1))
+            floatPanel("tool_settings", 120f, 100f)
+            val fixture = JSONObject(state().getJSONObject("workspace").toString())
+            fixture.getJSONObject("layout").array("floating").objects().first { it.getJSONObject("root").array("panels").values().contains("tool_settings") }
+                .put("height", 132).put("width", 300)
+            fixture.getJSONObject("layout").put("fit_height_groups", JSONArray())
+            action(obj("type" to "restore_workspace", "workspace" to fixture))
+            settle()
+            val body = compose.onNodeWithTag("panel-body-tool_settings", useUnmergedTree = true)
+            val node = body.fetchSemanticsNode().find { it.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange)?.maxValue?.invoke()?.let { max -> max > 0f } == true }
+            assertNotNull("$theme Tool settings actually overflows", node)
+            val maximum = node!!.config[SemanticsProperties.VerticalScrollAxisRange].maxValue()
+            val frame = screenBounds(body)
+            val density = compose.activity.resources.displayMetrics.density
+            assertTrue("$theme fixture content exceeds three viewports", maximum > frame.height * 2f)
+            fun hover(tool: Int) {
+                val time = SystemClock.uptimeMillis()
+                val event = MotionEvent.obtain(time, time, MotionEvent.ACTION_HOVER_MOVE, 1,
+                    arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = tool }),
+                    arrayOf(MotionEvent.PointerCoords().apply { x = frame.center.x; y = frame.center.y }),
+                    0, 0, 1f, 1f, 0, 0, if (tool == MotionEvent.TOOL_TYPE_MOUSE) InputDevice.SOURCE_MOUSE else InputDevice.SOURCE_STYLUS, 0)
+                try { assertTrue(instrumentation.uiAutomation.injectInputEvent(event, true)) } finally { event.recycle() }
+                settle()
+            }
+            hover(MotionEvent.TOOL_TYPE_STYLUS)
+            val before = instrumentation.uiAutomation.takeScreenshot()!!.let { raw ->
+                try { raw.copy(Bitmap.Config.ARGB_8888, false) } finally { raw.recycle() }
+            }
+            try {
+                hover(MotionEvent.TOOL_TYPE_MOUSE)
+                val after = instrumentation.uiAutomation.takeScreenshot()!!.let { raw ->
+                    try { raw.copy(Bitmap.Config.ARGB_8888, false) } finally { raw.recycle() }
+                }
+                try {
+                    val x = (frame.right - 4f * density).toInt()
+                    val changed = ((frame.top + 2f * density).toInt() until (frame.bottom - 2f * density).toInt()).filter { y ->
+                        val a = before.getPixel(x, y); val b = after.getPixel(x, y)
+                        kotlin.math.abs(android.graphics.Color.red(a) - android.graphics.Color.red(b)) +
+                            kotlin.math.abs(android.graphics.Color.green(a) - android.graphics.Color.green(b)) +
+                            kotlin.math.abs(android.graphics.Color.blue(a) - android.graphics.Color.blue(b)) > 24
+                    }
+                    assertTrue("$theme mouse hover paints a real scrollbar thumb", changed.isNotEmpty())
+                    val observed = changed.last() - changed.first() + 1f
+                    val expected = (frame.height * frame.height / (frame.height + maximum)).coerceIn((28f * density).coerceAtMost(frame.height), frame.height)
+                    val directory = File(compose.activity.getExternalFilesDir(null), "validation/batch2").apply { mkdirs() }
+                    File(directory, "scrollbar-$theme.json").writeText(obj("viewport" to frame.height, "maximum" to maximum, "expected" to expected, "observed" to observed).toString(2))
+                    File(directory, "scrollbar-$theme.png").outputStream().use { after.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                    assertEquals("$theme thumb is viewport squared / content, not the whole viewport", expected, observed, 4f * density)
+                } finally { after.recycle() }
+            } finally { before.recycle() }
+        }
+    }
+
     @Test fun panelDrawerAndDividerUseSharedLayout() {
         val source = group("brushes").getInt("id")
         customize(obj("type" to "set_column_collapsed", "group" to source, "collapsed" to true))

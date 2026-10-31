@@ -28,7 +28,7 @@ internal object PointerScrollbars {
     }
 }
 
-@Composable internal fun Modifier.panelScroll(scroll: ScrollState) = verticalScroll(scroll).mouseScrollbar(scroll)
+@Composable internal fun Modifier.panelScroll(scroll: ScrollState) = mouseScrollbar(scroll).verticalScroll(scroll)
 @Composable internal fun Modifier.mouseScrollbar(scroll: ScrollState) = mouseScrollbar({ scroll.value.toFloat() to scroll.maxValue.toFloat() }) { scroll.scrollBy(it) }
 @Composable internal fun Modifier.mouseScrollbar(scroll: LazyListState) = mouseScrollbar({
     val info=scroll.layoutInfo
