@@ -123,6 +123,7 @@ exports it as `$CAPY_APPLICATION_ID`. The commands below write
 
 ### Changing the host
 
+- **Pointer icons.** Register Compose text editors with `Modifier.textCursorRegion()`; `CanvasContent` resolves other workspace cursors from the gesture hit maps.
 - **JNI results.** `or_throw` in `native/src/android.rs` reports
   `IllegalStateException` and keeps the return sentinel; `argb_array` packs RGBA
   pixels for Kotlin. Every JNI export uses `jni_entry!`; VM loading returns

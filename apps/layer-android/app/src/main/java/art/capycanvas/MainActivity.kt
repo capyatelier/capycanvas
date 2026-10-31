@@ -9,8 +9,6 @@ import android.os.Bundle
 import android.view.KeyEvent
 import android.view.KeyCharacterMap
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.ReportDrawnWhen
-import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.lifecycle.viewmodel.initializer
@@ -36,10 +34,7 @@ class MainActivity : ComponentActivity() {
         window.enterCanvasFullscreen()
         window.colorMode=if(wideColorWindow())ActivityInfo.COLOR_MODE_WIDE_COLOR_GAMUT else ActivityInfo.COLOR_MODE_DEFAULT
         updateTheme(resources.configuration)
-        setContent {
-            ReportDrawnWhen { host.snapshot?.optBoolean("brush_ready") == true }
-            CapyApp(host)
-        }
+        setContentView(CanvasContent(this, host))
         if(savedInstanceState==null)openIntent(intent)
     }
     override fun onNewIntent(intent:android.content.Intent) {

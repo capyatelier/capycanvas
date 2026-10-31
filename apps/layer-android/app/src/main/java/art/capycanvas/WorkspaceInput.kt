@@ -9,14 +9,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.AwaitPointerEventScope
 import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.isPrimaryPressed
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.pointerHoverIcon
-import androidx.compose.ui.input.pointer.stylusHoverIcon
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
@@ -28,24 +25,6 @@ internal val LocalWorkspaceOpacity = staticCompositionLocalOf<State<Float>?> { n
 internal val LocalWorkspaceVisible = staticCompositionLocalOf { true }
 internal val LocalWorkspaceZ = staticCompositionLocalOf { 0 }
 internal val LocalDock = staticCompositionLocalOf<DockInteraction?> { null }
-
-/** Mouse handles use system hands; pen handles keep Android's default hover.
- * Directional resize cursors remain available to either pointing device. */
-@Composable internal fun Modifier.workspacePointerIcon(type: Int?): Modifier {
-    if (type == null) return this
-    val icon = remember(type) { PointerIcon(type) }
-    val mouse = pointerHoverIcon(icon)
-    return if (type == AndroidPointerIcon.TYPE_GRAB || type == AndroidPointerIcon.TYPE_GRABBING) mouse else mouse.stylusHoverIcon(icon)
-}
-
-@Composable internal fun Modifier.workspaceDragCursor(type: Int?): Modifier {
-    val icon = remember(type) { PointerIcon(type ?: AndroidPointerIcon.TYPE_ARROW) }
-    // Keep the mouse hover node installed before contact, so it owns the
-    // pointer when a resize/drag changes the icon without a new hover-enter.
-    val mouse = pointerHoverIcon(icon, overrideDescendants = type != null)
-    return if (type == null || type == AndroidPointerIcon.TYPE_GRABBING || type == AndroidPointerIcon.TYPE_GRAB) mouse
-        else mouse.stylusHoverIcon(icon, overrideDescendants = true)
-}
 
 internal fun pointerKind(type: PointerType) = when (type) {
     PointerType.Mouse -> "mouse"
@@ -82,7 +61,7 @@ internal class DockInteraction(val host: CanvasHost) {
     private companion object { var panelMetricGeneration = 0L }
     data class DrawerSource(val direction: String, val bounds: Rect, val anchor: JSONObject? = null)
     data class Region(val token: Any, val action: JSONObject?, val bounds: Rect, val z: Int, val priority: Int,
-        val context: JSONObject?, val cursor: Int, val holdToDrag: Boolean)
+        val context: JSONObject?, val cursor: Int, val holdToDrag: Boolean, val depth: Int = 0)
     val regions = mutableMapOf<Any, Region>()
     var bubbles: BubbleInteraction? = null
     var bubbleCaptured = false
@@ -106,23 +85,36 @@ internal class DockInteraction(val host: CanvasHost) {
     private var frozenTabClip: Rect? = null
     private var frozenPanel: String? = null
     var origin = Offset.Zero
+    var bounds = Rect.Zero
+    var canvas: CanvasSurfaceView? = null
     var density = 1f
     var viewport = JSONArray(listOf(1, 1))
     var enabled = true
     var focused = true
     var hint by mutableStateOf<JSONObject?>(null)
-    var dragging by mutableStateOf(false)
-        private set
-    var dragCursor by mutableStateOf<Int?>(null)
-        private set
-    fun pickupCursor(armed: Boolean) {
-        if (!dragging && edge?.claimed != true) dragCursor = if (armed) AndroidPointerIcon.TYPE_GRAB else null
+    private var active by mutableStateOf<JSONObject?>(null)
+    val dragging get() = active != null
+    private var pickupArmed = false
+    fun armPickup(armed: Boolean) { pickupArmed = armed }
+    fun activePointerIcon(): Int? {
+        if (!focused || !enabled) return null
+        edge?.cursor?.let { return edgePointerIcon(it) }
+        if (dragging) active?.let { action ->
+            if (action.optJSONObject("item") != null) return AndroidPointerIcon.TYPE_GRABBING
+            if (action.optString("type") == "resize_floating") return resizePointerIcon(action.getString("edge"))
+            if (action.optString("type") == "drag_divider") return host.snapshot?.getJSONObject("layout")?.array("dividers")?.objects()
+                ?.firstOrNull { it.getInt("id") == action.getInt("id") }?.let {
+                    if (it.getString("axis") == "horizontal") AndroidPointerIcon.TYPE_HORIZONTAL_DOUBLE_ARROW else AndroidPointerIcon.TYPE_VERTICAL_DOUBLE_ARROW
+                }
+        }
+        return AndroidPointerIcon.TYPE_GRAB.takeIf { pickupArmed && contactHeld && contactType == PointerType.Mouse }
     }
     class EdgeContact(val id: Long, val canvas: Boolean, val kind: String, val origin: Offset, var position: Offset = origin) {
         var pending = true
         var hold = false
         var selectOnRelease = false
-        var claimed = false
+        var cursor: String? = null
+        val claimed get() = cursor != null
     }
     var edge: EdgeContact? = null
         private set
@@ -159,7 +151,6 @@ internal class DockInteraction(val host: CanvasHost) {
         current.position = change.position
         if (!change.pressed) edge = null
         host.edgeContact(edgeInput(current, if (change.pressed) "move" else "up", change.uptimeMillis)) { edgeReply(current, it) }
-        if (!change.pressed && current.claimed) dragCursor = null
         val withheld = change.pressed && current.hold && (change.position - current.origin).getDistance() > slop
         return current.takeIf { it.claimed || withheld }?.also { change.consume() }
     }
@@ -170,15 +161,14 @@ internal class DockInteraction(val host: CanvasHost) {
         val cursor = reply.nullableString("edge_cursor")
         if (cursor != null) {
             if (!current.claimed) closeContext()
-            current.claimed = true
-            dragCursor = edgePointerIcon(cursor)
-        } else if (!current.pending && !current.claimed && !current.selectOnRelease) edge = null
+        }
+        current.cursor = cursor
+        if (reply.optBoolean("edge_retired") || cursor == null && !current.pending && !current.selectOnRelease) edge = null
     }
     fun cancelEdge() {
         val current = edge ?: return
         edge = null
         host.edgeContact(edgeInput(current, "cancel", android.os.SystemClock.uptimeMillis()))
-        if (current.claimed) dragCursor = null
     }
     var expansion by mutableStateOf<JSONObject?>(null)
     var configurationHeight by mutableFloatStateOf(0f)
@@ -199,9 +189,9 @@ internal class DockInteraction(val host: CanvasHost) {
     }
     /** The canvas bar's place, kept while a canvas contact hides the bar. */
     var canvasBarSlot by mutableStateOf<Rect?>(null)
-    private var active: JSONObject? = null
     private var position = Offset.Zero
-    private var generation = 0
+    private var contextGeneration = 0
+    private var gestureGeneration = 0
     private var contextTarget: String? = null
     private var contextOwner: Any? = null
     private val measurements = mutableMapOf<String, PanelMeasurement>()
@@ -315,6 +305,7 @@ internal class DockInteraction(val host: CanvasHost) {
     fun windowFocus(value: Boolean) {
         if (focused == value) return
         focused = value
+        if (!value) gestureGeneration++
         if (!value && contextMenu == null) closeContext()
     }
     fun context(target: JSONObject) {
@@ -327,10 +318,10 @@ internal class DockInteraction(val host: CanvasHost) {
         if (contextTarget == key) return
         contextTarget = key
         contextOwner = owner
-        val request = ++generation
+        val request = ++contextGeneration
         val query = obj("type" to "context", "target" to target)
         host.query(query) {
-            if (request != generation) return@query
+            if (request != contextGeneration) return@query
             if (dragging || !focused || !enabled || anchors[owner]?.target != key) { closeContext(); return@query }
             contextRequest = query; contextAnchor = anchor; contextMenu = it as? JSONObject; refresh()
         }
@@ -338,7 +329,7 @@ internal class DockInteraction(val host: CanvasHost) {
     fun holdContext(target: JSONObject) {
         if (contactType != PointerType.Mouse) context(target)
     }
-    fun closeContext() { generation++; contextTarget = null; contextOwner = null; contextMenu = null; contextRequest = null; refresh() }
+    fun closeContext() { contextGeneration++; contextTarget = null; contextOwner = null; contextMenu = null; contextRequest = null; refresh() }
     fun doubleClickHandle(item: JSONObject) {
         host.query(obj("type" to "panel_handle_target", "item" to item)) { group ->
             if (group is Number) host.dispatch(obj("type" to "double_click_panel_handle", "group" to group, "viewport" to viewport))
@@ -348,7 +339,7 @@ internal class DockInteraction(val host: CanvasHost) {
         if (!enabled || popupOpen || contextMenu != null) return null
         val z = chromeRegions.values.filter { it.bounds.contains(point) }.maxOfOrNull { it.z } ?: 0
         return regions.values.filter { it.z >= z && it.bounds.contains(point) }
-            .maxWithOrNull(compareBy<Region> { it.z }.thenBy { it.priority })
+            .maxWithOrNull(compareBy<Region> { it.z }.thenBy { it.priority }.thenBy { it.depth })
     }
     private fun send(phase: String, preview: Boolean = false) {
         val action = active ?: return
@@ -365,11 +356,11 @@ internal class DockInteraction(val host: CanvasHost) {
             actions.add(obj("type" to "begin_tab_drag", "tabs" to JSONArray(frozenTabs), "clip" to
                 obj("x" to clip.left, "y" to clip.top, "width" to clip.width, "height" to clip.height)))
         }
-        val request = generation
+        val request = gestureGeneration
         host.workspaceGesture(actions, if (preview && action.optJSONObject("item") != null) query() else null, moving = phase == "move") {
             // A newer pointer position must not starve completed feedback.
             // Only ending/replacing the gesture invalidates its replies.
-            if (request == generation) hint = it as? JSONObject
+            if (request == gestureGeneration) hint = it as? JSONObject
         }
     }
     private fun tabHits(): List<JSONObject> {
@@ -381,10 +372,11 @@ internal class DockInteraction(val host: CanvasHost) {
     fun isDraggedTab(panel: String) = dragging && frozenPanel == panel
     private fun query() = obj("type" to "drop", "item" to active?.optJSONObject("item"),
         "position" to JSONArray(listOf(position.x, position.y)), "tabs" to JSONArray(tabHits()), "expansion" to expansion)
-    fun start(action: JSONObject, point: Offset, cursor: Int) {
+    fun start(action: JSONObject, point: Offset) {
         cancelEdge()
+        gestureGeneration++
         host.beginWorkspaceGesture()
-        active = action; position = point; dragging = true
+        active = action; position = point
         val panel = action.optJSONObject("item")?.takeIf { it.optString("kind") == "panel" }?.optString("panel")
         // An open drawer also publishes tabs for its collapsed icons. Freeze
         // slots only when the actual press came from the tab, not the icon/grip.
@@ -393,38 +385,35 @@ internal class DockInteraction(val host: CanvasHost) {
         frozenTabGroup = tab?.getInt("group")
         frozenTabs = tabSlots.values.filter { it.optInt("group") == frozenTabGroup }.map { JSONObject(it.toString()) }
         frozenTabClip = frozenTabGroup?.let { tabClips[it] }?.let { Rect(it.left / density, it.top / density, it.right / density, it.bottom / density) }
-        dragCursor = if (action.optJSONObject("item") != null) AndroidPointerIcon.TYPE_GRABBING else cursor
         closeContext(); send("down")
     }
     fun move(point: Offset) {
         position = point; send("move", preview = true)
         if (active?.optString("type") == "tile_drag") {
             host.chrome(obj("kind" to "motion"), facts())
-            val request = generation
-            host.query(query()) { if (request == generation) hint = it as? JSONObject }
+            val request = gestureGeneration
+            host.query(query()) { if (request == gestureGeneration) hint = it as? JSONObject }
         }
     }
     fun finish(cancel: Boolean) {
         if (!dragging) return
         val action = active!!
-        val request = ++generation
-        fun end() {
-            if (request != generation) return
-            active = null; hint = null; dragging = false; dragCursor = null; frozenTabs = emptyList(); frozenTabGroup = null; frozenTabClip = null; frozenPanel = null; refresh()
-        }
+        val request = ++gestureGeneration
+        val point = position
         if (action.getString("type") == "tile_drag" && !cancel) {
             host.query(query()) { result ->
-                if (request == generation) {
+                if (request == gestureGeneration && focused) {
                     val target = (result as? JSONObject)?.optJSONObject("target")
                     val item = action.getJSONObject("item")
                     if (target != null) {
                         host.dispatch(obj("type" to "move_tile", "panel" to item.getString("panel"),
                             "tile" to item.getInt("tile"), "target" to target, "viewport" to viewport))
-                        end()
-                    } else bubbles?.takeTile(item, position, { request == generation }, ::end) ?: end()
+                    } else bubbles?.takeTile(item, point) { request == gestureGeneration && focused }
                 }
             }
-        } else { send(if (cancel) "cancel" else "up"); end() }
+        } else send(if (cancel) "cancel" else "up")
+        active = null; hint = null; pickupArmed = false
+        frozenTabs = emptyList(); frozenTabGroup = null; frozenTabClip = null; frozenPanel = null; refresh()
     }
 }
 
@@ -441,22 +430,19 @@ internal class DockInteraction(val host: CanvasHost) {
             dock.removeAnchor(token)
             if (dock.contactSource == token && !dock.dragging) {
                 dock.retiredContext = key
-                dock.pickupCursor(false)
+                dock.armPickup(false)
                 dock.closeContext()
             }
         }
     }
     SideEffect { dock.regions[token]?.let {
-        if (dock.contactSource == token && it.action?.toString() != action?.toString()) dock.pickupCursor(false)
+        if (dock.contactSource == token && it.action?.toString() != action?.toString()) dock.armPickup(false)
         dock.regions[token] = it.copy(action = action, z = z, priority = priority, context = anchor, cursor = cursor, holdToDrag = holdToDrag)
     } }
-    // Held tiles use the normal mouse pointer until pickup is armed. Keep
-    // Android's existing default pen hover; grips retain their immediate hand.
-    val feedback = if (holdToDrag || cursor == AndroidPointerIcon.TYPE_ARROW) pointerHoverIcon(PointerIcon(AndroidPointerIcon.TYPE_ARROW))
-        else workspacePointerIcon(if (dock.enabled) cursor else null)
-    return feedback.onGloballyPositioned {
+    return onGloballyPositioned {
         val bounds = it.boundsInRoot().translate(-dock.origin)
-        dock.regions[token] = DockInteraction.Region(token, action, bounds, z, priority, anchor, cursor, holdToDrag)
+        val depth = generateSequence(it.parentLayoutCoordinates) { parent -> parent.parentLayoutCoordinates }.count()
+        dock.regions[token] = DockInteraction.Region(token, action, bounds, z, priority, anchor, cursor, holdToDrag, depth)
         if (key != null) dock.anchors[token] = DockInteraction.Anchor(key, bounds)
     }
 }
@@ -559,7 +545,7 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
                 fun sourceExists() = dock.regions[source.token]?.let { it.action?.toString() == source.action?.toString() } == true
                 fun retire() {
                     retired = true
-                    dock.pickupCursor(false)
+                    dock.armPickup(false)
                     dock.retiredContext = source.context?.let(dock::anchorKey)
                     dock.closeContext()
                 }
@@ -575,7 +561,7 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
                             }
                             held = true
                             dock.cancelEdge()
-                            if (source.holdToDrag && down.type == PointerType.Mouse) dock.pickupCursor(true)
+                            if (source.holdToDrag && down.type == PointerType.Mouse) dock.armPickup(true)
                             source.context?.let(dock::holdContext)
                             continue
                         }
@@ -604,7 +590,7 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
                         // unconsumed for its scroll container, even after a pause.
                         if (!started && !retired && (source.holdToDrag || source.action == null) && !held && moved) retire()
                         if (source.action != null && !started && !retired && change.pressed && moved && (!source.holdToDrag || held)) {
-                            dock.start(source.action, down.position / dock.density, source.cursor); started = true
+                            dock.start(source.action, down.position / dock.density); started = true
                         }
                         if (started) {
                             change.consume()
@@ -627,7 +613,7 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
                 } finally {
                     if (started && !released) dock.finish(true)
                     if (!released) dock.closeContext()
-                    dock.pickupCursor(false)
+                    dock.armPickup(false)
                     dock.contactHeld = false
                     dock.contactSource = null
                     dock.retiredContext = null

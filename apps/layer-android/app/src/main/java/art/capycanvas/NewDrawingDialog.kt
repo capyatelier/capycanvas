@@ -463,7 +463,7 @@ private class DrawerMemory { var shown: JSONObject? = null; var open = false; va
             if (next.text != text.text || next.composition != null) { dirty = true; invalid = false }
             text = next
             host.textComposition.update(requester, next, focused)
-        }, Modifier.weight(1f).padding(start = 4.dp, end = if (suffix == null) 10.dp else 2.dp).focusRequester(requester)
+        }, Modifier.weight(1f).textCursorRegion(enabled).padding(start = 4.dp, end = if (suffix == null) 10.dp else 2.dp).focusRequester(requester)
             .onFocusChanged { state ->
                 val was = focused
                 focused = state.isFocused

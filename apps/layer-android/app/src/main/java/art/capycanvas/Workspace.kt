@@ -274,6 +274,10 @@ private val HiddenChromeShape=object:Shape {
 
 @Composable private fun Workspace(host: CanvasHost, snapshot: JSONObject?) {
     val dock = remember(host) { DockInteraction(host) }
+    DisposableEffect(dock) {
+        host.workspaceInteraction = dock
+        onDispose { if (host.workspaceInteraction === dock) host.workspaceInteraction = null }
+    }
     CompositionLocalProvider(LocalDock provides dock) { Workspace(host, snapshot, dock) }
     dock.publishMeasurements()
 }
@@ -332,18 +336,14 @@ private val HiddenChromeShape=object:Shape {
         .imageCanvasDropTarget(host) { point ->
             dock.chromeRegions.values.any { it.bounds.contains(point) } || dock.regions.values.any { it.bounds.contains(point) }
         }
-        .workspaceDragCursor(dock.dragCursor)
         .drawWithContent { drawContent(); host.recordUiDraw() }
-        .onGloballyPositioned { dock.origin = it.boundsInRoot().topLeft; host.surfaceOrigin = dock.origin }) {
+        .onGloballyPositioned { dock.bounds = it.boundsInRoot(); dock.origin = dock.bounds.topLeft; host.surfaceOrigin = dock.origin }) {
         dock.viewport = JSONArray(listOf(maxWidth.value, maxHeight.value))
         AndroidView(factory = { CanvasSurfaceView(it, host) { x, y ->
             val point = androidx.compose.ui.geometry.Offset(x, y)
-            dock.chromeRegions.values.any { region -> region.bounds.contains(point) } || dock.regions.values.any { region -> region.bounds.contains(point) }
-        } }, modifier = Modifier.fillMaxSize(), update = { view ->
-            // AndroidView resolves its own icon outside Compose's descendant
-            // override. Keep the active workspace cursor over bare canvas too.
+            dock.chromeRegions.values.any { region -> region.bounds.contains(point) } || dock.regions.values.any { region -> region.bounds.contains(point) } || dock.bubbles?.pointerTarget(point) != null
+        }.also { dock.canvas = it } }, modifier = Modifier.fillMaxSize(), update = { view ->
             view.contentDescription = host.bootstrap?.getString("drawing_canvas")
-            view.pointerIcon = AndroidPointerIcon.getSystemIcon(view.context, dock.dragCursor ?: AndroidPointerIcon.TYPE_NULL)
         })
         // SurfaceView punches through the window background. Cover its empty
         // layer with normal Android UI until this surface has a finished buffer.
@@ -748,7 +748,7 @@ internal class PanelContent(val id: Int, val active: String, val panels: JSONArr
                         }
                     }
                     Box(Modifier.width(20.dp).height(36.dp).then(if (vector) Modifier.drawBehind { drawRect(colors.strip,blendMode=androidx.compose.ui.graphics.BlendMode.Src) } else Modifier.background(colors.strip)).testTag("group-grip-${groupId}")
-                        .workspacePointerIcon(AndroidPointerIcon.TYPE_GRAB)
+                        .dragSource(dock, groupItem)
                         .combinedClickable(onClick = { if (expanded) host.customize(obj("type" to "close_expanded")) },
                             onLongClick = { dock.holdContext(obj("kind" to "group", "group" to groupId)) }), contentAlignment = Alignment.Center) { PanelGrip(host.catalog.getJSONObject("document_delivery_copy").getString("move_group")) }
                 }

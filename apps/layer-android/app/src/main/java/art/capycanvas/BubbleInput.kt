@@ -159,6 +159,7 @@ internal class BubbleInteraction(val host: CanvasHost, val dock: DockInteraction
         val reach = it.packet.number("reach")
         !it.faded && abs(relative.x) <= reach && abs(relative.y) <= reach && it.hit(point) != null
     }
+    fun pointerTarget(point: Offset) = target(point / dock.density)
     private fun sourceView(grab: JSONObject): JSONObject? = when (grab.optString("kind")) {
         "header" -> host.snapshot?.objectOrNull("header")?.array("items")?.objects()?.firstOrNull { it.getInt("id") == grab.getInt("id") }
         "tile" -> host.snapshot?.array("panels")?.objects()?.firstOrNull { it.getString("id") == grab.getString("panel") }
@@ -402,16 +403,15 @@ internal class BubbleInteraction(val host: CanvasHost, val dock: DockInteraction
         records.values.forEach { if (it.hovered != null) { it.hovered = null; wake() } }
         return false
     }
-    fun takeTile(item: JSONObject, position: Offset, valid: () -> Boolean, done: () -> Unit) {
+    fun takeTile(item: JSONObject, position: Offset, valid: () -> Boolean) {
         val source = sourceControl(item)
         val sourceEpoch = host.menuEpoch()
         fun current() = valid() && source != null && sourceEpoch == host.menuEpoch() && sourceControl(item) == source
         host.query(obj("type" to "bubble_grab", "grab" to item, "held" to true)) { raw ->
-            if (!current()) { done(); return@query }
+            if (!current()) return@query
             val grab = raw as? JSONObject
-            if (grab == null) done() else host.query(obj("type" to "can_take_bubble", "grab" to grab, "position" to position.headerPoint(), "viewport" to dock.viewport)) { can ->
+            if (grab != null) host.query(obj("type" to "can_take_bubble", "grab" to grab, "position" to position.headerPoint(), "viewport" to dock.viewport)) { can ->
                 if (current() && can == true) { drag(grab, "down", position); drag(grab, "up", position) }
-                done()
             }
         }
     }

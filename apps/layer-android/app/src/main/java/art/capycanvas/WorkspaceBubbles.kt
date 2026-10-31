@@ -38,6 +38,7 @@ internal fun bubbleUi(request: JSONObject): Any? = JSONTokener(Native.bubbleUi(r
 internal fun JSONArray.bubblePoint() = Offset(getDouble(0).toFloat(), getDouble(1).toFloat())
 internal fun CanvasHost.bubble(action: JSONObject) = dispatch(obj("type" to "bubble", "action" to action), action.optString("phase") == "move")
 private val LocalBubbleOrigin = staticCompositionLocalOf { Offset.Zero }
+internal val LocalBubbleOwner = staticCompositionLocalOf<Int?> { null }
 private fun smooth(t: Float) = t * t * (3f - 2f * t)
 private fun ease(t: Float) = 1f - (1f - t).let { it * it * it }
 
@@ -204,7 +205,7 @@ internal class BubbleRecord(packet: JSONObject) {
         for (record in input.records.values.sortedBy { it.order }) key(record.id) {
             BubbleStamp(host, record, density)
             val reach = record.packet.number("reach") + 16f
-            CompositionLocalProvider(LocalBubbleOrigin provides Offset(reach, reach)) {
+            CompositionLocalProvider(LocalBubbleOrigin provides Offset(reach, reach), LocalBubbleOwner provides record.id) {
             Box(Modifier.offset { IntOffset(((record.center.x - reach) * density).roundToInt(), ((record.center.y - reach) * density).roundToInt()) }
                 .wrapContentSize(Alignment.TopStart, unbounded = true).requiredSize((reach * 2).dp).zIndex(if (record.lifted) 701f else 700f).graphicsLayer {
                     scaleX = record.scale; scaleY = record.scale; alpha = record.alpha
@@ -327,9 +328,6 @@ private fun Modifier.bubbleCardSurface(id: Int) = pointerInput(id) {
     Box(Modifier.offset { IntOffset(((origin.x + part.center.x - part.size.width / 2) * density).roundToInt(), ((origin.y + part.center.y - part.size.height / 2) * density).roundToInt()) }
         .requiredSize(part.size.width.dp, part.size.height.dp)
         .then(if (part.key in listOf("face", "card")) Modifier else Modifier.testTag("bubble-part-${record.id}-${part.key}")).then(modifier)
-        .then(if (part.appearance.target == 0f) Modifier else Modifier
-            .stylusHoverIcon(PointerIcon(android.view.PointerIcon.TYPE_NULL), overrideDescendants = true)
-            .pointerHoverIcon(PointerIcon(if (record.view.objectOrNull("stamp") != null) android.view.PointerIcon.TYPE_NULL else android.view.PointerIcon.TYPE_ARROW)))
         .surfaceLayer(18.dp) {
             alpha = part.appearance.value * part.strength
             scaleX = part.scale; scaleY = part.scale

@@ -129,7 +129,7 @@ import org.json.JSONObject
                                 if (parameter == null) send(obj("type" to "query", "text" to it.text))
                             }, singleLine = true, textStyle = LocalTextStyle.current.copy(color = colors.text), cursorBrush = SolidColor(colors.accent),
                                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search, autoCorrectEnabled = false), keyboardActions = KeyboardActions(onSearch = { commit() }),
-                                modifier = Modifier.weight(1f).focusRequester(focus).onFocusChanged { entryFocused = it.isFocused; host.textComposition.update(focus, text, entryFocused) }.testTag("command-search").semantics { contentDescription = parameter?.getString("label") ?: copy.getString("search_commands") },
+                                modifier = Modifier.weight(1f).textCursorRegion().focusRequester(focus).onFocusChanged { entryFocused = it.isFocused; host.textComposition.update(focus, text, entryFocused) }.testTag("command-search").semantics { contentDescription = parameter?.getString("label") ?: copy.getString("search_commands") },
                                 decorationBox = { inner -> Box { if (text.text.isEmpty()) Text(if (parameter == null) copy.getString("search_commands") else copy.getString("enter_value"), color = colors.secondary); inner() } })
                             parameter?.getJSONObject("parameter")?.getJSONObject("numeric")?.optString("unit")?.takeIf { it.isNotEmpty() }?.let { Text(it, color = colors.secondary) }
                         }

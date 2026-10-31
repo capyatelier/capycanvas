@@ -185,7 +185,7 @@ class AndroidInteractionTest {
         instrumentation.runOnMainSync { result = count() }
         return result
     }
-    private fun workspaceDragging() = surface.pointerIcon == PointerIcon.getSystemIcon(surface.context, PointerIcon.TYPE_GRABBING)
+    private fun workspaceDragging() = host.workspaceInteraction?.dragging == true
     private val holdMenuCount get()=if(tool==MotionEvent.TOOL_TYPE_MOUSE) 0 else 1
     private val pointerTools = listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)
     private fun resetLayerScroll(first: Long) {
@@ -789,6 +789,52 @@ class AndroidInteractionTest {
         }
     }
 
+    @Test fun tileDropLosingWindowFocusRetiresDragState() {
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            val tiles = snapshot().array("panels").objects().first { it.getString("id") == "toolbar" }
+                .array("tiles").objects()
+            val source = tiles.first().getInt("id")
+            val destination = tiles[1].getInt("id")
+            assertNotEquals("The fixture has distinct toolbar tiles", source, destination)
+            val area = bounds("workspace")
+            val start = (bounds("tile-toolbar-$source").center - area.topLeft) / density
+            val end = (bounds("tile-toolbar-$destination").center - area.topLeft) / density
+            val item = obj("kind" to "tile", "panel" to "toolbar", "tile" to source)
+            val dock = DockInteraction(host)
+            try {
+                onMain {
+                    dock.density = density
+                    dock.viewport = JSONArray(listOf(area.width / density, area.height / density))
+                    dock.start(obj("type" to "tile_drag", "item" to item), start)
+                    dock.move(end)
+                }
+                host.drain()
+                onMain {
+                    assertTrue("$theme tile drag is active", dock.dragging)
+                    assertTrue("$theme chrome facts report the tile drag", dock.facts().getBoolean("dragging"))
+                    dock.finish(false)
+                    dock.windowFocus(false)
+                }
+                host.drain()
+                onMain {
+                    assertFalse("$theme focus loss retires a released tile drag", dock.dragging)
+                    assertFalse("$theme late drop reply cannot retain the dragging fact", dock.facts().getBoolean("dragging"))
+                    assertNull("$theme retired tile drop clears feedback", dock.hint)
+                    dock.windowFocus(true)
+                    val target = obj("kind" to "panel", "panel" to "toolbar")
+                    dock.anchors[Any()] = DockInteraction.Anchor(dock.anchorKey(target), area)
+                    dock.context(target)
+                }
+                host.drain()
+                onMain { assertNotNull("$theme a retired tile drop permits the next context menu", dock.contextMenu) }
+            } finally {
+                onMain { dock.finish(true); dock.closeContext(); dock.windowFocus(true) }
+                host.drain()
+            }
+        }
+    }
+
     @Test fun contextRequestsKeepTheirSourceAndRetireLateReplies() {
         val dock = DockInteraction(host)
         val first = Any(); val second = Any()
@@ -1041,10 +1087,10 @@ class AndroidInteractionTest {
                     .map { bounds("tile-toolbar-${it.getInt("id")}").center }.first { (it - nextPress).getDistance() > 30 * density }
                     else bounds("workspace").center
                 event(MotionEvent.ACTION_MOVE, destination)
-                waitFor("$pointer/$kind continues original drag") { surface.pointerIcon == PointerIcon.getSystemIcon(surface.context, PointerIcon.TYPE_GRABBING) }
+                waitFor("$pointer/$kind continues original drag") { workspaceDragging() }
                 waitFor("$pointer/$kind drag closes menu") { popupCount() == 0 }
                 event(MotionEvent.ACTION_CANCEL)
-                waitFor("$pointer/$kind cancel") { workspace() == before && surface.pointerIcon != PointerIcon.getSystemIcon(surface.context, PointerIcon.TYPE_GRABBING) }
+                waitFor("$pointer/$kind cancel") { workspace() == before && !workspaceDragging() }
             }
         }
     }
@@ -1988,8 +2034,219 @@ class AndroidInteractionTest {
         }
     }
 
+    private inner class NativeCursorInput(private val pointer: Int) {
+        private val source = if (pointer == MotionEvent.TOOL_TYPE_MOUSE) InputDevice.SOURCE_MOUSE else InputDevice.SOURCE_STYLUS
+        private val deviceId = InputDevice.getDeviceIds().asSequence().mapNotNull { InputDevice.getDevice(it) }
+            .firstOrNull { it.supportsSource(source) }?.id ?: 0
+        private var down = 0L
+        private var pressed = false
+        private var last = Offset.Zero
+        private fun motion(action: Int, at: Offset): MotionEvent {
+            val now = SystemClock.uptimeMillis()
+            val contactEvent = action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)
+            return MotionEvent.obtain(if (contactEvent) down else now, now, action, 1,
+                arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = pointer }),
+                arrayOf(MotionEvent.PointerCoords().apply { x = at.x; y = at.y; pressure = if (pressed) 1f else 0f }),
+                0, if (pressed && pointer == MotionEvent.TOOL_TYPE_MOUSE) MotionEvent.BUTTON_PRIMARY else 0,
+                1f, 1f, deviceId, 0, source, 0)
+        }
+        private fun inject(event: MotionEvent, sync: Boolean = true) {
+            val location = IntArray(2)
+            onMain { owner.view.getLocationOnScreen(location) }
+            event.offsetLocation(location[0].toFloat(), location[1].toFloat())
+            try { assertTrue("Android accepts ${MotionEvent.actionToString(event.actionMasked)} for $pointer",
+                instrumentation.uiAutomation.injectInputEvent(event, sync)) }
+            finally { event.recycle() }
+        }
+        fun hover(at: Offset) { last = at; inject(motion(MotionEvent.ACTION_HOVER_MOVE, at)) }
+        fun press(at: Offset) {
+            pressed = true; down = SystemClock.uptimeMillis(); last = at
+            inject(motion(MotionEvent.ACTION_DOWN, at))
+        }
+        fun move(at: Offset) { last = at; inject(motion(MotionEvent.ACTION_MOVE, at)) }
+        fun release() { pressed = false; inject(motion(MotionEvent.ACTION_UP, last)) }
+        fun cancel() {
+            if (pressed) { pressed = false; inject(motion(MotionEvent.ACTION_CANCEL, last)) }
+        }
+        fun resolved(at: Offset): PointerIcon? {
+            val event = motion(MotionEvent.ACTION_HOVER_MOVE, at)
+            var result: PointerIcon? = null
+            try { onMain {
+                val from = IntArray(2); val to = IntArray(2)
+                owner.view.getLocationOnScreen(from); activity.window.decorView.getLocationOnScreen(to)
+                event.offsetLocation((from[0] - to[0]).toFloat(), (from[1] - to[1]).toFloat())
+                result = activity.window.decorView.onResolvePointerIcon(event, 0)
+            } } finally { event.recycle() }
+            return result
+        }
+        fun assertIcon(label: String, at: Offset, type: Int) =
+            assertEquals(label, PointerIcon.getSystemIcon(activity, type), resolved(at))
+    }
+
+    private fun cursorWorkspace(input: NativeCursorInput, compact: Boolean = false): Pair<Offset, Offset> {
+        fixture.getJSONObject("layout").apply {
+            put("bands", JSONArray(listOf(obj("id" to 40, "edge" to "left", "extent" to 320,
+                "root" to obj("kind" to "split", "id" to 42, "axis" to "vertical", "fraction" to .5,
+                    "first" to if (compact) tabs(41, "color") else tabs(41, "stats", "brushes", "sizes", "color", "palettes", "tool_settings"),
+                    "second" to if (compact) tabs(43, "toolbar") else tabs(43, "navigator", "proof"))))))
+            for (key in listOf("floating", "collapsed", "column_stacks", "column_scroll", "fit_tab_groups", "fit_height_groups"))
+                put(key, JSONArray())
+        }
+        restore()
+        val canvas = snapshot().getJSONObject("layout").getJSONObject("work_area").rect().center * density + bounds("workspace").topLeft
+        input.hover(canvas)
+        host.drain()
+        waitFor("Current divider allocation matches Rust") {
+            val actual = tagged("divider-42")?.second?.boundsInRoot
+            val divider = snapshot().getJSONObject("layout").array("dividers").objects().firstOrNull { it.getInt("id") == 42 }
+            val origin = tagged("workspace")?.second?.boundsInRoot?.topLeft
+            actual != null && divider != null && origin != null &&
+                (actual.center - (divider.getJSONObject("bounds").rect().center * density + origin)).getDistance() <= density
+        }
+        return bounds("divider-42").center to canvas
+    }
+
+    @Test fun nativeCursorDoesNotRetainDividerAfterQuickTabReorder() {
+        for (theme in listOf("light", "dark")) for (pointer in listOf(MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.TOOL_TYPE_MOUSE)) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            val input = NativeCursorInput(pointer)
+            try {
+                val (divider, canvas) = cursorWorkspace(input)
+                input.hover(divider)
+                input.assertIcon("$theme/$pointer divider hover activates resize", divider, PointerIcon.TYPE_VERTICAL_DOUBLE_ARROW)
+                val from = bounds("tab-brushes").center
+                val to = bounds("tab-stats").center
+                input.press(from)
+                input.move(to)
+                waitFor("$theme/$pointer native tab reorder starts") { host.workspaceGeometry?.tab != null }
+                input.release()
+                input.hover(canvas)
+                input.assertIcon("$theme/$pointer first canvas resolve after release", canvas, PointerIcon.TYPE_NULL)
+                host.drain()
+                waitFor("$theme/$pointer reorder commits") { group("brushes").array("panels").values().first() == "brushes" }
+                screenshot("validation/cursor-owner/$theme-$pointer-reordered.png")
+            } finally { input.cancel() }
+        }
+    }
+
+    @Test fun nativeMouseCursorDoesNotRetainDividerOnNeutralChrome() {
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            val input = NativeCursorInput(MotionEvent.TOOL_TYPE_MOUSE)
+            try {
+                val (divider, canvas) = cursorWorkspace(input)
+                input.hover(divider)
+                input.assertIcon("$theme mouse divider hover activates resize", divider, PointerIcon.TYPE_VERTICAL_DOUBLE_ARROW)
+                val tab = bounds("tab-stats").center
+                val before = workspace()
+                input.press(tab)
+                input.release()
+                input.assertIcon("$theme first neutral chrome resolve after click", tab, PointerIcon.TYPE_ARROW)
+                host.drain()
+                assertEquals("$theme clicking the active tab does not drag or alter layout", before, workspace())
+                input.hover(canvas)
+                input.assertIcon("$theme bare canvas after neutral chrome click", canvas, PointerIcon.TYPE_NULL)
+            } finally { input.cancel() }
+        }
+    }
+
+    @Test fun nativeCursorTracksResizeAndCurrentControlGeometry() {
+        for (theme in listOf("light", "dark")) for (pointer in listOf(MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.TOOL_TYPE_MOUSE)) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            val input = NativeCursorInput(pointer)
+            try {
+                var (divider, canvas) = cursorWorkspace(input, compact = true)
+                input.hover(divider)
+                input.assertIcon("$theme/$pointer divider hover activates resize", divider, PointerIcon.TYPE_VERTICAL_DOUBLE_ARROW)
+                input.press(divider)
+                input.move(divider + Offset(0f, 40f * density))
+                host.drain()
+                input.move(canvas)
+                host.drain()
+                input.assertIcon("$theme/$pointer active resize owns the canvas cursor", canvas, PointerIcon.TYPE_VERTICAL_DOUBLE_ARROW)
+                input.release()
+                input.hover(canvas)
+                input.assertIcon("$theme/$pointer released resize leaves bare canvas hidden", canvas, PointerIcon.TYPE_NULL)
+                val prepared = cursorWorkspace(input, compact = true); divider = prepared.first; canvas = prepared.second
+                input.hover(divider)
+                input.assertIcon("$theme/$pointer moved control starts as resize", divider, PointerIcon.TYPE_VERTICAL_DOUBLE_ARROW)
+                val moved = JSONObject(fixture.toString())
+                moved.getJSONObject("layout").array("bands").objects().first().getJSONObject("root").put("fraction", .8)
+                action(obj("type" to "restore_workspace", "workspace" to moved))
+                assertTrue("$theme/$pointer divider moved from the stationary pointer", (bounds("divider-42").center - divider).getDistance() > 20f * density)
+                assertNotEquals("$theme/$pointer moved control does not retain resize", PointerIcon.getSystemIcon(activity, PointerIcon.TYPE_VERTICAL_DOUBLE_ARROW), input.resolved(divider))
+                input.hover(canvas)
+                input.assertIcon("$theme/$pointer canvas after moved control", canvas, PointerIcon.TYPE_NULL)
+                input.hover(bounds("divider-42").center)
+                input.assertIcon("$theme/$pointer remaining divider activates resize", bounds("divider-42").center, PointerIcon.TYPE_VERTICAL_DOUBLE_ARROW)
+                action(obj("type" to "move_group", "group" to 43, "target" to obj("kind" to "tab", "group" to 41),
+                    "viewport" to JSONArray(listOf(bounds("workspace").width / density, bounds("workspace").height / density))))
+                assertFalse("$theme/$pointer merged groups remove the divider", exists("divider-42"))
+                input.hover(canvas)
+                input.assertIcon("$theme/$pointer removed control leaves bare canvas hidden", canvas, PointerIcon.TYPE_NULL)
+            } finally { input.cancel() }
+        }
+    }
+
+    @Test fun nativeCursorPreservesTextEditorIBeam() {
+        for (theme in listOf("light", "dark")) for (bubble in listOf(false, true)) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            restore()
+            val label = "$theme/${if (bubble) "bubble" else "docked"}"
+            var bubbleId: Long? = null
+            if (bubble) {
+                val workspace = JSONObject(fixture.toString())
+                workspace.getJSONObject("layout").put("header", obj("size" to "medium", "next_id" to 3,
+                    "zones" to JSONArray(listOf(JSONArray(), JSONArray(listOf(obj("id" to 2,
+                        "item" to obj("kind" to "tool", "control" to obj("kind" to "panel", "panel" to "layers"))))), JSONArray()))))
+                action(obj("type" to "restore_workspace", "workspace" to workspace))
+                customize(obj("type" to "set_panel_visible", "panel" to "layers", "visible" to false))
+                val area = bounds("workspace")
+                val from = (bounds("header-item-2").center - area.topLeft) / density
+                val target = snapshot().getJSONObject("layout").getJSONObject("work_area").rect().center
+                onMain {
+                    for ((phase, at) in listOf("down" to from, "move" to target, "up" to target))
+                        host.dispatch(obj("type" to "bubble", "action" to obj("type" to "drag",
+                            "grab" to obj("kind" to "header", "id" to 2), "phase" to phase,
+                            "position" to JSONArray(listOf(at.x, at.y)),
+                            "viewport" to JSONArray(listOf(area.width / density, area.height / density)))))
+                }
+                host.drain()
+                waitFor("$label Layers bubble publishes its card") {
+                    snapshot().array("bubbles").objects().any {
+                        it.getJSONObject("view").optString("kind") == "layers" && !it.getJSONObject("view").isNull("card")
+                    }
+                }
+                bubbleId = snapshot().array("bubbles").objects().single {
+                    it.getJSONObject("view").getString("kind") == "layers"
+                }.getJSONObject("view").getLong("id")
+                waitFor("$label actual native card is composed") { shown("bubble-card-$bubbleId") }
+            } else revealLayers()
+            val id = layerStates().first().getLong("id")
+            val input = NativeCursorInput(MotionEvent.TOOL_TYPE_MOUSE)
+            try {
+                layerAction(obj("op" to "begin_rename", "id" to id))
+                waitFor("$label native layer name editor is ready") { shown("layer-name-editor-$id") && host.editingText }
+                if (bubble) onMain {
+                    assertNotNull("$label rename editor belongs to the actual bubble card",
+                        tagged("bubble-card-$bubbleId")?.second?.find(hasTag("layer-name-editor-$id")))
+                }
+                val editor = bounds("layer-name-editor-$id").center
+                input.hover(editor)
+                input.assertIcon("$label text editor keeps its native I-beam", editor, PointerIcon.TYPE_TEXT)
+                screenshot("validation/cursor-owner/${theme}-${if (bubble) "bubble" else "docked"}-text-editor.png")
+                if (bubble) action(obj("type" to "bubble", "action" to obj("type" to "close", "id" to bubbleId)))
+                else layerAction(obj("op" to "cancel_rename"))
+                waitFor("$label native layer name editor is removed") { !shown("layer-name-editor-$id") && !host.editingText }
+                if (bubble) assertFalse("$label closed bubble removes its native card", shown("bubble-card-$bubbleId"))
+                assertNotEquals("$label removed text editor does not retain an I-beam", PointerIcon.getSystemIcon(activity, PointerIcon.TYPE_TEXT), input.resolved(editor))
+            } finally { input.cancel(); layerAction(obj("op" to "cancel_rename")) }
+        }
+    }
+
     @Test fun mouseTilesShowPointerThenGrabThenGrabbing() {
         tool = MotionEvent.TOOL_TYPE_MOUSE
+        val cursor = NativeCursorInput(tool)
         customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
         val tiles = fixture.getJSONObject("layout").array("panels").objects().first { it.getString("id") == "toolbar" }
             .getJSONObject("content").array("tiles").objects()
@@ -2002,15 +2259,16 @@ class AndroidInteractionTest {
             val hover = MotionEvent.obtain(0, SystemClock.uptimeMillis(), MotionEvent.ACTION_HOVER_MOVE, 1, properties, coords,
                 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0)
             instrumentation.runOnMainSync { owner.view.dispatchGenericMotionEvent(hover) }; hover.recycle(); settle()
-            assertEquals("$tag starts with normal pointer", PointerIcon.getSystemIcon(owner.view.context, PointerIcon.TYPE_ARROW), owner.view.pointerIcon)
+            cursor.assertIcon("$tag starts with normal pointer", point, PointerIcon.TYPE_ARROW)
             val before = workspace()
             event(MotionEvent.ACTION_DOWN, point); SystemClock.sleep(700)
-            waitFor("$tag armed cursor") { surface.pointerIcon == PointerIcon.getSystemIcon(surface.context, PointerIcon.TYPE_GRAB) }
+            waitFor("$tag armed cursor") { cursor.resolved(point) == PointerIcon.getSystemIcon(activity, PointerIcon.TYPE_GRAB) }
             assertEquals(0, popupCount())
-            event(MotionEvent.ACTION_MOVE, bounds("workspace").center)
+            val canvas = snapshot().getJSONObject("layout").getJSONObject("work_area").rect().center * density + bounds("workspace").topLeft
+            event(MotionEvent.ACTION_MOVE, canvas)
             waitFor("$tag dragging cursor") { workspaceDragging() }
             event(MotionEvent.ACTION_CANCEL); settle(); assertEquals(before, workspace())
-            assertEquals("Canceled pickup clears the hand", PointerIcon.getSystemIcon(surface.context, PointerIcon.TYPE_NULL), surface.pointerIcon)
+            cursor.assertIcon("Canceled pickup clears the hand", canvas, PointerIcon.TYPE_NULL)
         }
     }
 
@@ -2620,7 +2878,7 @@ class AndroidInteractionTest {
             }
             SystemClock.sleep(700)
             assertEquals("$pointer/$mode retires menu",0,popupCount()); assertFalse(workspaceDragging())
-            assertEquals("$pointer/$mode retires pickup cursor", PointerIcon.getSystemIcon(surface.context, PointerIcon.TYPE_NULL), surface.pointerIcon)
+            assertNull("$pointer/$mode retires pickup cursor", host.workspaceInteraction?.activePointerIcon())
             event(MotionEvent.ACTION_CANCEL)
             if(!mode.endsWith("removed")) {
                 instrumentation.runOnMainSync { blurWindow!!.dismiss() }

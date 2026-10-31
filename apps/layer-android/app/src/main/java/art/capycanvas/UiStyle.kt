@@ -223,7 +223,7 @@ private data class ChromeFocusIndication(val color: Color) : IndicationNodeFacto
             host.textComposition.update(requester, text, focused)
             if (text.text != previous && onCommit == null) onChange(text.text)
         },
-            Modifier.fillMaxWidth().height(height).focusRequester(requester).onFocusChanged {
+            Modifier.fillMaxWidth().height(height).textCursorRegion(enabled).focusRequester(requester).onFocusChanged {
                 if (focused && !it.isFocused) onCommit?.invoke(text.text)
                 focused = it.isFocused; host.editingText = focused
                 host.textComposition.update(requester, text, focused)

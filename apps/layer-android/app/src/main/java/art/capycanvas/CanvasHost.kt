@@ -42,6 +42,8 @@ internal fun JSONObject.copy() = JSONObject().also { copy -> keys().forEach { co
 class CanvasHost @JvmOverloads constructor(application: Application, screen: JSONObject? = null) : AndroidViewModel(application) {
     internal val layerSwipe=LayerSwipe()
     internal val palettes=PaletteController(this)
+    internal var workspaceInteraction: DockInteraction? = null
+    internal val textCursorRegions = mutableMapOf<Any, TextCursorRegion>()
     internal val proof=ProofController(this)
     internal val hdr=HdrController(this)
     companion object {

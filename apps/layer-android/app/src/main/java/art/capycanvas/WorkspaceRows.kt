@@ -330,7 +330,7 @@ private fun JSONObject.offers(type: String) =
     val commit=remember(id) {{finish()}}
     SideEffect {host.workspaceNameCommit=commit}
     LaunchedEffect(view.optBoolean("busy"),view.optString("error")) {if(!view.optBoolean("busy"))submitted=false}
-    BasicTextField(name,{name=it;host.textComposition.update(focus,name,hadFocus)},Modifier.fillMaxWidth().testTag("workspace-name-$id").focusRequester(focus).onPreviewKeyEvent {event->
+    BasicTextField(name,{name=it;host.textComposition.update(focus,name,hadFocus)},Modifier.fillMaxWidth().textCursorRegion().testTag("workspace-name-$id").focusRequester(focus).onPreviewKeyEvent {event->
         val key=event.nativeKeyEvent
         if(key.keyCode==KeyEvent.KEYCODE_ESCAPE){if(name.composition==null&&!host.textComposition.owns(key)&&key.action==KeyEvent.ACTION_DOWN)finish(true);true}else false
     }.onFocusChanged {if(hadFocus&&!it.isFocused)finish();hadFocus=it.isFocused;host.editingText=it.isFocused;host.textComposition.update(focus,name,hadFocus)},

@@ -286,7 +286,7 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
                 host.textComposition.update(requester, text, focused)
                 if (dirty) onText(it)
             }
-        }, Modifier.edgeControl().then(if (panel) Modifier.width(68.dp) else if (inline && valueOnly && !toolbar) Modifier.fillMaxWidth() else if (inline) Modifier.width(fixedWidth) else if (ranged) Modifier.widthIn(min = 48.dp, max = 100.dp).width(IntrinsicSize.Min) else if(compact) Modifier.width(fixedWidth) else Modifier.width(if (presentedText != null || control.optString("unit").isNotEmpty()) 80.dp else 60.dp)).height(height)
+        }, Modifier.edgeControl().then(if (panel) Modifier.width(68.dp) else if (inline && valueOnly && !toolbar) Modifier.fillMaxWidth() else if (inline) Modifier.width(fixedWidth) else if (ranged) Modifier.widthIn(min = 48.dp, max = 100.dp).width(IntrinsicSize.Min) else if(compact) Modifier.width(fixedWidth) else Modifier.width(if (presentedText != null || control.optString("unit").isNotEmpty()) 80.dp else 60.dp)).height(height).textCursorRegion(enabled)
             .onGloballyPositioned { fieldBounds = it.boundsInRoot(); if (toolbar && focused) host.toolbarEditorBounds = fieldBounds }
             .focusRequester(requester).onFocusChanged {
                 if (focused && !it.isFocused) { finish(); if (heldKey != null) endEdit() }

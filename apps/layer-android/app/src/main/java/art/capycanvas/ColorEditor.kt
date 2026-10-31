@@ -422,7 +422,7 @@ private fun copyText(context: android.content.Context, text: String) {
         DisposableEffect(owner) { onDispose { host.textComposition.clear(owner); if (focused) host.editingText = false } }
         BasicTextField(value, { value = it; host.textComposition.update(owner, value, focused) }, singleLine = true, textStyle = style, cursorBrush = SolidColor(colors.accent),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done), keyboardActions = KeyboardActions(onDone = { onCommit(value.text) }),
-            modifier = Modifier.width(width).height(if (hex) 40.dp else 28.dp).clip(ControlShape).background(colors.dialogField)
+            modifier = Modifier.width(width).height(if (hex) 40.dp else 28.dp).textCursorRegion().clip(ControlShape).background(colors.dialogField)
                 .border(2.dp, if (invalid) MaterialTheme.colorScheme.error else colors.accent, ControlShape).padding(horizontal = 4.dp, vertical = 4.dp)
                 .focusRequester(focus).testTag("color-value-$tag-input")
                 .onPreviewKeyEvent { event -> if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) { cancelled = true; onCancel(); true } else false }
@@ -526,7 +526,7 @@ private fun copyText(context: android.content.Context, text: String) {
         verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             BasicTextField(query, { query = it; host.textComposition.update(owner, query, focused); search(it.text) }, singleLine = true, textStyle = MaterialTheme.typography.bodyMedium.copy(color = colors.text), cursorBrush = SolidColor(colors.accent),
-                modifier = Modifier.weight(1f).height(34.dp).clip(ControlShape).background(colors.dialogField).padding(horizontal = 10.dp, vertical = 8.dp)
+                modifier = Modifier.weight(1f).height(34.dp).textCursorRegion().clip(ControlShape).background(colors.dialogField).padding(horizontal = 10.dp, vertical = 8.dp)
                     .focusRequester(focus).onFocusChanged { state -> focused = state.isFocused; host.editingText = focused; host.textComposition.update(owner, query, focused) }
                     .testTag("color-sheet-search").semantics { contentDescription = copy.getJSONObject("color").getString("swatch_search") },
                 decorationBox = { inner -> Box { if (query.text.isEmpty()) Text(copy.getJSONObject("color").getString("swatch_search"), color = colors.secondary); inner() } })

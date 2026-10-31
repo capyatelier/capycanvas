@@ -562,7 +562,7 @@ internal class LayerSwipe {
                 var name by remember { mutableStateOf(TextFieldValue(layer.getString("label"),TextRange(0,layer.getString("label").length))) }
                 val focus=remember { FocusRequester() }; var hadFocus by remember { mutableStateOf(false) }; var done by remember { mutableStateOf(false) }
                 fun finish(cancel: Boolean = false) { if(!done) { done=true; host.layer(if(cancel || name.text.isBlank())obj("op" to "cancel_rename") else obj("op" to "rename","id" to id,"name" to name.text)) } }
-                BasicTextField(name,{name=it;host.textComposition.update(focus,name,hadFocus)},Modifier.edgeControl().fillMaxWidth().testTag("layer-name-editor-$id").focusRequester(focus).onPreviewKeyEvent { event ->
+                BasicTextField(name,{name=it;host.textComposition.update(focus,name,hadFocus)},Modifier.edgeControl().fillMaxWidth().textCursorRegion().testTag("layer-name-editor-$id").focusRequester(focus).onPreviewKeyEvent { event ->
                     val key = event.nativeKeyEvent
                     if (key.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE) {
                         val owned=name.composition != null || host.textComposition.owns(key)

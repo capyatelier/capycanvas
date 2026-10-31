@@ -49,10 +49,8 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.key.*
-import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.isSecondaryPressed
-import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.boundsInRoot
@@ -521,6 +519,7 @@ private fun DrawScope.checker(colors: Palette) {
 @Composable private fun SwatchTile(controller: PaletteController, view: JSONObject, swatch: JSONObject, index: Int, target: IntOffset,
     selected: Boolean, lifted: Boolean, geometry: PaletteGeometry, owner: Any, covered: Boolean, order: List<Long>) {
     val colors = LocalPalette.current
+    val dock = LocalDock.current
     val id = swatch.getLong("id")
     val detail = swatch.getString("detail")
     val color = swatch.getJSONArray("rgba").paint()
@@ -549,7 +548,7 @@ private fun DrawScope.checker(colors: Palette) {
             .semantics { contentDescription = detail; this.selected = selected; role = Role.Button; onClick { controller.use(id); true } }
             .paletteFocus(controller).focusRequester(requester).hoverable(interactions).focusable(!covered, interactions)
             .paletteKeys({ controller.use(id) }, { menu(bounds.center, false) })
-            .pointerHoverIcon(PointerIcon(if (lifted) AndroidPointerIcon.TYPE_GRABBING else AndroidPointerIcon.TYPE_GRAB))
+            .then(if (dock != null) Modifier.workspaceSource(dock, null, priority = 3, cursor = AndroidPointerIcon.TYPE_GRAB) else Modifier)
             .edgeControl().pointerInput(id, windowFocused, covered) {
                 if (!windowFocused || covered) return@pointerInput
                 awaitEachGesture {
@@ -651,7 +650,7 @@ private fun DrawScope.checker(colors: Palette) {
     LaunchedEffect(Unit) { focus.requestFocus() }
     DisposableEffect(Unit) { onDispose { host.editingText = false; host.textComposition.clear(focus) } }
     BasicTextField(value, { value = it; host.textComposition.update(focus, value, hadFocus) },
-        Modifier.edgeControl().widthIn(min = 64.dp, max = 180.dp).height(panelMetrics().height).paletteFocus(controller).focusRequester(focus).testTag("palette-name-editor")
+        Modifier.edgeControl().widthIn(min = 64.dp, max = 180.dp).height(panelMetrics().height).textCursorRegion().paletteFocus(controller).focusRequester(focus).testTag("palette-name-editor")
             .background(colors.input, ControlShape)
             .then(if (controller.message?.second == true) Modifier.border(1.dp, Color(0xffee5555), ControlShape) else Modifier)
             .onPreviewKeyEvent { event ->

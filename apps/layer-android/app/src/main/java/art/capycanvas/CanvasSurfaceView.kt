@@ -109,10 +109,10 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
         } else false
         host.updatePredictionAvailability(available)
     }
-    override fun onResolvePointerIcon(event: MotionEvent, pointerIndex: Int): PointerIcon? {
-        // Compose controls are virtual siblings above this full-window native
-        // view. Let their owner resolve the icon instead of hiding it underneath.
-        if (chromeHitTest(event.getX(pointerIndex), event.getY(pointerIndex))) return null
+    override fun onResolvePointerIcon(event: MotionEvent, pointerIndex: Int): PointerIcon? =
+        pointerIconAt(event.getX(pointerIndex), event.getY(pointerIndex))
+    internal fun pointerIconAt(x: Float, y: Float): PointerIcon? {
+        if (chromeHitTest(x, y)) return null
         val cursor = host.snapshot?.optString("navigation_cursor")
         return PointerIcon.getSystemIcon(context, when(cursor) {
             "pan" -> PointerIcon.TYPE_GRAB
