@@ -75,7 +75,7 @@ function Scroll-Check([string]$phase){
    $scroll=$pattern
    if($panel-eq'brushes'){Check ($actual.extent_height-gt$actual.viewport_height+.6-and$scroll.Current.VerticallyScrollable) ($phase+' Brushes have genuine native overflow') @{outer=$actual;scroll=$scroll.Current}}
    $before=$scroll.Current.VerticalScrollPercent
-   if($scroll.Current.VerticallyScrollable){$scroll.Scroll([System.Windows.Automation.ScrollAmount]::NoAmount,[System.Windows.Automation.ScrollAmount]::LargeIncrement);Start-Sleep -Milliseconds 150;$after=$scroll.Current.VerticalScrollPercent;Check ($after-ne$before) ($phase+' '+$panel+' genuine overflow scroll moves') @{before=$before;after=$after;outer=$actual};$scroll.SetScrollPercent(-1,0)}
+   if($scroll.Current.VerticallyScrollable){$scroll.Scroll([System.Windows.Automation.ScrollAmount]::NoAmount,[System.Windows.Automation.ScrollAmount]::LargeIncrement);Wait-Until {$scroll.Current.VerticalScrollPercent-ne$before} ($phase+' '+$panel+' genuine overflow scroll moves');$after=$scroll.Current.VerticalScrollPercent;Check ($after-ne$before) ($phase+' '+$panel+' genuine overflow scroll moves') @{before=$before;after=$after;outer=$actual};$scroll.SetScrollPercent(-1,0)}
   }
  }
  Wait-OverviewProjection
