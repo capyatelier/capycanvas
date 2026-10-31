@@ -3,7 +3,7 @@ $ErrorActionPreference='Stop'
 if($Executable){& (Join-Path $PSScriptRoot 'exercise-header.ps1') -Executable $Executable -Journey catalog-only;return}
 if(!$ProcessId -or !$WindowHandle -or !$StateFile){throw 'Supply an executable or an owned process, window and state file'}
 if(!$EvidenceDirectory){$EvidenceDirectory=Split-Path -Parent $StateFile}
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
 if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
 $app=Get-Process -Id $ProcessId
 if($app.ProcessName -ne 'CapyCanvas'){throw 'Expected a controlled CapyCanvas review process.'}
@@ -15,10 +15,10 @@ $script:settingsScope=$root
 $script:swatchAllocations=[Collections.Generic.List[object]]::new()
 function Read-Model {
     try {
-        $snapshot=Get-Content -LiteralPath $StateFile -Raw | ConvertFrom-Json
+        $snapshot=Read-Snapshot $StateFile
         if($snapshot.process_id -ne $ProcessId){return $null}
         return $snapshot.model
-    } catch {return $null} # The opt-in snapshot may be finishing a write.
+    } catch {return $null}
 }
 function Find-Control([string]$Name,$Type) {
     $nameCondition=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$Name)
