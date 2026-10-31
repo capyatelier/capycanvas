@@ -42,13 +42,13 @@ fn pointwise_paint_fragment(fragment_position:vec4<f32>)->MaterialOutput {
     for (var offset = 0u; offset < range.y; offset += 1u) {
         let dab = dabs[range.x + offset];
         let contact=material_contact(dab,world,field,stroke_coverage,selected);
-        if contact.held {
+        if (contact.flags & MATERIAL_HELD) != 0u {
             stroke_coverage=max(stroke_coverage,contact.coverage);
             continue;
         }
         let pigment=contact.pigment;
         let coverage=contact.coverage;
-        let repaint=contact.repaint;
+        let repaint=(contact.flags & MATERIAL_REPAINT) != 0u;
         if aggregate {dose+=coverage*dab.flow*dab.color.a;continue;}
         if coverage <= 0.0 { continue; }
         var requested_alpha = brush_alpha(dab,coverage/max(selected,0.000001))*selected;

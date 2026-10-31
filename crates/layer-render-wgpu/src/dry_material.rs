@@ -806,6 +806,41 @@ mod tests {
         }
     }
 
+    fn assert_no_bool_struct_results_in_loops(module: &naga::Module) {
+        fn visit(module: &naga::Module, block: &naga::Block, in_loop: bool) {
+            for statement in block.iter() {
+                match statement {
+                    naga::Statement::Block(block) => visit(module, block, in_loop),
+                    naga::Statement::If { accept, reject, .. } => {
+                        visit(module, accept, in_loop);
+                        visit(module, reject, in_loop);
+                    }
+                    naga::Statement::Switch { cases, .. } => {
+                        for case in cases { visit(module, &case.body, in_loop); }
+                    }
+                    naga::Statement::Loop { body, continuing, .. } => {
+                        visit(module, body, true);
+                        visit(module, continuing, true);
+                    }
+                    naga::Statement::Call { function, result: Some(_), .. } if in_loop => {
+                        let function = &module.functions[*function];
+                        if let Some(result) = &function.result {
+                            if let naga::TypeInner::Struct { members, .. } = &module.types[result.ty].inner {
+                                assert!(members.iter().all(|member| !matches!(module.types[member.ty].inner,
+                                    naga::TypeInner::Scalar(naga::Scalar::BOOL)
+                                        | naga::TypeInner::Vector { scalar: naga::Scalar::BOOL, .. })),
+                                    "loop calls {:?} returning a struct with bool members", function.name);
+                            }
+                        }
+                    }
+                    _ => (),
+                }
+            }
+        }
+        for (_, function) in module.functions.iter() { visit(module, &function.body, false); }
+        for entry in &module.entry_points { visit(module, &entry.function.body, false); }
+    }
+
     /// Browsers reject `a || b && c`, which naga accepts.
     fn assert_logical_operators_grouped(source: &str) {
         let mut groups = vec![[false; 2]];
@@ -845,6 +880,7 @@ mod tests {
             assert_logical_operators_grouped(&source);
             let module = naga::front::wgsl::parse_str(&source).unwrap();
             assert_no_member_after_a_bool(&module);
+            assert_no_bool_struct_results_in_loops(&module);
             assert_eq!(module.overrides.iter().any(|(_,v)|v.name.as_deref()==Some("CONTACT_FLAGS")),flags==u32::MAX);
             if flags!=u32::MAX {assert!(source.contains(&format!("const CONTACT_FLAGS: u32 = {flags}u;")));}
             assert!(!module.overrides.iter().any(|(_,v)|v.name.as_deref()==Some("MATERIAL_OPERATION")));
@@ -874,6 +910,7 @@ mod tests {
                 assert_logical_operators_grouped(&source);
                 let mut used = naga::front::wgsl::parse_str(&source).unwrap();
                 assert_no_member_after_a_bool(&used);
+                assert_no_bool_struct_results_in_loops(&used);
                 validate(&used);
                 used.entry_points.retain(|e| e.name == entry);
                 assert_eq!(used.entry_points.len(), 1, "{entry}/{operation:?}");
