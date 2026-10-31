@@ -703,26 +703,20 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Only committed workspace topology is durable. A process interruption
     /// during a drag must restore its starting layout, not an intermediate tear-off.
     pub fn durable_workspace(&self) -> WorkspaceState {
-        let mut workspace = self
+        let workspace = self
             .workspace_history
             .gesture_start()
             .or(self.workspace_preview.as_ref())
-            .unwrap_or(&self.state.workspace)
-            .clone();
+            .unwrap_or(&self.state.workspace);
+        let mut layout = durable_layout(&workspace.layout);
         self.state
             .customization
-            .committed_header(&mut workspace.layout);
-        workspace.layout.measurements.clear();
-        workspace.layout.column_scroll.clear();
-        workspace.layout.titlebar_insets = [0.0; 3];
-        workspace.layout.bottom_inset = 0.0;
-        workspace.layout.header_presentation = Default::default();
-        workspace.zen_mode = self
-            .workspace_preview
-            .as_ref()
-            .unwrap_or(&self.state.workspace)
-            .zen_mode;
-        workspace
+            .committed_header(&mut layout);
+        WorkspaceState {
+            version: workspace.version,
+            layout,
+            zen_mode: self.workspace_preview.as_ref().unwrap_or(&self.state.workspace).zen_mode,
+        }
     }
 
     pub fn preferences(&self) -> Option<PreferencesView> {
@@ -7438,6 +7432,19 @@ mod tests {
                 s.state.workspace.layout.canvas_info,
                 original.history.layout().canvas_info
             );
+        }
+    }
+
+    #[test]
+    fn native_layout_grid_does_not_change_workspace_captures() {
+        let mut app = session(Platform::Gtk);
+        let workspace = app.durable_workspace();
+        let capture = app.capture_workspace().unwrap();
+        for grid in [1., 0.8, 2.] {
+            app.state.workspace.layout.layout_grid = grid;
+            assert_eq!(app.durable_workspace(), workspace);
+            assert_eq!(app.capture_workspace().unwrap(), capture);
+            assert_eq!(app.state.workspace.layout.layout_grid, grid);
         }
     }
 

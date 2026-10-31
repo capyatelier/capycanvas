@@ -47,6 +47,7 @@ impl WorkspaceState {
 pub fn durable_layout(layout: &DockLayout) -> DockLayout {
     let mut layout = layout.clone();
     layout.measurements.clear();
+    layout.layout_grid = 0.;
     layout.column_scroll.clear();
     for s in &mut layout.column_stacks {
         s.open_column = None;
@@ -137,6 +138,7 @@ impl LayoutHistory {
                 || id != &revision.id
                 || !revision.layout.measurements.is_empty()
                 || !revision.layout.column_scroll.is_empty()
+                || revision.layout.layout_grid != 0.
                 || revision.layout.titlebar_insets != [0.0; 3]
                 || revision.layout.bottom_inset != 0.0
                 || revision.layout.header_presentation != Default::default()
@@ -358,6 +360,36 @@ pub struct WorkspaceCapture {
 mod tests {
     use super::*;
     use crate::{Panel, Localizer, UiLanguage};
+
+    #[test]
+    fn native_layout_grid_is_not_durable_history() {
+        for grid in [1., 0.8, 2.] {
+            let mut state = WorkspaceState::default();
+            let mut history = WorkspaceHistory::default();
+            let captured = history.capture(&state);
+            state.layout.layout_grid = grid;
+            assert_eq!(durable_layout(&state.layout), *captured.layout());
+            assert_eq!(LayoutHistory::new(&state.layout), captured);
+            history.record(WorkspaceState::default(), &state);
+            assert_eq!(history.capture(&state), captured);
+            assert!(!history.can_undo());
+            let before = state.clone();
+            state.layout.canvas_info.visible = !state.layout.canvas_info.visible;
+            history.record(before, &state);
+            assert!(history.can_undo());
+            history.undo(&mut state);
+            assert_eq!(durable_layout(&state.layout), *captured.layout());
+            assert_eq!(state.layout.layout_grid, grid);
+            history.redo(&mut state);
+            assert_eq!(state.layout.layout_grid, grid);
+            assert_ne!(durable_layout(&state.layout), *captured.layout());
+            let stored = history.capture(&state);
+            assert!(stored.revisions.values().all(|r| r.layout.layout_grid == 0.));
+            let mut invalid = captured.clone();
+            invalid.revisions.get_mut(&invalid.current).unwrap().layout.layout_grid = grid;
+            assert!(invalid.validate().is_err());
+        }
+    }
 
     #[test]
     fn semantic_history_keeps_custom_names_after_rename_and_deletion() {
