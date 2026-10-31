@@ -171,12 +171,24 @@ items, it does the following, in order:
    copies never share a name. The existing code publishes the copy by an
    fsynced rename.
 2. Records its own version.
-3. Deletes all but the three most recently modified copies.
+3. Once startup has adopted a workspace, prunes old copies.
 
 Because the lock is held during the copy, no other process writes until the copy
 exists. If the copy fails, for example on a full disk, the marker stays as it
 was and startup continues in memory with the existing notice. The next start
 tries again.
+
+**Retention:** keep the ten newest copies while they total at most 256 MB, and
+never fewer than three. If a release converts data badly, the copy from before
+it must still exist when the release that repairs it starts. That repair reads
+the newest copy recorded by a version before the faulty one, while loading, so
+pruning hasn't run yet. The recorded version in each name is what makes that
+copy easy to find.
+
+- **Why ten:** Android and Web painters run every release, and hotfixes can
+  ship several a day, so the needed copy has to outlast several version changes.
+- **Why 256 MB:** a store in daily use is about 5 MB, so ten copies take about
+  50 MB. Only unusually large stores keep fewer than ten.
 
 On Web, the same IndexedDB transaction that first writes the store also stores
 the copy and the version, the way a reset already stores its `unreadable`
@@ -235,7 +247,8 @@ without a manual backup step.
 - **Snapshot tests.** Three cases:
   - A version change copies the store before its first write.
   - A failed copy leaves the store byte for byte unchanged and runs in memory.
-  - Going up, down and up again keeps three distinct copies.
+  - Going up, down and up again keeps distinct copies, and pruning keeps the
+    ten newest within 256 MB and never fewer than three.
 - **Inputs stay fixed.** `.githooks/pre-push` additionally rejects a push that
   modifies or deletes a file under `crates/*/tests/compat/<release>/`; its
   existing ancestry and message checks stay as they are. The package contract
@@ -265,7 +278,7 @@ in the diff what changed instead of hiding it.
   adoption.
   - Its cost grows with the store. `HISTORY_BUDGET_BYTES` (100 MiB) bounds only
     trimmable layout history, not the whole store.
-  - Disk use peaks at four copies until pruning.
+  - Disk use holds one copy over the limit until pruning.
   - Milestone 1 records the cold-start time to the first canvas frame on the
     low-tier tablet with a large store, with and without the copy.
 - **Tests** use small inputs and need no GPU.
@@ -297,8 +310,8 @@ in the diff what changed instead of hiding it.
   painters, and the release inputs are checked on every push.
 - **No CI job that builds an earlier release, and no render comparison.** The
   expected files compare authored data exactly.
-- **No compatibility for data from before 1.0.15,** except the optional step
-  under Decisions.
+- **No compatibility for data from before 1.0.15.** 1.0.14 drawings with image
+  layers stay view-only.
 
 ## Work
 
@@ -335,17 +348,6 @@ true.
    - One line each in [testing](testing.md) naming the upgrade and tolerance
      tests.
 
-When milestone 3 lands, the rules in section 1 move into
-[`AGENTS.md`](../../AGENTS.md), replacing "no backward compatibility,
-migrations or readers for old formats" and "no generic schema migration
-machinery". This plan is then deleted.
-
-## Decisions
-
-- **1.0.14 drawings.** One `.capy` step that renames `objects` to `object` and
-  reads previews up to 1024 px makes 1.0.14 drawings with image layers editable
-  again. It needs a 1.0.14 input drawing with a 1024 px preview. It is the only
-  pre-1.0.15 conversion worth having, because painters still have those files.
-  Without it, they stay view-only.
-- **Snapshot count.** Three copies cover an upgrade, a step back and a retry.
-  More costs disk space on tablets.
+[`AGENTS.md`](../../AGENTS.md) already states the rules in section 1. When
+milestone 3 lands, its link points to the guides that own them, and this plan
+is deleted.

@@ -34,11 +34,17 @@ These rules cover tests, benchmark harnesses and tools as much as production cod
   No test-only switches in production types.
 - Artwork stores authored data, not built-in shaders, UI metadata or GPU layouts.
   Keep stable filter/parameter/choice IDs and all values, including defaults.
-  A concrete data conversion needs a fixed-file regression test; do not add
-  shader generations or generic schema migration machinery. Follow the
+  Do not add shader generations or a generic migration framework. Follow the
   [package contract](docs/reference/capy-package.md).
-- The app is pre-release: no backward compatibility, migrations or readers for
-  old formats unless the task asks for them.
+- Data saved by 1.0.15 or later must survive upgrades: workspaces, toolbars,
+  palettes, brush settings, preferences, export presets, drawings and recovery
+  copies. Never rename, reuse or remove a saved key, ID or enum name, or change
+  what a key means. New fields get defaults; app-state types get no
+  `deny_unknown_fields` or exact version checks. A change in meaning needs a
+  conversion step on the raw JSON and a test that opens data a released build
+  wrote. Never re-save a released fixture to make a test pass, and never reset
+  or overwrite data a build can't read
+  ([saved data compatibility](docs/development/saved-data-compatibility.md)).
 - Add dependencies or vendored code only when necessary, and never copy GPL code
   or another app's artwork ([publication](docs/development/publication.md)).
 - Never run `cargo fmt` across the workspace; it rewrites hundreds of files that
