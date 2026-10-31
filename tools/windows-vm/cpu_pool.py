@@ -95,9 +95,11 @@ def reserve(state, name, worktree):
                     chosen, lock = index, candidate
                 else:
                     candidate.close()
-            if any(not isinstance(row, dict) or row.get("pool") != settings
+            if any(not isinstance(row, dict) or not isinstance(row.get("pool"), dict)
+                   or any(row["pool"].get(key) != settings[key] for key in
+                          ("vcpu_budget", "memory_budget_gib", "runner_cpus", "runner_memory_gib"))
                    or not isinstance(row.get("worktree"), str) for row in held):
-                raise RuntimeError("CPU pool configuration differs from active reservations; stop their runners before changing it")
+                raise RuntimeError("CPU pool size or budget differs from active reservations; stop their runners before changing it")
             if any(row.get("vm") == name and row.get("state") == str(state.resolve()) for row in held):
                 raise RuntimeError(f"The {name} VM already holds a CPU runner reservation")
             worktree = str(Path(worktree).resolve())

@@ -117,7 +117,8 @@ without measurements the helper uses round-robin assignments. Bare names and
 Defaults reserve half the host's logical CPUs and physical memory for runners,
 with 4 vCPU / 8 GiB per runner and at most six per worktree, limited by capacity.
 Pool size settings apply to CPU runners independently of ordinary VM environment
-overrides. Change the configuration only after all runner reservations are free.
+overrides. Change the size or budget settings only after all runner reservations
+are free; `per_owner_limit` can change while runners are reserved.
 
 Slot locks are host-wide, including across VM state directories. QEMU inherits
 each reservation descriptor and holds it until shutdown or a crash, even if the

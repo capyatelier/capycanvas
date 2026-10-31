@@ -92,6 +92,15 @@ class CpuPoolTests(unittest.TestCase):
                 with pool.reserve(self.state, "second-r1", self.root / "second"):
                     self.fail("An active pool silently changed its budget")
 
+    def test_owner_limit_can_change_while_pool_geometry_is_reserved(self):
+        path = self.state / "cpu-pool.json"
+        path.write_text(json.dumps({**self.settings, "per_owner_limit": 6}))
+        with pool.reserve(self.state, "first-r1", self.root / "first") as (first, _):
+            path.write_text(json.dumps({**self.settings, "per_owner_limit": 12}))
+            with pool.reserve(self.state, "first-r2", self.root / "first") as (second, _):
+                self.assertNotEqual(first.index, second.index)
+                self.assertEqual(sum(row["status"] == "reserved" for row in pool.describe(self.state)[1]), 2)
+
     def test_listing_shows_live_metadata_only_while_reserved(self):
         with pool.reserve(self.state, "first-r1", self.root / "first") as (slot, _):
             settings, rows = pool.describe(self.state)
