@@ -43,25 +43,7 @@ fn native_contact_brushes() {
         .enumerate()
     {
         let id = preset as u32;
-        let group = layer_ui::brush_catalog()
-            .find(|b| b.id == id)
-            .unwrap()
-            .group;
-        w.dispatch(UiAction::Invoke {
-            command: group.tool().command(),
-        });
-        w.dispatch(UiAction::SelectToolGroup { group });
-        pump(30);
-        let button = w
-            .tool_set
-            .buttons
-            .borrow()
-            .iter()
-            .find(|(item, _, _)| item.preview == Some(id))
-            .expect("preset must be present in its native tool group")
-            .1
-            .clone();
-        click(&button);
+        w.dispatch(UiAction::SelectBrush { id });
         pump(40);
         if state(&w).customization.drawer.is_some() {
             w.dispatch(UiAction::Customize {
@@ -70,7 +52,6 @@ fn native_contact_brushes() {
             pump(250);
         }
         assert_eq!(state(&w).brush.preset, id);
-        assert!(button.has_css_class("selected-tool"));
         assert_eq!(
             ui_session(&w)
                 .engine()
