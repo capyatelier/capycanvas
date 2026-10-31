@@ -42,6 +42,7 @@ mod imp {
         fn size_allocate(&self, width: i32, _: i32, _: i32) {
             if let Some(w) = self.owner.borrow().upgrade() {
                 w.header.allocate(&w, width as f32);
+                w.documents.update_hover();
             }
         }
         fn snapshot(&self, snapshot: &gtk::Snapshot) {

@@ -24,6 +24,8 @@ fn native_palette_reorder_pen_input() {
 fn check_palette_reorder(devices: &[&str]) {
     use layer_core::color::{RgbColor, RgbSpace};
     let mut d = Driver::new("art.capycanvas.PaletteReorder");
+    set_transparency(&d.w, "LAYER_MOTION_TRANSPARENCY");
+    let settings = gtk::Settings::default().unwrap();
     for surface in ["drawer", "dock", "float"] {
         d.w.dispatch(UiAction::RestoreWorkspace {
             workspace: Box::new(WorkspaceState {
@@ -76,6 +78,8 @@ fn check_palette_reorder(devices: &[&str]) {
             let neighbor = d.named(&format!("palette-swatch-{}", original[1].id));
             let original_neighbor = grid.visual_bounds(&neighbor).unwrap();
             let original_source = grid.visual_bounds(&tile).unwrap();
+            d.input.perform(serde_json::json!([{"point": [800., 500.]}]));
+            let idle = idle_hover_pixel(&d.w, &grid, &neighbor, [0.5, 0.025]);
             let colors = |d: &Driver| state(&d.w).color_library.active_palette().swatches.clone();
             // Tiny motion remains a tap; dragging needs movement slop, not a hold.
             let jitter = [start[0] + 2., start[1] + 2.];
@@ -186,8 +190,12 @@ fn check_palette_reorder(devices: &[&str]) {
                 } else if cancel {
                     d.input.key(0xff1b);
                 }
-                d.input
-                    .perform(serde_json::json!([contact(device, "up", release)]));
+                let animations = settings.is_gtk_enable_animations();
+                if *device == "mouse" && !cancel { settings.set_gtk_enable_animations(false); }
+                let painted = (*device == "mouse" && !cancel).then(|| hover_frames(&d.w, &grid, release));
+                d.input.perform(serde_json::json!([contact(device, "up", release)]));
+                if let Some(frames) = painted { assert_hover_frames(&d.w, frames.finish(), idle, [0.5, 0.025]); }
+                settings.set_gtk_enable_animations(animations);
                 if *device == "pen" {
                     d.input.perform(serde_json::json!([{"pen":"leave"}]));
                 }
@@ -217,14 +225,21 @@ fn check_palette_reorder(devices: &[&str]) {
                 "retained tile"
             );
             assert!(tile.grab_focus());
+            let animations = settings.is_gtk_enable_animations();
+            settings.set_gtk_enable_animations(false);
+            let resting = d.point(&neighbor);
+            d.input.perform(serde_json::json!([{"point": resting}]));
             for (key, expected) in [(0x7a, &original), (0x79, &expected)] {
+                let frames = hover_frames(&d.w, &grid, resting);
                 d.input.perform(serde_json::json!([{"key":0xffe3,"down":true},{"key":key,"down":true},{"key":key,"down":false},{"key":0xffe3,"down":false}]));
+                assert_hover_frames(&d.w, frames.finish(), idle, [0.5, 0.025]);
                 assert_eq!(
                     &colors(&d),
                     expected,
                     "{surface} {device}: keyboard undo/redo"
                 );
             }
+            settings.set_gtk_enable_animations(animations);
             d.w.dispatch(UiAction::Color {
                 action: layer_ui::ColorAction::Library {
                     action: layer_ui::ColorLibraryAction::UndoReorder {
@@ -367,6 +382,7 @@ fn native_palette_panel_input() {
     let mut d = Driver::managed("art.capycanvas.PaletteReview");
     d.w.workspaces.send(&d.w, layer_workspace::WorkspaceInput::Switch { id: "builtin:workspace:painter".into() });
     wait_workspaces(&d.w);
+    set_transparency(&d.w, "LAYER_MOTION_TRANSPARENCY");
     d.w.dispatch(UiAction::SetTheme { theme: Some(if std::env::var("CAPY_NATIVE_TEST_THEME").as_deref() == Ok("light") { Theme::Light } else { Theme::Dark }) });
     pump(200);
     let color_button = d.header_tool(ToolbarControl::Color);
@@ -429,11 +445,31 @@ fn native_palette_panel_input() {
         [0.76, 0.66, 0.55, 1.],
         [0.93, 0.87, 0.74, 1.],
     ];
-    for rgba in colors {
+    let settings = gtk::Settings::default().unwrap();
+    let animations = settings.is_gtk_enable_animations();
+    settings.set_gtk_enable_animations(false);
+    let add = d.named("palette-add-color");
+    let grid = add.parent().unwrap();
+    d.input.perform(serde_json::json!([{"point": [500., 500.]}]));
+    let idle = idle_hover_pixel(&d.w, &grid, &add, [0.5, 0.75]);
+    let point = d.point(&add);
+    d.input.perform(serde_json::json!([{"point": point}]));
+    assert_ne!(idle_hover_pixel(&d.w, &grid, &add, [0.5, 0.75]), idle, "palette retains ordinary hover feedback");
+    for (index, rgba) in colors.into_iter().enumerate() {
+        let device = if index + 1 == colors.len() { "touch" } else { "mouse" };
         d.w.dispatch(UiAction::SetColor { rgba });
         pump(40);
-        d.click_name("palette-add-color");
+        let point = d.point(&add);
+        d.input.perform(serde_json::json!([contact(device, "down", point)]));
+        let frames = sample_after_paint(&grid, glib::clone!(#[weak(rename_to = w)] d.w,
+            #[weak] grid, #[weak] add, #[upgrade_or_default] move || {
+            vec![(add.widget_name().to_string(), add.compute_bounds(&grid).unwrap(),
+                add.compute_bounds(&w.window).unwrap().contains_point(&gtk::graphene::Point::new(point[0], point[1])))]
+        }));
+        d.input.perform(serde_json::json!([contact(device, "up", point)]));
+        assert_hover_frames(&d.w, frames.finish(), idle, [0.5, 0.75]);
     }
+    settings.set_gtk_enable_animations(animations);
     assert!(
         state(&d.w).color_library.history.is_empty(),
         "selection and storing are not paint use"

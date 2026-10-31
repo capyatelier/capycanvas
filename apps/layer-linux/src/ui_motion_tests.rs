@@ -88,6 +88,7 @@ fn native_panel_tab_feedback_preserves_join() {
     w.window.maximize();
     w.window.present();
     pump(1600);
+    set_transparency(&w, "LAYER_MOTION_TRANSPARENCY");
     let group = state(&w).workspace.layout.panel_group(Panel::Layers).unwrap();
     let tabs = w.groups.borrow().iter().find(|g| g.id == group).unwrap().tabs.clone();
     assert!(tabs.len() >= 2);
@@ -100,6 +101,25 @@ fn native_panel_tab_feedback_preserves_join() {
         pixels.split_off((texture.height() as usize - 6 * strip.scale_factor() as usize) * stride)
     };
     input.ready();
+    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(layer_ui::WorkspaceState::default()) });
+    pump(200);
+    let (moving_strip, button) = {
+        let groups = w.groups.borrow();
+        let view = groups.iter().find(|g| g.id == group).unwrap();
+        (view.tab_strip.clone(), view.tabs.iter().find(|(p, _)| *p == Panel::Adjustments).unwrap().1.clone())
+    };
+    input.perform(serde_json::json!([{"point": [800., 500.]}]));
+    let idle = idle_hover_pixel(&w, &moving_strip, &button, [0.5, 0.75]);
+    let point = screen_point(button.upcast_ref(), &w.window, [0.5, 0.5]);
+    input.perform(serde_json::json!([{"point": point}]));
+    let frames = hover_frames(&w, &moving_strip, point);
+    w.dispatch(UiAction::MovePanel { panel: Panel::Sizes, target: DockTarget::Split { group, edge: Edge::Top },
+        viewport: [w.surface.width() as f32, w.surface.height() as f32] });
+    pump(150);
+    assert!(!button.compute_bounds(&w.window).unwrap().contains_point(&gtk::graphene::Point::new(point[0], point[1])));
+    assert_hover_frames(&w, frames.finish(), idle, [0.5, 0.75]);
+    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(layer_ui::WorkspaceState::default()) });
+    pump(200);
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         for level in [layer_ui::Transparency::Off, layer_ui::Transparency::Low, layer_ui::Transparency::Medium, layer_ui::Transparency::High] {

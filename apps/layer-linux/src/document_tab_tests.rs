@@ -468,6 +468,8 @@ fn native_document_tab_input() {
     w.window.maximize();
     w.window.present();
     new_photo::ready(&w);
+    apply_fixture_theme(&w);
+    set_transparency(&w, "LAYER_MOTION_TRANSPARENCY");
     pump(250);
     let mut input = RemoteInput::new().settle_ms(180).timeout_secs(30);
     input.ready();
@@ -515,6 +517,51 @@ fn native_document_tab_input() {
             assert_eq!(row.has_css_class("selected"), index as u64 + 1 == w.documents.selected());
         }
     };
+    let settings = gtk::Settings::default().unwrap();
+    let animations = settings.is_gtk_enable_animations();
+    settings.set_gtk_enable_animations(false);
+    let strip = retained[0].parent().unwrap();
+    input.perform(serde_json::json!([{"point": [800., 500.]}]));
+    let idle = idle_hover_pixel(&w, &strip, &retained[1], [0.5, 0.75]);
+    let start = point(1, 0.3);
+    let end = [start[0] + (second.x() - first.x()) * 0.9, start[1]];
+    input.perform(serde_json::json!([{"point": start}, {"down": true}, {"point": end}]));
+    let frames = hover_frames(&w, &strip, end);
+    input.perform(serde_json::json!([{"down": false}]));
+    assert_hover_frames(&w, frames.finish(), idle, [0.5, 0.75]);
+    w.documents.model.borrow_mut().undo();
+    w.documents.refresh(&w);
+    pump(150);
+    input.perform(serde_json::json!([{"point": point(2, 0.5)}]));
+    assert_ne!(idle_hover_pixel(&w, &strip, &retained[1], [0.5, 0.75]), idle, "drawing tabs retain ordinary hover feedback");
+    for opening in [true, false] {
+        let resting = point(2, 0.9);
+        input.perform(serde_json::json!([{"point": resting}]));
+        let frames = hover_frames(&w, &strip, resting);
+        if opening {
+            glib::MainContext::default().block_on(w.documents.open(&w,
+                (new_drawing(128, 128, &w.localization()).unwrap(), None))).unwrap();
+        } else {
+            input.perform(serde_json::json!([{"key":0xffe3,"down":true},{"key":0x77,"down":true},
+                {"key":0x77,"down":false},{"key":0xffe3,"down":false}]));
+        }
+        new_photo::ready(&w);
+        pump(150);
+        assert_hover_frames(&w, frames.finish(), idle, [0.5, 0.75]);
+    }
+    switch(&w, 2);
+    input.perform(serde_json::json!([{"point": [800., 500.]}]));
+    let idle = idle_hover_pixel(&w, &strip, &retained[1], [0.5, 0.75]);
+    let touch = point(2, 0.5);
+    input.perform(serde_json::json!([contact("touch", "down", touch)]));
+    let frames = sample_after_paint(&strip, glib::clone!(#[weak] strip, #[strong(rename_to = row)] retained[1], #[upgrade_or_default] move || {
+        if row.state_flags().contains(gtk::StateFlags::ACTIVE) { Vec::new() }
+        else { vec![(row.widget_name().to_string(), row.compute_bounds(&strip).unwrap(), false)] }
+    }));
+    input.perform(serde_json::json!([contact("touch", "up", touch)]));
+    assert_hover_frames(&w, frames.finish(), idle, [0.5, 0.75]);
+    switch(&w, 3);
+    settings.set_gtk_enable_animations(animations);
     for touch in [false, true] {
         let device = if touch { "touch" } else { "mouse" };
         assert_eq!(
@@ -570,7 +617,7 @@ fn native_document_tab_input() {
             "held tab stays in the strip, touch={touch}: {held} {first:?} {last:?}"
         );
         if !touch {
-            crate::capture(&w, "/tmp/capy-document-tabs-slide.png");
+            crate::capture(&w, input.dir.join("capy-document-tabs-slide.png").to_str().unwrap());
         }
         let away = [to[0], to[1] + first.height() * 2.];
         input.perform(serde_json::json!([contact(device, "move", away)]));
@@ -702,7 +749,7 @@ fn native_document_tab_input() {
         "touch tab selection",
     );
     new_photo::ready(&w);
-    crate::capture(&w, "/tmp/capy-document-tabs-wide.png");
+    crate::capture(&w, input.dir.join("capy-document-tabs-wide.png").to_str().unwrap());
     // Exercise the actual pointer states for visual comparison with AdwTabBar.
     for (theme, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
@@ -712,20 +759,20 @@ fn native_document_tab_input() {
             ("selected", point(3, 0.4)),
         ] {
             input.perform(serde_json::json!([{"point":target}]));
-            crate::capture(&w, &format!("/tmp/capy-document-tabs-{name}-{state}.png"));
+            crate::capture(&w, input.dir.join(format!("capy-document-tabs-{name}-{state}.png")).to_str().unwrap());
         }
         let tab = find_named(w.window.upcast_ref(), "document-tab-3").unwrap();
         let close = tab.last_child().unwrap();
         let b = close.compute_bounds(&w.window).unwrap();
         input.perform(serde_json::json!([{"point":[b.x()+b.width()/2., b.y()+b.height()/2.]}]));
-        crate::capture(&w, &format!("/tmp/capy-document-tabs-{name}-close.png"));
+        crate::capture(&w, input.dir.join(format!("capy-document-tabs-{name}-close.png")).to_str().unwrap());
         input.perform(serde_json::json!([{"point":point(3, 0.4)}, {"down":true}]));
-        crate::capture(&w, &format!("/tmp/capy-document-tabs-{name}-pressed.png"));
+        crate::capture(&w, input.dir.join(format!("capy-document-tabs-{name}-pressed.png")).to_str().unwrap());
         input.perform(serde_json::json!([{"down":false}]));
         assert!(tab.first_child().unwrap().grab_focus());
         w.window.set_focus_visible(true);
         pump(100);
-        crate::capture(&w, &format!("/tmp/capy-document-tabs-{name}-focus.png"));
+        crate::capture(&w, input.dir.join(format!("capy-document-tabs-{name}-focus.png")).to_str().unwrap());
         assert!(!state(&w).workspace.zen_mode);
     }
     // Keyboard selector remains available when workspace customization removes

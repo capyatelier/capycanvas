@@ -133,6 +133,83 @@ use layer_render::CanvasRenderer;
 use layer_ui::FloatingToolbarLayout;
 use std::time::{Duration, Instant};
 
+struct PaintedSample<T> {
+    time: i64,
+    node: gtk::gsk::RenderNode,
+    bounds: gtk::graphene::Rect,
+    state: T,
+}
+impl<T> PaintedSample<T> {
+    fn pixel(&self, window: &adw::ApplicationWindow, point: [f32; 2]) -> [u8; 4] {
+        let texture = window.renderer().unwrap().render_texture(&self.node, Some(
+            &gtk::graphene::Rect::new(self.bounds.x() + point[0], self.bounds.y() + point[1], 1., 1.)));
+        let mut pixel = [0; 4];
+        texture.download(&mut pixel, 4);
+        pixel
+    }
+}
+struct PaintSamples<T> {
+    clock: gdk::FrameClock,
+    handler: glib::SignalHandlerId,
+    samples: Rc<RefCell<Vec<PaintedSample<T>>>>,
+}
+impl<T> PaintSamples<T> {
+    fn finish(self) -> Vec<PaintedSample<T>> {
+        self.clock.disconnect(self.handler);
+        self.samples.take()
+    }
+}
+fn sample_after_paint<T: 'static>(widget: &impl IsA<gtk::Widget>, sample: impl Fn() -> T + 'static) -> PaintSamples<T> {
+    let widget = widget.as_ref().clone();
+    let clock = widget.frame_clock().unwrap();
+    let samples = Rc::new(RefCell::new(Vec::new()));
+    let handler = clock.connect_after_paint(glib::clone!(#[strong] samples, move |clock| {
+        let parent = widget.parent().unwrap();
+        let snapshot = gtk::Snapshot::new();
+        parent.snapshot_child(&widget, &snapshot);
+        if let Some(node) = snapshot.to_node() {
+            samples.borrow_mut().push(PaintedSample {
+                time: clock.frame_time(), node, bounds: widget.compute_bounds(&parent).unwrap(), state: sample(),
+            });
+        }
+    }));
+    PaintSamples { clock, handler, samples }
+}
+
+fn idle_hover_pixel(w: &Workspace, container: &impl IsA<gtk::Widget>, child: &impl IsA<gtk::Widget>, at: [f32; 2]) -> [u8; 4] {
+    let frames = sample_after_paint(container, || ());
+    container.queue_draw();
+    pump(30);
+    let frame = frames.finish().pop().unwrap();
+    let bounds = child.compute_bounds(container).unwrap();
+    frame.pixel(&w.window, [bounds.x() + bounds.width() * at[0], bounds.y() + bounds.height() * at[1]])
+}
+
+fn hover_frames(w: &Rc<Workspace>, strip: &impl IsA<gtk::Widget>, point: [f32; 2])
+    -> PaintSamples<Vec<(String, gtk::graphene::Rect, bool)>>
+{
+    let strip = strip.as_ref();
+    sample_after_paint(strip, glib::clone!(#[weak] w, #[weak] strip, #[upgrade_or_default] move || {
+        widgets(&strip).filter(|child| child.parent().as_ref() == Some(&strip)
+            && (child.is::<gtk::Button>() || child.has_css_class("document-tab"))
+            && !child.has_css_class("selected-tool") && !child.has_css_class("selected"))
+            .map(|child| (child.widget_name().to_string(), child.compute_bounds(&strip).unwrap(),
+                child.compute_bounds(&w.window).unwrap().contains_point(&gtk::graphene::Point::new(point[0], point[1]))))
+            .collect()
+    }))
+}
+
+fn assert_hover_frames(w: &Workspace, frames: Vec<PaintedSample<Vec<(String, gtk::graphene::Rect, bool)>>>, idle: [u8; 4], at: [f32; 2]) {
+    assert!(frames.iter().any(|frame| !frame.state.is_empty()), "hover check samples painted controls");
+    for frame in frames {
+        for (name, bounds, inside) in &frame.state {
+            let pixel = frame.pixel(&w.window, [bounds.x() + bounds.width() * at[0], bounds.y() + bounds.height() * at[1]]);
+            assert!(*inside || pixel.iter().zip(idle).all(|(a, b)| a.abs_diff(b) <= 1),
+                "painted hover outside pointer: {name}, frame {}, bounds {bounds:?}, pixel {pixel:?}, idle {idle:?}", frame.time);
+        }
+    }
+}
+
 struct PaintTimer(Cell<(Instant, f64)>);
 impl PaintTimer {
     fn connect(clock: &gdk::FrameClock) -> (Rc<Self>, glib::SignalHandlerId) {
@@ -10752,6 +10829,7 @@ fn native_tab_slide_input() {
     w.window.maximize();
     w.window.present();
     pump(1200);
+    set_transparency(&w, "LAYER_MOTION_TRANSPARENCY");
     let original = layer_ui::WorkspaceState::default();
     let mut input = RemoteInput::new().settle_ms(150).timeout_secs(4);
     input.ready();
@@ -10771,6 +10849,7 @@ fn native_tab_slide_input() {
     let mut selected_backing = None;
     for (panel, end) in [
         (Panel::Layers, "cancel"),
+        (Panel::Layers, "release"),
         (Panel::Adjustments, "release"),
         (Panel::Layers, "blur"),
         (Panel::Adjustments, "detach"),
@@ -10803,6 +10882,7 @@ fn native_tab_slide_input() {
             let view = groups.iter().find(|view| view.id == group).unwrap();
             (view.root.clone(), view.stack.clone(), view.tab_strip.clone(), view.tabs.clone())
         };
+        let idle = idle_hover_pixel(&w, &retained.2, &retained.3.last().unwrap().1, [0.5, 0.75]);
         input.perform(serde_json::json!([{ "point": start }, { "down": true },
             { "point": [start[0] + 2., start[1]] }]));
         let selected = state(&w).workspace;
@@ -10956,13 +11036,17 @@ fn native_tab_slide_input() {
         } else {
             w.workspace_drag_input(ContactPhase::Cancel, point, None);
         }
+        let release_frames = (end == "release").then(|| hover_frames(&w, &retained.2, point));
         input.perform(serde_json::json!([{ "down": false }]));
+        if let Some(frames) = release_frames {
+            assert_hover_frames(&w, frames.finish(), idle, [0.5, 0.75]);
+        }
         assert!(w.workspace_drag.borrow().is_none());
         assert_eq!(tab.opacity(), 1.);
         if end == "release" {
             assert_eq!(
                 state(&w).workspace.layout.group_panels(group).unwrap()[0],
-                panel
+                if panel == Panel::Layers { Panel::Adjustments } else { panel }
             );
             let check_retained = || {
                 let groups = w.groups.borrow();
@@ -11028,13 +11112,18 @@ fn native_tab_slide_input() {
             let start = [b.x() + b.width() * 0.5, b.y() + b.height() * 0.5];
             let first = w.tab_hits().into_iter().find(|hit| hit.group == group && hit.index == 0).unwrap().bounds;
             let end = [first.x + 8., start[1]];
+            input.perform(serde_json::json!([{"point": [800., 500.]}]));
+            let strip = tab.parent().unwrap().downcast::<crate::panel_tabs::PanelTabs>().unwrap();
+            let idle = idle_hover_pixel(&w, &strip, &tab, [0.5, 0.75]);
             input.perform(serde_json::json!([contact(device, "down", start)]));
             let body = drawer.then(|| find_named(w.surface.upcast_ref(), "drawer-panel-Adjustments").unwrap());
             input.perform(serde_json::json!([contact(device, "move", end)]));
             let presentation = w.gpu.borrow().as_ref().unwrap().session.workspace_update().drag.unwrap();
             assert!(presentation.tab.is_some(), "{device}, drawer={drawer}: tab slides while attached");
             assert!(presentation.drop_hint.is_none(), "{device}, drawer={drawer}: attached slide has no insertion line");
+            let frames = (device == "mouse").then(|| hover_frames(&w, &strip, end));
             input.perform(serde_json::json!([contact(device, "up", end)]));
+            if let Some(frames) = frames { assert_hover_frames(&w, frames.finish(), idle, [0.5, 0.75]); }
             assert_eq!(state(&w).workspace.layout.group_panels(group).unwrap()[0], Panel::Adjustments);
             assert!(tab.is_mapped(), "{device}, drawer={drawer}: drop keeps the original tab mapped");
             assert_eq!(unmapped.get(), 0, "{device}, drawer={drawer}: drop never unmaps its source");

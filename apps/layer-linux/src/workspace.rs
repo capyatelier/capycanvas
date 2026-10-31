@@ -507,6 +507,21 @@ pub(crate) fn allocate_at(child: &gtk::Widget, b: Bounds) {
     );
 }
 
+pub(crate) fn hovered(widget: &impl IsA<gtk::Widget>) -> bool {
+    let widget = widget.as_ref();
+    widget.state_flags().contains(gtk::StateFlags::PRELIGHT)
+        && widget.native().and_then(|native| {
+            let device = native.display().default_seat()?.pointer()?;
+            let (x, y, _) = native.surface()?.device_position(&device)?;
+            crate::input::widget_point(widget, x, y)
+        }).is_some_and(|point| widget.contains(point.x() as f64, point.y() as f64))
+}
+
+pub(crate) fn update_hover(widget: &impl IsA<gtk::Widget>) {
+    let hovered = hovered(widget);
+    if hovered { widget.add_css_class("hovered"); } else { widget.remove_css_class("hovered"); }
+}
+
 fn native_allocation(b: Bounds) -> Bounds {
     let (x,y)=(b.x.round(),b.y.round());
     Bounds {x,y,width:((b.x+b.width).round()-x).max(1.),height:((b.y+b.height).round()-y).max(1.)}

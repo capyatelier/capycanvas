@@ -119,6 +119,7 @@ mod imp {
                             .translate(&gtk::graphene::Point::new(rect.x(), rect.y())),
                     ),
                 );
+                crate::workspace::update_hover(child);
             }
         }
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
@@ -157,12 +158,16 @@ impl PaletteGrid {
         self.queue_resize();
     }
     pub fn append(&self, child: &impl IsA<gtk::Widget>) {
-        child.set_parent(self);
+        self.parent_child(child.as_ref());
         self.imp()
             .children
             .borrow_mut()
             .push(child.clone().upcast());
         self.queue_resize();
+    }
+    fn parent_child(&self, child: &gtk::Widget) {
+        child.set_parent(self);
+        child.connect_state_flags_changed(|child, _| crate::workspace::update_hover(child));
     }
     pub fn reconcile(&self, children: Vec<gtk::Widget>) {
         self.clear_reorder();
@@ -174,7 +179,7 @@ impl PaletteGrid {
         }
         for child in &children {
             if child.parent().is_none() {
-                child.set_parent(self);
+                self.parent_child(child);
             }
         }
         *self.imp().children.borrow_mut() = children;

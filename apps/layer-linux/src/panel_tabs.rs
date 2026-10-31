@@ -109,7 +109,7 @@ mod imp {
             let corners = self.hover_bottom.borrow();
             for (i, button) in buttons.iter().enumerate().filter(|(_, button)| Some(*button) != selected) {
                 if button.is_sensitive() && button.opacity() > 0. && !button.has_css_class("selected-tool")
-                    && button.state_flags().contains(gtk::StateFlags::PRELIGHT)
+                    && crate::workspace::hovered(button)
                     && let Some(tab) = button.compute_bounds(&*obj) {
                         let tab = snapped_tab(&tab, grid);
                         let corner = corners.get(i).copied().unwrap_or_default();
