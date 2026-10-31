@@ -512,7 +512,7 @@ function Pair-Journey{
     (Control 'panel-tab-sizes').SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
     $panel=@((Model).panels|Where-Object id -eq 'sizes')[0];Invoke ($panel.configuration_title+'…') -Name
     Wait-Until {(Model).state.customization.expanded -eq 'sizes'} 'Brush configuration did not open'
-    $preview=Control 'configure-control-brush_color';Scroll-Position $preview 100
+    Scroll-Position (Control 'configure-show-brush_size' -Arranged) 100
     $preview=Control 'configure-control-brush_color' -Arranged;Pair-Park;Capture 'pair-temporary-active-preview' -Composed -WithModel
     $bitmap=[Drawing.Bitmap]::new((Join-Path $run 'pair-temporary-active-preview.png'))
     try{
