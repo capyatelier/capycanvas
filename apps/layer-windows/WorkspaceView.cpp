@@ -133,7 +133,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::map<uint32_t,Group> groups;
     hstring panelBridgeKey;
     NativeLayoutInput layoutInput,resolvedInput,metricInput;
-    J panelMetricContext;hstring panelMetricKey;
+    J panelMetricContext;hstring panelMetricKey,panelBodyMetricKey;
     J resolvedLayout;
     float viewportWidth=0,viewportHeight=0,resolvedWidth=0,resolvedHeight=0;
     uint64_t panelLayoutRevision=0,panelQueryLayoutRevision=0;
@@ -327,7 +327,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         Body* retained=nullptr;
         if(object(geometry,L"tiles").Size())group.body=create();
         else{
-            auto key=O({{L"panel",panelStructure(panel)},{L"metrics",S(panelMetricKey)}}).Stringify();
+            auto key=O({{L"panel",panelStructure(panel)},{L"metrics",S(panelBodyMetricKey)}}).Stringify();
             auto& cached=bodies[std::wstring(str(panel,L"id"))];
             if(!cached.view||cached.key!=key||gestures->Retains(cached.view->Root())){cached.view=create();cached.key=key;cached.host=nullptr;}
             else cached.Detach();
@@ -418,11 +418,12 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         auto scale=root.XamlRoot()?root.XamlRoot().RasterizationScale():1.;
         auto textScale=Windows::UI::ViewManagement::UISettings().TextScaleFactor();
         auto style=L"winui:"+data->language()+L":"+to_hstring(data->textSize());
-        auto key=O({{L"scale",N(scale)},{L"text_scale",N(textScale)},{L"style",S(style)}}).Stringify();
+        auto metrics=O({{L"scale",N(scale)},{L"text_scale",N(textScale)},{L"style",S(style)}});auto key=metrics.Stringify();
         if(key!=panelMetricKey){
             static std::atomic<uint64_t> generation{0};
             panelMetricKey=key;auto panelMetricGeneration=++generation;
             panelMetricContext=O({{L"generation",N(double(panelMetricGeneration))},{L"scale",N(scale)},{L"text_scale",N(textScale)},{L"style",S(style)}});
+            metrics.Insert(L"style",N(data->textSize()));panelBodyMetricKey=metrics.Stringify();
         }
         return panelMetricContext;
     }
@@ -575,7 +576,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             for(auto field:{L"bounds",L"resize_handles",L"tiles",L"footer_grip",L"min_body_height",L"zen_kept",L"scrolls",L"panels",L"tab_presentations"})if(structure.HasKey(field))structure.Remove(field);
             if(auto tiles=object(geometry,L"tiles");tiles.Size())structure.Insert(L"tile_style",S(str(tiles,L"tile_style")));
             structure.Insert(L"footer",B(object(geometry,L"footer_grip").Size()!=0));
-            J signature=O({{L"geometry",structure},{L"panel",panelStructure(panel)},{L"metrics",S(panelMetricKey)}});
+            J signature=O({{L"geometry",structure},{L"panel",panelStructure(panel)},{L"metrics",S(panelBodyMetricKey)}});
             A headers;for(auto member:array(geometry,L"panels")){
                 auto model=find(array(data->model,L"panels"),L"id",member.GetString());
                 headers.Append(O({{L"id",member},{L"title",S(str(model,L"title"))},{L"icon",S(str(model,L"icon"))},{L"tab",panelTabPresentation(array(geometry,L"panels"),array(geometry,L"tab_presentations"),member.GetString())}}));

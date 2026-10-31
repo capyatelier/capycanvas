@@ -3,6 +3,7 @@
 #include "NativeMenus.h"
 #include "ChromeVisibility.h"
 #include "WorkspaceManagerView.h"
+#include "WorkspaceView.h"
 #include <msctf.h>
 #pragma comment(lib,"uuid.lib")
 #include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
@@ -199,6 +200,74 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
     FrameworkElement workspaceElement(hstring const& id){
         for(auto const& popup:VisualTreeHelper::GetOpenPopupsForXamlRoot(root.XamlRoot()))if(auto node=findElement(popup.Child(),id))return node;
         return findElement(root,id);
+    }
+    winrt::Windows::Foundation::IAsyncAction layerLanguageDraft(){
+        auto theme=root.RequestedTheme();std::string snapshot,catalog,translated;NativeLayoutInput layout;
+        co_await resume_background();
+        {
+            struct Apartment{Apartment(){init_apartment(apartment_type::multi_threaded);}~Apartment(){uninit_apartment();}} apartment;
+            NativeLaunch launch(capy_launch("[\"en\"]",nullptr));require(bool(launch),L"Layer language fixture launch failed");
+            NativeHandle<capy_destroy> host(capy_create(1000,700,1,launch.get()));require(bool(host),L"Layer language fixture host failed");
+            J presentation;auto waitModel=[&](auto ready,wchar_t const* message){
+                for(int attempt=0;attempt<300;++attempt){
+                    require(capy_poll_services(host.get())>=0,L"Layer fixture service poll failed");CapySnapshotInfo info{};NativeString value(capy_snapshot(host.get(),&info));
+                    if(value){auto model=J::Parse(to_hstring(value.bytes));if(model.HasKey(L"localization"))presentation=object(model,L"localization");if(ready(model))return model;}
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                }
+                require(false,message);return J{};
+            };
+            require(capy_start_services(host.get(),nullptr,nullptr)>=0,L"Layer fixture services failed");
+            waitModel([](J const& model){auto workspace=object(model,L"windows_workspace");return flag(workspace,L"ready")&&!flag(workspace,L"busy");},L"Layer fixture workspace did not become ready");
+            auto action=[&](std::string const& value){require(capy_action(host.get(),value.c_str())==0,L"Layer language fixture action failed");};
+            action(theme==ElementTheme::Light?R"({"type":"set_theme","theme":"light"})":R"({"type":"set_theme","theme":"dark"})");
+            action(R"({"type":"customize","action":{"type":"set_panel_visible","panel":"layers","visible":true}})");
+            action(R"({"type":"move_panel","panel":"layers","target":{"kind":"float","position":[20,20]},"viewport":[1000,700]})");
+            action(R"({"type":"layer","action":{"op":"new","group":false,"clipped":false}})");
+            CapySnapshotInfo info{};NativeString initial(capy_snapshot(host.get(),&info));require(bool(initial)&&info.full,L"Layer fixture full model missing");
+            auto model=J::Parse(to_hstring(initial.bytes));auto id=num(object(object(object(model,L"state"),L"layer_tools"),L"editing_layer"),L"id");
+            action(to_string(O({{L"type",S(L"layer")},{L"action",O({{L"op",S(L"begin_rename")},{L"id",N(id)}})}}).Stringify()));
+            NativeString current(capy_snapshot(host.get(),&info));require(bool(current)&&info.full,L"Layer rename full model missing");
+            auto baseline=J::Parse(to_hstring(current.bytes));baseline.Insert(L"localization",presentation);snapshot=to_string(baseline.Stringify());
+            NativeString copy(capy_query(host.get(),R"({"type":"catalog"})"));require(bool(copy),L"Layer fixture catalog missing");catalog=std::move(copy.bytes);
+            auto input=to_string(object(baseline,L"layout_input").Stringify());layout=NativeLayoutInput(capy_layout_input_prepare(input.c_str()));require(bool(layout),L"Layer fixture layout input missing");
+            auto tags=array(object(presentation,L"bootstrap"),L"shipped_tags");uint32_t japanese=0;for(uint32_t i=0;i<tags.Size();++i)if(tags.GetStringAt(i)==L"ja")japanese=i+1;
+            require(japanese>0,L"Japanese fixture language choice missing");action(to_string(O({{L"type",S(L"preferences")},{L"action",O({{L"type",S(L"edit")},{L"id",S(L"language")},{L"value",N(japanese)}})}}).Stringify()));
+            waitModel([&](J const&){return str(object(presentation,L"bootstrap"),L"active_tag")==L"ja";},L"Japanese fixture presentation did not publish");translated=to_string(presentation.Stringify());
+            require(capy_finish_services(host.get())>=0,L"Layer fixture service shutdown failed");
+        }
+        co_await apartment;
+        auto model=J::Parse(to_hstring(snapshot)),next=J::Parse(to_hstring(snapshot)),copy=J::Parse(to_hstring(catalog));
+        auto locale=J::Parse(to_hstring(translated));
+        require(str(object(locale,L"bootstrap"),L"active_tag")==L"ja",L"Japanese fixture presentation is not Japanese");
+        require(num(locale,L"generation")>num(object(model,L"localization"),L"generation"),L"Japanese fixture publication did not advance localization");next.Insert(L"localization",locale);
+        auto state=object(model,L"state");auto id=num(object(state,L"layer_tools"),L"rename_layer");
+        require(id>0&&object(next,L"state").Stringify()==state.Stringify(),L"Localized fixture changed authored state");
+        require(str(state,L"theme")== (theme==ElementTheme::Light?L"light":L"dark"),L"Layer snapshot theme differs from the requested fixture theme");
+        require(str(object(object(model,L"localization"),L"bootstrap"),L"active_tag")==L"en",L"Layer fixture presentation must start in English");
+        auto localizedName=str(object(object(object(locale,L"catalog"),L"native_copy"),L"layers"),L"name");
+        copy.Insert(L"bootstrap",object(object(model,L"localization"),L"bootstrap"));
+        auto actions=std::make_shared<std::vector<J>>();auto send=[actions](std::string bytes){actions->push_back(J::Parse(to_hstring(bytes)));};
+        auto view=std::make_unique<WorkspaceView>(send,copy,context.localization,[](CanvasQueryKind,std::string,PreviewReply){return false;},[](bool){},send,send,[](std::string,std::function<void(int32_t)>){ });
+        auto surface=view->Root();surface.Width(1000);surface.Height(700);root.Width(1000);root.Height(780);root.Children().InsertAt(0,surface);window.AppWindow().Resize({1100,900});
+        require(view->Apply(model,layout),L"Initial WorkspaceView model was rejected");view->Resize(1000,700);
+        J group;for(auto value:array(object(model,L"layout"),L"groups")){auto candidate=value.GetObject();if(str(candidate,L"active")==L"layers"){group=candidate;break;}}
+        require(group.Size()!=0,L"Real layer panel group missing");
+        auto groupId=L"workspace-group-"+to_hstring(uint32_t(num(group,L"id"))),entryId=L"layer-"+to_hstring(uint64_t(id))+L"-rename";
+        auto entry=[&]{return findElement(findElement(surface,groupId),entryId).try_as<TextBox>();};
+        co_await wait([&]{auto field=entry();return field&&field.IsLoaded()&&field.ActualWidth()>0&&field.Visibility()==Visibility::Visible;},L"Real WorkspaceView layer editor did not become arranged");
+        auto field=entry();auto originalName=AutomationProperties::GetName(field);require(originalName==L"Layer name"&&localizedName==L"\u30ec\u30a4\u30e4\u30fc\u540d",L"Layer fixture needs English and Japanese accessibility text");captureTextComposition(field);require(field.Focus(FocusState::Keyboard),L"Layer draft focus failed");
+        co_await wait([&]{return FocusManager::GetFocusedElement(root.XamlRoot())==field;},L"Real layer editor did not own focus");
+        field.Text(L"\u65e5\u672c");field.Select(2,0);require(field.Text()==L"\u65e5\u672c"&&field.SelectionStart()==2&&field.SelectionLength()==0&&FocusManager::GetFocusedElement(root.XamlRoot())==field&&!textComposing(field),L"Layer draft must be focused, exact and unmarked before language publication");actions->clear();
+        require(view->Apply(next,layout),L"Localized WorkspaceView model was rejected");
+        require(entry()==field,L"Language publication replaced the active layer TextBox");
+        co_await settle();
+        require(field.IsLoaded()&&entry()==field&&FocusManager::GetFocusedElement(root.XamlRoot())==field,L"Language publication lost the retained layer editor or focus");
+        require(field.Text()==L"\u65e5\u672c"&&field.SelectionStart()==2&&field.SelectionLength()==0,L"Language publication replaced the native layer draft or caret");
+        require(AutomationProperties::GetName(field)==localizedName,L"Retained layer editor did not adopt Japanese accessibility text");
+        for(auto const& command:*actions){auto action=command.HasKey(L"windows_epoch")?object(command,L"action"):command;if(str(action,L"type")==L"layer"){
+            auto operation=str(object(action,L"action"),L"op");require(operation!=L"rename"&&operation!=L"cancel_rename",L"Language publication dispatched an authored rename or cancellation");
+        }}
+        root.Children().RemoveAt(0);view.reset();root.Width(400);root.Height(240);++imeChecks;
     }
     void nativeKey(WORD key,bool released,DWORD time=0){
         privacy();INPUT event{};event.type=INPUT_KEYBOARD;event.ki.wVk=key;event.ki.dwFlags=released?KEYEVENTF_KEYUP:0;event.ki.time=time;
@@ -437,6 +506,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             require(!shown.Current()&&!shown.Show(anchor,{}),L"Reply reopened closed popup");empty();++checks;
             phase=L"workspace-ime";co_await workspaceIme();
             phase=L"native-default-ime";co_await defaultIme();
+            phase=L"layer-language-draft";co_await layerLanguageDraft();
             phase=L"window-close";auto closed=owner.Begin(data,anchor,menu());window.Close();co_await settle();
             require(!closed.Current()&&!closed.Show(anchor,{}),L"Reply reopened canceled owner");empty();++checks;
         } catch(hresult_error const& e){resultCode=1;error=e.message();}catch(...){resultCode=1;error=L"Unhandled popup fixture failure";}
