@@ -74,6 +74,9 @@ and how parity is checked.
   palettes, brush settings, preferences, drawings and recovery copies across
   upgrades: tolerant readers, upgrade steps, version snapshots and release
   fixtures.
+- [Phone layout](phone-layout.md) defines the fixed short-edge presentation for
+  windows under 480 px on their short side: the Capy bar, a phone toolbar per
+  workspace, Capy's menu and drawing with a finger.
 - [Photo editing roadmap](photo-editing-roadmap.md) collects deferred inspection,
   presets, export, masking, retouching and host qualification work. Current
   measurements and remaining targets belong in the
