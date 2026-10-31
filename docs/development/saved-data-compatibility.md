@@ -43,7 +43,9 @@ that failed.
 | Preferences | `settings.json`, Android `SharedPreferences` and Web `localStorage`, all through `Settings::restore` | Sections 1 and 3; already field by field |
 | Export presets | `export-presets` | Sections 1 and 2: keep each preset this build can read |
 | Paper and colour-profile libraries | Content-addressed files plus an index | Section 1 for the index; files are never deleted by a reader |
+| Exported files | `.capyworkspace`, `.capytoolbar` and `.capykeys`, which painters keep and import later | Sections 1 and 3 |
 | Drawings and sessions | `.capy`, session store heads, generations and recovery metadata | Sections 1 and 3, with `.capy`'s closed field sets |
+| Palette files | `.gpl` and `.ase` | External formats; out of scope |
 | Caches, temp files, file-dialog folders | — | May be discarded |
 
 ## Design
@@ -100,6 +102,15 @@ chunk and may skip unknown
   - Maintenance finds component references in pending deliveries by scanning the
     raw JSON, as it already does for item content, instead of decoding them. A
     delivery it can't read therefore keeps its components and stays in place.
+- **A save changes only the editing fields its window changed.** Editing state
+  is shared by every window but loaded once at startup, and each save writes
+  the whole document. So a colour picked in one window drops a palette or brush
+  override saved from another, even when both run the same build. Instead, a
+  save sends only the top-level fields that differ from what its window last
+  saved. The store merges them into the stored document, validates the result
+  and returns it, and the window adopts the returned values for fields it
+  hasn't changed since. Two windows that change the same field, such as both
+  editing palettes, still keep the later save.
 - **When every workspace is unreadable,** the included workspaces are rebuilt
   from their included layouts, but only in a start whose version snapshot
   succeeded. In any other start, startup runs in memory with the existing notice
@@ -118,6 +129,10 @@ moves an unparsable preferences file aside as `.bad` and starts empty. The user
 keeps a copy but loses every setting. For a file that parses, field-by-field
 restore keeps everything except what failed. `Settings::restore` already works
 this way, so this extends an existing helper rather than adding a mechanism.
+Sending only changed fields is
+[JSON Merge Patch](https://www.rfc-editor.org/rfc/rfc7396): a patch replaces
+the members it names and leaves the rest. It avoids the lost update that a
+whole-document overwrite causes when two writers start from the same read.
 
 ### 3. A conversion step only where meaning changed
 
@@ -194,11 +209,19 @@ On Web, the same IndexedDB transaction that first writes the store also stores
 the copy and the version, the way a reset already stores its `unreadable`
 record. A quota failure aborts that transaction and leaves the store as it was.
 
+Builds up to 1.0.15 still reset a store they can't read. They keep one
+`unreadable` copy, and their next reset replaces it. Going back to such a build
+therefore resets the store. So does a stale Pages cache that briefly serves the
+1.0.15 page after a deploy, because the page is fetched network-first. On every
+start, if that copy is newer than the version marker, it is copied into the
+retained copies, so it outlives the next reset. On Web, the version record
+remembers a hash of the `unreadable` record it last saw, and copies a different
+one.
+
 This covers whatever the rules and tests miss. It runs on every version change,
 up or down, so going back to an earlier build is safe and the newer build's data
-is kept. The copy holds the store as it was at the version change. Editing
-state is shared by every window and the last write wins, whatever the versions
-involved, so edits made after the copy are not in it.
+is kept. The copy holds the store as it was at the version change, so edits
+made after it are not in it.
 
 Precedent: Lightroom Classic
 [copies the catalog before upgrading it](https://helpx.adobe.com/lightroom-classic/desktop/technical-support/workflow-issues/catalog-issues/catalog-faq-lightroom.html)
@@ -213,7 +236,8 @@ without a manual backup step.
   and never edited or re-saved:
   - a native `workspaces.sqlite3` and the Web store's JSON text;
   - editing state, preferences and export presets;
-  - `.capyworkspace` and `.capytoolbar` packages;
+  - the paper and colour-profile library indexes;
+  - `.capyworkspace`, `.capytoolbar` and `.capykeys` files;
   - `.capy` drawings and a session store.
 
   The content covers every variant by looping over every tool, command, tool
@@ -281,6 +305,8 @@ in the diff what changed instead of hiding it.
   - Disk use holds one copy over the limit until pruning.
   - Milestone 1 records the cold-start time to the first canvas frame on the
     low-tier tablet with a large store, with and without the copy.
+- **Merged editing saves** read and write the one editing row inside the
+  transaction that already writes it.
 - **Tests** use small inputs and need no GPU.
 
 ## Safety
@@ -291,6 +317,7 @@ in the diff what changed instead of hiding it.
   accepted write. For the workspace store, the version snapshot holds it beyond
   that.
 - A failed snapshot means no persistent write in that start.
+- A merged editing save is validated as a whole before it commits.
 - Steps receive untrusted JSON only after the existing size and depth limits,
   and walk only the fields they change.
 - Snapshot paths go through `validate_database_export_destination`, so they
@@ -312,42 +339,48 @@ in the diff what changed instead of hiding it.
   expected files compare authored data exactly.
 - **No compatibility for data from before 1.0.15.** 1.0.14 drawings with image
   layers stay view-only.
+- **No restore command and no automatic repair of a damaged SQLite file.** The
+  storage guide explains how to restore a copy by hand, and a repair release can
+  read the copies itself.
 
 ## Work
 
-Each milestone is one commit with its tests and the guide changes it makes
-true.
+Milestone 1 lands before the next release, as a few commits, each with its
+tests and the guide changes it makes true.
 
-1. **Before the next release: app state.**
-   - The generator, and the 1.0.15 workspace, preference and export-preset
-     inputs with their reviewed expected files.
+1. **Before the next release.**
+   - The generator, and every 1.0.15 input (app state, libraries, exported
+     files, drawings and sessions) with its reviewed expected file.
    - The shared field-by-field restore.
    - Field defaults, and no `deny_unknown_fields` on saved app-state types.
    - Exact version checks replaced by the editing-state step for
      `region_sources` and `smoothing`.
+   - Editing saves that merge changed fields, with the regression
+     `editing_saves_from_two_windows_keep_both_changes`.
    - No store reset for unreadable rows or deliveries.
-   - The version snapshot on native and Web.
+   - The version snapshot on native and Web, including keeping an older build's
+     `unreadable` copy.
    - The upgrade, tolerance and snapshot tests, and the `pre-push` check.
+   - A step in [releasing](releasing.md) that runs the generator at the release
+     commit and commits its output, and a line in each release's notes that
+     going back to 1.0.15 or earlier resets workspaces.
+   - One line each in [testing](testing.md) naming the upgrade and tolerance
+     tests.
    - Guide updates: [settings](../ui/settings.md#saving-and-loading),
-     [workspace startup](../internals/workspace-ownership.md#startup-always-adopts-a-workspace)
-     and [storage](../internals/storage.md).
+     [workspace startup](../internals/workspace-ownership.md#startup-always-adopts-a-workspace),
+     and [storage](../internals/storage.md). The storage guide lists the copies
+     and how to restore one by hand.
 
    Done when every 1.0.15 input loads with its expected value, a 1.0.15 store
    with custom palettes, brush overrides and toolbars upgrades with nothing lost
-   on each host, and the tablet measurements are recorded. The hosts are GTK
-   with the store in `CAPY_STORAGE_DIR`, Web with the `--stale-storage` journey
-   seeding the 1.0.15 record, Android, Windows and, where available, Apple.
-2. **Drawings and sessions.**
-   - The `.capy` record step table.
-   - 1.0.15 `.capy` and session inputs, with their upgrade test.
-   - Replace "Superseded pre-release formats have no conversion readers" in the
-     [package contract](../reference/capy-package.md) with these rules.
-3. **Release procedure.**
-   - A step in [releasing](releasing.md) that runs the generator at the release
-     commit and commits its output.
-   - One line each in [testing](testing.md) naming the upgrade and tolerance
-     tests.
+   on each host, two windows keep each other's editing changes, and the tablet
+   measurements are recorded. The hosts are GTK with the store in
+   `CAPY_STORAGE_DIR`, Web with the `--stale-storage` journey seeding the 1.0.15
+   record, Android, Windows and, where available, Apple.
+2. **With the first `.capy` change that needs it:** the record step table next
+   to `registry.rs`, with that change's step and its test against the 1.0.15
+   inputs.
 
 [`AGENTS.md`](../../AGENTS.md) already states the rules in section 1. When
-milestone 3 lands, its link points to the guides that own them, and this plan
+milestone 1 lands, its link points to the guides that own them, and this plan
 is deleted.

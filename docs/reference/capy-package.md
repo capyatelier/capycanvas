@@ -970,7 +970,8 @@ require updating the baseline. Add separate fixed inputs for new authored data.
 An intentional data-version change requires a concrete conversion and tests
 opening the unchanged released fixture, editing and resaving it. Do not replace
 the baseline with output from the new writer to make a compatibility failure pass.
-Superseded pre-release formats have no conversion readers.
+Formats from before 1.0.15 and formats that never shipped in a release have no
+conversion readers ([saved data compatibility](../development/saved-data-compatibility.md)).
 
 `illustration-conversions.capy` fixes Brightness to Opacity 1 and Threshold 2,
 including single-color output, binary alpha and the hidden alpha threshold after

@@ -301,8 +301,8 @@ Built-in choices and LUT color-space IDs map explicitly to GPU codes. Numbers, t
 portable colors, curve control points, gradient stops and LUT bindings remain
 authored data. Missing values and unknown parameters/options never silently use
 current defaults. Fixed-file fixtures protect the supported authored meaning.
-Pre-release readers support only the current data versions, without conversions
-for superseded representations.
+Readers convert data versions written by 1.0.15 and later releases; formats from
+before 1.0.15 and formats that never shipped have no conversions.
 See the [package contract](capy-package.md) for the wire grammar and evolution rules.
 
 ## Validation and supported editing
