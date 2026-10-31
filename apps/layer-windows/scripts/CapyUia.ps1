@@ -937,3 +937,38 @@ function Capy-Tooltips([int]$ProcessId){
   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$ProcessId))
  @([System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)|Where-Object {!$_.Current.IsOffscreen})
 }
+
+function Overview-Bounds{
+    foreach($item in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'navigator-overview'))){
+        $current=$item.Current;$box=$current.BoundingRectangle
+        if($current.ProcessId -eq $review.Id -and !$current.IsOffscreen -and $box.Width -gt 0 -and $box.Height -gt 0){$box}
+    }
+}
+function Wait-OverviewProjection{
+    $drawingWindow=[IntPtr]$root.Current.NativeWindowHandle
+    $origin=[CapyRowPointer+Point]::new()
+    if(![CapyRowPointer]::ClientToScreen($drawingWindow,[ref]$origin)){throw 'Cannot locate overview projection'}
+    $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+    Wait-Until {
+        $workspace=Workspace-Root
+        if(!$workspace){return $false}
+        $slots=@(($workspace.Current.ItemStatus|ConvertFrom-Json).overviews|Where-Object {$_.opacity -gt 0})
+        $visible=@(foreach($slot in $slots){
+            $b=$slot.bounds;$c=$slot.clip
+            $x=[Math]::Max($b[0],$c[0]);$y=[Math]::Max($b[1],$c[1])
+            $right=[Math]::Min($b[0]+$b[2],$c[0]+$c[2]);$bottom=[Math]::Min($b[1]+$b[3],$c[1]+$c[3])
+            if($right -gt $x -and $bottom -gt $y){@{left=$origin.x+$x*$scale;top=$origin.y+$y*$scale;right=$origin.x+$right*$scale;bottom=$origin.y+$bottom*$scale}}
+        })
+        $remaining=[Collections.Generic.List[object]]::new()
+        foreach($box in (Overview-Bounds)){$remaining.Add($box)}
+        if(!$visible.Count -or $visible.Count -ne $remaining.Count){return $false}
+        foreach($box in $visible){
+            $match=$remaining|Sort-Object {[Math]::Abs($_.Left-$box.left)+[Math]::Abs($_.Top-$box.top)}|Select-Object -First 1
+            if([Math]::Abs($match.Left-$box.left) -gt 2 -or [Math]::Abs($match.Top-$box.top) -gt 2 -or
+                [Math]::Abs($match.Right-$box.right) -gt 2 -or [Math]::Abs($match.Bottom-$box.bottom) -gt 2){return $false}
+            $remaining.Remove($match)|Out-Null
+        }
+        $true
+    } 'Published overview slots did not converge to live Navigator bounds'
+}

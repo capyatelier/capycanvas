@@ -4,13 +4,11 @@ $repo=(Resolve-Path(Join-Path $PSScriptRoot '../../..')).Path;$scripts=$PSScript
 . (Join-Path $scripts 'CapyUia.ps1')
 Add-Type -Path (Join-Path $scripts 'RowPointerDriver.cs')
 Add-Type -Path (Join-Path $scripts 'BubbleFixtureNative.cs')
-foreach($helper in @(@('exercise-expansion.ps1','Wait-OverviewProjection'),@('exercise-tools.ps1','Select-Tool'))){
- $tokens=$null;$errors=$null
- $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $scripts $helper[0]),[ref]$tokens,[ref]$errors)
- if($errors.Count){throw "$($helper[0]) helper parse failed"}
- $definition=$ast.Find({param($node)$node-is[Management.Automation.Language.FunctionDefinitionAst]-and$node.Name-eq$helper[1]},$true)
- if(!$definition){throw "$($helper[1]) helper missing"};Invoke-Expression $definition.Extent.Text
-}
+$tokens=$null;$errors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $scripts 'exercise-tools.ps1'),[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'Tools helper parse failed'}
+$definition=$ast.Find({param($node)$node-is[Management.Automation.Language.FunctionDefinitionAst]-and$node.Name-eq'Select-Tool'},$true)
+if(!$definition){throw 'Select-Tool helper missing'};Invoke-Expression $definition.Extent.Text
 [CapyRowPointer]::VerifyPrivateDesktop($env:CAPY_PRIVATE_DESKTOP)
 $run=Join-Path $repo ('artifacts/windows/drawer-layout/'+$Theme+'-'+[guid]::NewGuid().ToString('N'));[IO.Directory]::CreateDirectory($run)|Out-Null
 $review=$null;$window=[IntPtr]::Zero;$checks=[Collections.Generic.List[object]]::new()

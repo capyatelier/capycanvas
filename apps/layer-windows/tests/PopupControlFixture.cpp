@@ -227,7 +227,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             auto activeModel=J::Parse(model.Stringify());
             activeModel.Insert(L"prompt_action",inlineName?O({{L"type",S(L"rename")},{L"value",S(L"fixture-custom")}}):O({{L"type",S(L"new")}}));
             activeModel.Insert(L"prompt",O({{L"title",S(L"Workspace name")},{L"name",S(L"Fixture draft")},{L"confirm",S(L"Create")},{L"message",S(L"")},{L"destructive",B(false)}}));
-            WorkspaceManagerView manager([inputs,trace,label](std::string json){auto request=J::Parse(to_hstring(json));inputs->push_back(request);trace->push_back(O({{L"case",S(label)},{L"dispatch",request}}));},catalog,context.localization,root.XamlRoot(),[]{},
+            WorkspaceManagerView manager([inputs,trace,label](std::string json,std::function<void()> complete){auto request=J::Parse(to_hstring(json));inputs->push_back(request);trace->push_back(O({{L"case",S(label)},{L"dispatch",request}}));if(complete)complete();},catalog,context.localization,root.XamlRoot(),[]{},
                 [](CanvasQueryKind,std::string,PreviewReply reply){reply(PreviewPacket{});return true;});
             try{
                 manager.Apply(O({{L"state",state},{L"windows_workspace",activeModel}}),false);
