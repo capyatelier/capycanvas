@@ -479,6 +479,7 @@ pub struct ColorSample {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RegionSource {
+    Intersection(Vec<RegionSource>),
     Composite,
     Objects(OccurrenceHandle),
     /// An object layer's own content alpha, in document coordinates.
@@ -505,6 +506,16 @@ pub enum RegionSource {
     Modify(std::sync::Arc<SelectionModify>),
 }
 impl RegionSource {
+    pub fn reference(mut snapshot: std::sync::Arc<SceneSnapshot>, leaf: OccurrenceHandle) -> Option<Self> {
+        if !snapshot.view().visible(leaf) { return None; }
+        let occurrence = std::sync::Arc::make_mut(&mut snapshot).artwork.occurrences.get_mut(leaf)?;
+        occurrence.opacity = 1.;
+        occurrence.blend = layer_core::LayerBlend::Normal;
+        Some(Self::Scene { snapshot, scope: SceneScope::Members(vec![leaf].into()) })
+    }
+    pub fn sources(&self) -> &[Self] {
+        match self { Self::Intersection(sources) => sources, _ => std::slice::from_ref(self) }
+    }
     pub fn raw_source(&self) -> &Self {
         if let Self::Tonal(t) = self { &t.source } else { self }
     }

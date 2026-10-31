@@ -73,8 +73,8 @@ command-clone-aligned = Source alignée
 command-clone-flip-horizontal = Retourner la source horizontalement
 command-clone-flip-vertical = Retourner la source verticalement
 command-clone-reset-offset = Réinitialiser le décalage de la source
-command-selection-visible = Dessin visible
-command-selection-editing = Calque en cours de modification
+command-selection-visible = Tous les calques visibles
+command-selection-editing = Ce calque
 command-selection-reference = Calques de référence
 command-move = Opération
 command-scale-rotate = Transformer
@@ -687,3 +687,5 @@ command-pen-tilt = Inclinaison du stylet…
 command-fill-connected = Contigu
 command-fill-everywhere = Partout
 command-smooth-region-edges = Lisser les bords
+
+command-stop-at-colors = S’arrêter aux couleurs de ce calque

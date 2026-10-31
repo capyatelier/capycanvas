@@ -723,6 +723,30 @@ inline void explain(Grid const& host,Control const& control,bool enabled,hstring
     tooltip(host,enabled||reason.empty()?text:reason);
     AutomationProperties::SetHelpText(control,enabled?L"":reason);
 }
+struct CheckList {
+    StackPanel root;TextBlock title;std::vector<CheckBox> checks;std::vector<Grid> hosts;
+    bool update(J const& spec)const{
+        bool changed=title.Text()!=str(spec,L"label");if(changed)title.Text(str(spec,L"label"));AutomationProperties::SetName(root,str(spec,L"label"));
+        auto items=array(spec,L"items");
+        for(uint32_t i=0;i<std::min<uint32_t>(items.Size(),uint32_t(checks.size()));++i){
+            auto item=items.GetObjectAt(i);auto name=str(item,L"label");
+            auto text=checks[i].Content().as<TextBlock>();if(text.Text()!=name){text.Text(name);changed=true;}AutomationProperties::SetName(checks[i],name);
+            checks[i].IsChecked(flag(item,L"selected"));explain(hosts[i],checks[i],flag(item,L"enabled",true),name,str(item,L"disabled_reason"));
+        }
+        return changed;
+    }
+};
+inline CheckList checkList(std::shared_ptr<WorkspaceData> const& data,J const& spec,hstring const& id,std::function<void(J)> const& send){
+    CheckList result;result.root.Spacing(data->panelMetric(L"control_spacing"));result.title=label(data,str(spec,L"label"));
+    AutomationProperties::SetAutomationId(result.root,id);result.root.Children().Append(result.title);
+    for(uint32_t i=0;i<array(spec,L"items").Size();++i){
+        auto item=array(spec,L"items").GetObjectAt(i);auto action=object(item,L"action");
+        auto text=label(data,str(item,L"label"));twoLines(text);auto check=compactCheck(data,text);AutomationProperties::SetAutomationId(check,id+L"-"+to_hstring(i));
+        check.Click([send,action](auto&&,auto&&){send(action);});auto host=explainable(check);
+        result.root.Children().Append(host);result.checks.push_back(check);result.hosts.push_back(host);
+    }
+    result.update(spec);return result;
+}
 inline Control explained(FrameworkElement const& host){return host.as<Grid>().Children().GetAt(0).as<Control>();}
 inline bool pickerControl(J const& control){
     auto kind=str(control,L"kind");return kind==L"color_picker"||(kind==L"command"&&str(control,L"command")==L"eyedropper");

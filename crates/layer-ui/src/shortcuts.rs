@@ -693,7 +693,7 @@ fn command_section(command: CommandId) -> ShortcutSection {
         | C::TransformFlipHorizontal | C::TransformFlipVertical | C::TransformRotateLeft | C::TransformRotateRight
         | C::TransformFree | C::TransformUniform | C::TransformDistort | C::TransformPerspective | C::TransformNearest
         | C::TransformBilinear | C::TransformBicubic | C::TransformLanczos | C::CropFitContent | C::MoveLeaveCopy => ShortcutSection::Transform,
-        C::FillConnected | C::FillEverywhere | C::SmoothRegionEdges | C::ColorMixOklab | C::ColorMixLinear | C::ColorMixClassic
+        C::FillConnected | C::FillEverywhere | C::SmoothRegionEdges | C::StopAtColors | C::ColorMixOklab | C::ColorMixLinear | C::ColorMixClassic
         | C::EraseTouchedPart | C::EraseWholePaths | C::EraseToIntersection | C::ScaleOutlineWidths => ShortcutSection::Painting,
         command if CommandId::TOOLS.contains(&command) => ShortcutSection::Tools,
         C::CloneSourceArm | C::CloneAligned | C::CloneFlipHorizontal | C::CloneFlipVertical | C::CloneResetOffset => {

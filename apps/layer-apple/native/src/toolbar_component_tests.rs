@@ -32,16 +32,23 @@ fn apple_enclose_fill_flat_choices_and_source_use_native_transport() {
             assert!(state["tool_set"]["subtools"].as_array().unwrap().is_empty());
             assert!(selected("enclose_fill"));
             for source in ["selection_visible", "selection_editing", "selection_reference"] {
-                let command = app.state()["tool_actions"].as_array().unwrap().iter()
-                    .find(|item| item["command"] == source).unwrap()["command"].clone();
-                app.action(json!({"type":"invoke","command":command}));
+                let state = app.state();
+                let choice = &state["tool_extra"].as_array().unwrap().iter()
+                    .find(|item| item["Choice"]["id"] == "selection-source").unwrap()["Choice"];
+                assert_eq!(choice["segmented"], false);
+                assert_eq!(choice["items"].as_array().unwrap().iter().map(|item| item["label"].clone()).collect::<Vec<_>>(),
+                    [label("selection_reference"), label("selection_visible"), label("selection_editing")]);
+                app.action(choice["items"].as_array().unwrap().iter()
+                    .find(|item| item["action"]["command"] == source).unwrap()["action"].clone());
                 assert!(selected(source));
                 assert!(selected("enclose_fill"));
+                assert_eq!(app.state()["tool_extra"].as_array().unwrap().iter()
+                    .any(|item| item["Checklist"]["id"] == "reference-layers"), source == "selection_reference");
             }
             choose("groups", &lasso);
             assert!(selected("lasso_fill"));
-            assert!(!app.state()["tool_actions"].as_array().unwrap().iter()
-                .any(|action| ["selection_visible", "selection_editing", "selection_reference"].iter().any(|source| action["command"] == *source)));
+            assert!(!app.state()["tool_extra"].as_array().unwrap().iter()
+                .any(|item| item["Choice"]["id"] == "selection-source" || item["Checklist"]["id"] == "reference-layers"));
         }
     }
 }

@@ -2691,6 +2691,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     })
             }
             CommandId::FillConnected | CommandId::FillEverywhere => idle && matches!(self.layer_interaction.tool, LayerCanvasTool::Region { fill: true, .. }),
+            CommandId::StopAtColors => idle && self.layer_interaction.tool.region().is_some_and(|(_, source, _)| self.lines_from(source) == RegionSource::Reference),
             CommandId::SmoothRegionEdges => idle && self.layer_interaction.tool.region().is_some_and(|(fill, _, _)| fill),
             CommandId::SelectionVisible => idle && (self.layer_interaction.tool.selection_tool().is_some() || self.layer_interaction.tool.region().is_some()),
             CommandId::SelectionEditing | CommandId::SelectionReference => {
@@ -2816,6 +2817,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 | (CommandId::SelectionSubtract, SelectionMode::Subtract) | (CommandId::SelectionIntersect, SelectionMode::Intersect))
             || (id == CommandId::FillConnected && self.region_tools.scope == FillScope::Connected)
             || (id == CommandId::FillEverywhere && self.region_tools.scope == FillScope::Everywhere)
+            || (id == CommandId::StopAtColors && self.region_tools.stop_at_colors)
             || (id == CommandId::SmoothRegionEdges && self.region_tools.refinement.smooth_edges)
             || (id == CommandId::SelectionAntialias && self.selection_tools.options.antialias)
             || (id == CommandId::SelectionConstrainAngles && self.selection_tools.options.constrain_angles)
@@ -2828,7 +2830,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 tool_settings::color_mixing_visible(brush) && brush.wet_mix.mix_space == space
             })
             || blending::blend_space(id).is_some_and(|space| document.composition().blend == space)
-            || matches!((id, self.layer_interaction.tool.region()),
+            || matches!((id, self.layer_interaction.tool.region().map(|(fill, source, connected)| (fill, self.lines_from(source), connected))),
                 (CommandId::SelectionVisible, Some((_, RegionSource::Visible, _)))
                 | (CommandId::SelectionEditing, Some((_, RegionSource::Editing, _)))
                 | (CommandId::SelectionReference, Some((_, RegionSource::Reference, _))))
@@ -5297,7 +5299,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
             }
             CommandId::EncloseFill => {
-                self.layer_action(LayerAction::Tool { tool: LayerCanvasTool::EncloseFill { source: self.region_tools.enclose_source } })?;
+                self.layer_action(LayerAction::Tool { tool: LayerCanvasTool::EncloseFill { source: self.region_tools.source[2] } })?;
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
             }
             CommandId::LassoFill => {
@@ -5422,6 +5424,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     tool => tool.selection_tool().ok_or("Choose a region tool first")?.canvas_tool(source),
                 };
                 self.layer_action(LayerAction::Tool { tool })?;
+                if source == RegionSource::Reference && self.engine.document().scene().references().is_empty() { self.notify_missing_reference(); }
+                Ok((BRUSH | COMMANDS, false))
+            }
+            CommandId::StopAtColors => {
+                self.region_tools.stop_at_colors = !self.region_tools.stop_at_colors;
+                self.region_tools.cancel(); self.refresh_tools();
                 Ok((BRUSH | COMMANDS, false))
             }
             CommandId::FillConnected | CommandId::FillEverywhere | CommandId::SmoothRegionEdges => {
@@ -5940,10 +5948,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .collect()
         };
         self.sync_retouch();
-        if matches!(self.layer_interaction.tool, LayerCanvasTool::EncloseFill { .. }) {
-            self.state.tool_actions = [CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference]
-                .into_iter().map(|command| ToolSettingAction { command, checkable: command.is_toggle() }).collect();
-        }
         if self.layer_interaction.tool.region().is_some_and(|(fill, _, _)| fill) {
             self.state.tool_actions.push(ToolSettingAction { command: CommandId::SmoothRegionEdges, checkable: true });
             if matches!(self.layer_interaction.tool, LayerCanvasTool::Region { fill: true, .. }) {
@@ -5956,8 +5960,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 &[CommandId::SelectionFixedRatio, CommandId::SelectionFixedSize, CommandId::SelectionFromCenter]
             } else if tool == SelectionTool::Polygon {
                 &[CommandId::SelectionConstrainAngles, CommandId::RemoveSelectionPoint, CommandId::CompleteSelection, CommandId::CancelSelection]
-            } else if matches!(tool, SelectionTool::Color | SelectionTool::Wand) {
-                &[CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference]
             } else { &[] };
             self.state.tool_actions = if tool == SelectionTool::Brush {
                 [CommandId::SelectionAdd, CommandId::SelectionSubtract, CommandId::SelectionBrushPressure].into_iter()
@@ -6038,6 +6040,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             self.state.tool_settings.extend(edges);
         }
+        if self.layer_interaction.tool.region().is_some_and(|(_, source, _)| self.lines_from(source) == RegionSource::Reference) {
+            self.state.tool_actions.push(ToolSettingAction { command: CommandId::StopAtColors, checkable: true });
+        }
         self.state.tool_extra = if self.layer_interaction.tool == LayerCanvasTool::Zoom { self.state.settings.zoom_tool.controls(self.localization()) } else if self.operation.transforming() { self.transform_extra() } else { self.tonal_extra() };
         self.state.layer_tools.mask_editing = self.mask_editing_view();
         self.state.layer_tools.selection_resize = self.selection_masks.refine_view();
@@ -6046,6 +6051,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.layer_tools.frequency_separation = self.frequency_separation_view();
         let _ = self.prepare_transform_snapping();
         if !self.operation.transforming() {self.state.tool_extra.extend(self.gradient_tool_options());}
+        self.state.tool_extra.extend(self.region_controls());
     }
 
     /// Whether a contact of `kind` pressed with `button` at surface
@@ -8042,7 +8048,7 @@ mod tests {
             editing.selection.brush = serde_json::from_value(serde_json::json!({"size": 75.})).unwrap();
             editing.selection.tonal.softness = 0.4;
             editing.region_values.insert("tolerance".into(), 0.31);
-            editing.region_sources = [RegionSource::Visible, RegionSource::Editing];
+            editing.region_sources = [RegionSource::Visible, RegionSource::Editing, RegionSource::Reference];
             editing.gradient = GradientToolSettings {definition:Some(layer_core::GradientDefinition::default()),shape:layer_core::GradientShape::Reflected};
             editing.figure = (FigureShape::Ellipse, FigurePaint::Both);
             let palette = editing.color_library.active;
@@ -8741,7 +8747,7 @@ mod tests {
         let request = s.renderer_mut().region_requests[0].clone();
         assert_eq!(request.position, [48, 72]);
         assert_eq!(request.refinement, refinement);
-        let RegionSource::Scene {snapshot,scope}= &request.source else{panic!("visible scene snapshot")};
+        let RegionSource::Scene {snapshot,scope}= &request.source.sources()[0] else{panic!("visible scene snapshot")};
         assert_eq!(scope,&SceneScope::All);
         assert_eq!(snapshot.artwork,s.engine.document().artwork);
         assert!(request.limit.is_none());
@@ -8773,8 +8779,7 @@ mod tests {
         s.layer_edit(edit).unwrap();
         s.frame(4, 4).unwrap();
         invoke(&mut s, CommandId::Fill);
-        let source = s.state.tool_set.subtools[1].action.clone();
-        s.dispatch(source).unwrap();
+        invoke(&mut s, CommandId::SelectionEditing);
         s.dispatch(UiAction::SetToolSetting {
             id: "tolerance".into(),
             value: 0.2,
@@ -8852,7 +8857,7 @@ mod tests {
             [48, 72],
             "reference composition uses document coordinates"
         );
-        let RegionSource::Scene {snapshot,scope} = request.source else {
+        let RegionSource::Scene {snapshot,scope} = &request.source.sources()[0] else {
             panic!("reference snapshot")
         };
         assert_eq!(

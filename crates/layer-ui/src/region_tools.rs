@@ -11,11 +11,11 @@ pub enum FillScope { #[default] Connected, Everywhere }
 
 pub(super) struct RegionTools {
     pub scope: FillScope,
+    pub stop_at_colors: bool,
     pub tolerance: f32,
     pub texture_strength: f32,
     pub refinement: layer_render::RegionRefinement,
-    pub source: [RegionSource; 2],
-    pub enclose_source: RegionSource,
+    pub source: [RegionSource; 3],
     contact: Option<Point>,
     generation: u64,
     queued: Option<RegionRequest>,
@@ -45,14 +45,14 @@ impl Default for RegionTools {
     fn default() -> Self {
         Self {
             scope: FillScope::Connected,
+            stop_at_colors: true,
             tolerance: 0.1,
             texture_strength: 1.,
             refinement: layer_render::RegionRefinement {
                 smooth_edges: true,
                 ..Default::default()
             },
-            source: [RegionSource::Visible; 2],
-            enclose_source: RegionSource::Reference,
+            source: [RegionSource::Auto; 3],
             contact: None,
             generation: 0,
             queued: None,
@@ -206,16 +206,39 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.region_tools.filled_below = Some(layer);
         Ok(())
     }
+    pub(super) fn region_controls(&self) -> Vec<ToolOption> {
+        let Some((_, source, _)) = self.layer_interaction.tool.region() else { return Vec::new(); };
+        let mut controls = vec![ToolOption::Choice { id: "selection-source", label: self.localization().text(MessageId::TOOL_ACTION_GROUP_LINES_FROM),
+            segmented: false, labeled: false, columns: None, beside: None,
+            items: [CommandId::SelectionReference, CommandId::SelectionVisible, CommandId::SelectionEditing].into_iter()
+                .map(|command| { let state = self.command(command); state.choice_item(state.label.clone()) }).collect() }];
+        if self.lines_from(source) != RegionSource::Reference { return controls; }
+        let scene = self.engine.document().scene();
+        let items = scene.order().iter().filter_map(|id| {
+            let layer = scene.occurrence(*id)?;
+            if !matches!(layer.kind(), LayerKind::Paint | LayerKind::Object | LayerKind::Group) { return None; }
+            Some(ToolSetItem { label: layer.name.clone(), icon: "reference", enabled: true, disabled_reason: None,
+                action: UiAction::Layer { action: LayerAction::Reference { id: occurrence_token(*id) } }, selected: layer.reference, preview: None })
+        }).collect();
+        controls.push(ToolOption::Checklist { id: "reference-layers", label: self.localization().text(MessageId::COMMAND_SELECTION_REFERENCE), items });
+        controls
+    }
+    pub(super) fn lines_from(&self, source: RegionSource) -> RegionSource {
+        if source != RegionSource::Auto { return source; }
+        if self.engine.document().scene().references().is_empty() { RegionSource::Visible } else { RegionSource::Reference }
+    }
     fn region_source(&mut self, source: RegionSource, from: Option<layer_render::RegionSource>, source_target: Option<SourceTarget>) -> Option<layer_render::RegionSource> {
         let doc = self.engine.document();
-        Some(match (from, source) {
-                (Some(from), _) => from,
-                (None, RegionSource::Visible) => layer_render::RegionSource::Scene {snapshot:doc.snapshot(),scope:SceneScope::All},
+        let source = self.lines_from(source);
+        let mut sources = match (from, source) {
+                (Some(from), _) => return Some(from),
+                (None, RegionSource::Auto) => unreachable!(),
+                (None, RegionSource::Visible) => vec![layer_render::RegionSource::Scene {snapshot:doc.snapshot(),scope:SceneScope::All}],
                 (None, RegionSource::Editing) => {
                     if let Some(target) = source_target {
-                        layer_render::RegionSource::Scene {snapshot:doc.snapshot(),scope:SceneScope::Raw(target)}
+                        vec![layer_render::RegionSource::Scene {snapshot:doc.snapshot(),scope:SceneScope::Raw(target)}]
                     } else if let Some(handle) = doc.working.occurrence.filter(|handle| doc.scene().holds_objects(*handle)) {
-                        layer_render::RegionSource::Scene {snapshot:doc.snapshot(),scope:SceneScope::RawObjects(handle)}
+                        vec![layer_render::RegionSource::Scene {snapshot:doc.snapshot(),scope:SceneScope::RawObjects(handle)}]
                     } else {
                         let handle = doc.working.occurrence.filter(|handle| doc.scene().effect(*handle).is_some_and(|effect| effect.constant_color().is_some()))?;
                         let mut snapshot = doc.snapshot();
@@ -225,23 +248,33 @@ impl<R: CanvasRenderer> UiSession<R> {
                         occurrence.blend = layer_core::LayerBlend::Normal;
                         occurrence.attachment = layer_core::Attachment::None;
                         occurrence.mask = None;
-                        layer_render::RegionSource::Scene {snapshot,scope:SceneScope::Members(vec![handle].into())}
+                        vec![layer_render::RegionSource::Scene {snapshot,scope:SceneScope::Members(vec![handle].into())}]
                     }
                 }
                 (None, RegionSource::Reference) => {
-                    if doc.scene().references().is_empty() {
+                    if doc.scene().reference_leaves().is_empty() {
                         self.notify_missing_reference();
                         return None;
                     }
-                    layer_render::RegionSource::Scene {snapshot:doc.snapshot(),scope:doc.reference_scope()}
+                    let snapshot = doc.snapshot();
+                    doc.scene().reference_leaves().into_iter().filter_map(|leaf| layer_render::RegionSource::reference(snapshot.clone(), leaf)).collect()
                 }
-            })
+            };
+        if self.region_tools.stop_at_colors && source == RegionSource::Reference {
+            let doc = self.engine.document();
+            if let Some(target) = source_target.and_then(|target| doc.target_owner(target))
+                && !doc.scene().reference_leaves().contains(&target)
+                && let Some(target) = layer_render::RegionSource::reference(doc.snapshot(), target) { sources.push(target); }
+        }
+        if source == RegionSource::Reference { Some(layer_render::RegionSource::Intersection(sources)) }
+        else { sources.pop() }
     }
     fn request_region_at(&mut self, point: Point, enclosure: Option<Selection>, from: Option<layer_render::RegionSource>) {
         let enclosed = enclosure.is_some();
         let Some((fill, source, contiguous)) = self.layer_interaction.tool.region() else {
             return;
         };
+        let source = self.lines_from(source);
         let contiguous = contiguous && (enclosed || !fill || self.region_tools.scope == FillScope::Connected);
         let extent = self.engine.document().composition().size;
         if !point.x.is_finite()

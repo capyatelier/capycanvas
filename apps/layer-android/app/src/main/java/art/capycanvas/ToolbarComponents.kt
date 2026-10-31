@@ -188,6 +188,7 @@ private fun formatted(language: String, control: JSONObject, value: Float, units
                 option.has("Range") -> option.getJSONObject("Range").let { listOf(it.getString("id"), it.array("bounds").objects().map { f -> f.getJSONObject("numeric").toString() }) }
                 option.has("Numeric") -> option.getJSONObject("Numeric").let { listOf(it.getString("id"), it.getString("label"), it.getJSONObject("numeric").toString()) }
                 option.has("Choice") -> option.getJSONObject("Choice").let { listOf(it.getBoolean("segmented"), it.optBoolean("labeled"), it.array("items").length(), it.optInt("columns"), it.optString("beside")) }
+                option.has("Checklist") -> option.getJSONObject("Checklist").let { listOf(it.getString("label"), it.array("items").objects().map { item -> item.getString("label") }) }
                 else -> option.getJSONObject("Action").getJSONObject("state").let { listOf(it.getString("label"), it.opt("icon")) }
             } }.toString()
             val control = panelMetrics().height.value
@@ -228,6 +229,10 @@ internal fun toolOptionSize(option: JSONObject, vertical: Boolean, width: Float,
     val clear = if (vertical) 0f else 2 * pixelAligned(FieldClear, density)
     return when {
     option.has("Gradient") -> listOf(if (vertical) width else 120f + clear, control)
+    option.has("Checklist") -> option.getJSONObject("Checklist").let {
+        listOf(if (vertical) width else maxOf(textWidth(it.getString("label")), it.array("items").objects().maxOfOrNull { item -> textWidth(item.getString("label")) + 24f } ?: 0f) + clear,
+            control * (it.array("items").length() + 1))
+    }
     option.has("Range") -> listOf((if (preferences.getBoolean("sliders")) 280f else 100f) + clear, control)
     option.has("Choice") && option.getJSONObject("Choice").optBoolean("labeled") -> option.getJSONObject("Choice").let {
         val geometry = toolbarUi(language, obj("type" to "choice_style", "labeled" to true, "style" to style))
@@ -280,12 +285,13 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float, dens
     val grid = option.optJSONObject("Choice")?.optInt("columns")?.let { it > 0 } == true
     val control = panelMetrics().height
     val field = when {
-        vertical || action != null && !check && caption.isNullOrEmpty() -> Modifier.fillMaxSize()
+        vertical || option.has("Checklist") || action != null && !check && caption.isNullOrEmpty() -> Modifier.fillMaxSize()
         grid -> Modifier.fillMaxSize().padding(horizontal = FieldClear.dp)
         else -> Modifier.padding(horizontal = FieldClear.dp).fillMaxWidth().height(control)
     }
     Box(field, contentAlignment = Alignment.Center) { when {
         option.has("Gradient") -> GradientButton(LocalCanvasHost.current,option.getJSONObject("Gradient"),edit)
+        option.has("Checklist") -> ToolChecklist(option.getJSONObject("Checklist"), edit, prefix)
         option.has("Range") -> option.getJSONObject("Range").let { range ->
             val fields = range.array("bounds").objects()
             RangeControl(fields, range.getString("label"), Modifier.fillMaxWidth(), prefix=prefix, showSlider=preferences.getBoolean("sliders")) { index, value ->
@@ -301,6 +307,26 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float, dens
             edit(obj("type" to "invoke", "command" to it))
         }
     } }
+}
+
+@Composable internal fun ToolChecklist(checklist: JSONObject, edit: (JSONObject) -> Unit, prefix: String) {
+    val metrics = panelMetrics()
+    val id = checklist.getString("id")
+    Column(Modifier.fillMaxWidth().testTag("$prefix-checklist-$id")) {
+        Text(checklist.getString("label"), Modifier.heightIn(min = metrics.height), fontWeight = FontWeight.Bold)
+        checklist.array("items").objects().forEachIndexed { index, item ->
+            val selected = item.getBoolean("selected")
+            val enabled = item.optBoolean("enabled", true)
+            val label = item.getString("label")
+            val action = item.getJSONObject("action")
+            Row(Modifier.fillMaxWidth().heightIn(min = metrics.height).testTag("$prefix-check-$id-$index")
+                .toggleable(selected, enabled = enabled, role = Role.Checkbox) { edit(action) },
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(metrics.spacing)) {
+                EditorCheck(selected, label, Modifier.clearAndSetSemantics {}, enabled = enabled) { edit(action) }
+                Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
 }
 
 /** A disabled captioned action shows its published reason on tap, hold or hover. */

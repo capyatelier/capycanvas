@@ -535,6 +535,14 @@ impl SceneView<'_> {
         for h in members.iter().copied().collect::<Vec<_>>() {let mut parent=scene.parent(h);while let Some(h)=parent{members.insert(h);parent=scene.parent(h);}}
         members
     }
+    pub fn reference_leaves(self) -> Vec<OccurrenceHandle> {
+        self.order().iter().copied().filter(|h| {
+            if !self.visible(*h) || !self.occurrence(*h).is_some_and(|o| matches!(o.kind(), LayerKind::Paint | LayerKind::Object)) { return false; }
+            let mut current = Some(*h);
+            while let Some(h) = current { if self.occurrence(h).is_some_and(|o| o.reference) { return true; } current = self.parent(h); }
+            false
+        }).collect()
+    }
     pub fn reference_scope(self)->SceneScope {SceneScope::Members(self.composition_members(&self.references().into_iter().collect::<Vec<_>>()).into_iter().collect::<Vec<_>>().into())}
 }
 
@@ -1342,6 +1350,34 @@ mod organization_tests {
         assert_eq!(reference_names(&doc), ["Group", "Clip", "Line", "Unrelated"]);
         occurrence_mut(&mut doc, "Group").visible = false;
         assert!(reference_names(&doc).is_empty());
+    }
+    #[test]
+    fn reference_leaves_inherit_marks_and_exclude_hidden_ancestors_paper_and_effects() {
+        let mut doc = document([128; 2], &["Outer", "Inner", "Paint", "Object", "Hidden", "Effect", "Unmarked"]);
+        nest(&mut doc, "Inner", &["Paint", "Object", "Hidden", "Effect"]);
+        nest(&mut doc, "Outer", &["Inner"]);
+        effect(&mut doc, "Effect", "solid_color");
+        let object = doc.artwork.objects.insert(PortableId::random(), ImageObject::new(
+            color::source::rgba8_source([2; 2], |_, _| [255; 4]).into())).unwrap();
+        occurrence_mut(&mut doc, "Object").content = OccurrenceContent::Objects(object);
+        occurrence_mut(&mut doc, "Outer").reference = true;
+        occurrence_mut(&mut doc, "Hidden").visible = false;
+        let paper = doc.bottom_paper().unwrap();
+        doc.artwork.occurrences.get_mut(paper).unwrap().reference = true;
+        refresh(&mut doc);
+        let leaves = |doc: &Document| doc.scene().reference_leaves().into_iter()
+            .map(|h| doc.scene().occurrence(h).unwrap().name.to_string()).collect::<Vec<_>>();
+        assert_eq!(leaves(&doc), ["Paint", "Object"]);
+        let snapshot = doc.snapshot();
+        occurrence_mut(&mut doc, "Inner").visible = false;
+        assert!(leaves(&doc).is_empty());
+        assert_eq!(snapshot.view().reference_leaves().len(), 2);
+        occurrence_mut(&mut doc, "Inner").visible = true;
+        occurrence_mut(&mut doc, "Outer").reference = false;
+        occurrence_mut(&mut doc, "Object").reference = true;
+        assert_eq!(leaves(&doc), ["Object"]);
+        occurrence_mut(&mut doc, "Outer").visible = false;
+        assert!(leaves(&doc).is_empty());
     }
     #[test]
     fn clipping_stack_top_respects_siblings_and_hidden_members() {

@@ -47,6 +47,7 @@ tool-action-group-crop-overlay = Sovrapposizione
 tool-action-group-crop-ratio = Proporzioni
 tool-action-group-selection-mode = Modalità
 tool-action-group-selection-source = Sorgente
+tool-action-group-lines-from = Linee da
 tool-action-group-transform-interpolation = Interpolazione
 tool-action-group-transform-mode = Modalità
 tool-action-group-transform-warp-grid = Griglia

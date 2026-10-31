@@ -127,7 +127,7 @@ tool_action_groups! {
     FillScope: "fill-scope", COMMAND_FILL, false,
         [FillConnected, FillEverywhere];
     SelectionSource: "selection-source", TOOL_ACTION_GROUP_SELECTION_SOURCE, false,
-        [SelectionVisible, SelectionEditing, SelectionReference];
+        [SelectionReference, SelectionVisible, SelectionEditing];
     TransformMode: "transform-mode", TOOL_ACTION_GROUP_TRANSFORM_MODE, true,
         [TransformFree, TransformDistort, TransformWarp];
     TransformInterpolation: "transform-interpolation", TOOL_ACTION_GROUP_TRANSFORM_INTERPOLATION, false,

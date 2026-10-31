@@ -47,6 +47,7 @@ tool-action-group-crop-overlay = 輔助線
 tool-action-group-crop-ratio = 比例
 tool-action-group-selection-mode = 模式
 tool-action-group-selection-source = 來源
+tool-action-group-lines-from = 線稿來源
 tool-action-group-transform-interpolation = 內插
 tool-action-group-transform-mode = 模式
 tool-action-group-transform-warp-grid = 網格

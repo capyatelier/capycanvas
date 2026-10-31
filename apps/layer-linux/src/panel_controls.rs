@@ -57,13 +57,21 @@ pub fn command_dropdown(commands: &[&layer_ui::CommandState]) -> gtk::DropDown {
 }
 
 pub fn update_commands(dropdown: &gtk::DropDown, commands: &[&layer_ui::CommandState]) {
+    update_choices(dropdown, commands.len(), |i| (commands[i].label.clone(), commands[i].enabled));
+}
+
+pub fn update_tool_choices(dropdown: &gtk::DropDown, items: &[layer_ui::ToolSetItem]) {
+    update_choices(dropdown, items.len(), |i| (items[i].label.clone(), items[i].enabled));
+}
+
+fn update_choices(dropdown: &gtk::DropDown, count: usize, choice: impl Fn(usize) -> (std::sync::Arc<str>, bool)) {
     let model = dropdown.model().unwrap().downcast::<gtk::gio::ListStore>().unwrap();
-    if model.n_items() != commands.len() as u32 || commands.iter().enumerate().any(|(i, command)| {
+    if model.n_items() != count as u32 || (0..count).any(|i| {
         let item = model.item(i as u32).unwrap().downcast::<gtk::glib::BoxedAnyObject>().unwrap();
         let old = item.borrow::<(std::sync::Arc<str>, bool)>();
-        old.0 != command.label || old.1 != command.enabled
+        *old != choice(i)
     }) {
-        model.splice(0, model.n_items(), &commands.iter().map(|command| gtk::glib::BoxedAnyObject::new((command.label.clone(), command.enabled))).collect::<Vec<_>>());
+        model.splice(0, model.n_items(), &(0..count).map(|i| gtk::glib::BoxedAnyObject::new(choice(i))).collect::<Vec<_>>());
     }
 }
 

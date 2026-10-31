@@ -205,29 +205,37 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
     double actionLabelWidth()const{
         std::vector<hstring> titles;for(auto value:array(data->state,L"tool_actions")){auto item=value.GetObject();if(auto group=str(item,L"group");!group.empty()&&!flag(item,L"segmented"))titles.push_back(actionGroupLabel(group));}return captionWidth(titles);
     }
-    void actionChoice(hstring const& group,std::shared_ptr<hstring> const& context){
+    void choiceRow(std::function<J()> const& read,hstring const& id,std::shared_ptr<hstring> const& context,std::function<double()> const& labelWidth){
         Grid row;row.ColumnSpacing(data->panelMetric(L"control_spacing"));
-        ColumnDefinition caption;caption.Width({actionLabelWidth(),GridUnitType::Pixel});row.ColumnDefinitions().Append(caption);
+        ColumnDefinition caption;caption.Width({labelWidth(),GridUnitType::Pixel});row.ColumnDefinitions().Append(caption);
         ColumnDefinition field;field.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(field);
-        auto title=label(data,actionGroupLabel(group));title.VerticalAlignment(VerticalAlignment::Center);title.TextTrimming(TextTrimming::CharacterEllipsis);row.Children().Append(title);
+        auto title=label(data,str(read(),L"label"));title.VerticalAlignment(VerticalAlignment::Center);title.TextTrimming(TextTrimming::CharacterEllipsis);row.Children().Append(title);
         ComboBox choices;choiceColors(data,choices);choices.MinWidth(0);choices.MinHeight(data->controlHeight());choices.Height(data->controlHeight());choices.Padding({6,0,0,0});choices.FontSize(data->textSize());choices.FontWeight(Windows::UI::Text::FontWeights::Bold());
         choices.HorizontalAlignment(HorizontalAlignment::Stretch);
-        AutomationProperties::SetAutomationId(choices,L"tool-action-group-"+group);
-        std::vector<hstring> commands;for(auto value:array(data->state,L"tool_actions"))if(auto item=value.GetObject();str(item,L"group")==group){auto id=str(item,L"command");commands.push_back(id);comboOption(choices,str(find(array(data->state,L"commands"),L"id",id),L"label"),L"tool-action-"+id);}
+        AutomationProperties::SetAutomationId(choices,id);
+        auto items=array(read(),L"items");for(uint32_t i=0;i<items.Size();++i){auto item=items.GetObjectAt(i);auto command=str(object(item,L"action"),L"command");comboOption(choices,str(item,L"label"),command.empty()?id+L"-"+to_hstring(i):L"tool-action-"+command);}
         auto weak=weak_from_this();auto syncing=std::make_shared<bool>(false);
-        choices.SelectionChanged([weak,choices,commands,syncing,context](auto&&,auto&&){if(auto self=weak.lock();self&&!*syncing&&!self->data->updating&&settingsContext(self->data->state)==*context&&choices.SelectedIndex()>=0&&uint32_t(choices.SelectedIndex())<commands.size())self->data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(commands.at(choices.SelectedIndex()))}}));});
-        fields.emplace_back([weak,choices,commands,syncing,title,caption,group]{if(auto self=weak.lock()){
-            auto name=self->actionGroupLabel(group);title.Text(name);AutomationProperties::SetName(choices,name);caption.Width({self->actionLabelWidth(),GridUnitType::Pixel});
-            bool enabled=false;*syncing=true;for(uint32_t i=0;i<commands.size();++i){auto command=find(array(self->data->state,L"commands"),L"id",commands[i]);comboOptionText(choices,i,str(command,L"label"));choices.Items().GetAt(i).as<ComboBoxItem>().IsEnabled(flag(command,L"enabled"));enabled=enabled||flag(command,L"enabled");if(flag(command,L"selected"))selectIndex(choices,int(i));}*syncing=false;choices.IsEnabled(enabled);
-        }});
+        choices.SelectionChanged([weak,choices,read,syncing,context](auto&&,auto&&){if(auto self=weak.lock();self&&!*syncing&&!self->data->updating&&settingsContext(self->data->state)==*context&&choices.SelectedIndex()>=0){auto items=array(read(),L"items");if(uint32_t(choices.SelectedIndex())<items.Size())self->data->dispatch(object(items.GetObjectAt(choices.SelectedIndex()),L"action"));}});
+        fields.emplace_back([choices,read,syncing,title,caption,labelWidth]{
+            auto spec=read();auto name=str(spec,L"label");title.Text(name);AutomationProperties::SetName(choices,name);caption.Width({labelWidth(),GridUnitType::Pixel});
+            bool enabled=false;*syncing=true;auto items=array(spec,L"items");for(uint32_t i=0;i<std::min<uint32_t>(items.Size(),choices.Items().Size());++i){auto item=items.GetObjectAt(i);comboOptionText(choices,i,str(item,L"label"));choices.Items().GetAt(i).as<ComboBoxItem>().IsEnabled(flag(item,L"enabled",true));enabled=enabled||flag(item,L"enabled",true);if(flag(item,L"selected"))selectIndex(choices,int(i));}*syncing=false;choices.IsEnabled(enabled);
+        });
         Grid::SetColumn(choices,1);row.Children().Append(choices);body.Children().Append(row);
+    }
+    void actionChoice(hstring const& group,std::shared_ptr<hstring> const& context){
+        auto weak=weak_from_this();
+        choiceRow([weak,group]{if(auto self=weak.lock()){
+            A items;for(auto value:array(self->data->state,L"tool_actions"))if(auto item=value.GetObject();str(item,L"group")==group){auto id=str(item,L"command");auto command=find(array(self->data->state,L"commands"),L"id",id);items.Append(O({{L"label",S(str(command,L"label"))},{L"enabled",B(flag(command,L"enabled"))},{L"selected",B(flag(command,L"selected"))},{L"action",O({{L"type",S(L"invoke")},{L"command",S(id)}})}}));}
+            return O({{L"label",S(self->actionGroupLabel(group))},{L"items",items}});
+            }return J{};},L"tool-action-group-"+group,context,[weak]{if(auto self=weak.lock())return self->actionLabelWidth();return 0.;});
     }
     static A extraSchema(A const& extra){
         A result;for(auto value:extra){
             auto entry=value.GetObject();
             if(auto gradient=object(entry,L"Gradient");gradient.Size()){result.Append(object(object(gradient,L"gradient"),L"destination"));continue;}
+            if(auto checklist=object(entry,L"Checklist");checklist.Size()){result.Append(O({{L"checklist",S(str(checklist,L"id"))},{L"items",S(itemSchema(array(checklist,L"items")))}}));continue;}
             auto choice=object(entry,L"Choice");
-            result.Append(O({{L"id",S(str(choice,L"id"))},{L"labeled",B(flag(choice,L"labeled"))},{L"columns",N(num(choice,L"columns"))},
+            result.Append(O({{L"id",S(str(choice,L"id"))},{L"segmented",B(flag(choice,L"segmented"))},{L"labeled",B(flag(choice,L"labeled"))},{L"columns",N(num(choice,L"columns"))},
                 {L"beside",S(str(choice,L"beside"))},{L"items",S(itemSchema(array(choice,L"items")))}}));
         }return result;
     }
@@ -297,6 +305,12 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
             std::map<std::wstring,J> beside;
             for(auto value:extra){auto spec=object(value.GetObject(),L"Choice");if(auto target=str(spec,L"beside");!target.empty())beside.emplace(target.c_str(),spec);}
             for(auto value:extra){
+                if(auto spec=object(value.GetObject(),L"Checklist");spec.Size()){
+                    auto id=str(spec,L"id");auto list=checkList(data,spec,L"tool-checklist-"+id,[weak,context](J action){if(auto self=weak.lock();self&&settingsContext(self->data->state)==*context)self->data->dispatch(action);});
+                    body.Children().Append(list.root);
+                    fields.emplace_back([weak,list,id]{if(auto self=weak.lock())for(auto value:array(self->data->state,L"tool_extra"))if(auto current=object(value.GetObject(),L"Checklist");str(current,L"id")==id)list.update(current);});
+                    continue;
+                }
                 if(object(value.GetObject(),L"Gradient").Size()){
                     body.Children().Append(CapyEffects::GradientEditor(data,{[weak]{if(auto self=weak.lock())return toolGradient(self->data->state);return J{};},
                         [weak,context](J action,hstring phase){
@@ -308,6 +322,10 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                 }
                 auto spec=object(value.GetObject(),L"Choice");auto items=array(spec,L"items");auto specId=str(spec,L"id");
                 if(!str(spec,L"beside").empty())continue;
+                if(!flag(spec,L"segmented")&&num(spec,L"columns")==0){
+                    auto read=[weak,specId]{if(auto self=weak.lock())for(auto option:array(self->data->state,L"tool_extra"))if(auto current=object(option.GetObject(),L"Choice");str(current,L"id")==specId)return current;return J{};};
+                    choiceRow(read,L"tool-choice-"+specId,context,[weak,read]{if(auto self=weak.lock())return self->captionWidth({str(read(),L"label")});return 0.;});continue;
+                }
                 auto bar=segmented(items.Size());AutomationProperties::SetName(bar,str(spec,L"label"));
                 bool labeled=flag(spec,L"labeled");
                 auto caption=label(data,str(spec,L"label"));

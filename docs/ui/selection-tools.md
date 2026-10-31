@@ -80,16 +80,22 @@ paint the loop's entire interior. Enclose and Fill paints all eligible regions
 in one undo step; an empty result makes no edit. Escape, focus loss, a tool
 change or pointer cancellation discards the unfinished loop.
 
-Source in Tool settings selects visible artwork, the editing layer or marked
-reference layers. Enclose and Fill starts with Reference and remembers its choice
-separately from Bucket. With no marked references, the existing notice explains
-how to mark one and offers a suitable layer below when available. For flats on a separate layer, mark the transparent line-art
-layer as a reference, select a destination paint layer beneath it and choose Reference.
-An opaque paper/background layer in the sampled source hides transparent holes;
-exclude it by choosing the line-art reference. This version targets transparency,
-not white or arbitrary colors, and does not write to masks or selections.
+Lines from selects Reference layers, All visible layers or This layer. Fill,
+Enclose and Fill and Auto select default to references when any layer is marked,
+otherwise to all visible layers; each tool remembers an explicit source choice.
+The reference checklist includes paint, vector, text and group layers. Checking
+an item saves its reference mark in one undo step. With nothing marked, the tool
+offers the nearest visible paint, vector or text layer above the active layer,
+or the nearest below when none is above.
 
-Tolerance sets the maximum eligible alpha. Gap closing seals small breaks before
+Each visible reference leaf is sampled separately at full strength, keeping its
+mask and ancestor group masks, clipping and position. Hidden layers and hidden groups, Paper and filters
+are excluded. Tolerance compares each reference with its own colour at the tap;
+a mismatch on any reference stops the region. With Reference layers, Stop at
+colours on this layer is on by default and adds the destination to that comparison.
+Enclose and Fill compares each source with transparency instead of a tap colour.
+
+Gap closing seals small breaks before
 region discovery. Expansion and the Smooth edges switch refine the resulting edges. Components
 that reach the canvas boundary or extend outside the loop are excluded. Expansion
 stays inside the loop, and the active selection clips the final paint without

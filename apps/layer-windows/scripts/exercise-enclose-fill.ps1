@@ -61,6 +61,42 @@ function Settled{Wait-Until {$m=Model;$m -and !$m.state.document_file.busy -and 
 function Holes([bool]$Filled){
     Wait-Until {$a=Pixel 85 110;$b=Pixel 195 110;(Red $a) -eq $Filled -and (Red $b) -eq $Filled} $(if($Filled){'The enclosed holes did not fill'}else{'The enclosed holes did not clear'}) 15
 }
+function Check-References([long]$Id){
+    $source=Reveal-PanelControl 'tool_settings' 'tool-choice-selection-source'
+    $source.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+    $top=-1
+    foreach($command in @('selection_reference','selection_visible','selection_editing')){
+        $option=Control ('tool-action-'+$command) -Type ([System.Windows.Automation.ControlType]::ListItem) -Arranged
+        if($option.Current.Name -ne ((Model).state.commands|Where-Object id -eq $command).label -or $option.Current.BoundingRectangle.Top -le $top){throw 'Lines from choices lost their shared names or order'}
+        $top=$option.Current.BoundingRectangle.Top
+    }
+    (Control 'tool-action-selection_visible').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    Wait-Until {((Model).state.commands|Where-Object id -eq 'selection_visible').selected} 'Lines from did not select All visible layers'
+    $source=Reveal-PanelControl 'tool_settings' 'tool-choice-selection-source';$source.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+    (Control 'tool-action-selection_reference').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    $references=@{items=$null}
+    Wait-Until {$m=Model;if(!$m -or !(($m.state.commands|Where-Object id -eq 'selection_reference').selected)){return $false};$list=@($m.state.tool_extra.Checklist|Where-Object id -eq 'reference-layers');if($list.Count -ne 1 -or !$list[0]){return $false};$references.items=@($list[0].items);$true} 'Lines from did not select Reference layers and its checklist'
+    $items=$references.items
+    $index=@(0..($items.Count-1)|Where-Object {$items[$_].action.action.id -eq $Id})
+    if($index.Count -ne 1){throw 'Reference checklist did not publish the authored layer'}
+    $check=Reveal-PanelControl 'tool_settings' ('tool-checklist-reference-layers-'+$index[0])
+    if($check.Current.Name -ne $items[$index[0]].label -or $check.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On){throw 'Reference checklist lost the saved name or mark'}
+    $check.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    Wait-Until {$m=Model;$m -and !@($m.state.layers|Where-Object id -eq $Id)[0].reference} 'Reference checklist did not clear the saved mark'
+    Chord @(0x11) 0x5A
+    Wait-Until {$m=Model;$m -and @($m.state.layers|Where-Object id -eq $Id)[0].reference -and $check.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On} 'One Undo did not restore the reference checkbox and saved mark'
+    $stop=Reveal-PanelControl 'tool_settings' 'tool-action-stop_at_colors'
+    if($stop.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On){throw 'Stop at colours did not start on'}
+    foreach($selected in @($false,$true)){$stop.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle();Wait-Until {$m=Model;$m -and [bool](($m.state.commands|Where-Object id -eq 'stop_at_colors').selected) -eq $selected} 'Stop at colours did not follow its native checkbox'}
+    Use-Workspace 'builtin:workspace:photographer' 'Photo';Command 'fill';Command 'selection_reference'
+    $options=@((Model).panels|ForEach-Object {$_.tiles}|Where-Object {$_.control.kind -eq 'tool_options'})[0]
+    Invoke ('toolbar-more-'+$options.id);Wait-Until {$m=Model;$m -and $m.state.customization.drawer} 'Tool Options More did not open'
+    $more=Control ('tool-checklist-reference-layers-'+$index[0]) -Within (Control 'tool-drawer') -Arranged
+    if($more.Current.Name -ne $items[$index[0]].label -or $more.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On){throw 'Tool Options More lost the reference name or mark'}
+    foreach($selected in @($false,$true)){$more.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle();Wait-Until {$m=Model;$m -and [bool](@($m.state.layers|Where-Object id -eq $Id)[0].reference) -eq $selected} 'Tool Options More did not edit the reference mark'}
+    Key 0x1B;Wait-Until {$m=Model;$m -and !$m.state.customization.drawer} 'Tool Options More did not close'
+    Use-PaintWorkspace;Command 'fill'
+}
 function Texture-Strength([int]$Percent){
     $entry=Reveal-PanelControl 'tool_settings' 'tool-setting-grain_depth';$entry.SetFocus()
     $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue([string]$Percent);Key 0x0D
@@ -158,11 +194,13 @@ try {
 
     Open-Project $reference
     Wait-Until {$tab=@((Model).state.tabs|Where-Object active)[0];$tab -and $tab.width -eq 384 -and $tab.height -eq 256 -and (Model).brush_ready} 'The reference image did not open' 45
+    $referenceLayer=@((Model).state.layers|Where-Object editing)[0].id
     Invoke-Id 'layer-reference'
     Wait-Until {(Model).state.layer_tools.references_selected} 'The reference ink did not become a reference'
     Invoke-Id 'layer-new'
     Wait-Until {@((Model).state.layers).Count -ge 2 -and !@((Model).state.layers|Where-Object editing)[0].reference} 'A new paint layer did not open above the reference'
     Command 'fill'
+    Check-References $referenceLayer
     foreach($scope in 'fill_everywhere','fill_connected'){
         $null=Reveal-PanelControl 'tool_settings' 'tool-action-group-fill-scope'
         (Control 'tool-action-group-fill-scope' -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
@@ -171,6 +209,7 @@ try {
     }
     Command 'enclose_fill'
     Wait-Until {((Model).state.commands|Where-Object id -eq 'enclose_fill').selected} 'Enclose and Fill did not become the tool'
+    Texture-Strength 0
     $settings=@((Model).state.tool_settings|ForEach-Object id)
     foreach($id in 'tolerance','gap_closing','expansion'){
         if($settings -notcontains $id){throw "Enclose and Fill does not share $id with Fill"}

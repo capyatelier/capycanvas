@@ -73,8 +73,8 @@ command-clone-aligned = แหล่งที่มาตรงกัน
 command-clone-flip-horizontal = พลิกแหล่งที่มาตามแนวนอน
 command-clone-flip-vertical = พลิกแหล่งที่มาตามแนวตั้ง
 command-clone-reset-offset = รีเซ็ตระยะเยื้องแหล่งที่มา
-command-selection-visible = ภาพที่มองเห็น
-command-selection-editing = เลเยอร์ที่กำลังแก้ไข
+command-selection-visible = เลเยอร์ที่มองเห็นทั้งหมด
+command-selection-editing = เลเยอร์นี้
 command-selection-reference = เลเยอร์อ้างอิง
 command-move = การดำเนินการ
 command-scale-rotate = แปลงรูป
@@ -683,3 +683,5 @@ command-pen-tilt = การเอียงปากกา…
 command-fill-connected = พื้นที่ติดกัน
 command-fill-everywhere = ทุกพื้นที่
 command-smooth-region-edges = ทำขอบให้เรียบ
+
+command-stop-at-colors = หยุดที่สีบนเลเยอร์นี้

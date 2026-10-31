@@ -43,6 +43,7 @@ struct Classification {
     frame: Option<Arc<artwork::Frame>>,
     extent: [u32; 2],
     batch: usize,
+    source: usize,
 }
 // Full-precision luminance/alpha replace repeated color decoding/composition.
 // Opaque photos pack two luminances per texel, without storing redundant alpha.
@@ -228,7 +229,8 @@ impl RawRegions {
     pub fn extent(&self) -> Option<[u32; 2]> { self.progress.as_ref().map(|progress| progress.extent) }
     pub fn begin(&mut self, r: &WgpuRasterizer, request: &layer_render::RegionRequest) -> Result<(), GpuRasterError> {
         if self.progress.is_some() { return Ok(()); }
-        let frame = match request.source.raw_source() {
+        let source = request.source.raw_source().sources().first().ok_or(GpuRasterError::InvalidExtent)?;
+        let frame = match source {
             layer_render::RegionSource::Composite => Some(r.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?),
             layer_render::RegionSource::Objects(handle) | layer_render::RegionSource::ObjectCoverage(handle) => {
                 let mut frame = (**r.artwork_frame.as_ref().ok_or(GpuRasterError::InvalidExtent)?).clone();
@@ -243,7 +245,7 @@ impl RawRegions {
             layer_render::RegionSource::Source(_) | layer_render::RegionSource::Coverage(_) => None,
             _ => return Err(GpuRasterError::InvalidExtent),
         };
-        self.progress = Some(Classification {frame, extent:r.document_extent, batch:0});
+        self.progress = Some(Classification {frame, extent:r.document_extent, batch:0, source:0});
         Ok(())
     }
     #[cfg(test)]
@@ -307,6 +309,24 @@ impl RawRegions {
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<wgpu::Buffer, GpuRasterError> {
         self.begin(r, request)?;
+        loop {
+            let index = self.progress.as_ref().unwrap().source;
+            let sources = request.source.sources();
+            let source = layer_render::RegionRequest { source: sources[index].clone(), ..request.clone() };
+            let result = self.encode_source(r, &source, encoder, index > 0)?;
+            if index + 1 == sources.len() { self.progress = None; return Ok(result); }
+            self.progress = None;
+            let next = layer_render::RegionRequest { source: sources[index + 1].clone(), ..request.clone() };
+            self.begin(r, &next)?;
+            self.progress.as_mut().unwrap().source = index + 1;
+            self.bindings.clear();
+            self.uniform = None;
+            self.parameters.clear();
+        }
+    }
+    fn encode_source(&mut self, r: &mut WgpuRasterizer, request: &layer_render::RegionRequest,
+        encoder: &mut crate::submission::CommandEncoder, combine: bool,
+    ) -> Result<wgpu::Buffer, GpuRasterError> {
         let [w,h] = self.extent().unwrap();
         let mut layer = match request.source.raw_source() {
             layer_render::RegionSource::Source(id) | layer_render::RegionSource::Coverage(id) => {
@@ -466,7 +486,6 @@ impl RawRegions {
         }
         if cached {
             self.encode_cached(&r.device, encoder, &mask, [w, h]);
-            self.progress = None;
             return Ok(mask);
         }
         let fallback = layer.and_then(|target| r.layer_masks.definitions.get(&target)).map_or([0.;4], |mask| [mask.default_coverage;4]);
@@ -505,7 +524,7 @@ impl RawRegions {
                     request.tolerance.to_bits(),
                     f32::from(has_tile(*coordinate)).to_bits(),
                     (if request.enclosure.is_some() { 3.0f32 } else { f32::from(coverage) }).to_bits(),
-                    0,
+                    f32::from(combine).to_bits(),
                 ];
                 for (word, value) in uniforms[batch * stride as usize + i * 64..][..64]
                     .as_chunks_mut::<4>().0.iter_mut()
@@ -665,7 +684,6 @@ impl RawRegions {
             self.bindings.clear();
             self.capture = Default::default();
         }
-        self.progress = None;
         Ok(mask)
     }
 }

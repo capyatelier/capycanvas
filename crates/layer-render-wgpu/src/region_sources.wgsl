@@ -27,7 +27,6 @@ fn classify_tile(@builtin(global_invocation_id) id: vec3<u32>) {
             let color = raw_color(id.z,p+vec2<u32>(i,0u));
             var value = color.a;
             if tile.options.z > 1.5 { value = color.r; }
-            if tile.options.w > .5 { value=1.-value; }
             packed |= u32(round(clamp(value,0.,1.)*255.)) << (i*8u);
         }
         eligibility[8u+(tile.origin.y+p.y)*((tile.extent.x+3u)/4u)+(tile.origin.x+p.x)/4u]=packed;
@@ -52,5 +51,6 @@ fn classify_tile(@builtin(global_invocation_id) id: vec3<u32>) {
             packed |= 1u << i;
         }
     }
-    eligibility[(tile.origin.y+p.y)*((tile.extent.x+31u)/32u)+(tile.origin.x+p.x)/32u] = packed;
+    let index = (tile.origin.y+p.y)*((tile.extent.x+31u)/32u)+(tile.origin.x+p.x)/32u;
+    if tile.options.w > .5 { eligibility[index] &= packed; } else { eligibility[index] = packed; }
 }

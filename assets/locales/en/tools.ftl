@@ -47,6 +47,7 @@ tool-action-group-crop-overlay = Overlay
 tool-action-group-crop-ratio = Ratio
 tool-action-group-selection-mode = Mode
 tool-action-group-selection-source = Source
+tool-action-group-lines-from = Lines from
 tool-action-group-transform-interpolation = Interpolation
 tool-action-group-transform-mode = Mode
 tool-action-group-transform-warp-grid = Grid

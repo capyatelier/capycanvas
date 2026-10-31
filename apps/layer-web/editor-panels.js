@@ -6,7 +6,7 @@ import { chooseColor } from './color-editor.js';
 import { wheelPainter, wheelPicker, hueStopCache, wheelHit, rgba } from './color-wheel.js';
 import { colorTouchInput } from './color-touch.js';
 import { createRangeControl } from './range-control.js';
-import { actionField, choiceField } from './toolbar-components.js';
+import { actionField, checklistField, choiceField } from './toolbar-components.js';
 import {gradientEditor} from './gradient.js';
 // DOM widgets for shared editor models. Rust owns tool/color/geometry policy.
 export function createEditorPanels({ selectionUi, app, wasmModule, state, element, button, icon, dropdown, numberField, dispatch, asset, wake, applyChange, contentChanged, showContext }) {
@@ -101,7 +101,7 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
         }
         sampler.source.update({value:picker.layer});sampler.size.update({value:picker.sample_width});return;
       }
-      const next = JSON.stringify([owner,s.tool_settings.map(f=>[f.id,f.numeric,f.group_id]),s.tool_actions.map(a=>[a.command,a.checkable]),s.tool_extra.map(o=>o.Choice?[o.Choice.id,o.Choice.items.map(i=>[i.icon,i.action])]:["gradient",o.Gradient.gradient.destination])],(k,v)=>k==='endpoint_labels'?undefined:typeof v==='bigint'?String(v):v);
+      const next = JSON.stringify([owner,s.tool_settings.map(f=>[f.id,f.numeric,f.group_id]),s.tool_actions.map(a=>[a.command,a.checkable]),s.tool_extra.map(o=>o.Choice?[o.Choice.id,o.Choice.items.map(i=>[i.icon,i.action])]:o.Checklist?[o.Checklist.id,o.Checklist.items.map(i=>i.action)]:["gradient",o.Gradient.gradient.destination])],(k,v)=>k==='endpoint_labels'?undefined:typeof v==='bigint'?String(v):v);
       if (next !== key) {
         const previousBody=root.querySelector('.tool-settings-body'),focused=document.activeElement;
         const retainedChoice=previousBody?.contains(focused)&&focused.matches('[data-tool-action-group]')?focused:null;
@@ -121,10 +121,23 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
           if(!compact&&modeGroups.has("selection-mode"))modes.append(selectionUi.menuButton(()=>copy.tool_controls.selection_menu,'selection'));
         }
         if(!previousBody)root.append(body);
+        const choiceRow=(id,change)=>{
+          const row=element('label','tool-action-choice'),retained=retainedChoice?.dataset.toolActionGroup===id;
+          const input=retained?retainedChoice:dropdown('',value=>input.toolChoiceChange(value)),caption=retained?retainedChoice.parentElement.querySelector('span'):element('span');
+          if(retained)retainedRows.set(row,retainedChoice.parentElement);else row.append(caption,input);
+          input.toolChoiceChange=change;input.dataset.toolActionGroup=id;
+          return {row,input,update(label,items,value){caption.textContent=label;input.update({label,choices:items,value,disabled:items.every(i=>i.enabled===false)});}};
+        };
         const beside=new Map();let grouped;
         for (const option of s.tool_extra) {
           if(option.Gradient){gradient=gradientEditor({app,element,button,icon,dropdown,dispatch});body.append(gradient.node);continue;}
+          if(option.Checklist){const field=checklistField({element,button,icon},option.Checklist,dispatch);choices.push([option.Checklist.id,field]);body.append(field.row);continue;}
           const spec=option.Choice;
+          if(!spec.segmented){
+            const field=choiceRow(spec.id,value=>dispatch(state().tool_extra.find(o=>o.Choice?.id===spec.id).Choice.items[Number(value)].action));
+            field.input.dataset.toolExtraChoice=spec.id;
+            choices.push([spec.id,{update(option){const spec=option.Choice;field.update(spec.label,spec.items.map((item,index)=>({value:String(index),label:item.label,enabled:item.enabled})),String(spec.items.findIndex(i=>i.selected)));}}]);body.append(field.row);continue;
+          }
           const field=choiceField({app,element,button,icon},spec,dispatch),bar=field.row;
           bar.dataset.toolChoiceBar=spec.id;
           [...bar.children].forEach((node,index)=>node.dataset.toolChoiceTone=String(index));
@@ -156,12 +169,8 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
         for(const spec of s.tool_actions.filter(a=>!a.segmented)){
           if(spec.group){
             if(groups.has(spec.group))continue;groups.add(spec.group);
-            const group=catalog.tool_action_groups.find(g=>g.id===spec.group),row=element('label','tool-action-choice');
-            const retained=retainedChoice?.dataset.toolActionGroup===spec.group;
-            const input=retained?retainedChoice:dropdown('',command=>dispatch({type:'invoke',command})),caption=retained?retainedChoice.parentElement.querySelector('span'):element('span');
-            if(retained)retainedRows.set(row,retainedChoice.parentElement);else row.append(caption,input);
-            input.dataset.toolActionGroup=spec.group;
-            body.append(row);actionGroups.push({id:group.id,input,caption});continue;
+            const field=choiceRow(spec.group,command=>dispatch({type:'invoke',command}));
+            body.append(field.row);actionGroups.push({id:spec.group,...field});continue;
           }
           const command=s.commands.find(c=>c.id===spec.command);
           const field=spec.checkable?actionField({element,button,icon},{state:command,checkable:spec.checkable},dispatch,{checkbox:true}):null;
@@ -185,11 +194,11 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
       }
       for (const [id,node] of numbers) node.update(s.tool_settings.find(f=>f.id===id).value);
       if(range) {range.relabel(['tonal_lower','tonal_upper'].map(id=>s.tool_settings.find(f=>f.id===id)),copy.tool_controls.range_hint);range.update(['tonal_lower','tonal_upper'].map(id=>s.tool_settings.find(f=>f.id===id).value));}
-      for(const [id,field] of choices)field.update(s.tool_extra.find(o=>o.Choice?.id===id));
+      for(const [id,field] of choices)field.update(s.tool_extra.find(o=>(o.Choice??o.Checklist)?.id===id));
       if(gradient)gradient.update(s.tool_extra.find(o=>o.Gradient).Gradient);
-      for(const {id,input,caption} of actionGroups){
-        const group=catalog.tool_action_groups.find(g=>g.id===id),commands=s.tool_actions.filter(a=>a.group===id).map(a=>s.commands.find(c=>c.id===a.command));caption.textContent=group.label;
-        input.update({label:group.label,choices:commands.map(c=>({value:c.id,label:c.label,enabled:c.enabled})),value:commands.find(c=>c.selected)?.id??commands[0]?.id,disabled:commands.every(c=>!c.enabled)});
+      for(const {id,update} of actionGroups){
+        const group=catalog.tool_action_groups.find(g=>g.id===id),commands=s.tool_actions.filter(a=>a.group===id).map(a=>s.commands.find(c=>c.id===a.command));
+        update(group.label,commands.map(c=>({value:c.id,label:c.label,enabled:c.enabled})),commands.find(c=>c.selected)?.id??commands[0]?.id);
       }
       for (const [spec,node,field] of actions) {
         const c=s.commands.find(c=>c.id===spec.command);

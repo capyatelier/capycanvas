@@ -168,10 +168,19 @@ struct ToolSettingsControls: View {
             }
             let choices = store.state["tool_extra"].array.map { $0["Choice"] }.filter { !$0.isNull }
             ForEach(choices.filter { $0["beside"].isNull }, id: \.stableKey) { choice in
-                ToolOptionField(store: store, option: JSON(["Choice": choice.raw]), iconSize: store.panelMetrics.icon, vertical: false, labeled: true,
+                let field = ToolOptionField(store: store, option: JSON(["Choice": choice.raw]), iconSize: store.panelMetrics.icon, vertical: false, labeled: true,
                     style: "small", preferences: JSON(), stacked: false, prefix: "tool") { action, completion in
                     store.edit(action as? [String: Any] ?? [:], completion: completion)
                 }.frame(height: choice["labeled"].bool ? nil : store.panelMetrics.height)
+                if !choice["segmented"].bool && !choice["labeled"].bool {
+                    HStack(spacing: store.panelMetrics.spacing) { Text(choice["label"].string); field }
+                } else { field }
+            }
+            ForEach(store.state["tool_extra"].array.filter { !$0["Checklist"].isNull }, id: \.["Checklist"]["id"].string) { option in
+                ToolOptionField(store: store, option: option, iconSize: store.panelMetrics.icon, vertical: false, labeled: true,
+                    style: "small", preferences: JSON(), stacked: false, prefix: "tool") { action, completion in
+                    store.edit(action as? [String: Any] ?? [:], completion: completion)
+                }
             }
             ForEach(settingGroups.map { ($0[0].settingID, $0) }, id: \.0) { _, group in
                 let first = group[0], choice = choices.first { $0["beside"].string == first.settingID }

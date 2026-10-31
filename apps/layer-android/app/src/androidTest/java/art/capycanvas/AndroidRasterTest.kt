@@ -827,11 +827,22 @@ class AndroidRasterTest {
                 }
             }
             for (command in listOf("selection_visible", "selection_editing", "selection_reference")) {
-                settings("tool-action-group-selection-source").performScrollTo().assertIsDisplayed().performClick(); host.drain()
-                compose.onNodeWithTag("tool-action-$command").assertIsDisplayed().performClick(); host.drain()
+                settings("tool-choice-selection-source").performScrollTo().assertIsDisplayed().performClick(); host.drain()
+                compose.onNode(hasText(label(command)) and hasAnyAncestor(isPopup())).assertIsDisplayed().performClick(); host.drain()
                 compose.waitUntil(10_000) { selected(command) }
                 assertTrue(selected("enclose_fill"))
             }
+            val references = published().array("tool_extra").objects().single { it.has("Checklist") }.getJSONObject("Checklist")
+            val referenceIndex = references.array("items").objects().indexOfFirst { it.getJSONObject("action").getJSONObject("action").optLong("id") == owner }
+            assertTrue(referenceIndex >= 0)
+            settings("tool-check-reference-layers-$referenceIndex").performScrollTo().assertIsOn().performClick(); host.drain()
+            settings("tool-check-reference-layers-$referenceIndex").assertIsOff()
+            ui(obj("type" to "invoke", "command" to "undo"))
+            settings("tool-check-reference-layers-$referenceIndex").assertIsOn()
+            settings("tool-action-stop_at_colors").performScrollTo().assertIsOn().performClick(); host.drain()
+            assertFalse(selected("stop_at_colors"))
+            settings("tool-action-stop_at_colors").performClick(); host.drain()
+            assertTrue(selected("stop_at_colors"))
             for (id in listOf("tolerance", "gap_closing", "expansion")) {
                 settings("tool-setting-$id").performScrollTo().assertIsDisplayed()
                 ui(obj("type" to "set_tool_setting", "id" to id, "value" to 0))

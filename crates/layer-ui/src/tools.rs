@@ -485,29 +485,6 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool, localizer: 
     if let LayerCanvasTool::Figure { shape, paint } = canvas_tool {
         return ToolSetView { groups: Vec::new(), subtools: crate::session::figures::modes(shape, paint, localizer) };
     }
-    if let LayerCanvasTool::Region { fill, source } = canvas_tool {
-        return ToolSetView {
-            groups: Vec::new(),
-            subtools: [
-                (CommandId::SelectionVisible, RegionSource::Visible),
-                (CommandId::SelectionEditing, RegionSource::Editing),
-                (CommandId::SelectionReference, RegionSource::Reference),
-            ]
-            .into_iter()
-            .map(|(command, item_source)| ToolSetItem { enabled: true, disabled_reason: None,
-                label: command.localized_label(localizer),
-                icon: command.icon().unwrap(),
-                action: UiAction::Layer {
-                    action: LayerAction::Tool {
-                        tool: LayerCanvasTool::Region { fill, source: item_source },
-                    },
-                },
-                selected: source == item_source,
-                preview: None,
-            })
-            .collect(),
-        };
-    }
     if canvas_tool.picks_color() {
         return ToolSetView::default();
     }

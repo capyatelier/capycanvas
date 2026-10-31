@@ -161,7 +161,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             if(auto value=object(entry,L"Numeric");value.Size())value.SetNamedValue(L"value",N(0));
             if(auto range=object(entry,L"Range");range.Size())
                 for(auto bound:array(range,L"bounds"))bound.GetObject().SetNamedValue(L"value",N(0));
-            if(auto choice=object(entry,L"Choice");choice.Size())
+            for(auto kind:{L"Choice",L"Checklist"})if(auto choice=object(entry,kind);choice.Size())
                 for(auto choiceItem:array(choice,L"items"))choiceItem.GetObject().SetNamedValue(L"selected",B(false));
             if(auto action=object(entry,L"Action");action.Size()){
                 auto state=object(action,L"state");state.SetNamedValue(L"selected",B(false));state.SetNamedValue(L"enabled",B(true));
@@ -203,6 +203,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
                     else if(entry.HasKey(L"Range"))field=rangeField(object(entry,L"Range"));
                     else if(entry.HasKey(L"Numeric"))field=numericField(object(entry,L"Numeric"));
                     else if(entry.HasKey(L"Choice"))field=choiceField(object(entry,L"Choice"));
+                    else if(entry.HasKey(L"Checklist"))field=checklistField(object(entry,L"Checklist"));
                     else if(entry.HasKey(L"Gradient"))field=gradientField(object(entry,L"Gradient"));
                     else field=actionField(object(entry,L"Action"));
                     field.schema=key;fields.push_back(std::move(field));
@@ -724,6 +725,13 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             auto desired=range->root.DesiredSize();
             return winrt::Windows::Foundation::Size{std::max(desired.Width,self->sliders?280.f:0.f),std::max(desired.Height,float(self->data->controlHeight()))};
         };
+        return result;
+    }
+    Field checklistField(J const& checklist){
+        auto weak=weak_from_this();auto list=checkList(data,checklist,L"toolbar-checklist-"+str(checklist,L"id"),[weak](J action){if(auto self=weak.lock())self->send(action);});
+        Field result;result.row=list.root;result.intrinsic=true;
+        result.update=[weak,list](J const& option){if(auto self=weak.lock();self&&list.update(object(option,L"Checklist")))self->measured=false;};
+        result.natural=[list]{list.root.Measure({std::numeric_limits<float>::infinity(),std::numeric_limits<float>::infinity()});return list.root.DesiredSize();};
         return result;
     }
     Field choiceField(J const& choice){

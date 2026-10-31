@@ -73,8 +73,8 @@ command-clone-aligned = 샘플 지점 오프셋 유지
 command-clone-flip-horizontal = 복사할 픽셀 좌우 반전
 command-clone-flip-vertical = 복사할 픽셀 상하 반전
 command-clone-reset-offset = 샘플 지점 오프셋 재설정
-command-selection-visible = 보이는 그림
-command-selection-editing = 편집 중인 레이어
+command-selection-visible = 표시된 모든 레이어
+command-selection-editing = 현재 레이어
 command-selection-reference = 참조 레이어
 command-move = 작업
 command-scale-rotate = 변형
@@ -683,3 +683,5 @@ command-pen-tilt = 펜 기울기…
 command-fill-connected = 연결된 영역
 command-fill-everywhere = 모든 영역
 command-smooth-region-edges = 가장자리 매끄럽게
+
+command-stop-at-colors = 이 레이어의 색상에서 멈춤

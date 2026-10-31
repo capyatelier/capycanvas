@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {png} from './clone-journey.test.mjs';
 import {placementSave} from './image-placement-motion.test.mjs';
-import {rasterIdentity,sourceIdentity} from './package-fixture.test.mjs';
+import {rasterIdentity,sourceIdentity,packageOccurrences} from './package-fixture.test.mjs';
 import {chooseToolActionGroup} from './panel-controls-journey.test.mjs';
 
 export async function checkEncloseFill({call,evaluate,settle}) {
@@ -58,10 +58,22 @@ export async function checkEncloseFill({call,evaluate,settle}) {
       for(const label of ['Lasso fill','Enclose and Fill','Fill','Enclose and Fill'])
         await contact(`${toolset} .tool-groups [data-tool-choice="${label}"]`);
       assert.ok(await selected('enclose_fill'));
+      assert.deepEqual(await evaluate('["selection_reference","selection_visible","selection_editing"].map(id=>layerApp.state().commands.find(c=>c.id===id).label)'),['Reference layers','All visible layers','This layer']);
       for(const source of ['selection_visible','selection_editing','selection_reference']){
         await chooseToolActionGroup({call,evaluate,settle},'selection-source',source);
         assert.ok(await selected(source));assert.ok(await selected('enclose_fill'),'source preserves Enclose variant');
       }
+      const checklist='.dock-group [data-tool-checklist="reference-layers"]';
+      const marks=()=>evaluate('layerApp.state().tool_extra.find(o=>o.Checklist?.id==="reference-layers").Checklist.items.map(i=>({label:i.label,selected:i.selected}))');
+      const initialMarks=await marks();
+      assert.deepEqual(initialMarks.map(i=>i.label),['Layer 3','Reference ink'],'Checklist presents the eligible paint layers');
+      assert.deepEqual(initialMarks.map(i=>i.selected),[false,true]);
+      await contact(`${checklist} input`);
+      assert.deepEqual((await marks()).map(i=>i.selected),[true,true],'Checking one layer preserves the other mark');
+      assert.equal(packageOccurrences(await save()).filter(o=>o.data.reference).length,2,'Both reference marks are saved');
+      await invoke('undo');await idle();assert.deepEqual(await marks(),initialMarks,'One undo restores the reference mark');
+      await invoke('redo');await idle();assert.deepEqual((await marks()).map(i=>i.selected),[true,true]);
+      await invoke('undo');await idle();
       await evaluate(`document.querySelector('.dock-group [data-tool-action-group="selection-source"]').scrollIntoView({block:'nearest'})`);await settle();
       await writeFile(`${directory}/controls-${theme}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
       const controls=await evaluate('layerApp.state().tool_settings.map(c=>c.id)');
@@ -92,7 +104,7 @@ export async function checkEncloseFill({call,evaluate,settle}) {
       await invoke('redo');await idle();assert.deepEqual(rasterIdentity(await save()),filled,'cancel preserves redo');
       await invoke('undo');await idle();
       await contact(`${toolset} .tool-groups [data-tool-choice="Fill"]`);
-      await contact(`${toolset} [data-tool-choice="Reference layers"]`);
+      await chooseToolActionGroup({call,evaluate,settle},'selection-source','selection_reference');
       for(const [mode,other] of [['fill_connected',false],['fill_everywhere',true]]) {
         await chooseToolActionGroup({call,evaluate,settle},'fill-scope',mode);
         await pointer('mousePressed',await screen([85,110]));await pointer('mouseReleased',await screen([85,110]));await settle();await idle();

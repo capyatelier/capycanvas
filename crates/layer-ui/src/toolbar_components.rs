@@ -137,6 +137,7 @@ impl ToolbarNumericBinding {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[expect(clippy::large_enum_variant, reason = "Tool option publications retain inline range fields without allocating")]
 pub enum ToolOption {
+    Checklist { id: &'static str, label: std::sync::Arc<str>, items: Vec<ToolSetItem> },
     Gradient(Box<PropertyControl>),
     Numeric(ToolSetting),
     /// One atomic interval field; endpoint edits use the existing setting IDs.
@@ -166,6 +167,7 @@ impl ToolOption {
     /// Values, selection and presentation copy do not invalidate native editors.
     pub fn same_schema(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::Checklist { id:a, items:x, .. }, Self::Checklist { id:b, items:y, .. }) => a==b && x.len()==y.len() && x.iter().zip(y).all(|(a,b)|a.action==b.action),
             (Self::Gradient(a),Self::Gradient(b))=>a.key==b.key && a.gradient.as_ref().map(|c|&c.destination)==b.gradient.as_ref().map(|c|&c.destination),
             (Self::Numeric(a), Self::Numeric(b)) => {
                 a.id == b.id && a.group_id == b.group_id && a.numeric.same_rules(&b.numeric)
@@ -299,7 +301,7 @@ impl UiState {
                     .chain(&self.tool_set.subtools)
                     .any(|i| i.action == *action)
                     || self.tool_options().iter().chain(&self.tool_extra).any(|option| {
-                        matches!(option, ToolOption::Choice { items, .. } if items.iter().any(|i| i.action == *action))
+                        matches!(option, ToolOption::Choice { items, .. } | ToolOption::Checklist { items, .. } if items.iter().any(|i| i.enabled && i.action == *action))
                     })
             }
         }

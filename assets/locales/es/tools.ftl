@@ -47,6 +47,7 @@ tool-action-group-crop-overlay = Superposición
 tool-action-group-crop-ratio = Proporción
 tool-action-group-selection-mode = Modo
 tool-action-group-selection-source = Origen
+tool-action-group-lines-from = Líneas de
 tool-action-group-transform-interpolation = Interpolación
 tool-action-group-transform-mode = Modo
 tool-action-group-transform-warp-grid = Cuadrícula

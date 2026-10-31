@@ -156,7 +156,8 @@ impl RegionRequests {
         } else {
             None
         };
-        if tone.is_some_and(|t| !t.valid(extent))
+        if matches!(&request.source, layer_render::RegionSource::Intersection(sources) if sources.is_empty() || sources.iter().any(|source| !matches!(source, layer_render::RegionSource::Scene { .. })))
+            || tone.is_some_and(|t| !t.valid(extent))
             || extent.contains(&0)
             || request.position[0] >= extent[0]
             || request.position[1] >= extent[1]
@@ -173,7 +174,7 @@ impl RegionRequests {
             ) && request.selection.is_none())
             || request.enclosure.as_ref().is_some_and(|area| area.validate().is_err()
                 || !request.contiguous || request.limit.is_some()
-                || !matches!(request.source, layer_render::RegionSource::Composite | layer_render::RegionSource::Source(_) | layer_render::RegionSource::Scene { .. }))
+                || !matches!(request.source, layer_render::RegionSource::Composite | layer_render::RegionSource::Source(_) | layer_render::RegionSource::Scene { .. } | layer_render::RegionSource::Intersection(_)))
             || (mapped && (request.selection.is_some() || request.limit.is_some()))
         {
             return Err(GpuRasterError::InvalidExtent);

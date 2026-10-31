@@ -47,6 +47,7 @@ tool-action-group-crop-overlay = 오버레이
 tool-action-group-crop-ratio = 비율
 tool-action-group-selection-mode = 모드
 tool-action-group-selection-source = 샘플링 대상
+tool-action-group-lines-from = 선 참조
 tool-action-group-transform-interpolation = 보간
 tool-action-group-transform-mode = 모드
 tool-action-group-transform-warp-grid = 격자

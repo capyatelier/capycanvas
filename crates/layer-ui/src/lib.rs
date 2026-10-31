@@ -652,6 +652,7 @@ command_ids! {
     FillConnected,
     FillEverywhere,
     SmoothRegionEdges,
+    StopAtColors,
     CanvasSize,
     CropCanvasToSelection,
     GrowSelection,
@@ -738,7 +739,7 @@ impl CommandId {
     pub fn is_toggle(self) -> bool {
         matches!(
             self,
-            Self::FillConnected | Self::FillEverywhere | Self::SmoothRegionEdges | Self::CenterZoomClicks | Self::QuickMask | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::SelectionBrushPressure | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles
+            Self::FillConnected | Self::FillEverywhere | Self::SmoothRegionEdges | Self::StopAtColors | Self::CenterZoomClicks | Self::QuickMask | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::SelectionBrushPressure | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles
                 | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter
                 | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference
                 | Self::CropRatioFree | Self::CropRatioOriginal | Self::CropRatioSquare | Self::CropRatioFourFive
@@ -949,6 +950,7 @@ impl CommandId {
             Self::EditLayerContent => "brush",
             Self::LassoFill | Self::EncloseFill => "lasso-fill",
             Self::FillConnected | Self::FillEverywhere => "fill",
+            Self::StopAtColors => "alpha-lock",
             Self::SmoothRegionEdges => "edge-smooth",
             Self::CanvasSize => "canvas-size",
             Self::CropCanvasToSelection | Self::Crop => "crop",
@@ -1255,6 +1257,7 @@ impl CommandId {
             Self::FillConnected => MessageId::COMMAND_FILL_CONNECTED,
             Self::FillEverywhere => MessageId::COMMAND_FILL_EVERYWHERE,
             Self::SmoothRegionEdges => MessageId::COMMAND_SMOOTH_REGION_EDGES,
+            Self::StopAtColors => MessageId::COMMAND_STOP_AT_COLORS,
             Self::CanvasSize => MessageId::COMMAND_CANVAS_SIZE,
             Self::CropCanvasToSelection => MessageId::COMMAND_CROP_CANVAS_TO_SELECTION,
             Self::GrowSelection => MessageId::COMMAND_GROW_SELECTION,

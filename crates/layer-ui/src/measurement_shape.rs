@@ -22,6 +22,7 @@ fn property(value:&PropertyControl)->Value {
 }
 fn option(value:&ToolOption)->Value {
     match value {
+        ToolOption::Checklist {id,label,items}=>json!([id,label,items.iter().map(|item|&item.label).collect::<Vec<_>>()]),
         ToolOption::Numeric(value)=>setting(value),
         ToolOption::Range {id,label,bounds}=>json!([id,label,bounds.iter().map(setting).collect::<Vec<_>>()]),
         ToolOption::Gradient(value)=>property(value),

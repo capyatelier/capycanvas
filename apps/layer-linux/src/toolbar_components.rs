@@ -1300,6 +1300,9 @@ impl Component {
             }
         );
         let field = match option {
+            ToolOption::Checklist { .. } => {
+                let field=crate::tool_extra::ExtraField::new(w,option,context); row.append(&field.root); Field::Extra(field)
+            },
             ToolOption::Gradient(control)=> {
                 let field=crate::effects::GradientButton::new(w,control);row.append(&field.root);Field::Gradient(field)
             },

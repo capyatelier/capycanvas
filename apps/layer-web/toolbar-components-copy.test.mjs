@@ -175,3 +175,14 @@ test('standalone slider resize hides and restores the shared readout without reb
   assert.ok(layouts.every(request=>request.slider_style.show_value),'fitting leaves the saved preference enabled');
   assert.deepEqual(h.actions,[],'fitting does not edit the value or saved preference');
 });
+
+
+test('checklists retain independent marks and dispatch the supplied layer action through toolbar context',t=>{
+  const h=harness(t),value=h.tile(),items=[{label:'Ink {literal}',enabled:true,selected:true,action:{type:'layer',action:{op:'reference',id:3}}},{label:'Flats',enabled:true,selected:false,action:{type:'layer',action:{op:'reference',id:4}}}];
+  value.component.options=[{Checklist:{id:'references',label:'Reference layers',items}}];h.root.updateComponent(value);
+  const controls=h.root.querySelectorAll('input');assert.deepEqual(controls.map(c=>c.checked),[true,false]);controls[1].checked=true;controls[1].dispatch('change');
+  assert.deepEqual(h.actions,[{type:'toolbar_edit',context:value.component.context,action:items[1].action}]);
+  value.component.options[0].Checklist.items=items.map(item=>({...item,selected:true}));h.root.updateComponent(value);
+  assert.deepEqual(h.root.querySelectorAll('input'),controls);assert.deepEqual(controls.map(c=>c.checked),[true,true]);
+  assert.equal(controls[0].getAttribute('aria-label'),'Ink {literal}');
+});

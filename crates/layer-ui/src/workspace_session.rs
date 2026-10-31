@@ -11,7 +11,7 @@ impl EditingState {
         let mut color_library = ColorLibrary::fresh(&localization.text(MessageId::CREATION_PALETTE_MY_COLORS));
         color_library.ensure_starters_localized(localization);
         Self {
-            version: 2,
+            version: 3,
             preset: layer_core::DefaultBrushPreset::Pencil as u32,
             tools: ToolMemory::default(),
             tool_slots: ToolSlotMemory::default(),
@@ -26,6 +26,7 @@ impl EditingState {
                 .map(|(id, _, _, _, value)| (id.into(), value))
                 .collect(),
             region_sources: region.source,
+            region_stop_at_colors: region.stop_at_colors,
             fill_scope: region.scope,
             region_smooth_edges: region.refinement.smooth_edges,
             gradient: layer.gradient,
@@ -33,7 +34,7 @@ impl EditingState {
         }
     }
     pub fn validate(&self) -> Result<(), WorkspaceValidationError> {
-        if self.version != 2 { return Err("Unsupported editing-state version".into()); }
+        if self.version != 3 { return Err("Unsupported editing-state version".into()); }
         self.tools.validate()?;
         for (slot, variant) in &self.tool_slots.choices {
             if slot.member(*variant).is_none() { return Err("Invalid remembered tool variant".into()); }
@@ -216,7 +217,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut tools = self.tools.clone();
         if base.is_some() { tools.remember(preset); }
         EditingState {
-            version: 2,
+            version: 3,
             preset,
             tools,
             tool_slots: self.state.tool_slots.clone(),
@@ -232,6 +233,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .map(|(id, _, _, _, value)| (id.into(), value))
                 .collect(),
             region_sources: self.region_tools.source,
+            region_stop_at_colors: self.region_tools.stop_at_colors,
             fill_scope: self.region_tools.scope,
             region_smooth_edges: self.region_tools.refinement.smooth_edges,
             gradient: self.layer_interaction.gradient.clone(),
@@ -250,6 +252,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut region = region_tools::RegionTools::default();
         for (id, &value) in &state.region_values { region.edit_value(id, value).map_err(|reason| reason.message(self.localization()))?; }
         region.source = state.region_sources;
+        region.stop_at_colors = state.region_stop_at_colors;
         region.scope = state.fill_scope;
         region.refinement.smooth_edges = state.region_smooth_edges;
         self.engine.set_brush(brush.clone()).map_err(error)?;

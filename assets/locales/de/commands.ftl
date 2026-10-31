@@ -73,8 +73,8 @@ command-clone-aligned = Ausgerichtete Quelle
 command-clone-flip-horizontal = Quelle horizontal spiegeln
 command-clone-flip-vertical = Quelle vertikal spiegeln
 command-clone-reset-offset = Quellversatz zurücksetzen
-command-selection-visible = Sichtbares Bild
-command-selection-editing = Bearbeitete Ebene
+command-selection-visible = Alle sichtbaren Ebenen
+command-selection-editing = Diese Ebene
 command-selection-reference = Referenzebenen
 command-move = Vorgang
 command-scale-rotate = Transformieren
@@ -687,3 +687,5 @@ command-pen-tilt = Stiftneigung…
 command-fill-connected = Zusammenhängend
 command-fill-everywhere = Überall
 command-smooth-region-edges = Kanten glätten
+
+command-stop-at-colors = Bei Farben auf dieser Ebene stoppen

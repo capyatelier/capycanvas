@@ -1182,7 +1182,7 @@ pub fn tool_choice_localized(control: ToolbarControl, localization: &Localizer) 
                 | CommandId::ZoomSelection | CommandId::ResetRotation | CommandId::ResetView | CommandId::PreviousView
                 | CommandId::SaveView | CommandId::RestoreView | CommandId::NextDrawing | CommandId::PreviousDrawing
                 | CommandId::ScaleOutlineWidths | CommandId::PutBackBubbles
-                | CommandId::FillConnected | CommandId::FillEverywhere | CommandId::SmoothRegionEdges => label.to_string(),
+                | CommandId::FillConnected | CommandId::FillEverywhere | CommandId::SmoothRegionEdges | CommandId::StopAtColors => label.to_string(),
                 CommandId::EraseTouchedPart => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_ERASE_TOUCHED_PART).to_string(),
                 CommandId::EraseWholePaths => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_ERASE_WHOLE_PATHS).to_string(),
                 CommandId::EraseToIntersection => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_ERASE_TO_INTERSECTION).to_string(),

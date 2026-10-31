@@ -182,7 +182,7 @@ fn every_command_on_a_transform_bar_is_a_tool_action() {
                         UiAction::Invoke { command } => Some(command),
                         _ => None,
                     }).collect(),
-                    ToolOption::Gradient(_) | ToolOption::Numeric(_) | ToolOption::Range { .. } => Vec::new(),
+                    ToolOption::Checklist { .. } | ToolOption::Gradient(_) | ToolOption::Numeric(_) | ToolOption::Range { .. } => Vec::new(),
                 };
                 for command in commands {
                     assert!(s.state.tool_actions.iter().any(|a| a.command == command), "{mode:?}: {command:?}");
@@ -1157,7 +1157,7 @@ fn bar_items(items: &[CanvasBarItem]) -> Vec<(CommandId, &str, bool)> {
         .map(|item| match &item.option {
             ToolOption::Action { state, checkable } => (state.id, item.label.as_ref(), *checkable),
             ToolOption::Choice { .. } => (CommandId::SearchCommands, item.label.as_ref(), false),
-            ToolOption::Gradient(_) | ToolOption::Numeric(_) | ToolOption::Range { .. } => unreachable!("bars hold no values"),
+            ToolOption::Checklist { .. } | ToolOption::Gradient(_) | ToolOption::Numeric(_) | ToolOption::Range { .. } => unreachable!("bars hold no values"),
         })
         .collect()
 }

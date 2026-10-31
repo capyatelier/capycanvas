@@ -91,14 +91,15 @@ mod enclose_fill_checks {
     }
 
     #[test]
-    fn enclose_fill_starts_with_reference_and_keeps_its_source_separate_from_bucket() {
+    fn region_tools_default_to_available_references_and_keep_source_choices_separate() {
         for platform in Platform::ALL {
             let mut s = session(platform);
             invoke(&mut s, CommandId::EncloseFill);
-            assert!(s.command(CommandId::SelectionReference).selected);
+            assert!(s.command(CommandId::SelectionVisible).selected);
             assert!(ToolSlotId::Fill.variants().iter().any(|variant| variant.command() == CommandId::EncloseFill));
             assert!(ToolSlotId::PhotoFill.variants().iter().any(|variant| variant.command() == CommandId::EncloseFill));
             let checkpoint = s.engine.checkpoint();
+            invoke(&mut s, CommandId::SelectionReference);
             enclose(&mut s);
             s.frame(1, 1).unwrap();
             assert!(s.renderer_mut().region_requests.is_empty());
@@ -120,7 +121,9 @@ mod enclose_fill_checks {
     fn enclose_fill_and_bucket_share_controls_and_source_commands_on_every_platform() {
         for platform in Platform::ALL {
             let mut s = session(platform);
-            s.set_references([s.engine.document().working.occurrence.unwrap()].into()).unwrap();
+            let reference = s.engine.document().working.occurrence.unwrap();
+            layer(&mut s, LayerAction::New { group: false, clipped: false });
+            s.set_references([reference].into()).unwrap();
             for command in [CommandId::EncloseFill, CommandId::Fill] {
                 invoke(&mut s, command);
                 assert!(s.command(command).selected);
@@ -132,12 +135,14 @@ mod enclose_fill_checks {
                 for (source_command, scope) in [
                     (CommandId::SelectionVisible, SceneScope::All),
                     (CommandId::SelectionEditing, SceneScope::Raw(s.engine.document().active_target().unwrap())),
-                    (CommandId::SelectionReference, SceneScope::Members(vec![s.engine.document().working.occurrence.unwrap()].into())),
+                    (CommandId::SelectionReference, SceneScope::Members(vec![reference].into())),
                 ] {
                     assert!(s.command(source_command).enabled);
                     invoke(&mut s, source_command);
                     assert!(s.command(command).selected);
                     assert!(s.command(source_command).selected);
+                    assert_eq!(s.state.tool_actions.iter().any(|action| action.command == CommandId::StopAtColors), source_command == CommandId::SelectionReference);
+                    assert_eq!(s.command(CommandId::StopAtColors).enabled, source_command == CommandId::SelectionReference);
                     if command == CommandId::EncloseFill { enclose(&mut s); }
                     else {
                         contact(&mut s, PenPhase::Down, [40., 60.]);
@@ -151,13 +156,20 @@ mod enclose_fill_checks {
                     assert_eq!(request.refinement.gap_closing, 3);
                     assert_eq!(request.refinement.expansion, -2);
                     assert!(request.refinement.smooth_edges);
-                    let layer_render::RegionSource::Scene { scope: actual, .. } = &request.source else { panic!("scene source"); };
+                    assert_eq!(request.source.sources().len(), if source_command == CommandId::SelectionReference { 2 } else { 1 });
+                    let layer_render::RegionSource::Scene { scope: actual, .. } = &request.source.sources()[0] else { panic!("scene source"); };
                     assert_eq!(actual, &scope);
                     assert!(s.cancel_layer_gesture().unwrap());
                     reply(&mut s, &request);
                     s.frame(2, 2).unwrap();
                 }
             }
+            invoke(&mut s, CommandId::StopAtColors);
+            contact(&mut s, PenPhase::Down, [40., 60.]);
+            contact(&mut s, PenPhase::Up, [40., 60.]);
+            s.frame(3, 3).unwrap();
+            assert_eq!(s.renderer_mut().region_requests.last().unwrap().source.sources().len(), 1);
+            assert!(s.cancel_layer_gesture().unwrap());
             invoke(&mut s, CommandId::EncloseFill);
             assert!(s.command(CommandId::SelectionReference).selected);
         }
@@ -374,6 +386,50 @@ mod enclose_fill_checks {
             }
         }
     }
+    #[test]
+    fn reference_checklist_marks_multiple_layers_and_restores_source_and_stop_choices() {
+        for platform in Platform::ALL {
+            let mut s = session(platform);
+            let paint = s.engine.document().working.occurrence.unwrap();
+            layer(&mut s, LayerAction::NewVector);
+            let vector = s.engine.document().working.occurrence.unwrap();
+            layer(&mut s, LayerAction::New { group: true, clipped: false });
+            let group = s.engine.document().working.occurrence.unwrap();
+            invoke(&mut s, CommandId::Fill);
+            assert!(s.command(CommandId::SelectionVisible).selected);
+            assert!(!s.state.tool_actions.iter().any(|action| action.command == CommandId::StopAtColors));
+            invoke(&mut s, CommandId::SelectionReference);
+            let ToolOption::Checklist { items, .. } = s.state.tool_extra.iter().find(|option| matches!(option, ToolOption::Checklist { .. })).unwrap() else { unreachable!() };
+            assert_eq!(items.len(), 3);
+            let actions: Vec<_> = items.iter().map(|item| item.action.clone()).collect();
+            for id in [paint, vector, group] {
+                assert!(actions.contains(&UiAction::Layer { action: LayerAction::Reference { id: occurrence_token(id) } }));
+            }
+            for action in actions {
+                assert!(s.state.toolbar_edit_allowed(&action));
+                s.dispatch(UiAction::ToolbarEdit { context: s.state.toolbar_context(), action: Box::new(action) }).unwrap();
+            }
+            assert_eq!(s.engine.document().scene().references().len(), 3);
+            invoke(&mut s, CommandId::Undo);
+            assert_eq!(s.engine.document().scene().references().len(), 2);
+            invoke(&mut s, CommandId::Redo);
+            assert_eq!(s.engine.document().scene().references().len(), 3);
+            assert!(s.command(CommandId::StopAtColors).selected);
+            invoke(&mut s, CommandId::StopAtColors);
+            invoke(&mut s, CommandId::EncloseFill);
+            assert!(s.command(CommandId::SelectionReference).selected);
+            invoke(&mut s, CommandId::SelectionEditing);
+            invoke(&mut s, CommandId::Hand);
+            let mut restored = session(platform);
+            restored.restore_editing(serde_json::from_value(serde_json::to_value(s.editing_state()).unwrap()).unwrap()).unwrap();
+            invoke(&mut restored, CommandId::EncloseFill);
+            assert!(restored.command(CommandId::SelectionEditing).selected);
+            assert!(!restored.command(CommandId::StopAtColors).selected);
+            invoke(&mut restored, CommandId::Fill);
+            assert!(restored.command(CommandId::SelectionReference).selected);
+        }
+    }
+
     #[test]
     fn fill_texture_controls_share_range_reset_and_saved_strength_on_every_platform() {
         for platform in Platform::ALL {

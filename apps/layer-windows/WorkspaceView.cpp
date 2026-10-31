@@ -471,6 +471,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         workspaceUpdate=update;
         model.Insert(L"layout",data->model.GetNamedValue(L"layout"));
         data->model=model;data->state=object(model,L"state");
+        commandSearch->Apply(data->state);
         if(scopes){
             CapyScopes::Refresh(data);
             for(auto& [id,copy]:offscreen)if(copy.data){

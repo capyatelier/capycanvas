@@ -167,7 +167,7 @@ fn the_source_disc_drags_at_once_with_every_device_and_a_tap_shows_its_bar() {
     assert!([CommandId::CloneFlipVertical, CommandId::CloneResetOffset].iter().all(|&command| extras.contains(&UiAction::Invoke { command })), "Flip Vertical and Reset Offset are in More");
     let ToolOption::Choice { label, items, .. } = &bar.items[1].option else { panic!("Source is a choice") };
     assert_eq!(label.as_ref(), "Source");
-    assert_eq!(items.iter().map(|i| (i.label.as_ref(), i.selected)).collect::<Vec<_>>(), [("Reference layers", true), ("Editing layer", false)]);
+    assert_eq!(items.iter().map(|i| (i.label.as_ref(), i.selected)).collect::<Vec<_>>(), [("Reference layers", true), ("This layer", false)]);
     let [x0, y0, x1, y1] = bar.anchor.unwrap();
     let center = s.engine.clone_source().point.unwrap();
     assert!(x0 < center.x && center.x < x1 && y0 < center.y && center.y < y1, "the bar is anchored on the disc");

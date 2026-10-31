@@ -189,6 +189,23 @@ fn enclose_fill_unions_closed_islands_excludes_open_partial_and_canvas_edge_regi
     assert_eq!(r.readback_srgb_rgba8().unwrap(), before);
     assert_eq!(value(&held[0], 33, 40), 255);
     assert_eq!(value(&held[0], 112, 40), 255);
+    for corner_reference in [true, false] {
+        let mut corner_alpha = alpha.clone();
+        if corner_reference { for y in 0..4 { for x in 0..4 { corner_alpha[(y * extent[0] + x) as usize] = 1.; } } }
+        let mut references = self::document(extent, &corner_alpha);
+        let ink = placement::occurrence_id(&references);
+        let mut target = paint_document(extent, "Target flat");
+        placement::set_source(&mut target, layer_core::color::source::rgba8_source(extent, |x, y|
+            if !corner_reference && x < 4 && y < 4 { [30, 190, 80, 255] } else { [0; 4] }));
+        let (target, _) = placement::append_paint(&mut references, "Target flat", placement::paint(&target).clone());
+        frame(&mut r, &references, extent);
+        let snapshot = references.snapshot();
+        let source = RegionSource::Intersection([ink, target].into_iter()
+            .map(|leaf| RegionSource::reference(snapshot.clone(), leaf).unwrap()).collect());
+        let result = receive_request(&mut r, request(source, polygon(&points), Default::default(), 0.));
+        assert_eq!(value(&result.pixels, 33, 40), 255, "opaque corner in {} must not seed enclosure matching", if corner_reference { "reference" } else { "target" });
+        check(&result, &expected, extent);
+    }
 }
 
 #[test]
@@ -372,4 +389,133 @@ fn enclose_fill_workstation_completion_timings() {
                 r.regions.as_ref().unwrap().storage_bytes());
         }
     }
+}
+
+#[test]
+fn reference_intersection_matches_each_opaque_seed_across_classification_batches() {
+    let extent = [1153, 1025];
+    let mut document = paint_document(extent, "Red reference");
+    placement::set_source(&mut document, layer_core::color::source::rgba8_source(extent, |x, _|
+        if x < 700 { [230, 20, 40, 255] } else { [20, 20, 20, 255] }));
+    let first = placement::occurrence_id(&document);
+    let first_target = target(&document);
+    let mut second = paint_document(extent, "Green reference");
+    placement::set_source(&mut second, layer_core::color::source::rgba8_source(extent, |_, y|
+        if y < 600 { [20, 210, 50, 255] } else { [30, 40, 220, 255] }));
+    let (last, _) = placement::append_paint(&mut document, "Green reference", placement::paint(&second).clone());
+    let root = document.composition().result;
+    let stack = layer_core::authored::RecordChange::replace(&document.artwork.stacks, root,
+        Some(layer_core::authored::Stack { entries: vec![last, first] })).unwrap();
+    document.apply(layer_core::Edit::Stack(stack)).unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    frame(&mut r, &document, extent);
+    let before = r.readback_srgb_rgba8().unwrap();
+    for (source, x_bound, y_bound) in [(RegionSource::Source(first_target), 700, extent[1]),
+        (RegionSource::Composite, extent[0], 600)] {
+        let mut query = request(source, rectangle([0, 0, extent[0], extent[1]]), Default::default(), 0.);
+        query.position = [100, 100]; query.enclosure = None;
+        let result = receive_request(&mut r, query);
+        for y in (10..extent[1]-10).step_by(19) { for x in (10..extent[0]-10).step_by(17) {
+            if x.abs_diff(x_bound) > 3 && y.abs_diff(y_bound) > 3 {
+                assert_eq!(value(&result.pixels, x, y), if x < x_bound && y < y_bound { 255 } else { 0 }, "{x},{y}");
+            }
+        }}
+    }
+    document.artwork.occurrences.get_mut(first).unwrap().opacity = 0.17;
+    document.artwork.occurrences.get_mut(first).unwrap().blend = layer_core::LayerBlend::Multiply;
+    document.artwork.occurrences.get_mut(last).unwrap().opacity = 0.31;
+    document.artwork.occurrences.get_mut(last).unwrap().blend = layer_core::LayerBlend::Screen;
+    document.revision += 1;
+    let snapshot = document.snapshot();
+    let originals = [first, last].map(|h| snapshot.view().occurrence(h).unwrap().clone());
+    let sources = [first, last].into_iter().map(|h| RegionSource::reference(snapshot.clone(), h).unwrap()).collect();
+    for (h, original) in [first, last].into_iter().zip(&originals) {
+        assert_eq!(snapshot.view().occurrence(h), Some(original));
+        assert_eq!(document.scene().occurrence(h), Some(original));
+    }
+    let alpha: Vec<_> = (0..extent[0]*extent[1]).map(|i| if i%extent[0] < 700 && i/extent[0] < 600 { 0. } else { 1. }).collect();
+    let expected = expected_region(&alpha, extent, None, Some([100, 100]), 0., Default::default());
+    let mut query = request(RegionSource::Intersection(sources), rectangle([0, 0, extent[0], extent[1]]), Default::default(), 0.);
+    query.position = [100, 100]; query.enclosure = None;
+    let result = receive_request(&mut r, query);
+    for y in (10..extent[1]-10).step_by(19) { for x in (10..extent[0]-10).step_by(17) {
+        if x.abs_diff(700) > 3 && y.abs_diff(600) > 3 {
+            assert_eq!(value(&result.pixels, x, y), expected[(y*extent[0]+x) as usize], "{x},{y}");
+        }
+    }}
+    assert_eq!(r.readback_srgb_rgba8().unwrap(), before);
+    let extent = [128; 2];
+    let mut opaque = Document::new(layer_core::authored::PortableId::random(), 128, 128,
+        layer_core::DocumentNames { paint: "Lines".into(), paper: "Paper".into() });
+    placement::set_source(&mut opaque, layer_core::color::source::rgba8_source(extent, |x, y|
+        if barrier([20, 20, 108, 108], x, y) { [0, 0, 0, 255] } else { [0; 4] }));
+    let empty = paint_document(extent, "Empty target");
+    let (target, _) = placement::append_paint(&mut opaque, "Empty target", placement::paint(&empty).clone());
+    frame(&mut r, &opaque, extent);
+    let snapshot = opaque.snapshot();
+    let all = RegionSource::Scene { snapshot: snapshot.clone(), scope: layer_core::SceneScope::All };
+    for source in [RegionSource::Composite, RegionSource::Intersection(vec![all,
+        RegionSource::reference(snapshot, target).unwrap()])] {
+        let result = receive_request(&mut r, request(source, rectangle([4, 4, 124, 124]), Default::default(), 0.));
+        assert!(result.pixels.words().iter().all(|word| *word == 0), "opaque All visible layers has no transparent enclosed region");
+    }
+}
+
+#[test]
+fn reference_scene_keeps_nested_position_mask_and_clipping_without_changing_the_snapshot() {
+    let extent = [128; 2];
+    let mut document = paint_document(extent, "Clip base");
+    placement::set_source(&mut document, layer_core::color::source::rgba8_source(extent, |x, y|
+        if x < 50 && y < 100 { [20, 40, 210, 255] } else { [0; 4] }));
+    let base = placement::occurrence_id(&document);
+    let mut ink = paint_document(extent, "Reference");
+    placement::set_source(&mut ink, layer_core::color::source::rgba8_source(extent, |_, _| [230, 40, 20, 255]));
+    placement::set_mask(&mut ink, left_mask());
+    let (leaf, _) = placement::append_paint(&mut document, "Reference", placement::paint(&ink).clone());
+    let mask = placement::mask_snapshot(&ink);
+    let source = layer_core::authored::RecordChange::insert(&document.artwork.coverage, mask.source);
+    let mut owner = document.scene().occurrence(leaf).unwrap().clone();
+    let mut use_ = mask.use_; use_.source = source.handle;
+    owner.mask = Some(use_);
+    owner.attachment = layer_core::Attachment::Clip;
+    owner.offset = [7, 9]; owner.opacity = 0.2; owner.blend = layer_core::LayerBlend::Multiply;
+    let owner = layer_core::authored::RecordChange::replace(&document.artwork.occurrences, leaf, Some(owner)).unwrap();
+    let root = document.composition().result;
+    let stack = layer_core::authored::RecordChange::replace(&document.artwork.stacks, root,
+        Some(layer_core::authored::Stack { entries: vec![leaf, base] })).unwrap();
+    document.apply(layer_core::Edit::Batch(vec![layer_core::Edit::Coverage(source), layer_core::Edit::Occurrence(owner), layer_core::Edit::Stack(stack)])).unwrap();
+    document.artwork.occurrences.get_mut(base).unwrap().offset = [7, 9];
+    document.apply(document.group_layers_edit(&[leaf, base], layer_core::LayerBlend::Normal, "Translated group").unwrap()).unwrap();
+    let group = document.scene().children(None)[0];
+    document.artwork.occurrences.get_mut(group).unwrap().offset = [11, 13];
+    document.artwork.occurrences.get_mut(group).unwrap().reference = true;
+    let ancestor_mask = left_mask();
+    let source = layer_core::authored::RecordChange::insert(&document.artwork.coverage, ancestor_mask.source);
+    let mut owner = document.scene().occurrence(group).unwrap().clone();
+    let mut use_ = ancestor_mask.use_; use_.source = source.handle; use_.offset = [-30, 0];
+    owner.mask = Some(use_);
+    let owner = layer_core::authored::RecordChange::replace(&document.artwork.occurrences, group, Some(owner)).unwrap();
+    document.apply(layer_core::Edit::Batch(vec![layer_core::Edit::Coverage(source), layer_core::Edit::Occurrence(owner)])).unwrap();
+    let snapshot = document.snapshot();
+    let original = snapshot.view().occurrence(leaf).unwrap().clone();
+    let source = RegionSource::reference(snapshot.clone(), leaf).unwrap();
+    let RegionSource::Scene { snapshot: normalized, .. } = &source else { unreachable!() };
+    let adjusted = normalized.view().occurrence(leaf).unwrap();
+    assert_eq!((adjusted.opacity, adjusted.blend), (1., layer_core::LayerBlend::Normal));
+    assert_eq!((adjusted.offset, adjusted.attachment, &adjusted.mask), (original.offset, original.attachment, &original.mask));
+    assert_eq!(snapshot.view().occurrence(leaf), Some(&original));
+    assert_eq!(normalized.view().occurrence(group), snapshot.view().occurrence(group));
+    let mut renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    frame(&mut renderer, &document, extent);
+    let mut query = request(RegionSource::Intersection(vec![source]), rectangle([0, 0, 128, 128]), Default::default(), 0.);
+    query.position = [30, 40]; query.enclosure = None;
+    let result = receive_request(&mut renderer, query);
+    for y in (4u32..128).step_by(7) { for x in (4u32..128).step_by(7) {
+        if [18, 45].iter().all(|edge| x.abs_diff(*edge) > 3) && [22, 122].iter().all(|edge| y.abs_diff(*edge) > 3) {
+            assert_eq!(value(&result.pixels, x, y), if (18..45).contains(&x) && (22..122).contains(&y) { 255 } else { 0 }, "{x},{y}");
+        }
+    }}
+    document.artwork.occurrences.get_mut(group).unwrap().visible = false;
+    assert!(RegionSource::reference(document.snapshot(), leaf).is_none());
+    assert_eq!(snapshot.view().occurrence(leaf), Some(&original));
 }

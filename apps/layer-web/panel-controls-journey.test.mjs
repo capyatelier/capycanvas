@@ -9,9 +9,10 @@ import {createDrawing} from './new-drawing-fixture.mjs';
 export async function chooseToolActionGroup({call,evaluate,settle},group,command) {
   const selector=`[data-tool-action-group="${group}"]`;
   await evaluate(`window.toolGroupControl=document.querySelector(${JSON.stringify(selector)})`);
-  await evaluate(dropdownChoice(selector,command));await settle();
+  const value=await evaluate(`(()=>{const choice=layerApp.state().tool_extra.find(o=>o.Choice?.id===${JSON.stringify(group)})?.Choice;return choice?String(choice.items.findIndex(i=>i.action.command===${JSON.stringify(command)})):${JSON.stringify(command)}})()`);
+  await evaluate(dropdownChoice(selector,value));await settle();
   assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)})===window.toolGroupControl`),true,`${group} dropdown retains identity across choices`);
-  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)}).value`),command);
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)}).value`),value);
   assert.equal(await evaluate(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)}).selected`),true);
 }
 

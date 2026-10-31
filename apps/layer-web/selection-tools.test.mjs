@@ -84,8 +84,8 @@ export async function checkSelectionTools({call, evaluate, settle}) {
     for(const id of ['selection_width','selection_height']) assert.ok(await evaluate(`!!document.querySelector('[data-tool-setting=${id}]')`));
     await contact(mode('selection_fixed_size'));
     await invoke('color_select');
-    for(const id of ['tolerance','expansion','smoothing']) assert.ok(await evaluate(`!!document.querySelector('[data-tool-setting=${id}]')`));
-    assert.deepEqual(await evaluate(`document.querySelector('[data-tool-action-group="selection-source"]').menuModel().sections.flat().map(o=>o.command)`),['selection_visible','selection_editing','selection_reference']);
+    for(const id of ['tolerance','expansion']) assert.ok(await evaluate(`!!document.querySelector('[data-tool-setting=${id}]')`));
+    assert.deepEqual(await evaluate(`document.querySelector('[data-tool-action-group="selection-source"]').menuModel().sections.flat().map(o=>o.label)`),['Reference layers','All visible layers','This layer']);
     await chooseToolActionGroup({call,evaluate,settle},'selection-source','selection_visible');
     await mkdir('artifacts/selection-web',{recursive:true});
     for(const theme of ['light','dark']) {
@@ -116,7 +116,7 @@ export async function checkSelectionTools({call, evaluate, settle}) {
         await point(command==='lasso'?at(-60,50):['auto_select','color_select'].includes(command)?at(-60,-50):at(60,50),'pen','mouseReleased');
       }
       await wait('layerApp.state().layer_tools.has_selection');
-      await invoke('undo'); assert.equal(await evaluate('layerApp.state().layer_tools.has_selection'),false);
+      await invoke('undo');await wait('layerApp.app.document_park_ready()');assert.equal(await evaluate('layerApp.state().layer_tools.has_selection'),false);
       await invoke('redo'); assert.equal(await evaluate('layerApp.state().layer_tools.has_selection'),true);
     }
     await invoke('deselect');

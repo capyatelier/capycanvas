@@ -144,9 +144,9 @@ command-clone-flip-vertical = Balik Sumber secara Vertikal
 
 command-clone-reset-offset = Atur Ulang Offset Sumber
 
-command-selection-visible = Karya terlihat
+command-selection-visible = Semua lapisan terlihat
 
-command-selection-editing = Lapisan yang diedit
+command-selection-editing = Lapisan ini
 
 command-selection-reference = Lapisan acuan
 
@@ -1267,3 +1267,5 @@ command-pen-tilt = Kemiringan pena…
 command-fill-connected = Terhubung
 command-fill-everywhere = Di mana saja
 command-smooth-region-edges = Haluskan tepi
+
+command-stop-at-colors = Berhenti pada warna di lapisan ini

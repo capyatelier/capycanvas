@@ -73,8 +73,8 @@ command-clone-aligned = Aligned Source
 command-clone-flip-horizontal = Flip Source Horizontally
 command-clone-flip-vertical = Flip Source Vertically
 command-clone-reset-offset = Reset Source Offset
-command-selection-visible = Visible artwork
-command-selection-editing = Editing layer
+command-selection-visible = All visible layers
+command-selection-editing = This layer
 command-selection-reference = Reference layers
 command-move = Operation
 command-scale-rotate = Transform
@@ -687,3 +687,5 @@ command-pen-tilt = Pen tilt…
 command-fill-connected = Connected
 command-fill-everywhere = Everywhere
 command-smooth-region-edges = Smooth edges
+
+command-stop-at-colors = Stop at colours on this layer

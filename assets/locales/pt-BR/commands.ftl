@@ -73,8 +73,8 @@ command-clone-aligned = Origem alinhada
 command-clone-flip-horizontal = Inverter origem horizontalmente
 command-clone-flip-vertical = Inverter origem verticalmente
 command-clone-reset-offset = Redefinir deslocamento da origem
-command-selection-visible = Arte visível
-command-selection-editing = Camada em edição
+command-selection-visible = Todas as camadas visíveis
+command-selection-editing = Esta camada
 command-selection-reference = Camadas de referência
 command-move = Operação
 command-scale-rotate = Transformar
@@ -688,3 +688,5 @@ command-pen-tilt = Inclinação da caneta…
 command-fill-connected = Contíguo
 command-fill-everywhere = Em toda parte
 command-smooth-region-edges = Suavizar bordas
+
+command-stop-at-colors = Parar nas cores desta camada

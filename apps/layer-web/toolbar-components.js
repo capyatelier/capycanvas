@@ -13,7 +13,7 @@ export function actionField({ element, button, icon }, spec, send, { label, aria
   const check = spec.checkable && (checkbox || !spec.state.icon);
   const row = element(check ? 'label' : 'div', `toolbar-option ${check ? 'toolbar-check' : 'toolbar-action'}`); row.dataset.toolbarField = '';
   const invoke = () => {
-    if (b.getAttribute('aria-disabled') !== 'true') send({ type: 'invoke', command: spec.state.id });
+    if (b.getAttribute('aria-disabled') !== 'true') send(spec.action ?? { type: 'invoke', command: spec.state.id });
     else { if (check) b.checked = spec.state.selected; explain?.(b); }
   };
   const b = check ? element('input', 'panel-check') : button('', invoke);
@@ -39,6 +39,16 @@ export function actionField({ element, button, icon }, spec, send, { label, aria
   }
   update({ Action: spec });
   return { row, button: b, action: true, intrinsic: check, update };
+}
+
+export function checklistField(helpers, spec, send) {
+  const row=helpers.element('div','toolbar-checklist'),caption=helpers.element('h3','',spec.label);
+  row.dataset.toolbarField='';row.dataset.toolChecklist=spec.id;row.setAttribute('role','group');row.append(caption);
+  const option=item=>({action:item.action,checkable:true,state:{...item,tooltip:item.label}});
+  const fields=spec.items.map(item=>{const field=actionField(helpers,option(item),send,{checkbox:true});row.append(field.row);return field;});
+  const update=next=>{spec=next.Checklist;caption.textContent=spec.label;row.setAttribute('aria-label',spec.label);fields.forEach((field,index)=>field.update({Action:option(spec.items[index])}));};
+  update({Checklist:spec});
+  return {row,intrinsic:true,update};
 }
 
 export function choiceField({ app, element, button, icon, openPopup, closePopup }, spec, send, { labels = false } = {}) {
@@ -406,14 +416,14 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     const value = next.component;
     sliderPreferences = next.slider_style;
     copyChanged = copyKey !== copy.more_options; copyKey = copy.more_options;
-    const nextSchema = key([sliderPreferences, value.context, value.numeric && { ...fieldSemantic(value.numeric), value: 0 }, value.options.map(o => o.Gradient ? {Gradient:o.Gradient.gradient.destination} : o.Range ? {Range:{...semantic(o.Range),bounds:o.Range.bounds.map(f=>({...fieldSemantic(f),value:0}))}} : o.Numeric ? { Numeric: { ...fieldSemantic(o.Numeric), value: 0 } } : o.Choice ? { Choice: { ...semantic(o.Choice), items: o.Choice.items.map(i => ({ ...semantic(i), selected: false })) } } : { Action: { ...o.Action, state: { ...semantic(o.Action.state), selected: false, enabled: true } } })]);
+    const nextSchema = key([sliderPreferences, value.context, value.numeric && { ...fieldSemantic(value.numeric), value: 0 }, value.options.map(o => o.Gradient ? {Gradient:o.Gradient.gradient.destination} : o.Range ? {Range:{...semantic(o.Range),bounds:o.Range.bounds.map(f=>({...fieldSemantic(f),value:0}))}} : o.Numeric ? { Numeric: { ...fieldSemantic(o.Numeric), value: 0 } } : o.Checklist ? {Checklist:{...semantic(o.Checklist),items:o.Checklist.items.map(i=>({...semantic(i),selected:false,enabled:true}))}} : o.Choice ? { Choice: { ...semantic(o.Choice), items: o.Choice.items.map(i => ({ ...semantic(i), selected: false })) } } : { Action: { ...o.Action, state: { ...semantic(o.Action.state), selected: false, enabled: true } } })]);
     const sliderField = () => value.numeric || { id: tile.control.kind === 'brush_size_slider' ? 'size' : 'strength', label: next.label, numeric: app.toolbar_ui({ type: 'slider_spec', control: tile.control }), value: 0.5 };
     model = value;
     if (nextSchema !== schema) {
       closePopup(); fields.forEach(f => { f.dispose?.(); f.row.remove(); }); fields = []; schema = nextSchema;
       if (standalone) {
         fields.push(brushSlider(sliderField(), value.context));
-      } else fields = value.options.map(o => o.Gradient ? gradientButton({app,element,button,icon,dropdown,dispatch:action=>send(value.context,action)},o.Gradient,openPopup) : o.Range ? range(o.Range, value.context) : o.Numeric ? numeric(o.Numeric, value.context) : o.Choice ? choice(o.Choice, value.context) : action(o.Action, value.context));
+      } else fields = value.options.map(o => o.Gradient ? gradientButton({app,element,button,icon,dropdown,dispatch:action=>send(value.context,action)},o.Gradient,openPopup) : o.Range ? range(o.Range, value.context) : o.Numeric ? numeric(o.Numeric, value.context) : o.Checklist ? checklistField({element,button,icon},o.Checklist,action=>send(value.context,action)) : o.Choice ? choice(o.Choice, value.context) : action(o.Action, value.context));
       fields.forEach(f => root.append(f.row)); measured = '';
     }
     if (standalone) fields[0].update(sliderField());

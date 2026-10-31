@@ -505,10 +505,20 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.set_references(references)
     }
 
-    /// Wand and Fill sampling reference layers when none is marked.
     pub(super) fn notify_missing_reference(&mut self) {
-        if self.reference_below().is_some() {
-            self.offer_reference_below(MessageId::RESOURCES_REFERENCE_TOOL_UNMARKED);
+        let doc = self.engine.document();
+        let scene = doc.scene();
+        let candidate = doc.working.occurrence.and_then(|target| scene.position(target)).and_then(|index|
+            scene.order()[..index].iter().rev().chain(&scene.order()[index + 1..]).find_map(|id| {
+                let layer = scene.occurrence(*id)?;
+                (scene.visible(*id) && matches!(layer.kind(), LayerKind::Paint | LayerKind::Object)).then_some((*id, layer.name.clone()))
+            }));
+        if let Some((id, name)) = candidate {
+            let copy = NoticeCopy::Reference { message: MessageId::RESOURCES_REFERENCE_TOOL_UNMARKED, name };
+            let action = self.notice_choice(&copy, NoticeActionId::UseReference, NoticeRun::Dispatch(Box::new(UiAction::Layer {
+                action: LayerAction::Reference { id: occurrence_token(id) } })), None);
+            self.raise_notice(copy.text(self.localization()), vec![action]);
+            self.notices.copy = Some(copy);
         } else {
             self.raise_message_notice(MessageId::RESOURCES_REFERENCE_TOOL_MARK_FIRST);
         }
@@ -572,7 +582,7 @@ mod localization_tests {
             assert_eq!(current.text, s.localization().text(MessageId::RESOURCES_REFERENCE_TOOL_UNMARKED).as_ref());
             let mut args = FluentArgs::new(); args.set("name", name);
             assert_eq!(current.actions[0].label, s.localization().format(MessageId::RESOURCES_REFERENCE_USE_LAYER, &args));
-            assert!(matches!(&s.notices.actions[..], [(NoticeActionId::UseReference, NoticeRun::Dispatch(action))] if matches!(**action, UiAction::Invoke { command: CommandId::UseReferenceBelow })));
+            assert!(matches!(&s.notices.actions[..], [(NoticeActionId::UseReference, NoticeRun::Dispatch(action))] if matches!(**action, UiAction::Layer { action: LayerAction::Reference { id: token } } if token == occurrence_token(id))));
             assert_eq!(s.engine.document(), &document);
             assert_eq!(s.engine.checkpoint(), checkpoint);
         }

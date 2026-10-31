@@ -73,8 +73,8 @@ command-clone-aligned = サンプル位置のずれを維持
 command-clone-flip-horizontal = 参照元を左右反転
 command-clone-flip-vertical = 参照元を上下反転
 command-clone-reset-offset = 参照元のずれをリセット
-command-selection-visible = 表示中の作品
-command-selection-editing = 編集中のレイヤー
+command-selection-visible = すべての表示レイヤー
+command-selection-editing = このレイヤー
 command-selection-reference = 参照レイヤー
 command-move = 操作
 command-scale-rotate = 変形
@@ -683,3 +683,5 @@ command-pen-tilt = ペンの傾き…
 command-fill-connected = 隣接領域
 command-fill-everywhere = すべての領域
 command-smooth-region-edges = 縁を滑らかに
+
+command-stop-at-colors = このレイヤーの色で止める

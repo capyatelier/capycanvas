@@ -137,7 +137,7 @@ impl CanvasBarView {
     fn actions(&self) -> impl Iterator<Item = UiAction> + '_ {
         self.items.iter().chain(&self.completion).flat_map(|item| match &item.option {
             ToolOption::Action { state, .. } => vec![UiAction::Invoke { command: state.id }],
-            ToolOption::Choice { items, .. } => items.iter().map(|i| i.action.clone()).collect(),
+            ToolOption::Choice { items, .. } | ToolOption::Checklist { items, .. } => items.iter().map(|i| i.action.clone()).collect(),
             ToolOption::Gradient(_) | ToolOption::Numeric(_) | ToolOption::Range { .. } => Vec::new(),
         })
     }
@@ -1130,7 +1130,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 enabled: state.enabled,
                 ..ContextMenuItem::command(state.label.as_ref(), wrap(UiAction::Invoke { command: state.id }))
             }],
-            (ToolOption::Choice { label, items, .. }, None) => {
+            (ToolOption::Choice { label, items, .. } | ToolOption::Checklist { label, items, .. }, None) => {
                 vec![ContextMenuItem::submenu(label.as_ref(), vec![choice_items(items, &wrap)])]
             }
             (ToolOption::Gradient(_) | ToolOption::Numeric(_) | ToolOption::Range { .. }, None) => Vec::new(),

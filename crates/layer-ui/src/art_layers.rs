@@ -92,6 +92,7 @@ pub enum LayerCanvasTool {
 #[serde(rename_all = "snake_case")]
 pub enum RegionSource {
     #[default]
+    Auto,
     Visible,
     Editing,
     Reference,
@@ -1065,7 +1066,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.selection_tools.options.tool = kind;
                 }
                 if let LayerCanvasTool::EncloseFill { source } = tool {
-                    self.region_tools.enclose_source = source;
+                    self.region_tools.source[2] = source;
                 } else if let Some((fill, source, _)) = tool.region() {
                     self.region_tools.source[usize::from(fill)] = source;
                 }

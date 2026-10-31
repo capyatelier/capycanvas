@@ -135,11 +135,15 @@ selection Feather, remove both its category ID and heading text. An empty
 heading cannot retain a category boundary.
 
 The [canvas action bar](canvas-action-bar.md) presents the same `ToolOption`
-actions and choices beside the object being edited. On the Web it builds them
-with the same `actionField` and `choiceField` builders as Tool Options; a
+actions, choices and checklists beside the object being edited. On the Web it
+uses the same `actionField`, `choiceField` and `checklistField` builders as Tool Options; a
 segmented choice keeps its natural width there, and other choices open a
 dropdown. Android uses the same `ToolOptionField` and `toolOptionSize` as its
 Tool Options, with each item's short caption.
+
+`ToolOption::Checklist` publishes independent marks and actions; hosts retain its
+checkboxes when selection or labels change.
+
 Android measures worded controls by summing the native pixel widths of the text,
 icons, gaps and each padding edge, including at fractional display densities.
 

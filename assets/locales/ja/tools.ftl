@@ -47,6 +47,7 @@ tool-action-group-crop-overlay = オーバーレイ
 tool-action-group-crop-ratio = 比率
 tool-action-group-selection-mode = モード
 tool-action-group-selection-source = 参照対象
+tool-action-group-lines-from = 線の参照元
 tool-action-group-transform-interpolation = 補間
 tool-action-group-transform-mode = モード
 tool-action-group-transform-warp-grid = グリッド

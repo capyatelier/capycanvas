@@ -145,19 +145,44 @@ fn native_enclose_fill_pointer_workflow() {
             input.click(screen_point(&mapped_label(&groups, label).unwrap(), &w.window, [0.5, 0.5]));
         }
         assert!(ui_session(&w).command(CommandId::EncloseFill).selected);
-        for (index, source) in [CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference].into_iter().enumerate() {
-            let option = named::<gtk::DropDown>(&w.panel_widget(Panel::ToolSettings), "tool-action-group-selection-source");
+        for (index, source) in [CommandId::SelectionReference, CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference].into_iter().enumerate() {
+            let option = named::<gtk::DropDown>(&w.panel_widget(Panel::ToolSettings), "tool-choice-selection-source");
             histogram::scroll_to(option.upcast_ref());
             input.click(screen_point(option.upcast_ref(), &w.window, [0.5, 0.5]));
             input.key(0xff50);
-            for _ in 0..index { input.key(0xff54); }
+            for _ in 0..index % 3 { input.key(0xff54); }
             input.key(0xff0d);
+            let model = option.model().unwrap();
+            assert_eq!((0..model.n_items()).map(|i| model.item(i).unwrap().downcast::<glib::BoxedAnyObject>().unwrap().borrow::<(std::sync::Arc<str>, bool)>().0.to_string()).collect::<Vec<_>>(),
+                ["Reference layers", "All visible layers", "This layer"]);
             assert!(ui_session(&w).command(source).selected);
             assert!(ui_session(&w).command(CommandId::EncloseFill).selected,
                 "source choices preserve the Enclose variant");
         }
+        let checklist = state(&w).tool_extra.into_iter().find_map(|option| match option {
+            layer_ui::ToolOption::Checklist { id: "reference-layers", items, .. } => Some(items), _ => None,
+        }).unwrap();
+        assert!(!checklist.iter().any(|item| item.label.as_ref() == "Paper"));
+        let reference_index = checklist.iter().position(|item| item.label.as_ref() == "Reference ink").unwrap();
+        let check = named::<gtk::CheckButton>(&w.panel_widget(Panel::ToolSettings), &format!("tool-check-reference-layers-{reference_index}"));
+        histogram::scroll_to(check.upcast_ref());
+        assert!(check.is_active());
+        input.click(screen_point(check.upcast_ref(), &w.window, [0.5, 0.5])); ready(&w);
+        assert!(!ui_session(&w).engine().document().scene().occurrence(reference).unwrap().reference);
+        invoke(&w, CommandId::Undo); ready(&w);
+        assert!(ui_session(&w).engine().document().scene().occurrence(reference).unwrap().reference);
+        invoke(&w, CommandId::Redo); ready(&w);
+        assert!(!ui_session(&w).engine().document().scene().occurrence(reference).unwrap().reference);
+        invoke(&w, CommandId::Undo); ready(&w);
+        let stop = named::<gtk::CheckButton>(&w.panel_widget(Panel::ToolSettings), "tool-action-StopAtColors");
+        histogram::scroll_to(stop.upcast_ref());
+        assert!(stop.is_active() && ui_session(&w).command(CommandId::StopAtColors).selected);
+        for selected in [false, true] {
+            input.click(screen_point(stop.upcast_ref(), &w.window, [0.5, 0.5]));
+            assert_eq!(ui_session(&w).command(CommandId::StopAtColors).selected, selected);
+        }
         capture_ui(&w, &output, &format!("enclose-controls-{theme:?}.png"));
-        let source = find_named(&w.panel_widget(Panel::ToolSettings), "tool-action-group-selection-source").unwrap();
+        let source = find_named(&w.panel_widget(Panel::ToolSettings), "tool-choice-selection-source").unwrap();
         histogram::scroll_to(&source);
         capture_ui(&w, &output, &format!("enclose-source-{theme:?}.png"));
         for (id, value) in [("grain_depth", "0"), ("tolerance", "15"), ("gap_closing", "0"), ("expansion", "0")] {
@@ -231,7 +256,10 @@ fn native_enclose_fill_pointer_workflow() {
         assert_eq!(reference_now(), reference_pixels);
         invoke(&w, CommandId::Undo); ready(&w);
         input.click(screen_point(&mapped_label(&groups, "Fill").unwrap(), &w.window, [0.5, 0.5]));
-        input.click(screen_point(&mapped_label(&tools, "Reference layers").unwrap(), &w.window, [0.5, 0.5]));
+        let lines = named::<gtk::DropDown>(&w.panel_widget(Panel::ToolSettings), "tool-choice-selection-source");
+        histogram::scroll_to(lines.upcast_ref());
+        input.click(screen_point(lines.upcast_ref(), &w.window, [0.5, 0.5]));
+        input.key(0xff50); input.key(0xff0d);
         for (index, everywhere) in [(0, false), (1, true)] {
             let scope = named::<gtk::DropDown>(&w.panel_widget(Panel::ToolSettings), "tool-action-group-fill-scope");
             histogram::scroll_to(scope.upcast_ref());
@@ -251,8 +279,14 @@ fn native_enclose_fill_pointer_workflow() {
             invoke(&w, CommandId::Redo); ready(&w); assert_eq!(pixels(&raster(&w)), result);
             invoke(&w, CommandId::Undo); ready(&w);
         }
+        let mut layout = layer_ui::WorkspacePreset::Painter.layout(Platform::Gtk);
+        for zone in &mut layout.header.zones {
+            zone.retain(|entry| matches!(entry.item, HeaderItem::Capy | HeaderItem::Tool {
+                control: ToolbarControl::ToolSlot { slot: layer_ui::ToolSlotId::Fill }
+            }));
+        }
         w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
-            layout: layer_ui::WorkspacePreset::Painter.layout(Platform::Gtk), ..WorkspaceState::default()
+            layout, ..WorkspaceState::default()
         }) });
         invoke(&w, CommandId::EncloseFill); invoke(&w, CommandId::Hand); ready(&w);
         let id = state(&w).workspace.layout.header.entries().find(|entry| entry.item == HeaderItem::Tool {

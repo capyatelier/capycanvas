@@ -531,6 +531,11 @@ struct ToolbarDivider: View {
     func boxed(_ content: CGFloat, height: CGFloat) -> CGSize {
         vertical ? CGSize(width: content, height: height) : CGSize(width: content + 2 * bar.clear, height: tile.height)
     }
+    if !option["Checklist"].isNull {
+        let list = option["Checklist"], items = list["items"].array
+        return CGSize(width: max(text(list["label"].string), items.map { text($0["label"].string) + ToolCommandToggle.intrinsicSize.width + captionGap }.max() ?? 0),
+            height: CGFloat(items.count + 1) * bar.control)
+    }
     if !option["Range"].isNull { return boxed(preferences["sliders"].bool ? 280 : 100, height: 28) }
     if !option["Gradient"].isNull { return vertical ? CGSize(width: width, height: bar.control) : boxed(120, height: bar.control) }
     let choice = option["Choice"]
@@ -597,7 +602,7 @@ struct ToolOptionField: View {
     }
     var body: some View {
         if let bar, !tiled {
-            if option["Range"].isNull && option["Choice"]["columns"].uint == 0 {
+            if option["Checklist"].isNull && option["Range"].isNull && option["Choice"]["columns"].uint == 0 {
                 field.frame(height: bar.control).padding(.horizontal, bar.clear)
             } else {
                 field.padding(.horizontal, bar.clear)
@@ -605,7 +610,17 @@ struct ToolOptionField: View {
         } else { field }
     }
     @ViewBuilder private var field: some View {
-        if !option["Numeric"].isNull {
+        if !option["Checklist"].isNull {
+            let list = option["Checklist"]
+            VStack(alignment: .leading, spacing: captionGap) {
+                Text(list["label"].string).fontWeight(.bold)
+                ForEach(Array(list["items"].array.enumerated()), id: \.offset) { index, item in
+                    ToolCommandToggle(command: item) { edit(item["action"].raw, { _ in }) }
+                        .disabled(!item["enabled"].bool)
+                        .accessibilityIdentifier("\(prefix)-check-\(list["id"].string)-\(index)")
+                }
+            }
+        } else if !option["Numeric"].isNull {
             ToolbarNumberField(store: store, field: option["Numeric"], vertical: vertical,
                 labeled: labeled, style: style, preferences: preferences, edit: edit)
         } else if !option["Choice"].isNull {

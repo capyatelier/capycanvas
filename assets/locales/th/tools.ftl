@@ -47,6 +47,7 @@ tool-action-group-crop-overlay = เส้นซ้อนทับ
 tool-action-group-crop-ratio = อัตราส่วน
 tool-action-group-selection-mode = โหมด
 tool-action-group-selection-source = แหล่งที่มา
+tool-action-group-lines-from = ใช้เส้นจาก
 tool-action-group-transform-interpolation = การประมาณค่าสี
 tool-action-group-transform-mode = โหมด
 tool-action-group-transform-warp-grid = ตาราง

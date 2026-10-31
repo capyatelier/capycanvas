@@ -73,8 +73,8 @@ command-clone-aligned = Hizalı kaynak
 command-clone-flip-horizontal = Kaynağı yatay çevir
 command-clone-flip-vertical = Kaynağı dikey çevir
 command-clone-reset-offset = Kaynak ofsetini sıfırla
-command-selection-visible = Görünür çizim
-command-selection-editing = Düzenlenen katman
+command-selection-visible = Görünür tüm katmanlar
+command-selection-editing = Bu katman
 command-selection-reference = Referans katmanlar
 command-move = İşlem
 command-scale-rotate = Dönüştür
@@ -684,3 +684,5 @@ command-pen-tilt = Kalem eğimi…
 command-fill-connected = Bitişik
 command-fill-everywhere = Her yerde
 command-smooth-region-edges = Kenarları yumuşat
+
+command-stop-at-colors = Bu katmandaki renklerde dur

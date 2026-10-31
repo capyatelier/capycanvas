@@ -73,8 +73,8 @@ command-clone-aligned = 對齊取樣來源
 command-clone-flip-horizontal = 水平翻轉取樣來源
 command-clone-flip-vertical = 垂直翻轉取樣來源
 command-clone-reset-offset = 重設取樣偏移
-command-selection-visible = 可見畫作
-command-selection-editing = 正在編輯的圖層
+command-selection-visible = 所有可見圖層
+command-selection-editing = 目前圖層
 command-selection-reference = 參考圖層
 command-move = 操作
 command-scale-rotate = 變形
@@ -683,3 +683,5 @@ command-pen-tilt = 筆傾斜…
 command-fill-connected = 相鄰區域
 command-fill-everywhere = 所有區域
 command-smooth-region-edges = 平滑邊緣
+
+command-stop-at-colors = 在此圖層的顏色處停止

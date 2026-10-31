@@ -93,6 +93,7 @@ tool-action-group-crop-ratio = Rasio
 tool-action-group-selection-mode = Mode
 
 tool-action-group-selection-source = Sumber
+tool-action-group-lines-from = Garis dari
 
 tool-action-group-transform-interpolation = Interpolasi
 

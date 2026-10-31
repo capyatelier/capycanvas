@@ -73,8 +73,8 @@ command-clone-aligned = Origen alineado
 command-clone-flip-horizontal = Voltear origen horizontalmente
 command-clone-flip-vertical = Voltear origen verticalmente
 command-clone-reset-offset = Restablecer desplazamiento del origen
-command-selection-visible = Imagen visible
-command-selection-editing = Capa en edición
+command-selection-visible = Todas las capas visibles
+command-selection-editing = Esta capa
 command-selection-reference = Capas de referencia
 command-move = Operación
 command-scale-rotate = Transformar
@@ -687,3 +687,5 @@ command-pen-tilt = Inclinación del lápiz…
 command-fill-connected = Contiguo
 command-fill-everywhere = En todas partes
 command-smooth-region-edges = Suavizar bordes
+
+command-stop-at-colors = Detenerse en los colores de esta capa

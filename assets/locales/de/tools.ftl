@@ -47,6 +47,7 @@ tool-action-group-crop-overlay = Überlagerung
 tool-action-group-crop-ratio = Verhältnis
 tool-action-group-selection-mode = Modus
 tool-action-group-selection-source = Quelle
+tool-action-group-lines-from = Linien von
 tool-action-group-transform-interpolation = Interpolation
 tool-action-group-transform-mode = Modus
 tool-action-group-transform-warp-grid = Raster

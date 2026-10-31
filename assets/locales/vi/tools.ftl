@@ -47,6 +47,7 @@ tool-action-group-crop-overlay = Lớp phủ
 tool-action-group-crop-ratio = Tỷ lệ
 tool-action-group-selection-mode = Chế độ
 tool-action-group-selection-source = Nguồn
+tool-action-group-lines-from = Lấy nét từ
 tool-action-group-transform-interpolation = Nội suy
 tool-action-group-transform-mode = Chế độ
 tool-action-group-transform-warp-grid = Lưới

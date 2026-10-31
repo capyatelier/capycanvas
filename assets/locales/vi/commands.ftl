@@ -73,8 +73,8 @@ command-clone-aligned = Nguồn căn chỉnh
 command-clone-flip-horizontal = Lật nguồn ngang
 command-clone-flip-vertical = Lật nguồn dọc
 command-clone-reset-offset = Đặt lại độ lệch nguồn
-command-selection-visible = Bản vẽ hiển thị
-command-selection-editing = Lớp đang sửa
+command-selection-visible = Tất cả lớp đang hiện
+command-selection-editing = Lớp này
 command-selection-reference = Lớp tham chiếu
 command-move = Thao tác
 command-scale-rotate = Biến đổi
@@ -685,3 +685,5 @@ command-pen-tilt = Độ nghiêng bút…
 command-fill-connected = Liền kề
 command-fill-everywhere = Mọi nơi
 command-smooth-region-edges = Làm mịn biên
+
+command-stop-at-colors = Dừng ở màu trên lớp này

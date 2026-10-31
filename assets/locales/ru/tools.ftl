@@ -47,6 +47,7 @@ tool-action-group-crop-overlay = Перекрытие
 tool-action-group-crop-ratio = Пропорции
 tool-action-group-selection-mode = Режим
 tool-action-group-selection-source = Источник
+tool-action-group-lines-from = Линии из
 tool-action-group-transform-interpolation = Интерполяция
 tool-action-group-transform-mode = Режим
 tool-action-group-transform-warp-grid = Сетка

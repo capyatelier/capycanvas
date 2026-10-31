@@ -8,6 +8,11 @@ mod images;
 #[path = "filter_previews.rs"]
 mod previews;
 mod metadata;
+fn omitted_ancestor_masks(scene: SceneView<'_>, layer: OccurrenceHandle) -> impl Iterator<Item = OccurrenceHandle> {
+    let parent = matches!(scene.scope(), Some(SceneScope::Members(_))).then(|| scene.parent(layer)).flatten();
+    std::iter::successors(parent, move |id| scene.parent(*id)).take_while(move |id| !scene.includes(*id))
+        .filter(move |id| scene.mask(*id).is_some_and(|(mask, _)| mask.enabled))
+}
 pub(super) fn same_metadata(r:&WgpuRasterizer,packet:FramePacket<'_>)->bool {
     r.artwork_frame.as_ref().is_some_and(|old| {
         let scene=old.scene.view().with_scope(&old.scope);
@@ -1099,7 +1104,7 @@ impl Scene {
         tile: [u32; 2],
     ) -> Result<usize, GpuRasterError> {
         let layer = packet.scene.occurrence(index).unwrap();
-        let out = if layer.kind() == LayerKind::Group {
+        let mut out = if layer.kind() == LayerKind::Group {
             self.group(r, packet, Some(index), tile)?
         } else if let Some(color) = packet.scene.effect(index).and_then(|effect| effect.constant_color())
             .filter(|_| (self.image_window.is_none() && packet.scene.evaluation_offset64()==[0.;2]) || constant_frame_tile(packet.scene,tile,self.image_window)) {
@@ -1118,23 +1123,29 @@ impl Scene {
         };
         if let Some((mask, source)) = packet.scene.mask(index).filter(|(mask, _)| mask.enabled) {
             let m = self.mask_at(r, mask, source, packet.scene.target_offset(SourceTarget::Coverage(mask.source)), tile)?;
-            let result = self.alloc(r, wgpu::Color::TRANSPARENT);
-            self.draw(
-                r,
-                result,
-                self.pool[out].view.clone(),
-                Some(self.pool[m].view.clone()),
-                [0., 0., 256., 256.],
-                [3., 1., 0., 0.],
-                false,
-                Convert::None,
-            );
-            self.free(out);
-            self.free(m);
-            Ok(result)
-        } else {
-            Ok(out)
+            out = self.masked_image(r, out, m);
         }
+        if let Some(base) = packet.scene.clipping_base(index).filter(|base| !packet.scene.includes(*base)) {
+            let scope = SceneScope::All;
+            let scene = packet.scene.with_scope(&scope);
+            let mask = if scene.visible(base) { self.layer(r, FramePacket { scene, ..packet }, base, tile)? }
+                else { self.alloc(r, wgpu::Color::TRANSPARENT) };
+            out = self.masked_image(r, out, mask);
+        }
+        for ancestor in omitted_ancestor_masks(packet.scene, index) {
+            let (mask, source) = packet.scene.mask(ancestor).unwrap();
+            let m = self.mask_at(r, mask, source, packet.scene.target_offset(SourceTarget::Coverage(mask.source)), tile)?;
+            out = self.masked_image(r, out, m);
+        }
+        Ok(out)
+    }
+    fn masked_image(&mut self, r: &WgpuRasterizer, source: usize, mask: usize) -> usize {
+        let result = self.alloc(r, wgpu::Color::TRANSPARENT);
+        self.draw(r, result, self.pool[source].view.clone(), Some(self.pool[mask].view.clone()),
+            [0., 0., 256., 256.], [3., 1., 0., 0.], false, Convert::None);
+        self.free(source);
+        self.free(mask);
+        result
     }
     fn paint_tile(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, index: OccurrenceHandle, tile: [u32; 2]) -> Result<usize, GpuRasterError> {
         let target = packet.scene.source_target(index).unwrap_or_default();
@@ -1188,6 +1199,8 @@ impl Scene {
         output: usize,
     ) -> Result<bool, GpuRasterError> {
         let layer = packet.scene.occurrence(index).unwrap();
+        if packet.scene.clipping_base(index).is_some_and(|base| !packet.scene.includes(base))
+            || omitted_ancestor_masks(packet.scene, index).next().is_some() { return Ok(false); }
         if layer.blend == layer_core::LayerBlend::Normal
             && !layer.mask.as_ref().is_some_and(|mask| mask.enabled)
             && let Some(color) = packet.scene.effect(index).and_then(|effect| effect.constant_color())

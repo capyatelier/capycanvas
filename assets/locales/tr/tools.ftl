@@ -47,6 +47,7 @@ tool-action-group-crop-overlay = Kaplama
 tool-action-group-crop-ratio = Oran
 tool-action-group-selection-mode = Mod
 tool-action-group-selection-source = Kaynak
+tool-action-group-lines-from = Çizgi kaynağı
 tool-action-group-transform-interpolation = Enterpolasyon
 tool-action-group-transform-mode = Mod
 tool-action-group-transform-warp-grid = Izgara

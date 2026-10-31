@@ -16,7 +16,7 @@ Every host presents the bar. Bar item menus open on GTK, Web, Android, Windows, 
 | Polygon | A polygon selection or vector path is under construction | Remove Last Point │ Cancel, Finish, all icons | Bottom edge |
 | Crop | The Crop tool is active | Ratio ▾ (Free, Original, 1:1, 4:5, 2:3, 5:7, 16:9), Swap Orientation, Fit Content, Straighten │ Cancel, Apply. More adds Overlay ▸ (Thirds, Grid, Diagonal, Golden Ratio), Delete Cropped Paint Pixels and Reset | Bottom edge |
 | Guide | A guide is selected with the Ruler or Move tool and guides are shown | Delete, Snap, and Straighten for a straight guide. More adds Show guides | Beside the guide's handles |
-| Clone source | The Clone Stamp's or Healing Brush's source disc was tapped | Aligned, Source ▾ (Reference layers, Editing layer), Flip Horizontal, Set Source. More adds Flip Vertical and Reset Offset | Beside the disc |
+| Clone source | The Clone Stamp's or Healing Brush's source disc was tapped | Aligned, Source ▾ (Reference layers, This layer), Flip Horizontal, Set Source. More adds Flip Vertical and Reset Offset | Beside the disc |
 | Quick Mask | Quick Mask is on | "Quick Mask" · Invert, Fill, Clear, Refine ▾, Save as Selection Layer, all icons │ Exit | Bottom edge |
 | Selection Layer | A Selection Layer is being edited | "Editing *name*" · Load, Invert │ Return to Artwork | Bottom edge |
 | Layer mask | A layer's mask is being edited | "Editing *layer* mask" · Invert, Enable (an eye toggle), Apply Mask │ Edit Content | Bottom edge |

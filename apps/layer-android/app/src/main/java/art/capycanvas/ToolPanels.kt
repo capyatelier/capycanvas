@@ -167,10 +167,17 @@ import kotlinx.coroutines.withContext
         Column(verticalArrangement=Arrangement.spacedBy(metrics.spacing)) {
         val choices = state.array("tool_extra").objects().mapNotNull { it.optJSONObject("Choice") }
         val beside = choices.filter { it.has("beside") }.associateBy { it.getString("beside") }
+        val choiceLabelWidth = panelLabelWidth(choices.filter { !it.getBoolean("segmented") }.map { it.getString("label") })
         choices.filterNot { it.has("beside") }.forEach { choice ->
-            ToolbarChoice(choice, false, false, false, 20, host::dispatch, prefix = "tool", height = metrics.height.value)
+            if (choice.getBoolean("segmented") || choice.optBoolean("labeled")) {
+                ToolbarChoice(choice, false, false, false, 20, host::dispatch, prefix = "tool", height = metrics.height.value)
+            } else Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(metrics.spacing)) {
+                Text(choice.getString("label"), Modifier.width(choiceLabelWidth), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Box(Modifier.weight(1f)) { ToolbarChoice(choice, false, false, false, 20, host::dispatch, prefix = "tool", height = metrics.height.value) }
+            }
         }
         state.array("tool_extra").objects().mapNotNull {it.optJSONObject("Gradient")}.forEach {GradientControl(host,it)}
+        state.array("tool_extra").objects().mapNotNull {it.optJSONObject("Checklist")}.forEach {ToolChecklist(it, host::dispatch, "tool")}
         val generation = state.optLong("toolbar_context_generation")
         val fieldControl: @Composable (JSONObject, Boolean) -> Unit = { field, compact ->
             val id = field.getString("id")

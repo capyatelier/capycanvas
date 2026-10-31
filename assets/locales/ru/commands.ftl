@@ -73,8 +73,8 @@ command-clone-aligned = Совмещённый источник
 command-clone-flip-horizontal = Отразить источник по горизонтали
 command-clone-flip-vertical = Отразить источник по вертикали
 command-clone-reset-offset = Сбросить смещение источника
-command-selection-visible = Видимый рисунок
-command-selection-editing = Редактируемый слой
+command-selection-visible = Все видимые слои
+command-selection-editing = Этот слой
 command-selection-reference = Опорные слои
 command-move = Операция
 command-scale-rotate = Трансформация
@@ -690,3 +690,5 @@ command-pen-tilt = Наклон пера…
 command-fill-connected = Смежные области
 command-fill-everywhere = Везде
 command-smooth-region-edges = Сглаживать края
+
+command-stop-at-colors = Останавливаться на цветах этого слоя

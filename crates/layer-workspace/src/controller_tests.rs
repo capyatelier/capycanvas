@@ -1897,10 +1897,11 @@ fn start<S: WorkspaceStore + 'static>(
 
 #[test]
 fn obsolete_or_incomplete_editing_states_start_with_defaults_without_a_notice() {
-    for obsolete in [true, false] {
+    for version in [1, 2, 3] {
+        let obsolete = version < 3;
         let mut editing = layer_ui::EditingState::default();
+        editing.version = version;
         if obsolete {
-            editing.version = 1;
             editing.region_values.insert("smoothing".into(), 0.5);
             assert_eq!(editing.validate(), Err("Unsupported editing-state version".into()));
         }
@@ -1916,9 +1917,10 @@ fn obsolete_or_incomplete_editing_states_start_with_defaults_without_a_notice() 
         assert_started(&controller, &mut host, "invalid editing state");
         assert_eq!(notice(&host), None);
         assert!(controller.manager.editing().is_none());
-        assert_eq!(host.session.editing_state().version, 2);
+        assert_eq!(host.session.editing_state().version, 3);
         assert_eq!(host.session.editing_state().fill_scope, layer_ui::FillScope::Connected);
         assert!(host.session.editing_state().region_smooth_edges);
+        assert!(host.session.editing_state().region_stop_at_colors);
     }
 }
 

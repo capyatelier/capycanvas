@@ -2641,11 +2641,12 @@ fn vector_fill_honors_the_selected_source_on_every_platform() {
             press(&mut s, 10, &[p, p]);
             assert_eq!(s.engine.document().scene().vector_layer(vector).unwrap(), &original, "{platform:?}: source-based fills do not restyle the vector path");
             let request = s.renderer_mut().region_requests.last().unwrap();
-            let layer_render::RegionSource::Scene { scope, .. } = &request.source else { panic!("a scene source is required") };
+            let layer_render::RegionSource::Scene { scope, .. } = &request.source.sources()[0] else { panic!("a scene source is required") };
             let expected = match source {
                 crate::RegionSource::Visible => SceneScope::All,
                 crate::RegionSource::Editing => SceneScope::RawObjects(vector),
                 crate::RegionSource::Reference => SceneScope::Members(vec![reference].into()),
+                crate::RegionSource::Auto => unreachable!(),
             };
             assert_eq!(scope, &expected, "{platform:?}: {source:?}");
         }

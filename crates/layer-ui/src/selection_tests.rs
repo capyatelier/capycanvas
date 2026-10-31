@@ -598,10 +598,14 @@ mod selection_tools_checks {
     }
 
     #[test]
-    fn wand_without_a_reference_offers_the_layer_below_in_one_step() {
+    fn missing_references_offer_the_nearest_layer_above_in_one_step() {
         let mut s = session(Platform::Gtk);
         s.dispatch(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } }).unwrap();
         let top = s.engine.document().working.occurrence.unwrap();
+        s.dispatch(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } }).unwrap();
+        let ink = s.engine.document().working.occurrence.unwrap();
+        s.dispatch(UiAction::Layer { action: LayerAction::Rename { id: occurrence_token(ink), name: "Fine ink".into() } }).unwrap();
+        s.dispatch(UiAction::SelectLayer { id: occurrence_token(top) }).unwrap();
         invoke(&mut s, CommandId::AutoSelect);
         invoke(&mut s, CommandId::SelectionReference);
         send(&mut s, PenPhase::Down, [48., 72.]);
@@ -611,10 +615,10 @@ mod selection_tools_checks {
         s.pen(up);
         let change = s.frame(2, 2).unwrap();
         assert!(s.renderer_mut().region_requests.is_empty());
-        let notice = s.state.notice.clone().expect("a notice instead of a failed frame");
         assert_ne!(change.regions & regions::HOST, 0);
+        let notice = s.state.notice.clone().expect("a nearby reference offer");
         assert_eq!(notice.text, "This tool samples reference layers, and none is marked");
-        assert_eq!(notice.actions[0].label, "Use Current ink as Reference");
+        assert_eq!(notice.actions[0].label, "Use Fine ink as Reference");
         assert!(s.command(CommandId::UseReferenceBelow).enabled);
 
         assert!(s.dispatch(UiAction::Notice { id: notice.id + 1, accept: true, action: None }).is_err());
@@ -622,20 +626,14 @@ mod selection_tools_checks {
         let change = s.dispatch(UiAction::Notice { id: notice.id, accept: true, action: None }).unwrap();
         assert_ne!(change.regions & regions::HOST, 0);
         assert_eq!(s.state.notice, None);
-        assert_eq!(s.engine.document().scene().references(), [layer_core::authored::OccurrenceHandle::from_index(0)].into());
+        assert_eq!(s.engine.document().scene().references(), [ink].into());
         assert_eq!(s.engine.document().working.occurrence.unwrap(), top);
-        assert_eq!(
-            s.command_disabled_reason(CommandId::UseReferenceBelow).as_deref(),
-            Some("The layer below is already a reference")
-        );
+        assert!(s.command(CommandId::UseReferenceBelow).enabled, "retouching still offers the layer below");
         invoke(&mut s, CommandId::Undo);
         assert_eq!(s.engine.document().scene().references(), before.scene().references());
         assert!(s.engine.document().scene().occurrence(top).is_some());
-        invoke(&mut s, CommandId::Undo);
-        assert!(s.engine.document().scene().occurrence(top).is_none(), "accepting was one undo step");
         invoke(&mut s, CommandId::Redo);
-        invoke(&mut s, CommandId::Redo);
-        assert_eq!(s.engine.document().scene().references(), [layer_core::authored::OccurrenceHandle::from_index(0)].into());
+        assert_eq!(s.engine.document().scene().references(), [ink].into());
 
         click(&mut s, [48., 72.]);
         assert_eq!(s.state.notice, None);

@@ -73,8 +73,8 @@ command-clone-aligned = Sorgente allineata
 command-clone-flip-horizontal = Rifletti sorgente orizzontalmente
 command-clone-flip-vertical = Rifletti sorgente verticalmente
 command-clone-reset-offset = Azzera scostamento sorgente
-command-selection-visible = Disegno visibile
-command-selection-editing = Livello in modifica
+command-selection-visible = Tutti i livelli visibili
+command-selection-editing = Questo livello
 command-selection-reference = Livelli di riferimento
 command-move = Operazione
 command-scale-rotate = Trasforma
@@ -686,3 +686,5 @@ command-pen-tilt = Inclinazione della penna…
 command-fill-connected = Contiguo
 command-fill-everywhere = Ovunque
 command-smooth-region-edges = Smussa bordi
+
+command-stop-at-colors = Ferma sui colori di questo livello
