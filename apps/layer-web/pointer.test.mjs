@@ -8,6 +8,27 @@ import test from "node:test";
 
 const source = readFileSync(new URL("app.js", import.meta.url), "utf8");
 
+test('retiring an edge never reacquires a held workspace contact',()=>{
+  const physical=new Set(),acquisitions=[],styles=new Map();
+  const workspace={dataset:{},style:{setProperty:(key,value)=>styles.set(key,value),removeProperty:key=>styles.delete(key)},
+    hasPointerCapture:id=>physical.has(id),setPointerCapture(id){acquisitions.push(id);physical.add(id);},releasePointerCapture:id=>physical.delete(id)};
+  const held=id=>({id,held:true,waitForHold:true,start:{pointerType:'mouse'}});
+  const context={workspace,workspaceGesture:held(7),pendingEdge:{id:1,pointerId:7,cursor:null,hold:true},
+    workspaceGestureSourceObserver:{disconnect(){}},clearTabSlide(){},dropIndicator:{hidden:false},updateZen(){}};
+  runInNewContext(source.slice(source.indexOf('let workspaceCapture ='),source.indexOf('// Shared workspace_update publication:'))+
+    source.slice(source.indexOf('function endWorkspaceGesture('),source.indexOf('function edgeInput('))+'\nedgeContact=pendingEdge;',context);
+  context.workspacePointer();
+  assert.deepEqual(acquisitions,[7]);assert.equal(physical.has(7),true);assert.equal(workspace.dataset.workspaceCursor,'grab');
+  physical.delete(7);context.edgeReply({edge_retired:true});
+  assert.deepEqual(acquisitions,[7],'Retiring the edge preserves native capture loss while the held gesture is still live');
+  assert.equal(physical.has(7),false);
+  context.endWorkspaceGesture({pointerId:7},true);
+  assert.equal(workspace.dataset.workspaceCursor,undefined);assert.equal(styles.has('--workspace-cursor'),false);assert.equal(physical.size,0);
+  context.workspaceGesture=held(8);context.workspacePointer();
+  assert.deepEqual(acquisitions,[7,8]);assert.equal(physical.has(8),true);assert.equal(workspace.dataset.workspaceCursor,'grab');
+  context.endWorkspaceGesture({pointerId:8},true);assert.equal(physical.size,0);assert.equal(workspace.dataset.workspaceCursor,undefined);
+});
+
 test('button contacts clear on cancellation, removal, disabled state and pointer takeover', () => {
   const listeners = new Map(); let mutation;
   const root = {document:{documentElement:{}}, addEventListener(type, handler) { listeners.set(type, handler); },

@@ -1114,7 +1114,7 @@ function workspacePointer() {
   const previous = workspaceCapture;
   workspaceCapture = capture;
   if (previous !== capture && previous != null && workspace.hasPointerCapture(previous)) workspace.releasePointerCapture(previous);
-  if (capture != null && !workspace.hasPointerCapture(capture)) workspace.setPointerCapture(capture);
+  if (capture != null && previous !== capture && !workspace.hasPointerCapture(capture)) workspace.setPointerCapture(capture);
   const cursor = edge?.cursor ?? (drag?.started ? drag.tile || drag.action.type === "drag_workspace" ? "grabbing" : drag.cursor
     : drag?.waitForHold && drag.held && ["mouse", "pen"].includes(drag.start.pointerType) ? "grab" : null);
   if ((workspace.dataset.workspaceCursor || null) === (cursor || null)) return;
