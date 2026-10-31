@@ -72,7 +72,7 @@ export async function checkPassThrough({call,evaluate,settle}) {
     assert.deepEqual((await groups())[0],['Pass Through','Normal'],'a group\'s menu leads with Pass Through');
     await tap(await middle(row('Pass Through')),'touch');
     await wait(`!${opened}&&layerApp.state().layer_tools.editing_layer.blend_label==='Pass Through'`);
-    assert.equal(await evaluate(`document.querySelector('${control} .layer-blend-label').textContent`),'Pass Through');
+    assert.equal(await evaluate(`document.querySelector('${control} .dropdown-label').textContent`),'Pass Through');
     const [gray,same]=await peaks();
     assert.ok(Math.abs(gray-same)<=1,`the adjustment now reaches the fill below the group: ${gray} ${same}`);
     await send({type:'invoke',command:'undo'});
@@ -161,7 +161,7 @@ export async function checkPassThrough({call,evaluate,settle}) {
     await send({type:'close_settings'});
     await send({type:'layer',action:{op:'new',group:true,clipped:false}});
     await wait(`layerApp.state().layer_tools.editing_layer.blend_label==='Pass Through'`);
-    assert.equal(await evaluate(`document.querySelector('${control} .layer-blend-label').textContent`),'Pass Through','New Group passes through');
+    assert.equal(await evaluate(`document.querySelector('${control} .dropdown-label').textContent`),'Pass Through','New Group passes through');
     console.log(`PASS pass through: fixed Layer Settings labels, packaged icons, checked states, default subtitles, clipping tooltips and selected reference group icons in both themes; blend behavior and new-group preference; screenshots in ${directory}`);
   } finally {
     await send({type:'preferences',action:{type:'edit',id:'pass_through_groups',value:saved.pass}});

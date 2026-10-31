@@ -1,3 +1,4 @@
+import {dropdownChoice} from './dropdown-fixture.mjs';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 
@@ -12,7 +13,7 @@ export function histogramJourney({evaluate,settle}) {
     await visible(true);await evaluate(`layerApp.dispatch({type:'customize',action:{type:'close_expanded'}})`);await settle();
     await evaluate(`(()=>{const group=layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes('histogram'));if(group&&group.active!=='histogram')layerApp.dispatch({type:'select_panel_tab',group:group.id,panel:'histogram'});})()`);await settle();
     await poll(`!!document.querySelector('${root} [data-scope-control="source"]')`);
-    await evaluate(`(()=>{const select=document.querySelector('${root} [data-scope-control="source"]');if(select.value!=='0'){select.value='0';select.dispatchEvent(new Event('change',{bubbles:true}));}})()`);await settle();
+    if(await evaluate(`document.querySelector('${root} [data-scope-control="source"]').value!=='0'`))await evaluate(dropdownChoice(`${root} [data-scope-control="source"]`,'0'));await settle();
   };
   const exact=async()=>{
     await reveal();const identity=await owner();const tag=await evaluate('document.documentElement.lang');

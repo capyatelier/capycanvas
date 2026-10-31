@@ -1,3 +1,4 @@
+import {dropdownChoice,captureDropdowns} from './dropdown-fixture.mjs';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile,readFile} from 'node:fs/promises';
 import {placementSave} from './image-placement-motion.test.mjs';
@@ -23,7 +24,7 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
   };
   const pointer=(type,p)=>call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons:type==='mouseReleased'?0:1,clickCount:1});
   const key=async(name,code)=>{const physical=name===' '?'Space':name;await call('Input.dispatchKeyEvent',{type:'keyDown',key:name,code:physical,windowsVirtualKeyCode:code});await call('Input.dispatchKeyEvent',{type:'keyUp',key:name,code:physical,windowsVirtualKeyCode:code});await settle();};
-  const page=async id=>{await evaluate(`(()=>{const n=document.querySelector('[data-properties-page]');n.value=${JSON.stringify(id)};n.dispatchEvent(new Event('change',{bubbles:true}))})()`);await settle();assert.equal((await properties()).page,id);};
+  const page=async id=>{await evaluate(dropdownChoice('[data-properties-page]',id));await settle();assert.equal((await properties()).page,id);};
   const edit=async(key,text)=>{
     const input=`${selector(key)} .number-entry`;
     if(await evaluate(`document.querySelector(${JSON.stringify(input)}).hidden`))await click(`${selector(key)} .number-value`);else await click(input);
@@ -127,7 +128,7 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
     }
     if(colorPages) {
       const samples=[];
-      const nativeChoice=async(selector,index)=>{await evaluate(`document.querySelector(${JSON.stringify(selector)}).focus()`);await key('Home',36);for(let i=0;i<index;i++)await key('ArrowDown',40);assert.equal(await evaluate(`Number(document.querySelector(${JSON.stringify(selector)}).value)`),index);};
+      const nativeChoice=async(selector,index)=>{await evaluate(dropdownChoice(selector,index));await idle();assert.equal(await evaluate(`Number(document.querySelector(${JSON.stringify(selector)}).value)`),index);};
       const authored=async()=>authoredIdentity(await save());
       for(const width of widths) {
         await call('Emulation.setDeviceMetricsOverride',{width,height:800,deviceScaleFactor:1,mobile:false});
@@ -142,7 +143,7 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
           for(let i=0;i<pages.length;i++){await page(pages[i]);for(const [j,text] of [String((i+1)*2),'-1.25','1.5','0.5'].entries())await edit(`${pages[i]}_${inks[j]}`,text);}
           for(let i=0;i<pages.length;i++){await page(pages[i]);for(const [j,n] of [(i+1)*2,-1.25,1.5,.5].entries())assert.ok(Math.abs((await value(`${pages[i]}_${inks[j]}`)).value-n)<1e-6);}
           await page('cyans');const relative=await canvasPixel();assert.notDeepEqual(relative,original);await capture(`selective-relative-${width}-${theme}`);
-          before=await authored();await nativeChoice(`${selector('mode')} select`,1);assert.equal((await value('mode')).value,1);const absolute=await canvasPixel();assert.notDeepEqual(absolute,relative);
+          before=await authored();await nativeChoice(`${selector('mode')} .dropdown`,1);assert.equal((await value('mode')).value,1);const absolute=await canvasPixel();assert.notDeepEqual(absolute,relative);
           const after=await authored();await invoke('undo');assert.deepEqual(await authored(),before);await invoke('redo');assert.deepEqual(await authored(),after);
           await capture(`selective-absolute-${width}-${theme}`);await reopen(`selective-${width}-${theme}`);await send({type:'layer',action:{op:'delete_selected'}});
           await send({type:'effect',action:{op:'insert',effect:'channel_mixer'}});assert.deepEqual(await canvasPixel(),original);assert.deepEqual((await properties()).pages.map(p=>p.id),['red','green','blue']);
@@ -261,7 +262,7 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
           if(effect==='threshold') {
             const before=await value('threshold');await edit('threshold','0.378');await invoke('undo');assert.deepEqual(await value('threshold'),before);await invoke('redo');
             const pixel=await canvasPixel();assert.ok(pixel.every(v=>v>=250),'Threshold visibly classifies opaque artwork: '+pixel);
-            const choice=async(name,index)=>{await click(`${selector(name)} select`);await key('Home',36);for(let i=0;i<index;i++)await key('ArrowDown',40);await key('Enter',13);await idle();assert.equal((await value(name)).value,index);};
+            const choice=async(name,index)=>{await evaluate(dropdownChoice(`${selector(name)} .dropdown`,index));await idle();assert.equal((await value(name)).value,index);};
             await choice('colors',1);await choice('transparency',1);await edit('alpha_threshold','37');
             await choice('transparency',0);assert.equal(await value('alpha_threshold'),undefined);
             await invoke('undo');assert.equal((await value('alpha_threshold')).value,37);
@@ -310,7 +311,7 @@ export async function checkLookupTransport({call,evaluate,settle}) {
     for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...point,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});await settle();
   };
   const key=async(name,code)=>{for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:name,windowsVirtualKeyCode:code});await settle();};
-  const select=async index=>{await click('[data-property-resource]');await key('Home',36);for(let i=0;i<index;i++)await key('ArrowDown',40);await key('Enter',13);await idle();};
+  const select=async index=>{await evaluate(dropdownChoice('[data-property-resource]',index,'index'));await idle();};
   const originalArchive=await save(),originalSources=sourceIdentity(originalArchive);
   const lookupIndex=packageOccurrences(originalArchive).findIndex(occurrence=>{const application=occurrence.data.content.effect&&packageObject(originalArchive,occurrence.data.content.effect);return application&&application.data.builtin==='color_lookup'});assert.ok(lookupIndex>=0);
   const lookupOccurrence=packageOccurrences(originalArchive)[lookupIndex].id;
@@ -331,7 +332,7 @@ export async function checkLookupTransport({call,evaluate,settle}) {
       const changed=await pixel();await writeFile(`${directory}/lookup-selection-${index}-${width}-${theme}.json`,JSON.stringify(await evaluate('JSON.parse(JSON.stringify({properties:layerApp.state().layer_properties,host_error:layerApp.state().host_error,camera:layerApp.app.camera()},(_,v)=>typeof v==="bigint"?String(v):v))'),null,2));
       const diagnostic=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/lookup-selection-${index}-${width}-${theme}.png`,Buffer.from(diagnostic.data,'base64'));assert.equal(await evaluate('Number(layerApp.state().layer_properties.resource_selection)'),index,'Native selector commits the requested preset');assert.notDeepEqual(changed,original,'Built-in Look changes visible artwork');
       assert.equal(await evaluate(`layerApp.state().layer_properties.controls.some(c=>c.key==='color_space')`),false);
-      assert.equal(await evaluate(`document.querySelector('[data-property-resource]').selectedOptions[0].textContent.includes(String.fromCharCode(10))`),false);
+      assert.equal(await evaluate(`document.querySelector('[data-property-resource]').querySelector('.dropdown-label').textContent.includes(String.fromCharCode(10))`),false);
       const edited=await save();assert.deepEqual(sourceIdentity(edited),originalSources);
       await invoke('undo');assert.deepEqual(await pixel(),original);await invoke('redo');assert.deepEqual(await pixel(),changed);
       const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/lookup-preset-${index}-${width}-${theme}.png`,Buffer.from(shot.data,'base64'));
@@ -362,6 +363,7 @@ export async function checkLookupTransport({call,evaluate,settle}) {
     const importedPixel=await pixel();assert.notDeepEqual(importedPixel,original);
     await evaluate(`window.showOpenFilePicker=async()=>[{name:'imported.capy',getFile:async()=>new File([placementTest.saved],'imported.capy')}];`);await invoke('open_document');await idle();await invoke('fit_canvas');assert.deepEqual(await pixel(),importedPixel,'Archive owns imported resource after file picker is replaced');const reopened=await save();assert.deepEqual(packageResourceIdentity(reopened),packageResourceIdentity(imported));await selectLookup(reopened);
     const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/lookup-import-${width}-${theme}.png`,Buffer.from(shot.data,'base64'));
+    await captureDropdowns({call,evaluate,settle},'.effect-properties',directory,`lookup-${width}-${theme}`);
   }
   await evaluate(`window.showOpenFilePicker=async()=>[{name:'loaded-lookup.capy',getFile:async()=>new File([lookupFixture],'loaded-lookup.capy')}];`);await invoke('open_document');await idle();await invoke('fit_canvas');
   const expected=await save();assert.equal(packageResources(expected,'capy.lut3d/1').length,1);assert.equal(packageOccurrences(expected).filter(o=>o.data.content.effect&&packageObject(expected,o.data.content.effect).data.values?.resource?.value?.resource).length,1);

@@ -5,7 +5,7 @@ export function glassCss(color) {
   return `rgb(${color.slice(0,3).map(v=>alpha?Math.round(v*alpha)*255/alpha:0).join(' ')} / ${alpha/255})`;
 }
 
-export async function checkTextEntry(evaluate,selector,{height=34,padding=9,reference='.panel select',capture}={}) {
+export async function checkTextEntry(evaluate,selector,{height=34,padding=9,reference='.panel .dropdown:not(.layer-blend):not(#properties-add-filter)',capture}={}) {
   const settings=await evaluate('layerApp.state().settings');
   const restore=theme=>evaluate(`layerApp.dispatch({type:'restore_saved_settings',saved:${JSON.stringify(JSON.stringify({...settings,theme}))}})`);
   try {

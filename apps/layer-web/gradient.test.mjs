@@ -1,3 +1,4 @@
+import {dropdownChoice} from './dropdown-fixture.mjs';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {readPackage,packageOccurrences} from './package-fixture.test.mjs';
@@ -27,7 +28,9 @@ export async function checkGradientSurfaceContracts({evaluate,settle,selectors,p
     for(const root of [selectors.toolPanel,selectors.toolbarContext]) {
       const editors=await evaluate(`(()=>{const root=document.querySelector(${JSON.stringify(root)});return root?[...root.querySelectorAll(${JSON.stringify(selectors.editor)})].map(node=>({visible:node.getClientRects().length>0,text:node.textContent})):[]})()`);
       assert.ok(editors.some(editor=>editor.visible),'Tool panel and contextual toolbar expose the shared gradient editor');
-      for(const [,label] of control.gradient.interpolations)assert.ok(editors.some(editor=>editor.text.includes(label)),`Shared interpolation label ${label} is presented`);
+      await evaluate(`document.querySelector(${JSON.stringify(root)}).querySelector('[data-gradient-interpolation]').click()`);
+      assert.deepEqual(await evaluate(`[...document.querySelectorAll('.panel-context-menu:popover-open .menu-label')].map(node=>node.textContent)`),control.gradient.interpolations.map(([,label])=>label),'The opened interpolation menu presents the shared choices');
+      await evaluate(`document.querySelector('.panel-context-menu').hidePopover()`);
     }
     const actual=await pixels();assert.equal(rowVariance(actual),depth==='U8','Integer preview dithers across rows; float preview leaves each column unchanged');
     assert.deepEqual(await pixels(),actual,'Always-on preview dithering is deterministic');
@@ -41,12 +44,12 @@ export async function checkGradientSurfaceContracts({evaluate,settle,selectors,p
 export async function checkGradientDefinitions({call,evaluate,settle}) {
   const fixture=await scopesFixture({call,evaluate,settle});
   await checkCanvasCancellation(fixture,{call,evaluate,settle});
-  const directory=process.env.LAYER_TEST_ARTIFACTS??'/tmp/capy-gradients-web';await mkdir(directory,{recursive:true});
+  const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/ui/gradients-web';await mkdir(directory,{recursive:true});
   const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await settle();};
   const invoke=command=>send({type:'invoke',command});
   const key=async(key,code=key,windowsVirtualKeyCode)=>{for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key,code,windowsVirtualKeyCode});await settle();};
   const click=async selector=>{const p=await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});if(!n)throw Error(${JSON.stringify(selector)});n.scrollIntoView({block:'nearest'});const r=n.getBoundingClientRect();if(!r.width||!r.height)throw Error('Hidden '+${JSON.stringify(selector)});const x=r.x+r.width/2,y=r.y+r.height/2,hit=document.elementFromPoint(x,y);if(!hit||!(n===hit||n.contains(hit)))throw Error('Obstructed '+${JSON.stringify(selector)});return{x,y}})()`);for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});await settle();};
-  const select=async(selector,index)=>{await click(selector);await key('Home','Home',36);for(let i=0;i<index;i++)await key('ArrowDown','ArrowDown',40);await key('Enter','Enter',13);};
+  const select=async(selector,index)=>{await evaluate(dropdownChoice(selector,index,'index'));await settle();};
   const typeValue=async(selector,text,finish='Enter')=>{await click(selector);for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});await call('Input.insertText',{text});await key(finish,finish,finish==='Tab'?9:finish==='Escape'?27:13);};
   const capture=async name=>{const {data}=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/${name}.png`,Buffer.from(data,'base64'));};
   const phase=process.env.LAYER_GRADIENT_PHASE;
@@ -148,7 +151,7 @@ export async function checkGradientDefinitions({call,evaluate,settle}) {
       assert.ok(await evaluate(`!!document.querySelector(${JSON.stringify(editor+' .gradient-preview')})`),'Properties presents the common canvas editor');
       if(effect==='gradient_fill'){
         assert.equal(await evaluate('layerApp.state().layer_properties.controls[0].key'),'style','Fill Shape is the first shared control');
-        const bounds=await evaluate(`(()=>{const root=document.querySelector('.dock-group[data-panel=properties]'),shape=root.querySelector('[data-property-key=style] select'),editor=root.querySelector('.gradient-editor');return{shape:shape.getBoundingClientRect().toJSON(),editor:editor.getBoundingClientRect().toJSON(),visible:shape.checkVisibility()}})()`);
+        const bounds=await evaluate(`(()=>{const root=document.querySelector('.dock-group[data-panel=properties]'),shape=root.querySelector('[data-property-key=style] .dropdown'),editor=root.querySelector('.gradient-editor');return{shape:shape.getBoundingClientRect().toJSON(),editor:editor.getBoundingClientRect().toJSON(),visible:shape.checkVisibility()}})()`);
         assert.ok(bounds.visible&&bounds.shape.height>=24&&bounds.shape.bottom<=bounds.editor.top+1,'The actual Fill Shape control is visible above the gradient editor');
       }
       for(const [index,[value]] of control.gradient.interpolations.entries()) {

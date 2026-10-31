@@ -18,7 +18,7 @@ export async function checkBlendMenu({call,evaluate,settle}) {
   const wait=(expression,timeout=25000)=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+${timeout};function check(){if(${expression})resolve(true);else if(performance.now()>end)reject(Error(${JSON.stringify(expression)}));else setTimeout(check,30);}check();})`);
   const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
   const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await settle();};
-  const rect=expression=>evaluate(`(()=>{const r=(${expression}).getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height}})()`);
+  const rect=expression=>evaluate(`(()=>{const node=(${expression});node.scrollIntoView({block:'nearest'});const r=node.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height}})()`);
   const middle=async expression=>{const r=await rect(expression);return{x:r.x+r.width/2,y:r.y+r.height/2};};
   const row=label=>`[...document.querySelectorAll('${menu} button')].find(b=>b.querySelector('.menu-label')?.textContent===${JSON.stringify(label)})`;
   let touchId=140;
@@ -42,14 +42,14 @@ export async function checkBlendMenu({call,evaluate,settle}) {
       assert.deepEqual(await checked(),[before],`${kind}: the current mode is checked`);
       await tap(await middle(row(mode)),kind);
       await wait(`!${opened}&&layerApp.state().layer_tools.editing_layer.blend_label===${JSON.stringify(mode)}`);
-      assert.equal(await evaluate(`document.querySelector('${control} .layer-blend-label').textContent`),mode,`${kind}: the control shows the mode`);
+      assert.equal(await evaluate(`document.querySelector('${control} .dropdown-label').textContent`),mode,`${kind}: the control shows the mode`);
     }
     await open('mouse');
+    const beforeClose=await blend();
     await tap(await middle(`document.querySelector('${control}')`),'mouse');
     await wait(`!${opened}`);
     assert.equal(await evaluate(opened),false,'a second press closes the menu');
-    await send({type:'invoke',command:'undo'});
-    assert.equal(await blend(),'Luminosity','each choice is one undo step');
+    assert.equal(await blend(),beforeClose,'closing the menu does not choose a row');
     const capture=async(file,...boxes)=>{
       const x=Math.max(0,Math.min(...boxes.map(b=>b.x))-16),y=Math.max(0,Math.min(...boxes.map(b=>b.y))-16);
       const clip={x,y,width:Math.max(...boxes.map(b=>b.x+b.width))+16-x,height:Math.max(...boxes.map(b=>b.y+b.height))+16-y,scale:1};
@@ -65,6 +65,8 @@ export async function checkBlendMenu({call,evaluate,settle}) {
       await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
       await wait(`!${opened}`);
     }
+    await send({type:'invoke',command:'undo'});
+    assert.equal(await blend(),'Luminosity','each choice is one undo step');
   } finally {
     if(theme)await send({type:'set_theme',theme});
   }

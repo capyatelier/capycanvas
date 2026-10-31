@@ -6,7 +6,7 @@ import {liveCopy} from './localization.js';
 // DOM presentation of the shared Rust customization models. This module owns
 // widgets and animation, not catalogs, validation, selection or docking policy.
 export function createCustomization({ app, catalog, state, paintPair, workspace, panels, groups,
-  element, button, icon, numberField, panelFrame,
+  element, button, icon, dropdown, numberField, panelFrame,
   dispatch, draggable, grip, place, updateZen, editor, rasterWorker }) {
   const send = (action) => dispatch({ type: "customize", action });
   const common = liveCopy(app, 'bootstrap_view').common;
@@ -26,7 +26,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
   // popovers light-dismiss that same release as an outside click in Chromium.
   context.popover = "manual"; context.setAttribute("role", "menu"); workspace.append(context);
   const popup = element("div", "tile-popover"); popup.popover = "auto"; workspace.append(popup);
-  context.addEventListener("toggle", updateZen);
+  context.addEventListener("toggle", e=>{context.menuOwner?.setAttribute('aria-expanded',e.newState==='open');updateZen();});
   window.addEventListener("pointerdown", (e) => {
     if (context.matches(":popover-open") && !context.contains(e.target)) context.hidePopover();
   }, { capture: true });
@@ -73,7 +73,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
           if (item.sections?.some(section => section.length)) renderMenu(container, { title: item.label, sections: item.sections }, close, [...parents, model], [...path,[index,itemIndex]]);
           else {
             if (!item.keep_open) close();
-            if (item.action) dispatch(item.action); else if (item.command) menuCommand?.(item.command, item);
+            if (item.action) dispatch(item.action); else if (item.command != null) menuCommand?.(item.command, item);
             if (item.keep_open) refreshContextMenu();
           }
         });
@@ -133,6 +133,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     node.prepareMenu?.();
     const model = node.menuModel ? node.menuModel() : app.context_menu(JSON.parse(node.dataset.context));
     menuCommand = node.menuCommand ?? null;
+    context.menuOwner?.setAttribute('aria-expanded','false');
     anchor = point; context.menuOwner = node; context.menuFocus = focus;
     renderMenu(context, model, () => context.hidePopover());
     context.showPopover(); positionPopup(context);
@@ -149,8 +150,10 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     return node;
   }
   function positionPopup(node) {
-    const r = node.getBoundingClientRect(), [x, y, top] = anchor;
-    const above = top != null && y + r.height > innerHeight - 6 && top - r.height >= 6;
+    const [x,y,top]=anchor,below=innerHeight-y-6;
+    const above=top!=null&&node.scrollHeight>below&&top-6>below;
+    node.style.maxHeight=top==null?'':`${Math.max(0,above?top-6:below)}px`;
+    const r=node.getBoundingClientRect();
     node.style.left = `${Math.max(6, Math.min(x, innerWidth - r.width - 6))}px`;
     node.style.top = `${Math.max(6, Math.min(above ? top - r.height : y, innerHeight - r.height - 6))}px`;
   }
@@ -161,7 +164,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     if (e.key === "Tab") context.hidePopover();
   });
   function contextTarget(node) {
-    if (node.closest("input,select,textarea,[contenteditable=true],.scroll-thumb,[data-toolbar-field]")) return null;
+    if (node.closest("input,select,textarea,.dropdown,[contenteditable=true],.scroll-thumb,[data-toolbar-field]")) return null;
     return node.closest("[data-context]");
   }
   workspace.addEventListener("contextmenu", (e) => {
@@ -238,22 +241,14 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
       }
       case "brushes":
       case "layers": {
-        input = element("select");
-        input.addEventListener("change", () => dispatch(control === "brushes"
-          ? { type: "select_brush", id: Number(input.value) }
-          : { type: "select_layer", id: state().layers[Number(input.value)].id }));
+        input = dropdown(label,value=>dispatch(control === "brushes"
+          ? { type: "select_brush", id: Number(value) }
+          : { type: "select_layer", id: state().layers[Number(value)].id }));
         sync = () => {
           const choices = control === "brushes"
             ? catalog.brush_categories.flatMap((c) => c.brushes).map((b) => [b.id, b.label])
             : state().layers.map((l, i) => [i, l.label]);
-          const key = JSON.stringify(choices);
-          if (input.dataset.key !== key) {
-            input.dataset.key = key;
-            input.replaceChildren(...choices.map(([id, label]) => {
-              const option = element("option", "", label); option.value = id; return option;
-            }));
-          }
-          input.value = control === "brushes" ? state().brush.preset : state().layers.findIndex((l) => l.selected);
+          input.update({choices:choices.map(([value,label])=>({value,label})),value:control === "brushes" ? state().brush.preset : state().layers.findIndex((l) => l.selected),label:readLabel});
         }; row.append(input); break;
       }
       case "size_presets":
@@ -290,7 +285,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     for(const row of node.querySelectorAll("[data-control]")) row.disposeEditor?.();
   }
   function tileWidget(panel, view, tile) {
-    if (tile.component) return createToolbarComponent({ app, tile, view, element, button, icon, dispatch, draggable, target, place, panel, rasterWorker });
+    if (tile.component) return createToolbarComponent({ app, tile, view, element, button, icon, dropdown, dispatch, draggable, target, place, panel, rasterWorker });
     const root = element("div", "tile-button tool-tile"); root.dataset.tile = tile.id;
     const item = { kind: "tile", panel, tile: tile.id };
     if (tile.control.kind === "divider") {

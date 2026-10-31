@@ -17,6 +17,7 @@ import { createCommandBar } from "./command-bar.js";
 import { showGpuNotice } from "./gpu.js";
 import { createGpuDiagnostics, gpuErrorText, gpuReportDetails, suspendGpuForReport } from './gpu-diagnostics.js';
 import { createCustomization } from "./customization.js";
+import {createDropdown} from './dropdown.js';
 import { createCanvasBar } from "./canvas-bar.js";
 import { createNotice } from "./notice.js";
 import { createZoomReadout } from "./zoom-readout.js";
@@ -191,6 +192,7 @@ function button(text, action, className = "") {
   node.addEventListener("click", action);
   return node;
 }
+function dropdown(label,change) { return createDropdown({element,button,icon,openMenu:node=>customization.openMenu(node)},label,change); }
 function numberField(control, label, onChange, inline = false, valueOnly = false, panel = true) {
   const read = typeof label === "function" ? label : null;
   const number = createNumberField({ control, label:read ? read() : label, labels:next => app.numeric_labels(next), onChange, inline, valueOnly, panel, icon, resolve: request => app.number_input(request), errorCaption: reason => app.native_caption({type:"numeric_error",reason}) });
@@ -868,8 +870,8 @@ function buildPanels() {
   sizePresets = grid;
   panels.get("sizes").append(controls, grid);
   palettes.mount(panels.get("palettes"));
-  layerPanel = createLayerPanel({ app, catalog, state: () => state, panel: panels.get("layers"), element, button, icon, dispatch, applyChange, message, numberField, wake, dismissContext: () => customization.dismissContext(), openMenu: node => customization.openMenu(node), contentChanged: panelContentChanged });
-  effectPanels = createEffectPanels({app,wake,catalog,state:()=>state,panels,element,button,icon,dispatch,numberField,message,asset,openMenu:node=>customization.openMenu(node),
+  layerPanel = createLayerPanel({ app, catalog, state: () => state, panel: panels.get("layers"), element, button, icon,dropdown, dispatch, applyChange, message, numberField, wake, dismissContext: () => customization.dismissContext(), openMenu: node => customization.openMenu(node), contentChanged: panelContentChanged });
+  effectPanels = createEffectPanels({app,wake,catalog,state:()=>state,panels,element,button,icon,dropdown,dispatch,numberField,message,asset,
     contentChanged:panelContentChanged});
 }
 function contentPanel(id, splitPicker=false, readToolSet=null) {
@@ -881,11 +883,11 @@ function contentPanel(id, splitPicker=false, readToolSet=null) {
   } else if(id==="palettes") {
     const view=palettes.mount(panel);panel.refreshPanel=view.refresh;panel.disposePanel=view.dispose;
   } else if(id==="layers") {
-    const view=createLayerPanel({app,catalog,state:()=>state,panel,element,button,icon,dispatch,applyChange,message,numberField,wake,dismissContext:()=>customization.dismissContext(),openMenu:node=>customization.openMenu(node)});
+    const view=createLayerPanel({app,catalog,state:()=>state,panel,element,button,icon,dropdown,dispatch,applyChange,message,numberField,wake,dismissContext:()=>customization.dismissContext(),openMenu:node=>customization.openMenu(node)});
     panel.refreshPanel=view.refresh; panel.disposePanel=view.dispose;
   } else if(["filter_types","adjustments","properties","stats"].includes(id)) {
     const copies=new Map(["filter_types","adjustments","properties","stats"].map(name=>[name,name===id?panel:element("div","panel")]));
-    const view=createEffectPanels({app,wake,catalog,state:()=>state,panels:copies,element,button,icon,dispatch,numberField,message,asset,contentChanged:()=>{},splitPicker,openMenu:node=>customization.openMenu(node)});
+    const view=createEffectPanels({app,wake,catalog,state:()=>state,panels:copies,element,button,icon,dropdown,dispatch,numberField,message,asset,contentChanged:()=>{},splitPicker});
     panel.refreshPanel=view.refresh; panel.disposePanel=view.dispose;
   } else {
     for(const control of customization.view(id).controls.filter(c=>c.visible_in_panel)) panel.append(customization.field(control.control,control.label));
@@ -1960,14 +1962,14 @@ try {
   canvasSizeUi = createCanvasSizeUi({state:()=>state,element,button,icon,numberField,resolve:request=>app.number_input(request),dispatch});
   imageSizeUi = createImageSizeUi({state:()=>state,element,button,numberField,resolve:request=>app.number_input(request),dispatch});
   configureColorEditor({dispatch,icon,wasmModule});
-  editor = createEditorPanels({selectionUi,app,wasmModule,state:()=>state,workspace,canvas,element,button,icon,numberField,dispatch,asset,wake,applyChange,contentChanged:panelContentChanged,showContext:(node,point)=>customization.showContext(node,point)});
+  editor = createEditorPanels({selectionUi,app,wasmModule,state:()=>state,workspace,canvas,element,button,icon,dropdown,numberField,dispatch,asset,wake,applyChange,contentChanged:panelContentChanged,showContext:(node,point)=>customization.showContext(node,point)});
   palettes = createPalettes({ app, state: () => state, workspace, element, button, icon, panelFrame, applyChange, rasterWorker,
     dismissContext: () => customization?.dismissContext(), contentChanged: panelContentChanged });
   buildHeader();
   buildPanels();
   paintPairView = app.paint_pair();
   customization = createCustomization({ app, rasterWorker, catalog, state: () => state, paintPair: () => paintPairView, workspace, panels, groups,
-    element, button, icon, numberField, panelFrame,
+    element, button, icon,dropdown, numberField, panelFrame,
     dispatch, draggable, grip, place, updateZen, editor });
   workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel,tabLabel,releaseTabs});
   bubbles = createBubbles({app,workspace,element,button,icon,state:()=>state,dispatch,applyChange,wake,glassChanged:()=>glass?.queueBubbles(),customization,contentPanel,rasterWorker,asset,cancelWorkspace:()=>endWorkspaceGesture(null,true),viewport:()=>workspaceViewport,leaveCanvas:()=>cursorInput(null)});
@@ -1975,7 +1977,7 @@ try {
     project:metadata=>rasterWorker({operation:'panel-vectors',metadata,buffers:[]}),
     changed:()=>glass?.queue(),failed:error=>{workspaceLayoutFinished=workspaceLayoutRequested;clearWorkspaceTabDrop();message(error.message);}});
   glass = createGlass({app,canvas,workspace,connections:()=>workspaceChrome.connections(),vectors:()=>panelVectors.glass(),bubbles:()=>bubbles.glass(),enabled:()=>state.palette?.glass.transparency!=="off",wake});
-  documents = createDocuments({app,bootstrap,delivery,state:()=>state,canvas,canvasReady:()=>gpuReady,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas:resumeDocumentCanvas,contentChanged:panelContentChanged,refreshInputContext:()=>chromeInput({kind:"refresh"})});
+  documents = createDocuments({app,bootstrap,delivery,state:()=>state,canvas,canvasReady:()=>gpuReady,dispatch,applyChange,wake,element,button,icon,dropdown,numberField,message,gpuOperation,rasterWorker,resumeCanvas:resumeDocumentCanvas,contentChanged:panelContentChanged,refreshInputContext:()=>chromeInput({kind:"refresh"})});
   documents.mountProof(panels.get("proof"));
   const capy = button("",()=>dispatch({type:"invoke",command:"zen_mode"}),"tile-button");
   capy.id = "zen-capy"; capy.hidden = true;

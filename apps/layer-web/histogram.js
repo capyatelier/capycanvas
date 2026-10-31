@@ -50,14 +50,12 @@ export function scopeFooter({state,element,button,icon,dispatch,kind}) {
 }
 
 export function createScope(options) {
-  const {state,app,element,dispatch,waveform=false,tonal=false}=options;
+  const {state,app,element,dropdown,dispatch,waveform=false,tonal=false}=options;
   const kind=tonal?'tonal_histogram':waveform?'waveform':'histogram',copy=liveCopy(app,'catalog').native_copy;
   const root=element('div','scope-control');root.dataset.scope=kind;
   root.classList.toggle('scope-waveform',waveform);root.classList.toggle('scope-tonal',tonal);
-  const toolbar=element('div','scope-toolbar'),source=element('select'),channel=element('select');
+  const toolbar=element('div','scope-toolbar'),source=dropdown(()=>copy.sampler.source,value=>dispatch({type:'histogram',action:{type:'source',index:Number(value)}})),channel=dropdown(()=>copy.color.channel,value=>dispatch({type:'histogram',action:{type:waveform?'waveform_channel':'channel',index:Number(value)}}));
   source.dataset.scopeControl='source';channel.dataset.scopeControl='channel';
-  source.onchange=()=>dispatch({type:'histogram',action:{type:'source',index:Number(source.value)}});
-  channel.onchange=()=>dispatch({type:'histogram',action:{type:waveform?'waveform_channel':'channel',index:Number(channel.value)}});
   toolbar.append(source,channel);toolbar.hidden=tonal;
   const graph=element('div','scope-graph'),axis=element('div','scope-axis'),lower=element('span'),upper=element('span');
   const log=element('label','scope-log'),logToggle=element('input','panel-check'),logText=element('span');
@@ -66,16 +64,12 @@ export function createScope(options) {
   const plot=scopeGraph({state,element,kind,waveform}),footer=scopeFooter({...options,kind});
   axis.append(lower,upper);graph.append(plot.node,axis);root.append(toolbar,graph,log,footer.node);
   const choices=(select,labels,index)=>{
-    const key=JSON.stringify(labels);
-    if(select.dataset.schema!==key){select.dataset.schema=key;select.replaceChildren(...labels.map((label,i)=>{const option=element('option','',label);option.value=i;return option;}));}
-    select.value=index;
+    select.update({choices:labels.map((label,value)=>({value,label})),value:index});
   };
   let intrinsic;
   return {node:root,dispose:plot.dispose,refresh(){
     const view=state()[kind];if(!view)return;
     choices(source,view.sources,view.source);choices(channel,view.channels,view.channel);
-    source.title=copy.sampler.source;source.setAttribute('aria-label',source.title);
-    channel.title=copy.color.channel;channel.setAttribute('aria-label',channel.title);
     [lower.textContent,upper.textContent]=view.axis;logToggle.checked=view.logarithmic;logText.textContent=view.labels[0]??'';
     plot.refresh();footer.refresh();
     const next=JSON.stringify([view.sources,view.channels,view.axis,view.status,view.labels[0]]);

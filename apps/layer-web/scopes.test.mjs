@@ -1,3 +1,4 @@
+import {dropdownChoice} from './dropdown-fixture.mjs';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {scopesFixture} from './scopes-fixture.mjs';
@@ -19,7 +20,7 @@ export async function checkScopes({call,evaluate,settle}) {
   const point=selector=>evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});if(!n)throw Error(${JSON.stringify(selector)});n.scrollIntoView({block:'nearest'});const r=n.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
   const click=async selector=>{const p=await point(selector);for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});await settle();};
   const focus=async name=>{const active=await evaluate(`layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes(${JSON.stringify(name)}))?.active===${JSON.stringify(name)}`);if(!active)await click(targets[name].tab);if(await evaluate(`layerApp.state().customization.expanded===${JSON.stringify(name)}`))await send({type:"customize",action:{type:"close_expanded"}});await poll('layerApp.state().customization.expanded==null');await settle();};
-  const choose=async(selector,index)=>{await click(selector);for(const key of ['Home',...Array(index).fill('ArrowDown'),'Enter'])for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key,windowsVirtualKeyCode:{Home:36,ArrowDown:40,Enter:13}[key]});await settle();};
+  const choose=async(selector,index)=>{await evaluate(dropdownChoice(selector,index));await settle();};
   const bounds=async(name,floating=false)=>{
     const t=targets[name];const result=await evaluate(`(()=>{const t=${JSON.stringify(t)},root=document.querySelector(t.root),container=root.closest(${JSON.stringify(floating?targets.floatContainer:'.floating-panel, .dock-group')}),b=n=>{const r=n.getBoundingClientRect();return{x:r.x,y:r.y,right:r.right,bottom:r.bottom,width:r.width,height:r.height}};return{container:b(container),root:b(root),items:Object.fromEntries(Object.entries(t).filter(([k])=>!['root','tab'].includes(k)).map(([k,s])=>[k,b(document.querySelector(s))])),status:document.querySelector(t.status).textContent,scrollWidth:document.querySelector(t.status).scrollWidth,clientWidth:document.querySelector(t.status).clientWidth}})()`);
     for(const [key,r] of Object.entries(result.items)){assert.ok(r.width>0&&r.height>0,`${name}/${key} visible`);assert.ok(r.x>=result.container.x-1&&r.right<=result.container.right+1&&r.y>=result.container.y-1&&r.bottom<=result.container.bottom+1,`${name}/${key} inside actual container: ${JSON.stringify(result)}`);}

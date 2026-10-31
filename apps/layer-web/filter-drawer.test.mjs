@@ -1,3 +1,4 @@
+import {dropdownChoice} from './dropdown-fixture.mjs';
 import assert from 'node:assert/strict';
 import {createDrawing} from './new-drawing-fixture.mjs';
 import {mkdir,writeFile} from 'node:fs/promises';
@@ -53,7 +54,7 @@ export async function checkFilterDrawer({call,evaluate,settle}) {
   assert.equal(await evaluate('layerApp.state().customization.drawer'),undefined);
   await contact(filters);await send({type:'layer',action:{op:'select',id:2,mask:false}});await wait('Number(layerApp.state().layer_properties.layer)===2');
   await send({type:'set_color',rgba:[1,0,0,1]});await contact('.content-drawer [data-action="color-bucket"]','touch');
-  assert.equal(await evaluate('layerApp.state().layers.find(l=>Number(l.id)===2).content_icon'),'layer-fill-symbolic');
+  assert.equal(await evaluate('layerApp.state().layers.find(l=>Number(l.id)===2).content_icon'),'layer-paper-symbolic');
   assert.equal(await evaluate('layerApp.state().layers.find(l=>Number(l.id)===2).has_mask'),false);
   assert.equal(await evaluate('layerApp.state().layer_tools.controls.opacity'),true);
   for(const theme of ['light','dark']) {
@@ -61,7 +62,7 @@ export async function checkFilterDrawer({call,evaluate,settle}) {
     for(const name of ['Paper','Solid Color','Paper']) {
       await send({type:'layer',action:{op:'rename',id:2,name}});
       assert.equal(await evaluate('document.querySelector(".content-drawer .effect-properties h3").textContent'),name);
-      assert.equal(await evaluate('document.querySelector(".content-drawer .properties-layer-type").textContent'),"Solid Color");
+      assert.equal(await evaluate('document.querySelector(".content-drawer .properties-layer-type").textContent'),name==='Paper'?'':'Paper');
     }
     await capture(`paper-properties-${theme}`);
   }
@@ -109,9 +110,8 @@ export async function checkFilterDrawer({call,evaluate,settle}) {
   await send({type:'invoke',command:'undo'});await send({type:'invoke',command:'undo'});
   assert.equal(await evaluate('layerApp.state().layers.length'),2);
   console.log('PASS: swipe deletion, empty stack and undo');
-  // Pen panning must yield to a completed layer-row hold, even in an overflowing list.
   await evaluate(`document.querySelector('.content-drawer .layer-rows').style.maxHeight='60px'`);
-  const heldRow=await point(`${row(1)} .layer-name`);
+  const heldRow=await point(`${row(1)} .layer-grip`);
   await event('down',heldRow,'pen');await new Promise(r=>setTimeout(r,650));
   assert.equal(await evaluate("document.querySelector('.panel-context-menu').matches(':popover-open')"),true,'Pen hold opens the layer menu');
   await event('move',{x:heldRow.x,y:heldRow.y+16},'pen');await settle();
@@ -155,17 +155,13 @@ export async function checkFilterDrawer({call,evaluate,settle}) {
     await send({type:'set_theme',theme});
     await showProperties();
     for (const value of [1,2,0]) {
-      await contact('.effect-properties [data-property-key="color_mode"] select');
-      for (const [key,code] of [['Home',36],...Array(value).fill(['ArrowDown',40]),['Enter',13]]) {
-        for (const type of ['keyDown','keyUp']) await call('Input.dispatchKeyEvent',{type,key,code:key,windowsVirtualKeyCode:code});
-      }
-      await settle();
+      await evaluate(dropdownChoice('.effect-properties [data-property-key="color_mode"] .dropdown',value));await settle();
       await wait(`layerApp.state().layer_properties.controls.find(c=>c.key==='color_mode')?.value.value===${value}`);
     }
     assert.ok(await evaluate(`(()=>{
       const root=document.querySelector('.effect-properties'),name=root.querySelector('#properties-layer-name'),type=root.querySelector('#properties-layer-type'),add=root.querySelector('#properties-add-filter'),v=layerApp.state().layer_properties;
       const n=name.getBoundingClientRect(),t=type.getBoundingClientRect(),a=add.getBoundingClientRect();
-      return name.textContent===v.name&&type.textContent===v.layer_type&&n.bottom<=t.top&&Math.abs(t.top+t.height/2-a.top-a.height/2)<1&&a.left>=t.right&&a.height===24&&!!add.querySelector('[data-asset="chevron-down"]');
+      return name.textContent===v.name&&type.textContent===v.layer_type&&n.bottom<=t.top&&Math.abs(t.top+t.height/2-a.top-a.height/2)<1&&a.left>=t.right&&a.height===Number(layerApp.app.catalog().panel_metrics.control_height)&&!!add.querySelector('[data-asset="chevron-down"]');
     })()`),'Properties puts the layer name above its type and compact filter dropdown');
     await capture(`layer-properties-${theme}`);
     const before = await evaluate('layerApp.state().layers.length');

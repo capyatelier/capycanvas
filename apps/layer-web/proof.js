@@ -7,7 +7,7 @@ const proofWorkerUrl=new URL("./proof-worker.js",import.meta.url);
 
 // One CPU worker per editor. Termination cancels synchronous Wasm immediately
 // and releases its high-water heap. A replacement never queues behind old work.
-export function createProof({app,element,button,icon,applyChange,wake,contentChanged}) {
+export function createProof({app,element,button,icon,dropdown,applyChange,wake,contentChanged}) {
   const copy=liveCopy(app,"proof_copy"),profilesCopy=liveCopy(app,"profile_copy"),choicesCopy=liveCopy(app,"proof_choices_copy");
   let paused=false;
   let work=null,setup=null,finishPending=async()=>{},hasPending=()=>false,refreshLibrary=()=>{};
@@ -132,8 +132,8 @@ export function createProof({app,element,button,icon,applyChange,wake,contentCha
     let valueBalance=null,valueContrast=null;
     let failure=null,failedPrepare=false,printPreparing=false;const fail=(error,preparation=false)=>{failure=error;failedPrepare=preparation;bindCopy(issue,()=>failure==null?"":`${failedPrepare?copy.unavailable+"\n":""}${app.color_feature_error_copy(failure,true)}`);};const printStatus=visible=>{printPreparing=visible;bindCopy(status,()=>printPreparing?copy.preparing_print:"");};
     const send=action=>{try{applyChange(app.proof_control(action));wake();refreshPanel();}catch(e){fail(e);}};
-    const field=(root,label,node)=>{if(node.tagName==='SELECT')bindCopy(node,()=>node.selectedOptions[0]?.textContent??'','title');if(typeof label==='function')bindCopy(node,label,'ariaLabel');else node.setAttribute('aria-label',label);const row=element('label','document-size',label);row.append(node);root.append(row);return node;};
-    const select=(root,label,options,value)=>{const node=element('select');for(const[id,name]of options){const option=element('option','',name);option.value=id;node.append(option);}node.value=value;return field(root,label,node);};
+    const field=(root,label,node)=>{if(!node.classList.contains('dropdown')){if(typeof label==='function')bindCopy(node,label,'ariaLabel');else node.setAttribute('aria-label',label);}const row=element('label','document-size',label);row.append(node);root.append(row);return node;};
+    const select=(root,label,options,value,change)=>{const node=dropdown(label,change);node.update({choices:options.map(([value,label])=>({value,label})),value});return field(root,label,node);};
     const canvas=element('canvas','proof-tone-pad');canvas.width=canvas.height=256;canvas.tabIndex=0;canvas.setAttribute('role','slider');bindCopy(canvas,()=>copy.key_help,'ariaDescription');bindCopy(canvas,()=>copy.balance_contrast,"ariaLabel");sdrPage.append(canvas);
     canvas.addEventListener('contextrestored',()=>refreshPanel());
     let padContact=null,keyContact=false,activePart=0,dialSize=256,lastTouch=null,pointerStart=null,pointerMoved=false;
@@ -175,17 +175,15 @@ export function createProof({app,element,button,icon,applyChange,wake,contentCha
     });
     const reset=button(()=>copy.reset_sdr,()=>resetPart(3));reset.className='proof-dial-reset';bindCopy(reset,()=>copy.reset_sdr,"ariaLabel");reset.replaceChildren(icon('reset'));sdrPage.append(reset);
     const icons=['appearance','grain','brightness_contrast','hue_saturation'].map(name=>{const node=icon(name);node.classList.add('proof-dial-icon');sdrPage.append(node);return node;});
-    const profile=field(printPage,()=>copy.profile,element('select'));bindCopy(profile,()=>copy.profile_choice,"ariaLabel");const placeholder=element('option','',()=>profilesCopy.choose);placeholder.value='';placeholder.disabled=true;profile.append(placeholder);
-    const option=(group,p)=>{let index=p.id?profiles.findIndex(item=>item.id===p.id):-1;if(index<0)index=profiles.push(p)-1;else profiles[index]=p;const o=element('option','',()=>p.entry_copy_source?app.profile_entry_copy(p.entry_copy_source).name:app.profile_name_copy(p.name));o.value=index;group.append(o);return String(index);};
-    const documentGroup=element('optgroup');bindCopy(documentGroup,()=>profilesCopy.document,"label");profile.append(documentGroup);let documentIndex=null;
-    const documentProfile=p=>{documentGroup.replaceChildren();if(!p)return null;if(documentIndex===null)documentIndex=profiles.length;profiles[documentIndex]=p;const o=element('option','',()=>p.entry_copy_source?app.profile_entry_copy(p.entry_copy_source).name:app.profile_name_copy(p.name));o.value=documentIndex;documentGroup.append(o);return String(documentIndex);};
+    const profile=field(printPage,()=>copy.profile,dropdown(()=>copy.profile_choice,chooseProfile));
+    const documentGroup=[],saved=[],standard=[];let documentIndex=null;
+    const syncProfile=()=>profile.update({choices:[{is_heading:true,label:()=>profilesCopy.document},...documentGroup,{is_heading:true,label:()=>profilesCopy.saved},...saved,{is_heading:true,label:()=>profilesCopy.standard},...standard,{value:'add',label:()=>profilesCopy.add_profile_dialog},{value:'manage',label:()=>profilesCopy.manage}],value:selected,text:selected===''?()=>profilesCopy.choose:null,disabled:committing});
+    const option=(group,p)=>{let index=p.id?profiles.findIndex(item=>item.id===p.id):-1;if(index<0)index=profiles.push(p)-1;else profiles[index]=p;group.push({value:String(index),label:()=>p.entry_copy_source?app.profile_entry_copy(p.entry_copy_source).name:app.profile_name_copy(p.name)});return String(index);};
+    const documentProfile=p=>{documentGroup.length=0;if(!p)return null;if(documentIndex===null)documentIndex=profiles.length;profiles[documentIndex]=p;documentGroup.push({value:String(documentIndex),label:()=>p.entry_copy_source?app.profile_entry_copy(p.entry_copy_source).name:app.profile_name_copy(p.name)});return String(documentIndex);};
     if(model.print_settings.profile)selected=documentProfile(model.print_settings.profile);
-    const saved=element('optgroup');bindCopy(saved,()=>profilesCopy.saved,"label");profile.append(saved);
-    const standard=element('optgroup');bindCopy(standard,()=>profilesCopy.standard,"label");profile.append(standard);
-    for(const p of model.profiles)option(standard,p);
-    for(const[id,label]of[['add',()=>profilesCopy.add_profile_dialog],['manage',()=>profilesCopy.manage]]){const o=element('option','',label);o.value=id;profile.append(o);}profile.value=selected;
-    const simulation=select(printPage,()=>copy.simulation,model.simulations.map(c=>[c.value,()=>choicesCopy.simulations.find(value=>value.value===c.value).label]),printSettings.simulation);
-    const intent=select(printPage,()=>copy.intent,model.intents.map(c=>[c.value,()=>choicesCopy.intents.find(value=>value.value===c.value).label]),printSettings.intent);
+    for(const p of model.profiles)option(standard,p);syncProfile();
+    const simulation=select(printPage,()=>copy.simulation,model.simulations.map(c=>[c.value,()=>choicesCopy.simulations.find(value=>value.value===c.value).label]),printSettings.simulation,()=>schedule());
+    const intent=select(printPage,()=>copy.intent,model.intents.map(c=>[c.value,()=>choicesCopy.intents.find(value=>value.value===c.value).label]),printSettings.intent,()=>schedule());
     const bpc=field(printPage,()=>copy.black_point_compensation,element('input'));bpc.type='checkbox';bpc.className='panel-check';bpc.checked=printSettings.bpc;bpc.disabled=intent.value==='AbsoluteColorimetric';
     const gamut=field(printPage,()=>copy.gamut_warning,element('input'));gamut.type='checkbox';gamut.className='panel-check';gamut.onchange=()=>applyChange(app.dispatch({type:'invoke',command:'gamut_warning'}));
     let serial=0,preparing=null,lastMode=model.mode,shownMode=null;
@@ -214,13 +212,13 @@ export function createProof({app,element,button,icon,applyChange,wake,contentCha
     hasPending=()=>!!(pendingTimer||preparing);
     finishPending=async()=>{if(pendingTimer){clearTimeout(pendingTimer);pendingTimer=null;startPrepare();}if(preparing)await preparing;if(app.proof_panel_copy().mode==='print'&&failure)throw failure;};
     const schedule=()=>{if(committing)return;clearTimeout(pendingTimer);cancel();bpc.disabled=intent.value==='AbsoluteColorimetric';if(bpc.disabled)bpc.checked=false;pendingTimer=setTimeout(startPrepare,180);};
-    profile.onchange=async()=>{const value=profile.value;if(!['add','manage'].includes(value)){selected=value;schedule();return;}profile.value=selected;try{const p=value==='add'?await importProfile(app,element):await chooseProfileLibrary({app,element,button,manage:true});if(panel!==owner)return;if(p){selected=option(saved,p);profile.value=selected;schedule();}}catch(e){fail(e);}};
-    intent.onchange=bpc.onchange=simulation.onchange=schedule;
+    async function chooseProfile(value){if(!['add','manage'].includes(value)){selected=value;syncProfile();schedule();return;}syncProfile();try{const p=value==='add'?await importProfile(app,element):await chooseProfileLibrary({app,element,button,manage:true});if(panel!==owner)return;if(p){selected=option(saved,p);syncProfile();schedule();}}catch(e){fail(e);}}
+    bpc.onchange=schedule;
     mode.onchange=()=>{if(committing)return;const next=mode.value;cancelContacts();serial++;clearTimeout(pendingTimer);pendingTimer=null;cancel();mode.value=next;send({type:'mode',mode:mode.value});if(mode.value==='print'&&selected!=='')schedule();};
     function restorePrint(form){
       recipe=structuredClone(form.recipe);
-      const current=documentProfile(form.print_settings.profile);selected=current??'';profile.value=selected;
-      const saved=form.print_settings;intent.value=saved.intent;bpc.checked=saved.bpc;bpc.disabled=intent.value==='AbsoluteColorimetric';simulation.value=saved.simulation;
+      const current=documentProfile(form.print_settings.profile);selected=current??'';syncProfile();
+      const saved=form.print_settings;intent.update({value:saved.intent});bpc.checked=saved.bpc;bpc.disabled=intent.value==='AbsoluteColorimetric';simulation.update({value:saved.simulation});
     }
     refreshPanel=()=>{
       if(!panel)return;const mapped=panel.isConnected&&panel.getBoundingClientRect().width>0;
@@ -253,7 +251,7 @@ export function createProof({app,element,button,icon,applyChange,wake,contentCha
     if(sdr)send({type:'mode',mode:'sdr'});refreshPanel();
     refreshLibrary=()=>app.profile_library('list').then(entries=>{
       if(panel!==owner)return;
-      saved.replaceChildren();for(const p of entries)if(!p.issue&&p.visible!==false)option(saved,p);profile.value=selected;
+      saved.length=0;for(const p of entries)if(!p.issue&&p.visible!==false)option(saved,p);syncProfile();
     }).catch(e=>{if(panel===owner)fail(e);});
     profile.addEventListener('focus',()=>refreshLibrary());refreshLibrary();
   }

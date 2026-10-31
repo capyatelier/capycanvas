@@ -91,7 +91,7 @@ export function choiceField({ app, element, button, icon, openPopup, closePopup 
 
 // Retained DOM controls. Rust owns the field schema, edit context, numeric math,
 // and fitting; this adapter reports native font/control measurements.
-export function createToolbarComponent({ app, tile, view, element, button, icon, dispatch, draggable, target, place, panel, rasterWorker }) {
+export function createToolbarComponent({ app, tile, view, element, button, icon, dropdown, dispatch, draggable, target, place, panel, rasterWorker }) {
   const root = element('div', 'tile-button tool-tile toolbar-component');
   root.dataset.tile = tile.id; root.dataset.toolbarComponent = tile.control.kind;
   const item = { kind: 'tile', panel, tile: tile.id };
@@ -413,7 +413,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
       closePopup(); fields.forEach(f => { f.dispose?.(); f.row.remove(); }); fields = []; schema = nextSchema;
       if (standalone) {
         fields.push(brushSlider(sliderField(), value.context));
-      } else fields = value.options.map(o => o.Gradient ? gradientButton({app,element,button,icon,dispatch:action=>send(value.context,action)},o.Gradient,openPopup) : o.Range ? range(o.Range, value.context) : o.Numeric ? numeric(o.Numeric, value.context) : o.Choice ? choice(o.Choice, value.context) : action(o.Action, value.context));
+      } else fields = value.options.map(o => o.Gradient ? gradientButton({app,element,button,icon,dropdown,dispatch:action=>send(value.context,action)},o.Gradient,openPopup) : o.Range ? range(o.Range, value.context) : o.Numeric ? numeric(o.Numeric, value.context) : o.Choice ? choice(o.Choice, value.context) : action(o.Action, value.context));
       fields.forEach(f => root.append(f.row)); measured = '';
     }
     if (standalone) fields[0].update(sliderField());

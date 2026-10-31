@@ -1,3 +1,4 @@
+import {dropdownChoice} from './dropdown-fixture.mjs';
 import {histogramJourney} from './histogram-journey.mjs';
 import {createDrawing} from './new-drawing-fixture.mjs';
 import assert from "node:assert/strict";
@@ -268,7 +269,7 @@ export async function checkCurves({call,evaluate,settle}) {
         let view=await properties();
         assert.ok(view.pages.length>=4,'Curves exposes shared channel pages');
         const page=view.pages.at(-1).id;
-        await evaluate(`(()=>{const n=document.querySelector('[data-properties-page]');n.value=${JSON.stringify(page)};n.dispatchEvent(new Event('change',{bubbles:true}))})()`);await settle();
+        await evaluate(dropdownChoice('[data-properties-page]',page));await settle();
         assert.equal((await properties()).page,page);
         view=await properties();const control=view.controls.find(c=>c.curve);
         const empty=curves(view);
@@ -402,10 +403,10 @@ export async function checkCurves({call,evaluate,settle}) {
     await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});await settle();
     assert.deepEqual(curves(await properties()),exactTiny,'Unchanged tiny HDR text does not quantize stored knot');
     console.log('Curves: HDR numeric cancel passed');
-    const domain='[data-property-key="domain"] select';
+    const domain='[data-property-key="domain"] .dropdown';
     await wait(`document.querySelector(${JSON.stringify(domain)})`);
     for(const choice of ['0','1']) {
-      await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(domain)});n.value=${JSON.stringify(choice)};n.dispatchEvent(new Event('change',{bubbles:true}))})()`);await settle();
+      await evaluate(dropdownChoice(domain,choice));await settle();
       assert.equal((await properties()).controls.find(c=>c.curve).curve.domain.kind,choice==='0'?'encoded':'log_hdr','Native domain choice forwards shared policy');
       assert.deepEqual(curves(await properties()),exactTiny,'Changing display domain preserves curve graph knots');
     }

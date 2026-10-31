@@ -9,7 +9,7 @@ import { createRangeControl } from './range-control.js';
 import { actionField, choiceField } from './toolbar-components.js';
 import {gradientEditor} from './gradient.js';
 // DOM widgets for shared editor models. Rust owns tool/color/geometry policy.
-export function createEditorPanels({ selectionUi, app, wasmModule, state, element, button, icon, numberField, dispatch, asset, wake, applyChange, contentChanged, showContext }) {
+export function createEditorPanels({ selectionUi, app, wasmModule, state, element, button, icon, dropdown, numberField, dispatch, asset, wake, applyChange, contentChanged, showContext }) {
   const catalog=liveCopy(app,"catalog"),copy=catalog.native_copy;
   const updates = new Map(), navigators = new Map(), pendingPaints = new Set();
   let positioning = 0, nextNavigator = 1;
@@ -25,7 +25,7 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
     else if (kind === "color_wheel") refresh = colorWheel(root);
     else if (kind === "navigator") refresh = navigatorPanel(root);
     else if (["histogram","waveform"].includes(kind)) {
-      const scope=createScope({state,app,element,button,icon,dispatch,waveform:kind==="waveform",contentChanged:()=>contentChanged(kind)});
+      const scope=createScope({state,app,element,button,icon,dropdown,dispatch,waveform:kind==="waveform",contentChanged:()=>contentChanged(kind)});
       root.append(scope.node);root.disposeSettings=scope.dispose;refresh=scope.refresh;
     }
     else return null;
@@ -88,10 +88,8 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
         if(key!==next){
           key=next;root.disposeSettings();range=null;numbers=[];root.replaceChildren();
           const choice=(id,label,values,select)=>{
-            const row=element('label','picker-setting'),input=element('select');row.append(element('span','',label),input);
-            bindCopy(input,label,'ariaLabel');input.dataset.pickerSetting=id;
-            for(const [value,title] of values){const option=element('option','',title);option.value=value;input.append(option);}
-            input.onchange=()=>select(input.value);root.append(row);return input;
+            const row=element('label','picker-setting'),input=dropdown(label,select);row.append(element('span','',label),input);
+            input.dataset.pickerSetting=id;input.update({choices:values.map(([value,label])=>({value,label}))});root.append(row);return input;
           };
           sampler={
             source:choice('source',()=>copy.sampler.source,(picker.can_sample_layer?[false,true]:[false]).map(value=>[value,()=>value?copy.sampler.selected_layer:copy.sampler.visible_color]),
@@ -101,12 +99,12 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
           };
           contentChanged('tool_settings');
         }
-        sampler.source.value=String(picker.layer);sampler.size.value=String(picker.sample_width);return;
+        sampler.source.update({value:picker.layer});sampler.size.update({value:picker.sample_width});return;
       }
       const next = JSON.stringify([owner,s.tool_settings.map(f=>[f.id,f.numeric,f.group_id]),s.tool_actions.map(a=>[a.command,a.checkable]),s.tool_extra.map(o=>o.Choice?[o.Choice.id,o.Choice.items.map(i=>[i.icon,i.action])]:["gradient",o.Gradient.gradient.destination])],(k,v)=>k==='endpoint_labels'?undefined:typeof v==='bigint'?String(v):v);
       if (next !== key) {
         const previousBody=root.querySelector('.tool-settings-body'),focused=document.activeElement;
-        const retainedChoice=previousBody?.contains(focused)&&focused.matches('select[data-tool-action-group]')?focused:null;
+        const retainedChoice=previousBody?.contains(focused)&&focused.matches('[data-tool-action-group]')?focused:null;
         const retainedRows=new Map();
         key = next; root.disposeSettings(); range=null;
         for(const child of [...root.children])if(child!==previousBody)child.remove();
@@ -125,7 +123,7 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
         if(!previousBody)root.append(body);
         const beside=new Map();let grouped;
         for (const option of s.tool_extra) {
-          if(option.Gradient){gradient=gradientEditor({app,element,button,icon,dispatch});body.append(gradient.node);continue;}
+          if(option.Gradient){gradient=gradientEditor({app,element,button,icon,dropdown,dispatch});body.append(gradient.node);continue;}
           const spec=option.Choice;
           const field=choiceField({app,element,button,icon},spec,dispatch),bar=field.row;
           bar.dataset.toolChoiceBar=spec.id;
@@ -159,12 +157,10 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
           if(spec.group){
             if(groups.has(spec.group))continue;groups.add(spec.group);
             const group=catalog.tool_action_groups.find(g=>g.id===spec.group),row=element('label','tool-action-choice');
-            const commands=s.tool_actions.filter(a=>a.group===spec.group).map(a=>a.command);
-            const retained=retainedChoice?.dataset.toolActionGroup===spec.group&&JSON.stringify([...retainedChoice.options].map(o=>o.value))===JSON.stringify(commands);
-            const input=retained?retainedChoice:element('select'),caption=retained?retainedChoice.parentElement.querySelector('span'):element('span');
+            const retained=retainedChoice?.dataset.toolActionGroup===spec.group;
+            const input=retained?retainedChoice:dropdown('',command=>dispatch({type:'invoke',command})),caption=retained?retainedChoice.parentElement.querySelector('span'):element('span');
             if(retained)retainedRows.set(row,retainedChoice.parentElement);else row.append(caption,input);
-            input.dataset.toolActionGroup=spec.group;input.onchange=()=>dispatch({type:'invoke',command:input.value});
-            if(!retained)for(const command of commands){const option=element('option');option.value=command;option.dataset.toolAction=command;input.append(option);}
+            input.dataset.toolActionGroup=spec.group;
             body.append(row);actionGroups.push({id:group.id,input,caption});continue;
           }
           const command=s.commands.find(c=>c.id===spec.command);
@@ -192,9 +188,8 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
       for(const [id,field] of choices)field.update(s.tool_extra.find(o=>o.Choice?.id===id));
       if(gradient)gradient.update(s.tool_extra.find(o=>o.Gradient).Gradient);
       for(const {id,input,caption} of actionGroups){
-        const group=catalog.tool_action_groups.find(g=>g.id===id);caption.textContent=group.label;input.setAttribute('aria-label',group.label);
-        for(const option of input.options){const c=s.commands.find(c=>c.id===option.value);option.textContent=c.label;option.disabled=!c.enabled;if(c.selected)input.value=c.id;}
-        input.disabled=[...input.options].every(o=>o.disabled);
+        const group=catalog.tool_action_groups.find(g=>g.id===id),commands=s.tool_actions.filter(a=>a.group===id).map(a=>s.commands.find(c=>c.id===a.command));caption.textContent=group.label;
+        input.update({label:group.label,choices:commands.map(c=>({value:c.id,label:c.label,enabled:c.enabled})),value:commands.find(c=>c.selected)?.id??commands[0]?.id,disabled:commands.every(c=>!c.enabled)});
       }
       for (const [spec,node,field] of actions) {
         const c=s.commands.find(c=>c.id===spec.command);

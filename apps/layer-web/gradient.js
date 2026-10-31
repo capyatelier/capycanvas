@@ -24,12 +24,12 @@ export function gradientPreview({app,element}) {
   return {node:canvas,update(value){gradient=value;schedule();},dispose(){resize.disconnect();cancelAnimationFrame(frame);}};
 }
 
-export function gradientEditor({app,element,button,icon,dispatch}) {
+export function gradientEditor({app,element,button,icon,dropdown,dispatch}) {
   const copy=liveCopy(app,'catalog').native_copy.color;
   const node=element('div','gradient-editor'),top=element('div','gradient-controls'),strip=element('div','gradient-strip'),bar=element('div','gradient-ramp'),stopsRow=element('div','gradient-stops'),bottom=element('div','gradient-controls');
-  const interpolation=element('select');interpolation.dataset.gradientInterpolation='';
-  const preview=gradientPreview({app,element});bar.append(preview.node);strip.append(bar,stopsRow);strip.tabIndex=0;strip.style.touchAction='none';
   let control,ownerKey,selected=0,disabled=false,contact,held,numericOwner,disposed=false;
+  const interpolation=dropdown(()=>control?.gradient.interpolation_label??'',value=>send({kind:'interpolation',value}));interpolation.dataset.gradientInterpolation='';
+  const preview=gradientPreview({app,element});bar.append(preview.node);strip.append(bar,stopsRow);strip.tabIndex=0;strip.style.touchAction='none';
   const target=()=>control.gradient.destination;
   const stops=()=>control.value.value.stops;
   const send=(edit,phase,owner=target())=>{const action={op:'gradient',target:owner,edit};dispatch({type:'effect',action:phase?{op:'gesture',phase,action}:action});};
@@ -51,7 +51,6 @@ export function gradientEditor({app,element,button,icon,dispatch}) {
     onChange:value=>send({kind:'position',index:numericOwner?.index??selected,operation:{type:'value',value}},numericOwner?'move':null,numericOwner?.target??target())});
   bindCopy(position,()=>copy.position,'title');position.dataset.gradientPosition='';
   position.onEditPhase=phase=>{if(phase==='down')numericOwner={target:target(),index:selected};const owner=numericOwner;if(owner)send({kind:'position',index:owner.index,operation:{type:'step',steps:0}},phase,owner.target);if(phase==='up'||phase==='cancel')numericOwner=null;};
-  interpolation.onchange=()=>send({kind:'interpolation',value:interpolation.value});
   top.append(interpolation,reverse,reset);bottom.append(position,remove,color.node,bucket);node.append(top,strip,bottom);
   const buttons=[];
   function update(next) {
@@ -61,8 +60,7 @@ export function gradientEditor({app,element,button,icon,dispatch}) {
     control=next;selected=Math.min(selected,stops().length-1);
     position.relabel(copy.position);
     const modes=control.gradient.interpolations;
-    if(key([...interpolation.options].map(o=>[o.value,o.textContent]))!==key(modes))interpolation.replaceChildren(...modes.map(([value,label])=>{const o=element('option','',label);o.value=value;return o;}));
-    interpolation.value=control.value.value.interpolation;interpolation.title=control.gradient.interpolation_label;interpolation.setAttribute('aria-label',interpolation.title);
+    interpolation.update({choices:modes.map(([value,label])=>({value,label})),value:control.value.value.interpolation,disabled});
     while(buttons.length>stops().length)buttons.pop().remove();
     while(buttons.length<stops().length){const i=buttons.length,b=button('',()=>select(i));b.dataset.gradientStop=String(i);buttons.push(b);stopsRow.append(b);}
     for(const [i,stop] of stops().entries()){const b=buttons[i];b.style.left=`${stop.position*100}%`;b.classList.toggle('selected',i===selected);b.disabled=disabled;b.setAttribute('aria-label',`${copy.color} ${i+1}`);b.setAttribute('aria-pressed',i===selected);}

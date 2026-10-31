@@ -1,3 +1,4 @@
+import {dropdownChoice} from './dropdown-fixture.mjs';
 import {histogramJourney} from './histogram-journey.mjs';
 import {packageManifest,packageOutput,packageResources,readPackage,resourceIdentity} from './package-fixture.test.mjs';
 import assert from 'node:assert/strict';
@@ -18,10 +19,10 @@ export async function checkProof({call,evaluate,settle}, {profileUrl='/pkg/proof
     await evaluate(`(()=>{const b=[...document.querySelectorAll(':is(dialog[open],.proof-panel) button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b||b.disabled)throw Error('Missing enabled button '+${JSON.stringify(label)});b.click();})()`);
   };
   const invoke=async command=>{await wait(`!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);if(command==='export_document')console.log('Proof export pre-dispatch',await evaluate(`({enabled:layerApp.state().commands.find(c=>c.id==='export_document').enabled,documentsBusy:layerApp.documents.busy(),fileBusy:layerApp.state().document_file.busy,mode:layerApp.app.proof_form().mode})`));await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);if(command==='export_document')console.log('Proof export dispatched',await evaluate(`({documentsBusy:layerApp.documents.busy(),fileBusy:layerApp.state().document_file.busy,modal:!!document.querySelector('dialog:modal')})`));};
-  const set=async(label,value)=>evaluate(`(()=>{const s=document.querySelector(':is(dialog[open],.proof-panel) [aria-label="'+${JSON.stringify(label)}+'"]');s.value=${JSON.stringify(value)};s.dispatchEvent(new Event('change'));})()`);
-  const setup=async()=>{await invoke('soft_proof_setup');await wait(`!!document.querySelector('.proof-panel select[aria-label="Proof profile"]')`);if(await evaluate('layerApp.app.proof_form().mode')!=='print')await click('Print');};
-  const ready=async()=>{const expected=await evaluate(`document.querySelector('.proof-panel [aria-label="Proof profile"]')?.selectedOptions[0]?.textContent`);await wait(`${expected?`layerApp.app.proof_form().recipe.name===${JSON.stringify(expected)} &&`:''} !document.querySelector('.proof-panel [role="status"]')?.textContent && layerApp.app.proof_status().text.startsWith('Proof:') && !layerApp.app.proof_status().needed`);if(await evaluate(`!!document.querySelector('.proof-panel')`))await click('Close');};
-  const choose=async(name,group='Saved Profiles')=>{const selector=`.proof-panel optgroup[label="${group}"] option`;await wait(`!![...document.querySelectorAll(${JSON.stringify(selector)})].find(o=>o.textContent===${JSON.stringify(name)})`);await evaluate(`(()=>{const s=document.querySelector('.proof-panel select[aria-label="Proof profile"]');s.value=[...document.querySelectorAll(${JSON.stringify(selector)})].find(o=>o.textContent===${JSON.stringify(name)}).value;s.dispatchEvent(new Event('change'));})()`);};
+  const set=async(label,value)=>{const selector=':is(dialog[open],.proof-panel) [aria-label="'+label+'"]';if(await evaluate(`document.querySelector(${JSON.stringify(selector)})?.matches('.dropdown')`))await evaluate(dropdownChoice(selector,value));else await evaluate(`(()=>{const s=document.querySelector(${JSON.stringify(selector)});s.value=${JSON.stringify(value)};s.dispatchEvent(new Event('change'));})()`);};
+  const setup=async()=>{await invoke('soft_proof_setup');await wait(`!!document.querySelector('.proof-panel .dropdown[aria-label="Proof profile"]')`);if(await evaluate('layerApp.app.proof_form().mode')!=='print')await click('Print');};
+  const ready=async()=>{const expected=await evaluate(`document.querySelector('.proof-panel [aria-label="Proof profile"]')?.querySelector('.dropdown-label')?.textContent`);await wait(`${expected?`layerApp.app.proof_form().recipe.name===${JSON.stringify(expected)} &&`:''} !document.querySelector('.proof-panel [role="status"]')?.textContent && layerApp.app.proof_status().text.startsWith('Proof:') && !layerApp.app.proof_status().needed`);if(await evaluate(`!!document.querySelector('.proof-panel')`))await click('Close');};
+  const choose=async name=>{await evaluate(dropdownChoice('.proof-panel .dropdown[aria-label="Proof profile"]',name,'label'));await settle();};
   const histogram=histogramJourney({evaluate,settle}).exact;
   const save=async()=>{await invoke('save_document_as');await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');return readPackage(evaluate, '[...proofTest.files.values()].at(-1)');};
   const backing=m=>({objects:m.objects.filter(o=>o.type!=='capy.output/2'),resources:m.resources.filter(r=>r.type!=='capy.icc/1').map(r=>resourceIdentity(m,{ref:r.id}))});
@@ -40,7 +41,7 @@ export async function checkProof({call,evaluate,settle}, {profileUrl='/pkg/proof
   try {
     await invoke('new_document');await evaluate(createDrawing({width:513,height:257,space:'DisplayP3',depth:'U16'}));
     await wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
-    await invoke('soft_proof');await wait(`!!document.querySelector('.proof-panel select[aria-label="Proof profile"]')`);
+    await invoke('soft_proof');await wait(`!!document.querySelector('.proof-panel .dropdown[aria-label="Proof profile"]')`);
     await evaluate('new Promise(r=>setTimeout(r,400))');
     assert.equal(await evaluate('layerApp.state().soft_proof'),false);
     assert.equal(await evaluate('layerApp.app.proof_form().document_profile'),null);
@@ -60,7 +61,7 @@ export async function checkProof({call,evaluate,settle}, {profileUrl='/pkg/proof
     await evaluate(`(async()=>{for(const p of await layerApp.app.profile_library('list'))if(p.name===proofTest.original.name)await layerApp.app.profile_library('remove',p.id)})()`);
     const base=await save();
     await setup();await choose(names[1]);
-    assert.equal(await evaluate(`document.querySelector('optgroup[label="Document Profile"] option').textContent`),names[0]);
+    await evaluate(`document.querySelector('.proof-panel .dropdown[aria-label="Proof profile"]').click()`);assert.ok((await evaluate(`[...document.querySelectorAll('.panel-context-menu .menu-label')].map(n=>n.textContent)`)).includes(names[0]));await evaluate(`document.querySelector('.panel-context-menu').hidePopover()`);
     await click('Cancel');await wait(`!document.querySelector('dialog[open]')`);
     assert.equal(await evaluate(`(await layerApp.app.profile_library('list')).some(p=>p.name===proofTest.original.name)`),false);
     assert.deepEqual(await save(),base);

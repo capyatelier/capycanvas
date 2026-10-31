@@ -7,26 +7,13 @@ import { layerTouchInput } from './layer-touch.js';
 let thumbnailRequest=0n;
 const thumbnailPending=new Map();
 // Layer widgets only. Selection, references, hierarchy and menu policy are Rust.
-export function createLayerPanel({ app, catalog, state, panel, element, button, icon, dispatch, applyChange, message, numberField, wake, dismissContext, openMenu, contentChanged = () => {} }) {
+export function createLayerPanel({ app, catalog, state, panel, element, button, icon, dropdown, dispatch, applyChange, message, numberField, wake, dismissContext, openMenu, contentChanged = () => {} }) {
   const copy=liveCopy(app,"catalog").native_copy.layers,paperCopy=liveCopy(app,"catalog").native_copy.paper;
   const send = action => dispatch({ type: "layer", action });
   const header = element("div", "layer-header"), footer = element("div", "layer-footer");
   header.dataset.control = "layer_opacity"; footer.dataset.control = "layer_actions";
   const active = () => state().layer_tools.editing_layer;
-  let blendMenu = null, blendOpen = false, blendReopen = false;
-  const blend = button("", () => {
-    const skip = blendReopen; blendReopen = false;
-    const id = active()?.id;
-    if (skip || id == null) return;
-    blend.menuModel = () => app.layer_blend_menu(id);
-    const opened = openMenu(blend);
-    if (blendMenu !== opened) { blendMenu = opened; opened.addEventListener("toggle", e => { if (e.newState === "closed") blendOpen = false; }); }
-    blendOpen = true;
-  }, "layer-blend");
-  blend.addEventListener("pointerdown", () => { blendReopen = blendOpen && blendMenu?.menuOwner === blend; });
-  const blendLabel = element("span", "layer-blend-label", catalog.layer_blends[0]);
-  blend.append(blendLabel, icon("chevron-down"));
-  bindCopy(blend,()=>copy.blend,"title"); bindCopy(blend,()=>copy.blend,"ariaLabel"); blend.setAttribute("aria-haspopup", "menu");
+  const blend = dropdown(()=>copy.blend);blend.classList.add('layer-blend');
   const options = element("div", "layer-options");
   const opacity = numberField(catalog.layer_opacity, ()=>copy.opacity, value => dispatch({ type: "set_layer_opacity", opacity: value }), true);
   opacity.id = "layer-opacity"; options.append(blend, opacity); header.append(options);
@@ -412,8 +399,9 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
         opacityPopup.showPopover();
       }
     }else if(opacityPopup.matches(':popover-open'))opacityPopup.hidePopover();
-    if (current) { opacity.update(current.opacity); blendLabel.textContent = current.blend_label; }
-    opacity.setDisabled(!controls.opacity); blend.disabled = !controls.blend; maskButton.disabled = !controls.mask; more.disabled = !current && !overflow().length;
+    if (current) opacity.update(current.opacity);
+    blend.update({text:current?.blend_label??'',disabled:!controls.blend,menu:()=>app.layer_blend_menu(active().id)});
+    opacity.setDisabled(!controls.opacity); maskButton.disabled = !controls.mask; more.disabled = !current && !overflow().length;
     fitFooter();
     deleteButton.disabled = !state().layer_tools.can_delete;
     addFilter.disabled = !view.add_filter;

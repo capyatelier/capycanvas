@@ -9,14 +9,13 @@ import {filterPreviewView} from './filter-previews.js';
 import {gradientEditor} from './gradient.js';
 import {chooseTexture,paperThumbnail} from './paper-picker.js';
 // Views of the shared Rust effect/property schema; no filter-specific UI logic.
-export function createEffectPanels({app,wake,catalog,state,panels,element,button,icon,dispatch,numberField,contentChanged,splitPicker=false,message,openMenu,asset}) {
+export function createEffectPanels({app,wake,catalog,state,panels,element,button,icon,dropdown,dispatch,numberField,contentChanged,splitPicker=false,message,asset}) {
   const copy=liveCopy(app,"catalog").native_copy.color,common=liveCopy(app,"bootstrap_view").common;
   const send=action=>dispatch({type:"effect",action});
   const adjustments=element("div","filter-picker");adjustments.dataset.control="adjustments";
-  const pickerHeader=element("div","filter-picker-header"),category=element("select"),search=element("input"),list=element("div","filter-picker-list");
   const pickerAction=action=>dispatch({type:"filter_picker",action});
+  const pickerHeader=element("div","filter-picker-header"),category=dropdown(()=>state().filter_categories.find(c=>c.id===state().filter_picker.category)?.label??'',value=>pickerAction({op:'category',category:value||null})),search=element("input"),list=element("div","filter-picker-list");
   const searchButton=button("",()=>{pickerAction({op:"toggle_search"});if(!search.hidden)search.focus();});searchButton.append(icon("search"));
-  category.onchange=()=>pickerAction({op:"category",category:category.value||null});
   search.type="search";search.maxLength=120;search.oninput=()=>pickerAction({op:"search",query:search.value});
   search.onkeydown=e=>{if(composingKey(e))return;e.stopPropagation();if(e.key==="Escape"){e.preventDefault();pickerAction({op:"toggle_search"});}};
   const categoryIcon=element("span","filter-category-icon");
@@ -31,9 +30,8 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
     if(catalogRevision!==s.filter_catalog_revision){
       catalogRevision=s.filter_catalog_revision;visibleIds=null;rows.clear();
       typeList.replaceChildren(...s.filter_categories.map(c=>{const b=button("",()=>pickerAction({op:"category",category:c.id}),"filter-type");b.dataset.category=c.id??"";b.append(icon(c.icon),element("span","",c.label));return b;}));
-      category.replaceChildren(...s.filter_categories.map(c=>{const option=element("option","",c.label);option.value=c.id??"";return option;}));
     }
-    category.hidden=picker.search!=null;category.value=picker.category??"";
+    category.hidden=picker.search!=null;category.update({choices:s.filter_categories.map(c=>({value:c.id??'',label:c.label})),value:picker.category??''});
     categoryIcon.hidden=category.hidden;
     const categoryGlyph=s.filter_categories.find(c=>c.id===picker.category)?.icon??"adjustments";
     if(categoryIcon.firstChild?.dataset.asset!==categoryGlyph)categoryIcon.replaceChildren(icon(categoryGlyph));
@@ -46,8 +44,6 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
       for(const c of s.filter_categories){
         const b=[...typeList.children].find(b=>b.dataset.category===(c.id??""));
         if(b)b.querySelector("span").textContent=c.label;
-        const option=[...category.options].find(o=>o.value===(c.id??""));
-        if(option)option.textContent=c.label;
       }
       for(const choice of s.adjustments){
         const row=rows.get(choice.id);
@@ -95,15 +91,13 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
   });
   panels.get("adjustments").append(adjustments);
   const properties=element("div","effect-properties");properties.dataset.control="properties";
-  const title=element("h3"),page=element("select"),body=element("div","property-controls");page.dataset.propertiesPage="";page.onchange=()=>send({op:"select_page",layer:state().layer_properties.layer,page:page.value});const toolbar=element("div","property-toolbar"),actions=element("div","property-actions");
+  const title=element("h3"),page=dropdown(()=>state().layer_properties.pages.find(p=>p.id===state().layer_properties.page)?.label??'',value=>send({op:'select_page',layer:state().layer_properties.layer,page:value})),body=element("div","property-controls");page.dataset.propertiesPage="";const toolbar=element("div","property-toolbar"),actions=element("div","property-actions");
   const header=element("div","properties-header"),layerType=element("span","properties-layer-type");
   title.id="properties-layer-name";layerType.id="properties-layer-type";
   toolbar.append(page,actions);properties.append(title,header,toolbar,body);panels.get("properties").append(properties);
-  const addFilter=button(()=>state().layer_properties.add_filter?.title??"",()=>openMenu(addFilter));
-  addFilter.prepend(icon("add-filter"));addFilter.append(icon("chevron-down"));
-  addFilter.id="properties-add-filter";addFilter.setAttribute("aria-haspopup","menu");
-  addFilter.menuModel=()=>state().layer_properties.add_filter;header.append(layerType,addFilter);
-  const tonal=createScope({state,app,element,button,icon,dispatch,tonal:true});properties.insertBefore(tonal.node,body);
+  const addFilter=dropdown(()=>state().layer_properties.add_filter?.title??'');addFilter.prepend(icon('add-filter'));
+  addFilter.id="properties-add-filter";header.append(layerType,addFilter);
+  const tonal=createScope({state,app,element,button,icon,dropdown,dispatch,tonal:true});properties.insertBefore(tonal.node,body);
   let actionKey,actionNodes=[],groupMenus=[];
   function refreshActions(view) {
     const key=JSON.stringify(view.actions.map(a=>[a.action,a.icon,a.group?.id]),(_,v)=>typeof v==="bigint"?String(v):v);
@@ -140,11 +134,10 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
     }
     toolbar.hidden=page.hidden&&!actions.children.length;
   }
-  const resource=element("div","property-row property-resource"),resourceChoice=element("select"),resourceImport=button("",()=>{
+  const resource=element("div","property-row property-resource"),resourceChoice=dropdown(()=>state().layer_properties.resource_label,value=>{const action=state().layer_properties.actions[Number(value)];if(action)send(action.action);}),resourceImport=button("",()=>{
     const action=state().layer_properties.actions.find(a=>a.action.op==="import_lookup");if(action)send(action.action);
   });
   resourceChoice.dataset.propertyResource="";resourceImport.dataset.action="import-lookup";
-  resourceChoice.onchange=()=>{const action=state().layer_properties.actions[Number(resourceChoice.value)];if(action)send(action.action);};
   resource.append(resourceChoice,resourceImport);properties.insertBefore(resource,body);
   const stats=element("div","renderer-stats");stats.dataset.control="stats";panels.get("stats").append(stats);
   const recordButton=button("Start stroke recording",()=>{}); stats.append(recordButton);
@@ -184,20 +177,17 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
     layerType.textContent=view.layer_type;layerType.title=view.layer_type;
     header.hidden=!view.layer_type&&!view.add_filter;
     addFilter.hidden=!view.add_filter;
+    addFilter.update({menu:()=>state().layer_properties.add_filter});
     resource.hidden=view.resource_label==null;
     if(!resource.hidden){
       const choices=view.actions.flatMap((a,i)=>a.action.op==="lookup_preset"?[[i,a.label]]:[]);
       if(view.resource_selection==null)choices.push([-1,view.resource_name]);
-      const key=JSON.stringify(choices);
-      if(resourceChoice.dataset.schema!==key){resourceChoice.dataset.schema=key;resourceChoice.replaceChildren(...choices.map(([i,label])=>{const option=element("option","",label);option.value=i;return option;}));}
-      resourceChoice.value=view.resource_selection??-1;resourceChoice.title=view.resource_name;resourceChoice.setAttribute("aria-label",view.resource_label);resourceChoice.disabled=!view.enabled;
+      resourceChoice.update({choices:choices.map(([value,label])=>({value,label})),value:view.resource_selection??-1,disabled:!view.enabled});resourceChoice.title=view.resource_name;
       const action=view.actions.find(a=>a.action.op==="import_lookup");resourceImport.title=action.label;resourceImport.setAttribute("aria-label",action.label);resourceImport.disabled=!view.enabled;
       const glyph=action.icon.replace(/^layer-/,"").replace(/-symbolic$/,"");
       if(resourceImport.firstChild?.dataset.asset!==glyph)resourceImport.replaceChildren(icon(glyph));
     }
-    const pages=JSON.stringify(view.pages.map(p=>p.id));
-    if(page.dataset.schema!==pages){page.dataset.schema=pages;page.replaceChildren(...view.pages.map(p=>{const option=element("option","",()=>state().layer_properties.pages.find(v=>v.id===p.id)?.label??"");option.value=p.id;return option;}));}
-    page.hidden=view.pages.length<2;page.value=view.page??"";page.disabled=!view.enabled;refreshActions(view);
+    page.update({choices:view.pages.map(p=>({value:p.id,label:p.label})),value:view.page??'',disabled:!view.enabled});page.hidden=view.pages.length<2;refreshActions(view);
     tonal.node.hidden=!view.histogram;if(view.histogram)tonal.refresh();
     const owner=`${state().document_file.epoch}:${view.layer}`;
     const fieldSchema=c=>JSON.stringify([c.kind.kind,c.kind.numeric,c.kind.options?.length,c.color_action],(_,v)=>typeof v==="bigint"?String(v):v);
@@ -230,11 +220,11 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
         else if(c.kind.kind==="choice"&&c.paper){const thumbnail=paperThumbnail({app,element,icon,size:28}),name=element("span","property-texture-name"),n=button("",()=>chooseTexture({app,layer:state().layer_properties.layer,state,dispatch,element,button,icon,message}),"property-texture");
           n.id="property-texture";n.append(thumbnail.node,name);
           field={node:row(()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",n),update:c=>{const tile=c.paper.tiles[c.value.value];thumbnail.show(tile?.id??null);name.textContent=tile?.label??"";n.title=n.ariaLabel=c.label;n.setAttribute("aria-description",tile?.label??"");},disable:x=>n.disabled=x};}
-        else if(c.kind.kind==="choice"){const n=element("select");c.kind.options.forEach((label,i)=>{const o=element("option","",()=>state().layer_properties.controls.find(v=>v.key===c.key)?.kind.options[i]??"");o.value=i;n.append(o);});n.onchange=()=>change(Number(n.value));field={node:row(()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",n),update:c=>n.value=c.value.value,disable:x=>n.disabled=x};}
+        else if(c.kind.kind==="choice"){const label=()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??'',n=dropdown(label,value=>change(Number(value)));field={node:row(label,n),update:c=>n.update({choices:c.kind.options.map((label,value)=>({value,label})),value:c.value.value}),disable:x=>n.disabled=x};}
         else if(c.kind.kind==="color"){const n=colorButton({app,opaque:c.kind.opaque,label:()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",element,button,change,current:()=>`${state().document_file.epoch}:${state().layer_properties.layer}`});let input=n.node,bucket;
           if(c.color_action){bucket=button("",()=>dispatch(c.color_action));bucket.dataset.action=`${c.key.replaceAll("_","-")}-bucket`;bindCopy(bucket,()=>copy.use_selected,"title");bindCopy(bucket,()=>copy.use_selected,"ariaLabel");bucket.append(icon("fill"));input=element("div","color-action-property");input.append(n.node,bucket);}
           field={node:row(()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",input),update:c=>n.update(c.value.value),disable:x=>{n.disable(x);if(bucket)bucket.disabled=x;},dispose:()=>n.dispose()};}
-        else if(c.kind.kind==="gradient")field=gradientEditor({app,element,button,icon,dispatch});
+        else if(c.kind.kind==="gradient")field=gradientEditor({app,element,button,icon,dropdown,dispatch});
         if(field){field.node.dataset.propertyKey=c.key;field.schema=fieldSchema(c);fields.set(c.key,field);}
         }
         if(field)children.push(field.node);

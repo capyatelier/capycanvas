@@ -1,3 +1,4 @@
+import {dropdownChoice,captureDropdowns} from './dropdown-fixture.mjs';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {png} from './clone-journey.test.mjs';
@@ -6,13 +7,10 @@ import {createDrawing} from './new-drawing-fixture.mjs';
 
 export async function chooseToolActionGroup({call,evaluate,settle},group,command) {
   const selector=`[data-tool-action-group="${group}"]`;
-  const index=await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});window.toolGroupControl=n;n.focus();return [...n.options].findIndex(o=>o.value===${JSON.stringify(command)})})()`);
-  assert.ok(index>=0,`${group} contains ${command}`);
-  const trace=[];
-  const key=async(name,vk)=>{for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:name,code:name,windowsVirtualKeyCode:vk});await settle();trace.push(await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});return{key:${JSON.stringify(name)},value:n.value,focused:document.activeElement===n,generation:String(layerApp.state().toolbar_context_generation),owner:String(layerApp.state().layer_tools.editing_layer?.id),settings:layerApp.state().tool_settings.map(f=>({id:f.id,numeric:f.numeric,group_id:f.group_id})),options:[...n.options].map(o=>({value:o.value,disabled:o.disabled,selected:o.selected})),commands:layerApp.state().commands.filter(c=>[...n.options].some(o=>o.value===c.id)).map(c=>({id:c.id,enabled:c.enabled,selected:c.selected}))}})()`));};
-  await key('Home',36);for(let i=0;i<index;i++)await key('ArrowDown',40);
-  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)})===window.toolGroupControl&&document.activeElement===toolGroupControl`),true,`${group} native dropdown retains identity and focus across choices`);
-  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)}).value`),command,JSON.stringify(trace));
+  await evaluate(`window.toolGroupControl=document.querySelector(${JSON.stringify(selector)})`);
+  await evaluate(dropdownChoice(selector,command));await settle();
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)})===window.toolGroupControl`),true,`${group} dropdown retains identity across choices`);
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)}).value`),command);
   assert.equal(await evaluate(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)}).selected`),true);
 }
 
@@ -38,17 +36,18 @@ export async function checkPanelControls({call,evaluate,settle}) {
     if(selector==='.tool-settings-control')for(const field of await evaluate('layerApp.state().tool_settings'))assert.equal(!field.group_id,!field.group,`${name} ${field.id} category identity matches its caption`);
     const geometry=await measure(selector),record={name,...geometry};reports.push(record);
     const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/${name}.png`,Buffer.from(shot.data,'base64'));
+    if(name.endsWith('-242'))await captureDropdowns({call,evaluate,settle},selector,directory,name);
     for(const field of geometry.fields){near(field.x,geometry.panel.x+8,`${name} field leading inset`);near(field.right,geometry.panel.right-8,`${name} field trailing inset`);near(field.height,36,`${name} slider row`);}
     for(const number of geometry.numbers){near(number.label.top,number.field.top,`${name} caption top`);near(number.label.bottom,number.track.top,`${name} caption/track boundary`);near(number.track.left-number.field.left,36,`${name} slider leading reserve`);near(number.field.right-number.track.right,76,`${name} slider trailing reserve`);near(number.track.height,16,`${name} slider hit height`);if(number.value){near(number.value.bottom,number.field.bottom,`${name} readout bottom`);near(number.value.right,number.field.right,`${name} readout right`);near(number.value.width,number.glyph.width+12,`${name} natural readout width`);near(number.glyph.right,number.value.right-6,`${name} suffix anchor`);}}
     for(const label of geometry.labels)near(label.x,geometry.panel.x+8,`${name} plain label leading inset`);
     for(const control of geometry.controls){
       assert.ok(control.rect.left>=geometry.panel.left+8-.1&&control.rect.right<=geometry.panel.right-8+.1,`${name} control containment: ${JSON.stringify(control)}`);
-      if(control.tag==='SELECT')near(control.rect.height,metrics.control_height,`${name} select height`);
+      if(control.classes.split(' ').includes('dropdown'))near(control.rect.height,metrics.control_height,`${name} select height`);
       if(control.tag==='BUTTON'&&!control.special)near(control.rect.height,metrics.control_height,`${name} ${control.classes} button height`);
       if(control.classes.split(' ').includes('number-labels'))near(Number.parseFloat(control.paddingLeft),0,`${name} plain numeric label padding`);
       if(control.classes.split(' ').some(c=>['number-value','number-entry'].includes(c))){near(Number.parseFloat(control.paddingLeft),6,`${name} numeric left padding`);near(Number.parseFloat(control.paddingRight),6,`${name} numeric right padding`);}
-      if(control.tag==='SELECT'||control.classes.includes('number-entry')||control.classes.includes('palette-entry'))near(Number.parseFloat(control.radius),metrics.control_radius*geometry.fit,`${name} control radius`);
-      if(control.tag==='SELECT'&&geometry.fit===1)assert.ok(['squircle','superellipse(2)'].includes(control.shape),`${name} squircle shape: ${control.shape}`);
+      if(control.classes.split(' ').includes('dropdown')||control.classes.includes('number-entry')||control.classes.includes('palette-entry'))near(Number.parseFloat(control.radius),metrics.control_radius*geometry.fit,`${name} control radius`);
+      if(control.classes.split(' ').includes('dropdown')&&geometry.fit===1)assert.ok(['squircle','superellipse(2)'].includes(control.shape),`${name} squircle shape: ${control.shape}`);
     }
     for(const row of geometry.rows)for(let i=1;i<row.children.length;i++)near(row.children[i].left-row.children[i-1].right,4,`${name} ${row.classes} peer gap`);
     for(const check of geometry.checks){
@@ -138,6 +137,20 @@ export async function checkPanelControls({call,evaluate,settle}) {
   const original=await evaluate('layerApp.state().workspace'),theme=await evaluate('layerApp.state().settings.theme');
   const tools=['pen','wet-mixing','fill','lasso_fill','enclose_fill','gradient','rectangle_select','polygon_select','auto_select','color_select','selection_brush','tonal_select','pick_visible','zoom','liquify','clone','heal','crop','scale_rotate'];
   try {
+    await float('adjustments',320);
+    const category='.dock-group[data-panel="adjustments"] .filter-picker-header .dropdown';
+    for(const current of ['light','dark']) {
+      await send({type:'set_theme',theme:current});
+      await captureDropdowns({call,evaluate,settle},'.dock-group[data-panel="adjustments"]',directory,`filters-${current}`);
+      await evaluate(`document.querySelector(${JSON.stringify(category)}).click()`);
+      assert.equal(await evaluate(`document.querySelector('.panel-context-menu:popover-open [aria-checked="true"]').menuItem.command===document.querySelector(${JSON.stringify(category)}).value`),true,'Filters checks the current category');
+      await key('End',35);assert.equal(await evaluate(`document.activeElement===document.querySelector('.panel-context-menu:popover-open button:last-child')`),true,'End reaches the last category');
+      await key('Home',36);await key('ArrowDown',40);await key('Escape',27);
+      const next=await evaluate('layerApp.state().filter_categories.find(c=>c.id!==layerApp.state().filter_picker.category).id');
+      await evaluate(dropdownChoice(category,next??''));await settle();
+      assert.equal(await evaluate('layerApp.state().filter_picker.category??null'),next??null,'Picking a category changes shared Filters state');
+      assert.equal(await evaluate(`document.querySelectorAll('.panel select').length`),0,'Workspace panels contain no native selects');
+    }
     await evaluate(`for(const {id} of layerApp.state().workspace.layout.panels)layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:id,visible:['toolbar','commands','tool_settings'].includes(id)}})`);await settle();
     for(const width of [242,320])for(const current of ['light','dark']){
       await send({type:'set_theme',theme:current});await float('tool_settings',width);
@@ -164,7 +177,7 @@ export async function checkPanelControls({call,evaluate,settle}) {
           for(let i=1;i<rows.length;i++)near(rows[i].top-rows[i-1].bottom,4,`${name} vertical peer gap`);
         }
         if(tool==='pick_visible'){
-          const fields=geometry.controls.filter(c=>c.tag==='SELECT');assert.equal(fields.length,2);near(fields[0].rect.left,fields[1].rect.left,`${name} shared label column`);near(fields[0].rect.right,fields[1].rect.right,`${name} aligned field ends`);
+          const fields=geometry.controls.filter(c=>c.classes.split(' ').includes('dropdown'));assert.equal(fields.length,2);near(fields[0].rect.left,fields[1].rect.left,`${name} shared label column`);near(fields[0].rect.right,fields[1].rect.right,`${name} aligned field ends`);
         }
         if(tool==='crop')for(const command of ['crop_delete_cropped_pixels','crop_straighten']){
           const selected=()=>evaluate(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)}).selected`),before=await selected();
@@ -247,7 +260,7 @@ export async function checkPanelControls({call,evaluate,settle}) {
       await checkProofKeys({call,evaluate,settle,invoke});
       await click('.proof-modes button[value="print"]');
       await capture(`proof-print-${current}-${width}`,'.proof-controls');
-      const print=await evaluate(`(()=>{const root=document.querySelector('.proof-controls'),rect=n=>n.getBoundingClientRect().toJSON();return{modes:rect(root.querySelector('.proof-modes')),body:rect(root.querySelector('.proof-print')),rows:[...root.querySelectorAll('.proof-print .document-size')].map(rect),selects:[...root.querySelectorAll('.proof-print select')].map(rect),checks:[...root.querySelectorAll('.proof-print input[type=checkbox]')].map(n=>({row:rect(n.closest('label')),rect:rect(n)}))}})()`);
+      const print=await evaluate(`(()=>{const root=document.querySelector('.proof-controls'),rect=n=>n.getBoundingClientRect().toJSON();return{modes:rect(root.querySelector('.proof-modes')),body:rect(root.querySelector('.proof-print')),rows:[...root.querySelectorAll('.proof-print .document-size')].map(rect),selects:[...root.querySelectorAll('.proof-print .dropdown')].map(rect),checks:[...root.querySelectorAll('.proof-print input[type=checkbox]')].map(n=>({row:rect(n.closest('label')),rect:rect(n)}))}})()`);
       reports.at(-1).proofPrint=print;
       near(print.body.top-print.modes.bottom,4,'Proof modes/body peer gap');
       for(let i=1;i<print.rows.length;i++)near(print.rows[i].top-print.rows[i-1].bottom,4,'Proof print vertical peer gap');

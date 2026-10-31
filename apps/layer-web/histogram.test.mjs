@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {scopeGraph,createScope} from './histogram.js';
 import {FakeElement} from './fake-dom.mjs';
+import {createDropdown} from './dropdown.js';
 
 function harness(t,waveform=false) {
   const previous={document:globalThis.document,ResizeObserver:globalThis.ResizeObserver,ImageData:globalThis.ImageData,devicePixelRatio:globalThis.devicePixelRatio};
@@ -42,14 +43,16 @@ for(const waveform of [false,true]) test(`${waveform?'Waveform':'Histogram'} lat
   Object.assign(h.view,{sources:[],source:0,channels:[],channel:0,axis:['',''],labels:['','',''],status:'',logarithmic:false});
   const element=(tag,classes='',text='')=>{
     if(tag==='canvas')return h.canvas();
-    const node=new FakeElement();Object.assign(node,{tagName:tag,children:[],dataset:{},attributes:new Map(),textContent:text,className:classes,classList:{toggle(){}}});return node;
+    const node=new FakeElement();Object.assign(node,{tagName:tag,children:[],dataset:{},attributes:new Map(),listeners:{},textContent:text,className:classes,classList:{toggle(){}}});return node;
   };
+  const button=(label,activate,classes)=>{const node=element('button',classes,label);node.addEventListener('click',activate);return node;};
+  const dropdown=(label,change)=>createDropdown({element,button,icon:()=>element('svg'),openMenu:()=>assert.fail('Refreshing copy must not open menus')},label,change);
   let scope,cached,invalidations=0;
   const snapshot=()=>{
     const [toolbar,graph,log,footer]=scope.node.children;
     return {sources:toolbar.children[0].children.map(node=>node.textContent),channels:toolbar.children[1].children.map(node=>node.textContent),axis:graph.children[1].children.map(node=>node.textContent),status:footer.children[0].textContent,log:log.children[1].textContent};
   };
-  scope=createScope({state:()=>h.state,app:{catalog:()=>({native_copy:{sampler:{source:'Source'},color:{channel:'Channel'}}})},element,button:()=>element('button'),icon:()=>element('svg'),dispatch:()=>assert.fail('Refreshing copy must not dispatch'),waveform,contentChanged:()=>{invalidations++;cached=snapshot();}});
+  scope=createScope({state:()=>h.state,app:{catalog:()=>({native_copy:{sampler:{source:'Source'},color:{channel:'Channel'}}})},element,dropdown,button:()=>element('button'),icon:()=>element('svg'),dispatch:()=>assert.fail('Refreshing copy must not dispatch'),waveform,contentChanged:()=>{invalidations++;cached=snapshot();}});
   scope.refresh();cached=snapshot();const initial=invalidations;
   Object.assign(h.view,{sources:['Visible','Selected layer'],channels:['RGB','Luminance'],axis:['0','255'],labels:['Log counts','Shadows','Highlights'],status:'Exact'});
   scope.refresh();assert.equal(invalidations,initial+1,'Late intrinsic copy replaces the retained measurement clone');assert.deepEqual(cached,snapshot());assert.equal(cached.log,'Log counts');assert.equal(cached.status,'Exact');

@@ -52,10 +52,10 @@ export async function checkEditor({call,evaluate,settle,canvasPixels:capturePixe
   await show("adjustments");
   for(const theme of ["light","dark"]) {
     await evaluate(`layerApp.dispatch({type:"set_theme",theme:${JSON.stringify(theme)}})`);
-    await click(".filter-picker-header button");
+    await click(".filter-picker-header button:not(.dropdown)");
     await call("Input.insertText",{text:"glass"});await settle();
     const search=await evaluate(`(()=>{
-      const input=document.querySelector('.filter-picker-header input[type=search]'),header=input.parentElement,select=header.querySelector('select');
+      const input=document.querySelector('.filter-picker-header input[type=search]'),header=input.parentElement,select=header.querySelector('.dropdown');
       const style=getComputedStyle(input),control=getComputedStyle(select),rect=input.getBoundingClientRect();
       const fields=['height','borderTopWidth','borderTopLeftRadius','cornerShape','backgroundColor','color','fontFamily','fontSize','paddingLeft','outlineStyle','boxShadow'];
       return {value:input.value,focused:document.activeElement===input,left:rect.left,headerLeft:header.getBoundingClientRect().left,
@@ -72,7 +72,7 @@ export async function checkEditor({call,evaluate,settle,canvasPixels:capturePixe
     for(const type of ["mousePressed","mouseReleased"])await call("Input.dispatchMouseEvent",{type,...search.clear,button:"left",buttons:type==="mousePressed"?1:0,clickCount:1});
     await settle();
     assert.equal(await evaluate("layerApp.state().filter_picker.search"),"","Native search clear updates the filter list");
-    await click(".filter-picker-header button");
+    await click(".filter-picker-header button:not(.dropdown)");
   }
   await show("layers");
   await evaluate("layerApp.dispatch({type:'layer',action:{op:'begin_rename',id:1}})");

@@ -18,7 +18,7 @@ import {createImageImport} from './image-import.js';
 import {createNewDrawing, screenInfo} from './new-drawing.js';
 // Browser file transport; document checkpoints, stale-edit guards and unsaved
 // decisions stay in UiSession. File handles never enter a project or localStorage.
-export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas,contentChanged,refreshInputContext}) {
+export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady,dispatch,applyChange,wake,element,button,icon,dropdown,numberField,message,gpuOperation,rasterWorker,resumeCanvas,contentChanged,refreshInputContext}) {
   const common=bootstrap.common,exportCopy=liveCopy(app,"export_copy");
   const formatLabels=()=>({Exr:exportCopy.format_exr,PngHdr:exportCopy.format_pq,PngHdrMapped:exportCopy.format_pq_clipped,
     JpegHdr:exportCopy.format_jpeg_hdr,JpegHdrMapped:exportCopy.format_jpeg_hdr,AvifHdr:exportCopy.format_avif_hdr,AvifHdrMapped:exportCopy.format_avif_hdr,
@@ -76,7 +76,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     build(form,finish);root.showModal();
   });
   const cancel=(footer,finish)=>footer.append(button(()=>common.cancel,()=>finish(null)));
-  const proof=createProof({app,dialog,element,button,icon,applyChange,wake,dispatch,contentChanged});
+  const proof=createProof({app,dialog,element,button,icon,dropdown,applyChange,wake,dispatch,contentChanged});
   const clipMime="web application/x-capycanvas-clip",customClip=!!globalThis.ClipboardItem?.supports?.(clipMime);
   const clipboardRead=()=>{
     if(!navigator.clipboard?.read)throw deliveryFailure("clipboard_unavailable");
