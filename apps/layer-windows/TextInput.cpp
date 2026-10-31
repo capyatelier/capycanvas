@@ -32,7 +32,7 @@ struct TextComposition : implements<TextComposition,Windows::Foundation::IInspec
     HRESULT __stdcall OnEndEdit(ITfContext* context,TfEditCookie,ITfEditRecord*) noexcept override {
         com_ptr<ITfContextComposition> composing;com_ptr<IEnumITfCompositionView> items;com_ptr<ITfCompositionView> item;ULONG count=0;
         if(SUCCEEDED(context->QueryInterface(__uuidof(ITfContextComposition),composing.put_void()))&&SUCCEEDED(composing->EnumCompositions(items.put()))&&SUCCEEDED(items->Next(1,item.put(),&count)))
-            keys.Update(count!=0,uint32_t(GetMessageTime()));
+            keys.Update(count!=0,uint32_t(GetTickCount()));
         Notify();return S_OK;
     }
 };
@@ -54,7 +54,7 @@ void captureTextComposition(TextBox const& entry,std::function<void(bool)> local
     entry.Resources().Insert(key,state.as<Windows::Foundation::IInspectable>());
     auto weak=state->get_weak();
     entry.TextCompositionStarted([weak](auto&&,auto&&){if(auto state=weak.get())state->Start();});
-    entry.TextCompositionEnded([weak](auto&&,auto&&){if(auto state=weak.get();state&&!state->source){state->keys.Update(false,uint32_t(GetMessageTime()));state->Notify();}});
+    entry.TextCompositionEnded([weak](auto&&,auto&&){if(auto state=weak.get();state&&!state->source){state->keys.Update(false,uint32_t(GetTickCount()));state->Notify();}});
     entry.LostFocus([weak](auto&&,auto&&){if(auto state=weak.get())state->Clear();});
     entry.Unloaded([weak](auto&&,auto&&){if(auto state=weak.get())state->Clear();});
     entry.PreviewKeyDown([](auto&&,KeyRoutedEventArgs const& event){

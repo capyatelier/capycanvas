@@ -432,7 +432,7 @@ impl ManagerUi {
         self.details_key.borrow_mut().clear();
         clear(&self.details);
         self.rebuilding.set(true);
-        self.search.set_text(query);
+        if self.search.text() != query { self.search.set_text(query); }
         self.rebuilding.set(false);
     }
     fn rows(&self, w: &Rc<Workspace>, view: &WorkspaceView, page: ManagerPage) {

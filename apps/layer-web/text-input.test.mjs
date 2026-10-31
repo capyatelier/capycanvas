@@ -5,7 +5,7 @@ import {colorDialogDom, fakeColorApp} from './color-dialog-fixture.mjs';
 import {chooseColor} from './color-editor.js';
 import {createPreviewPanel} from './preview-panel.js';
 
-function editor(field = {}, releaseKey, receiver = field) {
+function editor(field = {}, releaseKey, receiver = field, defaultAction) {
   const root = new EventTarget(), dialog = {};
   root.activeElement = field;
   captureTextComposition(root, releaseKey);
@@ -15,6 +15,7 @@ function editor(field = {}, releaseKey, receiver = field) {
     for (const [key, value] of Object.entries({target, ...properties}))
       Object.defineProperty(event, key, {value});
     root.dispatchEvent(event);
+    if (!event.defaultPrevented) defaultAction?.(event);
     return event;
   }
   return {root, field, dialog, send};
@@ -52,6 +53,30 @@ test('candidate Escape suppresses the dialog default cancellation until release'
   send('keyup', {key:'Escape', code:'Escape', timeStamp:30});
   assert.ok(!composingKey({target:field}));
   assert.ok(!send('cancel', {timeStamp:45}, dialog).defaultPrevented);
+});
+
+test('candidate Escape preserves committed search text before its native default', () => {
+  const field = {value:'mc0001 한글'}, releases = [];
+  const {send} = editor(field, event => {
+    assert.ok(composingKey(event));
+    releases.push(event.key);
+  }, field, event => {
+    if (event.type === 'keydown' && event.key === 'Escape') field.value = '';
+  });
+  send('compositionstart', {timeStamp:21280});
+  assert.equal(send('keydown', {key:'Process', code:'Escape', keyCode:229, isComposing:true, timeStamp:21295.8}).defaultPrevented, false);
+  send('compositionend', {data:'글', timeStamp:21297});
+  const candidate = send('keydown', {key:'Escape', code:'Escape', keyCode:27, isComposing:false, timeStamp:21296.3});
+  assert.equal(field.value, 'mc0001 한글');
+  assert.equal(candidate.defaultPrevented, true);
+  assert.equal(send('keyup', {key:'Process', code:'Escape', keyCode:229, timeStamp:21296.5}).defaultPrevented, false);
+  assert.equal(send('keyup', {key:'Escape', code:'Escape', keyCode:27, timeStamp:21296.6}).defaultPrevented, false);
+  assert.deepEqual(releases, ['Process', 'Escape']);
+  assert.ok(!composingKey({target:field, timeStamp:21300}));
+  assert.equal(send('keydown', {key:'Escape', code:'Escape', keyCode:27, timeStamp:21310}).defaultPrevented, false);
+  assert.equal(field.value, '');
+  send('keyup', {key:'Escape', code:'Escape', keyCode:27, timeStamp:21311});
+  assert.deepEqual(releases, ['Process', 'Escape']);
 });
 
 test('pointer confirmation does not consume the next ordinary key', () => {

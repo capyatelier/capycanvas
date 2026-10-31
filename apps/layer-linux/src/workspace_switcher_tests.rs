@@ -1112,6 +1112,68 @@ fn workspace_audit_theme(w: &Rc<Workspace>, input: &RemoteInput, theme: Theme) {
 }
 
 #[test]
+#[ignore = "private Wayland display and SQLite; --native-test=native_workspace_manager_search_composition_snapshots --native-storage"]
+fn native_workspace_manager_search_composition_snapshots() {
+    let (app, w, mut input, _) = workspace_audit_fixture("art.capycanvas.WorkspaceManagerSearchComposition", 0);
+    crate::text_language::install(&app, &w.localization());
+    let active = w.workspaces.manager().unwrap().active_id();
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for page in [ManagerPage::ThisWorkspace, ManagerPage::ToolbarLibrary] {
+            w.workspaces.ui.show(&w, page);
+            until(|| w.workspaces.ui.dialog.is_mapped() && w.workspaces.view().page == Some(page) && !w.workspaces.busy(), "Manager search page");
+            let search = named::<gtk::SearchEntry>(w.window.upcast_ref(), "workspace-manager-search");
+            let text = descendant::<gtk::Text>(search.upcast_ref::<gtk::Widget>()).unwrap();
+            assert!(text.grab_focus());
+            until(|| text.has_focus(), "Native manager search focus");
+            search.set_text("한");
+            until(|| w.workspaces.view().query == "한", "Committed manager search prefix");
+            search.set_position(1);
+            text.emit_preedit_changed("글");
+            assert!(crate::input::localization_input_busy(&w.window));
+            let artwork = ui_session(&w).engine().document().artwork.clone();
+            let before = w.localization().language();
+            let target = if before == UiLanguage::Japanese { UiLanguage::English } else { UiLanguage::Japanese };
+            let mut settings = state(&w).settings;
+            settings.language = layer_ui::LanguagePreference::Explicit(target);
+            w.refresh_document_view();
+            w.dispatch(UiAction::RestoreSettings { settings: Box::new(settings) });
+            pump(100);
+            assert_eq!(w.localization().language(), before);
+            assert_eq!(search.text(), "한");
+            assert_eq!(search.position(), 1);
+            assert_eq!(search.selection_bounds(), None);
+            assert!(text.has_focus());
+            input.perform(serde_json::json!([{ "key": 0xff0d, "down": true }]));
+            text.emit_preedit_changed("");
+            let mut position = 1;
+            search.insert_text("글", &mut position);
+            search.set_position(2);
+            until(|| w.workspaces.view().query == "한글", "Complete committed manager query");
+            assert_eq!(w.localization().language(), before);
+            assert_eq!(search.position(), 2);
+            input.perform(serde_json::json!([{ "key": 0xff0d, "down": false }]));
+            until(|| w.localization().language() == target, "Deferred manager language publication");
+            assert_eq!(named::<gtk::SearchEntry>(w.window.upcast_ref(), "workspace-manager-search"), search);
+            assert_eq!(search.text(), "한글");
+            assert_eq!(w.workspaces.view().query, "한글");
+            assert_eq!(search.position(), 2, "{theme:?} {page:?}: language publication moved the caret");
+            assert_eq!(search.selection_bounds(), None);
+            assert!(text.has_focus());
+            assert_eq!(state(&w).theme, theme);
+            assert_eq!(w.workspaces.view().page, Some(page));
+            assert!(w.workspaces.view().prompt.is_none());
+            assert_eq!(w.workspaces.manager().unwrap().active_id(), active);
+            assert_eq!(ui_session(&w).engine().document().artwork, artwork);
+            w.workspaces.ui.close(&w);
+            until(|| w.workspaces.view().page.is_none() && !w.workspaces.busy() && !w.workspaces.ui.dialog.is_mapped(), "Manager search closes");
+        }
+    }
+    input.finish();
+    w.window.close();
+}
+
+#[test]
 #[ignore = "isolated native input and SQLite; --native-test=native_workspace_manager_lifecycle --native-storage"]
 fn native_workspace_manager_lifecycle() {
     use std::io::Write;

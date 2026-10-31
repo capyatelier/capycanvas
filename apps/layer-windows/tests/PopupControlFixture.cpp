@@ -8,6 +8,7 @@
 #include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.Provider.h>
 #include <microsoft.ui.xaml.window.h>
+#include <exception>
 #include <fstream>
 using namespace CapyUi;
 namespace {
@@ -199,32 +200,56 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         for(auto const& popup:VisualTreeHelper::GetOpenPopupsForXamlRoot(root.XamlRoot()))if(auto node=findElement(popup.Child(),id))return node;
         return findElement(root,id);
     }
-    void nativeKey(WORD key,bool released){
-        privacy();INPUT event{};event.type=INPUT_KEYBOARD;event.ki.wVk=key;event.ki.dwFlags=released?KEYEVENTF_KEYUP:0;
+    void nativeKey(WORD key,bool released,DWORD time=0){
+        privacy();INPUT event{};event.type=INPUT_KEYBOARD;event.ki.wVk=key;event.ki.dwFlags=released?KEYEVENTF_KEYUP:0;event.ki.time=time;
         require(SendInput(1,&event,sizeof(INPUT))==1,L"Workspace IME key injection failed");
     }
     winrt::Windows::Foundation::IAsyncAction defaultIme(){
+        for(bool stale:{false,true}){
+        hstring label=stale?L"native-default-stale-enter":L"native-default-enter";
         ContentDialog dialog;TextBox entry;entry.Text(L"Draft");captureTextComposition(entry);
         dialog.XamlRoot(root.XamlRoot());dialog.RequestedTheme(root.RequestedTheme());dialog.Title(box_value(L"Native default action"));dialog.Content(entry);
         dialog.PrimaryButtonText(L"Save");dialog.CloseButtonText(L"Cancel");dialog.DefaultButton(ContentDialogButton::Primary);
         auto primary=std::make_shared<unsigned>(0),events=std::make_shared<unsigned>(0);auto closed=std::make_shared<bool>(false);
         dialog.PrimaryButtonClick([primary](auto&&,ContentDialogButtonClickEventArgs const& e){++*primary;e.Cancel(true);});
         dialog.Closed([closed](auto&&,auto&&){*closed=true;});
-        dialog.AddHandler(UIElement::KeyDownEvent(),box_value(KeyEventHandler([events](auto&&,KeyRoutedEventArgs const&){++*events;})),true);
-        dialog.AddHandler(UIElement::KeyUpEvent(),box_value(KeyEventHandler([events](auto&&,KeyRoutedEventArgs const&){++*events;})),true);
-        auto shown=dialog.ShowAsync();bool heldKey=false;
+        dialog.AddHandler(UIElement::KeyDownEvent(),box_value(KeyEventHandler([events](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==Windows::System::VirtualKey::Enter)++*events;})),true);
+        dialog.AddHandler(UIElement::KeyUpEvent(),box_value(KeyEventHandler([events](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==Windows::System::VirtualKey::Enter)++*events;})),true);
+        auto shown=dialog.ShowAsync();bool heldKey=false,heldTrigger=false;Windows::Foundation::IInspectable starter{nullptr};
         try{
             co_await wait([entry]{return entry.IsLoaded()&&entry.ActualWidth()>0;},L"Native default TextBox did not become arranged");
             entry.Focus(FocusState::Keyboard);entry.Select(0,0);privacy();
             auto trace=imeTrace;
-            ScopedComposition composition(*textServices,[trace](hstring api,HRESULT result,uintptr_t pointer){
-                trace->push_back(O({{L"case",S(L"native-default-enter")},{L"api",S(api)},{L"code",N(int32_t(result))},{L"pointer",N(double(pointer))}}));
+            ScopedComposition composition(*textServices,[trace,label](hstring api,HRESULT result,uintptr_t pointer){
+                trace->push_back(O({{L"case",S(label)},{L"api",S(api)},{L"code",N(int32_t(result))},{L"pointer",N(double(pointer))}}));
             });
             co_await wait([this,entry,&composition]{return composition.focused(entry,root.XamlRoot());},L"Native default TextBox did not acquire its TSF context");
-            composition.begin();co_await wait([entry]{return textComposing(entry)&&std::wstring(entry.Text().c_str()).find(L"\u5019\u88dc")!=std::wstring::npos;},L"Native default TextBox did not acquire marked text");
-            nativeKey(VK_RETURN,false);heldKey=true;
+            composition.begin();co_await wait([entry]{return textComposing(entry)&&entry.Text()==L"\u5019\u88dcDraft";},L"Native default TextBox did not acquire exact marked text");
+            if(stale){
+                auto triggered=std::make_shared<bool>(false);std::exception_ptr callbackFailure;auto oldTime=GetTickCount()-1000;
+                starter=box_value(KeyEventHandler([this,entry,&composition,&heldKey,&callbackFailure,triggered,trace,label,oldTime](auto&&,KeyRoutedEventArgs const& e){
+                    if(e.Key()!=Windows::System::VirtualKey::F24)return;
+                    try{
+                        auto message=uint32_t(GetMessageTime());auto queuedAt=GetTickCount();
+                        require(message==oldTime&&int32_t(queuedAt-message)>0,L"Native stale-message precondition was not established");
+                        require(FocusManager::GetFocusedElement(root.XamlRoot())==entry&&textComposing(entry),L"Stale-message trigger lost its focused marked TextBox");
+                        nativeKey(VK_RETURN,false);heldKey=true;composition.end();auto completedAt=GetTickCount();
+                        trace->push_back(O({{L"case",S(label)},{L"message",N(message)},{L"queued_at",N(queuedAt)},{L"completed_at",N(completedAt)},{L"message_after_end",N(uint32_t(GetMessageTime()))}}));
+                        require(composition.observations.at(L"ITfContext::RequestEditSession/end").first==S_OK&&composition.observations.at(L"ITfEditSession::DoEditSession/end").first==S_OK,
+                            L"Native completion did not run its synchronous TSF edit session");
+                        require(int32_t(completedAt-queuedAt)>=0&&!textComposing(entry)&&entry.Text()==L"\u5019\u88dcDraft",L"Queued native Return did not follow exact synchronous TSF completion");
+                    }catch(...){callbackFailure=std::current_exception();}
+                    *triggered=true;
+                }));
+                entry.AddHandler(UIElement::PreviewKeyDownEvent(),starter,true);
+                nativeKey(VK_F24,false,oldTime);heldTrigger=true;nativeKey(VK_F24,true,oldTime);heldTrigger=false;
+                co_await wait([triggered]{return *triggered;},L"Native stale-message trigger did not reach its TextBox route");
+                entry.RemoveHandler(UIElement::PreviewKeyDownEvent(),starter);starter=nullptr;
+                if(callbackFailure)std::rethrow_exception(callbackFailure);
+            }else{nativeKey(VK_RETURN,false);heldKey=true;}
             co_await wait([events]{return *events>0;},L"Candidate Enter did not reach the native dialog route");
             require(*primary==0,L"Composition-owned Enter invoked the native default button");
+            require(FocusManager::GetFocusedElement(root.XamlRoot())==entry&&entry.Text()==L"\u5019\u88dcDraft",L"Candidate Enter changed the native default editor or its text");
             composition.end();co_await wait([entry]{return !textComposing(entry);},L"Native default composition did not finish");
             auto release=*events;nativeKey(VK_RETURN,true);heldKey=false;
             co_await wait([events,release]{return *events>release;},L"Candidate Enter release did not reach the native dialog route");
@@ -232,9 +257,10 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             nativeKey(VK_RETURN,false);nativeKey(VK_RETURN,true);
             co_await wait([primary]{return *primary>0;},L"Ordinary Enter did not recover the native default button");
             require(*primary==1,L"Ordinary Enter invoked duplicate native default actions");composition.finish();
-            trace->push_back(O({{L"case",S(L"native-default-enter")},{L"passed",B(true)}}));++imeChecks;
+            trace->push_back(O({{L"case",S(label)},{L"passed",B(true)}}));++imeChecks;
             dialog.Hide();co_await wait([closed]{return *closed;},L"Native default dialog did not close");co_await shown;
-        }catch(...){if(heldKey)try{nativeKey(VK_RETURN,true);}catch(...){}dialog.Hide();throw;}
+        }catch(...){if(starter)entry.RemoveHandler(UIElement::PreviewKeyDownEvent(),starter);if(heldKey)try{nativeKey(VK_RETURN,true);}catch(...){}if(heldTrigger)try{nativeKey(VK_F24,true);}catch(...){}dialog.Hide();throw;}
+        }
     }
     winrt::Windows::Foundation::IAsyncAction workspaceIme(){
         auto dark=root.RequestedTheme()!=ElementTheme::Light;
