@@ -14,6 +14,8 @@ public static class CapyWindowExercise {
  [StructLayout(LayoutKind.Sequential)] public struct Rect {public int left,top,right,bottom;}
  [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr value);
  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window,out Rect rect);
+ [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr window,out Rect rect);
+ [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr window);
  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
  [StructLayout(LayoutKind.Sequential)] public struct Mouse {public int dx,dy;public uint data,flags,time;public UIntPtr extra;}
@@ -102,6 +104,21 @@ if($Action -eq 'Close') {
     Record-CapyFixtureClose $ProcessId $handle.ToInt64() $false
 } elseif($Action -eq 'Resize') {
     if(![CapyWindowExercise]::MoveWindow($handle,$rect.left,$rect.top,$Width,$Height,$true)){throw 'Resize failed.'}
+    $review=$p
+    $traceDirectory=if($StateDirectory){$StateDirectory}else{Split-Path -Parent $p.Path}
+    $registration=Read-Snapshot (Join-Path $traceDirectory "windows-$ProcessId.json")
+    $registered=@($registration.windows|Where-Object hwnd -eq $handle.ToInt64())
+    if($registration.process_id -ne $ProcessId -or $registered.Count -ne 1){throw 'Resize has no unique owned drawing trace.'}
+    $statePath=Join-Path $traceDirectory "ui-state-$ProcessId-$($registered[0].id).json"
+    Wait-Until {
+        $outer=New-Object CapyWindowExercise+Rect;$client=New-Object CapyWindowExercise+Rect
+        if(![CapyWindowExercise]::GetWindowRect($handle,[ref]$outer) -or ![CapyWindowExercise]::GetClientRect($handle,[ref]$client)){throw 'Resize bounds are unavailable.'}
+        $snapshot=Read-Snapshot $statePath;$model=$snapshot.model;$scale=[CapyWindowExercise]::GetDpiForWindow($handle)/96.
+        $snapshot.process_id -eq $ProcessId -and $snapshot.window_id -eq $registered[0].id -and $model.windows_isolated_settings -and
+            $outer.right-$outer.left -eq $Width -and $outer.bottom-$outer.top -eq $Height -and
+            [Math]::Abs($model.layout.viewport[0]*$scale-$client.right) -le 1 -and [Math]::Abs($model.layout.viewport[1]*$scale-$client.bottom) -le 1 -and
+            [Math]::Abs($model.state.camera.viewport[0]-$client.right) -le 1 -and [Math]::Abs($model.state.camera.viewport[1]-$client.bottom) -le 1
+    } 'The requested native resize did not receive its model viewport acknowledgement.'
 } elseif($Action -in @('Undo','Redo','Test stroke','Test pan','Test backlog')) {
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
     $condition=New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty,$Action)

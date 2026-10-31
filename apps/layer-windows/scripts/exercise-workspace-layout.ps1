@@ -106,7 +106,8 @@ function Preset-Geometry([string]$Top){
             $receipt.native_filter_bounds=$filterBounds
             $scroll=@($presentation.groups|Where-Object id -eq $group.id)[0].body_scroll
             $receipt.native_body=$body;$receipt.body_scroll=$scroll
-            if(!$scroll -or !$box.Contains($body) -or !$root.Current.BoundingRectangle.Contains($body)){throw 'Preset body viewport left its owned group allocation'}
+            $contained=$box;$contained.Inflate(.001,.001)
+            if(!$scroll -or !$contained.Contains($body) -or !$root.Current.BoundingRectangle.Contains($body)){throw 'Preset body viewport left its owned group allocation'}
             $viewport=[double]$scroll.viewport_height;$extent=[double]$scroll.extent_height;$offset=[double]$scroll.vertical_offset
             foreach($value in @($viewport,$extent,$offset)){if([double]::IsNaN($value) -or [double]::IsInfinity($value)){throw 'Preset body scroll geometry is not finite'}}
             if($viewport -le 0 -or [Math]::Abs($body.Height-$viewport*$scale) -gt 1 -or $extent*$scale+1 -lt $group.min_body_height*$scale -or $offset -lt 0 -or $offset*$scale -gt [Math]::Max(0,$extent-$viewport)*$scale+1){throw 'Preset lost its finite scroll viewport or published minimum body extent'}

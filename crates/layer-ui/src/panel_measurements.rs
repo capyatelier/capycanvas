@@ -22,16 +22,19 @@ pub struct PanelMeasurementRequest {
 pub struct PanelMetricContext {
     pub generation:u64,
     pub scale:f32,
+    #[serde(default)]
+    pub layout_grid:f32,
     pub text_scale:f32,
     pub style:String,
 }
 impl PanelMetricContext {
     fn same_metrics(&self,other:&Self)->bool {
-        self.generation==other.generation&&self.scale==other.scale&&self.text_scale==other.text_scale&&self.style==other.style
+        self.generation==other.generation&&self.scale==other.scale&&self.layout_grid==other.layout_grid&&self.text_scale==other.text_scale&&self.style==other.style
     }
     fn validate(&self)->Result<(),String> {
         if self.generation==0||self.generation>9_007_199_254_740_991
             ||![self.scale,self.text_scale].into_iter().all(|v|v.is_finite()&&(0.1..=16.).contains(&v))
+            ||!self.layout_grid.is_finite()||self.layout_grid!=0.&&!((1./1024.)..=16.).contains(&self.layout_grid)
             ||self.style.is_empty()||self.style.len()>256 {return Err("Invalid panel metric context".into());}
         Ok(())
     }
@@ -176,9 +179,52 @@ mod tests {
     }
     fn request(cache:&PanelMeasurementCache,width:f32)->PanelMeasurementRequest {cache.request(&cache.identities[0],width)}
     fn report(cache:&PanelMeasurementCache,width:f32,height:f32)->PanelMeasurementReport {
-        PanelMeasurementReport {request:request(cache,width),context:PanelMetricContext {generation:1,scale:1.25,text_scale:1.,style:"native".into()},
+        PanelMeasurementReport {request:request(cache,width),context:PanelMetricContext {layout_grid:0.,generation:1,scale:1.25,text_scale:1.,style:"native".into()},
             tab_widths:Some([110.,36.]),body:Some(PanelBodyMeasurement {actual_width:width,content_height:height,scroll:None})}
     }
+    #[test]
+    fn layout_grid_changes_require_a_new_valid_metric_generation() {
+        let context=report(&cache(),200.,300.).context;
+        let cache=cache().with_context(context.clone()).unwrap();
+        for grid in [-1.,1./2048.,17.,f32::NAN,f32::INFINITY] {
+            assert!(cache.with_context(PanelMetricContext {generation:2,layout_grid:grid,..context.clone()}).is_err());
+        }
+        assert!(cache.with_context(PanelMetricContext {layout_grid:1.,..context.clone()}).is_err());
+        for generation in [0,9_007_199_254_740_992] {
+            assert!(cache.with_context(PanelMetricContext {generation,layout_grid:1.,..context.clone()}).is_err());
+        }
+        assert_eq!(cache.with_context(PanelMetricContext {generation:2,layout_grid:1.,..context}).unwrap().context.unwrap().layout_grid,1.);
+    }
+    #[test]
+    fn native_layout_grid_matches_fractional_group_edges_and_body_requests() {
+        let viewport=[1600.,1000.];
+        for (x,width) in [(400.,281.75),(400.375,281.375)] {
+            let mut layout=crate::WorkspacePreset::Photographer.layout(crate::Platform::Gtk);
+            layout.move_panel(viewport,Panel::Histogram,crate::DockTarget::Float {position:[x,180.]}).unwrap();
+            let group=layout.panel_group(Panel::Histogram).unwrap();
+            let floating=layout.floating.iter_mut().find(|floating|floating.root.id()==group).unwrap();
+            floating.position=[x,180.];
+            floating.width=width;
+            let context:PanelMetricContext=serde_json::from_value(serde_json::json!({
+                "generation":1,"scale":2,"text_scale":1,"style":"native","layout_grid":1
+            })).unwrap();
+            let input=crate::LayoutResolveInput::new(&layout,None).with_cache(cache().with_context(context.clone()).unwrap());
+            let resolved=input.resolve(viewport);
+            let group=resolved.groups.iter().find(|group|group.panels.contains(&Panel::Histogram)).unwrap();
+            let expected=(x+width).round()-x.round();
+            assert_eq!(group.bounds.x,x.round());
+            assert_eq!(group.bounds.width,expected);
+            let request=resolved.measurement_requests.into_iter().find(|request|request.identity.panel==Panel::Histogram).unwrap();
+            assert_eq!(request.width,expected);
+            let report=PanelMeasurementReport {request,context:context.clone(),tab_widths:Some([110.,36.]),
+                body:Some(PanelBodyMeasurement {actual_width:expected,content_height:300.,scroll:None})};
+            let resolved=input.with_panel_measurements(PanelMeasurementBatch {context,reports:vec![report]}).unwrap().resolve(viewport);
+            assert!(resolved.measurement_requests.iter().find(|request|request.identity.panel==Panel::Histogram).unwrap().body_measured);
+            let roundtrip:crate::LayoutResolveInput=serde_json::from_value(serde_json::to_value(&input).unwrap()).unwrap();
+            assert_eq!(serde_json::to_value(roundtrip.resolve(viewport)).unwrap(),serde_json::to_value(input.resolve(viewport)).unwrap());
+        }
+    }
+
     #[test]
     fn width_changes_select_only_matching_body_facts_and_keep_tabs() {
         let cache=cache();let cache=cache.with_reports(vec![report(&cache,200.,600.)]).unwrap();
@@ -244,7 +290,7 @@ mod tests {
     #[test]
     fn current_host_metrics_select_geometry_before_any_new_report() {
         let cache=cache();let cache=cache.with_reports(vec![report(&cache,200.,600.)]).unwrap();
-        let current=PanelMetricContext {generation:2,scale:1.25,text_scale:1.5,style:"native".into()};
+        let current=PanelMetricContext {layout_grid:0.,generation:2,scale:1.25,text_scale:1.5,style:"native".into()};
         let cache=cache.with_context(current).unwrap();
         assert!(!request(&cache,200.).body_measured);assert!(!request(&cache,200.).tab_measured);
         let old=report(&cache,200.,600.);let cache=cache.with_reports(vec![old]).unwrap();

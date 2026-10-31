@@ -3178,7 +3178,7 @@ impl Workspace {
         let mut current=self.panel_metric_context.borrow_mut();
         if current.as_ref().is_none_or(|context|context.scale!=scale||context.style!=style) {
             let generation=current.as_ref().map_or(1,|context|context.generation+1);
-            *current=Some(layer_ui::PanelMetricContext {generation,scale,text_scale:1.,style});
+            *current=Some(layer_ui::PanelMetricContext {layout_grid:1.,generation,scale,text_scale:1.,style});
         }
         current.as_ref().unwrap().clone()
     }
@@ -3204,7 +3204,7 @@ impl Workspace {
                     .unwrap_or(widget);
                 // Manual shrink can clip a panel below its natural
                 // minimum. GTK still requires a valid measure request.
-                let width = (width as i32).max(content.measure(gtk::Orientation::Horizontal, -1).0);
+                let width = (width.round() as i32).max(content.measure(gtk::Orientation::Horizontal, -1).0);
                 let (content_height, scroll) = match config.id {
                     Panel::Navigator => {
                         let (height, scroll) = self.navigator.content_measurement(width);

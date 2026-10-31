@@ -3389,9 +3389,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             UiAction::MeasurePanels { measurements } => {
                 self.panel_measurements=self.panel_measurement_cache().accept(measurements)?;
                 let viewport=self.workspace_viewport();
-                let accepted=crate::LayoutResolveInput::new(&self.state.workspace.layout,None)
-                    .with_cache(self.panel_measurements.clone()).measured_layout(viewport).measurements;
-                if self.state.workspace.layout.measurements == accepted { (0, false) } else if self.floating_auto_fit.is_empty() {
+                let measured=crate::LayoutResolveInput::new(&self.state.workspace.layout,None)
+                    .with_cache(self.panel_measurements.clone()).measured_layout(viewport);
+                let grid_changed=self.state.workspace.layout.layout_grid!=measured.layout_grid;
+                self.state.workspace.layout.layout_grid=measured.layout_grid;
+                let accepted=measured.measurements;
+                if !grid_changed && self.state.workspace.layout.measurements == accepted { (0, false) } else if self.floating_auto_fit.is_empty() {
                     self.state.workspace.layout.measurements = accepted;
                     (LAYOUT, false)
                 } else {
@@ -6168,6 +6171,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if regions & (regions::LAYOUT|regions::CUSTOMIZATION|regions::SETTINGS) != 0 {
             let viewport=self.workspace_viewport();
             let cache=self.panel_measurement_cache();
+            if let Some(context)=&cache.context {self.state.workspace.layout.layout_grid=context.layout_grid;}
             self.state.workspace.layout.measurements=crate::LayoutResolveInput::new(&self.state.workspace.layout,None)
                 .with_cache(cache).measured_layout(viewport).measurements;
         }
@@ -6584,7 +6588,7 @@ mod tests {
 
     fn measured_batch(app:&UiSession<Recorder>,viewport:[f32;2],measurements:Vec<PanelMeasurement>)->PanelMeasurementBatch {
         let requests=app.layout_resolve_input().resolve(viewport).measurement_requests;
-        let context=PanelMetricContext {generation:1,scale:1.,text_scale:1.,style:"session-test".into()};
+        let context=PanelMetricContext {layout_grid:0.,generation:1,scale:1.,text_scale:1.,style:"session-test".into()};
         let reports=measurements.into_iter().map(|measurement| {
             let request=requests.iter().find(|request|request.identity.panel==measurement.panel).unwrap().clone();
             PanelMeasurementReport {request:request.clone(),context:context.clone(),tab_widths:(measurement.tab_widths[0]>0.).then_some(measurement.tab_widths),

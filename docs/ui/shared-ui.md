@@ -152,6 +152,9 @@ generation monotonic across view recreation within a session. Old-context and
 old-content reports cannot replace current geometry. Native premeasurement uses
 `LayoutResolveInput::with_panel_measurements` with the same validation; set the
 current context before resolving the first destination layout.
+Set `PanelMetricContext.layout_grid` to the host's logical allocation step
+(`1` for GTK); `0` preserves continuous geometry. Rust snaps group edges before
+requesting body measurements, so measure and allocate those same widths.
 
 When a panel gains a control, label, row or other size-dependent presentation,
 update its shared identity projection in

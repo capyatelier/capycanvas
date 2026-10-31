@@ -1410,7 +1410,7 @@ mod tests {
             let stamp = host.session.session_stamp();
             for report in [
                 UiAction::MeasurePanels { measurements: layer_ui::PanelMeasurementBatch {
-                    context:layer_ui::PanelMetricContext {generation:1,scale:1.,text_scale:1.,style:"window-test".into()},
+                    context:layer_ui::PanelMetricContext {layout_grid:0.,generation:1,scale:1.,text_scale:1.,style:"window-test".into()},
                     reports:vec![],
                 } },
                 UiAction::MeasureDrawerTiles { measurements: vec![] },

@@ -2390,7 +2390,7 @@ mod tests {
         app.resize(2560, 1600, 2.0).unwrap();
         let request=app.session.layout_resolve_input().resolve([1280.,800.]).measurement_requests.into_iter()
             .find(|request|request.identity.panel==layer_ui::Panel::Brushes).unwrap();
-        let context=layer_ui::PanelMetricContext {generation:1,scale:2.,text_scale:1.,style:"host-test".into()};
+        let context=layer_ui::PanelMetricContext {layout_grid:0.,generation:1,scale:2.,text_scale:1.,style:"host-test".into()};
         app.dispatch(UiAction::MeasurePanels {
             measurements: layer_ui::PanelMeasurementBatch {context:context.clone(),reports:vec![layer_ui::PanelMeasurementReport {
                 request:request.clone(),context,tab_widths:Some([76.,36.]),body:Some(layer_ui::PanelBodyMeasurement {

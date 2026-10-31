@@ -710,6 +710,26 @@ fn native_sketch_layer_drawer_immediate_audit() {
 }
 
 #[test]
+#[ignore = "isolated native-input.js --native-test=native_fractional_panel_width_measurement at GDK_SCALE=2"]
+fn native_fractional_panel_width_measurement() {
+    let d = Driver::new("art.capycanvas.FractionalPanelWidth");
+    assert_eq!(d.w.surface.scale_factor(), 2);
+    let mut layout = WorkspacePreset::Photographer.layout(Platform::Gtk);
+    layout.move_panel([1600., 1000.], Panel::Histogram, DockTarget::Float {position:[400.,180.]}).unwrap();
+    layout.floating.last_mut().unwrap().width = 281.75;
+    d.w.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(WorkspaceState {layout,..Default::default()})});
+    pump(600);
+    let layout = state(&d.w).workspace.layout;
+    let measurement = layout.measurements.iter().find(|measurement|measurement.panel==Panel::Histogram);
+    assert!(measurement.is_some_and(|measurement|measurement.content_height>0.),
+        "fractional floating Histogram retains its body measurement at scale2: {measurement:?}");
+    let request = ui_session(&d.w).layout([d.w.surface.width() as f32,d.w.surface.height() as f32])
+        .measurement_requests.into_iter().find(|request|request.identity.panel==Panel::Histogram).unwrap();
+    assert!(request.body_measured,"fractional floating Histogram accepts its current body width: {request:?}");
+    d.input.finish(); d.w.window.destroy(); pump(100);
+}
+
+#[test]
 #[ignore = "isolated native-input.js --native-test=native_sketch_layer_drawer_auto_height"]
 fn native_sketch_layer_drawer_auto_height() {
     let mut d = Driver::new("art.capycanvas.LayerDrawerGrowth");

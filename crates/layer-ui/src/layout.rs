@@ -1059,6 +1059,8 @@ pub struct DockLayout {
     pub fit_height_groups: Vec<u32>,
     #[serde(skip)]
     pub measurements: Vec<PanelMeasurement>,
+    #[serde(skip)]
+    pub layout_grid: f32,
     /// Transient native caption bounds: left width, right width, height.
     #[serde(skip)]
     pub titlebar_insets: [f32; 3],
@@ -1113,6 +1115,7 @@ impl<'a> LayoutResolveInput<'a> {
     pub(crate) fn measured_layout(&self,viewport:[f32;2])->DockLayout {
         let mut layout=self.layout.as_ref().clone();
         if let Some(cache)=self.cache.as_ref().filter(|cache|cache.context.is_some()) {
+            layout.layout_grid=cache.context.as_ref().unwrap().layout_grid;
             layout.measurements=cache.project(&cache.identities.iter().map(|identity|cache.request(identity,0.)).collect::<Vec<_>>());
             let requests=self.requests(cache,&layout.resolved(viewport));
             layout.measurements=cache.project(&requests);
@@ -1820,6 +1823,7 @@ impl Default for DockLayout {
             fit_tab_groups: Vec::new(),
             fit_height_groups: Vec::new(),
             measurements: Vec::new(),
+            layout_grid: 0.,
             titlebar_insets: [0.0; 3],
             bottom_inset: 0.0,
             bubbles: BubbleLayout::default(),
@@ -3548,6 +3552,7 @@ impl DockLayout {
 
     pub(crate) fn adopt_runtime(&mut self, from: &DockLayout) {
         self.measurements.clear();
+        self.layout_grid = from.layout_grid;
         self.titlebar_insets = from.titlebar_insets;
         self.bottom_inset = from.bottom_inset;
         self.header_presentation = crate::HeaderPresentation {
@@ -3562,6 +3567,14 @@ impl DockLayout {
 
     pub(crate) fn workspace_height(&self, height: f32) -> f32 {
         (height - self.bottom_inset).max(1.0)
+    }
+
+    fn native_bounds(&self, bounds:Bounds)->Bounds {
+        let grid=self.layout_grid;
+        if grid==0. {return bounds;}
+        let snap=|value:f32|(value/grid).round()*grid;
+        let (x,y)=(snap(bounds.x),snap(bounds.y));
+        Bounds {x,y,width:(snap(bounds.x+bounds.width)-x).max(grid),height:(snap(bounds.y+bounds.height)-y).max(grid)}
     }
 
     #[inline]
@@ -3635,6 +3648,12 @@ impl DockLayout {
             let max_width = (width - WORKSPACE_SPACING * 2.0).max(1.0);
             let max_height = (height - top - WORKSPACE_SPACING).max(1.0);
             let mut width = floating.width.max(self.group_preferred_width(*id)).min(max_width);
+            if toolbar && axis == Axis::Vertical && floating.height.is_none() {
+                width=width.max(toolbar_cross_extent(max_height,config.tiles(),config.tile_style,axis)).min(max_width);
+            }
+            let horizontal=self.native_bounds(Bounds {x:floating.position[0]
+                .clamp(WORKSPACE_SPACING,WORKSPACE_SPACING+max_width-width),width,height:1.,..Default::default()});
+            width=horizontal.width;
             let natural = if toolbar {
                 let [tile_width, tile_height] = config.tile_style.size();
                 let gap = config.tile_style.gap();
@@ -3642,9 +3661,6 @@ impl DockLayout {
                     toolbar_lanes(width, config.tiles(), tile_width, gap, axis) as f32 * (tile_height + gap)
                         - gap
                 } else {
-                    if floating.height.is_none() {
-                        width = width.max(toolbar_cross_extent(max_height, config.tiles(), config.tile_style, axis)).min(max_width);
-                    }
                     toolbar_rows_height(&toolbar_rows(width, config.tiles(), config.tile_style), true, gap)
                         + TOOLBAR_GRIP_SIZE
                         + gap
@@ -3667,13 +3683,12 @@ impl DockLayout {
                 .unwrap_or(natural)
                 .max(self.floating_min_height(&floating.root))
                 .min(max_height);
-            let bounds = Bounds {
-                x: floating.position[0]
-                    .clamp(WORKSPACE_SPACING, WORKSPACE_SPACING + max_width - width),
+            let bounds = self.native_bounds(Bounds {
+                x: horizontal.x,
                 y: floating.position[1].clamp(top, top + max_height - height),
                 width,
                 height,
-            };
+            });
             resolve_node(&floating.root, bounds, max_height, axis, self, &mut result, false);
             let group = result.groups.last_mut().unwrap();
             group.floating = true;
@@ -4734,6 +4749,7 @@ fn resolve_node(
     result: &mut ResolvedLayout,
     open_columns: bool,
 ) {
+    let bounds=layout.native_bounds(bounds);
     if layout.is_collapsed(node.id()) {
         layout.resolve_stack(node, bounds, result, open_columns);
         return;

@@ -2,7 +2,7 @@ use crate::*;
 use crate::panel_measurements::PanelMeasurementCache;
 
 fn context()->PanelMetricContext {
-    PanelMetricContext {generation:1,scale:2.,text_scale:1.,style:"native-tab-fixture".into()}
+    PanelMetricContext {layout_grid:0.,generation:1,scale:2.,text_scale:1.,style:"native-tab-fixture".into()}
 }
 
 fn fixture(panels:&[Panel])->DockLayout {
@@ -33,14 +33,15 @@ fn cache(layout:&DockLayout)->PanelMeasurementCache {
 
 fn render_report(layout:&DockLayout,cache:&PanelMeasurementCache,viewport:[f32;2],russian:bool)->PanelMeasurementBatch {
     let resolved=LayoutResolveInput::new(layout,None).with_cache(cache.clone()).resolve(viewport);
+    let context=cache.context.clone().unwrap_or_else(context);
     let reports=resolved.measurement_requests.iter().map(|request| {
         let widths=metrics(request.identity.panel,russian);
-        PanelMeasurementReport {request:request.clone(),context:context(),tab_widths:Some(widths),
+        PanelMeasurementReport {request:request.clone(),context:context.clone(),tab_widths:Some(widths),
             body:Some(PanelBodyMeasurement {actual_width:request.width,
                 content_height:36.*(560./request.width.max(1.)).ceil()+24.,
                 scroll:Some(PanelScrollMeasurement {fixed_height:24.,unit_height:36.})})}
     }).collect();
-    PanelMeasurementBatch {context:context(),reports}
+    PanelMeasurementBatch {context,reports}
 }
 
 #[test]
@@ -96,8 +97,8 @@ fn body_heights_never_change_widths_in_nested_toolbars_or_presets() {
         }
         layouts.push(layout);
     }
-    for layout in layouts {for viewport in [[640.,480.],[960.,720.],[1600.,1000.]] {for russian in [false,true] {
-        let mut cache=cache(&layout);
+    for layout in layouts {for viewport in [[640.,480.],[960.,720.],[1600.,1000.]] {for russian in [false,true] {for grid in [0.,1.] {
+        let mut cache=cache(&layout).with_context(PanelMetricContext {layout_grid:grid,..context()}).unwrap();
         cache=cache.accept(render_report(&layout,&cache,viewport,russian)).unwrap();
         let first=LayoutResolveInput::new(&layout,None).with_cache(cache.clone()).resolve(viewport);
         for height in [64.,300.,4000.] {
@@ -111,5 +112,5 @@ fn body_heights_never_change_widths_in_nested_toolbars_or_presets() {
             cache=cache.accept(render_report(&layout,&cache,viewport,russian)).unwrap();
             assert_eq!(serde_json::to_vec(&first).unwrap(),serde_json::to_vec(&LayoutResolveInput::new(&layout,None).with_cache(cache.clone()).resolve(viewport)).unwrap());
         }
-    }}}
+    }}}}
 }
