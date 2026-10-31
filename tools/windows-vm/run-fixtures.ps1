@@ -50,6 +50,7 @@ foreach ($script in Get-ChildItem (Join-Path $scripts 'exercise-*.ps1')) {
     }
 }
 function Select-Fixtures([string[]]$Available,[string[]]$Requested) {
+    if($null -eq $Requested -or !$Requested.Count){return $Available}
     $Requested=@($Requested|ForEach-Object {if($_ -eq 'header-settings'){'header:catalog-only';'header:catalog-only-light'}else{$_}})
     $defaults = @($Requested | Where-Object { $_ -match '^[^:]+:default$' } | ForEach-Object { ($_ -split ':')[0] })
     foreach ($item in $Requested) {
