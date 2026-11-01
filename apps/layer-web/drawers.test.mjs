@@ -247,7 +247,7 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
       await customize({type:'set_column_drawers',column:46,drawers:true});
       const a=await rect('.column-tab[data-panel="brushes"]'),b=await rect('.column-tab[data-panel="sizes"]');
       const strip=await rect('.collapsed-column[data-column="46"]');
-      assert.ok(Math.abs(a.top-strip.top-6)<.01,'First tile retains the standard top padding');
+      assert.ok(Math.abs(a.top-strip.top)<.01,`First tile starts at the column edge: ${a.top-strip.top}px`);
       assert.equal(await evaluate('document.querySelectorAll(".collapsed-column .column-divider").length'),1,'Only the divider between groups is painted');
       assert.ok(Math.abs(b.top-a.bottom-12)<.01,'Collapsed groups use the toolbar divider plus its two gaps');
       const metrics=await evaluate('layerApp.app.divider_metrics()');
