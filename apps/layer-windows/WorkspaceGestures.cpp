@@ -353,7 +353,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     void edgeDown(PointerRoutedEventArgs const& e){
         auto p=e.GetCurrentPoint(root);
         if(trace){
-            lastEdgeContact=O({{L"pointer",N(p.PointerId())},{L"position",point(p.Position())},{L"contact",S(edgeContact(e.OriginalSource()))},{L"primary",B(PointerGesture::PrimaryContact(p))}});evidence();
+            lastEdgeContact=O({{L"pointer",N(p.PointerId())},{L"time",N(double(p.Timestamp()*1000))},{L"position",point(p.Position())},{L"contact",S(edgeContact(e.OriginalSource()))},{L"primary",B(PointerGesture::PrimaryContact(p))}});evidence();
         }
         if(edge&&edge->pointer==p.PointerId())edgeEnd(L"cancel");
         if(!data->edges||!PointerGesture::PrimaryContact(p))return;
