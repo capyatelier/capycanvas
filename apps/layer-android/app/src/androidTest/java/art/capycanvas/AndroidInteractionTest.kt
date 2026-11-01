@@ -3671,7 +3671,15 @@ class AndroidInteractionTest {
                         node.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.let { measure ->
                             val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
                             assertTrue(measure(layouts))
-                            for (text in layouts) assertFalse("$name: $tag clips ${text.layoutInput.text}: ${text.size}, ${text.layoutInput.constraints}, width=${text.didOverflowWidth}, height=${text.didOverflowHeight}", text.hasVisualOverflow)
+                            for (text in layouts) {
+                                val message = "$name: $tag clips ${text.layoutInput.text}: ${text.size}, ${text.layoutInput.constraints}"
+                                assertFalse(message, text.didOverflowHeight)
+                                for (line in 0 until text.lineCount) {
+                                    assertTrue(message, text.getLineLeft(line) >= 0f && text.getLineRight(line) <= text.size.width)
+                                    assertFalse(message, text.isLineEllipsized(line))
+                                }
+                                assertEquals(message, text.layoutInput.text.length, text.getLineEnd(text.lineCount - 1, false))
+                            }
                         }
                         node.children.forEach(::checkText)
                     }
