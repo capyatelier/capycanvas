@@ -1,6 +1,7 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','light-large','blend-large-dark','blend-large-light','profiles-dark','profiles-light')][string]$Theme='dark',[switch]$LargeText,[int]$LanguageLimit=0,[switch]$NoticeOnly,[switch]$HeaderOnly,[switch]$BlendOnly,[switch]$GroupedToolsOnly,[switch]$ProfilesOnly,[switch]$ConfigurationOnly,[switch]$ZenThemeOnly,[switch]$ColorOnly)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','light-large','blend-large-dark','blend-large-light','profiles-dark','profiles-light','stats-light')][string]$Theme='dark',[switch]$LargeText,[int]$LanguageLimit=0,[switch]$NoticeOnly,[switch]$StatsOnly,[switch]$HeaderOnly,[switch]$BlendOnly,[switch]$GroupedToolsOnly,[switch]$ProfilesOnly,[switch]$ConfigurationOnly,[switch]$ZenThemeOnly,[switch]$ColorOnly)
 $ErrorActionPreference='Stop'
 if($Theme.StartsWith('profiles-')){$Theme=$Theme.Substring(9);$ProfilesOnly=$true}
+if($Theme -eq 'stats-light'){$Theme='light';$StatsOnly=$true}
 if($Theme -eq 'light-large'){$Theme='light';$LargeText=$true}
 if($Theme.StartsWith('blend-large-')){$Theme=$Theme.Substring(12);$LargeText=$true;$BlendOnly=$true;$LanguageLimit=2}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
@@ -514,7 +515,7 @@ try{
  Menu-Command 'file' 'new_window'
  Wait-Until {@(Windows).Count -eq 2} 'Second window did not register' 45
  $second=@(Windows|Where-Object id -ne $first.id)[0];Ready $second
- if(@($NoticeOnly,$HeaderOnly,$BlendOnly,$GroupedToolsOnly,$ConfigurationOnly,$ProfilesOnly,$ZenThemeOnly,$ColorOnly|Where-Object {$_}).Count -gt 1){throw 'Choose one focused localization mode'}
+ if(@($NoticeOnly,$StatsOnly,$HeaderOnly,$BlendOnly,$GroupedToolsOnly,$ConfigurationOnly,$ProfilesOnly,$ZenThemeOnly,$ColorOnly|Where-Object {$_}).Count -gt 1){throw 'Choose one focused localization mode'}
  if($ColorOnly){
   $CapyPopups=$true
   [CapyRowPointer]::Initialize([uint32]$review.Id)
@@ -547,7 +548,7 @@ try{
   [pscustomobject]@{theme=$Theme;languages=$seen;profile_library_search='nine private ICC entries, stable-ID query and live localized metadata passed';evidence=$run}|ConvertTo-Json -Depth 4|Tee-Object -FilePath (Join-Path $run 'results.json')
   $completed=$true;return
  }
- if($GroupedToolsOnly){
+ if($GroupedToolsOnly -or $StatsOnly){
   if($HeaderOnly -or $BlendOnly -or $NoticeOnly){throw 'Choose one focused localization mode'}
   [CapyRowPointer]::Initialize([uint32]$review.Id)
   Use-Window $second;Menu-Command 'edit' 'settings';Invoke-Id 'preference-page-appearance'
@@ -563,6 +564,11 @@ try{
   }
   Language-Choice 1|Out-Null
   Wait-Until {(Model $first).windows_active_tag -eq $shippedTags[0]} 'Grouped baseline did not adopt the first shipped language' 30
+  if($StatsOnly){
+   Stats-CopySurface
+   Write-Output "Retained idle Diagnostics help and identity passed for $($seen.Count) languages ($Theme)"
+   $completed=$true;return
+  }
   Toolbar-GroupedLanguageSurface
   [pscustomobject]@{theme=$Theme;retained_grouped_toolbar_draft_focus_popup='passed';language_choices=$seen;evidence=$run}|ConvertTo-Json -Depth 8|Tee-Object -FilePath (Join-Path $run 'results.json')
   $completed=$true;return

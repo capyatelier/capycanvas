@@ -376,12 +376,15 @@ function Panel-CopySurfaces{
   $view=Fresh-Model $first $choice.tag
   if(($view.state.document_file|ConvertTo-Json -Depth 20 -Compress) -ne $document -or $view.windows_gpu_generation -ne $gpu -or ($view.state.color_library|ConvertTo-Json -Depth 80 -Compress) -ne $palette){throw 'Palette caption-only edit/cancel changed authored colors or document/GPU ownership'}
  }
- Copy-Panel 'stats' 'renderer-stat-0';$record=Reveal 'stroke-recording';$recordIdentity=$record.GetRuntimeId() -join ':'
+ Stats-CopySurface
+}
+function Stats-CopySurface{
+ Use-Window $first;Copy-Panel 'stats' 'renderer-stat-0';$record=Reveal-PanelControl 'stats' 'stroke-recording';$recordIdentity=$record.GetRuntimeId() -join ':'
  $idleHelp=@($shippedTags|ForEach-Object {Catalog-Text $_ 'native-color-record-tablet' 'common'})
  if($idleHelp -notcontains $record.Current.HelpText){throw 'Diagnostics copy fixture requires the ordinary idle recording control'}
  $baseline=Fresh-Model;$document=$baseline.state.document_file|ConvertTo-Json -Depth 20 -Compress;$gpu=$baseline.windows_gpu_generation
  Surface-Languages 'retained-diagnostics-record-help' {
-  $record=Reveal 'stroke-recording';$view=Fresh-Model $first $choice.tag
+  $record=Reveal-PanelControl 'stats' 'stroke-recording';$view=Fresh-Model $first $choice.tag
   if($record.Current.HelpText -ne (Catalog-Text $choice.tag 'native-color-record-tablet' 'common') -or ($record.GetRuntimeId() -join ':') -ne $recordIdentity){throw 'Retained idle Diagnostics record help stayed stale or the control was replaced'}
   if(($view.state.document_file|ConvertTo-Json -Depth 20 -Compress) -ne $document -or $view.windows_gpu_generation -ne $gpu){throw 'Diagnostics copy publication changed document/GPU ownership'}
  }
