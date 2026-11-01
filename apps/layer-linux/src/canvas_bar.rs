@@ -251,6 +251,7 @@ impl CanvasBar {
             && self.root.is_visible() == allocation.is_some() {
             return;
         }
+        let visible_bounds = self.visible_bounds();
         if let Some(presentation) = presentation {
             if layout.is_some() {
                 self.hold.set(Some((presentation.context, presentation.hold)));
@@ -274,8 +275,10 @@ impl CanvasBar {
         let changed = self.layout.replace(allocation) != allocation;
         self.root.set_visible(allocation.is_some());
         self.present();
-        if changed {
+        if changed || self.visible_bounds() != visible_bounds {
             workspace.place_notice();
+        }
+        if changed {
             workspace.queue_surface_allocate();
         }
     }

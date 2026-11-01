@@ -72,20 +72,35 @@ fn native_notice_move_on_locked_layer() {
         "Move on a locked layer shows the notice",
     );
     assert!(notice_action(&w).is_none(), "the refusal has no action");
+    until(|| w.canvas_bar.visible_bounds().is_some(), "the locked selection bar is shown");
     let css = paint_color(&w.notice.root, "#ff00ff");
     assert!(idle_paint(&w.window).color_bounds(&w.window, [255, 0, 255, 255]).is_some(), "shown notice paints before resizing");
-    let frames = sample_after_paint(&w.window, glib::clone!(#[weak] w, #[upgrade_or_default] move || {
+    let sample = || sample_after_paint(&w.window, glib::clone!(#[weak] w, #[upgrade_or_default] move || {
         let placement = w.notice_placement();
         let point = w.surface.compute_point(&w.window, &gtk::graphene::Point::new(placement.x, placement.y)).unwrap();
         (point.x(), point.y())
     }));
+    let frames = sample();
+    let retained = w.canvas_bar.bounds();
+    let zoom = state(&w).camera.zoom;
+    w.dispatch(UiAction::SetZoom { zoom: zoom * 1.01 });
+    w.dispatch(UiAction::SetZoom { zoom });
+    assert_eq!(w.canvas_bar.bounds(), retained, "the hidden bar retains its allocation");
+    assert!(w.canvas_bar.visible_bounds().is_none());
+    until(|| w.canvas_bar.visible_bounds().is_some(), "the bar returns after camera motion");
+    assert_eq!(w.canvas_bar.bounds(), retained, "reveal retains the original allocation");
+    idle_paint(&w.window);
+    let mut painted = frames.finish();
+    assert!(!painted.is_empty(), "bar visibility paints the notice");
+    let frames = sample();
     w.window.unmaximize();
     w.window.set_default_size(1100, 700);
     pump(300);
     let frames = frames.finish();
     assert!(!frames.is_empty(), "resizing paints the notice");
     assert!(frames.last().unwrap().color_bounds(&w.window, [255, 0, 255, 255]).is_some(), "notice paints after resizing settles");
-    for frame in frames {
+    painted.extend(frames);
+    for frame in painted {
         let bounds = frame.color_bounds(&w.window, [255, 0, 255, 255]).expect("a shown notice stays painted during resize");
         assert!((bounds.x() + bounds.width() * 0.5 - frame.state.0).abs() <= 2.
             && (bounds.y() + bounds.height() - frame.state.1).abs() <= 2.,
