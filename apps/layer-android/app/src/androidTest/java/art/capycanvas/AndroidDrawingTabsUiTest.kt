@@ -98,8 +98,16 @@ class AndroidDrawingTabsUiTest {
         }
     }
     private fun closeTab(id:Long,checkErrors:Boolean=true) {
-        if(point(tag("drawing-close-$id")) == null)tap(tag("drawing-selector-button"),checkErrors)
-        tap(tag("drawing-close-$id"),checkErrors)
+        val close=tag("drawing-close-$id"); val selector=tag("drawing-selector-button")
+        var openedSelector=false
+        tap({node ->
+            when {
+                close(node) -> {openedSelector=false;true}
+                selector(node) -> {openedSelector=true;true}
+                else -> false
+            }
+        },checkErrors)
+        if(openedSelector)tap(close,checkErrors)
     }
     private fun create(): Long {
         ready(); val count = ids().size
