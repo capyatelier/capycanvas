@@ -26,6 +26,7 @@ public:
     static constexpr size_t CommandSlots=32;
     static constexpr size_t CommandBytes=64*1024;
     bool Empty() const { return items.empty(); }
+    bool HasBeforePointers() const { return !items.empty()&&!std::holds_alternative<std::vector<CapyPointer>>(items.front()); }
     bool CanPush(CanvasWork const& item) const {
         auto cost=Bytes(item);
         bool command=std::holds_alternative<CanvasCommand>(item);

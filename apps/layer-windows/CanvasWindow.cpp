@@ -1137,6 +1137,14 @@ void CanvasWindow::Run() {
             refreshFrameDemand();
             query.reply(std::move(packet));
         };
+        auto dispatch=[this](std::deque<CanvasWork> const& pending){
+            for(auto const& item:pending){
+                auto result=DispatchWork(item,false);
+                if(result>0)Fail(NativeString(capy_error()).get());
+                if(result<0){Fail(NativeString(capy_error()).get());return false;}
+            }
+            return true;
+        };
         bool inputStarted=false;
         bool brushReady=false;
         bool probeReady=false;
@@ -1183,11 +1191,23 @@ void CanvasWindow::Run() {
                     Publish(std::move(owned.bytes),routing);
                 }
             }
-            std::optional<CanvasQuery> idleQuery;
+            std::optional<CanvasQuery> idleQuery;std::deque<CanvasWork> commands;
             {std::lock_guard lock(mutex);
-                auto step=NextCanvasRenderStep(dirty||transportFailed||!work.Empty()||pendingHover.has_value()||recoveryAttempts,previewWork);
+                auto step=NextCanvasRenderStep(dirty||transportFailed||pendingHover.has_value()||recoveryAttempts,work,previewWork);
                 if(step==CanvasRenderStep::Wait)continue;
+                if(step==CanvasRenderStep::Commands)commands=work.TakeBeforePointers();
                 if(step==CanvasRenderStep::Answer)idleQuery=previewWork.Take();
+            }
+            if(!commands.empty()){
+                space.notify_all();if(!dispatch(commands))break;
+                if(capy_chrome(host,0,0,0,false,menuOpen.load())<0){Fail(NativeString(capy_error()).get());break;}
+                if(capy_device_lost(host))continue;
+                refreshFrameDemand();
+                CapySnapshotInfo routing{};
+                if(auto snapshot=capy_snapshot(host,&routing)){
+                    NativeString owned(snapshot,capy_string_free);Publish(std::move(owned.bytes),routing);
+                }
+                CompleteCommands();
             }
             if(idleQuery){answer(*idleQuery);continue;}
             if(lastFrame){
@@ -1216,14 +1236,8 @@ void CanvasWindow::Run() {
             {std::lock_guard lock(mutex);pending=recoveryAttempts?work.TakeBeforePointers():work.Take();overflow=transportFailed;hover=std::exchange(pendingHover,std::nullopt);}
             auto drainedAt=latencyTrace.enabled?Now():0;
             space.notify_all();
-            bool failed=false;
             if(hover&&capy_chrome(host,*hover?0:1,0,0,false,menuOpen.load())<0){Fail(NativeString(capy_error()).get());break;}
-            for(auto& item:pending) {
-                auto result=DispatchWork(item,false);
-                if(result>0)Fail(NativeString(capy_error()).get()); // A rejected UI action leaves the canvas running.
-                if(result<0) {Fail(NativeString(capy_error()).get());failed=true;break;}
-            }
-            if(failed) break;
+            if(!dispatch(pending))break;
             if((!pending.empty()||hover)&&capy_chrome(host,0,0,0,false,menuOpen.load())<0){Fail(NativeString(capy_error()).get());break;}
             if(overflow){sentModifiers.store(0);if(capy_input(host,R"({"type":"blur"})")<0){Fail(NativeString(capy_error()).get());break;}}
             if(capy_device_lost(host))continue;

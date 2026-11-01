@@ -1,5 +1,6 @@
 #pragma once
 #include "NativeHandles.h"
+#include "CanvasWorkBuffer.h"
 #include <deque>
 #include <functional>
 #include <memory>
@@ -43,9 +44,10 @@ private:
     std::deque<CanvasQuery> items;
 };
 
-enum class CanvasRenderStep { Wait, Answer, Frame };
-inline CanvasRenderStep NextCanvasRenderStep(bool canvasPending,CanvasQueryQueue const& queries){
-    return canvasPending?CanvasRenderStep::Frame:queries.Empty()?CanvasRenderStep::Wait:CanvasRenderStep::Answer;
+enum class CanvasRenderStep { Wait, Answer, Commands, Frame };
+inline CanvasRenderStep NextCanvasRenderStep(bool canvasPending,CanvasWorkBuffer const& work,CanvasQueryQueue const& queries){
+    if(work.HasBeforePointers())return CanvasRenderStep::Commands;
+    return canvasPending||!work.Empty()?CanvasRenderStep::Frame:queries.Empty()?CanvasRenderStep::Wait:CanvasRenderStep::Answer;
 }
 
 class CanvasQuerySlots {

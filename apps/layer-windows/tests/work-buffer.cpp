@@ -694,12 +694,26 @@ int main() {
     assert(queries.Take(CanvasQueryKind::Workspace)->json=="second");
     assert(!queries.Take(CanvasQueryKind::Workspace));
     assert(queries.Take()->json=="menu");assert(queries.Take()->json=="thumbnail");assert(queries.Empty());
-    assert(NextCanvasRenderStep(false,queries)==CanvasRenderStep::Wait&&NextCanvasRenderStep(true,queries)==CanvasRenderStep::Frame);
+    CanvasWorkBuffer idleWork;
+    assert(NextCanvasRenderStep(false,idleWork,queries)==CanvasRenderStep::Wait&&NextCanvasRenderStep(true,idleWork,queries)==CanvasRenderStep::Frame);
     for(auto kind:{CanvasQueryKind::Filters,CanvasQueryKind::Thumbnails,CanvasQueryKind::LayerMenu,CanvasQueryKind::Workspace,CanvasQueryKind::Document,CanvasQueryKind::Papers}){
         assert(queries.Push({kind,"retry",{}}));
-        assert(NextCanvasRenderStep(false,queries)==CanvasRenderStep::Answer);
-        assert(NextCanvasRenderStep(true,queries)==CanvasRenderStep::Frame);
+        assert(NextCanvasRenderStep(false,idleWork,queries)==CanvasRenderStep::Answer);
+        assert(NextCanvasRenderStep(true,idleWork,queries)==CanvasRenderStep::Frame);
         queries.Clear();
+    }
+    {
+        CanvasWorkBuffer admitted;
+        assert(admitted.Push(CanvasCommand{CanvasCommandKind::Document,R"({"operation":"close"})"}));
+        assert(NextCanvasRenderStep(false,admitted,queries)==CanvasRenderStep::Commands);
+        assert(NextCanvasRenderStep(true,admitted,queries)==CanvasRenderStep::Commands);
+        auto admittedCommands=admitted.TakeBeforePointers();
+        assert(admittedCommands.size()==1&&std::get<CanvasCommand>(admittedCommands.front()).kind==CanvasCommandKind::Document&&admitted.Empty());
+        assert(NextCanvasRenderStep(false,admitted,queries)==CanvasRenderStep::Wait);
+        assert(admitted.Push(std::vector<CapyPointer>(1)));
+        assert(admitted.Push(CanvasCommand{CanvasCommandKind::Document,R"({"operation":"close"})"}));
+        assert(NextCanvasRenderStep(false,admitted,queries)==CanvasRenderStep::Frame&&admitted.TakeBeforePointers().empty());
+        auto ordered=admitted.Take();assert(ordered.size()==2&&std::holds_alternative<std::vector<CapyPointer>>(ordered.front())&&std::get<CanvasCommand>(ordered.back()).kind==CanvasCommandKind::Document);
     }
     std::cout<<"Canvas queries: an idle canvas answers every query kind without acquiring or presenting a frame\n";
     {
