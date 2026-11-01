@@ -335,11 +335,11 @@ impl Scene {
     pub(super) fn object_tile(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, owner: OccurrenceHandle,
         coordinate: [u32; 2],
     ) -> Result<usize, GpuRasterError> {
-        if packet.scene.vector_layer(owner).is_some() {return Ok(self.vector_tile(r,packet,owner,coordinate)?);}
+        if packet.scene.vector_layer(owner).is_some() {return self.vector_tile(r,packet,owner,coordinate);}
         let content=self.object_spatial.content(packet.scene,owner).ok_or(GpuRasterError::InvalidExtent)?;
         let window=ObjectWindow {origin:coordinate.map(|v|f64::from(v*PAGE_SIZE)),side:1.,size:[PAGE_SIZE;2]};
         let request=self.collection_job(r,packet,owner,content,window);
-        if request.keys.is_empty() {return Ok(self.alloc(r,wgpu::Color::TRANSPARENT)?);}
+        if request.keys.is_empty() {return self.alloc(r,wgpu::Color::TRANSPARENT);}
         if inline_sampling(r) && !self.object_display && !self.object_query {return self.inline_object_tile(r,&request);}
         let canonical=if self.object_display||self.object_query {self.object_results.resolve_collection(r,packet.scene,&request)?}
             else {self.exact_object_results.resolve_collection(r,packet.scene,&request)?};

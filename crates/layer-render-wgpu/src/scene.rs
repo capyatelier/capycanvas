@@ -283,7 +283,7 @@ impl Scene {
             + self.placement.iter().map(pixel_transform::PixelTransform::storage_bytes).sum::<u64>() + 32
             + self.images.storage_bytes() + self.scale_sources.storage_bytes() + self.object_results.bytes() + self.exact_object_results.bytes() + self.object_spatial.storage_bytes() + self.scale_commands.as_ref().map_or(0, scale::Commands::storage_bytes) + self.vectors.storage_bytes() - duplicate_metadata
     }
-    pub(crate) fn required_object_sources(&self) -> Result<Vec<(Arc<layer_core::color::source::SourceImage>, [u32; 2])>, GpuRasterError> {
+    pub(crate) fn required_object_sources(&self) -> Result<Vec<sources::RequiredSource>, GpuRasterError> {
         let mut tiles = Vec::new();
         self.object_results.required_sources(&mut tiles)?;
         self.exact_object_results.required_sources(&mut tiles)?;

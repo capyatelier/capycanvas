@@ -70,7 +70,7 @@ impl ObjectCache {
     pub fn clear(&mut self) { while let Some(task) = self.tasks.pop_front() { self.retire(task); } self.damage.clear(); self.coordinates.clear(); }
     fn retire(&mut self, mut task: Task) { task.coordinates = None; self.retiring.push(task); }
     pub fn pending(&self) -> bool { self.tasks.iter().any(|task| !task.complete || !task.valid.load(Ordering::Acquire)) }
-    pub fn required_sources(&self, tiles: &mut Vec<(Arc<layer_core::color::source::SourceImage>, [u32; 2])>) -> Result<(), GpuRasterError> {
+    pub fn required_sources(&self, tiles: &mut Vec<sources::RequiredSource>) -> Result<(), GpuRasterError> {
         let Some(task) = self.tasks.iter().find(|task| !task.complete || !task.valid.load(Ordering::Acquire)) else { return Ok(()); };
         let restarted = !task.valid.load(Ordering::Acquire);
         let next = task.collection.as_ref().filter(|collection| restarted || collection.next)

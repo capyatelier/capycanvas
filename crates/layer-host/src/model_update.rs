@@ -174,7 +174,7 @@ mod tests {
             let group=words[0] as u32;
             let commands=usize::try_from(words[3]).unwrap();let triangles=usize::try_from(words[4]).unwrap();
             let end=5+(commands+triangles)*7;assert!(words.len()>=end,"truncated vector geometry");
-            let decode=|slice: &[i32]|slice.chunks_exact(7).map(|chunk|chunk.try_into().unwrap()).collect();
+            let decode=|slice: &[i32]|slice.as_chunks::<7>().0.to_vec();
             assert!(result.insert(group,(decode(&words[5..5+commands*7]),decode(&words[5+commands*7..end]))).is_none());
             words=&words[end..];
         }

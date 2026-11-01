@@ -15,7 +15,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-
+pub(crate) type RequiredSource = (Arc<SourceImage>, [u32; 2]);
 pub(crate) const FLOAT_TILE_BYTES: u64 = PAGE_SIZE as u64 * PAGE_SIZE as u64 * 16;
 // Resident decoded pixels and in-flight uploads have different lifetimes.
 // Retain neighboring source tiles independently of staging memory. Immutable
@@ -228,7 +228,7 @@ impl DecodedTiles {
     fn mip_limit(&self) -> u64 {
         (self.limits.slots.saturating_sub(MIN_DECODED_SLOTS) as u64) * self.tile_bytes()
     }
-    pub(crate) fn require_images(&mut self, tiles: impl IntoIterator<Item = (Arc<SourceImage>, [u32; 2])>) {
+    pub(crate) fn require_images(&mut self, tiles: impl IntoIterator<Item = RequiredSource>) {
         self.required.clear();
         for (source, coordinate) in tiles {
             if self.required.len() >= self.limits.slots.saturating_sub(1) { break; }
