@@ -332,7 +332,6 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     }
 
     void paintStrip(Column& column,J const& placement,uint32_t index){
-        auto hovered=gestures->HoverTab();for(auto const& [id,shell]:column.tabs)hoverPanelTabShell(shell,shell.Children().GetAt(1)==hovered);
         auto [offset,animate]=gestures->TabOffset(uint32_t(num(object(model,L"tabs"),L"group")));column.strip.TranslateTab(offset,animate);
         float width=float(num(placement,L"width")),height=float(data->panelMetric(L"tab_bar_height")),x=0,activeWidth=0,activeHeight=0,clipX=0,clipWidth=width;
         auto scroll=column.header.Children().GetAt(0).as<ScrollView>();auto active=column.tabs.find(std::wstring(str(object(model,L"tabs"),L"active")));
@@ -553,6 +552,10 @@ WorkspaceDrawers::WorkspaceDrawers(std::shared_ptr<WorkspaceData> data,Canvas ro
 WorkspaceDrawers::~WorkspaceDrawers(){impl->reset();}
 void WorkspaceDrawers::Apply(NativeLayoutInput input,float width,float height){impl->apply(std::move(input),width,height);}
 void WorkspaceDrawers::PresentChrome(){for(auto const& [id,drawer]:impl->drawers)drawer->paintBackground();}
+void WorkspaceDrawers::HoverTabs(UIElement const& hovered){
+    for(auto const& [id,drawer]:impl->drawers)for(auto const& column:drawer->columns)for(auto const& [panel,shell]:column.tabs)
+        hoverPanelTabShell(shell,shell.Children().GetAt(1)==hovered);
+}
 void WorkspaceDrawers::AppendOverviews(A& slots)const{for(auto const& [id,drawer]:impl->drawers)drawer->appendOverviews(slots);}
 A WorkspaceDrawers::Sources()const{
     A result;

@@ -10,6 +10,7 @@ public:
     void Apply(NativeLayoutInput input,float width,float height);
     bool PresentTabs();
     void PresentChrome();
+    void HoverTabs(winrt::Microsoft::UI::Xaml::UIElement const& hovered);
     void AppendOverviews(CapyUi::A& slots)const;
     CapyUi::A Sources()const;
     void AppendGlass(CapyUi::A& regions,CapyUi::A& connections,winrt::Microsoft::UI::Xaml::UIElement const& reference)const;

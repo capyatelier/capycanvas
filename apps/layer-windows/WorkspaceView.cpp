@@ -1087,12 +1087,11 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         return surfaces;
     }
     void presentBackgrounds(){
-        auto hovered=gestures->HoverTab();
+        presentHoverTabs(gestures->HoverTab());
         measurePanelBridges();presentPanelBridges();
         auto document=data->chromeFrames->presented.document;
         for(auto& [id,group]:groups){
             if(group.hidden)continue;
-            hoverTabs(group,hovered);
             A slots;for(auto value:data->chromeFrames->presented.overviews)if(num(value.GetObject(),L"order")>=visualOrder(root,group.frame)&&num(value.GetObject(),L"opacity",1)>0)slots.Append(value);
             bool connected=nativeResize()&&!group.bridge.empty();
             bool expanded=group.presented.Size()!=0,tabbed=flag(group.geometry,L"tabs_visible");
@@ -1166,7 +1165,11 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         }
     }
     void hoverTabs(Group& group,UIElement const& hovered){for(auto const& [id,shell]:group.tabs)hoverPanelTabShell(shell,shell.Children().GetAt(1)==hovered);}
-    void cutStrip(uint32_t id){if(auto found=groups.find(id);found!=groups.end()){hoverTabs(found->second,gestures->HoverTab());cutStrip(found->second);}}
+    void presentHoverTabs(UIElement const& hovered){
+        for(auto& [id,group]:groups)if(!group.hidden)hoverTabs(group,hovered);
+        drawers->HoverTabs(hovered);
+    }
+    void cutStrip(uint32_t id){if(auto found=groups.find(id);found!=groups.end())cutStrip(found->second);}
     void cutStrip(Group& group){
         auto [offset,animate]=gestures->TabOffset(uint32_t(num(group.geometry,L"id")));group.strip.TranslateTab(offset,animate);
         std::vector<Point> band,active;float width=placement(group).Width,clipX=0,clipWidth=width;
