@@ -1,11 +1,49 @@
 import assert from 'node:assert/strict';
-import {mkdir,writeFile} from 'node:fs/promises';
+import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {png} from './clone-journey.test.mjs';
 import {placementSave} from './image-placement-motion.test.mjs';
 import {rasterIdentity,sourceIdentity,packageOccurrences} from './package-fixture.test.mjs';
 import {chooseToolActionGroup} from './panel-controls-journey.test.mjs';
+import {clickDropdownChoice} from './dropdown-fixture.mjs';
+import {createDrawing} from './new-drawing-fixture.mjs';
+
+function scribbleDistance(caseData,region,point) {
+  const distance=(p,a,b)=>{const dx=b[0]-a[0],dy=b[1]-a[1],t=Math.max(0,Math.min(1,((p[0]-a[0])*dx+(p[1]-a[1])*dy)/Math.max(Number.EPSILON,dx*dx+dy*dy)));return Math.hypot(p[0]-a[0]-dx*t,p[1]-a[1]-dy*t);};
+  return Math.min(...region.polygon.map((a,i)=>distance(point,a,region.polygon[(i+1)%region.polygon.length])),...caseData.paths.flatMap(path=>path.slice(1).map((b,i)=>distance(point,path[i],b))));
+}
+
+function scoreScribble(caseData,region,result,reference,outsideCell=0) {
+  const band=caseData.size/2+1.5;
+  const inside=p=>{let hit=false;for(let i=0;i<region.polygon.length;i++){const a=region.polygon[i],b=region.polygon[(i+1)%region.polygon.length];if((a[1]>p[1])!==(b[1]>p[1])&&p[0]<(b[0]-a[0])*(p[1]-a[1])/(b[1]-a[1])+a[0])hit=!hit;}return hit;};
+  const alpha=(x,y)=>result.pixels[(y*result.extent[0]+x)*4+3];
+  let missed=0,leaked=outsideCell;
+  const [left,top,width,height]=caseData.bounds;
+  for(let y=top;y<top+height;y++)for(let x=left;x<left+width;x++) {
+    const point=[x+.5,y+.5],line=scribbleDistance(caseData,region,point),junctionInk=reference.pixels[(y*reference.extent[0]+x)*4+3]>0&&caseData.junctions.some(junction=>Math.hypot(point[0]-junction[0],point[1]-junction[1])<=24);
+    if(inside(point)){if(line>band&&!junctionInk&&alpha(x,y)<250)missed++;}
+    else if(line>band&&!junctionInk&&alpha(x,y))leaked++;
+  }
+  for(const [x,y] of region.wash_samples)assert.ok(alpha(x,y)>=250,`${caseData.name}: missed bottom wash at ${x},${y}`);
+  const leakCeiling=region.known_leaks?.web??0;
+  assert.ok(leaked<=leakCeiling,`${caseData.name} ${region.side}: ${leaked} unexpected leaked pixels (ceiling ${leakCeiling})`);
+  if(leakCeiling)console.log(`${caseData.name} ${region.side} known leak: ${leaked}/${leakCeiling}; shrink or remove when improved`);
+  const ceiling=region.known_misses?.web??4;
+  assert.ok(missed<=ceiling,`${caseData.name}: ${missed} missed interior/tip/corner pixels (ceiling ${ceiling})`);
+  if(ceiling>4)console.log(`${caseData.name} ${region.side} known misses: ${missed}/${ceiling}; shrink or remove the ceiling when improved`);
+  let knownMissing=0;
+  for(const centre of region.centres){
+    const covered=[-1,0,1].some(dy=>[-1,0,1].some(dx=>{const x=Math.round(centre[0])+dx,y=Math.round(centre[1])+dy;return Math.hypot(x+.5-centre[0],y+.5-centre[1])<=1.5&&inside([x+.5,y+.5])&&alpha(x,y)>0;}));
+    if(region.known_empty_centres.some(known=>known.every((value,i)=>value===centre[i])))knownMissing+=Number(!covered);
+    else assert.ok(covered,`${caseData.name}: no fill under centre line ${centre}`);
+  }
+  if(region.known_empty_centres.length)console.log(`${caseData.name} ${region.side} known centre misses: ${knownMissing}/${region.known_empty_centres.length}; remove only after all hosts cover them`);
+  const knownProbes=region.known_filled_probes?.web??[];
+  assert.ok(knownProbes.every(index=>Number.isInteger(index)&&index>=0&&index<region.empty_probes.length));
+  for(const [index,point] of region.empty_probes.entries())assert.ok(alpha(Math.floor(point[0]),Math.floor(point[1]))===0||leaked>0&&leakCeiling>0&&knownProbes.includes(index),`${caseData.name} ${region.side}: far side stays empty at ${point}`);
+}
 
 export async function checkEncloseFill({call,evaluate,settle}) {
+  const scribbles=JSON.parse(await readFile(new URL('../../tools/fixtures/fill-scribble.json',import.meta.url),'utf8'));
   const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/enclose-fill/web';
   await mkdir(directory,{recursive:true});
   const wait=expression=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+30000;function poll(){if(${expression})resolve();else if(performance.now()>end)reject(Error(${JSON.stringify(expression)}));else setTimeout(poll,30)}poll()})`);
@@ -31,10 +69,70 @@ export async function checkEncloseFill({call,evaluate,settle}) {
   };
   const click=label=>evaluate(`(()=>{const button=[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)});if(!button||button.disabled)throw Error('Missing enabled '+${JSON.stringify(label)});button.click()})()`);
   const output=async()=>{
-    await invoke('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Dynamic range"]')`);
-    await click('Preview Output');await wait(`!!document.querySelector('canvas[aria-label="Output preview"]')&&!Array.from(document.querySelectorAll('dialog[open] button')).find(b=>b.textContent==='Preview Output').disabled`);
-    const pixels=await evaluate(`(()=>{const c=document.querySelector('canvas[aria-label="Output preview"]');return{extent:[c.width,c.height],pixels:Array.from(c.getContext('2d').getImageData(0,0,c.width,c.height).data)}})()`);
-    await click('Cancel');await idle();return pixels;
+    await invoke('export_document');await wait(`!!document.querySelector('dialog[open] .dropdown[aria-label="Format"]')`);
+    for(const [label,value] of [['Format','Png'],['Bit depth','U8'],['Pixel size','Original'],['Dither','None']])await clickDropdownChoice({call,evaluate,settle},`dialog[open] .dropdown[aria-label="${label}"]`,value);
+    await evaluate('placementTest.saved=null');await click('Choose File…');
+    await wait('placementTest.saved?.length>0&&!document.querySelector("dialog[open]")');await idle();
+    return evaluate(`(async()=>{const bitmap=await createImageBitmap(new Blob([placementTest.saved],{type:'image/png'})),canvas=new OffscreenCanvas(bitmap.width,bitmap.height),context=canvas.getContext('2d',{willReadFrequently:true});context.drawImage(bitmap,0,0);bitmap.close();return{extent:[canvas.width,canvas.height],pixels:Array.from(context.getImageData(0,0,canvas.width,canvas.height).data)}})()`);
+  };
+  const scribblePath=async points=>{
+    await idle();
+    for(let i=0;i<points.length;i++){await call('Input.dispatchMouseEvent',{type:i?'mouseMoved':'mousePressed',...await screen(points[i]),button:'left',buttons:1,clickCount:1,pointerType:'pen',force:.5});await settle();}
+    await call('Input.dispatchMouseEvent',{type:'mouseReleased',...await screen(points.at(-1)),button:'left',buttons:0,clickCount:1,pointerType:'pen',force:0});await settle();await idle();
+  };
+  const scribblePaper=async(theme,paper)=>{
+    await invoke('new_document');await wait('!!layerApp.state().new_drawing');
+    await contact('#new-drawing-texture');
+    const paperIndex=await evaluate(`layerApp.state().new_drawing.drawer.tiles.findIndex(tile=>tile.id===${JSON.stringify(paper)})`);assert.ok(paperIndex>=0);
+    await contact(`#new-drawing-papers [data-new-drawing-paper="${paperIndex}"]`);
+    await contact('#new-drawing-paper-relief-field input');
+    for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});
+    await call('Input.insertText',{text:'100'});
+    for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
+    await contact('#new-drawing-paper-use');
+
+    const setup=await evaluate(createDrawing({width:scribbles.size[0],height:scribbles.size[1],space:'Srgb',depth:'U8',relief:null}));assert.equal(setup.paper.texture,paper);assert.equal(setup.paper.relief,100);assert.equal(await evaluate('document.body.dataset.theme'),theme);await idle();await invoke('fit_canvas');
+    await send({type:'set_color',rgba:[0,0,0,1]});
+    const cases=scribbles.cases.filter(c=>c.paper===paper);
+    for(const caseData of cases) {
+      if(caseData.vector){await send({type:'layer',action:{op:'reference_selection'}});await send({type:'layer',action:{op:'new_vector'}});assert.equal(await evaluate('layerApp.state().layers.find(l=>l.editing).content_icon'),'layer-path-symbolic');}
+      await send({type:'select_brush',id:caseData.preset});await send({type:'set_brush_size',value:caseData.size});await send({type:'set_tool_setting',id:'smoothing_strength',value:0});
+      for(const path of caseData.paths)await scribblePath(path);
+      if(caseData.eraser.length){const revision=await evaluate('String(layerApp.state().layers.find(l=>l.editing).paint_revision)');await send({type:'select_brush',id:3});await send({type:'set_brush_size',value:caseData.gap});assert.ok(await selected('eraser'));await scribblePath(caseData.eraser);assert.notEqual(await evaluate('String(layerApp.state().layers.find(l=>l.editing).paint_revision)'),revision,'Real eraser contact cuts the reference ink');}
+    }
+    const paperLayer=await evaluate('Number(layerApp.state().layers.find(layer=>layer.content_icon==="layer-paper-symbolic").id)');
+    assert.equal(await evaluate(`layerApp.state().layers.find(layer=>Number(layer.id)===${paperLayer}).visible`),true);
+    await send({type:'layer',action:{op:'visibility',id:paperLayer,value:false}});
+    const reference=await output();assert.deepEqual(reference.extent,scribbles.size);
+    await writeFile(`${directory}/scribble-reference-${paper}-${theme}.png`,Buffer.from(await evaluate("Array.from(placementTest.saved)")));
+    await invoke('undo');await idle();
+    assert.equal(await evaluate(`layerApp.state().layers.find(layer=>Number(layer.id)===${paperLayer}).visible`),true,'Reference export Undo restores Paper');
+    await send({type:'layer',action:{op:'reference_selection'}});await send({type:'layer',action:{op:'new',group:false,clipped:false}});
+    await invoke('fill');await chooseToolActionGroup({call,evaluate,settle},'selection-source','selection_reference');
+    await chooseToolActionGroup({call,evaluate,settle},'close-gaps','close_gaps_auto');
+    await chooseToolActionGroup({call,evaluate,settle},'region-edges','edges_line_middle');
+    for(const [id,value] of [['grain_depth',0],['tolerance',.05],['opacity',1]])await send({type:'set_tool_setting',id,value});
+    assert.equal(await evaluate('layerApp.state().tool_settings.find(c=>c.id==="grain_depth").value'),0);
+    await send({type:'set_color',rgba:[.85,.1,.05,1]});
+    const baseline=rasterIdentity(await save());
+    const visibility=await evaluate('layerApp.state().layers.map(l=>({id:Number(l.id),visible:l.visible}))');
+    const references=await evaluate('layerApp.state().layers.filter(l=>!l.editing&&l.visible).map(l=>Number(l.id))');
+    for(const caseData of cases)for(const region of caseData.regions){
+      await scribblePath([region.seed,region.seed]);
+      await writeFile(`${directory}/scribble-${caseData.preset}-${region.side}-${paper}-${theme}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+      const hidden=[];
+      try {
+        for(const id of references){await send({type:'layer',action:{op:'visibility',id,value:false}});assert.equal(await evaluate(`layerApp.state().layers.find(layer=>Number(layer.id)===${id}).visible`),false,'Export isolation changes actual visibility');hidden.push(id);}
+        const result=await output();assert.deepEqual(result.extent,scribbles.size,'Geometry scoring reads original exported pixels');
+        await writeFile(`${directory}/scribble-target-${caseData.preset}-${region.side}-${paper}-${theme}.png`,Buffer.from(await evaluate("Array.from(placementTest.saved)")));
+        let outsideCell=0;for(let y=0;y<result.extent[1];y++)for(let x=0;x<result.extent[0];x++)if(result.pixels[(y*result.extent[0]+x)*4+3]&&!((x>=caseData.bounds[0]&&y>=caseData.bounds[1]&&x<caseData.bounds[0]+caseData.bounds[2]&&y<caseData.bounds[1]+caseData.bounds[3])||scribbleDistance(caseData,region,[x+.5,y+.5])<=caseData.size/2+1.5))outsideCell++;
+        scoreScribble(caseData,region,result,reference,outsideCell);
+      } finally {for(let i=hidden.length;i>0;i--){await invoke('undo');await idle();}}
+      assert.deepEqual(await evaluate('layerApp.state().layers.map(l=>({id:Number(l.id),visible:l.visible}))'),visibility,`${caseData.name} ${region.side}: isolation Undo restores original visibility`);
+      await invoke('undo');await idle();
+      assert.deepEqual(rasterIdentity(await save()),baseline,`${caseData.name} ${region.side}: Undo restores exact empty target`);
+      console.log(`PASS ${theme}/${paper}/${caseData.name}/${region.side}: checked geometry bounds and exact Undo`);
+    }
   };
   const settings=await evaluate('layerApp.state().settings');
   const workspace=await evaluate('layerApp.state().workspace');
@@ -74,14 +172,21 @@ export async function checkEncloseFill({call,evaluate,settle}) {
       await invoke('undo');await idle();assert.deepEqual(await marks(),initialMarks,'One undo restores the reference mark');
       await invoke('redo');await idle();assert.deepEqual((await marks()).map(i=>i.selected),[true,true]);
       await invoke('undo');await idle();
-      await evaluate(`document.querySelector('.dock-group [data-tool-action-group="selection-source"]').scrollIntoView({block:'nearest'})`);await settle();
+      await evaluate(`document.querySelector('.dock-group [data-tool-choice-bar="selection-source"]').scrollIntoView({block:'nearest'})`);await settle();
       await writeFile(`${directory}/controls-${theme}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
       const controls=await evaluate('layerApp.state().tool_settings.map(c=>c.id)');
-      for(const id of ['tolerance','gap_closing','expansion']){
+      for(const id of ['tolerance']){
         assert.ok(controls.includes(id),`${id} is shared with Fill`);
         assert.ok(await evaluate(`!!document.querySelector('[data-tool-setting="${id}"]')`),`${id} has a native Web control`);
       }
-      for(const [id,value] of [['tolerance',.15],['gap_closing',0],['expansion',0],['grain_depth',0]])await send({type:'set_tool_setting',id,value});
+      await chooseToolActionGroup({call,evaluate,settle},'close-gaps','close_gaps_off');
+      await chooseToolActionGroup({call,evaluate,settle},'region-edges','edges_grow_shrink');
+      assert.ok(await evaluate('layerApp.state().tool_settings.some(c=>c.id==="edge_offset")'));
+      const placement=await evaluate(`(()=>{const a=document.querySelector('[data-tool-choice-bar="region-edges"]').getBoundingClientRect(),b=document.querySelector('[data-tool-setting="edge_offset"]').getBoundingClientRect();return{bar:{left:a.left,right:a.right,bottom:a.bottom},value:{left:b.left,right:b.right,top:b.top}}})()`);
+      assert.ok(placement.value.top>=placement.bar.bottom&&placement.value.left>=placement.bar.left-.5&&placement.value.right<=placement.bar.right+.5,'Grow or shrink value sits below Edges within its width');
+      await chooseToolActionGroup({call,evaluate,settle},'region-edges','edges_exact');
+      assert.equal(await evaluate('layerApp.state().tool_settings.some(c=>["gap_closing","expansion","edge_offset"].includes(c.id))'),false);
+      for(const [id,value] of [['tolerance',.15],['grain_depth',0]])await send({type:'set_tool_setting',id,value});
       if(await selected('smooth_region_edges'))await contact('[data-tool-action="smooth_region_edges"]');
       assert.equal(await selected('smooth_region_edges'),false);
       await send({type:'set_color',rgba:[.85,.1,.05,1]});await invoke('fit_canvas');await idle();
@@ -162,6 +267,7 @@ export async function checkEncloseFill({call,evaluate,settle}) {
       await wait(`(()=>{const n=document.querySelector('#new-drawing-create'),r=n.getBoundingClientRect();return !layerApp.state().new_drawing.drawer&&n.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))})()`);
       await contact('#new-drawing-create');await wait('!layerApp.state().new_drawing');await idle();
       assert.ok(await evaluate('!!layerApp.state().layer_tools.add_paper'),'Digital drawing has no Paper layer');
+      for(const paper of ['cold_press','rough'])await scribblePaper(theme,paper);
       assert.equal(await evaluate('layerApp.state().host_error??null'),null);
       console.log(`PASS ${theme}: Enclose and Fill reference holes, untouched ink/exterior/reference, exact single undo/redo and Escape`);
     }

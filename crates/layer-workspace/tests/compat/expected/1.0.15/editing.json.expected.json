@@ -2016,7 +2016,8 @@
   "region_values": {
     "expansion": 2.0,
     "gap_closing": 2.0,
-    "tolerance": 0.4000000059604645
+    "tolerance": 0.4000000059604645,
+    "smoothing": 0.0
   },
   "selection": {
     "antialias": true,
@@ -2348,5 +2349,9 @@
       "spot_heal": 42
     }
   },
-  "version": 3
+  "version": 4,
+  "region_close_gaps": true,
+  "region_edges": {
+    "grow_shrink": 2
+  }
 }

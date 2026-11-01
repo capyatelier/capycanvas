@@ -1269,3 +1269,9 @@ command-fill-everywhere = Di mana saja
 command-smooth-region-edges = Haluskan tepi
 
 command-stop-at-colors = Berhenti pada warna di lapisan ini
+
+command-close-gaps-auto = Otomatis
+command-close-gaps-off = Mati
+command-edges-line-middle = Ke tengah garis
+command-edges-exact = Tepat
+command-edges-grow-shrink = Perbesar atau perkecil

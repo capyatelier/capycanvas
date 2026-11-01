@@ -33,6 +33,7 @@ impl Compiler {
         queue.admission.idle = idle;
         queue.admission.speculative_idle = speculative_idle;
     }
+    pub fn is_idle(&self)->bool {self.queue.borrow().admission.idle}
     pub fn delay(&self) -> std::time::Duration {
         let queue = self.queue.borrow();
         queue.admission.delay(queue.jobs.iter().map(|job| job.priority))

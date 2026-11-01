@@ -284,7 +284,9 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Move selected pixels: partial selection | 60 | Screen 59.4 presents/s, p99 16.8 ms; renderer 134.2 completed updates/s | Two-page-refinement qualification below, `move-part-drag` |
 | Move selected pixels: Leave Copy | 60 | Screen 59.3 presents/s, p99 16.7 ms; renderer 131.1 completed updates/s | Two-page-refinement qualification below, `move-part-leave-copy-drag` |
 | Marquee, Lasso or Polygon drag | 60 | | |
-| Enclose and Fill: loop drag and navigation during completion | 60 | Unmeasured on the reference tablet | Shared lasso overlay; GPU region discovery starts on release. Desktop checks do not qualify this tier |
+| Enclose and Fill: loop drag and navigation during completion | 60 | Motion unmeasured; completion latency does not qualify moving-frame cadence | [Reference Fill completion](#reference-fill-completion) |
+| G-Pen and pan while Fill prepares eight references | 60 | **No regression:** G-Pen 33.148 → 33.261 completed updates/s, a shared 60 Hz miss; pan 60.0224 → 60.0227 presents/s meets | [Reference Fill completion](#reference-fill-completion) |
+| Reference Fill completion, 12 MP | Cold and warm response | **Cold regression.** Headless cell/background 5.394/5.259 → 12.318/12.166 s; prewarm about 34.2 s | [Reference Fill completion](#reference-fill-completion) |
 | Selection Brush or Quick Mask, 1024 px | 60 | | |
 | Grow, Shrink or Feather drag, full canvas | 60, soft | | |
 | Paper Scale drag with relief preview | 60 | Unmeasured on the reference tablet | Canvas-bar `paper-scale-drag`; [Paper rendering](../development/paper.md#rendering-and-performance) |
@@ -337,6 +339,37 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Workspace visibility checklist: vertical scroll | 60 | Factory compact native submenu: 60.021–60.023 actual presents/s, p99 up to 16.995 ms; short-primer diagnostic | [Android baseline evidence](../../artifacts/android-ui-motion/final-report/low-tier-ui-details.local.md), 2026-10-28 |
 | Menu open and close | 60 | Android menu/submenu native transitions have fresh diagnostic observations; no sustained-FPS claim | [Android baseline evidence](../../artifacts/android-ui-motion/final-report/low-tier-ui-details.local.md), 2026-10-28 |
 | Interface language change | 60 | Current lifecycle binary unmeasured. Earlier German checkpoint: cold publication 169.2–195.5 ms; warm 144.4–194.4 ms; preparation-only maximum 4.095 ms | Matched Web language checkpoint below; no tier qualification |
+
+## Reference Fill completion
+
+M4a uses the TCL TAB 11 Gen 2 at 4248 × 2832. The final native eight-reference
+ABBA covers three fresh eight-second G-Pen and pan trials per leg, 24 motions
+in all, against pre-M4a main `ccf1e0110`. G-Pen ranges overlap, with mean
+per-run p99 completion gap 41.491 → 41.104 ms; pan holds 60 Hz. Background
+preparation yields to whole-contact idle admission; taps promote dependencies.
+
+One-reference native latency measured before the final band bounds and idle
+admission remains diagnostic: cold cell 4.478–4.640 → 20.875–21.038 s, warm
+cell 2.553–2.711 → 2.496–2.641 s. The headless and prewarm results below also
+predate idle admission and remain recorded regressions, not motion qualification.
+
+| Headless diagnostic | Matched main → M4a |
+| --- | ---: |
+| First cell / background result | 5.394 / 5.259 → 12.318 / 12.166 s |
+| After choosing Fill, whole-backend idle | M4a 34.162–34.217 s; upper bound on cache preparation |
+
+A reference edit currently invalidates the whole cache, so Draw → Fill commonly
+pays the cold cost. M4a lands with this regression recorded. The next M4a.1 gate
+is a 12 MP reference stroke → choose Fill → tap after one second, no slower than
+pre-M4a main. Its other gate brings the mid-tier one-reference warm regression
+back within 5% of pre-M4a main. Warm results do not satisfy the cold gate.
+
+The pre-band headless 1/3/8-reference device matrix has sixteen successful rows;
+TCL eight-reference cell/background checks pass on both variants. The two
+shared mid-tier eight-reference OOM rows are not TCL failures. Native brackets,
+headless boundaries and exact provenance remain in
+`artifacts/fill-tools/m4a-device-matrix/results.json` and
+`artifacts/fill-tools/m4a-native-audit/native-results.json`.
 
 ## Native tool bubbles
 

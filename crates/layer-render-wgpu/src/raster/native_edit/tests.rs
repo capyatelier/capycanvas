@@ -130,7 +130,7 @@ fn native_half_float_multiply_brush_saturates_finite_output() {
     let id=target(&document);
     let (mut input,mut live)=engine(document);
     live.append_raster_operation(id,layer_core::RasterOperation {placement:layer_core::Affine::IDENTITY,coverage:reveal_all([256;2],[0,0]),
-        kind:layer_core::RasterOperationKind::Fill { texture: Default::default(),color:[40000.,40000.,40000.,1.],alpha_locked:false}}).unwrap();
+        kind:layer_core::RasterOperationKind::Fill { underfill: None, texture: Default::default(),color:[40000.,40000.,40000.,1.],alpha_locked:false}}).unwrap();
     flush(&mut live);
     let mut brush=layer_core::BrushSnapshot {color_rgba_linear:[2.,2.,2.,1.],diameter:64.,hardness:1.,opacity:1.,flow:1.,mappings:Arc::from([]),..Default::default()};
     brush.rendering.blend_mode=layer_core::BrushBlendMode::Multiply;
@@ -273,7 +273,7 @@ fn native_extended_fill_gradient_and_figure_pixels_survive_history_and_save() {
             };
             let start = Point { x: 64., y: 32. };
             let end = Point { x: 320., y: 96. };
-            let mut kinds = vec![RasterOperationKind::Fill { texture: Default::default(), color: colors[0], alpha_locked: false }];
+            let mut kinds = vec![RasterOperationKind::Fill { underfill: None, texture: Default::default(), color: colors[0], alpha_locked: false }];
             for (shape, reverse) in layer_core::GradientShape::ALL.into_iter().flat_map(|shape| [false, true].map(move |reverse| (shape, reverse))) {
                 for transparent in [false, true] {
                     let mut colors = colors;
@@ -1267,7 +1267,7 @@ fn layer_color_modes_convert_originals_constrain_edits_and_survive_history_and_r
             assert_eq!(reopened.backend_mut().readback_srgb_rgba8().unwrap(), live.backend_mut().readback_srgb_rgba8().unwrap());
             let id = target(reopened.document());
             reopened.append_raster_operation(id, layer_core::RasterOperation { placement: layer_core::Affine::IDENTITY,
-                coverage: reveal_all([256; 2], [0, 0]), kind: layer_core::RasterOperationKind::Fill { texture: Default::default(), color: [0.1, 0.8, 0.2, 0.8], alpha_locked: false } }).unwrap();
+                coverage: reveal_all([256; 2], [0, 0]), kind: layer_core::RasterOperationKind::Fill { underfill: None, texture: Default::default(), color: [0.1, 0.8, 0.2, 0.8], alpha_locked: false } }).unwrap();
             flush(&mut reopened);
             let filled = reopened.backend_mut().readback_srgb_rgba8().unwrap();
             assert!(filled.as_chunks::<4>().0.iter().all(|p| (p[..3] == [0; 3] || p[..3] == [255; 3]) && p[3] == 255));
@@ -1411,7 +1411,7 @@ fn native_fill_texture_matches_contact_and_flat_pixels_through_history() {
                     gradient: layer_core::GradientDefinition::new([0., 1.].map(|position| layer_core::GradientStop { position,
                         color: layer_core::color::RgbColor::from_linear(RgbSpace::Srgb, color).unwrap() }).to_vec()),
                     shape: layer_core::GradientShape::Linear, reverse: false, opacity: 1., alpha_locked: false }
-                } else { RasterOperationKind::Fill { texture, color, alpha_locked: false } };
+                } else { RasterOperationKind::Fill { underfill: None, texture, color, alpha_locked: false } };
                 let mut coverage = reveal_all(extent, [0; 2]);
                 coverage.source.default_coverage = 0.4;
                 live.append_raster_operation(id, RasterOperation { placement: Affine::IDENTITY, coverage, kind }).unwrap();
@@ -1462,4 +1462,60 @@ fn native_fill_texture_matches_contact_and_flat_pixels_through_history() {
             }
         }
     }
+    let extent = [64; 2];
+    let mut document = paint_document(extent, "Underfill history");
+    crate::layer_tests::placement::set_source(&mut document, crate::test_support::depth_source(
+        extent, SampleDepth::U8, RgbSpace::Srgb, 1 << 20, |_, _| [0., 0., 1., 128. / 255.]));
+    let id = target(&document);
+    let (_, mut live) = engine(document);
+    flush(&mut live);
+    let original = backing(&paint(live.document()).raster);
+    let before = live.backend_mut().readback_srgb_rgba8().unwrap();
+    let band = layer_core::Selection::polygon([[0., 0.], [32., 0.], [32., 64.], [0., 64.]]
+        .map(|[x, y]| Point { x, y }).to_vec()).unwrap();
+    live.append_raster_operation(id, RasterOperation { placement: Affine::IDENTITY,
+        coverage: reveal_all(extent, [0; 2]), kind: RasterOperationKind::Fill {
+            texture: Default::default(), color: [1., 0., 0., 0.5], alpha_locked: false, underfill: Some(band) } }).unwrap();
+    flush(&mut live);
+    let pixels = backing(&paint(live.document()).raster);
+    let composite = live.backend_mut().readback_srgb_rgba8().unwrap();
+    let alpha = 128. / 255.;
+    let output_alpha = alpha + 0.5 * (1. - alpha);
+    let key = TileKey { plane: layer_core::raster::RasterPlane::Color, coordinate: [0; 2] };
+    for x in [16usize, 48] {
+        let linear = if x < 32 { [0.5 * (1. - alpha) / output_alpha, 0., alpha / output_alpha] }
+            else { [0.5 / output_alpha, 0., alpha * 0.5 / output_alpha] };
+        let expected = [RgbSpace::Srgb.encode(linear[0]), 0., RgbSpace::Srgb.encode(linear[2]), output_alpha];
+        let offset = (32 * 256 + x) * 4;
+        for (actual, expected) in pixels[&key][offset..offset + 4].iter().zip(expected) {
+            assert!(actual.abs_diff((expected * 255.).round() as u8) <= 1, "underfill history x={x}");
+        }
+    }
+    assert!(live.undo().unwrap()); flush(&mut live);
+    assert_eq!(backing(&paint(live.document()).raster), original);
+    assert_eq!(live.backend_mut().readback_srgb_rgba8().unwrap(), before);
+    assert!(live.redo().unwrap()); flush(&mut live);
+    assert_eq!(backing(&paint(live.document()).raster), pixels);
+    assert_eq!(live.backend_mut().readback_srgb_rgba8().unwrap(), composite);
+    let mut bytes = Vec::new(); write_capture(&live.capture_artwork(0).unwrap(), &mut bytes).unwrap();
+    let (_, mut reopened) = engine(read_document(bytes)); flush(&mut reopened);
+    assert_eq!(backing(&paint(reopened.document()).raster), pixels);
+    assert_eq!(reopened.backend_mut().readback_srgb_rgba8().unwrap(), composite);
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let session = layer_core::package::session::PreparedSession::prepare(
+        &live.capture_session(0).unwrap(), layer_core::package::session::SessionMetadata {
+            value: Default::default(), profiles: Vec::new() }, &cancel).unwrap();
+    let mut bytes = Vec::new(); session.write(&mut bytes, &cancel).unwrap();
+    let source = layer_core::package::ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap();
+    let restored = layer_core::package::session::open(source, Default::default(), &cancel).unwrap();
+    let (_, mut recovered) = engine(restored.editor.document().clone()); flush(&mut recovered);
+    recovered.restore_editor(restored.editor).unwrap();
+    assert_eq!(backing(&paint(recovered.document()).raster), pixels);
+    assert_eq!(recovered.backend_mut().readback_srgb_rgba8().unwrap(), composite);
+    assert!(recovered.undo().unwrap()); flush(&mut recovered);
+    assert_eq!(backing(&paint(recovered.document()).raster), original);
+    assert_eq!(recovered.backend_mut().readback_srgb_rgba8().unwrap(), before);
+    assert!(recovered.redo().unwrap()); flush(&mut recovered);
+    assert_eq!(backing(&paint(recovered.document()).raster), pixels);
+    assert_eq!(recovered.backend_mut().readback_srgb_rgba8().unwrap(), composite);
 }

@@ -2326,6 +2326,7 @@ impl<'a> RootInventory<'a> {
         if self.authored_only {return;}
         self.coverage(&operation.coverage.source);
         self.selections.extend(operation.coverage.selection.iter());
+        if let RasterOperationKind::Fill { underfill, .. } = &operation.kind {self.selections.extend(underfill.iter());}
         match &operation.kind {
             RasterOperationKind::Fill { texture, .. } | RasterOperationKind::Gradient { texture, .. } => {
                 if let Some(paper) = &texture.paper { match &paper.surface.texture {

@@ -7,133 +7,99 @@ fn mask_stride() -> u32 { return (params.extent_seed.x + 31u) / 32u; }
 fn mask_word_id(id: vec3<u32>, groups: vec3<u32>) -> u32 {
     return id.x + id.y * groups.x * 64u;
 }
+fn mask_word(word:u32)->u32 {
+    var bits=region_mask[word];let words=mask_stride()*params.extent_seed.y;
+    if params.input.x==3u {bits=atomicLoad(&coverage.values[word])&atomicLoad(&coverage.values[words+word])&atomicLoad(&coverage.values[2u*words+word]);}
+    else if params.input.x!=0u {bits=atomicLoad(&coverage.values[attempt()*words+word]);}
+    return bits;
+}
 fn mask_bit(p: vec2<i32>) -> bool {
     if any(p < vec2<i32>(0)) || any(p >= vec2<i32>(params.extent_seed.xy)) { return false; }
-    return (region_mask[u32(p.y) * mask_stride() + u32(p.x)/32u] & (1u << (u32(p.x)%32u))) != 0u;
+    return (mask_word(u32(p.y)*mask_stride()+u32(p.x)/32u) & (1u << (u32(p.x)%32u))) != 0u;
 }
-fn valid_bits(word: u32) -> u32 {
-    let remaining = params.extent_seed.x - word * 32u;
-    if remaining >= 32u { return NONE; }
-    return (1u << remaining) - 1u;
+fn open_word(p:vec2<i32>)->u32 {
+    if any(p<vec2<i32>(0)) || p.x>=i32(mask_stride()) || p.y>=i32(params.extent_seed.y) {return 0u;}
+    var bits=mask_word(u32(p.y)*mask_stride()+u32(p.x));let tail=params.extent_seed.x%32u;
+    if p.x+1==i32(mask_stride()) && tail!=0u {bits&=(1u<<tail)-1u;}
+    return bits;
 }
-fn read_word(x: i32, y: i32, parent_input: bool, extend: bool) -> u32 {
-    let w = i32(params.extent_seed.x);
-    let h = i32(params.extent_seed.y);
-    let stride = i32(mask_stride());
-    if !extend && (x < 0 || x >= stride || y < 0 || y >= h) { return 0u; }
-    let xx = clamp(x, 0, stride-1);
-    let index = u32(clamp(y, 0, h-1) * stride + xx);
-    var value = 0u;
-    if parent_input { value = atomicLoad(&parents[index]); }
-    else { value = region_mask[index]; }
-    if x < 0 { return select(0u, NONE, (value & 1u) != 0u); }
-    if x >= stride { return select(0u, NONE, (value & (1u << (u32(w-1)%32u))) != 0u); }
-    let valid = valid_bits(u32(x));
-    if extend && (value & (1u << (u32(w-1)%32u))) != 0u && x == stride-1 {
-        value |= ~valid;
-    }
-    return select(value & valid, value, extend);
-}
-fn shifted_word(x: i32, y: i32, extend: bool) -> u32 {
-    let word = i32(floor(f32(x) / 32.));
-    let shift = u32(x - word * 32);
-    let a = read_word(word, y, false, extend);
-    if shift == 0u { return a; }
-    return (a >> shift) | (read_word(word+1, y, false, extend) << (32u-shift));
-}
-fn morph(word: u32, horizontal: bool, erode: bool, lower: i32, upper: i32, extend: bool) {
-    let stride = mask_stride();
-    let p = vec2<u32>(word % stride, word / stride);
-    if p.y >= params.extent_seed.y { return; }
-    var result = select(0u, NONE, erode);
-    for (var d = lower; d <= upper; d++) {
-        var sample = 0u;
-        if horizontal { sample = shifted_word(i32(p.x)*32+d, i32(p.y), extend); }
-        else { sample = read_word(i32(p.x), i32(p.y)+d, true, extend); }
-        result = select(result | sample, result & sample, erode);
-    }
-    result &= valid_bits(p.x);
-    if horizontal { atomicStore(&parents[word], result); }
-    else { region_mask[word] = result; }
-}
-
-// Opening the eligible region closes holes in its complementary barriers.
-// Mirrored even-length footprints avoid shifting odd-width gap settings.
-@compute @workgroup_size(64)
-fn close_h(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
-    let gap = i32(params.options.y);
-    morph(mask_word_id(id, groups), true, true, -gap/2, (gap+1)/2, true);
-}
-@compute @workgroup_size(64)
-fn close_v(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
-    let gap = i32(params.options.y);
-    morph(mask_word_id(id, groups), false, true, -gap/2, (gap+1)/2, true);
-}
-@compute @workgroup_size(64)
-fn reopen_h(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
-    let gap = i32(params.options.y);
-    morph(mask_word_id(id, groups), true, false, -(gap+1)/2, gap/2, true);
-}
-@compute @workgroup_size(64)
-fn reopen_v(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
-    let gap = i32(params.options.y);
-    morph(mask_word_id(id, groups), false, false, -(gap+1)/2, gap/2, true);
+fn eroded_row(p:vec2<i32>)->u32 {
+    let center=open_word(p);
+    return center&((center<<1u)|(open_word(p-vec2(1,0))>>31u))&((center>>1u)|(open_word(p+vec2(1,0))<<31u));
 }
 fn window_word(id: vec3<u32>, groups: vec3<u32>) -> vec2<u32> {
     let word = mask_word_id(id, groups);
     let stride = (size().x + 31u) / 32u;
     return vec2<u32>((word % stride) * 32u, word / stride);
 }
+fn freed_word(p:vec2<u32>)->u32 {
+    let q=origin()+p;let word=q.y*mask_stride()+q.x/32u;let words=mask_stride()*params.extent_seed.y;
+    let base=atomicLoad(&coverage.values[word])&atomicLoad(&coverage.values[words+word])&atomicLoad(&coverage.values[2u*words+word]);
+    return atomicLoad(&coverage.values[attempt()*words+word])&~base;
+}
 @compute @workgroup_size(64)
 fn mark_exterior(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
     let p = window_word(id, groups);
     let extent = params.extent_seed.xy;
     if p.y >= size().y { return; }
+    let q=origin()+p;let word=vec2<i32>(i32(q.x/32u),i32(q.y));
+    let wide_bits=eroded_row(word-vec2(0,1))&eroded_row(word)&eroded_row(word+vec2(0,1));
+    var marked=NONE;var previous=NONE;var label=NONE;
     for (var i = 0u; i < 32u && p.x+i < size().x; i++) {
         let local = p + vec2<u32>(i, 0u);
         let q = origin() + local;
-        if any(q == vec2<u32>(0)) || any(q+vec2<u32>(1) == extent)
-            || brush_selection_at(vec2<f32>(q)+.5) < 1. {
-            let label = root(local_index(local, size()));
-            if label != NONE { set_bit(marks(), label); }
-        }
+        let parent=atomicLoad(&parents[local_index(local,size())]);
+        if parent!=previous {previous=parent;label=root(parent);}
+        if label==NONE {continue;}
+        if (wide_bits&(1u<<i))!=0u && label!=marked {set_bit(wide_marks(),label);marked=label;}
+        if any(q==vec2<u32>(0)) || any(q+vec2<u32>(1)==extent)
+            || (params.input.z!=0u && brush_selection_at(vec2<f32>(q)+.5)<1.) {set_bit(marks(),label);}
     }
 }
-fn selected_component(local: vec2<u32>) -> bool {
-    let label = root(local_index(local, size()));
-    if label == NONE { return false; }
-    let border = label < perimeter(size());
-    let base = slots() + slot_base(window_index());
-    if params.input.z != 0u {
-        if border { return !bit_set(flags(), root(base + label) - slots()); }
-        return !bit_set(marks(), label);
+fn wide_component(label:u32,global:u32)->bool {
+    if label==NONE {return false;}
+    if label<perimeter(size()){
+        return global!=NONE && bit_set(wide_flags(),global-slots());
     }
-    let reached = atomicLoad(&parents[seed() + 3u]) != 0u;
-    if border { return reached && root(base + label) == atomicLoad(&parents[seed() + 2u]); }
-    return !reached && atomicLoad(&parents[seed()]) == window_index() && atomicLoad(&parents[seed() + 1u]) == label;
+    return bit_set(wide_marks(),label);
+}
+fn selected_component(label:u32,global:u32,wide:bool)->bool {
+    if label==NONE{return false;}
+    if params.input.y!=0u {return true;}
+    if !wide && (params.input.z!=0u || (atomicLoad(&parents[seed()+6u])&0x80000000u)!=0u){return false;}
+    let border=label<perimeter(size());
+    if params.input.z!=0u {
+        if border{return !bit_set(flags(),global-slots());}
+        return !bit_set(marks(),label);
+    }
+    let reached=atomicLoad(&parents[seed()+3u])!=0u;
+    if border {return reached && global==atomicLoad(&parents[seed()+2u]);}
+    return !reached && atomicLoad(&parents[seed()])==window_index() && atomicLoad(&parents[seed()+1u])==label;
 }
 @compute @workgroup_size(64)
 fn component_mask(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
     let p = window_word(id, groups);
     if p.y >= size().y { return; }
-    var packed = 0u;
+    var packed = 0u;var thin=0u;var previous=NONE;var selected=false;var is_thin=false;
     for (var i = 0u; i < 32u && p.x+i < size().x; i++) {
-        if selected_component(p + vec2<u32>(i, 0u)) { packed |= 1u << i; }
+        let local=p+vec2<u32>(i,0u);let parent=atomicLoad(&parents[local_index(local,size())]);
+        if parent!=previous {
+            previous=parent;let label=root(parent);var global=NONE;
+            if label!=NONE && label<perimeter(size()) {global=root(slots()+slot_base(window_index())+label);}
+            let wide=wide_component(label,global);selected=selected_component(label,global,wide);is_thin=label!=NONE && !wide && !selected;
+        }
+        if selected{packed|=1u<<i;}
+        if is_thin{thin|=1u<<i;}
     }
     let q = origin() + p;
-    region_mask[q.y * mask_stride() + q.x / 32u] = packed;
+    let word=q.y*mask_stride()+q.x/32u;
+    region_mask[word]=packed;
+    let words=mask_stride()*params.extent_seed.y;
+    if thin!=0u && (params.input.x==0u || params.input.z==0u || params.input.w==2u) {
+        atomicOr(&coverage.values[select(0u,3u,params.input.x!=0u && params.input.z==0u)*words+word],thin);
+    }
+    if params.input.z!=0u {atomicOr(&coverage.values[select(1u,3u,params.input.x!=0u)*words+word],packed);}
 }
-@compute @workgroup_size(64)
-fn expand_h(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
-    let radius = i32(abs(params.options.z));
-    morph(mask_word_id(id, groups), true, params.options.z < 0., -radius, radius, false);
-}
-@compute @workgroup_size(64)
-fn expand_v(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
-    let radius = i32(abs(params.options.z));
-    morph(mask_word_id(id, groups), false, params.options.z < 0., -radius, radius, false);
-}
-
 fn refined_coverage(p: vec2<i32>) -> f32 {
     let center = mask_bit(p);
     if params.options.w <= 0. { return select(0., 1., center); }

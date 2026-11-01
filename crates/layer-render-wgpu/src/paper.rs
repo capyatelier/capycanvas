@@ -168,6 +168,9 @@ impl PaperTile {
             self.period[0] as f32, self.period[1] as f32, self.texel_mm() as f32, jitter as f32,
             nearest as f32, 0., 0., 0.]
     }
+    pub fn grain_radius(&self) -> u32 {
+        (3. * (self.pixels[0] / f64::from(self.texels[0])).max(self.pixels[1] / f64::from(self.texels[1]))).ceil().clamp(1.,16.) as u32
+    }
     pub fn grain(&self, binding: &PaperBinding) -> [f32; 4] {
         let offset = [0, 1].map(|axis| ((binding.target_offset[axis] - self.origin[axis]) as f64).rem_euclid(self.pixels[axis]));
         [self.pixels[0] as f32, self.pixels[1] as f32, offset[0] as f32, offset[1] as f32]

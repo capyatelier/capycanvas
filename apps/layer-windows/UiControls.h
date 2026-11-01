@@ -694,7 +694,8 @@ struct ChoiceGrid {
         auto items=array(spec,L"items");
         for(uint32_t i=0;i<std::min<uint32_t>(items.Size(),uint32_t(cells.size()));++i){
             auto item=items.GetObjectAt(i);bool chosen=flag(item,L"selected");
-            cells[i].Background(chosen?selected(data):clear());cells[i].Content().as<UIElement>().Opacity(chosen?1.:.45);
+            bool compact=num(spec,L"columns")>0;
+            cells[i].Background(chosen?selected(data):compact?clear():data->brush(L"input"));cells[i].Content().as<UIElement>().Opacity(chosen||!compact?1.:.45);
             cells[i].IsEnabled(flag(item,L"enabled",true));
             AutomationProperties::SetName(cells[i],str(item,L"label"));tooltip(hosts[i],flag(item,L"enabled",true)?str(item,L"label"):str(item,L"disabled_reason"));
             cells[i].IsHitTestVisible(flag(item,L"enabled",true));AutomationProperties::SetHelpText(cells[i],str(item,L"disabled_reason"));
@@ -703,14 +704,17 @@ struct ChoiceGrid {
     }
 };
 inline ChoiceGrid choiceGrid(std::shared_ptr<WorkspaceData> const& data,J const& spec,hstring const& id,std::function<void(J)> const& send){
-    ChoiceGrid result;auto items=array(spec,L"items");auto columns=std::max<uint32_t>(1,uint32_t(num(spec,L"columns")));
-    for(uint32_t i=0;i<columns;++i){ColumnDefinition column;column.Width({18,GridUnitType::Pixel});result.grid.ColumnDefinitions().Append(column);}
-    for(uint32_t i=0;i<(items.Size()+columns-1)/columns;++i){RowDefinition row;row.Height({18,GridUnitType::Pixel});result.grid.RowDefinitions().Append(row);}
+    ChoiceGrid result;auto items=array(spec,L"items");bool compact=num(spec,L"columns")>0;
+    auto columns=compact?uint32_t(num(spec,L"columns")):std::max<uint32_t>(1,items.Size());
+    double height=compact?18:data->panelMetric(L"control_height");
+    for(uint32_t i=0;i<columns;++i){ColumnDefinition column;column.Width(compact?GridLength{18,GridUnitType::Pixel}:GridLength{1,GridUnitType::Star});result.grid.ColumnDefinitions().Append(column);}
+    for(uint32_t i=0;i<(items.Size()+columns-1)/columns;++i){RowDefinition row;row.Height({height,GridUnitType::Pixel});result.grid.RowDefinitions().Append(row);}
     AutomationProperties::SetAutomationId(result.grid,id);
     for(uint32_t i=0;i<items.Size();++i){
         auto action=object(items.GetObjectAt(i),L"action");
-        auto cell=button(data,L"",[send,action]{send(action);});cell.Width(18);cell.Height(18);
-        cell.Content(icon(str(items.GetObjectAt(i),L"icon"),data->theme(),6));
+        auto cell=button(data,L"",[send,action]{send(action);});if(compact)cell.Width(18);cell.Height(height);
+        cell.Content(icon(str(items.GetObjectAt(i),L"icon"),data->theme(),compact?6:data->panelMetric(L"icon_size")));
+        if(!compact){double first=i==0?data->panelMetric(L"control_radius")*CornerFit:0,last=i+1==items.Size()?data->panelMetric(L"control_radius")*CornerFit:0;cell.CornerRadius({first,last,last,first});}
         auto host=explainable(cell);Grid::SetColumn(host,int(i%columns));Grid::SetRow(host,int(i/columns));AutomationProperties::SetAutomationId(cell,id+L"-"+to_hstring(i));
         result.grid.Children().Append(host);result.cells.push_back(cell);result.hosts.push_back(host);
     }

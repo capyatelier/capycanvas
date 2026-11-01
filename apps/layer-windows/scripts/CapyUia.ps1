@@ -145,11 +145,17 @@ function Owned-DrawingWindow([Diagnostics.Process]$Process,[long]$WindowHandle,[
     $directory=$TraceDirectory
     if(!$directory){$executable=$Process.Path;if(!$executable){return $null};$directory=Split-Path -Parent $executable}
     $registered=$false
-    if($WindowHandle){
-        $path=Join-Path $directory "windows-$($Process.Id).json"
-        if(Test-Path $path){
-            $trace=Read-Snapshot $path
-            $registered=$trace.process_id -eq $Process.Id -and $WindowHandle -in $trace.windows.hwnd
+    $path=Join-Path $directory "windows-$($Process.Id).json"
+    if(Test-Path $path){
+        $trace=Read-Snapshot $path
+        if($trace.process_id -eq $Process.Id){
+            if(!$WindowHandle){
+                $windows=@($trace.windows)
+                if($windows.Count -gt 1){throw 'The owned process has multiple drawing windows; specify a window handle'}
+                if(!$windows.Count){return $null}
+                $WindowHandle=$windows[0].hwnd
+            }
+            $registered=$WindowHandle -in $trace.windows.hwnd
         }
     }
     $canvas=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'drawing-canvas')

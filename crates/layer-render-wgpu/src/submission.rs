@@ -52,7 +52,21 @@ impl Drop for DiscardedCacheWrite {
     }
 }
 
+#[derive(Clone)]
+pub(crate) struct Submission(std::sync::Arc<std::sync::atomic::AtomicU8>);
+impl Submission {
+    pub fn submitted(&self)->bool {self.0.load(std::sync::atomic::Ordering::Acquire)==1}
+    pub fn discarded(&self)->bool {self.0.load(std::sync::atomic::Ordering::Acquire)==2}
+}
+struct PendingSubmission(Submission);
+impl Drop for PendingSubmission {
+    fn drop(&mut self) {
+        let _=self.0.0.compare_exchange(0,2,std::sync::atomic::Ordering::AcqRel,std::sync::atomic::Ordering::Acquire);
+    }
+}
+
 pub(crate) struct CommandEncoder {
+    submission: Option<PendingSubmission>,
     compute: Option<wgpu::ComputePass<'static>>,
     device: wgpu::Device,
     prologue: Option<wgpu::CommandEncoder>,
@@ -72,6 +86,7 @@ impl CommandEncoder {
 
     pub fn new(device: &wgpu::Device, descriptor: &wgpu::CommandEncoderDescriptor<'_>) -> Self {
         Self {
+            submission: None,
             compute: None,
             device: device.clone(),
             prologue: None,
@@ -81,6 +96,9 @@ impl CommandEncoder {
             total_passes: 0,
             resource_work: false,
         }
+    }
+    pub fn submission(&mut self)->Submission {
+        self.submission.get_or_insert_with(||PendingSubmission(Submission(std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0))))).0.clone()
     }
     fn begin_pass(&mut self) {
         self.reserve_passes(1);
@@ -158,6 +176,7 @@ impl CommandEncoder {
         for encoder in chunks {
             index = submit_traced(queue, [encoder], !self.resource_work);
         }
+        if let Some(pending)=self.submission.take() {pending.0.0.store(1,std::sync::atomic::Ordering::Release);}
         index
     }
 }
@@ -217,6 +236,20 @@ mod tests {
     use crate::test_support::{dab_batch, packet};
     use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
+    #[test]
+    fn submission_acknowledges_only_its_own_encoder() {
+        let r=renderer();let mut held=encoder(&r);let owner=held.submission();
+        assert!(!owner.submitted());assert!(!owner.discarded());
+        encoder(&r).submit(&r.queue);
+        assert!(!owner.submitted());assert!(!owner.discarded());
+        held.submit(&r.queue);
+        assert!(owner.submitted());assert!(!owner.discarded());
+    }
+    #[test]
+    fn dropped_encoder_discards_its_submission() {
+        let r=renderer();let mut held=encoder(&r);let owner=held.submission();drop(held);
+        assert!(owner.discarded());assert!(!owner.submitted());
+    }
     fn renderer() -> WgpuRasterizer {
         let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         assert_ne!(r.adapter.get_info().device_type, wgpu::DeviceType::Cpu);

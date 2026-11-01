@@ -34,7 +34,15 @@ impl MaskPage {
         Self { texture, view }
     }
 }
-pub(super) type CommandCoverage = (SourceTarget, u32);
+pub(super) type CommandCoverage = (SourceTarget, u32, bool);
+
+pub(super) fn underfill_coverage(operation: &layer_core::RasterOperation) -> Option<layer_core::CoverageSnapshot> {
+    let layer_core::RasterOperationKind::Fill { underfill: Some(selection), .. } = &operation.kind else { return None; };
+    let mut coverage = layer_core::CoverageSnapshot::reveal_all(operation.coverage.target, operation.coverage.source.domain, [0; 2]);
+    coverage.source.default_coverage = f32::from(selection.inverted);
+    coverage.selection = Some(selection.clone());
+    Some(coverage)
+}
 
 #[derive(Clone, Default)]
 pub(super) struct SnapshotMasks {
@@ -250,14 +258,16 @@ impl MaskRenderer {
         let commands: BTreeMap<_, _> = batches.iter().filter_map(|batch| {
             let DabBatchKind::RasterOperation(index) = batch.kind else { return None; };
             let operation = scene.operations(batch.target)?.get(index as usize)?;
-            Some(((batch.target, index), operation))
+            Some(((batch.target, index, false), operation))
+        }).collect();
+        let coverages: BTreeMap<_, _> = commands.iter().flat_map(|(key, operation)| {
+            std::iter::once((*key, operation.coverage.clone())).chain(underfill_coverage(operation).map(|coverage| ((key.0, key.1, true), coverage)))
         }).collect();
         let same = |stored: Option<&layer_core::CoverageSnapshot>, coverage: &layer_core::CoverageSnapshot|
             stored.is_some_and(|stored| stored.source == coverage.source && stored.selection == coverage.selection);
-        self.command_pages.retain(|(key, _), _| commands.get(key)
-            .is_some_and(|operation| same(self.command_definitions.get(key), &operation.coverage)));
-        for (key, operation) in &commands {
-            let coverage = &operation.coverage;
+        self.command_pages.retain(|(key, _), _| coverages.get(key)
+            .is_some_and(|coverage| same(self.command_definitions.get(key), coverage)));
+        for (key, coverage) in &coverages {
             let source = &coverage.source;
             let authored = SourceTarget::Coverage(coverage.use_.source);
             if !same(self.command_definitions.get(key), coverage) && coverage.selection.is_none() && self.definitions.get(&authored) == Some(source) {
@@ -294,7 +304,7 @@ impl MaskRenderer {
             }
             stored.definitions = definitions;
         }
-        self.command_definitions = commands.into_iter().map(|(key, operation)| (key, operation.coverage.clone())).collect();
+        self.command_definitions = coverages;
         let definitions: BTreeMap<_, _> = scene.artwork().coverage.iter()
             .filter(|(h, _, _)| scene.source_owner(SourceTarget::Coverage(*h)).is_some())
             .map(|(h, _, source)| (SourceTarget::Coverage(h), source.clone())).collect();
@@ -413,7 +423,7 @@ impl WgpuRasterizer {
                         [op as usize];
                     if operation.kind == layer_core::RasterOperationKind::Coverage {
                         for coordinate in page_coordinates(batch_pixel_rect(batch, self.target_extent(batch.target))) {
-                            if let Some(page) = self.layer_masks.command_pages.get(&((batch.target, op), coordinate)).cloned() {
+                            if let Some(page) = self.layer_masks.command_pages.get(&((batch.target, op, false), coordinate)).cloned() {
                                 self.layer_masks.pages.insert((batch.target, coordinate), page);
                             }
                         }

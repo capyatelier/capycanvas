@@ -654,6 +654,11 @@ command_ids! {
     FillEverywhere,
     SmoothRegionEdges,
     StopAtColors,
+    CloseGapsAuto,
+    CloseGapsOff,
+    EdgesLineMiddle,
+    EdgesExact,
+    EdgesGrowShrink,
     CanvasSize,
     CropCanvasToSelection,
     GrowSelection,
@@ -740,7 +745,7 @@ impl CommandId {
     pub fn is_toggle(self) -> bool {
         matches!(
             self,
-            Self::FillConnected | Self::FillEverywhere | Self::SmoothRegionEdges | Self::StopAtColors | Self::CenterZoomClicks | Self::QuickMask | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::SelectionBrushPressure | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles
+            Self::FillConnected | Self::FillEverywhere | Self::SmoothRegionEdges | Self::StopAtColors | Self::CloseGapsAuto | Self::CloseGapsOff | Self::EdgesLineMiddle | Self::EdgesExact | Self::EdgesGrowShrink | Self::CenterZoomClicks | Self::QuickMask | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::SelectionBrushPressure | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles
                 | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter
                 | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference
                 | Self::CropRatioFree | Self::CropRatioOriginal | Self::CropRatioSquare | Self::CropRatioFourFive
@@ -952,6 +957,11 @@ impl CommandId {
             Self::LassoFill | Self::EncloseFill => "lasso-fill",
             Self::FillConnected | Self::FillEverywhere => "fill",
             Self::StopAtColors => "alpha-lock",
+            Self::CloseGapsAuto => "close-gap",
+            Self::CloseGapsOff => "none",
+            Self::EdgesLineMiddle => "edge-width",
+            Self::EdgesExact => "edge-keeping",
+            Self::EdgesGrowShrink => "expand",
             Self::SmoothRegionEdges => "edge-smooth",
             Self::CanvasSize => "canvas-size",
             Self::CropCanvasToSelection | Self::Crop => "crop",
@@ -1259,6 +1269,11 @@ impl CommandId {
             Self::FillEverywhere => MessageId::COMMAND_FILL_EVERYWHERE,
             Self::SmoothRegionEdges => MessageId::COMMAND_SMOOTH_REGION_EDGES,
             Self::StopAtColors => MessageId::COMMAND_STOP_AT_COLORS,
+            Self::CloseGapsAuto => MessageId::COMMAND_CLOSE_GAPS_AUTO,
+            Self::CloseGapsOff => MessageId::COMMAND_CLOSE_GAPS_OFF,
+            Self::EdgesLineMiddle => MessageId::COMMAND_EDGES_LINE_MIDDLE,
+            Self::EdgesExact => MessageId::COMMAND_EDGES_EXACT,
+            Self::EdgesGrowShrink => MessageId::COMMAND_EDGES_GROW_SHRINK,
             Self::CanvasSize => MessageId::COMMAND_CANVAS_SIZE,
             Self::CropCanvasToSelection => MessageId::COMMAND_CROP_CANVAS_TO_SELECTION,
             Self::GrowSelection => MessageId::COMMAND_GROW_SELECTION,

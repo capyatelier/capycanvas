@@ -827,8 +827,9 @@ class AndroidRasterTest {
                 }
             }
             for (command in listOf("selection_visible", "selection_editing", "selection_reference")) {
-                settings("tool-choice-selection-source").performScrollTo().assertIsDisplayed().performClick(); host.drain()
-                compose.onNode(hasText(label(command)) and hasAnyAncestor(isPopup())).assertIsDisplayed().performClick(); host.drain()
+                val source = published().array("tool_extra").objects().single { it.has("Choice") && it.getJSONObject("Choice").getString("id") == "selection-source" }.getJSONObject("Choice")
+                val index = source.array("items").objects().indexOfFirst { it.getJSONObject("action").getString("command") == command }
+                settings("tool-segment-selection-source-$index").performScrollTo().assertIsDisplayed().performClick(); host.drain()
                 compose.waitUntil(10_000) { selected(command) }
                 assertTrue(selected("enclose_fill"))
             }
@@ -843,7 +844,17 @@ class AndroidRasterTest {
             assertFalse(selected("stop_at_colors"))
             settings("tool-action-stop_at_colors").performClick(); host.drain()
             assertTrue(selected("stop_at_colors"))
-            for (id in listOf("tolerance", "gap_closing", "expansion")) {
+            for (id in listOf("close-gaps", "region-edges")) {
+                val choice = published().array("tool_extra").objects().single { it.has("Choice") && it.getJSONObject("Choice").getString("id") == id }.getJSONObject("Choice")
+                for ((index, item) in choice.array("items").objects().withIndex()) {
+                    settings("tool-segment-$id-$index").performScrollTo().assertIsDisplayed().performClick(); host.drain()
+                    assertTrue(selected(item.getJSONObject("action").getString("command")))
+                    if (id == "region-edges") {
+                        assertEquals(index == 2, published().array("tool_settings").objects().any { it.getString("id") == "edge_offset" })
+                    }
+                }
+            }
+            for (id in listOf("tolerance", "edge_offset")) {
                 settings("tool-setting-$id").performScrollTo().assertIsDisplayed()
                 ui(obj("type" to "set_tool_setting", "id" to id, "value" to 0))
             }

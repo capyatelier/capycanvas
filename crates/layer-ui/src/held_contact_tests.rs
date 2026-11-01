@@ -324,7 +324,7 @@ fn land(s: &mut UiSession<Recorder>) {
 
 fn region_reply(s: &mut UiSession<Recorder>) {
     let request = s.renderer_mut().region_requests.last().unwrap().request_id;
-    s.renderer_mut().region_reply = Some(layer_render::RegionResult { request_id: request, tonal_sample: None,
+    s.renderer_mut().region_reply = Some(layer_render::RegionResult { underfill: None, request_id: request, tonal_sample: None,
         pixels: Arc::new(layer_core::SelectionPixels::bytes([8, 1], [0, 0, 8, 1], vec![0xffffffff; 2]).unwrap()),
         placement: layer_core::Affine::IDENTITY });
 }

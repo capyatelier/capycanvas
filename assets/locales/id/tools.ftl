@@ -109,11 +109,9 @@ tool-control-crop-straighten = Luruskan
 
 tool-control-crop-width = Lebar
 
-tool-control-expansion = Perluasan
 
 tool-control-feather = Perhalus tepi
 
-tool-control-gap-closing = Tutup celah
 
 tool-control-group-edges = Tepi
 
@@ -383,3 +381,5 @@ brush-preset-liquify-edge = Tepi
 brush-preset-liquify-reconstruct = Pulihkan
 tool-control-liquify-amount = Jumlah
 tool-family-fill = Alat isi
+tool-control-close-gaps = Tutup celah
+tool-control-edge-offset = Jarak

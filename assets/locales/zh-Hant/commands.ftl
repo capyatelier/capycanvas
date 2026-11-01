@@ -685,3 +685,9 @@ command-fill-everywhere = 所有區域
 command-smooth-region-edges = 平滑邊緣
 
 command-stop-at-colors = 在此圖層的顏色處停止
+
+command-close-gaps-auto = 自動
+command-close-gaps-off = 關閉
+command-edges-line-middle = 到線條中間
+command-edges-exact = 精確
+command-edges-grow-shrink = 擴張或收縮

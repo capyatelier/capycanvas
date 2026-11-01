@@ -15,14 +15,22 @@ impl EditingState {
             if let Some(sources) = value["region_sources"].as_array_mut().filter(|sources| sources.len() == 2) {
                 sources.push(serde_json::to_value(RegionSource::Auto).unwrap());
             }
-            if let Some(values) = value["region_values"].as_object_mut()
-                && let Some(smoothing) = values.remove("smoothing").and_then(|v| v.as_f64())
+            if let Some(values) = value["region_values"].as_object()
+                && let Some(smoothing) = values.get("smoothing").and_then(|v| v.as_f64())
                 && value.get("region_smooth_edges").is_none() {
                 value["region_smooth_edges"] = (smoothing > 0.).into();
             }
         }
+        if value.get("region_close_gaps").is_none()
+            && let Some(gap) = value["region_values"]["gap_closing"].as_f64().filter(|v| v.is_finite() && *v >= 0.) {
+            value["region_close_gaps"] = (gap > 0.).into();
+        }
+        if value.get("region_edges").is_none()
+            && let Some(offset) = value["region_values"]["expansion"].as_f64().filter(|v| v.fract() == 0. && v.abs() <= layer_render::RegionRefinement::MAX_EDGE_OFFSET as f64) {
+            value["region_edges"] = serde_json::to_value(layer_core::RegionEdges::GrowShrink(offset as i32)).unwrap();
+        }
         let mut restored = crate::saved_state::restore_fields(value, || Self::new_localized(localization), |state| state.validate().is_ok());
-        restored.version = 3;
+        restored.version = 4;
         restored
     }
     pub fn new_localized(localization: &Localizer) -> Self {
@@ -31,7 +39,7 @@ impl EditingState {
         let mut color_library = ColorLibrary::fresh(&localization.text(MessageId::CREATION_PALETTE_MY_COLORS));
         color_library.ensure_starters_localized(localization);
         Self {
-            version: 3,
+            version: 4,
             preset: layer_core::DefaultBrushPreset::Pencil as u32,
             tools: ToolMemory::default(),
             tool_slots: ToolSlotMemory::default(),
@@ -47,6 +55,8 @@ impl EditingState {
                 .collect(),
             region_sources: region.source,
             region_stop_at_colors: region.stop_at_colors,
+            region_close_gaps: region.refinement.close_gaps,
+            region_edges: region.refinement.edges,
             fill_scope: region.scope,
             region_smooth_edges: region.refinement.smooth_edges,
             gradient: layer.gradient,
@@ -70,8 +80,9 @@ impl EditingState {
         let mut brush = self.tools.brush(preset(self.preset)?);
         self.colors.load_paint(&mut brush, layer_core::color::RgbSpace::Srgb)?;
         brush.validate().map_err(error)?;
+        if !(layer_render::RegionRefinement { edges:self.region_edges, ..Default::default() }).is_valid() { return Err("Invalid region edges".into()); }
         let mut region = region_tools::RegionTools::default();
-        for (id, &value) in &self.region_values { region.edit_value(id, value)?; }
+        for (id, &value) in &self.region_values { region.restore_value(id, value)?; }
         Ok(())
     }
 
@@ -235,7 +246,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut tools = self.tools.clone();
         if base.is_some() { tools.remember(preset); }
         EditingState {
-            version: 3,
+            version: 4,
             preset,
             tools,
             tool_slots: self.state.tool_slots.clone(),
@@ -249,9 +260,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .fields()
                 .into_iter()
                 .map(|(id, _, _, _, value)| (id.into(), value))
+                .chain(self.region_tools.saved_values.clone())
                 .collect(),
             region_sources: self.region_tools.source,
             region_stop_at_colors: self.region_tools.stop_at_colors,
+            region_close_gaps: self.region_tools.refinement.close_gaps,
+            region_edges: self.region_tools.refinement.edges,
             fill_scope: self.region_tools.scope,
             region_smooth_edges: self.region_tools.refinement.smooth_edges,
             gradient: self.layer_interaction.gradient.clone(),
@@ -268,9 +282,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut brush = state.tools.brush_in(preset(state.preset)?, space);
         let tool = stroke_paint(tools::tool(state.preset), &state.colors, space, &mut brush)?;
         let mut region = region_tools::RegionTools::default();
-        for (id, &value) in &state.region_values { region.edit_value(id, value).map_err(|reason| reason.message(self.localization()))?; }
+        for (id, &value) in &state.region_values { region.restore_value(id, value).map_err(|reason| reason.message(self.localization()))?; }
         region.source = state.region_sources;
         region.stop_at_colors = state.region_stop_at_colors;
+        region.refinement.close_gaps = state.region_close_gaps;
+        region.refinement.edges = state.region_edges;
         region.scope = state.fill_scope;
         region.refinement.smooth_edges = state.region_smooth_edges;
         self.engine.set_brush(brush.clone()).map_err(error)?;

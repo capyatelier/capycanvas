@@ -1,26 +1,16 @@
 use super::*;
 use crate::test_support::{depth_source, receive_request, submit_ready};
 use layer_core::{Affine, SelectionMode, SelectionPixels, color::{RgbSpace, SampleDepth}};
-use layer_render::{RegionRefinement, RegionRequest, RegionResult, RegionSource, SelectionRefinement};
-use std::{collections::VecDeque, sync::Arc};
+use layer_render::{RegionRefinement, RegionRequest, RegionResult, RegionSource, SelectionRefinement, RegionEdges};
+use std::sync::Arc;
+#[path = "region_cache_tests.rs"]
+mod region_cache;
 
 fn polygon(points: &[[u32; 2]]) -> Selection {
     Selection::polygon(points.iter().map(|&[x, y]| Point { x: x as f32, y: y as f32 }).collect()).unwrap()
 }
 fn rectangle([x0, y0, x1, y1]: [u32; 4]) -> Selection {
     polygon(&[[x0, y0], [x1, y0], [x1, y1], [x0, y1]])
-}
-fn within(points: &[[u32; 2]], x: u32, y: u32) -> bool {
-    let (x, y) = (x as f64 + 0.5, y as f64 + 0.5);
-    let mut inside = false;
-    for (a, b) in points.iter().zip(points.iter().cycle().skip(1)).take(points.len()) {
-        let [ax, ay] = a.map(f64::from);
-        let [bx, by] = b.map(f64::from);
-        if (ay > y) != (by > y) && x < (bx - ax) * (y - ay) / (by - ay) + ax {
-            inside = !inside;
-        }
-    }
-    inside
 }
 fn barrier([x0, y0, x1, y1]: [u32; 4], x: u32, y: u32) -> bool {
     (x0..x1).contains(&x) && (y0..y1).contains(&y)
@@ -39,7 +29,7 @@ fn frame(r: &mut WgpuRasterizer, document: &Document, extent: [u32; 2]) {
     submit_ready(r, FramePacket { reset_layers: true, ..packet(document.scene(), extent) }).unwrap();
 }
 fn request(source: RegionSource, enclosure: Selection, refinement: RegionRefinement, tolerance: f32) -> RegionRequest {
-    RegionRequest {
+    RegionRequest { reference_count: None, paper: None,
         request_id: 91,
         source,
         contiguous: true,
@@ -75,81 +65,93 @@ fn check(result: &RegionResult, expected: &[u8], extent: [u32; 2]) {
     if bounds[2] == 0 { bounds = [0; 4]; }
     assert_eq!(result.pixels.bounds(), bounds);
 }
-fn box_morph(input: &[bool], [w, h]: [u32; 2], lower: i32, upper: i32, erode: bool, extend: bool) -> Vec<bool> {
-    (0..w * h).map(|i| {
-        let (x, y) = ((i % w) as i32, (i / w) as i32);
-        let mut selected = erode;
-        for dy in lower..=upper {
-            for dx in lower..=upper {
-                let (xx, yy) = (x + dx, y + dy);
-                let sample = if extend || ((0..w as i32).contains(&xx) && (0..h as i32).contains(&yy)) {
-                    input[(yy.clamp(0, h as i32 - 1) as u32 * w + xx.clamp(0, w as i32 - 1) as u32) as usize]
-                } else { false };
-                selected = if erode { selected && sample } else { selected || sample };
-            }
-        }
-        selected
-    }).collect()
+fn exact() -> RegionRefinement {
+    RegionRefinement { close_gaps: false, edges: RegionEdges::Exact, smooth_edges: false }
 }
-fn enclosed(alpha: &[f32], extent: [u32; 2], points: &[[u32; 2]], tolerance: f32, refinement: RegionRefinement) -> Vec<u8> {
-    expected_region(alpha, extent, Some(points), None, tolerance, refinement)
-}
-fn expected_region(alpha: &[f32], extent: [u32; 2], points: Option<&[[u32; 2]]>, seed: Option<[u32; 2]>, tolerance: f32, refinement: RegionRefinement) -> Vec<u8> {
-    let [w, h] = extent;
-    let reference = seed.map_or(0., |[x, y]| alpha[(y * w + x) as usize]);
-    let mut eligible: Vec<_> = alpha.iter().map(|a| (*a - reference).abs() <= tolerance).collect();
-    let gap = refinement.gap_closing as i32;
-    if gap > 0 {
-        eligible = box_morph(&box_morph(&eligible, extent, -gap / 2, (gap + 1) / 2, true, true),
-            extent, -(gap + 1) / 2, gap / 2, false, true);
-    }
-    let inside = |x: u32, y: u32| points.is_none_or(|points| within(points, x, y));
-    let mut selected = vec![false; alpha.len()];
-    let mut seen = vec![false; alpha.len()];
-    let starts: Vec<usize> = match (points, seed) {
-        (None, Some([x, y])) => vec![(y * w + x) as usize],
-        _ => (0..alpha.len()).collect(),
+
+fn same_layer_middle_fill(flattened: bool) {
+    let extent = [128; 2];
+    let source = |x: u32, y: u32| {
+        let distance = x.abs_diff(64).max(y.abs_diff(64));
+        let alpha = match distance { 34 | 42 => 0.25, 35 | 41 => 0.75, 36..=40 => 1., _ => 0. };
+        if [x, y] == [60, 60] {
+            if flattened { [1., 1., 1., 31. / 32.] } else { [0.25, 0.5, 0.25, 1. / 32.] }
+        } else if flattened { [1. - alpha, 1. - alpha, 1. - alpha, 1.] }
+        else { [0., 0.125, 0.25, alpha] }
     };
-    for start in starts {
-        if seen[start] || !eligible[start] { continue; }
-        let mut queue = VecDeque::from([start]);
-        let mut component = Vec::new();
-        let mut contained = true;
-        seen[start] = true;
-        while let Some(i) = queue.pop_front() {
-            let (x, y) = (i as u32 % w, i as u32 / w);
-            contained &= x > 0 && x + 1 < w && y > 0 && y + 1 < h && inside(x, y);
-            component.push(i);
-            for (xx, yy) in [(x as i32 - 1, y as i32), (x as i32 + 1, y as i32),
-                (x as i32, y as i32 - 1), (x as i32, y as i32 + 1)] {
-                if !(0..w as i32).contains(&xx) || !(0..h as i32).contains(&yy) { continue; }
-                let next = (yy as u32 * w + xx as u32) as usize;
-                if eligible[next] && !seen[next] { seen[next] = true; queue.push_back(next); }
-            }
-        }
-        if contained || points.is_none() { for i in component { selected[i] = true; } }
+    let mut document = paint_document(extent, "Same-layer line middle");
+    placement::set_source(&mut document, depth_source(extent, SampleDepth::F32, RgbSpace::Srgb,
+        128 * 128 * 16 + 4096, source));
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    frame(&mut r, &document, extent);
+    let before = r.readback_srgb_rgba8().unwrap();
+    let mut query = request(RegionSource::Source(target(&document)), rectangle([0, 0, 128, 128]), exact(), 1. / 16.);
+    query.enclosure = None;
+    query.position = [64, 64];
+    let interior = receive_request(&mut r, query.clone());
+    assert!(interior.underfill.is_none());
+    query.refinement.edges = RegionEdges::LineMiddle;
+    let result = receive_request(&mut r, query);
+    let band = result.underfill.as_ref().unwrap();
+    for [x, y] in [[64, 64], [60, 60], [97, 64]] {
+        assert_eq!(value(&interior.pixels, x, y), 255, "interior {x},{y}");
+        assert_eq!(value(band, x, y), 0, "interior band {x},{y}");
     }
-    let expansion = refinement.expansion;
-    if expansion != 0 {
-        selected = box_morph(&selected, extent, -expansion.abs(), expansion.abs(), expansion < 0, false);
-    }
-    (0..w * h).map(|i| {
-        if !inside(i % w, i / w) { return 0; }
-        let center = selected[i as usize];
-        if !refinement.smooth_edges { return if center { 255 } else { 0 }; }
-        let (x, y) = ((i % w) as i32, (i / w) as i32);
-        let at = |dx: i32, dy: i32| selected[((y + dy).clamp(0, h as i32 - 1) as u32 * w
-            + (x + dx).clamp(0, w as i32 - 1) as u32) as usize] as u32;
-        let mut samples = 0u32;
-        for dy in [-1, 1] {
-            for dx in [-1, 1] {
-                let count = center as u32 + at(dx, 0) + at(0, dy) + at(dx, dy);
-                samples += u32::from(count > 2 || (count == 2 && center));
-            }
+    assert_eq!(value(&interior.pixels, 98, 64), 0);
+    assert_eq!(value(&result.pixels, 98, 64), 255);
+    assert_eq!(value(band, 98, 64), 255);
+    assert_eq!(value(&result.pixels, 108, 64), 0);
+    let mut coverage = reveal_all(extent, [0, 0]);
+    coverage.selection = Some(Selection::pixels(result.pixels.clone()));
+    let color = [1., 0., 0., 0.75];
+    let operation = RasterOperation { placement: result.placement, coverage,
+        kind: RasterOperationKind::Fill { texture: Default::default(), color, alpha_locked: false,
+            underfill: Some(Selection::pixels(band.clone())) } };
+    let command = DabBatch { kind: DabBatchKind::RasterOperation(0), dab_count: 0,
+        damage: operation.bounds(extent), ..batch(target(&document)) };
+    paint_mut(&mut document).operations = Arc::new(vec![operation]);
+    submit_ready(&mut r, FramePacket { dab_batches: std::slice::from_ref(&command),
+        ..packet(document.scene(), extent) }).unwrap();
+    let after = r.readback_srgb_rgba8().unwrap();
+    for y in 0..128 { for x in 0..128 {
+        let index = ((y * 128 + x) * 4) as usize;
+        let old = source(x, y);
+        let amount = value(&result.pixels, x, y) as f32 / 255.;
+        let behind = value(band, x, y) != 0;
+        let interior_value = value(&interior.pixels, x, y);
+        assert_eq!(behind, amount != 0. && interior_value == 0, "band {x},{y}");
+        if interior_value != 0 { assert_eq!(value(&result.pixels, x, y), interior_value, "interior coverage {x},{y}"); }
+        if amount == 0. || (old[3] == 1. && value(&interior.pixels, x, y) == 0) {
+            assert_eq!(after[index..index + 4], before[index..index + 4], "preserved {x},{y}");
         }
-        samples = if center { samples.max(1) } else { samples.min(3) };
-        let coverage = samples as f32 * 0.25;
-        ((coverage * 4.).round() * 255. / 4.).round() as u8
+        let paint_alpha = color[3] * amount;
+        let alpha = old[3] + paint_alpha * (1. - old[3]);
+        let expected = std::array::from_fn::<_, 4, _>(|channel| {
+            if channel == 3 { return (alpha * 255.).round() as u8; }
+            let premultiplied = if behind { old[channel] * old[3] + color[channel] * paint_alpha * (1. - old[3]) }
+                else { color[channel] * paint_alpha + old[channel] * old[3] * (1. - paint_alpha) };
+            let linear = if alpha == 0. { 0. } else { premultiplied / alpha };
+            (RgbSpace::Srgb.encode(f64::from(linear)) * 255.).round() as u8
+        });
+        assert!(after[index..index + 4].iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1),
+            "{x},{y} behind={behind}: {:?} != {expected:?}", &after[index..index + 4]);
+    }}
+}
+
+#[test]
+fn line_middle_same_layer_alpha_border_keeps_ink_and_fills_behind_the_fringe() {
+    same_layer_middle_fill(false);
+}
+
+#[test]
+fn line_middle_same_layer_flattened_line_keeps_opaque_mixes_and_fills_the_interior() {
+    same_layer_middle_fill(true);
+}
+
+fn rectangles(extent: [u32; 2], boxes: &[[u32; 4]]) -> Vec<u8> {
+    (0..extent[0] * extent[1]).map(|i| {
+        let (x, y) = (i % extent[0], i / extent[0]);
+        if boxes.iter().any(|[x0, y0, x1, y1]| (*x0..*x1).contains(&x) && (*y0..*y1).contains(&y)) { 255 } else { 0 }
     }).collect()
 }
 
@@ -169,12 +171,12 @@ fn enclose_fill_unions_closed_islands_excludes_open_partial_and_canvas_edge_regi
     frame(&mut r, &document, extent);
     let before = r.readback_srgb_rgba8().unwrap();
     let points = [[4, 4], [247, 4], [247, 90], [4, 90]];
-    let expected = enclosed(&alpha, extent, &points, 0., Default::default());
+    let expected = rectangles(extent, &[[19, 19, 62, 69], [95, 25, 140, 71]]);
     assert_eq!(expected.iter().filter(|v| **v != 0).count(), 43 * 50 + 45 * 46);
     let mut held = Vec::new();
     for source in [RegionSource::Source(target(&document)), RegionSource::Composite] {
         for seed in [[0, 0], [18, 18], [33, 40]] {
-            let mut query = request(source.clone(), polygon(&points), Default::default(), 0.);
+            let mut query = request(source.clone(), polygon(&points), exact(), 0.);
             query.position = seed;
             let result = receive_request(&mut r, query);
             check(&result, &expected, extent);
@@ -183,8 +185,8 @@ fn enclose_fill_unions_closed_islands_excludes_open_partial_and_canvas_edge_regi
     }
     for bounds in [[80, 10, 155, 85], [150, 10, 220, 85], [4, 4, 247, 90], [0, 0, 259, 97]] {
         let points = [[bounds[0], bounds[1]], [bounds[2], bounds[1]], [bounds[2], bounds[3]], [bounds[0], bounds[3]]];
-        check(&receive_request(&mut r, request(RegionSource::Composite, polygon(&points), Default::default(), 0.)),
-            &enclosed(&alpha, extent, &points, 0., Default::default()), extent);
+        check(&receive_request(&mut r, request(RegionSource::Composite, polygon(&points), exact(), 0.)),
+            &rectangles(extent, &[[19, 19, 62, 69], [95, 25, 140, 71], [226, 27, 256, 70]].into_iter().filter(|b| b[0] > bounds[0] && b[1] > bounds[1] && b[2] < bounds[2] && b[3] < bounds[3]).collect::<Vec<_>>()), extent);
     }
     assert_eq!(r.readback_srgb_rgba8().unwrap(), before);
     assert_eq!(value(&held[0], 33, 40), 255);
@@ -202,7 +204,7 @@ fn enclose_fill_unions_closed_islands_excludes_open_partial_and_canvas_edge_regi
         let snapshot = references.snapshot();
         let source = RegionSource::Intersection([ink, target].into_iter()
             .map(|leaf| RegionSource::reference(snapshot.clone(), leaf).unwrap()).collect());
-        let result = receive_request(&mut r, request(source, polygon(&points), Default::default(), 0.));
+        let result = receive_request(&mut r, request(source, polygon(&points), exact(), 0.));
         assert_eq!(value(&result.pixels, 33, 40), 255, "opaque corner in {} must not seed enclosure matching", if corner_reference { "reference" } else { "target" });
         check(&result, &expected, extent);
     }
@@ -211,80 +213,29 @@ fn enclose_fill_unions_closed_islands_excludes_open_partial_and_canvas_edge_regi
 #[test]
 fn enclose_fill_uses_alpha_thresholds_and_intersects_selection_after_containment() {
     let extent = [97, 83];
-    let alpha: Vec<_> = (0..extent[0] * extent[1]).map(|i| {
+    let alpha = (0..extent[0] * extent[1]).map(|i| {
         let (x, y) = (i % extent[0], i / extent[0]);
         if barrier([15, 17, 78, 68], x, y) { 0.5 }
-        else if (16..77).contains(&x) && (18..67).contains(&y) {
-            if x == 35 { 0.25 } else if x == 36 { 0.125 } else { 0. }
-        } else { 0. }
-    }).collect();
+        else if (16..77).contains(&x) && (18..67).contains(&y) && x == 35 { 0.25 }
+        else if (16..77).contains(&x) && (18..67).contains(&y) && x == 36 { 0.125 }
+        else { 0. }
+    }).collect::<Vec<_>>();
     let document = document(extent, &alpha);
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     frame(&mut r, &document, extent);
-    let points = [[8, 8], [89, 8], [89, 75], [8, 75]];
     for tolerance in [0., 0.124, 0.125, 0.249, 0.25, 0.499, 0.5, 1.] {
+        let mut expected = rectangles(extent, if tolerance < 0.5 { &[[16, 18, 77, 67]][..] } else { &[] });
+        for y in 18..67 { for (x, threshold) in [(35, 0.25), (36, 0.125)] {
+            if tolerance < threshold { expected[(y * extent[0] + x) as usize] = 0; }
+        }}
         for source in [RegionSource::Source(target(&document)), RegionSource::Composite] {
-            check(&receive_request(&mut r, request(source, polygon(&points), Default::default(), tolerance)),
-                &enclosed(&alpha, extent, &points, tolerance, Default::default()), extent);
+            check(&receive_request(&mut r, request(source, rectangle([8, 8, 89, 75]), exact(), tolerance)), &expected, extent);
         }
     }
-    let mut query = request(RegionSource::Composite, polygon(&points), Default::default(), 0.25);
-    query.selection = Some(SelectionRefinement {
-        resize: 0,
-        mode: SelectionMode::Intersect,
-        antialias: true,
-        feather: 0.,
-        previous: Some(Arc::new(rectangle([0, 0, 40, 83]))),
-        source_to_document: Affine::IDENTITY,
-        keep_canvas_edges: false,
-    });
-    let mut expected = enclosed(&alpha, extent, &points, 0.25, Default::default());
-    for y in 0..extent[1] { for x in 40..extent[0] { expected[(y * extent[0] + x) as usize] = 0; } }
-    check(&receive_request(&mut r, query), &expected, extent);
-}
-
-#[test]
-fn enclose_fill_keeps_diagonal_components_separate_and_rejects_each_canvas_edge() {
-    let extent = [33, 33];
-    let holes = [[15, 15], [16, 16], [0, 8], [8, 0], [32, 8], [8, 32]];
-    let alpha: Vec<_> = (0..33 * 33).map(|i| if holes.contains(&[i % 33, i / 33]) { 0. } else { 1. }).collect();
-    let document = document(extent, &alpha);
-    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    frame(&mut r, &document, extent);
-    for points in [vec![[1, 1], [16, 1], [16, 16], [1, 16]],
-        vec![[0, 0], [33, 0], [33, 33], [0, 33]]] {
-        let expected = enclosed(&alpha, extent, &points, 0., Default::default());
-        assert_eq!(expected.iter().filter(|v| **v != 0).count(), if points[0] == [0, 0] { 2 } else { 1 });
-        check(&receive_request(&mut r, request(RegionSource::Composite, polygon(&points), Default::default(), 0.)),
-            &expected, extent);
-    }
-}
-
-#[test]
-fn enclose_fill_preserves_polygon_containment_gap_closing_expansion_and_smoothing() {
-    let extent = [193, 101];
-    let alpha: Vec<_> = (0..extent[0] * extent[1]).map(|i| {
-        let (x, y) = (i % extent[0], i / extent[0]);
-        let left = barrier([20, 18, 72, 79], x, y);
-        let gap = barrier([106, 16, 163, 77], x, y) && !(y == 16 && x == 128);
-        if left || gap { 1. } else { 0. }
-    }).collect();
-    let document = document(extent, &alpha);
-    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    frame(&mut r, &document, extent);
-    for points in [vec![[8, 8], [185, 8], [185, 92], [8, 92]],
-        vec![[8, 8], [185, 8], [185, 34], [85, 34], [85, 92], [8, 92]],
-        vec![[20, 18], [72, 18], [72, 79], [20, 79]]] {
-        for refinement in [RegionRefinement::default(),
-            RegionRefinement { gap_closing: 1, ..Default::default() },
-            RegionRefinement { gap_closing: 2, expansion: 2, smooth_edges: false },
-            RegionRefinement { gap_closing: 3, expansion: -2, smooth_edges: true },
-            RegionRefinement { smooth_edges: true, ..Default::default() }] {
-            let expected = enclosed(&alpha, extent, &points, 0., refinement);
-            let result = receive_request(&mut r, request(RegionSource::Composite, polygon(&points), refinement, 0.));
-            check(&result, &expected, extent);
-        }
-    }
+    let mut query = request(RegionSource::Composite, rectangle([8, 8, 89, 75]), exact(), 0.25);
+    query.selection = Some(SelectionRefinement { resize: 0, mode: SelectionMode::Intersect, antialias: true, feather: 0.,
+        previous: Some(Arc::new(rectangle([0, 0, 40, 83]))), source_to_document: Affine::IDENTITY, keep_canvas_edges: false });
+    check(&receive_request(&mut r, query), &rectangles(extent, &[[16, 18, 40, 67]]), extent);
 }
 
 fn uniform_document(extent: [u32; 2], alpha: &[f32]) -> Document {
@@ -295,37 +246,26 @@ fn uniform_document(extent: [u32; 2], alpha: &[f32]) -> Document {
 }
 
 #[test]
-fn regions_beyond_one_storage_binding_label_bounded_windows_and_match_a_whole_canvas_flood() {
+fn regions_beyond_one_storage_binding_cross_window_seams_and_halos() {
     let limit = 4u64 << 20;
     let mut r = limited_renderer(limit);
-    let extent = [1300u32, 900u32];
-    assert!(u64::from(extent[0]) * u64::from(extent[1]) * 4 > limit, "one parent per pixel exceeds the binding");
-    let alpha: Vec<_> = (0..extent[0] * extent[1]).map(|i| {
-        let (x, y) = (i % extent[0], i / extent[0]);
-        let wall = x % 90 == 45 && if (x / 90) % 2 == 0 { y < 870 } else { y > 30 };
-        let boxed = barrier([230, 200, 790, 700], x, y) || barrier([511, 511, 517, 517], x, y);
-        let ring = barrier([1100, 100, 1290, 850], x, y) && !(x == 1100 && y == 513);
-        if wall || boxed || ring || x == y { 1. } else { 0. }
-    }).collect();
+    assert_eq!(r.device.limits().max_storage_buffer_binding_size, limit);
+    let extent = [2304, 768];
+    let boxes = [[1900, 100, 2200, 600], [1968, 620, 2128, 740]];
+    let mut alpha = (0..extent[0] * extent[1]).map(|i| if boxes.iter().any(|b| barrier(*b, i % extent[0], i / extent[0])) { 1. } else { 0. }).collect::<Vec<_>>();
     let document = uniform_document(extent, &alpha);
     frame(&mut r, &document, extent);
-    let refinements = [RegionRefinement::default(), RegionRefinement { gap_closing: 2, expansion: 2, smooth_edges: true },
-        RegionRefinement { gap_closing: 1, expansion: -1, smooth_edges: false }];
-    for refinement in refinements {
-        for seed in [[3, 890], [240, 300], [514, 514], [512, 511], [230, 600], [1180, 513], [1299, 0]] {
-            let mut query = request(RegionSource::Composite, rectangle([0, 0, 1, 1]), refinement, 0.);
-            (query.enclosure, query.position) = (None, seed);
-            check(&receive_request(&mut r, query), &expected_region(&alpha, extent, None, Some(seed), 0., refinement), extent);
-        }
-        let points = [[6, 9], [1290, 9], [1290, 450], [1250, 450], [1250, 890], [6, 890]];
-        check(&receive_request(&mut r, request(RegionSource::Composite, polygon(&points), refinement, 0.)),
-            &enclosed(&alpha, extent, &points, 0., refinement), extent);
+    for (seed, bounds) in [([2000, 300], [1901, 101, 2199, 599]), ([2050, 680], [1969, 621, 2127, 739])] {
+        let mut query = request(RegionSource::Composite, rectangle([0, 0, 1, 1]), exact(), 0.);
+        (query.enclosure, query.position) = (None, seed);
+        check(&receive_request(&mut r, query), &rectangles(extent, &[bounds]), extent);
     }
+    for x in 2106..2118 { alpha[(100 * extent[0] + x) as usize] = 0.; }
+    frame(&mut r, &uniform_document(extent, &alpha), extent);
     let mut query = request(RegionSource::Composite, rectangle([0, 0, 1, 1]), Default::default(), 0.);
-    (query.enclosure, query.position, query.contiguous) = (None, [3, 890], false);
-    let expected: Vec<u8> = alpha.iter().map(|a| if *a == 0. { 255 } else { 0 }).collect();
-    check(&receive_request(&mut r, query), &expected, extent);
-    assert!(r.regions.as_ref().unwrap().flood.storage_bytes() <= limit, "label storage stays within one binding");
+    (query.enclosure, query.position) = (None, [2000, 300]);
+    let result = receive_request(&mut r, query);
+    score_geometry(&result.pixels, &[vec![[1900.5, 100.5], [2199.5, 100.5], [2199.5, 599.5], [1900.5, 599.5]]], [0, 0], &[], "Auto seal across window seam").unwrap();
 }
 
 #[test]
@@ -369,7 +309,7 @@ fn enclose_fill_workstation_completion_timings() {
         submit_ready(&mut r, FramePacket { reset_layers: true, view: view(), ..packet(document.scene(), extent) }).unwrap();
         let baseline = r.telemetry().resident_bytes;
         for (enclosed, refinement) in [false, true].into_iter().flat_map(|enclosed| [RegionRefinement::default(),
-            RegionRefinement { gap_closing: 2, expansion: 2, smooth_edges: true }].map(|refinement| (enclosed, refinement))) {
+            RegionRefinement { close_gaps: true, edges: RegionEdges::GrowShrink(2), smooth_edges: true }].map(|refinement| (enclosed, refinement))) {
             let mut samples = Vec::new();
             for run in 0..22 {
                 let started = std::time::Instant::now();
@@ -412,7 +352,7 @@ fn reference_intersection_matches_each_opaque_seed_across_classification_batches
     let before = r.readback_srgb_rgba8().unwrap();
     for (source, x_bound, y_bound) in [(RegionSource::Source(first_target), 700, extent[1]),
         (RegionSource::Composite, extent[0], 600)] {
-        let mut query = request(source, rectangle([0, 0, extent[0], extent[1]]), Default::default(), 0.);
+        let mut query = request(source, rectangle([0, 0, extent[0], extent[1]]), exact(), 0.);
         query.position = [100, 100]; query.enclosure = None;
         let result = receive_request(&mut r, query);
         for y in (10..extent[1]-10).step_by(19) { for x in (10..extent[0]-10).step_by(17) {
@@ -433,9 +373,8 @@ fn reference_intersection_matches_each_opaque_seed_across_classification_batches
         assert_eq!(snapshot.view().occurrence(h), Some(original));
         assert_eq!(document.scene().occurrence(h), Some(original));
     }
-    let alpha: Vec<_> = (0..extent[0]*extent[1]).map(|i| if i%extent[0] < 700 && i/extent[0] < 600 { 0. } else { 1. }).collect();
-    let expected = expected_region(&alpha, extent, None, Some([100, 100]), 0., Default::default());
-    let mut query = request(RegionSource::Intersection(sources), rectangle([0, 0, extent[0], extent[1]]), Default::default(), 0.);
+    let expected = rectangles(extent, &[[0, 0, 700, 600]]);
+    let mut query = request(RegionSource::Intersection(sources), rectangle([0, 0, extent[0], extent[1]]), exact(), 0.);
     query.position = [100, 100]; query.enclosure = None;
     let result = receive_request(&mut r, query);
     for y in (10..extent[1]-10).step_by(19) { for x in (10..extent[0]-10).step_by(17) {
@@ -456,7 +395,7 @@ fn reference_intersection_matches_each_opaque_seed_across_classification_batches
     let all = RegionSource::Scene { snapshot: snapshot.clone(), scope: layer_core::SceneScope::All };
     for source in [RegionSource::Composite, RegionSource::Intersection(vec![all,
         RegionSource::reference(snapshot, target).unwrap()])] {
-        let result = receive_request(&mut r, request(source, rectangle([4, 4, 124, 124]), Default::default(), 0.));
+        let result = receive_request(&mut r, request(source, rectangle([4, 4, 124, 124]), exact(), 0.));
         assert!(result.pixels.words().iter().all(|word| *word == 0), "opaque All visible layers has no transparent enclosed region");
     }
 }
@@ -507,7 +446,7 @@ fn reference_scene_keeps_nested_position_mask_and_clipping_without_changing_the_
     assert_eq!(normalized.view().occurrence(group), snapshot.view().occurrence(group));
     let mut renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     frame(&mut renderer, &document, extent);
-    let mut query = request(RegionSource::Intersection(vec![source]), rectangle([0, 0, 128, 128]), Default::default(), 0.);
+    let mut query = request(RegionSource::Intersection(vec![source]), rectangle([0, 0, 128, 128]), exact(), 0.);
     query.position = [30, 40]; query.enclosure = None;
     let result = receive_request(&mut renderer, query);
     for y in (4u32..128).step_by(7) { for x in (4u32..128).step_by(7) {
@@ -518,4 +457,399 @@ fn reference_scene_keeps_nested_position_mask_and_clipping_without_changing_the_
     document.artwork.occurrences.get_mut(group).unwrap().visible = false;
     assert!(RegionSource::reference(document.snapshot(), leaf).is_none());
     assert_eq!(snapshot.view().occurrence(leaf), Some(&original));
+}
+
+
+struct LineCase {
+    name: String,
+    lines: Vec<(Vec<[f32; 2]>, f32)>,
+    seeds: Vec<[f32; 2]>,
+    regions: Vec<Vec<Vec<[f32; 2]>>>,
+    open: bool,
+    dry: bool,
+    pressure: Option<f32>,
+    refinement: Option<RegionRefinement>,
+}
+fn line_cases() -> Vec<LineCase> {
+    vec![
+        LineCase { name: "aligned".into(), lines: vec![(vec![[130.0, 66.0], [130.0, 100.0], [30.0, 100.0], [30.0, 20.0], [130.0, 20.0], [130.0, 56.0]], 3.0), (vec![[65.0, 60.0], [64.829_63, 61.294_094], [64.330_124, 62.5], [63.535_534, 63.535_534], [62.5, 64.330_124], [61.294_094, 64.829_63], [60.0, 65.0], [58.705_906, 64.829_63], [57.5, 64.330_124], [56.464_466, 63.535_534], [55.669_872, 62.5], [55.170_372, 61.294_094], [55.0, 60.0], [55.170_372, 58.705_906], [55.669_872, 57.5], [56.464_466, 56.464_466], [57.5, 55.669_872], [58.705_906, 55.170_372], [60.0, 55.0], [61.294_094, 55.170_372], [62.5, 55.669_872], [63.535_534, 56.464_466], [64.330_124, 57.5], [64.829_63, 58.705_906], [65.0, 60.0]], 3.0)], seeds: vec![[95.0, 60.0]], regions: vec![vec![vec![[30.0, 20.0], [130.0, 20.0], [130.0, 100.0], [30.0, 100.0]], vec![[65.0, 60.0], [64.829_63, 61.294_094], [64.330_124, 62.5], [63.535_534, 63.535_534], [62.5, 64.330_124], [61.294_094, 64.829_63], [60.0, 65.0], [58.705_906, 64.829_63], [57.5, 64.330_124], [56.464_466, 63.535_534], [55.669_872, 62.5], [55.170_372, 61.294_094], [55.0, 60.0], [55.170_372, 58.705_906], [55.669_872, 57.5], [56.464_466, 56.464_466], [57.5, 55.669_872], [58.705_906, 55.170_372], [60.0, 55.0], [61.294_094, 55.170_372], [62.5, 55.669_872], [63.535_534, 56.464_466], [64.330_124, 57.5], [64.829_63, 58.705_906], [65.0, 60.0]]]], open: false, dry: false, pressure: None, refinement: None },
+        LineCase { name: "slanted".into(), lines: vec![(vec![[118.08, 37.12], [148.0, 60.0], [80.0, 112.0], [12.0, 60.0], [80.0, 8.0], [109.92, 30.88]], 3.0)], seeds: vec![[80.0, 60.0]], regions: vec![vec![vec![[80.0, 8.0], [148.0, 60.0], [80.0, 112.0], [12.0, 60.0]]]], open: false, dry: false, pressure: None, refinement: None },
+        LineCase { name: "offset".into(), lines: vec![(vec![[137.0, 68.0], [137.0, 100.0], [30.0, 100.0], [30.0, 20.0], [130.0, 20.0], [130.0, 56.0]], 3.0)], seeds: vec![[80.0, 60.0]], regions: vec![vec![vec![[30.0, 20.0], [130.0, 20.0], [130.0, 56.0], [137.0, 68.0], [137.0, 100.0], [30.0, 100.0]]]], open: false, dry: false, pressure: None, refinement: None },
+        LineCase { name: "tee".into(), lines: vec![(vec![[20.0, 20.0], [140.0, 20.0], [140.0, 100.0], [20.0, 100.0], [20.0, 20.0]], 3.0), (vec![[78.0, 20.0], [92.0, 91.0]], 3.0)], seeds: vec![[45.0, 60.0]], regions: vec![vec![vec![[20.0, 20.0], [78.0, 20.0], [93.8, 100.0], [20.0, 100.0]]]], open: false, dry: false, pressure: None, refinement: None },
+        LineCase { name: "acute".into(), lines: vec![(vec![[98.0, 100.0], [150.0, 100.0], [12.0, 64.0], [12.0, 100.0], [88.0, 100.0]], 3.0)], seeds: vec![[40.0, 88.0]], regions: vec![vec![vec![[12.0, 100.0], [150.0, 100.0], [12.0, 64.0]]]], open: false, dry: false, pressure: None, refinement: None },
+        LineCase { name: "corridor".into(), lines: vec![(vec![[15.0, 66.0], [15.0, 105.0], [145.0, 105.0], [145.0, 15.0], [15.0, 15.0], [15.0, 54.0]], 3.0), (vec![[24.0, 24.0], [136.0, 24.0], [136.0, 96.0], [24.0, 96.0], [24.0, 24.0]], 3.0)], seeds: vec![[80.0, 19.0]], regions: vec![vec![vec![[15.0, 15.0], [145.0, 15.0], [145.0, 105.0], [15.0, 105.0]], vec![[24.0, 24.0], [136.0, 24.0], [136.0, 96.0], [24.0, 96.0]]]], open: false, dry: false, pressure: None, refinement: None },
+        LineCase { name: "fold".into(), lines: vec![(vec![[20.0, 20.0], [140.0, 20.0], [140.0, 100.0], [20.0, 100.0], [20.0, 20.0]], 3.0), (vec![[80.0, 100.0], [84.0, 52.0]], 3.0)], seeds: vec![[50.0, 60.0]], regions: vec![vec![vec![[20.0, 20.0], [140.0, 20.0], [140.0, 100.0], [20.0, 100.0]]]], open: false, dry: false, pressure: None, refinement: None },
+        LineCase { name: "sketchy".into(), lines: vec![(vec![[12.0, 22.0], [146.0, 18.0]], 3.0), (vec![[140.0, 8.0], [136.0, 108.0]], 3.0), (vec![[148.0, 98.0], [16.0, 102.0]], 3.0), (vec![[24.0, 112.0], [26.0, 10.0]], 3.0)], seeds: vec![[80.0, 60.0]], regions: vec![vec![vec![[25.77, 21.59], [139.59, 18.19], [136.39, 98.35], [24.2, 101.75]]]], open: false, dry: false, pressure: None, refinement: None },
+        LineCase { name: "pencil".into(), lines: vec![(vec![[30.0, 20.0], [130.0, 20.0], [130.0, 100.0], [30.0, 100.0], [30.0, 20.0]], 4.0)], seeds: vec![[80.0, 60.0]], regions: vec![vec![vec![[30.0, 20.0], [130.0, 20.0], [130.0, 100.0], [30.0, 100.0]]]], open: false, dry: true, pressure: None, refinement: None },
+        LineCase { name: "pencil-break".into(), lines: vec![(vec![[122.34, 37.26], [148.9, 60.6], [80.9, 112.6], [12.9, 60.6], [80.9, 8.6], [109.46, 30.44]], 4.0), (vec![[118.64, 37.46], [147.2, 59.3], [79.2, 111.3], [11.2, 59.3], [79.2, 7.3], [106.76, 31.64]], 4.0)], seeds: vec![[80.0, 60.0]], regions: vec![vec![vec![[80.0, 8.0], [148.0, 60.0], [80.0, 112.0], [12.0, 60.0]]]], open: false, dry: true, pressure: None, refinement: None },
+        LineCase { name: "weights".into(), lines: vec![(vec![[20.0, 20.0], [140.0, 20.0], [140.0, 100.0], [20.0, 100.0], [20.0, 20.0]], 1.5), (vec![[80.0, 20.0], [80.0, 100.0]], 10.0)], seeds: vec![[50.0, 60.0], [110.0, 60.0]], regions: vec![vec![vec![[20.0, 20.0], [80.0, 20.0], [80.0, 100.0], [20.0, 100.0]]], vec![vec![[80.0, 20.0], [140.0, 20.0], [140.0, 100.0], [80.0, 100.0]]]], open: false, dry: false, pressure: None, refinement: None },
+        LineCase { name: "judgement".into(), lines: vec![(vec![[20.0, 20.0], [140.0, 20.0], [140.0, 100.0], [20.0, 100.0], [20.0, 20.0]], 3.0), (vec![[80.0, 100.0], [80.0, 29.0]], 3.0)], seeds: vec![[50.0, 60.0]], regions: vec![vec![vec![[20.0, 20.0], [80.0, 20.0], [80.0, 100.0], [20.0, 100.0]]]], open: false, dry: false, pressure: None, refinement: None },
+        LineCase { name: "open".into(), lines: vec![(vec![[40.0, 25.0], [40.0, 100.0], [120.0, 100.0], [120.0, 25.0]], 3.0)], seeds: vec![[80.0, 70.0]], regions: vec![vec![vec![[40.0, 25.0], [120.0, 25.0], [120.0, 100.0], [40.0, 100.0]]]], open: true, dry: false, pressure: None, refinement: None },
+    ]
+}
+fn segment_distance(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
+    let d = [b[0] - a[0], b[1] - a[1]];
+    let t = (((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / (d[0] * d[0] + d[1] * d[1]).max(f32::EPSILON)).clamp(0., 1.);
+    (p[0] - a[0] - t * d[0]).hypot(p[1] - a[1] - t * d[1])
+}
+fn geometry_at(contours: &[Vec<[f32; 2]>], p: [f32; 2]) -> (bool, f32) {
+    let mut inside = false;
+    let mut distance = f32::INFINITY;
+    for contour in contours {
+        for (&a, &b) in contour.iter().zip(contour.iter().cycle().skip(1)).take(contour.len()) {
+            if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0] { inside = !inside; }
+            distance = distance.min(segment_distance(p, a, b));
+        }
+    }
+    (inside, distance)
+}
+fn score_geometry(pixels: &SelectionPixels, contours: &[Vec<[f32; 2]>], offset: [u32; 2], footprint: &[(Vec<[f32; 2]>, f32)], name: &str) -> Result<(), String> {
+    let extent = pixels.extent();
+    let mut bounds = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+    for p in contours.iter().flatten().chain(footprint.iter().flat_map(|(line, _)| line)) { bounds = [bounds[0].min(p[0]), bounds[1].min(p[1]), bounds[2].max(p[0]), bounds[3].max(p[1])]; }
+    let band = footprint.iter().map(|(_, width)| width * 0.5 + 1.5).fold(1.5f32, f32::max);
+    let margin = band.max(2.);
+    let scan = [(bounds[0] - margin).floor().max(0.) as u32 + offset[0], (bounds[1] - margin).floor().max(0.) as u32 + offset[1],
+        (bounds[2] + margin).ceil() as u32 + offset[0], (bounds[3] + margin).ceil() as u32 + offset[1]];
+    let actual = pixels.bounds();
+    let (mut leaks, mut misses) = (0, 0);
+    for y in scan[1]..scan[3].min(extent[1]) { for x in scan[0]..scan[2].min(extent[0]) {
+        let p = [x as f32 + 0.5 - offset[0] as f32, y as f32 + 0.5 - offset[1] as f32];
+        let (inside, distance) = geometry_at(contours, p);
+        if distance <= band || footprint.iter().any(|(line, width)| line.windows(2).any(|s| segment_distance(p, s[0], s[1]) <= width * 0.5 + 1.5)) { continue; }
+        let filled = value(pixels, x, y) != 0;
+        leaks += u32::from(filled && !inside);
+        misses += u32::from(!filled && inside);
+    }}
+    if actual[2] != 0 && (actual[0] < scan[0] || actual[1] < scan[1] || actual[2] > scan[2] || actual[3] > scan[3]) {
+        Err(format!("{name}: leaked bounds {actual:?} outside {scan:?}, leaks={leaks}, misses={misses}"))
+    } else if leaks == 0 && misses <= 4 { Ok(()) } else { Err(format!("{name}: leaks={leaks}, misses={misses}")) }
+}
+const KNOWN_MISSES: &[&str] = &[
+    "Charcoal pressure=0.25 angle=0 gap=48 width=3",
+    "Charcoal pressure=0.25 angle=0 gap=8 width=3",
+    "Charcoal pressure=0.25 angle=15 gap=48 width=3",
+    "Charcoal pressure=0.25 angle=30 gap=48 width=3",
+    "Charcoal pressure=0.25 angle=45 gap=48 width=3",
+    "Charcoal pressure=0.25 angle=60 gap=32 width=3",
+    "Charcoal pressure=0.25 angle=60 gap=48 width=3",
+    "Charcoal pressure=0.25 angle=90 gap=2 width=3",
+    "Charcoal pressure=0.25 corner=10",
+    "Charcoal pressure=0.25 corner=20",
+    "Charcoal pressure=0.25 corner=5",
+    "Charcoal pressure=0.25 corner=85",
+    "Charcoal pressure=0.25 width sweep angle=30 gap=8 width=10",
+    "Charcoal pressure=0.25 width sweep angle=30 gap=8 width=13",
+    "Charcoal pressure=0.25 width sweep angle=30 gap=8 width=15",
+    "Charcoal pressure=0.25 width sweep angle=30 gap=8 width=3",
+    "Charcoal pressure=0.5 angle=30 gap=32 width=3",
+    "Charcoal pressure=0.5 angle=30 gap=4 width=3",
+    "Charcoal pressure=0.5 angle=30 gap=48 width=3",
+    "Charcoal pressure=0.5 angle=60 gap=32 width=3",
+    "Charcoal pressure=0.5 angle=60 gap=48 width=3",
+    "Charcoal pressure=0.5 angle=90 gap=2 width=3",
+    "Charcoal pressure=0.5 corner=40",
+    "Charcoal pressure=0.5 corner=55",
+    "Charcoal pressure=0.5 width sweep angle=30 gap=8 width=3",
+    "Charcoal pressure=0.5 width sweep angle=30 gap=8 width=7",
+    "Charcoal pressure=0.8 corner=20",
+    "Crayon pressure=0.25 corner=15",
+    "Crayon pressure=0.5 corner=75",
+    "Crayon pressure=0.8 corner=75",
+    "Pencil pressure=0.25 angle=15 gap=48 width=3",
+    "Pencil pressure=0.25 angle=45 gap=48 width=3",
+    "Pencil pressure=0.25 angle=90 gap=2 width=3",
+    "Pencil pressure=0.25 angle=90 gap=4 width=3",
+    "Pencil pressure=0.25 corner=10",
+    "Pencil pressure=0.25 corner=5",
+    "Pencil pressure=0.25 width sweep angle=30 gap=8 width=10",
+    "Pencil pressure=0.25 width sweep angle=30 gap=8 width=3",
+    "Pencil pressure=0.5 corner=10",
+    "Pencil pressure=0.5 corner=20",
+    "Pencil pressure=0.5 corner=5",
+    "Pencil pressure=0.8 corner=5",
+];
+fn check_geometry(name: &str, score: Result<(), String>) -> Result<(), String> {
+    match (KNOWN_MISSES.contains(&name), score) {
+        (true, Ok(())) => Err(format!("{name}: now passes; remove from KNOWN_MISSES")),
+        (true, Err(_)) => Ok(()),
+        (_, score) => score,
+    }
+}
+fn line_atlas(r: &mut WgpuRasterizer, cases: &[LineCase], preset: Option<layer_core::DefaultBrushPreset>, pressure: f32) -> Vec<Arc<SelectionPixels>> {
+    let extent = [768, (cases.len() as u32).div_ceil(4) * 152];
+    let mut alpha = vec![0f32; (extent[0] * extent[1]) as usize];
+    let mut reader=png::Decoder::new(std::io::Cursor::new(include_bytes!("fixtures/fill-pencil-references.png"))).read_info().unwrap();
+    let mut reference=vec![0;reader.output_buffer_size()];reader.next_frame(&mut reference).unwrap();
+    let mut dry=0;
+    for (index, case) in cases.iter().enumerate() {
+        let offset = [(index as u32 % 4) * 192 + 16, (index as u32 / 4) * 152 + 16];
+        if preset.is_none() && case.dry {
+            for y in 0..120 {for x in 0..160 {
+                alpha[((y+offset[1])*extent[0]+x+offset[0]) as usize]=f32::from(reference[(y*320+dry*160+x) as usize])/255.;
+            }}
+            dry+=1;
+        }
+        if preset.is_none() && !case.dry {
+            for (line, width) in &case.lines { for segment in line.windows(2) {
+                let [a, b] = [segment[0], segment[1]];
+                let bounds = [(a[0].min(b[0]) - width).floor().max(0.) as u32, (a[1].min(b[1]) - width).floor().max(0.) as u32,
+                    (a[0].max(b[0]) + width).ceil().min(160.) as u32, (a[1].max(b[1]) + width).ceil().min(120.) as u32];
+                for y in bounds[1]..bounds[3] { for x in bounds[0]..bounds[2] {
+                    let coverage = (width * 0.5 + 0.5 - segment_distance([x as f32 + 0.5, y as f32 + 0.5], a, b)).clamp(0., 1.);
+                    let i = ((y + offset[1]) * extent[0] + x + offset[0]) as usize;
+                    alpha[i] = alpha[i].max(coverage);
+                }}
+            }}
+        }
+    }
+    let mut document = Document::new(layer_core::authored::PortableId::random(), extent[0], extent[1],
+        layer_core::DocumentNames { paint: "Line atlas".into(), paper: "Paper".into() });
+    let paper = match preset { Some(layer_core::DefaultBrushPreset::Charcoal) => "pastel_paper", Some(layer_core::DefaultBrushPreset::Crayon) => "drawing_paper", _ => "rough" };
+    document.set_paper_texture(layer_core::paper::built_in_paper(paper).unwrap().texture.clone());
+    placement::set_source(&mut document, depth_source(extent, SampleDepth::F32, RgbSpace::Srgb,
+        extent[0] as usize * extent[1] as usize * 16 + 4096, |x, y| [0., 0., 0., alpha[(y * extent[0] + x) as usize]]));
+    frame(r, &document, extent);
+    for (index, case) in cases.iter().enumerate() {
+        if preset.is_none() { continue; }
+        let offset = [(index as u32 % 4) as f32 * 192. + 16., (index as u32 / 4) as f32 * 152. + 16.];
+        for (line_index, (line, width)) in case.lines.iter().enumerate() {
+            let mut brush = layer_core::default_brush(preset.unwrap_or(layer_core::DefaultBrushPreset::PointyPencil));
+            brush.diameter = *width;
+            brush.stabilization.strength = 0.;
+            let path: Vec<_> = line.windows(2).flat_map(|s| {
+                let count = ((s[1][0] - s[0][0]).hypot(s[1][1] - s[0][1]).ceil() as u32).max(1);
+                (0..count).map(move |i| { let t = i as f32 / count as f32; [s[0][0] + (s[1][0] - s[0][0]) * t, s[0][1] + (s[1][1] - s[0][1]) * t] })
+            }).chain(line.last().copied()).enumerate().map(|(i, p)| layer_core::StrokePoint {
+                position: Point { x: p[0] + offset[0], y: p[1] + offset[1] }, pressure: case.pressure.unwrap_or(pressure), tilt: [0.; 2], twist: 0., elapsed_micros: i as u32 * 4_000,
+            }).collect();
+            let id = layer_core::StrokeId((index * 16 + line_index + 1) as u64);
+            let stroke = layer_core::Stroke::new(id, target(&document), layer_core::StrokeTool::Brush, brush.clone(), path).unwrap();
+            let mut dabs = Vec::new();
+            layer_engine::DabGenerator::generate(&stroke, RgbSpace::Srgb, &mut dabs);
+            let mut style = DabStyle::for_brush(&brush, layer_core::StrokeTool::Brush);
+            style.paper = Some(document.paper_binding(target(&document)));
+            let batch = DabBatch { stroke_id: id, dab_count: dabs.len() as u32,
+                ..crate::test_support::dab_batch(target(&document), style, dabs.iter().fold(Rect::EMPTY, |r, d| r.union(d.bounds()))) };
+            submit_ready(r, FramePacket { dabs: &dabs, dab_batches: &[batch], ..packet(document.scene(), extent) }).unwrap();
+        }
+    }
+    let mut results = Vec::new();let mut errors=Vec::new();
+    for (index, case) in cases.iter().enumerate() {
+        let offset = [(index as u32 % 4) * 192 + 16, (index as u32 / 4) * 152 + 16];
+        for (seed, contours) in case.seeds.iter().zip(&case.regions) {
+            let mut query = request(RegionSource::Source(target(&document)), rectangle([0, 0, 1, 1]), case.refinement.unwrap_or_default(), 0.);
+            if preset.is_some() || case.dry { query.paper = document.nearest_paper_binding(document.drawing_content()); }
+            query.position = [seed[0] as u32 + offset[0], seed[1] as u32 + offset[1]];
+            query.enclosure = None;
+            let result = receive_request(r, query);
+            if case.open {
+                if value(&result.pixels, 0, 0)==0 {errors.push(format!("{}: intentional opening was sealed",case.name));}
+            } else if let Err(error)=check_geometry(&case.name, score_geometry(&result.pixels, contours, offset, if preset.is_some() { &case.lines } else { &[] }, &case.name)) {errors.push(error);}
+            results.push(result.pixels);
+        }
+    }
+    assert!(errors.is_empty(),"{}",errors.join("\n"));
+    results
+}
+
+#[test]
+fn enclose_fill_geometry_gallery() {
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    eprintln!("FILL_GEOMETRY_ADAPTER {:?} format={:?}",r.adapter.get_info(),r.device.working_format());
+    let cases = line_cases();
+    let masks = line_atlas(&mut r, &cases, None, 0.8);
+    let order = cases.iter().flat_map(|case| case.seeds.iter().enumerate().map(move |(seed, position)| (case, seed, position))).collect::<Vec<_>>();
+    assert_eq!(masks.len(), order.len());
+    let extent = masks[0].extent();
+    let mut crc = crc32fast::Hasher::new();
+    crc.update(&(masks.len() as u32).to_le_bytes());
+    for ((case, seed, position), mask) in order.iter().zip(&masks) {
+        assert_eq!(mask.extent(), extent);
+        crc.update(&(case.name.len() as u32).to_le_bytes());
+        crc.update(case.name.as_bytes());
+        crc.update(&(*seed as u32).to_le_bytes());
+        for coordinate in position.iter() { crc.update(&coordinate.to_bits().to_le_bytes()); }
+        for side in extent { crc.update(&side.to_le_bytes()); }
+        for y in 0..extent[1] {
+            let row = (0..extent[0]).map(|x| value(mask, x, y)).collect::<Vec<_>>();
+            crc.update(&row);
+        }
+    }
+    let hash=crc.finalize();
+    eprintln!("FILL_GEOMETRY_MASKS extent={}x{} order={} crc32={hash:08x}", extent[0], extent[1],
+        order.iter().map(|(case, seed, _)| format!("{}:{seed}", case.name)).collect::<Vec<_>>().join(","));
+    assert_eq!(hash,0x5338fcd7);
+}
+
+fn rotated_case(angle: f32, gap: f32, width: f32) -> LineCase {
+    let rotate = |[x, y]: [f32; 2]| {
+        let (s, c) = angle.to_radians().sin_cos();
+        [80. + (x - 80.) * c - (y - 60.) * s, 60. + (x - 80.) * s + (y - 60.) * c]
+    };
+    LineCase {
+        name: format!("angle={angle} gap={gap} width={width}"),
+        lines: vec![(vec![[120., 60. + gap * 0.5], [120., 90.], [40., 90.], [40., 30.], [120., 30.], [120., 60. - gap * 0.5]].into_iter().map(rotate).collect(), width)],
+        seeds: vec![[80., 60.]],
+        regions: vec![vec![vec![[40., 30.], [120., 30.], [120., 90.], [40., 90.]].into_iter().map(rotate).collect()]],
+        open: false,
+        dry: false,
+        pressure: None,
+        refinement: None,
+    }
+}
+fn line_sweep_cases()->Vec<LineCase> {
+    let mut cases = Vec::new();
+    for angle in (0..=90).step_by(15) { for gap in [2., 4., 8., 16., 32., 48.] {
+        cases.push(rotated_case(angle as f32, gap, 3.));
+    }}
+    for width in 1..=16 {
+        let mut case=rotated_case(30., 8., width as f32);
+        case.name=format!("width sweep {}",case.name);
+        cases.push(case);
+    }
+    for angle in (5..=90).step_by(5) {
+        let slope=(angle as f32*0.5).to_radians().tan();let length=100f32.min(50./slope);let height=length*slope;
+        let triangle = vec![[20., 60. - height], [20.+length, 60.], [20., 60. + height]];
+        let mut line = triangle.clone();
+        line.push(line[0]);
+        cases.push(LineCase { name: format!("corner={angle}"), lines: vec![(line, 1.)], seeds: vec![[30., 60.]],
+            regions: vec![vec![triangle]], open: false, dry: false, pressure: None, refinement: None });
+    }
+    cases
+}
+#[test]
+fn enclose_fill_geometry_angle_break_width_and_corner_sweeps() {
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    line_atlas(&mut r, &line_sweep_cases(), None, 0.8);
+}
+fn dry_geometry_cases(preset:layer_core::DefaultBrushPreset,pressure:f32) -> Vec<LineCase> {
+    line_sweep_cases().into_iter().map(|mut case| {
+            let line=&mut case.lines[0].0;let last=line.len()-1;
+            let gap=(line[0][0]-line[last][0]).hypot(line[0][1]-line[last][1]);let overshoot=(gap*0.25).min(4.);
+            for (end,next) in [(0,1),(last,last-1)] {
+                let delta=[line[end][0]-line[next][0],line[end][1]-line[next][1]];let length=delta[0].hypot(delta[1]);
+                for (at,d) in line[end].iter_mut().zip(delta){*at+=overshoot*d/length;}
+            }
+            let doubled = case.lines[0].0.iter().map(|p| [p[0] + 0.2, p[1] - 0.15]).collect::<Vec<_>>();
+            for p in &mut case.lines[0].0 {p[0]-=0.2;p[1]+=0.15;}
+            case.lines[0].0[0][0] += 0.2;
+            case.lines[0].0[2][1] -= 0.3;
+            let width=case.lines[0].1;case.lines.push((doubled, width));
+            case.name = format!("{preset:?} pressure={pressure} {}", case.name);
+            case.pressure = Some(pressure);
+            case
+        }).collect()
+}
+fn dry_geometry_sweep(preset:layer_core::DefaultBrushPreset,pressure:f32) {
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    line_atlas(&mut r, &dry_geometry_cases(preset,pressure), Some(preset), pressure);
+}
+#[test]
+fn enclose_fill_geometry_known_misses_only_shrink() {
+    let mut names=std::collections::HashSet::new();
+    for preset in [layer_core::DefaultBrushPreset::Pencil,layer_core::DefaultBrushPreset::Charcoal,layer_core::DefaultBrushPreset::Crayon] {
+        for pressure in [0.25,0.5,0.8] {
+            for case in dry_geometry_cases(preset,pressure) {assert!(names.insert(case.name),"duplicate real-brush case name");}
+        }
+    }
+    assert_eq!(names.len(),684);
+    let mut misses=std::collections::HashSet::new();
+    for &name in KNOWN_MISSES {
+        assert!(names.contains(name),"{name}: stale known miss");
+        assert!(misses.insert(name),"{name}: duplicate known miss");
+        assert!(check_geometry(name,Err("miss".into())).is_ok());
+        assert!(check_geometry(name,Ok(())).unwrap_err().contains(name));
+    }
+    assert_eq!(check_geometry("new case",Err("new failure".into())),Err("new failure".into()));
+    assert!(check_geometry("new case",Ok(())).is_ok());
+}
+#[test]
+fn enclose_fill_geometry_dry_pencil_pressure_25() {dry_geometry_sweep(layer_core::DefaultBrushPreset::Pencil, 0.25);}
+#[test]
+fn enclose_fill_geometry_dry_pencil_pressure_50() {dry_geometry_sweep(layer_core::DefaultBrushPreset::Pencil, 0.5);}
+#[test]
+fn enclose_fill_geometry_dry_pencil_pressure_80() {dry_geometry_sweep(layer_core::DefaultBrushPreset::Pencil, 0.8);}
+#[test]
+fn enclose_fill_geometry_dry_charcoal_pressure_25() {dry_geometry_sweep(layer_core::DefaultBrushPreset::Charcoal, 0.25);}
+#[test]
+fn enclose_fill_geometry_dry_charcoal_pressure_50() {dry_geometry_sweep(layer_core::DefaultBrushPreset::Charcoal, 0.5);}
+#[test]
+fn enclose_fill_geometry_dry_charcoal_pressure_80() {dry_geometry_sweep(layer_core::DefaultBrushPreset::Charcoal, 0.8);}
+#[test]
+fn enclose_fill_geometry_dry_crayon_pressure_25() {dry_geometry_sweep(layer_core::DefaultBrushPreset::Crayon, 0.25);}
+#[test]
+fn enclose_fill_geometry_dry_crayon_pressure_50() {dry_geometry_sweep(layer_core::DefaultBrushPreset::Crayon, 0.5);}
+#[test]
+fn enclose_fill_geometry_dry_crayon_pressure_80() {dry_geometry_sweep(layer_core::DefaultBrushPreset::Crayon, 0.8);}
+
+#[test]
+fn enclose_fill_geometry_auto_off_line_tap_and_edges() {
+    let mut cases = Vec::new();
+    let mut off = rotated_case(45., 8., 3.);
+    off.name = "Close gaps Off leaves deliberate break open".into();
+    off.refinement = Some(RegionRefinement { close_gaps: false, ..Default::default() });
+    off.open = true;
+    cases.push(off);
+    let mut tap = rotated_case(0., 0., 10.);
+    tap.name = "tap on inner half of line chooses interior".into();
+    tap.seeds = vec![[40., 60.]];
+    cases.push(tap);
+    for edges in [RegionEdges::LineMiddle, RegionEdges::Exact, RegionEdges::GrowShrink(0), RegionEdges::GrowShrink(4), RegionEdges::GrowShrink(-4)] {
+        let mut case = rotated_case(0., 0., 10.);
+        case.name = format!("Edges {edges:?}");
+        let inset = match edges { RegionEdges::LineMiddle => 0., RegionEdges::Exact => 5., RegionEdges::GrowShrink(n) => 5. - n as f32 };
+        case.regions = vec![vec![vec![[40. + inset, 30. + inset], [120. - inset, 30. + inset], [120. - inset, 90. - inset], [40. + inset, 90. - inset]]]];
+        case.refinement = Some(RegionRefinement { edges, close_gaps: false, smooth_edges: false });
+        cases.push(case);
+    }
+    let mut smooth = rotated_case(30., 0., 3.);
+    smooth.name = "Smooth edges preserves geometric coverage".into();
+    smooth.refinement = Some(RegionRefinement { smooth_edges: true, ..Default::default() });
+    cases.push(smooth);
+    for width in [1.,4.,8.,12.,16.] {
+        let mut case=rotated_case(0.,0.,width);
+        case.name=format!("tap on inner corner width={width}");case.seeds=vec![[42.,32.]];
+        cases.push(case);
+    }
+    let mut outer=rotated_case(0.,0.,16.);
+    outer.name="tap on outer half of corner chooses exterior".into();outer.seeds=vec![[39.,29.]];outer.open=true;cases.push(outer);
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let masks = line_atlas(&mut r, &cases, None, 0.8);
+    for y in 0..120 { for x in 0..160 {
+        assert_eq!(value(&masks[3], 592 + x, 16 + y), value(&masks[4], 16 + x, 168 + y), "Grow or shrink zero must equal Exact at {x},{y}");
+    }}
+}
+
+#[test]
+fn enclose_fill_line_middle_ignores_a_cross_shaped_thin_pocket() {
+    let extent = [128; 2];
+    let source = |x: u32, y: u32| {
+        let pocket = match y {
+            29 => (60..63).contains(&x),
+            30 => (60..64).contains(&x),
+            31 => (61..63).contains(&x),
+            32 => x == 61,
+            _ => false,
+        };
+        let border = (16..112).contains(&x) && (24..112).contains(&y)
+            && (y < 56 || y >= 96 || !(32..96).contains(&x));
+        [0., 0., 0., if pocket { (9 + (x + y) % 4) as f32 / 255. } else if border { 0.5 } else { 0. }]
+    };
+    let mut document = paint_document(extent, "Thin pocket line middle");
+    placement::set_source(&mut document, depth_source(extent, SampleDepth::F32, RgbSpace::Srgb,
+        128 * 128 * 16 + 4096, source));
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    frame(&mut r, &document, extent);
+    let before = r.readback_srgb_rgba8().unwrap();
+    let mut query = request(RegionSource::Source(target(&document)), rectangle([0, 0, 128, 128]),
+        RegionRefinement { close_gaps: false, smooth_edges: false, ..Default::default() }, 0.05);
+    query.position = [64, 80];
+    query.enclosure = None;
+    let result = receive_request(&mut r, query);
+    for [x, y] in [[64, 80], [64, 56], [64, 41]] {
+        assert_eq!(value(&result.pixels, x, y), 255, "selected interior {x},{y}");
+    }
+    assert_eq!(value(&result.pixels, 64, 23), 0);
+    assert_eq!(r.readback_srgb_rgba8().unwrap(), before);
 }

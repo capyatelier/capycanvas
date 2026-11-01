@@ -306,6 +306,7 @@ enum Command {
     MovingLayer(Option<OccurrenceHandle>),
     MovingPixels(Option<(SourceTarget, layer_core::Selection)>),
     Retouch(Option<layer_render::RetouchPreparation>),
+    Regions(Option<layer_render::RegionPreparation>),
     RetireStrokeSources,
     Startup(
         u64,
@@ -453,6 +454,7 @@ pub struct RenderWorker {
     in_flight: Arc<AtomicUsize>,
     report: Arc<FrameReport>,
     retouch: Option<layer_render::RetouchPreparation>,
+    regions:Option<layer_render::RegionPreparation>,
     thread: Option<JoinHandle<()>>,
     color: layer_core::color::DocumentColor,
     next_color_request: u64,
@@ -705,6 +707,7 @@ impl RenderWorker {
             in_flight: Arc::default(),
             report: Arc::default(),
             retouch: None,
+            regions:None,
             thread: None,
             color,
             next_color_request: 0,
@@ -1002,6 +1005,9 @@ impl CanvasRenderer for RenderWorker {
         if self.retouch.as_ref() != retouch && self.send(Command::Retouch(retouch.cloned())).is_ok() {
             self.retouch = retouch.cloned();
         }
+    }
+    fn prepare_regions(&mut self, regions:Option<&layer_render::RegionPreparation>) {
+        if self.regions.as_ref()!=regions && self.send(Command::Regions(regions.cloned())).is_ok() {self.regions=regions.cloned();}
     }
     fn take_retouch_miss(&mut self) -> Option<layer_core::StrokeId> {
         let stroke = self.report.retouch_miss.swap(0, Ordering::AcqRel);
@@ -1762,6 +1768,7 @@ impl Worker {
                 Command::MovingLayer(layer) => self.renderer.prepare_moving_layer(layer),
                 Command::MovingPixels(pixels) => self.renderer.prepare_moving_pixels(pixels),
                 Command::Retouch(retouch) => self.renderer.prepare_retouch(retouch.as_ref()),
+                Command::Regions(regions)=>self.renderer.prepare_regions(regions.as_ref()),
                 Command::RetireStrokeSources => self.renderer.retire_stroke_sources(),
                 Command::Startup(generation, mode, inputs) => {
                     let (document, brush, transform) = *inputs;

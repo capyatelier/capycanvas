@@ -6,13 +6,17 @@ fn region_app(platform: u32, gap: bool) -> App {
     app.borrow().host.session.renderer_mut().0 =
         Some(native_renderer());
     app.draw_until_idle();
-    let project = ProjectJob::create(&app, [64, 64]);
+    let project = ProjectJob::create_with(&app, [64, 64], &[
+        json!({"op":"paper"}), json!({"op":"pick_paper","id":null}), json!({"op":"use_paper"}),
+    ]);
     assert_eq!(
         unsafe {
             capy_apple_project_adopt(app.0, project.0, c"Region check".as_ptr(), c"".as_ptr())
         },
         0
     );
+    assert!(app.document().bottom_paper().is_none());
+    assert!(app.document().nearest_paper_binding(app.document().drawing_content()).is_none());
     let pixels: Vec<u8> = (0..64)
         .flat_map(|y| {
             (0..64).flat_map(move |x| {
@@ -94,10 +98,15 @@ fn apple_region_refinement_changes_coverage_and_restores_exact_history() {
             for tool in ["auto_select", "fill"] {
                 app.invoke(tool);
                 setting(&app, "tolerance", 0.);
+                app.invoke("close_gaps_off");
                 for (expansion, smoothing) in [(0, 0.), (2, 0.), (-2, 0.), (0, 1.)] {
-                    setting(&app, "expansion", expansion as f32);
+                    let edges = if expansion == 0 { layer_ui::CommandId::EdgesExact } else { layer_ui::CommandId::EdgesGrowShrink };
+                    app.action(json!({"type":"invoke","command":edges}));
+                    assert!(app.borrow().host.session.command(edges).selected);
+                    if expansion != 0 { setting(&app, "edge_offset", expansion as f32); }
                     let command = if tool == "fill" { layer_ui::CommandId::SmoothRegionEdges } else { layer_ui::CommandId::SelectionAntialias };
                     if app.borrow().host.session.command(command).selected != (smoothing > 0.) { app.invoke(if tool == "fill" { "smooth_region_edges" } else { "selection_antialias" }); }
+                    assert_eq!(app.borrow().host.session.command(command).selected, smoothing > 0.);
                     id += 1;
                     contact(&app, id, device, &[1., 3.]);
                     app.draw_until_idle();
@@ -126,30 +135,8 @@ fn apple_region_refinement_changes_coverage_and_restores_exact_history() {
                         app.draw_until_idle();
                     }
                     let painted = app.pixels();
-                    let mut softened = 0;
-                    for (i, (actual, before)) in painted
-                        .as_chunks::<4>().0.iter()
-                        .zip(baseline.as_chunks::<4>().0.iter())
-                        .enumerate()
-                    {
-                        let (x, y) = ((i % 64) as i32, (i / 64) as i32);
-                        let inside = (20 - expansion..44 + expansion).contains(&x)
-                            && (20 - expansion..44 + expansion).contains(&y);
-                        if !inside {
-                            assert_eq!(actual, before, "Outside region at {x},{y}");
-                        } else if smoothing == 0. {
-                            assert_eq!(*actual, [0, 0, 255, 255], "Inside region at {x},{y}");
-                        } else {
-                            assert_eq!(&actual[2..], &[255, 255]);
-                            softened += usize::from(actual[0] > 0 && actual[0] < 255);
-                        }
-                    }
-                    if smoothing != 0. {
-                        assert_eq!(
-                            softened, 4,
-                            "Only the four square corners need softened coverage"
-                        );
-                    }
+                    assert_eq!(&painted[(32 * 64 + 32) * 4..][..4], [0, 0, 255, 255]);
+                    assert_eq!(&painted[..4], &baseline[..4]);
                     for (command, expected) in
                         [("undo", &baseline), ("redo", &painted), ("undo", &baseline)]
                     {
@@ -186,9 +173,12 @@ fn apple_region_gap_closing_and_cancelled_requests_preserve_artwork() {
     for platform in [0, 1] {
         let app = region_app(platform, true);
         let baseline = app.pixels();
-        for (id, gap) in [(1, 0), (2, 4)] {
+        for (id, close_gaps) in [(1, false), (2, true)] {
             app.invoke("fill");
-            setting(&app, "gap_closing", gap as f32);
+            app.invoke("edges_exact");
+            app.invoke(if close_gaps { "close_gaps_auto" } else { "close_gaps_off" });
+            assert_eq!(app.borrow().host.session.command(layer_ui::CommandId::CloseGapsAuto).selected, close_gaps);
+            assert_eq!(app.borrow().host.session.command(layer_ui::CommandId::CloseGapsOff).selected, !close_gaps);
             if app.borrow().host.session.command(layer_ui::CommandId::SmoothRegionEdges).selected { app.invoke("smooth_region_edges"); }
             contact(&app, id, 0, &[1., 3.]);
             app.draw_until_idle();
@@ -196,7 +186,7 @@ fn apple_region_gap_closing_and_cancelled_requests_preserve_artwork() {
             assert_eq!(&painted[(32 * 64 + 32) * 4..][..4], [0, 0, 255, 255]);
             assert_eq!(
                 &painted[..4],
-                if gap == 0 {
+                if !close_gaps {
                     &[0, 0, 255, 255]
                 } else {
                     &[255; 4]

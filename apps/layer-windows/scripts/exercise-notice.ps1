@@ -118,11 +118,11 @@ try {
  Wait-Until {(Model).state.layers.Count -eq $count+1} 'New layer was not created'
  (Find 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x57)
  Wait-Until {((Model).state.commands|Where-Object id -eq 'auto_select').selected} 'W did not choose Auto Select'
- $source=Control 'tool-choice-selection-source'
- $source.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+ $source=Reveal-PanelControl 'tool_settings' 'tool-choice-selection-source-0'
  $sourceCaption=@((Model).state.commands|Where-Object id -eq 'selection_reference')[0].label
- (Control $sourceCaption -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
- Wait-Until {((Model).state.commands|Where-Object id -eq 'selection_reference').selected} 'Reference sampling was not chosen'
+ if($source.Current.Name-cne$sourceCaption -or !$source.Current.IsEnabled){throw 'The native Lines from choice differs from its shared reference source'}
+ Invoke 'tool-choice-selection-source-0'
+ Wait-Until {((Model).state.commands|Where-Object id -eq 'selection_reference').selected -and (Control 'tool-choice-selection-source-0').Current.ItemStatus-eq'Selected'} 'Reference sampling was not chosen'
  (Find 'drawing-canvas').SetFocus()
  Click 'mouse' $point
  Wait-Until {(NoticeText) -eq 'This tool samples reference layers, and none is marked' -and (Shown 'canvas-notice-action-use_reference')} 'The Wand refusal did not offer a reference'

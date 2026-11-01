@@ -686,3 +686,9 @@ command-fill-everywhere = Her yerde
 command-smooth-region-edges = Kenarları yumuşat
 
 command-stop-at-colors = Bu katmandaki renklerde dur
+
+command-close-gaps-auto = Otomatik
+command-close-gaps-off = Kapalı
+command-edges-line-middle = Çizginin ortasına kadar
+command-edges-exact = Tam
+command-edges-grow-shrink = Büyüt veya küçült

@@ -1,15 +1,12 @@
 import XCTest
 
 extension XCTestCase {
-    @MainActor func editorToolActionChoice(_ command: String, group: String = "selection-source", in app: XCUIApplication) {
-        let choice = app.buttons["tool-action-group-" + group]
-        revealEditorControl(choice, in: app.scrollViews.containing(.button, identifier: choice.identifier).firstMatch)
-        workspaceActivate(choice)
-        let option = app.buttons["tool-action-" + command]
+    @MainActor func editorToolChoice(_ id: String, index: Int, in app: XCUIApplication) {
+        let option = app.buttons["tool-segment-" + id + "-\(index)"]
+        revealEditorControl(option, in: app.scrollViews.containing(.button, identifier: option.identifier).firstMatch)
         XCTAssertTrue(option.waitForExistence(timeout: 5))
-        let label = option.label
         workspaceActivate(option)
-        expectation(for: NSPredicate(format: "value == %@", label), evaluatedWith: choice)
+        expectation(for: NSPredicate { _, _ in option.isSelected }, evaluatedWith: option)
         waitForExpectations(timeout: 5)
     }
 
@@ -53,13 +50,17 @@ extension XCTestCase {
         for id in ["tolerance"] {
             XCTAssertTrue(app.buttons["number-value-tool-" + id].waitForExistence(timeout: 10), "Enclose and Fill shares Fill's \(id)")
         }
-        for id in ["gap_closing", "expansion"] {
-            XCTAssertTrue(app.textFields["number-entry-tool-" + id].waitForExistence(timeout: 10), "Enclose and Fill shares Fill's \(id)")
+        for index in [0, 1] { editorToolChoice("close-gaps", index: index, in: app) }
+        for index in [0, 2, 1] {
+            editorToolChoice("region-edges", index: index, in: app)
+            let value = app.textFields["number-entry-tool-edge_offset"]
+            XCTAssertEqual(value.exists, index == 2)
+            if index == 2 { XCTAssertGreaterThanOrEqual(value.frame.minY, app.buttons["tool-segment-region-edges-2"].frame.maxY) }
         }
-        let source = app.buttons["tool-action-group-selection-source"]
+        let source = app.buttons["tool-segment-selection-source-0"]
         XCTAssertTrue(source.waitForExistence(timeout: 5))
-        XCTAssertEqual(source.value as? String, "Reference layers", "Enclose and Fill samples reference layers by default")
-        editorToolActionChoice("selection_visible", in: app)
+        XCTAssertEqual(source.label, "Reference layers", "Lines from retains its shared choice name")
+        editorToolChoice("selection-source", index: 1, in: app)
         XCTAssertTrue(tile.exists, "Changing the source keeps Enclose and Fill")
         attachEditor(in: app, name: "enclose-fill-tool")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)

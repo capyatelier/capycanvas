@@ -71,7 +71,7 @@ mod tests {
             saved["region_values"]["smoothing"] = 0.into();
             let restored = EditingState::restore(&saved.to_string(), &english);
             assert_eq!(restored.colors,state.colors);
-            assert_eq!(restored.version,3);
+            assert_eq!(restored.version,4);
             if version == 1 {
                 assert_eq!(restored.region_sources,[crate::RegionSource::Reference,crate::RegionSource::Visible,crate::RegionSource::Auto]);
                 assert!(!restored.region_smooth_edges);
@@ -80,6 +80,11 @@ mod tests {
                 assert!(restored.region_smooth_edges);
             }
         }
+        saved["version"] = 1.into();
+        saved["region_smooth_edges"] = true.into();
+        let restored = EditingState::restore(&saved.to_string(), &english);
+        assert!(restored.region_smooth_edges);
+        assert_eq!(restored.region_values["smoothing"],0.);
     }
     #[test]
     fn released_fill_choice_wins_over_lasso_fill_without_dropping_toolbar_tiles() {
@@ -97,6 +102,49 @@ mod tests {
             {"kind":"tool_slot","slot":"fill"}, {"kind":"tool_slot","slot":"lasso_fill"}
         ])).unwrap();
         assert_eq!(tiles, vec![ToolbarControl::ToolSlot { slot: ToolSlotId::Fill }; 2]);
+    }
+    #[test]
+    fn legacy_region_values_convert_without_losing_saved_fields() {
+        let english = Localizer::shared(UiLanguage::English);
+        let mut state = EditingState::default();
+        state.colors.set_rgba([0.2,0.4,0.6,1.]).unwrap();
+        state.region_values.insert("tolerance".into(),0.37);
+        state.region_values.insert("gap_closing".into(),0.);
+        state.region_values.insert("expansion".into(),-2.);
+        let mut saved = serde_json::to_value(&state).unwrap();
+        saved["version"] = 3.into();
+        saved.as_object_mut().unwrap().remove("region_close_gaps");
+        saved.as_object_mut().unwrap().remove("region_edges");
+        let converted = EditingState::restore(&saved.to_string(), &english);
+        state.region_close_gaps = false;
+        state.region_edges = layer_core::RegionEdges::GrowShrink(-2);
+        assert_eq!(converted,state);
+        assert_eq!(EditingState::restore(&serde_json::to_string(&converted).unwrap(),&english),converted);
+        saved["region_close_gaps"] = true.into();
+        saved["region_edges"] = serde_json::to_value(layer_core::RegionEdges::Exact).unwrap();
+        let explicit = EditingState::restore(&saved.to_string(),&english);
+        assert!(explicit.region_close_gaps);
+        assert_eq!(explicit.region_edges,layer_core::RegionEdges::Exact);
+        saved["region_values"].as_object_mut().unwrap().remove("gap_closing");
+        saved["region_values"].as_object_mut().unwrap().remove("expansion");
+        saved.as_object_mut().unwrap().remove("region_close_gaps");
+        saved.as_object_mut().unwrap().remove("region_edges");
+        let defaults = EditingState::restore(&saved.to_string(),&english);
+        assert!(defaults.region_close_gaps);
+        assert_eq!(defaults.region_edges,layer_core::RegionEdges::LineMiddle);
+    }
+    #[test]
+    fn released_region_options_convert_without_rewriting_inputs() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../layer-workspace/tests/compat");
+        let english = Localizer::shared(UiLanguage::English);
+        for name in ["editing.json", "editing-options.json"] {
+            let saved = std::fs::read_to_string(root.join("1.0.15").join(name)).unwrap();
+            let restored = EditingState::restore(&saved,&english);
+            let expected: serde_json::Value = serde_json::from_slice(&std::fs::read(root.join("expected/1.0.15").join(format!("{name}.expected.json"))).unwrap()).unwrap();
+            assert_eq!(serde_json::to_value(&restored).unwrap(),expected);
+            assert!(restored.region_close_gaps);
+            assert_eq!(restored.region_edges,layer_core::RegionEdges::GrowShrink(2));
+        }
     }
     #[test]
     fn unreadable_palettes_use_localized_defaults_without_losing_other_fields() {

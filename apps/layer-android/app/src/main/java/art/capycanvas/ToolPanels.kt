@@ -111,6 +111,7 @@ import kotlinx.coroutines.withContext
     else HoverTip(reason, modifier.bubbleChoice(action), reveal = reveal, content = row)
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable internal fun ToolSettingsControls(host: CanvasHost, state: JSONObject) {
     if (state.array("tool_extra").objects().any { it.optJSONObject("Choice")?.optString("id") == "tonal-tones" }) {
         key(state.optLong("toolbar_context_generation"), state.getJSONObject("document_file").optLong("epoch"), state.getJSONObject("layer_tools").optJSONObject("editing_layer")?.toString()) {
@@ -208,9 +209,16 @@ import kotlinx.coroutines.withContext
             val title = choice?.getString("label") ?: fields.first().getString("group")
             if (title.isNotEmpty()) Text(title, Modifier.padding(top=if(index>0)2.dp else 0.dp), fontWeight = FontWeight.Bold, color = LocalPalette.current.secondary)
             if (choice == null) fields.forEach { fieldControl(it, false) }
-            else Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(metrics.compound)) {
-                ToolbarChoice(choice, false, false, false, 20, host::dispatch, prefix = "tool")
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) { fields.forEach { fieldControl(it, true) } }
+            else {
+                val grid = choice.optInt("columns") > 0
+                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(metrics.compound),
+                    verticalArrangement = Arrangement.spacedBy(metrics.spacing), itemVerticalAlignment = Alignment.CenterVertically,
+                    maxItemsInEachRow = if (grid) 2 else 1) {
+                    ToolbarChoice(choice, false, false, false, 20, host::dispatch, prefix = "tool", height = metrics.height.value)
+                    Column(if (grid) Modifier.weight(1f) else Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(metrics.compound)) {
+                        fields.forEach { fieldControl(it, grid) }
+                    }
+                }
             }
         }
         ToolActionRows(host,state,actions.filterNot {it.optBoolean("segmented")},commands)

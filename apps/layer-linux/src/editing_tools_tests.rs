@@ -15,6 +15,15 @@ pub(super) fn pixels(root: &RasterRevision) -> BTreeMap<TileKey, Vec<u8>> {
         (*key, tile.wait_backing().unwrap().decode().unwrap())
     }).collect()
 }
+fn sample(paint: &BTreeMap<TileKey, Vec<u8>>, x: u32, y: u32) -> [u8; 4] {
+    let size = layer_core::raster::TILE_SIZE;
+    paint.iter().find(|(key, _)| key.coordinate == [x / size, y / size]).map_or([0; 4], |(_, bytes)| {
+        assert_eq!(bytes.len(), (size * size * 4) as usize);
+        let offset = ((y % size * size + x % size) * 4) as usize;
+        bytes[offset..offset + 4].try_into().unwrap()
+    })
+}
+
 fn healthy(w: &Workspace) {
     let gpu = w.gpu.borrow();
     let session = &gpu.as_ref().unwrap().session;
@@ -146,14 +155,12 @@ fn native_enclose_fill_pointer_workflow() {
         }
         assert!(ui_session(&w).command(CommandId::EncloseFill).selected);
         for (index, source) in [CommandId::SelectionReference, CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference].into_iter().enumerate() {
-            let option = named::<gtk::DropDown>(&w.panel_widget(Panel::ToolSettings), "tool-choice-selection-source");
+            let panel = w.panel_widget(Panel::ToolSettings);
+            let option = named::<gtk::ToggleButton>(&panel, &format!("tool-choice-selection-source-{}", index % 3));
             histogram::scroll_to(option.upcast_ref());
             input.click(screen_point(option.upcast_ref(), &w.window, [0.5, 0.5]));
-            input.key(0xff50);
-            for _ in 0..index % 3 { input.key(0xff54); }
-            input.key(0xff0d);
-            let model = option.model().unwrap();
-            assert_eq!((0..model.n_items()).map(|i| model.item(i).unwrap().downcast::<glib::BoxedAnyObject>().unwrap().borrow::<(std::sync::Arc<str>, bool)>().0.to_string()).collect::<Vec<_>>(),
+            assert!(option.is_active());
+            assert_eq!(state(&w).tool_extra.iter().find_map(|option| match option { layer_ui::ToolOption::Choice { id: "selection-source", items, .. } => Some(items.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>()), _ => None }).unwrap(),
                 ["Reference layers", "All visible layers", "This layer"]);
             assert!(ui_session(&w).command(source).selected);
             assert!(ui_session(&w).command(CommandId::EncloseFill).selected,
@@ -182,14 +189,21 @@ fn native_enclose_fill_pointer_workflow() {
             assert_eq!(ui_session(&w).command(CommandId::StopAtColors).selected, selected);
         }
         capture_ui(&w, &output, &format!("enclose-controls-{theme:?}.png"));
-        let source = find_named(&w.panel_widget(Panel::ToolSettings), "tool-choice-selection-source").unwrap();
+        let source = find_named(&w.panel_widget(Panel::ToolSettings), "tool-choice-bar-selection-source").unwrap();
         histogram::scroll_to(&source);
         capture_ui(&w, &output, &format!("enclose-source-{theme:?}.png"));
-        for (id, value) in [("grain_depth", "0"), ("tolerance", "15"), ("gap_closing", "0"), ("expansion", "0")] {
+        for (id, value) in [("grain_depth", "0"), ("tolerance", "15")] {
             let control = named::<crate::number_control::NumberControl>(
                 &w.panel_widget(Panel::ToolSettings), &format!("tool-setting-{id}"));
             assert!(control.is_mapped(), "{id} is visible for Enclose and Fill");
             edit_number(&control, value);
+        }
+        for (id, index) in [("close-gaps", 1), ("region-edges", 2), ("region-edges", 1)] {
+            let option = named::<gtk::ToggleButton>(&w.panel_widget(Panel::ToolSettings), &format!("tool-choice-{id}-{index}"));
+            histogram::scroll_to(option.upcast_ref());
+            input.click(screen_point(option.upcast_ref(), &w.window, [0.5, 0.5]));
+            assert!(option.is_active());
+            assert_eq!(state(&w).tool_settings.iter().any(|field| field.id == "edge_offset"), id == "region-edges" && index == 2);
         }
         let smooth = named::<gtk::CheckButton>(&w.panel_widget(Panel::ToolSettings), "tool-action-SmoothRegionEdges");
         histogram::scroll_to(smooth.upcast_ref());
@@ -216,15 +230,6 @@ fn native_enclose_fill_pointer_workflow() {
         ]));
         committed(&w, &before);
         let filled = pixels(&raster(&w));
-        let sample = |paint: &BTreeMap<TileKey, Vec<u8>>, x: u32, y: u32| {
-            let tile_size = layer_core::raster::TILE_SIZE;
-            let tile = paint.iter().find(|(key, _)| key.coordinate == [x / tile_size, y / tile_size]);
-            tile.map_or([0; 4], |(_, bytes)| {
-                assert_eq!(bytes.len(), (tile_size * tile_size * 4) as usize);
-                let offset = ((y % tile_size * tile_size + x % tile_size) * 4) as usize;
-                bytes[offset..offset + 4].try_into().unwrap()
-            })
-        };
         for [x, y] in [[85, 110], [195, 110]] {
             let rgba = sample(&filled, x, y);
             assert!(rgba[0] > 180 && rgba[1] < 80 && rgba[3] == 255, "enclosed hole {x},{y}: {rgba:?}");
@@ -256,10 +261,9 @@ fn native_enclose_fill_pointer_workflow() {
         assert_eq!(reference_now(), reference_pixels);
         invoke(&w, CommandId::Undo); ready(&w);
         input.click(screen_point(&mapped_label(&groups, "Fill").unwrap(), &w.window, [0.5, 0.5]));
-        let lines = named::<gtk::DropDown>(&w.panel_widget(Panel::ToolSettings), "tool-choice-selection-source");
+        let lines = named::<gtk::ToggleButton>(&w.panel_widget(Panel::ToolSettings), "tool-choice-selection-source-0");
         histogram::scroll_to(lines.upcast_ref());
         input.click(screen_point(lines.upcast_ref(), &w.window, [0.5, 0.5]));
-        input.key(0xff50); input.key(0xff0d);
         for (index, everywhere) in [(0, false), (1, true)] {
             let scope = named::<gtk::DropDown>(&w.panel_widget(Panel::ToolSettings), "tool-action-group-fill-scope");
             histogram::scroll_to(scope.upcast_ref());
@@ -407,6 +411,165 @@ fn native_portable_paint_pointer_workflow() {
         assert_eq!(pixels(&raster(&restored)), edited); healthy(&restored);
         eprintln!("PASS {space:?}/{depth:?}: bucket, four gradients, rectangle, exact undo/redo, GTK Save/Open, continue painting");
         restored.window.destroy(); pump(100);
+    }
+    input.finish();
+}
+
+
+#[derive(serde::Deserialize)]
+struct ScribbleSheet { size: [u32; 2], cases: Vec<ScribbleCase> }
+#[derive(serde::Deserialize)]
+struct ScribbleCase {
+    name: String, preset: u32, vector: bool, paper: String, bounds: [u32; 4], angle: u32, gap: u32,
+    direction: String, size: f32, paths: Vec<Vec<[f32; 2]>>, junctions: Vec<[f32; 2]>, regions: Vec<ScribbleRegion>, eraser: Vec<[f32; 2]>,
+}
+#[derive(serde::Deserialize)]
+struct ScribbleRegion {
+    side: String, seed: [f32; 2], polygon: Vec<[f32; 2]>, centres: Vec<[f32; 2]>, empty_probes: Vec<[f32; 2]>, wash_samples: Vec<[u32; 2]>, known_empty_centres: Vec<[f32; 2]>,
+    #[serde(default)] known_misses: BTreeMap<String,usize>,
+    #[serde(default)] known_leaks: BTreeMap<String,usize>,
+    #[serde(default)] known_filled_probes: BTreeMap<String,Vec<usize>>,
+}
+fn geometry_distance(point: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
+    let d = [b[0] - a[0], b[1] - a[1]];
+    let t = (((point[0] - a[0]) * d[0] + (point[1] - a[1]) * d[1]) / (d[0] * d[0] + d[1] * d[1]).max(f32::EPSILON)).clamp(0., 1.);
+    ((point[0] - a[0] - d[0] * t).powi(2) + (point[1] - a[1] - d[1] * t).powi(2)).sqrt()
+}
+fn geometry_inside(point: [f32; 2], polygon: &[[f32; 2]]) -> bool {
+    let mut inside = false;
+    for (a, b) in polygon.iter().zip(polygon.iter().cycle().skip(1)) {
+        if (a[1] > point[1]) != (b[1] > point[1]) && point[0] < (b[0] - a[0]) * (point[1] - a[1]) / (b[1] - a[1]) + a[0] { inside = !inside; }
+    }
+    inside
+}
+fn scribble_distance(case: &ScribbleCase, region: &ScribbleRegion, point: [f32; 2]) -> f32 {
+    let edge = region.polygon.iter().zip(region.polygon.iter().cycle().skip(1)).map(|(a, b)| geometry_distance(point, *a, *b));
+    edge.chain(case.paths.iter().flat_map(|path| path.windows(2)).map(|p| geometry_distance(point, p[0], p[1]))).fold(f32::INFINITY, f32::min)
+}
+fn score_scribble(case: &ScribbleCase, region: &ScribbleRegion, paint: &BTreeMap<TileKey, Vec<u8>>, reference: &BTreeMap<TileKey, Vec<u8>>, outside_cell: usize) {
+    let band = case.size * 0.5 + 1.5;
+    let mut missed = 0;let mut leaked = outside_cell;
+    for y in case.bounds[1]..case.bounds[1] + case.bounds[3] {
+        for x in case.bounds[0]..case.bounds[0] + case.bounds[2] {
+            let point = [x as f32 + 0.5, y as f32 + 0.5];
+            let line = scribble_distance(case, region, point);
+            let alpha = sample(paint, x, y)[3];
+            let junction_ink = sample(reference, x, y)[3] > 0 && case.junctions.iter().any(|junction| geometry_distance(point, *junction, *junction) <= 24.);
+            if geometry_inside(point, &region.polygon) {
+                if line > band && !junction_ink && alpha < 250 { missed += 1; }
+            } else if line > band && !junction_ink && alpha != 0 {leaked += 1;}
+        }
+    }
+    for &[x,y] in &region.wash_samples {assert!(sample(paint,x,y)[3] >= 250, "{} missed bottom wash at [{x},{y}]",case.name);}
+    let leak_ceiling = region.known_leaks.get("gtk").copied().unwrap_or(0);
+    assert!(leaked <= leak_ceiling, "{} {} leaked {leaked} unexpected pixels (ceiling {leak_ceiling})",case.name,region.side);
+    if leak_ceiling > 0 {eprintln!("{} {} known leak: {leaked}/{leak_ceiling}; shrink or remove when improved",case.name,region.side);}
+    let ceiling = region.known_misses.get("gtk").copied().unwrap_or(4);
+    assert!(missed <= ceiling, "{} missed {missed} interior/tip/corner pixels (ceiling {ceiling})", case.name);
+    if ceiling > 4 {eprintln!("{} {} known misses: {missed}/{ceiling}; shrink or remove the ceiling when improved",case.name,region.side);}
+    let mut known_missing = 0;
+    for centre in &region.centres {
+        let covered = (-1..=1).any(|dy| (-1..=1).any(|dx| {
+            let x = centre[0].round() as i32 + dx;let y = centre[1].round() as i32 + dy;
+            let p = [x as f32 + 0.5, y as f32 + 0.5];
+            x >= 0 && y >= 0 && geometry_distance(p, *centre, *centre) <= 1.5 && geometry_inside(p, &region.polygon) && sample(paint, x as u32, y as u32)[3] > 0
+        }));
+        if region.known_empty_centres.contains(centre) {known_missing += usize::from(!covered);}
+        else {assert!(covered, "{} has no fill under centre line {centre:?}",case.name);}
+    }
+    if !region.known_empty_centres.is_empty() {eprintln!("{} {} known centre misses: {known_missing}/{}; remove only after all hosts cover them",case.name,region.side,region.known_empty_centres.len());}
+    let known_probes = region.known_filled_probes.get("gtk").map(Vec::as_slice).unwrap_or(&[]);
+    assert!(known_probes.iter().all(|index| *index < region.empty_probes.len()));
+    for (index,point) in region.empty_probes.iter().enumerate() {assert!(sample(paint,point[0].floor() as u32,point[1].floor() as u32)[3] == 0 || leaked > 0 && leak_ceiling > 0 && known_probes.contains(&index), "{} {} filled the far side at {point:?}",case.name,region.side);}
+}
+fn capture_scribble(paint: &BTreeMap<TileKey, Vec<u8>>, [left,top,width,height]: [u32;4], path: &std::path::Path) {
+    let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+    for y in top..top + height {for x in left..left + width {rgba.extend_from_slice(&sample(paint,x,y));}}
+    gtk::gdk::MemoryTexture::new(width as i32,height as i32,gtk::gdk::MemoryFormat::R8g8b8a8,&glib::Bytes::from_owned(rgba),width as usize*4).save_to_png(path).unwrap();
+}
+fn scribble_path(input: &mut RemoteInput, w: &Rc<Workspace>, points: &[[f32; 2]]) {
+    ready(w);
+    let matrix = state(w).camera.document_to_surface();let scale = w.area.scale_factor() as f32;
+    let mut events = Vec::new();
+    for (index, point) in points.iter().enumerate() {
+        let p = gtk::graphene::Point::new((matrix[0] * point[0] + matrix[2] * point[1] + matrix[4]) / scale, (matrix[1] * point[0] + matrix[3] * point[1] + matrix[5]) / scale);
+        let p = w.area.compute_point(&w.window, &p).unwrap();
+        if index == 0 { events.push(serde_json::json!({"pen":"move", "point":[p.x(),p.y()]})); }
+        events.push(serde_json::json!({"pen": if index == 0 { "down" } else { "move" }, "point": [p.x(), p.y()]}));
+    }
+    events.push(serde_json::json!({"pen":"up"}));input.perform(serde_json::Value::Array(events));ready(w);
+}
+
+#[test]
+#[ignore = "private Wayland display, hardware GPU and --tablet"]
+fn native_fill_scribble_geometry() {
+    let sheet: ScribbleSheet = serde_json::from_str(include_str!("../../../tools/fixtures/fill-scribble.json")).unwrap();
+    let app = native_test_app("art.capycanvas.FillScribbles");
+    let output = std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap());std::fs::create_dir_all(&output).unwrap();
+    let mut input = RemoteInput::new().timeout_secs(30);input.ready();
+    for theme in [Theme::Light, Theme::Dark] {
+        for paper in ["cold_press", "rough"] {
+            let mut project = new_drawing(sheet.size[0], sheet.size[1], &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+            assert_eq!(project.composition().color.depth, SampleDepth::U8);
+            project.set_paper_texture(layer_core::paper::built_in_paper(paper).unwrap().texture.clone());project.set_paper_relief(100.);
+            let w = Workspace::with_project(&app, Some((project, None)));w.window.maximize();w.window.present();ready(&w);
+            w.dispatch(UiAction::SetTheme { theme: Some(theme) });invoke(&w, CommandId::FitCanvas);
+            w.dispatch(UiAction::SetColor { rgba: [0., 0., 0., 1.] });
+            let mut reference = None;
+            for case in sheet.cases.iter().filter(|case| case.paper == paper) {
+                if case.vector {
+                    reference = Some(pixels(&raster(&w)));
+                    w.dispatch(UiAction::Layer { action: LayerAction::ReferenceSelection });
+                    w.dispatch(UiAction::Layer { action: LayerAction::NewVector });
+                    let session = ui_session(&w);let document = session.engine().document();
+                    assert!(document.working.occurrence.is_some_and(|layer| document.scene().vector_layer(layer).is_some()));
+                }
+                w.dispatch(UiAction::SelectBrush { id: case.preset });w.dispatch(UiAction::SetBrushSize { value: case.size });
+                w.dispatch(UiAction::SetToolSetting { id: "smoothing_strength".into(), value: 0. });
+                for path in &case.paths { scribble_path(&mut input, &w, path); }
+                if case.vector {
+                    let session = ui_session(&w);let document = session.engine().document();
+                    assert!(document.scene().vector_layer(document.working.occurrence.unwrap()).unwrap().paths().next().is_some());
+                }
+                if !case.eraser.is_empty() {
+                    let before = raster(&w);
+                    w.dispatch(UiAction::SelectBrush { id: layer_core::DefaultBrushPreset::Eraser as u32 });
+                    w.dispatch(UiAction::SetBrushSize { value: case.gap as f32 });assert!(ui_session(&w).command(CommandId::Eraser).selected);scribble_path(&mut input, &w, &case.eraser);
+                    assert_ne!(raster(&w), before, "the real eraser contact cuts the reference ink");
+                }
+            }
+            let reference = reference.unwrap_or_else(|| pixels(&raster(&w)));
+            capture_scribble(&reference,[0,0,sheet.size[0],sheet.size[1]],&output.join(format!("scribble-reference-raster-{paper}-{theme:?}.png")));
+            capture_ui(&w, &output, &format!("scribble-reference-{paper}-{theme:?}.png"));
+            w.dispatch(UiAction::Layer { action: LayerAction::ReferenceSelection });w.dispatch(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } });
+            let workspace = tool_settings_workspace(&w, &[CommandId::Fill], true, false);w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+            invoke(&w, CommandId::FitCanvas);invoke(&w, CommandId::Fill);invoke(&w, CommandId::SelectionReference);
+            tool_controls_compact::select_group(&w, "close-gaps", 0);tool_controls_compact::select_group(&w, "region-edges", 0);
+            w.dispatch(UiAction::SetToolSetting { id: "grain_depth".into(), value: 0. });w.dispatch(UiAction::SetToolSetting { id: "tolerance".into(), value: 0.05 });
+            w.dispatch(UiAction::SetBrushOpacity { value: 1. });
+            assert!(state(&w).tool_settings.iter().any(|field| field.id == "grain_depth" && field.value == 0.));
+            w.dispatch(UiAction::SetColor { rgba: [0.85, 0.1, 0.05, 1.] });
+            let empty = pixels(&raster(&w));
+            for case in sheet.cases.iter().filter(|case| case.paper == paper) {
+                for region in &case.regions {
+                    scribble_path(&mut input, &w, &[region.seed, region.seed]);
+                    capture_ui(&w, &output, &format!("scribble-{}-{}-{paper}-{theme:?}.png", case.preset, region.side));
+                    let filled = pixels(&raster(&w));
+                    let [left, top, width, height] = case.bounds;
+                    capture_scribble(&filled,[0,0,sheet.size[0],sheet.size[1]],&output.join(format!("scribble-target-{}-{}-{paper}-{theme:?}.png",case.preset,region.side)));
+                    let tile_size = layer_core::raster::TILE_SIZE;let mut outside_cell = 0;
+                    for (key, bytes) in &filled {for (index, pixel) in bytes.chunks_exact(4).enumerate() {
+                        let x = key.coordinate[0] * tile_size + index as u32 % tile_size;let y = key.coordinate[1] * tile_size + index as u32 / tile_size;
+                        if pixel[3] != 0 && !((x >= left && y >= top && x < left + width && y < top + height) || scribble_distance(case,region,[x as f32 + 0.5,y as f32 + 0.5]) <= case.size * 0.5 + 1.5) {outside_cell += 1;}
+                    }}
+                    score_scribble(case, region, &filled, &reference, outside_cell);
+                    invoke(&w, CommandId::Undo);ready(&w);
+                    assert_eq!(pixels(&raster(&w)), empty, "{} {} Undo restores exact empty target", case.name, region.side);
+                    eprintln!("PASS {theme:?} {paper} {} {}: {}° corner, {} px {} break, checked geometry bounds and exact Undo", case.name, region.side, case.angle, case.gap, case.direction);
+                }
+            }
+            healthy(&w);w.window.destroy();pump(100);
+        }
     }
     input.finish();
 }

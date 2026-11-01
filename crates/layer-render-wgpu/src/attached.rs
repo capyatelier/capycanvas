@@ -87,6 +87,9 @@ impl CanvasRenderer for AttachedRenderer {
             gpu.prepare_retouch(retouch);
         }
     }
+    fn prepare_regions(&mut self, regions:Option<&layer_render::RegionPreparation>) {
+        if let Some(gpu)=self.0.as_mut() {gpu.prepare_regions(regions);}
+    }
     fn take_retouch_miss(&mut self) -> Option<layer_core::StrokeId> {
         self.0.as_mut()?.take_retouch_miss()
     }

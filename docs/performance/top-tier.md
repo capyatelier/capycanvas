@@ -191,7 +191,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Vector paths: Scale/Rotate, eraser, Outline width scrub | 120 | **Met** except the 5,000-path width scrub (29.6–32.1 updates/s); Edit Points **met** | [Vector layers](#vector-layers), 2026-10-21 |
 | Navigation over a crowded vector layer | 120 | **Not met.** Pan 27.7–28.8, pinch 36.8–38.9 (21.1–21.4 with 5,000 paths selected), rotate 25.6–26.1 presented/s | [Vector layers](#vector-layers), 2026-10-20 |
 | Marquee, Lasso or Polygon drag | 120 | Met on a small document: in-stroke interval p50/p99 4.2/6.9 ms with the canvas bar shown, p99 8.8 ms with it off (2048 × 1536) | `ba9483a8`, 2026-09-27 |
-| Enclose and Fill: loop drag and navigation during completion | 120 | Unmeasured on the reference tablet; 61 MP completion exceeds the current 128 MiB component-buffer binding limit | Shared lasso overlay; GPU region discovery starts on release. Desktop checks do not qualify this tier |
+| Enclose and Fill: loop drag and navigation during completion | 120 | Reference 61 MP motion remains unmeasured. Bounded windows fit a 128 MiB binding allowance when texture limits admit width 9504 | [Reference Fill completion](#reference-fill-completion); workstation completion does not qualify this tier |
 | Selection Brush or Quick Mask, 2048 px | 120 | | |
 | Grow, Shrink or Feather drag, full canvas | 120, soft | **Not met.** Feather: 14.9 updates/s on 6000 × 4000; 72.5 updates/s on 2048 × 1536 | Canvas-bar `refine-feather-drag`, 2026-09-27 |
 | Paper Scale drag with relief preview | 120 | Unmeasured on the reference tablet | Canvas-bar `paper-scale-drag`; [Paper rendering](../development/paper.md#rendering-and-performance) |
@@ -261,6 +261,24 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Tool Options or panel content change | 120 | **Not met.** UI frame p50/p95 25.1/30.6 ms | Canvas-bar `ui-panel-change`, 2026-09-27 |
 | List scrolling: layers, brushes, filters | 120 | **Unqualified.** GTK with 1,000 layers misses desktop criteria: touch at scale 1 gives 97.24–109.99 presents/s, p99 up to 25.016 ms; reference tablet unmeasured. Windows chrome rail scrolling and edge arbitration are unmeasured on reference hardware (2026-10-28). | [GTK layer input diagnostic](#gtk-layer-input-diagnostic), 2026-10-10 |
 | Menu open and close | 120 | Application menu heading switching unmeasured on reference hardware. Selection-bar diagnostic: menu open adds no canvas frames; UI frame p50/p95 11.5/26.6 ms | Canvas-bar `selection-bar-menu-open`, 2026-09-27; [menu interaction](../ui/window-bar.md) needs presented-frame qualification |
+
+## Reference Fill completion
+
+The bounded-window layout removes the former 61 MP single-component binding
+limit. At 9504 × 6336 the largest modeled binding is 83,675,304 bytes, below
+128 MiB; the device must also admit a texture dimension of at least 9504.
+This is a buffer-layout check, not a reference-device motion or OOM qualification.
+The complete allocation boundaries remain in
+`artifacts/fill-tools/current-band-memory/README.local.md`.
+
+A separate NVIDIA workstation 24 MP comparison covers 1/3/8 references in cell
+and background areas: warm medians improve from 24/275/930 ms to 15–18 ms,
+while all six first-cold results regress. Every one of the 264 requests passes its
+pixel checks. First-cold, second-request, twenty-warm medians, bytes and exact
+source/binary provenance remain in
+`artifacts/fill-tools/m4a-workstation-final-table.local.md` and its manifest.
+These request-to-mask measurements exclude upload and presentation and do not
+qualify the top-tier reference tablet or its 120 Hz target.
 
 ## Web and Android HDR color bubbles
 

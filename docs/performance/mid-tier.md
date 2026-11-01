@@ -310,7 +310,8 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Vector paths: Scale/Rotate, eraser, Outline width scrub | 90 | **Met** except the 5,000-path width scrub (24.7–24.9 updates/s); Edit Points **met** (89.4–89.6/s) | [Vector layers](#vector-layers), 2026-10-21 |
 | Navigation over a crowded vector layer | 90 | **Not met.** Pan 57.8–58.2, pinch 56.7–58.4, rotate 54.8–55.1 presented/s at 90 Hz, with or without 5,000 paths selected | [Vector layers](#vector-layers), 2026-10-20 |
 | Marquee, Lasso or Polygon drag | 90 | | |
-| Enclose and Fill: loop drag and navigation during completion | 90 | Unmeasured on the reference tablet | Shared lasso overlay; GPU region discovery starts on release. Desktop checks do not qualify this tier |
+| Enclose and Fill: loop drag and navigation during completion | 90 | Motion unmeasured on the reference tablet; completion checks do not qualify 90 Hz | [Reference Fill completion](#reference-fill-completion) |
+| Reference Fill completion, 24 MP | Cold and warm response | **Warm regressions:** enclosed cell about 8%; background about 16% at native bracket midpoints | [Reference Fill completion](#reference-fill-completion); M4a.1 must bring warm latency within 5% of main |
 | Selection Brush or Quick Mask, 1536 px | 90 | | |
 | Grow, Shrink or Feather drag, full canvas | 90, soft | | |
 | Paper Scale drag with relief preview | 90 | Unmeasured on the reference tablet | Canvas-bar `paper-scale-drag`; [Paper rendering](../development/paper.md#rendering-and-performance) |
@@ -354,6 +355,36 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | List scrolling: layers, brushes, filters | 90 | Layers scroll fixture fails before qualified motion; other list rows remain unqualified. | [Android UI motion](#android-ui-motion), 2026-10-29 |
 | Menu open and close | 90 | Application menu heading switching unmeasured on the tier canvas | [Menu interaction](../ui/window-bar.md); mouse and pen functional checks do not qualify presented frame rate |
 | G-Pen 1536 px stroke with a pending language change | 90 | **Not met.** 56.80 fresh updates/s (52.40–56.99), completion-gap p99 32.08–34.97 ms | Language-change diagnostic below; synthetic owner replay, no scanout qualification |
+
+## Reference Fill completion
+
+M4a native APK checks use the MovinkPad 11 at 6000 × 4000 with one reference,
+against pre-M4a main `ccf1e0110`. Three fresh enclosed-cell samples average
+the screenshot bounds below; the background row is one matched pair.
+
+| Area | Main, seconds | M4a, seconds | Result |
+| --- | ---: | ---: | --- |
+| Enclosed cell, mean bounds | 1.513–1.671 | 1.648–1.798 | About 8.2% slower at bracket midpoints |
+| Background | 2.167–2.354 | 2.487–2.750 | About 16% slower at bracket midpoints |
+
+These warm regressions are recorded for M4a.1, whose mid-tier gate is within
+5% of the same pre-M4a main control. Cold cache construction also regresses;
+the low-tier gate is a reference stroke → Fill → tap after one second, no
+slower than pre-M4a main. Warm results do not replace that measurement.
+The one reviewed background optimization reduces texture allocations from
+768 to 555 by supplying tight band bounds in the same pack reduction, with
+32 extra bytes in the existing output buffer.
+
+The separate pre-band headless 1/3/8-reference matrix does not qualify final
+native latency. At `1b464ad2a`, both main and candidate OOM on the 24 MP
+eight-reference case. The matched native checks at `ccf1e0110` open the viewport
+and contact Fill without an observed OOM, but neither main nor candidate
+produces an observed fill within 120 seconds. Completion and capacity remain
+unqualified; this is a shared miss.
+All sixteen successful device rows and both OOM records remain in
+`artifacts/fill-tools/m4a-device-matrix/results.json`; native brackets are in
+`artifacts/fill-tools/m4a-native-audit/native-results.json` and
+`artifacts/fill-tools/m4a-native-audit/final-mid-cell-three-samples.json`.
 
 ## HDR color bubbles
 

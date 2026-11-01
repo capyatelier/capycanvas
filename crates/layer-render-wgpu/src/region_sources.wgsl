@@ -38,7 +38,6 @@ fn classify_tile(@builtin(global_invocation_id) id: vec3<u32>) {
     var packed = 0u;
     for (var i = 0u; i < 32u && p.x+i < tile.size.x; i++) {
         let local = p + vec2<u32>(i, 0);
-        let world = tile.origin + local;
         let value = raw_color(id.z, local);
         // Compare the seed and candidates in the same shader. Encoding only
         // the seed in another pipeline can differ by one Float32 rounding step
@@ -47,7 +46,7 @@ fn classify_tile(@builtin(global_invocation_id) id: vec3<u32>) {
         let color = comparison_color(value);
         if select(same || all(abs(color - comparison_color(seed)) <= vec4<f32>(tile.options.x)),
             value.a <= tile.options.x, tile.options.z > 2.5)
-            && brush_selection_at(vec2<f32>(world) + .5) > 0. {
+            {
             packed |= 1u << i;
         }
     }

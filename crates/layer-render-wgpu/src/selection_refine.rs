@@ -357,6 +357,7 @@ impl SelectionRefiner {
     /// Time the chunk about to be encoded, when the GPU has timestamps.
     pub fn begin_timing(&mut self, encoder: &mut crate::submission::CommandEncoder) -> Option<u64> {
         let (timer, _, next) = self.timer.as_mut()?;
+        timer.resolve_completed(encoder);
         *next += 1;
         timer.begin_encoded(encoder, *next).then_some(*next)
     }
@@ -372,11 +373,10 @@ impl SelectionRefiner {
         }
     }
     /// Learn the GPU's pace from completed chunks.
-    pub fn poll_timing(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+    pub fn poll_timing(&mut self) {
         let Some((timer, pending, _)) = self.timer.as_mut() else {
             return;
         };
-        timer.poll(device, queue);
         let mut samples = [GpuFrameSample::default(); 8];
         let count = timer.take_into(&mut samples);
         for sample in &samples[..count] {
@@ -466,6 +466,7 @@ impl SelectionRefiner {
         flood::Region {
             coverage,
             bounds_offset,
+            underfill: None,
         }
     }
     /// Byte coverage for `extent` pixels from `origin`, followed by space for

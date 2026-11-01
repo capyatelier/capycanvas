@@ -685,3 +685,9 @@ command-fill-everywhere = ทุกพื้นที่
 command-smooth-region-edges = ทำขอบให้เรียบ
 
 command-stop-at-colors = หยุดที่สีบนเลเยอร์นี้
+
+command-close-gaps-auto = อัตโนมัติ
+command-close-gaps-off = ปิด
+command-edges-line-middle = ถึงกลางเส้น
+command-edges-exact = ตรงขอบ
+command-edges-grow-shrink = ขยายหรือหด

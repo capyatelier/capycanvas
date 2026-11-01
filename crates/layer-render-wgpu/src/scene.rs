@@ -1378,7 +1378,7 @@ impl Scene {
             let pages: Vec<_> = r.layer_masks.pages.iter().filter(|((id, c), _)| *id == target && !damage.page_local(*c).is_empty())
                 .map(|((_, c), page)| (*c, page.clone())).collect();
             for (coordinate, page) in pages {
-                let mask = self.command_mask_at(r, &op.coverage, coordinate, (target, operation_index as u32))?;
+                let mask = self.command_mask_at(r, &op.coverage, coordinate, (target, operation_index as u32, false))?;
                 let _mask = self.own(mask);
                 let out = self.reserve_format(r, true)?;
                 self.draw(r, out, page.view.clone(), Some(self.pool[mask].view.clone()),
@@ -1419,9 +1419,12 @@ impl Scene {
         let watercolor = stored.watercolor.is_some() && settles;
         let erase = f32::from(matches!(op.kind, RasterOperationKind::Erase { .. }));
         let gradient = if let RasterOperationKind::Gradient {gradient,..}=&op.kind {Some(crate::gradient::texture(r,gradient)?)} else {None};
+        let underfill_coverage = layer_masks::underfill_coverage(op);
         for (c, source, destination) in pages {
-            let mask = self.command_mask_at(r, &op.coverage, c, (target, operation_index as u32))?;
+            let mask = self.command_mask_at(r, &op.coverage, c, (target, operation_index as u32, false))?;
             let _mask = self.own(mask);
+            let underfill = underfill_coverage.as_ref().map(|coverage| self.command_mask_at(r, coverage, c, (target, operation_index as u32, true))).transpose()?;
+            let _underfill = underfill.map(|index| self.own(index));
             let out = self.alloc(r, wgpu::Color::TRANSPARENT)?;
             let _out = self.own(out);
             match op.kind {
@@ -1462,7 +1465,7 @@ impl Scene {
                         RasterOperationKind::Fill {
                             color,
                             alpha_locked, ..
-                        } => ([color; 2], [0.0; 4], [6., 1., 0., f32::from(alpha_locked)]),
+                        } => ([color; 2], [0.0; 4], [6., 1., f32::from(underfill.is_some()), f32::from(alpha_locked)]),
                         RasterOperationKind::Gradient {start,end,shape,reverse,opacity,alpha_locked,..} => (
                             [[opacity,0.,0.,0.],[0.;4]],
                             [start.x,start.y,end.x,end.y],
@@ -1494,6 +1497,7 @@ impl Scene {
                     );
                     if let Some(Job::Draw { data, sources, .. }) = self.jobs.last_mut() {
                         if let Some(gradient)=&gradient {sources[2]=gradient.clone();}
+                        if let Some(underfill)=underfill {sources[2]=self.pool[underfill].view.clone();}
                         data[6..8].copy_from_slice(&c.map(|v| (v * PAGE_SIZE) as f32));
                         data[12..16].copy_from_slice(&colors[0]);
                         data[16..20].copy_from_slice(&colors[1]);
@@ -1525,6 +1529,7 @@ impl Scene {
             }
             self.free(out);
             self.free(mask);
+            if let Some(underfill)=underfill {self.free(underfill);}
         }
         self.encode_jobs(r, encoder)?;
         if settles {

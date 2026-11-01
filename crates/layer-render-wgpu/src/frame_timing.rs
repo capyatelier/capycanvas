@@ -182,6 +182,7 @@ impl GpuFrameTimer {
             return false;
         }
         let (index, _, _) = self.active.unwrap();
+        crate::submission::CacheWrite::shared(self.slots[index].busy.clone()).track(encoder);
         self.marker.as_ref().unwrap().write(encoder, &self.slots[index].query, 0);
         true
     }
@@ -202,6 +203,7 @@ impl GpuFrameTimer {
 
     fn reserve(&mut self, frame: u64, end_index: u32) -> bool {
         self.requested += 1;
+        if self.active.is_some_and(|(index,_,_)|!self.slots[index].busy.load(Ordering::Acquire)) {self.active=None;}
         let slot = if self.active.is_none() && self.marker.as_ref().is_some_and(TimestampMarker::ready) {
             self.slots
                 .iter()
@@ -215,6 +217,7 @@ impl GpuFrameTimer {
             return false;
         };
         slot.busy.store(true, Ordering::Release);
+        slot.gpu_done.store(false, Ordering::Release);
         self.active = Some((index, frame, end_index));
         true
     }
@@ -264,65 +267,34 @@ impl GpuFrameTimer {
     /// resolving counters in the marker's command buffer returned stale values.
     /// This state machine never waits and retains the slot until mapped/drained.
     pub fn poll(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        if !self.slots.iter().any(|slot|slot.awaiting_resolve.is_some() && slot.gpu_done.load(Ordering::Acquire)) {return;}
+        let mut encoder=device.create_command_encoder(&wgpu::CommandEncoderDescriptor {label:Some("completed frame timestamps")});
+        self.resolve_completed(&mut encoder);queue.submit_for_present([encoder.finish()]);
+    }
+    pub(crate) fn resolve_completed(&mut self,encoder:&mut wgpu::CommandEncoder) {
         for slot in &mut self.slots {
-            if slot.awaiting_resolve.is_none() || !slot.gpu_done.load(Ordering::Acquire) {
-                continue;
-            }
-            let (frame, end_index) = slot.awaiting_resolve.take().unwrap();
-            slot.gpu_done.store(false, Ordering::Release);
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("completed frame timestamps"),
-            });
-            encoder.resolve_query_set(&slot.query, 0..end_index + 1, &slot.resolve, 0);
-            encoder.copy_buffer_to_buffer(&slot.resolve, 0, &slot.read, 0, u64::from(end_index + 1) * 8);
-            queue.submit_for_present([encoder.finish()]);
-            let buffer = slot.read.clone();
-            let busy = slot.busy.clone();
-            let ready = self.ready.clone();
-            let invalid = self.invalid.clone();
-            let omitted = self.omitted.clone();
-            let period = self.period;
-            slot.read.map_async(wgpu::MapMode::Read, .., move |result| {
-                let mut sample = GpuFrameSample {
-                    frame,
-                    status: 2,
-                    ..Default::default()
-                };
-                if result.is_ok() {
-                    if let Ok(bytes) = buffer.get_mapped_range(..) {
-                        let start = u64::from_le_bytes(bytes[..8].try_into().unwrap());
-                        let offset = end_index as usize * 8;
-                        let end = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
-                        let elapsed = end.saturating_sub(start) as f64 * period;
-                        if start > 0
-                            && end > start
-                            && elapsed.is_finite()
-                            && elapsed < u64::MAX as f64
-                        {
-                            sample.elapsed_ns = elapsed.round() as u64;
-                            sample.start_tick = start;
-                            sample.end_tick = end;
-                            sample.status = 1;
-                        } else {
-                            sample.status = 3;
-                        }
-                    }
-                    buffer.unmap();
+            if slot.awaiting_resolve.is_none() || !slot.gpu_done.load(Ordering::Acquire) {continue;}
+            let (frame,end_index)=slot.awaiting_resolve.take().unwrap();
+            slot.gpu_done.store(false,Ordering::Release);
+            encoder.resolve_query_set(&slot.query,0..end_index+1,&slot.resolve,0);
+            encoder.copy_buffer_to_buffer(&slot.resolve,0,&slot.read,0,u64::from(end_index+1)*8);
+            crate::submission::CacheWrite::shared(slot.busy.clone()).track(encoder);
+            let busy=slot.busy.clone();let ready=self.ready.clone();let invalid=self.invalid.clone();let omitted=self.omitted.clone();let period=self.period;
+            crate::raster::map_then(Some(encoder),&slot.read,u64::from(end_index+1)*8,move |bytes| {
+                let start=u64::from_le_bytes(bytes[..8].try_into().unwrap());let offset=end_index as usize*8;
+                let end=u64::from_le_bytes(bytes[offset..offset+8].try_into().unwrap());let elapsed=end.saturating_sub(start) as f64*period;
+                let mut sample=GpuFrameSample {frame,status:3,..Default::default()};
+                if start>0 && end>start && elapsed.is_finite() && elapsed<u64::MAX as f64 {
+                    sample.elapsed_ns=elapsed.round() as u64;sample.start_tick=start;sample.end_tick=end;sample.status=1;
                 }
-                if sample.status != 1 {
-                    invalid.fetch_add(1, Ordering::Relaxed);
-                }
-                // A profiler must not make drawing wait for its consumer.
-                if let Ok(mut ready) = ready.try_lock() {
-                    if ready.len() < 256 {
-                        ready.push_back(sample);
-                    } else {
-                        omitted.fetch_add(1, Ordering::Relaxed);
-                    }
-                } else {
-                    omitted.fetch_add(1, Ordering::Relaxed);
-                }
-                busy.store(false, Ordering::Release);
+                Ok(sample)
+            },move |result| {
+                let sample=result.unwrap_or(GpuFrameSample {frame,status:2,..Default::default()});
+                if sample.status!=1 {invalid.fetch_add(1,Ordering::Relaxed);}
+                if let Ok(mut ready)=ready.try_lock() {
+                    if ready.len()<256 {ready.push_back(sample);}else{omitted.fetch_add(1,Ordering::Relaxed);}
+                }else{omitted.fetch_add(1,Ordering::Relaxed);}
+                busy.store(false,Ordering::Release);
             });
         }
     }
@@ -555,4 +527,32 @@ mod tests {
             "Each result is delivered once"
         );
     }
+    #[test]
+    fn encoded_marker_and_resolve_recover_from_dropped_owners() {
+        let instance=crate::WgpuRasterizer::headless_instance();
+        let adapter=pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+        let (device,queue)=pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {required_features:wgpu::Features::TIMESTAMP_QUERY,..Default::default()})).unwrap();
+        let wait=||device.poll(wgpu::PollType::Wait {submission_index:None,timeout:Some(std::time::Duration::from_secs(5))}).unwrap();
+        let mut timer=GpuFrameTimer::new(&device,&queue);let mut samples=[GpuFrameSample::default();3];
+        let mut held=device.create_command_encoder(&Default::default());
+        assert!(timer.begin_encoded(&mut held,101));timer.end_encoded(&mut held);let held=held.finish();
+        queue.submit([]);wait();timer.poll(&device,&queue);
+        assert_eq!(timer.take_into(&mut samples),0);assert_eq!(timer.stats().pending,1);
+        drop(held);assert_eq!(timer.stats().pending,0);
+        let mut marker=device.create_command_encoder(&Default::default());
+        assert!(timer.begin_encoded(&mut marker,102));timer.end_encoded(&mut marker);
+        queue.submit([marker.finish()]);timer.submitted(&queue);wait();
+        let mut held=device.create_command_encoder(&Default::default());timer.resolve_completed(&mut held);
+        queue.submit([]);wait();assert_eq!(timer.take_into(&mut samples),0);assert_eq!(timer.stats().pending,1);
+        drop(held);assert_eq!(timer.stats().pending,0);assert_eq!(timer.take_into(&mut samples),0);
+        let mut marker=device.create_command_encoder(&Default::default());
+        assert!(timer.begin_encoded(&mut marker,103));timer.end_encoded(&mut marker);
+        queue.submit([marker.finish()]);timer.submitted(&queue);wait();
+        let mut owner=device.create_command_encoder(&Default::default());timer.resolve_completed(&mut owner);
+        queue.submit([]);wait();assert_eq!(timer.take_into(&mut samples),0);
+        queue.submit([owner.finish()]);wait();
+        assert_eq!(timer.take_into(&mut samples),1);assert_eq!(samples[0].frame,103);assert_eq!(samples[0].status,1);
+        assert!(samples[0].end_tick>samples[0].start_tick);assert_eq!(timer.stats().pending,0);
+    }
+
 }

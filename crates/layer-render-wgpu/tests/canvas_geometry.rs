@@ -415,7 +415,7 @@ fn resizing_a_whole_layer_leaves_no_vacated_tiles() {
         .append_raster_operation(paint, RasterOperation {
             placement: Affine::IDENTITY,
             coverage: CoverageSnapshot::reveal_all(CoverageHandle::from_index(0), extent, [0, 0]),
-            kind: RasterOperationKind::Fill { texture: Default::default(), color: [0.2, 0.4, 0.8, 0.5], alpha_locked: false },
+            kind: RasterOperationKind::Fill { underfill: None, texture: Default::default(), color: [0.2, 0.4, 0.8, 0.5], alpha_locked: false },
         })
         .unwrap();
     settled(&mut engine, 0);

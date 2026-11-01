@@ -692,3 +692,9 @@ command-fill-everywhere = Везде
 command-smooth-region-edges = Сглаживать края
 
 command-stop-at-colors = Останавливаться на цветах этого слоя
+
+command-close-gaps-auto = Авто
+command-close-gaps-off = Выкл.
+command-edges-line-middle = До середины линии
+command-edges-exact = Точно
+command-edges-grow-shrink = Расширить или сузить

@@ -95,12 +95,11 @@ extension XCTestCase {
         let closed = try outline(gap: false)
         for tool in ["Fill", "Auto select"] {
             selectTool(tool)
-            if tool == "Fill" { editorChoice("Visible artwork", in: app) } else {
-                editorToolActionChoice("selection_visible", in: app)
-            }
-            setting("tolerance", 0); setting("gap_closing", 0)
+            editorToolChoice("selection-source", index: 1, in: app)
+            setting("tolerance", 0); editorToolChoice("close-gaps", index: 1, in: app)
             for (expansion, smoothing) in [(0, 0), (2, 0), (-2, 0), (0, 100)] {
-                setting("expansion", expansion)
+                editorToolChoice("region-edges", index: expansion == 0 ? 1 : 2, in: app)
+                if expansion != 0 { setting("edge_offset", expansion) }
                 let toggle = app.checkBoxes["tool-action-" + (tool == "Fill" ? "smooth_region_edges" : "selection_antialias")]
                 if (toggle.value as? String == "1") != (smoothing > 0) { workspaceActivate(toggle) }
                 let painted = try paint(tool)
@@ -127,15 +126,15 @@ extension XCTestCase {
             }
         }
         let broken = try outline(gap: true)
-        selectTool("Fill"); setting("expansion", 0)
+        selectTool("Fill"); editorToolChoice("region-edges", index: 1, in: app)
         let smoothEdges = app.checkBoxes["tool-action-smooth_region_edges"]
         if smoothEdges.value as? String == "1" { workspaceActivate(smoothEdges) }
-        for distance in [0, 4] {
-            setting("gap_closing", distance)
+        for closeGaps in [false, true] {
+            editorToolChoice("close-gaps", index: closeGaps ? 0 : 1, in: app)
             let painted = try paint("Fill")
             XCTAssertEqual(Array(painted[(32 * 64 + 32) * 4..<(32 * 64 + 32) * 4 + 4]), [0, 0, 255, 255])
-            XCTAssertEqual(Array(painted.prefix(4)), distance == 0 ? [0, 0, 255, 255] : [255, 255, 255, 255])
-            attachEditor(in: app, name: "native-gap-closing-\(distance)")
+            XCTAssertEqual(Array(painted.prefix(4)), !closeGaps ? [0, 0, 255, 255] : [255, 255, 255, 255])
+            attachEditor(in: app, name: "native-gap-closing-\(closeGaps)")
             editorHistory("Undo", in: app); XCTAssertEqual(try pixels(), broken)
         }
         XCTAssertEqual(viewport.frame, originalFrame)
@@ -201,15 +200,13 @@ extension XCTestCase {
         for tool in ["Fill", "Auto select"] {
             editorTool(tool, in: app)
             for source in ["Visible artwork", "Editing layer", "Reference layers"] {
-                if tool == "Fill" { editorChoice(source, in: app) } else {
-                    editorToolActionChoice("selection_" + ["Visible artwork": "visible", "Editing layer": "editing", "Reference layers": "reference"][source]!, in: app)
-                }
+                editorToolChoice("selection-source", index: ["Visible artwork": 1, "Editing layer": 2, "Reference layers": 0][source]!, in: app)
                 for setting in ["tolerance"] {
                     XCTAssertTrue(app.buttons["number-value-tool-" + setting].exists)
                 }
-                for setting in ["gap_closing", "expansion"] {
-                    XCTAssertTrue(app.textFields["number-entry-tool-" + setting].exists)
-                }
+                for id in ["close-gaps", "region-edges"] { XCTAssertTrue(app.descendants(matching: .any)["tool-segments-" + id].exists) }
+                XCTAssertFalse(app.textFields["number-entry-tool-gap_closing"].exists)
+                XCTAssertFalse(app.textFields["number-entry-tool-expansion"].exists)
                 XCTAssertEqual(app.buttons["number-value-tool-opacity"].exists, tool == "Fill")
                 #if os(macOS)
                 coordinate(center).click(); editorDocumentTitle(in: app).hover()
@@ -246,16 +243,18 @@ extension XCTestCase {
                 waitForExpectations(timeout: 5)
             }
             #if os(iOS)
-            for (id, values) in [("gap_closing", ["4", "0"]), ("expansion", ["2", "-2", "0"])] {
-                for value in values {
-                    let entry = app.textFields["number-entry-tool-" + id]
-                    revealEditorControl(entry, in: app.scrollViews.containing(.textField, identifier: entry.identifier).firstMatch)
-                    workspaceActivate(entry); entry.typeText(value + "\n")
-                    editorTool("Paint Brush", in: app); editorTool(tool, in: app)
-                    expectation(for: NSPredicate(format: "value == %@", value + " px"), evaluatedWith: entry)
-                    waitForExpectations(timeout: 5)
-                }
+            for index in [0, 1] { editorToolChoice("close-gaps", index: index, in: app) }
+            editorToolChoice("region-edges", index: 2, in: app)
+            for value in ["2", "-2", "0"] {
+                let entry = app.textFields["number-entry-tool-edge_offset"]
+                revealEditorControl(entry, in: app.scrollViews.containing(.textField, identifier: entry.identifier).firstMatch)
+                workspaceActivate(entry); entry.typeText(value + "\n")
+                editorTool("Paint Brush", in: app); editorTool(tool, in: app)
+                expectation(for: NSPredicate(format: "value == %@", value + " px"), evaluatedWith: entry)
+                waitForExpectations(timeout: 5)
             }
+            editorToolChoice("region-edges", index: 1, in: app)
+            XCTAssertFalse(app.textFields["number-entry-tool-edge_offset"].exists)
             let edgeCommand = tool == "Fill" ? "smooth_region_edges" : "selection_antialias"
             let toggle = app.switches["tool-action-" + edgeCommand]
             revealEditorControl(toggle, in: app.scrollViews.containing(.switch, identifier: toggle.identifier).firstMatch)

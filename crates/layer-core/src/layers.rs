@@ -357,6 +357,10 @@ pub struct RasterOperation {
     pub coverage: CoverageSnapshot,
     pub kind: RasterOperationKind,
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegionEdges { #[default] LineMiddle, Exact, GrowShrink(i32) }
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FillTexture {
     pub strength: f32,
@@ -379,6 +383,7 @@ pub enum RasterOperationKind {
         texture: FillTexture,
         color: [f32; 4],
         alpha_locked: bool,
+        underfill: Option<Selection>,
     },
     Gradient {
         texture: FillTexture,
@@ -493,7 +498,8 @@ impl RasterOperation {
                     }
             }
             RasterOperationKind::Figure(figure) => figure.valid(),
-            RasterOperationKind::Fill { color, texture, .. } => color_ok(color) && texture.valid(),
+            RasterOperationKind::Fill { color, texture, underfill, .. } => color_ok(color) && texture.valid()
+                && underfill.as_ref().is_none_or(|selection| selection.validate().is_ok()),
             RasterOperationKind::Gradient {
                 start, end, gradient, opacity, texture, ..
             } => {
@@ -1134,7 +1140,7 @@ mod organization_tests {
     fn paint_operations_accept_extended_rgb_and_reject_invalid_coverage() {
         let operations = |color| {
             [
-                RasterOperationKind::Fill { texture: Default::default(), color, alpha_locked: false },
+                RasterOperationKind::Fill { underfill: None, texture: Default::default(), color, alpha_locked: false },
                 RasterOperationKind::Gradient { texture: Default::default(),
                     start: Point { x: 10., y: 20. },
                     end: Point { x: 80., y: 60. },

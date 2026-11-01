@@ -375,13 +375,14 @@ pub(crate) fn wait_mapping(
 /// Maps the first `size` bytes, parses them and unmaps before replying, so a
 /// persistent staging buffer stays reusable after a failed mapped-range access.
 pub(crate) fn map_then<T>(
+    encoder: Option<&wgpu::CommandEncoder>,
     buffer: &wgpu::Buffer,
     size: wgpu::BufferAddress,
     parse: impl FnOnce(&[u8]) -> Result<T, GpuRasterError> + Send + 'static,
     reply: impl FnOnce(Result<T, GpuRasterError>) + Send + 'static,
 ) {
     let ready = buffer.clone();
-    buffer.slice(..size).map_async(wgpu::MapMode::Read, move |result| {
+    let mapped = move |result:Result<(),wgpu::BufferAsyncError>| {
         let parsed = result
             .map_err(|e| GpuRasterError::MapFailed(e.to_string()))
             .and_then(|()| {
@@ -393,7 +394,9 @@ pub(crate) fn map_then<T>(
             });
         ready.unmap();
         reply(parsed);
-    });
+    };
+    if let Some(encoder)=encoder {encoder.map_buffer_on_submit(buffer,wgpu::MapMode::Read,..size,mapped);}
+    else {buffer.slice(..size).map_async(wgpu::MapMode::Read,mapped);}
 }
 
 pub(crate) fn unpadded_rows(bytes: &[u8], stride: u32, row_bytes: u32) -> Vec<u8> {

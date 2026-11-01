@@ -289,6 +289,7 @@ impl UiImageTarget {
         let [width, height] = self.size();
         let stride = self.stride;
         crate::raster::map_then(
+            None,
             &self.buffer,
             self.buffer.size(),
             move |data| {

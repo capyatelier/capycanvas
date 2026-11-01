@@ -13,6 +13,9 @@ struct Binding {
     group: wgpu::BindGroup,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Sampling { Pixels, Seeds, Transparent, Enclosed, Retained, Target }
+
 pub(super) struct RawRegions {
     capture: artwork::Capture,
     /// One capture per tile of a classification batch.
@@ -32,17 +35,21 @@ pub(super) struct RawRegions {
     pub(super) tonal_statistics: wgpu::Buffer,
     tile_pipeline: Deferred<wgpu::ComputePipeline>,
     seed: wgpu::Buffer,
+    seeds: Option<wgpu::Buffer>,
     empty_selection: wgpu::Buffer,
     uniform: Option<wgpu::Buffer>,
     mask: Option<wgpu::Buffer>,
     parameters: Vec<u8>,
     bindings: std::collections::VecDeque<Binding>,
     progress: Option<Classification>,
+    request_source: Option<(layer_render::RegionSource,Sampling)>,
+    batches_left:Option<usize>,
 }
 struct Classification {
     frame: Option<Arc<artwork::Frame>>,
     extent: [u32; 2],
     batch: usize,
+    batch_tiles:usize,
     source: usize,
 }
 // Full-precision luminance/alpha replace repeated color decoding/composition.
@@ -162,10 +169,11 @@ impl RawRegions {
                 mapped_at_creation: false,
             }),
             tile_pipeline: pipeline("classify_tile"),
+            seeds:None,
             seed: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("region seed color"),
                 size: 16,
-                usage: wgpu::BufferUsages::STORAGE,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
             empty_selection: device.create_buffer(&wgpu::BufferDescriptor {
@@ -179,13 +187,14 @@ impl RawRegions {
             parameters: Vec::new(),
             bindings: Default::default(),
             progress: None,
+            request_source:None,batches_left:None,
         }
     }
     pub fn pipelines(&self) -> impl Iterator<Item = &Deferred<wgpu::ComputePipeline>> {
         [&self.seed_pipeline, &self.tile_pipeline].into_iter()
     }
-    pub fn prepare(&self, compiler: &startup::Compiler) -> bool {
-        compiler.require(self.pipelines(), startup::BRUSH)
+    pub fn prepare(&self, compiler: &startup::Compiler, priority:u8) -> bool {
+        compiler.require(self.pipelines(), priority)
     }
     pub fn prepare_tonal(&self, compiler: &startup::Compiler) -> bool {
         compiler.require(
@@ -199,6 +208,7 @@ impl RawRegions {
             + self.tonal_parameters.size()
             + self.tonal_statistics.size()
             + self.seed.size()
+            + self.seeds.as_ref().map_or(0,wgpu::Buffer::size)
             + self.empty_selection.size()
             + self.uniform.as_ref().map_or(0, |b| b.size())
             + self.mask.as_ref().map_or(0, |b| b.size())
@@ -226,6 +236,8 @@ impl RawRegions {
             self.capture = Default::default();
         }
     }
+    pub fn batch_limit(&mut self,limit:Option<usize>) {self.batches_left=limit;}
+    pub fn processing(&self,source:&layer_render::RegionSource,sampling:Sampling)->bool {self.progress.is_some() && self.request_source.as_ref().is_some_and(|(old,mode)|old==source && *mode==sampling)}
     pub fn extent(&self) -> Option<[u32; 2]> { self.progress.as_ref().map(|progress| progress.extent) }
     pub fn begin(&mut self, r: &WgpuRasterizer, request: &layer_render::RegionRequest) -> Result<(), GpuRasterError> {
         if self.progress.is_some() { return Ok(()); }
@@ -245,7 +257,7 @@ impl RawRegions {
             layer_render::RegionSource::Source(_) | layer_render::RegionSource::Coverage(_) => None,
             _ => return Err(GpuRasterError::InvalidExtent),
         };
-        self.progress = Some(Classification {frame, extent:r.document_extent, batch:0, source:0});
+        self.progress = Some(Classification {frame, extent:r.document_extent, batch:0, batch_tiles:if self.batches_left.is_some(){1}else{BATCH_TILES}, source:0});
         Ok(())
     }
     #[cfg(test)]
@@ -308,12 +320,25 @@ impl RawRegions {
         request: &layer_render::RegionRequest,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<wgpu::Buffer, GpuRasterError> {
+        self.encode_sampling(r,request,encoder,Sampling::Pixels)
+    }
+    pub fn mask(&self)->Option<wgpu::Buffer> {self.mask.clone()}
+    pub fn seeds(&self)->&wgpu::Buffer {self.seeds.as_ref().unwrap()}
+    pub fn encode_sampling(&mut self,r:&mut WgpuRasterizer,request:&layer_render::RegionRequest,
+        encoder:&mut crate::submission::CommandEncoder,sampling:Sampling)->Result<wgpu::Buffer,GpuRasterError> {
+        if self.progress.is_none(){self.request_source=Some((request.source.clone(),sampling));}
         self.begin(r, request)?;
+        let bytes=request.source.sources().len() as u64*16;
+        if sampling!=Sampling::Target && self.seeds.as_ref().is_none_or(|buffer|buffer.size()!=bytes) {
+            self.seeds=Some(r.device.create_buffer(&wgpu::BufferDescriptor {label:Some("reference seed keys"),size:bytes,
+                usage:wgpu::BufferUsages::COPY_SRC|wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::STORAGE,mapped_at_creation:false}));
+        }
         loop {
             let index = self.progress.as_ref().unwrap().source;
             let sources = request.source.sources();
             let source = layer_render::RegionRequest { source: sources[index].clone(), ..request.clone() };
-            let result = self.encode_source(r, &source, encoder, index > 0)?;
+            let result = self.encode_source(r, &source, encoder, index > 0,sampling)?;
+            if sampling!=Sampling::Target {encoder.copy_buffer_to_buffer(&self.seed,0,self.seeds.as_ref().unwrap(),index as u64*16,16);}
             if index + 1 == sources.len() { self.progress = None; return Ok(result); }
             self.progress = None;
             let next = layer_render::RegionRequest { source: sources[index + 1].clone(), ..request.clone() };
@@ -325,13 +350,18 @@ impl RawRegions {
         }
     }
     fn encode_source(&mut self, r: &mut WgpuRasterizer, request: &layer_render::RegionRequest,
-        encoder: &mut crate::submission::CommandEncoder, combine: bool,
+        encoder: &mut crate::submission::CommandEncoder, combine: bool, sampling:Sampling,
     ) -> Result<wgpu::Buffer, GpuRasterError> {
         let [w,h] = self.extent().unwrap();
         let mut layer = match request.source.raw_source() {
             layer_render::RegionSource::Source(id) | layer_render::RegionSource::Coverage(id) => {
                 Some(*id)
             }
+            layer_render::RegionSource::Scene {snapshot,scope:SceneScope::Raw(id)} if r.artwork_frame.as_ref().is_some_and(|frame| {
+                let a=frame.scene.view();let b=snapshot.view();
+                a.same_composition(b) && a.target_offset(*id)==b.target_offset(*id)
+                    && a.source_owner(*id).is_some_and(|owner|a.same_occurrence(b,owner,true))
+            })=>Some(*id),
             _ => None,
         };
         let placed = layer.is_some_and(|id| r.artwork_frame.as_ref().is_none_or(|frame|
@@ -494,7 +524,7 @@ impl RawRegions {
         let batches: Vec<_> = (tone.is_none())
             .then_some(std::slice::from_ref(&seed_tile))
             .into_iter()
-            .chain(tiles.chunks(if placed { 1 } else { BATCH_TILES }))
+            .chain((sampling!=Sampling::Seeds).then_some(tiles.chunks(if placed { 1 } else { self.progress.as_ref().unwrap().batch_tiles })).into_iter().flatten())
             .collect();
         let stride =
             (PARAMETER_BYTES as u32).next_multiple_of(limit.min_uniform_buffer_offset_alignment);
@@ -523,7 +553,7 @@ impl RawRegions {
                     fallback[3].to_bits(),
                     request.tolerance.to_bits(),
                     f32::from(has_tile(*coordinate)).to_bits(),
-                    (if request.enclosure.is_some() { 3.0f32 } else { f32::from(coverage) }).to_bits(),
+                    (if request.enclosure.is_some() || sampling==Sampling::Enclosed { 3.0f32 } else { f32::from(coverage) }).to_bits(),
                     f32::from(combine).to_bits(),
                 ];
                 for (word, value) in uniforms[batch * stride as usize + i * 64..][..64]
@@ -573,6 +603,13 @@ impl RawRegions {
                 .collect()
         };
         for (i, tiles) in batches.into_iter().enumerate().skip(self.progress.as_ref().unwrap().batch) {
+            if i==0 && tone.is_none() && (matches!(sampling,Sampling::Transparent|Sampling::Enclosed|Sampling::Retained) || request.enclosure.is_some()) {
+                if sampling==Sampling::Retained {encoder.copy_buffer_to_buffer(self.seeds.as_ref().unwrap(),self.progress.as_ref().unwrap().source as u64*16,&self.seed,0,16);} else {encoder.clear_buffer(&self.seed,0,None);}
+                self.progress.as_mut().unwrap().batch=1;
+                continue;
+            }
+            if i>0 && self.batches_left==Some(0) {return Err(GpuRasterError::DeferredObjectWork);}
+            let checkpoint=r.source_tiles.borrow().batch_checkpoint();
             let mut views: [wgpu::TextureView; BATCH_TILES] =
                 std::array::from_fn(|_| r.empty_view.clone());
             let mut leases = Vec::with_capacity(tiles.len());
@@ -677,6 +714,8 @@ impl RawRegions {
             }
             self.bindings.push_back(binding);
             self.progress.as_mut().unwrap().batch = i + 1;
+            if !coverage {r.source_tiles.borrow_mut().release_batch(checkpoint);}
+            if i>0 && let Some(left)=&mut self.batches_left {*left=left.saturating_sub(1);}
         }
         if let Some(cache) = &mut self.tonal_cache {
             cache.ready = true;
@@ -781,7 +820,7 @@ mod tests {
         for pixel in capture.read_region([0,0,extent[0],extent[1]]).unwrap() {
             for channel in 0..4 { assert!((pixel[channel]-expected[channel]).abs()<0.0005, "{pixel:?}"); }
         }
-        let result = crate::test_support::receive_request(&mut r, RegionRequest {
+        let result = crate::test_support::receive_request(&mut r, RegionRequest { reference_count: None, paper: None,
             enclosure: None, request_id:42,source:RegionSource::Scene {snapshot:normalized,scope},position:[63,63],tolerance:0.,
             contiguous:true,selection:None,refinement:Default::default(),limit:None,
         });

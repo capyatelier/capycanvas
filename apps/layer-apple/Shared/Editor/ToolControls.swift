@@ -187,14 +187,19 @@ struct ToolSettingsControls: View {
                 let title = choice?["label"].string ?? first["group"].string
                 if !title.isEmpty { Text(title).fontWeight(.bold).padding(.top, group[0].settingID == settings.first?.settingID ? 0 : 2) }
                 if let choice {
-                    HStack(spacing: store.panelMetrics.compound) {
-                        SegmentedChoiceBar(choice: choice, prefix: "tool", height: nil, iconSize: 6, palette: palette) { store.dispatch($0["action"]) }
+                    let grid = choice["columns"].uint > 0
+                    let placement = grid ? AnyLayout(HStackLayout(spacing: store.panelMetrics.compound))
+                        : AnyLayout(VStackLayout(alignment: .leading, spacing: store.panelMetrics.spacing))
+                    placement {
+                        SegmentedChoiceBar(choice: choice, prefix: "tool", height: grid ? nil : store.panelMetrics.height,
+                            iconSize: grid ? 6 : store.panelMetrics.icon, palette: palette) { store.dispatch($0["action"]) }
                         VStack(spacing: 2) {
                             ForEach(group, id: \.settingID) { item in
-                                HStack(spacing: store.panelMetrics.spacing) {
+                                if grid { HStack(spacing: store.panelMetrics.spacing) {
                                     Text(item["label"].string).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                                     setting(item, editingContext: editingContext, valueOnly: true)
-                                }.frame(minHeight: store.panelMetrics.height)
+                                }.frame(minHeight: store.panelMetrics.height) }
+                                else { setting(item, editingContext: editingContext) }
                             }
                         }
                     }

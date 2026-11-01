@@ -359,7 +359,7 @@ fn connected_and_global_regions_select_painted_disks() {
     disks.dab_count = 2;
     submit(&mut r, document.scene(), &[left, right], &[disks], true);
     for contiguous in [true, false] {
-        let result = crate::test_support::receive_request(&mut r, RegionRequest {
+        let result = crate::test_support::receive_request(&mut r, RegionRequest { reference_count: None, paper: None,
             enclosure: None, contiguous,
             selection: None,
             request_id: 1,

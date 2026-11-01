@@ -21,13 +21,10 @@ import SwiftUI
                 guard Date() < deadline else { throw HostFailure(message: "Number owner startup timed out") }
                 try await Task.sleep(for: .milliseconds(5))
             }
-            try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
-                store.edit(["type": "invoke", "command": "auto_select"]) { error in
-                    if let error { c.resume(throwing: HostFailure(message: error)) } else { c.resume() }
-                }
-            }
-            guard let spin = store.state["tool_settings"].array.first(where: { $0["id"].string == "gap_closing" }) else {
-                throw HostFailure(message: "Auto select must expose Close gaps")
+            try await store.apply(["type": "invoke", "command": "auto_select"])
+            try await store.apply(["type": "invoke", "command": "edges_grow_shrink"])
+            guard let spin = store.state["tool_settings"].array.first(where: { $0["id"].string == "edge_offset" }) else {
+                throw HostFailure(message: "Auto select must expose Edge offset")
             }
             let rows: [(String, JSON, Double, Bool)] = [
                 ("Brush opacity", store.catalog["opacity"], 0, true),
@@ -194,6 +191,7 @@ import SwiftUI
             for _ in 0..<20 { try await Task.sleep(for: .milliseconds(5)) }
         }
         try await store.apply(["type": "invoke", "command": "auto_select"])
+        try await store.apply(["type": "invoke", "command": "edges_grow_shrink"])
         let diameter = store.state["brush"]["diameter"].number
         let size = store.catalog["brush_size"]
         let scrub = try store.resolveNumber(size, value: 1200, operation: ["type": "scrub", "origin": 1200, "pixels": 2])
@@ -206,8 +204,8 @@ import SwiftUI
             precondition(fractional["value"].number == 1200.5 && fractional["text"].string == "1200.5 px"
                 && fractional["edit"].string == "1200.5")
         }
-        func setting() -> JSON { store.state["tool_settings"].array.first { $0["id"].string == "gap_closing" } ?? JSON() }
-        precondition(!setting().isNull, "Auto select must expose Close gaps")
+        func setting() -> JSON { store.state["tool_settings"].array.first { $0["id"].string == "edge_offset" } ?? JSON() }
+        precondition(!setting().isNull, "Auto select must expose Edge offset")
         NSApp.setActivationPolicy(.accessory)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 226, height: 700),
             styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -220,8 +218,8 @@ import SwiftUI
         func fields(_ view: NSView) -> [NSTextField] {
             (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap(fields)
         }
-        guard let field = fields(host).first(where: { $0.accessibilityIdentifier() == "number-entry-tool-gap_closing" }) else {
-            throw HostFailure(message: "Missing mounted Close gaps field")
+        guard let field = fields(host).first(where: { $0.accessibilityIdentifier() == "number-entry-tool-edge_offset" }) else {
+            throw HostFailure(message: "Missing mounted Edge offset field")
         }
         func formatted() throws -> String {
             try store.resolveNumber(setting()["numeric"], value: setting()["value"].number, operation: ["type": "format"])["text"].string
@@ -255,7 +253,7 @@ import SwiftUI
         try await key(#selector(NSResponder.moveDown(_:)))
         precondition(setting()["value"].number == 14)
         try await draft("9 +")
-        try await store.apply(["type": "set_tool_setting", "id": "gap_closing", "value": 26])
+        try await store.apply(["type": "set_tool_setting", "id": "edge_offset", "value": 26])
         try await settle()
         precondition(field.stringValue == "9 +", "Snapshots must preserve an unfinished field")
         try await key(#selector(NSResponder.cancelOperation(_:)))

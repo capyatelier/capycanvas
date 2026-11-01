@@ -7,12 +7,21 @@ import {checkProofKeys,checkProofPattern} from './proof-parity.test.mjs';
 import {createDrawing} from './new-drawing-fixture.mjs';
 
 export async function chooseToolActionGroup({call,evaluate,settle},group,command) {
-  const selector=`[data-tool-action-group="${group}"]`;
+  const schema=()=>evaluate(`(()=>{const s=layerApp.state(),e=s.layer_tools.editing_layer;return JSON.stringify([[String(s.document_file.epoch),String(s.toolbar_context_generation),s.brush.preset,String(e?.id??''),e?.mask_selected,String(e?.mask_id??'')],s.tool_settings.map(f=>[f.id,f.numeric,f.group_id]),s.tool_actions.map(a=>[a.command,a.checkable]),s.tool_extra.map(o=>o.Choice?[o.Choice.id,o.Choice.segmented,o.Choice.labeled,o.Choice.columns,o.Choice.beside,o.Choice.items.map(i=>[i.icon,i.action])]:o.Checklist?[o.Checklist.id,o.Checklist.items.map(i=>i.action)]:['gradient',o.Gradient.gradient.destination])],(k,v)=>k==='endpoint_labels'?undefined:typeof v==='bigint'?String(v):v)})()`);
+  const initialSchema=await schema();
+  const choice=await evaluate(`layerApp.state().tool_extra.find(o=>o.Choice?.id===${JSON.stringify(group)})?.Choice`);
+  const selector=choice?.segmented?`[data-tool-choice-bar="${group}"]`:`[data-tool-action-group="${group}"]`;
   await evaluate(`window.toolGroupControl=document.querySelector(${JSON.stringify(selector)})`);
-  const value=await evaluate(`(()=>{const choice=layerApp.state().tool_extra.find(o=>o.Choice?.id===${JSON.stringify(group)})?.Choice;return choice?String(choice.items.findIndex(i=>i.action.command===${JSON.stringify(command)})):${JSON.stringify(command)}})()`);
-  await evaluate(dropdownChoice(selector,value));await settle();
-  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)})===window.toolGroupControl`),true,`${group} dropdown retains identity across choices`);
-  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)}).value`),value);
+  const value=choice?String(choice.items.findIndex(i=>i.action.command===command)):command;
+  if(choice?.segmented){
+    const point=await evaluate(`(()=>{const node=document.querySelector('[data-tool-choice-bar="${group}"] [data-toolbar-segment="${group}-${value}"]');node.scrollIntoView({block:'nearest'});const r=node.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+    for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...point,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});
+  }else await evaluate(dropdownChoice(selector,value));
+  await settle();
+  const next=await evaluate(`layerApp.state().tool_extra.find(o=>o.Choice?.id===${JSON.stringify(group)})?.Choice`);
+  if(initialSchema===await schema()&&JSON.stringify([choice?.segmented,choice?.labeled,choice?.columns,choice?.beside])===JSON.stringify([next?.segmented,next?.labeled,next?.columns,next?.beside]))assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)})===window.toolGroupControl`),true,`${group} control retains identity for the same schema`);
+  if(choice?.segmented)assert.equal(await evaluate(`document.querySelector('[data-tool-choice-bar="${group}"] [data-toolbar-segment="${group}-${value}"]').getAttribute('aria-checked')`),'true');
+  else assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)}).value`),value);
   assert.equal(await evaluate(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)}).selected`),true);
 }
 

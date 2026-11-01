@@ -1503,6 +1503,7 @@ button.new-drawing-preset.disabled { opacity:.4; }
 .toolbar-option.choice-grid svg { width:6px; height:6px; opacity:.45; }
 .toolbar-option.choice-grid > button[aria-pressed="true"] svg { opacity:1; }
 .tool-position-group { display:flex; align-items:center; gap:var(--panel-compound-spacing); }
+.tool-position-group.stacked { flex-direction:column; align-items:stretch; gap:var(--panel-control-spacing); }
 .tool-position-numbers { display:flex; flex:1; min-width:0; flex-direction:column; gap:var(--panel-compound-spacing); }
 .tool-position-numbers .number-control { flex:1; min-width:0; }
 #workspace > :is(.canvas-action-bar, .canvas-notice) .suggested-action { background: var(--accent); color: var(--accent-foreground); }

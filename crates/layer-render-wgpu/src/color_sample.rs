@@ -182,6 +182,7 @@ impl WgpuRasterizer {
         let tx = self.color_sampler.tx.clone();
         let space = self.document_color.space;
         crate::raster::map_then(
+            None,
             &buffer,
             buffer.size(),
             move |data| {

@@ -687,3 +687,9 @@ command-fill-everywhere = Mọi nơi
 command-smooth-region-edges = Làm mịn biên
 
 command-stop-at-colors = Dừng ở màu trên lớp này
+
+command-close-gaps-auto = Tự động
+command-close-gaps-off = Tắt
+command-edges-line-middle = Đến giữa nét
+command-edges-exact = Chính xác
+command-edges-grow-shrink = Mở rộng hoặc thu hẹp

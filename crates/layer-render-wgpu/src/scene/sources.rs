@@ -82,6 +82,7 @@ struct Slot {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     used: u64,
+    created: u64,
     valid: Arc<std::sync::atomic::AtomicBool>,
     lease: Arc<()>,
 }
@@ -396,6 +397,15 @@ impl DecodedTiles {
         Ok((tile, pending))
     }
 
+    pub fn batch_checkpoint(&self) -> u64 { self.clock }
+    pub fn release_batch(&mut self, checkpoint:u64) {
+        for slot in self.slots.iter_mut().filter(|slot|slot.created>checkpoint) {
+            slot.key=None;
+            slot.valid=Arc::new(std::sync::atomic::AtomicBool::new(false));
+            slot.created=0;
+            slot.used=0;
+        }
+    }
     pub fn lease(&self, view: &wgpu::TextureView) -> Option<Arc<()>> {
         self.slots.iter().find(|s| s.view == *view).map(|s| s.lease.clone())
     }
@@ -447,6 +457,7 @@ impl DecodedTiles {
                 texture,
                 view,
                 used: 0,
+                created: 0,
                 valid: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 lease: Arc::new(()),
             });
@@ -465,6 +476,7 @@ impl DecodedTiles {
         if slot.valid.load(Ordering::Acquire) { self.evictions += 1; }
         slot.key = Some(key);
         slot.used = self.clock;
+        slot.created = self.clock;
         let write = crate::submission::CacheWrite::new();
         slot.valid = write.validity();
         Ok((

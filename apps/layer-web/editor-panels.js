@@ -128,7 +128,7 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
           input.toolChoiceChange=change;input.dataset.toolActionGroup=id;
           return {row,input,update(label,items,value){caption.textContent=label;input.update({label,choices:items,value,disabled:items.every(i=>i.enabled===false)});}};
         };
-        const beside=new Map();let grouped;
+        const beside=new Map();let grouped,gridGroup=false;
         for (const option of s.tool_extra) {
           if(option.Gradient){gradient=gradientEditor({app,element,button,icon,dropdown,dispatch});body.append(gradient.node);continue;}
           if(option.Checklist){const field=checklistField({element,button,icon},option.Checklist,dispatch);choices.push([option.Checklist.id,field]);body.append(field.row);continue;}
@@ -153,16 +153,16 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
             body.append(range);continue;
           }
           if(field.group_id!==group){
-            group=field.group_id;grouped=null;const extra=beside.get(field.id);
+            group=field.group_id;grouped=null;gridGroup=false;const extra=beside.get(field.id);
             if(group)body.append(element('h3','',()=>state().tool_extra.find(o=>o.Choice?.beside===field.id)?.Choice.label??state().tool_settings.find(f=>f.id===field.id)?.group??''));
-            if(extra){const row=element('div','tool-position-group');grouped=element('div','tool-position-numbers');row.append(extra.bar,grouped);body.append(row);}
+            if(extra){gridGroup=!!extra.spec.columns;const row=element('div','tool-position-group');row.classList.toggle('stacked',!gridGroup);grouped=element('div','tool-position-numbers');row.append(extra.bar,grouped);body.append(row);}
           }
-          const node=numberField(field.numeric,()=>state().tool_settings.find(f=>f.id===field.id)?.label??"",value=>{if(key===next)dispatch({type:"set_tool_setting",id:field.id,value});},compact||!!grouped);
+          const node=numberField(field.numeric,()=>state().tool_settings.find(f=>f.id===field.id)?.label??"",value=>{if(key===next)dispatch({type:"set_tool_setting",id:field.id,value});},compact||gridGroup);
           node.onReset=()=>{if(key===next)dispatch({type:'reset_tool_setting',id:field.id});};
           if(field.preview)node.onEditPhase=phase=>{if(key===next)dispatch({type:'tool_setting_contact',id:field.id,phase});};
           node.dataset.toolSetting=field.id;
-          if(grouped)node.querySelector('.number-track').hidden=true;
-          if(compact||grouped){const row=element('label','tonal-numeric-row');row.append(element('span','',()=>state().tool_settings.find(f=>f.id===field.id)?.label??''),node);(grouped??body).append(row);}else body.append(node);
+          if(gridGroup)node.querySelector('.number-track').hidden=true;
+          if(compact||gridGroup){const row=element('label','tonal-numeric-row');row.append(element('span','',()=>state().tool_settings.find(f=>f.id===field.id)?.label??''),node);(grouped??body).append(row);}else (grouped??body).append(node);
           numbers.push([field.id,node]);
         }
         const groups=new Set(),rows=new Map();

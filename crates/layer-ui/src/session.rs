@@ -2685,6 +2685,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     })
             }
             CommandId::FillConnected | CommandId::FillEverywhere => idle && matches!(self.layer_interaction.tool, LayerCanvasTool::Region { fill: true, .. }),
+            CommandId::CloseGapsAuto | CommandId::CloseGapsOff => idle && self.layer_interaction.tool.region().is_some_and(|(fill, _, contiguous)| contiguous && (!fill || self.region_tools.scope != FillScope::Everywhere)),
+            CommandId::EdgesLineMiddle | CommandId::EdgesExact | CommandId::EdgesGrowShrink => idle && self.layer_interaction.tool.region().is_some(),
             CommandId::StopAtColors => idle && self.layer_interaction.tool.region().is_some_and(|(_, source, _)| self.lines_from(source) == RegionSource::Reference),
             CommandId::SmoothRegionEdges => idle && self.layer_interaction.tool.region().is_some_and(|(fill, _, _)| fill),
             CommandId::SelectionVisible => idle && (self.layer_interaction.tool.selection_tool().is_some() || self.layer_interaction.tool.region().is_some()),
@@ -2812,6 +2814,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             || (id == CommandId::FillConnected && self.region_tools.scope == FillScope::Connected)
             || (id == CommandId::FillEverywhere && self.region_tools.scope == FillScope::Everywhere)
             || (id == CommandId::StopAtColors && self.region_tools.stop_at_colors)
+            || (id == CommandId::CloseGapsAuto && self.region_tools.refinement.close_gaps)
+            || (id == CommandId::CloseGapsOff && !self.region_tools.refinement.close_gaps)
+            || matches!((id,self.region_tools.refinement.edges),
+                (CommandId::EdgesLineMiddle, layer_render::RegionEdges::LineMiddle)
+                | (CommandId::EdgesExact, layer_render::RegionEdges::Exact)
+                | (CommandId::EdgesGrowShrink, layer_render::RegionEdges::GrowShrink(_)))
             || (id == CommandId::SmoothRegionEdges && self.region_tools.refinement.smooth_edges)
             || (id == CommandId::SelectionAntialias && self.selection_tools.options.antialias)
             || (id == CommandId::SelectionConstrainAngles && self.selection_tools.options.constrain_angles)
@@ -5421,6 +5429,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if source == RegionSource::Reference && self.engine.document().scene().references().is_empty() { self.notify_missing_reference(); }
                 Ok((BRUSH | COMMANDS, false))
             }
+            CommandId::CloseGapsAuto | CommandId::CloseGapsOff | CommandId::EdgesLineMiddle | CommandId::EdgesExact | CommandId::EdgesGrowShrink => {
+                match command {
+                    CommandId::CloseGapsAuto | CommandId::CloseGapsOff => self.region_tools.refinement.close_gaps = command == CommandId::CloseGapsAuto,
+                    CommandId::EdgesLineMiddle => self.region_tools.refinement.edges = layer_render::RegionEdges::LineMiddle,
+                    CommandId::EdgesExact => self.region_tools.refinement.edges = layer_render::RegionEdges::Exact,
+                    _ => self.region_tools.refinement.edges = layer_render::RegionEdges::GrowShrink(0),
+                }
+                self.region_tools.cancel(); self.refresh_tools();
+                Ok((BRUSH | COMMANDS, false))
+            }
             CommandId::StopAtColors => {
                 self.region_tools.stop_at_colors = !self.region_tools.stop_at_colors;
                 self.region_tools.cancel(); self.refresh_tools();
@@ -5942,6 +5960,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .collect()
         };
         self.sync_retouch();
+        self.prepare_region_tools();
         if self.layer_interaction.tool.region().is_some_and(|(fill, _, _)| fill) {
             self.state.tool_actions.push(ToolSettingAction { command: CommandId::SmoothRegionEdges, checkable: true });
             if matches!(self.layer_interaction.tool, LayerCanvasTool::Region { fill: true, .. }) {
@@ -5999,10 +6018,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             if kind == SelectionTool::Tonal {self.selection_tools.options.tonal.controls(&self.state.localization)}
             else if kind == SelectionTool::Brush { self.selection_tools.options.brush.controls(&self.state.localization) }
             else if kind.geometric() { self.selection_tools.options.controls(&self.state.localization) } else { Vec::new() }
-        } else if let Some((fill, _, contiguous)) = self.layer_interaction.tool.region() {
+        } else if let Some((fill, _, _)) = self.layer_interaction.tool.region() {
             let mut controls = self.region_tools.controls(&self.state.localization);
             if !fill { controls.retain(|c| c.id != "grain_depth"); }
-            if !contiguous || fill && matches!(self.layer_interaction.tool, LayerCanvasTool::Region { .. }) && self.region_tools.scope == FillScope::Everywhere { controls.retain(|c| c.id != "gap_closing"); }
             if fill {
                 controls.extend(
                     tool_settings::controls(self.state.brush.preset, self.engine.configured_brush(), &self.state.localization)
@@ -6103,6 +6121,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     /// Reapply visibility-dependent sampling after a host attaches its GPU.
     pub fn sync_renderer_telemetry(&mut self) {
+        self.prepare_region_tools();
         self.engine.backend_mut().set_clipping_preview(self.state.histogram.shadows, self.state.histogram.highlights);
         self.engine.backend_mut().set_telemetry_enabled(
             (self.state.workspace.layout.active_panel(Panel::Stats) == Some(Panel::Stats)
@@ -6146,6 +6165,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if regions & regions::COMMAND_SEARCH != 0 {
             self.command_search.revision += 1;
         }
+        if regions & (regions::DOCUMENT|regions::BRUSH)!=0 {self.prepare_region_tools();}
         self.update_shader_idle();
         self.update_toolbar_context();
         self.note_tool();
@@ -8713,29 +8733,19 @@ mod tests {
         invoke(&mut s, CommandId::AutoSelect);
         assert_eq!(s.state.tool_set.subtools.len(), 8);
         assert_eq!(s.state.tool_settings[0].id, "tolerance");
-        assert_eq!(s.state.tool_settings.len(), 4);
+        assert_eq!(s.state.tool_settings.len(), 2);
         assert!(s.region_tools.refinement.smooth_edges);
-        for (id, value) in [("gap_closing", 3.), ("expansion", -2.)] {
-            s.dispatch(UiAction::SetToolSetting {
-                id: id.into(),
-                value,
-            })
-            .unwrap();
-            assert_eq!(
-                s.state
-                    .tool_settings
-                    .iter()
-                    .find(|c| c.id == id)
-                    .unwrap()
-                    .value,
-                value
-            );
-        }
+        invoke(&mut s, CommandId::CloseGapsOff);
+        invoke(&mut s, CommandId::EdgesGrowShrink);
+        s.dispatch(UiAction::SetToolSetting { id: "edge_offset".into(), value: -2. }).unwrap();
+        assert_eq!(s.state.tool_settings.iter().find(|c| c.id == "edge_offset").unwrap().value, -2.);
         let refinement = s.region_tools.refinement;
         for (id, value) in [
-            ("gap_closing", 33.),
-            ("expansion", -33.),
-            ("gap_closing", 1.5),
+            ("edge_offset", 33.),
+            ("edge_offset", -33.),
+            ("edge_offset", 1.5),
+            ("gap_closing", 0.),
+            ("expansion", 0.),
             ("smoothing", f32::NAN),
         ] {
             assert!(
@@ -8758,7 +8768,7 @@ mod tests {
         assert_eq!(scope,&SceneScope::All);
         assert_eq!(snapshot.artwork,s.engine.document().artwork);
         assert!(request.limit.is_none());
-        s.renderer_mut().region_reply = Some(RegionResult {
+        s.renderer_mut().region_reply = Some(RegionResult { underfill: None,
             tonal_sample: None,
             placement: layer_core::Affine::IDENTITY,
             request_id: request.request_id,
@@ -8809,7 +8819,7 @@ mod tests {
             request.limit.as_ref().unwrap().affine,
             layer_core::Affine::IDENTITY
         );
-        s.renderer_mut().region_reply = Some(RegionResult {
+        s.renderer_mut().region_reply = Some(RegionResult { underfill: None,
             tonal_sample: None,
             placement: layer_core::Affine::IDENTITY,
             request_id: request.request_id,
@@ -8842,7 +8852,7 @@ mod tests {
         let request = s.renderer_mut().region_requests.last().unwrap().clone();
         let before = s.engine.document().working.selection.clone();
         invoke(&mut s, CommandId::Hand);
-        s.renderer_mut().region_reply = Some(RegionResult {
+        s.renderer_mut().region_reply = Some(RegionResult { underfill: None,
             tonal_sample: None,
             placement: layer_core::Affine::IDENTITY,
             request_id: request.request_id,
@@ -8871,7 +8881,7 @@ mod tests {
             snapshot.view().with_scope(&scope).order().iter().copied().filter(|h| snapshot.view().with_scope(&scope).includes(*h) && snapshot.view().occurrence(*h).unwrap().visible).collect::<Vec<_>>(),
             [id]
         );
-        s.renderer_mut().region_reply = Some(RegionResult {
+        s.renderer_mut().region_reply = Some(RegionResult { underfill: None,
             tonal_sample: None,
             placement: layer_core::Affine::IDENTITY,
             request_id: request.request_id,
@@ -8899,7 +8909,7 @@ mod tests {
             value: 0.75,
         })
         .unwrap();
-        s.renderer_mut().region_reply = Some(RegionResult {
+        s.renderer_mut().region_reply = Some(RegionResult { underfill: None,
             tonal_sample: None,
             placement: layer_core::Affine::IDENTITY,
             request_id: request.request_id,

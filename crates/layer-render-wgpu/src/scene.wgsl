@@ -161,6 +161,9 @@ fn scene_value(v: Vertex) -> vec4<f32> {
         if !FILL_PAPER && op==11u && settings.options.y>=16. {
             return select(dst*(1.-src.a),dst,settings.options.w>.5);
         }
+        if op==6u && settings.options.z>.5 && scene_read(scene_extra,v).a>.5 {
+            return dst+src*select(1.-dst.a,0.,settings.options.w>.5);
+        }
         if settings.options.w > .5 {
             return vec4<f32>(src.rgb * dst.a + dst.rgb * (1. - src.a), dst.a);
         }

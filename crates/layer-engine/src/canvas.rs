@@ -652,7 +652,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 && self.selection_display.is_none()
                 && s.needs_resample(&preview.transform.placement)
         })?;
-        Some(layer_render::RegionRequest {
+        Some(layer_render::RegionRequest { reference_count: None, paper: None,
             enclosure: None, contiguous: false,
             selection: None,
             request_id,

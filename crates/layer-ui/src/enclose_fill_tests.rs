@@ -22,7 +22,7 @@ mod enclose_fill_checks {
 
     fn reply(s: &mut UiSession<Recorder>, request: &RegionRequest) -> Arc<SelectionPixels> {
         let pixels = Arc::new(SelectionPixels::bytes([8, 1], [0, 0, 8, 1], vec![0xffffffff; 2]).unwrap());
-        s.renderer_mut().region_reply = Some(RegionResult {
+        s.renderer_mut().region_reply = Some(RegionResult { underfill: None,
             request_id: request.request_id, pixels: pixels.clone(),
             placement: layer_core::Affine::IDENTITY, tonal_sample: None,
         });
@@ -127,9 +127,12 @@ mod enclose_fill_checks {
             for command in [CommandId::EncloseFill, CommandId::Fill] {
                 invoke(&mut s, command);
                 assert!(s.command(command).selected);
+                invoke(&mut s, CommandId::EdgesLineMiddle);
                 assert_eq!(s.state.tool_settings.iter().map(|setting| setting.id).collect::<Vec<_>>(),
-                    ["grain_depth", "tolerance", "gap_closing", "expansion", "opacity"]);
-                for (id, value) in [("tolerance", 0.25), ("gap_closing", 3.), ("expansion", -2.)] {
+                    ["grain_depth", "tolerance", "opacity"]);
+                invoke(&mut s, CommandId::CloseGapsOff);
+                invoke(&mut s, CommandId::EdgesGrowShrink);
+                for (id, value) in [("tolerance", 0.25), ("edge_offset", -2.)] {
                     s.dispatch(UiAction::SetToolSetting { id: id.into(), value }).unwrap();
                 }
                 for (source_command, scope) in [
@@ -153,8 +156,8 @@ mod enclose_fill_checks {
                     assert_eq!(request.enclosure.is_some(), command == CommandId::EncloseFill);
                     assert!(request.contiguous);
                     assert_eq!(request.tolerance, 0.25);
-                    assert_eq!(request.refinement.gap_closing, 3);
-                    assert_eq!(request.refinement.expansion, -2);
+                    assert!(!request.refinement.close_gaps);
+                    assert_eq!(request.refinement.edges, layer_render::RegionEdges::GrowShrink(-2));
                     assert!(request.refinement.smooth_edges);
                     assert_eq!(request.source.sources().len(), if source_command == CommandId::SelectionReference { 2 } else { 1 });
                     let layer_render::RegionSource::Scene { scope: actual, .. } = &request.source.sources()[0] else { panic!("scene source"); };
@@ -226,12 +229,14 @@ mod enclose_fill_checks {
             let request = s.renderer_mut().region_requests.last().unwrap().clone();
             s.dispatch(UiAction::SetToolSetting { id: "opacity".into(), value: 0.75 }).unwrap();
             let pixels = reply(&mut s, &request);
+            s.renderer_mut().region_reply.as_mut().unwrap().underfill = Some(pixels.clone());
             s.frame(2, 2).unwrap();
             let operations = s.engine.document().target_operations(target).unwrap();
             assert_eq!(operations.len(), 1);
             assert_eq!(operations[0].coverage.selection, Some(Selection::pixels(pixels)));
-            let layer_core::RasterOperationKind::Fill { color, .. } = operations[0].kind else { panic!("fill operation"); };
+            let layer_core::RasterOperationKind::Fill { color, underfill, .. } = &operations[0].kind else { panic!("fill operation"); };
             assert_eq!(color[3], 0.25);
+            assert_eq!(*underfill, operations[0].coverage.selection);
             assert!(s.engine.document().working.selection.is_none());
             s.frame(3, 3).unwrap();
             let committed = s.engine.document().target_raster(target).unwrap().identity();
@@ -353,7 +358,7 @@ mod enclose_fill_checks {
         enclose(&mut s);
         s.frame(2, 2).unwrap();
         let request = s.renderer_mut().region_requests.last().unwrap().clone();
-        s.renderer_mut().region_reply = Some(RegionResult {
+        s.renderer_mut().region_reply = Some(RegionResult { underfill: None,
             request_id: request.request_id,
             pixels: Arc::new(SelectionPixels::bytes([8, 1], [0; 4], vec![0; 2]).unwrap()),
             placement: layer_core::Affine::IDENTITY, tonal_sample: None,
@@ -517,14 +522,25 @@ mod fill_option_checks {
         for platform in Platform::ALL {
             let mut s = session(platform);
             invoke(&mut s, CommandId::Fill);
+            invoke(&mut s, CommandId::CloseGapsOff);
+            invoke(&mut s, CommandId::EdgesGrowShrink);
+            s.dispatch(UiAction::SetToolSetting { id: "edge_offset".into(), value: -2. }).unwrap();
             invoke(&mut s, CommandId::FillEverywhere);
             invoke(&mut s, CommandId::SmoothRegionEdges);
             let saved = s.editing_state();
+            invoke(&mut s, CommandId::AutoSelect);
+            invoke(&mut s, CommandId::CloseGapsAuto);
+            invoke(&mut s, CommandId::EdgesLineMiddle);
             s.restore_editing(serde_json::from_slice(&serde_json::to_vec(&saved).unwrap()).unwrap()).unwrap();
             assert_eq!(s.region_tools.scope, FillScope::Everywhere);
             assert!(!s.region_tools.refinement.smooth_edges);
+            assert!(!s.region_tools.refinement.close_gaps);
+            assert_eq!(s.region_tools.refinement.edges, layer_render::RegionEdges::GrowShrink(-2));
             for (tool, contiguous, smooth) in [(CommandId::Fill, false, false), (CommandId::AutoSelect, true, true)] {
                 invoke(&mut s, tool);
+                assert_eq!(s.state.tool_extra.iter().any(|option| matches!(option, ToolOption::Choice { id: "close-gaps", .. })), contiguous);
+                assert_eq!(s.command(CommandId::CloseGapsAuto).enabled, contiguous);
+                assert!(s.state.tool_extra.iter().any(|option| matches!(option, ToolOption::Choice { id: "region-edges", .. })));
                 assert!(!s.state.tool_settings.iter().any(|field| field.id == "smoothing"));
                 pen_at(&mut s, 1, PenPhase::Down, [48., 72.]);
                 pen_at(&mut s, 2, PenPhase::Up, [48., 72.]);
@@ -549,4 +565,17 @@ mod fill_option_checks {
         }
     }
 
+}
+
+#[test]
+fn legacy_region_values_survive_session_adoption_and_save() {
+    let mut s = session(Platform::Gtk);
+    let mut saved = s.editing_state();
+    saved.region_values.insert("gap_closing".into(),2.);
+    saved.region_values.insert("expansion".into(),-2.);
+    saved.region_values.insert("smoothing".into(),0.);
+    saved.region_edges = layer_core::RegionEdges::GrowShrink(-2);
+    saved.region_values.insert("edge_offset".into(),-2.);
+    s.restore_editing(saved.clone()).unwrap();
+    assert_eq!(s.editing_state(),saved);
 }

@@ -390,6 +390,7 @@ impl SelectionPainter {
                 readback,
                 size + 32,
                 size,
+                None,
                 extent,
                 true,
                 update.id,

@@ -95,7 +95,7 @@ impl BrushStamps {
         encoder.copy_buffer_to_buffer(&output,0,&readback,0,size);
         r.last_submission=Some(encoder.submit(&r.queue));
         let tx=self.tx.clone();
-        raster::map_then(&readback,size,move|data|Ok(ReadbackImage {request_id:id,width:192,height:192,stride:192,bytes:data.to_vec()}),
+        raster::map_then(None,&readback,size,move|data|Ok(ReadbackImage {request_id:id,width:192,height:192,stride:192,bytes:data.to_vec()}),
             move|result|{let _=tx.send(result);});
         self.pending=Some(readback);
         Ok(true)

@@ -359,19 +359,15 @@ try{
  Expect 'ellipse outline' @(1250,300) 'ink'
  Set-Color '#26B340'
  Select-Tool 'fill'
- $source=Reveal-PanelControl 'tool_settings' 'tool-choice-selection-source'
+ $source=Reveal-PanelControl 'tool_settings' 'tool-choice-selection-source-1'
+ if($source.Current.Name-cne(Label 'selection_visible') -or !$source.Current.IsEnabled){throw 'The native Lines from choice differs from its shared visible source'}
  if(!(Selected 'selection_visible')){
-  $source.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
-  $visible=Control 'tool-action-selection_visible' -Type ([System.Windows.Automation.ControlType]::ListItem) -Arranged
-  if($visible.Current.Name-cne(Label 'selection_visible') -or !$visible.Current.IsEnabled){throw 'The native Lines from choice differs from its shared visible source'}
-  $visible.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
-  $source.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Collapse()
+  Invoke 'tool-choice-selection-source-1'
  }
  Wait-Until {
-  $selected=@($source.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern).Current.GetSelection())
+  $source=Control 'tool-choice-selection-source-1' -Arranged
   (Selected 'selection_visible') -and (Model).state.layer_tools.tool.region.fill -and $source.Current.IsEnabled -and
-   $selected.Count-eq1 -and $selected[0].Current.AutomationId-ceq'tool-action-selection_visible' -and $selected[0].Current.Name-ceq(Label 'selection_visible') -and
-   $source.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Current.ExpandCollapseState-eq[System.Windows.Automation.ExpandCollapseState]::Collapsed
+   $source.Current.ItemStatus-ceq'Selected' -and $source.Current.Name-ceq(Label 'selection_visible')
  } 'Fill did not retain the native and shared All visible layers source'
  $before=@(Rows).Count
  Stroke (Line @(1250,400) @(1250,400) 1)

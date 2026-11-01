@@ -689,3 +689,9 @@ command-fill-everywhere = Überall
 command-smooth-region-edges = Kanten glätten
 
 command-stop-at-colors = Bei Farben auf dieser Ebene stoppen
+
+command-close-gaps-auto = Auto
+command-close-gaps-off = Aus
+command-edges-line-middle = Bis zur Linienmitte
+command-edges-exact = Exakt
+command-edges-grow-shrink = Vergrößern oder verkleinern

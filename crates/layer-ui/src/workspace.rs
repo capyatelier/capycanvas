@@ -324,6 +324,10 @@ pub struct EditingState {
     pub region_sources: [crate::RegionSource; 3],
     #[serde(default = "default_enabled")]
     pub region_stop_at_colors: bool,
+    #[serde(default = "default_enabled")]
+    pub region_close_gaps: bool,
+    #[serde(default)]
+    pub region_edges: layer_core::RegionEdges,
     #[serde(default)]
     pub fill_scope: crate::FillScope,
     #[serde(default = "default_enabled")]

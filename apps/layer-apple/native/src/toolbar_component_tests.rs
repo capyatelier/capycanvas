@@ -35,7 +35,7 @@ fn apple_enclose_fill_flat_choices_and_source_use_native_transport() {
                 let state = app.state();
                 let choice = &state["tool_extra"].as_array().unwrap().iter()
                     .find(|item| item["Choice"]["id"] == "selection-source").unwrap()["Choice"];
-                assert_eq!(choice["segmented"], false);
+                assert_eq!(choice["segmented"], true);
                 assert_eq!(choice["items"].as_array().unwrap().iter().map(|item| item["label"].clone()).collect::<Vec<_>>(),
                     [label("selection_reference"), label("selection_visible"), label("selection_editing")]);
                 app.action(choice["items"].as_array().unwrap().iter()

@@ -3806,10 +3806,12 @@ impl CanvasRenderer for WgpuRasterizer {
                 && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting())
             || self.scale_display.as_ref().is_some_and(|cache| cache.has_pending_work(self))
             || self.paper_shade_work_pending()
+            || self.regions.as_ref().is_some_and(|regions|regions.background_pending()) && flood::fits(self.document_extent,&self.device.limits()) && self.startup.as_ref().is_none_or(|startup|startup.compiler.is_idle())
     }
     fn prepare_retouch(&mut self, retouch: Option<&layer_render::RetouchPreparation>) {
         self.prepare_retouch_sources(retouch);
     }
+    fn prepare_regions(&mut self,regions:Option<&layer_render::RegionPreparation>) {self.prepare_region_cache(regions);}
     fn take_retouch_miss(&mut self) -> Option<StrokeId> {
         self.retouch.as_mut()?.take_miss()
     }
@@ -4228,6 +4230,7 @@ impl WgpuRasterizer {
         if let Some(t) = &mut self.transforms {
             t.begin_frame();
         }
+        if let Some(regions)=&mut self.regions {regions.changed(packet);}
         let context = self.frame_context(packet);
         let packet = FramePacket { scene: packet.scene.with_context(&context), ..packet };
         let started = self.telemetry.enabled.then(web_time::Instant::now);
@@ -5131,6 +5134,7 @@ impl WgpuRasterizer {
             || self.transform_preview.is_some()
             || self.artwork_frame.as_ref().is_none_or(|old| !old.same_artwork(packet));
         self.prefetch_retouch(&frame, moving, &mut encoder)?;
+        self.prefetch_regions(&frame,&mut encoder)?;
         self.uploads.finish(&encoder);
         if let Some(started) = started { cpu_phases[4] = started.elapsed().as_secs_f64() * 1000.; }
         trace_phase.next(c"capy.publication");
@@ -5141,6 +5145,7 @@ impl WgpuRasterizer {
         let backup=self.display_backup.take();
         self.retire_display_resources(&mut encoder, trim, backup);
         let submission = encoder.submit(&self.queue);
+        self.region_chunks_submitted();
         self.telemetry.submitted(&self.queue);
         self.last_submission = Some(submission.clone());
         if evaluated_objects { self.evaluated_object_revision = Some(packet.scene.revision()); }

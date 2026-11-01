@@ -1926,7 +1926,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let brush = self.engine.brush();
         let mut color = brush.color_rgba_linear;
         color[3] *= brush.opacity;
-        layer_core::RasterOperationKind::Fill {
+        layer_core::RasterOperationKind::Fill { underfill: None,
             texture: self.fill_texture(),
             color,
             alpha_locked: self
@@ -1958,7 +1958,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn paint_operation(
         &mut self,
         selection: Option<Selection>,
-        kind: layer_core::RasterOperationKind,
+        mut kind: layer_core::RasterOperationKind,
         colors: &[layer_core::color::RgbColor],
     ) -> Result<(), String> {
         let id = self.engine.document().drawing_content().ok_or("Select a drawing layer")?;
@@ -1968,6 +1968,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("Select a paint layer's content to fill".into());
         }
         let to_local = layer_core::offsets::point(self.engine.document().target_offset(id).map(|v| -v));
+        if let layer_core::RasterOperationKind::Fill { underfill: Some(selection), .. } = &mut kind {
+            *selection = selection.translated(to_local);
+        }
         let placement = if matches!(kind,layer_core::RasterOperationKind::Gradient {..}) { layer_core::Affine::translation(to_local) } else { layer_core::Affine::IDENTITY };
         let domain = self.engine.document().target_extent(id);
         let mut coverage = CoverageSnapshot::reveal_all(self.engine.allocate_coverage_handle(), domain, [0; 2]);

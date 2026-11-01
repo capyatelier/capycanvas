@@ -62,20 +62,19 @@ function Holes([bool]$Filled){
     Wait-Until {$a=Pixel 85 110;$b=Pixel 195 110;(Red $a) -eq $Filled -and (Red $b) -eq $Filled} $(if($Filled){'The enclosed holes did not fill'}else{'The enclosed holes did not clear'}) 15
 }
 function Check-References([long]$Id){
-    $source=Reveal-PanelControl 'tool_settings' 'tool-choice-selection-source'
-    $source.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
-    $top=-1
-    foreach($command in @('selection_reference','selection_visible','selection_editing')){
-        $option=Control ('tool-action-'+$command) -Type ([System.Windows.Automation.ControlType]::ListItem) -Arranged
-        if($option.Current.Name -ne ((Model).state.commands|Where-Object id -eq $command).label -or $option.Current.BoundingRectangle.Top -le $top){throw 'Lines from choices lost their shared names or order'}
-        $top=$option.Current.BoundingRectangle.Top
+    $null=Reveal-PanelControl 'tool_settings' 'tool-choice-selection-source-0'
+    $left=-1
+    $commands=@('selection_reference','selection_visible','selection_editing')
+    for($index=0;$index -lt $commands.Count;$index++){
+        $option=Control ('tool-choice-selection-source-'+$index) -Arranged
+        if($option.Current.Name -ne ((Model).state.commands|Where-Object id -eq $commands[$index]).label -or $option.Current.BoundingRectangle.Left -le $left){throw 'Lines from choices lost their shared names or order'}
+        $left=$option.Current.BoundingRectangle.Left
     }
-    (Control 'tool-action-selection_visible').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
-    Wait-Until {((Model).state.commands|Where-Object id -eq 'selection_visible').selected} 'Lines from did not select All visible layers'
-    $source=Reveal-PanelControl 'tool_settings' 'tool-choice-selection-source';$source.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
-    (Control 'tool-action-selection_reference').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    Invoke 'tool-choice-selection-source-1'
+    Wait-Until {((Model).state.commands|Where-Object id -eq 'selection_visible').selected -and (Control 'tool-choice-selection-source-1').Current.ItemStatus -eq 'Selected'} 'Lines from did not select All visible layers'
+    $null=Reveal-PanelControl 'tool_settings' 'tool-choice-selection-source-0';Invoke 'tool-choice-selection-source-0'
     $references=@{items=$null}
-    Wait-Until {$m=Model;if(!$m -or !(($m.state.commands|Where-Object id -eq 'selection_reference').selected)){return $false};$list=@($m.state.tool_extra.Checklist|Where-Object id -eq 'reference-layers');if($list.Count -ne 1 -or !$list[0]){return $false};$references.items=@($list[0].items);$true} 'Lines from did not select Reference layers and its checklist'
+    Wait-Until {$m=Model;if(!$m -or !(($m.state.commands|Where-Object id -eq 'selection_reference').selected)){return $false};$list=@($m.state.tool_extra.Checklist|Where-Object id -eq 'reference-layers');if($list.Count -ne 1 -or !$list[0]){return $false};$references.items=@($list[0].items);(Control 'tool-choice-selection-source-0').Current.ItemStatus -eq 'Selected'} 'Lines from did not select Reference layers and its checklist'
     $items=$references.items
     $index=@(0..($items.Count-1)|Where-Object {$items[$_].action.action.id -eq $Id})
     if($index.Count -ne 1){throw 'Reference checklist did not publish the authored layer'}
@@ -211,14 +210,20 @@ try {
     Wait-Until {((Model).state.commands|Where-Object id -eq 'enclose_fill').selected} 'Enclose and Fill did not become the tool'
     Texture-Strength 0
     $settings=@((Model).state.tool_settings|ForEach-Object id)
-    foreach($id in 'tolerance','gap_closing','expansion'){
-        if($settings -notcontains $id){throw "Enclose and Fill does not share $id with Fill"}
-        $null=Reveal-PanelControl 'tool_settings' ('tool-setting-'+$id)
-    }
-    foreach($id in 'gap_closing','expansion'){
-        $entry=Control ('tool-setting-'+$id);$entry.SetFocus()
-        $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('0');Key 0x0D
-        Wait-Until {((Model).state.tool_settings|Where-Object id -eq $id).value -eq 0} "Enclose and Fill did not accept $id 0"
+    if($settings -notcontains 'tolerance' -or $settings -contains 'gap_closing' -or $settings -contains 'expansion'){throw 'Enclose and Fill did not replace the old gap and expansion controls'}
+    $null=Reveal-PanelControl 'tool_settings' 'tool-setting-tolerance'
+    foreach($choice in @(@{id='close-gaps';indices=@(0,1)},@{id='region-edges';indices=@(0,2,1)})){
+        foreach($index in $choice.indices){
+            $id=$choice.id;$spec=@((Model).state.tool_extra.Choice|Where-Object id -eq $id)[0]
+            $option=Reveal-PanelControl 'tool_settings' ('tool-choice-'+$id+'-'+$index)
+            if($option.Current.Name -ne $spec.items[$index].label){throw "$id lost its shared choice label"}
+            Invoke ('tool-choice-'+$id+'-'+$index)
+            Wait-Until {$spec=@((Model).state.tool_extra.Choice|Where-Object id -eq $id)[0];$spec.items[$index].selected -and (Control ('tool-choice-'+$id+'-'+$index)).Current.ItemStatus -eq 'Selected'} "$id did not select item $index"
+            if($id -eq 'region-edges'){
+                if((@((Model).state.tool_settings|ForEach-Object id) -contains 'edge_offset') -ne ($index -eq 2)){throw 'Edge offset did not follow Grow or shrink'}
+                if($index -eq 2){$entry=Reveal-PanelControl 'tool_settings' 'tool-setting-edge_offset';$bar=Control 'tool-choice-region-edges' -Arranged;if($entry.Current.BoundingRectangle.Top -lt $bar.Current.BoundingRectangle.Bottom){throw 'Grow or shrink value did not sit below Edges'};foreach($value in @('2','-2','0')){$entry=Reveal-PanelControl 'tool_settings' 'tool-setting-edge_offset';$entry.SetFocus();$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($value);Key 0x0D;Wait-Until {((Model).state.tool_settings|Where-Object id -eq 'edge_offset').value -eq [double]$value} "Edge offset did not accept $value"}}
+            }
+        }
     }
     $null=Reveal-PanelControl 'tool_settings' 'tool-action-smooth_region_edges'
     Invoke 'tool-action-smooth_region_edges'

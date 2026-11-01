@@ -689,3 +689,9 @@ command-fill-everywhere = Partout
 command-smooth-region-edges = Lisser les bords
 
 command-stop-at-colors = S’arrêter aux couleurs de ce calque
+
+command-close-gaps-auto = Auto
+command-close-gaps-off = Désactivé
+command-edges-line-middle = Jusqu’au milieu du trait
+command-edges-exact = Exact
+command-edges-grow-shrink = Agrandir ou réduire

@@ -2265,6 +2265,8 @@ fn native_connected_tools() {
     pump(100);
     let tolerance = named::<crate::number_control::NumberControl>(&w.panel_widget(Panel::ToolSettings), "tool-setting-tolerance");
     edit_number(&tolerance, "15");
+    tool_controls_compact::select_group(&w, "close-gaps", 1);
+    tool_controls_compact::select_group(&w, "region-edges", 1);
     native_pen_path(&w, &[[1000., 750.], [1000., 750.]]);
     pump(350);
     let selected_bounds = || {
@@ -2291,7 +2293,7 @@ fn native_connected_tools() {
     let setting = |id: &str| {
         named::<crate::number_control::NumberControl>(&w.panel_widget(Panel::ToolSettings), &format!("tool-setting-{id}"))
     };
-    edit_number(&setting("gap_closing"), "12");
+    tool_controls_compact::select_group(&w, "close-gaps", 0);
     assert!(ui_session(&w).command(CommandId::SelectionAntialias).selected);
     native_pen_path(&w, &[[1000., 750.], [1000., 750.]]);
     pump(350);
@@ -2328,10 +2330,11 @@ fn native_connected_tools() {
     w.dispatch(UiAction::Invoke {
         command: CommandId::Fill,
     });
-    let reference_source = state(&w).tool_set.subtools[2].action.clone();
+    let reference_source = UiAction::Invoke { command: CommandId::SelectionReference };
     w.dispatch(reference_source);
     pump(100);
-    edit_number(&setting("expansion"), "2");
+    tool_controls_compact::select_group(&w, "region-edges", 2);
+    edit_number(&setting("edge_offset"), "2");
     let fill_raster = || {
         let gpu = w.gpu.borrow();
         let doc = gpu.as_ref().unwrap().session.engine().document();

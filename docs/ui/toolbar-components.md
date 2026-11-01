@@ -194,8 +194,8 @@ standard gap, connector and corner treatment of other tool drawers. Multiple
 horizontal Tool Options components share remaining space in their lane. Vertical components shrink before moving to another column. Components stay
 atomic; child fields are never independent drop destinations.
 
-Segmented choices retain connected icon buttons (for example New/Add/Subtract/
-Intersect selection); list choices such as selection source remain dropdowns.
+Segmented choices retain connected icon buttons, including selection modes and
+the region tools' Lines from, Close gaps and Edges choices.
 Choices with `labeled` put the shared label beside the bar, including Zoom Click
 and Drag. Hosts right-align the joined icon bar in its row; each segment
 is one small tile square (36×36 logical pixels) in Tool Options. GTK Tool Settings
@@ -209,8 +209,8 @@ Panel captions wrap to fit narrow docks.
 Iconless checkable actions use a text checkbox, including Center on click.
 The checkbox keeps its caption in Tool Options and moves into overflow
 as a complete control when the lane is too narrow.
-Grid choices can name a setting through `beside`; the settings panel places the
-compact chooser next to that setting's numeric group under the choice label.
+Choices can name a setting through `beside`; settings panels place grids next to
+the numeric group and radio bars directly above it.
 In horizontal toolbars, icon-only actions stay full tiles while every control with words or
 values (dropdowns, radios, number fields, checkboxes) is the 26px panel control height with 5px
 clear on every side, like the workspace switcher pills; Tool Options separates fields with the tile

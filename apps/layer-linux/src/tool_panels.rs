@@ -414,6 +414,7 @@ impl ToolSettings {
             actions.clear();
             let mut group = "";
             let mut grouped = None::<gtk::Box>;
+            let mut grid_group = false;
             let inline_labels=gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
             let inline_values=gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
             let dropdown_labels=gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
@@ -436,6 +437,7 @@ impl ToolSettings {
                 if group != control.group_id {
                     group = control.group_id;
                     grouped = None;
+                    grid_group = false;
                     let extras = self.extra_fields.borrow();
                     let beside = extras.iter().find(|(option, _)| matches!(option, layer_ui::ToolOption::Choice { beside: Some(id), .. } if *id == control.id));
                     if !group.is_empty() {
@@ -450,19 +452,21 @@ impl ToolSettings {
                         self.form.append(&title);
                         self.headings.borrow_mut().push((control.id, title));
                     }
-                    if let Some((_, field)) = beside {
-                        let row = crate::panel_controls::action_row(crate::panel_controls::COMPOUND_SPACING);
+                    if let Some((option, field)) = beside {
+                        grid_group = matches!(option, layer_ui::ToolOption::Choice { columns: Some(_), .. });
+                        let row = crate::panel_controls::action_row(if grid_group { crate::panel_controls::COMPOUND_SPACING } else { crate::panel_controls::CONTROL_SPACING });
+                        row.set_orientation(if grid_group { gtk::Orientation::Horizontal } else { gtk::Orientation::Vertical });
                         let numbers = gtk::Box::new(gtk::Orientation::Vertical, crate::panel_controls::COMPOUND_SPACING);
                         numbers.set_hexpand(true);
                         row.append(&field.root); row.append(&numbers); self.form.append(&row);
                         grouped = Some(numbers);
                     }
                 }
-                let input = if compact || grouped.is_some() {
+                let input = if compact || grid_group {
                     NumberControl::labeled_inline(control.numeric.clone(), &control.label, &control.tooltip_localized(&workspace.localization()), &inline_labels, &inline_values, workspace.localization().clone())
                 } else { NumberControl::panel(control.numeric.clone(), &control.label, workspace.localization().clone()) };
                 input.fit_spin_width();
-                if grouped.is_some() { input.set_slider_visible(false); }
+                if grid_group { input.set_slider_visible(false); }
                 input.set_widget_name(&format!("tool-setting-{}", control.id));
                 let id = control.id;
                 if control.preview { input.connect_edit_phase(glib::clone!(#[weak] workspace, move |phase| {

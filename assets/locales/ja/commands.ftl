@@ -685,3 +685,9 @@ command-fill-everywhere = すべての領域
 command-smooth-region-edges = 縁を滑らかに
 
 command-stop-at-colors = このレイヤーの色で止める
+
+command-close-gaps-auto = 自動
+command-close-gaps-off = オフ
+command-edges-line-middle = 線の中心まで
+command-edges-exact = 正確
+command-edges-grow-shrink = 拡張・縮小

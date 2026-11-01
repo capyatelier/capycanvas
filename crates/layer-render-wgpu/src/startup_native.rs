@@ -60,6 +60,7 @@ impl Compiler {
     pub fn activity(&self) -> Activity { Activity(self.0.clone()) }
     pub fn input(&self) { self.activity().input(); }
     pub fn idle(&self, idle: bool, speculative_idle: bool) { self.activity().idle(idle, speculative_idle); }
+    pub fn is_idle(&self)->bool {self.0.queue.lock().unwrap().admission.idle}
     pub fn delay(&self) -> std::time::Duration {
         let queue = self.0.queue.lock().unwrap();
         queue.admission.delay(queue.jobs.iter().map(|job| job.priority))
@@ -239,6 +240,33 @@ mod tests {
             "compiler replaced the original cause: {error}");
         drop(compiler);
         finish_shader_compiler_shutdown();
+    }
+
+    #[test]
+    fn region_preparation_parks_during_contact_and_promotes_without_idle() {
+        let renderer=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let flood=crate::flood::Flood::new(&renderer.device);
+        let raw=crate::region_sources::RawRegions::new(&renderer.device);
+        let compiler=Compiler::with_workers(1).unwrap();
+        let (entered,started)=mpsc::channel();let (release,resume)=mpsc::channel();
+        compiler.enqueue(BRUSH,move||{entered.send(()).unwrap();resume.recv_timeout(Duration::from_secs(60)).unwrap();Ok(())});
+        compiler.start();started.recv_timeout(Duration::from_secs(10)).unwrap();
+        let refinement=layer_render::RegionRefinement::default();
+        assert!(!flood.prepare(&compiler,refinement,false,true,OTHER));
+        assert!(!raw.prepare(&compiler,OTHER));
+        compiler.idle(false,false);
+        assert!(!compiler.is_idle());
+        let (sent,done)=mpsc::channel();compiler.enqueue(BRUSH,move||{sent.send(()).unwrap();Ok(())});
+        release.send(()).unwrap();done.recv_timeout(Duration::from_secs(60)).unwrap();
+        assert!(!flood.prepare(&compiler,refinement,false,true,OTHER));
+        assert!(!raw.prepare(&compiler,OTHER));
+        let _=flood.prepare(&compiler,refinement,false,true,BRUSH) & raw.prepare(&compiler,BRUSH);
+        let (sent,done)=mpsc::channel();compiler.enqueue(BRUSH,move||{sent.send(()).unwrap();Ok(())});
+        done.recv_timeout(Duration::from_secs(60)).unwrap();
+        assert!(flood.prepare(&compiler,refinement,false,true,BRUSH) & raw.prepare(&compiler,BRUSH));
+        assert!(!compiler.is_idle());
+        compiler.idle(true,true);finish_jobs(&compiler);
+        drop(compiler);finish_shader_compiler_shutdown();
     }
 
     #[test]

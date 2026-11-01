@@ -237,7 +237,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             preview: (!exact).then(|| 1. / self.state.camera.zoom),
         };
         draft.job = Some((draft.view.radius, exact));
-        self.queue_refine_region(RegionRequest {
+        self.queue_refine_region(RegionRequest { reference_count: None, paper: None,
             enclosure: None, request_id: 0,
             contiguous: false,
             source: layer_render::RegionSource::Modify(Arc::new(modify)),

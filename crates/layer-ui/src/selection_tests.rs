@@ -2,19 +2,53 @@ mod selection_tools_checks {
     use super::*;
 
     #[test]
-    fn whole_pixel_region_controls_accept_slider_scrub_and_text_results() {
-        let mut s = session(Platform::Gtk);
-        invoke(&mut s, CommandId::AutoSelect);
-        let controls: Vec<_> = s.state.tool_settings.iter().filter(|c| matches!(c.id, "gap_closing" | "expansion")).cloned().collect();
-        assert_eq!(controls.len(), 2);
-        for control in controls {
+    fn region_radio_bars_place_whole_pixel_value_under_edges() {
+        for platform in Platform::ALL {
+        let mut s = session(platform);
+        for tool in [CommandId::Fill, CommandId::AutoSelect, CommandId::EncloseFill] {
+            invoke(&mut s, tool);
+            assert!(!s.state.tool_settings.iter().any(|c| matches!(c.id, "gap_closing" | "expansion")));
+            for (id, commands) in [
+                ("selection-source", &[CommandId::SelectionReference, CommandId::SelectionVisible, CommandId::SelectionEditing][..]),
+                ("close-gaps", &[CommandId::CloseGapsAuto, CommandId::CloseGapsOff][..]),
+                ("region-edges", &[CommandId::EdgesLineMiddle, CommandId::EdgesExact, CommandId::EdgesGrowShrink][..]),
+            ] {
+                let items = s.state.tool_extra.iter().find_map(|option| match option {
+                    ToolOption::Choice { id: current, segmented, labeled, columns, beside, items, .. } if *current == id => {
+                        assert!(*segmented); assert_eq!(*labeled,beside.is_none()); assert_eq!(*columns,None); Some(items)
+                    },
+                    _ => None,
+                }).unwrap();
+                assert_eq!(items.iter().map(|item| item.action.clone()).collect::<Vec<_>>(),
+                    commands.iter().map(|command| UiAction::Invoke { command: *command }).collect::<Vec<_>>());
+                assert_eq!(items.iter().map(|item|item.icon).collect::<std::collections::HashSet<_>>().len(),items.len());
+                for command in commands {
+                    invoke(&mut s, *command);
+                    for other in commands { assert_eq!(s.command(*other).selected, command == other); }
+                    let selected = s.state.tool_extra.iter().find_map(|option| match option {
+                        ToolOption::Choice { id: current, items, .. } if *current == id => Some(items.iter().map(|item| item.selected).collect::<Vec<_>>()),
+                        _ => None,
+                    }).unwrap();
+                    assert_eq!(selected, commands.iter().map(|other| command == other).collect::<Vec<_>>());
+                    assert_eq!(s.state.tool_settings.iter().any(|c| c.id == "edge_offset"),
+                        matches!(s.region_tools.refinement.edges, layer_render::RegionEdges::GrowShrink(_)));
+                    let placement=s.state.tool_extra.iter().find_map(|option| match option {
+                        ToolOption::Choice { id:"region-edges", beside, .. }=>Some(*beside),_=>None,
+                    }).unwrap();
+                    assert_eq!(placement,matches!(s.region_tools.refinement.edges,layer_render::RegionEdges::GrowShrink(_)).then_some("edge_offset"));
+                }
+            }
+            let control = s.state.tool_settings.iter().find(|c| c.id == "edge_offset").unwrap().clone();
+            assert_eq!(control.group_id,MessageId::TOOL_CONTROL_GROUP_EDGES.key());
             let fill = control.numeric.resolve(5.5, NumericOperation::Format).unwrap().fill;
             for operation in [NumericOperation::Position { position: fill },
                 NumericOperation::Scrub { origin: 5., pixels: 2., fine: false }, NumericOperation::Expression { text: "5.5".into() }] {
                 let result = control.numeric.resolve(5., operation).unwrap();
                 assert_eq!(result.value, 6.);
                 s.dispatch(UiAction::SetToolSetting { id: control.id.into(), value: result.value as f32 }).unwrap();
+                assert_eq!(s.region_tools.refinement.edges, layer_render::RegionEdges::GrowShrink(6));
             }
+        }
         }
     }
 
@@ -229,7 +263,7 @@ mod selection_tools_checks {
                 layer_core::SelectionPixels::bytes([4, 1], [0, 0, 4, 1], vec![0xff0000ff]).unwrap(),
             );
             let subtracted = Some(layer_core::Selection::pixels(pixels.clone()));
-            s.renderer_mut().region_reply = Some(layer_render::RegionResult {
+            s.renderer_mut().region_reply = Some(layer_render::RegionResult { underfill: None,
                 tonal_sample: None, placement: layer_core::Affine::IDENTITY,
                 request_id: request.request_id, pixels,
             });
@@ -249,7 +283,7 @@ mod selection_tools_checks {
         invoke(&mut s, CommandId::ColorSelect);
         assert_eq!(s.state.tool_set.subtools.len(), 8);
         assert!(!s.state.tool_settings.iter().any(|c| c.id == "gap_closing"));
-        s.region_tools.refinement.gap_closing = 5;
+        s.region_tools.refinement.close_gaps = true;
         for command in [
             CommandId::SelectionVisible,
             CommandId::SelectionEditing,
@@ -262,10 +296,10 @@ mod selection_tools_checks {
             click(&mut s, [40., 60.]);
             let request = s.renderer_mut().region_requests.last().unwrap().clone();
             assert!(!request.contiguous);
-            assert_eq!(request.refinement.gap_closing, 0);
+            assert!(!request.refinement.close_gaps);
             assert!(s.command(command).selected);
             invoke(&mut s, CommandId::Lasso);
-            s.renderer_mut().region_reply = Some(layer_render::RegionResult {
+            s.renderer_mut().region_reply = Some(layer_render::RegionResult { underfill: None,
                 tonal_sample: None,
                 placement: layer_core::Affine::IDENTITY,
                 request_id: request.request_id,
@@ -281,15 +315,7 @@ mod selection_tools_checks {
         invoke(&mut s, CommandId::AutoSelect);
         click(&mut s, [40., 60.]);
         assert!(s.renderer_mut().region_requests.last().unwrap().contiguous);
-        assert_eq!(
-            s.renderer_mut()
-                .region_requests
-                .last()
-                .unwrap()
-                .refinement
-                .gap_closing,
-            5
-        );
+        assert!(s.renderer_mut().region_requests.last().unwrap().refinement.close_gaps);
     }
     #[test]
     fn path_drag_samples_do_not_republish_the_document() {
@@ -391,7 +417,7 @@ mod selection_tools_checks {
                     .any(|c| c.id == "selection_feather")
             );
             assert_eq!(
-                s.state.tool_settings.iter().any(|c| c.id == "gap_closing"),
+                s.state.tool_extra.iter().any(|option| matches!(option, ToolOption::Choice { id: "close-gaps", .. })),
                 tool == SelectionTool::Wand
             );
             invoke(&mut s, CommandId::SelectAll);
@@ -445,7 +471,7 @@ mod selection_tools_checks {
                 original,
                 "no partial history entry"
             );
-            s.renderer_mut().region_reply = Some(layer_render::RegionResult {
+            s.renderer_mut().region_reply = Some(layer_render::RegionResult { underfill: None,
                 tonal_sample: None,
                 placement: layer_core::Affine::IDENTITY,
                 request_id: request.request_id,
@@ -494,7 +520,7 @@ mod selection_tools_checks {
         send(&mut s, PenPhase::Up, [80., 80.]);
         let id = s.renderer_mut().region_requests.last().unwrap().request_id;
         invoke(&mut s, CommandId::SelectionSubtract);
-        s.renderer_mut().region_reply = Some(layer_render::RegionResult {
+        s.renderer_mut().region_reply = Some(layer_render::RegionResult { underfill: None,
                 tonal_sample: None,
                 placement: layer_core::Affine::IDENTITY,
             request_id: id,

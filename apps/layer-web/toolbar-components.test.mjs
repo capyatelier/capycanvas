@@ -188,7 +188,7 @@ export async function checkToolbarComponents({ call, evaluate, settle }) {
     assert.ok(await evaluate(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(['selection_add', 'selection_subtract', 'selection_intersect'][i])}).selected`));
   }
   await invoke('auto_select');
-  assert.ok(await evaluate('!!document.querySelector("[data-toolbar-choice=selection-source]:not(.toolbar-segments)")'));
+  assert.ok(await evaluate('!!document.querySelector("[data-toolbar-choice=selection-source] [role=radio]")'));
   for (const theme of ['light', 'dark']) {
     await send({ type: 'set_theme', theme }); await capture(`selection-${theme}`);
   }

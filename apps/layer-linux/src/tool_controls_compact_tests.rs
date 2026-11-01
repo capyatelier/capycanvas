@@ -1,14 +1,24 @@
 use super::*;
 use serde_json::json;
 
-fn select_group(w: &Rc<Workspace>, id: &str, index: u32) {
+pub(super) fn select_group(w: &Rc<Workspace>, id: &str, index: u32) {
     let panel = w.panel_widget(Panel::ToolSettings);
-    let dropdown = named::<gtk::DropDown>(&panel, &format!("tool-action-group-{id}"));
-    let groups: Vec<_> = state(w).tool_actions.into_iter().filter(|action| action.group().is_some_and(|group| group.id() == id)).collect();
-    let command = groups[index as usize].command;
-    dropdown.set_selected(index);
-    pump(120);
-    assert!(state(w).commands.iter().any(|item| item.id == command && item.selected), "{id} dispatches {command:?}");
+    if let Some(layer_ui::ToolOption::Choice { items, segmented, .. }) = state(w).tool_extra.iter().find(|option| matches!(option, layer_ui::ToolOption::Choice { id: key, .. } if *key == id)) {
+        let action = items[index as usize].action.clone();
+        if *segmented {
+            named::<gtk::ToggleButton>(&panel, &format!("tool-choice-{id}-{index}")).set_active(true);
+        } else {
+            named::<gtk::DropDown>(&panel, &format!("tool-choice-{id}")).set_selected(index);
+        }
+        pump(120);
+        assert!(state(w).tool_extra.iter().any(|option| matches!(option, layer_ui::ToolOption::Choice { items, .. } if items.iter().any(|item| item.action == action && item.selected))));
+    } else {
+        let dropdown = named::<gtk::DropDown>(&panel, &format!("tool-action-group-{id}"));
+        let groups: Vec<_> = state(w).tool_actions.into_iter().filter(|action| action.group().is_some_and(|group| group.id() == id)).collect();
+        let command = groups[index as usize].command;
+        dropdown.set_selected(index);pump(120);
+        assert!(state(w).commands.iter().any(|item| item.id == command && item.selected), "{id} dispatches {command:?}");
+    }
 }
 
 fn assert_gap(panel: &gtk::Widget, before: &str, after: &str, gap: f32, horizontal: bool) {
@@ -60,7 +70,7 @@ fn assert_family(w: &Rc<Workspace>, panel: &gtk::Widget, context: &str) {
 fn assert_spacing(panel: &gtk::Widget, context: &str) {
     let first = match context {
         name if primary_fields(name).is_some() => named::<gtk::Widget>(panel, "tool-setting-size"),
-        "fill" | "enclose-fill" => named::<gtk::Widget>(panel, "tool-setting-grain_depth"),
+        "fill" | "enclose-fill" => named::<gtk::Widget>(panel, "tool-choice-bar-selection-source").parent().unwrap(),
         "zoom" => named::<gtk::Widget>(panel, "tool-choice-bar-zoom-click").parent().unwrap(),
         "eyedropper" => named::<gtk::Widget>(panel, "color-picker-source").parent().unwrap(),
         "gradient" => named::<gtk::Widget>(panel, "tool-choice-bar-gradient-shape"),
@@ -74,12 +84,13 @@ fn assert_spacing(panel: &gtk::Widget, context: &str) {
     if matches!(context, "auto-select" | "rectangle-select" | "polygon-select" | "selection-brush") {
         let mode = if context == "selection-brush" { "tool-action-SelectionAdd" } else { "tool-action-SelectionNew" };
         assert_gap(panel, mode, "selection-actions", 4., false);
-        let first_setting = match context {
-            "auto-select" => "tool-setting-tolerance",
-            "selection-brush" => "tool-setting-selection_brush_size",
-            _ => "tool-setting-selection_feather",
-        };
-        assert_gap(panel, "selection-actions", first_setting, 6., false);
+        if context == "auto-select" {
+            let source = named::<gtk::Widget>(panel, "tool-choice-bar-selection-source").parent().unwrap();
+            assert_widget_gap(panel, &named::<gtk::Widget>(panel, "selection-actions"), &source, 6., false);
+        } else {
+            let first_setting = if context == "selection-brush" { "tool-setting-selection_brush_size" } else { "tool-setting-selection_feather" };
+            assert_gap(panel, "selection-actions", first_setting, 6., false);
+        }
     }
     match context {
         name if primary_fields(name).is_some() => {
@@ -88,7 +99,16 @@ fn assert_spacing(panel: &gtk::Widget, context: &str) {
             }
         }
         "fill" | "enclose-fill" | "auto-select" => {
-            assert_gap(panel, "tool-setting-gap_closing", "tool-setting-expansion", 4., false);
+            let source = named::<gtk::Widget>(panel, "tool-choice-bar-selection-source").parent().unwrap();
+            let close = named::<gtk::Widget>(panel, "tool-choice-bar-close-gaps").parent().unwrap();
+            assert_widget_gap(panel, &source, &close, 4., false);
+            if find_named(panel, "tool-setting-edge_offset").is_some() {
+                assert_gap(panel, "tool-choice-bar-region-edges", "tool-setting-edge_offset", 4., false);
+            } else {
+                let close = named::<gtk::Widget>(panel, "tool-choice-bar-close-gaps").parent().unwrap();
+                let edges = named::<gtk::Widget>(panel, "tool-choice-bar-region-edges").parent().unwrap();
+                assert_widget_gap(panel, &close, &edges, 4., false);
+            }
         }
         "tonal-presets" | "tonal-custom" => {
             let tones = named::<gtk::Widget>(panel, "tool-choice-bar-tonal-tones").parent().unwrap();
@@ -407,8 +427,16 @@ fn native_tool_controls_compact() {
                 if context == "tonal-presets" { w.dispatch(UiAction::Tonal { action: layer_ui::TonalAction::Preset { index: 4 } }); }
                 capture(&w, &output, context, theme, width, &mut reports);
                 if context == "fill" || context == "auto-select" {
-                    spin_edit(&w, "gap_closing", "3*2", 6., &output, theme, width);
-                    spin_edit(&w, "expansion", "-3*2", -6., &output, theme, width);
+                    select_group(&w, "close-gaps", 1);select_group(&w, "close-gaps", 0);
+                    select_group(&w, "region-edges", 2);
+                    let panel = w.panel_widget(Panel::ToolSettings);
+                    let edges = named::<gtk::Widget>(&panel, "tool-choice-bar-region-edges");
+                    let offset = named::<gtk::Widget>(&panel, "tool-setting-edge_offset");
+                    let a = edges.compute_bounds(&panel).unwrap();let b = offset.compute_bounds(&panel).unwrap();
+                    assert!(b.y() >= a.y() + a.height() && b.x() >= a.x() && b.x() + b.width() <= a.x() + a.width(), "offset is below Edges within its width");
+                    capture_reference(&w, output.join(format!("grow-{context}-{theme:?}-{width}.png")).to_str().unwrap(), 1.);
+                    spin_edit(&w, "edge_offset", "-3*2", -6., &output, theme, width);
+                    select_group(&w, "region-edges", 0);
                 }
                 if context == "enclose-fill" || context == "auto-select" { select_group(&w, "selection-source", 1); select_group(&w, "selection-source", 0); }
                 if context == "tonal-presets" {

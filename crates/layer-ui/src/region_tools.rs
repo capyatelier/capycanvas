@@ -10,6 +10,7 @@ use layer_render::RegionRequest;
 pub enum FillScope { #[default] Connected, Everywhere }
 
 pub(super) struct RegionTools {
+    pub saved_values: std::collections::BTreeMap<String, f32>,
     pub scope: FillScope,
     pub stop_at_colors: bool,
     pub tolerance: f32,
@@ -44,6 +45,7 @@ enum Purpose {
 impl Default for RegionTools {
     fn default() -> Self {
         Self {
+            saved_values: Default::default(),
             scope: FillScope::Connected,
             stop_at_colors: true,
             tolerance: 0.1,
@@ -63,8 +65,8 @@ impl Default for RegionTools {
     }
 }
 impl RegionTools {
-    pub(super) fn fields(&self) -> [(&'static str, MessageId, Option<MessageId>, NumericControl, f32); 4] {
-        let distance = layer_render::RegionRefinement::MAX_DISTANCE as f64;
+    pub(super) fn fields(&self) -> [(&'static str, MessageId, Option<MessageId>, NumericControl, f32); 3] {
+        let distance = layer_render::RegionRefinement::MAX_EDGE_OFFSET as f64;
         [
             ("grain_depth", MessageId::TOOL_SETTING_GRAIN_DEPTH, None, tool_settings::texture_strength_control(), self.texture_strength),
             (
@@ -74,24 +76,14 @@ impl RegionTools {
                 NumericControl::percent(),
                 self.tolerance,
             ),
-            (
-                "gap_closing",
-                MessageId::TOOL_CONTROL_GAP_CLOSING,
-                Some(MessageId::TOOL_CONTROL_GROUP_EDGES),
-                NumericControl::whole_pixels(0., distance),
-                self.refinement.gap_closing as f32,
-            ),
-            (
-                "expansion",
-                MessageId::TOOL_CONTROL_EXPANSION,
-                Some(MessageId::TOOL_CONTROL_GROUP_EDGES),
+            ("edge_offset", MessageId::TOOL_CONTROL_EDGE_OFFSET, Some(MessageId::TOOL_CONTROL_GROUP_EDGES),
                 NumericControl::whole_pixels(-distance, distance),
-                self.refinement.expansion as f32,
-            ),
+                match self.refinement.edges { layer_render::RegionEdges::GrowShrink(value) => value as f32, _ => 0. }),
         ]
     }
     pub fn controls(&self, localizer: &Localizer) -> Vec<ToolSetting> {
         self.fields().into_iter()
+        .filter(|field| field.0 != "edge_offset" || matches!(self.refinement.edges, layer_render::RegionEdges::GrowShrink(_)))
         .map(|(id, label, group, numeric, value)| ToolSetting { preview: false,
             id,
             label: localizer.text(label),
@@ -106,17 +98,22 @@ impl RegionTools {
     pub fn edit(&mut self, id: &str, value: f32, localizer: &Localizer) -> Result<(), String> {
         self.edit_value(id, value).map_err(|reason| reason.message(localizer))
     }
+    pub fn restore_value(&mut self, id: &str, value: f32) -> Result<(), WorkspaceValidationError> {
+        if matches!(id, "gap_closing" | "expansion" | "smoothing") && value.is_finite() {
+            self.saved_values.insert(id.into(), value);
+            Ok(())
+        } else { self.edit_value(id, value) }
+    }
     pub fn edit_value(&mut self, id: &str, value: f32) -> Result<(), WorkspaceValidationError> {
         let (_, label, _, numeric, _) = self.fields().into_iter().find(|field| field.0 == id).ok_or("Unknown region setting")?;
         numeric.validate(value, label)?;
-        if matches!(id, "gap_closing" | "expansion") && value.fract() != 0. {
+        if id == "edge_offset" && value.fract() != 0. {
             return Err(NumericError::WholePixels { label: label.into() }.into());
         }
         match id {
             "tolerance" => self.tolerance = value,
             "grain_depth" => self.texture_strength = value,
-            "gap_closing" => self.refinement.gap_closing = value as u32,
-            "expansion" => self.refinement.expansion = value as i32,
+            "edge_offset" => self.refinement.edges = layer_render::RegionEdges::GrowShrink(value as i32),
             _ => unreachable!(),
         }
         self.cancel();
@@ -207,11 +204,20 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
     pub(super) fn region_controls(&self) -> Vec<ToolOption> {
-        let Some((_, source, _)) = self.layer_interaction.tool.region() else { return Vec::new(); };
+        let Some((fill, source, contiguous)) = self.layer_interaction.tool.region() else { return Vec::new(); };
         let mut controls = vec![ToolOption::Choice { id: "selection-source", label: self.localization().text(MessageId::TOOL_ACTION_GROUP_LINES_FROM),
-            segmented: false, labeled: false, columns: None, beside: None,
+            segmented: true, labeled: true, columns: None, beside: None,
             items: [CommandId::SelectionReference, CommandId::SelectionVisible, CommandId::SelectionEditing].into_iter()
                 .map(|command| { let state = self.command(command); state.choice_item(state.label.clone()) }).collect() }];
+        for (id, label, commands) in [
+            ("close-gaps", MessageId::TOOL_CONTROL_CLOSE_GAPS, &[CommandId::CloseGapsAuto, CommandId::CloseGapsOff][..]),
+            ("region-edges", MessageId::TOOL_CONTROL_GROUP_EDGES, &[CommandId::EdgesLineMiddle, CommandId::EdgesExact, CommandId::EdgesGrowShrink][..]),
+        ] {
+            if id == "close-gaps" && (!contiguous || fill && self.region_tools.scope == FillScope::Everywhere) { continue; }
+            let beside=(id=="region-edges" && matches!(self.region_tools.refinement.edges,layer_render::RegionEdges::GrowShrink(_))).then_some("edge_offset");
+            controls.push(ToolOption::Choice { id, label:self.localization().text(label), segmented:true, labeled:beside.is_none(), columns:None, beside,
+                items:commands.iter().map(|command| {let state=self.command(*command);state.choice_item(state.label.clone())}).collect() });
+        }
         if self.lines_from(source) != RegionSource::Reference { return controls; }
         let scene = self.engine.document().scene();
         let items = scene.order().iter().filter_map(|id| {
@@ -269,6 +275,19 @@ impl<R: CanvasRenderer> UiSession<R> {
         if source == RegionSource::Reference { Some(layer_render::RegionSource::Intersection(sources)) }
         else { sources.pop() }
     }
+    pub(super) fn prepare_region_tools(&mut self) {
+        let Some((_,source,_))=self.layer_interaction.tool.region() else {return;};
+        let source=self.lines_from(source);let doc=self.engine.document();
+        if source==RegionSource::Reference && doc.scene().reference_leaves().is_empty() {self.engine.backend_mut().prepare_regions(None);return;}
+        let target=doc.drawing_target().or(doc.active_target());
+        let reference_count=(source==RegionSource::Reference).then(||doc.scene().reference_leaves().len());
+        let paper=doc.nearest_paper_binding(doc.drawing_content());
+        let Some(source)=self.region_source(source,None,target) else {return;};
+        self.engine.backend_mut().prepare_regions(Some(&layer_render::RegionPreparation {
+            source,reference_count,paper,tolerance:self.region_tools.tolerance,
+            enclosed:matches!(self.layer_interaction.tool,LayerCanvasTool::EncloseFill { .. }),
+        }));
+    }
     fn request_region_at(&mut self, point: Point, enclosure: Option<Selection>, from: Option<layer_render::RegionSource>) {
         let enclosed = enclosure.is_some();
         let Some((fill, source, contiguous)) = self.layer_interaction.tool.region() else {
@@ -308,6 +327,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             return;
         }
         let request = RegionRequest {
+            reference_count: (self.lines_from(self.layer_interaction.tool.region().unwrap().1) == RegionSource::Reference).then(|| doc.scene().reference_leaves().len()),
+            paper: doc.nearest_paper_binding(doc.drawing_content()),
             enclosure: enclosure.map(std::sync::Arc::new), request_id: self.region_tools.generation,
             contiguous,
             selection: if enclosed {
@@ -321,7 +342,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             position: [point.x as u32, point.y as u32],
             tolerance: self.region_tools.tolerance,
             refinement: layer_render::RegionRefinement {
-                gap_closing: if contiguous { self.region_tools.refinement.gap_closing } else { 0 },
+                close_gaps: contiguous && self.region_tools.refinement.close_gaps,
                 smooth_edges: if fill { self.region_tools.refinement.smooth_edges } else { self.selection_tools.options.antialias },
                 ..self.region_tools.refinement
             },
@@ -360,7 +381,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.region_tools.queued = Some(request);
     }
     pub(super) fn queue_selection(&mut self, selection: Selection, options: layer_render::SelectionRefinement) {
-        let request = RegionRequest {
+        let request = RegionRequest { reference_count: None, paper: None,
             enclosure: None, request_id: 0, contiguous: false, selection: Some(options),
             source: layer_render::RegionSource::Selection(std::sync::Arc::new(selection)),
             position: [0, 0], tolerance: 0., refinement: Default::default(), limit: None,
@@ -416,7 +437,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                     Purpose::Region { operation, color, basis } => {
                         let selection = Selection::pixels(result.pixels).transformed(basis).map_err(error)?;
-                        if let Some(operation) = operation {
+                        if let Some(mut operation) = operation {
+                            if let layer_core::RasterOperationKind::Fill { underfill, .. } = &mut operation {
+                                *underfill = result.underfill.map(Selection::pixels).map(|selection| selection.transformed(basis)).transpose().map_err(error)?;
+                            }
                             self.paint_operation(Some(selection), operation, color.as_slice())?;
                             if let Some(vector) = self.region_tools.filled_below.take() { self.notify_filled_below(vector); }
                         } else {

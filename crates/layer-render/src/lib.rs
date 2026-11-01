@@ -506,6 +506,12 @@ pub enum RegionSource {
     Modify(std::sync::Arc<SelectionModify>),
 }
 impl RegionSource {
+    pub fn valid_parameters(&self, reference_count: Option<usize>, tolerance: f32) -> bool {
+        tolerance.is_finite() && (0.0..=1.0).contains(&tolerance)
+            && reference_count.is_none_or(|count| count > 0 && count <= self.sources().len())
+            && !matches!(self, Self::Intersection(sources) if sources.is_empty()
+                || sources.iter().any(|source| !matches!(source, Self::Scene { .. })))
+    }
     pub fn reference(mut snapshot: std::sync::Arc<SceneSnapshot>, leaf: OccurrenceHandle) -> Option<Self> {
         if !snapshot.view().visible(leaf) { return None; }
         let occurrence = std::sync::Arc::make_mut(&mut snapshot).artwork.occurrences.get_mut(leaf)?;
@@ -621,8 +627,25 @@ impl SelectionModify {
             && self.preview.is_none_or(|detail| detail.is_finite() && detail >= 0.)
     }
 }
+#[derive(Clone, Debug, PartialEq)]
+pub struct RegionPreparation {
+    pub source:RegionSource,
+    pub reference_count:Option<usize>,
+    pub paper:Option<layer_core::paper::PaperBinding>,
+    pub tolerance:f32,
+    pub enclosed:bool,
+}
+impl RegionPreparation {
+    pub fn is_valid(&self) -> bool {
+        self.source.valid_parameters(self.reference_count, self.tolerance)
+            && matches!(self.source, RegionSource::Composite | RegionSource::Source(_)
+                | RegionSource::Objects(_) | RegionSource::Scene { .. } | RegionSource::Intersection(_))
+    }
+}
 #[derive(Clone, Debug)]
 pub struct RegionRequest {
+    pub reference_count: Option<usize>,
+    pub paper: Option<layer_core::paper::PaperBinding>,
     pub enclosure: Option<std::sync::Arc<layer_core::Selection>>,
     /// Join neighboring eligible pixels; without an enclosure, keep the seed component.
     pub contiguous: bool,
@@ -636,21 +659,20 @@ pub struct RegionRequest {
     /// Optional limit, expressed in the source's coordinates.
     pub limit: Option<std::sync::Arc<layer_core::Selection>>,
 }
-/// GPU morphology around component discovery. Distances use
-/// document pixels, independently of zoom and the color tolerance.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub use layer_core::RegionEdges;
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RegionRefinement {
-    /// Close passages up to this width before finding the connected component.
-    pub gap_closing: u32,
-    /// Signed square-neighborhood expansion of the resulting region.
-    pub expansion: i32,
+    pub close_gaps: bool,
+    pub edges: RegionEdges,
     pub smooth_edges: bool,
 }
+impl Default for RegionRefinement {
+    fn default() -> Self { Self { close_gaps: true, edges: RegionEdges::LineMiddle, smooth_edges: false } }
+}
 impl RegionRefinement {
-    pub const MAX_DISTANCE: u32 = 32;
+    pub const MAX_EDGE_OFFSET: u32 = 32;
     pub fn is_valid(self) -> bool {
-        self.gap_closing <= Self::MAX_DISTANCE
-            && self.expansion.unsigned_abs() <= Self::MAX_DISTANCE
+        !matches!(self.edges, RegionEdges::GrowShrink(value) if value.unsigned_abs() > Self::MAX_EDGE_OFFSET)
     }
 }
 #[derive(Clone, Debug)]
@@ -659,6 +681,7 @@ pub struct RegionResult {
     pub tonal_sample: Option<TonalSample>,
     /// Immutable, GPU-generated mask in the source's coordinates.
     pub pixels: std::sync::Arc<layer_core::SelectionPixels>,
+    pub underfill: Option<std::sync::Arc<layer_core::SelectionPixels>>,
     /// Maps a coarse preview's pixels onto the source's; identity for every
     /// exact result.
     pub placement: layer_core::Affine,
@@ -818,6 +841,7 @@ pub trait CanvasRenderer {
     /// A retouching tool's target, source and focus points, or None when no
     /// retouching tool is selected. Never blocks.
     fn prepare_retouch(&mut self, _retouch: Option<&RetouchPreparation>) {}
+    fn prepare_regions(&mut self, _regions: Option<&RegionPreparation>) {}
     /// A retouching stroke whose source was not ready while the pen was down.
     /// It must be replayed once, after contact ends. Each stroke is reported
     /// once; renderers without retouch sources report none.
@@ -964,6 +988,53 @@ impl std::error::Error for BackendError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn region_preparation_admits_only_valid_cacheable_sources() {
+        let document = layer_core::Document::new(layer_core::authored::PortableId::random(), 16, 16,
+            layer_core::DocumentNames { paint: "Paint".into(), paper: "Paper".into() });
+        let scene = RegionSource::Scene { snapshot: document.snapshot(), scope: SceneScope::All };
+        let target = SourceTarget::Paint(layer_core::authored::PaintHandle::from_index(0));
+        let object = OccurrenceHandle::from_index(0);
+        let mut preparation = RegionPreparation { source: RegionSource::Composite, reference_count: None,
+            paper: None, tolerance: 0.05, enclosed: false };
+        for source in [RegionSource::Composite, RegionSource::Source(target), RegionSource::Objects(object),
+            scene.clone(), RegionSource::Intersection(vec![scene.clone(), scene.clone()])] {
+            preparation.source = source;
+            for count in [None, Some(1), Some(preparation.source.sources().len())] {
+                preparation.reference_count = count;
+                assert!(preparation.is_valid());
+            }
+            for count in [0, preparation.source.sources().len() + 1] {
+                preparation.reference_count = Some(count);
+                assert!(!preparation.is_valid());
+                assert!(!preparation.source.valid_parameters(Some(count), preparation.tolerance));
+            }
+        }
+        preparation.reference_count = None;
+        for tolerance in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.01, 1.01] {
+            preparation.tolerance = tolerance;
+            assert!(!preparation.is_valid());
+            assert!(!preparation.source.valid_parameters(None, tolerance));
+        }
+        preparation.tolerance = 0.05;
+        let selection = std::sync::Arc::new(layer_core::Selection::empty());
+        for source in [RegionSource::Coverage(target), RegionSource::ObjectCoverage(object),
+            RegionSource::Selection(selection.clone()),
+            RegionSource::TransformedSelection { target, selection: selection.clone(), map: Default::default() },
+            RegionSource::Tonal(Box::new(TonalRequest { source: RegionSource::Composite, bands: vec![], invert: false, probe: None })),
+            RegionSource::Modify(std::sync::Arc::new(SelectionModify { selection, steps: vec![], preview: None }))] {
+            assert!(source.valid_parameters(None, preparation.tolerance));
+            preparation.source = source;
+            assert!(!preparation.is_valid());
+        }
+        for source in [RegionSource::Intersection(vec![]), RegionSource::Intersection(vec![RegionSource::Composite]),
+            RegionSource::Intersection(vec![RegionSource::Intersection(vec![scene])])] {
+            assert!(!source.valid_parameters(None, preparation.tolerance));
+            preparation.source = source;
+            assert!(!preparation.is_valid());
+        }
+    }
 
     #[test]
     fn thumbnail_wire_ids_distinguish_occurrences_and_mask_sources() {

@@ -84,8 +84,9 @@ export async function checkSelectionTools({call, evaluate, settle}) {
     for(const id of ['selection_width','selection_height']) assert.ok(await evaluate(`!!document.querySelector('[data-tool-setting=${id}]')`));
     await contact(mode('selection_fixed_size'));
     await invoke('color_select');
-    for(const id of ['tolerance','expansion']) assert.ok(await evaluate(`!!document.querySelector('[data-tool-setting=${id}]')`));
-    assert.deepEqual(await evaluate(`document.querySelector('[data-tool-action-group="selection-source"]').menuModel().sections.flat().map(o=>o.label)`),['Reference layers','All visible layers','This layer']);
+    await chooseToolActionGroup({call,evaluate,settle},'region-edges','edges_grow_shrink');
+    for(const id of ['tolerance','edge_offset']) assert.ok(await evaluate(`!!document.querySelector('[data-tool-setting=${id}]')`));
+    assert.deepEqual(await evaluate(`[...document.querySelectorAll('[data-tool-choice-bar="selection-source"] [role=radio]')].map(o=>o.ariaLabel)`),['Reference layers','All visible layers','This layer']);
     await chooseToolActionGroup({call,evaluate,settle},'selection-source','selection_visible');
     await mkdir('artifacts/selection-web',{recursive:true});
     for(const theme of ['light','dark']) {

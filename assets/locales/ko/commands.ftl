@@ -685,3 +685,9 @@ command-fill-everywhere = 모든 영역
 command-smooth-region-edges = 가장자리 매끄럽게
 
 command-stop-at-colors = 이 레이어의 색상에서 멈춤
+
+command-close-gaps-auto = 자동
+command-close-gaps-off = 끔
+command-edges-line-middle = 선 중심까지
+command-edges-exact = 정확하게
+command-edges-grow-shrink = 확대 또는 축소

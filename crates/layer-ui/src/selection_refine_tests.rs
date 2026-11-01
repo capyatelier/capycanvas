@@ -31,7 +31,7 @@ mod selection_refine_checks {
         let request = s.renderer_mut().region_requests.last().unwrap().clone();
         let SelectionShape::Pixels(pixels) = mask(word).shape else { unreachable!() };
         let placement = if exact || modify(&request).preview.is_none() { layer_core::Affine::IDENTITY } else { COARSE };
-        s.renderer_mut().region_reply = Some(RegionResult { request_id: request.request_id, tonal_sample: None, pixels, placement });
+        s.renderer_mut().region_reply = Some(RegionResult { underfill: None, request_id: request.request_id, tonal_sample: None, pixels, placement });
         s.frame(now + 1, now + 1).unwrap();
         request
     }

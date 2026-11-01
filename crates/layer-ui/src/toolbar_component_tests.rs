@@ -23,10 +23,12 @@ fn check_choice_items(s: &mut UiSession<Recorder>, id: &str) {
 #[test]
 fn language_refresh_retains_toolbar_editor_schema_and_action_context() {
     let mut s = session(Platform::Gtk);
-    for command in [CommandId::Pen, CommandId::Pencil, CommandId::Brush, CommandId::Blend, CommandId::Fill, CommandId::RectangleSelect, CommandId::Zoom] {
+    for command in [CommandId::Pen, CommandId::Pencil, CommandId::Brush, CommandId::Blend, CommandId::Fill, CommandId::AutoSelect, CommandId::EncloseFill, CommandId::RectangleSelect, CommandId::Zoom] {
         s.dispatch(UiAction::Invoke { command }).unwrap();
         let context = s.state().toolbar_context();
         let initial = s.state().tool_options();
+        for theme in [Theme::Light,Theme::Dark] {
+        s.dispatch(UiAction::SetTheme {theme:Some(theme)}).unwrap();
         for language in UiLanguage::ALL {
             s.set_localization(Localizer::shared(language));
             if command == CommandId::Zoom {
@@ -46,6 +48,13 @@ fn language_refresh_retains_toolbar_editor_schema_and_action_context() {
                 }
             }
             let updated = s.state().tool_options();
+            if s.layer_interaction.tool.region().is_some() {
+                for id in ["selection-source","close-gaps","region-edges"] {
+                    let ToolOption::Choice {segmented,labeled,label,items,..}=updated.iter().find(|option|matches!(option,ToolOption::Choice {id:current,..} if *current==id)).unwrap() else {unreachable!()};
+                    assert!(*segmented && *labeled && !label.is_empty());
+                    assert!(items.iter().all(|item|!item.label.is_empty() && crate::icon_ships(item.icon)));
+                }
+            }
             assert_eq!(initial.len(), updated.len());
             assert!(initial.iter().zip(&updated).all(|(before, after)| before.same_schema(after)));
             assert_eq!(context, s.state().toolbar_context());
@@ -54,6 +63,7 @@ fn language_refresh_retains_toolbar_editor_schema_and_action_context() {
                 different.id = "different-control";
                 assert!(!ToolOption::Numeric(field.clone()).same_schema(&ToolOption::Numeric(different)));
             }
+        }
         }
     }
 }
@@ -1123,7 +1133,7 @@ fn toolbar_field_icons_cover_published_settings_and_exist_in_the_bank() {
 }
 
 #[test]
-fn toolbar_choices_preserve_segmented_modes_and_list_sources() {
+fn toolbar_choices_preserve_region_radio_bars() {
     let mut s = session(Platform::Gtk);
     invoke(&mut s, CommandId::AutoSelect);
     let options = s.state().tool_options();
@@ -1152,7 +1162,7 @@ fn toolbar_choices_preserve_segmented_modes_and_list_sources() {
         o,
         ToolOption::Choice {
             id: "selection-source",
-            segmented: false,
+            segmented: true,
             ..
         }
     )));
@@ -1167,7 +1177,7 @@ fn toolbar_choices_preserve_segmented_modes_and_list_sources() {
                 }
             ))
             .count()
-            == 1
+            == 4
     );
 
     let sizes = [[36., 36.], [36., 144.], [36., 36.]];

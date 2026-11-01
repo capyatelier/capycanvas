@@ -63,7 +63,7 @@ impl Scene {
         if !r.snapshot_worker {
             self.jobs.clear();self.source_jobs.clear();self.used.iter_mut().for_each(scratch::Usage::reset);
             for (coordinate,destination) in &pages {
-                let output=self.bake_output(r,source,*coordinate,coverage,(target,operation),low)?;
+                let output=self.bake_output(r,source,*coordinate,coverage,(target,operation,false),low)?;
                 let _output=self.own(output);
                 let output=if target.is_coverage() {
                     let scalar=self.reserve_format(r,true)?;
@@ -86,12 +86,12 @@ impl Scene {
         let analysis = r.bake_analysis_entries(snapshot, scope, offset, extent)?;
         let prepared_masks = r.bake_mask_pages(snapshot, scope, offset, extent)?;
         if let Some(prepared) = prepared_masks {
-            let masks = r.layer_masks.snapshots.get_mut(&(target, operation)).expect("prepared bake mask inventory");
+            let masks = r.layer_masks.snapshots.get_mut(&(target, operation, false)).expect("prepared bake mask inventory");
             masks.pages = prepared.pages.clone();
             masks._lease = prepared._lease.clone();
         }
         let previous = analysis.map(|entries| std::mem::replace(&mut r.effect_analyses, entries));
-        let live_masks = r.layer_masks.bind_snapshot((target, operation));
+        let live_masks = r.layer_masks.bind_snapshot((target, operation, false));
         let result = (|| {
             for (output, window) in regions {
                 let pages: Vec<_> = pages.iter().filter(|(c, _)| !output.page_local(*c).is_empty()).collect();
@@ -102,7 +102,7 @@ impl Scene {
                 self.image_window = Some(window);
                 self.image_output = Some(output);
                 self.update_images(r, source, output, encoder)?;
-                self.bake_pages(r, source, &pages, coverage, (target, operation), low, encoder)?;
+                self.bake_pages(r, source, &pages, coverage, (target, operation, false), low, encoder)?;
                 if plan.is_some() {
                     r.metrics.image_window_peak_bytes = r.metrics.image_window_peak_bytes.max(self.images.storage_bytes());
                     if multiple {
@@ -113,7 +113,7 @@ impl Scene {
             }
             Ok(())
         })();
-        if let Some(live) = live_masks { r.layer_masks.restore_snapshot((target, operation), live); }
+        if let Some(live) = live_masks { r.layer_masks.restore_snapshot((target, operation, false), live); }
         if let Some(previous) = previous { r.effect_analyses = previous; }
         self.image_window = None; self.image_output = None;
         self.retire_images(|scene| scene.images = images::ImageStages::default());

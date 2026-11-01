@@ -39,7 +39,7 @@ constrain shape geometry instead. Paint selection keeps its two-mode behavior:
 Alt swaps Add/Subtract and Shift chooses Add. All modes have visible controls.
 
 Select by Color shares region classification, tolerance, visible/editing/reference
-sampling, stale-result validation, expansion, and edge smoothing with Auto select.
+sampling, stale-result validation, Edges and anti-aliasing with Auto select.
 `RegionRequest::contiguous` controls whether the GPU keeps only the seed's
 component or all matching pixels. It never downloads image pixels for CPU
 classification. Gap closing applies only to contiguous regions. Disabling
@@ -95,11 +95,18 @@ a mismatch on any reference stops the region. With Reference layers, Stop at
 colours on this layer is on by default and adds the destination to that comparison.
 Enclose and Fill compares each source with transparency instead of a tap colour.
 
-Gap closing seals small breaks before
-region discovery. Expansion and the Smooth edges switch refine the resulting edges. Components
-that reach the canvas boundary or extend outside the loop are excluded. Expansion
-stays inside the loop, and the active selection clips the final paint without
-creating new closed regions. Source pixels are never changed by discovery.
+Close gaps offers Auto and Off. Auto seals compatible line ends at 16 px,
+then tries 32 and 48 px while the tapped region still reaches the canvas edge.
+Off skips seals. Paper grain holes are healed in either mode. A tap on a line
+chooses its nearest side.
+
+Edges offers To line middle (default), Exact and Grow or shrink. To line middle
+carries coverage under the stroke to its centre; Exact keeps the discovered
+boundary. Grow or shrink exposes an offset in image pixels directly below the
+Edges radio bar. Smooth edges is a
+separate switch. Enclose and Fill keeps whole regions inside its loop; the active
+selection clips the final coverage without creating new closed regions. Discovery
+does not change source pixels.
 
 `RegionRequest::enclosure` uses the existing GPU classification and connected
 component pipeline. Classification covers the source before the enclosure is
@@ -111,22 +118,26 @@ No canvas pixels are read back to classify regions. A scene source, such as the
 paths of Fill outside the paths, is captured 16 pages at a time into separate
 tiles that one dispatch classifies, and a single page of vector paths draws
 straight into its tile, so classification records about one pass per page
-(`filling_outside_paths_classifies_captured_pages_in_batches`). Like Bucket, component
-labeling ([`flood.rs`](../../crates/layer-render-wgpu/src/flood.rs)) labels one
-window of at most 2048 × 2048 pixels at a time, keeps labels and exterior flags
-only for the windows' border pixels, joins components across window edges, then
-labels each window again to pack the components it keeps. Beyond the window,
-memory grows with the canvas by one bit per pixel for the eligibility planes and
-four bits for the coverage. A region whose planes or coverage exceed the device's
-storage binding (about 268 million pixels for 128 MiB) is refused with a notice
-before anything is allocated (`CanvasRenderer::region_fits`).
+(`filling_outside_paths_classifies_captured_pages_in_batches`). Component labeling ([`flood.rs`](../../crates/layer-render-wgpu/src/flood.rs))
+uses analysis windows of at most 2048 × 2048 pixels, including an 80 px halo.
+Labels and exterior flags join across window borders before coverage is packed.
+
+Reference classification, paper-grain healing, line bits, distances and bounded
+end/seal lists are cached. Reuse validates source revisions and sampled colours,
+Tolerance and paper. Choosing a region tool or changing its references prepares
+this work page by page in the background; a tap completes needed work when that
+preparation is unfinished. Stop at colours on this layer, seed snapping, seals,
+labeling and Edges run for the current request. Decoded tiles are released between
+reference batches. Full-canvas packed planes and coverage, window scratch and
+bounded seal storage must fit the device's buffer and texture limits; a request
+that does not fit is refused before allocation (`CanvasRenderer::region_fits`).
 
 ## Verification
 
 - Enclosure tests: shared `enclose_fill_checks` covers source defaults, geometry,
   selection clipping, cancellation and history. GPU `layer_tests::enclose_fill`
-  compares complete masks with an independent component oracle, including partial
-  enclosures, canvas edges, alpha thresholds, gap closing and expansion. With a
+  compares complete masks with independent geometry oracles, including partial
+  enclosures, canvas edges, alpha thresholds, Close gaps and Edges. With a
   cold backed paint source, the request must finish by polling alone. On a
   device with 4 MiB storage bindings it checks seed, enclosed and global regions
   labeled across windows, and that a region too large for the device is refused

@@ -689,3 +689,9 @@ command-fill-everywhere = Everywhere
 command-smooth-region-edges = Smooth edges
 
 command-stop-at-colors = Stop at colours on this layer
+
+command-close-gaps-auto = Auto
+command-close-gaps-off = Off
+command-edges-line-middle = To line middle
+command-edges-exact = Exact
+command-edges-grow-shrink = Grow or shrink

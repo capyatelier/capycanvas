@@ -7,6 +7,7 @@ pub(super) fn capture_selection<T: Send + 'static>(
     readback: &wgpu::Buffer,
     size: u64,
     coverage_size: u64,
+    underfill_offset: Option<u64>,
     extent: [u32; 2],
     byte_coverage: bool,
     request_id: u64,
@@ -14,6 +15,7 @@ pub(super) fn capture_selection<T: Send + 'static>(
     convert: impl FnOnce(RegionResult, bool, &[u8]) -> T + Send + 'static,
 ) {
     crate::raster::map_then(
+            None,
         readback,
         size,
         move |bytes| {
@@ -24,8 +26,8 @@ pub(super) fn capture_selection<T: Send + 'static>(
             // One bulk copy into immutable history. A per-word iterator
             // also builds an intermediate Vec and performs slow scalar
             // reads from mapped device memory on mobile GPUs.
-            let words: std::sync::Arc<[u32]> = {
-                let source = &bytes[32..32 + count * 4];
+            let copy_words = |offset: usize, count: usize| {
+                let source = &bytes[offset..offset + count * 4];
                 let mut words = std::sync::Arc::<[u32]>::new_uninit_slice(count);
                 // SAFETY: the fresh, uniquely owned allocation has count
                 // u32 slots. Copy exactly that many initialized bytes;
@@ -42,26 +44,34 @@ pub(super) fn capture_selection<T: Send + 'static>(
                     words.assume_init()
                 }
             };
-            let bounds = if read(coverage_size as usize + 16) == 0 {
+            let bounds_at = |offset: usize| if read(offset + 16) == 0 {
                 [0; 4]
             } else {
-                std::array::from_fn(|i| read(coverage_size as usize + i * 4))
+                std::array::from_fn(|i| read(offset + i * 4))
             };
+            let bounds = bounds_at(coverage_size as usize);
+            let words = copy_words(32, count);
             let pixels = if byte_coverage {
                 layer_core::SelectionPixels::bytes(extent, bounds, words)
             } else {
                 layer_core::SelectionPixels::new(extent, bounds, words)
             }
             .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
+            let band_count = extent[0].div_ceil(8) as usize * extent[1] as usize;
+            let underfill = underfill_offset.map(|offset| {
+                layer_core::SelectionPixels::new(extent, bounds_at(offset as usize-32), copy_words(offset as usize, band_count))
+                    .map(std::sync::Arc::new).map_err(|e|GpuRasterError::MapFailed(e.to_string()))
+            }).transpose()?;
             Ok(convert(
                 RegionResult {
                     request_id,
                     tonal_sample: None,
                     pixels: std::sync::Arc::new(pixels),
+                    underfill,
                     placement: layer_core::Affine::IDENTITY,
                 },
                 read(coverage_size as usize + 20) != 0,
-                &bytes[coverage_size as usize + 32..],
+                &bytes[underfill_offset.map_or(coverage_size as usize+32,|offset|offset as usize+band_count*4)..],
             ))
         },
         move |result| {

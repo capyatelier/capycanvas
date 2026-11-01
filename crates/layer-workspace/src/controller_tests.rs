@@ -1989,16 +1989,15 @@ fn start<S: WorkspaceStore + 'static>(
 
 #[test]
 fn released_or_incomplete_editing_states_keep_readable_fields_without_a_notice() {
-    for version in [1, 3, 999] {
+    for (version, missing) in [(1, "region_edges"), (2, "region_edges"), (3, "region_edges"),
+        (4, "region_edges"), (4, "region_close_gaps"), (4, "preset"), (999, "preset")] {
         let obsolete = version == 1;
         let mut editing = layer_ui::EditingState { version, ..Default::default() };
         if obsolete {
             editing.region_values.insert("smoothing".into(), 0.5);
         }
         let mut editing = serde_json::to_value(editing).unwrap();
-        for field in if obsolete { &["fill_scope", "region_smooth_edges"][..] } else { &["preset"][..] } {
-            editing.as_object_mut().unwrap().remove(*field);
-        }
+        editing.as_object_mut().unwrap().remove(missing);
         let backend = Rc::new(Backend::default());
         let mut stored: serde_json::Value = serde_json::from_str(&backend.database.borrow().encoded().unwrap()).unwrap();
         stored["editing"] = serde_json::Value::String(editing.to_string());
@@ -2007,10 +2006,12 @@ fn released_or_incomplete_editing_states_keep_readable_fields_without_a_notice()
         assert_started(&controller, &mut host, "invalid editing state");
         assert_eq!(notice(&host), None);
         assert!(controller.manager.editing().is_some());
-        assert_eq!(host.session.editing_state().version, 3);
+        assert_eq!(host.session.editing_state().version, 4);
         assert_eq!(host.session.editing_state().fill_scope, layer_ui::FillScope::Connected);
         assert!(host.session.editing_state().region_smooth_edges);
         assert!(host.session.editing_state().region_stop_at_colors);
+        assert!(host.session.editing_state().region_close_gaps);
+        assert_eq!(host.session.editing_state().region_edges, layer_render::RegionEdges::LineMiddle);
     }
 }
 

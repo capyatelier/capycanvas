@@ -127,7 +127,7 @@ fn composite_queries_ignore_inspection_and_need_no_display_texture() {
             }
         }
         assert!(
-            r.request_region(RegionRequest {
+            r.request_region(RegionRequest { reference_count: None, paper: None,
                 enclosure: None, contiguous: true,
                 selection: None,
                 request_id: 2,

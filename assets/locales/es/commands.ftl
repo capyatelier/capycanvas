@@ -689,3 +689,9 @@ command-fill-everywhere = En todas partes
 command-smooth-region-edges = Suavizar bordes
 
 command-stop-at-colors = Detenerse en los colores de esta capa
+
+command-close-gaps-auto = Automático
+command-close-gaps-off = Desactivado
+command-edges-line-middle = Hasta el centro de la línea
+command-edges-exact = Exacto
+command-edges-grow-shrink = Ampliar o reducir

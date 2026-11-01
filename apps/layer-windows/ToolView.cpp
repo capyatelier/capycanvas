@@ -361,7 +361,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                 }
                 if(!labeled)body.Children().Append(bar);
             }
-            auto settings=array(data->state,L"tool_settings");StackPanel numbers{nullptr};
+            auto settings=array(data->state,L"tool_settings");StackPanel numbers{nullptr};bool numbersInline=false;
             for(auto value:settings){
                 auto item=value.GetObject();auto id=str(item,L"id");
                 if(compact&&id==L"tonal_upper")continue;
@@ -380,7 +380,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                     continue;
                 }
                 if(group!=str(item,L"group_id")){
-                    group=str(item,L"group_id");numbers=nullptr;auto anchor=beside.find(id.c_str());
+                    group=str(item,L"group_id");numbers=nullptr;numbersInline=false;auto anchor=beside.find(id.c_str());
                     if(!group.empty()||anchor!=beside.end()){
                         auto heading=label(data,anchor!=beside.end()?str(anchor->second,L"label"):str(item,L"group"),true);heading.Opacity(.55);heading.Margin({0,body.Children().Size()?2.:0.,0,0});body.Children().Append(heading);
                         auto specId=anchor!=beside.end()?str(anchor->second,L"id"):hstring();
@@ -391,12 +391,14 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                     }
                     if(anchor!=beside.end()){
                         auto specId=str(anchor->second,L"id");
+                        numbersInline=num(anchor->second,L"columns")>0;
                         auto grid=choiceGrid(data,anchor->second,L"tool-choice-"+specId,[weak,context](J action){
                             if(auto self=weak.lock();self&&settingsContext(self->data->state)==*context)self->data->dispatch(action);});
-                        Grid row;row.ColumnSpacing(data->panelMetric(L"compound_spacing"));
+                        Grid row;row.ColumnSpacing(data->panelMetric(L"compound_spacing"));row.RowSpacing(data->panelMetric(L"control_spacing"));
                         for(auto width:{GridUnitType::Auto,GridUnitType::Star}){ColumnDefinition column;column.Width({1,width});row.ColumnDefinitions().Append(column);}
                         grid.grid.VerticalAlignment(VerticalAlignment::Center);row.Children().Append(grid.grid);
                         numbers=StackPanel();numbers.Spacing(data->panelMetric(L"compound_spacing"));Grid::SetColumn(numbers,1);row.Children().Append(numbers);body.Children().Append(row);
+                        if(!numbersInline){for(int i=0;i<2;++i){RowDefinition part;part.Height({1,GridUnitType::Auto});row.RowDefinitions().Append(part);}Grid::SetColumnSpan(grid.grid,2);Grid::SetColumn(numbers,0);Grid::SetRow(numbers,1);Grid::SetColumnSpan(numbers,2);}
                         fields.emplace_back([weak,grid,specId]{if(auto self=weak.lock())for(auto option:array(self->data->state,L"tool_extra"))
                             if(auto spec=object(option.GetObject(),L"Choice");str(spec,L"id")==specId)grid.update(self->data,spec);});
                     }
@@ -410,14 +412,15 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                 auto control=number(data,str(item,L"label"),object(item,L"numeric"),
                     [weak,id]{if(auto self=weak.lock())return num(find(array(self->data->state,L"tool_settings"),L"id",id),L"value");return 0.;},
                     [weak,id,context](double value){if(auto self=weak.lock();self&&settingsContext(self->data->state)==*context)
-                        self->data->dispatch(O({{L"type",S(L"set_tool_setting")},{L"id",S(id)},{L"value",N(value)}}));},fields,nullptr,bool(numbers),L"tool-setting-"+id,compact,presentation);
+                        self->data->dispatch(O({{L"type",S(L"set_tool_setting")},{L"id",S(id)},{L"value",N(value)}}));},fields,nullptr,bool(numbers)&&numbersInline,L"tool-setting-"+id,compact,presentation);
                 AutomationProperties::SetAutomationId(control,L"number-root-tool-setting-"+id);
-                if(numbers){
+                if(numbers&&numbersInline){
                     Grid line;line.ColumnSpacing(data->panelMetric(L"control_spacing"));
                     for(auto width:{GridUnitType::Auto,GridUnitType::Star}){ColumnDefinition column;column.Width({1,width});line.ColumnDefinitions().Append(column);}
                     auto text=label(data,str(item,L"label"));text.MinWidth(16);text.VerticalAlignment(VerticalAlignment::Center);line.Children().Append(text);
                     fields.emplace_back([text,title=presentation.title]{text.Text(title());});
                     Grid::SetColumn(control,1);line.Children().Append(control);numbers.Children().Append(line);
+                }else if(numbers){numbers.Children().Append(control);
                 }else if(compact){
                     Grid row;row.ColumnSpacing(data->panelMetric(L"control_spacing"));row.Height(data->controlHeight());
                     ColumnDefinition caption;caption.Width({1,GridUnitType::Auto});row.ColumnDefinitions().Append(caption);

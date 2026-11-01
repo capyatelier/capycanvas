@@ -15,7 +15,7 @@ fn multilayer_4k_fill_replay_matches_incremental_submissions() {
         let operation = RasterOperation {
             placement: layer_core::Affine::IDENTITY,
             coverage: reveal_all(extent, [0, 0]),
-            kind: RasterOperationKind::Fill { texture: Default::default(),
+            kind: RasterOperationKind::Fill { underfill: None, texture: Default::default(),
                 color: [0.1 + (id % 3) as f32 * 0.3, 0.25, 0.55, 0.2],
                 alpha_locked: false,
             },
