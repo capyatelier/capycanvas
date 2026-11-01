@@ -68,6 +68,9 @@ fn button(icon: &str, label: &str, id: &str) -> gtk::Button {
     button.add_css_class("flat");
     button
 }
+fn palette_choice_id(name: &str) -> Option<u64> {
+    name.strip_prefix("palette-choice-")?.parse().ok()
+}
 impl PalettePanel {
     pub fn content_measurement(&self, width: i32) -> (f32, layer_ui::PanelScrollMeasurement) {
         let (_, pitch) = crate::palette_grid::cells(width - 2 * layer_ui::PANEL_CONTENT_INSET as i32);
@@ -267,12 +270,7 @@ impl PalettePanel {
                         return;
                     }
                 }
-                let id = panel
-                    .library
-                    .borrow()
-                    .as_ref()
-                    .and_then(|l| l.palettes.get(row.index() as usize))
-                    .map(|p| p.id);
+                let id = palette_choice_id(&row.widget_name());
                 if let Some(id) = id
                     && panel.apply(Action::SelectPalette { id })
                 {
@@ -1185,6 +1183,22 @@ pub fn show(workspace: &Rc<Workspace>, slot: ColorSlot) {
 #[cfg(test)]
 mod activation_tests {
     use super::*;
+
+    #[test]
+    fn filtered_palette_choice_uses_its_palette_id() {
+        let mut library = ColorLibrary::canonical();
+        let original = library.active_palette().id;
+        library.apply(Action::CreatePalette { name: "Filtered study".into() }).unwrap();
+        let expected = library.active_palette().id;
+        library.apply(Action::SelectPalette { id: original }).unwrap();
+        let rows: Vec<_> = library.matching_palettes("Filtered study")
+            .map(|palette| format!("palette-choice-{}", palette.id)).collect();
+        assert_eq!(rows.len(), 1);
+        let id = palette_choice_id(&rows[0]).unwrap();
+        library.apply(Action::SelectPalette { id }).unwrap();
+        assert_eq!(library.active_palette().id, expected);
+        assert_eq!(palette_choice_id("other-row-149"), None);
+    }
 
     #[test]
     #[ignore = "private display native_palette_entry_composition"]
