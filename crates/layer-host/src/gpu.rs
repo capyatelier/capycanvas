@@ -79,11 +79,20 @@ static PROCESS_GPU: std::sync::Mutex<Option<ProcessGpu>> = std::sync::Mutex::new
 static INITIALIZING: futures_util::lock::Mutex<()> = futures_util::lock::Mutex::new(());
 
 #[cfg(not(target_arch = "wasm32"))]
+fn healthy_cached<T: Clone>(cache: &std::sync::Mutex<Option<T>>, healthy: impl FnOnce(&T) -> bool) -> Result<Option<T>, String> {
+    let mut cached = cache.lock().map_err(|e| e.to_string())?;
+    if cached.as_ref().is_some_and(healthy) { return Ok(cached.clone()); }
+    let retired = cached.take();
+    drop(cached);
+    drop(retired);
+    Ok(None)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn process_gpu(instance: &wgpu::Instance, surface: &wgpu::Surface<'_>,
     localization: &layer_ui::Localizer, power_preference: wgpu::PowerPreference) -> Result<ProcessGpu, String> {
     let _initializing = INITIALIZING.lock().await;
-    let cached = PROCESS_GPU.lock().map_err(|e| e.to_string())?.clone();
-    if let Some(gpu) = cached.filter(|gpu| gpu.watch.failure().is_none()) {
+    if let Some(gpu) = healthy_cached(&PROCESS_GPU, |gpu| gpu.watch.failure().is_none())? {
         return if gpu.factory.adapter().is_surface_supported(surface) { Ok(gpu.clone()) }
             else { Err(layer_ui::gpu_unsupported(localization, "The canvas GPU cannot present this window's surface")) };
     }
@@ -171,6 +180,36 @@ impl DeviceWatch {
 mod tests {
     use super::*;
     use layer_render::CanvasRenderer;
+
+    #[test]
+    fn failed_process_cache_releases_its_owner_before_replacement_outside_the_lock() {
+        use std::sync::{Mutex, atomic::{AtomicBool, Ordering}};
+        struct Owner { released: Arc<AtomicBool>, unlocked: Box<dyn Fn() + Send + Sync> }
+        impl Drop for Owner {
+            fn drop(&mut self) { (self.unlocked)(); self.released.store(true, Ordering::SeqCst); }
+        }
+        let cache = Arc::new(Mutex::new(None));
+        let released = Arc::new(AtomicBool::new(false));
+        let weak_cache = Arc::downgrade(&cache);
+        *cache.lock().unwrap() = Some(Arc::new(Owner { released: released.clone(), unlocked: Box::new(move || {
+            if let Some(cache) = weak_cache.upgrade() { assert!(cache.try_lock().is_ok()); }
+        }) }));
+        assert!(healthy_cached(&cache, |_| false).unwrap().is_none());
+        assert!(cache.lock().unwrap().is_none());
+        assert!(released.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn healthy_process_cache_reuses_its_owner_and_eviction_preserves_siblings() {
+        let owner = Arc::new(());
+        let cache = std::sync::Mutex::new(Some(owner.clone()));
+        let reused = healthy_cached(&cache, |_| true).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&owner, &reused));
+        assert_eq!(Arc::strong_count(&owner), 3);
+        assert!(healthy_cached(&cache, |_| false).unwrap().is_none());
+        assert_eq!(Arc::strong_count(&owner), 2);
+        assert!(Arc::ptr_eq(&owner, &reused));
+    }
 
     #[test]
     fn native_renderer_factory_and_frames_leave_stack_for_their_caller() {
