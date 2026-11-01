@@ -36,6 +36,7 @@ function Recording-Geometry([string]$Phase){
  if($state.process_id -ne $review.Id -or !$state.model.windows_isolated_settings -or $state.window_id -le 0 -or $metrics.process_id -ne $review.Id -or $metrics.window_id -ne $state.window_id){throw 'Recording geometry has foreign drawing metrics'}
  $height=[double]$metrics.panel_metrics.control_height
  if([double]::IsNaN($height) -or [double]::IsInfinity($height) -or $height -le 0){throw 'Recording control height is not a finite positive shared metric'}
+ Scroll-Position (Control 'stroke-recording' -Type ([System.Windows.Automation.ControlType]::Button)) 100
  $button=Control 'stroke-recording' -Type ([System.Windows.Automation.ControlType]::Button) -Arranged
  $bounds=$button.Current.BoundingRectangle;$handle=[IntPtr]$root.Current.NativeWindowHandle;$owner=[uint32]0
  [CapyRecordingPicker]::GetWindowThreadProcessId($handle,[ref]$owner)|Out-Null
