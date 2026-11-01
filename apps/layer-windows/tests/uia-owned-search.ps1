@@ -55,9 +55,10 @@ namespace CapyOwnedSearchTest {
  public static class AutomationElement {
   public static object AutomationIdProperty="id",NameProperty="name",ControlTypeProperty="type",ProcessIdProperty="pid",IsScrollPatternAvailableProperty="scroll_available";
   public static Node RootElement=new Node("desktop",0,0,0);
+  public static Node FromHandle(IntPtr window){return RootElement.Children.Find(node=>node.NativeWindowHandle==window);}
  }
  public class ElementNotAvailableException:Exception{}
- public class Review{public int Id=33;public bool HasExited=false;public int ExitCode=0;public void Refresh(){}}
+ public class Review{public int Id=33;public IntPtr MainWindowHandle=new IntPtr(132146);public bool HasExited=false;public int ExitCode=0;public void Refresh(){}}
 }
 '@
 foreach($name in @('Test-CapySearchItem','Find','Control','Wait-Until')){
@@ -219,3 +220,28 @@ if(@(Menu-Items).Count){throw 'Palette menu census accepted peers on a hidden me
 $surface.IsOffscreen=$false;$visible.BoundingRectangle=[CapyOwnedSearchTest.Rect]::new(1000,1000,80,26)
 if(@(Menu-Items).Count){throw 'Palette menu census accepted peers outside their menu surface'}
 Write-Output 'Palette menu census retains visible owned items and rejects unarranged, hidden-surface and out-of-surface peers.'
+
+$persistenceAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-persistence.ps1'),[ref]$tokens,[ref]$errors)
+if(@($errors).Count){throw ($errors|Out-String)}
+$launch=$persistenceAst.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Launch'},$true)
+$statements=@($launch.Body.EndBlock.Statements)
+$ready=@(for($i=0;$i -lt $statements.Count;$i++){if($statements[$i].Extent.Text.Contains("'Canvas did not start'")){$i}})
+if($ready.Count -ne 1 -or $statements[$ready[0]+1].Left.Extent.Text -ne '$script:root'){throw 'Missing actual persistence readiness and root assignment'}
+& {
+    $review=[CapyOwnedSearchTest.Review]::new()
+    $overlay=[CapyOwnedSearchTest.Node]::new('input-overlay',33,0,0);$overlay.NativeWindowHandle=$review.MainWindowHandle
+    $drawing=[CapyOwnedSearchTest.Node]::new('drawing-window',33,48,48);$drawing.NativeWindowHandle=[IntPtr]131956
+    [CapyOwnedSearchTest.AutomationElement]::RootElement.Children.Clear()
+    foreach($window in @($overlay,$drawing)){[CapyOwnedSearchTest.AutomationElement]::RootElement.Children.Add($window)}
+    $script:root=$overlay;$script:persistenceResolutions=0;$script:persistenceWaitSeconds=$null;$script:persistenceInsideWait=$false;$actualWait=${function:Wait-Until}
+    function Model{[pscustomobject]@{brush_ready=$true}}
+    function Owned-DrawingWindow($Process){if($Process -ne $review -or !$script:persistenceInsideWait){throw 'Persistence resolved outside its readiness wait or for a different process'};$script:persistenceResolutions++;[pscustomobject]@{Root=$drawing;Handle=$drawing.NativeWindowHandle}}
+    function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds){$script:persistenceWaitSeconds=$Seconds;$script:persistenceInsideWait=$true;try{& $actualWait $Condition $Message $Seconds}finally{$script:persistenceInsideWait=$false}}
+    $startup=@();$index=$ready[0]
+    if($index -gt 0 -and $statements[$index-1] -is [Management.Automation.Language.AssignmentStatementAst] -and $statements[$index-1].Left.Extent.Text -eq '$owned'){$startup+=@($statements[$index-1])}
+    $startup+=@($statements[$index],$statements[$index+1])
+    . ([scriptblock]::Create(($startup.Extent.Text -join "`n").Replace('System.Windows.Automation.','CapyOwnedSearchTest.')))
+    if($script:root -ne $drawing){throw 'Persistence launch selected the input overlay instead of its owned drawing'}
+    if($script:persistenceResolutions -ne 1 -or $script:persistenceWaitSeconds -ne 45){throw 'Persistence launch did not resolve its drawing within the original readiness wait'}
+}
+Write-Output 'Persistence launch uses its owned drawing when MainWindowHandle names an input overlay, within its original readiness deadline.'

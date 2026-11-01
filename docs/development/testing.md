@@ -318,7 +318,6 @@ when you fix it. A commit names an unmodified build that reproduces the failure.
 - Windows `exercise-layers.ps1` (Iris Xe, `c5624d37`): "Outer editing edge did not use the accent color"; the PrintWindow probe reads `#A94EC1` for `#A94DC1`, and `-Relationships` reads `#AA50C2` in light theme.
 - Windows matched Web editor captures (`c5624d37`): accent, caption controls, number rows and workspace controls differ; the Web collector looks for the blend button as a `select` and measures Tool Set children beyond their panel clip.
 - Windows `exercise-multiwindow.ps1`: "Pin preferences did not refresh in the inactive window".
-- Windows `exercise-persistence.ps1`: "Missing control: Brush size slider" (the slider is named "Brush size"), and the unreadable database writes a storage diagnostic to stderr.
 - Windows `exercise-pen-buttons.ps1`: Transform is enabled on the empty starting layer.
 - Windows `exercise-proof.ps1`: UI Automation times out choosing sRGB in Proof Setup after save and reopen.
 - iPad XCTest `testCompactMenuShortcutAcrossPages` and `testSettingsTextSelectionShortcut`: XCTest keys don't reach UIKit key commands.
