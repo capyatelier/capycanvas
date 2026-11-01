@@ -78,7 +78,7 @@ export function tabHover(tab, presentation) {
   tab.style.setProperty('--hover-right-foot',hoverFeet[1]);
 }
 export function createWorkspaceChrome({app,state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,draggable,grip,contentPanel,tabLabel,releaseTabs,frameInterval}) {
-  const columns=new Map(),drawers=new Map(),catalog=liveCopy(app,"catalog");
+  const columns=new Map(),drawers=new Map(),markedSources=new Set(),catalog=liveCopy(app,"catalog");
   let resolved,animating=false,tiles=[],previousAnimationFrame=null;
   const send=action=>dispatch({type:"customize",action});
   const local=(b,origin)=>({...b,x:b.x-origin.x,y:b.y-origin.y});
@@ -175,14 +175,22 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
   function markSource(source,direction) {
     if(!source)return;
     source.dataset.drawerFacing=direction;
+    markedSources.add(source);
     // Flatten only ancestor corners whose rounding reaches this active tile.
     const a=source.getBoundingClientRect(),facing={top:[0,1],right:[1,2],bottom:[2,3],left:[0,3]}[direction],vertical=direction==='top'||direction==='bottom';
     for(let node=source.parentElement;node&&node!==workspace;node=node.parentElement) {
       const b=node.getBoundingClientRect(),corners=[[b.left,b.top],[b.right,b.top],[b.right,b.bottom],[b.left,b.bottom]],style=getComputedStyle(node);
       const radii=[style.borderTopLeftRadius,style.borderTopRightRadius,style.borderBottomRightRadius,style.borderBottomLeftRadius].map(r=>Math.max(.5,parseFloat(r)||0));
       const square=facing.filter(i=>{const[x,y]=corners[i],[rx,ry]=vertical?[radii[i],.5]:[.5,radii[i]];return x>=a.left-rx&&x<=a.right+rx&&y>=a.top-ry&&y<=a.bottom+ry;});
-      if(square.length)node.dataset.drawerSourceCorners=[...new Set([...(node.dataset.drawerSourceCorners?.split(' ')||[]),...square])].join(' ');
+      if(square.length){node.dataset.drawerSourceCorners=[...new Set([...(node.dataset.drawerSourceCorners?.split(' ')||[]),...square])].join(' ');markedSources.add(node);}
     }
+  }
+  function refreshSource(record) {
+    const anchor=record.drawer.anchor,key=JSON.stringify(anchor);
+    if(record.sourceKey===key&&record.source?.isConnected)return;
+    record.sourceKey=key;
+    record.source=anchor.kind==="header"?workspace.querySelector(`[data-header-item="${anchor.id}"]:not([hidden]) .header-tool`):record.column!=null?workspace.querySelector(`.collapsed-column[data-column="${record.column}"] .column-tab[data-panel="${anchor.origin}"]`):
+      [...workspace.querySelectorAll(`.toolbar-controls[data-panel="${anchor.panel}"] > [data-tile="${anchor.tile}"] > button`)].find(node=>node.getBoundingClientRect().width>0);
   }
   function bridge(node,c) {
     if(!node){node=document.createElementNS("http://www.w3.org/2000/svg","svg");node.classList.add("drawer-bridge");node.setAttribute('aria-hidden','true');workspace.append(node);}
@@ -230,7 +238,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
         });
         record=Object.assign(record??{},{key,root,shadow,bodies,column,drawer,inspector,from,started:null,switching:!!switching,placement:from});drawers.set(id,record);
       }
-      record.drawer=drawer;record.measure=null;
+      record.drawer=drawer;refreshSource(record);record.measure=null;
       record.tabStyle=drawer.tabs?app.group_tab_style(drawer.tabs.group):null;
       const header=record.root.querySelector(':scope > .drawer-tabs');
       if(header&&drawer.tabs&&header.dataset.tabStyle!==record.tabStyle){releaseTabs(header);header.remove();}
@@ -247,8 +255,8 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
   function animate(now) {
     const interval=previousAnimationFrame===null?frameInterval():now-previousAnimationFrame;
     animating=false;let more=false;const measurements=[];
-    for(const node of workspace.querySelectorAll('[data-drawer-facing]'))delete node.dataset.drawerFacing;
-    for(const node of workspace.querySelectorAll('[data-drawer-source-corners]'))delete node.dataset.drawerSourceCorners;
+    for(const node of markedSources){delete node.dataset.drawerFacing;delete node.dataset.drawerSourceCorners;}
+    markedSources.clear();
     for(const[id,r]of drawers) {
       r.started??=now-interval-(!r.closing&&r.switching?catalog.panel_expansion_ms:0);
       if(!r.closing) {
@@ -273,9 +281,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       if(!result || (r.closing&&progress===1)){dispose(r);drawers.delete(id);continue;}
       r.placement=result.placement;r.connection=result.connection;place(r.root,r.placement.bounds);
       place(r.shadow,r.placement.bounds);
-      const anchor=r.drawer.anchor;
-      const source=anchor.kind==="header"?workspace.querySelector(`[data-header-item="${anchor.id}"]:not([hidden]) .header-tool`):r.column!=null?workspace.querySelector(`.collapsed-column[data-column="${r.column}"] .column-tab[data-panel="${anchor.origin}"]`):
-        [...workspace.querySelectorAll(`.toolbar-controls[data-panel="${anchor.panel}"] > [data-tile="${anchor.tile}"] > button`)].find(node=>node.getBoundingClientRect().width>0);
+      const source=r.source;
       r.shadow.style.zIndex=source?.closest('.content-drawer')?"1798":"0";
       if(source&&r.connection)markSource(source,r.placement.direction);
       if(r.connection) {

@@ -289,7 +289,7 @@ test('drawer plans follow exact native tile facts and retire missing sources',()
   let plans=0,placements=0,disposed=0;
   const body={style:{},querySelectorAll:()=>[]},record={column:null,drawer:{anchor:{kind:'tile',panel:'toolbar',tile:2}},bodies:[body],root:{style:{}},shadow:{style:{}},started:0};
   const bounds={x:0,y:0,width:242,height:120},drawers=new Map([['tool',record]]);
-  const context={drawers,tiles:[structuredClone(native)],animating:false,catalog:{panel_expansion_ms:200},previousAnimationFrame:null,frameInterval:()=>16,
+  const context={drawers,markedSources:new Set(),tiles:[structuredClone(native)],animating:false,catalog:{panel_expansion_ms:200},previousAnimationFrame:null,frameInterval:()=>16,
     workspace:{clientWidth:1200,clientHeight:900,querySelectorAll:()=>[]},
     app:{drawer_measure(){plans++;return{measure:context.tiles.length?{placement:{columns:[bounds]}}:null,toolbars:[]};},drawer(){placements++;return{placement:{bounds,columns:[bounds],direction:'right'},connection:null};}},
     contentHeight:()=>120,matchMedia:()=>({matches:false}),place(){},dispose(){disposed++;},dispatch(){},measureColumnDrawers(){},editor:{queuePositions(){}},
@@ -307,12 +307,43 @@ test('drawer plans follow exact native tile facts and retire missing sources',()
   const before=placements;step(null);assert.equal(disposed,1);assert.equal(drawers.has('tool'),false,'A missing native source leaves no drawer record');assert.equal(placements,before,'Missing sources are not placed from a stale plan');
 });
 
+test('drawer ticks clear owned marks without scanning the workspace',()=>{
+  const chrome=readFileSync(new URL('workspace-chrome.js',import.meta.url),'utf8');
+  const bounds={x:10,y:10,left:10,top:10,right:30,bottom:30,width:20,height:20};
+  let queries=0;
+  const workspace={clientWidth:1200,clientHeight:900,querySelectorAll(){queries++;return [visible];}};
+  const ancestor={dataset:{},parentElement:workspace,getBoundingClientRect:()=>bounds};
+  const source={dataset:{},parentElement:ancestor,isConnected:true,getBoundingClientRect:()=>bounds,closest:()=>null};
+  let visible=source;
+  const placement={bounds:{x:40,y:10,width:100,height:100},columns:[],direction:'right'};
+  const record={column:null,drawer:{anchor:{kind:'tile',panel:'toolbar',tile:2}},bodies:[],root:{style:{}},shadow:{style:{}},started:null,source};
+  const context={workspace,markedSources:new Set(),drawers:new Map([['tool',record]]),tiles:[{column:1,anchor:{panel:'toolbar',tile:2},bounds}],
+    animating:true,previousAnimationFrame:null,frameInterval:()=>16,catalog:{panel_expansion_ms:200},
+    getComputedStyle:()=>({borderTopLeftRadius:'8px',borderTopRightRadius:'8px',borderBottomRightRadius:'8px',borderBottomLeftRadius:'8px'}),
+    app:{drawer_measure:()=>({measure:{placement},toolbars:[]}),drawer:()=>({placement,connection:null})},
+    matchMedia:()=>({matches:false}),place(){},dispatch(){},measureColumnDrawers(){},editor:{queuePositions(){}},requestAnimationFrame(){}};
+  const start=chrome.indexOf('  function markSource('),end=chrome.indexOf('  workspace.addEventListener("scroll"',start);
+  runInNewContext(chrome.slice(start,end)+'\nglobalThis.mark=markSource;globalThis.tick=animate;',context);
+  for(const time of [100,116]){
+    context.mark(source,'right');assert.equal(source.dataset.drawerFacing,'right');assert.ok(ancestor.dataset.drawerSourceCorners);
+    context.tick(time);
+    assert.equal(queries,0,'Animation ticks do not query the whole workspace');
+    assert.equal(source.dataset.drawerFacing,undefined);assert.equal(ancestor.dataset.drawerSourceCorners,undefined);
+    assert.equal(context.markedSources.size,0,'Cleared nodes are released');
+  }
+  runInNewContext('globalThis.resolveSource=refreshSource;',context);
+  context.resolveSource(record);context.resolveSource(record);assert.equal(queries,1,'An unchanged anchor retains its source');
+  record.drawer.anchor.tile=3;context.resolveSource(record);assert.equal(queries,2,'An anchor change resolves its source once');
+  source.isConnected=false;visible={...source,isConnected:true};context.resolveSource(record);
+  assert.equal(queries,3);assert.equal(record.source,visible,'A replaced source is reacquired on refresh');
+});
+
 test('drawer progress follows frame deltas through delayed callbacks, close and idle restart',()=>{
   const chrome=readFileSync(new URL('workspace-chrome.js',import.meta.url),'utf8');
   const fixture=(closing=false,switching=false)=>{
     const queries=[],callbacks=[],body={style:{},querySelectorAll:()=>[]},root={style:{},querySelectorAll:()=>[]},bounds={x:48,y:48,width:242,height:120};
     const record={column:46,drawer:{anchor:{kind:'column',column:46,origin:'brushes'}},bodies:[body],root,shadow:{style:{}},started:null,closing,switching};
-    const context={drawers:new Map([[46,record]]),tiles:[],animating:true,previousAnimationFrame:null,catalog:{panel_expansion_ms:200},frameInterval:()=>16,entryTime:101.6,
+    const context={drawers:new Map([[46,record]]),markedSources:new Set(),tiles:[],animating:true,previousAnimationFrame:null,catalog:{panel_expansion_ms:200},frameInterval:()=>16,entryTime:101.6,
       performance:{now:()=>context.entryTime},workspace:{clientWidth:1200,clientHeight:900,querySelectorAll:()=>[],querySelector:()=>null},
       app:{drawer_measure:()=>({measure:{placement:{columns:[bounds]}},toolbars:[]}),drawer(query){queries.push(query);const width=bounds.width*(query.closing?1-query.progress:Math.max(0,query.progress)),placement={...bounds,width};return{placement:{bounds:placement,columns:[placement],direction:'right'},connection:null};}},
       contentHeight:()=>120,matchMedia:()=>({matches:false}),place:(node,box)=>Object.assign(node.style,box),dispose(){},dispatch(){},measureColumnDrawers(){},editor:{queuePositions(){}},requestAnimationFrame:callback=>callbacks.push(callback)};
