@@ -416,7 +416,20 @@ extension XCTestCase {
         try await paperUIFileWork { try FileManager.default.createDirectory(at:root,withIntermediateDirectories:false) }
         let photo = root.appendingPathComponent(fileName + ".png")
         #else
+        guard let providerToken = ProcessInfo.processInfo.environment["CAPY_FILE_TEST_TOKEN"], UUID(uuidString: providerToken) != nil,
+            let provider = ProcessInfo.processInfo.environment["CAPY_UI_PACKAGE_PROVIDER"] else {
+            throw XCTSkip("Paper Library requires the isolated native Files runner provider")
+        }
+        guard provider == "Capy Test Files " + providerToken else { XCTFail("Private runner provider mismatch"); return }
         let folder = "Capy Files " + token
+        func location() throws {
+            workspaceActivate(app.cells["DOC.sidebar.item.On My iPad"])
+            let container = fileProviderRoot(provider, in: app)
+            _ = try XCTUnwrap(container.waitForExistence(timeout: 10) ? container : nil, "The private runner provider must exist")
+            workspaceActivate(container)
+            let directory = app.otherElements["DOC.browsingRoot Source: com.apple.FileProvider.LocalStorage, Title: " + provider]
+            _ = try XCTUnwrap(directory.waitForExistence(timeout: 10) ? directory : nil, "The picker must enter the private runner provider")
+        }
         #endif
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"set_color","rgba":[0.1,0.3,0.9,1]}]"#
         app.launch(); capturePaintEditor(in:app,theme:theme)
@@ -510,7 +523,7 @@ extension XCTestCase {
         #else
         let controls = documentExportControls(in: app)
         let filename = controls.filename, save = controls.commit
-        workspaceActivate(app.cells["DOC.sidebar.item.On My iPad"])
+        try location()
         XCTAssertFalse(app.cells[folder+", Folder"].exists,"Only a fresh owned provider folder")
         workspaceActivate(app.buttons["New Folder"])
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout:10))
@@ -519,8 +532,8 @@ extension XCTestCase {
         replaceEditorText(filename,with:fileName,in:app)
         dismissEditorKeyboard(in:app)
         workspaceActivate(save);XCTAssertTrue(save.waitForNonExistence(timeout:30))
-        let provider = XCTAttachment(string:"Owned provider folder: "+folder+"; one normal exported PaperScan.png; retain for exact scoped cleanup")
-        provider.name="paper-provider-owned-folder-"+theme;provider.lifetime = .keepAlways;add(provider)
+        let proof = XCTAttachment(string:"Private runner provider: "+provider+"; owned folder: "+folder+"; one normal exported PaperScan.png; retain for exact scoped cleanup")
+        proof.name="paper-provider-owned-folder-"+theme;proof.lifetime = .keepAlways;add(proof)
         #endif
         XCTAssertEqual(app.state,.runningForeground)
         createDrawing()
@@ -627,7 +640,7 @@ extension XCTestCase {
         captureState("import-file-selected")
         workspaceActivate(open);XCTAssertTrue(open.waitForNonExistence(timeout:20))
         #else
-        workspaceActivate(app.cells["DOC.sidebar.item.On My iPad"])
+        try location()
         workspaceActivate(app.cells[folder+", Folder"])
         XCTAssertTrue(app.otherElements["DOC.browsingRoot Source: com.apple.FileProvider.LocalStorage, Title: "+folder].waitForExistence(timeout:15))
         let file=fileProviderFile(fileName+".png",in:app).images.firstMatch

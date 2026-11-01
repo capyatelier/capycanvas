@@ -538,17 +538,20 @@ extension EditorLaunchTests {
         func folderTitle(_ label: String) -> XCUIElement {
             app.otherElements["DOC.browsingRoot Source: com.apple.FileProvider.LocalStorage, Title: " + label]
         }
-        func location() {
+        func location() throws {
             workspaceActivate(app.cells["DOC.sidebar.item.On My iPad"])
-            XCTAssertTrue(folderTitle("On My iPad").waitForExistence(timeout: 10))
+            _ = try XCTUnwrap(folderTitle("On My iPad").waitForExistence(timeout: 10) ? folderTitle("On My iPad") : nil)
             let container = fileProviderRoot(provider, in: app)
-            XCTAssertTrue(container.waitForExistence(timeout: 10)); workspaceActivate(container)
-            XCTAssertTrue(folderTitle(provider).waitForExistence(timeout: 10))
+            _ = try XCTUnwrap(container.waitForExistence(timeout: 10) ? container : nil, "The private runner provider must exist")
+            workspaceActivate(container)
+            _ = try XCTUnwrap(folderTitle(provider).waitForExistence(timeout: 10) ? folderTitle(provider) : nil, "The picker must enter the private runner provider")
         }
-        func enterTestFolder() {
-            location()
-            workspaceActivate(app.cells[folder + ", Folder"])
-            XCTAssertTrue(folderTitle(folder).waitForExistence(timeout: 10))
+        func enterTestFolder() throws {
+            try location()
+            let directory = app.cells[folder + ", Folder"]
+            _ = try XCTUnwrap(directory.waitForExistence(timeout: 10) ? directory : nil)
+            workspaceActivate(directory)
+            _ = try XCTUnwrap(folderTitle(folder).waitForExistence(timeout: 10) ? folderTitle(folder) : nil, "The picker must enter the owned test folder")
         }
         func expectTitle(_ expected: String) {
             let selected = selectedNewDrawingDocument(in: app, expectedTitle: expected)
@@ -611,9 +614,9 @@ extension EditorLaunchTests {
             await waitUntil({ self.editorPixels(in: app) == pixels }, timeout: 15)
             capture("project-cold-restored-" + expected)
         }
-        func openProject(_ name: String, count: Int, pixels: Data) async {
+        func openProject(_ name: String, count: Int, pixels: Data) async throws {
             await command("open_document")
-            enterTestFolder()
+            try enterTestFolder()
             let file = fileProviderFile(name + ".capy", in: app).images.firstMatch
             XCTAssertTrue(file.waitForExistence(timeout: 10)); workspaceActivate(file)
             submitFileProviderSelection(in: app)
@@ -637,7 +640,7 @@ extension EditorLaunchTests {
         capture("project-painted-reference", pixels: painted)
         await command("save_document_as")
         let firstSave = documentExportControls(in: app)
-        location()
+        try location()
         XCTAssertFalse(app.cells[folder + ", Folder"].exists, "Each native run must create a fresh test folder")
         let newFolder = app.buttons["New Folder"]
         if !newFolder.exists {
@@ -676,7 +679,7 @@ extension EditorLaunchTests {
         await ready()
         await waitUntil({ rows.count == 2 })
         await command("open_document")
-        enterTestFolder()
+        try enterTestFolder()
         let project = fileProviderFile("RoundTrip.capy", in: app).images.firstMatch
         XCTAssertTrue(project.waitForExistence(timeout: 10)); workspaceActivate(project)
         submitFileProviderSelection(in: app)
@@ -698,10 +701,10 @@ extension EditorLaunchTests {
         expectTitle("RoundTrip")
         XCTAssertEqual(editorPixels(in: app), painted)
         capture("project-cold-open-grant-saved")
-        await openProject("RoundTrip", count: 4, pixels: painted)
+        try await openProject("RoundTrip", count: 4, pixels: painted)
         await command("save_document_as")
         let secondSave = documentExportControls(in: app)
-        enterTestFolder()
+        try enterTestFolder()
         replaceEditorText(secondSave.filename, with: "RoundTripCopy", in: app)
         XCTAssertEqual(secondSave.filename.value as? String, "RoundTripCopy")
         workspaceActivate(secondSave.commit)
@@ -724,18 +727,18 @@ extension EditorLaunchTests {
         XCTAssertEqual(rows.count, 5)
         XCTAssertEqual(editorPixels(in: app), painted)
         capture("project-cold-save-as-grant-saved")
-        await openProject("RoundTripCopy", count: 5, pixels: painted)
+        try await openProject("RoundTripCopy", count: 5, pixels: painted)
         await command("export_document")
         chooseExportDestination(in: app)
         let export = documentExportControls(in: app)
-        enterTestFolder()
+        try enterTestFolder()
         replaceEditorText(export.filename, with: "Render", in: app)
         workspaceActivate(export.commit)
         XCTAssertTrue(export.commit.waitForNonExistence(timeout: 20))
         XCTAssertEqual(app.state, .runningForeground)
         expectTitle("RoundTripCopy")
         await command("open_document")
-        enterTestFolder()
+        try enterTestFolder()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label == %@ OR label == %@", "Render", "Render.png")).firstMatch.waitForExistence(timeout: 15))
         capture("delivered-project-and-png")
         workspaceActivate(app.buttons["Cancel"].firstMatch)
