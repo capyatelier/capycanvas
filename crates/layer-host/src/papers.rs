@@ -12,12 +12,10 @@ const MAX_INDEX_BYTES: u64 = 1 << 20;
 const MAX_PAPER_BYTES: u64 = 64 << 20;
 
 #[derive(Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Index {
     papers: Vec<Named>,
 }
 #[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Named {
     id: String,
     name: String,
@@ -192,6 +190,7 @@ impl PaperTask {
 mod tests {
     use super::*;
     use layer_core::color::source::{SourceBuilder, SourceChannels, SourceInterpretation};
+    mod compat {include!("paper_compat.rs");}
 
     fn photo(seed: u8) -> SourceImage {
         let interpretation = SourceInterpretation { channels: SourceChannels::Rgb, depth: layer_core::color::SampleDepth::U8, profile: Default::default(), profile_assumed: false };

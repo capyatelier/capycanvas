@@ -70,10 +70,9 @@ and how parity is checked.
   awaits review before the other hosts.
 - [Texture programs](texture-programs.md) defines the WGSL language for paper
   surfaces, its bake and the programs behind the built-in papers.
-- [Saved data compatibility](saved-data-compatibility.md) keeps workspaces,
-  palettes, brush settings, preferences, drawings and recovery copies across
-  upgrades: tolerant readers, upgrade steps, version snapshots and release
-  fixtures.
+- [Saved-state rules](../ui/settings.md#saving-and-loading),
+  [version copies](../internals/storage.md#workspace-version-copies) and
+  [release fixtures](testing.md#saved-data-compatibility) cover saved data across upgrades.
 - [Phone layout](phone-layout.md) defines the fixed short-edge presentation for
   windows under 480 px on their short side: the Capy bar, a phone toolbar per
   workspace, Capy's menu and drawing with a finger.

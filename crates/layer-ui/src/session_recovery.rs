@@ -8,7 +8,6 @@ pub const MAX_SESSION_DRAWING_ID: u64 = (1u64<<53)-1;
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct SessionCamera {
     pub center: [f32; 2],
     pub zoom: f32,
@@ -41,7 +40,6 @@ impl SessionCamera {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct DestinationFingerprint {pub bytes:u64,pub sha256:String}
 impl DestinationFingerprint {
     pub fn validate(&self)->Result<(),String> {
@@ -70,7 +68,6 @@ fn resolve_export(last:&SessionExport,profiles:&[layer_core::color::ColorProfile
     Ok(resolved)
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct SessionDocumentState {
     pub camera: SessionCamera,
     pub location: Option<DocumentLocation>,
@@ -83,13 +80,7 @@ pub struct SessionDocumentState {
     pub last_export: Option<SessionExport>,
 }
 fn deserialize_last_export<'de,D:serde::Deserializer<'de>>(deserializer:D)->Result<Option<SessionExport>,D::Error> {
-    let value=Option::<serde_json::Value>::deserialize(deserializer)?;
-    let Some(value)=value else{return Ok(None)};
-    let decoded:SessionExport=serde_json::from_value(value.clone()).map_err(serde::de::Error::custom)?;
-    if serde_json::to_value(&decoded).map_err(serde::de::Error::custom)?!=value {
-        return Err(serde::de::Error::custom("Invalid session export destination"));
-    }
-    Ok(Some(decoded))
+    Option::<SessionExport>::deserialize(deserializer)
 }
 impl SessionDocumentState {
     fn validate(&self)->Result<(),String> {
@@ -251,15 +242,12 @@ impl<R:CanvasRenderer> UiSession<R> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct SessionDrawing {pub id:u64,pub key:String}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct SessionRestoreAttempt {pub id:u64,pub generation:u64}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct SessionManifest {
     pub generation:u64,
     pub drawings:Vec<SessionDrawing>,
@@ -450,6 +438,7 @@ mod tests {
     use super::*;
     use crate::session::test_support::{session,layer,invoke,Recorder};
     use std::sync::Arc;
+    mod compat {include!("saved_compat.rs");}
     fn manifest()->SessionManifest {
         SessionManifest::default().reconcile(vec![SessionDrawing{id:7,key:"drawing-a".into()},SessionDrawing{id:2,key:"drawing-b".into()}],2,false).unwrap()
     }
@@ -521,8 +510,8 @@ mod tests {
         for kind in 0..4 {
             let mut value=original.clone();match kind {
                 0=>{value.as_object_mut().unwrap().remove("last_export");},
-                1=>{value["last_export"]["recipe"].as_object_mut().unwrap().remove("metadata");},
-                2=>{value["last_export"]["recipe"]["profile"]["unknown"]=true.into();},
+                1=>{value["last_export"]["recipe"]["metadata"]=true.into();},
+                2=>{value["last_export"]["recipe"]["profile"]["profile"]=true.into();},
                 _=>{value["last_export"]["recipe"]["jpeg_quality"]=0.into();},
             }
             let state=serde_json::from_value::<SessionDocumentState>(value);
@@ -646,7 +635,7 @@ mod tests {
         }
     }
     #[test]
-    fn restored_camera_centers_document_point_for_new_viewport_and_rejects_unknown_state() {
+    fn restored_camera_centers_document_point_for_new_viewport_and_ignores_unknown_state() {
         let mut source=session(Platform::Gtk);source.frame(0,0).unwrap();
         source.state.camera.zoom_to(2.).unwrap();source.state.camera.rotation=0.7;source.state.camera.flipped=[true,false];source.state.camera.center_on([122.,345.]);
         let expected=source.session_stamp().state.camera;
@@ -659,7 +648,7 @@ mod tests {
         assert_eq!(after.zoom,expected.zoom);assert_eq!(after.rotation,expected.rotation);assert_eq!(after.flipped,expected.flipped);
         assert_eq!(resized.state.camera.translation,expected_resize.translation);
         let mut state=serde_json::to_value(source.session_document_state()).unwrap();state["new_unclassified_field"]=true.into();
-        assert!(serde_json::from_value::<SessionDocumentState>(state).is_err());
+        assert_eq!(serde_json::from_value::<SessionDocumentState>(state).unwrap(),source.session_document_state());
         let mut camera=expected;camera.center[0]=f32::MAX;assert!(camera.restore(&source.state.camera).is_err());
         let mut capture=source.capture_session().unwrap();capture.state.camera=camera;
         assert!(capture.prepare(&AtomicBool::new(false)).is_err());

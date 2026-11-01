@@ -94,6 +94,29 @@ or `Dark` for one contact per process. `native_targeted_curves_motion_and_latenc
 with `LAYER_NATIVE_INPUT_TRACE=1` records input, curve adoption and presentation
 times on the private 120 Hz display.
 
+### Saved data compatibility
+
+`release_fixtures_load_without_loss` in `layer-workspace` (with `--features native`),
+`layer-core`, `layer-ui` and `layer-host` opens released inputs through the real
+store, import and recovery readers and compares reviewed authored values and
+resource/preview digests, including save/reopen and session history.
+Push CI enables the native workspace cases and runs the paper compatibility
+tests separately without a GPU.
+
+`saved_documents_tolerate_missing_and_unknown_fields` in the affected suites
+removes defaultable app-state options and adds unknown struct fields; required
+identities and structure still fail validation. Closed artwork records keep
+their strict package acceptance tests.
+
+Inputs live in each crate's `tests/compat/<release>/`, written by that release's
+code and never edited or resaved. Expectations live separately under
+`tests/compat/expected/<release>/`; `CAPY_BLESS=1` rewrites only expectations.
+Review the first expectation against the source input field by field, including
+references and resource bytes, before accepting it. Later expectation diffs get
+the same review as code. The [push guard](../COMMIT_GUIDE.md#hooks-and-attribution)
+enforces immutable inputs; the [release procedure](releasing.md#saved-data-fixtures)
+adds new ones. Never freeze old Rust types or change an input to hide a regression.
+
 ### Writing shared tests
 
 - **Test threads.** Renderer tests create and destroy their own GPU device, so
@@ -112,8 +135,8 @@ times on the private 120 Hz display.
 - **Fixed fixtures.** File-format changes read the checked-in
   `crates/layer-core/src/package/codec/fixtures` files, then edit, save and
   reopen them. Never regenerate fixture inputs from the current writer. When a
-  superseded pre-release format goes, move its value and resource assertions to
-  a current-design fixed fixture without a conversion reader
+  representation that never shipped is replaced, move its value and resource
+  assertions to a current-design fixed fixture without a conversion reader
   ([package contract](../reference/capy-package.md#fixtures-and-acceptance-cases)).
 - **Render baselines.** The saved artwork, angular filter and vector contracts
   compare against fixed linear RGBA F32 images in

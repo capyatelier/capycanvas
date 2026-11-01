@@ -26,7 +26,8 @@ jobs:
           artifacts/visual-python/bin/pip install -r tools/visual/requirements.txt
           artifacts/visual-python/bin/python -m unittest discover -s tools/visual -p 'test_*.py'
       - run: rustup toolchain install "$RUST_VERSION" --profile minimal --target wasm32-unknown-unknown && rustup default "$RUST_VERSION"
-      - run: cargo test --locked -p layer-core -p layer-engine -p layer-ui -p layer-workspace -p layer-color -p layer-render
+      - run: cargo test --locked -p layer-core -p layer-engine -p layer-ui -p layer-workspace -p layer-color -p layer-render --features layer-workspace/native
+      - run: cargo test --locked -p layer-host papers::tests::compat
       - run: |
           cargo test --locked -p layer-render-wgpu --lib -- \
             dry_material::tests::blend_specialization_accepts_lf_and_crlf_sources \

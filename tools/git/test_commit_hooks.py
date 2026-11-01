@@ -125,6 +125,76 @@ class CommitHooksTest(unittest.TestCase):
         self.assert_rejected(self.git("push", "--force", "origin", "topic", ok=False))
         self.git("push", "origin", ":refs/heads/topic")
 
+    def commit_file(self, path, text):
+        target = self.repo / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+        self.git("add", path)
+        self.git("commit", "-m", "Write fixture")
+
+    def released_input(self):
+        path = "crates/layer-ui/tests/compat/1.0.15/settings.json"
+        self.commit_file(path, "released bytes")
+        self.git("push", "origin", "main")
+        return path, self.git("rev-parse", "HEAD").stdout.strip()
+
+    def assert_input_rejected(self, result):
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("released compatibility inputs", result.stderr)
+
+    def test_release_inputs_allow_additions_and_reviewed_expectations(self):
+        self.released_input()
+        expected = "crates/layer-ui/tests/compat/expected/1.0.15/settings.json"
+        for value in ["first expectation", "reviewed expectation"]:
+            self.commit_file(expected, value)
+            self.git("push", "origin", "main")
+        self.commit_file("crates/layer-core/tests/compat/1.0.16/artwork.capy", "next release")
+        self.git("push", "origin", "main")
+
+    def test_release_input_edits_deletions_and_renames_are_rejected(self):
+        path, base = self.released_input()
+        for change in ["edit", "delete", "rename"]:
+            with self.subTest(change=change):
+                self.git("checkout", "-b", change, base)
+                if change == "edit":
+                    (self.repo / path).write_text("rewritten bytes")
+                    self.git("add", path)
+                elif change == "delete":
+                    self.git("rm", path)
+                else:
+                    self.git("mv", path, path + ".renamed")
+                self.git("commit", "-m", "Change released input")
+                self.assert_input_rejected(self.git("push", "origin", change, ok=False))
+
+    def test_release_input_guard_reads_all_push_refs_once(self):
+        path, base = self.released_input()
+        self.git("checkout", "-b", "clean", base)
+        self.git("commit", "--allow-empty", "-m", "Clean branch")
+        self.git("checkout", "-b", "bad", base)
+        self.commit_file(path, "rewritten")
+        self.assert_input_rejected(self.git("push", "origin", "clean", "bad", ok=False))
+        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/clean").stdout, "")
+
+    def test_new_ref_does_not_recheck_already_published_input_changes(self):
+        path, _ = self.released_input()
+        self.commit_file(path, "historically published replacement")
+        self.run_command(["git", "--git-dir", str(self.remote), "fetch", str(self.repo), "main:refs/heads/main"])
+        self.git("fetch", "origin")
+        self.git("checkout", "-b", "new-ref")
+        self.git("commit", "--allow-empty", "-m", "New work")
+        self.git("push", "origin", "new-ref")
+
+    def test_release_input_guard_checks_merged_history_and_tags(self):
+        path, base = self.released_input()
+        self.git("checkout", "-b", "topic", base)
+        self.commit_file(path, "rewritten")
+        self.git("tag", "-a", "bad-input", "-m", "Changed input")
+        self.assert_input_rejected(self.git("push", "origin", "bad-input", ok=False))
+        self.commit_file(path, "released bytes")
+        self.git("checkout", "main")
+        self.git("merge", "--no-ff", "topic", "-m", "Merge restored input")
+        self.assert_input_rejected(self.git("push", "origin", "main", ok=False))
+
     def test_installed_hooks_cover_older_linked_worktrees(self):
         worktree = Path(self.temp.name) / "worktree"
         self.git("worktree", "add", "--detach", str(worktree), "HEAD")

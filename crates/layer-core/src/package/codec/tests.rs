@@ -583,3 +583,6 @@ mod roundtrip_semantics;
 
 #[path="current_design.rs"]
 mod current_design;
+
+#[path="compat.rs"]
+mod compat;

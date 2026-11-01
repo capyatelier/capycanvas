@@ -25,6 +25,26 @@ check_history() {
     fi
 }
 
+check_release_inputs() {
+    if [ -n "$2" ]; then
+        commits=$(git rev-list "$1" "^$2") || return 1
+    elif [ -n "$3" ]; then
+        commits=$(git rev-list "$1" --not "--remotes=$3") || return 1
+    else
+        commits=$(git rev-list "$1") || return 1
+    fi
+    for commit in $commits; do
+        changed=$(git diff-tree --root -m -r --no-commit-id --name-only --no-renames \
+            --diff-filter=MDT "$commit" -- ':(glob)crates/*/tests/compat/*/**' \
+            ':(exclude,glob)crates/*/tests/compat/expected/**') || return 1
+        if [ -n "$changed" ]; then
+            echo "error: released compatibility inputs must not be modified or deleted ($commit)." >&2
+            printf '%s\n' "$changed" >&2
+            return 1
+        fi
+    done
+}
+
 case "${1-}" in
     message)
         # Distinguish no match from an unreadable message or a grep failure.
@@ -43,11 +63,17 @@ case "${1-}" in
         done
         ;;
     push)
+        shift
         while read -r local_ref local_oid remote_ref remote_oid; do
             # Deleted refs introduce no commits (also works with SHA-256 repos).
             case "$local_oid" in *[!0]*) ;; *) continue ;; esac
             if commit=$(git rev-parse --verify "$local_oid^{commit}" 2>/dev/null); then
                 check_history "$commit" || exit 1
+                previous=
+                case "$remote_oid" in
+                    *[!0]*) previous=$(git rev-parse --verify "$remote_oid^{commit}") || exit 1 ;;
+                esac
+                check_release_inputs "$commit" "$previous" "${1-}" || exit 1
             else
                 # Tags may point at trees or blobs, which have no commit message.
                 # A missing object is an error, not a reason to allow the push.

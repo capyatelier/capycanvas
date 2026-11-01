@@ -78,7 +78,10 @@ sh tools/git/install-hooks.sh
 
 `commit-msg` rejects agent attribution. `pre-push` checks the full ancestry of
 every pushed commit or tag, including merge parents; remove prohibited trailers
-from that history before pushing. To audit a branch or test the guards:
+from that history before pushing. It also rejects introduced history that
+modifies or deletes released inputs under `crates/*/tests/compat/<release>/`;
+new inputs and reviewed files under `compat/expected/` are allowed. To audit a
+branch or test the guards:
 
 ```sh
 sh .githooks/check-commit-messages.sh history HEAD

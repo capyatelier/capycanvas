@@ -2016,17 +2016,22 @@ fn released_or_incomplete_editing_states_keep_readable_fields_without_a_notice()
 }
 
 #[test]
-fn released_browser_store_starts_without_loss() {
+fn release_fixtures_load_without_loss() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/compat");
-    let backend = Rc::new(Backend::default());
-    *backend.database.borrow_mut() = BrowserDatabase::decode(&std::fs::read_to_string(root.join("1.0.15/browser.json")).unwrap()).unwrap();
-    let (controller,host) = start(Store(backend),Platform::Web);
-    assert!(controller.view.ready, "{:?}",controller.view.error);
-    assert!(controller.view.error.is_none());
-    assert!(!controller.manager.in_memory());
-    assert_eq!(notice(&host),None);
-    let expected: serde_json::Value = serde_json::from_slice(&std::fs::read(root.join("expected/1.0.15/editing.json.expected.json")).unwrap()).unwrap();
-    assert_eq!(serde_json::to_value(controller.manager.editing()).unwrap(),expected);
+    for entry in std::fs::read_dir(&root).unwrap() {
+        let directory=entry.unwrap().path();
+        if !directory.is_dir() || directory.file_name().unwrap()=="expected" {continue;}
+        let release=directory.file_name().unwrap().to_str().unwrap();
+        let backend = Rc::new(Backend::default());
+        *backend.database.borrow_mut() = BrowserDatabase::decode(&std::fs::read_to_string(directory.join("browser.json")).unwrap()).unwrap();
+        let (controller,host) = start(Store(backend),Platform::Web);
+        assert!(controller.view.ready, "{:?}",controller.view.error);
+        assert!(controller.view.error.is_none());
+        assert!(!controller.manager.in_memory());
+        assert_eq!(notice(&host),None);
+        let expected: serde_json::Value = serde_json::from_slice(&std::fs::read(root.join(format!("expected/{release}/editing.json.expected.json"))).unwrap()).unwrap();
+        assert_eq!(serde_json::to_value(controller.manager.editing()).unwrap(),expected);
+    }
 }
 
 #[test]

@@ -24,6 +24,37 @@ pub(crate) fn restore_fields<T: DeserializeOwned + Serialize>(
 mod tests {
     use crate::{EditingState, Localizer, UiLanguage, WorkspaceWorkingState};
     #[test]
+    fn saved_documents_tolerate_missing_and_unknown_fields() {
+        use serde_json::{Value,json};
+        fn check(original:Value,restore:impl Fn(Value)->Value) {
+            let mut unknown=original.clone();unknown["future_option"]=json!({"value":17});
+            assert_eq!(restore(unknown),original);
+            for removed in original.as_object().unwrap().keys() {
+                let mut missing=original.clone();missing.as_object_mut().unwrap().remove(removed);
+                let restored=restore(missing);
+                for (field,value) in original.as_object().unwrap() {
+                    if field!=removed {assert_eq!(&restored[field],value,"missing {removed}, retained {field}");}
+                }
+            }
+        }
+        let english=Localizer::shared(UiLanguage::English);
+        let directory=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../layer-workspace/tests/compat/1.0.15");
+        let settings=crate::Settings::restore(&std::fs::read_to_string(directory.join("settings.json")).unwrap());
+        check(serde_json::to_value(settings).unwrap(),|value|serde_json::to_value(crate::Settings::restore(&value.to_string())).unwrap());
+        let editing=EditingState::restore(&std::fs::read_to_string(directory.join("editing.json")).unwrap(),&english);
+        let original=serde_json::to_value(editing).unwrap();let mut nested=original.clone();
+        for pointer in ["/tools","/tool_slots","/colors","/mask_colors","/color_library","/selection","/gradient"] {
+            nested.pointer_mut(pointer).unwrap().as_object_mut().unwrap().insert("future_option".into(),true.into());
+        }
+        for palette in nested["color_library"]["palettes"].as_array_mut().unwrap() {
+            palette["future_option"]=true.into();
+            for swatch in palette["swatches"].as_array_mut().unwrap() {swatch["future_option"]=true.into();swatch["color"]["future_option"]=true.into();}
+        }
+        assert_eq!(serde_json::to_value(EditingState::restore(&nested.to_string(),&english)).unwrap(),original);
+        check(original,|value|serde_json::to_value(EditingState::restore(&value.to_string(),&english)).unwrap());
+        check(json!({"version":1,"zen_mode":true}),|value|serde_json::to_value(WorkspaceWorkingState::restore(value)).unwrap());
+    }
+    #[test]
     fn editing_restore_keeps_valid_fields_and_converts_only_the_released_version() {
         let mut state = EditingState::default();
         state.colors.set_rgba([0.2,0.4,0.6,1.]).unwrap();

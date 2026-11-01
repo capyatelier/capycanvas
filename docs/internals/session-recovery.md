@@ -99,6 +99,11 @@ restored history; a reader does not silently trim history to make it fit. These
 checks enforce known invariants; they are not a proof against every possible
 hardware or implementation failure.
 
+UI metadata and drawing membership ignore unknown fields under the
+[saved-state rules](../ui/settings.md#saving-and-loading). Required identities,
+camera values, destinations and history structure still validate before adoption;
+this tolerance does not weaken authored package records.
+
 ## Private custom programs
 
 Private `capy.effect/2` has two exclusive alternatives: the portable inline

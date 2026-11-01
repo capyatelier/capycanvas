@@ -257,7 +257,7 @@ read-only render of effects it does not understand.
 This is the extension rule for released GA data, not an implementation of a
 conversion framework. Add each concrete converter with an unchanged older-file
 regression, including save/reopen and resources, when that extension ships.
-Pre-release replacements still need no compatibility reader. Future controls
+Representations that never shipped need no compatibility reader. Future controls
 have no reserved field today, and their neutral/default values are not frozen
 until their introduction requires a concrete conversion decision.
 
@@ -891,6 +891,13 @@ showing their summary or preview does not reconstruct an editable document.
 
 ## Fixtures and acceptance cases
 
+Released inputs under `crates/layer-core/tests/compat/<release>/` stay fixed,
+including supported drawings, independently verified previews and private
+recovery stores. Their expectations and the release generator follow the
+[compatibility checks](../development/testing.md#saved-data-compatibility).
+Closed record fields and unsupported-file byte preservation remain unchanged;
+there is no speculative record conversion table or pre-1.0.15 converter.
+
 A minimal supported document has one composition, one root stack and one canvas
 output. This abbreviated fixture has no pixels, paper or optional preview:
 
@@ -971,7 +978,7 @@ An intentional data-version change requires a concrete conversion and tests
 opening the unchanged released fixture, editing and resaving it. Do not replace
 the baseline with output from the new writer to make a compatibility failure pass.
 Formats from before 1.0.15 and formats that never shipped in a release have no
-conversion readers ([saved data compatibility](../development/saved-data-compatibility.md)).
+conversion readers ([saved-state rules](../ui/settings.md#saving-and-loading)).
 
 `illustration-conversions.capy` fixes Brightness to Opacity 1 and Threshold 2,
 including single-color output, binary alpha and the hidden alpha threshold after

@@ -10,6 +10,7 @@ Progress notes, validation reports and other work records are not committed
 
 ## Research
 
+- [Saved data compatibility](saved-data-compatibility.md): design and precedents at 1.0.15.
 - [Physical paint runtime cost](physical-paint-runtime-cost.md): calculations and
   break-even conditions for local brush updates and continuously flowing paint.
 - [Capy file format: compatibility, containers and future artwork types](capy-format-foundation.md).

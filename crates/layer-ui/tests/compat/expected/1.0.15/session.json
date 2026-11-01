@@ -1,0 +1,78 @@
+{
+  "camera": {
+    "center": [
+      500.00006103515625,
+      500.0000305175781
+    ],
+    "flipped": [
+      false,
+      false
+    ],
+    "rotation": 0.0,
+    "rotation_locked": false,
+    "zoom": 1.75,
+    "zoom_locked": false
+  },
+  "checkpoint": 1,
+  "metadata": {
+    "camera": {
+      "center": [
+        500.0000305175781,
+        500.0000305175781
+      ],
+      "flipped": [
+        false,
+        false
+      ],
+      "rotation": 0.0,
+      "rotation_locked": false,
+      "zoom": 1.75,
+      "zoom_locked": false
+    },
+    "destination": {
+      "bytes": 12,
+      "sha256": "79d36a30cdb395df1b91d711edd480cb47a18398b475005754b0d1023944607c"
+    },
+    "last_export": {
+      "location": {
+        "name": "Release.png",
+        "uri": "private:release.png"
+      },
+      "recipe": {
+        "background": "Preserve",
+        "depth": "U8",
+        "encoding": {
+          "conversion": {
+            "black_point_compensation": false,
+            "intent": "RelativeColorimetric"
+          },
+          "dither": "None"
+        },
+        "format": "Png",
+        "jpeg_quality": 90,
+        "metadata": {
+          "keep": "All",
+          "remove_location": true
+        },
+        "profile": {
+          "channels": "Rgb",
+          "name": "Display P3",
+          "profile": {
+            "Builtin": "DisplayP3"
+          }
+        },
+        "resolution": "Master",
+        "size": "Original"
+      }
+    },
+    "location": {
+      "name": "Painting.capy",
+      "uri": "private:painting.capy"
+    },
+    "recovered": false,
+    "saved_checkpoint": 1,
+    "unpublished": false,
+    "unsaved_name": null
+  },
+  "saved": 1
+}

@@ -1,0 +1,218 @@
+{
+  "manifest": {
+    "default_output": {
+      "ref": "d2ac93cc67f2445793b1b1c4bb81c8d0"
+    },
+    "document": "cd6f636009af472db062560ce8c94a09",
+    "format": "capy.canvas",
+    "objects": [
+      {
+        "data": {
+          "color_mode": "full_color",
+          "domain": {
+            "size": [
+              768,
+              512
+            ]
+          }
+        },
+        "id": "045d9f0226e04c2b9c20aa2c1fa344d3",
+        "type": "capy.paint-source/2"
+      },
+      {
+        "data": {
+          "content": {
+            "paint": {
+              "ref": "3b66ea44b1864a379adc524301d65853"
+            }
+          },
+          "name": "Layer 3"
+        },
+        "id": "14163ab07b69499fa56c30e084c7b5da",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "entries": [
+            {
+              "ref": "14163ab07b69499fa56c30e084c7b5da"
+            },
+            {
+              "ref": "d538c815b8b84cb987c1b8940dfaa978"
+            },
+            {
+              "ref": "ccf58346205b43d6aa85abe6efee9062"
+            }
+          ]
+        },
+        "id": "190b583d5bd04da48b1c755f21efa09c",
+        "type": "capy.stack/1"
+      },
+      {
+        "data": {
+          "color_mode": "full_color",
+          "domain": {
+            "size": [
+              768,
+              512
+            ]
+          }
+        },
+        "id": "3b66ea44b1864a379adc524301d65853",
+        "type": "capy.paint-source/2"
+      },
+      {
+        "data": {
+          "builtin": "paper",
+          "spatial": {
+            "extent": [
+              65.024,
+              43.349333333333334
+            ],
+            "mapping": [
+              11.811023622047244,
+              0.0,
+              0.0,
+              11.811023622047244,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ]
+              }
+            },
+            "light": {
+              "kind": "number",
+              "value": 225.0
+            },
+            "relief": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "texture": {
+              "kind": "texture",
+              "value": {
+                "builtin": "drawing",
+                "values": {
+                  "finish": {
+                    "kind": "number",
+                    "value": 35.0
+                  },
+                  "seed": {
+                    "kind": "number",
+                    "value": 1.0
+                  },
+                  "tooth": {
+                    "kind": "number",
+                    "value": 0.3499999940395355
+                  }
+                },
+                "version": 1
+              }
+            },
+            "through_paint": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "5a7219f08ca24d559b8f699e821f5a45",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "blend": "perceptual",
+          "resolution": {
+            "density": [
+              [
+                300,
+                1
+              ],
+              [
+                300,
+                1
+              ]
+            ],
+            "unit": "inch"
+          },
+          "result": {
+            "object": {
+              "ref": "190b583d5bd04da48b1c755f21efa09c"
+            },
+            "port": "color"
+          },
+          "size": [
+            768,
+            512
+          ]
+        },
+        "id": "92c122e14ec44240a1934ae101e02d44",
+        "type": "capy.composition/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "5a7219f08ca24d559b8f699e821f5a45"
+            }
+          },
+          "name": "Paper"
+        },
+        "id": "ccf58346205b43d6aa85abe6efee9062",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "source": {
+            "object": {
+              "ref": "92c122e14ec44240a1934ae101e02d44"
+            },
+            "port": "color"
+          }
+        },
+        "id": "d2ac93cc67f2445793b1b1c4bb81c8d0",
+        "type": "capy.output/2"
+      },
+      {
+        "data": {
+          "content": {
+            "paint": {
+              "ref": "045d9f0226e04c2b9c20aa2c1fa344d3"
+            }
+          },
+          "name": "Current ink"
+        },
+        "id": "d538c815b8b84cb987c1b8940dfaa978",
+        "type": "capy.occurrence/3"
+      }
+    ],
+    "outputs": [
+      {
+        "ref": "d2ac93cc67f2445793b1b1c4bb81c8d0"
+      }
+    ],
+    "resources": [],
+    "root": {
+      "ref": "92c122e14ec44240a1934ae101e02d44"
+    },
+    "version": 1
+  },
+  "preview": {
+    "pixels": "bf076da3a7d398b2ab96c5b3fa5cf8295b7cdf5fc5178ea1c62b0fc4e8f9b4d5",
+    "size": [
+      512,
+      341
+    ]
+  },
+  "resources": {}
+}

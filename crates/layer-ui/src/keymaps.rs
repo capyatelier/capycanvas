@@ -488,7 +488,6 @@ pub const KEYMAP_FORMAT: &str = "capycanvas-keymap";
 pub const KEYMAP_VERSION: u32 = 1;
 
 #[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct KeymapFile {
     format: String,
     version: u32,

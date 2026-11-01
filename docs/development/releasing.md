@@ -65,7 +65,10 @@ Add the matching `<release>` with notes in words a painter knows to
 these notes with Google Play, which allows
 [500 Unicode characters per language](https://support.google.com/googleplay/android-developer/answer/9859348).
 Keep any compatibility warning within that limit; validation runs before platform
-jobs and before a direct Play upload. Commit these files together. Fetch and
+jobs and before a direct Play upload. Include: **Returning to 1.0.15 or earlier
+can reset your workspaces.** Generate and review the
+[saved-data fixtures](#saved-data-fixtures) at this version before committing.
+Commit these files together. Fetch and
 rebase onto `origin/main`, rerun checks, and land the tested
 commit on `origin/main` under the [commit guide](../COMMIT_GUIDE.md).
 Set these variables to that version and commit, not a later moving `main`:
@@ -354,6 +357,38 @@ short-lived process environment for API access. Keep tokens out of command
 arguments, shell traces and saved request/response logs. A new agent obtains
 current private access and tester details from the maintainer, not from
 repository history.
+
+## Saved-data fixtures
+
+Before tagging, run the ignored `write_compat_fixtures` tests with the release
+version already set, `CAPY_RELEASE_VERSION` set to that version, and
+`CAPY_COMPAT_OUT` naming each crate's new
+`tests/compat/<release>/` directory. Use the release commit's own writers,
+including the real SQLite and Web store encoders:
+
+```bash
+CAPY_COMPAT_OUT="$PWD/crates/layer-workspace/tests/compat/$CAPY_RELEASE_VERSION" \
+  cargo test --locked -p layer-workspace --features native write_compat_fixtures -- --ignored
+for crate in layer-core layer-ui layer-host; do
+  CAPY_COMPAT_OUT="$PWD/crates/$crate/tests/compat/$CAPY_RELEASE_VERSION" \
+    cargo test --locked -p "$crate" write_compat_fixtures -- --ignored
+done
+CAPY_COMPAT_OUT="$PWD/crates/layer-core/tests/compat/$CAPY_RELEASE_VERSION" \
+  bash tools/performance/workspace-motion.sh gtk --native-test=native_write_compat_fixtures --native-storage
+CAPY_BLESS=1 cargo test --locked -p layer-workspace --features native release_fixtures_load_without_loss
+CAPY_BLESS=1 cargo test --locked -p layer-core -p layer-ui -p layer-host release_fixtures_load_without_loss
+```
+
+Never point the generators at an existing release directory. Inputs cover saved
+tools, commands, slots and panels; non-default palettes, brush and region
+options; custom and edited included workspaces; layer/record kinds and native
+sample depths; app-rendered previews; session history and UI membership; paper
+and profile content/indexes; and exported workspace, toolbar and keymap files.
+Keep unsupported files byte for byte. Follow the
+[expectation review](testing.md#saved-data-compatibility), rerun without
+`CAPY_BLESS`, and commit new inputs and reviewed expectations with the version.
+Exercise upgrading and reopening private release stores on the affected hosts;
+do not replace an old input with the new writer's output.
 
 ## Versions
 

@@ -32,8 +32,13 @@ Unreadable rows and pending deliveries stay in place. When no workspace can be
 read, startup creates a new workspace from the included layout and leaves the
 unreadable rows untouched. Only an unsupported table schema can trigger a reset,
 which keeps a copy first. See [workspace ownership](workspace-ownership.md#startup-always-adopts-a-workspace).
+Keep released table layouts readable with concrete SQL conversions keyed by
+`user_version`; do not use the reset path for a released layout.
 
 ### Workspace version copies
+
+The [design history](../history/saved-data-compatibility.md) records the rationale
+and precedents for these copies and the other saved-data protections.
 
 Before another version writes native workspace storage, its worker holds the
 SQLite write transaction, copies the database to
@@ -45,6 +50,13 @@ copied into this set before another reset can replace it.
 
 After adopting a workspace, the worker keeps the ten newest copies within
 256 MiB, retaining at least three even when they exceed the budget.
+
+These copies protect the workspace store at capture time, including editing
+state, toolbars and pending deliveries. Preferences, export presets, papers,
+profiles and sessions have separate storage; they are not in this snapshot.
+Copies do not coordinate different app versions or preserve later edits made by
+another process. Returning to 1.0.15 or earlier can reset workspaces; those
+builds retain only their single `unreadable` copy.
 
 Web storage keeps `version` and `snapshot:workspaces.<version>.<uuid>` records
 beside `database` and `unreadable` in IndexedDB's `workspace` object store.

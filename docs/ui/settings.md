@@ -347,6 +347,27 @@ stroke ends, and none applies while Settings, a popup or command search is open.
 
 ## Saving and loading
 
+Saved app-state keys, IDs and enum names keep their stored names and meaning.
+Never reuse or remove a released name; use Serde `rename` when only the Rust
+name changes. Add defaults for new option fields, while keeping identity,
+ownership and structural fields required. App-state objects ignore unknown
+fields and retain their size and validation limits. Preferences, editing state,
+working state and workspace document versions do not require an exact match;
+physical database schemas and file envelopes have their own admission rules.
+
+A type or meaning change, including a fixed array's length, needs a concrete
+conversion of the raw JSON before typed validation. Keep conversions from
+1.0.15 onward so painters can skip releases; do not add speculative steps or
+conversions for unreleased formats. Editing version 1 extends the two region
+sources with Auto and converts numeric smoothing to Smooth edges. Released
+fixtures and tolerance checks follow the
+[testing guide](../development/testing.md#saved-data-compatibility).
+
+Drawings and private recovery records follow the stricter
+[package contract](../reference/capy-package.md#object-records-and-defaults).
+Unknown session UI metadata fields are ignored, but invalid recovery structure
+is preserved for explicit recovery or discard.
+
 The host performs storage through its own APIs. Native clients write application
 settings in the platform's config folder; the web client uses browser storage
 ([where the app keeps its files](../internals/storage.md)). A failed write must

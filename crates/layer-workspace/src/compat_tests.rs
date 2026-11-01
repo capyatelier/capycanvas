@@ -92,8 +92,8 @@ fn write_compat_fixtures() {
     std::fs::write(directory.join("browser.json"), browser.encoded().unwrap()).unwrap();
 }
 
-fn expect(name: &str, actual: Value) {
-    let path = fixture_root().join("expected/1.0.15").join(format!("{name}.expected.json"));
+fn expect(release: &str, name: &str, actual: Value) {
+    let path = fixture_root().join("expected").join(release).join(format!("{name}.expected.json"));
     if std::env::var_os("CAPY_BLESS").as_deref() == Some(std::ffi::OsStr::new("1")) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, serde_json::to_vec_pretty(&actual).unwrap()).unwrap();
@@ -118,8 +118,42 @@ fn portable(mut entity: Entity) -> Value {
 }
 
 #[test]
+fn saved_documents_tolerate_missing_and_unknown_fields() {
+    let entities:Vec<Entity>=serde_json::from_slice(&std::fs::read(fixture_root().join("1.0.15/entities.json")).unwrap()).unwrap();
+    for entity in entities {
+        let original=serde_json::to_value(&entity).unwrap();let mut unknown=original.clone();
+        for pointer in ["","/metadata","/content","/working","/content/history","/content/baseline","/content/definition"] {
+            if let Some(fields)=unknown.pointer_mut(pointer).and_then(Value::as_object_mut) {fields.insert("future".into(),true.into());}
+        }
+        if let Some(revisions)=unknown.pointer_mut("/content/history/revisions").and_then(Value::as_object_mut) {
+            for revision in revisions.values_mut() {
+                revision["future"]=true.into();revision["layout"]["future"]=true.into();
+                revision["layout"]["header"]["future"]=true.into();
+            }
+        }
+        if let Some(tiles)=unknown.pointer_mut("/content/definition/tiles").and_then(Value::as_array_mut) {
+            for tile in tiles {tile["future"]=true.into();tile["control"]["future"]=true.into();tile["slider_style"]["future"]=true.into();}
+        }
+        let decoded:Entity=serde_json::from_value(unknown).unwrap();decoded.validate().unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(),original);
+        for pointer in ["/id","/metadata/kind","/content/type"] {
+            let mut missing=original.clone();let (parent,field)=pointer.rsplit_once('/').unwrap();
+            missing.pointer_mut(parent).unwrap().as_object_mut().unwrap().remove(field);
+            assert!(serde_json::from_value::<Entity>(missing).is_err(),"{pointer}");
+        }
+    }
+}
+
+#[test]
 fn release_fixtures_load_without_loss() {
-    let directory = fixture_root().join("1.0.15");
+    for entry in std::fs::read_dir(fixture_root()).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() && path.file_name().unwrap() != "expected" {check_release(path.file_name().unwrap().to_str().unwrap());}
+    }
+}
+
+fn check_release(release: &str) {
+    let directory = fixture_root().join(release);
     let english = Localizer::shared(UiLanguage::English);
     let mut paths: Vec<_> = std::fs::read_dir(&directory).unwrap().map(|p|p.unwrap().path()).collect();
     paths.sort();
@@ -139,13 +173,13 @@ fn release_fixtures_load_without_loss() {
                 entity.validate().unwrap(); serde_json::to_value(entity).unwrap()
             }
         };
-        expect(name,value);
+        expect(release,name,value);
     }
     let entities: Vec<Entity> = serde_json::from_slice(&std::fs::read(directory.join("entities.json")).unwrap()).unwrap();
     let temp = crate::test_support::temp_dir("released-store");
     std::fs::create_dir_all(&temp).unwrap();
     std::fs::copy(directory.join("workspaces.sqlite3"), temp.join("workspaces.sqlite3")).unwrap();
-    let expected: Value = serde_json::from_slice(&std::fs::read(fixture_root().join("expected/1.0.15/editing.json.expected.json")).unwrap()).unwrap();
+    let expected: Value = serde_json::from_slice(&std::fs::read(fixture_root().join(format!("expected/{release}/editing.json.expected.json"))).unwrap()).unwrap();
     {
         let manager = WorkspaceManager::new(StoreWorker::shared(&temp).unwrap(), Platform::Gtk);
         pollster::block_on(manager.load_editing()).unwrap();

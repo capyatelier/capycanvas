@@ -312,6 +312,26 @@ mod tests {
     use super::*;
     use layer_core::color::{SampleDepth, RgbSpace};
     #[test]
+    fn saved_documents_tolerate_missing_and_unknown_fields() {
+        let input=include_bytes!("../../layer-workspace/tests/compat/1.0.15/export-presets");
+        let baseline=ExportPresets::restore(input);
+        let (value,blocks):(serde_json::Value,_)=binary_payload::decode(b"CAPYPRESETS\x01",input,ExportPresets::MAX_FILE_BYTES).unwrap();
+        let restore=|value:&serde_json::Value|ExportPresets::restore(&binary_payload::encode(b"CAPYPRESETS\x01",value,&blocks,ExportPresets::MAX_FILE_BYTES).unwrap());
+        let mut unknown=value.clone();
+        unknown["future"]=true.into();unknown["named"][0]["future"]=true.into();unknown["named"][0]["recipe"]["future"]=true.into();
+        unknown["profiles"][0]["future"]=true.into();
+        assert_eq!(restore(&unknown),baseline);
+        for field in ["profiles","destinations","named"] {
+            let mut missing=value.clone();missing.as_object_mut().unwrap().remove(field);
+            let restored=restore(&missing);restored.validate().unwrap();
+            match field {
+                "profiles"=>assert_eq!(restored,ExportPresets::default()),
+                "destinations"=>assert_eq!(restored.named,baseline.named),
+                _=>assert_eq!(restored.destinations,baseline.destinations),
+            }
+        }
+    }
+    #[test]
     fn unreadable_preset_metadata_keeps_independent_fields_and_profile_references() {
         let mut saved = ExportPresets::default();
         saved.save("Delivery",ExportRecipe::wide_color()).unwrap();

@@ -49,6 +49,9 @@ snapshot. Inside the write transaction, the store merges those fields into the
 stored document and validates it; an invalid merge takes the complete submitted
 snapshot. A later save of the same field wins. Receipts carry no editing state,
 and other windows' values are not propagated into a live session.
+This is the top-level case of
+[JSON Merge Patch](https://www.rfc-editor.org/rfc/rfc7396), except null remains
+a value and nested objects are replaced as complete fields.
 
 GTK always attempts the authoritative switch/claim. On a live conflict it focuses
 the owning GTK window where available. A stale SwitchToWindow menu action uses

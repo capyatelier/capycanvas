@@ -121,7 +121,7 @@ These are for Sketch's eight tools. Ten tools at 320 get 27-unit tiles.
 - `DockLayout` gains `phone: Vec<ToolbarTile>`. As part of the arrangement, it is
   saved and validated with it, undone with Undo Layout Change, restored by Restore
   Starting Layout and copied by New Workspace. Following
-  [saved data compatibility](saved-data-compatibility.md), a workspace saved
+  [saved-state rules](../ui/settings.md#saving-and-loading), a workspace saved
   without the field, including any 1.0.15 workspace, still loads. The workspace
   store fills it, since only the store knows the owner: a built-in workspace gets
   its preset's toolbar and a custom one Sketch's, in the current layout, its history

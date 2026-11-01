@@ -4,7 +4,6 @@ use super::{RgbSpace, rgb};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct RgbColor {
     pub space: RgbSpace,
     /// Straight, profile-encoded RGB and linear alpha. Finite extended RGB is

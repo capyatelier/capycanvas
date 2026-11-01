@@ -7,6 +7,9 @@ use crate::{authored::*, color::{ColorProfile, RgbColor, RgbSpace, ProofRecipe, 
 use serde_json::json;
 use std::{collections::BTreeSet, sync::{Arc, atomic::AtomicBool}};
 
+#[path="session_compat.rs"]
+mod compat;
+
 fn raster(plane:RasterPlane,marker:u8,material:bool)->RasterRevision {
     let planes=if material {vec![plane,RasterPlane::WatercolorWetness]}else{vec![plane]};
     RasterRevision::backed(RasterData {

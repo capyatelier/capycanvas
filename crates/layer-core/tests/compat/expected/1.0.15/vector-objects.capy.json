@@ -1,0 +1,254 @@
+{
+  "manifest": {
+    "default_output": {
+      "ref": "e4104ac82d474084be195257c2306c64"
+    },
+    "document": "c89f529d691c45bda626554038a55eeb",
+    "format": "capy.canvas",
+    "objects": [
+      {
+        "data": {
+          "content": {
+            "object": {
+              "ref": "aca739e1527e480fa694b3d92242ee04"
+            }
+          },
+          "name": "Shapes"
+        },
+        "id": "0a1912a1e8494d489a62df9f9a4e8a2f",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "entries": [
+            {
+              "ref": "bd2d82bae0314a27b174c2a8e269a3ec"
+            },
+            {
+              "ref": "0a1912a1e8494d489a62df9f9a4e8a2f"
+            },
+            {
+              "ref": "331b0448e5684734b3b99644a9e60817"
+            },
+            {
+              "ref": "8c3828b96d3847e699a53cf193db574c"
+            }
+          ]
+        },
+        "id": "2c56e27346d8453db8bbfb2dc3acc84d",
+        "type": "capy.stack/1"
+      },
+      {
+        "data": {},
+        "id": "316beaf6adb547029a7c75e50b95b7e5",
+        "type": "capy.vector-object/1"
+      },
+      {
+        "data": {
+          "content": {
+            "object": {
+              "ref": "4fbf8c314ebc488d8b47e3334b164588"
+            }
+          },
+          "name": "Hatching"
+        },
+        "id": "331b0448e5684734b3b99644a9e60817",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "items": [
+            {
+              "ref": "5a6db78a79134f3084d5482e7c296563"
+            },
+            {
+              "ref": "1c6739805dfc45c8b6dedc265b790a45"
+            }
+          ],
+          "next_item": "165"
+        },
+        "id": "4fbf8c314ebc488d8b47e3334b164588",
+        "type": "capy.vector-object/1"
+      },
+      {
+        "data": {
+          "result": {
+            "object": {
+              "ref": "2c56e27346d8453db8bbfb2dc3acc84d"
+            },
+            "port": "color"
+          },
+          "size": [
+            256,
+            192
+          ]
+        },
+        "id": "5f4b9eba7f0547898ce277f52a55e99f",
+        "type": "capy.composition/2"
+      },
+      {
+        "data": {
+          "content": {
+            "object": {
+              "ref": "316beaf6adb547029a7c75e50b95b7e5"
+            }
+          },
+          "name": "Empty"
+        },
+        "id": "8c3828b96d3847e699a53cf193db574c",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "items": [
+            {
+              "ref": "32445fd1da5a467088dc36b871a8088d"
+            }
+          ],
+          "next_item": "12"
+        },
+        "id": "aca739e1527e480fa694b3d92242ee04",
+        "type": "capy.vector-object/1"
+      },
+      {
+        "data": {
+          "content": {
+            "object": {
+              "ref": "ca6aaaeff96247fab35c6de784f859c0"
+            }
+          },
+          "name": "Codes",
+          "visible": false
+        },
+        "id": "bd2d82bae0314a27b174c2a8e269a3ec",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "items": [
+            {
+              "ref": "bd1224b26c4c4fdab563833b374fb6e7"
+            },
+            {
+              "ref": "325826ed5f3046509dee1ef16c2bcec2"
+            }
+          ],
+          "next_item": "15"
+        },
+        "id": "ca6aaaeff96247fab35c6de784f859c0",
+        "type": "capy.vector-object/1"
+      },
+      {
+        "data": {
+          "source": {
+            "object": {
+              "ref": "5f4b9eba7f0547898ce277f52a55e99f"
+            },
+            "port": "color"
+          }
+        },
+        "id": "e4104ac82d474084be195257c2306c64",
+        "type": "capy.output/2"
+      }
+    ],
+    "outputs": [
+      {
+        "ref": "e4104ac82d474084be195257c2306c64"
+      }
+    ],
+    "resources": [
+      {
+        "bytes": "459",
+        "crc32": "a0e22f6a",
+        "data": {
+          "decoded_bytes": "2108",
+          "records": 32
+        },
+        "encoding": "capy.lz4-bytes/1",
+        "id": "1c6739805dfc45c8b6dedc265b790a45",
+        "location": {
+          "offset": "0",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.vector-items/1"
+      },
+      {
+        "bytes": "764",
+        "crc32": "d6f4ad90",
+        "data": {
+          "decoded_bytes": "1113",
+          "records": 11
+        },
+        "encoding": "capy.lz4-bytes/1",
+        "id": "32445fd1da5a467088dc36b871a8088d",
+        "location": {
+          "offset": "459",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.vector-items/1"
+      },
+      {
+        "bytes": "2484",
+        "crc32": "817cbf60",
+        "data": {
+          "records": 1
+        },
+        "encoding": "capy.vector-records/1",
+        "id": "325826ed5f3046509dee1ef16c2bcec2",
+        "location": {
+          "offset": "1223",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.vector-items/1"
+      },
+      {
+        "bytes": "471",
+        "crc32": "4ed5a811",
+        "data": {
+          "decoded_bytes": "2129",
+          "records": 33
+        },
+        "encoding": "capy.lz4-bytes/1",
+        "id": "5a6db78a79134f3084d5482e7c296563",
+        "location": {
+          "offset": "3707",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.vector-items/1"
+      },
+      {
+        "bytes": "254",
+        "crc32": "426427e3",
+        "data": {
+          "decoded_bytes": "538",
+          "records": 9
+        },
+        "encoding": "capy.lz4-bytes/1",
+        "id": "bd1224b26c4c4fdab563833b374fb6e7",
+        "location": {
+          "offset": "4178",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.vector-items/1"
+      }
+    ],
+    "root": {
+      "ref": "5f4b9eba7f0547898ce277f52a55e99f"
+    },
+    "version": 1
+  },
+  "preview": {
+    "pixels": "77861c1513f628d2dd39787341de13d2bf648034e9fdd82dd7025381be3154bb",
+    "size": [
+      2,
+      1
+    ]
+  },
+  "resources": {
+    "1c6739805dfc45c8b6dedc265b790a45": "a3ed65ae9ccdcabd3a7fdd571886ec276803a59d9075103df47dde350d8a0c59",
+    "32445fd1da5a467088dc36b871a8088d": "f62e011eb107d589a2fc2f3cfccfd1fd8eb9aef17ec638ab02b7a5657a6183f1",
+    "325826ed5f3046509dee1ef16c2bcec2": "adcb59fe9231d8b085b301716e4dfb255a5af90561d1861c14e82f11a9983e39",
+    "5a6db78a79134f3084d5482e7c296563": "00599c6e840a0f0a22a62808fcbea0040dac60de9f2685483104fd3b8ca43ace",
+    "bd1224b26c4c4fdab563833b374fb6e7": "1317da42d562a3bdce3d2283b08bf5e56d50822165c5a5062ec04b149b34816c"
+  }
+}
