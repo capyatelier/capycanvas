@@ -91,6 +91,37 @@ pub struct RendererTelemetry {
     pub effect_passes: u64,
     pub compiled_effects: u64,
     pub gpu_timestamps: bool,
+    pub memory: Option<MemorySnapshot>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProcessMemoryKind { Resident, PrivateCommit, PhysicalFootprint }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MemoryPeak { Lifetime(u64), Sampled(u64) }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProcessMemory {
+    pub kind: ProcessMemoryKind,
+    pub bytes: u64,
+    pub peak: MemoryPeak,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GpuMemoryKind { VulkanHeap, DxgiLocal, MetalAllocated }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GpuMemory {
+    pub kind: GpuMemoryKind,
+    pub bytes: u64,
+    pub budget: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct MemorySnapshot {
+    pub sampled_at: std::time::Instant,
+    pub process: Option<ProcessMemory>,
+    pub gpu: Option<GpuMemory>,
 }
 
 #[cfg(test)]

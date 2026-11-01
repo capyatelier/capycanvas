@@ -9,6 +9,8 @@ struct Factory {
     queue: wgpu::Queue,
     choices: Mutex<Vec<Arc<Choice>>>,
     shared: pipeline_device::DeviceRecipes,
+    #[cfg(not(target_arch = "wasm32"))]
+    memory: OnceLock<crate::memory_sample::MemorySampler>,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Key { space: layer_core::color::RgbSpace, depth: layer_core::color::SampleDepth }
@@ -19,7 +21,8 @@ impl RendererFactory {
         Self::with_device(adapter, &PipelineDevice::from(device), queue)
     }
     pub(super) fn with_device(adapter: wgpu::Adapter, device: &PipelineDevice, queue: wgpu::Queue) -> Self {
-        Self(Arc::new(Factory { adapter, device: (**device).clone(), queue, choices: Default::default(), shared: device.into() }))
+        Self(Arc::new(Factory { adapter, device: (**device).clone(), queue, choices: Default::default(), shared: device.into(),
+            #[cfg(not(target_arch = "wasm32"))] memory: OnceLock::new() }))
     }
     pub(super) fn pipeline_device(&self, color: layer_core::color::DocumentColor) -> PipelineDevice {
         PipelineDevice::from(self.device().clone()).with_device_recipes(&self.0.shared)
@@ -28,6 +31,10 @@ impl RendererFactory {
     pub fn adapter(&self) -> &wgpu::Adapter { &self.0.adapter }
     pub fn device(&self) -> &wgpu::Device { &self.0.device }
     pub fn queue(&self) -> &wgpu::Queue { &self.0.queue }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn start_memory_samples(&self) { self.0.memory.get_or_init(|| crate::memory_sample::MemorySampler::new(self.device().clone())); }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn memory_snapshot(&self) -> Option<layer_render::MemorySnapshot> { self.0.memory.get().and_then(|memory| memory.snapshot()) }
     pub fn rasterizer(&self, color: layer_core::color::DocumentColor) -> Result<Box<WgpuRasterizer>, GpuRasterError> {
         let device = self.pipeline_device(color);
         WgpuRasterizer::native_staged_on_factory(self.clone(), device, color)

@@ -120,6 +120,8 @@ impl WgpuRasterizer {
     }
 }
 impl SnapshotGpu {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn memory_snapshot(&self) -> Option<layer_render::MemorySnapshot> { self.factory.memory_snapshot() }
     /// A host observation for stale asynchronous candidates; policy lives in
     /// the shared workflow, while surface/device lifetime remains host-owned.
     pub fn same_device(&self, other: &Self) -> bool {

@@ -7073,3 +7073,39 @@ matches have about 6 ms medians and 6.4–6.5 ms p99 on both builds. Terminal,
 following-contact and backing-drain submissions remain in the phase appendix.
 Every trial, assertion, unknown, shared-process sample and parked probe is in
 `artifacts/gtk-r2-fix.local/p1-qualification/`.
+
+## GTK M1.4 memory diagnostics
+
+Measured 2026-11-01 on NVIDIA RTX PRO 6000 Blackwell Max-Q, driver 615.71.09,
+with private Mutter at 2560 × 1600, 120 Hz. The frozen M1.3 `7c6364fb2`
+control is compared with M1.4 on `e00c11dc3`; `7344a6c53` changes only a Web
+journey and has the same Rust sources. Both use the existing
+`native_frame_pacing` synthetic 6000 × 4000 workload, G-Pen 384 px and default
+GPU timestamps. Three paired trials run per workload and Stats state, with
+reversed build order in trial two and no owned builds or other GPU jobs.
+
+Values are medians of each trial's canvas presentation cadence, presentation-gap
+p99 and actual worker-thread CPU p95, excluding descheduled time.
+
+| Workload / Stats | M1.3 → M1.4 cadence, Hz | Gap p99, ms | Worker CPU p95, ms |
+| --- | ---: | ---: | ---: |
+| G-Pen / closed | 119.571 → 119.545 | 9.098 → 9.048 | 1.615 → 1.809 |
+| G-Pen / open | 119.553 → 119.752 | 9.034 → 9.051 | 1.553 → 1.613 |
+| Pan / closed | 120.009 → 120.008 | 9.020 → 8.770 | 0.961 → 0.810 |
+| Pan / open | 120.014 → 120.008 | 8.684 → 8.898 | 0.788 → 0.801 |
+| Hand / closed | 120.006 → 120.005 | 8.698 → 8.671 | 0.808 → 0.945 |
+| Hand / open | 120.008 → 120.005 | 8.682 → 8.659 | 0.856 → 0.872 |
+
+The saved layouts differ between Stats states: Navigator is visible with Stats
+closed and hidden with Stats open, changing panel coverage of the canvas. Layout
+and viewport match within each build pair; this does not isolate open-versus-closed
+sampler cost. Feedback covers six seconds of moving requests plus a brief drain,
+not an exact full-contact window or fresh-pose attribution. CPU p95 ranges overlap
+in every row; G-Pen closed spans 1.440–1.863 → 1.481–1.857 ms. Both builds retain
+the shared gap miss above 8.333 ms. These desktop diagnostics do not qualify the
+reference tier or establish timing equivalence.
+
+All 36 final runs pass their functional assertions. Raw reports and order/load
+records are under `/mnt/localssd/capycanvas7-issue24-impl/m14a-gtk/final-timing-*`;
+per-run metrics are in `final-metrics.json` there. Pre-fix `timing-*` attempts and
+the failed `preflight-m14-open` window capture are retained and excluded.

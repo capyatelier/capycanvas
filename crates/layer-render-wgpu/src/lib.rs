@@ -121,6 +121,8 @@ mod artwork;
 mod display_mips;
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows", target_vendor = "apple"))]
 mod display_memory;
+#[cfg(not(target_arch = "wasm32"))]
+mod memory_sample;
 mod present_damage;
 mod present_screen;
 mod region_requests;
@@ -3881,9 +3883,13 @@ impl CanvasRenderer for WgpuRasterizer {
     fn set_clipping_preview(&mut self, shadows: bool, highlights: bool) { self.clipping_preview = [shadows, highlights]; }
     fn set_telemetry_enabled(&mut self, enabled: bool) {
         self.telemetry.enabled = enabled;
+        #[cfg(not(target_arch = "wasm32"))]
+        if enabled { self.factory.start_memory_samples(); }
     }
     fn telemetry(&self) -> layer_render::RendererTelemetry {
         let mut t = self.telemetry.snapshot(&self.device, &self.queue);
+        #[cfg(not(target_arch = "wasm32"))]
+        { t.memory = self.factory.memory_snapshot(); }
         let m = &self.metrics;
         t.submissions = m.submissions;
         t.dabs = m.dabs;

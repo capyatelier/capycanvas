@@ -3,6 +3,21 @@
 //! or VRAM is not free GPU memory.
 //! This is an admission snapshot, not a reservation against other applications.
 
+#[cfg(not(target_arch = "wasm32"))]
+use layer_render::{GpuMemory, GpuMemoryKind};
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn usage(device: &wgpu::Device) -> Option<GpuMemory> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    { vulkan_memory(device).map(VulkanHeap::usage) }
+    #[cfg(target_os = "windows")]
+    { dx12_memory(device).or_else(|| vulkan_memory(device).map(VulkanHeap::usage)) }
+    #[cfg(target_vendor = "apple")]
+    { metal_memory(device) }
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows", target_vendor = "apple")))]
+    { let _ = device; None }
+}
+
 fn allowance(headroom: Option<u64>, divisor: u64, retained: u64) -> u64 {
     // Leave room for editable layers, scratch, GTK and other documents. This
     // is an admission ceiling: the cache allocates only the actual document's
@@ -60,16 +75,20 @@ pub(crate) fn device_headroom(device: &wgpu::Device) -> Option<u64> {
 
 #[cfg(target_vendor = "apple")]
 pub(crate) fn device_headroom(device: &wgpu::Device) -> Option<u64> {
+    let memory = metal_memory(device)?;
+    metal_headroom(memory.budget.unwrap_or(0), memory.bytes,
+        layer_color::photo::PhotoMemoryBudget::available_memory())
+}
+
+#[cfg(target_vendor = "apple")]
+fn metal_memory(device: &wgpu::Device) -> Option<GpuMemory> {
     // SAFETY: the guard retains wgpu's live device. These read-only Metal
     // properties neither allocate resources nor submit work.
     let hal = unsafe { device.as_hal::<wgpu::hal::api::Metal>() }?;
     use objc2_metal::MTLDevice;
     let metal = hal.raw_device();
-    metal_headroom(
-        metal.recommendedMaxWorkingSetSize(),
-        metal.currentAllocatedSize() as u64,
-        layer_color::photo::PhotoMemoryBudget::available_memory(),
-    )
+    Some(GpuMemory { kind: GpuMemoryKind::MetalAllocated, bytes: metal.currentAllocatedSize() as u64,
+        budget: std::num::NonZeroU64::new(metal.recommendedMaxWorkingSetSize()).map(std::num::NonZeroU64::get) })
 }
 
 #[cfg(target_os = "windows")]
@@ -95,6 +114,22 @@ fn metal_headroom(recommended: u64, allocated: u64, available: Option<u64>) -> O
 
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
 fn vulkan_headroom(device: &wgpu::Device) -> Option<u64> {
+    vulkan_memory(device).map(|heap| heap.available())
+}
+
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+#[derive(Clone, Copy)]
+struct VulkanHeap { bytes: u64, budget: u64, size: u64 }
+
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+impl VulkanHeap {
+    fn available(&self) -> u64 { self.budget.min(self.size).saturating_sub(self.bytes) }
+    fn usage(self) -> GpuMemory { GpuMemory { kind: GpuMemoryKind::VulkanHeap, bytes: self.bytes, budget: Some(self.budget) } }
+    fn select(heaps: impl Iterator<Item = Self>) -> Option<Self> { heaps.max_by_key(Self::available) }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+fn vulkan_memory(device: &wgpu::Device) -> Option<VulkanHeap> {
     use ash::vk;
     // SAFETY: the guard keeps wgpu's device/instance alive. We only query
     // immutable physical-device properties and never mutate/destroy its objects.
@@ -118,16 +153,11 @@ fn vulkan_headroom(device: &wgpu::Device) -> Option<u64> {
     }
     let memory = properties.memory_properties;
     // Do not sum unrelated heaps: a texture must fit one device-local heap.
-    memory.memory_heaps[..memory.memory_heap_count as usize]
+    VulkanHeap::select(memory.memory_heaps[..memory.memory_heap_count as usize]
         .iter()
         .enumerate()
         .filter(|(_, heap)| heap.flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL))
-        .map(|(i, heap)| {
-            budget.heap_budget[i]
-                .min(heap.size)
-                .saturating_sub(budget.heap_usage[i])
-        })
-        .max()
+        .map(|(i, heap)| VulkanHeap { bytes: budget.heap_usage[i], budget: budget.heap_budget[i], size: heap.size }))
 }
 
 
@@ -169,6 +199,13 @@ fn unified_memory(device: &wgpu::Device) -> bool {
 
 #[cfg(target_os = "windows")]
 fn dx12_headroom(device: &wgpu::Device) -> Option<u64> {
+    let memory = dx12_memory(device)?;
+    remaining_headroom(memory.budget?, memory.bytes,
+        layer_color::photo::PhotoMemoryBudget::available_memory())
+}
+
+#[cfg(target_os = "windows")]
+fn dx12_memory(device: &wgpu::Device) -> Option<GpuMemory> {
     use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory4,
         IDXGIAdapter3, DXGI_MEMORY_SEGMENT_GROUP_LOCAL};
     // The guard retains the renderer's live device. Query the matching adapter,
@@ -180,8 +217,7 @@ fn dx12_headroom(device: &wgpu::Device) -> Option<u64> {
     }.ok()?;
     let mut memory = Default::default();
     unsafe { adapter.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut memory) }.ok()?;
-    remaining_headroom(memory.Budget, memory.CurrentUsage,
-        layer_color::photo::PhotoMemoryBudget::available_memory())
+    Some(GpuMemory { kind: GpuMemoryKind::DxgiLocal, bytes: memory.CurrentUsage, budget: Some(memory.Budget) })
 }
 
 #[cfg(target_os = "windows")]
@@ -211,6 +247,25 @@ pub(super) fn resource_budget(device: &wgpu::Device, retained: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+    fn vulkan_usage_preserves_raw_values_while_admission_clamps_the_heap_size() {
+        let heap = VulkanHeap { bytes: 1024, budget: 8192, size: 4096 };
+        assert_eq!(heap.available(), 3072);
+        assert_eq!(heap.usage(), GpuMemory { kind: GpuMemoryKind::VulkanHeap, bytes: 1024, budget: Some(8192) });
+        let over = VulkanHeap { bytes: 8192, ..heap };
+        assert_eq!(over.available(), 0);
+        assert_eq!(over.usage().bytes, 8192);
+    }
+    #[test]
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+    fn vulkan_usage_selects_the_same_local_heap_as_admission() {
+        let heaps = [VulkanHeap { bytes: 0, budget: 8192, size: 4 }, VulkanHeap { bytes: 1, budget: 8, size: 8 }];
+        let selected = VulkanHeap::select(heaps.into_iter()).unwrap();
+        assert_eq!(selected.available(), 7);
+        assert_eq!(selected.usage(), GpuMemory { kind: GpuMemoryKind::VulkanHeap, bytes: 1, budget: Some(8) });
+        assert!(VulkanHeap::select(std::iter::empty()).is_none());
+    }
     #[test]
     #[cfg(target_os = "linux")]
     fn the_local_heap_is_reported_without_a_memory_budget() {

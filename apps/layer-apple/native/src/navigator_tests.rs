@@ -48,7 +48,7 @@ fn diagnostics_restored_before_gpu_attachment_collects_actual_drawing_samples() 
             assert!(std::time::Instant::now() < deadline, "GPU diagnostics did not deliver drawing samples: {stats}");
             std::thread::sleep(std::time::Duration::from_millis(5));
         };
-        assert_eq!(stats["rows"].as_array().unwrap().len(), 8);
+        assert_eq!(stats["rows"].as_array().unwrap().len(), 11);
         assert_eq!(metric(&stats, "FPS")["value"], "—");
         assert!(!stats["samples"].as_array().unwrap().is_empty());
         assert!(stats["samples"].as_array().unwrap().len() <= 120);

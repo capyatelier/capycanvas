@@ -1130,9 +1130,13 @@ impl EffectPanels {
         }
         for (label, metric) in self.stats_labels.borrow().iter().zip(&view.rows) {
             if label.text().as_str() != metric.value { label.set_text(&metric.value); }
-            if let Some(row) = label.parent()
-                && row.tooltip_text().as_deref() != Some(metric.description.as_str())
-            { row.set_tooltip_text(Some(&metric.description)); }
+            if let Some(row) = label.parent() {
+                if let Some(caption) = row.first_child().and_downcast::<gtk::Label>()
+                    && caption.text().as_str() != metric.label
+                { caption.set_text(&metric.label); }
+                if row.tooltip_text().as_deref() != Some(metric.description.as_str())
+                { row.set_tooltip_text(Some(&metric.description)); }
+            }
         }
         if *self.stats_samples.borrow() != view.samples {
             *self.stats_samples.borrow_mut() = view.samples;

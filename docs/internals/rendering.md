@@ -1353,6 +1353,17 @@ available memory on integrated GPUs and a quarter of the largest device-local
 heap on discrete GPUs, instead of the 256 MiB minimum. Optional display caches
 never use this allowance.
 
+Stats copies timestamped OS and driver readings from a worker owned by the factory,
+started when diagnostics first become visible and sampled every two seconds
+until that factory retires. Linux and Android report process RSS and its OS peak;
+Windows reports private commit and its lifetime peak; Apple reports physical
+footprint and the highest sampled footprint. GPU readings cover the selected
+Vulkan device-local heap, DXGI process usage in local memory and its budget, or Metal allocations
+and its working-set recommendation. These are raw readings, separate from cache
+admission allowances. Missing queries, including browser process memory, remain
+unavailable. Process and GPU readings can overlap and are not additive. Canvas
+storage remains tracked renderer allocation, excluding driver overhead.
+
 Live composite color samples and region classification retain their frame while
 cold image-object captures prepare on workers. Polling advances prepared GPU
 sampling without inline source decoding or GPU waits. Region classification

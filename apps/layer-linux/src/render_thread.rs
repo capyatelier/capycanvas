@@ -1166,6 +1166,7 @@ impl CanvasRenderer for RenderWorker {
             .try_lock()
             .map(|t| t.clone())
             .unwrap_or_default();
+        telemetry.memory = self.snapshot_gpu.as_ref().and_then(|gpu| gpu.memory_snapshot());
         telemetry.frame_rate = self.clock.presented_fps(gtk::glib::monotonic_time().max(0) as u64 * 1000)
             .map(|fps| layer_render::FrameRate { fps, source: layer_render::FrameRateSource::Presented });
         telemetry

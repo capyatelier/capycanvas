@@ -1,5 +1,6 @@
 //! Compact diagnostics, labels and summaries shared by native hosts.
-use layer_render::RendererTelemetry;
+use layer_render::{RendererTelemetry, MemorySnapshot, ProcessMemoryKind, MemoryPeak, GpuMemoryKind};
+use crate::{FluentArgs, MessageId};
 use serde::Serialize;
 #[derive(Clone, Debug, Serialize)]
 pub struct StatRow {
@@ -23,6 +24,61 @@ pub struct StatsView {
     /// Insert the chart after this many metric rows on every frontend.
     pub chart_after_rows: usize,
 }
+fn memory_rows(memory: Option<MemorySnapshot>, localization: &crate::Localizer) -> [StatRow; 3] {
+    let age = memory.map_or_else(|| localization.text(MessageId::DIAGNOSTICS_MEMORY_NO_SAMPLE).to_string(), |sample| {
+        let mut args = FluentArgs::new();
+        args.set("seconds", format!("{:.1}", sample.sampled_at.elapsed().as_secs_f64()));
+        localization.format(MessageId::DIAGNOSTICS_MEMORY_AGE, &args)
+    });
+    let value = |bytes: u64| {
+        let mut args = FluentArgs::new();
+        args.set("value", format!("{:.1}", bytes as f64 / 1048576.));
+        localization.format(MessageId::DIAGNOSTICS_MEMORY_MIB, &args)
+    };
+    let unavailable = || localization.text(MessageId::DIAGNOSTICS_MEMORY_UNAVAILABLE).to_string();
+    let row = |label, value, scope: &str, gpu| {
+        let mut args = FluentArgs::new();
+        args.set("scope", scope);
+        args.set("age", age.as_str());
+        StatRow { label: localization.text(label).to_string(), value,
+            description: localization.format(if gpu { MessageId::DIAGNOSTICS_MEMORY_GPU_DESCRIPTION } else { MessageId::DIAGNOSTICS_MEMORY_DESCRIPTION }, &args) }
+    };
+    let process = memory.and_then(|sample| sample.process);
+    let (process_label, current_scope) = process.map_or((MessageId::DIAGNOSTICS_MEMORY_PROCESS, MessageId::DIAGNOSTICS_MEMORY_PROCESS_UNAVAILABLE), |process| match process.kind {
+        ProcessMemoryKind::Resident => (MessageId::DIAGNOSTICS_MEMORY_RESIDENT_LABEL, MessageId::DIAGNOSTICS_MEMORY_RESIDENT),
+        ProcessMemoryKind::PrivateCommit => (MessageId::DIAGNOSTICS_MEMORY_PRIVATE_COMMIT_LABEL, MessageId::DIAGNOSTICS_MEMORY_PRIVATE_COMMIT),
+        ProcessMemoryKind::PhysicalFootprint => (MessageId::DIAGNOSTICS_MEMORY_FOOTPRINT_LABEL, MessageId::DIAGNOSTICS_MEMORY_FOOTPRINT),
+    });
+    let (peak, peak_label, peak_scope) = process.map_or_else(|| (unavailable(), MessageId::DIAGNOSTICS_MEMORY_PEAK, MessageId::DIAGNOSTICS_MEMORY_PEAK_UNAVAILABLE), |process| match process.peak {
+        MemoryPeak::Lifetime(bytes) => (value(bytes), MessageId::DIAGNOSTICS_MEMORY_LIFETIME_LABEL, MessageId::DIAGNOSTICS_MEMORY_LIFETIME_PEAK),
+        MemoryPeak::Sampled(bytes) => (value(bytes), MessageId::DIAGNOSTICS_MEMORY_SAMPLED_LABEL, MessageId::DIAGNOSTICS_MEMORY_SAMPLED_PEAK),
+    });
+    let peak_scope = if process.is_some() {
+        let mut args = FluentArgs::new();
+        let metric = localization.text(process_label);
+        args.set("metric", metric.as_ref());
+        localization.format(peak_scope, &args)
+    } else { localization.text(peak_scope).to_string() };
+    let (gpu_value, gpu_label, gpu_scope) = memory.and_then(|sample| sample.gpu).map_or_else(|| (unavailable(), MessageId::DIAGNOSTICS_MEMORY_GPU, MessageId::DIAGNOSTICS_MEMORY_GPU_UNAVAILABLE), |gpu| {
+        let mut args = FluentArgs::new();
+        args.set("used", format!("{:.1}", gpu.bytes as f64 / 1048576.));
+        let id = if let Some(budget) = gpu.budget {
+            args.set("budget", format!("{:.1}", budget as f64 / 1048576.));
+            MessageId::DIAGNOSTICS_MEMORY_BUDGET
+        } else { MessageId::DIAGNOSTICS_MEMORY_NO_BUDGET };
+        let (label, scope) = match gpu.kind {
+            GpuMemoryKind::VulkanHeap => (MessageId::DIAGNOSTICS_MEMORY_VULKAN_LABEL, MessageId::DIAGNOSTICS_MEMORY_VULKAN),
+            GpuMemoryKind::DxgiLocal => (MessageId::DIAGNOSTICS_MEMORY_DXGI_LABEL, MessageId::DIAGNOSTICS_MEMORY_DXGI),
+            GpuMemoryKind::MetalAllocated => (MessageId::DIAGNOSTICS_MEMORY_METAL_LABEL, MessageId::DIAGNOSTICS_MEMORY_METAL),
+        };
+        (localization.format(id, &args), label, scope)
+    });
+    [
+        row(process_label, process.map_or_else(unavailable, |process| value(process.bytes)), &localization.text(current_scope), false),
+        row(peak_label, peak, &peak_scope, false),
+        row(gpu_label, gpu_value, &localization.text(gpu_scope), true),
+    ]
+}
 pub(super) fn view(t: RendererTelemetry, localization: &crate::Localizer) -> StatsView {
     fn percentiles(values: Vec<f32>) -> String {
         if values.is_empty() {
@@ -35,7 +91,7 @@ pub(super) fn view(t: RendererTelemetry, localization: &crate::Localizer) -> Sta
     }
     let samples = t.cpu.ordered();
     let submitted = t.frame_rate.is_some_and(|rate| rate.source == layer_render::FrameRateSource::Submitted);
-    let rows = vec![
+    let mut rows = vec![
         StatRow {
             label: "CPU · ms".into(),
             value: percentiles(samples.clone()),
@@ -81,6 +137,7 @@ pub(super) fn view(t: RendererTelemetry, localization: &crate::Localizer) -> Sta
             description: "Cached effect pipelines. Parameter edits do not compile new pipelines.".into(),
         },
     ];
+    rows.extend(memory_rows(t.memory, localization));
     StatsView {
         rows,
         samples,
@@ -112,7 +169,10 @@ mod tests {
                 "Canvas storage",
                 "Dabs",
                 "Effect passes",
-                "Pipelines"
+                "Pipelines",
+                "Process memory",
+                "Process peak",
+                "GPU memory"
             ]
         );
         assert_eq!(view.rows[view.chart_after_rows - 1].label, "GPU · ms");
@@ -141,4 +201,71 @@ mod tests {
         assert_eq!(metric.value, "120");
         assert!(metric.description.contains("unavailable"));
     }
+
+    fn memory_view(process: Option<layer_render::ProcessMemory>, gpu: Option<layer_render::GpuMemory>, age: u64) -> StatsView {
+        let localization = crate::Localizer::shared(crate::UiLanguage::English);
+        view(RendererTelemetry { resident_bytes: 1048576, memory: Some(MemorySnapshot {
+            sampled_at: std::time::Instant::now() - std::time::Duration::from_secs(age), process, gpu,
+        }), ..Default::default() }, &localization)
+    }
+
+    #[test]
+    fn memory_unavailable_is_not_zero_and_old_samples_keep_their_age() {
+        let localization = crate::Localizer::shared(crate::UiLanguage::English);
+        let absent = view(RendererTelemetry::default(), &localization);
+        for row in &absent.rows[8..] {
+            assert_eq!(row.value, "Unavailable");
+            assert!(row.description.contains("No sample available"));
+        }
+        let old = memory_view(None, None, 42);
+        for row in &old.rows[8..] {
+            assert_eq!(row.value, "Unavailable");
+            let age = row.description.split("Sample age: ").nth(1).unwrap().split_whitespace().next().unwrap().parse::<f64>().unwrap();
+            assert!(age >= 42.);
+        }
+    }
+
+    #[test]
+    fn process_metrics_keep_their_scope_mib_units_and_peak_semantics() {
+        use layer_render::ProcessMemory;
+        for (kind, scope) in [
+            (ProcessMemoryKind::Resident, "including shared pages"),
+            (ProcessMemoryKind::PrivateCommit, "including pages outside RAM"),
+            (ProcessMemoryKind::PhysicalFootprint, "including compressed memory"),
+        ] {
+            let metric = memory_view(Some(ProcessMemory { kind, bytes: 10 * 1048576, peak: MemoryPeak::Lifetime(12 * 1048576) }), None, 0);
+            assert_eq!(metric.rows[4].value, "1.0 MiB");
+            assert_eq!(metric.rows[8].value, "10.0 MiB");
+            assert!(metric.rows[8].description.contains(scope));
+            assert_eq!(metric.rows[9].value, "12.0 MiB");
+            assert!(metric.rows[9].description.contains(&metric.rows[8].label));
+            assert!(metric.rows[9].description.contains("Operating-system lifetime peak"));
+        }
+        let sampled = memory_view(Some(ProcessMemory { kind: ProcessMemoryKind::Resident, bytes: 0, peak: MemoryPeak::Sampled(1572864) }), None, 0);
+        assert_eq!(sampled.rows[8].value, "0.0 MiB");
+        assert_eq!(sampled.rows[9].value, "1.5 MiB");
+        assert!(sampled.rows[9].description.contains("sampling can miss earlier peaks"));
+        assert!(!sampled.rows[9].description.contains("lifetime"));
+    }
+
+    #[test]
+    fn driver_memory_keeps_raw_budget_scope_and_unified_memory_overlap() {
+        use layer_render::GpuMemory;
+        for (kind, scope) in [
+            (GpuMemoryKind::VulkanHeap, "Vulkan heap with most headroom"),
+            (GpuMemoryKind::DxgiLocal, "local memory segment"),
+            (GpuMemoryKind::MetalAllocated, "recommended working set"),
+        ] {
+            let metric = memory_view(None, Some(GpuMemory { kind, bytes: 3 * 1048576, budget: Some(8 * 1048576) }), 0);
+            assert_eq!(metric.rows[10].value, "3.0 / 8.0 MiB");
+            assert!(metric.rows[10].description.contains(scope));
+            assert!(metric.rows[10].description.contains("may overlap"));
+            assert!(metric.rows[10].description.contains("do not add"));
+            if kind == GpuMemoryKind::MetalAllocated { assert!(metric.rows[10].description.contains("not free memory or a hard limit")); }
+        }
+        let partial = memory_view(None, Some(GpuMemory { kind: GpuMemoryKind::MetalAllocated, bytes: 1048576, budget: None }), 0);
+        assert_eq!(partial.rows[10].value, "1.0 / — MiB");
+        assert!(partial.rows[10].description.contains("— means unavailable"));
+    }
+
 }

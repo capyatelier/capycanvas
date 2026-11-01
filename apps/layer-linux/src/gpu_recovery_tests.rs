@@ -124,10 +124,34 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
     assert!(ui_session(&w).engine().backend().stats.lock().unwrap().presented.iter().any(|frame| frame[3] == 1));
     until(|| displayed_fps() == Some(0.) && w.frame_timer.borrow().is_none(), "idle FPS falls to zero");
     let idle_frames = ui_session(&w).engine().backend().stats.lock().unwrap().cpu.len();
-    pump(1100);
+    let idle_presentations = ui_session(&w).engine().backend().stats.lock().unwrap().presented.len();
+    let idle_memory = || {
+        let session = ui_session(&w);
+        let backend = session.engine().backend();
+        let stats = backend.stats.lock().unwrap();
+        assert_eq!(stats.cpu.len(), idle_frames, "Memory sampling does not render canvas frames");
+        assert_eq!(stats.presented.len(), idle_presentations, "Memory sampling does not present canvas frames");
+        assert!(w.frame_timer.borrow().is_none());
+        drop(stats);
+        backend.telemetry().memory
+    };
+    until(|| idle_memory().is_some_and(|sample| sample.process.is_some_and(|process| process.bytes > 0)), "process memory sample while canvas is idle");
+    let sampled_at = idle_memory().unwrap().sampled_at;
+    until(|| idle_memory().is_some_and(|sample| sample.sampled_at > sampled_at && sample.process.is_some_and(|process| process.bytes > 0)), "memory sample refreshes without canvas frames");
+    let metrics = ui_session(&w).renderer_stats();
+    let mut captions = Vec::new();
+    let mut child = w.effects.stats.first_child();
+    while let Some(row) = child {
+        if let Some(label) = row.first_child().and_downcast::<gtk::Label>() { captions.push(label.text().to_string()); }
+        child = row.next_sibling();
+    }
+    assert_eq!(&captions[..metrics.rows.len()], metrics.rows.iter().map(|row| row.label.clone()).collect::<Vec<_>>());
     assert_eq!(displayed_fps(), Some(0.));
     assert_eq!(ui_session(&w).engine().backend().stats.lock().unwrap().cpu.len(), idle_frames, "Diagnostics does not keep the canvas rendering");
     assert!(w.frame_timer.borrow().is_none());
+    if let Some(output) = std::env::var_os("LAYER_TEST_ARTIFACTS") {
+        crate::capture(&w, std::path::Path::new(&output).join("stats-memory.png").to_str().unwrap());
+    }
     let navigation_document = ui_session(&w).engine().document().clone();
     let navigation_checkpoint = ui_session(&w).engine().checkpoint();
     let presentations = ui_session(&w).engine().backend().stats.lock().unwrap().presented.iter().filter(|frame| frame[3] == 1).count();
