@@ -235,7 +235,7 @@ struct ScopeView : std::enable_shared_from_this<ScopeView> {
             }
         }
         auto details=str(current,L"description")+L"\n"+str(current,L"range");
-        AutomationProperties::SetName(frame,str(current,L"description"));AutomationProperties::SetHelpText(frame,str(current,L"range"));tooltip(frame,details);
+        tooltip(frame,details);AutomationProperties::SetName(frame,str(current,L"description"));AutomationProperties::SetHelpText(frame,str(current,L"range"));
         auto axisLabels=array(current,L"axis");
         for(uint32_t i=0;i<2;++i){auto text=i<axisLabels.Size()?axisLabels.GetStringAt(i):hstring();if(axis[i].Text()!=text)axis[i].Text(text);}
         if(logarithmic){
