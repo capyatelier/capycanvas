@@ -77,9 +77,9 @@ export function tabHover(tab, presentation) {
   tab.style.setProperty('--hover-left-foot',hoverFeet[0]);
   tab.style.setProperty('--hover-right-foot',hoverFeet[1]);
 }
-export function createWorkspaceChrome({app,state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,draggable,grip,contentPanel,tabLabel,releaseTabs}) {
+export function createWorkspaceChrome({app,state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,draggable,grip,contentPanel,tabLabel,releaseTabs,frameInterval}) {
   const columns=new Map(),drawers=new Map(),catalog=liveCopy(app,"catalog");
-  let resolved,animating=false,tiles=[];
+  let resolved,animating=false,tiles=[],previousAnimationFrame=null;
   const send=action=>dispatch({type:"customize",action});
   const local=(b,origin)=>({...b,x:b.x-origin.x,y:b.y-origin.y});
   function contentHeight(body) {
@@ -228,7 +228,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
           }
           root.append(body);return body;
         });
-        record=Object.assign(record??{},{key,root,shadow,bodies,column,drawer,inspector,from,started:performance.now()-(switching?catalog.panel_expansion_ms:0),placement:from});drawers.set(id,record);
+        record=Object.assign(record??{},{key,root,shadow,bodies,column,drawer,inspector,from,started:null,switching:!!switching,placement:from});drawers.set(id,record);
       }
       record.drawer=drawer;record.measure=null;
       record.tabStyle=drawer.tabs?app.group_tab_style(drawer.tabs.group):null;
@@ -240,15 +240,17 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       record.inspector?.refresh(layer_properties);
       for(const body of record.bodies)for(const child of body.children)child.refreshPanel?.();
     }
-    for(const[id,r]of drawers)if(!live.has(id)&&!r.closing){r.closing=true;r.root.inert=true;r.from=r.placement;r.started=performance.now();}
+    for(const[id,r]of drawers)if(!live.has(id)&&!r.closing){r.closing=true;r.root.inert=true;r.from=r.placement;r.started=null;}
     measureColumnDrawers();
     if(!animating){animating=true;requestAnimationFrame(animate);}
   }
   function animate(now) {
+    const interval=previousAnimationFrame===null?frameInterval():now-previousAnimationFrame;
     animating=false;let more=false;const measurements=[];
     for(const node of workspace.querySelectorAll('[data-drawer-facing]'))delete node.dataset.drawerFacing;
     for(const node of workspace.querySelectorAll('[data-drawer-source-corners]'))delete node.dataset.drawerSourceCorners;
     for(const[id,r]of drawers) {
+      r.started??=now-interval-(!r.closing&&r.switching?catalog.panel_expansion_ms:0);
       if(!r.closing) {
         const anchor=r.drawer.anchor,tile=anchor.kind==='tile'?tiles.find(m=>m.anchor.panel===anchor.panel&&m.anchor.tile===anchor.tile):undefined,previous=r.measuredTile;
         if(tile?.column!==previous?.column||tile&&(!previous||tile.bounds.x!==previous.bounds.x||tile.bounds.y!==previous.bounds.y||tile.bounds.width!==previous.bounds.width||tile.bounds.height!==previous.bounds.height))r.measure=null;
@@ -329,6 +331,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
     measureColumnDrawers();
     editor.queuePositions();
     if(more&&!animating){animating=true;requestAnimationFrame(animate);}
+    previousAnimationFrame=animating?now:null;
   }
   workspace.addEventListener("scroll",()=>{if(drawers.size&&!animating){animating=true;requestAnimationFrame(animate);}},true);
   function connectionList(){return [...drawers.values()].map(r=>r.connection).filter(Boolean);}

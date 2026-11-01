@@ -289,12 +289,12 @@ test('drawer plans follow exact native tile facts and retire missing sources',()
   let plans=0,placements=0,disposed=0;
   const body={style:{},querySelectorAll:()=>[]},record={column:null,drawer:{anchor:{kind:'tile',panel:'toolbar',tile:2}},bodies:[body],root:{style:{}},shadow:{style:{}},started:0};
   const bounds={x:0,y:0,width:242,height:120},drawers=new Map([['tool',record]]);
-  const context={drawers,tiles:[structuredClone(native)],animating:false,catalog:{panel_expansion_ms:200},
+  const context={drawers,tiles:[structuredClone(native)],animating:false,catalog:{panel_expansion_ms:200},previousAnimationFrame:null,frameInterval:()=>16,
     workspace:{clientWidth:1200,clientHeight:900,querySelectorAll:()=>[]},
     app:{drawer_measure(){plans++;return{measure:context.tiles.length?{placement:{columns:[bounds]}}:null,toolbars:[]};},drawer(){placements++;return{placement:{bounds,columns:[bounds],direction:'right'},connection:null};}},
     contentHeight:()=>120,matchMedia:()=>({matches:false}),place(){},dispose(){disposed++;},dispatch(){},measureColumnDrawers(){},editor:{queuePositions(){}},
     requestAnimationFrame(){assert.fail('A completed drawer does not schedule another callback');}};
-  const start=chrome.indexOf('  function animate(now) {'),end=chrome.indexOf('  workspace.addEventListener("scroll"',start);
+  const start=chrome.indexOf('  function animate('),end=chrome.indexOf('  workspace.addEventListener("scroll"',start);
   assert.ok(start>=0&&end>start);runInNewContext(chrome.slice(start,end)+'\nglobalThis.step=()=>animate(200);',context);
   const step=facts=>{context.tiles=facts?[structuredClone(facts)]:[];context.step();};
   step(native);assert.equal(plans,1);
@@ -305,4 +305,33 @@ test('drawer plans follow exact native tile facts and retire missing sources',()
     step(changed);assert.equal(plans,before+1,`${key} unchanged across placements retains the plan`);
   }
   const before=placements;step(null);assert.equal(disposed,1);assert.equal(drawers.has('tool'),false,'A missing native source leaves no drawer record');assert.equal(placements,before,'Missing sources are not placed from a stale plan');
+});
+
+test('drawer progress follows frame deltas through delayed callbacks, close and idle restart',()=>{
+  const chrome=readFileSync(new URL('workspace-chrome.js',import.meta.url),'utf8');
+  const fixture=(closing=false,switching=false)=>{
+    const queries=[],callbacks=[],body={style:{},querySelectorAll:()=>[]},root={style:{},querySelectorAll:()=>[]},bounds={x:48,y:48,width:242,height:120};
+    const record={column:46,drawer:{anchor:{kind:'column',column:46,origin:'brushes'}},bodies:[body],root,shadow:{style:{}},started:null,closing,switching};
+    const context={drawers:new Map([[46,record]]),tiles:[],animating:true,previousAnimationFrame:null,catalog:{panel_expansion_ms:200},frameInterval:()=>16,entryTime:101.6,
+      performance:{now:()=>context.entryTime},workspace:{clientWidth:1200,clientHeight:900,querySelectorAll:()=>[],querySelector:()=>null},
+      app:{drawer_measure:()=>({measure:{placement:{columns:[bounds]}},toolbars:[]}),drawer(query){queries.push(query);const width=bounds.width*(query.closing?1-query.progress:Math.max(0,query.progress)),placement={...bounds,width};return{placement:{bounds:placement,columns:[placement],direction:'right'},connection:null};}},
+      contentHeight:()=>120,matchMedia:()=>({matches:false}),place:(node,box)=>Object.assign(node.style,box),dispose(){},dispatch(){},measureColumnDrawers(){},editor:{queuePositions(){}},requestAnimationFrame:callback=>callbacks.push(callback)};
+    const start=chrome.indexOf('  function animate('),end=chrome.indexOf('  workspace.addEventListener("scroll"',start);
+    assert.ok(start>=0&&end>start);runInNewContext(chrome.slice(start,end)+'\nglobalThis.onFrame=animate;',context);
+    return{context,record,root,queries,callbacks,bounds};
+  };
+  for(const closing of [false,true]){
+    const f=fixture(closing),times=[100,116,133,149],entry=[101.6,120.8,146.4,152.5];
+    times.forEach((time,i)=>{f.context.entryTime=entry[i];(i?f.callbacks.shift():f.context.onFrame)(time);if(!i){assert.ok(f.root.style.width>0,'The first callback publishes positive width');assert.equal(f.callbacks.length,1,'Only the next animation callback is queued');}});
+    for(let i=1;i<times.length;i++)assert.ok(Math.abs((f.queries[i].progress-f.queries[i-1].progress)*200-(times[i]-times[i-1]))<1e-10,'Progress advances exactly by the frame timestamp delta');
+    assert.ok(f.queries[0].progress>0&&f.queries[0].progress<1,'The first callback shows one frame of motion');
+    assert.ok(Math.abs(f.queries[0].progress-.08)<1e-10);assert.ok(f.root.style.width>0);
+    assert.equal(f.queries.length,4,'Each real callback queries placement once');
+    f.context.entryTime=19000;f.callbacks.shift()(400);assert.equal(f.callbacks.length,0);
+    f.record.started=null;f.record.closing=false;f.context.drawers.set(46,f.record);f.context.onFrame(10000);
+    assert.ok(Math.abs(f.queries.at(-1).progress-.08)<1e-10,'An idle gap is not a frame interval');
+  }
+  const switched=fixture(false,true);switched.context.onFrame(100);assert.equal(switched.queries[0].progress,1,'Switching an opener keeps its immediate placement');
+  switched.record.started=null;switched.record.closing=true;switched.context.onFrame(1000);
+  assert.ok(Math.abs(switched.queries.at(-1).progress-.08)<1e-10,'Closing does not inherit the switch offset');
 });
