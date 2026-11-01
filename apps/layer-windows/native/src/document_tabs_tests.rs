@@ -275,14 +275,14 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
     let deadline=Instant::now()+Duration::from_secs(30);
     loop {
         service.poll(&mut host).unwrap();
-        let complete=std::fs::read_dir(crate::storage::roots().unwrap().sessions()).ok().is_some_and(|entries|entries.filter_map(Result::ok).any(|entry|{
+        let complete=std::fs::read_dir(crate::storage::roots().unwrap().sessions().join("packed")).ok().is_some_and(|entries|entries.filter_map(Result::ok).any(|entry|{
             let Ok(Some(manifest))=layer_ui::SessionManifest::read(&entry.path().join("session.json")) else{return false};
             manifest.drawings.len()==expected.len()&&manifest.drawings.iter().all(|drawing|{
                 let root=entry.path().join(&drawing.key);
                 let read=|path:std::path::PathBuf|std::fs::read(path).ok().and_then(|bytes|serde_json::from_slice::<serde_json::Value>(&bytes).ok());
                 let Some(head)=read(root.join("head.json"))else{return false};
                 let Some(generation)=head["current"]["id"].as_str()else{return false};
-                read(root.join("generations").join(format!("{generation}.json"))).is_some_and(|snapshot|snapshot["checkpoint"]["edit_checkpoint"].as_u64()==expected.get(&drawing.id).copied())
+                read(root.join("generations").join(format!("{generation}.json"))).is_some_and(|snapshot|snapshot["session"]["checkpoint"]["edit_checkpoint"].as_u64()==expected.get(&drawing.id).copied())
             })
         }));
         if complete {break;}

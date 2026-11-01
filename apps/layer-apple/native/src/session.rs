@@ -48,11 +48,12 @@ fn has_drawings(directory: &Path) -> Result<bool, SessionReadError> {
 }
 /// The scene's own session or, when it has no drawings and `adopt` is set, the
 /// newest unlocked session that has drawings, renamed to the scene.
-fn claim(open: SessionOpen) -> Result<(PathBuf, SessionLease, Option<String>), String> {
+fn claim(mut open: SessionOpen) -> Result<(PathBuf, SessionLease, Option<String>), String> {
     let mut parts = Path::new(&open.scene).components();
     if !matches!((parts.next(), parts.next()), (Some(Component::Normal(_)), None)) {
         return Err("Invalid editing session".into());
     }
+    open.sessions = layer_core::package::session_store::import_session_directories(&open.sessions, "window.json", ".lock")?;
     let own = open.sessions.join(&open.scene);
     let lease = SessionLease::claim(&own)?.ok_or("This editing session is already open")?;
     match has_drawings(&own) {

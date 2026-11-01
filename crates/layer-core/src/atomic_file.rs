@@ -64,7 +64,7 @@ fn publish_using(
     let mut file = BufWriter::new(temporary.1);
     write(&mut file)?;
     file.flush()
-        .and_then(|()| file.get_ref().sync_all())
+        .and_then(|()| crate::package::session_store::sync_file(file.get_ref()))
         .map_err(|e| format!("Cannot finish saving: {e}"))?;
     ready()?;
     std::fs::rename(&cleanup.0, path).map_err(|e| format!("Cannot replace drawing: {e}"))?;

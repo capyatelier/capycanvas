@@ -21,7 +21,7 @@ impl SessionJob {
     }
 }
 fn open(app: &App, path: &Path, adopt: bool) -> SessionJob {
-    let sessions = CString::new(path.parent().unwrap().to_str().unwrap()).unwrap();
+    let sessions = CString::new(path.parent().unwrap().parent().unwrap().to_str().unwrap()).unwrap();
     let scene = CString::new(path.file_name().unwrap().to_str().unwrap()).unwrap();
     SessionJob(unsafe { capy_apple_session_open(app.0, sessions.as_ptr(), scene.as_ptr(), adopt, false) })
 }
@@ -106,7 +106,7 @@ unsafe extern "C" fn observe_original(uri: *const std::ffi::c_char, context: *mu
 fn apple_saved_session_checks_original_before_clean_close() {
     for platform in [0, 1] {
         let root = std::env::temp_dir().join(format!("capy-apple-original-{}", layer_core::PortableId::random()));
-        let path = root.join("session");
+        let path = root.join("packed").join("session");
         let original = root.join("drawing.capy");
         let uri = CString::new(format!("file://{}", original.display())).unwrap();
         let app = launch(platform, &path);
@@ -213,7 +213,7 @@ fn presented_pixel(app: &App) -> [u8; 4] {
 #[test]
 fn apple_fill_selection_survives_background_checkpoint_undo_redo_and_restart() {
     for platform in [0, 1] {
-        let path = std::env::temp_dir().join(format!("capy-apple-fill-restart-{}", layer_core::PortableId::random()));
+        let path = std::env::temp_dir().join(format!("capy-apple-fill-restart-{}", layer_core::PortableId::random())).join("packed").join("scene");
         let app = launch(platform, &path);
         let blank = app.pixels();
         app.invoke("add_layer");
@@ -293,7 +293,7 @@ fn apple_fill_selection_survives_background_checkpoint_undo_redo_and_restart() {
 fn apple_unreadable_sessions_preserve_copies_and_allow_editing_checkpointing_and_retry() {
     for platform in [0, 1] {
         for peer in [false, true] {
-            let path = std::env::temp_dir().join(format!("capy-apple-unreadable-{}", layer_core::PortableId::random()));
+            let path = std::env::temp_dir().join(format!("capy-apple-unreadable-{}", layer_core::PortableId::random())).join("packed").join("scene");
             let app = launch(platform, &path);
             app.stroke(); app.draw_until_idle();
             let painted = app.pixels();
@@ -314,7 +314,7 @@ fn apple_unreadable_sessions_preserve_copies_and_allow_editing_checkpointing_and
             let metadata_path = path.join(&drawing.key).join("generations").join(format!("{}.json", head["current"]["id"].as_str().unwrap()));
             let original_metadata = std::fs::read(&metadata_path).unwrap();
             let mut metadata: serde_json::Value = serde_json::from_slice(&original_metadata).unwrap();
-            metadata["current"]["working"].as_object_mut().unwrap().remove("view_origin").unwrap();
+            metadata["session"]["current"]["working"].as_object_mut().unwrap().remove("view_origin").unwrap();
             let incompatible = serde_json::to_vec(&metadata).unwrap();
             head["current"]["sha256"] = layer_ui::DestinationFingerprint::read(incompatible.as_slice()).unwrap().sha256.into();
             head["previous"] = serde_json::Value::Null;
@@ -338,7 +338,7 @@ fn apple_unreadable_sessions_preserve_copies_and_allow_editing_checkpointing_and
             assert_eq!(restarted_failure, initial_failure, "A known drawing failure must not become an unexplained interrupted restart");
             assert_saved_document(&app.document(), &live);
             checkpoint(&app, 0, false);
-            let sessions = CString::new(path.parent().unwrap().to_str().unwrap()).unwrap();
+            let sessions = CString::new(path.parent().unwrap().parent().unwrap().to_str().unwrap()).unwrap();
             let scene = CString::new(path.file_name().unwrap().to_str().unwrap()).unwrap();
             let retry = || SessionJob(unsafe { capy_apple_session_open(app.0, sessions.as_ptr(), scene.as_ptr(), false, true) });
             let failed_retry = retry(); failed_retry.run();
@@ -375,7 +375,7 @@ fn apple_unreadable_sessions_preserve_copies_and_allow_editing_checkpointing_and
 #[test]
 fn apple_closing_new_work_keeps_unrestored_session_copies() {
     for platform in [0, 1] {
-        let path = std::env::temp_dir().join(format!("capy-apple-unrestored-close-{}", layer_core::PortableId::random()));
+        let path = std::env::temp_dir().join(format!("capy-apple-unrestored-close-{}", layer_core::PortableId::random())).join("packed").join("scene");
         std::fs::create_dir_all(path.join("preserved")).unwrap();
         let head = path.join("preserved/head.json");
         std::fs::write(&head, b"unsupported head").unwrap();
@@ -405,7 +405,7 @@ fn apple_closing_new_work_keeps_unrestored_session_copies() {
 #[test]
 fn apple_explicit_failed_entry_discard_preserves_live_history_and_other_failed_copy() {
     for platform in [0, 1] {
-        let path = std::env::temp_dir().join(format!("capy-apple-failed-discard-{}", layer_core::PortableId::random()));
+        let path = std::env::temp_dir().join(format!("capy-apple-failed-discard-{}", layer_core::PortableId::random())).join("packed").join("scene");
         let app = launch(platform, &path);
         let blank = app.pixels();
         app.stroke(); app.draw_until_idle();
@@ -481,7 +481,7 @@ fn apple_shared_image_objects_keep_f64_poses_pixels_and_history_across_workers_a
     ];
     for platform in [0, 1] {
         for (name, bytes) in packages {
-            let path = std::env::temp_dir().join(format!("capy-apple-objects-{}", layer_core::PortableId::random()));
+            let path = std::env::temp_dir().join(format!("capy-apple-objects-{}", layer_core::PortableId::random())).join("packed").join("scene");
             let app = launch(platform, &path);
             let open = ProjectJob::new(&app, true);
             assert_eq!(unsafe { capy_project_read_bytes(open.0, bytes.as_ptr(), bytes.len(), c"Objects.capy".as_ptr()) }, 0, "{:?}", open.error());
@@ -539,7 +539,7 @@ fn apple_shared_image_objects_keep_f64_poses_pixels_and_history_across_workers_a
 #[test]
 fn apple_session_restart_preserves_pixels_history_selection_and_close_membership() {
     for platform in [0, 1] {
-        let path = std::env::temp_dir().join(format!("capy-apple-session-{}", layer_core::PortableId::random()));
+        let path = std::env::temp_dir().join(format!("capy-apple-session-{}", layer_core::PortableId::random())).join("packed").join("scene");
         let app = launch(platform, &path);
         app.invoke("zoom_in");
         app.invoke("rotate_right");
@@ -595,7 +595,7 @@ fn apple_session_restart_preserves_pixels_history_selection_and_close_membership
 #[test]
 fn apple_session_stale_startup_appends_without_overwriting_new_input() {
     for (platform, interrupted_publication) in [0, 1].into_iter().flat_map(|platform| [false, true].map(|failure| (platform, failure))) {
-        let path = std::env::temp_dir().join(format!("capy-apple-session-stale-{}", layer_core::PortableId::random()));
+        let path = std::env::temp_dir().join(format!("capy-apple-session-stale-{}", layer_core::PortableId::random())).join("packed").join("scene");
         let app = launch(platform, &path);
         app.invoke("add_layer");
         app.draw_until_idle();
@@ -650,7 +650,7 @@ fn apple_session_stale_startup_appends_without_overwriting_new_input() {
 #[test]
 fn apple_session_failed_peer_checkpoint_keeps_closing_drawing_indexed() {
     for platform in [0, 1] {
-        let path = std::env::temp_dir().join(format!("capy-apple-session-close-failure-{}", layer_core::PortableId::random()));
+        let path = std::env::temp_dir().join(format!("capy-apple-session-close-failure-{}", layer_core::PortableId::random())).join("packed").join("scene");
         let app = launch(platform, &path);
         app.invoke("new_document");
         let project = ProjectJob::create(&app, [96, 64]);
@@ -683,7 +683,7 @@ fn apple_session_failed_peer_checkpoint_keeps_closing_drawing_indexed() {
 }
 #[test]
 fn apple_new_window_adopts_the_newest_unlocked_session_with_drawings() {
-    let sessions = std::env::temp_dir().join(format!("capy-apple-sessions-{}", layer_core::PortableId::random()));
+    let sessions = std::env::temp_dir().join(format!("capy-apple-sessions-{}", layer_core::PortableId::random())).join("packed");
     let pause = || std::thread::sleep(std::time::Duration::from_millis(20));
     let older = launch(1, &sessions.join("older"));
     checkpoint(&older, 0, false);
@@ -729,7 +729,7 @@ fn apple_new_window_adopts_the_newest_unlocked_session_with_drawings() {
 fn apple_scene_adoption_preserves_own_unindexed_drawing_heads() {
     for platform in [0, 1] {
         for missing in [false, true] {
-            let sessions = std::env::temp_dir().join(format!("capy-apple-unindexed-{}", layer_core::PortableId::random()));
+            let sessions = std::env::temp_dir().join(format!("capy-apple-unindexed-{}", layer_core::PortableId::random())).join("packed");
             let own = sessions.join("own");
             let app = launch(platform, &own);
             app.stroke(); app.draw_until_idle(); checkpoint(&app, 0, false);
@@ -758,7 +758,7 @@ fn apple_scene_adoption_preserves_own_unindexed_drawing_heads() {
 fn apple_invalid_window_membership_preserves_all_files_and_allows_new_checkpoints() {
     for platform in [0, 1] {
         for corruption in ["truncated", "active", "duplicate", "missing"] {
-            let sessions = std::env::temp_dir().join(format!("capy-apple-invalid-membership-{}", layer_core::PortableId::random()));
+            let sessions = std::env::temp_dir().join(format!("capy-apple-invalid-membership-{}", layer_core::PortableId::random())).join("packed");
             let path = sessions.join("own");
             let app = launch(platform, &path);
             app.stroke(); app.draw_until_idle(); checkpoint(&app, 0, true);
@@ -799,7 +799,7 @@ fn apple_invalid_window_membership_preserves_all_files_and_allows_new_checkpoint
 #[test]
 fn apple_recovery_reports_each_known_failure_separately_from_interrupted_attempts() {
     for platform in [0, 1] {
-        let sessions = std::env::temp_dir().join(format!("capy-apple-restore-reasons-{}", layer_core::PortableId::random()));
+        let sessions = std::env::temp_dir().join(format!("capy-apple-restore-reasons-{}", layer_core::PortableId::random())).join("packed");
         let path = sessions.join("known");
         for (key, bytes) in [("invalid-json", b"not json".as_slice()), ("missing-head-field", b"{}".as_slice())] {
             std::fs::create_dir_all(path.join(key)).unwrap();
@@ -832,7 +832,7 @@ fn apple_recovery_reports_each_known_failure_separately_from_interrupted_attempt
 #[test]
 fn apple_restored_window_reserves_failed_ids_before_creating_another_drawing() {
     for platform in [0, 1] {
-        let path = std::env::temp_dir().join(format!("capy-apple-reserved-restore-{}", layer_core::PortableId::random()));
+        let path = std::env::temp_dir().join(format!("capy-apple-reserved-restore-{}", layer_core::PortableId::random())).join("packed").join("scene");
         let app = launch(platform, &path);
         app.stroke(); app.draw_until_idle(); checkpoint(&app, 0, true);
         drop(app);
@@ -863,7 +863,7 @@ fn apple_restored_window_reserves_failed_ids_before_creating_another_drawing() {
 #[test]
 fn apple_unrelated_cleanup_failure_does_not_block_restoration_or_new_checkpoints() {
     for platform in [0, 1] {
-        let path = std::env::temp_dir().join(format!("capy-apple-cleanup-warning-{}", layer_core::PortableId::random()));
+        let path = std::env::temp_dir().join(format!("capy-apple-cleanup-warning-{}", layer_core::PortableId::random())).join("packed").join("scene");
         let app = launch(platform, &path);
         app.stroke(); app.draw_until_idle();
         let pixels = app.pixels();

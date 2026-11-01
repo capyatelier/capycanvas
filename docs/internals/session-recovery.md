@@ -187,6 +187,13 @@ evaluate at native resolution through their retained code.
 Sessions are device state: they live in each platform's state folder and are
 not backed up ([where the app keeps its files](storage.md)).
 
+Native packed recovery keeps membership and stores under
+`sessions/packed/`, outside released layouts' cleanup. Moving a legacy window
+holds its window and drawing locks. Flat layouts move stores first, preserving
+their keys, then membership and its lock. Both namespace GC gates protect the move;
+restart completes partial moves without copying or rewriting released data.
+Conflicting paths are preserved and refused.
+
 [`SessionManifest`](../../crates/layer-ui/src/session_recovery.rs) owns tab order,
 selection, membership and unfinished restore attempts. The native window holds an
 exclusive lease; web uses browser locks. A live owner's session cannot be claimed
@@ -203,8 +210,13 @@ closes a row, and explicit validated `remap` changes runtime identities while
 preserving durable keys when restoration races with new work.
 
 The native [`SessionStore`](../../crates/layer-core/src/package/session_store.rs)
-publishes immutable resource files, then generation metadata, then an atomic head
-replacement. Each file and the containing directory are synchronized in order.
+appends compressed resources to packs of about 64 MiB, synchronizes each touched
+pack, then publishes generation metadata and an atomic head replacement. Oversized
+resources have dedicated sealed packs. Generation metadata contains the unchanged
+private session plus resource locations and each pack's committed extent. Readers
+validate ranges and checksums and share immutable file handles; later appends never
+overwrite earlier ranges. Failed appends can leave unused tails. Legacy resource
+files remain readable, and portable `.capy` files keep their existing layout.
 The head retains current and previous generation identities and SHA-256 checksums
 of their exact metadata bytes. Decode and cleanup verify these checksums before
 using metadata references. Interrupted publication leaves
@@ -229,6 +241,9 @@ are separate from private session storage and are never overwritten by recovery.
 
 Cleanup retains current and previous generations plus resources pinned by readers
 and accepted work. Resource identity reuse requires matching descriptors and bytes.
+Packed resources retain whole packs; collection removes only unreachable packs and
+never truncates a pack with reachable ranges. Verified unchanged checkpoints publish
+only metadata without opening their payload packs.
 Retirement is durable and terminal: a stale job cannot commit to a retired key.
 Before removing membership, publish a retirement intent. The intent leaves an
 indexed drawing usable, including after a cancelled or failed close. Once the

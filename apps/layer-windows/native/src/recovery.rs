@@ -45,7 +45,8 @@ struct Storage {
 }
 impl Storage {
     fn create(root: &std::path::Path) -> Result<Self, String> {
-        let directory = root.join(key());
+        let packed = layer_core::package::session_store::packed_sessions(root)?;
+        let directory = packed.join(key());
         create_directory(&directory)?;
         let lease = OwnerLock::claim(&directory.join("owner.lock"))?
             .ok_or("Session storage is already open")?;
@@ -65,6 +66,9 @@ impl Storage {
         })
     }
     fn open(root: &std::path::Path) -> Result<(Self, usize), String> {
+        let session_root = root;
+        let packed = layer_core::package::session_store::import_session_directories(root, "session.json", "owner.lock")?;
+        let root = packed.as_path();
         create_directory(root)?;
         let mut candidates = Vec::new();
         for entry in fs::read_dir(root).map_err(|e| io_error("list sessions", e))? {
@@ -119,7 +123,7 @@ impl Storage {
             storage.collect(&AtomicBool::new(false))?;
             claimed = Some(storage);
         }
-        let mut storage=match claimed {Some(storage)=>storage,None=>Self::create(root)?};
+        let mut storage=match claimed {Some(storage)=>storage,None=>Self::create(session_root)?};
         storage.warnings.extend(warnings);Ok((storage,others))
     }
     fn publish(

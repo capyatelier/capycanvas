@@ -935,7 +935,7 @@ class AndroidRasterTest {
         captureSession(recovery)
         val saveMs=(SystemClock.elapsedRealtimeNanos()-saveStart)/1_000_000
         val head=JSONObject(File(recovery,"head.json").readText())
-        val index=JSONObject(File(recovery,"generations/${head.getString("current")}.json").readText())
+        val index=JSONObject(File(recovery,"generations/${head.getJSONObject("current").getString("id")}.json").readText()).getJSONObject("session")
         assertFalse(index.getJSONObject("current").getJSONObject("working").isNull("selection"))
         assertTrue("Selection/history metadata stays bounded",index.toString().length<16*1024*1024)
         invoke("quick_mask")

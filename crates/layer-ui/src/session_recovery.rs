@@ -530,9 +530,9 @@ mod tests {
         assert!(serde_json::to_vec(&capture.metadata().unwrap().value).unwrap().len()<4096);
         let prepared=capture.prepare(&cancel).unwrap();assert!(prepared.metadata().len()<8192);
         let root=std::env::temp_dir().join(format!("capy-export-profile-{id}"));let mut store=layer_core::package::session_store::SessionStore::open(&root).unwrap();
-        store.commit(&prepared,&cancel).unwrap();let count=std::fs::read_dir(root.join("resources")).unwrap().count();assert_eq!(count,1);
+        store.commit(&prepared,&cancel).unwrap();let count=std::fs::read_dir(root.join("packs")).unwrap().count();assert_eq!(count,1);
         source.state.camera.zoom_to(1.25).unwrap();store.commit(&source.capture_session().unwrap().prepare(&cancel).unwrap(),&cancel).unwrap();
-        assert_eq!(std::fs::read_dir(root.join("resources")).unwrap().count(),count);
+        assert_eq!(std::fs::read_dir(root.join("packs")).unwrap().count(),count);
         let restored=SessionRestore::from_core(store.load(ProjectLimits::default(),&cancel).unwrap().unwrap()).unwrap();
         let ColorProfile::Icc(bytes)=&restored.last_export.as_ref().unwrap().recipe.profile.profile else {panic!("missing ICC")};assert_eq!(bytes.id(),id);assert_eq!(bytes.len(),layer_core::color::source::MAX_PROFILE_BYTES);
         drop(restored);drop(store);drop(source);std::fs::remove_dir_all(root).unwrap();

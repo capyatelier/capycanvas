@@ -736,11 +736,11 @@ mod tests {
         let bytes=crate::authored::Resource::from(vec![37;crate::color::source::MAX_PROFILE_BYTES]);let id=bytes.id();let profile=crate::color::ColorProfile::Icc(bytes);
         let mut store=SessionStore::open(&path).unwrap();let metadata=|camera|SessionMetadata {value:json!({"camera":camera,"profile":id}),profiles:vec![profile.clone()]};
         store.commit(&PreparedSession::prepare(&capture,metadata(0),&cancel).unwrap(),&cancel).unwrap();
-        let resource_path=path.join("resources").join(format!("{id}.bin"));let timestamp=std::time::SystemTime::UNIX_EPOCH+std::time::Duration::from_secs(10);
+        let resource_path=std::fs::read_dir(path.join("packs")).unwrap().next().unwrap().unwrap().path();let timestamp=std::time::SystemTime::UNIX_EPOCH+std::time::Duration::from_secs(10);
         std::fs::OpenOptions::new().write(true).open(&resource_path).unwrap().set_times(std::fs::FileTimes::new().set_modified(timestamp)).unwrap();
         for camera in 1..21 {let prepared=PreparedSession::prepare(&capture,metadata(camera),&cancel).unwrap();assert!(prepared.metadata().len()<16*1024);store.commit(&prepared,&cancel).unwrap();}
         assert_eq!(std::fs::metadata(&resource_path).unwrap().modified().unwrap(),timestamp);
-        assert_eq!(std::fs::read_dir(path.join("resources")).unwrap().count(),1);
+        assert_eq!(std::fs::read_dir(path.join("packs")).unwrap().count(),1);
         let opened=store.load(ProjectLimits::default(),&cancel).unwrap().unwrap();assert_eq!(opened.metadata.value["camera"],20);
         let crate::color::ColorProfile::Icc(bytes)=&opened.metadata.profiles[0] else{panic!()};assert_eq!(bytes.id(),id);assert_eq!(bytes.len(),crate::color::source::MAX_PROFILE_BYTES);
         drop(opened);store.retire().unwrap();drop(store);collect_unreferenced_stores(&root,&Default::default(),&cancel).unwrap();

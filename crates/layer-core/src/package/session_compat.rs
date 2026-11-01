@@ -3,7 +3,7 @@ use crate::package::session_store::SessionStore;
 use std::path::{Path,PathBuf};
 use sha2::{Digest,Sha256};
 
-fn prepared(editor:&Editor,metadata:serde_json::Value)->PreparedSession {
+fn prepared(editor:&Editor,metadata:impl Into<crate::package::session::SessionMetadata>)->PreparedSession {
     let capture=editor.capture_session(editor.capture(11,editor.document().output().context.clone()).unwrap()).unwrap();
     PreparedSession::prepare(&capture,metadata,&AtomicBool::new(false)).unwrap()
 }
@@ -46,6 +46,12 @@ fn snapshot(editor:&Editor,metadata:serde_json::Value)->serde_json::Value {
     }).collect();
     json!({"metadata":value,"resources":resources})
 }
+fn history_snapshot(editor:&mut Editor,metadata:&serde_json::Value)->serde_json::Value {
+    let original=snapshot(editor,metadata.clone());let mut states=Vec::new();
+    while editor.can_undo() {editor.undo().unwrap();states.push(Sha256::digest(serde_json::to_vec(&snapshot(editor,metadata.clone())).unwrap()).iter().map(|b|format!("{b:02x}")).collect::<String>());}
+    while editor.can_redo() {editor.redo().unwrap();states.push(Sha256::digest(serde_json::to_vec(&snapshot(editor,metadata.clone())).unwrap()).iter().map(|b|format!("{b:02x}")).collect::<String>());}
+    json!({"metadata":original,"history":states})
+}
 
 #[test]
 fn release_fixtures_load_without_loss() {
@@ -63,18 +69,20 @@ fn check_release(release:&str) {
     let cancel=AtomicBool::new(false);let mut store=SessionStore::open(&temporary).unwrap();
     let loaded=store.load(ProjectLimits::default(),&cancel).unwrap().unwrap();
     let mut editor=loaded.editor;let metadata=loaded.metadata.value;
-    let original=snapshot(&editor,metadata.clone());
-    let mut states=Vec::new();
-    while editor.can_undo() {editor.undo().unwrap();states.push(Sha256::digest(serde_json::to_vec(&snapshot(&editor,metadata.clone())).unwrap()).iter().map(|b|format!("{b:02x}")).collect::<String>());}
-    while editor.can_redo() {editor.redo().unwrap();states.push(Sha256::digest(serde_json::to_vec(&snapshot(&editor,metadata.clone())).unwrap()).iter().map(|b|format!("{b:02x}")).collect::<String>());}
-    let actual=json!({"metadata":original,"history":states});
+    let actual=history_snapshot(&mut editor,&metadata);
     let expected=root.join("expected").join(release).join("session.json");
     if std::env::var_os("CAPY_BLESS").as_deref()==Some(std::ffi::OsStr::new("1")) {
         std::fs::create_dir_all(expected.parent().unwrap()).unwrap();
         std::fs::write(&expected,serde_json::to_vec_pretty(&actual).unwrap()).unwrap();
     }
     assert_eq!(actual,serde_json::from_slice::<serde_json::Value>(&std::fs::read(expected).unwrap()).unwrap());
-    drop(editor);drop(store);std::fs::remove_dir_all(&temporary).unwrap();
+    let loaded=store.load(ProjectLimits::default(),&cancel).unwrap().unwrap();
+    store.commit(&prepared(&loaded.editor,loaded.metadata),&cancel).unwrap();
+    drop(loaded.editor);drop(editor);drop(store);
+    let mut upgraded=SessionStore::open(&temporary).unwrap();
+    let mut loaded=upgraded.load(ProjectLimits::default(),&cancel).unwrap().unwrap();
+    assert_eq!(history_snapshot(&mut loaded.editor,&loaded.metadata.value),actual);
+    drop(loaded);drop(upgraded);std::fs::remove_dir_all(&temporary).unwrap();
     let source=root.join(release).join("unsupported-session");copy_tree(&source,&temporary);
     let mut store=SessionStore::open(&temporary).unwrap();
     assert!(store.load(ProjectLimits::default(),&cancel).err().unwrap().contains("not approved"));

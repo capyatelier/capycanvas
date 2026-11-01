@@ -6,13 +6,13 @@ use layer_ui::{recovery::{RecoveryState, RecoveryEvent, RecoveryWork, RecoveryWo
 use std::{cell::{Cell, RefCell}, path::PathBuf, rc::Rc, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, time::Duration};
 
 fn directory() -> PathBuf {
-    crate::storage::sessions().map(Into::into).unwrap_or_default()
+    crate::storage::sessions().map(|root| PathBuf::from(root).join("packed")).unwrap_or_default()
 }
 fn key() -> String { layer_core::authored::PortableId::random().to_string() }
 fn enabled() -> bool { crate::storage::sessions().is_some() }
 
 fn storage_gate(root:&std::path::Path)->Result<OwnerLock,String> {
-    layer_core::package::session_store::create_directory(root)?;
+    layer_core::package::session_store::packed_sessions(root.parent().ok_or("Session storage has no parent directory")?)?;
     loop {
         if let Some(lease)=OwnerLock::claim(&root.join(".gc.lock"))? {return Ok(lease);}
         std::thread::sleep(Duration::from_millis(5));
@@ -314,7 +314,8 @@ pub(crate) fn install(w:&Rc<Workspace>) {
 
 struct ClaimedWindow { path: PathBuf, manifest: SessionManifest, lease: OwnerLock }
 fn abandoned() -> Result<Vec<ClaimedWindow>,String> {
-    let dir=directory();
+    let root=crate::storage::sessions().map(PathBuf::from).ok_or("Session storage is unavailable")?;
+    let dir=layer_core::package::session_store::import_session_directories(&root,".json",".lock")?;
     let _gate=storage_gate(&dir)?;
     let mut paths=std::fs::read_dir(&dir).map_err(|e|e.to_string())?.flatten().map(|entry|entry.path()).filter(|path|path.extension().is_some_and(|e|e=="json")).collect::<Vec<_>>();
     paths.sort();
@@ -496,4 +497,25 @@ async fn failed_drawings(w:&Rc<Workspace>)->Result<(),String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn refused_legacy_namespace_cannot_be_reopened_for_fresh_publication_or_cleanup() {
+        struct Fixture(PathBuf);
+        impl Drop for Fixture { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
+        let fixture = Fixture(std::env::temp_dir().join(format!("capy-gtk-namespace-{}", key())));
+        let packed = fixture.0.join("packed");
+        std::fs::create_dir_all(&packed).unwrap();
+        std::fs::write(packed.join("head.json"), b"released drawing head").unwrap();
+        let owner = OwnerLock::claim(&packed.join(".lock")).unwrap().unwrap();
+        assert!(layer_core::package::session_store::import_session_directories(&fixture.0, ".json", ".lock").unwrap_err().contains("conflicts"));
+        assert!(storage_gate(&packed).err().unwrap().contains("conflicts"));
+        assert!(!packed.join(".gc.lock").exists());
+        assert_eq!(std::fs::read(packed.join("head.json")).unwrap(), b"released drawing head");
+        assert!(OwnerLock::claim(&packed.join(".lock")).unwrap().is_none());
+        drop(owner);
+    }
 }

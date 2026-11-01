@@ -931,7 +931,7 @@ fn native_session_restart() {
     w.documents.model.borrow_mut().reorder(2,Some(1));
     switch(&w,1);
     w.window.close();
-    until(||!w.window.is_visible(),"quit flushed both drawings");
+    until(||!w.window.is_visible()&&windows.borrow().is_empty(),"quit flushed both drawings");
     assert!(w.window.visible_dialog().is_none());
     assert!(windows.borrow().is_empty());
     drop(w);pump(100);
@@ -961,7 +961,7 @@ fn native_session_restart() {
     assert_eq!(w.documents.selected(),2);
     assert!(!state(&w).document_file.modified);
     w.documents.select(&w,2,true);
-    until(||!w.window.is_visible(),"last explicitly closed drawing exits");
+    until(||!w.window.is_visible()&&windows.borrow().is_empty(),"last explicitly closed drawing exits");
 }
 
 #[test]

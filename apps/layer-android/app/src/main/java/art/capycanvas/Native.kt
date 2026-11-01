@@ -97,6 +97,7 @@ internal object Native {
     @JvmStatic external fun sessionCapture(handle: Long, id: Long): Long
     @JvmStatic external fun sessionSettle(handle: Long, now: Long)
     @JvmStatic external fun sessionStoreOpen(directory: String): Long
+    @JvmStatic external fun sessionImport(directory: String): String
     @JvmStatic external fun sessionStoreFree(store: Long)
     @JvmStatic external fun sessionStoreRetire(store: Long)
     @JvmStatic external fun sessionStorePrepareRetirement(store: Long)

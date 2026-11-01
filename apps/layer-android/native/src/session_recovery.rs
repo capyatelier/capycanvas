@@ -1,10 +1,24 @@
 use crate::android::{error, fail, or_throw, read};
-use jni::{JNIEnv, objects::{JClass, JString}, sys::{jboolean, jlong}};
+use jni::{JNIEnv, JavaVM, objects::{GlobalRef, JClass, JString, JValue}, sys::{jboolean, jlong}};
 use layer_host::{Renderer, open::OpenEnvironment};
 use layer_ui::{UiSession, session_recovery::{SessionCapture, SessionManifest, SessionRestore}};
 use std::{path::Path, sync::atomic::AtomicBool};
 use std::time::{Duration, Instant};
 use std::{fs::File, os::fd::FromRawFd};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
+
+struct SessionOwner { object: GlobalRef, vm: Arc<JavaVM>, failure: Rc<RefCell<Option<String>>> }
+impl Drop for SessionOwner {
+    fn drop(&mut self) {
+        let result = (|| {
+            let mut env = self.vm.attach_current_thread().map_err(error)?;
+            let result = env.call_method(self.object.as_obj(), "close", "()V", &[]).map(|_| ()).map_err(error);
+            if result.is_err() { let _ = env.exception_clear(); }
+            result
+        })();
+        if let Err(error) = result { self.failure.borrow_mut().get_or_insert(error); }
+    }
+}
 
 enum Work {
     Capture(Option<Box<SessionCapture>>),
@@ -54,6 +68,32 @@ pub extern "system" fn Java_art_capycanvas_Native_sessionStoreOpen(mut env: JNIE
     let result = read(&mut env, &directory).and_then(|path| layer_core::package::session_store::SessionStore::open(Path::new(&path)))
         .and_then(crate::inspection::owned);
     or_throw(&mut env, result, 0)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_sessionImport(mut env: JNIEnv, _: JClass, directory: JString) -> jni::sys::jstring {
+    crate::jni_entry!(env, {
+    let result = (|| {
+        let root = read(&mut env, &directory)?;
+        let vm = Arc::new(env.get_java_vm().map_err(error)?); let failure = Rc::new(RefCell::new(None));
+        let result = layer_core::package::session_store::import_session_directories_with_owner(Path::new(&root), "session.json", "owner.lock", |lock| {
+            let path = env.new_string(lock.parent().ok_or("Invalid session owner path")?.to_string_lossy()).map_err(error)?;
+            let path = env.auto_local(path);
+            let owner = env.call_static_method("art/capycanvas/SessionOwners", "claim", "(Ljava/lang/String;)Ljava/lang/AutoCloseable;", &[JValue::Object(path.as_ref())]).and_then(|value| value.l()).map_err(error)?;
+            let owner = env.auto_local(owner);
+            if owner.is_null() { return Ok(None); }
+            let object = match env.new_global_ref(&owner) {
+                Ok(object) => object,
+                Err(error) => { let _ = env.exception_clear(); let _ = env.call_method(&owner, "close", "()V", &[]); let _ = env.exception_clear(); return Err(crate::android::error(error)); }
+            };
+            Ok(Some(SessionOwner { object, vm: vm.clone(), failure: failure.clone() }))
+        });
+        let release = failure.borrow_mut().take();
+        if let Some(error) = release { return Err(error); }
+        result.map(|path| path.to_string_lossy().into_owned())
+    })();
+    crate::android::string(&mut env, result)
     })
 }
 

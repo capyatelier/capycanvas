@@ -5,25 +5,18 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
-import java.nio.channels.FileChannel
-import java.nio.channels.FileLock
-import java.nio.channels.OverlappingFileLockException
-import java.nio.file.StandardOpenOption
 import java.util.UUID
 import org.json.JSONObject
 
 internal class RecoveryController(private val host: CanvasHost) {
-    private val directory get() = host.storage.sessions
+    private val directory get() = File(host.storage.sessions, "packed")
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val storage = Mutex()
     private val publication = Mutex()
-    private class Held(val path: File, val channel: FileChannel, val lock: FileLock): AutoCloseable {
-        override fun close() { try { lock.release() } finally { channel.close() } }
-    }
     private class Owner(val key: String) { var stamp = "" }
     private val owners = mutableMapOf<Long, Owner>()
-    private var held: Held? = null
-    private val retained = mutableListOf<Held>()
+    private var held: SessionOwners.Held? = null
+    private val retained = mutableListOf<SessionOwners.Held>()
     private val stores = mutableMapOf<String, Long>()
     private var manifest = ""
     private var publicationPending = false
@@ -41,14 +34,7 @@ internal class RecoveryController(private val host: CanvasHost) {
     private suspend fun reportFailure(error: Exception, recovery: Boolean = false) {
         host.reportActionError(host.withNative {Native.sessionFailure(it,error.message.orEmpty(),recovery)})
     }
-    private fun claim(path: File): Held? {
-        check(path.mkdirs() || path.isDirectory) { "Cannot create session storage" }
-        val channel = FileChannel.open(File(path, "owner.lock").toPath(), StandardOpenOption.CREATE, StandardOpenOption.WRITE)
-        val lock = try { channel.tryLock() } catch (_: OverlappingFileLockException) { null }
-            catch (e: Exception) { channel.close(); throw e }
-        if (lock == null) { channel.close(); return null }
-        return Held(path, channel, lock)
-    }
+    private fun claim(path: File) = SessionOwners.claim(path)
     private fun keys(manifest: String) = org.json.JSONArray(JSONObject(manifest).array("drawings").objects().map {it.getString("key")}).toString()
     private suspend fun writeManifest(event: JSONObject) = publication.withLock {
         val next = Native.sessionManifestUpdate(manifest, event.toString())
@@ -77,8 +63,8 @@ internal class RecoveryController(private val host: CanvasHost) {
                 restoring = true
                 startupStamp = host.withNative {Native.sessionStamp(it,host.drawingTabs.selected)}
                 val abandoned = withContext(NonCancellable) {withContext(Dispatchers.IO) {
-                    check(directory.mkdirs() || directory.isDirectory) { "Cannot create session storage" }
-                    var selected: Held? = null
+                    Native.sessionImport(host.storage.sessions.absolutePath)
+                    var selected: SessionOwners.Held? = null
                     for(path in directory.listFiles().orEmpty().filter {it.isDirectory&&File(it,"session.json").isFile}
                         .sortedByDescending {File(it,"session.json").lastModified()}) {
                         val owner = claim(path) ?: continue
@@ -109,7 +95,7 @@ internal class RecoveryController(private val host: CanvasHost) {
             finally {restoring=false}
         }
     }
-    private suspend fun preserveFailed(source: Held) {
+    private suspend fun preserveFailed(source: SessionOwners.Held) {
         candidate = source.path
         if(source !in retained)retained.add(source)
         held = withContext(Dispatchers.IO) { checkNotNull(claim(File(directory, UUID.randomUUID().toString()))) }

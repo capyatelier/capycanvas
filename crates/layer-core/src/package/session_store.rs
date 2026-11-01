@@ -4,7 +4,7 @@ use crate::{PortableId, ProjectLimits};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::{BTreeMap, BTreeSet}, fs::{self, File, OpenOptions},
-    io::{BufWriter, Read, Seek, SeekFrom, Write}, path::{Path, PathBuf},
+    io::{BufWriter, Read, Write}, path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock, Weak, atomic::{AtomicBool, Ordering}}};
 
 #[derive(Debug)]
@@ -63,6 +63,118 @@ impl Drop for OwnerLock {
 }
 
 pub struct SessionLease { _owner: OwnerLock }
+pub fn packed_sessions(root: &Path) -> Result<PathBuf, String> {
+    let packed = root.join("packed");
+    if metadata_optional(&packed.join(".lock"))?.is_some() || metadata_optional(&packed.join("owner.lock"))?.is_some() {
+        return Err("The packed session directory conflicts with an existing session; its files were kept".into());
+    }
+    create_directory(&packed)?;
+    Ok(packed)
+}
+pub fn relocate_session(source: &Path, destination: &Path) -> Result<(), String> {
+    let parent = source.parent().ok_or("Session has no parent directory")?;
+    let target = destination.parent().ok_or("Session has no destination directory")?;
+    if metadata_optional(destination)?.is_some() { return Err("The saved session exists in both versions; both copies were kept".into()); }
+    if !metadata_optional(source)?.is_some_and(|metadata| metadata.is_dir()) { return Err("Invalid session source directory".into()); }
+    let mut stores = Vec::new();
+    for entry in fs::read_dir(source).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if !entry.file_type().map_err(|e| e.to_string())?.is_dir() { continue; }
+        let lock = entry.path().join(".lock");
+        let Some(metadata) = metadata_optional(&lock)? else { continue; };
+        if !metadata.is_file() { return Err("Invalid recovery drawing lock".into()); }
+        let owner = OwnerLock::claim(&lock)?.ok_or("Recovery drawing is already open")?;
+        stores.push(owner);
+    }
+    fs::rename(source, destination).map_err(|e| e.to_string())?;
+    sync_directory(target)?;
+    sync_directory(parent)
+}
+pub fn import_session_directories(root: &Path, manifest: &str, lock: &str) -> Result<PathBuf, String> {
+    import_session_directories_with_owner(root, manifest, lock, OwnerLock::claim)
+}
+pub fn import_session_directories_with_owner<Owner>(root: &Path, manifest: &str, lock: &str, claim: impl FnMut(&Path) -> Result<Option<Owner>, String>) -> Result<PathBuf, String> {
+    import_with_owner_using(root, manifest, lock, claim, |_| Ok(()))
+}
+#[cfg(test)]
+fn import_sessions_using(root: &Path, manifest: &str, lock: &str, boundary: impl FnMut(&str) -> Result<(), String>) -> Result<PathBuf, String> {
+    import_with_owner_using(root, manifest, lock, OwnerLock::claim, boundary)
+}
+fn import_with_owner_using<Owner>(root: &Path, manifest: &str, lock: &str, mut claim: impl FnMut(&Path) -> Result<Option<Owner>, String>, mut boundary: impl FnMut(&str) -> Result<(), String>) -> Result<PathBuf, String> {
+    if !matches!((manifest, lock), ("session.json", "owner.lock") | ("window.json", ".lock") | (".json", ".lock")) {
+        return Err("Invalid native session layout".into());
+    }
+    let packed = packed_sessions(root)?;
+    if manifest == ".json" {
+        let Some(_source_gate) = OwnerLock::claim(&root.join(".gc.lock"))? else { return Err("Session cleanup is already running".into()); };
+        let Some(_packed_gate) = OwnerLock::claim(&packed.join(".gc.lock"))? else { return Err("Session cleanup is already running".into()); };
+        relocate_flat_sessions(root, &packed, &mut boundary)?;
+        return Ok(packed);
+    }
+    for entry in fs::read_dir(root).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let source = entry.path();
+        if !entry.file_type().map_err(|e| e.to_string())?.is_dir()
+            || !metadata_optional(&source.join(manifest))?.is_some_and(|metadata| metadata.is_file()) { continue; }
+        let Some(_owner) = claim(&source.join(lock))? else { continue; };
+        let destination = packed.join(entry.file_name());
+        relocate_session(&source, &destination)?;
+    }
+    Ok(packed)
+}
+fn relocate_flat_sessions(root: &Path, packed: &Path, boundary: &mut impl FnMut(&str) -> Result<(), String>) -> Result<(), String> {
+    for entry in fs::read_dir(root).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?; let source = entry.path();
+        if source.extension().is_none_or(|extension| extension != "json") || !entry.file_type().map_err(|e| e.to_string())?.is_file() { continue; }
+        let Some(_owner) = OwnerLock::claim(&source.with_extension("lock"))? else { continue; };
+        let destination = packed.join(entry.file_name());
+        if metadata_optional(&destination)?.is_some() { return Err("The saved session exists in both versions; both copies were kept".into()); }
+        let bytes = read_bounded(&source, 1024 * 1024)?;
+        let value = super::parse_json(&bytes, 1024 * 1024)?;
+        let drawings = value["drawings"].as_array().ok_or("Invalid saved drawing list")?;
+        if drawings.len() > 1024 { return Err("Too many saved drawings".into()); }
+        let mut keys = BTreeSet::new(); let mut moves = Vec::new(); let mut owners = Vec::new(); let mut busy = false;
+        for drawing in drawings {
+            let key = drawing["key"].as_str().ok_or("Invalid saved drawing key")?;
+            if key.is_empty() || key.len() > 128 || !key.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_') || !keys.insert(key) {
+                return Err("Invalid saved drawing key".into());
+            }
+            let from = root.join(key); let to = packed.join(key);
+            let original = metadata_optional(&from)?; let moved = metadata_optional(&to)?;
+            if original.as_ref().is_some_and(|metadata| !metadata.is_dir()) || moved.as_ref().is_some_and(|metadata| !metadata.is_dir()) { return Err("Invalid saved drawing directory".into()); }
+            if original.is_some() && moved.is_some() && metadata_optional(&from.join("head.json"))?.is_some() {
+                return Err("The saved drawing exists in both versions; both copies were kept".into());
+            }
+            for path in [original.as_ref().map(|_| &from), moved.as_ref().map(|_| &to)].into_iter().flatten() {
+                let Some(owner) = OwnerLock::claim(&path.join(".lock"))? else { busy = true; break; };
+                owners.push(owner);
+            }
+            if busy { break; }
+            if original.is_some() && moved.is_none() { moves.push((from, to)); }
+        }
+        if busy { continue; }
+        for (from, to) in moves { relocate_session(&from, &to)?; boundary("store")?; }
+        relocate_entry(&source, &destination)?; boundary("manifest")?;
+        relocate_entry(&source.with_extension("lock"), &destination.with_extension("lock"))?; boundary("lock")?;
+    }
+    for entry in fs::read_dir(packed).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?; let destination = entry.path();
+        if destination.extension().is_none_or(|extension| extension != "json") || !entry.file_type().map_err(|e| e.to_string())?.is_file() { continue; }
+        let source = root.join(entry.file_name()); let lock = source.with_extension("lock");
+        if metadata_optional(&source)?.is_some() || metadata_optional(&lock)?.is_none() { continue; }
+        let Some(_owner) = OwnerLock::claim(&lock)? else { continue; };
+        let target = destination.with_extension("lock");
+        let _target = if metadata_optional(&target)?.is_some() { OwnerLock::claim(&target)? } else { None };
+        if metadata_optional(&target)?.is_some() && _target.is_none() { continue; }
+        relocate_entry(&lock, &target)?; boundary("lock")?;
+    }
+    Ok(())
+}
+fn relocate_entry(source: &Path, destination: &Path) -> Result<(), String> {
+    fs::rename(source, destination).map_err(|e| e.to_string())?;
+    sync_directory(destination.parent().ok_or("Session has no destination directory")?)?;
+    sync_directory(source.parent().ok_or("Session has no parent directory")?)
+}
 pub fn preserve_directory(path: &Path) -> Result<PathBuf, String> {
     let parent = path.parent().ok_or("Session has no parent directory")?;
     let preserved = parent.join(format!("preserved-{}", PortableId::random()));
@@ -108,6 +220,62 @@ impl Generation {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Head { current: Generation, previous: Option<Generation> }
+
+const PACK_BYTES: u64 = 64 * 1024 * 1024;
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PackRange { pack: PortableId, offset: u64 }
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PackedGeneration {
+    format: String,
+    version: u32,
+    session: serde_json::Value,
+    locations: BTreeMap<PortableId, PackRange>,
+    extents: BTreeMap<PortableId, u64>,
+}
+struct StoredGeneration {
+    metadata: Vec<u8>,
+    locations: Option<BTreeMap<PortableId, PackRange>>,
+    extents: BTreeMap<PortableId, u64>,
+}
+impl StoredGeneration {
+    fn parse(bytes: &[u8], limits: ProjectLimits) -> Result<Self, super::session::OpenFailure> {
+        let value = super::parse_json(bytes, limits.metadata_bytes.min(usize::MAX as u64) as usize)?;
+        if value["format"] != "capy.session.packed" {
+            return Ok(Self { metadata: bytes.into(), locations: None, extents: BTreeMap::new() });
+        }
+        if value["version"] != 1 { return Err(super::session::OpenFailure::Unsupported("Unsupported packed recovery format".into())); }
+        let packed: PackedGeneration = serde_json::from_value(value).map_err(|e| e.to_string())?;
+        let metadata = serde_json::to_vec(&packed.session).map_err(|e| e.to_string())?;
+        let index = resource_index(&metadata, limits)?;
+        if packed.locations.len() != index.records.len() { return Err("Recovery pack inventory disagrees with metadata".into()); }
+        let mut ranges = BTreeMap::<PortableId, BTreeMap<u64, (u64, u32, [u8; 32])>>::new();
+        let mut aliases = BTreeMap::new();
+        let mut referenced = BTreeSet::new();
+        for record in index.records {
+            let location = packed.locations.get(&record.id).ok_or("Missing recovery pack location")?;
+            let extent = *packed.extents.get(&location.pack).ok_or("Missing recovery pack extent")?;
+            if extent == 0 || location.offset.checked_add(record.length).is_none_or(|end| end > extent) { return Err("Recovery range exceeds committed pack extent".into()); }
+            referenced.insert(location.pack);
+            if record.length == 0 { continue; }
+            if let Some((pack, offset)) = aliases.insert(record.offset, (location.pack, location.offset))
+                && (pack, offset) != (location.pack, location.offset) { return Err("Conflicting recovery pack alias locations".into()); }
+            let ranges = ranges.entry(location.pack).or_default();
+            if let Some(previous) = ranges.insert(location.offset, (record.length, record.crc, record.descriptor))
+                && previous != (record.length, record.crc, record.descriptor) { return Err("Conflicting recovery pack aliases".into()); }
+        }
+        if referenced.len() != packed.extents.len() { return Err("Unreferenced recovery pack extent".into()); }
+        for ranges in ranges.values() {
+            let mut end = 0;
+            for (&offset, &(length, _, _)) in ranges {
+                if offset < end { return Err("Overlapping recovery pack ranges".into()); }
+                end = offset.checked_add(length).ok_or("Recovery pack range overflow")?;
+            }
+        }
+        Ok(Self { metadata, locations: Some(packed.locations), extents: packed.extents })
+    }
+}
 fn parse_head(bytes: &[u8]) -> Result<Head, String> {
     let head: Head = serde_json::from_value(super::parse_json(bytes, 1024)?).map_err(|e| e.to_string())?;
     if std::iter::once(&head.current).chain(head.previous.as_ref()).any(|generation|
@@ -126,6 +294,12 @@ pub struct SessionStore {
     loaded: Option<Generation>,
     verified: BTreeMap<PortableId, (u64, u32, [u8; 32])>,
     programs: BTreeMap<PortableId, super::TrustedPrograms>,
+}
+struct StoreRoots {
+    generations: BTreeSet<PortableId>,
+    resources: BTreeSet<PortableId>,
+    packs: BTreeSet<PortableId>,
+    identities: BTreeSet<PortableId>,
 }
 struct Ownership { owner: Weak<OwnerLock>, writer: Weak<()> }
 type StoreClaim = (Arc<OwnerLock>, Arc<()>);
@@ -157,6 +331,7 @@ impl SessionStore {
         sync_directory(path)?;
         create_directory(&path.join("resources"))?;
         create_directory(&path.join("generations"))?;
+        create_directory(&path.join("packs"))?;
         let head = read_optional(&path.join("head.json"), 1024)?.map(|bytes| parse_head(&bytes)).transpose()?;
         let mut store = Self { path: path.into(), _owner: owner, _writer: writer, head, loaded: None,
             verified: BTreeMap::new(), programs: BTreeMap::new() };
@@ -166,6 +341,7 @@ impl SessionStore {
                 clean_temporaries(&store.path)?;
                 clean_temporaries(&store.path.join("generations"))?;
                 clean_temporaries(&store.path.join("resources"))?;
+                clean_temporaries(&store.path.join("packs"))?;
             }
         }
         Ok(Some(store))
@@ -174,7 +350,6 @@ impl SessionStore {
     pub fn generation(&self) -> Option<PortableId> { self.head.as_ref().map(|head| head.current.id) }
     pub fn loaded_generation(&self) -> Option<PortableId> { self.loaded.as_ref().map(|loaded| loaded.id) }
     pub fn recovered_previous(&self) -> bool { self.loaded_generation().is_some_and(|loaded| Some(loaded) != self.generation()) }
-
     pub fn commit(&mut self, prepared: &PreparedSession, cancelled: &AtomicBool) -> Result<PortableId, String> {
         self.commit_using(prepared, cancelled, AtomicPublication)
     }
@@ -183,70 +358,127 @@ impl SessionStore {
         self.validate_layout()?;
         if retired_store(&self.path)? { return Err("This drawing's session copy was retired".into()); }
         self.refresh_head()?;
+        if let Ok(roots) = self.resource_roots() { self.collect_roots(roots)?; }
         let index = resource_index(prepared.metadata(), ProjectLimits::default())?;
         let entries: BTreeMap<_, _> = prepared.resources().entries.iter().map(|entry| (entry.payload.id(), entry)).collect();
         if entries.len() != index.records.len() { return Err("Recovery resource inventory disagrees with metadata".into()); }
+        let mut locations = BTreeMap::new();
+        let mut extents = BTreeMap::new();
+        let mut known = BTreeMap::new();
+        if let Some(head) = &self.head {
+            let retained = self.loaded.as_ref().unwrap_or(&head.current);
+            for generation in std::iter::once(retained).chain(head.previous.as_ref().filter(|previous| retained.id == head.current.id && previous.id != retained.id)) {
+                let stored = self.generation_metadata(generation, ProjectLimits::default().metadata_bytes)
+                    .and_then(|bytes| StoredGeneration::parse(&bytes, ProjectLimits::default()).map_err(|e| e.message()));
+                let stored = match stored { Ok(stored) => stored, Err(_) if generation.id != retained.id => continue, Err(error) => return Err(error) };
+                for record in resource_index(&stored.metadata, ProjectLimits::default())?.records {
+                    let integrity = (record.length, record.crc, record.descriptor);
+                    if self.verified.get(&record.id).is_some_and(|previous| *previous != integrity) { return Err("Conflicting immutable recovery resource descriptor".into()); }
+                    if known.insert(record.id, integrity).is_some_and(|previous| previous != integrity) { return Err("Conflicting immutable recovery resource descriptor".into()); }
+                }
+                if let Some(previous) = stored.locations {
+                    for (id, location) in previous { locations.entry(id).or_insert(location); }
+                    for (id, extent) in stored.extents { extents.entry(id).or_insert(extent); }
+                }
+            }
+        }
+        let mut pending = Vec::new();
+        let aliases = index.records.iter().filter(|record| record.length != 0).filter_map(|record| locations.get(&record.id).map(|location| (record.offset, location.clone()))).collect::<BTreeMap<_, _>>();
+        let mut pending_offsets = BTreeSet::new();
         for record in &index.records {
             check_cancelled(cancelled)?;
             let entry = entries.get(&record.id).ok_or("Missing recovery resource payload")?;
             if entry.bytes != record.length || entry.crc != record.crc || resource_descriptor(&entry.record)? != record.descriptor {
                 return Err("Recovery resource integrity disagrees with metadata".into());
             }
-            let path = self.resource_path(record.id);
-            if let Some(verified) = self.verified.get(&record.id) {
-                if *verified != (record.length, record.crc, record.descriptor) { return Err("Conflicting immutable recovery resource descriptor".into()); }
-                continue;
-            }
-            if metadata_optional(&path)?.is_some() {
-                let file = File::open(&path).map_err(|e| e.to_string())?;
-                verify_file(&file, record, cancelled)?;
-                verify_payload(file, &entry.payload, record.length, cancelled)?;
-            } else {
-                publication.publish(&path, |file| {
-                    let mut hasher = crc32fast::Hasher::new();
-                    match &entry.payload {
-                        Payload::Opaque(resource) => {
-                            let mut offset = 0;
-                            while offset < record.length {
-                                check_cancelled(cancelled)?;
-                                let count = (record.length - offset).min(MAX_RANGE_BYTES as u64) as usize;
-                                let bytes = resource.read_chunk(offset, count, cancelled)?;
-                                hasher.update(&bytes);
-                                file.write_all(&bytes).map_err(|e| e.to_string())?;
-                                offset += count as u64;
-                            }
-                        }
-                        payload => {
-                            let bytes = payload.encoded()?.bytes;
-                            if bytes.len() as u64 != record.length { return Err("Recovery payload length changed".into()); }
-                            for chunk in bytes.chunks(MAX_RANGE_BYTES) {
-                                check_cancelled(cancelled)?;
-                                hasher.update(chunk);
-                                file.write_all(chunk).map_err(|e| e.to_string())?;
-                            }
-                        }
-                    }
-                    if hasher.finalize() != record.crc { return Err("Recovery resource checksum failed".into()); }
-                    Ok(())
-                }, || check_cancelled(cancelled))?;
-            }
-            self.verified.insert(record.id, (record.length, record.crc, record.descriptor));
+            if let Some(verified) = self.verified.get(&record.id)
+                && *verified != (record.length, record.crc, record.descriptor) { return Err("Conflicting immutable recovery resource descriptor".into()); }
+            if known.get(&record.id).is_some_and(|previous| *previous != (record.length, record.crc, record.descriptor)) { return Err("Conflicting immutable recovery resource descriptor".into()); }
+            if let Some(location) = locations.get(&record.id).or_else(|| aliases.get(&record.offset)).cloned() {
+                if !self.verified.contains_key(&record.id) {
+                    let file = File::open(self.pack_path(location.pack)).map_err(|e| e.to_string())?;
+                    verify_range(&file, location.offset, record, cancelled)?;
+                    verify_payload(file, location.offset, &entry.payload, record.length, cancelled)?;
+                    self.verified.insert(record.id, (record.length, record.crc, record.descriptor));
+                }
+                locations.insert(record.id, location);
+            } else if record.length == 0 || pending_offsets.insert(record.offset) { pending.push(record); }
         }
+        pending.sort_by_key(|record| index.spatial.get(&record.id).map_or((1, 0, 0, record.id), |coordinate| (0, coordinate[1], coordinate[0], record.id)));
+        let mut first = 0;
+        while first < pending.len() {
+            let mut target = None;
+            for (&pack, &extent) in &extents {
+                let length = fs::metadata(self.pack_path(pack)).map_err(|e| e.to_string())?.len();
+                if length < extent { return Err("Recovery pack is shorter than its committed extent".into()); }
+                if target.is_none() && length.checked_add(pending[first].length.max(1)).is_some_and(|end| end <= PACK_BYTES) {
+                    target = Some((pack, length));
+                }
+            }
+            let (pack, start) = target.unwrap_or_else(|| (PortableId::random(), 0));
+            let mut length = 0u64;
+            let mut last = first;
+            while last < pending.len() {
+                let next = length.checked_add(pending[last].length).ok_or("Recovery pack length overflow")?;
+                if last > first && start.checked_add(next).is_none_or(|end| end > PACK_BYTES) { break; }
+                length = next; last += 1;
+            }
+            let write = |file: &mut BufWriter<File>| {
+                for record in &pending[first..last] {
+                    write_payload(file, &entries[&record.id].payload, record, cancelled)?;
+                }
+                if length == 0 { file.write_all(&[0]).map_err(|e| e.to_string())?; }
+                Ok(())
+            };
+            if target.is_some() {
+                publication.append(&self.pack_path(pack), write, || check_cancelled(cancelled))?;
+            } else {
+                publication.publish(&self.pack_path(pack), write, || check_cancelled(cancelled)).map_err(|error| error.error)?;
+            }
+            let mut offset = start;
+            for record in &pending[first..last] {
+                locations.insert(record.id, PackRange { pack, offset });
+                self.verified.insert(record.id, (record.length, record.crc, record.descriptor));
+                offset += record.length;
+            }
+            extents.insert(pack, start.checked_add(length.max(1)).ok_or("Recovery pack length overflow")?);
+            first = last;
+        }
+        locations.retain(|id, _| entries.contains_key(id));
+        let mut aliases = BTreeMap::new();
+        for record in &index.records {
+            if record.length == 0 { continue; }
+            if let Some(location) = aliases.get(&record.offset) {
+                let location: &PackRange = location;
+                if !self.verified.contains_key(&record.id) {
+                    verify_payload(File::open(self.pack_path(location.pack)).map_err(|e| e.to_string())?, location.offset,
+                        &entries[&record.id].payload, record.length, cancelled)?;
+                    self.verified.insert(record.id, (record.length, record.crc, record.descriptor));
+                }
+                locations.insert(record.id, location.clone());
+            } else { aliases.insert(record.offset, locations[&record.id].clone()); }
+        }
+        extents.retain(|id, _| locations.values().any(|location| location.pack == *id));
+        let metadata = serde_json::to_vec(&PackedGeneration { format: "capy.session.packed".into(), version: 1,
+            session: serde_json::from_slice(prepared.metadata()).map_err(|e| e.to_string())?, locations, extents }).map_err(|e| e.to_string())?;
+        if metadata.len() as u64 > ProjectLimits::default().metadata_bytes { return Err("Packed recovery metadata exceeds admission limit".into()); }
         let generation = PortableId::random();
         publication.publish(&self.generation_path(generation), |file| {
-            file.write_all(prepared.metadata()).map_err(|e| e.to_string())
-        }, || check_cancelled(cancelled))?;
-        let reference = Generation::new(generation, prepared.metadata());
+            file.write_all(&metadata).map_err(|e| e.to_string())
+        }, || check_cancelled(cancelled)).map_err(|error| error.error)?;
+        let reference = Generation::new(generation, &metadata);
         let head = Head { current: reference.clone(),
             previous: self.loaded.clone().or_else(|| self.head.as_ref().map(|head| head.current.clone())) };
         let bytes = serde_json::to_vec(&head).map_err(|e| e.to_string())?;
-        publication.publish(&self.path.join("head.json"), |file| file.write_all(&bytes).map_err(|e| e.to_string()),
-            || check_cancelled(cancelled))?;
+        let published = publication.publish(&self.path.join("head.json"), |file| file.write_all(&bytes).map_err(|e| e.to_string()),
+            || check_cancelled(cancelled));
+        if published.as_ref().is_err_and(|error| !error.published) { return Err(published.unwrap_err().error); }
         self.head = Some(head);
         self.loaded = Some(reference);
         self.programs.insert(generation, prepared.trusted_programs().clone());
         let previous=self.head.as_ref().and_then(|head|head.previous.as_ref()).map(|previous|previous.id);
         self.programs.retain(|id,_|*id==generation || Some(*id)==previous);
+        published.map_err(|error| error.error)?;
         self.collect_garbage()?;
         Ok(generation)
     }
@@ -276,22 +508,38 @@ impl SessionStore {
     }
     fn load_generation(&mut self, generation: &Generation, limits: ProjectLimits, cancelled: &AtomicBool) -> Result<OpenSession, super::session::OpenFailure> {
         let metadata = self.generation_metadata(generation, limits.metadata_bytes)?;
-        let index = resource_index(&metadata, limits)?;
+        let stored = StoredGeneration::parse(&metadata, limits)?;
+        let index = resource_index(&stored.metadata, limits)?;
         let mut files = Vec::with_capacity(index.ranges.len());
         let mut verified = BTreeMap::new();
+        let mut packs = BTreeMap::<PortableId, Arc<File>>::new();
+        for (&pack, &extent) in &stored.extents {
+            let file = Arc::new(File::open(self.pack_path(pack)).map_err(|e| e.to_string())?);
+            if file.metadata().map_err(|e| e.to_string())?.len() < extent { return Err("Recovery pack is shorter than its committed extent".into()); }
+            packs.insert(pack, file);
+        }
         for record in &index.ranges {
             check_cancelled(cancelled)?;
-            let file = File::open(self.resource_path(record.id)).map_err(|e| e.to_string())?;
-            verify_file(&file, record, cancelled)?;
+            let (path, offset, file) = if let Some(location) = stored.locations.as_ref().and_then(|locations| locations.get(&record.id)) {
+                let path = self.pack_path(location.pack);
+                let file = packs.get(&location.pack).ok_or("Missing recovery pack handle")?.clone();
+                (path, location.offset, file)
+            } else {
+                let path = self.resource_path(record.id);
+                let file = Arc::new(File::open(&path).map_err(|e| e.to_string())?);
+                if file.metadata().map_err(|e| e.to_string())?.len() != record.length { return Err("Recovery resource length changed".into()); }
+                (path, 0, file)
+            };
+            verify_range(&file, offset, record, cancelled)?;
             verified.insert(record.id, (record.length, record.crc, record.descriptor));
-            let owner = Arc::new(ResourceFile { id: record.id, path: self.resource_path(record.id),
+            let owner = Arc::new(ResourceFile { id: record.id, path, offset, file,
                 _owner: self._owner.clone(), length: record.length });
             self._owner.readers.lock().map_err(|_| "Recovery reader lock failed")?.push(Arc::downgrade(&owner));
             files.push((record.offset, owner));
         }
         let backing = ImmutableBacking::new(Arc::new(ResourcePack { length: index.length, files })).map_err(String::from)?;
         let programs=self.programs.get(&generation.id).cloned().unwrap_or_default();
-        let session = super::session::open_parts_checked(&metadata, backing, limits, cancelled, &programs)?;
+        let session = super::session::open_parts_checked(&stored.metadata, backing, limits, cancelled, &programs)?;
         if verified.iter().any(|(id, value)| self.verified.get(id).is_some_and(|previous| previous != value)) {
             return Err("Conflicting immutable recovery resource descriptor".into());
         }
@@ -322,35 +570,50 @@ impl SessionStore {
         sync_directory(&self.path)?;
         self.collect_roots(self.resource_roots()?)
     }
-    fn resource_roots(&self) -> Result<(BTreeSet<PortableId>, BTreeSet<PortableId>), String> {
+    fn resource_roots(&self) -> Result<StoreRoots, String> {
         let mut generations = BTreeSet::new();
         let mut resources = BTreeSet::new();
+        let mut packs = BTreeSet::new();
+        let mut identities = BTreeSet::new();
         if let Some(head) = &self.head {
             for generation in std::iter::once(&head.current).chain(head.previous.as_ref()) {
                 generations.insert(generation.id);
                 let metadata = self.generation_metadata(generation, ProjectLimits::default().metadata_bytes)?;
-                resources.extend(resource_index(&metadata, ProjectLimits::default())?.records.into_iter().map(|record| record.id));
+                let stored = StoredGeneration::parse(&metadata, ProjectLimits::default()).map_err(|e| e.message())?;
+                if let Some(locations) = stored.locations {
+                    identities.extend(locations.keys().copied()); packs.extend(stored.extents.keys().copied());
+                }
+                else { resources.extend(resource_index(&stored.metadata, ProjectLimits::default())?.records.into_iter().map(|record| record.id)); }
             }
         }
-        Ok((generations, resources))
+        identities.extend(resources.iter().copied());
+        Ok(StoreRoots { generations, resources, packs, identities })
     }
-    fn collect_roots(&mut self, (generations, mut resources): (BTreeSet<PortableId>, BTreeSet<PortableId>)) -> Result<(), String> {
+    fn collect_roots(&mut self, roots: StoreRoots) -> Result<(), String> {
+        let StoreRoots { generations, mut resources, mut packs, mut identities } = roots;
         self._owner.readers.lock().map_err(|_| "Recovery reader lock failed")?.retain(|reader| {
-            if let Some(owner) = reader.upgrade() { resources.insert(owner.id); true } else { false }
+            if let Some(owner) = reader.upgrade() {
+                identities.insert(owner.id);
+                if owner.path.parent().is_some_and(|path| path == self.path.join("packs")) {
+                    if let Some(id) = owner.path.file_stem().and_then(|id| id.to_str()).and_then(|id| id.parse().ok()) { packs.insert(id); }
+                } else { resources.insert(owner.id); }
+                true
+            } else { false }
         });
         let terminal = retired_store(&self.path)?;
-        for (name, retained, suffix) in [("generations", &generations, ".json"), ("resources", &resources, ".bin")] {
+        for (name, retained, suffix) in [("generations", &generations, ".json"), ("resources", &resources, ".bin"), ("packs", &packs, ".bin")] {
             let path = self.path.join(name);
             if metadata_optional(&path)?.is_some() {
                 clean_directory(&path, retained, suffix)?;
                 if terminal && retained.is_empty() { fs::remove_dir(&path).map_err(|e| e.to_string())?; }
-            } else if !terminal { return Err("Missing drawing session directory".into()); }
+            } else if !terminal && name != "packs" { return Err("Missing drawing session directory".into()); }
         }
         clean_temporaries(&self.path)?;
-        self.verified.retain(|id, _| resources.contains(id));
+        self.verified.retain(|id, _| identities.contains(id));
         Ok(())
     }
     fn resource_path(&self, id: PortableId) -> PathBuf { self.path.join("resources").join(format!("{id}.bin")) }
+    fn pack_path(&self, id: PortableId) -> PathBuf { self.path.join("packs").join(format!("{id}.bin")) }
     fn validate_layout(&self) -> Result<(), String> {
         if store_layout_with(&self.path, retired_store(&self.path)?)? { Ok(()) } else { Err("Invalid drawing session directory".into()) }
     }
@@ -385,6 +648,7 @@ fn store_layout_with(path: &Path, terminal: bool) -> Result<bool, String> {
     Ok(metadata_optional(path)?.is_some_and(|metadata| metadata.is_dir())
         && metadata_optional(&path.join(".lock"))?.is_some_and(|metadata| metadata.is_file())
         && metadata_optional(&path.join("resources"))?.map_or(terminal, |metadata| metadata.is_dir())
+        && metadata_optional(&path.join("packs"))?.is_none_or(|metadata| metadata.is_dir())
         && metadata_optional(&path.join("generations"))?.map_or(terminal, |metadata| metadata.is_dir()))
 }
 fn compact_retired_store(path: &Path) -> Result<bool, String> {
@@ -432,17 +696,45 @@ fn retiring_store(path: &Path) -> Result<bool, String> {
 }
 
 trait Publication {
-    fn publish(&mut self, path: &Path, write: impl FnOnce(&mut BufWriter<File>) -> Result<(), String>, ready: impl FnOnce() -> Result<(), String>) -> Result<(), String>;
+    fn publish(&mut self, path: &Path, write: impl FnOnce(&mut BufWriter<File>) -> Result<(), String>, ready: impl FnOnce() -> Result<(), String>) -> Result<(), AtomicReplaceError>;
+    fn append(&mut self, path: &Path, write: impl FnOnce(&mut BufWriter<File>) -> Result<(), String>, ready: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+        append_pack(path, write, ready)
+    }
+}
+fn append_pack(path: &Path, write: impl FnOnce(&mut BufWriter<File>) -> Result<(), String>, ready: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+    append_using(path, write, ready, |file| sync_file(file).map_err(|e| e.to_string()))
+}
+fn append_using(path: &Path, write: impl FnOnce(&mut BufWriter<File>) -> Result<(), String>, ready: impl FnOnce() -> Result<(), String>, sync: impl FnOnce(&File) -> Result<(), String>) -> Result<(), String> {
+    if !metadata_optional(path)?.is_some_and(|metadata| metadata.is_file()) { return Err("Invalid recovery pack file".into()); }
+    let mut file = BufWriter::new(OpenOptions::new().append(true).open(path).map_err(|e| e.to_string())?);
+    write(&mut file)?;
+    file.flush().map_err(|e| e.to_string())?;
+    sync(file.get_ref())?;
+    ready()
+}
+pub(crate) fn sync_file(file: &File) -> std::io::Result<()> {
+    #[cfg(target_vendor = "apple")]
+    {
+        use std::os::fd::AsRawFd;
+        unsafe extern "C" { fn fcntl(fd: i32, command: i32, ...) -> i32; }
+        const F_FULLFSYNC: i32 = 51;
+        if unsafe { fcntl(file.as_raw_fd(), F_FULLFSYNC) } == -1 { return Err(std::io::Error::last_os_error()); }
+        Ok(())
+    }
+    #[cfg(all(unix, not(target_vendor = "apple")))]
+    { file.sync_data() }
+    #[cfg(windows)]
+    { file.sync_all() }
 }
 struct AtomicPublication;
 impl Publication for AtomicPublication {
-    fn publish(&mut self, path: &Path, write: impl FnOnce(&mut BufWriter<File>) -> Result<(), String>, ready: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
-        atomic_publish(path, write, ready)
+    fn publish(&mut self, path: &Path, write: impl FnOnce(&mut BufWriter<File>) -> Result<(), String>, ready: impl FnOnce() -> Result<(), String>) -> Result<(), AtomicReplaceError> {
+        atomic_publish_checked(path, write, ready)
     }
 }
 
 struct ResourceRecord { id: PortableId, offset: u64, length: u64, crc: u32, descriptor: [u8; 32] }
-struct ResourceIndex { records: Vec<ResourceRecord>, ranges: Vec<ResourceRecord>, length: u64 }
+struct ResourceIndex { records: Vec<ResourceRecord>, ranges: Vec<ResourceRecord>, length: u64, spatial: BTreeMap<PortableId, [u32; 2]> }
 fn resource_index(metadata: &[u8], limits: ProjectLimits) -> Result<ResourceIndex, super::session::OpenFailure> {
     if metadata.len() as u64 > limits.metadata_bytes { return Err("Recovery metadata exceeds admission limit".into()); }
     let value = super::parse_json(metadata, limits.metadata_bytes.min(usize::MAX as u64) as usize)?;
@@ -484,7 +776,15 @@ fn resource_index(metadata: &[u8], limits: ProjectLimits) -> Result<ResourceInde
     if output.iter().any(|record| record.offset.checked_add(record.length).is_none_or(|end| end > length)) {
         return Err("Recovery resource range exceeds pack".into());
     }
-    Ok(ResourceIndex { records: output, ranges: physical, length })
+    let mut spatial = BTreeMap::new();
+    for group in value["index_chunks"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_array) {
+        for tile in group {
+            let coordinate = serde_json::from_value::<[u32; 2]>(tile["coordinate"].clone());
+            if let (Ok(coordinate), Some(id)) = (coordinate, tile["resource"]["ref"].as_str().and_then(|id| id.parse().ok()))
+                && ids.contains(&id) { spatial.entry(id).or_insert(coordinate); }
+        }
+    }
+    Ok(ResourceIndex { records: output, ranges: physical, length, spatial })
 }
 fn resource_descriptor(record: &serde_json::Value) -> Result<[u8; 32], String> {
     let mut descriptor = record.clone();
@@ -493,7 +793,7 @@ fn resource_descriptor(record: &serde_json::Value) -> Result<[u8; 32], String> {
     Ok(Sha256::digest(serde_json::to_vec(&descriptor).map_err(|e| e.to_string())?).into())
 }
 
-struct ResourceFile { id: PortableId, path: PathBuf, _owner: Arc<OwnerLock>, length: u64 }
+struct ResourceFile { id: PortableId, path: PathBuf, offset: u64, file: Arc<File>, _owner: Arc<OwnerLock>, length: u64 }
 struct ResourcePack { length: u64, files: Vec<(u64, Arc<ResourceFile>)> }
 impl ByteSource for ResourcePack {
     fn byte_len(&self) -> u64 { self.length }
@@ -509,8 +809,7 @@ impl ByteSource for ResourcePack {
             let local = position.checked_sub(*start).ok_or("Recovery backing range overflow")?;
             let count = (owner.length.saturating_sub(local)).min((length - written) as u64) as usize;
             if count > 0 {
-                let mut file = File::open(&owner.path).map_err(|e| e.to_string())?;
-                file.seek(SeekFrom::Start(local)).and_then(|_| file.read_exact(&mut bytes[written..written + count])).map_err(|e| e.to_string())?;
+                read_exact_at(&owner.file, owner.offset.checked_add(local).ok_or("Recovery read overflow")?, &mut bytes[written..written + count])?;
                 written += count; position += count as u64;
             }
             index += 1;
@@ -519,31 +818,43 @@ impl ByteSource for ResourcePack {
     }
 }
 
-fn verify_file(file: &File, record: &ResourceRecord, cancelled: &AtomicBool) -> Result<(), String> {
-    if file.metadata().map_err(|e| e.to_string())?.len() != record.length { return Err("Recovery resource length changed".into()); }
-    let mut file = file.try_clone().map_err(|e| e.to_string())?;
-    file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+fn read_exact_at(file: &File, mut offset: u64, mut bytes: &mut [u8]) -> Result<(), String> {
+    while !bytes.is_empty() {
+        #[cfg(unix)]
+        let count = { use std::os::unix::fs::FileExt; file.read_at(bytes, offset) };
+        #[cfg(windows)]
+        let count = { use std::os::windows::fs::FileExt; file.seek_read(bytes, offset) };
+        let count = match count {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            other => other.map_err(|e| e.to_string())?,
+        };
+        if count == 0 { return Err("Incomplete recovery pack range".into()); }
+        offset = offset.checked_add(count as u64).ok_or("Recovery read overflow")?;
+        bytes = &mut bytes[count..];
+    }
+    Ok(())
+}
+fn verify_range(file: &File, offset: u64, record: &ResourceRecord, cancelled: &AtomicBool) -> Result<(), String> {
     let mut buffer = [0; 64 * 1024];
     let mut remaining = record.length;
     let mut checksum = crc32fast::Hasher::new();
     while remaining != 0 {
         check_cancelled(cancelled)?;
         let count = remaining.min(buffer.len() as u64) as usize;
-        file.read_exact(&mut buffer[..count]).map_err(|e| e.to_string())?;
+        read_exact_at(file, offset.checked_add(record.length - remaining).ok_or("Recovery range overflow")?, &mut buffer[..count])?;
         checksum.update(&buffer[..count]); remaining -= count as u64;
     }
     if checksum.finalize() != record.crc { return Err("Recovery resource checksum failed".into()); }
     Ok(())
 }
-fn verify_payload(mut file: File, payload: &Payload, length: u64, cancelled: &AtomicBool) -> Result<(), String> {
-    file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+fn verify_payload(file: File, start: u64, payload: &Payload, length: u64, cancelled: &AtomicBool) -> Result<(), String> {
     let encoded = match payload { Payload::Opaque(_) => None, payload => Some(payload.encoded()?.bytes) };
     let mut buffer = [0; 64 * 1024];
     let mut offset = 0;
     while offset < length {
         check_cancelled(cancelled)?;
         let count = (length - offset).min(buffer.len() as u64) as usize;
-        file.read_exact(&mut buffer[..count]).map_err(|e| e.to_string())?;
+        read_exact_at(&file, start.checked_add(offset).ok_or("Recovery range overflow")?, &mut buffer[..count])?;
         let same = match payload {
             Payload::Opaque(resource) => *resource.read_chunk(offset, count, cancelled)? == buffer[..count],
             _ => encoded.as_ref().and_then(|bytes| bytes.get(offset as usize..offset as usize + count)) == Some(&buffer[..count]),
@@ -551,6 +862,33 @@ fn verify_payload(mut file: File, payload: &Payload, length: u64, cancelled: &At
         if !same { return Err("Conflicting immutable recovery resource bytes".into()); }
         offset += count as u64;
     }
+    Ok(())
+}
+fn write_payload(file: &mut impl Write, payload: &Payload, record: &ResourceRecord, cancelled: &AtomicBool) -> Result<(), String> {
+    let mut hasher = crc32fast::Hasher::new();
+    match payload {
+        Payload::Opaque(resource) => {
+            let mut offset = 0;
+            while offset < record.length {
+                check_cancelled(cancelled)?;
+                let count = (record.length - offset).min(MAX_RANGE_BYTES as u64) as usize;
+                let bytes = resource.read_chunk(offset, count, cancelled)?;
+                hasher.update(&bytes);
+                file.write_all(&bytes).map_err(|e| e.to_string())?;
+                offset += count as u64;
+            }
+        }
+        payload => {
+            let bytes = payload.encoded()?.bytes;
+            if bytes.len() as u64 != record.length { return Err("Recovery payload length changed".into()); }
+            for chunk in bytes.chunks(MAX_RANGE_BYTES) {
+                check_cancelled(cancelled)?;
+                hasher.update(chunk);
+                file.write_all(chunk).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    if hasher.finalize() != record.crc { return Err("Recovery resource checksum failed".into()); }
     Ok(())
 }
 pub fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
@@ -638,6 +976,7 @@ pub fn atomic_replace(path: &Path, bytes: &[u8]) -> Result<(), String> {
 pub fn atomic_replace_checked(path: &Path, bytes: &[u8]) -> Result<(), AtomicReplaceError> {
     let parent = path.parent().ok_or("Invalid recovery destination")?;
     create_directory(parent)?;
+    if let Some(ancestor) = parent.parent().filter(|path| !path.as_os_str().is_empty()) { sync_directory(ancestor)?; }
     atomic_publish_checked(path, |file| file.write_all(bytes).map_err(|e| e.to_string()), || Ok(()))
 }
 fn remove_file(path: &Path) -> Result<(), String> {
@@ -704,18 +1043,373 @@ mod tests {
         let capture = editor.capture_session(editor.capture(1, Default::default()).unwrap()).unwrap();
         PreparedSession::prepare(&capture, json!({"marker": marker}), &AtomicBool::new(false)).unwrap()
     }
+    fn copy_fixture(source: &Path, destination: &Path) {
+        fs::create_dir_all(destination).unwrap(); fs::copy(source.join("head.json"), destination.join("head.json")).unwrap();
+        for name in ["generations", "resources"] {
+            fs::create_dir_all(destination.join(name)).unwrap();
+            for entry in fs::read_dir(source.join(name)).unwrap() {
+                let entry = entry.unwrap(); fs::copy(entry.path(), destination.join(name).join(entry.file_name())).unwrap();
+            }
+        }
+    }
+    fn session_history(path: &Path) -> serde_json::Value {
+        let cancel = AtomicBool::new(false); let mut store = SessionStore::open(path).unwrap();
+        let mut opened = store.load(ProjectLimits::default(), &cancel).unwrap().unwrap();
+        assert_eq!(store.loaded_generation(), store.generation());
+        let snapshot = |editor: &Editor| {
+            let capture = editor.capture_session(editor.capture(11, editor.document().output().context.clone()).unwrap()).unwrap();
+            let prepared = PreparedSession::prepare(&capture, opened.metadata.clone(), &cancel).unwrap();
+            let mut metadata: serde_json::Value = serde_json::from_slice(prepared.metadata()).unwrap(); metadata["checkpoint"]["owner"] = 0.into();
+            let resources = prepared.resources().entries.iter().map(|entry| (entry.payload.id().to_string(), Sha256::digest(&entry.payload.encoded().unwrap().bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>())).collect::<BTreeMap<_,_>>();
+            json!({"metadata":metadata,"resources":resources})
+        };
+        let current = snapshot(&opened.editor); let mut history = Vec::new();
+        while opened.editor.can_undo() { opened.editor.undo().unwrap(); history.push(snapshot(&opened.editor)); }
+        while opened.editor.can_redo() { opened.editor.redo().unwrap(); history.push(snapshot(&opened.editor)); }
+        assert!(!history.is_empty()); json!({"current":current,"history":history})
+    }
+    #[test]
+    fn flat_session_moves_resume_at_every_store_manifest_and_lock_boundary() {
+        for interrupt in 1..=4 {
+            let directory = Directory::new(); let root = &directory.0;
+            let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+            copy_fixture(&crate_root.join("tests/compat/1.0.15/session"), &root.join("drawing-a"));
+            copy_fixture(&crate_root.join("src/package/codec/fixtures/v1.0.14-paint-session"), &root.join("drawing-b"));
+            let expected = [session_history(&root.join("drawing-a")), session_history(&root.join("drawing-b"))];
+            let manifest = serde_json::to_vec(&json!({"generation":7,"drawings":[{"id":1,"key":"drawing-a"},{"id":2,"key":"drawing-b"}],"active":2,"clean_exit":false,"restoring":[],"blocked":[],"future_ui":{"keep":42}})).unwrap();
+            fs::write(root.join("window-test.json"), &manifest).unwrap();
+            let mut count = 0;
+            assert!(import_sessions_using(root, ".json", ".lock", |_| {
+                assert!(OwnerLock::claim(&root.join(".gc.lock")).unwrap().is_none());
+                assert!(OwnerLock::claim(&root.join("packed/.gc.lock")).unwrap().is_none());
+                count += 1; if count == interrupt { Err("Interrupted move".into()) } else { Ok(()) }
+            }).is_err());
+            let packed = import_session_directories(root, ".json", ".lock").unwrap();
+            import_session_directories(root, ".json", ".lock").unwrap();
+            assert!(!root.join("window-test.json").exists()); assert!(!root.join("window-test.lock").exists());
+            assert!(packed.join("window-test.lock").is_file()); assert_eq!(fs::read(packed.join("window-test.json")).unwrap(), manifest);
+            for (index, key) in ["drawing-a", "drawing-b"].into_iter().enumerate() {
+                assert!(!root.join(key).exists()); assert_eq!(session_history(&packed.join(key)), expected[index]);
+            }
+            collect_unreferenced_stores(root, &BTreeSet::new(), &AtomicBool::new(false)).unwrap();
+            assert!(!packed.join(".lock").exists()); assert!(packed.join("drawing-a/head.json").is_file()); assert!(packed.join("drawing-b/head.json").is_file());
+        }
+    }
+    fn many_tiles(count: u32) -> PreparedSession {
+        let mut document = Document::new(PortableId::random(), 50 * 256, count.div_ceil(50) * 256,
+            DocumentNames { paint: "ink".into(), paper: "paper".into() });
+        let descriptor = RasterPlane::Color.descriptor(Default::default());
+        let tiles = (0..count).map(|index| {
+            let mut bytes = vec![37; 256 * 256 * 4];
+            bytes[..4].copy_from_slice(&index.to_le_bytes());
+            let tile = RasterTile::backed(TileBlob::encode(descriptor, &bytes).unwrap());
+            (TileKey { plane: RasterPlane::Color, coordinate: [index % 50, index / 50] }, tile)
+        }).collect();
+        *document.target_raster_mut(document.working.target.unwrap()).unwrap() = RasterRevision::backed(RasterData { tiles, ..Default::default() });
+        let editor = Editor::new(document);
+        let capture = editor.capture_session(editor.capture(1, Default::default()).unwrap()).unwrap();
+        PreparedSession::prepare(&capture, json!({"marker": 37}), &AtomicBool::new(false)).unwrap()
+    }
+    struct Operations<'a>(&'a mut Vec<String>);
+    impl Publication for Operations<'_> {
+        fn publish(&mut self, path: &Path, write: impl FnOnce(&mut BufWriter<File>) -> Result<(), String>, ready: impl FnOnce() -> Result<(), String>) -> Result<(), AtomicReplaceError> {
+            self.0.push(path.parent().unwrap().file_name().unwrap().to_str().unwrap().into());
+            atomic_publish_checked(path, write, ready)
+        }
+        fn append(&mut self, path: &Path, write: impl FnOnce(&mut BufWriter<File>) -> Result<(), String>, ready: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+            self.0.push("append".into()); append_pack(path, write, ready)
+        }
+    }
+    #[test]
+    fn two_thousand_tile_checkpoint_syncs_packs_and_reuses_existing_payloads() {
+        let directory = Directory::new(); let cancel = AtomicBool::new(false);
+        let prepared = many_tiles(2_000);
+        let mut store = SessionStore::open(&directory.0).unwrap();
+        let mut operations = Vec::new();
+        store.commit_using(&prepared, &cancel, Operations(&mut operations)).unwrap();
+        assert_eq!(operations.len(), 3);
+        assert_eq!(&operations[..2], &["packs", "generations"]);
+        assert_eq!(count(&directory.0.join("resources")), 0);
+        let index = resource_index(prepared.metadata(), ProjectLimits::default()).unwrap_or_else(|e| panic!("{}", e.message()));
+        let bytes = store.generation_metadata(&store.head.as_ref().unwrap().current, ProjectLimits::default().metadata_bytes).unwrap();
+        let stored = StoredGeneration::parse(&bytes, ProjectLimits::default()).unwrap_or_else(|e| panic!("{}", e.message()));
+        let locations = stored.locations.unwrap();
+        let mut spatial = index.spatial.into_iter().collect::<Vec<_>>(); spatial.sort_by_key(|(_, coordinate)| [coordinate[1], coordinate[0]]);
+        assert_eq!(spatial.len(), 2_000);
+        assert!(spatial.windows(2).all(|pair| locations[&pair[0].0].offset < locations[&pair[1].0].offset));
+        let pack = resource_owner(&store, tile_resource(&prepared).payload.id(), tile_resource(&prepared).bytes);
+        let bytes = fs::read(&pack.path).unwrap();
+        operations.clear();
+        store.commit_using(&prepared, &cancel, Operations(&mut operations)).unwrap();
+        assert_eq!(operations.len(), 2);
+        assert_eq!(fs::read(&pack.path).unwrap(), bytes);
+        operations.clear();
+        store.commit_using(&capture(42), &cancel, Operations(&mut operations)).unwrap();
+        assert_eq!(&operations[..2], &["append", "generations"]);
+        assert_eq!(count(&directory.0.join("packs")), 1);
+        assert_eq!(marker(&mut store), 42);
+    }
+    #[test]
+    fn a_truncated_committed_pack_is_never_reused_for_append() {
+        let directory = Directory::new(); let cancel = AtomicBool::new(false);
+        let mut store = SessionStore::open(&directory.0).unwrap();
+        let first = capture(1); store.commit(&first, &cancel).unwrap();
+        let pack = resource_owner(&store, tile_resource(&first).payload.id(), tile_resource(&first).bytes);
+        let head = fs::read(directory.0.join("head.json")).unwrap();
+        OpenOptions::new().write(true).open(&pack.path).unwrap().set_len(0).unwrap();
+        assert_eq!(store.commit(&capture(2), &cancel).unwrap_err(), "Recovery pack is shorter than its committed extent");
+        assert_eq!(fs::metadata(&pack.path).unwrap().len(), 0);
+        assert_eq!(fs::read(directory.0.join("head.json")).unwrap(), head);
+    }
+    #[test]
+    fn failed_partial_append_keeps_last_good_extent_and_skips_its_tail() {
+        struct FullDisk;
+        impl Publication for FullDisk {
+            fn publish(&mut self, _: &Path, _: impl FnOnce(&mut BufWriter<File>) -> Result<(), String>, _: impl FnOnce() -> Result<(), String>) -> Result<(), AtomicReplaceError> {
+                panic!("The incremental checkpoint must append its existing pack")
+            }
+            fn append(&mut self, path: &Path, _: impl FnOnce(&mut BufWriter<File>) -> Result<(), String>, _: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+                let mut file = OpenOptions::new().append(true).open(path).unwrap();
+                file.write_all(b"partial append").unwrap(); file.sync_data().unwrap();
+                Err(std::io::Error::from(std::io::ErrorKind::StorageFull).to_string())
+            }
+        }
+        let directory = Directory::new(); let cancel = AtomicBool::new(false);
+        let original = capture(1); let second = capture(2);
+        let mut store = SessionStore::open(&directory.0).unwrap(); store.commit(&original, &cancel).unwrap();
+        let owner = resource_owner(&store, tile_resource(&original).payload.id(), tile_resource(&original).bytes);
+        let committed = fs::metadata(&owner.path).unwrap().len();
+        let head = fs::read(directory.0.join("head.json")).unwrap();
+        assert!(store.commit_using(&second, &cancel, FullDisk).is_err());
+        let tail = fs::metadata(&owner.path).unwrap().len(); assert!(tail > committed);
+        assert_eq!(fs::read(directory.0.join("head.json")).unwrap(), head);
+        assert_eq!(marker(&mut store), 1);
+        drop(store);
+        let mut store = SessionStore::open(&directory.0).unwrap();
+        assert_eq!(fs::metadata(&owner.path).unwrap().len(), tail);
+        store.commit(&second, &cancel).unwrap();
+        let next = resource_owner(&store, tile_resource(&second).payload.id(), tile_resource(&second).bytes);
+        assert_eq!(owner.path, next.path); assert!(next.offset >= tail);
+        assert_eq!(marker(&mut store), 2);
+        let bytes = fs::read(&owner.path).unwrap(); assert_eq!(&bytes[committed as usize..tail as usize], b"partial append");
+    }
+    #[test]
+    fn failed_append_sync_preserves_the_last_good_checkpoint() {
+        struct FailedSync;
+        impl Publication for FailedSync {
+            fn publish(&mut self, _: &Path, _: impl FnOnce(&mut BufWriter<File>) -> Result<(), String>, _: impl FnOnce() -> Result<(), String>) -> Result<(), AtomicReplaceError> {
+                panic!("The incremental checkpoint must append")
+            }
+            fn append(&mut self, path: &Path, write: impl FnOnce(&mut BufWriter<File>) -> Result<(), String>, ready: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+                append_using(path, write, ready, |_| Err("Pack data sync failed".into()))
+            }
+        }
+        let directory = Directory::new(); let cancel = AtomicBool::new(false);
+        let mut store = SessionStore::open(&directory.0).unwrap(); store.commit(&capture(1), &cancel).unwrap();
+        let head = fs::read(directory.0.join("head.json")).unwrap();
+        assert_eq!(store.commit_using(&capture(2), &cancel, FailedSync).unwrap_err(), "Pack data sync failed");
+        assert_eq!(fs::read(directory.0.join("head.json")).unwrap(), head); drop(store);
+        let mut store = SessionStore::open(&directory.0).unwrap(); assert_eq!(marker(&mut store), 1);
+        store.commit(&capture(3), &cancel).unwrap(); assert_eq!(marker(&mut store), 3);
+    }
+    #[test]
+    fn repeated_failed_rollovers_collect_only_unpublished_whole_packs() {
+        let directory = Directory::new(); let cancel = AtomicBool::new(false); let first = capture(1); let second = capture(2);
+        let mut store = SessionStore::open(&directory.0).unwrap(); store.commit(&first, &cancel).unwrap();
+        let owner = resource_owner(&store, tile_resource(&first).payload.id(), tile_resource(&first).bytes);
+        OpenOptions::new().append(true).open(&owner.path).unwrap().set_len(PACK_BYTES).unwrap();
+        for _ in 0..10 {
+            assert!(store.commit_using(&second, &cancel, Interrupted { operation: 2, after: false, count: 0 }).is_err());
+            assert_eq!(count(&directory.0.join("packs")), 2); assert_eq!(marker(&mut store), 1);
+        }
+        store.commit(&second, &cancel).unwrap(); assert_eq!(count(&directory.0.join("packs")), 2); assert_eq!(marker(&mut store), 2);
+    }
+    #[test]
+    fn a_resource_retained_only_by_previous_is_reused_without_append() {
+        let directory = Directory::new(); let cancel = AtomicBool::new(false); let first = capture(1);
+        let mut store = SessionStore::open(&directory.0).unwrap(); store.commit(&first, &cancel).unwrap();
+        let owner = resource_owner(&store, tile_resource(&first).payload.id(), tile_resource(&first).bytes);
+        store.commit(&capture(2), &cancel).unwrap(); let length = fs::metadata(&owner.path).unwrap().len();
+        let mut operations = Vec::new(); store.commit_using(&first, &cancel, Operations(&mut operations)).unwrap();
+        assert_eq!(operations.len(), 2); assert_eq!(fs::metadata(&owner.path).unwrap().len(), length); assert_eq!(marker(&mut store), 1);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn verified_camera_checkpoint_does_not_open_or_read_payload_packs() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = Directory::new(); let cancel = AtomicBool::new(false); let prepared = capture(1);
+        let mut store = SessionStore::open(&directory.0).unwrap(); store.commit(&prepared, &cancel).unwrap();
+        let owner = resource_owner(&store, tile_resource(&prepared).payload.id(), tile_resource(&prepared).bytes);
+        let permissions = fs::metadata(&owner.path).unwrap().permissions();
+        fs::set_permissions(&owner.path, fs::Permissions::from_mode(0)).unwrap();
+        assert!(File::open(&owner.path).is_err());
+        let mut operations = Vec::new(); let result = store.commit_using(&prepared, &cancel, Operations(&mut operations));
+        fs::set_permissions(&owner.path, permissions).unwrap();
+        result.unwrap(); assert_eq!(operations.len(), 2); assert_eq!(marker(&mut store), 1);
+    }
+    #[test]
+    fn rollover_keeps_previous_pack_and_live_ranges() {
+        let directory = Directory::new(); let cancel = AtomicBool::new(false);
+        let original = capture(1); let second = capture(2);
+        let mut store = SessionStore::open(&directory.0).unwrap(); store.commit(&original, &cancel).unwrap();
+        let owner = resource_owner(&store, tile_resource(&original).payload.id(), tile_resource(&original).bytes);
+        store._owner.readers.lock().unwrap().push(Arc::downgrade(&owner));
+        OpenOptions::new().append(true).open(&owner.path).unwrap().set_len(PACK_BYTES).unwrap();
+        store.commit(&second, &cancel).unwrap();
+        let next = resource_owner(&store, tile_resource(&second).payload.id(), tile_resource(&second).bytes);
+        assert_ne!(owner.path, next.path); assert_eq!(count(&directory.0.join("packs")), 2);
+        let pack = ResourcePack { length: owner.length, files: vec![(0, owner.clone())] };
+        assert!(matches!(pack.poll(0, owner.length as usize).unwrap(), RangeState::Ready(_)));
+        store.retire().unwrap(); assert!(owner.path.is_file()); assert!(!next.path.exists());
+    }
+    #[test]
+    fn corrupt_pack_extents_ranges_and_aliases_are_rejected() {
+        let directory = Directory::new(); let cancel = AtomicBool::new(false);
+        let mut store = SessionStore::open(&directory.0).unwrap();
+        let generation = store.commit(&capture(1), &cancel).unwrap();
+        let bytes = fs::read(store.generation_path(generation)).unwrap();
+        let base: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        for corruption in 0..5 {
+            let mut value = base.clone();
+            let id = value["locations"].as_object().unwrap().keys().next().unwrap().clone();
+            let pack = value["locations"][&id]["pack"].as_str().unwrap().to_owned();
+            match corruption {
+                0 => value["locations"][&id]["offset"] = u64::MAX.into(),
+                1 => value["extents"][&pack] = 0.into(),
+                2 => { value["extents"].as_object_mut().unwrap().remove(&pack); },
+                3 => { value["locations"].as_object_mut().unwrap().remove(&id); },
+                _ => { value["extents"][PortableId::random().to_string()] = 1.into(); },
+            }
+            assert!(StoredGeneration::parse(&serde_json::to_vec(&value).unwrap(), ProjectLimits::default()).is_err());
+        }
+    }
+    #[test]
+    fn native_namespace_import_preserves_live_and_downgrade_sessions() {
+        let root = Directory::new(); create_directory(&root.0).unwrap();
+        let old = root.0.join("scene"); create_directory(&old).unwrap();
+        fs::write(old.join("window.json"), b"original membership").unwrap();
+        let first = capture(1);
+        let mut store = SessionStore::open(&old.join("drawing")).unwrap(); store.commit(&first, &AtomicBool::new(false)).unwrap();
+        let live = OwnerLock::claim(&old.join(".lock")).unwrap().unwrap();
+        let mut callbacks = 0;
+        import_session_directories_with_owner(&root.0, "window.json", ".lock", |path| {
+            assert_eq!(path, old.join(".lock")); callbacks += 1; Ok(None::<OwnerLock>)
+        }).unwrap();
+        assert_eq!(callbacks, 1); assert!(OwnerLock::claim(&old.join(".lock")).unwrap().is_none());
+        let packed = import_session_directories(&root.0, "window.json", ".lock").unwrap();
+        assert!(old.is_dir()); assert!(!packed.join("scene").exists()); drop(live);
+        assert_eq!(import_session_directories(&root.0, "window.json", ".lock").unwrap_err(), "Recovery drawing is already open");
+        let reader = resource_owner(&store, tile_resource(&first).payload.id(), tile_resource(&first).bytes); drop(store);
+        assert_eq!(import_session_directories(&root.0, "window.json", ".lock").unwrap_err(), "Recovery drawing is already open"); drop(reader);
+        import_session_directories(&root.0, "window.json", ".lock").unwrap();
+        assert_eq!(fs::read(packed.join("scene/window.json")).unwrap(), b"original membership");
+        assert!(!old.exists());
+        create_directory(&old).unwrap(); fs::write(old.join("window.json"), b"downgrade latest membership").unwrap();
+        assert_eq!(import_session_directories(&root.0, "window.json", ".lock").unwrap_err(), "The saved session exists in both versions; both copies were kept");
+        assert_eq!(fs::read(packed.join("scene/window.json")).unwrap(), b"original membership");
+        assert_eq!(fs::read(old.join("window.json")).unwrap(), b"downgrade latest membership");
+        fs::remove_file(old.join("window.json")).unwrap(); fs::remove_file(old.join(".lock")).unwrap(); fs::remove_dir(&old).unwrap();
+        let upgraded = packed.join("scene/drawing");
+        let mut upgraded_store = SessionStore::open(&upgraded).unwrap();
+        let mut opened = upgraded_store.load(ProjectLimits::default(), &AtomicBool::new(false)).unwrap().unwrap();
+        let target = opened.editor.document().working.target.unwrap();
+        let descriptor = RasterPlane::Color.descriptor(Default::default());
+        let tile = RasterTile::backed(TileBlob::encode(descriptor, &vec![42; 256 * 256 * 4]).unwrap());
+        opened.editor.perform(crate::Edit::SetRaster { target, revision: RasterRevision::backed(RasterData {
+            tiles: [(TileKey { plane: RasterPlane::Color, coordinate: [0, 0] }, tile)].into(), ..Default::default()
+        }) }).unwrap();
+        let capture = opened.editor.capture_session(opened.editor.capture(11, Default::default()).unwrap()).unwrap();
+        upgraded_store.commit(&PreparedSession::prepare(&capture, json!({"marker":42}), &AtomicBool::new(false)).unwrap(), &AtomicBool::new(false)).unwrap();
+        drop(opened); drop(upgraded_store);
+        let newest = session_history(&upgraded);
+        collect_unreferenced_stores(&root.0, &BTreeSet::new(), &AtomicBool::new(false)).unwrap();
+        assert_eq!(session_history(&upgraded), newest);
+        let downgrade = root.0.join("new-legacy-window"); create_directory(&downgrade).unwrap();
+        fs::write(downgrade.join("window.json"), b"fresh downgrade membership").unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/compat/1.0.15/session");
+        copy_fixture(&fixture, &downgrade.join("drawing"));
+        let legacy = session_history(&downgrade.join("drawing"));
+        import_session_directories(&root.0, "window.json", ".lock").unwrap();
+        assert_eq!(session_history(&upgraded), newest);
+        assert_eq!(session_history(&packed.join("new-legacy-window/drawing")), legacy);
+        assert!(packed.join("new-legacy-window/window.json").is_file());
+    }
+    #[test]
+    fn packed_checkpoints_preserve_all_sample_depths_and_auxiliary_planes() {
+        use crate::color::SampleDepth;
+        for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32] {
+            let directory = Directory::new(); let cancel = AtomicBool::new(false);
+            let mut document = Document::new(PortableId::random(), 256, 256, DocumentNames { paint: "ink".into(), paper: "paper".into() });
+            document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.depth = depth;
+            let color = document.composition().color;
+            let tiles = [RasterPlane::Color, RasterPlane::WatercolorWetness].into_iter().map(|plane| {
+                let descriptor = plane.descriptor(color);
+                let sample = if plane != RasterPlane::Color { vec![0x34; descriptor.bits_per_channel as usize / 8] }
+                    else { match depth { SampleDepth::U8 => vec![42], SampleDepth::U16 => vec![0x34, 0x12],
+                        SampleDepth::F16 => half::f16::from_f32(0.25).to_le_bytes().to_vec(), SampleDepth::F32 => 0.25f32.to_le_bytes().to_vec() } };
+                let bytes = sample.repeat(descriptor.byte_len([256; 2]).unwrap() / sample.len());
+                (TileKey { plane, coordinate: [0, 0] }, RasterTile::backed(TileBlob::encode(descriptor, &bytes).unwrap()))
+            }).collect();
+            *document.target_raster_mut(document.working.target.unwrap()).unwrap() = RasterRevision::backed(RasterData {
+                tiles, watercolor: Some(crate::raster::RasterWatercolor { wet_edge: 0.25, burnt_edge: 0.5, edge_width: 2. }),
+            });
+            let editor = Editor::new(document);
+            let expected = editor.document().target_raster(editor.document().working.target.unwrap()).unwrap().wait_data().unwrap();
+            let capture = editor.capture_session(editor.capture(1, Default::default()).unwrap()).unwrap();
+            let prepared = PreparedSession::prepare(&capture, json!({}), &cancel).unwrap();
+            let mut store = SessionStore::open(&directory.0).unwrap(); store.commit(&prepared, &cancel).unwrap(); drop(store);
+            let mut store = SessionStore::open(&directory.0).unwrap();
+            let restored = store.load(ProjectLimits::default(), &cancel).unwrap().unwrap();
+            let document = restored.editor.document(); assert_eq!(document.composition().color.depth, depth);
+            let actual = document.target_raster(document.working.target.unwrap()).unwrap().wait_data().unwrap();
+            assert_eq!(actual.watercolor, expected.watercolor); assert_eq!(actual.tiles.len(), expected.tiles.len());
+            for (key, tile) in &expected.tiles {
+                let a = actual.tiles[key].wait_backing().unwrap(); let b = tile.wait_backing().unwrap();
+                assert_eq!(a.descriptor, b.descriptor); assert_eq!(a.resource_id(), b.resource_id()); assert_eq!(a.decode().unwrap(), b.decode().unwrap());
+            }
+        }
+    }
+    #[test]
+    fn opaque_resources_preserve_empty_ranges_and_seal_oversized_packs() {
+        for length in [0, PACK_BYTES + 1_024] {
+            struct Repeated(u64);
+            impl ByteSource for Repeated {
+                fn byte_len(&self) -> u64 { self.0 }
+                fn poll(&self, offset: u64, length: usize) -> Result<RangeState, String> {
+                    if offset.checked_add(length as u64).is_none_or(|end| end > self.0) { return Err("Repeat range exceeds source".into()); }
+                    Ok(RangeState::Ready(ByteRange::new(vec![37; length].into(), 0..length)?))
+                }
+            }
+            let directory = Directory::new(); let cancel = AtomicBool::new(false);
+            let backing = ImmutableBacking::new(Arc::new(Repeated(length))).unwrap();
+            let mut checksum = crc32fast::Hasher::new(); let chunk = vec![37; 1024];
+            for _ in 0..length / 1024 { checksum.update(&chunk); }
+            let id = PortableId::random();
+            let opaque = Arc::new(crate::authored::OpaqueResource { id, kind: "future.attachment/1".into(), data: json!({}), encoding: "future.codec/1".into(),
+                extra_fields: Default::default(), backing, offset: 0, length, crc32: checksum.finalize() });
+            let mut document = Document::new(PortableId::random(), 256, 256, DocumentNames { paint: "ink".into(), paper: "paper".into() });
+            document.artwork.extensions = Arc::new(crate::authored::Extensions { resources: [(id, opaque)].into(), ..Default::default() });
+            let editor = Editor::new(document);
+            let capture = editor.capture_session(editor.capture(1, Default::default()).unwrap()).unwrap();
+            let prepared = PreparedSession::prepare(&capture, json!({}), &cancel).unwrap();
+            let mut store = SessionStore::open(&directory.0).unwrap(); store.commit(&prepared, &cancel).unwrap();
+            let owner = resource_owner(&store, id, length); assert_eq!(owner.offset, 0); assert_eq!(fs::metadata(&owner.path).unwrap().len(), length.max(1));
+            if length == 0 {
+                let missing = owner.path.with_extension("held"); fs::rename(&owner.path, &missing).unwrap();
+                let failed = store.load(ProjectLimits::default(), &cancel).is_err(); fs::rename(missing, &owner.path).unwrap(); assert!(failed);
+            }
+            let restored = store.load(ProjectLimits::default(), &cancel).unwrap().unwrap();
+            let resource = &restored.editor.document().artwork.extensions.resources[&id];
+            if length != 0 { assert_eq!(&*resource.read_chunk(length - 1024, 1024, &cancel).unwrap(), chunk.as_slice()); }
+            store.commit(&self::capture(2), &cancel).unwrap();
+            if length > PACK_BYTES { assert_eq!(fs::metadata(&owner.path).unwrap().len(), length); }
+        }
+    }
     #[test]
     fn v1_0_14_paint_session_preserves_resources_history_and_identities() {
         let fixture=Path::new(env!("CARGO_MANIFEST_DIR")).join("src/package/codec/fixtures/v1.0.14-paint-session");
         let directory=Directory::new();let cancel=AtomicBool::new(false);
-        fs::create_dir_all(&directory.0).unwrap();
-        fs::copy(fixture.join("head.json"),directory.0.join("head.json")).unwrap();
-        for name in ["generations","resources"] {
-            fs::create_dir_all(directory.0.join(name)).unwrap();
-            for entry in fs::read_dir(fixture.join(name)).unwrap() {
-                let entry=entry.unwrap();fs::copy(entry.path(),directory.0.join(name).join(entry.file_name())).unwrap();
-            }
-        }
+        copy_fixture(&fixture, &directory.0);
         let head:Head=serde_json::from_slice(&fs::read(directory.0.join("head.json")).unwrap()).unwrap();
         let metadata:serde_json::Value=serde_json::from_slice(&fs::read(directory.0.join("generations").join(format!("{}.json",head.current.id))).unwrap()).unwrap();
         assert!(metadata["layout"].get("vectors").is_none());
@@ -814,7 +1508,14 @@ mod tests {
         assert_eq!(fs::read(root.0.join("head.json")).unwrap(),head);
     }
     fn count(path: &Path) -> usize { match fs::read_dir(path) { Ok(entries) => entries.count(), Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0, Err(error) => panic!("{error}") } }
-    fn resource_ids(prepared: &PreparedSession) -> BTreeSet<PortableId> { prepared.resources().entries.iter().map(|entry| entry.payload.id()).collect() }
+    fn resource_owner(store: &SessionStore, id: PortableId, length: u64) -> Arc<ResourceFile> {
+        let generation = store.head.as_ref().unwrap().current.clone();
+        let bytes = store.generation_metadata(&generation, ProjectLimits::default().metadata_bytes).unwrap();
+        let stored = StoredGeneration::parse(&bytes, ProjectLimits::default()).unwrap_or_else(|e| panic!("{}", e.message()));
+        let location = &stored.locations.unwrap()[&id];
+        let path = store.pack_path(location.pack);
+        Arc::new(ResourceFile { id, offset: location.offset, file: Arc::new(File::open(&path).unwrap()), path, length, _owner: store._owner.clone() })
+    }
     fn tile_resource(prepared: &PreparedSession) -> &super::super::resources::PreparedResource {
         prepared.resources().entries.iter().find(|entry| matches!(entry.payload, Payload::Tile(_))).unwrap()
     }
@@ -824,14 +1525,25 @@ mod tests {
 
     struct Interrupted { operation: usize, after: bool, count: usize }
     impl Publication for Interrupted {
-        fn publish(&mut self, path: &Path, write: impl FnOnce(&mut BufWriter<File>) -> Result<(), String>, ready: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+        fn append(&mut self, path: &Path, write: impl FnOnce(&mut BufWriter<File>) -> Result<(), String>, ready: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+            self.count += 1;
+            let interrupt = self.count == self.operation;
+            append_pack(path, |file| {
+                write(file)?;
+                if interrupt && !self.after { return Err("Interrupted append".into()); }
+                Ok(())
+            }, ready)?;
+            if interrupt { return Err("Interrupted append sync".into()); }
+            Ok(())
+        }
+        fn publish(&mut self, path: &Path, write: impl FnOnce(&mut BufWriter<File>) -> Result<(), String>, ready: impl FnOnce() -> Result<(), String>) -> Result<(), AtomicReplaceError> {
             self.count += 1;
             let interrupt = self.count == self.operation;
             if interrupt && !self.after {
-                return atomic_publish(path, |file| { write(file)?; Err("Interrupted write".into()) }, ready);
+                return atomic_publish_checked(path, |file| { write(file)?; Err("Interrupted write".into()) }, ready);
             }
-            atomic_publish(path, write, ready)?;
-            if interrupt { return Err("Interrupted publication".into()); }
+            atomic_publish_checked(path, write, ready)?;
+            if interrupt { return Err(AtomicReplaceError { published: true, error: "Interrupted publication".into() }); }
             Ok(())
         }
     }
@@ -840,8 +1552,7 @@ mod tests {
     fn every_write_interruption_restores_a_complete_checkpoint() {
         let old = capture(11);
         let new = capture(22);
-        let old_ids = resource_ids(&old); let new_ids = resource_ids(&new);
-        let operations = new_ids.difference(&old_ids).count() + 2;
+        let operations = 3;
         for after in [false, true] {
             for operation in 1..=operations {
                 let directory = Directory::new();
@@ -853,7 +1564,7 @@ mod tests {
                 let mut restored = SessionStore::open(&directory.0).unwrap();
                 assert_eq!(marker(&mut restored), if after && operation == operations { 22 } else { 11 });
                 assert_eq!(count(&directory.0.join("generations")), if after && operation == operations { 2 } else { 1 });
-                assert_eq!(count(&directory.0.join("resources")), if after && operation == operations { old_ids.union(&new_ids).count() } else { old_ids.len() });
+                assert_eq!(count(&directory.0.join("packs")), 1);
             }
         }
     }
@@ -864,7 +1575,7 @@ mod tests {
             let path = PathBuf::from(directory);
             let store = SessionStore::open(&path).unwrap();
             let target = match std::env::var("CAPY_SESSION_CRASH_STAGE").unwrap().as_str() {
-                "resources" => store.resource_path(PortableId::random()),
+                "resources" => store.pack_path(PortableId::random()),
                 "generations" => store.generation_path(PortableId::random()),
                 _ => path.join("head.json"),
             };
@@ -890,9 +1601,9 @@ mod tests {
             assert_eq!(status.code(), Some(87));
             let mut store = SessionStore::open(&directory.0).unwrap();
             assert_eq!(marker(&mut store), 7);
-            assert_eq!(count(&directory.0.join("resources")), original.resources().entries.len());
+            assert_eq!(count(&directory.0.join("packs")), 1);
             assert_eq!(count(&directory.0.join("generations")), 1);
-            assert_eq!(count(&directory.0), 4);
+            assert_eq!(count(&directory.0), 5);
         }
     }
 
@@ -901,16 +1612,18 @@ mod tests {
         let directory = Directory::new();
         let mut store = SessionStore::open(&directory.0).unwrap();
         let old = capture(1);
-        store.commit(&old, &AtomicBool::new(false)).unwrap();
+        let previous = store.commit(&old, &AtomicBool::new(false)).unwrap();
         let new = capture(2);
-        assert!(store.commit_using(&new, &AtomicBool::new(false), Interrupted { operation: resource_ids(&new).difference(&resource_ids(&old)).count() + 2, after: true, count: 0 }).is_err());
+        assert!(store.commit_using(&new, &AtomicBool::new(false), Interrupted { operation: 3, after: true, count: 0 }).is_err());
+        assert_ne!(store.generation(), Some(previous)); assert_eq!(store.loaded_generation(), store.generation());
+        assert!(store.programs.contains_key(&store.generation().unwrap()));
         store.collect_garbage().unwrap();
         assert_eq!(marker(&mut store), 2);
         let third = capture(3);
         store.commit(&third, &AtomicBool::new(false)).unwrap();
         assert_eq!(marker(&mut store), 3);
         assert_eq!(count(&directory.0.join("generations")), 2);
-        assert_eq!(count(&directory.0.join("resources")), resource_ids(&new).union(&resource_ids(&third)).count());
+        assert_eq!(count(&directory.0.join("packs")), 1);
     }
 
     #[test]
@@ -920,25 +1633,25 @@ mod tests {
         let original = capture(1);
         store.commit(&original, &AtomicBool::new(false)).unwrap();
         let resource = tile_resource(&original);
-        let live = Arc::new(ResourceFile { id: resource.payload.id(), path: store.resource_path(resource.payload.id()), length: resource.bytes, _owner: store._owner.clone() });
+        let live = resource_owner(&store, resource.payload.id(), resource.bytes);
         store._owner.readers.lock().unwrap().push(Arc::downgrade(&live));
         for value in 2..20 {
             store.commit(&capture(value), &AtomicBool::new(false)).unwrap();
             assert!(count(&directory.0.join("generations")) <= 2);
-            assert!(count(&directory.0.join("resources")) <= original.resources().entries.len() + 2);
+            assert!(count(&directory.0.join("packs")) <= 3);
         }
         let pack = ResourcePack { length: live.length, files: vec![(0, live.clone())] };
         assert!(matches!(pack.poll(0, live.length as usize).unwrap(), RangeState::Ready(_)));
         store.retire().unwrap();
-        assert_eq!(count(&directory.0.join("resources")), 1);
+        assert_eq!(count(&directory.0.join("packs")), 1);
         drop(store);
         assert!(OwnerLock::claim(&directory.0.join(".lock")).unwrap().is_none());
         assert!(SessionStore::open(&directory.0).is_err());
         collect_unreferenced_stores(&root.0, &BTreeSet::new(), &AtomicBool::new(false)).unwrap();
-        assert_eq!(count(&directory.0.join("resources")), 1);
+        assert_eq!(count(&directory.0.join("packs")), 1);
         drop(pack); drop(live);
         collect_unreferenced_stores(&root.0, &BTreeSet::new(), &AtomicBool::new(false)).unwrap();
-        assert_eq!(count(&directory.0.join("resources")), 0);
+        assert_eq!(count(&directory.0.join("packs")), 0);
         assert_eq!(count(&directory.0.join("generations")), 0);
         assert!(directory.0.join(".lock").exists());
     }
@@ -952,7 +1665,12 @@ mod tests {
             let second = capture(2);
             let generation = store.commit(&second, &AtomicBool::new(false)).unwrap();
             match corruption {
-                0 => fs::write(store.resource_path(tile_resource(&second).payload.id()), b"broken").unwrap(),
+                0 => {
+                    let owner = resource_owner(&store, tile_resource(&second).payload.id(), tile_resource(&second).bytes);
+                    let mut file = OpenOptions::new().write(true).open(&owner.path).unwrap();
+                    use std::io::{Seek, SeekFrom};
+                    file.seek(SeekFrom::Start(owner.offset)).unwrap(); file.write_all(b"broken").unwrap();
+                }
                 1 => fs::write(store.generation_path(generation), b"broken").unwrap(),
                 3 => {
                     let path = store.generation_path(generation);
@@ -960,8 +1678,8 @@ mod tests {
                     fs::write(path,&metadata[..metadata.len()/2]).unwrap();
                 }
                 _ => {
-                    let mut metadata: serde_json::Value = serde_json::from_slice(second.metadata()).unwrap();
-                    let resource = metadata["resources"].as_array_mut().unwrap().iter_mut().find(|record| record["id"] == json!(tile_resource(&second).payload.id())).unwrap();
+                    let mut metadata: serde_json::Value = serde_json::from_slice(&fs::read(store.generation_path(generation)).unwrap()).unwrap();
+                    let resource = metadata["session"]["resources"].as_array_mut().unwrap().iter_mut().find(|record| record["id"] == json!(tile_resource(&second).payload.id())).unwrap();
                     resource["encoding"] = "unsupported".into();
                     let metadata = serde_json::to_vec(&metadata).unwrap();
                     fs::write(store.generation_path(generation), &metadata).unwrap();
@@ -987,7 +1705,7 @@ mod tests {
             store.commit(&capture(3), &AtomicBool::new(false)).unwrap();
             assert_eq!(marker(&mut store), 3);
             assert_eq!(count(&directory.0.join("generations")), 2);
-            assert_eq!(count(&directory.0.join("resources")), second.resources().entries.len() + 1);
+            assert_eq!(count(&directory.0.join("packs")), 1);
         }
     }
 
@@ -1012,7 +1730,7 @@ mod tests {
         let capture = capture(9);
         let mut store = SessionStore::open(&directory.0).unwrap();
         store.commit(&capture, &AtomicBool::new(false)).unwrap();
-        let path = store.resource_path(tile_resource(&capture).payload.id());
+        let path = resource_owner(&store, tile_resource(&capture).payload.id(), tile_resource(&capture).bytes).path.clone();
         let modified = fs::metadata(&path).unwrap().modified().unwrap();
         store.commit(&capture, &AtomicBool::new(false)).unwrap();
         assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
@@ -1040,7 +1758,7 @@ mod tests {
         assert!(!file.exists());
         drop(store);
         let store = SessionStore::open(&directory.0).unwrap();
-        assert_eq!(count(&directory.0.join("resources")), saved.resources().entries.len());
+        assert_eq!(count(&directory.0.join("packs")), 1);
         drop(store);
     }
 
@@ -1082,7 +1800,7 @@ mod tests {
         let prepared = capture(3);
         orphan.commit(&prepared, &cancel).unwrap();
         let tile = tile_resource(&prepared);
-        let reader = Arc::new(ResourceFile { id: tile.payload.id(), path: orphan.resource_path(tile.payload.id()), length: tile.bytes, _owner: orphan._owner.clone() });
+        let reader = resource_owner(&orphan, tile.payload.id(), tile.bytes);
         orphan._owner.readers.lock().unwrap().push(Arc::downgrade(&reader));
         orphan.retire().unwrap();
         let mut unpublished = SessionStore::open(&root.0.join("unpublished")).unwrap();
@@ -1098,13 +1816,13 @@ mod tests {
         assert!(root.0.join("kept/head.json").is_file());
         assert!(root.0.join("writer/head.json").is_file());
         assert!(!root.0.join("orphan/head.json").exists());
-        assert_eq!(count(&root.0.join("orphan/resources")), 1);
+        assert_eq!(count(&root.0.join("orphan/packs")), 1);
         assert!(reader.path.is_file());
         assert_eq!(fs::read(unrecognized.join("keep")).unwrap(), b"user bytes");
         assert!(root.0.join("unpublished/head.json").is_file());
         drop(reader); drop(live);
         collect_unreferenced_stores(&root.0, &reachable, &cancel).unwrap();
-        assert_eq!(count(&root.0.join("orphan/resources")), 0);
+        assert_eq!(count(&root.0.join("orphan/packs")), 0);
         assert!(root.0.join("writer/head.json").is_file());
         assert!(root.0.join("orphan/.lock").is_file());
     }
@@ -1201,11 +1919,12 @@ mod tests {
         let previous = store.commit(&capture(1), &cancel).unwrap();
         let prepared = capture(2);
         let current = store.commit(&prepared, &cancel).unwrap();
-        let mut metadata: serde_json::Value = serde_json::from_slice(prepared.metadata()).unwrap();
-        metadata["metadata"]["marker"] = 3.into();
+        let original = fs::read(store.generation_path(current)).unwrap();
+        let mut metadata: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        metadata["session"]["metadata"]["marker"] = 3.into();
         let damaged = serde_json::to_vec(&metadata).unwrap();
-        assert_eq!(damaged.len(), prepared.metadata().len());
-        assert_ne!(damaged, prepared.metadata());
+        assert_eq!(damaged.len(), original.len());
+        assert_ne!(damaged, original);
         fs::write(store.generation_path(current), damaged).unwrap();
         assert!(store.collect_garbage().is_err());
         assert_eq!(count(&directory.0.join("generations")), 2);
@@ -1307,7 +2026,7 @@ mod tests {
         fs::rename(path.join("head.json"), path.join("saved-head")).unwrap();
         symlink("head.json", path.join("head.json")).unwrap();
         assert!(SessionStore::open(&path).is_err());
-        assert_eq!(count(&path.join("resources")), prepared.resources().entries.len());
+        assert_eq!(count(&path.join("packs")), 1);
         assert_eq!(count(&path.join("generations")), 1);
         fs::remove_file(path.join("head.json")).unwrap();
         fs::rename(path.join("saved-head"), path.join("head.json")).unwrap();
