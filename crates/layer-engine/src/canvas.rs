@@ -725,6 +725,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.append_operations(Vec::new(), vec![(SourceTarget::Paint(*handle), operation)], None, false, None)
     }
 
+    #[cfg_attr(target_arch="wasm32",expect(clippy::arc_with_non_send_sync,reason="Shared single-threaded Wasm ownership preserves the native Arc contract"))]
     fn append_operations(
         &mut self,
         prefix: Vec<Edit>,
@@ -1299,6 +1300,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         Ok(())
     }
 
+    #[cfg_attr(target_arch="wasm32",expect(clippy::arc_with_non_send_sync,reason="Shared single-threaded Wasm ownership preserves the native Arc contract"))]
     pub fn liquify_context(&self) -> Option<(SourceTarget, Arc<layer_core::liquify::Context>, bool)> {
         let document = self.document();
         let target = document.working.target?;
@@ -1310,6 +1312,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         context.field.is_some().then(|| (target, Arc::new(context), alpha_locked))
     }
 
+    #[cfg_attr(target_arch="wasm32",expect(clippy::arc_with_non_send_sync,reason="Shared single-threaded Wasm ownership preserves the native Arc contract"))]
     fn liquify_batch(&mut self, target: SourceTarget, context: &layer_core::liquify::Context,
         alpha_locked: bool, amount: f32, expected: &layer_core::raster::RasterRevision,
         kind: DabBatchKind) -> Result<DabBatch, DocumentError> {
@@ -1874,6 +1877,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         ruler
     }
 
+    #[cfg_attr(target_arch="wasm32",expect(clippy::arc_with_non_send_sync,reason="Shared single-threaded Wasm ownership preserves the native Arc contract"))]
     fn process_event(&mut self, event: PenEvent) -> Result<(), EngineError<B::Error>> {
         if event.phase != PenPhase::Up || self.pending_up.is_none() || event.flags.contains(SampleFlags::CORRECTION) {
             self.metrics.input_events = self.metrics.input_events.saturating_add(1);
@@ -2403,6 +2407,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         );
     }
 
+    #[cfg_attr(target_arch="wasm32",expect(clippy::arc_with_non_send_sync,reason="Shared single-threaded Wasm ownership preserves the native Arc contract"))]
     fn build_full_scene(&mut self) {
         if self.active_stroke.is_none() && !self.rebuild_completed {
             return;
