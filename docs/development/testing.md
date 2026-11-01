@@ -40,6 +40,27 @@ crates that a given machine may not be able to run.
 | Scripts under `tools/` | `python3 -m unittest discover -s tools/<dir> -p 'test_*.py'`, or `node --test` on the script's `.test.mjs`. |
 | Docs only | Check every link, path, command and test name you wrote or whose target you changed. |
 
+## Windows validation scope
+
+Select fixtures by the behavior and consumers a change affects, including callers
+outside the edited feature. Run every affected variant, with both themes and
+each affected input device. A single passing variant does not cover its family.
+
+Run the **full default matrix** before pushing changes to shared UI state or
+layout, Windows host Rust, shared Windows fixture helpers or
+`tools/windows-vm/run-fixtures.ps1`. For local controls and individual fixtures,
+run their complete affected selector families and dependent journeys. Follow
+the [VM matrix command](windows-vm.md#ui-fixtures-on-the-software-adapter), plus
+the windowless checks above. Fixture routing changes also run
+`tools/windows-vm/test-fixture-routing.ps1` on PowerShell 7 and Windows PowerShell
+5.1 and the Python suite in `tools/windows-vm`.
+
+Record first-attempt failures with the selector, exact error and evidence path;
+a retry is diagnostic evidence, not a passing result. Fix or report failures
+already on `main` before pushing. Do not remove a known failure until its
+original assertion passes with the fix. Follow the
+[fixture authoring rules](windows.md#ui-fixtures) for geometry, DPI and identity.
+
 ## Shared Rust
 
 The table names the tests for areas whose coverage is not obvious from the

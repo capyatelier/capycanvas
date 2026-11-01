@@ -491,6 +491,14 @@ Follow these rules when writing one:
 - **Use real keyboard focus.** Arrange keyboard targets, then use `Focus-Keyboard`,
   which uses native Tab traversal; UI Automation's SetFocus does not establish
   keyboard modality.
+- **Compare the right geometry.** Use the host's published bounds for the canvas
+  or control being tested; client and window rectangles can include native
+  frames outside it. Geometry assertions must hold at 100 %, 150 % and 200 %
+  display scale. Derive rounding bounds from device pixels and floating-point
+  precision; do not put an exact float on an assertion boundary.
+- **Keep control identity stable.** Find controls by automation ID. For a missing
+  control, check the ID's producer and history before changing the lookup;
+  an absent control can be an app regression.
 - **Measure timed input.** Use the native test drivers for double presses,
   holds and prediction strokes and record their actual timing; PowerShell sleeps
   can exceed a gesture's interval under load.
