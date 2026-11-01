@@ -887,11 +887,10 @@ control on the tier devices.
       level stays on screen while object work defers; bind groups are owned by
       pages. Test: repeated deferred frames over many image layers keep the pool
       bounded and the view presentable.
-   2. Background work yields to the active drawing: one device-wide submission
-      priority for captures and transfers, aggregate admission for pending
-      captures and retiring renderers, and spill IO outside the `Bytes` lock.
-      Test: a stalled writer never blocks readiness or accounting; captures from
-      another drawing never delay a pen-down past one frame.
+   2. Spill IO outside the `Bytes` lock. Test: a stalled writer never blocks
+      readiness or accounting. While switches keep the backing barrier and
+      drop the outgoing renderer, no other drawing's captures run during
+      painting, so device-wide priority waits for milestone 2.
    3. Tab switches stop waiting for recovery writes, spills and the outgoing
       render thread: the switch captures the departing snapshot, writes it in the
       background, and retires the renderer on a worker. The backing barrier
@@ -899,11 +898,11 @@ control on the tier devices.
       switch with a recovery write and a spill pending presents the incoming
       drawing without waiting; an edit made just before a switch is restored
       after a crash once its background recovery write is durable.
-   4. Basic memory rows in the Stats panel from OS and driver queries, and,
-      independently, a persistent Vulkan pipeline cache. Tests: the rows match
-      an external measurement with the same definition; output is identical
-      with an absent, stale, truncated or corrupt cache; pipeline-ready and
-      first-brush times improve on Android, or the cache waits.
+   4. Basic memory rows in the Stats panel from OS and driver queries. Test:
+      the rows match an external measurement with the same definition. The
+      persistent Vulkan pipeline cache follows milestone 1 as its own change:
+      output identical with an absent, stale, truncated or corrupt cache, and
+      pipeline-ready and first-brush times improving on Android, or it waits.
    5. Recovery writes packs with batched commits instead of one synced file per
       tile, still reading the old layout, with per-pack extents, one writer per
       store and the separate namespace. Tests: a checkpoint's syncs scale with
@@ -927,7 +926,10 @@ control on the tier devices.
       separate tap, step and page allowances. Test: queued speculative work
       never delays a pen-down past one frame.
    3. Warm tabs: parked drawings keep their renderer state under the budget,
-      with capture leases replacing the backing barrier, parked speculative work
+      with one device-wide submission priority and aggregate admission for
+      pending captures and retiring renderers (captures from another drawing
+      never delay a pen-down past one frame), capture leases replacing the
+      backing barrier, parked speculative work
       cancelled, and late completions fenced by drawing and generation; hidden
       windows give memory back; the ledger's rows in the Stats panel. Tests: a
       warm switch composes no pages and presents on the next frame; switching
