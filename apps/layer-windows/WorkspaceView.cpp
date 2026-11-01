@@ -778,8 +778,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 if((key.starts_with(L"layer-")||key.starts_with(L"column-")||key.starts_with(L"collapsed-column-")
                     ||key.starts_with(L"tool-")||key.starts_with(L"number-")||key.starts_with(L"property-")||key.starts_with(L"properties-")
                     ||key.starts_with(L"toolbar-")||key.starts_with(L"component-slider-")||key.starts_with(L"slider-")
-                    ||key.starts_with(L"filter-")||key.starts_with(L"histogram-")||key.starts_with(L"waveform-")||key.starts_with(L"navigator-")
+                    ||key.starts_with(L"filter-")||key.starts_with(L"histogram-")||key.starts_with(L"tonal-")||key.starts_with(L"waveform-")||key.starts_with(L"navigator-")
                     ||key.starts_with(L"palette-")||key.starts_with(L"palettes-")||key.starts_with(L"proof-panel-")
+                    ||key.starts_with(L"pen-pressure-")||key.starts_with(L"pen-tilt-")
                     ||key.starts_with(L"panel-body-scroll-")||key.starts_with(L"panel-scroll-"))
                     &&item.IsLoaded()&&item.ActualWidth()>0&&item.ActualHeight()>0){
                     auto transform=item.TransformToVisual(root);auto size=item.RenderSize();
@@ -790,7 +791,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             }
             for(int i=0;i<VisualTreeHelper::GetChildrenCount(node);i++)visit(VisualTreeHelper::GetChild(node,i));
         };
-        if(!windowResizing)visit(root);
+        if(!windowResizing){visit(root);visit(utilities);}
         A grips;
         for(auto const& [id,handle]:handles){
             if(!handle.IsLoaded())continue;

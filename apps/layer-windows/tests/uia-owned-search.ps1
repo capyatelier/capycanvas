@@ -18,7 +18,7 @@ namespace CapyOwnedSearchTest {
   public override bool Matches(Node n){foreach(var v in values)if(!v.Matches(n))return false;return true;}
  }
  public struct Rect {
-  public int X,Y,Width,Height;public bool IsEmpty{get{return Width==0||Height==0;}}public int Top{get{return Y;}}
+  public int X,Y,Width,Height;public bool IsEmpty{get{return Width==0||Height==0;}}public int Top{get{return Y;}}public int Bottom{get{return Y+Height;}}
   public Rect(int x,int y){X=x;Y=y;Width=1414;Height=986;}
   public Rect(int x,int y,int width,int height){X=x;Y=y;Width=width;Height=height;}
   public bool Contains(Rect other){return !other.IsEmpty&&other.X>=X&&other.Y>=Y&&other.X+other.Width<=X+Width&&other.Y+other.Height<=Y+Height;}
@@ -28,7 +28,7 @@ namespace CapyOwnedSearchTest {
  public enum ScrollAmount{NoAmount,SmallDecrement,SmallIncrement}
  public static class ScrollPattern{public static object Pattern="scroll";public static double NoScroll=-1;}
  public class Scroll {
-  public double VerticalScrollPercent;public int Resets,Steps;public bool VerticallyScrollable=true;public Scroll Current{get{return this;}}
+  public double VerticalScrollPercent,VerticalViewSize=50;public int Resets,Steps;public bool VerticallyScrollable=true;public Scroll Current{get{return this;}}
   public void SetScrollPercent(double horizontal,double vertical){VerticalScrollPercent=vertical;Resets++;}
   public void ScrollBy(ScrollAmount horizontal,ScrollAmount vertical){VerticalScrollPercent=Math.Max(0,Math.Min(100,VerticalScrollPercent+(vertical==ScrollAmount.SmallDecrement?-20:20)));Steps++;}
  }
@@ -337,3 +337,57 @@ $capGeometry=[scriptblock]::Create(($statements[$start..$last].Extent.Text -join
     if(!$rejected){throw 'Slider cap assertion accepted an overlapping stacked unit'}
 }
 Write-Output 'Slider cap geometry uses native arranged bounds and retains its original inset and stacked-unit assertions.'
+
+$scopesAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-scopes.ps1'),[ref]$tokens,[ref]$errors)
+if(@($errors).Count){throw ($errors|Out-String)}
+$scopesReveal=@($scopesAst.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Reveal'},$true))
+if($scopesReveal.Count -ne 1){throw 'Missing actual scopes Reveal helper'}
+& {
+    . ([scriptblock]::Create($scopesReveal[0].Extent.Text.Replace('System.Windows.Automation.','CapyOwnedSearchTest.').Replace('[CapyRowPointer]','[CapyOwnedSearchTest.Driver]')))
+    $drawingWindow=[IntPtr]1
+    $viewport=[CapyOwnedSearchTest.Node]::new('panel-body-scroll-14',33,0,0)
+    $viewport.BoundingRectangle=[CapyOwnedSearchTest.Rect]::new(0,0,100,100);$viewport.Provider=[CapyOwnedSearchTest.Scroll]::new()
+    $chart=[CapyOwnedSearchTest.Node]::new('histogram-chart',33,0,60);$chart.Parent=$viewport
+    $chart.BoundingRectangle=[CapyOwnedSearchTest.Rect]::new(0,60,80,40)
+    $state=@{arranged=[CapyOwnedSearchTest.Rect]::new(0,60,80,80);waits=0}
+    function Control([string]$Id){if($Id -ne 'histogram-chart'){throw 'Unexpected scopes target'};$chart}
+    function Native-Bounds([string]$Id,[double]$Scale){if($Id -ne 'histogram-chart' -or $Scale -ne 1){throw 'Unexpected scopes native bounds request'};$state.arranged}
+    function Start-Sleep([int]$Milliseconds){if($Milliseconds -ne 200){throw 'Unexpected scopes sleep'}}
+    function Wait-Until([scriptblock]$Condition,[string]$Message){
+        $state.waits++
+        if(& $Condition){throw 'Scopes Reveal accepted clipped UIA bounds as its scroll acknowledgment'}
+        $state.arranged=[CapyOwnedSearchTest.Rect]::new(0,16,80,80)
+        if(!(& $Condition)){throw $Message}
+    }
+    $visible=Reveal 'histogram-chart'
+    if($viewport.Provider.VerticalScrollPercent -le 0){throw 'Scopes Reveal did not scroll the full native chart hidden below its clipped UIA rectangle'}
+    if($state.waits -ne 1 -or $visible.Bottom -ne 100 -or $visible.Height -ne 100){throw 'Scopes Reveal did not acknowledge native chart bounds within its viewport'}
+}
+Write-Output 'Scopes Reveal scrolls the full native chart despite clipped UIA bounds and acknowledges its native arranged position.'
+
+$tiltAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-tilt.ps1'),[ref]$tokens,[ref]$errors)
+if(@($errors).Count){throw ($errors|Out-String)}
+$headerCheck=@($tiltAst.FindAll({param($node)$node -is [Management.Automation.Language.IfStatementAst] -and $node.Extent.Text.Contains('title and Close do not share a centerline')},$true))
+if($headerCheck.Count -ne 1){throw 'Missing actual response header centerline assertion'}
+$statements=@($headerCheck[0].Parent.Statements);$last=[array]::IndexOf($statements,$headerCheck[0])
+$start=@(for($i=0;$i -lt $last;$i++){if($statements[$i] -is [Management.Automation.Language.AssignmentStatementAst] -and $statements[$i].Left.Extent.Text -eq '$title'){$i}})[-1]
+if($null -eq $start){throw 'Missing actual response header measurements'}
+$headerGeometry=[scriptblock]::Create(($statements[$start..$last].Extent.Text -join "`n"))
+& {
+    $review=[pscustomobject]@{Id=7};$drawingWindow=[IntPtr]1
+    $geometry=@{}
+    function Control([string]$Id,[switch]$Arranged){[pscustomobject]@{Current=[pscustomobject]@{BoundingRectangle=[pscustomobject]@{Top=$(if($Id.EndsWith('-title')){if($scale -eq 1.5){175}else{$geometry.titleTop}}else{$geometry.closeTop});Height=24*$scale}}}}
+    function Native-Bounds([string]$Id,[double]$Scale){if($Scale -notin @(1,1.5,2) -or $Id -notin @("pen-$kind-title","pen-$kind-close")){throw 'Unexpected response header geometry request'};[pscustomobject]@{Top=$(if($Id.EndsWith('-title')){$geometry.titleTop}else{$geometry.closeTop});Height=24*$Scale}}
+    function Evidence([string]$Name,$Value){if($Name -ne 'response-header-failure'){throw 'Unexpected response header evidence'}}
+    foreach($scale in @(1,1.5,2)){
+        $geometry.closeTop=118*$scale;$geometry.titleTop=(118-11*96/72*262/4096)*$scale
+        foreach($kind in @('pressure','tilt')){
+            . $headerGeometry
+            $top=$geometry.titleTop;$geometry.titleTop=$geometry.closeTop-1.25*$scale;$rejected=$false
+            try{. $headerGeometry}catch{if($_.Exception.Message -ne "$kind title and Close do not share a centerline"){throw};$rejected=$true}
+            if(!$rejected){throw 'Response header accepted a native centerline gap greater than one DIP'}
+            $geometry.titleTop=$top
+        }
+    }
+}
+Write-Output 'Response headers use fractional native geometry at 100, 150 and 200 percent and retain their one-DIP centerline bound.'

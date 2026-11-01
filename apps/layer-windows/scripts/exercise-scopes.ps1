@@ -102,12 +102,12 @@ function Reveal([string]$Id){
     while($node -and !($node.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$scroll) -and $scroll.Current.VerticallyScrollable)){$node=$walker.GetParent($node);$scroll=$null}
     if(!$node){return $null}
     $scroll.SetScrollPercent([System.Windows.Automation.ScrollPattern]::NoScroll,0);Start-Sleep -Milliseconds 200
-    $view=$node.Current.BoundingRectangle;$target=(Control $Id).Current.BoundingRectangle
+    $view=$node.Current.BoundingRectangle;$scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.;$target=Native-Bounds $Id $scale
     $range=$view.Height*(100/$scroll.Current.VerticalViewSize-1)
     if($range -gt 0 -and ($target.IsEmpty -or $target.Bottom -gt $view.Bottom)){
         $offset=if($target.IsEmpty){$range}else{$target.Bottom-$view.Bottom+4}
         $scroll.SetScrollPercent([System.Windows.Automation.ScrollPattern]::NoScroll,[Math]::Min(100,100*$offset/$range))
-        Wait-Until {$box=(Control $Id).Current.BoundingRectangle;!$box.IsEmpty -and $box.Bottom -le $view.Bottom+1} "$Id did not scroll into view"
+        Wait-Until {$box=Native-Bounds $Id $scale;!$box.IsEmpty -and $box.Bottom -le $view.Bottom+1} "$Id did not scroll into view"
     }
     $view
 }

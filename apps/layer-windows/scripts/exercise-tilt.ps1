@@ -351,7 +351,8 @@ function Response-Switching{
             Wait-Until {$null -eq (Model).state.pressure_calibration -and (Tilt) -and (Find 'pen-tilt-dialog' -Visible)} 'Tilt did not replace the live Pressure utility'
             if((Curve) -ne $neutral -or (Tilt).axes.reverse_horizontal -or (Tilt).axes.reverse_vertical -or (Tilt).axes.swap -or (Json (Control 'pen-tilt-curve').GetRuntimeId()) -eq $oldOwner){throw 'Switching response kinds retained a retired curve owner or unapplied draft'}
         }
-        $title=(Control "pen-$kind-title" -Arranged).Current.BoundingRectangle;$close=(Control "pen-$kind-close" -Arranged).Current.BoundingRectangle
+        $null=Control "pen-$kind-title" -Arranged;$null=Control "pen-$kind-close" -Arranged
+        $title=Native-Bounds "pen-$kind-title" $scale;$close=Native-Bounds "pen-$kind-close" $scale
         if([Math]::Abs(($title.Top+$title.Height/2)-($close.Top+$close.Height/2)) -gt $scale){throw "$kind title and Close do not share a centerline"}
     }
     if((Saved) -ne $saved -or (Json (Model).state.settings.pressure_curve) -ne $pressureSaved){throw 'Switching response kinds committed a retired draft'}
