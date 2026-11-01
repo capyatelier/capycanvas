@@ -14,6 +14,17 @@ int main(){
     assert(CapyUi::LatinKey(VirtualKey(VK_OEM_4),true,L"\u0445")==L"{");
     assert(CapyUi::LatinKey(VirtualKey::Escape,false,L"escape").empty());
     using J=winrt::Windows::Data::Json::JsonObject;
+    auto preview=J::Parse(LR"({"picker":{"editor":true,"preview":{"rgba":[1,0,0,1]}}})"),retainedPreview=preview;
+    auto camera=J::Parse(LR"({"revision":52,"camera":{"revision":10}})");
+    assert(!CapyUi::ApplyColorPreview(camera,preview));
+    assert(preview==retainedPreview);
+    auto placement=J::Parse(LR"({"workspace_update":{"revision":52,"model_revision":39,"canvas_bar":{"layout":null}}})");
+    assert(!CapyUi::ApplyColorPreview(placement,preview));
+    assert(preview==retainedPreview);
+    auto ended=J::Parse(LR"({"color_preview":{"picker":{"editor":false,"preview":null}}})");
+    assert(CapyUi::ApplyColorPreview(ended,preview));
+    assert(!preview.GetNamedObject(L"picker").GetNamedBoolean(L"editor"));
+    assert(preview.GetNamedObject(L"picker").GetNamedValue(L"preview").ValueType()==winrt::Windows::Data::Json::JsonValueType::Null);
     CanvasModelUpdate models;
     auto initial=J::Parse(LR"({"state":{"revision":1,"histogram":{"status":"old"},"workspace":{"layout":{"extent":240}}},"catalog":{"01":"literal","a/b":"key"},"rows":[{"value":1},{"value":2}]})");
     assert(models.Read(initial)==CanvasAllSections);

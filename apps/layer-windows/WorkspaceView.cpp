@@ -14,6 +14,7 @@
 #include "WorkspaceGeometry.h"
 #include "WorkspaceTabSurface.h"
 #include "WorkspacePublication.h"
+#include "NativeJson.h"
 #include "OverviewOcclusion.h"
 #include "WorkspaceShadow.h"
 #include "WorkspaceSurface.h"
@@ -538,8 +539,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             return true;
         }
         if(!full&&!reflow){
-            if(snapshot.HasKey(L"color_preview")){data->colorPreview=object(snapshot,L"color_preview");data->queueColors();presentFill();}
-            else if(WorkspaceData::previewing(data->colorPreview)){data->colorPreview=J{};data->queueColors();presentFill();}
+            if(ApplyColorPreview(snapshot,data->colorPreview)){data->queueColors();presentFill();}
             if(update.Size()){++motionUpdates;applyMotion(object(update,L"drag"));}
             if(snapshot.HasKey(L"camera")){
                 auto cameraPatch=object(snapshot,L"camera");
