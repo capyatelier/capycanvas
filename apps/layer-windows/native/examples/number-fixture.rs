@@ -27,15 +27,16 @@ fn main() {
         command: CommandId::AutoSelect,
     })
     .unwrap();
+    host.dispatch(UiAction::Invoke { command: CommandId::EdgesGrowShrink }).unwrap();
     let state = serde_json::to_value(host.session.state()).unwrap();
-    let gap = state["tool_settings"]
+    let offset = state["tool_settings"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|field| field["id"] == "gap_closing")
-        .expect("Auto select gap control");
-    let spin: NumericControl = serde_json::from_value(gap["numeric"].clone()).unwrap();
-    let title = gap["label"].as_str().unwrap();
+        .find(|field| field["id"] == "edge_offset")
+        .expect("Auto select edge offset control");
+    let spin: NumericControl = serde_json::from_value(offset["numeric"].clone()).unwrap();
+    let title = offset["label"].as_str().unwrap();
     let rows = vec![
         row("Brush opacity", &opacity, opacity.min, true),
         row("Brush opacity", &opacity, 0.5, true),
