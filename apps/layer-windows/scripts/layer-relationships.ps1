@@ -225,3 +225,73 @@ function Test-LayerRelationships{
         if($realized.Count -ge 40){throw 'Connections materialized offscreen rows'}
     }finally{[CapyRowPointer]::Dispose()}
 }
+
+function Test-LayerUnit{
+    if(!('CapyLocaleLayout' -as [type])){Add-Type -TypeDefinition @'
+using System;using System.Runtime.InteropServices;
+public static class CapyLocaleLayout {
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr SendMessageTimeout(IntPtr window,uint message,UIntPtr w,string l,uint flags,uint timeout,out UIntPtr result);
+ public static void NotifyTextSize(){UIntPtr result;SendMessageTimeout(new IntPtr(0xffff),0x1a,UIntPtr.Zero,"Accessibility",2,2000,out result);}
+}
+'@}
+    function Unit-TextScale{[double](& powershell.exe -NoProfile -NonInteractive -Command '[Windows.UI.ViewManagement.UISettings,Windows.UI.ViewManagement,ContentType=WindowsRuntime]::new().TextScaleFactor')}
+    $path='HKCU:\Software\Microsoft\Accessibility'
+    $saved=Get-ItemProperty -LiteralPath $path -Name TextScaleFactor -ErrorAction SilentlyContinue
+    $previous=Unit-TextScale;$initialTheme=(Model).state.theme;$edits=[Collections.Generic.List[object]]::new();$receipts=[Collections.Generic.List[object]]::new()
+    $before=(Model).state.layers;$authoredIds=@($before.id);$top=$authoredIds[0]
+    $unitError=$null;$cleanupErrors=[Collections.Generic.List[object]]::new()
+    function Unit-Error($Record){@{message=$Record.Exception.Message;exception_type=$Record.Exception.GetType().FullName;id=$Record.FullyQualifiedErrorId;position=$Record.InvocationInfo.PositionMessage;stack=$Record.ScriptStackTrace}}
+    try{
+        New-Item -Path $path -Force|Out-Null
+        Set-ItemProperty -LiteralPath $path -Name TextScaleFactor -Type DWord -Value 130
+        [CapyLocaleLayout]::NotifyTextSize()
+        Wait-Until {[Math]::Abs((Unit-TextScale)-1.3) -lt .01} 'Layers unit requires Windows text scale 130 percent' 15
+        $scroll=Scroll-Pattern (Control 'layer-list');$scroll.SetScrollPercent(-1,0)
+        Wait-Until {$row=Find "layer-row-$top" -Visible;$row -and $row.Current.BoundingRectangle.Height -gt 0} 'Plain top row did not realize at large text'
+        $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+        $plain=(Control "layer-row-$top" -Arranged).Current.BoundingRectangle
+        if(@((Model).state.layers|Where-Object id -eq $top)[0].description){throw 'Intrinsic unit reference must be a real plain row'}
+        $listWidth=(Control 'layer-list' -Arranged).Current.BoundingRectangle.Width
+        $realized=@($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)|Where-Object {$_.Current.AutomationId -match '^layer-row-[0-9]+$'}|ForEach-Object {[long]($_.Current.AutomationId.Substring(10))})
+        foreach($id in $authoredIds){
+            $layer=Relationship-Layer $id
+            if(!$layer -or $layer.description -or $layer.paper){continue}
+            Relationship-Select $id
+            $edits.Add(@{id=$id;opacity=$layer.opacity})
+            Edit 'layer-opacity' '60';(Control 'layer-blend').SetFocus()
+            Wait-Until {[Math]::Abs((Model).state.layer_tools.editing_layer.opacity-.6) -lt .000001 -and (Relationship-Layer $id).description} 'Unit setup did not describe its realized row'
+        }
+        Relationship-Reveal "layer-$top-content";Invoke "layer-$top-content"
+        Wait-Until {(Model).state.layer_tools.editing_layer.id -eq $top} 'Unit setup did not return to the described top row'
+        foreach($themePass in 1..2){
+            $oldRequest=@((Model).layout.measurement_requests|Where-Object panel -eq 'layers')[0]
+            Relationship-Theme
+            Wait-Until {$r=@((Model).layout.measurement_requests|Where-Object panel -eq 'layers')[0];$r -and $r.body_measured -and $r.body -ne $oldRequest.body} 'Current theme did not acknowledge a fresh Layers body measurement'
+            foreach($percent in @(0,100,0)){
+                $scroll=Scroll-Pattern (Control 'layer-list');$scroll.SetScrollPercent(-1,$percent)
+                Wait-Until {[Math]::Abs((Scroll-Pattern (Control 'layer-list')).Current.VerticalScrollPercent-$percent) -lt .1} 'Unit regression did not reach the requested native list end'
+                $m=Model;$request=@($m.layout.measurement_requests|Where-Object panel -eq 'layers')[0];$measurement=@($m.panel_measurements|Where-Object panel -eq 'layers')[0]
+                $described=Find "layer-row-$top" -Visible;$paper=Find 'layer-add-paper' -Visible
+                $receipt=@{theme=$m.state.theme;percent=$percent;text_scale=(Unit-TextScale);scale=$scale;request=$request;measurement=$measurement;plain_id=$top;plain_bounds=$plain;described_bounds=$(if($described){$described.Current.BoundingRectangle}else{$null});add_paper_bounds=$(if($paper){$paper.Current.BoundingRectangle}else{$null});list_bounds=(Control 'layer-list' -Arranged).Current.BoundingRectangle;realized_before=$realized;authored_ids=$authoredIds}
+                $receipts.Add($receipt)
+                $receipts|ConvertTo-Json -Depth 30|Set-Content (Join-Path $run 'intrinsic-layer-unit.json')
+                if(!$request.body_measured -or !$measurement.scroll -or [Math]::Abs($receipt.list_bounds.Width-$listWidth) -gt 1){throw 'Intrinsic row comparison lost the current measured body or native width'}
+                if($percent -eq 0 -and (!$described -or $described.Current.BoundingRectangle.Height -le $plain.Height+1)){throw 'Described first row did not exceed the intrinsic plain row at 130 percent text'}
+                if([Math]::Abs($measurement.scroll.unit_height-$plain.Height/$scale) -gt .1){throw "Layers unit follows realized content: native=$($measurement.scroll.unit_height), plain=$($plain.Height/$scale), theme=$($m.state.theme), scroll=$percent"}
+            }
+        }
+    }catch{$unitError=$_}finally{
+        try{
+            if((Model).state.theme -ne $initialTheme){Relationship-Theme}
+        }catch{$cleanupErrors.Add((Unit-Error $_))}finally{
+            try{
+                if($saved){Set-ItemProperty -LiteralPath $path -Name TextScaleFactor -Type DWord -Value $saved.TextScaleFactor}else{Remove-ItemProperty -LiteralPath $path -Name TextScaleFactor}
+                [CapyLocaleLayout]::NotifyTextSize()
+                Wait-Until {[Math]::Abs((Unit-TextScale)-$previous) -lt .01} 'Windows text scale did not restore after Layers unit regression' 15
+            }catch{$cleanupErrors.Add((Unit-Error $_))}
+        }
+    }
+    @{before_layers=$before;after_layers=(Model).state.layers;edits=$edits;original_error=$(if($unitError){Unit-Error $unitError}else{$null});cleanup_errors=$cleanupErrors}|ConvertTo-Json -Depth 30|Set-Content (Join-Path $run 'intrinsic-layer-unit-setup.json')
+    if($unitError){if($cleanupErrors.Count){Write-Host ('Intrinsic unit cleanup errors: '+($cleanupErrors|ConvertTo-Json -Depth 8 -Compress))};throw $unitError}
+    if($cleanupErrors.Count){throw ($cleanupErrors|ConvertTo-Json -Depth 8 -Compress)}
+}

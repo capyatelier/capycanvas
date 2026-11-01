@@ -21,6 +21,34 @@ LayerThumbnail thumbnail(J const& layer,bool mask){
 J rowSelection(double id,bool checkbox=false){return O({{L"op",S(L"select_row")},{L"id",N(id)},
     {L"extend",B((GetKeyState(VK_SHIFT)&0x8000)!=0)},{L"toggle",B(checkbox||(GetKeyState(VK_CONTROL)&0x8000)!=0)}});}
 }
+void layerRowFrame(std::shared_ptr<WorkspaceData> const& data,Border const& root,Grid const& body){
+    root.MinHeight(LayerRowHeight);root.BorderThickness({0});body.ColumnSpacing(0);body.Padding(layerRowPadding(data));
+    auto slot=data->panelMetric(L"control_height"),gap=data->panelMetric(L"compound_spacing");
+    for(auto width:{slot+gap,slot+gap,0.,5.,32.,0.,12.,32.,0.,-1.,0.,14.,16.}){
+        ColumnDefinition column;column.Width({width<0?1:width,width<0?GridUnitType::Star:GridUnitType::Pixel});body.ColumnDefinitions().Append(column);
+    }
+}
+Button layerRowButton(std::shared_ptr<WorkspaceData> const& data,hstring const& title,int column,std::function<void()> action){
+    auto control=button(data,title,std::move(action));auto slot=data->panelMetric(L"control_height");
+    control.Width(column==4||column==5||column==7||column==8?30:column==6?10:column==12?16:slot);
+    control.Height(30);control.HorizontalAlignment(HorizontalAlignment::Left);Grid::SetColumn(control,column);
+    if(column==0||column==1){control.ClearValue(FrameworkElement::HeightProperty());control.MinHeight(slot);control.VerticalAlignment(VerticalAlignment::Stretch);}
+    return control;
+}
+void layerRowThumbnail(ContentControl const& host,ImageBrush const& brush,Grid const& tile){
+    host.Width(28);host.Height(28);host.IsHitTestVisible(false);host.IsTabStop(false);
+    host.HorizontalAlignment(HorizontalAlignment::Center);host.VerticalAlignment(VerticalAlignment::Center);
+    Shapes::Path shape;shape.Width(28);shape.Height(28);shape.Data(squircleRectangle(28,28,{14,14,14,14}));
+    brush.Stretch(Stretch::Fill);shape.Fill(brush);host.Content(shape);
+    tile.Width(30);tile.Height(30);tile.Children().Append(host);
+}
+Button layerRowName(std::shared_ptr<WorkspaceData> const& data,std::function<void()> action,TextBlock& title,StackPanel& caption){
+    auto name=button(data,data->caption(L"layers",L"layer"),std::move(action));
+    name.FontWeight(Windows::UI::Text::FontWeights::Normal());name.MinHeight(36);name.HorizontalAlignment(HorizontalAlignment::Stretch);name.HorizontalContentAlignment(HorizontalAlignment::Stretch);name.Padding({0});
+    caption.Margin({6,0,0,0});caption.VerticalAlignment(VerticalAlignment::Center);
+    title=label(data,data->caption(L"layers",L"layer"));title.TextTrimming(TextTrimming::CharacterEllipsis);caption.Children().Append(title);name.Content(caption);
+    return name;
+}
 void ThumbnailEdge::init(Canvas const& frame){
     auto ring=[](Geometry const& outside,Geometry const& inside){
         GeometryGroup edge;edge.FillRule(FillRule::EvenOdd);edge.Children().Append(outside);edge.Children().Append(inside);return edge;
@@ -95,8 +123,8 @@ void LayerRow::init(){
     swipeActions.HorizontalAlignment(HorizontalAlignment::Right);swipeActions.VerticalAlignment(VerticalAlignment::Stretch);
     swipeFrame.Children().Append(swipeActions);swipeFrame.Children().Append(body);body.RenderTransform(swipeTransform);
     swipeFrame.SizeChanged([weak](auto&&,SizeChangedEventArgs const& e){if(auto self=weak.lock()){RectangleGeometry clip;clip.Rect({0,0,e.NewSize().Width,e.NewSize().Height});self->swipeFrame.Clip(clip);}});
-    root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock()){self->swipe(0,false);self->contentEdge.stop();self->maskEdge.stop();self->textureEdge.stop();}});root.MinHeight(LayerRowHeight);root.BorderThickness({0});
-    root.BorderBrush(accent(data));body.ColumnSpacing(0);body.Padding(layerRowPadding(data));
+    root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock()){self->swipe(0,false);self->contentEdge.stop();self->maskEdge.stop();self->textureEdge.stop();}});layerRowFrame(data,root,body);
+    root.BorderBrush(accent(data));
     AutomationProperties::SetAutomationId(root,L"layer-row-"+to_hstring(uint64_t(id)));
     auto rowCaption=[weak]{
         auto self=weak.lock();if(!self||!self->current())return hstring();
@@ -115,24 +143,15 @@ void LayerRow::init(){
         auto action=imageDrop(self->data->state);A row;row.Append(N(self->id));row.Append(N(event.GetPosition(self->root).Y/std::max(1.,self->root.ActualHeight())));action.Insert(L"layer",row);
         receiveFileDrop(event,action,self->data->document);
     }});
-    // Include the two-DIP gaps only beside visible flex items. Empty mask and
-    // indentation columns must not add their own gaps.
-    auto slot=data->panelMetric(L"control_height"),gap=data->panelMetric(L"compound_spacing");
-    for(auto width:{slot+gap,slot+gap,0.,5.,32.,0.,12.,32.,0.,-1.,0.,14.,16.}){
-        ColumnDefinition column;column.Width({width<0?1:width,width<0?GridUnitType::Star:GridUnitType::Pixel});
-        body.ColumnDefinitions().Append(column);
-    }
     auto pick=[&](hstring const& title,int column,std::function<void()> action){
-        auto control=button(data,title,[weak,action=std::move(action)]{
+        auto control=layerRowButton(data,title,column,[weak,action=std::move(action)]{
             auto self=weak.lock();auto view=self?self->owner.lock():nullptr;
             if(view&&(!view->pickup||!view->pickup->SuppressClick()))action();
-        });control.Width(column==4||column==5||column==7||column==8?30:column==6?10:column==12?16:slot);
-        control.Height(30);control.HorizontalAlignment(HorizontalAlignment::Left);Grid::SetColumn(control,column);body.Children().Append(control);return control;
+        });body.Children().Append(control);return control;
     };
     eye=pick(data->caption(L"layers",L"visibility"),0,[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"visibility")},{L"id",N(self->id)},{L"value",B(!flag(self->model(),L"visible"))}}));});
     check=pick(L"",1,[weak]{if(auto self=weak.lock())self->action(rowSelection(self->id,true));});
     copyName(data,check,data->copyCaption(L"layers",L"select_row_help"));
-    for(auto control:{eye,check}){control.ClearValue(FrameworkElement::HeightProperty());control.MinHeight(slot);control.VerticalAlignment(VerticalAlignment::Stretch);}
     Grid::SetColumn(indent,2);body.Children().Append(indent);
     content=pick(data->caption(L"layers",L"edit_content"),4,[weak]{if(auto self=weak.lock();self&&!self->loadThumbnail(false)){
         auto layer=self->model();self->action(flag(layer,L"group")?O({{L"op",S(L"collapse")},{L"id",N(self->id)}}):
@@ -148,14 +167,7 @@ void LayerRow::init(){
     texture=pick(data->caption(L"paper",L"choose"),8,[weak]{if(auto self=weak.lock())self->chooseTexture();});
     copyName(data,texture,data->copyCaption(L"paper",L"choose"),true);
     texturePreview=PaperThumbnail::Create(data,28,14);texture.Content(texturePreview->root);
-    auto preview=[](ContentControl const& host,ImageBrush const& brush,Grid const& tile){
-        host.Width(28);host.Height(28);host.IsHitTestVisible(false);host.IsTabStop(false);
-        host.HorizontalAlignment(HorizontalAlignment::Center);host.VerticalAlignment(VerticalAlignment::Center);
-        Shapes::Path shape;shape.Width(28);shape.Height(28);shape.Data(squircleRectangle(28,28,{14,14,14,14}));
-        brush.Stretch(Stretch::Fill);shape.Fill(brush);host.Content(shape);
-        tile.Width(30);tile.Height(30);tile.Children().Append(host);
-    };
-    preview(contentThumbnail,contentPreview,contentTile);preview(maskThumbnail,maskPreview,maskTile);
+    layerRowThumbnail(contentThumbnail,contentPreview,contentTile);layerRowThumbnail(maskThumbnail,maskPreview,maskTile);
     contentSymbol.IsHitTestVisible(false);contentTile.Children().Append(contentSymbol);
     groupMode.IsHitTestVisible(false);groupMode.Width(14);groupMode.Height(14);groupMode.CornerRadius({2,2,2,2});groupMode.Background(data->brush(L"input"));
     groupMode.HorizontalAlignment(HorizontalAlignment::Right);groupMode.VerticalAlignment(VerticalAlignment::Bottom);groupMode.Margin({0,0,3,3});contentTile.Children().Append(groupMode);
@@ -177,14 +189,13 @@ void LayerRow::init(){
     actionTooltip(data,mask,[weak]{auto self=weak.lock();if(!self)return J{};
         return O({{L"type",S(L"layer")},{L"action",O({{L"op",S(L"select")},{L"id",N(self->id)},{L"mask",B(true)}})}});});
     link.Content(icon(L"link",data->theme(),10));link.Height(36);
-    name=button(data,data->caption(L"layers",L"layer"),[weak]{if(auto self=weak.lock();self&&self->clickAllowed())self->action(rowSelection(self->id));});
+    StackPanel caption;
+    name=layerRowName(data,[weak]{if(auto self=weak.lock();self&&self->clickAllowed())self->action(rowSelection(self->id));},title,caption);
     buttonFeedback(name,data->brush(L"text"),0,0);
-    name.FontWeight(Windows::UI::Text::FontWeights::Normal());name.MinHeight(36);name.HorizontalAlignment(HorizontalAlignment::Stretch);name.HorizontalContentAlignment(HorizontalAlignment::Stretch);name.Padding({0});
-    StackPanel caption;caption.Margin({6,0,0,0});title=label(data,L"");title.TextTrimming(TextTrimming::CharacterEllipsis);caption.Children().Append(title);
     AutomationProperties::SetAutomationId(title,L"layer-"+to_hstring(uint64_t(id))+L"-label");
     meta=label(data,L"");meta.Opacity(.55);
     AutomationProperties::SetAutomationId(meta,L"layer-"+to_hstring(uint64_t(id))+L"-meta");
-    meta.TextTrimming(TextTrimming::CharacterEllipsis);caption.Children().Append(meta);caption.VerticalAlignment(VerticalAlignment::Center);name.Content(caption);
+    meta.TextTrimming(TextTrimming::CharacterEllipsis);caption.Children().Append(meta);
     Grid::SetColumn(name,9);body.Children().Append(name);
     edgeTag(rename,L"edge_contact",S(L"input"));rename.MinWidth(0);rename.MinHeight(data->controlHeight());rename.Height(data->controlHeight());rename.Padding({2,0,2,0});rename.Margin({6,0,2,0});rename.FontSize(data->textSize());
     rename.MaxLength(128);fieldColors(data,rename);rename.Visibility(Visibility::Collapsed);

@@ -5,6 +5,7 @@
 #include "WorkspaceGeometry.h"
 #include "PanelScroll.h"
 #include <chrono>
+#include <winrt/Windows.UI.ViewManagement.h>
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 
 using namespace CapyLayers;
@@ -23,6 +24,27 @@ void ElementFactory::RecycleElement(ElementFactoryRecycleArgs const& args){
     }
 }
 LayersView::~LayersView(){ForgetLayerThumbnails(data->thumbnails,this);if(outsideSurface)outsideSurface.RemoveHandler(UIElement::PointerPressedEvent(),box_value(outsidePress));if(pickup)pickup->Cancel();if(timer)timer.Stop();if(menu)menu.Hide();}
+double LayersView::intrinsicUnitHeight(){
+    auto scale=root.XamlRoot()?root.XamlRoot().RasterizationScale():1.;
+    auto key=data->theme()+L":"+data->language()+L":"+to_hstring(data->textSize())+L":"+to_hstring(Windows::UI::ViewManagement::UISettings().TextScaleFactor())
+        +L":"+to_hstring(scale)+L":"+to_hstring(data->panelMetric(L"control_height"))+L":"+to_hstring(data->panelMetric(L"compound_spacing"))+L":"+to_hstring(data->panelMetric(L"layer_edge_inset"));
+    if(key!=unitStyle){
+        Border frame;Grid body;layerRowFrame(data,frame,body);frame.Child(body);
+        for(int column:{0,1,4}){
+            auto control=layerRowButton(data,L"",column,[]{});control.IsTabStop(false);AutomationProperties::SetAccessibilityView(control,Automation::Peers::AccessibilityView::Raw);
+            if(column==0)control.Content(icon(L"eye",data->theme()));
+            if(column==1)control.Content(icon(L"layer-selection-empty-symbolic",data->theme()));
+            if(column==4){ContentControl thumbnail;ImageBrush image;Grid tile;layerRowThumbnail(thumbnail,image,tile);AutomationProperties::SetAccessibilityView(thumbnail,Automation::Peers::AccessibilityView::Raw);control.Content(tile);}
+            body.Children().Append(control);
+        }
+        TextBlock title{nullptr};StackPanel caption;auto name=layerRowName(data,[]{},title,caption);name.IsTabStop(false);
+        AutomationProperties::SetAccessibilityView(name,Automation::Peers::AccessibilityView::Raw);AutomationProperties::SetAccessibilityView(title,Automation::Peers::AccessibilityView::Raw);
+        Grid::SetColumn(name,9);body.Children().Append(name);unitHost.Children().Clear();unitHost.Children().Append(frame);
+        frame.Measure({std::numeric_limits<float>::infinity(),std::numeric_limits<float>::infinity()});
+        unitHeight=frame.DesiredSize().Height;unitStyle=std::move(key);
+    }
+    return unitHeight;
+}
 void LayersView::init(){
     auto weak=weak_from_this();root.RowSpacing(0);
     outsidePress=PointerEventHandler([weak](auto&&,PointerRoutedEventArgs const& event){if(auto self=weak.lock()){
@@ -40,6 +62,8 @@ void LayersView::init(){
         self->outsideSurface.RemoveHandler(UIElement::PointerPressedEvent(),box_value(self->outsidePress));self->outsideSurface=nullptr;
     }});
     AutomationProperties::SetAutomationId(root,L"layer-panel");
+    unitHost.Width(0);unitHost.Height(0);unitHost.Opacity(0);unitHost.IsHitTestVisible(false);
+    AutomationProperties::SetAccessibilityView(unitHost,Automation::Peers::AccessibilityView::Raw);root.Children().Append(unitHost);
     for(auto unit:{GridUnitType::Auto,GridUnitType::Star,GridUnitType::Auto}){
         RowDefinition row;row.Height({1,unit});root.RowDefinitions().Append(row);
     }
@@ -452,8 +476,7 @@ FrameworkElement LayersPanel(std::shared_ptr<WorkspaceData> const& data,Bindings
     if(scrollMetrics)*scrollMetrics=[weak=std::weak_ptr(view)]{
         if(auto view=weak.lock()){
             auto height=[](FrameworkElement const& item){return item.Visibility()==Visibility::Visible?item.ActualHeight():0.;};
-            double unit=0;for(auto const& [key,row]:view->rows)if(row->root.IsLoaded()&&row->root.ActualHeight()>0){auto margin=row->root.Margin();unit=row->root.ActualHeight()+margin.Top+margin.Bottom;break;}
-            return O({{L"fixed_height",N(height(view->header)+height(view->footerFrame))},{L"unit_height",N(std::max(unit,height(view->addPaper)))}});
+            return O({{L"fixed_height",N(height(view->header)+height(view->footerFrame))},{L"unit_height",N(view->intrinsicUnitHeight())}});
         }return J{};
     };
     if(contentHeight)*contentHeight=[weak=std::weak_ptr(view)](double){

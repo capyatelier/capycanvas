@@ -17,6 +17,10 @@ namespace CapyLayers {
 using namespace CapyUi;
 inline constexpr double LayerRowHeight=40;
 inline Thickness layerRowPadding(std::shared_ptr<WorkspaceData> const& data){auto inset=data->panelMetric(L"layer_edge_inset");return {inset,2,inset,2};}
+void layerRowFrame(std::shared_ptr<WorkspaceData> const&,Border const&,Grid const&);
+Button layerRowButton(std::shared_ptr<WorkspaceData> const&,hstring const&,int,std::function<void()>);
+void layerRowThumbnail(ContentControl const&,ImageBrush const&,Grid const&);
+Button layerRowName(std::shared_ptr<WorkspaceData> const&,std::function<void()>,TextBlock&,StackPanel&);
 inline J layerAction(J const& operation){return O({{L"type",S(L"layer")},{L"action",operation}});}
 inline hstring epochOf(std::shared_ptr<WorkspaceData> const& data){
     return to_hstring(uint64_t(num(object(data->state,L"document_file"),L"epoch")));
@@ -88,7 +92,10 @@ struct ElementFactory : implements<ElementFactory,IElementFactory> {
 struct LayersView : std::enable_shared_from_this<LayersView> {
     std::shared_ptr<WorkspaceData> data;
     Grid root,values,footerFrame,listFrame;
-    Canvas connectionOverlay;
+    Canvas connectionOverlay,unitHost;
+    hstring unitStyle;
+    double unitHeight=0;
+    double intrinsicUnitHeight();
     hstring connectionKey,connectionTheme;
     std::vector<Shapes::Line> connectionLines;
     std::vector<Image> connectionGlyphs;

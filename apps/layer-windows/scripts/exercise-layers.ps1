@@ -133,15 +133,18 @@ function Stable-PreviewSamples([string]$Id,[string]$Save){
 }
 function Thumbnail-Pixels([string]$Id,[string]$Save='',$Image){
     Read-Preview $Id {param($bitmap,$r,$window)
-        if($Save){
-            $bitmap.Save((Join-Path $run ($Save+'.png')))
-            @{preview=$r;window=$window}|ConvertTo-Json|Set-Content (Join-Path $run ($Save+'-bounds.json'))
-        }
-        foreach($point in @(@(14,0),@(0,0),@(0,-5),@(3,3),@(14,2),@(2,14),@(25,14),@(14,25))){
+        $samples=[Collections.Generic.List[int]]::new();$pixels=[Collections.Generic.List[object]]::new()
+        foreach($point in @(@(14,-.5),@(0,0),@(0,-5),@(3,3),@(14,2),@(2,14),@(25,14),@(14,25))){
             $x=[int][Math]::Floor($r.X-$window.left+$point[0]*$r.Width/28)
             $y=[int][Math]::Floor($r.Y-$window.top+$point[1]*$r.Height/28)
-            $bitmap.GetPixel($x,$y).ToArgb() -band 0xffffff
+            $rgb=$bitmap.GetPixel($x,$y).ToArgb() -band 0xffffff
+            $samples.Add($rgb);$pixels.Add(@{dip=$point;x=$x;y=$y;rgb=$rgb})
         }
+        if($Save){
+            $bitmap.Save((Join-Path $run ($Save+'.png')))
+            @{preview=$r;window=$window;pixels=$pixels}|ConvertTo-Json -Depth 5|Set-Content (Join-Path $run ($Save+'-bounds.json'))
+        }
+        $samples.ToArray()
     } $Image
 }
 function Stable-ThumbnailPixels([string]$Id){
@@ -160,8 +163,12 @@ function Test-ThumbnailSquircles([long]$Id){
     $accent=[Drawing.ColorTranslator]::FromHtml((Model).state.palette.accent).ToArgb() -band 0xffffff
     if($active[0] -ne $accent){throw 'Outer editing edge did not use the accent color'}
     if($content[1] -ne $content[2] -or $content[3] -eq $content[2]){throw 'Thumbnail pixels did not form a full squircle'}
-    $scale=(Control "layer-$Id-thumbnail").Current.BoundingRectangle.Width/28
-    if([Math]::Abs((Control "layer-$Id-link").Current.BoundingRectangle.Width/$scale-10) -gt .1){throw 'Mask link did not narrow to 10 DIP'}
+    $thumbnailBounds=(Control "layer-$Id-thumbnail").Current.BoundingRectangle
+    $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+    $linkBounds=(Control "layer-$Id-link").Current.BoundingRectangle
+    $linkExpected=10*$scale;$linkError=[Math]::Abs($linkBounds.Width-$linkExpected)
+    @{thumbnail_bounds=$thumbnailBounds;link_bounds=$linkBounds;scale=$scale;requested_dip=10;requested_physical=$linkExpected;actual_physical=$linkBounds.Width;error_physical=$linkError;tolerance_physical=1}|ConvertTo-Json -Depth 5|Set-Content (Join-Path $run ("mask-link-$((Model).state.theme).json"))
+    if($linkError -gt 1.001){throw "Mask link did not narrow to 10 DIP: scale=$scale, expected=$linkExpected px, actual=$($linkBounds.Width) px, error=$linkError px"}
     Capture "thumbnail-squircles-$((Model).state.theme)" -WithModel
     Invoke "layer-$Id-content";Wait-Until {!(Model).state.layer_tools.editing_layer.mask_selected} 'Content editing did not publish'
     $idle=Stable-ThumbnailPixels "layer-$Id-mask-thumbnail"
@@ -326,6 +333,8 @@ try {
     $top=(Model).state.layers[0].id
     Wait-Until {$row=Find "layer-$top-name";$row -and !$row.Current.IsOffscreen} 'Scrolling back did not realize the top layer'
     Capture 'virtualized'
+    . (Join-Path $PSScriptRoot 'layer-relationships.ps1')
+    Test-LayerUnit
     $theme=(Model).state.theme
     Invoke 'settings-button'
     $preferences=Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
