@@ -90,8 +90,8 @@ pub struct TabPresentation {
     pub hover_bottom: [i8; 2],
 }
 impl TabPresentation {
-    pub(crate) fn width(self,widths:[f32;2])->f32 {
-        if !self.show_name {widths[1]}else{(widths[0]-if self.show_icon {0.}else{22.}).max(0.)}
+    pub(crate) fn width(self,widths:[f32;2],metrics:PanelControlMetrics)->f32 {
+        if !self.show_name {widths[1]}else{(widths[0]-if self.show_icon {0.}else{metrics.icon_size+metrics.group_spacing}).max(0.)}
     }
 }
 
@@ -3058,6 +3058,21 @@ mod tests {
         );
         edit(&mut state, &mut layout, CustomizationAction::CancelTools);
         assert_eq!(layout, before);
+    }
+
+    #[test]
+    fn tab_name_width_uses_icon_and_spacing_metrics() {
+        for metrics in [PANEL_CONTROL_METRICS, PanelControlMetrics {icon_size:24.,group_spacing:8.,..PANEL_CONTROL_METRICS}] {
+            let caption=60.;
+            let padding=16.;
+            let widths=[padding+metrics.icon_size+metrics.group_spacing+caption,36.];
+            for (show_icon,show_name,expected) in [(true,true,widths[0]),(false,true,padding+caption),(true,false,widths[1])] {
+                let tab=TabPresentation {show_icon,show_name,hover_bottom:[0;2]};
+                assert_eq!(tab.width(widths,metrics),expected);
+            }
+            let tab=TabPresentation {show_icon:false,show_name:true,hover_bottom:[0;2]};
+            assert_eq!(tab.width([metrics.icon_size+metrics.group_spacing-1.,36.],metrics),0.);
+        }
     }
 
     #[test]

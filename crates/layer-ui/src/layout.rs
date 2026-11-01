@@ -2672,7 +2672,7 @@ impl DockLayout {
                             .map_or(0.0, |m| {
                                 let style=self.group_tab_style(group).unwrap();
                                 if style==crate::TabStyle::Automatic {m.tab_widths[0]}
-                                else {self.tab_presentation(*p).width(m.tab_widths)}
+                                else {self.tab_presentation(*p).width(m.tab_widths,PANEL_CONTROL_METRICS)}
                             })
                     })
                     .sum::<f32>()
@@ -6466,7 +6466,7 @@ mod tests {
                     .tiles
                     .iter()
                     .all(|t| t.x + t.width <= group.bounds.width
-                        && t.y + t.height <= group.bounds.height - 22.0)
+                        && t.y + t.height <= group.bounds.height - TOOLBAR_GRIP_SIZE - gap)
             );
         }
     }
@@ -6494,7 +6494,7 @@ mod tests {
             }).collect();
             let saved = serde_json::to_value(&layout).unwrap();
             let wide = layout.workspace(1440., 900., 48., 28.);
-            assert!(group(&wide, Panel::ToolSettings).width >= 480. * text_scale + 22.);
+            assert!(group(&wide, Panel::ToolSettings).width >= 480. * text_scale + PANEL_CONTROL_METRICS.tab_grip_width + TILE_GAP);
             for width in [640., 744., 1200., 1440., 640.] {
                 let resolved = layout.workspace(width, 900., 48., 28.);
                 let leading = group(&resolved, Panel::ToolSettings);
