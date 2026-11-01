@@ -193,15 +193,15 @@ impl crate::Document {
     pub fn ruler_edit(&self, rulers: Vec<Ruler>) -> Result<crate::Edit, DocumentError> {
         use crate::authored::*;
         validate_rulers(&rulers)?;
-        let value = Guides { rulers: rulers.into_iter().map(|r| (r.id, r.geometry)).collect() };
+        let value = (!rulers.is_empty()).then(|| Guides { rulers: rulers.into_iter().map(|r| (r.id, r.geometry)).collect() });
         let mut edits = Vec::new();
         let mut guides = self.artwork.guides.iter();
         if let Some((h, _, _)) = guides.next() {
-            edits.push(crate::Edit::Guides(RecordChange::replace(&self.artwork.guides, h, Some(value))?));
+            edits.push(crate::Edit::Guides(RecordChange::replace(&self.artwork.guides, h, value)?));
             for (h, _, _) in guides {
                 edits.push(crate::Edit::Guides(RecordChange::replace(&self.artwork.guides, h, None)?));
             }
-        } else {
+        } else if let Some(value) = value {
             edits.push(crate::Edit::Guides(RecordChange::insert(&self.artwork.guides, value)));
         }
         Ok(crate::Edit::Batch(edits))
@@ -289,5 +289,21 @@ mod tests {
             assert_eq!(editor.document(), &before);
         }
         assert_eq!(editor.document().artwork.paint, paint);
+    }
+    #[test]
+    fn deleting_the_last_ruler_removes_its_record_and_undo_restores_it_exactly() {
+        let mut editor = Editor::new(Document::new(
+            PortableId::random(), 128, 128,
+            crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() },
+        ));
+        let ruler = Ruler { id: identity(1), geometry: RulerGeometry::Straight { start: p(0., 0.), end: p(10., 20.) } };
+        editor.perform(editor.document().ruler_edit(vec![ruler]).unwrap()).unwrap();
+        let guides = editor.document().artwork.guides.clone();
+        editor.perform(editor.document().ruler_edit(Vec::new()).unwrap()).unwrap();
+        assert!(editor.document().artwork.guides.is_empty());
+        editor.undo().unwrap();
+        assert_eq!(editor.document().artwork.guides, guides);
+        editor.redo().unwrap();
+        assert!(editor.document().artwork.guides.is_empty());
     }
 }
