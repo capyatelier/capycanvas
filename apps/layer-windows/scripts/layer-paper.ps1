@@ -288,6 +288,8 @@ function Paper-ScaleRelief{
     Relationship-Layers;Relationship-Reveal "layer-$paper-name";Invoke "layer-$paper-name"
     Wait-Until {(Model).state.layer_tools.editing_layer.id -eq $paper} 'Paper selection did not publish before Scale'
     if(!@((Model).layout.groups|Where-Object {$_.active -eq 'properties'}).Count){Invoke 'Properties' -Name}
+    $originalRelief=Lighting-Value 'relief'
+    if($originalRelief -ne 0){Lighting-Relief '0' {(Lighting-Value 'relief') -eq 0}}
     $track=(Control 'property-scale-slider' -Arranged).Current.BoundingRectangle;$y=[int]($track.Y+$track.Height/2)
     $relief=[ordered]@{original=(Paper-Scale);held=0.;scale=0.;flat=$null;dragging=$null;released=$null};$baseline=@{pixels=@()}
     try{
@@ -302,7 +304,11 @@ function Paper-ScaleRelief{
         $relief.fade=$clock.Elapsed.TotalSeconds
     }finally{$relief|ConvertTo-Json|Set-Content (Join-Path $run "scale-relief-$theme.json")}
     Relationship-Undo
-    Wait-Until {(Paper-Scale) -eq $relief.original} 'One Undo did not restore the Paper Scale'
+    Wait-Until {(Paper-Scale) -eq $relief.original -and (Lighting-Value 'relief') -eq 0} 'One Undo did not restore the Paper Scale'
+    if($originalRelief -ne 0){
+        Relationship-Undo
+        Wait-Until {(Paper-Scale) -eq $relief.original -and (Lighting-Value 'relief') -eq $originalRelief} 'One Undo did not restore Texture visibility after the Paper Scale check'
+    }
 }
 function Lighting-Property([string]$Key){@((Model).state.layer_properties.controls|Where-Object key -eq $Key)[0]}
 function Lighting-Value([string]$Key){(Lighting-Property $Key).value.value}
@@ -339,6 +345,7 @@ function Test-PaperLighting{
     Wait-Until {(Lighting-Property 'light').kind.numeric.kind -eq 'dial'} 'Paper Properties did not publish the Light dial'
     Lighting-Reveal
     $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+    if((Lighting-Value 'relief') -ne 0){Lighting-Relief '0' {(Lighting-Value 'relief') -eq 0}}
     if((Lighting-Value 'relief') -ne 0 -or !(Lighting-Property 'light').disabled -or !(Lighting-Property 'through_paint').disabled){throw 'Light and Shows through paint were not disabled while Texture visibility is 0'}
     $dial=Control 'property-light-dial' -Arranged
     if($dial.Current.IsEnabled -or (Control 'property-through_paint-slider').Current.IsEnabled -or (Control 'property-light').Current.IsEnabled){throw 'Disabled lighting controls still accept input'}
@@ -352,10 +359,12 @@ function Test-PaperLighting{
     $track=(Control 'property-relief-slider' -Arranged).Current.BoundingRectangle
     $row=(Control 'number-root-property-light' -Arranged).Current.BoundingRectangle;$slider=(Control 'number-root-property-relief' -Arranged).Current.BoundingRectangle
     $value=(Control 'property-light' -Arranged).Current.BoundingRectangle
-    [ordered]@{dial=$d;track=$track;row=$row;slider_row=$slider;value=$value;scale=$scale}|ConvertTo-Json|Set-Content (Join-Path $run "paper-lighting-geometry-$theme.json")
-    if([Math]::Abs($d.Width/$scale-28) -gt .5 -or [Math]::Abs($d.Height/$scale-28) -gt .5){throw "The Light dial is not 28 DIP: $d"}
+    $arrangedDial=Native-Bounds 'property-light-dial' $scale
+    $arrangedRow=Native-Bounds 'number-root-property-light' $scale;$arrangedSlider=Native-Bounds 'number-root-property-relief' $scale
+    [ordered]@{dial=$d;track=$track;row=$row;slider_row=$slider;value=$value;arranged_dial=$arrangedDial;arranged_row=$arrangedRow;arranged_slider_row=$arrangedSlider;scale=$scale}|ConvertTo-Json|Set-Content (Join-Path $run "paper-lighting-geometry-$theme.json")
+    if([Math]::Abs($arrangedDial.Width/$scale-28) -gt .5 -or [Math]::Abs($arrangedDial.Height/$scale-28) -gt .5){throw "The Light dial is not 28 DIP: $arrangedDial"}
     if([Math]::Abs($d.Right-$track.Right) -gt 1){throw "The Light dial does not end where the slider tracks end: $($d.Right) vs $($track.Right)"}
-    if([Math]::Abs($row.Height-$slider.Height) -gt 1 -or [Math]::Abs($row.Height/$scale-36) -gt .5){throw "The Light row is not a slider row's height: $($row.Height) vs $($slider.Height)"}
+    if([Math]::Abs($arrangedRow.Height-$arrangedSlider.Height) -gt 1 -or [Math]::Abs($arrangedRow.Height/$scale-36) -gt .5){throw "The Light row is not a slider row's height: $($arrangedRow.Height) vs $($arrangedSlider.Height)"}
     if([Math]::Abs($d.Top+$d.Height/2-($row.Top+$row.Height/2)) -gt 1){throw 'The Light dial is not centered in its row'}
     if([Math]::Abs($value.Right-$row.Right) -gt 1 -or [Math]::Abs($value.Bottom-$row.Bottom) -gt 1 -or $value.Left -lt $d.Right){throw 'The Light value is not at the bottom right beside the dial'}
     $range=$dial.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).Current
