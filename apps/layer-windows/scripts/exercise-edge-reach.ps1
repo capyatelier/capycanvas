@@ -480,8 +480,8 @@ function Check-ColumnHandleReset([string]$Theme){
     if(!$groups.Count -or !$adjacent.Count){throw 'The nested divider has no adjacent column and toolbar groups'}
     $owner=@{divider=$edge.id;groups=@($groups.id)}
     $other=@{widths=@($adjacent|ForEach-Object {@{id=$_.id;width=$_.bounds.width}})}
-    $canonical=Reach-Point @(foreach($id in $owner.groups){$g=@((Layout).groups|Where-Object id -eq $id)[0];foreach($fraction in .9,.6,.3){@{x=$edge.bounds.x-20;y=$g.bounds.y+$g.bounds.height*$fraction}}}) {param($edge)$edge.contact -eq 'free' -and !$edge.vertical}
-    $point=Screen $canonical.x $canonical.y;[void][CapyRowPointer]::DoubleClick($Device,$point.x,$point.y);Settled
+    $handle=Control ('divider-'+$edge.id) -Arranged;$bounds=$handle.Current.BoundingRectangle
+    [void][CapyRowPointer]::DoubleClick($Device,[int]($bounds.X+$bounds.Width*.5),[int]($bounds.Y+$bounds.Height*.5));Settled
     $original=Width $owner.groups[0];$edge=Divider $owner.divider
     $handle=Control ('divider-'+$edge.id) -Arranged;$bounds=$handle.Current.BoundingRectangle
     $from=@{x=$edge.bounds.x+$edge.bounds.width*.5;y=$edge.bounds.y+$edge.bounds.height*.5}
