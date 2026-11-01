@@ -354,10 +354,13 @@ results, a stopped desktop task and startup or fixture deadlines fail the run.
 The shared fixture reader uses bounded retries for brief trace-file I/O locks;
 malformed snapshots still fail immediately.
 
-For the [full-matrix validation scope](testing.md#windows-validation-scope), omit
-all fixture names:
+Follow the [Windows validation scope](testing.md#windows-validation-scope).
+The `smoke` alias selects 40 fixed variants; add affected families in the same
+command. The runner removes duplicate selections. For the full matrix, omit all
+fixture names:
 
 ```sh
+tools/windows-vm/windows-vm.py fixtures --runners 6 smoke navigator
 tools/windows-vm/windows-vm.py fixtures --runners 6
 ```
 

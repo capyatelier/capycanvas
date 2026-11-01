@@ -46,11 +46,15 @@ Select fixtures by the behavior and consumers a change affects, including caller
 outside the edited feature. Run every affected variant, with both themes and
 each affected input device. A single passing variant does not cover its family.
 
-Run the **full default matrix** before pushing changes to shared UI state or
-layout, Windows host Rust, shared Windows fixture helpers or
-`tools/windows-vm/run-fixtures.ps1`. For local controls and individual fixtures,
-run their complete affected selector families and dependent journeys. Follow
-the [VM matrix command](windows-vm.md#ui-fixtures-on-the-software-adapter), plus
+| Change | Windows fixtures before pushing |
+| --- | --- |
+| Shared UI state, layout, Windows host Rust or shared native controls, input and presentation | `smoke` plus every affected selector family and dependent journey. |
+| Startup, window registry, automation discovery, shared fixture helpers or runner | Full default matrix. |
+| Local controls and individual fixture scripts | Complete affected selector families and dependent journeys. |
+
+`smoke` is the single named selector list in `run-fixtures.ps1`; use the alias
+without hand-picking a subset. Follow the
+[VM matrix commands](windows-vm.md#ui-fixtures-on-the-software-adapter), plus
 the windowless checks above. Fixture routing changes also run
 `tools/windows-vm/test-fixture-routing.ps1` on PowerShell 7 and Windows PowerShell
 5.1 and the Python suite in `tools/windows-vm`.

@@ -37,6 +37,23 @@ foreach($case in @(@{option='CanvasResetOnly';journey='Check-CanvasReset'},@{opt
     if($case.option -eq 'CancelOnly'){$bound.Device='pen';if((& $probe @bound) -ne 'pen'){throw 'Explicit pen cancellation changed'}}
 }
 if(($edgeRuns['edge-reach:pen'] -join ',') -ne '-Device,pen' -or ($edgeRuns['edge-reach:ColumnResetOnly'] -join ',') -ne '-ColumnResetOnly'){throw 'Native edge routing changed unrelated variants'}
+$smoke=@(
+    'activation','canvas-editing:smoke','canvas-editing:smoke-light','clipboard',
+    'color-editor:light','column-stacks:touch','documents:new-drawing','documents:native-writeback-light',
+    'drawers','drawers:light','editor','effects:light',
+    'header','header:light','image-rows','layer-pickup',
+    'layers','layers:PaperLight','localization-smoke:light','navigator',
+    'navigator:light','persistence','popup','popup:light',
+    'saved-data:light','scopes','selection:light','startup-close',
+    'switcher-drag:mouse','switcher','tab-drag','tab-drag:light',
+    'tool-bubbles:light-pen','toolbar-components','window','window:light',
+    'workspace-layout','workspace-layout:light','workspace-pickup','zoom-readout:touch'
+)
+$smokePlan=@(Select-Fixtures @($edgeRuns.Keys) @('smoke'))
+if($smokePlan.Count -ne 40 -or ($smokePlan -join ',') -ne ($smoke -join ',')){throw 'Smoke must select its exact forty inventory entries'}
+if(((Select-Fixtures @($edgeRuns.Keys) @('smoke','popup:default')) -join ',') -ne ($smoke -join ',')){throw 'An explicit smoke entry must not duplicate or expand variants'}
+$smokeExtended=@($edgeRuns.Keys|Where-Object {$_ -in $smoke -or $_ -eq 'navigator:PixelsOnly'})
+if(((Select-Fixtures @($edgeRuns.Keys) @('smoke','navigator:PixelsOnly')) -join ',') -ne ($smokeExtended -join ',')){throw 'Smoke must preserve an explicitly requested extra variant'}
 $available=@('header','header:catalog-only','header:catalog-only-light','popup','popup:light','effects')
 if(((Select-Fixtures $available @()) -join ',') -ne ($available -join ',')){throw 'An empty fixture request must select every available selector'}
 if(((Select-Fixtures $available $null) -join ',') -ne ($available -join ',')){throw 'A null fixture request must select every available selector'}
@@ -136,12 +153,13 @@ try{
         . ([scriptblock]::Create($discovery.Extent.Text))
         $runs.Keys
     })
-    foreach($case in @(@{names=$null;controls='Feedback,LayerDrop,Popup'},@{names='navigator:default';controls=''},@{names='button-feedback:default,popup:default';controls='Feedback,Popup'},@{names='layer-pickup:default';controls='LayerDrop'})){
+    foreach($case in @(@{names=$null;controls='Feedback,LayerDrop,Popup'},@{names='navigator:default';controls=''},@{names='button-feedback:default,popup:default';controls='Feedback,Popup'},@{names='layer-pickup:default';controls='LayerDrop'},@{names='smoke';controls='LayerDrop,Popup';runs=$smoke},@{names='smoke,popup:default';controls='LayerDrop,Popup';runs=$smoke},@{names='smoke,navigator:PixelsOnly';controls='LayerDrop,Popup';runs=$smokeExtended})){
         $selection=@{};if($case.names){$selection.Name=$case.names}
         $json=& (Get-Process -Id $PID).Path -NoProfile -File (Join-Path $PSScriptRoot 'run-fixtures.ps1') -Executable 'C:\not-built\CapyCanvas.exe' -Output $cacheRun @selection -List
         if($LASTEXITCODE){throw 'Listing fixture controls required a build or desktop'}
         $plan=$json|ConvertFrom-Json
         if(($plan.controls -join ',') -ne $case.controls -or !$plan.runs.Count){throw 'Fixture plan selected unnecessary controls or lost its selectors'}
+        if($case.runs -and ($plan.runs.Count -ne $case.runs.Count -or ($plan.runs -join ',') -ne ($case.runs -join ','))){throw 'Listed smoke selectors differ from the exact requested inventory'}
         if(!$case.names -and ($plan.runs -join ',') -ne ($all -join ',')){throw 'Listing without names must return every available selector'}
     }
     $process=[Diagnostics.Process]::GetCurrentProcess();$previous=$process.PriorityClass

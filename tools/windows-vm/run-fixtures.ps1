@@ -51,7 +51,24 @@ foreach ($script in Get-ChildItem (Join-Path $scripts 'exercise-*.ps1')) {
 }
 function Select-Fixtures([string[]]$Available,[string[]]$Requested) {
     if($null -eq $Requested -or !$Requested.Count){return $Available}
-    $Requested=@($Requested|ForEach-Object {if($_ -eq 'header-settings'){'header:catalog-only';'header:catalog-only-light'}else{$_}})
+    $Requested=@($Requested|ForEach-Object {
+        switch($_){
+            'header-settings'{'header:catalog-only';'header:catalog-only-light'}
+            'smoke'{
+                'activation:default','canvas-editing:smoke','canvas-editing:smoke-light','clipboard:default',
+                'color-editor:light','column-stacks:touch','documents:new-drawing','documents:native-writeback-light',
+                'drawers:default','drawers:light','editor:default','effects:light',
+                'header:default','header:light','image-rows:default','layer-pickup:default',
+                'layers:default','layers:PaperLight','localization-smoke:light','navigator:default',
+                'navigator:light','persistence:default','popup:default','popup:light',
+                'saved-data:light','scopes:default','selection:light','startup-close:default',
+                'switcher-drag:mouse','switcher:default','tab-drag:default','tab-drag:light',
+                'tool-bubbles:light-pen','toolbar-components:default','window:default','window:light',
+                'workspace-layout:default','workspace-layout:light','workspace-pickup:default','zoom-readout:touch'
+            }
+            default{$_}
+        }
+    })
     $defaults = @($Requested | Where-Object { $_ -match '^[^:]+:default$' } | ForEach-Object { ($_ -split ':')[0] })
     foreach ($item in $Requested) {
         $known = if ($item -match '^([^:]+):default$') { $Matches[1] -in $Available } else {

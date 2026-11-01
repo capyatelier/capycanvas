@@ -75,9 +75,10 @@ These rules cover tests, benchmark harnesses and tools as much as production cod
 - Plans, handoffs and history docs are not evidence that something works. Check
   the code. When you steer or review another agent, review its diffs, not only
   its results.
-- Choose Windows fixtures by affected consumers, including callers of shared
-  helpers. Shared fixture helper and runner changes require the full matrix
-  before pushing; follow the [Windows validation scope](docs/development/testing.md#windows-validation-scope).
+- Choose Windows fixtures by affected consumers: shared UI, layout and host
+  changes run `smoke` plus affected families. Startup, registry, discovery,
+  shared fixture helpers and runner changes require the full matrix before
+  pushing; follow the [Windows validation scope](docs/development/testing.md#windows-validation-scope).
   Fix or report failures already on `main` with their reproduction and evidence;
   never silently push past them.
 
