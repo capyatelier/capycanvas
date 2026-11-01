@@ -1190,31 +1190,10 @@ impl ColorWheel {
             let Some(layout)=layer_ui::BareColorWheel::fit(self.width() as f32,self.height() as f32,self.imp().hdr.get()) else {return (0.,[0.;2]);};
             return (layout.stage,[(self.width() as f32-layout.wheel)*0.5-layout.inset,-layout.inset]);
         }
-        let mut size = self.width().min(self.height()).max(0);
-        let mut footer = 0.;
-        {
-            let layout_for = |side| if self.imp().hdr.get() { ColorPanelLayout::with_hdr(side) } else { ColorPanelLayout::new(side) };
-            // Fit the shared, width-dependent footer when a short panel constrains height.
-            let (mut low, mut high) = (128, size);
-            size = 0;
-            while low <= high {
-                let candidate = low + (high - low) / 2;
-                let height = layout_for(candidate as f32).unwrap().height().ceil() as i32;
-                if height <= self.height() { size = candidate; low = candidate + 1; }
-                else { high = candidate - 1; }
-            }
-            if let Some(layout) = layout_for(size as f32) {
-                footer = layout.height().ceil() - size as f32;
-            }
-        }
-        let size = size as f32;
-        (
-            size,
-            [
-                (self.width() as f32 - size) * 0.5,
-                (self.height() as f32 - size - footer) * 0.5,
-            ],
-        )
+        let width = self.width() as f32;
+        let height = self.height() as f32;
+        let Some(fit) = ColorPanelLayout::fit(width, Some(height), 0., self.imp().hdr.get()) else { return (0., [0.; 2]); };
+        (fit.size, [(width - fit.size) * 0.5, (height - fit.height) * 0.5])
     }
     pub(crate) fn drawing_bounds(&self) -> (f32, [f32; 2]) {
         let (size, [x, y]) = self.stage_bounds();

@@ -261,15 +261,9 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
       }
       const height=frame.clientHeight;
       if(resized||height!==frameHeight){
-        // Fit the complete footer. Reading the frame avoids stage-size feedback;
-        // cache geometry across color changes, just as for the wheel raster.
-        let width=availableWidth;
-        if(naturalLayout.height>height){
-          let low=128,high=availableWidth;
-          while(low<high){const middle=Math.ceil((low+high)/2);if(geometry(middle).height<=height)low=middle;else high=middle-1;}
-          width=low;
-        }
-        frameWidth=availableWidth;frameHeight=height;layoutWidth=width;layout=geometry(width);layout.hdr=view.hdr;
+        layout=app.color_ui({type:"fit_layout",width:availableWidth,height,hdr:view.hdr});
+        const width=layout.size;
+        frameWidth=availableWidth;frameHeight=height;layoutWidth=width;layout.hdr=view.hdr;
         stage.style.width=`${width}px`;stage.style.height=`${layout.height}px`;
         place(wheel,layout.wheel);
         choices.forEach(({slot,node})=>place(node,layout[slot]));

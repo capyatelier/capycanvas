@@ -1147,6 +1147,15 @@ pub struct ColorPanelLayout {
     pub intensity_caption: ColorArcCaption,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct ColorPanelFit {
+    pub size: f32,
+    pub height: f32,
+    pub natural_height: f32,
+    #[serde(flatten)]
+    pub layout: ColorPanelLayout,
+}
+
 #[derive(Clone, Copy, Debug, Default, Serialize)]
 pub struct ColorArcCaption {
     pub center: [f32; 2],
@@ -1156,6 +1165,8 @@ pub struct ColorArcCaption {
     pub font_size: f32,
 }
 impl ColorArcCaption {
+    const BOTTOM: f32 = 4.;
+    fn font_size(size: f32) -> f32 { (size * 0.044).clamp(9., 12.) }
     fn new(center: [f32; 2], mut radius: f32, font_size: f32, controls: [[f32; 4]; 4]) -> Self {
         loop {
             let (mut min_angle, mut max_angle) = (0f32, std::f32::consts::PI);
@@ -1225,6 +1236,41 @@ impl BareColorWheel {
 }
 
 impl ColorPanelLayout {
+    pub fn fit(width: f32, height: Option<f32>, fixed_height: f32, hdr: bool) -> Option<ColorPanelFit> {
+        if !width.is_finite() || width < 0. || !fixed_height.is_finite() || fixed_height < 0.
+            || height.is_some_and(|h| !h.is_finite() || h < 0.) { return None; }
+        let width = width.max(128.);
+        let geometry = |size| if hdr { Self::with_hdr(size) } else { Self::new(size) };
+        let natural = geometry(width)?;
+        let natural_height = natural.height().max(width);
+        let room = height.map(|h| (h - fixed_height).max(0.));
+        let (size, layout) = match room {
+            Some(room) if natural_height > room => {
+                if hdr {
+                    let minimum = Self::new(128.)?;
+                    let wheel = ColorWheelGeometry::new(1.)?;
+                    let expansion = wheel.outer - wheel.disc_radius();
+                    let rate = 0.5 + wheel.outer + expansion;
+                    let offset = minimum.readout_radius - 128. * wheel.outer
+                        - 2. * minimum.wheel[0] * expansion
+                        + ColorArcCaption::font_size(128.) + ColorArcCaption::BOTTOM;
+                    let upper = ((room - offset) / rate).ceil().min(width.floor()).max(128.) as u32;
+                    match (128..=upper).rev().find_map(|size| {
+                        let layout = geometry(size as f32)?;
+                        (layout.height().max(size as f32) <= room).then_some((size as f32, layout))
+                    }) {
+                        Some(fit) => fit,
+                        None => (128., geometry(128.)?),
+                    }
+                } else {
+                    let size = width.min(room).floor().max(128.);
+                    (size, geometry(size)?)
+                }
+            }
+            _ => (width, natural),
+        };
+        Some(ColorPanelFit { size, height: layout.height().max(size), natural_height, layout })
+    }
     pub fn stage_for_wheel(wheel: f32) -> Option<f32> {
         if !wheel.is_finite() || wheel < Self::new(128.)?.wheel[2] { return None; }
         let (mut low, mut high) = (128., wheel + 40.);
@@ -1254,7 +1300,7 @@ impl ColorPanelLayout {
             b[1] = arc.center[1] + (distance * distance - dx * dx).sqrt() - b[3] * 0.5;
         }
         layout.swap[1] += layout.background[1] - old_background_y;
-        let font = (size * 0.044).clamp(9., 12.);
+        let font = ColorArcCaption::font_size(size);
         let radius = arc.radius + arc.width * 0.5 + font + layout.readout_radius - wheel.outer;
         layout.intensity_caption = ColorArcCaption::new(arc.center, radius, font,
             [layout.foreground, layout.background, layout.swap, layout.transparent]);
@@ -1264,7 +1310,7 @@ impl ColorPanelLayout {
     pub fn height(&self) -> f32 {
         [self.foreground, self.background, self.transparent, self.swap]
             .into_iter().map(|b| b[1] + b[3]).fold(0., f32::max)
-            .max(self.intensity_caption.center[1] + self.intensity_caption.radius + 4.)
+            .max(self.intensity_caption.center[1] + self.intensity_caption.radius + ColorArcCaption::BOTTOM)
     }
     pub fn new(size: f32) -> Option<Self> {
         if !size.is_finite() || size < 128. {
@@ -1806,6 +1852,53 @@ mod tests {
                 .is_err()
         );
     }
+    #[test]
+    fn color_fit_uses_the_largest_fitting_stage_across_disconnected_hdr_ranges() {
+        for width in [280., 400., 800.] {
+            let fit = ColorPanelLayout::fit(width, Some(200.), 16., true).unwrap();
+            assert_eq!(fit.size, 159.);
+            assert!(fit.height <= 184.);
+            for size in 160..=width as u32 {
+                assert!(ColorPanelLayout::with_hdr(size as f32).unwrap().height() > 184., "{size}");
+            }
+            assert!(ColorPanelLayout::with_hdr(151.).unwrap().height() > 184.);
+            assert!(ColorPanelLayout::with_hdr(157.).unwrap().height() < 184.);
+        }
+        let fit = ColorPanelLayout::fit(4352., Some(145.), 16., false).unwrap();
+        assert_eq!((fit.size, fit.height), (129., 129.));
+    }
+
+    #[test]
+    fn color_fit_preserves_width_only_natural_height_and_fractional_unconstrained_size() {
+        for hdr in [false, true] {
+            let natural = ColorPanelLayout::fit(280.5, None, 16., hdr).unwrap();
+            assert_eq!(natural.size, 280.5);
+            assert_eq!(natural.height, natural.natural_height);
+            for (height, fixed) in [(1000., 16.), (200., 0.), (200., 16.), (0., 16.)] {
+                let fit = ColorPanelLayout::fit(280.5, Some(height), fixed, hdr).unwrap();
+                assert_eq!(fit.natural_height, natural.natural_height);
+                assert!(fit.size >= 128. && fit.size <= 280.5);
+                if height == 1000. { assert_eq!(fit.size, natural.size); }
+                if height == 0. { assert_eq!(fit.size, 128.); }
+            }
+        }
+        for (width, height, fixed) in [(f32::NAN, None, 0.), (280., Some(f32::INFINITY), 0.),
+            (-1., None, 0.), (280., Some(-1.), 0.), (280., None, -1.)] {
+            assert!(ColorPanelLayout::fit(width, height, fixed, true).is_none());
+        }
+    }
+
+    #[test]
+    fn color_fit_hdr_scan_matches_exhaustive_maximum() {
+        for room in [140., 170., 183.5, 184., 200., 237., 300., 500., 1000., 2000.] {
+            let width = 2400.;
+            let fit = ColorPanelLayout::fit(width, Some(room + 16.), 16., true).unwrap();
+            let expected = (128..=width as u32).rev().find(|&size|
+                ColorPanelLayout::with_hdr(size as f32).unwrap().height().max(size as f32) <= room).unwrap_or(128);
+            assert_eq!(fit.size, expected as f32, "{room}");
+        }
+    }
+
     #[test]
     fn curved_controls_fit_four_tiles_without_covering_the_hue_ring() {
         for size in 128..=600 {

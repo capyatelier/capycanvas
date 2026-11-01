@@ -453,6 +453,8 @@ stacks. Run
 for the x64 and ARM64 release build, test and Clippy jobs. Neither workflow
 qualifies hardware rendering or performance.
 
+`color-picker:fit-dark` and `color-picker:fit-light` check native HDR Color allocation and the constrained shared fit independently of picker sampling.
+
 Focused tab-drop journeys are `tab-drag:release-dark`, `tab-drag:release-light`,
 `hdr:tab-drop-dark` and `hdr:tab-drop-light`. They cover panel and drawing tabs
 with mouse, pen and touch, including native control identity, arranged release

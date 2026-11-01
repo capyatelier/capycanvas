@@ -5,6 +5,22 @@ import test from 'node:test';
 
 const source=readFileSync(new URL('editor-panels.js',import.meta.url),'utf8');
 
+test('Colour applies the shared fit and only queries changed allocations',()=>{
+  const node=()=>({style:{}}),requests=[],frame={...node(),clientWidth:280,clientHeight:184},root=node(),stage=node(),wheel=node(),swap=node(),readout=node(),edit=node();
+  const choices=['foreground','background','transparent'].map(slot=>({slot,node:node()})),shapes=[node(),node()];
+  const fit={size:159,height:184,natural_height:300,wheel:[2,3,155,155],foreground:[4,5,32,32],background:[20,21,24,24],transparent:[40,50,24,24],shapes:[[8,9,20,20],[10,11,20,20]],swap:[12,13,20,20],readout:[14,15,40,20],edit:[16,17,20,20]};
+  const context={frame,root,stage,wheel,swap,readout,edit,choices,shapes,view:{hdr:true},frameWidth:0,frameHeight:0,layoutWidth:0,layout:undefined,naturalAspect:'',naturalLayout:undefined,contentChanged(){},app:{color_ui(request){requests.push({...request});return request.type==='fit_layout'?{...fit}:{...fit,size:request.size,height:request.size===128?150:300};}}};
+  const begin=source.indexOf('    const place=',source.indexOf('  function colorWheel(')),end=source.indexOf('      const width=layoutWidth;',begin);
+  runInNewContext(source.slice(begin,end)+'\n}\nglobalThis.draw=draw;',context);
+  context.draw();
+  assert.equal(stage.style.width,'159px');assert.equal(stage.style.height,'184px');assert.equal(frame.style.aspectRatio,'280 / 300');
+  assert.deepEqual(requests,[{type:'layout',size:128,hdr:true},{type:'layout',size:280,hdr:true},{type:'fit_layout',width:280,height:184,hdr:true}]);
+  for(const [control,rect]of [[wheel,fit.wheel],...choices.map(({slot,node})=>[node,fit[slot]]),...shapes.map((node,index)=>[node,fit.shapes[index]]),[swap,fit.swap],[readout,fit.readout],[edit,fit.edit]])assert.deepEqual(control.style,Object.fromEntries(['left','top','width','height'].map((key,index)=>[key,`${rect[index]}px`])));
+  context.draw();assert.equal(requests.length,3);
+  frame.clientHeight=185;context.draw();
+  assert.deepEqual(requests.at(-1),{type:'fit_layout',width:280,height:185,hdr:true});assert.equal(requests.length,4);
+});
+
 function harness() {
   const navigators=new Map(),pending=new Map(),sizes=[],reflows=[];
   let next=0,wakes=0;

@@ -166,7 +166,7 @@ internal val DividerLength = 18.dp
                 when (item.getString("control")) {
                     "brushes", "brush_sets", "sculpt_sets", "tools" -> ToolSetControls(host, state, item.getString("control"), toolSet)
                     "tool_settings" -> ToolSettingsControls(host, state)
-                    "color_wheel" -> ColorPanelControls(host, availableHeight - 16.dp) { natural, displayed -> deficits[0] = natural - displayed }
+                    "color_wheel" -> ColorPanelControls(host, availableHeight, (2 * (panelMetrics().inset.value * density).roundToInt() / density).dp) { natural, displayed -> deficits[0] = natural - displayed }
                     "navigator" -> NavigatorPanel(host, availableHeight) { natural, displayed -> deficits[1] = natural - displayed }
                     "histogram", "waveform" -> ScopeControl(host, state, item.getString("control"))
                     "brush_size" -> NumericSetting("Brush size", state.getJSONObject("brush").number("diameter"), host.catalog.getJSONObject("brush_size"),

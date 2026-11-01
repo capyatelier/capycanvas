@@ -369,6 +369,26 @@ export async function checkColorPanel({call,evaluate,settle}) {
     if(hdrState.depth!=='F16'||!hdrState.ready)await new Promise(resolve=>setTimeout(resolve,100));
   }while(hdrState.depth!=='F16'||!hdrState.ready);
   assert.equal(await evaluate('layerApp.app.color_panel().hdr'),true);
+  const constrained=[];
+  try {for(const theme of ['light','dark']) {
+    await send({type:'set_theme',theme});await resizePanel(280,230);
+    const chrome=await evaluate(`(()=>{const frame=document.querySelector('${root} .color-wheel-stage'),floating=layerApp.app.workspace_persistence().layout.floating.find(f=>f.root.panels?.includes('color'));return{width:floating.width,height:floating.height,contentWidth:frame.clientWidth,contentHeight:frame.clientHeight}})()`);
+    await resizePanel(chrome.width+280-chrome.contentWidth,chrome.height);
+    const authoredStyle=await evaluate(`document.querySelector('${root} .color-wheel-stage').getAttribute('style')`);
+    try {
+    await evaluate(`Object.assign(document.querySelector('${root} .color-wheel-stage').style,{height:'184px',flexBasis:'184px',maxHeight:'184px'})`);await settle();
+    const allocation=await evaluate(`(()=>{const root=document.querySelector('${root}'),frame=root.querySelector('.color-wheel-stage'),stage=root.querySelector('.color-wheel-square'),box=stage.getBoundingClientRect();return{width:frame.clientWidth,height:frame.clientHeight,stage:box.toJSON(),fit:layerApp.app.color_ui({type:'fit_layout',width:frame.clientWidth,height:frame.clientHeight,hdr:true}),controls:[...root.querySelectorAll('.color-swatch,.color-utility,.color-shape')].map(n=>{const r=n.getBoundingClientRect(),target=[[.5,.5],[.75,.75],[.25,.75],[.75,.25]].map(([x,y])=>({x:r.x+r.width*x,y:r.y+r.height*y})).find(p=>n.contains(document.elementFromPoint(p.x,p.y)));return{label:n.getAttribute('aria-label'),slot:n.dataset.colorSlot,...r.toJSON(),target}}),glyphs:[...root.querySelector('.color-intensity').lastElementChild.children].map(n=>n.getBoundingClientRect().toJSON())}})()`);
+    constrained.push({theme,chrome,authoredStyle,...allocation});
+    assert.deepEqual([allocation.width,allocation.height],[280,184],'The production Colour frame receives the native allocation');
+    assert.equal(allocation.fit.size,159,'The shared HDR fit chooses the largest fitting stage');
+    assert.equal(allocation.stage.width,159,'The native stage applies the shared fit');
+    assert.ok(allocation.stage.height<=184&&Math.abs(allocation.stage.height-allocation.fit.height)<1/64);
+    for(const control of [...allocation.controls,...allocation.glyphs])assert.ok(control.x>=allocation.stage.x-.5&&control.right<=allocation.stage.right+.5&&control.y>=allocation.stage.y-.5&&control.bottom<=allocation.stage.bottom+.5,'The constrained HDR footer and caption fit');
+    assert.ok(allocation.controls.every(control=>control.target),'Constrained controls have an unoccluded native input target');
+    for(const kind of ['mouse','touch','pen'])for(const slot of ['background','foreground'])await gesture(kind,allocation.controls.find(control=>control.slot===slot).target);
+    await capturePanel(`${theme}-hdr-constrained`);
+    } finally {await evaluate(`(()=>{const n=document.querySelector('${root} .color-wheel-stage'),style=${JSON.stringify(authoredStyle)};if(style===null)n.removeAttribute('style');else n.setAttribute('style',style)})()`);await settle();}
+  }} finally {await writeFile(`${output}/hdr-constrained.json`,JSON.stringify(constrained,null,2));}
   const captions=[];
   for(const theme of ['light','dark'])for(const width of [128,144,280,360])for(const stops of [-2,0,6]) {
     await send({type:'set_theme',theme});await resizePanel(width,width+100);

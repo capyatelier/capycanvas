@@ -1,9 +1,11 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','fit-dark','fit-light')][string]$Case='full')
+if($Case -ne 'full'){$Theme=$Case.Substring(4)}
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyFind='visible'
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 Add-Type -Path (Join-Path $PSScriptRoot 'CanvasTouchDriver.cs')
+Add-Type -Path (Join-Path $PSScriptRoot 'BubbleFixtureNative.cs')
 $null=[CapyCanvasTouch]::SetThreadDpiAwarenessContext([IntPtr](-4))
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
@@ -68,7 +70,7 @@ function Switch-Workspace([string]$Name,[string]$Id){
     $switch.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     Wait-Until {(Model).windows_workspace.id -eq $Id -and !(Model).windows_workspace.busy} "$Name did not open" 20
 }
-function Color-Resize{
+function Color-Resize([string]$Name='color-resized'){
     $group=@((Model).layout.groups|Where-Object {$_.active -eq 'color'})[0]
     if(!$group){throw 'Color is not docked in the starting workspace'}
     $edges=@($group.bounds.x,($group.bounds.x+$group.bounds.width))
@@ -86,7 +88,30 @@ function Color-Resize{
     $released=(Control 'color-wheel').Current.BoundingRectangle
     if([Math]::Abs($released.Width-$held.Width) -gt 1 -or [Math]::Abs($released.X-$held.X) -gt 1 -or [Math]::Abs($released.Y-$held.Y) -gt 1){throw 'Releasing the resize moved or resized the color wheel'}
     if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -eq $layout){throw 'Dragging the divider did not resize the Color column'}
-    Capture 'color-resized'
+    Capture $Name
+}
+function Color-FitHeight{
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File'
+    Invoke 'new_document';New-DrawingPixels 128 96
+    (Control 'document-depth').GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+    (Control '16-bit float HDR' -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    Invoke 'Create' -Name
+    Wait-Until {(Model).color_panel.hdr -and (Model).brush_ready -and !(Model).state.document_file.busy} 'HDR Color fit drawing did not open' 60
+    Invoke 'panel-tab-color';Color-Resize 'color-hdr-resized'
+    $controls=Control 'color-controls' -Arranged;$retained=$controls.GetRuntimeId() -join ':'
+    $bounds=$controls.Current.BoundingRectangle;$scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+    $proof=@{controls=$bounds;scale=$scale;theme=$Theme;measurement=@((Model).panel_measurements|Where-Object panel -eq 'color')[0];request=@{type='fit_layout';width=[Math]::Floor($bounds.Width)/$scale;height=$bounds.Height/$scale;hdr=[bool](Model).color_panel.hdr};constrained_request=@{type='fit_layout';width=280;height=184;hdr=$true}}
+    try{
+        foreach($case in @(@('shared','request'),@('constrained','constrained_request'))){$proof[$case[0]]=[CapyBubbleFixtureNative]::ColorQuery((Join-Path $directory 'layer_windows.dll'),($proof[$case[1]]|ConvertTo-Json -Compress))|ConvertFrom-Json}
+        $proof.stage=(Control 'color-panel' -Arranged).Current.BoundingRectangle;$proof.wheel=(Control 'color-wheel' -Arranged).Current.BoundingRectangle
+        if($proof.constrained.size -ne 159){throw 'The constrained HDR transport did not select the shared 159 DIP stage'}
+        Wait-Until {
+            $proof.stage=(Control 'color-panel' -Arranged).Current.BoundingRectangle;$proof.wheel=(Control 'color-wheel' -Arranged).Current.BoundingRectangle
+            [Math]::Abs($proof.stage.Width-$proof.shared.size*$scale) -le 1 -and [Math]::Abs($proof.wheel.Width/$scale-$proof.shared.wheel[2]) -le 1
+        } 'Native HDR Color stage and wheel did not apply the shared fit at their actual allocation'
+        if(($controls.GetRuntimeId() -join ':') -ne $retained){throw 'Color fit rebuilt its native control'}
+        Capture 'color-fit-height' -WithModel -Composed
+    }finally{$proof|ConvertTo-Json -Depth 18|Set-Content (Join-Path $run 'color-fit-height.json')}
 }
 function Canvas-Points{
     $area=(Model).state.camera.work_area;$bounds=(Control 'drawing-canvas').Current.BoundingRectangle
@@ -110,6 +135,7 @@ try {
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     Use-PaintWorkspace
 
+    if($Case -eq 'full'){
     Color-Resize
     Switch-Workspace 'Sketch' 'builtin:workspace:painter'
     Fit-Canvas;Start-Sleep -Milliseconds 300;Canvas-Points
@@ -238,13 +264,17 @@ try {
     if($after.motion_updates -le $before.motion_updates){throw 'Hover did not deliver picker previews'}
     Capture 'wheel-preview'
     Escape-Picker
+    }
+    Color-FitHeight
     [CapyRowPointer]::Verify();[CapyRowPointer]::Dispose()
 
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow -Action Close -DiscardUnsaved
     if(!$review.WaitForExit(8000)){throw 'Color picker review did not close'}
     if((Get-Item -LiteralPath $stderr).Length){throw 'Color picker review wrote to stderr'}
+    if($Case -eq 'full'){
     $counts={param($p)@{full=$p.full_updates;motion=$p.motion_updates}}
     @{tooltip=$tooltip;touch_lift_pixels=$lifted;touch_reach_pixels=$reached;column_resize='retained wheel scaled during the drag; final raster at release without moving controls';sweep_before=(& $counts $before);sweep_after=(& $counts $after)}|ConvertTo-Json -Depth 6|Set-Content (Join-Path $run 'result.json')
+    }
     Write-Output "Color picker acceptance passed: $run"
 }catch{
     try{Capture 'failure' -WithModel}catch{}

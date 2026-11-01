@@ -279,6 +279,20 @@ fn native_color_panel_input() {
     let mut reports = Vec::new();
     let mut previous_guide = None;
     for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        let wheel: crate::tool_panels::ColorWheel = glib::Object::new();
+        let view = crate::display_color::ViewColor::Srgb.with_rendition(
+            layer_core::color::DocumentColor { depth: layer_core::color::SampleDepth::F16, ..Default::default() },
+            Default::default(),
+        );
+        wheel.set_state(&state(&w).colors, view, 1., false, None);
+        let natural = layer_ui::ColorPanelLayout::fit(280., None, 0., true).unwrap();
+        assert_eq!(wheel.measure(gtk::Orientation::Vertical, 280).1, natural.natural_height.ceil() as i32);
+        wheel.allocate(280, 184, -1, None);
+        let fit = layer_ui::ColorPanelLayout::fit(280., Some(184.), 0., true).unwrap();
+        assert_eq!(fit.size, 159.);
+        assert!((wheel.drawing_bounds().0 - fit.layout.wheel[2]).abs() < 0.001,
+            "{theme:?}: constrained HDR wheel uses the shared 159px stage");
         for width in [144., 160., 200., 242., 280., 360.] {
             for float in &mut fixture.layout.floating {
                 if let DockNode::Tabs { panels, .. } = &float.root

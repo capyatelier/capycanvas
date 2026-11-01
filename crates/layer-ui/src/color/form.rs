@@ -13,6 +13,7 @@ pub enum ColorUiRequest {
     BareLayout { width: f32, height: f32, #[serde(default)] hdr: bool },
     HdrPreview { color: RgbColor, document_space: RgbSpace, recipe: layer_core::color::hdr::SdrRendition, headroom: f32 },
     Layout { size: f32, #[serde(default)] hdr: bool },
+    FitLayout { width: f32, height: Option<f32>, #[serde(default)] fixed_height: f32, #[serde(default)] hdr: bool },
     Arc { size: f32, point: Option<[f32;2]>, #[serde(default)] fraction: f32 },
     ProofDial { size: f32, recipe: layer_core::color::hdr::SdrRendition, point: Option<[f32;2]>, part: Option<u8> },
     ProofControl { recipe: layer_core::color::hdr::SdrRendition, part: u8, edit: crate::proof_panel::SdrControlEdit },
@@ -111,6 +112,10 @@ pub fn color_ui_localized(request: ColorUiRequest, localizer: &crate::localizati
         ColorUiRequest::PrintProof {settings} => return serde_json::to_value(settings.recipe().map_err(|reason|reason.proof_message(localizer))?).map_err(|e|e.to_string()),
         ColorUiRequest::BareLayout {width,height,hdr} => {
             return serde_json::to_value(BareColorWheel::fit(width,height,hdr).ok_or("Invalid bare wheel allocation")?).map_err(|e|e.to_string());
+        },
+        ColorUiRequest::FitLayout {width,height,fixed_height,hdr} => {
+            return serde_json::to_value(ColorPanelLayout::fit(width,height,fixed_height,hdr)
+                .ok_or("Invalid color panel allocation")?).map_err(|e|e.to_string());
         },
         ColorUiRequest::Layout {size,hdr} => {
             let layout=if hdr {ColorPanelLayout::with_hdr(size)}else{ColorPanelLayout::new(size)}.ok_or("Invalid color panel size")?;
@@ -271,6 +276,23 @@ pub fn color_validation_localized(color: RgbColor, document: RgbSpace, display: 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn color_fit_transport_counts_fixed_parts_once_and_keeps_intrinsic_height() {
+        let reply = color_ui(serde_json::from_value(serde_json::json!({
+            "type":"fit_layout", "width":280., "height":200., "fixed_height":16., "hdr":true,
+        })).unwrap()).unwrap();
+        let fit = ColorPanelLayout::fit(280., Some(200.), 16., true).unwrap();
+        assert_eq!(reply, serde_json::to_value(fit).unwrap());
+        assert_eq!(reply["size"], 159.);
+        assert_eq!(reply["natural_height"], ColorPanelLayout::with_hdr(280.).unwrap().height());
+        let unconstrained = color_ui(serde_json::from_value(serde_json::json!({
+            "type":"fit_layout", "width":280.5, "height":null, "hdr":false,
+        })).unwrap()).unwrap();
+        assert_eq!(unconstrained["size"], 280.5);
+        assert!(color_ui(serde_json::from_value(serde_json::json!({
+            "type":"fit_layout", "width":280., "height":200., "fixed_height":-1.,
+        })).unwrap()).is_err());
+    }
     use super::*;
     #[test]
     fn native_intensity_points_keep_shared_precision_and_depth_bounds() {

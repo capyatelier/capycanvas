@@ -556,17 +556,9 @@ struct View:std::enable_shared_from_this<View>{
         if(std::abs(frameWidth-available)>.01||std::abs(frameHeight-height)>.01||layoutScale!=scale||layoutHdr!=hdr){
             frameWidth=available;frameHeight=height;layoutScale=scale;layoutHdr=hdr;
             root.MinHeight(std::ceil(num(geometry(data,128,hdr),L"height")));
-            double size=available;auto next=geometry(data,size,hdr);
-            if(fitHeight&&num(next,L"height")>height){
-                if(!hdr)size=std::floor(std::min(available,height)*scale)/scale;
-                else{
-                    int low=128,high=int(available);
-                    while(low<high){int middle=(low+high+1)/2;if(num(geometry(data,middle,true),L"height")<=height)low=middle;else high=middle-1;}
-                    size=low;
-                }
-                if(size<128)return;
-                next=geometry(data,size,hdr);
-            }
+            auto next=colorUi(data->localization.get(),O({{L"type",S(L"fit_layout")},{L"width",N(available)},
+                {L"height",fitHeight?N(height):JsonValue::CreateNullValue()},{L"hdr",B(hdr)}})).GetObject();
+            double size=num(next,L"size");
             cancel();cancelArc();panelSize=size;layout=next;arcKey=L"";
             double stageHeight=num(layout,L"height",size);
             if(!fitHeight)root.Height(stageHeight);stage.Width(panelSize);stage.Height(stageHeight);

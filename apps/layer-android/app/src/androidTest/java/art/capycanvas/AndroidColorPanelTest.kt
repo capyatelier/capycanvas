@@ -6,6 +6,11 @@ import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.ViewConfiguration
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.ViewRootForTest
@@ -909,6 +914,66 @@ class AndroidColorPanelTest {
         for (i in points.size - 1 downTo 1) send(MotionEvent.ACTION_POINTER_UP or (i shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), i + 1)
         send(MotionEvent.ACTION_UP, 1)
         host.drain(); settle()
+    }
+    @Test fun constrainedHdrPanelUsesLargestFittingStageAndKeepsNaturalMeasurement() {
+        host.createDrawing(320, 240, depth = "F16")
+        waitFor("HDR drawing ready") { view().optBoolean("hdr") && host.snapshot?.optBoolean("brush_ready") == true }
+        val report = JSONArray()
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            val panel = host.snapshot!!.array("panels").objects().first { it.getString("id") == "color" }
+            val expected = JSONObject(Native.colorUi(obj("type" to "layout", "size" to 280, "hdr" to true).toString(), host.languageTag))
+            val natural = (expected.number("height") * density).roundToInt() + 2 * (8 * density).roundToInt()
+            val originalOwner = owner
+            var measurement: PanelContentSize? = null
+            lateinit var nativeView: androidx.compose.ui.platform.ComposeView
+            instrumentation.runOnMainSync {
+                nativeView = androidx.compose.ui.platform.ComposeView(activity)
+                activity.addContentView(nativeView, android.widget.FrameLayout.LayoutParams((296 * density).roundToInt(), (200 * density).roundToInt()).apply {
+                    gravity = android.view.Gravity.TOP or android.view.Gravity.START
+                })
+            }
+            try {
+                instrumentation.runOnMainSync {
+                    nativeView.setContent {
+                        CompositionLocalProvider(LocalCanvasHost provides host, LocalPalette provides Palette(theme == "dark", state().getJSONObject("palette"))) {
+                            MaterialTheme(colorScheme = if (theme == "dark") androidx.compose.material3.darkColorScheme() else androidx.compose.material3.lightColorScheme()) {
+                                PanelControls(host, state(), panel, Modifier.fillMaxSize().testTag("fitted-color-body"), scrollable = false, onContent = { measurement = it })
+                            }
+                        }
+                    }
+                }
+                waitFor("$theme attached production Color panel") { nativeView.descendant<ViewRootForTest>()?.find(hasTag("color-panel")) != null }
+                instrumentation.runOnMainSync { owner = nativeView.descendant<ViewRootForTest>()!! }
+                for (height in listOf(200, 400)) {
+                    instrumentation.runOnMainSync { nativeView.layoutParams = nativeView.layoutParams.apply { this.height = (height * density).roundToInt() } }
+                    waitFor("$theme/$height native Color body") {
+                        find("fitted-color-body")?.boundsInRoot?.height?.let { abs(it - height * density) <= 1f } == true
+                    }
+                    val body = bounds("fitted-color-body")
+                    val stage = bounds("color-panel")
+                    assertEquals("$theme/$height Color keeps its full available width", 296 * density, body.width, 1f)
+                    assertEquals("$theme/$height selects the largest fitting stage", (if (height == 200) 159 else 280) * density, stage.width, 1f)
+                    assertTrue("$theme/$height the full HDR picker fits its body", stage.height <= (height - 16) * density + 1f)
+                    for (tag in listOf("color-wheel", "color-swatch-foreground", "color-swatch-background", "color-swatch-transparent", "color-swap", "color-hdr-intensity")) {
+                        val control = bounds(tag)
+                        assertTrue("$theme/$height $tag fits the stage: $control in $stage", control.left >= stage.left - 1f && control.top >= stage.top - 1f && control.right <= stage.right + 1f && control.bottom <= stage.bottom + 1f)
+                    }
+                    waitFor("$theme/$height width-only natural Color measurement") { measurement?.height?.let { abs(it * density - natural) <= 1f } == true }
+                    assertEquals("$theme/$height natural measurement ignores fitted height", natural.toFloat(), measurement!!.height * density, 1f)
+                    capture("hdr-fitted-$theme-$height").recycle()
+                    report.put(obj("theme" to theme, "body_height" to height, "stage_width" to stage.width / density,
+                        "stage_height" to stage.height / density, "natural_height" to measurement!!.height))
+                }
+            } finally {
+                instrumentation.runOnMainSync {
+                    owner = originalOwner
+                    nativeView.disposeComposition()
+                    (nativeView.parent as android.view.ViewGroup).removeView(nativeView)
+                }
+            }
+        }
+        File(output, "hdr-fitted.json").writeText(report.toString(2))
     }
     @Test fun hdrCaptionFitsNarrowAndNormalPanelsInBothThemes() {
         host.createDrawing(640, 480, depth = "F16")
