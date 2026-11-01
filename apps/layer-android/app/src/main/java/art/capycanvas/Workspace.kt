@@ -330,7 +330,7 @@ private val HiddenChromeShape=object:Shape {
         }
         workspaceFrames(host.catalog.optLong("panel_expansion_ms",200)) { place(it) }
         if (expanded == null) { dock.expansion = null; shownPanel = null; dock.refresh() }
-        else snapshotFlow { host.snapshot?.optJSONObject("layout")?.toString() to dock.configurationHeight }.collect { place(1f) }
+        else snapshotFlow { host.snapshot?.optJSONObject("layout")?.copy()?.toString() to dock.configurationHeight }.collect { place(1f) }
     }
     BackHandler(expanded != null) { host.customize(obj("type" to "close_expanded")) }
     BoxWithConstraints(Modifier.fillMaxSize().clipToBounds().testTag("workspace").bubbleGestures(bubbles).headerGestures(header).workspaceGestures(dock)

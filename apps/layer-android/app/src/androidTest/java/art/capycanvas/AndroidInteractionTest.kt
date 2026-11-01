@@ -1613,6 +1613,62 @@ class AndroidInteractionTest {
             columnFor(panel).objectOrNull("open") != null && group(panel).getString("active") == panel
         }; settle()
     }
+    @Test fun expandedPanelRefreshesRightAnchorWhenWindowWidthChanges() {
+        val dock = host.workspaceInteraction!!
+        val originalWidth = activity.window.attributes.width
+        val originalHeight = activity.window.attributes.height
+        fun expansion() = checkNotNull(kotlinx.coroutines.runBlocking { host.awaitQuery(obj("type" to "expansion", "panel" to "brushes",
+            "heights" to JSONArray(listOf(0f, dock.configurationHeight)), "progress" to 1f, "closing" to false)) })
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            val scene = JSONObject(fixture.toString()).apply { getJSONObject("layout").apply {
+                put("bands", JSONArray(listOf(obj("id" to 640, "edge" to "right", "extent" to 252, "root" to tabs(641, "brushes")))))
+                put("floating", JSONArray()); put("collapsed", JSONArray()); put("column_stacks", JSONArray()); put("next_id", 650)
+            } }
+            action(obj("type" to "restore_workspace", "workspace" to scene))
+            val work = bounds("workspace")
+            assertTrue("Both allocations keep the full configuration width", work.width / density - 200f > 640f)
+            customize(obj("type" to "show_all_controls", "panel" to "brushes"))
+            try {
+                waitFor("$theme configuration opens at its full allocation") {
+                    dock.configurationHeight > 0f && dock.expansion?.getJSONObject("configuration")?.number("width") == 380f
+                }
+                val before = expansion()
+                waitFor("$theme initial expansion reaches its resolved bounds") {
+                    dock.expansion?.getJSONObject("bounds")?.toString() == before.getJSONObject("bounds").toString()
+                }
+                val height = dock.configurationHeight
+                val resizedWidth = kotlin.math.round(work.width - 200f * density).toInt()
+                onMain { activity.window.setLayout(resizedWidth, kotlin.math.round(work.height).toInt()) }
+                waitFor("$theme width-only allocation reaches the native viewport") {
+                    val viewport = state().getJSONObject("camera").array("viewport")
+                    kotlin.math.abs(viewport.getDouble(0) - resizedWidth) <= 1f && kotlin.math.abs(viewport.getDouble(1) - work.height) <= 1f
+                }
+                val after = expansion()
+                assertEquals("$theme configuration content height is unchanged", height, dock.configurationHeight, .01f)
+                assertEquals("$theme configuration keeps its full width", 380f, after.getJSONObject("configuration").number("width"), .01f)
+                val expected = after.getJSONObject("bounds")
+                assertTrue("$theme the right anchor changes", kotlin.math.abs(before.getJSONObject("bounds").number("x") - expected.number("x")) > 100f)
+                waitFor("$theme expanded panel follows the current Rust anchor without a content-height change") {
+                    dock.expansion?.getJSONObject("bounds")?.toString() == expected.toString()
+                }
+                val native = bounds("group-641").translate(-bounds("workspace").topLeft)
+                assertEquals("$theme native configuration left", expected.number("x") * density, native.left, 1f)
+                assertEquals("$theme native configuration top", expected.number("y") * density, native.top, 1f)
+                assertEquals("$theme native configuration right", (expected.number("x") + expected.number("width")) * density, native.right, 1f)
+                assertEquals("$theme native configuration bottom", (expected.number("y") + expected.number("height")) * density, native.bottom, 1f)
+                assertEquals("$theme content height stays constant after presentation", height, dock.configurationHeight, .01f)
+                screenshot("validation/expanded-panel/$theme-resized.png")
+            } finally {
+                onMain { activity.window.setLayout(originalWidth, originalHeight) }
+                customize(obj("type" to "close_expanded"))
+            }
+            waitFor("$theme configuration closes and viewport restores") {
+                dock.expansion == null && kotlin.math.abs(state().getJSONObject("camera").array("viewport").getDouble(0) - work.width) <= 1f
+            }
+        }
+    }
+
     @Test fun configuringAnotherColumnRetainsNavigatorIdentity() {
         fixture.getJSONObject("layout").put("collapsed", JSONArray(listOf(41,43).map {
             obj("root" to it,"expanded_width" to 246)
