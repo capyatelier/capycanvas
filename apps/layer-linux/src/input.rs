@@ -19,18 +19,25 @@ mod tablet;
 #[derive(Default)]
 pub(crate) struct CompositionKeys {
     owned: RefCell<BTreeSet<u32>>,
+    passed: RefCell<BTreeSet<u32>>,
     current: Cell<Option<u32>>,
 }
 impl CompositionKeys {
     pub(crate) fn capture(&self, keycode: u32, composing: bool) -> bool {
         self.current.set(Some(keycode));
-        if composing { self.owned.borrow_mut().insert(keycode); }
+        if composing && !self.passed.borrow().contains(&keycode) { self.owned.borrow_mut().insert(keycode); }
         self.active()
     }
     pub(crate) fn active(&self) -> bool {
         self.current.get().is_some_and(|key| self.owned.borrow().contains(&key))
     }
+    fn busy(&self) -> bool { !self.owned.borrow().is_empty() || !self.passed.borrow().is_empty() }
+    fn pass(&self, keycode: u32) -> bool {
+        self.owned.borrow_mut().remove(&keycode);
+        self.passed.borrow_mut().insert(keycode)
+    }
     pub(crate) fn release(&self, keycode: u32) -> bool {
+        self.passed.borrow_mut().remove(&keycode);
         let owned = self.owned.borrow_mut().remove(&keycode);
         if self.current.get() == Some(keycode) { self.current.set(None); }
         owned
@@ -39,6 +46,7 @@ impl CompositionKeys {
         self.current.set(None);
         self.owned.borrow_mut().clear();
     }
+    fn cancel(&self) { self.clear(); self.passed.borrow_mut().clear(); }
 }
 
 #[derive(Default)]
@@ -48,10 +56,40 @@ pub(crate) struct EntryComposition {
 }
 impl EntryComposition {
     pub(crate) fn active(&self) -> bool { self.composing.get() || self.keys.active() }
+    pub(crate) fn busy(&self) -> bool { self.composing.get() || self.keys.busy() }
     pub(crate) fn marked(&self) -> bool { self.composing.get() }
     pub(crate) fn capture(&self, keycode: u32) -> bool { self.keys.capture(keycode, self.composing.get()) }
     pub(crate) fn release(&self, keycode: u32) -> bool { self.keys.release(keycode) }
     pub(crate) fn clear(&self) { self.composing.set(false); self.keys.clear(); }
+    pub(crate) fn bubble(self: &Rc<Self>, controller: &gtk::EventControllerKey, key: gdk::Key, keycode: u32) -> glib::Propagation {
+        if matches!(key, gdk::Key::Return | gdk::Key::KP_Enter | gdk::Key::ISO_Enter) && !self.marked() && self.keys.pass(keycode)
+            && let Some(widget) = controller.widget() && let Some(releases) = composition_releases(&widget) {
+            releases.borrow_mut().push(self.clone());
+        }
+        if self.active() { glib::Propagation::Stop } else { glib::Propagation::Proceed }
+    }
+}
+type CompositionReleases = Rc<RefCell<Vec<Rc<EntryComposition>>>>;
+fn composition_releases(widget: &impl IsA<gtk::Widget>) -> Option<CompositionReleases> {
+    let window = widget.root().and_downcast::<gtk::Window>()?;
+    if let Some(releases) = unsafe { window.data::<CompositionReleases>("capy-composition-releases") } {
+        return Some(unsafe { releases.as_ref() }.clone());
+    }
+    let releases = CompositionReleases::default();
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    keys.connect_key_released(glib::clone!(#[strong] releases, move |_, _, code, _| {
+        releases.borrow_mut().retain(|entry| { entry.release(code); entry.busy() });
+    }));
+    window.connect_is_active_notify(glib::clone!(#[strong] releases, move |window| {
+        if !window.is_active() { for entry in releases.borrow_mut().drain(..) { entry.keys.cancel(); } }
+    }));
+    window.connect_unmap(glib::clone!(#[strong] releases, move |_| {
+        for entry in releases.borrow_mut().drain(..) { entry.keys.cancel(); }
+    }));
+    window.add_controller(keys);
+    unsafe { window.set_data("capy-composition-releases", releases.clone()); }
+    Some(releases)
 }
 pub(crate) fn guard_entry_activation(entry: &gtk::Entry) -> Rc<EntryComposition> {
     guard_editable_activation(entry)
@@ -69,6 +107,8 @@ pub(crate) fn guard_editable_activation(entry: &(impl IsA<gtk::Widget> + IsA<gtk
         return ownership;
     }
     let ownership = Rc::new(EntryComposition::default());
+    editable.connect_map(|widget| { composition_releases(widget); });
+    composition_releases(&editable);
     if let Some(text) = editable.downcast_ref::<gtk::Text>() {
         text.connect_preedit_changed(glib::clone!(#[strong] ownership, move |_, preedit| ownership.composing.set(!preedit.is_empty())));
     }
@@ -82,9 +122,7 @@ pub(crate) fn guard_editable_activation(entry: &(impl IsA<gtk::Widget> + IsA<gtk
     editable.add_controller(keys);
     let bubble = gtk::EventControllerKey::new();
     bubble.set_propagation_phase(gtk::PropagationPhase::Bubble);
-    bubble.connect_key_pressed(glib::clone!(#[strong] ownership, move |_, _, _, _| {
-        if ownership.active() { glib::Propagation::Stop } else { glib::Propagation::Proceed }
-    }));
+    bubble.connect_key_pressed(glib::clone!(#[strong] ownership, move |controller, key, code, _| ownership.bubble(controller, key, code)));
     editable.add_controller(bubble);
     let focus = gtk::EventControllerFocus::new();
     focus.connect_leave(glib::clone!(#[strong] ownership, move |_| ownership.clear()));
@@ -104,6 +142,9 @@ pub(crate) fn stop_search(entry: &gtk::SearchEntry, handler: impl Fn(&gtk::Searc
 pub(crate) fn localization_input_busy(window: &impl IsA<gtk::Window>) -> bool {
     let mut busy = false;
     for window in crate::text_language::owned_windows(window) {
+    if let Some(releases) = unsafe { window.data::<CompositionReleases>("capy-composition-releases") } {
+        busy |= unsafe { releases.as_ref() }.borrow().iter().any(|entry| entry.busy());
+    }
     crate::text_language::visit(window.upcast_ref(), &mut |widget| {
         busy |= widget.is_mapped() && (widget.is::<gtk::PopoverMenu>()
             || widget.is::<gtk::Popover>() && (widget.ancestor(gtk::DropDown::static_type()).is_some()
@@ -112,7 +153,7 @@ pub(crate) fn localization_input_busy(window: &impl IsA<gtk::Window>) -> bool {
             busy |= control.composing();
         }
         if let Some(ownership) = unsafe { widget.data::<Rc<EntryComposition>>("capy-entry-composition") } {
-            busy |= unsafe { ownership.as_ref() }.active();
+            busy |= unsafe { ownership.as_ref() }.busy();
         }
     });
     }
@@ -1125,12 +1166,32 @@ impl Input {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn passed_composition_key_stays_busy_after_retirement_until_release() {
+        for composing in [true, false] {
+            let keys = super::CompositionKeys::default();
+            assert_eq!(keys.capture(36, composing), composing);
+            assert!(keys.pass(36));
+            assert!(!keys.active());
+            assert!(keys.busy());
+            assert!(!keys.capture(36, true));
+            keys.clear();
+            assert!(keys.busy());
+            assert!(!keys.release(36));
+            assert!(!keys.busy());
+            assert!(keys.pass(36));
+            keys.cancel();
+            assert!(!keys.busy());
+        }
+    }
+
+    #[test]
     fn composition_keys_retain_same_press_until_release_or_retirement() {
         let keys = super::CompositionKeys::default();
         assert!(keys.capture(36, true));
         assert!(keys.active());
         assert!(keys.capture(36, false));
         assert!(!keys.capture(9, false));
+        assert!(keys.busy());
         assert!(!keys.release(9));
         assert!(keys.capture(36, false));
         assert!(keys.release(36));

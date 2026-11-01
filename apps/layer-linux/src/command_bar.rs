@@ -49,7 +49,7 @@ impl Closing {
 }
 
 impl CommandBar {
-    pub(crate) fn composition_busy(&self) -> bool { self.composition.active() }
+    pub(crate) fn composition_busy(&self) -> bool { self.composition.busy() }
 
     pub fn is_open(&self) -> bool {
         self.view.borrow().is_some()
@@ -317,9 +317,7 @@ impl CommandBar {
         let composed = gtk::EventControllerKey::new();
         composed.set_name(Some("command-search-composed-key"));
         composed.set_propagation_phase(gtk::PropagationPhase::Bubble);
-        composed.connect_key_pressed(glib::clone!(#[weak] w, #[upgrade_or] glib::Propagation::Proceed, move |_, _, _, _| {
-            if w.command_bar.composition.active() { glib::Propagation::Stop } else { glib::Propagation::Proceed }
-        }));
+        composed.connect_key_pressed(glib::clone!(#[weak] w, #[upgrade_or] glib::Propagation::Proceed, move |controller, key, code, _| w.command_bar.composition.bubble(controller, key, code)));
         self.root.add_controller(composed);
         let focus = gtk::EventControllerFocus::new();
         focus.connect_leave(glib::clone!(#[weak] w, move |_| w.command_bar.composition.clear()));

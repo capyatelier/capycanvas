@@ -505,7 +505,7 @@ impl ColorForm {
             } else {
                 field.entry.remove_css_class("error");
             }
-            blocked |= field.composition.active();
+            blocked |= field.composition.busy();
         }
         if let Some(callback) = self.blocked.borrow().as_ref() { callback(blocked); }
     }

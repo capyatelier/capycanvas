@@ -172,6 +172,7 @@ retain their reasons, literal names and actions when their captions change.
 
 Native text editors own Escape while editing, including composition. Shared
 shortcuts leave surrounding popups and drawers open until focus leaves the editor.
+An Enter consumed by the input method only confirms; an Enter passed to the field after commitment performs its normal action once with the committed text.
 
 Create the localization context before editing begins. Share it with the owners
 that need its text; prepare catalogs and static labels outside painting, pointer

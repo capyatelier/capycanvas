@@ -508,17 +508,39 @@ fn native_command_bar_preedit_guard() {
                 keys.emit_by_name::<()>("key-released", &[&key, &code, &gdk::ModifierType::empty()]);
                 assert_eq!(serde_json::to_value(state(&d.w).command_search).unwrap(), before);
             }
+            let language = d.w.localization().language();
+            let target = if language == UiLanguage::Japanese { UiLanguage::English } else { UiLanguage::Japanese };
+            if preedit == "한국어" {
+                let mut settings = state(&d.w).settings;
+                settings.language = LanguagePreference::Explicit(target);
+                d.w.dispatch(UiAction::RestoreSettings { settings: Box::new(settings) });
+            }
             assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
             text.emit_preedit_changed("");
-            entry.emit_by_name::<()>("activate", &[]);
-            assert_eq!(serde_json::to_value(state(&d.w).command_search).unwrap(), before);
-            assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
-            entry.emit_by_name::<()>("activate", &[]);
-            assert!(bubble.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
-            assert_eq!(serde_json::to_value(state(&d.w).command_search).unwrap(), before);
+            if preedit == "한국어" {
+                let controllers = text.observe_controllers();
+                let passed = (0..controllers.n_items()).find_map(|i| controllers.item(i).and_downcast::<gtk::EventControllerKey>()
+                    .filter(|controller| controller.propagation_phase() == gtk::PropagationPhase::Bubble)).unwrap();
+                assert!(!passed.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
+                assert!(!bubble.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
+                entry.emit_by_name::<()>("activate", &[]);
+                assert!(state(&d.w).command_search.is_none());
+                assert!(crate::input::localization_input_busy(&d.w.window));
+                pump(100);
+                assert_eq!(d.w.localization().language(), language);
+                entry.emit_by_name::<()>("activate", &[]);
+                assert!(state(&d.w).command_search.is_none());
+            } else {
+                entry.emit_by_name::<()>("activate", &[]);
+                assert_eq!(serde_json::to_value(state(&d.w).command_search).unwrap(), before);
+            }
             keys.emit_by_name::<()>("key-released", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]);
-            assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
-            entry.emit_by_name::<()>("activate", &[]);
+            assert!(!crate::input::localization_input_busy(&d.w.window));
+            if preedit == "한국어" { until(|| d.w.localization().language() == target, "Language publication after passed Enter release"); }
+            if preedit != "한국어" {
+                assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
+                entry.emit_by_name::<()>("activate", &[]);
+            }
             assert!(state(&d.w).command_search.is_none());
             d.w.dispatch(UiAction::Invoke { command: CommandId::SearchCommands });
             text.emit_preedit_changed(preedit);
