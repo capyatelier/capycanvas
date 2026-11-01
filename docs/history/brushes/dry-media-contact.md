@@ -53,7 +53,8 @@ T = R + (1 + kappa * R) * d              kappa = 0.25
 x = clamp((0.5 * p - T) / W, 0, 1)
 
 C = x*x * (3 - 2*x)
-L = (1 - Lambda) + Lambda*p
+H = 1 - (1 - Lambda)^2
+L = (1 - H) + H*p*p
 local_deposition = C * L
 ```
 
@@ -66,9 +67,8 @@ guarantee zero deposition at zero pressure.
 | --- | --- | --- |
 | `stylus_pressure` | Normalized device pressure. | Device input. |
 | `input_pressure` | Existing device calibration and input smoothing. | Input processing. |
-| `pressure_gain` | Preset material approach gain, clamped before Strength multiplication. | Brush material definition; no per-pose map. |
+| `pressure_gain` | Material approach gain, clamped before Strength multiplication; one in built-in dry presets. | Brush material definition; no per-pose map. |
 | `p_pen` | Calibrated physical pressure in `[0,1]`; controls pressure-driven dimensions. | Calculated. |
-| Pencil/crayon calibration | Pencil, Pointy Pencil and Crayon approach gain `0.7`; Shading Pencil `0.63`. These are 70% of their preceding gains, so maximum Strength matches the preceding 70% with the same Material hardness. | Brush definitions, independent of the Strength field and size mappings. |
 | `Strength` | Material-pressure multiplier in `[0,1]`, after existing Strength mappings. | Painting control; stable `flow` ID. |
 | `p` | Strength-scaled material pressure in `[0,1]`; drives contact and loading. | Calculated on the CPU per contact. |
 | `paper_height` | Paper height in `[0,1]`; larger values are peaks. Coordinates are stationary in document space. | Selected paper asset and its feature scale/orientation. |
@@ -86,18 +86,18 @@ guarantee zero deposition at zero pressure.
 
 ### Built-in material defaults
 
-These are recipe choices in the shared brush definitions. All seven presets start
-at Strength 100%; other brush families retain their own defaults.
+These are recipe choices in the shared brush definitions. All seven use approach
+gain one; their Strength defaults preserve their preceding material pressure.
 
-| Preset | Material hardness `Lambda` | Approach gain |
+| Preset | Material hardness `Lambda` | Strength |
 | --- | --- | --- |
-| Pencil | 0.90 | 0.70 |
-| Pointy Pencil | 0.95 | 0.70 |
-| Shading Pencil | 0.85 | 0.63 |
-| Charcoal | 0.55 | 0.85 |
-| Chalk | 0.15 | 0.75 |
-| Pastel Block | 0.50 | 0.85 |
-| Crayon | 0.90 | 0.70 |
+| Pencil | 0.70 | 70% |
+| Pointy Pencil | 0.75 | 70% |
+| Shading Pencil | 0.65 | 63% |
+| Charcoal | 0.55 | 85% |
+| Chalk | 0.15 | 75% |
+| Pastel Block | 0.60 | 85% |
+| Crayon | 0.90 | 70% |
 
 Higher pencil/crayon hardness makes light contact release less pigment. Powdery
 charcoal/pastel retain more pigment at light contact; Chalk retains the strongest
@@ -202,8 +202,13 @@ length through that point:
 
 ```text
 E = (1 / ell_full) * integral_over_I_segment(C * L) d_ell
+F = (1 / ell_full) * integral_over_full_chord(C * L) d_ell
 Delta_D = K * E
-D_new = D_old + Delta_D
+B = K * F
+p = contact.x = Strength * clamp(pen * pressure_gain, 0, 1)
+phi = mix(0.12, 1, p^3)
+room = max(0, B-D_old)
+D_new = D_old + mix(min(Delta_D,room), Delta_D, phi)
 A = 1 - exp(-D_new)
 alpha_stroke = opacity * A
 ```
@@ -217,11 +222,19 @@ without dividing by a zero chord.
 `E` is renderer exposure. `K` folds in the fixed optical normalization six,
 color alpha and directional feed; it is not another editor control. Strength
 enters only through material pressure, not through `K`. Dry contacts carry unit
-pigment feed; their pressure gain is already resolved on the CPU. `D` is a
-conceptual additive optical dose, not a requirement to store a new physical
+pigment feed; their material pressure is already resolved on the CPU. `D` is a
+conceptual optical dose, not a requirement to store a new physical
 pigment layer in the artwork. `A` describes ordinary same-color flow
 accumulation. Existing blending, selection and other accumulation modes retain
 their own renderer contracts.
+
+Coarse full-pass exposure uses exact full-transfer length and three-node
+Gauss–Legendre integration of the ramps. Fine contacts reuse their filtered
+full-pass dose; a tap is its own pass. A completion uses
+`B=K*max(max F, sum E + E_completion)`, so it fills the rest of the same pass.
+Filtered caps retain the full-pass budget of their point-sampled incident contacts.
+Incident contacts compose in stroke order. Self-overlap beyond a full pass is
+dwell and follows the same grip law, including inner corners and hairpins.
 
 Resolve pose parameters on the CPU per retained input/contact, and send compact
 resolved data to the GPU. Use predefined fixed-pose integrals and bounded
@@ -506,21 +519,21 @@ is not a substitute for appropriate contact recruitment.
 Its use as contact transfer is our approximation, not a transfer law established
 by the drawing-material papers.
 
-### 8. Loading: `L = (1-Lambda) + Lambda*p`
+### 8. Loading: `L = (1-H) + H*p*p`
 
 **Purpose.** Control pigment amount at an engaged contact separately from
 recruiting contacts. A paper peak already at `C=1` can continue depositing more
 as pressure rises. Relief alone cannot supply that behavior while keeping the
 contact saturated.
 
-**Choice and constants.** `L` blends constant loading and pressure-proportional
-loading. `Lambda=0` makes pressure act through engagement and existing geometry;
-`Lambda=1` makes per-contact loading equal to pressure. Intermediate values
+**Choice and constants.** Displayed hardness `Lambda` resolves to
+`H=1-(1-Lambda)^2`. `L` blends constant loading and material pressure squared.
+`Lambda=0` makes pressure act through engagement and existing geometry;
+`Lambda=1` makes per-contact loading equal to pressure squared. Intermediate values
 retain strong individual grains during light shading while allowing additional
 pressure buildup. The material-pressure endpoint is normalized to one; full loading is reached
 only when calibrated pressure and Strength both reach one, unless `Lambda=0`
-makes loading constant. The affine form is the unique straight line
-between `L(0)=1-Lambda` and `L(1)=1`, with one free parameter.
+makes loading constant. Displayed 50% resolves to effective hardness 75%; both endpoints stay fixed.
 
 The painting control is **Material hardness**, with `Lambda` from zero to one.
 Contact stays pressure-sensitive throughout. Higher hardness makes pigment loading
@@ -535,9 +548,8 @@ A separate density control would duplicate the pressure effect expected from
 Strength. Scaling pigment dose by Strength independently was rejected: it
 weakens existing grains without recruiting or releasing paper contacts.
 
-**Alternatives.** Constant loading and pure `p` are retained as endpoints of the
-family. `(1-Lambda)+Lambda*p*p` cheaply delays loading until firmer pressure and
-remains a legitimate future material response. A smoothstep or general exponent
+**Alternatives.** Constant loading and pure `p*p` are retained as endpoints of the
+family. Linear pressure loading releases more pigment at light pressure. A smoothstep or general exponent
 of `p` provides more shaping but lacks a current requirement. Such loading can
 often be resolved per contact on the CPU, so it is not inherently expensive per
 pixel; nonlinearity can still increase integration complexity when pressure
@@ -549,8 +561,8 @@ threshold. No universal material values are prescribed by this record.
 
 **Research basis.** The [graphite model][graphite] distinguishes pigment transfer
 from paper damage. The [crayon model][crayon] relates transfer to contact and
-friction. They motivate a separate material response, not universally affine
-loading. Their material coefficients must not be confused with our `Lambda`.
+friction. They motivate a separate material response, not this particular
+loading curve. Their material coefficients must not be confused with our `Lambda`.
 
 ### 9. Swept exposure: normalized contact integral
 
@@ -607,29 +619,32 @@ follows area coverage and optical averaging rather than a new physical law.
 
 ### 10. Dose and opacity: `alpha = 1-exp(-D)`
 
-**Purpose.** Let repeated engaged passes deepen color smoothly while keeping
-opacity bounded. With nonnegative additive dose, raw coverage rises monotonically
-toward one. A contact can become optically dark without requiring every nearby
-paper contact to engage.
+**Purpose.** Preserve a first passage on blank paper, then reduce deposition on
+existing marks. Each contact lays its dose in full until the grain holds its
+full-pass optical dose `B`; beyond that only `phi` sticks. Grip rises with the
+cube of material pressure, from 0.12 to one at material pressure one.
+At Strength 100%, full pressure covers what is beneath; below 100%, full pressure
+slides over part of it.
 
-**Choice and constants.** Scaling is folded into `K`, leaving the displayed
-exponent coefficient at one. Small doses give approximately linear opacity;
-large doses have diminishing visible effect. For ordinary same-color source-over
-flow, adding doses is equivalent to multiplying transmittances:
+**Choice and constants.** Minimum grip `0.12` is a fixed engine choice.
+At fixed `B` and material pressure, unmasked, unlocked contacts compose independently of their partition.
+The exponential converts total optical dose to coverage; ordered contacts use:
 
 ```text
-1 - alpha_combined = exp(-D1) * exp(-D2) = exp(-(D1+D2))
+remaining = exp(D_before-D_after)
+q = 1-remaining
 ```
 
-This supports batched dose accumulation. It does not require per-pixel pigment
-mass, paper deformation or a new artwork storage representation.
+A second identical pass adds `phi*B`; after `k` such passes the dose is
+`B*(1+(k-1)*phi)`. Layering keeps building without a finite cap. No pigment-mass
+image, paper deformation or new artwork storage is required.
 
 **Strength as material pressure.** Strength multiplies calibrated pen pressure
 before contact and loading: `p=Strength*clamp(pressure_gain*p_pen,0,1)`. Reducing Strength lowers approach,
 recruits fewer paper locations and reduces loading through the same response as
 lower pressure. Physical pressure still drives contact dimensions and tilt still
 selects relief. At fixed geometry and effective pressure, Strength and pen
-pressure therefore produce the same material response. Pressure gain is clamped
+pressure therefore produce the same contact, loading and grip. Pressure gain is clamped
 before Strength multiplication; the GPU style uses unit gain for these resolved
 contacts. This avoids applying calibration twice.
 
@@ -642,12 +657,9 @@ pigment loading is selected by Material hardness within that response.
 The present multiplier is linear, bounded and resolved once
 per contact, with no additional per-pixel operation or integral degree.
 
-The three pencil recipes and Crayon calibrate their upper material response through
-`pressure_gain`, rather than scaling stored Strength. Multiplying their preceding
-gain by 0.7 makes new Strength 100% equal to prior Strength 70% at every physical
-pressure with the same Material hardness. Loading, paper eligibility and optical
-dose match at the same geometry. The seven dry presets default Strength to 100%;
-physical pressure-size curves stay unchanged.
+Strength sets overall material pressure; at 100%, full pressure saturates every grain it reaches.
+Material hardness sets light-touch loading; at full pressure loading is one at every hardness.
+Texture strength sets how many deep valleys stay white at full pressure.
 
 **Stroke ceiling.** Strength controls material pressure; Opacity limits the contribution of one
 stroke over its starting paint. For raw coverage `A`, the stroke contribution is
@@ -665,6 +677,10 @@ That scalar-only implementation is rejected for pointwise painting: after
 coverage saturates, it prevents later pigment colors from replacing earlier
 colors. Retaining the stroke's starting paint `B` gives the general composite
 `F=(1-opacity)*B+opacity*G`, where `G` is the full-opacity stroke result over `B`.
+Density starts from `G.a=(F.a-(1-opacity)*B.a)/opacity`, or from stored alpha
+without grouped Opacity. Zero Opacity leaves the pixel unchanged; full-grip contacts can replace opaque pigment.
+Selection multiplies the resulting increment `q` as an alpha mask; fractional
+selection retains its existing partition dependence.
 For Normal paint, a contact request `q` updates it directly:
 
 ```text
@@ -684,18 +700,17 @@ starting paint. Photoshop's
 [Opacity and Flow distinction](https://helpx.adobe.com/photoshop/using/painting-tools.html)
 motivates this digital control. It is separate from the dry-material contact law.
 
-**Alternatives.** Directly clipping a linear opacity sum saturates abruptly and
-does not preserve this compositing identity. Applying a nonlinear tone curve
-before integrating changes the accumulation behavior. Full Kubelka-Munk
-scattering, material transport, crayon smearing and persistent paper damage
-represent additional phenomena beyond this contact model. They are deferred,
+**Alternatives.** Independent tone curves on segment exposures lose partition
+invariance.
+Full Kubelka-Munk scattering, material transport, crayon smearing and persistent
+paper damage represent additional phenomena beyond this contact model. They are deferred,
 not claimed to be reproduced by tuning `Lambda` or relief.
 
-**Research basis.** [Physically Based Rendering's transmittance treatment][transmittance]
-gives exponential attenuation and additive optical thickness. Here it inspires
-a simple opacity approximation, not complete graphite or wax optics. The
-[crayon model][crayon] uses a richer scattering treatment that this design does
-not adopt.
+**Research basis.** [Sousa and Buchanan][graphite] model local graphite capacity;
+the friction blend in [Rudolf, Mould and Neufeld][crayon] motivates fading grip
+as material accumulates. The grip law and its constants are engine choices.
+[Transmittance][transmittance] motivates exponential coverage, without adopting
+the crayon model's scattering or transport.
 
 ## Intended artistic behavior and remaining choices
 

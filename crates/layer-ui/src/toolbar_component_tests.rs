@@ -390,7 +390,7 @@ fn toolbar_dry_settings_preserve_writing_size_and_default_pose_footprints() {
         (P::ShadingPencil,64.,[[0.28,0.28],[1.,0.55],[2.6,0.8]],false,0.65,0.63),
         (P::Charcoal,48.,[[0.65,0.65],[1.,0.65],[2.,0.8]],false,0.55,0.85),
         (P::Chalk,36.,[[0.55,0.55],[1.,0.8],[1.6,0.85]],true,0.15,0.75),
-        (P::PastelBlock,64.,[[0.55,0.55],[1.,0.65],[3.2,0.55]],true,0.50,0.85),
+        (P::PastelBlock,64.,[[0.55,0.55],[1.,0.65],[3.2,0.55]],true,0.60,0.85),
         (P::Crayon,32.,[[0.65,0.65],[1.,0.7],[2.6,0.85]],false,0.90,0.7),
     ] {
         s.dispatch(UiAction::SelectBrush {id:preset as u32}).unwrap();
@@ -408,7 +408,7 @@ fn toolbar_dry_settings_preserve_writing_size_and_default_pose_footprints() {
         assert_eq!((material.numeric.min,material.numeric.max,material.numeric.scale),(0.,1.,100.));
         assert!(material.numeric.endpoint_labels.is_none());
         let brush=s.engine.configured_brush();let dry=brush.contact.unwrap().dry.unwrap();
-        assert_eq!((brush.flow,dry.loading,brush.contact.unwrap().pressure_gain),(1.,loading,gain),"{preset:?}: authored defaults");
+        assert_eq!((brush.flow,dry.loading,brush.contact.unwrap().pressure_gain),(gain,loading,1.),"{preset:?}: authored defaults");
         assert_eq!(material.value,loading);
         assert_eq!(dry.softness,0.05);
         assert_eq!(dry.poses[1].radii[0].max(dry.poses[1].radii[1]),1.,"{preset:?}: 40° long axis");

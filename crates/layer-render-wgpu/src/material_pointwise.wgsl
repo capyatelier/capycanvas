@@ -17,6 +17,14 @@ fn pointwise_paint_fragment(fragment_position:vec4<f32>)->MaterialOutput {
     var dose=0.0;
     var background = vec4<f32>(0.0);
     if grouped { background = deposit_paint(dry_stroke_start(state_coordinate)); }
+    let grip=contact_feature(64u,style.contact_a.z>0.5) && !contact_uniform() && style.operation.w==0u;
+    if grip {
+        if style.canvas_opacity.z<=0.0 {
+            return MaterialOutput(result,vec4<f32>(stroke_coverage,0.0,0.0,1.0),vec4<f32>(0.0));
+        }
+        dose=-log(max(pointwise_transmittance(result,background),0.000001));
+    }
+    let initial_dose=dose;
     if aggregate && MATERIAL_OPERATION==OP_DEPOSIT && contact_feature(4096u,style.material_a.x>0.0)
         && !grouped && deposit_unchanged(result,background,dabs[range.x].color.rgb) {
         return MaterialOutput(result,vec4<f32>(0.0),vec4<f32>(0.0));
@@ -41,7 +49,7 @@ fn pointwise_paint_fragment(fragment_position:vec4<f32>)->MaterialOutput {
     let selected = brush_selection_at(world);
     for (var offset = 0u; offset < range.y; offset += 1u) {
         let dab = dabs[range.x + offset];
-        let contact=material_contact(dab,world,field,stroke_coverage,selected);
+        let contact=material_contact(dab,world,field,stroke_coverage,selected,dose);
         if (contact.flags & MATERIAL_HELD) != 0u {
             stroke_coverage=max(stroke_coverage,contact.coverage);
             continue;
@@ -49,11 +57,26 @@ fn pointwise_paint_fragment(fragment_position:vec4<f32>)->MaterialOutput {
         let pigment=contact.pigment;
         let coverage=contact.coverage;
         let repaint=(contact.flags & MATERIAL_REPAINT) != 0u;
-        if aggregate {dose+=coverage*dab.flow*dab.color.a;continue;}
+        if aggregate {
+            if grip {dose=relief_dose(dab,vec2<f32>(coverage,contact.reference),dose);}
+            else {dose+=coverage*dab.flow*dab.color.a;}
+            continue;
+        }
         if coverage <= 0.0 { continue; }
         var requested_alpha = brush_alpha(dab,coverage/max(selected,0.000001))*selected;
+        if grip {
+            let next=relief_dose(dab,vec2<f32>(coverage,contact.reference)/max(selected,0.000001),dose);
+            requested_alpha=(1.0-exp(dose-next))*selected;
+            if style.color.a<=0.5 {
+                if selected==1.0 && MATERIAL_OPERATION!=OP_CLONE {dose=next;}
+                else {
+                    let alpha=requested_alpha*select(1.0,clone_source.a,MATERIAL_OPERATION==OP_CLONE);
+                    dose-=log(max(1.0-alpha,0.000001));
+                }
+            }
+        }
         if contact_uniform() && MATERIAL_OPERATION != OP_CLONE && !bristles_enabled() && requested_alpha < 1.0 {
-            let laid = brush_alpha(dab,contact.start/max(selected,0.000001))*selected;
+            let laid = brush_alpha(dab,contact.reference/max(selected,0.000001))*selected;
             requested_alpha = clamp(working_ratio(requested_alpha-laid,1.0-laid),0.0,1.0);
         }
         if telescoped {
@@ -114,11 +137,12 @@ fn pointwise_paint_fragment(fragment_position:vec4<f32>)->MaterialOutput {
         result = select(result, erased, erasing);
     }
     if aggregate {
-        let remaining = exp(-6.0*dose);
-        if grouped && dose>0.0 {
+        var remaining = exp(-6.0*dose);
+        if grip {remaining=exp(initial_dose-dose);}
+        if grouped && remaining<1.0 {
             result = stored_paint(grouped_deposit(deposit_paint(result),background,dabs[range.x].color.rgb,1.0-remaining));
         } else if style.operation.w != 0u { result *= remaining; }
-        else if dose>0.0 {
+        else if remaining<1.0 {
             let alpha=1.0-remaining;
             let pigment=style.material_b.xyz;
             if result.a==0.0 || all(result.rgb==pigment*result.a) {
@@ -155,6 +179,13 @@ fn pointwise_paint_fragment(fragment_position:vec4<f32>)->MaterialOutput {
         vec4<f32>(stroke_coverage, 0.0, 0.0, 1.0),
         vec4<f32>(0.0),
     );
+}
+
+fn pointwise_transmittance(result:vec4<f32>,background:vec4<f32>)->f32 {
+    if grouped_opacity() {
+        return 1.0-(result.a-(1.0-style.canvas_opacity.z)*background.a)/style.canvas_opacity.z;
+    }
+    return 1.0-result.a;
 }
 
 fn pointwise_material_result(fragment_position:vec4<f32>)->MaterialOutput {

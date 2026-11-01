@@ -116,7 +116,7 @@ fn advanced_color(input: VertexOutput, opacity: f32) -> vec4<f32> {
                 input.flow_hardness.x,1.0,vec2<f32>(1.0),input.cached_material,input.previous,
                 input.contact,input.previous_contact,input.material,
                 vec4<f32>(input.texture_sign,input.flow_hardness.y,input.min_radius));
-            coverage=relief_contact(dab,input.world,field.y);
+            coverage=relief_contact(dab,input.world,field.y,0.0,true).x;
         } else {
             coverage=evolving_contact_prepared(input.world,input.center,input.geometry.xy,input.geometry.zw,
                 input.motion,input.previous,input.contact,input.previous_contact,input.flow_hardness.y,

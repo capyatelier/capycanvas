@@ -1881,6 +1881,31 @@ Raw records, screenshots, environment data, source hashes and the measured APK
 are in `artifacts/tilt-conversion/android/performance/`. These measurements
 qualify only the listed motions on the low-tier reference device.
 
+### Dry grip comparison, 2026-11-01
+
+TCL TAB 11 Gen 2, Mali-G52 MC2, 4248 × 2832 photo at Fit 0.336864,
+pressure 1, tilt 45°, SharedDemandRefresh, Stats closed, thermal status 0
+and factory display settings. Default sizes are Pencil 9, Charcoal 24 and
+Pastel Block 32.82051086425781. Pencil Size 1024 has geometric contact axes
+1632 × 753.6 document pixels at this pose. Matched control `0246f8374` →
+`4cbf8291e` plus the combined 4c grip/filter changes, APK `b6e3b483`.
+ABBA has six six-second contacts per arm and workload. Rates are medians;
+gaps are the worst contact p99; CPU is median contact mean.
+[All runs and separation](../../artifacts/dry-overdraw-capacity/production/phase-b4-device/device-results.csv).
+
+| Brush and work | Completed updates/s | Fresh updates/s | Fresh gap p99 worst (ms) | Owner CPU mean (ms) |
+| --- | --- | --- | --- | --- |
+| Pencil 1024, curve | 40.90 → 36.88 | 40.90 → 36.88 | 55.52 → 64.02 | 12.75 → 12.33 |
+| Pencil 1024, zigzag | 47.80 → 44.15 | 47.80 → 44.15 | 45.13 → 52.03 | 12.88 → 12.28 |
+| Pencil 9 (default), curve | 160.60 → 163.83 | 160.35 → 162.95 | 12.26 → 12.62 | 5.14 → 5.06 |
+| Charcoal 24 (default), curve | 161.48 → 163.22 | 160.56 → 162.47 | 11.46 → 11.34 | 5.15 → 5.09 |
+| Pastel 32.82051 (default), curve | 162.58 → 162.79 | 161.83 → 162.20 | 11.40 → 11.65 | 5.17 → 5.16 |
+| Pencil 1024, frequent lifts | 24.53 → 21.85 | 18.61 → 15.20 | 152.21 → 229.65 | 15.87 → 15.90 |
+
+The user accepted the 1024 cost for the grip law on 2026-11-01; main already misses these rows' 60 updates/s or 33.3 ms gap targets.
+The three default-size rows meet those targets and show no separated regression
+in completed rate, fresh rate or gap p99 against the matched control.
+
 ### Dry corner timing, 2026-10-31
 
 TCL TAB 11 Gen 2, Mali-G52, 4248 × 2832 photo at Fit 0.336864,

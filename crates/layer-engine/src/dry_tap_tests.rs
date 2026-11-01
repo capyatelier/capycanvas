@@ -44,7 +44,7 @@ fn dry_tap_waits_for_real_release_and_ignores_prediction_pressure() {
         assert_eq!(engine.backend().persistent.len(), 1, "{preset:?}");
         let tap = engine.backend().persistent[0];
         assert_eq!(tap.motion, [0., 0.]);
-        assert_eq!(tap.contact[0], engine.settings.pressure.map(0.2)*engine.settings.brush.contact.unwrap().pressure_gain);
+        assert_eq!(tap.contact[0], engine.settings.pressure.map(0.2)*engine.settings.brush.contact.unwrap().pressure_gain*engine.settings.brush.flow);
         let raster = active_paint(engine.document()).raster.identity();
         assert!(engine.undo().unwrap());
         assert!(active_paint(engine.document()).raster.is_empty());
@@ -117,8 +117,9 @@ fn dry_drag_flushes_without_a_tap_and_replays_at_either_frame_cadence() {
         let dabs=&engine.backend().persistent;
         let ordinary=dabs.iter().filter(|dab|!dab.is_completion()).collect::<Vec<_>>();
         assert!(ordinary.len()>1,"{preset:?}");
+        assert!(!dabs[0].is_completion(),"{preset:?}: incident body precedes its start completion");
         assert!(ordinary.iter().all(|dab|dab.motion!=[0.,0.]),"{preset:?}");
         assert_eq!(dabs.iter().filter(|dab|dab.is_completion()).count(),2,"{preset:?}: one completion at each end");
-        assert_eq!(ordinary[0].previous_contact[0], engine.settings.pressure.map(0.2)*engine.settings.brush.contact.unwrap().pressure_gain);
+        assert_eq!(ordinary[0].previous_contact[0], engine.settings.pressure.map(0.2)*engine.settings.brush.contact.unwrap().pressure_gain*engine.settings.brush.flow);
     }}}
 }

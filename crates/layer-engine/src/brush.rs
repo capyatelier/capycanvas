@@ -885,12 +885,12 @@ impl DabGenerator {
                 let completion = if brush.rendering.accumulation == layer_core::BrushAccumulation::Flow {
                     self.dry_completion.as_mut().map_or_else(Vec::new, |path| path.append(dab))
                 } else { Vec::new() };
+                if self.tap_peak.is_some() { Arc::make_mut(&mut self.pending_contacts).push(dab); }
+                else { include_dab(damage,dab); output.push(dab); }
                 for added in completion {
                     if self.tap_peak.is_some() { Arc::make_mut(&mut self.pending_contacts).push(added); }
                     else { include_dab(damage, added); output.push(added); }
                 }
-                if self.tap_peak.is_some() { Arc::make_mut(&mut self.pending_contacts).push(dab); }
-                else { include_dab(damage,dab); output.push(dab); }
             }
             return;
         }
@@ -2252,20 +2252,21 @@ mod tests {
     }
 
     #[test]
-    fn calibrated_dry_maximum_matches_prior_seventy_percent_material_pressure() {
+    fn dry_default_strength_matches_prior_gain_and_identical_dabs() {
         use layer_core::{DefaultBrushPreset as P,StrokeTool};
-        for (preset,prior_gain) in [(P::Pencil,1.),(P::PointyPencil,1.),(P::ShadingPencil,0.9),(P::Crayon,1.)] {
-            let mut current=layer_core::default_brush(preset);current.flow=1.;
+        for (preset,prior_gain) in [(P::Pencil,0.7),(P::PointyPencil,0.7),(P::ShadingPencil,0.63),
+            (P::Charcoal,0.85),(P::Chalk,0.75),(P::PastelBlock,0.85),(P::Crayon,0.7)] {
+            let current=layer_core::default_brush(preset);
             assert!(current.contact.unwrap().dry.unwrap().loading<=1.);
-            assert!((current.contact.unwrap().pressure_gain-prior_gain*0.7).abs()<0.000001,"{preset:?}: calibrated maximum");
-            let mut prior=current.clone();prior.flow=0.7;prior.contact.as_mut().unwrap().pressure_gain=prior_gain;
+            assert_eq!((current.flow,current.contact.unwrap().pressure_gain),(prior_gain,1.),"{preset:?}: authored defaults");
+            let mut prior=current.clone();prior.flow=1.;prior.contact.as_mut().unwrap().pressure_gain=prior_gain;
             for pressure in [0.,0.15,0.4,0.75,1.] {for tilt in [0.,0.25,0.5,0.85,1.] {for azimuth in [0,1] {
                 let mut input=point(20.,pressure,0);input.tilt=[0.;2];input.tilt[azimuth]=tilt*std::f32::consts::FRAC_PI_2;
                 let mut a=DabGenerator::default();let pose=a.characterize(input);let actual=a.evaluate(pose,&current).dab;
-                let mut expected=DabGenerator::default().evaluate(pose,&prior).dab;
-                assert!((actual.contact[0]-expected.contact[0]).abs()<0.000001,"{preset:?} p={pressure} tilt={tilt}: material pressure");
+                let expected=DabGenerator::default().evaluate(pose,&prior).dab;
+                assert_eq!(actual.contact[0],expected.contact[0],"{preset:?} p={pressure} tilt={tilt}: material pressure");
                 assert_eq!(actual.flow,1.);assert_eq!(expected.flow,1.);
-                expected.contact[0]=actual.contact[0];assert_eq!(actual,expected,"{preset:?}: physical geometry and all other contact fields");
+                assert_eq!(actual,expected,"{preset:?}: physical geometry and all contact fields");
                 assert_eq!(layer_render::DabStyle::for_brush(&current,StrokeTool::Brush).contact.unwrap().pressure_gain,current.contact.unwrap().pressure_gain);
                 assert_eq!(layer_render::DabStyle::for_brush(&prior,StrokeTool::Brush).contact.unwrap().pressure_gain,prior_gain);
             }}}

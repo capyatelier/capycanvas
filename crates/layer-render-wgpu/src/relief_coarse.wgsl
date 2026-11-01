@@ -1,3 +1,3 @@
-fn relief_contact(dab:Dab,world:vec2<f32>,paper:f32)->f32 {
-    return relief_evaluate(dab,world,paper,false).x;
+fn relief_contact(dab:Dab,world:vec2<f32>,paper:f32,held:f32,required:bool)->vec2<f32> {
+    return relief_exposure(dab,world,paper,held,required);
 }

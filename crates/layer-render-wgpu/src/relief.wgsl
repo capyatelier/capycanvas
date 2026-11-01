@@ -15,15 +15,17 @@ fn relief_ray(o: vec2<f32>, v: vec2<f32>) -> vec4<f32> {
     return vec4<f32>(middle,dot(nearest,nearest),speed2,1.0/speed2);
 }
 
+fn relief_interval(middle:f32,reach:f32,bounds:vec2<f32>)->vec2<f32> {
+    if reach<=0.0 {return vec2<f32>(bounds.x);}
+    let lo=clamp(middle-reach,bounds.x,bounds.y);
+    return vec2<f32>(lo,max(lo,clamp(middle+reach,bounds.x,bounds.y)));
+}
+
 fn relief_range(ray: vec4<f32>, limit: f32, bounds: vec2<f32>) -> vec2<f32> {
     if ray.z < 0.00000001 {
         return select(vec2<f32>(bounds.x), bounds, ray.y <= limit);
     }
-    let reach2 = (limit-ray.y)*ray.w;
-    if reach2 <= 0.0 { return vec2<f32>(bounds.x); }
-    let reach = sqrt(reach2);
-    let lo = clamp(ray.x-reach,bounds.x,bounds.y);
-    return vec2<f32>(lo,max(lo,clamp(ray.x+reach,bounds.x,bounds.y)));
+    return relief_interval(ray.x,sqrt(max(0.0,(limit-ray.y)*ray.w)),bounds);
 }
 
 fn relief_polynomial_pair(t2: f32, z: vec4<f32>, z4: f32) -> f32 {
@@ -63,43 +65,62 @@ fn relief_partial(o: vec2<f32>, v: vec2<f32>, interval: vec2<f32>, gap: f32,
 }
 
 fn relief_piece(o: vec2<f32>, v: vec2<f32>, ray: vec4<f32>, bounds: vec2<f32>, gap: f32,
-    k: f32, profile: vec3<f32>, whole: bool) -> vec2<f32> {
-    let support = bounds;
-    let full = support.y-support.x;
+    k: f32, profile: vec3<f32>, whole: bool, reference: bool) -> vec2<f32> {
+    let full = bounds.y-bounds.x;
     if full <= 0.0 { return vec2<f32>(0.0); }
-    let stroke = select(vec2<f32>(max(support.x,0.0),min(support.y,1.0)),support,whole);
-    if stroke.y <= stroke.x { return vec2<f32>(0.0,full); }
+    let stroke = select(vec2<f32>(max(bounds.x,0.0),min(bounds.y,1.0)),bounds,whole);
+    if stroke.y <= stroke.x { return vec2<f32>(0.0); }
     if ray.z < 0.00000001 || profile.y+profile.z <= 0.000001 {
         let q = dot(o,o);
         let c = relief_transfer((gap-k*(profile.x+q*(profile.y+profile.z*q)))*style.material_a.y);
-        return vec2<f32>(c*(stroke.y-stroke.x),full);
+        return vec2<f32>(c*(stroke.y-stroke.x),select(0.0,c*full,reference));
     }
-    let a = o+v*stroke.x;
-    let b = o+v*stroke.y;
-    let qmax = max(dot(a,a),dot(b,b));
-    if gap-k*(profile.x+qmax*(profile.y+profile.z*qmax)) >= 1.0/style.material_a.y {
-        return vec2<f32>(stroke.y-stroke.x,full);
+    var integral=0.0;
+    var reach=vec2<f32>(0.0);
+    var solved=false;
+    if !whole || !reference {
+        let a = o+v*stroke.x;
+        let b = o+v*stroke.y;
+        let qmax = max(dot(a,a),dot(b,b));
+        if gap-k*(profile.x+qmax*(profile.y+profile.z*qmax)) >= 1.0/style.material_a.y {
+            integral=stroke.y-stroke.x;
+        } else {
+            let half = 0.5*(stroke.y-stroke.x);
+            if ray.z*half*half < style.material_b.w && !contact_feature(4096u,style.material_a.x>0.0) {
+                let m = o+v*(stroke.x+half);
+                let near = v*(0.5384693101056831*half);
+                let far = v*(0.9061798459386640*half);
+                let q = vec4<f32>(dot(m-far,m-far),dot(m-near,m-near),dot(m+near,m+near),dot(m+far,m+far));
+                let qm = dot(m,m);
+                let z = clamp((gap-k*(profile.x+q*(profile.y+profile.z*q)))*style.material_a.y,vec4<f32>(0.0),vec4<f32>(1.0));
+                let zm = clamp((gap-k*(profile.x+qm*(profile.y+profile.z*qm)))*style.material_a.y,0.0,1.0);
+                let c = z*z*(3.0-2.0*z);
+                let sum = 0.2369268850561891*(c.x+c.w)+0.4786286704993665*(c.y+c.z)+0.5688888888888889*zm*zm*(3.0-2.0*zm);
+                integral=sum*half;
+            } else {
+                reach.x=sqrt(max(0.0,(relief_inverse(gap/k,profile)-ray.y)*ray.w));
+                let outer = relief_interval(ray.x,reach.x,stroke);
+                if outer.y <= outer.x { return vec2<f32>(0.0); }
+                reach.y=sqrt(max(0.0,(relief_inverse((gap-1.0/style.material_a.y)/k,profile)-ray.y)*ray.w));
+                solved=true;
+                let inner = relief_interval(ray.x,reach.y,outer);
+                integral = inner.y-inner.x
+                    +relief_partial(o,v,vec2<f32>(outer.x,inner.x),gap,k,profile)
+                    +relief_partial(o,v,vec2<f32>(inner.y,outer.y),gap,k,profile);
+            }
+        }
     }
-    let half = 0.5*(stroke.y-stroke.x);
-    if ray.z*half*half < style.material_b.w && !contact_feature(4096u,style.material_a.x>0.0) {
-        let m = o+v*(stroke.x+half);
-        let near = v*(0.5384693101056831*half);
-        let far = v*(0.9061798459386640*half);
-        let q = vec4<f32>(dot(m-far,m-far),dot(m-near,m-near),dot(m+near,m+near),dot(m+far,m+far));
-        let qm = dot(m,m);
-        let z = clamp((gap-k*(profile.x+q*(profile.y+profile.z*q)))*style.material_a.y,vec4<f32>(0.0),vec4<f32>(1.0));
-        let zm = clamp((gap-k*(profile.x+qm*(profile.y+profile.z*qm)))*style.material_a.y,0.0,1.0);
-        let c = z*z*(3.0-2.0*z);
-        let sum = 0.2369268850561891*(c.x+c.w)+0.4786286704993665*(c.y+c.z)+0.5688888888888889*zm*zm*(3.0-2.0*zm);
-        return vec2<f32>(sum*half,full);
+    if !reference || (!whole && integral<=0.0) {return vec2<f32>(integral,0.0);}
+    if !solved {reach=sqrt(max((vec2<f32>(relief_inverse(gap/k,profile),relief_inverse((gap-1.0/style.material_a.y)/k,profile))-vec2<f32>(ray.y))*ray.w,vec2<f32>(0.0)));}
+    let outer=relief_interval(ray.x,reach.x,bounds);
+    if outer.y<=outer.x {return vec2<f32>(integral,0.0);}
+    let inner_range=relief_interval(ray.x,reach.y,outer);
+    let inner=select(vec2<f32>(clamp(ray.x,outer.x,outer.y)),inner_range,inner_range.y>inner_range.x);
+    let right=relief_full_ramp(o,v,vec2<f32>(inner.y,outer.y),gap,k,profile);
+    if contact_feature(32768u,style.contact_c.z!=0.0) || contact_feature(4096u,style.material_a.x>0.0) {
+        return vec2<f32>(integral,inner.y-inner.x+right+relief_full_ramp(o,v,vec2<f32>(outer.x,inner.x),gap,k,profile));
     }
-    let outer = relief_range(ray,relief_inverse(gap/k,profile),stroke);
-    if outer.y <= outer.x { return vec2<f32>(0.0,full); }
-    let inner = relief_range(ray,relief_inverse((gap-1.0/style.material_a.y)/k,profile),outer);
-    let integral = inner.y-inner.x
-        +relief_partial(o,v,vec2<f32>(outer.x,inner.x),gap,k,profile)
-        +relief_partial(o,v,vec2<f32>(inner.y,outer.y),gap,k,profile);
-    return vec2<f32>(integral,full);
+    return vec2<f32>(integral,inner.y-inner.x+2.0*right);
 }
 
 fn relief_slab(o:f32,v:f32,inverse:f32,extent:f32)->vec2<f32> {
@@ -130,7 +151,7 @@ fn relief_origin(dab:Dab,origin:vec2<f32>)->vec2<f32> {
     return origin;
 }
 
-fn relief_evaluate(dab: Dab, world: vec2<f32>, paper: f32, paired: bool) -> vec2<f32> {
+fn relief_evaluate(dab: Dab, world: vec2<f32>, paper: f32, paired: bool, required: bool, held: f32) -> vec2<f32> {
     let relative = world-dab.center+dab.motion;
     let o = vec2<f32>(dot(relative,dab.metric.xy),dot(relative,dab.metric.zw));
     let corner = style.material_a.x;
@@ -149,6 +170,8 @@ fn relief_evaluate(dab: Dab, world: vec2<f32>, paper: f32, paired: bool) -> vec2
     let k = 1.0+0.25*d;
     let profile = input.yzw;
     if gap <= k*profile.x { return vec2<f32>(0.0); }
+    let loading=1.0-style.material_a.z+style.material_a.z*p*p;
+    let reference=required || (held!=0.0 && held<6.0*dab.flow*dab.color.a*loading);
     var engaged = true;
     var full_engaged = paired;
     if !rounded {
@@ -192,8 +215,8 @@ fn relief_evaluate(dab: Dab, world: vec2<f32>, paper: f32, paired: bool) -> vec2
             if ray.z<0.00000001 {field_ray=vec4<f32>(0.0,dot(origin,origin),0.0,0.0);}
         }
         sum.y = support.y-support.x;
-        if engaged {sum.x = relief_piece(origin,v,field_ray,support,gap,k,profile,false).x;}
-        if full_engaged {full_integral = relief_piece(origin,v,field_ray,support,gap,k,profile,true).x;}
+        if engaged {let measure=relief_piece(origin,v,field_ray,support,gap,k,profile,false,reference);sum.x=measure.x;full_integral=measure.y;}
+        if full_engaged {full_integral = relief_piece(origin,v,field_ray,support,gap,k,profile,true,false).x;}
     } else {
         var rim = dab.invariants.zw;
         if contact_uniform() {
@@ -208,26 +231,57 @@ fn relief_evaluate(dab: Dab, world: vec2<f32>, paper: f32, paired: bool) -> vec2
         let face = vec2<f32>(1.0)-rim;
         if all(max(abs(o+v*bounds.x),abs(o+v*bounds.y))<=face) {
             let contact=relief_transfer((gap-k*profile.x)*style.material_a.y);
-            return vec2<f32>(contact*(bounds.y-bounds.x)/sum.y*(1.0-style.material_a.z+style.material_a.z*p*p),0.0);
+            let exposure=contact*(bounds.y-bounds.x)/sum.y*loading;
+            var budget=0.0;
+            if reference && exposure>0.0 {budget=clamp(relief_beveled_walk(o,v,rim,support,gap,k,profile,true)/max(sum.y,0.000001),0.0,1.0)*loading;}
+            return vec2<f32>(exposure,budget);
         }
-        let moving = abs(v)>vec2<f32>(0.000001);
-        let safe = select(vec2<f32>(1.0),v,moving);
-        let cuts = vec4<f32>(select(vec2<f32>(bounds.y),(-face-o)/safe,moving),
-            select(vec2<f32>(bounds.y),(face-o)/safe,moving));
-        var lo = bounds.x;
-        for (var i = 0u; i < 5u; i += 1u) {
-            let next = select(vec4<f32>(bounds.y),cuts,cuts>vec4<f32>(lo+0.000001));
-            let hi = min(min(next.x,next.y),min(next.z,next.w));
-            let mid = o+v*((lo+hi)*0.5);
-            let engaged = abs(mid)>face;
-            let edge_o = select(vec2<f32>(0.0),(sign(mid)*o-face)/rim,engaged);
-            let po = vec2<f32>(edge_o.x+edge_o.y,0.0);
-            let edge_v = select(vec2<f32>(0.0),sign(mid)*v/rim,engaged);
-            let pv = vec2<f32>(edge_v.x+edge_v.y,0.0);
-            sum.x += relief_piece(po,pv,relief_ray(po,pv),vec2<f32>(lo,hi),gap,k,profile,false).x;
-            lo = hi;
-            if hi >= bounds.y { break; }
-        }
+        sum.x=relief_beveled_walk(o,v,rim,bounds,gap,k,profile,false);
+        if reference && sum.x>0.0 {full_integral=relief_beveled_walk(o,v,rim,support,gap,k,profile,true);}
     }
-    return clamp(vec2<f32>(sum.x,full_integral)/max(sum.y,0.000001),vec2<f32>(0.0),vec2<f32>(1.0))*(1.0-style.material_a.z+style.material_a.z*p*p);
+    return clamp(vec2<f32>(sum.x,full_integral)/max(sum.y,0.000001),vec2<f32>(0.0),vec2<f32>(1.0))*loading;
+}
+
+fn relief_beveled_walk(o:vec2<f32>,v:vec2<f32>,rim:vec2<f32>,bounds:vec2<f32>,gap:f32,k:f32,profile:vec3<f32>,full:bool)->f32 {
+    let face=vec2<f32>(1.0)-rim;
+    let moving=abs(v)>vec2<f32>(0.000001);
+    let safe=select(vec2<f32>(1.0),v,moving);
+    let cuts=vec4<f32>(select(vec2<f32>(bounds.y),(-face-o)/safe,moving),
+        select(vec2<f32>(bounds.y),(face-o)/safe,moving));
+    var sum=0.0;
+    var lo=bounds.x;
+    for(var i=0u;i<5u;i+=1u) {
+        let next=select(vec4<f32>(bounds.y),cuts,cuts>vec4<f32>(lo+0.000001));
+        let hi=min(min(next.x,next.y),min(next.z,next.w));
+        let mid=o+v*((lo+hi)*0.5);
+        let engaged=abs(mid)>face;
+        let edge_o=select(vec2<f32>(0.0),(sign(mid)*o-face)/rim,engaged);
+        let po=vec2<f32>(edge_o.x+edge_o.y,0.0);
+        let edge_v=select(vec2<f32>(0.0),sign(mid)*v/rim,engaged);
+        let pv=vec2<f32>(edge_v.x+edge_v.y,0.0);
+        let ray=relief_ray(po,pv);
+        if full {sum+=relief_piece(po,pv,ray,vec2<f32>(lo,hi),gap,k,profile,true,true).y;}
+        else {sum+=relief_piece(po,pv,ray,vec2<f32>(lo,hi),gap,k,profile,false,false).x;}
+        lo=hi;
+        if hi>=bounds.y {break;}
+    }
+    return sum;
+}
+
+fn relief_full_ramp(o:vec2<f32>,v:vec2<f32>,bounds:vec2<f32>,gap:f32,k:f32,profile:vec3<f32>)->f32 {
+    let half=0.5*(bounds.y-bounds.x);
+    if half<=0.0 {return 0.0;}
+    let center=o+v*(bounds.x+half);
+    let offset=v*(0.7745966692414834*half);
+    let q=vec3<f32>(dot(center-offset,center-offset),dot(center,center),dot(center+offset,center+offset));
+    let z=clamp((gap-k*(profile.x+q*(profile.y+profile.z*q)))*style.material_a.y,vec3<f32>(0.0),vec3<f32>(1.0));
+    return half*dot(z*z*(3.0-2.0*z),vec3<f32>(0.5555555555555556,0.8888888888888889,0.5555555555555556));
+}
+
+fn relief_exposure(dab:Dab,world:vec2<f32>,paper:f32,held:f32,required:bool)->vec2<f32> {
+    if contact_uniform() {return vec2<f32>(relief_evaluate(dab,world,paper,false,false,0.0).x,0.0);}
+    if all(dab.motion==vec2<f32>(0.0)) {return vec2<f32>(relief_evaluate(dab,world,paper,false,false,0.0).x);}
+    let exposure=relief_evaluate(dab,world,paper,false,required,held);
+    if exposure.x<=0.0 {return vec2<f32>(0.0);}
+    return vec2<f32>(exposure.x,max(exposure.x,exposure.y));
 }

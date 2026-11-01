@@ -76,23 +76,24 @@ fn relief_tap_pixel(dab:Dab,world:vec2<f32>,paper:f32,dose:f32)->f32 {
     return -log(max(1.0-integral.y,0.000001))/dose;
 }
 
-fn relief_contact(dab:Dab,world:vec2<f32>,paper:f32)->f32 {
+fn relief_contact(dab:Dab,world:vec2<f32>,paper:f32,held:f32,required:bool)->vec2<f32> {
     let axes=0.5*(dab.radii+dab.previous.xy);
     let radius=min(axes.x,axes.y);
-    var filtered=0.0;
+    var filtered=vec2<f32>(0.0);
     var blend=1.0;
-    if contact_feature(16384u,radius<8.0) && radius<8.0 && !contact_feature(4096u,style.material_a.x>0.0) {
+    let fine=contact_feature(16384u,radius<8.0) && radius<8.0 && !contact_feature(4096u,style.material_a.x>0.0);
+    if fine {
         let dose=6.0*dab.flow*dab.color.a;
-        if dose<=0.0 {return 0.0;}
-        if all(dab.motion == vec2<f32>(0.0)) {filtered=relief_tap_pixel(dab,world,paper,dose);}
+        if dose<=0.0 {return vec2<f32>(0.0);}
+        if all(dab.motion == vec2<f32>(0.0)) {filtered=vec2<f32>(relief_tap_pixel(dab,world,paper,dose));}
         else {filtered=relief_swept_pixel(dab,world,paper,dose,radius);}
         blend=relief_transfer((radius-4.0)*0.25);
     }
-    if blend>0.0 {filtered=mix(filtered,relief_evaluate(dab,world,paper,false).x,blend);}
+    if blend>0.0 {filtered=mix(filtered,relief_exposure(dab,world,paper,held,required || fine),blend);}
     return filtered;
 }
 
-fn relief_swept_pixel(dab:Dab,world:vec2<f32>,paper:f32,dose:f32,radius:f32)->f32 {
+fn relief_swept_pixel(dab:Dab,world:vec2<f32>,paper:f32,dose:f32,radius:f32)->vec2<f32> {
     let relative=world-dab.center+dab.motion;
     let transverse=dot(relative,dab.metric.zw);
     let pressure=max(dab.previous_contact.x,dab.contact.x);
@@ -100,7 +101,7 @@ fn relief_swept_pixel(dab:Dab,world:vec2<f32>,paper:f32,dose:f32,radius:f32)->f3
     let depth=0.5-clamp(0.5+style.contact_a.y*(paper-0.5),0.0,1.0);
     var limit=relief_inverse((0.5*clamp(pressure,0.0,1.0)-depth)/(1.0+0.25*depth),profile);
     if !contact_feature(32768u,style.contact_c.z!=0.0) {limit=min(1.0,limit);}
-    if limit<=0.0 {return 0.0;}
+    if limit<=0.0 {return vec2<f32>(0.0);}
     var normal=normalize(dab.metric.zw);
     var field_transverse=transverse;
     if contact_feature(32768u,style.contact_c.z!=0.0) {field_transverse+=dab.material.z;}
@@ -130,12 +131,13 @@ fn relief_swept_pixel(dab:Dab,world:vec2<f32>,paper:f32,dose:f32,radius:f32)->f3
             let probability=select(1.0/a,(half-abs(position))/max(a*b,0.00000001),abs(position)>flat);
             let weight=0.5*(span.y-span.x)*select(select(0.6521451548625461,0.3478548451374538,outer),1.0,taps==2u)*probability;
             let sample=world+normal*position;
-            let contact=relief_evaluate(dab,sample,paper,!contact_uniform());
+            let contact=relief_evaluate(dab,sample,paper,!contact_uniform(),false,0.0);
             exposure+=weight*contact;
             alpha+=weight*(1.0-exp(-dose*contact.y));
         }
     }
-    if contact_uniform() {return exposure.x;}
-    if exposure.y<=0.0 {return 0.0;}
-    return exposure.x*(-log(max(1.0-alpha,0.000001)))/(dose*exposure.y);
+    if contact_uniform() {return vec2<f32>(exposure.x,0.0);}
+    if exposure.y<=0.0 {return vec2<f32>(0.0);}
+    let full=-log(max(1.0-alpha,0.000001))/dose;
+    return vec2<f32>(exposure.x*full/exposure.y,full);
 }

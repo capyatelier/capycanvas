@@ -5,3 +5,12 @@ fn brush_alpha(dab: Dab, coverage: f32) -> f32 {
     }
     return clamp(dose,0.0,1.0);
 }
+
+fn relief_dose(dab:Dab,exposure:vec2<f32>,dose:f32)->f32 {
+    let feed=6.0*dab.flow*dab.color.a;
+    let full=feed*exposure.y;
+    let delta=feed*exposure.x;
+    let room=max(0.0,full-dose);
+    let phi=mix(0.12,1.0,dab.contact.x*dab.contact.x*dab.contact.x);
+    return dose+mix(min(delta,room),delta,phi);
+}

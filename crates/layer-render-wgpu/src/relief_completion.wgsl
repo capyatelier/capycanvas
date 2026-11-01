@@ -1,10 +1,10 @@
 fn completion_piece(o:vec2<f32>,v:vec2<f32>,bounds:vec2<f32>,gap:f32,k:f32,profile:vec3<f32>)->vec2<f32> {
     let ray=relief_ray(o,v);
-    let full=relief_piece(o,v,ray,bounds,gap,k,profile,true).x;
+    let full=relief_piece(o,v,ray,bounds,gap,k,profile,true,false).x;
     if bounds.x>=0.0 {return vec2<f32>(full);}
     if bounds.y<=0.0 {return vec2<f32>(0.0,full);}
     let half=vec2<f32>(max(bounds.x,0.0),max(bounds.y,0.0));
-    return vec2<f32>(relief_piece(o,v,ray,half,gap,k,profile,true).x,full);
+    return vec2<f32>(relief_piece(o,v,ray,half,gap,k,profile,true,false).x,full);
 }
 
 fn completion_radial_line(o:vec2<f32>,v:vec2<f32>,gap:f32,k:f32,profile:vec3<f32>,limits:vec2<f32>)->vec2<f32> {
@@ -63,9 +63,9 @@ fn completion_line(dab:Dab,o:vec2<f32>,v:vec2<f32>,gap:f32,k:f32,profile:vec3<f3
     return sum/(support.y-support.x);
 }
 
-fn completion_exposure(dab:Dab,world:vec2<f32>,paper:f32)->f32 {
+fn completion_exposure(dab:Dab,world:vec2<f32>,paper:f32)->vec2<f32> {
     let p=clamp(dab.contact.x,0.0,1.0);
-    if p<=0.0 {return 0.0;}
+    if p<=0.0 {return vec2<f32>(0.0);}
     let delta=world-dab.center;
     let o=vec2<f32>(dot(delta,dab.metric.xy),dot(delta,dab.metric.zw));
     let rounded=contact_feature(4096u,style.material_a.x>0.0);
@@ -74,22 +74,24 @@ fn completion_exposure(dab:Dab,world:vec2<f32>,paper:f32)->f32 {
         let edge=max(abs(o)-(vec2<f32>(1.0)-dab.material.yz),vec2<f32>(0.0))/dab.material.yz;
         q=(edge.x+edge.y)*(edge.x+edge.y);
     }
-    if q>1.0 {return 0.0;}
+    if q>1.0 {return vec2<f32>(0.0);}
     if !rounded && !contact_feature(32768u,style.contact_c.z!=0.0)
         && dot(dab.invariants.xy,dab.invariants.xy)>0.5 && dot(dab.invariants.zw,dab.invariants.zw)>0.5
-        && dot(o,dab.invariants.xy+dab.invariants.zw)<=0.0 {return 0.0;}
+        && dot(o,dab.invariants.xy+dab.invariants.zw)<=0.0 {return vec2<f32>(0.0);}
     if !rounded {let shifted=relief_origin(dab,o);q=dot(shifted,shifted);}
     let d=0.5-clamp(0.5+style.contact_a.y*(paper-0.5),0.0,1.0);
     let gap=0.5*p-d;
     let k=1.0+0.25*d;
     let profile=dab.contact.yzw;
     let window=relief_transfer((gap-k*(profile.x+q*(profile.y+profile.z*q)))*style.material_a.y);
-    if window<=0.0 {return 0.0;}
+    if window<=0.0 {return vec2<f32>(0.0);}
     var limits=vec2<f32>(0.0);
     if !rounded && !contact_feature(32768u,style.contact_c.z!=0.0) {
         limits=vec2<f32>(relief_inverse(gap/k,profile),relief_inverse((gap-1.0/style.material_a.y)/k,profile));
     }
     let a=completion_line(dab,o,dab.invariants.xy,gap,k,profile,limits);
     let b=completion_line(dab,o,dab.invariants.zw,gap,k,profile,limits);
-    return dab.texture_sign.y*window*max(0.0,max(a.y,b.y)-a.x-b.x)*(1.0-style.material_a.z+style.material_a.z*p*p);
+    let exposure=dab.texture_sign.y*window*max(0.0,max(a.y,b.y)-a.x-b.x);
+    return vec2<f32>(exposure,max(max(a.y,b.y),a.x+b.x+exposure))
+        *(1.0-style.material_a.z+style.material_a.z*p*p);
 }

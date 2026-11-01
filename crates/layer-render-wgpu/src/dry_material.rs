@@ -113,7 +113,7 @@ pub(super) fn coverage_source(flags:u32)->Cow<'static,str> {
     let contact=if fine {include_str!("relief_fine.wgsl")} else {include_str!("relief_coarse.wgsl")};
     let completed=flags==u32::MAX || flags&COMPLETION!=0;
     let completion=if completed {format!("{}\n{}\n{}",contact.replace("fn relief_contact(","fn relief_segment_contact("),include_str!("relief_completion.wgsl"),
-        if fine {include_str!("relief_completion_fine.wgsl")} else {"fn relief_contact(dab:Dab,world:vec2<f32>,paper:f32)->f32 {\n    if dab.texture_sign.x!=2.0 {return relief_segment_contact(dab,world,paper);}\n    return completion_exposure(dab,world,paper);\n}"})} else {String::new()};
+        if fine {include_str!("relief_completion_fine.wgsl")} else {"fn relief_contact(dab:Dab,world:vec2<f32>,paper:f32,held:f32,required:bool)->vec2<f32> {\n    if dab.texture_sign.x!=2.0 {return relief_segment_contact(dab,world,paper,held,required);}\n    return completion_exposure(dab,world,paper);\n}"})} else {String::new()};
     let relief_contact=if completed {completion.as_str()} else {contact};
     if flags!=u32::MAX && flags&64!=0 {
         compose_wgsl(&[include_str!("brush_math.wgsl"),include_str!("paper_sample.wgsl"),include_str!("contact_field.wgsl"),

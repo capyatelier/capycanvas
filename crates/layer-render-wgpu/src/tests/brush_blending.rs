@@ -165,6 +165,18 @@ fn uniform_stroke_colors_and_coverage_do_not_depend_on_contact_batching() {
     }
 }
 
+fn flat_dry_remaining(dab:&Dab,alpha:f64,mode:DabMode)->f64 {
+    let mut delta=6.*f64::from(dab.flow)*f64::from(dab.color_rgba_linear[3]);
+    if mode==DabMode::Paint {
+        let held=-(1.-alpha).max(0.000001).ln();
+        let room=(delta-held).max(0.);
+        let first=delta.min(room);
+        let phi=0.12+0.88*f64::from(dab.contact[0]).powi(3);
+        delta=first+(delta-first)*phi;
+    }
+    (-delta).exp()
+}
+
 #[test]
 fn dry_flow_batch_dose_matches_ordered_contacts_and_closed_form() {
     use layer_core::{BrushContact, BrushDryMedia, BrushDryPose, Selection, SelectionPixels};
@@ -240,7 +252,7 @@ fn dry_flow_batch_dose_matches_ordered_contacts_and_closed_form() {
                     for c in 0..3 { expected[c] = if expected[3]>0. {RgbSpace::Srgb.encode(expected[c]/expected[3])*expected[3]} else {0.}; }
                 }
                 for dab in &dabs {
-                    let alpha = (1.-(-6.*f64::from(dab.flow)*f64::from(dab.color_rgba_linear[3])).exp())*if selection {0.5} else {1.};
+                    let alpha = (1.-flat_dry_remaining(dab,expected[3],mode))*if selection {0.5} else {1.};
                     if mode == DabMode::Erase { if !locked { for value in &mut expected { *value *= 1.-alpha; } } }
                     else {
                         for c in 0..3 {
@@ -481,7 +493,7 @@ fn cropped_dry_dispatch_preserves_every_untouched_hdr_pixel() {
             r.encode_dry_material_jobs(&mut encoder,0,&batch,&[job]);
             encoder.submit(&r.queue);
             let actual=crate::test_support::float_pixels(r,&output.texture);
-            let remaining=(-6f64*f64::from(dab.flow)*f64::from(source_color[3])).exp();
+            let remaining=flat_dry_remaining(&dab,f64::from(underpaint[3]),mode);
             for y in 0..PAGE_SIZE {for x in 0..PAGE_SIZE {
                 let pixel=actual[(y*PAGE_SIZE+x) as usize];
                 let inside=x>=dirty.min_x()&&x<dirty.max_x()&&y>=dirty.min_y()&&y<dirty.max_y();
@@ -542,7 +554,6 @@ fn cropped_display_restores_hdr_blocks_at_partial_document_edges() {
             coverage:false,record_offset:0,dirty}]);
         encoder.submit(&r.queue);
         let actual=crate::test_support::float_pixels(r,&output.texture);
-        let remaining=(-6f64*f64::from(dab.flow)*f64::from(color[3])).exp();
         for y in 0..size[1] {for x in 0..size[0] {
             let start=[x*block,y*block];
             let end=[(start[0]+block).min(extent[0]),(start[1]+block).min(extent[1])];
@@ -555,6 +566,7 @@ fn cropped_display_restores_hdr_blocks_at_partial_document_edges() {
             }
             let center=[start[0]+block/2,start[1]+block/2];
             if center[0]>=dirty.min_x() && center[0]<dirty.max_x() && center[1]>=dirty.min_y() && center[1]<dirty.max_y() {
+                let remaining=flat_dry_remaining(&dab,expected[3],mode);
                 expected=if mode==DabMode::Erase {expected.map(|v|v*remaining)} else {
                     std::array::from_fn(|c|expected[c]*remaining+(if c==3 {1.} else {f64::from(color[c])})*(1.-remaining))};
             }
@@ -565,6 +577,26 @@ fn cropped_display_restores_hdr_blocks_at_partial_document_edges() {
     }}
 }
 
+
+#[test]
+fn zero_exposure_preserves_existing_float_paint_exactly() {
+    let mut canvas=Canvas::new(DocumentColor {depth:SampleDepth::F32,..Default::default()},BlendSpace::Linear,None);
+    canvas.fill(canvas.base,[0.2,0.3,0.4,41./65536.]);
+    let pixels=|c:&Canvas| {
+        let layer=c.r.paint_layers.iter().find(|l|l.id==c.base).unwrap();
+        crate::layer_tests::page_bytes(&c.r,&layer.pages[0].active().texture)
+    };
+    let before=pixels(&canvas);
+    let mut style=crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::Pencil);
+    style.rendering.accumulation=BrushAccumulation::Flow;
+    let mut dab=test_dab([64.,64.],[0.8,0.1,0.05,1.],1.);
+    dab.radii=[20.;2];dab.previous=[20.,20.,1.,0.];dab.motion=[3.,0.];
+    let profile=style.contact.unwrap().dry.unwrap().poses[0].relief;
+    dab.contact=[0.7,profile[0],profile[1],profile[2]];dab.previous_contact=dab.contact;
+    canvas.paint(canvas.base,style,dab);
+    let after=pixels(&canvas);let offset=(83*256+83)*16;
+    assert_eq!(before[offset..offset+16],after[offset..offset+16]);
+}
 
 #[test]
 fn independent_full_page_dispatch_preserves_contact_hull_pixels() {

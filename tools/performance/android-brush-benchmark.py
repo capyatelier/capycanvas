@@ -49,7 +49,7 @@ def main():
     p.add_argument("--size-idle-ms", type=int, default=0, help="Idle delay between selecting the brush and setting --size")
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--duration", type=int, default=10000)
-    p.add_argument("--size", type=int, default=1000)
+    p.add_argument("--size", type=float, default=1000)
     p.add_argument("--mode", default="constant")
     p.add_argument("--pause-ms", type=int, default=100, help="Gap between identical contacts in pauses mode")
     p.add_argument("--contact-ms", type=int, default=100, help="Contact duration in pauses mode")
@@ -138,7 +138,8 @@ def main():
         return subprocess.run(adb + list(items), check=True, **kw)
 
     for preset in map(int, args.presets.split(",")):
-        label = f"{args.prefix}-{PRESETS[preset]}-{args.size}-{args.mode}"
+        size_label = str(args.size).replace(".", "p")
+        label = f"{args.prefix}-{PRESETS[preset]}-{size_label}-{args.mode}"
         if args.workload != "ordinary":
             label += f"-{args.workload}"
         if args.live_filter:

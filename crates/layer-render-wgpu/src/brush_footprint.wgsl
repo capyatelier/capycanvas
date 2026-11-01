@@ -6,8 +6,12 @@ fn brush_footprint(dab: Dab, world: vec2<f32>, field: vec2<f32>) -> f32 {
     return unbristled_footprint(dab, world, field);
 }
 
-fn footprint_and_start(dab: Dab, world: vec2<f32>, field: vec2<f32>) -> vec2<f32> {
-    if !contact_feature(64u,style.contact_a.z>0.5) && contact_feature(1u, style.contact_a.x > 0.5) {
+fn footprint_and_start(dab: Dab, world: vec2<f32>, field: vec2<f32>, held:f32, required:bool) -> vec2<f32> {
+    if contact_feature(64u,style.contact_a.z>0.5) {
+        let exposure=relief_contact(dab,world,field.y,held,required);
+        return vec2<f32>(exposure.x,select(exposure.y,0.0,contact_uniform()));
+    }
+    if contact_feature(1u, style.contact_a.x > 0.5) {
         return evolving_contact(dab, world, field);
     }
     return vec2<f32>(unbristled_footprint(dab, world, field), 0.0);
@@ -20,7 +24,7 @@ fn evolving_contact(dab: Dab, world: vec2<f32>, field: vec2<f32>) -> vec2<f32> {
 }
 
 fn unbristled_footprint(dab: Dab, world: vec2<f32>, field: vec2<f32>) -> f32 {
-    if contact_feature(64u,style.contact_a.z>0.5) { return relief_contact(dab,world,field.y); }
+    if contact_feature(64u,style.contact_a.z>0.5) { return relief_contact(dab,world,field.y,0.0,true).x; }
     if contact_feature(1u, style.contact_a.x > 0.5) { return evolving_contact(dab, world, field).x; }
     let delta = world - dab.center;
     let local = rotate(delta, dab.rotation.x, -dab.rotation.y) / max(dab.radii, vec2<f32>(0.005));

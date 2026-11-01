@@ -51,7 +51,7 @@ struct MaterialOutput {
 
 const MATERIAL_REPAINT: u32 = 1u;
 const MATERIAL_HELD: u32 = 2u;
-struct MaterialContact { pigment:vec3<f32>, coverage:f32, start:f32, flags:u32 }
+struct MaterialContact { pigment:vec3<f32>, coverage:f32, reference:f32, flags:u32 }
 
 fn contact_coverage(dab: Dab, world: vec2<f32>) -> f32 {
     return contact_coverage_field(dab, world, contact_field(world));
@@ -161,5 +161,5 @@ fn material_alpha_locked(result:MaterialOutput, original:vec4<f32>)->MaterialOut
 fn pointwise_aggregate()->bool {
     return (MATERIAL_OPERATION==OP_DEPOSIT || MATERIAL_OPERATION==OP_COVERAGE)
         && contact_feature(64u,style.contact_a.z>0.5) && !contact_uniform()
-        && contact_feature(8192u,style.material_a.w>0.5) && style.material_a.w>0.5;
+        && contact_feature(8192u,style.material_a.w>0.5);
 }

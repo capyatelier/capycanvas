@@ -36,11 +36,11 @@ integration coordinates rotate with stroke motion. Pastel Block is square
 upright and long and narrow on its side; its writing-pose size stays the reference.
 
 Material pressure is `Strength*clamp(pen_pressure*pressure_gain,0,1)`, resolved
-on the CPU after Strength mappings. Pencil and Pointy Pencil use gain `0.7`;
-Shading Pencil uses `0.63`, and Crayon `0.7`. Their maximum response equals the
-preceding gains at Strength 70% with the same Material hardness; the Strength
-field is unscaled. Physical pen
-pressure still drives dimensions.
+on the CPU after Strength mappings. The seven dry presets use unit gain, with
+Strength defaults of 70%, 70%, 63%, 85%, 75%, 85% and 70% for Pencil, Pointy Pencil,
+Shading Pencil, Charcoal, Chalk, Pastel Block and Crayon. Default material pressure
+and physical pressure-driven dimensions are unchanged.
+Strength sets overall material pressure; at 100%, full pressure saturates every grain it reaches.
 Zero pressure or Strength deposits nothing. Increasing material pressure recruits lower paper contacts
 and increases their transfer; maximum pressure need not reach every recessed area.
 Texture strength scales the authored paper strength `S` from zero to twice the
@@ -52,9 +52,10 @@ material pressure. Displayed 50% gives effective hardness 75%; both endpoints st
 fixed. Hardness blends constant loading with material pressure squared without
 changing paper contact or brush dimensions. Contact always responds to material
 pressure. Pencil defaults to 70%, Pointy Pencil to 75%, and Shading Pencil to 65%.
-Crayon defaults high, Charcoal and Pastel Block medium, and Chalk low. All seven dry
-presets default Strength to 100%. A preset pressure gain below one keeps material
-pressure below one even at full stylus pressure.
+Crayon defaults to 90%, Charcoal to 55%, Pastel Block to 60%, and Chalk to 15%. All seven dry
+presets expose their material-pressure limit through their Strength defaults.
+Material hardness sets light-touch loading; at full pressure loading is one at every hardness.
+Texture strength sets how many deep valleys stay white at full pressure.
 Tilt changes the relief itself, including
 its interaction with paper, without additional per-pose paper or bite controls.
 The [decision record](../history/brushes/dry-media-contact.md) explains the constants,
@@ -189,11 +190,29 @@ Dose is `6*color_alpha*exposure`. The configured `flow` field stores Strength;
 resolved dry contacts carry unit `Dab.flow` and Strength-scaled material pressure
 in `Dab.contact[0]`. The renderer uses unit gain for these resolved contacts,
 so calibration is not applied twice. Strength does not
-multiply pigment dose separately. Raw coverage `A=1-exp(-dose)` adds optical depth
-across segments and repeated passes. The stroke contributes `opacity*A` over
-its starting paint.
-Unselected, unlocked normal batches with a single pigment sum their dose before
-one exponential and one blend. Erasing sums dose regardless of pigment color.
+multiply pigment dose separately. Dry Flow lays its dose in full until the grain
+holds one full-pass dose `B`; beyond that only `phi` sticks under the
+[grip law](../history/brushes/dry-media-contact.md#swept-exposure-and-pigment-accumulation).
+Grip follows resolved material pressure:
+
+```text
+p = contact.x = Strength * clamp(pen * pressure_gain, 0, 1)
+phi = mix(0.12, 1, p^3)
+room = max(0, B-D)
+D <- D + mix(min(dD,room), dD, phi)
+```
+
+At Strength 100%, full pressure covers what is beneath; below 100%, full pressure
+slides over part of it. Layering keeps building without a finite dose cap.
+Single passages keep their exposure; self-overlap within a stroke is dwell and
+follows the same buildup law as repeated strokes. Start caps follow their first
+body contact; completions fill the rest of their incident pass. Raw coverage remains `A=1-exp(-D)`.
+Grouped Opacity reconstructs full-opacity alpha from stored paint and retained
+stroke-start paint before integrating dose, then contributes `opacity*A` over
+that start. Fractional selection remains an alpha mask on each increment.
+Unselected, unlocked normal batches with a single pigment integrate contacts in
+stroke order before one exponential and one blend. Erasing keeps additive dose
+regardless of pigment color.
 Transparent paint and paint already carrying that same pigment also avoid a
 per-pixel color-space round trip; arbitrary underpaint retains the normal blend.
 Changing pigment colors, selections and locked alpha retain ordered deposition.

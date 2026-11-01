@@ -83,6 +83,170 @@ fn line(brush: BrushSnapshot, pressure: f32, tilt: f32, run: Run) -> support::Im
         [tilt * std::f32::consts::FRAC_PI_2, 0.]))
 }
 
+fn passes(brush: BrushSnapshot, pressures: &[f32], cadence: u64) -> Vec<support::Image> {
+    let (mut engine,mut input)=contact_engine(brush,Run::default());
+    let mut time=1_000_000_000;
+    pressures.iter().map(|&pressure| pass(&mut engine,&mut input,&mut time,pressure,cadence)).collect()
+}
+
+fn pass(engine:&mut support::Engine,input:&mut layer_engine::InputProducer<layer_engine::PenEvent>,
+    time:&mut u64,pressure:f32,cadence:u64)->support::Image {
+    for i in 0..=64 {
+        *time+=4_000_000;
+        let mut event=support::pen_sample(i,64,*time,Point {x:32.5+3.*i as f32,y:128.5});
+        event.sequence=*time;event.pressure=pressure;
+        input.push(event).unwrap();
+        if i%cadence==0 || i==64 {support::drain_input(engine,*time,true);}
+    }
+    support::image(engine,*time)
+}
+
+fn flat_dry_brush() -> BrushSnapshot {
+    let mut brush=analytic(0.,0.);
+    brush.flow=1.;brush.color_rgba_linear[3]=0.2;brush.stabilization.strength=0.;
+    let dry=brush.contact.as_mut().unwrap().dry.as_mut().unwrap();
+    dry.loading=1.;
+    for pose in &mut dry.poses {pose.relief=[0.;3];}
+    brush
+}
+
+#[test]
+fn dry_grip_light_over_heavy_adds_nonzero_dose() {
+    let brush=flat_dry_brush();
+    let images=passes(brush.clone(),&[1.,0.3],4);
+    let heavy=6.*f64::from(brush.color_rgba_linear[3])*reference_exposure(128,1.,&brush);
+    let light=6.*f64::from(brush.color_rgba_linear[3])*reference_exposure(128,0.3,&brush);
+    let expected=grip_dose(heavy,light,light,material_pressure(0.3,&brush));
+    let alpha=|dose:f64| (255.*(1.-(-dose).exp())).round() as u8;
+    let actual=images[1].rgba[(128*256+128)*4+3];
+    assert!(actual>images[0].rgba[(128*256+128)*4+3],"light contact must add pigment over a heavy pass");
+    assert!(actual.abs_diff(alpha(expected))<=1,"light over heavy: {actual}, expected {}",alpha(expected));
+    let blank=line(brush.clone(),0.3,0.,Run::default());
+    assert!(blank.rgba[(128*256+128)*4+3].abs_diff(alpha(light))<=1);
+}
+
+#[test]
+fn dry_grip_repeated_light_pass_adds_the_pressure_grip() {
+    let brush=flat_dry_brush();
+    let images=passes(brush.clone(),&[0.14,0.14],4);
+    let density=|image:&support::Image| -(1.-f64::from(image.rgba[(128*256+128)*4+3])/255.).ln();
+    let first=density(&images[0]);let second=density(&images[1]);
+    let full=6.*f64::from(brush.color_rgba_linear[3])*reference_exposure(128,0.14,&brush);
+    let expected=grip_dose(full,full,full,material_pressure(0.14,&brush));
+    let ratio=(second-first)/first;
+    assert!((ratio-(expected-full)/full).abs()<0.05,"density gain ratio {ratio}, expected {}",(expected-full)/full);
+}
+
+#[test]
+fn dry_grip_at_full_strength_and_pen_is_additive() {
+    let brush=flat_dry_brush();
+    let images=passes(brush.clone(),&[1.,1.],4);
+    let full=6.*f64::from(brush.color_rgba_linear[3])*reference_exposure(128,1.,&brush);
+    let alpha=|dose:f64| (255.*(1.-(-dose).exp())).round() as u8;
+    assert!(images[0].rgba[(128*256+128)*4+3].abs_diff(alpha(full))<=1);
+    let actual=images[1].rgba[(128*256+128)*4+3];
+    assert!(actual.abs_diff(alpha(2.*full))<=1,"full Strength and pen: {actual}, additive {}",alpha(2.*full));
+}
+
+#[test]
+fn pencil_default_strength_retains_partial_grip() {
+    let mut brush=default_brush(DefaultBrushPreset::Pencil);
+    brush.color_rgba_linear[3]=0.2;
+    for pressure in [1.,0.9] {
+        let images=passes(brush.clone(),&[pressure,pressure],4);
+        let full=6.*f64::from(brush.color_rgba_linear[3])*reference_exposure(128,f64::from(pressure),&brush);
+        let expected=grip_dose(full,full,full,material_pressure(f64::from(pressure),&brush));
+        let alpha=|dose:f64| (255.*(1.-(-dose).exp())).round() as u8;
+        assert!(images[0].rgba[(128*256+128)*4+3].abs_diff(alpha(full))<=1);
+        let actual=images[1].rgba[(128*256+128)*4+3];
+        assert!(actual.abs_diff(alpha(expected))<=1,"pen {pressure}: {actual}, expected {}",alpha(expected));
+        assert!(actual+2<alpha(2.*full),"pen {pressure}: {actual}, additive {}",alpha(2.*full));
+    }
+}
+
+#[test]
+fn dry_grip_at_half_strength_and_full_pen_is_partial() {
+    let mut brush=flat_dry_brush();brush.flow=0.5;
+    let images=passes(brush.clone(),&[1.,1.],4);
+    let full=6.*f64::from(brush.color_rgba_linear[3])*reference_exposure(128,1.,&brush);
+    let expected=grip_dose(full,full,full,material_pressure(1.,&brush));
+    let alpha=|dose:f64| (255.*(1.-(-dose).exp())).round() as u8;
+    assert!(images[0].rgba[(128*256+128)*4+3].abs_diff(alpha(full))<=1);
+    let actual=images[1].rgba[(128*256+128)*4+3];
+    assert!(actual.abs_diff(alpha(expected))<=1,"Strength .5: {actual}, expected {}",alpha(expected));
+    assert!(actual+2<alpha(2.*full),"Strength .5: {actual}, additive {}",alpha(2.*full));
+}
+
+#[test]
+fn dry_grip_heavy_over_light_retains_the_light_residue() {
+    let mut brush=flat_dry_brush();brush.color_rgba_linear[3]=0.5;
+    let images=passes(brush.clone(),&[0.2,0.35],4);
+    let light=6.*f64::from(brush.color_rgba_linear[3])*reference_exposure(128,0.2,&brush);
+    let heavy=6.*f64::from(brush.color_rgba_linear[3])*reference_exposure(128,0.35,&brush);
+    let expected=grip_dose(light,heavy,heavy,material_pressure(0.35,&brush));
+    let alpha=|dose:f64| (255.*(1.-(-dose).exp())).round() as u8;
+    let actual=images[1].rgba[(128*256+128)*4+3];
+    assert!(actual.abs_diff(alpha(expected))<=1,"heavy over light: {actual}, expected {}",alpha(expected));
+    assert!(actual>alpha(heavy));
+}
+
+#[test]
+fn dry_grip_grouped_opacity_preserves_light_over_heavy_across_cadences() {
+    let mut brush=analytic(0.,0.);
+    brush.flow=1.;brush.opacity=0.5;brush.color_rgba_linear[3]=0.2;brush.stabilization.strength=0.;
+    let reference=passes(brush.clone(),&[1.,0.25],1);
+    let heavy=6.*f64::from(brush.color_rgba_linear[3])*reference_exposure(128,1.,&brush);
+    let light=6.*f64::from(brush.color_rgba_linear[3])*reference_exposure(128,0.25,&brush);
+    let first=0.5*(1.-(-heavy).exp());
+    let dose=grip_dose(-(1.-first).ln(),light,light,material_pressure(0.25,&brush));
+    let expected=(255.*(0.5*first+0.5*(1.-(-dose).exp()))).round() as u8;
+    assert!(reference[1].rgba[(128*256+128)*4+3].abs_diff(expected)<=1);
+    let batched=passes(brush,&[1.,0.25],17);
+    for (a,b) in reference.iter().zip(&batched) {a.assert_near(b,1,"grouped grip cadence");}
+}
+
+#[test]
+fn dry_full_strength_and_pressure_color_covers_graphite_and_saturates() {
+    let mut brush=default_brush(DefaultBrushPreset::Pencil);
+    brush.diameter=80.;brush.flow=1.;brush.stabilization.strength=0.;brush.color_rgba_linear=[0.,0.,0.,1.];
+    let (mut engine,mut input)=contact_engine(brush.clone(),Run::default());
+    let mut time=1_000_000_000;
+    let first=pass(&mut engine,&mut input,&mut time,1.,4);
+    for _ in 0..2 {pass(&mut engine,&mut input,&mut time,1.,4);}
+    brush.color_rgba_linear=[1.,0.,0.,1.];engine.set_brush(brush.clone()).unwrap();
+    let actual=pass(&mut engine,&mut input,&mut time,1.,4);
+    let linear=engine.document().composition().blend==BlendSpace::Linear;
+    let expected=support::Image {size:first.size,rgba:first.rgba.as_chunks::<4>().0.iter().flat_map(|pixel| {
+        let a=f64::from(pixel[3])/255.;let alpha=1.-(1.-a).powi(4);
+        let red=if alpha>0. {a/alpha} else {0.};
+        let red=if linear {color::RgbSpace::Srgb.encode(red)} else {red};
+        [(255.*red).round() as u8,0,0,(255.*alpha).round() as u8]
+    }).collect()};
+    actual.assert_near(&expected,2,"full-Strength, full-pressure red over three heavy black passes");
+    brush.contact.as_mut().unwrap().paper=0.;
+    for hardness in [0.,0.5,1.] {
+        brush.contact.as_mut().unwrap().dry.as_mut().unwrap().loading=hardness;
+        let image=line(brush.clone(),1.,0.,Run::default());
+        assert!(image.rgba[(128*256+128)*4+3]>=253,"Strength 100%, hardness {hardness}: saturated core");
+    }
+}
+
+#[test]
+fn light_dry_caps_match_additive_reference() {
+    for (preset,pressure,hardness,paper,pixel,expected) in [
+        (DefaultBrushPreset::PointyPencil,0.15,0.,0.563,[33,128],71),
+        (DefaultBrushPreset::PointyPencil,0.15,0.25,0.564,[33,128],52),
+        (DefaultBrushPreset::Chalk,0.3,0.,0.627,[226,132],193),
+    ] {
+        let mut brush=default_brush(preset);
+        let contact=brush.contact.as_mut().unwrap();
+        contact.paper*=2.*paper-1.;contact.dry.as_mut().unwrap().loading=hardness;
+        let image=line(brush,pressure,0.,Run::default());
+        let actual=image.rgba[(pixel[1]*256+pixel[0])*4+3];
+        assert!(actual.abs_diff(expected)<=1,"{preset:?} pressure={pressure} hardness={hardness} cap={pixel:?}: alpha {actual}, additive {expected}");
+    }
+}
+
 fn analytic(corner: f32, paper: f32) -> BrushSnapshot {
     let mut brush = default_brush(DefaultBrushPreset::Pencil);
     brush.diameter = 80.;
@@ -159,6 +323,13 @@ fn reference_alpha(y: usize, pressure: f64, brush: &BrushSnapshot) -> u8 {
         *reference_exposure(y,pressure,brush)).exp())).round() as u8
 }
 
+fn grip_dose(dose:f64,delta:f64,full:f64,pressure:f64)->f64 {
+    let linear=(full-dose).max(0.);
+    let phi=0.12+0.88*pressure.clamp(0.,1.).powi(3);
+    let first=delta.min(linear);
+    dose+first+(delta-first)*phi
+}
+
 #[test]
 fn rotated_block_taps_keep_every_supported_corner_and_no_outside_pixels() {
     for angle in [0., 0.7] {
@@ -231,7 +402,7 @@ fn swept_contact_matches_independent_quadrature_for_ellipse_and_rounded_block() 
 fn pointy_tip_contrast_tracks_stylus_pose_when_motion_reverses() {
     let mut brush = default_brush(DefaultBrushPreset::PointyPencil);
     brush.diameter = 24.;
-    assert_eq!(brush.flow,1.);
+    assert_eq!((brush.flow,brush.contact.unwrap().pressure_gain),(0.7,1.));
     brush.mappings = Arc::from([]);
     brush.grain = None;
     brush.contact.as_mut().unwrap().paper = 0.;
@@ -405,13 +576,15 @@ fn pressure_recruits_contacts_without_forcing_the_rim_or_zero_force_to_paint() {
         }
         assert!(recruited>0 && empty>0,"hardness={hardness}: pressure recruits contacts while recessed paper stays empty");
     }
-    for (preset,prior_gain) in [(DefaultBrushPreset::Pencil,1.),(DefaultBrushPreset::PointyPencil,1.),(DefaultBrushPreset::ShadingPencil,0.9),(DefaultBrushPreset::Crayon,1.)] {
-        let mut current=default_brush(preset);current.flow=1.;
-        let mut prior=current.clone();prior.flow=0.7;prior.contact.as_mut().unwrap().pressure_gain=prior_gain;
+    for (preset,prior_gain) in [(DefaultBrushPreset::Pencil,0.7),(DefaultBrushPreset::PointyPencil,0.7),
+        (DefaultBrushPreset::ShadingPencil,0.63),(DefaultBrushPreset::Charcoal,0.85),
+        (DefaultBrushPreset::Chalk,0.75),(DefaultBrushPreset::PastelBlock,0.85),(DefaultBrushPreset::Crayon,0.7)] {
+        let current=default_brush(preset);
+        let mut prior=current.clone();prior.flow=1.;prior.contact.as_mut().unwrap().pressure_gain=prior_gain;
         for pressure in [0.25,0.7,1.] {for tilt in [0.,0.5,0.85] {
             let actual=line(current.clone(),pressure,tilt,Run::default());
             let expected=line(prior.clone(),pressure,tilt,Run::default());
-            actual.assert_near(&expected,2,&format!("{preset:?}: maximum matches prior70 pressure={pressure} tilt={tilt}"));
+            actual.assert_near(&expected,2,&format!("{preset:?}: default Strength matches prior gain pressure={pressure} tilt={tilt}"));
         }}
     }
     let image = line(analytic(0., 0.), 1., 0., Run::default());
@@ -744,8 +917,11 @@ fn nonflat_turn_completion_matches_independent_incident_chords() {
         let a=incident(f64::from(dy),f64::from(dx),true);
         let b=incident(f64::from(dx),f64::from(dy),false);
         let window=transfer(f64::from(dx*dx+dy*dy)/1600.);
-        let exposure=a[0]+b[0]+window*(a[1].max(b[1])-a[0]-b[0]).max(0.);
-        let expected=(255.*(1.-(-1.2*exposure).exp())).round() as u8;
+        let completion=window*(a[1].max(b[1])-a[0]-b[0]).max(0.);
+        let mut dose=grip_dose(0.,1.2*a[0],1.2*a[1],1.);
+        dose=grip_dose(dose,1.2*b[0],1.2*b[1],1.);
+        dose=grip_dose(dose,1.2*completion,1.2*a[1].max(b[1]).max(a[0]+b[0]+completion),1.);
+        let expected=(255.*(1.-(-dose).exp())).round() as u8;
         let x=(128+dx) as usize;let y=(128+dy) as usize;
         let actual=image.rgba[(y*256+x)*4+3];
         assert!(actual.abs_diff(expected)<=2,
@@ -789,12 +965,15 @@ fn broad_completion_preserves_independent_chord_exposure_across_tiles() {
         let squared=dx*dx+dy*dy;
         if (squared-radius*radius).abs()<2.*radius {continue;}
         if (px-64.5).hypot(dy)<=radius+1. || dx.hypot(py-960.5)<=radius+1. {continue;}
-        let mut exposure=chord(dy,px,64.5,512.5)+chord(dx,py,512.5,960.5);
+        let a=chord(dy,px,64.5,512.5);let b=chord(dx,py,512.5,960.5);
+        let mut dose=grip_dose(0.,1.2*a,1.2,1.);
+        dose=grip_dose(dose,1.2*b,1.2,1.);
         if squared<radius*radius {
             if dx>dy {outer+=1;} else {inner+=1;}
-            exposure=exposure.max(1.);
+            let completion=(1.-a-b).max(0.);
+            dose=grip_dose(dose,1.2*completion,1.2*(a+b+completion).max(1.),1.);
         }
-        let expected=(255.*(1.-(-1.2*exposure).exp())).round() as u8;
+        let expected=(255.*(1.-(-dose).exp())).round() as u8;
         let actual=image.rgba[(y*1024+x)*4+3];
         assert!(actual.abs_diff(expected)<=2,
             "cross-tile cap pixel=({x},{y}): GPU{actual} independent chord{expected}");
