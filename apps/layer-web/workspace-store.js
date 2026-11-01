@@ -2,7 +2,7 @@
 // fencing, counters, receipts, names, migration and retention policy.
 const ownerLock = "capy-workspace-owner:";
 export function createWorkspaceStore(reduce, { name = "capycanvas.workspaces", indexedDB = globalThis.indexedDB } = {}) {
-  let database, opening;
+  let database, opening, versionChecked = false;
   async function liveOwners() {
     const at = Date.now(), { held = [], pending = [] } = await navigator.locks.query();
     return [[...held, ...pending].flatMap(({ name }) => name?.startsWith(ownerLock) ? [name.slice(ownerLock.length)] : []), at];
@@ -32,19 +32,29 @@ export function createWorkspaceStore(reduce, { name = "capycanvas.workspaces", i
     const db = await open(), command = JSON.parse(request), [live, liveAt] = await liveOwners();
     return new Promise((resolve, reject) => {
       let tx, response, failure;
-      const readonly = !pending && readOnly.has(command.type);
+      const protect = !versionChecked || command.type === "reopen" || command.type === "adopted";
+      const readonly = !protect && !pending && readOnly.has(command.type);
       try {
         tx = db.transaction("workspace", readonly ? "readonly" : "readwrite", { durability: "strict" });
         const store = tx.objectStore("workspace"), read = store.get("database");
-        read.onsuccess = () => {
+        const marker = protect ? store.get("version") : null, unreadable = protect ? store.get("unreadable") : null;
+        (unreadable || read).onsuccess = () => {
           try {
-            const result = reduce(read.result?.snapshot, request, pending, Date.now(), live, liveAt);
+            const result = reduce(read.result?.snapshot, request, pending, Date.now(), live, liveAt,
+              protect ? {marker:marker.result?.value,unreadable:unreadable.result?.snapshot} : undefined);
             response = result.response;
+            if (protect) {
+              const plan = result.compatibility;
+              if (!plan) throw new Error("Workspace version protection did not complete.");
+              for (const copy of plan.copies) store.put(copy);
+              for (const id of plan.remove) store.delete(id);
+              store.put({id:"version",value:plan.marker});
+            }
             if (command.type === "reset" && read.result) store.put({ id: "unreadable", snapshot: read.result.snapshot });
-            if (!readonly) store.put({ id: "database", snapshot: result.snapshot });
+            if (result.snapshot != null) store.put({ id: "database", snapshot: result.snapshot });
           } catch (e) { failure = typeof e === "string" ? e : error(e); tx.abort(); }
         };
-        tx.oncomplete = () => resolve(response);
+        tx.oncomplete = () => { if (protect) versionChecked = true; resolve(response); };
         tx.onabort = () => reject(failure || error(tx.error || new Error("The workspace transaction was interrupted. Your changes have been kept.")));
         tx.onerror = () => {}; // onabort reports the complete transaction's result.
       } catch (e) { reject(error(e)); }

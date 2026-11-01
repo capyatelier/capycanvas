@@ -91,10 +91,13 @@ Unreadable workspace and toolbar rows remain listed and are skipped during
 startup and retention. Pending deliveries and switcher preferences remain
 opaque until read; unreadable ones are skipped and kept. Component collection
 scans raw item and delivery JSON and keeps referenced components. If it cannot
-follow a malformed graph, it skips collection. When no workspace can open,
-startup uses memory and leaves the stored rows in place.
-`Reset` refuses a store written by a newer build. A window still running an
-older build keeps that store and runs in memory.
+follow a malformed graph, it skips collection. When no workspace can be read,
+startup creates a new workspace from the included layout and leaves the
+unreadable rows untouched. Copy protection precedes schema setup, maintenance
+and ownership writes; copy retention runs only after adoption. See
+[version copies](storage.md#workspace-version-copies).
+`Reset` refuses a newer table schema. A build that cannot read that schema
+keeps the store and runs in memory.
 
 ## Verification
 
@@ -111,7 +114,7 @@ startup request in turn, with and without a healing reset.
 `startup_replaces_only_storage_it_cannot_read` checks that invalid records,
 unavailable, busy, owned, failed and full storage never reach `Reset`, and
 `stores_of_other_versions_serve_only_reset` checks the kept copy. The SQLite cases
-`sqlite_startup_keeps_unreadable_workspaces_and_runs_in_memory` and
+`sqlite_startup_creates_one_workspace_and_keeps_unreadable_rows` and
 `sqlite_startup_keeps_a_newer_store_and_runs_in_memory` cover the rest. The same
 journey runs on real storage with
 `node apps/layer-web/test.mjs --headless --stale-storage` and

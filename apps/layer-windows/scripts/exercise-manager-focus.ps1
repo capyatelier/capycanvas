@@ -45,7 +45,9 @@ function Launch([string]$Label){
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/manager-focus-review.json'),(@{process_id=$review.Id;run=$run}|ConvertTo-Json))
     Write-Output "Owned manager review $($review.Id) ($Label)"
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready} 'Manager review did not start' 45
-    $script:root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+    $owned=@{window=$null}
+    Wait-Until {$owned.window=Owned-DrawingWindow $review;$null -ne $owned.window} 'Owned drawing window is unavailable'
+    $script:root=$owned.window.Root
 }
 function Close {
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
@@ -56,13 +58,33 @@ try {
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
     $config=Join-Path $env:CAPY_STORAGE_DIR 'config'
     New-Item -ItemType Directory -Force $config|Out-Null
-    [IO.File]::WriteAllText((Join-Path $config 'settings.json'),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
+    $fixtures=Join-Path $repo 'crates/layer-workspace/tests/compat/1.0.15'
+    $workspaces=Join-Path $env:CAPY_STORAGE_DIR 'data/workspaces'
+    New-Item -ItemType Directory -Force $workspaces|Out-Null
+    Copy-Item -LiteralPath (Join-Path $fixtures 'workspaces.sqlite3') -Destination (Join-Path $workspaces 'workspaces.sqlite3')
+    Copy-Item -LiteralPath (Join-Path $fixtures 'export-presets') -Destination (Join-Path $config 'export-presets')
+    $settings=Get-Content -Raw -LiteralPath (Join-Path $fixtures 'settings.json')|ConvertFrom-Json
+    $settings.theme=$Theme
+    $settings.language=@{Explicit='en'}
+    [IO.File]::WriteAllText((Join-Path $config 'settings.json'),($settings|ConvertTo-Json -Depth 80))
     $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     Launch 'first'
+    $state=(Model).state
+    if($state.brush.diameter -ne 37 -or $state.settings.pan_speed -ne 1.5 -or $state.notice){throw 'Released editing settings were lost'}
+    $palette=$state.color_library.palettes|Where-Object name -eq 'Release palette'
+    if(!($palette.swatches|Where-Object name -eq 'Release blue')){throw 'Released palette was lost'}
+    if(!(Test-Path -LiteralPath (Join-Path $workspaces 'last-version')) -or @(Get-ChildItem -LiteralPath $workspaces -Filter 'workspaces.earlier.*.sqlite3').Count -ne 1){throw 'Version copy was not published'}
+    if(!(Model).state.workspace.zen_mode){throw 'Released working state was lost'}
     Menu 'Manage Workspaces…'
     $original=(Manager).selected
     Choose 'Cancel';Closed
     $first=$review;$firstRoot=$root
+    $secondProfile=Join-Path $run 'profile-second'
+    $secondData=Join-Path $secondProfile 'data'
+    New-Item -ItemType Directory -Force $secondData|Out-Null
+    Copy-Item -LiteralPath $config -Destination (Join-Path $secondProfile 'config') -Recurse
+    New-Item -ItemType Junction -Path (Join-Path $secondData 'workspaces') -Target $workspaces|Out-Null
+    $env:CAPY_STORAGE_DIR=$secondProfile
     Launch 'second'
     $second=$review;$secondRoot=$root
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/manager-focus-review.json'),(@{processes=@($first.Id,$second.Id);run=$run}|ConvertTo-Json))
@@ -86,7 +108,7 @@ try {
     Close
     $review=$second;$root=$secondRoot;$stderr=Join-Path $run 'second-stderr.log'
     Close
-    [pscustomobject]@{independent_workspaces='passed';owned_workspace_action='passed';native_window_activation='passed';source_workspace_retained='passed';zero_exit='passed';scope='two isolated native application processes; same-process New Window and physical input remain separate'}|ConvertTo-Json
+    [pscustomobject]@{independent_workspaces='passed';owned_workspace_action='passed';native_window_activation='passed';source_workspace_retained='passed';zero_exit='passed';scope='two isolated native application processes sharing the workspace store; same-process New Window and physical input remain separate'}|ConvertTo-Json
 }catch{
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw

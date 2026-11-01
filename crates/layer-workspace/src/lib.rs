@@ -14,6 +14,7 @@ mod protocol;
 pub use package::*;
 mod browser;
 mod retention;
+pub mod snapshots;
 mod store_rules;
 pub use browser::BrowserDatabase;
 mod controller;

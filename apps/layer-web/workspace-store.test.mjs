@@ -11,7 +11,7 @@ export async function checkWorkspaceStore({evaluate}) {
     const {createWorkspaceStore} = await import(resources.find(n => /workspace-store\\.[a-f0-9]+\\.js$/.test(n)) || './workspace-store.js');
     const name = 'capycanvas.contract.' + crypto.randomUUID();
     let now = 1000;
-    const reduce = (snapshot, request, pending) => glue.workspace_database(snapshot, request, pending, now);
+    const reduce = (snapshot, request, pending, _now, _live, _at, compatibility) => glue.workspace_database(snapshot, request, pending, now, undefined, 0, compatibility);
     const store = createWorkspaceStore(reduce, {name});
     const normalize = reply => {
       if (reply.type === 'list') reply.value.sort((a,b) => a.id.localeCompare(b.id));
@@ -68,6 +68,76 @@ export async function checkWorkspaceStore({evaluate}) {
   assert.equal(result.upgradeError, "unsupported_schema");
   assert.equal(result.unavailableError, "unavailable"); assert.equal(result.quotaError, "storage_full");
   console.log(`PASS: ${fixtures.length} IndexedDB/SQLite contract cases, aborted transaction, newer database, unavailable storage and quota errors`);
+  await checkWorkspaceSnapshots(evaluate);
+}
+
+async function checkWorkspaceSnapshots(evaluate) {
+  const released = await readFile(new URL("../../crates/layer-workspace/tests/compat/1.0.15/browser.json", import.meta.url), "utf8");
+  const result = await evaluate(`(async () => {
+    const resources = performance.getEntriesByType('resource').map(r => r.name);
+    const glue = await import(resources.find(n => /layer_web\\.[a-f0-9]+\\.js$/.test(n)) || './pkg/layer_web.js');
+    const {createWorkspaceStore} = await import(resources.find(n => /workspace-store\\.[a-f0-9]+\\.js$/.test(n)) || './workspace-store.js');
+    const name = 'capycanvas.snapshots.' + crypto.randomUUID();
+    const connection = await new Promise((resolve,reject) => {
+      const open = indexedDB.open(name,1);
+      open.onupgradeneeded = () => open.result.createObjectStore('workspace',{keyPath:'id'});
+      open.onsuccess = () => resolve(open.result); open.onerror = () => reject(open.error);
+    });
+    const records = async (values = []) => new Promise((resolve,reject) => {
+      const tx = connection.transaction('workspace',values.length ? 'readwrite' : 'readonly'), store = tx.objectStore('workspace');
+      for (const value of values) store.put(value);
+      const read = store.getAll();
+      tx.oncomplete = () => resolve(read.result.sort((a,b) => a.id.localeCompare(b.id)));
+      tx.onabort = () => reject(tx.error);
+    });
+    const encoded = value => JSON.stringify(value,(_key,value) => typeof value==='bigint' ? value.toString() : value);
+    const original = ${JSON.stringify(released)}, legacy = 'legacy unreadable bytes';
+    await records([{id:'database',snapshot:original},{id:'unreadable',snapshot:legacy},{id:'version',value:{version:'1.0.14',unreadable_hash:null,copies:[]}}]);
+    const reduce = (...args) => glue.workspace_database(...args);
+    const store = createWorkspaceStore(reduce,{name});
+    let aborted;
+    try {
+      await store.execute('{"type":"reopen"}');
+      const first = await records(), copies = first.filter(row => row.id.startsWith('snapshot:'));
+      await store.execute('{"type":"reopen"}');
+      const repeated = await records();
+      for (const version of ['99.0.0',...Array(10).fill('1.0.14')]) {
+        const marker = (await records()).find(row => row.id==='version');
+        marker.value.version = version; await records([marker]);
+        await store.execute('{"type":"reopen"}');
+      }
+      const beforeAdoption = (await records()).filter(row => row.id.startsWith('snapshot:')).length;
+      await store.execute('{"type":"adopted"}');
+      const kept = await records();
+      const marker = kept.find(row => row.id==='version'); marker.value.version='99.0.0'; await records([marker]);
+      const beforeAbort = await records();
+      aborted = createWorkspaceStore((...args) => {
+        const result = reduce(...args);
+        return {...result,get snapshot() { throw JSON.stringify({kind:'failed_write',message:'Abort after queued version copy'}); }};
+      },{name});
+      let abortError;
+      try { await aborted.execute('{"type":"reopen"}'); } catch(error) { abortError=JSON.parse(error).kind; }
+      const unchanged = encoded(beforeAbort)===encoded(await records());
+      marker.value.version='';
+      const restoredCopy = kept.find(row => row.snapshot===original);
+      await records([{id:'database',snapshot:restoredCopy.snapshot},marker]);
+      await store.execute('{"type":"reopen"}');
+      const restored = (await records()).find(row => row.id==='database').snapshot===original;
+      await store.execute('{"type":"adopted"}');
+      const restoredCount = (await records()).filter(row => row.id.startsWith('snapshot:')).length;
+      return {copies:copies.map(row => row.snapshot).sort(),repeated:encoded(first)===encoded(repeated),
+        beforeAdoption,kept:kept.filter(row => row.id.startsWith('snapshot:')).length,
+        metadata:kept.find(row => row.id==='version').value.copies.length,
+        abortError,unchanged,restored,restoredCount};
+    } finally { store.close(); aborted?.close(); connection.close(); indexedDB.deleteDatabase(name); }
+  })()`);
+  assert.deepEqual(result.copies, [released, "legacy unreadable bytes"].sort());
+  assert.ok(result.repeated);
+  assert.equal(result.beforeAdoption, 13);
+  assert.equal(result.kept, 10); assert.equal(result.metadata, 10);
+  assert.equal(result.abortError, "failed_write"); assert.ok(result.unchanged);
+  assert.ok(result.restored); assert.equal(result.restoredCount, 10);
+  console.log("PASS: Web version copies preserve released and legacy bytes, survive downgrade, prune after adoption, roll back queued copies on abort and restore by hand");
 }
 
 export async function checkStaleStorageStartup({evaluate, reload}) {
@@ -129,7 +199,6 @@ export async function checkStaleStorageStartup({evaluate, reload}) {
       };
     };
   })`;
-  const volatile = /^Workspace changes in this window won't be saved:/;
   await wait(ready);
   await evaluate('layerApp.documents.startRecovery()');
   await wait('(() => { const workspace = JSON.parse(layerApp.app.workspace_view()); return !workspace.dirty && !workspace.saving; })()');
@@ -143,12 +212,14 @@ export async function checkStaleStorageStartup({evaluate, reload}) {
   await restart();
   const view = JSON.parse(await evaluate("layerApp.app.workspace_view()"));
   assert.equal(view.error, null);
-  assert.equal(view.id, "builtin:workspace:illustrator");
-  assert.match(await evaluate('document.querySelector(".canvas-notice-text")?.textContent'), volatile);
+  assert.ok(!stale.includes(view.id));
+  assert.equal(await evaluate("!!layerApp.state().notice"), false);
   assert.equal(await evaluate('document.querySelector("#status").textContent'), "");
   assert.equal(await evaluate('[...document.querySelectorAll("dialog")].some(d => d.open)'), false);
   assert.equal(await evaluate(workspaceRecord("unreadable")), previousCopy);
-  assert.equal(await evaluate(workspaceRecord("database")), unreadable, "Unreadable workspaces remain in the original store");
+  const retained = JSON.parse(await evaluate(workspaceRecord("database")));
+  for (const id of stale) assert.deepEqual(retained.items[id], JSON.parse(unreadable).items[id]);
+  assert.equal(Object.keys(retained.items).length, stale.length + 1);
   assert.equal(await evaluate("layerApp.state().settings.pan_speed"), 2);
   assert.equal(await evaluate("layerApp.state().settings.zoom_speed"), 1);
   const zen = await evaluate(snapshot(`database => Object.values(database.items).map(item => item.entity.working.zen_mode)`));
@@ -175,7 +246,11 @@ export async function checkStaleStorageStartup({evaluate, reload}) {
   assert.equal(await evaluate("(async () => !!(await layerApp.app.export_presets({type: 'get', index: 0})).recipe)()"), true);
   await restart();
   assert.equal(JSON.parse(await evaluate("layerApp.app.workspace_view()")).error, null);
-  assert.match(await evaluate('document.querySelector(".canvas-notice-text")?.textContent || ""'), volatile);
+  assert.equal(await evaluate("!!layerApp.state().notice"), false);
+  assert.equal(JSON.parse(await evaluate("layerApp.app.workspace_view()")).id, view.id);
+  const restarted = JSON.parse(await evaluate(workspaceRecord("database")));
+  assert.equal(Object.keys(restarted.items).length, stale.length + 1);
+  for (const id of stale) assert.deepEqual(restarted.items[id], JSON.parse(unreadable).items[id]);
   assert.equal(await evaluate('document.querySelector("#status").textContent'), "");
   assert.equal(await evaluate("layerApp.state().settings.pan_speed"), 2);
   const released = JSON.parse(await readFile(new URL("../../crates/layer-workspace/tests/compat/1.0.15/browser.json", import.meta.url), "utf8"));
@@ -185,5 +260,5 @@ export async function checkStaleStorageStartup({evaluate, reload}) {
   assert.equal(await evaluate('layerApp.state().color_library.palettes.some(p => p.name === "Release palette" && p.swatches.some(s => s.name === "Release blue"))'), true);
   assert.equal(await evaluate('layerApp.state().brush.diameter'), 37);
   assert.equal(await evaluate('!!layerApp.state().notice'), false);
-  console.log(`PASS: startup read stale preferences, kept ${stale.length} unreadable workspaces and continued in memory, upgraded older color preferences without losing data, and opened Export without a message`);
+  console.log(`PASS: startup read stale preferences, kept ${stale.length} unreadable workspaces and created one persistent workspace, upgraded older color preferences without losing data, and opened Export without a message`);
 }

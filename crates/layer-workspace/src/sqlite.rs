@@ -92,14 +92,15 @@ impl SqliteStore {
         use rusqlite::{config::DbConfig, limits::Limit};
         connection.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
         connection.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)?;
+        connection.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)?;
         connection.set_limit(Limit::SQLITE_LIMIT_LENGTH, MAX_ROW_BYTES as i32)?;
         connection.set_limit(Limit::SQLITE_LIMIT_SQL_LENGTH, 64 * 1024)?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
-        connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "wal_autocheckpoint", 1000)?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        snapshots::protect(&tx)?;
         let incompatible = match tx.pragma_query_value(None, "user_version", |r| r.get(0))? {
             SCHEMA_VERSION => None,
             0 if table_names(&tx)?.is_empty() => {
@@ -110,6 +111,8 @@ impl SqliteStore {
             _ => Some(other_schema()),
         };
         tx.commit()?;
+        connection.pragma_update(None, "journal_mode", "WAL")?;
+        connection.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, false)?;
         Ok(Self {
             connection,
             clock,
@@ -147,13 +150,19 @@ impl SqliteStore {
             return Err(error.clone());
         }
         match request {
+            StoreRequest::Adopted => {
+                let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                snapshots::prune(&tx)?;
+                tx.commit()?;
+                Ok(StoreResponse::Done)
+            }
             StoreRequest::Reset => {
                 self.reset()?;
                 Ok(StoreResponse::Done)
             }
-            StoreRequest::Editing => {
+            StoreRequest::Editing { language } => {
                 let json: Option<String> = self.connection.query_row("SELECT json FROM editing WHERE id=1", [], |r| r.get(0)).optional()?;
-                Ok(StoreResponse::Editing(json))
+                Ok(StoreResponse::Editing(json.map(|json|Box::new(layer_ui::EditingState::restore(&json,&layer_ui::Localizer::shared(language))))))
             }
             StoreRequest::Switcher => self
                 .preference_ids("workspace_switcher")
@@ -790,3 +799,6 @@ mod tests;
 
 #[path = "sqlite_maintenance.rs"]
 mod maintenance;
+
+#[path = "sqlite_snapshots.rs"]
+mod snapshots;

@@ -121,6 +121,26 @@ fn unreadable_rows_deliveries_and_preferences_survive_maintenance() {
 }
 
 #[test]
+fn editing_reads_restore_fields_with_the_requested_language_without_writing() {
+    let mut f = Fixture::new();
+    let mut expected = layer_ui::EditingState::new_localized(&layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese));
+    expected.colors.set_rgba([0.2,0.4,0.7,1.]).unwrap();
+    let mut value = serde_json::to_value(&expected).unwrap();
+    value["color_library"]["palettes"] = "unreadable".into();
+    let original = value.to_string();
+    f.store.connection.execute("INSERT INTO editing(id,json) VALUES(1,?1)",[&original]).unwrap();
+    let mut value = serde_json::to_value(BrowserDatabase::default()).unwrap();
+    value["editing"] = original.clone().into();
+    let mut browser = BrowserDatabase::decode(&value.to_string()).unwrap();
+    for response in [f.store.handle(StoreRequest::Editing {language:layer_ui::UiLanguage::Japanese}).unwrap(),browser.execute(StoreRequest::Editing {language:layer_ui::UiLanguage::Japanese},1_000_000).unwrap()] {
+        let StoreResponse::Editing(Some(restored)) = response else {panic!()};
+        assert_eq!(*restored,expected);
+    }
+    assert_eq!(f.store.connection.query_row("SELECT json FROM editing",[],|row|row.get::<_,String>(0)).unwrap(),original);
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&browser.encoded().unwrap()).unwrap()["editing"],original);
+}
+
+#[test]
 fn editing_merge_falls_back_to_the_valid_incoming_document() {
     for current in ["not json",r#"{"preset":"unreadable"}"#] {
         let mut f = Fixture::new();
@@ -136,18 +156,18 @@ fn editing_merge_falls_back_to_the_valid_incoming_document() {
         batch.editing_fields = Some(vec!["colors".into()]);
         f.store.commit(batch.clone()).unwrap();
         browser.execute(StoreRequest::Commit {batch},1_000_000).unwrap();
-        for result in [f.store.handle(StoreRequest::Editing).unwrap(),browser.execute(StoreRequest::Editing,1_000_000).unwrap()] {
+        for result in [f.store.handle(StoreRequest::Editing {language:layer_ui::UiLanguage::English}).unwrap(),browser.execute(StoreRequest::Editing {language:layer_ui::UiLanguage::English},1_000_000).unwrap()] {
             let StoreResponse::Editing(Some(stored)) = result else {panic!()};
-            assert_eq!(serde_json::from_str::<layer_ui::EditingState>(&stored).unwrap(),incoming);
+            assert_eq!(*stored,incoming);
         }
         let mut invalid = CommitBatch::prepare(f.owner.clone(),vec![]).unwrap();
         invalid.editing_json = Some("{}".into());
         invalid.editing_fields = Some(vec!["colors".into()]);
         assert!(f.store.commit(invalid.clone()).is_err());
         assert!(browser.execute(StoreRequest::Commit {batch:invalid},1_000_000).is_err());
-        for result in [f.store.handle(StoreRequest::Editing).unwrap(),browser.execute(StoreRequest::Editing,1_000_000).unwrap()] {
+        for result in [f.store.handle(StoreRequest::Editing {language:layer_ui::UiLanguage::English}).unwrap(),browser.execute(StoreRequest::Editing {language:layer_ui::UiLanguage::English},1_000_000).unwrap()] {
             let StoreResponse::Editing(Some(stored)) = result else {panic!()};
-            assert_eq!(serde_json::from_str::<layer_ui::EditingState>(&stored).unwrap(),incoming);
+            assert_eq!(*stored,incoming);
         }
     }
 }

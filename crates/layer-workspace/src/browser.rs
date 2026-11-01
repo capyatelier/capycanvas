@@ -209,7 +209,7 @@ impl BrowserDatabase {
     fn apply(&mut self, request: StoreRequest, now: u64) -> Result<StoreResponse> {
         use StoreRequest::*;
         Ok(match request {
-            Editing => StoreResponse::Editing(self.editing.clone()),
+            Editing { language } => StoreResponse::Editing(self.editing.as_ref().map(|json|Box::new(layer_ui::EditingState::restore(json,&layer_ui::Localizer::shared(language))))),
             Switcher => StoreResponse::Switcher(self.switcher.clone().and_then(manager::readable_ids)),
             WorkspaceOrder => StoreResponse::WorkspaceOrder(self.workspace_order.clone().and_then(manager::readable_ids)),
             UpdateSwitcher { expected, ids } => {
@@ -308,6 +308,7 @@ impl BrowserDatabase {
             Pending => StoreResponse::Pending(self.pending.values().filter_map(|value| serde_json::from_value(value.clone()).ok())
                 .filter(|batch| validate_payload(batch, |_| Err(missing_resource())).is_ok()).collect()),
             Reopen => StoreResponse::Done,
+            Adopted => StoreResponse::Done,
             Reset => {
                 *self = Self::default();
                 StoreResponse::Done

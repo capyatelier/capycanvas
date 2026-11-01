@@ -365,7 +365,7 @@ pub struct CommitReceipt {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StoreRequest {
-    Editing,
+    Editing { language: layer_ui::UiLanguage },
     List,
     Switcher,
     UpdateSwitcher {
@@ -412,6 +412,7 @@ pub enum StoreRequest {
         clear_older: bool,
     },
     Reopen,
+    Adopted,
     /// Replace every stored item and record with an empty current store. A
     /// store written by a newer build is refused and kept.
     Reset,
@@ -419,7 +420,7 @@ pub enum StoreRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum StoreResponse {
-    Editing(Option<String>),
+    Editing(Option<Box<layer_ui::EditingState>>),
     Switcher(Option<Vec<String>>),
     WorkspaceOrder(Option<Vec<String>>),
     List(Vec<ItemSummary>),

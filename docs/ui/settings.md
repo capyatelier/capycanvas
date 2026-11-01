@@ -361,13 +361,16 @@ and use defaults for fields they cannot read:
   to `Settings::restore` when they need settings before a session exists. Each
   field this build reads and validates is kept, and every other field keeps its
   default. Loading does not rewrite the saved copy; the next change replaces it.
+- Editing: the existing storage worker restores fields with the window's
+  language and returns the restored state before workspace adoption.
 - Export presets load through `ExportPresets::restore`. An unreadable metadata
   field uses its default while independent fields and valid profile references
   survive. The binary envelope, digest and size limits remain strict. The
   hidden-profile list keeps the IDs this build reads. The web color-preference database
   adds missing stores when its version changes and never deletes stored data.
-- Workspaces: unreadable rows are kept, and startup uses memory if no workspace
-  can open. Only an unsupported table schema can trigger a reset; see
+- Workspaces: unreadable rows are kept. When none can be read, startup creates
+  a new workspace from the included layout. Only an unsupported table schema
+  can trigger a reset; see
   [workspace startup](../internals/workspace-ownership.md#startup-always-adopts-a-workspace).
 - Caches discard data they cannot use.
 - Artwork is never replaced automatically. A recovery copy this build cannot

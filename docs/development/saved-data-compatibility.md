@@ -114,10 +114,8 @@ chunk and may skip unknown
   do not change; windows do not adopt another window's editing values. Two
   windows that change the same field, such as both editing palettes, still keep
   the later save.
-- **When every workspace is unreadable,** the included workspaces are rebuilt
-  from their included layouts, but only in a start whose version snapshot
-  succeeded. In any other start, startup runs in memory with the existing notice
-  and writes nothing.
+- **When no workspace can be read,** startup creates a new workspace from the
+  included layout and leaves the unreadable rows untouched.
 - **Reset only for a table layout older than the first release.** Later table
   changes are steps (section 3).
 
@@ -297,9 +295,8 @@ in the diff what changed instead of hiding it.
 - **Opening data:** The usual path is unchanged; the whole document decodes
   first. Field-by-field restore and steps run only for another version's data or
   a failed decode, once per document, where decoding runs today.
-  - Editing state decodes on the controller's owner thread. Milestone 1
-    measures the slow path on the low-tier tablet with a large palette library,
-    and moves restore into the storage worker if it takes longer than a frame.
+  - Editing state restores on the existing storage worker. Milestone 1 measures
+    the slow path on the low-tier tablet with a large palette library.
 - **`.capy` steps** touch only the manifest JSON. Tile resources are never
   copied, decoded or rewritten by a step.
 - **The snapshot** runs once per version change, on the storage worker, before
@@ -315,8 +312,9 @@ in the diff what changed instead of hiding it.
 
 ## Safety
 
-- A row this build can't read is never overwritten. The one exception is
-  rebuilding included workspaces after a successful snapshot (section 2).
+- A row this build can't read is never overwritten. When no workspace can be
+  read, startup creates a new workspace from the included layout and leaves the
+  unreadable rows untouched.
 - Restore and steps run in memory; the stored original stays until the next
   accepted write. For the workspace store, the version snapshot holds it beyond
   that.

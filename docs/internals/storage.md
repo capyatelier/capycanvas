@@ -26,10 +26,45 @@ image a decoder reads, are removed when their reader finishes. GTK, Android and 
 temp folder when the process that owns the installation starts; Apple clears the
 app's `tmp` itself.
 
-The workspace store holds the painter's palettes and custom workspaces.
-Unreadable rows and pending deliveries stay in place. Startup uses memory if
-no stored workspace can open; only an unsupported table schema can trigger a
-reset, which keeps a copy first. See [workspace ownership](workspace-ownership.md#startup-always-adopts-a-workspace).
+The workspace store holds the painter's palettes and custom workspaces. Its
+worker restores editing fields with the window's language before returning them.
+Unreadable rows and pending deliveries stay in place. When no workspace can be
+read, startup creates a new workspace from the included layout and leaves the
+unreadable rows untouched. Only an unsupported table schema can trigger a reset,
+which keeps a copy first. See [workspace ownership](workspace-ownership.md#startup-always-adopts-a-workspace).
+
+### Workspace version copies
+
+Before another version writes native workspace storage, its worker holds the
+SQLite write transaction, copies the database to
+`workspaces.<previous-version>.<uuid>.sqlite3`, and atomically records its version
+in `last-version`. An absent marker uses `earlier` in the copy's name. The copy
+includes committed WAL data. A failed copy leaves storage unchanged and starts
+the window in memory. A newer legacy `workspaces.unreadable.sqlite3` is also
+copied into this set before another reset can replace it.
+
+After adopting a workspace, the worker keeps the ten newest copies within
+256 MiB, retaining at least three even when they exceed the budget.
+
+Web storage keeps `version` and `snapshot:workspaces.<version>.<uuid>` records
+beside `database` and `unreadable` in IndexedDB's `workspace` object store.
+The version record holds copy metadata and the last seen legacy-copy hash.
+The first write publishes its copy, version and changes in one transaction;
+quota or transaction failure publishes none of them. Retention uses the copy
+metadata without reading every retained snapshot.
+
+To restore a native copy, close every Capy Canvas process. Move the current
+database and its `-wal` and `-shm` sidecars into a separate recovery folder.
+Copy the chosen retained database to `workspaces.sqlite3`, leaving the retained
+copy intact, and remove `last-version`. The next start protects the restored
+database before writing it.
+
+For Web, close the app's tabs and workers before using the browser's IndexedDB
+tools for its origin. Export the current `database` record first. Replace its
+`snapshot` string with the chosen retained record's `snapshot`, keeping its id
+`database`. Set only `value.version` in the `version` record to an empty string;
+keep its copy metadata, the retained copies and `unreadable` record. The next
+start protects the restored data before writing it.
 
 Native workspace connections enable SQLite defensive mode and disable trusted
 schema before reading stored records. SQLite limits values and complete rows to

@@ -41,6 +41,7 @@ thread_local! {
 struct DatabaseReply<'a> {
     snapshot: Option<&'a str>,
     response: String,
+    compatibility: Option<snapshots::SnapshotPlan>,
 }
 
 /// Called synchronously inside an IndexedDB transaction. Return the strings
@@ -53,9 +54,15 @@ pub fn workspace_database(
     now: f64,
     live_owners: Option<Vec<String>>,
     owners_at: f64,
+    compatibility: JsValue,
 ) -> Result<JsValue, JsValue> {
     let result = (|| -> Result<JsValue, StoreError> {
         let request: StoreRequest = serde_json::from_str(&request)?;
+        let compatibility = if compatibility.is_null() || compatibility.is_undefined() {None} else {
+            let environment = serde_wasm_bindgen::from_value(compatibility).map_err(|error|StoreError::invalid(error.to_string()))?;
+            Some(snapshots::plan(snapshot.as_string().as_deref(),environment,
+                matches!(request,StoreRequest::Adopted),now.max(0.) as u64)?)
+        };
         let reset = matches!(request, StoreRequest::Reset);
         let cached = DATABASE_CACHE.with(|cache| cache.borrow_mut().take());
         let mut cached = match cached {
@@ -89,10 +96,10 @@ pub fn workspace_database(
             cached.list = None;
         }
         let read_only = !pending && matches!(&request,
-            StoreRequest::Editing | StoreRequest::List | StoreRequest::Load { .. }
+            StoreRequest::Editing { .. } | StoreRequest::List | StoreRequest::Load { .. }
             | StoreRequest::Receipt { .. } | StoreRequest::Binding { .. }
             | StoreRequest::Pending
-            | StoreRequest::Reopen | StoreRequest::Switcher | StoreRequest::WorkspaceOrder);
+            | StoreRequest::Reopen | StoreRequest::Adopted | StoreRequest::Switcher | StoreRequest::WorkspaceOrder);
         let listing = !pending && matches!(&request, StoreRequest::List);
         let response = if listing && let Some(reply) = &cached.list {
             reply.clone()
@@ -117,7 +124,7 @@ pub fn workspace_database(
             cached.list = None;
             Some(cached.database.encoded()?)
         };
-        let result = serialize(&DatabaseReply { snapshot: encoded.as_deref(), response }).map_err(store_error)?;
+        let result = serialize(&DatabaseReply { snapshot: encoded.as_deref(), response, compatibility }).map_err(store_error)?;
         if let Some(encoded) = encoded {
             cached.bytes = encoded.len();
             cached.source = js_sys::Reflect::get(&result, &JsValue::from_str("snapshot")).map_err(store_error)?;

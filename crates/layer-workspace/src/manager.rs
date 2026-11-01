@@ -161,8 +161,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     }
     pub fn editing(&self) -> Option<Box<layer_ui::EditingState>> { self.state.borrow().editing.clone() }
     pub async fn load_editing(&self) -> Result<()> {
-        if let StoreResponse::Editing(json) = self.execute(StoreRequest::Editing).await? {
-            let editing = json.map(|json| Box::new(layer_ui::EditingState::restore(&json, &self.localization())));
+        if let StoreResponse::Editing(editing) = self.execute(StoreRequest::Editing {language:self.localization().language()}).await? {
             let mut state = self.state.borrow_mut();
             state.saved_editing = editing.clone();
             state.editing = editing;
@@ -463,13 +462,15 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 item.id.clone(),
             )
         });
+        let mut occupied = false;
         for candidate in &candidates {
             match self
                 .prepare_switch_inner(&candidate.id, now, resume && candidate.id == preferred)
                 .await
             {
                 Ok(incoming) => return Ok(incoming),
-                Err(error) if matches!(error.kind, ErrorKind::OwnedElsewhere | ErrorKind::InvalidData) => continue,
+                Err(error) if error.kind == ErrorKind::OwnedElsewhere => occupied = true,
+                Err(error) if error.kind == ErrorKind::InvalidData => continue,
                 Err(error) => return Err(error),
             }
         }
@@ -482,7 +483,11 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             let name = message(&self.localization(), layer_ui::MessageId::WORKSPACE_COPY_NAME, &[("name", self.display_name(&source.id, &source.metadata))]);
             return self.create_from_snapshot(source, &name, true, now).await;
         }
-        Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoWorkspacesAreAvailable))
+        if occupied { return Err(crate::store_rules::owned_elsewhere()); }
+        let (id,_) = DEFAULT_WORKSPACES.iter().find(|(_,preset)|*preset==self.initial_workspace.get()).unwrap();
+        let source = Entity::included_workspace(id,self.platform,self.tablet.get(),now).unwrap();
+        let name = self.display_name(&source.id,&source.metadata);
+        self.create_from_snapshot(source,&name,true,now).await
     }
 
     async fn ensure_defaults(&self, now: u64) -> Result<()> {

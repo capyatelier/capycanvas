@@ -1551,8 +1551,8 @@ fn native_unreadable_workspace_storage_input() {
     pump(500);
     let manager = d.w.workspaces.manager().unwrap();
     assert!(manager.error().is_none());
-    assert!(manager.in_memory());
-    assert!(state(&d.w).notice.unwrap().text.starts_with("Workspace changes in this window won't be saved:"));
+    assert!(!manager.in_memory());
+    assert!(state(&d.w).notice.is_none());
     assert!(d.w.area.is_mapped());
     assert_eq!(state(&d.w).settings.pan_speed, 2.0);
     assert_eq!(state(&d.w).settings.zoom_speed, 1.0);
@@ -1575,19 +1575,10 @@ fn native_unreadable_workspace_storage_input() {
     assert!(state(&d.w).host_error.is_none(), "{:?}", state(&d.w).host_error);
     d.w.window.visible_dialog().unwrap().close();
     until(|| d.w.window.visible_dialog().is_none(), "export dialog close");
-    d.click_name("workspace-switch-painter");
-    wait_workspaces(&d.w);
-    pump(400);
-    assert_eq!(
-        state(&d.w).workspace.layout.header,
-        HeaderLayout::painter_for_platform(Platform::Gtk)
-    );
     assert!(manager.error().is_none());
-    d.click_name(&d.header_tool(ToolbarControl::Color));
-    assert!(state(&d.w).customization.drawer.is_some());
     crate::capture(
         &d.w,
-        d.input.dir.join("unreadable-storage-in-memory.png").to_str().unwrap(),
+        d.input.dir.join("unreadable-storage-preserved.png").to_str().unwrap(),
     );
     d.finish();
 }

@@ -50,6 +50,7 @@ host guide describes.
 | Area | Checks |
 | --- | --- |
 | Session persistence | Core `package::session`, `package::session_transfer`, `package::session_store` and `persistence_tests`; UI `session_recovery` and `recovery`; affected native restore/close fixtures; `node apps/layer-web/restart-store.test.mjs`. Keep the [regression checks](../internals/session-recovery.md#regression-checks). |
+| Workspace version copies | Native `sqlite::snapshots::tests`, shared `snapshots::tests`, and Web `--workspace-store` cover version changes, failed copies, legacy preservation, retention and transaction aborts. |
 | Workspace startup | `workspace_controls_become_ready_with_the_restored_layout_on_every_platform`; Web `--workspace-startup`. |
 | Artwork, filters and file format | Core `package::effect_records`, `package::codec` and `package::session` with the fixed [`builtin-contracts.json`](../../crates/layer-core/src/package/codec/fixtures/builtin-contracts.json) and [`authored-filters.capy`](../../crates/layer-core/src/package/codec/fixtures/authored-filters.capy); on hardware, `saved_artwork_render_contracts` and `saved_angular_filter_render_contracts` with `-- --nocapture`. |
 | Vector layers | `vector::tests`; on hardware, `saved_vector_render_contract`. |

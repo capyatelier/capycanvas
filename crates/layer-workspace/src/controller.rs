@@ -1856,6 +1856,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             && self.renew.is_none()
             && (self.last_renew == 0 || now.saturating_sub(self.last_renew) >= OWNER_RENEW_MS)
         {
+            let prune_copies = self.last_renew == 0;
             self.last_renew = now;
             let m = self.manager.clone();
             if !m.lease_valid(now) {
@@ -1864,6 +1865,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             }
             self.renew = self.spawn(async move {
                 m.revalidate_owner(now).await?;
+                if prune_copies { let _ = m.execute(StoreRequest::Adopted).await; }
                 Ok(m.interrupted_change_sources(now).await.unwrap_or_default())
             });
         }

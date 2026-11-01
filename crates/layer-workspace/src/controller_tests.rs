@@ -2300,7 +2300,17 @@ pub(crate) fn close_native(
 }
 
 #[test]
-fn sqlite_startup_keeps_unreadable_workspaces_and_runs_in_memory() {
+fn sqlite_startup_retention_does_not_delay_workspace_forms() {
+    let directory = crate::test_support::temp_dir("startup-retention-form");
+    let (mut controller,mut host) = start_native(&directory);
+    controller.input(&mut host.session,WorkspaceInput::Form {action:ManagerAction::New},1000).unwrap();
+    assert!(controller.view.prompt.is_some());
+    close_native(controller,&mut host);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn sqlite_startup_creates_one_workspace_and_keeps_unreadable_rows() {
     let directory = crate::test_support::temp_dir("workspace-stale");
     let (controller, mut host) = start_native(&directory);
     assert_started(&controller, &mut host, "first start");
@@ -2324,20 +2334,33 @@ fn sqlite_startup_keeps_unreadable_workspaces_and_runs_in_memory() {
         .unwrap();
     assert_eq!(stale, DEFAULT_WORKSPACES.len());
 
-    let (controller, mut host) = start_native(&directory);
-    assert_started(&controller, &mut host, "stale start");
-    assert!(controller.manager.in_memory());
-    assert!(notice(&host).unwrap().starts_with("Workspace changes in this window won't be saved:"));
-    close_native(controller, &mut host);
-
-    let (controller, mut host) = start_native(&directory);
-    assert_started(&controller, &mut host, "restart");
-    assert!(controller.manager.in_memory());
-    assert!(notice(&host).unwrap().starts_with("Workspace changes in this window won't be saved:"));
-    close_native(controller, &mut host);
-    assert_eq!(db.query_row("SELECT count(*) FROM items WHERE content='{}'", [], |row| row.get::<_, u32>(0)).unwrap(), stale as u32);
+    let unreadable_rows = || {
+        let mut query = db.prepare("SELECT * FROM items WHERE content='{}' ORDER BY id").unwrap();
+        let columns = query.column_count();
+        query.query_map([],|row| (0..columns).map(|column| row.get::<_,rusqlite::types::Value>(column)).collect::<rusqlite::Result<Vec<_>>>()).unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>().unwrap()
+    };
+    let original = unreadable_rows();
+    let mut active = None;
+    for launch in ["stale start","restart"] {
+        let (controller, mut host) = start_native(&directory);
+        assert!(controller.view.ready && !controller.view.busy, "{launch}: {:?}",controller.view.error);
+        assert!(controller.view.error.is_none());
+        assert!(host.session.capture_workspace().is_ok());
+        assert!(host.session.state().workspace_ready);
+        assert!(!controller.manager.in_memory());
+        assert!(notice(&host).is_none());
+        let id = controller.manager.active_id().unwrap();
+        assert!(!DEFAULT_WORKSPACES.iter().any(|(builtin,_)| *builtin==id));
+        if let Some(previous) = &active { assert_eq!(&id,previous); }
+        active = Some(id);
+        assert_eq!(controller.manager.items().iter().filter(|item|item.metadata.kind==ItemKind::Workspace).count(),stale+1);
+        close_native(controller, &mut host);
+        assert_eq!(unreadable_rows(),original);
+    }
     assert_eq!(db.query_row("SELECT content FROM items WHERE id=?1",[&toolbar_id],|row|row.get::<_,String>(0)).unwrap(),toolbar_content);
-    assert_eq!(db.query_row("SELECT json FROM editing WHERE id=1",[],|row|row.get::<_,String>(0)).unwrap(),editing);
+    let restored = layer_ui::EditingState::restore(&db.query_row("SELECT json FROM editing WHERE id=1",[],|row|row.get::<_,String>(0)).unwrap(), &Localizer::shared(UiLanguage::English));
+    assert!(restored.color_library.palettes.iter().any(|palette|palette.name=="Release palette"));
     assert!(!directory.join("workspaces.unreadable.sqlite3").exists());
     let _ = std::fs::remove_dir_all(&directory);
 }
