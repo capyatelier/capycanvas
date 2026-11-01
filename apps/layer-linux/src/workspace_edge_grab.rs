@@ -144,7 +144,7 @@ impl Workspace {
             };
         }
         let surface: gtk::Widget = self.surface.clone().upcast();
-        let mut widget = Some(picked).filter(|_| slot != Slot::Canvas);
+        let mut widget = (slot != Slot::Canvas).then_some(picked);
         while let Some(w) = widget.filter(|w| *w != surface) {
             if crate::input::swipe_control(&w) {
                 contact = EdgeContact::Input;

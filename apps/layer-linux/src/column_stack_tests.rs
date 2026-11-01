@@ -525,10 +525,8 @@ fn column_bridge_motion(w: &Rc<Workspace>, input: &mut RemoteInput, output: &std
         assert!(missing.borrow().is_empty(), "displayed chrome revisions must have measured geometry: {:?}", missing.borrow());
         assert!(inputs > 200 && range[1] - range[0] > 12. && presented.len() > 1,
             "native input must move actual panel geometry: inputs={inputs}, height_range={range:?}, presents={}", presented.len());
-        if run > 0 {
-            if hz.unwrap() < minimum || p99.unwrap() > 2000./refresh {
-                failures.push(format!("{theme:?}/{edge:?}/{name}: {} Hz, p99 {} ms", hz.unwrap(), p99.unwrap()));
-            }
+        if run > 0 && (hz.unwrap() < minimum || p99.unwrap() > 2000./refresh) {
+            failures.push(format!("{theme:?}/{edge:?}/{name}: {} Hz, p99 {} ms", hz.unwrap(), p99.unwrap()));
         }
     }
     input.settle_ms = settle;

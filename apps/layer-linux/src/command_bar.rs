@@ -8,6 +8,8 @@ use std::{
     rc::Rc,
 };
 
+type Contact = (Option<gdk::Device>, Option<gdk::EventSequence>, u32);
+
 pub struct CommandBar {
     copy: RefCell<layer_ui::native_copy::SearchCopy>,
     close: gtk::Button,
@@ -26,7 +28,7 @@ pub struct CommandBar {
     previous_focus: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
     closing: Cell<Option<Closing>>,
     paint: RefCell<Option<(gdk::FrameClock, glib::SignalHandlerId)>>,
-    contacts: RefCell<Vec<(Option<gdk::Device>, Option<gdk::EventSequence>, u32)>>,
+    contacts: RefCell<Vec<Contact>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

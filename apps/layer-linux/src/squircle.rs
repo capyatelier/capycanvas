@@ -334,14 +334,16 @@ fn gaussian_blur(values: &mut [f32], [width, height]: [usize; 2], sigma: f64) {
     }
 }
 
+type NodeCache = HashMap<(usize, bool, [u32; 4], [u32; 9]), (gsk::RenderNode, gsk::RenderNode)>;
+
 #[derive(Default)]
 struct Converter {
     scale: f64,
     aligned: bool,
     grid: PixelGrid,
     window: Option<[f32; 3]>,
-    nodes: HashMap<(usize, bool, [u32; 4], [u32; 9]), (gsk::RenderNode, gsk::RenderNode)>,
-    previous: HashMap<(usize, bool, [u32; 4], [u32; 9]), (gsk::RenderNode, gsk::RenderNode)>,
+    nodes: NodeCache,
+    previous: NodeCache,
     masks: HashMap<MaskKey, glib::WeakRef<gdk::Texture>>,
     shadows: HashMap<[u32; 22], [gdk::Texture; 8]>,
     corners: HashMap<[u32; 5], gsk::Path>,

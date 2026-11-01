@@ -82,9 +82,9 @@ fn native_button_feedback_styles() {
             gtk::StateFlags::CHECKED | gtk::StateFlags::PRELIGHT | gtk::StateFlags::ACTIVE] {
             for button in &buttons { button.set_state_flags(flags, true); }
             pump(260);
-            rows.push(buttons.iter().map(|button| background(button)).collect::<Vec<_>>());
+            rows.push(buttons.iter().map(background).collect::<Vec<_>>());
         }
-        for (checked, states) in rows[rows.len()-8..].chunks_exact(4).enumerate() {
+        for (checked, states) in rows[rows.len()-8..].as_chunks::<4>().0.iter().enumerate() {
             for (i, family) in families.iter().enumerate() {
                 let [idle, hover, press, hover_press] = std::array::from_fn::<_, 4, _>(|s| states[s][i]);
                 if idle == hover || idle == press || hover == hover_press {

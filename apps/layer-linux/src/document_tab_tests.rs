@@ -203,7 +203,7 @@ fn native_canvas_background_during_startup_and_tab_switch() {
             let distance = |a: [u8; 3], b: [u8; 3]| a.into_iter().zip(b).map(|(a, b)| u32::from(a.abs_diff(b)).pow(2)).sum::<u32>();
             if distance(*panel, new_panel) > 12 || distance(*panel, old_panel) < 100 { continue; }
             checked += 1;
-            if pixel.into_iter().zip(expected).any(|(actual, expected)| actual.abs_diff(expected) > 4) {
+            if pixel.iter().zip(expected).any(|(actual, expected)| actual.abs_diff(expected) > 4) {
                 palette_failures.push(format!("{name} frame {index}: new native palette {panel:?} with surround {pixel:?}, expected {expected:?}"));
             }
         }

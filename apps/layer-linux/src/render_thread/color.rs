@@ -136,28 +136,6 @@ impl RenderWorker {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn color_adoption_rejects_paper_receipts_from_the_previous_renderer() {
-        let (mut renderer, _commands, _chrome, _reply) = RenderWorker::channels(Default::default());
-        let document = layer_ui::new_drawing(32, 24, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-        let paper = document.nearest_paper_binding(None).unwrap();
-        renderer.set_paper_overlay(Some(layer_render::PaperOverlay { paper: paper.clone(), opacity: 0.5, moving: true }));
-        let previous = renderer.overlays.clone();
-        renderer.report.paper_drawn.store(previous.paper_generation, Ordering::Release);
-        assert!(renderer.paper_overlay_ready(&paper));
-        renderer.pending_color = Some(Pending { id: 1, color: renderer.color, cancelled: Arc::default(), reply: mpsc::channel().1, ready: true });
-        assert!(renderer.adopt_color(renderer.color).unwrap());
-        renderer.report.paper_drawn.store(previous.paper_generation, Ordering::Release);
-        assert!(!renderer.paper_overlay_ready(&paper));
-        renderer.report.paper_drawn.store(renderer.overlays.paper_generation, Ordering::Release);
-        assert!(renderer.paper_overlay_ready(&paper));
-    }
-}
-
 impl Worker {
     pub(super) fn prepare_color(&mut self, request: Request, startup_busy: bool) {
         let result = if startup_busy || self.prepared_color.is_some() {
@@ -286,5 +264,27 @@ impl Worker {
         if self.prepared_color.as_ref().is_some_and(|p| p.id == id) {
             self.prepared_color = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn color_adoption_rejects_paper_receipts_from_the_previous_renderer() {
+        let (mut renderer, _commands, _chrome, _reply) = RenderWorker::channels(Default::default());
+        let document = layer_ui::new_drawing(32, 24, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+        let paper = document.nearest_paper_binding(None).unwrap();
+        renderer.set_paper_overlay(Some(layer_render::PaperOverlay { paper: paper.clone(), opacity: 0.5, moving: true }));
+        let previous = renderer.overlays.clone();
+        renderer.report.paper_drawn.store(previous.paper_generation, Ordering::Release);
+        assert!(renderer.paper_overlay_ready(&paper));
+        renderer.pending_color = Some(Pending { id: 1, color: renderer.color, cancelled: Arc::default(), reply: mpsc::channel().1, ready: true });
+        assert!(renderer.adopt_color(renderer.color).unwrap());
+        renderer.report.paper_drawn.store(previous.paper_generation, Ordering::Release);
+        assert!(!renderer.paper_overlay_ready(&paper));
+        renderer.report.paper_drawn.store(renderer.overlays.paper_generation, Ordering::Release);
+        assert!(renderer.paper_overlay_ready(&paper));
     }
 }

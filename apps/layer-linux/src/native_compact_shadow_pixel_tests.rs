@@ -38,7 +38,7 @@ fn native_compact_shadow_pixels() {
                         let i=y*a.3+x*4;let j=y*b.3+x*4;let av=f32::from_ne_bytes(a.2[i..i+4].try_into().unwrap());let bv=f32::from_ne_bytes(b.2[j..j+4].try_into().unwrap());assert!(av.is_finite()&&bv.is_finite());if x%4==3 { assert!((-0.001..=1.001).contains(&bv),"shadow alpha remains bounded"); }float_error=float_error.max((av-bv).abs());
                     }}
                     max_byte_error=max_byte_error.max(byte_error);max_float_error=max_float_error.max(float_error);
-                    if comparisons==0 {if let Some(dir)=std::env::var_os("LAYER_TEST_ARTIFACTS"){let dir=std::path::PathBuf::from(dir);std::fs::create_dir_all(&dir).unwrap();a.4.save_to_png(dir.join("shadow-reference.png")).unwrap();b.4.save_to_png(dir.join("shadow-candidate.png")).unwrap();}}
+                    if comparisons==0 && let Some(dir)=std::env::var_os("LAYER_TEST_ARTIFACTS"){let dir=std::path::PathBuf::from(dir);std::fs::create_dir_all(&dir).unwrap();a.4.save_to_png(dir.join("shadow-reference.png")).unwrap();b.4.save_to_png(dir.join("shadow-candidate.png")).unwrap();}
                     comparisons+=1;
                 }}
             }

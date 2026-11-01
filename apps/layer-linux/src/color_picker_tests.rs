@@ -738,7 +738,7 @@ fn native_color_preview_matches_painted_input() {
         let snap = gtk::Snapshot::new();
         crate::display_color::append_picker_solid(&snap,view,headroom,color.space,
             color.linear_in(color.space).unwrap(),&gtk::graphene::Rect::new(0.,0.,1.,1.));
-        let texture = d.w.window.renderer().unwrap().render_texture(&snap.to_node().unwrap(),None);
+        let texture = d.w.window.renderer().unwrap().render_texture(snap.to_node().unwrap(),None);
         let mut pixel=[0;4];texture.download(&mut pixel,4);pixel
     };
     for frame in &frames {

@@ -147,7 +147,7 @@ impl<T> PaintedSample<T> {
         let mut pixels = vec![0; width * height * 4];
         texture.download(&mut pixels, width * 4);
         let mut bounds = None::<[usize; 4]>;
-        for (i, pixel) in pixels.chunks_exact(4).enumerate() {
+        for (i, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
             if pixel.iter().zip(color).all(|(a, b)| a.abs_diff(b) <= 1) {
                 let (x, y) = (i % width, i / width);
                 bounds = Some(bounds.map_or([x, y, x, y], |b| [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)]));

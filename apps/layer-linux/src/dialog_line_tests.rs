@@ -157,7 +157,8 @@ fn native_dialog_lines_match_the_palette() {
 
             let alert = adw::AlertDialog::builder().heading("Delete workspace?").body("Its layout cannot be restored.").build();
             alert.add_responses(&[("cancel", "Cancel"), ("delete", "Delete")]);
-            let opens: [(&str, Box<dyn Fn()>); 4] = [
+            type Opener<'a> = (&'a str, Box<dyn Fn() + 'a>);
+            let opens: [Opener<'_>; 4] = [
                 ("export", Box::new(|| w.dispatch(UiAction::Invoke { command: CommandId::ExportDocument }))),
                 ("new-drawing", Box::new(|| w.dispatch(UiAction::Invoke { command: CommandId::NewDocument }))),
                 ("color-editor", Box::new(|| crate::color_editor::show(&w, layer_ui::ColorSlot::Foreground))),
