@@ -214,6 +214,14 @@ function Move-Paint($Stroke){
 function Paint-Wheel{
  Invoke-Id (Tool-Tile 'pen')
  Wait-Until {$view=Model;$view.brush_ready -and ($view.state.commands|Where-Object id -eq 'pen').selected} 'Pen did not become ready before the paint-contact wheel check'
+ Invoke-Id 'color-edit'
+ Wait-Until {Find 'edit-color-apply'} 'Paint-contact check did not open Edit Color'
+ Invoke-Id 'edit-color-hex'
+ $colorEntry=Control 'edit-color-hex-entry';$colorEntry.SetFocus()
+ $colorEntry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('#00aa00')
+ [CapyRowPointer]::Key([uint32]$review.Id,0x0d)
+ Invoke-Id 'edit-color-apply'
+ Wait-Until {$color=(Model).state.colors.foreground.rgba;!(Find 'edit-color-apply') -and $color[0] -lt .001 -and [Math]::Abs($color[1]-170./255) -lt .001 -and $color[2] -lt .001 -and $color[3] -eq 1} 'Paint-contact check did not select opaque green'
  $fit=Camera;Fit-Canvas
  Wait-Until {Readout-State $false} 'Fit did not acknowledge closing the zoom menu'
  $null=Changed-Camera $fit 'Fit before the paint-contact wheel check'
