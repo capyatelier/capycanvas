@@ -227,20 +227,24 @@ try {
         Wait-Until {!(Model).header.editing -and (((Model).header.model|ConvertTo-Json -Depth 40 -Compress) -eq $headerBefore)} 'Header cancellation setup did not restore the original header'
     }
     if($Family -in @('all','preset')){foreach($drift in @(0,1,3)){
-        if(!@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles[0].selected){Invoke 'tile-toolbar-1'}
-        Wait-Until {@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles[0].selected -and (Find 'tool-subtool-1').Current.IsEnabled -and (Model).brush_ready} 'Pen preset setup failed'
+        $pen=Tool-Tile 'pen'
+        if(!@(@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {('tile-toolbar-'+$_.id) -eq $pen})[0].selected){Invoke $pen}
+        Wait-Until {@(@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {('tile-toolbar-'+$_.id) -eq $pen})[0].selected -and (Find 'tool-subtool-1').Current.IsEnabled -and (Model).brush_ready} 'Pen preset setup failed'
         if((Model).state.customization.drawer -or (Model).state.customization.expanded){[CapyRowPointer]::Key(0x1b)}
         Wait-Until {$null -eq (Model).state.customization.drawer -and $null -eq (Model).state.customization.expanded} 'Preset setup retained an overlapping control surface'
         $subtools=@((Model).state.tool_set.subtools);$index=0
         while($index -lt $subtools.Count -and ($subtools[$index].selected -or !$subtools[$index].enabled)){$index++}
         if($index -ge $subtools.Count){throw 'Invalid run: no inactive preset is available'}
-        $preset=$subtools[$index].action.id;$script:caseExpected=$preset
+        $preset=Tool-PresetId $subtools[$index]
+        if($null -eq $preset){throw 'Invalid run: inactive Pen choice has no brush preset action'}
+        $script:caseExpected=$preset
         Check "preset-$drift" {Native-Tap ('tool-subtool-'+$index) $drift} {(Model).state.brush.preset -eq $preset}
     }}
     if($Family -in @('all','tool')){foreach($drift in @(0,1,3)){
-        $choice=if(@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles[3].selected){1}else{4}
+        $eraser=Tool-Tile 'eraser'
+        $choice=if(@(@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {('tile-toolbar-'+$_.id) -eq $eraser})[0].selected){Tool-Tile 'pen'}else{$eraser}
         $script:caseExpected='selected toolbar tile '+$choice
-        Check "tool-$drift" {Native-Tap ('tile-toolbar-'+$choice) $drift} {@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles[$choice-1].selected}
+        Check "tool-$drift" {Native-Tap $choice $drift} {@(@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {('tile-toolbar-'+$_.id) -eq $choice})[0].selected}
     }}
     if($Family -in @('all','panel')){foreach($drift in @(0,1,3)){
         $panel=if(@((Model).layout.groups|Where-Object {$_.panels -contains 'sizes'})[0].active -eq 'sizes'){'tool_settings'}else{'sizes'}

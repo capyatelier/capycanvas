@@ -103,7 +103,7 @@ function Draft([string]$Id,[string]$Text){
     Wait-Until {$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq $Text} 'Draft was not retained'
 }
 function Select-Preset([int]$Preset){
-    $items=@((Model).state.tool_set.subtools);$indices=@(for($i=0;$i -lt $items.Count;$i++){if($items[$i].action.type -eq 'select_brush' -and $items[$i].action.id -eq $Preset){$i}})
+    $items=@((Model).state.tool_set.subtools);$indices=@(for($i=0;$i -lt $items.Count;$i++){if((Tool-PresetId $items[$i]) -eq $Preset){$i}})
     if($indices.Count -ne 1){throw "Preset $Preset has no unique native Tool Set choice"}
     Invoke-Id ('tool-subtool-'+$indices[0])
     Wait-Until {(Model).state.brush.preset -eq $Preset -and (Model).brush_ready} "Preset $Preset did not activate"

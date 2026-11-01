@@ -703,6 +703,10 @@ function Tool-Tile([string]$Command){
     }};$false} "No $Command tile"
     $target.id
 }
+function Tool-PresetId($Item){
+    if($Item.action.type -eq 'select_brush'){return $Item.action.id}
+    if($Item.action.type -eq 'choose_tool_variant' -and $Item.action.variant.type -eq 'brush_preset'){return $Item.action.variant.id}
+}
 function Tool-Choice([string]$Command){
     $target=@{id=$null;list=$null;index=-1}
     Wait-Until {

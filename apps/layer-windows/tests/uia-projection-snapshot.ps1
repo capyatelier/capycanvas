@@ -143,4 +143,79 @@ $root|Add-Member ScriptMethod FindAll {param($Scope,$Condition)
  [pscustomobject]@{Cached=[pscustomobject]@{AutomationId='one';Name='Known';IsEnabled=$true;ItemStatus='Selected';ControlType=[System.Windows.Automation.ControlType]::Edit;IsOffscreen=$false;ProcessId=33}}
 }
 $actual=@(Real-ReadControlSnapshot @('one','two'));if($actual.Count -ne 1 -or $actual[0].Name -cne 'Known'){throw 'Actual UIA API constructor/cache-only activation failed'}
+
+& {
+    $activation=Tree 'exercise-activation.ps1';$editor=Tree 'exercise-tools.ps1'
+    . ([scriptblock]::Create((Function-Text $helpers 'Tool-Tile')))
+    $presetHelper=@($helpers.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Tool-PresetId'},$true))
+    if($presetHelper.Count -gt 1){throw 'More than one actual preset action helper'}
+    if($presetHelper.Count -eq 1){. ([scriptblock]::Create($presetHelper[0].Extent.Text))}
+    . ([scriptblock]::Create((Function-Text $editor 'Select-Preset')))
+    $familyBlocks=@{}
+    foreach($family in @('preset','tool')){
+        $condition='$Family -in @(''all'','''+$family+''')'
+        $statement=@($activation.FindAll({param($node) $node -is [Management.Automation.Language.IfStatementAst] -and $node.Clauses[0].Item1.Extent.Text -eq $condition}.GetNewClosure(),$true))
+        if($statement.Count -ne 1){throw "Missing actual activation family: $family"}
+        $familyBlocks[$family]=[scriptblock]::Create($statement[0].Extent.Text)
+    }
+    function Reset-ToolCase([string]$Shape){
+        $script:toolModel='{"brush_ready":true,"panels":[{"id":"toolbar","tiles":[{"id":1,"control":{"kind":"divider"},"selected":false},{"id":99,"control":{"kind":"command","command":"eraser"},"selected":false},{"id":71,"control":{"kind":"command","command":"pen"},"selected":false},{"id":4,"control":{"kind":"divider"},"selected":false}]}],"state":{"customization":{"drawer":null,"expanded":null},"brush":{"preset":1},"tool_set":{"subtools":[{"enabled":true,"selected":true,"action":{"type":"select_brush","id":1}},{"enabled":true,"selected":false,"action":{"type":"select_brush","id":7}}]}}}'|ConvertFrom-Json
+        if($Shape -eq 'anchored'){
+            foreach($item in $script:toolModel.state.tool_set.subtools){$item.action=[pscustomobject]@{type='choose_tool_variant';anchor=[pscustomobject]@{kind='tile';panel='toolbar';tile=71};variant=[pscustomobject]@{type='brush_preset';id=$item.action.id}}}
+        }
+        $script:toolInputs=[Collections.Generic.List[string]]::new()
+    }
+    function Model{$script:toolModel}
+    function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds){if(!(& $Condition)){throw $Message}}
+    function Find([string]$Id){if($Id -cne 'tool-subtool-1'){throw "Unexpected control: $Id"};[pscustomobject]@{Current=[pscustomobject]@{IsEnabled=$true}}}
+    function Invoke([string]$Id){
+        if($Id -cne 'tile-toolbar-71'){throw "Activation used a tile ordinal: $Id"}
+        foreach($tile in $script:toolModel.panels[0].tiles){$tile.selected=$tile.id -eq 71}
+    }
+    function Native-Tap([string]$Id,[double]$Drift){
+        $script:toolInputs.Add($Id+'@'+$Drift)
+        if($Id -like 'tile-toolbar-*'){
+            if($Id -notin @('tile-toolbar-71','tile-toolbar-99')){throw "Activation used a tile ordinal: $Id"}
+            foreach($tile in $script:toolModel.panels[0].tiles){$tile.selected=('tile-toolbar-'+$tile.id) -eq $Id}
+        }elseif($Id -match '^tool-subtool-([0-9]+)$'){
+            $index=[int]$Matches[1];$items=$script:toolModel.state.tool_set.subtools
+            $script:toolModel.state.brush.preset=@(1,7)[$index]
+            for($i=0;$i -lt $items.Count;$i++){$items[$i].selected=$i -eq $index}
+        }else{throw "Unexpected native action: $Id"}
+    }
+    function Invoke-Id([string]$Id){Native-Tap $Id 0}
+    function Check([string]$Name,[scriptblock]$Action,[scriptblock]$Expected){& $Action;if(!(& $Expected)){throw "Actual activation assertion failed: $Name"}}
+    foreach($shape in @('direct','anchored')){
+        Reset-ToolCase $shape
+        $Family='preset';. $familyBlocks.preset
+        if(($script:toolInputs -join ',') -cne 'tool-subtool-1@0,tool-subtool-0@1,tool-subtool-1@3'){throw "Preset drift journey missed exact native rows: $shape"}
+        Reset-ToolCase $shape
+        Select-Preset 7
+        if(($script:toolInputs -join ',') -cne 'tool-subtool-1@0' -or $script:toolModel.state.brush.preset -ne 7){throw "Editor did not invoke the unique native preset: $shape"}
+        $items=$script:toolModel.state.tool_set.subtools
+        $script:toolModel.state.tool_set.subtools=@($items[0],$items[1],$items[1])
+        $script:toolInputs.Clear();$rejected=$false
+        try{Select-Preset 7}catch{if($_.Exception.Message -cne 'Preset 7 has no unique native Tool Set choice'){throw};$rejected=$true}
+        if(!$rejected -or $script:toolInputs.Count){throw "Editor accepted duplicate native preset choices: $shape"}
+    }
+    Reset-ToolCase 'direct';$Family='tool';. $familyBlocks.tool
+    if(($script:toolInputs -join ',') -cne 'tile-toolbar-99@0,tile-toolbar-71@1,tile-toolbar-99@3'){throw 'Tool drift journey used tile order instead of semantic Pen/Eraser identities'}
+    foreach($action in @(
+        '{"type":"select_brush","id":25}',
+        '{"type":"choose_tool_variant","variant":{"type":"brush_group","id":7}}',
+        '{"type":"invoke","id":7}'
+    )){
+        Reset-ToolCase 'direct';$script:toolModel.state.tool_set.subtools[1].action=$action|ConvertFrom-Json
+        $rejected=$false
+        try{Select-Preset 7}catch{if($_.Exception.Message -cne 'Preset 7 has no unique native Tool Set choice'){throw};$rejected=$true}
+        if(!$rejected -or $script:toolInputs.Count){throw 'Editor accepted an unrelated action as its requested preset'}
+    }
+    Reset-ToolCase 'direct';$Family='preset'
+    $script:toolModel.state.tool_set.subtools[0].selected=$false
+    $script:toolModel.state.tool_set.subtools[0].action='{"type":"invoke","id":7}'|ConvertFrom-Json
+    $rejected=$false
+    try{. $familyBlocks.preset}catch{if($_.Exception.Message -cne 'Invalid run: inactive Pen choice has no brush preset action'){throw};$rejected=$true}
+    if(!$rejected -or $script:toolInputs.Count){throw 'Activation silently skipped an unexpected inactive Pen action'}
+    Write-Output 'Actual activation families and editor selection passed with reordered nonordinal tiles, direct/anchored preset actions, exact native drift targets and duplicate/unrelated action rejection; no UI/GPU.'
+}
 Write-Output "UIA projection snapshot passed: $($cases.Count) hierarchy/cache cases, fresh cached-only batch/visibility semantics, per-review canvas reset, live per-pixel bounds/camera/foreground, exact768 prefix and independent dense ARGB hash with nonsampled-pixel change/restoration; no UI/GPU."
