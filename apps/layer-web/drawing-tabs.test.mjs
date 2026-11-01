@@ -434,12 +434,14 @@ export async function checkDrawingTabs({call,evaluate,settle}) {
   assert.ok(tabExpected.length>0);
   await invoke('undo');await ready();
   const neighbor=await create();
+  await wait('Number(layerApp.app.document_tabs(0).resident_bytes)===0');
   assert.equal((await tabs()).resident_bytes,0,'Inactive redo payloads leave RAM after successful OPFS write');
   assert.ok(await evaluate(`(async()=>{let n=0;const root=await(await navigator.storage.getDirectory()).getDirectoryHandle('capy-live-tiles');for await(const dir of root.values())for await(const file of dir.values())if(file.kind==='file')n++;return n;})()`),'Private immutable chunks exist');
   await select(painted);await invoke('redo');await ready();
   await invoke('save_document_as');await ready();
   assert.deepEqual(packageResourceIdentity(await readPackage(evaluate, '[...tabFiles.values()].at(-1)')),tabExpected,'Redo from disk retains exact compressed tile identity');
   await select(neighbor);
+  await wait('Number(layerApp.app.document_tabs(0).resident_bytes)===0');
   assert.equal((await tabs()).resident_bytes,0,'A reread cache is evicted on the next switch');
   const beforeCorrupt=(await tabs()).tabs.map(t=>t.id);
   assert.equal(await evaluate(`layerApp.documents.openFiles([new File(['invalid'],'broken.capy')]).then(()=>false,error=>{window.tabOpenDiagnostic=error.message??String(error);return true;})`),true);
@@ -492,6 +494,7 @@ export async function checkDrawingTabs({call,evaluate,settle}) {
     const p=await evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect(),a=c.work_area;return{x:r.x+(a[0]+a[2]/2)*r.width/c.viewport[0],y:r.y+(a[1]+a[3]/2)*r.height/c.viewport[1]}})()`);
     for(const[type,dy,buttons]of[['mousePressed',0,1],['mouseMoved',25,1],['mouseReleased',25,0]]){await call('Input.dispatchMouseEvent',{type,x:p.x,y:p.y+dy,button:'left',buttons,clickCount:1,pointerType:'pen',force:buttons?.7:0});await settle();}
     await ready();failedStorageTab=await create();
+    await wait('!!layerApp.app.document_tabs(0).storage_error');
     assert.ok((await tabs()).storage_error);assert.ok((await tabs()).resident_bytes>0);
     const count=(await tabs()).tabs.length;await invoke('new_document');
     await evaluate(createDrawing());await ready();
