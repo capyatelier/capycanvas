@@ -209,8 +209,7 @@ function Test-PaperTexture{
         $name="Renamed $theme scan"
         (Control 'paper-rename-name').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($name)
         Invoke 'PrimaryButton'
-        Wait-Until {$apply=Find 'texture-apply';$apply -and !$apply.Current.IsOffscreen -and (Find "texture-tile-$library").Current.Name -eq $name} 'Choose Texture did not return with the renamed paper'
-        if((Texture-Pending) -ne $library){throw 'Renaming lost the pending texture'}
+        Wait-Until {$apply=Find 'texture-apply';$apply -and !$apply.Current.IsOffscreen -and (Find "texture-tile-$library").Current.Name -eq $name -and (Texture-Pending) -eq $library} 'Choose Texture did not return with the renamed pending paper'
         Capture "texture-renamed-$theme" -WithModel
         Invoke 'texture-apply';Texture-Closed 'Use Texture did not close Choose Texture for the library paper'
         Wait-Until {(Relationship-Layer $paper).paper.id -eq $TextureLibraryId -and (Relationship-Layer $paper).paper.label -eq $name} 'Use Texture did not apply the library paper'
