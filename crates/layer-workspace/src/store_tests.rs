@@ -53,6 +53,106 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn unreadable_rows_deliveries_and_preferences_survive_maintenance() {
+    for content in [r#"{"type":"future"}"#, "not json"] {
+        let mut f = Fixture::new();
+        let mut browser = BrowserDatabase::default();
+        let good = workspace("Readable");
+        let bad = workspace("Unreadable");
+        let batch = CommitBatch::prepare(f.owner.clone(), vec![create(good.clone()),create(bad.clone())]).unwrap();
+        f.store.commit(batch.clone()).unwrap();
+        browser.execute(StoreRequest::Commit {batch:batch.clone()},1_000_000).unwrap();
+        f.store.handle(StoreRequest::Acknowledge {operation_id:batch.operation_id}).unwrap();
+        let pending = CommitBatch::prepare(f.owner.clone(), vec![create(workspace("Interrupted"))]).unwrap();
+        let mut payload = serde_json::to_value(&pending).unwrap();
+        if content == "not json" { payload["writes"][0]["content_json"] = "not json".into(); }
+        else { payload["writes"][0]["metadata"]["kind"] = "future_kind".into(); }
+        let extra = r#"{"kept_for_future":true}"#;
+        let extra_id = content_id(extra.as_bytes());
+        payload["future_reference"] = serde_json::json!({"$workspace_component":extra_id});
+        for (id,json) in pending.components.iter().chain(std::iter::once((&extra_id,&extra.to_string()))) {
+            f.store.connection.execute("INSERT OR IGNORE INTO components(id,json) VALUES(?1,?2)",params![id,json]).unwrap();
+        }
+        let orphan = r#"{"orphan":true}"#;
+        let orphan_id = content_id(orphan.as_bytes());
+        f.store.connection.execute("INSERT INTO components(id,json) VALUES(?1,?2)",params![orphan_id,orphan]).unwrap();
+        f.store.connection.execute("UPDATE items SET content=?2 WHERE id=?1",params![bad.id,content]).unwrap();
+        f.store.connection.execute("INSERT INTO pending(id,hash,payload) VALUES(?1,'future',?2)",params![pending.operation_id,payload.to_string()]).unwrap();
+        for table in ["workspace_switcher","workspace_order"] {
+            f.store.connection.execute(&format!("INSERT INTO {table}(id,workspace_ids) VALUES(1,'true')"),[]).unwrap();
+        }
+        let mut encoded: serde_json::Value = serde_json::from_str(&browser.encoded().unwrap()).unwrap();
+        encoded["items"][&bad.id]["entity"]["content"] = serde_json::json!({"type":"future"});
+        encoded["pending"][&pending.operation_id] = payload.clone();
+        encoded["switcher"] = true.into();
+        encoded["workspace_order"] = true.into();
+        let mut browser = BrowserDatabase::decode(&encoded.to_string()).unwrap();
+        for request in [StoreRequest::Maintenance {owner:None,clear_older:false},StoreRequest::Pending,StoreRequest::Switcher,StoreRequest::WorkspaceOrder] {
+            assert_eq!(serde_json::to_value(f.store.handle(request.clone()).unwrap()).unwrap(),serde_json::to_value(browser.execute(request,1_000_000).unwrap()).unwrap());
+        }
+        assert!(matches!(f.store.handle(StoreRequest::Load {id:good.id.clone()}).unwrap(),StoreResponse::Entity(_)));
+        assert!(matches!(browser.execute(StoreRequest::Load {id:good.id},1_000_000).unwrap(),StoreResponse::Entity(_)));
+        assert!(f.store.list().unwrap().iter().any(|item|item.id==bad.id));
+        assert!(f.store.load(&bad.id).is_err());
+        assert_eq!(f.store.connection.query_row("SELECT content FROM items WHERE id=?1",[&bad.id],|row|row.get::<_,String>(0)).unwrap(),content);
+        assert_eq!(f.store.connection.query_row("SELECT payload FROM pending WHERE id=?1",[&pending.operation_id],|row|row.get::<_,String>(0)).unwrap(),payload.to_string());
+        for id in pending.components.keys().chain(std::iter::once(&extra_id)) {
+            assert!(component(&f.store.connection,id).is_ok());
+        }
+        assert_eq!(component(&f.store.connection,&orphan_id).is_ok(),content=="not json");
+        let kept: serde_json::Value = serde_json::from_str(&browser.encoded().unwrap()).unwrap();
+        assert_eq!(kept["pending"],encoded["pending"]);
+        assert_eq!(kept["items"][&bad.id],encoded["items"][&bad.id]);
+        assert_eq!(kept["switcher"],true);
+        assert_eq!(kept["workspace_order"],true);
+        assert!(matches!(f.store.handle(StoreRequest::Pending).unwrap(),StoreResponse::Pending(batches) if batches.is_empty()));
+        assert!(matches!(browser.execute(StoreRequest::Pending,1_000_000).unwrap(),StoreResponse::Pending(batches) if batches.is_empty()));
+        payload["owner"]["future"] = true.into();
+        f.store.connection.execute("UPDATE pending SET payload=?2 WHERE id=?1",params![pending.operation_id,payload.to_string()]).unwrap();
+        encoded["pending"][&pending.operation_id] = payload;
+        browser = BrowserDatabase::decode(&encoded.to_string()).unwrap();
+        let mut abandon = CommitBatch::prepare(f.owner.clone(),vec![]).unwrap();
+        abandon.abandon_operations.push(pending.operation_id.clone());
+        assert!(f.store.commit(abandon.clone()).is_err());
+        assert!(browser.execute(StoreRequest::Commit {batch:abandon},1_000_000).is_err());
+        let kept: serde_json::Value = serde_json::from_str(&browser.encoded().unwrap()).unwrap();
+        assert_eq!(kept["pending"],encoded["pending"]);
+    }
+}
+
+#[test]
+fn editing_merge_falls_back_to_the_valid_incoming_document() {
+    for current in ["not json",r#"{"preset":"unreadable"}"#] {
+        let mut f = Fixture::new();
+        f.store.connection.execute("INSERT INTO editing(id,json) VALUES(1,?1)",[current]).unwrap();
+        let mut snapshot = serde_json::to_value(BrowserDatabase::default()).unwrap();
+        snapshot["editing"] = current.into();
+        let mut browser = BrowserDatabase::decode(&snapshot.to_string()).unwrap();
+        let mut incoming = layer_ui::EditingState::default();
+        incoming.colors.set_rgba([0.4,0.2,0.7,1.]).unwrap();
+        let json = serde_json::to_string(&incoming).unwrap();
+        let mut batch = CommitBatch::prepare(f.owner.clone(),vec![]).unwrap();
+        batch.editing_json = Some(json.clone());
+        batch.editing_fields = Some(vec!["colors".into()]);
+        f.store.commit(batch.clone()).unwrap();
+        browser.execute(StoreRequest::Commit {batch},1_000_000).unwrap();
+        for result in [f.store.handle(StoreRequest::Editing).unwrap(),browser.execute(StoreRequest::Editing,1_000_000).unwrap()] {
+            let StoreResponse::Editing(Some(stored)) = result else {panic!()};
+            assert_eq!(serde_json::from_str::<layer_ui::EditingState>(&stored).unwrap(),incoming);
+        }
+        let mut invalid = CommitBatch::prepare(f.owner.clone(),vec![]).unwrap();
+        invalid.editing_json = Some("{}".into());
+        invalid.editing_fields = Some(vec!["colors".into()]);
+        assert!(f.store.commit(invalid.clone()).is_err());
+        assert!(browser.execute(StoreRequest::Commit {batch:invalid},1_000_000).is_err());
+        for result in [f.store.handle(StoreRequest::Editing).unwrap(),browser.execute(StoreRequest::Editing,1_000_000).unwrap()] {
+            let StoreResponse::Editing(Some(stored)) = result else {panic!()};
+            assert_eq!(serde_json::from_str::<layer_ui::EditingState>(&stored).unwrap(),incoming);
+        }
+    }
+}
+
+#[test]
 fn sqlite_rejects_oversized_values_before_row_materialization() {
     let f = Fixture::new();
     let result = f.store.connection.query_row("SELECT zeroblob(?1)", [MAX_ROW_BYTES as i64 + 1], |row| {

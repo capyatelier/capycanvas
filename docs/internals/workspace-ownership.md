@@ -43,6 +43,13 @@ Inline workspace names require an accepted submission or explicit cancellation
 before navigation. A rejected submission keeps its prompt and selected preview;
 pin edits remain available while a name is being edited or saved.
 
+Editing state is shared across windows. Each save includes the complete editing
+snapshot and the top-level fields changed since this window's last submitted
+snapshot. Inside the write transaction, the store merges those fields into the
+stored document and validates it; an invalid merge takes the complete submitted
+snapshot. A later save of the same field wins. Receipts carry no editing state,
+and other windows' values are not propagated into a live session.
+
 GTK always attempts the authoritative switch/claim. On a live conflict it focuses
 the owning GTK window where available. A stale SwitchToWindow menu action uses
 the same path; if the external owner disappeared during the attempt, it retries
@@ -57,9 +64,9 @@ Every host (GTK, Web, Android, Apple and Windows) starts through
 adoption moves startup to a later stage:
 
 1. **Stored**: start from the store as it is.
-2. **Replaced**: only when this build cannot read the store (an unsupported
-   schema or invalid data), `StoreRequest::Reset` keeps a copy of it and empties
-   it, then startup begins again. SQLite copies the database and its log to
+2. **Replaced**: only for an unsupported table schema, `StoreRequest::Reset`
+   keeps a copy of it and empties it, then startup begins again. SQLite copies
+   the database and its log to
    `workspaces.unreadable.sqlite3`; the browser keeps the previous record under
    the id `unreadable`. Each reset replaces the previous copy.
 3. **In memory**: after any other error, or a failed replacement, continue on a
@@ -80,8 +87,12 @@ working-state fields use their defaults. App-state documents accept unknown
 option fields and do not reject a readable document for its version number.
 `SCHEMA_VERSION` identifies the tables: a store of any other schema version
 serves nothing but `Reset`.
-Startup maintenance decodes every item and pending delivery, so a store this
-build cannot fully read fails stage 1 whether or not the version was bumped.
+Unreadable workspace and toolbar rows remain listed and are skipped during
+startup and retention. Pending deliveries and switcher preferences remain
+opaque until read; unreadable ones are skipped and kept. Component collection
+scans raw item and delivery JSON and keeps referenced components. If it cannot
+follow a malformed graph, it skips collection. When no workspace can open,
+startup uses memory and leaves the stored rows in place.
 `Reset` refuses a store written by a newer build. A window still running an
 older build keeps that store and runs in memory.
 
@@ -97,15 +108,19 @@ browser lease behavior.
 Startup is covered by `startup_on_every_platform_adopts_from_empty_or_unusable_storage`
 and `startup_survives_a_failure_at_every_storage_request`, which fails each
 startup request in turn, with and without a healing reset.
-`startup_replaces_only_storage_it_cannot_read` checks that unavailable, busy,
-owned, failed and full storage never reaches `Reset`, and
+`startup_replaces_only_storage_it_cannot_read` checks that invalid records,
+unavailable, busy, owned, failed and full storage never reach `Reset`, and
 `stores_of_other_versions_serve_only_reset` checks the kept copy. The SQLite cases
-`sqlite_startup_replaces_workspaces_of_the_same_version_it_cannot_read` and
+`sqlite_startup_keeps_unreadable_workspaces_and_runs_in_memory` and
 `sqlite_startup_keeps_a_newer_store_and_runs_in_memory` cover the rest. The same
 journey runs on real storage with
 `node apps/layer-web/test.mjs --headless --stale-storage` and
 `bash tools/performance/workspace-motion.sh gtk
 --native-test=native_unreadable_workspace_storage_input --native-storage`.
+
+`editing_saves_from_two_windows_keep_both_changes` covers independent editing
+fields, repeated saves and later writes to the same field; the shared store
+contract also checks duplicate delivery through SQLite and IndexedDB.
 
 `bash tools/performance/workspace-motion.sh gtk
 --native-test=native_workspace_ownership_input --native-storage` runs the GTK

@@ -473,14 +473,16 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 Err(error) => return Err(error),
             }
         }
-        // Every existing workspace is in use. Another window needs its own
-        // editable copy so its autosaves cannot overwrite another window's work.
-        let source = candidates
-            .first()
-            .ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoWorkspacesAreAvailable))?;
-        let source = self.load(&source.id).await?.entity;
-        let name = message(&self.localization(), layer_ui::MessageId::WORKSPACE_COPY_NAME, &[("name", self.display_name(&source.id, &source.metadata))]);
-        self.create_from_snapshot(source, &name, true, now).await
+        for candidate in candidates {
+            let source = match self.load(&candidate.id).await {
+                Ok(source) => source.entity,
+                Err(error) if error.kind == ErrorKind::InvalidData => continue,
+                Err(error) => return Err(error),
+            };
+            let name = message(&self.localization(), layer_ui::MessageId::WORKSPACE_COPY_NAME, &[("name", self.display_name(&source.id, &source.metadata))]);
+            return self.create_from_snapshot(source, &name, true, now).await;
+        }
+        Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoWorkspacesAreAvailable))
     }
 
     async fn ensure_defaults(&self, now: u64) -> Result<()> {
@@ -607,7 +609,14 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     )?] };
                     let editing = (s.editing != s.saved_editing).then(|| s.editing.clone()).flatten();
                     let mut batch = CommitBatch::prepare(self.owner.clone(), mutations)?;
-                    batch.editing_json = editing.as_ref().map(serde_json::to_string).transpose()?;
+                    if let Some(editing) = &editing {
+                        let previous = s.saved_editing.as_ref().map(serde_json::to_value)
+                            .unwrap_or_else(|| serde_json::to_value(layer_ui::EditingState::new_localized(&self.localization())))?;
+                        let value = serde_json::to_value(editing)?;
+                        batch.editing_fields = Some(value.as_object().unwrap().iter()
+                            .filter(|(key, value)| previous.get(*key) != Some(*value)).map(|(key, _)| key.clone()).collect());
+                        batch.editing_json = Some(serde_json::to_string(editing)?);
+                    }
                     let pending = PendingSave { batch, snapshot: latest.clone(), editing };
                     s.pending = Some(pending.clone());
                     Some(pending)
@@ -866,4 +875,4 @@ pub(crate) use recovery::InterruptedChange;
 #[path = "manager_switcher.rs"]
 mod switcher;
 pub use switcher::SwitcherEdit;
-pub(crate) use switcher::{validate_ids as validate_switcher_ids, with_created_pins};
+pub(crate) use switcher::{readable_ids, validate_ids as validate_switcher_ids, with_created_pins};

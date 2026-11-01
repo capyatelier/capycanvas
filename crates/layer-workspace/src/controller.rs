@@ -195,9 +195,7 @@ impl Outcome {
         Self::Adopt(Box::new(entity))
     }
 }
-/// Any failure before the first adoption moves startup to a later stage. Only
-/// a store this build cannot read is replaced; the last stage reads nothing that
-/// was stored, so startup always ends adopted.
+/// Unsupported table layouts can be replaced; other startup failures use memory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Startup {
     Stored,
@@ -207,7 +205,7 @@ enum Startup {
 impl Startup {
     fn next(self, error: &StoreError) -> Option<Self> {
         match self {
-            Self::Stored if matches!(error.kind, ErrorKind::UnsupportedSchema | ErrorKind::InvalidData) => Some(Self::Replaced),
+            Self::Stored if error.kind == ErrorKind::UnsupportedSchema => Some(Self::Replaced),
             Self::Stored | Self::Replaced => Some(Self::InMemory),
             Self::InMemory => None,
         }

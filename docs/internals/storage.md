@@ -26,9 +26,10 @@ image a decoder reads, are removed when their reader finishes. GTK, Android and 
 temp folder when the process that owns the installation starts; Apple clears the
 app's `tmp` itself.
 
-The workspace store holds the painter's palettes and custom workspaces. Startup
-replaces it only when this build cannot read it, and keeps a copy of the old
-store first; see [workspace ownership](workspace-ownership.md#startup-always-adopts-a-workspace).
+The workspace store holds the painter's palettes and custom workspaces.
+Unreadable rows and pending deliveries stay in place. Startup uses memory if
+no stored workspace can open; only an unsupported table schema can trigger a
+reset, which keeps a copy first. See [workspace ownership](workspace-ownership.md#startup-always-adopts-a-workspace).
 
 Native workspace connections enable SQLite defensive mode and disable trusted
 schema before reading stored records. SQLite limits values and complete rows to

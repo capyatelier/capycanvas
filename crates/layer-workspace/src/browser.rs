@@ -17,12 +17,12 @@ pub struct BrowserDatabase {
     fences: BTreeMap<String, String>,
     receipts: BTreeMap<String, (String, CommitReceipt)>,
     acknowledged: Vec<String>,
-    pending: BTreeMap<String, CommitBatch>,
+    pending: BTreeMap<String, serde_json::Value>,
     bindings: BTreeMap<String, String>,
     tombstones: BTreeSet<String>,
     cancelled: BTreeSet<String>,
-    switcher: Option<Vec<String>>,
-    workspace_order: Option<Vec<String>>,
+    switcher: Option<serde_json::Value>,
+    workspace_order: Option<serde_json::Value>,
 }
 /// Keep each entity opaque until it is opened, like SQLite's JSON columns.
 /// One incompatible workspace must not make the whole catalog undecodable.
@@ -80,17 +80,18 @@ fn content(text: &str, batch: &CommitBatch) -> Result<ItemContent> {
     })
 }
 fn update_ids(
-    field: &mut Option<Vec<String>>,
+    field: &mut Option<serde_json::Value>,
     expected: Option<Vec<String>>,
     ids: Vec<String>,
     items: &BTreeMap<String, BrowserRecord>,
 ) -> Result<Option<Vec<String>>> {
-    if update_preference(field.as_ref(), expected, &ids, |id| {
+    let current = field.clone().and_then(manager::readable_ids);
+    if update_preference(current.as_ref(), expected, &ids, |id| {
         Ok(items.get(id).ok_or_else(not_found)?.metadata()?.kind == ItemKind::Workspace)
     })? {
-        *field = Some(ids);
+        *field = Some(serde_json::to_value(ids)?);
     }
-    Ok(field.clone())
+    Ok(field.clone().and_then(manager::readable_ids))
 }
 fn schema(text: &str) -> Option<u64> {
     #[derive(Deserialize)]
@@ -170,7 +171,7 @@ impl BrowserDatabase {
             ));
         }
         if let Some(original) = self.pending.get(&batch.operation_id)
-            && content_id(original.encoded()?.as_bytes()) != hash
+            && original != &serde_json::to_value(batch)?
         {
             return Err(StoreError::invalid(
                 "An operation ID is already bound to another payload.",
@@ -185,7 +186,7 @@ impl BrowserDatabase {
         self.validated_batch(batch)?;
         if !self.receipts.contains_key(&batch.operation_id) {
             self.pending
-                .insert(batch.operation_id.clone(), batch.clone());
+                .insert(batch.operation_id.clone(), serde_json::to_value(batch)?);
         }
         Ok(())
     }
@@ -209,8 +210,8 @@ impl BrowserDatabase {
         use StoreRequest::*;
         Ok(match request {
             Editing => StoreResponse::Editing(self.editing.clone()),
-            Switcher => StoreResponse::Switcher(self.switcher.clone()),
-            WorkspaceOrder => StoreResponse::WorkspaceOrder(self.workspace_order.clone()),
+            Switcher => StoreResponse::Switcher(self.switcher.clone().and_then(manager::readable_ids)),
+            WorkspaceOrder => StoreResponse::WorkspaceOrder(self.workspace_order.clone().and_then(manager::readable_ids)),
             UpdateSwitcher { expected, ids } => {
                 StoreResponse::Switcher(update_ids(&mut self.switcher, expected, ids, &self.items)?)
             }
@@ -304,7 +305,8 @@ impl BrowserDatabase {
                 StoreResponse::Done
             }
             Binding { key } => StoreResponse::Binding(self.bindings.get(&key).cloned()),
-            Pending => StoreResponse::Pending(self.pending.values().cloned().collect()),
+            Pending => StoreResponse::Pending(self.pending.values().filter_map(|value| serde_json::from_value(value.clone()).ok())
+                .filter(|batch| validate_payload(batch, |_| Err(missing_resource())).is_ok()).collect()),
             Reopen => StoreResponse::Done,
             Reset => {
                 *self = Self::default();
@@ -369,12 +371,13 @@ impl BrowserDatabase {
             if self.receipts.contains_key(id) {
                 return Err(already_saved());
             }
-            if let Some(original) = self.pending.get(id)
-                && original.owner != batch.owner
+            let original = self.pending.get(id).map(|value| serde_json::from_value::<Owner>(value["owner"].clone())).transpose()?;
+            if let Some(original) = original
+                && original != batch.owner
                 && self.items.values().any(|s| {
                     s.claim
                         .as_ref()
-                        .is_some_and(|c| c.owner == original.owner && c.expires_at_ms > now)
+                        .is_some_and(|c| c.owner == original && c.expires_at_ms > now)
                 })
             {
                 return Err(StoreError::new(
@@ -461,10 +464,10 @@ impl BrowserDatabase {
                 .insert(w.id.clone(), BrowserRecord::from_stored(s)?);
         }
         if !batch.pin_workspaces.is_empty() {
-            self.switcher = Some(with_created_pins(
-                self.switcher.clone(),
+            self.switcher = Some(serde_json::to_value(with_created_pins(
+                self.switcher.clone().and_then(manager::readable_ids),
                 &batch.pin_workspaces,
-            )?);
+            )?)?);
         }
         for (key, id) in &batch.bindings {
             if let Some(id) = id {
@@ -480,7 +483,7 @@ impl BrowserDatabase {
                 self.bindings.remove(key);
             }
         }
-        if let Some(editing) = batch.editing_json { self.editing = Some(editing); }
+        if let Some(editing) = merge_editing(self.editing.as_deref(), &batch)? { self.editing = Some(editing); }
         self.receipts
             .insert(batch.operation_id, (hash, receipt.clone()));
         Ok(receipt)

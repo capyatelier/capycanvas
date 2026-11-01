@@ -94,12 +94,17 @@ fn collect_components(connection: &Connection) -> Result<()> {
         Ok(())
     }
     let mut used = BTreeSet::new();
-    for text in strings(connection, "SELECT content FROM items")? {
-        visit(&serde_json::from_str(&text)?, connection, &mut used, 0)?;
-    }
-    for text in strings(connection, "SELECT payload FROM pending")? {
-        let batch: CommitBatch = serde_json::from_str(&text)?;
-        used.extend(batch.components.keys().cloned());
+    for (sql, pending) in [("SELECT content FROM items", false), ("SELECT payload FROM pending", true)] {
+        for text in strings(connection, sql)? {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else { return Ok(()); };
+            if pending && let Some(components) = value["components"].as_object() {
+                used.extend(components.keys().cloned());
+            }
+            match visit(&value, connection, &mut used, 0) {
+                Err(error) if error.kind == ErrorKind::InvalidData => return Ok(()),
+                result => result?,
+            }
+        }
     }
     for id in strings(connection, "SELECT id FROM components")? {
         if !used.contains(&id) {

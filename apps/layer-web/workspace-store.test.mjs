@@ -129,13 +129,14 @@ export async function checkStaleStorageStartup({evaluate, reload}) {
       };
     };
   })`;
-  const reset = "Saved workspaces couldn't be opened, so they were reset.";
+  const volatile = /^Workspace changes in this window won't be saved:/;
   await wait(ready);
   await evaluate('layerApp.documents.startRecovery()');
   await wait('(() => { const workspace = JSON.parse(layerApp.app.workspace_view()); return !workspace.dirty && !workspace.saving; })()');
   const stale = await evaluate(snapshot(`database => Object.values(database.items).map(item => { item.entity.content = {}; item.claim = null; return item.entity.id; })`));
   assert.ok(stale.length >= 3);
   const unreadable = await evaluate(workspaceRecord("database"));
+  const previousCopy = await evaluate(workspaceRecord("unreadable"));
   await evaluate(`localStorage.setItem("layer.preferences.v1", JSON.stringify({...layerApp.state().settings, pan_speed: 2, tip_lock: true, prediction_algorithm: "kalman", zoom_speed: "fast"}))`);
   await evaluate(`sessionStorage.setItem("capy.workspace.owner", JSON.stringify({id: 7, epoch: "stale", extra: true}))`);
   assert.equal(await evaluate(olderColorPreferences), true);
@@ -143,11 +144,11 @@ export async function checkStaleStorageStartup({evaluate, reload}) {
   const view = JSON.parse(await evaluate("layerApp.app.workspace_view()"));
   assert.equal(view.error, null);
   assert.equal(view.id, "builtin:workspace:illustrator");
-  assert.equal(await evaluate('document.querySelector(".canvas-notice-text")?.textContent'), reset);
+  assert.match(await evaluate('document.querySelector(".canvas-notice-text")?.textContent'), volatile);
   assert.equal(await evaluate('document.querySelector("#status").textContent'), "");
   assert.equal(await evaluate('[...document.querySelectorAll("dialog")].some(d => d.open)'), false);
-  assert.equal(await evaluate(workspaceRecord("unreadable")), unreadable, "Reset keeps the unreadable workspaces beside the new store");
-  assert.notEqual(await evaluate(workspaceRecord("database")), unreadable);
+  assert.equal(await evaluate(workspaceRecord("unreadable")), previousCopy);
+  assert.equal(await evaluate(workspaceRecord("database")), unreadable, "Unreadable workspaces remain in the original store");
   assert.equal(await evaluate("layerApp.state().settings.pan_speed"), 2);
   assert.equal(await evaluate("layerApp.state().settings.zoom_speed"), 1);
   const zen = await evaluate(snapshot(`database => Object.values(database.items).map(item => item.entity.working.zen_mode)`));
@@ -174,7 +175,7 @@ export async function checkStaleStorageStartup({evaluate, reload}) {
   assert.equal(await evaluate("(async () => !!(await layerApp.app.export_presets({type: 'get', index: 0})).recipe)()"), true);
   await restart();
   assert.equal(JSON.parse(await evaluate("layerApp.app.workspace_view()")).error, null);
-  assert.equal(await evaluate('document.querySelector(".canvas-notice-text")?.textContent || ""'), "");
+  assert.match(await evaluate('document.querySelector(".canvas-notice-text")?.textContent || ""'), volatile);
   assert.equal(await evaluate('document.querySelector("#status").textContent'), "");
   assert.equal(await evaluate("layerApp.state().settings.pan_speed"), 2);
   const released = JSON.parse(await readFile(new URL("../../crates/layer-workspace/tests/compat/1.0.15/browser.json", import.meta.url), "utf8"));
@@ -184,5 +185,5 @@ export async function checkStaleStorageStartup({evaluate, reload}) {
   assert.equal(await evaluate('layerApp.state().color_library.palettes.some(p => p.name === "Release palette" && p.swatches.some(s => s.name === "Release blue"))'), true);
   assert.equal(await evaluate('layerApp.state().brush.diameter'), 37);
   assert.equal(await evaluate('!!layerApp.state().notice'), false);
-  console.log(`PASS: startup read stale preferences, replaced ${stale.length} unreadable workspaces and kept a copy, upgraded older color preferences without losing data, and opened Export without a message`);
+  console.log(`PASS: startup read stale preferences, kept ${stale.length} unreadable workspaces and continued in memory, upgraded older color preferences without losing data, and opened Export without a message`);
 }

@@ -78,6 +78,21 @@ pub(crate) fn update_preference(
     }
     Ok(true)
 }
+pub(crate) fn merge_editing(current: Option<&str>, batch: &CommitBatch) -> Result<Option<String>> {
+    let Some(incoming) = &batch.editing_json else { return Ok(None); };
+    let Some(fields) = &batch.editing_fields else { return Ok(Some(incoming.clone())); };
+    let incoming_value: serde_json::Value = serde_json::from_str(incoming)?;
+    let mut merged = current.and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+        .filter(serde_json::Value::is_object).unwrap_or_else(|| incoming_value.clone());
+    for key in fields {
+        merged[key] = incoming_value.get(key).ok_or_else(|| StoreError::invalid("Invalid editing-state field."))?.clone();
+    }
+    if serde_json::from_value::<layer_ui::EditingState>(merged.clone()).is_ok_and(|state| state.validate().is_ok()) {
+        Ok(Some(serde_json::to_string(&merged)?))
+    } else {
+        Ok(Some(incoming.clone()))
+    }
+}
 pub(crate) fn validate_payload(
     batch: &CommitBatch,
     mut lookup: impl FnMut(&str) -> Result<String>,

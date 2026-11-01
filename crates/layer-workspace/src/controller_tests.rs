@@ -2231,50 +2231,26 @@ fn startup_survives_a_failure_at_every_storage_request() {
     let requests = clean.0.requests.get();
     assert!(requests > 10);
     for fail_from in 0..requests {
-        for reset_heals in [true, false] {
-            let store = FaultyStore::new(fail_from, reset_heals);
-            let (mut controller, mut host) = start(store.clone(), Platform::Web);
-            let context = format!("failing from request {fail_from}, reset heals: {reset_heals}");
-            assert_started(&controller, &mut host, &context);
-            assert!(store.0.reset.get() || fail_from > 0, "{context}");
-            if !store.0.reset.get() {
-                assert!(!controller.manager.in_memory(), "{context}");
-                assert_eq!(notice(&host), None, "{context}");
-                continue;
-            }
-            assert_eq!(controller.manager.in_memory(), !reset_heals, "{context}");
-            let expected = if reset_heals {
-                "Saved workspaces couldn't be opened, so they were reset."
-            } else {
-                "Workspace changes in this window won't be saved: This workspace cannot be opened. Choose another workspace or reset this one."
-            };
-            assert_eq!(notice(&host).as_deref(), Some(expected), "{context}");
-            let before = host.session.editing_state();
-            host.dispatch(UiAction::Invoke {
-                command: layer_ui::CommandId::Eraser,
-            })
-            .unwrap();
-            controller.observe(&mut host.session, 2000);
-            for _ in 0..3 {
-                controller.tick(&mut host.session, 2400);
-            }
-            assert!(controller.view.error.is_none(), "{context}");
-            assert!(!controller.manager.dirty(), "{context}");
-            assert_ne!(
-                *controller.manager.editing().unwrap(),
-                before
-            );
-            if reset_heals {
-                let StoreResponse::List(items) = store
-                    .0
-                    .database
-                    .borrow_mut()
-                    .execute(StoreRequest::List, 1000)
-                    .unwrap()
-                else {
-                    panic!()
-                };
-                assert_eq!(items.len(), DEFAULT_WORKSPACES.len(), "{context}");
+        for kind in [ErrorKind::InvalidData, ErrorKind::UnsupportedSchema] {
+            for reset_heals in [true, false] {
+                let store = FaultyStore::failing(fail_from, reset_heals, kind.clone());
+                let (mut controller, mut host) = start(store.clone(), Platform::Web);
+                let context = format!("{kind:?} at request {fail_from}, reset heals: {reset_heals}");
+                assert_started(&controller, &mut host, &context);
+                assert!(!store.0.reset.get() || kind == ErrorKind::UnsupportedSchema, "{context}");
+                if controller.manager.in_memory() {
+                    assert!(notice(&host).unwrap().starts_with("Workspace changes in this window won't be saved:"), "{context}");
+                } else {
+                    assert_eq!(notice(&host).as_deref(), store.0.reset.get().then_some("Saved workspaces couldn't be opened, so they were reset."), "{context}");
+                }
+                if !store.0.reset.get() && !controller.manager.in_memory() { continue; }
+                let before = host.session.editing_state();
+                host.dispatch(UiAction::Invoke {command:layer_ui::CommandId::Eraser}).unwrap();
+                controller.observe(&mut host.session, 2000);
+                for _ in 0..3 { controller.tick(&mut host.session, 2400); }
+                assert!(controller.view.error.is_none(), "{context}");
+                assert!(!controller.manager.dirty(), "{context}");
+                assert_ne!(*controller.manager.editing().unwrap(), before);
             }
         }
     }
@@ -2285,7 +2261,7 @@ fn startup_replaces_only_storage_it_cannot_read() {
     let clean = FaultyStore::new(usize::MAX, false);
     let (_, _) = start(clean.clone(), Platform::Web);
     for fail_from in 0..clean.0.requests.get() {
-        for kind in [ErrorKind::Unavailable, ErrorKind::Conflict, ErrorKind::OwnedElsewhere, ErrorKind::FailedWrite, ErrorKind::StorageFull] {
+        for kind in [ErrorKind::InvalidData, ErrorKind::Unavailable, ErrorKind::Conflict, ErrorKind::OwnedElsewhere, ErrorKind::FailedWrite, ErrorKind::StorageFull] {
             let store = FaultyStore::failing(fail_from, true, kind.clone());
             let (controller, mut host) = start(store.clone(), Platform::Web);
             let context = format!("{kind:?} from request {fail_from}");
@@ -2324,15 +2300,25 @@ pub(crate) fn close_native(
 }
 
 #[test]
-fn sqlite_startup_replaces_workspaces_of_the_same_version_it_cannot_read() {
+fn sqlite_startup_keeps_unreadable_workspaces_and_runs_in_memory() {
     let directory = crate::test_support::temp_dir("workspace-stale");
     let (controller, mut host) = start_native(&directory);
     assert_started(&controller, &mut host, "first start");
     close_native(controller, &mut host);
     let db = rusqlite::Connection::open(directory.join("workspaces.sqlite3")).unwrap();
+    let entities: Vec<Entity> = serde_json::from_str(include_str!("../tests/compat/1.0.15/entities.json")).unwrap();
+    let toolbar = entities.into_iter().find(|entity|entity.metadata.kind==ItemKind::Toolbar).unwrap();
+    let toolbar_id = toolbar.id.clone();
+    {
+        let mut store = SqliteStore::open(&directory.join("workspaces.sqlite3")).unwrap();
+        store.handle(StoreRequest::Commit {batch:CommitBatch::prepare(Owner::fresh(),vec![Mutation::Create {entity:toolbar,claim:false,name_policy:NamePolicy::Exact}]).unwrap()}).unwrap();
+    }
+    let toolbar_content: String = db.query_row("SELECT content FROM items WHERE id=?1",[&toolbar_id],|row|row.get(0)).unwrap();
+    let editing = include_str!("../tests/compat/1.0.15/editing.json");
+    db.execute("INSERT INTO editing(id,json) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET json=excluded.json",[editing]).unwrap();
     let stale = db
         .execute(
-            "UPDATE items SET content='{}'",
+            "UPDATE items SET content='{}' WHERE kind='workspace'",
             [],
         )
         .unwrap();
@@ -2340,17 +2326,19 @@ fn sqlite_startup_replaces_workspaces_of_the_same_version_it_cannot_read() {
 
     let (controller, mut host) = start_native(&directory);
     assert_started(&controller, &mut host, "stale start");
-    assert!(!controller.manager.in_memory());
-    assert_eq!(
-        notice(&host).as_deref(),
-        Some("Saved workspaces couldn't be opened, so they were reset.")
-    );
+    assert!(controller.manager.in_memory());
+    assert!(notice(&host).unwrap().starts_with("Workspace changes in this window won't be saved:"));
     close_native(controller, &mut host);
 
     let (controller, mut host) = start_native(&directory);
     assert_started(&controller, &mut host, "restart");
-    assert_eq!(notice(&host), None);
+    assert!(controller.manager.in_memory());
+    assert!(notice(&host).unwrap().starts_with("Workspace changes in this window won't be saved:"));
     close_native(controller, &mut host);
+    assert_eq!(db.query_row("SELECT count(*) FROM items WHERE content='{}'", [], |row| row.get::<_, u32>(0)).unwrap(), stale as u32);
+    assert_eq!(db.query_row("SELECT content FROM items WHERE id=?1",[&toolbar_id],|row|row.get::<_,String>(0)).unwrap(),toolbar_content);
+    assert_eq!(db.query_row("SELECT json FROM editing WHERE id=1",[],|row|row.get::<_,String>(0)).unwrap(),editing);
+    assert!(!directory.join("workspaces.unreadable.sqlite3").exists());
     let _ = std::fs::remove_dir_all(&directory);
 }
 

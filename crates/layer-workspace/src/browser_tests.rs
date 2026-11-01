@@ -179,6 +179,24 @@ fn browser_transactions_match_sqlite_contract() {
         1001,
     );
     execute(StoreRequest::Editing, 1001);
+    let mut later = layer_ui::EditingState::default();
+    later.colors.set_rgba([0.4,0.2,0.7,1.]).unwrap();
+    let mut colour_save = CommitBatch::prepare(other.clone(), vec![]).unwrap();
+    colour_save.editing_json = Some(serde_json::to_string(&later).unwrap());
+    colour_save.editing_fields = Some(vec!["colors".into()]);
+    execute(StoreRequest::Commit {batch:colour_save.clone()}, 1002);
+    editing.colors = later.colors;
+    let stored = execute(StoreRequest::Editing, 1002);
+    assert_eq!(serde_json::from_str::<layer_ui::EditingState>(stored["ok"]["value"].as_str().unwrap()).unwrap(), editing);
+    later = editing.clone();
+    later.colors.set_rgba([0.7,0.1,0.3,1.]).unwrap();
+    let mut newer = CommitBatch::prepare(owner.clone(), vec![]).unwrap();
+    newer.editing_json = Some(serde_json::to_string(&later).unwrap());
+    newer.editing_fields = Some(vec!["colors".into()]);
+    execute(StoreRequest::Commit {batch:newer},1003);
+    execute(StoreRequest::Commit {batch:colour_save},1004);
+    let stored = execute(StoreRequest::Editing,1004);
+    assert_eq!(serde_json::from_str::<layer_ui::EditingState>(stored["ok"]["value"].as_str().unwrap()).unwrap(),later);
     execute(StoreRequest::List, 1001);
     type PreferenceUpdate = fn(Option<Vec<String>>, Vec<String>) -> StoreRequest;
     for (read, update, ids, replacements) in [

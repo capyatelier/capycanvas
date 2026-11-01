@@ -1551,24 +1551,16 @@ fn native_unreadable_workspace_storage_input() {
     pump(500);
     let manager = d.w.workspaces.manager().unwrap();
     assert!(manager.error().is_none());
-    assert!(!manager.in_memory());
-    assert_eq!(
-        state(&d.w).notice.map(|notice| notice.text),
-        Some("Saved workspaces couldn't be opened, so they were reset.".into())
-    );
+    assert!(manager.in_memory());
+    assert!(state(&d.w).notice.unwrap().text.starts_with("Workspace changes in this window won't be saved:"));
     assert!(d.w.area.is_mapped());
     assert_eq!(state(&d.w).settings.pan_speed, 2.0);
     assert_eq!(state(&d.w).settings.zoom_speed, 1.0);
     assert_eq!(
         sql("SELECT count(*) FROM items WHERE content='{}'"),
-        "0"
+        "3"
     );
-    let kept = std::process::Command::new("sqlite3")
-        .arg(database.with_file_name("workspaces.unreadable.sqlite3"))
-        .arg("SELECT count(*) FROM items WHERE content='{}'")
-        .output()
-        .unwrap();
-    assert_eq!(String::from_utf8(kept.stdout).unwrap().trim(), "3");
+    assert!(!database.with_file_name("workspaces.unreadable.sqlite3").exists());
     d.w.dispatch(UiAction::Invoke {
         command: CommandId::ExportDocument,
     });
@@ -1595,7 +1587,7 @@ fn native_unreadable_workspace_storage_input() {
     assert!(state(&d.w).customization.drawer.is_some());
     crate::capture(
         &d.w,
-        d.input.dir.join("replaced-storage.png").to_str().unwrap(),
+        d.input.dir.join("unreadable-storage-in-memory.png").to_str().unwrap(),
     );
     d.finish();
 }

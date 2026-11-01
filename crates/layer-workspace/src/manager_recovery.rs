@@ -150,6 +150,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .collect();
         let mut recovery = CommitBatch::prepare(self.owner.clone(), mutations)?;
         recovery.editing_json = batch.editing_json;
+        recovery.editing_fields = batch.editing_fields;
         let restores_editing = recovery.editing_json.is_some();
         recovery.abandon_operations = batch.abandon_operations;
         recovery.abandon_operations.push(operation.into());

@@ -37,6 +37,10 @@ pub(crate) fn validate_ids(ids: &[String]) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn readable_ids(value: serde_json::Value) -> Option<Vec<String>> {
+    serde_json::from_value(value).ok().filter(|ids: &Vec<String>| validate_ids(ids).is_ok())
+}
+
 pub(crate) fn with_created_pins(
     pins: Option<Vec<String>>,
     created: &[String],

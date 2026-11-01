@@ -232,8 +232,9 @@ impl SqliteStore {
                 Ok(StoreResponse::Pending(
                     texts
                         .iter()
-                        .map(|v| serde_json::from_str(v).map_err(StoreError::from))
-                        .collect::<Result<_>>()?,
+                        .filter_map(|v| serde_json::from_str(v).ok())
+                        .filter(|batch| validate_payload(batch, |id| component(&self.connection, id)).is_ok())
+                        .collect(),
                 ))
             }
             StoreRequest::Reopen => {
@@ -268,7 +269,7 @@ impl SqliteStore {
                 |r| r.get(0),
             )
             .optional()?;
-        let current: Option<Vec<String>> = current.map(|s| serde_json::from_str(&s)).transpose()?;
+        let current = current.and_then(|s| serde_json::from_str(&s).ok()).and_then(manager::readable_ids);
         if update_preference(current.as_ref(), expected, &ids, |id| {
             Ok(header(&tx, id)?.kind == "workspace")
         })? {
@@ -286,10 +287,7 @@ impl SqliteStore {
                 |r| r.get(0),
             )
             .optional()?;
-        let ids: Option<Vec<String>> = json.map(|s| serde_json::from_str(&s)).transpose()?;
-        if let Some(ids) = &ids {
-            validate_switcher_ids(ids)?;
-        }
+        let ids = json.and_then(|s| serde_json::from_str(&s).ok()).and_then(manager::readable_ids);
         Ok(ids)
     }
     pub fn list(&mut self) -> Result<Vec<ItemSummary>> {
@@ -522,7 +520,7 @@ impl SqliteStore {
                     |row| row.get(0),
                 )
                 .optional()?;
-            let pins = pins.map(|s| serde_json::from_str(&s)).transpose()?;
+            let pins = pins.and_then(|s| serde_json::from_str(&s).ok()).and_then(manager::readable_ids);
             let pins = with_created_pins(pins, &batch.pin_workspaces)?;
             tx.execute("INSERT INTO workspace_switcher(id,workspace_ids) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET workspace_ids=excluded.workspace_ids", [serde_json::to_string(&pins)?])?;
         }
@@ -540,7 +538,10 @@ impl SqliteStore {
                 tx.execute("DELETE FROM bindings WHERE key=?1", [key])?;
             }
         }
-        if let Some(editing) = &batch.editing_json {
+        let current: Option<String> = if batch.editing_json.is_some() {
+            tx.query_row("SELECT json FROM editing WHERE id=1", [], |row| row.get(0)).optional()?
+        } else { None };
+        if let Some(editing) = merge_editing(current.as_deref(), &batch)? {
             tx.execute("INSERT INTO editing(id,json) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET json=excluded.json", [editing])?;
         }
         tx.execute(

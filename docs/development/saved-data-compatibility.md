@@ -106,11 +106,14 @@ chunk and may skip unknown
   is shared by every window but loaded once at startup, and each save writes
   the whole document. So a colour picked in one window drops a palette or brush
   override saved from another, even when both run the same build. Instead, a
-  save sends only the top-level fields that differ from what its window last
-  saved. The store merges them into the stored document, validates the result
-  and returns it, and the window adopts the returned values for fields it
-  hasn't changed since. Two windows that change the same field, such as both
-  editing palettes, still keep the later save.
+  save names the top-level fields that differ from what its window last
+  submitted. Its immutable payload keeps the complete document for recovery
+  and fallback. The store merges the named fields into the stored document and
+  validates the result inside the write transaction. If validation fails, it
+  replaces the whole document with the submitted one. Receipts and live state
+  do not change; windows do not adopt another window's editing values. Two
+  windows that change the same field, such as both editing palettes, still keep
+  the later save.
 - **When every workspace is unreadable,** the included workspaces are rebuilt
   from their included layouts, but only in a start whose version snapshot
   succeeded. In any other start, startup runs in memory with the existing notice
@@ -129,10 +132,11 @@ moves an unparsable preferences file aside as `.bad` and starts empty. The user
 keeps a copy but loses every setting. For a file that parses, field-by-field
 restore keeps everything except what failed. `Settings::restore` already works
 this way, so this extends an existing helper rather than adding a mechanism.
-Sending only changed fields is
-[JSON Merge Patch](https://www.rfc-editor.org/rfc/rfc7396): a patch replaces
-the members it names and leaves the rest. It avoids the lost update that a
+Replacing only named top-level members avoids the lost update that a
 whole-document overwrite causes when two writers start from the same read.
+This is the top-level case of
+[JSON Merge Patch](https://www.rfc-editor.org/rfc/rfc7396), except null is kept as
+a value. Nested objects are replaced as complete fields.
 
 ### 3. A conversion step only where meaning changed
 

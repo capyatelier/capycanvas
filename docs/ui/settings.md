@@ -366,7 +366,8 @@ and use defaults for fields they cannot read:
   survive. The binary envelope, digest and size limits remain strict. The
   hidden-profile list keeps the IDs this build reads. The web color-preference database
   adds missing stores when its version changes and never deletes stored data.
-- Workspaces: startup replaces a store it cannot read, after keeping a copy; see
+- Workspaces: unreadable rows are kept, and startup uses memory if no workspace
+  can open. Only an unsupported table schema can trigger a reset; see
   [workspace startup](../internals/workspace-ownership.md#startup-always-adopts-a-workspace).
 - Caches discard data they cannot use.
 - Artwork is never replaced automatically. A recovery copy this build cannot

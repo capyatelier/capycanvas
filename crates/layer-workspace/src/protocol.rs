@@ -103,6 +103,8 @@ pub struct CommitBatch {
     pub operation_id: String,
     pub owner: Owner,
     pub(crate) editing_json: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) editing_fields: Option<Vec<String>>,
     pub(crate) writes: Vec<PreparedWrite>,
     pub(crate) components: BTreeMap<String, String>,
     pub bindings: Vec<(String, Option<String>)>,
@@ -118,6 +120,7 @@ impl CommitBatch {
             operation_id: new_id(),
             owner,
             editing_json: None,
+            editing_fields: None,
             writes: Vec::new(),
             components: BTreeMap::new(),
             bindings: Vec::new(),

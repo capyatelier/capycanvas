@@ -91,6 +91,79 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn editing_saves_from_two_windows_keep_both_changes() {
+    pollster::block_on(async {
+        let f = Fixture::new();
+        let a = &f.manager;
+        a.load_editing().await.unwrap();
+        let b = WorkspaceManager::new(a.store.worker.clone(), Platform::Gtk);
+        b.load_editing().await.unwrap();
+        let incoming = b.initialize(2_000).await.unwrap();
+        b.activate(incoming);
+        let english = layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
+        let mut from_b = b.editing().map(|e| *e).unwrap_or_default();
+        from_b.tools.set_override(from_b.preset, "size", 91., &english).unwrap();
+        b.observe_editing(from_b);
+        b.flush().await.unwrap();
+        let mut from_a = a.editing().map(|e| *e).unwrap_or_default();
+        from_a.colors.set_rgba([0.4, 0.2, 0.7, 1.]).unwrap();
+        a.observe_editing(from_a.clone());
+        a.flush().await.unwrap();
+        let reopened = WorkspaceManager::new(a.store.worker.clone(), Platform::Gtk);
+        reopened.load_editing().await.unwrap();
+        let stored = reopened.editing().unwrap();
+        assert_eq!(stored.tools.overrides.get(&stored.preset).and_then(|o| o.get("size")).copied(), Some(91.), "window A's later colour save dropped window B's brush override");
+        assert_eq!(stored.colors, from_a.colors);
+        assert_eq!(*a.editing().unwrap(), from_a);
+        from_a.region_smooth_edges = false;
+        let palette = from_a.color_library.prepare_creation(layer_ui::ColorLibraryAction::CreatePalette {name:"Shared palette".into()},&english).unwrap();
+        from_a.color_library.apply(palette).unwrap();
+        a.observe_editing(from_a);
+        a.flush().await.unwrap();
+        let mut from_b = *b.editing().unwrap();
+        from_b.colors.set_rgba([0.7, 0.1, 0.3, 1.]).unwrap();
+        b.observe_editing(from_b.clone());
+        b.flush().await.unwrap();
+        reopened.load_editing().await.unwrap();
+        let stored = reopened.editing().unwrap();
+        assert_eq!(stored.colors, from_b.colors);
+        assert!(!stored.region_smooth_edges);
+        assert_eq!(stored.tools, from_b.tools);
+        assert!(stored.color_library.palettes.iter().any(|palette|palette.name=="Shared palette"));
+    });
+}
+
+#[test]
+fn startup_skips_an_unreadable_preference_when_readable_workspaces_are_owned() {
+    pollster::block_on(async {
+        let f = Fixture::new();
+        let worker = &f.manager.store.worker;
+        let mut others = Vec::new();
+        for _ in 0..2 {
+            let other = WorkspaceManager::new(worker.clone(),Platform::Gtk);
+            let incoming = other.initialize(2000).await.unwrap();
+            other.activate(incoming);
+            others.push(other);
+        }
+        let unreadable = crate::test_support::workspace("Unreadable preferred workspace");
+        let id = unreadable.id.clone();
+        let creator = Owner::fresh();
+        let mut batch = CommitBatch::prepare(creator.clone(),vec![Mutation::Create {entity:unreadable,claim:true,name_policy:NamePolicy::Exact}]).unwrap();
+        batch.bindings.push(("last_workspace".into(),Some(id.clone())));
+        worker.execute(StoreRequest::Commit {batch}).await.unwrap();
+        worker.execute(StoreRequest::Release {id:id.clone(),owner:creator,fence:"1".into()}).await.unwrap();
+        let sql = rusqlite::Connection::open(f.directory.join("workspaces.sqlite3")).unwrap();
+        sql.execute("UPDATE items SET content='{}' WHERE id=?1",[&id]).unwrap();
+        let fourth = WorkspaceManager::new(worker.clone(),Platform::Gtk);
+        let incoming = fourth.initialize(3000).await.unwrap();
+        assert_ne!(incoming.entity.id,id);
+        assert!(!model::is_default_item(&incoming.entity.id));
+        incoming.entity.validate().unwrap();
+        fourth.release(&incoming).await;
+    });
+}
+
+#[test]
 fn concurrent_default_catalog_creation_retires_only_the_duplicate_seed() {
     struct RacingStore {
         worker: StoreWorker,
@@ -1070,13 +1143,19 @@ fn interrupted_editing_recovers_without_creating_a_workspace() {
         editing.tools.set_override(editing.preset, "size", 91., &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         let mut batch = CommitBatch::prepare(Owner::fresh(), vec![]).unwrap();
         batch.editing_json = Some(serde_json::to_string(&editing).unwrap());
+        batch.editing_fields = Some(vec!["tools".into()]);
         let sql = rusqlite::Connection::open(f.directory.join("workspaces.sqlite3")).unwrap();
         sql.execute_batch("CREATE TRIGGER interrupt_editing BEFORE INSERT ON editing BEGIN SELECT RAISE(ABORT,'interrupted editing'); END;").unwrap();
         assert!(m.store.worker.request(StoreRequest::Commit { batch: batch.clone() }).await.is_err());
         assert!(m.interrupted_changes(3000).await.unwrap().iter().any(|(id, _)| id == &batch.operation_id));
         let count = m.items().len();
         sql.execute_batch("DROP TRIGGER interrupt_editing;").unwrap();
+        let mut other = layer_ui::EditingState::default();
+        other.colors.set_rgba([0.4,0.2,0.7,1.]).unwrap();
+        m.observe_editing(other.clone());
+        m.flush().await.unwrap();
         assert!(m.recover_interrupted(&batch.operation_id, 4000).await.unwrap().is_none());
+        editing.colors = other.colors;
         assert_eq!(m.editing(), Some(Box::new(editing)));
         assert_eq!(m.items().len(), count);
         assert!(m.interrupted_changes(5000).await.unwrap().is_empty());
