@@ -435,6 +435,6 @@ tilt-reverse-horizontal = 左右を反転
 tilt-reverse-vertical = 上下を反転
 tilt-swap-axes = 軸を入れ替え
 tilt-use-pen = ここでペンを使ってください
-common-stroke-input-canceled = ストロークが長すぎたため、取り消されました。引き続き描画できます。
+common-stroke-input-limit = ストロークが入力上限に達したため終了しました。描いた部分は保持されています。
 
 native-color-stroke-recording-file-type = Capy ストローク記録

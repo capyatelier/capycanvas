@@ -153,6 +153,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Ok(());
         };
         reply.handled = true;
+        if !self.binding_enabled(&definition.action) {return Ok(());}
         match definition.action {
             ShortcutAction::Navigate { mode } => self.interaction.navigation = Some((trigger.into(), mode)),
             ShortcutAction::Hold { action } => self.press_hold(trigger.into(), *action),

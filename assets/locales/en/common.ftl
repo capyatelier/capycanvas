@@ -619,4 +619,4 @@ tilt-reverse-horizontal = Reverse horizontal
 tilt-reverse-vertical = Reverse vertical
 tilt-swap-axes = Swap axes
 tilt-use-pen = Use your pen here
-common-stroke-input-canceled = That stroke was too long and was canceled. You can keep painting.
+common-stroke-input-limit = That stroke reached the input limit and was finished. Your paint was kept.

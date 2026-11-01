@@ -694,6 +694,6 @@ tilt-reverse-horizontal = Balik horizontal
 tilt-reverse-vertical = Balik vertikal
 tilt-swap-axes = Tukar sumbu
 tilt-use-pen = Gunakan pena di sini
-common-stroke-input-canceled = Goresan terlalu panjang dan dibatalkan. Anda dapat terus melukis.
+common-stroke-input-limit = Goresan mencapai batas input dan telah diselesaikan. Hasil lukisan tetap dipertahankan.
 
 native-color-stroke-recording-file-type = Rekaman goresan Capy

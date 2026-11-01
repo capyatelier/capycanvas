@@ -621,6 +621,59 @@ fn pen_buttons_are_opt_in_and_use_the_hold_lifecycle() {
 }
 
 #[test]
+fn buttons_and_keys_preserve_an_owned_stroke() {
+    for end in [Some(PenPhase::Up),Some(PenPhase::Cancel),None] {
+        let mut s=session(Platform::Gtk);
+        bind(&mut s,"pen.button.secondary","command.Eraser");
+        let preset=s.state.brush.preset;
+        let before=s.engine.checkpoint();
+        let route=|s:&mut UiSession<Recorder>,sequence,phase,button| {
+            let event=event(s,sequence,phase,1.);
+            let contact=match phase {PenPhase::Down=>ContactPhase::Down,PenPhase::Move=>ContactPhase::Move,
+                PenPhase::Up=>ContactPhase::Up,_=>ContactPhase::Cancel};
+            let reply=s.input(pointer_input(1,contact,PointerKind::Pen,button,
+                [event.surface_position.x,event.surface_position.y],event.timestamp_ns)).unwrap();
+            if reply.paint {s.pen(event);}
+            reply.paint
+        };
+        assert!(route(&mut s,1,PenPhase::Down,PointerButton::Primary));
+        assert!(route(&mut s,2,PenPhase::Move,PointerButton::Primary));
+        s.frame(30_000_000,30_000_000).unwrap();
+        assert!(s.engine.has_active_stroke());
+        for button in [PointerButton::Pan,PointerButton::Other] {
+            for phase in [PenPhase::Down,PenPhase::Up] {
+                assert!(!route(&mut s,3,phase,button),"{button:?}/{phase:?} cannot replace the tip");
+            }
+        }
+        assert!(!route(&mut s,3,PenPhase::Down,PointerButton::Primary));
+        assert!(!s.input(pointer_input(1,ContactPhase::Cancel,PointerKind::Mouse,
+            PointerButton::Primary,[300.;2],30_000_000)).unwrap().paint);
+        for button in [PenButton::Primary,PenButton::Secondary,PenButton::Tertiary] {
+            for pressed in [true,false] {s.input(UiInput::PenButton {button,pressed}).unwrap();}
+            assert!(painting_with(&s,preset),"{button:?}: the owned stroke keeps its tool");
+        }
+        for name in ["q","Shift","Control","Alt"," ","e","b","z","Escape"] {
+            for pressed in [true,false] {key(&mut s,name,pressed,name=="z",false);}
+            assert!(s.engine.has_active_stroke(),"{name}: the owned stroke stays active");
+            assert_eq!(s.engine.checkpoint(),before,"{name}: no stroke or edit ends early");
+        }
+        assert!(route(&mut s,4,PenPhase::Move,PointerButton::Primary));
+        s.frame(50_000_000,50_000_000).unwrap();
+        if let Some(end)=end {assert!(route(&mut s,6,end,PointerButton::Primary));}
+        else {
+            assert!(s.input(UiInput::Blur).unwrap().cancel_paint);
+            s.pen(event(&s,6,PenPhase::Cancel,1.));
+        }
+        s.frame(70_000_000,70_000_000).unwrap();
+        s.frame(1_000_000_000,1_000_000_000).unwrap();
+        assert_eq!(s.engine.metrics().committed_strokes,1,"{end:?}: preserve the prefix and finish once");
+        assert_ne!(s.engine.checkpoint(),before);
+        invoke(&mut s,CommandId::Undo);
+        assert_eq!(s.engine.checkpoint(),before);
+    }
+}
+
+#[test]
 fn a_new_drawing_keeps_the_hosts_tap_timing() {
     let mut s = painted_session();
     s.set_touch_policy(TouchPolicy { tap_ms: 900, slop: 24. }).unwrap();

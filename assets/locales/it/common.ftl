@@ -394,6 +394,6 @@ tilt-reverse-horizontal = Inverti orizzontale
 tilt-reverse-vertical = Inverti verticale
 tilt-swap-axes = Scambia assi
 tilt-use-pen = Usa la penna qui
-common-stroke-input-canceled = Il tratto era troppo lungo ed è stato annullato. Puoi continuare a dipingere.
+common-stroke-input-limit = Il tratto ha raggiunto il limite di input ed è stato terminato. Quanto dipinto è stato conservato.
 
 native-color-stroke-recording-file-type = Registrazione dei tratti Capy

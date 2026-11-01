@@ -387,6 +387,6 @@ tilt-reverse-horizontal = กลับแนวนอน
 tilt-reverse-vertical = กลับแนวตั้ง
 tilt-swap-axes = สลับแกน
 tilt-use-pen = ใช้ปากกาที่นี่
-common-stroke-input-canceled = เส้นยาวเกินไปจึงถูกยกเลิก คุณสามารถวาดต่อได้
+common-stroke-input-limit = เส้นถึงขีดจำกัดการป้อนข้อมูลและสิ้นสุดแล้ว ส่วนที่วาดไว้ยังคงอยู่
 
 native-color-stroke-recording-file-type = การบันทึกเส้นของ Capy

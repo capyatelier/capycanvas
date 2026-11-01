@@ -507,6 +507,11 @@ mod painted_selection_checks {
         );
         send(&mut s, PenPhase::Down, 100.);
         send(&mut s, PenPhase::Cancel, 100.);
+        assert!(s.painted_selections.busy());
+        s.frame(4,4).unwrap();
+        assert!(s.engine.backend().selection_updates.last().unwrap().finish);
+        reply(&mut s,0);
+        s.frame(5,5).unwrap();
         assert!(!s.painted_selections.busy());
         s.dispatch(UiAction::SetToolSetting {
             id: "selection_brush_size".into(),

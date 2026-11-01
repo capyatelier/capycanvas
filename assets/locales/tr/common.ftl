@@ -611,6 +611,6 @@ tilt-reverse-horizontal = Yatayı ters çevir
 tilt-reverse-vertical = Dikeyi ters çevir
 tilt-swap-axes = Eksenleri değiştir
 tilt-use-pen = Kaleminizi burada kullanın
-common-stroke-input-canceled = Çizgi çok uzun olduğu için iptal edildi. Boyamaya devam edebilirsiniz.
+common-stroke-input-limit = Çizgi giriş sınırına ulaştı ve tamamlandı. Boyadığınız kısım korundu.
 
 native-color-stroke-recording-file-type = Capy fırça darbesi kaydı

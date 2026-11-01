@@ -618,6 +618,6 @@ tilt-reverse-horizontal = Horizontal umkehren
 tilt-reverse-vertical = Vertikal umkehren
 tilt-swap-axes = Achsen tauschen
 tilt-use-pen = Stift hier verwenden
-common-stroke-input-canceled = Der Strich war zu lang und wurde verworfen. Du kannst weiter malen.
+common-stroke-input-limit = Der Strich hat die Eingabegrenze erreicht und wurde beendet. Deine Zeichnung bleibt erhalten.
 
 native-color-stroke-recording-file-type = Capy-Strichaufzeichnung

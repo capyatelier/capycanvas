@@ -320,6 +320,7 @@ pub struct StrokeBuilder {
     predicted: Vec<StrokePoint>,
     start_ns: Option<u64>,
     last_real_source: usize,
+    last_event: Option<PenEvent>,
     tilt: TiltCurve,
 }
 
@@ -330,6 +331,7 @@ impl StrokeBuilder {
             predicted: Vec::with_capacity(32),
             start_ns: None,
             last_real_source: 0,
+            last_event: None,
             tilt: TiltCurve::default(),
         }
     }
@@ -359,6 +361,7 @@ impl StrokeBuilder {
         } else {
             self.predicted.clear();
             self.last_real_source = self.real.len();
+            self.last_event = Some(event);
             self.real.push(point);
         }
     }
@@ -366,6 +369,8 @@ impl StrokeBuilder {
     pub fn real_points(&self) -> &[StrokePoint] {
         &self.real
     }
+
+    pub(crate) fn last_event(&self) -> Option<PenEvent> { self.last_event }
 
     pub fn predicted_points(&self) -> &[StrokePoint] {
         &self.predicted
@@ -415,6 +420,7 @@ impl StrokeBuilder {
     /// Predicted points are intentionally never returned as document data.
     pub fn finish(&mut self) -> Option<Arc<[StrokePoint]>> {
         self.start_ns.take()?;
+        self.last_event=None;
         self.predicted.clear();
         let points = Arc::from(self.real.as_slice());
         self.real.clear();
@@ -425,6 +431,7 @@ impl StrokeBuilder {
         self.real.clear();
         self.predicted.clear();
         self.start_ns = None;
+        self.last_event = None;
     }
 }
 

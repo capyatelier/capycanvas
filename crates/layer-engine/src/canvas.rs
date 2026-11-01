@@ -61,7 +61,7 @@ pub struct EngineMetrics {
     pub last_consumed_paint_ns: u64,
     pub frames: u64,
     pub committed_strokes: u64,
-    pub input_budget_cancellations: u64,
+    pub input_budget_completions: u64,
     pub platform_prediction_frames: u64,
     pub engine_prediction_frames: u64,
 }
@@ -1520,7 +1520,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if self.settings.retouch.is_some() {
             self.refresh_retouch();
         }
-        self.cancel_over_budget_contact();
+        let input_limit_finished=self.finish_over_budget_contact()?;
         let mut rebuilt = false;
         if self.rebuild_all || self.rebuild_completed {
             rebuilt |= self.rebuild_all;
@@ -1528,7 +1528,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             self.rebuild_all = false;
         }
         // Complete queued raster operations before starting another contact.
-        if !self
+        if !input_limit_finished && !self
             .batches
             .iter()
             .any(|b| matches!(b.kind, DabBatchKind::RasterOperation(_)))
@@ -1763,9 +1763,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     fn process_captured_event(&mut self, event: PenEvent) -> Result<(), EngineError<B::Error>> {
         if event.phase == PenPhase::Down && !event.flags.contains(SampleFlags::CORRECTION) {
             let key = (event.device_id, event.sequence);
-            self.contact_settings = Some(if self.queued_contacts.front().is_some_and(|(found, _)| *found == key) {
+            let settings=if self.queued_contacts.front().is_some_and(|(found, _)| *found == key) {
                 self.queued_contacts.pop_front().unwrap().1
-            } else { self.settings.clone() });
+            } else { self.settings.clone() };
+            if self.active_stroke.is_some() {return Ok(());}
+            self.contact_settings=Some(settings);
         }
         let Some(mut settings) = self.contact_settings.take() else { return self.process_event(event); };
         std::mem::swap(&mut settings, &mut self.settings);
@@ -1806,6 +1808,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             return Ok(());
         }
         for _ in 0..INPUT_BATCH {
+            if self.finish_over_budget_contact()? {break;}
+            if self.active_stroke.is_some() && self.builder.real_points().len()>=MAX_CONTACT_POINTS {break;}
             if self.input.peek().is_some_and(|e| {
                 e.phase == PenPhase::Up || e.flags.contains(SampleFlags::CORRECTION)
             }) && !self.backend.can_capture_raster()
@@ -1815,7 +1819,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             let Some(event) = self.input.pop() else {
                 break;
             };
-            self.cancel_over_budget_contact();
             self.process_captured_event(event)?;
             // Publish one contact boundary before consuming the next contact.
             // This keeps each undo revision tied to its exact GPU queue point.
@@ -1891,9 +1894,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 self.completed_publication = None;
                 self.estimates.clear();
                 self.transform_preview = None;
-                if self.active_stroke.is_some() {
-                    self.cancel_active();
-                }
                 let mut tool = self.stroke_tool(&event);
                 let Ok(StrokeTarget {
                     target,
@@ -2047,7 +2047,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     return Ok(());
                 }
                 let momentum = self.active_stroke.as_ref().unwrap().momentum.is_some();
-                if self.pending_up.take().is_none() && !momentum {
+                if self.pending_up.take().is_none() && !momentum && self.builder.real_points().len()<MAX_CONTACT_POINTS {
                     self.builder.push(event, transform, self.settings.pressure.clone());
                     self.record_builder_sample(event);
                     self.track_estimate(event, transform);
@@ -2571,11 +2571,17 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.rebuild_all = true;
     }
 
-    fn cancel_over_budget_contact(&mut self) {
-        if self.active_stroke.is_some() && self.builder.real_points().len()>=MAX_CONTACT_POINTS {
-            self.cancel_active();
-            self.metrics.input_budget_cancellations=self.metrics.input_budget_cancellations.saturating_add(1);
+    fn finish_over_budget_contact(&mut self) -> Result<bool,EngineError<B::Error>> {
+        if self.active_stroke.is_some() && self.pending_up.is_none()
+            && self.builder.real_points().len()>=MAX_CONTACT_POINTS && self.backend.can_capture_raster()
+        {
+            let event=self.builder.last_event().expect("an active stroke has input");
+            self.process_captured_event(PenEvent {phase:PenPhase::Up,
+                timestamp_ns:self.frame_clock_ns.unwrap_or(event.timestamp_ns).max(event.timestamp_ns),..event})?;
+            self.metrics.input_budget_completions=self.metrics.input_budget_completions.saturating_add(1);
+            return Ok(true);
         }
+        Ok(false)
     }
 }
 
@@ -3062,7 +3068,29 @@ mod tests {
     }
 
     #[test]
-    fn exhausting_contact_input_cancels_only_that_contact_and_keeps_rendering() {
+    fn another_down_keeps_the_owned_stroke_and_captured_settings() {
+        let (mut input,mut canvas)=engine("Owned input",64,64);
+        let down=event(1,PenPhase::Down,8.);
+        canvas.capture_queued_contact(down);input.push(down).unwrap();canvas.render_frame().unwrap();
+        let id=canvas.active_stroke.as_ref().unwrap().id;
+        let points=canvas.builder.real_points().len();
+        let captured=canvas.contact_settings.as_ref().unwrap().brush.clone();
+        let mut brush=canvas.configured_brush().clone();brush.flow=0.5;canvas.set_brush(brush).unwrap();
+        let duplicate=event(2,PenPhase::Down,40.);
+        canvas.capture_queued_contact(duplicate);input.push(duplicate).unwrap();canvas.render_frame().unwrap();
+        assert_eq!(canvas.active_stroke.as_ref().unwrap().id,id);
+        assert_eq!(canvas.builder.real_points().len(),points);
+        assert!(canvas.queued_contacts.is_empty());
+        assert_eq!(canvas.contact_settings.as_ref().unwrap().brush,captured);
+        for (sequence,phase) in [(3,PenPhase::Move),(4,PenPhase::Up)] {
+            input.push(event(sequence,phase,48.)).unwrap();canvas.render_frame().unwrap();
+        }
+        assert_eq!(canvas.metrics().committed_strokes,1);
+        canvas.undo().unwrap();assert!(!canvas.can_undo());
+    }
+
+    #[test]
+    fn exhausting_contact_input_commits_its_prefix_and_keeps_rendering() {
         for remaining in [0,1] {
             let (mut input,mut canvas)=engine("Input budget",64,64);
             for (sequence,phase) in [(1,PenPhase::Down),(2,PenPhase::Up)] {
@@ -3079,15 +3107,15 @@ mod tests {
             canvas.render_frame().expect("a contact limit cannot stop the canvas");
             input.push(event(200_002,PenPhase::Up,24.)).unwrap();canvas.render_frame().unwrap();
             assert!(!canvas.has_active_stroke());
-            assert_eq!(canvas.metrics().input_budget_cancellations,1);
-            assert_eq!(canvas.checkpoint(),checkpoint);
-            assert_eq!(canvas.document().artwork,document.artwork);
+            assert_eq!(canvas.metrics().input_budget_completions,1);
+            assert_ne!(canvas.checkpoint(),checkpoint);
+            assert_ne!(canvas.document().artwork,document.artwork);
             assert_eq!(canvas.document().working,document.working);
             for (sequence,phase) in [(200_003,PenPhase::Down),(200_004,PenPhase::Up)] {
                 input.push(event(sequence,phase,32.)).unwrap();canvas.render_frame().unwrap();
             }
-            assert_eq!(canvas.metrics().committed_strokes,2);
-            canvas.undo().unwrap();assert_eq!(canvas.checkpoint(),checkpoint);
+            assert_eq!(canvas.metrics().committed_strokes,3);
+            canvas.undo().unwrap();canvas.undo().unwrap();assert_eq!(canvas.checkpoint(),checkpoint);
             canvas.redo().unwrap();assert!(canvas.capture_artwork(0).is_ok());
         }
     }
@@ -5192,7 +5220,7 @@ mod tests {
     }
 
     #[test]
-    fn live_contact_budget_cancels_without_committing_partial_pixels() {
+    fn live_contact_budget_commits_the_drawn_prefix() {
         let (mut input, mut engine) = engine("bounded", 64, 64);
         input.push(event(1, PenPhase::Down, 8.)).unwrap();
         engine.render_frame().unwrap();
@@ -5205,12 +5233,12 @@ mod tests {
             );
         }
         engine.render_frame().unwrap();
-        assert_eq!(engine.metrics().input_budget_cancellations,1);
+        assert_eq!(engine.metrics().input_budget_completions,1);
         assert!(!engine.has_active_stroke());
-        assert_eq!(engine.checkpoint(), checkpoint);
-        assert!(!engine.can_undo());
+        assert_ne!(engine.checkpoint(), checkpoint);
+        assert!(engine.can_undo());
         engine.render_frame().unwrap();
-        assert!(active_paint(engine.document()).raster.is_empty());
+        assert!(!active_paint(engine.document()).raster.is_empty());
     }
 
     #[test]

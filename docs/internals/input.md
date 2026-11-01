@@ -17,10 +17,10 @@ input that should not be confused with prediction.
 
 Shared numerical admission drops samples with non-finite coordinates or pen
 axes before cursor, tool and recording consumers. A damaged real release
-cancels its contact using the last valid sample. Damaged predictions and
+finishes a painting stroke using the last valid sample. Damaged predictions and
 corrections leave the real contact intact. The session retains at most sixteen
 contacts in storage allocated once when it starts. Packed batches preserve
-valid siblings; malformed native structures cancel their matching real contact.
+valid siblings; malformed native structures finish their matching painting contact.
 Packed adapters use `PointerBatch` to validate estimate metadata and decode
 contact starts before forwarding numerical samples. Stale document revisions
 leave the current contact alone.
@@ -49,8 +49,12 @@ into document coordinates using the appropriate view information.
 The platform collects input without waiting for a completed GPU frame. A bounded
 queue carries drawing records to the engine owner. On the single-threaded browser
 client, the same responsibilities run on one event loop; a thread is not required
-by the shared contract. Hosts must explicitly handle queue saturation and gesture
-cancellation rather than silently losing a stroke boundary.
+by the shared contract. Shared ownership ignores secondary contact boundaries and
+unrelated device cancellations during ink. Focus or capture loss and the hard
+point limit finish the drawn prefix; explicit editing Cancel commands retain rollback.
+Hosts preserve native identity instead of treating every gesture cancellation as blur.
+`buttons_and_keys_preserve_an_owned_stroke` covers this policy without a window.
+`another_down_keeps_the_owned_stroke_and_captured_settings` covers direct engine admission.
 
 Touch timestamps are ordered within each contact. Coalesced histories for
 different fingers can overlap in time when a host delivers each pointer's batch
@@ -73,8 +77,8 @@ keeps zoom/rotate/pan contacts owned until release, independently of held keys.
 Pen side buttons arrive as `pen_button` input, never as pen samples, and do
 nothing until the artist binds them ([pen buttons](../ui/settings.md#touch-gestures-and-pen-buttons)).
 Pressing or releasing one must not interrupt, finish or restart a tip or eraser
-stroke, or start mouse navigation; a bound tool change applies after the stroke
-ends. Adapters filter native button transitions before gesture arbitration and
+stroke, or start mouse navigation; a bound hold applies after the stroke
+ends. Action shortcuts are disabled during ink; Escape can explicitly cancel an editing gesture. Adapters filter native button transitions before gesture arbitration and
 preserve tip and eraser identity. Apple Pencil double-taps and squeezes arrive
 the same way as `stylus_action` input, carrying the system's choice
 ([Pencil gestures](../ui/settings.md#touch-gestures-and-pen-buttons)).

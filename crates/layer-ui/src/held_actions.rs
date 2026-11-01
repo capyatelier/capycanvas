@@ -256,6 +256,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// bindings so a less specific one can run instead.
     pub(super) fn binding_enabled(&self, action: &ShortcutAction) -> bool {
         match action {
+            ShortcutAction::Action { .. } if self.stroke_contact_active() => false,
             ShortcutAction::Action { action } => match &**action {
                 UiAction::Invoke { command } => if navigation::command_mode(*command).is_some() { self.navigation_idle() }
                     else { self.command_flags(*command).0 || self.defers(action) },

@@ -1156,7 +1156,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn native_paste_input(&mut self) -> Result<UiChange, String> {
-        if self.shortcut_input_blocked(false, true) || !self.command_flags(CommandId::PasteImage).0 {
+        if self.shortcut_input_blocked(false, true) || !self.canvas_contact_idle() || !self.command_flags(CommandId::PasteImage).0 {
             return Ok(UiChange { revision: self.state.revision, ..Default::default() });
         }
         self.dispatch(UiAction::Invoke { command: CommandId::PasteImage })
@@ -1583,6 +1583,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         }
                     }
                     let blocked = self.shortcut_input_blocked(editing, modifiers.command);
+                    reply.handled |= !self.canvas_contact_idle();
                     // Explicit application chords can open search from a
                     // numeric/text editor. Plain typing still belongs to it.
                     if editing && modifiers.command && self.command_flags(CommandId::SearchCommands).0
@@ -1690,6 +1691,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                 } else {
                     let paint = self.pointer_contact_paints(kind, button, position);
+                    let owned=self.interaction.pointer.is_some_and(|p|p.paint);
+                    reply.handled |= owned;
+
                     if phase == ContactPhase::Down
                         && self.interaction.pointer.is_none()
                         && !self.state.settings_open
@@ -1709,7 +1713,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                             self.begin_clone_source_contact(id, kind, position);
                         }
                     }
-                    if let Some(mut contact) = self.interaction.pointer.filter(|p| p.id == id && p.kind == kind) {
+                    if let Some(mut contact) = self.interaction.pointer.filter(|p| p.id == id && p.kind == kind
+                        && (!p.paint || (button==PointerButton::Primary && (phase!=ContactPhase::Down || !owned)))) {
                         reply.handled = true;
                         reply.paint = contact.paint;
                         if let Some(change) = self.clone_source_input(id, phase, position) {
@@ -1740,7 +1745,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     reply.change = self.changed(regions::BRUSH | regions::COMMANDS | regions::CUSTOMIZATION | regions::COLOR_PREVIEW, true);
                 }
                 self.eyedropper.cancel();
-                if self.cancel_layer_contact()? {
+                if !self.stroke_contact_active() && self.cancel_layer_contact()? {
                     reply.cancel_paint = true;
                     reply.change = self.changed(regions::DOCUMENT, true);
                 }
@@ -4394,7 +4399,13 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     /// Shared numerical admission before cursor, tool and recording consumers.
-    pub fn filter_pen(&mut self, event: PenEvent) -> Option<PenEvent> {self.pen_input.filter(event)}
+    pub fn filter_pen(&mut self, event: PenEvent) -> Option<PenEvent> {
+        let finish=self.stroke_contact_active();
+        self.pen_input.filter(event).map(|mut event| {
+            if finish && event.phase==PenPhase::Cancel {event.phase=PenPhase::Up;}
+            event
+        })
+    }
     pub fn take_pen_cancel(&mut self, id:u64,tool:layer_engine::ToolKind) -> Option<PenEvent> {self.pen_input.cancel(id,tool)}
 
     fn pen_ready(&mut self, mut event: PenEvent) -> Result<(), PenEvent> {
@@ -4851,12 +4862,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.sync_vector_line_preview(now_ns, presentation_ns);
         let preview = self.sync_previews(now_ns, presentation_ns);
         let clone_source = self.engine.clone_source();
-        let input_cancellations=self.engine.metrics().input_budget_cancellations;
+        let budget_completions=self.engine.metrics().input_budget_completions;
         self.engine
             .render_frame_for(now_ns, presentation_ns)
             .map_err(error)?;
-        if self.engine.metrics().input_budget_cancellations!=input_cancellations {
-            self.raise_message_notice(MessageId::COMMON_STROKE_INPUT_CANCELED);
+        if self.engine.metrics().input_budget_completions!=budget_completions {
+            self.raise_message_notice(MessageId::COMMON_STROKE_INPUT_LIMIT);
         }
         if self.engine.clone_source() != clone_source {
             self.sync_retouch_points();
@@ -6102,6 +6113,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         let point = self.pointer64(position);
         self.transform_touch_hit(position) || self.clone_disc_hit(position) || self.object_touch_target(position)
             || self.vector_move_touch_target(point) || self.vector_points_touch_target(point)
+    }
+    fn stroke_contact_active(&self) -> bool {
+        self.painted_selections.has_contact() || (self.layer_interaction.tool==LayerCanvasTool::Paint
+            && !self.objects.placing() && !self.operation.active()
+            && (self.pen_contact || self.engine.has_active_stroke() || self.deferred_contact()==Some(true)
+                || self.vector_lines.active() || self.vector_lines.erasing()))
     }
     fn paint_contact_busy(&self) -> bool {
         self.pen_contact || (!self.engine.backend().has_pending_submission()
@@ -15936,6 +15953,10 @@ mod tests {
         assert!(!s.scroll([400., 400.], [0., -40.], 1., true, false).unwrap().canvas_wake);
         assert_eq!(s.state.camera, before);
         s.pen(event(&s, 2, PenPhase::Cancel, 1.0));
+        assert!(!s.scroll([400., 400.], [0., -40.], 1., true, false).unwrap().canvas_wake);
+        s.renderer_mut().painting_unready=false;
+        for frame in 2..40 {s.frame(frame*10_000_000,frame*10_000_000).unwrap();}
+        assert_eq!(s.engine.metrics().committed_strokes,1);
         assert!(s.scroll([400., 400.], [0., -40.], 1., true, false).unwrap().canvas_wake);
     }
     #[test]
@@ -18940,7 +18961,7 @@ mod tests {
         );
     }
     #[test]
-    fn cancel_removes_provisional_stroke_and_binding_actions_roundtrip() {
+    fn interruption_commits_provisional_stroke_and_binding_actions_roundtrip() {
         let mut app = session(Platform::Gtk);
         invoke(&mut app, CommandId::AddLayer);
         invoke(&mut app, CommandId::Undo);
@@ -18952,17 +18973,15 @@ mod tests {
         app.pen(event(&app, 2, PenPhase::Cancel, 0.0));
         app.frame(20_000_000, 28_000_000).unwrap();
         assert!(
-            app.engine
+            !app.engine
                 .document()
                 .target_raster(app.engine.document().active_target().unwrap())
                 .unwrap()
                 .is_empty()
         );
-        assert!(!app.command(CommandId::Undo).enabled);
-        assert_eq!(
-            app.state.commands, commands,
-            "cancellation restores live availability"
-        );
+        assert!(app.command(CommandId::Undo).enabled);
+        assert!(!app.command(CommandId::Redo).enabled);
+        assert_eq!(app.engine.metrics().committed_strokes,1);
         let action: UiAction = serde_json::from_str(r#"{"type":"move_panel","panel":"sizes","target":{"kind":"edge","edge":"right","outer":false},"viewport":[1200,900]}"#).unwrap();
         let value = serde_json::to_string(&action).unwrap();
         app.dispatch(serde_json::from_str(&value).unwrap()).unwrap();

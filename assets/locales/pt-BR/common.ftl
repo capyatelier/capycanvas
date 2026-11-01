@@ -623,6 +623,6 @@ tilt-reverse-horizontal = Inverter horizontal
 tilt-reverse-vertical = Inverter vertical
 tilt-swap-axes = Trocar eixos
 tilt-use-pen = Use a caneta aqui
-common-stroke-input-canceled = O traço era longo demais e foi cancelado. Você pode continuar pintando.
+common-stroke-input-limit = O traço atingiu o limite de entrada e foi concluído. A pintura foi preservada.
 
 native-color-stroke-recording-file-type = Gravação de traços do Capy

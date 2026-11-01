@@ -435,6 +435,6 @@ tilt-reverse-horizontal = 水平反转
 tilt-reverse-vertical = 垂直反转
 tilt-swap-axes = 交换坐标轴
 tilt-use-pen = 在这里使用笔
-common-stroke-input-canceled = 该笔画过长，已取消。你可以继续绘画。
+common-stroke-input-limit = 笔画达到输入上限，已结束。已绘制的内容已保留。
 
 native-color-stroke-recording-file-type = Capy 笔画记录

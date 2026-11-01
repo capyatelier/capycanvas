@@ -1659,7 +1659,7 @@ fn every_tool_shows_the_refusal_cursor_on_a_locked_vector_layer() {
 }
 
 #[test]
-fn cancelled_vector_gestures_leave_the_paths_and_history_alone() {
+fn explicitly_cancelled_vector_gestures_leave_the_paths_and_history_alone() {
     let (mut s, handle) = vector_session();
     put_paths(&mut s, handle, vec![straight(1, &[[100., 300.], [400., 300.], [700., 300.]], false), straight(2, &[[100., 500.], [700., 500.]], false)]);
     let before = (s.engine.document().scene().vector_layer(handle).unwrap().clone(), s.engine.checkpoint());
@@ -1671,10 +1671,10 @@ fn cancelled_vector_gestures_leave_the_paths_and_history_alone() {
             s.pen(e);
             s.frame(e.timestamp_ns, e.timestamp_ns).unwrap();
         }
-        let mut e = event(s, first + points.len() as u64, PenPhase::Cancel, 0.5);
-        e.surface_position = surface_at(s, points[points.len() - 1]);
-        s.pen(e);
-        s.frame(e.timestamp_ns, e.timestamp_ns).unwrap();
+        let mut e=event(s,first+points.len() as u64,PenPhase::Cancel,0.5);
+        e.surface_position=surface_at(s,points[points.len()-1]);
+        s.admit_pen(e);
+        s.frame(e.timestamp_ns,e.timestamp_ns).unwrap();
     };
     cancel_after(&mut s, 10, &[[100., 700.], [300., 720.], [500., 760.]]);
     assert_eq!(state(&s), before, "a cancelled line adds no path");

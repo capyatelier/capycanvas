@@ -435,6 +435,6 @@ tilt-reverse-horizontal = 좌우 반전
 tilt-reverse-vertical = 상하 반전
 tilt-swap-axes = 축 바꾸기
 tilt-use-pen = 여기에서 펜을 사용하세요
-common-stroke-input-canceled = 획이 너무 길어 취소되었습니다. 계속 그릴 수 있습니다.
+common-stroke-input-limit = 획이 입력 한도에 도달하여 종료되었습니다. 그린 내용은 유지됩니다.
 
 native-color-stroke-recording-file-type = Capy 획 기록

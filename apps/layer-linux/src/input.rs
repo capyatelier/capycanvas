@@ -285,9 +285,6 @@ pub struct Input {
 
 pub fn install(workspace: &Rc<Workspace>) {
     let input = workspace.input.clone();
-    // GestureSingle resets an active sequence on a different button, and
-    // GestureStylus emits down/up even for that rejected event. Stop tablet
-    // side buttons before either painting or mouse-pan gestures can see them.
     let pen_buttons = gtk::EventControllerLegacy::new();
     pen_buttons.set_propagation_phase(gtk::PropagationPhase::Capture);
     pen_buttons.connect_event(glib::clone!(
@@ -303,7 +300,14 @@ pub fn install(workspace: &Rc<Workspace>) {
             if event.device_tool().is_none()
                 && !event.device().is_some_and(|d| d.source() == gdk::InputSource::Pen)
             {
-                return glib::Propagation::Proceed;
+                let Some((x,y))=event.position() else {return glib::Propagation::Proceed;};
+                let dpi=workspace.area.scale_factor() as f32;
+                let reply=workspace.interact(UiInput::Pointer {
+                    id:1,kind:PointerKind::Mouse,button:PointerButton::Other,
+                    phase:if event.event_type()==gdk::EventType::ButtonPress {ContactPhase::Down} else {ContactPhase::Up},
+                    position:[x as f32*dpi,y as f32*dpi],time_ns:workspace.input.timestamp(event.time()),
+                });
+                return if reply.handled {glib::Propagation::Stop} else {glib::Propagation::Proceed};
             }
             let pen_button = match button {
                 2 => Some(PenButton::Primary),
@@ -369,7 +373,10 @@ pub fn install(workspace: &Rc<Workspace>) {
         workspace,
         #[strong]
         input,
-        move |_, _| input.cancel(&workspace)
+        move |gesture, _| {
+            let (x,y)=gesture.current_event().and_then(|event|event.position()).unwrap_or_default();
+            input.stylus(&workspace,gesture,PenPhase::Cancel,x,y);
+        }
     ));
     workspace.area.add_controller(stylus);
     let hover = gtk::EventControllerMotion::new();
@@ -891,7 +898,10 @@ impl Input {
     }
     fn stylus(&self,workspace:&Rc<Workspace>,gesture:&gtk::GestureStylus,phase:PenPhase,x:f64,y:f64) {
         let native=gesture.current_event();
-        let Some(event)=self.sample(workspace,native.as_ref(),phase,x,y) else{return;};
+        let event=if phase==PenPhase::Cancel && native.is_none() {
+            self.last.get().map(|event|PenEvent {phase,..event})
+        } else {self.sample(workspace,native.as_ref(),phase,x,y)};
+        let Some(event)=event else{return;};
         let dpi=workspace.area.scale_factor() as f32;
         let defaults=if event.is_finite() {event} else {self.last.get().filter(|p|p.device_id==event.device_id).unwrap_or(event)};
         let history=if phase==PenPhase::Move {gesture.backlog().unwrap_or_default()} else {Vec::new()};
@@ -945,7 +955,10 @@ impl Input {
         let reply=workspace.interact(UiInput::Pointer {
             id:routing.device_id,phase:contact_phase(routing.phase),
             kind:if routing.tool==ToolKind::Mouse {PointerKind::Mouse} else {PointerKind::Pen},
-            button:PointerButton::Primary,position:[routing.surface_position.x,routing.surface_position.y],time_ns:routing.timestamp_ns,
+            button:if native.as_ref().and_then(|event|event.downcast_ref::<gdk::ButtonEvent>()).is_some_and(|event|event.button()!=1) {
+                PointerButton::Other
+            } else {PointerButton::Primary},
+            position:[routing.surface_position.x,routing.surface_position.y],time_ns:routing.timestamp_ns,
         });
         #[cfg(test)]
         if let Some(gpu)=workspace.gpu.borrow().as_ref() {

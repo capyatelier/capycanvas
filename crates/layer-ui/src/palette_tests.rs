@@ -1,6 +1,6 @@
 // Included in session::tests: real engine commits with the protocol recorder.
 #[test]
-fn palette_history_tracks_completed_paint_not_selection_preview_cancel_or_erase() {
+fn palette_history_tracks_completed_and_interrupted_paint_not_selection_preview_or_erase() {
     use layer_core::color::{RgbColor, RgbSpace};
     let mut s = session(Platform::Gtk);
     let color = RgbColor::new(RgbSpace::DisplayP3, [0.7, 0.2, 0.1, 0.8]).unwrap();
@@ -34,7 +34,7 @@ fn palette_history_tracks_completed_paint_not_selection_preview_cancel_or_erase(
     );
     s.pen(event(&s, 2, PenPhase::Cancel, 0.));
     s.frame(20_000_000, 28_000_000).unwrap();
-    assert!(s.state.color_library.history.is_empty());
+    assert_eq!(s.state.color_library.history,[color]);
     s.pen(event(&s, 3, PenPhase::Down, 0.8));
     s.pen(event(&s, 4, PenPhase::Up, 0.));
     s.frame(40_000_000, 48_000_000).unwrap();
