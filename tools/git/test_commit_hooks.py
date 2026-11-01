@@ -166,6 +166,17 @@ class CommitHooksTest(unittest.TestCase):
                 self.git("commit", "-m", "Change released input")
                 self.assert_input_rejected(self.git("push", "origin", change, ok=False))
 
+    def test_ci_release_input_range_checks_intermediate_edits(self):
+        path, base = self.released_input()
+        guard = self.repo / ".git/hooks/check-commit-messages.sh"
+        self.commit_file("crates/layer-ui/tests/compat/1.0.16/settings.json", "new input")
+        self.run_command(["sh", str(guard), "release-inputs", base, "HEAD"], cwd=self.repo)
+        self.commit_file(path, "rewritten")
+        self.commit_file(path, "released bytes")
+        self.assert_input_rejected(self.run_command(
+            ["sh", str(guard), "release-inputs", base, "HEAD"], cwd=self.repo, ok=False,
+        ))
+
     def test_release_input_guard_reads_all_push_refs_once(self):
         path, base = self.released_input()
         self.git("checkout", "-b", "clean", base)

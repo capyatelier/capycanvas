@@ -46,13 +46,18 @@ and precedents for these copies and the other saved-data protections.
 Before another version writes native workspace storage, its worker holds the
 SQLite write transaction, copies the database to
 `workspaces.<previous-version>.<uuid>.sqlite3`, and atomically records its version
-in `last-version`. An absent marker uses `earlier` in the copy's name. The copy
-includes committed WAL data. A failed copy leaves storage unchanged and starts
-the window in memory. A newer legacy `workspaces.unreadable.sqlite3` is also
-copied into this set before another reset can replace it.
+in `last-version`, using the same JSON `VersionMarker` as Web. It holds the
+version, legacy-copy identity and copies in publication order. An absent marker
+or an unrecognized marker format uses `earlier` in the copy's name. The copy includes
+committed WAL data. A failed copy leaves the marker unchanged and continues with
+persistent storage; the next start tries the copy again. Changes to the size or
+mtime of `workspaces.unreadable.sqlite3` or its nonempty WAL trigger another
+legacy copy, regardless of whether the mtime increased.
 
-After adopting a workspace, the worker keeps the ten newest copies within
-256 MiB, retaining at least three even when they exceed the budget.
+After adopting a workspace, the worker keeps the ten newest published copies
+within 256 MiB, retaining at least three even when they exceed the budget. Marker
+order determines age; file timestamps do not. Unlisted native copies count as
+oldest, and this start's copies are kept. A failed protection step defers pruning.
 
 These copies protect the workspace store at capture time, including editing
 state, toolbars and pending deliveries. Preferences, export presets, papers,
@@ -63,10 +68,13 @@ builds retain only their single `unreadable` copy.
 
 Web storage keeps `version` and `snapshot:workspaces.<version>.<uuid>` records
 beside `database` and `unreadable` in IndexedDB's `workspace` object store.
-The version record holds copy metadata and the last seen legacy-copy hash.
+The version record holds copy metadata and the last seen legacy-copy hash;
+native markers identify the legacy database and WAL by size and mtime instead.
 The first write publishes its copy, version and changes in one transaction;
-quota or transaction failure publishes none of them. Retention uses the copy
-metadata without reading every retained snapshot.
+transaction failure publishes none of them. On quota failure, the protecting
+transaction runs once more without copy records or marker changes, so ordinary
+saves can continue; a later start tries protection again. Other failures are
+reported. Retention uses the copy metadata without reading every retained snapshot.
 
 To restore a native copy, close every Capy Canvas process. Move the current
 database and its `-wal` and `-shm` sidecars into a separate recovery folder.

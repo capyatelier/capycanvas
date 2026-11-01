@@ -101,7 +101,13 @@ times on the private 120 Hz display.
 store, import and recovery readers and compares reviewed authored values and
 resource/preview digests, including save/reopen and session history.
 Push CI enables the native workspace cases and runs the paper compatibility
-tests separately without a GPU.
+tests separately without a GPU. It also runs the released-input guard over the
+pushed commit range, or the range since `origin/main` for a new branch, with full
+history so intermediate input edits cannot hide behind a later restore.
+
+`generated_compat_fixtures_load_without_expectations` runs the workspace fixture
+generator in private temporary storage and reads every generated input through
+the release loaders without expectation files; output excludes markers and locks.
 
 `saved_documents_tolerate_missing_and_unknown_fields` in the affected suites
 removes defaultable app-state options and adds unknown struct fields; required

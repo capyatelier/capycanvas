@@ -62,6 +62,9 @@ case "${1-}" in
             check_history "$ref" || exit 1
         done
         ;;
+    release-inputs)
+        check_release_inputs "$3" "$2" ""
+        ;;
     push)
         shift
         while read -r local_ref local_oid remote_ref remote_oid; do
@@ -81,5 +84,5 @@ case "${1-}" in
             fi
         done
         ;;
-    *) echo 'usage: check-commit-messages.sh message FILE | history REF... | push' >&2; exit 2 ;;
+    *) echo 'usage: check-commit-messages.sh message FILE | history REF... | release-inputs BASE HEAD | push' >&2; exit 2 ;;
 esac

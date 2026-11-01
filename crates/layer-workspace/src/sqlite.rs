@@ -58,6 +58,7 @@ pub struct SqliteStore {
     ownership: ownership::Ownership,
     /// Set for a store of another version; only `StoreRequest::Reset` is served.
     incompatible: Option<StoreError>,
+    snapshots_ready: bool,
 }
 impl SqliteStore {
     pub fn open(path: &Path) -> Result<Self> {
@@ -100,7 +101,7 @@ impl SqliteStore {
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "wal_autocheckpoint", 1000)?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        snapshots::protect(&tx)?;
+        let snapshots_ready = snapshots::protect(&tx).is_ok();
         let incompatible = match tx.pragma_query_value(None, "user_version", |r| r.get(0))? {
             SCHEMA_VERSION => None,
             0 if table_names(&tx)?.is_empty() => {
@@ -118,6 +119,7 @@ impl SqliteStore {
             clock,
             ownership: ownership::Ownership::new(path)?,
             incompatible,
+            snapshots_ready,
         })
     }
     fn reset(&mut self) -> Result<()> {
@@ -152,7 +154,7 @@ impl SqliteStore {
         match request {
             StoreRequest::Adopted => {
                 let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                snapshots::prune(&tx)?;
+                if self.snapshots_ready { snapshots::prune(&tx)?; }
                 tx.commit()?;
                 Ok(StoreResponse::Done)
             }

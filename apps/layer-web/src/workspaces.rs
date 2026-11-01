@@ -61,7 +61,7 @@ pub fn workspace_database(
         let compatibility = if compatibility.is_null() || compatibility.is_undefined() {None} else {
             let environment = serde_wasm_bindgen::from_value(compatibility).map_err(|error|StoreError::invalid(error.to_string()))?;
             Some(snapshots::plan(snapshot.as_string().as_deref(),environment,
-                matches!(request,StoreRequest::Adopted),now.max(0.) as u64)?)
+                matches!(request,StoreRequest::Adopted))?)
         };
         let reset = matches!(request, StoreRequest::Reset);
         let cached = DATABASE_CACHE.with(|cache| cache.borrow_mut().take());

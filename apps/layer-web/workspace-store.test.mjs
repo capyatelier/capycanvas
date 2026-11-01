@@ -68,10 +68,10 @@ export async function checkWorkspaceStore({evaluate}) {
   assert.equal(result.upgradeError, "unsupported_schema");
   assert.equal(result.unavailableError, "unavailable"); assert.equal(result.quotaError, "storage_full");
   console.log(`PASS: ${fixtures.length} IndexedDB/SQLite contract cases, aborted transaction, newer database, unavailable storage and quota errors`);
-  await checkWorkspaceSnapshots(evaluate);
+  await checkWorkspaceSnapshots(evaluate, fixtures[0].request);
 }
 
-async function checkWorkspaceSnapshots(evaluate) {
+async function checkWorkspaceSnapshots(evaluate, commit) {
   const released = await readFile(new URL("../../crates/layer-workspace/tests/compat/1.0.15/browser.json", import.meta.url), "utf8");
   const result = await evaluate(`(async () => {
     const resources = performance.getEntriesByType('resource').map(r => r.name);
@@ -92,10 +92,10 @@ async function checkWorkspaceSnapshots(evaluate) {
     });
     const encoded = value => JSON.stringify(value,(_key,value) => typeof value==='bigint' ? value.toString() : value);
     const original = ${JSON.stringify(released)}, legacy = 'legacy unreadable bytes';
-    await records([{id:'database',snapshot:original},{id:'unreadable',snapshot:legacy},{id:'version',value:{version:'1.0.14',unreadable_hash:null,copies:[]}}]);
+    await records([{id:'database',snapshot:original},{id:'unreadable',snapshot:legacy},{id:'version',value:{version:'1.0.14',unreadable_identity:null,copies:[]}}]);
     const reduce = (...args) => glue.workspace_database(...args);
     const store = createWorkspaceStore(reduce,{name});
-    let aborted;
+    let aborted, quota;
     try {
       await store.execute('{"type":"reopen"}');
       const first = await records(), copies = first.filter(row => row.id.startsWith('snapshot:'));
@@ -118,9 +118,37 @@ async function checkWorkspaceSnapshots(evaluate) {
       let abortError;
       try { await aborted.execute('{"type":"reopen"}'); } catch(error) { abortError=JSON.parse(error).kind; }
       const unchanged = encoded(beforeAbort)===encoded(await records());
-      marker.value.version='';
+      let attempts = 0;
+      quota = createWorkspaceStore(reduce,{name,indexedDB:{open(...args) {
+        const request = indexedDB.open(...args);
+        request.addEventListener('success',() => {
+          const db = request.result, transaction = db.transaction.bind(db);
+          db.transaction = (...args) => {
+            const tx = transaction(...args), objectStore = tx.objectStore.bind(tx);
+            tx.objectStore = (...args) => {
+              const store = objectStore(...args), put = store.put.bind(store);
+              store.put = row => {
+                if (row.id.startsWith('snapshot:')) { attempts++; throw new DOMException('Copy quota exhausted','QuotaExceededError'); }
+                return put(row);
+              };
+              return store;
+            };
+            return tx;
+          };
+        });
+        return request;
+      }}});
+      await quota.execute(${JSON.stringify(JSON.stringify(commit))});
+      const afterQuota = await records();
+      const quotaMarkerUnchanged = encoded(afterQuota.find(row=>row.id==='version'))===encoded(beforeAbort.find(row=>row.id==='version'));
+      const quotaSaved = !!JSON.parse(afterQuota.find(row=>row.id==='database').snapshot).items[${JSON.stringify(commit.batch.writes[0].id)}];
+      quota.close();
+      await store.execute('{"type":"reopen"}');
+      const quotaRetried = (await records()).filter(row=>row.id.startsWith('snapshot:')).length===kept.filter(row=>row.id.startsWith('snapshot:')).length+1;
+      const restoreMarker = (await records()).find(row=>row.id==='version');
+      restoreMarker.value.version='';
       const restoredCopy = kept.find(row => row.snapshot===original);
-      await records([{id:'database',snapshot:restoredCopy.snapshot},marker]);
+      await records([{id:'database',snapshot:restoredCopy.snapshot},restoreMarker]);
       await store.execute('{"type":"reopen"}');
       const restored = (await records()).find(row => row.id==='database').snapshot===original;
       await store.execute('{"type":"adopted"}');
@@ -128,14 +156,15 @@ async function checkWorkspaceSnapshots(evaluate) {
       return {copies:copies.map(row => row.snapshot).sort(),repeated:encoded(first)===encoded(repeated),
         beforeAdoption,kept:kept.filter(row => row.id.startsWith('snapshot:')).length,
         metadata:kept.find(row => row.id==='version').value.copies.length,
-        abortError,unchanged,restored,restoredCount};
-    } finally { store.close(); aborted?.close(); connection.close(); indexedDB.deleteDatabase(name); }
+        abortError,unchanged,attempts,quotaMarkerUnchanged,quotaSaved,quotaRetried,restored,restoredCount};
+    } finally { store.close(); aborted?.close(); quota?.close(); connection.close(); indexedDB.deleteDatabase(name); }
   })()`);
   assert.deepEqual(result.copies, [released, "legacy unreadable bytes"].sort());
   assert.ok(result.repeated);
   assert.equal(result.beforeAdoption, 13);
   assert.equal(result.kept, 10); assert.equal(result.metadata, 10);
   assert.equal(result.abortError, "failed_write"); assert.ok(result.unchanged);
+  assert.equal(result.attempts, 1); assert.ok(result.quotaMarkerUnchanged); assert.ok(result.quotaSaved); assert.ok(result.quotaRetried);
   assert.ok(result.restored); assert.equal(result.restoredCount, 10);
   console.log("PASS: Web version copies preserve released and legacy bytes, survive downgrade, prune after adoption, roll back queued copies on abort and restore by hand");
 }

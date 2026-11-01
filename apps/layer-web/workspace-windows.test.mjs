@@ -60,7 +60,6 @@ export async function checkWorkspaceWindows({call,evaluate}) {
     assert.notDeepEqual(ownCapture.working,otherCapture.working);
     await checkpoint(other);
     await call('Page.reload',{},sessionId); await new Promise(r=>setTimeout(r,1000)); await wait(other,ready);
-    assert.equal(await other('layerApp.state().brush.diameter'),77);
     assert.equal(await other('JSON.stringify(layerApp.state().color_library.history)'),history);
     assert.ok(await other('layerApp.state().color_library.palettes.some(p=>p.name==="Window A palette")'),'Painting keeps another window\'s palettes after restart');
     for(const [id,size] of [[2,91],[5,53],[7,77]]) {

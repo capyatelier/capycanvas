@@ -20,6 +20,19 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - if: github.event_name == 'push'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [[ -z "$BEFORE" || "$BEFORE" =~ ^0+$ ]]; then
+            base_commit=$(git merge-base origin/main "$GITHUB_SHA")
+          else
+            git cat-file -e "$BEFORE^{commit}" || git fetch origin "$BEFORE"
+            base_commit=$BEFORE
+          fi
+          sh .githooks/check-commit-messages.sh release-inputs "$base_commit" "$GITHUB_SHA"
       - run: python3 -m unittest discover -s tools/build -p 'test_android_*.py'
       - run: |
           python3 -m venv artifacts/visual-python

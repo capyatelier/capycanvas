@@ -12,7 +12,13 @@ fn write_json(directory: &Path, name: &str, value: &impl serde::Serialize) {
 #[ignore]
 fn write_compat_fixtures() {
     let directory = PathBuf::from(std::env::var_os("CAPY_COMPAT_OUT").expect("CAPY_COMPAT_OUT"));
+    generate(&directory);
+}
+
+fn generate(output: &Path) {
+    let directory = crate::test_support::temp_dir("compat-generator");
     std::fs::create_dir_all(&directory).unwrap();
+    std::fs::create_dir_all(output).unwrap();
     let localizer = Localizer::shared(UiLanguage::English);
     let mut editing = EditingState::default();
     for id in layer_ui::brush_ids() {
@@ -85,11 +91,18 @@ fn write_compat_fixtures() {
     native.handle(StoreRequest::Commit {batch:batch.clone()}).unwrap();
     native.handle(StoreRequest::Reopen).unwrap();
     drop(native);
-    std::fs::remove_dir(directory.join("workspaces.sqlite3-locks")).unwrap();
     let mut browser = BrowserDatabase::default();
     browser.prepare_delivery(&batch).unwrap();
     browser.execute(StoreRequest::Commit {batch},1000).unwrap();
     std::fs::write(directory.join("browser.json"), browser.encoded().unwrap()).unwrap();
+    for entry in std::fs::read_dir(&directory).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_str().unwrap();
+        if name.ends_with(".json") || matches!(name,"export-presets" | "workspace.capyworkspace" | "toolbar.capytoolbar" | "workspaces.sqlite3") {
+            std::fs::copy(&path,output.join(name)).unwrap();
+        }
+    }
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 fn expect(release: &str, name: &str, actual: Value) {
@@ -153,7 +166,18 @@ fn release_fixtures_load_without_loss() {
 }
 
 fn check_release(release: &str) {
-    let directory = fixture_root().join(release);
+    check_inputs(&fixture_root().join(release), |name,value|expect(release,name,value));
+}
+
+#[test]
+fn generated_compat_fixtures_load_without_expectations() {
+    let directory = crate::test_support::temp_dir("generated-compat");
+    generate(&directory);
+    check_inputs(&directory, |_,_| {});
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+fn check_inputs(directory: &Path, check: impl Fn(&str, Value)) {
     let english = Localizer::shared(UiLanguage::English);
     let mut paths: Vec<_> = std::fs::read_dir(&directory).unwrap().map(|p|p.unwrap().path()).collect();
     paths.sort();
@@ -173,13 +197,20 @@ fn check_release(release: &str) {
                 entity.validate().unwrap(); serde_json::to_value(entity).unwrap()
             }
         };
-        expect(release,name,value);
+        check(name,value);
     }
     let entities: Vec<Entity> = serde_json::from_slice(&std::fs::read(directory.join("entities.json")).unwrap()).unwrap();
+    let mut browser = BrowserDatabase::decode(&std::fs::read_to_string(directory.join("browser.json")).unwrap()).unwrap();
+    for entity in &entities {
+        let StoreResponse::Entity(loaded) = browser.execute(StoreRequest::Load {id:entity.id.clone()},1000).unwrap() else {panic!()};
+        assert_eq!(portable(loaded.entity),portable(entity.clone()));
+    }
     let temp = crate::test_support::temp_dir("released-store");
     std::fs::create_dir_all(&temp).unwrap();
     std::fs::copy(directory.join("workspaces.sqlite3"), temp.join("workspaces.sqlite3")).unwrap();
-    let expected: Value = serde_json::from_slice(&std::fs::read(fixture_root().join(format!("expected/{release}/editing.json.expected.json"))).unwrap()).unwrap();
+    let expected = serde_json::to_value(EditingState::restore(&std::fs::read_to_string(directory.join("editing.json")).unwrap(),&english)).unwrap();
+    let StoreResponse::Editing(editing) = browser.execute(StoreRequest::Editing {language:UiLanguage::English},1000).unwrap() else {panic!()};
+    assert_eq!(serde_json::to_value(editing).unwrap(),expected);
     {
         let manager = WorkspaceManager::new(StoreWorker::shared(&temp).unwrap(), Platform::Gtk);
         pollster::block_on(manager.load_editing()).unwrap();

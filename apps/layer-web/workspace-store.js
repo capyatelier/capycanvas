@@ -28,11 +28,11 @@ export function createWorkspaceStore(reduce, { name = "capycanvas.workspaces", i
     return opening;
   }
   const readOnly = new Set(["editing", "list", "load", "receipt", "binding", "pending", "reopen", "switcher", "workspace_order"]);
-  async function transaction(request, pending = false) {
+  async function transaction(request, pending = false, withoutCopies = false) {
     const db = await open(), command = JSON.parse(request), [live, liveAt] = await liveOwners();
     return new Promise((resolve, reject) => {
       let tx, response, failure;
-      const protect = !versionChecked || command.type === "reopen" || command.type === "adopted";
+      const protect = !withoutCopies && (!versionChecked || command.type === "reopen" || command.type === "adopted");
       const readonly = !protect && !pending && readOnly.has(command.type);
       try {
         tx = db.transaction("workspace", readonly ? "readonly" : "readwrite", { durability: "strict" });
@@ -54,8 +54,12 @@ export function createWorkspaceStore(reduce, { name = "capycanvas.workspaces", i
             if (result.snapshot != null) store.put({ id: "database", snapshot: result.snapshot });
           } catch (e) { failure = typeof e === "string" ? e : error(e); tx.abort(); }
         };
-        tx.oncomplete = () => { if (protect) versionChecked = true; resolve(response); };
-        tx.onabort = () => reject(failure || error(tx.error || new Error("The workspace transaction was interrupted. Your changes have been kept.")));
+        tx.oncomplete = () => { if (protect || withoutCopies) versionChecked = true; resolve(response); };
+        tx.onabort = () => {
+          const reason = failure || error(tx.error || new Error("The workspace transaction was interrupted. Your changes have been kept."));
+          if (protect && JSON.parse(reason).kind === "storage_full") transaction(request, pending, true).then(resolve, reject);
+          else reject(reason);
+        };
         tx.onerror = () => {}; // onabort reports the complete transaction's result.
       } catch (e) { reject(error(e)); }
     });
