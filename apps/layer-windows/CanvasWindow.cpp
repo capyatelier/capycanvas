@@ -310,7 +310,7 @@ void CanvasWindow::Open() {
                         self->Send(R"({"type":"blur"})",CanvasCommandKind::Input);
                     }
                 }});
-            }else{self->Resize();self->RefreshWorkspaceSwitcher();}
+            }else{self->Resize();self->Send(R"({"operation":"input","input":{"type":"focus"}})",CanvasCommandKind::Workspace);}
         }
     });
     window.AppWindow().Closing([weak=weak_from_this()](auto&&,AppWindowClosingEventArgs const& e) {

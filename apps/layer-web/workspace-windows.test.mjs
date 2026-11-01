@@ -1,9 +1,22 @@
 import assert from 'node:assert/strict';
+import {writeFile,rename} from 'node:fs/promises';
+import {existsSync} from 'node:fs';
 
 // Two real browser windows share IndexedDB but have independent document and
 // workspace owners. This also exercises the recovery UI after a suspended owner
 // loses its claim, without changing any system clock or production database.
 export async function checkWorkspaceWindows({call,evaluate}) {
+  const inputDir=process.env.LAYER_NATIVE_INPUT_DIR;
+  assert.ok(inputDir,'Run --workspace-windows through workspace-motion.sh on a private display');
+  let step=0;
+  const switchWindow=async()=>{
+    const id=step++,path=`${inputDir}/step-${id}.json`;
+    await writeFile(path+'.tmp',JSON.stringify([{key:0xffe9,down:true},{key:0xff09,down:true},{key:0xff09,down:false},{key:0xffe9,down:false}]));
+    await rename(path+'.tmp',path);
+    const deadline=Date.now()+15000;
+    while(!existsSync(`${inputDir}/done-${id}`)){assert.ok(Date.now()<deadline,'Compositor window switch timed out');await new Promise(resolve=>setTimeout(resolve,2));}
+  };
+  await writeFile(`${inputDir}/ready`,'ready');
   const wait = async (run, predicate) => {
     for (let i=0;i<200;i++) { if (await run(predicate)) return; await new Promise(r=>setTimeout(r,100)); }
     throw Error(`Workspace window timed out: ${await run('layerApp.app.workspace_view()')}`);
@@ -34,6 +47,8 @@ export async function checkWorkspaceWindows({call,evaluate}) {
   };
   try {
     await call('Runtime.enable',{},sessionId); await call('Page.enable',{},sessionId);
+    await call('Emulation.setFocusEmulationEnabled',{enabled:false},sessionId);
+    await call('Emulation.setFocusEmulationEnabled',{enabled:false});
     await call('Page.navigate',{url:await evaluate('location.href')},sessionId); await wait(other,ready);
     assert.notEqual((await view(other)).id,original,'Live windows start with independent workspaces');
     const defaults=['builtin:workspace:painter','builtin:workspace:illustrator','builtin:workspace:photographer'];
@@ -45,8 +60,18 @@ export async function checkWorkspaceWindows({call,evaluate}) {
     await evaluate('layerApp.dispatch({type:"set_color",rgba:[0.4,0.2,0.7,1]});null');
     await wait(evaluate,ready);
     const colour=await evaluate('layerApp.state().colors.foreground');
+    await wait(other,'document.hasFocus()');
+    await switchWindow();
+    await wait(evaluate,'document.hasFocus()');
+    await wait(other,'!document.hasFocus()');
     await evaluate('layerApp.dispatch({type:"color",action:{op:"library",action:{op:"create_palette",name:"Window A palette"}}});layerApp.dispatch({type:"select_brush",id:5});layerApp.dispatch({type:"set_brush_size",value:53});null');
     await wait(evaluate,ready);
+    await wait(evaluate,`new Promise((resolve,reject)=>{const open=indexedDB.open('capycanvas.workspaces',1);open.onerror=()=>reject(open.error);open.onsuccess=()=>{const db=open.result,read=db.transaction('workspace').objectStore('workspace').get('database');read.onsuccess=()=>{db.close();resolve(JSON.parse(JSON.parse(read.result.snapshot).editing).color_library.palettes.some(p=>p.name==='Window A palette'));};read.onerror=()=>{db.close();reject(read.error);};};})`);
+    assert.equal(await other('layerApp.state().color_library.palettes.some(p=>p.name==="Window A palette")'),false,'Palette changes wait for focus');
+    await switchWindow();
+    await wait(other,'document.hasFocus()');
+    await wait(evaluate,'!document.hasFocus()');
+    await wait(other,'layerApp.state().color_library.palettes.some(p=>p.name==="Window A palette")');
     await other('layerApp.dispatch({type:"select_brush",id:7});layerApp.dispatch({type:"set_brush_size",value:77});null');
     await wait(other,'layerApp.app.brush_ready()');
     const point=await other('(()=>{const r=layerApp.canvas.getBoundingClientRect();return{x:r.x+r.width*.5,y:r.y+r.height*.5}})()');

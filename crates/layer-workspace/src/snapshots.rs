@@ -50,6 +50,7 @@ impl VersionMarker {
 pub struct SnapshotEnvironment {
     pub marker: Option<VersionMarker>,
     pub unreadable: Option<String>,
+    pub restoring: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -64,6 +65,7 @@ pub struct SnapshotPlan {
     pub marker: VersionMarker,
     pub copies: Vec<SnapshotCopy>,
     pub remove: Vec<String>,
+    pub restore: Option<String>,
 }
 
 pub fn plan(snapshot: Option<&str>, environment: SnapshotEnvironment, adopted: bool) -> Result<SnapshotPlan, StoreError> {
@@ -85,12 +87,21 @@ pub fn plan(snapshot: Option<&str>, environment: SnapshotEnvironment, adopted: b
         }
     }
     let unreadable_identity = environment.unreadable.as_ref().map(|text| content_id(text.as_bytes())).or_else(||previous.unreadable_identity.clone());
-    if unreadable_identity != previous.unreadable_identity && let Some(text) = &environment.unreadable {
+    let changed = unreadable_identity != previous.unreadable_identity;
+    if changed && let Some(text) = &environment.unreadable {
         copy("unreadable",text);
     }
+    let restore = changed.then(||copies.last().map(|copy|copy.info.id.clone())).flatten();
     previous.unreadable_identity = unreadable_identity;
     let (marker, remove) = previous.finish(copies.iter().map(|copy|copy.info.clone()).collect(), adopted);
-    Ok(SnapshotPlan {marker,copies,remove})
+    Ok(SnapshotPlan {marker,copies,remove,restore})
+}
+impl SnapshotPlan {
+    pub fn keep_current(&mut self, snapshot: &str) {
+        let info = SnapshotInfo {id:format!("snapshot:{}",name(VERSION)),bytes:snapshot.len() as u64};
+        self.marker.copies.push(info.clone());
+        self.copies.push(SnapshotCopy {info,snapshot:snapshot.into()});
+    }
 }
 
 #[cfg(test)]
@@ -106,14 +117,14 @@ mod tests {
     fn version_changes_and_unreadable_records_keep_original_bytes_without_repeated_copies() {
         let original = r#"{"items":{"custom":{}},"editing":"released palettes"}"#;
         let old = r#"{"items":{"legacy":{}}}"#;
-        let first = plan(Some(original),SnapshotEnvironment {marker:None,unreadable:Some(old.into())},false).unwrap();
+        let first = plan(Some(original),SnapshotEnvironment {marker:None,unreadable:Some(old.into()),..Default::default()},false).unwrap();
         assert_eq!(first.copies.len(),2);
         assert_eq!(first.copies[0].snapshot,original);
         assert_eq!(first.copies[1].snapshot,old);
         let mut marker = first.marker.clone();
-        assert!(plan(Some(original),SnapshotEnvironment {marker:Some(marker.clone()),unreadable:Some(old.into())},false).unwrap().copies.is_empty());
+        assert!(plan(Some(original),SnapshotEnvironment {marker:Some(marker.clone()),unreadable:Some(old.into()),..Default::default()},false).unwrap().copies.is_empty());
         marker.version = "99.0.0".into();
-        let down = plan(Some(original),SnapshotEnvironment {marker:Some(marker),unreadable:Some(old.into())},false).unwrap();
+        let down = plan(Some(original),SnapshotEnvironment {marker:Some(marker),unreadable:Some(old.into()),..Default::default()},false).unwrap();
         assert_eq!(down.copies.len(),1);
         assert_ne!(first.copies[0].info.id,down.copies[0].info.id);
     }

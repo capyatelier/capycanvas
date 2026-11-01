@@ -312,7 +312,8 @@ impl BrowserDatabase {
             Binding { key } => StoreResponse::Binding(self.bindings.get(&key).cloned()),
             Pending => StoreResponse::Pending(self.pending.values().filter_map(|value| serde_json::from_value(value.clone()).ok())
                 .filter(|batch| validate_payload(batch, |_| Err(missing_resource())).is_ok()).collect()),
-            Reopen => StoreResponse::Done,
+            Reopen => StoreResponse::Reopened(None),
+            RestoreSnapshot { .. } => return Err(StoreError::new(ErrorKind::Unavailable,"Snapshots require persistent storage.")),
             Adopted => StoreResponse::Done,
             Reset => {
                 *self = Self::default();

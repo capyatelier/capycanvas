@@ -13,6 +13,7 @@ struct PendingSave {
 struct State {
     editing_dropped: bool,
     startup_created: bool,
+    restore: Option<String>,
     editing: Option<Box<layer_ui::EditingState>>,
     saved_editing: Option<Box<layer_ui::EditingState>>,
     saved: Option<StoredEntity>,
@@ -85,6 +86,19 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub(crate) async fn set_aside_storage(&self) -> Result<()> {
         *self.state.borrow_mut() = State::default();
         self.execute(StoreRequest::SetAside).await.map(|_| ())
+    }
+    pub(crate) async fn reopen(&self) -> Result<()> {
+        if let StoreResponse::Reopened(restore) = self.execute(StoreRequest::Reopen).await? {
+            self.state.borrow_mut().restore = restore;
+        }
+        Ok(())
+    }
+    pub(crate) fn take_restore(&self) -> Option<String> { self.state.borrow_mut().restore.take() }
+    pub(crate) async fn restore_snapshot(&self, id: String) -> Result<()> {
+        self.flush().await?;
+        self.execute(StoreRequest::RestoreSnapshot {id}).await?;
+        *self.state.borrow_mut() = State::default();
+        Ok(())
     }
     /// Continue on a new store that lives only in this manager.
     pub fn use_memory(&self) {
@@ -173,6 +187,18 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         Ok(())
     }
     pub fn observe_editing(&self, editing: layer_ui::EditingState) { self.state.borrow_mut().editing = Some(Box::new(editing)); }
+    pub(crate) fn editing_baseline(&self) -> Box<layer_ui::EditingState> { self.state.borrow().saved_editing.clone().unwrap_or_else(||Box::new(layer_ui::EditingState::new_localized(&self.localization()))) }
+    pub(crate) fn refresh_editing(&self, remote: Box<layer_ui::EditingState>, baseline: Box<layer_ui::EditingState>, current: layer_ui::EditingState) -> Result<layer_ui::EditingState> {
+        if remote == baseline { return Ok(current); }
+        let mut state = self.state.borrow_mut();
+        let current = serde_json::to_value(current)?;
+        let paths = crate::store_rules::changed_editing_paths(&serde_json::to_value(baseline)?,&current);
+        let merged: layer_ui::EditingState = serde_json::from_value(crate::store_rules::overlay_editing(serde_json::to_value(&remote)?,&current,&paths)?)?;
+        merged.validate().map_err(StoreError::workspace)?;
+        state.saved_editing = Some(remote);
+        state.editing = Some(Box::new(merged.clone()));
+        Ok(merged)
+    }
     pub fn observe_working(&self, working: WorkspaceWorkingState) {
         if let Some(entity) = &mut self.state.borrow_mut().latest {
             entity.working = Some(working);

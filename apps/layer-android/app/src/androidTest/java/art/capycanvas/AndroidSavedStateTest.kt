@@ -49,6 +49,47 @@ class AndroidSavedStateTest {
             assertArrayEquals(bytes,storage.workspaces.listFiles()!!.single {it.name.startsWith("workspaces.damaged.") && it.extension=="sqlite3"}.readBytes())
         }
     }
+    @Test fun resetWorkspacePromptRestoresOrKeepsAndDoesNotRepeat() {
+        val context = instrumentation.targetContext
+        val theme = androidx.test.platform.app.InstrumentationRegistry.getArguments().getString("theme") ?: "dark"
+        assertTrue(context.getSharedPreferences(CanvasHost.preferencesName,0).edit().putString("settings",obj("theme" to theme,"language" to obj("Explicit" to "en")).toString()).commit())
+        for (restore in listOf(false,true)) {
+            AppStorage.directoryForTest = File(device.root,"restore-$restore")
+            val storage = AppStorage.of(context)
+            storage.workspaces.mkdirs()
+            instrumentation.context.assets.open("workspaces.sqlite3").use { input -> File(storage.workspaces,"workspaces.unreadable.sqlite3").outputStream().use {input.copyTo(it)} }
+            wakeDevice()
+            launchCapy(120_000).use { scenario ->
+                val host = scenario.activity().host
+                host.awaitMain("reset restore prompt ($restore)",30_000,{"${host.workspaceManager}; files=${storage.workspaces.list()?.toList()}"}) {host.workspaceManager?.objectOrNull("prompt")!=null && findNode(hasLabel("Keep Current"))!=null}
+                val prompt = host.workspaceManager!!.getJSONObject("prompt")
+                assertEquals("Restore Workspaces?",prompt.getString("title"))
+                assertEquals("An older version of Capy Canvas reset your workspaces, palettes and brush settings. Restoring replaces changes you made after the reset.",prompt.getString("message"))
+                assertEquals("Restore",prompt.getString("confirm"))
+                assertEquals("Keep Current",prompt.getString("cancel"))
+                screenshot("validation/saved-data/restore-$restore-$theme.png")
+                instrumentation.runOnMainSync {
+                    val (owner,node) = findNode(hasLabel(if(restore)"Restore" else "Keep Current"))!!
+                    val at = android.os.SystemClock.uptimeMillis()
+                    for (action in listOf(android.view.MotionEvent.ACTION_DOWN,android.view.MotionEvent.ACTION_UP)) {
+                        val event = motion(android.view.MotionEvent.TOOL_TYPE_FINGER,action,node.boundsInRoot.center,at)
+                        try {owner.view.dispatchTouchEvent(event)} finally {event.recycle()}
+                    }
+                }
+                host.awaitMain("restore choice adopted",120_000) {host.workspaceManager?.isNull("prompt")==true && host.workspaceManager?.optBoolean("ready")==true && host.snapshot?.getJSONObject("state")?.getJSONObject("brush")?.getDouble("diameter")==if(restore)37.0 else 9.0}
+                assertTrue(host.workspaceManager!!.isNull("error"))
+                val copies = storage.workspaces.listFiles()!!.filter {it.name.startsWith("workspaces.") && it.name!="workspaces.sqlite3" && it.name!="workspaces.unreadable.sqlite3" && it.extension=="sqlite3"}
+                assertEquals(if(restore)2 else 1,copies.size)
+                host.drain(obj("type" to "set_brush_size","value" to 43.0))
+                host.awaitMain("settings after restore saved",30_000) {host.workspaceManager?.let {!it.optBoolean("dirty") && !it.optBoolean("saving")}==true}
+            }
+            launchCapy(120_000).use { scenario ->
+                val host = scenario.activity().host
+                assertTrue(host.workspaceManager!!.isNull("prompt"))
+                assertEquals(43.0,host.snapshot!!.getJSONObject("state").getJSONObject("brush").getDouble("diameter"),0.0)
+            }
+        }
+    }
     @Test fun releasedStoreKeepsEditingPreferencesAndPresetsAfterRestart() {
         val context = instrumentation.targetContext
         val storage = AppStorage.of(context)

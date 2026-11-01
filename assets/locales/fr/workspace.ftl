@@ -642,3 +642,7 @@ workspace-storage-unavailable-notice = { common-app-name } ne peut pas ouvrir vo
 workspace-storage-damaged-notice = Vos espaces de travail enregistrés étaient endommagés. { common-app-name } en a créé de nouveaux.
 workspace-editing-unreadable-notice = Certaines palettes ou certains réglages des pinceaux ne peuvent pas être ouverts dans cette version de { common-app-name }. Mettez à jour { common-app-name } pour les ouvrir.
 workspace-created-unreadable-notice = Cette version de { common-app-name } ne peut pas ouvrir vos espaces de travail enregistrés. Mettez à jour { common-app-name } pour les ouvrir.
+
+workspace-restore-workspaces-title = Restaurer les espaces de travail ?
+workspace-restore-workspaces-message = Une ancienne version de { common-app-name } a réinitialisé vos espaces de travail, palettes et réglages des pinceaux. La restauration remplace les modifications effectuées après la réinitialisation.
+workspace-keep-current = Conserver les actuels

@@ -665,3 +665,7 @@ workspace-storage-unavailable-notice = { common-app-name }에서 저장된 작�
 workspace-storage-damaged-notice = 저장된 작업 영역이 손상되었습니다. { common-app-name }에서 새 작업 영역으로 시작했습니다.
 workspace-editing-unreadable-notice = 일부 팔레트 또는 브러시 설정은 이 버전의 { common-app-name }에서 열 수 없습니다. 열려면 { common-app-name }를 업데이트하세요.
 workspace-created-unreadable-notice = 이 버전의 { common-app-name }에서는 저장된 작업 영역을 열 수 없습니다. 열려면 { common-app-name }를 업데이트하세요.
+
+workspace-restore-workspaces-title = 작업 영역을 복원할까요?
+workspace-restore-workspaces-message = 이전 버전의 { common-app-name }에서 작업 영역, 팔레트 및 브러시 설정을 초기화했습니다. 복원하면 초기화 후 변경한 내용이 대체됩니다.
+workspace-keep-current = 현재 상태 유지

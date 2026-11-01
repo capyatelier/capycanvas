@@ -639,3 +639,7 @@ workspace-storage-unavailable-notice = { common-app-name } kaydedilmiş çalış
 workspace-storage-damaged-notice = Kaydedilmiş çalışma alanlarınız hasar görmüş. { common-app-name } yeni çalışma alanlarıyla başladı.
 workspace-editing-unreadable-notice = Bazı paletler veya fırça ayarları { common-app-name } uygulamasının bu sürümünde açılamıyor. Bunları açmak için { common-app-name } uygulamasını güncelleyin.
 workspace-created-unreadable-notice = { common-app-name } uygulamasının bu sürümü kaydedilmiş çalışma alanlarınızı açamıyor. Bunları açmak için { common-app-name } uygulamasını güncelleyin.
+
+workspace-restore-workspaces-title = Çalışma Alanları Geri Yüklensin mi?
+workspace-restore-workspaces-message = { common-app-name } uygulamasının eski bir sürümü çalışma alanlarınızı, paletlerinizi ve fırça ayarlarınızı sıfırladı. Geri yükleme, sıfırlamadan sonra yaptığınız değişikliklerin yerini alır.
+workspace-keep-current = Geçerli Olanları Koru

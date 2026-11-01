@@ -26,7 +26,7 @@ fn write_marker(path: &Path, marker: &VersionMarker) -> Result<()> {
     worker::publish_file(path,|temporary| fs::write(temporary,serde_json::to_vec(marker)?).map_err(io))
 }
 
-pub(super) fn protect(connection: &Connection) -> Result<()> {
+pub(super) fn protect(connection: &Connection) -> Result<Option<String>> {
     let path = Path::new(connection.path().unwrap_or_default());
     let marker_path = path.with_file_name("last-version");
     let previous = read_marker(&marker_path)?;
@@ -50,11 +50,47 @@ pub(super) fn protect(connection: &Connection) -> Result<()> {
     let unreadable_identity = identity(&legacy)?.map(|database| {
         identity(&PathBuf::from(format!("{}-wal",legacy.display()))).map(|wal|format!("{database:?}:{:?}",wal.filter(|(size,_)|*size>0)))
     }).transpose()?.or_else(||previous.unreadable_identity.clone());
-    if unreadable_identity!=previous.unreadable_identity { copy(&legacy,"unreadable")?; }
+    let changed = unreadable_identity!=previous.unreadable_identity;
+    if changed { copy(&legacy,"unreadable")?; }
+    let restore = changed.then(||copies.last().map(|copy|copy.id.clone())).flatten();
     let mut marker = previous.clone();
     marker.unreadable_identity = unreadable_identity;
     let (marker,_) = marker.finish(copies,false);
     if marker!=previous {write_marker(&marker_path,&marker)?;}
+    Ok(restore)
+}
+
+pub(super) fn restore(connection: &mut Connection, id: &str) -> Result<()> {
+    if Path::new(id).file_name().and_then(|name|name.to_str())!=Some(id)
+        || !id.strip_suffix(".sqlite3").is_some_and(snapshots::managed_name) {
+        return Err(StoreError::invalid("Invalid workspace snapshot identity."));
+    }
+    let path = PathBuf::from(connection.path().unwrap_or_default());
+    let source = path.with_file_name(id);
+    if !source.is_file() { return Err(not_found()); }
+    connection.execute("ATTACH DATABASE ?1 AS restored",[source.to_string_lossy().as_ref()])?;
+    let result = (|| {
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let version: u32 = tx.query_row("PRAGMA restored.user_version",[],|row|row.get(0))?;
+        if version!=SCHEMA_VERSION { return Err(if version>SCHEMA_VERSION {newer_schema()} else {other_schema()}); }
+        let mut marker = read_marker(&path.with_file_name("last-version"))?;
+        let id = format!("{}.sqlite3",snapshots::name(snapshots::VERSION));
+        let destination = path.with_file_name(&id);
+        worker::backup_database(&path,&destination)?;
+        marker.copies.push(SnapshotInfo {id,bytes:fs::metadata(destination).map_err(io)?.len()});
+        write_marker(&path.with_file_name("last-version"),&marker)?;
+        for table in table_names(&tx)? {
+            let table = table.replace('"',"\"\"");
+            tx.execute(&format!("DELETE FROM main.\"{table}\""),[])?;
+            tx.execute(&format!("INSERT INTO main.\"{table}\" SELECT * FROM restored.\"{table}\""),[])?;
+        }
+        tx.execute("UPDATE items SET owner=NULL,epoch=NULL,lease_until=NULL",[])?;
+        tx.commit()?;
+        Ok(())
+    })();
+    let detached = connection.execute_batch("DETACH DATABASE restored");
+    result?;
+    detached?;
     Ok(())
 }
 
@@ -95,6 +131,26 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/compat/1.0.15/workspaces.sqlite3"),directory.join("workspaces.sqlite3")).unwrap();
         directory
+    }
+    #[test]
+    fn restoration_rolls_back_incomplete_copies_and_keeps_the_current_store() {
+        let directory = seed();
+        let path = directory.join("workspaces.sqlite3");
+        let mut store = SqliteStore::open(&path).unwrap();
+        let id = format!("{}.sqlite3",snapshots::name("unreadable"));
+        worker::backup_database(&path,&directory.join(&id)).unwrap();
+        let original: String = store.connection.query_row("SELECT json FROM editing",[],|row|row.get(0)).unwrap();
+        {
+            let broken = Connection::open(directory.join(&id)).unwrap();
+            broken.execute("DROP TABLE editing",[]).unwrap();
+        }
+        let copy = fs::read(directory.join(&id)).unwrap();
+        assert!(store.handle(StoreRequest::RestoreSnapshot {id:id.clone()}).is_err());
+        assert_eq!(store.connection.query_row("SELECT json FROM editing",[],|row|row.get::<_,String>(0)).unwrap(),original);
+        assert_eq!(fs::read(directory.join(id)).unwrap(),copy);
+        assert!(store.handle(StoreRequest::Reopen).is_ok());
+        drop(store);
+        fs::remove_dir_all(directory).unwrap();
     }
     #[test]
     fn version_change_copies_before_the_first_write_and_keeps_legacy_unreadable() {

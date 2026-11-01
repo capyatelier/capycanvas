@@ -390,7 +390,9 @@ and use defaults for fields they cannot read:
   field raises the shared palettes-and-brush-settings notice once per start. Saves merge
   changed JSON paths, so painting history does not replace another window's
   palettes and different brushes keep independent overrides. Unchanged unreadable
-  fields stay stored; see [editing saves](../internals/workspace-ownership.md).
+  fields stay stored. On focus or resume, the worker reloads editing state and
+  the window adopts unchanged paths after input ends, preserving its pending
+  edits; see [editing saves](../internals/workspace-ownership.md).
 - Export presets load through `ExportPresets::restore`. An unreadable metadata
   field uses its default while independent fields and valid profile references
   survive. The binary envelope, digest and size limits remain strict. The

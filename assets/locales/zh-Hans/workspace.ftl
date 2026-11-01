@@ -665,3 +665,7 @@ workspace-storage-unavailable-notice = { common-app-name }无法打开您保存�
 workspace-storage-damaged-notice = 您保存的工作区已损坏。{ common-app-name }已创建新的工作区并启动。
 workspace-editing-unreadable-notice = 此版本的{ common-app-name }无法打开部分调色板或画笔设置。请更新{ common-app-name }以打开它们。
 workspace-created-unreadable-notice = 此版本的{ common-app-name }无法打开您保存的工作区。请更新{ common-app-name }以打开它们。
+
+workspace-restore-workspaces-title = 恢复工作区？
+workspace-restore-workspaces-message = 旧版本的{ common-app-name }重置了您的工作区、调色板和画笔设置。恢复会替换您在重置后所做的更改。
+workspace-keep-current = 保留当前设置

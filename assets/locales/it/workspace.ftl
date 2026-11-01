@@ -639,3 +639,7 @@ workspace-storage-unavailable-notice = { common-app-name } non può aprire le ar
 workspace-storage-damaged-notice = Le aree di lavoro salvate erano danneggiate. { common-app-name } ne ha avviate di nuove.
 workspace-editing-unreadable-notice = Alcune tavolozze o impostazioni dei pennelli non possono essere aperte in questa versione di { common-app-name }. Aggiorna { common-app-name } per aprirle.
 workspace-created-unreadable-notice = Questa versione di { common-app-name } non può aprire le aree di lavoro salvate. Aggiorna { common-app-name } per aprirle.
+
+workspace-restore-workspaces-title = Ripristinare le aree di lavoro?
+workspace-restore-workspaces-message = Una versione precedente di { common-app-name } ha reimpostato le aree di lavoro, le tavolozze e le impostazioni dei pennelli. Il ripristino sostituisce le modifiche apportate dopo la reimpostazione.
+workspace-keep-current = Mantieni le attuali

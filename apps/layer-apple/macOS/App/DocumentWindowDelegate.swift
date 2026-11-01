@@ -118,7 +118,7 @@ import AppKit
     }
     func windowDidBecomeKey(_ notification: Notification) {
         downstream?.windowDidBecomeKey?(notification)
-        store?.workspaces?.refreshSwitcher()
+        store?.workspaces?.focus()
     }
     override func responds(to selector: Selector!) -> Bool {
         super.responds(to: selector) || (downstream?.responds(to: selector) ?? false)

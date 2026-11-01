@@ -78,7 +78,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
     }
     void dispatch(J const& input,std::function<void()> ready={}) {
         auto type=str(input,L"type");
-        if(type!=L"submit"&&type!=L"cancel"&&type!=L"dismiss"&&type!=L"edit_switcher"&&type!=L"refresh_switcher")if(!finishName())return;
+        if(type!=L"submit"&&type!=L"cancel"&&type!=L"dismiss"&&type!=L"edit_switcher"&&type!=L"refresh_switcher"&&type!=L"focus")if(!finishName())return;
         send(to_string(O({{L"operation",S(L"input")},{L"input",input}}).Stringify()),std::move(ready));
     }
     static J form(hstring const& type,V value=nullptr) {
@@ -502,7 +502,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         workspaceApply.IsEnabled((!busy||inlineName)&&flag(model,L"enabled")&&!flag(model,L"loading"));
         dialog.PrimaryButtonText(workspacePage?L"":naming?str(details,L"confirm"):str(model,L"primary"));
         dialog.IsPrimaryButtonEnabled((!busy||inlineName)&&!flag(model,L"loading")&&(naming?(name.Visibility()!=Visibility::Visible||nameValid):flag(model,L"enabled")));
-        dialog.CloseButtonText(workspacePage?L"":common(L"cancel"));
+        auto cancel=str(details,L"cancel");dialog.CloseButtonText(workspacePage?L"":cancel.empty()?common(L"cancel"):cancel);
         dialog.DefaultButton(naming?ContentDialogButton::Primary:ContentDialogButton::None);
         cancelPending=false;
     }

@@ -97,8 +97,11 @@ pub(crate) fn merge_editing(current: Option<&str>, batch: &CommitBatch) -> Resul
     let Some(incoming) = &batch.editing_json else { return Ok(None); };
     let Some(fields) = &batch.editing_fields else { return Ok(Some(incoming.clone())); };
     let incoming_value: serde_json::Value = serde_json::from_str(incoming)?;
-    let mut merged = current.and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+    let merged = current.and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
         .filter(serde_json::Value::is_object).unwrap_or_else(|| incoming_value.clone());
+    Ok(Some(serde_json::to_string(&overlay_editing(merged,&incoming_value,fields)?)?))
+}
+pub(crate) fn overlay_editing(mut merged: serde_json::Value, incoming_value: &serde_json::Value, fields: &[String]) -> Result<serde_json::Value> {
     for path in fields {
         if path.is_empty() { merged = incoming_value.clone(); continue; }
         if !path.starts_with('/') || path.split('~').skip(1).any(|part| !part.starts_with('0') && !part.starts_with('1')) {
@@ -118,7 +121,7 @@ pub(crate) fn merge_editing(current: Option<&str>, batch: &CommitBatch) -> Resul
             parent.remove(&key);
         }
     }
-    Ok(Some(serde_json::to_string(&merged)?))
+    Ok(merged)
 }
 pub(crate) fn validate_payload(
     batch: &CommitBatch,

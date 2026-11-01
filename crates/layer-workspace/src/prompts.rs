@@ -13,6 +13,7 @@ pub struct ManagerPrompt {
     pub title: String,
     pub message: String,
     pub confirm: String,
+    pub cancel: Option<String>,
     pub destructive: bool,
     pub name: Option<String>,
     pub description: Option<String>,
@@ -30,6 +31,7 @@ impl ManagerPrompt {
             title: title.into(),
             message: message.into(),
             confirm: confirm.into(),
+            cancel: None,
             destructive: false,
             name: None,
             description: None,
@@ -118,6 +120,15 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         use ManagerAction as A;
         let source = || source.ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseAnItem));
         Ok(match action {
+            A::RestoreWorkspaces(_) => {
+                let mut prompt = ManagerPrompt::confirm(
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_RESTORE_WORKSPACES_TITLE).to_string(),
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_RESTORE_WORKSPACES_MESSAGE).to_string(),
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_RESTORE).to_string(),
+                );
+                prompt.cancel = Some(self.localization().text(layer_ui::MessageId::WORKSPACE_KEEP_CURRENT).to_string());
+                prompt
+            }
             A::New => {
                 let mut p = ManagerPrompt::confirm(
                     self.localization().text(layer_ui::MessageId::WORKSPACE_NEW_WORKSPACE).to_string(),

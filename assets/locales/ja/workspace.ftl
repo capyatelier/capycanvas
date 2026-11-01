@@ -665,3 +665,7 @@ workspace-storage-unavailable-notice = { common-app-name }は保存されたワ�
 workspace-storage-damaged-notice = 保存されたワークスペースが破損していました。{ common-app-name }は新しいワークスペースで起動しました。
 workspace-editing-unreadable-notice = 一部のパレットやブラシ設定は、このバージョンの{ common-app-name }では開けません。開くには、{ common-app-name }を更新してください。
 workspace-created-unreadable-notice = このバージョンの{ common-app-name }では、保存されたワークスペースを開けません。開くには、{ common-app-name }を更新してください。
+
+workspace-restore-workspaces-title = ワークスペースを復元しますか？
+workspace-restore-workspaces-message = 古いバージョンの{ common-app-name }がワークスペース、パレット、ブラシ設定をリセットしました。復元すると、リセット後に行った変更が置き換えられます。
+workspace-keep-current = 現在の状態を保持

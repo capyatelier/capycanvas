@@ -14,6 +14,7 @@ struct Backend {
     lose_reply: Cell<bool>,
     deliveries: RefCell<Vec<String>>,
     load_gate: RefCell<Option<async_channel::Receiver<()>>>,
+    editing_gate: RefCell<Option<async_channel::Receiver<()>>>,
     commit_gate: RefCell<Option<async_channel::Receiver<()>>>,
     switcher_gate: RefCell<Option<async_channel::Receiver<()>>>,
     order_gate: RefCell<Option<async_channel::Receiver<()>>>,
@@ -23,6 +24,7 @@ struct Backend {
 struct Store(Rc<Backend>);
 impl WorkspaceStore for Store {
     async fn execute(&self, request: StoreRequest) -> Result<StoreResponse, StoreError> {
+        let editing = matches!(request, StoreRequest::Editing {..});
         if matches!(request, StoreRequest::UpdateWorkspaceOrder { .. }) {
             let gate = self.0.order_gate.borrow_mut().take();
             if let Some(gate) = gate { let _ = gate.recv().await; }
@@ -65,6 +67,10 @@ impl WorkspaceStore for Store {
             .database
             .borrow_mut()
             .execute(request, self.0.now.get());
+        if editing {
+            let gate = self.0.editing_gate.borrow_mut().take();
+            if let Some(gate) = gate { let _ = gate.recv().await; }
+        }
         if commit && self.0.lose_reply.replace(false) {
             return Err(StoreError::new(
                 ErrorKind::Unavailable,
@@ -2590,5 +2596,140 @@ fn workspace_projection_uses_one_identity_without_publishing_or_dirtying() {
         assert!(!manager.dirty());
         assert_eq!(serde_json::to_string(&manager.current().unwrap()).unwrap(), before);
         assert_eq!(backend.deliveries.borrow().len(), publications);
+    }
+}
+
+#[test]
+fn reset_restore_prompt_keeps_both_choices_and_a_copy_of_replaced_data() {
+    for restore in [false,true] {
+        let directory = crate::test_support::temp_dir("reset-restore-prompt");
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("workspaces.sqlite3");
+        std::fs::copy(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/compat/1.0.15/workspaces.sqlite3"),&path).unwrap();
+        {
+            let mut store = SqliteStore::open(&path).unwrap();
+            store.handle(StoreRequest::Reset).unwrap();
+        }
+        let english = Localizer::shared(UiLanguage::English);
+        let mut current = layer_ui::EditingState::new_localized(&english);
+        current.tools.set_override(current.preset,"size",43.,&english).unwrap();
+        {
+            let sql = rusqlite::Connection::open(&path).unwrap();
+            sql.execute("INSERT INTO editing(id,json) VALUES(1,?1)",[serde_json::to_string(&current).unwrap()]).unwrap();
+        }
+        let (mut controller,mut host) = start_native(&directory);
+        fn drive(controller:&mut WorkspaceController<StoreWorker>,host:&mut layer_host::NativeHost,done:impl Fn(&WorkspaceController<StoreWorker>,&layer_host::NativeHost)->bool) {
+            let deadline = std::time::Instant::now()+std::time::Duration::from_secs(20);
+            while !done(controller,host) && std::time::Instant::now()<deadline {
+                controller.tick(&mut host.session,1000);
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            assert!(done(controller,host),"{:?}",controller.view.error);
+        }
+        drive(&mut controller,&mut host,|c,_|c.view.prompt.is_some());
+        let prompt = controller.view.prompt.as_ref().unwrap();
+        assert_eq!(prompt.title,"Restore Workspaces?");
+        assert_eq!(prompt.message,"An older version of Capy Canvas reset your workspaces, palettes and brush settings. Restoring replaces changes you made after the reset.");
+        assert_eq!(prompt.confirm,"Restore");
+        assert_eq!(prompt.cancel.as_deref(),Some("Keep Current"));
+        assert_eq!(host.session.state().brush.diameter,43.);
+        let copies = || std::fs::read_dir(&directory).unwrap().map(|entry|entry.unwrap().path())
+            .filter(|path|path.file_name().unwrap().to_string_lossy().strip_suffix(".sqlite3").is_some_and(crate::snapshots::managed_name)).collect::<Vec<_>>();
+        let before = copies();
+        controller.input(&mut host.session,if restore {WorkspaceInput::Submit {name:String::new(),description:None,choice:None}} else {WorkspaceInput::Cancel},1000).unwrap();
+        drive(&mut controller,&mut host,|c,h|c.view.prompt.is_none() && c.view.ready && h.session.state().brush.diameter==if restore {37.} else {43.});
+        assert!(controller.view.prompt.is_none(),"{:?}",controller.view.error);
+        assert!(controller.view.error.is_none(),"{:?}",controller.view.error);
+        assert_eq!(host.session.state().brush.diameter,if restore {37.} else {43.});
+        let added: Vec<_> = copies().into_iter().filter(|path|!before.contains(path)).collect();
+        assert_eq!(added.len(),usize::from(restore));
+        if restore {
+            let sql = rusqlite::Connection::open(&added[0]).unwrap();
+            let json: String = sql.query_row("SELECT json FROM editing",[],|row|row.get(0)).unwrap();
+            assert_eq!(layer_ui::EditingState::restore(&json,&english),current);
+        }
+        close_native(controller,&mut host);
+        let (controller,mut host) = start_native(&directory);
+        assert!(controller.view.prompt.is_none());
+        assert_eq!(host.session.state().brush.diameter,if restore {37.} else {43.});
+        close_native(controller,&mut host);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+#[test]
+fn unchanged_focus_refresh_preserves_the_session_and_has_no_changed_paths() {
+    let mut f = Fixture::new();
+    let mut editing = f.host.session.editing_state();
+    for palette in &mut editing.color_library.palettes { palette.swatches.clear(); }
+    editing.color_library.apply(layer_ui::ColorLibraryAction::Import {
+        name: "Large palette".into(),
+        swatches: (0..layer_ui::ColorLibrary::MAX_SWATCHES).map(|i| (format!("Swatch {i}"),editing.colors.definition())).collect(),
+    }).unwrap();
+    f.host.session.restore_editing(editing).unwrap();
+    f.controller.observe(&mut f.host.session,f.backend.now.get());
+    f.save();
+    assert!(!f.controller.manager.dirty());
+    let baseline = f.controller.manager.editing_baseline();
+    let (send,receive) = async_channel::bounded(1);
+    *f.backend.editing_gate.borrow_mut() = Some(receive);
+    f.input(serde_json::json!({"type":"focus"}));
+    assert!(f.controller.view.switcher_busy);
+    let mut editing = f.host.session.editing_state();
+    let palette = editing.color_library.active_palette().id;
+    let id = editing.color_library.active_palette().swatches[0].id;
+    editing.color_library.apply(layer_ui::ColorLibraryAction::Reorder {palette,id,before:None}).unwrap();
+    editing.color_library.apply(layer_ui::ColorLibraryAction::UndoReorder {palette}).unwrap();
+    f.host.session.restore_editing(editing).unwrap();
+    f.controller.observe(&mut f.host.session,f.backend.now.get());
+    let before = f.host.session.editing_state();
+    let revision = f.host.session.state().revision;
+    assert!(before.color_library.can_undo_reorder(palette,true));
+    send.try_send(()).unwrap();
+    f.pump();
+    let after = f.host.session.editing_state();
+    assert!(!f.controller.view.switcher_busy);
+    assert!(f.controller.view.error.is_none());
+    assert!(after.color_library.can_undo_reorder(palette,true),"An unchanged remote must preserve local reorder history");
+    assert!(after==before,"An unchanged remote must leave editing state untouched");
+    assert_eq!(f.host.session.state().revision,revision);
+    assert!(crate::store_rules::changed_editing_paths(&serde_json::to_value(baseline).unwrap(),&serde_json::to_value(after).unwrap()).is_empty());
+}
+
+#[test]
+fn focus_refresh_keeps_pending_and_submitted_paths_and_saves_remote_palettes_without_broadcasting() {
+    for submitted in [false,true] {
+    let mut a = Fixture::new();
+    let (mut b,mut host_b) = start(Store(a.backend.clone()),Platform::Web);
+    let released = layer_ui::EditingState::restore(include_str!("../tests/compat/1.0.15/editing.json"),a.host.session.localization());
+    let mut editing = a.host.session.editing_state();
+    editing.color_library = released.color_library;
+    a.host.session.restore_editing(editing).unwrap();
+    a.controller.observe(&mut a.host.session,1000);
+    pollster::block_on(a.controller.manager.flush()).unwrap();
+    assert_ne!(host_b.session.editing_state().color_library,a.host.session.editing_state().color_library);
+    let (send,receive) = async_channel::bounded(1);
+    *a.backend.editing_gate.borrow_mut() = Some(receive);
+    b.input(&mut host_b.session,WorkspaceInput::Focus,1000).unwrap();
+    for _ in 0..20 { b.tick(&mut host_b.session,1000); }
+    assert!(b.view.switcher_busy);
+    let mut editing = host_b.session.editing_state();
+    editing.tools.set_override(editing.preset,"size",55.,host_b.session.localization()).unwrap();
+    editing.region_smooth_edges = false;
+    host_b.session.restore_editing(editing).unwrap();
+    b.observe(&mut host_b.session,1000);
+    if submitted {pollster::block_on(b.manager.flush()).unwrap();}
+    send.try_send(()).unwrap();
+    for _ in 0..20 { b.tick(&mut host_b.session,1000); }
+    assert!(!b.view.switcher_busy);
+    assert_eq!(host_b.session.state().brush.diameter,55.);
+    assert!(!host_b.session.editing_state().region_smooth_edges);
+    assert_eq!(host_b.session.editing_state().color_library,a.host.session.editing_state().color_library);
+    assert!(b.manager.dirty());
+    pollster::block_on(b.manager.flush()).unwrap();
+    let (_,c) = start(Store(a.backend.clone()),Platform::Web);
+    assert_eq!(c.session.state().brush.diameter,55.);
+    assert_eq!(c.session.editing_state().color_library,a.host.session.editing_state().color_library);
+    assert!(!c.session.editing_state().region_smooth_edges);
     }
 }

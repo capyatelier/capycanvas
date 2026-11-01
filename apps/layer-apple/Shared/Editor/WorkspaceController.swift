@@ -59,7 +59,7 @@ import SwiftUI
     }
     func tick() { send(["type": "tick"]) }
     @discardableResult func send(_ input: [String: Any]) -> Int {
-        if inlineRename && !["tick","submit","cancel","dismiss","edit_switcher","refresh_switcher","resume","suspend"].contains(input["type"] as? String ?? "") {
+        if inlineRename && !["tick","submit","cancel","dismiss","edit_switcher","refresh_switcher","focus","resume","suspend"].contains(input["type"] as? String ?? "") {
             guard finishName() else { return sent }
         }
         if input["type"] as? String == "retry" { dismissedError = nil }
@@ -115,7 +115,7 @@ import SwiftUI
     }
     func suspend() { send(["type": "suspend"]) }
     func resume() { send(["type": "resume"]) }
-    func refreshSwitcher() { send(["type": "refresh_switcher"]) }
+    func focus() { send(["type": "focus"]) }
     /// Completes true once the claim is released after a final save, or false
     /// when saving fails and the window must stay open for recovery.
     func close(_ completion: @escaping @MainActor (Bool) -> Void) {

@@ -94,6 +94,10 @@ option fields. Discarded editing fields raise the palettes-and-brush-settings
 notice once per start. Creating a workspace because none could be read raises
 the shared update notice once.
 Readable documents are not rejected for their version number.
+`WorkspaceInput::Focus` and resume reload editing state on the storage worker;
+unchanged paths adopt the stored values while local changes made during the read
+stay pending. The [version-copy guide](storage.md#workspace-version-copies)
+describes the startup restore prompt.
 `SCHEMA_VERSION` identifies the tables: a store of any other schema version
 serves nothing but `Reset`.
 Unreadable workspace and toolbar rows remain listed and are skipped during

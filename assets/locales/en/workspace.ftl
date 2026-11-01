@@ -642,3 +642,7 @@ workspace-storage-unavailable-notice = { common-app-name } can't open your saved
 workspace-storage-damaged-notice = Your saved workspaces were damaged. { common-app-name } started new ones.
 workspace-editing-unreadable-notice = Some palettes or brush settings can't be opened in this version of { common-app-name }. Update { common-app-name } to open them.
 workspace-created-unreadable-notice = This version of { common-app-name } can't open your saved workspaces. Update { common-app-name } to open them.
+
+workspace-restore-workspaces-title = Restore Workspaces?
+workspace-restore-workspaces-message = An older version of { common-app-name } reset your workspaces, palettes and brush settings. Restoring replaces changes you made after the reset.
+workspace-keep-current = Keep Current

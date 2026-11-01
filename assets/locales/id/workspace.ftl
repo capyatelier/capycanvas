@@ -1216,3 +1216,7 @@ workspace-storage-unavailable-notice = { common-app-name } tidak dapat membuka r
 workspace-storage-damaged-notice = Ruang kerja tersimpan Anda rusak. { common-app-name } memulai ruang kerja baru.
 workspace-editing-unreadable-notice = Beberapa palet atau pengaturan kuas tidak dapat dibuka dalam versi { common-app-name } ini. Perbarui { common-app-name } untuk membukanya.
 workspace-created-unreadable-notice = Versi { common-app-name } ini tidak dapat membuka ruang kerja tersimpan Anda. Perbarui { common-app-name } untuk membukanya.
+
+workspace-restore-workspaces-title = Pulihkan Ruang Kerja?
+workspace-restore-workspaces-message = Versi lama { common-app-name } mengatur ulang ruang kerja, palet, dan pengaturan kuas Anda. Pemulihan mengganti perubahan yang Anda buat setelah pengaturan ulang.
+workspace-keep-current = Pertahankan Saat Ini

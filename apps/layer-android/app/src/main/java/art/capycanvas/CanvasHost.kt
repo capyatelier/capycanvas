@@ -190,7 +190,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
     }
     internal var workspaceNameCommit: (() -> Boolean)? = null
     internal fun workspaceInput(request: JSONObject) {
-        if(request.optString("type") !in listOf("submit","cancel","dismiss","edit_switcher","refresh_switcher","resume","suspend") && workspaceNameCommit?.invoke()==false)return
+        if(request.optString("type") !in listOf("submit","cancel","dismiss","edit_switcher","refresh_switcher","focus","resume","suspend") && workspaceNameCommit?.invoke()==false)return
         post {updateWorkspaceManager(request); refreshChrome(); publish(true); wake()}
     }
     private var closingWorkspaceWindow = false

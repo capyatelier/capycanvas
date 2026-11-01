@@ -148,7 +148,7 @@ class MainActivity : ComponentActivity() {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
             window.enterCanvasFullscreen()
-            host.workspaceInput(obj("type" to "refresh_switcher"))
+            host.workspaceInput(obj("type" to "focus"))
         } else if (!host.pickerPopupOpen) host.input(obj("type" to "blur"))
     }
 }

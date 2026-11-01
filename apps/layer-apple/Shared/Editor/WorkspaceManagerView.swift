@@ -256,7 +256,7 @@ private struct WorkspaceManagerForm: View {
             Spacer(minLength: 16)
             HStack {
                 Spacer()
-                Button(common["cancel"].string, role: .cancel) { workspaces.cancelPrompt() }.keyboardShortcut(.cancelAction)
+                Button(spec["cancel"].string.isEmpty ? common["cancel"].string : spec["cancel"].string, role: .cancel) { workspaces.cancelPrompt() }.keyboardShortcut(.cancelAction)
                     .accessibilityIdentifier("workspace-form-cancel")
                 Button(spec["confirm"].string, role: spec["destructive"].bool ? .destructive : nil) { workspaces.submit() }
                     .keyboardShortcut(.defaultAction)

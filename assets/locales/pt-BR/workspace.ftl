@@ -645,3 +645,7 @@ workspace-storage-unavailable-notice = O { common-app-name } não pode abrir sua
 workspace-storage-damaged-notice = Suas áreas de trabalho salvas estavam danificadas. O { common-app-name } iniciou novas áreas de trabalho.
 workspace-editing-unreadable-notice = Algumas paletas ou configurações de pincel não podem ser abertas nesta versão do { common-app-name }. Atualize o { common-app-name } para abri-las.
 workspace-created-unreadable-notice = Esta versão do { common-app-name } não pode abrir suas áreas de trabalho salvas. Atualize o { common-app-name } para abri-las.
+
+workspace-restore-workspaces-title = Restaurar áreas de trabalho?
+workspace-restore-workspaces-message = Uma versão anterior do { common-app-name } redefiniu suas áreas de trabalho, paletas e configurações de pincel. A restauração substitui as alterações feitas após a redefinição.
+workspace-keep-current = Manter atuais

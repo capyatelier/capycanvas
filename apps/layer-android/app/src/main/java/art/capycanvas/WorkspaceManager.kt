@@ -118,7 +118,7 @@ import org.json.JSONArray
                 if (choices.isNotEmpty()) PropertyChoice(form.getString("choice_label"), choices.map { it.getString("label") }, choices.indexOfFirst { it.getString("id") == choice }.coerceAtLeast(0), enabled = !busy, fill = colors.dialogField) { choice = choices[it].getString("id") }
                 if (nameError != null || error != null) Text(nameError ?: error.orEmpty(), color = MaterialTheme.colorScheme.error)
             }
-        }, dismissButton = { TextButton(cancel) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) } }, confirmButton = {
+        }, dismissButton = { TextButton(cancel) { Text(form.optString("cancel").takeUnless {form.isNull("cancel")} ?: host.bootstrap!!.getJSONObject("common").getString("cancel")) } }, confirmButton = {
             TextButton({ host.workspaceInput(obj("type" to "submit", "name" to name, "description" to description.takeUnless { form.isNull("description") }, "choice" to choice)) }, enabled = !busy && nameError == null,
                 modifier = Modifier.testTag("workspace-submit")) { Text(if (view.optBoolean("retry") && action.getString("type") != "save_as_new") copy.getString("retry") else form.getString("confirm"),
                 color = if (form.optBoolean("destructive")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }

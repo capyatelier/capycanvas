@@ -627,3 +627,7 @@ workspace-storage-unavailable-notice = { common-app-name } เปิดพื้
 workspace-storage-damaged-notice = พื้นที่ทำงานที่บันทึกไว้ของคุณเสียหาย { common-app-name } เริ่มต้นด้วยพื้นที่ทำงานใหม่แล้ว
 workspace-editing-unreadable-notice = จานสีหรือการตั้งค่าพู่กันบางรายการเปิดใน { common-app-name } เวอร์ชันนี้ไม่ได้ โปรดอัปเดต { common-app-name } เพื่อเปิดรายการเหล่านี้
 workspace-created-unreadable-notice = { common-app-name } เวอร์ชันนี้เปิดพื้นที่ทำงานที่บันทึกไว้ของคุณไม่ได้ โปรดอัปเดต { common-app-name } เพื่อเปิดพื้นที่ทำงานเหล่านี้
+
+workspace-restore-workspaces-title = กู้คืนพื้นที่ทำงานหรือไม่?
+workspace-restore-workspaces-message = { common-app-name } เวอร์ชันเก่ารีเซ็ตพื้นที่ทำงาน จานสี และการตั้งค่าพู่กันของคุณ การกู้คืนจะแทนที่การเปลี่ยนแปลงที่คุณทำหลังจากรีเซ็ต
+workspace-keep-current = เก็บปัจจุบันไว้

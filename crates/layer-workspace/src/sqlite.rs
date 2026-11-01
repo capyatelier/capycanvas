@@ -59,6 +59,7 @@ pub struct SqliteStore {
     /// Set for a store of another version; only `StoreRequest::Reset` is served.
     incompatible: Option<StoreError>,
     snapshots_ready: bool,
+    restore: Option<String>,
 }
 impl SqliteStore {
     pub fn open(path: &Path) -> Result<Self> {
@@ -101,7 +102,9 @@ impl SqliteStore {
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "wal_autocheckpoint", 1000)?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let snapshots_ready = snapshots::protect(&tx).is_ok();
+        let protection = snapshots::protect(&tx);
+        let snapshots_ready = protection.is_ok();
+        let restore = protection.ok().flatten();
         let incompatible = match tx.pragma_query_value(None, "user_version", |r| r.get(0))? {
             SCHEMA_VERSION => None,
             0 if table_names(&tx)?.is_empty() => {
@@ -120,6 +123,7 @@ impl SqliteStore {
             ownership: ownership::Ownership::new(path)?,
             incompatible,
             snapshots_ready,
+            restore,
         })
     }
     fn reset(&mut self) -> Result<()> {
@@ -152,6 +156,11 @@ impl SqliteStore {
             return Err(error.clone());
         }
         match request {
+            StoreRequest::RestoreSnapshot { id } => {
+                snapshots::restore(&mut self.connection,&id)?;
+                self.ownership.release_all();
+                Ok(StoreResponse::Done)
+            }
             StoreRequest::Adopted => {
                 let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 if self.snapshots_ready { snapshots::prune(&tx)?; }
@@ -254,7 +263,7 @@ impl SqliteStore {
             StoreRequest::Reopen => {
                 self.connection
                     .execute_batch("PRAGMA wal_checkpoint(PASSIVE)")?;
-                Ok(StoreResponse::Done)
+                Ok(StoreResponse::Reopened(self.restore.take()))
             }
         }
     }

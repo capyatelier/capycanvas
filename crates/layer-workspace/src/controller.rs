@@ -176,6 +176,7 @@ pub enum WorkspaceInput {
         edit: SwitcherEdit,
     },
     RefreshSwitcher,
+    Focus,
     Retry,
     Suspend,
     Close,
@@ -200,6 +201,7 @@ enum Outcome {
     Adopt(Box<StoredEntity>),
     Editing(Option<Box<StoredEntity>>),
     Done,
+    Restart,
     Dismiss,
     Closed,
     Focus(FocusTarget),
@@ -244,6 +246,7 @@ struct WorkspaceNotice {
     copy: WorkspaceNoticeCopy,
 }
 type Selection = (Option<StoredEntity>, Option<DockLayout>);
+type EditingRefresh = (Box<layer_ui::EditingState>,Box<layer_ui::EditingState>);
 pub struct WorkspaceController<S: WorkspaceStore + 'static> {
     localization: Arc<layer_ui::Localizer>,
     localization_generation: u64,
@@ -252,7 +255,9 @@ pub struct WorkspaceController<S: WorkspaceStore + 'static> {
     wake: WakeSlot,
     task: Option<Task<Outcome>>,
     quiet: bool,
-    preferences: Option<Task<()>>,
+    preferences: Option<Task<Option<EditingRefresh>>>,
+    refresh_editing: bool,
+    refreshed_editing: Option<EditingRefresh>,
     preference_edit: Option<SwitcherEdit>,
     preference_edits: VecDeque<SwitcherEdit>,
     refresh_preferences: bool,
@@ -369,6 +374,8 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             task: None,
             quiet: false,
             preferences: None,
+            refresh_editing: false,
+            refreshed_editing: None,
             preference_edit: None,
             preference_edits: VecDeque::new(),
             refresh_preferences: false,
@@ -466,7 +473,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 Startup::SetAside => m.set_aside_storage().await?,
                 Startup::InMemory => m.use_memory(),
             }
-            m.execute(StoreRequest::Reopen).await?;
+            m.reopen().await?;
             m.load_editing().await?;
             m.refresh_switcher().await?;
             let mut bound = Vec::new();
@@ -884,6 +891,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         if !matches!(
             input,
             WorkspaceInput::Resume
+                | WorkspaceInput::Focus
                 | WorkspaceInput::RefreshSwitcher
                 | WorkspaceInput::EditSwitcher { .. }
                 | WorkspaceInput::Search { .. }
@@ -912,6 +920,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 self.preference_edits.push_back(edit);
             }
             WorkspaceInput::RefreshSwitcher => self.refresh_preferences = true,
+            WorkspaceInput::Focus => { self.refresh_preferences = true; self.refresh_editing = true; },
             WorkspaceInput::FocusFailed { error } => {
                 self.error = None;
                 self.view.error = Some(error);
@@ -975,6 +984,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 self.close_after_task = false;
                 self.last_renew = 0;
                 self.refresh_preferences = true;
+                self.refresh_editing = true;
             }
             WorkspaceInput::DiscardClose => {
                 if !self.terminating || self.view.closed {
@@ -1208,6 +1218,10 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 }))
             };
             Ok(match action {
+                ManagerAction::RestoreWorkspaces(id) => {
+                    m.restore_snapshot(id).await?;
+                    Outcome::Restart
+                }
                 ManagerAction::New => Outcome::adopt(m.create_workspace(&name, now).await?),
                 ManagerAction::Rename(id) => {
                     let metadata = m.load(&id).await?.entity.metadata;
@@ -1558,7 +1572,8 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             let edited = self.preference_edit.take().is_some();
             presentation_changed = true;
             match result {
-                Ok(()) => {
+                Ok(editing) => {
+                    if editing.is_some() { self.refreshed_editing = editing; }
                     self.set_switcher_error(None);
                     if edited {
                         self.view.switcher_revision = self.view.switcher_revision.wrapping_add(1);
@@ -1581,12 +1596,18 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             let manager = self.manager.clone();
             if let Some(edit) = self.preference_edits.pop_front() {
                 self.preference_edit = Some(edit.clone());
-                self.preferences = self.spawn(async move { manager.edit_switcher(edit).await });
-            } else if self.refresh_preferences && !self.terminating {
+                self.preferences = self.spawn(async move { manager.edit_switcher(edit).await?; Ok(None) });
+            } else if self.refresh_preferences && !self.terminating && self.task.is_none() {
                 self.refresh_preferences = false;
+                let editing = std::mem::take(&mut self.refresh_editing);
+                let baseline = manager.editing_baseline();
                 self.preferences = self.spawn(async move {
                     manager.refresh().await?;
-                    manager.refresh_switcher().await
+                    manager.refresh_switcher().await?;
+                    if editing && let StoreResponse::Editing {state,..} = manager.execute(StoreRequest::Editing {language:manager.localization().language()}).await? {
+                        return Ok(Some((state.unwrap_or_else(||Box::new(layer_ui::EditingState::new_localized(&manager.localization()))),baseline)));
+                    }
+                    Ok(None)
                 });
             }
         }
@@ -1597,6 +1618,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 Ok(outcome) => {
                     let keep_prompt = matches!(outcome, Outcome::Adopt(_) | Outcome::Editing(Some(_)) | Outcome::Install(_));
                     match outcome {
+                        Outcome::Restart => { self.view.ready = false; self.preferences=None; self.refreshed_editing=None; self.renew=None; self.start(Startup::Stored,now); },
                         Outcome::Adopt(incoming) => {
                             if self
                                 .view
@@ -1908,6 +1930,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 && !self.transition
                 && !self.suspended
                 && self.manager.dirty()
+                && self.preferences.is_none() && self.refreshed_editing.is_none()
                 && self.view.error.is_none()
                 && (now.saturating_sub(self.last_edit) >= 250
                     || now.saturating_sub(self.last_observed) >= 2000)
@@ -1929,6 +1952,28 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             match self.input(session, input, now) {
                 Ok(c) => merge(&mut change, c),
                 Err(e) => self.set_error(e),
+            }
+        }
+        if self.view.ready && self.task.is_none() && self.incoming.is_none() && !self.transition && !self.suspended
+            && session.require_workspace_idle().is_ok()
+            && let Some((editing,baseline)) = self.refreshed_editing.take()
+        {
+            let current = session.editing_state();
+            match self.manager.refresh_editing(editing,baseline,current.clone()) {
+                Ok(editing) if editing!=current => match session.restore_editing(editing) {
+                    Ok(c) => merge(&mut change,c),
+                    Err(error) => self.set_error(StoreError::invalid(error)),
+                },
+                Ok(_) => {},
+                Err(error) => self.set_error(error),
+            }
+        }
+        if self.view.ready && self.task.is_none() && self.incoming.is_none() && !self.terminating && self.view.prompt.is_none()
+            && let Some(id) = self.manager.take_restore()
+        {
+            match self.form(session,ManagerAction::RestoreWorkspaces(id)) {
+                Ok(c) => {merge(&mut change,c);presentation_changed=true;},
+                Err(error) => self.set_error(error),
             }
         }
         if presentation_changed {

@@ -83,6 +83,12 @@ transaction runs once more without copy records or marker changes, so ordinary
 saves can continue; a later start tries protection again. Other failures are
 reported. Retention uses the copy metadata without reading every retained snapshot.
 
+A newly detected legacy reset offers **Restore Workspaces?** once at startup.
+**Restore** retains a version copy of the current store before replacing it under
+the store's write lock, then restarts workspace adoption. **Keep Current** leaves
+the current store in place. A failed restoration retains the current store and
+copies; restoration never falls back to writing without its version copy.
+
 To restore a native copy, close every Capy Canvas process. Move the current
 database and its `-wal` and `-shm` sidecars into a separate recovery folder.
 Copy the chosen retained database to `workspaces.sqlite3`, leaving the retained

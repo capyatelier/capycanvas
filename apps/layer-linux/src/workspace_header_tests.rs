@@ -4756,6 +4756,9 @@ fn native_saved_data_messages_input() {
                 if fixture_case=="workspace" {sql.execute("UPDATE items SET content='{}' WHERE kind='workspace'",[]).unwrap();}
                 else {sql.execute("UPDATE items SET content='{}' WHERE id=?1",[layer_workspace::DEFAULT_WORKSPACES[0].0]).unwrap();}
             },
+            "restore" | "keep-current" => {
+                std::fs::copy(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates/layer-workspace/tests/compat/1.0.15/workspaces.sqlite3"),directory.join("workspaces.unreadable.sqlite3")).unwrap();
+            },
             "drawing-unsupported" | "drawing-damaged" => {},
             _ => panic!("unknown saved-data case"),
         }
@@ -4773,6 +4776,7 @@ fn native_saved_data_messages_input() {
     let package = super::canvas_bar_tests::until_some(||receiver.try_recv().ok(),"saved-data fixture");
     let mut d = Driver::managed("art.capycanvas.SavedDataMessages");
     let expected = match case.as_str() {
+        "restore" | "keep-current" => M::WORKSPACE_RESTORE_WORKSPACES_TITLE,
         "newer" => M::WORKSPACE_STORAGE_NEWER_NOTICE,
         "unavailable" => M::WORKSPACE_STORAGE_UNAVAILABLE_NOTICE,
         "damaged" => M::WORKSPACE_STORAGE_DAMAGED_NOTICE,
@@ -4793,7 +4797,7 @@ fn native_saved_data_messages_input() {
         d.w.workspaces.send(&d.w,layer_workspace::WorkspaceInput::Select {id:Some(layer_workspace::DEFAULT_WORKSPACES[0].0.into())});
         until(||d.w.workspaces.view().error.is_some(),"unreadable workspace choice");
         assert_eq!(d.w.workspaces.view().error.as_deref(),Some(expected.as_str()));
-    } else {assert_eq!(state(&d.w).notice.as_ref().unwrap().text,expected);}
+    } else if case!="restore" && case!="keep-current" {assert_eq!(state(&d.w).notice.as_ref().unwrap().text,expected);}
     fn shown(widget:&gtk::Widget,text:&str)->bool {
         if widget.is_mapped() && widget.downcast_ref::<gtk::Label>().is_some_and(|label|label.text()==text) {return true;}
         let mut child=widget.first_child();
@@ -4803,6 +4807,52 @@ fn native_saved_data_messages_input() {
     until(||shown(d.w.window.upcast_ref(),&expected),"saved-data message is rendered");
     let theme = std::env::var("CAPY_NATIVE_TEST_THEME").unwrap();
     d.input.perform(serde_json::json!([{"capture":format!("gtk-{case}-{theme}")} ]));
-    if let Some(dialog)=d.w.window.visible_dialog() {dialog.close();}
+    if case=="restore" || case=="keep-current" {
+        d.click_label(if case=="restore" {"Restore"} else {"Keep Current"});
+        until(||d.w.workspaces.view().prompt.is_none() && d.w.workspaces.view().ready && !d.w.workspaces.view().busy,"restore choice adopted");
+        assert_eq!(state(&d.w).brush.diameter,if case=="restore" {37.} else {9.});
+        assert!(d.w.workspaces.view().error.is_none());
+    } else if let Some(dialog)=d.w.window.visible_dialog() {dialog.close();}
+    d.finish();
+}
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_editing_focus_input --native-storage"]
+fn native_editing_focus_input() {
+    let mut d = Driver::managed("art.capycanvas.EditingFocus");
+    apply_fixture_theme(&d.w);
+    new_photo::ready(&d.w);
+    let second = Workspace::new(&d._app);
+    apply_fixture_theme(&second);
+    second.window.maximize();
+    second.window.present();
+    wait_workspaces(&second);
+    new_photo::ready(&second);
+    until(||!second.workspaces.view().switcher_busy,"initial focus refresh settled");
+    d.w.window.present();
+    until(||d.w.window.is_active(),"palette window active");
+    d.w.dispatch(serde_json::from_value(serde_json::json!({"type":"color","action":{"op":"library","action":{"op":"create_palette","name":"Focus palette"}}})).unwrap());
+    let manager = d.w.workspaces.manager().unwrap();
+    until(||!manager.dirty() && !manager.saving(),"palette saved");
+    let has_palette = |w:&Workspace|serde_json::to_value(ui_session_mut(w).editing_state()).unwrap()["color_library"]["palettes"].as_array().unwrap().iter().any(|p|p["name"]=="Focus palette");
+    assert!(has_palette(&d.w));
+    assert!(!has_palette(&second));
+    second.window.present();
+    until(||second.window.is_active(),"palette receiving window active");
+    until(||has_palette(&second),"focus reloads palette");
+    let revision = state(&second).document_file.revision;
+    d.input.click(screen_point(second.area.upcast_ref(),&second.window,[0.5,0.5]));
+    until(||state(&second).document_file.revision>revision,"painting after focus");
+    until(||!second.workspaces.view().dirty && !second.workspaces.view().saving,"paint settings saved");
+    second.window.close();
+    until(||!second.window.is_visible(),"second window closed");
+    d.w.window.close();
+    until(||!d.w.window.is_visible(),"first window closed");
+    d.w = Workspace::new(&d._app);
+    d.w.window.maximize();
+    d.w.window.present();
+    wait_workspaces(&d.w);
+    assert!(has_palette(&d.w));
+    assert!(!serde_json::to_value(ui_session_mut(&d.w).editing_state()).unwrap()["color_library"]["history"].as_array().unwrap().is_empty());
     d.finish();
 }

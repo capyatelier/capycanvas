@@ -636,3 +636,7 @@ workspace-storage-unavailable-notice = { common-app-name } không thể mở cá
 workspace-storage-damaged-notice = Các không gian làm việc đã lưu của bạn bị hỏng. { common-app-name } đã bắt đầu với các không gian làm việc mới.
 workspace-editing-unreadable-notice = Một số bảng màu hoặc thiết lập cọ không thể mở trong phiên bản { common-app-name } này. Hãy cập nhật { common-app-name } để mở chúng.
 workspace-created-unreadable-notice = Phiên bản { common-app-name } này không thể mở các không gian làm việc đã lưu của bạn. Hãy cập nhật { common-app-name } để mở chúng.
+
+workspace-restore-workspaces-title = Khôi phục không gian làm việc?
+workspace-restore-workspaces-message = Phiên bản { common-app-name } cũ hơn đã đặt lại các không gian làm việc, bảng màu và thiết lập cọ của bạn. Việc khôi phục sẽ thay thế những thay đổi bạn đã thực hiện sau khi đặt lại.
+workspace-keep-current = Giữ hiện tại

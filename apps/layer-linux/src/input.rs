@@ -628,7 +628,9 @@ pub fn install(workspace: &Rc<Workspace>) {
         #[strong]
         focus,
         move |window| {
-            if !window.is_active() {
+            if window.is_active() {
+                workspace.workspaces.send(&workspace,layer_workspace::WorkspaceInput::Focus);
+            } else {
                 input.window_focus_changed(&workspace, &focus);
             }
         }

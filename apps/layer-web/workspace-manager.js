@@ -175,7 +175,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
         formSubmit = button(form.confirm, () => {if(formKey!==key||!view?.prompt||!validatePrompt())return;send({ type: "submit", name: formName?.value || "",description:formDescription?.value??null,choice:formChoice?.value??null });}, "suggested-action");
         formName?.addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();if(validatePrompt())formSubmit.click();}});
         if (form.destructive) formSubmit.classList.add("destructive-action");
-        footer.append(localizedButton(()=>common.cancel,cancel), formSubmit); formDialog.append(formError, footer);
+        footer.append(localizedButton(()=>view?.prompt?.cancel??common.cancel,cancel), formSubmit); formDialog.append(formError, footer);
       }
     }
     if (form) { validatePrompt();bindCopy(formSubmit,()=>view?.retry&&view?.prompt_action?.type!=="save_as_new"?copy.retry:view?.prompt?.confirm??""); }
@@ -238,7 +238,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   app.workspace_start(store.execute, JSON.stringify(owner));
   timer = setInterval(tick, 100); tick();
   document.addEventListener("visibilitychange", () => send({ type: document.hidden ? "suspend" : "resume" }));
-  window.addEventListener("focus", () => send({type:"refresh_switcher"}));
+  window.addEventListener("focus", () => send({type:"focus"}));
   window.addEventListener("pagehide", () => send({ type: "suspend" }));
   window.addEventListener("pageshow", () => send({ type: "resume" }));
   window.addEventListener("beforeunload", e => { if (view?.dirty || view?.busy || view?.switcher_busy) { e.preventDefault(); e.returnValue = ""; } });

@@ -32,16 +32,17 @@ export function createWorkspaceStore(reduce, { name = "capycanvas.workspaces", i
     const db = await open(), command = JSON.parse(request), [live, liveAt] = await liveOwners();
     return new Promise((resolve, reject) => {
       let tx, response, failure;
-      const protect = !withoutCopies && (!versionChecked || command.type === "reopen" || command.type === "adopted");
+      const protect = !withoutCopies && (!versionChecked || ["reopen","adopted","restore_snapshot"].includes(command.type));
       const readonly = !protect && !pending && readOnly.has(command.type);
       try {
         tx = db.transaction("workspace", readonly ? "readonly" : "readwrite", { durability: "strict" });
         const store = tx.objectStore("workspace"), read = store.get("database");
         const marker = protect ? store.get("version") : null, unreadable = protect ? store.get("unreadable") : null;
-        (unreadable || read).onsuccess = () => {
+        const restoring = command.type === "restore_snapshot" ? store.get(command.id) : null;
+        (restoring || unreadable || read).onsuccess = () => {
           try {
             const result = reduce(read.result?.snapshot, request, pending, Date.now(), live, liveAt,
-              protect ? {marker:marker.result?.value,unreadable:unreadable.result?.snapshot} : undefined);
+              protect ? {marker:marker.result?.value,unreadable:unreadable.result?.snapshot,restoring:restoring?.result?.snapshot} : undefined);
             response = result.response;
             if (protect) {
               const plan = result.compatibility;
@@ -57,7 +58,7 @@ export function createWorkspaceStore(reduce, { name = "capycanvas.workspaces", i
         tx.oncomplete = () => { if (protect || withoutCopies) versionChecked = true; resolve(response); };
         tx.onabort = () => {
           const reason = failure || error(tx.error || new Error("The workspace transaction was interrupted. Your changes have been kept."));
-          if (protect && JSON.parse(reason).kind === "storage_full") transaction(request, pending, true).then(resolve, reject);
+          if (protect && command.type !== "restore_snapshot" && JSON.parse(reason).kind === "storage_full") transaction(request, pending, true).then(resolve, reject);
           else reject(reason);
         };
         tx.onerror = () => {}; // onabort reports the complete transaction's result.

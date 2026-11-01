@@ -579,7 +579,7 @@ impl ManagerUi {
             dialog.set_heading(Some(&prompt.title));
             dialog.set_body(&prompt.message);
             dialog.set_response_label("confirm", &prompt.confirm);
-            dialog.set_response_label("cancel", &w.localization().text(layer_ui::MessageId::COMMON_CANCEL));
+            dialog.set_response_label("cancel", prompt.cancel.as_deref().unwrap_or(&w.localization().text(layer_ui::MessageId::COMMON_CANCEL)));
             if let Some(localization) = unsafe { dialog.data::<Rc<RefCell<std::sync::Arc<layer_ui::Localizer>>>>("capy-prompt-localization") } {
                 *unsafe { localization.as_ref() }.borrow_mut() = w.localization();
             }
@@ -650,7 +650,7 @@ fn prompt_dialog(
         .body(&prompt.message)
         .build();
     dialog.set_widget_name("workspace-prompt");
-    dialog.add_responses(&[("cancel", &localization.text(layer_ui::MessageId::COMMON_CANCEL)), ("confirm", &prompt.confirm)]);
+    dialog.add_responses(&[("cancel", prompt.cancel.as_deref().unwrap_or(&localization.text(layer_ui::MessageId::COMMON_CANCEL))), ("confirm", &prompt.confirm)]);
     dialog.set_close_response("cancel");
     dialog.set_default_response(Some("confirm"));
     dialog.set_response_appearance(
