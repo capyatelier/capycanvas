@@ -611,6 +611,11 @@ impl Drawer {
     pub fn placement(&self) -> Option<DrawerPlacement> {
         self.presented.borrow().clone()
     }
+    pub fn glass_connectors(&self, out: &mut Vec<layer_render_wgpu::BackdropRegion>) {
+        if let Some(connection) = self.placement().and_then(|p| p.connection()) {
+            crate::glass::connector(&connection, out);
+        }
+    }
     pub fn measurement(&self) -> Option<layer_ui::ColumnDrawerMeasurement> {
         if self.closing.get() {
             return None;
@@ -833,7 +838,7 @@ impl Drawer {
             .collect();
         place(&heights)
     }
-    pub fn geometry(&self, w: &Workspace) -> Option<DrawerPlacement> {
+    pub fn allocate(&self, w: &Workspace) -> Option<DrawerPlacement> {
         let Some(target) = self
             .target(w)
             .or_else(|| self.closing.get().then(|| self.placement()).flatten())
@@ -1117,5 +1122,38 @@ impl Drawer {
         }
         w.surface.raise_drawer(self.id);
         w.surface.queue_allocate();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drawer_glass_uses_the_allocated_frame_until_the_next_allocation() {
+        let drawer = Drawer::new(0);
+        let placed = DrawerPlacement { bounds: Bounds {x:100.,y:100.,width:240.,height:360.},
+            anchor: Bounds {x:140.,y:50.,width:36.,height:36.}, direction: Edge::Bottom,
+            columns: Vec::new(), tab_presentations: Vec::new() };
+        *drawer.presented.borrow_mut() = Some(placed.clone());
+        *drawer.from.borrow_mut() = Some(placed.closed());
+        let mut expected = Vec::new();
+        crate::glass::connector(&placed.connection().unwrap(), &mut expected);
+        assert!(!expected.is_empty());
+        for (closing, progress) in [(false,0.25),(false,0.75),(true,1.)] {
+            drawer.closing.set(closing);
+            drawer.progress.set(progress);
+            let mut actual = Vec::new();
+            drawer.glass_connectors(&mut actual);
+            assert_eq!(actual, expected);
+            assert_eq!(serde_json::to_value(drawer.placement()).unwrap(), serde_json::to_value(&placed).unwrap());
+        }
+        *drawer.presented.borrow_mut() = Some(placed.closed());
+        let mut closed = Vec::new();
+        drawer.glass_connectors(&mut closed);
+        assert!(closed.is_empty());
+        drawer.presented.borrow_mut().take();
+        drawer.glass_connectors(&mut closed);
+        assert!(closed.is_empty());
     }
 }

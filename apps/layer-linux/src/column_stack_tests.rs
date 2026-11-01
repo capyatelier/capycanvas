@@ -1357,3 +1357,143 @@ fn native_column_stack_input() {
         }
     }
 }
+#[test]
+#[ignore = "private Wayland display and hardware GPU; drawer snapshot purity"]
+fn native_column_drawer_snapshot_purity() { column_drawer_snapshot_frames(true); }
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU; short drawer motion comparison"]
+fn native_column_drawer_snapshot_motion() { column_drawer_snapshot_frames(false); }
+
+fn column_drawer_snapshot_frames(inspect: bool) {
+    let input = RemoteInput::new().settle_ms(8).timeout_secs(60);
+    let app = native_test_app("art.capycanvas.DrawerSnapshot");
+    let w = fixture_workspace(&app);
+    w.window.maximize(); w.window.present(); pump(2000); wait_workspaces(&w);
+    until(|| w.gpu.borrow().as_ref().is_some_and(|g| g.session.engine().backend().startup.complete), "drawer snapshot startup");
+    input.ready();
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let (fixture, panels) = native_bridge_fixture(viewport, 84.5);
+    w.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(fixture)});
+    w.customize(CustomizationAction::SetColumnDrawers {column:4, drawers:true}); pump(400);
+    gtk::Settings::default().unwrap().set_gtk_enable_animations(true);
+    let audit = inspect.then(snapshot_audit::Audit::start);
+    let phase = Rc::new(Cell::new(0usize));
+    let samples = Rc::new(RefCell::new(Vec::new()));
+    let frames = Rc::new(RefCell::new(Vec::new()));
+    let failures = Rc::new(RefCell::new(Vec::new()));
+    let previous = Rc::new(Cell::new(None));
+    let legacy = Rc::new(RefCell::new(serde_json::Value::Null));
+    let revisions = Rc::new(RefCell::new(std::collections::BTreeMap::from([(w.chrome_released.get(), None)])));
+    let missing = Rc::new(RefCell::new(Vec::new()));
+    let clock = w.surface.frame_clock().unwrap();
+    let painted = clock.connect_after_paint(glib::clone!(#[weak] w, #[strong] phase, #[strong] samples,
+        #[strong] frames, #[strong] failures, #[strong] previous, #[strong] legacy, #[strong] revisions,
+        #[strong] missing, move |clock| {
+        let drawer = w.drawers().into_iter().find(|drawer| drawer.id == 4);
+        let placement = drawer.as_ref().and_then(|drawer| drawer.placement());
+        let bounds = placement.as_ref().map(|placement| placement.bounds);
+        revisions.borrow_mut().insert(w.chrome.revision(), bounds);
+        let shown = w.chrome_released.get();
+        if let Some(bounds) = revisions.borrow().get(&shown).copied() {
+            let changed = previous.replace(bounds) != bounds;
+            samples.borrow_mut().push((phase.get(), clock.frame_time(), changed, clock.current_timings()));
+        } else { missing.borrow_mut().push(shown); }
+        if !inspect { return; }
+        let value = serde_json::to_value(&placement).unwrap();
+        let mut native = Vec::new();
+        for (slot, child) in w.surface.imp().children.borrow().iter() {
+            let (name, expected) = match slot {
+                Slot::Drawer(4) => ("body", bounds),
+                Slot::DrawerShadow(4) => ("shadow", bounds),
+                Slot::DrawerConnection(4) => ("connection", placement.as_ref().and_then(|p| p.connection()).map(|c| c.bounds)),
+                _ => continue,
+            };
+            let actual = child.is_child_visible().then(|| child.compute_bounds(&w.surface)).flatten();
+            let expected = expected.map(native_allocation);
+            let equal = match (expected, actual.as_ref()) {
+                (Some(expected), Some(actual)) => [expected.x, expected.y, expected.width, expected.height].into_iter()
+                    .zip([actual.x(), actual.y(), actual.width(), actual.height()]).all(|(a,b)| (a-b).abs() <= 1.),
+                (None, None) => true,
+                _ => false,
+            };
+            if !equal { failures.borrow_mut().push(format!("phase{} {name}: cached={expected:?} native={actual:?}", phase.get())); }
+            native.push(serde_json::json!({"kind":name,"expected":expected,"actual":actual.map(|r|[r.x(),r.y(),r.width(),r.height()])}));
+        }
+        let mut expected = Vec::new();
+        if let Some(connection) = placement.as_ref().and_then(|p| p.connection()) { crate::glass::connector(&connection, &mut expected); }
+        let mut cached = Vec::new();
+        if let Some(drawer) = &drawer { drawer.glass_connectors(&mut cached); }
+        if cached != expected { failures.borrow_mut().push(format!("phase{} cached connector differs from allocated frame", phase.get())); }
+        let enabled = w.palette.get().is_some_and(|p| p.glass.transparency.enabled());
+        if expected.iter().any(|region| w.glass.borrow().contains(region) != enabled) {
+            failures.borrow_mut().push(format!("phase{} snapshot connector differs from allocated frame", phase.get()));
+        }
+        if *legacy.borrow() != value {
+            if let Some(drawer) = &drawer {
+                let recomputed = drawer.allocate(&w);
+                if serde_json::to_value(recomputed).unwrap() != value {
+                    failures.borrow_mut().push(format!("phase{} cached placement differs from frozen legacy recomputation", phase.get()));
+                }
+            }
+            *legacy.borrow_mut() = value.clone();
+        }
+        frames.borrow_mut().push(serde_json::json!({"phase":phase.get(),"frame_time_us":clock.frame_time(),"placement":value,"native":native,"connectors":expected.len()}));
+    }));
+    let mut turns = Vec::new();
+    for (theme_index, theme) in [Theme::Light, Theme::Dark].into_iter().enumerate() {
+        w.dispatch(UiAction::SetTheme {theme:Some(theme)}); pump(250);
+        for (level_index, level) in [layer_ui::Transparency::Off, layer_ui::Transparency::Medium].into_iter().enumerate() {
+            let index = theme_index * 2 + level_index;
+            phase.set(index); if let Some(audit) = &audit { audit.phase(index); }
+            use_transparency(&w, level);
+            for turn in 0..8 {
+                let begin = glib::monotonic_time();
+                w.customize(CustomizationAction::ToggleColumnDrawer {group:5, panel:panels[2]}); pump(220);
+                turns.push((index, turn, begin, glib::monotonic_time()));
+                assert_eq!(state(&w).customization.column_drawers.is_empty(), turn % 2 == 1, "actual drawer mode toggles");
+                if turn % 2 == 0 {
+                    let placed = w.drawers().into_iter().find(|drawer|drawer.id==4).and_then(|drawer|drawer.placement())
+                        .is_some_and(|placement|placement.bounds.width>0. && placement.bounds.height>0.);
+                    let mapped = w.surface.imp().children.borrow().iter().any(|(slot,child)|matches!(slot,Slot::Drawer(4))
+                        && child.is_mapped() && child.is_child_visible() && child.width()>0 && child.height()>0);
+                    if !placed || !mapped { failures.borrow_mut().push(format!("phase{index} turn{turn}: opening has no allocated mapped drawer")); }
+                }
+            }
+        }
+    }
+    clock.disconnect(painted); pump(100);
+    let audit = audit.map(snapshot_audit::Audit::finish);
+    let mut motion = Vec::new();
+    for (phase, turn, begin, end) in turns {
+        let completed = |moving: bool| {
+            let mut times: Vec<_> = samples.borrow().iter().filter(|(p,t,changed,_)| *p == phase && *t >= begin && *t <= end && (!moving || *changed))
+                .filter_map(|(_,_,_,timing)|timing.as_ref()).filter(|t|t.is_complete() && t.presentation_time()>0)
+                .map(|t|t.presentation_time()).filter(|t|*t>=begin && *t<=end).collect();
+            times.sort_unstable(); times.dedup(); times
+        };
+        let all = completed(false); let moving = completed(true);
+        if moving.len()<2 { failures.borrow_mut().push(format!("phase{phase} turn{turn}: fewer than two completed changing presentations")); }
+        let mut gaps: Vec<_> = moving.windows(2).map(|p|(p[1]-p[0]) as f64/1000.).collect(); gaps.sort_by(f64::total_cmp);
+        motion.push(serde_json::json!({"phase":phase,"turn":turn,"input_window_us":[begin,end],"opening":turn%2==0,
+            "presentations":all.len(),"full_contact_hz":moving.len() as f64*1e6/(end-begin) as f64,
+            "moving_presentations":moving,"moving_hz":(moving.len()>1).then(||(moving.len()-1) as f64*1e6/(moving.last().unwrap()-moving[0]) as f64),
+            "gap_p99_ms":gaps.get(gaps.len()*99/100),"longest_gap_ms":gaps.last(),
+            "onset_ms":moving.first().map(|t|(*t-begin) as f64/1000.),"tail_ms":moving.last().map(|t|(end-*t) as f64/1000.)}));
+    }
+    let report = serde_json::json!({"mode":if inspect {"purity"} else {"motion"},"phase_order":["Light Off","Light Medium","Dark Off","Dark Medium"],
+        "audit":audit,"frames":*frames.borrow(),"geometry_failures":*failures.borrow(),"motion":motion,"missing_shown_revisions":*missing.borrow(),
+        "scope":"Complete GTK feedback associated with selected chrome and changing allocated drawer bounds; short toggles, no reference-tier or GPU-pixel qualification",
+        "runtime_gtk":[gtk::major_version(),gtk::minor_version(),gtk::micro_version()],"runtime_library_path":std::env::var("LD_LIBRARY_PATH").ok()});
+    if let Some(output) = std::env::var_os("LAYER_TEST_ARTIFACTS") {
+        std::fs::write(std::path::Path::new(&output).join(if inspect {"drawer-snapshot-purity.json"} else {"drawer-snapshot-motion.json"}),serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+    }
+    input.finish(); w.window.destroy(); pump(100);
+    assert!(missing.borrow().is_empty(), "unattributed drawer chrome revisions: {:?}", missing.borrow());
+    assert!(failures.borrow().is_empty(), "drawer frame geometry: {:?}", failures.borrow());
+    if inspect {
+        let audit = audit.as_ref().unwrap();
+        assert!(audit.counts.iter().all(|count| count.snapshots > 0), "all drawer phases must snapshot");
+        assert!(audit.events.is_empty(), "snapshot mutation calls: {}", serde_json::to_string(&audit.counts).unwrap());
+    }
+}

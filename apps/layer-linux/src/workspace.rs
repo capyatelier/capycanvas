@@ -228,7 +228,7 @@ mod allocation {
                     w.drawers()
                         .into_iter()
                         .filter(|d| d.id != 0)
-                        .filter_map(|d| d.geometry(&w).map(|p| (d.id, p)))
+                        .filter_map(|d| d.allocate(&w).map(|p| (d.id, p)))
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
@@ -318,7 +318,7 @@ mod allocation {
                 owner.update_backdrop();
                 owner.allocate_workspace_motion();
                 owner.measure_drawer_tiles();
-                let placement = owner.drawer.geometry(&owner);
+                let placement = owner.drawer.allocate(&owner);
                 for (slot, child) in self.children.borrow().iter() {
                     let bounds = match slot {
                         Slot::Drawer(0) | Slot::DrawerShadow(0) => {
@@ -357,6 +357,8 @@ mod allocation {
             }
         }
         fn snapshot(&self, target: &gtk::Snapshot) {
+            #[cfg(test)]
+            let _snapshot = crate::workspace::tests::snapshot_audit::SnapshotScope::enter();
             let composed = gtk::Snapshot::new();
             let snapshot = &composed;
             let owner = self.owner.borrow().upgrade();
@@ -408,7 +410,7 @@ mod allocation {
                             crate::glass::collect(node, &surfaces, &mut regions);
                         }
                     }
-                    owner.drawer_glass_connectors(&mut connectors);
+                    for drawer in owner.drawers() { drawer.glass_connectors(&mut connectors); }
                     regions.extend_from_slice(&connectors);
                     regions.extend(column_surfaces.iter().map(|surface|layer_render_wgpu::BackdropRegion::rounded(
                         surface.bounds(),[0.;4],layer_render_wgpu::BackdropRegion::SQUIRCLE).with_strength(0.)));
@@ -3613,13 +3615,6 @@ impl Workspace {
             };
             if view.stack.height_request() != minimum {
                 view.stack.set_height_request(minimum);
-            }
-        }
-    }
-    fn drawer_glass_connectors(&self, out: &mut Vec<layer_render_wgpu::BackdropRegion>) {
-        for drawer in self.drawers() {
-            if let Some(connection) = drawer.geometry(self).and_then(|p| p.connection()) {
-                crate::glass::connector(&connection, out);
             }
         }
     }

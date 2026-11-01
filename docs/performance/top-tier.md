@@ -6766,3 +6766,40 @@ The loaded 61 MP trace has 76 → 0 confirmed GTK-ahead mismatch instants. Its
 the opaque full-window canvas after its first opaque present. Source/trace
 reasoning, exact chrome-response timings, runtime receipts, original outlier,
 per-contact results and parked probes remain in `artifacts/gtk-race-ordering.local/`.
+
+
+## GTK drawer snapshot purity
+
+Measured 2026-10-31 on RTX PRO 6000 Blackwell Max-Q, NVIDIA 615.71.09,
+bundled GTK 4.24.1 and private Mutter 50.5 at 1600 × 1000, scale 1, 120 Hz.
+The matched `5739b053c` control and candidate run the same test-only GTK call
+audit. Across 32 Light/Dark × Off/Medium drawer toggles, main makes 411 draw
+requests and 17,673 CSS API calls during snapshot; the candidate makes zero
+snapshot draw, allocation, resize or CSS calls. Actual CSS value changes are
+zero on both. All 962/956 painted geometry records match native bounds and the
+legacy placement/connector calculation; the nested-drawer journey passes.
+
+The separate motion fixture disables the expensive audit/oracle and runs ABBA.
+Pooled results count complete GTK feedback associated with changing logical
+drawer bounds, not fresh GPU pixels. Short turns do not qualify sustained
+reference-tier performance.
+
+| Motion diagnostic | Main → cached snapshot |
+| --- | ---: |
+| Moving cadence, Hz | 118.838 → 118.614 |
+| Full-window changing cadence, Hz | 109.703 → 109.380 |
+| Pooled gap p99, ms | 10.911 → 11.074 |
+| Longest gap, ms | 16.964 → 18.354 |
+
+The Dark/Medium closing-tail difference remains unresolved: candidate maxima
+18.354/17.962 ms versus controls 16.964/12.340 ms. Main also has Medium-close
+two-refresh gaps of 16.964/16.531 ms. Overall rate and p99 ranges overlap; these
+samples do not establish equal timing. Main's first run ends with another
+session's CPU build, and the first candidate run starts with that cargo/rustc/
+linker work; the second candidate and final control have no observed CPU builds.
+No unauthorized GPU overlap is detected in the four accepted motion runs.
+Logical bounds can keep changing after native boxes settle late in closing;
+this limits attribution and does not explain or exclude the longer gaps.
+No further repeat is made because an unholdable GPU trial is active. Raw runs,
+contention records, exact phase results and the audit remain in
+`artifacts/gtk-r4.local/`; the earlier contended functional timings are excluded.

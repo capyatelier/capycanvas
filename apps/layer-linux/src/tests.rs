@@ -15019,3 +15019,5 @@ fn native_genuine_language_composition() {
 }
 
 mod smoothing_tests;
+#[path = "snapshot_audit_tests.rs"]
+pub(super) mod snapshot_audit;
