@@ -249,7 +249,7 @@ private struct PaperNameForm: View {
         VStack(alignment:.leading,spacing:12) {
             Text(copy["paper"]["rename_title"].string).font(.headline)
             TextField(controller.common["name"].string,text:$name).textFieldStyle(.roundedBorder)
-                .accessibilityIdentifier("paper-library-name").onSubmit(save)
+                .accessibilityIdentifier("paper-library-name").onNativeTextSubmit(name) { name = $0; save() }
             if let error { Text(error).foregroundStyle(.red).accessibilityIdentifier("paper-name-error") }
             HStack {
                 Spacer()

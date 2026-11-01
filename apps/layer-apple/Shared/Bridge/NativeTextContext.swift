@@ -44,6 +44,32 @@ extension KeyPress {
     }
 }
 @MainActor enum NativeTextContext {
+    static func submittedText(_ fallback: String) -> String? {
+        #if os(macOS)
+        guard let editor = NSApp.keyWindow?.firstResponder as? NSTextView else { return composing ? nil : fallback }
+        return submittedText(in: editor)
+        #else
+        guard let window = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
+            .flatMap(\.windows).first(where: \.isKeyWindow), let input = textInput(in: window) else { return fallback }
+        return submittedText(in: input)
+        #endif
+    }
+    #if os(macOS)
+    static func submittedText(in editor: NSTextView) -> String? {
+        editor.unmarkText()
+        return editor.hasMarkedText() ? nil : editor.string
+    }
+    #else
+    static func submittedText(in input: any UITextInput) -> String? {
+        input.unmarkText()
+        guard input.markedTextRange == nil, let range = input.textRange(from: input.beginningOfDocument, to: input.endOfDocument) else { return nil }
+        return input.text(in: range)
+    }
+    private static func textInput(in view: UIView) -> (any UITextInput)? {
+        if view.isFirstResponder, let input = view as? any UITextInput { return input }
+        return view.subviews.lazy.compactMap { textInput(in: $0) }.first
+    }
+    #endif
     nonisolated static func shortcutKeyIs(_ key: String, latin: String?, _ expected: String) -> Bool {
         key.withCString { key in
             (latin ?? "").withCString { latin in
@@ -104,4 +130,12 @@ extension KeyPress {
         return view.subviews.contains { markedText(in: $0) }
     }
     #endif
+}
+extension View {
+    func onNativeTextSubmit(_ fallback: String, action: @escaping (String) -> Void) -> some View {
+        onSubmit {
+            guard let text = NativeTextContext.submittedText(fallback) else { return }
+            action(text)
+        }
+    }
 }

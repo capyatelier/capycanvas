@@ -9,6 +9,12 @@ import SwiftUI
 @main struct NumberControlCaptures {
     @MainActor static func main() async throws {
         _ = NSApplication.shared; NSApp.setActivationPolicy(.prohibited)
+        let composing = NSTextView()
+        composing.string = "한"
+        composing.setMarkedText("글", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: 1, length: 0))
+        precondition(composing.hasMarkedText())
+        precondition(NativeTextContext.submittedText(in: composing) == "한글" && !composing.hasMarkedText(),
+            "A delivered native submit must commit and read the final Korean syllable")
         let env = ProcessInfo.processInfo.environment
         let directory = URL(fileURLWithPath: env["CAPY_NUMBER_CAPTURES"]!)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -236,7 +242,8 @@ import SwiftUI
             try await settle()
         }
         func key(_ selector: Selector) async throws {
-            precondition(field.delegate?.control?(field, textView: NSTextView(), doCommandBy: selector) == true)
+            let editor = NSTextView(); editor.string = field.stringValue
+            precondition(field.delegate?.control?(field, textView: editor, doCommandBy: selector) == true)
             try await settle()
         }
         try checkFormatted()
@@ -259,6 +266,18 @@ import SwiftUI
         try await key(#selector(NSResponder.cancelOperation(_:)))
         precondition(setting()["value"].number == 26); try checkFormatted()
         precondition(store.state["brush"]["diameter"].number == diameter && store.failure == nil)
+        try await draft("19 + ")
+        precondition(window.makeFirstResponder(field))
+        guard let editor = field.currentEditor() as? NSTextView else { throw HostFailure(message: "Missing native numeric field editor") }
+        editor.string = "19 + "
+        editor.setMarkedText("8", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: 5, length: 0))
+        precondition(editor.hasMarkedText() && editor.string == "19 + 8")
+        precondition(field.delegate?.control?(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:))) == true,
+            "A delivered native Return must submit after committing marked text")
+        precondition(!editor.hasMarkedText())
+        try await settle()
+        precondition(setting()["value"].number == 27, "Return must submit the full native value instead of the earlier draft")
+        try checkFormatted()
         print("PASS: mounted numeric field delegates commit units/expressions, reject invalid input, step, preserve drafts and restore external values through the real editor")
     }
 }

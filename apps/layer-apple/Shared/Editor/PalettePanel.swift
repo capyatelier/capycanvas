@@ -262,7 +262,7 @@ private struct PaletteFooter: View {
                         .overlay { if controller.message?.error == true { SquircleShape.control.strokeBorder(Color(red: 0.93, green: 0.33, blue: 0.33), lineWidth: 1) } }
                         .focused($editorFocused)
                         .onAppear { DispatchQueue.main.async { editorFocused = true } }
-                        .onSubmit { if !NativeTextContext.composing { controller.commitName(controller.editText) } }
+                        .onNativeTextSubmit(controller.editText) { controller.editText = String($0.prefix(64)); controller.commitName(controller.editText) }
                         .onKeyPress(.escape) { guard !NativeTextContext.composing else { return .ignored }; controller.cancelEditing(); return .handled }
                         .onChange(of: editorFocused) { _, focused in if !focused { controller.commitName(controller.editText) } }
                         .accessibilityIdentifier("palette-name-editor")

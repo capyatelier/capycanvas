@@ -71,10 +71,15 @@ struct NumericTextField: NSViewRepresentable {
         }
         func controlTextDidEndEditing(_ notification: Notification) { if parent.focused { parent.focused = false } }
         func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            if selector == #selector(NSResponder.insertNewline(_:)) {
+                guard let text = NativeTextContext.submittedText(in: textView) else { return false }
+                parent.text = text
+                _ = parent.submit(true)
+                return true
+            }
             guard !textView.hasMarkedText() else { return false }
             switch selector {
             case #selector(NSResponder.cancelOperation(_:)): parent.cancel(); return true
-            case #selector(NSResponder.insertNewline(_:)): _ = parent.submit(true); return true
             case #selector(NSResponder.insertTab(_:)), #selector(NSResponder.insertBacktab(_:)):
                 return !parent.submit(false)
             case #selector(NSResponder.moveUp(_:)): guard let step = parent.step else { return false }; step(1); return true

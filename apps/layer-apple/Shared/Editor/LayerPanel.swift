@@ -573,7 +573,7 @@ private struct LayerName: View {
         Group {
             if renaming {
                 TextField(store.catalog["native_copy"]["layers"]["name"].string, text: $name).textFieldStyle(.plain).focused($focused)
-                    .onSubmit { if !NativeTextContext.composing { finish() } }.onKeyPress(.escape) { guard !NativeTextContext.composing else { return .ignored }; finish(cancel: true); return .handled }
+                    .onNativeTextSubmit(name) { name = $0; finish() }.onKeyPress(.escape) { guard !NativeTextContext.composing else { return .ignored }; finish(cancel: true); return .handled }
             } else {
                 Text(layer["label"].string).lineLimit(1).help(layer["label"].string)
                     .onTapGesture(count: 2) {

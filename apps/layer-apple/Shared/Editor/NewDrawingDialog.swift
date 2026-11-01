@@ -160,7 +160,7 @@ private struct NewDrawingDialog: View {
                 TextField(view["untitled"].string, text: $name).textFieldStyle(.plain).autocorrectionDisabled()
                     .padding(.horizontal, 10).frame(height: 34).background(palette.newDrawingField, in: SquircleShape.control)
                     #if os(iOS)
-                    .onSubmit(create)
+                    .onNativeTextSubmit(name) { name = $0; create() }
                     #endif
                     .accessibilityLabel(copy["name"].string).accessibilityIdentifier("new-drawing-name")
             }
@@ -436,7 +436,10 @@ private struct NewDrawingDialog: View {
                 .padding(.horizontal, 8).frame(width: 150, height: 34).background(palette.newDrawingField, in: SquircleShape.control)
                 .overlay { if !save["can_save"].bool { SquircleShape.control.stroke(Color.red, lineWidth: 1) } }
                 .onChange(of: presetName) { _, text in if text != drawer["save"]["name"].string { send(["op": "preset_name", "text": text]) } }
-                .onSubmit { send(["op": "save_preset"]) }
+                .onNativeTextSubmit(presetName) { text in
+                    presetName = text
+                    send(["op": "preset_name", "text": text]); send(["op": "save_preset"])
+                }
                 .accessibilityLabel(copy["preset_name"].string).accessibilityIdentifier("new-drawing-save-name")
             choice(copy["preset_category"].string, save["groups"].array, value: save["group"], identifier: "new-drawing-save-group") {
                 ["op": "preset_group", "group": $0.raw]

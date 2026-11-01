@@ -69,7 +69,7 @@ struct WorkspaceSwitcherRows: View {
                                 .padding(.horizontal,metrics.padding).frame(minHeight:metrics.height)
                                 .background(palette.field,in:SquircleShape.control)
                                 .accessibilityIdentifier("workspace-name-"+id)
-                                .onSubmit {if !NativeTextContext.composing {workspaces.finishName()}}
+                                .onNativeTextSubmit(workspaces.formName) { workspaces.formName = $0; workspaces.finishName() }
                                 .onAppear {editing=true;workspaces.validateName(required:true)}
                                 .onChange(of:workspaces.formName) {_,_ in workspaces.validateName(required:true)}
                                 .onChange(of:editing) {_,focused in if !focused {workspaces.finishName()}}

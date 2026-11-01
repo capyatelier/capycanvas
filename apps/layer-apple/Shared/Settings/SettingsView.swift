@@ -326,7 +326,7 @@ private struct PreferenceSwatches: View {
     private var field: some View {
         NumericTextField(label: row["title"].string, text: $text, focused: $focused,
             fontSize: 14, color: palette["text"], identifier: "preference-" + row["id"].string + "-custom",
-            submit: { _ in submit(); return !NativeTextContext.composing }, cancel: { focused = false })
+            submit: { _ in submit(); return true }, cancel: { focused = false })
             .id(focusRequest).frame(height: 28).padding(.horizontal, 6)
             .background(palette["input"], in: SquircleShape.control)
             .focusedValue(\.editorTextCommit, { submit() })

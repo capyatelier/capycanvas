@@ -122,12 +122,15 @@ System-reserved trackpad gestures must reach the app for recognition to work.
 
 ## Text composition
 
-Native marked text takes precedence over shortcut capture and numeric submit,
-cancel, stepping and artwork undo. Search and rename key handlers also defer to
-native composition. UIKit's numeric field carries the active interface tag in
+Native marked text takes precedence over shortcut capture, numeric cancel,
+stepping and artwork undo. A delivered native submit commits marked text and
+submits the full value; an Enter consumed by the IME only confirms its candidate.
+Other search and rename keys defer to native composition. UIKit's numeric field
+carries the active interface tag in
 its accessibility language and text-input context identifier; system keyboard
 selection and system font fallback remain native. The SwiftUI locale carries the active tag for interface text and font fallback.
 System status formatters and shared numeric strings retain their existing formatting.
+Apple text-entry language deferral does not yet track a passed Return through release.
 
 ## Checks
 

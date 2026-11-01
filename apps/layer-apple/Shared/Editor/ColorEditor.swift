@@ -124,7 +124,7 @@ struct ColorEditor: View {
             HStack(spacing: 6) {
                 NumericTextField(label: copy["swatch_search"].string, text: $search, focused: $searchFocused,
                     fontSize: 14, color: palette["text"], identifier: "color-sheet-search",
-                    submit: { _ in !NativeTextContext.composing }, cancel: escapeSearch)
+                    submit: { _ in true }, cancel: escapeSearch)
                     .frame(height: 28).padding(.horizontal, 6)
                     .background(palette.field, in: SquircleShape.control)
                     .onChange(of: search) { _, text in session.search(text) }
@@ -443,7 +443,7 @@ private struct ColorValueField: View {
                     .focused(focus, equals: name)
                     .onAppear { DispatchQueue.main.async { focus.wrappedValue = name } }
                     .onChange(of: focus.wrappedValue) { _, now in if now != name { opened = false } }
-                    .onSubmit { focus.wrappedValue = nil }
+                    .onNativeTextSubmit(draft ?? shown["edit"].string) { draft = $0; focus.wrappedValue = nil }
                     .onKeyPress(.escape) { draft = nil; session.dismissError(name); opened = false; focus.wrappedValue = nil; return .handled }
                     .onKeyPress(keys: [.upArrow, .downArrow]) { press in
                         guard scrub != nil else { return .ignored }

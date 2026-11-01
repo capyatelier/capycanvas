@@ -97,7 +97,8 @@ struct NumericTextField: UIViewRepresentable {
         }
         func textFieldDidEndEditing(_ textField: UITextField) { if parent.focused { parent.focused = false } }
         func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-            guard textField.markedTextRange == nil else { return false }
+            guard let text = NativeTextContext.submittedText(in: textField) else { return false }
+            parent.text = text
             return parent.submit(true)
         }
     }

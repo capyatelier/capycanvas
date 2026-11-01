@@ -174,7 +174,8 @@ import QuartzCore
                     return (field, delegate)
                 }
                 func commit(_ field: NSTextField, _ delegate: any NSTextFieldDelegate) async throws {
-                    try require(delegate.control?(field, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:))) == true,
+                    let editor = NSTextView(); editor.string = field.stringValue
+                    try require(delegate.control?(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:))) == true,
                         "The retained native field must handle its commit callback")
                     try await drain()
                 }

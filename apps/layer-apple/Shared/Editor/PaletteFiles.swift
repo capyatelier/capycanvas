@@ -47,7 +47,7 @@ private struct PaletteNameForm: View {
         VStack(alignment: .leading, spacing: 12) {
             Text(dialog.kind == .rename ? controller.copy["rename_title"].string : controller.copy["new_title"].string).font(.headline)
             TextField(controller.copy["palette_name"].string, text: Binding(get: { name }, set: { name = String($0.prefix(64)) }))
-                .textFieldStyle(.roundedBorder).focused($focused).onSubmit(save)
+                .textFieldStyle(.roundedBorder).focused($focused).onNativeTextSubmit(name) { name = String($0.prefix(64)); save() }
                 .accessibilityIdentifier("palette-library-name")
             if let error { Text(error).foregroundStyle(.red).font(.callout).accessibilityIdentifier("palette-name-error") }
             HStack {
@@ -62,7 +62,7 @@ private struct PaletteNameForm: View {
             .task(id: name) { controller.dryRun(action) { error = $0 } }
     }
     private func save() {
-        guard error == nil, !saving else { return }
+        guard !saving else { return }
         saving = true
         controller.apply(action) { failure in
             saving = false
