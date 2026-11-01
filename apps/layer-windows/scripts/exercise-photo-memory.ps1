@@ -8,6 +8,15 @@ Add-Type -TypeDefinition @'
 using System;
 using System.IO;
 using System.IO.Compression;
+public static class CapyPhotoMemoryProcess {
+    [System.Runtime.InteropServices.DllImport("kernel32.dll",CharSet=System.Runtime.InteropServices.CharSet.Unicode,ExactSpelling=true,SetLastError=true)]
+    static extern bool QueryFullProcessImageNameW(IntPtr process,uint flags,System.Text.StringBuilder path,ref int length);
+    public static string ImagePath(IntPtr process,out int error){
+        var path=new System.Text.StringBuilder(32768);int length=path.Capacity;
+        if(QueryFullProcessImageNameW(process,0,path,ref length)){error=0;return path.ToString(0,length);}
+        error=System.Runtime.InteropServices.Marshal.GetLastWin32Error();return null;
+    }
+}
 public static class CapyPhotoMemoryPng {
     static void Big(Stream s,uint n){s.WriteByte((byte)(n>>24));s.WriteByte((byte)(n>>16));s.WriteByte((byte)(n>>8));s.WriteByte((byte)n);}
     static void Chunk(Stream s,string name,byte[] data,int count){
@@ -76,7 +85,7 @@ try{
             while(!$Control.stop){
                 foreach($child in @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$Owner AND Name='capy-photo-reader.exe'" -OperationTimeoutSec 2)){
                     if(!$children.ContainsKey([int]$child.ProcessId)){
-                        try{$p=Get-Process -Id $child.ProcessId;$null=$p.Handle;$children[[int]$child.ProcessId]=@{process=$p;path=$child.ExecutablePath;arguments=$child.CommandLine;parent=$child.ParentProcessId;sampled_private=0L;peak_working_set=0L;peak_pagefile=0L}}catch{}
+                        try{$p=Get-Process -Id $child.ProcessId;$null=$p.Handle;$pathError=0;$imagePath=[CapyPhotoMemoryProcess]::ImagePath($p.Handle,[ref]$pathError);$children[[int]$child.ProcessId]=@{process=$p;path=$imagePath;path_error=$pathError;arguments=$child.CommandLine;parent=$child.ParentProcessId;sampled_private=0L;peak_working_set=0L;peak_pagefile=0L}}catch{}
                     }
                 }
                 $app.Refresh();$current=$app.PrivateMemorySize64;$appPrivate=[Math]::Max($appPrivate,$current)
@@ -87,7 +96,7 @@ try{
                 $combined=[Math]::Max($combined,$current);Start-Sleep -Milliseconds 50
             }
         }finally{
-            $records=@(foreach($entry in $children.Values){$p=$entry.process;$p.Refresh();@{pid=$p.Id;parent=$entry.parent;path=$entry.path;arguments=$entry.arguments;exited=$p.HasExited;exit_code=$(if($p.HasExited){$p.ExitCode}else{$null});sampled_private=$entry.sampled_private;observed_peak_working_set=$entry.peak_working_set;observed_peak_pagefile=$entry.peak_pagefile};if(!$p.HasExited){$p.Kill();$p.WaitForExit()};$p.Dispose()})
+            $records=@(foreach($entry in $children.Values){$p=$entry.process;$p.Refresh();@{pid=$p.Id;parent=$entry.parent;path=$entry.path;path_error=$entry.path_error;arguments=$entry.arguments;exited=$p.HasExited;exit_code=$(if($p.HasExited){$p.ExitCode}else{$null});sampled_private=$entry.sampled_private;observed_peak_working_set=$entry.peak_working_set;observed_peak_pagefile=$entry.peak_pagefile};if(!$p.HasExited){$p.Kill();$p.WaitForExit()};$p.Dispose()})
             $app.Refresh();@{children=$records;app_sampled_private=$appPrivate;app_peak_working_set=$app.PeakWorkingSet64;app_peak_pagefile=$app.PeakPagedMemorySize64;sampled_combined_private=$combined}|ConvertTo-Json -Depth 5|Set-Content -LiteralPath $Output
             $app.Dispose()
         }
@@ -123,6 +132,7 @@ try{
     $memory=Read-Snapshot (Join-Path $run 'memory.json')
     if(!@($memory.children).Count){throw 'No owned photo decoder was observed'}
     foreach($child in $memory.children){
+        if($child.path_error){throw "Owned photo decoder image path query failed: PID=$($child.pid), Win32=$($child.path_error)"}
         if($child.path -ine $helper -or !$child.exited -or $child.exit_code -ne 0){throw 'Owned photo decoder path or exit status differs'}
         if($child.arguments -notmatch '\s(\d+)\s+(\d+)\s+(\d+)\s*$'){throw 'Owned decoder budgets were not observed'}
         $source=[long]$Matches[1];$codec=[long]$Matches[2]

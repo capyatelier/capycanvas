@@ -164,3 +164,31 @@ Write-Output 'Clipboard affine checks compare exact numbers: default and transla
     }finally{$env:CAPY_WAIT_SCALE=$previous}
 }
 Write-Output 'Idle readiness owns its functional deadlines without changing Wet Round scope.'
+
+& {
+    $photo=Fixture-Ast 'exercise-photo-memory.ps1'
+    $definition=$photo.Find({param($n)$n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Add-Type' -and $n.Extent.Text.Contains('public static class CapyPhotoMemoryPng')},$true)
+    $acquire=$photo.Find({param($n)$n -is [Management.Automation.Language.TryStatementAst] -and $n.Body.Statements[0].Extent.Text -eq '$p=Get-Process -Id $child.ProcessId'},$true)
+    $guard=$photo.Find({param($n)$n -is [Management.Automation.Language.IfStatementAst] -and $n.Extent.Text.StartsWith('if($child.path -ine $helper')},$true)
+    if(!$definition -or !$acquire -or !$guard){throw 'Missing actual photo monitor acquisition or executable identity guard'}
+    & ([scriptblock]::Create($definition.Extent.Text))
+    $self=[Diagnostics.Process]::GetCurrentProcess();$probe=[powershell]::Create();$probe.Runspace=[runspacefactory]::CreateRunspace();$probe.Runspace.Open()
+    try{
+        $null=$probe.AddScript({param($Acquire,$Guard,$Owner,$Expected)
+            $ErrorActionPreference='Stop';$children=@{}
+            $child=[pscustomobject]@{ProcessId=$Owner;ExecutablePath=$null;CommandLine='owned process';ParentProcessId=$Owner}
+            & ([scriptblock]::Create($Acquire))
+            if(!$children.ContainsKey([int]$Owner)){throw 'Actual photo monitor did not retain the owned process'}
+            $entry=$children[[int]$Owner]
+            try{
+                $child=@{path=$entry.path;exited=$true;exit_code=0};$helper=$Expected
+                & ([scriptblock]::Create($Guard))
+                $helper=$Expected+'.wrong';$rejected=$false
+                try{& ([scriptblock]::Create($Guard))}catch{$rejected=$_.Exception.Message -eq 'Owned photo decoder path or exit status differs'}
+                if(!$rejected){throw 'Actual photo monitor accepted the wrong executable identity'}
+            }finally{$entry.process.Dispose()}
+        }).AddArgument($acquire.Extent.Text).AddArgument($guard.Extent.Text).AddArgument($self.Id).AddArgument($self.MainModule.FileName)
+        $null=$probe.Invoke();if($probe.Streams.Error.Count){throw ($probe.Streams.Error|Out-String)}
+    }finally{$probe.Runspace.Dispose();$probe.Dispose();$self.Dispose()}
+}
+Write-Output 'Photo monitor resolves null CIM paths through the retained owned handle and rejects another executable identity.'
