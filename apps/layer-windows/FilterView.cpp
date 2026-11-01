@@ -8,6 +8,9 @@ namespace {
 A categorySchema(A const& categories){
     A schema;for(auto value:categories){auto item=value.GetObject();schema.Append(O({{L"id",item.GetNamedValue(L"id",JsonValue::CreateNullValue())},{L"icon",S(str(item,L"icon"))}}));}return schema;
 }
+void sizeFilterPreview(Image const& image,double width){
+    auto height=std::max(0.,width)/6;if(image.Height()!=height)image.Height(height);
+}
 struct FiltersView : std::enable_shared_from_this<FiltersView> {
     std::shared_ptr<WorkspaceData> data;
     Grid root,header;
@@ -44,6 +47,12 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
     }
     hstring catalogKey,listKey;
     std::optional<hstring> searchDraft;
+    double measure(double width){
+        auto padding=root.Padding();auto inner=std::max(0.,width-padding.Left-padding.Right);
+        for(auto const& row:previews){auto inset=row.button.Padding();sizeFilterPreview(row.image,inner-inset.Left-inset.Right);}
+        header.Measure({float(inner),INFINITY});rows.Measure({float(inner),INFINITY});
+        return padding.Top+padding.Bottom+(split?0:header.DesiredSize().Height)+rows.DesiredSize().Height;
+    }
     void send(J action){if(!data->updating)data->dispatch(O({{L"type",S(L"filter_picker")},{L"action",action}}));}
     void init(){
         auto weak=weak_from_this();root.Padding({8,8,8,8});root.UseLayoutRounding(false);
@@ -128,7 +137,7 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
                 StackPanel content;content.Spacing(4);Image preview;preview.Stretch(Stretch::Uniform);preview.IsHitTestVisible(false);
                 preview.HorizontalAlignment(HorizontalAlignment::Stretch);
                 content.SizeChanged([image=winrt::make_weak(preview)](winrt::Windows::Foundation::IInspectable const&,SizeChangedEventArgs const& size){
-                    if(auto view=image.get()){auto height=size.NewSize().Width/6;if(view.Height()!=height)view.Height(height);}
+                    if(auto view=image.get())sizeFilterPreview(view,size.NewSize().Width);
                 });
                 bool bundled=flag(choice,L"bundled_preview");
                 if(bundled){
@@ -171,12 +180,12 @@ FrameworkElement FiltersPanel(std::shared_ptr<WorkspaceData> const& data,Binding
     auto view=std::make_shared<FiltersView>();view->data=data;view->split=split;view->init();bindings.emplace_back([view]{view->refresh();});
     if(scrollMetrics)*scrollMetrics=[weak=std::weak_ptr(view)]{
         if(auto view=weak.lock()){
-            double unit=0;for(auto const& row:view->previews)if(row.button.IsLoaded()&&row.button.ActualHeight()>0){auto margin=row.button.Margin();unit=row.button.ActualHeight()+margin.Top+margin.Bottom+view->rows.Spacing();break;}
-            auto padding=view->root.Padding();return O({{L"fixed_height",N(padding.Top+padding.Bottom+(view->split?0:view->header.ActualHeight()))},{L"unit_height",N(unit)}});
+            double unit=0;for(auto const& row:view->previews)if(row.button.DesiredSize().Height>0){unit=row.button.DesiredSize().Height+view->rows.Spacing();break;}
+            auto padding=view->root.Padding();return O({{L"fixed_height",N(padding.Top+padding.Bottom+(view->split?0:view->header.DesiredSize().Height))},{L"unit_height",N(unit)}});
         }return J{};
     };
-    if(contentHeight)*contentHeight=[weak=std::weak_ptr(view)](double){
-        if(auto view=weak.lock();view&&view->root.IsLoaded()){auto padding=view->root.Padding();return padding.Top+padding.Bottom+(view->split?0:view->header.ActualHeight())+view->list.ExtentHeight();}
+    if(contentHeight)*contentHeight=[weak=std::weak_ptr(view)](double width){
+        if(auto view=weak.lock())return view->measure(width);
         return -1.;
     };
     return view->root;

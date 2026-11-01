@@ -108,11 +108,11 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
     winrt::Windows::Foundation::IAsyncAction rendered(FrameworkElement target=nullptr){
         if(!target)target=image;
         auto root=target.XamlRoot();
-        require(target.IsLoaded()&&root&&root.IsHostVisible(),L"Capture image is not loaded and connected before rendering wait");
+        require(root&&root.IsHostVisible(),L"Capture image is not connected before rendering wait");
         winrt::handle event{CreateEventW(nullptr,true,false,nullptr)};
         auto frame=CompositionTarget::Rendering(auto_revoke,[target,signal=event.get()](auto&&,auto&&){
             auto root=target.XamlRoot();
-            if(root&&root.IsHostVisible()&&target.ActualWidth()>0&&target.ActualHeight()>0)SetEvent(signal);
+            if(target.IsLoaded()&&root&&root.IsHostVisible()&&target.ActualWidth()>0&&target.ActualHeight()>0)SetEvent(signal);
         });
         bool signaled=co_await resume_on_signal(event.get(),std::chrono::seconds(10));
         co_await apartment;frame.revoke();
@@ -357,6 +357,47 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         A choices;choices.Append(O({{L"id",S(L"filter")},{L"label",S(L"Filter")},{L"category",S(L"all")}}));data->state.Insert(L"adjustments",choices);
         auto view=std::make_shared<FiltersView>();view->data=data;view->init();view->refresh();
         require(view->previews.size()==1&&view->previews.front().image.Source()==source,L"New filter row did not bind its cached preview before the timer");++checks;
+        bool hadPointSize=data->catalog.HasKey(L"text_size_pt");auto pointSize=data->catalog.GetNamedValue(L"text_size_pt",JsonValue::CreateNullValue());
+        for(auto theme:{L"dark",L"light"})for(auto points:{11.,19.}){
+            data->catalog.Insert(L"text_size_pt",N(points));data->state.Insert(L"theme",S(theme));Bindings bindings;std::function<double(double)> contentHeight;std::function<J()> scrollMetrics;
+            auto panel=FiltersPanel(data,bindings,&contentHeight,&scrollMetrics,false).as<Grid>();
+            panel.RequestedTheme(hstring(theme)==L"dark"?ElementTheme::Dark:ElementTheme::Light);
+            Canvas coldHost;coldHost.Children().Append(panel);Border gate;gate.UseLayoutRounding(false);gate.Visibility(Visibility::Collapsed);gate.Child(coldHost);
+            surface.Children().Append(gate);for(auto const& bind:bindings)bind();
+            auto context=data->state.Stringify();auto header=panel.Children().GetAt(0).as<Grid>();auto list=panel.Children().GetAt(1).as<ScrollView>();auto rows=list.Content().as<StackPanel>();
+            auto pick=rows.Children().GetAt(rows.Children().Size()-1).as<Button>();auto body=pick.Content().as<StackPanel>();auto preview=body.Children().GetAt(0).as<Image>();
+            auto scale=surface.XamlRoot().RasterizationScale();auto tolerance=1/scale;
+            std::map<double,std::pair<double,J>> cold;
+            auto measure=[&](double width){
+                auto height=contentHeight(width);auto scroll=scrollMetrics();
+                require(std::isfinite(height)&&height>0&&std::isfinite(num(scroll,L"fixed_height"))&&num(scroll,L"fixed_height")>0
+                    &&std::isfinite(num(scroll,L"unit_height"))&&num(scroll,L"unit_height")>0,L"Filters did not report intrinsic height and scroll facts before native load");
+                require(data->state.Stringify()==context&&panel.XamlRoot()==surface.XamlRoot(),L"Filter measurement changed its document/style context or native root");
+                return std::pair{height,scroll};
+            };
+            panel.Height(160);
+            for(auto width:{242.,180.,320.}){
+                panel.Width(width);panel.Measure({float(width),INFINITY});panel.Arrange({0,0,float(width),panel.DesiredSize().Height});
+                require(!panel.IsLoaded()&&std::abs(panel.DesiredSize().Width-width)<=tolerance,L"Cold Filters fixture lost its unloaded native measurement allocation");cold.emplace(width,measure(panel.DesiredSize().Width));
+            }
+            require(cold.at(180).first<cold.at(242).first&&cold.at(242).first<cold.at(320).first
+                &&num(cold.at(180).second,L"unit_height")<num(cold.at(242).second,L"unit_height")
+                &&num(cold.at(242).second,L"unit_height")<num(cold.at(320).second,L"unit_height"),L"Cold filter measurements ignored the offered width");
+            coldHost.Children().Clear();surface.Children().RemoveAtEnd();surface.Children().Append(panel);
+            for(auto width:{242.,180.,320.})for(auto allocated:{160.,320.}){
+                panel.Width(width);panel.Height(allocated);co_await rendered(panel);
+                auto [height,scroll]=measure(width);auto padding=panel.Padding();auto margin=pick.Margin();
+                require(std::abs(panel.ActualWidth()-width)<=tolerance&&std::abs(panel.ActualHeight()-allocated)<=tolerance,L"Loaded Filters lost the requested native allocation");
+                require(std::round(height*64)==std::round(cold.at(width).first*64)&&std::round(num(scroll,L"fixed_height")*64)==std::round(num(cold.at(width).second,L"fixed_height")*64)
+                    &&std::round(num(scroll,L"unit_height")*64)==std::round(num(cold.at(width).second,L"unit_height")*64),L"Cold and loaded filter facts differ after Rust quantization");
+                require(std::abs(num(scroll,L"fixed_height")-padding.Top-padding.Bottom-header.ActualHeight())<=tolerance
+                    &&std::abs(num(scroll,L"unit_height")-pick.ActualHeight()-margin.Top-margin.Bottom-rows.Spacing())<=tolerance
+                    &&std::abs(height-padding.Top-padding.Bottom-header.DesiredSize().Height-rows.DesiredSize().Height)<=tolerance,L"Filter measurement disagrees with its native row/header facts");
+                require(std::abs(preview.ActualHeight()-body.ActualWidth()/6)<=tolerance&&pick.ActualHeight()>0&&list.ActualHeight()>0,L"Native filter preview or viewport lost its measured aspect");
+            }
+            surface.Children().RemoveAtEnd();
+        }
+        if(hadPointSize)data->catalog.Insert(L"text_size_pt",pointSize);else data->catalog.Remove(L"text_size_pt");
     }
     winrt::Windows::Foundation::IAsyncAction layerRow(){
         co_await submit(frames->paperWhite);auto source=upload->Image();auto data=workspace();

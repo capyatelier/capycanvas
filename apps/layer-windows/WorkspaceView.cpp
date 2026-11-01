@@ -74,7 +74,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     };
     std::map<std::wstring,Body> bodies;
     Canvas measureHost;
-    ContentControl measureGate;
+    Border measureGate;
     hstring lastMeasurements;
     bool measurementsPending=false,measuring=false;
     CompositionTarget::Rendered_revoker resizeTintFrame;
@@ -217,7 +217,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         expansion=std::make_unique<WorkspaceExpansion>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->present();},
             [weak=weak_from_this()](double width){if(auto self=weak.lock())return self->configurationHeight(width);return 0.;});
         bubbles=std::make_unique<WorkspaceBubbles>(data,root,[weak=weak_from_this()]{if(auto self=weak.lock())self->queueMeasurements();});
-        measureGate.Content(measureHost);measureGate.IsEnabled(false);measureGate.IsTabStop(false);measureGate.IsHitTestVisible(false);measureGate.Visibility(Visibility::Collapsed);Canvas::SetLeft(measureGate,-100000);root.Children().Append(measureGate);
+        measureGate.Child(measureHost);measureGate.UseLayoutRounding(false);measureGate.IsHitTestVisible(false);measureGate.Visibility(Visibility::Collapsed);Canvas::SetLeft(measureGate,-100000);root.Children().Append(measureGate);
         root.LayoutUpdated([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->layoutUpdated();});
         root.Loaded([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->queueMeasurements();});
     }
@@ -894,7 +894,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                     copy.body->Root().Width(width);
                     copy.body->Root().Measure({float(width),INFINITY});
                     copy.body->Root().Arrange({0,0,float(width),copy.body->Root().DesiredSize().Height});
-                    actualWidth=copy.body->Root().ActualWidth();
+                    actualWidth=copy.body->Root().DesiredSize().Width;
                     height=copy.body->ContentHeight(actualWidth);scroll=copy.body->ScrollMetrics();
                 }
                 if(std::isfinite(height)&&height>=0)body=O({{L"actual_width",N(stable(actualWidth))},{L"content_height",N(stable(height))},
