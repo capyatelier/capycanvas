@@ -220,6 +220,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         showing=false;programmatic=false;
         for(auto panel:{&presetsDrawer,&paperDrawer,&colorDrawer}){if(panel->motion)panel->motion.Stop();panel->motion=nullptr;panel->open=false;panel->root.Visibility(Visibility::Collapsed);}
         closeForm();
+        for(auto const& list:admissions)for(auto const& admit:list)admit(true);
         drawerKind=L"";
         if(waiting&&!stopping){waiting=false;document(to_string(O({{L"operation",S(L"cancel")},{L"id",N(request)}}).Stringify()));}
         changed();

@@ -487,7 +487,14 @@ function New-Journey([string]$Theme,[switch]$Full) {
     Type-Text 'document-width' '2+'
     Press 'new-drawing-create';Start-Sleep -Milliseconds 800
     if(!(Drawing) -or [string]::IsNullOrWhiteSpace((Owned 'document-width').Current.HelpText) -or (Model).state.document_file.epoch -ne 0){throw 'An invalid size expression did not keep the dialog open with its refusal'}
+    Close-NewDrawing 'new-drawing-cancel'
+    Open-NewDrawing
+    Wait-Until {(Field-Value 'document-width') -eq (Drawing).values[0] -and [string]::IsNullOrWhiteSpace((Owned 'document-width').Current.HelpText)} 'Reopening New drawing retained the canceled width draft or refusal'
+    Pick-Choice 'new-drawing-unit' (Value-Index (Drawing).units 'px')
+    Wait-Until {(Drawing).setup.unit -eq 'px'} 'Reopened drawing did not choose pixels'
     Type-Text 'document-width' '128' -Commit;Wait-Until {[string]::IsNullOrWhiteSpace((Owned 'document-width').Current.HelpText)} 'The corrected width kept its refusal'
+    Type-Text 'document-height' '96' -Commit
+    Wait-Until {$values=(Drawing).values;$values[0] -eq 128 -and $values[1] -eq 96} 'Reopened drawing did not apply the chosen size'
     Type-Text 'new-drawing-name' 'Harbor study'
     Wait-Until {(Drawing).name -eq 'Harbor study'} 'The drawing name did not reach the dialog'
     $count=@((Model).windows_tabs.tabs).Count
