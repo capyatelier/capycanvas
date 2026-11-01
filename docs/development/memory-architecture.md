@@ -423,12 +423,7 @@ the recovery copy. It replaces recovery's one-file-per-tile layout with packs.
   learns to accept holes, as package readers already do.
 - **Reclaiming space:** a record is dead only when no document, history step,
   capture, save, export, reader or current or previous durable generation refers
-  to it. Compaction copies live records sequentially into new packs, makes the
-  copies durable before publishing the remapped index atomically, and deletes
-  old packs whole once their readers finish; packs are never truncated.
-  Compaction reserves its own destination space apart from what edits and
-  commits need, runs one copy at a time, and on failure discards its
-  unpublished packs while the source and the good head stay.
+  to it. [Compaction](#compaction) reclaims packs that are mostly dead.
 - **Compatibility:** recovery copies are saved data
   ([saved data compatibility](saved-data-compatibility.md)). New builds keep
   reading the one-file-per-tile layout. Leaving packs untouched isn't enough on
@@ -451,6 +446,95 @@ the recovery copy. It replaces recovery's one-file-per-tile layout with packs.
   page cache still often keeps the drawing in RAM while memory is free.
 - **Web:** the existing OPFS store, extended from parked tabs to the open
   document, with tile-sized reads instead of whole-chunk loads.
+
+### Compaction
+
+Edits, undo pruning and closed drawings leave dead records in sealed packs.
+Compaction copies a pack's live records into the open append pack and deletes
+the old pack once nothing reads it.
+
+- **What qualifies:** a sealed pack whose live bytes have fallen below half,
+  with at least 16 MiB dead. Packs are taken in order of most dead bytes per live
+  byte copied, so the cheapest space comes back first. The open pack is never
+  compacted.
+- **When it runs:** only when the store's dead bytes pass a quarter of the store
+  or 256 MiB, or the scratch disk's free space falls below its reserve; and then
+  only while the drawing is idle: no stroke, transform, filter preview or camera
+  motion for two seconds, and no tab switch or checkpoint in flight. It never
+  runs while an iPadOS app is in the background. Saving or closing a drawing
+  needs no compaction: the saved package holds only live tiles, and a closed
+  drawing's store is retired whole.
+- **How it yields:** it copies in chunks of at most 4 MiB at low I/O priority,
+  under the work arbiter's background budget, and stops between chunks the
+  moment input arrives; a stopped compaction leaves an unpublished partial pack
+  that the next run reuses or deletes. Bandwidth is capped, so required reads
+  never queue behind it.
+- **How it stays safe:** it reserves the destination space before starting,
+  makes the copies durable, publishes the remapped index atomically, then deletes
+  old packs whole once their readers' leases end; packs are never truncated. On
+  failure the source packs and the good head stay. At startup any pack no head
+  or lease reaches is deleted.
+- **How it keeps the cache clean:** compaction reads and writes mostly cold
+  records, which would otherwise push hot pages out of the page cache. Its old
+  pack ranges are dropped from the cache after copying (`posix_fadvise`
+  `DONTNEED` on Linux and Android, `F_NOCACHE` on Apple, sequential-scan handles
+  on Windows), and records known to be cold are dropped from the cache after
+  they are written; hot records keep their cached pages.
+
+### Keeping hot tiles in RAM
+
+Capy can't pin the page cache, so the tiles it will need next are kept in places
+it controls, and the page cache serves everything else:
+
+1. **GPU first.** Visible, Edit-ready and Ahead pages stay on the GPU; the store
+   is only read when a page was never loaded or was evicted.
+2. **The hot set guarantees the next second.** Capy's heap keeps the compressed
+   bytes of every tile that a Pinned, Edit-ready or Ahead page depends on and
+   that isn't on the GPU, plus tiles reused within the last few seconds: the
+   edit target under the view, the prefetch ring, recent undo states. It is
+   sized from measured reuse within the budget, and is the last data trimmed
+   under pressure before Pinned.
+3. **The page cache keeps what is warm, and isn't polluted.** Normal reads keep
+   their pages recently used. Read-ahead hints (`WILLNEED`, `F_RDADVISE`) go out
+   for the ring before it is needed. Reads that won't be repeated (export,
+   save, compaction, thumbnail generation) drop their pages after use, so a
+   one-off pass over the drawing never evicts the working set.
+4. **Locality helps read-ahead.** Batches are written in spatial order, and
+   readers coalesce adjacent ranges, so one read brings in a tile's neighbours.
+
+### Reads never stall the frame or the pen
+
+- **No thread on the critical path touches storage.** The input, UI, render and
+  presentation threads never read a file, wait on a worker, take a lock held
+  across I/O, or touch mapped memory. Every tile request from them is a
+  non-blocking residency query: resident pages are used, missing ones are
+  requested and replaced by a fallback. Completed reads reach the render owner
+  through a queue it polls once per frame.
+- **The view falls back to an approximation.** A missing page uses, in order,
+  the next coarser level that is resident, resampled; then the layer's or
+  composite's overview; then the root overview, which is always resident. A
+  frame is never black and never waits; completed reads replace fallbacks a few
+  pages a frame, within the arbiter's upload budget, so a burst of arrivals
+  can't spike frame time.
+- **Strokes start on time where they can.** Edit-ready prewarms the pointer's
+  neighbourhood before the pen lands, so a dab usually finds its tiles ready. If
+  one doesn't, its input is kept in order and nothing is dropped; the cursor,
+  view and the rest of the UI keep moving. Dry brushes that don't read the
+  destination draw their existing preview tail over the fallback at once, and
+  the exact ink replaces it when the tiles arrive. Brushes that read the
+  destination (smudge, wet paint, blur) wait for their own neighbourhood: by
+  estimate, a page-cache hit costs tens of microseconds and a 512 px brush's
+  nine tiles from an SSD a few milliseconds, about a frame of ink delay.
+- **Slow storage degrades, never blocks.** On a slow or removable drive the view
+  stays coarse longer and ink waits longer; frames, the cursor and navigation
+  keep their rate. A read that fails reports an error for that tile and keeps
+  the good copy elsewhere if one exists.
+- **Tests make misses happen.** Windowless tests use a store reader that delays
+  or fails reads (a generic reader seam, not a production switch) and assert
+  that frames keep presenting with fallback pixels and that the stroke's final
+  pixels are exact. Device rows evict the store from the page cache before each
+  run (`posix_fadvise` `DONTNEED` on the store files needs no root) and record
+  frame cadence, fallback duration and first-dab latency cold and warm.
 
 ## Derived cache
 
@@ -859,7 +943,8 @@ control on the tier devices.
       once durable, positional reads through the page cache with read-ahead
       hints, the IO queue and hot set, asynchronous `Disk` readiness, leases and
       compaction, and the asset limit as a disk check. Tests: crash injection at
-      every compaction boundary; disk full while painting keeps every edit; a
+      every compaction boundary; compaction stops within one chunk when input
+      arrives and leaves hot pages cached; disk full while painting keeps every edit; a
       drawing larger than physical RAM pans without dropped frames, showing
       coarser levels where the page cache misses; first-dab latency after warm,
       evicted and cgroup-limited caches is recorded.
@@ -870,9 +955,11 @@ control on the tier devices.
    3. Residency by view: classes including Edit-ready and Ahead, view-ordered
       reads with cancellation and motion prediction, windowed mips, overviews,
       the derived cache, and the composite page cache replacing the complete
-      hierarchy. Tests: a drawing larger than the RAM budget opens, pans, paints,
-      undoes, switches tabs and saves identically to an in-memory run; resident
-      bytes for 1, 28 and 100 layers stay within the same bound.
+      hierarchy; the fallback ladder and preview tails over fallbacks. Tests: a
+      drawing larger than the RAM budget opens, pans, paints, undoes, switches
+      tabs and saves identically to an in-memory run; resident bytes for 1, 28
+      and 100 layers stay within the same bound; with reads delayed or failing,
+      frames keep presenting fallback pixels and strokes end exact.
    4. Streaming decoders, the predictive photo codec and deduplicated imports,
       each gated on its own measurements.
 4. **Pivot composition.** Normal-only reassociation and branch-cache priority
