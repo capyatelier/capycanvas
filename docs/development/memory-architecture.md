@@ -3,7 +3,8 @@
 [Developer guide](README.md) · [Rendering and composition](../internals/rendering.md) · [Region and scale composition](../rendering/display-composition.md) · [Performance targets](../PERFORMANCE_TARGETS.md)
 
 **Status: proposed.** Milestone 1 fixes the unbounded GPU growth behind issue #24
-and should land first. Later milestones change where authored pixels live.
+and the slowest tab switches, and should land first. Later milestones change
+where authored pixels live.
 
 ## Goal
 
@@ -37,6 +38,9 @@ These rules define the end state:
 - **Small display errors are acceptable.** Display data uses half floats; only
   data that half floats would get badly wrong, and the tiles being edited, use
   RGBA32F.
+- **Tab switches are immediate.** A recently used drawing appears on the next
+  frame and takes a stroke at once; a switch never waits for disk writes,
+  captures or a renderer rebuild.
 - **One implementation.** Discrete and unified memory differ in parameters
   chosen at startup, not in separate code paths.
 
@@ -57,6 +61,7 @@ These rules define the end state:
 | Complete hierarchy | An optional full-document RGBA32F pyramid including level 0, kept even when image objects make it unusable. | A blank 61 MP document holds 1.22 GB of GPU memory on an RTX PRO 6000 (Linux, 2026-10-31). |
 | Scheduling | One first-in, first-out decode pool (up to three workers, eighteen jobs) for every window; no viewport priority, no motion prediction, partial cancellation. | Work for views the painter left competes with the current one. |
 | Parked tabs | Inactive documents spill to disk once together they pass a fixed 64 MiB, whatever RAM is free. | Switching back to a tab reads from disk even on a machine with RAM to spare. |
+| Tab switches | Every host drops the outgoing renderer and builds a fresh one for the incoming drawing; GTK also creates a new GPU device. Hosts wait for captures, recovery writes or spills first (see [Tab switches](#tab-switches)). | Each switch recompiles or re-prepares and recomposes the incoming drawing. |
 | Windows | wgpu's D3D12 backend creates a 64 KiB sampler-index buffer for every bind group with samplers (`vendor/wgpu-hal/src/dx12/device.rs`). | Adds about 6 % to every scratch page and counts as committed RAM. |
 
 What we keep: immutable, content-identified tiles shared by history, captures
@@ -92,7 +97,7 @@ takes from the lowest class first and, within it, by the lowest
 
 | Class | What | Where | Leaves when |
 | --- | --- | --- | --- |
-| Pinned | Tiles the current frame reads; working tiles; tiles leased by encoded commands; the root overview | VRAM | Their commands complete or the stroke commits |
+| Pinned | Tiles the current frame reads; working tiles; tiles leased by encoded commands; the root overview; dirty authored data: captures not yet published and tiles not yet durable | VRAM or RAM | Their commands complete, the stroke commits, or the data is durable |
 | Edit-ready | The dependencies of pending contacts and operations; then a bounded neighbourhood of the edit target around the pointer, sized by what the current tool reads (brush radius, smudge and wet-paint support, filter halo) | VRAM, compressed copies in RAM | The target, tool or pointer moves on |
 | Visible | Window pages at the presented level and the adjacent level; admitted pivot images | VRAM, with compressed copies in RAM | The view moves away |
 | Ahead | Pages in the direction of motion; the next level during a pinch; tiles a queued operation will read | RAM, then VRAM as they near the view | The prediction changes |
@@ -206,9 +211,37 @@ automatic. Painters get two settings in shared Preferences
   the app's cache directory. Painters with a small system drive and a large
   second drive need to choose; Capy can't know which drive they want filled.
 
-The only messages are about disk: when the store can't grow, Capy keeps tiles in
-RAM, and asks the painter to free space or choose another scratch disk. Low
-memory never shows a message; it shows as slower sharpening.
+Low memory normally shows only as slower sharpening. Messages appear only when
+new work can't be admitted (see below) or when the store can't grow: then Capy
+keeps tiles in RAM and asks the painter to free space or choose another scratch
+disk.
+
+### When required memory runs out
+
+Pinned data, including dirty authored tiles, can't be evicted. The ledger keeps
+it as a bounded debt: pending captures, unpublished outputs and write-behind
+each have a ceiling inside the budget, charged until they complete.
+
+- **Debt always drains.** Under pressure only speculative work is deferred.
+  Accepted captures, durability writes and renderer retirement keep bounded
+  forward progress, within the resumed-input delay bound, so the debt shrinks
+  and the next operation can be admitted.
+- **New operations are refused, not failed.** When a new stroke, import or
+  filter would exceed what is left after evicting every evictable byte, Capy
+  keeps the drawing and its navigation working and refuses the operation with a
+  message saying memory is full, instead of failing an allocation.
+- **A stroke in progress always finishes.** Pen-down reserves the stroke's
+  commit and cancel capacity and a continuation allowance for the pages it may
+  reach next. When a growing stroke uses that allowance up, new dabs wait in
+  order for captures to drain, as backpressure: presentation continues and no
+  sample is dropped. If the shortage lasts (RAM exhausted and the disk full),
+  the stroke commits what has been painted, nothing is lost, and the next stroke
+  is refused.
+- **Limit changes are gradual.** Lowering the memory limit or a pressure signal
+  shrinks caches through bounded work after presentation, never inside a frame
+  or a stroke.
+- **Web without storage.** When OPFS is unavailable or over quota, the open
+  drawing runs RAM-only under the same rules.
 
 ### Eager, not greedy
 
@@ -243,7 +276,7 @@ everything else; parked tabs follow.
 | Linux | One `GtkApplication`; a second launch hands its files to the running instance | None |
 | Windows | New Window opens in the same process; a second launch hands its files to the running instance (`apps/layer-windows/App.cpp`) | None |
 | Android, iPadOS, macOS | One process for all windows and scenes | None |
-| Web | Each tab is its own page, wasm instance and GPU device | Tabs announce themselves on a `BroadcastChannel` and divide the budget between them |
+| Web | Each tab is its own page, wasm instance and GPU device | None: each tab keeps its own budget, and the browser manages memory across tabs |
 
 ### Admission
 
@@ -270,13 +303,26 @@ The session store is the open document's copy of record until it is saved.
   input, render or presentation thread. `Bytes::ready` reports a pending `Disk`
   read as not ready, like `External`.
 - **Opening a saved file:** keep deflate tiles in the package and read them on
-  demand. Transcode a tile into the store's LZ4 when it is first read or at idle.
-  Saving copies unchanged tiles straight from the original package.
+  demand, through an immutable lease on the package file that the document,
+  its history and every job hold. Transcode a tile into the store's LZ4 when it
+  is first read or at idle. Saving copies unchanged tiles straight from the
+  leased original; an atomic save over the same path keeps the old file alive
+  for its leases. Before a recovery generation refers to a tile, that tile is in
+  the store, so recovery never depends on the original file. Package and store
+  reads are both asynchronous; the transport's synchronous `poll` stays on
+  workers.
 - **Codec:** LZ4 for paint, which compresses well; a fast predictive codec for photo
   tiles, which LZ4 leaves at raw size. Both must decode at over 1 GB/s per tablet
   core, so decoding stays cheaper than an SSD read.
-- **Reclaiming space:** when a tile's last owner (document, history, capture) drops,
-  its record is dead; compact a pack when most of it is dead.
+- **Durability order:** a tile stays Pinned until its pack write is flushed. A
+  recovery generation's metadata and head are published only after every tile it
+  names is durable, and the previous good generation stays until the new one is
+  complete. A commit still only in RAM is covered by the next generation; that
+  window is the recovery interval, as today.
+- **Reclaiming space:** a record is dead only when no document, history step,
+  capture, save, export, reader or current or previous durable generation refers
+  to it. Compaction writes new packs, publishes the remapped index atomically and
+  keeps the old packs until their readers finish.
 - **Storage speed:** Capy assumes an SSD or tablet flash. On a slower drive the
   painter raises the memory limit, and the eager policy keeps more in RAM.
 - **Web:** the existing OPFS store, extended from parked tabs to the open
@@ -304,21 +350,28 @@ in extended range even in 8- and 16-bit documents (`FX_EXTENDED` in
 `crates/layer-render-wgpu/src/effects.rs`), Exposure spans ±126 EV, and float
 paint can exceed half-float range. Raising Exposure by 20 stops and lowering it
 again returns white through RGBA32F, but 0.06 through a half-float step between.
-So an expression node is marked *extended* when it is an extended-range effect,
-a float source, or depends on one, and extended nodes keep RGBA32F.
+Marking only an effect and its consumers isn't enough: Exposure +24 EV above a
+composite of near-black Multiply layers needs its input's tiny values, which a
+half-float input would already have flushed to zero. So precision is propagated
+both ways. An extended-range effect, a float source, everything downstream of
+them, and the whole input ancestry of an extended-range effect keep RGBA32F.
+Changing such an effect's gain invalidates its half-float caches.
 
 | Data | Format |
 | --- | --- |
 | Level-0 view tiles of 8-bit documents | `Rgba8UnormSrgb` or `Rgba8Unorm`, as stored; the shader converts on read |
 | Level-0 view tiles of 16-bit documents | `Rgba16Unorm` where supported, else `Rgba16Float` |
 | Reduced levels, mips, composites, pivot and operator images, scratch | `Rgba16Float`, premultiplied, in the blend space |
-| Extended nodes and everything downstream of them | `Rgba32Float` |
+| Extended effects, float sources, their downstream nodes and the input ancestry of extended effects | `Rgba32Float` |
 | Working tiles of the edit target; brush material; exact evaluation | `Rgba32Float`, as today |
 | Presentation copies | The existing guarded half-float conversion (`crates/layer-render-wgpu/src/scene/scale/half.wgsl`) |
 
 Reduced levels average premultiplied values, so they can't be stored straight.
 Exact queries, export and idle refinement read authored tiles, so display
-precision never reaches a file.
+precision never reaches a file. Editing restores working RGBA32F tiles from
+authored tiles too, never from display data; that conversion is charged to the
+work arbiter like any upload. Shared recipes and caches are keyed by working
+colour space, depth, blend space and HDR encoding as well as by device.
 
 ## Composition
 
@@ -470,7 +523,8 @@ Pinned, Edit-ready, Visible, Ahead, then idle work.
 | Navigator jump | Same as a level crossing, at the new position | Overview |
 | Paint | Brush dabs into working tiles; recompose damaged root pages from the pivot | Balanced-branch graph until the pivot is built |
 | Transform drag | Resample the target's pyramid over below and above composites | Coarser level of the target |
-| Layer change | Present the root; start the new pivot | Root as it is |
+| Layer change | Present the root; prewarm the Edit-ready set, then build the new pivot | Root as it is |
+| Tab switch | Present the incoming drawing's retained root; resume its scene | Its overview, then refinement as after a Navigator jump |
 | Idle | Exact refinement, mip and pivot completion, derived-cache writes, write-behind | — |
 
 **Rules for every frame:**
@@ -487,6 +541,98 @@ Pinned, Edit-ready, Visible, Ahead, then idle work.
   page count is bounded and trimmed. On D3D12 each retained bind group with
   samplers still owns a 64 KiB sampler-index buffer; removing those needs a
   sampler-free binding layout or a backend change, measured separately.
+
+## Tab switches
+
+A tab switch should feel like flipping a page: the other drawing appears on the
+next frame and takes a stroke right away.
+
+### Today
+
+Every host rebuilds the incoming drawing's GPU state on every switch, and most
+wait for slow work first:
+
+| Host | Before the switch | At the switch |
+| --- | --- | --- |
+| Linux | Blocks input; waits until the outgoing drawing is idle, for every pending tile capture including undo and redo, and for the recovery writer (`apps/layer-linux/src/documents.rs`) | Stops and joins the outgoing render thread on the UI thread, creates a new render worker with a new GPU device, so every shader recipe, the decoded-tile cache, scene, mips and display levels start empty (`apps/layer-linux/src/canvas.rs`, `apps/layer-linux/src/render_thread.rs`); waits for parked-tab spill writes before input resumes |
+| Windows | Waits until the outgoing drawing is idle; an unfinished spill refuses the switch | Keeps the device, drops the outgoing renderer and builds a fresh one on a worker (`crates/layer-host/src/window.rs`) |
+| Android | Blocks input; waits for the recovery capture | As Windows, then waits for spill writes before input resumes |
+| Apple | Waits for the recovery flush | Spills parked drawings, then drops and rebuilds the renderer |
+| Web | Blocks input; waits for spill writes, then for every tile of the incoming drawing to load from OPFS (`apps/layer-web/app.js`) | Drops the renderer and builds a fresh one on the same device |
+
+The incoming drawing then restores its rasters, builds mips from every level-0
+tile and composes its display before its first artwork frame, and brush
+readiness gates its first dab.
+
+Measured on Linux (RTX PRO 6000, 2560 × 1600, 2026-11-01) between two drawings
+of the same kind, from the switch request to the first presented artwork:
+
+| Drawings | First switch | Later switches |
+| --- | --- | --- |
+| 4248 × 2832, ten painted layers | 10.5 s | 1.15–1.31 s |
+| 4216 × 3016, eight photos and a painted layer | 10.6 s | 1.74–1.84 s |
+| 9504 × 6336, one photo and a painted layer | 8.6 s | 1.37–2.23 s |
+
+The first switch waits 6.6–8.6 s for the outgoing drawing's first recovery
+checkpoint and about 0.3 s for spill writes. Every later switch spends 1.1–1.7 s
+rebuilding the incoming drawing on a new device and renderer. Joining the old
+render thread freezes the UI for 95–150 ms, up to 330 ms. In the eight-photo
+drawing, object work never settles after a switch: the source cache churns
+about 750 tiles a second, the same starvation as in milestone 1.
+
+### End state
+
+- **One device per process.** Every window and drawing shares one GPU device and
+  one set of compiled recipes; the decoded-tile cache and other device-level
+  caches live under the shared budget. The adapter is chosen once, compatible
+  with every surface the process presents to; a window on a display that adapter
+  can't present to gets its own device, with its own VRAM budget and recipes,
+  under the same RAM ledger.
+- **Parked drawings keep their scenes.** Switching away parks the renderer state
+  with the drawing instead of dropping it: the presented root window, overview,
+  branch images, mips and source windows stay resident as Warm, ordered by last
+  use behind the active drawing. Under pressure their pages are evicted like any
+  other Warm data; nothing is destroyed just because a tab changed. Parking
+  cancels the drawing's speculative decode, mip and refinement work, so it can't
+  delay the incoming drawing's first dab; its captures and recovery writes
+  continue.
+- **The switch waits for nothing slow.** It needs only the outgoing drawing's
+  input to end, as today an open stroke commits or cancels, and its accepted
+  captures to be owned: by the backing barrier while renderers are dropped
+  (milestone 1), and by capture leases that survive with the parked renderer
+  once renderers are kept (milestone 2). Recovery writes and spills keep running
+  in the background, but the switch still captures an immutable snapshot of the
+  departing drawing at once, so recovery observes every edit made before the
+  switch; scheduled recovery also checks parked drawings with unsaved changes.
+  Once the session store exists a checkpoint writes only metadata, because tiles
+  are already on disk. No host awaits a disk write, a recovery flush or a tile
+  load before showing the incoming drawing, and none joins a render thread or
+  destroys GPU resources on the UI thread; retirement runs on a worker,
+  independently of attaching the incoming renderer.
+- **Background work yields to the active drawing.** Capture transfers,
+  retirement, recovery writes and spills from every parked or retiring renderer
+  share one device-wide priority with the active drawing's frames: they submit
+  only while presentation and fresh input are served, with bounded transfer sizes
+  and bounded CPU and IO concurrency. Spill and write-behind snapshot their
+  payloads under a short lock and do their IO without holding it, so readiness
+  and accounting never wait on a disk write.
+- **Late completions stay with their drawing.** Every background job is fenced by
+  its drawing and generation: a capture finishing after the painter switched
+  back, undid, redid or closed the tab updates only the drawing it belongs to,
+  and closing a tab or window hands its remaining jobs to a retirement owner
+  that finishes or fails them under the existing failure rules.
+- **The incoming drawing presents at once.** A warm drawing presents its retained
+  root on the next frame with no composition. A drawing whose pages were evicted
+  presents its overview, a ≤ 1 MP image per drawing kept in RAM like a tab
+  thumbnail, and refines like a Navigator jump, Edit-ready first.
+- **Input follows readiness, not the switch.** Input unblocks as soon as the
+  incoming renderer is attached; a dab waits only for its own neighbourhood, as
+  everywhere else. Shaders compiled for any drawing serve every drawing; a brush
+  never used in this process still compiles once.
+
+A parked scene costs at most a few window-sized images plus its caches; the
+budget evicts the oldest parked scenes first, so ten open tabs on a tight device
+behave like ten cold tabs, never like a failed switch.
 
 ## Discrete and unified memory
 
@@ -512,7 +658,10 @@ web host is treated as unified, the safer assumption.
 
 - **GPU allocation fails:** drop Visible pages outside the current window and
   Warm data, lower the VRAM budget by a quarter, and continue with coarser levels.
-  Device loss rebuilds at half the budget.
+- **Device lost:** every active and parked scene on that device is invalid;
+  pending captures resolve under their existing failure rules. The focused
+  drawing rebuilds first at half the budget; parked drawings rebuild only when
+  shown, never all at once.
 - **Disk full:** keep new tiles in RAM, stop write-behind, and show the scratch
   disk message. Never drop authored data.
 - **Slow or busy disk:** the frame keeps presenting coarser levels while reads
@@ -520,45 +669,75 @@ web host is treated as unified, the safer assumption.
 
 ## Milestones
 
-Each milestone ships alone. Every one adds windowless tests and records its
-frame-rate and memory rows on the tier devices.
+Four milestones. Each ships alone, and so does each numbered step inside it,
+with windowless tests and frame-rate, latency and memory rows against a matched
+control on the tier devices.
 
-1. **Bounded scratch and a frame to show.** Leased scratch slots released on every
-   return path; a pool cap with idle trimming; source slots reserved before mips;
-   the coarser level presented while object work defers. Bind groups owned by
-   pages, so D3D12 sampler buffers stop churning. Test: repeated deferred frames
-   over many image layers keep the pool bounded and presentable.
-2. **Budget manager and work arbiter.** The process-wide ledger, pool budgets
-   and signals per host, replacing the fixed constants, the asset limit and the
-   parked-tab budget; the Memory limit setting; web tab coordination; one
-   per-frame work arbiter with a fresh-input reserve, absorbing the separate tap,
-   step and page allowances.
-   Test: simulated budgets, limits and signals produce the expected shares and
-   trims across several windows; already-submitted speculative work never delays
-   a pen-down past one frame, and none is submitted after it.
-3. **Half-float display data.** Extended marking on expression nodes; RGBA16F
-   for everything else on the display path; document-depth level-0 view tiles.
-   Test: display stays within a small tolerance of exact output for every mode,
-   depth and blend space, and inverse Exposure chains and float paint beyond half
-   range stay exact.
-4. **Session store and lazy open.** Write-behind, the IO queue, the read cache,
-   asynchronous `Disk` readiness, recovery on the store, lazy package reads.
-   Test: a document larger than the RAM budget opens, pans, paints, undoes and
-   saves identically to an in-memory run.
-5. **Scheduler and derived cache.** Residency classes including Edit-ready,
-   view-ordered reads with cancellation, motion prediction, windowed mips, the root
-   overview, the composite page cache replacing the complete hierarchy. Test:
-   resident bytes for 1, 28 and 100 layers stay within the same admitted-image
-   bound plus the edit-ready set.
-6. **Pivot composition.** First, Normal-only reassociation and branch-cache
-   priority around the edit target inside the existing graph, with cancellation
-   and fallback retention. Then, only where Mali and Adreno measurements show a
-   win in bytes moved, proved affine operators and nested groups. Test: every blend
-   mode stays within the display tolerance of the exact path, including clamped
-   modes over extended backdrops; reads per damaged texel don't grow with layer
-   count for eligible stacks.
-7. **Smaller wins.** Content deduplication of identical imports, streaming
-   decoders, the predictive photo codec.
+1. **Stop the worst lag.** Fixes issue #24 and the slowest tab switches.
+   1. Scratch slots become leases released on every return path, with a pool
+      cap and idle trimming; source slots are reserved before mips; the coarser
+      level stays on screen while object work defers; bind groups are owned by
+      pages. Test: repeated deferred frames over many image layers keep the pool
+      bounded and the view presentable.
+   2. Background work yields to the active drawing: one device-wide submission
+      priority for captures and transfers, aggregate admission for pending
+      captures and retiring renderers, and spill IO outside the `Bytes` lock.
+      Test: a stalled writer never blocks readiness or accounting; captures from
+      another drawing never delay a pen-down past one frame.
+   3. Tab switches stop waiting for recovery writes, spills and the outgoing
+      render thread: the switch captures the departing snapshot, writes it in the
+      background, and retires the renderer on a worker. The backing barrier
+      stays. GTK keeps one GPU device and its recipes for the process. Tests: a
+      switch with a recovery write and a spill pending presents the incoming
+      drawing without waiting; an edit made just before a switch is restored
+      after a crash once its background recovery write is durable.
+2. **One budget and warm tabs.**
+   1. The process-wide budget manager: ledger with pinned debt, pool budgets,
+      host queries and pressure signals, the Memory limit setting, the
+      admission refusal rule, and eager-not-greedy rules for today's caches. It
+      replaces the fixed cache constants, the 512 MiB asset limit (a budget check
+      until milestone 3) and the 64 MiB parked-tab budget. Tests: simulated
+      budgets, limits and signals give the expected shares and trims across
+      several windows; lowering the limit mid-stroke loses nothing and drops no
+      frame; with the allowance full and the painter navigating, the debt
+      drains and the next stroke is admitted; a growing stroke under pressure
+      and disk full commits everything painted.
+   2. One per-frame work arbiter with a fresh-input reserve, absorbing today's
+      separate tap, step and page allowances. Test: queued speculative work
+      never delays a pen-down past one frame.
+   3. Warm tabs: parked drawings keep their renderer state under the budget,
+      with capture leases replacing the backing barrier, parked speculative work
+      cancelled, and late completions fenced by drawing and generation. Tests: a
+      warm switch composes no pages and presents on the next frame; switching
+      back mid-capture, undo, redo and closing either tab keep every edit.
+   4. Half-float display data, with extended effects, float sources, their
+      downstream nodes and the input ancestry of extended effects in RGBA32F.
+      Test: display stays within a small tolerance of exact output; Exposure
+      chains and float paint beyond half range stay exact.
+3. **Drawings on disk, residency by view.**
+   1. The session store on recovery's files, with durability order, generation
+      roots and leases, write-behind, the IO queue and read cache, asynchronous
+      `Disk` readiness, and the asset limit as a disk check. Tests: crash
+      injection at every publication and compaction boundary; disk full while
+      painting keeps every edit.
+   2. Lazy package reads with package leases. Tests: overwrite the original,
+      Save As, undo to an unread tile, and restart recovery after removing the
+      original.
+   3. Residency by view: classes including Edit-ready and Ahead, view-ordered
+      reads with cancellation and motion prediction, windowed mips, overviews,
+      the derived cache, and the composite page cache replacing the complete
+      hierarchy. Tests: a drawing larger than the RAM budget opens, pans, paints,
+      undoes, switches tabs and saves identically to an in-memory run; resident
+      bytes for 1, 28 and 100 layers stay within the same bound.
+   4. Streaming decoders, the predictive photo codec and deduplicated imports,
+      each gated on its own measurements.
+4. **Pivot composition.** Normal-only reassociation and branch-cache priority
+   around the edit target inside the existing graph, with cancellation and
+   fallback retention. Then, only where Mali and Adreno measurements show fewer
+   bytes moved, proved affine operators and nested groups. Test: every blend mode
+   stays within the display tolerance of the exact path, including clamped modes
+   over extended backdrops; reads per damaged texel don't grow with layer count
+   for eligible stacks.
 
 ## Performance gates
 
@@ -572,6 +751,18 @@ limits as today.
 Latency rows sit beside them: first dab after a layer change, a tool change, a
 Navigator jump and a lazy open, cold and warm; and pan → stroke and pinch →
 stroke, where resumed input may wait at most one extra frame.
+
+Tab switch rows on every host: between two tier-canvas drawings with 10 and 28
+layers, warm and after eviction, with a capture and a recovery write still
+pending, and a stroke started right after the switch. A warm switch presents the
+incoming drawing on the next frame and accepts a dab within two; a cold one
+presents its overview on the next frame and meets the Navigator-jump latency
+gates.
+
+One combined stress row per tier: many open tabs, background captures and
+writes, the memory limit under pressure, and immediate painting and navigation
+in the active drawing. Motion holds the tier rate and resumed input waits at most
+one extra frame.
 
 ## Open questions
 
