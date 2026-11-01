@@ -947,23 +947,31 @@ function Color-Preview([string]$Space,[switch]$Copy){
     $confirm=if($Copy){(Model).windows_document.details.feature_copy.color.create_copy}else{'Apply'}
     Wait-Until {$dialog=Find-Id 'document-workflow';$dialog -and (Find-Name $confirm).Current.IsEnabled} 'Completed comparison did not enable its commit action'
 }
-function Color-Images {
-    $dialog=Find-Id 'document-workflow';if(!$dialog){return}
-    @($dialog.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new(
-        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Image))|Where-Object {
-        !$_.Current.IsOffscreen -and $_.Current.BoundingRectangle.Width -gt 64 -and $_.Current.BoundingRectangle.Height -gt 64
-    }|Sort-Object {$_.Current.BoundingRectangle.Top})
+function Color-Images([string]$Message='Color comparison did not display its preview images') {
+    $images=@{items=@()}
+    Wait-Until {
+        $dialog=Find-Id 'document-workflow';if(!$dialog){return $false}
+        $images.items=@($dialog.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Image)))
+        $images.items.Count -ge 2
+    } $Message
+    foreach($index in @(1,0)){
+        $image=$images.items[$index]
+        Scroll-Position $image (100*$index)
+        Wait-Until {!$image.Current.IsOffscreen -and $image.Current.BoundingRectangle.Width -gt 64 -and $image.Current.BoundingRectangle.Height -gt 64} $Message
+    }
+    $images.items
 }
 function Color-Frames {
-    $images=@{items=@()};Wait-Until {$images.items=@(Color-Images);$images.items.Count -ge 2} 'Color comparison did not display its preview images'
-    $bounds=$images.items[0].Current.BoundingRectangle
+    $images=@(Color-Images)
+    $bounds=$images[0].Current.BoundingRectangle
     $area=[Drawing.Rectangle]::FromLTRB([int][Math]::Ceiling($bounds.Left+12),[int][Math]::Ceiling($bounds.Top+12),[int][Math]::Floor($bounds.Right-12),[int][Math]::Floor($bounds.Bottom-12))
     $choice=Combo-Item (Owned 'document-profile-choice') {$_.Current.Name -eq 'Display P3'}
     $folder=Join-Path $run ('color-preview-frames-'+(Model).state.theme);[IO.Directory]::CreateDirectory($folder)|Out-Null
     $sample=Sample-Frames $area {param($i)if($i -eq 3){$choice.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()}}
     try{
         Color-Preview 'DisplayP3'
-        Wait-Until {@(Color-Images).Count -ge 2} 'Color comparison did not restore its preview images'
+        Color-Images 'Color comparison did not restore its preview images'|Out-Null
         $null=[TabFrames]::DwmFlush();$final=[TabFrames]::Grab($area.Left,$area.Top,$area.Width,$area.Height)
         try{
             $final.Save((Join-Path $folder 'held.png'));$envelope=[TabFrames+Envelope]::new($sample.frames[2],$final);$bad=@();$scores=@()

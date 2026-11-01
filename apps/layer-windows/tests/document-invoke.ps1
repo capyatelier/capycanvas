@@ -71,3 +71,38 @@ Write-Output 'Document invocation passed: ordinary acknowledgement, retired comm
  }
  'Document writeback projection: revision-only acknowledgement accepted; changed geometry/ownership, rotation/flips and original action errors rejected; every action and cleanup once.'
 }
+
+& {
+ $function=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Color-Images'},$true)
+ if(!$function){throw 'Missing actual document color preview helper'}
+ . ([scriptblock]::Create($function.Extent.Text))
+ function Wait-Until([scriptblock]$Condition,[string]$Message){if(!(& $Condition)){throw $Message}}
+ $script:previewDialog=[pscustomobject]@{}
+ $script:previewDialog|Add-Member ScriptMethod FindAll {param($Scope,$Condition)
+  if($Scope -ne [System.Windows.Automation.TreeScope]::Descendants -or $Condition.Property -ne [System.Windows.Automation.AutomationElement]::ControlTypeProperty -or $Condition.Value -ne [System.Windows.Automation.ControlType]::Image.Id){throw 'Unexpected preview query'}
+  $script:previewImages
+ }
+ function Find-Id([string]$Id){if($Id -cne 'document-workflow'){throw 'Unexpected preview owner'};$script:previewDialog}
+ function Scroll-Position($Control,[double]$Percent){
+  $expected=if($Control.key -eq 'before'){0}else{100}
+  if($Percent -ne $expected -or $Control -notin $script:previewImages){throw 'Preview scrolled through an unrelated owner or position'}
+  $script:previewScrolls.Add($Control.key+':'+$Percent)
+  foreach($image in $script:previewImages){
+   $image.Current.IsOffscreen=$image -ne $Control
+   $size=if($image -ne $Control){[double]::NegativeInfinity}elseif($script:previewReady[$image.key]){314}else{0}
+   $image.Current.BoundingRectangle=[pscustomobject]@{Top=$(if($image -eq $Control){509}else{[double]::PositiveInfinity});Width=$size;Height=$size}
+  }
+ }
+ foreach($missing in @('none','before','after','peer')){
+  $script:previewReady=@{before=$missing -ne 'before';after=$missing -ne 'after'};$script:previewScrolls=[Collections.Generic.List[string]]::new()
+  $script:previewImages=@([pscustomobject]@{key='before';Current=[pscustomobject]@{IsOffscreen=$false;BoundingRectangle=[pscustomobject]@{Top=509;Width=419;Height=314}}},[pscustomobject]@{key='after';Current=[pscustomobject]@{IsOffscreen=$true;BoundingRectangle=[pscustomobject]@{Top=[double]::PositiveInfinity;Width=[double]::NegativeInfinity;Height=[double]::NegativeInfinity}}})
+  if($missing -eq 'peer'){$script:previewImages=@($script:previewImages[0])}
+  $failure=$null;$images=@();try{$images=@(Color-Images)}catch{$failure=$_}
+  if($missing -eq 'none'){
+   if($failure -or $images.Count -ne 2 -or $images[0].key -cne 'before' -or $images[0].Current.IsOffscreen -or !$images[1].Current.IsOffscreen -or ($script:previewScrolls -join ',') -cne 'after:100,before:0'){throw "Color previews did not validate their own view and restore Before: $failure; count=$($images.Count); scroll=$($script:previewScrolls -join ',')"}
+   $null=Color-Images
+   if(($script:previewScrolls -join ',') -cne 'after:100,before:0,after:100,before:0'){throw 'Replacement previews did not restore the retained Before position'}
+  }elseif(!$failure -or $failure.Exception.Message -cne 'Color comparison did not display its preview images'){throw "Missing preview raster or peer was accepted: $missing"}
+ }
+ 'Document color previews: both native scroll positions checked, Before restored for sampling and missing raster/peer rejected; no UI/GPU.'
+}
