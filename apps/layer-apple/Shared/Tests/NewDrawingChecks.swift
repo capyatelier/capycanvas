@@ -112,7 +112,11 @@ extension XCTestCase {
         let dialog = app.descendants(matching: .any)["new-drawing-dialog"].firstMatch
         checkDialogKeyboardHeight(dialog, in: app) { workspaceActivate(app.textFields["new-drawing-name"]) }
         #endif
-        if keyboardOnly { return }
+        if keyboardOnly {
+            workspaceActivate(app.buttons["new-drawing-cancel"])
+            XCTAssertTrue(create.waitForNonExistence(timeout: 10))
+            return
+        }
         expectNewDrawingText("new-drawing-caption", in: app) { $0.hasPrefix("Sketchbook A4") }
         let resolution = newDrawingNumber("resolution", in: app)
         XCTAssertEqual(resolution.value as? String, "300")

@@ -265,6 +265,22 @@ extension XCTestCase {
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 
+    @MainActor func openEditorSettings(in app: XCUIApplication, theme: String) {
+        waitForEditorInteraction(in: app)
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(app.buttons["settings-done"].waitForExistence(timeout: 10))
+        let themePicker = app.descendants(matching: .any)["preference-theme"].firstMatch
+        if !themePicker.waitForExistence(timeout: 3) { workspaceActivate(app.staticTexts["Appearance"].firstMatch) }
+        workspaceActivate(themePicker)
+        #if os(macOS)
+        workspaceActivate(app.menuItems[theme.capitalized].firstMatch)
+        #else
+        workspaceActivate(app.buttons[theme.capitalized])
+        #endif
+        expectation(for: NSPredicate(format: "value == %@ OR label ENDSWITH %@", theme.capitalized, theme.capitalized), evaluatedWith: themePicker)
+        waitForExpectations(timeout: 10)
+    }
+
     @MainActor func checkNumericSettingsDone(in app: XCUIApplication, theme: String = "light") {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"invoke","command":"settings"},{"type":"preferences","action":{"type":"page","page":"canvas"}}]"#
         app.launch()

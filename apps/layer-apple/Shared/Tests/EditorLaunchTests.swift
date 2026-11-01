@@ -207,6 +207,10 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testAlphaConversionFiltersDark() { checkAlphaConversionFilters(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testEditColor() { checkEditColor(in: ignoringSavedWindows(editorCaptureApplication()), theme: "light") }
     @MainActor func testEditColorDark() { checkEditColor(in: ignoringSavedWindows(editorCaptureApplication()), theme: "dark") }
+    #if os(iOS)
+    @MainActor func testEditColorKeyboardHeight() { checkEditColorKeyboardHeight(in: editorTestApplication(), theme: "light") }
+    @MainActor func testEditColorKeyboardHeightDark() { checkEditColorKeyboardHeight(in: editorTestApplication(), theme: "dark") }
+    #endif
     @MainActor func testFillThumbnailColor() { checkFillThumbnailColor(in: editorCaptureApplication(), theme: "light") }
     @MainActor func testFillThumbnailColorDark() { checkFillThumbnailColor(in: editorCaptureApplication(), theme: "dark") }
     #if os(iOS)
@@ -395,8 +399,10 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testNewDrawingKeyboardHeightDark() { newDrawingDialog(theme: "dark", keyboardOnly: true) }
     @MainActor private func newDrawingDialog(theme: String, keyboardOnly: Bool = false) {
         let app = ignoringSavedWindows(editorTestApplication())
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"invoke","command":"new_document"}]"#
         app.launch()
+        openEditorSettings(in: app, theme: theme)
+        workspaceActivate(app.buttons["settings-done"])
+        editorMenu(in: app, menu: "File", id: "new_document", label: "New…")
         checkNewDrawingDialog(in: app, theme: theme, keyboardOnly: keyboardOnly)
     }
 

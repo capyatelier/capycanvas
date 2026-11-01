@@ -62,6 +62,25 @@ extension XCTestCase {
         }
         return text ?? ""
     }
+    #if os(iOS)
+    @MainActor func checkEditColorKeyboardHeight(in app: XCUIApplication, theme: String) {
+        app.launch()
+        openEditorSettings(in: app, theme: theme)
+        workspaceActivate(app.buttons["settings-done"])
+        let paint = app.buttons["workspace-switch-builtin:workspace:illustrator"]
+        if !paint.isSelected { workspaceActivate(paint) }
+        expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: paint)
+        waitForExpectations(timeout: 10)
+        workspaceActivate(app.buttons["paint-edit-color"].firstMatch)
+        let dialog = app.descendants(matching: .any)["edit-color-dialog"].firstMatch
+        XCTAssertTrue(dialog.waitForExistence(timeout: 10))
+        checkDialogKeyboardHeight(dialog, in: app) {
+            workspaceActivate(app.descendants(matching: .any)["color-value-hex"].firstMatch)
+        }
+        workspaceActivate(app.buttons["color-cancel"])
+        XCTAssertTrue(dialog.waitForNonExistence(timeout: 10))
+    }
+    #endif
     @MainActor func checkEditColor(in app: XCUIApplication, theme: String) {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"workspace_manager","command":{"type":"switch","id":"builtin:workspace:illustrator"}},{"type":"set_color","rgba":[0.2,0.45,0.8,1]},{"type":"invoke","command":"select_all"},{"type":"invoke","command":"fill_selection"},{"type":"invoke","command":"deselect"},{"type":"set_color","rgba":[0.9,0.1,0.1,1]}]"#
         app.launch()
@@ -259,14 +278,7 @@ extension XCTestCase {
         let ready = app.staticTexts["recovery-status"]
         let observesRecovery = recover && ready.waitForExistence(timeout: 2)
         if !recover || !observesRecovery {
-            app.typeKey(",", modifierFlags: .command)
-            XCTAssertTrue(app.buttons["settings-done"].waitForExistence(timeout: 10))
-            let themePicker = app.descendants(matching: .any)["preference-theme"].firstMatch
-            if !themePicker.waitForExistence(timeout: 3) { workspaceActivate(app.staticTexts["Appearance"].firstMatch) }
-            workspaceActivate(themePicker)
-            workspaceActivate(app.buttons[theme.capitalized])
-            expectation(for: NSPredicate(format: "value == %@ OR label ENDSWITH %@", theme.capitalized, theme.capitalized), evaluatedWith: themePicker)
-            waitForExpectations(timeout: 10)
+            openEditorSettings(in: app, theme: theme)
             workspaceActivate(app.buttons["settings-done"])
         }
         let painter = app.buttons["workspace-switch-builtin:workspace:painter"]
@@ -319,6 +331,7 @@ extension XCTestCase {
         for visit in 0..<2 {
             workspaceActivate(texture)
             XCTAssertTrue(dialog.waitForExistence(timeout: 10))
+            checkDialogPreferredHeight(dialog, in: app)
             XCTAssertTrue(cancel.isHittable)
             attachEditor(in: app, name: "texture-sheet-\(theme)-\(visit)")
             if let checkpoint, visit == 0 {

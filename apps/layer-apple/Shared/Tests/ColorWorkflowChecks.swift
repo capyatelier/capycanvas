@@ -2,23 +2,27 @@ import XCTest
 
 extension XCTestCase {
     #if os(iOS)
+    @MainActor private func dialogOuterFrame(_ dialog: XCUIElement, in app: XCUIApplication) -> CGRect {
+        let width = dialog.frame.width
+        return app.otherElements.containing(.any, identifier: dialog.identifier).allElementsBoundByIndex
+            .map(\.frame).filter { abs($0.width - width) <= 2 }
+            .max { $0.height < $1.height } ?? .zero
+    }
+    @MainActor @discardableResult func checkDialogPreferredHeight(_ dialog: XCUIElement, in app: XCUIApplication) -> CGRect {
+        let outer = dialogOuterFrame(dialog, in: app)
+        XCTAssertGreaterThan(outer.height, 0, "The native sheet has a matching-width dialog ancestor")
+        XCTAssertLessThanOrEqual(outer.height - dialog.frame.height, 40, "The native sheet fits its preferred content")
+        return outer
+    }
     @MainActor func checkDialogKeyboardHeight(_ dialog: XCUIElement, in app: XCUIApplication, openKeyboard: () -> Void) {
         if app.keyboards.firstMatch.exists { dismissEditorKeyboard(in: app) }
-        let width = dialog.frame.width
-        func outerFrame() -> CGRect {
-            app.otherElements.containing(.any, identifier: dialog.identifier).allElementsBoundByIndex
-                .map(\.frame).filter { abs($0.width - width) <= 2 }
-                .max { $0.height < $1.height } ?? .zero
-        }
-        let initial = outerFrame()
-        XCTAssertGreaterThan(initial.height, 0, "The native sheet has a matching-width dialog ancestor")
-        XCTAssertLessThanOrEqual(initial.height - dialog.frame.height, 40, "The native sheet fits its preferred content")
+        let initial = checkDialogPreferredHeight(dialog, in: app)
         openKeyboard()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         dismissEditorKeyboard(in: app)
         var current = initial
         let restored = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            current = outerFrame()
+            current = self.dialogOuterFrame(dialog, in: app)
             return abs(current.height - initial.height) <= 2 && current.height - dialog.frame.height <= 40
         }, object: app)
         let result = XCTWaiter.wait(for: [restored], timeout: 10)
