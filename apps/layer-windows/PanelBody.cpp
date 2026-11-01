@@ -62,7 +62,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                     continue;
                 }
                 if(kind==L"divider"){
-                    auto bounds=rects.GetObjectAt(i);auto slot=button(data,str(tile,L"label"),[]{});place(slot,bounds);
+                    auto bounds=rects.GetObjectAt(i);auto slot=button(data,str(tile,L"label"),[]{});slot.AllowFocusOnInteraction(false);place(slot,bounds);
                     auto line=dividerLine(data,num(bounds,L"width")>num(bounds,L"height"));
                     slot.Content(line);dividers.emplace(uint32_t(id),line);tiles.Children().Append(slot);attach(slot);
                     tileControls.emplace(uint32_t(id),slot);
