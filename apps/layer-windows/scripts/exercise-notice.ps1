@@ -118,7 +118,7 @@ try {
  Wait-Until {(Model).state.layers.Count -eq $count+1} 'New layer was not created'
  (Find 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x57)
  Wait-Until {((Model).state.commands|Where-Object id -eq 'auto_select').selected} 'W did not choose Auto Select'
- $source=Control 'tool-action-group-selection-source'
+ $source=Control 'tool-choice-selection-source'
  $source.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
  $sourceCaption=@((Model).state.commands|Where-Object id -eq 'selection_reference')[0].label
  (Control $sourceCaption -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
