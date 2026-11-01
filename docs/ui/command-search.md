@@ -88,11 +88,10 @@ forms own history; catalog entries carry presentation and availability.
 
 Search builds an index when opened and performs no I/O or thumbnail work while
 typing. `COMMAND_SEARCH` changes leave workspace model/content revisions alone.
-GTK updates only the popup for these changes; opening and closing use native
-popover behavior and motion preferences. The popup is its own Wayland surface,
-so the workspace publishes its body as an extra glass region from the popup's
-position whenever the popup's layout changes, and removes it when the popup
-unmaps. Web uses a search-only Wasm publication
+GTK updates an in-window native card for these changes. The card and its glass
+share the retained workspace chrome node. Closing keeps native input ownership
+until the closing node paints and outside contacts end; Tab stays within the
+card, and native text input owns composition keys. Web uses a search-only Wasm publication
 and retains workspace DOM controls. Its native modal dialog supports IME,
 combobox/listbox accessibility, reduced motion and visual-viewport sizing.
 Outside-dismissal contacts must not reach the canvas. Closing restores the
@@ -171,14 +170,15 @@ Scoped bindings and held tool overrides are described in
 ```sh
 cargo test --locked -p layer-ui -p layer-host
 bash tools/performance/workspace-motion.sh gtk --native-test=native_command_bar_input --native-storage
+bash tools/performance/workspace-motion.sh gtk --native-test=native_command_bar_capture --native-storage
 LAYER_NATIVE_CAPTURE_DIR=/tmp/command-bar-glass \
   bash tools/performance/workspace-motion.sh gtk --native-test=native_command_bar_glass --native-storage
 LAYER_TEST_ARTIFACTS=/tmp/command-search bash tools/performance/workspace-motion.sh web --command-bar
 pwsh -NoProfile -File apps/layer-windows/scripts/exercise-command-search.ps1 -Executable artifacts/windows/Release/CapyCanvas.exe
 ```
 
-`native_command_bar_glass` paints sharp stripes behind the bar at every
-transparency level in both themes: inside the bar they must be blurred and
+`native_command_bar_glass` paints sharp stripes behind the bar at Medium and
+Off in both themes: inside the bar they must be blurred and
 tinted, Off must be opaque, and where a shrinking or closed bar used to be they
 must be sharp again. Android runs `art.capycanvas.AndroidCommandSearchTest`
 (see [Android development](../development/android.md)); macOS and iPad run

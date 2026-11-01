@@ -1,8 +1,7 @@
-//! Native focus, IME and popup capture around the shared command search model.
+//! Native focus, IME and input capture around the shared command search model.
 use crate::workspace::Workspace;
 use adw::prelude::*;
 use gtk::{gdk, glib};
-use layer_render_wgpu::BackdropRegion;
 use layer_ui::*;
 use std::{
     cell::{Cell, RefCell},
@@ -12,10 +11,12 @@ use std::{
 pub struct CommandBar {
     copy: RefCell<layer_ui::native_copy::SearchCopy>,
     close: gtk::Button,
-    popup: gtk::Popover,
+    pub(crate) root: gtk::Overlay,
+    card: gtk::Box,
     entry: gtk::SearchEntry,
     unit: gtk::Label,
     list: gtk::ListBox,
+    viewport: gtk::Viewport,
     detail: gtk::Label,
     empty: gtk::Label,
     view: RefCell<Option<CommandSearchView>>,
@@ -23,6 +24,26 @@ pub struct CommandBar {
     updating: Cell<bool>,
     composition: Rc<crate::input::EntryComposition>,
     previous_focus: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
+    closing: Cell<Option<Closing>>,
+    paint: RefCell<Option<(gdk::FrameClock, glib::SignalHandlerId)>>,
+    contacts: RefCell<Vec<(Option<gdk::Device>, Option<gdk::EventSequence>, u32)>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Closing { Requested(Option<u64>), Selected(i64), Painted }
+impl Closing {
+    fn selected(self, requested: u64, shown: u64, frame: i64) -> Self {
+        match self {
+            Self::Requested(revision) => {
+                let revision = revision.unwrap_or(requested);
+                if shown >= revision { Self::Selected(frame) } else { Self::Requested(Some(revision)) }
+            }
+            _ => self,
+        }
+    }
+    fn painted(self, frame: i64) -> Self {
+        match self { Self::Selected(selected) if frame >= selected => Self::Painted, _ => self }
+    }
 }
 
 impl CommandBar {
@@ -36,13 +57,19 @@ impl CommandBar {
     }
 
     fn with_copy(copy: layer_ui::native_copy::SearchCopy) -> Self {
-        let popup = gtk::Popover::new();
-        popup.set_widget_name("command-bar");
-        popup.update_property(&[gtk::accessible::Property::Label(copy.title.as_ref())]);
-        popup.set_has_arrow(false);
-        popup.set_position(gtk::PositionType::Bottom);
-        popup.add_css_class("command-bar");
-        let body = gtk::Box::new(gtk::Orientation::Vertical, COMMAND_SEARCH_STYLE.gap);
+        let root = gtk::Overlay::new();
+        root.set_widget_name("command-search-capture");
+        root.set_focusable(true);
+        root.set_visible(false);
+        root.set_overflow(gtk::Overflow::Hidden);
+        let body = gtk::Box::builder().orientation(gtk::Orientation::Vertical)
+            .spacing(COMMAND_SEARCH_STYLE.gap).accessible_role(gtk::AccessibleRole::Dialog).build();
+        body.set_widget_name("command-bar");
+        body.add_css_class("command-bar");
+        body.set_halign(gtk::Align::Center);
+        body.set_valign(gtk::Align::Start);
+        body.update_property(&[gtk::accessible::Property::Label(copy.title.as_ref()), gtk::accessible::Property::Modal(true)]);
+        root.add_overlay(&body);
         let header = gtk::Box::new(gtk::Orientation::Horizontal, COMMAND_SEARCH_STYLE.gap);
         let entry = gtk::SearchEntry::new();
         entry.set_widget_name("command-search");
@@ -57,11 +84,6 @@ impl CommandBar {
         close.set_tooltip_text(Some(copy.close_search.as_ref()));
         close.update_property(&[gtk::accessible::Property::Label(copy.close_search.as_ref())]);
         close.add_css_class("flat");
-        close.connect_clicked(glib::clone!(
-            #[weak]
-            popup,
-            move |_| popup.popdown()
-        ));
         header.append(&entry);
         header.append(&unit);
         header.append(&close);
@@ -72,7 +94,11 @@ impl CommandBar {
         list.set_selection_mode(gtk::SelectionMode::Single);
         list.set_activate_on_single_click(true);
         list.add_css_class("navigation-sidebar");
-        body.append(&list);
+        let viewport = gtk::Viewport::builder().child(&list).build();
+        let scroll = gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never)
+            .vscrollbar_policy(gtk::PolicyType::Automatic).propagate_natural_height(true).child(&viewport).build();
+        scroll.set_vexpand(true);
+        body.append(&scroll);
         let empty = gtk::Label::new(Some(copy.no_matches.as_ref()));
         empty.add_css_class("dim-label");
         empty.set_margin_top(12);
@@ -88,15 +114,16 @@ impl CommandBar {
         detail.set_margin_end(COMMAND_SEARCH_STYLE.inset);
         detail.set_height_request(20);
         body.append(&detail);
-        popup.set_child(Some(&body));
         let composition = crate::input::guard_editable_activation(&entry);
         Self {
             copy: RefCell::new(copy),
             close,
-            popup,
+            root,
+            card: body,
             entry,
             unit,
             list,
+            viewport,
             detail,
             empty,
             view: Default::default(),
@@ -104,12 +131,15 @@ impl CommandBar {
             updating: Cell::new(false),
             composition,
             previous_focus: Default::default(),
+            closing: Cell::new(None),
+            paint: RefCell::default(),
+            contacts: RefCell::default(),
         }
     }
 
     pub(crate) fn set_localization(&self, localization: std::sync::Arc<Localizer>) {
         let copy = NativeCopy::new(&localization).search;
-        self.popup.update_property(&[gtk::accessible::Property::Label(&copy.title)]);
+        self.card.update_property(&[gtk::accessible::Property::Label(&copy.title)]);
         self.close.set_tooltip_text(Some(&copy.close_search));
         self.close.update_property(&[gtk::accessible::Property::Label(&copy.close_search)]);
         self.list.update_property(&[gtk::accessible::Property::Label(&copy.commands)]);
@@ -125,45 +155,75 @@ impl CommandBar {
         self.entry.set_placeholder_text(Some(if parameter.is_some() { copy.enter_value.as_ref() } else { copy.search_commands.as_ref() }));
     }
 
-    pub fn glass(&self, w: &Workspace) -> Option<BackdropRegion> {
-        if !self.is_open() || !self.popup.is_mapped() {
-            return None;
+    pub(crate) fn owns_input(&self) -> bool { self.is_open() || self.closing.get().is_some() }
+
+    pub(crate) fn allocate(&self, width: i32, height: i32) {
+        if !self.root.is_visible() { return; }
+        self.card.set_width_request((width - COMMAND_SEARCH_STYLE.inset * 4).clamp(240, COMMAND_SEARCH_STYLE.width));
+        self.card.set_margin_top(COMMAND_SEARCH_STYLE.top(height as f32) as i32);
+    }
+
+    pub(crate) fn selected(&self, w: &Workspace, requested: u64, shown: u64) {
+        if let Some(closing) = self.closing.get() && let Some(clock) = w.surface.frame_clock() {
+            self.closing.set(Some(closing.selected(requested, shown, clock.frame_counter())));
         }
-        let popup = self.popup.surface()?.downcast::<gdk::Popup>().ok()?;
-        let body = self.popup.child()?.parent()?.compute_bounds(&self.popup)?;
-        let origin = w.surface.compute_point(&w.window, &gtk::graphene::Point::zero())?;
-        let (popover_x, popover_y) = self.popup.surface_transform();
-        let (window_x, window_y) = w.window.surface_transform();
-        let x = popup.position_x() as f64 + popover_x - window_x - origin.x() as f64;
-        let y = popup.position_y() as f64 + popover_y - window_y - origin.y() as f64;
-        Some(BackdropRegion::rounded(
-            [x as f32 + body.x(), y as f32 + body.y(), body.width(), body.height()],
-            [COMMAND_SEARCH_STYLE.radius as f32; 4],
-            BackdropRegion::CIRCULAR,
-        ))
+    }
+
+    fn disconnect_paint(&self) {
+        if let Some((clock, handler)) = self.paint.borrow_mut().take() { clock.disconnect(handler); }
+    }
+
+    fn retire(&self, w: &Rc<Workspace>, restore: bool) {
+        self.closing.set(None);
+        self.disconnect_paint();
+        let focus = self.previous_focus.take().and_then(|focus| focus.upgrade()).filter(|focus| focus.is_mapped());
+        self.root.set_visible(false);
+        if restore && w.window.is_mapped() && w.window.visible_dialog().is_none() {
+            if let Some(focus) = focus { focus.grab_focus(); } else { w.area.grab_focus(); }
+        }
+    }
+
+    fn finish_close(&self, w: &Rc<Workspace>) {
+        if self.closing.get() == Some(Closing::Painted) && self.contacts.borrow().is_empty() { self.retire(w, true); }
+    }
+
+    pub(crate) fn capture(&self, w: &Rc<Workspace>, event: &gdk::Event, point: Option<[f32; 2]>) -> bool {
+        if !self.owns_input() { return false; }
+        let kind = event.event_type();
+        let touch = matches!(kind, gdk::EventType::TouchBegin | gdk::EventType::TouchUpdate | gdk::EventType::TouchEnd | gdk::EventType::TouchCancel);
+        let key = (event.device(), touch.then(|| event.event_sequence()), event.downcast_ref::<gdk::ButtonEvent>().map_or(0, |event| event.button()));
+        let terminal = matches!(kind, gdk::EventType::ButtonRelease | gdk::EventType::TouchEnd | gdk::EventType::TouchCancel);
+        let claimed = self.contacts.borrow().iter().position(|contact| if touch { *contact == key } else {
+            contact.0 == key.0 && contact.1.is_none() && (!terminal || contact.2 == key.2)
+        });
+        if let Some(index) = claimed {
+            if kind == gdk::EventType::ButtonPress && !self.contacts.borrow().contains(&key) { self.contacts.borrow_mut().push(key); }
+            if terminal { self.contacts.borrow_mut().remove(index); self.finish_close(w); }
+            return true;
+        }
+        if w.window.visible_dialog().is_some() || event.surface() != w.window.surface() { return false; }
+        let pointer = matches!(kind, gdk::EventType::ButtonPress | gdk::EventType::ButtonRelease | gdk::EventType::MotionNotify
+            | gdk::EventType::TouchBegin | gdk::EventType::TouchUpdate | gdk::EventType::TouchEnd | gdk::EventType::TouchCancel | gdk::EventType::Scroll);
+        if !pointer { return false; }
+        let inside = self.is_open() && point.is_some_and(|[x,y]| self.card.compute_bounds(&w.surface)
+            .is_some_and(|bounds| bounds.contains_point(&gtk::graphene::Point::new(x,y))));
+        if inside { return false; }
+        if matches!(kind, gdk::EventType::ButtonPress | gdk::EventType::TouchBegin) {
+            self.contacts.borrow_mut().push(key);
+            w.close_command_search();
+        }
+        true
     }
 
     pub fn bind(&self, w: &Rc<Workspace>) {
-        self.popup.set_parent(&w.surface);
-        w.watch_popover(&self.popup);
-        self.popup.connect_realize(glib::clone!(
-            #[weak]
-            w,
-            move |popup| {
-                if let Some(surface) = popup.surface() {
-                    surface.connect_layout(glib::clone!(
-                        #[weak]
-                        w,
-                        move |_, _, _| w.wake()
-                    ));
-                }
-            }
-        ));
-        self.popup.connect_unmap(glib::clone!(
-            #[weak]
-            w,
-            move |_| { w.command_bar.composition.clear(); w.wake(); }
-        ));
+        self.close.connect_clicked(glib::clone!(#[weak] w, move |_| w.close_command_search()));
+        self.card.connect_unmap(glib::clone!(#[weak] w, move |_| w.command_bar.composition.clear()));
+        self.root.connect_unmap(glib::clone!(#[weak] w, move |_| {
+            let open = w.command_bar.view.take().is_some();
+            w.command_bar.contacts.borrow_mut().clear();
+            w.command_bar.retire(&w, false);
+            if open { w.close_command_search(); }
+        }));
         self.entry.connect_changed(glib::clone!(
             #[weak]
             w,
@@ -203,8 +263,19 @@ impl CommandBar {
             w,
             #[upgrade_or]
             glib::Propagation::Proceed,
-            move |_, key, keycode, _| {
+            move |_, key, keycode, modifiers| {
                 if w.command_bar.composition.capture(keycode) { return glib::Propagation::Proceed; }
+                if !w.command_bar.is_open() { return glib::Propagation::Stop; }
+                if matches!(key, gdk::Key::Tab | gdk::Key::ISO_Left_Tab) {
+                    let direction = if key == gdk::Key::ISO_Left_Tab || modifiers.contains(gdk::ModifierType::SHIFT_MASK) {
+                        gtk::DirectionType::TabBackward
+                    } else { gtk::DirectionType::TabForward };
+                    if !w.command_bar.card.child_focus(direction) {
+                        gtk::prelude::GtkWindowExt::set_focus(&w.window, None::<&gtk::Widget>);
+                        w.command_bar.card.child_focus(direction);
+                    }
+                    return glib::Propagation::Stop;
+                }
                 let action = match key {
                     gdk::Key::Up => Some(CommandSearchAction::Move { delta: -1 }),
                     gdk::Key::Down => Some(CommandSearchAction::Move { delta: 1 }),
@@ -218,7 +289,7 @@ impl CommandBar {
                         Some(CommandSearchAction::Back)
                     }
                     gdk::Key::Escape => {
-                        w.command_bar.popup.popdown();
+                        w.close_command_search();
                         return glib::Propagation::Stop;
                     }
                     _ => None,
@@ -240,38 +311,17 @@ impl CommandBar {
                 w.interact(crate::input::key_input(key, keycode, false, modifiers, true, None));
             }
         ));
-        self.popup.add_controller(keys);
+        self.root.add_controller(keys);
         let composed = gtk::EventControllerKey::new();
         composed.set_name(Some("command-search-composed-key"));
         composed.set_propagation_phase(gtk::PropagationPhase::Bubble);
         composed.connect_key_pressed(glib::clone!(#[weak] w, #[upgrade_or] glib::Propagation::Proceed, move |_, _, _, _| {
             if w.command_bar.composition.active() { glib::Propagation::Stop } else { glib::Propagation::Proceed }
         }));
-        self.popup.add_controller(composed);
+        self.root.add_controller(composed);
         let focus = gtk::EventControllerFocus::new();
         focus.connect_leave(glib::clone!(#[weak] w, move |_| w.command_bar.composition.clear()));
-        self.popup.add_controller(focus);
-        self.popup.connect_closed(glib::clone!(
-            #[weak]
-            w,
-            move |_| {
-                w.command_bar.composition.clear();
-                let canceled = w.command_bar.view.borrow().is_some();
-                if canceled {
-                    w.dispatch(UiAction::CommandSearch {
-                        action: CommandSearchAction::Close,
-                    });
-                    if let Some(focus) = w
-                        .command_bar
-                        .previous_focus
-                        .take()
-                        .and_then(|f| f.upgrade())
-                    {
-                        focus.grab_focus();
-                    }
-                }
-            }
-        ));
+        self.root.add_controller(focus);
     }
 
     fn execute(&self, w: &Rc<Workspace>, index: Option<usize>) {
@@ -308,17 +358,23 @@ impl CommandBar {
             .and_then(|v| v.parameter.as_ref().map(|p| p.id.clone()));
         *self.view.borrow_mut() = view.clone();
         let Some(view) = view else {
-            self.popup.popdown();
-            if was_open && w.window.visible_dialog().is_none() {
-                if let Some(focus) = self
-                    .previous_focus
-                    .take()
-                    .and_then(|f| f.upgrade())
-                    .filter(|f| f.is_mapped())
-                {
-                    focus.grab_focus();
+            if was_open {
+                self.closing.set(Some(Closing::Requested(None)));
+                self.card.set_visible(false);
+                if self.root.is_mapped() {
+                    if w.window.visible_dialog().is_none() { self.root.grab_focus(); }
+                    let clock = self.root.frame_clock().unwrap();
+                    let handler = clock.connect_after_paint(glib::clone!(#[weak] w, move |clock| {
+                        if let Some(closing) = w.command_bar.closing.get() {
+                            w.command_bar.closing.set(Some(closing.painted(clock.frame_counter())));
+                            w.command_bar.finish_close(&w);
+                        }
+                    }));
+                    *self.paint.borrow_mut() = Some((clock, handler));
+                    w.surface.queue_draw();
                 } else {
-                    w.area.grab_focus();
+                    self.contacts.borrow_mut().clear();
+                    self.retire(w, false);
                 }
             }
             self.updating.set(false);
@@ -409,6 +465,7 @@ impl CommandBar {
         if let Some(row) = self.list.row_at_index(view.selected as i32) {
             self.list.select_row(Some(&row));
             if parameter.is_none() {
+                self.viewport.scroll_to(&row, None);
                 self.entry
                     .update_relation(&[gtk::accessible::Relation::ActiveDescendant(
                         row.upcast_ref(),
@@ -423,19 +480,15 @@ impl CommandBar {
         self.detail
             .set_tooltip_text((!view.detail.is_empty()).then_some(view.detail.as_str()));
         if !was_open {
-            *self.previous_focus.borrow_mut() =
-                gtk::prelude::GtkWindowExt::focus(&w.window).map(|f| f.downgrade());
-            self.popup.set_width_request(
-                (w.surface.width() - COMMAND_SEARCH_STYLE.inset * 4)
-                    .clamp(240, COMMAND_SEARCH_STYLE.width),
-            );
-            self.popup.set_pointing_to(Some(&gdk::Rectangle::new(
-                w.surface.width() / 2,
-                COMMAND_SEARCH_STYLE.top(w.surface.height() as f32) as i32,
-                0,
-                0,
-            )));
-            self.popup.popup();
+            if self.closing.take().is_none() {
+                *self.previous_focus.borrow_mut() = gtk::prelude::GtkWindowExt::focus(&w.window).map(|focus| focus.downgrade());
+            }
+            self.disconnect_paint();
+            if let Some(adjustment) = self.viewport.vadjustment() { adjustment.set_value(0.); }
+            self.card.set_visible(true);
+            self.root.set_visible(true);
+            self.allocate(w.surface.width(), w.surface.height());
+            w.surface.queue_allocate();
             self.entry.grab_focus();
         }
         self.updating.set(false);
@@ -444,13 +497,29 @@ impl CommandBar {
 
 impl Drop for CommandBar {
     fn drop(&mut self) {
-        self.popup.unparent();
+        self.disconnect_paint();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closing_search_waits_for_selection_and_its_painted_frame() {
+        let requested = Closing::Requested(None).selected(7, 6, 11);
+        assert_eq!(requested, Closing::Requested(Some(7)));
+        assert_eq!(requested.painted(12), requested);
+        let selected = requested.selected(9, 7, 13);
+        assert_eq!(selected, Closing::Selected(13));
+        assert_eq!(selected.painted(12), selected);
+        assert_eq!(selected.painted(13), Closing::Painted);
+    }
+
+    #[test]
+    fn closing_search_accepts_an_unconstrained_generation_without_waiting_for_gpu_visibility() {
+        assert_eq!(Closing::Requested(None).selected(4, 4, 8).painted(8), Closing::Painted);
+    }
 
     #[test]
     #[ignore = "private display native_command_search_copy"]
@@ -462,8 +531,6 @@ mod tests {
                 let context = Localizer::shared(language);
                 let expected = NativeCopy::new(&context).search;
                 let bar = CommandBar::with_copy(expected.clone());
-                let parent = gtk::Box::new(gtk::Orientation::Vertical, 0);
-                bar.popup.set_parent(&parent);
                 assert_eq!(bar.entry.placeholder_text().as_deref(), Some(expected.search_commands.as_ref()));
                 assert_eq!(bar.empty.text().as_str(), expected.no_matches.as_ref());
                 bar.update_entry_copy(Some("literal parameter & name"));

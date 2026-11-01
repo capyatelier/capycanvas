@@ -196,6 +196,7 @@ mod allocation {
             if let Some(owner) = self.owner.borrow().upgrade() {
                 owner.present_toolbars();
                 owner.pressure_calibration.measure(&owner);
+                owner.command_bar.allocate(width, height);
                 owner.bubbles.measure_cards(&owner);
             }
             let mut resolved = self.layout.borrow().workspace(
@@ -241,7 +242,7 @@ mod allocation {
                 }
                 let bounds = match slot {
                     // Native surface, input and cursor share full-window coordinates.
-                    Slot::Canvas | Slot::Bubbles => Some(Bounds {
+                    Slot::Canvas | Slot::Bubbles | Slot::CommandSearch => Some(Bounds {
                         x: 0.0,
                         y: 0.0,
                         width: width as f32,
@@ -428,6 +429,7 @@ mod allocation {
                 let Some(node) = node else {
                     continue;
                 };
+                if matches!(slot, Slot::CommandSearch) { continue; }
                 if matches!(slot, Slot::Canvas | Slot::PressureCalibration) {
                     snapshot.append_node(node);
                 } else {
@@ -500,6 +502,7 @@ mod allocation {
                 snapshot.restore();
                 snapshot.pop();
             }
+            if let Some((_, Some(node))) = nodes.iter().find(|(slot, _)| *slot == Slot::CommandSearch) { snapshot.append_node(node); }
             let composed = composed.to_node();
             match &owner {
                 Some(owner) => owner.present_chrome(target, composed, chrome_changed),
@@ -605,6 +608,7 @@ enum Slot {
     Column(u32),
     CanvasBar,
     PressureCalibration,
+    CommandSearch,
     Bubbles,
 }
 glib::wrapper! {
@@ -650,7 +654,7 @@ impl DockSurface {
         if children
             .iter()
             .rev()
-            .filter(|(slot,_)|*slot!=Slot::PressureCalibration)
+            .filter(|(slot,_)|!matches!(slot, Slot::PressureCalibration | Slot::CommandSearch))
             .take(2)
             .map(|(slot, _)| *slot)
             .eq([Slot::DrawerConnection(id), Slot::Drawer(id)])
@@ -708,9 +712,11 @@ impl DockSurface {
                 None => { overlay.1.insert_after(self, children.last().map(|(_, w)| w)); children.push(overlay); }
             }
         }
-        if let Some(index)=children.iter().position(|(s,_)|*s==Slot::PressureCalibration) && index+1!=children.len() {
-            let utility=children.remove(index);
-            utility.1.insert_after(self,children.last().map(|(_,w)|w));children.push(utility);
+        for slot in [Slot::PressureCalibration, Slot::CommandSearch] {
+            if let Some(index)=children.iter().position(|(s,_)|*s==slot) && index+1!=children.len() {
+                let utility=children.remove(index);
+                utility.1.insert_after(self,children.last().map(|(_,w)|w));children.push(utility);
+            }
         }
     }
     fn remove_slots(&self, remove: impl Fn(Slot) -> bool) {
@@ -1402,7 +1408,9 @@ impl Workspace {
         this.navigator.bind(&this);
         this.customization.bind(&this);
         this.preferences.bind(&this);
+        this.surface.add(Slot::CommandSearch, &this.command_bar.root);
         this.command_bar.bind(&this);
+        this.command_bar.root.connect_visible_notify(glib::clone!(#[weak] this, move |_| this.update_zen()));
         this.workspaces.bind(&this);
         this.zen_capy.connect_clicked(glib::clone!(
             #[weak]
@@ -1550,7 +1558,7 @@ impl Workspace {
                 {
                     return glib::Propagation::Proceed;
                 }
-                if this.command_bar.is_open() { return glib::Propagation::Proceed; }
+                if this.command_bar.owns_input() { return glib::Propagation::Proceed; }
                 if this.documents.key(&this, key, modifiers) { return glib::Propagation::Stop; }
                 if gtk::prelude::GtkWindowExt::focus(&this.window)
                     .is_some_and(|focus| crate::number_control::NumberControl::owns_native_key(&focus, key)
@@ -1583,6 +1591,7 @@ impl Workspace {
             #[weak(rename_to = this)]
             self,
             move |_, key, keycode, modifiers| {
+                if this.command_bar.owns_input() { return; }
                 if this.window.visible_dialog().is_some_and(|d| d != this.preferences.dialog)
                     && !this.preferences.editing_shortcut()
                 {
@@ -1719,6 +1728,11 @@ impl Workspace {
             #[upgrade_or]
             glib::Propagation::Proceed,
             move |controller, event| {
+                if this.command_bar.owns_input() {
+                    return if this.command_bar.capture(&this, event, this.event_point(controller)) {
+                        glib::Propagation::Stop
+                    } else { glib::Propagation::Proceed };
+                }
                 if this.dismiss_held_context(event) {
                     return glib::Propagation::Stop;
                 }
@@ -1966,7 +1980,7 @@ impl Workspace {
                 .and_then(|p| p.connection().map(|c| c.bounds)),
             held: !self.chrome_contacts.borrow().is_empty(),
             dragging: self.dragging.get(),
-            popup_open: self
+            popup_open: self.command_bar.owns_input() || self
                 .popovers
                 .borrow()
                 .iter()
@@ -2159,7 +2173,7 @@ impl Workspace {
         let gpu = self.gpu.borrow();
         let keeps = |group: u32| gpu.as_ref().is_some_and(|g| g.session.zen_keeps(group));
         for (slot, widget) in self.surface.imp().children.borrow().iter() {
-            if !matches!(slot, Slot::Canvas | Slot::CanvasBar | Slot::ZenCapy | Slot::Bubbles) {
+            if !matches!(slot, Slot::Canvas | Slot::CanvasBar | Slot::ZenCapy | Slot::Bubbles | Slot::CommandSearch) {
                 let hidden = hidden
                     && !widget.has_css_class("floating-panel")
                     && !matches!(slot, Slot::Group(id) if keeps(*id));
@@ -2203,7 +2217,7 @@ impl Workspace {
         self.gpu.borrow().as_ref().map_or(1., |g| g.session.engine().backend().display_headroom)
     }
     fn remember_command_focus(&self) {
-        if self.command_bar.is_open() || self.window.visible_dialog().is_some() { return; }
+        if self.command_bar.owns_input() || self.window.visible_dialog().is_some() { return; }
         let Some(focus) = gtk::prelude::GtkWindowExt::focus(&self.window) else { return; };
         if focus.native().is_some_and(|n| n.is::<gtk::Popover>()) { return; }
         let mut ancestor = Some(focus.clone());
@@ -2217,6 +2231,13 @@ impl Workspace {
             CommandFocus::Palette
         } else { CommandFocus::Canvas };
         if let Some(g) = self.gpu.borrow_mut().as_mut() { g.session.set_command_focus(scope); }
+    }
+
+    pub(crate) fn close_command_search(self: &Rc<Self>) {
+        let result = self.gpu.borrow_mut().as_mut().map(|g| g.session.dispatch(UiAction::CommandSearch {
+            action: CommandSearchAction::Close,
+        }));
+        if let Some(result) = result { self.changed(result); } else { self.command_bar.refresh(self, None); }
     }
 
     pub fn dispatch(self: &Rc<Self>, action: UiAction) {
@@ -3088,10 +3109,7 @@ impl Workspace {
         g.session.renderer_mut().surround=surround;
         g.session.renderer_mut().backdrop_style=style;
         g.session.renderer_mut().backdrop_hold = g.session.hold_canvas_backdrop();
-        let command_bar = g.session.state().palette.glass.transparency.enabled()
-            .then(|| self.command_bar.glass(self))
-            .flatten();
-        g.session.renderer_mut().backdrops = self.glass.borrow().iter().chain(&command_bar)
+        g.session.renderer_mut().backdrops = self.glass.borrow().iter()
             .map(|r| layer_render_wgpu::BackdropRegion {
                 bounds: r.bounds.map(|v| v * scale),
                 radii: r.radii.map(|v| v * scale),
@@ -3101,8 +3119,10 @@ impl Workspace {
     }
 
     fn present_chrome(self: &Rc<Self>, snapshot: &gtk::Snapshot, node: Option<gtk::gsk::RenderNode>, changed: bool) {
-        let Some(node) = node else { return };
+        let node = node.unwrap_or_else(|| gtk::gsk::ColorNode::new(&gdk::RGBA::TRANSPARENT,
+            &gtk::graphene::Rect::new(0., 0., self.surface.width() as f32, self.surface.height() as f32)).upcast());
         let (node, revision, initial) = self.chrome.compose(node, changed, self.chrome.state());
+        self.command_bar.selected(self, self.chrome.revision(), revision);
         if initial {
             let result = self.gpu.borrow_mut().as_mut().map(|g| {
                 self.update_canvas_chrome(g);

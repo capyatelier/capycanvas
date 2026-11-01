@@ -6803,3 +6803,43 @@ this limits attribution and does not explain or exclude the longer gaps.
 No further repeat is made because an unholdable GPU trial is active. Raw runs,
 contention records, exact phase results and the audit remain in
 `artifacts/gtk-r4.local/`; the earlier contended functional timings are excluded.
+
+## GTK retained command search
+
+Measured 2026-10-31 on RTX PRO 6000 Blackwell Max-Q, NVIDIA 615.71.09,
+bundled GTK 4.24.1 and private Mutter 50.5 at 1600 × 1000, scale 1, 120 Hz.
+The frozen comparison uses `2598263a5` and the retained-search prototype with
+identical parked input-attribution probes. Subsequent changes affect the
+search-card border CSS and native test setup. Functional checks use the final
+standard test binary. Pen-up's actual window viewport is 1200 × 900.
+
+Six pen-up pairs retain all 24 exact terminal frames per variant. Only the five
+pairs with matching acquisition settings and no CPU builds at either recorded
+boundary are pooled: 20 terminal frames and 15 following responses per variant.
+The first CPU-asymmetric pair remains separate. CPU boundaries do not measure
+continuous load.
+
+| Diagnostic | Main → retained search |
+| --- | ---: |
+| Exact terminal display median / maximum, ms | 47.050 / 52.019 → 47.085 / 51.321 |
+| Exact terminal display mean, ms | 47.025 → 46.747 |
+| Following response median / maximum, ms | 19.011 / 21.593 → 19.338 / 21.071 |
+| Full-contact consumed-packet progression median, Hz | 119.644 → 119.661 |
+| Per-contact progression gap p99 median, ms | 8.609 → 8.619 |
+| Longest progression gap, ms | 16.762 → 14.068 |
+| Separate G-Pen progression median, Hz | 119.794 → 119.861 |
+| Separate G-Pen per-contact gap p99 median, ms | 8.890 → 8.843 |
+
+The original terminal median differences are +3.008/+1.936 ms. Four additional
+alternating pairs give −3.218/−0.742/+1.101/+1.361 ms; consistently higher
+candidate medians do not repeat. This does not establish statistical equivalence.
+No foreign GPU overlap is detected in the 24 accepted timing invocations.
+
+Bundled-runtime concurrent ink/Zen runs two alternating pairs per theme.
+Consumed-packet progression medians are light 112.318 → 111.646 Hz and dark
+111.983 → 110.982 Hz; per-contact gap p99 medians are 33.456 → 34.522 ms and
+33.408 → 31.631 ms. Both variants miss the combined-motion target. G-Pen has
+two six-second trials per variant, with inferred contact bounds. Watermarks
+do not prove accepted pixels, and compositor feedback is not physical
+pen-to-photon latency. Conditions, every pair, unknowns and the phase audit
+remain in `artifacts/gtk-r3.local/`; no reference-tier qualification follows.

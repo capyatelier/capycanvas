@@ -321,7 +321,7 @@ impl Header {
             #[upgrade_or]
             glib::Propagation::Proceed,
             move |_, key, _, modifiers| {
-                if !w.header.editing.get() || w.window.visible_dialog().is_some() {
+                if !w.header.editing.get() || w.window.visible_dialog().is_some() || w.command_bar.owns_input() {
                     return glib::Propagation::Proceed;
                 }
                 if key == gdk::Key::Escape {
