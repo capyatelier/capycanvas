@@ -955,7 +955,14 @@ control on the tier devices.
    3. Residency by view: classes including Edit-ready and Ahead, view-ordered
       reads with cancellation and motion prediction, windowed mips, overviews,
       the derived cache, and the composite page cache replacing the complete
-      hierarchy; the fallback ladder and preview tails over fallbacks. Tests: a
+      hierarchy; the fallback ladder and preview tails over fallbacks; exact
+      completion of canonical image-object work for any number of visible
+      layers: admitted work keeps its source and result capacity until it
+      completes, unstarted work runs nearest the view first, and a result
+      larger than the object-result allowance is produced in bounded regions.
+      Tests: 28 distinct 4216 × 3016 photos at 100 % reach exact pixels in the
+      normal suite and on GTK; the blurred-object result-capacity case
+      completes; a
       drawing larger than the RAM budget opens, pans, paints, undoes, switches
       tabs and saves identically to an in-memory run; resident bytes for 1, 28
       and 100 layers stay within the same bound; with reads delayed or failing,
