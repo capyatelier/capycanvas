@@ -5,6 +5,8 @@ use layer_core::{binary_payload, color::{ColorProfile, DocumentColor, ProfileCha
 use serde::{Deserialize, Serialize};
 use crate::ColorFeatureError;
 
+type ProfilePayloads = Vec<std::sync::Arc<[u8]>>;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct Named {
     name: String,
@@ -260,7 +262,7 @@ impl ExportPresets {
         let (metadata, payloads) = Self::decode_envelope(bytes)?;
         Self::decode_metadata(metadata, &payloads)
     }
-    fn decode_envelope<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<(T, Vec<std::sync::Arc<[u8]>>), ColorFeatureError> {
+    fn decode_envelope<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<(T, ProfilePayloads), ColorFeatureError> {
         if bytes.len() > Self::MAX_FILE_BYTES {
             return Err(ColorFeatureError::PresetFileLimit);
         }
@@ -276,7 +278,7 @@ impl ExportPresets {
         let mut used = std::collections::BTreeSet::new();
         let profiles = metadata.profiles.into_iter().map(|p| {
             if let ProfileReference::Embedded(id) = &p.profile { used.insert(*id); }
-            let profile = p.profile.resolve(&payloads)?;
+            let profile = p.profile.resolve(payloads)?;
             Ok(p.with_profile(profile))
         }).collect::<Result<_, String>>()?;
         if used.len() != payloads.len() { return Err(ColorFeatureError::PresetUnusedProfile); }
