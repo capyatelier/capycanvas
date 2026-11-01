@@ -226,6 +226,45 @@ mod tests {
     }
 
     #[test]
+    fn zero_width_allocations_defer_measurements_until_the_panel_can_be_measured() {
+        let mut layout=crate::DockLayout::editor_default();
+        layout.bands=vec![crate::DockBand {id:1,edge:crate::Edge::Left,extent:206.,alignment:None,
+            root:crate::DockNode::Tabs {id:2,panels:vec![Panel::Commands],active:Panel::Commands,tab_style:Default::default()}}];
+        layout.validate().unwrap();
+        for scale in [1.5,2.] {
+            let mut cache=cache();cache.identities.push(cache.identities[0].clone());cache.identities[0].panel=Panel::Commands;
+            assert_eq!(cache.with_reports(vec![report(&cache,0.,0.)]).unwrap_err(),"Invalid panel measurement");
+            let mut measured=report(&cache,200.,0.);measured.context.scale=scale;
+            let context=measured.context.clone();
+            let cache=cache.accept(PanelMeasurementBatch {context:context.clone(),reports:vec![measured]}).unwrap();
+            let mut input=crate::LayoutResolveInput::new(&layout,None).with_cache(cache.clone());
+            for (width,allocated,offered) in [
+                (18.,0.,None),
+                (18.+1./256.,1./256.,None),
+                (18.+1./64.,1./64.,Some((1./64.,false))),
+                (800.,200.,Some((200.,true))),
+            ] {
+                let viewport=[width,352.];let resolved=input.resolve(viewport);
+                assert_eq!(resolved.groups.iter().find(|group|group.active==Panel::Commands).unwrap().bounds.width,allocated);
+                let pending=resolved.measurement_requests.iter().find(|request|request.identity.panel==Panel::Commands);
+                assert_eq!(pending.map(|request|(request.width,request.body_measured)),offered);
+                assert!(pending.is_none_or(|request|request.tab_measured));
+                assert!(resolved.measurement_requests.iter().all(|request|request.width>0.));
+                assert_eq!(resolved.measurement_requests.iter().find(|request|request.identity.panel==Panel::Histogram).unwrap().width,
+                    Panel::Histogram.default_width(width));
+                let projected=input.measured_layout(viewport).measurements;
+                let commands=projected.iter().find(|measurement|measurement.panel==Panel::Commands).unwrap();
+                assert_eq!((commands.tab_widths,commands.content_height),([110.,36.],0.));
+                let roundtrip:crate::LayoutResolveInput=serde_json::from_value(serde_json::to_value(&input).unwrap()).unwrap();
+                assert_eq!(serde_json::to_value(roundtrip.resolve(viewport)).unwrap(),serde_json::to_value(&resolved).unwrap());
+                let reports=resolved.measurement_requests.into_iter().map(|request| {
+                    let mut measured=report(&cache,request.width,0.);measured.request=request;measured.context=context.clone();measured
+                }).collect();
+                input=input.with_panel_measurements(PanelMeasurementBatch {context:context.clone(),reports}).unwrap();
+            }
+        }
+    }
+    #[test]
     fn width_changes_select_only_matching_body_facts_and_keep_tabs() {
         let cache=cache();let cache=cache.with_reports(vec![report(&cache,200.,600.)]).unwrap();
         let different=request(&cache,300.);

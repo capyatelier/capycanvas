@@ -1124,7 +1124,9 @@ impl<'a> LayoutResolveInput<'a> {
     }
     pub fn resolve(&self,viewport:[f32;2])->ResolvedLayout {
         let mut result=if self.cache.is_some(){self.measured_layout(viewport).resolved(viewport)}else{self.layout.resolved(viewport)};
-        if let Some(cache)=&self.cache {result.measurement_requests=self.requests(cache,&result);}
+        if let Some(cache)=&self.cache {
+            result.measurement_requests=self.requests(cache,&result).into_iter().filter(|request|request.width>0.).collect();
+        }
         for group in &mut result.groups {group.zen_kept=self.keeps(group.id);}
         result
     }
