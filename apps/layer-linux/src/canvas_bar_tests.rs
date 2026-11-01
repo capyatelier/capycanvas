@@ -388,13 +388,14 @@ fn native_canvas_bar_distorts_a_pixel_selection() {
 }
 
 #[test]
-#[ignore = "isolated native-input.js --native-test=native_canvas_bar_warps_a_selection --tablet"]
+#[ignore = "LAYER_MOTION_VIEWPORT=3000x2600 workspace-motion.sh gtk --native-test=native_canvas_bar_warps_a_selection --tablet"]
 fn native_canvas_bar_warps_a_selection() {
     let app = native_test_app("art.capycanvas.CanvasBarWarp");
     let w = fixture_workspace(&app);
     w.window.present();
     w.window.maximize();
     pump(900);
+    assert!(w.surface.width() > 2048 && w.surface.height() > 2048, "use LAYER_MOTION_VIEWPORT=3000x2600");
     w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
     w.dispatch(UiAction::SetColor { rgba: [0.12, 0.38, 0.72, 1.] });
     w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
@@ -1165,7 +1166,7 @@ fn native_move_drags_selected_pixels() {
 }
 
 #[test]
-#[ignore = "isolated compositor, hardware GPU and native mouse delivery"]
+#[ignore = "LAYER_MOTION_VIEWPORT=3000x2600 workspace-motion.sh gtk --native-test=native_distort_near_collinear_corner_recovery"]
 #[allow(deprecated)]
 fn native_distort_near_collinear_corner_recovery() {
     let app=native_test_app("art.capycanvas.DistortCornerRecovery");
@@ -1177,6 +1178,7 @@ fn native_distort_near_collinear_corner_recovery() {
     let mut project=layer_core::Document::from_artwork(project.artwork).unwrap();project.working=working;
     let w=Workspace::with_project(&app,Some((project,None)));
     w.window.maximize();w.window.present();super::new_photo::ready(&w);
+    assert!(w.surface.width() > 2048 && w.surface.height() > 2048, "use LAYER_MOTION_VIEWPORT=3000x2600");
     if let Ok(theme)=std::env::var("CAPY_NATIVE_TEST_THEME") {
         w.dispatch(UiAction::SetTheme {theme:Some(if theme=="dark" {layer_ui::Theme::Dark}else{layer_ui::Theme::Light})});
     }
