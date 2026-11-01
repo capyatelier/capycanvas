@@ -345,19 +345,20 @@ foreach($tool in $tools){
 $toolGeometry|ConvertTo-Json -Depth 8|Set-Content (Join-Path $OutputDirectory 'tool-settings-geometry.json')
 # Exercise real keyboard routing through the native spin field and Rust policy.
 Select-Tool 'auto_select'
-Draft 'gap_closing' '6 * 2'
+Invoke-Id 'tool-choice-region-edges-2'
+Draft 'edge_offset' '6 * 2'
 [CapyRowPointer]::Key($ProcessId,0x0D)
-Wait-Until {(Value 'gap_closing') -eq 12} 'Enter did not commit the spin expression'
+Wait-Until {(Value 'edge_offset') -eq 12} 'Enter did not commit the spin expression'
 [CapyRowPointer]::Key($ProcessId,0x26)
-Wait-Until {(Value 'gap_closing') -eq 13} 'Up did not step the spin control'
+Wait-Until {(Value 'edge_offset') -eq 13} 'Up did not step the spin control'
 [CapyRowPointer]::Key($ProcessId,0x28)
-Wait-Until {(Value 'gap_closing') -eq 12} 'Down did not step the spin control'
-Draft 'gap_closing' 'invalid'
+Wait-Until {(Value 'edge_offset') -eq 12} 'Down did not step the spin control'
+Draft 'edge_offset' 'invalid'
 [CapyRowPointer]::Key($ProcessId,0x26)
-Wait-Until {(Field 'gap_closing').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq 'invalid'} 'Invalid spin input was discarded'
+Wait-Until {(Field 'edge_offset').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq 'invalid'} 'Invalid spin input was discarded'
 [CapyRowPointer]::Key($ProcessId,0x1B)
-Wait-Until {(Field 'gap_closing').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq '12'} 'Escape did not cancel the invalid spin draft'
-if((Value 'gap_closing') -ne 12){throw 'Invalid spin input changed the shared value'}
+Wait-Until {(Field 'edge_offset').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq '12'} 'Escape did not cancel the invalid spin draft'
+if((Value 'edge_offset') -ne 12){throw 'Invalid spin input changed the shared value'}
 # A long brush schema must retain its actual native scroll container and offset
 # when a visible slider changes a value. An offscreen UIA slider intentionally
 # scrolls into view, so it cannot test this retention invariant.
