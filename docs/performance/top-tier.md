@@ -5235,6 +5235,45 @@ leave reference-tier qualification pending. Exact binaries, paired CPU/rate/gap
 values, residency, setup failure and repeat evidence are in
 `artifacts/issue24-impl/m11-preview-performance.md`.
 
+### GTK shared recipes and tab activation
+
+Measured 2026-11-01 on the same RTX PRO 6000 and private 2560 × 1600/120 Hz
+display, using the immutable M1.2 `9673fda69` control and the M1.3 candidate on
+`23e3840e4`. Three interleaved completed pairs use identical test workloads.
+The stroke has a 4096² ProPhoto U16 document, 32 paint layers plus Paper and a
+720 px Palette Knife, with a 1200 × 900 canvas viewport. Navigation uses the
+synthetic 9504 × 6336 photo and the exact M1.2 five-phase test body at 2560 × 1600.
+
+| Desktop diagnostic, median of three trials | M1.2 | M1.3 candidate |
+| --- | ---: | ---: |
+| First measured tab readiness endpoint, ms | 315.280 | 264.499 |
+| Later keyboard tab readiness endpoint, ms | 391.659 | 394.072 |
+| Stroke canvas presentations/s | 119.931 | 119.879 |
+| Stroke inter-present gap p99, ms | 8.549 | 8.626 |
+| Stroke render-thread CPU p95, ms | 2.771 | 2.909 |
+| Stroke worker elapsed p95, ms | 2.794 | 2.949 |
+| Stroke GPU execution p95, ms | 3.634 | 3.836 |
+| Navigation canvas presentations/s | 108.449 | 120.001 |
+| Navigation inter-present gap p99, ms | 16.883 | 8.556 |
+
+Tab endpoints run from the injected selection trigger to the next test request
+after canvas readiness. They include 60 ms event pacing, 180 ms settling and
+readiness pumping; they do not measure first artwork presentation. Four attempted
+tab pairs produced three completed pairs. One control failed during preparation
+because its fixed 30 ms paint pump returned no sample; that run and its unpaired
+candidate remain in the raw results. The normal helper now waits for its paint
+callback before consuming the sample.
+
+Motion rates count actual canvas presentations in moving windows after 100 ms
+contact-edge trimming. Missing camera attribution on the control prevents a
+fresh-pose or fresh-ink claim. CPU p95 ranges overlap (2.490–3.125 → 2.871–3.414 ms);
+the median CPU and GPU costs increase by 0.138 and 0.202 ms while stroke cadence
+stays steady. One candidate whole-process stroke run takes 17.25 s versus about
+13 s for later runs and is retained. The candidate includes upstream admission
+changes, so the navigation gain is not isolated to recipe sharing. These desktop
+diagnostics do not qualify the reference tablet. Raw trials and load observations
+are under `/mnt/localssd/capycanvas7-issue24-impl/m13-gtk/`.
+
 ### GTK window corner geometry diagnostic
 
 Measured 2026-10-26 on the same RTX PRO 6000, GTK 4.22.5 and Mutter 50.5,

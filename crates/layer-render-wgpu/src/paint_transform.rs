@@ -217,7 +217,7 @@ impl PaintTransforms {
         let state = &mut self.0[0];
         if state.preview.is_some() { return Ok(()); }
         if let Some(startup) = &r.startup {
-            let mip = r.display_pipelines.get_or_insert_with(|| display_mips::Pipelines::new(&r.device));
+            let mip = r.display_pipelines.get_or_insert_with(|| r.recipes.display.clone());
             let ready = startup.compiler.require([&r.scene_pipelines.source.pipeline], startup::OTHER)
                 & startup.compiler.require([&state.color.display_pipeline()], startup::OTHER)
                 & startup.compiler.require([&mip.reduce, &mip.fused_reduce], startup::OTHER)
@@ -1752,7 +1752,7 @@ impl ImageTransformState {
         }
         if self.reduced.as_ref().unwrap().pending.is_none() {return Ok(());}
         r.drain_image_decodes(encoder)?;
-        let pipelines=r.display_pipelines.take().unwrap_or_else(||display_mips::Pipelines::new(&r.device));
+        let pipelines=r.display_pipelines.take().unwrap_or_else(||r.recipes.display.clone());
         let result=(|| {
             while let Some(page)=self.reduced.as_ref().unwrap().pending.as_ref().unwrap().front().copied() {
                 let input=self.reduced.as_ref().unwrap();let phase=input.phase;let level=input.level;
@@ -1835,7 +1835,7 @@ impl ImageTransformState {
         self.reduced.as_mut().unwrap().fine.as_mut().unwrap().restart_discarded();
         if self.reduced.as_ref().unwrap().fine.as_ref().unwrap().complete {return Ok(());}
         r.drain_image_decodes(encoder)?;
-        let pipelines=r.display_pipelines.take().unwrap_or_else(||display_mips::Pipelines::new(&r.device));
+        let pipelines=r.display_pipelines.take().unwrap_or_else(||r.recipes.display.clone());
         let result=(|| {
             loop {
                 let page=self.reduced.as_ref().unwrap().fine.as_ref().unwrap().pages.front().copied();

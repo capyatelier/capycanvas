@@ -189,7 +189,7 @@ import UIKit
                             DispatchQueue.main.async { [weak self] in
                                 guard let self else { return }
                                 if let error { report(error) }
-                                finish(error == nil)
+                                if error == nil { self.store?.recovery.checkpoint() }; finish(error == nil)
                             }
                         }
                     case .failure(let error): fail(error.localizedDescription)
@@ -618,35 +618,23 @@ import UIKit
         })
     }
     private func openItem(_ item: PhotoItem) {
-        store?.recovery.flush { [weak self] saved in
+        task(.open) { [weak self] task in
             guard let self else { return }
-            guard saved else { fail(store?.recovery.failure ?? "Could not preserve the current drawing for recovery"); return }
-            task(.open) { [weak self] task in
-                guard let self else { return }
-                let id = requestID; loadingPhoto = true
-                item.load { [weak self, weak task] result in
-                    guard let self, let task, requestID == id, !finishing else { return }
-                    loadingPhoto = false
-                    if cancelled { finish(); return }
-                    do {
-                        switch try result.get() {
-                        case .file(let url): prepare(task, url: url) { try task.read(from: url) }
-                        case .image(let data): prepare(task, url: nil) { try task.read(image: data, name: item.name) }
-                        }
-                    } catch { fail(error.localizedDescription) }
-                }
+            let id = requestID; loadingPhoto = true
+            item.load { [weak self, weak task] result in
+                guard let self, let task, requestID == id, !finishing else { return }
+                loadingPhoto = false
+                if cancelled { finish(); return }
+                do {
+                    switch try result.get() {
+                    case .file(let url): prepare(task, url: url) { try task.read(from: url) }
+                    case .image(let data): prepare(task, url: nil) { try task.read(image: data, name: item.name) }
+                    }
+                } catch { fail(error.localizedDescription) }
             }
         }
     }
     private func open(_ url: URL?) {
-        // Preserve the outgoing drawing's checkpoint before it becomes inactive.
-        store?.recovery.flush { [weak self] saved in
-            guard let self else { return }
-            guard saved else { fail(store?.recovery.failure ?? "Could not preserve the current drawing for recovery"); return }
-            beginOpen(url)
-        }
-    }
-    private func beginOpen(_ url: URL?) {
         task(.open) { [weak self] task in
             self?.prepare(task, url: url) { try task.read(from: url) }
         }
@@ -690,7 +678,7 @@ import UIKit
                             else {
                                 self.destination = url
                             }
-                            self.finish(error == nil)
+                            if error == nil { self.store?.recovery.checkpoint() }; self.finish(error == nil)
                         }
                     }
                 }
@@ -782,7 +770,7 @@ import UIKit
                             self?.store?.native?.finishProject(task, opening: true, title: url.lastPathComponent, url: nil) { [weak self] error in
                                 DispatchQueue.main.async {
                                     if let error { self?.report(error) }
-                                    self?.finish(error == nil)
+                                    if error == nil { self?.store?.recovery.checkpoint() }; self?.finish(error == nil)
                                 }
                             }
                         }

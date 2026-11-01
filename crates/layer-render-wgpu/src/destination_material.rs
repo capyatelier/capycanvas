@@ -122,6 +122,7 @@ pub(super) fn blended(operation: MaterialOperation) -> bool {
 
 type KernelKey = (u32, usize, Entry, u8, bool, bool, bool);
 
+#[derive(Clone)]
 pub(super) struct Pipelines {
     layouts: [wgpu::BindGroupLayout; 4],
     kernels: std::collections::BTreeMap<KernelKey, Deferred<wgpu::ComputePipeline>>,

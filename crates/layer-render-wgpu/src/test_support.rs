@@ -147,7 +147,7 @@ pub(crate) fn dry_display(r: &mut WgpuRasterizer, batch: &DabBatch, neighborhood
 
 /// Dry kernels as a device without read-write storage builds them.
 pub(crate) fn write_only_dry_material(r: &mut WgpuRasterizer) {
-    r.pipelines.dry_material = crate::dry_material::Pipelines::new(&r.device,
+    Arc::make_mut(&mut r.pipelines).dry_material = crate::dry_material::Pipelines::new(&r.device,
         [&r.target_layout, &r.material_layout, &r.advanced_texture_layout], false, &crate::dry_material::output_layouts(&r.device, false));
 }
 

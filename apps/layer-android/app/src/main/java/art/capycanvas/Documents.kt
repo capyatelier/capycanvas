@@ -326,7 +326,6 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                     if (location!!.getString("name").substringAfterLast('.').lowercase() !in extensions) error(deliveryMessage("export_extension", "extension" to extensions.first()))
                 }
                 if(kind=="export")host.withNative {Native.dispatch(it,obj("type" to "prepare_export","id" to id,"owner" to document.getLong("owner"),"recipe" to exportRecipe,"location" to location).toString())}
-                if(kind=="open"||kind=="new")host.drawingTabs.trim()
                 if (kind in listOf("export", "open", "new")) { control = Native.captureControl(); exportControl = control; exportCancelled = false; publishing = false; exporting = kind == "export"; opening = !exporting }
                 if (kind == "export") withTimeout(30_000) {
                     while (task == 0L) {

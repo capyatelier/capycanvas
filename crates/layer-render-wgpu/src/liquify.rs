@@ -286,7 +286,7 @@ impl Liquify {
     }
 
     pub fn new(r: &WgpuRasterizer) -> Self {
-        Self { pipelines: r.liquify_pipelines.get_or_init(|| Arc::new(Pipelines::new(r))).clone(), strokes: BTreeMap::new(),
+        Self { pipelines: r.recipes.liquify.get_or_init(|| Arc::new(Pipelines::new(r))).clone(), strokes: BTreeMap::new(),
             unchanged_previews: Default::default(),
             empty: Tile::new(r, PixelRect::EMPTY),
             scratch_map: std::array::from_fn(|_| Tile::new(r, PixelRect::EMPTY)),
@@ -365,7 +365,7 @@ impl Liquify {
             base_mip_level: level, mip_level_count: Some(1), ..descriptor.clone()
         })).collect();
         let refs: Vec<_> = views.iter().collect();
-        let pipelines = r.liquify_pipelines.get().expect("liquify prepared");
+        let pipelines = r.recipes.liquify.get().expect("liquify prepared");
         let mut reductions = display_mips::CompleteUpdates::from_level(&r.device, &pipelines.mips,
             display_mips::Plan::at([PAGE_SIZE; 2], 8), 0, &refs);
         reductions.tile(encoder, [0; 2]);

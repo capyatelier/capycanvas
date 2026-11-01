@@ -64,14 +64,14 @@ impl WebApp {
             layer_ui::clipboard_document(images.sources, self.session.state().settings.photo_open, self.session.localization()).map_err(js)?
         };
         let live = self.session.engine().backend().0.as_ref().ok_or_else(|| js("Wait for the canvas"))?;
-        let (adapter, device, queue) = (live.adapter().clone(), live.device().clone(), live.queue().clone());
+        let factory = live.renderer_factory();
         let (epoch, revision) = (self.session.state().document_file.epoch, self.session.engine().document().revision);
         let viewport = self.session.state().camera.viewport;
         let brush = self.session.engine().configured_brush().clone();
         let localization = self.session.localization().clone();
         self.documents.admission(&self.session.retained_document_tiles()).admit(&project).map_err(|reason| js(reason.message(&localization)))?;
         Ok(future_to_promise(async move {
-            let candidate = prepare_session(project, adapter, device, queue, &brush, viewport, localization, Some(&cancelled)).await?;
+            let candidate = prepare_session(project, factory, &brush, viewport, localization, Some(&cancelled)).await?;
             Ok(WebProject { session: Some(Box::new(candidate)), request: id, copy_owner: None, epoch, revision, source: layer_ui::ImportSource::Photo,
                 placed: None, source_name: String::new(), target: None, package: None, lost }.into())
         }))
@@ -199,7 +199,7 @@ impl WebApp {
         candidate.workflow.identity.validate(&self.session, candidate.control.is_cancelled(), device_current).map_err(js)?;
         let project = candidate.workflow.copy_project(candidate.control.is_cancelled()).map_err(js)?.clone();
         let live = self.session.engine().backend().0.as_ref().ok_or_else(|| js("Wait for the canvas"))?;
-        let (adapter, device, queue) = (live.adapter().clone(), live.device().clone(), live.queue().clone());
+        let factory = live.renderer_factory();
         let request = candidate.workflow.identity.request();
         let epoch = self.session.state().document_file.epoch;
         let revision = self.session.engine().document().revision;
@@ -214,7 +214,7 @@ impl WebApp {
         Ok(future_to_promise(async move {
             output::cancelled(&control)?;
             let cancelled = wasm_bindgen::closure::Closure::<dyn Fn() -> bool>::new(move || control.is_cancelled());
-            let session = prepare_session(project, adapter, device, queue, &brush, viewport, localization,
+            let session = prepare_session(project, factory, &brush, viewport, localization,
                 Some(cancelled.as_ref().unchecked_ref())).await?;
             Ok(WebProject { session: Some(Box::new(session)), request, copy_owner, epoch, revision,
                 source: layer_ui::ImportSource::Photo, placed: None, source_name: String::new(),
@@ -270,11 +270,7 @@ impl WebApp {
             .0
             .as_ref()
             .ok_or_else(|| js("Wait for the canvas"))?;
-        let (adapter, device, queue) = (
-            live.adapter().clone(),
-            live.device().clone(),
-            live.queue().clone(),
-        );
+        let factory = live.renderer_factory();
         let lost = self.gpu_owner().ok_or_else(|| js("Wait for the canvas"))?;
         let viewport = self.session.state().camera.viewport;
         let localization = self.session.localization().clone();
@@ -297,7 +293,7 @@ impl WebApp {
             // Yield before decoding so the file-progress UI is painted first.
             yield_browser().await?;
             let limits = ProjectLimits {
-                dimension: device
+                dimension: factory.device()
                     .limits()
                     .max_texture_dimension_2d
                     .min(ProjectLimits::default().dimension),
@@ -369,7 +365,7 @@ impl WebApp {
                 .into());
             }
             admission.admit(&project).map_err(|reason|js(reason.message(&localization)))?;
-            let prepared=prepare_session(project,adapter,device,queue,&brush,viewport,localization,cancelled.as_ref()).await;
+            let prepared=prepare_session(project,factory,&brush,viewport,localization,cancelled.as_ref()).await;
             let mut candidate=match prepared {
                 Ok(candidate)=>candidate,
                 Err(error)=>{
@@ -486,18 +482,12 @@ pub fn raster_worker_properties(metadata: &str) -> Result<JsValue, JsValue> {
 }
 
 pub(super) async fn prepare_session(
-    project:layer_core::Document,adapter:wgpu::Adapter,device:wgpu::Device,queue:wgpu::Queue,
+    project:layer_core::Document,factory:RendererFactory,
     brush:&layer_core::BrushSnapshot,viewport:[u32;2],localization:std::sync::Arc<layer_ui::Localizer>,
     cancelled:Option<&js_sys::Function>,
 )->Result<UiSession<AttachedRenderer>,JsValue>{
     hdr::admit_document(&project)?;
-    let mut renderer = WgpuRasterizer::from_wgpu_native_staged(
-        adapter,
-        device,
-        queue,
-        project.composition().color,
-    )
-    .map_err(js)?;
+    let mut renderer = factory.rasterizer(project.composition().color).map_err(js)?;
     raster_worker::install(&mut renderer);
     let programs=project.artwork.effects.iter().map(|(_,_,d)|d.program.clone()).collect::<Vec<_>>();
     let mut validating = !programs.is_empty();
@@ -531,7 +521,7 @@ pub(super) async fn prepare_session(
         yield_browser().await?;
     }
     let mut candidate = UiSession::from_project_localized(
-        AttachedRenderer(Some(Box::new(renderer))),
+        AttachedRenderer(Some(renderer)),
         project,
         None,
         viewport,

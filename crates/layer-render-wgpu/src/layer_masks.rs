@@ -58,6 +58,9 @@ pub(super) struct MaskRenderer {
     pub(super) preview_bases: BTreeMap<(SourceTarget, [u32; 2]), MaskPage>,
     command_definitions: BTreeMap<CommandCoverage, layer_core::CoverageSnapshot>,
     pub snapshots: BTreeMap<CommandCoverage, SnapshotMasks>,
+    pipelines: Arc<Pipelines>,
+}
+pub(super) struct Pipelines {
     pub(super) brush: [Deferred<wgpu::RenderPipeline>; 6],
     pub(super) initialize: Deferred<wgpu::RenderPipeline>,
     init_layout: wgpu::BindGroupLayout,
@@ -69,13 +72,18 @@ impl MaskRenderer {
             else { usize::from(matches!(style.tip, BrushTip::Mask(_)))*2 };
         shape+usize::from(style.mode == DabMode::Erase)
     }
-    pub fn new(
-        device: &PipelineDevice,
-        style: &wgpu::BindGroupLayout,
-        target: &wgpu::BindGroupLayout,
-        texture: &wgpu::BindGroupLayout,
-        advanced_texture: &wgpu::BindGroupLayout,
-    ) -> Self {
+    pub fn from_pipelines(pipelines: Arc<Pipelines>) -> Self {
+        Self { definitions: BTreeMap::new(), pages: BTreeMap::new(), command_pages: BTreeMap::new(),
+            preview_bases: BTreeMap::new(), command_definitions: BTreeMap::new(), snapshots: BTreeMap::new(), pipelines }
+    }
+}
+impl std::ops::Deref for MaskRenderer {
+    type Target = Pipelines;
+    fn deref(&self) -> &Self::Target { &self.pipelines }
+}
+impl Pipelines {
+    pub fn new(device: &PipelineDevice, style: &wgpu::BindGroupLayout, target: &wgpu::BindGroupLayout,
+        texture: &wgpu::BindGroupLayout, advanced_texture: &wgpu::BindGroupLayout) -> Self {
         let shader = {
             let device = device.clone();
             Deferred::new(move || {
@@ -194,12 +202,6 @@ impl MaskRenderer {
             })
         };
         Self {
-            definitions: BTreeMap::new(),
-            pages: BTreeMap::new(),
-            command_pages: BTreeMap::new(),
-            preview_bases: BTreeMap::new(),
-            command_definitions: BTreeMap::new(),
-            snapshots: BTreeMap::new(),
             brush,
             initialize,
             init_layout,
@@ -211,6 +213,8 @@ impl MaskRenderer {
             }),
         }
     }
+}
+impl MaskRenderer {
     pub fn bind_snapshot(&mut self, command: CommandCoverage) -> Option<SnapshotMasks> {
         let snapshot = self.snapshots.get_mut(&command)?;
         Some(SnapshotMasks {
@@ -278,7 +282,7 @@ impl MaskRenderer {
             let needed = coverage.selection.as_ref().map_or_else(Default::default,
                 |selection| page_coordinates(pixel_rect(selection.bounds(), source.domain)).collect());
             initialize_pages(&mut self.command_pages, *key, source, coverage.selection.as_ref(), needed, regions.is_some(),
-                device, encoder, selections, &self.initialize, &self.init_layout, &self.empty_selection)?;
+                device, encoder, selections, &self.pipelines.initialize, &self.pipelines.init_layout, &self.pipelines.empty_selection)?;
         }
         self.snapshots.retain(|key, _| commands.get(key).is_some_and(|operation| matches!(operation.kind,
             layer_core::RasterOperationKind::Bake { .. } | layer_core::RasterOperationKind::FrequencyDetail { .. })));
@@ -327,7 +331,7 @@ impl MaskRenderer {
                 needed.extend(page_coordinates(batch_pixel_rect(batch, extent)));
             }
             initialize_pages(&mut self.pages, target, mask, None, needed, regions.is_some(),
-                device, encoder, selections, &self.initialize, &self.init_layout, &self.empty_selection)?;
+                device, encoder, selections, &self.pipelines.initialize, &self.pipelines.init_layout, &self.pipelines.empty_selection)?;
         }
         Ok(())
     }

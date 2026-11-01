@@ -434,22 +434,26 @@ fn packed_parts(packed: &JsValue) -> Result<(String, js_sys::Array), JsValue> {
 }
 
 thread_local! {
-    static SNAPSHOT_GPU: RefCell<Option<(layer_core::color::DocumentColor, layer_render_wgpu::snapshot::SnapshotGpu)>> = const {RefCell::new(None)};
+    static SNAPSHOT_GPU: RefCell<Option<(RendererFactory, layer_core::color::DocumentColor, layer_render_wgpu::snapshot::SnapshotGpu)>> = const {RefCell::new(None)};
 }
 pub(super) async fn snapshot_gpu(color:layer_core::color::DocumentColor) -> Result<layer_render_wgpu::snapshot::SnapshotGpu,JsValue> {
-    if let Some(gpu)=SNAPSHOT_GPU.with(|cache|cache.borrow().as_ref().filter(|(cached,_)|*cached==color).map(|(_,gpu)|gpu.clone())) {return Ok(gpu);}
-    SNAPSHOT_GPU.with(|cache|*cache.borrow_mut()=None);
-    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-    descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
-    let instance = wgpu::Instance::new(descriptor);
-    let (adapter, device, queue) = request_device(&instance, None, None).await?;
-    device.set_device_lost_callback(|reason, message| {
-        gpu_diagnostics::report("worker", "device_lost", format!("{reason:?}: {message}"));
-    });
-    let mut renderer = WgpuRasterizer::from_wgpu_native_staged(adapter, device, queue, color).map_err(js)?;
+    let cached=SNAPSHOT_GPU.with(|cache|cache.borrow().clone());
+    if let Some((_,cached,gpu))=&cached && *cached==color {return Ok(gpu.clone());}
+    let factory=if let Some((factory,_,_))=cached {factory} else {
+        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
+        let instance = wgpu::Instance::new(descriptor);
+        let (adapter, device, queue) = request_device(&instance, None, None).await?;
+        device.set_device_lost_callback(|reason, message| {
+            gpu_diagnostics::report("worker", "device_lost", format!("{reason:?}: {message}"));
+            SNAPSHOT_GPU.with(|cache|*cache.borrow_mut()=None);
+        });
+        RendererFactory::new(adapter, device, queue)
+    };
+    let mut renderer = factory.rasterizer(color).map_err(js)?;
     renderer.set_browser_raster_encoder(Rc::new(|bytes, descriptors| Box::pin(async move { encode_tiles(&bytes, descriptors) })));
     let gpu=renderer.snapshot_gpu();
-    SNAPSHOT_GPU.with(|cache|*cache.borrow_mut()=Some((color,gpu.clone())));
+    SNAPSHOT_GPU.with(|cache|*cache.borrow_mut()=Some((factory,color,gpu.clone())));
     Ok(gpu)
 }
 

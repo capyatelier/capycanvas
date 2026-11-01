@@ -55,15 +55,12 @@ import UniformTypeIdentifiers
         native.prepareDocumentSwitch { [weak self] error in DispatchQueue.main.async {
             guard let self else { completion(false); return }
             guard error == nil else { self.busy = false; store.projectFiles.error = error; completion(false); return }
-            store.recovery.flush { [weak self] saved in
+            native.switchDocument(id) { [weak self] error in DispatchQueue.main.async {
                 guard let self else { completion(false); return }
-                guard saved else { self.busy = false; store.projectFiles.error = store.recovery.failure ?? store.bootstrap["action_failed"].string; completion(false); return }
-                native.switchDocument(id) { [weak self] error in DispatchQueue.main.async {
-                    guard let self else { completion(false); return }
-                    self.busy = false; if let error { store.projectFiles.error = error }
-                    store.wake?(); completion(error == nil)
-                } }
-            }
+                self.busy = false
+                if let error { store.projectFiles.error = error } else { store.recovery.checkpoint() }
+                store.wake?(); completion(error == nil)
+            } }
         } }
     }
     func adjacent(_ forward: Bool) {

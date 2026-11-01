@@ -1,5 +1,5 @@
 //! Window drawing ownership. Rust owns membership, admission, history and backing;
-//! WinUI owns tab capture and presentation. The file worker builds renderers.
+//! WinUI owns tab capture and presentation. A drawing worker builds renderers.
 use super::*;
 use layer_host::window::{Activation, OpenAdoption, TabRequest};
 use serde_json::Value;
@@ -64,7 +64,7 @@ impl DocumentService {
         self.window.gpu.as_ref().map(|g| &g.device)
     }
     pub(crate) fn window_close_ready(&self, host: &NativeHost) -> bool {
-        (self.close_window || self.window.documents.order().len()==1) && host.session.state().document_file.close_ready
+        !self.window.documents.trim_in_flight() && (self.close_window || self.window.documents.order().len()==1) && host.session.state().document_file.close_ready
     }
     #[cfg_attr(all(not(target_os = "windows"), not(test)), expect(dead_code, reason = "Used by the Windows host"))]
     pub(crate) fn tabs_view(&self, host: &NativeHost) -> Value {
@@ -86,14 +86,13 @@ impl DocumentService {
             && self.workflow.is_none()
             && !self.workflow_running
             && !self.activating
-            && !self.spilling
             && self.deferred_action.is_none()
             && self.package.as_ref().is_none_or(|package| package.writing.is_none())
             && self.recovery.as_ref().is_none_or(|r| !r.restoring())
     }
-    fn document_retired(&mut self, host: &mut NativeHost) -> Result<(), String> {
+    fn document_retired(&mut self, host: &mut NativeHost, closing: bool) -> Result<(), String> {
         self.tone.clear();
-        self.proof.stop()?;
+        if closing { self.proof.stop()?; } else { self.proof.retire()?; }
         host.proof = Default::default();
         Ok(())
     }
@@ -103,7 +102,7 @@ impl DocumentService {
                 Some(layer_ui::DocumentTransportRefusal::PaintingUnavailable.message(host.session.localization()).to_string());
             return Ok(());
         }
-        self.worker.submit(Job::Activate(Box::new(activation)))?;
+        self.activation_worker.submit(Job::Activate(Box::new(activation)))?;
         self.activating = true;
         Ok(())
     }
@@ -114,7 +113,7 @@ impl DocumentService {
         else {
             return Ok(());
         };
-        self.document_retired(host)?;
+        self.document_retired(host, closing)?;
         if let Some(closed) = closed {
             self.worker.retire(closed.session);
         }
@@ -157,7 +156,8 @@ impl DocumentService {
         let mut candidate = Some(candidate);
         match self.adopt_candidate(host, active, &mut candidate) {
             Ok(retired) => {
-                self.document_retired(host)?;
+                self.document_retired(host, false)?;
+                if let Some(recovery) = &mut self.recovery { recovery.checkpoint(); }
                 self.worker.retire_renderer(Renderer(retired));
                 Ok(())
             }
@@ -195,10 +195,22 @@ impl DocumentService {
             })()
         };
         match result {
-            Ok(retired)=>{for renderer in retired{self.worker.retire_renderer(Renderer(Some(renderer)));}self.document_retired(host)?;self.recovery.as_mut().unwrap().complete_restore(Ok(()))?;},
+            Ok(retired)=>{for renderer in retired{self.worker.retire_renderer(Renderer(Some(renderer)));}self.document_retired(host, false)?;self.recovery.as_mut().unwrap().complete_restore(Ok(()))?;},
             Err(error)=>{for (_,candidate) in candidates{self.worker.retire(candidate);}self.recovery.as_mut().unwrap().complete_restore(Err(error))?;}
         }
         host.invalidate_snapshot();
+        Ok(())
+    }
+    pub(super) fn trim_next(&mut self, token: u64) -> Result<(), String> {
+        if let Some(tiles) = self.window.documents.spill_candidate() {
+            if let Err(error) = self.worker.submit(Job::Spill { tiles }) {
+                self.window.documents.complete_trim(token, Err(error.clone()));
+                return Err(error);
+            }
+            self.trim_token = Some(token);
+        } else if self.window.documents.complete_trim(token, Ok(())) {
+            self.trim_next(token)?;
+        }
         Ok(())
     }
     pub(super) fn activated(
@@ -207,6 +219,8 @@ impl DocumentService {
         completed: Result<Completed, String>,
     ) -> Result<(), String> {
         self.activating = false;
+        if self.window.documents.trim_in_flight() { self.window.documents.request_trim(); }
+        if let Some(recovery) = &mut self.recovery { recovery.checkpoint(); }
         match completed {
             Ok(Completed::Activated(mut activation)) => {
                 match self.window.resume(host, &mut activation) {
@@ -240,7 +254,8 @@ impl DocumentService {
         host: &mut NativeHost,
         action: Action,
     ) -> Result<(), String> {
-        if !self.idle() || self.close_window || host.session.state().document_file.close_ready {
+        if !self.idle() || self.close_window || host.session.state().document_file.close_ready
+            || self.window.documents.trim_in_flight() && matches!(&action, Action::Close { .. }) {
             return Err(layer_ui::DocumentTransportRefusal::ChangeInProgress.message(host.session.localization()).to_string());
         }
         if matches!(action, Action::Select { .. } | Action::Adjacent { .. } | Action::Close { .. }) {
@@ -319,7 +334,7 @@ impl DocumentService {
         }
         if self.prepared_close.is_some()&&!host.session.state().document_file.close_ready {let prepared=self.prepared_close.take().unwrap();self.window.cancel_close(host,prepared)?;}
         if !self.close_window && host.session.state().document_file.close_ready && self.prepared_close.is_none() {
-            if !self.idle()||!self.window.adoption_ready(host)? {return Ok(());}
+            if self.window.documents.trim_in_flight()||!self.idle()||!self.window.adoption_ready(host)? {return Ok(());}
             let options=host.renderer_options();self.prepared_close=Some(self.window.prepare_close(host,options)?);
         }
         if let Some(prepared)=&self.prepared_close {self.window.validate_close(host,prepared)?;}
@@ -349,34 +364,36 @@ impl DocumentService {
             host.error = Some(layer_ui::document_recovery_unavailable(host.session.localization(), &error));
             host.invalidate_snapshot();
         }
-        if self.close_next && self.idle() && host.session.can_park_document() {
+        if self.close_next && !self.window.documents.trim_in_flight() && self.idle() && host.session.can_park_document() {
             self.close_next = false;
             host.dispatch(layer_ui::UiAction::Invoke {
                 command: layer_ui::CommandId::CloseDocument,
             })?;
         }
-        if self.close_window && self.idle() && !host.session.state().document_file.busy && !host.session.state().document_file.close_ready {
+        if self.close_window && !self.window.documents.trim_in_flight() && self.idle() && !host.session.state().document_file.busy && !host.session.state().document_file.close_ready {
             if self.quit_pending {
                 self.quit_pending=false;let previous=host.session.state().revision;let change=host.session.request_session_close()?;host.apply_change(previous,change);
             }else{self.close_window=false;}
         }
         if !self.close_window && host.session.state().document_file.close_ready
             && self.window.documents.order().len() > 1
+            && !self.window.documents.trim_in_flight()
             && self.idle()
             && self.recovery.as_ref().is_none_or(|r| r.close_ready())
         {
             let prepared=self.prepared_close.take().ok_or("The drawing close is not prepared")?;
             let (activation,closed)=self.window.commit_close(host,prepared,|_|{})?;
-            self.document_retired(host)?;if let Some(closed)=closed{self.worker.retire(closed.session);}self.activate(host,activation)?;
+            self.document_retired(host, true)?;if let Some(closed)=closed{self.worker.retire(closed.session);}self.activate(host,activation)?;
             self.close_next = false;
         }
         if self.idle()
+            && !self.window.documents.trim_in_flight()
             && host.session.can_park_document()
             && self.window.documents.storage_error().is_none()
-            && let Some(tiles) = self.window.documents.spill_candidate()
+            && self.window.documents.spill_candidate().is_some()
+            && let Some(token) = self.window.documents.request_trim()
         {
-            self.spilling = true;
-            self.worker.submit(Job::Spill { tiles })?;
+            self.trim_next(token)?;
             host.invalidate_snapshot();
         }
         Ok(())

@@ -92,9 +92,7 @@ pub struct SnapshotGpu {
     analyses: Vec<Arc<crate::effect_analysis::Prepared>>,
     #[cfg(target_arch = "wasm32")]
     analysis_backing_waiter: Option<crate::effect_analysis::BackingWaiter>,
-    scene_pipelines: scene::Pipelines,
-    transforms: Arc<paint_transform::Recipes>,
-    adapter: wgpu::Adapter,
+    factory: RendererFactory,
     device: PipelineDevice,
     queue: wgpu::Queue,
 }
@@ -109,15 +107,13 @@ impl WgpuRasterizer {
             analyses: self.effect_analyses.clone(),
             #[cfg(target_arch = "wasm32")]
             analysis_backing_waiter: self.analysis_backing_waiter.clone(),
-            scene_pipelines: self.scene_pipelines.clone(),
-            transforms: self.transforms.as_ref().unwrap().recipes(),
+            factory: self.factory.clone(),
             #[cfg(target_arch = "wasm32")]
             encoder: self.browser_raster_encoder(),
             #[cfg(target_arch = "wasm32")]
             image_decoder: self.browser_image_decoder.clone(),
             #[cfg(target_arch = "wasm32")]
             nearest_coordinate_decoder: self.browser_nearest_coordinate_decoder.clone(),
-            adapter: self.adapter.clone(),
             device: self.device.clone(),
             queue: self.queue.clone(),
         }
@@ -324,12 +320,8 @@ impl SnapshotRenderer {
             }
         }
         control.check()?;
-        let mut renderer = WgpuRasterizer::native_capture_on_gpu(gpu.adapter.clone(), gpu.device.clone(), gpu.queue.clone(), color)?;
+        let mut renderer = WgpuRasterizer::native_capture_on_factory(gpu.factory.clone(), gpu.device.clone(), color)?;
         if let Some(native) = renderer.native_edit.as_mut() { native.color_cache_bytes = 0; }
-        if gpu.device.working_space() == color.space && gpu.device.hdr() == color.depth.is_float() {
-            renderer.scene_pipelines = gpu.scene_pipelines.clone(); renderer.scene = None;
-            renderer.transforms = Some(paint_transform::PaintTransforms::from_recipes(&gpu.transforms));
-        }
         #[cfg(target_arch = "wasm32")]
         if let Some(encoder) = gpu.encoder.clone() { renderer.set_browser_raster_encoder(encoder); }
         #[cfg(target_arch = "wasm32")]

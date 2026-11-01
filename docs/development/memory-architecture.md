@@ -809,9 +809,8 @@ about 750 tiles a second, the same starvation as in milestone 1.
   captures to be owned: by the backing barrier while renderers are dropped
   (milestone 1), and by capture leases that survive with the parked renderer
   once renderers are kept (milestone 2). Recovery writes and spills keep running
-  in the background, but the switch still captures an immutable snapshot of the
-  departing drawing at once, so recovery observes every edit made before the
-  switch; scheduled recovery also checks parked drawings with unsaved changes.
+  in the background. Activation requests an ordinary checkpoint of every drawing,
+  including parked sessions; parked artwork does not change between checkpoints.
   Once the session store exists a checkpoint writes only metadata, because tiles
   are already on disk. No host awaits a disk write, a recovery flush or a tile
   load before showing the incoming drawing, and none joins a render thread or
@@ -892,9 +891,10 @@ control on the tier devices.
       drop the outgoing renderer, no other drawing's captures run during
       painting, so device-wide priority waits for milestone 2.
    3. Tab switches stop waiting for recovery writes, spills and the outgoing
-      render thread: the switch captures the departing snapshot, writes it in the
-      background, and retires the renderer on a worker. The backing barrier
-      stays. GTK keeps one GPU device and its recipes for the process. Tests: a
+      render thread: activation requests an ordinary checkpoint of every tab,
+      including parked drawings, and retires the renderer on a worker. The backing
+      barrier stays. Native windows share one process GPU device and factory
+      recipes; Web retains its factory in each canvas and worker context. Tests: a
       switch with a recovery write and a spill pending presents the incoming
       drawing without waiting; an edit made just before a switch is restored
       after a crash once its background recovery write is durable.

@@ -106,9 +106,18 @@ fn apple_tabs_preserve_history_pixels_and_disk_parking() {
         let second = app.document().clone();
         app.borrow().window.documents.budget.inactive_ram = 0;
         switch(&app, 1, false);
-        assert_eq!(tabs(&app)["resident_bytes"], 0);
         assert_project_document(&app.document(), &first);
         assert_eq!(app.document().working, first.working);
+        let storage = unsafe { capy_apple_document_storage(app.0) };
+        assert_ne!(storage, 0);
+        loop {
+            assert_eq!(unsafe { capy_document_prepare(storage) }, 0);
+            let again = unsafe { capy_apple_document_resume(app.0, storage) };
+            assert!(matches!(again, 0 | 1), "{:?}", app.borrow().error);
+            if again == 0 { break; }
+        }
+        unsafe { capy_document_free(storage) };
+        assert_eq!(tabs(&app)["resident_bytes"], 0);
         app.invoke("undo");
         app.draw_until_idle();
         assert_ne!(

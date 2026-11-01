@@ -409,6 +409,7 @@ impl Service {
         }
         Ok(())
     }
+    pub fn checkpoint(&mut self) { self.next_observation = Instant::now(); }
     pub fn poll<P: Parked>(
         &mut self,
         host: &mut NativeHost,

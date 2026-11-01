@@ -86,6 +86,8 @@ pub type BrowserNearestCoordinateDecoder = std::rc::Rc<dyn Fn([f64;6],[u32;2],u3
 use builtin_masks::builtin_masks;
 use deferred::{Compilation, CompileMode, Deferred};
 mod pipeline_device;
+mod renderer_factory;
+pub use renderer_factory::RendererFactory;
 use pipeline_device::PipelineDevice;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod startup_pixels_tests;
@@ -900,6 +902,7 @@ struct TextureSet {
     relief: f32,
 }
 
+#[derive(Clone)]
 struct Pipelines {
     dry_material: dry_material::Pipelines,
     destination_material: destination_material::Pipelines,
@@ -959,7 +962,7 @@ pub struct WgpuRasterizer {
     paper_overlay: Option<layer_render::PaperOverlay>,
     paper_overlay_drawn: std::cell::Cell<bool>,
     paper_lighting: Option<paper::PaperLighting>,
-    paper_export: Option<paper::ExportShade>,
+    paper_export: Option<Arc<paper::ExportShade>>,
     vector_preview: Option<layer_render::VectorPreview>,
     vector_preview_shown: Option<(OccurrenceHandle, u64, DocRect)>,
     vector_preview_drawn: Option<layer_render::VectorPreview>,
@@ -1081,8 +1084,6 @@ pub struct WgpuRasterizer {
     material_gather: Option<material_sources::Gather>,
     retouch: Option<Box<retouch_sources::RetouchSources>>,
     liquify: Option<Box<liquify::Liquify>>,
-    liquify_pipelines: std::sync::OnceLock<Arc<liquify::Pipelines>>,
-    retouch_pipelines: Option<Arc<retouch_sources::Pipelines>>,
     edge_layout: wgpu::BindGroupLayout,
     watercolor_layout: wgpu::BindGroupLayout,
     transport_layout: wgpu::BindGroupLayout,
@@ -1112,7 +1113,9 @@ pub struct WgpuRasterizer {
     reservoir: BrushReservoir,
     dab_buffer: wgpu::Buffer,
     dab_capacity_bytes: u64,
-    pipelines: Pipelines,
+    pipelines: Arc<Pipelines>,
+    factory: RendererFactory,
+    recipes: Arc<renderer_factory::Recipes>,
     scene_pipelines: scene::Pipelines,
     portable_blend: portable_blend::Renderer,
     last_submission: Option<wgpu::SubmissionIndex>,
@@ -1141,6 +1144,7 @@ impl WgpuRasterizer {
     pub fn queue(&self) -> &wgpu::Queue {
         &self.queue
     }
+    pub fn renderer_factory(&self) -> RendererFactory { self.factory.clone() }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn headless_instance() -> wgpu::Instance {
@@ -1156,7 +1160,7 @@ impl WgpuRasterizer {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    async fn headless(space: layer_core::color::RgbSpace, initialization: Initialization, omitted: wgpu::Features) -> Result<Self, GpuRasterError> {
+    async fn headless(color: layer_core::color::DocumentColor, initialization: Initialization, omitted: wgpu::Features) -> Result<Self, GpuRasterError> {
         let instance = Self::headless_instance();
         let indexed_adapter = std::env::var("LAYER_GPU_INDEX")
             .ok()
@@ -1198,56 +1202,38 @@ impl WgpuRasterizer {
 
         Self::from_wgpu_inner(
             adapter,
-            PipelineDevice::from(device).with_working_space(space),
+            PipelineDevice::from(device).with_working_space(color.space).with_depth(color.depth),
             queue,
             initialization,
         ).map(|renderer| *renderer)
     }
 
+    #[cfg(any(not(target_arch = "wasm32"), test))]
     fn from_wgpu_inner(
         adapter: wgpu::Adapter,
         device: PipelineDevice,
         queue: wgpu::Queue,
         initialization: Initialization,
     ) -> Result<Box<Self>, GpuRasterError> {
+        Self::from_factory_inner(RendererFactory::with_device(adapter, &device, queue), device, initialization)
+    }
+    fn from_factory_inner(factory: RendererFactory, device: PipelineDevice, initialization: Initialization) -> Result<Box<Self>, GpuRasterError> {
+        let (adapter, queue) = (factory.adapter().clone(), factory.queue().clone());
         if adapter.get_info().device_type == wgpu::DeviceType::Cpu && !software_adapter_tests() {
             return Err(GpuRasterError::HardwareAdapterRequired);
         }
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("layer linear clamp sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Linear,
-            ..Default::default()
-        });
-        let brush_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("layer repeating brush sampler"),
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            address_mode_w: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Linear,
-            ..Default::default()
-        });
-        let style_layout = create_style_layout(&device);
-        let texture_layout = create_texture_layout(&device, true);
-        let float_texture_layout = create_texture_layout(&device, device.float32_filterable());
-        let advanced_texture_layout = create_advanced_texture_layout(&device);
-        let target_layout = create_target_layout(&device);
-        let material_layout = create_material_layout(&device);
-        let edge_layout = fragment_textures_layout(&device, 10, "layer post-stroke edge sources");
-        let watercolor_layout = bindings::layout(&device, "layer watercolor pigment and wetness neighborhood",
-            &(0..10).map(|i| bindings::texture(i, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, false)).collect::<Vec<_>>());
-        let transport_layout = bindings::layout(&device, "layer watercolor transport sources",
-            &(0..10).map(|i| bindings::texture(i, wgpu::ShaderStages::COMPUTE, false)).chain([
-                bindings::storage_texture(10, wgpu::ShaderStages::COMPUTE, device.working_format(), wgpu::StorageTextureAccess::WriteOnly),
-                bindings::storage_texture(11, wgpu::ShaderStages::COMPUTE, device.scalar_format(), wgpu::StorageTextureAccess::WriteOnly),
-                bindings::buffer(12, wgpu::ShaderStages::COMPUTE, wgpu::BufferBindingType::Uniform, true, NonZeroU64::new(160)),
-            ]).collect::<Vec<_>>());
+        let (device, recipes) = factory.resources(&device);
+        let sampler = recipes.sampler.clone();
+        let brush_sampler = recipes.brush_sampler.clone();
+        let style_layout = recipes.style_layout.clone();
+        let texture_layout = recipes.texture_layout.clone();
+        let float_texture_layout = recipes.float_texture_layout.clone();
+        let advanced_texture_layout = recipes.advanced_texture_layout.clone();
+        let target_layout = recipes.target_layout.clone();
+        let material_layout = recipes.material_layout.clone();
+        let edge_layout = recipes.edge_layout.clone();
+        let watercolor_layout = recipes.watercolor_layout.clone();
+        let transport_layout = recipes.transport_layout.clone();
         let style_alignment = device.limits().min_uniform_buffer_offset_alignment as u64;
         let style_stride =
             (mem::size_of::<StyleGpu>() as u64).div_ceil(style_alignment) * style_alignment;
@@ -1318,33 +1304,22 @@ impl WgpuRasterizer {
                 | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let pipelines = create_pipelines(
-            &device,
-            PipelineLayouts {
-                style: &style_layout,
-                texture: &texture_layout,
-                float_texture: &float_texture_layout,
-                advanced_texture: &advanced_texture_layout,
-                target: &target_layout,
-                material: &material_layout,
-                edge: &edge_layout,
-                watercolor: &watercolor_layout,
-                transport: &transport_layout,
-            },
-        );
+        let pipelines = recipes.pipelines.clone();
 
         let uploads = Uploads::new(&device, 64 * 1024);
         let restore_uploads = Uploads::new(&device, 64 * 1024);
         let layer_masks =
-            layer_masks::MaskRenderer::new(&device, &style_layout, &target_layout, &texture_layout, &advanced_texture_layout);
-        let papers = paper::Papers::new(&device);
+            layer_masks::MaskRenderer::from_pipelines(recipes.masks.clone());
+        let papers = paper::Papers::from_recipes(recipes.paper.clone());
         let telemetry = telemetry::Telemetry::new(&device, &queue);
-        let selection_clip = selection_clip::SelectionClip::new(&device);
-        let scene_pipelines = scene::Pipelines::new(&device);
+        let selection_clip = selection_clip::SelectionClip::from_pipelines(recipes.selection.clone());
+        let scene_pipelines = recipes.scene.clone();
         let changed_cells = Some(changed_cells::ChangedCells::new(&device));
         let portable_blend = portable_blend::Renderer::new(&device);
-        let transforms = Some(paint_transform::PaintTransforms::new(&device));
+        let transforms = Some(paint_transform::PaintTransforms::from_recipes(&recipes.transforms));
         let mut renderer = Box::new(Self {
+            factory,
+            recipes: recipes.clone(),
             snapshot_worker: initialization == Initialization::Snapshot,
             snapshot_cancelled: None,
             startup: None,
@@ -1491,8 +1466,6 @@ impl WgpuRasterizer {
             material_gather: None,
             retouch: None,
             liquify: None,
-            liquify_pipelines: Default::default(),
-            retouch_pipelines: None,
             edge_layout,
             watercolor_layout,
             transport_layout,
@@ -1845,7 +1818,7 @@ impl WgpuRasterizer {
             self.require_paper_slope(&binding, startup::OTHER)?;
         }
         let tile = paper::PaperTile::new(&binding.surface)?;
-        let export = self.paper_export.get_or_insert_with(|| paper::ExportShade::new(&self.device));
+        let export = self.paper_export.get_or_insert_with(|| self.recipes.paper_export.get_or_init(|| Arc::new(paper::ExportShade::new(&self.device))).clone());
         let Some(slope) = self.papers.slope(&tile.id(&binding.surface)) else { return Ok(None) };
         let offset = scene.evaluation_offset64();
         let origin = [f64::from(origin[0]) + offset[0], f64::from(origin[1]) + offset[1]];

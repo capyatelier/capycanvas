@@ -389,9 +389,9 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     try{
       app.prepare_document_switch();await proof.pause();await readyToPark();
       await action();
-      await trim();
-      await recovery.ensure();
       await resumeCanvas();
+      trim().catch(message);
+      recovery.autosave().catch(message);
     }finally{changing=false;blocker.remove();proof.resume();tabs.refresh(true);pruneHandles();wake();}
   }
   async function select(id){
@@ -411,7 +411,6 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     dispatch({type:'invoke',command:'close_document'});
   }
   async function openDrawing({request=null,file=null,bytes}){
-    await trim();
     if(request===null){
       const change=app.dispatch({type:'invoke',command:'open_document'});
       const pending=app.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='open');

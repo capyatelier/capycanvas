@@ -216,7 +216,7 @@ After changing the tablet proxy, run its tests with
 
 | Journey | Needs |
 | --- | --- |
-| `native_session_restart`, `native_session_restart_saved_origins`, `native_document_files`, `native_object_only_shared_images` | `--native-recovery` |
+| `native_session_restart`, `native_session_restart_saved_origins`, `native_document_files`, `native_object_only_shared_images`, `native_document_tabs_blocked_writer_keeps_canvas_live` | `--native-recovery` |
 | `native_dialog_lines_match_the_palette` | `--native-storage` |
 | `native_workspace_switcher_press_feedback` | `--native-storage`, then again with `--tablet` |
 | `native_three_finger_scrub`, `native_pressure_calibration` | `--tablet` |

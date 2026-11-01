@@ -18,6 +18,8 @@ struct Job {
     budget: usize,
     error: Option<CString>,
     storage_error: Option<String>,
+    trim: Option<u64>,
+    wait: Option<layer_ui::TrimWait>,
 }
 pub struct CapyDocumentTask(Mutex<Job>);
 impl CapyApple {
@@ -65,6 +67,8 @@ impl CapyApple {
             budget: self.window.documents.budget.inactive_ram,
             error: None,
             storage_error: None,
+            trim: None,
+            wait: None,
         })))
     }
 }
@@ -149,7 +153,21 @@ pub unsafe extern "C" fn capy_apple_document_close_validate(app: u64, task: u64)
 /// Serial owner only; schedules inactive backing I/O without changing selection.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_document_storage(app: u64) -> u64 {
-    handles::app(app).map_or(0, |a| handles::store(*a.document_job(None)))
+    let Some(mut a) = handles::app(app) else { return 0; };
+    let Some(token) = a.window.documents.request_trim() else { return 0; };
+    let task = a.document_job(None);
+    task.0.lock().unwrap_or_else(|e| e.into_inner()).trim = Some(token);
+    handles::store(*task)
+}
+/// # Safety
+/// Serial owner; the returned job waits only on the independent drawing worker.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_document_trim_wait(app: u64) -> u64 {
+    let Some(a) = handles::app(app) else { return 0; };
+    let Some(wait) = a.window.documents.trim_wait() else { return 0; };
+    let task = a.document_job(None);
+    task.0.lock().unwrap_or_else(|e| e.into_inner()).wait = Some(wait);
+    handles::store(*task)
 }
 /// # Safety
 /// Worker only; job stays alive and has no concurrent caller.
@@ -170,15 +188,18 @@ pub unsafe extern "C" fn capy_document_prepare(task: u64) -> i32 {
 fn prepare_document(task: &CapyDocumentTask) -> i32 {
     let mut job = task.0.lock().unwrap_or_else(|e| e.into_inner());
     let result = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
-        for tiles in &job.tiles {
-            if layer_core::raster_storage::resident_tile_bytes(job.tiles.iter()) <= job.budget {
-                break;
-            }
-            if let Err(e) = layer_core::temp_files::directory()
-                .and_then(|directory| layer_core::raster_storage::spill_to_directory(tiles, directory))
-            {
-                job.storage_error = Some(e);
-                break;
+        if let Some(wait) = &job.wait { return wait.wait_on_worker(); }
+        if job.trim.is_some() {
+            for tiles in &job.tiles {
+                if layer_core::raster_storage::resident_tile_bytes(job.tiles.iter()) <= job.budget {
+                    break;
+                }
+                if let Err(e) = layer_core::temp_files::directory()
+                    .and_then(|directory| layer_core::raster_storage::spill_to_directory(tiles, directory))
+                {
+                    job.storage_error = Some(e);
+                    break;
+                }
             }
         }
         match &mut job.activation {
@@ -209,9 +230,16 @@ pub unsafe extern "C" fn capy_apple_document_resume(
     a.perform(|a| {
         let mut job = task.0.lock().unwrap_or_else(|e| e.into_inner());
         let job = &mut *job;
-        a.window
-            .documents
-            .storage_completed(job.storage_error.clone().map_or(Ok(()), Err));
+        if let Some(token) = job.trim {
+            let result = job.error.as_ref().map(|error| error.to_string_lossy().into_owned()).or_else(|| job.storage_error.clone()).map_or(Ok(()), Err);
+            if a.window.documents.complete_trim(token, result) {
+                job.tiles = a.window.documents.parked().map(|(_, parked)| parked.tiles.clone()).collect();
+                job.budget = a.window.documents.budget.inactive_ram;
+                job.error = None;
+                job.storage_error = None;
+                return Ok(true);
+            }
+        }
         let renderer = match &mut job.activation {
             Some(activation) if job.error.is_none() => a.window.resume(&a.host, activation)?,
             _ => None,
@@ -228,9 +256,9 @@ pub unsafe extern "C" fn capy_apple_document_resume(
         } else {
             a.host.invalidate_snapshot();
         }
-        Ok(())
+        Ok(false)
     })
-    .map_or(-1, |_| 0)
+    .map_or(-1, i32::from)
 }
 /// # Safety
 /// No outstanding job calls. Resource destruction belongs on the file worker.

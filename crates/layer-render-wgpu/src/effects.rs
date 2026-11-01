@@ -187,25 +187,30 @@ struct Instance {
     lookups: Vec<preparation::State>,
     offsets: Vec<u32>,
 }
-pub(super) struct Effects {
+type PipelineRecipe = (Vec<Arc<EffectProgram>>, Stage, Pipeline, bool);
+pub(super) struct Recipes {
     layout: wgpu::BindGroupLayout,
     pub masks: wgpu::BindGroupLayout,
     pub outputs: Vec<wgpu::BindGroupLayout>,
     pub sources: wgpu::BindGroupLayout,
     pipeline_layout: wgpu::PipelineLayout,
     compute_layout: Vec<wgpu::PipelineLayout>,
-    pipelines: Vec<(
-        Vec<Arc<EffectProgram>>,
-        Stage,
-        Pipeline,
-        bool,
-    )>,
+    pipelines: std::sync::Mutex<Vec<PipelineRecipe>>,
+    preparation: Arc<preparation::Recipes>,
+}
+pub(super) struct Effects {
+    recipes: Arc<Recipes>,
+    pipelines: Vec<PipelineRecipe>,
     // Parameters and GPU tables are shared by every pass of the same chain.
     instances: HashMap<(Vec<OccurrenceHandle>, u32), Instance>,
     // Reuse the lookup key; ordinary painting/animation does not repack inputs.
     ids: (Vec<OccurrenceHandle>, u32),
     preparation: preparation::Preparation,
     pub compilations: u64,
+}
+impl std::ops::Deref for Effects {
+    type Target = Recipes;
+    fn deref(&self) -> &Self::Target { &self.recipes }
 }
 impl Effects {
     pub(super) fn chain_ready(&self, scene: SceneView<'_>, layers: &[OccurrenceHandle], execution: Execution, space: layer_core::BlendSpace) -> bool {
@@ -290,12 +295,7 @@ impl Effects {
     }
     pub fn fork(&self) -> Self {
         Self {
-            layout: self.layout.clone(),
-            masks: self.masks.clone(),
-            outputs: self.outputs.clone(),
-            sources: self.sources.clone(),
-            pipeline_layout: self.pipeline_layout.clone(),
-            compute_layout: self.compute_layout.clone(),
+            recipes: self.recipes.clone(),
             pipelines: self.pipelines.clone(),
             instances: HashMap::new(),
             ids: (Vec::new(), 0),
@@ -331,40 +331,42 @@ impl Effects {
     pub fn storage_bytes(&self) -> u64 {
         self.instances.values().map(|i| i.buffer.size()).sum()
     }
-    pub fn new(
-        r: &WgpuRasterizer,
-        uniforms: &wgpu::BindGroupLayout,
-    ) -> Self {
-        if let Some(cache) = &r.validated_effects {
-            return cache.fork();
-        }
+    pub fn new(r: &WgpuRasterizer, uniforms: &wgpu::BindGroupLayout) -> Self {
+        if let Some(cache) = &r.validated_effects { return cache.fork(); }
+        let recipes = r.recipes.effects.get_or_init(|| Arc::new(Recipes::new(&r.device, uniforms))).clone();
+        Self { preparation: preparation::Preparation::from_recipes(recipes.preparation.clone()), recipes,
+            pipelines: Vec::new(), instances: HashMap::new(), ids: (Vec::new(), 0), compilations: 0 }
+    }
+}
+impl Recipes {
+    fn new(device: &PipelineDevice, uniforms: &wgpu::BindGroupLayout) -> Self {
         let visibility=wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE;
-        let sources = crate::bindings::layout(&r.device, "effect sources", &[
-            crate::bindings::float_texture(0,visibility,&r.device),
-            crate::bindings::float_texture(1,visibility,&r.device),
+        let sources = crate::bindings::layout(device, "effect sources", &[
+            crate::bindings::float_texture(0,visibility,device),
+            crate::bindings::float_texture(1,visibility,device),
             crate::bindings::sampler(2,visibility,wgpu::SamplerBindingType::Filtering),
         ]);
-        let layout = crate::bindings::layout(&r.device, "effect parameters", &[crate::bindings::buffer(
+        let layout = crate::bindings::layout(device, "effect parameters", &[crate::bindings::buffer(
             0,
             visibility,
             wgpu::BufferBindingType::Storage { read_only: true },
             false,
             NonZeroU64::new(16),
         ), crate::bindings::buffer(1, visibility, wgpu::BufferBindingType::Storage {read_only: true}, false, NonZeroU64::new(16))]);
-        let masks = crate::bindings::layout(&r.device, "effect mask inputs",
-            &(0..MASK_SLOTS).map(|i| crate::bindings::float_texture(i as u32, visibility, &r.device))
+        let masks = crate::bindings::layout(device, "effect mask inputs",
+            &(0..MASK_SLOTS).map(|i| crate::bindings::float_texture(i as u32, visibility, device))
                 .chain([crate::bindings::buffer(MASK_SLOTS as u32,wgpu::ShaderStages::FRAGMENT,
                     wgpu::BufferBindingType::Storage {read_only:true},false,NonZeroU64::new(20))]).collect::<Vec<_>>());
-        let outputs:Vec<_>=(1..=MASK_SLOTS).map(|count|crate::bindings::layout(&r.device,"pointwise effect destination",
-            &(0..count).map(|i|crate::bindings::float_texture(i as u32,wgpu::ShaderStages::COMPUTE,&r.device))
+        let outputs:Vec<_>=(1..=MASK_SLOTS).map(|count|crate::bindings::layout(device,"pointwise effect destination",
+            &(0..count).map(|i|crate::bindings::float_texture(i as u32,wgpu::ShaderStages::COMPUTE,device))
                 .chain([crate::bindings::storage_texture(count as u32,wgpu::ShaderStages::COMPUTE,
                     wgpu::TextureFormat::Rgba32Float,wgpu::StorageTextureAccess::WriteOnly)]).collect::<Vec<_>>())).collect();
-        let pipeline_layout = r.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("WGSL effects ABI 5"),
                 bind_group_layouts: &[Some(uniforms), Some(&sources), Some(&layout), Some(&masks)],
                 immediate_size: 0,
             });
-        let compute_layout=outputs.iter().map(|outputs|r.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let compute_layout=outputs.iter().map(|outputs|device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label:Some("pointwise effects ABI 5"),
             bind_group_layouts:&[Some(uniforms),Some(&sources),Some(&layout),Some(outputs)],immediate_size:0,
         })).collect();
@@ -375,13 +377,12 @@ impl Effects {
             sources,
             pipeline_layout,
             compute_layout,
-            pipelines: Vec::new(),
-            instances: HashMap::new(),
-            ids: (Vec::new(), 0),
-            preparation: preparation::Preparation::new(&r.device),
-            compilations: 0,
+            pipelines: Default::default(),
+            preparation: Arc::new(preparation::Recipes::new(device)),
         }
     }
+}
+impl Effects {
     pub fn retain(&mut self, scene: SceneView<'_>) {
         self.instances.retain(|(ids, _), instance| ids.iter().zip(&instance.effects).all(|(id, old)|
             scene.position(*id).is_some() && scene.includes(*id) && scene.effect(*id).is_some_and(|effect|
@@ -466,6 +467,12 @@ impl Effects {
         {
             (pipeline.clone(), *original_independent)
         } else {
+            let cached = self.recipes.pipelines.lock().unwrap().iter()
+                .find(|(p, s, _, _)| *p == programs && *s == stage).cloned();
+            if let Some((_, _, pipeline, original_independent)) = cached {
+                self.pipelines.push((programs.clone(), stage, pipeline.clone(), original_independent));
+                (pipeline, original_independent)
+            } else {
             let mut source = shader_source(
                 &programs,
                 &offsets,
@@ -485,13 +492,13 @@ impl Effects {
                     source: wgpu::ShaderSource::Wgsl(source.into()),
                 });
             let pipeline = if compute {
-                let (device,layout)=(r.device().clone(),self.compute_layout[programs.len().min(MASK_SLOTS)-1].clone());
+                let (device,layout)=(r.device().for_recipe(),self.compute_layout[programs.len().min(MASK_SLOTS)-1].clone());
                 Pipeline::Compute(Deferred::pipeline(move |mode|mode.compute(&device,&wgpu::ComputePipelineDescriptor {
                     label:Some("pointwise effect tiles"),layout:Some(&layout),module:&module,entry_point:Some("effect_compute"),
                     compilation_options:Default::default(),cache:None,
                 })))
             } else {
-                let (device, layout) = (r.device().clone(), self.pipeline_layout.clone());
+                let (device, layout) = (r.device().for_recipe(), self.pipeline_layout.clone());
                 Pipeline::Render(Deferred::pipeline(move |mode| {
                 fullscreen_pipeline_recipe(
                     mode,
@@ -505,9 +512,19 @@ impl Effects {
                 )
                 }))
             };
+            let (pipeline, original_independent) = {
+                let mut shared = self.recipes.pipelines.lock().unwrap();
+                if let Some((_, _, pipeline, original_independent)) = shared.iter().find(|(p, s, _, _)| *p == programs && *s == stage) {
+                    (pipeline.clone(), *original_independent)
+                } else {
+                    shared.push((programs.clone(), stage, pipeline.clone(), original_independent));
+                    self.compilations += 1;
+                    (pipeline, original_independent)
+                }
+            };
             self.pipelines.push((programs, stage, pipeline.clone(), original_independent));
-            self.compilations += 1;
             (pipeline, original_independent)
+            }
         };
         let reusable = self
             .instances

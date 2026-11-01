@@ -8,11 +8,7 @@ use std::{
 use wgpu::util::DeviceExt;
 
 pub(super) struct SelectionClip {
-    pub(super) crossings: Deferred<wgpu::ComputePipeline>,
-    pub(super) fill: Deferred<wgpu::ComputePipeline>,
-    pub(super) resample: Deferred<wgpu::ComputePipeline>,
-    layout: wgpu::BindGroupLayout,
-    no_positions: wgpu::TextureView,
+    pipelines: Arc<Pipelines>,
     pub buffer: Option<wgpu::Buffer>,
     pub binding: Option<wgpu::BindGroup>,
     geometry: Option<Arc<layer_core::Selection>>,
@@ -23,7 +19,24 @@ pub(super) struct SelectionClip {
     pixel_clock: u64,
     pixels_bytes: u64,
 }
+pub(super) struct Pipelines {
+    pub(super) crossings: Deferred<wgpu::ComputePipeline>,
+    pub(super) fill: Deferred<wgpu::ComputePipeline>,
+    pub(super) resample: Deferred<wgpu::ComputePipeline>,
+    layout: wgpu::BindGroupLayout,
+    no_positions: wgpu::TextureView,
+}
+impl std::ops::Deref for SelectionClip {
+    type Target = Pipelines;
+    fn deref(&self) -> &Self::Target { &self.pipelines }
+}
 impl SelectionClip {
+    pub fn from_pipelines(pipelines: Arc<Pipelines>) -> Self {
+        Self { pipelines, buffer: None, binding: None, geometry: None, region: None, extent: None, bytes: 0,
+            pixels: BTreeMap::new(), pixels_bytes: 0, pixel_clock: 0 }
+    }
+}
+impl Pipelines {
     pub fn new(device: &PipelineDevice) -> Self {
         let layout = crate::bindings::layout(device, "selection raster inputs", &[
             buffer_entry(0, wgpu::BufferBindingType::Uniform),
@@ -48,17 +61,10 @@ impl SelectionClip {
             resample: Deferred::compute(device, "resample packed selection", &pipeline_layout, &resample_shader, "resample"),
             layout,
             no_positions: create_target(device, [1, 1], pixel_transform::POSITIONS_FORMAT, "selection resample without positions").1,
-            buffer: None,
-            binding: None,
-            geometry: None,
-            region: None,
-            extent: None,
-            bytes: 0,
-            pixels: BTreeMap::new(),
-            pixels_bytes: 0,
-            pixel_clock: 0,
         }
     }
+}
+impl SelectionClip {
     pub fn pipelines(&self) -> [&Deferred<wgpu::ComputePipeline>; 3] {
         [&self.crossings, &self.fill, &self.resample]
     }

@@ -112,10 +112,11 @@ impl Compiler {
         });
     }
     pub fn pipeline<T: Send + Sync + 'static>(&self, pipeline: &Deferred<T>, priority: u8) {
-        if pipeline.promote(priority) {
+        if let Some(promotion) = pipeline.promote(priority) {
             let pipeline = pipeline.clone();
             self.submit(Job { priority, tracked: true, independent: pipeline.async_pipeline() && priority < OTHER, work: Box::new(move || {
                 pipeline.compile();
+                drop(promotion);
                 Ok(())
             }) });
         }
@@ -207,6 +208,23 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "shader jobs did not finish");
             std::thread::sleep(Duration::from_millis(1));
         }
+    }
+
+    #[test]
+    fn canceled_compiler_releases_shared_recipe_admission() {
+        let (sent, received) = mpsc::channel();
+        let recipe = Deferred::new(move || { sent.send(()).unwrap(); 17 });
+        let canceled = Compiler::with_workers(1).unwrap();
+        canceled.pipeline(&recipe, DOCUMENT);
+        drop(canceled);
+        let next = Compiler::with_workers(1).unwrap();
+        next.pipeline(&recipe, DOCUMENT);
+        next.start();
+        received.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(*recipe.compile(), 17);
+        assert!(received.try_recv().is_err());
+        drop(next);
+        finish_shader_compiler_shutdown();
     }
 
     #[test]

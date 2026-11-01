@@ -58,7 +58,7 @@ fn shared_bounds_pipeline_preserves_alpha_across_working_depth_and_space_changes
         (SampleDepth::F32, layer_core::color::RgbSpace::Srgb),
     ] {
         let color = DocumentColor { depth, space };
-        let renderer = WgpuRasterizer::native_capture_on_gpu(gpu.adapter.clone(), gpu.device.clone(), gpu.queue.clone(), color).unwrap();
+        let renderer = WgpuRasterizer::native_capture_on_factory(gpu.factory.clone(), gpu.device.clone(), color).unwrap();
         let transfer = renderer.source_tiles.borrow_mut().prepare_transfer(&renderer.device, space).unwrap();
         let shared = gpu.source_tiles.borrow_mut().prepare_transfer(&gpu.device, space).unwrap();
         assert_eq!(transfer, shared, "device clones share the exact native transfer handle for {space:?}");

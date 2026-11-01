@@ -1430,6 +1430,7 @@ dependencies = [
 name = "layer-host"
 version = "1.0.15"
 dependencies = [
+ "futures-util",
  "layer-color",
  "layer-core",
  "layer-engine",

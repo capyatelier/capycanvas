@@ -829,7 +829,7 @@ impl Documents {
             }
         ));
     }
-    async fn prepare_switch(&self, w: &Rc<Workspace>, checkpoint:bool) -> Result<(), String> {
+    async fn prepare_switch(&self, w: &Rc<Workspace>) -> Result<(), String> {
         if w.gpu.borrow().is_none() {
             return Err("Wait for the drawing canvas to finish opening".into());
         }
@@ -885,9 +885,6 @@ impl Documents {
                 return Err(error);
             }
         }
-        let recovery = w.recovery();
-        if checkpoint&&!w.gpu.borrow().as_ref().is_some_and(|gpu|gpu.session.state().document_file.close_ready) {recovery.capture(w);}
-        recovery.drain().await;
         if !w.window.is_visible() {
             self.changing.set(false);
             return Err(layer_ui::bootstrap_view(&w.localization()).editor_closed.to_string());
@@ -904,7 +901,6 @@ impl Documents {
             w.local_tone.resume();
             return Err(error);
         }
-        if let Some(retirement) = parked.unwrap() { retirement.await; }
         Ok(())
     }
     fn park(&self, w: &Workspace) -> Option<GpuCanvas> {
@@ -926,6 +922,7 @@ impl Documents {
         self.refresh(w);
         w.area.grab_focus();
         w.wake();
+        w.restart.request(w);
         if self.close_pending.replace(false) {
             glib::idle_add_local_once(glib::clone!(
                 #[weak]
@@ -941,7 +938,7 @@ impl Documents {
         if !self.model.borrow().contains_parked(id) {
             return Err(layer_ui::DocumentSessionError::TabClosed.message(&w.localization()));
         }
-        self.prepare_switch(w,true).await?;
+        self.prepare_switch(w).await?;
         let previous = self.park(w).ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization()))?;
         let tiles = previous.session.retained_document_tiles();
         let error = {
@@ -954,7 +951,7 @@ impl Documents {
             .unwrap_or_else(|_| unreachable!("validated drawing target"));
         *w.gpu.borrow_mut() = Some(next.canvas);
         *w.recovery.borrow_mut() = next.recovery;
-        self.trim().await;
+        self.trim_in_background(w);
         self.finish_switch(w, error);
         Ok(())
     }
@@ -1003,13 +1000,13 @@ impl Documents {
             candidate.session.frame(now,now)?;
             glib::timeout_future(Duration::from_millis(2)).await;
         }
-        recovery.capture_session(&candidate.session);
+        recovery.capture_session(w, &candidate.session);
         recovery.flush().await?;
         candidate.session.park_document()?;
         let tiles=candidate.session.retained_document_tiles();
         candidate.session.renderer_mut().stop().await;
         self.model.borrow_mut().append_parked_with_id(id,Parked {canvas:candidate,recovery},tiles,&w.localization()).map_err(|(error,_)|error)?;
-        self.trim().await;
+        self.trim_in_background(w);
         self.refresh(w);
         Ok(())
     }
@@ -1035,7 +1032,7 @@ impl Documents {
         }
         let retry_storage = self.model.borrow().storage_error().is_some();
         if retry_storage {
-            self.trim().await;
+            self.trim(w).await;
         }
         let active = w.gpu.borrow().as_ref().map(|g| g.session.retained_document_tiles()).unwrap_or_default();
         let admission = self.model.borrow().admit(&active, &project).map_err(|reason| reason.message(&w.localization()));
@@ -1043,7 +1040,7 @@ impl Documents {
             return self.show_unsupported(w, imported.as_ref(), original, reason).await;
         }
         let mut replace_initial=replace_initial&&w.gpu.borrow().as_ref().is_some_and(|gpu|startup.as_ref().is_some_and(|stamp|gpu.session.can_replace_startup_session(stamp)));
-        self.prepare_switch(w,!replace_initial).await?;
+        self.prepare_switch(w).await?;
         let mut previous = Box::new(self.park(w).ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization()))?);
         if self.closing_window.get() || self.cancel_open.get() {
             let error = previous.reattach(&w.area).err();
@@ -1101,7 +1098,7 @@ impl Documents {
         }
         *w.gpu.borrow_mut() = Some(*next);
         *w.recovery.borrow_mut() = recovery;
-        self.trim().await;
+        self.trim_in_background(w);
         self.finish_switch(w, error);
         Ok(())
     }
@@ -1110,7 +1107,22 @@ impl Documents {
         let Some(outcome) = imported.and_then(|imported| imported.preserve_unsupported(reason.clone())) else { return Err(reason); };
         crate::files::open::show_package(w.window.upcast_ref(), layer_ui::PackageView::new(outcome)?, original, &w.localization()).await
     }
-    async fn trim(&self) {
+    fn trim_in_background(&self, w: &Rc<Workspace>) {
+        let Some(token) = self.model.borrow_mut().request_trim() else { return; };
+        let w = w.clone();
+        glib::spawn_future_local(async move {
+            loop {
+                let result = w.documents.trim_storage().await;
+                if !w.documents.model.borrow_mut().complete_trim(token, result) { break; }
+            }
+        });
+    }
+    async fn trim(&self, w: &Rc<Workspace>) {
+        self.trim_in_background(w);
+        let completion = self.model.borrow().trim_wait();
+        if let Some(completion) = completion { let _ = completion.await; }
+    }
+    async fn trim_storage(&self) -> Result<(), String> {
         #[cfg(test)]
         { self.model.borrow_mut().budget.inactive_ram = self.ram_budget.get(); }
         self.model.borrow_mut().storage_completed(Ok(()));
@@ -1124,10 +1136,10 @@ impl Documents {
                 .map_err(|_| "Drawing storage worker stopped".to_string())
                 .and_then(|r| r);
             if let Err(error) = result {
-                self.model.borrow_mut().storage_completed(Err(error));
-                break;
+                return Err(error);
             }
         }
+        Ok(())
     }
     /// A completed close always belongs to the active session; service_requests
     /// calls this only after its Save/Discard/Cancel state machine has settled.
@@ -1184,7 +1196,7 @@ impl Documents {
             w,
             async move {
                 w.documents.changing.set(false);
-                if let Err(error)=w.documents.prepare_switch(&w,true).await {
+                if let Err(error)=w.documents.prepare_switch(&w).await {
                     w.documents.closing_tab.set(false);w.documents.closing_window.set(false);
                     if let Some(gpu)=w.gpu.borrow_mut().as_mut() {gpu.session.reset_document_close();}
                     w.changed(Err(error));return;

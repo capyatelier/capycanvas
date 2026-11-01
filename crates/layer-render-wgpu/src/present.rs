@@ -75,7 +75,24 @@ impl OverviewPlacement {
     }
 }
 
+pub(super) struct Recipes {
+    pipeline: [crate::Deferred<wgpu::RenderPipeline>; 3],
+    surround: crate::Deferred<wgpu::RenderPipeline>,
+    cursor: crate::Deferred<wgpu::RenderPipeline>,
+    layout: wgpu::BindGroupLayout,
+    shader: wgpu::ShaderModule,
+    pipeline_layout: wgpu::PipelineLayout,
+    cursor_icons: wgpu::BindGroup,
+    picker: std::sync::OnceLock<crate::Deferred<wgpu::RenderPipeline>>,
+    screen: std::sync::OnceLock<crate::present_screen::Recipes>,
+    backdrop: std::sync::OnceLock<crate::backdrop_blur::Recipes>,
+    panels: std::sync::OnceLock<crate::panel_surface::Recipes>,
+    paper: std::sync::OnceLock<[crate::Deferred<wgpu::RenderPipeline>; 3]>,
+    overviews: [std::sync::OnceLock<crate::Deferred<wgpu::RenderPipeline>>; 2],
+}
+
 pub struct ViewportPresenter {
+    recipes: std::sync::Arc<Recipes>,
     timing: Option<crate::frame_timing::GpuFrameTimer>,
     pipeline: [crate::Deferred<wgpu::RenderPipeline>; 3],
     paper_pipeline: Option<[crate::Deferred<wgpu::RenderPipeline>; 3]>,
@@ -182,6 +199,133 @@ impl PaperShade {
     }
     fn changed(&self, renderer: &WgpuRasterizer) -> bool {
         renderer.paper_shade().map(|(_, data, _)| data) != self.drawn
+    }
+}
+
+impl Recipes {
+    pub fn new(device: &crate::PipelineDevice, queue: &wgpu::Queue, format: wgpu::TextureFormat, color: SdrSurfaceColor) -> Self {
+        let layout = crate::bindings::layout(device, "viewport bindings", &[
+            crate::bindings::buffer(
+                10,
+                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Storage { read_only: true },
+                false,
+                std::num::NonZeroU64::new(32),
+            ),
+            crate::bindings::texture_of(
+                11,
+                wgpu::ShaderStages::FRAGMENT,
+                wgpu::TextureSampleType::Uint,
+                wgpu::TextureViewDimension::D2,
+            ),
+            crate::bindings::buffer(
+                0,
+                wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Uniform,
+                true,
+                wgpu::BufferSize::new(CAMERA_SIZE),
+            ),
+            crate::bindings::float_texture(1, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, device),
+            crate::bindings::sampler(
+                2,
+                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                wgpu::SamplerBindingType::Filtering,
+            ),
+            crate::bindings::buffer(
+                3,
+                wgpu::ShaderStages::FRAGMENT,
+                wgpu::BufferBindingType::Storage { read_only: true },
+                false,
+                None,
+            ),
+            crate::bindings::float_texture(4, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, device),
+            crate::bindings::buffer(
+                5,
+                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Storage { read_only: true },
+                false,
+                std::num::NonZeroU64::new(32),
+            ),
+            crate::bindings::float_texture(6, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, device),
+            crate::bindings::float_texture(13, wgpu::ShaderStages::FRAGMENT, device),
+            crate::bindings::buffer(
+                7,
+                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Storage { read_only: true },
+                false,
+                std::num::NonZeroU64::new(20),
+            ),
+            crate::bindings::buffer(
+                9,
+                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Uniform,
+                false,
+                std::num::NonZeroU64::new(32),
+            ),
+            crate::bindings::buffer(
+                8,
+                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Uniform,
+                false,
+                std::num::NonZeroU64::new(16),
+            ),
+            crate::bindings::buffer(
+                12,
+                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Uniform,
+                false,
+                std::num::NonZeroU64::new(crate::present_screen::UNIFORM_SIZE),
+            ),
+            crate::bindings::buffer(14, wgpu::ShaderStages::FRAGMENT, wgpu::BufferBindingType::Uniform, false, wgpu::BufferSize::new(PAPER_SHADE_SIZE)),
+            crate::bindings::texture(15, wgpu::ShaderStages::FRAGMENT, true),
+            crate::bindings::sampler(16, wgpu::ShaderStages::FRAGMENT, wgpu::SamplerBindingType::Filtering),
+            crate::bindings::float_texture(17, wgpu::ShaderStages::FRAGMENT, device),
+            crate::bindings::float_texture(18, wgpu::ShaderStages::FRAGMENT, device),
+            crate::bindings::texture(19, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, true),
+            crate::bindings::texture(20, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, true),
+        ]);
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("viewport layout"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let shader = viewport_shader(device, format, color, false);
+        let pipeline = ["fs_main", "fs_placed", "fs_mapped"].map(|entry|
+            surface_pipeline(device, "viewport presentation", &pipeline_layout, &shader, ["vs_main", entry], None, format, None));
+        let surround_pipeline = surface_pipeline(device, "viewport surround", &pipeline_layout, &shader, ["vs_main", "fs_surround"], None, format, None);
+        let cursor_icon_layout = crate::bindings::layout(device, "tool cursor icons", &[
+            crate::bindings::texture_of(0, wgpu::ShaderStages::FRAGMENT,
+                wgpu::TextureSampleType::Float { filterable: false }, wgpu::TextureViewDimension::D2Array),
+        ]);
+        let atlas = include_bytes!("tool-cursors.bin");
+        let extent = wgpu::Extent3d { width: 64, height: 64, depth_or_array_layers: layer_render::TOOL_CURSOR_ICONS.len() as u32 };
+        let cursor_icon_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("tool cursor signed distances"), size: extent,
+            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[],
+        });
+        queue.write_texture(cursor_icon_texture.as_image_copy(), atlas,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(64), rows_per_image: Some(64) }, extent);
+        let cursor_icon_view = cursor_icon_texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default()
+        });
+        let cursor_icons = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("tool cursor icons"), layout: &cursor_icon_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&cursor_icon_view) }],
+        });
+        let cursor_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("cursor layout"), bind_group_layouts: &[Some(&layout), Some(&cursor_icon_layout)], immediate_size: 0,
+        });
+        let cursor_pipeline = surface_pipeline(device, "display-only cursor", &cursor_layout, &shader, ["cursor_vertex", "cursor_fragment"],
+            Some(wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<CursorSegment>() as u64,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32, 3 => Float32, 4 => Float32],
+            }),
+            format, Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING));
+        Self { pipeline, surround: surround_pipeline, cursor: cursor_pipeline, layout, shader, pipeline_layout, cursor_icons,
+            paper: Default::default(), overviews: Default::default(), backdrop: Default::default(), panels: Default::default(), picker: Default::default(), screen: Default::default() }
     }
 }
 
@@ -416,7 +560,7 @@ impl ViewportPresenter {
             .chain([renderer.composite_revision as u32, (renderer.composite_revision >> 32) as u32])
             .collect();
         let counter = self.screen_counter.get_or_insert_with(|| {
-            crate::present_screen::ScreenCounter::new(&renderer.device, &self.layout, &self.shader)
+            crate::present_screen::ScreenCounter::from_recipes(&renderer.device, self.recipes.screen.get_or_init(|| crate::present_screen::Recipes::new(&renderer.device, &self.layout, &self.shader)))
         });
         if counter.busy() || counter.current(&signature) || !renderer.background_pipeline_ready(&counter.pipeline) {
             return false;
@@ -432,7 +576,7 @@ impl ViewportPresenter {
 
     /// Shares the renderer's optional startup cache with presentation shaders.
     pub fn for_renderer(renderer: &WgpuRasterizer, format: wgpu::TextureFormat) -> Self {
-        Self::with_device(&renderer.device, &renderer.queue, format, SdrSurfaceColor::Srgb)
+        Self::with_device(renderer, format, SdrSurfaceColor::Srgb)
     }
 
     pub async fn prepare(&mut self, renderer: &WgpuRasterizer) -> Result<(), GpuRasterError> {
@@ -450,10 +594,10 @@ impl ViewportPresenter {
         if renderer.paper_shade().is_none() { return false; }
         let (device, format, color) = (&renderer.device, self.format, self.color);
         let layout = &self.pipeline_layout;
-        let paper = self.paper_pipeline.get_or_insert_with(|| {
+        let paper = self.paper_pipeline.get_or_insert_with(|| self.recipes.paper.get_or_init(|| {
             let shader = viewport_shader(device, format, color, true);
             ["fs_main", "fs_placed", "fs_mapped"].map(|entry| surface_pipeline(device, "viewport presentation with paper lighting", layout, &shader, ["vs_main", entry], None, format, None))
-        });
+        }).clone());
         let Some(startup) = &renderer.startup else { return true };
         let ready = startup.compiler.require(paper.iter(), crate::startup::OTHER);
         startup.compiler.start();
@@ -480,7 +624,7 @@ impl ViewportPresenter {
         color: SdrSurfaceColor,
     ) -> Result<Self, GpuRasterError> {
         color.shader_encoding(format)?;
-        let mut presenter = Self::with_device(&renderer.device, &renderer.queue, format, color);
+        let mut presenter = Self::with_device(renderer, format, color);
         presenter.set_hdr_view(
             renderer,
             renderer
@@ -502,132 +646,16 @@ impl ViewportPresenter {
         Ok(Self { standalone_overview: true, ..Self::for_surface(renderer, format, color)? })
     }
 
-    fn with_device(
-        device: &crate::PipelineDevice,
-        queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
-        color: SdrSurfaceColor,
-    ) -> Self {
-        let layout = crate::bindings::layout(device, "viewport bindings", &[
-            crate::bindings::buffer(
-                10,
-                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
-                wgpu::BufferBindingType::Storage { read_only: true },
-                false,
-                std::num::NonZeroU64::new(32),
-            ),
-            crate::bindings::texture_of(
-                11,
-                wgpu::ShaderStages::FRAGMENT,
-                wgpu::TextureSampleType::Uint,
-                wgpu::TextureViewDimension::D2,
-            ),
-            crate::bindings::buffer(
-                0,
-                wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
-                wgpu::BufferBindingType::Uniform,
-                true,
-                wgpu::BufferSize::new(CAMERA_SIZE),
-            ),
-            crate::bindings::float_texture(1, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, device),
-            crate::bindings::sampler(
-                2,
-                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
-                wgpu::SamplerBindingType::Filtering,
-            ),
-            crate::bindings::buffer(
-                3,
-                wgpu::ShaderStages::FRAGMENT,
-                wgpu::BufferBindingType::Storage { read_only: true },
-                false,
-                None,
-            ),
-            crate::bindings::float_texture(4, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, device),
-            crate::bindings::buffer(
-                5,
-                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
-                wgpu::BufferBindingType::Storage { read_only: true },
-                false,
-                std::num::NonZeroU64::new(32),
-            ),
-            crate::bindings::float_texture(6, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, device),
-            crate::bindings::float_texture(13, wgpu::ShaderStages::FRAGMENT, device),
-            crate::bindings::buffer(
-                7,
-                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
-                wgpu::BufferBindingType::Storage { read_only: true },
-                false,
-                std::num::NonZeroU64::new(20),
-            ),
-            crate::bindings::buffer(
-                9,
-                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
-                wgpu::BufferBindingType::Uniform,
-                false,
-                std::num::NonZeroU64::new(32),
-            ),
-            crate::bindings::buffer(
-                8,
-                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
-                wgpu::BufferBindingType::Uniform,
-                false,
-                std::num::NonZeroU64::new(16),
-            ),
-            crate::bindings::buffer(
-                12,
-                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
-                wgpu::BufferBindingType::Uniform,
-                false,
-                std::num::NonZeroU64::new(crate::present_screen::UNIFORM_SIZE),
-            ),
-            crate::bindings::buffer(14, wgpu::ShaderStages::FRAGMENT, wgpu::BufferBindingType::Uniform, false, wgpu::BufferSize::new(PAPER_SHADE_SIZE)),
-            crate::bindings::texture(15, wgpu::ShaderStages::FRAGMENT, true),
-            crate::bindings::sampler(16, wgpu::ShaderStages::FRAGMENT, wgpu::SamplerBindingType::Filtering),
-            crate::bindings::float_texture(17, wgpu::ShaderStages::FRAGMENT, device),
-            crate::bindings::float_texture(18, wgpu::ShaderStages::FRAGMENT, device),
-            crate::bindings::texture(19, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, true),
-            crate::bindings::texture(20, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, true),
-        ]);
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("viewport layout"),
-            bind_group_layouts: &[Some(&layout)],
-            immediate_size: 0,
-        });
-        let shader = viewport_shader(device, format, color, false);
-        let pipeline = ["fs_main", "fs_placed", "fs_mapped"].map(|entry|
-            surface_pipeline(device, "viewport presentation", &pipeline_layout, &shader, ["vs_main", entry], None, format, None));
-        let surround_pipeline = surface_pipeline(device, "viewport surround", &pipeline_layout, &shader, ["vs_main", "fs_surround"], None, format, None);
-        let cursor_icon_layout = crate::bindings::layout(device, "tool cursor icons", &[
-            crate::bindings::texture_of(0, wgpu::ShaderStages::FRAGMENT,
-                wgpu::TextureSampleType::Float { filterable: false }, wgpu::TextureViewDimension::D2Array),
-        ]);
-        let atlas = include_bytes!("tool-cursors.bin");
-        let extent = wgpu::Extent3d { width: 64, height: 64, depth_or_array_layers: layer_render::TOOL_CURSOR_ICONS.len() as u32 };
-        let cursor_icon_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("tool cursor signed distances"), size: extent,
-            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[],
-        });
-        queue.write_texture(cursor_icon_texture.as_image_copy(), atlas,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(64), rows_per_image: Some(64) }, extent);
-        let cursor_icon_view = cursor_icon_texture.create_view(&wgpu::TextureViewDescriptor {
-            dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default()
-        });
-        let cursor_icons = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("tool cursor icons"), layout: &cursor_icon_layout,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&cursor_icon_view) }],
-        });
-        let cursor_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("cursor layout"), bind_group_layouts: &[Some(&layout), Some(&cursor_icon_layout)], immediate_size: 0,
-        });
-        let cursor_pipeline = surface_pipeline(device, "display-only cursor", &cursor_layout, &shader, ["cursor_vertex", "cursor_fragment"],
-            Some(wgpu::VertexBufferLayout {
-                array_stride: std::mem::size_of::<CursorSegment>() as u64,
-                step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32, 3 => Float32, 4 => Float32],
-            }),
-            format, Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING));
+    fn with_device(renderer: &WgpuRasterizer, format: wgpu::TextureFormat, color: SdrSurfaceColor) -> Self {
+        let (device, queue) = (&renderer.device, &renderer.queue);
+        let recipes = renderer.recipes.presentation(device, queue, format, color);
+        let pipeline = recipes.pipeline.clone();
+        let surround_pipeline = recipes.surround.clone();
+        let cursor_pipeline = recipes.cursor.clone();
+        let layout = recipes.layout.clone();
+        let shader = recipes.shader.clone();
+        let pipeline_layout = recipes.pipeline_layout.clone();
+        let cursor_icons = recipes.cursor_icons.clone();
         let shade = PaperShade::new(device);
         let cursor_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("cursor segments"),
@@ -648,6 +676,7 @@ impl ViewportPresenter {
             mapped_at_creation: false,
         });
         Self {
+            recipes,
             pipeline,
             paper_pipeline: None,
             presented_paper: None,
@@ -759,8 +788,9 @@ impl ViewportPresenter {
                 wgpu::BlendComponent { src_factor:wgpu::BlendFactor::Zero, dst_factor:wgpu::BlendFactor::One, operation:wgpu::BlendOperation::Add }
             },
         };
-        self.overview_pipeline = Some(surface_pipeline(device, "in-surface document overviews", &self.pipeline_layout, &self.shader,
-            ["overview_vertex", "overview_fragment"], Some(instance), self.format, Some(blend)));
+        self.overview_pipeline = Some(self.recipes.overviews[usize::from(self.standalone_overview)].get_or_init(||
+            surface_pipeline(device, "in-surface document overviews", &self.pipeline_layout, &self.shader,
+                ["overview_vertex", "overview_fragment"], Some(instance), self.format, Some(blend))).clone());
     }
 
     /// Reuses the composition, bindings and current presentation pass. An
@@ -807,7 +837,7 @@ impl ViewportPresenter {
         }
         let backdrop = self
             .backdrop
-            .get_or_insert_with(|| crate::backdrop_blur::BackdropBlur::new(&renderer.device, self.format));
+            .get_or_insert_with(|| crate::backdrop_blur::BackdropBlur::from_recipes(&renderer.device, self.format, self.recipes.backdrop.get_or_init(|| crate::backdrop_blur::Recipes::new(&renderer.device, self.format))));
         self.overlays_changed |= backdrop.regions() != regions || backdrop.style() != style;
         backdrop.set_style(style);
         backdrop.set_regions(regions);
@@ -823,14 +853,14 @@ impl ViewportPresenter {
 
     pub fn set_panel_surfaces(&mut self, renderer: &WgpuRasterizer, surfaces: &[crate::PanelSurface]) {
         if surfaces.is_empty() && self.panels.is_none() { return; }
-        let panels=self.panels.get_or_insert_with(||crate::panel_surface::PanelSurfaces::new(&renderer.device,&self.uniform,&self.shader,self.format));
+        let panels=self.panels.get_or_insert_with(||crate::panel_surface::PanelSurfaces::from_recipes(&renderer.device,&self.uniform,self.recipes.panels.get_or_init(|| crate::panel_surface::Recipes::new(&renderer.device,&self.shader,self.format))));
         self.panel_surfaces_changed |= panels.set(surfaces);
     }
 
     pub fn prepare_chrome(&mut self, renderer: &WgpuRasterizer) -> bool {
         self.prepare_overviews(renderer);
-        self.backdrop.get_or_insert_with(||crate::backdrop_blur::BackdropBlur::new(&renderer.device,self.format));
-        self.panels.get_or_insert_with(||crate::panel_surface::PanelSurfaces::new(&renderer.device,&self.uniform,&self.shader,self.format));
+        self.backdrop.get_or_insert_with(||crate::backdrop_blur::BackdropBlur::from_recipes(&renderer.device,self.format,self.recipes.backdrop.get_or_init(||crate::backdrop_blur::Recipes::new(&renderer.device,self.format))));
+        self.panels.get_or_insert_with(||crate::panel_surface::PanelSurfaces::from_recipes(&renderer.device,&self.uniform,self.recipes.panels.get_or_init(|| crate::panel_surface::Recipes::new(&renderer.device,&self.shader,self.format))));
         if !self.pipelines_ready(renderer) {return false;}
         self.chrome_ready()
     }
@@ -859,7 +889,7 @@ impl ViewportPresenter {
     }
 
     pub fn set_color_picker(&mut self, renderer: &WgpuRasterizer, overlay: Option<layer_render::ColorPickerOverlay>) {
-        self.picker.set(overlay, &renderer.device, &self.shader, &self.pipeline_layout, self.format);
+        self.picker.set(overlay, &renderer.device, &self.shader, &self.pipeline_layout, self.format, &self.recipes.picker);
     }
 
     pub fn set_cursor(&mut self, device: &wgpu::Device, segments: &[CursorSegment], scale: f32) {

@@ -262,7 +262,7 @@ impl CapyHost {
         // fragment storage-buffer code can be rejected by drivers; retain API
         // validation while using the same optimized shaders as Release.
         descriptor.flags.remove(wgpu::InstanceFlags::DEBUG);
-        let instance = wgpu::Instance::new(descriptor);
+        let instance = layer_host::gpu::native_instance(descriptor);
         let (surface, surface_handle) = Self::composition_surface(&instance)?;
         // GPU allocation and shader work happen after ownership moves to the
         // render worker. No swap chain is attached during CPU/UI initialization.
@@ -414,45 +414,31 @@ impl CapyHost {
             // reject those while allowing an in-flight CPU Save to complete.
             self.poll_services()?;
         }
-        let adapter =
-            pollster::block_on(self.instance.request_adapter(&wgpu::RequestAdapterOptions {
-                compatible_surface: Some(&self.surface),
-                force_fallback_adapter: false,
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                apply_limit_buckets: false,
-            }))
-            .map_err(err)?;
-        let limits = layer_render_wgpu::rendering_limits(adapter.limits());
-        layer_host::admit_adapter(self.native.session.localization(), &adapter, &limits)?;
-        let (device, queue, gpu_state) = pollster::block_on(layer_host::request_device(&adapter, &wgpu::DeviceDescriptor {
-            label: Some("Capy Canvas Windows"),
-            required_features: layer_render_wgpu::rendering_features(&adapter)
-                | adapter.features() & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS),
-            required_limits: limits,
-            memory_hints: layer_render_wgpu::memory_hints(),
-            ..Default::default()
-        }))
-        .map_err(err)?;
+        let gpu = pollster::block_on(layer_host::gpu::process_gpu(
+            &self.instance, &self.surface, self.native.session.localization(), wgpu::PowerPreference::HighPerformance,
+        ))?;
+        let adapter = gpu.factory.adapter();
+        let gpu_state = gpu.watch;
         let [width, height] = self.native.session.state().camera.viewport;
         let mut config = self
             .surface
-            .get_default_config(&adapter, width, height)
+            .get_default_config(adapter, width, height)
             .ok_or("D3D12 surface unsupported")?;
-        config.present_mode = if self.surface.get_capabilities(&adapter).present_modes
+        config.present_mode = if self.surface.get_capabilities(adapter).present_modes
             .contains(&wgpu::PresentMode::Immediate) {
             wgpu::PresentMode::Immediate
         } else { wgpu::PresentMode::Fifo };
         config.desired_maximum_frame_latency = crate::frame_pacing::FramePacing::IN_FLIGHT as u32;
         config.alpha_mode = wgpu::CompositeAlphaMode::Opaque;
         // Keep scRGB across monitor moves; only viewing changes, never artwork.
-        if self.surface.get_capabilities(&adapter).format_capabilities.iter().any(|f|
+        if self.surface.get_capabilities(adapter).format_capabilities.iter().any(|f|
             f.format == wgpu::TextureFormat::Rgba16Float
                 && f.color_spaces.contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR)) {
             config.format = wgpu::TextureFormat::Rgba16Float;
             config.color_space = wgpu::SurfaceColorSpace::ExtendedSrgbLinear;
             config.view_formats.clear();
         }
-        let renderer = layer_host::GpuContext { adapter, device, queue }.rasterizer(
+        let renderer = layer_host::GpuContext::from_factory(gpu.factory).rasterizer(
             self.native.session.engine().document().composition().color, &self.native.renderer_options(), false)?;
         let encoding = self.display.encoding(config.format);
         let presenter = ViewportPresenter::for_surface(&renderer, config.format, encoding).map_err(err)?;

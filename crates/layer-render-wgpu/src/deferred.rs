@@ -63,7 +63,7 @@ type Factory<T> = Box<dyn FnOnce(CompileMode) -> Compilation<T>>;
 struct Inner<T> {
     value: OnceLock<T>,
     #[cfg(target_arch = "wasm32")]
-    validating: std::cell::Cell<bool>,
+    validating: std::cell::Cell<u32>,
     #[cfg(target_arch = "wasm32")]
     preparation: std::cell::OnceCell<futures_util::future::Shared<futures_util::future::LocalBoxFuture<'static, Result<(), String>>>>,
     async_pipeline: bool,
@@ -71,6 +71,27 @@ struct Inner<T> {
     priority: std::sync::atomic::AtomicU8,
 }
 pub(super) struct Deferred<T>(Arc<Inner<T>>);
+pub(super) struct Promotion<T> { pipeline: Deferred<T>, priority: u8 }
+impl<T> Drop for Promotion<T> {
+    fn drop(&mut self) {
+        let _ = self.pipeline.0.priority.compare_exchange(self.priority, u8::MAX,
+            std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+#[cfg(target_arch = "wasm32")]
+pub(super) struct Validation<T> { pipeline: Deferred<T>, active: std::cell::Cell<bool> }
+#[cfg(target_arch = "wasm32")]
+impl<T> Validation<T> {
+    pub fn begin(&self) {
+        if !self.active.replace(true) { self.pipeline.0.validating.set(self.pipeline.0.validating.get() + 1); }
+    }
+}
+#[cfg(target_arch = "wasm32")]
+impl<T> Drop for Validation<T> {
+    fn drop(&mut self) {
+        if self.active.get() { self.pipeline.0.validating.set(self.pipeline.0.validating.get() - 1); }
+    }
+}
 impl<T> Clone for Deferred<T> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
@@ -97,7 +118,7 @@ impl<T> Deferred<T> {
         Self(Arc::new(Inner {
             value: OnceLock::new(),
             #[cfg(target_arch = "wasm32")]
-            validating: std::cell::Cell::new(false),
+            validating: std::cell::Cell::new(0),
             #[cfg(target_arch = "wasm32")]
             preparation: Default::default(),
             async_pipeline,
@@ -163,22 +184,16 @@ impl<T> Deferred<T> {
     }
     pub fn ready(&self) -> bool {
         #[cfg(target_arch = "wasm32")]
-        if self.0.validating.get() {
+        if self.0.validating.get() != 0 {
             return false;
         }
         self.0.value.get().is_some()
     }
     #[cfg(target_arch = "wasm32")]
-    pub fn validating(&self, value: bool) {
-        self.0.validating.set(value);
-    }
-    pub fn promote(&self, priority: u8) -> bool {
-        !self.ready()
-            && self
-                .0
-                .priority
-                .fetch_min(priority, std::sync::atomic::Ordering::Relaxed)
-                > priority
+    pub fn validation(&self) -> Validation<T> { Validation { pipeline: self.clone(), active: std::cell::Cell::new(false) } }
+    pub fn promote(&self, priority: u8) -> Option<Promotion<T>> {
+        (!self.ready() && self.0.priority.fetch_min(priority, std::sync::atomic::Ordering::Relaxed) > priority)
+            .then(|| Promotion { pipeline: self.clone(), priority })
     }
 }
 impl<T> std::ops::Deref for Deferred<T> {
@@ -215,5 +230,23 @@ impl Deferred<wgpu::ComputePipeline> {
             compilation_options: Default::default(),
             cache: None,
         }))
+    }
+}
+
+#[cfg(all(test, target_arch = "wasm32"))]
+mod tests {
+    use super::*;
+    #[test]
+    fn canceled_validation_releases_only_its_shared_recipe_owner() {
+        let recipe = Deferred::new(|| 17);
+        let first = recipe.validation();
+        let second = recipe.validation();
+        first.begin(); second.begin();
+        recipe.compile();
+        assert!(!recipe.ready());
+        drop(first);
+        assert!(!recipe.ready());
+        drop(second);
+        assert!(recipe.ready());
     }
 }

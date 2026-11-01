@@ -10,8 +10,8 @@ fn install(app: &App) {
 
 #[test]
 fn apple_idle_paper_presentation_notifies_once_and_settles_without_input() {
-    let reference = native_renderer();
     for platform in [0, 1] {
+        let reference = native_renderer();
         let app = App::new(platform);
         let paper = layer_ui::occurrence_token(layer_core::paper::paper_occurrence(app.document().scene(), None).unwrap());
         app.action(json!({"type":"select_layer","id":paper}));
@@ -207,9 +207,9 @@ fn unsupported_metal_adapter_keeps_localized_explanation_and_native_cause_on_bot
             let localization = layer_ui::Localizer::shared(language);
             let app = App(apple_launch_localized(platform, "", localization.clone()).unwrap());
             let mut lease_native=app.borrow();let native=&mut *lease_native;
-            assert!(metal::check_adapter(&native.host, adapter, &limits).is_ok());
-            let expected = layer_ui::gpu_unsupported(&localization, &format!("Metal adapter requirements: {cause}"));
-            assert!(native.perform(|a| a.gpu_operation(|a| metal::check_adapter(&a.host, adapter, &beyond))).is_none());
+            assert!(layer_host::admit_adapter(native.host.session.localization(), adapter, &limits).is_ok());
+            let expected = layer_ui::gpu_unsupported(&localization, &cause);
+            assert!(native.perform(|a| a.gpu_operation(|a| layer_host::admit_adapter(a.host.session.localization(), adapter, &beyond))).is_none());
             drop(lease_native);
             let error = handles::take_text(unsafe {capy_apple_error(app.0)});
             assert_eq!(error.to_str().unwrap(), expected);

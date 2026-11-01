@@ -57,6 +57,17 @@ impl PanelSurface {
     }
 }
 
+pub(crate) struct Recipes {
+    pipeline: Deferred<wgpu::RenderPipeline>,
+    mask_pipeline: Deferred<wgpu::RenderPipeline>,
+    layout: wgpu::BindGroupLayout,
+    mask_layout: wgpu::BindGroupLayout,
+    viewport: wgpu::BindGroupLayout,
+    profile: wgpu::Buffer,
+    empty: wgpu::Texture,
+    sampler: wgpu::Sampler,
+    spacer: wgpu::BindGroup,
+}
 pub(crate) struct PanelSurfaces {
     pub pipeline: Deferred<wgpu::RenderPipeline>,
     pub mask_pipeline: Deferred<wgpu::RenderPipeline>,
@@ -83,8 +94,8 @@ struct PanelMask {
     group: Option<wgpu::BindGroup>,
 }
 
-impl PanelSurfaces {
-    pub fn new(device: &crate::PipelineDevice, uniform: &wgpu::Buffer, shader: &wgpu::ShaderModule, format: wgpu::TextureFormat) -> Self {
+impl Recipes {
+    pub fn new(device: &crate::PipelineDevice, shader: &wgpu::ShaderModule, format: wgpu::TextureFormat) -> Self {
         let storage = |binding, visibility, read_only| crate::bindings::buffer(binding, visibility,
             wgpu::BufferBindingType::Storage { read_only }, false, None);
         let layout = crate::bindings::layout(device, "connected panel surfaces", &[
@@ -98,9 +109,6 @@ impl PanelSurfaces {
         let spacer = crate::bindings::group(device,"panel surface spacer",&empty_layout,[]);
         let viewport=crate::bindings::layout(device,"panel viewport",&[crate::bindings::buffer(0,wgpu::ShaderStages::VERTEX_FRAGMENT,
             wgpu::BufferBindingType::Uniform,true,wgpu::BufferSize::new(crate::present::CAMERA_SIZE))]);
-        let camera=crate::bindings::group(device,"panel viewport",&viewport,[wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-            buffer:uniform,offset:0,size:wgpu::BufferSize::new(crate::present::CAMERA_SIZE),
-        })]);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("connected panel surfaces"), bind_group_layouts: &[Some(&viewport),Some(&empty_layout),Some(&layout)], immediate_size: 0,
         });
@@ -126,13 +134,28 @@ impl PanelSurfaces {
             size:wgpu::Extent3d {width:1,height:1,depth_or_array_layers:1},mip_level_count:1,sample_count:1,
             dimension:wgpu::TextureDimension::D2,format:wgpu::TextureFormat::Rgba16Float,
             usage:wgpu::TextureUsages::TEXTURE_BINDING,view_formats:&[], });
-        Self { pipeline,mask_pipeline,layout,profile,surfaces:Vec::new(),data:Vec::new(),
+        Self { pipeline, mask_pipeline, layout, mask_layout, viewport, profile, empty, spacer,
+            sampler: device.create_sampler(&wgpu::SamplerDescriptor { label: Some("panel backdrop"), mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear, ..Default::default() }) }
+    }
+}
+
+impl PanelSurfaces {
+    #[cfg(test)]
+    pub fn new(device: &crate::PipelineDevice, uniform: &wgpu::Buffer, shader: &wgpu::ShaderModule, format: wgpu::TextureFormat) -> Self {
+        Self::from_recipes(device, uniform, &Recipes::new(device, shader, format))
+    }
+    pub fn from_recipes(device: &crate::PipelineDevice, uniform: &wgpu::Buffer, recipes: &Recipes) -> Self {
+        let Recipes { pipeline, mask_pipeline, layout, profile, mask_layout, empty, sampler, spacer, .. } = recipes;
+        let camera=crate::bindings::group(device,"panel viewport",&recipes.viewport,[wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+            buffer:uniform,offset:0,size:wgpu::BufferSize::new(crate::present::CAMERA_SIZE),
+        })]);
+        Self { pipeline: pipeline.clone(),mask_pipeline: mask_pipeline.clone(),layout: layout.clone(),profile: profile.clone(),surfaces:Vec::new(),data:Vec::new(),
             uploaded:Arc::new(AtomicBool::new(false)),
             buffer:device.create_buffer(&wgpu::BufferDescriptor {label:Some("panel surface parameters"),size:64,
                 usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false}),
-            mask_layout,mask_group:None,masks:Vec::new(),mask_view:None,mask_valid:Arc::new(AtomicBool::new(false)),
-            blur:empty.clone(),empty,spacer,camera,
-            sampler:device.create_sampler(&wgpu::SamplerDescriptor {label:Some("panel backdrop"),mag_filter:wgpu::FilterMode::Linear,min_filter:wgpu::FilterMode::Linear,..Default::default()}),
+            mask_layout: mask_layout.clone(),mask_group:None,masks:Vec::new(),mask_view:None,mask_valid:Arc::new(AtomicBool::new(false)),
+            blur:empty.clone(),empty: empty.clone(),spacer: spacer.clone(),camera,sampler: sampler.clone(),
         }
     }
 

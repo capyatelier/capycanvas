@@ -90,15 +90,18 @@ composed corners through startup, tab changes and renderer restart at 1x and 2x.
 
 Keep one Workspace/native window and its retained controls. Store the active
 GpuCanvas in its existing slot and inactive GpuCanvas sessions in a tab owner.
-An inactive renderer is stopped and joined, retaining no native GPU surface,
-renderer worker, device/snapshot handles, thumbnails, or pending image replies.
+An inactive renderer is stopped; a cleanup worker joins its render thread and
+releases its surface, snapshots, thumbnails and pending image replies. All windows
+reuse the process GPU device and factory recipes for each working space and depth.
 Reactivation reuses the existing renderer-replacement API, which preserves
 editor history, save checkpoints, exact raster roots, camera, selection, tools,
 color interpretation, and document-owned proof settings. Recovery ownership is
-per tab and switches with its session. Recovery snapshots and their recovery owner are captured synchronously before
-parking. Async writers never reacquire a document through the active slot. A
-window serializes these writes; unsaved inactive drawings retain independent
-recovery and no writer can accidentally capture its successor.
+per tab and switches with its session. Ordinary checkpoints capture every tab,
+including parked sessions and their stopped renderer's final evaluation context.
+Async writers retain immutable captures from those owners. Activation requests a
+checkpoint without awaiting recovery writes, inactive spills or render-thread
+cleanup. `native_document_tabs_blocked_writer_keeps_canvas_live` checks incoming
+painting while the outgoing recovery writer is blocked.
 
 Window settings, workspace layout/history/manager ownership, fullscreen, and
 native chrome remain window-owned. Copy that window state to the incoming

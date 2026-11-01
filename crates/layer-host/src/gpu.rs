@@ -1,6 +1,6 @@
 //! One GPU context, renderer factory and device-failure watch for native hosts.
 use layer_core::color::{DocumentColor, RgbSpace};
-use layer_render_wgpu::WgpuRasterizer;
+use layer_render_wgpu::{RendererFactory, WgpuRasterizer};
 use std::sync::{Arc, OnceLock};
 
 /// UI preview colors: mapped through the SDR rendition, or tagged in a display space.
@@ -29,14 +29,18 @@ pub struct GpuContext {
     pub adapter: wgpu::Adapter,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    factory: RendererFactory,
 }
 impl GpuContext {
+    pub fn new(adapter: wgpu::Adapter, device: wgpu::Device, queue: wgpu::Queue) -> Self {
+        let factory = RendererFactory::new(adapter.clone(), device.clone(), queue.clone());
+        Self { adapter, device, queue, factory }
+    }
+    pub fn from_factory(factory: RendererFactory) -> Self {
+        Self { adapter: factory.adapter().clone(), device: factory.device().clone(), queue: factory.queue().clone(), factory }
+    }
     pub fn of(gpu: &WgpuRasterizer) -> Self {
-        Self {
-            adapter: gpu.adapter().clone(),
-            device: gpu.device().clone(),
-            queue: gpu.queue().clone(),
-        }
+        Self { adapter: gpu.adapter().clone(), device: gpu.device().clone(), queue: gpu.queue().clone(), factory: gpu.renderer_factory() }
     }
     /// Secondary renderers (tabs, open, color candidates) pass `finish_catalog = true`;
     /// the window renderer passes false and calls `finish_startup_catalog` after its catalog.
@@ -46,13 +50,7 @@ impl GpuContext {
         options: &RendererOptions,
         finish_catalog: bool,
     ) -> Result<Box<WgpuRasterizer>, String> {
-        let (adapter, device, queue) = (
-            self.adapter.clone(),
-            self.device.clone(),
-            self.queue.clone(),
-        );
-        let mut gpu = WgpuRasterizer::from_wgpu_native_staged_boxed(adapter, device, queue, color)
-            .map_err(|e| e.to_string())?;
+        let mut gpu = self.factory.rasterizer(color).map_err(|e| e.to_string())?;
         gpu.configure_ui_previews(options.ui_color.preview_space())
             .map_err(|e| e.to_string())?;
         if finish_catalog {
@@ -60,6 +58,49 @@ impl GpuContext {
         }
         Ok(gpu)
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn native_instance(descriptor: wgpu::InstanceDescriptor) -> wgpu::Instance {
+    static INSTANCE: OnceLock<wgpu::Instance> = OnceLock::new();
+    INSTANCE.get_or_init(|| wgpu::Instance::new(descriptor)).clone()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone)]
+pub struct ProcessGpu {
+    pub factory: RendererFactory,
+    pub watch: DeviceWatch,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+static PROCESS_GPU: std::sync::Mutex<Option<ProcessGpu>> = std::sync::Mutex::new(None);
+#[cfg(not(target_arch = "wasm32"))]
+static INITIALIZING: futures_util::lock::Mutex<()> = futures_util::lock::Mutex::new(());
+
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn process_gpu(instance: &wgpu::Instance, surface: &wgpu::Surface<'_>,
+    localization: &layer_ui::Localizer, power_preference: wgpu::PowerPreference) -> Result<ProcessGpu, String> {
+    let _initializing = INITIALIZING.lock().await;
+    let cached = PROCESS_GPU.lock().map_err(|e| e.to_string())?.clone();
+    if let Some(gpu) = cached.filter(|gpu| gpu.watch.failure().is_none()) {
+        return if gpu.factory.adapter().is_surface_supported(surface) { Ok(gpu.clone()) }
+            else { Err(layer_ui::gpu_unsupported(localization, "The canvas GPU cannot present this window's surface")) };
+    }
+    let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
+        compatible_surface: Some(surface), power_preference, force_fallback_adapter: false, apply_limit_buckets: false,
+    }).await.map_err(|e| layer_ui::gpu_unsupported(localization, &e.to_string()))?;
+    let limits = layer_render_wgpu::rendering_limits(adapter.limits());
+    admit_adapter(localization, &adapter, &limits)?;
+    let (device, queue, watch) = request_device(&adapter, &wgpu::DeviceDescriptor {
+        label: Some("Capy Canvas process GPU"),
+        required_features: layer_render_wgpu::rendering_features(&adapter) | adapter.features()
+            & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS),
+        required_limits: limits, memory_hints: layer_render_wgpu::memory_hints(), ..Default::default()
+    }).await.map_err(|e| e.to_string())?;
+    let gpu = ProcessGpu { factory: RendererFactory::new(adapter, device, queue), watch };
+    *PROCESS_GPU.lock().map_err(|e| e.to_string())? = Some(gpu.clone());
+    Ok(gpu)
 }
 
 pub fn unsupported_adapter(adapter: &wgpu::Adapter, limits: &wgpu::Limits) -> Option<String> {
@@ -91,6 +132,12 @@ pub struct DeviceWatch {
     error: Arc<OnceLock<String>>,
 }
 impl DeviceWatch {
+    pub fn for_device(device: &wgpu::Device) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(watch) = PROCESS_GPU.lock().unwrap().as_ref()
+            .filter(|gpu| gpu.factory.device() == device).map(|gpu| gpu.watch.clone()) { return watch; }
+        Self::observe(device)
+    }
     pub fn observe(device: &wgpu::Device) -> Self {
         let watch = Self::default();
         let lost = watch.lost.clone();

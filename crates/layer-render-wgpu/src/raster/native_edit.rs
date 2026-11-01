@@ -272,9 +272,9 @@ impl WgpuRasterizer {
         &self,
         color: DocumentColor,
     ) -> Result<Self, GpuRasterError> {
-        let mut device = PipelineDevice::from(self.device().clone());
+        let mut device = self.factory.pipeline_device(color);
         device.source_samples = self.device.source_samples.clone();
-        Self::native_staged_on_device(self.adapter.clone(), device, self.queue.clone(), color).map(|renderer| *renderer)
+        Self::native_staged_on_factory(self.factory.clone(), device, color).map(|renderer| *renderer)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -303,8 +303,11 @@ impl WgpuRasterizer {
         queue: wgpu::Queue,
         color: DocumentColor,
     ) -> Result<Box<Self>, GpuRasterError> {
+        Self::native_staged_on_factory(RendererFactory::with_device(adapter, &device, queue), device, color)
+    }
+    pub(crate) fn native_staged_on_factory(factory: RendererFactory, device: PipelineDevice, color: DocumentColor) -> Result<Box<Self>, GpuRasterError> {
         let device = device.with_working_space(color.space).with_depth(color.depth);
-        let mut r = Self::from_wgpu_inner(adapter, device, queue, Initialization::Interactive)?;
+        let mut r = Self::from_factory_inner(factory, device, Initialization::Interactive)?;
         r.startup.as_mut().unwrap().host_catalog_pending = !cfg!(target_arch = "wasm32");
         r.initialize_native(color)?;
         Ok(r)
@@ -318,28 +321,31 @@ impl WgpuRasterizer {
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn native_headless_without(color: DocumentColor, omitted: wgpu::Features) -> Result<Self, GpuRasterError> {
-        let mut r = pollster::block_on(Self::headless(color.space, Initialization::Headless, omitted))?;
+        let mut r = pollster::block_on(Self::headless(color, Initialization::Headless, omitted))?;
         r.initialize_native(color)?;
         Ok(r)
     }
 
+    #[cfg(test)]
     pub(crate) fn native_capture_on_gpu(
         adapter: wgpu::Adapter,
         device: PipelineDevice,
         queue: wgpu::Queue,
         color: DocumentColor,
     ) -> Result<Self, GpuRasterError> {
+        Self::native_capture_on_factory(RendererFactory::with_device(adapter, &device, queue), device, color)
+    }
+    pub(crate) fn native_capture_on_factory(factory: RendererFactory, device: PipelineDevice, color: DocumentColor) -> Result<Self, GpuRasterError> {
         let device = device.with_working_space(color.space).with_depth(color.depth);
-        let mut r = Self::from_wgpu_inner(adapter, device, queue, Initialization::Snapshot)?;
+        let mut r = Self::from_factory_inner(factory, device, Initialization::Snapshot)?;
         r.initialize_native(color)?;
         Ok(*r)
     }
 
     pub(crate) fn native_preparation(&self)->Result<Self,GpuRasterError> {
-        let mut renderer=Self::from_wgpu_inner(self.adapter.clone(),self.device.clone(),self.queue.clone(),Initialization::Snapshot)?;
+        let mut renderer=Self::from_factory_inner(self.factory.clone(),self.device.clone(),Initialization::Snapshot)?;
         renderer.initialize_native_from(self.document_color(),self.native_edit.as_ref())?;
-        renderer.snapshot_worker=false;renderer.scene_pipelines=self.scene_pipelines.clone();renderer.scene=None;
-        renderer.transforms=Some(paint_transform::PaintTransforms::from_recipes(&self.transforms.as_ref().unwrap().recipes()));
+        renderer.snapshot_worker=false;
         renderer.source_tiles=std::cell::RefCell::new(crate::scene::sources::DecodedTiles::new(self.document_color().space));
         if let Some(native)=&mut renderer.native_edit {native.color_cache_bytes=0;}
         renderer.preparation_compiler=self.startup.as_ref().map(|startup|startup.compiler.clone())

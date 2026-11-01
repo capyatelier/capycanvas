@@ -249,6 +249,7 @@ impl NativeHost {
         true
     }
     pub fn new(platform: layer_ui::Platform) -> Result<Self, String> {
+        window::prepare_cleanup()?;
         Self::new_localized(platform, layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
     }
     pub fn new_localized(

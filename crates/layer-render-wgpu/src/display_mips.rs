@@ -90,6 +90,7 @@ impl Plan {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct Pipelines {
     layout: wgpu::BindGroupLayout,
     fused_layout: wgpu::BindGroupLayout,

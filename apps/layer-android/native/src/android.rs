@@ -400,7 +400,7 @@ impl App {
             .get_or_insert_with(|| {
                 let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
                 descriptor.backends = wgpu::Backends::VULKAN;
-                wgpu::Instance::new(descriptor)
+                layer_host::gpu::native_instance(descriptor)
             })
             .clone();
         let surface = unsafe {
@@ -417,35 +417,17 @@ impl App {
             // Readiness belongs to this GPU initialization, including hosts
             // whose shared state otherwise defaults to eager rendering.
             self.host.startup = Default::default();
-            let unsupported = |cause: &str| layer_ui::gpu_unsupported(self.host.session.localization(), cause);
-            let adapter =
-                pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                    compatible_surface: Some(&surface),
-                    force_fallback_adapter: false,
-                    power_preference: wgpu::PowerPreference::None,
-                    apply_limit_buckets: false,
-                }))
-                .map_err(|e| unsupported(&e.to_string()))?;
-            let limits = layer_render_wgpu::rendering_limits(adapter.limits());
-            layer_host::admit_adapter(self.host.session.localization(), &adapter, &limits)?;
-            let (device, queue, watch) =
-                pollster::block_on(layer_host::request_device(&adapter, &wgpu::DeviceDescriptor {
-                    label: Some("Capy Canvas Android"),
-                    required_features: layer_render_wgpu::rendering_features(&adapter) | adapter.features()
-                        & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS),
-                    required_limits: limits,
-                    memory_hints: layer_render_wgpu::memory_hints(),
-                    ..Default::default()
-                }))
-                .map_err(error)?;
+            let gpu = pollster::block_on(layer_host::gpu::process_gpu(
+                &instance, &surface, self.host.session.localization(), wgpu::PowerPreference::None,
+            ))?;
             // Callbacks record failures without panicking through JNI or owning
             // the device. The render owner suspends input and exposes recovery.
             self.gpu_generation = self
                 .gpu_generation
                 .checked_add(1)
                 .ok_or("GPU generation exhausted")?;
-            self.gpu_watch = watch;
-            let renderer = layer_host::GpuContext { adapter, device, queue }.rasterizer(
+            self.gpu_watch = gpu.watch;
+            let renderer = layer_host::GpuContext::from_factory(gpu.factory).rasterizer(
                 self.host.session.engine().document().composition().color,
                 &self.host.renderer_options(),
                 false,

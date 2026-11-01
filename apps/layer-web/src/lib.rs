@@ -28,7 +28,7 @@ mod panel_vectors;
 use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
 use layer_render::{CanvasRenderer, FrameRate, FrameRateSource, PresentationRate};
-use layer_render_wgpu::{AttachedRenderer, GpuRasterError, SdrSurfaceColor, StartupProgress, ViewportPresenter, WgpuRasterizer};
+use layer_render_wgpu::{AttachedRenderer, GpuRasterError, RendererFactory, SdrSurfaceColor, StartupProgress, ViewportPresenter, WgpuRasterizer};
 use layer_ui::{UiAction, UiSession, ui_catalog_localized};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -440,7 +440,7 @@ impl WebApp {
             "session": self.session.rendering_diagnostics()}))
     }
     pub fn suspend_gpu(&mut self) -> Result<JsValue, JsValue> {
-        if let Some(context) = self.document_gpu.take() { context.device.destroy(); }
+        if let Some(context) = self.document_gpu.take() { context.factory.device().destroy(); }
         let change = self.session.suspend_renderer().map_err(js);
         if let Some(gpu) = self.session.renderer_mut().0.take() {
             // Dropping WebGPU handles leaves release to JavaScript GC. Retire
@@ -501,8 +501,8 @@ impl WebGpu {
             *failure.lock().unwrap() = Some(format!("Canvas GPU stopped ({reason:?}): {message}"));
         });
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let mut renderer = WgpuRasterizer::from_wgpu_native_staged(adapter, device, queue, color)
-            .map_err(|error| gpu_error("renderer", error))?;
+        let factory = RendererFactory::new(adapter, device, queue);
+        let mut renderer = *factory.rasterizer(color).map_err(|error| gpu_error("renderer", error))?;
         let hdr_capable = surface.get_capabilities(renderer.adapter())
             .color_spaces(wgpu::TextureFormat::Rgba16Float)
             .contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB);

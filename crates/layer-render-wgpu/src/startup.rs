@@ -183,7 +183,7 @@ impl Requirements {
             return;
         }
         if style.execution == BrushExecution::Liquify {
-            let pipelines = r.liquify_pipelines.get_or_init(|| Arc::new(liquify::Pipelines::new(r)));
+            let pipelines = r.recipes.liquify.get_or_init(|| Arc::new(liquify::Pipelines::new(r)));
             self.compute.extend([pipelines.update(style).clone(), pipelines.reconstruct.clone(), pipelines.mips.reduce.clone(), pipelines.mips.fused_reduce.clone()]);
             return;
         }
@@ -410,7 +410,7 @@ impl WgpuRasterizer {
             if shader.key.watercolor {required.compute.push(self.pipelines.watercolor_compute.1.clone());}
             required.compute.extend(self.transforms.as_ref().unwrap().placement_pipelines());
             if self.native_edit.is_some() {
-                let mip = self.display_pipelines.get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
+                let mip = self.display_pipelines.get_or_insert_with(|| self.recipes.display.clone());
                 required.compute.extend([mip.reduce.clone(), mip.fused_reduce.clone()]);
                 required.compute.extend(self.scene_pipelines.scale_pipelines().into_iter().cloned());
             }

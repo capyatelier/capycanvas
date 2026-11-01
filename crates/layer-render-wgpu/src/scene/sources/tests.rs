@@ -34,7 +34,7 @@ fn raster_cache_keys_share_generated_contents_and_keep_loaded_owner_identity() {
 #[test]
 fn equal_generated_rasters_reuse_gpu_pixels_without_another_sample_decode() {
     let gpu = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut r = WgpuRasterizer::native_capture_on_gpu(gpu.adapter.clone(), gpu.device.clone(), gpu.queue.clone(), Default::default()).unwrap();
+    let mut r = WgpuRasterizer::native_capture_on_factory(gpu.factory.clone(), gpu.device.clone(), Default::default()).unwrap();
     drop(gpu);
     let mut scene = Scene::new(&r).unwrap();
     let descriptor = r.document_color().paint_descriptor();
@@ -192,7 +192,7 @@ fn repeated_native_threshold_updates_reuse_an_oversized_decoded_working_set() {
 #[test]
 fn discarded_source_decodes_cannot_be_reused_as_valid_pixels() {
     let gpu = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut r = WgpuRasterizer::native_capture_on_gpu(gpu.adapter.clone(), gpu.device.clone(), gpu.queue.clone(), Default::default()).unwrap();
+    let mut r = WgpuRasterizer::native_capture_on_factory(gpu.factory.clone(), gpu.device.clone(), Default::default()).unwrap();
     drop(gpu);
     r.source_tiles.get_mut().limits.slots = 2;
     let source = scan_source(3, 32);
@@ -317,7 +317,7 @@ fn source_residency_and_upload_window_follow_admitted_headroom() {
 #[test]
 fn decoded_sources_preserve_srgb_codes_and_padding() {
     let gpu = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut r = WgpuRasterizer::native_capture_on_gpu(gpu.adapter.clone(), gpu.device.clone(), gpu.queue.clone(), Default::default()).unwrap();
+    let mut r = WgpuRasterizer::native_capture_on_factory(gpu.factory.clone(), gpu.device.clone(), Default::default()).unwrap();
     drop(gpu);
     let mut scene = Scene::new(&r).unwrap();
     let mut exact = DecodedTiles::new(RgbSpace::Srgb);

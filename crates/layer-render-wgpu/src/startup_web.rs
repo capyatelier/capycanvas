@@ -57,16 +57,17 @@ impl Compiler {
         });
     }
     pub fn pipeline<T: 'static>(&self, pipeline: &Deferred<T>, priority: u8) {
-        if pipeline.promote(priority) {
+        if let Some(promotion) = pipeline.promote(priority) {
             let work = pipeline.clone();
-            let done = pipeline.clone();
+            let done = Rc::new(pipeline.validation());
+            let validation = done.clone();
             self.queue.borrow_mut().jobs.push_back(Job {
                 priority,
                 work: Box::new(move || {
-                    work.validating(true);
+                    validation.begin();
                     work.compile_async()
                 }),
-                complete: Some(Box::new(move || done.validating(false))),
+                complete: Some(Box::new(move || { drop(done); drop(promotion); })),
                 batchable: pipeline.async_pipeline(),
                 tracked: true,
             });
@@ -75,17 +76,18 @@ impl Compiler {
     /// Optional preparation that startup completion does not wait for; it is
     /// skipped once `current` reports a newer preparation.
     pub fn background<T: 'static>(&self, pipeline: &Deferred<T>, priority: u8, current: impl Fn() -> bool + Send + 'static) {
-        if pipeline.promote(priority) {
+        if let Some(promotion) = pipeline.promote(priority) {
             let work = pipeline.clone();
-            let done = pipeline.clone();
+            let done = Rc::new(pipeline.validation());
+            let validation = done.clone();
             self.queue.borrow_mut().jobs.push_back(Job {
                 priority,
                 work: Box::new(move || {
                     if !current() { return Box::pin(std::future::ready(Ok(()))); }
-                    work.validating(true);
+                    validation.begin();
                     work.compile_async()
                 }),
-                complete: Some(Box::new(move || done.validating(false))),
+                complete: Some(Box::new(move || { drop(done); drop(promotion); })),
                 batchable: false,
                 tracked: false,
             });

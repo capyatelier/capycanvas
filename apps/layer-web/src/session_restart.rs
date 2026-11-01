@@ -103,7 +103,7 @@ impl WebApp {
     pub fn prepare_session_restart(&self,checkpoint:JsValue,buffers:js_sys::Array,recovered:bool,observe:js_sys::Function)->Result<js_sys::Promise,JsValue> {
         let metadata=js_sys::JSON::stringify(&checkpoint)?.as_string().ok_or_else(||js("Missing drawing checkpoint"))?;
         let renderer=self.session.engine().backend().0.as_ref().ok_or_else(||js("Wait for the canvas"))?;
-        let (adapter,device,queue)=(renderer.adapter().clone(),renderer.device().clone(),renderer.queue().clone());
+        let factory=renderer.renderer_factory();
         let lost=self.gpu_owner().ok_or_else(||js("Wait for the canvas"))?;
         let viewport=self.session.state().camera.viewport;let localization=self.session.localization().clone();
         let brush=self.session.engine().configured_brush().clone();
@@ -115,7 +115,7 @@ impl WebApp {
             let observed=observe.call1(&JsValue::NULL,&serialize(&restore.state.location)?)?;
             let observed:Option<layer_ui::DestinationFingerprint>=serde_wasm_bindgen::from_value(JsFuture::from(js_sys::Promise::resolve(&observed)).await?).map_err(js)?;
             admission.admit(restore.document()).map_err(|reason|js(reason.message(&localization)))?;
-            let mut candidate=documents::prepare_session(restore.document().clone(),adapter,device,queue,&brush,viewport,localization,None).await?;
+            let mut candidate=documents::prepare_session(restore.document().clone(),factory,&brush,viewport,localization,None).await?;
             candidate.restore_session(restore,recovered,observed).map_err(js)?;
             Ok(WebSessionProject{session:Some(Box::new(candidate)),lost}.into())
         }))

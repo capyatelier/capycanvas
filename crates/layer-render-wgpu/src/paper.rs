@@ -269,19 +269,28 @@ impl Bake {
     }
 }
 
-pub(super) struct Papers {
+pub(super) struct Recipes {
     layout: wgpu::BindGroupLayout,
     pipeline_layout: wgpu::PipelineLayout,
     sampler: wgpu::Sampler,
     empty_image: wgpu::TextureView,
-    programs: Vec<Programs>,
-    slope_programs: Option<SlopePrograms>,
+    programs: std::sync::Mutex<Vec<Arc<Programs>>>,
+    slope: std::sync::OnceLock<Arc<SlopePrograms>>,
+}
+pub(super) struct Papers {
+    recipes: Arc<Recipes>,
+    programs: Vec<Arc<Programs>>,
+    slope_programs: Option<Arc<SlopePrograms>>,
     bakes: Vec<Bake>,
     clock: u64,
     submitted: Arc<AtomicBool>,
 }
 
-impl Papers {
+impl std::ops::Deref for Papers {
+    type Target = Recipes;
+    fn deref(&self) -> &Self::Target { &self.recipes }
+}
+impl Recipes {
     pub fn new(device: &PipelineDevice) -> Self {
         let layout = bindings::layout(device, "paper bake", &[
             bindings::buffer(0, wgpu::ShaderStages::FRAGMENT, wgpu::BufferBindingType::Uniform, false, None),
@@ -302,8 +311,13 @@ impl Papers {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let empty_image = Self::image_texture(device, [1, 1]).create_view(&Default::default());
-        Self { layout, pipeline_layout, sampler, empty_image, programs: Vec::new(), slope_programs: None, bakes: Vec::new(), clock: 0, submitted: Arc::new(AtomicBool::new(true)) }
+        let empty_image = Papers::image_texture(device, [1, 1]).create_view(&Default::default());
+        Self { layout, pipeline_layout, sampler, empty_image, programs: Default::default(), slope: Default::default() }
+    }
+}
+impl Papers {
+    pub fn from_recipes(recipes: Arc<Recipes>) -> Self {
+        Self { recipes, programs: Vec::new(), slope_programs: None, bakes: Vec::new(), clock: 0, submitted: Arc::new(AtomicBool::new(true)) }
     }
 
     fn image_texture(device: &PipelineDevice, extent: [u32; 2]) -> wgpu::Texture {
@@ -324,6 +338,10 @@ impl Papers {
         if self.programs.iter().any(|p| p.id == id) {
             return Ok(id);
         }
+        if let Some(program) = self.recipes.programs.lock().unwrap().iter().find(|p| p.id == id).cloned() {
+            self.programs.push(program);
+            return Ok(id);
+        }
         let mut source = String::from(include_str!("paper_bake.wgsl"));
         match texture.program() {
             Some(instance) => {
@@ -340,11 +358,17 @@ impl Papers {
             let (device, layout, module) = (device.for_recipe(), self.pipeline_layout.clone(), module.clone());
             Deferred::pipeline(move |mode| fullscreen_pipeline_recipe(mode, &device, &layout, &module, entry, None, format, "paper texture"))
         };
-        self.programs.push(Programs {
+        let program = Arc::new(Programs {
             id: id.clone(),
             probe: pipeline("paper_probe", wgpu::TextureFormat::R32Float),
             bake: pipeline("paper_bake", wgpu::TextureFormat::R8Unorm),
         });
+        let program = {
+            let mut programs = self.recipes.programs.lock().unwrap();
+            if let Some(shared) = programs.iter().find(|p| p.id == id) { shared.clone() }
+            else { programs.push(program.clone()); program }
+        };
+        self.programs.push(program);
         Ok(id)
     }
 
@@ -384,7 +408,7 @@ impl Papers {
     }
 
     pub fn require_slope(&mut self, device: &PipelineDevice, compiler: Option<&startup::Compiler>, id: &AssetId, priority: u8) {
-        let programs = self.slope_programs.get_or_insert_with(|| SlopePrograms::new(device));
+        let programs = self.slope_programs.get_or_insert_with(|| self.recipes.slope.get_or_init(|| Arc::new(SlopePrograms::new(device))).clone());
         if let Some(compiler) = compiler {
             compiler.require([&programs.slope, &programs.mip], priority);
         }
@@ -403,7 +427,7 @@ impl Papers {
 
     fn ready_to_step(&self, bake: &Bake) -> bool {
         if matches!(bake.stage, Stage::Ready { .. }) {
-            bake.wants_slope && bake.slope.is_none() && self.slope_programs.as_ref().is_some_and(SlopePrograms::ready)
+            bake.wants_slope && bake.slope.is_none() && self.slope_programs.as_ref().is_some_and(|programs| programs.ready())
         } else {
             let program = self.programs.iter().find(|program| program.id == bake.program).expect("prepared paper program");
             program.probe.ready() && program.bake.ready()
@@ -492,7 +516,7 @@ impl Papers {
                             wgpu::Extent3d { width: source.extent[0], height: source.extent[1], depth_or_array_layers: 1 });
                         texture.create_view(&Default::default())
                     }
-                    TextureSource::Program(_) => self.empty_image.clone(),
+                    TextureSource::Program(_) => self.recipes.empty_image.clone(),
                 };
                 let probe = device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("paper probe"),
@@ -510,7 +534,7 @@ impl Papers {
                     usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                     mapped_at_creation: false,
                 });
-                let group = Self::group(device, &self.layout, &bake.tile.parameters(&bake.surface, 0., 1.), &bake.data, &image, &self.sampler)?;
+                let group = Self::group(device, &self.recipes.layout, &bake.tile.parameters(&bake.surface, 0., 1.), &bake.data, &image, &self.recipes.sampler)?;
                 let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("paper probe") });
                 {
                     let view = probe.create_view(&Default::default());
@@ -566,7 +590,7 @@ impl Papers {
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
                     view_formats: &[],
                 });
-                let group = Self::group(device, &self.layout, &bake.tile.parameters(&bake.surface, low, high), &bake.data, image, &self.sampler)?;
+                let group = Self::group(device, &self.recipes.layout, &bake.tile.parameters(&bake.surface, low, high), &bake.data, image, &self.recipes.sampler)?;
                 Stage::Baking { texture, group, next: 0, relief }
             }
             Stage::Baking { texture, group, next, relief } => {

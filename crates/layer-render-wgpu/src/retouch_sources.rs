@@ -60,7 +60,7 @@ impl Pipelines {
             compose_wgsl(&[&working_color::shader(device), include_str!("retouch_sample.wgsl"), include_str!("retouch_sources.wgsl")]),
         );
         let pipeline = |entry: &'static str| {
-            let (device, layout, shader) = (device.clone(), pipeline_layout.clone(), shader.clone());
+            let (device, layout, shader) = (device.for_recipe(), pipeline_layout.clone(), shader.clone());
             Deferred::pipeline(move |mode| {
                 fullscreen_pipeline_recipe(mode, &device, &layout, &shader, entry, None, device.working_format(), "retouch sources")
             })
@@ -880,7 +880,7 @@ impl WgpuRasterizer {
     }
 
     pub(super) fn retouch_pipelines(&mut self) -> Arc<Pipelines> {
-        self.retouch_pipelines.get_or_insert_with(|| Arc::new(Pipelines::new(&self.device))).clone()
+        self.recipes.retouch.get_or_init(|| Arc::new(Pipelines::new(&self.device))).clone()
     }
 
     pub(crate) fn release_unused_retouch(&mut self) {

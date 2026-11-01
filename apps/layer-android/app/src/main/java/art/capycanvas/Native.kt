@@ -64,6 +64,8 @@ internal object Native {
     @JvmStatic external fun documentResumeWork(task: Long)
     @JvmStatic external fun documentResume(handle: Long, task: Long)
     @JvmStatic external fun documentResumeFree(task: Long)
+    @JvmStatic external fun documentTrimRequest(handle: Long): Long
+    @JvmStatic external fun documentTrimComplete(handle: Long, token: Long, error: String?): Boolean
     @JvmStatic external fun documentSpillTask(handle: Long): Long
     @JvmStatic external fun documentSpillWork(task: Long)
     @JvmStatic external fun projectParkReady(handle: Long, task: Long): Boolean

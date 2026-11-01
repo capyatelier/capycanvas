@@ -62,10 +62,10 @@ impl Recovery {
         self.execute(work);
     }
     pub fn capture(self: &Rc<Self>, w: &Rc<Workspace>) {
-        self.window.replace(Rc::downgrade(w));
-        if let Some(gpu) = w.gpu.borrow().as_ref() { self.capture_session(&gpu.session); }
+        if let Some(gpu) = w.gpu.borrow().as_ref() { self.capture_session(w, &gpu.session); }
     }
-    pub fn capture_session(self: &Rc<Self>, session: &layer_ui::UiSession<crate::render_thread::RenderWorker>) {
+    pub fn capture_session(self: &Rc<Self>, w: &Rc<Workspace>, session: &layer_ui::UiSession<crate::render_thread::RenderWorker>) {
+        self.window.replace(Rc::downgrade(w));
         if !enabled() || self.discarded.load(Ordering::Acquire) { return; }
         let stamp=session.session_stamp();
         if self.current.get() && self.stamp.borrow().as_ref()==Some(&stamp) {return;}
@@ -79,12 +79,6 @@ impl Recovery {
         let update = self.policy.borrow_mut().event(RecoveryEvent::Observe { document, owned: true }).unwrap();
         self.current.set(update.current);
         self.execute(update.work);
-    }
-    pub fn retry(self:&Rc<Self>) {
-        if !self.current.get()&&!self.running.get()&&!self.discarded.load(Ordering::Acquire) {
-            let update=self.policy.borrow_mut().event(RecoveryEvent::Ownership {owned:true}).unwrap();
-            self.execute(update.work);
-        }
     }
     pub async fn prepare_retirement(&self)->Result<(),String> {
         self.drain().await;
@@ -113,6 +107,8 @@ impl Recovery {
             SessionRestore::from_core(open)
         }).await.map_err(|e|format!("Snapshot reader stopped: {e:?}"))?
     }
+    #[cfg(test)]
+    pub fn writer_store(&self) -> Arc<Mutex<Option<SessionStore>>> { self.store.clone() }
     #[cfg(test)]
     pub fn published_path(&self)->PathBuf {self.path.clone()}
     fn execute(self: &Rc<Self>, first: Option<RecoveryWork>) {
@@ -261,7 +257,7 @@ impl Restart {
             let model = w.documents.model.borrow();
             for (_, parked) in model.parked() {
                 let owner = parked.owner.recovery.clone();
-                owner.retry();
+                owner.capture_session(w, &parked.owner.canvas.session);
                 owners.push(owner);
             }
         }
@@ -279,6 +275,13 @@ impl Restart {
             }
         }
         Ok(())
+    }
+    pub fn request(&self, w: &Rc<Workspace>) {
+        if !enabled() || self.busy() { return; }
+        let w = w.clone();
+        glib::spawn_future_local(async move {
+            if let Err(error) = w.restart.checkpoint(&w, false).await { w.changed(Err(error)); }
+        });
     }
     pub async fn remove(&self,w:&Rc<Workspace>,id:u64)->Result<(),String> {
         if !enabled() {return Ok(());}

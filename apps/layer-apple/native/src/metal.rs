@@ -41,14 +41,6 @@ fn error(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
-#[cfg(any(target_vendor="apple",test))]
-pub(super) fn check_adapter(host: &NativeHost, adapter: &wgpu::Adapter, limits: &wgpu::Limits) -> Result<(), String> {
-    match layer_host::unsupported_adapter(adapter, limits) {
-        Some(cause) => Err(layer_ui::gpu_unsupported(host.session.localization(), &format!("Metal adapter requirements: {cause}"))),
-        None => Ok(()),
-    }
-}
-
 impl MetalHost {
     pub(crate) fn document_changed(&mut self) {
         self.local_tone.clear();
@@ -113,7 +105,7 @@ impl MetalHost {
     /// Each device records failures separately; a retired callback cannot stop
     /// its replacement. All session changes still happen on the serial owner.
     pub(crate) fn install_renderer(&mut self, host: &mut NativeHost, renderer: Box<WgpuRasterizer>) -> Result<(), String> {
-        let watch = layer_host::DeviceWatch::observe(renderer.device());
+        let watch = layer_host::DeviceWatch::for_device(renderer.device());
         let retired = host.replace_renderer(layer_host::Renderer(Some(renderer)))?;
         self.local_tone.clear();
         self.watch = watch;
@@ -184,33 +176,18 @@ impl MetalHost {
         let instance = self.instance.get_or_insert_with(|| {
             let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
             descriptor.backends = wgpu::Backends::METAL;
-            wgpu::Instance::new(descriptor)
+            layer_host::gpu::native_instance(descriptor)
         });
         let surface = unsafe {
             instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(layer))
         }
         .map_err(|e| format!("Metal surface creation: {e}"))?;
         if host.session.engine().backend().0.is_none() {
-            let adapter =
-                pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                    compatible_surface: Some(&surface),
-                    force_fallback_adapter: false,
-                    power_preference: wgpu::PowerPreference::None,
-                    apply_limit_buckets: false,
-                }))
-                .map_err(|e| layer_ui::gpu_unsupported(host.session.localization(), &format!("Metal adapter selection: {e}")))?;
-            let limits = layer_render_wgpu::rendering_limits(adapter.limits());
-            check_adapter(host, &adapter, &limits)?;
-            let (device, queue, watch) =
-                pollster::block_on(layer_host::request_device(&adapter, &wgpu::DeviceDescriptor {
-                    label: Some("Capy Canvas Apple"),
-                    required_features: layer_render_wgpu::rendering_features(&adapter)
-                        | adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
-                    required_limits: limits,
-                    ..Default::default()
-                }))
-                .map_err(|e| format!("Metal device request ({:?}): {e}", adapter.get_info()))?;
-            let context = layer_host::GpuContext { adapter, device, queue };
+            let gpu = pollster::block_on(layer_host::gpu::process_gpu(
+                instance, &surface, host.session.localization(), wgpu::PowerPreference::None,
+            ))?;
+            let watch = gpu.watch;
+            let context = layer_host::GpuContext::from_factory(gpu.factory);
             let (color, options) = (host.session.engine().document().composition().color, host.renderer_options());
             let renderer = std::thread::scope(|scope| -> Result<Box<WgpuRasterizer>, String> {
                 std::thread::Builder::new()

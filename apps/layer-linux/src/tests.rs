@@ -197,6 +197,7 @@ fn sample_after_paint<T: 'static>(widget: &impl IsA<gtk::Widget>, sample: impl F
 fn idle_paint(widget: &impl IsA<gtk::Widget>) -> PaintedSample<()> {
     let frames = sample_after_paint(widget, || ());
     widget.queue_draw(); pump(30);
+    until(|| !frames.samples.borrow().is_empty(), "after-paint sample");
     frames.finish().pop().unwrap()
 }
 

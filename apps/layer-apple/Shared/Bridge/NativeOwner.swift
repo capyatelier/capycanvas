@@ -87,6 +87,7 @@ struct ScreenReport: Equatable {
 
 final class NativeOwner: @unchecked Sendable {
     private let queue: RenderOwnerQueue
+    private let drawingWorker = DispatchQueue(label: "art.capycanvas.drawing-activation", qos: .userInitiated)
     private let languageWorker = DispatchQueue(label: "art.capycanvas.language", qos: .userInitiated)
     private var languageReady = false
     private var languagePollScheduled = false
@@ -586,7 +587,12 @@ final class NativeOwner: @unchecked Sendable {
             let task = SessionJob(pointer, failure: documentDeliveryCopy["change_in_progress"].string, access: ProjectFileAccess(state: persistence.locations?.state))
             NativeProjectTask.io.async { let failure = task.work(); completion(failure ?? task.diagnostic, capy_session_committed(nativeValue(task.handle))) }
         }
-        queue.async(execute: poll)
+        if cleanExit || exclusion != 0 {
+            waitForDocumentStorage { [self] error in
+                if let error { completion(error, false) }
+                else { queue.async(execute: poll) }
+            }
+        } else { queue.async(execute: poll) }
     }
     /// Poll only while document/export shaders prepare. GPU synchronization and
     /// pixel packing happen later on the file worker through the returned job.
@@ -623,7 +629,8 @@ final class NativeOwner: @unchecked Sendable {
                 try publish()
                 if let url {
                     let access = ProjectFileAccess(state: persistence.locations?.state)
-                    NativeProjectTask.io.async { try? access.remember(url); completion(nil) }
+                    NativeProjectTask.io.async { try? access.remember(url); if !opening { completion(nil) } }
+                    if opening { completion(nil) }
                 } else { completion(nil) }
                 if opening { documentStorage() }
             } catch { completion(error.localizedDescription) }
@@ -658,8 +665,7 @@ final class NativeOwner: @unchecked Sendable {
     func switchDocument(_ id: UInt64, closing: Bool = false,
         removing: (@Sendable (@escaping @Sendable (Bool) -> Void) -> Void)? = nil,
         completion: @escaping @Sendable (String?) -> Void) {
-        prepareDocumentSwitch { [self] error in
-            guard error == nil else { completion(error); return }
+        @Sendable func perform() {
             do {
                 guard let task = nativeHandle(capy_apple_document_switch(nativeValue(handle), id, closing)) else { try check(-1); return }
                 let job = DocumentJob(task)
@@ -681,16 +687,34 @@ final class NativeOwner: @unchecked Sendable {
                 } else { runDocumentJob(job, completion: completion) }
             } catch { completion(error.localizedDescription) }
         }
+        if closing {
+            prepareDocumentSwitch { error in
+                guard error == nil else { completion(error); return }
+                perform()
+            }
+        } else { queue.async(execute: perform) }
+    }
+    private func waitForDocumentStorage(_ completion: @escaping @Sendable (String?) -> Void) {
+        queue.async { [self] in
+            guard let task = nativeHandle(capy_apple_document_trim_wait(nativeValue(handle))) else { completion(nil); return }
+            runDocumentJob(DocumentJob(task), waiting: true, completion: completion)
+        }
     }
     private func documentStorage() {
         guard let task = nativeHandle(capy_apple_document_storage(nativeValue(handle))) else { return }
-        runDocumentJob(DocumentJob(task)) { [weak self] error in if let error { self?.receive(nil, error) } }
+        runDocumentJob(DocumentJob(task), storage: true) { [weak self] error in if let error { self?.receive(nil, error) } }
     }
-    private func runDocumentJob(_ job: DocumentJob, completion: @escaping @Sendable (String?) -> Void) {
-        NativeProjectTask.io.async { [self, job] in
+    private func runDocumentJob(_ job: DocumentJob, storage: Bool = false, waiting: Bool = false, completion: @escaping @Sendable (String?) -> Void) {
+        (storage ? NativeProjectTask.io : drawingWorker).async { [self, job] in
             _ = capy_document_prepare(nativeValue(job.handle))
             queue.async { [self, job] in
-                do { try check(capy_apple_document_resume(nativeValue(handle),nativeValue(job.handle))); try publish(); completion(nil) }
+                do {
+                    let result = capy_apple_document_resume(nativeValue(handle),nativeValue(job.handle))
+                    try check(result)
+                    if result == 1 { runDocumentJob(job, storage: storage, waiting: waiting, completion: completion); return }
+                    try publish(); completion(nil)
+                    if !storage && !waiting { documentStorage() }
+                }
                 catch { try? publish(); completion(error.localizedDescription) }
             }
         }

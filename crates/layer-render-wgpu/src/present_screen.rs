@@ -60,6 +60,10 @@ const MAPPING: u8 = 1;
 const MAPPED: u8 = 2;
 const FAILED: u8 = 3;
 
+pub(crate) struct Recipes {
+    layout: wgpu::BindGroupLayout,
+    pipeline: crate::deferred::Deferred<wgpu::ComputePipeline>,
+}
 pub(crate) struct ScreenCounter {
     pub(crate) pipeline: crate::deferred::Deferred<wgpu::ComputePipeline>,
     counts: wgpu::Buffer,
@@ -70,8 +74,8 @@ pub(crate) struct ScreenCounter {
     pending: Option<Vec<u32>>,
 }
 
-impl ScreenCounter {
-    pub(crate) fn new(device: &crate::PipelineDevice, viewport: &wgpu::BindGroupLayout, shader: &wgpu::ShaderModule) -> Self {
+impl Recipes {
+    pub fn new(device: &crate::PipelineDevice, viewport: &wgpu::BindGroupLayout, shader: &wgpu::ShaderModule) -> Self {
         let layout = crate::bindings::layout(device, "screen gamut counts", &[crate::bindings::buffer(
             0,
             wgpu::ShaderStages::COMPUTE,
@@ -79,19 +83,13 @@ impl ScreenCounter {
             false,
             wgpu::BufferSize::new(COUNTS_SIZE),
         )]);
-        let counts = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("screen gamut counts"),
-            size: COUNTS_SIZE,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("screen gamut count"),
             bind_group_layouts: &[Some(viewport), Some(&layout)],
             immediate_size: 0,
         });
-        let (compiler, module) = (device.clone(), shader.clone());
-        Self {
+        let (compiler, module) = (device.for_recipe(), shader.clone());
+        Self { layout,
             pipeline: crate::deferred::Deferred::pipeline(move |mode| {
                 mode.compute(&compiler, &wgpu::ComputePipelineDescriptor {
                     label: Some("screen gamut count"),
@@ -102,7 +100,20 @@ impl ScreenCounter {
                     cache: None,
                 })
             }),
-            group: crate::bindings::group(device, "screen gamut counts", &layout, [counts.as_entire_binding()]),
+        }
+    }
+}
+impl ScreenCounter {
+    pub(crate) fn from_recipes(device: &crate::PipelineDevice, recipes: &Recipes) -> Self {
+        let counts = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("screen gamut counts"),
+            size: COUNTS_SIZE,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Self {
+            pipeline: recipes.pipeline.clone(),
+            group: crate::bindings::group(device, "screen gamut counts", &recipes.layout, [counts.as_entire_binding()]),
             counts,
             readback: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("screen gamut readback"),

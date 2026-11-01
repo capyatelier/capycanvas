@@ -77,8 +77,7 @@ pub enum TabRequest {
     ResetClose,
 }
 
-/// Worker half of a drawing switch: drops the retired renderer and builds the
-/// selected drawing's renderer on the window device.
+/// Worker half of a drawing switch, using the window's shared GPU factory.
 pub struct Activation {
     selected: u64,
     epoch: u64,
@@ -86,6 +85,7 @@ pub struct Activation {
     color: DocumentColor,
     options: RendererOptions,
     retired: Option<Box<WgpuRasterizer>>,
+    retirement_barrier: bool,
     renderer: Option<Box<WgpuRasterizer>>,
 }
 impl Activation {
@@ -93,7 +93,10 @@ impl Activation {
         self.selected
     }
     pub fn work(&mut self) -> Result<(), String> {
-        drop(self.retired.take());
+        if let Some(retired) = self.retired.take() {
+            if self.retirement_barrier { drop(retired); }
+            else { retire_render_resources(retired)?; }
+        }
         if self.selected == 0 {
             return Ok(());
         }
@@ -107,6 +110,32 @@ impl Activation {
     pub fn take_renderer(&mut self) -> Option<Box<WgpuRasterizer>> {
         self.renderer.take()
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn cleanup_worker() -> Result<&'static std::sync::mpsc::Sender<Box<dyn Send>>, String> {
+    use std::sync::{OnceLock, mpsc};
+    static CLEANUP: OnceLock<Result<mpsc::Sender<Box<dyn Send>>, String>> = OnceLock::new();
+    let sender = CLEANUP.get_or_init(|| {
+        let (sender, incoming) = mpsc::channel();
+        std::thread::Builder::new().name("capy-renderer-cleanup".into()).spawn(move || {
+            for resources in incoming {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(resources)));
+            }
+        }).map(|_| sender).map_err(|error| error.to_string())
+    });
+    sender.as_ref().map_err(Clone::clone)
+}
+#[cfg(target_arch = "wasm32")]
+pub fn retire_render_resources(renderer: Box<WgpuRasterizer>) -> Result<(), String> { drop(renderer); Ok(()) }
+#[cfg(not(target_arch = "wasm32"))]
+pub fn retire_render_resources(resources: Box<dyn Send>) -> Result<(), String> {
+    cleanup_worker()?.send(resources).map_err(|error| error.to_string())
+}
+pub(crate) fn prepare_cleanup() -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    cleanup_worker()?;
+    Ok(())
 }
 
 pub struct OpenAdoption {
@@ -367,6 +396,7 @@ impl<P: Parked> DocumentWindow<P> {
             color: host.session.engine().document().composition().color,
             options,
             retired,
+            retirement_barrier: false,
             renderer: None,
         };
         Ok(Some((activation, None)))
@@ -440,7 +470,7 @@ impl<P: Parked> DocumentWindow<P> {
         host.startup = Default::default();
         Ok((Activation {selected:self.documents.selected(),epoch:host.session.state().document_file.epoch,
             gpu:self.gpu.clone(),color:host.session.engine().document().composition().color,
-            options:prepared.options,retired,renderer:None}, closed))
+            options:prepared.options,retired,retirement_barrier:true,renderer:None}, closed))
     }
 
     /// Checks that the activation still targets the selected drawing, its
@@ -748,6 +778,35 @@ mod tests {
     use crate::open::OpenEnvironment;
     use layer_ui::{LayerAction, UiAction, UiInput};
     use std::time::{Duration, Instant};
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn renderer_cleanup_does_not_hold_the_activation_worker() {
+        use std::sync::mpsc;
+        struct Resource(mpsc::Sender<std::thread::ThreadId>, mpsc::Receiver<()>, mpsc::Sender<()>);
+        impl Drop for Resource {
+            fn drop(&mut self) {
+                self.0.send(std::thread::current().id()).unwrap();
+                self.1.recv().unwrap();
+                self.2.send(()).unwrap();
+            }
+        }
+        let (entered, cleanup) = mpsc::channel();
+        let (release, waiting) = mpsc::channel();
+        let (destroyed, complete) = mpsc::channel();
+        let (accepted, activation) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            retire_render_resources(Box::new(Resource(entered, waiting, destroyed))).unwrap();
+            accepted.send(std::thread::current().id()).unwrap();
+        });
+        let result = activation.recv_timeout(Duration::from_secs(5));
+        let cleanup_thread = cleanup.recv_timeout(Duration::from_secs(5));
+        assert!(complete.try_recv().is_err());
+        release.send(()).unwrap();
+        worker.join().unwrap();
+        assert_ne!(result.expect("Activation waited for cleanup"), cleanup_thread.unwrap());
+        complete.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
 
     #[test]
     fn conversion_copy_is_completed_before_parking_the_original_drawing() {

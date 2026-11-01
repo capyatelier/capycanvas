@@ -95,6 +95,10 @@ import UIKit
             finish(failure, accepted: committed, exclusion: exclusion)
         } }
     }
+    func checkpoint() {
+        scheduled?.cancel(); scheduled = nil
+        if !closed && !restoring && !restoreFailed && !saving { write() }
+    }
     func flush(cleanExit: Bool = false, _ completion: @escaping (Bool) -> Void) {
         scheduled?.cancel(); scheduled = nil
         if closed && !saving { completion(error == nil); return }

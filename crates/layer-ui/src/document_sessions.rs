@@ -73,6 +73,10 @@ pub struct ParkedDocument<T> {
     untitled: String,
 }
 
+#[path = "document_sessions/trim.rs"]
+mod trim;
+pub use trim::TrimWait;
+
 pub struct DocumentSessions<T> {
     tabs: DocumentTabs,
     parked: BTreeMap<u64, ParkedDocument<T>>,
@@ -82,6 +86,7 @@ pub struct DocumentSessions<T> {
     pub budget: DocumentBudget,
     storage_error: Option<String>,
     pub clip: RetainedClipboard,
+    trim: trim::Trim,
 }
 impl<T> Default for DocumentSessions<T> {
     fn default() -> Self { Self::localized(&Localizer::shared(crate::UiLanguage::English)) }
@@ -108,8 +113,16 @@ impl<T> DocumentSessions<T> {
         Self {
             tabs: Default::default(), parked: Default::default(), clock: 0, language: localization.language(),
             untitled: DocumentTabLabel::untitled(1, localization),
-            budget: Default::default(), storage_error: None, clip: RetainedClipboard,
+            budget: Default::default(), storage_error: None, clip: RetainedClipboard, trim: Default::default(),
         }
+    }
+    pub fn request_trim(&mut self) -> Option<u64> { self.trim.request() }
+    pub fn trim_wait(&self) -> Option<TrimWait> { self.trim.wait() }
+    pub fn trim_in_flight(&self) -> bool { self.trim.in_flight() }
+    pub fn complete_trim(&mut self, token: u64, result: Result<(), String>) -> bool {
+        if !self.trim.matches(token) { return false; }
+        self.storage_completed(result.clone());
+        self.trim.complete(token, result)
     }
     pub fn set_localization(&mut self, localization: &Localizer) -> bool {
         if self.language == localization.language() { return false; }

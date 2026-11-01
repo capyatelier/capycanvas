@@ -313,6 +313,7 @@ pub(super) fn prepare_geometry(style: &layer_render::DabStyle, dabs: &mut [DabGp
 const OPERATIONS: [MaterialOperation; 3] = [MaterialOperation::Deposit, MaterialOperation::Coverage, MaterialOperation::Clone];
 type Kernels = [Deferred<wgpu::ComputePipeline>; 2 * OPERATIONS.len()];
 
+#[derive(Clone)]
 pub(super) struct Pipelines {
     in_place: bool,
     layouts: [wgpu::BindGroupLayout; 2],

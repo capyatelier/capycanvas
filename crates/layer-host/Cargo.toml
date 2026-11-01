@@ -16,6 +16,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 wgpu.workspace = true
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+
 [dev-dependencies]
 layer-core = { path = "../layer-core", features = ["test-support"] }
 pollster = "0.4"

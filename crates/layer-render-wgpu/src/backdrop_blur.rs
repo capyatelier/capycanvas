@@ -147,6 +147,14 @@ fn surface_rotation(turns: u32, [width, height]: [f32; 2]) -> Affine {
     }
 }
 
+pub(crate) struct Recipes {
+    layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    down: crate::Deferred<wgpu::RenderPipeline>,
+    up: crate::Deferred<wgpu::RenderPipeline>,
+    fill: crate::Deferred<wgpu::RenderPipeline>,
+    region: crate::Deferred<wgpu::RenderPipeline>,
+}
 pub(crate) struct BackdropBlur {
     style: BackdropBlurStyle,
     format: wgpu::TextureFormat,
@@ -177,8 +185,7 @@ pub(crate) struct BackdropBlur {
     frames: [u64; 2],
 }
 
-impl BackdropBlur {
-    pub fn pipelines(&self) -> [&crate::Deferred<wgpu::RenderPipeline>; 4] { [&self.down, &self.up, &self.fill, &self.region] }
+impl Recipes {
     pub fn new(device: &crate::PipelineDevice, format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("backdrop blur"),
@@ -229,20 +236,22 @@ impl BackdropBlur {
                 },
             }),
         );
+        Self { layout, down, up, fill, region, sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("backdrop blur"), mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default()
+        }) }
+    }
+}
+
+impl BackdropBlur {
+    #[cfg(test)]
+    pub fn new(device: &crate::PipelineDevice, format: wgpu::TextureFormat) -> Self { Self::from_recipes(device, format, &Recipes::new(device, format)) }
+    pub fn pipelines(&self) -> [&crate::Deferred<wgpu::RenderPipeline>; 4] { [&self.down, &self.up, &self.fill, &self.region] }
+    pub fn from_recipes(device: &crate::PipelineDevice, format: wgpu::TextureFormat, recipes: &Recipes) -> Self {
+        let Recipes { layout, sampler, down, up, fill, region } = recipes;
         Self {
             style: BackdropBlurStyle::default(),
             format,
-            layout,
-            sampler: device.create_sampler(&wgpu::SamplerDescriptor {
-                label: Some("backdrop blur"),
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                ..Default::default()
-            }),
-            down,
-            up,
-            fill,
-            region,
+            layout: layout.clone(), sampler: sampler.clone(), down: down.clone(), up: up.clone(), fill: fill.clone(), region: region.clone(),
             uniforms: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("backdrop blur passes"),
                 size: PASS_STRIDE * 16,

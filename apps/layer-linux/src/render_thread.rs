@@ -227,6 +227,9 @@ impl ContextCapture {
 impl RenderWorker {
     pub(super) fn take_cancelled_thumbnail(&mut self) -> Option<u64> { self.cancelled_thumbnails.pop_front() }
     pub(crate) fn capture_context(&self) -> Result<ContextCapture, String> {
+        if self.retirement.is_some() {
+            return Ok(ContextCapture(self.report.final_context.clone()));
+        }
         let value = Arc::new(std::sync::OnceLock::new());
         if self.failure.get().is_some() {
             let _ = value.set(Ok(self.evaluation_context()));
@@ -366,6 +369,7 @@ enum Command {
 #[derive(Default)]
 struct FrameReport {
     context: std::sync::RwLock<EvaluationContext>,
+    final_context: Arc<std::sync::OnceLock<Result<EvaluationContext, String>>>,
     pending_work: AtomicBool,
     retouch_miss: std::sync::atomic::AtomicU64,
     retouch_waiting: std::sync::atomic::AtomicU64,
@@ -621,6 +625,7 @@ impl RenderWorker {
         renderer.thread = Some(std::thread::Builder::new()
             .name("canvas-gpu".into())
             .spawn(move || {
+                let _final_context = ContextRequest { value: worker_report.final_context.clone() };
                 // A panic retires this entire owner; no encoder or renderer
                 // state is reused after unwinding.
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -940,6 +945,7 @@ impl RenderWorker {
         let retirement = if let Some(thread) = self.thread.take() {
             crate::retirement::reap(thread, resources, self.parent.take())
         } else {
+            let _ = self.report.final_context.set(Err("GPU worker stopped before capture".into()));
             drop(resources);
             let finished = crate::retirement::Retirement::default();
             finished.complete();
@@ -1943,6 +1949,7 @@ impl Worker {
                 Command::Stop => break,
             }
         }
+        let _ = report.final_context.set(Ok(self.renderer.evaluation_context()));
         Ok(())
     }
     fn new(
@@ -1954,32 +1961,16 @@ impl Worker {
         localization: &layer_ui::Localizer,
     ) -> Result<Self, String> {
         let mut child = Child::new(parent, clock)?;
-        // One process-lifetime loader/instance, not one per window. On the
-        // tested NVIDIA driver, destroying our instance invalidates Wayland WSI
-        // entry points still used by GTK's instance. Devices/surfaces/resources
-        // are still destroyed with their window; only this instance is retained.
-        static INSTANCE: std::sync::OnceLock<wgpu::Instance> = std::sync::OnceLock::new();
-        let instance = INSTANCE
-            .get_or_init(|| {
-                let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-                descriptor.backends = wgpu::Backends::VULKAN;
-                descriptor.flags = descriptor.flags.with_env();
-                wgpu::Instance::new(descriptor)
-            })
-            .clone();
-        // Worker owns child; GpuCanvas retains GTK parent and joins us on drop.
+        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        descriptor.backends = wgpu::Backends::VULKAN;
+        descriptor.flags = descriptor.flags.with_env();
+        let instance = layer_host::gpu::native_instance(descriptor);
         let surface = unsafe { instance.create_surface_unsafe(child.target()) }.map_err(error)?;
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(&surface),
-            ..Default::default()
-        }))
-        .map_err(error)?;
-        let limits = layer_render_wgpu::rendering_limits(adapter.limits());
-        layer_host::admit_adapter(localization, &adapter, &limits)?;
-        let caps = surface.get_capabilities(&adapter);
+        let gpu = pollster::block_on(layer_host::gpu::process_gpu(&instance, &surface, localization, wgpu::PowerPreference::HighPerformance))?;
+        let adapter = gpu.factory.adapter();
+        let caps = surface.get_capabilities(adapter);
         let mut config = surface
-            .get_default_config(&adapter, 1, 1)
+            .get_default_config(adapter, 1, 1)
             .ok_or("Vulkan Wayland swapchain unavailable")?;
         let hdr_float_supported = caps.color_spaces(wgpu::TextureFormat::Rgba16Float).contains(wgpu::SurfaceColorSpaces::PASS_THROUGH);
         let hdr_encoding = if color.depth.is_float() && hdr_float_supported {
@@ -2006,29 +1997,18 @@ impl Worker {
         }
         config.present_mode = wgpu::PresentMode::Mailbox;
         config.desired_maximum_frame_latency = 2;
-        let (device, queue, watch) = pollster::block_on(layer_host::request_device(&adapter, &wgpu::DeviceDescriptor {
-            label: Some("Wayland canvas GPU"),
-            required_features: layer_render_wgpu::rendering_features(&adapter) | adapter.features()
-                & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS),
-            required_limits: limits,
-            memory_hints: layer_render_wgpu::memory_hints(),
-            ..Default::default()
-        }))
-        .map_err(error)?;
         eprintln!(
             "Wayland canvas GPU: {:?}, {:?}, {:?}",
             adapter.get_info(),
             config.present_mode,
             config.format
         );
-        let mut renderer = *WgpuRasterizer::from_wgpu_native_staged_boxed(
-            adapter, device, queue, color,
-        ).map_err(error)?;
+        let mut renderer = *gpu.factory.rasterizer(color).map_err(error)?;
         renderer.configure_ui_previews(view_color.space()).map_err(error)?;
         eprintln!("Wayland canvas color: {:?}; available: {:?}", config.color_space, caps.format_capabilities);
         let presenter = workspace_presenter(&renderer, config.format, hdr_encoding.unwrap_or_else(|| view_color.surface()))?;
         Ok(Self {
-            watch,
+            watch: gpu.watch,
             view_color,
             backdrop_submitted: false,
             paper_ready: Arc::new(AtomicBool::new(false)),

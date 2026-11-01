@@ -456,11 +456,7 @@ mod tests {
             ..Default::default()
         }))
         .unwrap();
-        let replacement = crate::GpuContext {
-            adapter,
-            device,
-            queue,
-        }
+        let replacement = crate::GpuContext::new(adapter, device, queue)
         .rasterizer(DocumentColor::default(), &Default::default(), true)
         .unwrap();
         host.session

@@ -5,9 +5,7 @@ use super::*;
 /// The window keeps its device and surface through a switch. This contains no
 /// document textures, readback, renderer, preview or raster worker.
 pub(super) struct DocumentGpu {
-    adapter: wgpu::Adapter,
-    pub device: wgpu::Device,
-    queue: wgpu::Queue,
+    pub factory: layer_render_wgpu::RendererFactory,
 }
 
 #[wasm_bindgen]
@@ -43,13 +41,7 @@ impl WebApp {
         if surface.lost.lock().unwrap().is_some() {
             return Err(js("The window GPU device was lost; restart the canvas"));
         }
-        let mut renderer = WgpuRasterizer::from_wgpu_native_staged(
-            context.adapter.clone(),
-            context.device.clone(),
-            context.queue.clone(),
-            self.session.engine().document().composition().color,
-        )
-        .map_err(js)?;
+        let mut renderer = *context.factory.rasterizer(self.session.engine().document().composition().color).map_err(js)?;
         raster_worker::install(&mut renderer);
         let mut surface = self.surface.take().unwrap();
         surface.blank_presented = false;
@@ -247,9 +239,7 @@ impl WebApp {
         self.proof = Default::default();
         if let Some(gpu) = self.session.renderer_mut().0.take() {
             self.document_gpu = Some(DocumentGpu {
-                adapter: gpu.adapter().clone(),
-                device: gpu.device().clone(),
-                queue: gpu.queue().clone(),
+                factory: gpu.renderer_factory(),
             });
         }
         self.reset_document_views();

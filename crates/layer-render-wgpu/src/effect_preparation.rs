@@ -22,11 +22,30 @@ pub(super) enum Work {
     Dispatch(Dispatch),
     Copy { source: wgpu::Buffer, destination: wgpu::Buffer, offset: u64, size: u64 },
 }
+pub(super) struct Recipes {
+    layout: wgpu::BindGroupLayout,
+    pipelines: std::sync::Mutex<Vec<(Key, Deferred<wgpu::ComputePipeline>)>>,
+}
 pub(super) struct Preparation {
+    recipes: Arc<Recipes>,
     pub layout: wgpu::BindGroupLayout,
     pub(super) pipelines: Vec<(Key, Deferred<wgpu::ComputePipeline>)>,
     pub pending: Vec<Work>,
     pub executions: u64,
+}
+impl Recipes {
+    pub fn new(device: &wgpu::Device) -> Self {
+        Self {
+            layout: crate::bindings::layout(device, "effect preparation storage", &[crate::bindings::buffer(
+                0,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Storage { read_only: false },
+                false,
+                NonZeroU64::new(16),
+            )]),
+            pipelines: Default::default(),
+        }
+    }
 }
 impl Preparation {
     pub fn retain_programs(&mut self, programs: &[Arc<EffectProgram>]) {
@@ -35,6 +54,7 @@ impl Preparation {
     }
     pub fn fork(&self) -> Self {
         Self {
+            recipes: self.recipes.clone(),
             layout: self.layout.clone(),
             pipelines: self.pipelines.clone(),
             pending: Vec::new(),
@@ -48,19 +68,10 @@ impl Preparation {
             }
         }
     }
-    pub fn new(device: &wgpu::Device) -> Self {
-        Self {
-            layout: crate::bindings::layout(device, "effect preparation storage", &[crate::bindings::buffer(
-                0,
-                wgpu::ShaderStages::COMPUTE,
-                wgpu::BufferBindingType::Storage { read_only: false },
-                false,
-                NonZeroU64::new(16),
-            )]),
-            pipelines: Vec::new(),
-            pending: Vec::new(),
-            executions: 0,
-        }
+    #[cfg(test)]
+    pub fn new(device: &wgpu::Device) -> Self { Self::from_recipes(Arc::new(Recipes::new(device))) }
+    pub fn from_recipes(recipes: Arc<Recipes>) -> Self {
+        Self { layout: recipes.layout.clone(), recipes, pipelines: Vec::new(), pending: Vec::new(), executions: 0 }
     }
     pub fn pipeline(
         &mut self,
@@ -69,6 +80,10 @@ impl Preparation {
     ) -> Result<Deferred<wgpu::ComputePipeline>, GpuRasterError> {
         if let Some((_, pipeline)) = self.pipelines.iter().find(|(k, _)| k == key) {
             return Ok(pipeline.clone());
+        }
+        if let Some((_, pipeline)) = self.recipes.pipelines.lock().unwrap().iter().find(|(k, _)| k == key).cloned() {
+            self.pipelines.push((key.clone(), pipeline.clone()));
+            return Ok(pipeline);
         }
         let mut source = String::from(
             "@group(0) @binding(0) var<storage,read_write> prep_data:array<vec4<f32>>;\nfn prep_parameter(index:u32,element:u32)->vec4<f32>{switch index {\n",
@@ -144,6 +159,11 @@ impl Preparation {
             immediate_size: 0,
         });
         let pipeline = Deferred::compute(device, "effect preparation", &layout, &module, "prep_main");
+        let pipeline = {
+            let mut shared = self.recipes.pipelines.lock().unwrap();
+            if let Some((_, pipeline)) = shared.iter().find(|(k, _)| k == key) { pipeline.clone() }
+            else { shared.push((key.clone(), pipeline.clone())); pipeline }
+        };
         self.pipelines.push((key.clone(), pipeline.clone()));
         Ok(pipeline)
     }

@@ -353,17 +353,14 @@ fn native_document_tabs_history_storage_and_close() {
     assert_eq!(app.windows().len(), 1);
     assert_eq!(windows.borrow().len(), 1);
     assert_eq!(w.documents.len(), 2);
-    assert_eq!(
-        w.documents.parked_memory(),
-        (0, true),
-        "inactive CPU tiles spilled and renderer joined"
-    );
+    until(|| w.documents.parked_memory() == (0, true), "inactive CPU tiles spilled and renderer joined");
     assert!(!state(&w).document_file.modified);
     new_photo::invoke(&w, CommandId::AddLayer);
     w.recovery().capture(&w);
     glib::MainContext::default().block_on(w.recovery().drain());
     let mut owners=w.documents.model.borrow().parked().map(|(_,p)|p.owner.recovery.clone()).collect::<Vec<_>>();
     owners.push(w.recovery());
+    for owner in &owners { glib::MainContext::default().block_on(owner.flush()).unwrap(); }
     let mut widths=owners.iter().map(|owner|glib::MainContext::default().block_on(owner.read_snapshot()).unwrap().document().composition().size[0]).collect::<Vec<_>>();
     widths.sort();
     assert_eq!(
@@ -431,7 +428,7 @@ fn native_document_tabs_history_storage_and_close() {
         switch(&w, second);
         switch(&w, first);
     }
-    assert_eq!(w.documents.parked_memory(), (0, true));
+    until(|| w.documents.parked_memory() == (0, true), "inactive storage completed");
     let mut temporary = Vec::new();
     for _ in 0..2 {
         glib::MainContext::default()
@@ -1072,6 +1069,62 @@ fn native_session_restart_saved_origins() {
 }
 
 #[test]
+#[ignore = "isolated native-input.js with --native-recovery"]
+fn native_document_tabs_blocked_writer_keeps_canvas_live() {
+    let app = native_test_app("art.capycanvas.TabBlockedWriter");
+    let w = Workspace::with_project(&app, Some((new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
+    w.window.maximize();
+    w.window.present();
+    new_photo::ready(&w);
+    apply_fixture_theme(&w);
+    glib::MainContext::default().block_on(w.documents.open(&w,
+        (new_drawing(256, 256, &w.localization()).unwrap(), None))).unwrap();
+    new_photo::ready(&w);
+    let incoming = w.documents.selected();
+    switch(&w, 1);
+    let outgoing = w.recovery();
+    outgoing.capture(&w);
+    glib::MainContext::default().block_on(outgoing.flush()).unwrap();
+    let store = outgoing.writer_store();
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let lock = std::thread::spawn(move || {
+        let _writer = store.lock().unwrap();
+        locked_tx.send(()).unwrap();
+        release_rx.recv_timeout(std::time::Duration::from_secs(30)).is_ok()
+    });
+    locked_rx.recv().unwrap();
+    new_photo::invoke(&w, CommandId::AddLayer);
+    let expected = ui_session(&w).engine().document().clone();
+    outgoing.capture(&w);
+    let started = std::time::Instant::now();
+    glib::MainContext::default().block_on(w.documents.activate(&w, incoming)).unwrap();
+    new_photo::ready(&w);
+    let mut input = RemoteInput::new().settle_ms(0).timeout_secs(10);
+    input.ready();
+    let a = super::canvas_bar_tests::canvas_point(&w, [80., 128.]);
+    let b = super::canvas_bar_tests::canvas_point(&w, [176., 128.]);
+    input.perform(serde_json::json!([{"point":a,"down":true},{"point":b},{"down":false}]));
+    new_photo::ready(&w);
+    let painted = !active_paint(ui_session(&w).engine().document()).raster.wait_data().unwrap().tiles.is_empty();
+    let elapsed = started.elapsed();
+    let released = release_tx.send(()).is_ok();
+    let held = lock.join().unwrap();
+    assert!(released && held, "incoming canvas and input completed while the real SessionStore writer was blocked: {elapsed:?}");
+    assert!(painted, "incoming native contact paints before outgoing storage completes");
+    input.finish();
+    glib::MainContext::default().block_on(outgoing.flush()).unwrap();
+    let recovered = glib::MainContext::default().block_on(outgoing.read_snapshot()).unwrap();
+    let mut saved = recovered.document().clone();
+    saved.artwork.outputs.get_mut(saved.artwork.default_output).unwrap().context.elapsed = expected.output().context.elapsed;
+    assert_live_artwork_eq(&saved, &expected);
+    switch(&w, 1);
+    assert_eq!(ui_session(&w).engine().document(), &expected);
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
 #[ignore = "isolated Wayland and GPU"]
 fn native_document_tabs_immediate_stroke_and_undo() {
     let app = native_test_app("art.capycanvas.TabPendingStroke");
@@ -1124,7 +1177,7 @@ fn native_document_tabs_immediate_stroke_and_undo() {
         };
         // No event-loop pumping between contact/Undo and the switch request.
         switch(&w, second);
-        assert_eq!(w.documents.parked_memory(), (0, true));
+        until(|| w.documents.parked_memory() == (0, true), "inactive storage completed");
         if let Some(root) = &root {
             assert!(
                 root.host_backed(),

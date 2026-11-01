@@ -22,6 +22,27 @@ impl Drop for CompileTrace<'_> {
     }
 }
 #[derive(Clone)]
+pub(crate) struct DeviceRecipes {
+    pub bounds_pipeline: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::thumbnails::BoundsPipeline>>>,
+    pub levels_pipeline:std::sync::Arc<std::sync::OnceLock<std::sync::Arc<crate::snapshot::levels::LevelsPipeline>>>,
+    pub statistics_pipeline: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<crate::snapshot::statistics::StatisticsPipeline>>>,
+    pub sample_pipeline: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::snapshot::sample::SamplePipeline>>>,
+    pub native_publication: std::sync::Arc<std::sync::Mutex<Vec<std::sync::Arc<super::raster::native_edit::Recipes>>>>,
+    pub native_transfers: std::sync::Arc<std::sync::Mutex<super::native_tiles::transfer::Tables>>,
+}
+impl From<&PipelineDevice> for DeviceRecipes {
+    fn from(device: &PipelineDevice) -> Self {
+        Self {
+            bounds_pipeline: device.bounds_pipeline.clone(),
+            levels_pipeline: device.levels_pipeline.clone(),
+            statistics_pipeline: device.statistics_pipeline.clone(),
+            sample_pipeline: device.sample_pipeline.clone(),
+            native_publication: device.native_publication.clone(),
+            native_transfers: device.native_transfers.clone(),
+        }
+    }
+}
+#[derive(Clone)]
 pub(crate) struct PipelineDevice {
     device: wgpu::Device,
     working_space: layer_core::color::RgbSpace,
@@ -69,6 +90,23 @@ impl std::ops::Deref for PipelineDevice {
     }
 }
 impl PipelineDevice {
+    pub fn with_device_recipes(mut self, recipes: &DeviceRecipes) -> Self {
+        self.bounds_pipeline = recipes.bounds_pipeline.clone();
+        self.levels_pipeline = recipes.levels_pipeline.clone();
+        self.statistics_pipeline = recipes.statistics_pipeline.clone();
+        self.sample_pipeline = recipes.sample_pipeline.clone();
+        self.native_publication = recipes.native_publication.clone();
+        self.native_transfers = recipes.native_transfers.clone();
+        self
+    }
+    pub fn with_recipes(&self, recipes: &Self) -> Self {
+        Self {
+            blend_pipelines: recipes.blend_pipelines.clone(),
+            tone_pipelines: recipes.tone_pipelines.clone(),
+            dehaze_pipelines: recipes.dehaze_pipelines.clone(),
+            ..self.clone()
+        }
+    }
     pub fn for_recipe(&self) -> Self {
         Self { working_space: self.working_space, depth: self.depth, ..Self::from(self.device.clone()) }
     }

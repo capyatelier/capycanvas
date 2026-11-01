@@ -52,6 +52,7 @@ void capy_session_free(CapySessionTask task);
 CapyDocumentTask capy_apple_document_switch(CapyApple app, uint64_t id, bool closing);
 int32_t capy_apple_document_prepare_switch(CapyApple app, uint64_t now);
 CapyDocumentTask capy_apple_document_storage(CapyApple app);
+CapyDocumentTask capy_apple_document_trim_wait(CapyApple app);
 int32_t capy_document_prepare(CapyDocumentTask task);
 int32_t capy_apple_document_close_commit(CapyApple app, CapyDocumentTask task, bool accept);
 int32_t capy_apple_document_close_validate(CapyApple app, CapyDocumentTask task);

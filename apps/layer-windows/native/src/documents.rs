@@ -381,7 +381,7 @@ pub(crate) struct DocumentService {
     pub recovery: Option<crate::recovery::Service>,
     wake: Arc<dyn Fn() + Send + Sync>,
     activating: bool,
-    spilling: bool,
+    trim_token: Option<u64>,
     deferred_action: Option<DocumentAction>,
     incoming_drop: Option<IncomingDrop>,
     pending_tab: Option<tabs::Action>,
@@ -394,6 +394,7 @@ pub(crate) struct DocumentService {
     pub palettes: crate::palette_files::Service,
     pub papers: crate::paper_files::Service,
     worker: Worker,
+    activation_worker: Worker,
     active: Option<Active>,
     opening: Option<Box<Opening>>,
     workflow: Option<Box<crate::document_workflows::Task>>,
@@ -426,6 +427,7 @@ impl DocumentService {
     pub(crate) fn open_localized(localization: &layer_ui::Localizer, wake: impl Fn() + Send + Sync + 'static) -> Result<Self, String> {
         let wake = std::sync::Arc::new(wake);
         let notify = wake.clone();
+        let activate_notify = wake.clone();
         Ok(Self {
             proof: crate::proof::Service::new(wake.clone()),
             tone: layer_host::tone::ToneService::new(Some(wake.clone())),
@@ -436,7 +438,7 @@ impl DocumentService {
             profile_copy: serde_json::to_value(layer_ui::color_feature_copy::ProfileCopy::new(localization)).unwrap(),
             recovery: None,
             activating: false,
-            spilling: false,
+            trim_token: None,
             deferred_action: None,
             incoming_drop: None,
             pending_tab: None,
@@ -445,6 +447,7 @@ impl DocumentService {
             close_next: false,
             prepared_close:None,
             worker: Worker::start(move || notify())?,
+            activation_worker: Worker::start(move || activate_notify())?,
             active: None,
             opening: None,
             package:None,next_package_id:0,
@@ -533,14 +536,14 @@ impl DocumentService {
         let environment = OpenEnvironment::capture(&host.session, self.window.documents.admission(&host.session.retained_document_tiles()), host.renderer_options())?;
         let cancelled = Arc::new(AtomicBool::new(false));
         self.active = Some(Active { id, epoch: host.session.state().document_file.epoch, revision: host.session.engine().document().revision, location: None, cancelled: Some(cancelled.clone()) });
-        self.worker.submit(Job::Prepare { environment: Box::new(environment), source, cancelled })?;
+        self.activation_worker.submit(Job::Prepare { environment: Box::new(environment), source, cancelled })?;
         Ok(())
     }
     const MAX_QUEUED_OPENS: usize = 64;
     fn open_idle(&self, host: &NativeHost) -> bool {
         let state = host.session.state();
         self.package.is_none() && self.active.is_none() && self.workflow_control.is_none() && !self.activating
-            && !self.spilling && self.opening.is_none() && self.recovery.as_ref().is_none_or(|r| !r.restoring())
+            && self.opening.is_none() && self.recovery.as_ref().is_none_or(|r| !r.restoring())
             && !state.document_file.busy && !state.document_file.close_ready
             && !state.requests.iter().any(|r| matches!(r.kind, HostRequestKind::Document { .. }))
             && host.session.engine().backend().0.is_some()
@@ -664,7 +667,7 @@ impl DocumentService {
             self.incoming_drop = Some(IncomingDrop { id, paths, screen, layer });host.apply_change(previous, change);
             return Ok(());
         }
-        if self.spilling {
+        if self.window.documents.trim_in_flight() && !matches!(&action, DocumentAction::Open { .. } | DocumentAction::Create { .. } | DocumentAction::Interpret { .. }) {
             if self.deferred_action.is_some() { return Err("A file response is already queued".into()); }
             self.deferred_action = Some(action);
             return Ok(());
@@ -739,8 +742,8 @@ impl DocumentService {
             let opening = self.opening.take().ok_or("No image interpretation is pending")?;
             if let Some(profile) = profile {
                 let Opening { environment, imported, .. } = *opening;
-                self.worker.submit(Job::Prepare { environment: Box::new(environment), source: Source::Interpret(Box::new(imported), profile), cancelled: self.active.as_ref().and_then(|a| a.cancelled.clone()).ok_or("Opening control missing")? })?;
-            } else { self.worker.submit(Job::DiscardOpening(opening))?; }
+                self.activation_worker.submit(Job::Prepare { environment: Box::new(environment), source: Source::Interpret(Box::new(imported), profile), cancelled: self.active.as_ref().and_then(|a| a.cancelled.clone()).ok_or("Opening control missing")? })?;
+            } else { self.activation_worker.submit(Job::DiscardOpening(opening))?; }
             host.invalidate_snapshot();
             return Ok(());
         }
@@ -872,7 +875,7 @@ impl DocumentService {
                     location,
                     cancelled: match &job { Job::Prepare { cancelled, .. } => Some(cancelled.clone()), _ => None },
                 });
-                self.worker.submit(job)?;
+                if matches!(&job, Job::Prepare { .. }) { self.activation_worker.submit(job)?; } else { self.worker.submit(job)?; }
                 Ok(())
             }
             Ok(None) => Ok(()),
@@ -880,6 +883,7 @@ impl DocumentService {
         }
     }
     pub(crate) fn poll(&mut self, host: &mut NativeHost) -> Result<(), String> {
+        if self.activating && let Some(completed) = self.activation_worker.take() { self.activated(host, completed)?; }
         self.poll_tabs(host)?;
         self.palettes.poll(host);
         self.papers.poll(host)?;
@@ -892,23 +896,26 @@ impl DocumentService {
             }
             host.invalidate_snapshot();
         }
-        let prepared=self.worker.shared.mailbox.lock().unwrap().completed.as_ref().is_some_and(|result|matches!(result,Ok(Completed::Prepared(_)|Completed::PhotoPrepared(_))));
+        if let Some(completed) = self.worker.take() { self.completed(host, completed, true)?; }
+        let prepared=self.activation_worker.shared.mailbox.lock().unwrap().completed.as_ref().is_some_and(|result|matches!(result,Ok(Completed::Prepared(_)|Completed::PhotoPrepared(_))));
         if prepared && !self.active.as_ref().and_then(|active|active.cancelled.as_ref()).is_some_and(|cancel|cancel.load(Ordering::Acquire)) && !self.window.adoption_ready(host)? {return Ok(());}
-        let Some(completed) = self.worker.take() else {
-            return Ok(());
-        };
-        if self.package.as_ref().is_some_and(|p|p.writing.is_some()) {
+        if !self.activating && let Some(completed) = self.activation_worker.take() { self.completed(host, completed, false)?; }
+        Ok(())
+    }
+    fn completed(&mut self, host: &mut NativeHost, completed: Result<Completed, String>, file: bool) -> Result<(), String> {
+        if file && self.package.as_ref().is_some_and(|p|p.writing.is_some()) {
             let package=self.package.as_mut().unwrap();package.writing=None;package.serial=package.serial.wrapping_add(1);
             if !package.close_requested {match completed {Ok(Completed::PackageWritten)=>{},Err(error)=>host.error=Some(error),_=>return Err("Unexpected package write completion".into())}}
             if package.close_requested {self.package=None;}
             host.invalidate_snapshot();return Ok(());
         }
-        if self.activating { return self.activated(host, completed); }
-        if self.spilling {
-            self.spilling = false;
-            self.window.documents.storage_completed(completed.and_then(|result| if matches!(result, Completed::Spilled) { Ok(()) } else { Err("Unexpected storage completion".into()) }));
+        if file && let Some(token) = self.trim_token.take() {
+            let result = completed.and_then(|result| if matches!(result, Completed::Spilled) { Ok(()) } else { Err("Unexpected storage completion".into()) });
+            if self.window.documents.complete_trim(token, result) {
+                self.trim_next(token)?;
+            }
             host.invalidate_snapshot();
-            if let Some(action) = self.deferred_action.take() { self.dispatch(host, action)?; }
+            if !self.window.documents.trim_in_flight() && let Some(action) = self.deferred_action.take() { self.dispatch(host, action)?; }
             return Ok(());
         }
         if self.workflow_running {
@@ -961,7 +968,7 @@ impl DocumentService {
         let completed = if self.active.as_ref().and_then(|a| a.cancelled.as_ref()).is_some_and(|c| c.load(Ordering::Acquire)) {
             match completed {
                 Ok(Completed::Prepared(candidate) | Completed::PhotoPrepared(candidate)) => { self.worker.retire(candidate); Ok(Completed::Cancelled) }
-                Ok(Completed::Interpretation(opening)) => { self.worker.submit(Job::DiscardOpening(opening))?; return Ok(()); }
+                Ok(Completed::Interpretation(opening)) => { self.activation_worker.submit(Job::DiscardOpening(opening))?; return Ok(()); }
                 _ => Ok(Completed::Cancelled),
             }
         } else { completed };
@@ -1033,8 +1040,9 @@ impl DocumentService {
         let proof = self.proof.stop();
         if let Some((_, control)) = &self.workflow_control { control.cancel(); }
         if let Some(task) = self.workflow.take() { self.worker.retire_workflow(task); }
+        let activation = self.activation_worker.stop();
         let worker = self.worker.stop();
-        recovery.and(proof).and(worker)
+        recovery.and(proof).and(activation).and(worker)
     }
 }
 
@@ -1145,12 +1153,55 @@ mod tests {
     }
 
     #[test]
+    fn an_explicit_close_keeps_the_pending_spill_barrier() {
+        let mut f = Fixture::new();
+        if f.service.trim_token.is_none() { f.service.trim_token = f.service.window.documents.request_trim(); }
+        let id = f.service.window.documents.selected();
+        assert!(f.service.tab_action(&mut f.host, tabs::Action::Close { id }).is_err());
+        assert!(f.service.pending_tab.is_none());
+        f.invoke(CommandId::CloseDocument);
+        f.service.poll(&mut f.host).unwrap();
+        assert!(f.service.prepared_close.is_none());
+        assert!(!f.service.window_close_ready(&f.host));
+        f.service.stop_worker().unwrap();
+    }
+    #[test]
+    fn open_failures_complete_while_the_spill_worker_is_occupied() {
+        let mut f = Fixture::new();
+        f.invoke(CommandId::OpenDocument);
+        f.service.trim_token = f.service.window.documents.request_trim();
+        f.service.worker.shared.mailbox.lock().unwrap().running = true;
+        let file = &f.host.session.state().document_file;
+        f.act(DocumentAction::Open { id: f.request(), epoch: file.epoch, revision: file.revision, path: f.path("missing.capy") });
+        assert!(f.service.deferred_action.is_none());
+        assert!(f.service.active.is_none());
+        assert!(f.host.session.state().host_error.is_some());
+        f.invoke(CommandId::OpenDocument);
+        let file = &f.host.session.state().document_file;
+        f.service.active = Some(Active { id: f.request(), epoch: file.epoch, revision: file.revision, location: None, cancelled: None });
+        f.service.activation_worker.shared.mailbox.lock().unwrap().completed = Some(Err("Invalid incoming fixture".into()));
+        f.service.poll(&mut f.host).unwrap();
+        assert!(f.service.active.is_none());
+        assert!(f.service.window.documents.trim_in_flight());
+        assert_eq!(f.host.session.state().host_error.as_deref(), Some("Invalid incoming fixture"));
+    }
+    #[test]
+    fn a_tab_request_can_park_while_the_file_worker_is_spilling() {
+        let mut f = Fixture::new();
+        if f.service.trim_token.is_none() { f.service.trim_token = f.service.window.documents.request_trim(); }
+        f.service.worker.shared.mailbox.lock().unwrap().running = true;
+        f.service.tab_action(&mut f.host, tabs::Action::Adjacent { forward: true }).unwrap();
+        assert!(matches!(f.service.pending_tab, Some(tabs::Action::Adjacent { forward: true })));
+        assert!(f.service.deferred_action.is_none());
+        f.service.stop_worker().unwrap();
+    }
+    #[test]
     fn a_photo_drop_preserves_a_waiting_tab_and_bypasses_spill_dispatch() {
         for spilling in [false, true] {
             let mut f = Fixture::new();
             f.service.tab_action(&mut f.host, tabs::Action::Adjacent { forward: true }).unwrap();
             assert!(matches!(f.service.pending_tab, Some(tabs::Action::Adjacent { forward: true })));
-            f.service.spilling = spilling;
+            if spilling && f.service.trim_token.is_none() { f.service.trim_token = f.service.window.documents.request_trim(); }
             let file = &f.host.session.state().document_file;
             f.act(DocumentAction::DropImages {
                 epoch: file.epoch, revision: file.revision,
@@ -1161,10 +1212,10 @@ mod tests {
             assert!(matches!(f.service.pending_tab, Some(tabs::Action::Adjacent { forward: true })));
             assert!(f.host.session.file_drop_pending(id));
             assert!(f.service.deferred_action.is_none());
-            f.service.spilling = true;
+            if f.service.trim_token.is_none() { f.service.trim_token = f.service.window.documents.request_trim(); }
             f.service.worker.shared.mailbox.lock().unwrap().completed = Some(Ok(Completed::Spilled));
             f.service.poll(&mut f.host).unwrap();
-            assert!(!f.service.spilling);
+            assert!(!f.service.window.documents.trim_in_flight());
             assert_eq!(f.service.incoming_drop.as_ref().unwrap().id, id);
             assert!(matches!(f.service.pending_tab, Some(tabs::Action::Adjacent { forward: true })));
             assert!(f.service.workflow_control.is_none());
@@ -1261,7 +1312,7 @@ mod tests {
             let source=ImmutableBacking::new(Arc::new(ChunkedBytes::new(vec![Arc::from(bytes.as_slice())]).unwrap())).unwrap();let preview=Preview::from_rgba([1,1],Arc::from([16,32,48,255])).unwrap();
             let outcome=match disposition {0=>OpenOutcome::Preserved{source,preview:Some(preview),outputs:Vec::new(),reason:"unsupported content".into()},1=>OpenOutcome::RecoveredView{source,preview,reason:"invalid graph".into(),cause:Some(layer_ui::PackageCause::Damaged)},_=>OpenOutcome::Failure{source,reason:"invalid package".into(),cause:Some(layer_ui::PackageCause::Damaged)}};
             f.service.active=Some(Active{id,epoch,revision:before.revision,location:Some(DocumentLocation{uri:f.path("original.capy"),name:"original.capy".into()}),cancelled:None});
-            f.service.worker.shared.mailbox.lock().unwrap().completed=Some(Ok(Completed::Package(layer_ui::PackageView::new(outcome).unwrap())));f.service.poll(&mut f.host).unwrap();
+            f.service.activation_worker.shared.mailbox.lock().unwrap().completed=Some(Ok(Completed::Package(layer_ui::PackageView::new(outcome).unwrap())));f.service.poll(&mut f.host).unwrap();
             assert_eq!(f.host.session.engine().document(),&before);assert_eq!(f.host.session.state().document_file.epoch,epoch);assert!(f.service.active.is_none());assert!(f.host.session.state().requests.iter().all(|r|r.id!=id));
             let status=f.service.status().unwrap();let id=status["id"].as_u64().unwrap() as u32;assert_eq!(status["type"],"package");assert_eq!(status["summary"]["capabilities"]["edit"],false);assert_eq!(status["summary"]["capabilities"]["save"],false);assert_eq!(status["summary"]["capabilities"]["export"],disposition!=2);assert_eq!(f.service.preview(id,0).is_ok(),disposition!=2);
             assert!(f.service.preview(id,1).is_err());assert_empty_preview(&f.service,id.wrapping_add(1),0);
@@ -1611,7 +1662,7 @@ mod tests {
                 Platform::Windows,
             )
             .unwrap();
-            f.service.worker.shared.mailbox.lock().unwrap().completed =
+            f.service.activation_worker.shared.mailbox.lock().unwrap().completed =
                 Some(Ok(Completed::Prepared(Box::new(candidate))));
             if changed {
                 f.invoke(CommandId::AddLayer);

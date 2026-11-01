@@ -27,11 +27,8 @@ impl SnapshotGpu {
     ) -> Result<ColorCanvas, GpuRasterError> {
         control.check()?;
         document.validate(Default::default()).map_err(GpuRasterError::Color)?;
-        let mut renderer = WgpuRasterizer::native_staged_on_device(
-            self.adapter.clone(),
-            self.device.clone(),
-            self.queue.clone(),
-            document.composition().color,
+        let mut renderer = WgpuRasterizer::native_staged_on_factory(
+            self.factory.clone(), self.device.clone(), document.composition().color,
         )?;
         #[cfg(target_arch = "wasm32")]
         if let Some(encoder) = self.encoder.clone() {

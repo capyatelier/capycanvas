@@ -19,6 +19,7 @@ impl Picker {
         shader: &wgpu::ShaderModule,
         layout: &wgpu::PipelineLayout,
         format: wgpu::TextureFormat,
+        shared: &std::sync::OnceLock<crate::Deferred<wgpu::RenderPipeline>>,
     ) {
         let data = overlay.map(|o| {
             [
@@ -50,8 +51,8 @@ impl Picker {
         }
         let instance = wgpu::VertexBufferLayout { array_stride: 64, step_mode: wgpu::VertexStepMode::Instance,
             attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4] };
-        self.pipeline = Some(super::present::surface_pipeline(device, "color picker glass", layout, shader, ["picker_vertex", "picker_fragment"],
-            Some(instance), format, Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING)));
+        self.pipeline = Some(shared.get_or_init(|| super::present::surface_pipeline(device, "color picker glass", layout, shader, ["picker_vertex", "picker_fragment"],
+            Some(instance), format, Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING))).clone());
         self.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("color picker geometry"),
             size: 64,

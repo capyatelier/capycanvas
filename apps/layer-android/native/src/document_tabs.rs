@@ -150,6 +150,19 @@ pub extern "system" fn Java_art_capycanvas_Native_documentResumeFree(
     })
 }
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_documentTrimRequest(mut env: JNIEnv, _: JClass, handle: jlong) -> jlong {
+    crate::jni_entry!(env, handle, capy_app, {
+    capy_app.window.documents.request_trim().map_or(0, |token| token as jlong)
+    })
+}
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_documentTrimComplete(mut env: JNIEnv, _: JClass, handle: jlong, token: jlong, detail: jni::objects::JString) -> jni::sys::jboolean {
+    crate::jni_entry!(env, handle, capy_app, {
+    let result = if detail.as_raw().is_null() { Ok(()) } else { Err(read(&mut env, &detail)?) };
+    u8::from(capy_app.window.documents.complete_trim(token as u64, result))
+    })
+}
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_documentSpillTask(
     mut env: JNIEnv,
     _: JClass,

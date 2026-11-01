@@ -35,7 +35,7 @@ pub use zoom_tool::{ZoomDirection, ZoomDrag, ZoomToolAction, ZoomToolSettings};
 mod document_tabs;
 pub use document_tabs::{DocumentTabDrag, DocumentTabHit, DocumentTabSlide, DocumentTabs};
 mod document_sessions;
-pub use document_sessions::{DocumentSessionError, DocumentTransportRefusal, document_storage_retained, document_recovery_unavailable, DocumentAdmission, DocumentBudget, DocumentSessions, DocumentTabLabel, ParkedDocument, RetainedClipboard};
+pub use document_sessions::{DocumentSessionError, DocumentTransportRefusal, document_storage_retained, document_recovery_unavailable, DocumentAdmission, DocumentBudget, DocumentSessions, DocumentTabLabel, ParkedDocument, RetainedClipboard, TrimWait};
 mod document_creation;
 mod new_drawing;
 pub use new_drawing::*;

@@ -7,12 +7,19 @@ use std::collections::BTreeMap;
 use wgpu::util::DeviceExt;
 
 pub(super) struct SelectionPainter {
-    layout: wgpu::BindGroupLayout,
-    pipelines: [Deferred<wgpu::ComputePipeline>; 3],
+    recipes: Arc<Pipelines>,
     pub active: Option<Painting>,
     pending: Option<wgpu::Buffer>,
     tx: mpsc::Sender<Result<SelectionPaintResult, GpuRasterError>>,
     rx: mpsc::Receiver<Result<SelectionPaintResult, GpuRasterError>>,
+}
+pub(super) struct Pipelines {
+    layout: wgpu::BindGroupLayout,
+    pipelines: [Deferred<wgpu::ComputePipeline>; 3],
+}
+impl std::ops::Deref for SelectionPainter {
+    type Target = Pipelines;
+    fn deref(&self) -> &Self::Target { &self.recipes }
 }
 pub(super) struct Painting {
     id: u64,
@@ -28,6 +35,12 @@ impl SelectionPainter {
                 p.before.size() + p.output.size() + p.pages.values().map(|b| b.size()).sum::<u64>()
             })
     }
+    pub fn from_pipelines(recipes: Arc<Pipelines>) -> Self {
+        let (tx, rx) = mpsc::channel();
+        Self { recipes, active: None, pending: None, tx, rx }
+    }
+}
+impl Pipelines {
     pub fn new(device: &PipelineDevice, textures: &wgpu::BindGroupLayout) -> Self {
         let entries: Vec<_> = [0, 1, 2, 3, 6, 7, 8, 9]
             .map(|binding| crate::bindings::buffer(
@@ -66,17 +79,10 @@ impl SelectionPainter {
         });
         let pipelines = ["initialize", "paint", "bounds"]
             .map(|entry| Deferred::compute(device, entry, &pipeline_layout, &shader, entry));
-        let (tx, rx) = mpsc::channel();
-        Self {
-            layout,
-            pipelines,
-            active: None,
-            pending: None,
-            tx,
-            rx,
-        }
+        Self { layout, pipelines }
     }
-
+}
+impl SelectionPainter {
     #[expect(clippy::too_many_arguments, reason = "Selection paint bindings retain the separate shader buffers and uniform layout")]
     fn binding(
         &self,
@@ -450,7 +456,7 @@ impl WgpuRasterizer {
         let mut painter = self
             .selection_painter
             .take()
-            .unwrap_or_else(|| SelectionPainter::new(&self.device, &self.advanced_texture_layout));
+            .unwrap_or_else(|| SelectionPainter::from_pipelines(self.recipes.selection_paint.clone()));
         let result = painter.update(self, update);
         if matches!(&result, Ok(true)) {
             self.selection_paint_revision = self.selection_paint_revision.wrapping_add(1);
