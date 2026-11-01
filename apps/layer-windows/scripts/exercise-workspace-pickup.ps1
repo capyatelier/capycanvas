@@ -82,9 +82,12 @@ function Drifting-Taps {
     # pen in range between contacts to cover physical tablet hover routing.
     $script:case='drifting-short-taps'
     $before=Settled-Layout
-    foreach($command in @('pen','pencil','pen','pencil')){
+    $commands=if(@((Model).state.commands|Where-Object id -eq 'pen')[0].selected){@('pencil','pen','pencil','pen')}else{@('pen','pencil','pen','pencil')}
+    foreach($command in $commands){
         $at=Point (CommandTileId $command 'toolbar')
         if($Device -eq 'pen'){[CapyRowPointer]::PenHover($at.x,$at.y);Start-Sleep -Milliseconds 35}
+        $ready=Model
+        if($ready.state.customization.drawer -or @($ready.state.commands|Where-Object id -eq $command)[0].selected){throw 'Drifting tap requires an unselected tool and a closed tool drawer'}
         [CapyRowPointer]::Down($Device,$at.x,$at.y)
         Start-Sleep -Milliseconds 35
         [CapyRowPointer]::Move($at.x+8,$at.y)
@@ -305,6 +308,13 @@ try {
     [CapyRowPointer]::Hover($at.x,$at.y)
     Wait-Until {[CapyRowPointer]::CursorVisible()} 'Toolbar did not restore the Windows cursor'
     $script:case='short-click'
+    if((Model).state.customization.drawer){throw 'Short click requires a closed tool drawer'}
+    if(!@((Model).state.commands|Where-Object id -eq 'pen')[0].selected){
+        Invoke $toolbarPen
+        Wait-Until {@((Model).state.commands|Where-Object id -eq 'pen')[0].selected} 'Short-click setup did not select Pen'
+    }
+    $ready=Model
+    if($ready.state.customization.drawer -or @($ready.state.commands|Where-Object id -eq 'pencil')[0].selected){throw 'Short click requires an unselected Pencil and a closed tool drawer'}
     Tap $toolbarPencil
     Wait-Until {@(@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {$_.resolved_control.command -eq 'pencil'})[0].selected} 'Short pointer tap did not activate Pencil'
     if($Device -eq 'touch'){
