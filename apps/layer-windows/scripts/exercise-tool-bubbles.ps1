@@ -339,7 +339,7 @@ function Ensure-Sources{
     Drag $from $to;Wait-Until {(Model).picker} 'Native tool component did not open picker'
     $wantedSources=@(@('command','drawing_brush'),@('color',''),@('color_picker',''),@('command','undo'),@('panel','layers'),@('command','next_drawing'))
     if($BlendersOnly){$wantedSources=@(@('brush','25'),@('brush','51'),@('brush','55'),@('brush','49'))}
-    elseif($SlidersOnly){$wantedSources=@(@('command','drawing_brush'),@('color_picker',''),@('brush','25'),@('brush','51'),@('brush','55'),@('brush','49'),@('tool_slot','drawing'),@('command','lasso'))}
+    elseif($SlidersOnly){$wantedSources=@(@('command','drawing_brush'),@('color_picker',''),@('brush','25'),@('tool_slot','drawing'),@('brush','55'),@('brush','49'),@('brush','51'),@('command','lasso'))}
     foreach($wanted in $wantedSources){
         (Control 'tool-picker-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('')
         Wait-Until {(Model).picker.query -eq ''} 'Picker did not clear search'
