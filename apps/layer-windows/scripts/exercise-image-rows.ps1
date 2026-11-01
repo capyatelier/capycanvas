@@ -298,7 +298,7 @@ try{
  $converted=Join-Path $run 'image-converted.capy';Save-ProjectAs $converted;$conversion=Package $converted
  if(@(Object-Layers $conversion).Count -ne 2 -or @($conversion.objects|Where-Object type -eq 'capy.image-object/1').Count -ne 2 -or @($conversion.objects|Where-Object type -eq 'capy.image/1').Count -ne 2 -or @($conversion.objects|Where-Object type -eq 'capy.object-layer/1').Count){throw 'Conversion did not save one image per ordinary Object layer'}
  $backLayer=@(Object-Layers $authored|Where-Object id -ne (Front-Layer $authored).id)[0]
- $backObject=@($authored.objects|Where-Object id -eq $backLayer.data.content.objects.ref)[0]
+ $backObject=@($authored.objects|Where-Object id -eq $backLayer.data.content.object.ref)[0]
  if((Json @($conversion.objects|Where-Object id -in @($backLayer.id,$backObject.id,$backObject.data.image.ref)|Sort-Object id)) -ne (Json @($authored.objects|Where-Object id -in @($backLayer.id,$backObject.id,$backObject.data.image.ref)|Sort-Object id))){throw 'Conversion changed the other Object layer or its immutable source'}
  Capture "image-converted-$Device-$Theme" -WithModel -Composed
  Assert-ImageHistory 'Undo' {!(Row $front).object -and (Artwork-Pixels) -eq $rasterPixels}

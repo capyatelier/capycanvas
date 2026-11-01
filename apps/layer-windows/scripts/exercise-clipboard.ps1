@@ -108,10 +108,10 @@ function Root-Stack($Package){
  if($composition.Count -ne 1 -or $stack.Count -ne 1 -or $stack[0].type -ne 'capy.stack/1'){throw 'Position checks require an ordinary root layer stack'}
  $stack[0]
 }
-function Object-Layers($Package){@($Package.manifest.objects|Where-Object {$_.type -eq 'capy.occurrence/3' -and $_.data.content.objects})}
+function Object-Layers($Package){@($Package.manifest.objects|Where-Object {$_.type -eq 'capy.occurrence/3' -and $_.data.content.object})}
 function Effective-Affine($Package,$Layer){
  if($Layer.id -notin (Root-Stack $Package).data.entries.ref){throw 'Position checks require a root Object layer'}
- $object=@($Package.manifest.objects|Where-Object id -eq $Layer.data.content.objects.ref)
+ $object=@($Package.manifest.objects|Where-Object id -eq $Layer.data.content.object.ref)
  if($object.Count -ne 1 -or $object[0].type -ne 'capy.image-object/1'){throw 'The Object layer must directly own one image object'}
  $affine=@(Affine $object[0]);$offset=if($Layer.data.offset){$Layer.data.offset}else{@(0,0)}
  foreach($axis in 0..1){$affine[4+$axis]+=[double]$offset[$axis]};$affine
@@ -127,7 +127,7 @@ function Paste-Position([string]$Command,[string]$Shortcut,[uint16[]]$Modifiers,
  if($binding.Count -ne 1 -or !$binding[0].enabled -or $binding[0].shortcut -ne $Shortcut){throw "$Command does not expose the default $Shortcut binding"}
  $original=@($Before.manifest.objects|Where-Object type -eq 'capy.image-object/1')
  $owners=@(Object-Layers $Before)
- if($original.Count -ne 1 -or $owners.Count -ne 1 -or $owners[0].data.content.objects.ref -ne $original[0].id){throw 'Position checks require one copied image in one ordinary Object layer'}
+ if($original.Count -ne 1 -or $owners.Count -ne 1 -or $owners[0].data.content.object.ref -ne $original[0].id){throw 'Position checks require one copied image in one ordinary Object layer'}
  $layer=$owners[0];$a=Effective-Affine $Before $layer;$order=@((Root-Stack $Before).data.entries.ref)
  $image=@($Before.manifest.objects|Where-Object id -eq $original[0].data.image.ref)[0]
  if(($a[0..3] -join ',') -ne '1,0,0,1' -or ($image.data.extent -join 'x') -ne '40x30'){throw 'Position checks require the original unscaled 40x30 image'}
@@ -171,7 +171,7 @@ function Paste-Position([string]$Command,[string]$Shortcut,[uint16[]]$Modifiers,
  $destinations=@(Object-Layers $after);$addedLayers=@($destinations|Where-Object id -NotIn $owners.id)
  $actual=if($addedLayers.Count -eq 1){Effective-Affine $after $addedLayers[0]}else{@()}
  @{command=$Command;shortcut=$binding[0].shortcut;camera=$camera;requested_cursor=$requested;cursor=$point;surface=$surface;document_center=$center;clipboard_extent=$clip;expected_affine=$expected;actual_affine=$actual}|ConvertTo-Json -Depth 10|Set-Content (Join-Path $run ($Command+'-position.json'))
- if($added.Count -ne 1 -or $destinations.Count -ne 2 -or $addedLayers.Count -ne 1 -or $addedLayers[0].data.content.objects.ref -ne $added[0].id){throw "$Shortcut did not add one independent Object layer"}
+ if($added.Count -ne 1 -or $destinations.Count -ne 2 -or $addedLayers.Count -ne 1 -or $addedLayers[0].data.content.object.ref -ne $added[0].id){throw "$Shortcut did not add one independent Object layer"}
  $expectedOrder=@(foreach($id in $order){if($id -eq $layer.id){$addedLayers[0].id};$id})
  if(((Root-Stack $after).data.entries.ref -join ',') -ne ($expectedOrder -join ',')){throw "$Shortcut did not preserve the sibling layer order"}
  if((Json @($after.manifest.objects|Where-Object id -eq $layer.id)) -ne (Json @($layer))){throw "$Shortcut changed the original Object layer"}

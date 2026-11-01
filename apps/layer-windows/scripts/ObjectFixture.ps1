@@ -19,18 +19,18 @@ function Root-Stack($Manifest){
  if($composition.Count -ne 1 -or $stack.Count -ne 1 -or $stack[0].type -ne 'capy.stack/1'){throw 'Image authoring requires an ordinary root layer stack'}
  $stack[0]
 }
-function Object-Layers($Manifest){@($Manifest.objects|Where-Object {$_.type -eq 'capy.occurrence/3' -and $_.data.content.objects})}
+function Object-Layers($Manifest){@($Manifest.objects|Where-Object {$_.type -eq 'capy.occurrence/3' -and $_.data.content.object})}
 function Front-Layer($Manifest){
  $layers=@(Object-Layers $Manifest);$id=@((Root-Stack $Manifest).data.entries.ref|Where-Object {$_ -in $layers.id})[0]
  @($layers|Where-Object id -eq $id)[0]
 }
 function Front-Object($Manifest){
  $layer=Front-Layer $Manifest
- @($Manifest.objects|Where-Object id -eq $layer.data.content.objects.ref)[0]
+ @($Manifest.objects|Where-Object id -eq $layer.data.content.object.ref)[0]
 }
 function Effective-Affine($Manifest,$Layer){
  if($Layer.id -notin (Root-Stack $Manifest).data.entries.ref){throw 'Image authoring requires a root Object layer'}
- $object=@($Manifest.objects|Where-Object id -eq $Layer.data.content.objects.ref)
+ $object=@($Manifest.objects|Where-Object id -eq $Layer.data.content.object.ref)
  if($object.Count -ne 1 -or $object[0].type -ne 'capy.image-object/1'){throw 'The Object layer must directly own one image object'}
  $affine=if($object[0].data.affine){@($object[0].data.affine)}else{@(1,0,0,1,0,0)}
  $offset=if($Layer.data.offset){$Layer.data.offset}else{@(0,0)}
@@ -39,7 +39,7 @@ function Effective-Affine($Manifest,$Layer){
 function Assert-ImageCopy($Before,$After,[string]$Operation){
  $original=@($Before.objects|Where-Object type -eq 'capy.image-object/1');$pasted=@($After.objects|Where-Object type -eq 'capy.image-object/1')
  $owners=@(Object-Layers $Before);$destinations=@(Object-Layers $After);$added=@($pasted|Where-Object id -NotIn $original.id);$addedLayers=@($destinations|Where-Object id -NotIn $owners.id)
- if($original.Count -ne 2 -or $owners.Count -ne 2 -or $pasted.Count -ne 3 -or $added.Count -ne 1 -or $destinations.Count -ne 3 -or $addedLayers.Count -ne 1 -or $addedLayers[0].data.content.objects.ref -ne $added[0].id){throw "$Operation did not add one independent Object layer"}
+ if($original.Count -ne 2 -or $owners.Count -ne 2 -or $pasted.Count -ne 3 -or $added.Count -ne 1 -or $destinations.Count -ne 3 -or $addedLayers.Count -ne 1 -or $addedLayers[0].data.content.object.ref -ne $added[0].id){throw "$Operation did not add one independent Object layer"}
  if((Json @($After.objects|Where-Object type -eq 'capy.image/1'|Sort-Object id)) -ne (Json @($Before.objects|Where-Object type -eq 'capy.image/1'|Sort-Object id))){throw "$Operation changed source images or added a flattened capy.image record"}
  if((Json @($pasted|Where-Object id -In $original.id|Sort-Object id)) -ne (Json @($original|Sort-Object id)) -or (Json @($destinations|Where-Object id -In $owners.id|Sort-Object id)) -ne (Json @($owners|Sort-Object id))){throw "$Operation changed an original object or its layer"}
  $sourceLayer=Front-Layer $Before;$source=Front-Object $Before

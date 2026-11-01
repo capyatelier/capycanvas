@@ -94,3 +94,40 @@ $resolved=Resource-Value ('{"outer":[null,{"ref":"s"},false]}'|ConvertFrom-Json)
 $resource=$resolved['outer'][1];$child=$resource['data']['child']
 if($resolved['outer'][0] -ne $null -or $resolved['outer'][2] -ne $false -or $resource['type'] -cne 'nested' -or $resource['sha256'] -cne $expected -or $child['sha256'] -cne $expected -or $child['data']['values'][0] -ne $true -or $child['data']['values'][1] -ne $null -or $child['data']['values'][2] -ne 2.5){throw 'Actual recursive clipboard helper changed resource bytes or structured data'}
 Write-Output 'PS5-compatible fixture APIs passed: known PNG guards, SHA256 bytes, four nested JSON decoders and recursive clipboard resources.'
+
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$archive=[IO.Compression.ZipFile]::OpenRead((Join-Path $repo 'crates/layer-core/src/package/codec/fixtures/shared-image-objects.capy'))
+try{
+    $reader=[IO.StreamReader]::new($archive.GetEntry('manifest.json').Open(),[Text.Encoding]::UTF8)
+    try{$fixedManifest=$reader.ReadToEnd()|ConvertFrom-Json}finally{$reader.Dispose()}
+}finally{$archive.Dispose()}
+foreach($fixtureName in @('exercise-clipboard.ps1','ObjectFixture.ps1')){& {
+    param($FixtureName,$Manifest)
+    $ast=Fixture-Ast $FixtureName
+    foreach($name in @('Json','Canonical','Root-Stack','Object-Layers','Affine','Effective-Affine','Front-Layer','Front-Object','Assert-ImageCopy')){
+        $fn=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name}.GetNewClosure(),$true)
+        if($fn){. ([scriptblock]::Create($fn.Extent.Text))}
+    }
+    $packageInput=if($FixtureName -eq 'exercise-clipboard.ps1'){@{manifest=$Manifest}}else{$Manifest}
+    $layers=@(Object-Layers $packageInput)
+    if($layers.Count -ne 2 -or ($layers.data.name -join ',') -ne 'First,Second'){throw "$FixtureName did not find both fixed Object layers"}
+    $first=@($layers|Where-Object {$_.data.name -eq 'First'})[0]
+    $affine=@(Effective-Affine $packageInput $first);$expected=@(1,.125,.25,.875,16777230.125,-8388618.25)
+    foreach($i in 0..5){if($affine[$i] -ne $expected[$i]){throw "$FixtureName changed the fixed effective affine at $i"}}
+    if($FixtureName -ne 'ObjectFixture.ps1'){return}
+    $front=Front-Object $Manifest
+    if($front.id -ne '00000000000000000000000000000009'){throw 'Object fixture did not resolve the fixed front image'}
+    $authored=$Manifest;$backLayer=@($layers|Where-Object id -ne $first.id)[0]
+    $back=(Fixture-Ast 'exercise-image-rows.ps1').Find({param($n)$n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$backObject'},$true)
+    if(!$back){throw 'Missing actual back image lookup'}
+    $backObject=& ([scriptblock]::Create($back.Right.Extent.Text))
+    if($backObject.id -ne '0000000000000000000000000000000a'){throw 'Image rows did not resolve the fixed back image'}
+    $after=(Json $Manifest)|ConvertFrom-Json;$copiedImage=(Json $front)|ConvertFrom-Json;$copiedLayer=(Json $first)|ConvertFrom-Json
+    $copiedImage.id='fffffffffffffffffffffffffffffff1';$copiedLayer.id='fffffffffffffffffffffffffffffff2';$copiedLayer.data.content.object.ref=$copiedImage.id
+    $after.objects+=@($copiedImage,$copiedLayer);$stack=Root-Stack $after;$stack.data.entries=@([pscustomobject]@{ref=$copiedLayer.id})+@($stack.data.entries)
+    Assert-ImageCopy $Manifest $after 'Fixed image copy'
+    $copiedLayer.data.content.object.ref=$front.id;$failure=$null
+    try{Assert-ImageCopy $Manifest $after 'Wrong owner'}catch{$failure=$_.Exception.Message}
+    if($failure -ne 'Wrong owner did not add one independent Object layer'){throw 'Image copy accepted the wrong image owner'}
+} $fixtureName $fixedManifest}
+Write-Output 'Fixed image fixture passed: ordinary Object owners, front/back image lookup, effective affine, independent copy and wrong-owner rejection.'
