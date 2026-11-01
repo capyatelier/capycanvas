@@ -265,11 +265,15 @@ try{
     $settled=@{area=$null};Wait-Until {$area=(Model).state.camera.work_area|ConvertTo-Json -Compress;$same=$area -eq $settled.area;$settled.area=$area;Start-Sleep -Milliseconds 150;$same} 'The fitted view did not settle'
     Invoke (Tool-Tile 'gradient')
     Wait-Until {((Model).state.commands|Where-Object id -eq 'gradient').selected} 'Gradient tool did not activate'
-    if(!$layoutOnly){foreach($stop in @(@{position=0;color='#404040';value=64/255.},@{position=1;color='#BFBFBF';value=191/255.})){
+    if(!$layoutOnly){
+        Invoke 'column-icon-tool_settings'
+        foreach($stop in @(@{position=0;color='#404040';value=64/255.},@{position=1;color='#BFBFBF';value=191/255.})){
         $strip=(Control 'tool-gradient-gradient' -Arranged).Current.BoundingRectangle;$dpi=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
         $at=@([int]($strip.X+6*$dpi+($strip.Width-12*$dpi)*$stop.position),[int]($strip.Y+39*$dpi))
         [CapyRowPointer]::Down('mouse',$at[0],$at[1]);[CapyRowPointer]::Up()
-        Invoke 'tool-gradient-color';Edit 'edit-color-hex' $stop.color;Invoke 'edit-color-apply'
+        Invoke 'tool-gradient-color';Invoke 'edit-color-hex'
+        Edit 'edit-color-hex-entry' $stop.color;[CapyRowPointer]::Key([uint32]$review.Id,0x0D)
+        Invoke 'edit-color-apply'
         Wait-Until {
             $gradient=@((Model).state.tool_extra|Where-Object Gradient)[0].Gradient.value.value
             !(Find 'edit-color-apply') -and [Math]::Abs($gradient.stops[$stop.position].color.rgba[0]-$stop.value) -lt .002
