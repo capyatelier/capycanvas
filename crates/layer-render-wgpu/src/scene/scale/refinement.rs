@@ -12,6 +12,7 @@ impl Cache {
         let Encoding { encoder, commands } = encoding;
         if missing.is_empty() {
             self.present_half(r, packet, encoder)?;
+            self.ready = true;
             return Ok(std::mem::take(&mut self.deferred_changed));
         }
         self.admit_hierarchy(r, packet, encoder, commands)?;
@@ -25,7 +26,8 @@ impl Cache {
         if reverse { regions.reverse(); }
         let mut image = self.exact_tile.get_or_insert_with(|| Image::new(r,
             display_mips::Plan::at(exact_strip(packet.document_extent), 0), "exact composition working strip")).clone();
-        let batch_size = if packet.scene.order().iter().any(|owner| packet.scene.object_layer(*owner).is_some()) { 1 } else { self.native_batch };
+        let objects = packet.scene.order().iter().any(|owner| packet.scene.object_layer(*owner).is_some());
+        let batch_size = if objects { 1 } else { self.native_batch };
         let mut batch = Vec::with_capacity(batch_size);
         if plan.is_some() {
             Scene::submit_chunk(r, encoder, "before native filter windows")?;
@@ -37,7 +39,7 @@ impl Cache {
                 r.metrics.image_window_peak_bytes = r.metrics.image_window_peak_bytes.max(scene.images.storage_bytes());
             }
             let mut coordinates: Vec<_> = page_coordinates(output).filter(|c| missing.contains(c)).collect();
-            if reverse {coordinates.reverse();}
+            if reverse { coordinates.reverse(); }
             let mut coordinates = coordinates.into_iter().peekable();
             loop {
                 batch.clear();let mut bounds = PixelRect::EMPTY;
@@ -65,6 +67,7 @@ impl Cache {
         }
         scene.native_reverse = !reverse;
         self.present_half(r, packet, encoder)?;
+        self.ready = true;
         Ok(std::mem::take(&mut self.deferred_changed))
     }
 
@@ -87,7 +90,7 @@ impl Cache {
         Ok(page_coordinates(self.plan.bounds).filter(|c| !self.refined.contains(c)).collect())
     }
 
-    pub fn approximating(&self) -> bool { !self.approximate.is_empty() || self.preparing }
+    pub fn approximating(&self) -> bool { !self.approximate.is_empty() || self.preparing || self.overview.as_ref().is_some_and(|overview| overview.approximating()) }
 
     fn next_exact_page(&self) -> Option<[u32; 2]> {
         page_coordinates(self.plan.bounds).find(|page| !self.refined.contains(page))
@@ -104,10 +107,10 @@ impl Cache {
     }
 
     pub fn has_pending_work(&self, r: &WgpuRasterizer) -> bool {
+        if r.moving_layer.is_some() || self.transform.as_ref().is_some_and(|preview| preview.moving) { return false; }
         if self.approximating() { return true; }
         if r.artwork_frame.as_ref().is_some_and(|frame| frame.scene.view().order().iter().any(|h| frame.scene.view().object_layer(*h).is_some() || frame.scene.view().vector_layer(*h).is_some())) { return false; }
-        self.ready && r.moving_layer.is_none() && !self.transform.as_ref().is_some_and(|p| p.moving)
-            && self.next_missing_page().is_some()
+        self.ready && self.next_missing_page().is_some()
     }
 
     pub(super) fn refine(
@@ -185,8 +188,10 @@ impl Cache {
             let covered = region.intersect(self.plan.bounds);
             let coordinate = [region.min_x() / PAGE_SIZE, region.min_y() / PAGE_SIZE];
             if covered.is_empty() || !self.refined.insert(coordinate) {return None;}
+            self.approximate.remove(&coordinate);
             self.valid.insert(coordinate);Some(covered)
         }).collect();
+        if page_coordinates(self.plan.bounds).all(|coordinate| self.refined.contains(&coordinate)) { self.ready = true; }
         if regions.is_empty() {return Ok(());}
         self.pixels.ensure(r, self.plan);
         if matches!(self.pixels, hierarchy::Pixels::Resident { .. }) {

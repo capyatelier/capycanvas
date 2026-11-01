@@ -89,6 +89,10 @@ retained native hierarchy or reduce into the display window.
 Small batches move independent source decodes before their pointwise consumers.
 An earlier source or mask read prevents moving a decode that would overwrite its
 slot; reused decode targets keep their original order.
+A coarse view of the current artwork publishes camera and artwork changes before
+canonical work continues. Approximate graph branches remain invalid for exact
+reuse until their canonical pixels arrive. `photo_navigation_presents_current_camera_within_two_submissions`
+covers displayed pixels across zoom, pan and artwork changes while detail remains pending.
 Required previews take priority over spare detail when several photos compete
 for the admitted memory. Admission reserves composition scratch and command
 capacity before retaining optional source levels, including images allocated

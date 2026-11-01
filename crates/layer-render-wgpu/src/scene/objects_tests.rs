@@ -815,16 +815,12 @@ fn tablet_scene(distinct: bool, count: usize, blur: bool) -> (layer_core::Docume
     (doc, owner, handles, view)
 }
 
-fn settle_frames(r: &mut WgpuRasterizer, frame: FramePacket<'_>, limit: usize) -> usize {
-    settle_live_frames(r,FramePacket {composite_all:true,reset_layers:true,..frame},limit)
-}
-
 fn settle_live_frames(r: &mut WgpuRasterizer, frame: FramePacket<'_>, limit: usize) -> usize {
     crate::test_support::submit_ready(r, frame).unwrap();
     for submitted in 1..=limit {
         r.wait_idle().unwrap();
         if !r.has_pending_work() { return submitted; }
-        crate::test_support::submit_ready(r, FramePacket { composite_all: false, ..frame }).unwrap();
+        crate::test_support::submit_ready(r, FramePacket { composite_all: false, reset_layers: false, ..frame }).unwrap();
     }
     panic!("object scene must settle within {limit} submissions: deferred={}, image_waiting={}, moving={}, analysis={}, results_pending={}, results_bytes={}, completed_images={}, passes={}",
         r.object_deferred,r.image_decode_waiting(),r.moving_images_pending(),r.analysis_dirty,
@@ -842,7 +838,7 @@ fn batch_motion_of_twenty_sibling_images_pauses_queued_canonical_work_and_resume
     let (mut doc,owner,handles)=document([128;2],objects);
     let view=layer_render::ViewState {width_px:32,height_px:32,document_to_surface:[0.25,0.,0.,0.25,0.,0.]};
     let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    settle_frames(&mut r,FramePacket {view,..packet(doc.scene(),[128;2])},2000);
+    settle_live_frames(&mut r,FramePacket {view,..packet(doc.scene(),[128;2])},2000);
     let mut scene=r.scene.take().unwrap();
     let request=canonical_request(&r,&mut scene,&doc,owner,ObjectWindow {origin:[3.,5.],side:4.,size:[32;2]});
     assert!(scene.object_results.resolve_collection(&r,doc.scene(),&request).unwrap().is_none());
@@ -864,7 +860,7 @@ fn batch_motion_of_twenty_sibling_images_pauses_queued_canonical_work_and_resume
         settle_live_frames(&mut r,FramePacket {view,reset_layers:false,composite_all:true,..packet(doc.scene(),[128;2])},2000);
         let mut reference=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         layer_render::CanvasRenderer::prepare_moving_layer(&mut reference,Some(owner));
-        settle_frames(&mut reference,FramePacket {view,..packet(doc.scene(),[128;2])},2000);
+        settle_live_frames(&mut reference,FramePacket {view,..packet(doc.scene(),[128;2])},2000);
         let actual=float_pixels(&r,r.scale_display.as_ref().unwrap().texture());
         let expected=float_pixels(&reference,reference.scale_display.as_ref().unwrap().texture());
         assert!(crate::test_support::max_error(&actual,&expected)<2e-5,"every moved sibling matches a fresh pose at {delta}");
@@ -874,7 +870,7 @@ fn batch_motion_of_twenty_sibling_images_pauses_queued_canonical_work_and_resume
     settle_live_frames(&mut r,FramePacket {view,reset_layers:false,composite_all:true,..packet(doc.scene(),[128;2])},2000);
     assert!(!r.scene.as_ref().unwrap().object_results.pending());
     let mut reference=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    settle_frames(&mut reference,FramePacket {view,..packet(doc.scene(),[128;2])},2000);
+    settle_live_frames(&mut reference,FramePacket {view,..packet(doc.scene(),[128;2])},2000);
     assert!(crate::test_support::max_error(&float_pixels(&r,r.scale_display.as_ref().unwrap().texture()),&float_pixels(&reference,reference.scale_display.as_ref().unwrap().texture()))<2e-5);
 }
 
@@ -883,7 +879,7 @@ fn moving_blurred_object_layer_publishes_every_pose_without_queueing_canonical_w
     for distinct in [false, true] {
         let (mut doc, owner, handles, view) = tablet_scene(distinct, 4, true);
         let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-        settle_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [4248, 2832]) }, 2000);
+        settle_live_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [4248, 2832]) }, 2000);
         assert_eq!(r.scale_display.as_ref().unwrap().cached_branches(), 5, "presentation copies leave the composition its budget for five branches (distinct={distinct})");
         layer_render::CanvasRenderer::prepare_moving_layer(&mut r, Some(owner));
         let original = doc.scene().object(handles[0]).unwrap().affine;
@@ -899,7 +895,7 @@ fn moving_blurred_object_layer_publishes_every_pose_without_queueing_canonical_w
             assert!(!r.scene.as_ref().unwrap().object_results.pending(), "a moving layer never starts canonical work for a superseded pose");
         }
         layer_render::CanvasRenderer::prepare_moving_layer(&mut r, None);
-        settle_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [4248, 2832]) }, 2000);
+        settle_live_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [4248, 2832]) }, 2000);
         let display = r.scale_display.as_ref().unwrap();
         assert!(display.plan.level > 0);
         let bytes = r.scene.as_ref().unwrap().object_results.bytes();
@@ -914,11 +910,11 @@ fn cold_tablet_object_previews_and_canonical_results_settle_in_bounded_submissio
     view.document_to_surface = [zoom, 0., 0., zoom, (1920. - 4248. * zoom) / 2., (1200. - 2832. * zoom) / 2.];
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let passes = r.metrics.command_passes;
-    settle_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [4248, 2832]) }, 4000);
+    settle_live_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [4248, 2832]) }, 4000);
     assert!(r.metrics.command_passes - passes < 4000, "exact canonical tent windows need one dispatch per source tile and child part plus boundary denominators: {}", r.metrics.command_passes - passes);
     let (doc, _, _, view) = tablet_scene(true, 4, false);
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    let submissions = settle_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [4248, 2832]) }, 4000);
+    let submissions = settle_live_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [4248, 2832]) }, 4000);
     assert_eq!(r.moving_images.completed_images, 4);
     eprintln!("cold tablet submissions={submissions}");
     assert!(submissions < 400, "four cold 12MP previews and canonical windows settle in {submissions} submissions");
@@ -939,7 +935,7 @@ fn moving_collection_preview_composes_ordered_children_across_source_batches() {
         layer_render::CanvasRenderer::prepare_moving_layer(&mut r, Some(owner));
         let mut frame = FramePacket { blend_space: blend, ..packet(doc.scene(), [128; 2]) };
         frame.view.width_px = 32; frame.view.height_px = 32; frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-        settle_frames(&mut r, frame, 2000);
+        settle_live_frames(&mut r, frame, 2000);
         assert!(!r.scene.as_ref().unwrap().object_results.pending(), "a moving layer composes previews without canonical work");
         let display = r.scale_display.as_ref().unwrap();
         assert_eq!(display.plan.level, 2);
@@ -983,7 +979,7 @@ fn moving_nearest_objects_publish_level_zero_poses_with_and_without_effects() {
         }
         let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         let view = layer_render::ViewState { width_px: 64, height_px: 64, document_to_surface: [0.25, 0., 0., 0.25, 0., 0.] };
-        settle_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [256; 2]) }, 2000);
+        settle_live_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [256; 2]) }, 2000);
         layer_render::CanvasRenderer::prepare_moving_layer(&mut r, Some(owner));
         for step in 0..12 {
             let mut affine = doc.scene().object(handles[0]).unwrap().affine; affine.0[4] += 1.37; affine.0[5] -= 0.61;
@@ -1047,6 +1043,82 @@ fn eight_distinct_sources_settle_in_few_frames_with_a_tablet_sized_source_cache(
     view.document_to_surface = [0.1597, 0., 0., 0.1597, 670.09, 445.26];
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     r.source_tiles.get_mut().admit(400 * 4 * (1 << 20));
-    let frames = settle_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [4248, 2832]) }, 4000);
+    let frames = settle_live_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [4248, 2832]) }, 4000);
     assert!(frames < 400, "decoding stays ahead of eight sources' mip and canonical work: {frames} frames");
+}
+
+#[test]
+fn photo_navigation_presents_current_camera_within_two_submissions() {
+    fn color(x: u32, y: u32, seed: u32) -> [u8; 4] {
+        let color = match (x < 768, y < 768) {
+            (true, true) => [220, 40, 20], (false, true) => [20, 200, 40],
+            (true, false) => [20, 40, 220], (false, false) => [220, 200, 20],
+        };
+        let [r, g, b] = color.map(|value| (value + seed) as u8);
+        [r, g, b, 255]
+    }
+    fn preview(r: &mut WgpuRasterizer, presenter: &mut crate::present::ViewportPresenter, target: &(wgpu::Texture, wgpu::TextureView), doc: &layer_core::Document, view: layer_render::ViewState, seed: u32) {
+        for _ in 0..2 {
+            crate::test_support::submit_ready(r, FramePacket { view, composite_all: false,
+                blend_space: layer_core::BlendSpace::Linear, ..packet(doc.scene(), [1536; 2]) }).unwrap();
+            r.wait_idle().unwrap();
+            if !r.has_presentable_frame() || r.display_backup.is_some()
+                || r.evaluated_object_revision() != Some(doc.scene().revision())
+                || !r.artwork_frame.as_ref().is_some_and(|frame| frame.view == view) { continue; }
+            if r.scene.as_ref().is_some_and(|scene| scene.object_results.pending()) {
+                assert!(r.object_deferred || r.selected_display_cache().unwrap().approximating(),
+                    "pending canonical work must not label mip pixels exact");
+            }
+            if seed != 0 {
+                assert!(presenter.needs_present(r, view, [0.; 4]), "new artwork must publish while canonical work remains pending");
+            }
+            presenter.present(r, &target.1, view, [0.; 4]).unwrap();
+            let pixel = float_pixels(r, &target.0)[96 * view.width_px as usize + 96];
+            let [a, _, _, d, tx, ty] = view.document_to_surface;
+            let expected = color(((96.5 - tx) / a) as u32, ((96.5 - ty) / d) as u32, seed);
+            for channel in 0..3 {
+                let expected = r.document_color().space.decode(f64::from(expected[channel]) / 255.) as f32;
+                assert!((pixel[channel] - expected).abs() < 0.0015,
+                    "camera {:?}, channel {channel}: {} != {expected}", view.document_to_surface, pixel[channel]);
+            }
+            assert_eq!(pixel[3], 1.);
+            return;
+        }
+        panic!("current artwork and camera must present within two submissions: {:?}", view.document_to_surface);
+    }
+    let objects = (0..28).map(|seed| ImageObject::new(AuthoredImage::new(
+        rgba8_source([1536; 2], |x, y| color(x, y, seed))))).collect();
+    let (mut doc, owner, _) = document([1536; 2], objects);
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    assert_ne!(r.adapter.get_info().device_type, wgpu::DeviceType::Cpu);
+    r.source_tiles.get_mut().admit(0);
+    assert_eq!(r.source_tiles.borrow().admitted_bytes()[0], 64 * (1 << 20));
+    let fit = layer_render::ViewState { width_px: 384, height_px: 384,
+        document_to_surface: [0.25, 0., 0., 0.25, 0., 0.] };
+    layer_render::CanvasRenderer::prepare_moving_layer(&mut r, Some(owner));
+    settle_live_frames(&mut r, FramePacket { view: fit, blend_space: layer_core::BlendSpace::Linear,
+        ..packet(doc.scene(), [1536; 2]) }, 4000);
+    assert_eq!(r.moving_images.completed_images, 28);
+    layer_render::CanvasRenderer::prepare_moving_layer(&mut r, None);
+    let mut presenter = crate::test_support::float_presenter(&r);
+    presenter.set_target_retention(true);
+    let target = create_color_target(&r.device, [384; 2], "current camera preview");
+    for exact in [false, true] {
+        r.test.exact_display = exact;
+        for document_to_surface in [fit.document_to_surface,
+            [1., 0., 0., 1., -512., -384.], [1., 0., 0., 1., -768., -640.],
+            [0.5, 0., 0., 0.5, -192., -128.], [0.5, 0., 0., 0.5, -448., -384.], fit.document_to_surface] {
+                preview(&mut r, &mut presenter, &target, &doc, layer_render::ViewState { document_to_surface, ..fit }, 0);
+        }
+    }
+    r.test.exact_display = false;
+    let actual = layer_render::ViewState { document_to_surface: [1., 0., 0., 1., -512., -384.], ..fit };
+    preview(&mut r, &mut presenter, &target, &doc, actual, 0);
+    let revision = r.canvas_preview_revision();
+    doc.apply(doc.delete_layers_edit(&[owner]).unwrap()).unwrap();
+    preview(&mut r, &mut presenter, &target, &doc, actual, 1);
+    assert_eq!(r.canvas_preview_revision(), revision.wrapping_add(1));
+    crate::test_support::submit_ready(&mut r, FramePacket { view: actual, composite_all: false,
+        blend_space: layer_core::BlendSpace::Linear, ..packet(doc.scene(), [1536; 2]) }).unwrap();
+    assert_eq!(r.canvas_preview_revision(), revision.wrapping_add(1));
 }

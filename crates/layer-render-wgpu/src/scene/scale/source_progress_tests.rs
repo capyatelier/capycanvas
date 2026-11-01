@@ -120,18 +120,33 @@ fn deferred_fine_objects_keep_coarse_presentation_without_backup() {
         cache.overview = cache.spare.take();
     }
     assert_eq!(present(&r, &mut presenter, fine), expected, "a complete overview is also presentable");
+    let coordinate = {
+        let overview = r.scale_display.as_mut().unwrap().overview.as_mut().unwrap();
+        let coordinate = *overview.valid.iter().next().unwrap();
+        overview.valid.remove(&coordinate);
+        overview.approximate.insert(coordinate);
+        overview.resume = Some(vec![page_rect(coordinate)]);
+        coordinate
+    };
+    assert!(r.has_presentable_frame(), "accepted coarse pixels remain visible while exact replacements defer");
+    assert_eq!(present(&r, &mut presenter, fine), expected);
+    {
+        let overview = r.scale_display.as_mut().unwrap().overview.as_mut().unwrap();
+        overview.valid.insert(coordinate);
+        overview.approximate.remove(&coordinate);
+        overview.resume = None;
+    }
     let accepted = Arc::new(std::sync::atomic::AtomicBool::new(false));
     r.scale_display.as_mut().unwrap().overview.as_mut().unwrap().submission_valid = Some(accepted.clone());
     assert!(!r.has_presentable_frame(), "abandoned coarse writes stay pending");
     accepted.store(true, std::sync::atomic::Ordering::Release);
-    {
-        let cache = r.scale_display.as_mut().unwrap();
-        cache.unchanged = false;
-    }
+    let previous = r.scale_display.take();
+    let (cache, _) = Cache::select(previous, &r, frame, request, false);
+    r.scale_display = Some(cache);
     assert!(!r.has_presentable_frame(), "coarse pixels from another artwork generation stay pending");
     {
         let cache = r.scale_display.as_mut().unwrap();
-        cache.unchanged = true;
+        cache.overview.as_mut().unwrap().ready = true;
         cache.overview.as_mut().unwrap().valid.clear();
     }
     assert!(!r.has_presentable_frame(), "an incomplete overview stays pending");

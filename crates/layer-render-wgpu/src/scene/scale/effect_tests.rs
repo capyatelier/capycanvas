@@ -154,7 +154,7 @@ fn native_level_pointwise_writes_branch_without_materialization_and_initializes_
             scene.used.iter_mut().for_each(super::scratch::Usage::reset);
             let mut evaluator = Evaluator { cache: &mut cache, commands: &mut commands, scene: &mut scene, packet: frame,
                 r: &mut r, encoder: &mut encoder, region: region.into(), input: plan, tiled: true, source_plans: &mut source_plans,
-                root_compositions: &mut root_compositions, defer_root: false };
+                root_compositions: &mut root_compositions, approximate:false,preview:false,defer_root: false };
             let output = evaluator.effect(input, chain, masks, Some(Target { view: destination.view.clone(), slot: None, plan })).unwrap();
             assert_eq!(output.view(), Some(&destination.view));
             assert!(commands.jobs.is_empty(), "native branch must not enqueue input/output materialization");

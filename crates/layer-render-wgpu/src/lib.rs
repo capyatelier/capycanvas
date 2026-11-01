@@ -4298,6 +4298,23 @@ impl WgpuRasterizer {
             self.scale_display = Some(cache);
             rebuilt
         } else { false };
+        if unchanged && !analysis_dirty && settled_commit.is_none()
+            && packet.commit_rasters && !packet.reset_layers && packet.restore_rasters.is_empty()
+            && original_batches.is_empty() && packet.dabs.is_empty()
+            && (self.document_damage.is_empty() || self.object_deferred) && self.transform_damage.is_empty()
+            && self.evaluated_object_revision == Some(packet.scene.revision())
+            && self.artwork_frame.as_ref().is_some_and(|frame| frame.view != packet.view)
+            && self.scale_display.as_ref().is_some_and(|cache| cache.deferred_presentation().is_some()) {
+                if let Some(backup) = self.display_backup.take() {
+                    let mut encoder = submission::CommandEncoder::new(&self.device, &Default::default());
+                    self.retire_display_resources(&mut encoder, false, Some(backup));
+                    self.last_submission = Some(encoder.submit(&self.queue));
+                }
+                self.object_deferred = true;
+                self.artwork_frame = Some(Arc::new(artwork::Frame::new(packet, context.clone())));
+                self.submitted_context = Some(context);
+                return Ok(());
+        }
         let packet = FramePacket { composite_all: packet.composite_all || blending_changed, ..packet };
         self.prepare_selection_previews(packet)?;
         let mut batch_tiles=brush_tiles::plan_packet(FramePacket {dab_batches:original_batches,..packet},|target|self.target_extent(target))?;
@@ -5076,7 +5093,17 @@ impl WgpuRasterizer {
                     self.uploads.finish(&encoder);
                     self.telemetry.phase_end(2,encoder.diagnostics());self.telemetry.end(encoder.diagnostics());
                     self.metrics.command_passes+=encoder.pass_count();
-                    self.retire_display_resources(&mut encoder, true, None);
+                    let preview = self.scale_display.as_ref().is_some_and(|cache| cache.deferred_presentation().is_some());
+                    let backup = if preview { self.display_backup.take() } else { None };
+                    self.retire_display_resources(&mut encoder, true, backup);
+                    if preview {
+                        if !same_artwork || self.evaluated_object_revision != Some(packet.scene.revision()) {
+                            self.artwork_revision = self.artwork_revision.wrapping_add(1);
+                            if let Some(regions) = &mut self.regions { regions.raw.invalidate_tonal(); }
+                        }
+                        self.composite_damage = PixelRect::full(packet.document_extent);
+                        self.evaluated_object_revision = Some(packet.scene.revision());
+                    }
                     self.last_submission=Some(encoder.submit(&self.queue));
                     self.telemetry.submitted(&self.queue);
                     if let Some(commit)=native_commit {self.finish_native_rasters(commit,true)?;}

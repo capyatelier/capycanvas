@@ -5190,6 +5190,43 @@ regressions separately check bounded scratch and released reservations.
 Paired values, exact binaries and scope are in
 `artifacts/issue24-impl/m11-current-main-checks.md`.
 
+### GTK preview publication comparison
+
+Measured 2026-11-01 on the same RTX PRO 6000, with a private 2560 × 1600/120 Hz
+display. Current-main control `b9a5ae2a…` and final preview/Undo-publication
+candidate `1c659c8e…` alternate three eight-second generated 24 MP navigation
+trials and three six-second G-Pen 384 px trials, Navigator visible and Low glass.
+All twelve processes pass; one matched repeat per workload brings the total to sixteen.
+
+| Desktop diagnostic | Main | Preview candidate |
+| --- | ---: | ---: |
+| Navigation publications/s, pooled contacts | 110.434 | 109.022 |
+| Navigation pooled gap p99, ms | 16.760 | 16.913 |
+| G-Pen publication rate, median/s | 119.461 | 119.184 |
+| G-Pen publication gap p99, median ms | 9.051 | 9.049 |
+| Paint worker elapsed p50/p99, median ms | 1.189 / 1.971 | 1.164 / 1.836 |
+| Paint worker thread CPU p50/p99, median ms | 1.179 / 1.949 | 1.152 / 1.801 |
+
+Both builds retain the navigation 114/s and 16.667 ms target miss. Candidate
+paint trial 2 has an isolated 611.041 ms mid-contact publication gap, reducing
+its rate to 107.614/s despite a 9.049 ms p99. Its 590.165 ms pre-render/owner-wait
+elapsed component uses 0.087 ms thread CPU; the cause remains unresolved. The
+single matched repeat does not reproduce it: 118.694 → 119.445 publications/s,
+maximum gap 64.268 → 28.798 ms. The original outlier remains in the comparison.
+CPU measurements do not establish the wait's cause or isolate composition cost.
+The final navigation repeat is 96.837 → 105.228 publications/s, gap p99
+68.745 → 17.014 ms; it does not reproduce a constant candidate rate loss.
+All original pairs and repeats remain retained as variation and shared misses;
+no consistent navigation improvement or loss is established.
+
+Navigation counts actual unique publications in contact bounds; cached frames
+lack camera attribution. Paint lacks exact contact bounds and fresh input
+revisions, so its cadence does not qualify fresh ink. First measured enqueue to
+publication is not first-dab latency. These generated-raster desktop diagnostics
+leave reference-tier qualification pending. Exact binaries, paired CPU/rate/gap
+values, residency, setup failure and repeat evidence are in
+`artifacts/issue24-impl/m11-preview-performance.md`.
+
 ### GTK window corner geometry diagnostic
 
 Measured 2026-10-26 on the same RTX PRO 6000, GTK 4.22.5 and Mutter 50.5,

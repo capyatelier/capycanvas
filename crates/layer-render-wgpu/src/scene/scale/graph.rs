@@ -447,6 +447,7 @@ impl Evaluator<'_> {
             if self.cache.plan.level>0 && chain.iter().any(|(h,..)|native_pointwise_alpha(self.packet.scene.effect(*h).unwrap().program))))
             .map_or(self.region,|branch|page_coordinates(region).filter(|c|!branch.initialized.contains(c))
                 .fold(region,|bounds,c|bounds.union(page_rect(c).intersect(branch.image.as_ref().unwrap().plan.bounds))).into());
+        let outer_approximate = std::mem::replace(&mut self.approximate, false);
         let result = self.with_region(evaluation,|compositor| match node.as_ref() {
             Expression::Color(c) => Ok(Value::Color(c.map(f32::from_bits))),
             Expression::Objects {content,preview} => compositor.objects(content,*preview,output),
@@ -457,12 +458,17 @@ impl Evaluator<'_> {
             Expression::Opacity { input, opacity } => compositor.evaluate(input).map(|value| value.with_opacity(f32::from_bits(*opacity))),
             Expression::Combine { front, back, blend, flags } => compositor.combine(front, back, *blend, *flags, output),
             Expression::Effect { input, chain, masks, .. } => compositor.effect(input, chain, masks, output),
-        })?;
+        });
+        let approximate = self.approximate;
+        self.approximate |= outer_approximate;
+        let result = result?;
         if let Some(branch) = self.cache.graph.branches.get_mut(node) {
             let bounds = branch.image.as_ref().unwrap().plan.doc_bounds.in_frame(self.cache.plan.extent);
             let complete:Vec<_>=page_coordinates(evaluation.in_frame(self.cache.plan.extent)).filter(|c|page_rect(*c).intersect(bounds).intersect(evaluation.in_frame(self.cache.plan.extent))==page_rect(*c).intersect(bounds)).collect();
             for c in &complete { branch.stale.remove(c); }
-            branch.valid.extend(complete.iter().copied());branch.initialized.extend(complete);
+            if approximate { for coordinate in &complete { branch.valid.remove(coordinate); } }
+            else { branch.valid.extend(complete.iter().copied()); }
+            branch.initialized.extend(complete);
         }
         Ok(result)
     }

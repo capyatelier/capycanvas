@@ -1936,7 +1936,8 @@ impl Scene {
         }
         let mut objects = std::mem::take(&mut self.object_results);
         let input = !packet.dab_batches.is_empty() || r.moving_layer.is_some();
-        let advanced = if input && !r.object_deferred { Ok(0) } else { objects.advance(r, self, encoder, input) };
+        let preview = r.artwork_frame.as_ref().is_some_and(|frame| frame.view != packet.view || frame.scene.revision != packet.scene.revision());
+        let advanced = if preview || input && !r.object_deferred { Ok(0) } else { objects.advance(r, self, encoder, input) };
         let mut refinements = objects.take_damage();
         let mut damage: std::collections::BTreeMap<_, _> = refinements.extract_if(.., |(level, _), _| *level == 0).map(|((_, owner), damage)| (owner, damage)).collect();
         let source = std::mem::take(&mut self.object_source_damage);
@@ -1958,6 +1959,11 @@ impl Scene {
         self.object_display = true;
         let result = (|| {
             cache.prepare_graph(r, packet, self, &commands, tiles)?;
+            if r.moving_layer.is_none()
+                && cache.render_preview(self, r, packet, dirty, &mut scale::Encoding { encoder, commands: &mut commands }, tiles)? {
+                r.composite_revision = r.composite_revision.wrapping_add(1);
+                return Err(GpuRasterError::DeferredObjectWork);
+            }
             cache.invalidate_hierarchy(&self.scale_sources, dirty, tiles);
             if cache.evaluation == scale::Evaluation::Native {
                 self.image_damage = tiles.filter(|_|!scale::bounded(packet.scene)).map(|tiles|scale::Damage::from_tiles(dirty,Some(tiles)));
