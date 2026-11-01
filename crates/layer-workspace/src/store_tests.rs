@@ -141,28 +141,42 @@ fn editing_reads_restore_fields_with_the_requested_language_without_writing() {
 }
 
 #[test]
-fn editing_merge_falls_back_to_the_valid_incoming_document() {
-    for current in ["not json",r#"{"preset":"unreadable"}"#] {
+fn editing_merge_keeps_unreadable_fields_and_rejects_invalid_submissions() {
+    let palettes = serde_json::json!([{"id":17,"name":"Future palette","swatches":"unreadable"}]);
+    let mut partial = serde_json::to_value(layer_ui::EditingState::default()).unwrap();
+    partial["preset"] = "unreadable".into();
+    partial["color_library"]["palettes"] = palettes.clone();
+    let partial = partial.to_string();
+    for current in ["not json", partial.as_str()] {
         let mut f = Fixture::new();
         f.store.connection.execute("INSERT INTO editing(id,json) VALUES(1,?1)",[current]).unwrap();
         let mut snapshot = serde_json::to_value(BrowserDatabase::default()).unwrap();
         snapshot["editing"] = current.into();
         let mut browser = BrowserDatabase::decode(&snapshot.to_string()).unwrap();
         let mut incoming = layer_ui::EditingState::default();
-        incoming.colors.set_rgba([0.4,0.2,0.7,1.]).unwrap();
+        incoming.tools.set_override(incoming.preset,"size",91.,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         let json = serde_json::to_string(&incoming).unwrap();
         let mut batch = CommitBatch::prepare(f.owner.clone(),vec![]).unwrap();
         batch.editing_json = Some(json.clone());
-        batch.editing_fields = Some(vec!["colors".into()]);
+        batch.editing_fields = Some(vec!["/tools/overrides/2".into()]);
         f.store.commit(batch.clone()).unwrap();
         browser.execute(StoreRequest::Commit {batch},1_000_000).unwrap();
+        let native: String = f.store.connection.query_row("SELECT json FROM editing",[],|row|row.get(0)).unwrap();
+        let web = serde_json::from_str::<serde_json::Value>(&browser.encoded().unwrap()).unwrap()["editing"].as_str().unwrap().to_owned();
+        if current == partial {
+            for saved in [&native, &web] {
+                let value: serde_json::Value = serde_json::from_str(saved).unwrap();
+                assert_eq!(value["color_library"]["palettes"].to_string(), palettes.to_string());
+                assert_eq!(value["preset"], "unreadable");
+            }
+        }
         for result in [f.store.handle(StoreRequest::Editing {language:layer_ui::UiLanguage::English}).unwrap(),browser.execute(StoreRequest::Editing {language:layer_ui::UiLanguage::English},1_000_000).unwrap()] {
             let StoreResponse::Editing(Some(stored)) = result else {panic!()};
             assert_eq!(*stored,incoming);
         }
         let mut invalid = CommitBatch::prepare(f.owner.clone(),vec![]).unwrap();
         invalid.editing_json = Some("{}".into());
-        invalid.editing_fields = Some(vec!["colors".into()]);
+        invalid.editing_fields = Some(vec!["/tools".into()]);
         assert!(f.store.commit(invalid.clone()).is_err());
         assert!(browser.execute(StoreRequest::Commit {batch:invalid},1_000_000).is_err());
         for result in [f.store.handle(StoreRequest::Editing {language:layer_ui::UiLanguage::English}).unwrap(),browser.execute(StoreRequest::Editing {language:layer_ui::UiLanguage::English},1_000_000).unwrap()] {
@@ -170,6 +184,26 @@ fn editing_merge_falls_back_to_the_valid_incoming_document() {
             assert_eq!(*stored,incoming);
         }
     }
+}
+
+#[test]
+fn editing_paths_keep_arrays_and_null_as_leaves_and_remove_map_entries() {
+    let mut previous = serde_json::to_value(layer_ui::EditingState::default()).unwrap();
+    previous["future"] = serde_json::json!({"a/b~c":{"removed":1,"null":1},"array":[1]});
+    let mut incoming = previous.clone();
+    incoming["future"] = serde_json::json!({"a/b~c":{"null":null},"array":[2]});
+    let paths = crate::store_rules::changed_editing_paths(&previous,&incoming);
+    assert_eq!(paths, ["/future/a~1b~0c/null", "/future/a~1b~0c/removed", "/future/array"]);
+    previous["future"]["another_window"] = true.into();
+    let mut batch = CommitBatch::prepare(Owner::fresh(),vec![]).unwrap();
+    batch.editing_json = Some(incoming.to_string());
+    batch.editing_fields = Some(paths);
+    let merged = crate::store_rules::merge_editing(Some(&previous.to_string()),&batch).unwrap().unwrap();
+    let merged: serde_json::Value = serde_json::from_str(&merged).unwrap();
+    incoming["future"]["another_window"] = true.into();
+    assert_eq!(merged,incoming);
+    batch.editing_fields = Some(vec!["/future/bad~2escape".into()]);
+    assert!(crate::store_rules::merge_editing(Some(&previous.to_string()),&batch).is_err());
 }
 
 #[test]

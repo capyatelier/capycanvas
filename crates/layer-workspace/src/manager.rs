@@ -618,8 +618,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                         let previous = s.saved_editing.as_ref().map(serde_json::to_value)
                             .unwrap_or_else(|| serde_json::to_value(layer_ui::EditingState::new_localized(&self.localization())))?;
                         let value = serde_json::to_value(editing)?;
-                        batch.editing_fields = Some(value.as_object().unwrap().iter()
-                            .filter(|(key, value)| previous.get(*key) != Some(*value)).map(|(key, _)| key.clone()).collect());
+                        batch.editing_fields = Some(crate::store_rules::changed_editing_paths(&previous, &value));
                         batch.editing_json = Some(serde_json::to_string(editing)?);
                     }
                     let pending = PendingSave { batch, snapshot: latest.clone(), editing };

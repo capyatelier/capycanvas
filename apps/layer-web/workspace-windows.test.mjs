@@ -45,13 +45,28 @@ export async function checkWorkspaceWindows({call,evaluate}) {
     await evaluate('layerApp.dispatch({type:"set_color",rgba:[0.4,0.2,0.7,1]});null');
     await wait(evaluate,ready);
     const colour=await evaluate('layerApp.state().colors.foreground');
+    await evaluate('layerApp.dispatch({type:"color",action:{op:"library",action:{op:"create_palette",name:"Window A palette"}}});layerApp.dispatch({type:"select_brush",id:5});layerApp.dispatch({type:"set_brush_size",value:53});null');
+    await wait(evaluate,ready);
+    await other('layerApp.dispatch({type:"select_brush",id:7});layerApp.dispatch({type:"set_brush_size",value:77});null');
+    await wait(other,'layerApp.app.brush_ready()');
+    const point=await other('(()=>{const r=layerApp.canvas.getBoundingClientRect();return{x:r.x+r.width*.5,y:r.y+r.height*.5}})()');
+    for(const type of ['mousePressed','mouseReleased']) await call('Input.dispatchMouseEvent',{type,...point,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1},sessionId);
+    await wait(other,'layerApp.state().color_library.history.length>0');
+    await wait(other,ready);
+    const history=await other('JSON.stringify(layerApp.state().color_library.history)');
     await evaluate('layerApp.dispatch({type:"invoke",command:"zen_mode"});null');
     await new Promise(r=>setTimeout(r,700)); await wait(evaluate,ready); await wait(other,ready);
     const ownCapture=await capture(evaluate), otherCapture=await capture(other), otherId=(await view(other)).id;
     assert.notDeepEqual(ownCapture.working,otherCapture.working);
     await checkpoint(other);
     await call('Page.reload',{},sessionId); await new Promise(r=>setTimeout(r,1000)); await wait(other,ready);
-    assert.equal(await other('layerApp.state().brush.diameter'),91,'A later colour save keeps the other window\'s brush override');
+    assert.equal(await other('layerApp.state().brush.diameter'),77);
+    assert.equal(await other('JSON.stringify(layerApp.state().color_library.history)'),history);
+    assert.ok(await other('layerApp.state().color_library.palettes.some(p=>p.name==="Window A palette")'),'Painting keeps another window\'s palettes after restart');
+    for(const [id,size] of [[2,91],[5,53],[7,77]]) {
+      await other(`layerApp.dispatch({type:"select_brush",id:${id}});null`);
+      assert.equal(await other('layerApp.state().brush.diameter'),size,`Brush ${id} keeps its independent override`);
+    }
     assert.deepEqual(await other('layerApp.state().colors.foreground'),colour);
     assert.equal((await view(other)).id,otherId);
     assert.deepEqual([...(await view(other)).order].sort(),[...defaults].sort(),'Reloading does not create a workspace');

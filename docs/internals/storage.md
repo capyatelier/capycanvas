@@ -28,6 +28,9 @@ app's `tmp` itself.
 
 The workspace store holds the painter's palettes and custom workspaces. Its
 worker restores editing fields with the window's language before returning them.
+Saves merge only this window's changed JSON paths, keeping other windows' brush
+overrides and palettes and unchanged unreadable fields; see
+[editing saves](workspace-ownership.md).
 Unreadable rows and pending deliveries stay in place. When no workspace can be
 read, startup creates a new workspace from the included layout and leaves the
 unreadable rows untouched. Only an unsupported table schema can trigger a reset,

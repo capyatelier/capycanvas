@@ -183,7 +183,7 @@ fn browser_transactions_match_sqlite_contract() {
     later.colors.set_rgba([0.4,0.2,0.7,1.]).unwrap();
     let mut colour_save = CommitBatch::prepare(other.clone(), vec![]).unwrap();
     colour_save.editing_json = Some(serde_json::to_string(&later).unwrap());
-    colour_save.editing_fields = Some(vec!["colors".into()]);
+    colour_save.editing_fields = Some(vec!["/colors".into()]);
     execute(StoreRequest::Commit {batch:colour_save.clone()}, 1002);
     editing.colors = later.colors;
     let stored = execute(StoreRequest::Editing {language:layer_ui::UiLanguage::English}, 1002);
@@ -192,7 +192,7 @@ fn browser_transactions_match_sqlite_contract() {
     later.colors.set_rgba([0.7,0.1,0.3,1.]).unwrap();
     let mut newer = CommitBatch::prepare(owner.clone(), vec![]).unwrap();
     newer.editing_json = Some(serde_json::to_string(&later).unwrap());
-    newer.editing_fields = Some(vec!["colors".into()]);
+    newer.editing_fields = Some(vec!["/colors".into()]);
     execute(StoreRequest::Commit {batch:newer},1003);
     execute(StoreRequest::Commit {batch:colour_save},1004);
     let stored = execute(StoreRequest::Editing {language:layer_ui::UiLanguage::English},1004);

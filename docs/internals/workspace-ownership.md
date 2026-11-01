@@ -44,14 +44,15 @@ before navigation. A rejected submission keeps its prompt and selected preview;
 pin edits remain available while a name is being edited or saved.
 
 Editing state is shared across windows. Each save includes the complete editing
-snapshot and the top-level fields changed since this window's last submitted
-snapshot. Inside the write transaction, the store merges those fields into the
-stored document and validates it; an invalid merge takes the complete submitted
-snapshot. A later save of the same field wins. Receipts carry no editing state,
-and other windows' values are not propagated into a live session.
-This is the top-level case of
-[JSON Merge Patch](https://www.rfc-editor.org/rfc/rfc7396), except null remains
-a value and nested objects are replaced as complete fields.
+snapshot and the paths changed since this window's last submitted snapshot,
+encoded as [JSON Pointers](https://www.rfc-editor.org/rfc/rfc6901) in
+`editing_fields`. Objects present in both snapshots are compared recursively;
+arrays and scalars are leaves. A path missing from the submitted snapshot removes
+that map entry; null remains a value. Inside the write transaction, the store
+validates the submitted snapshot and applies only those paths to the stored
+document, retaining unchanged unreadable fields. A later save of the same path
+wins, including a whole palette list. Receipts carry no editing state, and other
+windows' values are not propagated into a live session.
 
 GTK always attempts the authoritative switch/claim. On a live conflict it focuses
 the owning GTK window where available. A stale SwitchToWindow menu action uses

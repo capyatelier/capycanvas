@@ -359,8 +359,11 @@ A type or meaning change, including a fixed array's length, needs a concrete
 conversion of the raw JSON before typed validation. Keep conversions from
 1.0.15 onward so painters can skip releases; do not add speculative steps or
 conversions for unreleased formats. Editing version 1 extends the two region
-sources with Auto and converts numeric smoothing to Smooth edges. Released
-fixtures and tolerance checks follow the
+sources with Auto and converts numeric smoothing to Smooth edges.
+Merged saves can retain old versions and keys, so every conversion must be safe
+to rerun on a partly upgraded document, filling or repairing only what the current
+format lacks and preserving current fields already present.
+Released fixtures and tolerance checks follow the
 [testing guide](../development/testing.md#saved-data-compatibility).
 
 Drawings and private recovery records follow the stricter
@@ -383,7 +386,10 @@ and use defaults for fields they cannot read:
   field this build reads and validates is kept, and every other field keeps its
   default. Loading does not rewrite the saved copy; the next change replaces it.
 - Editing: the existing storage worker restores fields with the window's
-  language and returns the restored state before workspace adoption.
+  language and returns the restored state before workspace adoption. Saves merge
+  changed JSON paths, so painting history does not replace another window's
+  palettes and different brushes keep independent overrides. Unchanged unreadable
+  fields stay stored; see [editing saves](../internals/workspace-ownership.md).
 - Export presets load through `ExportPresets::restore`. An unreadable metadata
   field uses its default while independent fields and valid profile references
   survive. The binary envelope, digest and size limits remain strict. The

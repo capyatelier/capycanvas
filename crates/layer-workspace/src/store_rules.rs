@@ -78,20 +78,47 @@ pub(crate) fn update_preference(
     }
     Ok(true)
 }
+pub(crate) fn changed_editing_paths(previous: &serde_json::Value, incoming: &serde_json::Value) -> Vec<String> {
+    fn collect(previous: Option<&serde_json::Value>, incoming: Option<&serde_json::Value>, path: String, paths: &mut Vec<String>) {
+        if previous == incoming { return; }
+        if let (Some(serde_json::Value::Object(previous)), Some(serde_json::Value::Object(incoming))) = (previous, incoming) {
+            for key in previous.keys().chain(incoming.keys().filter(|key| !previous.contains_key(*key))) {
+                collect(previous.get(key), incoming.get(key), format!("{path}/{}", key.replace('~', "~0").replace('/', "~1")), paths);
+            }
+        } else {
+            paths.push(path);
+        }
+    }
+    let mut paths = Vec::new();
+    collect(Some(previous), Some(incoming), String::new(), &mut paths);
+    paths
+}
 pub(crate) fn merge_editing(current: Option<&str>, batch: &CommitBatch) -> Result<Option<String>> {
     let Some(incoming) = &batch.editing_json else { return Ok(None); };
     let Some(fields) = &batch.editing_fields else { return Ok(Some(incoming.clone())); };
     let incoming_value: serde_json::Value = serde_json::from_str(incoming)?;
     let mut merged = current.and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
         .filter(serde_json::Value::is_object).unwrap_or_else(|| incoming_value.clone());
-    for key in fields {
-        merged[key] = incoming_value.get(key).ok_or_else(|| StoreError::invalid("Invalid editing-state field."))?.clone();
+    for path in fields {
+        if path.is_empty() { merged = incoming_value.clone(); continue; }
+        if !path.starts_with('/') || path.split('~').skip(1).any(|part| !part.starts_with('0') && !part.starts_with('1')) {
+            return Err(StoreError::invalid("Invalid editing-state path."));
+        }
+        let (parent_path, key) = path.rsplit_once('/').unwrap();
+        let key = key.replace("~1", "/").replace("~0", "~");
+        if let Some(value) = incoming_value.pointer(path) {
+            let mut parent = &mut merged;
+            for token in parent_path.split('/').skip(1) {
+                if !parent.is_object() { *parent = serde_json::json!({}); }
+                parent = &mut parent[token.replace("~1", "/").replace("~0", "~")];
+            }
+            if !parent.is_object() { *parent = serde_json::json!({}); }
+            parent[key] = value.clone();
+        } else if let Some(parent) = merged.pointer_mut(parent_path).and_then(serde_json::Value::as_object_mut) {
+            parent.remove(&key);
+        }
     }
-    if serde_json::from_value::<layer_ui::EditingState>(merged.clone()).is_ok_and(|state| state.validate().is_ok()) {
-        Ok(Some(serde_json::to_string(&merged)?))
-    } else {
-        Ok(Some(incoming.clone()))
-    }
+    Ok(Some(serde_json::to_string(&merged)?))
 }
 pub(crate) fn validate_payload(
     batch: &CommitBatch,

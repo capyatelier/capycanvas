@@ -64,6 +64,7 @@ mod tests {
         let english = Localizer::shared(UiLanguage::English);
         let restored = EditingState::restore(&saved.to_string(), &english);
         assert_eq!(restored,state);
+        saved.as_object_mut().unwrap().remove("region_smooth_edges");
         for version in [1,2,999] {
             saved["version"] = version.into();
             saved["region_sources"] = serde_json::json!(["reference","visible"]);
@@ -79,6 +80,23 @@ mod tests {
                 assert!(restored.region_smooth_edges);
             }
         }
+    }
+    #[test]
+    fn released_fill_choice_wins_over_lasso_fill_without_dropping_toolbar_tiles() {
+        use crate::{CommandId, ToolSlotId, ToolVariant, ToolbarControl};
+        let english = Localizer::shared(UiLanguage::English);
+        let fill = ToolVariant::Command { command: CommandId::Fill };
+        let lasso = ToolVariant::Command { command: CommandId::LassoFill };
+        let mut saved = serde_json::to_value(EditingState::default()).unwrap();
+        saved["version"] = 1.into();
+        saved["tool_slots"]["choices"] = serde_json::json!({"fill":fill,"lasso_fill":lasso});
+        assert_eq!(EditingState::restore(&saved.to_string(), &english).tool_slots.choices[&ToolSlotId::Fill], fill);
+        saved["tool_slots"]["choices"].as_object_mut().unwrap().remove("fill");
+        assert_eq!(EditingState::restore(&saved.to_string(), &english).tool_slots.choices[&ToolSlotId::Fill], lasso);
+        let tiles: Vec<ToolbarControl> = serde_json::from_value(serde_json::json!([
+            {"kind":"tool_slot","slot":"fill"}, {"kind":"tool_slot","slot":"lasso_fill"}
+        ])).unwrap();
+        assert_eq!(tiles, vec![ToolbarControl::ToolSlot { slot: ToolSlotId::Fill }; 2]);
     }
     #[test]
     fn unreadable_palettes_use_localized_defaults_without_losing_other_fields() {

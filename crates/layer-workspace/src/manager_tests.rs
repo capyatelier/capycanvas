@@ -106,6 +106,7 @@ fn editing_saves_from_two_windows_keep_both_changes() {
         b.observe_editing(from_b);
         b.flush().await.unwrap();
         let mut from_a = a.editing().map(|e| *e).unwrap_or_default();
+        from_a.tools.set_override(5, "size", 53., &english).unwrap();
         from_a.colors.set_rgba([0.4, 0.2, 0.7, 1.]).unwrap();
         a.observe_editing(from_a.clone());
         a.flush().await.unwrap();
@@ -121,15 +122,54 @@ fn editing_saves_from_two_windows_keep_both_changes() {
         a.observe_editing(from_a);
         a.flush().await.unwrap();
         let mut from_b = *b.editing().unwrap();
+        from_b.tools.set_override(7, "size", 77., &english).unwrap();
         from_b.colors.set_rgba([0.7, 0.1, 0.3, 1.]).unwrap();
+        from_b.color_library.history.push(from_b.colors.foreground);
         b.observe_editing(from_b.clone());
         b.flush().await.unwrap();
         reopened.load_editing().await.unwrap();
         let stored = reopened.editing().unwrap();
         assert_eq!(stored.colors, from_b.colors);
         assert!(!stored.region_smooth_edges);
-        assert_eq!(stored.tools, from_b.tools);
+        assert_eq!(stored.tools.overrides[&5]["size"], 53.);
+        assert_eq!(stored.tools.overrides[&7]["size"], 77.);
+        assert_eq!(stored.color_library.history, from_b.color_library.history);
         assert!(stored.color_library.palettes.iter().any(|palette|palette.name=="Shared palette"));
+        from_b.color_library.palettes[0].name = "Later palette list".into();
+        b.observe_editing(from_b.clone());
+        b.flush().await.unwrap();
+        reopened.load_editing().await.unwrap();
+        assert_eq!(reopened.editing().unwrap().color_library.palettes, from_b.color_library.palettes);
+    });
+}
+
+#[test]
+fn released_editing_path_saves_survive_repeated_conversion() {
+    pollster::block_on(async {
+        let f = Fixture::new();
+        let manager = &f.manager;
+        let released = include_str!("../tests/compat/1.0.15/editing.json");
+        let sql = rusqlite::Connection::open(f.directory.join("workspaces.sqlite3")).unwrap();
+        sql.execute("INSERT INTO editing(id,json) VALUES(1,?1)", [released]).unwrap();
+        manager.load_editing().await.unwrap();
+        let mut expected = *manager.editing().unwrap();
+        assert!(!expected.region_smooth_edges);
+        assert_eq!(expected.region_sources, [layer_ui::RegionSource::Visible, layer_ui::RegionSource::Reference, layer_ui::RegionSource::Auto]);
+        expected.region_smooth_edges = true;
+        expected.region_sources[0] = layer_ui::RegionSource::Auto;
+        manager.observe_editing(expected.clone());
+        manager.flush().await.unwrap();
+        let stored: String = sql.query_row("SELECT json FROM editing", [], |row| row.get(0)).unwrap();
+        let mut unchanged: serde_json::Value = serde_json::from_str(released).unwrap();
+        unchanged["region_smooth_edges"] = true.into();
+        unchanged["region_sources"] = serde_json::to_value(expected.region_sources).unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&stored).unwrap(), unchanged);
+        let reopened = WorkspaceManager::new(manager.store.worker.clone(), Platform::Gtk);
+        reopened.load_editing().await.unwrap();
+        let restored = *reopened.editing().unwrap();
+        assert!(restored.region_smooth_edges);
+        assert_eq!(restored.region_sources, expected.region_sources);
+        assert_eq!(restored, expected);
     });
 }
 
@@ -1143,7 +1183,7 @@ fn interrupted_editing_recovers_without_creating_a_workspace() {
         editing.tools.set_override(editing.preset, "size", 91., &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         let mut batch = CommitBatch::prepare(Owner::fresh(), vec![]).unwrap();
         batch.editing_json = Some(serde_json::to_string(&editing).unwrap());
-        batch.editing_fields = Some(vec!["tools".into()]);
+        batch.editing_fields = Some(vec!["/tools".into()]);
         let sql = rusqlite::Connection::open(f.directory.join("workspaces.sqlite3")).unwrap();
         sql.execute_batch("CREATE TRIGGER interrupt_editing BEFORE INSERT ON editing BEGIN SELECT RAISE(ABORT,'interrupted editing'); END;").unwrap();
         assert!(m.store.worker.request(StoreRequest::Commit { batch: batch.clone() }).await.is_err());

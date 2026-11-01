@@ -8,11 +8,16 @@ impl EditingState {
     pub fn restore(saved: &str, localization: &Localizer) -> Self {
         let mut value: serde_json::Value = serde_json::from_str(saved).unwrap_or_default();
         if value["version"].as_u64() == Some(1) {
+            if let Some(choices) = value.pointer_mut("/tool_slots/choices").and_then(serde_json::Value::as_object_mut)
+                && let Some(lasso_fill) = choices.remove("lasso_fill") {
+                choices.entry("fill").or_insert(lasso_fill);
+            }
             if let Some(sources) = value["region_sources"].as_array_mut().filter(|sources| sources.len() == 2) {
                 sources.push(serde_json::to_value(RegionSource::Auto).unwrap());
             }
             if let Some(values) = value["region_values"].as_object_mut()
-                && let Some(smoothing) = values.remove("smoothing").and_then(|v| v.as_f64()) {
+                && let Some(smoothing) = values.remove("smoothing").and_then(|v| v.as_f64())
+                && value.get("region_smooth_edges").is_none() {
                 value["region_smooth_edges"] = (smoothing > 0.).into();
             }
         }
