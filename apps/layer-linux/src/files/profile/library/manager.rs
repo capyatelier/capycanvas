@@ -259,7 +259,7 @@ impl Manager {
 }
 
 pub(crate) async fn manage(w: &Rc<Workspace>) -> Result<(), String> {
-    manage_for_window(&w.window, Some(w), w.localization()).await
+    manage_for_window(w.window.upcast_ref(), Some(w), w.localization()).await
 }
 
 pub(crate) async fn manage_for_window(

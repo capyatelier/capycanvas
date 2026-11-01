@@ -197,7 +197,7 @@ impl Launcher {
             }
             let parent = target
                 .as_ref()
-                .map(|w| &w.window)
+                .map(|w| w.window.upcast_ref::<adw::ApplicationWindow>())
                 .or(placeholder.as_ref())
                 .unwrap();
             parent.present();

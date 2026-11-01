@@ -1,6 +1,6 @@
 use adw::{prelude::*, subclass::prelude::*};
 use gtk::{gdk, glib, gsk};
-use std::cell::Cell;
+use std::{cell::Cell, rc::Rc};
 
 fn outline(node: &gsk::RenderNode) -> Option<gsk::RoundedRect> {
     if let Some(shadow) = node.downcast_ref::<gsk::OutsetShadowNode>() {
@@ -25,6 +25,7 @@ mod imp {
     pub struct Window {
         pub radius: Cell<Option<([i32; 2], f32)>>,
         changed: Cell<bool>,
+        pub(super) owners: Rc<crate::retirement::Owners>,
     }
 
     #[glib::object_subclass]
@@ -60,11 +61,17 @@ mod imp {
     impl ObjectImpl for Window {
         fn signals() -> &'static [glib::subclass::Signal] {
             static SIGNALS: std::sync::OnceLock<Vec<glib::subclass::Signal>> = std::sync::OnceLock::new();
-            SIGNALS.get_or_init(|| vec![glib::subclass::Signal::builder("outline-changed").build()])
+            SIGNALS.get_or_init(|| vec![glib::subclass::Signal::builder("outline-changed").build(),
+                glib::subclass::Signal::builder("retire-renderers").build()])
         }
     }
     impl WidgetImpl for Window {}
-    impl WindowImpl for Window {}
+    impl WindowImpl for Window {
+        fn close_request(&self) -> glib::Propagation {
+            self.obj().destroy();
+            glib::Propagation::Stop
+        }
+    }
     impl ApplicationWindowImpl for Window {}
     impl AdwApplicationWindowImpl for Window {}
 }
@@ -77,6 +84,21 @@ glib::wrapper! {
 }
 
 impl Window {
+    pub(crate) fn renderer_owner(&self) -> Result<crate::retirement::Owner, String> {
+        self.imp().owners.acquire()
+    }
+    pub fn destroy(&self) {
+        let Some(drained) = self.imp().owners.close() else { return; };
+        self.emit_by_name::<()>("retire-renderers", &[]);
+        self.set_visible(false);
+        let window = self.clone();
+        let hold = self.application().map(|app| app.hold());
+        glib::spawn_future_local(async move {
+            drained.await;
+            gtk::prelude::GtkWindowExt::destroy(&window);
+            drop(hold);
+        });
+    }
     #[allow(deprecated)]
     pub fn corner_radius(&self) -> f32 {
         let size = [self.width().max(1), self.height().max(1)];

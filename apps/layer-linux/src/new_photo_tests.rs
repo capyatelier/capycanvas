@@ -100,7 +100,8 @@ pub(super) fn export_page(w: &Rc<Workspace>, tag: &str) {
     pump(350);
     assert_eq!(nav.visible_page_tag().as_deref(), Some(tag));
 }
-pub(super) fn controls_root(window: &adw::ApplicationWindow) -> gtk::Widget {
+pub(super) fn controls_root(window: &impl IsA<adw::ApplicationWindow>) -> gtk::Widget {
+    let window = window.as_ref();
     window.visible_dialog().map(|d| d.upcast()).unwrap_or_else(|| window.clone().upcast())
 }
 pub(super) fn combo(w: &Rc<Workspace>, name: &str) -> adw::ComboRow {
@@ -131,7 +132,8 @@ pub(super) fn profile_action(w: &Rc<Workspace>, prefix: &str, action: &str) {
     profile_action_window(&w.window, prefix, action);
 }
 
-pub(super) fn profile_action_window(window: &adw::ApplicationWindow, prefix: &str, action: &str) {
+pub(super) fn profile_action_window(window: &impl IsA<adw::ApplicationWindow>, prefix: &str, action: &str) {
+    let window = window.as_ref();
 
     if prefix == "export" {
         let dialog = window.visible_dialog().unwrap();

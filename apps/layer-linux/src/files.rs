@@ -307,7 +307,7 @@ async fn document_request(
                 let session = &gpu.as_ref().ok_or_else(|| w.localization().text(MessageId::DOCUMENTS_ERROR_CANVAS_UNAVAILABLE).to_string())?.session;
                 (session.state().settings.photo_open, session.engine().document().composition().color.space)
             };
-            let Some((project, location)) = open::prepare(&w.window, Some(w), file, policy, working, photo_document_names(&location.name, &w.localization()), &w.localization()).await? else {
+            let Some((project, location)) = open::prepare(w.window.upcast_ref(), Some(w), file, policy, working, photo_document_names(&location.name, &w.localization()), &w.localization()).await? else {
                 return Ok(false);
             };
             w.documents.enqueue_imported(w, project, location);

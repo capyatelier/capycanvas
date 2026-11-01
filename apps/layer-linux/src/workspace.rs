@@ -908,7 +908,7 @@ pub struct Workspace {
     localization: RefCell<std::sync::Arc<layer_ui::Localizer>>,
     language_transition: RefCell<layer_ui::LanguageTransition>,
     localization_callbacks: RefCell<Vec<crate::LocalizationCallback>>,
-    pub window: adw::ApplicationWindow,
+    pub window: crate::window::Window,
     pub area: gtk::Picture,
     pub gpu: RefCell<Option<GpuCanvas>>,
     backdrop: RefCell<Option<crate::wayland::backdrop::Backdrop>>,
@@ -1005,8 +1005,6 @@ impl Drop for Workspace {
     fn drop(&mut self) {
         if let Some(timer) = self.color_preview_timer.get_mut().take() { timer.remove(); }
         self.notice.cancel_timeout();
-        // Weak unrealize callbacks cannot upgrade once the final Rc is gone.
-        // Join the GPU worker before any native window/surface fields drop.
         self.local_tone.suspend();
         self.gpu.get_mut().take();
         self.backdrop.get_mut().take();
@@ -1122,12 +1120,12 @@ impl Workspace {
             gtk::IconTheme::for_display(&gdk::Display::default().unwrap())
                 .add_resource_path("/dev/layer/icons");
         });
-        let window: adw::ApplicationWindow = glib::Object::builder::<crate::window::Window>()
+        let window = glib::Object::builder::<crate::window::Window>()
             .property("application", app)
             .property("title", localization.language().app_name())
             .property("default-width", 1200)
             .property("default-height", 900)
-            .build().upcast();
+            .build();
         window.set_icon_name(Some("art.capycanvas.CapyCanvas"));
         static NEXT_WINDOW: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         window.add_css_class("capy-workspace");
@@ -1532,7 +1530,7 @@ impl Workspace {
         self.color.bind(self, |workspace, color| workspace.dispatch(UiAction::Color {
             action: layer_ui::ColorAction::Definition { color },
         }));
-        let keyboard_focus = crate::input::keyboard_focus(&self.window);
+        let keyboard_focus = crate::input::keyboard_focus(self.window.upcast_ref());
         let keys = gtk::EventControllerKey::new();
         keys.set_name(Some("workspace-shortcuts"));
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -2683,12 +2681,8 @@ impl Workspace {
                     }
                     Err(error) => { this.gpu_error(&error); return; }
                 }
-                let reattached = this.gpu.borrow_mut().as_mut().map(|gpu| gpu.reattach(area));
-                if let Some(result) = reattached {
-                    if let Err(error) = result {
-                        this.gpu_error(&error);
-                    }
-                    this.wake();
+                if this.gpu.borrow().is_some() {
+                    this.restart_gpu();
                     return;
                 }
                 if this.initial_project.borrow().is_some() || has_monitor.get() {
@@ -2705,6 +2699,19 @@ impl Workspace {
             #[weak(rename_to = this)]
             self,
             move |_| this.wake()
+        ));
+        self.window.connect_local("retire-renderers", false, glib::clone!(
+            #[weak(rename_to = this)] self,
+            #[upgrade_or] None,
+            move |_| {
+                this.documents.closing_window.set(true);
+                this.documents.cancel_open.set(true);
+                this.documents.paused.set(true);
+                this.local_tone.suspend();
+                this.frame_timer.borrow_mut().take();
+                if let Some(gpu) = this.gpu.borrow_mut().as_mut() { gpu.session.renderer_mut().stop(); }
+                None
+            }
         ));
         self.area.connect_unrealize(glib::clone!(
             #[weak(rename_to = this)]
@@ -2773,26 +2780,33 @@ impl Workspace {
         self.status.set_visible(true);
     }
     fn restart_gpu(self: &Rc<Self>) {
-        self.update_backdrop();
-        let result = self
-            .gpu
-            .borrow_mut()
-            .as_mut()
-            .map(|g| g.reattach(&self.area));
-        match result {
-            Some(Ok(())) => {
-                self.restart_canvas.set_visible(false);
-                self.status.set_visible(false);
-                self.refresh(regions::ALL);
-                self.wake();
+        let retiring = self.gpu.borrow_mut().as_mut().map(|g| {
+            let owner = g.session.engine().backend().proof_owner;
+            (owner, g.session.renderer_mut().stop())
+        });
+        let Some((owner, retirement)) = retiring else { return; };
+        glib::spawn_future_local(glib::clone!(#[weak(rename_to = this)] self, async move {
+            retirement.await;
+            if !this.window.is_visible() || !this.area.is_realized()
+                || !this.gpu.borrow().as_ref().is_some_and(|g| g.session.engine().backend().proof_owner == owner) {
+                return;
             }
-            Some(Err(error)) => {
-                eprintln!("Canvas restart failed: {error}");
-                self.status
-                    .set_text(&layer_ui::bootstrap_view(&self.localization()).canvas_restart_failed);
+            this.update_backdrop();
+            let result = this.gpu.borrow_mut().as_mut().map(|g| g.reattach(&this.area));
+            match result {
+                Some(Ok(())) => {
+                    this.restart_canvas.set_visible(false);
+                    this.status.set_visible(false);
+                    this.refresh(regions::ALL);
+                    this.wake();
+                }
+                Some(Err(error)) => {
+                    eprintln!("Canvas restart failed: {error}");
+                    this.status.set_text(&layer_ui::bootstrap_view(&this.localization()).canvas_restart_failed);
+                }
+                None => (),
             }
-            None => (),
-        }
+        }));
     }
     fn refresh_color_preview(&self) {
         let colors = self.gpu.borrow().as_ref().map(|g| {

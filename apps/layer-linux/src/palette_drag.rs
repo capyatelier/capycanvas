@@ -127,7 +127,7 @@ impl PalettePanel {
         ));
         w.window.add_controller(keys.clone());
         *self.drag_host.borrow_mut() = Some(Host {
-            window: w.window.downgrade(),
+            window: w.window.upcast_ref::<adw::ApplicationWindow>().downgrade(),
             keys,
             blur: Some(blur),
         });

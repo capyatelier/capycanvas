@@ -1,7 +1,7 @@
 //! Native session/pacing adapter. GPU ownership lives in render_thread.
 use crate::{
     render_thread::RenderWorker,
-    wayland::{Geometry, Parent},
+    wayland::Geometry,
 };
 use gtk::prelude::*;
 use layer_render::{CanvasRenderer, ReadbackImage};
@@ -11,26 +11,18 @@ pub struct GpuCanvas {
     pub session: UiSession<RenderWorker>,
     cursor: CanvasCursor,
     view_color: crate::display_color::ViewColor,
-    // Alive until the worker and its borrowed Wayland handles are gone.
-    _parent: gtk::gdk::Surface,
     pub needs_present: bool,
     pending_regions: u32,
 }
 impl GpuCanvas {
     pub fn reattach(&mut self, area: &gtk::Picture) -> Result<(), String> {
-        let parent = area
-            .native()
-            .and_then(|native| native.surface())
-            .ok_or("The canvas window has no native surface")?;
         let renderer = RenderWorker::new(
-            Parent::new(&parent)?,
-            area.downgrade().into(),
+            area,
             self.session.engine().document().composition().color,
             self.session.localization().clone(),
         )?;
         let (previous, _) = self.session.replace_renderer(renderer)?;
         drop(previous);
-        self._parent = parent;
         self.session.renderer_mut().finish_startup_catalog()?;
         self.needs_present = true;
         Ok(())
@@ -71,7 +63,7 @@ impl GpuCanvas {
             None => (layer_ui::startup_drawing(crate::new_drawing::screen(&parent), &localization)?, None),
         };
         let color = project.composition().color;
-        let renderer = RenderWorker::new(Parent::new(&parent)?, area.downgrade().into(), color, localization.clone())?;
+        let renderer = RenderWorker::new(area, color, localization.clone())?;
         let mut session =
             UiSession::from_project_localized(renderer, project, location, extent(area), layer_ui::Platform::Gtk, localization)?;
         if startup { session.mark_startup_drawing(); }
@@ -95,7 +87,6 @@ impl GpuCanvas {
             session,
             cursor: CanvasCursor::default(),
             view_color: Default::default(),
-            _parent: parent,
             needs_present: true,
             pending_regions: 0,
         })

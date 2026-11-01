@@ -2,7 +2,8 @@
 use super::*;
 use std::path::{Path, PathBuf};
 
-pub(super) fn capture_widget(window: &adw::ApplicationWindow, widget: &impl IsA<gtk::Widget>) -> gdk::Texture {
+pub(super) fn capture_widget(window: &impl IsA<adw::ApplicationWindow>, widget: &impl IsA<gtk::Widget>) -> gdk::Texture {
+    let window = window.as_ref();
     let widget = widget.as_ref();
     assert!(widget.is_mapped());
     if let Ok(expected) = std::env::var("LAYER_MOTION_SCALE") {

@@ -47,6 +47,7 @@ mod command_bar;
 mod previews;
 mod recovery;
 mod render_thread;
+mod retirement;
 mod squircle;
 mod storage;
 mod system_status;
@@ -380,12 +381,10 @@ fn open_workspace_ready(
     // Capture the prepared document for both ordinary activation and file
     // launches. Starting here also excludes photo decoding from the delay.
     if let Ok(path) = std::env::var("LAYER_UI_CAPTURE") {
-        let app = app.clone();
         gtk::glib::timeout_add_local_once(std::time::Duration::from_secs(4), move || {
             assert!(workspace.gpu.borrow().is_some(), "GTK GPU initialization failed");
             capture(&workspace, &path);
             workspace.window.close();
-            app.quit();
         });
     }
 }

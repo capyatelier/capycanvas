@@ -112,7 +112,7 @@ pub(super) async fn interpret(
 ) -> Result<Option<layer_core::color::source::SourceImage>, String> {
     let working = w.gpu.borrow().as_ref().ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization()))?
         .session.engine().document().composition().color.space;
-    interpret_window(&w.window, Some(w), source, policy, working, &w.localization()).await
+    interpret_window(w.window.upcast_ref(), Some(w), source, policy, working, &w.localization()).await
 }
 
 async fn interpret_window(

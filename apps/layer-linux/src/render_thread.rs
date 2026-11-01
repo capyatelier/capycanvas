@@ -25,14 +25,16 @@ fn error(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 /// Wake the canvas once GTK is next idle, from any thread.
-fn wake_canvas(area: &gtk::glib::SendWeakRef<gtk::Picture>) {
-    canvas_action(area, "canvas.wake", None);
+fn wake_canvas(area: &gtk::glib::SendWeakRef<gtk::Picture>, status: &Arc<ChromeStatus>) {
+    canvas_action(area, "canvas.wake", status);
 }
-fn canvas_action(area: &gtk::glib::SendWeakRef<gtk::Picture>, action: &'static str, owner: Option<u64>) {
+fn canvas_action(area: &gtk::glib::SendWeakRef<gtk::Picture>, action: &'static str, status: &Arc<ChromeStatus>) {
     let area = area.clone();
+    let status = status.clone();
     gtk::glib::idle_add_once(move || {
+        if !status.accepting.load(Ordering::Acquire) { return; }
         if let Some(area) = area.upgrade() {
-            let parameter = owner.map(|owner| gtk::glib::variant::ToVariant::to_variant(&owner));
+            let parameter = (action == "canvas.chrome").then(|| gtk::glib::variant::ToVariant::to_variant(&status.owner));
             let _ = area.activate_action(action, parameter.as_ref());
         }
     });
@@ -43,10 +45,11 @@ const CHROME_READY: u64 = u64::MAX - 1;
 const CHROME_RETIRED: u64 = u64::MAX - 2;
 pub(crate) struct ChromeStatus {
     owner: u64,
+    accepting: AtomicBool,
     value: AtomicU64,
 }
 impl ChromeStatus {
-    fn new(owner: u64) -> Self { Self {owner,value:AtomicU64::new(CHROME_PREPARING)} }
+    fn new(owner: u64) -> Self { Self {owner,accepting:AtomicBool::new(true),value:AtomicU64::new(CHROME_PREPARING)} }
     pub(crate) fn state(&self) -> crate::glass::ChromeState {
         use crate::glass::ChromeState;
         match self.value.load(Ordering::Acquire) {
@@ -399,6 +402,8 @@ impl<T> WorkerJob<T> {
 /// Two in-flight paint frames, including the frame being presented. GTK never
 /// waits on a worker lock, Vulkan acquire, or a GPU completion fence.
 pub struct RenderWorker {
+    parent: Option<NativeParent>,
+    retirement: Option<crate::retirement::Retirement>,
     overlays: Arc<Overlays>,
     snapshot_job: Option<WorkerJob<layer_render_wgpu::snapshot::SnapshotJob>>,
     analysis_job: Option<WorkerJob<layer_render_wgpu::effect_analysis::Job>>,
@@ -481,6 +486,12 @@ pub struct RenderWorker {
     #[cfg(test)]
     pub stats: Arc<std::sync::Mutex<crate::timing::Stats>>,
 }
+struct NativeParent {
+    _window: crate::window::Window,
+    _surface: gtk::gdk::Surface,
+    _owner: crate::retirement::Owner,
+    _hold: Option<gtk::gio::ApplicationHoldGuard>,
+}
 impl RenderWorker {
     fn chrome_presentation(&self) -> ChromePresentation {
         ChromePresentation {revision:self.chrome,hold:self.chrome_hold,surround:self.surround,
@@ -559,12 +570,19 @@ impl RenderWorker {
         rx.recv_timeout(Duration::from_secs(30)).map_err(error)?
     }
     pub(super) fn new(
-        parent: Parent,
-        area: gtk::glib::SendWeakRef<gtk::Picture>,
+        area: &gtk::Picture,
         color: layer_core::color::DocumentColor,
         localization: Arc<layer_ui::Localizer>,
     ) -> Result<Self, String> {
+        use gtk::prelude::*;
+        let window = area.root().and_downcast::<crate::window::Window>().ok_or("The canvas has no window")?;
+        let surface = window.surface().ok_or("The canvas window has no native surface")?;
+        let parent = Parent::new(&surface)?;
+        let lease = NativeParent { _owner: window.renderer_owner()?,
+            _hold: window.application().map(|app| app.hold()), _window: window, _surface: surface };
+        let area: gtk::glib::SendWeakRef<gtk::Picture> = area.downgrade().into();
         let (mut renderer, receiver, chrome_requests, reply) = Self::channels(color);
+        renderer.parent = Some(lease);
         #[cfg(test)]
         { renderer.startup_pause = NEXT_STARTUP_PAUSE.lock().unwrap().take(); }
         #[cfg(test)]
@@ -621,7 +639,7 @@ impl RenderWorker {
                 if let Err(error) = result {
                     let _ = worker_failure.set(error.clone());
                     let _ = reply.send(Reply::Error(error));
-                    wake_canvas(&failure_area);
+                    wake_canvas(&failure_area, &finished_chrome);
                 }
             })
             .map_err(error)?);
@@ -635,6 +653,8 @@ impl RenderWorker {
         let (reply, replies) = mpsc::channel();
         let presented_chrome = Arc::new(ChromeStatus::new(proof_owner));
         let renderer = Self {
+            parent: None,
+            retirement: None,
             overlays: Arc::default(),
             context_seed: EvaluationContext::default(),
             selection_overlays: Arc::default(),
@@ -782,10 +802,11 @@ impl RenderWorker {
         self.initialized
     }
     pub(super) fn ready(&mut self) -> Result<bool, String> {
-        if let Some(error) = self.failure.get() {
-            self.snapshot_gpu = None;
-            return Err(error.clone());
+        if let Some(error) = self.failure.get().cloned() {
+            self.stop();
+            return Err(error);
         }
+        if self.retirement.is_some() { return Err("GPU worker retired".into()); }
         while let Ok(reply) = self.replies.try_recv() {
             if let Some(id) = self.awaiting_color_adoption {
                 match reply {
@@ -801,7 +822,7 @@ impl RenderWorker {
                     Reply::Screen(color) => self.screen_color = color,
                     Reply::ScreenClipped(generation, clipped) => if generation == self.screen_generation { self.screen_clipped = clipped },
                     Reply::BrushStamp(image) => self.brush_stamps.push_back(image),
-                Reply::Error(error) => { self.snapshot_gpu = None; return Err(error); },
+                Reply::Error(error) => { self.stop(); return Err(error); },
                     _ => (),
                 }
                 continue;
@@ -854,11 +875,11 @@ impl RenderWorker {
                 Reply::DisplayHeadroom(headroom, encoding) => { self.display_headroom = headroom; self.display_encoding = encoding; },
                 Reply::Screen(color) => self.screen_color = color,
                 Reply::ScreenClipped(generation, clipped) => if generation == self.screen_generation { self.screen_clipped = clipped },
-                Reply::Error(error) => { self.snapshot_gpu = None; return Err(error); },
+                Reply::Error(error) => { self.stop(); return Err(error); },
             }
         }
         if self.thread.as_ref().is_some_and(|t| t.is_finished()) {
-            self.snapshot_gpu = None;
+            self.stop();
             return Err("GPU worker stopped".into());
         }
         Ok(self.initialized
@@ -866,8 +887,8 @@ impl RenderWorker {
             && self.in_flight.load(Ordering::Acquire) < 2)
     }
     #[cfg(test)]
-    pub(super) fn worker_is_joined(&self) -> bool {
-        self.thread.is_none()
+    pub(super) fn worker_is_retired(&self) -> bool {
+        self.retirement.as_ref().is_some_and(|retirement| retirement.is_complete())
     }
     #[cfg(test)]
     pub(super) fn frames_idle(&self) -> bool {
@@ -879,26 +900,32 @@ impl RenderWorker {
         }
         self.snapshot_gpu.clone().ok_or_else(|| "Canvas renderer is still preparing".into())
     }
-    pub(super) fn stop(&mut self) {
+    pub(super) fn stop(&mut self) -> crate::retirement::Retirement {
+        if let Some(retirement) = &self.retirement { return retirement.clone(); }
         #[cfg(test)]
         if let Some(pause) = &self.startup_pause { pause.store(false, Ordering::Release); }
-        self.snapshot_gpu = None;
         let _ = self.discard_prepared_color();
-        if let Some(thread) = self.thread.take() {
-            let _ = self.send(Command::Stop);
-            // Wayland children must die before GTK releases their parent.
-            let _ = thread.join();
-        }
-        // Unconsumed initialization replies also own a device handle.
-        for reply in self.replies.try_iter() { drop(reply); }
-        self.thumbnails.clear();
-        self.brush_stamps.clear();
-        self.filter_previews.clear();
-        self.color_sample = None;
-        self.region = None;
-        Arc::make_mut(&mut self.overlays).selection = None;
-        self.brush_sources.clear();
-        self.startup_key = None;
+        self.presented_chrome.accepting.store(false, Ordering::Release);
+        let _ = self.send(Command::Stop);
+        self.commands = mpsc::channel().0;
+        self.chrome_updates = mpsc::channel().0;
+        let replies = std::mem::replace(&mut self.replies, mpsc::channel().1);
+        let resources = (replies, self.snapshot_gpu.take(), self.snapshot_job.take(), self.analysis_job.take(),
+            self.analysis_candidate.take(), self.shader_activity.take(), std::mem::take(&mut self.brush_sources),
+            std::mem::take(&mut self.thumbnails), std::mem::take(&mut self.brush_stamps),
+            std::mem::take(&mut self.filter_previews), self.color_sample.take(), self.region.take(),
+            std::mem::take(&mut self.overlays), self.startup_key.take());
+        let retirement = if let Some(thread) = self.thread.take() {
+            crate::retirement::reap(thread, resources, self.parent.take())
+        } else {
+            drop(resources);
+            let finished = crate::retirement::Retirement::default();
+            finished.complete();
+            finished
+        };
+        self.retirement = Some(retirement.clone());
+        self.startup = Default::default();
+        retirement
     }
 }
 impl Drop for RenderWorker {
@@ -1444,19 +1471,19 @@ impl Worker {
                 self.child.synchronize(false)?;
                 self.initial_completion = None;
                 self.presented_chrome.publish(self.chrome.published);
-                canvas_action(&self.area, "canvas.chrome", Some(self.presented_chrome.owner));
+                canvas_action(&self.area, "canvas.chrome", &self.presented_chrome);
             }
             self.prepare_initial_chrome();
             let (revision, screen) = self.child.screen_color();
             if self.screen_reported != Some(revision) {
                 self.screen_reported = Some(revision);
                 reply.send(Reply::Screen(screen)).map_err(error)?;
-                wake_canvas(&self.area);
+                wake_canvas(&self.area, &self.presented_chrome);
             }
             if let Some(result) = self.presenter.screen_check_result() {
                 if let Err(e) = &result { eprintln!("Screen gamut check: {e}"); }
                 reply.send(Reply::ScreenClipped(self.checked_generation, result.ok())).map_err(error)?;
-                wake_canvas(&self.area);
+                wake_canvas(&self.area, &self.presented_chrome);
             }
             let headroom = if self.hdr_encoding.is_some() { self.screen_headroom } else { 1. };
             if headroom != self.display_headroom {
@@ -1587,7 +1614,11 @@ impl Worker {
                     let request = context_capture.take().unwrap();
                     let _ = request.value.set(Ok(self.renderer.evaluation_context()));
                 } else {
-                    std::thread::sleep(Duration::from_millis(1));
+                    match receiver.recv_timeout(Duration::from_millis(1)) {
+                        Ok(Command::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        Ok(command) => deferred.push_back(command),
+                        Err(mpsc::RecvTimeoutError::Timeout) => (),
+                    }
                     continue;
                 }
             }
@@ -1648,7 +1679,7 @@ impl Worker {
                             Err(layer_render_wgpu::GpuRasterError::ThumbnailUnavailable(_)) => {
                                 pending_thumbnails.pop_front();
                                 reply.send(Reply::ThumbnailCancelled(id)).map_err(error)?;
-                                wake_canvas(&self.area);
+                                wake_canvas(&self.area, &self.presented_chrome);
                             }
                             Err(failure) => return Err(error(failure)),
                         }
@@ -2042,13 +2073,13 @@ impl Worker {
         }
         let pending = self.renderer.has_pending_work();
         if pending && !report.pending_work.swap(pending, Ordering::AcqRel) {
-            wake_canvas(&self.area);
+            wake_canvas(&self.area, &self.presented_chrome);
         }
         report.pending_work.store(pending, Ordering::Release);
     }
     fn report_display(&self, reply: &mpsc::Sender<Reply>) -> Result<(), String> {
         reply.send(Reply::DisplayHeadroom(self.display_headroom, self.hdr_encoding)).map_err(error)?;
-        wake_canvas(&self.area);
+        wake_canvas(&self.area, &self.presented_chrome);
         Ok(())
     }
     fn enable_hdr(&mut self) -> Result<(), String> {
@@ -2110,7 +2141,7 @@ impl Worker {
             if done.load(Ordering::Acquire) {
                 self.chrome.ready();
                 self.presented_chrome.value.store(CHROME_READY, Ordering::Release);
-                canvas_action(&self.area, "canvas.chrome", Some(self.presented_chrome.owner));
+                canvas_action(&self.area, "canvas.chrome", &self.presented_chrome);
             }
         } else if self.last_view.is_some() && self.renderer.has_presentable_frame()
             && self.presenter.pipelines_ready(&self.renderer) && self.presenter.chrome_ready() {
@@ -2314,7 +2345,9 @@ impl Worker {
         self.renderer.queue().present(target);
         if moved {
             let area = self.area.clone();
+            let status = self.presented_chrome.clone();
             gtk::glib::idle_add_once(move || {
+                if !status.accepting.load(Ordering::Acquire) { return; }
                 if let Some(area) = area.upgrade() {
                     crate::wayland::request_parent_commit(&area);
                 }
@@ -2322,7 +2355,7 @@ impl Worker {
         }
         if let Some(revision) = self.chrome.publish() {
             if self.chrome.first == FirstChrome::Visible { self.presented_chrome.publish(revision); }
-            canvas_action(&self.area, "canvas.chrome", Some(self.presented_chrome.owner));
+            canvas_action(&self.area, "canvas.chrome", &self.presented_chrome);
         }
         if !self.paper_ready.load(Ordering::Acquire) {
             let ready = self.paper_ready.clone();

@@ -895,9 +895,8 @@ impl Documents {
         self.paused.set(true);
         let parked = w.gpu.borrow_mut().as_mut().map(|g| {
             g.session.park_document()?;
-            g.session.renderer_mut().stop();
-            Ok::<_, String>(())
-        }).unwrap_or(Ok(()));
+            Ok::<_, String>(g.session.renderer_mut().stop())
+        }).transpose();
         if let Err(error) = parked {
             self.paused.set(false);
             self.changing.set(false);
@@ -905,6 +904,7 @@ impl Documents {
             w.local_tone.resume();
             return Err(error);
         }
+        if let Some(retirement) = parked.unwrap() { retirement.await; }
         Ok(())
     }
     fn park(&self, w: &Workspace) -> Option<GpuCanvas> {
@@ -1007,7 +1007,7 @@ impl Documents {
         recovery.flush().await?;
         candidate.session.park_document()?;
         let tiles=candidate.session.retained_document_tiles();
-        candidate.session.renderer_mut().stop();
+        candidate.session.renderer_mut().stop().await;
         self.model.borrow_mut().append_parked_with_id(id,Parked {canvas:candidate,recovery},tiles,&w.localization()).map_err(|(error,_)|error)?;
         self.trim().await;
         self.refresh(w);
@@ -1044,17 +1044,22 @@ impl Documents {
         }
         let mut replace_initial=replace_initial&&w.gpu.borrow().as_ref().is_some_and(|gpu|startup.as_ref().is_some_and(|stamp|gpu.session.can_replace_startup_session(stamp)));
         self.prepare_switch(w,!replace_initial).await?;
-        let mut previous = self.park(w).ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization()))?;
+        let mut previous = Box::new(self.park(w).ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization()))?);
         if self.closing_window.get() || self.cancel_open.get() {
             let error = previous.reattach(&w.area).err();
-            *w.gpu.borrow_mut() = Some(previous);
+            *w.gpu.borrow_mut() = Some(*previous);
             self.finish_switch(w, error);
             return Err("Opening was cancelled because the window is closing".into());
         }
-        let candidate = GpuCanvas::with_project_localized(&w.area, Some((project, location)), w.localization(), Some(previous.session.state().settings.clone()));
+        let candidate = GpuCanvas::with_project_localized(&w.area, Some((project, location)), w.localization(), Some(previous.session.state().settings.clone())).map(Box::new);
         let candidate = match candidate {
             Ok(mut next) if imported.is_some() || restored.is_some() => match next.prepare_import(|| !w.window.is_visible() || self.closing_window.get() || self.cancel_open.get()).await {
-                Ok(()) => Ok(next), Err(error) => Err(error),
+                Ok(()) => Ok(next), Err(error) => {
+                    let retirement = next.session.renderer_mut().stop();
+                    drop(next);
+                    retirement.await;
+                    Err(error)
+                },
             },
             candidate => candidate,
         };
@@ -1062,7 +1067,7 @@ impl Documents {
             Ok(next) => next,
             Err(error) => {
                 let restart_error = previous.reattach(&w.area).err();
-                *w.gpu.borrow_mut() = Some(previous);
+                *w.gpu.borrow_mut() = Some(*previous);
                 self.finish_switch(w, restart_error);
                 return self.show_unsupported(w, imported.as_ref(), original, error).await;
             }
@@ -1074,8 +1079,11 @@ impl Documents {
                 .or_else(|| next.session.inherit_initial_drawing_tools(&previous.session).err()) };
         let recovery = if let Some((restored,recovery,observed))=restored {
             if let Err(error)=next.session.restore_session(restored,recovery.recovered.get(),observed) {
+                let retirement = next.session.renderer_mut().stop();
+                drop(next);
+                retirement.await;
                 let restart_error=previous.reattach(&w.area).err();
-                *w.gpu.borrow_mut()=Some(previous);
+                *w.gpu.borrow_mut()=Some(*previous);
                 self.finish_switch(w,restart_error);
                 return Err(error);
             }
@@ -1089,9 +1097,9 @@ impl Documents {
             drop(previous);
         } else {
             let tiles = previous.session.retained_document_tiles();
-            self.model.borrow_mut().append(Parked { canvas: previous, recovery: w.recovery() }, tiles, &w.localization());
+            self.model.borrow_mut().append(Parked { canvas: *previous, recovery: w.recovery() }, tiles, &w.localization());
         }
-        *w.gpu.borrow_mut() = Some(next);
+        *w.gpu.borrow_mut() = Some(*next);
         *w.recovery.borrow_mut() = recovery;
         self.trim().await;
         self.finish_switch(w, error);
@@ -1100,7 +1108,7 @@ impl Documents {
     async fn show_unsupported(&self, w: &Rc<Workspace>, imported: Option<&layer_ui::ImportedDocument>, original: Option<std::path::PathBuf>, reason: String) -> Result<(), String> {
         if !w.window.is_visible() || self.closing_window.get() || self.cancel_open.get() { return Err(reason); }
         let Some(outcome) = imported.and_then(|imported| imported.preserve_unsupported(reason.clone())) else { return Err(reason); };
-        crate::files::open::show_package(&w.window, layer_ui::PackageView::new(outcome)?, original, &w.localization()).await
+        crate::files::open::show_package(w.window.upcast_ref(), layer_ui::PackageView::new(outcome)?, original, &w.localization()).await
     }
     async fn trim(&self) {
         #[cfg(test)]
@@ -1224,7 +1232,7 @@ impl Documents {
         let p = self.model.borrow();
         (
             p.resident_bytes(),
-            p.parked().all(|(_, p)| p.owner.canvas.session.engine().backend().worker_is_joined()),
+            p.parked().all(|(_, p)| p.owner.canvas.session.engine().backend().worker_is_retired()),
         )
     }
 }

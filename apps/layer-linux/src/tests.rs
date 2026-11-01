@@ -140,7 +140,8 @@ struct PaintedSample<T> {
     state: T,
 }
 impl<T> PaintedSample<T> {
-    fn color_bounds(&self, window: &adw::ApplicationWindow, color: [u8; 4]) -> Option<gtk::graphene::Rect> {
+    fn color_bounds(&self, window: &impl IsA<adw::ApplicationWindow>, color: [u8; 4]) -> Option<gtk::graphene::Rect> {
+        let window = window.as_ref();
         let texture = window.renderer().unwrap().render_texture(&self.node, Some(&self.bounds));
         let (width, height) = (texture.width() as usize, texture.height() as usize);
         let mut pixels = vec![0; width * height * 4];
@@ -155,7 +156,8 @@ impl<T> PaintedSample<T> {
         bounds.map(|b| gtk::graphene::Rect::new(self.bounds.x() + b[0] as f32, self.bounds.y() + b[1] as f32,
             (b[2] - b[0] + 1) as f32, (b[3] - b[1] + 1) as f32))
     }
-    fn pixel(&self, window: &adw::ApplicationWindow, point: [f32; 2]) -> [u8; 4] {
+    fn pixel(&self, window: &impl IsA<adw::ApplicationWindow>, point: [f32; 2]) -> [u8; 4] {
+        let window = window.as_ref();
         let texture = window.renderer().unwrap().render_texture(&self.node, Some(
             &gtk::graphene::Rect::new(self.bounds.x() + point[0], self.bounds.y() + point[1], 1., 1.)));
         let mut pixel = [0; 4];
@@ -1427,11 +1429,11 @@ impl std::ops::Deref for NativeTestApp {
 }
 impl Drop for NativeTestApp {
     fn drop(&mut self) {
-        // A failed assertion must not leave GPU workers alive while the test
-        // process tears down GTK and the Vulkan driver.
         for window in self.0.windows() {
-            window.destroy();
+            if let Some(window) = window.downcast_ref::<crate::window::Window>() { window.destroy(); }
+            else { window.destroy(); }
         }
+        until(|| self.0.windows().is_empty(), "native test windows retired");
         layer_render_wgpu::finish_shader_compiler_shutdown();
     }
 }
@@ -8051,23 +8053,28 @@ fn native_window_lifecycle() {
     app.activate_action("new-window", None);
     until(|| windows.borrow().first().is_some_and(|workspace| workspace.window.is_mapped()), "first lifecycle window mapped");
     let first = windows.borrow()[0].clone();
+    apply_fixture_theme(&first);
     pump(200);
     for _ in 0..12 {
         app.activate_action("new-window", None);
         until(|| windows.borrow().len() == 2 && windows.borrow()[1].window.is_mapped(), "next lifecycle window mapped");
         pump(100);
         let next = windows.borrow().last().unwrap().clone();
+        apply_fixture_theme(&next);
+        let parent = next.window.surface().unwrap();
         next.window.destroy();
-        pump(150);
-        // Unrealize stops/joins the renderer while retaining the shared session
-        // for possible remapping. Verify GPU ownership, not model destruction.
-        assert!(next.gpu.borrow().as_ref().is_none_or(|g| g.session.engine().backend().worker_is_joined()));
+        assert!(!next.window.is_visible());
+        assert!(!parent.is_destroyed(), "retain the native parent while its child retires");
+        until(|| next.gpu.borrow().as_ref().is_none_or(|g| g.session.engine().backend().worker_is_retired())
+            && !next.window.is_realized(), "native child retired before window destruction");
+        assert!(parent.is_destroyed());
+        assert!(next.gpu.borrow().as_ref().is_none_or(|g| g.session.engine().backend().worker_is_retired()));
         assert!(next.frame_timer.borrow().is_none());
         assert_eq!(windows.borrow().len(), 1);
     }
     first.window.destroy();
-    pump(100);
-    assert!(first.gpu.borrow().as_ref().is_none_or(|g| g.session.engine().backend().worker_is_joined()));
+    until(|| !first.window.is_realized(), "last lifecycle window retired");
+    assert!(first.gpu.borrow().as_ref().is_none_or(|g| g.session.engine().backend().worker_is_retired()));
     assert!(first.frame_timer.borrow().is_none());
     assert!(windows.borrow().is_empty());
 }
@@ -12795,7 +12802,7 @@ fn native_workspace_controls_docking_and_ink() {
         w.gpu
             .borrow()
             .as_ref()
-            .is_none_or(|g| g.session.engine().backend().worker_is_joined())
+            .is_none_or(|g| g.session.engine().backend().worker_is_retired())
     );
 }
 

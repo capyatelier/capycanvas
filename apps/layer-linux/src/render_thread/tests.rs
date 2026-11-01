@@ -28,6 +28,47 @@ fn retired_context_capture_resolves_failure_without_changing_sources() {
 use super::*;
 use gtk::prelude::*;
 
+#[test]
+fn stop_retires_the_owner_without_waiting_for_its_worker_or_accepting_late_replies() {
+    let context = gtk::glib::MainContext::new();
+    context.with_thread_default(|| {
+        let (mut renderer, commands, _chrome, reply) = RenderWorker::channels(Default::default());
+        let status = renderer.chrome_status().clone();
+        let (exit, wait) = mpsc::channel();
+        let (observed, stopped) = mpsc::channel();
+        let acknowledged = Arc::new(AtomicBool::new(false));
+        let worker_acknowledged = acknowledged.clone();
+        let ui = context.clone();
+        renderer.thread = Some(std::thread::spawn(move || {
+            assert!(matches!(commands.recv().unwrap(), Command::Stop));
+            reply.send(Reply::DisplayHeadroom(9., None)).unwrap();
+            observed.send(()).unwrap();
+            let source = gtk::glib::idle_source_new(None, gtk::glib::Priority::DEFAULT, move || {
+                exit.send(()).unwrap();
+                gtk::glib::ControlFlow::Break
+            });
+            source.attach(Some(&ui));
+            wait.recv_timeout(Duration::from_secs(5)).expect("GTK must keep servicing input during retirement");
+            worker_acknowledged.store(true, Ordering::Release);
+        }));
+        let retirement = renderer.stop();
+        assert!(!retirement.is_complete());
+        assert!(!status.accepting.load(Ordering::Acquire));
+        stopped.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(renderer.ready().is_err());
+        assert_eq!(renderer.display_headroom, 1.);
+        assert!(renderer.send(Command::Wake).is_err());
+        assert!(!renderer.worker_is_retired());
+        let (replacement, _commands, _chrome, replacement_reply) = RenderWorker::channels(Default::default());
+        assert_ne!(renderer.proof_owner, replacement.proof_owner);
+        assert!(replacement_reply.send(Reply::DisplayHeadroom(2., None)).is_ok());
+        context.block_on(retirement);
+        assert!(renderer.worker_is_retired());
+        assert!(acknowledged.load(Ordering::Acquire));
+        assert_eq!(renderer.display_headroom, 1.);
+    }).unwrap();
+}
+
 fn overlay_packet(renderer: &mut RenderWorker, document: &layer_core::Document) -> Result<(), BackendError> {
     renderer.geometry = Some(Geometry { position: [0; 2], scale: 1, corner_radius: 0. });
     renderer.submit(FramePacket {

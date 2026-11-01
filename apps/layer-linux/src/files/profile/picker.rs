@@ -268,7 +268,7 @@ impl ProfilePicker {
         working: RgbSpace,
         purpose: ProfilePurpose,
     ) -> Self {
-        let picker = Self::build(&w.window, Some(w), working, purpose, w.localization());
+        let picker = Self::build(w.window.upcast_ref(), Some(w), working, purpose, w.localization());
         picker.button.set_widget_name(name);
         crate::panel_controls::menu_choice(&picker.button, &picker.state.copy.borrow().choose_short);
         picker.state.changed.borrow_mut().push(Rc::new(glib::clone!(
@@ -291,7 +291,7 @@ impl ProfileChooser {
         working: RgbSpace,
         purpose: ProfilePurpose,
     ) -> Self {
-        Self::build(&w.window, Some(w), title, name, working, purpose, w.localization())
+        Self::build(w.window.upcast_ref(), Some(w), title, name, working, purpose, w.localization())
     }
 
     // Application file opens can ask for a source profile before a canvas exists.
@@ -718,7 +718,7 @@ mod tests {
                         assert_eq!(row.subtitle().as_deref(), Some(selected.display_name(&w.localization()).as_str()));
                         assert_eq!((picker.selected_typed)().unwrap(), selected);
                         if name.is_empty() {
-                            let standalone = ProfileChooser::for_window(&w.window, "ICC", "prepared-profile", RgbSpace::Srgb, ProfilePurpose::Output, w.localization());
+                            let standalone = ProfileChooser::for_window(w.window.upcast_ref(), "ICC", "prepared-profile", RgbSpace::Srgb, ProfilePurpose::Output, w.localization());
                             (standalone.restore)(selected.clone());
                             assert_eq!(standalone.row.subtitle().as_deref(), Some(selected.display_name(&w.localization()).as_str()));
                             assert_eq!((standalone.selected_typed)().unwrap(), selected);

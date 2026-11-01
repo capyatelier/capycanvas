@@ -523,7 +523,7 @@ fn native_document_tabs_history_storage_and_close() {
     w.documents.select(&w,w.documents.selected(),true);
     until(|| w.window.visible_dialog().is_some(), "final dirty close");
     new_photo::response(&w, "discard");
-    until(|| !w.window.is_visible(), "last tab closes window");
+    until(|| !w.window.is_visible() && windows.borrow().is_empty(), "last tab retires its window");
     assert!(windows.borrow().is_empty());
 }
 
