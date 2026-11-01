@@ -319,6 +319,7 @@ try{
  Wait-Until {(Model).state.document_file.location.uri -eq $saved -and !(Model).state.document_file.busy -and @(Rows).Count -eq 2 -and (Model).brush_ready} 'The edited Object layer drawing did not reopen'
  $reopened=Join-Path $run 'Object layers reopened.capy';Save-ProjectAs $reopened
  if((Identity (Package $reopened)) -ne $savedIdentity){throw 'Save/reopen changed image identities, shared sources, effective affines or sibling order'}
+ Expand-PanelColumn 'layers'
  foreach($id in @(Rows|ForEach-Object id)){Wait-Until {(Control "layer-$id-thumbnail").Current.ItemStatus -eq 'Ready'} 'The reopened Object layer thumbnail did not arrive' 45}
  Capture "object-layers-reopened-$Device-$Theme" -WithModel -Composed
  $checks.edited_object_layer_save_reopen='passed'
