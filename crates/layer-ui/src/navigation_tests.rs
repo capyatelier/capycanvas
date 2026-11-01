@@ -41,6 +41,30 @@ mod navigation_controls {
     }
 
     #[test]
+    fn chrome_motion_follows_navigation_contacts_and_axes_not_view_commands() {
+        for platform in Platform::ALL {
+            let mut s = session(platform);
+            for command in [CommandId::FitCanvas, CommandId::ActualPixels, CommandId::ResetView] {
+                s.dispatch(UiAction::Invoke { command }).unwrap();
+                assert!(!s.chrome_in_motion(false), "{platform:?}/{command:?}: an isolated view command is discrete");
+            }
+            s.dispatch(UiAction::SetZoom { zoom: 0.7 }).unwrap();
+            assert!(!s.chrome_in_motion(false));
+            s.input(UiInput::Axes { pan: [0.5, 0.], zoom: 0. }).unwrap();
+            assert!(s.chrome_in_motion(false));
+            s.input(UiInput::Axes { pan: [0.; 2], zoom: 0. }).unwrap();
+            assert!(!s.chrome_in_motion(false));
+            s.dispatch(UiAction::Invoke { command: CommandId::Hand }).unwrap();
+            pointer(&mut s, ContactPhase::Down, [300., 300.]);
+            assert!(!s.chrome_in_motion(false));
+            pointer(&mut s, ContactPhase::Move, [340., 320.]);
+            assert!(s.chrome_in_motion(false));
+            pointer(&mut s, ContactPhase::Up, [340., 320.]);
+            assert!(!s.chrome_in_motion(false));
+        }
+    }
+
+    #[test]
     fn rotation_snapping_menu_saves_the_preference_without_moving_the_view() {
         for platform in Platform::ALL {
             let mut s = session(platform);

@@ -1008,8 +1008,11 @@ fn native_bubble_chooser_sliders() {
                 until(|| bubble.stamp_receipt().is_some(), "first bubble slider stamp accepted");
                 let (first_request, first_texture) = bubble.stamp_receipt().unwrap();
                 let first_pixels = super::workspace_header::preview_freshness::texture_pixels(&first_texture);
-                let paints = super::workspace_header::preview_freshness::PreviewPaints::start(d.w.bubbles.layer.upcast_ref(),
+                let workspace = d.w.clone();
+                let mut paints = super::workspace_header::preview_freshness::PreviewPaints::start_from_node(d.w.surface.upcast_ref(),
+                    move || workspace.chrome.selected_node(),
                     glib::clone!(#[strong] bubble, move || bubble.stamp_receipt().map(|(_, texture)| texture)));
+                paints.begin_on_first_texture();
                 let start_value = value(&d);
                 let leg = |from, to| serde_json::Value::Array((1..=24)
                     .map(|i| contact(device, "move", arc(from + (to - from) * i as f32 / 24.))).collect());

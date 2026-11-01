@@ -248,7 +248,7 @@ impl Desk {
         !near.is_empty()
     }
     pub(crate) fn moving(&self) -> bool {
-        self.moved || self.grabbed.is_some() || self.target.is_some() || self.bodies.iter().any(|b| b.kicked)
+        !self.bodies.is_empty() && (self.moved || self.grabbed.is_some() || self.target.is_some() || self.bodies.iter().any(|b| b.kicked))
     }
     pub(crate) fn advance(&mut self, now_ns: u64) -> bool {
         let last = *self.clock.get_or_insert(now_ns.saturating_sub(STEP_NS));

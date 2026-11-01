@@ -7117,3 +7117,44 @@ All 36 final runs pass their functional assertions. Raw reports and order/load
 records are under `/mnt/localssd/capycanvas7-issue24-impl/m14a-gtk/final-timing-*`;
 per-run metrics are in `final-metrics.json` there. Pre-fix `timing-*` attempts and
 the failed `preflight-m14-open` window capture are retained and excluded.
+
+## GTK discrete chrome handoff
+
+Measured 2026-11-01 on RTX PRO 6000 Blackwell Max-Q, NVIDIA 615.71.09,
+bundled GTK 4.24.1 and private Mutter 50.5 at 1600 × 1000, scale 1, 120 Hz.
+Matched `c635f9d66` and the handoff candidate run ABBAAB, three five-second
+contacts per build and appearance for native pointer and Ctrl-wheel zoom with
+Navigator open. Pen uses six trials and twenty-four five-second contacts per
+build on its default 1200 × 900 fixture; that fixture does not apply the requested
+appearance variables. Shared CPU/GPU activity is retained. These workstation
+checks do not qualify a reference tablet or physical pen latency.
+
+Rates are median moving actual presentations; navigation counts fresh camera
+poses. Gaps are the worst trial p99 and maximum, in milliseconds.
+
+| Journey / appearance | Moving Hz, main → candidate | Gap p99 / maximum, ms |
+| --- | ---: | ---: |
+| Native pointer zoom / Light Medium | 119.81 → 119.21 | 16.68/16.81 → 16.83/16.94 |
+| Native pointer zoom / Dark Off | 119.81 → 119.61 | 16.33/16.82 → 16.76/16.86 |
+| Native Ctrl-wheel zoom / Light Medium | 119.22 → 119.42 | 10.66/16.89 → 8.70/16.90 |
+| Native Ctrl-wheel zoom / Dark Off | 118.81 → 119.02 | 16.66/16.86 → 16.69/16.84 |
+| Pen contacts / default fixture | 119.889 → 119.888 | 8.707/14.672 → 9.216/21.837 |
+
+Full-contact rate medians are 119.34 → 118.70 and 119.45 → 119.16 Hz for
+pointer zoom, 119.25 → 119.22 and 118.70 → 118.70 for wheel zoom, and
+119.770 → 119.766 for pen. One Light/Medium candidate pointer contact reaches
+104.52 Hz; its identical next contact reaches 118.70. The slow contact coincides
+with higher GPU load and a transient CPU-heavy process; causation is unproven.
+All navigation runs record zero unchanged-chrome republications or queued-Frame
+bypasses in their publication metadata. New-chrome repeated poses
+remain legitimate. Pointer p99 values straddle the two-frame budget; this is not
+a complete 120 Hz qualification.
+
+All twenty-four terminal pen frames per build have exact presentation matches.
+Up-to-terminal presentation median/p99 is 46.124/51.852 → 47.519/54.719 ms;
+enqueue-to-that-presentation is 9.072/14.441 → 9.387/14.613 ms. Pen presentation
+counts and worker/composite association do not establish fresh-ink throughput,
+receipt-to-present latency or following-stroke fresh-ink latency. GTK paint-thread
+CPU was not sampled in this quick check; paint wall spans are not CPU time.
+Trial details, source/binary hashes, full-contact counts, failures and shared
+process samples are in `artifacts/gtk-r2-fix.local/flicker-f1-f3/qualification/`.

@@ -81,6 +81,7 @@ fn native_paint_fitted_columns() {
     for (hdr, document) in [(false, [1600, 900]), (true, [900, 1200])] {
         let project = new_drawing_at(document[0], document[1], if hdr { SampleDepth::F16 } else { SampleDepth::U8 });
         let w = Workspace::with_project(&app, Some((project, None)));
+        apply_fixture_theme(&w);
         w.window.present();
         ready(&w);
         set_transparency(&w, "LAYER_MOTION_TRANSPARENCY");

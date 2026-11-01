@@ -72,6 +72,7 @@ pub(crate) struct Bubbles {
 
 impl Bubbles {
     pub(super) fn moving(&self)->bool {self.drag.is_some()||self.pending_drag.is_some()}
+    pub(super) fn chrome_in_motion(&self)->bool {self.moving()||self.desk.moving()||self.ring.is_some()||self.wheel.is_some()}
 }
 
 #[derive(Clone, Copy, Debug)]

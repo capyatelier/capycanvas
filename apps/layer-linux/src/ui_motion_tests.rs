@@ -729,3 +729,6 @@ fn native_workspace_switch_repaints_vacated_regions() {
     });
     assert!(stale.is_empty(), "{} pixels kept the previous workspace after the switch, within {extent:?}", stale.len());
 }
+
+#[path = "chrome_handoff_tests.rs"]
+mod chrome_handoff;

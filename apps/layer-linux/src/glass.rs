@@ -268,6 +268,10 @@ impl Chrome {
     pub fn revision(&self) -> u64 {
         self.revision.get()
     }
+    #[cfg(test)]
+    pub(crate) fn selected_node(&self) -> Option<gsk::RenderNode> {
+        self.frames.borrow().front().map(|(_, node, _)| node.clone())
+    }
     pub fn held(&self) -> bool { self.frames.borrow().front().is_none_or(|frame| frame.2) }
     pub fn compose(&self, node: gsk::RenderNode, changed: bool, hold: bool, state: ChromeState) -> (gsk::RenderNode, u64, bool) {
         let hold = hold || !matches!(state, ChromeState::Visible(..));
@@ -466,8 +470,10 @@ mod tests {
         assert_eq!(shown(chrome.compose(node(0.), false, true, ChromeState::Visible(1, 0))), (0., 0));
         assert_eq!(shown(chrome.compose(node(0.25), true, true, ChromeState::Visible(1, 0))), (0., 0));
         assert_eq!(shown(chrome.compose(node(0.5), false, true, ChromeState::Visible(1, 0))), (0., 0));
+        assert_eq!(shade(&chrome.selected_node().unwrap()), 0., "selected node retains the committed composition");
         assert_eq!(shown(chrome.compose(node(0.5), false, true, ChromeState::Visible(1, 1))), (0.5, 1));
         assert_eq!(shown(chrome.compose(node(0.75), true, true, ChromeState::Visible(1, 1))), (0.5, 1));
         assert_eq!(shown(chrome.compose(node(1.), false, true, ChromeState::Visible(1, 2))), (1., 2));
+        assert_eq!(shade(&chrome.selected_node().unwrap()), 1., "selected node follows the published composition");
     }
 }

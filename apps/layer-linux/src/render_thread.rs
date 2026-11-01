@@ -111,15 +111,15 @@ impl ChromeHandoff {
     fn can_present(&self) -> bool {
         matches!(self.first, FirstChrome::Granted | FirstChrome::Visible)
     }
-    fn release_for_canvas(&mut self) -> bool {
-        if self.first != FirstChrome::Visible { return false; }
+    fn release_unheld(&mut self) -> bool {
+        if self.hold || self.first != FirstChrome::Visible { return false; }
         self.synchronized.take().is_some()
     }
-    fn should_hold(&self, allow_sync: bool) -> bool { self.first == FirstChrome::Granted || allow_sync && self.changed() && self.hold }
-    fn publish(&mut self, allow_sync: bool) -> Option<u64> {
+    fn should_hold(&self) -> bool { self.first == FirstChrome::Granted || self.changed() && self.hold }
+    fn publish(&mut self) -> Option<u64> {
         assert!(self.can_present());
         if !self.changed() && self.first == FirstChrome::Visible { return None; }
-        if self.should_hold(allow_sync) { self.synchronized = Some(self.requested); }
+        if self.should_hold() { self.synchronized = Some(self.requested); }
         self.published = self.requested;
         self.first = if self.first == FirstChrome::Granted { FirstChrome::Submitted } else { FirstChrome::Visible };
         Some(self.published)
@@ -366,6 +366,8 @@ enum Command {
     Stop,
     #[cfg(test)]
     FailNextFrame,
+    #[cfg(test)]
+    PendingDependency(mpsc::Sender<(usize, bool)>),
 }
 /// What the render thread reports after each frame for the session to read.
 #[derive(Default)]
@@ -544,6 +546,12 @@ impl RenderWorker {
         self.send(Command::Wake).map_err(error)
     }
     pub(crate) fn chrome_status(&self) -> &Arc<ChromeStatus> { &self.presented_chrome }
+    #[cfg(test)]
+    pub(crate) fn pending_dependency(&self) -> Result<mpsc::Receiver<(usize, bool)>, BackendError> {
+        let (sender, receiver) = mpsc::channel();
+        self.send(Command::PendingDependency(sender))?;
+        Ok(receiver)
+    }
     pub(crate) fn release_chrome(&self, revision: u64) -> impl FnOnce() + 'static {
         let commands = self.commands.clone();
         move || { let _ = commands.send(Command::ReleaseChrome(revision)); }
@@ -1598,9 +1606,8 @@ impl Worker {
             };
             if queued.is_none() {
                 if self.pending_present && self.renderer.has_presentable_frame() {
-                    if self.chrome.release_for_canvas() { self.child.synchronize(false)?; }
-                    if let Some(target) = self.acquire()? { self.publish(target, None, false, #[cfg(test)] None, #[cfg(test)] None)?; }
-                } else if pending_frames.is_empty() {
+                    if let Some(target) = self.acquire()? { self.publish(target, None, #[cfg(test)] None, #[cfg(test)] None)?; }
+                } else {
                     self.publish_chrome(#[cfg(test)] count.load(Ordering::Acquire))?;
                 }
             }
@@ -1758,6 +1765,12 @@ impl Worker {
                 continue;
             }
             match command {
+                #[cfg(test)]
+                Command::PendingDependency(reply) => {
+                    let missing = pending_frames.front().is_some_and(|frame|
+                        frame.pending_rasters.iter().any(|raster| raster.try_data().is_none()));
+                    let _ = reply.send((pending_frames.len(), missing));
+                }
                 Command::SeedContext(context) => self.renderer.seed_evaluation_context(context),
                 Command::CaptureContext(request) => context_capture = Some(request),
                 Command::LocalTone(guide, reply) => {
@@ -1918,7 +1931,7 @@ impl Worker {
                     self.set_view(view, geometry)?;
                     self.cursor = cursor;
                     self.presenter.set_cursor(self.renderer.device(), &self.cursor, geometry.scale as f32);
-                    if let Some(target) = self.acquire()? { self.publish(target, None, false, #[cfg(test)] None, #[cfg(test)] None)?; }
+                    if let Some(target) = self.acquire()? { self.publish(target, None, #[cfg(test)] None, #[cfg(test)] None)?; }
                 }
                 Command::Frame(frame) => {
                     #[cfg(test)]
@@ -2147,13 +2160,13 @@ impl Worker {
         if self.chrome.needs_publication()
             && self.renderer.has_presentable_frame()
             && let Some(target) = self.acquire()? {
-            self.publish(target, None, true, #[cfg(test)] None, #[cfg(test)] Some(queued_frames_at_admission))?;
+            self.publish(target, None, #[cfg(test)] None, #[cfg(test)] Some(queued_frames_at_admission))?;
         }
         Ok(())
     }
     fn set_chrome(&mut self, chrome: &ChromePresentation) -> Result<(), String> {
         if !self.chrome.request(chrome.revision, chrome.hold) { return Ok(()); }
-        if !chrome.hold && self.chrome.release_for_canvas() { self.child.synchronize(false)?; }
+        if self.chrome.release_unheld() { self.child.synchronize(false)?; }
         self.apply_chrome(chrome);
         Ok(())
     }
@@ -2181,7 +2194,7 @@ impl Worker {
         }
     }
     fn set_view(&mut self, view: ViewState, geometry: Geometry) -> Result<(), String> {
-        if self.chrome.release_for_canvas() { self.child.synchronize(false)?; }
+        if self.chrome.release_unheld() { self.child.synchronize(false)?; }
         self.presenter.set_corner_radius(geometry.corner_radius * geometry.scale as f32);
         self.last_view = Some(view);
         self.geometry_changed |= self.geometry != Some(geometry);
@@ -2275,7 +2288,6 @@ impl Worker {
             self.publish(
                 target,
                 frame.stroke_target.filter(|_| !backdrop),
-                false,
                 #[cfg(test)]
                 Some(timing),
                 #[cfg(test)]
@@ -2292,7 +2304,7 @@ impl Worker {
     }
 
     fn acquire(&mut self) -> Result<Option<wgpu::SurfaceTexture>, String> {
-        if !self.chrome.hold && self.chrome.release_for_canvas() { self.child.synchronize(false)?; }
+        if self.chrome.release_unheld() { self.child.synchronize(false)?; }
         if !self.chrome.can_present() { return Ok(None); }
         if !self.presenter.pipelines_ready(&self.renderer) || !self.presenter.chrome_ready() {return Ok(None);}
         if !self.renderer.has_presentable_frame() { return Ok(None); }
@@ -2329,7 +2341,6 @@ impl Worker {
         &mut self,
         target: wgpu::SurfaceTexture,
         stroke_target: Option<crate::wayland::StrokeTarget>,
-        allow_sync: bool,
         #[cfg(test)] timing: Option<&mut crate::timing::Timing>,
         #[cfg(test)] queued_frames_at_chrome_admission: Option<usize>,
     ) -> Result<(), String> {
@@ -2362,7 +2373,7 @@ impl Worker {
             timing.encoded(&mut encoder);
         }
         let commands = encoder.finish();
-        if self.chrome.should_hold(allow_sync) { self.child.synchronize(true)?; }
+        if self.chrome.should_hold() { self.child.synchronize(true)?; }
         if self.chrome.first == FirstChrome::Granted { self.child.initial_commit(); }
         let moved = self.child.geometry(self.geometry.expect("rendered geometry"));
         #[cfg(test)]
@@ -2393,7 +2404,7 @@ impl Worker {
                 }
             });
         }
-        if let Some(revision) = self.chrome.publish(allow_sync) {
+        if let Some(revision) = self.chrome.publish() {
             if self.chrome.first == FirstChrome::Visible { self.presented_chrome.publish(revision); }
             if self.chrome.hold { canvas_action(&self.area, "canvas.chrome", &self.presented_chrome); }
         }

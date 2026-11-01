@@ -869,11 +869,24 @@ fn native_large_photo_navigation() {
     let mut requests = Vec::new();
     let motion_begin_ns = glib::monotonic_time() as u64 * 1000;
     let mode = std::env::var("LAYER_NAVIGATION_MODE").ok();
-    assert!(mode.as_deref().is_none_or(|mode| matches!(mode, "pan" | "zoom")));
+    assert!(mode.as_deref().is_none_or(|mode| matches!(mode, "pan" | "zoom" | "wheel" | "pointer")));
     let steps = std::env::var("LAYER_NAVIGATION_STEPS").ok().map(|v| v.parse::<usize>().unwrap()).unwrap_or(96);
     let repeats = std::env::var("LAYER_NAVIGATION_REPEATS").ok().map(|v| v.parse::<usize>().unwrap()).unwrap_or(2);
     assert!(steps > 24 && repeats > 0);
     let mut contacts = Vec::new();
+    let mut wheel_traces = Vec::new();
+    let mut pointer_traces = Vec::new();
+    if mode.as_deref() == Some("pointer") {
+        w.dispatch(UiAction::Invoke { command: CommandId::Zoom });
+        w.dispatch(UiAction::ZoomTool { action: layer_ui::ZoomToolAction::Click { out: false } });
+        w.dispatch(UiAction::ZoomTool { action: layer_ui::ZoomToolAction::Smooth { direction: layer_ui::ZoomDirection::Horizontal } });
+    }
+    let mut native_input = matches!(mode.as_deref(), Some("wheel" | "pointer")).then(|| {
+        assert_eq!(std::env::var("LAYER_NATIVE_INPUT_TRACE").as_deref(), Ok("1"));
+        assert_eq!(std::env::var("LAYER_NATIVE_EVENT_MS").as_deref(), Ok("4"));
+        let input = RemoteInput::new().settle_ms(0).timeout_secs(15);
+        input.ready(); input
+    });
     let phases = if let Some(mode) = mode.as_deref() {
         vec![(mode, if mode == "pan" { fit } else { 0. })]
     } else { vec![
@@ -891,6 +904,36 @@ fn native_large_photo_navigation() {
             let start = scheduled_start();
             let contact_begin_ns = glib::monotonic_time() as u64 * 1000;
             let first_request = requests.len();
+            if let Some(input) = native_input.as_mut() {
+                let camera = state(&w).camera;
+                let [x, y, width, height] = camera.work_area;
+                let point = if phase == "pointer" {
+                    screen_point(w.area.upcast_ref(), &w.window, [(x + width * 0.5) / viewport[0] as f32, (y + height * 0.5) / viewport[1] as f32])
+                } else { screen_point(w.area.upcast_ref(), &w.window, [0.5, 0.5]) };
+                input.perform(if phase == "wheel" { serde_json::json!([{"point":point},{"key":0xffe3,"down":true}]) }
+                    else { serde_json::json!([{"point":point}]) });
+                let step = input.step;
+                let events = if phase == "wheel" {
+                    (0..1248).map(|i| serde_json::json!({"wheel":[0,if i / 24 % 2 == 0 {-1} else {1}]})).collect::<Vec<_>>()
+                } else {
+                    assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Zoom);
+                    assert_eq!(state(&w).settings.zoom_tool.drag, layer_ui::ZoomDrag::Smooth);
+                    assert_eq!(state(&w).settings.zoom_tool.direction, layer_ui::ZoomDirection::Horizontal);
+                    let radius = (width / w.area.scale_factor() as f32 * 0.2).min(100.);
+                    let mut events = vec![serde_json::json!({"down":true})];
+                    events.extend((0..1248).map(|i| serde_json::json!({"point":[point[0] + radius * (i as f32 / 1247. * std::f32::consts::TAU * 4.).sin(),point[1]]})));
+                    events.push(serde_json::json!({"down":false})); events
+                };
+                input.perform(serde_json::json!(events));
+                let trace: Vec<serde_json::Value> = serde_json::from_slice(&std::fs::read(input.dir.join(format!("trace-{step}.json"))).unwrap()).unwrap();
+                let begin = trace.first().unwrap()["ns"].as_u64().unwrap();
+                let end = trace.last().unwrap()["ns"].as_u64().unwrap();
+                if phase == "wheel" { input.perform(serde_json::json!([{"key":0xffe3,"down":false}])); }
+                contacts.push((phase, repeat == 0, repeat, begin, end, first_request, requests.len()));
+                let traces = if phase == "wheel" { &mut wheel_traces } else { &mut pointer_traces };
+                traces.push(serde_json::json!({"repeat":repeat,"events":trace}));
+                continue;
+            }
             for step in 0..steps {
                 let due = start + Duration::from_secs_f64(step as f64 / 120.);
                 while Instant::now() < due {
@@ -922,7 +965,7 @@ fn native_large_photo_navigation() {
                     if phase == "zoom" || phase == "pan" { -camera.rotation } else { angle - camera.rotation },
                 );
                 assert!(change.is_ok(), "navigation failed: {change:?}");
-                w.changed(change);
+                w.navigation_changed(change);
                 assert!(!ui_session(&w).rendering_suspended(),
                     "GPU worker stopped during {phase}, repeat {repeat}, step {step}");
                 requests.push(serde_json::json!({
@@ -938,6 +981,7 @@ fn native_large_photo_navigation() {
                 glib::monotonic_time() as u64 * 1000, first_request, requests.len()));
         }
     }
+    if let Some(input) = native_input.as_ref() { input.finish(); }
     let motion_end_ns = glib::monotonic_time() as u64 * 1000;
     tick.remove();
     frame_clock.disconnect(before_paint);
@@ -1016,6 +1060,7 @@ fn native_large_photo_navigation() {
         "proof": proof,
         "extent": extent, "space": "ProPhoto", "depth": original.composition().color.depth.bits(), "viewport": viewport,
         "gtk_renderer": w.window.renderer().unwrap().type_().name(),
+        "wheel_input_traces": wheel_traces,
         "requests": requests, "camera_views": stats.camera_views,
         "camera_publications": stats.camera_publications,
         "camera_work": stats.camera_work,
@@ -1032,6 +1077,7 @@ fn native_large_photo_navigation() {
         "canvas_presentation": stats.presented,
     });
     report["contacts"] = serde_json::json!(contact_reports);
+    report["pointer_input_traces"] = serde_json::json!(pointer_traces);
     report["mode"] = serde_json::json!(mode);
     report["steps"] = serde_json::json!(steps);
     report["actual_theme"] = serde_json::json!(match state(&w).theme { Theme::Light => "light", Theme::Dark => "dark" });

@@ -23,19 +23,35 @@ pub(crate) struct PreviewPaints {
 }
 impl PreviewPaints {
     pub(crate) fn start(widget: &gtk::Widget, texture: impl Fn() -> Option<gdk::Texture> + 'static) -> Self {
-        let widget = widget.clone();
+        let observed = widget.clone();
+        Self::start_from_node(widget, move || {
+            let image = gtk::WidgetPaintable::new(Some(&observed)).current_image();
+            let snapshot = gtk::Snapshot::new();
+            image.snapshot(&snapshot, observed.width() as f64, observed.height() as f64);
+            snapshot.to_node()
+        }, texture)
+    }
+    pub(crate) fn start_from_node(widget: &gtk::Widget, node: impl Fn() -> Option<gtk::gsk::RenderNode> + 'static,
+        texture: impl Fn() -> Option<gdk::Texture> + 'static) -> Self {
         let clock = widget.frame_clock().unwrap();
         let renderer = widget.native().unwrap().renderer().unwrap();
         let bounds = gtk::graphene::Rect::new(0., 0., widget.width() as f32, widget.height() as f32);
         let initial_texture = texture();
         let frames = Rc::new(RefCell::new(Vec::new()));
-        let handler = clock.connect_after_paint(glib::clone!(#[strong] widget, #[strong] frames, move |clock| {
-            let image = gtk::WidgetPaintable::new(Some(&widget)).current_image();
-            let snapshot = gtk::Snapshot::new();
-            image.snapshot(&snapshot, widget.width() as f64, widget.height() as f64);
-            frames.borrow_mut().push((clock.frame_time(), snapshot.to_node(), texture()));
+        let handler = clock.connect_after_paint(glib::clone!(#[strong] frames, move |clock| {
+            frames.borrow_mut().push((clock.frame_time(), node(), texture()));
         }));
         Self { clock, handler, renderer, bounds, initial_texture, frames }
+    }
+    pub(crate) fn begin_on_first_texture(&mut self) {
+        self.clock.request_phase(gdk::FrameClockPhase::AFTER_PAINT);
+        let visible = |row: &(i64, Option<gtk::gsk::RenderNode>, Option<gdk::Texture>)|
+            row.1.as_ref().zip(row.2.as_ref()).is_some_and(|(node, texture)| includes_texture(node, texture));
+        until(|| self.frames.borrow().iter().any(visible), "first accepted preview reaches an actual paint");
+        let mut frames = self.frames.borrow_mut();
+        let first = frames.iter().position(visible).unwrap();
+        self.initial_texture = frames[first].2.clone();
+        frames.drain(..first);
     }
     pub(crate) fn assert_nonempty(self, name: &str) {
         self.clock.disconnect(self.handler);

@@ -56,7 +56,7 @@ fn contact(s: &mut UiSession<Recorder>, grab: BubbleGrab, phase: ContactPhase, p
 }
 
 #[test]
-fn chrome_motion_tracks_bubble_pickup_and_retires_with_its_contact() {
+fn chrome_motion_tracks_bubble_pickup_and_settles_after_animation() {
     for ending in [ContactPhase::Up, ContactPhase::Cancel] {
         let mut s = desk();
         let grab = brush(DefaultBrushPreset::PointyPencil);
@@ -66,8 +66,51 @@ fn chrome_motion_tracks_bubble_pickup_and_retires_with_its_contact() {
         contact(&mut s, grab, ContactPhase::Move, FAR).unwrap();
         assert!(s.chrome_in_motion(false));
         contact(&mut s, grab, ending, FAR).unwrap();
+        settle(&mut s, 0);
         assert!(!s.chrome_in_motion(false));
     }
+}
+
+#[test]
+fn chrome_motion_tracks_settled_ring_wheel_and_intensity_contacts() {
+    let mut missing = Vec::new();
+    for kind in ["ring", "wheel", "intensity"] {
+        for ending in [ContactPhase::Up, ContactPhase::Cancel] {
+            let mut s = hdr_desk(layer_core::color::SampleDepth::F16, Platform::Gtk);
+            let id = if kind == "ring" {
+                take(&mut s, brush(DefaultBrushPreset::PointyPencil), FAR)
+            } else {
+                take_ring(&mut s, FAR)
+            };
+            let mut now = settle(&mut s, 0);
+            assert!(!s.chrome_in_motion(false), "{kind}: settled bubble");
+            let ring = (kind == "ring").then(|| view(&s, id).rings[0].arc);
+            let intensity = (kind == "intensity").then(|| view(&s, id).color.unwrap().intensity.unwrap());
+            for (phase, fraction) in [(ContactPhase::Down, 0.3), (ContactPhase::Move, 0.7), (ending, 0.7)] {
+                let position = if let Some(arc) = ring { arc.point(fraction) }
+                    else if let Some(arc) = intensity { arc.point(fraction) }
+                    else { [fraction * 30., -10.] };
+                let action = match kind {
+                    "ring" => BubbleAction::Ring { id, phase, position },
+                    "wheel" => BubbleAction::Wheel { id, phase, part: ColorWheelPart::Field, position },
+                    _ => BubbleAction::Intensity { id, phase, position },
+                };
+                act(&mut s, action).unwrap();
+                if phase == ContactPhase::Down || phase == ContactPhase::Move {
+                    if !s.chrome_in_motion(false) { missing.push(format!("{kind} {ending:?} {phase:?}")); }
+                } else {
+                    now = settle(&mut s, now);
+                    assert!(!s.chrome_in_motion(false), "{kind}: retired {ending:?}");
+                }
+            }
+            let action = if let Some(arc) = ring {
+                BubbleAction::ResetRing { id, position: arc.point(0.5) }
+            } else { BubbleAction::SetIntensity { id, stops: 1. } };
+            act(&mut s, action).unwrap();
+            assert!(!s.chrome_in_motion(false), "{kind}: isolated value command");
+        }
+    }
+    assert!(missing.is_empty(), "contacts missing chrome motion: {missing:?}");
 }
 
 #[test]

@@ -430,7 +430,9 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub fn chrome_in_motion(&self, native_animation_active: bool) -> bool {
         native_animation_active || self.workspace_transition
-            || self.workspace_interaction_active() || self.bubble_state.moving()
+            || self.workspace_interaction_active() || self.bubble_state.chrome_in_motion()
+            || self.interaction.axes.active()
+            || self.interaction.pointer.is_some_and(|pointer| pointer.navigation.is_some_and(|contact| contact.dragged))
     }
 
     pub fn camera(&self) -> &crate::Camera { &self.state.camera }

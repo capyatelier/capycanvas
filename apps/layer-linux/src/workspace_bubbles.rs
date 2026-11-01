@@ -1913,7 +1913,7 @@ pub(crate) struct Bubbles {
 
 impl Bubbles {
     pub(super) fn animation_active(&self) -> bool {
-        self.tick.borrow().is_some() || self.layer.bubbles().iter().any(|bubble| {
+        self.layer.bubbles().iter().any(|bubble| {
             bubble.imp().ticking.get() || bubble.imp().fold.get().is_some()
         })
     }

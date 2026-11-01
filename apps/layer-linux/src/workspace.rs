@@ -912,10 +912,14 @@ pub(crate) fn system_appearance() -> (Theme, Option<HexColor>) {
 }
 
 #[derive(Default)]
-struct ChromeWindowMotion(Cell<Option<[i32; 2]>>);
+struct ChromeWindowMotion {
+    size: Cell<Option<[i32; 2]>>,
+    changed: Cell<bool>,
+}
 impl ChromeWindowMotion {
     fn update(&self, size: [i32; 2]) -> bool {
-        self.0.replace(Some(size)).is_some_and(|previous| previous != size)
+        let changed = self.size.replace(Some(size)).is_some_and(|previous| previous != size);
+        self.changed.replace(changed) && changed
     }
 }
 
@@ -923,14 +927,25 @@ impl ChromeWindowMotion {
 mod chrome_window_motion_tests {
     use super::ChromeWindowMotion;
     #[test]
-    fn resizing_compares_adjacent_gtk_frames() {
+    fn chrome_resizing_requires_two_consecutive_size_changes() {
         let motion = ChromeWindowMotion::default();
         assert!(!motion.update([800, 600]));
-        assert!(motion.update([801, 600]));
+        assert!(!motion.update([801, 600]));
         assert!(motion.update([800, 600]));
         assert!(!motion.update([800, 600]));
-        assert!(motion.update([800, 601]));
         assert!(!motion.update([800, 601]));
+        assert!(!motion.update([800, 601]));
+    }
+
+    #[test]
+    fn chrome_maximize_and_fullscreen_are_discrete_until_resizing_continues() {
+        let motion = ChromeWindowMotion::default();
+        assert!(!motion.update([800, 600]));
+        assert!(!motion.update([1600, 1000]));
+        assert!(!motion.update([1600, 1000]));
+        assert!(!motion.update([1920, 1080]));
+        assert!(motion.update([1919, 1080]));
+        assert!(!motion.update([1919, 1080]));
     }
 }
 
@@ -1004,7 +1019,7 @@ pub struct Workspace {
     chrome_style: Cell<Option<([f32;4],layer_render_wgpu::BackdropBlurStyle)>>,
     chrome_window_motion: ChromeWindowMotion,
     chrome_hold: Cell<bool>,
-    chrome_camera_revision: Cell<u64>,
+    chrome_navigation_input: Cell<u64>,
     chrome_fading: Cell<bool>,
     chrome: crate::glass::Chrome,
     chrome_released: Cell<u64>,
@@ -1393,7 +1408,7 @@ impl Workspace {
             chrome_style: Cell::new(None),
             chrome_window_motion: Default::default(),
             chrome_hold: Cell::new(true),
-            chrome_camera_revision: Cell::new(u64::MAX),
+            chrome_navigation_input: Cell::new(0),
             chrome_fading: Cell::new(false),
             chrome: Default::default(),
             chrome_released: Cell::new(0),
@@ -2058,6 +2073,7 @@ impl Workspace {
     }
 
     pub fn interact(self: &Rc<Self>, input: UiInput) -> InputReply {
+        let navigation = matches!(input, UiInput::Pointer { phase: ContactPhase::Move, .. });
         if matches!(input, UiInput::Key { pressed: true, .. } | UiInput::Pointer { phase: ContactPhase::Down, .. }) { self.remember_command_focus(); }
         if matches!(input, UiInput::Pointer { phase: ContactPhase::Down, .. }) { self.notice.hide(); }
         let finishing = matches!(
@@ -2111,7 +2127,8 @@ impl Workspace {
         let reply = match result {
             Some(Ok(reply)) => {
                 self.present_interaction(reply);
-                self.changed(Ok(reply.change));
+                if navigation { self.navigation_changed(Ok(reply.change)); }
+                else { self.changed(Ok(reply.change)); }
                 reply
             }
             Some(Err(error)) => {
@@ -2367,6 +2384,7 @@ impl Workspace {
         } else {
             None
         };
+        let navigation = matches!(action, UiAction::Navigator { phase: ContactPhase::Move, .. });
         let result = self
             .gpu
             .borrow_mut()
@@ -2374,7 +2392,8 @@ impl Workspace {
             .map(|g| g.session.dispatch(action));
         if let Some(result) = result {
             let succeeded = result.is_ok();
-            self.changed(result);
+            if navigation { self.navigation_changed(result); }
+            else { self.changed(result); }
             if let Some((group, from)) = animate.filter(|_| succeeded) {
                 self.surface.animate_size(group, from);
             }
@@ -2382,6 +2401,12 @@ impl Workspace {
     }
     pub(crate) fn restart_busy(&self)->bool {
         self.gpu.borrow().as_ref().is_none_or(|gpu| gpu.session.recovery_document().busy)
+    }
+    pub(crate) fn navigation_changed(self: &Rc<Self>, result: Result<UiChange, String>) {
+        if result.as_ref().is_ok_and(|change| change.canvas_wake && change.regions & regions::CAMERA != 0) {
+            self.chrome_navigation_input.set(glib::monotonic_time().max(0) as u64 * 1000);
+        }
+        self.changed(result);
     }
     pub fn changed(self: &Rc<Self>, result: Result<UiChange, String>) {
         match result {
@@ -3155,8 +3180,9 @@ impl Workspace {
             || self.drawers().iter().any(|drawer| drawer.animation_active())
             || self.groups.borrow().iter().any(|group| group.stack.is_transition_running());
         let resized = self.chrome_window_motion.update([self.window.width(), self.window.height()]);
-        let camera = g.session.camera().revision;
-        let navigated = self.chrome_camera_revision.replace(camera) != camera;
+        let input = self.chrome_navigation_input.get();
+        let now = glib::monotonic_time().max(0) as u64 * 1000;
+        let navigated = input != 0 && now.saturating_sub(input) < g.session.engine().backend().clock.period() * 2;
         !matches!(g.session.engine().backend().chrome_status().state(), crate::glass::ChromeState::Visible(..))
             || !(g.session.chrome_in_motion(animation) || resized || navigated)
     }

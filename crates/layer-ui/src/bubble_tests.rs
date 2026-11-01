@@ -20,6 +20,16 @@ fn run(desk: &mut Desk, from: u64, frames: u64) -> u64 {
     now
 }
 
+#[test]
+fn empty_bubble_desk_has_no_motion_after_layout_refresh() {
+    let mut desk = desk(&[]);
+    assert!(!desk.moving());
+    desk.release();
+    assert!(!desk.moving());
+    desk.advance(16_666_667);
+    assert!(!desk.moving());
+}
+
 fn distance(a: [f32; 2], b: [f32; 2]) -> f32 {
     (a[0] - b[0]).hypot(a[1] - b[1])
 }

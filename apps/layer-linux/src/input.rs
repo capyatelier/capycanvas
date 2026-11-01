@@ -490,7 +490,7 @@ pub fn install(workspace: &Rc<Workspace>) {
                         if scale.is_finite() && scale > 0. {
                             let result = workspace.gpu.borrow_mut().as_mut().map(|g| g.session.multi_touch_gesture(from, to, scale / previous, pinch.pinch_angle_delta() as f32));
                             input.touchpad.set(Some((to, scale)));
-                            if let Some(result) = result { workspace.changed(result); }
+                            if let Some(result) = result { workspace.navigation_changed(result); }
                         }
                     },
                     _ => input.touchpad.set(None),
@@ -643,7 +643,7 @@ pub fn install(workspace: &Rc<Workspace>) {
                     )
                 });
                 if let Some(result) = result {
-                    workspace.changed(result);
+                    workspace.navigation_changed(result);
                 }
             }
             glib::Propagation::Stop
