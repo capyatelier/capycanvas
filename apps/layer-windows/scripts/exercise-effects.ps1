@@ -314,7 +314,8 @@ function Property-Resize([int]$Width){
     Wait-Until {[Math]::Abs($root.Current.BoundingRectangle.Width-$Width*$scale) -lt 2} 'Properties window did not acknowledge its dimensions'
 }
 function Property-Language([string]$Tag){
-    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'edit'
+    $caption=@((Model).application_menus|Where-Object id -eq 'edit')[0].label
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'edit' -Caption $caption
     Invoke 'settings';Invoke 'preference-page-appearance'
     $statePath=State-File
     $tags=@((Read-Snapshot (Join-Path (Split-Path -Parent $statePath) ((Split-Path -Leaf $statePath) -replace '^ui-state-','bootstrap-'))).shipped_tags)
