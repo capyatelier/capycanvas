@@ -1,6 +1,8 @@
 import { FakeElement as SharedElement } from "./fake-dom.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import { createCanvasBar } from "./canvas-bar.js";
 
 class FakeElement extends SharedElement {
@@ -86,7 +88,10 @@ function harness({ reveal = true, layout = measure => ({ bounds: { x: 100.2, y: 
       else dispatched.push(action);
     },
     glass: { queue: () => glassQueued++ }, reappearMs: 180,
-    openMenu: node => { menu.menuOwner = node; menu.model = node.menuModel(); menu.open = true; return menu; },
+    openMenu: node => {
+      if (menu.open && menu.menuOwner === node) { menu.hidePopover(); menu.menuOwner = null; return menu; }
+      menu.model = node.menuModel(); menu.open = !!menu.model; menu.menuOwner = menu.open ? node : null; return menu;
+    },
     explain: node => explained.push(node.dataset.command), presented: () => presented.push(clock),
     setTimer: (callback, ms) => { const timer = { id: timers.length + 1, callback, at: clock + ms, cleared: false }; timers.push(timer); return timer.id; },
     clearTimer: id => { const timer = timers.find(t => t.id === id); if (timer) timer.cleared = true; },
@@ -303,6 +308,35 @@ test("a stale context leaves the bar unplaced", () => {
   assert.equal(h.bar.bounds(), null);
 });
 
+test("context menu triggers retain native ownership and toggle before querying", () => {
+  const source = readFileSync(new URL("customization.js", import.meta.url), "utf8");
+  const context = new FakeElement("div"), sources = [];
+  let pointerdown;
+  let queries = 0;
+  context.showPopover = ({ source } = {}) => { sources.push(source); context.open = true; };
+  context.querySelector = () => null;
+  context.contains = () => false;
+  const trigger = () => Object.assign(new FakeElement("button"), {
+    menuModel() { queries++; return { title: "Menu", sections: [] }; },
+  });
+  const first = trigger(), second = trigger();
+  first.contains = target => target === first; second.contains = target => target === second;
+  const scope = { context, Event, window: { addEventListener(type, callback) { pointerdown = callback; } },
+    renderMenu() {}, positionPopup() {}, closeMenuHost() {}, closeDropdown() {},
+    closeContext() { context.hidePopover(); context.menuOwner = null; } };
+  runInNewContext(source.slice(source.indexOf("  function showContext("), source.indexOf("  function variationMarker(")), scope);
+  runInNewContext(source.slice(source.indexOf('  window.addEventListener("pointerdown"'), source.indexOf('  window.addEventListener("keydown"')), scope);
+  scope.openMenu(first);
+  assert.equal(sources.at(-1), first);
+  pointerdown({ target: first }); assert.equal(context.open, true);
+  scope.openMenu(first);
+  assert.equal(context.open, false); assert.equal(queries, 1);
+  scope.openMenu(second);
+  assert.equal(sources.at(-1), second); assert.equal(queries, 2);
+  scope.openMenu(first);
+  assert.equal(context.menuOwner, first); assert.equal(context.open, true); assert.equal(queries, 3);
+});
+
 test("More opens the shared menu for the shown count, toggles closed, and closes when the bar hides", () => {
   let shown = 2;
   const h = harness({ layout: measure => ({ bounds: { x: 0, y: 0, width: 100, height: measure.height }, items: BigInt(shown), side: "below" }) });
@@ -313,7 +347,6 @@ test("More opens the shared menu for the shown count, toggles closed, and closes
   more.click();
   assert.deepEqual(h.menus, [{ context: v.context, shown: 2 }]);
   assert.ok(h.bar.menuOpen());
-  h.menu.open = false;
   more.dispatch("pointerdown"); more.click();
   assert.equal(h.menus.length, 1, "A press on More while its menu is open closes it");
   h.menu.dispatch("toggle", { newState: "closed" });
@@ -353,7 +386,6 @@ test("icon-only menu items are tiles with the tool-group corner that open the sh
   assert.deepEqual(h.menu.model, choiceMenus.copy(v.context), "The menu is the shared model, unchanged");
   assert.ok(h.bar.menuOpen());
   assert.deepEqual(h.dispatched, [], "Opening a menu runs nothing");
-  h.menu.open = false;
   copy.dispatch("pointerdown"); copy.click();
   assert.equal(h.choices.length, 1, "A press on an open menu's button closes it");
   h.menu.dispatch("toggle", { newState: "closed" });

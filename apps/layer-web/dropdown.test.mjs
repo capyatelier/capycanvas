@@ -8,7 +8,10 @@ function harness(label=()=> 'Category') {
   const element=(tag,className='')=>Object.assign(new FakeElement(),{tagName:tag.toUpperCase(),className,children:[],attributes:new Map(),listeners:{}});
   const button=(text,action,className)=>{const node=element('button',className);node.click=action;return node;};
   const menu=element('div'),changes=[];menu.matches=()=>!!menu.open;menu.hidePopover=()=>{menu.open=false;};
-  const node=createDropdown({element,button,icon:()=>element('svg'),openMenu:node=>{menu.model=node.menuModel();menu.menuOwner=node;menu.open=true;return menu;}},label,value=>changes.push(value));
+  const node=createDropdown({element,button,icon:()=>element('svg'),openMenu:node=>{
+    if(menu.open&&menu.menuOwner===node){menu.hidePopover();menu.menuOwner=null;return menu;}
+    menu.model=node.menuModel();menu.menuOwner=node;menu.open=true;return menu;
+  }},label,value=>changes.push(value));
   return {node,changes,menu,caption:node.children[0]};
 }
 

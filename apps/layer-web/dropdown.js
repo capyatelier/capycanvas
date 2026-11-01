@@ -1,12 +1,9 @@
 import {bindCopy} from './localization.js';
 
 export function createDropdown({element,button,icon,openMenu},label,change) {
-  let view={},menu;
+  let view={};
   const read=value=>typeof value==='function'?value():value;
-  const node=button('',()=>{
-    if(menu?.menuOwner===node&&menu.matches(':popover-open')){menu.hidePopover();return;}
-    menu=openMenu(node);node.setAttribute('aria-expanded','true');
-  },'dropdown');
+  const node=button('',()=>openMenu(node),'dropdown');
   const caption=element('span','dropdown-label');node.append(caption,icon('chevron-down'));
   const name=()=>read(view.label??label)??'',text=()=>read(view.text??view.choices?.find(choice=>String(choice.value)===node.value)?.label)??name();
   bindCopy(node,name,'ariaLabel');bindCopy(node,name,'title');bindCopy(caption,text);

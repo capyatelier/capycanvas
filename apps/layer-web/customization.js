@@ -22,8 +22,6 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
   let anchor = [320, 120], expanded = null, animation = 0, popupControl = null, menuCommand = null, menuHost=null;
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
   const context = element("div", "panel-context-menu");
-  // A context menu opens during a press/hold, before release. Automatic
-  // popovers light-dismiss that same release as an outside click in Chromium.
   context.popover = "manual"; context.setAttribute("role", "menu"); workspace.append(context);
   const popup = element("div", "tile-popover"); popup.popover = "auto"; workspace.append(popup);
   const closeMenuHost=event=>{if(event.type==='close'||event.newState==='closed')dismissContext();};
@@ -38,7 +36,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
   const closeDropdown=()=>closeContext(context.menuOwner?.classList.contains('dropdown'));
   context.addEventListener("toggle", e=>{if(e.newState==='closed')closeContext();else context.menuOwner?.setAttribute('aria-expanded','true');updateZen();});
   window.addEventListener("pointerdown", (e) => {
-    const trigger=context.menuOwner?.classList.contains('dropdown')&&context.menuOwner.contains(e.target);
+    const trigger=context.menuOwner?.contains(e.target);
     if (context.matches(":popover-open") && !context.contains(e.target)&&!trigger) closeContext();
   }, { capture: true });
   window.addEventListener("keydown", (e) => {
@@ -145,14 +143,16 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     const model = node.menuModel ? node.menuModel() : app.context_menu(JSON.parse(node.dataset.context));
     menuCommand = node.menuCommand ?? null;
     closeContext();
+    if (!model) return;
     menuHost=node.closest('dialog[open],[popover]:popover-open');
     if(menuHost){menuHost.append(context);for(const type of ['close','beforetoggle'])menuHost.addEventListener(type,closeMenuHost);}
     context.style.minWidth=node.classList.contains('dropdown')&&point[2]!=null?`${node.getBoundingClientRect().width}px`:'';
     anchor = point; context.menuOwner = node; context.menuFocus = focus;
     renderMenu(context, model, closeDropdown);
-    context.showPopover(); positionPopup(context);
+    context.showPopover({source: node}); positionPopup(context);
   }
   function openMenu(node, point, focus = node) {
+    if (context.menuOwner === node && context.matches(':popover-open')) { closeContext(); return context; }
     const r = node.getBoundingClientRect();
     showContext(node, point || [r.left, r.bottom, r.top], focus);
     context.querySelector("button:not(:disabled)")?.focus({preventScroll:true});

@@ -28,22 +28,14 @@ export function createCanvasBar({ app, workspace, element, button, icon, marker,
   root.addEventListener("mousedown", e => { if (!e.target.closest?.("input,select,textarea")) e.preventDefault(); });
   let view = null, schema = "", widthSchema = "", fields = [], sizes = null, layout = null, popup = null;
   let publication = null, timer = 0, timerKey = "", metricsKey = "";
-  let menu = null, owner = null, reopen = false;
+  let menu = null, owner = null;
   const shown = { visible: false, transform: "", items: -1 };
-  opensMenu(more);
-
-  function opensMenu(node) {
-    node.addEventListener("pointerdown", () => { reopen = owner === node && menu?.menuOwner === node; });
-  }
   function toggleMenu() {
     showMenu(more, () => app.canvas_bar_menu(view.context, Number(layout?.items ?? 0)));
   }
   function showMenu(node, query) {
-    const skip = reopen; reopen = false;
-    if (skip || !view) return;
-    const model = query();
-    if (!model) return;
-    node.menuModel = () => model;
+    if (!view) return;
+    node.menuModel = query;
     const opened = openMenu(node);
     if (menu !== opened) {
       menu = opened;
@@ -77,7 +69,7 @@ export function createCanvasBar({ app, workspace, element, button, icon, marker,
     b.setAttribute("aria-label", item.label); b.setAttribute("aria-haspopup", "menu");
     if (item.icon_only) b.append(icon(item.icon), marker());
     else { row.classList.add("text-tile"); b.append(icon(item.icon), element("span", "toolbar-action-label", item.label), icon("chevron-down")); }
-    opensMenu(b); row.append(b);
+    row.append(b);
     let tooltip, disabled;
     function update(option) {
       const state = option.Action?.state, off = state ? !state.enabled : false;
@@ -195,6 +187,6 @@ export function createCanvasBar({ app, workspace, element, button, icon, marker,
   return {
     root, refresh, measure, apply,
     bounds: () => shown.visible ? layout.bounds : null,
-    menuOpen: () => !!owner,
+    menuOpen: () => !!owner && menu?.menuOwner === owner && menu.matches(":popover-open"),
   };
 }
