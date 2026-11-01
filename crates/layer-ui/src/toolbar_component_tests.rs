@@ -1568,20 +1568,16 @@ fn slider_stamp_coalesces_full_brush_keys_and_rejects_stale_owners() {
     let mut brush=s.engine.configured_brush().clone();
     brush.tip=layer_core::BrushTip::Mask(AssetId::from("preview-test"));
     s.engine.set_brush(brush.clone()).unwrap();
-    let pending=s.toolbar_stamp(context,Some(first)).unwrap().unwrap();
-    assert!(pending.pending && pending.alpha.is_empty());
-    assert_eq!(pending.request_id,first);
+    assert!(s.toolbar_stamp(context,Some(first)).unwrap().is_none());
     assert_eq!(s.renderer_mut().requests[1].1.style.tip,brush.tip);
     let second=s.renderer_mut().requests[1].0;
     brush.tip=layer_core::BrushTip::AnalyticEllipse;
     brush.grain=Some(layer_core::BrushGrain{depth:0.5});
     s.engine.set_brush(brush.clone()).unwrap();
-    assert!(s.toolbar_stamp(context,Some(first)).unwrap().unwrap().pending);
+    assert!(s.toolbar_stamp(context,Some(first)).unwrap().is_none());
     assert_eq!(s.renderer_mut().requests.len(),2,"one request in flight");
     s.renderer_mut().complete(second,11);
-    let pending=s.toolbar_stamp(context,Some(first)).unwrap().unwrap();
-    assert!(pending.pending);
-    assert_eq!(pending.alpha.as_slice(),&[11;4]);
+    assert!(s.toolbar_stamp(context,Some(first)).unwrap().is_none());
     assert_eq!(s.renderer_mut().requests[2].1.style.grain,brush.grain);
     let paper=s.engine.document().paper(None);
     assert_eq!(s.renderer_mut().requests[2].1.style.paper.as_ref().map(|paper|paper.surface.as_ref()),Some(&paper));
@@ -1708,6 +1704,46 @@ fn short_sliders_reclaim_readouts_without_changing_the_saved_preference() {
                 if extent < threshold { assert_eq!(layout, hidden); }
                 for part in [layout.cap, layout.track] { assert!(part.width >= 0. && part.height >= 0.); }
             }
+        }
+    }
+}
+
+#[test]
+fn slider_stamp_never_delivers_pixels_from_an_obsolete_value_key() {
+    for platform in Platform::ALL {
+        for cached in [false, true] {
+            let mut s = UiSession::blank(StampRecorder::default(), [1000, 1000], platform).unwrap();
+            s.dispatch(UiAction::SelectBrush { id: DefaultBrushPreset::Pencil as u32 }).unwrap();
+            s.dispatch(UiAction::SetToolSetting { id: "flow".into(), value: 0.25 }).unwrap();
+            let context = s.state().toolbar_context();
+            let checkpoint = s.engine.checkpoint();
+            assert!(s.toolbar_stamp(context, None).unwrap().is_none());
+            let first = s.renderer_mut().requests.last().unwrap().0;
+            let known = if cached {
+                s.renderer_mut().complete(first, 7);
+                let image = s.toolbar_stamp(context, None).unwrap().unwrap();
+                assert!(!image.pending && image.alpha == [7; 4]);
+                Some(first)
+            } else { None };
+            s.dispatch(UiAction::SetToolSetting { id: "flow".into(), value: 0.5 }).unwrap();
+            s.toolbar_stamp(context, known).unwrap();
+            let obsolete = s.renderer_mut().requests.last().unwrap().clone();
+            s.dispatch(UiAction::SetToolSetting { id: "flow".into(), value: 1. }).unwrap();
+            assert_eq!(s.state().toolbar_context(), context);
+            assert_eq!(ToolbarNumericBinding::BrushStrength.field(s.state()).unwrap().value, 1.);
+            s.renderer_mut().complete(obsolete.0, 11);
+            let delivered = s.toolbar_stamp(context, known).unwrap();
+            assert!(delivered.as_ref().is_none_or(|stamp| stamp.alpha.is_empty()),
+                "{platform:?}, cached={cached}: current Strength100 received obsolete request {} pixels {:?}",
+                obsolete.0, delivered.as_ref().map(|stamp| (stamp.request_id, stamp.pending, &stamp.alpha)));
+            let current = s.renderer_mut().requests.last().unwrap().clone();
+            assert_ne!(current.0, obsolete.0);
+            assert_ne!(current.1.dabs, obsolete.1.dabs);
+            s.renderer_mut().complete(current.0, 211);
+            let delivered = s.toolbar_stamp(context, known).unwrap().unwrap();
+            assert!(!delivered.pending);
+            assert_eq!((delivered.request_id, delivered.alpha.as_slice()), (current.0, &[211; 4][..]));
+            assert_eq!(s.engine.checkpoint(), checkpoint);
         }
     }
 }

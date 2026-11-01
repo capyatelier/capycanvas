@@ -822,6 +822,7 @@ impl Component {
                     .bookmark_selected
                     .set(gpu.session.state().palette.panel.0);
             }
+            self.refresh_stamp(w);
             self.root.queue_draw();
             self.update_preview(&w.localization());
             let value = field
@@ -1029,30 +1030,40 @@ impl Component {
                     #[weak] w,
                     #[upgrade_or] glib::ControlFlow::Break,
                     move || {
-                        let Some(preview)=component.preview.borrow().clone() else { return glib::ControlFlow::Break; };
-                        let Some(context)=component.context.get() else { return glib::ControlFlow::Break; };
-                        let result=w.gpu.borrow_mut().as_mut().and_then(|g|
-                            g.session.toolbar_stamp(context,preview.request.get()).ok()).flatten();
-                        if let Some(stamp)=result
-                            && !stamp.alpha.is_empty()
-                                && let Ok(image)=gtk::cairo::ImageSurface::create_for_data(stamp.alpha,
-                                    gtk::cairo::Format::A8,stamp.size as i32,stamp.size as i32,stamp.size as i32) {
-                                    preview.request.set(Some(stamp.request_id));
-                                    preview.extent.set(stamp.extent);
-                                    preview.image.replace(Some(image));
-                                    component.update_preview(&w.localization());
-                                }
+                        if component.preview.borrow().is_none() { return glib::ControlFlow::Break; }
+                        if component.refresh_stamp(&w) { component.update_preview(&w.localization()); }
                         glib::ControlFlow::Continue
                     }
                 ));
                 preview.poll.replace(Some(source));
             }
+        self.refresh_stamp(w);
         self.update_preview(&w.localization());
         let preview = self.preview.borrow().clone();
         if let Some(preview) = preview {
             preview.popover.popup();
             preview.popover.present();
         }
+    }
+    fn refresh_stamp(&self, w: &Rc<Workspace>) -> bool {
+        let Some(preview) = self.preview.borrow().clone() else { return false; };
+        let result = self.context.get().and_then(|context| w.gpu.borrow_mut().as_mut().and_then(|gpu|
+            gpu.session.toolbar_stamp(context, preview.request.get()).ok()).flatten());
+        let Some(stamp) = result.filter(|stamp| !stamp.pending) else {
+            preview.request.set(None);
+            preview.extent.set(1.);
+            return preview.image.take().is_some();
+        };
+        if stamp.alpha.is_empty() { return false; }
+        let Ok(image) = gtk::cairo::ImageSurface::create_for_data(stamp.alpha,
+            gtk::cairo::Format::A8, stamp.size as i32, stamp.size as i32, stamp.size as i32) else {
+            preview.request.set(None);
+            return preview.image.take().is_some();
+        };
+        preview.request.set(Some(stamp.request_id));
+        preview.extent.set(stamp.extent);
+        preview.image.replace(Some(image));
+        true
     }
     fn preview_layout(&self, extent: f32, localization: &layer_ui::Localizer) -> Result<SliderPreviewLayout, String> {
         slider_preview_layout(

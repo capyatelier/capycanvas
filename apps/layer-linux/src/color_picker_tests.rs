@@ -706,3 +706,65 @@ fn native_color_picker_settings_follow_shared_copy_and_sizes() {
         pump(100);
     }
 }
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
+fn native_color_preview_matches_painted_input() {
+    use gtk::subclass::prelude::ObjectSubclassIsExt;
+    let mut d = Driver::new("art.capycanvas.PreviewFreshness");
+    d.input = d.input.settle_ms(0);
+    picker_artwork(&mut d);
+    d.w.dispatch(UiAction::Customize { action: CustomizationAction::SetPanelVisible { panel: Panel::Color, visible: true } });
+    pump(300);
+    let wheel = named::<crate::tool_panels::ColorWheel>(d.w.color_panel.root.upcast_ref(), "color-wheel");
+    let button = d.named("color-Foreground");
+    let patch = widgets(&button).find(|widget| widget.is::<crate::display_color::ColorPatch>()).unwrap();
+    let committed = state(&d.w).colors.clone();
+    d.input.key('i' as u32);
+    let samples = sample_after_paint(&patch, glib::clone!(#[weak] wheel, #[weak(rename_to = w)] d.w,
+        #[upgrade_or_panic] move || {
+            let model = state(&w);
+            (model.preview_colors().foreground, wheel.imp().color.borrow().foreground,
+                model.color_picker.preview.is_some(), wheel.imp().view.get(), wheel.imp().headroom.get(),
+                model.color_picker.sample_point)
+        }));
+    let events: Vec<_> = (0..80).map(|i| serde_json::json!({"point": [820.+(i as f64*0.43).sin()*95.,487.+(i as f64*0.31).cos()*47.]})).collect();
+    d.input.perform(serde_json::Value::Array(events));
+    pump(50);
+    let frames = samples.finish();
+    let output = std::path::PathBuf::from(std::env::var_os("LAYER_TEST_ARTIFACTS").unwrap());
+    let mut rows = Vec::new();
+    let expected = |color:layer_core::color::RgbColor,view:crate::display_color::ViewColor,headroom:f32| {
+        let snap = gtk::Snapshot::new();
+        crate::display_color::append_picker_solid(&snap,view,headroom,color.space,
+            color.linear_in(color.space).unwrap(),&gtk::graphene::Rect::new(0.,0.,1.,1.));
+        let texture = d.w.window.renderer().unwrap().render_texture(&snap.to_node().unwrap(),None);
+        let mut pixel=[0;4];texture.download(&mut pixel,4);pixel
+    };
+    for frame in &frames {
+        let (current, displayed, preview, view, headroom, point) = frame.state;
+        if !preview || current == displayed { continue; }
+        let old = expected(displayed,view,headroom);
+        let new = expected(current,view,headroom);
+        if !old[..3].iter().zip(&new[..3]).any(|(a,b)|a.abs_diff(*b)>12) { continue; }
+        let pixel = frame.pixel(&d.w.window,[frame.bounds.width()*0.5,frame.bounds.height()*0.5]);
+        let matches_old=pixel.iter().zip(old).all(|(a,b)|a.abs_diff(b)<=2);
+        if matches_old {
+            if rows.is_empty() {
+                d.w.window.renderer().unwrap().render_texture(&frame.node,Some(&frame.bounds))
+                    .save_to_png(output.join("stale-painted-swatch.png")).unwrap();
+            }
+            rows.push(serde_json::json!({"frame_time":frame.time,"point":point,"current_color":current,
+                "displayed_color":displayed,"painted_pixel":pixel,"old_expected":old,"current_expected":new}));
+        }
+    }
+    assert!(frames.iter().any(|frame|frame.state.2),"sample actual picker preview frames");
+    let count=rows.len();
+    std::fs::write(output.join("color-preview-freshness.json"),serde_json::to_vec_pretty(&serde_json::json!({
+        "protocol":1,"painted_frames":frames.len(),"stale_painted_frames":count,"witnesses":rows,
+        "oracle":"GTK after-paint retained ColorPatch node and contemporaneous model; no compositor scanout claim"
+    })).unwrap()).unwrap();
+    assert_eq!(state(&d.w).colors,committed);
+    d.w.window.destroy();
+    assert_eq!(count,0,"painted color panel showed an older value for newer picker input");
+}

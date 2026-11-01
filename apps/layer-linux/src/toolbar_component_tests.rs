@@ -3206,6 +3206,9 @@ fn native_toolbar_strength_preview_input() {
             let low_sum:u64=low.iter().map(|&v|v as u64).sum();
             capture_popover(&popup,d.input.dir.join(format!("strength-{name}-25-{theme:?}.png")).to_str().unwrap());
             d.w.dispatch(UiAction::SetToolSetting {id:"flow".into(),value:1.});
+            assert!(slider_stamp_pixels(&area).iter().all(|&alpha| alpha == 0),
+                "new Strength metadata withholds the previous key's cached pixels");
+            capture_popover(&popup,d.input.dir.join(format!("strength-{name}-pending-{theme:?}.png")).to_str().unwrap());
             let mut full=Vec::new();until(||{full=slider_stamp_pixels(&area);full.iter().map(|&v|v as u64).sum::<u64>()>low_sum},"Strength refreshes the existing popup image");
             assert!(popup.is_mapped());assert_eq!(popup.child().and_downcast::<gtk::Overlay>().unwrap().child().unwrap(),area,"value updates retain popup canvas");
             let full_sum:u64=full.iter().map(|&v|v as u64).sum();assert!(full_sum>low_sum,"{name}: Strength changes rendered alpha");

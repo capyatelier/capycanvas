@@ -95,13 +95,16 @@ pub struct LayerPanel {
     rows: Rc<RefCell<HashMap<usize, Row>>>,
     connections: connections::Connections,
     previews: Previews,
-    requested: RefCell<HashMap<(u64, bool), u64>>,
     pending: RefCell<HashMap<u64, (u64, bool, u64)>>,
     simple: Rc<Cell<bool>>,
     next_preview: Cell<u64>,
     renderer: Cell<u64>,
 }
 type Previews = Rc<RefCell<HashMap<(u64, bool), (u64, gdk::Texture)>>>;
+fn current_preview<T>(cached: Option<&(u64, T)>, revision: u64) -> Option<&T> {
+    cached.filter(|(key, _)| *key == revision).map(|(_, texture)| texture)
+}
+
 #[derive(Clone)]
 struct Row {
     simple: Rc<Cell<bool>>,
@@ -417,7 +420,6 @@ fn row_button_action(row: &LayerState, kind: u8) -> UiAction {
 impl LayerPanel {
     pub fn document_changed(&self) {
         self.previews.borrow_mut().clear();
-        self.requested.borrow_mut().clear();
         self.pending.borrow_mut().clear();
         for row in self.rows.borrow().values() {
             row.content_image.set_paintable(None::<&gdk::Texture>);
@@ -445,7 +447,6 @@ impl LayerPanel {
     pub(super) fn preview_debug(&self, extra: &[Rc<Self>]) -> serde_json::Value {
         serde_json::json!({
             "pending": self.pending.borrow().iter().collect::<Vec<_>>(),
-            "requested": self.requested.borrow().iter().collect::<Vec<_>>(),
             "cached": self.previews.borrow().iter().map(|(key,(revision,_))| (key, revision)).collect::<Vec<_>>(),
             "views": std::iter::once(self).chain(extra.iter().map(|v| v.as_ref())).map(|view| serde_json::json!({
                 "mapped": view.root.is_mapped(),
@@ -1132,7 +1133,6 @@ impl LayerPanel {
             owner,
             rows,
             previews,
-            requested: Default::default(),
             pending: Default::default(),
             simple,
             next_preview: Cell::new(1),
@@ -1532,8 +1532,8 @@ impl LayerPanel {
             row.name_entry.select_region(0, -1);
         }
     }
-    pub(crate) fn preview(&self, id: u64) -> Option<gdk::Texture> {
-        self.previews.borrow().get(&(id, false)).map(|(_, texture)| texture.clone())
+    pub(crate) fn preview(&self, layer: &LayerState) -> Option<gdk::Texture> {
+        layer.has_thumbnail.then(|| current_preview(self.previews.borrow().get(&(layer.id, false)), layer.paint_revision).cloned()).flatten()
     }
     fn update_previews(&self, w: &Workspace, extra: &[Rc<Self>], thumbnails: &[(u64, gtk::Picture)]) {
         let views: Vec<&Self> = std::iter::once(self).chain(extra.iter().map(|v| v.as_ref())).filter(|v| v.root.is_mapped()).collect();
@@ -1551,25 +1551,16 @@ impl LayerPanel {
             return;
         }
         let generation = g.session.renderer_generation();
-        if self.renderer.replace(generation) != generation {
-            let lost: Vec<_> = self.pending.borrow_mut().drain().map(|(_, request)| request).collect();
-            let mut requested = self.requested.borrow_mut();
-            for (id, mask, revision) in lost {
-                if requested.get(&(id, mask)) == Some(&revision) { requested.remove(&(id, mask)); }
-            }
-        }
+        if self.renderer.replace(generation) != generation { self.pending.borrow_mut().clear(); }
         while let Some(request) = g.session.renderer_mut().take_cancelled_thumbnail() {
-            let pending = self.pending.borrow_mut().remove(&request);
-            if let Some((id, mask, revision)) = pending {
-                let current = self.requested.borrow().get(&(id, mask)) == Some(&revision);
-                if current { self.requested.borrow_mut().remove(&(id, mask)); }
-            }
+            self.pending.borrow_mut().remove(&request);
         }
         while let Some(result) = g.session.renderer_mut().take_thumbnail() {
             if let Ok(image) = result
                 && let Some((id, mask, revision)) =
                     self.pending.borrow_mut().remove(&image.request_id)
-                && self.requested.borrow().get(&(id, mask)) == Some(&revision)
+                && g.session.state().layers.iter().any(|layer| layer.id == id
+                    && (if mask { layer.mask_revision } else { layer.paint_revision }) == revision)
             {
                 let texture = g.session.engine().backend().view_color.texture(
                     [image.width, image.height], gdk::MemoryFormat::R8g8b8a8,
@@ -1579,9 +1570,7 @@ impl LayerPanel {
                     .insert((id, mask), (revision, texture));
             }
         }
-        if g.session.engine().has_pending_document_edits() {
-            return;
-        }
+        let editing = g.session.engine().has_pending_document_edits();
         let mut wanted = Vec::new();
         for row in rows {
             let Some(state) = g.session.state().layers.iter().find(|l| l.id == row.id.get()).cloned() else { continue };
@@ -1596,12 +1585,14 @@ impl LayerPanel {
             wanted.push((state.id, false, state.has_thumbnail.then_some(state.id), state.paint_revision, picture.clone()));
         }
         for (id, mask, target, revision, picture) in wanted {
-            let Some(target) = target else { continue };
             let key = (id, mask);
-            if let Some((_, texture)) = self.previews.borrow().get(&key) {
-                picture.set_paintable(Some(texture));
-            }
-            if self.requested.borrow().get(&key) == Some(&revision)
+            let ready = self.previews.borrow();
+            let texture = target.and_then(|_| current_preview(ready.get(&key), revision));
+            picture.set_paintable(texture);
+            if target.is_none() || texture.is_some() || editing { continue; }
+            drop(ready);
+            let target = target.unwrap();
+            if self.pending.borrow().values().any(|request| *request == (id, mask, revision))
                 || self.pending.borrow().len() >= 8
             {
                 continue;
@@ -1613,7 +1604,6 @@ impl LayerPanel {
                 .request_thumbnail(request, layer_render::ThumbnailTarget::from_wire_id(target).expect("Published thumbnail target"))
                 .is_ok()
             {
-                self.requested.borrow_mut().insert(key, revision);
                 self.pending
                     .borrow_mut()
                     .insert(request, (id, mask, revision));
@@ -1708,10 +1698,11 @@ impl Row {
             self.swipe.reset();
             self.name_stack.set_visible_child_name("name");
             self.name_entry.set_text("");
-            let previews = self.previews.borrow();
-            self.content_image.set_paintable(previews.get(&(s.id, false)).map(|(_, texture)| texture));
-            self.mask_image.set_paintable(previews.get(&(s.id, true)).map(|(_, texture)| texture));
         }
+        let previews = self.previews.borrow();
+        self.content_image.set_paintable(s.has_thumbnail.then(|| current_preview(previews.get(&(s.id, false)), s.paint_revision)).flatten());
+        self.mask_image.set_paintable(s.has_mask.then(|| current_preview(previews.get(&(s.id, true)), s.mask_revision)).flatten());
+        drop(previews);
         self.root.set_widget_name(&format!("art-layer-{}", s.id));
         self.swipe.set_actions(s);
         let thumbnail = s.has_thumbnail && !s.adjustment_effect;
@@ -1810,6 +1801,19 @@ impl Row {
 #[cfg(test)]
 mod copy_tests {
     use super::*;
+
+    #[test]
+    fn thumbnail_pixels_are_pending_until_the_current_revision_is_ready() {
+        let texture = |color: [u8; 4]| gdk::MemoryTexture::new(2, 2, gdk::MemoryFormat::R8g8b8a8,
+            &glib::Bytes::from_owned(color.repeat(4)), 8).upcast::<gdk::Texture>();
+        let old = texture([255, 0, 0, 255]);
+        let new = texture([255; 4]);
+        let cached = (7, old.clone());
+        crate::color_preview_raster::assert_current_pixels(current_preview(Some(&cached), 8).is_some(), &old, &new);
+        assert_eq!(current_preview(Some(&cached), 7), Some(&old));
+        let cached = (8, new.clone());
+        assert_eq!(current_preview(Some(&cached), 8), Some(&new));
+    }
 
     #[test]
     #[ignore = "private display native_layers_control_copy"]

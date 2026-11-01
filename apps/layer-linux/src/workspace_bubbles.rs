@@ -1294,6 +1294,7 @@ impl Bubble {
                 patch
             })
             .set_display_color(stamp.color, display, headroom);
+        self.poll_stamp(w);
         if imp.stamp_tick.borrow().is_none() {
             let tick = self.add_tick_callback(glib::clone!(#[weak] w, #[upgrade_or] glib::ControlFlow::Break, move |bubble, _| {
                 if bubble.poll_stamp(&w) {
@@ -1336,6 +1337,10 @@ impl Bubble {
             let context = g.session.state().toolbar_context();
             g.session.toolbar_stamp(context, known).ok().flatten()
         });
+        if stamp.as_ref().is_none_or(|stamp| stamp.pending) {
+            if imp.stamp.take().is_some() { self.layer_redraw(); }
+            return true;
+        }
         if let Some(stamp) = stamp.filter(|s| !s.alpha.is_empty()) {
             let size = stamp.size as i32;
             let texture = gdk::MemoryTexture::new(size, size, gdk::MemoryFormat::A8, &glib::Bytes::from_owned(stamp.alpha), stamp.size as usize);
@@ -1970,7 +1975,7 @@ impl Bubbles {
             }
             bubble.imp().display.set(Some((w.paint_view_color(), w.picker_headroom())));
             if let (Some(thumbnail), Some(layer)) = (bubble.imp().thumbnail.borrow().as_ref(), view.layer) {
-                thumbnail.set_paintable(w.layer_panel.preview(layer).as_ref());
+                thumbnail.set_paintable(state.layers.iter().find(|current| current.id == layer).and_then(|current| w.layer_panel.preview(current)).as_ref());
             }
             bubble.set_card(w, state, &view);
             if view.card.is_some() { *self.active_card.borrow_mut() = Some(bubble.clone()); }

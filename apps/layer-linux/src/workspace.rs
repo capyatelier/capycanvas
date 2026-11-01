@@ -997,13 +997,11 @@ pub struct Workspace {
     columns: columns::Columns,
     refreshing: Cell<bool>,
     frame_timer: RefCell<Option<crate::canvas::FrameTimer>>,
-    color_preview_timer: RefCell<Option<glib::SourceId>>,
     frame_deadline: Cell<u64>,
     navigation_input: Cell<u64>,
 }
 impl Drop for Workspace {
     fn drop(&mut self) {
-        if let Some(timer) = self.color_preview_timer.get_mut().take() { timer.remove(); }
         self.notice.cancel_timeout();
         self.local_tone.suspend();
         self.gpu.get_mut().take();
@@ -1379,7 +1377,6 @@ impl Workspace {
             columns: columns::Columns::default(),
             refreshing: Cell::new(false),
             frame_timer: RefCell::new(None),
-            color_preview_timer: RefCell::new(None),
             frame_deadline: Cell::new(0),
             navigation_input: Cell::new(0),
             input: Rc::default(),
@@ -2838,24 +2835,6 @@ impl Workspace {
             self.command_bar.refresh(self, view);
             return;
         }
-        if regions == regions::COLOR_PREVIEW
-            && self.gpu.borrow().as_ref().is_some_and(|g| g.session.state().color_picker.preview.is_some()) {
-            if self.color_preview_timer.borrow().is_none() {
-                // Bound native panel redraws separately from the full-rate
-                // canvas/loupe. Read the newest color without postponing the
-                // deadline; leaving or committing a preview bypasses this wait.
-                let timer = glib::timeout_add_local_once(std::time::Duration::from_millis(17), glib::clone!(
-                    #[weak(rename_to = this)] self,
-                    move || {
-                        this.color_preview_timer.borrow_mut().take();
-                        this.refresh_color_preview();
-                    }
-                ));
-                *self.color_preview_timer.borrow_mut() = Some(timer);
-            }
-            return;
-        }
-        if let Some(timer) = self.color_preview_timer.borrow_mut().take() { timer.remove(); }
         if regions == regions::COLOR_PREVIEW {
             self.refresh_color_preview();
             return;

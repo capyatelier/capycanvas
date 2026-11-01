@@ -76,12 +76,7 @@ impl Key {
             texture,
         )
     }
-    fn compatible(self, other: Self) -> bool {
-        self.shape == other.shape
-            && self.space == other.space
-            && self.view == other.view
-            && self.headroom == other.headroom
-    }
+
 }
 
 fn render(
@@ -162,7 +157,40 @@ impl ColorWheel {
                 *wheel.imp().disc.borrow_mut() = Some(key.disc(texture));
                 *wheel.imp().ring.borrow_mut() = ring;
             },
-            Key::compatible,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn color(rgb: [f32; 3]) -> ColorState {
+        let mut state = ColorState::default();
+        state.apply(layer_ui::ColorAction::Shape { shape: ColorShape::Triangle }).unwrap();
+        state.set_color(layer_core::color::RgbColor::from_linear(RgbSpace::Srgb, [rgb[0],rgb[1],rgb[2],1.]).unwrap()).unwrap();
+        state
+    }
+    #[test]
+    fn freshness_rejects_an_obsolete_hue_field() {
+        let old = color([1.,0.,0.]);
+        let current = color([0.,0.,1.]);
+        let a = Key::new(48, &old, ViewColor::Srgb, 1.);
+        let b = Key::new(48, &current, ViewColor::Srgb, 1.);
+        crate::color_preview_raster::assert_current_pixels(crate::color_preview_raster::current(b, a),
+            &render(a, &old, &mut None), &render(b, &current, &mut None));
+    }
+    #[test]
+    fn freshness_rejects_an_obsolete_hdr_field_intensity() {
+        let mut old = color([0.25,0.1,0.5]);
+        old.set_hdr_enabled(true).unwrap();
+        let mut current = old.clone();
+        current.apply(layer_ui::ColorAction::HdrIntensity { stops: 3. }).unwrap();
+        let view = ViewColor::Srgb.with_rendition(layer_core::color::DocumentColor {
+            depth: layer_core::color::SampleDepth::F16, ..Default::default()
+        }, Default::default());
+        let a = Key::new(48, &old, view, 1.);
+        let b = Key::new(48, &current, view, 1.);
+        crate::color_preview_raster::assert_current_pixels(crate::color_preview_raster::current(b, a),
+            &render(a, &old, &mut None), &render(b, &current, &mut None));
     }
 }

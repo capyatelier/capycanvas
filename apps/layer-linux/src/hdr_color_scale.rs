@@ -34,11 +34,7 @@ pub(crate) struct ArcKey {
     color: (RgbColor, ViewColor, f32),
 }
 impl ArcKey {
-    fn compatible(self, other: Self) -> bool {
-        self.dpi == other.dpi
-            && self.min == other.min && self.max == other.max
-            && self.color.1 == other.color.1 && self.color.2 == other.color.2
-    }
+
     fn bounds(self) -> gtk::graphene::Rect {
         let width = self.width as f32 / self.dpi as f32;
         let g = HdrIntensityArc::new(width).unwrap();
@@ -119,8 +115,7 @@ mod imp {
             let ready = cache.as_ref().is_some_and(|(k, _)| *k == key);
             if !self.resizing.get() {
                 self.raster.request(&*obj, key, || (!ready).then_some(key), ArcKey::render,
-                    |scale, key, texture| { *scale.imp().texture.borrow_mut() = Some((key, texture)); },
-                    ArcKey::compatible);
+                    |scale, key, texture| { *scale.imp().texture.borrow_mut() = Some((key, texture)); });
             }
             let mut paths = self.paths.borrow_mut();
             if paths.as_ref().is_none_or(|p| p.key.0 != obj.width()) {
@@ -130,14 +125,8 @@ mod imp {
                 paths.zero = ArcPaths::zero(min, max, &g);
             }
             let paths = paths.as_ref().unwrap();
-            if let Some((old, texture)) = cache.as_ref() {
-                let old_bounds = old.bounds();
-                let old_arc = HdrIntensityArc::new(old_bounds.width()).unwrap();
-                let scale = g.radius / old_arc.radius;
-                snapshot.append_texture(texture, &gtk::graphene::Rect::new(
-                    g.center[0] + (old_bounds.x() - old_arc.center[0]) * scale,
-                    g.center[1] + (old_bounds.y() - old_arc.center[1]) * scale,
-                    old_bounds.width() * scale, old_bounds.height() * scale));
+            if let Some((_, texture)) = cache.as_ref().filter(|(old, _)| crate::color_preview_raster::current(*old, key)) {
+                snapshot.append_texture(texture, &key.bounds());
             }
             let [cx, cy] = g.point(((obj.value() - min) / (max - min)) as f32);
             let radius = g.marker_radius;
@@ -280,4 +269,16 @@ impl HdrColorScale {
 // Preview saturation never changes the stored paint definition.
 fn preview_gain(value: f32, gain: f64) -> f32 {
     (f64::from(value) * gain).clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32
+}
+
+#[cfg(test)]
+mod freshness_tests {
+    use super::*;
+    #[test]
+    fn freshness_rejects_an_obsolete_hdr_arc_color() {
+        let a = ArcKey { width: 192, dpi: 1, min: -2., max: 2.,
+            color: (RgbColor::from_linear(layer_core::color::RgbSpace::Srgb,[1.,0.,0.,1.]).unwrap(), ViewColor::Srgb, 1.) };
+        let b = ArcKey { color: (RgbColor::from_linear(layer_core::color::RgbSpace::Srgb,[0.,0.,1.,1.]).unwrap(), ViewColor::Srgb, 1.), ..a };
+        crate::color_preview_raster::assert_current_pixels(crate::color_preview_raster::current(b, a), &a.render(), &b.render());
+    }
 }
