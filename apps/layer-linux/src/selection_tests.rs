@@ -83,18 +83,19 @@ fn native_quick_mask_input() {
     let layers = d.header_tool(ToolbarControl::Panel { panel:Panel::Layers });
     d.click_name(&layers); pump(150);
     assert!(d.named("art-layer-0").is_visible());
-    pump(500);
-    let row = d.named("art-layer-0");
-    let thumbnail = find_css(&row, "layer-thumbnail").unwrap();
-
-    assert!(descendant::<gtk::Picture>(&thumbnail).unwrap().paintable().is_some(), "Quick Mask uses the normal GPU thumbnail");
+    until(|| {
+        let thumbnail = find_css(&d.named("art-layer-0"), "layer-thumbnail").unwrap();
+        descendant::<gtk::Picture>(&thumbnail).unwrap().paintable().is_some()
+    }, "Quick Mask uses the normal GPU thumbnail");
 
     for theme in [Theme::Light,Theme::Dark] {
         d.w.dispatch(UiAction::SetTheme { theme:Some(theme) }); pump(250);
-        save_snapshot(&d.w, 100, || output.join(format!("quick-mask-{theme:?}.png")));
         let capture=ui_session(&d.w).engine().backend().capture().unwrap();
         let tinted=capture.bytes.as_chunks::<4>().0.iter().filter(|p|p[0]>p[1].saturating_add(30) && p[0]>p[2].saturating_add(30)).count();
         assert!(tinted>100,"{theme:?} mask overlay disappeared: {tinted} pixels");
+        if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
+            d.input.perform(serde_json::json!([{ "capture": format!("quick-mask-{theme:?}").to_lowercase() }]));
+        }
     }
     d.click_name(&layers); pump(100);
     let properties = d.header_tool(ToolbarControl::Panel { panel:Panel::Adjustments });

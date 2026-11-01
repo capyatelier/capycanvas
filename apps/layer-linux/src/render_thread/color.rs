@@ -118,7 +118,9 @@ impl RenderWorker {
         self.startup_generation += 1;
         self.startup = layer_render_wgpu::StartupProgress::COMPLETE;
         self.startup_key = None;
-        self.selection = None;
+        let overlays = Arc::make_mut(&mut self.overlays);
+        overlays.selection = None;
+        overlays.paper_generation += 1;
         self.transform_preview = None;
         self.region = None;
         self.region_pending = false;
@@ -131,6 +133,28 @@ impl RenderWorker {
         self.effect_validation_pending = false;
         self.brush_sources.clear();
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn color_adoption_rejects_paper_receipts_from_the_previous_renderer() {
+        let (mut renderer, _commands, _chrome, _reply) = RenderWorker::channels(Default::default());
+        let document = layer_ui::new_drawing(32, 24, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+        let paper = document.nearest_paper_binding(None).unwrap();
+        renderer.set_paper_overlay(Some(layer_render::PaperOverlay { paper: paper.clone(), opacity: 0.5, moving: true }));
+        let previous = renderer.overlays.clone();
+        renderer.report.paper_drawn.store(previous.paper_generation, Ordering::Release);
+        assert!(renderer.paper_overlay_ready(&paper));
+        renderer.pending_color = Some(Pending { id: 1, color: renderer.color, cancelled: Arc::default(), reply: mpsc::channel().1, ready: true });
+        assert!(renderer.adopt_color(renderer.color).unwrap());
+        renderer.report.paper_drawn.store(previous.paper_generation, Ordering::Release);
+        assert!(!renderer.paper_overlay_ready(&paper));
+        renderer.report.paper_drawn.store(renderer.overlays.paper_generation, Ordering::Release);
+        assert!(renderer.paper_overlay_ready(&paper));
     }
 }
 
@@ -250,6 +274,7 @@ impl Worker {
         }
         let candidate = self.prepared_color.take().unwrap();
         self.renderer = candidate.renderer;
+        self.overlays = None;
         self.presenter = candidate.presenter;
         self.renderer.set_telemetry_enabled(telemetry);
         self.last_view = None;

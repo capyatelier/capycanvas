@@ -6843,3 +6843,42 @@ two six-second trials per variant, with inferred contact bounds. Watermarks
 do not prove accepted pixels, and compositor feedback is not physical
 pen-to-photon latency. Conditions, every pair, unknowns and the phase audit
 remain in `artifacts/gtk-r3.local/`; no reference-tier qualification follows.
+
+## GTK frame overlay ordering
+
+Measured 2026-10-31 on RTX PRO 6000 Blackwell Max-Q, NVIDIA 615.71.09,
+bundled GTK 4.24.1 and private Mutter 50.5 at 1600 × 1000, scale 1, 120 Hz.
+The frozen control is `007ddcc7a`; both variants use identical parked input
+attribution probes. Pen-up's window viewport is 1200 × 900.
+
+All 20 runs complete without observed foreign GPU overlap. CPU builds occur at
+both boundaries of every run, with varying processes; terminal observations
+are reported per pair without pooling or older R3 observations.
+
+| Plain pen-up pair | Exact terminal display median, ms | Following response median, ms |
+| --- | ---: | ---: |
+| 1 | 48.299 → 47.858 | 19.095 → 19.349 |
+| 2 | 48.717 → 48.940 | 19.459 → 18.990 |
+| 3 | 47.082 → 46.865 | 19.509 → 19.077 |
+| 4 | 47.059 → 45.001 | 18.016 → 19.385 |
+
+All 16 terminal IDs and 12 following responses per variant are observed.
+Candidate contact progression is 119.481–119.809 Hz; its longest gap is
+14.248 ms versus main's 18.447 ms. The earlier 114–118 Hz/137 ms episode does
+not recur. These pairs show no reproducible added plain pen-up cost.
+
+| G-Pen pair | Presented cadence, Hz | Median presentation gap, ms |
+| --- | ---: | ---: |
+| 1 | 120.008 → 120.004 | 8.328 → 8.331 |
+| 2 | 120.005 → 120.007 | 8.330 → 8.333 |
+
+Both drawing pairs retain 120 Hz cadence; longest gaps are 9.615 → 9.902 ms.
+Contact bounds are inferred from packet watermarks. No physical pen or
+reference-device qualification follows.
+
+Concurrent ink/Zen completes two pairs per theme. Light terminal median deltas
+are +1.915/+1.974 ms and following deltas +2.982/+2.258 ms; this repeated Light
+difference remains unresolved. Dark terminal deltas are −3.612/+1.380 ms.
+Both variants retain the pre-existing combined-motion target miss. No overall
+latency equivalence is claimed. Exact events, conditions, every pair and
+source-availability limits remain in `artifacts/gtk-overlay-ordering.local/`.

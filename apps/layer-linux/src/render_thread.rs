@@ -215,7 +215,20 @@ impl RenderWorker {
     }
 }
 
+#[derive(Clone, Default)]
+struct Overlays {
+    selection: Option<layer_core::Selection>,
+    selection_overlay: Option<layer_render::SelectionOverlay>,
+    crop: Option<layer_render::CropOverlay>,
+    paper: Option<layer_render::PaperOverlay>,
+    paper_generation: u64,
+    vector_preview: Option<layer_render::VectorPreview>,
+    vector_motion: Option<layer_render::VectorMotion>,
+    clipping: [bool; 2],
+}
+
 struct Frame {
+    overlays: Arc<Overlays>,
     time_seconds: f32,
     view: ViewState,
     extent: [u32; 2],
@@ -297,15 +310,8 @@ enum Command {
         Box<(layer_core::Document, layer_core::BrushSnapshot, bool)>,
     ),
     FinishStartupCatalog,
-    Selection(Option<layer_core::Selection>),
     SelectionPaint(u64, layer_render::SelectionPaint),
     CancelSelectionPaint(u64),
-    SelectionOverlay(Option<layer_render::SelectionOverlay>),
-    CropOverlay(Option<layer_render::CropOverlay>),
-    PaperOverlay(u64, Option<layer_render::PaperOverlay>),
-    VectorPreview(Option<layer_render::VectorPreview>),
-    VectorMotion(Option<layer_render::VectorMotion>),
-    ClippingPreview(bool,bool),
     QuickMaskThumbnail(Option<layer_core::Selection>),
     Region(u64, layer_render::RegionRequest),
     CancelRegion(u64),
@@ -393,6 +399,7 @@ impl<T> WorkerJob<T> {
 /// Two in-flight paint frames, including the frame being presented. GTK never
 /// waits on a worker lock, Vulkan acquire, or a GPU completion fence.
 pub struct RenderWorker {
+    overlays: Arc<Overlays>,
     snapshot_job: Option<WorkerJob<layer_render_wgpu::snapshot::SnapshotJob>>,
     analysis_job: Option<WorkerJob<layer_render_wgpu::effect_analysis::Job>>,
     analysis_candidate: Option<layer_render_wgpu::effect_analysis::Candidate>,
@@ -421,7 +428,6 @@ pub struct RenderWorker {
     pub(super) startup: layer_render_wgpu::StartupProgress,
     startup_generation: u64,
     startup_key: Option<(layer_render_wgpu::ShaderDocument, layer_core::BrushSnapshot, bool)>,
-    selection: Option<layer_core::Selection>,
     region: Option<Result<layer_render::RegionResult, String>>,
     region_pending: bool,
     region_generation: u64,
@@ -429,11 +435,6 @@ pub struct RenderWorker {
     selection_update_pending: bool,
     selection_ack: Option<Result<bool, String>>,
     selection_paint: Option<Result<layer_render::SelectionPaintResult, String>>,
-    selection_overlay: Option<layer_render::SelectionOverlay>,
-    crop_overlay: Option<layer_render::CropOverlay>,
-    paper_overlay: Option<layer_render::PaperOverlay>,
-    paper_generation: u64,
-    clipping_preview:[bool;2],
     quick_thumbnail: Option<layer_core::Selection>,
     pub(super) clock: Arc<crate::wayland::FrameClock>,
     telemetry: Arc<std::sync::Mutex<layer_render::RendererTelemetry>>,
@@ -563,36 +564,22 @@ impl RenderWorker {
         color: layer_core::color::DocumentColor,
         localization: Arc<layer_ui::Localizer>,
     ) -> Result<Self, String> {
+        let (mut renderer, receiver, chrome_requests, reply) = Self::channels(color);
         #[cfg(test)]
-        let startup_pause = NEXT_STARTUP_PAUSE.lock().unwrap().take();
+        { renderer.startup_pause = NEXT_STARTUP_PAUSE.lock().unwrap().take(); }
         #[cfg(test)]
-        let pause = startup_pause.clone();
-        static NEXT_OWNER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        let proof_owner = NEXT_OWNER.fetch_add(1, Ordering::Relaxed);
-        let (commands, receiver) = mpsc::channel();
-        let (chrome_updates, chrome_requests) = mpsc::channel();
-        let (reply, replies) = mpsc::channel();
-        let failure = Arc::new(std::sync::OnceLock::new());
-        let worker_failure = failure.clone();
-        let clock = Arc::new(crate::wayland::FrameClock::default());
-        let worker_clock = clock.clone();
-        let in_flight = Arc::new(AtomicUsize::new(0));
-        let count = in_flight.clone();
-        let report = Arc::new(FrameReport::default());
-        let worker_report = report.clone();
-        let telemetry = Arc::new(std::sync::Mutex::new(
-            layer_render::RendererTelemetry::default(),
-        ));
-        let worker_telemetry = telemetry.clone();
+        let pause = renderer.startup_pause.clone();
+        let worker_failure = renderer.failure.clone();
+        let worker_clock = renderer.clock.clone();
+        let count = renderer.in_flight.clone();
+        let worker_report = renderer.report.clone();
+        let worker_telemetry = renderer.telemetry.clone();
         let failure_area = area.clone();
-        let presented_chrome = Arc::new(ChromeStatus::new(proof_owner));
-        let worker_chrome = presented_chrome.clone();
-        let finished_chrome = presented_chrome.clone();
+        let worker_chrome = renderer.presented_chrome.clone();
+        let finished_chrome = renderer.presented_chrome.clone();
         #[cfg(test)]
-        let stats = Arc::new(std::sync::Mutex::new(crate::timing::Stats::default()));
-        #[cfg(test)]
-        let worker_stats = stats.clone();
-        let thread = std::thread::Builder::new()
+        let worker_stats = renderer.stats.clone();
+        renderer.thread = Some(std::thread::Builder::new()
             .name("canvas-gpu".into())
             .spawn(move || {
                 // A panic retires this entire owner; no encoder or renderer
@@ -637,8 +624,18 @@ impl RenderWorker {
                     wake_canvas(&failure_area);
                 }
             })
-            .map_err(error)?;
-        Ok(Self {
+            .map_err(error)?);
+        Ok(renderer)
+    }
+    fn channels(color: layer_core::color::DocumentColor) -> (Self, mpsc::Receiver<Command>, mpsc::Receiver<ChromeUpdate>, mpsc::Sender<Reply>) {
+        static NEXT_OWNER: AtomicU64 = AtomicU64::new(1);
+        let proof_owner = NEXT_OWNER.fetch_add(1, Ordering::Relaxed);
+        let (commands, receiver) = mpsc::channel();
+        let (chrome_updates, chrome_requests) = mpsc::channel();
+        let (reply, replies) = mpsc::channel();
+        let presented_chrome = Arc::new(ChromeStatus::new(proof_owner));
+        let renderer = Self {
+            overlays: Arc::default(),
             context_seed: EvaluationContext::default(),
             selection_overlays: Arc::default(),
             snapshot_job: None,
@@ -646,7 +643,7 @@ impl RenderWorker {
             analysis_candidate: None,
             shader_activity: None,
             #[cfg(test)]
-            startup_pause,
+            startup_pause: None,
             proof_owner,
             hdr_view: None,
             transform_preview: None,
@@ -667,7 +664,6 @@ impl RenderWorker {
             startup: Default::default(),
             startup_generation: 0,
             startup_key: None,
-            selection: None,
             region: None,
             region_pending: false,
             region_generation: 0,
@@ -675,26 +671,21 @@ impl RenderWorker {
             selection_update_pending: false,
             selection_ack: None,
             selection_paint: None,
-            selection_overlay: None,
-            crop_overlay: None,
-            paper_overlay: None,
-            paper_generation: 0,
-            clipping_preview:[false;2],
             quick_thumbnail: None,
-            clock,
+            clock: Arc::default(),
             stroke_target: None,
-            telemetry,
+            telemetry: Arc::default(),
             telemetry_enabled: false,
             commands,
             chrome_updates,
             chrome_sent: None,
             input_order: 0,
             replies,
-            failure,
-            in_flight,
-            report,
+            failure: Arc::default(),
+            in_flight: Arc::default(),
+            report: Arc::default(),
             retouch: None,
-            thread: Some(thread),
+            thread: None,
             color,
             next_color_request: 0,
             pending_color: None,
@@ -724,8 +715,9 @@ impl RenderWorker {
             chrome_hold: false,
             presented_chrome,
             #[cfg(test)]
-            stats,
-        })
+            stats: Arc::default(),
+        };
+        (renderer, receiver, chrome_requests, reply)
     }
     #[cfg(test)]
     pub(super) fn fail_next_frame(&self) {
@@ -784,7 +776,7 @@ impl RenderWorker {
     }
     #[cfg(test)]
     pub(super) fn has_paper_overlay(&self) -> bool {
-        self.paper_overlay.is_some()
+        self.overlays.paper.is_some()
     }
     pub(super) fn started(&self) -> bool {
         self.initialized
@@ -904,7 +896,7 @@ impl RenderWorker {
         self.filter_previews.clear();
         self.color_sample = None;
         self.region = None;
-        self.selection = None;
+        Arc::make_mut(&mut self.overlays).selection = None;
         self.brush_sources.clear();
         self.startup_key = None;
     }
@@ -1012,7 +1004,7 @@ impl CanvasRenderer for RenderWorker {
     fn cancel_selection_paint(&mut self) {
         self.selection_generation = self.selection_generation.wrapping_add(1);
         self.selection_update_pending = false; self.selection_ack = None; self.selection_paint = None;
-        self.selection = None;
+        Arc::make_mut(&mut self.overlays).selection = None;
         let _ = self.send(Command::CancelSelectionPaint(self.selection_generation));
     }
     fn set_quick_mask_thumbnail(&mut self, selection: Option<&layer_core::Selection>) {
@@ -1022,41 +1014,44 @@ impl CanvasRenderer for RenderWorker {
         }
     }
     fn set_selection_overlay(&mut self, overlay: Option<layer_render::SelectionOverlay>) {
-        if self.selection_overlay != overlay {
-            let _ = self.send(Command::SelectionOverlay(overlay));
-            self.selection_overlay = overlay; self.selection = None;
+        if self.overlays.selection_overlay != overlay {
+            let state = Arc::make_mut(&mut self.overlays);
+            state.selection_overlay = overlay;
+            state.selection = None;
         }
     }
-    fn set_clipping_preview(&mut self, shadows:bool, highlights:bool) {
-        if self.clipping_preview!=[shadows,highlights] {
-            let _=self.send(Command::ClippingPreview(shadows,highlights));
-            self.clipping_preview=[shadows,highlights];
+    fn set_clipping_preview(&mut self, shadows: bool, highlights: bool) {
+        if self.overlays.clipping != [shadows, highlights] {
+            Arc::make_mut(&mut self.overlays).clipping = [shadows, highlights];
         }
     }
     fn set_crop_overlay(&mut self, overlay: Option<layer_render::CropOverlay>) {
-        if self.crop_overlay != overlay {
-            let _ = self.send(Command::CropOverlay(overlay));
-            self.crop_overlay = overlay;
-        }
+        if self.overlays.crop != overlay { Arc::make_mut(&mut self.overlays).crop = overlay; }
     }
     fn set_vector_preview(&mut self, preview: Option<layer_render::VectorPreview>) {
-        let _ = self.send(Command::VectorPreview(preview));
+        let key = |value: &layer_render::VectorPreview| (value.owner, Arc::as_ptr(&value.path), value.revision);
+        if self.overlays.vector_preview.as_ref().map(key) != preview.as_ref().map(key) {
+            Arc::make_mut(&mut self.overlays).vector_preview = preview;
+        }
     }
     fn set_vector_motion(&mut self, motion: Option<layer_render::VectorMotion>) {
-        let _ = self.send(Command::VectorMotion(motion));
+        let key = |value: &layer_render::VectorMotion| (value.owner, Arc::as_ptr(&value.items), value.transform);
+        if self.overlays.vector_motion.as_ref().map(key) != motion.as_ref().map(key) {
+            Arc::make_mut(&mut self.overlays).vector_motion = motion;
+        }
     }
     fn set_paper_overlay(&mut self, overlay: Option<layer_render::PaperOverlay>) {
-        if self.paper_overlay != overlay {
-            if self.paper_overlay.as_ref().map(|o| &o.paper) != overlay.as_ref().map(|o| &o.paper) {
-                self.paper_generation += 1;
+        if self.overlays.paper != overlay {
+            let state = Arc::make_mut(&mut self.overlays);
+            if state.paper.as_ref().map(|value| &value.paper) != overlay.as_ref().map(|value| &value.paper) {
+                state.paper_generation += 1;
             }
-            let _ = self.send(Command::PaperOverlay(self.paper_generation, overlay.clone()));
-            self.paper_overlay = overlay;
+            state.paper = overlay;
         }
     }
     fn paper_overlay_ready(&self, paper: &layer_core::paper::PaperBinding) -> bool {
-        self.paper_overlay.as_ref().is_some_and(|o| o.paper == *paper)
-            && self.report.paper_drawn.load(Ordering::Acquire) == self.paper_generation
+        self.overlays.paper.as_ref().is_some_and(|value| value.paper == *paper)
+            && self.report.paper_drawn.load(Ordering::Acquire) == self.overlays.paper_generation
     }
     fn request_region(
         &mut self,
@@ -1081,13 +1076,9 @@ impl CanvasRenderer for RenderWorker {
             .take()
             .map(|result| result.map_err(|_| BackendError("Region detection failed")))
     }
-    fn set_selection_outline(
-        &mut self,
-        selection: Option<&layer_core::Selection>,
-    ) -> Result<(), Self::Error> {
-        if self.selection.as_ref() != selection {
-            self.send(Command::Selection(selection.cloned()))?;
-            self.selection = selection.cloned();
+    fn set_selection_outline(&mut self, selection: Option<&layer_core::Selection>) -> Result<(), Self::Error> {
+        if self.overlays.selection.as_ref() != selection {
+            Arc::make_mut(&mut self.overlays).selection = selection.cloned();
         }
         Ok(())
     }
@@ -1267,6 +1258,7 @@ impl CanvasRenderer for RenderWorker {
             input_frame_order(&mut self.input_order, packet.dabs.len(), packet.dab_batches.iter().any(|batch| batch.stroke_end))
         } else { 0 };
         let frame = Frame {
+            overlays: self.overlays.clone(),
             time_seconds: packet.time_seconds,
             view: packet.view,
             extent: packet.document_extent,
@@ -1310,7 +1302,7 @@ struct Worker {
     watch: layer_host::DeviceWatch,
     backdrop_submitted: bool,
     paper_ready: Arc<AtomicBool>,
-    paper_overlay: Option<(u64, layer_core::paper::PaperBinding)>,
+    overlays: Option<Arc<Overlays>>,
     // Drop Vulkan's surface before the wl_surface (field declaration order).
     surface: wgpu::Surface<'static>,
     instance: wgpu::Instance,
@@ -1753,24 +1745,14 @@ impl Worker {
                 }
                 Command::CancelSelectionPaint(generation) => {
                     selection_generation = generation; self.renderer.cancel_selection_paint();
+                    self.overlays = None;
                 }
                 Command::QuickMaskThumbnail(selection) => self.renderer.set_quick_mask_thumbnail(selection.as_ref()),
-                Command::SelectionOverlay(overlay) => self.renderer.set_selection_overlay(overlay),
                 Command::CancelRegion(generation) => {
                     region_generation = generation;
                     deferred.retain(|c| !matches!(c, Command::Region(..)));
                     self.renderer.cancel_region();
                 }
-                Command::CropOverlay(overlay) => self.renderer.set_crop_overlay(overlay),
-                Command::PaperOverlay(generation, overlay) => {
-                    self.paper_overlay = overlay.as_ref().map(|o| (generation, o.paper.clone()));
-                    self.renderer.set_paper_overlay(overlay);
-                    #[cfg(test)]
-                    timing.paper_overlay();
-                }
-                Command::VectorPreview(preview) => self.renderer.set_vector_preview(preview),
-                Command::VectorMotion(motion) => self.renderer.set_vector_motion(motion),
-                Command::ClippingPreview(shadows,highlights) => self.renderer.set_clipping_preview(shadows,highlights),
                 Command::Region(generation, request) => {
                     region_generation = generation;
                     let result = self.renderer.request_region(request);
@@ -1900,10 +1882,6 @@ impl Worker {
                         )
                         .map_err(error)?;
                 }
-                Command::Selection(selection) => self
-                    .renderer
-                    .set_selection_outline(selection.as_ref())
-                    .map_err(error)?,
                 Command::Release(id) => self.renderer.release_asset(&id),
                 #[cfg(test)]
                 Command::DocumentPixels(request_id, reply) => {
@@ -2012,7 +1990,7 @@ impl Worker {
             view_color,
             backdrop_submitted: false,
             paper_ready: Arc::new(AtomicBool::new(false)),
-            paper_overlay: None,
+            overlays: None,
             surface,
             instance,
             child,
@@ -2058,8 +2036,9 @@ impl Worker {
             report.retouch_miss.store(stroke.0, Ordering::Release);
         }
         report.retouch_waiting.store(self.renderer.retouch_waiting().map_or(0, |stroke| stroke.0), Ordering::Release);
-        if let Some((generation, paper)) = &self.paper_overlay && self.renderer.paper_overlay_ready(paper) {
-            report.paper_drawn.store(*generation, Ordering::Release);
+        if let Some(state) = &self.overlays && let Some(overlay) = &state.paper
+            && self.renderer.paper_overlay_ready(&overlay.paper) {
+            report.paper_drawn.store(state.paper_generation, Ordering::Release);
         }
         let pending = self.renderer.has_pending_work();
         if pending && !report.pending_work.swap(pending, Ordering::AcqRel) {
@@ -2154,6 +2133,20 @@ impl Worker {
             self.renderer.raster_dependencies_ready(frame.backdrop_packet(&scope),None)
         }
     }
+    fn apply_overlays(&mut self, state: &Arc<Overlays>, #[cfg(test)] timing: &mut crate::timing::Timing) -> Result<(), String> {
+        if self.overlays.as_ref().is_some_and(|current| Arc::ptr_eq(current, state)) { return Ok(()); }
+        self.renderer.set_selection_overlay(state.selection_overlay);
+        self.renderer.set_selection_outline(state.selection.as_ref()).map_err(error)?;
+        self.renderer.set_crop_overlay(state.crop);
+        self.renderer.set_vector_preview(state.vector_preview.clone());
+        self.renderer.set_vector_motion(state.vector_motion.clone());
+        self.renderer.set_clipping_preview(state.clipping[0], state.clipping[1]);
+        self.renderer.set_paper_overlay(state.paper.clone());
+        #[cfg(test)]
+        if self.overlays.as_ref().and_then(|current| current.paper.as_ref()) != state.paper.as_ref() { timing.paper_overlay(); }
+        self.overlays = Some(state.clone());
+        Ok(())
+    }
     fn draw(
         &mut self,
         frame: &mut Frame,
@@ -2177,6 +2170,7 @@ impl Worker {
         self.renderer
             .resize_surface(frame.view.width_px, frame.view.height_px)
             .map_err(error)?;
+        self.apply_overlays(&frame.overlays, #[cfg(test)] timing)?;
         let _presentation = self.renderer.prioritize_raster_presentation();
         #[cfg(test)]
         if !backdrop && frame.scene.view().targets().any(|t| frame.scene.view().raster(t).is_some_and(|r| r.try_data().is_none())) {

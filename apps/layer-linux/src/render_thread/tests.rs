@@ -28,6 +28,97 @@ fn retired_context_capture_resolves_failure_without_changing_sources() {
 use super::*;
 use gtk::prelude::*;
 
+fn overlay_packet(renderer: &mut RenderWorker, document: &layer_core::Document) -> Result<(), BackendError> {
+    renderer.geometry = Some(Geometry { position: [0; 2], scale: 1, corner_radius: 0. });
+    renderer.submit(FramePacket {
+        time_seconds: 0., view: ViewState { width_px: 32, height_px: 24, document_to_surface: [1., 0., 0., 1., 0., 0.] },
+        document_extent: [32, 24], scene: document.scene(), inspect_mask: None, selection_overlays: None,
+        dabs: &[], dab_batches: &[], restore_rasters: &[], reset_layers: false, commit_rasters: true,
+        composite_all: true, blend_space: Default::default(),
+    })
+}
+
+fn queued_frame(commands: &mpsc::Receiver<Command>) -> Box<Frame> {
+    loop {
+        match commands.try_recv() {
+            Ok(Command::Frame(frame)) => return frame,
+            Ok(Command::Wake) => (),
+            _ => panic!("expected a Frame without standalone overlay commands"),
+        }
+    }
+}
+
+#[test]
+fn nonink_overlay_changes_wait_for_frame_submission() {
+    let (mut renderer, commands, _chrome, _reply) = RenderWorker::channels(Default::default());
+    let document = layer_ui::new_drawing(32, 24, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+    let crop = layer_render::CropOverlay { to_crop: layer_core::Affine::IDENTITY, dim: 0.75 };
+    renderer.set_crop_overlay(Some(crop));
+    assert!(commands.try_recv().is_err(), "an overlay setter can overtake a deferred Frame");
+    let selection = layer_core::Selection::full();
+    let overlay = layer_render::SelectionOverlay { active: true, editing: None, color: [0.5; 4], protected: false, saved_protected: true };
+    renderer.set_selection_overlay(Some(overlay));
+    renderer.set_selection_outline(Some(&selection)).unwrap();
+    let paper = layer_render::PaperOverlay { paper: document.nearest_paper_binding(None).unwrap(), opacity: 0.6, moving: true };
+    renderer.set_paper_overlay(Some(paper.clone()));
+    renderer.set_clipping_preview(true, false);
+    use layer_core::authored::vector::{Anchor, ItemId, PathGeometry, PathItem, Subpath};
+    let path = Arc::new(PathItem::new(ItemId(1), Arc::new(PathGeometry::new(vec![Subpath::new(&[Anchor::corner([2., 3.])], false)]).unwrap()), Arc::default()));
+    let owner = document.scene().order()[0];
+    renderer.set_vector_preview(Some(layer_render::VectorPreview { owner, path: path.clone(), revision: 7 }));
+    renderer.set_vector_motion(Some(layer_render::VectorMotion { owner, items: Arc::new([ItemId(1)].into()), transform: Default::default() }));
+    assert!(commands.try_recv().is_err(), "non-ink setters bypassed the Frame");
+    overlay_packet(&mut renderer, &document).unwrap();
+    let first = queued_frame(&commands);
+    assert_eq!(first.overlays.crop, Some(crop));
+    assert_eq!(first.overlays.selection, Some(selection));
+    assert_eq!(first.overlays.selection_overlay, Some(overlay));
+    assert_eq!(first.overlays.paper, Some(paper));
+    assert_eq!(first.overlays.paper_generation, 1);
+    assert_eq!(first.overlays.clipping, [true, false]);
+    assert!(Arc::ptr_eq(&first.overlays.vector_preview.as_ref().unwrap().path, &path));
+    assert_eq!(first.overlays.vector_motion.as_ref().unwrap().owner, owner);
+    renderer.set_crop_overlay(None);
+    renderer.set_selection_overlay(None);
+    renderer.set_paper_overlay(None);
+    renderer.set_vector_preview(None);
+    renderer.set_vector_motion(None);
+    renderer.set_clipping_preview(false, true);
+    assert!(commands.try_recv().is_err());
+    overlay_packet(&mut renderer, &document).unwrap();
+    let second = queued_frame(&commands);
+    assert_eq!(first.overlays.crop, Some(crop));
+    assert_eq!(first.overlays.paper_generation, 1);
+    assert!(first.overlays.selection.is_some() && first.overlays.vector_motion.is_some());
+    assert_eq!(second.overlays.crop, None);
+    assert_eq!(second.overlays.paper_generation, 2);
+    assert!(second.overlays.selection.is_none() && second.overlays.selection_overlay.is_none());
+    assert!(second.overlays.vector_preview.is_none() && second.overlays.vector_motion.is_none());
+    assert_eq!(second.overlays.clipping, [false, true]);
+}
+
+#[test]
+fn backpressure_preserves_pending_overlays_and_unchanged_frames_share_them() {
+    let (mut renderer, commands, _chrome, _reply) = RenderWorker::channels(Default::default());
+    let document = layer_ui::new_drawing(32, 24, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+    renderer.in_flight.store(2, Ordering::Release);
+    let crop = layer_render::CropOverlay { to_crop: layer_core::Affine::IDENTITY, dim: 0.4 };
+    renderer.set_crop_overlay(Some(crop));
+    assert!(overlay_packet(&mut renderer, &document).is_err());
+    assert!(commands.try_recv().is_err());
+    renderer.in_flight.store(0, Ordering::Release);
+    overlay_packet(&mut renderer, &document).unwrap();
+    let first = queued_frame(&commands);
+    renderer.set_crop_overlay(Some(crop));
+    renderer.set_clipping_preview(false, false);
+    renderer.set_vector_preview(None);
+    renderer.set_vector_motion(None);
+    overlay_packet(&mut renderer, &document).unwrap();
+    let second = queued_frame(&commands);
+    assert_eq!(second.overlays.crop, Some(crop));
+    assert!(Arc::ptr_eq(&first.overlays, &second.overlays));
+}
+
 fn visible_chrome() -> ChromeHandoff {
     let mut chrome = ChromeHandoff::default();
     chrome.ready();
