@@ -19,8 +19,8 @@ try {
  if(!$process.WaitForExit(30000)){throw 'Popup fixture timed out after 30 seconds'}
  if($process.ExitCode -ne 0){throw "Popup fixture exited $($process.ExitCode); see $run"}
  $result=Get-Content -LiteralPath (Join-Path $run 'popup-fixture-result.json') -Raw|ConvertFrom-Json
- if($result.exit_code -ne 0 -or $result.passed -ne 14 -or $result.ime_passed -ne 10){throw "Popup fixture assertions incomplete; see $run"}
- Write-Output "Popup fixture passed 14 popup and 10 workspace/default IME cases ($Theme); artifacts: $run"
+ if($result.exit_code -ne 0 -or $result.passed -ne 14 -or $result.ime_passed -ne 11){throw "Popup fixture assertions incomplete; see $run"}
+ Write-Output "Popup fixture passed 14 popup and 11 workspace/default IME cases ($Theme); artifacts: $run"
 } finally {
  $env:CAPY_POPUP_FIXTURE=$beforePath;$env:CAPY_POPUP_THEME=$beforeTheme
  if($process -and !$process.HasExited){Stop-Process -Id $process.Id -Force}

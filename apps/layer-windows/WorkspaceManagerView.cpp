@@ -152,6 +152,14 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         rowDrag->Cancel();cancelPending=true;
         dispatch(O({{L"type",S(prompt()&&!inlineRename()&&page()!=L"prompt"?L"cancel":L"dismiss")}}));
     }
+    void confirm(){
+        if(stopping||!showing||cancelPending||flag(model,L"busy")||flag(model,L"loading")||focusedTextComposing(root))return;
+        if(prompt()&&!inlineRename()){
+            auto selected=choices.SelectedItem().try_as<ComboBoxItem>();
+            auto option=selected?S(unbox_value<hstring>(selected.Tag())):Windows::Data::Json::JsonValue::CreateNullValue();
+            dispatch(O({{L"type",S(L"submit")},{L"name",S(name.Text())},{L"description",description.Visibility()==Visibility::Visible?S(description.Text()):JsonValue::CreateNullValue()},{L"choice",option}}));
+        }else dispatch(O({{L"type",S(L"confirm")}}));
+    }
     void init() {
         body.Spacing(12);listing.Spacing(4);promptBody.Spacing(12);
         toolbarTabs.Orientation(Orientation::Horizontal);toolbarTabs.Spacing(8);
@@ -223,6 +231,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         name.TextChanging([weak=weak_from_this()](auto&&,auto&&){
             if(auto self=weak.lock();self&&!self->updating){self->nameDraft=self->name.Text();self->validateName();}
         });
+        name.KeyDown([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==Windows::System::VirtualKey::Enter&&!composingKey(e))if(auto self=weak.lock()){e.Handled(true);self->confirm();}});
         description.TextChanging([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating)self->descriptionDraft=self->description.Text();});
         list.SelectionChanged([weak=weak_from_this()](auto&&,auto&&){
             if(auto self=weak.lock();self&&!self->updating){
@@ -517,15 +526,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
             dialog.KeyDown([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
                 if(e.Key()==Windows::System::VirtualKey::Escape&&!composingKey(e))if(auto self=weak.lock()){e.Handled(true);if(!self->rowDrag->Escape())self->cancel();}
             });
-            dialog.PrimaryButtonClick([weak=weak_from_this()](auto&&,ContentDialogButtonClickEventArgs const& e){
-                e.Cancel(true);if(auto self=weak.lock();self&&!focusedTextComposing(self->root)){
-                    if(self->prompt()&&!self->inlineRename()){
-                        auto selected=self->choices.SelectedItem().try_as<ComboBoxItem>();
-                        auto option=selected?S(unbox_value<hstring>(selected.Tag())):Windows::Data::Json::JsonValue::CreateNullValue();
-                        self->dispatch(O({{L"type",S(L"submit")},{L"name",S(self->name.Text())},{L"description",self->description.Visibility()==Visibility::Visible?S(self->description.Text()):JsonValue::CreateNullValue()},{L"choice",option}}));
-                    }else self->dispatch(O({{L"type",S(L"confirm")}}));
-                }
-            });
+            dialog.PrimaryButtonClick([weak=weak_from_this()](auto&&,ContentDialogButtonClickEventArgs const& e){e.Cancel(true);if(auto self=weak.lock())self->confirm();});
             dialog.CloseButtonClick([weak=weak_from_this()](auto&&,ContentDialogButtonClickEventArgs const& e){
                 e.Cancel(true);if(auto self=weak.lock())self->cancel();
             });

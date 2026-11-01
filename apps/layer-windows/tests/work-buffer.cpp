@@ -133,7 +133,43 @@ int main() {
     std::cout<<"Trace publication atomically replaces window manifests while readers retain complete snapshots\n";
 #endif
 
-    for(uint32_t key:{13u,27u,40u}) {
+    {
+        TextCompositionKeys input;
+        input.Update(true,10);input.Update(false,30);
+        assert(!input.Owns(13,29,false,false)&&input.Busy());
+        assert(!input.Owns(13,29,false,false));
+        assert(!input.Owns(13,40,false,true)&&input.Busy());
+        input.Clear();input.Pointer();assert(input.Busy()&&!input.Active());
+        assert(!input.Owns(13,50,true,true)&&!input.Busy());
+        assert(!input.Owns(13,50,true,true));
+        assert(!input.Owns(13,60,false,false)&&input.Busy());
+        assert(!input.Owns(13,70,true,true)&&!input.Busy());
+        input.Update(true,80);assert(input.Owns(13,90,false,false));
+        input.Update(false,100);assert(input.Owns(13,90,false,false));
+        assert(input.Owns(13,110,false,true)&&input.Busy());
+        input.Clear();assert(!input.Busy());
+        assert(!input.Owns(13,120,true,true)&&!input.Busy());
+        assert(!input.Owns(13,130,false,false)&&input.Busy());
+        assert(!input.Owns(13,140,true,true)&&!input.Busy());
+        assert(input.Owns(229,150,false,false)&&input.Busy());
+        input.Clear();assert(!input.Busy());
+        assert(input.Owns(229,160,true,true)&&!input.Busy());
+        assert(input.Owns(229,170,false,false,28)&&input.Busy());
+        assert(input.Owns(13,180,true,true,28)&&!input.Busy());
+        assert(input.Owns(229,190,false,false,28));
+        assert(!input.Owns(13,190,false,true,28)&&input.Busy());
+        assert(!input.Owns(13,190,false,true,28));
+        assert(!input.Owns(13,200,true,true,28)&&!input.Busy());
+        assert(!input.Owns(13,210,false,false,28)&&input.Busy());
+        assert(input.Owns(229,220,true,true,28)&&input.Busy());
+        assert(!input.Owns(13,230,false,true,28)&&input.Busy());
+        assert(!input.Owns(13,240,true,true,28)&&!input.Busy());
+        input.Update(true,0xffffffe0);input.Update(false,0x10);
+        assert(!input.Owns(13,0xfffffff0,false,false)&&input.Busy());
+        assert(!input.Owns(13,0x11,true,true)&&!input.Busy());
+    }
+    std::cout<<"Passed Enter remains busy through its physical release without becoming owned; active and Process input remain owned\n";
+    for(uint32_t key:{27u,40u}) {
         TextCompositionKeys input;
         assert(!input.Busy());input.Update(true,10);assert(input.Busy());
         input.Update(true,20);

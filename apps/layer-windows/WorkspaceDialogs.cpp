@@ -105,10 +105,7 @@ struct WorkspaceDialogs::Impl:std::enable_shared_from_this<Impl>{
         AutomationProperties::SetAutomationId(error,L"workspace-dialog-error");
         auto weak=weak_from_this();
         name.TextChanging([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating&&!self->closing&&!self->cancelPending&&self->edit(self->name,L"name",self->nameDraft)){
-            self->send(O({{L"type",S(self->kind==L"picker"?L"picker_name":L"toolbar_name")},{L"name",S(*self->nameDraft)}}));
-        }});
-        name.TextChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&self->nameDraft){
-            self->dialog.IsPrimaryButtonEnabled(false);
+            self->dialog.IsPrimaryButtonEnabled(true);self->send(O({{L"type",S(self->kind==L"picker"?L"picker_name":L"toolbar_name")},{L"name",S(*self->nameDraft)}}));
         }});
         search.TextChanging([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating&&!self->closing&&self->kind==L"picker"&&!self->cancelPending&&self->edit(self->search,L"query",self->searchDraft)){
             self->send(O({{L"type",S(L"picker_search")},{L"query",S(*self->searchDraft)}}));
@@ -116,11 +113,11 @@ struct WorkspaceDialogs::Impl:std::enable_shared_from_this<Impl>{
         dialog.PrimaryButtonClick([weak](auto&&,ContentDialogButtonClickEventArgs const& e){
             e.Cancel(true);
             if(auto self=weak.lock();self&&focusedTextComposing(self->xamlRoot))return;
-            if(auto self=weak.lock();self&&!self->closing&&!self->cancelPending&&!self->nameDraft){
+            if(auto self=weak.lock();self&&!self->closing&&!self->cancelPending){
                 auto view=self->view();if(!view.Size())return;
                 if(self->kind==L"toolbar_manager"){
                     auto action=object(view,L"delete_action");if(action.Size())self->send(action);
-                }else if(flag(view,L"can_confirm")){
+                }else if(self->nameDraft||flag(view,L"can_confirm")){
                     self->send(O({{L"type",S(self->kind==L"picker"?L"confirm_tools":L"confirm_toolbar")}}));
                 }
             }
@@ -241,7 +238,7 @@ struct WorkspaceDialogs::Impl:std::enable_shared_from_this<Impl>{
         bool hasName=model.GetNamedValue(L"name",JsonValue::CreateNullValue()).ValueType()==JsonValueType::String;
         name.Visibility(hasName?Visibility::Visible:Visibility::Collapsed);name.Header(box_value(str(model,L"name_label")));
         sync(name,str(model,L"name"),nameDraft);
-        dialog.IsPrimaryButtonEnabled(!nameDraft&&(manager?object(model,L"delete_action").Size()>0:flag(model,L"can_confirm")));
+        dialog.IsPrimaryButtonEnabled(manager?object(model,L"delete_action").Size()>0:bool(nameDraft)||flag(model,L"can_confirm"));
         search.Visibility(picker?Visibility::Visible:Visibility::Collapsed);search.PlaceholderText(str(model,L"search_hint"));
         AutomationProperties::SetName(search,str(model,L"search_hint"));
         sync(search,str(model,L"query"),searchDraft);

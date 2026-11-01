@@ -238,13 +238,14 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
             },true);
         };
         input.TextChanged([validate](auto&&,auto&&){validate();});validate();
-        dialog.PrimaryButtonClick([weak,shown,field,message,action](auto&&,ContentDialogButtonClickEventArgs const& e){
-            e.Cancel(true);auto self=weak.lock();auto input=field.get();if(!self||!input)return;
+        auto submit=[weak,shown,field,message,action]{auto self=weak.lock();auto input=field.get();if(!self||!input)return;
             self->library(action(input.Text()),[weak,shown,message](hstring text){
                 if(!text.empty()){if(auto error=message.get())error.Text(text);return;}
                 if(auto dialog=shown.get())dialog.Hide();if(auto self=weak.lock())self->browse(false);
             });
-        });
+        };
+        dialog.PrimaryButtonClick([submit](auto&&,ContentDialogButtonClickEventArgs const& e){e.Cancel(true);submit();});
+        input.KeyDown([submit](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==winrt::Windows::System::VirtualKey::Enter&&!composingKey(e)){e.Handled(true);submit();}});
         input.Loaded([field](auto&&,auto&&){if(auto input=field.get()){input.Focus(FocusState::Programmatic);input.SelectAll();}});
         data->popup(true);
         try{co_await dialog.ShowAsync();}catch(hresult_error const&){}

@@ -331,7 +331,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         nameLabel=caption();
         input(name);name.HorizontalAlignment(HorizontalAlignment::Stretch);name.MaxLength(256);name.Padding({10,0,10,0});entryBaseline(name);
         AutomationProperties::SetAutomationId(name,L"new-drawing-name");inheritLanguage(name,data);
-        name.TextChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating&&self->name.Text()!=str(self->shown,L"name"))self->send(O({{L"op",S(L"name")},{L"text",S(self->name.Text())}}));});
+        name.TextChanging([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating&&self->name.Text()!=str(self->shown,L"name"))self->send(O({{L"op",S(L"name")},{L"text",S(self->name.Text())}}));});
         name.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock();self&&!composingKey(e)&&e.Key()==winrt::Windows::System::VirtualKey::Enter){e.Handled(true);self->createDrawing();}});
         Grid nameRow;nameRow.ColumnSpacing(RowGap);columns(nameRow,{autoWidth(),star()});column(nameRow,nameLabel,0);column(nameRow,name,1);
 
@@ -470,7 +470,7 @@ Grid searchField;search.Padding({34,0,10,0});entryBaseline(search);searchField.C
         select=primary(L"new-drawing-select",0,sends(op(L"use_preset")));
         actions.Orientation(Orientation::Horizontal);actions.Spacing(8);for(auto const& node:{browserCancel,saveAs,select})actions.Children().Append(node);
         input(saveName);saveName.Width(150);saveName.MaxLength(64);saveName.Padding({10,0,10,0});entryBaseline(saveName);AutomationProperties::SetAutomationId(saveName,L"new-drawing-save-name");inheritLanguage(saveName,data);
-        saveName.TextChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating&&self->saveName.Text()!=str(object(self->drawerView(),L"save"),L"name"))self->send(O({{L"op",S(L"preset_name")},{L"text",S(self->saveName.Text())}}));});
+        saveName.TextChanging([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating&&self->saveName.Text()!=str(object(self->drawerView(),L"save"),L"name"))self->send(O({{L"op",S(L"preset_name")},{L"text",S(self->saveName.Text())}}));});
         saveName.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock();self&&!composingKey(e)&&e.Key()==winrt::Windows::System::VirtualKey::Enter){e.Handled(true);self->send(op(L"save_preset"));}});
         input(saveGroup);choiceColors(data,saveGroup,ControlSurface::Drawing,ChoiceFeedbackMode::Field,winrt::Windows::UI::Text::FontWeights::Bold());saveGroup.Width(150);AutomationProperties::SetAutomationId(saveGroup,L"new-drawing-save-group");
         saveGroup.SelectionChanged([weak](auto&&,auto&&){if(auto self=weak.lock()){
