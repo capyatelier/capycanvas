@@ -228,6 +228,24 @@ function Blend-CaptionSurface{
 
 
 function Shown-Value($Control){$name=$Control.Current.Name;$name.Substring($name.LastIndexOf(" ")+1)}
+function Layers-Footer{
+ $view=Fresh-Model;$group=@($view.layout.groups|Where-Object active -eq 'layers')[0]
+ if(!$group){throw 'Layers footer requires its active docked panel'}
+ $minimum=($view.state.layer_tools.footer|Measure-Object min_width -Maximum).Maximum
+ if($group.bounds.width -ge $minimum){return}
+ $edges=@($group.bounds.x,($group.bounds.x+$group.bounds.width))
+ $distance={param($d)($edges|ForEach-Object {[Math]::Abs($d.bounds.x+$d.bounds.width*.5-$_)}|Measure-Object -Minimum).Minimum}
+ $divider=@($view.layout.dividers|Where-Object {$_.axis -eq 'horizontal' -and !$_.fixed}|Sort-Object {& $distance $_})[0]
+ if(!$divider -or (& $distance $divider) -gt 8){throw 'Layers has no column resize divider'}
+ $bounds=(Control ('divider-'+$divider.id) -Arranged).Current.BoundingRectangle
+ $x=[int]($bounds.X+$bounds.Width/2);$y=[int]($bounds.Y+$bounds.Height/2)
+ $direction=if([Math]::Abs($divider.bounds.x-$edges[0]) -lt [Math]::Abs($divider.bounds.x-$edges[1])){-1}else{1}
+ $delta=[int][Math]::Ceiling(($minimum-$group.bounds.width+2*$divider.bounds.width)*[CapyRowPointer]::GetDpiForWindow([IntPtr]$script:current.hwnd)/96.)
+ [CapyRowPointer]::Initialize([uint32]$review.Id)
+ try{[CapyRowPointer]::Down('mouse',$x,$y);[CapyRowPointer]::Move($x+$direction*$delta,$y)}finally{try{[CapyRowPointer]::Up()}finally{[CapyRowPointer]::Dispose()}}
+ Wait-Until {$view=Model;@($view.layout.groups|Where-Object id -eq $group.id)[0].bounds.width -ge $minimum} 'Layers did not expose its complete footer'
+ Control 'layer-new-selection' -Arranged|Out-Null
+}
 function Workspace-Grips{
  $nodes=@($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)|Where-Object {$_.Current.AutomationId -match '^(group-grip-|panel-footer-grip-|ribbon-grip-|divider-|floating-\d+-)'})
  $ids=@($nodes|ForEach-Object {$_.Current.AutomationId}|Select-Object -Unique)
@@ -263,12 +281,11 @@ function Preference-Numeric{
  Select-Draft $entry $numericDraft;Key 13;Select-Draft $entry $numericDraft
  Surface-Languages 'retained-numeric-validation' {
   $view=Fresh-Model $first $choice.tag;$control=Control 'setting-number-pan_speed' -Arranged
-  if(($control.GetRuntimeId() -join ':') -ne $identity -or (Value $control) -ne $numericDraft -or (Selection $control) -ne $numericDraft -or ($view.state.document_file|ConvertTo-Json -Depth 20 -Compress) -ne $document -or $view.windows_gpu_generation -ne $gpu -or (Read-Snapshot (Settings-File)).pan_speed -ne $pan){throw 'Native invalid numeric draft changed its editor, selected literal, setting or document/GPU ownership'}
+  if(($control.GetRuntimeId() -join ':') -ne $identity -or !$control.Current.HasKeyboardFocus -or (Value $control) -ne $numericDraft -or (Selection $control) -ne $numericDraft -or ($view.state.document_file|ConvertTo-Json -Depth 20 -Compress) -ne $document -or $view.windows_gpu_generation -ne $gpu -or (Read-Snapshot (Settings-File)).pan_speed -ne $pan){throw 'Native invalid numeric draft changed its editor, selected literal, focus, setting or document/GPU ownership'}
   if($control.Current.HelpText -ne (Catalog-Text $choice.tag 'numeric-invalid-expression' 'common')){throw 'Retained typed numeric error accessibility help stayed in an earlier language'}
   $away=(Control 'preferences-heading').Current.BoundingRectangle;[CapyRowPointer]::Hover([int]($away.Left+$away.Width/2),[int]($away.Top+$away.Height/2))
-  Wait-Until {!(Numeric-Tooltip)} 'Previous native numeric tooltip did not dismiss' 10
   $bounds=$control.Current.BoundingRectangle;[CapyRowPointer]::Hover([int]($bounds.Left+$bounds.Width/2),[int]($bounds.Top+$bounds.Height/2))
-  Wait-Until {$tip=Numeric-Tooltip;$tip -and $tip.Current.Name -eq (Catalog-Text $choice.tag 'numeric-invalid-expression' 'common')} 'Retained typed numeric error tooltip did not use the current canonical copy' 10
+  Wait-Until {$tip=Numeric-Tooltip;$tip -and $tip.Current.Name -eq (Catalog-Text $choice.tag 'numeric-invalid-expression' 'common')} 'Retained native error tooltip did not use the current canonical copy' 10
  }
  Use-Window $first;$entry=Control 'setting-number-pan_speed';$entry.SetFocus();Key 27
  Invoke 'CloseButton';Wait-Until {$view=Model;$view -and !$view.preferences} 'Numeric Preferences did not close' 15
@@ -280,6 +297,96 @@ function Property-Panel([string]$Id){
  if(@($view.layout.groups|Where-Object active -eq $Id).Count -eq 0){Invoke-Id $(if(Find ('drawer-tab-'+$Id)){'drawer-tab-'+$Id}else{'panel-tab-'+$Id})}
  Wait-Until {$view=Model;$view -and @($view.layout.groups|Where-Object active -eq $Id).Count} "Native panel did not become active: $Id" 20
 }
+function Copy-Panel([string]$Id,[string]$Probe){
+ $menu={param($Panel)
+  $window=@((Fresh-Model).application_menus|Where-Object id -eq 'window')[0]
+  $items=@($window.model.sections|ForEach-Object {$_}|Where-Object {$_.action.type -eq 'customize' -and $_.action.action.type -eq 'set_panel_visible' -and $_.action.action.panel -eq $Panel})
+  if($items.Count -ne 1 -or !$items[0].enabled){throw "Shared Window menu has no single enabled panel action: $Panel"};$items[0]
+ }
+ $item=& $menu $Id
+ if(!$item.selected){
+  Application-Menu 'window'
+  (Control $item.label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+  Wait-Until {(& $menu $Id).selected} "Window menu did not show panel: $Id" 20
+ }
+ if(@((Fresh-Model).layout.collapsed|Where-Object {$_.groups.icons.panel -contains $Id}).Count){
+  (Control ('column-icon-'+$Id) -Arranged).SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
+  Invoke (Catalog-Text (Fresh-Model).windows_active_tag 'workspace-expand-column-menu' 'workspace') -Name
+  Wait-Until {@((Model).layout.collapsed|Where-Object {$_.groups.icons.panel -contains $Id}).Count -eq 0} "Native column did not expand for panel: $Id" 20
+ }
+ Wait-Until {@((Model).layout.groups|Where-Object {$_.panels -contains $Id}).Count -eq 1} "Shown panel has no single native workspace group: $Id" 20
+ Property-Panel $Id
+ $null=Control $Probe -Arranged
+}
+function Panel-CopySurfaces{
+ Use-Window $first;Copy-Panel 'navigator' 'navigator-overview'
+ $overview=Control 'navigator-overview' -Arranged
+ $navigator=$null;$captions=@($shippedTags|ForEach-Object {Catalog-Text $_ 'commands-show-navigator' 'commands'})
+ for($parent=[System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($overview);$parent -and $parent.Current.ProcessId -eq $review.Id;$parent=[System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($parent)){
+  if($parent.Current.ControlType -eq [System.Windows.Automation.ControlType]::Group -and $captions -contains $parent.Current.Name){$navigator=$parent;break}
+ }
+ if(!$navigator){throw 'Native Navigator has no source-named Grid peer in its actual raw ancestry'}
+ $navigatorIdentity=$navigator.GetRuntimeId() -join ':'
+ $navigation=@('zoom_out','zoom_in','rotate_left','rotate_right','flip_horizontal','flip_vertical')
+ $identities=Native-Identities (@('navigator-overview')+@($navigation|ForEach-Object {'navigator-'+$_}))
+ $baseline=Fresh-Model;$document=$baseline.state.document_file|ConvertTo-Json -Depth 20 -Compress;$gpu=$baseline.windows_gpu_generation
+ Surface-Languages 'retained-navigator-copy' {
+  $view=Fresh-Model $first $choice.tag
+  if($navigator.Current.Name -ne (Catalog-Text $choice.tag 'commands-show-navigator' 'commands') -or (Control 'navigator-overview').Current.Name -ne (Catalog-Text $choice.tag 'native-color-navigator-overview' 'common')){throw 'Retained Navigator container or overview caption stayed stale'}
+  foreach($id in $navigation){$command=@($view.state.commands|Where-Object id -eq $id)[0];$control=Control ('navigator-'+$id);if(!$command -or $control.Current.Name -ne $command.label -or $control.Current.HelpText -ne $command.tooltip){throw "Retained Navigator command copy stayed stale: $id"}}
+  Check-Identities $identities
+  if(($navigator.GetRuntimeId() -join ':') -ne $navigatorIdentity -or ($view.state.document_file|ConvertTo-Json -Depth 20 -Compress) -ne $document -or $view.windows_gpu_generation -ne $gpu){throw 'Navigator publication replaced its container or changed document/GPU ownership'}
+ }
+ Copy-Panel 'palettes' 'palettes-panel'
+ $normal=@('palettes-panel','palette-history','palette-swatches','palette-selector','palette-name','palette-detail','palette-add','palette-history-expand')
+ $identities=Native-Identities $normal
+ $baseline=Fresh-Model;$document=$baseline.state.document_file|ConvertTo-Json -Depth 20 -Compress;$gpu=$baseline.windows_gpu_generation
+ if(!$baseline.palette_panel.can_name){throw 'Palette caption fixture requires an editable current paint color'}
+ $palette=$baseline.state.color_library|ConvertTo-Json -Depth 80 -Compress
+ Surface-Languages 'retained-palettes-copy' {
+  $view=Fresh-Model $first $choice.tag
+  $captions=@{'palettes-panel'=@('workspace-panel-palettes','workspace');'palette-history'=@('native-palettes-recent','common');'palette-swatches'=@('native-palettes-saved','common');'palette-selector'=@('native-palettes-choose','common');'palette-add'=@('native-palettes-add-current','common');'palette-history-expand'=@('native-palettes-expand-history','common')}
+  foreach($id in $captions.Keys){$copy=$captions[$id];if((Control $id).Current.Name -ne (Catalog-Text $choice.tag $copy[0] $copy[1])){throw "Retained Palette caption stayed stale: $id"}}
+  foreach($pair in @(@('palette-history','native-palettes-history-help'),@('palette-detail','native-palettes-hex-help'),@('palette-add','native-palettes-add-current'),@('palette-history-expand','native-palettes-expand-history'))){if((Control $pair[0]).Current.HelpText -ne (Catalog-Text $choice.tag $pair[1] 'common')){throw "Retained Palette help stayed stale: $($pair[0])"}}
+  $selector=(Catalog-Text $choice.tag 'native-choose-palette' 'common').Replace('{ $name }',$view.palette_panel.name)
+  if((Control 'palette-selector').Current.HelpText -ne $selector){throw 'Retained Palette selector help stayed stale'}
+  Check-Identities $identities
+  if(($view.state.document_file|ConvertTo-Json -Depth 20 -Compress) -ne $document -or $view.windows_gpu_generation -ne $gpu -or ($view.state.color_library|ConvertTo-Json -Depth 80 -Compress) -ne $palette){throw 'Palette publication changed authored colors or document/GPU ownership'}
+ }
+ Invoke-Id 'palette-selector';$search=Control 'palette-search' -Arranged;Select-Draft $search $literalName
+ $emptyCaption=Catalog-Text (Fresh-Model).windows_active_tag 'native-palettes-no-matches' 'common'
+ Wait-Until {(Find 'palette-search' -Visible).Current.HasKeyboardFocus -and (Find $emptyCaption -Name -Within (Control 'palettes-panel') -Type ([System.Windows.Automation.ControlType]::Text) -Visible) -and @((Control 'palette-list').FindAll([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button))).Count -eq 0} 'Private Palette query did not acknowledge its native empty result state' 15
+ $selection=Selection $search;$identities=Native-Identities @('palettes-panel','palette-search','palette-list','palette-library-add')
+ Surface-Languages 'retained-palette-query-copy' {
+  $view=Fresh-Model $first $choice.tag;$entry=Control 'palette-search';$caption=Catalog-Text $choice.tag 'native-palettes-find' 'common'
+  if($entry.Current.Name -ne $caption -or (Control 'palette-list').Current.Name -ne (Catalog-Text $choice.tag 'workspace-panel-palettes' 'workspace')){throw 'Retained Palette chooser caption stayed stale'}
+  $add=Control 'palette-library-add';$expected=Catalog-Text $choice.tag 'native-palettes-new-import' 'common'
+  if($add.Current.Name -ne $expected -or $add.Current.HelpText -ne $expected){throw 'Retained Palette new/import caption or help stayed stale'}
+  Check-VisibleText 'palettes-panel' (Catalog-Text $choice.tag 'native-palettes-no-matches' 'common')
+  Check-Identities $identities
+  if((Value $entry) -ne $literalName -or (Selection $entry) -ne $selection -or !$entry.Current.HasKeyboardFocus -or ($view.state.document_file|ConvertTo-Json -Depth 20 -Compress) -ne $document -or $view.windows_gpu_generation -ne $gpu -or ($view.state.color_library|ConvertTo-Json -Depth 80 -Compress) -ne $palette){throw 'Palette chooser publication changed its exact native query/selection/focus, authored colors or document/GPU ownership'}
+ }
+ $search.SetFocus();Key 27;Wait-Until {!(Find 'palette-search' -Visible)} 'Palette chooser did not close with Escape'
+ Invoke-Id 'palette-name';$editor=Control 'palette-name-editor' -Arranged;$editorIdentity=$editor.GetRuntimeId() -join ':';$editor.SetFocus();Key 27
+ Wait-Until {!(Find 'palette-name-editor' -Visible)} 'Palette name editor did not cancel before language publication'
+ Surface-Languages 'retained-palette-editor-copy' {
+  Invoke-Id 'palette-name';$entry=Control 'palette-name-editor' -Arranged
+  if($entry.Current.Name -ne (Catalog-Text $choice.tag 'native-palettes-name' 'common') -or ($entry.GetRuntimeId() -join ':') -ne $editorIdentity){throw 'Retained Palette name editor caption stayed stale or its native identity changed'}
+  $entry.SetFocus();Key 27;Wait-Until {!(Find 'palette-name-editor' -Visible)} 'Palette name editor did not cancel after caption acceptance'
+  $view=Fresh-Model $first $choice.tag
+  if(($view.state.document_file|ConvertTo-Json -Depth 20 -Compress) -ne $document -or $view.windows_gpu_generation -ne $gpu -or ($view.state.color_library|ConvertTo-Json -Depth 80 -Compress) -ne $palette){throw 'Palette caption-only edit/cancel changed authored colors or document/GPU ownership'}
+ }
+ Copy-Panel 'stats' 'renderer-stat-0';$record=Reveal 'stroke-recording';$recordIdentity=$record.GetRuntimeId() -join ':'
+ $idleHelp=@($shippedTags|ForEach-Object {Catalog-Text $_ 'native-color-record-tablet' 'common'})
+ if($idleHelp -notcontains $record.Current.HelpText){throw 'Diagnostics copy fixture requires the ordinary idle recording control'}
+ $baseline=Fresh-Model;$document=$baseline.state.document_file|ConvertTo-Json -Depth 20 -Compress;$gpu=$baseline.windows_gpu_generation
+ Surface-Languages 'retained-diagnostics-record-help' {
+  $record=Reveal 'stroke-recording';$view=Fresh-Model $first $choice.tag
+  if($record.Current.HelpText -ne (Catalog-Text $choice.tag 'native-color-record-tablet' 'common') -or ($record.GetRuntimeId() -join ':') -ne $recordIdentity){throw 'Retained idle Diagnostics record help stayed stale or the control was replaced'}
+  if(($view.state.document_file|ConvertTo-Json -Depth 20 -Compress) -ne $document -or $view.windows_gpu_generation -ne $gpu){throw 'Diagnostics copy publication changed document/GPU ownership'}
+ }
+}
+
 function Filter-Options{
  $box=Control 'filter-category';$pattern=$box.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern);$pattern.Expand()
  $hit=@{items=@()};$count=@((Fresh-Model).state.filter_categories).Count
@@ -300,6 +407,9 @@ function Filter-Surfaces{
  $ids=@('filter-picker','filter-category','filter-search-toggle','filter-list')+@($baseline.state.adjustments|ForEach-Object {'filter-'+$_.id})
  $identities=Native-Identities $ids;$optionIds=@(Filter-Options|ForEach-Object {$_.GetRuntimeId() -join ':'})
  $selectedIdentity=(Selected-Option (Control 'filter-category')).GetRuntimeId() -join ':'
+ $bundled=@($baseline.state.adjustments|Where-Object bundled_preview);if(!$bundled.Count){throw 'Filter copy fixture requires actual bundled previews'}
+ $previewIdentities=@{};$ready=@($shippedTags|ForEach-Object {Catalog-Text $_ 'native-header-ready' 'common'});$filterList=Control 'filter-list' -Arranged
+ foreach($result in $bundled){$image=Control ('filter-preview-'+$result.id) -Within $filterList;Wait-Until {$ready -contains $image.Current.ItemStatus} "Bundled preview never became actually ready: $($result.id)" 20;$previewIdentities[$result.id]=$image.GetRuntimeId() -join ':'}
  Surface-Languages 'retained-filter-results' {
   $view=Fresh-Model $first $choice.tag;Filter-Owner $view;Check-Identities $identities
   foreach($id in @('filter-picker','filter-list')){if((Control $id).Current.Name -ne (Catalog-Text $choice.tag 'workspace-panel-adjustments' 'workspace')){throw "Retained filter container accessibility title stayed stale: $id"}}
@@ -309,6 +419,7 @@ function Filter-Surfaces{
   foreach($i in 0..($options.Count-1)){if(($options[$i].GetRuntimeId() -join ':') -ne $optionIds[$i] -or $options[$i].Current.Name -ne $view.state.filter_categories[$i].label){throw 'Retained filter category option identity or caption stayed stale'}}
   if((Control 'filter-category').Current.Name -ne (Catalog-Text $choice.tag 'native-color-category' 'common') -or (Control 'filter-search-toggle').Current.Name -ne (Catalog-Text $choice.tag 'resources-search-filters' 'resources')){throw 'Filter category or search toggle retained an earlier language'}
   foreach($result in $view.state.adjustments){$row=Control ('filter-'+$result.id);$status=if($result.id -eq $filterSelected){Catalog-Text $choice.tag 'native-search-selected' 'common'}else{''};if($row.Current.Name -ne $result.label -or $row.Current.ItemStatus -ne $status){throw 'Filter result caption or selected accessibility status stayed stale'}}
+  foreach($id in $previewIdentities.Keys){$result=@($view.state.adjustments|Where-Object id -eq $id)[0];$image=Control ('filter-preview-'+$id) -Within $filterList;if(!$result.bundled_preview -or ($image.GetRuntimeId() -join ':') -ne $previewIdentities[$id] -or $image.Current.Name -ne $result.label -or $image.Current.ItemStatus -ne (Catalog-Text $choice.tag 'native-header-ready' 'common')){throw "Retained ready bundled preview identity or current copy changed: $id"}}
   Check-VisibleText 'filter-category' $view.state.filter_categories[0].label
  }
  Invoke-Id 'filter-search-toggle';Wait-Until {$view=Model;$view -and $null -ne $view.state.filter_picker.search -and (Find 'filter-search' -Visible)} 'Filter search did not open its real native editor' 15
@@ -353,7 +464,7 @@ function Property-Owner($View){
 }
 function Property-Surfaces{
  Use-Window $first
- & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $first.hwnd -Action Resize -Width 1550 -Height 1400
+ & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $first.hwnd -Action Resize -Width 1550 -Height 1400 -StateDirectory $run
  Property-Filter 'color_balance'
  $view=Fresh-Model
  $midtones=@($view.state.layer_properties.pages|Where-Object id -eq 'midtones')[0]
@@ -442,22 +553,28 @@ function Property-Surfaces{
  }
  Select-Draft (Control 'edit-color-intensity-entry') '1.25';Key 13
  Wait-Until {!(Find 'edit-color-intensity-entry')} 'Floating Edit Color did not accept the corrected EV'
- $identities=Native-Identities @($colorId,'edit-color-form-0','edit-color-intensity','edit-color-apply','edit-color-error')
+ $identities=Native-Identities @($colorId,'edit-color-form-0','edit-color-intensity','edit-color-apply')
  Surface-Languages 'retained-hdr-color-intensity-retry' {
   $view=Fresh-Model $first $choice.tag;Property-Owner $view;Check-Identities $identities
   $intensity=Control 'edit-color-intensity'
   if(!(Control 'edit-color-apply').Current.IsEnabled -or !$intensity.Current.Name.EndsWith('+1.25 EV')){throw 'Floating Edit Color retry did not accept the corrected EV'}
-  if(!$intensity.Current.Name.StartsWith((Catalog-Text $choice.tag 'native-color-intensity-ev' 'common')) -or (Control 'edit-color-error').Current.Name){throw 'Floating Edit Color retry kept a stale refusal or caption'}
+  if(!$intensity.Current.Name.StartsWith((Catalog-Text $choice.tag 'native-color-intensity-ev' 'common')) -or (Find 'edit-color-error' -Visible)){throw 'Floating Edit Color retry kept a stale refusal or caption'}
  }
  Invoke-Id 'edit-color-cancel';Wait-Until {!(Find 'edit-color-apply')} 'Cancel did not close Edit Color'
  Use-Window $textWindow
 }
 
 function Toolbar-GroupedLanguageSurface{
- Use-Window $first
+ $owners=@(Windows|Where-Object {(Model $_).windows_workspace.id -eq 'builtin:workspace:photographer'})
+ if($owners.Count -gt 1){throw 'Photo workspace has more than one owned window'}
+ $targetWindow=if($owners.Count){$owners[0]}else{$first}
+ Use-Window $targetWindow
+ $window=$root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)
+ $window.SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
+ Wait-Until {$window.Current.WindowVisualState -eq [System.Windows.Automation.WindowVisualState]::Maximized} 'Grouped toolbar window did not maximize'
  $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'exercise-toolbar-components.ps1'),[ref]$null,[ref]$null)
  $method=@($ast.FindAll({param($n)$n-is[Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-eq'Switch-Workspace'},$true));if($method.Count-ne1){throw 'Expected original workspace selector'};Invoke-Expression $method[0].Extent.Text
- Switch-Workspace 'Photo' 'builtin:workspace:photographer'
+ if((Model).windows_workspace.id -ne 'builtin:workspace:photographer'){Switch-Workspace 'Photo' 'builtin:workspace:photographer'}
  $pencil=@((Fresh-Model).state.commands|Where-Object id -eq 'pencil')
  if($pencil.Count-ne1-or!$pencil[0].enabled){throw 'Shared current Pencil command unavailable'}
  Search-Command $pencil[0].label 'pencil'
@@ -494,22 +611,24 @@ function Toolbar-GroupedLanguageSurface{
  if($opacityCurrent.ProcessId-ne$review.Id){throw 'Arranged inline Opacity belongs to another process'}
  $setup=[ordered]@{preset=$compact.state.brush.preset;settings=@($compact.state.tool_settings.id);tool_options_id=$options[0].id;style=$compactOptions[0].control.style;pencil_runtime=($pencilTile.GetRuntimeId()-join':');opacity_runtime=($entry.GetRuntimeId()-join':');opacity_bounds=$opacityCurrent.BoundingRectangle.ToString();opacity_offscreen=$opacityCurrent.IsOffscreen;opacity_process=$opacityCurrent.ProcessId;inline_fit='actual mandatory Arranged predicate passed; no assumed width'}
  $setupPath=Join-Path $run 'grouped-toolbar-prerequisites.json';$setupTemporary=$setupPath+'.tmp-'+[guid]::NewGuid().ToString('N')
- [IO.File]::WriteAllText($setupTemporary,($setup|ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false));[IO.File]::Move($setupTemporary,$setupPath,$true)
+ [IO.File]::WriteAllText($setupTemporary,($setup|ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false));[IO.File]::Move($setupTemporary,$setupPath)
  $base=Fresh-Model;$field=@($base.state.tool_settings|Where-Object id -eq 'opacity')[0]
- if($field.group_id-ne'tool-setting-group-blending'-or!$field.group){throw 'Actual grouped opacity prerequisite absent'}
+ if($field.group_id-ne'tool-setting-group-blending'-or!$field.group-or$field.value-ne1-or$field.numeric.scale-ne100-or$field.numeric.unit-cne'%'-or$field.numeric.digits-ne1){throw 'Actual grouped opacity prerequisite absent'}
  Select-Draft $entry $numericDraft
  $toolbarIdentity=$entry.GetRuntimeId()-join':';$toolbarSelection=Selection $entry
  Invoke-Id ('toolbar-more-'+$options[0].id)
  Wait-Until {$v=Model;$v.state.customization.drawer-and(Find 'tool-drawer' -Visible)} 'ToolOptions did not open its original overflow drawer' 8
  $drawer=Control 'tool-drawer';$popupIdentity=$drawer.GetRuntimeId()-join':'
  $drawerEntry=Control 'tool-setting-opacity' -Within $drawer
+ $drawerValue='100'
+ $drawerEntry.SetFocus();Wait-Until {$drawerEntry.Current.HasKeyboardFocus -and (Value $drawerEntry) -ceq $drawerValue} 'Grouped numeric editor did not own its current edit value'
  Select-Draft $drawerEntry $numericDraft
  $drawerIdentity=$drawerEntry.GetRuntimeId()-join':';$drawerSelection=Selection $drawerEntry
  $base=Fresh-Model;$document=$base.state.document_file|ConvertTo-Json -Depth 20 -Compress;$gpu=$base.windows_gpu_generation;$brush=$base.state.brush|ConvertTo-Json -Depth 12 -Compress
  $schema=@($base.state.tool_settings|ForEach-Object{[ordered]@{id=$_.id;group_id=$_.group_id;numeric=$_.numeric;value=$_.value}})|ConvertTo-Json -Depth 12 -Compress
  $originalGroup=@($base.state.tool_settings|Where-Object id -eq 'opacity')[0].group;$languageState=@{group_changed=$false};$records=[Collections.Generic.List[object]]::new()
  Surface-Languages 'retained-grouped-toolbar-draft-and-overflow' {
-  $v=Fresh-Model $first $choice.tag;$f=@($v.state.tool_settings|Where-Object id -eq 'opacity')[0]
+  $v=Fresh-Model $targetWindow $choice.tag;$f=@($v.state.tool_settings|Where-Object id -eq 'opacity')[0]
   if(($v.state.document_file|ConvertTo-Json -Depth 20 -Compress)-cne$document-or$v.windows_gpu_generation-ne$gpu-or($v.state.brush|ConvertTo-Json -Depth 12 -Compress)-cne$brush){throw 'Language changed authored history, brush values or GPU owner'}
   if((@($v.state.tool_settings|ForEach-Object{[ordered]@{id=$_.id;group_id=$_.group_id;numeric=$_.numeric;value=$_.value}})|ConvertTo-Json -Depth 12 -Compress)-cne$schema){throw 'Language changed stable tool settings schema or values'}
   $toolbar=Control 'toolbar-setting-opacity';$popup=Control 'tool-drawer';$edit=Control 'tool-setting-opacity' -Within $popup
@@ -522,10 +641,16 @@ function Toolbar-GroupedLanguageSurface{
   if(!$heading-or$heading.Current.ProcessId-ne$review.Id-or$f.group_id-ne'tool-setting-group-blending'){throw 'Grouped popup heading does not match shared current stablegroup/currentcopy'}
   if($f.group-cne$originalGroup){$languageState.group_changed=$true}
   $records.Add(@{tag=$choice.tag;group_id=$f.group_id;group_caption=$f.group;toolbar_runtime=$toolbarIdentity;popup_runtime=$popupIdentity;popup_edit_runtime=$drawerIdentity;draft=$numericDraft;focus=$edit.Current.HasKeyboardFocus})
- }
+ } -Window $targetWindow
  if(!$languageState.group_changed){throw 'No actual localized group caption change observed'}
- $records|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $run 'grouped-toolbar-language-proof.json')
- (Control 'tool-setting-opacity' -Within (Control 'tool-drawer')).SetFocus();Key 27
+ $records|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $run 'grouped-toolbar-language-proof.json') -Encoding UTF8
+ $cancelEntry=Control 'tool-setting-opacity' -Within (Control 'tool-drawer');$cancelEntry.SetFocus()
+ Wait-Until {$cancelEntry.Current.HasKeyboardFocus -and (Value $cancelEntry) -ceq $numericDraft -and ($cancelEntry.GetRuntimeId()-join':') -ceq $drawerIdentity} 'Grouped numeric draft did not acknowledge cleanup focus' 8
+ Key 27
+ Wait-Until {$entry=Find 'tool-setting-opacity' -Within (Control 'tool-drawer');$entry -and $entry.Current.HasKeyboardFocus -and (Value $entry) -ceq $drawerValue -and (Model).state.customization.drawer} 'Escape did not cancel only the focused numeric draft' 8
+ $cancelled=Fresh-Model
+ if(($cancelled.state.document_file|ConvertTo-Json -Depth 20 -Compress)-cne$document-or$cancelled.windows_gpu_generation-ne$gpu-or($cancelled.state.brush|ConvertTo-Json -Depth 12 -Compress)-cne$brush-or(@($cancelled.state.tool_settings|ForEach-Object{[ordered]@{id=$_.id;group_id=$_.group_id;numeric=$_.numeric;value=$_.value}})|ConvertTo-Json -Depth 12 -Compress)-cne$schema){throw 'Numeric cancellation changed authored state or tool settings'}
+ Focus-Canvas;Key 27
  Wait-Until {$null-eq(Model).state.customization.drawer} 'Escape did not close grouped ToolOptions drawer' 8
 }
 
@@ -534,6 +659,23 @@ function Tool-Surfaces{
  Use-Window $first
  Search-Command 'transform' 'scale_rotate'
  Wait-Until {$view=Model;$view -and $view.state.layer_tools.tool -eq 'transform' -and (Find 'tool-setting-transform_x') -and (Find 'tool-choice-transform-reference')} 'Transform did not expose retained native position and anchor controls' 30
+ $groups=@((Fresh-Model).state.tool_set.groups);$tooltipIndex=-1;for($i=0;$i -lt $groups.Count;$i++){if($groups[$i].enabled -and !$groups[$i].disabled_reason){$tooltipIndex=$i;break}}
+ if($tooltipIndex -lt 0){throw 'Tool Set tooltip fixture requires an enabled group with no disabled reason'}
+ $tooltipId='tool-group-'+$tooltipIndex;Copy-Panel 'brushes' $tooltipId;$tooltipControl=Control $tooltipId -Arranged;$tooltipIdentity=$tooltipControl.GetRuntimeId() -join ':'
+ $baseline=Fresh-Model;$tooltipAction=$baseline.state.tool_set.groups[$tooltipIndex].action|ConvertTo-Json -Depth 20 -Compress;$tooltipDocument=$baseline.state.document_file|ConvertTo-Json -Depth 20 -Compress;$tooltipGpu=$baseline.windows_gpu_generation
+ $away=$root.Current.BoundingRectangle;[CapyRowPointer]::Hover([int]($away.X+20),[int]($away.Y+20));Wait-Until {@(Capy-Tooltips $review.Id).Count -eq 0} 'Previous tooltip did not retire before keyboard-only Tool Set copy acceptance'
+ Focus-Keyboard $tooltipControl
+ Wait-Until {$tips=@(Capy-Tooltips $review.Id);$tips.Count -eq 1 -and $tips[0].Current.Name -eq $baseline.state.tool_set.groups[$tooltipIndex].label} 'Tool Set initial keyboard tooltip is not its exact source caption' 10
+ Focus-Canvas;Wait-Until {@(Capy-Tooltips $review.Id).Count -eq 0} 'Initial Tool Set keyboard tooltip did not retire'
+ Surface-Languages 'retained-toolset-keyboard-tooltip' {
+  $view=Fresh-Model $first $choice.tag;$item=$view.state.tool_set.groups[$tooltipIndex];$control=Control $tooltipId -Arranged
+  if(!$item.enabled -or $item.disabled_reason -or ($item.action|ConvertTo-Json -Depth 20 -Compress) -ne $tooltipAction -or ($control.GetRuntimeId() -join ':') -ne $tooltipIdentity){throw 'Tool Set tooltip target/action/reason changed during copy publication'}
+  Focus-Keyboard $control
+  Wait-Until {$tips=@(Capy-Tooltips $review.Id);$tips.Count -eq 1 -and $tips[0].Current.Name -eq $item.label} 'Retained keyboard Tool Set tooltip kept an earlier exact caption' 10
+  Focus-Canvas;Wait-Until {@(Capy-Tooltips $review.Id).Count -eq 0} 'Retained Tool Set keyboard tooltip did not retire'
+  $view=Fresh-Model $first $choice.tag;if(($view.state.document_file|ConvertTo-Json -Depth 20 -Compress) -ne $tooltipDocument -or $view.windows_gpu_generation -ne $tooltipGpu){throw 'Tool Set tooltip copy acceptance changed document/GPU ownership'}
+ }
+ Property-Panel 'tool_settings'
  $entry=Control 'tool-setting-transform_x' -Arranged;Select-Draft $entry $numericDraft
  $baseline=Fresh-Model;$document=$baseline.state.document_file|ConvertTo-Json -Depth 20 -Compress;$gpu=$baseline.windows_gpu_generation
  $settings=@($baseline.state.tool_settings|ForEach-Object {@{id=$_.id;value=$_.value}})|ConvertTo-Json -Depth 8 -Compress
@@ -622,7 +764,10 @@ function Notice-Surface{
  Invoke-Id 'preference-page-appearance'
  $japanese=1+[Array]::IndexOf($shippedTags,'ja')
  if($japanese -lt 1){throw 'The registered Japanese locale is missing'}
- Language-Choice $japanese|Out-Null;Language-Choice 1|Out-Null
+ Language-Choice $japanese|Out-Null
+ Wait-Until {(Model $first).windows_active_tag -eq 'ja'} 'Notice owner did not complete Japanese preparation' 30
+ Language-Choice 1|Out-Null
+ Wait-Until {(Model $first).windows_active_tag -eq 'en'} 'Notice owner did not restore the English baseline' 30
  Use-Window $first
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  Menu-Command 'file' 'open_document'
@@ -650,6 +795,10 @@ function Notice-Surface{
    $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Normal)
    Wait-Until {$root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Current.WindowVisualState -eq [System.Windows.Automation.WindowVisualState]::Normal} 'The notice window did not restore before resize'
    Resize-Window $first 1400 950
+   $narrowBaseline=Fresh-Model;$narrowDensity=[CapyRowPointer]::GetDpiForWindow([IntPtr]$first.hwnd)/96.
+   if($narrowBaseline.layout.work_area.width-le0-or$narrowBaseline.layout.viewport[0]-le0){throw 'The notice resize baseline has no acknowledged work area'}
+   $narrowWidth=[int][Math]::Ceiling($root.Current.BoundingRectangle.Width-($narrowBaseline.layout.viewport[0]-600)*$narrowDensity)
+   Resize-Window $first $narrowWidth 950
   }else{
    $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
    Wait-Until {$root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Current.WindowVisualState -eq [System.Windows.Automation.WindowVisualState]::Maximized} 'The wide notice window did not maximize'
@@ -681,10 +830,11 @@ function Notice-Surface{
    pre_contact_layer_locked=$view.state.layer_tools.editing_layer.locked;expected_locked_after_publication=$locked}|ConvertTo-Json -Depth 30|Set-Content (Join-Path $run ("notice-geometry-$caseName.json"))
   $at=@([int]($bounds.X+$camera.work_area[0]+$camera.work_area[2]*.5),[int]($bounds.Y+$camera.work_area[1]+$camera.work_area[3]*.5))
   $notice=@{before=$null;updated=$null;bounds=$null;stable=0;height=$null}
+  $previousNotice=(Model).state.notice;$previousNoticeId=if($previousNotice){$previousNotice.id}else{$null}
   [CapyRowPointer]::Down('pen',$at[0],$at[1]);[CapyRowPointer]::Up()
   Wait-Until {
    $view=Model
-   if(@($view.state.notice.actions).Count -ne 3 -or !(Find 'canvas-notice-action-add_mask' -Visible)){return $false}
+   if(!$view.state.notice -or $view.state.notice.id -eq $previousNoticeId -or @($view.state.notice.actions).Count -ne 3 -or !(Find 'canvas-notice-action-add_mask' -Visible)){return $false}
    $notice.before=$view.state.notice;$true
   } 'The image refusal did not publish three visible actions'
   $before=$notice.before;$clock=[Diagnostics.Stopwatch]::StartNew();$timing=@{case=$caseName;published_utc=[DateTime]::UtcNow.ToString('o')}
@@ -707,7 +857,7 @@ function Notice-Surface{
   }
   Wait-Until {
    $frame=Find 'canvas-notice' -Visible;$text=if($frame){Find 'canvas-notice-text' -Within $frame -Visible}
-   if(!$frame -or !$text -or $text.Current.Name -ne $updated.text -or $frame.Current.Name -ne $updated.text){return $false}
+   if(!$frame -or !$text -or $text.Current.Name -ne $updated.text -or $frame.Current.Name -ne $updated.name){return $false}
    $bounds=$frame.Current.BoundingRectangle
    $textBounds=$text.Current.BoundingRectangle;$actionBounds=@()
    if(!$bounds.Contains($textBounds)){return $false}
@@ -751,23 +901,28 @@ function Notice-Surface{
    $timing.capture_copy_completed_ms=$clock.Elapsed.TotalMilliseconds
    if(!$updated.actions[0].accent -or @($updated.actions|Where-Object accent).Count-ne1){throw 'The localized notice did not mark its first suggested action'}
    $density=[CapyRowPointer]::GetDpiForWindow([IntPtr]$first.hwnd)/96.
-   $palette=$notice.palette;$nativeColors=@()
+   $palette=$notice.palette;$nativeColors=@();$glass=@($palette.glass.panel)
+   if($glass.Count-ne4-or@($glass|Where-Object {[double]::IsNaN($_)-or[double]::IsInfinity($_)-or$_-lt0-or$_-gt1}).Count){throw 'The notice panel did not publish valid unit RGBA'}
+   $rgba=@($glass|ForEach-Object {[int][Math]::Round($_*255,0,[MidpointRounding]::AwayFromZero)})
+   $minimum=@(0..2|ForEach-Object {[int][Math]::Floor($rgba[$_]*$rgba[3]/255.)});$maximum=@(0..2|ForEach-Object {[int][Math]::Ceiling($rgba[$_]*$rgba[3]/255.+255-$rgba[3])})
    foreach($offer in $updated.actions){
     $box=@($notice.layout.actions|Where-Object id -eq $offer.id)[0].bounds
-    $role=if($offer.accent -and $offer.enabled){'accent'}else{'panel'};$expected=[Drawing.ColorTranslator]::FromHtml($palette.$role)
+    $expected=if($offer.accent){[Drawing.ColorTranslator]::FromHtml($palette.accent).ToArgb()}else{@{rgba=$rgba;minimum=$minimum;maximum=$maximum}}
     $point=@([int]($box.Left+6*$density),[int]($box.Y+$box.Height/2))
     $pixel=$bitmap.GetPixel($point[0]-[int]$windowBounds.X,$point[1]-[int]$windowBounds.Y)
-    if($pixel.ToArgb()-ne$expected.ToArgb()){throw 'The retained localized notice action did not render its shared accent or ordinary fill'}
-    $nativeColors+=@{id=$offer.id;accent=$offer.accent;point=$point;pixel=$pixel.ToArgb();expected=$expected.ToArgb()}
+    $valid=$pixel.A-eq255
+    if($offer.accent){$valid=$valid-and$pixel.ToArgb()-eq$expected}else{$channels=@([int]$pixel.R,[int]$pixel.G,[int]$pixel.B);foreach($i in 0..2){$valid=$valid-and$channels[$i]-ge$minimum[$i]-and$channels[$i]-le$maximum[$i]}}
+    if(!$valid){throw ("The retained notice action $($offer.id) sampled ARGB $($pixel.ToArgb()) outside its shared fill: "+($expected|ConvertTo-Json -Compress))}
+    $nativeColors+=@{id=$offer.id;accent=$offer.accent;point=$point;pixel=$pixel.ToArgb();expected=$expected}
    }
    $timing.native_action_colors=$nativeColors
    if(!(Find 'canvas-notice' -Visible)){throw 'The notice expired before its composed capture completed'}
    Wait-Until {$view=Model;$view -and !$view.state.notice} 'Relabeling restarted the original notice deadline' 4
    if($clock.Elapsed.TotalSeconds -gt 4.8){throw "Relabeling extended the notice deadline to $($clock.Elapsed.TotalSeconds) seconds"}
    $bitmap.Save((Join-Path $run ("notice-localized-$caseName.png")),[Drawing.Imaging.ImageFormat]::Png)
-   $updated|ConvertTo-Json -Depth 6|Set-Content (Join-Path $run ("notice-localized-$caseName.json"))
+   $updated|ConvertTo-Json -Depth 6|Set-Content (Join-Path $run ("notice-localized-$caseName.json")) -Encoding UTF8
    $notice.layout|ConvertTo-Json -Depth 6|Set-Content (Join-Path $run ("notice-layout-$caseName.json"))
-  }finally{if($graphics){$graphics.Dispose()};if($bitmap){$bitmap.Dispose()};[CapyWindowApi]::SetThreadDpiAwarenessContext($dpi)|Out-Null;$timing.final_ms=$clock.Elapsed.TotalMilliseconds;$timing|ConvertTo-Json|Set-Content (Join-Path $run ("notice-timing-$caseName.json"))}
+  }finally{if($graphics){$graphics.Dispose()};if($bitmap){$bitmap.Dispose()};[CapyWindowApi]::SetThreadDpiAwarenessContext($dpi)|Out-Null;$timing.final_ms=$clock.Elapsed.TotalMilliseconds;$timing|ConvertTo-Json -Depth 6|Set-Content (Join-Path $run ("notice-timing-$caseName.json"))}
   if($locked){(Control 'layer-lock').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle();Wait-Until {!(Model).state.layer_tools.editing_layer.locked} 'The image layer did not unlock'}
  }
 }

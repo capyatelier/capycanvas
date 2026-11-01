@@ -117,12 +117,12 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
             if(previous!=key){previous=key;rebuild(items,group);}
             auto const& buttons=group?groupButtons:subtoolButtons;auto const& titles=group?groupTitles:subtoolTitles;auto shells=group?groups.Children():list.Children();
             for(uint32_t i=0;i<items.Size();i++){
-                auto item=items.GetObjectAt(i);auto title=str(item,L"label");titles[i].Text(title);AutomationProperties::SetName(buttons[i],title);
+                auto item=items.GetObjectAt(i);auto title=str(item,L"label");bool titleChanged=titles[i].Text()!=title;if(titleChanged)titles[i].Text(title);AutomationProperties::SetName(buttons[i],title);
                 bool brush=!group&&previews[i];bool active=flag(item,L"selected");buttons[i].Background(active?(brush?data->brush(L"selection"):selected(data)):clear());
                 if(brush){for(auto const& surface:captionSurfaces[i])surface.Background(data->tint(active?L"selection":L"panel",uint8_t(std::lround(num(object(data->catalog,L"tool_preview_metrics"),L"caption_opacity")*255))));if(themeChanged)previews[i].Source(BrushPreview(int(num(item,L"preview")),data->theme()));}
                 bool enabled=flag(item,L"enabled",true);auto reason=str(item,L"disabled_reason");
                 buttons[i].IsEnabled(enabled);buttons[i].IsHitTestVisible(enabled);buttons[i].Opacity(enabled?1:.36);buttons[i].Content().as<UIElement>().Opacity(enabled&&!reason.empty()?.36:1);
-                if(AutomationProperties::GetHelpText(buttons[i])!=reason){AutomationProperties::SetHelpText(buttons[i],reason);tooltip(shells.GetAt(i),reason.empty()?title:reason);}
+                if(titleChanged||AutomationProperties::GetHelpText(buttons[i])!=reason){AutomationProperties::SetHelpText(buttons[i],reason);tooltip(shells.GetAt(i),reason.empty()?title:reason);}
                 if(!group)buttons[i].MinHeight(brush?num(object(data->catalog,L"tool_preview_metrics"),L"minimum_height"):selection?32:44);
                 AutomationProperties::SetItemStatus(buttons[i],active?data->caption(L"search",L"selected"):hstring());
             }

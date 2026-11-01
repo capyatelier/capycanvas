@@ -31,7 +31,7 @@ function Text-Scale{
 }
 function Resize-Window($Window,[int]$Width,[int]$Height){
  Use-Window $Window
- & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $Window.hwnd -Action Resize -Width $Width -Height $Height
+ & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $Window.hwnd -Action Resize -Width $Width -Height $Height -StateDirectory $run
  Wait-Until {$actual=$root.Current.BoundingRectangle;[Math]::Abs($actual.Width-$Width) -lt 2 -and [Math]::Abs($actual.Height-$Height) -lt 2} 'Native window did not acknowledge its narrow dimensions' 15
 }
 function Dismiss-NarrowPreferences{
@@ -604,10 +604,7 @@ try{
  Wait-Until {$view=Model;$view -and @($view.state.layers|Where-Object {$_.id -eq $layer -and $_.has_mask}).Count -eq 1 -and (Find ('layer-'+$layer+'-mask')) -and (Find ('layer-'+$layer+'-mask-thumbnail'))} 'Private named layer did not expose its real mask controls' 30
  Invoke-Id ('layer-'+$layer+'-content')
  Wait-Until {$view=Model;$view -and $view.state.layer_tools.editing_layer.id -eq $layer -and !(@($view.state.layers|Where-Object id -eq $layer)[0].mask_selected)} 'Native content thumbnail did not select the drawing target after mask setup' 15
- Open-Search
- (Control 'command-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('rectangle select')
- Wait-Until {(Search).query -eq 'rectangle select' -and (Find 'command-result-0').Current.Name -eq ((Model).state.commands|Where-Object id -eq 'rectangle_select').label} 'Rectangle Select did not resolve in native command search' 15
- Key 13
+ Search-Command 'rectangle select' 'rectangle_select'
  Wait-Until {(Model).state.layer_tools.tool.selection.kind -eq 'rectangle' -and !(Find 'command-search' -Visible)} 'Rectangle Select did not activate before the retained selection proof' 15
  Menu-Command 'select' 'select_all'
  Wait-Until {$view=Model;$view.state.layer_tools.has_selection -and $view.state.canvas_bar.context.kind -eq 'selection' -and ($view.state.canvas_bar.anchor -join ',') -eq '-1,-1,65,65'} 'Select All did not publish a nonempty canvas selection and conservative boundary-sampling bounds' 15
@@ -623,6 +620,8 @@ try{
   'layer-blend'=@('native-layers-blend','common');'layer-list'=@('workspace-panel-layers','workspace')
   'layer-alpha_lock'=@('resources-layer-menu-alpha-lock','resources');'layer-lock'=@('resources-layer-menu-lock-editing','resources')
  }
+ foreach($panel in (Fresh-Model).panels){foreach($tile in $panel.tiles|Where-Object {$_.control.kind -eq 'divider'}){$workspaceCopies[('tile-'+$panel.id+'-'+$tile.id)]=@('workspace-tool-divider','workspace')}}
+ Layers-Footer
  $workspaceIdentities=Native-Identities (@($workspaceCopies.Keys)+@('layer-opacity','layer-attachment',('layer-row-'+$layer),('layer-'+$layer+'-name'),('layer-'+$layer+'-selection'),('layer-'+$layer+'-drag'),('layer-'+$layer+'-thumbnail'),('layer-'+$layer+'-mask'),('layer-'+$layer+'-mask-thumbnail')))
  Workspace-Grips
  $groups=@(((Fresh-Model).application_menus|Where-Object id -eq 'window').model.sections|ForEach-Object {$_})
@@ -719,15 +718,14 @@ try{
  Preference-Numeric
  Shortcut-Surfaces
  Property-Surfaces
- foreach($panel in (Fresh-Model).panels){
-  $pen=@($panel.tiles|Where-Object {$_.control.command -eq 'pen'})[0]
-  if($pen){Invoke-Id "tile-$($panel.id)-$($pen.id)";break}
- }
+ Panel-CopySurfaces
+ Use-Window $textWindow
+ Search-Command 'Pen' 'pen'
  Wait-Until {$view=Model;$view -and ($view.state.commands|Where-Object id -eq 'pen').selected -and $view.brush_ready} 'Pen did not become ready for continued drawing' 45
  Open-Search
  (Control 'command-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('brush size')
- Wait-Until {(Search).query -eq 'brush size' -and (Find 'command-result-0')} 'Brush size parameter did not resolve' 15
- Key 13;Wait-Until {$parameter=(Search).parameter;$parameter -and !(Find 'command-result-0' -Visible) -and (Find 'command-search' -Visible).Current.Name -eq $parameter.label} 'Brush size parameter entry did not open' 15
+ Wait-Until {(Search).query -eq 'brush size' -and (Search).results[0].id -ceq 'tool_setting.size' -and (Search).results[0].enabled -and (Find 'command-result-0').Current.Name -ceq (Search).results[0].label -and (Find 'command-result-0').Current.IsEnabled} 'Brush size parameter did not resolve' 15
+ Invoke-Id 'command-result-0';Wait-Until {$parameter=(Search).parameter;$parameter -and $parameter.id -ceq 'tool_setting.size' -and !(Find 'command-result-0' -Visible) -and (Find 'command-search' -Visible).Current.Name -eq $parameter.label} 'Brush size parameter entry did not open' 15
  (Control 'command-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('1');Key 13
  Wait-Until {!(Find 'command-search' -Visible) -and (Model).state.brush.diameter -eq 1} 'Controlled one-pixel Pen size did not commit' 15
  $journeys=@()

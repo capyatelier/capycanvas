@@ -132,9 +132,13 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
                 });
                 bool bundled=flag(choice,L"bundled_preview");
                 if(bundled){
-                    AutomationProperties::SetItemStatus(preview,data->caption(L"layers",L"pending"));
-                    preview.Source(CapyUi::bundledImage(L"filter-previews/"+std::wstring(str(choice,L"id").c_str())+L".webp",
-                        [data=data,image=winrt::make_weak(preview)]{if(auto shown=image.get())AutomationProperties::SetItemStatus(shown,data->caption(L"header",L"ready"));}));
+                    auto path=assetPath(L"filter-previews/"+std::wstring(str(choice,L"id").c_str())+L".webp");
+                    auto status=[source=std::weak_ptr<WorkspaceData>(data),image=winrt::make_weak(preview),path]{
+                        auto data=source.lock();auto shown=image.get();if(!data||!shown)return false;
+                        auto& entries=BitmapUpload::BundledEntries();auto entry=entries.find(path);bool ready=entry!=entries.end()&&entry->second.ready&&entry->second.source.get()==shown.Source();
+                        AutomationProperties::SetItemStatus(shown,data->caption(ready?L"header":L"layers",ready?L"ready":L"pending"));return true;
+                    };
+                    preview.Source(BitmapUpload::Bundled(path,[status]{status();}));status();data->copyView(status);
                 }else bindPreview(preview,str(choice,L"id"),previewContext());
                 AutomationProperties::SetName(preview,str(choice,L"label"));
                 AutomationProperties::SetAutomationId(preview,L"filter-preview-"+str(choice,L"id"));

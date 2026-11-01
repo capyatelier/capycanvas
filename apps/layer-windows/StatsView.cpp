@@ -51,7 +51,7 @@ struct StatsView:std::enable_shared_from_this<StatsView>{
         AutomationProperties::SetLiveSetting(recordError,Automation::Peers::AutomationLiveSetting::Polite);
         root.Children().Append(record);root.Children().Append(recordError);
         if(data->strokes)listener=data->strokes->listen([weak=weak_from_this()]{if(auto self=weak.lock())self->recording();});
-        recording();
+        recording();data->copyView([weak=weak_from_this()]{if(auto self=weak.lock()){self->recording();return true;}return false;});
         timer=root.DispatcherQueue().CreateTimer();timer.Interval(std::chrono::milliseconds(200));
         timer.Tick([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->refresh();});
         root.Loaded([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock()){self->timer.Start();self->refresh();}});

@@ -70,7 +70,7 @@ struct NavigatorView::Impl : std::enable_shared_from_this<Impl> {
         auto weak=weak_from_this();
         root.Background(data->brush(L"panel"));
         data->chromeFrames->observers.emplace(ChromeFrames::Id(root),[weak]{if(auto self=weak.lock())self->refreshGeometry();});
-        AutomationProperties::SetName(root,data->caption(L"color",L"navigator_panel"));
+        copyName(data,root,data->copyCaption(L"color",L"navigator_panel"));
         surround.Fill(data->brush(L"bg"));surround.IsHitTestVisible(false);
         root.Children().Append(surround);
         backing.Fill(data->brush(L"panel"));backing.IsHitTestVisible(false);root.Children().Append(backing);
@@ -78,7 +78,7 @@ struct NavigatorView::Impl : std::enable_shared_from_this<Impl> {
         overview.HorizontalContentAlignment(HorizontalAlignment::Stretch);overview.VerticalContentAlignment(VerticalAlignment::Stretch);edgeTag(overview,L"edge_contact",S(L"input"));
         overview.IsTabStop(true);overview.UseSystemFocusVisuals(false);
         overview.HorizontalAlignment(HorizontalAlignment::Stretch);
-        AutomationProperties::SetName(overview,data->caption(L"color",L"navigator_overview"));
+        copyName(data,overview,data->copyCaption(L"color",L"navigator_overview"));
         AutomationProperties::SetAutomationId(overview,L"navigator-overview");
         actions=NavigationButtons(data,L"navigator",[data=data]{return array(data->state,L"commands");},bindings);
         for(auto const& bind:bindings)bind();

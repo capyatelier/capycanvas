@@ -27,18 +27,18 @@ function Check-VisibleText([string]$Id,[string]$Expected){
   if($current.Name -ne $Expected){throw "Native visible text stayed stale for $Id; expected '$Expected'"}
  }elseif(!(Find $Expected -Name -Within $control -Type ([System.Windows.Automation.ControlType]::Text) -Visible)){throw "Native visible content stayed stale for $Id; expected '$Expected'"}
 }
-function Surface-Languages([string]$Surface,[scriptblock]$Assert){
+function Surface-Languages([string]$Surface,[scriptblock]$Assert,$Window=$first){
  foreach($choice in $seen){
   Use-Window $second;Language-Choice $choice.index|Out-Null
-  Wait-Until {(Model $first).windows_active_tag -eq $choice.tag} 'Retained workflow did not adopt the new context' 30
-  Use-Window $first;& $Assert
-  Capture-Window $first ($choice.tag+'-'+$Surface)
+  Wait-Until {(Model $Window).windows_active_tag -eq $choice.tag} 'Retained workflow did not adopt the new context' 30
+  Use-Window $Window;& $Assert
+  Capture-Window $Window ($choice.tag+'-'+$Surface)
  }
 }
 function Search-Command([string]$Query,[string]$Id){
  Open-Search;(Control 'command-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Query)
- Wait-Until {(Search).query -eq $Query -and (Find 'command-result-0').Current.Name -eq ((Model).state.commands|Where-Object id -eq $Id).label} "Native search did not resolve $Id" 20
- Key 13
+ Wait-Until {(Search).query -eq $Query -and (Search).results[0].id -ceq ('command.'+$Id) -and (Find 'command-result-0').Current.Name -eq ((Model).state.commands|Where-Object id -eq $Id).label -and (Find 'command-result-0').Current.IsEnabled} "Native search did not resolve $Id" 20
+ Invoke-Id 'command-result-0'
 }
 function Profile-Surfaces{
  $icc=Join-Path $run 'nameless-profile.icc';$photo=Join-Path $run 'Tiếng Việt İı ไทย source.png'
@@ -126,22 +126,22 @@ function Profile-Surfaces{
  $removeLocation=Control 'export-remove-location' -Arranged;$removeLocationIdentity=$removeLocation.GetRuntimeId() -join ':'
  $removeLocation.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
  Wait-Until {$removeLocation.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::Off} 'Dirty metadata location choice did not commit' 15
- $quality=Control 'export-quality';$qualityEntry=$quality.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Edit))
- if(!$qualityEntry -or !$qualityEntry.Current.IsEnabled){throw 'JPEG quality did not expose its retained native numeric editor'}
+ $qualityEntry=Control 'export-quality'
+ if($qualityEntry.Current.ControlType -ne [System.Windows.Automation.ControlType]::Edit -or !$qualityEntry.Current.IsEnabled){throw 'JPEG quality did not expose its retained native numeric editor'}
  $qualityEntry.SetFocus();$qualityEntry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('0')
  $preset=Control 'export-preset-name';Select-Draft $preset $literalName;$presetIdentity=$preset.GetRuntimeId() -join ':'
- Invoke 'PrimaryButton'
- Wait-Until {$view=Model;$view -and $view.windows_active_tag -and (Find 'export-validation').Current.Name -eq (Catalog-Text $view.windows_active_tag 'color-export-quality-range') -and $view.windows_document.stage -eq 'options'} 'Actual invalid JPEG quality did not retain a typed validation error' 30
- Select-Draft $preset $literalName
+ Wait-Until {$view=Model;$view -and $view.windows_document.stage -eq 'options' -and (Value $qualityEntry) -eq '1' -and (Control 'export-validation').Current.Name -eq '' -and (Selected-Option (Control 'export-format')).Current.Name -eq (Catalog-Text $view.windows_active_tag 'color-features-export-format-jpeg')} 'Bounded JPEG quality did not retain the native export options' 30
+ if(((Fresh-Model).state.document_file|ConvertTo-Json -Depth 20 -Compress) -ne $sourceDocument){throw 'Bounded JPEG quality changed document history'}
  $recipe=(Fresh-Model).windows_document.details.recipe|ConvertTo-Json -Depth 40 -Compress
  Surface-Languages 'retained-export' {
   $view=Fresh-Model $first $choice.tag;$details=$view.windows_document.details
   Check-Copy 'export-profile' $details.form.copy.profile $exportIdentity
-  Check-Copy 'export-quality' $details.form.copy.quality $qualityIdentity
+  Check-Copy 'export-quality' ((Catalog-Text $choice.tag 'numeric-edit-label' 'common').Replace('{ $label }',$details.form.copy.quality)) $qualityIdentity
   Check-Copy 'export-metadata' (Catalog-Text $choice.tag 'color-features-export-metadata') $metadataIdentity
   Check-Copy 'export-remove-location' (Catalog-Text $choice.tag 'color-features-export-remove-location') $removeLocationIdentity
   if((Selected-Option (Control 'export-metadata')).Current.Name -ne (Catalog-Text $choice.tag 'color-features-export-metadata-all') -or ((Selected-Option (Control 'export-metadata')).GetRuntimeId() -join ':') -ne $metadataOptionIdentity -or (Control 'export-remove-location').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::Off){throw 'Metadata publication changed retained option identity, selection or dirty location value'}
-  if((Control 'export-validation').Current.Name -ne (Catalog-Text $view.windows_active_tag 'color-export-quality-range') -or (Selected-Option (Control 'export-format')).Current.Name -ne (Catalog-Text $view.windows_active_tag 'color-features-export-format-jpeg') -or (Value $qualityEntry) -ne '0'){throw 'Retained export validation, dirty format or numeric value did not reproject without editing the draft'}
+  if($view.windows_document.stage -ne 'options' -or (Control 'export-validation').Current.Name -ne '' -or (Selected-Option (Control 'export-format')).Current.Name -ne (Catalog-Text $view.windows_active_tag 'color-features-export-format-jpeg') -or (Value $qualityEntry) -ne '1'){throw 'Retained export options, dirty format or bounded numeric value changed during publication'}
+  if(($view.state.document_file|ConvertTo-Json -Depth 20 -Compress) -ne $sourceDocument){throw 'Export publication changed document history'}
   if(($details.recipe|ConvertTo-Json -Depth 40 -Compress) -ne $recipe -or (Value (Control 'export-preset-name')) -ne $literalName -or ((Control 'export-preset-name').GetRuntimeId() -join ':') -ne $presetIdentity -or (Selection (Control 'export-preset-name')) -ne $literalName){throw 'Export publication changed retained raw recipe or Unicode preset draft/selection'}
  }
  Invoke 'CloseButton';Wait-Until {$view=Model;$view -and !$view.windows_document} 'Export options did not cancel' 30

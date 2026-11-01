@@ -67,6 +67,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                     slot.Content(line);dividers.emplace(uint32_t(id),line);tiles.Children().Append(slot);attach(slot);
                     tileControls.emplace(uint32_t(id),slot);
                     AutomationProperties::SetAutomationId(slot,L"tile-"+panelId+L"-"+to_hstring(uint32_t(id)));
+                    bindings.emplace_back([data=data,slot,panelId,id]{auto tile=findId(array(find(array(data->model,L"panels"),L"id",panelId),L"tiles"),id);AutomationProperties::SetName(slot,str(tile,L"label"));});
                     continue;
                 }
                 bool picker=pickerControl(object(tile,L"control"));

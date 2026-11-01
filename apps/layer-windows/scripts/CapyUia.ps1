@@ -443,19 +443,19 @@ function Reveal([string]$Id,[switch]$Focus,[string]$ViewportId){
    $pattern=$null
    if(!$scroll -and $node.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$pattern) -and $pattern.Current.VerticallyScrollable){$scroll=$pattern;$viewport=$node}
    if($node.Current.AutomationId -match '^panel-body-scroll-\d+$'){$ViewportId=$node.Current.AutomationId;break}
-   if($node.Current.AutomationId -match '^workspace-group-(\d+)$'){if($scroll){$ViewportId='panel-body-scroll-'+$Matches[1]};break}
+   if($node.Current.AutomationId -match '^workspace-group-(\d+)$'){break}
    if($node.Equals($root)){break}
    $node=$walker.GetParent($node)
   }
  }
  $scanFromTop=$false
  for($step=0;$step -lt 40;$step++){
-  $item=if($ViewportId -and $viewport){Find $Id -Within $viewport -NoPopups}else{Control $Id}
+  $item=if($viewport){Find $Id -Within $viewport -NoPopups}else{Control $Id}
   $bounds=if($item){$item.Current.BoundingRectangle}else{$null}
   $clip=if($ViewportId){Native-Bounds $ViewportId ([CapyRowPointer]::GetDpiForWindow([IntPtr]$root.Current.NativeWindowHandle)/96.)}elseif($viewport){$viewport.Current.BoundingRectangle}else{$root.Current.BoundingRectangle}
   $clip.Intersect($root.Current.BoundingRectangle);$clip.Inflate(1,1)
   if($item -and !$item.Current.IsOffscreen -and !$bounds.IsEmpty -and $clip.Contains($bounds)){
-   $ready=if($ViewportId -and $viewport){Control $Id -Within $viewport -Arranged -NoPopups}else{Control $Id -Arranged}
+   $ready=if($viewport){Control $Id -Within $viewport -Arranged -NoPopups}else{Control $Id -Arranged}
    if($Focus -and $ViewportId){$ready.SetFocus();Wait-Until {$ready.Current.HasKeyboardFocus} "$Id did not receive focus"}
    return $ready
   }
