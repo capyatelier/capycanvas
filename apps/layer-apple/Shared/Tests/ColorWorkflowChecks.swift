@@ -131,13 +131,14 @@ extension XCTestCase {
         field.typeKey("a", modifierFlags: .command)
         field.typeText(value.isEmpty ? XCUIKeyboardKey.delete.rawValue : value)
         #else
-        if !field.isHittable { dismissEditorKeyboard(in: app) }
+        let keyboard = app.keyboards.firstMatch
+        if keyboard.exists && keyboard.frame.intersects(field.frame) { dismissEditorKeyboard(in: app) }
         let focused = app.textFields.matching(NSPredicate(format: "identifier == %@ AND hasKeyboardFocus == true", field.identifier)).firstMatch
         let scroll = app.scrollViews.containing(.textField, identifier: field.identifier).firstMatch
         for _ in 0..<2 {
             if focused.exists { break }
             if scroll.exists { revealEditorControl(field, in: scroll) }
-            workspaceActivate(field)
+            workspacePoint(field)?.tap()
             if focused.waitForExistence(timeout: 1) { break }
         }
         XCTAssertTrue(focused.waitForExistence(timeout: 3))
