@@ -192,3 +192,21 @@ Write-Output 'Idle readiness owns its functional deadlines without changing Wet 
     }finally{$probe.Runspace.Dispose();$probe.Dispose();$self.Dispose()}
 }
 Write-Output 'Photo monitor resolves null CIM paths through the retained owned handle and rejects another executable identity.'
+
+& {
+    $color=Fixture-Ast 'exercise-compact-color.ps1'
+    $capture=@($color.FindAll({param($n)$n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Capture' -and $n.Extent.Text -eq "Capture 'retained-drawer'"},$true))
+    $restore=@($color.FindAll({param($n)$n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$root' -and $n.Right.Extent.Text -eq '$windowRoot'},$true))
+    if($capture.Count -ne 1 -or $restore.Count -ne 1){throw 'Missing actual retained drawer capture and window restoration'}
+    $start=[Math]::Min($capture[0].Extent.StartOffset,$restore[0].Extent.StartOffset)
+    $end=[Math]::Max($capture[0].Extent.EndOffset,$restore[0].Extent.EndOffset)
+    $windowRoot=[pscustomobject]@{Current=[pscustomobject]@{NativeWindowHandle=42}}
+    $root=[pscustomobject]@{Current=[pscustomobject]@{NativeWindowHandle=0}};$observed=@{captures=0}
+    function Capture([string]$Name){
+        if($root.Current.NativeWindowHandle -ne 42){throw 'Retained drawer capture used a child instead of the owned window'}
+        $observed.captures++
+    }
+    . ([scriptblock]::Create($color.Extent.Text.Substring($start,$end-$start)))
+    if($observed.captures -ne 1 -or $root -ne $windowRoot){throw 'Retained drawer capture lost the owned window context'}
+}
+Write-Output 'Retained color drawer captures use the owned native window after scoped control checks.'

@@ -714,8 +714,8 @@ try{
     }
     Invoke 'color-readout'
     if(((Control 'color-shape-0').GetRuntimeId() -join ':') -ne $drawerButton){throw 'Drawer edits replaced retained color controls'}
-    Capture 'retained-drawer'
     $root=$windowRoot
+    Capture 'retained-drawer'
     Invoke "tile-toolbar-$tileId"
     Wait-Until {$null -eq (Find 'tool-drawer')} 'Color drawer did not close'
     if(((Model).state.document_file|ConvertTo-Json -Compress) -ne $document){throw 'Picker input painted or changed the document'}
