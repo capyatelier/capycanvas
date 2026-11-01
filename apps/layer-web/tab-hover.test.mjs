@@ -27,6 +27,15 @@ export async function checkTabSurfaceCoverage({call,evaluate,settle}) {
         Object.assign(preview.style,{left:(rect.x-origin.x+12.25)+'px',top:'0',width:rect.width+'px',height:'36px'});overlay.append(preview);group.append(overlay);
       }
     }
+    for(const [index,group]of Array.from(root.children).entries()){
+      group.dataset.reference=index;
+      const sample=JSON.parse(group.dataset.sample);
+      for(const [endpoint,alpha]of [sample.alpha,.35].entries()){
+        const swatch=document.createElement('div');swatch.dataset.reference=index;swatch.dataset.endpoint=endpoint;
+        Object.assign(swatch.style,{position:'absolute',left:(parseFloat(group.style.left)+198)+'px',top:(parseFloat(group.style.top)+4+endpoint*20)+'px',width:'12px',height:'12px',background:'rgba('+[sample.value,sample.value,sample.value,alpha].join(',')+')'});
+        root.append(swatch);
+      }
+    }
   })()`);
   try {
     for(const round of [false,true]){
@@ -41,6 +50,7 @@ export async function checkTabSurfaceCoverage({call,evaluate,settle}) {
           const pixels=context.getImageData(0,0,image.width,image.height).data,scale=image.width/920,errors=[];let compared=0;
           for(const group of document.querySelectorAll('#tab-surface-fixture>[data-sample]')){
             const sample=JSON.parse(group.dataset.sample),rect=group.getBoundingClientRect(),selected=(group.querySelector('.tab-slide-overlay>.dock-tab')||group.querySelector('.dock-tab[aria-selected=true]')).getBoundingClientRect(),radius=${round?9.72:18},power=${round?2:4};
+            const references=Array.from(document.querySelectorAll('#tab-surface-fixture>[data-endpoint][data-reference="'+group.dataset.reference+'"]'),swatch=>{const r=swatch.getBoundingClientRect(),offset=(Math.floor((r.y+6)*scale)*image.width+Math.floor((r.x+6)*scale))*4;return Array.from(pixels.slice(offset,offset+3));});
             const inside=(x,y)=>{
               if(y<selected.y||y>=selected.bottom)return false;
               if(x>=selected.x&&x<selected.right){if(y>=selected.y+radius)return true;const dx=x<selected.x+radius?selected.x+radius-x:x>selected.right-radius?x-selected.right+radius:0;return (dx/radius)**power+((selected.y+radius-y)/radius)**power<=1;}
@@ -53,8 +63,7 @@ export async function checkTabSurfaceCoverage({call,evaluate,settle}) {
               if(${unequal}&&sample.alpha<1&&!sample.drawer){
                 const corners=[-1,.5,2].flatMap(dx=>[-1,.5,2].map(dy=>[dx,dy])).map(([dx,dy])=>inside((x+dx)/scale,(y+dy)/scale));coverage=corners[0]?1:0;boundary=corners.some(value=>value!==corners[0]);
               }
-              const alpha=${unequal}&&sample.alpha<1&&!sample.drawer ? .35+coverage*(sample.alpha-.35):sample.alpha,expected=[255,0,255].map(background=>Math.round(sample.value*alpha+background*(1-alpha)));
-              const endpoints=[.35,sample.alpha].map(alpha=>[255,0,255].map(background=>Math.round(sample.value*alpha+background*(1-alpha))));
+              const endpoints=[references[1],references[0]],expected=${unequal}&&sample.alpha<1&&!sample.drawer?endpoints[coverage]:references[0];
               if(actual.some((value,k)=>boundary?value<Math.min(endpoints[0][k],endpoints[1][k])-2||value>Math.max(endpoints[0][k],endpoints[1][k])+2:Math.abs(value-expected[k])>2)&&errors.length<12)errors.push({...sample,x:x/scale,y:y/scale,expected,actual});
             }
           }

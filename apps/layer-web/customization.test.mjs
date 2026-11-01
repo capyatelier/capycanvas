@@ -201,7 +201,16 @@ export async function checkTabStyles({ call, evaluate, settle }) {
     const shot = await call('Page.captureScreenshot', {format:'png'});
     await writeFile(`${dir}/web-${theme}-automatic-two-tabs.png`, Buffer.from(shot.data, 'base64'));
     await send({type:'move_panel',panel:'layers',target:{kind:'tab',group}});
-    assert.ok((await names()).filter(t=>t.name).length < 3, 'Automatic drops names that no longer fit when a third tab arrives');
+    assert.deepEqual(await names(),Array.from({length:3},()=>({icon:true,name:true})),'Automatic fits natural named widths after a tab arrives');
+    const fitted=await evaluate('layerApp.app.workspace_persistence()');
+    const divider=await evaluate(`(()=>{const layout=layerApp.app.layout(innerWidth,innerHeight),g=layout.groups.find(g=>g.id===${group}),d=layout.dividers.find(d=>d.band&&d.axis==='horizontal'&&Math.abs(d.bounds.x-g.bounds.x-g.bounds.width)<1);if(!d)throw Error('The fitted group has no native width divider');return{x:d.bounds.x+d.bounds.width/2,y:g.bounds.y+g.bounds.height/2,width:g.bounds.width}})()`);
+    for(const [type,dx]of [['mousePressed',0],['mouseMoved',-72],['mouseReleased',-72]])await call('Input.dispatchMouseEvent',{type,x:divider.x+dx,y:divider.y,button:'left',buttons:type==='mouseReleased'?0:1,clickCount:1});
+    await settle();
+    assert.ok(await evaluate(`document.querySelector('[data-group="${group}"]').getBoundingClientRect().width<${divider.width-40}`),'Native divider constrains the fitted group');
+    assert.ok((await names()).filter(t=>t.name).length<3,'Automatic drops names within the manually constrained width');
+    await send({type:'invoke',command:'undo_workspace'});
+    assert.deepEqual(await evaluate('layerApp.app.workspace_persistence()'),fitted,'One undo restores the fitted allocation');
+    assert.deepEqual(await names(),Array.from({length:3},()=>({icon:true,name:true})),'Undo restores the natural named tabs');
   }
   assert.equal(await evaluate("document.querySelector('#status').textContent"), '');
   console.log('PASS: group context choices and active/inactive tab contents in all five styles, both themes');
