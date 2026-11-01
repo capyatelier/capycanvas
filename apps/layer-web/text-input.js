@@ -1,4 +1,4 @@
-const preedit = new WeakSet(), ended = new WeakMap(), held = new WeakMap(), owned = new WeakSet();
+const preedit = new WeakSet(), ended = new WeakMap(), held = new WeakMap(), owned = new WeakSet(), passed = new Set();
 let compositionRoot;
 
 const latinPairs = {Backquote:'`~', Minus:'-_', Equal:'=+', BracketLeft:'[{', BracketRight:']}',
@@ -12,6 +12,7 @@ export function latinKey({key, code, shiftKey}) {
 
 export function captureTextComposition(root, releaseKey = () => {}) {
   compositionRoot = root;
+  passed.clear();
   root.addEventListener("cancel", event => {
     if (!composingKey(event)) return;
     event.preventDefault(); event.stopImmediatePropagation();
@@ -24,8 +25,11 @@ export function captureTextComposition(root, releaseKey = () => {}) {
   root.addEventListener("keydown", event => {
     const key = event.code || event.key, keys = held.get(event.target) ?? new Map();
     if (!event.repeat && keys.get(key) !== event.timeStamp) keys.delete(key);
-    if (!composingKey(event)) return;
-    if ((event.key === "Escape" || event.key === "Enter") && !event.isComposing && event.keyCode !== 229
+    if (!composingKey(event)) {
+      if (event.key === "Enter" && event.keyCode === 13) passed.add(key);
+      return;
+    }
+    if (event.key === "Escape" && !event.isComposing && event.keyCode !== 229
         && !preedit.has(event.target) && !preedit.has(root.activeElement)) event.preventDefault();
     owned.add(event);
     if (event.key !== "Process" && event.keyCode !== 229) keys.set(key, event.timeStamp);
@@ -35,6 +39,7 @@ export function captureTextComposition(root, releaseKey = () => {}) {
   root.addEventListener("keyup", event => {
     if (composingKey(event)) { owned.add(event); releaseKey(event); event.stopImmediatePropagation(); }
     held.get(event.target)?.delete(event.code || event.key);
+    if (event.key === "Enter" && event.keyCode === 13) passed.delete(event.code || event.key);
   }, true);
   root.addEventListener("pointerdown", () => held.delete(root.activeElement), true);
   root.addEventListener("focusout", event => {
@@ -47,6 +52,10 @@ export function composingKey(event) {
   const keys = held.get(event.target) ?? held.get(active);
   return event.isComposing || event.keyCode === 229 || owned.has(event)
     || preedit.has(event.target) || preedit.has(active)
-    || event.timeStamp <= ended.get(event.target)
+    || (!(event.key === "Enter" && event.keyCode === 13) && event.timeStamp <= ended.get(event.target))
     || (event.code || event.key ? keys?.has(event.code || event.key) : !!keys?.size);
+}
+
+export function compositionBusy() {
+  return passed.size > 0 || !!composingKey({target:compositionRoot?.activeElement});
 }

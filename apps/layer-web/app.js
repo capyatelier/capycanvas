@@ -32,7 +32,7 @@ import { createDocuments } from "./documents.js";
 import { createSystemStatus } from "./system-status.js";
 import { createHeader } from "./header.js";
 import { createNumberField } from "./numeric.js";
-import { captureTextComposition, composingKey, latinKey } from "./text-input.js";
+import { captureTextComposition, composingKey, compositionBusy, latinKey } from "./text-input.js";
 import { createSelectionUi } from "./selection-masks.js";
 import { createPreviewPanel } from "./preview-panel.js";
 import { createFillGesture } from "./fill-gesture.js";
@@ -300,7 +300,7 @@ function queueLanguage() {
   if (languageTimer) return;
   languageTimer = setTimeout(() => {
     languageTimer = null;
-    const change = app.prepare_language(composingKey({target:document.activeElement}) || !!workspaceGesture || heldPointers.size > 0 || compilerContacts.size > 0);
+    const change = app.prepare_language(compositionBusy() || !!workspaceGesture || heldPointers.size > 0 || compilerContacts.size > 0);
     if (change) applyChange(change);
     if (app.language_pending()) queueLanguage();
   }, 4);

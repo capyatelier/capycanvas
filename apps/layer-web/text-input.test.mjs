@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {captureTextComposition, composingKey} from './text-input.js';
+import {captureTextComposition, composingKey, compositionBusy} from './text-input.js';
 import {colorDialogDom, fakeColorApp} from './color-dialog-fixture.mjs';
 import {chooseColor} from './color-editor.js';
 import {createPreviewPanel} from './preview-panel.js';
@@ -22,25 +22,38 @@ function editor(field = {}, releaseKey, receiver = field, defaultAction) {
 }
 
 for (const key of ['Enter', 'Escape', 'ArrowDown']) {
-  test(`${key} belongs to composition until its native release`, () => {
+  test(`${key} follows native composition ownership`, () => {
     const {send} = editor();
     send('compositionstart', {timeStamp:10});
     assert.ok(composingKey(send('keydown', {key:'Process', code:key, keyCode:229, timeStamp:20})));
     send('compositionend', {timeStamp:22});
-    assert.ok(composingKey(send('keydown', {key, code:key, timeStamp:20})));
-    assert.ok(composingKey(send('keydown', {key, code:key, repeat:true, timeStamp:25})));
-    assert.ok(composingKey(send('keyup', {key, code:key, timeStamp:30})));
+    assert.equal(!!composingKey(send('keydown', {key, code:key, keyCode:key === 'Enter' ? 13 : 0, timeStamp:20})), key !== 'Enter');
+    assert.equal(!!composingKey(send('keydown', {key, code:key, keyCode:key === 'Enter' ? 13 : 0, repeat:true, timeStamp:25})), key !== 'Enter');
+    assert.equal(!!composingKey(send('keyup', {key, code:key, keyCode:key === 'Enter' ? 13 : 0, timeStamp:30})), key !== 'Enter');
     assert.ok(!composingKey(send('keydown', {key, code:key, timeStamp:40})));
   });
 }
 
-test('a delayed native key retains composition ownership without a Process event', () => {
-  const {send} = editor();
+test('a passed Enter submits the committed Korean form once despite an older timestamp', () => {
+  const field = {value:'한글'}, submitted = [];
+  let open = true;
+  const {send, root} = editor(field, undefined, field, event => {
+    if (open && event.type === 'keydown' && event.key === 'Enter') { submitted.push(field.value); open = false; }
+  });
   send('compositionstart', {timeStamp:10});
   send('compositionend', {timeStamp:22});
-  assert.ok(composingKey(send('keydown', {key:'Enter', code:'Enter', timeStamp:20})));
-  send('keyup', {key:'Enter', code:'Enter', timeStamp:30});
-  assert.ok(!composingKey(send('keydown', {key:'Enter', code:'Enter', timeStamp:40})));
+  assert.ok(!composingKey(send('keydown', {key:'Enter', code:'Enter', keyCode:13, timeStamp:20})));
+  assert.deepEqual(submitted, ['한글']);
+  assert.ok(compositionBusy());
+  send('focusout'); root.activeElement = {};
+  assert.ok(compositionBusy());
+  send('keyup', {key:'Process', code:'Enter', keyCode:229, timeStamp:29}, root.activeElement);
+  assert.ok(compositionBusy());
+  send('keyup', {key:'Enter', code:'Enter', keyCode:13, timeStamp:30}, root.activeElement);
+  assert.ok(!compositionBusy());
+  send('keydown', {key:'Enter', code:'Enter', keyCode:13, timeStamp:40});
+  assert.deepEqual(submitted, ['한글']);
+  send('keyup', {key:'Enter', code:'Enter', keyCode:13, timeStamp:41});
 });
 
 test('candidate Escape suppresses the dialog default cancellation until release', () => {
@@ -79,7 +92,7 @@ test('candidate Escape preserves committed search text before its native default
   assert.deepEqual(releases, ['Process', 'Escape']);
 });
 
-test('candidate Enter preserves textarea text before its native default', () => {
+test('passed Enter inserts the committed Korean textarea newline once', () => {
   const field = {value:'mc0001 한글', selectionStart:9, selectionEnd:9}, releases = [];
   const {send} = editor(field, event => {
     assert.ok(composingKey(event));
@@ -94,16 +107,15 @@ test('candidate Enter preserves textarea text before its native default', () => 
   assert.equal(send('keydown', {key:'Process', code:'', keyCode:229, isComposing:true, timeStamp:32066.2}).defaultPrevented, false);
   send('compositionend', {data:'글', timeStamp:32067});
   const candidate = send('keydown', {key:'Enter', code:'', keyCode:13, isComposing:false, timeStamp:32066.7});
-  assert.deepEqual([field.value, field.selectionStart, field.selectionEnd], ['mc0001 한글', 9, 9]);
-  assert.equal(candidate.defaultPrevented, true);
+  assert.deepEqual([field.value, field.selectionStart, field.selectionEnd], ['mc0001 한글\n', 10, 10]);
+  assert.equal(candidate.defaultPrevented, false);
   assert.equal(send('keyup', {key:'Process', code:'', keyCode:229, timeStamp:32067.5}).defaultPrevented, false);
   assert.equal(send('keyup', {key:'Enter', code:'', keyCode:13, timeStamp:32067.6}).defaultPrevented, false);
-  assert.deepEqual(releases, ['Process', 'Enter']);
+  assert.deepEqual(releases, ['Process']);
   assert.ok(!composingKey({target:field, timeStamp:32080}));
-  assert.equal(send('keydown', {key:'Enter', code:'', keyCode:13, timeStamp:32090}).defaultPrevented, false);
   assert.deepEqual([field.value, field.selectionStart, field.selectionEnd], ['mc0001 한글\n', 10, 10]);
   send('keyup', {key:'Enter', code:'', keyCode:13, timeStamp:32091});
-  assert.deepEqual(releases, ['Process', 'Enter']);
+  assert.deepEqual(releases, ['Process']);
 });
 
 test('pointer confirmation does not consume the next ordinary key', () => {
