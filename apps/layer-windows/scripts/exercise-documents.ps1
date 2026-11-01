@@ -1075,9 +1075,9 @@ function Writeback-Checked([scriptblock]$Action) {
     $window=$root.Current.BoundingRectangle;[CapyRowPointer]::Hover([int]($window.X+20),[int]($window.Y+20))
     $projection=Writeback-Projection
     if((Writeback-Geometry $projection|ConvertTo-Json -Depth 8 -Compress) -cne $script:writebackProjection){throw 'Native writeback pixel projection changed'}
-    $signature=$projection|ConvertTo-Json -Depth 20 -Compress
+    $signature=Writeback-Geometry $projection|ConvertTo-Json -Depth 8 -Compress
     try{& $Action $projection}finally{
-        if((Writeback-Projection|ConvertTo-Json -Depth 20 -Compress) -cne $signature){throw 'Native writeback owned projection changed during sampling or input'}
+        if((Writeback-Geometry (Writeback-Projection)|ConvertTo-Json -Depth 8 -Compress) -cne $signature){throw 'Native writeback owned projection changed during sampling or input'}
     }
     }finally{[CapyRowPointer]::Dispose()}
 }
