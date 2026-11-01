@@ -1,5 +1,6 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','fit-dark','fit-light')][string]$Case='full')
-if($Case -ne 'full'){$Theme=$Case.Substring(4)}
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','fit-dark','fit-light','sampling-dark','sampling-light')][string]$Case='full')
+if($Case -ne 'full'){$Theme=($Case -split '-')[-1]}
+$samplingOnly=$Case.StartsWith('sampling-')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyFind='visible'
@@ -53,7 +54,9 @@ function Choose([string]$Id,[string]$Item){
     try{$box.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Collapse()}catch{}
 }
 function Choices([string]$Id){
-    $box=Control $Id;$box.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand();Start-Sleep -Milliseconds 200
+    $box=Control $Id -Arranged;$b=$box.Current.BoundingRectangle
+    Tap @{x=[int]($b.X+$b.Width/2);y=[int]($b.Y+$b.Height/2)}
+    Wait-Until {$box.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Expanded} "Choice did not open after real mouse click: $Id"
     $items=$box.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ListItem))
     $names=@($items|ForEach-Object {$_.Current.Name})
     $box.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Collapse();Start-Sleep -Milliseconds 150
@@ -135,8 +138,8 @@ try {
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     Use-PaintWorkspace
 
-    if($Case -eq 'full'){
-    Color-Resize
+    if($Case -eq 'full' -or $samplingOnly){
+    if(!$samplingOnly){Color-Resize}
     Switch-Workspace 'Sketch' 'builtin:workspace:painter'
     Fit-Canvas;Start-Sleep -Milliseconds 300;Canvas-Points
     $order=$null
@@ -168,8 +171,10 @@ try {
     Wait-Until {(Model).state.color_picker.sample_width -eq 1} 'Single pixel did not reach Rust'
     Choose 'picker-setting-size' '5 px circle'
     Wait-Until {(Model).state.color_picker.sample_width -eq 5} '5 px circle did not reach Rust'
+    if($samplingOnly){@{theme=$Theme;names=$sizes;picker=(Model).state.color_picker;drawer=(Model).state.customization.drawer}|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run 'sampling-size.json');Capture 'sampling-size' -WithModel -Composed}
     Escape-Picker
 
+    if(!$samplingOnly){
     $revision=(Model).state.document_file.revision
     [CapyRowPointer]::Down('pen',($center.x-60),$center.y)
     try{for($i=1;$i -le 24;$i++){[CapyRowPointer]::Move(($center.x-60+$i*5),$center.y);Start-Sleep -Milliseconds 8}}finally{[CapyRowPointer]::Up()}
@@ -265,7 +270,8 @@ try {
     Capture 'wheel-preview'
     Escape-Picker
     }
-    Color-FitHeight
+    }
+    if(!$samplingOnly){Color-FitHeight}
     [CapyRowPointer]::Verify();[CapyRowPointer]::Dispose()
 
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow -Action Close -DiscardUnsaved

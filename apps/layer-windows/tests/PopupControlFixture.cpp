@@ -575,13 +575,19 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         try {
             co_await wait([this]{return anchor.IsLoaded()&&untagged.ActualWidth()>0&&GetForegroundWindow()==hwnd;},L"Fixture did not become arranged and foreground");privacy();
             phase=L"primitives";
-            ComboBox choice;comboOption(choice,L"One");comboOption(choice,L"Two");choiceColors(data,choice,ControlSurface::Settings);
+            ComboBox choice;comboOption(choice,L"One");auto selected=comboOption(choice,L"Two");choiceColors(data,choice,ControlSurface::Settings,ChoiceFeedbackMode::Field,Windows::UI::Text::FontWeights::Bold());
             require(choice.Background().as<SolidColorBrush>().Color()!=data->brush(L"settings").Color(),L"Settings choice has no visible face");
             selectIndex(choice,1);require(choice.SelectedIndex()==1,L"Valid choice was rejected");
             selectIndex(choice,99);require(choice.SelectedIndex()==-1,L"Out-of-range choice was accepted");
-            root.Children().Append(choice);co_await wait([choice]{return choice.IsLoaded();},L"Native choice did not load");
-            choice.IsDropDownOpen(true);co_await wait([this]{return data->popupCount==1;},L"Native choice did not block workspace popup routing");
+            require(selected.Content().as<Windows::Foundation::IPropertyValue>().Type()==Windows::Foundation::PropertyType::String&&selected.ContentTemplate(),L"Native choice retained a visual as item data");
+            selectIndex(choice,1);root.Children().Append(choice);co_await wait([choice]{return choice.IsLoaded()&&choice.ActualWidth()>0;},L"Native choice did not load");
+            std::function<TextBlock(DependencyObject const&)> caption;caption=[&](DependencyObject const& node)->TextBlock{if(auto text=node.try_as<TextBlock>();text&&text.Text()==L"Two")return text;for(int i=0;i<VisualTreeHelper::GetChildrenCount(node);++i)if(auto text=caption(VisualTreeHelper::GetChild(node,i)))return text;return nullptr;};
+            co_await wait([&]{return bool(caption(choice));},L"Selected native choice caption did not arrange");auto face=caption(choice);
+            require(face.FontWeight().Weight==700&&face.FontFamily().Source()==L"Segoe UI"&&face.TextTrimming()==TextTrimming::CharacterEllipsis&&face.FontSize()==choice.FontSize()&&std::abs(face.RenderTransform().as<TranslateTransform>().Y()+TextBlock().FontSize()*262/4096)<.001,L"Selected choice lost its native font or optical metrics");
+            choice.IsDropDownOpen(true);co_await wait([this,&selected,&caption]{return data->popupCount==1&&bool(caption(selected));},L"Native choice did not block workspace popup routing");
+            auto popupCaption=caption(selected);require(popupCaption!=face&&popupCaption.FontWeight().Weight==400,L"Popup choice reused the selected visual or bold caption");
             choice.IsDropDownOpen(false);co_await wait([this]{return data->popupCount==0;},L"Native choice did not release workspace popup routing");
+            require(caption(choice)&&caption(choice).FontWeight().Weight==700,L"Closing popup changed the selected choice caption weight");
             root.Children().RemoveAtEnd();++checks;
             phase=L"chrome-replacement";auto fade=std::make_shared<ChromeVisibility>();Border previous,replacement,decoration;
             fade->apply(previous,true,true);fade->apply(replacement,true,true);

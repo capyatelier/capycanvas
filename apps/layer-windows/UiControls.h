@@ -496,16 +496,22 @@ inline TextBlock label(std::shared_ptr<WorkspaceData> const& data,LocalizedCopy 
     data->copyView([weak=make_weak(result),resolve=text.current]{if(auto view=weak.get()){view.Text(resolve());return true;}return false;});
     return result;
 }
+inline DataTemplate comboOptionTemplate(){
+    static thread_local auto value=[]{
+        TextBlock caption;opticalText(caption,caption.FontSize());
+        auto offset=caption.RenderTransform().as<TranslateTransform>().Y();
+        return Markup::XamlReader::Load(L"<DataTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'><TextBlock Text='{Binding}' FontFamily='Segoe UI' TextTrimming='CharacterEllipsis'><TextBlock.RenderTransform><TranslateTransform Y='"+JsonValue::CreateNumberValue(offset).Stringify()+L"'/></TextBlock.RenderTransform></TextBlock></DataTemplate>").as<DataTemplate>();
+    }();
+    return value;
+}
 inline void comboOptionText(ComboBoxItem const& option,hstring const& text){
-    auto content=option.Tag().try_as<TextBlock>();
-    if(!content){
-        content=option.Content().try_as<TextBlock>();
-        if(!content){content=TextBlock();content.TextTrimming(TextTrimming::CharacterEllipsis);option.Content(content);}
-        content.FontFamily(FontFamily(L"Segoe UI"));content.FontWeight(Windows::UI::Text::FontWeights::Normal());
-        opticalText(content,content.FontSize());
-        option.Tag(content);
+    if(!option.ContentTemplate()){
+        option.FontWeight(Windows::UI::Text::FontWeights::Normal());
+        option.ContentTemplate(comboOptionTemplate());
     }
-    if(content.Text()!=text)content.Text(text);AutomationProperties::SetName(option,text);
+    auto content=option.Content().try_as<Windows::Foundation::IPropertyValue>();
+    if(!content||content.Type()!=Windows::Foundation::PropertyType::String||content.GetString()!=text)option.Content(box_value(text));
+    AutomationProperties::SetName(option,text);
 }
 inline ComboBoxItem comboOption(ComboBox const& control,hstring const& text,hstring const& id=L""){
     ComboBoxItem option;comboOptionText(option,text);if(!id.empty())AutomationProperties::SetAutomationId(option,id);

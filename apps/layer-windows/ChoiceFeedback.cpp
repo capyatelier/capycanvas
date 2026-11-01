@@ -24,7 +24,6 @@ struct ChoiceState:std::enable_shared_from_this<ChoiceState>{
     struct Resource{SolidColorBrush brush;Kind kind;};
     weak_ref<ComboBox> owner;
     bool rowSuffix=false;
-    std::optional<Windows::UI::Text::FontWeight> captionWeight;
     SolidColorBrush background{nullptr},foreground{nullptr};int64_t backgroundChanged=0,foregroundChanged=0;
     std::vector<Resource> resources;
     ~ChoiceState(){
@@ -46,13 +45,6 @@ struct ChoiceState:std::enable_shared_from_this<ChoiceState>{
         double opacity=rowSuffix||control.IsEnabled()||control.Opacity()<=0?1.:std::min(1.,(92./255)/control.Opacity());
         for(auto name:{L"ContentPresenter",L"PlaceholderTextBlock",L"HeaderContentPresenter",L"DropDownGlyph"})if(auto child=part(control,name))child.Opacity(opacity);
     }
-    void presentWeights(){
-        auto control=owner.get();if(!control||!captionWeight)return;
-        for(uint32_t i=0;i<control.Items().Size();++i)if(auto item=control.Items().GetAt(i).try_as<ComboBoxItem>())if(auto text=item.Content().try_as<TextBlock>()){
-            auto weight=!control.IsDropDownOpen()&&int32_t(i)==control.SelectedIndex()?*captionWeight:Windows::UI::Text::FontWeights::Normal();
-            if(text.FontWeight().Weight!=weight.Weight)text.FontWeight(weight);
-        }
-    }
     void presentItems(){
         auto control=owner.get();if(!control)return;
         for(uint32_t i=0;i<control.Items().Size();++i){
@@ -71,9 +63,7 @@ struct ChoiceState:std::enable_shared_from_this<ChoiceState>{
         auto self=shared_from_this();
         for(auto property:{Control::BackgroundProperty(),Control::ForegroundProperty(),Control::IsEnabledProperty(),UIElement::OpacityProperty()})
             control.RegisterPropertyChangedCallback(property,[self](auto&&,auto&&){self->present();});
-        control.Loaded([self](auto&&,auto&&){self->present();self->presentWeights();});control.DropDownOpened([self](auto&&,auto&&){self->presentWeights();self->presentItems();if(auto owner=self->owner.get())owner.DispatcherQueue().TryEnqueue([self]{self->presentItems();});});
-        control.DropDownClosed([self](auto&&,auto&&){self->presentWeights();});control.SelectionChanged([self](auto&&,auto&&){self->presentWeights();});
-        control.Items().VectorChanged([self](auto&&,auto&&){self->presentWeights();});present();
+        control.Loaded([self](auto&&,auto&&){self->present();});control.DropDownOpened([self](auto&&,auto&&){self->presentItems();if(auto owner=self->owner.get())owner.DispatcherQueue().TryEnqueue([self]{self->presentItems();});});present();
     }
 };
 void naturalDialogLayout(ContentDialog const& dialog){
@@ -164,10 +154,10 @@ void CapyUi::choiceColors(std::shared_ptr<WorkspaceData> const& data,ComboBox co
     control.BorderThickness({0});control.CornerRadius(data->controlCorner());control.MinWidth(0);
     control.MinHeight(surface==ControlSurface::Dialog||surface==ControlSurface::Drawing?34:data->controlHeight());
     double padding=data->panelMetric(L"field_padding");control.Padding({padding,0,padding,0});
-    control.FontFamily(FontFamily(L"Segoe UI"));control.FontSize(data->textSize());control.FontWeight(Windows::UI::Text::FontWeights::Normal());
+    control.FontFamily(FontFamily(L"Segoe UI"));control.FontSize(data->textSize());control.FontWeight(captionWeight.value_or(Windows::UI::Text::FontWeights::Normal()));
     auto key=box_value(L"CapyChoiceFeedback");if(control.Resources().HasKey(key))return;
     edgeTag(control,L"edge_reset_contact",S(L"pickup"));
-    control.Resources().Insert(key,box_value(true));auto state=std::make_shared<ChoiceState>();state->rowSuffix=mode==ChoiceFeedbackMode::RowSuffix;state->captionWeight=captionWeight;state->init(control);
+    control.Resources().Insert(key,box_value(true));auto state=std::make_shared<ChoiceState>();state->rowSuffix=mode==ChoiceFeedbackMode::RowSuffix;state->init(control);
     auto open=std::make_shared<bool>(false);auto context=std::weak_ptr<WorkspaceData>(data);
     auto report=[context,open](bool value){if(std::exchange(*open,value)!=value)if(auto data=context.lock())data->popup(value);};
     control.DropDownOpened([report](auto&&,auto&&){report(true);});control.DropDownClosed([report](auto&&,auto&&){report(false);});control.Unloaded([report](auto&&,auto&&){report(false);});

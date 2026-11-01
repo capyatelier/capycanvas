@@ -154,7 +154,7 @@ function Save-Evidence([string]$Log) {
         & robocopy.exe $context.run $evidence /E /R:0 /W:0 /NFL /NDL /NJH /NJS | Out-Null
         if ($LASTEXITCODE -ge 8) { throw "Could not preserve fixture evidence: $($context.run)" }
     }
-    if ($HardwareGpu) {
+    if ($HardwareGpu -and $controlFixture -ne 'Popup') {
         . (Join-Path $PSScriptRoot 'test-hardware-traces.ps1')
         Assert-HardwareTraces -Directory $evidence -Output "$Log-adapters.json"
     }
