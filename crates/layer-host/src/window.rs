@@ -535,6 +535,9 @@ impl<P: Parked> DocumentWindow<P> {
             candidate.set_document_replacement(false);
             if *id != selected { candidate.park_document()?; }
             candidate.inherit_restored_window_state(&host.session)?;
+            if *id == selected && host.session.state().document_file.close_ready {
+                candidate.request_session_close()?;
+            }
         }
         let active = candidates.iter().position(|(id, _)| *id == selected).unwrap();
         let selected_candidate = candidates.remove(active);
@@ -1101,6 +1104,57 @@ mod tests {
         invoke(&mut host, CommandId::Undo);
         assert_eq!(host.session.engine().document().scene().order().len(), count);
         assert!(!host.session.state().document_file.modified);
+        finish(host, window);
+    }
+
+    #[test]
+    fn startup_restore_keeps_approved_close_and_every_recovered_history() {
+        let mut host = host();
+        let mut window = Window::default();
+        host.session.set_document_replacement(true);
+        let stamp = host.session.session_stamp();
+        let mut selected = candidate(&window, &host).unwrap();
+        let mut parked = candidate(&window, &host).unwrap();
+        for candidate in [&mut selected, &mut parked] {
+            candidate.dispatch(UiAction::Invoke { command: CommandId::AddLayer }).unwrap();
+            candidate.dispatch(UiAction::Invoke { command: CommandId::AddLayer }).unwrap();
+            settle_candidate(candidate);
+            candidate.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
+            settle_candidate(candidate);
+            assert!(candidate.state().document_file.modified);
+            assert!(candidate.engine().can_undo());
+            assert!(candidate.engine().can_redo());
+        }
+        let selected_artwork = selected.engine().document().artwork.id;
+        let selected_checkpoint = selected.engine().checkpoint();
+        let selected_layers = selected.engine().document().scene().order().len();
+        let parked_artwork = parked.engine().document().artwork.id;
+        let parked_checkpoint = parked.engine().checkpoint();
+        let parked_layers = parked.engine().document().scene().order().len();
+        let mut candidates = vec![(9, selected), (3, parked)];
+        host.session.request_session_close().unwrap();
+        assert!(host.session.state().document_file.close_ready);
+        let retired = window.restore_sessions(&mut host, &mut candidates, 9, stamp, |s| s).unwrap();
+        assert!(candidates.is_empty());
+        assert_eq!(window.documents.order(), [9, 3]);
+        assert_eq!(window.documents.selected(), 9);
+        assert_eq!(host.session.engine().document().artwork.id, selected_artwork);
+        assert_eq!(host.session.engine().checkpoint(), selected_checkpoint);
+        assert_eq!(host.session.engine().document().scene().order().len(), selected_layers);
+        assert!(host.session.state().document_file.modified);
+        assert!(host.session.engine().can_undo());
+        assert!(host.session.engine().can_redo());
+        let parked = window.documents.parked_owner_mut(3).unwrap();
+        assert_eq!(parked.engine().document().artwork.id, parked_artwork);
+        assert_eq!(parked.engine().checkpoint(), parked_checkpoint);
+        assert_eq!(parked.engine().document().scene().order().len(), parked_layers);
+        assert!(parked.state().document_file.modified);
+        assert!(parked.engine().can_undo());
+        assert!(parked.engine().can_redo());
+        assert!(parked.rendering_suspended());
+        assert!(!parked.state().document_file.close_ready);
+        drop(retired);
+        assert!(host.session.state().document_file.close_ready);
         finish(host, window);
     }
 
