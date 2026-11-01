@@ -29,6 +29,7 @@ fn settle(service: &mut DocumentService, host: &mut NativeHost) {
             host.session.engine().backend().0.as_ref().unwrap().device().poll(wgpu::PollType::Poll).unwrap();
         }
         if !(!service.idle()
+            || service.window.documents.trim_in_flight()
             || service.close_next
             || host.session.state().document_file.busy
             || host.session.state().document_file.close_ready
