@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,[switch]$ExpectFailure)
+param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
@@ -15,11 +15,9 @@ try{
  if(!(Test-Path -LiteralPath $env:CAPY_NAVIGATOR_LAYOUT)){throw 'First-allocation result missing'}
  $result=Get-Content -LiteralPath $env:CAPY_NAVIGATOR_LAYOUT -Raw|ConvertFrom-Json
  if((Get-Item -LiteralPath (Join-Path $run 'stderr.log')).Length){throw 'First-allocation fixture wrote stderr'}
- if($ExpectFailure){
-  if($owned.ExitCode-ne1-or$result.passed-or$result.samples.Count-ne1-or$result.samples[0].phase-ne0-or[math]::Abs($result.samples[0].overview[3]-220)-gt.75){throw 'Baseline did not reproduce the first-allocation height220 failure'}
- }elseif($owned.ExitCode-ne0-or!$result.passed-or$result.samples.Count-ne3-or@($result.samples|Where-Object {!$_.passed}).Count){throw 'Navigator first-allocation invariant failed'}
- @{executable=$Executable;sha256=(Get-FileHash -LiteralPath $Executable).Hash;expected_failure=[bool]$ExpectFailure;exit_code=$owned.ExitCode;samples=$result.samples.Count}|ConvertTo-Json|Set-Content (Join-Path $run 'result.json')
- Write-Output "Navigator first allocation verified (expected failure=$ExpectFailure); artifacts: $run"
+ if($owned.ExitCode-ne0-or!$result.passed-or$result.samples.Count-ne3-or@($result.samples|Where-Object {!$_.passed}).Count){throw 'Navigator first-allocation invariant failed'}
+ @{executable=$Executable;sha256=(Get-FileHash -LiteralPath $Executable).Hash;exit_code=$owned.ExitCode;samples=$result.samples.Count}|ConvertTo-Json|Set-Content (Join-Path $run 'result.json')
+ Write-Output "Navigator first allocation verified; artifacts: $run"
 }finally{
  if($owned-and!$owned.HasExited){'Forced cleanup after failed allocation check'|Set-Content (Join-Path $run 'cleanup-failure.txt');Stop-Process -Id $owned.Id}
  Exit-CapyEnvironment
