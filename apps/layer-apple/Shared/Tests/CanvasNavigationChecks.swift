@@ -56,6 +56,7 @@ extension XCTestCase {
         }
         command("Fit canvas")
         XCTAssertGreaterThan(zoom(), 0)
+        let original = editorPixels(in: app)
         for index in [0, 1] {
             choose("click", index)
             let before = zoom()
@@ -81,7 +82,7 @@ extension XCTestCase {
         let undo = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
             "toolbar-tile-commands-", "Undo")).firstMatch
         XCTAssertTrue(undo.exists); XCTAssertFalse(undo.isEnabled, "Zoom modes and preferences create no artwork history")
-        XCTAssertTrue(editorPixels(in: app).allSatisfy { $0 == 255 }, "Navigation preserves the empty white drawing")
+        expectPixels(original, in: app)
         attachEditor(in: app, name: "zoom-tool-\(theme)")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
