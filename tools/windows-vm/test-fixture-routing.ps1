@@ -2,9 +2,57 @@ $ErrorActionPreference='Stop'
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'run-fixtures.ps1'),[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw ($errors|Out-String)}
-foreach($name in 'Select-Fixtures','Control-Fixture','Reviews','Get-FixtureTimeoutSeconds','Get-FixtureVariantArguments','Get-FixtureCompanionArguments','Write-FixtureResult','ConvertTo-FixtureCommandLine','Assert-FixtureFiles','Build-ControlFixture'){
+foreach($name in 'Write-FixturePlan','Get-NextFixture','Select-Fixtures','Control-Fixture','Reviews','Get-FixtureTimeoutSeconds','Get-FixtureVariantArguments','Get-FixtureCompanionArguments','Write-FixtureResult','ConvertTo-FixtureCommandLine','Assert-FixtureFiles','Build-ControlFixture'){
     $function=$ast.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$false)
     . ([scriptblock]::Create($function.Extent.Text))
+}
+& {
+    $directory=Join-Path ([IO.Path]::GetTempPath()) ('capy-fixture-plan-'+[guid]::NewGuid().ToString('N'))
+    [IO.Directory]::CreateDirectory($directory)|Out-Null
+    $path=Join-Path $directory 'plan.json';$TimeoutMinutes=20;$HardwareGpu=$false
+    try{
+        Write-FixturePlan $path @()
+        $empty=[IO.File]::ReadAllText($path)|ConvertFrom-Json
+        if($null -eq $empty.runs -or $empty.runs.Count -ne 0){throw 'An idle queue runner must publish an empty plan array'}
+        Write-FixturePlan $path @('previous-'+('x'*200))
+        $before=[IO.File]::ReadAllBytes($path)
+        $stream=[IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+        $reader=[IO.BinaryReader]::new($stream)
+        try{
+            $prefix=$reader.ReadBytes([int]($before.Length/2))
+            Write-FixturePlan $path @('next')
+            $observed=[Text.Encoding]::UTF8.GetString([byte[]]($prefix+$reader.ReadBytes($before.Length)))|ConvertFrom-Json
+            if($observed.runs[0] -cne ('previous-'+('x'*200))){throw 'Plan replacement changed a partially consumed reader'}
+        }finally{$reader.Dispose();$stream.Dispose()}
+        $current=[IO.File]::ReadAllText($path)|ConvertFrom-Json
+        if(($current.runs -join ',') -ne 'next' -or $current.timeout_minutes -ne 20 -or $current.hardware_gpu){throw 'New plan readers did not receive the complete replacement'}
+    }finally{Remove-Item -LiteralPath $directory -Recurse -Force}
+}
+& {
+    $planned=@('popup','header:pen','effects:light')
+    $claimed=[Collections.Generic.List[string]]::new()
+    $actual=@(while($null -ne ($name=Get-NextFixture $planned $null $claimed)){$name})
+    if(($actual -join ',') -ne ($planned -join ',')){throw 'Default fixture iteration changed selection or order'}
+    $claimed=[Collections.Generic.List[string]]::new()
+    $queue=[pscustomobject]@{url='http://10.0.2.2:1234/r1';token='test-secret'}
+    $script:responses=[Collections.Generic.Queue[object]]::new()
+    foreach($name in @('effects:light','popup',$null)){$script:responses.Enqueue([pscustomobject]@{selector=$name})}
+    $script:requests=0
+    function Invoke-RestMethod($Method,$Uri,$Headers,$TimeoutSec){
+        if($Method -ne 'Post' -or $Uri -ne $queue.url -or $Headers.Authorization -ne 'Bearer test-secret'){throw 'Queue request lost its endpoint or authentication'}
+        $script:requests++
+        $script:responses.Dequeue()
+    }
+    $actual=@(while($null -ne ($name=Get-NextFixture $planned $queue $claimed)){$name})
+    if(($actual -join ',') -ne 'effects:light,popup' -or $script:requests -ne 3){throw 'Queue was prefetched, reordered or retried'}
+    foreach($bad in @('popup','unknown')){
+        $script:responses.Enqueue([pscustomobject]@{selector=$bad})
+        $failure=$null;try{Get-NextFixture $planned $queue $claimed|Out-Null}catch{$failure=$_.Exception.Message}
+        if($failure -ne 'The fixture queue returned an unknown or repeated selector.'){throw 'Invalid queue assignment was accepted'}
+    }
+    $before=$script:requests
+    $failure=$null;try{Get-NextFixture $planned $queue $claimed|Out-Null}catch{$failure=$_.Exception.Message}
+    if($failure -ne 'The fixture queue request failed.' -or $script:requests -ne $before+1){throw 'Failed queue request was replayed or leaked transport details'}
 }
 foreach($ending in 'drag','cancel','escape'){if(((Get-FixtureVariantArguments 'switcher-drag' 'ContextEnding' $ending) -join ',') -ne "-ContextHoldOnly,-ContextEnding,$ending"){throw 'Context ending selection lost its required journey scope'}}
 if(((Get-FixtureVariantArguments 'popup' 'Theme' 'light') -join ',') -ne '-Theme,light'){throw 'Ordinary fixture variant arguments changed'}

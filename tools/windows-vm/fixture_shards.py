@@ -1,25 +1,72 @@
-"""Balanced fixture assignments and complete merged result coverage."""
+"""Once-only shared fixture claims and complete merged result coverage."""
 
+import json
 import math
+import secrets
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Lock, Thread
 from statistics import median
 
 
-def balance(selectors, runners, durations):
-    if type(runners) is not int or runners < 1:
-        raise ValueError("Fixture runner count must be positive")
-    if not selectors or len(selectors) != len(set(selectors)):
-        raise ValueError("Fixture selectors must be nonempty and distinct")
-    known = {name: value for name, value in durations.items()
-             if type(value) in (int, float) and math.isfinite(value) and value > 0}
-    fallback = median(known.values()) if known else 1
-    buckets = [[] for _ in range(min(runners, len(selectors)))]
-    loads = [0] * len(buckets)
-    order = {name: index for index, name in enumerate(selectors)}
-    for name in sorted(selectors, key=lambda name: -known.get(name, fallback)):
-        index = min(range(len(buckets)), key=lambda index: (loads[index], index))
-        buckets[index].append(name)
-        loads[index] += known.get(name, fallback)
-    return [sorted(bucket, key=order.__getitem__) for bucket in buckets]
+class Queue:
+    def __init__(self, selectors, runners, durations, plan):
+        if not selectors or len(selectors) != len(set(selectors)):
+            raise ValueError("Fixture selectors must be nonempty and distinct")
+        if not runners or len(runners) != len(set(runners)):
+            raise ValueError("Fixture runners must be nonempty and distinct")
+        known = {name: value for name, value in durations.items()
+                 if type(value) in (int, float) and math.isfinite(value) and value > 0}
+        fallback = median(known.values()) if known else 1
+        self.remaining = iter(sorted(selectors, key=lambda name: -known.get(name, fallback)))
+        self.lock = Lock()
+        self.selectors = selectors
+        self.assignments = {runner: [] for runner in runners}
+        self.tokens = {runner: secrets.token_urlsafe(32) for runner in runners}
+        self.plan = plan
+        self.save()
+        queue = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                runner = self.path[1:]
+                token = queue.tokens.get(runner)
+                if token is None or not secrets.compare_digest(self.headers.get("Authorization", ""), "Bearer " + token):
+                    self.send_error(403)
+                    return
+                with queue.lock:
+                    selector = next(queue.remaining, None)
+                    if selector is not None:
+                        queue.assignments[runner].append(selector)
+                        queue.save()
+                body = json.dumps({"selector": selector}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.thread = Thread(target=self.server.serve_forever, daemon=True)
+
+    def save(self):
+        temporary = self.plan.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"runs": self.selectors, "shards": self.assignments}, indent=2))
+        temporary.replace(self.plan)
+
+    def configuration(self, runner):
+        return {"url": f"http://10.0.2.2:{self.server.server_port}/{runner}", "token": self.tokens[runner]}
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exception):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join()
 
 
 def merge(expected, shards):

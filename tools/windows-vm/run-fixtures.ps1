@@ -4,6 +4,7 @@ param(
     [string]$Name,
     [string]$DebuggerPath,
     [string]$BuildRecord,
+    [string]$QueueConfig,
     [switch]$List,
     [ValidateSet('release','dev-perf')][string]$RustProfile='release',
     [ValidateRange(1,1440)][int]$TimeoutMinutes = 20,
@@ -19,6 +20,12 @@ function Write-FixtureResult([string]$Path,[string]$Json){
     $stream=[IO.File]::Open($Path,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::Write,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
     $writer=[IO.StreamWriter]::new($stream,[Text.UTF8Encoding]::new($false))
     try{$null=$stream.Seek(0,[IO.SeekOrigin]::End);$writer.WriteLine($Json);$writer.Flush()}finally{$writer.Dispose();$stream.Dispose()}
+}
+function Write-FixturePlan([string]$Path,[string[]]$Runs){
+    $plan=@{runs=@();timeout_minutes=$TimeoutMinutes;hardware_gpu=[bool]$HardwareGpu};if($Runs){$plan.runs=$Runs}
+    $temporary=$Path+'.tmp'
+    [IO.File]::WriteAllText($temporary,($plan|ConvertTo-Json),[Text.UTF8Encoding]::new($false))
+    if([IO.File]::Exists($Path)){[IO.File]::Replace($temporary,$Path,[NullString]::Value)}else{[IO.File]::Move($temporary,$Path)}
 }
 $runnerStarted = Get-Date
 $Executable = if($List){[IO.Path]::GetFullPath($Executable)}else{(Resolve-Path -LiteralPath $Executable).Path}
@@ -77,6 +84,16 @@ function Select-Fixtures([string[]]$Available,[string[]]$Requested) {
         if (!$known) { throw "Unknown fixture: $item" }
     }
     @($Available | Where-Object { !$Requested -or $_ -in $Requested -or ($_ -split ':')[0] -in $Requested -or $_ -in $defaults })
+}
+function Get-NextFixture([string[]]$Planned,$Queue,[Collections.Generic.List[string]]$Claimed){
+    if($Queue){
+        try{$next=(Invoke-RestMethod -Method Post -Uri $Queue.url -Headers @{Authorization=('Bearer '+$Queue.token)} -TimeoutSec 30).selector}
+        catch{throw 'The fixture queue request failed.'}
+    }else{$next=if($Claimed.Count -lt $Planned.Count){$Planned[$Claimed.Count]}else{$null}}
+    if($null -eq $next){return}
+    if($next -isnot [string] -or $next -notin $Planned -or $Claimed.Contains($next)){throw 'The fixture queue returned an unknown or repeated selector.'}
+    $Claimed.Add($next)
+    $next
 }
 function Control-Fixture([string]$Fixture,[string[]]$Arguments=@()){
     if($Fixture -eq 'layer-pickup' -and '-PendingDropOnly' -in $Arguments){return 'LayerDrop'}
@@ -162,7 +179,7 @@ function Save-Evidence([string]$Log) {
     foreach ($folder in $folders) {
         foreach ($owner in $owners | Where-Object { $_ } | Select-Object -Unique) {
             Get-ChildItem -LiteralPath $folder -File | Where-Object {
-                $_.Name -match "^(ui-state|camera-state|search-state|windows|prediction|latency)-$owner(-|\.)"
+                $_.Name -match "^(ui-state|camera-state|presentation-state|search-state|windows|prediction|latency)-$owner(-|\.)"
             } | Copy-Item -Destination $evidence
         }
     }
@@ -231,11 +248,15 @@ if ($HardwareGpu) {
     $env:LAYER_TEST_SOFTWARE_GPU = '1'
 }
 $env:NO_COLOR = '1'
-@{runs=$planned;timeout_minutes=$TimeoutMinutes;hardware_gpu=[bool]$HardwareGpu}|ConvertTo-Json|Set-Content (Join-Path $Output 'plan.json')
+Write-FixturePlan (Join-Path $Output 'plan.json') @(if(!$QueueConfig){$planned})
+$queue=if($QueueConfig){Get-Content -LiteralPath $QueueConfig -Raw|ConvertFrom-Json}else{$null}
+if($QueueConfig -and (!$queue.url -or !$queue.token)){throw 'The fixture queue configuration is incomplete.'}
+$claimed=[Collections.Generic.List[string]]::new()
 $results = Join-Path $Output 'results.jsonl'
-foreach ($run in $runs.GetEnumerator()) {
+while($null -ne ($name=Get-NextFixture $planned $queue $claimed)){
+    $run=[pscustomobject]@{Key=$name;Value=$runs[$name]}
+    if($queue){Write-FixturePlan (Join-Path $Output 'plan.json') $claimed.ToArray()}
     $fixture = ($run.Key -split ':')[0]
-    if ($run.Key -notin $planned) { continue }
     Stop-Review
     $log = Join-Path $Output ($run.Key -replace ':', '-')
     $env:CAPY_FIXTURE_CONTEXT = "$log-context.json"

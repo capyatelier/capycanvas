@@ -108,10 +108,9 @@ tools/windows-vm/windows-vm.py fixtures --runners 6 --no-build layers palettes p
 
 The primary VM builds the app and only the Feedback, Popup or LayerDrop controls
 needed by the planned selectors. The helper ships their runtime files, assets and build record to owned
-`<primary>-r1` … runner VMs, validates every recorded hash, and runs balanced
-shards in parallel. Previous successful fixture durations guide assignments;
-without measurements the helper uses round-robin assignments. Bare names and
-`:default` keep the same selection rules as ordinary `fixtures`.
+`<primary>-r1` … runner VMs, validates every recorded hash, and runs fixtures in parallel.
+Idle VMs claim remaining selectors once, longest recorded duration first. Bare
+names and `:default` keep the same selection rules as ordinary `fixtures`.
 
 `cpu-pool.json` in the VM state directory sets `vcpu_budget`,
 `memory_budget_gib`, `runner_cpus`, `runner_memory_gib` and `per_owner_limit`.

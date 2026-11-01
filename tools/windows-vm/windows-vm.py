@@ -6,7 +6,7 @@ See docs/development/windows-vm.md.
 
 import argparse
 import base64
-from contextlib import nullcontext, ExitStack
+from contextlib import contextmanager, nullcontext, ExitStack
 from concurrent.futures import ThreadPoolExecutor
 import fcntl
 import getpass
@@ -953,9 +953,10 @@ def wait_for_fixtures(machine, output):
                 progress = json.loads(status.stdout)
             except json.JSONDecodeError as error:
                 raise RuntimeError(f"Invalid fixture progress JSON: {error}; stdout={status.stdout!r}; stderr={status.stderr!r}") from error
-            if plan is None and progress["plan"]:
+            if progress["plan"]:
+                if plan is None:
+                    deadline = time.monotonic() + progress["plan"]["timeout_minutes"] * 60 + 120
                 plan = progress["plan"]
-                deadline = time.monotonic() + plan["timeout_minutes"] * 60 + 120
             for line in (progress["log"] or "").splitlines()[len(results):]:
                 try:
                     result = json.loads(line)
@@ -984,11 +985,12 @@ def fixture_selection(names):
     return f" -Name {','.join(names)}" if names else ""
 
 
-def execute_fixtures(machine, args, directory, provenance, names):
+def execute_fixtures(machine, args, directory, provenance, names, queue=None):
     name = time.strftime("%Y%m%d-%H%M%S")
     output = f"{GUEST_REPO}\\artifacts\\windows\\vm-fixtures\\{name}"
     selection = fixture_selection(names)
     mode = " -HardwareGpu" if provenance["hardware_gpu"] else ""
+    mode += f" -QueueConfig {queue}" if queue else ""
     desktop(machine, f"-File {GUEST_REPO}\\tools\\windows-vm\\run-fixtures.ps1 "
                      f"-Executable {directory}\\CapyCanvas.exe -Output {output} "
                      f"-TimeoutMinutes {args.timeout_minutes} -RustProfile {args.profile} "
@@ -1083,6 +1085,18 @@ def import_fixture_build(machine, directory, record, archive, hashes, profile):
     build_record_path(machine, False, profile).write_text(json.dumps(record))
 
 
+@contextmanager
+def fixture_queue_config(machine, queue):
+    path = f"{GUEST_REPO}\\artifacts\\windows\\fixture-queue-{secrets.token_hex(16)}.json"
+    try:
+        payload = json.dumps(queue.configuration(machine.name))
+        guest(machine, f"[IO.File]::WriteAllText('{path}', [Console]::In.ReadToEnd())",
+              input=payload, text=True, stdout=subprocess.DEVNULL)
+        yield path
+    finally:
+        guest(machine, f"if(Test-Path -LiteralPath '{path}'){{Remove-Item -LiteralPath '{path}' -Force -ErrorAction Stop}}")
+
+
 def sharded_fixtures(args):
     if args.hardware_gpu:
         raise ValueError("CPU runners cannot be used with --hardware-gpu")
@@ -1106,7 +1120,6 @@ def sharded_fixtures(args):
     candidates = [runner_machine(primary, index + 1) for index in range(min(args.runners, len(selectors), settings["per_owner_limit"]))]
     used = []
     locks = {}
-    shards = []
     def start_runner(machine):
         lock = claim(machine)
         try:
@@ -1122,17 +1135,19 @@ def sharded_fixtures(args):
             finally:
                 lock.close()
             raise
-    def run_shard(machine, selection):
+    def run_shard(machine):
+        result = {"vm": machine.name, "results": [], "complete": False, "failure": None}
         try:
             synced = sync_machine(machine)
             if synced != hashes:
                 raise ValueError("The source tree changed while preparing fixture runners")
             import_fixture_build(machine, directory, record, archive, synced, args.profile)
-            names = [name if ":" in name else name + ":default" for name in selection]
-            result = execute_fixtures(machine, args, directory, provenance, names)
-            return dict(result, selectors=selection)
+            names = [name if ":" in name else name + ":default" for name in selectors]
+            with fixture_queue_config(machine, queue) as configuration:
+                result = execute_fixtures(machine, args, directory, provenance, names, queue=configuration)
         except (Exception, SystemExit) as error:
-            return {"vm": machine.name, "selectors": selection, "results": [], "complete": False, "failure": str(error)}
+            result["failure"] = "; ".join(filter(None, (result.get("failure"), str(error))))
+        return dict(result, selectors=queue.assignments[machine.name])
     try:
         with ThreadPoolExecutor(max_workers=len(candidates)) as executor:
             futures = [executor.submit(start_runner, machine) for machine in candidates]
@@ -1152,10 +1167,9 @@ def sharded_fixtures(args):
                 raise RuntimeError("; ".join(failures))
         if not used:
             raise RuntimeError("No CPU runner slot was available; see `runners`")
-        assignments = fixture_shards.balance(selectors, len(used), fixture_durations())
-        (local / "plan.json").write_text(json.dumps({"runs": selectors, "shards": dict(zip([machine.name for machine in used], assignments))}, indent=2))
-        with ThreadPoolExecutor(max_workers=len(used)) as executor:
-            shards = list(executor.map(run_shard, used, assignments))
+        with fixture_shards.Queue(selectors, [machine.name for machine in used], fixture_durations(), local / "plan.json") as queue:
+            with ThreadPoolExecutor(max_workers=len(used)) as executor:
+                shards = list(executor.map(run_shard, used))
         results, errors = fixture_shards.merge(selectors, shards)
         (local / "results.jsonl").write_text("".join(json.dumps(row) + "\n" for row in results))
         (local / "shards.json").write_text(json.dumps(shards, indent=2))

@@ -1,4 +1,5 @@
 import importlib.util
+from contextlib import contextmanager
 import json
 from pathlib import Path
 import subprocess
@@ -6,6 +7,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+from urllib.request import Request, urlopen
 
 
 spec = importlib.util.spec_from_file_location("runner_vm", Path(__file__).with_name("windows-vm.py"))
@@ -172,16 +174,32 @@ class RunnerVmTests(unittest.TestCase):
                                hardware_gpu=False, no_build=True, profile="dev-perf", timeout_minutes=20)
         record = self.build_record()
         failed = False
+        cleanup_failed = False
         clock = [0]
         def shutdown(machine):
             clock[0] += 37
         def boot(machine, **options):
             if machine.name.endswith("-r2"):
                 raise vm.cpu_pool.Unavailable("pool full")
-        def execute(machine, args, directory, provenance, names):
+        @contextmanager
+        def configuration(machine, queue):
+            yield queue
+            if cleanup_failed:
+                raise RuntimeError("queue config cleanup failed")
+        def execute(machine, args, directory, provenance, names, queue=None):
             self.assertEqual(names, ["popup:default", "header:pen"])
+            claims = []
+            while True:
+                request = Request(f"http://127.0.0.1:{queue.server.server_port}/{machine.name}", method="POST",
+                                  headers={"Authorization": "Bearer " + queue.tokens[machine.name]})
+                with urlopen(request, timeout=5) as response:
+                    selector = json.load(response)["selector"]
+                if selector is None:
+                    break
+                claims.append(selector)
+            self.assertEqual(claims, ["popup", "header:pen"])
             return {"vm": machine.name, "results": [{"name": "popup", "exit": int(failed)}, {"name": "header:pen", "exit": 0}],
-                    "complete": True, "failure": None, "evidence": "shard-evidence"}
+                    "complete": True, "failure": None, "evidence": "shard-evidence", "plan": {"runs": claims}}
         with patch.object(vm, "ARTIFACTS", artifacts), patch.object(vm, "selected", return_value=self.primary), \
                 patch.object(vm, "boot", side_effect=boot), patch.object(vm, "sync_machine", return_value=record["inputs"]), \
                 patch.object(vm, "fixture_build", return_value=(vm.SOFTWARE_BUILD + "-dev-perf", record)) as build, \
@@ -189,18 +207,23 @@ class RunnerVmTests(unittest.TestCase):
                 patch.object(vm, "export_fixture_build", return_value=self.root / "archive"), \
                 patch.object(vm, "import_fixture_build") as ship, patch.object(vm, "fixture_durations", return_value={}), \
                 patch.object(vm, "execute_fixtures", side_effect=execute), \
+                patch.object(vm, "fixture_queue_config", side_effect=configuration), \
                 patch.object(vm, "run", return_value=SimpleNamespace(stdout="revision\n")), \
                 patch.object(vm, "time") as timing, patch.object(vm, "stop_machine", side_effect=shutdown) as stop:
-            timing.strftime.side_effect = ["success", "failure"]
+            timing.strftime.side_effect = ["success", "failure", "cleanup-failure"]
             timing.monotonic.side_effect = lambda: clock[0]
             vm.sharded_fixtures(args)
             failed = True
             with self.assertRaisesRegex(RuntimeError, "popup"):
                 vm.sharded_fixtures(args)
-        self.assertEqual(build.call_count, 2)
+            failed = False
+            cleanup_failed = True
+            with self.assertRaisesRegex(RuntimeError, "queue config cleanup failed"):
+                vm.sharded_fixtures(args)
+        self.assertEqual(build.call_count, 3)
         build.assert_called_with(self.primary, record["inputs"], True, False, "dev-perf", controls=["Popup"])
-        self.assertEqual(ship.call_count, 2)
-        self.assertEqual([call.args[0].name for call in stop.call_args_list], ["owner-r1", "owner-r1"])
+        self.assertEqual(ship.call_count, 3)
+        self.assertEqual([call.args[0].name for call in stop.call_args_list], ["owner-r1"] * 3)
         output = artifacts / "owner" / "shards-success"
         self.assertTrue((output / "complete").exists())
         self.assertEqual(len((output / "results.jsonl").read_text().splitlines()), 2)
@@ -208,6 +231,30 @@ class RunnerVmTests(unittest.TestCase):
         failure = artifacts / "owner" / "shards-failure"
         self.assertFalse((failure / "complete").exists())
         self.assertEqual(json.loads((failure / "summary.json").read_text())["wall_seconds"], 37)
+
+        cleanup = artifacts / "owner" / "shards-cleanup-failure"
+        self.assertFalse((cleanup / "complete").exists())
+        shards = json.loads((cleanup / "shards.json").read_text())
+        self.assertEqual(shards[0]["results"], [{"name": "popup", "exit": 0}, {"name": "header:pen", "exit": 0}])
+        self.assertTrue(shards[0]["complete"])
+        self.assertEqual(shards[0]["evidence"], "shard-evidence")
+        self.assertEqual(shards[0]["plan"], {"runs": ["popup", "header:pen"]})
+        self.assertEqual(shards[0]["failure"], "queue config cleanup failed")
+        self.assertTrue(all(row["exit"] == 0 for row in map(json.loads, (cleanup / "results.jsonl").read_text().splitlines())))
+
+    def test_queue_secret_uses_stdin_outside_evidence_and_exact_cleanup_on_failure(self):
+        queue = SimpleNamespace(configuration=lambda runner: {"url": "http://10.0.2.2:1234/" + runner, "token": "secret"})
+        with patch.object(vm, "guest") as guest:
+            with self.assertRaisesRegex(RuntimeError, "fixture failed"):
+                with vm.fixture_queue_config(self.primary, queue) as path:
+                    self.assertNotIn("vm-fixtures", path)
+                    raise RuntimeError("fixture failed")
+        write, cleanup = guest.call_args_list
+        self.assertEqual(json.loads(write.kwargs["input"])["token"], "secret")
+        self.assertNotIn("secret", write.args[1])
+        self.assertNotIn("secret", cleanup.args[1])
+        self.assertIn(path, cleanup.args[1])
+        self.assertIn("-LiteralPath", cleanup.args[1])
 
     def test_failed_final_shutdown_is_reported(self):
         machine = vm.runner_machine(self.primary, 1)
