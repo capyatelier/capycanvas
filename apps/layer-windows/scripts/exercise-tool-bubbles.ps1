@@ -1044,7 +1044,12 @@ function Native-InertiaInterruption([long]$Id,$List,$Scroll){
         $timeline.Add(@{stage='second-down-before';elapsed_ms=$clock.Elapsed.TotalMilliseconds;percent=$moving.after;native=$null})
         [CapyCanvasTouch]::Down(1,$point.x,$point.y)
         & $observe 'second-down-returned'
-        Wait-Until {$admission.native=$List.Current.ItemStatus|ConvertFrom-Json;$admission.native.device -eq 'touch' -and $admission.native.generation -gt $admission.before -and $admission.native.phase -eq 'pressed' -and $admission.native.touch_contacts -eq 1 -and $null -ne $admission.native.pointer_id} 'Native layer list did not process the interrupting touch'
+        Wait-Until {
+            $admission.native=$List.Current.ItemStatus|ConvertFrom-Json
+            $pressed=$admission.native.phase -eq 'pressed' -and $admission.native.touch_contacts -eq 1 -and $null -ne $admission.native.pointer_id
+            $scrolling=$admission.native.phase -eq 'idle' -and $admission.native.last_cancel.reason -eq 'native_scroll' -and $admission.native.last_cancel.generation -gt $admission.before
+            $admission.native.device -eq 'touch' -and $admission.native.generation -gt $admission.before -and ($pressed -or $scrolling)
+        } 'Native layer list did not process the interrupting touch'
         & $observe 'second-down-native'
         $interruptStart=$Scroll.Current.VerticalScrollPercent
         if($interruptStart -le 1 -or $interruptStart -ge 99){throw 'Native inertia reached a boundary before the interrupting contact'}
