@@ -39,7 +39,8 @@ namespace CapyOwnedSearchTest {
  }
  public class TreeWalker{public static TreeWalker ControlViewWalker=new TreeWalker();public Node GetParent(Node node){return node.Parent;}}
  public static class Driver {
-  public static IntPtr Foreground;public static int Activations;
+  public static IntPtr Foreground;public static int Activations,Injected;
+  public static void Down(string device,int x,int y){Injected++;}public static void Up(bool hover){Injected++;}
   public static int GetDpiForWindow(IntPtr window){return 96;}
   public static bool SetForegroundWindow(IntPtr window){Foreground=window;Activations++;return true;}
   public static IntPtr GetForegroundWindow(){return Foreground;}
@@ -364,6 +365,31 @@ if($scopesReveal.Count -ne 1){throw 'Missing actual scopes Reveal helper'}
     if($state.waits -ne 1 -or $visible.Bottom -ne 100 -or $visible.Height -ne 100){throw 'Scopes Reveal did not acknowledge native chart bounds within its viewport'}
 }
 Write-Output 'Scopes Reveal scrolls the full native chart despite clipped UIA bounds and acknowledges its native arranged position.'
+
+& {
+    $switcher=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-switcher-drag.ps1'),[ref]$tokens,[ref]$errors)
+    if(@($errors).Count){throw ($errors|Out-String)}
+    $action=@($switcher.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Swipe-DeleteAction'},$true))
+    if($action.Count -ne 1){throw 'Missing actual native swipe Delete action'}
+    . ([scriptblock]::Create($action[0].Extent.Text.Replace('[CapyRowPointer]','[CapyOwnedSearchTest.Driver]')))
+    $row=[pscustomobject]@{Current=[pscustomobject]@{BoundingRectangle=[pscustomobject]@{Right=1308;Y=807;Height=84}}}
+    $button=[pscustomobject]@{AutomationId='workspace-manager-swipe-delete-custom'};$state=@{visible=$false;by_name=$false;taps=0}
+    $scale=1.5;$Device='touch';$run='C:\owned'
+    function Manager {@{rows=@(@{id='custom';options=@(@{action=@{type='delete'};label='Delete'})})}}
+    function Control([string]$Id,[switch]$Arranged){$row}
+    function Find([string]$Value,[switch]$Name,$Within,[switch]$Visible){
+        if($state.visible -and (($Name -and $state.by_name) -or (!$Name -and !$state.by_name))){$button}
+    }
+    function Native-TapAt($Control,[double]$Drift){if($Control -ne $button){throw 'Swipe Delete targeted another control'};$state.taps++}
+    function Gesture {@{}}
+    function Set-Content {param($Path)process{}}
+    [CapyOwnedSearchTest.Driver]::Injected=0;$rejected=$false
+    try{Swipe-DeleteAction 'custom'}catch{if($_.Exception.Message -ne 'Native swipe Delete action is unavailable'){throw};$rejected=$true}
+    if(!$rejected -or $state.taps -ne 0 -or [CapyOwnedSearchTest.Driver]::Injected -ne 0){throw 'Missing native Swipe Delete injected into another control'}
+    foreach($byName in $false,$true){$state.visible=$true;$state.by_name=$byName;Swipe-DeleteAction 'custom'}
+    if($state.taps -ne 2 -or [CapyOwnedSearchTest.Driver]::Injected -ne 0){throw 'Visible native swipe Delete actions did not retain their direct targets'}
+}
+Write-Output 'Native swipe Delete rejects an absent action before input and retains visible ID and label targets.'
 
 $tiltAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-tilt.ps1'),[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw ($errors|Out-String)}

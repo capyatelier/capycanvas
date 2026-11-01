@@ -277,11 +277,8 @@ function Swipe-DeleteAction([string]$Id){
     $row=Control ('workspace-manager-row-'+$Id) -Arranged
     $spec=@((Manager).rows|Where-Object id -eq $Id)[0].options|Where-Object {$_.action.type -eq 'delete'}|Select-Object -First 1
     if(!$action){$action=Find $spec.label -Name -Within $row -Visible}
-    if($action){$null=Native-TapAt $action 0;return}
-    $bounds=$row.Current.BoundingRectangle
-    $x=[int]($bounds.Right-20*$scale);$y=[int]($bounds.Y+$bounds.Height/2)
-    @{case='native-swipe-revealed-strip';row=$Id;label=$spec.label;bounds=$bounds.ToString();point=@($x,$y);gesture=Gesture}|ConvertTo-Json -Depth 10|Set-Content (Join-Path $run 'swipe-action-target.json')
-    [CapyRowPointer]::Down($Device,$x,$y);Start-Sleep -Milliseconds 50;[CapyRowPointer]::Up($Device -eq 'pen')
+    if(!$action){throw 'Native swipe Delete action is unavailable'}
+    $null=Native-TapAt $action 0
 }
 function Read-AckNative($Peer,[int[]]$RootRuntime,[switch]$Held){
     if($Held -and ![CapyRowPointer]::Active){throw 'The native acknowledgement contact is no longer Down'}
