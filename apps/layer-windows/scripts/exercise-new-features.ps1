@@ -125,7 +125,9 @@ try {
     Tap $sculpt 'pen';Drawer @('sculpt_sets','tools','tool_settings')
     foreach($device in @('mouse','touch','pen')){foreach($choice in @((Model).state.tool_panels.sculpt_sets.groups)){Tap ('sculpt-set-'+$choice.icon) $device;Drawer @('sculpt_sets','tools','tool_settings')}}
     $sculptPreset=(Model).state.brush.preset;Capture 'sculpt-dark' -WithModel
-    Tap $eraser 'touch';Drawer @('tools','tool_settings');Capture 'eraser-dark' -WithModel
+    Tap $eraser 'touch';Drawer @('tool_settings');Capture 'eraser-dark' -WithModel
+    $eraserChoices=(Model).state.tool_panels.tools
+    if(@($eraserChoices.groups).Count -or @($eraserChoices.subtools).Count){throw 'The pinned Eraser unexpectedly exposes tool choices'}
     Tap $brush;Drawer @('brush_sets','tools','tool_settings');if((Model).state.brush.preset -ne $drawing){throw 'Drawing tool memory lost'}
     Tap $sculpt;Drawer @('sculpt_sets','tools','tool_settings');if((Model).state.brush.preset -ne $sculptPreset){throw 'Sculpt tool memory lost'}
     Write-Output "PASS: Brush/Sculpt/Eraser drawers, $InputMode input, retained tool memory"
