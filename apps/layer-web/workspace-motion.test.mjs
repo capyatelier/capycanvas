@@ -62,7 +62,8 @@ export async function checkWorkspaceMotion({call, evaluate, settle}) {
       await input("move",origin);await wait();
       await evaluate(`(()=>{
         const app=layerApp.app, original={};
-        const probe=window.motionProbe={counts:{},cpu:[],frames:[],callbacks:[],placementCpu:[],moves:0,running:true,original,refreshStacks:[],raf:window.requestAnimationFrame};
+        const probe=window.motionProbe={counts:{},cpu:[],frames:[],callbacks:[],placementCpu:[],moves:0,submissions:0,submit:GPUQueue.prototype.submit,running:true,original,refreshStacks:[],raf:window.requestAnimationFrame};
+        GPUQueue.prototype.submit=function(...args){const result=probe.submit.apply(this,args);probe.submissions++;return result;};
         window.requestAnimationFrame=callback=>probe.raf.call(window,callback.name==="presentWorkspaceFrame"?now=>{const t=performance.now();callback(now);probe.callbacks.push(now);probe.placementCpu.push(performance.now()-t);}:callback);
         for(const name of ["state","layout","workspace_update","drop_hint","tab_drag_preview","dispatch","frame","navigator_surface","navigator_size","color_field_request","color_field_pixels"]){
           original[name]=app[name].bind(app);app[name]=(...args)=>{const t=performance.now();const value=original[name](...args);probe.counts[name]=(probe.counts[name]||0)+1;if(name==="frame"&&value.regions)probe.refreshStacks.push({regions:value.regions,revision:String(value.revision)});if(name==="state")probe.refreshStacks.push(new Error().stack);if(name==="dispatch"&&args[0].phase==="move"){probe.moves++;probe.cpu.push(performance.now()-t);}return value;};
@@ -85,7 +86,7 @@ export async function checkWorkspaceMotion({call, evaluate, settle}) {
         if(!native)await new Promise(r=>setTimeout(r,4));
       }
       if(native)await performNative(pending);else await Promise.all(pending);await settle();
-      const probe=await evaluate(`(()=>{const p=motionProbe;p.running=false;const u=p.original.workspace_update();const b=p.node.getBoundingClientRect(),g=u.drag.group;const result={counts:p.counts,cpu:p.cpu,frames:p.callbacks,visualChanges:p.frames.length,placementCpu:p.placementCpu,moves:p.moves,retained:p.node.isConnected&&p.content===p.node.firstElementChild,revision:p.revision,finalRevision:String(u.model_revision),error:g?Math.max(Math.abs(b.x-g.bounds.x),Math.abs(b.y-g.bounds.y)):0};for(const [k,v]of Object.entries(p.original))layerApp.app[k]=v;window.requestAnimationFrame=p.raf;return result;})()`);
+      const probe=await evaluate(`(()=>{const p=motionProbe;p.running=false;const u=p.original.workspace_update();const b=p.node.getBoundingClientRect(),g=u.drag.group;const result={counts:p.counts,cpu:p.cpu,frames:p.callbacks,visualChanges:p.frames.length,placementCpu:p.placementCpu,moves:p.moves,submissions:p.submissions,retained:p.node.isConnected&&p.content===p.node.firstElementChild,revision:p.revision,finalRevision:String(u.model_revision),error:g?Math.max(Math.abs(b.x-g.bounds.x),Math.abs(b.y-g.bounds.y)):0};for(const [k,v]of Object.entries(p.original))layerApp.app[k]=v;window.requestAnimationFrame=p.raf;GPUQueue.prototype.submit=p.submit;return result;})()`);
       assert.equal(probe.retained,true,`${device}/${scenario}: retain DOM and content`);
       if(probe.counts.state)console.log(await evaluate("motionProbe.refreshStacks"));
       assert.equal(probe.counts.state||0,0,`${device}/${scenario}: no full state serialization`);
@@ -104,6 +105,7 @@ export async function checkWorkspaceMotion({call, evaluate, settle}) {
         assert.equal(probe.counts.navigator_size||0,0,"native overview needs no geometry publication during translation");
         assert.equal(probe.counts.navigator_surface||0,0,"retain the GPU surface");
         assert.equal(probe.counts.frame||0,0,"placement needs no GPU rendering");
+        assert.equal(probe.submissions,0,"placement submits no GPU work");
         assert.ok(await evaluate(`(()=>{const p=motionProbe,c=p.node.querySelector('.navigator-surface'),b=c.getBoundingClientRect(),r=p.node.querySelector('.navigator-overview').getBoundingClientRect();return c===p.surface&&c.width===Math.round(b.width*devicePixelRatio)&&Math.abs(b.x-r.x)<1&&Math.abs(b.y-r.y)<1;})()`), "native-resolution GPU surface follows its panel");
       }
       const sorted=probe.cpu.sort((a,b)=>a-b),n=probe.frames.length;
@@ -134,7 +136,7 @@ export async function checkWorkspaceMotion({call, evaluate, settle}) {
     await writeFile("artifacts/workspace-motion/web.json",JSON.stringify(results,null,2));
     console.log("PASS: native mouse/touch motion, retained models, matching geometry, drop, undo and redo, glass following a dragged float");
   } finally {
-    await evaluate("if(window.motionProbe){motionProbe.running=false;for(const[k,v]of Object.entries(motionProbe.original))layerApp.app[k]=v;window.requestAnimationFrame=motionProbe.raf;}");
+    await evaluate("if(window.motionProbe){motionProbe.running=false;for(const[k,v]of Object.entries(motionProbe.original))layerApp.app[k]=v;window.requestAnimationFrame=motionProbe.raf;GPUQueue.prototype.submit=motionProbe.submit;}");
     if(held){await input("up");held=null;}
     await send({type:"restore_workspace",workspace:saved});
     await send({type:'preferences',action:{type:'edit',id:'transparency',value:transparency}});

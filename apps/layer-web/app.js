@@ -324,7 +324,6 @@ function publishLanguage(patch) {
   return true;
 }
 function applyChange(change) {
-  if (change.regions & (1 | 2 | 4 | 8 | 16 | 128 | 256 | 8192)) bubbles?.refresh();
   if (app.language_pending()) queueLanguage();
   canvasBar?.hold(app.canvas_bar_hold());
   if (change.regions & 512) {
@@ -333,10 +332,12 @@ function applyChange(change) {
     if (change.regions === 512) { if (change.canvas_wake) wake(); return; }
   }
   if(change.regions & 256) { editor?.refreshColorPreview(); refreshColorEditors(); }
-  if(change.regions===256){if(change.canvas_wake)wake();return;}
+  if(change.regions===256){bubbles?.refresh();if(change.canvas_wake)wake();return;}
   if (change.regions & (1 | 2 | 4 | 8 | 128)) workspaceManager?.observe();
   if (change.regions) {
     const presentation = app.workspace_update();
+    if(change.regions & (1 | 2 | 4 | 8 | 16 | 128 | 256 | 8192)
+      && ((change.regions&(1|2|4|8|16|128|256|8192))!==129||workspaceModelRevision!==presentation.model_revision))bubbles?.refresh();
     if (workspaceModelRevision !== presentation.model_revision) {
       if (workspaceContentRevision === presentation.content_revision) {
         queueWorkspaceLayout(presentation);

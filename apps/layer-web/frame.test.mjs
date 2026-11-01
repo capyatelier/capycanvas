@@ -7,6 +7,22 @@ import {colorDialogDom} from './color-dialog-fixture.mjs';
 import {latinKey} from './text-input.js';
 
 const source = readFileSync(new URL("app.js", import.meta.url), "utf8");
+test('retained workspace placement keeps bubble presentation without scheduling GPU work',()=>{
+  let refreshes=0,wakes=0,model=1;
+  const context={app:{language_pending:()=>false,workspace_update:()=>({model_revision:model,content_revision:1}),state_update:assert.fail},
+    bubbles:{refresh(){refreshes++;wakes++;}},canvasBar:null,workspaceManager:{observe(){}},editor:{refreshColorPreview(){}},
+    workspaceModelRevision:1,workspaceContentRevision:1,workspaceGesture:{started:true},
+    queueWorkspacePresentation(){},queueWorkspaceLayout(){},refreshColorEditors(){},refreshTextureDialogs(){},wake(){wakes++;}};
+  runInNewContext(source.slice(source.indexOf('function applyChange(change)'),source.indexOf('let canvasCursorActive')),context);
+  for(const regions of [129,129|32768])context.applyChange({regions,canvas_wake:false});
+  assert.deepEqual([refreshes,wakes],[0,0]);
+  model=2;context.applyChange({regions:129,canvas_wake:false});
+  assert.deepEqual([refreshes,wakes],[1,1],'A new shared model still refreshes bubbles');
+  model=1;
+  for(const regions of [2,4,8,16,256,8192])context.applyChange({regions,canvas_wake:false});
+  assert.deepEqual([refreshes,wakes],[7,7],'Brush, document, command, settings, preview and bubble changes remain live');
+});
+
 test('header buttons present shared refusal hints without replacing layout-editing hints', () => {
   const spec={label:'Shared label',enabled:false,disabled_reason:'Shared refusal'},command={tooltip:'Command hint'};
   assert.equal(headerButtonHint(spec,command,false),'Shared refusal');
