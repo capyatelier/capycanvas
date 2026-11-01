@@ -219,6 +219,130 @@ extension XCTestCase {
         expectPixels(originalPixels, in: app)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
+    #if os(iOS)
+    @MainActor func checkTextureSheetDuringStartup(in app: XCUIApplication) throws {
+        app.launch()
+        let texture = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-texture-")).firstMatch
+        if !texture.exists {
+            let layers = app.buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", "header-tool-panel", "Layers panel")).firstMatch
+            guard layers.waitForExistence(timeout: 20) else { throw XCTSkip("Layers is unavailable during brush preparation") }
+            let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == YES"), object: layers)
+            guard XCTWaiter.wait(for: [enabled], timeout: 20) == .completed else {
+                throw XCTSkip("Layers stays disabled during brush preparation")
+            }
+            workspaceActivate(layers)
+        }
+        XCTAssertTrue(texture.waitForExistence(timeout: 10))
+        let preparing = app.descendants(matching: .any)["canvas-startup"].firstMatch
+        guard preparing.exists && preparing.label.contains("Preparing brush") else {
+            attachEditor(in: app, name: "texture-startup-window-missed")
+            throw XCTSkip("Brush preparation finished before the texture tap")
+        }
+        XCTAssertTrue(preparing.label.contains("Preparing brush"), "The first texture tap occurs during brush preparation")
+        texture.tap()
+        let dialog = app.descendants(matching: .any)["texture-dialog"].firstMatch
+        for visit in 0..<2 {
+            if visit > 0 { workspaceActivate(texture) }
+            XCTAssertTrue(dialog.waitForExistence(timeout: 10))
+            workspaceActivate(app.buttons["texture-cancel"])
+            XCTAssertTrue(dialog.waitForNonExistence(timeout: 10))
+        }
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
+    @MainActor func checkTextureSheetLifecycle(in app: XCUIApplication, theme: String, recover: Bool = false) throws {
+        if recover {
+            app.launchEnvironment["CAPY_PERSISTENCE_PROBE"] = "1"
+            app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"}]"#
+        }
+        app.launch()
+        waitForEditorInteraction(in: app)
+        if !recover {
+            app.typeKey(",", modifierFlags: .command)
+            XCTAssertTrue(app.buttons["settings-done"].waitForExistence(timeout: 10))
+            let themePicker = app.descendants(matching: .any)["preference-theme"].firstMatch
+            if !themePicker.waitForExistence(timeout: 3) { workspaceActivate(app.staticTexts["Appearance"].firstMatch) }
+            workspaceActivate(themePicker)
+            workspaceActivate(app.buttons[theme.capitalized])
+            expectation(for: NSPredicate(format: "value == %@ OR label ENDSWITH %@", theme.capitalized, theme.capitalized), evaluatedWith: themePicker)
+            waitForExpectations(timeout: 10)
+            workspaceActivate(app.buttons["settings-done"])
+        }
+        let painter = app.buttons["workspace-switch-builtin:workspace:painter"]
+        XCTAssertTrue(painter.waitForExistence(timeout: 10))
+        if !painter.isSelected { workspaceActivate(painter) }
+        expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: painter)
+        waitForExpectations(timeout: 10)
+        var checkpoint: Data?
+        if recover {
+            let ready = app.staticTexts["recovery-status"]
+            guard ready.waitForExistence(timeout: 2) else { throw XCTSkip("The existing recovery probe requires a diagnostic app") }
+            editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
+            let unpainted = editorPixels(in: app)
+            for _ in 0..<3 {
+                editorMenu(in: app, menu: "Layer", id: "add_layer", label: "New layer", submenu: "New")
+                editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
+                editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection")
+                editorMenu(in: app, menu: "Select", id: "deselect", label: "Deselect pixels")
+            }
+            XCTAssertNotEqual(editorPixels(in: app), unpainted)
+            expectation(for: NSPredicate(format: "label == %@ OR value == %@", "Recovery ready", "Recovery ready"), evaluatedWith: ready)
+            waitForExpectations(timeout: 60)
+        }
+        let texture = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-texture-")).firstMatch
+        if !app.scrollViews["layer-rows"].exists {
+            workspaceActivate(app.buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", "header-tool-panel", "Layers panel")).firstMatch)
+        }
+        if recover { revealEditorControl(texture, label: "Choose Texture", type: .button, in: app.scrollViews["layer-rows"]) }
+        XCTAssertTrue(texture.waitForExistence(timeout: 10))
+        let dialog = app.descendants(matching: .any)["texture-dialog"].firstMatch
+        if recover {
+            workspaceActivate(texture)
+            XCTAssertTrue(dialog.waitForExistence(timeout: 10))
+            let canvas = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "texture-tile-", "Canvas")).firstMatch
+            revealEditorControl(canvas, label: "Canvas", type: .button, in: dialog.scrollViews.firstMatch)
+            workspaceActivate(canvas)
+            workspaceActivate(app.buttons["texture-apply"])
+            XCTAssertTrue(dialog.waitForNonExistence(timeout: 10))
+            expectation(for: NSPredicate(format: "value == %@", "Canvas"), evaluatedWith: texture)
+            waitForExpectations(timeout: 10)
+            expectation(for: NSPredicate(format: "label == %@ OR value == %@", "Recovery ready", "Recovery ready"), evaluatedWith: app.staticTexts["recovery-status"])
+            waitForExpectations(timeout: 60)
+            checkpoint = editorPixels(in: app)
+        }
+        let original = texture.value as? String
+        XCTAssertFalse(original?.isEmpty ?? true)
+        let cancel = app.buttons["texture-cancel"]
+        for visit in 0..<2 {
+            workspaceActivate(texture)
+            XCTAssertTrue(dialog.waitForExistence(timeout: 10))
+            XCTAssertTrue(cancel.isHittable)
+            attachEditor(in: app, name: "texture-sheet-\(theme)-\(visit)")
+            if let checkpoint, visit == 0 {
+                app.terminate()
+                app.launchEnvironment.removeValue(forKey: "CAPY_INITIAL_ACTIONS")
+                app.launch()
+                let restoredSheet = dialog.waitForExistence(timeout: 2)
+                attachEditor(in: app, name: "texture-relaunch-\(theme)-sheet-\(restoredSheet)")
+                if restoredSheet { workspaceActivate(cancel); XCTAssertTrue(dialog.waitForNonExistence(timeout: 10)) }
+                waitForEditorInteraction(in: app)
+                expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: app.descendants(matching: .any)["canvas"].firstMatch)
+                waitForExpectations(timeout: 60)
+                editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
+                expectPixels(checkpoint, in: app)
+                if !app.scrollViews["layer-rows"].exists { workspaceActivate(app.buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", "header-tool-panel", "Layers panel")).firstMatch) }
+                revealEditorControl(texture, label: "Choose Texture", type: .button, in: app.scrollViews["layer-rows"])
+                XCTAssertEqual(app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-")).count, 5)
+            } else {
+                workspaceActivate(cancel)
+                XCTAssertTrue(dialog.waitForNonExistence(timeout: 10))
+            }
+            XCTAssertTrue(texture.exists)
+            XCTAssertEqual(texture.value as? String, original)
+            XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+        }
+    }
+    #endif
+
     @MainActor func checkFillThumbnailColor(in app: XCUIApplication, theme: String) {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"workspace_manager","command":{"type":"switch","id":"builtin:workspace:painter"}}]"#
         app.launch()

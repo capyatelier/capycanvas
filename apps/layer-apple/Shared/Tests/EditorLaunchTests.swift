@@ -209,6 +209,21 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testEditColorDark() { checkEditColor(in: ignoringSavedWindows(editorCaptureApplication()), theme: "dark") }
     @MainActor func testFillThumbnailColor() { checkFillThumbnailColor(in: editorCaptureApplication(), theme: "light") }
     @MainActor func testFillThumbnailColorDark() { checkFillThumbnailColor(in: editorCaptureApplication(), theme: "dark") }
+    #if os(iOS)
+    @MainActor func testTextureSheetLifecycle() throws { try checkTextureSheetLifecycle(in: editorTestApplication(), theme: "light") }
+    @MainActor func testTextureSheetLifecycleDark() throws { try checkTextureSheetLifecycle(in: editorTestApplication(), theme: "dark") }
+    @MainActor func testTextureSheetRecovery() throws { try checkTextureSheetLifecycle(in: editorTestApplication(), theme: "light", recover: true) }
+    @MainActor func testTextureSheetRecoveryDark() throws { try checkTextureSheetLifecycle(in: editorTestApplication(), theme: "dark", recover: true) }
+    @MainActor func testTextureSheetDuringStartup() throws { try checkTextureSheetDuringStartup(in: editorTestApplication()) }
+    @MainActor func testTextureSheetPortrait() throws {
+        XCUIDevice.shared.orientation = .portrait
+        try checkTextureSheetLifecycle(in: editorTestApplication(), theme: "light")
+    }
+    @MainActor func testTextureSheetPortraitDark() throws {
+        XCUIDevice.shared.orientation = .portrait
+        try checkTextureSheetLifecycle(in: editorTestApplication(), theme: "dark")
+    }
+    #endif
     @MainActor func testSwitcherVisibility() { checkSwitcherVisibility(in: editorTestApplication()) }
     @MainActor func testWorkspaceSwitcher() {
         checkWorkspaceSwitcher(in: editorTestApplication())
