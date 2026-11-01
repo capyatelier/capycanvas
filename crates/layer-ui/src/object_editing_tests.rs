@@ -832,6 +832,19 @@ fn choosing_a_brush_on_an_image_layer_explains_at_once() {
 }
 
 #[test]
+fn tapping_a_brush_key_on_an_image_layer_explains_on_release() {
+    let (mut s, _, _) = fixture();
+    key(&mut s, "b", true, false, false);
+    assert_eq!(s.layer_interaction.tool, LayerCanvasTool::Paint);
+    assert!(s.state.notice.is_none());
+    let reply = key(&mut s, "b", false, false, false);
+    assert_eq!(s.layer_interaction.tool, LayerCanvasTool::Paint);
+    assert_ne!(reply.change.regions & regions::HOST, 0);
+    assert_eq!(s.state.notice.as_ref().map(|n| n.actions.iter().map(|a| a.id).collect::<Vec<_>>()),
+        Some(vec![NoticeActionId::AddMask, NoticeActionId::NewPaintLayer, NoticeActionId::RasterizeLayer]));
+}
+
+#[test]
 fn fill_clear_layer_and_frequency_separation_on_images_raise_the_image_refusal() {
     let (mut s, _, _) = fixture();
     invoke(&mut s, CommandId::BlendPerceptual);

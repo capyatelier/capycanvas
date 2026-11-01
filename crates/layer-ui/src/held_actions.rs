@@ -111,11 +111,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.interaction.restores.push(spring.restore);
             return UiChange::default();
         }
+        if matches!(spring.restore, Restore::Tool(..)) { self.explain_chosen_tool(); }
         let brush_changed = self.layer_interaction.tool == LayerCanvasTool::Paint && self.tools.remember(self.state.brush.preset);
         let memory = self.state.tool_slots.clone();
         self.remember_tool_slots();
         if brush_changed || memory != self.state.tool_slots { self.changed(regions::BRUSH | regions::COMMANDS, false) }
-        else { UiChange::default() }
+        else { self.changed(0, false) }
     }
 
     /// Put the modifier keys that are fully held into effect; more specific
