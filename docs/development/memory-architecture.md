@@ -55,7 +55,7 @@ These rules define the end state:
 | Imported photos | A `SourceImage` keeps every LZ4 tile in RAM. LZ4 doesn't compress RGB photo tiles. A fixed 512 MiB per-document asset limit refuses further imports. | Two RAM copies of each photo (tiles plus decoded cache), and a refused 15th 12 MP photo on a 64 GB machine. |
 | Opening a file | `ResourceReader` materialises every tile into RAM and transcodes deflate tiles to LZ4. | RAM grows with document size on open. |
 | Spill | `raster_storage::Bytes` supports `Disk` and `External` backings, but only parked tabs use them. `Disk` reads seek synchronously on the decode worker, with no read cache. | The open document can't use the disk. |
-| Recovery | `SessionStore` writes every tile to disk; live tiles never point at those files. | The bytes are on disk already, but RAM keeps the only copy the editor uses. |
+| Recovery | `SessionStore` writes every tile as its own file (`resources/<id>.bin`), each created, written, synced, renamed and its directory synced (`crates/layer-core/src/package/session_store.rs`). Live tiles never point at those files. | A first checkpoint of about 2,000 tiles takes 6.6–8.6 s, about 3.5–4.7 ms a tile (Linux, RTX PRO 6000 workstation, 2026-11-01). RAM keeps the only copy the editor uses. |
 | GPU precision | Paint pages, source slots, mips, scratch and display levels are RGBA32F. | 16 bytes per pixel where the document stores 3–8. |
 | Image mips | Built from every level-0 tile of every visible image, each session, regardless of the view. | A 61 MP photo keeps all 942 source tiles resident on an RTX PRO 6000 (Linux, 2026-10-31). |
 | Complete hierarchy | An optional full-document RGBA32F pyramid including level 0, kept even when image objects make it unusable. | A blank 61 MP document holds 1.22 GB of GPU memory on an RTX PRO 6000 (Linux, 2026-10-31). |
@@ -101,7 +101,8 @@ takes from the lowest class first and, within it, by the lowest
 | Edit-ready | The dependencies of pending contacts and operations; then a bounded neighbourhood of the edit target around the pointer, sized by what the current tool reads (brush radius, smudge and wet-paint support, filter halo) | VRAM, compressed copies in RAM | The target, tool or pointer moves on |
 | Visible | Window pages at the presented level and the adjacent level; admitted pivot images | VRAM, with compressed copies in RAM | The view moves away |
 | Ahead | Pages in the direction of motion; the next level during a pinch; tiles a queued operation will read | RAM, then VRAM as they near the view | The prediction changes |
-| Warm | Recently visible pages, per-layer reduced windows and overviews, recent history versions, parked tabs and other windows' documents | RAM, compressed | RAM is over budget; authored copies go once their store copy is written |
+| Warm | Durable authored tiles: recent history, parked tabs and other windows' drawings, everything off screen | The OS page cache, over the store and package files; Capy's heap keeps only a small hot set | The OS reclaims the page cache; the hot set leaves when its tiles stop being reused |
+| Warm derived | Recently visible pages, per-layer reduced windows and overviews | VRAM, and compressed in Capy's heap | The budget needs the room |
 | Cold | Everything else | Disk | Never; the store is the copy of record |
 
 Only the root overview is guaranteed resident: one whole-document image of at
@@ -158,16 +159,16 @@ B_ram(t) = min( memory limit,
                 process limit − pinned,
                 max(floor, ours(t) + available(t) − reserve) )
 
-memory limit = the painter's setting, or share × physical when it is Automatic
+memory limit = the internal override, or share × physical by default
 ```
 
 - `available(t)` is the OS figure above; `ours(t)` is what the ledger holds, so the
   budget measures headroom as if our caches were free.
 - `reserve` keeps room for the system and other apps: max(10 % of physical,
   1 GiB) on desktops, max(15 %, 0.75 GiB) on tablets.
-- `share` is the Automatic limit: 0.6 of physical memory on desktops, 0.45 on
-  tablets. A painter's setting replaces it, higher or lower; the reserve still
-  applies, so a high setting never makes the system kill Capy.
+- `share` is the default limit: 0.6 of physical memory on desktops, 0.45 on
+  tablets. The internal override replaces it, higher or lower; the reserve still
+  applies, so a high override never makes the system kill Capy.
 - `floor` is the smallest working budget, about 384 MiB: pinned and visible
   classes for one window.
 - On unified devices GPU allocations count against this pool, and Metal's
@@ -199,17 +200,30 @@ about once a second off the frame path.
 ### Controls
 
 Pool budgets, cache shares, spill, prefetch distance and undo depth are
-automatic. Painters get two settings in shared Preferences
-(`crates/layer-ui/src/settings.rs`), with their text in every Fluent catalog:
+automatic, and Capy returns everything it can rebuild to the OS. Painters get
+one setting in shared Preferences (`crates/layer-ui/src/settings.rs`), with its
+text in every Fluent catalog:
 
-- **Memory limit:** Automatic (the default) or a size, from 1 GB up to the
-  device's physical memory. It sets `memory limit` above. A painter with a slow
-  drive raises it so more stays in RAM; one running other heavy applications
-  lowers it. It applies to the RAM pool on discrete GPUs and to the whole pool on
-  unified devices; VRAM always follows the driver's budget.
 - **Scratch disk** (desktop only): where the session store lives. The default is
-  the app's cache directory. Painters with a small system drive and a large
+  the existing session folder. Painters with a small system drive and a large
   second drive need to choose; Capy can't know which drive they want filled.
+
+There is no memory limit in Preferences. An internal override caps Capy's own
+memory (its heap, and on unified devices its GPU allocations) for testing and
+support; the OS page cache is outside it. Whether painters ever need a limit is
+decided later from the memory diagnostics below.
+
+### Memory diagnostics
+
+The Stats panel (`crates/layer-ui/src/stats.rs`) gains memory rows, shared by
+every host: Capy's private memory and its peak; GPU memory in use against the
+driver's budget; the ledger by residency class, with pinned debt and the hot
+set; parked drawings' scenes; the session store's size on disk; the current
+pressure state; and how many operations memory refusals have turned away. They
+are copied snapshots of what the budget manager already keeps, never read on the
+frame path, and each row states what it measures, its scope (process or drawing)
+and when it was sampled. The existing Canvas storage row keeps its meaning.
+Before the ledger exists, the first rows show what the OS and driver report.
 
 Low memory normally shows only as slower sharpening. Messages appear only when
 new work can't be admitted (see below) or when the store can't grow: then Capy
@@ -245,24 +259,53 @@ each have a ceiling inside the budget, charged until they complete.
 
 ### Eager, not greedy
 
-The budget is a ceiling. Within it, a copy stays in RAM or VRAM while it is
-likely to save work, and leaves only when the budget needs the room:
+The budget is a ceiling, not a target, and RAM holds three kinds of data:
 
-- **Keep:** compressed authored tiles of every open document, including parked
-  tabs and other windows, so nothing is read back from disk while RAM is free;
-  recently visible pages and adjacent levels; recent history versions; derived
-  data that costs more to rebuild than to hold (mips, composite pages, pivot
-  branches). Write-behind still puts authored tiles in the session store for
-  recovery, but the RAM copy stays.
+| Tier | Holds | Managed by |
+| --- | --- | --- |
+| Capy's heap | Dirty authored tiles until durable, buffers in flight, a small hot set of tiles reused within seconds, derived data with no file behind it | The budget manager |
+| OS page cache | Durable authored tiles: the session store's packs, saved packages, derived mip files | The OS, which keeps them while RAM is free and drops them first under pressure |
+| GPU | The view, the edit target, pivot images and composites | The budget manager's VRAM pool (part of RAM on unified devices) |
+
+- **Keep in the heap only what must be there.** Once a tile is durable in the
+  store, Capy drops its heap copy unless the tile is in the hot set; the page
+  cache already holds the same bytes, so a second copy would waste RAM. Clean
+  file pages are the cheapest memory to reclaim: the OS drops them, while
+  anonymous heap has to be swapped or compressed, and LZ4 tiles barely compress.
+  The page cache still uses physical RAM, and a cgroup v2 limit still charges it
+  to Capy (`memory.current`), so pressure and cgroup limits stay part of
+  admission; what changes is that the process's private memory (Task Manager's
+  private working set, iPadOS's footprint, Android's PSS) no longer carries a
+  second copy.
+- **Let the page cache be eager, and plan for misses.** On a machine with free
+  RAM the OS keeps the pack pages it has read or written, so a drawing often
+  stays in memory and panning rarely reads the disk. That residency is
+  best-effort: under pressure the OS or Android's low-memory killer reclaims it.
+  A miss costs a read on a worker while the frame shows a coarser level; the
+  first dab after a miss waits for its neighbourhood, which the latency gates
+  measure.
+- **Read through the cache, never around it.** Reads are positional (`pread`,
+  `ReadFile`) on workers and decode straight from the read buffer. Advisory
+  hints (`posix_fadvise` `WILLNEED`, `F_RDADVISE`) are free to be ignored; real
+  prefetch reads are accepted jobs with leased buffers, bounded outstanding
+  bytes, and ownership until completion, including after a cancel (Windows
+  overlapped reads keep their buffer until they complete), and a demand read
+  takes over a prefetch already in flight instead of reading again. No direct,
+  cache-bypassing I/O and no memory mapping (see the session store). Estimated,
+  not measured: a cached 256 KiB tile costs a system call, a copy and an
+  integrity check, perhaps 20–80 µs on a worker, before decoding and upload; a
+  fast three-stream pan reads up to about 900 tiles a second. Read, check,
+  decode, convert and upload are budgeted separately, and the hot set's size
+  follows measured reuse and first-dab latency.
 - **Don't keep:** a decoded CPU copy of a tile that is already on the GPU, or
   any decoded copy once its upload completes; prefetch beyond the view's
   predicted motion; whole-document decoding or mip chains for layers no view
   needs; copies of tiles nothing references.
+- **Web:** the browser exposes no page cache, so the web host keeps a small
+  compressed heap cache over OPFS and lets the browser manage the rest.
 
-A machine with spare RAM therefore keeps a whole 28-photo document in memory
-and never touches the disk; a tight one keeps the view and the edit and reads the
-rest from the store. The fixed 64 MiB parked-tab budget goes away: parked tabs
-are Warm, behind the active document.
+The fixed 64 MiB parked-tab budget goes away: parked tabs' tiles are durable and
+live in the page cache, and their scenes are Warm in VRAM.
 
 ### Windows and processes
 
@@ -287,44 +330,125 @@ everything else; parked tabs follow.
   so their peak is a band, not the whole image. Today the JPEG path decodes the
   whole image first.
 
+### Hidden windows give memory back
+
+When a window is minimized or hidden, or the app goes to the background (GTK
+unmapping, Windows minimizing, Android `onStop`, iPadOS backgrounding, the web's
+`visibilitychange`), its Warm data drops to the bottom of the eviction order and
+its pending write-behind continues within its usual bounds; on Android and
+iPadOS, where a backgrounded app is killed first, its Warm data and parked scenes
+are released once no capture or command still holds them. Its presented image
+and root overview stay, so showing it again is immediate and the rest refines as
+after a tab switch. On Apple the background write time is limited, so nothing
+waits for write-behind to drain.
+
+### Shader cache across launches
+
+Every launch, new device and first use of a brush compiles its shader recipes
+today. On Vulkan (Linux, Android and Windows' fallback) a persistent wgpu
+`PipelineCache` speeds those compiles up; a hit still builds the pipeline, and
+desktop drivers already keep caches of their own, so the gain is measured, not
+assumed. The cache is a bounded private file written atomically with an
+integrity check, loaded and saved off the UI and input paths, and dropped
+silently when it is missing, stale, truncated or corrupt; it never fails
+startup. D3D12 and Metal rely on their driver caches.
+
 ## Session tile store
 
-The session store is the open document's copy of record until it is saved.
+The session store is the open document's copy of record until it is saved, and
+the recovery copy. It replaces recovery's one-file-per-tile layout with packs.
 
-- **Layout:** append-only pack files of 8 MiB chunks (`SPILL_CHUNK_BYTES`), indexed
-  in memory by the tile's existing identity: about 40 bytes per tile, 0.2 MB for
-  the 28-photo document.
-- **Writing:** imports and commits append compressed tiles on a file worker. Once
-  a write is flushed, the tile's `Bytes` records its `Disk` location and keeps its
-  RAM copy while the budget allows, so dropping it later costs nothing. Recovery
-  reads the store and its generation metadata instead of writing a second copy.
+- **Layout:** append-only pack files with stable identities, about 64 MiB to
+  start (a parameter, tuned against read locality, dead space and compaction
+  peaks), sealed when full. Each import or checkpoint batch is written in
+  spatial order per layer, so neighbours usually sit together; later edits land
+  elsewhere, so readers coalesce adjacent indexed ranges up to a byte cap
+  rather than assume locality. Locations reuse the package's pack records (`{"pack", "offset"}`,
+  `docs/reference/capy-package.md`), indexed in memory by tile identity: about 40
+  bytes per tile, 0.2 MB for the 28-photo document.
+- **Writing:** one writer per store, as the existing owner lock enforces across
+  windows and processes, appends new tiles sequentially at low I/O priority. A
+  checkpoint commits in a batch: append its tiles, sync every pack it touched,
+  durably publish the names of any new packs (on Unix by syncing their
+  directory), then atomically publish the generation metadata and head. That is
+  a number of syncs proportional to the packs touched plus the publication
+  steps, instead of several per tile. The sync is `fdatasync` on Linux and
+  Android, `FlushFileBuffers` on Windows, and `F_FULLFSYNC` on Apple, where
+  plain `fsync` doesn't flush the drive's cache. Once a tile is durable its
+  `Bytes` records the location and its heap copy is dropped unless hot.
+- **Writes never starve reads.** I/O priority hints are aids, not guarantees, so
+  queued write bytes, concurrent sync cohorts and compaction bandwidth are
+  bounded process-wide, checkpoints coalesce, and required reads have their own
+  workers that never wait behind a sync. Compression and integrity work for
+  writes runs under the same work limits as other background work.
 - **Reading:** an IO queue with the residency classes as priorities, cancellation
-  by view generation, and a compressed read cache in RAM. Reads never run on the
-  input, render or presentation thread. `Bytes::ready` reports a pending `Disk`
-  read as not ready, like `External`.
-- **Opening a saved file:** keep deflate tiles in the package and read them on
+  by view generation, positional reads through the page cache and the small hot
+  set in the heap. Reads never run on the input, render or presentation thread.
+  `Bytes::ready` reports a pending `Disk` read as not ready, like `External`.
+- **No memory mapping.** A fault on a mapped page blocks its thread on the disk,
+  can't be cancelled and is invisible in code review, so a stray access on the
+  render thread drops a frame; worker reads have explicit completion and
+  errors. An I/O error or a removable drive becomes a SIGBUS instead of an error
+  value. Handles of any kind still need explicit sharing modes on Windows (read,
+  write and delete sharing) plus leases, for appends, compaction and atomic
+  saves.
+- **Opening a saved file:** when the package has a valid embedded preview (a
+  PNG of up to 512 px, validated by `crates/layer-core/src/package/preview.rs`),
+  show it as a temporary picture of the drawing, decoded on a worker and placed
+  with the output framing and SDR treatment the package contract gives it,
+  until the drawing's own overview replaces it. A missing or unusable preview
+  falls back to the normal opening frame; a preview never seeds editable pixels
+  or counts as readiness, and a late decode never replaces a newer overview. Keep
+  deflate tiles in the package and read them on
   demand, through an immutable lease on the package file that the document,
-  its history and every job hold. Transcode a tile into the store's LZ4 when it
-  is first read or at idle. Saving copies unchanged tiles straight from the
-  leased original; an atomic save over the same path keeps the old file alive
-  for its leases. Before a recovery generation refers to a tile, that tile is in
-  the store, so recovery never depends on the original file. Package and store
-  reads are both asynchronous; the transport's synchronous `poll` stays on
-  workers.
+  its history and every job hold. `.capy` already stores tiles in uncompressed
+  pack members located by its resource table, so this needs no format change. Transcode a
+  tile into the store's LZ4 when it is first read or at idle. Saving copies
+  unchanged tiles straight from the leased original; an atomic save over the
+  same path keeps the old file alive for its leases. Before a recovery generation
+  refers to a tile, that tile is in the store, so recovery never depends on the
+  original file. Package and store reads are both asynchronous; the transport's
+  synchronous `poll` stays on workers.
 - **Codec:** LZ4 for paint, which compresses well; a fast predictive codec for photo
   tiles, which LZ4 leaves at raw size. Both must decode at over 1 GB/s per tablet
   core, so decoding stays cheaper than an SSD read.
-- **Durability order:** a tile stays Pinned until its pack write is flushed. A
+- **Durability order:** a tile stays Pinned until its pack data is synced. A
   recovery generation's metadata and head are published only after every tile it
   names is durable, and the previous good generation stays until the new one is
   complete. A commit still only in RAM is covered by the next generation; that
-  window is the recovery interval, as today.
+  window is the recovery interval, as today. Durable metadata records each
+  pack's committed extent; a range is read only after its length and checksum
+  check out, and bytes past a committed extent are reused only when no head,
+  previous generation or live lease can reach them. The recovery validator
+  learns to accept holes, as package readers already do.
 - **Reclaiming space:** a record is dead only when no document, history step,
   capture, save, export, reader or current or previous durable generation refers
-  to it. Compaction writes new packs, publishes the remapped index atomically and
-  keeps the old packs until their readers finish.
+  to it. Compaction copies live records sequentially into new packs, makes the
+  copies durable before publishing the remapped index atomically, and deletes
+  old packs whole once their readers finish; packs are never truncated.
+  Compaction reserves its own destination space apart from what edits and
+  commits need, runs one copy at a time, and on failure discards its
+  unpublished packs while the source and the good head stay.
+- **Compatibility:** recovery copies are saved data
+  ([saved data compatibility](saved-data-compatibility.md)). New builds keep
+  reading the one-file-per-tile layout. Leaving packs untouched isn't enough on
+  a downgrade: an older build could fall back to a previous generation, commit,
+  and clean up the newer generation's metadata. So the packed layout's heads and
+  metadata live in their own namespace, which released builds neither read nor
+  clean, and the per-tile store a drawing migrates from is retired the way stores
+  already retire. Tests run the whole cycle against each released layout:
+  upgrade, downgrade, open, edit, checkpoint, clean up, upgrade, and the newest
+  artwork and history must survive or be explicitly preserved.
+- **Durability scope:** the guarantees assume a local filesystem. A scratch disk
+  on a removable or network drive works, but recovery from it is best-effort if
+  the drive goes away.
+- **Where it lives:** the existing persistent session roots (Android's
+  `noBackupFilesDir`, Apple's Application Support), never a disposable cache
+  directory. New and compacted packs use the default first-unlock data
+  protection on Apple; when storage is unavailable, the good generation stays
+  and writing resumes later.
 - **Storage speed:** Capy assumes an SSD or tablet flash. On a slower drive the
-  painter raises the memory limit, and the eager policy keeps more in RAM.
+  page cache still often keeps the drawing in RAM while memory is free.
 - **Web:** the existing OPFS store, extended from parked tabs to the open
   document, with tile-sized reads instead of whole-chunk loads.
 
@@ -644,7 +768,7 @@ existing probes supplies the parameters.
 | Pools | VRAM and RAM, budgeted separately | One pool for CPU and GPU |
 | Scarce resource | VRAM | The pool |
 | Occupancy target | 80 % of the driver budget | The RAM formula, GPU included |
-| RAM cache | Generous: compressed tiles re-upload in about 30 µs each | Small; never a decoded CPU copy of a tile already on the GPU |
+| RAM for tiles | Durable tiles in the page cache, a small hot set in Capy's heap; re-uploading a tile is cheap over PCIe (not yet measured) | The same, but GPU allocations share the pool, and never a decoded CPU copy of a tile already on the GPU |
 | Upload | Decode into the mapped upload ring, copy over PCIe | Decode into the upload ring; the copy stays in DRAM |
 | Spill trigger | RAM pressure | Any pressure |
 | Over budget | Windows quietly demotes to shared memory; Linux drivers fail the allocation | The OS ends the app |
@@ -665,7 +789,7 @@ web host is treated as unified, the safer assumption.
 - **Disk full:** keep new tiles in RAM, stop write-behind, and show the scratch
   disk message. Never drop authored data.
 - **Slow or busy disk:** the frame keeps presenting coarser levels while reads
-  catch up; the painter can raise the memory limit.
+  catch up; background writes stay at low I/O priority behind reads.
 
 ## Milestones
 
@@ -691,9 +815,22 @@ control on the tier devices.
       switch with a recovery write and a spill pending presents the incoming
       drawing without waiting; an edit made just before a switch is restored
       after a crash once its background recovery write is durable.
+   4. Basic memory rows in the Stats panel from OS and driver queries, and,
+      independently, a persistent Vulkan pipeline cache. Tests: the rows match
+      an external measurement with the same definition; output is identical
+      with an absent, stale, truncated or corrupt cache; pipeline-ready and
+      first-brush times improve on Android, or the cache waits.
+   5. Recovery writes packs with batched commits instead of one synced file per
+      tile, still reading the old layout, with per-pack extents, one writer per
+      store and the separate namespace. Tests: a checkpoint's syncs scale with
+      the packs it touches, not its tiles; fault injection at every write,
+      sync, rename, directory and head boundary and at a full disk recovers the
+      last good generation; the full upgrade and downgrade cycle against each
+      released layout keeps the newest artwork; checkpoint duration and the
+      moving frames and first dab around it are recorded.
 2. **One budget and warm tabs.**
    1. The process-wide budget manager: ledger with pinned debt, pool budgets,
-      host queries and pressure signals, the Memory limit setting, the
+      host queries and pressure signals, the internal limit override, the
       admission refusal rule, and eager-not-greedy rules for today's caches. It
       replaces the fixed cache constants, the 512 MiB asset limit (a budget check
       until milestone 3) and the 64 MiB parked-tab budget. Tests: simulated
@@ -707,22 +844,29 @@ control on the tier devices.
       never delays a pen-down past one frame.
    3. Warm tabs: parked drawings keep their renderer state under the budget,
       with capture leases replacing the backing barrier, parked speculative work
-      cancelled, and late completions fenced by drawing and generation. Tests: a
+      cancelled, and late completions fenced by drawing and generation; hidden
+      windows give memory back; the ledger's rows in the Stats panel. Tests: a
       warm switch composes no pages and presents on the next frame; switching
-      back mid-capture, undo, redo and closing either tab keep every edit.
+      back mid-capture, undo, redo and closing either tab keep every edit;
+      hiding a window during a capture keeps every edit, and showing it presents
+      at once.
    4. Half-float display data, with extended effects, float sources, their
       downstream nodes and the input ancestry of extended effects in RGBA32F.
       Test: display stays within a small tolerance of exact output; Exposure
       chains and float paint beyond half range stay exact.
 3. **Drawings on disk, residency by view.**
-   1. The session store on recovery's files, with durability order, generation
-      roots and leases, write-behind, the IO queue and read cache, asynchronous
-      `Disk` readiness, and the asset limit as a disk check. Tests: crash
-      injection at every publication and compaction boundary; disk full while
-      painting keeps every edit.
-   2. Lazy package reads with package leases. Tests: overwrite the original,
-      Save As, undo to an unread tile, and restart recovery after removing the
-      original.
+   1. The live drawing on recovery's packs: write-behind, heap copies dropped
+      once durable, positional reads through the page cache with read-ahead
+      hints, the IO queue and hot set, asynchronous `Disk` readiness, leases and
+      compaction, and the asset limit as a disk check. Tests: crash injection at
+      every compaction boundary; disk full while painting keeps every edit; a
+      drawing larger than physical RAM pans without dropped frames, showing
+      coarser levels where the page cache misses; first-dab latency after warm,
+      evicted and cgroup-limited caches is recorded.
+   2. Lazy package reads with package leases, and the embedded preview as a
+      temporary first picture. Tests: missing, corrupt and stale previews; a
+      late preview decode; overwriting the original, Save As, undo to an unread
+      tile, and restarting recovery after removing the original.
    3. Residency by view: classes including Edit-ready and Ahead, view-ordered
       reads with cancellation and motion prediction, windowed mips, overviews,
       the derived cache, and the composite page cache replacing the complete
@@ -759,10 +903,29 @@ incoming drawing on the next frame and accepts a dab within two; a cold one
 presents its overview on the next frame and meets the Navigator-jump latency
 gates.
 
+Checkpoint rows: duration and syncs for a first and a later checkpoint of a
+28-layer drawing, and moving frames and first-dab latency while one runs.
+
 One combined stress row per tier: many open tabs, background captures and
 writes, the memory limit under pressure, and immediate painting and navigation
 in the active drawing. Motion holds the tier rate and resumed input waits at most
 one extra frame.
+
+## Deferred until measured
+
+Each of these could help, but adds a second representation or a new ownership
+contract; the memory rows decide whether it is worth it, after milestone 3.
+
+- **OS-reclaimable GPU memory.** Metal purgeable state is the first candidate;
+  D3D12 eviction and Vulkan pageable memory page data rather than discard it, and
+  every backend needs allocation-level isolation from active work first.
+- **Single-colour tiles on the GPU.** Uniform tiles as a colour entry instead of
+  a page. Once residency follows the view, a flat layer costs only its visible
+  pages, and every page consumer would need the colour path.
+- **GPU block compression** (BC, ASTC) for display-only Warm data.
+- **Shared GPU pages** for identical tiles in duplicated layers and repeated
+  imports.
+- **A Preferences memory limit**, if the diagnostics show painters need one.
 
 ## Open questions
 
