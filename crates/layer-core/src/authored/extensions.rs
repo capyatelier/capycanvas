@@ -1,5 +1,5 @@
 use super::PortableId;
-use crate::package::{ByteRange, ImmutableBacking, RangeState, MAX_RANGE_BYTES, manifest::Manifest, references};
+use crate::package::{ByteRange, ImmutableBacking, RangeState, MAX_RANGE_BYTES, manifest::Manifest, references, values::{DecodeError,DecodeResult}};
 use serde_json::{Map, Value, json};
 use std::{collections::{BTreeMap, BTreeSet}, fmt, sync::{Arc, atomic::{AtomicBool, Ordering}}};
 
@@ -56,18 +56,18 @@ impl OpaqueResource {
             ("crc32", format!("{:08x}", self.crc32).into())] { fields.insert(key.into(), value); }
         Value::Object(fields)
     }
-    pub fn read_chunk(&self, offset: u64, length: usize, cancelled: &AtomicBool) -> Result<ByteRange, String> {
+    pub fn read_chunk(&self, offset: u64, length: usize, cancelled: &AtomicBool) -> DecodeResult<ByteRange> {
         check(cancelled)?;
         if offset.checked_add(length as u64).is_none_or(|end| end > self.length) { return Err("Opaque resource read exceeds range".into()); }
         let absolute = self.offset.checked_add(offset).ok_or("Opaque resource offset overflow")?;
-        let bytes = match self.backing.poll(absolute, length)? {
-            RangeState::Pending => return Err("Package bytes are pending".into()),
+        let bytes = match self.backing.poll(absolute, length).map_err(DecodeError::Io)? {
+            RangeState::Pending => return Err(DecodeError::Io("Package bytes are pending".into())),
             RangeState::Ready(bytes) => bytes,
         };
         check(cancelled)?;
         Ok(bytes)
     }
-    pub fn verify(&self, cancelled: &AtomicBool) -> Result<(), String> {
+    pub fn verify(&self, cancelled: &AtomicBool) -> DecodeResult<()> {
         check(cancelled)?;
         self.offset.checked_add(self.length).filter(|end| *end <= self.backing.byte_len()).ok_or("Opaque resource exceeds backing")?;
         if self.length == 0 { self.read_chunk(0, 0, cancelled)?; }
@@ -78,8 +78,8 @@ impl OpaqueResource {
             checksum.update(&self.read_chunk(offset, length, cancelled)?);
             offset += length as u64;
         }
-        if checksum.finalize() != self.crc32 { return Err(self.backing.fail("Opaque resource checksum failed".into())); }
-        check(cancelled)
+        if checksum.finalize() != self.crc32 { return Err(self.backing.fail("Opaque resource checksum failed".into()).into()); }
+        check(cancelled).map_err(DecodeError::from)
     }
     fn references(&self) -> Result<Vec<PortableId>, String> {
         let mut result = references(&self.data, REFERENCE_NODES)?;
@@ -89,7 +89,7 @@ impl OpaqueResource {
     }
 }
 impl Extensions {
-    pub fn load(manifest: &Manifest, backing: &ImmutableBacking, cancelled: &AtomicBool) -> Result<Self, String> {
+    pub fn load(manifest: &Manifest, backing: &ImmutableBacking, cancelled: &AtomicBool) -> DecodeResult<Self> {
         check(cancelled)?;
         let records: BTreeMap<_, _> = manifest.objects.iter().filter(|(_, record)| record["ancillary"] == true)
             .map(|(id, record)| (*id, record.clone())).collect();

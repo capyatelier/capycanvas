@@ -54,6 +54,7 @@ pub enum ErrorKind {
     FailedWrite,
     StorageFull,
     InvalidData,
+    DamagedStorage,
     NotFound,
     NameCollision,
 }
@@ -272,7 +273,7 @@ impl StoreError {
             ErrorKind::NameCollision => M::WORKSPACE_REFUSAL_AN_ITEM_WITH_THIS_NAME_ALREADY_EXISTS,
             ErrorKind::FailedWrite => M::WORKSPACE_STORAGE_WRITE_FAILED,
             ErrorKind::StorageFull => M::WORKSPACE_STORAGE_FULL,
-            ErrorKind::Unavailable | ErrorKind::UnsupportedSchema => M::WORKSPACE_STORAGE_UNAVAILABLE,
+            ErrorKind::Unavailable | ErrorKind::UnsupportedSchema | ErrorKind::DamagedStorage => M::WORKSPACE_STORAGE_UNAVAILABLE,
         };
         localization.text(id).to_string()
     }

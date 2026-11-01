@@ -336,7 +336,7 @@ impl From<String> for OpenFailure {fn from(message:String)->Self {Self::Invalid(
 impl From<&str> for OpenFailure {fn from(message:&str)->Self {Self::Invalid(message.into())}}
 impl From<super::values::DecodeError> for OpenFailure {
     fn from(error:super::values::DecodeError)->Self {match error {
-        super::values::DecodeError::Invalid(message)=>Self::Invalid(message),
+        super::values::DecodeError::Invalid(message) | super::values::DecodeError::Io(message)=>Self::Invalid(message),
         super::values::DecodeError::Unsupported(message)=>Self::Unsupported(message),
     }}
 }

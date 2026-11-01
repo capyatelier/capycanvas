@@ -211,34 +211,30 @@ impl Outcome {
         Self::Adopt(Box::new(entity))
     }
 }
-/// Unsupported table layouts can be replaced; other startup failures use memory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Startup {
     Stored,
-    Replaced,
+    SetAside,
     InMemory,
 }
 impl Startup {
     fn next(self, error: &StoreError) -> Option<Self> {
         match self {
-            Self::Stored if error.kind == ErrorKind::UnsupportedSchema => Some(Self::Replaced),
-            Self::Stored | Self::Replaced => Some(Self::InMemory),
+            Self::Stored if error.kind == ErrorKind::DamagedStorage => Some(Self::SetAside),
+            Self::Stored | Self::SetAside => Some(Self::InMemory),
             Self::InMemory => None,
         }
     }
 }
 enum WorkspaceNoticeCopy {
-    Reset,
-    Volatile(StoreError),
+    Messages(Vec<layer_ui::MessageId>),
     SwitcherError(StoreError),
 }
 impl WorkspaceNoticeCopy {
     fn text(&self, localization: &layer_ui::Localizer) -> String {
         match self {
             Self::SwitcherError(error) => error.localized_message(localization),
-            Self::Reset => localization.text(layer_ui::MessageId::WORKSPACE_STORAGE_RESET_NOTICE).to_string(),
-            Self::Volatile(error) => message(localization, layer_ui::MessageId::WORKSPACE_STORAGE_VOLATILE_NOTICE,
-                &[("detail", error.localized_message(localization))]),
+            Self::Messages(ids) => ids.iter().map(|id|localization.text(*id).to_string()).collect::<Vec<_>>().join("\n\n"),
         }
     }
 }
@@ -467,7 +463,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         self.run(async move {
             match stage {
                 Startup::Stored => {}
-                Startup::Replaced => m.replace_storage().await?,
+                Startup::SetAside => m.set_aside_storage().await?,
                 Startup::InMemory => m.use_memory(),
             }
             m.execute(StoreRequest::Reopen).await?;
@@ -511,14 +507,22 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         true
     }
     fn startup_notice_copy(&self) -> Option<WorkspaceNoticeCopy> {
+        use layer_ui::MessageId as M;
+        let mut ids = Vec::new();
         match self.startup? {
-            Startup::Stored => None,
-            Startup::Replaced => Some(WorkspaceNoticeCopy::Reset),
-            Startup::InMemory => Some(WorkspaceNoticeCopy::Volatile(self.startup_error.clone()?)),
+            Startup::Stored => {},
+            Startup::SetAside => ids.push(M::WORKSPACE_STORAGE_DAMAGED_NOTICE),
+            Startup::InMemory => ids.push(if self.startup_error.as_ref().is_some_and(|error|error.kind==ErrorKind::UnsupportedSchema
+                && error.known!=Some(WorkspaceRefusal::WorkspaceStorageWasWrittenByAnEarlierVersionOfCapyCanvas)) {
+                M::WORKSPACE_STORAGE_NEWER_NOTICE
+            } else { M::WORKSPACE_STORAGE_UNAVAILABLE_NOTICE }),
         }
+        if self.manager.startup_created() { ids.push(M::WORKSPACE_CREATED_UNREADABLE_NOTICE); }
+        if self.manager.editing_dropped() { ids.push(M::WORKSPACE_EDITING_UNREADABLE_NOTICE); }
+        (!ids.is_empty()).then_some(WorkspaceNoticeCopy::Messages(ids))
     }
     fn notify<R: CanvasRenderer>(&mut self, session: &mut UiSession<R>, copy: WorkspaceNoticeCopy) {
-        session.notify(copy.text(&self.localization));
+        session.notify_window(copy.text(&self.localization));
         self.notice = session.state().notice.as_ref().map(|notice| WorkspaceNotice {
             id: notice.id, generation: self.localization_generation, copy,
         });

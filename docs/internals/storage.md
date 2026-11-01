@@ -27,14 +27,21 @@ temp folder when the process that owns the installation starts; Apple clears the
 app's `tmp` itself.
 
 The workspace store holds the painter's palettes and custom workspaces. Its
-worker restores editing fields with the window's language before returning them.
+worker restores editing fields with the window's language and reports discarded
+fields before returning them. Startup shows the shared palettes-and-brush-settings
+notice once when any field was discarded.
 Saves merge only this window's changed JSON paths, keeping other windows' brush
 overrides and palettes and unchanged unreadable fields; see
 [editing saves](workspace-ownership.md).
 Unreadable rows and pending deliveries stay in place. When no workspace can be
 read, startup creates a new workspace from the included layout and leaves the
-unreadable rows untouched. Only an unsupported table schema can trigger a reset,
-which keeps a copy first. See [workspace ownership](workspace-ownership.md#startup-always-adopts-a-workspace).
+unreadable rows untouched and shows the shared update notice. SQLite corruption
+or not-a-database errors rename the database and its existing WAL/SHM sidecars to
+`workspaces.damaged.<uuid>.sqlite3` and matching sidecar names, then start a fresh
+store. Damaged copies are kept outside version-copy retention. A failed set-aside
+continues in memory with the can't-open notice. Unsupported schemas stay in place;
+newer schemas show the newer-version notice. See
+[workspace ownership](workspace-ownership.md#startup-always-adopts-a-workspace).
 Keep released table layouts readable with concrete SQL conversions keyed by
 `user_version`; do not use the reset path for a released layout.
 

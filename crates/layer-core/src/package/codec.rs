@@ -20,9 +20,12 @@ pub struct OutputInfo { pub id: PortableId, pub name: Arc<str> }
 pub enum OpenOutcome {
     Candidate { artwork: Artwork, source: ImmutableBacking, preview: Option<Preview> },
     Preserved { source: ImmutableBacking, outputs: Vec<OutputInfo>, preview: Option<Preview>, reason: String },
-    RecoveredView { source: ImmutableBacking, preview: Preview, reason: String },
-    Failure { source: ImmutableBacking, reason: String },
+    RecoveredView { source: ImmutableBacking, preview: Preview, reason: String, cause: Option<PackageCause> },
+    Failure { source: ImmutableBacking, reason: String, cause: Option<PackageCause> },
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageCause { Unsupported, Damaged }
 #[derive(serde::Serialize)]
 struct ManifestWire<'a> {
     default_output: Value,
@@ -148,8 +151,14 @@ fn preview(directory:&Directory,reader:&mut BackingReader<'_>) -> Option<Preview
     let member=directory.member("preview.png")?;
     Preview::decode(directory.read_member(reader,member,MAX_PREVIEW_BYTES).ok()?.into()).ok()
 }
-fn failed(source:ImmutableBacking,preview:Option<Preview>,reason:String) -> OpenOutcome {
-    match preview {Some(preview)=>OpenOutcome::RecoveredView {source,preview,reason},None=>OpenOutcome::Failure {source,reason}}
+fn failed(source:ImmutableBacking,preview:Option<Preview>,error:super::values::DecodeError) -> OpenOutcome {
+    let cause = match &error {
+        super::values::DecodeError::Unsupported(_) => Some(PackageCause::Unsupported),
+        super::values::DecodeError::Invalid(_) => Some(PackageCause::Damaged),
+        super::values::DecodeError::Io(_) => None,
+    };
+    let reason = error.to_string();
+    match preview {Some(preview)=>OpenOutcome::RecoveredView {source,preview,reason,cause},None=>OpenOutcome::Failure {source,reason,cause}}
 }
 fn output_inventory(manifest:&Manifest) -> Vec<OutputInfo> {
     manifest.outputs.iter().map(|id|OutputInfo {id:*id,name:manifest.objects.get(id).and_then(|record|record["data"]["name"].as_str()).unwrap_or("").into()}).collect()
@@ -182,7 +191,7 @@ pub fn open(source:ImmutableBacking,limits:crate::ProjectLimits,cancelled:&Atomi
     let directory=match Directory::read(&mut reader,262_144,limits.metadata_bytes) {
         Ok(directory)=>directory,
         Err(super::values::DecodeError::Unsupported(reason))=>{active(cancelled)?;return Ok(OpenOutcome::Preserved {source,outputs:Vec::new(),preview:None,reason});},
-        Err(super::values::DecodeError::Invalid(reason))=>{active(cancelled)?;return Ok(OpenOutcome::Failure {source,reason});}
+        Err(error)=>{active(cancelled)?;return Ok(failed(source,None,error));}
     };
     let preview=preview(&directory,&mut reader);
     let bytes=match directory.read_member(&mut reader,directory.member("manifest.json").unwrap(),limits.metadata_bytes.min(usize::MAX as u64) as usize) {
@@ -193,7 +202,7 @@ pub fn open(source:ImmutableBacking,limits:crate::ProjectLimits,cancelled:&Atomi
         Ok(ManifestRead::UnsupportedEnvelope(_))=>return Ok(OpenOutcome::Preserved {source,outputs:Vec::new(),preview,reason:"Unsupported package envelope".into()}),
         Ok(ManifestRead::Limited {value,reason})=>return Ok(limited(source,value,preview,reason)),
         Err(super::values::DecodeError::Unsupported(reason))=>return Ok(OpenOutcome::Preserved {source,outputs:Vec::new(),preview:None,reason}),
-        Err(super::values::DecodeError::Invalid(reason))=>return Ok(failed(source,preview,reason)),
+        Err(error)=>return Ok(failed(source,preview,error)),
     };
     let indexed=manifest.resources.values().filter_map(|resource|resource.range.map(|range|range.member)).collect::<std::collections::BTreeSet<_>>();
     if directory.members.iter().enumerate().any(|(index,member)|member.name.starts_with("data/") && !indexed.contains(&index)) {
@@ -207,14 +216,14 @@ pub fn open(source:ImmutableBacking,limits:crate::ProjectLimits,cancelled:&Atomi
             if let Support::Preserved(reasons)=&manifest.support {return Ok(OpenOutcome::Preserved {source,outputs:output_inventory(&manifest),preview:matching_preview(&manifest,preview),reason:reasons.iter().copied().collect::<Vec<_>>().join("; ")});}
             let document=crate::Document::from_artwork(artwork.clone());
             match document {
-                Err(reason)=>return Ok(failed(source,preview,reason.to_string())),
+                Err(reason)=>return Ok(failed(source,preview,reason.to_string().into())),
                 Ok(document)=>if let Err(reason)=document.admit(limits) {return Ok(OpenOutcome::Preserved {source,outputs:output_inventory(&manifest),preview:matching_preview(&manifest,preview),reason});},
             }
             artwork.extensions=match crate::authored::Extensions::load(&manifest,&source,cancelled) {Ok(extensions)=>Arc::new(extensions),Err(reason)=>{active(cancelled)?;return Ok(failed(source,preview,reason));}};
             Ok(OpenOutcome::Candidate {artwork,source,preview:matching_preview(&manifest,preview)})
         }
         Err(super::values::DecodeError::Unsupported(reason))=>Ok(OpenOutcome::Preserved {source,outputs:output_inventory(&manifest),preview:matching_preview(&manifest,preview),reason}),
-        Err(super::values::DecodeError::Invalid(reason))=>Ok(failed(source,preview,reason)),
+        Err(error)=>Ok(failed(source,preview,error)),
     }
 }
 

@@ -44,7 +44,7 @@ fn crc_failure_never_becomes_empty_payload_and_signature_exception_is_exact() {
     let mut bytes = package(&[("data/a", b"pixels")]);
     let dir = read(&bytes).unwrap(); let member = dir.member("data/a").unwrap();
     bytes[member.offset as usize] ^= 1;
-    assert!(dir.read_member(&mut Cursor::new(bytes), member, 100).unwrap_err().contains("checksum"));
+    assert!(dir.read_member(&mut Cursor::new(bytes), member, 100).unwrap_err().to_string().contains("checksum"));
     assert!(verify(&Member { name:CREDENTIAL.into(), offset:0, length:1, compressed_length:None, crc32:0 }, 77).is_ok());
     assert!(verify(&Member { name:"META-INF/other.c2pa".into(), offset:0, length:1, compressed_length:None, crc32:0 }, 77).is_err());
 }

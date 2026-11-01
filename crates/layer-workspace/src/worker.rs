@@ -75,6 +75,17 @@ impl StoreWorker {
                         }
                         WorkerRequest::Store(request) => request,
                     };
+                    if matches!(request, StoreRequest::SetAside) {
+                        let result = if matches!(&store,Err(error) if error.kind==ErrorKind::DamagedStorage) {
+                            store = set_aside_database(&database);
+                            store.as_ref().map(|_|StoreResponse::Done).map_err(Clone::clone)
+                        } else {
+                            Err(StoreError::new(ErrorKind::Unavailable,"Only a damaged database can be set aside."))
+                        };
+                        if let Err(error) = &result { eprintln!("Workspace storage {:?}: {}",error.kind,error.message); }
+                        let _ = reply.try_send(result);
+                        continue;
+                    }
                     if matches!(request, StoreRequest::Reopen | StoreRequest::Reset)
                         && store.is_err()
                     {
@@ -84,6 +95,7 @@ impl StoreWorker {
                         Ok(store) => store.handle(request),
                         Err(error) => Err(error.clone()),
                     };
+                    if let Err(error) = &result { eprintln!("Workspace storage {:?}: {}",error.kind,error.message); }
                     // A dropped receiver leaves the persisted receipt/pending payload
                     // available for retry. It must never imply that a write failed.
                     let _ = reply.try_send(result);
@@ -170,6 +182,39 @@ pub fn validate_database_export_destination(source: &Path, destination: &Path) -
         }
     }
     Ok(())
+}
+
+fn set_aside_database(path: &Path) -> Result<SqliteStore> {
+    let io = |error: std::io::Error| StoreError::new(ErrorKind::Unavailable,error.to_string());
+    let path = std::fs::canonicalize(path).map_err(io)?;
+    let _recovery = crate::sqlite::ownership::storage_recovery_lock(&path)?;
+    match SqliteStore::open(&path) {
+        Err(error) if error.kind==ErrorKind::DamagedStorage => {},
+        Err(error) => return Err(error),
+        Ok(mut store) => {store.handle(StoreRequest::Reopen)?;return Err(StoreError::conflict());},
+    }
+    let destination = path.with_file_name(format!("workspaces.damaged.{}.sqlite3",new_id()));
+    let mut files = Vec::new();
+    for suffix in ["-wal", "-shm", ""] {
+        let mut source = path.as_os_str().to_owned(); source.push(suffix);
+        let mut target = destination.as_os_str().to_owned(); target.push(suffix);
+        match std::fs::metadata(&source) {
+            Ok(metadata) if metadata.is_file() => files.push((PathBuf::from(source),PathBuf::from(target))),
+            Err(error) if !suffix.is_empty() && error.kind()==std::io::ErrorKind::NotFound => {},
+            Ok(_) => return Err(StoreError::new(ErrorKind::Unavailable,"A database sidecar is not a file.")),
+            Err(error) => return Err(io(error)),
+        }
+    }
+    for (index,(source,target)) in files.iter().enumerate() {
+        if let Err(error) = std::fs::rename(source,target) {
+            let mut detail = error.to_string();
+            for (source,target) in files[..index].iter().rev() {
+                if let Err(error) = std::fs::rename(target,source) { detail.push_str(&format!("; {error}")); }
+            }
+            return Err(StoreError::new(ErrorKind::Unavailable,detail));
+        }
+    }
+    SqliteStore::open(&path)
 }
 
 pub(crate) fn backup_database(source: &Path, destination: &Path) -> Result<()> {

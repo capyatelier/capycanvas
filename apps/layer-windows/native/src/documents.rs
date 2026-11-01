@@ -1259,7 +1259,7 @@ mod tests {
         for disposition in 0..3 {
             let mut f=Fixture::new();f.invoke(CommandId::OpenDocument);let id=f.request();let before=f.host.session.engine().document().clone();let epoch=f.host.session.state().document_file.epoch;
             let source=ImmutableBacking::new(Arc::new(ChunkedBytes::new(vec![Arc::from(bytes.as_slice())]).unwrap())).unwrap();let preview=Preview::from_rgba([1,1],Arc::from([16,32,48,255])).unwrap();
-            let outcome=match disposition {0=>OpenOutcome::Preserved{source,preview:Some(preview),outputs:Vec::new(),reason:"unsupported content".into()},1=>OpenOutcome::RecoveredView{source,preview,reason:"invalid graph".into()},_=>OpenOutcome::Failure{source,reason:"invalid package".into()}};
+            let outcome=match disposition {0=>OpenOutcome::Preserved{source,preview:Some(preview),outputs:Vec::new(),reason:"unsupported content".into()},1=>OpenOutcome::RecoveredView{source,preview,reason:"invalid graph".into(),cause:Some(layer_ui::PackageCause::Damaged)},_=>OpenOutcome::Failure{source,reason:"invalid package".into(),cause:Some(layer_ui::PackageCause::Damaged)}};
             f.service.active=Some(Active{id,epoch,revision:before.revision,location:Some(DocumentLocation{uri:f.path("original.capy"),name:"original.capy".into()}),cancelled:None});
             f.service.worker.shared.mailbox.lock().unwrap().completed=Some(Ok(Completed::Package(layer_ui::PackageView::new(outcome).unwrap())));f.service.poll(&mut f.host).unwrap();
             assert_eq!(f.host.session.engine().document(),&before);assert_eq!(f.host.session.state().document_file.epoch,epoch);assert!(f.service.active.is_none());assert!(f.host.session.state().requests.iter().all(|r|r.id!=id));

@@ -346,7 +346,7 @@ impl Default for WorkspaceWorkingState {
 }
 impl WorkspaceWorkingState {
     pub fn restore(value: serde_json::Value) -> Self {
-        let mut restored = crate::saved_state::restore_fields(value, Self::default, |_| true);
+        let (mut restored, _) = crate::saved_state::restore_fields(value, Self::default, |_| true);
         restored.version = 1;
         restored
     }

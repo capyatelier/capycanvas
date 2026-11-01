@@ -51,7 +51,7 @@ pub mod color_management;
 pub mod parameter_pad;
 
 mod package_view;
-pub use package_view::{PackageView, PackagePresentation, PackageViewSummary, PackageCapabilities, PackageDisposition, PackageAction, PackageOutput};
+pub use package_view::{PackageView, PackagePresentation, PackageViewSummary, PackageCapabilities, PackageDisposition, PackageAction, PackageOutput, PackageCause};
 
 mod import_policy;
 pub use import_policy::{FileDropRefusal, ImageImportBatch, ImportIntent, ImportSource, ImportOutcome, ImportedDocument, photo_document_names, read_import,read_import_backing,read_import_with_decoder};

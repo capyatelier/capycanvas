@@ -21,6 +21,7 @@ impl WorkspaceStore for BrowserStore {
     }
 }
 fn store_error(value: JsValue) -> StoreError {
+    web_sys::console::info_1(&value);
     let text = value.as_string().unwrap_or_else(|| format!("{value:?}"));
     serde_json::from_str(&text).unwrap_or_else(|_| StoreError::new(ErrorKind::Unavailable, text))
 }

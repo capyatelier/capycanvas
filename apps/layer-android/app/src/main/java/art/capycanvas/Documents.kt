@@ -453,7 +453,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
             title = {Text(summary.getString("status"))},
             text = {Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 controller.packagePreview?.let {Image(it.asImageBitmap(),null,Modifier.fillMaxWidth().heightIn(max=320.dp))}
-                Text(summary.getString("reason"))
+                summary.optString("body").takeIf {it.isNotEmpty()}?.let {Text(it)}
                 if(controller.packageCopying)CircularProgressIndicator(Modifier.size(20.dp),strokeWidth=2.dp)
             }},
             confirmButton = {Column {

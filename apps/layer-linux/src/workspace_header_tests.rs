@@ -1553,7 +1553,7 @@ fn native_unreadable_workspace_storage_input() {
     let manager = d.w.workspaces.manager().unwrap();
     assert!(manager.error().is_none());
     assert!(!manager.in_memory());
-    assert!(state(&d.w).notice.is_none());
+    assert_eq!(state(&d.w).notice.as_ref().unwrap().text,"This version of Capy Canvas can't open your saved workspaces. Update Capy Canvas to open them.");
     assert!(d.w.area.is_mapped());
     assert_eq!(state(&d.w).settings.pan_speed, 2.0);
     assert_eq!(state(&d.w).settings.zoom_speed, 1.0);
@@ -4718,3 +4718,91 @@ fn native_caption_toolbar_constructor_before_realize() {
 
 #[path = "preview_freshness_tests.rs"]
 mod preview_freshness;
+
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_saved_data_messages_input --native-storage"]
+fn native_saved_data_messages_input() {
+    use layer_ui::MessageId as M;
+    let case = std::env::var("CAPY_SAVED_UX_CASE").unwrap();
+    let theme = std::env::var("CAPY_NATIVE_TEST_THEME").unwrap();
+    let roots = crate::storage::roots().unwrap().clone();
+    let directory = crate::storage::workspaces().unwrap().to_path_buf();
+    let fixture_case = case.clone();
+    let (sender,receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("workspaces.sqlite3");
+        match fixture_case.as_str() {
+            "damaged" => std::fs::write(&path,b"damaged SQLite store").unwrap(),
+            "unavailable" => std::fs::create_dir(&path).unwrap(),
+            "newer" | "editing" => {
+                std::fs::copy(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates/layer-workspace/tests/compat/1.0.15/workspaces.sqlite3"),&path).unwrap();
+                let sql = rusqlite::Connection::open(std::fs::canonicalize(&path).unwrap()).unwrap();
+                if fixture_case=="newer" {sql.pragma_update(None,"user_version",layer_workspace::SCHEMA_VERSION+1).unwrap();}
+                else {
+                    let text: String = sql.query_row("SELECT json FROM editing",[],|row|row.get(0)).unwrap();
+                    let mut editing: serde_json::Value = serde_json::from_str(&text).unwrap();
+                    editing["preset"] = "unreadable".into();
+                    sql.execute("UPDATE editing SET json=?1",[editing.to_string()]).unwrap();
+                }
+            },
+            "workspace" | "choice" => {
+                {
+                    let manager = layer_workspace::WorkspaceManager::new(layer_workspace::StoreWorker::shared(&directory).unwrap(),Platform::Gtk);
+                    pollster::block_on(manager.initialize(1000)).unwrap();
+                }
+                let sql = rusqlite::Connection::open(std::fs::canonicalize(&path).unwrap()).unwrap();
+                if fixture_case=="workspace" {sql.execute("UPDATE items SET content='{}' WHERE kind='workspace'",[]).unwrap();}
+                else {sql.execute("UPDATE items SET content='{}' WHERE id=?1",[layer_workspace::DEFAULT_WORKSPACES[0].0]).unwrap();}
+            },
+            "drawing-unsupported" | "drawing-damaged" => {},
+            _ => panic!("unknown saved-data case"),
+        }
+        std::fs::create_dir_all(roots.settings().parent().unwrap()).unwrap();
+        std::fs::write(roots.settings(),serde_json::json!({"theme":theme,"language":{"Explicit":"en"}}).to_string()).unwrap();
+        let package = if fixture_case.starts_with("drawing-") {
+            let bytes = if fixture_case=="drawing-unsupported" {
+                std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates/layer-core/tests/compat/1.0.15/unsupported-pass-through.capy")).unwrap()
+            } else {b"damaged package".to_vec()};
+            let source = layer_core::package::ImmutableBacking::new(std::sync::Arc::new(layer_core::package::transport::ChunkedBytes::new(vec![bytes.into()]).unwrap())).unwrap();
+            Some(layer_ui::PackageView::new(layer_core::package::codec::open(source,Default::default(),&Default::default()).unwrap()).unwrap())
+        } else {None};
+        sender.send(package).unwrap();
+    });
+    let package = super::canvas_bar_tests::until_some(||receiver.try_recv().ok(),"saved-data fixture");
+    let mut d = Driver::managed("art.capycanvas.SavedDataMessages");
+    let expected = match case.as_str() {
+        "newer" => M::WORKSPACE_STORAGE_NEWER_NOTICE,
+        "unavailable" => M::WORKSPACE_STORAGE_UNAVAILABLE_NOTICE,
+        "damaged" => M::WORKSPACE_STORAGE_DAMAGED_NOTICE,
+        "editing" => M::WORKSPACE_EDITING_UNREADABLE_NOTICE,
+        "workspace" => M::WORKSPACE_CREATED_UNREADABLE_NOTICE,
+        "choice" => M::WORKSPACE_REFUSAL_INVALID_WORKSPACE,
+        "drawing-unsupported" => M::DOCUMENTS_PACKAGE_UNSUPPORTED_BODY,
+        "drawing-damaged" => M::DOCUMENTS_PACKAGE_DAMAGED_BODY,
+        _ => unreachable!(),
+    };
+    let expected = d.w.localization().text(expected).to_string();
+    if let Some(package) = package {
+        let w = d.w.clone();
+        glib::MainContext::default().spawn_local(async move {crate::files::open::show_package(w.window.upcast_ref(),package,None,&w.localization()).await.unwrap();});
+        until(|| d.w.window.visible_dialog().is_some(),"saved drawing dialog");
+    } else if case=="choice" {
+        d.w.workspaces.send(&d.w,layer_workspace::WorkspaceInput::Open {page:layer_workspace::ManagerPage::Workspaces});
+        d.w.workspaces.send(&d.w,layer_workspace::WorkspaceInput::Select {id:Some(layer_workspace::DEFAULT_WORKSPACES[0].0.into())});
+        until(||d.w.workspaces.view().error.is_some(),"unreadable workspace choice");
+        assert_eq!(d.w.workspaces.view().error.as_deref(),Some(expected.as_str()));
+    } else {assert_eq!(state(&d.w).notice.as_ref().unwrap().text,expected);}
+    fn shown(widget:&gtk::Widget,text:&str)->bool {
+        if widget.is_mapped() && widget.downcast_ref::<gtk::Label>().is_some_and(|label|label.text()==text) {return true;}
+        let mut child=widget.first_child();
+        while let Some(node)=child {if shown(&node,text) {return true;} child=node.next_sibling();}
+        false
+    }
+    until(||shown(d.w.window.upcast_ref(),&expected),"saved-data message is rendered");
+    let theme = std::env::var("CAPY_NATIVE_TEST_THEME").unwrap();
+    d.input.perform(serde_json::json!([{"capture":format!("gtk-{case}-{theme}")} ]));
+    if let Some(dialog)=d.w.window.visible_dialog() {dialog.close();}
+    d.finish();
+}

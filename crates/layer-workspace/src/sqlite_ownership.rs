@@ -1,6 +1,5 @@
 //! Kernel locks are native liveness; database owner/epoch/fence remains write
-//! authority. Every probe/acquisition happens inside an IMMEDIATE transaction,
-//! so observing an unlocked file and retiring its old claim cannot race a claim.
+//! authority.
 use super::*;
 use std::{collections::BTreeMap, fs::File, path::PathBuf};
 
@@ -12,6 +11,9 @@ struct Held {
     owner: Owner,
     fence: u64,
     _file: File,
+}
+pub(crate) fn storage_recovery_lock(database: &Path) -> Result<File> {
+    Ownership::new(database)?.try_lock("storage:set-aside")?.ok_or_else(StoreError::conflict)
 }
 impl Ownership {
     pub(super) fn new(database: &Path) -> Result<Self> {

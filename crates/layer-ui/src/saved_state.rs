@@ -5,24 +5,41 @@ pub(crate) fn restore_fields<T: DeserializeOwned + Serialize>(
     value: Value,
     defaults: impl FnOnce() -> T,
     validate: impl Fn(&T) -> bool,
-) -> T {
+) -> (T, bool) {
     let valid = |value: &Value| serde_json::from_value::<T>(value.clone()).ok().filter(&validate);
-    if let Some(restored) = valid(&value) { return restored; }
+    if let Some(restored) = valid(&value) { return (restored, false); }
+    let mut dropped = !value.is_object();
     let defaults = defaults();
     let mut kept = serde_json::to_value(&defaults).unwrap();
     if let Value::Object(fields) = value {
         for (key, value) in fields {
             let mut candidate = kept.clone();
             candidate[key] = value;
-            if valid(&candidate).is_some() { kept = candidate; }
+            if valid(&candidate).is_some() { kept = candidate; } else { dropped = true; }
         }
     }
-    valid(&kept).unwrap_or(defaults)
+    (valid(&kept).unwrap_or(defaults), dropped)
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{EditingState, Localizer, UiLanguage, WorkspaceWorkingState};
+    #[test]
+    fn editing_restore_reports_unreadable_fields_and_accepts_missing_or_unknown_options() {
+        let english = Localizer::shared(UiLanguage::English);
+        let original = EditingState::default();
+        let mut value = serde_json::to_value(&original).unwrap();
+        value["future_option"] = true.into();
+        value.as_object_mut().unwrap().remove("preset");
+        let (restored,dropped) = EditingState::restore_with_report(&value.to_string(),&english);
+        assert_eq!(restored,original);
+        assert!(!dropped);
+        value["color_library"]["palettes"] = "unreadable".into();
+        let (restored,dropped) = EditingState::restore_with_report(&value.to_string(),&english);
+        assert_eq!(restored,original);
+        assert!(dropped);
+        assert!(EditingState::restore_with_report("invalid JSON",&english).1);
+    }
     #[test]
     fn saved_documents_tolerate_missing_and_unknown_fields() {
         use serde_json::{Value,json};

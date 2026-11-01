@@ -345,3 +345,5 @@ documents-height-name = 高さ
 documents-drop-drawings = 絵を開く
 documents-drop-mixed = 絵を開くか画像を配置するか、どちらかを選んでください
 documents-drop-images = キャンバスに画像を配置
+documents-package-unsupported-body = このバージョンの{ common-app-name }では編集できないレイヤーや設定が含まれています。
+documents-package-damaged-body = このファイルの一部が破損しています。

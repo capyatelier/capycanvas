@@ -586,3 +586,31 @@ mod current_design;
 
 #[path="compat.rs"]
 mod compat;
+#[test]
+fn package_io_failures_are_not_reported_as_damaged_content() {
+    use crate::package::{ByteSource,RangeState};
+    struct Failing {
+        bytes: super::super::transport::ChunkedBytes,
+        offset: u64,
+        failed: Arc<AtomicBool>,
+    }
+    impl ByteSource for Failing {
+        fn byte_len(&self)->u64 { self.bytes.byte_len() }
+        fn poll(&self,offset:u64,length:usize)->Result<RangeState,String> {
+            if offset==self.offset {
+                self.failed.store(true,Ordering::Relaxed);
+                return Err("PRIVATE I/O failure".into());
+            }
+            self.bytes.poll(offset,length)
+        }
+    }
+    let bytes = include_bytes!("../../../tests/compat/1.0.15/samples-U8.capy");
+    let directory = Directory::read(&mut Cursor::new(bytes.as_slice()),262_144,64*1024*1024).unwrap();
+    for offset in [bytes.len() as u64-22,directory.member("manifest.json").unwrap().offset,directory.member("data/tiles-1.bin").unwrap().offset] {
+        let failed = Arc::new(AtomicBool::new(false));
+        let source = ImmutableBacking::new(Arc::new(Failing {bytes:super::super::transport::ChunkedBytes::new(vec![Arc::from(bytes.as_slice())]).unwrap(),offset,failed:failed.clone()})).unwrap();
+        let outcome = open(source,Default::default(),&AtomicBool::new(false)).unwrap();
+        assert!(failed.load(Ordering::Relaxed));
+        assert!(matches!(outcome,OpenOutcome::Failure {cause:None,..} | OpenOutcome::RecoveredView {cause:None,..}),"offset {offset}: {outcome:?}");
+    }
+}

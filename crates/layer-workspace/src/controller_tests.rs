@@ -1928,31 +1928,30 @@ fn import_toolbar_package_selects_it_and_backup_adopts() {
 }
 
 /// Answers like `Store` until request `fail_from`, then fails every request
-/// with `kind`. A reset heals it when `reset_heals`, as replacing unreadable data does.
 struct Faulty {
     database: RefCell<BrowserDatabase>,
     requests: Cell<usize>,
     fail_from: usize,
-    reset_heals: bool,
+    aside_heals: bool,
     kind: ErrorKind,
     healed: Cell<bool>,
-    reset: Cell<bool>,
+    set_aside: Cell<bool>,
 }
 #[derive(Clone)]
 struct FaultyStore(Rc<Faulty>);
 impl FaultyStore {
-    fn new(fail_from: usize, reset_heals: bool) -> Self {
-        Self::failing(fail_from, reset_heals, ErrorKind::InvalidData)
+    fn new(fail_from: usize, aside_heals: bool) -> Self {
+        Self::failing(fail_from, aside_heals, ErrorKind::InvalidData)
     }
-    fn failing(fail_from: usize, reset_heals: bool, kind: ErrorKind) -> Self {
+    fn failing(fail_from: usize, aside_heals: bool, kind: ErrorKind) -> Self {
         Self(Rc::new(Faulty {
             database: RefCell::default(),
             requests: Cell::new(0),
             fail_from,
-            reset_heals,
+            aside_heals,
             kind,
             healed: Cell::new(false),
-            reset: Cell::new(false),
+            set_aside: Cell::new(false),
         }))
     }
 }
@@ -1960,12 +1959,13 @@ impl WorkspaceStore for FaultyStore {
     async fn execute(&self, request: StoreRequest) -> Result<StoreResponse, StoreError> {
         let f = &self.0;
         let index = f.requests.replace(f.requests.get() + 1);
-        let reset = matches!(request, StoreRequest::Reset);
-        f.reset.set(f.reset.get() || reset);
-        if index >= f.fail_from && !f.healed.get() && !(reset && f.reset_heals) {
+        let aside = matches!(request, StoreRequest::SetAside);
+        f.set_aside.set(f.set_aside.get() || aside);
+        if index >= f.fail_from && !f.healed.get() && !(aside && f.aside_heals) {
             return Err(StoreError::new(f.kind.clone(), "invalid type: map, expected a boolean"));
         }
-        f.healed.set(f.healed.get() || reset);
+        f.healed.set(f.healed.get() || aside);
+        if aside { *f.database.borrow_mut() = BrowserDatabase::default(); return Ok(StoreResponse::Done); }
         if let StoreRequest::Commit { batch } = &request {
             f.database.borrow_mut().prepare_delivery(batch)?;
         }
@@ -2104,6 +2104,110 @@ fn startup_notices_relabel_in_place_and_do_not_resurrect_dismissed_or_replaced_n
 fn notice(host: &layer_host::NativeHost) -> Option<String> {
     host.session.state().notice.as_ref().map(|n| n.text.clone())
 }
+#[test]
+fn unreadable_editing_fields_raise_one_notice_per_start() {
+    for damaged in [false,true] {
+        let backend = Rc::new(Backend::default());
+        let mut editing = serde_json::to_value(layer_ui::EditingState::default()).unwrap();
+        if damaged { editing["preset"] = "unreadable".into(); }
+        let mut stored = serde_json::from_str::<serde_json::Value>(&backend.database.borrow().encoded().unwrap()).unwrap();
+        stored["editing"] = editing.to_string().into();
+        *backend.database.borrow_mut() = BrowserDatabase::decode(&stored.to_string()).unwrap();
+        let (mut controller,mut host) = start(Store(backend),Platform::Web);
+        assert_started(&controller,&mut host,"editing notice");
+        assert_eq!(notice(&host).as_deref(),damaged.then_some("Some palettes or brush settings can't be opened in this version of Capy Canvas. Update Capy Canvas to open them."));
+        if let Some(notice) = host.session.state().notice.clone() {
+            for _ in 0..4 { controller.tick(&mut host.session,2000); }
+            assert_eq!(host.session.state().notice.as_ref().unwrap().id,notice.id);
+            host.session.dispatch(UiAction::Notice {id:notice.id,accept:false,action:None}).unwrap();
+            controller.tick(&mut host.session,3000);
+            assert!(host.session.state().notice.is_none());
+        }
+    }
+}
+#[test]
+fn startup_notices_survive_initial_drawing_recovery_without_reappearing_after_dismissal() {
+    let (mut controller,mut host) = start(FaultyStore::failing(0,false,ErrorKind::Unavailable),Platform::Web);
+    let notice = host.session.state().notice.clone().unwrap();
+    let mut restored = layer_host::NativeHost::new(Platform::Web).unwrap();
+    restored.session.inherit_window_state(&host.session).unwrap();
+    std::mem::swap(&mut host.session,&mut restored.session);
+    controller.tick(&mut host.session,2000);
+    assert_eq!(host.session.state().notice.as_ref().map(|notice|(&notice.text,notice.id)),Some((&notice.text,notice.id)));
+    host.session.dispatch(UiAction::Notice {id:notice.id,accept:false,action:None}).unwrap();
+    restored.session.inherit_window_state(&host.session).unwrap();
+    std::mem::swap(&mut host.session,&mut restored.session);
+    controller.tick(&mut host.session,3000);
+    assert!(host.session.state().notice.is_none());
+}
+
+#[test]
+fn failed_set_aside_keeps_the_database_and_uses_memory() {
+    let directory = crate::test_support::temp_dir("failed-set-aside");
+    std::fs::create_dir_all(directory.join("workspaces.sqlite3-wal")).unwrap();
+    let path = directory.join("workspaces.sqlite3");
+    std::fs::write(&path,b"damaged database").unwrap();
+    let (controller,mut host) = start_native(&directory);
+    assert_started(&controller,&mut host,"failed set aside");
+    assert!(controller.manager.in_memory());
+    assert_eq!(notice(&host).as_deref(),Some("Capy Canvas can't open your saved workspaces. Restart Capy Canvas to save changes to workspaces, palettes and brush settings."));
+    assert_eq!(std::fs::read(&path).unwrap(),b"damaged database");
+    assert!(!std::fs::read_dir(&directory).unwrap().any(|entry|entry.unwrap().file_name().to_string_lossy().starts_with("workspaces.damaged.")));
+    close_native(controller,&mut host);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+#[test]
+#[cfg(unix)]
+fn damaged_storage_with_a_live_reader_is_kept_aside_and_replaced() {
+    let directory = crate::test_support::temp_dir("damaged-store-in-use");
+    let path = directory.join("workspaces.sqlite3");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::copy(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/compat/1.0.15/workspaces.sqlite3"),&path).unwrap();
+    let reader = rusqlite::Connection::open(std::fs::canonicalize(&path).unwrap()).unwrap();
+    reader.set_db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,true).unwrap();
+    reader.execute_batch("BEGIN; SELECT count(*) FROM items;").unwrap();
+    std::fs::write(&path,b"damaged SQLite store").unwrap();
+    let (controller,mut host) = start_native(&directory);
+    assert_started(&controller,&mut host,"damaged store in use");
+    assert!(!controller.manager.in_memory());
+    assert_eq!(notice(&host).as_deref(),Some("Your saved workspaces were damaged. Capy Canvas started new ones."));
+    let copies = std::fs::read_dir(&directory).unwrap().map(|entry|entry.unwrap().path())
+        .filter(|path|path.file_name().unwrap().to_string_lossy().starts_with("workspaces.damaged.") && path.extension().is_some_and(|value|value=="sqlite3"))
+        .collect::<Vec<_>>();
+    assert_eq!(copies.len(),1);
+    assert_eq!(std::fs::read(&copies[0]).unwrap(),b"damaged SQLite store");
+    close_native(controller,&mut host);
+    drop(reader);
+    assert_eq!(std::fs::read(&copies[0]).unwrap(),b"damaged SQLite store");
+    let (controller,mut host) = start_native(&directory);
+    assert_started(&controller,&mut host,"fresh store after live reader closed");
+    assert!(!controller.manager.in_memory());
+    assert!(notice(&host).is_none());
+    close_native(controller,&mut host);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+#[test]
+fn a_stale_damage_report_does_not_set_aside_repaired_or_newer_storage() {
+    for version in [SCHEMA_VERSION,SCHEMA_VERSION+1] {
+        let directory = crate::test_support::temp_dir("stale-damage-report");
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("workspaces.sqlite3");
+        std::fs::write(&path,b"damaged SQLite store").unwrap();
+        let worker = StoreWorker::shared(&directory).unwrap();
+        assert_eq!(pollster::block_on(worker.execute(StoreRequest::Reopen)).unwrap_err().kind,ErrorKind::DamagedStorage);
+        std::fs::copy(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/compat/1.0.15/workspaces.sqlite3"),&path).unwrap();
+        let sql = rusqlite::Connection::open(std::fs::canonicalize(&path).unwrap()).unwrap();
+        sql.pragma_update(None,"user_version",version).unwrap();
+        drop(sql);
+        let original = std::fs::read(&path).unwrap();
+        let error = pollster::block_on(worker.execute(StoreRequest::SetAside)).unwrap_err();
+        assert_eq!(error.kind,if version==SCHEMA_VERSION {ErrorKind::Conflict}else{ErrorKind::UnsupportedSchema});
+        assert!(std::fs::read(&path).unwrap()==original);
+        assert!(!std::fs::read_dir(&directory).unwrap().any(|entry|entry.unwrap().file_name().to_string_lossy().starts_with("workspaces.damaged.")));
+        drop(worker);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}
 fn assert_started<S: WorkspaceStore + 'static>(
     controller: &WorkspaceController<S>,
     host: &mut layer_host::NativeHost,
@@ -2140,7 +2244,7 @@ fn startup_on_every_platform_adopts_from_empty_or_unusable_storage() {
         assert_eq!(
             notice(&host).as_deref(),
             Some(
-                "Workspace changes in this window won't be saved: This workspace cannot be opened. Choose another workspace or reset this one."
+                "Capy Canvas can't open your saved workspaces. Restart Capy Canvas to save changes to workspaces, palettes and brush settings."
             )
         );
     }
@@ -2236,19 +2340,19 @@ fn startup_survives_a_failure_at_every_storage_request() {
     let requests = clean.0.requests.get();
     assert!(requests > 10);
     for fail_from in 0..requests {
-        for kind in [ErrorKind::InvalidData, ErrorKind::UnsupportedSchema] {
+        for kind in [ErrorKind::InvalidData, ErrorKind::UnsupportedSchema, ErrorKind::DamagedStorage] {
             for reset_heals in [true, false] {
                 let store = FaultyStore::failing(fail_from, reset_heals, kind.clone());
                 let (mut controller, mut host) = start(store.clone(), Platform::Web);
                 let context = format!("{kind:?} at request {fail_from}, reset heals: {reset_heals}");
                 assert_started(&controller, &mut host, &context);
-                assert!(!store.0.reset.get() || kind == ErrorKind::UnsupportedSchema, "{context}");
+                assert!(!store.0.set_aside.get() || kind == ErrorKind::DamagedStorage, "{context}");
                 if controller.manager.in_memory() {
-                    assert!(notice(&host).unwrap().starts_with("Workspace changes in this window won't be saved:"), "{context}");
+                    assert_eq!(notice(&host).as_deref(),Some(if kind==ErrorKind::UnsupportedSchema {"Your workspaces were saved by a newer version of Capy Canvas. Update Capy Canvas to save changes to workspaces, palettes and brush settings."}else{"Capy Canvas can't open your saved workspaces. Restart Capy Canvas to save changes to workspaces, palettes and brush settings."}), "{context}");
                 } else {
-                    assert_eq!(notice(&host).as_deref(), store.0.reset.get().then_some("Saved workspaces couldn't be opened, so they were reset."), "{context}");
+                    assert_eq!(notice(&host).as_deref(), store.0.set_aside.get().then_some("Your saved workspaces were damaged. Capy Canvas started new ones."), "{context}");
                 }
-                if !store.0.reset.get() && !controller.manager.in_memory() { continue; }
+                if !store.0.set_aside.get() && !controller.manager.in_memory() { continue; }
                 let before = host.session.editing_state();
                 host.dispatch(UiAction::Invoke {command:layer_ui::CommandId::Eraser}).unwrap();
                 controller.observe(&mut host.session, 2000);
@@ -2271,7 +2375,7 @@ fn startup_replaces_only_storage_it_cannot_read() {
             let (controller, mut host) = start(store.clone(), Platform::Web);
             let context = format!("{kind:?} from request {fail_from}");
             assert_started(&controller, &mut host, &context);
-            assert!(!store.0.reset.get(), "{context}");
+            assert!(!store.0.set_aside.get(), "{context}");
         }
     }
 }
@@ -2353,8 +2457,8 @@ fn sqlite_startup_creates_one_workspace_and_keeps_unreadable_rows() {
         assert!(controller.view.error.is_none());
         assert!(host.session.capture_workspace().is_ok());
         assert!(host.session.state().workspace_ready);
+        assert_eq!(notice(&host).as_deref(),(launch=="stale start").then_some("This version of Capy Canvas can't open your saved workspaces. Update Capy Canvas to open them."));
         assert!(!controller.manager.in_memory());
-        assert!(notice(&host).is_none());
         let id = controller.manager.active_id().unwrap();
         assert!(!DEFAULT_WORKSPACES.iter().any(|(builtin,_)| *builtin==id));
         if let Some(previous) = &active { assert_eq!(&id,previous); }
@@ -2371,7 +2475,7 @@ fn sqlite_startup_creates_one_workspace_and_keeps_unreadable_rows() {
 }
 
 #[test]
-fn sqlite_startup_preserves_damaged_files_and_recovers_a_complete_wal() {
+fn sqlite_startup_sets_damaged_files_aside_and_recovers_a_complete_wal() {
     let released = include_bytes!("../tests/compat/1.0.15/workspaces.sqlite3");
     for bytes in [&released[..released.len()/2], b"not a SQLite database".as_slice()] {
         for sidecars in [true, false] {
@@ -2383,23 +2487,35 @@ fn sqlite_startup_preserves_damaged_files_and_recovers_a_complete_wal() {
                     std::fs::write(directory.join(name), b"unreadable sidecar bytes").unwrap();
                 }
             }
-            let stored = || {
-                let mut files = std::fs::read_dir(&directory).unwrap().map(|entry|entry.unwrap().path())
-                    .filter(|path|path.is_file() && path.file_name().unwrap()!="workspaces.sqlite3-shm")
-                    .map(|path|(path.file_name().unwrap().to_owned(),std::fs::read(path).unwrap()))
-                    .collect::<std::collections::BTreeMap<_,_>>();
-                files.entry("workspaces.sqlite3-wal".into()).or_default();
-                files
-            };
-            let original = stored();
-            for launch in ["damaged start", "damaged restart"] {
-                let (controller, mut host) = start_native(&directory);
-                assert_started(&controller, &mut host, launch);
-                assert!(controller.manager.in_memory(), "{launch}");
-                assert!(stored()==original, "{launch}: database, WAL or copies changed; SQLite owns SHM and may create an empty WAL");
-                close_native(controller, &mut host);
-                assert!(stored()==original, "{launch} after close: database, WAL or copies changed; SQLite owns SHM and may create an empty WAL");
+            let (controller, mut host) = start_native(&directory);
+            assert_started(&controller, &mut host, "damaged start");
+            assert!(!controller.manager.in_memory());
+            assert_eq!(notice(&host).as_deref(),Some("Your saved workspaces were damaged. Capy Canvas started new ones."));
+            let copies = std::fs::read_dir(&directory).unwrap().map(|entry|entry.unwrap().path())
+                .filter(|path|path.file_name().unwrap().to_string_lossy().starts_with("workspaces.damaged.") && path.extension().is_some_and(|value|value=="sqlite3"))
+                .collect::<Vec<_>>();
+            assert_eq!(copies.len(),1);
+            let kept = &copies[0];
+            assert_eq!(std::fs::read(kept).unwrap(),bytes);
+            if sidecars {
+                assert_eq!(std::fs::read(format!("{}-wal",kept.display())).unwrap(),b"unreadable sidecar bytes");
+                assert!(std::path::Path::new(&format!("{}-shm",kept.display())).is_file());
             }
+            let mut editing = host.session.editing_state();
+            editing.region_smooth_edges = false;
+            host.session.restore_editing(editing.clone()).unwrap();
+            controller.manager.observe_editing(editing);
+            pollster::block_on(controller.manager.flush()).unwrap();
+            close_native(controller, &mut host);
+            let (controller, mut host) = start_native(&directory);
+            assert_started(&controller, &mut host, "damaged restart");
+            assert!(!controller.manager.in_memory());
+            assert_eq!(notice(&host),None);
+            assert!(!controller.manager.editing().unwrap().region_smooth_edges);
+            close_native(controller, &mut host);
+            assert_eq!(std::fs::read(kept).unwrap(),bytes);
+            if sidecars { assert_eq!(std::fs::read(format!("{}-wal",kept.display())).unwrap(),b"unreadable sidecar bytes"); }
+            assert!(!directory.join("workspaces.unreadable.sqlite3").exists());
             std::fs::remove_dir_all(directory).unwrap();
         }
     }
@@ -2438,11 +2554,8 @@ fn sqlite_startup_keeps_a_newer_store_and_runs_in_memory() {
     let (controller, mut host) = start_native(&directory);
     assert_started(&controller, &mut host, "newer store");
     assert!(controller.manager.in_memory());
-    assert!(
-        notice(&host)
-            .unwrap()
-            .contains("A newer version of Capy Canvas updated workspace storage.")
-    );
+    assert_eq!(notice(&host).as_deref(),Some("Your workspaces were saved by a newer version of Capy Canvas. Update Capy Canvas to save changes to workspaces, palettes and brush settings."));
+    assert!(!std::fs::read_dir(&directory).unwrap().any(|entry|entry.unwrap().file_name().to_string_lossy().starts_with("workspaces.damaged.")));
     close_native(controller, &mut host);
     let version: u32 = db
         .pragma_query_value(None, "user_version", |r| r.get(0))

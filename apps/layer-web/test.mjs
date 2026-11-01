@@ -78,6 +78,7 @@ import {checkMenuLabels} from "./menu-labels.test.mjs";
 import {checkHeaderControls} from "./header-controls.test.mjs";
 import {checkWorkspaceWindows} from "./workspace-windows.test.mjs";
 import {checkWorkspaceStore,checkStaleStorageStartup} from "./workspace-store.test.mjs";
+import {checkSavedDataUx} from "./saved-data-ux.test.mjs";
 import {checkLayerHolding,checkLayerSwipes} from "./layer-hold.test.mjs";
 import {checkLongPressDragging} from "./long-press-drag.test.mjs";
 import {checkPalettes} from "./palettes.test.mjs";
@@ -154,7 +155,7 @@ const cdp = await launchChrome(
     "--window-size=1440,1000",
   ],
   {
-    timeout: process.argv.includes('--transform-footprint')?60000:process.argv.some(x=>['--capture-readiness','--hdr-bubbles','--color-undo','--vector-edges','--vector-files','--layer-properties-drawer','--drawing-tabs-recovery','--scopes','--tonal-controls','--gradients','--panel-controls'].includes(x))?300000:process.argv.some(x=>["--enclose-fill","--vector-tools","--vector-milestone","--selection-tools","--color-mixing","--contact-brushes","--layer-properties-drawer","--filter-drawer","--artistic-filters","--filter-previews","--spatial-filter-windows","--lookup-transport","--local-adjustments","--drawing-tabs","--shared-workflows","--live-language-color","--live-language-proof","--live-language-delivery","--live-language-surfaces","--live-language-toolbar","--live-language-effects","--hdr","--hdr-performance","--proof","--portable-photo","--image-object-fixture","--image-rows","--image-layers","--package-view","--export-metadata","--filter-investigation","--paper-texture-readiness","--pipeline-readiness","--tip-resize-readiness","--gpu-failure-lifecycle","--callback-boundaries","--blending","--editor","--new-drawing"].includes(x)) ? 180000 : 30000,
+    timeout: process.argv.includes('--transform-footprint')?60000:process.argv.some(x=>['--capture-readiness','--hdr-bubbles','--color-undo','--vector-edges','--vector-files','--layer-properties-drawer','--drawing-tabs-recovery','--scopes','--tonal-controls','--gradients','--panel-controls'].includes(x))?300000:process.argv.some(x=>["--saved-data-ux","--enclose-fill","--vector-tools","--vector-milestone","--selection-tools","--color-mixing","--contact-brushes","--layer-properties-drawer","--filter-drawer","--artistic-filters","--filter-previews","--spatial-filter-windows","--lookup-transport","--local-adjustments","--drawing-tabs","--shared-workflows","--live-language-color","--live-language-proof","--live-language-delivery","--live-language-surfaces","--live-language-toolbar","--live-language-effects","--hdr","--hdr-performance","--proof","--portable-photo","--image-object-fixture","--image-rows","--image-layers","--package-view","--export-metadata","--filter-investigation","--paper-texture-readiness","--pipeline-readiness","--tip-resize-readiness","--gpu-failure-lifecycle","--callback-boundaries","--blending","--editor","--new-drawing"].includes(x)) ? 180000 : 30000,
     onEvent: (event) => {
       if (
         event.method === "Runtime.consoleAPICalled" &&
@@ -374,6 +375,7 @@ try {
     [process.argv.includes("--workspace-manager"), () => checkWorkspaceManager({call,evaluate,settle,reload}), checkErrors],
     [process.argv.includes("--workspace-store"), () => checkWorkspaceStore({evaluate}), checkErrors],
     [process.argv.includes("--stale-storage"), () => checkStaleStorageStartup({evaluate,reload}), checkErrors],
+    [process.argv.includes("--saved-data-ux"), () => checkSavedDataUx({call,evaluate,reload,settle}), checkErrors],
     [process.argv.includes("--drawer-switch"), () => checkToolbarDrawerSwitching({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--drawer-style"), () => checkDrawerStyling({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--drawer-drag"), () => checkDrawerDragging({call,evaluate,settle}), checkErrors],

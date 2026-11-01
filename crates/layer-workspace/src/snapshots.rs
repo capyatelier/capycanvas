@@ -25,6 +25,7 @@ pub(crate) fn name(version: &str) -> String {
 }
 
 pub(crate) fn managed_name(name: &str) -> bool {
+    if name.starts_with("workspaces.damaged.") { return false; }
     name.strip_prefix("workspaces.").and_then(|name|name.rsplit_once('.')).is_some_and(|(_,id)|uuid::Uuid::parse_str(id).is_ok())
 }
 
@@ -94,6 +95,12 @@ pub fn plan(snapshot: Option<&str>, environment: SnapshotEnvironment, adopted: b
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn damaged_stores_are_never_managed_version_copies() {
+        let name = format!("workspaces.damaged.{}",crate::new_id());
+        assert!(!super::managed_name(&name));
+        assert!(super::managed_name(&super::name("1.0.15")));
+    }
     use super::*;
     #[test]
     fn version_changes_and_unreadable_records_keep_original_bytes_without_repeated_copies() {

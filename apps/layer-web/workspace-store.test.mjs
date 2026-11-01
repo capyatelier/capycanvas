@@ -242,7 +242,7 @@ export async function checkStaleStorageStartup({evaluate, reload}) {
   const view = JSON.parse(await evaluate("layerApp.app.workspace_view()"));
   assert.equal(view.error, null);
   assert.ok(!stale.includes(view.id));
-  assert.equal(await evaluate("!!layerApp.state().notice"), false);
+  assert.equal(await evaluate("layerApp.state().notice?.text"),"This version of Capy Canvas can't open your saved workspaces. Update Capy Canvas to open them.");
   assert.equal(await evaluate('document.querySelector("#status").textContent'), "");
   assert.equal(await evaluate('[...document.querySelectorAll("dialog")].some(d => d.open)'), false);
   assert.equal(await evaluate(workspaceRecord("unreadable")), previousCopy);

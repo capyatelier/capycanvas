@@ -880,7 +880,7 @@ struct ProjectFilesModifier: ViewModifier {
                         if let image = files.packageImage {
                             Image(decorative: image, scale: 1).resizable().aspectRatio(contentMode: .fit).frame(maxHeight: 420)
                         }
-                        Text(summary["reason"].string)
+                        if !summary["body"].string.isEmpty { Text(summary["body"].string) }
                         HStack {
                             Button(summary["close"].string) { files.closePackage() }.disabled(files.packageCopying)
                             Spacer()

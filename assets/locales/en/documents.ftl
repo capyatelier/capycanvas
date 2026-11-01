@@ -347,3 +347,5 @@ documents-height-name = Height
 documents-drop-drawings = Open drawing
 documents-drop-mixed = Open drawings or place images, not both
 documents-drop-images = Place images on canvas
+documents-package-unsupported-body = It has layers or settings that this version of { common-app-name } can't edit.
+documents-package-damaged-body = Part of this file is damaged.

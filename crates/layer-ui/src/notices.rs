@@ -134,6 +134,7 @@ pub(super) struct Notices {
     actions: Vec<(NoticeActionId, NoticeRun)>,
     owner: u64,
     epoch: u64,
+    window: bool,
     changed: bool,
     /// The mask whose editing session already explained dry coverage.
     dry_mask: Option<SourceTarget>,
@@ -209,6 +210,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn notify(&mut self, text: impl Into<String>) {
         self.raise_notice(text.into(), Vec::new());
     }
+    pub fn notify_window(&mut self, text: impl Into<String>) {
+        self.notify(text);
+        self.notices.window = true;
+    }
 
     pub fn raise_message_notice(&mut self, message: MessageId) {
         self.raise_notice(self.localization().text(message).to_string(), Vec::new());
@@ -220,6 +225,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         notices.last_id += 1;
         notices.epoch = self.state.document_file.epoch;
         notices.owner = self.engine.document().owner;
+        notices.window = false;
         notices.changed = true;
         notices.actions = actions.iter().map(|(action, run)| (action.id, run.clone())).collect();
         notices.copy = None;
@@ -338,6 +344,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn dismiss_notice(&mut self) {
         if self.state.notice.take().is_some() {
+            self.notices.window = false;
             self.notices.actions.clear();
             self.notices.copy = None;
             self.notices.changed = true;
@@ -356,10 +363,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
 
-    /// HOST when the notice changed since the last publication. A notice
-    /// never outlives the document activation that raised it.
     pub(super) fn notice_regions(&mut self) -> u32 {
-        if self.notices.epoch != self.state.document_file.epoch {
+        if !self.notices.window && self.notices.epoch != self.state.document_file.epoch {
             self.dismiss_notice();
             self.notices.epoch = self.state.document_file.epoch;
         }
@@ -369,6 +374,13 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Keep notice ids increasing across the documents of one window.
     pub(super) fn inherit_notice_ids(&mut self, previous: &Self) {
         self.notices.last_id = self.notices.last_id.max(previous.notices.last_id);
+        if previous.notices.window || self.notices.window {
+            self.state.notice = previous.notices.window.then(||previous.state.notice.clone()).flatten();
+            self.notices.copy = previous.notices.window.then(||previous.notices.copy.clone()).flatten();
+            self.notices.actions.clear();
+            self.notices.window = previous.notices.window;
+            self.notices.changed = true;
+        }
     }
 
     pub(super) fn notice_action(&mut self, id: u64, accept: bool, action: Option<NoticeActionId>) -> Result<UiChange, String> {

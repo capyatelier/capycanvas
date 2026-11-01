@@ -126,6 +126,8 @@ node --test tools/cdp.test.mjs
 
 ### Browser journeys
 
+`--saved-data-ux` checks saved-data startup and package messages in both themes and captures them under `artifacts/saved-data-compat/ux-shots/`.
+
 The other `*.test.mjs` files are Chrome journeys that
 [`test.mjs`](../../apps/layer-web/test.mjs) imports; do not run them with
 `node --test`. Run one journey per invocation against the development server:

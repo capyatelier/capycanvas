@@ -133,7 +133,7 @@ fn editing_reads_restore_fields_with_the_requested_language_without_writing() {
     value["editing"] = original.clone().into();
     let mut browser = BrowserDatabase::decode(&value.to_string()).unwrap();
     for response in [f.store.handle(StoreRequest::Editing {language:layer_ui::UiLanguage::Japanese}).unwrap(),browser.execute(StoreRequest::Editing {language:layer_ui::UiLanguage::Japanese},1_000_000).unwrap()] {
-        let StoreResponse::Editing(Some(restored)) = response else {panic!()};
+        let StoreResponse::Editing {state:Some(restored),dropped:true} = response else {panic!()};
         assert_eq!(*restored,expected);
     }
     assert_eq!(f.store.connection.query_row("SELECT json FROM editing",[],|row|row.get::<_,String>(0)).unwrap(),original);
@@ -171,7 +171,7 @@ fn editing_merge_keeps_unreadable_fields_and_rejects_invalid_submissions() {
             }
         }
         for result in [f.store.handle(StoreRequest::Editing {language:layer_ui::UiLanguage::English}).unwrap(),browser.execute(StoreRequest::Editing {language:layer_ui::UiLanguage::English},1_000_000).unwrap()] {
-            let StoreResponse::Editing(Some(stored)) = result else {panic!()};
+            let StoreResponse::Editing {state:Some(stored),..} = result else {panic!()};
             assert_eq!(*stored,incoming);
         }
         let mut invalid = CommitBatch::prepare(f.owner.clone(),vec![]).unwrap();
@@ -180,7 +180,7 @@ fn editing_merge_keeps_unreadable_fields_and_rejects_invalid_submissions() {
         assert!(f.store.commit(invalid.clone()).is_err());
         assert!(browser.execute(StoreRequest::Commit {batch:invalid},1_000_000).is_err());
         for result in [f.store.handle(StoreRequest::Editing {language:layer_ui::UiLanguage::English}).unwrap(),browser.execute(StoreRequest::Editing {language:layer_ui::UiLanguage::English},1_000_000).unwrap()] {
-            let StoreResponse::Editing(Some(stored)) = result else {panic!()};
+            let StoreResponse::Editing {state:Some(stored),..} = result else {panic!()};
             assert_eq!(*stored,incoming);
         }
     }

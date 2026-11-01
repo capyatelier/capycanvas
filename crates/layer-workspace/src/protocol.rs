@@ -412,6 +412,7 @@ pub enum StoreRequest {
         clear_older: bool,
     },
     Reopen,
+    SetAside,
     Adopted,
     /// Replace every stored item and record with an empty current store. A
     /// store written by a newer build is refused and kept.
@@ -420,7 +421,7 @@ pub enum StoreRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum StoreResponse {
-    Editing(Option<Box<layer_ui::EditingState>>),
+    Editing { state: Option<Box<layer_ui::EditingState>>, dropped: bool },
     Switcher(Option<Vec<String>>),
     WorkspaceOrder(Option<Vec<String>>),
     List(Vec<ItemSummary>),

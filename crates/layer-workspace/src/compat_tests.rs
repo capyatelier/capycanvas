@@ -208,7 +208,7 @@ fn check_inputs(directory: &Path, check: impl Fn(&str, Value)) {
     std::fs::create_dir_all(&temp).unwrap();
     std::fs::copy(directory.join("workspaces.sqlite3"), temp.join("workspaces.sqlite3")).unwrap();
     let expected = serde_json::to_value(EditingState::restore(&std::fs::read_to_string(directory.join("editing.json")).unwrap(),&english)).unwrap();
-    let StoreResponse::Editing(editing) = browser.execute(StoreRequest::Editing {language:UiLanguage::English},1000).unwrap() else {panic!()};
+    let StoreResponse::Editing {state:editing,..} = browser.execute(StoreRequest::Editing {language:UiLanguage::English},1000).unwrap() else {panic!()};
     assert_eq!(serde_json::to_value(editing).unwrap(),expected);
     {
         let manager = WorkspaceManager::new(StoreWorker::shared(&temp).unwrap(), Platform::Gtk);

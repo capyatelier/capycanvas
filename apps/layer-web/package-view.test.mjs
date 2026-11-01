@@ -83,7 +83,8 @@ export async function checkPackageView({evaluate,settle}) {
       const model=await open('unsupported.capy');
       assert.equal(model.disposition,'preserved');assert.deepEqual(model.extent,[2,1],JSON.stringify(model));assert.deepEqual(model.outputs,outputs);
       assert.deepEqual(model.capabilities,{view:true,copy_original:true,edit:false,save:false,export:true});
-      assert.match(model.reason,/blend/i);
+      assert.equal(model.body,"It has layers or settings that this version of Capy Canvas can't edit.");
+      assert.equal("reason" in model,false);
       assert.deepEqual(await snapshot(),incumbent,'Viewing a preserved package keeps the incumbent editor and dirty history');
       assert.deepEqual(await evaluate(`Array.from(document.querySelector('dialog[open]').querySelectorAll('p')).slice(1).map(p=>p.textContent)`),outputs.map(o=>o.name));
       assert.equal(await evaluate("document.querySelectorAll('dialog[open] img').length"),0,'Package presentation never reparses the original PNG');

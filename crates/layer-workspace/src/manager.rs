@@ -11,6 +11,8 @@ struct PendingSave {
 }
 #[derive(Default)]
 struct State {
+    editing_dropped: bool,
+    startup_created: bool,
     editing: Option<Box<layer_ui::EditingState>>,
     saved_editing: Option<Box<layer_ui::EditingState>>,
     saved: Option<StoredEntity>,
@@ -80,10 +82,9 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         }
         self.store.execute(request).await
     }
-    /// Empty the store for a new start. A store written by a newer build is kept.
-    pub async fn replace_storage(&self) -> Result<()> {
+    pub(crate) async fn set_aside_storage(&self) -> Result<()> {
         *self.state.borrow_mut() = State::default();
-        self.execute(StoreRequest::Reset).await.map(|_| ())
+        self.execute(StoreRequest::SetAside).await.map(|_| ())
     }
     /// Continue on a new store that lives only in this manager.
     pub fn use_memory(&self) {
@@ -160,9 +161,12 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         }
     }
     pub fn editing(&self) -> Option<Box<layer_ui::EditingState>> { self.state.borrow().editing.clone() }
+    pub(crate) fn editing_dropped(&self) -> bool { self.state.borrow().editing_dropped }
+    pub(crate) fn startup_created(&self) -> bool { self.state.borrow().startup_created }
     pub async fn load_editing(&self) -> Result<()> {
-        if let StoreResponse::Editing(editing) = self.execute(StoreRequest::Editing {language:self.localization().language()}).await? {
+        if let StoreResponse::Editing {state:editing,dropped} = self.execute(StoreRequest::Editing {language:self.localization().language()}).await? {
             let mut state = self.state.borrow_mut();
+            state.editing_dropped = dropped;
             state.saved_editing = editing.clone();
             state.editing = editing;
         }
@@ -487,7 +491,9 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let (id,_) = DEFAULT_WORKSPACES.iter().find(|(_,preset)|*preset==self.initial_workspace.get()).unwrap();
         let source = Entity::included_workspace(id,self.platform,self.tablet.get(),now).unwrap();
         let name = self.display_name(&source.id,&source.metadata);
-        self.create_from_snapshot(source,&name,true,now).await
+        let incoming = self.create_from_snapshot(source,&name,true,now).await?;
+        self.state.borrow_mut().startup_created = true;
+        Ok(incoming)
     }
 
     async fn ensure_defaults(&self, now: u64) -> Result<()> {

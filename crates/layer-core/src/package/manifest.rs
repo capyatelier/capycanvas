@@ -90,7 +90,7 @@ fn shape(record: &Value, refs: &[PortableId], context: RecordContext, reasons: &
     if extras(data, descriptor.data_fields) { reasons.insert("Unknown object data field"); }
     match registry::validate_context(record, context) {
         Err(DecodeError::Unsupported(_)) => { reasons.insert("Unsupported authored record context"); },
-        Err(DecodeError::Invalid(reason)) => return Err(reason),
+        Err(DecodeError::Invalid(reason) | DecodeError::Io(reason)) => return Err(reason),
         Ok(()) => {},
     }
     Ok(match descriptor.kind {

@@ -988,7 +988,7 @@ workspace-refusal-inconsistent-metadata-payload = Muatan metadata tidak konsiste
 
 workspace-refusal-invalid-item-identity = Identitas item tidak valid.
 
-workspace-refusal-invalid-workspace = Ruang kerja ini tidak dapat dibuka. Pilih ruang kerja lain atau atur ulang ruang kerja ini.
+workspace-refusal-invalid-workspace = Versi { common-app-name } ini tidak dapat membuka ruang kerja ini.
 
 workspace-refusal-invalid-workspace-component = Komponen ruang kerja tidak valid.
 
@@ -1163,9 +1163,7 @@ workspace-refusal-session-panel-has-no-workspace-group = Panel tidak memiliki gr
 
 workspace-refusal-invalid-toolbar-identity = Identitas bilah alat tidak valid.
 
-workspace-storage-reset-notice = Ruang kerja tersimpan tidak dapat dibuka, sehingga diatur ulang.
 
-workspace-storage-volatile-notice = Perubahan ruang kerja di jendela ini tidak akan disimpan: { $detail }
 
 workspace-storage-write-failed = Perubahan ruang kerja tidak dapat disimpan. Coba lagi.
 
@@ -1213,3 +1211,8 @@ diagnostics-submitted-fps-description = Bingkai kanvas yang dikirim dalam satu d
 
 workspace-slider-show-value = Tampilkan nilai
 workspace-slider-expand = Perluas untuk mengisi
+workspace-storage-newer-notice = Ruang kerja Anda disimpan oleh versi { common-app-name } yang lebih baru. Perbarui { common-app-name } untuk menyimpan perubahan pada ruang kerja, palet, dan pengaturan kuas.
+workspace-storage-unavailable-notice = { common-app-name } tidak dapat membuka ruang kerja tersimpan Anda. Mulai ulang { common-app-name } untuk menyimpan perubahan pada ruang kerja, palet, dan pengaturan kuas.
+workspace-storage-damaged-notice = Ruang kerja tersimpan Anda rusak. { common-app-name } memulai ruang kerja baru.
+workspace-editing-unreadable-notice = Beberapa palet atau pengaturan kuas tidak dapat dibuka dalam versi { common-app-name } ini. Perbarui { common-app-name } untuk membukanya.
+workspace-created-unreadable-notice = Versi { common-app-name } ini tidak dapat membuka ruang kerja tersimpan Anda. Perbarui { common-app-name } untuk membukanya.

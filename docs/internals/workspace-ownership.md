@@ -68,17 +68,19 @@ Every host (GTK, Web, Android, Apple and Windows) starts through
 adoption moves startup to a later stage:
 
 1. **Stored**: start from the store as it is.
-2. **Replaced**: only for an unsupported table schema, `StoreRequest::Reset`
-   keeps a copy of it and empties it, then startup begins again. SQLite copies
-   the database and its log to
-   `workspaces.unreadable.sqlite3`; the browser keeps the previous record under
-   the id `unreadable`. Each reset replaces the previous copy.
-3. **In memory**: after any other error, or a failed replacement, continue on a
+2. **Set aside**: only SQLite corruption or not-a-database errors reach
+   `StoreRequest::SetAside`. The worker renames the database and its existing
+   WAL/SHM sidecars to `workspaces.damaged.<uuid>.sqlite3` and matching sidecar names,
+   then opens a fresh store. These files are never pruned as version copies.
+   Recovery serializes set-aside operations and rechecks corruption. It moves
+   sidecars before the main file and restores moved names if a rename fails.
+3. **In memory**: after any other error, or a failed set-aside, continue on a
    `BrowserDatabase` owned by the manager. Nothing in this window is persisted,
    and the next launch tries the store again.
 
-Stages 2 and 3 raise the shared canvas notice to explain what happened (GTK, Web,
-Android and Windows show it). Stage 3 reads nothing that was stored: it seeds the
+Stages 2 and 3 raise the shared canvas notice. A successful set-aside shows the
+damaged-store message; a newer schema shows the newer-version message, and other
+failures show the can't-open message. Stage 3 reads nothing that was stored: it seeds the
 built-in presets from code into an empty store and adopts one. Startup
 therefore always ends with an adopted workspace, provided the presets adopt on
 that platform and every storage request eventually replies or fails. Tests
@@ -88,7 +90,10 @@ blocked upgrades and worker failures.
 
 Editing state written by 1.0.15 is converted on read; unreadable editing and
 working-state fields use their defaults. App-state documents accept unknown
-option fields and do not reject a readable document for its version number.
+option fields. Discarded editing fields raise the palettes-and-brush-settings
+notice once per start. Creating a workspace because none could be read raises
+the shared update notice once.
+Readable documents are not rejected for their version number.
 `SCHEMA_VERSION` identifies the tables: a store of any other schema version
 serves nothing but `Reset`.
 Unreadable workspace and toolbar rows remain listed and are skipped during

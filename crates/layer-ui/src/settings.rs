@@ -223,7 +223,7 @@ impl Settings {
     }
     pub fn restore_localized(saved: &str, localization: &Localizer) -> Self {
         if saved.len() > Self::MAX_FILE_BYTES { return Self::default(); }
-        let mut restored = crate::saved_state::restore_fields(
+        let (mut restored, _) = crate::saved_state::restore_fields(
             serde_json::from_str(saved).unwrap_or_default(), Self::default,
             |settings| settings.validate_localized(localization).is_ok(),
         );

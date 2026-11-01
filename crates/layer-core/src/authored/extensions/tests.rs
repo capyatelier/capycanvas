@@ -102,7 +102,7 @@ fn resource_checksum_failure_poisons_every_borrower_of_the_backing() {
     manifest.resources.get_mut(&id(11)).unwrap().crc32 ^= 1;
     let other_owner=backing.clone();
     let error=Extensions::load(&manifest,&backing,&AtomicBool::new(false)).unwrap_err();
-    assert!(error.contains("checksum"));assert_eq!(other_owner.poll(0,1).unwrap_err(),error);
+    assert!(error.to_string().contains("checksum"));assert_eq!(other_owner.poll(0,1).unwrap_err(),error.to_string());
 }
 
 struct DeferredSource { bytes:Arc<[u8]>, pending:AtomicBool, cancel:Arc<AtomicBool>, polls:AtomicUsize }
@@ -125,13 +125,13 @@ fn pending_and_cancellation_stop_reads_without_poisoning_the_backing() {
     let cancel=Arc::new(AtomicBool::new(true));
     let source=Arc::new(DeferredSource {bytes:Arc::from(b"abc".as_slice()),pending:AtomicBool::new(true),cancel:cancel.clone(),polls:AtomicUsize::new(0)});
     let backing=ImmutableBacking::new(source.clone()).unwrap();let resource=opaque(backing.clone(),3,crc32fast::hash(b"abc"));
-    assert!(resource.verify(&cancel).unwrap_err().contains("cancelled"));assert_eq!(source.polls.load(Ordering::Relaxed),0);
+    assert!(resource.verify(&cancel).unwrap_err().to_string().contains("cancelled"));assert_eq!(source.polls.load(Ordering::Relaxed),0);
     cancel.store(false,Ordering::Relaxed);
-    assert!(resource.verify(&cancel).unwrap_err().contains("pending"));
+    assert!(resource.verify(&cancel).unwrap_err().to_string().contains("pending"));
     source.pending.store(false,Ordering::Relaxed);
-    assert!(resource.verify(&cancel).unwrap_err().contains("cancelled"));
+    assert!(resource.verify(&cancel).unwrap_err().to_string().contains("cancelled"));
     assert!(matches!(backing.poll(0,3).unwrap(),RangeState::Ready(_)));
-    assert!(resource.read_chunk(2,2,&AtomicBool::new(false)).unwrap_err().contains("exceeds range"));
+    assert!(resource.read_chunk(2,2,&AtomicBool::new(false)).unwrap_err().to_string().contains("exceeds range"));
     assert!(resource.read_chunk(u64::MAX,2,&AtomicBool::new(false)).is_err());
     assert!(resource.verify(&AtomicBool::new(false)).is_ok());
 }
@@ -162,8 +162,8 @@ fn empty_resources_observe_pending_and_owner_failure() {
     let source=Arc::new(DeferredSource {bytes:Arc::from([]),pending:AtomicBool::new(true),cancel:Arc::new(AtomicBool::new(false)),polls:AtomicUsize::new(0)});
     let backing=ImmutableBacking::new(source.clone()).unwrap();let resource=opaque(backing.clone(),0,crc32fast::hash(&[]));
     let cancelled=AtomicBool::new(false);
-    assert!(resource.verify(&cancelled).unwrap_err().contains("pending"));
+    assert!(resource.verify(&cancelled).unwrap_err().to_string().contains("pending"));
     source.pending.store(false,Ordering::Relaxed);resource.verify(&cancelled).unwrap();
     let error=backing.fail("Another resource was corrupt".into());
-    assert_eq!(resource.verify(&cancelled).unwrap_err(),error);
+    assert_eq!(resource.verify(&cancelled).unwrap_err().to_string(),error);
 }

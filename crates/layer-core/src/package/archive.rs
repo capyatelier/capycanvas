@@ -17,9 +17,16 @@ fn io(error: std::io::Error) -> String { format!("Package I/O failed: {error}") 
 fn u16_at(bytes: &[u8], offset: usize) -> u16 { u16::from_le_bytes(bytes[offset..offset+2].try_into().unwrap()) }
 fn u32_at(bytes: &[u8], offset: usize) -> u32 { u32::from_le_bytes(bytes[offset..offset+4].try_into().unwrap()) }
 fn u64_at(bytes: &[u8], offset: usize) -> u64 { u64::from_le_bytes(bytes[offset..offset+8].try_into().unwrap()) }
-fn at<const N: usize>(input: &mut (impl Read + Seek), offset: u64) -> Result<[u8; N], String> {
-    input.seek(SeekFrom::Start(offset)).map_err(io)?;
-    let mut bytes = [0; N]; input.read_exact(&mut bytes).map_err(io)?; Ok(bytes)
+fn at<const N: usize>(input: &mut (impl Read + Seek), offset: u64) -> DecodeResult<[u8; N]> {
+    input.seek(SeekFrom::Start(offset))?;
+    let mut bytes = [0; N]; input.read_exact(&mut bytes)?; Ok(bytes)
+}
+fn zip_error(error: zip::result::ZipError) -> DecodeError {
+    match error {
+        zip::result::ZipError::Io(error) => error.into(),
+        zip::result::ZipError::UnsupportedArchive(reason) => DecodeError::Unsupported(reason.into()),
+        error => DecodeError::Invalid(error.to_string()),
+    }
 }
 fn name_valid(name: &str) -> bool {
     !name.is_empty() && name.len() <= 255 && name.bytes().all(|c| c.is_ascii_alphanumeric() || b"/._-".contains(&c))
@@ -37,7 +44,7 @@ fn extras(bytes: &[u8], expected: &[u64]) -> Result<(), String> {
 
 impl Directory {
     pub fn read(input: &mut (impl Read + Seek), max_entries: usize, max_metadata: u64) -> DecodeResult<Self> {
-        let length = input.seek(SeekFrom::End(0)).map_err(io)?;
+        let length = input.seek(SeekFrom::End(0))?;
         let end_offset = length.checked_sub(22).ok_or("Incomplete ZIP end record")?;
         let end = at::<22>(input, end_offset)?;
         if u32_at(&end, 0) != 0x06054b50 || u16_at(&end, 4) != 0 || u16_at(&end, 6) != 0 || u16_at(&end, 20) != 0 {
@@ -67,13 +74,13 @@ impl Directory {
         }
         if count > max_entries as u64 || size > max_metadata { return Err(DecodeError::Unsupported("ZIP directory exceeds admission".into())); }
         let mut archive = zip::ZipArchive::with_config(zip::read::Config { archive_offset: zip::read::ArchiveOffset::Known(0) }, &mut *input)
-            .map_err(|e| format!("Invalid ZIP: {e}"))?;
+            .map_err(zip_error)?;
         if archive.len() as u64 != count || archive.offset() != 0 { return Err("Ambiguous ZIP member inventory".into()); }
         let mut members = Vec::with_capacity(count as usize);
         let mut headers = Vec::with_capacity(count as usize);
         let mut names = BTreeSet::new();
         for index in 0..archive.len() {
-            let file = archive.by_index_raw(index).map_err(|e| e.to_string())?;
+            let file = archive.by_index_raw(index).map_err(zip_error)?;
             let name = std::str::from_utf8(file.name_raw()).map_err(|_| "Non-ASCII ZIP member")?;
             if name.len()>255 { return Err(DecodeError::Unsupported("ZIP member name exceeds admission".into())); }
             if name == "manifest.json" && file.size() > max_metadata { return Err(DecodeError::Unsupported("Package metadata exceeds limit".into())); }
@@ -117,10 +124,10 @@ impl Directory {
                 (local, 30, u16_at(&l, 26), u16_at(&l, 28), false),
                 (central, 46, u16_at(&c, 28), u16_at(&c, 30), true),
             ] {
-                input.seek(SeekFrom::Start(add(base, fixed)?)).map_err(io)?;
-                let mut name = vec![0; name_size as usize]; input.read_exact(&mut name).map_err(io)?;
+                input.seek(SeekFrom::Start(add(base, fixed)?))?;
+                let mut name = vec![0; name_size as usize]; input.read_exact(&mut name)?;
                 if name != member.name.as_bytes() { return Err("Conflicting ZIP member names".into()); }
-                let mut extra = vec![0; extra_size as usize]; input.read_exact(&mut extra).map_err(io)?;
+                let mut extra = vec![0; extra_size as usize]; input.read_exact(&mut extra)?;
                 if is_central && header >= LIMIT32 { expected.push(header); }
                 extras(&extra, &expected)?;
             }
@@ -139,12 +146,12 @@ impl Directory {
         Ok(directory)
     }
     pub fn member(&self, name: &str) -> Option<&Member> { self.members.iter().find(|m| m.name == name) }
-    pub fn read_member(&self, input: &mut (impl Read + Seek), member: &Member, limit: usize) -> Result<Vec<u8>, String> {
+    pub fn read_member(&self, input: &mut (impl Read + Seek), member: &Member, limit: usize) -> DecodeResult<Vec<u8>> {
         let encoded_length = member.compressed_length.unwrap_or(member.length);
         if member.length > limit as u64 || encoded_length > limit as u64 || !self.members.contains(member)
             || member.offset.checked_add(encoded_length).is_none_or(|end| end > self.length) { return Err("ZIP member exceeds read bound".into()); }
-        input.seek(SeekFrom::Start(member.offset)).map_err(io)?;
-        let mut bytes = vec![0; encoded_length as usize]; input.read_exact(&mut bytes).map_err(io)?;
+        input.seek(SeekFrom::Start(member.offset))?;
+        let mut bytes = vec![0; encoded_length as usize]; input.read_exact(&mut bytes)?;
         if member.compressed_length.is_some() { bytes = inflate(&bytes, member.length as usize, false)?; }
         verify(member, crc32fast::hash(&bytes))?;
         Ok(bytes)

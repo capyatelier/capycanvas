@@ -344,3 +344,5 @@ documents-height-name = 高度
 documents-drop-drawings = 打开绘图
 documents-drop-mixed = 请选择打开绘图或放置图像，不能同时进行
 documents-drop-images = 将图像放置到画布上
+documents-package-unsupported-body = 其中包含此版本的{ common-app-name }无法编辑的图层或设置。
+documents-package-damaged-body = 此文件的部分内容已损坏。

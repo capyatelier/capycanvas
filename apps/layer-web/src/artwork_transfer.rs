@@ -141,6 +141,7 @@ pub async fn raster_worker_read(options:&str,file:web_sys::Blob)->Result<JsValue
 }
 fn package_value(outcome:layer_core::package::codec::OpenOutcome)->Result<JsValue,JsValue> {
     let view=layer_ui::PackageView::new(outcome).map_err(js)?;
+    web_sys::console::info_1(&js(view.reason()));
     let wire=js_sys::Object::new();js_sys::Reflect::set(&wire,&js("package"),&serialize(&view.presentation())?)?;
     if let Some(preview)=view.preview(){js_sys::Reflect::set(&wire,&js("preview"),&preview_value(preview)?)?;}
     Ok(wire.into())

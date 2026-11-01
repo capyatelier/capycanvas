@@ -17,7 +17,7 @@ export async function checkBinaryTransfer({evaluate}, fixture) {
     const check=condition=>{if(!condition)throw Error('Invalid typed transfer fixture');};
     let expectedProfile;
     const inspect=wire=>{
-      if(wire.package)throw Error('Binary fixture must admit editable artwork: '+wire.package.disposition+': '+wire.package.reason);
+      if(wire.package)throw Error('Binary fixture must admit editable artwork: '+wire.package.disposition+': '+wire.package.cause);
       check(typeof wire.metadata==='string' && Array.isArray(wire.buffers));
       const envelope=JSON.parse(wire.metadata),transfer=envelope.transfer;
       const starts=[];let at=0;

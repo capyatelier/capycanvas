@@ -244,6 +244,12 @@ fn read_import_input<R:Read+Seek>(
             let limit = source.input_bytes_limit(project_limits, photo_limits);
             let backing = match input.backing {Some(backing)=>backing,None=>package_backing(&mut reader,limit,cancelled)?};
             let outcome = layer_core::package::codec::open(backing, project_limits, cancelled)?;
+            match &outcome {
+                layer_core::package::codec::OpenOutcome::Preserved {reason,..}
+                | layer_core::package::codec::OpenOutcome::RecoveredView {reason,..}
+                | layer_core::package::codec::OpenOutcome::Failure {reason,..} => eprintln!("Drawing open: {reason}"),
+                _ => {},
+            }
             match outcome {
                 layer_core::package::codec::OpenOutcome::Candidate { artwork, source, preview } => {
                     match Document::from_artwork(artwork).map_err(|e| e.to_string()).and_then(|document| { document.validate_integrity()?; Ok(document) }) {
@@ -255,8 +261,8 @@ fn read_import_input<R:Read+Seek>(
                         Err(reason) => {
                             if cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("Image import cancelled".into()); }
                             return Ok(ImportOutcome::Package(match preview {
-                                Some(preview) => layer_core::package::codec::OpenOutcome::RecoveredView { source, preview, reason },
-                                None => layer_core::package::codec::OpenOutcome::Failure { source, reason },
+                                Some(preview) => layer_core::package::codec::OpenOutcome::RecoveredView { source, preview, reason, cause: Some(layer_core::package::codec::PackageCause::Damaged) },
+                                None => layer_core::package::codec::OpenOutcome::Failure { source, reason, cause: Some(layer_core::package::codec::PackageCause::Damaged) },
                             }));
                         },
                     }

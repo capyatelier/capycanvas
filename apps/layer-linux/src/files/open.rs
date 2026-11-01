@@ -212,7 +212,7 @@ pub(crate) async fn show_package(
     loop {
         let summary = package.summary(localization);
         let dialog = adw::AlertDialog::builder().heading(summary.status.as_ref())
-            .body(&summary.reason).prefer_wide_layout(true).build();
+            .body(summary.body.as_deref().unwrap_or("")).prefer_wide_layout(true).build();
         dialog.set_widget_name("preserved-package-preview");
         if let Some(preview) = package.preview() {
             let [width,height] = preview.size();

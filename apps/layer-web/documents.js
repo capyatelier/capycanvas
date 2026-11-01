@@ -448,7 +448,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
   async function showPackage(candidate,original,name,originalHandle) {
     const model=app.package_view(candidate),preview=app.package_preview(candidate);
       await dialog(()=>model.status,(form,finish)=>{
-        form.append(element("p","",model.reason));
+        if(model.body)form.append(element("p","",model.body));
         for(const output of model.outputs)form.append(element("p","",output.name));
         if(preview){const image=element("canvas");[image.width,image.height]=model.extent;image.setAttribute("aria-label",model.status);image.style.maxWidth="100%";image.style.maxHeight="60vh";
           image.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(preview.pixels.buffer,preview.pixels.byteOffset,preview.pixels.byteLength),...model.extent),0,0);form.append(image);}

@@ -375,8 +375,8 @@ impl WebApp {
                 Err(error)=>{
                     check_cancelled()?;
                     if lost.lock().unwrap().is_some(){return Err(error);}
-                    if let Some((mut presentation,preview))=fallback {
-                        presentation.reason=error.as_string().unwrap_or_else(||format!("{error:?}"));
+                    if let Some((presentation,preview))=fallback {
+                        web_sys::console::info_1(&error);
                         return Ok(WebProject {session:None,request:id,copy_owner:None,epoch,revision,source:source_kind,placed:None,source_name,target,lost,package:Some((presentation,preview))}.into());
                     }
                     return Err(error);

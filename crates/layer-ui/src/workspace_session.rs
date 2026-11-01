@@ -6,6 +6,9 @@ impl Default for EditingState {
 }
 impl EditingState {
     pub fn restore(saved: &str, localization: &Localizer) -> Self {
+        Self::restore_with_report(saved, localization).0
+    }
+    pub fn restore_with_report(saved: &str, localization: &Localizer) -> (Self, bool) {
         let mut value: serde_json::Value = serde_json::from_str(saved).unwrap_or_default();
         if value["version"].as_u64() == Some(1) {
             if let Some(choices) = value.pointer_mut("/tool_slots/choices").and_then(serde_json::Value::as_object_mut)
@@ -29,9 +32,9 @@ impl EditingState {
             && let Some(offset) = value["region_values"]["expansion"].as_f64().filter(|v| *v != 0. && v.fract() == 0. && v.abs() <= layer_render::RegionRefinement::MAX_EDGE_OFFSET as f64) {
             value["region_edges"] = serde_json::to_value(layer_core::RegionEdges::GrowShrink(offset as i32)).unwrap();
         }
-        let mut restored = crate::saved_state::restore_fields(value, || Self::new_localized(localization), |state| state.validate().is_ok());
+        let (mut restored, dropped) = crate::saved_state::restore_fields(value, || Self::new_localized(localization), |state| state.validate().is_ok());
         restored.version = 4;
-        restored
+        (restored, dropped)
     }
     pub fn new_localized(localization: &Localizer) -> Self {
         let region = region_tools::RegionTools::default();

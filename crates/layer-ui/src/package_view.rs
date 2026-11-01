@@ -1,4 +1,5 @@
 use crate::{Localizer, MessageId};
+pub use layer_core::package::codec::PackageCause;
 use layer_core::{PortableId, package::{ImmutableBacking, codec::{OpenOutcome, OutputInfo}, preview::Preview}};
 use serde::{Deserialize, Serialize};
 use std::{io::Write, sync::{Arc, atomic::{AtomicBool, Ordering}}};
@@ -24,7 +25,7 @@ pub struct PackagePresentation {
     pub disposition: PackageDisposition,
     pub extent: Option<[u32; 2]>,
     pub outputs: Vec<PackageOutput>,
-    pub reason: String,
+    pub cause: Option<PackageCause>,
 }
 impl PackagePresentation {
     pub fn capabilities(&self) -> PackageCapabilities {
@@ -41,7 +42,10 @@ impl PackagePresentation {
                 PackageDisposition::Recovered => MessageId::DOCUMENTS_PACKAGE_RECOVERED,
                 PackageDisposition::Failed => MessageId::DOCUMENTS_PACKAGE_FAILED,
             }),
-            reason: self.reason.clone(),
+            body: self.cause.map(|cause|localization.text(match cause {
+                PackageCause::Unsupported => MessageId::DOCUMENTS_PACKAGE_UNSUPPORTED_BODY,
+                PackageCause::Damaged => MessageId::DOCUMENTS_PACKAGE_DAMAGED_BODY,
+            })),
             copy_original: localization.text(MessageId::DOCUMENTS_PACKAGE_COPY_ORIGINAL),
             export_preview: localization.text(MessageId::DOCUMENTS_PACKAGE_EXPORT_PREVIEW),
             destination_error: localization.text(MessageId::DOCUMENTS_PACKAGE_CHOOSE_DIFFERENT),
@@ -56,7 +60,8 @@ pub struct PackageViewSummary {
     pub extent: Option<[u32; 2]>,
     pub outputs: Vec<PackageOutput>,
     pub status: Arc<str>,
-    pub reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<Arc<str>>,
     pub copy_original: Arc<str>,
     pub export_preview: Arc<str>,
     pub destination_error: Arc<str>,
@@ -68,17 +73,18 @@ pub struct PackageView {
     preview: Option<Preview>,
     outputs: Vec<OutputInfo>,
     reason: String,
+    cause: Option<PackageCause>,
     disposition: PackageDisposition,
 }
 impl PackageView {
     pub fn new(outcome: OpenOutcome) -> Result<Self, String> {
-        let (source, preview, outputs, reason, disposition) = match outcome {
-            OpenOutcome::Preserved { source, preview, outputs, reason } => (source, preview, outputs, reason, PackageDisposition::Preserved),
-            OpenOutcome::RecoveredView { source, preview, reason } => (source, Some(preview), Vec::new(), reason, PackageDisposition::Recovered),
-            OpenOutcome::Failure { source, reason } => (source, None, Vec::new(), reason, PackageDisposition::Failed),
+        let (source, preview, outputs, reason, cause, disposition) = match outcome {
+            OpenOutcome::Preserved { source, preview, outputs, reason } => (source, preview, outputs, reason, Some(PackageCause::Unsupported), PackageDisposition::Preserved),
+            OpenOutcome::RecoveredView { source, preview, reason, cause } => (source, Some(preview), Vec::new(), reason, cause, PackageDisposition::Recovered),
+            OpenOutcome::Failure { source, reason, cause } => (source, None, Vec::new(), reason, cause, PackageDisposition::Failed),
             OpenOutcome::Candidate { .. } => return Err("Editable artwork requires document admission".into()),
         };
-        Ok(Self { source, preview, outputs, reason, disposition })
+        Ok(Self { source, preview, outputs, reason, cause, disposition })
     }
     pub fn source(&self) -> &ImmutableBacking { &self.source }
     pub fn preview(&self) -> Option<&Preview> { self.preview.as_ref() }
@@ -93,7 +99,7 @@ impl PackageView {
             disposition: self.disposition,
             extent: self.preview.as_ref().map(Preview::size),
             outputs: self.outputs.iter().map(|output| PackageOutput { id: output.id, name: output.name.clone() }).collect(),
-            reason: self.reason.clone(),
+            cause: self.cause,
         }
     }
     pub fn summary(&self, localization: &Localizer) -> PackageViewSummary {
@@ -121,6 +127,25 @@ mod tests {
         ImmutableBacking::new(Arc::new(ChunkedBytes::new(vec![Arc::from(bytes)]).unwrap())).unwrap()
     }
     #[test]
+    fn package_bodies_describe_typed_causes_without_reader_details() {
+        let english = Localizer::shared(crate::UiLanguage::English);
+        for (cause,body) in [
+            (Some(PackageCause::Unsupported),Some("It has layers or settings that this version of Capy Canvas can't edit.")),
+            (Some(PackageCause::Damaged),Some("Part of this file is damaged.")),
+            (None,None),
+        ] {
+            let view = PackageView::new(OpenOutcome::Failure {source:backing(b"source"),reason:"PRIVATE reader details".into(),cause}).unwrap();
+            let summary = view.summary(&english);
+            assert_eq!(summary.status.as_ref(),"This drawing could not be opened.");
+            assert_eq!(summary.body.as_deref(),body);
+            assert!(!serde_json::to_string(&summary).unwrap().contains("PRIVATE"));
+            assert!(!serde_json::to_string(&view.presentation()).unwrap().contains("PRIVATE"));
+            let japanese = view.summary(&Localizer::shared(crate::UiLanguage::Japanese));
+            assert_eq!(japanese.body.is_some(),body.is_some());
+            if body.is_some() {assert_ne!(japanese.body,summary.body);}
+        }
+    }
+    #[test]
     fn preserved_and_recovered_views_keep_original_bytes_and_never_enable_editing() {
         let bytes = b"preserve every original byte, including unsupported data";
         let source = backing(bytes);
@@ -129,7 +154,7 @@ mod tests {
         let output = PortableId::random();
         for recovered in [false, true] {
             let outcome = if recovered {
-                OpenOutcome::RecoveredView { source: source.clone(), preview: preview.clone(), reason: "invalid authored data".into() }
+                OpenOutcome::RecoveredView { source: source.clone(), preview: preview.clone(), reason: "invalid authored data".into(), cause: Some(PackageCause::Damaged) }
             } else {
                 OpenOutcome::Preserved { source: source.clone(), preview: Some(preview.clone()), outputs: vec![OutputInfo { id: output, name: "Literal output".into() }], reason: "unsupported visible content".into() }
             };
@@ -143,7 +168,7 @@ mod tests {
             assert_eq!(restored.capabilities(), view.capabilities());
             assert_eq!(restored.extent, Some([1, 1]));
             assert_eq!(restored.disposition, view.disposition());
-            assert_eq!(restored.reason, view.reason());
+            assert_eq!(restored.cause, view.cause);
             assert_eq!(restored.outputs.len(), view.outputs().len());
             assert_eq!(view.outputs().len(), usize::from(!recovered));
             if !recovered { assert_eq!(view.outputs()[0].id, output); }
@@ -163,7 +188,7 @@ mod tests {
             assert_eq!(copied, bytes);
             assert!(view.copy_original(&mut Vec::new(), &AtomicBool::new(true)).is_err());
         }
-        let failed = PackageView::new(OpenOutcome::Failure { source, reason: "no valid representation".into() }).unwrap();
+        let failed = PackageView::new(OpenOutcome::Failure { source, reason: "no valid representation".into(), cause: Some(PackageCause::Damaged) }).unwrap();
         assert!(!failed.capabilities().view);
         assert!(failed.capabilities().copy_original);
         assert!(failed.preview().is_none());
@@ -197,7 +222,7 @@ mod tests {
         }).collect::<Vec<_>>();
         let preview = Preview::from_rgba([256, 128], pixels.into()).unwrap();
         assert!(preview.encoded().len() > 64 * 1024);
-        let view = PackageView::new(OpenOutcome::RecoveredView { source: backing(b"preserved source"), preview: preview.clone(), reason: "recovered image".into() }).unwrap();
+        let view = PackageView::new(OpenOutcome::RecoveredView { source: backing(b"preserved source"), preview: preview.clone(), reason: "recovered image".into(), cause: Some(PackageCause::Damaged) }).unwrap();
         for fail in [false, true] {
             let cancelled = AtomicBool::new(false);
             let mut destination = Destination { bytes: Vec::new(), cancelled: &cancelled, fail, flushed: false };

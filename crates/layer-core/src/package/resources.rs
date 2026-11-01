@@ -352,7 +352,7 @@ impl<'a> ResourceReader<'a> {
         while bytes.len() < record.bytes as usize {
             if self.cancelled.load(Ordering::Relaxed) { return Err("Package operation cancelled".into()); }
             let length = (record.bytes as usize - bytes.len()).min(MAX_RANGE_BYTES);
-            match self.backing.poll(range.offset.checked_add(bytes.len() as u64).ok_or("Resource offset overflow")?, length)? {
+            match self.backing.poll(range.offset.checked_add(bytes.len() as u64).ok_or("Resource offset overflow")?, length).map_err(DecodeError::Io)? {
                 RangeState::Pending => return Err("Package bytes are pending".into()),
                 RangeState::Ready(chunk) => bytes.extend_from_slice(&chunk),
             }
