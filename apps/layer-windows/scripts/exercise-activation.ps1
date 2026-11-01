@@ -183,8 +183,8 @@ try {
     $root=$native.window.Root;$drawingWindow=$native.window.Handle
     $null=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))
     $null=[CapyWindowApi]::ShowWindow($drawingWindow,3)
-    $null=[CapyRowPointer]::SetForegroundWindow($drawingWindow);$root.SetFocus()
-    Wait-Until {$owner=[uint32]0;$null=[CapyRowPointer]::GetWindowThreadProcessId([CapyRowPointer]::GetForegroundWindow(),[ref]$owner);$owner -eq $review.Id} 'Invalid run: owned window did not acquire foreground' 10
+    $null=[CapyRowPointer]::SetForegroundWindow($drawingWindow);$canvas=Control 'drawing-canvas';$canvas.SetFocus()
+    Wait-Until {$owner=[uint32]0;$null=[CapyRowPointer]::GetWindowThreadProcessId([CapyRowPointer]::GetForegroundWindow(),[ref]$owner);$owner -eq $review.Id -and $canvas.Current.HasKeyboardFocus} 'Invalid run: owned canvas did not acquire foreground and focus' 10
     $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
     if($scale -le 0 -or [double]::IsNaN($scale) -or [double]::IsInfinity($scale)){throw 'Invalid run: owned window DPI is unavailable'}
     [CapyRowPointer]::Initialize([uint32]$review.Id)
