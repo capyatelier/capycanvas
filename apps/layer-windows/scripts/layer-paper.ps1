@@ -181,7 +181,7 @@ function Test-PaperTexture{
     Wait-Until {(Control 'property-texture').Current.HelpText -eq $tiles[$pick].label} 'The Texture button did not follow the chosen texture'
     Capture "texture-applied-$theme" -WithModel
     Relationship-Undo
-    Wait-Until {(Relationship-Layer $paper).paper.id -eq $original} 'One Undo did not restore the texture'
+    Wait-Until {(Relationship-Layer $paper).paper.id -eq $original -and (Control 'property-texture').Current.HelpText -eq $tiles[$current].label} 'One Undo did not restore the texture and its Properties description'
 
     Relationship-Layers
     Texture-Open "layer-texture-$paper"
