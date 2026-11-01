@@ -490,7 +490,7 @@ function Check-ResizeCancel {
 }
 function Check-Fullscreen([switch]$WindowOnly) {
     foreach($active in @($true,$false)){
-        $at=At $(if($WindowOnly){'title-bar'}else{'header-item-1'})
+        $at=At $(if($WindowOnly){'title-bar'}else{'zen-capy'})
         $restoredTrace=Join-Path $directory ("fullscreen-restored-$($review.Id)-$($drawingWindow.ToInt64()).json")
         if($WindowOnly -and !$FullscreenBaseline -and !$active){Remove-Item -LiteralPath $restoredTrace -ErrorAction SilentlyContinue}
         if($WindowOnly){[CapyFullscreenProbe]::StartFrames($drawingWindow)}
