@@ -185,7 +185,7 @@ fn native_alpha_reuse_admits_warm_pages_beside_cold_output_pages() {
         cache.pixels.ensure_root(&r,cache.plan,"partial retained effect output");
         let image=cache.pixels.root().unwrap().clone();
         let output=Target {view:image.view.clone(),slot:Some(Slot::Root),plan:image.plan};
-        let scratch=Target {slot:Some(Slot::Cache(0)),..output.clone()};
+        let scratch=Target {slot:Some(Slot::Cache({let mut used=scratch::Usage::default();used.reserve();used.lease(0)})),..output.clone()};
         assert!(cache.initialized_pages(&scratch).is_none());
         let handle=doc.scene().order()[0];
         let mut scene=r.scene.take().unwrap();

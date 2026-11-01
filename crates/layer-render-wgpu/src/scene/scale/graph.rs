@@ -56,7 +56,7 @@ impl Expression {
             }),
         }
     }
-    fn cost(&self) -> (u32, u32) {
+    pub(super) fn cost(&self) -> (u32, u32) {
         match self {
             Self::Color(_) => (0, 0),
             Self::Objects {content,..} => (content.len() as u32*2, 3),
@@ -324,9 +324,9 @@ impl Builder<'_> {
 }
 impl stack::Compositor for Builder<'_> {
     type Image = Vec<Node>;
-    fn clear(&mut self) -> Self::Image { Vec::new() }
+    fn clear(&mut self) -> Result<Self::Image, GpuRasterError> { Ok(Vec::new()) }
     fn discard(&mut self, _: Self::Image) {}
-    fn duplicate(&mut self, image: &Self::Image) -> Self::Image { image.clone() }
+    fn duplicate(&mut self, image: &Self::Image) -> Result<Self::Image, GpuRasterError> { Ok(image.clone()) }
     fn fade(&mut self, front: Self::Image, back: Self::Image, index: OccurrenceHandle) -> Result<Self::Image, GpuRasterError> {
         let layer = self.packet.scene.occurrence(index).unwrap();
         let back = Expression::over(&back);

@@ -200,18 +200,19 @@ The fifth `camera_work` column counts source misses within the timed canvas fram
 the fourth retains cumulative misses, including separately scheduled thumbnail
 work. Presentation timing includes any interference from those background jobs.
 
-`tools/performance/photo-navigation-report.py REPORT.json` matches exact camera
-matrices and frame IDs to Wayland presentation feedback. It reports unmatched
-requests, discarded feedback, refresh-slot gaps, phase-specific p95/p99/max,
-worker CPU/GPU time and GTK frame-handler time. Do not infer request latency from
-frame cadence alone, or ignore a failed phase in the whole-run aggregate. Keep
-builds and other performance workloads out of the measurement interval.
-The report excludes late-arriving startup feedback from navigation cadence,
-retains unmatched requests by phase, and separately reports first-request to
-first-navigation presentation, request-to-enqueue, and enqueue-to-present delay.
-Repeated presentations of the same input count once for input latency, while
-remaining in cadence and work totals. Inspect distinct presented requests as
-well as refresh cadence: repeating old poses can hide coalesced input. Optional
+`tools/performance/photo-navigation-report.py REPORT.json` counts distinct
+Wayland presentation timestamps inside the recorded motion interval, including
+cached canvas publications whose frame ID is zero. It reports full-contact
+rate, refresh-slot gaps and cadence separately from worker CPU/GPU and GTK
+frame-handler time. Cached publications have no camera attribution.
+`instrumented_camera` matches exact matrices and nonzero worker frame IDs to
+feedback, retaining unmatched requests by phase, discarded feedback,
+request-to-enqueue, enqueue-to-present and first attributed response. These
+metrics cover instrumented frames, not every camera publication or the first
+actual navigation response. Repeated poses count once for input attribution
+while distinct publications remain in cadence. Do not infer input latency from
+cadence alone. Keep builds and other performance workloads out of the interval.
+Inspect distinct attributed requests alongside refresh cadence. Optional
 `LAYER_NAVIGATION_SETTLE_MS` separates a ready-window run from the default cold
 first interaction; retain both, including first response and lost requests.
 The first-response measurement includes initial coalesced requests; the ordinary

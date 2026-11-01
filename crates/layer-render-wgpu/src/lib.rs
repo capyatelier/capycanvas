@@ -272,7 +272,9 @@ struct DisplayRetirement {
     bytes:u64,
     charge:Arc<std::sync::atomic::AtomicU64>,
     #[cfg(not(target_arch="wasm32"))]
-    _backup:scene::scale::DisplayBackup,
+    _backup:Option<scene::scale::DisplayBackup>,
+    #[cfg(not(target_arch="wasm32"))]
+    _scratch:(Vec<PageSurface>,Vec<scene::Image>),
 }
 impl Drop for DisplayRetirement {
     fn drop(&mut self) {self.charge.fetch_sub(self.bytes,std::sync::atomic::Ordering::AcqRel);}
@@ -785,6 +787,7 @@ struct PageSurface {
     material_input: bindings::MaterialInput,
     material_in_place_input: bindings::MaterialInput,
     material_output: bindings::MaterialOutput,
+    scene_output: std::cell::OnceCell<wgpu::BindGroup>,
 }
 
 #[derive(Default)]
@@ -802,6 +805,10 @@ fn texture_bytes(texture: &wgpu::Texture) -> u64 {
         * u64::from(texture.format().block_copy_size(None).unwrap())
 }
 impl PageSurface {
+    fn scene_output(&self, r: &WgpuRasterizer, layout: &wgpu::BindGroupLayout) -> &wgpu::BindGroup {
+        self.scene_output.get_or_init(|| bindings::group(&r.device, "scene page output", layout,
+            [wgpu::BindingResource::TextureView(&self.view)]))
+    }
     fn storage_bytes(&self) -> u64 {
         texture_bytes(&self.texture)
     }
@@ -1563,19 +1570,39 @@ impl WgpuRasterizer {
         self.evaluated_object_revision
     }
 
+    pub(crate) fn selected_display_cache(&self)->Option<&scene::scale::Cache> {
+        let cache=self.scale_display.as_ref()?;
+        if self.object_deferred {cache.deferred_presentation()} else {Some(cache)}
+    }
+    fn retire_display_resources(&mut self, encoder: &mut submission::CommandEncoder, trim: bool, backup: Option<scene::scale::DisplayBackup>) {
+        let (mut pages,mut images)=(Vec::new(),Vec::new());
+        if trim {
+            let keep=self.scale_display.as_ref().map_or(0,|cache|cache.scratch_images());
+            if let Some(scene)=&mut self.scene {pages=scene.trim_scratch(keep);}
+            if let Some(cache)=&mut self.scale_display {images=cache.trim_scratch();}
+        }
+        let bytes=backup.as_ref().map_or(0,|backup|backup.bytes)+pages.iter().map(PageSurface::storage_bytes).sum::<u64>()
+            +images.iter().map(scene::Image::bytes).sum::<u64>();
+        if bytes!=0 {
+            self.retired_display_bytes.fetch_add(bytes,std::sync::atomic::Ordering::AcqRel);
+            let charge=DisplayRetirement {bytes,charge:self.retired_display_bytes.clone(),
+                #[cfg(not(target_arch="wasm32"))] _backup:backup,
+                #[cfg(not(target_arch="wasm32"))] _scratch:(pages,images)};
+            #[cfg(target_arch="wasm32")] drop((backup,pages,images));
+            encoder.on_submitted_work_done(move||drop(charge));
+        }
+    }
     pub(crate) fn display_views(&self)->Option<[&wgpu::TextureView;3]> {
         if let Some(backup)=&self.display_backup {return Some([&backup.views[0],&backup.views[2],&backup.views[1]]);}
-        if self.object_deferred {return None;}
-        self.scale_display.as_ref().map(|cache|[cache.view(),cache.coarse_view(),cache.next_view()])
+        self.selected_display_cache().map(|cache|[cache.view(),cache.coarse_view(),cache.next_view()])
     }
     pub fn has_presentable_frame(&self) -> bool { self.presentation_views().is_some() }
     pub(crate) fn presentation_views(&self)->Option<[&wgpu::TextureView;3]> {
         if self.display_backup.is_some() {return self.display_views();}
-        if self.object_deferred {return None;}
-        self.scale_display.as_ref().map(|cache|{let [moved,kept]=cache.presented_views();[moved,cache.coarse_view(),kept]})
+        self.selected_display_cache().map(|cache|{let [moved,kept]=cache.presented_views();[moved,cache.coarse_view(),kept]})
     }
     pub(crate) fn display_geometry(&self)->Option<&wgpu::Buffer> {
-        self.display_backup.as_ref().map(|backup|&backup.geometry).or_else(||self.scale_display.as_ref().map(|cache|&cache.geometry))
+        self.display_backup.as_ref().map(|backup|&backup.geometry).or_else(||self.selected_display_cache().map(|cache|&cache.geometry))
     }
     fn vector_motion_moved(&self) -> Option<(DocRect, DocRect)> {
         let (motion, bounds) = self.vector_motion_drawn.as_ref().filter(|_| self.vector_motion_split.is_some())?;
@@ -1600,10 +1627,10 @@ impl WgpuRasterizer {
         Some(([view, above.unwrap_or(&self.empty_view)], [x, y, (1u32 << level) as f32, 1., tx, ty, w, h, sx, sy, (1u32 << plan.level) as f32, 1., sw, sh, 0., 0., rx0, ry0, rx1, ry1, a, b, c, d], moved, revision))
     }
     pub(crate) fn display_placement(&self)->[f32;20] {
-        self.display_backup.as_ref().map_or_else(||self.scale_display.as_ref().unwrap().placement_values(),|backup|backup.placement)
+        self.display_backup.as_ref().map_or_else(||self.selected_display_cache().unwrap().placement_values(),|backup|backup.placement)
     }
     pub(crate) fn display_resample(&self)->[u8;scene::resample::UNIFORM_BYTES as usize] {
-        self.display_backup.as_ref().map_or_else(||self.scale_display.as_ref().unwrap().resample_values(),|backup|backup.resample)
+        self.display_backup.as_ref().map_or_else(||self.selected_display_cache().unwrap().resample_values(),|backup|backup.resample)
     }
 
     /// Benchmark/export synchronization only. Live drawing never calls this.
@@ -3607,6 +3634,8 @@ impl WgpuRasterizer {
     }
     fn prepare_moving_images(&mut self, packet: FramePacket<'_>, encoder: &mut submission::CommandEncoder) -> Result<bool, GpuRasterError> {
         self.prepare_moving_projection(packet)?;
+        let required = self.scene.as_ref().map(|scene| scene.required_object_sources()).transpose()?.unwrap_or_default();
+        self.source_tiles.borrow_mut().require_images(required);
         let mut images = std::mem::take(&mut self.moving_images);
         let completed = images.completed_images;
         let budget = if packet.dab_batches.is_empty() && self.moving_layer.is_none() { MOVING_IMAGE_IDLE_STEPS } else { MOVING_IMAGE_INPUT_STEPS };
@@ -5044,6 +5073,7 @@ impl WgpuRasterizer {
                     self.uploads.finish(&encoder);
                     self.telemetry.phase_end(2,encoder.diagnostics());self.telemetry.end(encoder.diagnostics());
                     self.metrics.command_passes+=encoder.pass_count();
+                    self.retire_display_resources(&mut encoder, true, None);
                     self.last_submission=Some(encoder.submit(&self.queue));
                     self.telemetry.submitted(&self.queue);
                     if let Some(commit)=native_commit {self.finish_native_rasters(commit,true)?;}
@@ -5107,14 +5137,9 @@ impl WgpuRasterizer {
         self.telemetry.phase_end(2, encoder.diagnostics());
         self.telemetry.end(encoder.diagnostics());
         self.metrics.command_passes += encoder.pass_count();
-        if let Some(backup)=self.display_backup.take() {
-            let bytes=backup.bytes;
-            self.retired_display_bytes.fetch_add(bytes,std::sync::atomic::Ordering::AcqRel);
-            let charge=DisplayRetirement {bytes,charge:self.retired_display_bytes.clone(),
-                #[cfg(not(target_arch="wasm32"))] _backup:backup};
-            #[cfg(target_arch="wasm32")] drop(backup);
-            encoder.on_submitted_work_done(move||drop(charge));
-        }
+        let trim=!moving && self.artwork_frame.as_ref().is_some_and(|old| old.view==packet.view);
+        let backup=self.display_backup.take();
+        self.retire_display_resources(&mut encoder, trim, backup);
         let submission = encoder.submit(&self.queue);
         self.telemetry.submitted(&self.queue);
         self.last_submission = Some(submission.clone());
@@ -5728,6 +5753,7 @@ fn create_page_surface(
         material_input: Default::default(),
         material_in_place_input: Default::default(),
         material_output: Default::default(),
+        scene_output: Default::default(),
     }
 }
 

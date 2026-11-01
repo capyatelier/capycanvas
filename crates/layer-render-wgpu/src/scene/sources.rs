@@ -201,6 +201,7 @@ pub(crate) struct DecodedTiles {
     pub misses: u64,
     pub evictions: u64,
     mip_reservation: u64,
+    required: Vec<Key>,
     retired_bytes: Arc<AtomicU64>,
     retired_slots: std::cell::RefCell<Vec<RetiredSlot>>,
     unit: Option<u64>,
@@ -215,13 +216,34 @@ impl DecodedTiles {
     }
     pub fn admit(&mut self, allowance: u64) {
         self.limits = SourceLimits::admitted(allowance);
-        self.mip_reservation = self.mip_reservation.min(self.mip_budget());
+        self.mip_reservation = self.mip_reservation.min(self.mip_limit());
     }
     pub fn admitted_bytes(&self) -> [u64; 2] {
         [self.limits.slots as u64 * self.tile_bytes(), self.limits.upload_bytes]
     }
     pub fn mip_budget(&self) -> u64 {
+        let sources = MIN_DECODED_SLOTS.max(self.required.len().saturating_add(self.leased_outside_requirements()).saturating_add(1));
+        self.limits.slots.saturating_sub(sources) as u64 * self.tile_bytes()
+    }
+    fn mip_limit(&self) -> u64 {
         (self.limits.slots.saturating_sub(MIN_DECODED_SLOTS) as u64) * self.tile_bytes()
+    }
+    pub(crate) fn require_images(&mut self, tiles: impl IntoIterator<Item = (Arc<SourceImage>, [u32; 2])>) {
+        self.required.clear();
+        for (source, coordinate) in tiles {
+            if self.required.len() >= self.limits.slots.saturating_sub(1) { break; }
+            let key = Key::Image(Arc::downgrade(&source), coordinate);
+            if !self.required.iter().any(|stored| stored.matches(&key)) { self.required.push(key); }
+        }
+    }
+    fn leased_outside_requirements(&self) -> usize {
+        self.slots.iter().filter(|slot| Arc::strong_count(&slot.lease) > 1 && !self.required(slot, self.required.len())).count()
+    }
+    fn protected_sources(&self) -> usize {
+        self.slot_limit().saturating_sub(self.leased_outside_requirements().saturating_add(1))
+    }
+    fn required(&self, slot: &Slot, count: usize) -> bool {
+        slot.key.as_ref().is_some_and(|key| self.required.iter().take(count).any(|required| required.matches(key)))
     }
     pub fn can_upload_bytes(&self, bytes: u64) -> bool {
         self.in_flight.bytes.load(Ordering::Acquire).checked_add(bytes).is_some_and(|n| n <= self.limits.upload_bytes)
@@ -231,10 +253,11 @@ impl DecodedTiles {
     }
     pub fn reserve_mips(&mut self, bytes: u64, encoder: &crate::submission::CommandEncoder) -> Result<bool, GpuRasterError> {
         self.reap_retired();
-        if bytes > self.mip_budget() { return Err(GpuRasterError::SourceWorkingSetExceeded); }
+        if bytes > self.mip_limit() { return Err(GpuRasterError::SourceWorkingSetExceeded); }
         self.mip_reservation = bytes;
+        let protected = self.protected_sources();
         while self.slots.len() > self.slot_limit() {
-            let Some(index) = self.slots.iter().enumerate().filter(|(_,slot)| Arc::strong_count(&slot.lease)==1)
+            let Some(index) = self.slots.iter().enumerate().filter(|(_,slot)| Arc::strong_count(&slot.lease)==1 && !self.required(slot, protected))
                 .min_by_key(|(_,slot)|slot.used).map(|(index,_)|index) else { return Ok(false); };
             let slot = self.slots.swap_remove(index);
             if slot.valid.load(Ordering::Acquire) { self.evictions += 1; }
@@ -396,7 +419,9 @@ impl DecodedTiles {
                 None,
             ));
         }
-        let unused = self.slots.iter().position(|s| Arc::strong_count(&s.lease) == 1 && !s.valid.load(Ordering::Acquire));
+        let protected = self.protected_sources();
+        let unused = self.slots.iter().position(|s| Arc::strong_count(&s.lease) == 1 && !s.valid.load(Ordering::Acquire)
+            && (!self.required(s, protected) || s.key.as_ref().is_some_and(|stored| stored.matches(&key))));
         let index = if let Some(index) = unused { index } else if self.slots.len() < self.slot_limit() {
             let texture = r.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("bounded source tile"),
@@ -430,7 +455,7 @@ impl DecodedTiles {
             let (index, slot) = self.slots
                 .iter()
                 .enumerate()
-                .filter(|(_, s)| Arc::strong_count(&s.lease) == 1)
+                .filter(|(_, s)| Arc::strong_count(&s.lease) == 1 && !self.required(s, protected))
                 .min_by_key(|(_, s)| s.used)
                 .ok_or(GpuRasterError::SourceWorkingSetExceeded)?;
             self.overflowed |= self.unit.is_some_and(|start| slot.used > start);

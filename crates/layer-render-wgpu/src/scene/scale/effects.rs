@@ -26,7 +26,7 @@ pub(super) fn capture_native_effect(
     let result = scene.prepare_region_in_frame(r, packet, (bounds, window), PixelRect::EMPTY, false, encoder)
         .and_then(|()| scene.capture_prepared_regions_reuse(r, packet, &destination, &regions,
             scene::Output::EffectComposite(handle), false, Some(&reserved), initialized, encoder));
-    scene.used.fill(false); scene.used[..reserved.len()].copy_from_slice(&reserved); scene.placement_display = true;
+    scene.used.iter_mut().for_each(scratch::Usage::reset); scene.used[..reserved.len()].clone_from_slice(&reserved); scene.placement_display = true;
     result
 }
 
@@ -64,14 +64,14 @@ impl Evaluator<'_> {
             present |= 1 << i;
             slots.extend(value.slot());
         }
-        let Target { view, slot, plan } = output.as_ref().filter(|target| target.plan == plan).cloned().unwrap_or_else(|| self.target());
+        let Target { view, slot, plan } = match output.as_ref().filter(|target| target.plan == plan).cloned() { Some(target) => target, None => self.target()? };
         let input_support = input_node_support;
         let mut previous = input.view().unwrap().clone();
         let mut previous_slot = None;
         for (pass, &region) in regions[1..].iter().enumerate() {
             let last = pass + 2 == regions.len();
             let (target, temporary) = if last { (view.clone(), None) } else {
-                let target = self.target();
+                let target = self.target()?;
                 (target.view, target.slot)
             };
             let [x, y, width, height] = paint_transform::texel_rect(plan.doc_bounds.local(region), 1 << plan.level);
@@ -106,11 +106,11 @@ impl Evaluator<'_> {
     fn native_effect(&mut self, handles: &[OccurrenceHandle], output: Option<Target>) -> Result<Value, GpuRasterError> {
         self.encode_scene_jobs()?;
         self.commands.flush(self.r, self.encoder)?;
-        let target = output.unwrap_or_else(|| {
+        let target = match output { Some(target) => target, None => {
             let plan = self.working_plan();
-            let slot = self.cache.allocate(self.r, plan);
-            Target { view: self.cache.output[slot].view.clone(), slot: Some(Slot::Cache(slot)), plan }
-        });
+            let slot = self.cache.allocate(self.r, plan)?;
+            Target { view: self.cache.output[slot.index].view.clone(), slot: Some(Slot::Cache(slot)), plan }
+        }};
         let handle = *handles.last().unwrap();
         if !self.packet.scene.effect(handle).unwrap().program.fusion_boundary() {
             let side=if target.plan.level==0 {PAGE_SIZE} else {1<<target.plan.level};

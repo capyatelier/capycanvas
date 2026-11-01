@@ -107,7 +107,7 @@ impl BakePreflight {
             let prepared=(|| {
                 compositor.image_window=Some(window);compositor.image_output=Some(output);
                 compositor.update_images(r,source,output,&mut encoder)?;
-                compositor.jobs.clear();compositor.source_jobs.clear();compositor.used.fill(false);
+                compositor.jobs.clear();compositor.source_jobs.clear();compositor.used.iter_mut().for_each(scratch::Usage::reset);
                 let tile=compositor.group(r,source,None,coordinate)?;
                 let (texture,view)=create_color_target(&r.device,[PAGE_SIZE;2],"prepared bake page");
                 let image=Image {texture,view,plan:display_mips::Plan::window(input.key.extent,0,page_rect(coordinate).intersect(PixelRect::full(input.key.extent)))};

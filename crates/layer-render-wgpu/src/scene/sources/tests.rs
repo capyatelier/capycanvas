@@ -411,6 +411,105 @@ fn source_mip_reservations_wait_for_retired_slots_and_release_discarded_charges(
 }
 
 #[test]
+fn canonical_source_requirements_survive_optional_uploads_within_the_shared_allowance() {
+    let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut cache = DecodedTiles::default();
+    let source = scan_source(80, 0);
+    cache.require_images((0..36).chain(0..36).map(|x| (source.clone(), [x, 0])));
+    assert_eq!(cache.required.len(), 36);
+    assert_eq!(cache.mip_budget(), 27 * FLOAT_TILE_BYTES);
+    let encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    for x in 0..36 {
+        let (_, pending) = cache.plan(&r, &source, [x, 0]).unwrap();
+        pending.unwrap().write.track(&encoder);
+    }
+    assert!(cache.reserve_mips(cache.mip_budget(), &encoder).unwrap());
+    for x in 36..80 {
+        let (_, pending) = cache.plan(&r, &source, [x, 0]).unwrap();
+        pending.unwrap().write.track(&encoder);
+        assert!((0..36).all(|x| cache.prepared_view(&source, [x, 0]).is_some()));
+        assert!(cache.gpu_bytes() + cache.mip_reservation <= cache.admitted_bytes()[0]);
+    }
+    cache.require_images(std::iter::empty());
+    assert_eq!(cache.mip_budget(), cache.mip_limit());
+    for x in 36..80 {
+        let (_, pending) = cache.plan(&r, &source, [x, 0]).unwrap();
+        if let Some(pending) = pending { pending.write.track(&encoder); }
+    }
+    assert!(cache.prepared_view(&source, [0, 0]).is_none());
+    drop(encoder);
+    assert!((0..36).all(|x| cache.prepared_view(&source, [x, 0]).is_none()));
+}
+
+#[test]
+fn discarded_required_source_writes_reuse_their_own_slots() {
+    let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut cache = DecodedTiles::default();
+    let source = scan_source(1, 0);
+    cache.require_images([(source.clone(), [0, 0])]);
+    let (first, pending) = cache.plan(&r, &source, [0, 0]).unwrap();
+    drop(pending);
+    let (second, _) = cache.plan(&r, &source, [0, 0]).unwrap();
+    assert_eq!(first.view, second.view);
+    assert_eq!(cache.slots.len(), 1);
+}
+
+#[test]
+fn canonical_source_demand_keeps_uploading_until_mip_retirement_releases_capacity() {
+    let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut cache = DecodedTiles::default();
+    let source = scan_source(36, 0);
+    let encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    let previous = cache.mip_budget();
+    assert!(cache.reserve_mips(previous, &encoder).unwrap());
+    cache.require_images((0..36).map(|x| (source.clone(), [x, 0])));
+    assert!(cache.mip_budget() < previous);
+    assert!(cache.reserve_mips(previous, &encoder).unwrap());
+    for x in 0..36 {
+        let (_, pending) = cache.plan(&r, &source, [x, 0]).unwrap();
+        pending.unwrap().write.track(&encoder);
+        assert!(cache.gpu_bytes() + cache.mip_reservation <= cache.admitted_bytes()[0]);
+    }
+    assert!(cache.reserve_mips(cache.mip_budget(), &encoder).unwrap());
+    for x in 0..36 {
+        let (_, pending) = cache.plan(&r, &source, [x, 0]).unwrap();
+        if let Some(pending) = pending { pending.write.track(&encoder); }
+    }
+    assert!((0..36).all(|x| cache.prepared_view(&source, [x, 0]).is_some()));
+    assert!(cache.gpu_bytes() + cache.mip_reservation <= cache.admitted_bytes()[0]);
+}
+
+#[test]
+fn canonical_requirements_leave_streaming_capacity_beside_other_composition_leases() {
+    let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut cache = DecodedTiles::default();
+    let source = scan_source(40, 0);
+    let encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    let previous = cache.mip_budget();
+    assert!(cache.reserve_mips(previous, &encoder).unwrap());
+    let (outside, pending) = cache.plan(&r, &source, [19, 0]).unwrap();
+    pending.unwrap().write.track(&encoder);
+    let lease = cache.lease(&outside.view).unwrap();
+    cache.require_images((0..19).map(|x| (source.clone(), [x, 0])));
+    assert_eq!(cache.mip_budget(), previous - FLOAT_TILE_BYTES);
+    for x in (0..19).chain(20..40) {
+        let (_, pending) = cache.plan(&r, &source, [x, 0]).unwrap();
+        pending.unwrap().write.track(&encoder);
+        assert_eq!(cache.prepared_view(&source, [19, 0]), Some(&outside.view));
+        assert!((0..18.min(x + 1)).all(|x| cache.prepared_view(&source, [x, 0]).is_some()));
+        assert!(cache.gpu_bytes() + cache.mip_reservation <= cache.admitted_bytes()[0]);
+    }
+    assert!(cache.reserve_mips(cache.mip_budget(), &encoder).unwrap());
+    for x in 0..19 {
+        let (_, pending) = cache.plan(&r, &source, [x, 0]).unwrap();
+        if let Some(pending) = pending { pending.write.track(&encoder); }
+    }
+    assert!((0..19).all(|x| cache.prepared_view(&source, [x, 0]).is_some()));
+    drop(lease);
+    assert_eq!(cache.mip_budget(), previous);
+}
+
+#[test]
 fn prepared_source_samples_upload_without_renderer_decompression_and_share_cached_pixels() {
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let source=layer_core::color::source::rgba8_source([PAGE_SIZE;2],|_,_|[64,128,192,128]);

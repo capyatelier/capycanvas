@@ -9,7 +9,7 @@ pub(super) struct MaterialPage {
     offset: [i64; 2],
     coordinate: [i32; 2],
     plane: layer_core::raster::RasterPlane,
-    page: usize,
+    page: scratch::Lease,
 }
 
 #[derive(Clone)]
@@ -73,7 +73,8 @@ impl Scene {
         let mut pieces = Vec::new();
         Splitter::new(bounds, &transform, mesh, |c| !page_rect(c).intersect(bounds).is_empty())?
             .placed().shifted(offset).split(page_rect(tile), &mut pieces)?;
-        let out = self.reserve_format(r, scalar);
+        let out = self.reserve_format(r, scalar)?;
+        let held = self.own(out);
         if pieces.is_empty() {
             let color = f64::from(background);
             self.jobs.push(Job::Clear(self.pool[out].view.clone(), wgpu::Color { r:color,g:color,b:color,a:color }));
@@ -87,7 +88,7 @@ impl Scene {
                 let (input, page) = source(self, c)?;
                 if first < self.jobs.len() {self.source_jobs.push(first..self.jobs.len());}
                 if let Some(ColorInput { view, lease }) = input { sources.push((c, view)); leases.extend(lease); }
-                scratch.extend(page);
+                scratch.extend(page.map(|page| self.own(page)));
             }
             self.jobs.push(Job::Placement(Box::new(PlacementJob {
                 scalar,
@@ -103,11 +104,9 @@ impl Scene {
                 source_size: [PAGE_SIZE; 2],
                 positions: positions.clone(),
             })));
-            for page in scratch {
-                self.free(page);
-            }
+            drop(scratch);
         }
-        Ok(out)
+        Ok(self.keep(held))
     }
 
     pub(crate) fn capture_raw_tile(
@@ -123,6 +122,7 @@ impl Scene {
         let extent = packet.scene.target_extent(target);
         let mut inputs = Vec::new();
         let mut tiles = Vec::new();
+        let mut pages = Vec::with_capacity(planes.len());
         for &plane in planes {
             let (mut transform, bounds) = if plane == RasterPlane::Mask {
                 let (mask, source) = packet.scene.mask(owner).unwrap();
@@ -131,13 +131,14 @@ impl Scene {
             } else { (geometry.clone(), pixel_rect(plan.plane_domain(target), extent)) };
             transform.placement.interpolation = geometry.placement.interpolation;
             let page = self.placed_raw_plane(r, packet.scene, target, transform, [0; 2], coordinate, plane, bounds)?;
+            let held = self.own(page);
             self.encode_jobs(r, encoder)?;
             let tile = RasterTile::pending(plane.descriptor_for(r.document_color(), packet.scene.color_mode(target)));
             inputs.push((self.pool[page].texture.clone(), tile.clone(), packet.scene.color_mode(target)));
             tiles.push((plane, tile));
+            pages.push(held);
         }
         let capture = r.encode_private_tiles(inputs, encoder)?;
-        self.used.fill(false);
         Ok((tiles, capture))
     }
 
@@ -161,7 +162,7 @@ impl Scene {
                 let inputs = scene.color_inputs(r, scene_view, target, stored, c, preview)?;
                 return match inputs {
                     [Some(base), Some(flow)] => {
-                        let page = scene.alloc(r, wgpu::Color::TRANSPARENT);
+                        let page = scene.alloc(r, wgpu::Color::TRANSPARENT)?;
                         for input in [base, flow] {
                             scene.draw(r, page, input.view, None, [0., 0., 256., 256.], [1., 1., 0., 0.], true, Convert::None);
                         }
@@ -216,8 +217,9 @@ impl Scene {
             Ok((if flow { overlay } else { color }, None))
         });
         let color = plane(self, false)?;
+        let color = self.own(color);
         let flow = flows.then(|| plane(self, true)).transpose()?;
-        Ok((color, flow))
+        Ok((self.keep(color), flow))
     }
 
     pub(super) fn placed_material_tile(
@@ -246,12 +248,13 @@ impl Scene {
         }
         let binding = views_group(&r.device, "placed material neighborhood", &r.watercolor_layout,
             pages.iter());
-        let out = self.alloc(r, wgpu::Color::TRANSPARENT);
+        let out = self.alloc(r, wgpu::Color::TRANSPARENT)?;
+        let held = self.own(out);
         self.jobs.push(Job::Watercolor {
             coordinates: (self.material_coordinates.clone(), 0), target: self.pool[out].view.clone(), binding,
             record: *r.layer_style_records.get(&handle).ok_or(GpuRasterError::MissingPaintLayer(target))?,
         });
-        Ok((out, pages[0].clone()))
+        Ok((self.keep(held), pages[0].clone()))
     }
 
     pub(super) fn material_coverage(&mut self, r: &WgpuRasterizer, id: SourceTarget, offset: [i64; 2], batches: &[DabBatch]) -> (DocRect, u32) {
@@ -263,7 +266,7 @@ impl Scene {
     pub(super) fn clear_material_pages(&mut self) {
         self.material_bounds.clear();
         self.position_key = None;
-        while let Some(entry) = self.material_pages.pop_front() { self.free(entry.page); }
+        self.material_pages.clear();
     }
 
     #[expect(clippy::too_many_arguments, reason = "Material sampling keeps offset, tile, neighbor, and raster plane explicit")]
@@ -285,17 +288,17 @@ impl Scene {
         if let Some(index) = self.material_pages.iter().position(|entry| entry.layer == target
             && entry.offset == offset && entry.coordinate == coordinate && entry.plane == plane) {
             let entry = self.material_pages.remove(index).unwrap();
-            let page = entry.page;
+            let page = entry.page.index;
             self.material_pages.push_back(entry);
             return Ok(self.pool[page].view.clone());
         }
         if self.material_pages.len() == Self::MATERIAL_CACHE_PAGES {
-            let entry = self.material_pages.pop_front().unwrap();
-            self.free(entry.page);
+            self.material_pages.pop_front();
         }
         let shift = std::array::from_fn(|i| offset[i] + i64::from(PAGE_SIZE) - i64::from(tile[i] * PAGE_SIZE));
         let page = self.placed_raw_plane(r, packet.scene, target, Default::default(), shift, neighbor, plane, PixelRect::full(packet.scene.local_extent(handle)))?;
-        self.material_pages.push_back(MaterialPage { layer: target, offset, coordinate, plane, page });
+        let held = self.own(page);
+        self.material_pages.push_back(MaterialPage { layer: target, offset, coordinate, plane, page: held });
         Ok(self.pool[page].view.clone())
     }
 
@@ -308,10 +311,11 @@ impl Scene {
         c: [u32; 2],
     ) -> Result<usize, GpuRasterError> {
         let target = packet.scene.source_target(handle).unwrap();
-        let out = self.alloc(r, wgpu::Color::TRANSPARENT);
+        let out = self.alloc(r, wgpu::Color::TRANSPARENT)?;
+        let held = self.own(out);
         let stored = r.paint_layers.iter().find(|l| l.id == target);
         self.paint_page(r, packet, handle, stored, c, out, [0., 0., 256., 256.], Convert::None)?;
-        Ok(out)
+        Ok(self.keep(held))
     }
 }
 

@@ -51,7 +51,8 @@ impl Cache {
                 if batch.is_empty() {break;}
                 r.source_tiles.borrow_mut().begin_unit();
                 let captured = self.capture_exact(scene, r, packet, &mut image, &batch, encoder, commands);
-                if r.source_tiles.borrow_mut().end_unit() && captured.is_err() { self.native_batch = (batch.len() / 2).max(1); }
+                let overflowed = r.source_tiles.borrow_mut().end_unit();
+                if (overflowed || scene.scratch_exhausted) && captured.is_err() { self.native_batch = (batch.len() / 2).max(1); }
                 captured?;
             }
             if let Some(hierarchy) = &mut self.hierarchy { hierarchy.flush(encoder); }
@@ -236,6 +237,7 @@ impl Scene {
         let result = cache.refine(self, r, packet, encoder, &mut commands);
         self.scale_commands = Some(commands);
         r.scale_display = Some(cache);
+        if matches!(result, Err(GpuRasterError::DeferredObjectWork)) { self.clear_unencoded_jobs(); }
         if result.is_ok() || matches!(result,Err(GpuRasterError::DeferredObjectWork)) {write.track(encoder);}
         result
     }

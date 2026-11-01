@@ -18,6 +18,16 @@ larger than a surface pixel, capped at 16 document pixels. At the benchmark's
 and the expression-evaluation scratch pool plus the adjacent output mip against
 the existing display component budget.
 
+Evaluation values and retained material pages own scratch leases. An abandoned
+evaluation releases its leases and unencoded job suffix without releasing
+another evaluation's pages. Scratch allocation respects the composition
+allowance; exhausted evaluations defer, retire unused capacity behind GPU
+completion and resume with bounded batches. Idle excess retires the same way.
+Stable page destinations
+own their output bindings, while changing input tuples use bounded caches.
+Canonical collection work reserves its next source tiles before optional mips;
+retiring mip allocations remain charged until their commands finish.
+
 The scene owns each layer's reduced local pixels independently of the view.
 A source can retain several levels within the display allowance; each records
 which local pages are valid. Authoritative paint uses linear premultiplied working

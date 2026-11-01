@@ -19,11 +19,11 @@ fn fixture(name:&str)->(Document,OccurrenceHandle,OccurrenceHandle,OccurrenceHan
 fn capture(r:&mut WgpuRasterizer,frame:FramePacket<'_>,handles:[OccurrenceHandle;3],tile:[u32;2],eligible:bool,colors:Option<[[f32;4];2]>)->(Vec<[f32;4]>,[u64;2]) {
     let [owner,filter,photo]=handles;
     let mut scene=r.scene.take().unwrap_or_else(||Scene::new(r).unwrap());
-    scene.begin_frame();scene.used.fill(false);scene.jobs.clear();scene.source_jobs.clear();
+    scene.begin_frame();scene.used.iter_mut().for_each(super::scratch::Usage::reset);scene.jobs.clear();scene.source_jobs.clear();
     let (front,back)=if let Some([ink,photo])=colors {
         let color=|[red,green,blue,alpha]:[f32;4]|wgpu::Color {r:f64::from(red),g:f64::from(green),b:f64::from(blue),a:f64::from(alpha)};
-        let back=scene.alloc(r,color(photo));
-        (scene.alloc(r,color(ink)),back)
+        let back=scene.alloc(r,color(photo)).unwrap();
+        (scene.alloc(r,color(ink)).unwrap(),back)
     } else {
         let back=scene.layer(r,frame,photo,tile).unwrap();
         (scene.layer(r,frame,owner,tile).unwrap(),back)
@@ -34,7 +34,7 @@ fn capture(r:&mut WgpuRasterizer,frame:FramePacket<'_>,handles:[OccurrenceHandle
         prepared.original_independent=false;
     }
     let output=scene.combine(r,front,back,frame.scene.occurrence(owner).unwrap().opacity,
-        frame.scene.occurrence(owner).unwrap().blend,false,frame.blend_space);
+        frame.scene.occurrence(owner).unwrap().blend,false,frame.blend_space).unwrap();
     let work=scene.jobs.iter().filter_map(|job|match job {
         Job::Draw {data,..} if data[8]==4.=>Some((1,(data[2]*data[3]) as u64)),_=>None,
     }).fold([0,0],|[jobs,pixels],(n,area)|[jobs+n,pixels+area]);

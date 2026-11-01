@@ -5145,6 +5145,33 @@ private-socket setup failures remain in the logs. Raw joined frame IDs, pointer
 cadence, CPU/GPU distributions, variance, snap-hold reconstruction limits and
 provenance are under `artifacts/nav-rebase-qualification-20261025/gtk/`.
 
+### GTK composition scratch comparison
+
+Measured 2026-11-01 on the RTX PRO 6000 Blackwell Max-Q with a private
+2560 × 1600/120 Hz display. Release main `79e751fc3` and the M1.1 candidate
+(`a86ea646` source fingerprint) alternate three eight-second 24 MP photo
+navigation trials and three six-second G-Pen 384 px trials with Navigator.
+
+| Desktop diagnostic | Main | M1.1 |
+| --- | ---: | ---: |
+| Navigation publications across three contacts | 2,619 | 2,619 |
+| Navigation publications/s, combined contacts | 109.222 | 109.225 |
+| Navigation pooled gap p99, ms | 17.115 | 17.287 |
+| G-Pen publication rate, median/s | 119.601 | 119.531 |
+| G-Pen publication gap p99, median ms | 8.799 | 9.036 |
+| Paint worker elapsed CPU p50/p99, median ms | 1.087 / 1.733 | 0.969 / 1.714 |
+| Paint worker thread CPU p50/p99, median ms | 1.076 / 1.716 | 0.960 / 1.693 |
+
+The pairs show no consistent added paint CPU cost. Navigation retains the
+existing 114/s and 16.667 ms target miss. Cached navigation publications have
+no camera attribution; paint cadence has no recorded contact bounds or fresh
+input revision. These desktop diagnostics leave reference-tablet qualification
+pending. The raster fixture's renderer allocation is essentially unchanged,
+942.866 → 942.882 MiB, and paired RSS changes are inconsistent. Deferred-object
+regressions separately check bounded scratch and released reservations.
+Paired values, exact binaries and scope are in
+`artifacts/issue24-impl/m11-current-main-checks.md`.
+
 ### GTK window corner geometry diagnostic
 
 Measured 2026-10-26 on the same RTX PRO 6000, GTK 4.22.5 and Mutter 50.5,

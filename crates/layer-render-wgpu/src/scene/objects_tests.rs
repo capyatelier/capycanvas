@@ -210,6 +210,32 @@ fn private_canonical_jobs_yield_and_cancel_before_publication() {
     assert!(!cache.pending(), "obsolete affine work cannot publish");
     assert!(cache.bytes() < 64 * 1024);
 }
+
+#[test]
+fn required_canonical_sources_follow_only_the_next_bounded_task() {
+    let objects = [[255, 0, 0, 255], [0, 0, 255, 255]].map(|color| {
+        let mut object = ImageObject::new(image([8192, 256], color));
+        object.affine = Affine64([1. / 32., 0., 0., 1., 0., 0.]);
+        object
+    });
+    let (doc, owner, handles) = document([256; 2], objects.into());
+    let r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut scene = Scene::new(&r).unwrap();
+    let mut cache = super::super::object_cache::ObjectCache::default();
+    for handle in handles {
+        let owner = doc.scene().object_owner(handle).unwrap();
+        let request = canonical_request(&r, &mut scene, &doc, owner,
+            ObjectWindow { origin: [0.; 2], side: 1., size: [256; 2] });
+        assert!(cache.resolve_collection(&r, doc.scene(), &request).unwrap().is_none());
+    }
+    let mut required = Vec::new();
+    cache.required_sources(&mut required).unwrap();
+    let first = doc.scene().object_layer(owner).unwrap();
+    assert_eq!(required.len(), 18);
+    assert!(required.iter().all(|(source, _)| Arc::ptr_eq(source, first.image.storage())));
+    assert_eq!(required.iter().map(|(_, coordinate)| *coordinate).collect::<Vec<_>>(),
+        (0..18).map(|x| [x, 0]).collect::<Vec<_>>());
+}
 #[test]
 fn object_masks_attached_effects_and_clipping_follow_both_stack_evaluators() {
     let (mut doc, owner, _) = document([64; 2], vec![ImageObject::new(image([16; 2], [255, 0, 0, 255]))]);
@@ -747,9 +773,9 @@ fn deferred_collection_construction_discards_unencoded_prefix_and_reuses_scratch
     let r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut scene=Scene::new(&r).unwrap();scene.object_query=true;
     for _ in 0..12 {
-        scene.alloc(&r,wgpu::Color::TRANSPARENT);
+        scene.alloc(&r,wgpu::Color::TRANSPARENT).unwrap();
         assert!(matches!(scene.object_tile(&r,packet(doc.scene(),[256;2]),owner,[0;2]),Err(GpuRasterError::DeferredObjectWork)));
-        assert!(scene.jobs.is_empty());assert!(scene.source_jobs.is_empty());assert!(scene.used.iter().all(|used|!*used));
+        assert!(scene.jobs.is_empty());assert!(scene.source_jobs.is_empty());assert!(scene.used.iter().all(|used|!used.occupied()));
         assert_eq!(scene.pool.len(),1,"abandoned composition prefix remains reusable");
         assert!(scene.object_results.pending(),"private collection progress remains scheduled");
     }

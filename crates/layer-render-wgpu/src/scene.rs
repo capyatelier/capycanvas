@@ -8,6 +8,7 @@ mod images;
 #[path = "filter_previews.rs"]
 mod previews;
 mod metadata;
+mod scratch;
 fn omitted_ancestor_masks(scene: SceneView<'_>, layer: OccurrenceHandle) -> impl Iterator<Item = OccurrenceHandle> {
     let parent = matches!(scene.scope(), Some(SceneScope::Members(_))).then(|| scene.parent(layer)).flatten();
     std::iter::successors(parent, move |id| scene.parent(*id)).take_while(move |id| !scene.includes(*id))
@@ -42,7 +43,7 @@ pub(crate) mod resample;
 pub(crate) mod scale;
 
 #[derive(Clone)]
-struct Image {
+pub(super) struct Image {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     plan: display_mips::Plan,
@@ -52,7 +53,7 @@ impl Image {
         let (texture, view) = create_color_target(&r.device, plan.size, label);
         Self { texture, view, plan }
     }
-    fn bytes(&self) -> u64 { texture_bytes(&self.texture) }
+    pub(super) fn bytes(&self) -> u64 { texture_bytes(&self.texture) }
 }
 
 struct ColorInput {
@@ -178,7 +179,8 @@ pub(super) struct Scene {
     vectors: vectors::Vectors,
     scale_commands: Option<scale::Commands>,
     pool: Vec<PageSurface>,
-    used: Vec<bool>,
+    used: Vec<scratch::Usage>,
+    scratch_exhausted: bool,
     jobs: Vec<Job>,
     source_jobs: Vec<std::ops::Range<usize>>,
     ordered:bool,
@@ -188,7 +190,6 @@ pub(super) struct Scene {
     source_bindings: RecentBindings<(bool,[wgpu::TextureView; 4])>,
     compute_bindings: RecentBindings<[wgpu::TextureView; 4]>,
     output_bindings: RecentBindings<wgpu::TextureView>,
-    watercolor_outputs: RecentBindings<wgpu::TextureView>,
     mask_bindings: RecentBindings<([wgpu::TextureView; effects::MASK_SLOTS],wgpu::Buffer)>,
     effect_outputs: RecentBindings<(usize,[wgpu::TextureView; effects::MASK_SLOTS],wgpu::TextureView)>,
     layout: wgpu::BindGroupLayout,
@@ -281,6 +282,12 @@ impl Scene {
             + self.effects.storage_bytes() + self.positions.storage_bytes()
             + self.placement.iter().map(pixel_transform::PixelTransform::storage_bytes).sum::<u64>() + 32
             + self.images.storage_bytes() + self.scale_sources.storage_bytes() + self.object_results.bytes() + self.exact_object_results.bytes() + self.object_spatial.storage_bytes() + self.scale_commands.as_ref().map_or(0, scale::Commands::storage_bytes) + self.vectors.storage_bytes() - duplicate_metadata
+    }
+    pub(crate) fn required_object_sources(&self) -> Result<Vec<(Arc<layer_core::color::source::SourceImage>, [u32; 2])>, GpuRasterError> {
+        let mut tiles = Vec::new();
+        self.object_results.required_sources(&mut tiles)?;
+        self.exact_object_results.required_sources(&mut tiles)?;
+        Ok(tiles)
     }
     fn submit_source_uploads(
         r: &mut WgpuRasterizer,
@@ -383,7 +390,6 @@ impl Scene {
         self.source_bindings.begin_frame();
         self.compute_bindings.begin_frame();
         self.output_bindings.begin_frame();
-        self.watercolor_outputs.begin_frame();
         self.mask_bindings.begin_frame();
         self.effect_outputs.begin_frame();
         self.record_count = 0;
@@ -439,12 +445,12 @@ impl Scene {
             material_bounds: Default::default(),
             pool: Vec::new(),
             used: Vec::new(),
+            scratch_exhausted: false,
             jobs: Vec::new(),
             source_jobs: Vec::new(),ordered:false,decode_wait:false,
             source_bindings: Default::default(),
             compute_bindings: Default::default(),
             output_bindings: Default::default(),
-            watercolor_outputs: Default::default(),
             mask_bindings: Default::default(),
             effect_outputs: Default::default(),
             layout,
@@ -476,37 +482,63 @@ impl Scene {
         self.source_bindings.forget(|(_,views)| views.iter().any(|view| retired.contains(view)));
         self.compute_bindings.forget(|views| views.iter().any(|view| retired.contains(view)));
         self.output_bindings.forget(|view| retired.contains(view));
-        self.watercolor_outputs.forget(|view| retired.contains(view));
         self.mask_bindings.forget(|views| views.0.iter().any(|view| retired.contains(view)));
         self.effect_outputs.forget(|(_,views,output)|retired.contains(output) || views.iter().any(|view|retired.contains(view)));
     }
-    fn alloc(&mut self, r: &WgpuRasterizer, color: wgpu::Color) -> usize {
-        let id = self.reserve(r);
+    fn alloc(&mut self, r: &WgpuRasterizer, color: wgpu::Color) -> Result<usize, GpuRasterError> {
+        let id = self.reserve(r)?;
         self.jobs
             .push(Job::Clear(self.pool[id].view.clone(), color));
-        id
+        Ok(id)
     }
-    fn reserve(&mut self, r: &WgpuRasterizer) -> usize {
+    fn reserve(&mut self, r: &WgpuRasterizer) -> Result<usize, GpuRasterError> {
         self.reserve_format(r, false)
     }
-    fn reserve_format(&mut self, r: &WgpuRasterizer, scalar: bool) -> usize {
+    fn reserve_format(&mut self, r: &WgpuRasterizer, scalar: bool) -> Result<usize, GpuRasterError> {
+        self.reserve_with_limit(r, scalar, self.scratch_limit(r))
+    }
+    fn reserve_with_limit(&mut self, r: &WgpuRasterizer, scalar: bool, limit: u64) -> Result<usize, GpuRasterError> {
         let format = if scalar { r.device.scalar_format() } else { r.device.working_format() };
         let id = self
             .used
             .iter()
             .enumerate()
-            .position(|(i, v)| !*v && self.pool[i].texture.format() == format)
+            .position(|(i, v)| !v.occupied() && self.pool[i].texture.format() == format)
             .unwrap_or(self.pool.len());
         if id == self.pool.len() {
-            self.pool.push(if scalar { r.create_scalar_page_surface("scene reusable scalar") }
-                else { r.create_page_surface("scene reusable tile") });
-            self.used.push(false);
+            let bytes = u64::from(PAGE_SIZE).pow(2) * u64::from(format.block_copy_size(None).unwrap());
+            let retained = self.pool.iter().map(PageSurface::storage_bytes).sum::<u64>();
+            if retained.saturating_add(bytes) > limit {
+                self.scratch_exhausted = true;
+                return Err(GpuRasterError::DeferredObjectWork);
+            }
+            let page = if scalar { r.create_scalar_page_surface("scene reusable scalar") } else { r.create_page_surface("scene reusable tile") };
+            self.pool.push(page);
+            self.used.push(Default::default());
         }
-        self.used[id] = true;
-        id
+        self.used[id].reserve();
+        Ok(id)
     }
     fn free(&mut self, id: usize) {
-        self.used[id] = false;
+        self.used[id].reset();
+    }
+    fn own(&mut self, id: usize) -> scratch::Lease { self.used[id].lease(id) }
+    fn keep(&mut self, lease: scratch::Lease) -> usize { self.used[lease.index].keep(lease) }
+    fn scratch_limit(&self, r: &WgpuRasterizer) -> u64 {
+        r.native_edit.as_ref().map_or(scale::CACHE_BYTES, |native| native.composition_bytes.max(scale::CACHE_BYTES))
+            .saturating_sub(r.retired_display_bytes.load(std::sync::atomic::Ordering::Acquire))
+    }
+    pub(super) fn trim_scratch(&mut self, keep: usize) -> Vec<PageSurface> {
+        if !self.jobs.is_empty() { return Vec::new(); }
+        let keep = if std::mem::take(&mut self.scratch_exhausted) { 0 } else { keep };
+        let mut retired = Vec::new();
+        while self.pool.len() > keep && self.used.last().is_some_and(|usage| !usage.occupied()) {
+            retired.push(self.pool.pop().unwrap());
+            self.used.pop();
+        }
+        let views: Vec<_> = retired.iter().map(|page| page.view.clone()).collect();
+        self.forget_bindings(&views);
+        retired
     }
     fn enqueue_source_decode(&mut self, pending: sources::PendingTile) {
         // Decoding writes only the separate source cache. Keep an adjacent
@@ -537,7 +569,7 @@ impl Scene {
         coordinate: [u32; 2], encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<crate::source_access::RawTile, GpuRasterError> {
         debug_assert!(self.jobs.is_empty());
-        self.used.fill(false); self.begin_frame();
+        self.used.iter_mut().for_each(scratch::Usage::reset); self.begin_frame();
         let extent = scene.target_extent(target);
         let page = match target {
             SourceTarget::Coverage(coverage) => {
@@ -548,6 +580,7 @@ impl Scene {
             }
             _ => self.placed_raw_plane(r, scene, target, Default::default(), scene.target_offset(target), coordinate, layer_core::raster::RasterPlane::Color, PixelRect::full(extent))?,
         };
+        let _page = self.own(page);
         self.encode_jobs(r, encoder)?;
         Ok(crate::source_access::RawTile { texture: self.pool[page].texture.clone(), view: self.pool[page].view.clone() })
     }
@@ -641,8 +674,9 @@ impl Scene {
             let page = if rect == [0., 0., 256., 256.] && convert == Convert::None {
                 out
             } else {
-                self.alloc(r, wgpu::Color::TRANSPARENT)
+                self.alloc(r, wgpu::Color::TRANSPARENT)?
             };
+            let _page = self.own(page);
             self.jobs.push(Job::Watercolor {
                 coordinates: (r.target_bind_group.clone(), r.layer_target_offset(target, c)),
                 target: self.pool[page].view.clone(),
@@ -754,11 +788,12 @@ impl Scene {
         tile: [u32; 2],
         input: usize,
     ) -> Result<usize, GpuRasterError> {
+        let _input = self.own(input);
         let handle = indices[0];
         if packet.scene.effect(handle).unwrap().program.image_boundary() {
             let image = self.images.output(handle).ok_or_else(|| GpuRasterError::Effect("Missing image effect stage".into()))?;
             let bounds=image.plan.doc_bounds.translated(self.images.doc_bounds.min);
-            let out = self.image_tile(r, image.view, bounds, tile);
+            let out = self.image_tile(r, image.view, bounds, tile)?;
             self.free(input);
             return Ok(out);
         }
@@ -768,7 +803,9 @@ impl Scene {
                 self.mask_at(r, use_, source, packet.scene.target_offset(SourceTarget::Coverage(use_.source)), tile)
             }).transpose()?
         } else { None };
-        let out = self.reserve(r);
+        let _mask = mask.map(|mask| self.own(mask));
+        let out = self.reserve(r)?;
+        let held_out = self.own(out);
         let mut data = [0.; 32];
         data[..4].copy_from_slice(&[0., 0., 256., 256.]);
         data[4..6].copy_from_slice(&[256., 256.]);
@@ -854,7 +891,7 @@ impl Scene {
         if let Some(m) = mask {
             self.free(m);
         }
-        Ok(out)
+        Ok(self.keep(held_out))
     }
     #[allow(clippy::too_many_arguments)] // Explicit tile draw operands.
     fn draw(
@@ -928,7 +965,9 @@ impl Scene {
         blend: layer_core::LayerBlend,
         clip: bool,
         space: layer_core::BlendSpace,
-    ) -> usize {
+    ) -> Result<usize, GpuRasterError> {
+        let held_front = self.own(front);
+        let held_back = self.own(back);
         let n = self.jobs.len();
         // Watercolor already outputs premultiplied source-over. A complete,
         // unmasked layer at full opacity can draw straight onto its backdrop.
@@ -942,7 +981,7 @@ impl Scene {
                 *target = self.pool[back].view.clone();
                 self.jobs.remove(n - 2);
                 self.free(front);
-                return back;
+                return Ok(self.keep(held_back));
             }
         }
         // An isolated clipping stack over a constant backdrop needs no color
@@ -967,7 +1006,7 @@ impl Scene {
                 data[20..24].copy_from_slice(&[bg.r as f32, bg.g as f32, bg.b as f32, bg.a as f32]);
                 self.jobs.remove(n - 2);
                 self.free(back);
-                return front;
+                return Ok(self.keep(held_front));
             }
         }
         if !clip && blend==layer_core::LayerBlend::Normal
@@ -978,14 +1017,14 @@ impl Scene {
             sources[1]=self.pool[back].view.clone();
             data[8]=2.;data[9]=opacity;data[10]=crate::blend_code(blend,&r.device,space) as f32;
             self.free(back);
-            return front;
+            return Ok(self.keep(held_front));
         }
         if !clip && opacity == 1. && let Some(at) = self.untouched_clear(back) {
             self.jobs.remove(at);
             self.free(back);
-            return front;
+            return Ok(self.keep(held_front));
         }
-        let out = self.alloc(r, wgpu::Color::TRANSPARENT);
+        let out = self.alloc(r, wgpu::Color::TRANSPARENT)?;
         self.draw(
             r,
             out,
@@ -998,7 +1037,7 @@ impl Scene {
         );
         self.free(front);
         self.free(back);
-        out
+        Ok(out)
     }
     /// The position of the transparent clear `image` still holds when no
     /// later job reads or writes it. An unclipped blend at full opacity over
@@ -1015,9 +1054,9 @@ impl Scene {
     }
     /// `tile` drawn through `convert` into a new tile, or `tile` itself when
     /// nothing converts.
-    pub(super) fn converted(&mut self, r: &WgpuRasterizer, tile: usize, convert: Convert) -> usize {
+    pub(super) fn converted(&mut self, r: &WgpuRasterizer, tile: usize, convert: Convert) -> Result<usize, GpuRasterError> {
         if convert == Convert::None {
-            return tile;
+            return Ok(tile);
         }
         if let Some(Job::Draw { target, data, over: false, clip: None, .. }) = self.jobs.last_mut()
             && *target == self.pool[tile].view && data[..4] == [0., 0., 256., 256.]
@@ -1027,12 +1066,13 @@ impl Scene {
                 && matches!(convert,Convert::Encode | Convert::Decode) {
                 data[31]=convert.code();
             } else {data[7] = convert.code();}
-            return tile;
+            return Ok(tile);
         }
-        let out = self.reserve(r);
+        let _input = self.own(tile);
+        let out = self.reserve(r)?;
         self.draw(r, out, self.pool[tile].view.clone(), None, [0., 0., 256., 256.], [1., 1., 0., 0.], false, convert);
         self.free(tile);
-        out
+        Ok(out)
     }
     fn mask_tile(
         &mut self,
@@ -1062,7 +1102,8 @@ impl Scene {
                 b: default,
                 a: default,
             },
-        );
+        )?;
+        let held = self.own(out);
         let command_pages = command.into_iter().flat_map(|key| r.layer_masks.command_pages.iter()
             .filter_map(move |((id, c), page)| (*id == key).then_some((*c, page))));
         let authored_pages = command.is_none().then_some(SourceTarget::Coverage(mask.source)).into_iter()
@@ -1094,7 +1135,7 @@ impl Scene {
                 self.draw(r, out, input.view, None, local_rect(c, offset, tile), [2., 1., f32::from(mask.inverted), 0.], false, Convert::None);
             }
         }
-        Ok(out)
+        Ok(self.keep(held))
     }
     fn layer(
         &mut self,
@@ -1108,44 +1149,50 @@ impl Scene {
             self.group(r, packet, Some(index), tile)?
         } else if let Some(color) = packet.scene.effect(index).and_then(|effect| effect.constant_color())
             .filter(|_| (self.image_window.is_none() && packet.scene.evaluation_offset64()==[0.;2]) || constant_frame_tile(packet.scene,tile,self.image_window)) {
-            self.alloc(r, composite_color(r, packet, color.linear_in(r.device.working_space()).map_err(GpuRasterError::Color)?))
+            self.alloc(r, composite_color(r, packet, color.linear_in(r.device.working_space()).map_err(GpuRasterError::Color)?))?
         } else if layer.kind() == LayerKind::Effect {
-            let input = self.alloc(r, wgpu::Color::TRANSPARENT);
+            let input = self.alloc(r, wgpu::Color::TRANSPARENT)?;
             // Generator coverage is applied below with ordinary layer masks.
             self.effect(r, packet, &[index], tile, input)?
         } else if packet.scene.object_layer(index).is_some() {
             self.object_tile(r, packet, index, tile)?
         } else if packet.scene.vector_layer(index).is_some() {
-            self.vector_tile(r, packet, index, tile)
+            self.vector_tile(r, packet, index, tile)?
         } else {
             let out = self.paint_tile(r, packet, index, tile)?;
-            self.converted(r, out, Convert::layers(packet))
+            self.converted(r, out, Convert::layers(packet))?
         };
+        let mut held = self.own(out);
         if let Some((mask, source)) = packet.scene.mask(index).filter(|(mask, _)| mask.enabled) {
             let m = self.mask_at(r, mask, source, packet.scene.target_offset(SourceTarget::Coverage(mask.source)), tile)?;
-            out = self.masked_image(r, out, m);
+            out = self.masked_image(r, out, m)?;
+            held = self.own(out);
         }
         if let Some(base) = packet.scene.clipping_base(index).filter(|base| !packet.scene.includes(*base)) {
             let scope = SceneScope::All;
             let scene = packet.scene.with_scope(&scope);
             let mask = if scene.visible(base) { self.layer(r, FramePacket { scene, ..packet }, base, tile)? }
-                else { self.alloc(r, wgpu::Color::TRANSPARENT) };
-            out = self.masked_image(r, out, mask);
+                else { self.alloc(r, wgpu::Color::TRANSPARENT)? };
+            out = self.masked_image(r, out, mask)?;
+            held = self.own(out);
         }
         for ancestor in omitted_ancestor_masks(packet.scene, index) {
             let (mask, source) = packet.scene.mask(ancestor).unwrap();
             let m = self.mask_at(r, mask, source, packet.scene.target_offset(SourceTarget::Coverage(mask.source)), tile)?;
-            out = self.masked_image(r, out, m);
+            out = self.masked_image(r, out, m)?;
+            held = self.own(out);
         }
-        Ok(out)
+        Ok(self.keep(held))
     }
-    fn masked_image(&mut self, r: &WgpuRasterizer, source: usize, mask: usize) -> usize {
-        let result = self.alloc(r, wgpu::Color::TRANSPARENT);
+    fn masked_image(&mut self, r: &WgpuRasterizer, source: usize, mask: usize) -> Result<usize, GpuRasterError> {
+        let _source = self.own(source);
+        let _mask = self.own(mask);
+        let result = self.alloc(r, wgpu::Color::TRANSPARENT)?;
         self.draw(r, result, self.pool[source].view.clone(), Some(self.pool[mask].view.clone()),
             [0., 0., 256., 256.], [3., 1., 0., 0.], false, Convert::None);
         self.free(source);
         self.free(mask);
-        result
+        Ok(result)
     }
     fn paint_tile(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, index: OccurrenceHandle, tile: [u32; 2]) -> Result<usize, GpuRasterError> {
         let target = packet.scene.source_target(index).unwrap_or_default();
@@ -1153,7 +1200,8 @@ impl Scene {
                 && r.watercolor_style(target, packet.dab_batches).is_some() {
             return self.placed_material_tile(r, packet, index, packet.scene.target_offset(target), tile);
         }
-        let out = self.alloc(r, wgpu::Color::TRANSPARENT);
+        let out = self.alloc(r, wgpu::Color::TRANSPARENT)?;
+        let held = self.own(out);
         let offset = world_offset(packet.scene, index, false);
         let stored = r.paint_layers.iter().find(|l| l.id == target);
         if stored.is_some() || packet.scene.paint_source(index).is_some_and(|paint| paint.base.is_some()) {
@@ -1176,7 +1224,7 @@ impl Scene {
             && *output==self.pool[out].view {
                 *source_target=Some(target);
             }
-        Ok(out)
+        Ok(self.keep(held))
     }
     fn group(
         &mut self,
@@ -1313,7 +1361,7 @@ impl Scene {
     ) -> Result<(), GpuRasterError> {
         self.jobs.clear();self.source_jobs.clear();
         self.clear_material_pages();
-        self.used.fill(false);
+        self.used.iter_mut().for_each(scratch::Usage::reset);
         let handle = packet.scene.source_owner(target).ok_or(GpuRasterError::MissingPaintLayer(target))?;
         let op = &packet.scene.operations(target).ok_or(GpuRasterError::MissingPaintLayer(target))?[operation_index];
         let extent = packet.scene.target_extent(target);
@@ -1331,7 +1379,8 @@ impl Scene {
                 .map(|((_, c), page)| (*c, page.clone())).collect();
             for (coordinate, page) in pages {
                 let mask = self.command_mask_at(r, &op.coverage, coordinate, (target, operation_index as u32))?;
-                let out = self.reserve_format(r, true);
+                let _mask = self.own(mask);
+                let out = self.reserve_format(r, true)?;
                 self.draw(r, out, page.view.clone(), Some(self.pool[mask].view.clone()),
                     [0., 0., 256., 256.], [22., 1., 0., 0.], false, Convert::None);
                 self.copy_window_tile(out, &Image { texture: page.texture, view: page.view,
@@ -1372,7 +1421,9 @@ impl Scene {
         let gradient = if let RasterOperationKind::Gradient {gradient,..}=&op.kind {Some(crate::gradient::texture(r,gradient)?)} else {None};
         for (c, source, destination) in pages {
             let mask = self.command_mask_at(r, &op.coverage, c, (target, operation_index as u32))?;
-            let out = self.alloc(r, wgpu::Color::TRANSPARENT);
+            let _mask = self.own(mask);
+            let out = self.alloc(r, wgpu::Color::TRANSPARENT)?;
+            let _out = self.own(out);
             match op.kind {
                 RasterOperationKind::ColorMode(_) | RasterOperationKind::Transform(_) | RasterOperationKind::Bake { .. } | RasterOperationKind::FrequencyDetail { .. }
                     | RasterOperationKind::Coverage => {
@@ -1382,28 +1433,27 @@ impl Scene {
                     let mut resolved = None;
                     if watercolor {
                         let binding = self.watercolor_binding(r, packet.scene, target, stored, c, false)?;
-                        let p = self.alloc(r, wgpu::Color::TRANSPARENT);
+                        let p = self.alloc(r, wgpu::Color::TRANSPARENT)?;
+                        let held = self.own(p);
                         self.jobs.push(Job::Watercolor {
                             coordinates: (r.target_bind_group.clone(), r.layer_target_offset(target, c)),
                             target: self.pool[p].view.clone(),
                             binding,
                             record: *r.layer_style_records.get(&handle).ok_or(GpuRasterError::MissingPaintLayer(target))?,
                         });
-                        resolved = Some(p);
+                        resolved = Some(held);
                     }
                     self.draw(
                         r,
                         out,
-                        resolved.map_or(source, |p| self.pool[p].view.clone()),
+                        resolved.as_ref().map_or(source, |p| self.pool[p.index].view.clone()),
                         Some(self.pool[mask].view.clone()),
                         [0., 0., 256., 256.],
                         [3., 1., erase, 0.],
                         false,
                         Convert::None,
                     );
-                    if let Some(p) = resolved {
-                        self.free(p);
-                    }
+                    drop(resolved);
                 }
                 RasterOperationKind::Fill { .. }
                 | RasterOperationKind::Gradient { .. }
@@ -1732,20 +1782,20 @@ impl Scene {
     #[expect(clippy::too_many_arguments, reason = "Prepared capture keeps output encoding and independent destination regions explicit")]
     fn capture_prepared_regions(
         &mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, destination: &Image,
-        regions: &[PixelRect], output: Output, preview: bool, reserved: Option<&[bool]>, encoder: &mut crate::submission::CommandEncoder,
+        regions: &[PixelRect], output: Output, preview: bool, reserved: Option<&[scratch::Usage]>, encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         self.capture_prepared_regions_reuse(r,packet,destination,regions,output,preview,reserved,None,encoder)
     }
     #[expect(clippy::too_many_arguments, reason = "Retained capture owns explicit initialized output and dependency regions")]
     fn capture_prepared_regions_reuse(
         &mut self,r:&mut WgpuRasterizer,packet:FramePacket<'_>,destination:&Image,
-        regions:&[PixelRect],output:Output,preview:bool,reserved:Option<&[bool]>,initialized:Option<&std::collections::BTreeSet<[u32;2]>>,encoder:&mut submission::CommandEncoder,
+        regions:&[PixelRect],output:Output,preview:bool,reserved:Option<&[scratch::Usage]>,initialized:Option<&std::collections::BTreeSet<[u32;2]>>,encoder:&mut submission::CommandEncoder,
     )->Result<(),GpuRasterError> {
         self.jobs.clear();self.source_jobs.clear();
         self.object_display = self.object_live || matches!(output, Output::Display);
         self.clear_material_pages();
-        self.used.fill(false);
-        if let Some(reserved) = reserved { self.used[..reserved.len()].copy_from_slice(reserved); }
+        self.used.iter_mut().for_each(scratch::Usage::reset);
+        if let Some(reserved) = reserved { self.used[..reserved.len()].clone_from_slice(reserved); }
         self.stop_before = packet.scene.effect_input();
         let object_pages = packet.scene.order().iter().any(|owner| packet.scene.object_layer(*owner).is_some());
         let mut pages: Vec<_> = regions.iter().flat_map(|region| page_coordinates(*region)).collect();
@@ -1756,11 +1806,11 @@ impl Scene {
             let image = match output {
                 Output::Artwork(parent) => {
                     let image = self.group(r, packet, parent, tile)?;
-                    self.converted(r, image, Convert::linear(packet))
+                    self.converted(r, image, Convert::linear(packet))?
                 }
                 Output::Objects(id) => {
                     let image = self.object_tile(r, packet, id, tile)?;
-                    self.converted(r, image, Convert::linear(packet))
+                    self.converted(r, image, Convert::linear(packet))?
                 }
                 Output::EffectInput(id) | Output::EffectChannels(id) | Output::EffectComposite(id) => {
                     packet.scene.occurrence(id).ok_or(GpuRasterError::InvalidExtent)?;
@@ -1768,7 +1818,7 @@ impl Scene {
                     let image = self.group(r, packet, layer_core::composite_input_scope(packet.scene, id), tile)?;
                     self.stop_before = packet.scene.effect_input();
                     let image = if matches!(output, Output::EffectInput(_)) { image } else { self.effect(r, packet, &[id], tile, image)? };
-                    if matches!(output, Output::EffectComposite(_)) { image } else { self.converted(r, image, Convert::linear(packet)) }
+                    if matches!(output, Output::EffectComposite(_)) { image } else { self.converted(r, image, Convert::linear(packet))? }
                 }
                 Output::Source(target) | Output::MaskImage(target) => {
                     let owner=packet.scene.source_owner(target).ok_or(GpuRasterError::MissingPaintLayer(target))?;
@@ -1778,17 +1828,19 @@ impl Scene {
                             let (use_,source)=packet.scene.mask(owner).ok_or(GpuRasterError::MissingPaintLayer(target))?;
                             let mut use_=use_.clone(); use_.inverted=false;
                             let mask = self.mask_at(r,&use_,source,packet.scene.target_offset(target),tile)?;
+                            let held = self.own(mask);
                             if matches!(output, Output::MaskImage(_)) {
-                                let image = self.alloc(r, wgpu::Color::TRANSPARENT);
+                                let image = self.alloc(r, wgpu::Color::TRANSPARENT)?;
                                 self.draw(r, image, self.pool[mask].view.clone(), None, [0., 0., 256., 256.], [20., 1., 0., 0.], false, Convert::None);
                                 self.free(mask); image
-                            } else { mask }
+                            } else { self.keep(held) }
                         }
                         SourceTarget::Selection(_) => return Err(GpuRasterError::MissingPaintLayer(target)),
                     }
                 },
                 Output::Display => self.display_tile(r, packet, tile)?,
             };
+            let _image = self.own(image);
             if let Output::EffectComposite(handle)=output && destination.plan.level>0 {
                 let execution=if matches!(self.jobs.last(),Some(Job::Effect {data,..}) if data[19]>2.5) {effects::Execution::ReducedContribution} else {effects::Execution::Reduced};
                 let prepared=self.effects.prepare(r,packet.scene,&[handle],execution,packet.time_seconds,0,packet.blend_space)?;
@@ -1926,6 +1978,9 @@ impl Scene {
         self.object_display = false;
         self.scale_commands = Some(commands);
         r.scale_display = Some(cache);
+        if matches!(result, Err(GpuRasterError::DeferredObjectWork)) {
+            self.clear_unencoded_jobs();
+        }
         if result.is_err() { self.object_results.reset_used(); }
         self.object_results.flush_retired(encoder);
         self.image_damage = None;
@@ -1938,10 +1993,12 @@ impl Scene {
         let output = self.group(r, packet, None, tile);
         self.presented_backdrop = None;
         let mut output = output?;
+        let mut held = self.own(output);
         if let Some(handle) = packet.inspect_mask
             && let Some((mask, source)) = packet.scene.mask(handle).filter(|(mask, _)| mask.enabled) {
             let m = self.mask_at(r, mask, source, packet.scene.target_offset(SourceTarget::Coverage(mask.source)), tile)?;
-            let tint = self.alloc(r, wgpu::Color::TRANSPARENT);
+            let _mask = self.own(m);
+            let tint = self.alloc(r, wgpu::Color::TRANSPARENT)?;
             self.draw(
                 r,
                 tint,
@@ -1961,9 +2018,10 @@ impl Scene {
                 layer_core::LayerBlend::Normal,
                 false,
                 packet.blend_space,
-            );
+            )?;
+            held = self.own(output);
         }
-        Ok(output)
+        Ok(self.keep(held))
     }
 
     // wgpu handles hash by stable resource identity, not mutable GPU contents.
@@ -2014,8 +2072,11 @@ impl Scene {
         r.source_receipt=None;Ok(true)
     }
 
+    fn clear_unencoded_jobs(&mut self) {
+        self.jobs.clear();self.source_jobs.clear();self.clear_material_pages();
+    }
     fn discard_unencoded_jobs(&mut self) {
-        self.jobs.clear();self.source_jobs.clear();self.clear_material_pages();self.used.fill(false);
+        self.clear_unencoded_jobs();self.used.iter_mut().for_each(scratch::Usage::reset);
         self.object_results.reset_used();self.exact_object_results.reset_used();
     }
 
@@ -2151,9 +2212,12 @@ impl Scene {
                         }
                         Job::Watercolor { coordinates, target, binding, record } => {
                             let (layout, pipeline) = &r.pipelines.watercolor_compute;
-                            let output = self.watercolor_outputs.get(target, || crate::bindings::group(
-                                &r.device, "watercolor output", layout, [wgpu::BindingResource::TextureView(target)],
-                            ));
+                            let output = match self.pool.iter().find(|page| page.view == *target) {
+                                Some(page) => page.scene_output(r, layout),
+                                None => output_bindings.get(target, || crate::bindings::group(
+                                    &r.device, "watercolor output", layout, [wgpu::BindingResource::TextureView(target)],
+                                )),
+                            };
                             pass.set_pipeline(pipeline);
                             pass.set_bind_group(0, &r.style_bind_group, &[*record * r.style_stride as u32]);
                             pass.set_bind_group(1, &coordinates.0, &[coordinates.1]);
@@ -2189,9 +2253,12 @@ impl Scene {
                         let size = target.texture().size();
                         let empty = [r.empty_view.clone(), r.empty_view.clone(), r.empty_view.clone(), r.empty_paper_view.clone()];
                         let input = compute_bindings.get(&empty, || compute_source_binding(r, inputs, &empty));
-                        let output = output_bindings.get(target, || crate::bindings::group(&r.device, "scene normal layers destination", layout, [
-                            wgpu::BindingResource::TextureView(target),
-                        ]));
+                        let output = match self.pool.iter().find(|page| page.view == *target) {
+                            Some(page) => page.scene_output(r, layout),
+                            None => output_bindings.get(target, || crate::bindings::group(&r.device, "scene normal layers destination", layout, [
+                                wgpu::BindingResource::TextureView(target),
+                            ])),
+                        };
                         pass.set_pipeline(pipeline);
                         pass.set_bind_group(0, &self.binding, &[((base + j) * self.stride) as u32]);
                         pass.set_bind_group(1, input, &[]);
@@ -2219,14 +2286,12 @@ impl Scene {
                     let Job::Draw { target, sources, data, clip, .. } = job else { unreachable!() };
                     pass.set_pipeline(pipeline);
                     let input = compute_bindings.get(sources, || compute_source_binding(r, inputs, sources));
-                    // All independent tiles in a complete image share this
-                    // destination. Source-specific state belongs in the input
-                    // group, not a new destination binding for every tile.
-                    let output = output_bindings.get(target, || {
-                        crate::bindings::group(&r.device, "scene normal layers destination", layout, [
+                    let output = match self.pool.iter().find(|page| page.view == *target) {
+                        Some(page) => page.scene_output(r, layout),
+                        None => output_bindings.get(target, || crate::bindings::group(&r.device, "scene normal layers destination", layout, [
                             wgpu::BindingResource::TextureView(target),
-                        ])
-                    });
+                        ])),
+                    };
                     pass.set_bind_group(0, &self.binding, &[((base + j) * self.stride) as u32]);
                     pass.set_bind_group(1, input, &[]);
                     pass.set_bind_group(2, output, &[]);

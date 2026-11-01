@@ -22,6 +22,9 @@ fn identity_source_window_clips_signed_bounds_without_interpolation_padding() {
 #[path = "presentation_tests.rs"]
 mod presentation;
 
+#[path = "scratch_tests.rs"]
+mod scratch_ownership;
+
 #[path = "source_progress_tests.rs"]
 pub(crate) mod source_progress;
 
@@ -347,7 +350,7 @@ fn native_graph_admits_a_full_4k_view_with_bounded_scratch() {
         assert!(scene.scale_sources.entries.values().all(|s| !s.levels.contains_key(&0)));
         let bytes = resident_bytes_with_pool(cache, scene);
         assert!(bytes <= crate::scene::scale::CACHE_BYTES, "layers={count}, bytes={bytes}");
-        assert!(scene.used.iter().all(|used| !used));
+        assert!(scene.used.iter().all(|used| !used.occupied()));
     }
 }
 
@@ -407,7 +410,7 @@ fn rotated_reduced_stacks_admit_bounded_source_working_storage() {
     let bytes = resident_bytes_with_pool(cache, scene);
     assert!(bytes <= crate::scene::scale::CACHE_BYTES, "resident bytes={bytes}");
 
-    assert!(scene.used.iter().all(|used| !used));
+    assert!(scene.used.iter().all(|used| !used.occupied()));
 }
 
 #[test]
@@ -464,7 +467,7 @@ fn streamed_sources_match_cached_pixels_through_masks_paint_and_admission_change
         let scene = streamed.scene.as_ref().unwrap();
         let bytes = resident_bytes_with_pool(full, scene);
         assert!(bytes <= crate::scene::scale::CACHE_BYTES, "state {state}, bytes {bytes}");
-        assert!(scene.used.iter().all(|used| !used));
+        assert!(scene.used.iter().all(|used| !used.occupied()));
 
         assert_presentation_mip(&streamed);
     }

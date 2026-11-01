@@ -67,7 +67,7 @@ fn root_deferred_rejects_unretained_and_changed_coordinate_inputs() {
             0=>*opacity=0.7,1=>*encode=true,2=>*preview=Some(r.empty_view.clone()),
             3=>*source=display_mips::Plan::window(plan.extent,plan.level,PixelRect::new(4,0,65,33)),
             4=>*view=root.clone(),5=>*view=Image::new(&r,plan,"unretained input").view,
-            6=>{let index=cache.allocate(&r,plan);*slot=Some(Slot::Cache(index));},
+            6=>{let index=cache.allocate(&r,plan).unwrap();*slot=Some(Slot::Cache(index));},
             7=>{let Value::Image {opacity,..}=&mut back else {unreachable!()};*opacity=0.5;},_=>{},
         }
         let mut frame=packet(doc.scene(),doc.composition().size);frame.blend_space=doc.composition().blend;

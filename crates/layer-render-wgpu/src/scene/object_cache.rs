@@ -70,6 +70,20 @@ impl ObjectCache {
     pub fn clear(&mut self) { while let Some(task) = self.tasks.pop_front() { self.retire(task); } self.damage.clear(); self.coordinates.clear(); }
     fn retire(&mut self, mut task: Task) { task.coordinates = None; self.retiring.push(task); }
     pub fn pending(&self) -> bool { self.tasks.iter().any(|task| !task.complete || !task.valid.load(Ordering::Acquire)) }
+    pub fn required_sources(&self, tiles: &mut Vec<(Arc<layer_core::color::source::SourceImage>, [u32; 2])>) -> Result<(), GpuRasterError> {
+        let Some(task) = self.tasks.iter().find(|task| !task.complete || !task.valid.load(Ordering::Acquire)) else { return Ok(()); };
+        let restarted = !task.valid.load(Ordering::Acquire);
+        let next = task.collection.as_ref().filter(|collection| restarted || collection.next)
+            .map(|collection| collection.request.child(0, collection.request.part(if restarted { 0 } else { collection.part }), task.job.output.clone())).transpose()?;
+        let job = next.as_ref().unwrap_or(&task.job);
+        if task.tiles.is_empty() || restarted || next.is_some() {
+            let (_, bounds, _) = working_set(job)?;
+            tiles.extend(page_coordinates(bounds).take(PREFETCH).map(|coordinate| (job.source.clone(), coordinate)));
+        } else {
+            tiles.extend(task.tiles.iter().skip(task.tile).take(PREFETCH).map(|&coordinate| (task.job.source.clone(), coordinate)));
+        }
+        Ok(())
+    }
     #[cfg(test)]
     pub fn work_progress(&self) -> (usize, usize, u64) {
         (self.tasks.len(), self.tasks.iter().filter(|task|task.complete).count(), self.tasks.iter().map(|task|task.step + task.tile as u64 * 1000000 + task.phase as u64 * 1000000000 + task.collection.as_ref().map_or(0,|c|c.part as u64 * 1000000000000)).sum())

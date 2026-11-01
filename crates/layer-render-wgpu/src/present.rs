@@ -1016,7 +1016,7 @@ impl ViewportPresenter {
         overview_only: bool,
     ) -> Result<(), GpuRasterError> {
         let Some([composite,coarse,next]) = renderer.presentation_views() else { return Ok(()); };
-        if renderer.display_backup.is_none() && let Some(cache) = &renderer.scale_display { cache.refresh_half(renderer, encoder, &mut self.uploads)?; }
+        if renderer.display_backup.is_none() && let Some(cache) = renderer.selected_display_cache() { cache.refresh_half(renderer, encoder, &mut self.uploads)?; }
         let lit = self.prepare_paper_lighting(renderer);
         let navigator = renderer.navigator.view().unwrap_or(&renderer.empty_view);
         let motion = renderer.display_motion();

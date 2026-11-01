@@ -42,6 +42,119 @@ fn value_equal_sources_with_distinct_storage_require_published_frame_backup() {
 }
 
 #[test]
+fn scene_page_output_binding_survives_frames_and_both_compute_layouts() {
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    for watercolor_first in [false, true] {
+        let mut scene = Scene::new(&r).unwrap();
+        let slot = scene.alloc(&r, wgpu::Color::WHITE).unwrap();
+        let layout = if watercolor_first { &r.pipelines.watercolor_compute.0 } else { &r.scene_pipelines.constant.0 };
+        let accepted = scene.pool[slot].scene_output(&r, layout).clone();
+        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        scene.encode_jobs(&mut r, &mut encoder).unwrap();
+        for _ in 0..3 { scene.begin_frame(); }
+        let target = scene.pool[slot].view.clone();
+        let binding = views_group(&r.device, "page binding watercolor inputs", &r.watercolor_layout,
+            [&r.empty_view; 5].into_iter().chain([&r.empty_scalar_view; 5]));
+        scene.jobs.push(Job::Clear(target.clone(), wgpu::Color::TRANSPARENT));
+        scene.jobs.push(Job::Watercolor { coordinates: (r.target_bind_group.clone(), 0), target,
+            binding, record: 0 });
+        scene.encode_jobs(&mut r, &mut encoder).unwrap();
+        assert_eq!(scene.pool[slot].scene_output(&r, &r.scene_pipelines.constant.0), &accepted);
+        assert!(scene.output_bindings.entries.is_empty(), "page bindings have one owner");
+        let (_texture, external) = create_color_target(&r.device, [PAGE_SIZE; 2], "external binding target");
+        scene.jobs.push(Job::Clear(external.clone(), wgpu::Color::WHITE));
+        scene.encode_jobs(&mut r, &mut encoder).unwrap();
+        assert!(scene.output_bindings.entries.contains_key(&external), "external images retain the bounded fallback");
+        r.uploads.finish(&encoder);
+        encoder.submit(&r.queue);
+        crate::test_support::complete(&r);
+    }
+}
+
+#[test]
+fn deferred_fine_objects_keep_coarse_presentation_without_backup() {
+    let extent = [1024, 512];
+    let mut artwork = Artwork::new(extent).unwrap();
+    let mut object = ImageObject::new(layer_core::authored::Image::new(rgba8_source([512; 2], |x, y|
+        [40 + (x / 32) as u8 * 9, 30 + (y / 32) as u8 * 11, 150, 255])));
+    object.affine = Affine64([1., 0., 0., 1., 512., 0.]);
+    object.interpolation = ImageInterpolation::Nearest;
+    let object = artwork.objects.insert(PortableId::random(), object).unwrap();
+    let owner = artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Objects(object), "Image")).unwrap();
+    let stack = artwork.compositions.get(artwork.root).unwrap().result;
+    artwork.stacks.get_mut(stack).unwrap().entries = vec![owner];
+    let mut doc = Document::from_artwork(artwork).unwrap();
+    add_fill(&mut doc, layer_core::color::RgbColor::WHITE);
+    let coarse = ViewState { width_px: 256, height_px: 128, document_to_surface: [0.25, 0., 0., 0.25, 0., 0.] };
+    let fine = ViewState { width_px: 640, height_px: 384, document_to_surface: [1., 0., 0., 1., -128., -64.] };
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    crate::test_support::submit_settled(&mut r, FramePacket { view: coarse, ..packet(doc.scene(), extent) });
+    let mut presenter = crate::test_support::float_presenter(&r);
+    let expected = present(&r, &mut presenter, fine);
+    let geometry = r.display_geometry().unwrap().clone();
+    let frame = FramePacket { view: fine, composite_all: false, ..packet(doc.scene(), extent) };
+    let request = request(&r, frame).unwrap();
+    assert_eq!(request.plan.level, 0);
+    let (cache, _) = Cache::select(r.scale_display.take(), &r, frame, request, true);
+    assert!(cache.spare.as_ref().is_some_and(|coarse| coarse.output_complete()));
+    r.scale_display = Some(cache);
+    r.moving_images = Default::default();
+    let mut scene = r.scene.take().unwrap();
+    scene.object_results.clear();
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    let result = scene.compose(&mut r, frame, &[], PixelRect::EMPTY, &mut encoder, None);
+    assert!(matches!(result, Err(GpuRasterError::DeferredObjectWork)));
+    r.object_deferred = true;
+    r.scene = Some(scene);
+    r.uploads.finish(&encoder);
+    encoder.submit(&r.queue);
+    r.wait_idle().unwrap();
+    let cache = r.scale_display.as_ref().unwrap();
+    assert!(!cache.valid.is_empty() && !cache.output_complete(), "fine output contains only a completed prefix");
+    assert!(r.display_backup.is_none());
+    assert!(r.has_presentable_frame());
+    assert_eq!(r.display_geometry(), Some(&geometry));
+    assert_eq!(present(&r, &mut presenter, fine), expected, "coarse geometry follows the new camera without exposing fine prefixes");
+    {
+        let cache = r.scale_display.as_mut().unwrap();
+        cache.overview = cache.spare.take();
+    }
+    assert_eq!(present(&r, &mut presenter, fine), expected, "a complete overview is also presentable");
+    let accepted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    r.scale_display.as_mut().unwrap().overview.as_mut().unwrap().submission_valid = Some(accepted.clone());
+    assert!(!r.has_presentable_frame(), "abandoned coarse writes stay pending");
+    accepted.store(true, std::sync::atomic::Ordering::Release);
+    {
+        let cache = r.scale_display.as_mut().unwrap();
+        cache.unchanged = false;
+    }
+    assert!(!r.has_presentable_frame(), "coarse pixels from another artwork generation stay pending");
+    {
+        let cache = r.scale_display.as_mut().unwrap();
+        cache.unchanged = true;
+        cache.overview.as_mut().unwrap().valid.clear();
+    }
+    assert!(!r.has_presentable_frame(), "an incomplete overview stays pending");
+    {
+        let cache = r.scale_display.as_mut().unwrap();
+        let overview = cache.overview.as_mut().unwrap();
+        overview.valid.extend(page_coordinates(overview.plan.bounds));
+    }
+    let previous = r.scale_display.take();
+    let (cache, _) = Cache::select(previous, &r, frame, request, false);
+    r.scale_display = Some(cache);
+    let previous = r.scale_display.take();
+    let (cache, _) = Cache::select(previous, &r, frame, request, true);
+    r.scale_display = Some(cache);
+    assert!(!r.has_presentable_frame(), "deferred frames cannot revalidate an overview from an older artwork generation");
+    crate::test_support::submit_settled(&mut r, frame);
+    assert!(!r.object_deferred);
+    let mut reference = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    crate::test_support::submit_settled(&mut reference, frame);
+    assert_eq!(display_pixels(&r), display_pixels(&reference), "settling restores the exact fine output");
+}
+
+#[test]
 fn reduced_photo_larger_than_decoded_cache_publishes_only_after_prefixes_finish() {
     let doc = photo(0);
     let mut previous = doc.clone();

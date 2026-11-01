@@ -335,28 +335,29 @@ impl Scene {
     pub(super) fn object_tile(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, owner: OccurrenceHandle,
         coordinate: [u32; 2],
     ) -> Result<usize, GpuRasterError> {
-        if packet.scene.vector_layer(owner).is_some() {return Ok(self.vector_tile(r,packet,owner,coordinate));}
+        if packet.scene.vector_layer(owner).is_some() {return Ok(self.vector_tile(r,packet,owner,coordinate)?);}
         let content=self.object_spatial.content(packet.scene,owner).ok_or(GpuRasterError::InvalidExtent)?;
         let window=ObjectWindow {origin:coordinate.map(|v|f64::from(v*PAGE_SIZE)),side:1.,size:[PAGE_SIZE;2]};
         let request=self.collection_job(r,packet,owner,content,window);
-        if request.keys.is_empty() {return Ok(self.alloc(r,wgpu::Color::TRANSPARENT));}
+        if request.keys.is_empty() {return Ok(self.alloc(r,wgpu::Color::TRANSPARENT)?);}
         if inline_sampling(r) && !self.object_display && !self.object_query {return self.inline_object_tile(r,&request);}
         let canonical=if self.object_display||self.object_query {self.object_results.resolve_collection(r,packet.scene,&request)?}
             else {self.exact_object_results.resolve_collection(r,packet.scene,&request)?};
         if let Some(view)=canonical {
-            let output=self.reserve(r);
+            let output=self.reserve(r)?;
             self.jobs.push(Job::Copy {source:view.texture().clone(),source_origin:[0;2],destination:self.pool[output].texture.clone(),origin:[0;2],width:PAGE_SIZE,height:PAGE_SIZE});
             return Ok(output);
         }
         let Some((sources,objects))=(if self.object_display {Self::collection_preview(r,&request)?} else {None}) else {
             self.discard_unencoded_jobs();return Err(GpuRasterError::DeferredObjectWork);
         };
-        let output=self.reserve(r);
-        let scratch=(crate::object_sampling::CollectionPreview::passes(&objects)>1).then(||self.reserve(r));
+        let output=self.reserve(r)?;
+        let held=self.own(output);
+        let scratch=(crate::object_sampling::CollectionPreview::passes(&objects)>1).then(||self.reserve(r)).transpose()?;
         self.jobs.push(Job::Collection(Box::new(crate::object_sampling::CollectionPreview {sources,objects,size:window.size,
             output:self.pool[output].view.clone(),scratch:scratch.map(|slot|self.pool[slot].view.clone()),encode:packet.blend_space==layer_core::BlendSpace::Perceptual})));
         if let Some(slot)=scratch {self.free(slot);}
-        Ok(output)
+        Ok(self.keep(held))
     }
     fn inline_object_tile(&mut self, r: &WgpuRasterizer, request: &CollectionJob) -> Result<usize, GpuRasterError> {
         let job=request.child(0,request.part(0),r.empty_view.clone())?;
@@ -372,7 +373,7 @@ impl Scene {
             self.jobs.push(Job::Sampling(Box::new(SamplingStep::Contribute {source:tile.view,origin:origin.map(|v|v as i32),extent})));
         }
         self.jobs.push(Job::Sampling(Box::new(SamplingStep::Normalize)));
-        let output=self.reserve(r);
+        let output=self.reserve(r)?;
         if request.blend==layer_core::BlendSpace::Perceptual {
             let mut data=[0.;32];data[..4].copy_from_slice(&[0.,0.,PAGE_SIZE as f32,PAGE_SIZE as f32]);
             data[4..8].copy_from_slice(&[PAGE_SIZE as f32,PAGE_SIZE as f32,0.,0.]);

@@ -121,7 +121,7 @@ impl MovingImages {
                     self.allocation_waiting=true;
                     return Ok(MipPlan {targets:Vec::new(),bytes:self.storage_bytes(),waiting:true});
                 }
-                if let Some(index)=self.entries.iter().enumerate().filter(|(_,entry)|entry.image.plan.level<display_mips::MAX_LEVEL).max_by_key(|(_,entry)|entry.storage_bytes()).map(|(index,_)|index) {
+                if let Some(index)=self.entries.iter().enumerate().max_by_key(|(_,entry)|entry.storage_bytes()).map(|(index,_)|index) {
                     let entry=self.entries.swap_remove(index);
                     self.evictions+=1;
                     let complete=Arc::new(AtomicBool::new(false));
@@ -770,6 +770,28 @@ mod tests {
         assert!(images.lookup(unadmitted.id,&unadmitted.source,1).is_none() && images.entries.is_empty());
         assert!(!images.pending());
         encoder.submit(&r.queue);
+    }
+    #[test]
+    fn canonical_sources_can_retire_the_last_overview_without_losing_its_charge() {
+        let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let mut images=MovingImages::default();
+        let mut request=moving_request();request.level=display_mips::MAX_LEVEL;
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        let plan=images.plan(&r,std::slice::from_ref(&request),u64::MAX,&mut encoder).unwrap();
+        images.allocate(&r,plan);
+        assert_eq!(images.entries[0].image.plan.level,display_mips::MAX_LEVEL);
+        let bytes=images.storage_bytes();
+        let plan=images.plan(&r,std::slice::from_ref(&request),0,&mut encoder).unwrap();
+        assert!(plan.waiting && plan.targets.is_empty());
+        assert!(images.entries.is_empty());
+        assert_eq!(plan.bytes,bytes);
+        assert_eq!(images.storage_bytes(),bytes);
+        drop(encoder);
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        let plan=images.plan(&r,&[request],0,&mut encoder).unwrap();
+        assert!(!plan.waiting && plan.targets.is_empty());
+        assert_eq!(plan.bytes,0);
+        assert_eq!(images.storage_bytes(),0);
     }
 }
 

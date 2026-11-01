@@ -109,7 +109,7 @@ fn ordered_cold_fusion_retains_all_jobs_and_source_ranges_until_prepared() {
     let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
     scene.prepare_region(&mut r, frame, (region, region.into()), region, false, &mut encoder).unwrap();
     let image = scene.group(&r, frame, None, [0, 0]).unwrap();
-    let image = scene.converted(&r, image, Convert::linear(frame));
+    let image = scene.converted(&r, image, Convert::linear(frame)).unwrap();
     scene.copy_window_tile(image, &destination, [0, 0]);
     assert!(scene.jobs.iter().any(|job| matches!(job, Job::Effect {prepared, ..} if !prepared.pipeline.ready())));
     let jobs: Vec<_> = scene.jobs.iter().map(std::mem::discriminant).collect();

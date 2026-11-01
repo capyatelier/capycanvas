@@ -187,7 +187,7 @@ fn independent_pointwise_tiles_share_a_compute_pass() {
     r.queue.write_texture(image.texture.as_image_copy(), &bytes,
         wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(PAGE_SIZE * 16), rows_per_image: Some(PAGE_SIZE) }, image.texture.size());
     let outputs: Vec<_> = [Convert::None, Convert::Encode, Convert::Decode].into_iter().map(|convert| {
-        let output = scene.alloc(&r, wgpu::Color::TRANSPARENT);
+        let output = scene.alloc(&r, wgpu::Color::TRANSPARENT).unwrap();
         scene.draw(&r, output, image.view.clone(), None, [0., 0., PAGE_SIZE as f32, PAGE_SIZE as f32],
             [1., 1., 0., 0.], false, convert);
         (output, convert)
@@ -225,12 +225,12 @@ fn normal_composition_converts_in_its_final_destination() {
         wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(PAGE_SIZE * 16), rows_per_image: Some(PAGE_SIZE) }, image.texture.size());
     for count in [1, 2] {
         scene.begin_frame();
-        let output = scene.alloc(&r, wgpu::Color::TRANSPARENT);
+        let output = scene.alloc(&r, wgpu::Color::TRANSPARENT).unwrap();
         for _ in 0..count {
             scene.draw(&r, output, image.view.clone(), None, [0., 0., PAGE_SIZE as f32, PAGE_SIZE as f32],
                 [7., 0.7, 1., 0.], true, Convert::Encode);
         }
-        let output = scene.converted(&r, output, Convert::DecodeStore);
+        let output = scene.converted(&r, output, Convert::DecodeStore).unwrap();
         assert_eq!(scene.jobs.iter().filter(|j| matches!(j, Job::Draw { .. })).count(), 1,
             "normal layers and their output conversion require one destination write");
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
@@ -259,7 +259,7 @@ fn complete_compute_composition_replaces_the_clear_but_partial_writes_preserve_i
         image.texture.size());
     for width in [PAGE_SIZE, PAGE_SIZE / 2] {
         scene.begin_frame();
-        let output = scene.alloc(&r, wgpu::Color { r: 0.3, g: 0.4, b: 0.6, a: 1. });
+        let output = scene.alloc(&r, wgpu::Color { r: 0.3, g: 0.4, b: 0.6, a: 1. }).unwrap();
         let region = PixelRect::new(0, 0, width, PAGE_SIZE);
         scene.draw(&r, output, image.view.clone(), None, [0., 0., width as f32, PAGE_SIZE as f32],
             [7., 1., 1., 0.], true, Convert::None);

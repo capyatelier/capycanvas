@@ -375,7 +375,8 @@ pub(crate) struct Cache {
     pub evaluation: Evaluation,
     pub plan: display_mips::Plan,
     output: Vec<Image>,
-    used: Vec<bool>,
+    used: Vec<scratch::Usage>,
+    scratch_exhausted: bool,
     pixels: hierarchy::Pixels,
     half: Option<hierarchy::Half>,
     half_stale: std::sync::Mutex<PixelRect>,
@@ -808,6 +809,7 @@ impl Cache {
         }
         if !unchanged {
             old.spare = None;
+            if let Some(overview) = &mut old.overview { overview.ready = false; }
             old.residency_checked = false;
         }
         if matches(&old) {
@@ -880,6 +882,7 @@ impl Cache {
             overview, shifted: None, valid: BTreeSet::new(), refined: BTreeSet::new(), approximate: BTreeSet::new(), preparing: false, zoomed: false, exact_tile: None,
             unchanged: false, graph: Default::default(), transform: r.transform_preview.clone(),
             resume: None, split: false, native_batch: SOURCE_SLOTS, deferred_changed: PixelRect::EMPTY,
+            scratch_exhausted: false,
         }
     }
     fn geometry(r: &WgpuRasterizer, plan: display_mips::Plan, coarse: u32) -> wgpu::Buffer {
@@ -1031,6 +1034,15 @@ impl Cache {
     fn output_complete(&self) -> bool {
         self.ready && self.approximate.is_empty() && (self.placed.is_some() || page_coordinates(self.plan.bounds).all(|coordinate| self.valid.contains(&coordinate)))
     }
+    pub(crate) fn deferred_presentation(&self) -> Option<&Self> {
+        if !self.unchanged { return None; }
+        [self.overview.as_deref(), self.spare.as_deref()].into_iter().flatten().find(|cache|
+            cache.plan.extent == self.plan.extent && cache.plan.level > self.plan.level
+                && cache.plan.bounds == PixelRect::full(self.plan.extent)
+                && cache.placed.is_none() && !self.pixels.shares_levels(&cache.pixels) && cache.output_complete()
+                && cache.resume.as_ref().is_none_or(Vec::is_empty)
+                && cache.submission_valid.as_ref().is_none_or(|valid| valid.load(std::sync::atomic::Ordering::Acquire)))
+    }
 
     pub fn view(&self) -> &wgpu::TextureView {
         self.placed.as_ref().map_or_else(|| &self.pixels.root().expect("composed output").view, |root| root.view())
@@ -1140,16 +1152,35 @@ impl Cache {
             + self.half.as_ref().map_or(0, hierarchy::Half::bytes)
             + self.resident_bytes()
     }
-    fn allocate(&mut self, r: &WgpuRasterizer, plan: display_mips::Plan) -> usize {
-        let slot = self.used.iter().position(|used| !used).unwrap_or_else(|| {
+    pub(crate) fn scratch_images(&self) -> usize { self.graph.root.as_ref().map_or(0, |root| root.cost().1 as usize + 1) }
+    pub(crate) fn trim_scratch(&mut self) -> Vec<Image> {
+        let keep = if std::mem::take(&mut self.scratch_exhausted) { 0 } else { self.scratch_images() };
+        let mut retired = Vec::new();
+        while self.output.len() > keep && self.used.last().is_some_and(|usage| !usage.occupied()) {
+            retired.push(self.output.pop().unwrap());
+            self.used.pop();
+        }
+        for cache in [&mut self.overview, &mut self.spare, &mut self.shifted].into_iter().flatten() {
+            retired.extend(cache.trim_scratch());
+        }
+        retired
+    }
+    fn allocate(&mut self, r: &WgpuRasterizer, plan: display_mips::Plan) -> Result<scratch::Lease, GpuRasterError> {
+        let slot = self.used.iter().enumerate().position(|(index, used)| !used.occupied() && self.output[index].plan.size == plan.size).unwrap_or(self.output.len());
+        let bytes = plan.size.map(u64::from).into_iter().product::<u64>() * 16;
+        let retained = self.output.iter().enumerate().filter(|(i,_)| *i != slot).map(|(_,image)| texture_bytes(&image.texture)).sum::<u64>();
+        let limit = CACHE_BYTES.saturating_sub(r.retired_display_bytes.load(std::sync::atomic::Ordering::Acquire));
+        if retained.saturating_add(bytes) > limit {
+            self.scratch_exhausted = true;
+            return Err(GpuRasterError::DeferredObjectWork);
+        }
+        if slot == self.output.len() {
             self.output.push(Image::new(r, plan, "display composition level"));
-            self.used.push(false);
-            self.used.len() - 1
-        });
-        if self.output[slot].plan.size != plan.size { self.output[slot] = Image::new(r, plan, "display composition level"); }
+            self.used.push(Default::default());
+        }
         self.output[slot].plan = plan;
-        self.used[slot] = true;
-        slot
+        self.used[slot].reserve();
+        Ok(self.used[slot].lease(slot))
     }
     pub(super) fn render(
         &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
@@ -1284,8 +1315,7 @@ impl Cache {
         let mut deferred = Vec::new();
         while let Some(region) = pending.pop_front() {
             let [x, y, width, height] = paint_transform::texel_rect(region.window_local(output_bounds), side);
-            self.used.fill(false);
-            let queued = (commands.jobs.len(), root_compositions.len());
+            let queued = (commands.jobs.len(), root_compositions.len(), scene.jobs.len(), scene.source_jobs.len());
             scene.decode_wait = false;
             r.source_tiles.borrow_mut().begin_unit();
             let placed = (|| -> Result<bool, GpuRasterError> {
@@ -1323,6 +1353,8 @@ impl Cache {
                 Err(GpuRasterError::DeferredObjectWork) if resumable => {
                     commands.jobs.truncate(queued.0);
                     root_compositions.truncate(queued.1);
+                    scene.jobs.truncate(queued.2);
+                    scene.source_jobs.truncate(queued.3);
                     if overflowed && !self.split {
                         self.split = true;
                         let rest: Vec<_> = pending.drain(..).collect();
@@ -1369,8 +1401,7 @@ impl Cache {
         if let Some(halves) = self.graph.prepared.clone() {
             let halves: Vec<_> = halves.into_iter().filter(|half| self.graph.caches(half)).collect();
             for region in prepared {
-                self.used.fill(false);
-                let mut compositor = Evaluator { cache: self, commands, scene, packet, r, encoder, region: region.into(), input, tiled, source_plans: &mut source_plans, root_compositions: &mut root_compositions, defer_root: false };
+                    let mut compositor = Evaluator { cache: self, commands, scene, packet, r, encoder, region: region.into(), input, tiled, source_plans: &mut source_plans, root_compositions: &mut root_compositions, defer_root: false };
                 for half in &halves { compositor.evaluate(half)?; }
             }
             commands.flush(r, encoder)?;
@@ -1591,7 +1622,7 @@ impl Placed {
 struct TransformSource { id: SourceTarget, placement: layer_core::Affine, opacity: f32, backdrop: [f32; 4], encode: bool }
 
 #[derive(Clone)]
-enum Slot { Root, Cache(usize), Scene(usize), Scenes([usize; 2]), Decoded(Arc<()>) }
+enum Slot { Root, Cache(scratch::Lease), Scene(scratch::Lease), Scenes([scratch::Lease; 2]), Decoded(Arc<()>) }
 
 #[derive(Clone)]
 struct Target {
@@ -1656,23 +1687,21 @@ impl Evaluator<'_> {
             display_mips::Plan::window(self.cache.plan.extent, self.cache.plan.level, PixelRect::new(x, y, x + span, y + span))
         } else { self.input }
     }
-    fn target(&mut self) -> Target {
+    fn target(&mut self) -> Result<Target, GpuRasterError> {
         let plan = self.working_plan();
         if self.tiled {
-            let slot = self.scene.reserve(self.r);
-            Target { view: self.scene.pool[slot].view.clone(), slot: Some(Slot::Scene(slot)), plan }
+            let slot = self.scene.reserve(self.r)?;
+            Ok(Target { view: self.scene.pool[slot].view.clone(), slot: Some(Slot::Scene(self.scene.used[slot].lease(slot))), plan })
         } else {
-            let slot = self.cache.allocate(self.r, plan);
-            Target { view: self.cache.output[slot].view.clone(), slot: Some(Slot::Cache(slot)), plan }
+            let slot = self.cache.allocate(self.r, plan)?;
+            Ok(Target { view: self.cache.output[slot.index].view.clone(), slot: Some(Slot::Cache(slot)), plan })
         }
     }
     fn release(&mut self, slot: Option<Slot>) {
         match slot {
-            Some(Slot::Cache(slot)) => self.cache.used[slot] = false,
-            Some(Slot::Scene(slot)) => self.scene.free(slot),
-            Some(Slot::Scenes(slots)) => for slot in slots { self.scene.free(slot); },
-            Some(Slot::Decoded(lease)) => drop(lease),
-            Some(Slot::Root) | None => {}
+            Some(Slot::Cache(lease) | Slot::Scene(lease)) => drop(lease),
+            Some(Slot::Scenes(leases)) => drop(leases),
+            slot => drop(slot),
         }
     }
     fn texels(&self, plan: display_mips::Plan) -> [u32; 4] {
@@ -1696,8 +1725,8 @@ impl Evaluator<'_> {
         let pages: Vec<_> = page_coordinates(local).collect();
         let mut plan = display_mips::Plan::window(self.packet.document_extent, self.cache.plan.level, local);
         plan.doc_bounds = region;
-        let slot = self.cache.allocate(self.r, plan);
-        let view = self.cache.output[slot].view.clone();
+        let slot = self.cache.allocate(self.r, plan)?;
+        let view = self.cache.output[slot.index].view.clone();
         let packet = FramePacket { scene: self.packet.scene.with_offset64(region.min.map(|n| -(n as f64))), document_extent: size, ..self.packet };
         let placement = [origin[0] - region.min[0], origin[1] - region.min[1]];
         let local_plan = display_mips::Plan::window(size, self.cache.plan.level, local);
@@ -1708,7 +1737,7 @@ impl Evaluator<'_> {
     }
     fn vector(&mut self, owner: OccurrenceHandle, moving: Option<&super::vectors::Moving>, output: Option<Target>, append: bool) -> Result<Value, GpuRasterError> {
         self.commands.flush(self.r, self.encoder)?;
-        let mut target = self.target();
+        let mut target = self.target()?;
         let side = 1u32 << target.plan.level;
         let bounds = self.region.intersect(target.plan.doc_bounds).aligned(side);
         let size = bounds.size().map_err(|_| GpuRasterError::ExtentUnsupported)?;
@@ -1783,7 +1812,7 @@ impl Evaluator<'_> {
             }
             self.scene.vectors.replace_motion(super::vectors::MotionImage { key, window: plan.doc_bounds, image, revision: 0 });
         }
-        let mut target = self.target();
+        let mut target = self.target()?;
         let size = window.size().map_err(|_| GpuRasterError::ExtentUnsupported)?;
         target.plan.doc_bounds = window; target.plan.size = size.map(|v| v.div_ceil(side)); target.plan.bounds = PixelRect::full(size);
         self.r.encode_clear(self.encoder, &target.view, "vector motion");
@@ -1797,7 +1826,7 @@ impl Evaluator<'_> {
         let Some((_, path, bounds)) = self.scene.scale_sources.vector_preview.clone().filter(|(o, ..)| *o == owner) else { return self.materialize(Value::Color([0.; 4]), output) };
         if bounds.intersect(self.region).is_empty() { return self.materialize(Value::Color([0.; 4]), output); }
         self.commands.flush(self.r, self.encoder)?;
-        let mut target = self.target();
+        let mut target = self.target()?;
         let side = 1u32 << target.plan.level;
         let window = self.region.intersect(target.plan.doc_bounds).aligned(side);
         let size = window.size().map_err(|_| GpuRasterError::ExtentUnsupported)?;
@@ -1814,7 +1843,7 @@ impl Evaluator<'_> {
     }
     fn objects(&mut self,content:&object_spatial::Content,moving:bool,output:Option<Target>)->Result<Value,GpuRasterError> {
         self.commands.flush(self.r,self.encoder)?;
-        let mut target=self.target();let side=1u32<<target.plan.level;
+        let mut target=self.target()?;let side=1u32<<target.plan.level;
         let bounds=self.region.intersect(target.plan.doc_bounds).aligned(side);
         let size=bounds.size().map_err(|_|GpuRasterError::ExtentUnsupported)?;
         target.plan.doc_bounds=bounds;target.plan.size=size.map(|v|v.div_ceil(side));target.plan.bounds=PixelRect::full(size);
@@ -1842,7 +1871,7 @@ impl Evaluator<'_> {
             return self.materialize(Value::Image {view:target.view,slot:target.slot,opacity:1.,plan,preview:None,encode:false},output);
         }
         let Some((sources,objects))=(if moving {preview} else {Scene::collection_preview(self.r,&request)?}) else {self.release(target.slot);return Err(GpuRasterError::DeferredObjectWork);};
-        let scratch=(crate::object_sampling::CollectionPreview::passes(&objects)>1).then(||self.target());
+        let scratch=(crate::object_sampling::CollectionPreview::passes(&objects)>1).then(||self.target()).transpose()?;
         self.scene.jobs.push(Job::Collection(Box::new(crate::object_sampling::CollectionPreview {sources,objects,size:plan.size,output:target.view.clone(),
             scratch:scratch.as_ref().map(|scratch|scratch.view.clone()),encode:self.packet.blend_space==layer_core::BlendSpace::Perceptual})));
         self.encode_scene_jobs()?;
@@ -1888,10 +1917,12 @@ impl Evaluator<'_> {
                 self.commands.flush(self.r, self.encoder)?;
                 if self.r.watercolor_style(id, self.packet.dab_batches).is_none() {
                     let (color, flow) = self.scene.placed_color(self.r, self.packet.scene, id, origin, tile)?;
+                    let color = self.scene.own(color);
+                    let flow = flow.map(|flow| self.scene.own(flow));
                     self.encode_scene_jobs()?;
-                    let view = self.scene.pool[color].view.clone();
-                    let preview = flow.map(|flow| self.scene.pool[flow].view.clone());
-                    let slot = flow.map_or(Slot::Scene(color), |flow| Slot::Scenes([color, flow]));
+                    let view = self.scene.pool[color.index].view.clone();
+                    let preview = flow.as_ref().map(|flow| self.scene.pool[flow.index].view.clone());
+                    let slot = match flow {Some(flow) => Slot::Scenes([color, flow]),None => Slot::Scene(color)};
                     return Ok(Value::Image { view, slot: Some(slot), opacity: 1., plan: self.working_plan(), preview, encode });
                 }
                 self.scene.paint_tile(self.r, self.packet, handle, tile)?
@@ -1900,8 +1931,9 @@ impl Evaluator<'_> {
                 let (mask, source) = self.packet.scene.mask(handle).unwrap();
                 self.scene.mask_at(self.r, mask, source, origin, tile)?
             };
+            let slot = self.scene.own(slot);
             self.encode_scene_jobs()?;
-            return Ok(Target { view: self.scene.pool[slot].view.clone(), slot: Some(Slot::Scene(slot)), plan: self.working_plan() }.value().with_encoding(encode));
+            return Ok(Target { view: self.scene.pool[slot.index].view.clone(), slot: Some(Slot::Scene(slot)), plan: self.working_plan() }.value().with_encoding(encode));
         }
         if plan.bounds.is_empty() { return Ok(Value::Color([outside; 4])); }
         let encode = encode && self.scene.scale_sources.entries[&id].blend_space == layer_core::BlendSpace::Linear;
@@ -1915,7 +1947,7 @@ impl Evaluator<'_> {
                 return Ok(Value::Image { view: level.image.view.clone(), slot: None, opacity: 1., plan: frame.placed(level.image.plan), preview: None, encode });
             }
             self.commands.flush(self.r, self.encoder)?;
-            let target = self.target();
+            let target = self.target()?;
             let mut missing = page_coordinates(local).collect();
             if frame.shift == [0; 2] {
                 self.scene.scale_sources.entries[&id].derive_pages(self.commands, self.r, self.encoder, target.plan, &target.view, &mut missing)?;
@@ -1954,7 +1986,7 @@ impl Evaluator<'_> {
     fn transform(&mut self, source: TransformSource, output: Option<Target>) -> Result<Value, GpuRasterError> {
         if output.as_ref().is_some_and(|target|matches!(target.slot,Some(Slot::Root))) { self.commands.flush_root(self.scene,self.r,self.encoder,self.root_compositions)?; }
         self.commands.flush(self.r, self.encoder)?;
-        let Target { view, slot, plan } = output.unwrap_or_else(|| self.target());
+        let Target { view, slot, plan } = match output { Some(target) => target, None => self.target()? };
         let side = 1 << self.cache.plan.level;
         let region = self.region;
         let display = pixel_transform::DisplayLevel { side, extent: self.cache.plan.extent, opacity: source.opacity, backdrop: source.backdrop, encode: source.encode };
@@ -1969,7 +2001,7 @@ impl Evaluator<'_> {
         if let Value::Transform(source) = value { return self.transform(source, output); }
         let Value::Placed(placed) = value else { return Ok(value); };
         if output.as_ref().is_some_and(|target|matches!(target.slot,Some(Slot::Root))) { self.commands.flush_root(self.scene,self.r,self.encoder,self.root_compositions)?; }
-        let Target { view, slot, plan } = output.unwrap_or_else(|| self.target());
+        let Target { view, slot, plan } = match output { Some(target) => target, None => self.target()? };
         let texels = self.texels(plan);
         let values = placed.record(plan, texels)?;
         self.commands.push(self.r, self.encoder, DisplayJob::Resample {
@@ -2001,7 +2033,7 @@ impl Evaluator<'_> {
         let front = self.resample(front, None)?;
         let front = if matches!(front, Value::Color(c) if c != [0.; 4]) { self.materialize(front, None)? } else { front };
         let back = self.resample(back, None)?;
-        let Target { view, slot, plan } = output.unwrap_or_else(|| self.target());
+        let Target { view, slot, plan } = match output { Some(target) => target, None => self.target()? };
         let [x, y, width, height] = self.texels(plan);
         let deferred = if matches!(slot, Some(Slot::Root)) {
             let retained = |input: &Value| matches!(input,

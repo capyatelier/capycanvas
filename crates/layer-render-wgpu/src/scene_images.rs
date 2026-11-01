@@ -171,8 +171,8 @@ impl Scene {
         destination: &Image,
         tile: [u32; 2],
         convert: Convert,
-    ) {
-        let output = self.converted(r, output, convert);
+    ) -> Result<(), GpuRasterError> {
+        let output = self.converted(r, output, convert)?;
         let bounds = destination.plan.bounds;
         let extent = [bounds.width(), bounds.height()];
         let view = &self.pool[output].view;
@@ -229,6 +229,7 @@ impl Scene {
         } else {
             self.copy_window_tile(output, destination, tile);
         }
+        Ok(())
     }
     pub(super) fn image_tile(
         &mut self,
@@ -236,8 +237,8 @@ impl Scene {
         view: wgpu::TextureView,
         bounds: DocRect,
         tile: [u32; 2],
-    ) -> usize {
-        let out = self.reserve(r);
+    ) -> Result<usize, GpuRasterError> {
+        let out = self.reserve(r)?;
         self.draw(
             r,
             out,
@@ -253,7 +254,7 @@ impl Scene {
             false,
             Convert::None,
         );
-        out
+        Ok(out)
     }
     pub(super) fn copy_window_tile(
         &mut self,
@@ -494,7 +495,7 @@ impl Scene {
                 };
             if cached.input_owned && !input_dirty.is_empty() {
                 self.jobs.clear();
-                self.used.fill(false);
+                self.used.iter_mut().for_each(scratch::Usage::reset);
                 self.stop_before = Some(handle);
                 if effect.program.kind == layer_core::EffectKind::Generator {
                     self.jobs.push(Job::Clear(
@@ -523,7 +524,7 @@ impl Scene {
                         self.decode_wait = false;
                         let result = (|| {
                             let pixels = self.group(r, packet, layer_core::composite_input_scope(scene, handle), tile)?;
-                            self.capture_tile(r, pixels, &cached.input, tile, input);
+                            self.capture_tile(r, pixels, &cached.input, tile, input)?;
                             self.encode_jobs(r, encoder)
                         })();
                         let pages = &mut cached.input_gather.as_mut().unwrap().pages;
@@ -554,7 +555,7 @@ impl Scene {
                             return Err(error);
                         }
                         self.object_results.flush_retired(encoder); self.exact_object_results.flush_retired(encoder);
-                        self.clear_material_pages(); self.used.fill(false);
+                        self.clear_material_pages(); self.used.iter_mut().for_each(scratch::Usage::reset);
                     }
                     cached.input_gather = None;
                 }
@@ -564,7 +565,7 @@ impl Scene {
             }
             if !output_dirty.is_empty() {
                 self.jobs.clear();
-                self.used.fill(false);
+                self.used.iter_mut().for_each(scratch::Usage::reset);
                 if let Some((mask,coverage)) = scene.mask(handle).filter(|(m,_)| m.enabled) {
                     let mask_offset = world_offset(scene, handle, true);
                     let mask_reset = !cached.valid

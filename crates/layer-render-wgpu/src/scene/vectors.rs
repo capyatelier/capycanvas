@@ -334,13 +334,13 @@ impl Scene {
     pub(super) fn vector_palette(r: &WgpuRasterizer, packet: FramePacket<'_>) -> (layer_core::color::RgbSpace, layer_core::BlendSpace) {
         (r.device.working_space(), packet.blend_space)
     }
-    pub(super) fn vector_tile(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, owner: OccurrenceHandle, coordinate: [u32; 2]) -> usize {
+    pub(super) fn vector_tile(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, owner: OccurrenceHandle, coordinate: [u32; 2]) -> Result<usize, GpuRasterError> {
         let origin = coordinate.map(|v| i64::from(v * PAGE_SIZE));
         let preview = r.vector_preview.as_ref().filter(|p| self.object_display && p.owner == owner).map(|p| p.path.clone());
         let batch = self.vectors.batch_with(packet.scene, owner, None, origin, 0, [PAGE_SIZE; 2], packet.document_extent, Self::vector_palette(r, packet), preview.as_ref(), false);
-        let output = self.alloc(r, wgpu::Color::TRANSPARENT);
+        let output = self.alloc(r, wgpu::Color::TRANSPARENT)?;
         if batch.tile_count() > 0 { self.jobs.push(Job::Vector(Box::new(VectorJob { batch, output: self.pool[output].view.clone(), base: None }))); }
-        output
+        Ok(output)
     }
     pub(super) fn vector_thumbnail(&mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, owner: OccurrenceHandle, grid: display_mips::Plan,
         encoder: &mut crate::submission::CommandEncoder) -> Result<(wgpu::Texture, wgpu::TextureView), GpuRasterError> {
