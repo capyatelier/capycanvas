@@ -551,6 +551,12 @@ function Choose-Path([string]$Path) {
     Picker-Button '1'
     $script:scope=$root
 }
+function Assert-DocumentStderr([string]$Text,[switch]$PreservedPackage){
+    if(!$Text.Length){return}
+    $expected='Drawing open: Unknown layer blend future-package-blend'
+    if($PreservedPackage -and @($expected,($expected+"`n"),($expected+"`r`n")) -ccontains $Text){return}
+    throw 'Native review reported stderr'
+}
 function Write-PreservedPackage([string]$Destination,[byte[]]$Preview) {
     $members=[CapyPackageFixture]::Read((Join-Path $repo 'crates/layer-core/src/package/codec/fixtures/authored-filters.capy'))
     $manifest=[Text.Encoding]::UTF8.GetString(@($members|Where-Object Key -eq 'manifest.json')[0].Value)|ConvertFrom-Json
@@ -1549,7 +1555,7 @@ $entry.SetFocus();$entry.GetCurrentPattern([System.Windows.Automation.ValuePatte
 $reopenedDrawing=@((Model).state.tabs|Where-Object active)[0].id
 Request-Close -WithPreferences
 Wait-Closed 'Session close did not finish'
-if((Get-Item -LiteralPath $stderr).Length){throw 'Native review reported stderr'}
+Assert-DocumentStderr ([IO.File]::ReadAllText($stderr)) -PreservedPackage
 $stderr=Join-Path $run 'reopened.stderr.log'
 $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
 $null=$review.Handle

@@ -150,3 +150,21 @@ Write-Output 'Document invocation passed: ordinary acknowledgement, retired comm
  }
  'Header drawings: old brush/unchanged tabs, old selection and pending activation rejected; exact new drawing admitted once through existing pixel setup.'
 }
+
+& {
+ $helper=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Assert-DocumentStderr'},$true)
+ if(!$helper){throw 'Document stderr contract is missing'}
+ . ([scriptblock]::Create($helper.Extent.Text))
+ $expected='Drawing open: Unknown layer blend future-package-blend'
+ foreach($case in @(
+  @{text='';preserved=$false;reject=$false}, @{text=$expected;preserved=$true;reject=$false},
+  @{text=($expected+"`n");preserved=$true;reject=$false}, @{text=($expected+"`r`n");preserved=$true;reject=$false},
+  @{text=$expected;preserved=$false;reject=$true}, @{text=($expected+"`n"+$expected+"`n");preserved=$true;reject=$true},
+  @{text=($expected+"`nUnexpected renderer failure`n");preserved=$true;reject=$true},
+  @{text='Drawing open: another refusal';preserved=$true;reject=$true}
+ )){
+  $failure=$null;try{Assert-DocumentStderr $case.text -PreservedPackage:$case.preserved}catch{$failure=$_}
+  if([bool]$failure -ne $case.reject){throw 'Document stderr accepted unexpected diagnostics or rejected its owned preserved-package diagnostic'}
+ }
+ 'Document stderr: only the single intentional preserved-package diagnostic is accepted; other sessions, duplicates and unrelated errors rejected.'
+}
