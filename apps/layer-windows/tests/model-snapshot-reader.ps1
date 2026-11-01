@@ -51,6 +51,7 @@ $registryFile=Join-Path $out ("windows-$ProcessId.json")
 $payload=@{process_id=$ProcessId;window_id=$current.id;model=@{process_id=$ProcessId;window_id=$current.id;windows_isolated_settings=$true;state=@{camera=@{rotation=0;flipped=@($false,$false)}};padding=('x'*524288)}}|ConvertTo-Json -Depth 8 -Compress
 $registry=@{process_id=$ProcessId;windows=@(@{process_id=$ProcessId;id=$current.id;hwnd=$current.hwnd});padding=('x'*524288)}|ConvertTo-Json -Depth 8 -Compress
 [IO.File]::WriteAllText($StateFile,$payload);[IO.File]::WriteAllText($registryFile,$registry)
+if((Read-Snapshot $StateFile -Raw) -cne $payload){throw 'Raw snapshot reader did not preserve the exact unparsed frame'}
 $publisher=[CapyAtomicPublisher]::new($StateFile,$payload)
 $registryPublisher=[CapyAtomicPublisher]::new($registryFile,$registry)
 $reads=0;$nulls=0;$errors=0;$misclassified=0;$multiwindowNulls=0;$multiwindowReads=0;$multiwindowMismatches=0;$registryNulls=0;$registryReads=0;$registryMismatches=0
@@ -96,3 +97,13 @@ $pass=$reads-eq100-and$nulls-eq0-and$errors-eq0-and$misclassified-eq0-and$multiw
 @{pass=$pass;multiwindow_nulls=$multiwindowNulls;multiwindow_reads=$multiwindowReads;multiwindow_mismatches=$multiwindowMismatches;registry_nulls=$registryNulls;registry_reads=$registryReads;registry_mismatches=$registryMismatches;registry_published=$registryPublisher.Published;registry_replace_errors=$registryPublisher.Errors;registry_last_replace_error=$registryPublisher.LastError;registry_writer_exception=$registryPublisher.LastException;reads=$reads;nulls=$nulls;read_errors=$errors;read_failures=$readFailures.ToArray();read_durations_ms=$readDurations.ToArray();elapsed_ms=$watch.Elapsed.TotalMilliseconds;false_rotation_preconditions=$misclassified;published=$publisher.Published;replace_errors=$publisher.Errors;last_replace_error=$publisher.LastError;last_writer_exception=$publisher.LastException;invalid_owner_rejected=$invalidOwnerRejected;malformed_rejected=$malformedRejected;missing_rejected=$missingRejected;writer_joined=$true;pid=$PID}|ConvertTo-Json -Depth 6|Set-Content -LiteralPath (Join-Path $out 'result.json')
 Get-Content -LiteralPath (Join-Path $out 'result.json')
 if(!$pass){throw 'Atomic snapshot model reader regression failed'}
+
+Import-Function (Join-Path $repo 'apps/layer-windows/scripts/exercise-localization.ps1') 'Model' 'Localization-Model'
+$run=$out;$review=[pscustomobject]@{Id=$PID};$window=[pscustomobject]@{id=7}
+$captured=@{process_id=$PID;window_id=7;model=@{windows_isolated_settings=$true;state=@{camera=@{rotation=0}}}}
+if((Localization-Model $window ($captured|ConvertTo-Json -Depth 6 -Compress)).state.camera.rotation -ne 0){throw 'Captured localization snapshot did not preserve its owned state'}
+foreach($invalid in @(@{process_id=($PID+1);window_id=7;isolated=$true},@{process_id=$PID;window_id=8;isolated=$true},@{process_id=$PID;window_id=7;isolated=$false})){
+ $captured.process_id=$invalid.process_id;$captured.window_id=$invalid.window_id;$captured.model.windows_isolated_settings=$invalid.isolated
+ if(Localization-Model $window ($captured|ConvertTo-Json -Depth 6 -Compress)){throw 'Captured localization snapshot bypassed its process, window or isolation guard'}
+}
+Write-Output 'Captured snapshot parsing preserves exact raw data and the existing process, window and isolation guards.'

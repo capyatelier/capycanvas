@@ -1,6 +1,7 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','light-large','blend-large-dark','blend-large-light','profiles-dark','profiles-light','stats-light')][string]$Theme='dark',[switch]$LargeText,[int]$LanguageLimit=0,[switch]$NoticeOnly,[switch]$StatsOnly,[switch]$HeaderOnly,[switch]$BlendOnly,[switch]$GroupedToolsOnly,[switch]$ProfilesOnly,[switch]$ConfigurationOnly,[switch]$ZenThemeOnly,[switch]$ColorOnly)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','light-large','blend-large-dark','blend-large-light','profiles-dark','profiles-light','notice-light','stats-light')][string]$Theme='dark',[switch]$LargeText,[int]$LanguageLimit=0,[switch]$NoticeOnly,[switch]$StatsOnly,[switch]$HeaderOnly,[switch]$BlendOnly,[switch]$GroupedToolsOnly,[switch]$ProfilesOnly,[switch]$ConfigurationOnly,[switch]$ZenThemeOnly,[switch]$ColorOnly)
 $ErrorActionPreference='Stop'
 if($Theme.StartsWith('profiles-')){$Theme=$Theme.Substring(9);$ProfilesOnly=$true}
+if($Theme -eq 'notice-light'){$Theme='light';$NoticeOnly=$true}
 if($Theme -eq 'stats-light'){$Theme='light';$StatsOnly=$true}
 if($Theme -eq 'light-large'){$Theme='light';$LargeText=$true}
 if($Theme.StartsWith('blend-large-')){$Theme=$Theme.Substring(12);$LargeText=$true;$BlendOnly=$true;$LanguageLimit=2}
@@ -52,10 +53,10 @@ function Dismiss-NarrowPreferences{
 }
 
 function Windows {try{(Read-Snapshot (Join-Path $run "windows-$($review.Id).json")).windows}catch{@()}}
-function Model($Window=$script:current){
+function Model($Window=$script:current,[string]$Captured){
  $path=Join-Path $run "ui-state-$($review.Id)-$($Window.id).json"
  try{
-  $snapshot=Read-Snapshot $path
+  $snapshot=if($Captured){$Captured|ConvertFrom-Json}else{Read-Snapshot $path}
   if($snapshot.process_id -ne $review.Id -or $snapshot.window_id -ne $Window.id -or !$snapshot.model.windows_isolated_settings){throw 'Snapshot owner/isolation guard rejected the parsed frame'}
   $snapshot.model
  }catch{
@@ -81,9 +82,12 @@ function Trace-Part([string]$Kind,[string]$Field,$Window=$script:current){
 }
 function Search{Trace-Part 'search-state' 'search'}
 function Camera{Trace-Part 'camera-state' 'camera'}
-function Use-Window($Window){
- Register-CapyFixtureWindow $review ([long]$Window.hwnd) $run
- $script:current=$Window;$script:root=(Owned-DrawingWindow $review -WindowHandle $Window.hwnd -TraceDirectory $run).Root
+function Use-Window($Window,$PreparedRoot){
+ if(!$PreparedRoot){
+  Register-CapyFixtureWindow $review ([long]$Window.hwnd) $run
+  $PreparedRoot=(Owned-DrawingWindow $review -WindowHandle $Window.hwnd -TraceDirectory $run).Root
+ }elseif($PreparedRoot.Current.ProcessId -ne $review.Id -or [long]$PreparedRoot.Current.NativeWindowHandle -ne [long]$Window.hwnd){throw 'Prepared window root does not belong to its registered owner'}
+ $script:current=$Window;$script:root=$PreparedRoot
  Wait-Until {[CapyRowPointer]::SetForegroundWindow([IntPtr]$Window.hwnd)|Out-Null;[CapyRowPointer]::GetForegroundWindow() -eq [IntPtr]$Window.hwnd} 'Review window did not own foreground input' 10
 }
 function Focus-Canvas{
@@ -107,18 +111,21 @@ function Close-OwnedLocalizationWindows{
 }
 
 function Language-Row($Window=$script:current){@((Fresh-Model $Window).preferences.pages.groups.rows|Where-Object id -eq 'language')[0]}
-function Request-Language([int]$Index){
- $row=Language-Row;$choice=$row.kind.options[$Index]
- $dropdown=(Control 'preference-choice-language').GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+function Request-Language([int]$Index,$Prepared){
+ $dropdown=if($Prepared){$Prepared.dropdown}else{(Control 'preference-choice-language').GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)}
  $dropdown.Expand()
- (Control $choice -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+ $selection=if($Prepared){$Prepared.selection}else{$choice=(Language-Row).kind.options[$Index];(Control $choice -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)}
+ $selection.Select()
  $dropdown.Collapse()
 }
 function Language-Choice([int]$Index){
  $choice=(Language-Row).kind.options[$Index];Request-Language $Index
+ Confirm-Language $Index $choice
+}
+function Confirm-Language([int]$Index,[string]$Choice,$Window=$script:current){
  $expected=if($Index -eq 0){$systemTag}else{$shippedTags[$Index-1]};$ack=@{view=$null}
  Wait-Until {
-  $ack.view=Model
+  $ack.view=Model $Window
   if(!$ack.view -or $null -eq $ack.view.windows_gpu_generation -or $ack.view.windows_active_tag -ne $expected){return $false}
   $row=@($ack.view.preferences.pages.groups.rows|Where-Object id -eq 'language')[0]
   $saved=if($Index -eq 0){$ack.view.state.settings.language -eq 'System'}else{$ack.view.state.settings.language.Explicit -eq $expected}

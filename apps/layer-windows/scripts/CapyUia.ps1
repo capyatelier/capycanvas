@@ -543,7 +543,7 @@ function Invoke([string]$Value,[switch]$Name,$Within=$root){
     if($item.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)){$pattern.Invoke()}
     else{$item.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()}
 }
-function Read-Snapshot([string]$Path){
+function Read-Snapshot([string]$Path,[switch]$Raw){
     for($attempt=0;$attempt -lt 20;$attempt++){
         try{
             $stream=[IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
@@ -554,6 +554,7 @@ function Read-Snapshot([string]$Path){
             Start-Sleep -Milliseconds 50
             continue
         }
+        if($Raw){return $json}
         return ($json|ConvertFrom-Json)
     }
 }

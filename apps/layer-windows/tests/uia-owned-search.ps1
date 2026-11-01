@@ -38,7 +38,12 @@ namespace CapyOwnedSearchTest {
   public void Scroll(ScrollAmount horizontal,ScrollAmount vertical){Value.ScrollBy(horizontal,vertical);}
  }
  public class TreeWalker{public static TreeWalker ControlViewWalker=new TreeWalker();public Node GetParent(Node node){return node.Parent;}}
- public static class Driver{public static int GetDpiForWindow(IntPtr window){return 96;}}
+ public static class Driver {
+  public static IntPtr Foreground;public static int Activations;
+  public static int GetDpiForWindow(IntPtr window){return 96;}
+  public static bool SetForegroundWindow(IntPtr window){Foreground=window;Activations++;return true;}
+  public static IntPtr GetForegroundWindow(){return Foreground;}
+ }
  public class Node {
   public string AutomationId,Name;public object ControlType="control";public int ProcessId;bool offscreen;Rect bounds;public Node Parent;public Scroll Provider,TargetScroll;public int? ContentY;
   public bool HasKeyboardFocus;public IntPtr NativeWindowHandle=new IntPtr(1);
@@ -252,3 +257,35 @@ if($ready.Count -ne 1 -or $statements[$ready[0]+1].Left.Extent.Text -ne '$script
     if($script:persistenceResolutions -ne 1 -or $script:persistenceWaitSeconds -ne 45){throw 'Persistence launch did not resolve its drawing within the original readiness wait'}
 }
 Write-Output 'Persistence launch uses its owned drawing when MainWindowHandle names an input overlay, within its original readiness deadline.'
+
+$localizationAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-localization.ps1'),[ref]$tokens,[ref]$errors)
+if(@($errors).Count){throw ($errors|Out-String)}
+$useWindow=@($localizationAst.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Use-Window'},$true))
+if($useWindow.Count -ne 1){throw 'Missing actual localization window switch'}
+& {
+    . ([scriptblock]::Create($useWindow[0].Extent.Text.Replace('[CapyRowPointer]','[CapyOwnedSearchTest.Driver]')))
+    $review=[CapyOwnedSearchTest.Review]::new();$window=[pscustomobject]@{id=7;hwnd=131956};$run='private-owned-search'
+    $prepared=[CapyOwnedSearchTest.Node]::new('prepared-window',33,0,0);$prepared.NativeWindowHandle=[IntPtr]$window.hwnd
+    $discovered=[CapyOwnedSearchTest.Node]::new('discovered-window',33,0,0);$discovered.NativeWindowHandle=$prepared.NativeWindowHandle
+    $script:windowRegistrations=0;$script:windowResolutions=0;[CapyOwnedSearchTest.Driver]::Activations=0
+    function Register-CapyFixtureWindow($Process,[long]$WindowHandle,[string]$Directory){
+        if($Process -ne $review -or $WindowHandle -ne $window.hwnd -or $Directory -ne $run){throw 'Window registration changed its owned inputs'}
+        $script:windowRegistrations++
+    }
+    function Owned-DrawingWindow($Process,[long]$WindowHandle,[string]$TraceDirectory){
+        if($Process -ne $review -or $WindowHandle -ne $window.hwnd -or $TraceDirectory -ne $run){throw 'Window discovery changed its owned inputs'}
+        $script:windowResolutions++;[pscustomobject]@{Root=$discovered}
+    }
+    Use-Window $window $prepared
+    if($script:windowRegistrations -ne 0 -or $script:windowResolutions -ne 0){throw 'Prepared window switch performed root discovery or registration'}
+    if($script:current -ne $window -or $script:root -ne $prepared -or [CapyOwnedSearchTest.Driver]::Activations -ne 1 -or [CapyOwnedSearchTest.Driver]::GetForegroundWindow() -ne [IntPtr]$window.hwnd){throw 'Prepared window switch did not retain its exact root and activate its owned HWND'}
+    Use-Window $window
+    if($script:windowRegistrations -ne 1 -or $script:windowResolutions -ne 1 -or $script:root -ne $discovered -or $script:current -ne $window -or [CapyOwnedSearchTest.Driver]::Activations -ne 2){throw 'Unprepared window switch changed its discovery or activation path'}
+    foreach($invalid in @(@{pid=99;hwnd=$window.hwnd},@{pid=33;hwnd=132146})){
+        $foreign=[CapyOwnedSearchTest.Node]::new('invalid-window',$invalid.pid,0,0);$foreign.NativeWindowHandle=[IntPtr]$invalid.hwnd
+        $rejected=$false
+        try{Use-Window $window $foreign}catch{if($_.Exception.Message -ne 'Prepared window root does not belong to its registered owner'){throw};$rejected=$true}
+        if(!$rejected -or [CapyOwnedSearchTest.Driver]::Activations -ne 2 -or $script:windowRegistrations -ne 1 -or $script:windowResolutions -ne 1 -or $script:root -ne $discovered -or $script:current -ne $window){throw 'Invalid prepared root changed activation, discovery or the current owned window'}
+    }
+}
+Write-Output 'Localization window switching retains prepared owned roots without rediscovery, preserves ordinary discovery, and rejects foreign PID or HWND before activation.'
