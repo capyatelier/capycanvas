@@ -35,8 +35,17 @@ impl Scene {
         self.mask_tile_input(r, mask, source, offset, tile, None)
     }
 
-    pub(super) fn command_mask_at(&mut self, r: &WgpuRasterizer, coverage: &layer_core::CoverageSnapshot, tile: [u32; 2], command: layer_masks::CommandCoverage) -> Result<usize, GpuRasterError> {
-        self.mask_tile_input(r, &coverage.use_, &coverage.source, coverage.use_.offset, tile, Some(command))
+    pub(super) fn command_mask_at(&mut self, r: &WgpuRasterizer, coverage: &layer_core::CoverageSnapshot, tile: [u32; 2], command: layer_masks::CommandCoverage) -> Result<ColorInput, GpuRasterError> {
+        if coverage.use_.offset == [0; 2] && !coverage.use_.inverted {
+            if let Some(page) = r.layer_masks.command_pages.get(&(command, tile)) {
+                return Ok(ColorInput { view: page.view.clone(), lease: None });
+            }
+            if coverage.source.default_coverage == 0. {
+                return Ok(ColorInput { view: r.empty_scalar_view.clone(), lease: None });
+            }
+        }
+        let index = self.mask_tile_input(r, &coverage.use_, &coverage.source, coverage.use_.offset, tile, Some(command))?;
+        Ok(ColorInput { view: self.pool[index].view.clone(), lease: Some(self.own(index).into_owner()) })
     }
 
     pub(crate) fn mesh_geometry(&self, transform: &layer_core::ImageTransform) -> Option<Arc<paint_transform::mesh::MeshGeometry>> {
@@ -369,4 +378,53 @@ pub(super) fn prepare(
         .source_views(&r.device, &views, bounds, None, job.positions.as_ref(), &r.empty_view)
         .map_err(GpuRasterError::InvalidTransform)?;
     Ok(pass.placement_draw(&r.device, &job.target, source, offset))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_mask_reuse_preserves_fractional_coverage_and_placement() {
+        let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let mut scene = Scene::new(&r).unwrap();
+        let command = (SourceTarget::default(), 0, false);
+        for value in [0., 0.0001, 1. / 255., 0.12345, 0.5, 0.9995, 1.] {
+            let page = layer_masks::MaskPage::new(&r.device);
+            scene.jobs.push(Job::Clear(page.view.clone(), wgpu::Color { r:value, g:value, b:value, a:value }));
+            r.layer_masks.command_pages.insert((command, [0; 2]), page.clone());
+            for (offset, inverted, tile, default) in [
+                ([0; 2], false, [0; 2], 0.), ([8, 0], false, [0; 2], 0.),
+                ([0; 2], true, [0; 2], 0.), ([0; 2], false, [1, 0], 0.),
+                ([0; 2], false, [1, 0], 0.7),
+            ] {
+                let mut coverage = layer_core::CoverageSnapshot::reveal_all(Default::default(), [512, 256], offset);
+                coverage.use_.inverted = inverted;
+                coverage.source.default_coverage = default;
+                let before = scene.pool.len();
+                let input = scene.command_mask_at(&r, &coverage, tile, command).unwrap();
+                if offset == [0; 2] && !inverted && (tile == [0; 2] || default == 0.) {
+                    assert_eq!(scene.pool.len(), before);
+                    assert!(input.lease.is_none());
+                }
+                let pooled = scene.mask_tile_input(&r, &coverage.use_, &coverage.source, offset, tile, Some(command)).unwrap();
+                let _pooled = scene.own(pooled);
+                let mut outputs = Vec::new();
+                for mask in [scene.pool[pooled].view.clone(), input.view.clone()] {
+                    let output = scene.alloc(&r, wgpu::Color::TRANSPARENT).unwrap();
+                    let held = scene.own(output);
+                    scene.draw(&r, output, mask, None, [0., 0., 256., 256.], [6., 1., 0., 0.], false, Convert::None);
+                    if let Some(Job::Draw { data, .. }) = scene.jobs.last_mut() { data[12..16].copy_from_slice(&[0.2, 0.7, 0.4, 0.6]); }
+                    outputs.push((scene.pool[output].texture.clone(), held));
+                }
+                let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+                scene.encode_jobs(&mut r, &mut encoder).unwrap();
+                r.uploads.finish(&encoder);encoder.submit(&r.queue);
+                assert_eq!(crate::test_support::float_pixels(&r, &outputs[0].0), crate::test_support::float_pixels(&r, &outputs[1].0),
+                    "coverage={value}, offset={offset:?}, inverted={inverted}, tile={tile:?}, default={default}");
+                scene.jobs.clear();
+                scene.used.iter_mut().for_each(scratch::Usage::reset);
+            }
+        }
+    }
 }

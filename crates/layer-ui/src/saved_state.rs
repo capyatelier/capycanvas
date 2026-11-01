@@ -116,7 +116,7 @@ mod tests {
         saved.as_object_mut().unwrap().remove("region_close_gaps");
         saved.as_object_mut().unwrap().remove("region_edges");
         let converted = EditingState::restore(&saved.to_string(), &english);
-        state.region_close_gaps = false;
+        state.region_close_gaps = true;
         state.region_edges = layer_core::RegionEdges::GrowShrink(-2);
         assert_eq!(converted,state);
         assert_eq!(EditingState::restore(&serde_json::to_string(&converted).unwrap(),&english),converted);
@@ -145,6 +145,22 @@ mod tests {
             assert!(restored.region_close_gaps);
             assert_eq!(restored.region_edges,layer_core::RegionEdges::GrowShrink(2));
         }
+    }
+    #[test]
+    fn released_default_region_values_adopt_auto_and_line_middle() {
+        let english = Localizer::shared(UiLanguage::English);
+        let released = include_str!("../../layer-workspace/tests/compat/1.0.15/editing.json");
+        let mut saved: serde_json::Value = serde_json::from_str(released).unwrap();
+        saved["region_values"]["gap_closing"] = 0.into();
+        saved["region_values"]["expansion"] = 0.into();
+        let mut expected = EditingState::restore(released, &english);
+        expected.region_values.insert("gap_closing".into(), 0.);
+        expected.region_values.insert("expansion".into(), 0.);
+        expected.region_close_gaps = true;
+        expected.region_edges = layer_core::RegionEdges::LineMiddle;
+        let restored = EditingState::restore(&saved.to_string(), &english);
+        assert_eq!(restored, expected);
+        assert_eq!(EditingState::restore(&serde_json::to_string(&restored).unwrap(), &english), expected);
     }
     #[test]
     fn unreadable_palettes_use_localized_defaults_without_losing_other_fields() {

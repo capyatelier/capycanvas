@@ -1379,13 +1379,11 @@ impl Scene {
                 .map(|((_, c), page)| (*c, page.clone())).collect();
             for (coordinate, page) in pages {
                 let mask = self.command_mask_at(r, &op.coverage, coordinate, (target, operation_index as u32, false))?;
-                let _mask = self.own(mask);
                 let out = self.reserve_format(r, true)?;
-                self.draw(r, out, page.view.clone(), Some(self.pool[mask].view.clone()),
+                self.draw(r, out, page.view.clone(), Some(mask.view.clone()),
                     [0., 0., 256., 256.], [22., 1., 0., 0.], false, Convert::None);
                 self.copy_window_tile(out, &Image { texture: page.texture, view: page.view,
                     plan: display_mips::Plan::window(extent, 0, page_rect(coordinate).intersect(PixelRect::full(extent))) }, coordinate);
-                self.free(mask);
             }
             return self.encode_jobs(r, encoder);
         }
@@ -1422,9 +1420,7 @@ impl Scene {
         let underfill_coverage = layer_masks::underfill_coverage(op);
         for (c, source, destination) in pages {
             let mask = self.command_mask_at(r, &op.coverage, c, (target, operation_index as u32, false))?;
-            let _mask = self.own(mask);
             let underfill = underfill_coverage.as_ref().map(|coverage| self.command_mask_at(r, coverage, c, (target, operation_index as u32, true))).transpose()?;
-            let _underfill = underfill.map(|index| self.own(index));
             let out = self.alloc(r, wgpu::Color::TRANSPARENT)?;
             let _out = self.own(out);
             match op.kind {
@@ -1450,9 +1446,9 @@ impl Scene {
                         r,
                         out,
                         resolved.as_ref().map_or(source, |p| self.pool[p.index].view.clone()),
-                        Some(self.pool[mask].view.clone()),
+                        Some(mask.view.clone()),
                         [0., 0., 256., 256.],
-                        [3., 1., erase, 0.],
+                        [3., 2., erase, 0.],
                         false,
                         Convert::None,
                     );
@@ -1488,7 +1484,7 @@ impl Scene {
                     self.draw(
                         r,
                         out,
-                        self.pool[mask].view.clone(),
+                        mask.view.clone(),
                         Some(source),
                         [0., 0., 256., 256.],
                         options,
@@ -1497,7 +1493,7 @@ impl Scene {
                     );
                     if let Some(Job::Draw { data, sources, .. }) = self.jobs.last_mut() {
                         if let Some(gradient)=&gradient {sources[2]=gradient.clone();}
-                        if let Some(underfill)=underfill {sources[2]=self.pool[underfill].view.clone();}
+                        if let Some(underfill)=&underfill {sources[2]=underfill.view.clone();}
                         data[6..8].copy_from_slice(&c.map(|v| (v * PAGE_SIZE) as f32));
                         data[12..16].copy_from_slice(&colors[0]);
                         data[16..20].copy_from_slice(&colors[1]);
@@ -1528,8 +1524,6 @@ impl Scene {
                 });
             }
             self.free(out);
-            self.free(mask);
-            if let Some(underfill)=underfill {self.free(underfill);}
         }
         self.encode_jobs(r, encoder)?;
         if settles {

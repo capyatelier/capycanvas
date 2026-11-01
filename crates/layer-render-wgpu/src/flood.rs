@@ -121,15 +121,18 @@ impl Flood {
     pub fn pipelines(&self) -> impl Iterator<Item = &Deferred<wgpu::ComputePipeline>> {
         STAGES.into_iter().map(|entry| &self.pipelines[entry])
     }
+    #[cfg(test)]
+    pub fn compaction_pending(&self)->Option<bool> {self.lines.compaction_pending()}
     pub fn prepare(&self, compiler: &startup::Compiler, refinement: RegionRefinement, enclosed: bool, contiguous: bool, priority:u8) -> bool {
-        self.lines.prepare(compiler,priority) & compiler.require(stages(refinement, enclosed, contiguous).map(|entry| &self.pipelines[entry]), priority)
+        self.lines.prepare(compiler,priority,refinement) & compiler.require(stages(refinement, enclosed, contiguous).map(|entry| &self.pipelines[entry]), priority)
     }
-    pub fn build_lines(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,extent:[u32;2],paper:([f32;4],u32,bool),budget:f64,demand:bool)->Result<(bool,f64),GpuRasterError> {
+    pub fn prepare_cache(&self,compiler:&startup::Compiler,priority:u8)->bool {self.lines.prepare_cache(compiler,priority)}
+    pub fn build_lines(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,extent:[u32;2],paper:([f32;4],u32,bool),(budget,demand):(f64,bool),dirty:&std::collections::BTreeSet<[u32;2]>)->Result<(bool,f64),GpuRasterError> {
         let device=input.device;
         let labels=Labels::new(extent,&device.limits()).ok_or(GpuRasterError::SizeOverflow)?;
         let windows:Vec<_>=labels.windows(extent).collect();
         if !self.lines.building() {self.lines.allocate(device,extent,labels.side,&windows)?;}
-        self.lines.build(input,encoder,paper,budget,demand)
+        self.lines.build(input,encoder,paper,budget,demand,dirty)
     }
     pub fn needs_seals(&self,close:bool)->bool {self.lines.needs_seals(close)}
     pub fn prepare_seals(&mut self,device:&PipelineDevice,encoder:&mut crate::submission::CommandEncoder,paper:&wgpu::TextureView,close:bool,budget:f64)->Result<(bool,f64),GpuRasterError> {self.lines.prepare_seals(device,encoder,paper,close,budget)}

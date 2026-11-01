@@ -13,6 +13,9 @@ pub(super) struct Lease {
     pub index: usize,
     _owner: Arc<()>,
 }
+impl Lease {
+    pub fn into_owner(self) -> Arc<()> { self._owner }
+}
 
 impl Usage {
     pub fn occupied(&self) -> bool {

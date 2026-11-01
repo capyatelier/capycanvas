@@ -91,6 +91,63 @@ mod enclose_fill_checks {
     }
 
     #[test]
+    fn reference_documents_prepare_fill_on_open_without_choosing_the_tool() {
+        for platform in Platform::ALL {
+            let mut s=session(platform);
+            assert!(s.renderer_mut().region_preparation.is_none());
+            let reference=s.engine.document().working.occurrence.unwrap();
+            s.set_references([reference].into()).unwrap();
+            let document=s.engine.document().clone();
+            let mut opened=UiSession::new(Recorder::default(),document,[1000,1000],platform).unwrap();
+            assert_eq!(opened.layer_interaction.tool,LayerCanvasTool::Paint);
+            let preparation=opened.renderer_mut().region_preparation.clone().unwrap();
+            assert_eq!(preparation.reference_count,Some(1));
+            assert!(preparation.refinement.close_gaps);
+            assert_eq!(preparation.refinement.edges,layer_render::RegionEdges::LineMiddle);
+            assert!(!preparation.enclosed);
+            contact(&mut opened,PenPhase::Down,[40.,60.]);
+            assert!(!opened.renderer_mut().shader_idle.0);
+            assert!(opened.renderer_mut().region_preparation.is_some());
+            contact(&mut opened,PenPhase::Up,[60.,60.]);
+            opened.frame(1,1).unwrap();
+        }
+    }
+
+    #[test]
+    fn fill_preparation_follows_window_use_and_keeps_each_drawings_options() {
+        for platform in Platform::ALL {
+            for command in [CommandId::Fill,CommandId::EncloseFill] {
+                let mut s=session(platform);
+                invoke(&mut s,command);
+                invoke(&mut s,CommandId::SelectionEditing);
+                invoke(&mut s,CommandId::CloseGapsOff);
+                invoke(&mut s,CommandId::EdgesGrowShrink);
+                s.dispatch(UiAction::SetToolSetting {id:"edge_offset".into(),value:3.}).unwrap();
+                invoke(&mut s,CommandId::Hand);
+                let editing=s.editing_state();
+                s.restore_editing(editing).unwrap();
+                let preparation=s.renderer_mut().region_preparation.clone().unwrap();
+                assert_eq!(preparation.enclosed,command==CommandId::EncloseFill);
+                assert!(!preparation.refinement.close_gaps);
+                assert_eq!(preparation.refinement.edges,layer_render::RegionEdges::GrowShrink(3));
+                assert!(matches!(preparation.source,layer_render::RegionSource::Scene {scope:SceneScope::Raw(_),..}));
+                let mut next=session(platform);
+                assert!(next.renderer_mut().region_preparation.is_none());
+                next.inherit_window_state(&s).unwrap();
+                let preparation=next.renderer_mut().region_preparation.clone().unwrap();
+                assert_eq!(preparation.enclosed,command==CommandId::EncloseFill);
+                assert!(preparation.refinement.close_gaps);
+                assert_eq!(preparation.refinement.edges,layer_render::RegionEdges::LineMiddle);
+                assert_eq!(preparation.reference_count,None);
+                s.inherit_window_state(&next).unwrap();
+                let preparation=s.renderer_mut().region_preparation.as_ref().unwrap();
+                assert_eq!(preparation.refinement.edges,layer_render::RegionEdges::GrowShrink(3));
+                assert!(matches!(preparation.source,layer_render::RegionSource::Scene {scope:SceneScope::Raw(_),..}));
+            }
+        }
+    }
+
+    #[test]
     fn region_tools_default_to_available_references_and_keep_source_choices_separate() {
         for platform in Platform::ALL {
             let mut s = session(platform);

@@ -4230,7 +4230,6 @@ impl WgpuRasterizer {
         if let Some(t) = &mut self.transforms {
             t.begin_frame();
         }
-        if let Some(regions)=&mut self.regions {regions.changed(packet);}
         let context = self.frame_context(packet);
         let packet = FramePacket { scene: packet.scene.with_context(&context), ..packet };
         let started = self.telemetry.enabled.then(web_time::Instant::now);
@@ -4381,6 +4380,7 @@ impl WgpuRasterizer {
             reset,
             &batch_tiles,
         )?;
+        if let Some(regions)=&mut self.regions {regions.changed(FramePacket {dab_batches:original_batches,..packet},&raster_damage);}
         self.transform_damage.extend(raster_damage);
         self.ensure_persistent_pages(packet.dab_batches, &batch_tiles)?;
         self.ensure_destination_companions(packet.dab_batches, &batch_tiles);

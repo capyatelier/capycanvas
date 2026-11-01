@@ -22,11 +22,11 @@ impl EditingState {
             }
         }
         if value.get("region_close_gaps").is_none()
-            && let Some(gap) = value["region_values"]["gap_closing"].as_f64().filter(|v| v.is_finite() && *v >= 0.) {
-            value["region_close_gaps"] = (gap > 0.).into();
+            && value["region_values"]["gap_closing"].as_f64().is_some_and(|v| v.is_finite() && v > 0.) {
+            value["region_close_gaps"] = true.into();
         }
         if value.get("region_edges").is_none()
-            && let Some(offset) = value["region_values"]["expansion"].as_f64().filter(|v| v.fract() == 0. && v.abs() <= layer_render::RegionRefinement::MAX_EDGE_OFFSET as f64) {
+            && let Some(offset) = value["region_values"]["expansion"].as_f64().filter(|v| *v != 0. && v.fract() == 0. && v.abs() <= layer_render::RegionRefinement::MAX_EDGE_OFFSET as f64) {
             value["region_edges"] = serde_json::to_value(layer_core::RegionEdges::GrowShrink(offset as i32)).unwrap();
         }
         let mut restored = crate::saved_state::restore_fields(value, || Self::new_localized(localization), |state| state.validate().is_ok());
@@ -282,6 +282,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut brush = state.tools.brush_in(preset(state.preset)?, space);
         let tool = stroke_paint(tools::tool(state.preset), &state.colors, space, &mut brush)?;
         let mut region = region_tools::RegionTools::default();
+        region.last_fill = self.region_tools.last_fill;
         for (id, &value) in &state.region_values { region.restore_value(id, value).map_err(|reason| reason.message(self.localization()))?; }
         region.source = state.region_sources;
         region.stop_at_colors = state.region_stop_at_colors;

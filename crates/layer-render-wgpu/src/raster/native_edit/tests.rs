@@ -111,6 +111,115 @@ fn engine_on(mut document: layer_core::Document, r: WgpuRasterizer) -> (InputPro
 }
 
 #[test]
+fn native_stroke_publication_keeps_prepared_reference_pages_and_matches_fresh_masks() {
+    use layer_render::{CanvasRenderer, RegionEdges, RegionPreparation, RegionRefinement, RegionRequest, RegionSource};
+    use crate::region_requests::tests::cached_pages;
+    use crate::test_support::{receive_request, submit_settled};
+    let extent=[4097,257];
+    let mut document=Document::new(PortableId::random(),extent[0],extent[1],
+        layer_core::DocumentNames {paint:"Reference".into(),paper:"Paper".into()});
+    crate::layer_tests::placement::set_source(&mut document,layer_core::color::source::rgba8_source(extent,|x,y| {
+        let outline=|[left,top,right,bottom]:[u32;4]|(left..right).contains(&x) && (top..bottom).contains(&y)
+            && (x==left || x+1==right || y==top || y+1==bottom);
+        let ink=(outline([80,32,2100,225]) && !(y==32 && (252..260).contains(&x)))
+            || (outline([3300,32,3900,225]) && !(y==32 && (3596..3604).contains(&x)));
+        [0,0,0,if ink {255}else{0}]
+    }));
+    let reference=occurrence_id(&document);
+    let id=target(&document);
+    let (mut input,mut live)=engine(document);
+    live.set_view(ViewState {width_px:extent[0],height_px:extent[1],document_to_surface:[1.,0.,0.,1.,0.,0.]},ViewTransform::IDENTITY);
+    live.set_brush(layer_core::BrushSnapshot {diameter:16.,hardness:1.,opacity:1.,flow:1.,
+        color_rgba_linear:[0.,0.,0.,1.],mappings:Arc::from([]),..layer_core::default_brush(layer_core::DefaultBrushPreset::GPen)}).unwrap();
+    flush(&mut live);
+    let prepare=|document:&Document|RegionPreparation {source:RegionSource::reference(document.snapshot(),reference).unwrap(),
+        reference_count:None,paper:None,tolerance:0.,refinement:Default::default(),enclosed:false};
+    let snapshot=live.document().snapshot();
+    let preparation=prepare(live.document());
+    let r=live.backend_mut();
+    r.startup=Some(crate::startup::Startup::new(&r.device).unwrap());
+    r.startup.as_ref().unwrap().compiler.start();
+    r.shader_idle(true,true);
+    r.prepare_regions(Some(&preparation));
+    submit_settled(r,crate::test_support::packet(snapshot.view(),extent));
+    let (seeds,classified,empty)=cached_pages(r);
+    assert!(classified.is_some() && empty.is_empty());
+    for (phase,(compacted,a,b)) in [(false,248.,2040.),(true,504.,1784.)].into_iter().enumerate() {
+        let sequence=phase as u64*20+1;
+        let before=live.document().target_raster(id).unwrap().clone();
+        live.backend().shader_idle(false,false);
+        stroke(&mut live,&mut input,sequence,a);
+        let published=live.document().target_raster(id).unwrap();
+        assert_ne!(*published,before);
+        let pixels=published.wait_data().unwrap();
+        let a_pages=[[(a as u32)/PAGE_SIZE,0],[(a as u32+18)/PAGE_SIZE,0]];
+        for coordinate in a_pages {assert!(pixels.tiles.keys().any(|key|key.coordinate==coordinate));}
+        let (retained_seeds,retained_classified,a_dirty)=cached_pages(live.backend());
+        assert_eq!(retained_seeds,seeds);
+        assert_eq!(retained_classified,classified);
+        for coordinate in a_pages {assert!(a_dirty.contains(&coordinate));}
+        let snapshot=live.document().snapshot();
+        let preparation=prepare(live.document());
+        let r=live.backend_mut();
+        r.set_refine_chunk(Some(1_048_576.));
+        r.prepare_regions(Some(&preparation));
+        r.shader_idle(true,true);
+        let deadline=std::time::Instant::now()+READBACK_TIMEOUT;
+        loop {
+            crate::test_support::submit_ready(r,crate::test_support::packet(snapshot.view(),extent)).unwrap();
+            r.wait_idle().unwrap();
+            let flood=&r.regions.as_ref().unwrap().flood;
+            if flood.compaction_pending()==Some(!compacted) {
+                assert!(flood.lines_submitted());
+                break;
+            }
+            assert!(std::time::Instant::now()<deadline,"incremental compaction stage {compacted}");
+        }
+        r.shader_idle(false,false);
+        let before=live.document().target_raster(id).unwrap().clone();
+        stroke(&mut live,&mut input,sequence+10,b);
+        let published=live.document().target_raster(id).unwrap();
+        assert_ne!(*published,before);
+        let pixels=published.wait_data().unwrap();
+        let b_pages=[[(b as u32)/PAGE_SIZE,0],[(b as u32+18)/PAGE_SIZE,0]];
+        for coordinate in b_pages {assert!(pixels.tiles.keys().any(|key|key.coordinate==coordinate));}
+        assert_eq!(live.backend().regions.as_ref().unwrap().flood.compaction_pending(),Some(!compacted),
+            "second stroke must preserve the incremental build, compacted={compacted}");
+        let (retained_seeds,retained_classified,dirty)=cached_pages(live.backend());
+        assert_eq!(retained_seeds,seeds);
+        assert_eq!(retained_classified,classified);
+        assert!(dirty.is_superset(&a_dirty));
+        for coordinate in b_pages {assert!(dirty.contains(&coordinate));}
+        assert!(dirty.len()<(extent[0].div_ceil(PAGE_SIZE)*extent[1].div_ceil(PAGE_SIZE)) as usize);
+        let snapshot=live.document().snapshot();
+        let preparation=prepare(live.document());
+        let r=live.backend_mut();
+        r.set_refine_chunk(None);
+        r.prepare_regions(Some(&preparation));
+        r.shader_idle(true,true);
+        submit_settled(r,crate::test_support::packet(snapshot.view(),extent));
+        let (retained_seeds,retained_classified,dirty)=cached_pages(r);
+        assert_eq!(retained_seeds,seeds);
+        assert_eq!(retained_classified,classified);
+        assert!(dirty.is_empty());
+        let mut fresh=WgpuRasterizer::new_native_headless(live.document().composition().color).unwrap();
+        submit_settled(&mut fresh,crate::test_support::packet(snapshot.view(),extent));
+        for edges in [RegionEdges::Exact,RegionEdges::LineMiddle,RegionEdges::GrowShrink(2)] {
+            for position in [[120,128],[3600,128]] {
+                let query=RegionRequest {source:preparation.source.clone(),reference_count:None,paper:None,enclosure:None,
+                    contiguous:true,selection:None,request_id:91,position,tolerance:0.,
+                    refinement:RegionRefinement {edges,..Default::default()},limit:None};
+                let cached=receive_request(live.backend_mut(),query.clone());
+                let rebuilt=receive_request(&mut fresh,query);
+                assert_eq!((cached.pixels.bounds(),cached.pixels.words()),(rebuilt.pixels.bounds(),rebuilt.pixels.words()),"{edges:?} {position:?}");
+                assert_eq!(cached.underfill.as_deref().map(|pixels|(pixels.bounds(),pixels.words())),
+                    rebuilt.underfill.as_deref().map(|pixels|(pixels.bounds(),pixels.words())),"underfill {edges:?} {position:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn native_color_cache_budget_preserves_fallback_and_retained_admission() {
     for (allowance,expected) in [(0,256),(128,256),(256,256),(768,768),(2048,2048)] {
         assert_eq!(NativeEdit::color_cache_budget(allowance<<20,None),expected<<20);

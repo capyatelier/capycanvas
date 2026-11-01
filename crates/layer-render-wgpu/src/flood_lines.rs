@@ -5,9 +5,15 @@ const ENDS_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_LINE_WIDTH:u32=16;
 const UNDERFILL_HALF_PIXELS:u32=48;
 const DISTANCE_LIMIT_HALF_PIXELS:u32=UNDERFILL_HALF_PIXELS+1;
+const DISTANCE_HALO:u32=64;
+const SKELETON_HALO:u32=1+32+2*(32+63+1);
+const END_HALO:u32=33;
+const FIT_DISPLACEMENT:u32=24;
+const NEIGHBOUR_REACH:u32=64;
 const PARAMS: u64 = 112;
+const PARAMETER_BATCH_BYTES:u64=64*1024;
 type Step = (&'static str,u64,Vec<u32>);
-struct Build { steps:std::collections::VecDeque<Step>, submission:Option<crate::submission::Submission>,in_flight:std::sync::Arc<std::sync::atomic::AtomicU32>, ends:Option<mpsc::Receiver<Result<[u32;2],GpuRasterError>>>, ranked:bool, sealing:bool }
+struct Build { steps:std::collections::VecDeque<Step>, submission:Option<crate::submission::Submission>,in_flight:std::sync::Arc<std::sync::atomic::AtomicU32>, ends:Option<mpsc::Receiver<Result<[u32;2],GpuRasterError>>>, ranked:bool, sealing:bool, incremental:bool }
 impl Build {
     fn available(&self,demand:bool)->bool {
         let count=self.in_flight.load(std::sync::atomic::Ordering::Acquire);
@@ -50,8 +56,22 @@ impl Lines {
     pub fn storage_bytes(&self)->u64 {
         self.seals.as_ref().map_or(0,wgpu::Buffer::size)+self.data.as_ref().map_or(0,wgpu::Buffer::size)+self.scratch.as_ref().map_or(0,|buffers|buffers.iter().map(wgpu::Buffer::size).sum())
     }
-    pub fn prepare(&self,compiler:&startup::Compiler,priority:u8)->bool {
-        compiler.require(STAGES.iter().map(|entry|&self.pipelines[entry]),priority)
+    pub fn prepare_cache(&self,compiler:&startup::Compiler,priority:u8)->bool {
+        compiler.require(STAGES.iter().filter(|entry|self.building.as_ref().map_or_else(
+            ||STAGES[..8].contains(entry) || **entry=="reset_ends",
+            |work|work.steps.iter().any(|(pending,_,_)|pending==*entry))).map(|entry|&self.pipelines[entry]),priority)
+    }
+    pub fn prepare(&self,compiler:&startup::Compiler,priority:u8,refinement:RegionRefinement)->bool {
+        let prewarm=priority==startup::OTHER;
+        self.prepare_cache(compiler,priority) & compiler.require(STAGES[8..].iter().filter(|entry|match **entry {
+            "refine_ends"|"seal_candidates"=>prewarm || self.overflow && refinement.close_gaps,
+            "grow_region"=>matches!(refinement.edges,layer_render::RegionEdges::GrowShrink(_)),
+            "assign_region"=>matches!(refinement.edges,layer_render::RegionEdges::LineMiddle),
+            "region_seeds"=>!matches!(refinement.edges,layer_render::RegionEdges::Exact),
+            "apply_seals"=>refinement.close_gaps && (prewarm || self.ends>0),
+            "apply_seal_plane"=>refinement.close_gaps && self.overflow,
+            _=>true,
+        }).map(|entry|&self.pipelines[entry]),priority)
     }
     pub fn allocate(&mut self,device:&PipelineDevice,extent:[u32;2],side:u32,windows:&[(u32,[u32;4])])->Result<(),GpuRasterError> {
         let (offsets,size)=storage_layout(extent,&device.limits()).ok_or(GpuRasterError::SizeOverflow)?;
@@ -60,8 +80,9 @@ impl Lines {
                 usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::COPY_SRC,mapped_at_creation:false}));
         }
         let scratch_bytes=u64::from(side+160).pow(2)*4;
-        if self.scratch.as_ref().is_none_or(|buffers|buffers[0].size()<scratch_bytes) {
-            self.scratch=Some(std::array::from_fn(|_|device.create_buffer(&wgpu::BufferDescriptor {label:Some("region window coordinates"),size:scratch_bytes,
+        let compact_bytes=scratch_bytes.max(u64::from(offsets[3])*64);
+        if self.scratch.as_ref().is_none_or(|buffers|buffers[0].size()<compact_bytes || buffers[1].size()<scratch_bytes) {
+            self.scratch=Some(std::array::from_fn(|index|device.create_buffer(&wgpu::BufferDescriptor {label:Some("region window coordinates"),size:if index==0 {compact_bytes}else{scratch_bytes},
                 usage:wgpu::BufferUsages::STORAGE,mapped_at_creation:false})));
         }
         self.extent=extent;self.offsets=offsets;
@@ -76,25 +97,29 @@ impl Lines {
         let Input {device,mask,paper}=input;
         let alignment=u64::from(device.limits().min_uniform_buffer_offset_alignment);
         let stride=PARAMS.next_multiple_of(alignment);
-        let mut values=vec![0u8;steps.len()*stride as usize];
-        for ((_,_,params),block) in steps.iter().zip(values.chunks_mut(stride as usize)) {
-            for (word,value) in block.as_chunks_mut::<4>().0.iter_mut().zip(params){word.copy_from_slice(&value.to_ne_bytes());}
-        }
-        let uniform=device.create_buffer_init(&wgpu::util::BufferInitDescriptor {label:Some("region line parameters"),contents:&values,usage:wgpu::BufferUsages::UNIFORM});
         let scratch=self.scratch.as_ref().unwrap();
-        let group=device.create_bind_group(&wgpu::BindGroupDescriptor {label:Some("region line stages"),layout:&self.layout,entries:&[
-            wgpu::BindGroupEntry {binding:1,resource:wgpu::BindingResource::Buffer(wgpu::BufferBinding {buffer:&uniform,offset:0,size:wgpu::BufferSize::new(PARAMS)})},
-            wgpu::BindGroupEntry {binding:2,resource:first.unwrap_or(&scratch[0]).as_entire_binding()},
-            wgpu::BindGroupEntry {binding:3,resource:second.unwrap_or(&scratch[1]).as_entire_binding()},
-            wgpu::BindGroupEntry {binding:4,resource:self.data.as_ref().unwrap().as_entire_binding()},
-            wgpu::BindGroupEntry {binding:5,resource:mask.as_entire_binding()},
-            wgpu::BindGroupEntry {binding:6,resource:wgpu::BindingResource::TextureView(paper)},
-        ]});
-        for (i,(entry,count,_)) in steps.iter().enumerate() {
-            let pass=encoder.compute_pass();
-            pass.set_pipeline(&self.pipelines[entry]);pass.set_bind_group(0,&group,&[(i as u64*stride) as u32]);
-            let groups=count.div_ceil(64) as u32;let maximum=device.limits().max_compute_workgroups_per_dimension;
-            pass.dispatch_workgroups(groups.min(maximum),groups.div_ceil(maximum).max(1),1);
+        for steps in steps.chunks((PARAMETER_BATCH_BYTES/stride) as usize) {
+            let mut values=vec![0u8;steps.len()*stride as usize];
+            for ((_,_,params),block) in steps.iter().zip(values.chunks_mut(stride as usize)) {
+                for (word,value) in block.as_chunks_mut::<4>().0.iter_mut().zip(params){word.copy_from_slice(&value.to_ne_bytes());}
+            }
+            let uniform=device.create_buffer_init(&wgpu::util::BufferInitDescriptor {label:Some("region line parameters"),contents:&values,usage:wgpu::BufferUsages::UNIFORM});
+            let group=device.create_bind_group(&wgpu::BindGroupDescriptor {label:Some("region line stages"),layout:&self.layout,entries:&[
+                wgpu::BindGroupEntry {binding:1,resource:wgpu::BindingResource::Buffer(wgpu::BufferBinding {buffer:&uniform,offset:0,size:wgpu::BufferSize::new(PARAMS)})},
+                wgpu::BindGroupEntry {binding:2,resource:first.unwrap_or(&scratch[0]).as_entire_binding()},
+                wgpu::BindGroupEntry {binding:3,resource:second.unwrap_or(&scratch[1]).as_entire_binding()},
+                wgpu::BindGroupEntry {binding:4,resource:self.data.as_ref().unwrap().as_entire_binding()},
+                wgpu::BindGroupEntry {binding:5,resource:mask.as_entire_binding()},
+                wgpu::BindGroupEntry {binding:6,resource:wgpu::BindingResource::TextureView(paper)},
+            ]});
+            let mut pass=encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {label:Some("region line stages"),timestamp_writes:None});
+            for (i,(entry,count,_)) in steps.iter().enumerate() {
+                if *count==0 {continue;}
+                pass.set_pipeline(&self.pipelines[entry]);pass.set_bind_group(0,&group,&[(i as u64*stride) as u32]);
+                let groups=count.div_ceil(64) as u32;let maximum=device.limits().max_compute_workgroups_per_dimension;
+                let rows=groups.div_ceil(maximum);
+                pass.dispatch_workgroups(groups.div_ceil(rows),rows,1);
+            }
         }
     }
     fn jump_steps(&self,steps:&mut Vec<Step>,core:[u32;4],window:[u32;4],seeds:&'static str,kind:u32,reach:u32)->u32 {
@@ -102,33 +127,58 @@ impl Lines {
         steps.push((seeds,count,self.params(core,window,[0,kind,0,0],[1.,1.,0.,0.])));
         let mut input=0;
         for step in (0..=reach.max(1).next_power_of_two().ilog2()).rev().map(|n|1<<n).chain([1]) {
-            steps.push(("jump_distance",count,self.params(core,window,[0,kind,step,input],[1.,1.,0.,0.])));input^=1;
+            steps.push(("jump_distance",if kind==0 || kind==4 {word_count(window)}else{count},self.params(core,window,[0,kind,step,input],[1.,1.,0.,0.])));input^=1;
         }
         input
     }
-    fn build_steps(&self,grain:[f32;4],radius:u32,has_paper:bool)->Vec<Step> {
+    fn build_steps(&self,grain:[f32;4],radius:u32,has_paper:bool,dirty:&std::collections::BTreeSet<[u32;2]>)->Vec<Step> {
         let mut steps=Vec::new();
-        for &(core,window) in &self.windows {
+        let changed=|halo|changed_regions(dirty,halo,self.extent);
+        let windows=|regions:Vec<PixelRect>,context|self.windows.iter().filter_map(move |&(core,window)| {
+            let core=rect(core);let window=rect(window);
+            let core=regions.iter().map(|region|core.intersect(*region)).filter(|core|!core.is_empty()).reduce(PixelRect::union)?;
+            Some((bounds(core),bounds(core.expand(context,self.extent).intersect(window))))
+        }).collect::<Vec<_>>();
+        let grain_windows=if dirty.is_empty() {self.windows.clone()}else{windows(changed(radius.max(1)),0)};
+        for (core,window) in grain_windows {
             steps.push(("grain_bits",u64::from(core[2])*u64::from(core[3]),self.params(core,window,[radius,u32::from(has_paper),0,0],grain)));
         }
-        for &(core,window) in &self.windows {
+        let distance_windows=if dirty.is_empty() {self.windows.clone()}else{windows(changed(radius.max(1)+DISTANCE_HALO),DISTANCE_HALO)};
+        for (core,window) in distance_windows {
             let input=self.jump_steps(&mut steps,core,window,"distance_seeds",0,DISTANCE_LIMIT_HALF_PIXELS.div_ceil(2));
             steps.push(("store_distance",u64::from(core[2])*u64::from(core[3]),self.params(core,window,[DISTANCE_LIMIT_HALF_PIXELS,0,0,input],grain)));
         }
-        for &(core,window) in &self.windows {self.end_steps(&mut steps,core,window,grain);}
+        let end_halo=radius.max(1)+DISTANCE_HALO+SKELETON_HALO+END_HALO;
+        let end_windows=if dirty.is_empty() {self.windows.clone()}else{windows(changed(end_halo),SKELETON_HALO+END_HALO)};
+        if !dirty.is_empty() {
+            steps.push(("reset_ends",u64::from(self.ends),self.params([0;4],[0;4],[3,self.ends,0,0],grain)));
+            for &(core,_) in &end_windows {steps.push(("reset_ends",u64::from(self.ends),self.params(core,[0;4],[4,self.ends,0,0],grain)));}
+            let candidate_halo=end_halo+2*(NEIGHBOUR_REACH+2*FIT_DISPLACEMENT);
+            for (core,_) in windows(changed(candidate_halo),0) {steps.push(("reset_ends",u64::from(self.ends),self.params(core,[0;4],[5,self.ends,0,0],grain)));}
+            steps.push(("reset_ends",u64::from(self.offsets[2]-self.offsets[1]-4).max(1),self.params([0;4],[0;4],[0;4],grain)));
+            steps.push(("reset_ends",u64::from(self.ends),self.params([0;4],[0;4],[6,self.ends,0,0],grain)));
+            steps.push(("reset_ends",u64::from(self.offsets[0]),self.params([0;4],[0;4],[7,0,0,0],grain)));
+        }
+        for (core,window) in end_windows {self.end_steps(&mut steps,core,window,grain);}
         steps
     }
     fn end_steps(&self,steps:&mut Vec<Step>,core:[u32;4],window:[u32;4],grain:[f32;4]) {
         let count=u64::from(window[2])*u64::from(window[3]);
         steps.push(("skeleton_seeds",count,self.params(core,window,[0;4],grain)));
+        let sparse_count=word_count(window);
         let mut input=0;
         for distance in (2..=16).step_by(2) {for phase in 0..4 {
-            steps.push(("skeleton_ridges",count,self.params(core,window,[distance,0,phase,input],grain)));input^=1;
+            steps.push(("skeleton_ridges",sparse_count,self.params(core,window,[distance,0,phase,input],grain)));input^=1;
         }}
         for _ in 0..2 {steps.push(("skeleton_prune",count,self.params(core,window,[0,0,0,input],grain)));input^=1;}
         steps.push(("line_ends",count,self.params(core,window,[0,MAX_LINE_WIDTH,0,input],grain)));
     }
     pub fn building(&self)->bool {self.building.is_some()}
+    #[cfg(test)]
+    pub fn compaction_pending(&self)->Option<bool> {
+        self.building.as_ref().filter(|work|work.incremental).map(|work|
+            work.steps.iter().any(|(entry,_,params)|*entry=="reset_ends" && params[16]==6))
+    }
     fn available(&self,demand:bool)->bool {
         self.building.as_ref().is_none_or(|work|work.available(demand))
     }
@@ -138,7 +188,7 @@ impl Lines {
         if let Some(rx)=&work.ends {
             let metadata=match rx.try_recv() {Ok(result)=>result?,Err(mpsc::TryRecvError::Empty)=>{self.building=Some(work);return Ok(false);},Err(error)=>return Err(GpuRasterError::MapFailed(error.to_string()))};
             self.overflow=metadata[1]!=0;self.ends=metadata[0].min(self.offsets[3]);work.ends=None;work.ranked=true;
-            if !self.overflow && self.ends>0 {for entry in ["refine_ends","seal_candidates"] {work.steps.push_back((entry,u64::from(self.ends),self.params([0;4],[0;4],[MAX_LINE_WIDTH*3/2,0,0,0],[1.,1.,0.,0.])));}}
+            if !self.overflow && self.ends>0 {for entry in ["refine_ends","seal_candidates"] {work.steps.push_back((entry,u64::from(self.ends),self.params([0;4],[0;4],[MAX_LINE_WIDTH*3/2,u32::from(work.incremental),0,0],[1.,1.,0.,0.])));}}
         }
         self.building=Some(work);Ok(true)
     }
@@ -146,12 +196,15 @@ impl Lines {
     pub fn discarded(&self)->bool {self.building.as_ref().is_some_and(|work|work.submission.as_ref().is_some_and(|owner|owner.discarded()))}
     pub fn cancel(&mut self) {self.building=None;self.seals_ready=false;}
     pub fn begin_tap(&mut self) {if self.building.as_ref().is_some_and(|work|work.sealing){self.building=None;}self.seals_ready=false;}
-    pub fn build(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,paper:([f32;4],u32,bool),budget:f64,demand:bool)->Result<(bool,f64),GpuRasterError> {
+    pub fn build(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,paper:([f32;4],u32,bool),budget:f64,demand:bool,dirty:&std::collections::BTreeSet<[u32;2]>)->Result<(bool,f64),GpuRasterError> {
         let (grain,radius,has_paper)=paper;
         use std::sync::{Arc,atomic::AtomicU32};
         if self.building.is_none() {
-            encoder.clear_buffer(self.data.as_ref().unwrap(),0,None);self.ends=0;self.overflow=false;self.seals_ready=false;
-            self.building=Some(Build {steps:self.build_steps(grain,radius,has_paper).into(),submission:None,in_flight:Arc::new(AtomicU32::new(0)),ends:None,ranked:false,sealing:false});
+            let incremental=!dirty.is_empty() && !self.overflow;
+            if !incremental {encoder.clear_buffer(self.data.as_ref().unwrap(),0,None);self.ends=0;self.overflow=false;}
+            self.seals_ready=false;
+            let empty=std::collections::BTreeSet::new();
+            self.building=Some(Build {steps:self.build_steps(grain,radius,has_paper,if incremental {dirty}else{&empty}).into(),submission:None,in_flight:Arc::new(AtomicU32::new(0)),ends:None,ranked:false,sealing:false,incremental});
         }
         self.advance(input,encoder,radius,budget,demand)
     }
@@ -165,7 +218,9 @@ impl Lines {
         while spent<budget {
             let Some((entry,remaining,mut params))=work.steps.pop_front() else {break;};
             let weight=match entry {"grain_bits"=>f64::from(radius*16+32),"jump_distance"=>9.,"store_distance"=>16.,"skeleton_ridges"=>32.,"skeleton_prune"=>128.,"line_ends"=>128.,"refine_ends"=>1024.,"seal_candidates"=>4096.,_=>1.};
-            let count=((((budget-spent)/weight) as u64).clamp(64,65536)/64*64).min(remaining);
+            let sparse=entry=="skeleton_ridges" || entry=="jump_distance" && matches!(params[17],0|4);
+            let weight=weight*if sparse {32.}else{1.};
+            let count=((((budget-spent)/weight) as u64).max(64)/64*64).min(remaining);
             steps.push((entry,count,params.clone()));spent+=count as f64*weight;
             if count<remaining {params[24]+=count as u32;work.steps.push_front((entry,remaining-count,params));}
         }
@@ -206,7 +261,7 @@ impl Lines {
                     for bucket in 0..3 {steps.push(("apply_seals",count,self.params(block,window,[0,0,bucket,bucket*self.offsets[0]],[1.,1.,0.,0.])));}
                 }}
             }
-            self.building=Some(Build {steps:steps.into(),submission:None,in_flight:std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),ends:None,ranked:true,sealing:true});
+            self.building=Some(Build {steps:steps.into(),submission:None,in_flight:std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),ends:None,ranked:true,sealing:true,incremental:false});
         }
         let mask=self.seals.as_ref().unwrap().clone();let result=self.advance(&Input {device,mask:&mask,paper},encoder,1,budget,true)?;
         self.seals_ready=result.0;Ok(result)
@@ -232,7 +287,7 @@ impl Lines {
             let words=(window[0]+window[2]).div_ceil(32)-window[0]/32;
             steps.push(("region_seeds",u64::from(words)*u64::from(window[3]),self.params(core,window,[0,5,0,0],[1.,1.,0.,0.])));
             let input=self.jump_steps(&mut steps,core,window,"region_seeds",4,UNDERFILL_HALF_PIXELS.div_ceil(2));
-            steps.push(("assign_region",u64::from(core[2])*u64::from(core[3]),self.params(core,window,[UNDERFILL_HALF_PIXELS,4,0,input],[1.,1.,0.,0.])));
+            steps.push(("assign_region",word_count(core),self.params(core,window,[UNDERFILL_HALF_PIXELS,4,0,input],[1.,1.,0.,0.])));
         }
         self.encode(input,encoder,None,None,steps);
     }
@@ -277,6 +332,12 @@ fn analysis_window(core:[u32;4],extent:[u32;2])->[u32;4] {
     let x=core[0].saturating_sub(80);let y=core[1].saturating_sub(80);
     [x,y,(core[0]+core[2]+80).min(extent[0])-x,(core[1]+core[3]+80).min(extent[1])-y]
 }
+fn word_count(rect:[u32;4])->u64 {u64::from((rect[0]+rect[2]).div_ceil(32)-rect[0]/32)*u64::from(rect[3])}
+fn bounds(rect:PixelRect)->[u32;4] {[rect.min_x(),rect.min_y(),rect.width(),rect.height()]}
+fn rect(bounds:[u32;4])->PixelRect {PixelRect::new(bounds[0],bounds[1],bounds[0]+bounds[2],bounds[1]+bounds[3])}
+fn changed_regions(pages:&std::collections::BTreeSet<[u32;2]>,halo:u32,extent:[u32;2])->Vec<PixelRect> {
+    pages.iter().map(|&page|page_rect(page).intersect(PixelRect::full(extent)).expand(halo,extent)).filter(|region|!region.is_empty()).collect()
+}
 
 pub(super) fn fits(extent:[u32;2],limits:&wgpu::Limits)->bool {storage_layout(extent,limits).is_some()}
 fn storage_layout(extent:[u32;2],limits:&wgpu::Limits)->Option<([u32;4],u64)> {
@@ -285,10 +346,35 @@ fn storage_layout(extent:[u32;2],limits:&wgpu::Limits)->Option<([u32;4],u64)> {
         let distance=u64::from(w.div_ceil(4))*u64::from(h);
         let summary=bits+distance;
         let sparse=summary+4+u64::from(w.div_ceil(128))*u64::from(h.div_ceil(128));
-        let dense=(sparse+bits)*4;
+        let dense=(sparse+bits*2)*4;
         let capacity=ENDS_BYTES.min(limits.max_storage_buffer_binding_size.min(limits.max_buffer_size).saturating_sub(dense))
             .min(u64::from(w)*u64::from(h)*64)/64;
         let size=dense+capacity*64;
         if capacity<u64::from(w.min(161))*u64::from(h.min(161)) || size>limits.max_storage_buffer_binding_size || size>limits.max_buffer_size || w>=65535 || h>=65535 {return None;}
     Some(([bits as u32,summary as u32,sparse as u32,capacity as u32],size))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overflow_preparation_covers_every_fallback_stage() {
+        let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let compiler=startup::Compiler::new().unwrap();compiler.idle(true,true);compiler.start();
+        let mut lines=Lines::new(&r.device);
+        lines.allocate(&r.device,[64;2],64,&[(0,[0,0,64,64])]).unwrap();
+        lines.overflow=true;
+        let deadline=std::time::Instant::now()+crate::READBACK_TIMEOUT;
+        while !lines.prepare(&compiler,startup::OTHER,Default::default()) {
+            compiler.check().unwrap();
+            assert!(std::time::Instant::now()<deadline,"overflow recipes must finish preparing");
+            std::thread::yield_now();
+        }
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        assert!(!lines.prepare_seals(&r.device,&mut encoder,&r.empty_paper_view,true,0.).unwrap().0);
+        for (entry,_,_) in &lines.building.as_ref().unwrap().steps {
+            assert!(lines.pipelines[entry].ready(),"overflow stage {entry} must prepare before encoding");
+        }
+    }
 }

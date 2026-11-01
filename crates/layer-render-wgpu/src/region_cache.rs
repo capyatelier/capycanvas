@@ -1,5 +1,6 @@
 use super::*;
 use layer_render::{RegionRequest,RegionSource};
+use std::collections::{BTreeMap,BTreeSet};
 
 pub(super) struct Cache {
     pub source: RegionSource,
@@ -10,16 +11,34 @@ pub(super) struct Cache {
     pub ready: bool,
     pub lastwrite:Option<crate::submission::Submission>,
     pub classified:bool,
+    pub reclassify:bool,
+    pub mask:Option<wgpu::Buffer>,
+    pub dirty:BTreeMap<SourceTarget,BTreeSet<[u32;2]>>,
+    pub sampling:region_sources::Sampling,
     frame:Option<std::sync::Arc<artwork::Frame>>,
 }
 impl Cache {
     pub fn new(r:&WgpuRasterizer,request:&RegionRequest,source:RegionSource,enclosed:bool)->Self {
         let seeds=r.device.create_buffer(&wgpu::BufferDescriptor {label:Some("cached reference seed keys"),size:source.sources().len() as u64*16,
-            usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false});
-        Self {source,paper:request.paper.clone(),tolerance:request.tolerance.to_bits(),enclosed,seeds,ready:false,lastwrite:None,classified:false,frame:r.artwork_frame.clone()}
+            usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::COPY_SRC,mapped_at_creation:false});
+        Self {source,paper:request.paper.clone(),tolerance:request.tolerance.to_bits(),enclosed,seeds,ready:false,lastwrite:None,classified:false,reclassify:false,mask:None,dirty:BTreeMap::new(),sampling:region_sources::Sampling::Transparent,frame:r.artwork_frame.clone()}
     }
     pub fn submitted(&self)->bool {self.lastwrite.as_ref().is_none_or(|owner|owner.submitted())}
     pub fn pending(&self)->bool {self.lastwrite.as_ref().is_some_and(|owner|!owner.submitted() && !owner.discarded())}
+    pub fn local(&self)->bool {
+        self.source.sources().iter().all(|source|match source {
+            RegionSource::Scene {snapshot,scope}=>{
+                let scene=snapshot.view();
+                let members=match scope {
+                    SceneScope::Raw(_)|SceneScope::RawObjects(_)=>return true,
+                    SceneScope::Members(members)=>dependencies(scene,members),
+                    _=>scene.order().to_vec(),
+                };
+                members.iter().all(|&id|scene.effect(id).is_none_or(|effect|layer_core::paper::is_paper(effect.program)))
+            },
+            _=>false,
+        })
+    }
     pub fn reads(&self,target:SourceTarget)->bool {
         self.source.sources().iter().any(|source|match source {
             RegionSource::Scene {snapshot,scope}=>{
@@ -42,16 +61,51 @@ impl Cache {
                 new.scene.view().effect(id).is_some() && effects::effective_phase(old.scene.view(),id,old.time).to_bits()==effects::effective_phase(new.scene.view(),id,new.time).to_bits()))
             && self.tolerance==request.tolerance.to_bits() && self.paper==request.paper && self.enclosed==enclosed
             && self.source.sources().len()==source.sources().len()
-            && self.source.sources().iter().zip(source.sources()).all(|(old,new)|same_source(r,old,new))
+            && self.source.sources().iter().zip(source.sources()).all(|(old,new)|same_source(r,&renewed(old,new,self.dirty.keys().copied()),new))
     }
 }
+fn renewed(old:&RegionSource,new:&RegionSource,targets:impl Iterator<Item=SourceTarget>)->RegionSource {
+    let mut result=old.clone();
+    if let (RegionSource::Scene {snapshot,..},RegionSource::Scene {snapshot:next,..})=(&mut result,new) {
+        for target in targets {
+            let Some(revision)=next.view().raster(target) else {continue;};
+            let snapshot=std::sync::Arc::make_mut(snapshot);
+            match target {
+                SourceTarget::Paint(id)=>{if let Some(source)=snapshot.artwork.paint.get_mut(id) {source.raster=revision.clone();}},
+                SourceTarget::Coverage(id)=>{if let Some(source)=snapshot.artwork.coverage.get_mut(id) {source.raster=revision.clone();}},
+                SourceTarget::Selection(_)=>{},
+            }
+        }
+    }
+    result
+}
+pub(super) fn current(r:&WgpuRasterizer,request:&RegionRequest)->RegionRequest {
+    let mut request=request.clone();
+    if let Some(frame)=&r.artwork_frame {
+        let sources=request.source.sources().iter().map(|source|match source {
+            RegionSource::Scene {snapshot,scope} if snapshot.owner==frame.scene.owner && snapshot.revision<=frame.scene.revision=>match scope {
+                SceneScope::Members(members) if members.len()==1=>RegionSource::reference(frame.scene.clone(),members[0]).unwrap_or_else(||source.clone()),
+                SceneScope::All|SceneScope::Members(_)|SceneScope::Raw(_)|SceneScope::RawObjects(_)=>RegionSource::Scene {snapshot:frame.scene.clone(),scope:scope.clone()},
+                _=>source.clone(),
+            },
+            _=>source.clone(),
+        }).collect::<Vec<_>>();
+        request.source=if sources.len()==1 {sources.into_iter().next().unwrap()}else{RegionSource::Intersection(sources)};
+    }
+    request
+}
 fn dependencies(scene:layer_core::authored::SceneView<'_>,members:&[OccurrenceHandle])->Vec<OccurrenceHandle> {
-    let mut required=members.to_vec();let mut index=0;
+    fn include(scene:layer_core::authored::SceneView<'_>,id:OccurrenceHandle,required:&mut Vec<OccurrenceHandle>) {
+        if !required.contains(&id) {required.push(id);}
+        for &child in scene.children(Some(id)) {include(scene,child,required);}
+    }
+    let mut required=Vec::new();
+    for &id in members {include(scene,id,&mut required);}
+    let mut index=0;
     while index<required.len() {
         let id=required[index];index+=1;
-        for next in [scene.parent(id),scene.clipping_base(id)].into_iter().flatten() {
-            if !required.contains(&next) {required.push(next);}
-        }
+        if let Some(parent)=scene.parent(id) && !required.contains(&parent) {required.push(parent);}
+        if let Some(base)=scene.clipping_base(id) {include(scene,base,&mut required);}
     }
     required
 }
@@ -61,7 +115,10 @@ fn same_source(r:&WgpuRasterizer,old:&RegionSource,new:&RegionSource)->bool {
             let a=a.view();let b=b.view();
             if a.owner()!=b.owner() || !a.same_composition(b) {return false;}
             match x {
-                SceneScope::Members(members)=>dependencies(a,members).iter().all(|&id|a.same_occurrence(b,id,true)),
+                SceneScope::Members(members)=>{
+                    let required=dependencies(a,members);
+                    required==dependencies(b,members) && required.iter().all(|&id|a.children(Some(id))==b.children(Some(id)) && a.same_occurrence(b,id,true))
+                },
                 SceneScope::Raw(target)=>a.target_offset(*target)==b.target_offset(*target) && a.source_owner(*target).is_some_and(|id|a.same_occurrence(b,id,true)),
                 SceneScope::RawObjects(id)=>a.same_occurrence(b,*id,true),
                 _=>a.same_artwork(b),

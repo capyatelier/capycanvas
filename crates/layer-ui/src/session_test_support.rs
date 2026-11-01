@@ -40,6 +40,7 @@ pub(crate) struct Recorder {
     pub(crate) selection_reply: Option<layer_render::SelectionPaintResult>,
     pub(crate) selection_wait: bool,
     pub(crate) region_requests: Vec<layer_render::RegionRequest>,
+    pub(crate) region_preparation: Option<layer_render::RegionPreparation>,
     pub(crate) region_reply: Option<layer_render::RegionResult>,
     pub(crate) region_fails: bool,
     pub(crate) region_cancels: usize,
@@ -84,6 +85,7 @@ pub(crate) struct Recorder {
 }
 impl CanvasRenderer for Recorder {
     type Error = BackendError;
+    fn prepare_regions(&mut self, preparation: Option<&layer_render::RegionPreparation>) { self.region_preparation=preparation.cloned(); }
     fn evaluation_context(&self) -> EvaluationContext { self.evaluation.clone() }
     fn seed_evaluation_context(&mut self, context: EvaluationContext) { self.evaluation = context; }
     fn set_clipping_preview(&mut self, shadows:bool, highlights:bool) {self.clipping_previews.push((shadows,highlights));}

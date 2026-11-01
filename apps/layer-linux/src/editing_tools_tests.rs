@@ -283,6 +283,30 @@ fn native_enclose_fill_pointer_workflow() {
             invoke(&w, CommandId::Redo); ready(&w); assert_eq!(pixels(&raster(&w)), result);
             invoke(&w, CommandId::Undo); ready(&w);
         }
+        let target = layer_ui::occurrence_token(ui_session(&w).engine().document().working.occurrence.unwrap());
+        w.dispatch(UiAction::Invoke { command: CommandId::FillConnected });
+        for (from,to,seed,other) in [([85.,50.],[85.,170.],[65.,110.],[105,110]),([40.,110.],[130.,110.],[85.,85.],[85,135])] {
+            w.dispatch(UiAction::Layer { action: LayerAction::Select { id: layer_ui::occurrence_token(reference), mask: false } });
+            w.dispatch(UiAction::SelectBrush { id: 2 });w.dispatch(UiAction::SetBrushSize { value: 8. });
+            w.dispatch(UiAction::SetColor { rgba: [0.,0.,0.,1.] });ready(&w);
+            let before = raster(&w);
+            stroke(&mut input,&w,from,to);committed(&w,&before);
+            let edited_reference = raster(&w);
+            w.dispatch(UiAction::SetColor { rgba: [0.85,0.1,0.05,1.] });
+            w.dispatch(UiAction::Layer { action: LayerAction::Select { id: target, mask: false } });
+            let before_fill = raster(&w);
+            w.dispatch(UiAction::Invoke { command: CommandId::Fill });
+            input.perform(serde_json::json!([{"point":at(seed),"down":true},{"down":false}]));
+            committed(&w,&before_fill);
+            let result = pixels(&raster(&w));
+            assert_eq!(sample(&result,seed[0] as u32,seed[1] as u32)[3],255);
+            assert_eq!(sample(&result,other[0],other[1])[3],0,"Fill uses the edited reference divider");
+            assert_eq!(ui_session(&w).engine().document().scene().paint_source(reference).unwrap().raster,edited_reference);
+            invoke(&w,CommandId::Undo);ready(&w);assert_eq!(pixels(&raster(&w)),empty);
+            invoke(&w,CommandId::Undo);ready(&w);assert_eq!(reference_now(),reference_pixels);
+            w.dispatch(UiAction::Layer { action: LayerAction::Select { id: target, mask: false } });
+        }
+        eprintln!("PASS {theme:?}: edited cached reference, immediate Fill, exact fill/edit Undo");
         let mut layout = layer_ui::WorkspacePreset::Painter.layout(Platform::Gtk);
         for zone in &mut layout.header.zones {
             zone.retain(|entry| matches!(entry.item, HeaderItem::Capy | HeaderItem::Tool {
@@ -552,7 +576,9 @@ fn native_fill_scribble_geometry() {
             let empty = pixels(&raster(&w));
             for case in sheet.cases.iter().filter(|case| case.paper == paper) {
                 for region in &case.regions {
+                    let before = raster(&w);
                     scribble_path(&mut input, &w, &[region.seed, region.seed]);
+                    committed(&w, &before);
                     capture_ui(&w, &output, &format!("scribble-{}-{}-{paper}-{theme:?}.png", case.preset, region.side));
                     let filled = pixels(&raster(&w));
                     let [left, top, width, height] = case.bounds;

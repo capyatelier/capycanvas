@@ -633,11 +633,13 @@ pub struct RegionPreparation {
     pub reference_count:Option<usize>,
     pub paper:Option<layer_core::paper::PaperBinding>,
     pub tolerance:f32,
+    pub refinement:RegionRefinement,
     pub enclosed:bool,
 }
 impl RegionPreparation {
     pub fn is_valid(&self) -> bool {
         self.source.valid_parameters(self.reference_count, self.tolerance)
+            && self.refinement.is_valid()
             && matches!(self.source, RegionSource::Composite | RegionSource::Source(_)
                 | RegionSource::Objects(_) | RegionSource::Scene { .. } | RegionSource::Intersection(_))
     }
@@ -997,7 +999,7 @@ mod tests {
         let target = SourceTarget::Paint(layer_core::authored::PaintHandle::from_index(0));
         let object = OccurrenceHandle::from_index(0);
         let mut preparation = RegionPreparation { source: RegionSource::Composite, reference_count: None,
-            paper: None, tolerance: 0.05, enclosed: false };
+            paper: None, tolerance: 0.05, refinement:Default::default(),enclosed: false };
         for source in [RegionSource::Composite, RegionSource::Source(target), RegionSource::Objects(object),
             scene.clone(), RegionSource::Intersection(vec![scene.clone(), scene.clone()])] {
             preparation.source = source;
@@ -1018,6 +1020,10 @@ mod tests {
             assert!(!preparation.source.valid_parameters(None, tolerance));
         }
         preparation.tolerance = 0.05;
+        for (offset,valid) in [(-32,true),(0,true),(32,true),(33,false),(i32::MIN,false)] {
+            preparation.refinement.edges=RegionEdges::GrowShrink(offset);assert_eq!(preparation.is_valid(),valid);
+        }
+        preparation.refinement=Default::default();
         let selection = std::sync::Arc::new(layer_core::Selection::empty());
         for source in [RegionSource::Coverage(target), RegionSource::ObjectCoverage(object),
             RegionSource::Selection(selection.clone()),

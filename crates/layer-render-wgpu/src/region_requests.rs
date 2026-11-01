@@ -17,7 +17,7 @@ pub(super) struct RegionRequests {
     cache_request: Option<RegionRequest>,
     stop_mask: Option<wgpu::Buffer>,
     chunk_timing:Option<u64>,
-    preparation:Option<(RegionRequest,bool)>,
+    preparation:Option<Preparation>,
     refiner: Option<selection_refine::SelectionRefiner>,
     readback: Option<wgpu::Buffer>,
     pending: Option<Region>,
@@ -28,6 +28,7 @@ pub(super) struct RegionRequests {
     rx: Option<mpsc::Receiver<Result<(RegionResult,bool), GpuRasterError>>>,
     modify_source: Option<ModifySource>,
 }
+struct Preparation {request:RegionRequest,enclosed:bool,recipes_ready:bool}
 /// The selection Select › Modify refines, prepared at document resolution,
 /// and the levels of its preview pyramid built so far, each halving the last
 /// over `region`.
@@ -52,6 +53,7 @@ impl RegionRequests {
         self.flood.storage_bytes()
             + self.raw.storage_bytes()
             + self.cache.as_ref().map_or(0,|cache|cache.seeds.size())
+            + self.cache.as_ref().and_then(|cache|cache.mask.as_ref()).filter(|mask|self.raw.mask().as_ref()!=Some(mask)).map_or(0,wgpu::Buffer::size)
             + self.stop_mask.as_ref().map_or(0,wgpu::Buffer::size)
             + self.readback.as_ref().map_or(0, |b| b.size())
             + self.pending.as_ref().map_or(0, Region::storage_bytes)
@@ -161,35 +163,67 @@ impl RegionRequests {
         if self.flood.lines_discarded() || self.cache.as_ref().is_none_or(|cache|!cache.matches(r,request,&source,enclosed)) {
             self.raw.cancel();self.flood.cancel_lines();self.stop_mask=None;
             if self.sampling!=region_sources::Sampling::Retained {self.sampling=if enclosed {region_sources::Sampling::Enclosed}else{region_sources::Sampling::Transparent};}
-            self.cache=Some(cache::Cache::new(r,request,source,enclosed));
+            self.cache=Some(cache::Cache::new(r,request,source.clone(),enclosed));
         }
         if !self.cache.as_ref().unwrap().ready {
             if !self.flood.lines_ready(demand)? {return Err(GpuRasterError::DeferredObjectWork);}
             if !self.cache.as_ref().unwrap().classified {
+                let cache=self.cache.as_ref().unwrap();
+                if !cache.dirty.is_empty() {self.sampling=cache.sampling;}
+                if !self.raw.processing(&base.source,self.sampling) {
+                    let pages=(!cache.dirty.is_empty()).then(||cache.dirty.values().flatten().copied().collect::<std::collections::BTreeSet<_>>().into_iter().collect());
+                    let [width,height]=r.document_extent;
+                    let bytes=u64::from(width.div_ceil(32))*u64::from(height)*4;
+                    let mut working=self.raw.mask().filter(|mask|mask.size()==bytes);
+                    if !cache.dirty.is_empty() {
+                        let saved=cache.mask.as_ref().unwrap();
+                        if let Some(working)=&working {encoder.copy_buffer_to_buffer(saved,0,working,0,saved.size());}
+                        else{working=Some(Self::copy(&r.device,encoder,saved,"region working eligibility"));}
+                    }
+                    self.raw.classification(working,pages);
+                    if self.sampling==region_sources::Sampling::Retained && !cache.dirty.is_empty() {encoder.copy_buffer_to_buffer(&cache.seeds,0,self.raw.seeds(),0,cache.seeds.size());}
+                }
                 self.raw.encode_sampling(r,&base,encoder,self.sampling)?;
-                self.cache.as_mut().unwrap().classified=true;
+                let cache=self.cache.as_mut().unwrap();cache.classified=true;cache.source=source;cache.sampling=self.sampling;
+                let classified=self.raw.mask().unwrap();
+                if let Some(saved)=&cache.mask {encoder.copy_buffer_to_buffer(&classified,0,saved,0,saved.size());}
+                else{cache.mask=Some(Self::copy(&r.device,encoder,&classified,"cached reference classification"));}
             }
+            if let Some(startup)=&r.startup
+                && !self.flood.prepare_cache(&startup.compiler,if demand {startup::BRUSH}else{startup::OTHER}) {return Err(GpuRasterError::DeferredObjectWork);}
             let classified=self.raw.mask().ok_or(GpuRasterError::InvalidExtent)?;
             let (paper,grain,radius)=Self::paper(r,request)?;
             let budget=self.refiner(r).chunk();
             self.chunk_timing=self.refiner(r).begin_timing(encoder);
-            let (ready,taps)=self.flood.build_lines(&flood::Input {device:&r.device,mask:&classified,paper:&paper},encoder,r.document_extent,(grain,radius,request.paper.is_some()),budget,demand)?;
+            let dirty=self.cache.as_ref().unwrap().dirty.values().flatten().copied().collect::<std::collections::BTreeSet<_>>();
+            let (ready,taps)=self.flood.build_lines(&flood::Input {device:&r.device,mask:&classified,paper:&paper},encoder,r.document_extent,(grain,radius,request.paper.is_some()),(budget,demand),&dirty)?;
             self.refiner.as_mut().unwrap().end_timing(encoder,self.chunk_timing,taps);
             if !ready {return Err(GpuRasterError::DeferredObjectWork);}
             let cache=self.cache.as_mut().unwrap();
             encoder.copy_buffer_to_buffer(self.raw.seeds(),0,&cache.seeds,0,cache.seeds.size());
-            cache.lastwrite=Some(encoder.submission());cache.ready=true;
+            cache.lastwrite=Some(encoder.submission());
+            if std::mem::take(&mut cache.reclassify) {
+                cache.classified=false;self.raw.cancel();self.flood.cancel_lines();
+                return Err(GpuRasterError::DeferredObjectWork);
+            }
+            cache.ready=true;cache.dirty.clear();
         }
+        Ok(())
+    }
+    fn classify_target(&mut self,r:&mut WgpuRasterizer,request:&RegionRequest,encoder:&mut crate::submission::CommandEncoder)->Result<(),GpuRasterError> {
+        let stop=self.raw.encode_sampling(r,request,encoder,region_sources::Sampling::Target)?;
+        self.stop_mask=Some(Self::copy(&r.device,encoder,&stop,"Stop target eligibility"));
         Ok(())
     }
     fn classify_lines(&mut self,r:&mut WgpuRasterizer,request:&RegionRequest,encoder:&mut crate::submission::CommandEncoder)->Result<wgpu::Buffer,GpuRasterError> {
         if let Some(count)=request.reference_count && count<request.source.sources().len()
             && self.raw.processing(&request.source.sources()[count],region_sources::Sampling::Target) {
             let target=RegionRequest {source:request.source.sources()[count].clone(),reference_count:None,limit:None,..request.clone()};
-            let stop=self.raw.encode_sampling(r,&target,encoder,region_sources::Sampling::Target)?;
-            self.stop_mask=Some(Self::copy(&r.device,encoder,&stop,"Stop target eligibility"));
+            self.classify_target(r,&target,encoder)?;
         }
         self.build_cache(r,request,request.enclosure.is_some(),encoder,true)?;
+        if let Some(startup)=&r.startup
+            && !self.flood.prepare(&startup.compiler,request.refinement,request.enclosure.is_some(),request.contiguous,startup::BRUSH) {return Err(GpuRasterError::DeferredObjectWork);}
         let source=cache::source(r,request);
         let base=RegionRequest {source,limit:None,reference_count:None,..request.clone()};
         let classified={
@@ -201,8 +235,7 @@ impl RegionRequests {
         };
         if let Some(count)=request.reference_count && count<request.source.sources().len() && self.stop_mask.is_none() {
             let target=RegionRequest {source:request.source.sources()[count].clone(),reference_count:None,limit:None,..request.clone()};
-            let stop=self.raw.encode_sampling(r,&target,encoder,region_sources::Sampling::Target)?;
-            self.stop_mask=Some(Self::copy(&r.device,encoder,&stop,"Stop target eligibility"));
+            self.classify_target(r,&target,encoder)?;
         }
         if self.flood.needs_seals(request.refinement.close_gaps) {
             if self.chunk_timing.is_some() {return Err(GpuRasterError::DeferredObjectWork);}
@@ -214,17 +247,33 @@ impl RegionRequests {
         }
         Ok(classified)
     }
-    pub fn changed(&mut self,packet:FramePacket<'_>) {
-        if self.cache.as_ref().is_some_and(|cache|packet.reset_layers || packet.dab_batches.iter().any(|batch|cache.reads(batch.target))
-            || packet.restore_rasters.iter().any(|(target,_)|cache.reads(*target))) {
-            self.cache=None;self.raw.cancel();self.flood.cancel_lines();
+    pub fn changed(&mut self,packet:FramePacket<'_>,restored:&[(SourceTarget,PixelRect)]) {
+        let Some(cache)=&mut self.cache else {return;};
+        if packet.reset_layers {self.cache=None;self.raw.cancel();self.flood.cancel_lines();return;}
+        let mut damage=restored.to_vec();
+        damage.extend(packet.dab_batches.iter().filter(|batch|batch.kind!=DabBatchKind::Preview)
+            .map(|batch|(batch.target,batch_pixel_rect(batch,packet.scene.target_extent(batch.target)))));
+        damage.retain(|(target,rect)|cache.reads(*target) && !rect.is_empty());
+        if damage.is_empty() {return;}
+        if (!cache.ready && !cache.classified && cache.lastwrite.is_none())
+            || cache.lastwrite.as_ref().is_some_and(|owner|owner.discarded()) || self.flood.lines_discarded()
+            || !cache.local() {
+            self.cache=None;self.raw.cancel();self.flood.cancel_lines();return;
         }
+        for (target,rect) in damage {
+            let rect=DocRect::from(rect).translated(packet.scene.target_offset(target)).in_frame(packet.document_extent);
+            cache.dirty.entry(target).or_default().extend(page_coordinates(rect));
+        }
+        if !cache.ready && cache.classified {cache.reclassify=true;return;}
+        cache.ready=false;cache.classified=false;
+        self.raw.cancel();self.flood.cancel_lines();self.stop_mask=None;
     }
-    pub fn background_pending(&self)->bool {self.preparation.is_some() && self.cache.as_ref().is_none_or(|cache|!cache.ready || !cache.submitted())}
+    pub fn background_pending(&self)->bool {self.preparation.as_ref().is_some_and(|preparation|!preparation.recipes_ready || self.cache.as_ref().is_none_or(|cache|!cache.ready || !cache.submitted()))}
     fn prewarm(&mut self,r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder)->Result<(),GpuRasterError> {
         if self.pending.is_some() || self.waiting.is_some() || self.running.is_some() {return Ok(());}
         if r.startup.as_ref().is_some_and(|startup|!startup.compiler.is_idle()) {return Ok(());}
-        let Some((request,enclosed))=self.preparation.clone() else {return Ok(());};
+        let Some(preparation)=&self.preparation else {return Ok(());};
+        let (request,enclosed)=(cache::current(r,&preparation.request),preparation.enclosed);
         let _=r.device.poll(wgpu::PollType::Poll);
         if self.cache.as_ref().is_some_and(|cache|cache.pending()) || (!self.flood.lines_ready(false)? && !self.flood.lines_discarded()) {return Ok(());}
         if !flood::fits(r.document_extent,&r.device.limits()) {return Ok(());}
@@ -232,12 +281,23 @@ impl RegionRequests {
             r.prepare_paper_binding(binding,startup::OTHER)?;
             if paper::PaperTile::id_for(binding).is_some_and(|id|r.papers.view(&id).is_none()) {return Ok(());}
         }
-        if let Some(startup)=&r.startup
-            && !(self.flood.prepare(&startup.compiler,request.refinement,enclosed,true,startup::OTHER) & self.raw.prepare(&startup.compiler,startup::OTHER)) {return Ok(());}
+        if let Some(startup)=&r.startup {
+            let ready=self.raw.prepare(&startup.compiler,startup::OTHER);
+            self.flood.prepare_cache(&startup.compiler,startup::OTHER);
+            if !ready {return Ok(());}
+        }
         self.refiner(r).poll_timing();
         self.raw.batch_limit(Some(1));
         if self.cache.as_ref().is_none_or(|cache|!cache.matches(r,&request,&cache::source(r,&request),enclosed)) {self.sampling=region_sources::Sampling::Transparent;}
-        match self.build_cache(r,&request,enclosed,encoder,false) {Ok(())|Err(GpuRasterError::DeferredObjectWork)=>Ok(()),Err(error)=>Err(error)}
+        match self.build_cache(r,&request,enclosed,encoder,false) {
+            Ok(())=>{
+                self.preparation.as_mut().unwrap().recipes_ready=r.startup.as_ref().is_none_or(|startup|
+                    self.flood.prepare(&startup.compiler,request.refinement,enclosed,true,startup::OTHER)
+                    & (!enclosed || startup.compiler.require(r.selection_clip.pipelines(),startup::OTHER)));
+                Ok(())
+            },
+            Err(GpuRasterError::DeferredObjectWork)=>Ok(()),Err(error)=>Err(error),
+        }
     }
     fn start(
         &mut self,
@@ -303,10 +363,11 @@ impl RegionRequests {
             } else if tone.is_some() {
                 ready &= self.raw.prepare_tonal(&startup.compiler);
             } else if !matches!(request.source, layer_render::RegionSource::Selection(_)) {
-                if !matches!(request.source, layer_render::RegionSource::Coverage(_) | layer_render::RegionSource::ObjectCoverage(_)) {
-                    ready &= self.flood.prepare(&startup.compiler, request.refinement, request.enclosure.is_some(), request.contiguous,startup::BRUSH);
-                }
                 ready &= self.raw.prepare(&startup.compiler,startup::BRUSH);
+                if !matches!(request.source, layer_render::RegionSource::Coverage(_) | layer_render::RegionSource::ObjectCoverage(_)) {
+                    let prepared=self.flood.prepare(&startup.compiler,request.refinement,request.enclosure.is_some(),request.contiguous,startup::BRUSH);
+                    if !lines || self.cache.as_ref().is_some_and(|cache|cache.ready) {ready &= prepared;}
+                }
             }
             if let Some(options) = &request.selection {
                 ready &= self
@@ -475,7 +536,7 @@ impl RegionRequests {
         let copy = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
             size: buffer.size(),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         encoder.copy_buffer_to_buffer(buffer, 0, &copy, 0, buffer.size());
@@ -697,14 +758,16 @@ impl WgpuRasterizer {
             regions.raw.cancel();regions.flood.cancel_lines();
             if regions.cache.as_ref().is_some_and(|cache|!cache.ready) {regions.cache=None;}
         }
-        regions.preparation=preparation.map(|p|(RegionRequest {
+        let previous=regions.preparation.take();
+        regions.preparation=preparation.map(|p|Preparation {request:RegionRequest {
             source:p.source.clone(),reference_count:p.reference_count,paper:p.paper.clone(),tolerance:p.tolerance,
             enclosure:None,
-            position:[0;2],request_id:0,refinement:Default::default(),contiguous:true,limit:None,selection:None,
-        },p.enclosed));
-        if let Some((request,enclosed))=&regions.preparation {
-            let source=cache::source(self,request);
-            if regions.cache.as_ref().is_some_and(|cache|!cache.matches(self,request,&source,*enclosed)) {
+            position:[0;2],request_id:0,refinement:p.refinement,contiguous:true,limit:None,selection:None,
+        },enclosed:p.enclosed,recipes_ready:self.startup.is_none() || previous.as_ref().is_some_and(|old|
+            old.recipes_ready && old.enclosed==p.enclosed && old.request.refinement==p.refinement)});
+        if let Some(preparation)=&regions.preparation {
+            let request=cache::current(self,&preparation.request);let source=cache::source(self,&request);
+            if regions.cache.as_ref().is_some_and(|cache|!cache.matches(self,&request,&source,preparation.enclosed)) {
                 regions.cache.as_mut().unwrap().ready=false;
             }
         }
@@ -817,14 +880,20 @@ impl WgpuRasterizer {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    pub(crate) fn cache_ready(r:&WgpuRasterizer)->bool {r.regions.as_ref().unwrap().cache.as_ref().unwrap().ready}
+    pub(crate) fn cached_pages(r:&WgpuRasterizer)->(wgpu::Buffer,Option<wgpu::Buffer>,std::collections::BTreeSet<[u32;2]>) {
+        let cache=r.regions.as_ref().unwrap().cache.as_ref().unwrap();
+        (cache.seeds.clone(),cache.mask.clone(),cache.dirty.values().flatten().copied().collect())
+    }
     use crate::{layer_tests::placement, test_support};
     use layer_render::{CanvasRenderer, RegionPreparation, RegionRefinement, RegionSource, SelectionRefinement, TonalRequest};
 
     fn prepared_reference() -> (WgpuRasterizer, RegionSource) {
         let extent = [64, 64];
-        let mut document = placement::paint_document(extent, "Reference");
+        let mut document = layer_core::Document::new(layer_core::authored::PortableId::random(),extent[0],extent[1],
+            layer_core::DocumentNames {paint:"Reference".into(),paper:"Paper".into()});
         placement::set_source(&mut document, layer_core::color::source::rgba8_source(extent, |x, y| {
             let ink = (12..52).contains(&x) && (12..52).contains(&y)
                 && (x == 12 || x == 51 || y == 12 || y == 51);
@@ -834,7 +903,7 @@ mod tests {
         let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         test_support::submit_ready(&mut r, test_support::packet(document.scene(), extent)).unwrap();
         r.set_refine_chunk(Some(1_048_576.));
-        r.prepare_regions(Some(&RegionPreparation { source: source.clone(), reference_count: None, paper: None, tolerance: 0., enclosed: false }));
+        r.prepare_regions(Some(&RegionPreparation { source: source.clone(), reference_count: None, paper: None, tolerance: 0., refinement:Default::default(),enclosed: false }));
         test_support::submit_settled(&mut r, test_support::packet(document.scene(), extent));
         r.wait_idle().unwrap();
         (r, source)
@@ -844,6 +913,45 @@ mod tests {
         RegionRequest { source, reference_count: None, paper: None, enclosure: None,
             contiguous: true, selection: None, request_id: 91, position: [32, 32], tolerance: 0.,
             refinement: RegionRefinement { close_gaps: false, edges: layer_render::RegionEdges::Exact, smooth_edges: false }, limit: None }
+    }
+
+    #[test]
+    fn reference_dirty_pages_keep_the_cache_with_unchanged_paper() {
+        let (mut r,source)=prepared_reference();
+        let RegionSource::Scene {snapshot,scope:SceneScope::Raw(target)}=source else {unreachable!()};
+        assert!(snapshot.view().order().iter().any(|&id|layer_core::paper::is_paper_layer(snapshot.view(),id)));
+        let mask=r.regions.as_ref().unwrap().cache.as_ref().unwrap().mask.clone();
+        let mut next=snapshot.clone();
+        let next_mut=std::sync::Arc::make_mut(&mut next);
+        let SourceTarget::Paint(paint)=target else {unreachable!()};
+        next_mut.artwork.paint.get_mut(paint).unwrap().raster=layer_core::raster::RasterRevision::pending();
+        next_mut.revision+=1;
+        r.prepare_regions(Some(&layer_render::RegionPreparation {
+            source:RegionSource::Scene {snapshot:next.clone(),scope:SceneScope::Raw(target)},
+            reference_count:None,paper:None,tolerance:0.,refinement:Default::default(),enclosed:false,
+        }));
+        let regions=r.regions.as_mut().unwrap();
+        regions.changed(test_support::packet(next.view(),[64;2]),&[(target,PixelRect::new(16,16,32,32))]);
+        let cache=regions.cache.as_ref().expect("unchanged Paper must not discard reference analysis");
+        assert_eq!(cache.mask,mask);assert!(!cache.ready);
+        assert_eq!(cache.dirty[&target],std::collections::BTreeSet::from([[0;2]]));
+    }
+
+    #[test]
+    fn background_cache_prepares_query_recipes_before_becoming_idle() {
+        let (mut r,source)=prepared_reference();
+        let RegionSource::Scene {snapshot,..}=&source else {unreachable!()};
+        r.regions=None;
+        r.startup=Some(startup::Startup::new(&r.device).unwrap());
+        r.startup.as_ref().unwrap().compiler.start();
+        r.shader_idle(true,true);
+        r.prepare_regions(Some(&RegionPreparation {source:source.clone(),reference_count:None,paper:None,tolerance:0.,refinement:Default::default(),enclosed:false}));
+        test_support::submit_settled(&mut r,test_support::packet(snapshot.view(),[64;2]));
+        assert!(r.regions.as_ref().unwrap().cache.as_ref().unwrap().ready);
+        assert!(r.regions.as_ref().unwrap().flood.prepare(&r.startup.as_ref().unwrap().compiler,Default::default(),false,true,startup::OTHER));
+        assert_eq!(r.startup.as_ref().unwrap().compiler.pending(),0);
+        let result=test_support::receive_request(&mut r,reference_query(source));
+        check_reference(&result);
     }
 
     fn hold_reference(r: &mut WgpuRasterizer) -> crate::submission::CommandEncoder {

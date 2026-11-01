@@ -357,7 +357,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Navigation over a crowded vector layer | 90 | **Not met.** Pan 57.8–58.2, pinch 56.7–58.4, rotate 54.8–55.1 presented/s at 90 Hz, with or without 5,000 paths selected | [Vector layers](#vector-layers), 2026-10-20 |
 | Marquee, Lasso or Polygon drag | 90 | | |
 | Enclose and Fill: loop drag and navigation during completion | 90 | Motion unmeasured on the reference tablet; completion checks do not qualify 90 Hz | [Reference Fill completion](#reference-fill-completion) |
-| Reference Fill completion, 24 MP | Cold and warm response | **Warm regressions:** enclosed cell about 8%; background about 16% at native bracket midpoints | [Reference Fill completion](#reference-fill-completion); M4a.1 must bring warm latency within 5% of main |
+| Reference Fill completion, 24 MP | Cold and warm response | **M4a.1 warm within 5%:** enclosed conservative bound +3.990%; background +4.486%. First-open regression remains on the low tier | [Reference Fill completion](#reference-fill-completion) |
 | Selection Brush or Quick Mask, 1536 px | 90 | | |
 | Grow, Shrink or Feather drag, full canvas | 90, soft | | |
 | Paper Scale drag with relief preview | 90 | Unmeasured on the reference tablet | Canvas-bar `paper-scale-drag`; [Paper rendering](../development/paper.md#rendering-and-performance) |
@@ -414,10 +414,26 @@ the screenshot bounds below; the background row is one matched pair.
 | Enclosed cell, mean bounds | 1.513–1.671 | 1.648–1.798 | About 8.2% slower at bracket midpoints |
 | Background | 2.167–2.354 | 2.487–2.750 | About 16% slower at bracket midpoints |
 
-These warm regressions are recorded for M4a.1, whose mid-tier gate is within
-5% of the same pre-M4a main control. Cold cache construction also regresses;
-the low-tier gate is a reference stroke → Fill → tap after one second, no
-slower than pre-M4a main. Warm results do not replace that measurement.
+M4a.1 qualifies warm latency against the same pre-M4a control with three
+matched native pairs per area on the final `12f050291` build, native library
+`e1af4a03…`. Both builds retain density 280 for these static latency checks;
+this does not qualify the tier's 90 Hz motion target.
+
+| Warm area and mean bounds | Main, seconds | M4a.1, seconds | Conservative overhead |
+| --- | ---: | ---: | ---: |
+| Enclosed cell, screenshot acquisition | 1.482–1.594 | 1.409–1.541 | +3.990% |
+| Background, screenshot call | 2.147–2.340 | 2.028–2.244 | +4.486% |
+
+The cell's whole-call screenshot bounds alone leave +6.940% uncertainty.
+All 37 cell screenshots map to a unique capture, draw, and numbered GPU-fence
+completion. The narrower bounds retain the GPU wait and exclude subsequent
+Bitmap delivery/copy time. The fence interpretation matches published
+[FenceMonitor](https://android.googlesource.com/platform/frameworks/native/+/refs/heads/main/libs/gui/FenceMonitor.cpp)
+semantics and observed process/thread/scope identities; the vendor source is
+unavailable. Original bounds, all mappings and executable checks remain in
+`artifacts/fill-tools/m4a1-preview-integration-native/capture-acquisition/`.
+The prepared-stroke gate and remaining first-open regression are reported
+separately in [low-tier results](low-tier.md#reference-fill-completion).
 The one reviewed background optimization reduces texture allocations from
 768 to 555 by supplying tight band bounds in the same pack reduction, with
 32 extra bytes in the existing output buffer.

@@ -143,14 +143,14 @@ fn scene_value(v: Vertex) -> vec4<f32> {
         let local = settings.extent.zw + v.uv * settings.rect.zw;
         let p = mat2x2<f32>(settings.operation_linear.xy, settings.operation_linear.zw) * local + settings.operation_offset.xy;
         var src: vec4<f32>;
-        if !FILL_PAPER && op == 11u { src = figure_color(p)*raw.a; }
+        if !FILL_PAPER && op == 11u { src = figure_color(p)*raw.r; }
         else if op==18u {
             let flags=u32(settings.options.z);
             let t=gradient_shape(p-settings.backdrop.xy,settings.backdrop.zw-settings.backdrop.xy,flags%4u,flags>=4u);
             let sample=gradient_sample(0xffffffffu,t);
             let color=gradient_dither(sample.color,p,settings.options.y,sample.dither);
-            src=vec4(color.rgb*color.a,color.a)*settings.color.x*raw.a;
-        } else {src=vec4(settings.color.rgb*settings.color.a,settings.color.a)*raw.a;}
+            src=vec4(color.rgb*color.a,color.a)*settings.color.x*raw.r;
+        } else {src=vec4(settings.color.rgb*settings.color.a,settings.color.a)*raw.r;}
         if FILL_PAPER && settings.operation_offset.z > 0. {
             let paper = paper_sample(scene_paper, paper_sampling, local, settings.source_over);
             let h = clamp(.5 + settings.operation_offset.z * (paper - .5), 0., 1.);
@@ -161,7 +161,7 @@ fn scene_value(v: Vertex) -> vec4<f32> {
         if !FILL_PAPER && op==11u && settings.options.y>=16. {
             return select(dst*(1.-src.a),dst,settings.options.w>.5);
         }
-        if op==6u && settings.options.z>.5 && scene_read(scene_extra,v).a>.5 {
+        if op==6u && settings.options.z>.5 && scene_read(scene_extra,v).r>.5 {
             return dst+src*select(1.-dst.a,0.,settings.options.w>.5);
         }
         if settings.options.w > .5 {
@@ -179,9 +179,12 @@ fn scene_value(v: Vertex) -> vec4<f32> {
         let gray = clamp(dot(sdr_encode(working_to_srgb(working_unassociate(raw)), 0u), vec3<f32>(.2126, .7152, .0722)), 0., 1.) * raw.a;
         return vec4<f32>(clamp(gray + dst.r * (1. - raw.a), 0., 1.));
     }
-    if op == 22u { return vec4<f32>(raw.r * (1. - dst.a)); }
+    if op == 22u { return vec4<f32>(raw.r * (1. - dst.r)); }
     if op == 16u { return raw * settings.options.y + dst * settings.options.z; }
-    if op == 3u { return raw*mix(dst.a,1.-dst.a,settings.options.z); }
+    if op == 3u {
+        let coverage=select(dst.a,dst.r,settings.options.y==2.);
+        return raw*mix(coverage,1.-coverage,settings.options.z);
+    }
     if op == 5u { let a = (1.-raw.a)*.42; return scene_space(vec4<f32>(.46,.12,.8,1.)*a); }
     let src = blend_opacity(raw,settings.options.y);
     if settings.options.w > .5 { return blend_clip(src,dst,u32(settings.options.z)); }

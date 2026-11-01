@@ -84,7 +84,28 @@ fn grain_bits(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgro
     let p=vec2<u32>(index%line.core.z,index/line.core.z);
     if p.y>=line.core.w {return;}
     let q=line.core.xy+p;
-    if grain(vec2<i32>(q)) {atomicOr(&cached[q.y*line.extent.z+q.x/32u],1u<<(q.x%32u));}
+    let word=q.y*line.extent.z+q.x/32u;let bit=1u<<(q.x%32u);
+    if grain(vec2<i32>(q)) {atomicOr(&cached[word],bit);}else{atomicAnd(&cached[word],~bit);}
+}
+fn line_block(index:u32,bounds:vec4<u32>,barrier:bool)->vec3<u32> {
+    let left=bounds.x/32u;let width=(bounds.x+bounds.z+31u)/32u-left;
+    let x=left+index%width;let y=bounds.y+index/width;
+    if y>=bounds.y+bounds.w {return vec3<u32>(0);}
+    let base=select(0u,line.offsets.z+line.offsets.w*16u,barrier);
+    return vec3(x*32u,y,atomicLoad(&cached[base+y*line.extent.z+x]));
+}
+fn ink_word(x:i32,y:i32)->u32 {
+    if x<0 || x>=i32(line.extent.z) || y<0 || y>=i32(line.extent.y) {return 0u;}
+    return atomicLoad(&cached[u32(y)*line.extent.z+u32(x)]);
+}
+fn skeleton_block(index:u32)->vec3<u32> {
+    let block=line_block(index,line.window,false);
+    if block.z==0u {return block;}
+    let x=i32(block.x/32u);let y=i32(block.y);let centre=block.z;
+    let west=(centre<<1u)|(ink_word(x-1,y)>>31u);
+    let east=(centre>>1u)|(ink_word(x+1,y)<<31u);
+    let bits=centre|(ink_word(x,y-1)&ink_word(x,y+1)&west&east);
+    return vec3(block.xy,bits);
 }
 fn local_point(i: u32) -> vec2<u32> { return vec2(i%line.window.z,i/line.window.z); }
 fn local_index(p: vec2<u32>) -> u32 { return p.y*line.window.z+p.x; }
@@ -104,11 +125,8 @@ fn distance_seeds(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_wor
     let q=line.window.xy+p;
     let value=select(INVALID,point(q),!ink(vec2<i32>(q)));first[index]=value;second[index]=value;
 }
-@compute @workgroup_size(64)
-fn jump_distance(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroups) groups:vec3<u32>) {
-    if line.options.y==4u && atomicLoad(&cached[line.offsets.y+3u])==0u{return;}
-    let index=id.x+id.y*groups.x*64u+line.job.x;
-    let p=local_point(index);if p.y>=line.window.w {return;}
+fn jump_point(p:vec2<u32>) {
+    let index=local_index(p);
     let q=line.window.xy+p;if line.options.y==0u && !ink(vec2<i32>(q)){return;}
     var best=input(index);var cost=0xffffffffu;
     if best==point(q){if line.options.y!=4u{output(index,best);}return;}
@@ -122,14 +140,32 @@ fn jump_distance(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_work
     output(index,best);
 }
 @compute @workgroup_size(64)
+fn jump_distance(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>) {
+    if line.options.y==4u && atomicLoad(&cached[line.offsets.y+3u])==0u {return;}
+    let index=id.x+id.y*groups.x*64u+line.job.x;
+    if line.options.y!=0u && line.options.y!=4u {
+        let p=local_point(index);if p.y<line.window.w {jump_point(p);}return;
+    }
+    let block=line_block(index,line.window,line.options.y==4u);var bits=block.z;
+    loop {
+        if bits==0u {break;}let bit=countTrailingZeros(bits);bits&=bits-1u;
+        let q=block.xy+vec2(bit,0u);
+        if all(q>=line.window.xy) && all(q<line.window.xy+line.window.zw) {jump_point(q-line.window.xy);}
+    }
+}
+
+@compute @workgroup_size(64)
 fn store_distance(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroups) groups:vec3<u32>) {
     let index=id.x+id.y*groups.x*64u+line.job.x;
     let p=vec2(index%line.core.z,index/line.core.z);if p.y>=line.core.w{return;}
     let q=line.core.xy+p;
-    if !ink(vec2<i32>(q)) {return;}
-    let nearest=input(local_index(q-line.window.xy));var d=line.options.x;
-    if nearest!=INVALID {d=min(line.options.x,root(4u*square(q,coord(nearest))));}
-    atomicOr(&cached[line.offsets.x+q.y*line.extent.w+q.x/4u],d<<((q.x%4u)*8u));
+    var d=0u;
+    if ink(vec2<i32>(q)) {
+        let nearest=input(local_index(q-line.window.xy));d=line.options.x;
+        if nearest!=INVALID {d=min(line.options.x,root(4u*square(q,coord(nearest))));}
+    }
+    let word=line.offsets.x+q.y*line.extent.w+q.x/4u;let shift=(q.x%4u)*8u;
+    atomicAnd(&cached[word],~(255u<<shift));atomicOr(&cached[word],d<<shift);
 }
 fn initial_skeleton(q:vec2<i32>)->bool {
     let solid=ink(q) || (ink(q+AROUND[0]) && ink(q+AROUND[2]) && ink(q+AROUND[4]) && ink(q+AROUND[6]));
@@ -147,11 +183,8 @@ fn skeleton(p: vec2<i32>) -> u32 {
     if any(p<vec2<i32>(0)) || any(p>=vec2<i32>(line.window.zw)){return 0u;}
     return input(local_index(vec2<u32>(p)));
 }
-@compute @workgroup_size(64)
-fn skeleton_ridges(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroups) groups:vec3<u32>) {
-    if line.job.y!=0u && atomicLoad(&cached[line.offsets.y+3u])==0u{return;}
-    let index=id.x+id.y*groups.x*64u+line.job.x;
-    let p=local_point(index);if p.y>=line.window.w{return;}
+fn skeleton_ridges_point(p:vec2<u32>) {
+    let index=local_index(p);
     let q=line.window.xy+p;if !initial_skeleton(vec2<i32>(q)){return;}
     var value=input(index);
     if value!=0u && ((q.x&1u)|((q.y&1u)<<1u))==line.options.z && distance(vec2<i32>(q))<=line.options.x {
@@ -162,6 +195,17 @@ fn skeleton_ridges(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_wo
     }
     output(index,value);
 }
+@compute @workgroup_size(64)
+fn skeleton_ridges(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>) {
+    if line.job.y!=0u && atomicLoad(&cached[line.offsets.y+3u])==0u {return;}
+    let block=skeleton_block(id.x+id.y*groups.x*64u+line.job.x);var bits=block.z;
+    loop {
+        if bits==0u {break;}let bit=countTrailingZeros(bits);bits&=bits-1u;
+        let q=block.xy+vec2(bit,0u);
+        if all(q>=line.window.xy) && all(q<line.window.xy+line.window.zw) {skeleton_ridges_point(q-line.window.xy);}
+    }
+}
+
 fn connected(p:vec2<i32>,d:vec2<i32>)->bool {
     return skeleton(p+d)!=0u && (d.x==0 || d.y==0 || (skeleton(p+vec2(d.x,0))==0u && skeleton(p+vec2(0,d.y))==0u));
 }
@@ -223,7 +267,8 @@ fn line_ends(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgrou
     let q=line.window.xy+p;
     if all(q>=line.core.xy) && all(q<line.core.xy+line.core.zw) {
         let word=line.offsets.z+line.offsets.w*16u+q.y*line.extent.z+q.x/32u;let bit=1u<<(q.x%32u);
-        if skeleton(vec2<i32>(p))!=0u {atomicOr(&cached[word],bit);}else{atomicAnd(&cached[word],~bit);}
+        if skeleton(vec2<i32>(p))!=0u {atomicOr(&cached[word],bit);atomicOr(&cached[word+line.offsets.x],bit);}
+        else{atomicAnd(&cached[word],~bit);atomicAnd(&cached[word+line.offsets.x],~bit);}
     }
     if any(q<line.core.xy) || any(q>=line.core.xy+line.core.zw) || skeleton(vec2<i32>(p))==0u || crossing_number(vec2<i32>(p))!=1u {return;}
     var path:array<vec2<i32>,33>;path[0]=vec2<i32>(p);
@@ -245,6 +290,7 @@ fn line_ends(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgrou
     atomicStore(&cached[base],point(vec2<u32>(position)));
     atomicStore(&cached[base+1u],(u32(delta.x)&65535u)|(u32(delta.y)<<16u));
     atomicStore(&cached[base+2u],width|(length<<16u));
+    atomicStore(&cached[base+11u],1u);atomicStore(&cached[base+15u],point(q));
     let page=(q.y/128u)*((line.extent.x+127u)/128u)+q.x/128u;
     atomicStore(&cached[base+3u],atomicExchange(&cached[line.offsets.y+4u+page],slot+1u));
 }
@@ -324,6 +370,7 @@ fn refine_ends(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgrou
     let index=id.x+id.y*groups.x*64u+line.job.x;
     let count=min(atomicLoad(&cached[line.offsets.y]),line.offsets.w);if index>=count{return;}
     let base=line.offsets.z+index*16u;let start=vec2<i32>(coord(atomicLoad(&cached[base])));let original=tangent(atomicLoad(&cached[base+1u]));
+    if line.options.y==1u && atomicLoad(&cached[base+11u])==0u {return;}
     var direction=original;var best=0xffffffffu;var key=INVALID;
     if atomicLoad(&cached[base+2u])>>16u<16u {
         let lower=vec2<u32>(max(start-vec2<i32>(64),vec2<i32>(0)))/128u;
@@ -354,6 +401,7 @@ fn seal_candidates(@builtin(global_invocation_id) id:vec3<u32>, @builtin(num_wor
     let index=id.x+id.y*groups.x*64u+line.job.x;
     let count=min(atomicLoad(&cached[line.offsets.y]),line.offsets.w);if index>=count{return;}
     let base=line.offsets.z+index*16u;let start=vec2<i32>(coord(atomicLoad(&cached[base])));let dir=tangent(atomicLoad(&cached[base+7u]));
+    if line.options.y==1u && atomicLoad(&cached[base+11u])==0u {return;}
     var best:array<u32,3>;var scores:array<u32,3>;var bends:array<u32,3>;
     for(var bucket=0u;bucket<3u;bucket++){best[bucket]=INVALID;scores[bucket]=0xffffffffu;bends[bucket]=INVALID;}
     let lower=vec2<u32>(max(start-vec2<i32>(80),vec2<i32>(0)))/128u;
@@ -457,17 +505,24 @@ fn region_seeds(@builtin(global_invocation_id) id:vec3<u32>, @builtin(num_workgr
     first[index]=select(INVALID,point(q),open);
     if line.options.y==4u && open {second[index]=point(q);}
 }
-@compute @workgroup_size(64)
-fn assign_region(@builtin(global_invocation_id) id:vec3<u32>, @builtin(num_workgroups) groups:vec3<u32>){
-    if atomicLoad(&cached[line.offsets.y+3u])==0u{return;}
-    let index=id.x+id.y*groups.x*64u+line.job.x;
-    let p=vec2(index%line.core.z,index/line.core.z);if p.y>=line.core.w{return;}
-    let q=line.core.xy+p;let nearest=input(local_index(q-line.window.xy));if nearest==INVALID{return;}
+fn assign_point(q:vec2<u32>) {
+    let nearest=input(local_index(q-line.window.xy));if nearest==INVALID{return;}
     if active_barrier(vec2<i32>(q)) && (!ink(vec2<i32>(q)) || distance(vec2<i32>(q))<=line.options.x) {
         let at=coord(nearest);let selected=(atomicLoad(&eligible[at.y*line.extent.z+at.x/32u])&(1u<<(at.x%32u)))!=0u;
         if selected{atomicOr(&eligible[q.y*line.extent.z+q.x/32u],1u<<(q.x%32u));}
     }
 }
+@compute @workgroup_size(64)
+fn assign_region(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>) {
+    if atomicLoad(&cached[line.offsets.y+3u])==0u {return;}
+    let block=line_block(id.x+id.y*groups.x*64u+line.job.x,line.core,true);var bits=block.z;
+    loop {
+        if bits==0u {break;}let bit=countTrailingZeros(bits);bits&=bits-1u;
+        let q=block.xy+vec2(bit,0u);
+        if all(q>=line.core.xy) && all(q<line.core.xy+line.core.zw) {assign_point(q);}
+    }
+}
+
 
 @compute @workgroup_size(64)
 fn hold_barriers(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>){
@@ -533,6 +588,30 @@ fn snap_seed(){
 @compute @workgroup_size(64)
 fn reset_ends(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>){
     let index=id.x+id.y*groups.x*64u+line.job.x;
+    if line.options.x==7u {
+        if index<line.offsets.x {let base=line.offsets.z+line.offsets.w*16u+index;atomicStore(&cached[base],atomicLoad(&cached[base+line.offsets.x]));}
+        return;
+    }
+    if line.options.x>=3u {
+        if index>=line.options.y {return;}
+        let at=index*16u;
+        if line.options.x==3u {
+            for(var word=0u;word<16u;word++){first[at+word]=atomicLoad(&cached[line.offsets.z+at+word]);}
+            first[at+11u]=0u;
+        }else if line.options.x==6u {
+            if first[at+15u]==INVALID {return;}
+            let slot=atomicAdd(&cached[line.offsets.y],1u);let base=line.offsets.z+slot*16u;
+            for(var word=0u;word<16u;word++){atomicStore(&cached[base+word],first[at+word]);}
+            let q=coord(first[at+15u]);let page=(q.y/128u)*((line.extent.x+127u)/128u)+q.x/128u;
+            atomicStore(&cached[base+3u],atomicExchange(&cached[line.offsets.y+4u+page],slot+1u));
+        }else{
+            let q=coord(first[at+15u]);
+            if all(q>=line.core.xy) && all(q<line.core.xy+line.core.zw) {
+                if line.options.x==4u {first[at+15u]=INVALID;}else{first[at+11u]=1u;}
+            }
+        }
+        return;
+    }
     if line.options.x==2u {if index==0u{atomicStore(&cached[line.offsets.y+3u],0u);}return;}
     if index==0u {atomicStore(&cached[line.offsets.y],0u);atomicStore(&cached[line.offsets.y+1u],0u);}
     if index<line.offsets.z-line.offsets.y-4u {atomicStore(&cached[line.offsets.y+4u+index],0u);}

@@ -44,6 +44,7 @@ pub(super) struct RawRegions {
     progress: Option<Classification>,
     request_source: Option<(layer_render::RegionSource,Sampling)>,
     batches_left:Option<usize>,
+    pages:Option<Vec<[u32;2]>>,
 }
 struct Classification {
     frame: Option<Arc<artwork::Frame>>,
@@ -187,7 +188,7 @@ impl RawRegions {
             parameters: Vec::new(),
             bindings: Default::default(),
             progress: None,
-            request_source:None,batches_left:None,
+            request_source:None,batches_left:None,pages:None,
         }
     }
     pub fn pipelines(&self) -> impl Iterator<Item = &Deferred<wgpu::ComputePipeline>> {
@@ -231,12 +232,16 @@ impl RawRegions {
         self.mask = None;
     }
     pub fn cancel(&mut self) {
+        self.pages=None;
         if self.progress.take().is_some() {
             self.invalidate_tonal();
             self.capture = Default::default();
         }
     }
     pub fn batch_limit(&mut self,limit:Option<usize>) {self.batches_left=limit;}
+    pub fn classification(&mut self,mask:Option<wgpu::Buffer>,pages:Option<Vec<[u32;2]>>) {
+        self.bindings.clear();self.mask=mask;self.pages=pages;
+    }
     pub fn processing(&self,source:&layer_render::RegionSource,sampling:Sampling)->bool {self.progress.is_some() && self.request_source.as_ref().is_some_and(|(old,mode)|old==source && *mode==sampling)}
     pub fn extent(&self) -> Option<[u32; 2]> { self.progress.as_ref().map(|progress| progress.extent) }
     pub fn begin(&mut self, r: &WgpuRasterizer, request: &layer_render::RegionRequest) -> Result<(), GpuRasterError> {
@@ -339,7 +344,7 @@ impl RawRegions {
             let source = layer_render::RegionRequest { source: sources[index].clone(), ..request.clone() };
             let result = self.encode_source(r, &source, encoder, index > 0,sampling)?;
             if sampling!=Sampling::Target {encoder.copy_buffer_to_buffer(&self.seed,0,self.seeds.as_ref().unwrap(),index as u64*16,16);}
-            if index + 1 == sources.len() { self.progress = None; return Ok(result); }
+            if index + 1 == sources.len() { self.progress = None; self.pages=None; return Ok(result); }
             self.progress = None;
             let next = layer_render::RegionRequest { source: sources[index + 1].clone(), ..request.clone() };
             self.begin(r, &next)?;
@@ -520,7 +525,7 @@ impl RawRegions {
         }
         let fallback = layer.and_then(|target| r.layer_masks.definitions.get(&target)).map_or([0.;4], |mask| [mask.default_coverage;4]);
         let seed_tile = request.position.map(|v| v / PAGE_SIZE);
-        let tiles: Vec<_> = page_coordinates(PixelRect::full([w, h])).collect();
+        let tiles: Vec<_> = self.pages.clone().unwrap_or_else(||page_coordinates(PixelRect::full([w, h])).collect());
         let batches: Vec<_> = (tone.is_none())
             .then_some(std::slice::from_ref(&seed_tile))
             .into_iter()

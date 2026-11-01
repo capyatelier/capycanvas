@@ -3,6 +3,116 @@ use crate::test_support::submit_settled;
 use layer_render::RegionPreparation;
 
 #[test]
+fn region_cache_reference_edits_match_fresh_masks_across_page_and_window_seams() {
+    let extent=[4097,257];
+    let alpha=(0..extent[0]*extent[1]).map(|i| {
+        let (x,y)=(i%extent[0],i/extent[0]);
+        f32::from((barrier([80,32,2100,225],x,y) && !(y==32 && (252..260).contains(&x)))
+            || (barrier([3300,32,3900,225],x,y) && !(y==32 && (3596..3604).contains(&x))))
+    }).collect::<Vec<_>>();
+    let mut document=Document::new(layer_core::authored::PortableId::random(),extent[0],extent[1],
+        layer_core::DocumentNames {paint:"Reference".into(),paper:"Paper".into()});
+    placement::set_source(&mut document,layer_core::color::source::rgba8_source(extent,|x,y|
+        [0,0,0,(alpha[(y*extent[0]+x) as usize]*255.) as u8]));
+    assert!(document.bottom_paper().is_some());
+    let reference=placement::occurrence_id(&document);
+    let paint=target(&document);
+    let SourceTarget::Paint(handle)=paint else {unreachable!()};
+    let original=document.artwork.paint.get(handle).unwrap().raster.clone();
+    let empty=paint_document(extent,"Fill target");
+    let (_,stop)=placement::append_paint(&mut document,"Fill target",placement::paint(&empty).clone());
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    frame(&mut r,&document,extent);
+    let preparation=|document:&Document| {
+        let snapshot=document.snapshot();
+        RegionPreparation {source:RegionSource::Intersection(vec![RegionSource::reference(snapshot.clone(),reference).unwrap(),
+            RegionSource::Scene {snapshot,scope:layer_core::SceneScope::Raw(stop)}]),reference_count:Some(1),paper:None,tolerance:0.,refinement:Default::default(),enclosed:false}
+    };
+    r.prepare_regions(Some(&preparation(&document)));
+    submit_settled(&mut r,packet(document.scene(),extent));
+    for stage in 1..=4 {
+        if stage%2==1 {
+            document.artwork.paint.get_mut(handle).unwrap().raster=layer_core::raster::RasterRevision::pending();
+            document.revision+=1;
+            let mut ink=dab([0.,0.,0.,1.]);
+            ink.center=Point {x:if stage==1 {256.}else{1888.},y:128.};ink.radii=[2.,112.];
+            let mut stroke=batch(paint);stroke.damage=ink.bounds();
+            submit_ready(&mut r,FramePacket {dabs:&[ink],dab_batches:&[stroke],..packet(document.scene(),extent)}).unwrap();
+        }else{
+            document.artwork.paint.get_mut(handle).unwrap().raster=original.clone();document.revision+=1;
+            submit_ready(&mut r,FramePacket {restore_rasters:&[(paint,original.clone())],..packet(document.scene(),extent)}).unwrap();
+        }
+        submit_settled(&mut r,packet(document.scene(),extent));
+        let prepared=preparation(&document);
+        r.prepare_regions(Some(&prepared));
+        assert!(!r.regions.as_ref().unwrap().background_pending(),"preparation must adopt the current reference without a second build, stage {stage}");
+        let mut queries=Vec::new();let mut cached=Vec::new();
+        for edges in [RegionEdges::Exact,RegionEdges::LineMiddle,RegionEdges::GrowShrink(2)] {
+            for position in [[120,128],[3600,128]] {
+                let mut query=request(prepared.source.clone(),rectangle([0,0,1,1]),RegionRefinement {edges,..Default::default()},0.);
+                query.reference_count=Some(1);query.enclosure=None;query.position=position;
+                cached.push(receive_request(&mut r,query.clone()));queries.push(query);
+            }
+        }
+        r.prepare_regions(None);r.regions=None;
+        for (query,cached) in queries.into_iter().zip(cached) {
+            let fresh=receive_request(&mut r,query);
+            assert_eq!((cached.pixels.bounds(),cached.pixels.words()),(fresh.pixels.bounds(),fresh.pixels.words()),"stage {stage}");
+            assert_eq!(cached.underfill.as_deref().map(|pixels|(pixels.bounds(),pixels.words())),
+                fresh.underfill.as_deref().map(|pixels|(pixels.bounds(),pixels.words())),"underfill stage {stage}");
+        }
+        r.prepare_regions(Some(&prepared));
+        submit_settled(&mut r,packet(document.scene(),extent));
+    }
+}
+
+#[test]
+fn region_cache_tracks_clipping_group_children_and_topology() {
+    let extent=[129;2];
+    let alpha=(0..extent[0]*extent[1]).map(|i|f32::from(barrier([16,16,112,112],i%extent[0],i/extent[0]))).collect::<Vec<_>>();
+    let mut document=uniform_document(extent,&alpha);
+    let child=placement::occurrence_id(&document);let paint=target(&document);
+    let SourceTarget::Paint(handle)=paint else {unreachable!()};
+    let original=document.artwork.paint.get(handle).unwrap().raster.clone();
+    document.apply(document.group_layers_edit(&[child],layer_core::LayerBlend::Normal,"Clip base").unwrap()).unwrap();
+    let group=document.scene().children(None)[0];
+    let opaque=uniform_document(extent,&vec![1.;(extent[0]*extent[1]) as usize]);
+    let (reference,_)=placement::append_paint(&mut document,"Clipped reference",placement::paint(&opaque).clone());
+    document.apply(document.drop_layers_edit(&[reference],group,layer_core::OccurrenceDropPosition::Above).unwrap().edit).unwrap();
+    let mut clipped=document.scene().occurrence(reference).unwrap().clone();clipped.attachment=layer_core::Attachment::Clip;
+    document.apply(layer_core::Edit::Occurrence(layer_core::authored::RecordChange::replace(&document.artwork.occurrences,reference,Some(clipped)).unwrap())).unwrap();
+    assert_eq!(document.scene().clipping_base(reference),Some(group));
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();frame(&mut r,&document,extent);
+    for stage in 0..4 {
+        if stage==1 {
+            document.artwork.paint.get_mut(handle).unwrap().raster=layer_core::raster::RasterRevision::pending();document.revision+=1;
+            let mut ink=dab([0.,0.,0.,1.]);ink.center=Point {x:64.,y:64.};ink.radii=[2.,54.];
+            let mut stroke=batch(paint);stroke.damage=ink.bounds();
+            submit_ready(&mut r,FramePacket {dabs:&[ink],dab_batches:&[stroke],..packet(document.scene(),extent)}).unwrap();
+        }else if stage==2 {
+            document.artwork.paint.get_mut(handle).unwrap().raster=original.clone();document.revision+=1;
+            submit_ready(&mut r,FramePacket {restore_rasters:&[(paint,original.clone())],..packet(document.scene(),extent)}).unwrap();
+        }else if stage==3 {
+            let alpha=(0..extent[0]*extent[1]).map(|i|f32::from(i%extent[0]==64 && (16..112).contains(&(i/extent[0])))).collect::<Vec<_>>();
+            let added=uniform_document(extent,&alpha);
+            let (added,_)=placement::append_paint(&mut document,"New clip child",placement::paint(&added).clone());
+            let edit=document.drop_layers_edit(&[added],group,layer_core::OccurrenceDropPosition::Into).unwrap().edit;
+            document.apply(edit).unwrap();submit_settled(&mut r,packet(document.scene(),extent));
+        }
+        let source=RegionSource::reference(document.snapshot(),reference).unwrap();
+        let prepared=RegionPreparation {source:source.clone(),reference_count:None,paper:None,tolerance:0.,refinement:Default::default(),enclosed:false};
+        r.prepare_regions(Some(&prepared));submit_settled(&mut r,packet(document.scene(),extent));
+        let mut query=request(source,rectangle([0,0,1,1]),Default::default(),0.);query.enclosure=None;query.position=[40,64];
+        let cached=receive_request(&mut r,query.clone());
+        assert_eq!(value(&cached.pixels,80,64),if stage%2==0 {255}else{0},"stage {stage}");
+        r.prepare_regions(None);r.regions=None;
+        let fresh=receive_request(&mut r,query);
+        assert_eq!((cached.pixels.bounds(),cached.pixels.words()),(fresh.pixels.bounds(),fresh.pixels.words()),"stage {stage}");
+        r.prepare_regions(Some(&prepared));submit_settled(&mut r,packet(document.scene(),extent));
+    }
+}
+
+#[test]
 fn region_cache_prewarm_pauses_for_contact_resumes_idle_and_promotes_demand() {
     let extent=[64;2];
     let alpha=(0..extent[0]*extent[1]).map(|i|f32::from(barrier([12,12,52,52],i%extent[0],i/extent[0]))).collect::<Vec<_>>();
@@ -13,7 +123,7 @@ fn region_cache_prewarm_pauses_for_contact_resumes_idle_and_promotes_demand() {
     r.startup=Some(startup::Startup::new(&r.device).unwrap());
     r.startup.as_ref().unwrap().compiler.start();
     r.shader_idle(false,false);
-    r.prepare_regions(Some(&RegionPreparation {source:source.clone(),reference_count:None,paper:None,tolerance:0.,enclosed:false}));
+    r.prepare_regions(Some(&RegionPreparation {source:source.clone(),reference_count:None,paper:None,tolerance:0.,refinement:Default::default(),enclosed:false}));
     assert!(r.regions.as_ref().unwrap().background_pending());
     assert!(!r.has_pending_work());
     let frame=r.artwork_frame.clone().unwrap();
@@ -29,6 +139,11 @@ fn region_cache_prewarm_pauses_for_contact_resumes_idle_and_promotes_demand() {
     let mut query=request(source,rectangle([0,0,1,1]),exact(),0.);
     query.enclosure=None;query.position=[32,32];
     check(&receive_request(&mut r,query),&rectangles(extent,&[[13,13,51,51]]),extent);
+    assert!(crate::region_requests::tests::cache_ready(&r));
+    assert!(r.regions.as_ref().unwrap().background_pending());
+    assert!(!r.has_pending_work());
+    r.shader_idle(true,true);
+    submit_settled(&mut r,packet(document.scene(),extent));
     assert!(!r.regions.as_ref().unwrap().background_pending());
     r.prepare_regions(None);
 }
@@ -42,12 +157,12 @@ fn region_cache_prewarm_completes_reuses_and_schedules_changed_preparation() {
     let expected = [vec![[41., 41.], [472., 41.], [472., 224.], [41., 224.]]];
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     assert!(r.regions.is_none());
-    r.prepare_regions(Some(&RegionPreparation { source: source.clone(), reference_count: Some(2), paper: None, tolerance: 0., enclosed: false }));
+    r.prepare_regions(Some(&RegionPreparation { source: source.clone(), reference_count: Some(2), paper: None, tolerance: 0., refinement:Default::default(),enclosed: false }));
     assert!(r.regions.is_none());
     frame(&mut r, &document, extent);
     r.set_refine_chunk(Some(1_048_576.));
     for enclosed in [false, true] {
-        let mut preparation = RegionPreparation { source: source.clone(), reference_count: None, paper: None, tolerance: 0., enclosed };
+        let mut preparation = RegionPreparation { source: source.clone(), reference_count: None, paper: None, tolerance: 0., refinement:Default::default(),enclosed };
         r.prepare_regions(Some(&preparation));
         assert!(r.regions.as_ref().unwrap().background_pending());
         submit_ready(&mut r, packet(document.scene(), extent)).unwrap();
@@ -96,20 +211,20 @@ fn region_cache_foreground_promotion_cancel_drops_the_old_request() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     frame(&mut r, &document, extent);
     r.set_refine_chunk(Some(1_048_576.));
-    r.prepare_regions(Some(&RegionPreparation { source: source.clone(), reference_count: None, paper: None, tolerance: 0., enclosed: false }));
+    r.prepare_regions(Some(&RegionPreparation { source: source.clone(), reference_count: None, paper: None, tolerance: 0., refinement:Default::default(),enclosed: false }));
     submit_ready(&mut r, packet(document.scene(), extent)).unwrap();
     assert!(r.regions.as_ref().unwrap().background_pending());
     let mut query = request(source, rectangle([0, 0, 1, 1]), exact(), 0.);
     query.enclosure = None; query.position = [100, 100]; query.request_id = 90;
     assert!(r.request_region(query).unwrap());
     assert!(r.region_pending());
-    r.prepare_regions(Some(&RegionPreparation { source: RegionSource::Composite, reference_count: Some(2), paper: None, tolerance: 0., enclosed: false }));
+    r.prepare_regions(Some(&RegionPreparation { source: RegionSource::Composite, reference_count: Some(2), paper: None, tolerance: 0., refinement:Default::default(),enclosed: false }));
     assert!(r.region_pending());
     r.cancel_region();
     assert!(!r.region_pending());
     assert!(r.take_region().is_none());
     let source = RegionSource::Scene { snapshot, scope: layer_core::SceneScope::Raw(second) };
-    r.prepare_regions(Some(&RegionPreparation { source: source.clone(), reference_count: None, paper: None, tolerance: 0., enclosed: false }));
+    r.prepare_regions(Some(&RegionPreparation { source: source.clone(), reference_count: None, paper: None, tolerance: 0., refinement:Default::default(),enclosed: false }));
     let mut query = request(source, rectangle([0, 0, 1, 1]), exact(), 0.);
     query.enclosure = None; query.position = [300, 100];
     let result = receive_request(&mut r, query);
@@ -132,7 +247,7 @@ fn region_cache_prewarm_rebuilds_for_an_opaque_seed() {
     }));
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     frame(&mut r,&document,extent);
-    r.prepare_regions(Some(&RegionPreparation {source:RegionSource::Composite,reference_count:None,paper:None,tolerance:0.,enclosed:false}));
+    r.prepare_regions(Some(&RegionPreparation {source:RegionSource::Composite,reference_count:None,paper:None,tolerance:0.,refinement:Default::default(),enclosed:false}));
     submit_settled(&mut r,packet(document.scene(),extent));
     for close_gaps in [false,true] {
         let mut query=request(RegionSource::Composite,rectangle([0,0,1,1]),RegionRefinement {close_gaps,..exact()},0.);
@@ -156,7 +271,7 @@ fn region_cache_reference_parent_offset_moves_warm_geometry() {
     let source = RegionSource::Scene { snapshot: document.snapshot(), scope: layer_core::SceneScope::Raw(target) };
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     frame(&mut r, &document, extent);
-    r.prepare_regions(Some(&RegionPreparation { source: source.clone(), reference_count: None, paper: None, tolerance: 0., enclosed: false }));
+    r.prepare_regions(Some(&RegionPreparation { source: source.clone(), reference_count: None, paper: None, tolerance: 0., refinement:Default::default(),enclosed: false }));
     submit_settled(&mut r, packet(document.scene(), extent));
     assert!(!r.regions.as_ref().unwrap().background_pending());
     let mut query = request(source, rectangle([0, 0, 1, 1]), exact(), 0.);
@@ -169,7 +284,7 @@ fn region_cache_reference_parent_offset_moves_warm_geometry() {
     let change = layer_core::authored::RecordChange::replace(&document.artwork.occurrences, group, Some(owner)).unwrap();
     document.apply(layer_core::Edit::Occurrence(change)).unwrap();
     let source = RegionSource::Scene { snapshot: document.snapshot(), scope: layer_core::SceneScope::Raw(target) };
-    r.prepare_regions(Some(&RegionPreparation { source: source.clone(), reference_count: None, paper: None, tolerance: 0., enclosed: false }));
+    r.prepare_regions(Some(&RegionPreparation { source: source.clone(), reference_count: None, paper: None, tolerance: 0., refinement:Default::default(),enclosed: false }));
     assert!(r.regions.as_ref().unwrap().background_pending());
     submit_settled(&mut r, packet(document.scene(), extent));
     assert!(!r.regions.as_ref().unwrap().background_pending());
@@ -217,7 +332,7 @@ fn region_cache_stop_target_dab_and_restore_keep_reference_geometry_ready() {
         let snapshot = document.snapshot();
         let source = RegionSource::Intersection(vec![RegionSource::reference(snapshot.clone(), leaf).unwrap(),
             RegionSource::Scene { snapshot, scope: layer_core::SceneScope::Raw(stop) }]);
-        r.prepare_regions(Some(&RegionPreparation { source: source.clone(), reference_count: Some(1), paper: None, tolerance: 0., enclosed: false }));
+        r.prepare_regions(Some(&RegionPreparation { source: source.clone(), reference_count: Some(1), paper: None, tolerance: 0., refinement:Default::default(),enclosed: false }));
         if stage == 0 { submit_settled(&mut r, packet(document.scene(), extent)); }
         assert!(!r.regions.as_ref().unwrap().background_pending(), "Stop changes must not reclassify references");
         let mut query = request(source, rectangle([0, 0, 1, 1]), exact(), 0.);
@@ -266,7 +381,7 @@ fn region_cache_sparse_overflow_preserves_seals_across_blocks_and_warm_requests(
         let document = uniform_document(extent, &alpha);
         let source = RegionSource::Scene { snapshot: document.snapshot(), scope: layer_core::SceneScope::Raw(target(&document)) };
         frame(&mut r, &document, extent);
-        r.prepare_regions(Some(&RegionPreparation { source: source.clone(), reference_count: None, paper: None, tolerance: 0., enclosed: false }));
+        r.prepare_regions(Some(&RegionPreparation { source: source.clone(), reference_count: None, paper: None, tolerance: 0., refinement:Default::default(),enclosed: false }));
         submit_settled(&mut r, packet(document.scene(), extent));
         assert!(!r.regions.as_ref().unwrap().background_pending());
         assert_eq!(r.regions.as_ref().unwrap().flood.needs_seals(true), dense);
@@ -301,7 +416,7 @@ fn region_cache_paper_deletion_rebuilds_reference_without_resetting_layers() {
         [0, 0, 0, if barrier([12, 12, 52, 52], x, y) { 255 } else { 0 }]));
     let target = target(&document);
     let mut preparation = RegionPreparation { source: RegionSource::Scene { snapshot: document.snapshot(), scope: layer_core::SceneScope::Raw(target) },
-        reference_count: None, paper: document.nearest_paper_binding(document.drawing_content()), tolerance: 0., enclosed: false };
+        reference_count: None, paper: document.nearest_paper_binding(document.drawing_content()), tolerance: 0., refinement:Default::default(),enclosed: false };
     assert!(preparation.paper.is_some());
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     frame(&mut r, &document, extent);

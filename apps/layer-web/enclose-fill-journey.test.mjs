@@ -221,6 +221,28 @@ export async function checkEncloseFill({call,evaluate,settle}) {
         await invoke('redo');await idle();assert.deepEqual(rasterIdentity(await save()),after,`${mode}: exact redo`);
         await invoke('undo');await idle();
       }
+      const targetBeforeEdit=await evaluate('Number(layerApp.state().layers.find(l=>l.editing).id)');
+      const referenceId=await evaluate('Number(layerApp.state().layers.find(l=>l.label==="Reference ink").id)');
+      const targetRaster=empty.find(source=>!reference.some(original=>original.id===source.id));assert.ok(targetRaster);
+      await chooseToolActionGroup({call,evaluate,settle},'fill-scope','fill_connected');
+      for(const [from,to,seed,other] of [[[85,50],[85,170],[65,110],[105,110]],[[40,110],[130,110],[85,85],[85,135]]]){
+        await send({type:'layer',action:{op:'select',id:referenceId,mask:false}});
+        await send({type:'select_brush',id:2});await send({type:'set_brush_size',value:8});await send({type:'set_color',rgba:[0,0,0,1]});
+        const revision=await evaluate('String(layerApp.state().layers.find(l=>l.editing).paint_revision)');
+        await scribblePath([from,to]);
+        const editedRevision=await evaluate('String(layerApp.state().layers.find(l=>l.editing).paint_revision)');
+        assert.notEqual(editedRevision,revision,'Native reference edit commits');
+        const point=await screen(seed);
+        await evaluate(`layerApp.dispatch({type:'set_color',rgba:[.85,.1,.05,1]});layerApp.dispatch({type:'layer',action:{op:'select',id:${targetBeforeEdit},mask:false}});layerApp.dispatch({type:'invoke',command:'fill'})`);
+        await pointer('mousePressed',point);await pointer('mouseReleased',point);await idle();
+        const result=await output(),alpha=([x,y])=>result.pixels[(y*384+x)*4+3];
+        assert.equal(alpha(seed),255);assert.equal(alpha(other),0,'Fill uses the edited reference divider');
+        assert.equal(await evaluate(`String(layerApp.state().layers.find(l=>Number(l.id)===${referenceId}).paint_revision)`),editedRevision,'Fill preserves the edited reference');
+        await invoke('undo');await idle();assert.deepEqual(rasterIdentity(await save()).find(source=>source.id===targetRaster.id),targetRaster,'One Undo removes the promoted Fill');
+        await invoke('undo');await idle();assert.deepEqual(rasterIdentity(await save()),empty,'Second Undo restores the reference edit');
+        await send({type:'layer',action:{op:'select',id:targetBeforeEdit,mask:false}});
+      }
+      console.log(`PASS ${theme}: edited cached reference, immediate Fill, exact fill/edit Undo`);
       const paperLayer=await evaluate('Number(layerApp.state().layers.find(l=>l.content_icon==="layer-paper-symbolic")?.id)');assert.ok(Number.isFinite(paperLayer),'Imported drawing supplies its default Paper');
       await send({type:'layer',action:{op:'delete',id:paperLayer}});
       assert.ok(await evaluate('!!layerApp.state().layer_tools.add_paper'),'No Paper fixture removes its Paper');

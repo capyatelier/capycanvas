@@ -285,8 +285,8 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Move selected pixels: Leave Copy | 60 | Screen 59.3 presents/s, p99 16.7 ms; renderer 131.1 completed updates/s | Two-page-refinement qualification below, `move-part-leave-copy-drag` |
 | Marquee, Lasso or Polygon drag | 60 | | |
 | Enclose and Fill: loop drag and navigation during completion | 60 | Motion unmeasured; completion latency does not qualify moving-frame cadence | [Reference Fill completion](#reference-fill-completion) |
-| G-Pen and pan while Fill prepares eight references | 60 | **No regression:** G-Pen 33.148 → 33.261 completed updates/s, a shared 60 Hz miss; pan 60.0224 → 60.0227 presents/s meets | [Reference Fill completion](#reference-fill-completion) |
-| Reference Fill completion, 12 MP | Cold and warm response | **Cold regression.** Headless cell/background 5.394/5.259 → 12.318/12.166 s; prewarm about 34.2 s | [Reference Fill completion](#reference-fill-completion) |
+| G-Pen and pan while Fill prepares eight references | 60 | **M4a.1 partial AB:** G-Pen 32.50 → 32.40 completed updates/s, a shared 60 Hz miss; pan 60.02 on both. Full ABBA pending | [Reference Fill completion](#reference-fill-completion) |
+| Reference Fill completion, 12 MP | Cold and warm response | Prepared stroke 5.5 → 3.6–3.8 s. **First-open cold regression:** 5.6–5.8 → 7.6–7.8 s | [Reference Fill completion](#reference-fill-completion) |
 | Selection Brush or Quick Mask, 1024 px | 60 | | |
 | Grow, Shrink or Feather drag, full canvas | 60, soft | | |
 | Paper Scale drag with relief preview | 60 | Unmeasured on the reference tablet | Canvas-bar `paper-scale-drag`; [Paper rendering](../development/paper.md#rendering-and-performance) |
@@ -358,11 +358,49 @@ predate idle admission and remain recorded regressions, not motion qualification
 | First cell / background result | 5.394 / 5.259 → 12.318 / 12.166 s |
 | After choosing Fill, whole-backend idle | M4a 34.162–34.217 s; upper bound on cache preparation |
 
-A reference edit currently invalidates the whole cache, so Draw → Fill commonly
-pays the cold cost. M4a lands with this regression recorded. The next M4a.1 gate
-is a 12 MP reference stroke → choose Fill → tap after one second, no slower than
-pre-M4a main. Its other gate brings the mid-tier one-reference warm regression
-back within 5% of pre-M4a main. Warm results do not satisfy the cold gate.
+M4a invalidated the whole reference cache after a stroke. M4a.1 retains clean
+pages and prepares query recipes at idle, including on open for reference
+drawings. The native prepared-stroke check uses the same reference stroke and
+contacts Fill one second after choosing it, without a priming query.
+
+| Native prepared-stroke check | Pre-M4a main, seconds | M4a.1, seconds |
+| --- | ---: | ---: |
+| Three matched pairs, mean screenshot bounds | 5.478–5.640 | 3.630–3.819 |
+| Final merged build, one confirmation pair | 5.495–5.658 | 3.599–3.754 |
+
+The control is `ccf1e0110`; the measured merged APK is `db7e9120…` on
+`12f050291`. These static latency pairs retain density 272 on both builds;
+they do not qualify moving-frame cadence. Three-pair evidence is in
+`artifacts/fill-tools/m4a1-repeated-stroke-native/prepared-results.json`;
+final integration evidence is in `artifacts/fill-tools/m4a1-preview-integration-native/`.
+These prepared results do not measure cold cache construction.
+
+The corrected first-open draw → Fill check waits for the brush, without
+draining background preparation before drawing. Its first matched cell pair
+is 5.595–5.761 → 7.638–7.800 s: **the natural first-open path still
+regresses**. Both builds report pending composition before the stroke.
+This is a user-loop measurement with possible prewarm progress, not a fully
+cold build time. The separate test hook and timing boundaries are in
+`artifacts/fill-tools/m4a1-natural-open-audit/`.
+
+The final 12 MP eight-reference native capacity pair completes without OOM on
+both builds. First cell completion is 23.512–23.736 → 25.017–25.244 s;
+the next tap is 21.528–21.690 → 2.571–2.704 s. This single pair checks
+capacity; its latency is diagnostic. Exact provenance is in
+`artifacts/fill-tools/m4a1-preview-integration-native/tcl-8ref-pair.log`.
+
+The M4a.1 on-open motion comparison completed only the first AB half: three
+eight-second G-Pen and pan contacts per build, 12 of the planned 24 motions,
+at factory density 320. Mean completed and fresh-input updates are
+32.504 → 32.402/s (−0.3%); per-run p99 completion gaps are
+41.208–42.169 → 42.750–44.777 ms. Pan holds 60.023/s on both, with
+p99 present gaps 16.690–16.841 → 16.684–16.840 ms. This partial comparison
+does not qualify a full ABBA; that check remains in the final fill matrix.
+Open-to-whole-idle upper bounds are 31.90–33.39 → 53.06–54.25 s,
+including document opening, the contact and settling, rather than cache time
+alone. Every completion observation follows the terminal input and publication;
+contact-paused preparation is not counted as complete. Compact evidence is in
+`artifacts/fill-tools/m4a1-on-open-motion/partial-results.json`.
 
 The pre-band headless 1/3/8-reference device matrix has sixteen successful rows;
 TCL eight-reference cell/background checks pass on both variants. The two

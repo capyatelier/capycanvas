@@ -17,6 +17,7 @@ pub(super) struct RegionTools {
     pub texture_strength: f32,
     pub refinement: layer_render::RegionRefinement,
     pub source: [RegionSource; 3],
+    pub last_fill: Option<CommandId>,
     contact: Option<Point>,
     generation: u64,
     queued: Option<RegionRequest>,
@@ -55,6 +56,7 @@ impl Default for RegionTools {
                 ..Default::default()
             },
             source: [RegionSource::Auto; 3],
+            last_fill: None,
             contact: None,
             generation: 0,
             queued: None,
@@ -276,7 +278,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         else { sources.pop() }
     }
     pub(super) fn prepare_region_tools(&mut self) {
-        let Some((_,source,_))=self.layer_interaction.tool.region() else {return;};
+        let tool=self.layer_interaction.tool;
+        if tool.region().is_some_and(|(fill,_,_)|fill) {
+            self.region_tools.last_fill=Some(if matches!(tool,LayerCanvasTool::EncloseFill {..}) {CommandId::EncloseFill}else{CommandId::Fill});
+        }
+        let (source,enclosed)=if let Some((_,source,_))=tool.region() {
+            (source,matches!(tool,LayerCanvasTool::EncloseFill {..}))
+        }else if self.region_tools.last_fill.is_some() || !self.engine.document().scene().references().is_empty() {
+            let enclosed=self.region_tools.last_fill==Some(CommandId::EncloseFill);
+            (self.region_tools.source[if enclosed {2}else{1}],enclosed)
+        }else{self.engine.backend_mut().prepare_regions(None);return;};
         let source=self.lines_from(source);let doc=self.engine.document();
         if source==RegionSource::Reference && doc.scene().reference_leaves().is_empty() {self.engine.backend_mut().prepare_regions(None);return;}
         let target=doc.drawing_target().or(doc.active_target());
@@ -284,8 +295,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         let paper=doc.nearest_paper_binding(doc.drawing_content());
         let Some(source)=self.region_source(source,None,target) else {return;};
         self.engine.backend_mut().prepare_regions(Some(&layer_render::RegionPreparation {
-            source,reference_count,paper,tolerance:self.region_tools.tolerance,
-            enclosed:matches!(self.layer_interaction.tool,LayerCanvasTool::EncloseFill { .. }),
+            source,reference_count,paper,tolerance:self.region_tools.tolerance,refinement:self.region_tools.refinement,
+            enclosed,
         }));
     }
     fn request_region_at(&mut self, point: Point, enclosure: Option<Selection>, from: Option<layer_render::RegionSource>) {

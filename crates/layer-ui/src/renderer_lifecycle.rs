@@ -176,6 +176,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.workspace = previous.state.workspace.clone();
         self.state.workspace_ready = previous.state.workspace_ready;
         self.state.tool_slots = previous.state.tool_slots.clone();
+        self.region_tools.last_fill = previous.region_tools.last_fill.or(self.region_tools.last_fill);
         self.workspace_history = previous.workspace_history.clone();
         self.workspace_read_only = previous.workspace_read_only;
         self.managed_workspace = previous.managed_workspace.clone();

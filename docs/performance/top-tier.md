@@ -265,11 +265,12 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 ## Reference Fill completion
 
 The bounded-window layout removes the former 61 MP single-component binding
-limit. At 9504 × 6336 the largest modeled binding is 83,675,304 bytes, below
+limit. At 9504 × 6336 the largest modeled binding is 91,202,472 bytes, below
 128 MiB; the device must also admit a texture dimension of at least 9504.
 This is a buffer-layout check, not a reference-device motion or OOM qualification.
-The complete allocation boundaries remain in
-`artifacts/fill-tools/current-band-memory/README.local.md`.
+Retained classification and skeleton planes add 15,054,336 bytes at this size;
+endpoint compaction reuses the existing window scratch. The allocation boundaries
+remain in `artifacts/fill-tools/m4a1-cache-memory.json`.
 
 A separate NVIDIA workstation 24 MP comparison covers 1/3/8 references in cell
 and background areas: warm medians improve from 24/275/930 ms to 15–18 ms,
