@@ -4,6 +4,7 @@ extension XCTestCase {
     @MainActor func checkNativeHDRColor(in app: XCUIApplication, theme: String = "dark") throws {
         var actions: [[String: Any]] = [
             ["type": "set_theme", "theme": theme],
+            ["type": "workspace_manager", "command": ["type": "switch", "id": "builtin:workspace:illustrator"]],
             ["type": "customize", "action": ["type": "insert_tools", "panel": "commands", "before": NSNull()]]
         ]
         for command in ["change_bit_depth", "sdr_rendition", "histogram", "export_document"] {

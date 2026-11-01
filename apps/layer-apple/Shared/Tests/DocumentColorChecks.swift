@@ -4,6 +4,7 @@ extension XCTestCase {
     @MainActor func checkNativeDocumentColor(in app: XCUIApplication) throws {
         var actions: [[String: Any]] = [
             ["type":"set_theme","theme":"light"],
+            ["type":"workspace_manager","command":["type":"switch","id":"builtin:workspace:illustrator"]],
             ["type":"customize","action":["type":"insert_tools","panel":"commands","before":NSNull()]]
         ]
         for command in ["assign_profile","convert_color_space","change_bit_depth","document_properties"] {
