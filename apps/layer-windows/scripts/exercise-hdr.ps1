@@ -411,7 +411,7 @@ try {
  if($title -notmatch ' · \d+ × \d+$' -or (Find 'drawing-tab-1') -or (Find 'drawing-selector')){throw "One drawing did not show the plain title: $title"}
  if(!$DrawingTabsOnly -and !$ControlsOnly){
   Button 'Test pen';Wait-Until {(Model).state.document_file.modified} 'Initial drawing did not become dirty' 60
-  Wait-Until {$review.Refresh();$review.MainWindowTitle.StartsWith('• ')} 'Window title lacks the unsaved marker'
+  Wait-Until {$root.Current.Name.StartsWith('• ')} 'Window title lacks the unsaved marker'
  }
  Command 'new_document' 'File';New-DrawingPixels 128 96
  if(!$DrawingTabsOnly){Select-Choice 'document-depth' $(if($Depth -eq 'F32'){'32-bit float HDR'}else{'16-bit float HDR'})}

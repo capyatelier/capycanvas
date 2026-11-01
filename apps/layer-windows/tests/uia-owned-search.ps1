@@ -289,3 +289,18 @@ if($useWindow.Count -ne 1){throw 'Missing actual localization window switch'}
     }
 }
 Write-Output 'Localization window switching retains prepared owned roots without rediscovery, preserves ordinary discovery, and rejects foreign PID or HWND before activation.'
+
+$hdrAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-hdr.ps1'),[ref]$tokens,[ref]$errors)
+if(@($errors).Count){throw ($errors|Out-String)}
+$captionWait=@($hdrAst.FindAll({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Wait-Until' -and @($node.CommandElements|Where-Object {$_ -is [Management.Automation.Language.StringConstantExpressionAst] -and $_.Value -eq 'Window title lacks the unsaved marker'}).Count -eq 1},$true))
+if($captionWait.Count -ne 1){throw 'Missing actual HDR dirty-window caption assertion'}
+$condition=@($captionWait[0].CommandElements|Where-Object {$_ -is [Management.Automation.Language.ScriptBlockExpressionAst]})
+if($condition.Count -ne 1){throw 'HDR dirty caption assertion has no unique predicate'}
+$predicate=[scriptblock]::Create($condition[0].ScriptBlock.EndBlock.Extent.Text)
+$dirty=[string][char]0x2022+' Untitled'
+foreach($case in @(@{owned=$dirty;other='';expected=$true},@{owned='Untitled';other=$dirty;expected=$false})){
+    $root=[pscustomobject]@{Current=[pscustomobject]@{Name=$case.owned;NativeWindowHandle=[IntPtr]42}}
+    $review=[pscustomobject]@{MainWindowTitle=$case.other;MainWindowHandle=[IntPtr]99};$review|Add-Member -MemberType ScriptMethod -Name Refresh -Value {}
+    if([bool](& $predicate) -ne $case.expected){throw 'HDR dirty-caption assertion read another process window instead of its registered drawing'}
+}
+Write-Output 'HDR dirty caption observes the owned drawing while preserving both dirty and clean title checks.'
