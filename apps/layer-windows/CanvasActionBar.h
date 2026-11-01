@@ -141,20 +141,28 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
         group.Children().Append(slot);group.Children().Append(element);
         return group;
     }
+    void nativeText(TextBlock const& text,hstring const& value){
+        if(text.Text()==value)return;text.Text(value);sizes=J{};if(pending)pending->sizes=J{};
+    }
+    void relabel(Control const& control,hstring const& value){
+        if(auto content=control.as<ContentControl>().Content().try_as<StackPanel>())for(auto child:content.Children())if(auto text=child.try_as<TextBlock>())nativeText(text,value);
+    }
     void update(FrameworkElement const& element,J const& item){
         if(!str(item,L"menu").empty()){
             auto state=command(item);bool enabled=!state.Size()||flag(state,L"enabled");auto button=explained(element);
             explain(element.as<Grid>(),button,enabled,str(item,L"label"),str(state,L"disabled_reason"));
-            return;
+            AutomationProperties::SetName(button,str(item,L"label"));relabel(button,str(item,L"label"));return;
         }
         if(auto spec=choice(item);spec.Size()){
-            auto list=array(spec,L"items");
+            auto list=array(spec,L"items");AutomationProperties::SetName(element,str(spec,L"label"));
             if(auto group=element.try_as<StackPanel>()){
                 for(uint32_t i=0;i<list.Size()&&i<group.Children().Size();++i){
                     auto entry=list.GetObjectAt(i);auto toggle=group.Children().GetAt(i).as<Primitives::ToggleButton>();
                     toggle.IsChecked(flag(entry,L"selected"));tooltip(toggle,str(entry,L"disabled_reason",str(entry,L"label")));
+                    AutomationProperties::SetName(toggle,str(entry,L"label"));relabel(toggle,str(entry,L"label"));
                 }
             }else if(auto picker=element.try_as<Button>()){
+                tooltip(picker,str(spec,L"label"));
                 J chosen=list.Size()?list.GetObjectAt(0):J{};
                 for(auto value:list)if(flag(value.GetObject(),L"selected"))chosen=value.GetObject();
                 if(chosen.Size()){
@@ -162,7 +170,7 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
                     if(str(tag?tag:J{},L"canvas_bar_value")!=key){
                         if(auto content=picker.Content().try_as<StackPanel>()){
                             auto image=content.Children().GetAt(0).as<Image>();if(!name.empty())setIcon(image,name,data->theme(),glyph);image.Visibility(name.empty()?Visibility::Collapsed:Visibility::Visible);
-                            content.Children().GetAt(1).as<TextBlock>().Text(text);
+                            nativeText(content.Children().GetAt(1).as<TextBlock>(),text);
                         }else{StackPanel body;body.Orientation(Orientation::Horizontal);body.Spacing(6);Image image;if(!name.empty())setIcon(image,name,data->theme(),glyph);image.Visibility(name.empty()?Visibility::Collapsed:Visibility::Visible);body.Children().Append(image);auto caption=label(data,text,true);caption.VerticalAlignment(VerticalAlignment::Center);body.Children().Append(caption);body.Children().Append(icon(L"chevron-down",data->theme(),glyph));picker.Content(body);}
                         edgeTag(picker,L"canvas_bar_value",S(key));
                     }
@@ -172,24 +180,27 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
         }
         auto button=explained(element);auto state=command(item);bool enabled=flag(state,L"enabled");
         explain(element.as<Grid>(),button,enabled,str(state,L"tooltip"),str(state,L"disabled_reason"));
+        AutomationProperties::SetName(button,str(state,L"label"));relabel(button,str(item,L"label"));
         if(auto toggle=button.try_as<Primitives::ToggleButton>())toggle.IsChecked(flag(state,L"selected"));
     }
-    void restore(std::vector<Field> const& target,J const& model){
+    void restore(std::vector<Field> const& target,J const& model,TextBlock const& title){
+        auto text=str(model,L"label");nativeText(title,text);title.Visibility(text.empty()?Visibility::Collapsed:Visibility::Visible);
         uint32_t index=0;
         for(auto list:{L"items",L"completion"})for(auto item:array(model,list))if(index<target.size())update(target[index++].element,item.GetObject());
     }
-    void restore(){restore(fields,view);}
+    void restore(){restore(fields,view,caption);}
     hstring signature(J const& next)const{
-        std::wstring key=std::wstring(object(next,L"context").Stringify())+L"|"+std::wstring(str(next,L"label"));
-        for(auto list:{L"items",L"completion"})for(auto value:array(next,list)){
-            auto item=value.GetObject();key+=L"|"+std::wstring(str(item,L"label"))+L":"+std::wstring(str(command(item),L"id"))
+        std::wstring key=std::wstring(object(next,L"context").Stringify());
+        for(auto list:{L"items",L"completion"}){key+=L"|"+std::wstring(list)+L":"+std::to_wstring(array(next,list).Size());for(auto value:array(next,list)){
+            auto item=value.GetObject();key+=L"|"+std::wstring(str(command(item),L"id"))+L":"+std::wstring(str(command(item),L"icon"))
+                +(flag(object(object(item,L"option"),L"Action"),L"checkable")?L":t":L":b")
                 +L":"+std::wstring(str(item,L"menu"))+L":"+std::wstring(str(item,L"icon"))+(flag(item,L"accent")?L":a":L"")
                 +(flag(item,L"icon_only")?L":i":L"")+(flag(item,L"separated")?L":s":L"");
             if(auto spec=choice(item);spec.Size()){
                 key+=L":"+std::wstring(str(spec,L"id"))+(flag(spec,L"segmented")?L":s":L":d");
-                for(auto entry:array(spec,L"items"))key+=L","+std::wstring(str(entry.GetObject(),L"label"));
+                for(auto entry:array(spec,L"items"))key+=L","+std::wstring(object(entry.GetObject(),L"action").Stringify())+L":"+std::wstring(str(entry.GetObject(),L"icon"));
             }
-        }
+        }}
         return hstring(key);
     }
     std::shared_ptr<Prepared> prepare(J const& model,hstring const& key){
@@ -219,8 +230,7 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
         if(key==schema&&theme==data->theme()){pending.reset();view=next;restore();}
         else{
             if(!pending||pending->schema!=key||pending->theme!=data->theme())pending=prepare(next,key);
-            else if(pending->view.Stringify()!=next.Stringify())pending->sizes=J{};
-            pending->view=next;restore(pending->fields,next);
+            pending->view=next;restore(pending->fields,next,pending->caption);
         }
         auto located=next.Stringify()+L"|"+object(data->model,L"layout").Stringify()+L"|"+data->theme();
         if(located!=placement){placement=located;place();}

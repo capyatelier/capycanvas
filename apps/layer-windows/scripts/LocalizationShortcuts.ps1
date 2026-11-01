@@ -2,7 +2,7 @@ function Native-Identities([string[]]$Ids){
  $result=@{};foreach($id in $Ids){$result[$id]=(Control $id).GetRuntimeId() -join ':'};$result
 }
 function Check-Identities($Identities){
- foreach($id in $Identities.Keys){if(((Control $id).GetRuntimeId() -join ':') -ne $Identities[$id]){throw "Locale publication replaced a retained native shortcut control: $id"}}
+ foreach($id in ($Identities.Keys|Sort-Object)){if(((Control $id).GetRuntimeId() -join ':') -ne $Identities[$id]){throw "Locale publication replaced a retained native shortcut control: $id"}}
 }
 function Shortcut-Owner($View){
  if(($View.state.document_file|ConvertTo-Json -Depth 20 -Compress) -ne $shortcutDocument -or $View.windows_gpu_generation -ne $shortcutGpu){throw 'Shortcut publication changed document history or GPU ownership'}
