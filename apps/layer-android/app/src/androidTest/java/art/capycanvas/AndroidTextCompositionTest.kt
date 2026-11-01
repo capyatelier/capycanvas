@@ -7,6 +7,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import org.junit.Assert.*
@@ -61,11 +62,8 @@ class AndroidTextCompositionTest {
                     val input = connection(tag, text, true)
                     compose.runOnIdle { assertTrue(host.textComposition.active); assertTrue(input.performEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_DONE)) }
                     compose.waitForIdle()
-                    assertEquals(text, literal(tag)); assertEquals(0, used)
-                    compose.runOnIdle { assertTrue(input.finishComposingText()) }
-                    compose.waitForIdle()
-                    compose.runOnIdle { assertTrue(input.performEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_DONE)) }
                     compose.waitUntil(10_000) { findTag(tag) == null }
+                    assertEquals(0, used)
                     compose.onNodeWithTag("color-value-$field").performClick()
                     val candidate = connection(tag, text, true)
                     nativeKey(candidate, KeyEvent.KEYCODE_ESCAPE)
@@ -109,9 +107,7 @@ class AndroidTextCompositionTest {
                 var flags = 0
                 compose.runOnIdle { flags = window.attributes.flags; window.addFlags(android.view.WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM) }
                 try {
-                    val input = connection("toolbar-name", "日本 toolbar", true) {
-                        compose.waitUntil(10_000) { !nativeView.context.getSystemService(android.view.inputmethod.InputMethodManager::class.java).isActive(nativeView) }
-                    }
+                    val input = connection("toolbar-name", "日本 toolbar", true)
                     compose.runOnIdle { assertTrue("Name field has native preedit before Escape", host.textComposition.active) }
                     nativeKey(input, KeyEvent.KEYCODE_ESCAPE)
                     assertEquals("日本 toolbar", literal("toolbar-name"))
@@ -197,23 +193,13 @@ class AndroidTextCompositionTest {
                     }
                     val connection = replace("12", composing = true)
                     compose.runOnIdle { assertTrue(host.textComposition.active) }
-                    for (phase in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) compose.runOnIdle {
-                        val now = android.os.SystemClock.uptimeMillis()
-                        connection.sendKeyEvent(KeyEvent(now, now, phase, KeyEvent.KEYCODE_ENTER, 0, 0, 0, 0, KeyEvent.FLAG_SOFT_KEYBOARD))
-                    }
-                    compose.onNodeWithContentDescription(captions.getString("increase")).performClick()
-                    compose.onNodeWithTag("canvas-size-apply").performClick()
+                    nativeKey(connection, KeyEvent.KEYCODE_ENTER, KeyEvent.FLAG_SOFT_KEYBOARD)
                     compose.runOnIdle {
-                        assertTrue(host.textComposition.active)
-                        assertEquals("12", literal())
-                        assertEquals(15.0, panel()!!.getJSONArray("values").getDouble(0), 0.0)
-                        assertEquals(originalWidth, width())
-                        assertTrue(connection.commitText("12+3", 1))
-                        assertTrue(connection.finishComposingText())
+                        assertFalse("Passed Enter retires composition after its key release", host.textComposition.active)
                     }
-                    compose.waitUntil(10_000) { !host.textComposition.active }
+                    compose.waitUntil(10_000) { panel()!!.getJSONArray("values").getDouble(0) == 12.0 }
                     compose.onNodeWithTag("canvas-size-apply").performClick()
-                    compose.waitUntil(10_000) { panel() == null && width() == 15 }
+                    compose.waitUntil(10_000) { panel() == null && width() == 12 }
                     host.drain(obj("type" to "invoke", "command" to "undo"))
                     compose.waitUntil(10_000) { width() == originalWidth }
                     host.drain(obj("type" to "invoke", "command" to "canvas_size"))
@@ -282,19 +268,12 @@ class AndroidTextCompositionTest {
                 connection = open("output")
                 compose.runOnIdle {
                     assertTrue(connection.setSelection(0, literal("output").length))
-                    assertTrue(connection.setComposingText("12", 1))
+                    assertTrue(connection.setComposingText("127.5", 1))
                 }
                 compose.waitForIdle()
                 assertTrue(host.textComposition.active)
                 nativeEnter(connection)
-                assertTrue("Candidate Enter belongs to the native composition", host.textComposition.active)
-                assertEquals(original, points())
-                compose.runOnIdle {
-                    assertTrue(connection.commitText("127.5", 1))
-                    assertTrue(connection.finishComposingText())
-                }
-                compose.waitUntil(10_000) { !host.textComposition.active }
-                nativeEnter(connection)
+                assertFalse("Passed Enter commits the current numeric composition", host.textComposition.active)
                 compose.waitUntil(10_000) { control().getJSONObject("curve").getJSONObject("output").getDouble("value") == .5 }
                 invoke("undo"); assertEquals("Committed IME text has one undo", original, points())
                 connection = open("output")
@@ -427,30 +406,111 @@ class AndroidTextCompositionTest {
         }
     }
 
+    @Test fun koreanDonePublishesTheLatestSyllableOnce() {
+        launchCapy(compose = compose).use { scenario ->
+            val host = scenario.activity().host
+            host.drain(obj("type" to "close_settings"))
+            for (theme in listOf("light", "dark")) for (ime in listOf(
+                android.view.inputmethod.EditorInfo.IME_ACTION_DONE, android.view.inputmethod.EditorInfo.IME_ACTION_GO,
+                android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH, android.view.inputmethod.EditorInfo.IME_ACTION_SEND,
+                -KeyEvent.KEYCODE_ENTER, -KeyEvent.KEYCODE_NUMPAD_ENTER)) {
+                host.drain(obj("type" to "set_theme", "theme" to theme))
+                val value = androidx.compose.runtime.mutableStateOf(TextFieldValue(""))
+                val submitted = androidx.compose.runtime.mutableStateOf(false)
+                val names = mutableListOf<String>()
+                lateinit var view: androidx.compose.ui.platform.ComposeView
+                compose.runOnIdle {
+                    val state = host.snapshot!!.getJSONObject("state")
+                    val palette = Palette(theme == "dark", state.getJSONObject("palette"))
+                    view = androidx.compose.ui.platform.ComposeView(scenario.activity())
+                    scenario.activity().addContentView(view, android.widget.FrameLayout.LayoutParams(-1, -1))
+                    view.setContent {
+                        androidx.compose.runtime.CompositionLocalProvider(LocalCanvasHost provides host, LocalPalette provides palette) {
+                            val submit = { names.add(value.value.text); submitted.value = true }
+                            if (!submitted.value) CoreTextField(value.value, { value.value = it },
+                                androidx.compose.ui.Modifier.testTag("korean-name"),
+                                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = when (ime) {
+                                    android.view.inputmethod.EditorInfo.IME_ACTION_GO -> androidx.compose.ui.text.input.ImeAction.Go
+                                    android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH -> androidx.compose.ui.text.input.ImeAction.Search
+                                    android.view.inputmethod.EditorInfo.IME_ACTION_SEND -> androidx.compose.ui.text.input.ImeAction.Send
+                                    else -> androidx.compose.ui.text.input.ImeAction.Done
+                                }), keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                                    onDone = { submit() }, onGo = { submit() }, onSearch = { submit() }, onSend = { submit() }))
+                        }
+                    }
+                }
+                fun input(text: String, marked: Boolean): android.view.inputmethod.InputConnection {
+                    compose.onNodeWithTag("korean-name").performClick()
+                    lateinit var connection: android.view.inputmethod.InputConnection
+                    compose.runOnIdle {
+                        connection = view.descendant<androidx.compose.ui.platform.ViewRootForTest>()!!.view
+                            .onCreateInputConnection(android.view.inputmethod.EditorInfo())!!
+                        assertTrue(connection.setSelection(0, value.value.text.length))
+                        assertTrue(if (marked) connection.setComposingText(text, 1) else connection.commitText(text, 1))
+                    }
+                    compose.waitForIdle()
+                    return connection
+                }
+                try {
+                    for (candidate in listOf("日本", "中文")) {
+                        val input = input(candidate, true)
+                        compose.runOnIdle { assertTrue(input.finishComposingText()) }
+                        compose.waitForIdle()
+                        assertTrue("Consumed candidate confirmation sends no editor action", names.isEmpty())
+                    }
+                    val input = input("", false)
+                    compose.runOnIdle {
+                        assertTrue(input.commitText("한", 1))
+                        assertTrue(input.setComposingText("글", 1))
+                        if (ime > 0) assertTrue(input.performEditorAction(ime))
+                        else for (phase in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP))
+                            assertTrue(input.sendKeyEvent(KeyEvent(phase, -ime)))
+                    }
+                    compose.waitUntil(10_000) { submitted.value }
+                    assertEquals(listOf("한글"), names)
+                    compose.runOnIdle {
+                        if (ime > 0) input.performEditorAction(ime)
+                        else for (phase in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) input.sendKeyEvent(KeyEvent(phase, -ime))
+                    }
+                    compose.waitForIdle()
+                    assertEquals("A retired field cannot repeat its action", listOf("한글"), names)
+                } finally {
+                    compose.runOnIdle { (view.parent as android.view.ViewGroup).removeView(view); view.disposeComposition() }
+                }
+            }
+        }
+    }
+
     @Test fun candidateKeysBelongToFocusedCompositionUntilNativeCommit() {
         val state=TextComposition()
         val owner=Any()
         for(text in listOf("日本語", "한국어", "中文", "{ $"+"name }\u2068字\u2069")) {
             val value=TextFieldValue(text,TextRange(text.length),TextRange(0,text.length))
             state.update(owner,value,true)
-            for(code in listOf(KeyEvent.KEYCODE_ESCAPE,KeyEvent.KEYCODE_ENTER,KeyEvent.KEYCODE_DPAD_UP,KeyEvent.KEYCODE_DPAD_DOWN)) {
+            for(code in listOf(KeyEvent.KEYCODE_ESCAPE,KeyEvent.KEYCODE_DPAD_UP,KeyEvent.KEYCODE_DPAD_DOWN)) {
                 for(action in listOf(KeyEvent.ACTION_DOWN,KeyEvent.ACTION_UP)) assertTrue(state.owns(KeyEvent(action,code)))
             }
+            assertFalse(state.owns(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)))
+            assertFalse(state.owns(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER)))
             assertEquals(TextRange(0,text.length),value.composition)
             state.update(owner,value.copy(composition=null),true)
             assertFalse(state.owns(KeyEvent(KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_ENTER)))
         }
     }
     @Test fun languageBoundaryWaitsUntilCandidateKeyRelease() {
-        val state = TextComposition()
-        val owner = Any()
-        state.update(owner, TextFieldValue("日本", composition = TextRange(0, 2)), true)
-        assertTrue(state.owns(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)))
-        state.update(owner, TextFieldValue("日本"), true)
-        assertTrue(state.active)
-        assertTrue(state.owns(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER)))
-        assertFalse(state.active)
-        assertFalse(state.owns(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)))
+        for (code in listOf(KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER)) {
+            val state = TextComposition()
+            val owner = Any()
+            state.update(owner, TextFieldValue("한글", composition = TextRange(1, 2)), true)
+            assertFalse(state.owns(KeyEvent(KeyEvent.ACTION_DOWN, code)))
+            state.update(owner, TextFieldValue("한글"), true)
+            state.clear(owner)
+            assertTrue("Passed Enter remains busy after the field retires", state.active)
+            assertFalse(state.owns(KeyEvent(KeyEvent.ACTION_DOWN, code)))
+            assertFalse(state.owns(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_A)))
+            assertFalse(state.owns(KeyEvent(KeyEvent.ACTION_UP, code)))
+            assertFalse(state.active)
+        }
     }
     @Test fun imeKeysAndRetiredFieldsCannotBeClaimedByEditorCaptures() {
         val state=TextComposition()

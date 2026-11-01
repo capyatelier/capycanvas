@@ -212,17 +212,24 @@ private tailrec fun inputActivity(context: android.content.Context): android.app
         val release = host.textComposition.window(window)
         onDispose { release(); host.textComposition.clear(owner); if (focused) host.editingText = false }
     }
-    SideEffect { host.textComposition.update(owner, value, focused) }
-    fun action(ime: ImeAction, callback: (KeyboardActionScope.() -> Unit)?): KeyboardActionScope.() -> Unit = {
-        if (host.textComposition.canAct(window)) {
-            if (callback == null) defaultKeyboardAction(ime) else callback()
-        }
+    var latest by remember { mutableStateOf(value) }
+    val change by rememberUpdatedState(onValueChange)
+    fun update(next: TextFieldValue) {
+        latest = next
+        host.textComposition.update(owner, next, focused)
+        change(next)
     }
-    BasicTextField(value, { next -> host.textComposition.update(owner, next, focused); onValueChange(next) },
+    val commit = { if (latest.composition != null) update(latest.copy(composition = null)) }
+    SideEffect { latest = value; host.textComposition.update(owner, value, focused, commit) }
+    fun action(ime: ImeAction, callback: (KeyboardActionScope.() -> Unit)?): KeyboardActionScope.() -> Unit = {
+        commit()
+        if (callback == null) defaultKeyboardAction(ime) else callback()
+    }
+    BasicTextField(value, ::update,
         Modifier.onFocusChanged {
             if (focused != it.isFocused) host.editingText = it.isFocused
             focused = it.isFocused
-            host.textComposition.update(owner, value, focused)
+            host.textComposition.update(owner, latest, focused, commit)
         }.then(modifier), enabled = enabled, singleLine = singleLine, textStyle = textStyle, cursorBrush = cursorBrush,
         keyboardOptions = keyboardOptions, keyboardActions = KeyboardActions(
             onDone = action(ImeAction.Done, keyboardActions.onDone), onGo = action(ImeAction.Go, keyboardActions.onGo),
