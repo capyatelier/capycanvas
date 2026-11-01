@@ -523,6 +523,13 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.scene_preview = preview;
         self.composite_all = true;
     }
+    pub fn set_fill_preview(&mut self,preview:Option<layer_render::FillPreview>) {
+        self.backend.set_fill_preview(preview);
+        self.composite_all=true;
+    }
+    pub fn set_fill_reveal(&mut self,reveal:Option<layer_render::FillReveal>) {
+        self.backend.set_fill_reveal(reveal);
+    }
 
     /// Current disposable transform, including its startup shader dependency.
     pub fn transform_preview(&self) -> Option<&layer_render::TransformPreview> {
@@ -565,7 +572,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         id: SourceTarget,
         operation: layer_core::RasterOperation,
     ) -> Result<(), DocumentError> {
-        self.append_operations(Vec::new(), vec![(id, operation)], None, false)
+        self.append_operations(Vec::new(), vec![(id, operation)], None, false, None)
+    }
+
+    pub fn amend_raster_operation(&mut self,target:SourceTarget,operation:layer_core::RasterOperation,checkpoint:u64)->Result<(),DocumentError> {
+        self.append_operations(Vec::new(),vec![(target,operation)],None,false,Some(checkpoint))
     }
 
     /// Apply `prefix` edits, such as inserting layers, and run pixel operations
@@ -578,7 +589,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         operations: Vec<(SourceTarget, layer_core::RasterOperation)>,
         selection_after: Option<Option<layer_core::Selection>>,
     ) -> Result<(), DocumentError> {
-        self.append_operations(prefix, operations, selection_after, false)
+        self.append_operations(prefix, operations, selection_after, false, None)
     }
 
     /// Commit the displayed pixels and moved selection as one undoable edit.
@@ -635,7 +646,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 },
             ));
         }
-        self.append_operations(Vec::new(), operations, Some(selection), false)?;
+        self.append_operations(Vec::new(), operations, Some(selection), false, None)?;
         Ok(true)
     }
 
@@ -652,7 +663,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 && self.selection_display.is_none()
                 && s.needs_resample(&preview.transform.placement)
         })?;
-        Some(layer_render::RegionRequest { reference_count: None, paper: None,
+        Some(layer_render::RegionRequest { fill: None, reference_count: None, paper: None,
             enclosure: None, contiguous: false,
             selection: None,
             request_id,
@@ -711,7 +722,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             coverage: layer_core::CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(), source.domain, [0; 2]),
             kind: layer_core::RasterOperationKind::ColorMode(mode),
         };
-        self.append_operations(Vec::new(), vec![(SourceTarget::Paint(*handle), operation)], None, false)
+        self.append_operations(Vec::new(), vec![(SourceTarget::Paint(*handle), operation)], None, false, None)
     }
 
     fn append_operations(
@@ -720,7 +731,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         operations: Vec<(SourceTarget, layer_core::RasterOperation)>,
         selection_after: Option<Option<layer_core::Selection>>,
         reaches_locked_sources: bool,
+        amend:Option<u64>,
     ) -> Result<(), DocumentError> {
+        if amend.is_some_and(|checkpoint|checkpoint!=self.checkpoint()) {return Err(DocumentError::InvalidLayerOperation("The fill changed"));}
         self.flush_pending_edits()?;
         self.end_corrections();
         if self.has_active_stroke() {
@@ -803,7 +816,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             edits.push(Edit::Working(working));
         }
         let removes = edits.iter().any(|edit| matches!(edit, Edit::Stack(_) | Edit::Occurrence(_)));
-        self.editor.perform(Edit::Batch(edits))?;
+        if amend.is_some() {self.editor.amend(Edit::Batch(edits))?;}else{self.editor.perform(Edit::Batch(edits))?;}
         self.transform_preview = None;
         self.composite_all |= removes;
         self.batches.extend(batches);
@@ -875,7 +888,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 operation.coverage.target = target;
                 operation.coverage.use_.source = target;
             }
-            self.append_operations(plan.edits, plan.operations, None, true)?;
+            self.append_operations(plan.edits, plan.operations, None, true, None)?;
             self.rebuild_all = true;
             self.composite_all = true;
         }
@@ -3412,7 +3425,7 @@ mod tests {
         engine.render_frame().unwrap();
         assert!(engine.has_active_stroke());
         let retired = engine.backend().retired_sources;
-        assert!(engine.append_operations(Vec::new(), Vec::new(), None, false).is_err());
+        assert!(engine.append_operations(Vec::new(), Vec::new(), None, false, None).is_err());
         assert_eq!(engine.backend().retired_sources, retired, "a rejected operation cannot retire active originals");
         let mut occurrence = active_occurrence(engine.document()).clone();
         occurrence.opacity = 0.8;

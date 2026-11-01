@@ -731,7 +731,7 @@ impl SnapshotRenderer {
         r.layer_masks.prepare_regions(
             &r.device,
             &mut encoder,
-            (view, &[]),
+            (view, &[],None),
             self.extent,
             false,
             &mut r.selection_clip,

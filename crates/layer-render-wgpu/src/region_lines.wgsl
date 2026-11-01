@@ -1,3 +1,4 @@
+const END_WORDS:u32=20u;
 struct LineParams {
     extent: vec4<u32>,
     window: vec4<u32>,
@@ -25,7 +26,7 @@ fn raw_ink(p: vec2<i32>) -> bool {
 }
 fn active_barrier(p:vec2<i32>) -> bool {
     if !valid(p){return false;}
-    let base=line.offsets.z+line.offsets.w*16u;
+    let base=line.offsets.z+line.offsets.w*END_WORDS;
     return (atomicLoad(&cached[base+u32(p.y)*line.extent.z+u32(p.x)/32u]) & (1u<<(u32(p.x)%32u))) != 0u;
 }
 fn ink(p: vec2<i32>) -> bool {
@@ -91,7 +92,7 @@ fn line_block(index:u32,bounds:vec4<u32>,barrier:bool)->vec3<u32> {
     let left=bounds.x/32u;let width=(bounds.x+bounds.z+31u)/32u-left;
     let x=left+index%width;let y=bounds.y+index/width;
     if y>=bounds.y+bounds.w {return vec3<u32>(0);}
-    let base=select(0u,line.offsets.z+line.offsets.w*16u,barrier);
+    let base=select(0u,line.offsets.z+line.offsets.w*END_WORDS,barrier);
     return vec3(x*32u,y,atomicLoad(&cached[base+y*line.extent.z+x]));
 }
 fn ink_word(x:i32,y:i32)->u32 {
@@ -266,7 +267,7 @@ fn line_ends(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgrou
     let p=local_point(index);if p.y>=line.window.w{return;}
     let q=line.window.xy+p;
     if all(q>=line.core.xy) && all(q<line.core.xy+line.core.zw) {
-        let word=line.offsets.z+line.offsets.w*16u+q.y*line.extent.z+q.x/32u;let bit=1u<<(q.x%32u);
+        let word=line.offsets.z+line.offsets.w*END_WORDS+q.y*line.extent.z+q.x/32u;let bit=1u<<(q.x%32u);
         if skeleton(vec2<i32>(p))!=0u {atomicOr(&cached[word],bit);atomicOr(&cached[word+line.offsets.x],bit);}
         else{atomicAnd(&cached[word],~bit);atomicAnd(&cached[word+line.offsets.x],~bit);}
     }
@@ -286,7 +287,7 @@ fn line_ends(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgrou
     if !valid(position) || all(delta==vec2<i32>(0)) {return;}
     let slot=atomicAdd(&cached[line.offsets.y],1u);
     if slot>=line.offsets.w {atomicStore(&cached[line.offsets.y+1u],1u);return;}
-    let base=line.offsets.z+slot*16u;
+    let base=line.offsets.z+slot*END_WORDS;
     atomicStore(&cached[base],point(vec2<u32>(position)));
     atomicStore(&cached[base+1u],(u32(delta.x)&65535u)|(u32(delta.y)<<16u));
     atomicStore(&cached[base+2u],width|(length<<16u));
@@ -306,7 +307,7 @@ fn middle(p:vec2<i32>)->vec2<i32>{
 }
 fn required_reach(squared:u32,allowance:u32)->u32 {
     let d=root(squared);let length=d+u32(d*d<squared);let gap=max(1u,length-min(length,allowance));
-    return 16u*min(3u,(gap+15u)/16u);
+    return 16u*min(4u,(gap+15u)/16u);
 }
 fn nearby_own_stroke(start:vec2<i32>,hit:vec2<i32>,reach:u32)->bool {
     var nodes:array<vec2<u32>,256>;nodes[0]=vec2(point(vec2<u32>(start)),0u);var head=0u;var tail=1u;
@@ -369,7 +370,7 @@ fn refine_ends(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgrou
     if line.job.y!=0u && atomicLoad(&cached[line.offsets.y+3u])==0u{return;}
     let index=id.x+id.y*groups.x*64u+line.job.x;
     let count=min(atomicLoad(&cached[line.offsets.y]),line.offsets.w);if index>=count{return;}
-    let base=line.offsets.z+index*16u;let start=vec2<i32>(coord(atomicLoad(&cached[base])));let original=tangent(atomicLoad(&cached[base+1u]));
+    let base=line.offsets.z+index*END_WORDS;let start=vec2<i32>(coord(atomicLoad(&cached[base])));let original=tangent(atomicLoad(&cached[base+1u]));
     if line.options.y==1u && atomicLoad(&cached[base+11u])==0u {return;}
     var direction=original;var best=0xffffffffu;var key=INVALID;
     if atomicLoad(&cached[base+2u])>>16u<16u {
@@ -378,7 +379,7 @@ fn refine_ends(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgrou
         for(var y=lower.y;y<=upper.y;y++){for(var x=lower.x;x<=upper.x;x++){
             var link=atomicLoad(&cached[line.offsets.y+4u+y*((line.extent.x+127u)/128u)+x]);
             loop {
-                if link==0u{break;}let other=line.offsets.z+(link-1u)*16u;link=atomicLoad(&cached[other+3u]);
+                if link==0u{break;}let other=line.offsets.z+(link-1u)*END_WORDS;link=atomicLoad(&cached[other+3u]);
                 if atomicLoad(&cached[other+2u])>>16u<16u {continue;}
                 let candidate=atomicLoad(&cached[other]);let at=vec2<i32>(coord(candidate));let axis=tangent(atomicLoad(&cached[other+1u]));let delta=start-at;
                 let forward=dot(axis,original);let aligned=select(-axis,axis,forward>0 || (forward==0 && determinant(axis,original)>0));
@@ -400,17 +401,17 @@ fn seal_candidates(@builtin(global_invocation_id) id:vec3<u32>, @builtin(num_wor
     if line.job.y!=0u && atomicLoad(&cached[line.offsets.y+3u])==0u{return;}
     let index=id.x+id.y*groups.x*64u+line.job.x;
     let count=min(atomicLoad(&cached[line.offsets.y]),line.offsets.w);if index>=count{return;}
-    let base=line.offsets.z+index*16u;let start=vec2<i32>(coord(atomicLoad(&cached[base])));let dir=tangent(atomicLoad(&cached[base+7u]));
+    let base=line.offsets.z+index*END_WORDS;let start=vec2<i32>(coord(atomicLoad(&cached[base])));let dir=tangent(atomicLoad(&cached[base+7u]));
     if line.options.y==1u && atomicLoad(&cached[base+11u])==0u {return;}
-    var best:array<u32,3>;var scores:array<u32,3>;var bends:array<u32,3>;
-    for(var bucket=0u;bucket<3u;bucket++){best[bucket]=INVALID;scores[bucket]=0xffffffffu;bends[bucket]=INVALID;}
+    var best:array<u32,4>;var scores:array<u32,4>;var bends:array<u32,4>;
+    for(var bucket=0u;bucket<4u;bucket++){best[bucket]=INVALID;scores[bucket]=0xffffffffu;bends[bucket]=INVALID;}
     let lower=vec2<u32>(max(start-vec2<i32>(80),vec2<i32>(0)))/128u;
     let upper=vec2<u32>(min(start+vec2<i32>(80),vec2<i32>(line.extent.xy)-vec2<i32>(1)))/128u;
     for(var y=lower.y;y<=upper.y;y++){for(var x=lower.x;x<=upper.x;x++){
         var link=atomicLoad(&cached[line.offsets.y+4u+y*((line.extent.x+127u)/128u)+x]);
         loop {
             if link==0u {break;}
-            let other=line.offsets.z+(link-1u)*16u;let same=link-1u==index;link=atomicLoad(&cached[other+3u]);if same{continue;}
+            let other=line.offsets.z+(link-1u)*END_WORDS;let same=link-1u==index;link=atomicLoad(&cached[other+3u]);if same{continue;}
             let key=atomicLoad(&cached[other]);let end=vec2<i32>(coord(key));let d=end-start;
             if square(vec2<u32>(start),vec2<u32>(end))>64u*64u {continue;}
             let facing=tangent(atomicLoad(&cached[other+7u]));var denominator=determinant(dir,facing);var a=determinant(d,facing);var b=determinant(d,dir);
@@ -433,7 +434,7 @@ fn seal_candidates(@builtin(global_invocation_id) id:vec3<u32>, @builtin(num_wor
             var alignment=0u;
             if bend==INVALID {alignment=u32(abs(determinant(dir,d))*1024/max(1,dot(dir,d))+abs(determinant(facing,-d))*1024/max(1,dot(facing,-d)));}
             let score=(length*length+alignment*4u)*2048u;
-            for(var bucket=0u;bucket<3u;bucket++){
+            for(var bucket=0u;bucket<4u;bucket++){
                 let reach=16u*(bucket+1u)+(end_width(base)+end_width(other))/2u;
                 if square(vec2<u32>(start),vec2<u32>(end))<=reach*reach && (score<scores[bucket] || (score==scores[bucket] && (key<best[bucket] || (key==best[bucket] && bend<bends[bucket])))) {scores[bucket]=score;best[bucket]=key;bends[bucket]=bend;}
             }
@@ -443,21 +444,21 @@ fn seal_candidates(@builtin(global_invocation_id) id:vec3<u32>, @builtin(num_wor
         let rotation=RAYS[ray];let v=vec2(dir.x*rotation.x-dir.y*rotation.y,dir.x*rotation.y+dir.y*rotation.x);
         let divisor=max(abs(v.x),abs(v.y));if divisor==0{continue;}
         var free=false;
-        for(var step=1;step<=64;step++){
-            let q=start+rounded_div(v*step,divisor);let d=q-start;let length=u32(d.x*d.x+d.y*d.y);if length>(48u+end_width(base))*(48u+end_width(base)){break;}
+        for(var step=1;step<=80;step++){
+            let q=start+rounded_div(v*step,divisor);let d=q-start;let length=u32(d.x*d.x+d.y*d.y);if length>(64u+end_width(base))*(64u+end_width(base)){break;}
             if !ink(q){free=true;continue;}
             if !free{continue;}
             if !in_cone(dir,d){break;}
             let hit=middle(q);if !supported_hit(hit){continue;}let key=point(vec2<u32>(hit));let score=0x80000000u+root(length*65536u)*(100u+3u*u32(abs(i32(ray)-20)));
             if nearby_own_stroke(start,hit,required_reach(length,end_width(base))){break;}
-            for(var bucket=0u;bucket<3u;bucket++){
+            for(var bucket=0u;bucket<4u;bucket++){
                 let reach=16u*(bucket+1u);
                 if length<=(reach+end_width(base))*(reach+end_width(base)) && (score<scores[bucket] || (score==scores[bucket] && key<best[bucket])){scores[bucket]=score;best[bucket]=key;bends[bucket]=INVALID;}
             }
             break;
         }
     }
-    for(var bucket=0u;bucket<3u;bucket++){
+    for(var bucket=0u;bucket<4u;bucket++){
         atomicStore(&cached[base+4u+bucket*4u],best[bucket]);atomicStore(&cached[base+5u+bucket*4u],scores[bucket]);atomicStore(&cached[base+6u+bucket*4u],bends[bucket]);
     }
 }
@@ -468,18 +469,33 @@ fn apply_seals(@builtin(global_invocation_id) id:vec3<u32>, @builtin(num_workgro
     if !active_line_attempt(){return;}
     let index=id.x+id.y*groups.x*64u+line.job.x;
     let count=min(atomicLoad(&cached[line.offsets.y]),line.offsets.w);if index>=count{return;}
-    let base=line.offsets.z+index*16u;let hit=atomicLoad(&cached[base+4u+line.options.z*4u]);if hit==INVALID{return;}
-    let start=vec2<i32>(coord(atomicLoad(&cached[base])));if line.core.z!=0u && (any(start<vec2<i32>(line.core.xy)) || any(start>=vec2<i32>(line.core.xy+line.core.zw))){return;}
+    let base=line.offsets.z+index*END_WORDS;
+    let hit=atomicLoad(&cached[base+4u+line.options.z*4u]);
+    if hit==INVALID || atomicLoad(&cached[base+19u])!=0u{return;}
+    let start=vec2<i32>(coord(atomicLoad(&cached[base])));
+    if line.core.z!=0u && (any(start<vec2<i32>(line.core.xy)) || any(start>=vec2<i32>(line.core.xy+line.core.zw))){return;}
     let end=vec2<i32>(coord(hit));let bend=atomicLoad(&cached[base+6u+line.options.z*4u]);
-    if bend!=INVALID {seal_segment(start,vec2<i32>(coord(bend)));seal_segment(vec2<i32>(coord(bend)),end);}else{seal_segment(start,end);}
+    let write=line.options.w==0u;
+    var touches=false;
+    if bend!=INVALID {touches=seal_segment(start,vec2<i32>(coord(bend)),write);touches=seal_segment(vec2<i32>(coord(bend)),end,write)||touches;}
+    else{touches=seal_segment(start,end,write);}
+    if !write && touches {
+        let at=line.options.w-1u+index*5u;
+        first[at]=atomicLoad(&cached[base+15u]);first[at+1u]=point(vec2<u32>(start));
+        first[at+2u]=hit;first[at+3u]=bend;first[at+4u]=16u*(line.options.z+1u);
+    }
 }
-fn seal_segment(start:vec2<i32>,end:vec2<i32>) {
+fn seal_segment(start:vec2<i32>,end:vec2<i32>,write:bool)->bool {
     var p=start;let delta=abs(end-p);let step=select(vec2(-1),vec2(1),p<end);var error=delta.x-delta.y;
     loop{
-        clear_open(p);if all(p==end){break;}let twice=2*error;
+        if write {clear_open(p);}else{
+            for(var axis=0u;axis<8u;axis+=2u){let q=p+AROUND[axis];if valid(q) && !raw_ink(q){return true;}}
+        }
+        if all(p==end){break;}let twice=2*error;
         if twice> -delta.y{error-=delta.y;p.x+=step.x;}
         if twice<delta.x{error+=delta.x;p.y+=step.y;}
     }
+    return false;
 }
 @compute @workgroup_size(64)
 fn open_bits(@builtin(global_invocation_id) id:vec3<u32>, @builtin(num_workgroups) groups:vec3<u32>){
@@ -494,7 +510,7 @@ fn region_seeds(@builtin(global_invocation_id) id:vec3<u32>, @builtin(num_workgr
         let left=line.window.x/32u;let width=(line.window.x+line.window.z+31u)/32u-left;
         let y=index/width;if y>=line.window.w{return;}
         let word=(line.window.y+y)*line.extent.z+left+index%width;
-        let barrier=line.offsets.z+line.offsets.w*16u;
+        let barrier=line.offsets.z+line.offsets.w*END_WORDS;
         if (atomicLoad(&eligible[word])&~atomicLoad(&cached[barrier+word]))!=0u {atomicOr(&cached[line.offsets.y+3u],1u);}
         return;
     }
@@ -528,7 +544,7 @@ fn assign_region(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgr
 fn hold_barriers(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>){
     if !active_line_attempt(){return;}
     let index=id.x+id.y*groups.x*64u+line.job.x;
-    if index<line.offsets.x{atomicStore(&cached[line.offsets.z+line.offsets.w*16u+index],select(~atomicLoad(&eligible[index]),atomicLoad(&eligible[index]),line.options.x!=0u));}
+    if index<line.offsets.x{atomicStore(&cached[line.offsets.z+line.offsets.w*END_WORDS+index],select(~atomicLoad(&eligible[index]),atomicLoad(&eligible[index]),line.options.x!=0u));}
 }
 @compute @workgroup_size(64)
 fn grow_region(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>){
@@ -550,7 +566,7 @@ fn intersect_bits(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workg
 @compute @workgroup_size(64)
 fn remember_thin(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>){
     let index=id.x+id.y*groups.x*64u+line.job.x;
-    if index<line.offsets.x {atomicOr(&cached[line.offsets.z+line.offsets.w*16u+index],first[8u+line.options.x*line.offsets.x+index]);}
+    if index<line.offsets.x {atomicOr(&cached[line.offsets.z+line.offsets.w*END_WORDS+index],first[8u+line.options.x*line.offsets.x+index]);}
 }
 
 @compute @workgroup_size(64)
@@ -563,14 +579,62 @@ fn check_seeds(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgrou
     if a!=b && ((a|b)&0x7fffffffu)!=0u {atomicOr(&cached[line.offsets.y+2u],1u);}
 }
 
+fn trail_point(index:u32)->vec2<i32> {
+    var low=0u;var high=line.options.z;
+    loop {if low>=high {break;}let mid=(low+high)/2u;if second[mid*6u+4u]<=index {low=mid+1u;}else{high=mid;}}
+    let at=low*6u;var previous=0u;if low>0u {previous=second[at-2u];}
+    let start=vec2(bitcast<f32>(second[at]),bitcast<f32>(second[at+1u]));
+    let end=vec2(bitcast<f32>(second[at+2u]),bitcast<f32>(second[at+3u]));
+    return vec2<i32>(floor(mix(start,end,f32(index-previous)/f32(second[at+5u]))));
+}
 @compute @workgroup_size(64)
 fn barrier_plane(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>){
-    let index=id.x+id.y*groups.x*64u+line.job.x;if index>=line.offsets.x{return;}
+    let index=id.x+id.y*groups.x*64u+line.job.x;
+    if line.options.x==6u {
+        if index>=line.options.y {return;}let p=trail_point(index);if !valid(p){return;}
+        if line.core.y!=0u {
+            let base=line.core.x;let q=vec2<i32>(floor(vec2<f32>(p)+.5-bitcast<vec2<f32>>(vec2(second[base+6u],second[base+7u]))))-vec2<i32>(vec2(second[base],second[base+1u]));
+            let size=vec2(second[base+2u],second[base+3u]);let bytes=second[base+5u]==2u;
+            let count=select(8u,4u,bytes);let bits=select(4u,8u,bytes);var covered=false;
+            if all(q>=vec2<i32>(0)) && all(q<vec2<i32>(size)) {
+                let word=u32(q.y)*((size.x+count-1u)/count)+u32(q.x)/count;
+                covered=((second[base+8u+word]>>((u32(q.x)%count)*bits))&select(15u,255u,bytes))!=0u;
+            }
+            if covered==(second[base+4u]!=0u) {return;}
+        }
+        if ink(p) && distance(middle(p))<=line.options.w {return;}
+        let at=u32(p.y)*line.extent.z+u32(p.x)/32u;
+        if (first[8u+at]&(1u<<(u32(p.x)%32u)))==0u {atomicMin(&cached[line.offsets.y+3u],index);}
+        return;
+    }
+    if line.options.x==7u {
+        if index==0u {let next=atomicLoad(&cached[line.offsets.y+3u]);first[0u]=INVALID;if next!=INVALID {first[0u]=point(vec2<u32>(trail_point(next)));}}
+        return;
+    }
+    if index>=line.offsets.x{return;}
+    if line.options.x==5u {
+        if line.options.y!=second[line.options.z] {return;}
+        let bits=first[8u+index]|atomicLoad(&eligible[index]);first[8u+index]=bits;atomicStore(&eligible[index],bits);return;
+    }
+    if line.options.x==3u {
+        let bits=atomicLoad(&eligible[index]);
+        for(var bit=0u;bit<32u;bit++) {
+            if (bits&(1u<<bit))==0u {continue;}
+            let p=vec2<i32>(i32((index%line.extent.z)*32u+bit),i32(index/line.extent.z));
+            if !valid(p){continue;}
+            for(var axis=0u;axis<8u;axis+=2u) {
+                let q=p+AROUND[axis];
+                if ink(q) && distance(middle(q))<=line.options.z {atomicOr(&cached[line.offsets.y+3u],1u);return;}
+            }
+        }
+        return;
+    }
     if line.options.x==0u {first[8u+line.options.y*line.offsets.x+index]=atomicLoad(&eligible[index]);}
     else if line.options.x==2u {second[index]=atomicLoad(&eligible[index]);}
     else {
-        let bits=first[8u+second[line.options.y]*line.offsets.x+index];
-        atomicStore(&eligible[index],bits);atomicStore(&cached[line.offsets.z+line.offsets.w*16u+index],~bits);
+        let plane=select(second[line.options.y],line.options.y,line.options.x==4u);
+        let bits=first[8u+plane*line.offsets.x+index];
+        atomicStore(&eligible[index],bits);atomicStore(&cached[line.offsets.z+line.offsets.w*END_WORDS+index],~bits);
     }
 }
 
@@ -589,19 +653,25 @@ fn snap_seed(){
 fn reset_ends(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>){
     let index=id.x+id.y*groups.x*64u+line.job.x;
     if line.options.x==7u {
-        if index<line.offsets.x {let base=line.offsets.z+line.offsets.w*16u+index;atomicStore(&cached[base],atomicLoad(&cached[base+line.offsets.x]));}
+        if index<line.offsets.x {let base=line.offsets.z+line.offsets.w*END_WORDS+index;atomicStore(&cached[base],atomicLoad(&cached[base+line.offsets.x]));}
         return;
     }
     if line.options.x>=3u {
         if index>=line.options.y {return;}
-        let at=index*16u;
+        let at=index*END_WORDS;
+        if line.options.x==8u {
+            let key=atomicLoad(&cached[line.offsets.z+at+15u]);var low=0u;var high=line.options.w;
+            loop {if low>=high {break;}let middle=(low+high)/2u;if second[middle]<key {low=middle+1u;}else{high=middle;}}
+            var found=false;if low<line.options.w {found=second[low]==key;}
+            atomicStore(&cached[line.offsets.z+at+19u],u32(found));return;
+        }
         if line.options.x==3u {
-            for(var word=0u;word<16u;word++){first[at+word]=atomicLoad(&cached[line.offsets.z+at+word]);}
+            for(var word=0u;word<END_WORDS;word++){first[at+word]=atomicLoad(&cached[line.offsets.z+at+word]);}
             first[at+11u]=0u;
         }else if line.options.x==6u {
             if first[at+15u]==INVALID {return;}
-            let slot=atomicAdd(&cached[line.offsets.y],1u);let base=line.offsets.z+slot*16u;
-            for(var word=0u;word<16u;word++){atomicStore(&cached[base+word],first[at+word]);}
+            let slot=atomicAdd(&cached[line.offsets.y],1u);let base=line.offsets.z+slot*END_WORDS;
+            for(var word=0u;word<END_WORDS;word++){atomicStore(&cached[base+word],first[at+word]);}
             let q=coord(first[at+15u]);let page=(q.y/128u)*((line.extent.x+127u)/128u)+q.x/128u;
             atomicStore(&cached[base+3u],atomicExchange(&cached[line.offsets.y+4u+page],slot+1u));
         }else{
@@ -612,7 +682,7 @@ fn reset_ends(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroup
         }
         return;
     }
-    if line.options.x==2u {if index==0u{atomicStore(&cached[line.offsets.y+3u],0u);}return;}
+    if line.options.x==2u {if index==0u{atomicStore(&cached[line.offsets.y+3u],select(0u,INVALID,line.options.z!=0u));}return;}
     if index==0u {atomicStore(&cached[line.offsets.y],0u);atomicStore(&cached[line.offsets.y+1u],0u);}
     if index<line.offsets.z-line.offsets.y-4u {atomicStore(&cached[line.offsets.y+4u+index],0u);}
 }

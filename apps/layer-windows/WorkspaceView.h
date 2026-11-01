@@ -26,6 +26,7 @@ public:
     void CancelPreviews();
     void SetTitlebarInsets(float left,float right,float height);
     void SetWindowId(uint64_t id);
+    void SetFillFeedback(std::function<void(Json const&)> feedback);
     void SetGlassChanged(std::function<void()> changed);
     void SetCommit(std::function<void(std::string,bool,std::function<void()>)> commit);
     void CanvasContact(bool active);

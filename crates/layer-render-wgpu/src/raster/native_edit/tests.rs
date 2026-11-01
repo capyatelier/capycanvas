@@ -39,17 +39,7 @@ fn view() -> ViewState {
         document_to_surface: [1., 0., 0., 1., 0., 0.],
     }
 }
-fn flush(engine: &mut CanvasEngine<WgpuRasterizer>) {
-    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
-    loop {
-        engine.render_frame().unwrap();
-        if !engine.has_pending_input() && !engine.has_pending_document_edits() {
-            break;
-        }
-        assert!(std::time::Instant::now() < deadline);
-        std::thread::yield_now();
-    }
-}
+use crate::test_support::flush_engine as flush;
 fn stroke(
     engine: &mut CanvasEngine<WgpuRasterizer>,
     input: &mut InputProducer<PenEvent>,
@@ -206,7 +196,7 @@ fn native_stroke_publication_keeps_prepared_reference_pages_and_matches_fresh_ma
         submit_settled(&mut fresh,crate::test_support::packet(snapshot.view(),extent));
         for edges in [RegionEdges::Exact,RegionEdges::LineMiddle,RegionEdges::GrowShrink(2)] {
             for position in [[120,128],[3600,128]] {
-                let query=RegionRequest {source:preparation.source.clone(),reference_count:None,paper:None,enclosure:None,
+                let query=RegionRequest { fill: None,source:preparation.source.clone(),reference_count:None,paper:None,enclosure:None,
                     contiguous:true,selection:None,request_id:91,position,tolerance:0.,
                     refinement:RegionRefinement {edges,..Default::default()},limit:None};
                 let cached=receive_request(live.backend_mut(),query.clone());

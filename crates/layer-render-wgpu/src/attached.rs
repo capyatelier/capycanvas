@@ -108,6 +108,9 @@ impl CanvasRenderer for AttachedRenderer {
     ) -> Result<(), Self::Error> {
         self.gpu()?.set_transform_preview(preview)
     }
+    fn set_fill_preview(&mut self,preview:Option<layer_render::FillPreview>) {if let Some(gpu)=&mut self.0 {gpu.set_fill_preview(preview);}}
+    fn fill_preview_ready(&self)->Option<(u64,u64)> {self.0.as_ref().and_then(|gpu|gpu.fill_preview_ready())}
+    fn set_fill_reveal(&mut self,reveal:Option<layer_render::FillReveal>) {if let Some(gpu)=&mut self.0 {gpu.set_fill_reveal(reveal);}}
     fn request_effect_analysis(&mut self, query: layer_core::ArtworkQuery) -> Result<bool, Self::Error> { self.gpu()?.request_effect_analysis(query) }
     fn take_effect_analysis(&mut self) -> Option<Result<(), Self::Error>> { self.0.as_mut()?.take_effect_analysis() }
     fn accept_effect_analysis(&mut self) -> Result<(), Self::Error> { self.gpu()?.accept_effect_analysis() }
@@ -258,6 +261,27 @@ impl CanvasRenderer for AttachedRenderer {
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
         self.gpu()?.submit(packet)
     }
+}
+
+#[test]
+fn attached_renderer_forwards_fill_preview_and_reveal() {
+    let document=crate::layer_tests::placement::paint_document([32;2],"Native fill preview");
+    let preview=layer_render::FillPreview {transaction:1,revision:2,target:crate::layer_tests::placement::target(&document),
+        operation:layer_core::RasterOperation {placement:layer_core::Affine::IDENTITY,
+            coverage:crate::layer_tests::placement::reveal_all([32;2],[0;2]),kind:layer_core::RasterOperationKind::Fill {
+                color:[1.,0.,0.,1.],texture:Default::default(),alpha_locked:false,underfill:None}}};
+    let reveal=layer_render::FillReveal {transaction:1,center:[16.;2],radius:8.};
+    let mut renderer=AttachedRenderer(Some(Box::new(WgpuRasterizer::new_native_headless(Default::default()).unwrap())));
+    renderer.set_fill_preview(Some(preview.clone()));renderer.set_fill_reveal(Some(reveal));
+    assert_eq!(renderer.0.as_ref().unwrap().fill_preview.as_ref().map(layer_render::FillPreview::key),Some(preview.key()));
+    assert_eq!(renderer.0.as_ref().unwrap().fill_reveal,Some(reveal));
+    assert_eq!(renderer.fill_preview_ready(),None);
+    crate::test_support::submit_settled(renderer.0.as_mut().unwrap(),crate::test_support::packet(document.scene(),[32;2]));
+    let shown=renderer.0.as_mut().unwrap().readback_srgb_rgba8().unwrap();assert_eq!(&shown[..4],&[255,0,0,255]);
+    assert_eq!(renderer.fill_preview_ready(),Some((1,2)));
+    renderer.set_fill_preview(None);renderer.set_fill_reveal(None);
+    assert_eq!(renderer.fill_preview_ready(),None);
+    assert!(renderer.0.as_ref().unwrap().fill_preview.is_none());assert_eq!(renderer.0.as_ref().unwrap().fill_reveal,None);
 }
 
 #[test]

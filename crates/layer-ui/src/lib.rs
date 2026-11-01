@@ -143,7 +143,7 @@ mod glass;
 pub use glass::{BlurStyle, GlassColor, GlassPalette, Transparency};
 mod workspace;
 mod workspace_manager_ui;
-pub use session::{FillScope, ImageLayerDestination, ImagePlacementContext, LayerAction, LayerCanvasTool, LayerDropHint, LayerDropPosition, LayerDropSurface, LayerFooterButton, LayerFooterSlot, LayersView, RegionSource, layer_footer_overflow};
+pub use session::{FillScope, FillGestureView, FillPillView, ImageLayerDestination, ImagePlacementContext, LayerAction, LayerCanvasTool, LayerDropHint, LayerDropPosition, LayerDropSurface, LayerFooterButton, LayerFooterSlot, LayersView, RegionSource, layer_footer_overflow};
 pub use workspace_manager_ui::{ManagedWorkspace, WorkspaceChoice, WorkspaceCommand};
 mod stats;
 pub use session::{HistogramAction, HistogramView};
@@ -1457,6 +1457,7 @@ pub struct DocumentTab {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct UiState {
+    pub fill_gesture:Option<FillGestureView>,
     pub pressure_calibration: Option<PressureCalibrationView>,
     pub tilt_calibration: Option<Box<TiltCalibrationView>>,
     #[serde(skip)]
@@ -1794,6 +1795,7 @@ pub enum UiAction {
     SetTheme {
         theme: Option<Theme>,
     },
+    SystemMotionChanged {reduced:bool},
     SystemThemeChanged {
         theme: Theme,
         #[serde(default)]
@@ -1847,6 +1849,7 @@ impl UiAction {
                 | Self::MeasureHeader { .. }
                 | Self::MeasureWorkspaceBottom { .. }
                 | Self::SystemThemeChanged { .. }
+                | Self::SystemMotionChanged { .. }
                 | Self::WindowFullscreen { .. }
         )
     }

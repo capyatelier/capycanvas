@@ -961,12 +961,12 @@ fn move_and_content_tools_explain_what_they_cannot_change() {
 }
 
 #[test]
-fn a_fill_click_without_content_raises_a_notice_at_release_but_not_outside_the_canvas() {
+fn a_fill_click_without_content_raises_a_notice_at_press_but_not_outside_the_canvas() {
     let mut s = session(Platform::Gtk);
     invoke(&mut s, CommandId::Fill);
     layer(&mut s, LayerAction::New { group: true, clipped: false });
     s.pen(event(&s, 1, PenPhase::Down, 1.));
-    assert_eq!(s.state.notice, None);
+    assert_eq!(notice_text(&s),Some("A group has no pixels of its own. Select a layer inside it."));
     s.pen(event(&s, 1, PenPhase::Up, 1.));
     let change = s.frame(2, 2).unwrap();
     assert_ne!(change.regions & regions::HOST, 0);

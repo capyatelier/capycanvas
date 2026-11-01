@@ -35,6 +35,7 @@ import { createNumberField } from "./numeric.js";
 import { captureTextComposition, composingKey, latinKey } from "./text-input.js";
 import { createSelectionUi } from "./selection-masks.js";
 import { createPreviewPanel } from "./preview-panel.js";
+import { createFillGesture } from "./fill-gesture.js";
 import { createCanvasSizeUi } from "./canvas-size.js";
 import { createImageSizeUi } from "./image-size.js";
 import { createLayerPanel } from "./layers.js";
@@ -80,7 +81,7 @@ let app,
   statusError = null,
   shownHostError = null;
 let penResponse, refreshPreferences, customization, layerPanel, effectPanels, palettes, editor, selectionUi, frequencySeparationUi, canvasSizeUi, imageSizeUi, workspaceChrome, panelVectors, glass, documents, systemStatus, header, canvasBar, notice, zoomReadout, screenStatus;
-let commandBar, paintPairView;
+let commandBar, paintPairView, fillGesture;
 let bubbles;
 observeButtonFeedback(window);
 const compilerContacts = new Set();
@@ -130,6 +131,7 @@ const settingsKey = "layer.preferences.v1";
 let workspaceManager;
 const pending = [];
 const systemTheme = matchMedia("(prefers-color-scheme: dark)");
+const systemMotion = matchMedia("(prefers-reduced-motion: reduce)");
 let appliedTheme;
 applyTheme(systemTheme.matches ? "dark" : "light");
 
@@ -270,7 +272,7 @@ workspace.append(dropIndicator);
 
 function dispatch(action) {
   try {
-    if(documents?.interactionBusy()&&!['pen_input','restore_saved_settings','complete_request','measure_panels','measure_canvas_bar','reveal_canvas_bar','measure_titlebar','measure_workspace_bottom','measure_column_drawers','measure_drawer_tiles','measure_column_scroll'].includes(action.type))return;
+    if(documents?.interactionBusy()&&!['pen_input','system_motion_changed','restore_saved_settings','complete_request','measure_panels','measure_canvas_bar','reveal_canvas_bar','measure_titlebar','measure_workspace_bottom','measure_column_drawers','measure_drawer_tiles','measure_column_scroll'].includes(action.type))return;
     if (action.type === "measure_column_drawers" && workspaceGesture) workspaceGesture.hits = null;
     if (["move_panel", "move_group", "move_tile", "double_click_panel_handle", "reset_column_width"].includes(action.type))
       action = {
@@ -330,7 +332,7 @@ function applyChange(change) {
     commandBar?.refresh(state.command_search);
     if (change.regions === 512) { if (change.canvas_wake) wake(); return; }
   }
-  if(change.regions & 256) { editor?.refreshColorPreview(); refreshColorEditors(); }
+  if(change.regions & 256) { fillGesture?.refresh(app.color_preview().fill_gesture); editor?.refreshColorPreview(); refreshColorEditors(); }
   if(change.regions===256){bubbles?.refresh();if(change.canvas_wake)wake();return;}
   if (change.regions & (1 | 2 | 4 | 8 | 128)) workspaceManager?.observe();
   if (change.regions) {
@@ -897,6 +899,7 @@ function contentPanel(id, splitPicker=false, readToolSet=null) {
   panel.refreshPanel();return panel;
 }
 function update(regions) {
+  fillGesture?.refresh(app.color_preview().fill_gesture);
   const themeChanged = !!(regions & 16) && document.body.dataset.theme !== state.theme;
   document.body.toggleAttribute("data-workspace-ready", state.workspace_ready);
   if(regions & (4096 | 16384 | 16)) penResponse?.refresh();
@@ -1706,9 +1709,9 @@ function pointerInput(e, stage, point = position(e)) {
     phase: ["move", "down", "move", "up", "cancel"][stage],
     kind: e.pointerType || "mouse",
     button:
-      e.pointerType === "pen" || e.button === 0 || e.button === 5
+      e.pointerType === "pen" || e.button === 0 || e.button === 5 || !!(e.buttons & 1)
         ? "primary"
-        : e.button === 1 || e.button === 2
+        : e.button === 1 || e.button === 2 || !!(e.buttons & 6)
           ? "pan"
           : "other",
     position: point,
@@ -1954,6 +1957,10 @@ try {
   for(const [key,value] of Object.entries(catalog.panel_metrics))document.documentElement.style.setProperty(`--panel-${key.replaceAll("_","-")}`,`${value}px`);
   for(const [key,value] of Object.entries(app.divider_metrics()))document.documentElement.style.setProperty(`--divider-${key}`,`${value}px`);
   publishAppName();
+  fillGesture=createFillGesture({workspace,canvas,element,glassChanged:()=>glass?.queue()});
+  fillGesture.refresh(app.color_preview().fill_gesture);
+  const motionChanged=()=>dispatch({type:'system_motion_changed',reduced:systemMotion.matches});
+  systemMotion.addEventListener('change',motionChanged);motionChanged();
   penResponse=createPenResponse({state:()=>state,workspace,element,button,icon,numberField,dispatch});
   observePenInput({workspace,canvas,dispatch,position,owner:()=>state.document_file.epoch});
   refreshPreferences = createPreferences({ app, element, button, icon, numberField, panelFrame, dispatch, nativeCopy: catalog.native_copy, view: () => app.preferences_cached() });

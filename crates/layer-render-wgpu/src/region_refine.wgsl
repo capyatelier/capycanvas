@@ -7,11 +7,15 @@ fn mask_stride() -> u32 { return (params.extent_seed.x + 31u) / 32u; }
 fn mask_word_id(id: vec3<u32>, groups: vec3<u32>) -> u32 {
     return id.x + id.y * groups.x * 64u;
 }
-fn mask_word(word:u32)->u32 {
-    var bits=region_mask[word];let words=mask_stride()*params.extent_seed.y;
-    if params.input.x==3u {bits=atomicLoad(&coverage.values[word])&atomicLoad(&coverage.values[words+word])&atomicLoad(&coverage.values[2u*words+word]);}
-    else if params.input.x!=0u {bits=atomicLoad(&coverage.values[attempt()*words+word]);}
+fn base_word(word:u32)->u32 {
+    let words=mask_stride()*params.extent_seed.y;var bits=0xffffffffu;
+    for(var plane=0u;plane<attempt_count();plane++){bits&=atomicLoad(&coverage.values[plane*words+word]);}
     return bits;
+}
+fn mask_word(word:u32)->u32 {
+    if params.input.x==3u {return base_word(word);}
+    if params.input.x!=0u && params.input.x!=4u {return atomicLoad(&coverage.values[attempt()*mask_stride()*params.extent_seed.y+word]);}
+    return region_mask[word];
 }
 fn mask_bit(p: vec2<i32>) -> bool {
     if any(p < vec2<i32>(0)) || any(p >= vec2<i32>(params.extent_seed.xy)) { return false; }
@@ -34,7 +38,7 @@ fn window_word(id: vec3<u32>, groups: vec3<u32>) -> vec2<u32> {
 }
 fn freed_word(p:vec2<u32>)->u32 {
     let q=origin()+p;let word=q.y*mask_stride()+q.x/32u;let words=mask_stride()*params.extent_seed.y;
-    let base=atomicLoad(&coverage.values[word])&atomicLoad(&coverage.values[words+word])&atomicLoad(&coverage.values[2u*words+word]);
+    let base=base_word(word);
     return atomicLoad(&coverage.values[attempt()*words+word])&~base;
 }
 @compute @workgroup_size(64)
@@ -95,10 +99,10 @@ fn component_mask(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_wor
     let word=q.y*mask_stride()+q.x/32u;
     region_mask[word]=packed;
     let words=mask_stride()*params.extent_seed.y;
-    if thin!=0u && (params.input.x==0u || params.input.z==0u || params.input.w==2u) {
-        atomicOr(&coverage.values[select(0u,3u,params.input.x!=0u && params.input.z==0u)*words+word],thin);
+    if thin!=0u && (params.input.x==0u || params.input.z==0u || params.input.w+1u==attempt_count()) {
+        atomicOr(&coverage.values[select(0u,attempt_count(),params.input.x!=0u && params.input.z==0u)*words+word],thin);
     }
-    if params.input.z!=0u {atomicOr(&coverage.values[select(1u,3u,params.input.x!=0u)*words+word],packed);}
+    if params.input.z!=0u {atomicOr(&coverage.values[select(1u,attempt_count(),params.input.x!=0u)*words+word],packed);}
 }
 fn refined_coverage(p: vec2<i32>) -> f32 {
     let center = mask_bit(p);

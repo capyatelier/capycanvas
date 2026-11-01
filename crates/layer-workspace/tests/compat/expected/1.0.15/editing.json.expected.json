@@ -2351,6 +2351,7 @@
   },
   "version": 4,
   "region_close_gaps": true,
+  "region_gap_reach": null,
   "region_edges": {
     "grow_shrink": 2
   }

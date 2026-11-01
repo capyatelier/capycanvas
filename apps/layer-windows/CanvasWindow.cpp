@@ -164,8 +164,10 @@ std::string CanvasWindow::SystemTheme(){
     char hex[8];sprintf_s(hex,"#%02x%02x%02x",accent.R,accent.G,accent.B);
     return std::string(R"({"type":"system_theme_changed","theme":")")+(ink.R+ink.G+ink.B>384?"dark":"light")+R"(","accent":")"+hex+"\"}";
 }
+std::string CanvasWindow::SystemMotion(){return std::string(R"({"type":"system_motion_changed","reduced":)")+(uiSettings.AnimationsEnabled()?"false":"true")+"}";}
 CanvasWindow::~CanvasWindow() {
     if(colorValues)uiSettings.ColorValuesChanged(colorValues);
+    if(motionValues)uiSettings.AnimationsEnabledChanged(motionValues);
     { std::lock_guard lock(mutex); closing=true; paused=false; }
     wake.notify_all();space.notify_all();
     if (renderer.joinable()) renderer.join();
@@ -493,6 +495,10 @@ bool CanvasWindow::StartPrepared(CapyLaunch  prepared) {
     check_bool(SetWindowSubclass(Handle(),WindowMessage,1,reinterpret_cast<DWORD_PTR>(this)));
     auto dark=panel.ActualTheme()==ElementTheme::Dark;
     capy_action(host,SystemTheme().c_str());
+    capy_action(host,SystemMotion().c_str());
+    motionValues=uiSettings.AnimationsEnabledChanged([weak=weak_from_this()](auto&&,auto&&){
+        if(auto self=weak.lock())self->dispatcher.TryEnqueue([weak]{if(auto self=weak.lock();self&&!self->closed&&self->host)self->Send(self->SystemMotion());});
+    });
     colorValues=uiSettings.ColorValuesChanged([weak=weak_from_this()](auto&&,auto&&){
         if(auto self=weak.lock())self->dispatcher.TryEnqueue([weak]{
             if(auto self=weak.lock();self&&!self->closed&&self->host)self->Send(self->SystemTheme());
@@ -526,6 +532,18 @@ bool CanvasWindow::StartPrepared(CapyLaunch  prepared) {
             dispatcher.TryEnqueue([reply,bits]{reply(bits);});
         });});
     workspace->SetWindowId(windowId);
+    workspace->SetFillFeedback([weak=weak_from_this()](WorkspaceView::Json const& view){
+        if(auto self=weak.lock();self&&self->inputDispatcher){
+            auto resize=CapyUi::flag(view,L"resize_cursor");auto transaction=uint64_t(CapyUi::num(view,L"transaction")),tick=uint64_t(CapyUi::num(view,L"tick"));
+            self->inputDispatcher.TryEnqueue([weak,resize,transaction,tick]{if(auto self=weak.lock()){
+                if(self->fillResizeCursor.exchange(resize)!=resize)self->UpdateNavigationCursor();
+                if(self->fillTransaction!=transaction){self->fillTransaction=transaction;self->fillTick=0;}
+                if(tick!=self->fillTick){self->fillTick=tick;if(tick&&self->fillHaptics)try{
+                    for(auto const& feedback:self->fillHaptics.SupportedFeedback())if(feedback.Waveform()==Windows::Devices::Haptics::KnownSimpleHapticsControllerWaveforms::Click()){self->fillHaptics.SendHapticFeedback(feedback);break;}
+                }catch(hresult_error const&) {}}
+            }});
+        }
+    });
     auto commit=[weak=weak_from_this()](std::string json,bool document,std::function<void()> ready){
         if(auto self=weak.lock())self->Send(std::move(json),document?CanvasCommandKind::Document:CanvasCommandKind::Action,
             [ready=std::move(ready)](int32_t){ready();});
@@ -865,6 +883,11 @@ void CanvasWindow::XamlPointer(PointerRoutedEventArgs const& e,uint32_t phase){
 }
 std::vector<CapyPointer> CanvasWindow::PointerSamples(Microsoft::UI::Input::PointerPoint const& current,PointerPoints const& points,uint32_t phase,bool predict){
     phase=CanvasPointerPhase(phase,current.Properties().IsCanceled());
+    if(phase==1){
+        Windows::Devices::Haptics::SimpleHapticsController controller{nullptr};
+        try{if(current.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Pen)if(auto pen=Microsoft::UI::Input::Interop::PenDeviceInterop::FromPointerPoint(current))controller=pen.SimpleHapticsController();}catch(hresult_error const&) {}
+        inputDispatcher.TryEnqueue([weak=weak_from_this(),controller]{if(auto self=weak.lock())self->fillHaptics=controller;});
+    }
     if(current.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Pen){
         bool describe;
         {std::lock_guard lock(mutex);describe=penSources.Describe(current.PointerId(),phase==1);}
@@ -1498,8 +1521,9 @@ void CanvasWindow::UpdateNavigationCursor() {
     if(!inputSource)return;
     using namespace Microsoft::UI::Input;
     InputCursor next{nullptr};
-    auto mode=navigationCursor.load();
+    auto mode=fillResizeCursor.load()?NavigationCursor::Resize:navigationCursor.load();
     switch(mode){
+    case NavigationCursor::Resize:next=InputSystemCursor::Create(InputSystemCursorShape::SizeWestEast);break;
     case NavigationCursor::Pan:next=InputSystemCursor::Create(InputSystemCursorShape::SizeAll);break;
     case NavigationCursor::Zoom:next=zoomInCursor;break;
     case NavigationCursor::ZoomOut:next=zoomOutCursor;break;
@@ -1509,7 +1533,7 @@ void CanvasWindow::UpdateNavigationCursor() {
     inputSource.Cursor(next);
     dispatcher.TryEnqueue([weak=weak_from_this(),mode,next]{
         auto self=weak.lock();
-        if(!self||self->closing||self->closed||self->navigationCursor.load()!=mode)return;
+        if(!self||self->closing||self->closed||(self->fillResizeCursor.load()?NavigationCursor::Resize:self->navigationCursor.load())!=mode)return;
         self->panel.as<IUIElementProtected>().ProtectedCursor(next);
         if(self->menuOpen.load()||self->dialogOpen.load())return;
         POINT point{};

@@ -108,6 +108,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn contact_waits_for_raster_backing(&self, event: &PenEvent) -> bool {
         matches!(event.phase, PenPhase::Down | PenPhase::Up) && self.engine.raster_backing_pending()
+            || event.phase==PenPhase::Down && self.fill_waits_for_commit()
     }
     pub(super) fn apply_loaded_paper(&mut self) -> u32 {
         if self.rendering_suspended || !self.deferred_edits.is_empty() || !self.canvas_idle() || self.engine.raster_backing_pending() { return 0; }
@@ -199,12 +200,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 | UiAction::FrequencySeparation { .. } | UiAction::Tonal { .. }
                 | UiAction::TransformReference { .. } | UiAction::ToolbarEdit { .. }
                 | UiAction::CanvasBarEdit { .. })))
-            && !(self.deferred_edits.is_empty() && configures_brush)
+            && !(self.deferred_edits.is_empty() && configures_brush && !self.fill_waits_for_commit())
     }
     fn edits_pending(&self, action: &UiAction) -> bool {
         let history = matches!(action, UiAction::Invoke { command: CommandId::Undo | CommandId::Redo });
         let applying = self.applying_mode() && self.applies_open_mode(action);
-        applying || !self.deferred_edits.is_empty() || self.painted_selections.busy()
+        applying || self.fill_waits_for_commit() || !self.deferred_edits.is_empty() || self.painted_selections.busy()
             || (history && (self.region_tools.publishing_edit() || self.files.pending.is_some()))
             || (self.engine.raster_backing_pending() && !held_actions::selects_tool(action) && !configures_brush(action)
                 && !(configures_transform(action) && self.files.pending.is_none() && !self.region_tools.publishing_edit()))
@@ -233,6 +234,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             if self.applying_mode() || (self.engine.raster_backing_pending()
                 && !matches!(&edit.input, EditInput::Action(action) if configures_transform(action) || configures_brush(action) || held_actions::selects_tool(action))) || self.files.pending.is_some()
+                || matches!(&edit.input,EditInput::Action(_)) && self.fill_waits_for_commit()
                 || matches!(&edit.input, EditInput::Pen { event, .. } if starts_contact(event) && !self.paint_ready())
                 || (matches!(&edit.input, EditInput::Action(action) if !configures_brush(action))
                     && (self.painted_selections.busy() || self.region_tools.publishing_edit()

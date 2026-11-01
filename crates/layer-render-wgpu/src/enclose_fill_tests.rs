@@ -29,7 +29,7 @@ fn frame(r: &mut WgpuRasterizer, document: &Document, extent: [u32; 2]) {
     submit_ready(r, FramePacket { reset_layers: true, ..packet(document.scene(), extent) }).unwrap();
 }
 fn request(source: RegionSource, enclosure: Selection, refinement: RegionRefinement, tolerance: f32) -> RegionRequest {
-    RegionRequest { reference_count: None, paper: None,
+    RegionRequest { fill: None, reference_count: None, paper: None,
         request_id: 91,
         source,
         contiguous: true,
@@ -153,6 +153,20 @@ fn rectangles(extent: [u32; 2], boxes: &[[u32; 4]]) -> Vec<u8> {
         let (x, y) = (i % extent[0], i / extent[0]);
         if boxes.iter().any(|[x0, y0, x1, y1]| (*x0..*x1).contains(&x) && (*y0..*y1).contains(&y)) { 255 } else { 0 }
     }).collect()
+}
+
+#[test]
+fn enclose_fill_six_pixel_references_match_the_host_journey() {
+    let extent=[384,256];let mut document=paint_document(extent,"Six pixel reference");
+    placement::set_source(&mut document,layer_core::color::source::rgba8_source(extent,|x,y| {
+        let ink=[40,150,270].into_iter().any(|left|x>=left&&x<left+90&&y>=50&&y<170&&(x<left+6||x>=left+84||y<56||y>=164));
+        if ink {[0,0,0,255]}else{[0;4]}
+    }));
+    let ink=target(&document);let empty=paint_document(extent,"Destination");let (_,target)=placement::append_paint(&mut document,"Destination",placement::paint(&empty).clone());
+    let snapshot=document.snapshot();let source=RegionSource::Intersection([ink,target].into_iter().map(|target|RegionSource::Scene {snapshot:snapshot.clone(),scope:SceneScope::Raw(target)}).collect());
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();frame(&mut r,&document,extent);
+    let mut query=request(source,rectangle([20,30,315,190]),exact(),0.15);query.reference_count=Some(1);
+    check(&receive_request(&mut r,query),&rectangles(extent,&[[46,56,124,164],[156,56,234,164]]),extent);
 }
 
 #[test]

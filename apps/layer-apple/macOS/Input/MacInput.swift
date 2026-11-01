@@ -199,6 +199,7 @@ extension NSEvent {
         guard canvasCursor else { return }
         let cursor: NSCursor
         switch store.navigationCursor {
+        case "ew-resize": cursor = .resizeLeftRight
         case "pan": cursor = .openHand
         case "zoom": cursor = .zoomIn
         case "zoom_out": cursor = .zoomOut

@@ -22,6 +22,7 @@ mod color_picker;
 mod color_touch;
 mod color_preview_raster;
 mod color_readout;
+mod fill_gesture;
 mod new_drawing;
 mod slide_sheet;
 mod color_library;

@@ -4,6 +4,7 @@ struct EditorView<Canvas: View>: View {
     @ObservedObject var store: EditorStore
     @ViewBuilder let canvas: () -> Canvas
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openWindow) private var openWindow
     @Environment(\.supportsMultipleWindows) private var supportsMultipleWindows
     @State private var lastWindowRequest: UInt64 = 0
@@ -45,6 +46,7 @@ struct EditorView<Canvas: View>: View {
                 WorkspacePanels(store: store, workspace: store.workspace)
                 PenResponseCalibration(store: store)
             }
+            FillGestureOverlay(view: store.snapshot["color_preview"]["fill_gesture"], palette: palette)
             HStack {
                 ToneStatusLabel(store: store, palette: palette)
                 ProofIndicator(model: store.proof, palette: palette)
@@ -114,6 +116,7 @@ struct EditorView<Canvas: View>: View {
         }
         .ignoresSafeArea()
         .overlay { CommandSearchLayer(store: store).ignoresSafeArea(.container) }
+        .onChange(of: [reduceMotion, store.snapshot["gpu_ready"].bool], initial: true) { _, _ in store.dispatch(["type": "system_motion_changed", "reduced": reduceMotion]) }
         .foregroundStyle(palette["text"])
         .font(.system(size: store.catalog["text_size_pt"].number > 0 ? store.catalog["text_size_pt"].number * 4 / 3 : 44 / 3))
         .tint(palette.accent)
@@ -327,3 +330,47 @@ private struct ManagedPersistenceProbe: View {
     var body: some View { PersistenceProbe.label(store, saving: workspaces.hasUnsavedChanges, failed: workspaces.error != nil) }
 }
 #endif
+
+private struct FillGestureOverlay: View {
+    let view: JSON
+    let palette: EditorPalette
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            SwiftUI.Canvas { context, _ in
+                var seals = Path()
+                for segment in view["seals"].array {
+                    let ends = segment.array
+                    seals.move(to: CGPoint(x: ends[0][0].number, y: ends[0][1].number))
+                    seals.addLine(to: CGPoint(x: ends[1][0].number, y: ends[1][1].number))
+                }
+                context.stroke(seals, with: .color(palette.accent), style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                if !view["ring"].isNull {
+                    let tip = view["tip"].array
+                    var ring = Path()
+                    ring.addArc(center: CGPoint(x: tip[0].number, y: tip[1].number), radius: 12,
+                        startAngle: .degrees(-90), endAngle: .degrees(-90 + 360 * view["ring"].number), clockwise: false)
+                    context.stroke(ring, with: .color(palette.accent), lineWidth: 2)
+                }
+            }
+            if !view["pill"].isNull {
+                let pill = view["pill"], bounds = pill["bounds"].rect, track = pill["track"].array
+                VStack(spacing: 0) {
+                    HStack { Text(pill["label"].string); Spacer(); Text(pill["value"].string).monospacedDigit() }
+                        .padding(.horizontal, 12).padding(.top, 5)
+                    SwiftUI.Canvas { context, _ in
+                        var trough = Path(), fill = Path()
+                        trough.move(to: CGPoint(x: track[0].number - bounds.minX, y: 7))
+                        trough.addLine(to: CGPoint(x: track[1].number - bounds.minX, y: 7))
+                        fill.move(to: CGPoint(x: track[0].number - bounds.minX, y: 7))
+                        fill.addLine(to: CGPoint(x: pill["fill_end"].number - bounds.minX, y: 7))
+                        context.stroke(trough, with: .color(palette.field), style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                        context.stroke(fill, with: .color(palette["panel"]), style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                        context.stroke(fill, with: .color(palette["text"].opacity(0.5)), style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                    }
+                }.glassSurface(SquircleShape(8), fill: palette.glassPanel)
+                    .placed(pill["bounds"])
+            }
+        }.allowsHitTesting(false).accessibilityHidden(true)
+            .sensoryFeedback(.selection, trigger: view["tick"].uint) { _, tick in tick != 0 }
+    }
+}

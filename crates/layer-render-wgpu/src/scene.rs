@@ -212,6 +212,8 @@ pub(super) struct Scene {
     image_damage: Option<scale::Damage>,
 }
 
+pub(super) enum PaintOperation<'a> { Stored(usize),Preview(&'a layer_core::RasterOperation) }
+
 /// Immutable device resources, compiled before input is enabled and shared by
 /// live composition, captures and recreated scenes. No canvas pixels retained.
 #[derive(Clone)]
@@ -1355,7 +1357,7 @@ impl Scene {
         r: &mut WgpuRasterizer,
         packet: FramePacket<'_>,
         target: SourceTarget,
-        operation_index: usize,
+        operation: PaintOperation<'_>,
         damage: PixelRect,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
@@ -1363,7 +1365,10 @@ impl Scene {
         self.clear_material_pages();
         self.used.iter_mut().for_each(scratch::Usage::reset);
         let handle = packet.scene.source_owner(target).ok_or(GpuRasterError::MissingPaintLayer(target))?;
-        let op = &packet.scene.operations(target).ok_or(GpuRasterError::MissingPaintLayer(target))?[operation_index];
+        let (operation_index,op,preview)=match operation {
+            PaintOperation::Stored(index)=>(index,&packet.scene.operations(target).ok_or(GpuRasterError::MissingPaintLayer(target))?[index],false),
+            PaintOperation::Preview(operation)=>(u32::MAX as usize,operation,true),
+        };
         let extent = packet.scene.target_extent(target);
         if matches!(op.kind, RasterOperationKind::ColorMode(_) | RasterOperationKind::Erase { alpha_locked: true }) {
             return Ok(());
@@ -1402,8 +1407,7 @@ impl Scene {
             RasterOperationKind::Erase { .. } => damage == PixelRect::full(extent),
             _ => false,
         };
-        let pages: Vec<_> = stored
-            .pages
+        let pages: Vec<_> = if preview {&r.preview_pages}else{&stored.pages}
             .iter()
             .filter(|p| !damage.page_local(p.coordinate).is_empty())
             .map(|p| {

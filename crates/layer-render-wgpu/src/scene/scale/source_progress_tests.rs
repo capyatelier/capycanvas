@@ -71,9 +71,8 @@ fn scene_page_output_binding_survives_frames_and_both_compute_layouts() {
     }
 }
 
-#[test]
-fn deferred_fine_objects_keep_coarse_presentation_without_backup() {
-    let extent = [1024, 512];
+fn deferred_object_document()->Document {
+    let extent=[1024,512];
     let mut artwork = Artwork::new(extent).unwrap();
     let mut object = ImageObject::new(layer_core::authored::Image::new(rgba8_source([512; 2], |x, y|
         [40 + (x / 32) as u8 * 9, 30 + (y / 32) as u8 * 11, 150, 255])));
@@ -85,6 +84,13 @@ fn deferred_fine_objects_keep_coarse_presentation_without_backup() {
     artwork.stacks.get_mut(stack).unwrap().entries = vec![owner];
     let mut doc = Document::from_artwork(artwork).unwrap();
     add_fill(&mut doc, layer_core::color::RgbColor::WHITE);
+    doc
+}
+
+#[test]
+fn deferred_fine_objects_keep_coarse_presentation_without_backup() {
+    let extent=[1024,512];
+    let doc=deferred_object_document();
     let coarse = ViewState { width_px: 256, height_px: 128, document_to_surface: [0.25, 0., 0., 0.25, 0., 0.] };
     let fine = ViewState { width_px: 640, height_px: 384, document_to_surface: [1., 0., 0., 1., -128., -64.] };
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
@@ -232,4 +238,42 @@ fn reduced_photo_larger_than_decoded_cache_publishes_only_after_prefixes_finish(
         }
     }
     assert!(presentation_change.is_none(), "pending source preparation replaced the published frame: {presentation_change:?}");
+}
+
+#[test]
+fn fill_preview_becomes_ready_after_deferred_object_composition() {
+    let extent=[1024,512];
+    let mut doc=deferred_object_document();
+    let (_,target)=crate::test_support::add_paint(&mut doc.artwork,"Fill preview",extent);
+    reindex(&mut doc);
+    let coarse=ViewState {width_px:256,height_px:128,document_to_surface:[0.25,0.,0.,0.25,0.,0.]};
+    let fine=ViewState {width_px:640,height_px:384,document_to_surface:[1.,0.,0.,1.,-128.,-64.]};
+    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    crate::test_support::submit_settled(&mut r,FramePacket {view:coarse,..packet(doc.scene(),extent)});
+    let authored=doc.artwork.clone();
+    let frame=FramePacket {view:fine,composite_all:false,..packet(doc.scene(),extent)};
+    let request=request(&r,frame).unwrap();
+    let (cache,_)=Cache::select(r.scale_display.take(),&r,frame,request,true);
+    r.scale_display=Some(cache);r.moving_images=Default::default();
+    r.scene.as_mut().unwrap().object_results.clear();
+    let operation=layer_core::RasterOperation {placement:layer_core::Affine::IDENTITY,
+        coverage:CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(),extent,[0;2]),
+        kind:layer_core::RasterOperationKind::Fill {color:[1.,0.,0.,1.],texture:Default::default(),alpha_locked:false,underfill:None}};
+    r.set_fill_preview(Some(layer_render::FillPreview {transaction:91,revision:3,target,operation}));
+    crate::test_support::submit_ready(&mut r,frame).unwrap();
+    r.wait_idle().unwrap();
+    assert!(r.object_deferred,"cold fine objects must defer the first preview composition");
+    assert_eq!(r.fill_preview_ready(),None);
+    let idle=FramePacket {composite_all:false,reset_layers:false,..frame};
+    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(30);
+    while r.object_deferred {
+        assert!(std::time::Instant::now()<deadline,"fine object composition must publish");
+        crate::test_support::submit_ready(&mut r,idle).unwrap();
+        r.wait_idle().unwrap();
+    }
+    assert_eq!(r.fill_preview_ready(),Some((91,3)));
+    assert_eq!(doc.artwork,authored);
+    r.set_fill_preview(None);
+    crate::test_support::submit_settled(&mut r,idle);
+    assert_eq!(r.fill_preview_ready(),None);
 }

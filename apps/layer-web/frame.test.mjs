@@ -19,7 +19,7 @@ test('retained workspace placement keeps bubble presentation without scheduling 
   let refreshes=0,wakes=0,model=1;
   const context={app:{language_pending:()=>false,workspace_update:()=>({model_revision:model,content_revision:1}),state_update:assert.fail},
     bubbles:{refresh(){refreshes++;wakes++;}},canvasBar:null,workspaceManager:{observe(){}},editor:{refreshColorPreview(){}},
-    workspaceModelRevision:1,workspaceContentRevision:1,workspaceGesture:{started:true},
+    fillGesture:null,workspaceModelRevision:1,workspaceContentRevision:1,workspaceGesture:{started:true},
     queueWorkspacePresentation(){},queueWorkspaceLayout(){},refreshColorEditors(){},refreshTextureDialogs(){},wake(){wakes++;}};
   runInNewContext(source.slice(source.indexOf('function applyChange(change)'),source.indexOf('let canvasCursorActive')),context);
   for(const regions of [129,129|32768])context.applyChange({regions,canvas_wake:false});
@@ -29,6 +29,17 @@ test('retained workspace placement keeps bubble presentation without scheduling 
   model=1;
   for(const regions of [2,4,8,16,256,8192])context.applyChange({regions,canvas_wake:false});
   assert.deepEqual([refreshes,wakes],[7,7],'Brush, document, command, settings, preview and bubble changes remain live');
+});
+
+test('fill gesture publishes through the color preview fast path without a workspace patch',()=>{
+  const received=[],gesture={transaction:7,pill:{label:'Shared label',value:'Shared value'}};
+  const context={app:{language_pending:()=>false,color_preview:()=>({fill_gesture:gesture}),state_update:assert.fail},
+    fillGesture:{refresh:value=>received.push(value)},editor:null,refreshColorEditors(){},bubbles:null,wake(){}};
+  runInNewContext(source.slice(source.indexOf('function applyChange(change)'),source.indexOf('let canvasCursorActive')),context);
+  context.applyChange({regions:256,canvas_wake:false});
+  assert.equal(received[0],gesture);
+  context.app.color_preview=()=>({fill_gesture:null});context.applyChange({regions:256,canvas_wake:false});
+  assert.equal(received[1],null);
 });
 
 test('header buttons present shared refusal hints without replacing layout-editing hints', () => {
@@ -75,11 +86,12 @@ test('live preferences publish while document dialogs retain exclusive editing i
   const restore={type:'restore_saved_settings',saved:JSON.stringify({language:{Explicit:'ja'}})};
   context.dispatch(restore);
   assert.deepEqual(received,[restore]);assert.deepEqual(published,[change]);
+  const motion={type:'system_motion_changed',reduced:true};context.dispatch(motion);
   const invoke={type:'invoke',command:'pen'};
   context.dispatch(invoke);
-  assert.deepEqual(received,[restore],'the open dialog keeps ownership of editing commands');
+  assert.deepEqual(received,[restore,motion],'the open dialog keeps ownership of editing commands');
   busy=false;context.dispatch(invoke);
-  assert.deepEqual(received,[restore,invoke]);assert.deepEqual(published,[change,change]);
+  assert.deepEqual(received,[restore,motion,invoke]);assert.deepEqual(published,[change,change,change]);
 });
 
 test('native key input retains dialog ownership, text and Latin candidates', () => {

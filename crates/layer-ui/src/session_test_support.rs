@@ -42,6 +42,8 @@ pub(crate) struct Recorder {
     pub(crate) region_requests: Vec<layer_render::RegionRequest>,
     pub(crate) region_preparation: Option<layer_render::RegionPreparation>,
     pub(crate) region_reply: Option<layer_render::RegionResult>,
+    pub(crate) fill_preview: Option<layer_render::FillPreview>,
+    pub(crate) fill_reveal: Option<layer_render::FillReveal>,
     pub(crate) region_fails: bool,
     pub(crate) region_cancels: usize,
     pub(crate) bounds_requests: Vec<layer_core::ContentBoundsRequest>,
@@ -144,6 +146,9 @@ impl CanvasRenderer for Recorder {
     fn take_selection_paint(&mut self)->Option<Result<layer_render::SelectionPaintResult,Self::Error>> {
         self.selection_reply.take().map(Ok)
     }
+    fn set_fill_preview(&mut self,preview:Option<layer_render::FillPreview>) {self.fill_preview=preview;}
+    fn fill_preview_ready(&self)->Option<(u64,u64)> {self.fill_preview.as_ref().filter(|_|!self.settling).map(|preview|(preview.transaction,preview.revision))}
+    fn set_fill_reveal(&mut self,reveal:Option<layer_render::FillReveal>) {self.fill_reveal=reveal;}
     fn request_region(
         &mut self,
         request: layer_render::RegionRequest,

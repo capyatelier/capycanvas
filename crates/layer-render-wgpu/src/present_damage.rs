@@ -102,6 +102,15 @@ pub(super) fn surface_bounds(bounds: [f32; 4], view: ViewState, turns: u32) -> P
     )
 }
 
+pub(super) fn fill_reveal(old:Option<layer_render::FillReveal>,new:Option<layer_render::FillReveal>,view:ViewState,turns:u32)->Option<[PixelRect;4]> {
+    let (old,new)=(old?,new?);
+    if old.transaction!=new.transaction || old.center!=new.center || old.radius<0. || new.radius<0. {return None;}
+    if old==new {return Some([PixelRect::EMPTY;4]);}
+    let [x,y]=new.center;let outer=old.radius.max(new.radius);let inner=(old.radius.min(new.radius)*std::f32::consts::FRAC_1_SQRT_2-1.).max(0.);
+    let bounds=|radius|if radius>0. {surface_bounds([x-radius,y-radius,radius*2.,radius*2.],view,turns)}else{PixelRect::EMPTY};
+    Some(bounds(outer).subtract(bounds(inner)))
+}
+
 pub(super) fn cursor_bounds(
     segments: &[layer_render::CursorSegment],
     view: ViewState,

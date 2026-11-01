@@ -3,6 +3,9 @@ use wgpu::util::DeviceExt;
 
 const PIXELS_PER_END:u64=256;
 const MIN_END_CAPACITY:u64=16384;
+const END_WORDS:u64=20;
+const GAP_REACH:u32=64;
+pub(super) const WINDOW_HALO:u32=GAP_REACH+2*MAX_LINE_WIDTH;
 const MAX_LINE_WIDTH:u32=16;
 const UNDERFILL_HALF_PIXELS:u32=48;
 const DISTANCE_LIMIT_HALF_PIXELS:u32=UNDERFILL_HALF_PIXELS+1;
@@ -77,8 +80,8 @@ impl Lines {
             self.data=Some(device.create_buffer(&wgpu::BufferDescriptor {label:Some("cached region lines"),size,
                 usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::COPY_SRC,mapped_at_creation:false}));
         }
-        let scratch_bytes=u64::from(side+160).pow(2)*4;
-        let compact_bytes=scratch_bytes.max(u64::from(offsets[3])*64);
+        let scratch_bytes=u64::from(side+2*WINDOW_HALO).pow(2)*4;
+        let compact_bytes=scratch_bytes.max(u64::from(offsets[3])*END_WORDS*4);
         if self.scratch.as_ref().is_none_or(|buffers|buffers[0].size()<compact_bytes || buffers[1].size()<scratch_bytes) {
             self.scratch=Some(std::array::from_fn(|index|device.create_buffer(&wgpu::BufferDescriptor {label:Some("region window coordinates"),size:if index==0 {compact_bytes}else{scratch_bytes},
                 usage:wgpu::BufferUsages::STORAGE,mapped_at_creation:false})));
@@ -237,6 +240,24 @@ impl Lines {
         self.building=Some(work);Ok((false,spent))
     }
     pub fn has_seals(&self)->bool {!self.overflow && self.ends!=0}
+    pub fn exclude(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,excluded:&[u32]) {
+        if !self.has_seals(){return;}
+        let mut ids=excluded.to_vec();ids.sort_unstable();ids.dedup();
+        let bytes=ids.iter().flat_map(|id|id.to_ne_bytes()).collect::<Vec<_>>();
+        let buffer=(!ids.is_empty()).then(||input.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label:Some("removed fill seals"),contents:&bytes,usage:wgpu::BufferUsages::STORAGE}));
+        self.encode(input,encoder,None,buffer.as_ref(),vec![("reset_ends",u64::from(self.ends),
+            self.params([0;4],[0;4],[8,self.ends,0,ids.len() as u32],[1.,1.,0.,0.]))]);
+    }
+    pub fn seal_metadata(&self,device:&PipelineDevice)->Option<wgpu::Buffer> {
+        self.has_seals().then(||device.create_buffer(&wgpu::BufferDescriptor {label:Some("fill seal metadata"),
+            size:u64::from(self.ends)*4*20,usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_SRC,mapped_at_creation:false}))
+    }
+    pub fn capture_seals(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,output:&wgpu::Buffer,reach:u32) {
+        self.encode(input,encoder,Some(output),None,vec![("apply_seals",u64::from(self.ends),
+            self.params([0;4],[0;4],[0,0,reach/16-1,1+(reach/16-1)*self.ends*5],[1.,1.,0.,0.]))]);
+    }
+
     pub fn barriers(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,close:bool,reach:u32,job:[u32;4],parents:&wgpu::Buffer) {
         let params=|mut steps:Vec<Step>| {
             for (_,_,params) in &mut steps {params[24..28].copy_from_slice(&job);}
@@ -284,6 +305,37 @@ impl Lines {
         self.encode(input,encoder,Some(coverage),Some(parents),vec![("barrier_plane",u64::from(self.offsets[0]),params)]);
     }
 
+    pub fn boundary(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,coverage:&wgpu::Buffer) {
+        self.encode(input,encoder,Some(coverage),None,vec![
+            ("reset_ends",1,self.params([0;4],[0;4],[2,0,0,0],[1.,1.,0.,0.])),
+            ("barrier_plane",u64::from(self.offsets[0]),self.params([0;4],[0;4],[3,0,MAX_LINE_WIDTH*3/2,0],[1.,1.,0.,0.])),
+        ]);
+        encoder.copy_buffer_to_buffer(self.data.as_ref().unwrap(),u64::from(self.offsets[1]+3)*4,coverage,28,4);
+    }
+    pub fn union_trail(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,trail:&wgpu::Buffer,parents:&wgpu::Buffer,output:u32,active:u32) {
+        self.encode(input,encoder,Some(trail),Some(parents),vec![("barrier_plane",u64::from(self.offsets[0]),self.params([0;4],[0;4],[5,output,active,0],[1.,1.,0.,0.]))]);
+    }
+    pub fn next_trail(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,trail:&wgpu::Buffer,points:&[[f32;2]],limit:Option<&wgpu::Buffer>) {
+        let mut count=0u32;let mut data=Vec::new();
+        for segment in points.windows(2) {
+            let steps=((segment[1][0]-segment[0][0]).abs().max((segment[1][1]-segment[0][1]).abs())*2.).ceil().max(1.) as u32;
+            count=count.saturating_add(steps+1);
+            data.extend([segment[0][0].to_bits(),segment[0][1].to_bits(),segment[1][0].to_bits(),segment[1][1].to_bits(),count,steps]);
+        }
+        if data.is_empty(){data.extend([0;6]);}
+        let bytes=data.into_iter().flat_map(u32::to_ne_bytes).collect::<Vec<_>>();
+        let path=input.device.create_buffer(&wgpu::BufferDescriptor {label:Some("fill input path"),size:bytes.len() as u64+limit.map_or(0,wgpu::Buffer::size),
+            usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false});
+        let input_path=input.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {label:Some("fill input segments"),contents:&bytes,usage:wgpu::BufferUsages::COPY_SRC});
+        encoder.copy_buffer_to_buffer(&input_path,0,&path,0,bytes.len() as u64);
+        if let Some(limit)=limit {encoder.copy_buffer_to_buffer(limit,0,&path,bytes.len() as u64,limit.size());}
+        self.encode(input,encoder,Some(trail),Some(&path),vec![
+            ("reset_ends",1,self.params([0;4],[0;4],[2,0,1,0],[1.,1.,0.,0.])),
+            ("barrier_plane",u64::from(count.max(1)),self.params([bytes.len() as u32/4,u32::from(limit.is_some()),0,0],[0;4],[6,count,points.len().saturating_sub(1) as u32,MAX_LINE_WIDTH*3/2],[1.,1.,0.,0.])),
+            ("barrier_plane",1,self.params([0;4],[0;4],[7,count,points.len().saturating_sub(1) as u32,0],[1.,1.,0.,0.])),
+        ]);
+    }
+
     pub fn check_seeds(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,old:&wgpu::Buffer,new:&wgpu::Buffer,position:[u32;2]) {
         encoder.clear_buffer(self.data.as_ref().unwrap(),u64::from(self.offsets[1]+2)*4,Some(4));
         self.encode(input,encoder,Some(old),Some(new),vec![("check_seeds",old.size()/4,self.params([0;4],[0;4],[position[0],position[1],MAX_LINE_WIDTH*3/2,0],[1.,1.,0.,0.]))]);
@@ -298,8 +350,8 @@ impl Lines {
 }
 
 fn analysis_window(core:[u32;4],extent:[u32;2])->[u32;4] {
-    let x=core[0].saturating_sub(80);let y=core[1].saturating_sub(80);
-    [x,y,(core[0]+core[2]+80).min(extent[0])-x,(core[1]+core[3]+80).min(extent[1])-y]
+    let x=core[0].saturating_sub(WINDOW_HALO);let y=core[1].saturating_sub(WINDOW_HALO);
+    [x,y,(core[0]+core[2]+WINDOW_HALO).min(extent[0])-x,(core[1]+core[3]+WINDOW_HALO).min(extent[1])-y]
 }
 fn word_count(rect:[u32;4])->u64 {u64::from((rect[0]+rect[2]).div_ceil(32)-rect[0]/32)*u64::from(rect[3])}
 fn bounds(rect:PixelRect)->[u32;4] {[rect.min_x(),rect.min_y(),rect.width(),rect.height()]}
@@ -318,8 +370,8 @@ fn storage_layout(extent:[u32;2],limits:&wgpu::Limits)->Option<([u32;4],u64)> {
         let dense=(sparse+bits*2)*4;
         let area=u64::from(w)*u64::from(h);
         let capacity=area.div_ceil(PIXELS_PER_END).max(MIN_END_CAPACITY).min(area)
-            .min(limits.max_storage_buffer_binding_size.min(limits.max_buffer_size).saturating_sub(dense)/64);
-        let size=dense+capacity*64;
+            .min(limits.max_storage_buffer_binding_size.min(limits.max_buffer_size).saturating_sub(dense)/(END_WORDS*4));
+        let size=dense+capacity*END_WORDS*4;
         if capacity==0 || size>limits.max_storage_buffer_binding_size || size>limits.max_buffer_size || w>=65535 || h>=65535 {return None;}
     Some(([bits as u32,summary as u32,sparse as u32,capacity as u32],size))
 }
@@ -331,7 +383,7 @@ mod tests {
     #[test]
     fn end_storage_scales_with_canvas_area_and_fits_61mp() {
         let limits=wgpu::Limits {max_storage_buffer_binding_size:128*1024*1024,max_buffer_size:128*1024*1024,..Default::default()};
-        for (extent,ends,bytes) in [([4248,2832],46994,19560968),([6000,4000],93750,39030032),([9504,6336],235224,97868200)] {
+        for (extent,ends,bytes) in [([4248,2832],46994,20312872),([6000,4000],93750,40530032),([9504,6336],235224,101631784)] {
             let (offsets,size)=storage_layout(extent,&limits).unwrap();
             assert_eq!((offsets[3],size),(ends,bytes));
             assert!(size<=limits.max_storage_buffer_binding_size);

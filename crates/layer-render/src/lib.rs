@@ -647,6 +647,7 @@ impl RegionPreparation {
 }
 #[derive(Clone, Debug)]
 pub struct RegionRequest {
+    pub fill: Option<RegionFillQuery>,
     pub reference_count: Option<usize>,
     pub paper: Option<layer_core::paper::PaperBinding>,
     pub enclosure: Option<std::sync::Arc<layer_core::Selection>>,
@@ -663,6 +664,54 @@ pub struct RegionRequest {
     pub limit: Option<std::sync::Arc<layer_core::Selection>>,
 }
 pub use layer_core::RegionEdges;
+#[derive(Clone, Debug, Default)]
+pub struct RegionFillQuery {
+    pub reach: Option<u32>,
+    pub excluded_seals: std::sync::Arc<[u32]>,
+    pub trail:Option<RegionFillTrail>,
+}
+#[derive(Clone,Debug)]
+pub struct RegionFillTrail {pub transaction:u64,pub points:std::sync::Arc<[[f32;2]]>}
+#[derive(Clone, Debug)]
+pub struct RegionCoverage {
+    pub pixels: std::sync::Arc<layer_core::SelectionPixels>,
+    pub underfill: Option<std::sync::Arc<layer_core::SelectionPixels>>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RegionSeal {
+    pub id: u32,
+    pub start: [u32; 2],
+    pub bend: Option<[u32; 2]>,
+    pub end: [u32; 2],
+    pub reach: u32,
+}
+#[derive(Clone, Debug)]
+pub struct RegionGapMasks {
+    pub next:Option<[u32;2]>,
+    pub regions: [RegionCoverage; 5],
+    pub active: usize,
+    pub line_bounded: bool,
+    pub seals: std::sync::Arc<[RegionSeal]>,
+}
+#[derive(Clone, Debug)]
+pub struct FillPreview {
+    pub transaction: u64,
+    pub revision: u64,
+    pub target: SourceTarget,
+    pub operation: layer_core::RasterOperation,
+}
+impl FillPreview {
+    pub fn key(&self)->(u64,u64,SourceTarget) {(self.transaction,self.revision,self.target)}
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FillReveal {
+    pub transaction: u64,
+    pub center: [f32; 2],
+    pub radius: f32,
+}
+impl RegionGapMasks {
+    pub const STOPS: [u32; 5] = [0, 16, 32, 48, 64];
+}
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RegionRefinement {
     pub close_gaps: bool,
@@ -680,6 +729,7 @@ impl RegionRefinement {
 }
 #[derive(Clone, Debug)]
 pub struct RegionResult {
+    pub gaps: Option<RegionGapMasks>,
     pub request_id: u64,
     pub tonal_sample: Option<TonalSample>,
     /// Immutable, GPU-generated mask in the source's coordinates.
@@ -845,6 +895,9 @@ pub trait CanvasRenderer {
     /// retouching tool is selected. Never blocks.
     fn prepare_retouch(&mut self, _retouch: Option<&RetouchPreparation>) {}
     fn prepare_regions(&mut self, _regions: Option<&RegionPreparation>) {}
+    fn set_fill_preview(&mut self, _preview: Option<FillPreview>) {}
+    fn fill_preview_ready(&self)->Option<(u64,u64)> {None}
+    fn set_fill_reveal(&mut self, _reveal: Option<FillReveal>) {}
     /// A retouching stroke whose source was not ready while the pen was down.
     /// It must be replayed once, after contact ends. Each stroke is reported
     /// once; renderers without retouch sources report none.

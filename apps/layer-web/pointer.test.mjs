@@ -351,6 +351,20 @@ test("zero pressure with tip or eraser contact is not a lift", () => {
   }
 });
 
+test("mouse moves forward held buttons and terminal releases", () => {
+  for (const [buttons, button] of [[1, "primary"], [2, "pan"], [0, "other"]]) {
+    const h = harness();
+    h.send("pointermove", { pointerType: "mouse", button: -1, buttons });
+    assert.equal(h.phases.at(-1).button, button);
+  }
+  const h = harness();
+  h.send("pointerdown", { pointerType: "mouse", button: 0, buttons: 1 });
+  h.send("pointermove", { pointerType: "mouse", button: -1, buttons: 1 });
+  h.send("pointerup", { pointerType: "mouse", button: 0, buttons: 0 });
+  assert.ok(h.phases.every(p => p.button === "primary"));
+  assert.deepEqual(h.samples().map(s => s[1]), [1, 2, 3]);
+});
+
 test("mouse cancellation and touch/pan routing retain their semantics", () => {
   const mouse = harness();
   mouse.send("pointerdown", { pointerType: "mouse" });

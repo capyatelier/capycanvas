@@ -840,7 +840,7 @@ fn resampled_reply(s: &mut UiSession<Recorder>) -> layer_render::RegionResult {
     let doc = s.engine.document();
     let extent = doc.target_extent(doc.working.target.unwrap());
     let words = vec![u32::MAX; extent[0].div_ceil(4) as usize * extent[1] as usize];
-    layer_render::RegionResult { underfill: None,
+    layer_render::RegionResult { gaps: None, underfill: None,
         tonal_sample: None,
         placement: layer_core::Affine::IDENTITY,
         request_id: request.request_id,

@@ -1955,12 +1955,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.paint_operation(doc.working.selection.clone(),kind,&colors)
     }
 
-    pub(super) fn paint_operation(
-        &mut self,
-        selection: Option<Selection>,
-        mut kind: layer_core::RasterOperationKind,
-        colors: &[layer_core::color::RgbColor],
-    ) -> Result<(), String> {
+    pub(super) fn paint_operation_data(&self,selection:Option<Selection>,mut kind:layer_core::RasterOperationKind)
+        ->Result<(SourceTarget,layer_core::RasterOperation),String> {
         let id = self.engine.document().drawing_content().ok_or("Select a drawing layer")?;
         let owner = self.engine.document().target_owner(id).ok_or("Unknown layer")?;
         let layer = self.editable_layer(occurrence_token(owner))?;
@@ -1973,7 +1969,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let placement = if matches!(kind,layer_core::RasterOperationKind::Gradient {..}) { layer_core::Affine::translation(to_local) } else { layer_core::Affine::IDENTITY };
         let domain = self.engine.document().target_extent(id);
-        let mut coverage = CoverageSnapshot::reveal_all(self.engine.allocate_coverage_handle(), domain, [0; 2]);
+        let mut coverage = CoverageSnapshot::reveal_all(self.engine.document().artwork.coverage.next_handle(), domain, [0; 2]);
         let doc = self.engine.document();
         let [w, h] = doc.composition().size.map(|v| v as f32);
         let hidden = doc.target_extent(id) != doc.composition().size || doc.target_offset(id) != [0; 2];
@@ -1988,7 +1984,19 @@ impl<R: CanvasRenderer> UiSession<R> {
             coverage.source.default_coverage = f32::from(selection.inverted);
             coverage.selection = Some(selection.translated(to_local));
         }
-        let paints = match &kind {
+        Ok((id,layer_core::RasterOperation {placement,coverage,kind}))
+    }
+
+    pub(super) fn paint_operation(
+        &mut self,
+        selection: Option<Selection>,
+        kind: layer_core::RasterOperationKind,
+        colors: &[layer_core::color::RgbColor],
+    ) -> Result<(), String> {
+        let (id,mut operation)=self.paint_operation_data(selection,kind)?;
+        operation.coverage.target=self.engine.allocate_coverage_handle();
+        operation.coverage.use_.source=operation.coverage.target;
+        let paints = match &operation.kind {
             layer_core::RasterOperationKind::Fill { color, .. } => color[3] > 0.,
             layer_core::RasterOperationKind::Gradient { gradient, opacity, .. } => {
                 *opacity>0. && gradient.stops.iter().any(|stop| stop.color.rgba[3]>0.)
@@ -1998,7 +2006,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             _ => false,
         };
-        self.engine.append_raster_operation(id, layer_core::RasterOperation { placement, coverage, kind }).map_err(error)?;
+        self.engine.append_raster_operation(id,operation).map_err(error)?;
         if paints {
             for color in colors.iter().rev() {
                 self.state.color_library.record_use(*color);

@@ -59,6 +59,7 @@ impl EditingState {
             region_sources: region.source,
             region_stop_at_colors: region.stop_at_colors,
             region_close_gaps: region.refinement.close_gaps,
+            region_gap_reach:None,
             region_edges: region.refinement.edges,
             fill_scope: region.scope,
             region_smooth_edges: region.refinement.smooth_edges,
@@ -84,6 +85,7 @@ impl EditingState {
         self.colors.load_paint(&mut brush, layer_core::color::RgbSpace::Srgb)?;
         brush.validate().map_err(error)?;
         if !(layer_render::RegionRefinement { edges:self.region_edges, ..Default::default() }).is_valid() { return Err("Invalid region edges".into()); }
+        if self.region_gap_reach.is_some_and(|reach|!layer_render::RegionGapMasks::STOPS[1..].contains(&reach)) {return Err("Invalid fill gap reach".into());}
         let mut region = region_tools::RegionTools::default();
         for (id, &value) in &self.region_values { region.restore_value(id, value)?; }
         Ok(())
@@ -262,12 +264,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .region_tools
                 .fields()
                 .into_iter()
-                .map(|(id, _, _, _, value)| (id.into(), value))
+                .map(|(id, _, _, _, value)| (id.into(), if id=="tolerance" {self.settled_fill_options().0}else{value}))
                 .chain(self.region_tools.saved_values.clone())
                 .collect(),
             region_sources: self.region_tools.source,
             region_stop_at_colors: self.region_tools.stop_at_colors,
-            region_close_gaps: self.region_tools.refinement.close_gaps,
+            region_close_gaps: self.settled_fill_options().2,
+            region_gap_reach:self.settled_fill_options().1,
             region_edges: self.region_tools.refinement.edges,
             fill_scope: self.region_tools.scope,
             region_smooth_edges: self.region_tools.refinement.smooth_edges,
@@ -286,10 +289,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         let tool = stroke_paint(tools::tool(state.preset), &state.colors, space, &mut brush)?;
         let mut region = region_tools::RegionTools::default();
         region.last_fill = self.region_tools.last_fill;
+        region.reduced_motion=self.region_tools.reduced_motion;
         for (id, &value) in &state.region_values { region.restore_value(id, value).map_err(|reason| reason.message(self.localization()))?; }
         region.source = state.region_sources;
         region.stop_at_colors = state.region_stop_at_colors;
         region.refinement.close_gaps = state.region_close_gaps;
+        region.gap_reach=state.region_gap_reach;
         region.refinement.edges = state.region_edges;
         region.scope = state.fill_scope;
         region.refinement.smooth_edges = state.region_smooth_edges;

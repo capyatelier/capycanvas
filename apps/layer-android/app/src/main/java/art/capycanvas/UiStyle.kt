@@ -66,6 +66,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.node.DrawModifierNode
@@ -313,14 +314,17 @@ private tailrec fun inputActivity(context: android.content.Context): android.app
             },
             track = { state ->
                 ComposeCanvas(Modifier.fillMaxWidth().height(4.dp)) {
-                    val radius = CornerRadius(size.height / 2f)
-                    drawRoundRect(inactiveTrackColor, cornerRadius = radius)
                     val fraction = (state.value - range.start) / (range.endInclusive - range.start)
-                    if (fraction > 0f) drawRoundRect(activeTrackColor.copy(alpha = if (enabled) 1f else .4f),
-                        size = Size(size.width * fraction, size.height), cornerRadius = radius)
+                    editorSliderTrack(inactiveTrackColor, activeTrackColor.copy(alpha = if (enabled) 1f else .4f), size.width * fraction)
                 }
             })
     }
+}
+
+internal fun DrawScope.editorSliderTrack(inactive: Color, active: Color, fillWidth: Float) {
+    val radius = CornerRadius(size.height / 2f)
+    drawRoundRect(inactive, cornerRadius = radius)
+    if (fillWidth > 0f) drawRoundRect(active, size = Size(fillWidth, size.height), cornerRadius = radius)
 }
 
 internal val LocalCompactPanel = staticCompositionLocalOf { false }

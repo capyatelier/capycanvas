@@ -327,6 +327,8 @@ pub struct EditingState {
     #[serde(default = "default_enabled")]
     pub region_close_gaps: bool,
     #[serde(default)]
+    pub region_gap_reach:Option<u32>,
+    #[serde(default)]
     pub region_edges: layer_core::RegionEdges,
     #[serde(default)]
     pub fill_scope: crate::FillScope,

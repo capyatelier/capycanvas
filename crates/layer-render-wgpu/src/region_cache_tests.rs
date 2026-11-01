@@ -1,6 +1,123 @@
 use super::*;
-use crate::test_support::submit_settled;
+use crate::test_support::{flush_engine,submit_settled};
 use layer_render::RegionPreparation;
+
+#[test]
+fn fill_preview_matches_commit_and_swaps_without_changing_the_document() {
+    let extent=[64,48];
+    let mut document=paint_document(extent,"Fill preview");
+    let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    placement::set_source(&mut document,layer_core::color::source::rgba8_source(extent,|x,y|[(3*x) as u8,(4*y) as u8,151,77]));
+    let target=target(&document);
+    let (_producer,consumer)=layer_engine::input_queue(64);
+    let mut engine=layer_engine::CanvasEngine::new(r,document,consumer,crate::test_support::view(extent),layer_engine::ViewTransform::IDENTITY).unwrap();
+    flush_engine(&mut engine);
+    let original=engine.backend_mut().readback_srgb_rgba8().unwrap();
+    let authored=engine.document().artwork.clone();
+    let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.document().artwork.coverage.next_handle(),extent,[0;2]);
+    coverage.source.default_coverage=0.;coverage.selection=Some(rectangle([20,12,40,36]));
+    let operation=layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,
+        kind:layer_core::RasterOperationKind::Fill {color:[1.,0.,0.,1.],texture:Default::default(),alpha_locked:false,
+            underfill:Some(rectangle([20,12,24,36]))}};
+    engine.set_fill_preview(Some(layer_render::FillPreview {transaction:1,revision:0,target,operation:operation.clone()}));
+    flush_engine(&mut engine);
+    let shown=engine.backend_mut().readback_srgb_rgba8().unwrap();
+    assert_ne!(shown,original);
+    for y in 0..extent[1] {for x in 0..extent[0] {
+        let at=(y*extent[0]+x) as usize*4;
+        if !(20..40).contains(&x) || !(12..36).contains(&y) {assert_eq!(&shown[at..at+4],&original[at..at+4]);}
+    }}
+    let mut swapped=operation.clone();swapped.coverage.selection=Some(rectangle([28,16,36,32]));
+    engine.set_fill_preview(Some(layer_render::FillPreview {transaction:1,revision:1,target,operation:swapped}));
+    flush_engine(&mut engine);
+    assert_ne!(engine.backend_mut().readback_srgb_rgba8().unwrap(),shown);
+    engine.set_fill_preview(None);flush_engine(&mut engine);
+    assert_eq!(engine.backend_mut().readback_srgb_rgba8().unwrap(),original);
+    assert_eq!(engine.document().artwork,authored);assert!(!engine.can_undo());
+    engine.append_raster_operation(target,operation).unwrap();flush_engine(&mut engine);
+    let committed=engine.backend_mut().readback_srgb_rgba8().unwrap();
+    for y in 0..extent[1] {for x in 0..extent[0] {
+        let at=(y*extent[0]+x) as usize*4;
+        if (20..24).contains(&x) && (12..36).contains(&y) {
+            assert!(committed[at..at+4].iter().zip(&shown[at..at+4]).all(|(a,b)|a.abs_diff(*b)<=3));
+        }else{assert_eq!(&committed[at..at+4],&shown[at..at+4]);}
+    }}
+    assert!(engine.undo().unwrap());flush_engine(&mut engine);
+    assert_eq!(engine.backend_mut().readback_srgb_rgba8().unwrap(),original);
+    assert!(!engine.can_undo());
+}
+
+#[test]
+fn fill_tolerance_preview_and_commit_keep_the_latest_three_band_mask() {
+    let extent=[384,256];
+    let mut document=paint_document(extent,"Fill tolerance");
+    placement::set_source(&mut document,layer_core::color::source::rgba8_source(extent,|x,_| {
+        let gray=if x<128 {64}else if x<256 {80}else{160};[gray,gray,gray,255]
+    }));
+    let target=target(&document);
+    let renderer=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+    let mut engine=layer_engine::CanvasEngine::new(renderer,document,layer_engine::input_queue(8).1,
+        crate::test_support::view(extent),layer_engine::ViewTransform::IDENTITY).unwrap();
+    flush_engine(&mut engine);
+    let original=engine.backend_mut().readback_srgb_rgba8().unwrap();
+    let source=RegionSource::Scene {snapshot:engine.document().snapshot(),scope:layer_core::SceneScope::Raw(target)};
+    let mut latest=None;let mut shown=Vec::new();
+    for (revision,tolerance) in [0.1,0.8,0.2].into_iter().enumerate() {
+        let mut query=request(source.clone(),rectangle([0,0,1,1]),RegionRefinement {close_gaps:true,edges:RegionEdges::LineMiddle,smooth_edges:true},tolerance);
+        query.enclosure=None;query.position=[85,110];query.fill=Some(layer_render::RegionFillQuery {trail:Some(layer_render::RegionFillTrail {transaction:51,points:Default::default()}),..Default::default()});
+        let result=receive_request(engine.backend_mut(),query);
+        assert_eq!(value(&result.pixels,64,128),255);
+        assert_eq!(value(&result.pixels,192,128),255);
+        assert_eq!(value(&result.pixels,320,128),if tolerance==0.8 {255}else{0});
+        let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.document().artwork.coverage.next_handle(),extent,[0;2]);
+        coverage.source.default_coverage=0.;coverage.selection=Some(Selection::pixels(result.pixels));
+        let operation=layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,
+            kind:layer_core::RasterOperationKind::Fill {color:[1.,0.,0.,1.],texture:Default::default(),alpha_locked:false,
+                underfill:result.underfill.map(Selection::pixels)}};
+        engine.set_fill_preview(Some(layer_render::FillPreview {transaction:51,revision:revision as u64,target,operation:operation.clone()}));
+        flush_engine(&mut engine);
+        shown=engine.backend_mut().readback_srgb_rgba8().unwrap();
+        let far=(128*384+320)*4;
+        assert_eq!(&shown[far..far+4],if tolerance==0.8 {&[255,0,0,255]}else{&original[far..far+4]});
+        latest=Some(operation);
+    }
+    engine.set_fill_preview(None);
+    engine.append_raster_operation(target,latest.unwrap()).unwrap();flush_engine(&mut engine);
+    let committed=engine.backend_mut().readback_srgb_rgba8().unwrap();
+    assert_eq!(committed,shown);
+    let far=(128*384+320)*4;assert_eq!(&committed[far..far+4],&original[far..far+4]);
+    assert!(engine.undo().unwrap());flush_engine(&mut engine);
+    assert_eq!(engine.backend_mut().readback_srgb_rgba8().unwrap(),original);
+}
+
+#[test]
+fn fill_amendment_restores_the_original_source_and_keeps_one_undo_entry() {
+    let extent=[32;2];let mut document=paint_document(extent,"Seal removal");
+    placement::set_source(&mut document,layer_core::color::source::rgba8_source(extent,|_,_|[0,0,255,255]));
+    let target=target(&document);let SourceTarget::Paint(handle)=target else{unreachable!()};
+    let original_source=document.artwork.paint.get(handle).unwrap().clone();
+    let r=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+    let mut engine=layer_engine::CanvasEngine::new(r,document,layer_engine::input_queue(8).1,crate::test_support::view(extent),layer_engine::ViewTransform::IDENTITY).unwrap();
+    flush_engine(&mut engine);let original=engine.backend_mut().readback_srgb_rgba8().unwrap();
+    let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.document().artwork.coverage.next_handle(),extent,[0;2]);
+    coverage.source.default_coverage=0.;coverage.selection=Some(rectangle([8,8,16,24]));
+    let mut operation=layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,kind:layer_core::RasterOperationKind::Fill {
+        color:[1.,0.,0.,1.],texture:Default::default(),alpha_locked:false,underfill:None}};
+    engine.append_raster_operation(target,operation.clone()).unwrap();flush_engine(&mut engine);
+    let checkpoint=engine.checkpoint();let filled=engine.backend_mut().readback_srgb_rgba8().unwrap();
+    let filled_source=engine.document().artwork.paint.get(handle).unwrap().clone();
+    let replace=|engine:&layer_engine::CanvasEngine<WgpuRasterizer>,source|layer_core::Edit::Paint(layer_core::RecordChange::replace(&engine.document().artwork.paint,handle,Some(source)).unwrap());
+    engine.preview_edit(replace(&engine,original_source.clone())).unwrap();flush_engine(&mut engine);
+    assert_eq!(engine.backend_mut().readback_srgb_rgba8().unwrap(),original);
+    engine.preview_edit(replace(&engine,filled_source)).unwrap();flush_engine(&mut engine);
+    assert_eq!(engine.backend_mut().readback_srgb_rgba8().unwrap(),filled);
+    engine.preview_edit(replace(&engine,original_source)).unwrap();flush_engine(&mut engine);
+    operation.coverage.selection=Some(rectangle([8,8,24,24]));
+    engine.amend_raster_operation(target,operation,checkpoint).unwrap();flush_engine(&mut engine);
+    assert_ne!(engine.backend_mut().readback_srgb_rgba8().unwrap(),filled);
+    assert!(engine.undo().unwrap());flush_engine(&mut engine);
+    assert_eq!(engine.backend_mut().readback_srgb_rgba8().unwrap(),original);assert!(!engine.can_undo());
+}
 
 #[test]
 fn region_cache_reference_edits_match_fresh_masks_across_page_and_window_seams() {
@@ -364,6 +481,113 @@ fn fill_keeps_the_tapped_thin_region_between_target_colours() {
     let mut query=request(source,rectangle([0,0,1,1]),exact(),0.);
     query.position=[21,30];query.enclosure=None;query.reference_count=Some(1);
     check(&receive_request(&mut r,query),&rectangles(extent,&[[21,20,22,44]]),extent);
+}
+
+#[test]
+fn fill_drag_accumulates_each_crossed_region_without_filling_the_dividing_ink() {
+    let extent=[160,120];
+    let alpha=(0..extent[0]*extent[1]).map(|i| {let (x,y)=(i%extent[0],i/extent[0]);
+        f32::from(barrier([24,20,136,100],x,y) || x==70 && (20..100).contains(&y))}).collect::<Vec<_>>();
+    let document=uniform_document(extent,&alpha);
+    let source=RegionSource::Scene {snapshot:document.snapshot(),scope:layer_core::SceneScope::Raw(target(&document))};
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();frame(&mut r,&document,extent);
+    let mut query=request(source,rectangle([0,0,1,1]),exact(),0.);query.enclosure=None;query.position=[40,60];
+    query.fill=Some(layer_render::RegionFillQuery {trail:Some(layer_render::RegionFillTrail {transaction:71,points:Default::default()}),..Default::default()});
+    let first=receive_request(&mut r,query.clone());assert_eq!(first.gaps.unwrap().next,None);
+    query.fill.as_mut().unwrap().trail.as_mut().unwrap().points=vec![[40.,60.],[110.,60.]].into();
+    let path=receive_request(&mut r,query.clone());let next=path.gaps.unwrap().next.unwrap();
+    assert!((71..135).contains(&next[0]),"{next:?}");query.position=next;
+    let complete=receive_request(&mut r,query.clone());assert_eq!(complete.gaps.as_ref().unwrap().next,None);
+    check(&complete,&rectangles(extent,&[[25,21,70,99],[71,21,135,99]]),extent);
+    query.fill.as_mut().unwrap().trail.as_mut().unwrap().transaction=72;
+    let reset=receive_request(&mut r,query);assert!(reset.gaps.unwrap().next.is_some());
+}
+
+#[test]
+fn fill_retained_gap_masks_render_the_selected_coverage() {
+    let extent=[160,120];let mut document=paint_document(extent,"Retained fill masks");
+    placement::set_source(&mut document,layer_core::color::source::rgba8_source(extent,|x,y|
+        if barrier([24,20,136,100],x,y) && !(y==20 && (76..84).contains(&x)){[51,77,102,255]}else{[0;4]}));
+    let target=target(&document);let source=RegionSource::Scene {snapshot:document.snapshot(),scope:layer_core::SceneScope::Raw(target)};
+    let r=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+    let mut engine=layer_engine::CanvasEngine::new(r,document,layer_engine::input_queue(8).1,crate::test_support::view(extent),layer_engine::ViewTransform::IDENTITY).unwrap();flush_engine(&mut engine);
+    let mut query=request(source,rectangle([0,0,1,1]),RegionRefinement {close_gaps:true,edges:RegionEdges::Exact,..exact()},0.);
+    query.enclosure=None;query.position=[80,60];query.fill=Some(Default::default());
+    let selected=receive_request(engine.backend_mut(),query);let masks=selected.gaps.as_ref().unwrap();assert_eq!(masks.active,1);
+    let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.document().artwork.coverage.next_handle(),extent,[0;2]);coverage.source.default_coverage=0.;
+    let mut operation=layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,kind:layer_core::RasterOperationKind::Fill {
+        color:[1.,0.,0.,1.],texture:Default::default(),alpha_locked:false,underfill:None}};
+    for (revision,slot) in [1,0,4].into_iter().enumerate() {
+        operation.coverage.selection=Some(Selection::pixels(masks.regions[slot].pixels.clone()));
+        engine.set_fill_preview(Some(layer_render::FillPreview {transaction:77,revision:revision as u64,target,operation:operation.clone()}));flush_engine(&mut engine);
+        let shown=engine.backend_mut().readback_srgb_rgba8().unwrap();assert_eq!(&shown[(60*160+80)*4..][..4],&[255,0,0,255]);
+        assert_eq!(&shown[..4],if slot==0 {&[255,0,0,255]}else{&[0;4]},"retained mask {slot}");
+    }
+}
+
+#[test]
+fn fill_gap_64_stop_closes_a_gap_that_auto_leaves_open() {
+    let extent=[160,120];
+    let alpha=(0..extent[0]*extent[1]).map(|i| {let (x,y)=(i%extent[0],i/extent[0]);
+        f32::from(barrier([24,20,136,100],x,y) && !(y==20 && (52..108).contains(&x)))}).collect::<Vec<_>>();
+    let document=uniform_document(extent,&alpha);let source=RegionSource::Scene {snapshot:document.snapshot(),scope:layer_core::SceneScope::Raw(target(&document))};
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();frame(&mut r,&document,extent);
+    let mut query=request(source,rectangle([0,0,1,1]),RegionRefinement {close_gaps:true,edges:RegionEdges::Exact,..exact()},0.);
+    query.enclosure=None;query.position=[80,60];let auto=receive_request(&mut r,query.clone());
+    assert_eq!(auto.pixels.bounds(),[0,0,160,120]);
+    query.fill=Some(layer_render::RegionFillQuery {reach:Some(64),..Default::default()});
+    let selected=receive_request(&mut r,query);let masks=selected.gaps.as_ref().unwrap();assert_eq!(masks.active,4);
+    assert_eq!((&masks.regions[3].pixels,&masks.regions[3].underfill),(&auto.pixels,&auto.underfill));
+    score_geometry(&selected.pixels,&[vec![[25.,21.],[135.,21.],[135.,99.],[25.,99.]]],[0,0],&[],"64 px gap stop").unwrap();
+}
+
+#[test]
+fn fill_gap_masks_share_one_request_and_match_off_and_auto() {
+    let extent=[160,120];
+    let expected=[vec![[25.,21.],[135.,21.],[135.,99.],[25.,99.]]];
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    for thin in [true,false] {
+        let alpha=(0..extent[0]*extent[1]).map(|i| {
+            let (x,y)=(i%extent[0],i/extent[0]);
+            f32::from(if thin {barrier([24,20,136,100],x,y) && !(y==20 && (76..84).contains(&x))}
+                else{!(25..135).contains(&x) || !(21..99).contains(&y)})
+        }).collect::<Vec<_>>();
+        let document=uniform_document(extent,&alpha);
+        let source=RegionSource::Scene {snapshot:document.snapshot(),scope:layer_core::SceneScope::Raw(target(&document))};
+        frame(&mut r,&document,extent);
+        for edges in [RegionEdges::Exact,RegionEdges::LineMiddle] {
+            let mut query=request(source.clone(),rectangle([0,0,1,1]),RegionRefinement {close_gaps:true,edges,..exact()},0.);
+            query.enclosure=None;query.position=[80,60];
+            let auto=receive_request(&mut r,query.clone());
+            let mut off=query.clone();off.refinement.close_gaps=false;
+            let off=receive_request(&mut r,off);
+            query.fill=Some(Default::default());
+            let result=receive_request(&mut r,query.clone());
+            assert_eq!((&result.pixels,&result.underfill),(&auto.pixels,&auto.underfill));
+            let masks=result.gaps.unwrap();
+            assert_eq!((masks.active,masks.line_bounded),(1,thin));
+            assert_eq!((&masks.regions[0].pixels,&masks.regions[0].underfill),(&off.pixels,&off.underfill));
+            if thin {for mask in &masks.regions[1..] {score_geometry(&mask.pixels,&expected,[0,0],&[],"retained gap stop").unwrap();}}
+            for reach in [0,64] {
+                query.fill.as_mut().unwrap().reach=Some(reach);
+                let selected=receive_request(&mut r,query.clone());
+                let slot=(reach/16) as usize;
+                assert_eq!((&selected.pixels,&selected.underfill),(&masks.regions[slot].pixels,&masks.regions[slot].underfill));
+                assert_eq!(selected.gaps.unwrap().active,slot);
+            }
+            if thin {
+                let ids=masks.seals.iter().map(|seal|seal.id).collect::<std::collections::BTreeSet<_>>();
+                assert!(!ids.is_empty());
+                query.fill.as_mut().unwrap().reach=None;
+                query.fill.as_mut().unwrap().excluded_seals=ids.into_iter().collect::<Vec<_>>().into();
+                let opened=receive_request(&mut r,query.clone());
+                assert_eq!((&opened.pixels,&opened.underfill),(&off.pixels,&off.underfill));
+                query.fill=None;
+                let restored=receive_request(&mut r,query);
+                assert_eq!((&restored.pixels,&restored.underfill),(&auto.pixels,&auto.underfill));
+            }
+        }
+    }
 }
 
 #[test]

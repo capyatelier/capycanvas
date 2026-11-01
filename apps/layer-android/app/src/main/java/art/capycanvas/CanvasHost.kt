@@ -566,7 +566,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
         val focus = if (action.optString("type") == "invoke" && action.optString("command") == "search_commands") commandFocus() else null
         post {
             val type=action.optString("type")
-            if(documentInputBlocked && !type.startsWith("measure_") && type !in listOf("reveal_canvas_bar", "complete_request", "system_theme_changed", "window_fullscreen", "pen_input")) return@post
+            if(documentInputBlocked && !type.startsWith("measure_") && type !in listOf("reveal_canvas_bar", "complete_request", "system_theme_changed", "system_motion_changed", "window_fullscreen", "pen_input")) return@post
             val tracing = android.os.Trace.isEnabled()
             if (tracing) android.os.Trace.beginSection("capy.action." + type + "." + action.optString("command"))
             try {

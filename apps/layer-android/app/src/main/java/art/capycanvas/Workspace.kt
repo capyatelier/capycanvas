@@ -411,6 +411,7 @@ private val HiddenChromeShape=object:Shape {
             }
         }
         }
+        FillGestureOverlay(host)
         WorkspaceDropHint(dock)
         PaletteDragOverlay(host, dock.origin)
         dock.contextMenu?.let { menu ->

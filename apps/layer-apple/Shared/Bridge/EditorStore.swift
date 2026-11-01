@@ -61,7 +61,7 @@ import Darwin
     var focusWindow: (() -> Void)?
     var focusCanvas: (() -> Void)?
     var cursorChanged: (() -> Void)?
-    var navigationCursor: String { snapshot["navigation_cursor"].string }
+    var navigationCursor: String { snapshot["color_preview"]["fill_gesture"]["resize_cursor"].bool ? "ew-resize" : snapshot["navigation_cursor"].string }
     var measuredPenResponse: String?
     var penResponseBounds: CGRect? {
         guard let measuredPenResponse else { return nil }
@@ -202,9 +202,9 @@ import Darwin
             let hadCanvas = snapshot["canvas_ready"].bool
             let documentEpoch = state["document_file"]["epoch"].uint, cursor = navigationCursor
             let update = ui.receive(next)
+            if cursor != navigationCursor { cursorChanged?() }
             switch update {
             case .full:
-                if cursor != navigationCursor { cursorChanged?() }
                 // Replacing a document retires its GPU readbacks even when
                 // the new renderer is already ready in the same publication.
                 if hadRenderer != snapshot["gpu_ready"].bool || documentEpoch != state["document_file"]["epoch"].uint {

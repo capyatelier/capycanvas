@@ -13,6 +13,7 @@ struct Coverage { rect: vec4<u32>, info: vec4<u32>, values: array<atomic<u32>> }
 
 const NONE = 0xffffffffu;
 fn summary_index(field: u32) -> u32 {
+    if params.input.x==4u {return bitcast<u32>(params.options.z)+field;}
     return max(((params.extent_seed.x+7u)/8u)*params.extent_seed.y,4u*mask_stride()*params.extent_seed.y) + field;
 }
 fn tap_position()->vec2<u32>{return vec2(atomicLoad(&parents[seed()+6u])&65535u,atomicLoad(&parents[seed()+7u]));}
@@ -23,7 +24,8 @@ fn side() -> u32 { return params.grid.w; }
 fn slots() -> u32 { return params.offsets.x; }
 fn flags() -> u32 { return params.offsets.y; }
 fn marks() -> u32 { return params.offsets.z; }
-fn attempt()->u32 {if params.input.x==2u && params.input.z==0u {return atomicLoad(&parents[params.offsets.w+24u]);}return params.input.w;}
+fn attempt_count()->u32 {return u32(params.options.z);}
+fn attempt()->u32 {if params.input.x==2u && params.input.z==0u {return atomicLoad(&parents[params.offsets.w+8u*attempt_count()]);}return params.input.w;}
 fn seed() -> u32 { return params.offsets.w+8u*attempt(); }
 fn slot_base(window: u32) -> u32 { return (attempt()*params.grid.y*params.grid.z+window) * 4u * side(); }
 fn perimeter(size: vec2<u32>) -> u32 {
@@ -308,12 +310,12 @@ fn pack(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocation_
 
 @compute @workgroup_size(1)
 fn finish_attempt(){
-    if params.input.z==0u && atomicLoad(&parents[seed()+4u])==0u {atomicStore(&parents[params.offsets.w+24u],params.input.w);}
+    if params.input.z==0u && atomicLoad(&parents[seed()+4u])==0u {atomicStore(&parents[params.offsets.w+8u*attempt_count()],params.input.w);}
 }
 @compute @workgroup_size(64)
 fn restore_components(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>){
     let index=mask_word_id(id,groups);let words=mask_stride()*params.extent_seed.y;
-    if index<words {region_mask[index]=atomicLoad(&coverage.values[select(1u,3u,params.input.x==2u)*words+index]);}
+    if index<words {region_mask[index]=atomicLoad(&coverage.values[select(1u,attempt_count(),params.input.x==2u)*words+index]);}
 }
 
 @compute @workgroup_size(64)

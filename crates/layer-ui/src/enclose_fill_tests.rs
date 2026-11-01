@@ -22,11 +22,217 @@ mod enclose_fill_checks {
 
     fn reply(s: &mut UiSession<Recorder>, request: &RegionRequest) -> Arc<SelectionPixels> {
         let pixels = Arc::new(SelectionPixels::bytes([8, 1], [0, 0, 8, 1], vec![0xffffffff; 2]).unwrap());
-        s.renderer_mut().region_reply = Some(RegionResult { underfill: None,
+        s.renderer_mut().region_reply = Some(RegionResult { gaps: None, underfill: None,
             request_id: request.request_id, pixels: pixels.clone(),
             placement: layer_core::Affine::IDENTITY, tonal_sample: None,
         });
         pixels
+    }
+
+    #[test]
+    fn fill_reveal_waits_for_preparation_and_starts_with_a_fresh_frame() {
+        for platform in Platform::ALL {
+            let mut s=session(platform);invoke(&mut s,CommandId::Fill);
+            contact(&mut s,PenPhase::Down,[40.,60.]);s.frame(20_000_000,20_000_000).unwrap();
+            let request=s.renderer_mut().region_requests.last().unwrap().clone();reply(&mut s,&request);
+            s.frame(30_000_000,30_000_000).unwrap();
+            s.renderer_mut().settling=true;
+            s.frame(2_000_000_000,2_000_000_000).unwrap();
+            assert_eq!(s.renderer_mut().fill_reveal.unwrap().radius,0.);
+            s.frame(2_050_000_000,2_050_000_000).unwrap();assert_eq!(s.renderer_mut().fill_reveal.unwrap().radius,0.);
+            s.renderer_mut().settling=false;s.frame(2_100_000_000,2_100_000_000).unwrap();assert_eq!(s.renderer_mut().fill_reveal.unwrap().radius,0.);
+            let change=s.frame(2_150_000_000,2_150_000_000).unwrap();
+            assert!(s.renderer_mut().fill_reveal.unwrap().radius>0.);assert!(change.needs_present());
+            assert!(!s.engine.can_undo());contact(&mut s,PenPhase::Cancel,[40.,60.]);s.frame(2_160_000_000,2_160_000_000).unwrap();
+            assert!(s.renderer_mut().fill_reveal.is_none());assert!(!s.engine.can_undo());
+        }
+    }
+
+    #[test]
+    fn fill_press_previews_before_release_and_cancel_preserves_history() {
+        for platform in Platform::ALL {
+            let mut s=session(platform);invoke(&mut s,CommandId::Fill);
+            let before=s.engine.document().artwork.clone();let checkpoint=s.engine.checkpoint();
+            contact(&mut s,PenPhase::Down,[40.,60.]);s.frame(1,1).unwrap();
+            let request=s.renderer_mut().region_requests.last().unwrap().clone();
+            assert!(request.fill.is_some());
+            reply(&mut s,&request);s.frame(2,2).unwrap();
+            assert!(s.renderer_mut().fill_preview.is_some());
+            assert_eq!(s.engine.document().artwork,before);assert_eq!(s.engine.checkpoint(),checkpoint);
+            assert!(s.renderer_mut().pending_operations.is_empty());
+            contact(&mut s,PenPhase::Cancel,[40.,60.]);s.frame(3,3).unwrap();
+            assert!(s.renderer_mut().fill_preview.is_none());
+            assert_eq!(s.engine.document().artwork,before);assert_eq!(s.engine.checkpoint(),checkpoint);
+            assert!(!s.engine.can_undo());
+        }
+    }
+
+    #[test]
+    fn fill_hold_swaps_gap_masks_without_queries_and_cancel_restores_the_option() {
+        for platform in Platform::ALL {
+            let mut s=session(platform);invoke(&mut s,CommandId::Fill);
+            contact(&mut s,PenPhase::Down,[100.,160.]);s.frame(20_000_000,20_000_000).unwrap();
+            let request=s.renderer_mut().region_requests.last().unwrap().clone();let pixels=reply(&mut s,&request);
+            s.renderer_mut().region_reply.as_mut().unwrap().gaps=Some(layer_render::RegionGapMasks {next:None,active:2,line_bounded:true,seals:Default::default(),
+                regions:std::array::from_fn(|_|layer_render::RegionCoverage {pixels:pixels.clone(),underfill:None})});
+            s.frame(520_000_000,520_000_000).unwrap();
+            let pill=s.state.fill_gesture.as_ref().unwrap().pill.as_ref().unwrap();
+            assert!(pill.bounds.y+pill.bounds.height<s.state.fill_gesture.as_ref().unwrap().tip[1]);
+            assert_eq!(pill.fill_end,s.state.fill_gesture.as_ref().unwrap().tip[0]);
+            let end=Point {x:pill.track[1],y:s.state.fill_gesture.as_ref().unwrap().tip[1]};
+            let saved=s.editing_state();let mut movement=event(&s,2,PenPhase::Move,1.);movement.surface_position=end;s.pen(movement);s.frame(530_000_000,530_000_000).unwrap();
+            assert_eq!(s.renderer_mut().region_requests.len(),1);assert_eq!(s.region_tools.gap_reach,Some(64));
+            assert_eq!(s.editing_state(),saved);
+            contact(&mut s,PenPhase::Cancel,[160.,160.]);s.frame(540_000_000,540_000_000).unwrap();
+            assert_eq!(s.region_tools.gap_reach,None);assert!(s.region_tools.refinement.close_gaps);assert!(!s.engine.can_undo());
+        }
+    }
+
+    #[test]
+    fn fill_restores_its_gap_stop_without_relabeling_auto_in_other_region_tools() {
+        for platform in Platform::ALL {
+            let mut s=session(platform);
+            let mut editing=s.editing_state();editing.region_gap_reach=Some(64);s.restore_editing(editing).unwrap();
+            for command in [CommandId::Fill,CommandId::EncloseFill,CommandId::AutoSelect,CommandId::Fill] {
+                invoke(&mut s,command);
+                let option=s.state.tool_extra.iter().find(|option|matches!(option,ToolOption::Choice {id:"close-gaps",..})).unwrap();
+                let ToolOption::Choice {items,..}=option else{unreachable!()};
+                assert_eq!(items[0].label.as_ref(),if command==CommandId::Fill {"64 px"}else{"Auto"});
+                assert_eq!(s.editing_state().region_gap_reach,Some(64));
+            }
+        }
+    }
+
+    #[test]
+    fn fill_seal_hit_amends_but_a_neighbouring_region_outside_every_hit_radius_fills_normally() {
+        for platform in Platform::ALL {for hit in [true,false] {
+            let mut s=session(platform);invoke(&mut s,CommandId::Fill);
+            contact(&mut s,PenPhase::Down,[40.,60.]);s.frame(20_000_000,20_000_000).unwrap();
+            let request=s.renderer_mut().region_requests.last().unwrap().clone();let pixels=reply(&mut s,&request);
+            s.renderer_mut().region_reply.as_mut().unwrap().gaps=Some(layer_render::RegionGapMasks {next:None,active:2,line_bounded:true,
+                seals:vec![layer_render::RegionSeal {id:7,start:[100,80],bend:None,end:[104,80],reach:32}].into(),
+                regions:std::array::from_fn(|_|layer_render::RegionCoverage {pixels:pixels.clone(),underfill:None})});
+            s.frame(30_000_000,30_000_000).unwrap();contact(&mut s,PenPhase::Up,[40.,60.]);s.frame(40_000_000,40_000_000).unwrap();s.frame(50_000_000,50_000_000).unwrap();
+            let first=s.engine.checkpoint();assert!(s.engine.can_undo());
+            let point=if hit {[102.,80.]}else{[150.,90.]};
+            contact(&mut s,PenPhase::Down,point);s.frame(60_000_000,60_000_000).unwrap();
+            let request=s.renderer_mut().region_requests.last().unwrap().clone();
+            assert_eq!(request.fill.as_ref().unwrap().excluded_seals.as_ref(),if hit {&[7][..]}else{&[][..]});
+            assert_eq!(request.position,if hit {[40,60]}else{[150,90]});
+            reply(&mut s,&request);s.frame(70_000_000,70_000_000).unwrap();contact(&mut s,PenPhase::Up,point);
+            s.frame(80_000_000,80_000_000).unwrap();s.frame(90_000_000,90_000_000).unwrap();
+            assert_ne!(s.engine.checkpoint(),first);invoke(&mut s,CommandId::Undo);
+            assert_eq!(s.engine.can_undo(),!hit);
+            if !hit {assert_eq!(s.engine.checkpoint(),first);invoke(&mut s,CommandId::Undo);assert!(!s.engine.can_undo());}
+        }}
+    }
+
+    #[test]
+    fn fill_tolerance_slide_keeps_only_the_newest_request_before_release() {
+        for platform in Platform::ALL {
+            let mut s=session(platform);invoke(&mut s,CommandId::Fill);
+            contact(&mut s,PenPhase::Down,[100.,160.]);s.frame(20_000_000,20_000_000).unwrap();
+            let request=s.renderer_mut().region_requests.last().unwrap().clone();reply(&mut s,&request);s.frame(520_000_000,520_000_000).unwrap();
+            assert!(s.state.fill_gesture.as_ref().unwrap().pill.is_some());
+            contact(&mut s,PenPhase::Move,[120.,160.]);s.frame(530_000_000,530_000_000).unwrap();
+            let older=s.renderer_mut().region_requests.last().unwrap().clone();
+            contact(&mut s,PenPhase::Move,[150.,160.]);contact(&mut s,PenPhase::Up,[150.,160.]);
+            assert!(!s.engine.can_undo());reply(&mut s,&older);s.frame(540_000_000,540_000_000).unwrap();
+            assert!(!s.engine.can_undo());let newest=s.renderer_mut().region_requests.last().unwrap().clone();
+            assert_ne!(older.request_id,newest.request_id);assert!(newest.tolerance>older.tolerance);
+            reply(&mut s,&newest);s.frame(550_000_000,550_000_000).unwrap();s.frame(560_000_000,560_000_000).unwrap();
+            assert!(s.engine.can_undo());assert_eq!(s.region_tools.tolerance,newest.tolerance);
+            invoke(&mut s,CommandId::Undo);assert!(!s.engine.can_undo());
+        }
+    }
+
+    #[test]
+    fn fill_drag_coalesces_motion_and_waits_for_every_crossed_region_in_one_entry() {
+        for platform in Platform::ALL {
+            let mut s=session(platform);invoke(&mut s,CommandId::Fill);
+            contact(&mut s,PenPhase::Down,[40.,60.]);s.frame(20_000_000,20_000_000).unwrap();
+            let first=s.renderer_mut().region_requests.last().unwrap().clone();
+            contact(&mut s,PenPhase::Move,[100.,60.]);contact(&mut s,PenPhase::Move,[180.,60.]);contact(&mut s,PenPhase::Up,[180.,60.]);
+            reply(&mut s,&first);s.frame(30_000_000,30_000_000).unwrap();s.frame(40_000_000,40_000_000).unwrap();
+            let second=s.renderer_mut().region_requests.last().unwrap().clone();
+            assert_ne!(first.request_id,second.request_id);assert_eq!(second.fill.as_ref().unwrap().trail.as_ref().unwrap().points.len(),4);
+            assert!(!s.engine.can_undo());let pixels=reply(&mut s,&second);
+            s.renderer_mut().region_reply.as_mut().unwrap().gaps=Some(layer_render::RegionGapMasks {next:Some([121,60]),active:0,line_bounded:true,seals:Default::default(),
+                regions:std::array::from_fn(|_|layer_render::RegionCoverage {pixels:pixels.clone(),underfill:None})});
+            s.frame(50_000_000,50_000_000).unwrap();s.frame(60_000_000,60_000_000).unwrap();
+            let last=s.renderer_mut().region_requests.last().unwrap().clone();assert_eq!(last.position,[121,60]);assert!(!s.engine.can_undo());
+            let pixels=reply(&mut s,&last);
+            s.renderer_mut().region_reply.as_mut().unwrap().gaps=Some(layer_render::RegionGapMasks {next:None,active:0,line_bounded:true,seals:Default::default(),
+                regions:std::array::from_fn(|_|layer_render::RegionCoverage {pixels:pixels.clone(),underfill:None})});
+            s.frame(70_000_000,70_000_000).unwrap();s.frame(80_000_000,80_000_000).unwrap();
+            assert!(s.engine.can_undo());invoke(&mut s,CommandId::Undo);assert!(!s.engine.can_undo());
+        }
+    }
+
+    #[test]
+    fn fill_quick_touch_taps_keep_both_released_contacts_in_order() {
+        for platform in Platform::ALL {
+            let mut s=session(platform);invoke(&mut s,CommandId::Fill);
+            let pointer=|id,phase,x|UiInput::Pointer {id,kind:PointerKind::Touch,button:PointerButton::Primary,position:[x,240.],time_ns:id*1_000_000,phase};
+            for (id,x) in [(41,200.),(42,400.)] {s.input(pointer(id,ContactPhase::Down,x)).unwrap();s.input(pointer(id,ContactPhase::Up,x)).unwrap();}
+            s.frame(50_000_000,50_000_000).unwrap();let first=s.renderer_mut().region_requests.last().unwrap().clone();
+            reply(&mut s,&first);
+            for now in 51..56 {s.frame(now*1_000_000,now*1_000_000).unwrap();}
+            assert_eq!(s.renderer_mut().region_requests.len(),2);let second=s.renderer_mut().region_requests.last().unwrap().clone();
+            assert_ne!(first.position,second.position);assert_ne!(first.request_id,second.request_id);
+            reply(&mut s,&second);s.frame(60_000_000,60_000_000).unwrap();s.frame(70_000_000,70_000_000).unwrap();
+            invoke(&mut s,CommandId::Undo);assert!(s.engine.can_undo());invoke(&mut s,CommandId::Undo);assert!(!s.engine.can_undo());
+        }
+    }
+
+    #[test]
+    fn fill_touch_computes_on_press_and_cancels_on_a_second_finger() {
+        for platform in Platform::ALL {
+            let mut s=session(platform);invoke(&mut s,CommandId::Fill);
+            let pointer=|id,phase|UiInput::Pointer {id,kind:PointerKind::Touch,button:PointerButton::Primary,position:[200.,240.],time_ns:10_000_000,phase};
+            s.input(pointer(41,ContactPhase::Down)).unwrap();s.frame(20_000_000,20_000_000).unwrap();
+            let request=s.renderer_mut().region_requests.last().unwrap().clone();reply(&mut s,&request);s.frame(30_000_000,30_000_000).unwrap();
+            assert!(s.renderer_mut().fill_preview.is_none());assert!(!s.engine.can_undo());
+            s.input(pointer(42,ContactPhase::Down)).unwrap();s.input(pointer(41,ContactPhase::Up)).unwrap();s.input(pointer(42,ContactPhase::Up)).unwrap();
+            s.frame(40_000_000,40_000_000).unwrap();assert!(s.renderer_mut().fill_preview.is_none());assert!(!s.engine.can_undo());
+            s.input(pointer(43,ContactPhase::Down)).unwrap();s.frame(50_000_000,50_000_000).unwrap();
+            let request=s.renderer_mut().region_requests.last().unwrap().clone();reply(&mut s,&request);s.frame(60_000_000,60_000_000).unwrap();
+            let mut moved_up=pointer(43,ContactPhase::Up);if let UiInput::Pointer {position,..}=&mut moved_up {*position=[400.,240.];}
+            s.input(moved_up).unwrap();s.frame(70_000_000,70_000_000).unwrap();assert!(!s.engine.can_undo());
+            s.input(pointer(44,ContactPhase::Down)).unwrap();s.frame(80_000_000,80_000_000).unwrap();
+            let request=s.renderer_mut().region_requests.last().unwrap().clone();reply(&mut s,&request);s.frame(90_000_000,90_000_000).unwrap();
+            s.input(pointer(44,ContactPhase::Up)).unwrap();s.frame(100_000_000,100_000_000).unwrap();assert!(s.engine.can_undo());
+        }
+    }
+
+    #[test]
+    fn fill_release_commits_before_the_next_tool_or_setting_change() {
+        for platform in Platform::ALL {for tool in [true,false] {
+            let mut s=session(platform);invoke(&mut s,CommandId::Fill);
+            contact(&mut s,PenPhase::Down,[40.,60.]);s.frame(20_000_000,20_000_000).unwrap();
+            let request=s.renderer_mut().region_requests.last().unwrap().clone();contact(&mut s,PenPhase::Up,[40.,60.]);
+            if tool {invoke(&mut s,CommandId::Brush);}else{s.dispatch(UiAction::SetToolSetting {id:"tolerance".into(),value:0.2}).unwrap();}
+            assert!(matches!(s.layer_interaction.tool,LayerCanvasTool::Region {fill:true,..}));assert_eq!(s.region_tools.tolerance,0.1);
+            reply(&mut s,&request);
+            for now in 30..35 {s.frame(now*1_000_000,now*1_000_000).unwrap();}
+            if tool {assert_eq!(s.layer_interaction.tool,LayerCanvasTool::Paint);}else{assert_eq!(s.region_tools.tolerance,0.2);}
+            assert!(s.engine.can_undo());
+            invoke(&mut s,CommandId::Undo);assert!(!s.engine.can_undo());
+        }}
+    }
+
+    #[test]
+    fn fill_release_keeps_its_press_request_and_commits_one_entry_when_ready() {
+        for platform in Platform::ALL {
+            let mut s=session(platform);invoke(&mut s,CommandId::Fill);
+            contact(&mut s,PenPhase::Down,[40.,60.]);s.frame(1,1).unwrap();
+            let request=s.renderer_mut().region_requests.last().unwrap().clone();
+            contact(&mut s,PenPhase::Up,[40.,60.]);s.frame(2,2).unwrap();
+            assert_eq!(s.renderer_mut().region_requests.len(),1);assert!(!s.engine.can_undo());
+            reply(&mut s,&request);s.frame(3,3).unwrap();s.frame(4,4).unwrap();
+            assert_eq!(s.renderer_mut().region_requests.len(),1);assert!(s.engine.can_undo());
+            invoke(&mut s,CommandId::Undo);assert!(!s.engine.can_undo());
+        }
     }
 
     #[test]
@@ -415,7 +621,7 @@ mod enclose_fill_checks {
         enclose(&mut s);
         s.frame(2, 2).unwrap();
         let request = s.renderer_mut().region_requests.last().unwrap().clone();
-        s.renderer_mut().region_reply = Some(RegionResult { underfill: None,
+        s.renderer_mut().region_reply = Some(RegionResult { gaps: None, underfill: None,
             request_id: request.request_id,
             pixels: Arc::new(SelectionPixels::bytes([8, 1], [0; 4], vec![0; 2]).unwrap()),
             placement: layer_core::Affine::IDENTITY, tonal_sample: None,
@@ -535,6 +741,7 @@ mod enclose_fill_checks {
             let target = s.engine.document().drawing_content().unwrap();
             let expected = s.engine.document().nearest_paper_binding(Some(target)).unwrap();
             contact(&mut s, PenPhase::Down, [20., 30.]);
+            assert_eq!(s.layer_interaction.fill_texture.as_ref().unwrap().paper.as_ref(),Some(&expected));
             let doc = s.engine.document();
             let paper = doc.bottom_paper().unwrap();
             let handle = doc.scene().effect_handle(paper).unwrap();
@@ -557,7 +764,8 @@ mod enclose_fill_checks {
                 s.frame(2, 2).unwrap();
             }
             let operations = s.engine.document().target_operations(target).unwrap();
-            assert_eq!(operations.last().unwrap().kind.fill_texture().unwrap().paper.as_ref(), Some(&expected), "{command:?}");
+            if command==CommandId::Fill {assert!(operations.is_empty(),"a document change retires the press result");}
+            else {assert_eq!(operations.last().unwrap().kind.fill_texture().unwrap().paper.as_ref(), Some(&expected), "{command:?}");}
             assert!(s.layer_interaction.fill_texture.is_none());
             if command == CommandId::Fill {
                 contact(&mut s, PenPhase::Down, [20., 30.]);

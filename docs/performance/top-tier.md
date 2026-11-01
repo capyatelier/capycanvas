@@ -265,19 +265,27 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 ## Reference Fill completion
 
 The bounded-window layout removes the former 61 MP single-component binding
-limit. At 9504 × 6336 the largest modeled binding is 97,868,200 bytes, below
+limit. At 9504 × 6336 the largest modeled binding is 101,631,784 bytes, below
 128 MiB; the device must also admit a texture dimension of at least 9504.
 This is a buffer-layout check, not a reference-device motion or OOM qualification.
 Retained classification and skeleton planes add 15,054,336 bytes at this size;
-endpoint compaction reuses the existing window scratch. The allocation boundaries
-remain in `artifacts/fill-tools/m4a1-cache-memory.json`.
+endpoint compaction reuses the window scratch.
 
 The end table allows one record per 256 pixels, with a 16,384-record floor
 clipped to the canvas and device limit. At this size its 235,224 records use
-15,054,336 bytes and still fit the existing 16 MiB compaction scratch.
+18,817,920 bytes. Compaction uses 18,817,920 bytes in its first scratch buffer
+and 16 MiB in its second.
 Pathological density beyond that capacity closes no gaps, matching Off;
-there is no streamed overflow pass. Exact modeled bounds are in
-`artifacts/fill-tools/m4a2-cache-memory.json`.
+there is no streamed overflow pass.
+
+The hold slider retains five exact gap masks. A 61 MP To line middle query
+allocates 316,141,536 bytes of GPU coverage, up to 334,959,456 bytes of readbacks
+and 301,086,720 bytes of CPU coverage during capture. Readbacks are released
+after capture; GPU masks share the existing 128 MiB selection cache. Commit
+releases four CPU variants, leaving 60,217,344 bytes of coverage. The 64 px reach
+uses 96 px halos around 1856 px window cores. Individual bindings fit 128 MiB;
+aggregate memory still needs device qualification with artwork and other caches.
+The exact allocation model is in `artifacts/fill-tools/m5-memory-review.local.json`.
 
 A separate NVIDIA workstation 24 MP comparison covers 1/3/8 references in cell
 and background areas: warm medians improve from 24/275/930 ms to 15–18 ms,

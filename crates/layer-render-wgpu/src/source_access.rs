@@ -331,7 +331,7 @@ mod tests {
         assert_eq!(pixels(&r),pixels(&reference));
         assert_eq!(thumbnail(&mut r,target),thumbnail(&mut reference,baked_target));
         for at in [[17,31],[255,255],[256,256],[316,250],[317,250]] {assert_eq!(sample(&mut r,target,at),sample(&mut reference,baked_target,at));}
-        let query=|r:&mut WgpuRasterizer,target|crate::test_support::receive_request(r,RegionRequest { reference_count: None, paper: None,request_id:1,source:RegionSource::Source(target),position:[260,260],tolerance:0.,contiguous:true,selection:None,refinement:Default::default(),limit:None,enclosure:None}).pixels;
+        let query=|r:&mut WgpuRasterizer,target|crate::test_support::receive_request(r,RegionRequest { fill: None, reference_count: None, paper: None,request_id:1,source:RegionSource::Source(target),position:[260,260],tolerance:0.,contiguous:true,selection:None,refinement:Default::default(),limit:None,enclosure:None}).pixels;
         assert_eq!(query(&mut r,target),query(&mut reference,baked_target));
         let mut capture=r.snapshot_gpu().capture_scene(offset.snapshot(),SceneScope::Raw(target),Default::default()).unwrap();
         assert!(capture.read_region([256,256,61,45]).unwrap().iter().all(|p|*p==[0.;4]),"transparent override replaces the base tile");

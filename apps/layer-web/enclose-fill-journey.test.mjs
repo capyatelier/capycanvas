@@ -54,7 +54,8 @@ export async function checkEncloseFill({call,evaluate,settle}) {
   const fixture=png(384,256,(x,y)=>[40,150,270].some(left=>
     x>=left&&x<left+90&&y>=50&&y<170&&(x<left+6||x>=left+84||y<56||y>=164))?[0,0,0,255]:[0,0,0,0],4);
   const screen=([x,y])=>evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(${x}*c.zoom+c.translation[0])*r.width/c.viewport[0],y:r.y+(${y}*c.zoom+c.translation[1])*r.height/c.viewport[1]}})()`);
-  const pointer=(type,p)=>call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons:type==='mouseReleased'?0:1,clickCount:1});
+  const trackPoint=(x,y)=>evaluate(`({x:layerApp.canvas.getBoundingClientRect().x+${x},y:${y}})`);
+  const pointer=(type,p,kind='mouse')=>call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons:type==='mouseReleased'?0:1,clickCount:1,pointerType:kind,force:type==='mouseReleased'?0:.5});
   const contact=async selector=>{
     const p=await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});if(!n)throw Error(${JSON.stringify(selector)});n.scrollIntoView({block:'nearest'});const r=n.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
     await pointer('mousePressed',p);await pointer('mouseReleased',p);await settle();
@@ -74,6 +75,24 @@ export async function checkEncloseFill({call,evaluate,settle}) {
     await evaluate('placementTest.saved=null');await click('Choose File…');
     await wait('placementTest.saved?.length>0&&!document.querySelector("dialog[open]")');await idle();
     return evaluate(`(async()=>{const bitmap=await createImageBitmap(new Blob([placementTest.saved],{type:'image/png'})),canvas=new OffscreenCanvas(bitmap.width,bitmap.height),context=canvas.getContext('2d',{willReadFrequently:true});context.drawImage(bitmap,0,0);bitmap.close();return{extent:[canvas.width,canvas.height],pixels:Array.from(context.getImageData(0,0,canvas.width,canvas.height).data)}})()`);
+  };
+  const preview=async()=>JSON.parse(await evaluate('JSON.stringify(layerApp.app.color_preview().fill_gesture,(_,value)=>typeof value==="bigint"?String(value):value)'));
+  const pressPreview=async(point,theme)=>{
+    const end=Date.now()+30000;
+    for(;;){
+      const shot=await call('Page.captureScreenshot',{format:'png',clip:{x:Math.floor(point.x),y:Math.floor(point.y),width:1,height:1,scale:1}});
+      const rgba=await evaluate(`(async()=>{const image=await createImageBitmap(new Blob([Uint8Array.from(atob('${shot.data}'),c=>c.charCodeAt(0))],{type:'image/png'})),c=new OffscreenCanvas(1,1),x=c.getContext('2d');x.drawImage(image,0,0);image.close();return Array.from(x.getImageData(0,0,1,1).data)})()`);
+      if(rgba[0]>180&&rgba[1]<80&&rgba[3]===255){assert.ok(!(await preview()).pill,'Press preview appears before hold engages');break;}
+      assert.ok(Date.now()<end,`Press preview becomes visible before release: ${rgba}`);await settle();
+    }
+    await writeFile(`${directory}/press-preview-${theme}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  };
+  const heldPill=async label=>{
+    await wait('!!layerApp.app.color_preview().fill_gesture?.pill');
+    const view=await preview();assert.equal(view.pill.label,label);
+    const rendered=await evaluate(`(()=>{const root=document.querySelector('.fill-gesture-pill'),r=root.getBoundingClientRect(),c=layerApp.canvas.getBoundingClientRect(),f=root.querySelector('.fill-gesture-fill').getBoundingClientRect();return{visible:root.checkVisibility(),x:r.x-c.x,y:r.y-c.y,width:r.width,height:r.height,end:f.right-c.x,label:root.querySelector('.number-title').textContent,labelFits:root.querySelector('.number-title').scrollWidth<=root.querySelector('.number-title').clientWidth,value:root.querySelector('.number-value').textContent,cursor:getComputedStyle(layerApp.canvas).cursor}})()`);
+    assert.ok(rendered.visible);assert.ok(rendered.labelFits,'The shared pill label fits');for(const key of ['x','y','width','height'])assert.ok(Math.abs(rendered[key]-view.pill.bounds[key])<.5,`Shared pill ${key}`);
+    assert.ok(Math.abs(rendered.end-view.pill.fill_end)<.5);assert.equal(rendered.label,view.pill.label);assert.equal(rendered.value,view.pill.value);assert.equal(rendered.cursor,'ew-resize');return view;
   };
   const scribblePath=async points=>{
     await idle();
@@ -239,10 +258,46 @@ export async function checkEncloseFill({call,evaluate,settle}) {
         assert.equal(alpha(seed),255);assert.equal(alpha(other),0,'Fill uses the edited reference divider');
         assert.equal(await evaluate(`String(layerApp.state().layers.find(l=>Number(l.id)===${referenceId}).paint_revision)`),editedRevision,'Fill preserves the edited reference');
         await invoke('undo');await idle();assert.deepEqual(rasterIdentity(await save()).find(source=>source.id===targetRaster.id),targetRaster,'One Undo removes the promoted Fill');
+        if(from[0]===to[0]){
+          const start=await screen([65,110]),end=await screen([105,110]);
+          await pointer('mousePressed',start);await pointer('mouseMoved',end);await pointer('mouseReleased',end);await idle();
+          const dragged=await output();for(const x of [65,105])assert.equal(dragged.pixels[(110*384+x)*4+3],255,`Drag-through fills the adjacent face at ${x},110`);
+          assert.equal(dragged.pixels[(110*384+195)*4+3],0,'Drag-through leaves an uncrossed face empty');
+          await invoke('undo');await idle();assert.deepEqual(rasterIdentity(await save()).find(source=>source.id===targetRaster.id),targetRaster,'One Undo removes the complete drag-through');
+        }
         await invoke('undo');await idle();assert.deepEqual(rasterIdentity(await save()),empty,'Second Undo restores the reference edit');
         await send({type:'layer',action:{op:'select',id:targetBeforeEdit,mask:false}});
       }
       console.log(`PASS ${theme}: edited cached reference, immediate Fill, exact fill/edit Undo`);
+      const press=await screen([85,110]);await pointer('mousePressed',press,'pen');await pressPreview(await screen([95,120]),theme);await pointer('mouseReleased',press,'pen');await idle();
+      await invoke('undo');await idle();assert.deepEqual(rasterIdentity(await save()),empty,'One Undo removes the press fill');
+      await send({type:'layer',action:{op:'select',id:referenceId,mask:false}});await send({type:'select_brush',id:3});await send({type:'set_brush_size',value:48});
+      const cutRevision=await evaluate('String(layerApp.state().layers.find(l=>l.editing).paint_revision)');await scribblePath([[85,40],[85,66]]);
+      assert.notEqual(await evaluate('String(layerApp.state().layers.find(l=>l.editing).paint_revision)'),cutRevision,'Native eraser creates the gap');
+      await send({type:'layer',action:{op:'select',id:targetBeforeEdit,mask:false}});await invoke('fill');await send({type:'set_color',rgba:[.85,.1,.05,1]});
+      await chooseToolActionGroup({call,evaluate,settle},'close-gaps','close_gaps_auto');
+      const gapBase=rasterIdentity(await save()),gapLabel=await evaluate('layerApp.state().tool_extra.find(o=>o.Choice?.id==="close-gaps").Choice.label');
+      await pointer('mousePressed',press);let held=await heldPill(gapLabel);const transaction=String(held.transaction),track=held.pill.track;
+      for(const [index,reach] of [0,16,32,48,64].entries()){
+        await pointer('mouseMoved',await trackPoint(track[0]+(track[1]-track[0])*index/4,press.y));
+        await wait(`(()=>{const p=layerApp.app.color_preview().fill_gesture?.pill;return p&&${reach===0?'p.value===layerApp.state().commands.find(c=>c.id==="close_gaps_off").label':`parseFloat(p.value)===${reach}`}})()`);
+        held=await heldPill(gapLabel);assert.equal(String(held.transaction),transaction);
+      }
+      assert.ok(held.seals.length>0,'The gap hold presents actual seals');
+      await writeFile(`${directory}/hold-close-gaps-${theme}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+      await pointer('mouseReleased',await trackPoint(track[1],press.y));await idle();
+      assert.equal(parseFloat(await evaluate('layerApp.state().tool_extra.find(o=>o.Choice?.id==="close-gaps").Choice.items[0].label')),64,'Close gaps hold remembers the selected reach');
+      const firstFill=rasterIdentity(await save()),seals=(await preview()).seals,neighbour=await screen([195,110]),origin=await evaluate('(()=>{const r=layerApp.canvas.getBoundingClientRect();return{x:r.x,y:r.y}})()');
+      assert.ok(seals.length>0);
+      for(const [a,b]of seals){const x=neighbour.x-origin.x,y=neighbour.y-origin.y,dx=b[0]-a[0],dy=b[1]-a[1],t=Math.max(0,Math.min(1,((x-a[0])*dx+(y-a[1])*dy)/Math.max(Number.EPSILON,dx*dx+dy*dy)));assert.ok(Math.hypot(x-a[0]-t*dx,y-a[1]-t*dy)>6,'Neighbour press is outside every seal hit radius');}
+      await pointer('mousePressed',neighbour);await pointer('mouseReleased',neighbour);await idle();
+      const neighbouring=await output();for(const x of [85,195])assert.equal(neighbouring.pixels[(110*384+x)*4+3],255,'Normal neighbouring fill preserves the previous region');
+      await invoke('undo');await idle();assert.deepEqual(rasterIdentity(await save()),firstFill,'Neighbour press creates a normal fill instead of amending the previous fill');
+      await invoke('undo');await idle();assert.deepEqual(rasterIdentity(await save()),gapBase,'The first gap fill has its own Undo');
+      await invoke('undo');await idle();assert.deepEqual(rasterIdentity(await save()),empty,'Restore the authored eraser cut');
+      await send({type:'layer',action:{op:'select',id:targetBeforeEdit,mask:false}});await chooseToolActionGroup({call,evaluate,settle},'close-gaps','close_gaps_off');
+      console.log(`PASS ${theme}: press preview, Close gaps hold, drag-through, neighbouring seal guard and single Undo`);
+
       const paperLayer=await evaluate('Number(layerApp.state().layers.find(l=>l.content_icon==="layer-paper-symbolic")?.id)');assert.ok(Number.isFinite(paperLayer),'Imported drawing supplies its default Paper');
       await send({type:'layer',action:{op:'delete',id:paperLayer}});
       assert.ok(await evaluate('!!layerApp.state().layer_tools.add_paper'),'No Paper fixture removes its Paper');
@@ -278,6 +333,28 @@ export async function checkEncloseFill({call,evaluate,settle}) {
           else for(const [index,result] of results.entries())if(index)assert.notDeepEqual(result,results[0],`${command}: paper changes coverage at ${index*100}%`);
         }
       }
+      const colours=png(384,256,(x,y)=>x<128?[64,64,64,255]:x<256?[80,80,80,255]:[160,160,160,255],4);
+      await evaluate(`window.enclosePickers.fixture=window.showOpenFilePicker;window.showOpenFilePicker=async()=>[{name:'Fill colours.png',async getFile(){return new File([Uint8Array.from(atob('${colours.toString('base64')}'),c=>c.charCodeAt(0))],'Fill colours.png',{type:'image/png'})}}]`);
+      await invoke('open_document');await wait('!layerApp.documents.busy()&&layerApp.state().layers.some(l=>l.editing&&l.label==="Fill colours")&&layerApp.app.brush_ready()');await idle();await evaluate('window.showOpenFilePicker=enclosePickers.fixture;delete enclosePickers.fixture');await invoke('fit_canvas');await invoke('fill');
+      await chooseToolActionGroup({call,evaluate,settle},'selection-source','selection_editing');
+      await send({type:'set_color',rgba:[.85,.1,.05,1]});await send({type:'set_tool_setting',id:'grain_depth',value:0});await send({type:'set_tool_setting',id:'tolerance',value:.1});
+      const colourBase=rasterIdentity(await save()),toleranceLabel=await evaluate('layerApp.state().tool_settings.find(f=>f.id==="tolerance").label'),colourPoint=await screen([85,110]);
+      await pointer('mousePressed',colourPoint,'pen');const tolerance=await heldPill(toleranceLabel),range=tolerance.pill.track;
+      for(const fraction of [.8,.2])await pointer('mouseMoved',await trackPoint(range[0]+(range[1]-range[0])*fraction,colourPoint.y),'pen');
+      await wait('parseFloat(layerApp.app.color_preview().fill_gesture?.pill?.value)===20');await heldPill(toleranceLabel);
+      await writeFile(`${directory}/hold-tolerance-${theme}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+      await pointer('mouseReleased',await trackPoint(range[0]+(range[1]-range[0])*.2,colourPoint.y),'pen');await idle();
+      assert.ok(Math.abs(await evaluate('layerApp.state().tool_settings.find(f=>f.id==="tolerance").value')-.2)<.00001,'Tolerance hold remembers the newest value');
+      const recoloured=await output();for(const x of [85,250]){const i=(110*384+x)*4;assert.ok(recoloured.pixels[i]>180&&recoloured.pixels[i+1]<80,'Newest tolerance result is committed');}
+      assert.deepEqual(recoloured.pixels.slice((110*384+320)*4,(110*384+320)*4+4),[160,160,160,255],'A stale higher-tolerance result cannot recolour the far band');
+      await invoke('undo');await idle();assert.deepEqual(rasterIdentity(await save()),colourBase,'One Undo removes the tolerance fill');
+      await pointer('mousePressed',colourPoint,'pen');const cancelling=await heldPill(toleranceLabel),cancelRange=cancelling.pill.track;
+      await pointer('mouseMoved',await trackPoint(cancelRange[0]+(cancelRange[1]-cancelRange[0])*.6,colourPoint.y),'pen');await wait('parseFloat(layerApp.app.color_preview().fill_gesture?.pill?.value)===60');
+      for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+      await pointer('mouseReleased',colourPoint,'pen');await idle();
+      assert.ok(Math.abs(await evaluate('layerApp.state().tool_settings.find(f=>f.id==="tolerance").value')-.2)<.00001,'Escape restores the held option');
+      assert.deepEqual(rasterIdentity(await save()),colourBase,'Escape adds no fill history');assert.equal(await evaluate('layerApp.canvas.classList.contains("fill-gesture-resize")'),false);
+      console.log(`PASS ${theme}: Tolerance hold newest-value publication and exact single Undo`);
       await invoke('new_document');await wait('!!layerApp.state().new_drawing');
       await contact('#new-drawing-presets-button');
       const digital=await evaluate('layerApp.state().new_drawing.drawer.tabs.findIndex(t=>t.label==="Digital")');assert.ok(digital>=0);

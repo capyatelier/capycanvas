@@ -3,7 +3,7 @@
 use crate::{BackdropBlurStyle, BackdropRegion, GpuRasterError, SdrSurfaceColor, Uploads, WgpuRasterizer};
 use layer_render::{CanvasRenderer, CursorSegment, ViewState};
 
-pub(super) const CAMERA_SIZE: u64 = 624;
+pub(super) const CAMERA_SIZE: u64 = 640;
 const SOURCE_CAMERA: u32 = 768;
 
 /// The viewport shader for `format` and `color`; `paper` keeps the paper
@@ -97,6 +97,8 @@ pub struct ViewportPresenter {
     pipeline: [crate::Deferred<wgpu::RenderPipeline>; 3],
     paper_pipeline: Option<[crate::Deferred<wgpu::RenderPipeline>; 3]>,
     presented_paper: Option<bool>,
+    fill_reveal: Option<layer_render::FillReveal>,
+    fill_before: Option<(u64,wgpu::TextureView)>,
     surround_pipeline: crate::Deferred<wgpu::RenderPipeline>,
     layout: wgpu::BindGroupLayout,
     uniform: wgpu::Buffer,
@@ -131,7 +133,7 @@ pub struct ViewportPresenter {
     cursor_buffer: wgpu::Buffer,
     cursor_vertices: Vec<CursorSegment>,
     uploads: Uploads,
-    camera_data: Option<[f32; 156]>,
+    camera_data: Option<[f32; 160]>,
     quarter_turns: u32,
     retained: bool,
     history: crate::present_damage::Retained,
@@ -143,7 +145,7 @@ pub struct ViewportPresenter {
     backdrop: Option<crate::backdrop_blur::BackdropBlur>,
     panels: Option<crate::panel_surface::PanelSurfaces>,
     panel_surfaces_changed: bool,
-    source_camera: Option<[f32; 156]>,
+    source_camera: Option<[f32; 160]>,
     presented_area: u64,
     shaded_area: u64,
     shader: wgpu::ShaderModule,
@@ -283,6 +285,7 @@ impl Recipes {
             crate::bindings::float_texture(18, wgpu::ShaderStages::FRAGMENT, device),
             crate::bindings::texture(19, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, true),
             crate::bindings::texture(20, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, true),
+            crate::bindings::texture(21,wgpu::ShaderStages::FRAGMENT,false),
         ]);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("viewport layout"),
@@ -429,7 +432,8 @@ impl ViewportPresenter {
     }
 
     pub fn proof_storage_bytes(&self) -> u64 {
-        (if self.gpu_local_guide.is_some() { self.local_buffer.size() } else { 0 })
+        self.fill_before.as_ref().map_or(0,|(_,view)|crate::texture_bytes(view.texture()))
+            + (if self.gpu_local_guide.is_some() { self.local_buffer.size() } else { 0 })
             + if self.proof_lut.is_some() {
                 self.proof_buffer.size()
             } else {
@@ -680,6 +684,8 @@ impl ViewportPresenter {
             pipeline,
             paper_pipeline: None,
             presented_paper: None,
+            fill_reveal: None,
+            fill_before: None,
             surround_pipeline,
             layout,
             uniform,
@@ -937,6 +943,7 @@ impl ViewportPresenter {
             || self.panels.as_ref().is_some_and(|p|p.needs_refresh())
             || self.shade.changed(renderer)
             || self.picker.changed()
+            || self.fill_reveal!=renderer.fill_reveal
             || self.camera_data.is_none_or(|old| old[62..64] != renderer.clipping_preview.map(f32::from))
             || (!self.overviews.is_empty() && previous.navigator_revision != renderer.navigator.revision)
             || previous.overviews != self.overviews
@@ -1045,6 +1052,10 @@ impl ViewportPresenter {
         surround_linear: [f32; 4],
         overview_only: bool,
     ) -> Result<(), GpuRasterError> {
+        if self.fill_before.as_ref().is_some_and(|(id,image)|renderer.fill_reveal.is_none_or(|reveal|reveal.transaction!=*id)
+            || [image.texture().width(),image.texture().height()]!=if self.quarter_turns.is_multiple_of(2) {[view.width_px,view.height_px]}else{[view.height_px,view.width_px]}) {
+            self.fill_before=None;self.bind_group=None;
+        }
         let Some([composite,coarse,next]) = renderer.presentation_views() else { return Ok(()); };
         if renderer.display_backup.is_none() && let Some(cache) = renderer.selected_display_cache() { cache.refresh_half(renderer, encoder, &mut self.uploads)?; }
         let lit = self.prepare_paper_lighting(renderer);
@@ -1097,6 +1108,7 @@ impl ViewportPresenter {
                 wgpu::BindingResource::TextureView(motion_views[1]),
                 wgpu::BindingResource::TextureView(levels[0]),
                 wgpu::BindingResource::TextureView(levels[1]),
+                wgpu::BindingResource::TextureView(self.fill_before.as_ref().map_or(&renderer.empty_view,|(_,view)|view)),
             ]));
             self.shade.view = Some(slope.clone());
             self.navigator_view = Some(navigator.clone());
@@ -1132,7 +1144,7 @@ impl ViewportPresenter {
         let overlay_color = overlay.map_or([0.;4],|o| o.color);
         let crop = renderer.crop_overlay.filter(|c| c.to_crop.inverse().is_some());
         let [ca, cb, cc, cd, cx, cy] = crop.map_or([0.; 6], |c| c.to_crop.0);
-        let mut data = [0.; 156];
+        let mut data = [0.; 160];
         data[..40].copy_from_slice(&[
             d / det,
             -b / det,
@@ -1172,6 +1184,9 @@ impl ViewportPresenter {
         data[62..64].copy_from_slice(&renderer.clipping_preview.map(f32::from));
         data[128..152].copy_from_slice(&motion.map_or([0.; 24], |(_, values, ..)| values));
         data[152] = f32::from(composite.texture().format() == wgpu::TextureFormat::Rgba16Float);
+        if let Some(reveal)=renderer.fill_reveal.filter(|reveal|reveal.radius>=0. && self.fill_before.as_ref().is_some_and(|(id,_)|*id==reveal.transaction)) {
+            data[156..160].copy_from_slice(&[reveal.center[0],reveal.center[1],reveal.radius,1.]);
+        }
         // A fixed f32 array has no padding or uninitialized bytes.
         let bytes = unsafe {
             std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), std::mem::size_of_val(&data))
@@ -1235,6 +1250,7 @@ impl ViewportPresenter {
         } else {
             [view.height_px, view.width_px]
         };
+        let reveal_damage=crate::present_damage::fill_reveal(self.fill_reveal,renderer.fill_reveal,view,self.quarter_turns);
         // A retained target may be scanned out while this pass runs. Even a
         // full camera redraw must preserve its old pixels until the fullscreen
         // shader replaces them; a fast clear can otherwise flash on screen.
@@ -1254,7 +1270,7 @@ impl ViewportPresenter {
                     && previous.selection_revision.wrapping_add(1) != renderer.selection_paint_revision)
                 || (previous.revision != renderer.composite_revision
                     && previous.revision.wrapping_add(1) != renderer.composite_revision);
-            let full = content || bindings_changed || camera_changed || self.panel_surfaces_changed || self.panels.as_ref().is_some_and(|p|p.needs_refresh()) || (selection_changed && outline.is_none()) || self.presented_paper != Some(lit);
+            let full = content || (self.fill_reveal!=renderer.fill_reveal && reveal_damage.is_none()) || bindings_changed || camera_changed || self.panel_surfaces_changed || self.panels.as_ref().is_some_and(|p|p.needs_refresh()) || (selection_changed && outline.is_none()) || self.presented_paper != Some(lit);
             let cursor =
                 crate::present_damage::cursor_bounds(&self.cursor_vertices, view, self.quarter_turns);
             let repaint = if full {
@@ -1274,6 +1290,7 @@ impl ViewportPresenter {
             for bounds in previous.picker.into_iter().chain(self.picker.bounds()) {
                 crate::present_damage::add_region(&mut regions, crate::present_damage::surface_bounds(bounds, view, self.quarter_turns));
             }
+            if !full {for area in reveal_damage.into_iter().flatten(){crate::present_damage::add_region(&mut regions,area);}}
             crate::present_damage::add_region(&mut regions, repaint);
             let motion_now = motion.map(|(_, values, moved, revision)| (values, moved, revision));
             if !full && (self.presented_motion != motion_now || motion_rebound) {
@@ -1296,7 +1313,7 @@ impl ViewportPresenter {
             let content_damage = (!full).then(|| {
                 let selection = (previous.selection_revision != renderer.selection_paint_revision)
                     .then(|| crate::present_damage::damage(renderer.selection_paint_damage, view, self.quarter_turns));
-                [repaint].into_iter().chain(selection).chain(outline).filter(|r| !r.is_empty()).collect::<Vec<_>>()
+                [repaint].into_iter().chain(reveal_damage.into_iter().flatten()).chain(selection).chain(outline).filter(|r| !r.is_empty()).collect::<Vec<_>>()
             });
             // A distant Navigator must not turn a short stroke into a nearly
             // full-screen render area. Only merge intersecting damage regions.
@@ -1346,6 +1363,19 @@ impl ViewportPresenter {
         };
         let mut began = false;
         let pipeline = match &self.paper_pipeline { Some(paper) if lit => &paper[data[53] as usize], _ => &self.pipeline[data[53] as usize] };
+        let capture_before=renderer.fill_reveal.filter(|reveal|!overview_only && reveal.radius<0. && self.fill_before.as_ref().is_none_or(|(id,_)|*id!=reveal.transaction));
+        if let Some(reveal)=capture_before {
+            let texture=renderer.device.create_texture(&wgpu::TextureDescriptor {label:Some("fill reveal before"),
+                size:wgpu::Extent3d {width:extent[0],height:extent[1],depth_or_array_layers:1},mip_level_count:1,sample_count:1,
+                dimension:wgpu::TextureDimension::D2,format:self.format,usage:wgpu::TextureUsages::RENDER_ATTACHMENT|wgpu::TextureUsages::TEXTURE_BINDING,view_formats:&[]});
+            let target=texture.create_view(&Default::default());
+            let mut pass=encoder.begin_render_pass(&wgpu::RenderPassDescriptor {label:Some("fill reveal before"),
+                color_attachments:&[Some(wgpu::RenderPassColorAttachment {view:&target,depth_slice:None,resolve_target:None,
+                    ops:wgpu::Operations {load:wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),store:wgpu::StoreOp::Store}})],
+                depth_stencil_attachment:None,timestamp_writes:None,occlusion_query_set:None,multiview_mask:None});
+            pass.set_pipeline(pipeline);pass.set_bind_group(0,self.bind_group.as_ref().unwrap(),&[0]);pass.draw(0..3,0..1);drop(pass);
+            self.fill_before=Some((reveal.transaction,target));
+        }
         if let Some(backdrop) = self.backdrop.as_mut().filter(|_| !overview_only) {
             let group = self.bind_group.as_ref().unwrap();
             let mut glass = Vec::new();
@@ -1496,6 +1526,8 @@ impl ViewportPresenter {
         self.presented_view = Some((view, surround_linear, self.quarter_turns, self.corner_radius));
         self.presented_selection_overlay = renderer.selection_overlay;
         self.presented_paper = Some(lit);
+        if !overview_only {self.fill_reveal=renderer.fill_reveal;}
+        if capture_before.is_some() {self.bind_group=None;}
         self.overlays_changed = false;
         if overview_only {
             self.history.valid=true;
@@ -1543,6 +1575,10 @@ pub(crate) fn surface_pipeline(
         cache: None,
     }) })
 }
+
+#[cfg(test)]
+#[path = "present_fill_tests.rs"]
+mod fill_tests;
 
 #[cfg(test)]
 mod tests {

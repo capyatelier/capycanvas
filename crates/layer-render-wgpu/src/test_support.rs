@@ -158,6 +158,17 @@ pub(crate) fn complete(r: &WgpuRasterizer) {
 }
 
 /// Submit `frame` once its dependencies are ready, as the engine does.
+pub(crate) fn flush_engine(engine: &mut layer_engine::CanvasEngine<WgpuRasterizer>) {
+    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+    loop {
+        engine.render_frame().unwrap();
+        if !engine.has_pending_input() && !engine.has_pending_document_edits() {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+}
 pub(crate) fn submit_ready(r: &mut WgpuRasterizer, frame: FramePacket<'_>) -> Result<(), GpuRasterError> {
     let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
     let preview = r.transform_preview.clone();

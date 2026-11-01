@@ -4,6 +4,9 @@ use crate::localization::{Localizer, MessageId};
 use super::*;
 use layer_core::{Point, Selection, authored::{OccurrenceHandle,SceneScope,SourceTarget}};
 use layer_render::RegionRequest;
+#[path="fill_gesture.rs"]
+mod gesture;
+pub use gesture::{FillGestureView,FillPillView};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -18,6 +21,15 @@ pub(super) struct RegionTools {
     pub refinement: layer_render::RegionRefinement,
     pub source: [RegionSource; 3],
     pub last_fill: Option<CommandId>,
+    pub gap_reach: Option<u32>,
+    gesture: Option<gesture::Gesture>,
+    reveal: Option<gesture::Reveal>,
+    preview_active: bool,
+    pub(super) reduced_motion: bool,
+    completed:Option<gesture::Completed>,
+    rollback:Option<(u64,u64,layer_core::authored::PaintHandle,layer_core::authored::PaintSource)>,
+    now_ns: u64,
+    finger:Option<u64>,
     contact: Option<Point>,
     generation: u64,
     queued: Option<RegionRequest>,
@@ -57,6 +69,14 @@ impl Default for RegionTools {
             },
             source: [RegionSource::Auto; 3],
             last_fill: None,
+            gap_reach: None,
+            gesture: None,
+            reveal: None,
+            preview_active: false,
+            reduced_motion: false,
+            completed:None,rollback:None,
+            now_ns: 0,
+            finger:None,
             contact: None,
             generation: 0,
             queued: None,
@@ -112,16 +132,21 @@ impl RegionTools {
         if id == "edge_offset" && value.fract() != 0. {
             return Err(NumericError::WholePixels { label: label.into() }.into());
         }
+        self.cancel();
         match id {
             "tolerance" => self.tolerance = value,
             "grain_depth" => self.texture_strength = value,
             "edge_offset" => self.refinement.edges = layer_render::RegionEdges::GrowShrink(value as i32),
             _ => unreachable!(),
         }
-        self.cancel();
         Ok(())
     }
     pub fn cancel(&mut self) {
+        if let Some(gesture)=self.gesture.take() {
+            if let Some((checkpoint,source))=gesture.amendment && let Some((handle,_))=gesture.before {self.rollback=Some((checkpoint,gesture.owner,handle,source));}
+            self.tolerance=gesture.original_tolerance;self.gap_reach=gesture.original_reach;self.refinement.close_gaps=gesture.original_close;
+        }
+        self.reveal=None;
         self.generation = self.generation.wrapping_add(1);
         self.contact = None;
         self.queued = None;
@@ -137,10 +162,11 @@ impl RegionTools {
         self.pending = false;
     }
     pub fn busy(&self) -> bool {
-        self.pending || self.queued.is_some()
+        self.pending || self.queued.is_some() || self.reveal.is_some() || self.rollback.is_some() || self.preview_active && self.gesture.is_none()
+            || self.gesture.as_ref().is_some_and(|gesture|!gesture.released && !gesture.holding() && gesture.tool!=layer_engine::ToolKind::Finger)
     }
     pub fn publishing_edit(&self) -> bool {
-        self.target.as_ref().is_some_and(|t| matches!(t.purpose, Purpose::Region { .. }))
+        self.gesture.is_some() || self.target.as_ref().is_some_and(|t| matches!(t.purpose, Purpose::Region { .. }))
     }
     pub fn applying_transform(&self) -> bool {
         self.target.as_ref().is_some_and(|t| matches!(t.purpose, Purpose::Transform))
@@ -149,11 +175,12 @@ impl RegionTools {
         self.target.as_ref().is_some_and(|t| matches!(t.purpose, Purpose::Refine))
     }
     pub fn cancellable(&self) -> bool {
-        self.contact.is_some() || self.target.is_some()
+        self.gesture.is_some() || self.contact.is_some() || self.target.is_some()
     }
 }
 impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn region_pen(&mut self, event: PenEvent) {
+        if self.fill_pen(event) {return;}
         match event.phase {
             PenPhase::Down => {
                 self.region_tools.cancel();
@@ -218,7 +245,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             if id == "close-gaps" && (!contiguous || fill && self.region_tools.scope == FillScope::Everywhere) { continue; }
             let beside=(id=="region-edges" && matches!(self.region_tools.refinement.edges,layer_render::RegionEdges::GrowShrink(_))).then_some("edge_offset");
             controls.push(ToolOption::Choice { id, label:self.localization().text(label), segmented:true, labeled:beside.is_none(), columns:None, beside,
-                items:commands.iter().map(|command| {let state=self.command(*command);state.choice_item(state.label.clone())}).collect() });
+                items:commands.iter().map(|command| {let state=self.command(*command);
+                    let label=if matches!(self.layer_interaction.tool,LayerCanvasTool::Region {fill:true,..}) && *command==CommandId::CloseGapsAuto {self.region_tools.gap_reach.map(|reach|NumericControl::whole_pixels(0.,64.).compact_text(f64::from(reach)).into()).unwrap_or_else(||state.label.clone())}else{state.label.clone()};
+                    state.choice_item(label)}).collect() });
         }
         if self.lines_from(source) != RegionSource::Reference { return controls; }
         let scene = self.engine.document().scene();
@@ -337,7 +366,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.notify_drawing_refusal();
             return;
         }
-        let request = RegionRequest {
+        let request = RegionRequest { fill: (fill && !enclosed && self.region_tools.gesture.is_some()).then(||layer_render::RegionFillQuery {
+                reach:self.region_tools.gap_reach.or_else(||(!self.region_tools.refinement.close_gaps).then_some(0)),excluded_seals:Default::default(),
+                trail:self.fill_query_trail()}),
             reference_count: (self.lines_from(self.layer_interaction.tool.region().unwrap().1) == RegionSource::Reference).then(|| doc.scene().reference_leaves().len()),
             paper: doc.nearest_paper_binding(doc.drawing_content()),
             enclosure: enclosure.map(std::sync::Arc::new), request_id: self.region_tools.generation,
@@ -378,7 +409,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.queue_region(request, purpose);
     }
     fn queue_region(&mut self, mut request: RegionRequest, purpose: Purpose) {
+        let gesture=matches!(&purpose,Purpose::Region {operation:Some(_),..}).then(||self.region_tools.gesture.take()).flatten();
+        let reveal=gesture.as_ref().and(self.region_tools.reveal.take());
         self.region_tools.cancel();
+        self.region_tools.gesture=gesture;self.region_tools.reveal=reveal;
         request.request_id = self.region_tools.generation;
         let doc = self.engine.document();
         self.region_tools.target = Some(Target {
@@ -389,10 +423,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             owner:doc.owner,
             purpose,
         });
+        if let Some(gesture)=&mut self.region_tools.gesture {gesture.request=Some(request.clone());}
         self.region_tools.queued = Some(request);
     }
     pub(super) fn queue_selection(&mut self, selection: Selection, options: layer_render::SelectionRefinement) {
-        let request = RegionRequest { reference_count: None, paper: None,
+        let request = RegionRequest { fill: None, reference_count: None, paper: None,
             enclosure: None, request_id: 0, contiguous: false, selection: Some(options),
             source: layer_render::RegionSource::Selection(std::sync::Arc::new(selection)),
             position: [0, 0], tolerance: 0., refinement: Default::default(), limit: None,
@@ -424,7 +459,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             let target = self.region_tools.target.take_if(|t| {
                 result.as_ref().map_or(!queued, |result| t.generation == result.request_id)
             });
-            let result = result.map_err(|cause| { if target.as_ref().is_some_and(|t| matches!(t.purpose, Purpose::Transform)) { self.discard_mode_actions(); } error(cause) })?;
+            let result = result.map_err(|cause| {
+                if target.as_ref().is_some_and(|t| matches!(t.purpose, Purpose::Transform)) { self.discard_mode_actions(); }
+                if target.is_some() {self.region_tools.cancel();}
+                error(cause)
+            })?;
             let doc = self.engine.document();
             if let Some(target) = target.filter(|t| doc.owner == t.owner && doc.revision == t.revision && doc.working.occurrence == t.layer && doc.working.target == t.source) {
                 match target.purpose {
@@ -442,9 +481,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                             Err(cause) => { self.set_host_error(Some(cause)); Ok(regions::HOST) },
                         };
                     }
-                    Purpose::Region { operation, .. } if operation.is_some() && result.pixels.bounds() == [0; 4] => {
+                    Purpose::Region { operation, .. } if operation.is_some() && result.pixels.bounds() == [0; 4] && self.region_tools.gesture.is_none() => {
                         self.region_tools.filled_below = None;
                         return Ok(0);
+                    }
+                    Purpose::Region {operation:Some(operation),color,basis} if self.region_tools.gesture.is_some()=> {
+                        return self.accept_fill_result(result,operation,color,basis);
                     }
                     Purpose::Region { operation, color, basis } => {
                         let selection = Selection::pixels(result.pixels).transformed(basis).map_err(error)?;
@@ -461,6 +503,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             } else {
                 self.region_tools.filled_below = None;
+                if !queued {self.region_tools.cancel();}
             }
         }
         if !self.region_tools.pending

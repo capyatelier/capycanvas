@@ -209,7 +209,7 @@ impl NativeHost {
             }
             let snapshot = Motion {
                 workspace_update: &update,
-                color_preview: self.session.state().layer_tools.tool.picks_color().then(|| self.color_preview()),
+                color_preview: (self.session.state().layer_tools.tool.picks_color() || self.session.state().layer_tools.tool.region().is_some_and(|(fill,_,_)|fill)).then(|| self.color_preview()),
                 camera: (self.last_camera_revision != Some(camera.revision)).then_some(camera),
             }
             .serialize(serializer)?;
@@ -278,7 +278,7 @@ impl NativeHost {
         let colors = state.preview_colors();
         let view = self.color_view(&colors);
         let bubble_colors = self.session.bubble_color_previews(&colors);
-        layer_ui::PickerPreview { picker: &state.color_picker, colors, view, bubble_colors }
+        layer_ui::PickerPreview { fill_gesture:&state.fill_gesture, picker: &state.color_picker, colors, view, bubble_colors }
     }
     fn serialize_snapshot<S: Serializer>(
         &self,

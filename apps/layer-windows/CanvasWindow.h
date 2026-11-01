@@ -18,6 +18,7 @@
 #include "GamepadInput.h"
 #include "NativeHandles.h"
 #include "PenSourceCache.h"
+#include <winrt/Windows.Devices.Haptics.h>
 #include "PointerModality.h"
 #include <atomic>
 #include <condition_variable>
@@ -83,14 +84,18 @@ private:
     void ApplyScreen(winrt::Windows::Data::Json::JsonObject const& model);
     winrt::Microsoft::UI::Dispatching::DispatcherQueue dispatcher{nullptr};
     winrt::Windows::UI::ViewManagement::UISettings uiSettings;
-    winrt::event_token colorValues{};
+    winrt::event_token colorValues{},motionValues{};
     winrt::Microsoft::UI::Xaml::Input::FocusManager::GettingFocus_revoker textFocus;
     std::string SystemTheme();
+    std::string SystemMotion();
     winrt::Microsoft::UI::Dispatching::DispatcherQueueController inputController{nullptr};
     winrt::Microsoft::UI::Dispatching::DispatcherQueue inputDispatcher{nullptr};
     winrt::Microsoft::UI::Input::InputPointerSource inputSource{nullptr}; // input thread only
-    enum class NavigationCursor { None, Pan, Zoom, ZoomOut, Rotate };
+    enum class NavigationCursor { None, Pan, Zoom, ZoomOut, Rotate, Resize };
     std::atomic<NavigationCursor> navigationCursor{NavigationCursor::None};
+    std::atomic<bool> fillResizeCursor{false};
+    winrt::Windows::Devices::Haptics::SimpleHapticsController fillHaptics{nullptr};
+    uint64_t fillTransaction=0,fillTick=0;
     winrt::Microsoft::UI::Input::InputCursor zoomInCursor{nullptr},zoomOutCursor{nullptr};
     winrt::Microsoft::UI::Input::PointerPredictor pointerPredictor{nullptr}; // input thread only
     struct CanvasTouchGesture {

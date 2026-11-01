@@ -49,7 +49,7 @@ fn receive_with_resize(
 fn receive_refined(r: &mut WgpuRasterizer, incoming: Selection, options: SelectionRefinement) -> Arc<SelectionPixels> {
     let reply = crate::test_support::receive_request(
         r,
-        RegionRequest { reference_count: None, paper: None,
+        RegionRequest { fill: None, reference_count: None, paper: None,
             enclosure: None, request_id: 42,
             source: RegionSource::Selection(Arc::new(incoming)),
             contiguous: false,
@@ -369,7 +369,7 @@ fn smooth_fills_notches_removes_spikes_and_keeps_the_canvas_edges() {
 }
 
 fn modify_request(selection: Selection, steps: &[ModifyStep], preview: Option<f32>) -> RegionRequest {
-    RegionRequest { reference_count: None, paper: None,
+    RegionRequest { fill: None, reference_count: None, paper: None,
         enclosure: None, request_id: 7,
         source: RegionSource::Modify(Arc::new(SelectionModify { selection: Arc::new(selection), steps: steps.to_vec(), preview })),
         contiguous: false,

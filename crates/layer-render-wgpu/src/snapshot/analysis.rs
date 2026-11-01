@@ -101,7 +101,7 @@ impl SnapshotGpu {
             masks._lease = Some(Arc::new(crate::effect_analysis::Lease::reserve(&snapshot.renderer.device, bytes)?));
             let r = &mut snapshot.renderer;
             let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-            r.layer_masks.prepare_regions(&r.device, &mut encoder, (view, &[]), snapshot.extent, false,
+            r.layer_masks.prepare_regions(&r.device, &mut encoder, (view, &[],None), snapshot.extent, false,
                 &mut r.selection_clip, Some(&regions)).map_err(|e| e.to_string())?;
             r.uploads.finish(&encoder);
             r.last_submission = Some(encoder.submit(&r.queue));

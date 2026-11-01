@@ -233,7 +233,7 @@ impl MaskRenderer {
         &mut self,
         device: &PipelineDevice,
         encoder: &mut crate::submission::CommandEncoder,
-        inputs: (SceneView<'_>, &[DabBatch]),
+        inputs: (SceneView<'_>, &[DabBatch],Option<&layer_render::FillPreview>),
         extent: [u32; 2],
         reset: bool,
         selections: &mut selection_clip::SelectionClip,
@@ -247,13 +247,13 @@ impl MaskRenderer {
         &mut self,
         device: &PipelineDevice,
         encoder: &mut crate::submission::CommandEncoder,
-        inputs: (SceneView<'_>, &[DabBatch]),
+        inputs: (SceneView<'_>, &[DabBatch],Option<&layer_render::FillPreview>),
         _extent: [u32; 2],
         reset: bool,
         selections: &mut selection_clip::SelectionClip,
         regions: Option<&std::collections::HashMap<SourceTarget, PixelRect>>,
     ) -> Result<(), GpuRasterError> {
-        let (scene, batches) = inputs;
+        let (scene,batches,fill)=inputs;
         self.pages.extend(mem::take(&mut self.preview_bases));
         if reset {
             self.pages.clear();
@@ -263,7 +263,7 @@ impl MaskRenderer {
             let DabBatchKind::RasterOperation(index) = batch.kind else { return None; };
             let operation = scene.operations(batch.target)?.get(index as usize)?;
             Some(((batch.target, index, false), operation))
-        }).collect();
+        }).chain(fill.map(|fill|((fill.target,u32::MAX,false),&fill.operation))).collect();
         let coverages: BTreeMap<_, _> = commands.iter().flat_map(|(key, operation)| {
             std::iter::once((*key, operation.coverage.clone())).chain(underfill_coverage(operation).map(|coverage| ((key.0, key.1, true), coverage)))
         }).collect();
@@ -436,7 +436,7 @@ impl WgpuRasterizer {
                     if !matches!(operation.kind, layer_core::RasterOperationKind::Transform(_)) {
                         let mut compositor = self.scene.take().map(Ok).unwrap_or_else(|| scene::Scene::new(self))?;
                         let damage = batch_pixel_rect(batch, self.target_extent(batch.target));
-                        let result = compositor.apply_operation(self, packet, batch.target, op as usize, damage, encoder);
+                        let result = compositor.apply_operation(self, packet, batch.target, scene::PaintOperation::Stored(op as usize), damage, encoder);
                         self.scene = Some(compositor);
                         result?;
                         continue;

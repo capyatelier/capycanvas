@@ -215,13 +215,15 @@ fn native_enclose_fill_pointer_workflow() {
         let camera = state(&w).camera;
         let scale = w.area.scale_factor() as f32;
         let matrix = camera.document_to_surface();
-        let at = |p: [f32; 2]| {
-            let p = gtk::graphene::Point::new(
-                (matrix[0] * p[0] + matrix[2] * p[1] + matrix[4]) / scale,
-                (matrix[1] * p[0] + matrix[3] * p[1] + matrix[5]) / scale);
-            let p = w.area.compute_point(&w.window, &p).unwrap();
+        let logical = |p: [f32; 2]| [
+            (matrix[0] * p[0] + matrix[2] * p[1] + matrix[4]) / scale,
+            (matrix[1] * p[0] + matrix[3] * p[1] + matrix[5]) / scale,
+        ];
+        let canvas_at = |p: [f32; 2]| {
+            let p = w.area.compute_point(&w.window, &gtk::graphene::Point::new(p[0], p[1])).unwrap();
             [p.x(), p.y()]
         };
+        let at = |p| canvas_at(logical(p));
         let before = raster(&w);
         input.perform(serde_json::json!([
             {"point":at([20.,30.]),"down":true}, {"point":at([315.,30.])},
@@ -284,6 +286,82 @@ fn native_enclose_fill_pointer_workflow() {
             invoke(&w, CommandId::Undo); ready(&w);
         }
         let target = layer_ui::occurrence_token(ui_session(&w).engine().document().working.occurrence.unwrap());
+        w.dispatch(UiAction::Layer { action: LayerAction::Select { id: layer_ui::occurrence_token(reference), mask: false } });
+        w.dispatch(UiAction::SelectBrush { id: layer_core::DefaultBrushPreset::Eraser as u32 });
+        w.dispatch(UiAction::SetBrushSize { value: 8. }); ready(&w);
+        let before = raster(&w);
+        stroke(&mut input,&w,[84.,45.],[84.,62.]); committed(&w,&before);
+        let gapped_reference = raster(&w);
+        assert_ne!(gapped_reference,before);
+        w.dispatch(UiAction::Layer { action: LayerAction::Select { id: target, mask: false } });
+        invoke(&w,CommandId::Fill);
+        invoke(&w, CommandId::FillConnected);
+        invoke(&w, CommandId::CloseGapsAuto);
+        let before = raster(&w);
+        input.perform(serde_json::json!([{ "point":at([85.,110.]), "down":true }]));
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let held = loop {
+            pump(10); healthy(&w);
+            if let Some(view) = state(&w).fill_gesture.filter(|view| view.pill.is_some()) { break view; }
+            assert!(Instant::now() < deadline, "Fill hold did not publish its controls");
+        };
+        let pill = held.pill.as_ref().unwrap();
+        assert_eq!(pill.label.as_ref(), "Close gaps");
+        assert!(held.resize_cursor);
+        assert_eq!(raster(&w), before);
+        let suffix = if theme == Theme::Light { "light" } else { "dark" };
+        input.perform(serde_json::json!([{ "capture":format!("fill-held-{suffix}") }]));
+        input.perform(serde_json::json!([{ "point":canvas_at([pill.track[1],held.tip[1]]) }]));
+        assert_eq!(state(&w).fill_gesture.unwrap().pill.unwrap().value.as_ref(), "64 px");
+        input.perform(serde_json::json!([{ "down":false }]));
+        committed(&w,&before);
+        let first = pixels(&raster(&w));
+        assert_eq!(sample(&first,85,110)[3],255);
+        assert_eq!(sample(&first,195,110)[3],0);
+        let seals = state(&w).fill_gesture.unwrap().seals;
+        assert!(!seals.is_empty());
+        let neighbour = logical([195.,110.]);
+        for [a,b] in seals.iter() {
+            assert!((0..2).any(|axis| neighbour[axis] < a[axis].min(b[axis])-6.
+                || neighbour[axis] > a[axis].max(b[axis])+6.), "neighbour stays outside every seal hit radius");
+        }
+        let before = raster(&w);
+        input.click(at([195.,110.])); committed(&w,&before);
+        assert_eq!(sample(&pixels(&raster(&w)),195,110)[3],255);
+        invoke(&w,CommandId::Undo); ready(&w); assert_eq!(pixels(&raster(&w)),first);
+        invoke(&w,CommandId::Undo); ready(&w); assert_eq!(pixels(&raster(&w)),empty);
+        invoke(&w,CommandId::SelectionEditing);
+        let before = raster(&w);
+        input.perform(serde_json::json!([{ "point":at([85.,110.]), "down":true }]));
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let held = loop {
+            pump(10); healthy(&w);
+            if let Some(view) = state(&w).fill_gesture.filter(|view| view.pill.is_some()) { break view; }
+            assert!(Instant::now() < deadline, "Tolerance hold did not publish its controls");
+        };
+        let pill = held.pill.as_ref().unwrap();
+        assert_eq!(pill.label.as_ref(),"Tolerance");
+        assert_eq!(raster(&w),before);
+        input.perform(serde_json::json!([{ "point":canvas_at([pill.track[1],held.tip[1]]) }]));
+        assert_eq!(state(&w).fill_gesture.unwrap().pill.unwrap().value.as_ref(),"100 %");
+        input.perform(serde_json::json!([{ "down":false }])); committed(&w,&before);
+        invoke(&w,CommandId::Undo); ready(&w); assert_eq!(pixels(&raster(&w)),empty);
+        invoke(&w,CommandId::SelectionReference);
+        invoke(&w,CommandId::CloseGapsAuto);
+        edit_number(&named::<crate::number_control::NumberControl>(
+            &w.panel_widget(Panel::ToolSettings),"tool-setting-tolerance"),"15");
+        let before = raster(&w);
+        input.perform(serde_json::json!([
+            { "point":at([85.,110.]),"down":true },
+            { "point":at([195.,110.]) }, { "down":false }
+        ])); committed(&w,&before);
+        let dragged = pixels(&raster(&w));
+        assert_eq!(sample(&dragged,85,110)[3],255);
+        assert_eq!(sample(&dragged,195,110)[3],255);
+        assert_eq!(ui_session(&w).engine().document().scene().paint_source(reference).unwrap().raster,gapped_reference);
+        invoke(&w,CommandId::Undo); ready(&w); assert_eq!(pixels(&raster(&w)),empty);
+        invoke(&w,CommandId::Undo); ready(&w); assert_eq!(reference_now(),reference_pixels);
+        w.dispatch(UiAction::Layer { action: LayerAction::Select { id: target, mask: false } });
         w.dispatch(UiAction::Invoke { command: CommandId::FillConnected });
         for (from,to,seed,other) in [([85.,50.],[85.,170.],[65.,110.],[105,110]),([40.,110.],[130.,110.],[85.,85.],[85,135])] {
             w.dispatch(UiAction::Layer { action: LayerAction::Select { id: layer_ui::occurrence_token(reference), mask: false } });

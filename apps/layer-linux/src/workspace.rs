@@ -957,6 +957,7 @@ pub struct Workspace {
     column_corner_css: gtk::CssProvider,
     column_corner_styles: RefCell<Vec<(String, [f32; 4])>>,
     palette: Cell<Option<ThemePalette>>,
+    fill_gesture:crate::fill_gesture::Overlay,
     header: header::Header,
     zen_capy: gtk::Button,
     system_status: Rc<crate::system_status::SystemStatus>,
@@ -1264,6 +1265,7 @@ impl Workspace {
         let workspaces = manager::NativeWorkspaces::new();
         workspaces.root.add_css_class("workspace-notice");
         content.set_child(Some(&surface));
+        let fill_gesture=crate::fill_gesture::Overlay::new();content.add_overlay(&fill_gesture);
         let zen_capy = gtk::Button::builder()
             .visible(false)
             .build();
@@ -1318,6 +1320,7 @@ impl Workspace {
             column_corner_css,
             column_corner_styles: RefCell::default(),
             palette: Cell::new(None),
+            fill_gesture,
             header,
             zen_capy,
             system_status,
@@ -1755,6 +1758,11 @@ impl Workspace {
                 ),
             );
         }
+        let motion=gtk::Settings::for_display(&self.area.display());
+        self.dispatch(UiAction::SystemMotionChanged {reduced:!motion.is_gtk_enable_animations()});
+        motion.connect_gtk_enable_animations_notify(glib::clone!(#[weak(rename_to=this)] self,move |settings| {
+            this.dispatch(UiAction::SystemMotionChanged {reduced:!settings.is_gtk_enable_animations()});
+        }));
         self.header.bind(self);
         let hold = gtk::EventControllerLegacy::new();
         hold.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -2134,6 +2142,7 @@ impl Workspace {
             Some(layer_ui::NavigationMode::Zoom) => "zoom-in",
             Some(layer_ui::NavigationMode::ZoomOut) => "zoom-out",
             Some(layer_ui::NavigationMode::Rotate) => "crosshair",
+            None if self.fill_gesture.resize_cursor()=>"ew-resize",
             None => "none",
         });
         if self.area.cursor().and_then(|c| c.name()).as_deref() != cursor {
@@ -2279,7 +2288,7 @@ impl Workspace {
     pub fn dispatch(self: &Rc<Self>, action: UiAction) {
         if self.documents.changing.get() && !matches!(&action,
             UiAction::CompleteRequest { .. } | UiAction::RestoreSettings { .. }
-            | UiAction::SystemThemeChanged { .. } | UiAction::WindowFullscreen { .. }) { return; }
+            | UiAction::SystemThemeChanged { .. } | UiAction::SystemMotionChanged { .. } | UiAction::WindowFullscreen { .. }) { return; }
         if self.refreshing.get() {
             return;
         }
@@ -2315,7 +2324,7 @@ impl Workspace {
                 | UiAction::MeasurePanels { .. }
                 | UiAction::MeasureTitlebar { .. }
                 | UiAction::MeasureHeader { .. }
-                | UiAction::SystemThemeChanged { .. }
+                | UiAction::SystemThemeChanged { .. } | UiAction::SystemMotionChanged { .. }
                 | UiAction::RestoreSettings { .. }
                 | UiAction::WindowFullscreen { .. }
         ) && !self.workspaces.accepts_input(self)
@@ -2330,7 +2339,7 @@ impl Workspace {
                     | UiAction::MeasureColumnScroll { .. }
                     | UiAction::MeasurePanels { .. }
                     | UiAction::MeasureTitlebar { .. }
-                    | UiAction::SystemThemeChanged { .. }
+                    | UiAction::SystemThemeChanged { .. } | UiAction::SystemMotionChanged { .. }
                     | UiAction::RestoreSettings { .. }
                     | UiAction::WindowFullscreen { .. }
             )
@@ -2772,7 +2781,11 @@ impl Workspace {
     fn initialize_canvas(self: &Rc<Self>, area: &gtk::Picture) {
         if self.gpu.borrow().is_some() { return; }
         match GpuCanvas::with_project_localized(area, self.initial_project.borrow_mut().take(), self.localization(), self.initial_settings.borrow_mut().take()) {
-            Ok(gpu) => {
+            Ok(mut gpu) => {
+                let settings=gtk::Settings::for_display(&area.display());
+                let _=gpu.session.set_touch_policy(layer_ui::TouchPolicy {tap_ms:settings.gtk_long_press_time().max(1),slop:settings.gtk_dnd_drag_threshold().max(1) as f32*area.scale_factor() as f32});
+                let reduced=!settings.is_gtk_enable_animations();
+                let _=gpu.session.dispatch(UiAction::SystemMotionChanged {reduced});
                 *self.gpu.borrow_mut() = Some(gpu);
                 crate::files::paper::load_library(self);
                 self.fullscreen_changed(self.window.is_fullscreen());
@@ -2851,6 +2864,10 @@ impl Workspace {
         }));
     }
     fn refresh_color_preview(&self) {
+        let resize=self.fill_gesture.resize_cursor();
+        let view=self.gpu.borrow().as_ref().and_then(|g|g.session.state().fill_gesture.clone());
+        if self.fill_gesture.update(view.as_ref(),self.palette.get()) {self.update_backdrop();}
+        if resize!=self.fill_gesture.resize_cursor(){self.area.set_cursor_from_name(Some(if self.fill_gesture.resize_cursor(){"ew-resize"}else{"none"}));}
         let colors = self.gpu.borrow().as_ref().map(|g| {
             let state = g.session.state();
             (state.preview_colors().into_owned(), state.color_picker.preview.is_some())
@@ -2956,6 +2973,7 @@ impl Workspace {
             self.image_size.refresh(self, &state);
         }
         if regions & (regions::COLOR_PREVIEW | regions::BRUSH | regions::DOCUMENT | regions::SETTINGS | regions::COMMANDS) != 0 {
+            self.fill_gesture.update(state.fill_gesture.as_ref(),self.palette.get());
             self.color_panel.refresh(&state.preview_colors(), self.paint_view_color(), self.picker_headroom());
             self.palette_panel
                 .refresh(&state, self.paint_view_color(), self.picker_headroom());
@@ -3046,6 +3064,7 @@ impl Workspace {
         if self.palette.replace(Some(palette)) == Some(palette) {
             return;
         }
+        let view=self.gpu.borrow().as_ref().and_then(|g|g.session.state().fill_gesture.clone());self.fill_gesture.update(view.as_ref(),Some(palette));
         let roles = [
             ("bg", palette.bg),
             ("panel", palette.panel),

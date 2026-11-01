@@ -114,7 +114,7 @@ mod selection_properties;
 pub use selection_masks::{SelectionAction, SelectionDisplayOptions, MaskEditingView, SelectionMenu};
 #[path = "region_tools.rs"]
 mod region_tools;
-pub use region_tools::FillScope;
+pub use region_tools::{FillScope,FillGestureView,FillPillView};
 #[path = "rulers.rs"]
 pub(crate) mod rulers;
 #[path = "canvas_bar.rs"]
@@ -609,6 +609,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             tool_origin: None,
             files: document_files::DocumentFiles::default(),
             state: UiState {
+                fill_gesture:None,
                 pressure_calibration: None,
                 tilt_calibration: None,
                 tool_slots: ToolSlotMemory::default(),
@@ -1246,6 +1247,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.interaction.keys.remove(&key);
             }
         }
+        if matches!(input,UiInput::Key {pressed:true,..}|UiInput::Pointer {phase:ContactPhase::Down,..}) {self.finish_fill_reveal();}
+        self.fill_touch_input(&input);
         if let Some(change) = self.color_picker_input(&input)? {
             reply.handled = true;
             reply.change = change;
@@ -4074,6 +4077,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.state.fullscreen = fullscreen;
                 (if changed { DOCUMENT } else { 0 }, false)
             }
+            UiAction::SystemMotionChanged {reduced}=>(self.set_fill_motion(reduced)?,false),
             UiAction::SystemThemeChanged { theme, accent } => {
                 self.system_theme = theme;
                 let accent_changed = std::mem::replace(&mut self.system_accent, accent) != accent;
@@ -4387,6 +4391,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// full queue returns the untouched record; hosts must retry after a frame.
     pub fn pen(&mut self, event: PenEvent) {
         let Some(event)=self.filter_pen(event) else {return;};
+        if event.phase==PenPhase::Down && !event.flags.contains(layer_engine::SampleFlags::PREDICTED){self.finish_fill_reveal();}
         self.prepare_tilt_input(event);
         if !event.flags.contains(layer_engine::SampleFlags::PREDICTED) && !event.flags.contains(layer_engine::SampleFlags::CORRECTION) {
             self.bubble_stroke(event.phase, [event.surface_position.x, event.surface_position.y]);
@@ -4542,6 +4547,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.layer_interaction.tool == LayerCanvasTool::Hand,
             &self.state.settings,
         ) {
+            self.finish_fill_reveal();
             self.initial_fit = false;
             self.sync_camera();
             self.changed(regions::CAMERA, true)
@@ -4562,6 +4568,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if !anchor.into_iter().chain(delta).chain([dpi]).all(f32::is_finite) || dpi <= 0. {
             return Err("Invalid scroll".into());
         }
+        self.finish_fill_reveal();
         if self.interaction.pointer.is_some_and(|p| p.paint || p.kind != PointerKind::Mouse)
             || self.retouch.drag.is_some() || self.touch.is_active() || self.holding_input()
             || !self.navigation_idle() || delta == [0.; 2]
@@ -4615,6 +4622,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn navigation_gesture(
         &mut self, from: [f32; 2], to: [f32; 2], scale: f32, rotation: f32, snapping: bool,
     ) -> Result<UiChange, String> {
+        self.finish_fill_reveal();
         if !self.navigation_idle() || self.interaction.gestures.suspends_navigation() {
             return Ok(self.changed(0, false));
         }
@@ -4843,8 +4851,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let commands_pending = std::mem::replace(&mut self.frame_commands_pending, true);
         let pending_edits = self.engine.has_pending_document_edits();
         let command_activity = (self.canvas_idle(), self.engine.can_undo(), self.engine.can_redo());
+        let fill_changed=self.advance_fill_gesture(now_ns)?;
         self.update_shader_idle();
-        let mut changed = self.poll_filter_installation() | self.poll_deferred_edits() | self.apply_loaded_paper() | self.take_bubble_changes()
+        let mut changed = fill_changed | self.poll_filter_installation() | self.poll_deferred_edits() | self.apply_loaded_paper() | self.take_bubble_changes()
             | self.advance_edge_contact(now_ns)?.regions;
         if std::mem::take(&mut self.pressure_meter_changed) { changed |= regions::PRESSURE_CALIBRATION; }
         if std::mem::take(&mut self.tilt_meter_changed) { changed |= regions::TILT_CALIBRATION; }
@@ -5461,13 +5470,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((BRUSH | COMMANDS, false))
             }
             CommandId::CloseGapsAuto | CommandId::CloseGapsOff | CommandId::EdgesLineMiddle | CommandId::EdgesExact | CommandId::EdgesGrowShrink => {
+                self.region_tools.cancel();
                 match command {
-                    CommandId::CloseGapsAuto | CommandId::CloseGapsOff => self.region_tools.refinement.close_gaps = command == CommandId::CloseGapsAuto,
+                    CommandId::CloseGapsAuto | CommandId::CloseGapsOff => {self.region_tools.refinement.close_gaps=command==CommandId::CloseGapsAuto;self.region_tools.gap_reach=None;},
                     CommandId::EdgesLineMiddle => self.region_tools.refinement.edges = layer_render::RegionEdges::LineMiddle,
                     CommandId::EdgesExact => self.region_tools.refinement.edges = layer_render::RegionEdges::Exact,
                     _ => self.region_tools.refinement.edges = layer_render::RegionEdges::GrowShrink(0),
                 }
-                self.region_tools.cancel(); self.refresh_tools();
+                self.refresh_tools();
                 Ok((BRUSH | COMMANDS, false))
             }
             CommandId::StopAtColors => {
@@ -8884,7 +8894,7 @@ mod tests {
         assert_eq!(scope,&SceneScope::All);
         assert_eq!(snapshot.artwork,s.engine.document().artwork);
         assert!(request.limit.is_none());
-        s.renderer_mut().region_reply = Some(RegionResult { underfill: None,
+        s.renderer_mut().region_reply = Some(RegionResult { gaps: None, underfill: None,
             tonal_sample: None,
             placement: layer_core::Affine::IDENTITY,
             request_id: request.request_id,
@@ -8935,7 +8945,7 @@ mod tests {
             request.limit.as_ref().unwrap().affine,
             layer_core::Affine::IDENTITY
         );
-        s.renderer_mut().region_reply = Some(RegionResult { underfill: None,
+        s.renderer_mut().region_reply = Some(RegionResult { gaps: None, underfill: None,
             tonal_sample: None,
             placement: layer_core::Affine::IDENTITY,
             request_id: request.request_id,
@@ -8968,7 +8978,7 @@ mod tests {
         let request = s.renderer_mut().region_requests.last().unwrap().clone();
         let before = s.engine.document().working.selection.clone();
         invoke(&mut s, CommandId::Hand);
-        s.renderer_mut().region_reply = Some(RegionResult { underfill: None,
+        s.renderer_mut().region_reply = Some(RegionResult { gaps: None, underfill: None,
             tonal_sample: None,
             placement: layer_core::Affine::IDENTITY,
             request_id: request.request_id,
@@ -8997,7 +9007,7 @@ mod tests {
             snapshot.view().with_scope(&scope).order().iter().copied().filter(|h| snapshot.view().with_scope(&scope).includes(*h) && snapshot.view().occurrence(*h).unwrap().visible).collect::<Vec<_>>(),
             [id]
         );
-        s.renderer_mut().region_reply = Some(RegionResult { underfill: None,
+        s.renderer_mut().region_reply = Some(RegionResult { gaps: None, underfill: None,
             tonal_sample: None,
             placement: layer_core::Affine::IDENTITY,
             request_id: request.request_id,
@@ -9025,7 +9035,7 @@ mod tests {
             value: 0.75,
         })
         .unwrap();
-        s.renderer_mut().region_reply = Some(RegionResult { underfill: None,
+        s.renderer_mut().region_reply = Some(RegionResult { gaps: None, underfill: None,
             tonal_sample: None,
             placement: layer_core::Affine::IDENTITY,
             request_id: request.request_id,

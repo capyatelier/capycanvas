@@ -58,7 +58,8 @@ using V=IJsonValue;
 using namespace CapyUi;
 struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::shared_ptr<WorkspaceData> data=std::make_shared<WorkspaceData>();
-    Canvas root,utilities;
+    Canvas root,utilities,fillGesture;
+    std::function<void(J const&)> fillFeedback;
     std::shared_ptr<WorkspaceGestures> gestures;
     std::unique_ptr<WorkspaceDrawers> drawers;
     std::unique_ptr<WorkspaceBubbles> bubbles;
@@ -202,6 +203,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         surface.HorizontalAlignment(HorizontalAlignment::Right);surface.VerticalAlignment(VerticalAlignment::Bottom);surface.Margin({4,0,4,0});
         cameraSlot.Children().Append(surface);
         root.Children().Append(cameraSlot);
+        fillGesture.IsHitTestVisible(false);Canvas::SetZIndex(fillGesture,10000);root.Children().Append(fillGesture);
         canvasBar->data=data;
         canvasBar->changed=[weak=weak_from_this()]{if(auto self=weak.lock()){self->gestures->ChromeChanged();self->placePreviews();self->queueMeasurements();}};
         canvasBar->init(root);
@@ -483,6 +485,35 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         applyGlass();
         tracePresentation();return true;
     }
+    void presentFill(){
+        auto view=object(data->colorPreview,L"fill_gesture");
+        fillGesture.Children().Clear();if(fillFeedback)fillFeedback(view);
+        if(!view.Size())return;
+        auto line=[&](double x1,double y1,double x2,double y2,Brush const& brush,bool dashed){
+            Shapes::Line shape;shape.X1(x1);shape.Y1(y1);shape.X2(x2);shape.Y2(y2);shape.Stroke(brush);shape.StrokeThickness(1.5);
+            if(dashed){DoubleCollection dash;dash.Append(4);dash.Append(3);shape.StrokeDashArray(dash);}fillGesture.Children().Append(shape);
+        };
+        for(auto const& value:array(view,L"seals")){
+            auto ends=value.GetArray();auto a=ends.GetArrayAt(0),b=ends.GetArrayAt(1);
+            line(a.GetNumberAt(0),a.GetNumberAt(1),b.GetNumberAt(0),b.GetNumberAt(1),accent(data),true);
+        }
+        auto tip=array(view,L"tip");
+        if(view.HasKey(L"ring")&&view.GetNamedValue(L"ring").ValueType()==JsonValueType::Number){
+            Shapes::Polyline ring;PointCollection points;double progress=num(view,L"ring");
+            for(int i=0;i<=32;++i){double angle=-1.5707963267948966+6.283185307179586*progress*i/32.;points.Append({float(tip.GetNumberAt(0)+12*std::cos(angle)),float(tip.GetNumberAt(1)+12*std::sin(angle))});}
+            ring.Points(points);ring.Stroke(accent(data));ring.StrokeThickness(2);fillGesture.Children().Append(ring);
+        }
+        auto pill=object(view,L"pill");if(!pill.Size())return;
+        auto bounds=rectangle(object(pill,L"bounds"));Border face;face.Background(data->glass(L"panel"));face.CornerRadius({8,8,8,8});
+        Canvas content;face.Child(content);face.Width(bounds.Width);face.Height(bounds.Height);Canvas::SetLeft(face,bounds.X);Canvas::SetTop(face,bounds.Y);
+        TextBlock label,value;label.Text(str(pill,L"label"));value.Text(str(pill,L"value"));
+        for(auto const& text:{label,value}){text.FontSize(data->textSize());text.Foreground(data->brush(L"text"));Canvas::SetTop(text,5);}
+        Canvas::SetLeft(label,12);value.Measure({bounds.Width,24});Canvas::SetLeft(value,bounds.Width-value.DesiredSize().Width-12);content.Children().Append(label);content.Children().Append(value);
+        auto track=array(pill,L"track");double left=track.GetNumberAt(0)-bounds.X,right=track.GetNumberAt(1)-bounds.X;
+        Border trough,filled;for(auto const& bar:{trough,filled}){bar.Height(4);bar.CornerRadius({2,2,2,2});Canvas::SetLeft(bar,left);Canvas::SetTop(bar,32);content.Children().Append(bar);}
+        trough.Width(right-left);trough.Background(data->brush(L"input"));filled.Width(num(pill,L"fill_end")-track.GetNumberAt(0));auto panelColor=data->paletteColor(L"panel"),textColor=data->paletteColor(L"text");filled.Background(fill({255,uint8_t((int(panelColor.R)+textColor.R)/2),uint8_t((int(panelColor.G)+textColor.G)/2),uint8_t((int(panelColor.B)+textColor.B)/2)}));
+        fillGesture.Children().Append(face);
+    }
     bool apply(J const& snapshot,NativeLayoutInput preparedInput){
         auto previousGpu=num(data->model,L"windows_gpu_generation");
         bool relocalize=data->adoptLocalization(snapshot);
@@ -507,8 +538,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             return true;
         }
         if(!full&&!reflow){
-            if(snapshot.HasKey(L"color_preview")){data->colorPreview=object(snapshot,L"color_preview");data->queueColors();}
-            else if(WorkspaceData::previewing(data->colorPreview)){data->colorPreview=J{};data->queueColors();}
+            if(snapshot.HasKey(L"color_preview")){data->colorPreview=object(snapshot,L"color_preview");data->queueColors();presentFill();}
+            else if(WorkspaceData::previewing(data->colorPreview)){data->colorPreview=J{};data->queueColors();presentFill();}
             if(update.Size()){++motionUpdates;applyMotion(object(update,L"drag"));}
             if(snapshot.HasKey(L"camera")){
                 auto cameraPatch=object(snapshot,L"camera");
@@ -533,7 +564,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         data->model=snapshot;data->state=object(model,L"state");data->colorPreview=object(model,L"color_preview");
         RefreshFilterPreviewContext(data->previews,object(data->state,L"document_file").GetNamedValue(L"epoch").Stringify());
         lastMeasurements=L"";
-        data->refreshPalette();
+        data->refreshPalette();presentFill();
         auto theme=data->theme(),palette=object(data->state,L"palette").Stringify();
         if(theme!=previousTheme||palette!=previousPalette){
             panelBridgeKey=L"";
@@ -1321,3 +1352,5 @@ void WorkspaceView::MergeLayout(Json const& model,Json const& patch){
     for(auto const& item:object(patch,L"workspace_layout"))layout.Insert(item.Key(),item.Value());
     if(patch.HasKey(L"camera"))state.Insert(L"camera",patch.GetNamedValue(L"camera"));
 }
+
+void WorkspaceView::SetFillFeedback(std::function<void(Json const&)> feedback){impl->fillFeedback=std::move(feedback);}

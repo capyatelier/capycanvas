@@ -1008,6 +1008,10 @@ pub struct WgpuRasterizer {
     transforms: Option<paint_transform::PaintTransforms>,
     preparation_compiler: Option<startup::CompilerHandle>,
     transform_preview: Option<layer_render::TransformPreview>,
+    fill_preview: Option<layer_render::FillPreview>,
+    fill_preview_shown: Option<(u64,u64,SourceTarget)>,
+    fill_preview_done:Option<Arc<std::sync::atomic::AtomicBool>>,
+    fill_reveal: Option<layer_render::FillReveal>,
     refused_transform: Option<layer_render::TransformPreview>,
     transform_sources_pending: bool,
     transform_damage: Vec<(SourceTarget, PixelRect)>,
@@ -1386,6 +1390,10 @@ impl WgpuRasterizer {
             transforms,
             preparation_compiler: None,
             transform_preview: None,
+            fill_preview: None,
+            fill_preview_shown: None,
+            fill_preview_done:None,
+            fill_reveal: None,
             refused_transform: None,
             transform_sources_pending: false,
             transform_damage: Vec::with_capacity(2),
@@ -3693,7 +3701,15 @@ impl CanvasRenderer for WgpuRasterizer {
             startup.compiler.start();
             ready
         });
-        transforms_ready && self.scene_scale_ready() && self.startup.as_ref().is_none_or(|s| s.document.ready() && s.current.ready())
+        let fill_ready=if let Some(fill)=self.fill_preview.clone() {
+            let pipeline=scene::fill_pipeline(&fill.operation.kind).map_or(0,|(pipeline,_)|pipeline);
+            self.startup.as_ref().is_none_or(|startup| {
+                let ready=startup.compiler.require([&self.scene_pipelines.pipeline[pipeline],&self.layer_masks.initialize],startup::BRUSH)
+                    & startup.compiler.require(self.selection_clip.pipelines(),startup::BRUSH);
+                startup.compiler.start();ready
+            })
+        }else{true};
+        fill_ready && transforms_ready && self.scene_scale_ready() && self.startup.as_ref().is_none_or(|s| s.document.ready() && s.current.ready())
             && self.brush_batches_ready(packet)
             && self.prepare_raster_restores(packet) && self.bake_analyses_ready(packet) && self.retouch_analyses_ready(packet)
             && self.bake_vectors_ready(packet) && self.prepare_bakes(packet) && self.prepare_transform_preview(packet,preview)
@@ -3771,7 +3787,8 @@ impl CanvasRenderer for WgpuRasterizer {
         self.moving_pixels = pixels;
     }
     fn has_pending_work(&self) -> bool {
-        self.held_result_ready() || self.bake_preflight.as_ref().is_some_and(|state|state.pending() && (!cfg!(target_arch="wasm32") || !state.waiting())) || self.restore_preparation_pending() || self.analysis_dirty || !self.transform_damage.is_empty() || !self.document_damage.is_empty() || self.settling.is_some() || self.retouch.as_ref().is_some_and(|retouch| retouch.pending() && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting()))
+        self.fill_preview.is_some() && self.fill_preview_ready().is_none()
+            || self.held_result_ready() || self.bake_preflight.as_ref().is_some_and(|state|state.pending() && (!cfg!(target_arch="wasm32") || !state.waiting())) || self.restore_preparation_pending() || self.analysis_dirty || !self.transform_damage.is_empty() || !self.document_damage.is_empty() || self.settling.is_some() || self.retouch.as_ref().is_some_and(|retouch| retouch.pending() && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting()))
             || self.navigator.pending()
             || self.transform_sources_pending && self.transform_preview.is_some() && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting())
             || self.moving_images_pending()
@@ -3819,6 +3836,12 @@ impl CanvasRenderer for WgpuRasterizer {
         }
         Ok(())
     }
+    fn set_fill_preview(&mut self,preview:Option<layer_render::FillPreview>) {self.fill_preview=preview;}
+    fn fill_preview_ready(&self)->Option<(u64,u64)> {
+        let key=self.fill_preview.as_ref()?.key();
+        (self.fill_preview_shown==Some(key) && self.fill_preview_done.as_ref()?.load(std::sync::atomic::Ordering::Acquire)).then_some((key.0,key.1))
+    }
+    fn set_fill_reveal(&mut self,reveal:Option<layer_render::FillReveal>) {self.fill_reveal=reveal;}
     fn request_region(
         &mut self,
         request: layer_render::RegionRequest,
@@ -4124,6 +4147,7 @@ impl WgpuRasterizer {
             && packet.commit_rasters && !packet.composite_all && !packet.reset_layers && packet.restore_rasters.is_empty()
             && packet.dabs.is_empty() && packet.dab_batches.is_empty()
             && settled_commit.is_none() && self.transform_preview.is_none()
+            && self.fill_preview.as_ref().map(layer_render::FillPreview::key)==self.fill_preview_shown
             && self.transform_damage.is_empty() && self.document_damage.is_empty()
             && self.moving_layer.is_none() && self.moving_pixels.is_none()
             && self.vector_preview.as_ref().map(|p| (p.owner, p.revision)) == self.vector_preview_shown.map(|(owner, revision, _)| (owner, revision))
@@ -4371,6 +4395,8 @@ impl WgpuRasterizer {
         if let Some(scene)=&mut self.scene {scene.retire_changed_cells(&changed_cells.take_retired());}
         self.changed_cells = Some(changed_cells);
 
+        let fill_preview=self.fill_preview.clone();
+        let fill_changed=fill_preview.as_ref().map(layer_render::FillPreview::key)!=self.fill_preview_shown;
         let old_preview_damage = self.preview_damage;
         let old_preview_contact_tiles = if packet.commit_rasters {self.preview_contact_tiles.take()} else {None};
         let mut new_preview_contact_tiles = Some(std::collections::BTreeSet::new());
@@ -4378,7 +4404,7 @@ impl WgpuRasterizer {
         let old_preview_level = self.preview_level;
         let old_preview_contribution = self.preview_contribution;
         let watercolor_style_dirty = self.update_watercolor_layer_styles(packet.dab_batches);
-        let mut dirty = old_preview_damage.union(watercolor_style_dirty);
+        let mut dirty = if fill_preview.is_some() && !fill_changed {watercolor_style_dirty}else{old_preview_damage.union(watercolor_style_dirty)};
         if moving_images_changed { dirty = PixelRect::full(packet.document_extent); }
         let mut new_preview_damage = PixelRect::EMPTY;
         let mut new_preview_layer = None;
@@ -4440,6 +4466,15 @@ impl WgpuRasterizer {
                     .saturating_add(dab_candidate_pixels(*dab, self.target_extent(batch.target)));
             }
         }
+        if let Some(fill)=&fill_preview {
+            new_preview_layer=Some(fill.target);
+            let damage=pixel_rect(fill.operation.bounds(packet.scene.target_extent(fill.target)),packet.scene.target_extent(fill.target));
+            new_preview_damage=page_coordinates(damage).fold(PixelRect::EMPTY,|bounds,page|bounds.union(page_rect(page)))
+                .intersect(PixelRect::full(packet.scene.target_extent(fill.target)));
+            new_preview_requires_base=true;
+            new_preview_contact_tiles=None;
+            if fill_changed {dirty=dirty.union(new_preview_damage);}
+        }
         let destination_preview_batches = packet
             .dab_batches
             .iter()
@@ -4449,7 +4484,7 @@ impl WgpuRasterizer {
                     && BrushPassPlan::for_device(&batch.style, &self.device).requires_destination()
             })
             .count();
-        let new_preview_from_persistent = destination_preview_batches == 1
+        let new_preview_from_persistent = fill_preview.is_none() && destination_preview_batches == 1
             && !preview_is_watercolor
             && packet
                 .dab_batches
@@ -4478,11 +4513,11 @@ impl WgpuRasterizer {
         if packet.commit_rasters {
             self.preview_contribution=preview_contribution;
             let mut preview_cells=self.changed_cells.take().unwrap();
-            preview_cells.prepare_preview(self,
+            if fill_preview.is_none() || fill_changed {preview_cells.prepare_preview(self,
                 changed_cells::Preview {id:old_preview_layer,level:old_preview_level,contribution:old_preview_contribution,
                     damage:old_preview_damage,tiles:old_preview_contact_tiles.as_ref()},
                 changed_cells::Preview {id:new_preview_layer,level:preview_level,contribution:preview_contribution,
-                    damage:new_preview_damage,tiles:new_preview_contact_tiles.as_ref()});
+                    damage:new_preview_damage,tiles:new_preview_contact_tiles.as_ref()});}
             self.changed_cells=Some(preview_cells);
             if self.preview_level != preview_level {
                 self.preview_pages.clear();
@@ -4509,7 +4544,7 @@ impl WgpuRasterizer {
         self.layer_masks.prepare(
             &self.device,
             &mut encoder,
-            (packet.scene, original_batches),
+            (packet.scene, original_batches,fill_preview.as_ref()),
             packet.document_extent,
             false,
             &mut self.selection_clip,
@@ -4642,7 +4677,7 @@ impl WgpuRasterizer {
                 } else {
                     let mut scene = self.scene.take().map(Ok).unwrap_or_else(|| scene::Scene::new(self))?;
                     let damage = batch_pixel_rect(batch, self.target_extent(batch.target));
-                    scene.apply_operation(self, packet, batch.target, op as usize, damage, &mut encoder)?;
+                    scene.apply_operation(self, packet, batch.target, scene::PaintOperation::Stored(op as usize), damage, &mut encoder)?;
                     self.scene = Some(scene);
                 }
                 let bounds = operation
@@ -4756,7 +4791,7 @@ impl WgpuRasterizer {
 
         self.preview_damage = new_preview_damage;
         self.preview_contact_tiles = new_preview_contact_tiles;
-        if let Some(layer_id) = new_preview_layer {
+        if let Some(layer_id) = new_preview_layer.filter(|_|fill_preview.is_none() || fill_changed) {
             for page in &mut self.preview_pages {
                 page.active_secondary = false;
                 page.clear_stroke_start();
@@ -4952,6 +4987,13 @@ impl WgpuRasterizer {
                 )?;
             }
         }
+        if fill_changed && let Some(fill)=&fill_preview {
+            let mut scene=self.scene.take().map(Ok).unwrap_or_else(||scene::Scene::new(self))?;
+            scene.apply_operation(self,packet,fill.target,scene::PaintOperation::Preview(&fill.operation),new_preview_damage,&mut encoder)?;
+            self.scene=Some(scene);
+        }
+        self.fill_preview_shown=fill_preview.as_ref().map(layer_render::FillPreview::key);
+        if fill_changed {self.fill_preview_done=None;}
         if preview_is_watercolor { self.canonicalize_preview_watercolor(&mut encoder)?; }
         if let Some(started) = started { cpu_phases[3] = started.elapsed().as_secs_f64() * 1000.; }
         trace_phase.next(c"capy.composition");
@@ -5150,6 +5192,10 @@ impl WgpuRasterizer {
         let trim=!moving && self.artwork_frame.as_ref().is_some_and(|old| old.view==packet.view);
         let backup=self.display_backup.take();
         self.retire_display_resources(&mut encoder, trim, backup);
+        if fill_preview.is_some() && self.fill_preview_done.is_none() {
+            let done=Arc::new(std::sync::atomic::AtomicBool::new(false));self.fill_preview_done=Some(done.clone());
+            encoder.on_submitted_work_done(move||done.store(true,std::sync::atomic::Ordering::Release));
+        }
         let submission = encoder.submit(&self.queue);
         self.region_chunks_submitted();
         self.telemetry.submitted(&self.queue);

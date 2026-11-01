@@ -1473,7 +1473,18 @@ button.new-drawing-preset.disabled { opacity:.4; }
 .toolbar-choice-menu:not([popover]), .toolbar-choice-menu:popover-open { display: flex; }
 .toolbar-choice-menu > button { display: flex; align-items: center; gap: 8px; text-align: left; min-height: 32px; }
 .toolbar-choice-menu svg { width: 16px; height: 16px; }
-.canvas-action-bar, .canvas-notice { --field-clear: calc((var(--bar-tile) - var(--panel-control-height)) / 2); position: absolute; left: 0; top: 0; z-index: 900; display: flex; align-items: center; gap: var(--bar-gap); box-sizing: border-box; width: max-content; color: var(--text); background: var(--glass-panel); border-radius: var(--surface-radius); box-shadow: 0 2px 8px rgb(0 0 0 / 16%); touch-action: none; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+.canvas-action-bar, .canvas-notice, .fill-gesture-pill { --field-clear: calc((var(--bar-tile) - var(--panel-control-height)) / 2); position: absolute; left: 0; top: 0; z-index: 900; display: flex; align-items: center; gap: var(--bar-gap); box-sizing: border-box; width: max-content; color: var(--text); background: var(--glass-panel); border-radius: var(--surface-radius); box-shadow: 0 2px 8px rgb(0 0 0 / 16%); touch-action: none; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+.fill-gesture-overlay { position:absolute; inset:0; z-index:900; pointer-events:none; }
+.fill-gesture-lines { position:absolute; inset:0; width:100%; height:100%; overflow:visible; fill:none; stroke:var(--accent); stroke-width:2px; }
+.fill-gesture-seals { stroke-dasharray:4 4; }
+.fill-gesture-ring { r:12px; transform-box:fill-box; transform-origin:center; transform:rotate(-90deg); }
+.fill-gesture-pill[hidden] { display:none; }
+.fill-gesture-pill .number-header { position:absolute; top:4px; left:12px; right:12px; justify-content:space-between; }
+.fill-gesture-pill .number-labels { padding:0; }
+.fill-gesture-pill .number-value { padding:0; min-height:0; height:auto; line-height:20px; white-space:nowrap; }
+.fill-gesture-track { position:absolute; bottom:8px; height:4px; border-radius:2px; background:var(--input); overflow:hidden; }
+.fill-gesture-fill { height:100%; border-radius:inherit; background:var(--number-fill); }
+#canvas.fill-gesture-resize { cursor:ew-resize!important; }
 .canvas-action-bar[hidden], .canvas-action-bar [hidden] { display: none !important; }
 .canvas-action-bar.suppressed { visibility: hidden; }
 .canvas-action-bar-label { flex: none; padding: 0 8px 0 12px; white-space: nowrap; opacity: .8; }

@@ -463,7 +463,7 @@ impl SelectionRefiner {
         pass.set_bind_group(0, &binding, &[]);
         pass.dispatch_workgroups(h, 1, 1);
         drop(pass);
-        flood::Region {
+        flood::Region { gaps: None,
             coverage,
             bounds_offset,
             underfill: None,

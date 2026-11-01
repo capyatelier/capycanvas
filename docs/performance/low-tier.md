@@ -287,6 +287,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Enclose and Fill: loop drag and navigation during completion | 60 | Motion unmeasured; completion latency does not qualify moving-frame cadence | [Reference Fill completion](#reference-fill-completion) |
 | G-Pen and pan while Fill prepares eight references | 60 | **M4a.1 partial AB:** G-Pen 32.50 → 32.40 completed updates/s, a shared 60 Hz miss; pan 60.02 on both. Full ABBA pending | [Reference Fill completion](#reference-fill-completion) |
 | Reference Fill completion, 12 MP | Cold and warm response | Prepared stroke 5.5 → 3.6–3.8 s. **First-open cold regression:** 5.6–5.8 → 7.6–7.8 s | [Reference Fill completion](#reference-fill-completion) |
+| Fill reveal while holding the pen, 12 MP | 60 | **Not met.** AB8 → AB9: moving viewport callbacks 46.2 → 57.3/s; largest start gap 38.5 → 37.4 ms. Scanout unobservable; no physical 60 Hz qualification | 2026-11-01; `artifacts/fill-tools/m5-reveal/damage-ab-results.json`; full matrix deferred |
 | Selection Brush or Quick Mask, 1024 px | 60 | | |
 | Grow, Shrink or Feather drag, full canvas | 60, soft | | |
 | Paper Scale drag with relief preview | 60 | Unmeasured on the reference tablet | Canvas-bar `paper-scale-drag`; [Paper rendering](../development/paper.md#rendering-and-performance) |

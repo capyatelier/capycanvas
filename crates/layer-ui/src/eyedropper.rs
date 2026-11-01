@@ -151,6 +151,7 @@ impl Default for ColorPickerState {
 /// Small, reversible color-panel publication; never a workspace or paint edit.
 #[derive(Serialize)]
 pub struct PickerPreview<'a> {
+    pub fill_gesture: &'a Option<crate::FillGestureView>,
     pub picker: &'a ColorPickerState,
     pub colors: std::borrow::Cow<'a, ColorState>,
     pub view: crate::ColorPanelView,
@@ -161,6 +162,6 @@ impl<R: CanvasRenderer> crate::UiSession<R> {
         let colors = self.state().preview_colors();
         let view = colors.view_mapped(self.effective_sdr_rendition(), self.localization());
         let bubble_colors = self.bubble_color_previews(&colors);
-        PickerPreview { picker: &self.state().color_picker, colors, view, bubble_colors }
+        PickerPreview { fill_gesture:&self.state().fill_gesture, picker: &self.state().color_picker, colors, view, bubble_colors }
     }
 }

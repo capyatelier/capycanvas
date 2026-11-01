@@ -7,8 +7,11 @@ import android.view.View
 import androidx.activity.compose.ReportDrawnWhen
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -21,6 +24,12 @@ internal data class TextCursorRegion(val bounds: Rect, val z: Int, val root: Vie
 
 internal class CanvasContent(context: Context, private val host: CanvasHost) : AbstractComposeView(context) {
     @Composable override fun Content() {
+        LaunchedEffect(host) {
+            val motion = kotlinx.coroutines.currentCoroutineContext()[MotionDurationScale]
+            snapshotFlow { motion?.scaleFactor == 0f }.collect {
+                host.dispatch(obj("type" to "system_motion_changed", "reduced" to it))
+            }
+        }
         ReportDrawnWhen { host.snapshot?.optBoolean("brush_ready") == true }
         CapyApp(host)
     }

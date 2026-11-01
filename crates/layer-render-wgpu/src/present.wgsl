@@ -20,6 +20,7 @@ struct Camera {
     split_region: vec4<f32>,
     motion_inverse: vec4<f32>,
     levels: vec4<f32>,
+    fill_reveal: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var moved: texture_2d<f32>;
@@ -40,6 +41,7 @@ struct PaperShade { tile: vec4<f32>, light: vec4<f32>, paper: vec4<f32>, state: 
 @group(0) @binding(18) var above_paths: texture_2d<f32>;
 @group(0) @binding(19) var moved_level: texture_2d<f32>;
 @group(0) @binding(20) var kept_level: texture_2d<f32>;
+@group(0) @binding(21) var fill_before: texture_2d<f32>;
 
 // The backing buffer follows the display's native orientation. All artwork,
 // cursor and UI geometry continues to use the host's logical viewport.
@@ -324,6 +326,9 @@ fn surround_color(surface: vec2<f32>, p: vec2<f32>) -> vec4<f32> {
 fn surface_color(vertex:Vertex,source:u32)->vec4<f32> {
     let footprint = camera.rotation.w;
     let surface = logical_surface(vertex.position.xy * footprint);
+    if camera.fill_reveal.w!=0. && distance(surface,camera.fill_reveal.xy)>=camera.fill_reveal.z {
+        return textureLoad(fill_before,clamp(vec2<i32>(vertex.position.xy*footprint),vec2<i32>(0),vec2<i32>(textureDimensions(fill_before))-vec2<i32>(1)),0);
+    }
     let p = vec2<f32>(dot(camera.inverse.xz, surface), dot(camera.inverse.yw, surface)) + camera.offset_document.xy;
     let extent = camera.offset_document.zw;
     let cropping = camera.crop_offset.w > .5;

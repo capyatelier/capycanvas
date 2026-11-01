@@ -260,6 +260,8 @@ struct Frame {
     scene: Arc<SceneSnapshot>,
     inspect_mask: Option<OccurrenceHandle>,
     transform_preview: Option<layer_render::TransformPreview>,
+    fill_preview: Option<layer_render::FillPreview>,
+    fill_reveal: Option<layer_render::FillReveal>,
     selection_overlays: Arc<layer_core::authored::SelectionOverlays>,
     dabs: Vec<Dab>,
     batches: Vec<DabBatch>,
@@ -368,6 +370,7 @@ enum Command {
 /// What the render thread reports after each frame for the session to read.
 #[derive(Default)]
 struct FrameReport {
+    fill_preview:std::sync::RwLock<Option<(u64,u64)>>,
     context: std::sync::RwLock<EvaluationContext>,
     final_context: Arc<std::sync::OnceLock<Result<EvaluationContext, String>>>,
     pending_work: AtomicBool,
@@ -438,6 +441,8 @@ pub struct RenderWorker {
     pub(crate) proof_owner: u64,
     hdr_view: Option<(Option<layer_core::color::hdr::SdrRendition>, bool)>,
     transform_preview: Option<layer_render::TransformPreview>,
+    fill_preview: Option<layer_render::FillPreview>,
+    fill_reveal: Option<layer_render::FillReveal>,
     moving_layer: Option<OccurrenceHandle>,
     moving_pixels: Option<(SourceTarget, layer_core::Selection)>,
     initialized: bool,
@@ -693,6 +698,8 @@ impl RenderWorker {
             proof_owner,
             hdr_view: None,
             transform_preview: None,
+            fill_preview: None,
+            fill_reveal: None,
             moving_layer: None,
             moving_pixels: None,
             initialized: false,
@@ -1016,6 +1023,9 @@ impl CanvasRenderer for RenderWorker {
         self.transform_preview = preview.cloned();
         Ok(())
     }
+    fn set_fill_preview(&mut self,preview:Option<layer_render::FillPreview>) {self.fill_preview=preview;}
+    fn fill_preview_ready(&self)->Option<(u64,u64)> {self.report.fill_preview.try_read().ok().and_then(|key|*key)}
+    fn set_fill_reveal(&mut self,reveal:Option<layer_render::FillReveal>) {self.fill_reveal=reveal;}
     fn prepare_moving_layer(&mut self, layer: Option<OccurrenceHandle>) {
         if self.moving_layer != layer && self.send(Command::MovingLayer(layer)).is_ok() {
             self.moving_layer = layer;
@@ -1324,6 +1334,8 @@ impl CanvasRenderer for RenderWorker {
             scene: Arc::new(packet.scene.snapshot()),
             inspect_mask: packet.inspect_mask,
             transform_preview: self.transform_preview.clone(),
+            fill_preview: self.fill_preview.clone(),
+            fill_reveal: self.fill_reveal,
             selection_overlays: self.selection_overlays.clone(),
             pending_rasters: packet.scene.targets().filter_map(|target| packet.scene.raster(target))
                 .filter(|r| packet.commit_rasters && r.try_data().is_none()).cloned().collect(),
@@ -2054,6 +2066,7 @@ impl Worker {
     /// idle canvas when it newly does. A retouching stroke that missed its
     /// source is kept for the session to replay.
     fn report_frame(&mut self, report: &FrameReport) {
+        if let Ok(mut key)=report.fill_preview.try_write(){*key=self.renderer.fill_preview_ready();}
         if let Ok(mut context) = report.context.try_write() { *context = self.renderer.evaluation_context(); }
         if let Some(stroke) = self.renderer.take_retouch_miss() {
             report.retouch_miss.store(stroke.0, Ordering::Release);
@@ -2233,6 +2246,8 @@ impl Worker {
             self.backdrop_submitted = true;
         } else {
             self.renderer.set_transform_preview(frame.transform_preview.as_ref()).map_err(error)?;
+            self.renderer.set_fill_preview(frame.fill_preview.clone());
+            self.renderer.set_fill_reveal(frame.fill_reveal);
             self.renderer.submit(frame.packet()).map_err(error)?;
             if self.renderer.has_pending_submission() { frame.pending_rasters.clear(); }
             #[cfg(test)]

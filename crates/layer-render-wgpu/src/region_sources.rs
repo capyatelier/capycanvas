@@ -825,7 +825,7 @@ mod tests {
         for pixel in capture.read_region([0,0,extent[0],extent[1]]).unwrap() {
             for channel in 0..4 { assert!((pixel[channel]-expected[channel]).abs()<0.0005, "{pixel:?}"); }
         }
-        let result = crate::test_support::receive_request(&mut r, RegionRequest { reference_count: None, paper: None,
+        let result = crate::test_support::receive_request(&mut r, RegionRequest { fill: None, reference_count: None, paper: None,
             enclosure: None, request_id:42,source:RegionSource::Scene {snapshot:normalized,scope},position:[63,63],tolerance:0.,
             contiguous:true,selection:None,refinement:Default::default(),limit:None,
         });

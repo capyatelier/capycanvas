@@ -69,6 +69,20 @@ Fill, Lasso fill, Enclose and Fill, Fill Selection and Gradient share Texture
 strength, from 0–200%, starting at 100%. They use the nearest Paper at or below
 the target when the fill starts; 0% or No paper gives a flat fill.
 
+Pen and mouse presses preview Fill as soon as its mask is ready. A short radial
+reveal follows the press; reduced motion skips it. Moving immediately fills
+every crossed region in one undo step. Holding still opens a panel slider for
+Close gaps on line-bounded regions, or Tolerance on colour-bounded regions.
+Close gaps swaps five exact masks from the press request: Off, 16, 32, 48 and
+64 px. Tolerance keeps the latest request while preserving the last preview.
+Release commits once and remembers the value; cancellation restores the option.
+Finger presses compute speculatively and commit only on lift within the native
+slop. A second contact cancels; touch-and-hold remains colour picking.
+
+Dashed seals remain visible after Fill. Pressing a seal within 6 logical pixels
+removes it and refills in the same undo step. Presses outside that radius fill
+normally, with their own undo step.
+
 ## Enclose and Fill
 
 The Fill group lists **Fill**, **Lasso fill** and **Enclose and Fill** as siblings
@@ -119,7 +133,7 @@ paths of Fill outside the paths, is captured 16 pages at a time into separate
 tiles that one dispatch classifies, and a single page of vector paths draws
 straight into its tile, so classification records about one pass per page
 (`filling_outside_paths_classifies_captured_pages_in_batches`). Component labeling ([`flood.rs`](../../crates/layer-render-wgpu/src/flood.rs))
-uses analysis windows of at most 2048 × 2048 pixels, including an 80 px halo.
+uses analysis windows of at most 2048 × 2048 pixels, including a 96 px halo.
 Labels and exterior flags join across window borders before coverage is packed.
 
 Reference classification, paper-grain healing, line bits, distances and bounded
@@ -134,6 +148,8 @@ that does not fit is refused before allocation (`CanvasRenderer::region_fits`).
 
 ## Verification
 
+- M5 gestures: shared `fill_` tests, GTK `native_enclose_fill_pointer_workflow`
+  and Web `--enclose-fill` cover press, both sliders, drag-through and undo.
 - Enclosure tests: shared `enclose_fill_checks` covers source defaults, geometry,
   selection clipping, cancellation and history. GPU `layer_tests::enclose_fill`
   compares complete masks with independent geometry oracles, including partial

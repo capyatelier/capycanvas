@@ -113,6 +113,8 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
         pointerIconAt(event.getX(pointerIndex), event.getY(pointerIndex))
     internal fun pointerIconAt(x: Float, y: Float): PointerIcon? {
         if (chromeHitTest(x, y)) return null
+        if (host.fillGesture()?.optBoolean("resize_cursor") == true)
+            return PointerIcon.getSystemIcon(context, PointerIcon.TYPE_HORIZONTAL_DOUBLE_ARROW)
         val cursor = host.snapshot?.optString("navigation_cursor")
         return PointerIcon.getSystemIcon(context, when(cursor) {
             "pan" -> PointerIcon.TYPE_GRAB
