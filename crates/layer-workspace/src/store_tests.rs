@@ -296,7 +296,6 @@ fn deep_database_paths_preserve_wal_and_original_export() {
         f.store.connection.pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0)).unwrap(),
         "wal"
     );
-    assert!(f.directory.join("workspaces.sqlite3-wal").is_file());
     let exports = f.directory.join("exports");
     std::fs::create_dir_all(&exports).unwrap();
     original_database_export(f, exports.join("original-backup.sqlite3"));
@@ -316,6 +315,7 @@ fn original_database_export(mut f: Fixture, destination: std::path::PathBuf) {
         .connection
         .pragma_update(None, "user_version", 99)
         .unwrap();
+    assert!(f.directory.join("workspaces.sqlite3-wal").is_file());
     let worker = StoreWorker::shared(&f.directory).unwrap();
     assert_eq!(
         wait(worker.request(StoreRequest::List)).unwrap_err().kind,
