@@ -44,6 +44,7 @@ namespace CapyOwnedSearchTest {
   public static bool SetForegroundWindow(IntPtr window){Foreground=window;Activations++;return true;}
   public static IntPtr GetForegroundWindow(){return Foreground;}
  }
+ public static class GeometryDriver{public static int GetDpiForWindow(IntPtr window){return 144;}}
  public class Node {
   public string AutomationId,Name;public object ControlType="control";public int ProcessId;bool offscreen;Rect bounds;public Node Parent;public Scroll Provider,TargetScroll;public int? ContentY;
   public bool HasKeyboardFocus;public IntPtr NativeWindowHandle=new IntPtr(1);
@@ -304,3 +305,35 @@ foreach($case in @(@{owned=$dirty;other='';expected=$true},@{owned='Untitled';ot
     if([bool](& $predicate) -ne $case.expected){throw 'HDR dirty-caption assertion read another process window instead of its registered drawing'}
 }
 Write-Output 'HDR dirty caption observes the owned drawing while preserving both dirty and clean title checks.'
+
+$toolbarAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-toolbar-components.ps1'),[ref]$tokens,[ref]$errors)
+if(@($errors).Count){throw ($errors|Out-String)}
+$capChecks=@($toolbarAst.FindAll({param($n)$n -is [Management.Automation.Language.ForEachStatementAst] -and $n.Variable.Extent.Text -eq '$text' -and $n.Extent.Text.Contains("throw 'Slider value/unit touches its cap edge'")},$true))
+if($capChecks.Count -ne 1){throw 'Missing actual slider cap geometry assertion'}
+$statements=@($capChecks[0].Parent.Statements);$last=[array]::IndexOf($statements,$capChecks[0])
+$start=@(for($i=0;$i -lt $last;$i++){if($statements[$i] -is [Management.Automation.Language.AssignmentStatementAst] -and $statements[$i].Left.Extent.Text -eq '$cap'){$i}})[-1]
+if($null -eq $start){throw 'Missing actual slider cap geometry measurements'}
+if($start -gt 0 -and $statements[$start-1] -is [Management.Automation.Language.AssignmentStatementAst] -and $statements[$start-1].Left.Extent.Text -eq '$scale'){$start--}
+$capGeometry=[scriptblock]::Create(($statements[$start..$last].Extent.Text -join "`n").Replace('[CapyRowPointer]','[CapyOwnedSearchTest.GeometryDriver]'))
+& {
+    function Rectangle([double]$X,[double]$Y,[double]$Width,[double]$Height){[pscustomobject]@{Left=$X;Top=$Y;Right=$X+$Width;Bottom=$Y+$Height}}
+    $tile=[pscustomobject]@{id=17};$drawingWindow=[IntPtr]1;$scale=1.5
+    $native=@{
+        'slider-cap-17'=(Rectangle 9 (197.3333282470703*1.5) 81 81)
+        'slider-value-17'=(Rectangle (17.1875*1.5) (202.88735961914062*1.5) (31.625*1.5) (19.5078125*1.5))
+        'slider-unit-17'=(Rectangle (25.32291603088379*1.5) (224.39517211914062*1.5) (15.354169845581055*1.5) (19.5078125*1.5))
+    }
+    $rounded=@{'slider-cap-17'=(Rectangle 9 296 81 81);'slider-value-17'=(Rectangle 26 304 48 30);'slider-unit-17'=(Rectangle 38 336 24 30)}
+    function Box([string]$Id){$rounded[$Id]}
+    function Native-Bounds([string]$Id,[double]$Scale){if($Scale -ne 1.5 -or !$native.ContainsKey($Id)){throw 'Unexpected slider native geometry request'};$native[$Id]}
+    . $capGeometry
+    $original=$native['slider-value-17'];$native['slider-value-17']=Rectangle $original.Left ($native['slider-cap-17'].Top+5*$scale) ($original.Right-$original.Left) ($original.Bottom-$original.Top)
+    $rejected=$false
+    try{. $capGeometry}catch{if($_.Exception.Message -ne 'Slider value/unit touches its cap edge'){throw};$rejected=$true}
+    if(!$rejected){throw 'Slider cap assertion accepted less than its original inset'}
+    $native['slider-value-17']=$original;$original=$native['slider-unit-17'];$native['slider-unit-17']=Rectangle $original.Left ($native['slider-value-17'].Bottom-1) ($original.Right-$original.Left) ($original.Bottom-$original.Top)
+    $rejected=$false
+    try{. $capGeometry}catch{if($_.Exception.Message -ne 'A long Medium vertical value did not stack its unit'){throw};$rejected=$true}
+    if(!$rejected){throw 'Slider cap assertion accepted an overlapping stacked unit'}
+}
+Write-Output 'Slider cap geometry uses native arranged bounds and retains its original inset and stacked-unit assertions.'

@@ -178,9 +178,9 @@ try {
         $expectedUnit=if($kind -eq 'brush_size_slider'){'px'}else{'%'}
         Wait-Until {(Control "slider-value-$($tile.id)").Current.Name -eq $expected} 'Slider value did not update'
         if((Control "slider-unit-$($tile.id)").Current.Name -ne $expectedUnit){throw 'Slider unit differs from the shared numeric unit'}
-        $cap=Box "slider-cap-$($tile.id)";$number=Box "slider-value-$($tile.id)";$unit=Box "slider-unit-$($tile.id)"
-        if($unit.Top -lt $number.Bottom){throw 'A long Medium vertical value did not stack its unit'}
         $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+        $cap=Native-Bounds "slider-cap-$($tile.id)" $scale;$number=Native-Bounds "slider-value-$($tile.id)" $scale;$unit=Native-Bounds "slider-unit-$($tile.id)" $scale
+        if($unit.Top -lt $number.Bottom){throw 'A long Medium vertical value did not stack its unit'}
         foreach($text in @($number,$unit)){
             if($text.Left -lt $cap.Left+5.5*$scale -or $text.Top -lt $cap.Top+5.5*$scale -or $text.Right -gt $cap.Right-5.5*$scale -or $text.Bottom -gt $cap.Bottom-5.5*$scale){throw 'Slider value/unit touches its cap edge'}
         }
