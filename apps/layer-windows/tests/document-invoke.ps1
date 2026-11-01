@@ -106,3 +106,47 @@ Write-Output 'Document invocation passed: ordinary acknowledgement, retired comm
  }
  'Document color previews: both native scroll positions checked, Before restored for sampling and missing raster/peer rejected; no UI/GPU.'
 }
+
+& {
+ $tokens=$null;$errors=$null
+ $headerAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-header.ps1'),[ref]$tokens,[ref]$errors)
+ if($errors.Count){throw($errors|Out-String)}
+ $function=$headerAst.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'New-HeaderDrawings'},$true)
+ if(!$function){throw 'Missing actual header drawing helper'}
+ . ([scriptblock]::Create($function.Extent.Text))
+ function Join-Path($Path,$ChildPath){if($ChildPath -cne 'open-application-menu.ps1'){throw 'Unexpected header script route'};'Open-HeaderFileMenu'}
+ function Open-HeaderFileMenu($Root,[string]$Name){if($Root -ne $script:headerRoot -or $Name -cne 'File'){throw 'Header menu left its drawing'}}
+ function Model{$script:headerModel}
+ function New-DrawingPixels([int]$Width,[int]$Height){if($Width -ne 64 -or $Height -ne 64){throw 'Header bypassed its shared pixel setup'};$script:headerSizes++}
+ function Invoke([string]$Id){
+  if($Id -ceq 'new_document'){
+   if($script:headerPending){throw 'New invoked before the previous drawing was adopted'}
+   $script:headerNew++;$script:headerModel.state.new_drawing=[pscustomobject]@{}
+  }elseif($Id -ceq 'new-drawing-create'){
+   $script:headerCreates++;$script:headerPending=$true
+   $script:headerModel.state.new_drawing=$null;$script:headerModel.windows_tabs.available=$false
+  }else{throw 'Unexpected header action'}
+ }
+ function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds){
+  if($Message -cne 'Header fixture drawing did not open' -or $Seconds -ne 60 -or !$script:headerPending){throw 'Unexpected header completion gate'}
+  if(& $Condition){throw 'Old brush readiness accepted an unadopted drawing'}
+  $tabs=$script:headerModel.windows_tabs;$id=$tabs.upcoming_id
+  $tabs.available=$true
+  if(& $Condition){throw 'Header accepted unchanged drawing identities'}
+  $tabs.tabs+=@([pscustomobject]@{id=$id})
+  if(& $Condition){throw 'Header accepted the old selected drawing'}
+  $tabs.selected=$id;$tabs.available=$false
+  if(& $Condition){throw 'Header accepted pending native activation'}
+  $tabs.available=$true
+  if(!(& $Condition)){throw 'Header rejected its newly adopted drawing'}
+  $tabs.upcoming_id++;$script:headerPending=$false;$script:headerWaits++
+ }
+ $root=[pscustomobject]@{name='owned-header-drawing'};$script:headerRoot=$root
+ foreach($count in @(2,3)){
+  $script:headerNew=0;$script:headerCreates=0;$script:headerSizes=0;$script:headerWaits=0;$script:headerPending=$false
+  $script:headerModel=[pscustomobject]@{brush_ready=$true;state=[pscustomobject]@{new_drawing=$null};windows_tabs=[pscustomobject]@{tabs=@([pscustomobject]@{id=1});selected=1;upcoming_id=2;available=$true}}
+  New-HeaderDrawings $count
+  if($script:headerNew -ne ($count - 1) -or $script:headerCreates -ne ($count - 1) -or $script:headerSizes -ne ($count - 1) -or $script:headerWaits -ne ($count - 1) -or $script:headerModel.windows_tabs.selected -ne $count){throw 'Header repeated an action or stopped before the requested drawing'}
+ }
+ 'Header drawings: old brush/unchanged tabs, old selection and pending activation rejected; exact new drawing admitted once through existing pixel setup.'
+}

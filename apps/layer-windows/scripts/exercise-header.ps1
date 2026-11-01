@@ -765,9 +765,15 @@ function Header-GlyphInk($Image,$Bounds){
 }
 function New-HeaderDrawings([int]$Count=2){
     while(@((Model).windows_tabs.tabs).Count -lt $Count){
+        $before=Model;$next=$before.windows_tabs.upcoming_id;$expectedCount=@($before.windows_tabs.tabs).Count+1
         & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File'
         Invoke 'new_document';New-DrawingPixels 64 64;Invoke 'new-drawing-create'
-        Wait-Until {!(Model).state.new_drawing -and (Model).brush_ready} 'Header fixture drawing did not open' 60
+        Wait-Until {
+            $created=Model
+            @($created.windows_tabs.tabs).Count -eq $expectedCount -and $next -in @($created.windows_tabs.tabs.id) -and
+                $created.windows_tabs.selected -eq $next -and $created.windows_tabs.available -and
+                !$created.state.new_drawing -and $created.brush_ready
+        } 'Header fixture drawing did not open' 60
     }
 }
 function Check-HeaderAtomic {
