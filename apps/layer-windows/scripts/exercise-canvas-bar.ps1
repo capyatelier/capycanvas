@@ -1,6 +1,7 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','invert-dark','invert-light','tail-dark','tail-light','parity','parity-light')][string]$Theme='dark')
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','invert-dark','invert-light','tail-dark','tail-light','parity','parity-light','resize-dark','resize-light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
 $parityCapture=$Theme -in @('parity','parity-light');if($parityCapture){$Theme=if($Theme -eq 'parity-light'){'light'}else{'dark'}}
+$resizeOnly=$Theme.StartsWith('resize-');if($resizeOnly){$Theme=$Theme.Substring(7)}
 $Theme=$Theme.ToLowerInvariant();$invertOnly=$Theme.StartsWith('invert-');if($invertOnly){$Theme=$Theme.Substring(7)}
 $tailOnly=$Theme.StartsWith('tail-');if($tailOnly){$Theme=$Theme.Substring(5)}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
@@ -56,7 +57,7 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $run=Join-Path $repo ('artifacts/windows/canvas-bar/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
 $CapyTraceDirectory=$run
-$checks=[ordered]@{scope=$(if($tailOnly){'remaining canvas bar controls'}elseif($invertOnly){'Invert input diagnostic'}else{'all canvas bar journeys'})}
+$checks=[ordered]@{scope=$(if($resizeOnly){'canvas bar resize placement'}elseif($tailOnly){'remaining canvas bar controls'}elseif($invertOnly){'Invert input diagnostic'}else{'all canvas bar journeys'})}
 $barTaps=[Collections.Generic.List[object]]::new()
 $toolChoices=[Collections.Generic.List[object]]::new()
 $invokeTrace=[CapyBarInvokeTrace]::new()
@@ -259,6 +260,41 @@ function Drag([string]$Device,[int[]]$From,[int[]]$To){
  for($step=1;$step -le 12;$step++){[CapyRowPointer]::Move([int]($From[0]+($To[0]-$From[0])*$step/12),[int]($From[1]+($To[1]-$From[1])*$step/12));Start-Sleep -Milliseconds 12}
  [CapyRowPointer]::Up();Start-Sleep -Milliseconds 150
 }
+function Check-Resize{
+ $records=[Collections.Generic.List[object]]::new();$scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+ try{
+  foreach($placement in 'near_object','bottom_edge'){
+   if($placement -eq 'bottom_edge'){
+    $quickMask=@((Model).state.commands|Where-Object id -eq 'quick_mask')[0].label
+    Tap 'canvas-bar-menu-mask' 'mouse'
+    Wait-Until {$null -ne (Owned $quickMask -Name)} 'The Mask menu has no Quick Mask'
+    (Owned $quickMask -Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Wait-Until {(Kind) -eq 'quick_mask' -and (Bar) -and !(MenuOpen)} 'Quick Mask did not show its bar'
+   }
+   $identity=(Bar).GetRuntimeId() -join ':';$context=(Model).state.canvas_bar.context;$wide=$null;$wideCanvas=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle;$wideViewport=(Model).layout.viewport -join ','
+   foreach($stage in 'wide','narrow','restored'){
+    if($stage -eq 'narrow'){
+     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Normal)
+     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -StateDirectory $run -Action Resize -Width ([int](700*$scale)) -Height ([int](800*$scale))
+    }else{$root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)}
+    if($stage -eq 'restored'){Wait-Until {(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle -eq $wideCanvas -and ((Model).layout.viewport -join ',') -ceq $wideViewport} 'The restored native canvas and published viewport did not acknowledge their wide extent'}
+    Wait-Until {$null -ne (Bar)} 'The resized canvas bar did not reappear'
+    $model=Model;$owner=Control 'canvas-action-bar' -Arranged;$native=$owner.Current.BoundingRectangle;$window=$root.Current.BoundingRectangle
+    $presentation=(Workspace-Root).Current.ItemStatus|ConvertFrom-Json;$published=$presentation.workspace_update.canvas_bar;$record=[ordered]@{placement=$placement;stage=$stage;native_revision=$presentation.revision;native_model_revision=$presentation.model_revision;model_publication=$model.workspace_update;native=@($native.X,$native.Y,$native.Width,$native.Height);window=@($window.X,$window.Y,$window.Width,$window.Height);context=$model.state.canvas_bar.context;viewport=$model.state.camera.viewport;published=$published;runtime=($owner.GetRuntimeId() -join ':')};$records.Add($record)
+    Capture ("resize-$placement-$stage-$Theme") -WithModel -Composed
+    if($record.runtime -ne $identity -or ($model.state.canvas_bar.context.generation -ne $context.generation -or $model.state.canvas_bar.context.kind -cne $context.kind)){throw 'Resizing rebuilt the bar or changed its editing context'}
+    if($model.state.canvas_bar.placement -ne $placement -or !$window.Contains($native)){throw 'The resized canvas bar left its placement or owned window'}
+    if($stage -eq 'wide'){$wide=$native}
+    if($placement -eq 'bottom_edge' -and $stage -eq 'narrow' -and $native.Bottom -eq $wide.Bottom){throw 'The bottom-edge bar kept its old window position'}
+    if(!$published.layout -or ($published.context.generation -ne $context.generation -or $published.context.kind -cne $context.kind)){throw 'The current canvas bar placement was not published'}
+    $origin=[CapyRowPointer+Point]::new();if(![CapyRowPointer]::ClientToScreen($drawingWindow,[ref]$origin)){throw 'The current client origin is unavailable'}
+    $expected=$published.layout.bounds
+    foreach($pair in @(@($native.X,($origin.x+$expected.x*$scale)),@($native.Y,($origin.y+$expected.y*$scale)),@($native.Width,($expected.width*$scale)),@($native.Height,($expected.height*$scale)))){if([Math]::Abs($pair[0]-$pair[1]) -gt 1){throw 'Native canvas bar bounds differ from the published placement'}}
+   }
+  }
+ }finally{[IO.File]::WriteAllText((Join-Path $run 'resize-placement.json'),($records|ConvertTo-Json -Depth 20))}
+ $checks.resize_placement='passed'
+}
 try {
  Enter-CapyEnvironment
  $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1'
@@ -297,6 +333,7 @@ try {
  if($bar.Top -lt $selection[1][1]){throw "The selection bar is not below the selection: $($bar.Top) < $($selection[1][1])"}
  if([Math]::Abs(($bar.X+$bar.Width/2)-$cx) -gt 40){throw 'The selection bar is not centred under the selection'}
  $paint=Paint
+ if($resizeOnly){Check-Resize;Close-CanvasReview;return}
  if($parityCapture){
   Capture-CanvasParity 'selection'
   Tap 'canvas-bar-scale_rotate' 'mouse'

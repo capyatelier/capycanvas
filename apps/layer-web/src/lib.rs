@@ -198,11 +198,8 @@ impl WebApp {
     pub fn layer_drop_preview(&self, id: u64, target: u64, fraction: f32, surface: JsValue) -> Result<JsValue, JsValue> {
         serialize(&self.session.layer_drop_preview(id, target, fraction, serde_wasm_bindgen::from_value(surface).map_err(js)?))
     }
-    /// Places the canvas action bar from DOM control sizes; null for a stale context.
-    pub fn canvas_bar_layout(&self, measure: JsValue) -> Result<JsValue, JsValue> {
-        let measure: layer_ui::CanvasBarMeasure =
-            serde_wasm_bindgen::from_value(measure).map_err(js)?;
-        serialize(&self.session.canvas_bar_layout(&measure))
+    pub fn canvas_bar_presentation(&self) -> Result<JsValue, JsValue> {
+        serialize(&self.session.canvas_bar_presentation())
     }
     pub fn canvas_bar_menu(&self, context: JsValue, shown: usize) -> Result<JsValue, JsValue> {
         let context = serde_wasm_bindgen::from_value(context).map_err(js)?;
@@ -213,9 +210,7 @@ impl WebApp {
         let context = serde_wasm_bindgen::from_value(context).map_err(js)?;
         serialize(&self.session.canvas_bar_choice_menu(context, id))
     }
-    pub fn canvas_bar_hold(&self) -> u32 {
-        self.session.canvas_bar_hold()
-    }
+
     pub fn zoom_menu(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.zoom_menu())
     }

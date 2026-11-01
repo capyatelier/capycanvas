@@ -134,6 +134,8 @@ The other `*.test.mjs` files are Chrome journeys that
 node apps/layer-web/test.mjs --headless --editor
 ```
 
+`--canvas-bar-resize` checks published bar placement after window resizing in both themes.
+
 `test.mjs` launches Chrome with a temporary profile over
 `--remote-debugging-pipe`, with no TCP debugging port or Playwright. Without
 `--headless` Chrome opens on the current Wayland display. Journeys require a

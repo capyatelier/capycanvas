@@ -157,6 +157,9 @@ import Darwin
                 workspaces = WorkspaceController(store: self, directory: locations.workspaces, scene: scene)
             }
             notice.answer = { [weak self] id, accept, action in self?.dispatch(["type": "notice", "id": id, "accept": accept, "action": action ?? NSNull()]) }
+            canvasBar.reveal = { [weak self] context, hold in
+                self?.dispatch(["type": "reveal_canvas_bar", "context": context.raw, "hold": hold])
+            }
             native?.setCanvasBarHoldChanged { [weak self] hold in
                 DispatchQueue.main.async { self?.canvasBar.hold(hold) }
             }
@@ -198,7 +201,8 @@ import Darwin
             let hadRenderer = snapshot["gpu_ready"].bool
             let hadCanvas = snapshot["canvas_ready"].bool
             let documentEpoch = state["document_file"]["epoch"].uint, cursor = navigationCursor
-            switch ui.receive(next) {
+            let update = ui.receive(next)
+            switch update {
             case .full:
                 if cursor != navigationCursor { cursorChanged?() }
                 // Replacing a document retires its GPU readbacks even when
@@ -238,6 +242,9 @@ import Darwin
                     camera.value = next["camera"]
                 }
             case .ignored: break
+            }
+            if update != .ignored, (next["workspace_update"].raw as? NSDictionary)?["canvas_bar"] != nil {
+                canvasBar.receive(next["workspace_update"]["canvas_bar"])
             }
             cameraRevision = state["camera"]["revision"].uint
             notice.publish(state["notice"])

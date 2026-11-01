@@ -281,6 +281,7 @@ try {
     [process.argv.includes("--image-object-fixture"), () => checkImageObjectFixture({call,evaluate,settle,canvasPixels}), checkRasterErrors],
     [process.argv.includes("--image-layers"), () => checkImageLayers({call,evaluate,settle}), checkRasterErrors],
     [process.argv.includes("--image-rows"), () => checkImageRows({call,evaluate,settle,canvasPixels}), checkErrors],
+    [process.argv.includes("--canvas-bar-resize"), () => checkCanvasBar({call,evaluate,settle,resizeOnly:true}), checkErrors],
     [process.argv.includes("--canvas-bar"), () => checkCanvasBar({call,evaluate,settle}), checkErrors],
     [process.argv.includes('--transform-footprint'), () => checkTransformFootprint({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--notices"), () => checkNotices({call,evaluate,settle}), checkErrors],

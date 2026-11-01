@@ -1,5 +1,6 @@
 #pragma once
 #include "UiControls.h"
+#include "NativeJson.h"
 #include "NativeMenus.h"
 #include "WorkspaceGeometry.h"
 #include "WorkspaceQuery.h"
@@ -25,24 +26,21 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
     std::vector<Field> fields;
     std::shared_ptr<Prepared> pending;
     Microsoft::UI::Dispatching::DispatcherQueueTimer reappear{nullptr};
-    J view,bounds,sizes;
-    hstring schema,theme,placement;
-    uint64_t request=0;
+    J view,bounds,sizes,revealContext;
+    hstring schema,theme,measurement;
+    uint32_t revealHold=0;
     size_t shown=0;
     double tile=36,gap=2,glyph=16;
-    bool contact=false,dragging=false,suppressed=false;
+    bool suppressed=false;
 
     void init(Canvas const& root){
-        host=root;auto weak=weak_from_this();
+        host=root;
         auto style=toolbarUi(data->localization.get(),O({{L"type",S(L"style")},{L"style",S(L"small")}})).GetObject();
         tile=array(style,L"size").GetNumberAt(1);gap=num(style,L"gap",gap);glyph=num(style,L"icon",glyph);
         surface.IsHitTestVisible(false);content.Children().Append(surface);content.Children().Append(row);
         frame.Child(content);frame.Background(clear());
         AutomationProperties::SetAutomationId(frame,L"canvas-action-bar");copyName(data,frame,data->copyCaption(L"color",L"canvas_actions"));
         Canvas::SetZIndex(frame,180);
-        reappear=host.DispatcherQueue().CreateTimer();reappear.IsRepeating(false);
-        reappear.Interval(std::chrono::milliseconds(uint32_t(num(data->catalog,L"canvas_bar_reappear_ms",180))));
-        reappear.Tick([weak](auto&&,auto&&){if(auto self=weak.lock()){self->suppressed=false;self->place();}});
         attach();present(false);
     }
     void attach(){
@@ -223,7 +221,8 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
     void Apply(J const& state){
         auto value=state.GetNamedValue(L"canvas_bar",JsonValue::CreateNullValue());
         if(value.ValueType()!=JsonValueType::Object){
-            if(view.Size()||pending){view=J{};pending.reset();schema=L"";placement=L"";++request;bounds=J{};menuOwner.Cancel();present(false);}
+            if(reappear)reappear.Stop();
+            if(view.Size()||pending){view=J{};pending.reset();schema=L"";measurement=L"";revealContext=J{};bounds=J{};menuOwner.Cancel();present(false);}
             return;
         }
         auto next=value.GetObject();auto key=signature(next);
@@ -232,8 +231,8 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
             if(!pending||pending->schema!=key||pending->theme!=data->theme())pending=prepare(next,key);
             pending->view=next;restore(pending->fields,next,pending->caption);
         }
-        auto located=next.Stringify()+L"|"+object(data->model,L"layout").Stringify()+L"|"+data->theme();
-        if(located!=placement){placement=located;place();}
+        auto measured=next.Stringify()+L"|"+data->theme();
+        if(measured!=measurement){measurement=measured;admit();}
     }
     J measure(std::shared_ptr<Prepared> const& prepared={}){
         auto const& measuredFields=prepared?prepared->fields:fields;auto measuredView=prepared?prepared->view:view;
@@ -259,17 +258,35 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
         for(size_t i=0;i<fields.size()&&i<array(view,L"items").Size();++i)fields[i].slot.Visibility(i<shown?Visibility::Visible:Visibility::Collapsed);
         present(bounds.Size()!=0);
     }
-    void place(){
+    void admit(){
         auto prepared=pending;auto model=prepared?prepared->view:view;
         if(!model.Size()){present(false);return;}
-        auto& dimensions=prepared?prepared->sizes:sizes;if(!dimensions.Size())dimensions=measure(prepared);
+        auto& dimensions=prepared?prepared->sizes:sizes;dimensions=measure(prepared);
         auto measured=J::Parse(dimensions.Stringify());measured.Insert(L"context",object(model,L"context"));
-        auto query=O({{L"type",S(L"canvas_bar_layout")},{L"measure",measured}});
-        auto serial=++request;auto weak=weak_from_this();
-        QueryWorkspace(data->query,query,[weak,serial,prepared](J reply){
-            auto self=weak.lock();if(!self||serial!=self->request)return;
-            self->install(prepared,object(reply,L"result"));
-        });
+        if(!prepared)for(size_t i=0;i<fields.size()&&i<array(view,L"items").Size();++i)fields[i].slot.Visibility(i<shown?Visibility::Visible:Visibility::Collapsed);
+        data->dispatch(O({{L"type",S(L"measure_canvas_bar")},{L"measure",measured}}));
+    }
+    void Published(J const& published){
+        auto model=pending?pending->view:view;auto context=object(published,L"context");
+        if(!model.Size()||!JsonEqual(context,object(model,L"context")))return;
+        auto result=object(published,L"layout");auto hold=uint32_t(num(published,L"hold"));
+        bool hidden=result.Size()==0;
+        if(hold!=revealHold||!JsonEqual(context,revealContext)){
+            revealContext=context;revealHold=hold;if(reappear)reappear.Stop();
+            if(hidden&&hold%2==0){
+                reappear=host.DispatcherQueue().CreateTimer();reappear.IsRepeating(false);
+                reappear.Interval(std::chrono::milliseconds(uint32_t(num(data->catalog,L"canvas_bar_reappear_ms",180))));
+                reappear.Tick([weak=weak_from_this(),context,hold](auto&&,auto&&){if(auto self=weak.lock())
+                    self->data->dispatch(O({{L"type",S(L"reveal_canvas_bar")},{L"context",context},{L"hold",N(hold)}}));});
+                reappear.Start();
+            }
+        }
+        if(!pending&&suppressed==hidden&&(hidden||(frame.Opacity()==1&&
+            bounds.Stringify()==object(result,L"bounds").Stringify()&&shown==size_t(num(result,L"items")))))return;
+        suppressed=hidden;
+        if(suppressed){menuOwner.Cancel();present(false);return;}
+        if(reappear)reappear.Stop();
+        install(pending,result);
     }
     void present(bool placed){
         bool visible=placed&&view.Size()&&!suppressed;
@@ -290,20 +307,9 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
             data->chrome.Insert(L"canvas_bar",facts);if(changed)changed();
         }
     }
-    void suppress(bool hidden){
-        reappear.Stop();
-        if(hidden){suppressed=true;menuOwner.Cancel();present(false);return;}
-        if(suppressed&&!contact&&!dragging)reappear.Start();
-    }
     void Contact(bool active){
-        contact=active;
-        if(!active||nearObject())suppress(active);
+        if(active&&nearObject()){menuOwner.Cancel();present(false);}
     }
-    void Dragging(bool active){
-        if(dragging==active)return;
-        dragging=active;suppress(active);
-    }
-    void Defer(){if(view.Size()&&nearObject()&&!contact&&!dragging){suppress(true);suppress(false);}}
     void AppendGlass(A& regions,UIElement const& reference)const{
         appendGlass(regions,frame,reference,{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius},true);
     }

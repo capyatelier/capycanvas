@@ -260,9 +260,10 @@ class AndroidCanvasBarBenchmarkTest {
             fun hideAndShow(milliseconds: Int) {
                 val began = SystemClock.uptimeMillis()
                 while (SystemClock.uptimeMillis() - began < milliseconds) {
-                    instrumentation.runOnMainSync { host.holdCanvasBar(1) }
-                    SystemClock.sleep(250)
-                    instrumentation.runOnMainSync { host.holdCanvasBar(0) }
+                    val down = SystemClock.uptimeMillis()
+                    val at = corner().let { it.first - 200 to it.second - 200 }
+                    inject(MotionEvent.ACTION_DOWN, down, at.first, at.second, .7f)
+                    try { SystemClock.sleep(250) } finally { inject(MotionEvent.ACTION_CANCEL, down, at.first, at.second, 0f) }
                     SystemClock.sleep(450)
                 }
             }

@@ -252,14 +252,44 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
     internal var cameraLocks by mutableStateOf(false to false)
         private set
     internal val canvasBar: JSONObject? get() = snapshot?.objectOrNull("state")?.objectOrNull("canvas_bar")
-    internal var canvasBarVisible by mutableStateOf(true)
+    internal var canvasBarGeometry by mutableStateOf<CanvasBarGeometry?>(null)
+        private set
+    private var canvasBarPresentation: CanvasBarPresentation? = null
+    internal var canvasBarVisible by mutableStateOf(false)
         private set
     private var canvasBarHold = 0 // Native owner only.
-    private val canvasBarReturn = Runnable { canvasBarVisible = true }
+    private inner class CanvasBarReturn(val context: String, val hold: Int) : Runnable {
+        override fun run() {
+            if (canvasBarReturn !== this) return
+            canvasBarReturn = null
+            dispatch(obj("type" to "reveal_canvas_bar", "context" to JSONObject(context), "hold" to hold))
+        }
+    }
+    private var canvasBarReturn: CanvasBarReturn? = null
     internal fun holdCanvasBar(hold: Int) {
-        main.removeCallbacks(canvasBarReturn)
         canvasBarVisible = false
-        if (hold % 2 == 0) main.postDelayed(canvasBarReturn, catalog.optLong("canvas_bar_reappear_ms"))
+        val context = canvasBarGeometry?.context
+        if (canvasBarReturn?.let { it.context == context && it.hold == hold } == true) return
+        canvasBarReturn?.let(main::removeCallbacks)
+        canvasBarReturn = null
+        if (context != null && hold % 2 == 0) {
+            val reveal = CanvasBarReturn(context, hold)
+            canvasBarReturn = reveal
+            main.postDelayed(reveal, catalog.optLong("canvas_bar_reappear_ms"))
+        }
+    }
+    private fun applyCanvasBar(next: CanvasBarPresentation?) {
+        val previous = canvasBarPresentation
+        canvasBarPresentation = next
+        canvasBarGeometry = next?.geometry
+        if (next == null || next.geometry.bounds != null) {
+            canvasBarReturn?.let(main::removeCallbacks)
+            canvasBarReturn = null
+            canvasBarVisible = next?.geometry?.bounds != null
+        } else {
+            canvasBarVisible = false
+            if (previous?.geometry?.context != next.geometry.context || previous?.hold != next.hold) holdCanvasBar(next.hold)
+        }
     }
     internal suspend fun glassPresented() = kotlinx.coroutines.suspendCancellableCoroutine<Unit> { continuation ->
         main.post { worker.post { worker.post { main.post { if (continuation.isActive) continuation.resumeWith(Result.success(Unit)) } } } }
@@ -534,7 +564,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
         val focus = if (action.optString("type") == "invoke" && action.optString("command") == "search_commands") commandFocus() else null
         post {
             val type=action.optString("type")
-            if(documentInputBlocked && !type.startsWith("measure_") && type !in listOf("complete_request", "system_theme_changed", "window_fullscreen", "pen_input")) return@post
+            if(documentInputBlocked && !type.startsWith("measure_") && type !in listOf("reveal_canvas_bar", "complete_request", "system_theme_changed", "window_fullscreen", "pen_input")) return@post
             val tracing = android.os.Trace.isEnabled()
             if (tracing) android.os.Trace.beginSection("capy.action." + type + "." + action.optString("command"))
             try {
@@ -1092,6 +1122,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
     private fun applyWorkspaceGeometry(next: WorkspaceGeometry) {
         if (next.modelRevision != workspaceModelRevision || next.revision < (workspaceGeometry?.revision ?: -1L)) return
         workspaceGeometry = next
+        applyCanvasBar(next.canvasBar)
         if (next.group != null && next.bounds != null) lastWorkspaceGroup = next.group to next.bounds
     }
     private fun contentChanged(previous: JSONObject?, next: JSONObject): Boolean {
@@ -1139,6 +1170,8 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
             (camera.number("rotation") * 180 / Math.PI).roundToInt())
     }
     override fun onCleared() {
+        canvasBarReturn?.let(main::removeCallbacks)
+        canvasBarReturn = null
         layerThumbnails.close()
         proof.pause()
         hdr.pause()

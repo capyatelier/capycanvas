@@ -226,6 +226,12 @@ extension XCTestCase {
         func onBar() -> Int { selectionActions.filter { action($0).exists }.count }
         let windowed = onBar()
         fullscreen(true)
+        expectation(for: NSPredicate { _, _ in bar.exists && window.frame.contains(bar.frame) }, evaluatedWith: bar)
+        waitForExpectations(timeout: 10)
+        fullscreen(false)
+        expectation(for: NSPredicate { _, _ in bar.exists && window.frame.contains(bar.frame) }, evaluatedWith: bar)
+        waitForExpectations(timeout: 10)
+        fullscreen(true)
         expectation(for: NSPredicate { _, _ in windowed < selectionActions.count ? onBar() > windowed : onBar() == windowed },
             evaluatedWith: bar)
         waitForExpectations(timeout: 10)
@@ -245,6 +251,9 @@ extension XCTestCase {
             canvas.pinch(withScale: 3, velocity: 10)
         }
         expect(camera, "label != '\(beforePinch)'", "The native pinch changes the camera")
+        expect(bar, "exists == YES", "Shared placement returns after the camera hold")
+        expectation(for: NSPredicate { _, _ in window.frame.contains(bar.frame) }, evaluatedWith: bar)
+        waitForExpectations(timeout: 10)
         editorTool("Operation", in: app); editorChoice("Operation", group: true, in: app)
         expect(action("deselect"), "exists == YES AND enabled == YES")
         editorMenu(in: app, menu: "View", id: "reset_rotation", label: "Reset rotation")

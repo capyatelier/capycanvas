@@ -44,6 +44,7 @@ pub struct WorkspaceUpdate {
     pub content_revision: u64,
     /// None ends the presentation, including cancellation and undo/redo.
     pub drag: Option<WorkspaceDragPresentation>,
+    pub canvas_bar: Option<crate::CanvasBarPresentation>,
 }
 
 /// Absolute reflow publication shared by native transports and Wasm. Apply only

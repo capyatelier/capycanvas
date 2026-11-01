@@ -122,6 +122,19 @@ fn native_canvas_bar_input() {
         "the selection bar appears beside the new selection",
     );
     let mut native = remote_input();
+    let held_bounds = w.canvas_bar.bounds();
+    let zoom = state(&w).camera.zoom;
+    w.dispatch(UiAction::SetZoom { zoom: zoom * 1.01 });
+    assert!(ui_session(&w).canvas_bar_presentation().unwrap().layout.is_none());
+    assert!(w.canvas_bar.visible_bounds().is_none());
+    assert_eq!(w.canvas_bar.bounds(), held_bounds, "a hidden bar retains its native allocation");
+    assert!(w.canvas_bar.root.is_visible());
+    assert_eq!(w.canvas_bar.root.opacity(), 0.);
+    assert!(!w.canvas_bar.root.can_target());
+    until(|| shown(&w), "shared placement is revealed after camera motion");
+    assert!(ui_session(&w).canvas_bar_presentation().unwrap().layout.is_some());
+    w.dispatch(UiAction::SetZoom { zoom });
+    until(|| shown(&w), "selection bar returns at the original zoom");
     press_bar_command(&w, &mut native, "canvas-bar-ScaleRotate", &CommandId::ScaleRotate.label());
     until(
         || kind(&w) == Some(layer_ui::CanvasBarKind::Transform) && shown(&w),
@@ -1239,4 +1252,50 @@ fn native_distort_near_collinear_corner_recovery() {
         restored.window.close();pump(100);w.window.present();super::new_photo::ready(&w);
     }
     w.window.close();pump(200);
+}
+
+#[test]
+#[ignore = "private display: workspace-motion.sh gtk --native-test=native_canvas_bar_follows_resized_viewport"]
+fn native_canvas_bar_follows_resized_viewport() {
+    let app = native_test_app("art.capycanvas.CanvasBarResize");
+    let w = fixture_workspace(&app);
+    w.window.present();
+    pump(900);
+    let input = remote_input();
+    w.dispatch(UiAction::Invoke { command: CommandId::SelectAll });
+    w.dispatch(UiAction::Invoke { command: CommandId::QuickMask });
+    for (theme, name) in [(Theme::Light, "light"), (Theme::Dark, "dark")] {
+        if std::env::var("CAPY_NATIVE_TEST_THEME").is_ok_and(|choice| choice != name) { continue; }
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        w.window.unmaximize();
+        until(|| shown(&w), "mode bar is shown");
+        let retained = bar_widget(&w, "canvas-bar-InvertSelection");
+        for [width, height] in [[1100, 700], [740, 500], [1000, 650]] {
+            let previous = w.surface.width();
+            w.window.set_default_size(width, height);
+            until(|| w.surface.width() != previous
+                && state(&w).camera.viewport == [w.area.width().max(1) as u32 * w.area.scale_factor() as u32, w.area.height().max(1) as u32 * w.area.scale_factor() as u32]
+                && w.canvas_bar.visible_bounds().is_some(), "resized canvas bar reappears");
+            let fits = || w.canvas_bar.visible_bounds().is_some_and(|bounds| bounds.x >= 0. && bounds.y >= 0.
+                && bounds.x + bounds.width <= w.surface.width() as f32 + 1.
+                && bounds.y + bounds.height <= w.surface.height() as f32 + 1.);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            until(|| fits() || Instant::now() >= deadline, "resized bar placement settles");
+            if let Some(output) = std::env::var_os("LAYER_TEST_ARTIFACTS") {
+                let path = std::path::PathBuf::from(output).join(format!("bar-resize-{name}-{width}.png"));
+                capture_reference(&w, path.to_str().unwrap(), 1.);
+            }
+            let bounds = w.canvas_bar.visible_bounds().unwrap();
+            assert_eq!(bar_widget(&w, "canvas-bar-InvertSelection"), retained, "resize retains native controls");
+            let published = ui_session(&w).canvas_bar_presentation().copied().unwrap();
+            assert_eq!(published.layout.unwrap().bounds, bounds, "native bounds are the current shared publication");
+            assert!(bounds.x >= 0. && bounds.y >= 0.
+                && bounds.x + bounds.width <= w.surface.width() as f32 + 1.
+                && bounds.y + bounds.height <= w.surface.height() as f32 + 1.,
+                "{name}: bar {bounds:?} fits {}x{}", w.surface.width(), w.surface.height());
+        }
+    }
+    input.finish();
+    w.window.close();
+    pump(50);
 }

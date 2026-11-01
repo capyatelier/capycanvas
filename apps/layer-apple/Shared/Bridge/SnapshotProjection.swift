@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 import Observation
 
 /// A stable observation identity, separate from the immutable snapshot value.
@@ -70,10 +71,10 @@ import Observation
         Unmanaged<AnyObject>.fromOpaque(pointer).takeUnretainedValue()
     }
     private static func compare(_ left: AnyObject, _ right: AnyObject) -> Bool {
+        if left is NSNull || right is NSNull { return left is NSNull && right is NSNull }
         let type = CFGetTypeID(left)
         guard type == CFGetTypeID(right) else { return false }
         switch type {
-        case CFNullGetTypeID(): return true
         case CFBooleanGetTypeID(), CFStringGetTypeID(): return CFEqual(left, right)
         case CFNumberGetTypeID():
             let a = unsafeDowncast(left, to: NSNumber.self), b = unsafeDowncast(right, to: NSNumber.self)

@@ -124,7 +124,6 @@ fn request(json: &str) -> Result<Value, String> {
             | "palette_panel"
             | "swatch_sheet"
             | "reveal_panel"
-            | "canvas_bar_layout"
             | "canvas_bar_menu"
             | "canvas_bar_choice_menu"
             | "zoom_menu"
@@ -353,6 +352,7 @@ mod tests {
         let invalid=CString::new("{}").unwrap();
         assert_eq!(unsafe {capy_layout_input_prepare(invalid.as_ptr())},0);
         assert!(request(&json!({"type":"panel_bridges"}).to_string()).is_err());
+        assert!(request(&json!({"type":"canvas_bar_layout"}).to_string()).is_err());
         assert_eq!(revision,host.session.engine().document().revision);
         assert!(host.error.is_none());
     }

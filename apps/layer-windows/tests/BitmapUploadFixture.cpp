@@ -446,42 +446,49 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         require(pendingHidden,L"Pickup exposed an empty face while capture was pending");++checks;
     }
     winrt::Windows::Foundation::IAsyncAction actionBarPending(){
-        auto data=workspace();std::vector<PreviewReply> replies;
-        data->query=[&](CanvasQueryKind kind,std::string json,PreviewReply reply){
-            require(kind==CanvasQueryKind::Workspace&&str(J::Parse(to_hstring(json)),L"type")==L"canvas_bar_layout",L"Unexpected canvas-bar query");
-            replies.push_back(std::move(reply));return true;
-        };
+        auto data=workspace();std::vector<J> measurements;
+        data->send=[&](std::string json){auto action=J::Parse(to_hstring(json));require(str(action,L"type")==L"measure_canvas_bar",L"Unexpected canvas-bar action");measurements.push_back(object(action,L"measure"));};
+        data->query=[](CanvasQueryKind,std::string,PreviewReply){throw hresult_error(E_FAIL,L"Canvas-bar measurement queried a renderer worker");return false;};
         auto bar=std::make_shared<CanvasActionBar>();bar->data=data;bar->init(surface);
         auto state=[](int target,hstring const& label){
             A items;items.Append(O({{L"label",S(label)},{L"option",O({{L"Action",O({{L"state",O({{L"id",S(L"apply")},{L"label",S(label)},{L"enabled",B(true)}})}})}})}}));
-            return O({{L"canvas_bar",O({{L"context",O({{L"target",N(target)}})},{L"label",S(label)},{L"items",items}})}});
+            return O({{L"canvas_bar",O({{L"context",O({{L"generation",N(target)},{L"kind",S(L"quick_mask")}})},{L"label",S(label)},{L"items",items}})}});
         };
-        bar->Apply(state(1,L"First"));require(replies.size()==1,L"Initial canvas-bar layout was not requested");
+        bar->Apply(state(1,L"First"));require(measurements.size()==1,L"Initial canvas-bar measurement was not admitted");
         auto measurementRoot=bar->pending->row.XamlRoot();
         require(measurementRoot&&measurementRoot.RasterizationScale()==surface.XamlRoot().RasterizationScale(),
             L"Off-tree canvas-bar measurement lost the host rasterization scale");
         auto firstLayout=O({{L"bounds",O({{L"x",N(3)},{L"y",N(4)},{L"width",N(120)},{L"height",N(36)}})},{L"items",N(1)}});
-        bar->install(bar->pending,firstLayout);
+        auto publish=[&](J const& layout){auto view=bar->pending?bar->pending->view:bar->view;bar->Published(O({{L"context",object(view,L"context")},{L"hold",N(0)},{L"layout",layout}}));};
+        auto reversed=J::Parse(L"{\"kind\":\"quick_mask\",\"generation\":1}");
+        require(reversed.Stringify()!=object(bar->pending->view,L"context").Stringify(),L"Canvas-bar context fixture did not reverse JSON property order");
+        bar->Published(O({{L"context",reversed},{L"hold",N(0)},{L"layout",firstLayout}}));
+        require(!bar->pending&&bar->frame.Opacity()==1,L"Equal canvas-bar contexts with reversed JSON order rejected a placement");
+        bar->Published(O({{L"context",reversed},{L"hold",N(2)}}));auto timer=bar->reappear;
+        bar->Published(O({{L"context",object(bar->view,L"context")},{L"hold",N(2)}}));
+        require(bar->reappear==timer&&timer.IsRunning(),L"JSON context order restarted the canvas-bar reveal timer");
+        bar->Published(O({{L"context",O({{L"generation",N(0)},{L"kind",S(L"quick_mask")}})},{L"hold",N(4)},{L"layout",firstLayout}}));
+        require(bar->suppressed&&bar->reappear==timer&&timer.IsRunning(),L"A stale canvas-bar generation changed the current placement or reveal timer");
+        publish(firstLayout);
         auto first=bar->fields.front().element;auto caption=bar->caption.Text();auto bounds=bar->bounds.Stringify();
         bar->Apply(state(2,L"Second, wider action"));
-        require(replies.size()==2,L"Changed canvas-bar layout was not requested");
+        require(measurements.size()==2,L"Changed canvas-bar layout was not admitted");
         require(bar->frame.Opacity()==1&&bar->fields.front().element==first&&bar->caption.Text()==caption&&bar->bounds.Stringify()==bounds,
             L"Pending canvas-bar layout replaced the presented fields inside the previous bounds");
-        auto second=bar->pending;
         auto secondLayout=O({{L"bounds",O({{L"x",N(9)},{L"y",N(10)},{L"width",N(220)},{L"height",N(40)}})},{L"items",N(0)}});
-        bar->install(second,secondLayout);
+        publish(secondLayout);
         require(bar->fields.front().element!=first&&bar->caption.Text()==L"Second, wider action"&&bar->frame.Opacity()==1
             &&Canvas::GetLeft(bar->frame)==9&&Canvas::GetTop(bar->frame)==10&&bar->frame.Width()==220&&bar->frame.Height()==40
             &&bar->fields.front().slot.Visibility()==Visibility::Collapsed&&!bar->pending,
             L"Completed canvas-bar layout did not publish its fields, bounds and overflow together");
         auto installed=bar->fields.front().element;bar->Apply(state(2,L"Second, wider action"));
-        require(replies.size()==2&&bar->fields.front().element==installed&&bar->fields.front().slot.Visibility()==Visibility::Collapsed,
-            L"Unchanged canvas-bar state repeated its query or replaced the completed row");
+        require(measurements.size()==2&&bar->fields.front().element==installed&&bar->fields.front().slot.Visibility()==Visibility::Collapsed,
+            L"Unchanged canvas-bar state repeated its measurement or replaced the completed row");
         data->state.Insert(L"theme",S(L"light"));bar->Apply(state(2,L"Second, wider action"));
-        require(replies.size()==3&&bar->fields.front().element==installed&&bar->pending&&bar->pending->theme==L"light",
-            L"Theme-only canvas-bar change did not request its prepared row layout");
-        bar->install(bar->pending,secondLayout);bar->Apply(state(2,L"Second, wider action"));
-        require(replies.size()==3&&bar->theme==L"light"&&!bar->pending,L"Completed theme-only canvas-bar row repeated its query");++checks;
+        require(measurements.size()==3&&bar->fields.front().element==installed&&bar->pending&&bar->pending->theme==L"light",
+            L"Theme-only canvas-bar change did not admit its prepared row measurement");
+        publish(secondLayout);bar->Apply(state(2,L"Second, wider action"));
+        require(measurements.size()==3&&bar->theme==L"light"&&!bar->pending,L"Completed theme-only canvas-bar row repeated its measurement");++checks;
         co_return;
     }
     winrt::Windows::Foundation::IAsyncAction toolContext(){

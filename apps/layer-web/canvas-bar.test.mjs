@@ -65,20 +65,26 @@ function view({ kind = "transform", generation = 1n, items, completion, placemen
     completion: completion ?? [action("cancel_transform", "Cancel"), action("apply_transform", "Apply", { accent: true })],
   };
 }
-function harness({ layout = measure => ({ bounds: { x: 100.2, y: 50, width: 300, height: measure.height }, items: measure.items.length, side: "below" }) } = {}) {
+function harness({ reveal = true, layout = measure => ({ bounds: { x: 100.2, y: 50, width: 300, height: measure.height }, items: measure.items.length, side: "below" }) } = {}) {
   const workspace = new FakeElement("main"), dispatched = [], measures = [], menus = [], choices = [], timers = [], explained = [], presented = [];
   const menu = new FakeElement("div", "panel-context-menu");
-  let glassQueued = 0, clock = 0;
+  let glassQueued = 0, clock = 0, held = 0, bar;
+  const reveals = [];
+  const publish = () => bar.apply(measures.length ? {context: measures.at(-1).context, hold: held, layout: layout(measures.at(-1))} : null);
+  const hold = value => { if (held === value) return; held = value; bar.apply({context:measures.at(-1).context,hold:value,layout:null}); };
   const element = (tag, className, text) => { const node = new FakeElement(tag, className); if (text != null) node.textContent = text; return node; };
   const button = (text, click, className = "") => { const node = element("button", className, text); node.addEventListener("click", click); return node; };
   const app = {
     toolbar_ui: request => { assert.deepEqual(request, { type: "style", style: "small" }); return { size: [36, 36], gap: 2, icon: 16, labeled: false }; },
-    canvas_bar_layout: measure => { measures.push(structuredClone(measure)); return layout(measure); },
     canvas_bar_menu: (context, shown) => { menus.push({ context, shown }); return { title: "More", sections: [] }; },
     canvas_bar_choice_menu: (context, id) => { choices.push({ context, id }); return choiceMenus[id] ? choiceMenus[id](context) : null; },
   };
-  const bar = createCanvasBar({
-    app, workspace, element, button, icon: name => element("svg", name), marker: () => element("span", "tool-variations"), dispatch: action => dispatched.push(action),
+  bar = createCanvasBar({
+    app, workspace, element, button, icon: name => element("svg", name), marker: () => element("span", "tool-variations"), dispatch: action => {
+      if (action.type === "measure_canvas_bar") { measures.push(structuredClone(action.measure)); publish(); }
+      else if (action.type === "reveal_canvas_bar") { reveals.push(action); if (reveal && action.hold === held && textContext(action.context) === textContext(measures.at(-1).context)) publish(); }
+      else dispatched.push(action);
+    },
     glass: { queue: () => glassQueued++ }, reappearMs: 180,
     openMenu: node => { menu.menuOwner = node; menu.model = node.menuModel(); menu.open = true; return menu; },
     explain: node => explained.push(node.dataset.command), presented: () => presented.push(clock),
@@ -94,8 +100,9 @@ function harness({ layout = measure => ({ bounds: { x: 100.2, y: 50, width: 300,
   const menuButton = id => bar.root.querySelectorAll("button").find(b => b.dataset.canvasBarMenu === id);
   const row = predicate => bar.root.children.flatMap(n => n.children).find(predicate);
   const slot = command => find(command).parentNode.parentNode;
-  return { bar, workspace, dispatched, measures, menus, choices, menu, advance, pending, find, menuButton, row, slot, explained, presented, glass: () => glassQueued };
+  return { bar, publish, hold, reveals, workspace, dispatched, measures, menus, choices, menu, advance, pending, find, menuButton, row, slot, explained, presented, glass: () => glassQueued };
 }
+const textContext = value => JSON.stringify(value, (_, v) => typeof v === "bigint" ? String(v) : v);
 const edit = (context, action) => ({ type: "canvas_bar_edit", context, action });
 const entry = (label, action, sections = []) => ({ label, selected: null, action, enabled: true, hint: "", bindings: [], sections });
 const choiceMenus = {
@@ -159,11 +166,10 @@ test("overflowed items hide, completion items never do, and placement reuses mea
   assert.deepEqual(rows.map(r => r.hidden), [false, true, true]);
   assert.ok(h.bar.root.children.filter(n => n.classList.contains("canvas-action-bar-completion")).every(r => !r.hidden));
   const reads = h.slot("reset_transform").reads;
-  shown = 3; h.bar.place();
+  shown = 3; h.publish();
   assert.deepEqual(rows.map(r => r.hidden), [false, false, false]);
   assert.equal(h.slot("reset_transform").reads, reads, "Moving the bar performs no DOM reads");
-  assert.equal(h.measures.length, 2);
-  assert.deepEqual(h.measures[1], h.measures[0]);
+  assert.equal(h.measures.length, 1, "Published placement changes do not remeasure controls");
 });
 
 test("state changes update retained controls; schema changes rebuild them", () => {
@@ -178,7 +184,7 @@ test("state changes update retained controls; schema changes rebuild them", () =
   assert.equal(h.find("transform_flip_horizontal").disabled, false, "Disabled items keep pointer events for their reason tooltip");
   assert.equal(h.find("transform_flip_horizontal").title, "transform_flip_horizontal is unavailable", "the title is the published reason");
   assert.equal(h.find("reset_transform").title, "Reset tooltip");
-  assert.equal(h.measures.length, 2);
+  assert.equal(h.measures.length, 1);
   h.bar.refresh(view());
   assert.equal(h.find("transform_flip_horizontal").title, "Flip H tooltip", "an enabled item returns to its tooltip");
   h.bar.refresh(view({ generation: 2n }));
@@ -262,16 +268,16 @@ test("each new hold hides the bar at once and it returns once after the debounce
   const h = harness();
   h.bar.refresh(view());
   const queued = h.glass();
-  h.bar.hold(1);
+  h.hold(1);
   assert.ok(h.bar.root.classList.contains("suppressed"));
   assert.equal(h.bar.bounds(), null);
   assert.equal(h.glass(), queued + 1, "Hiding republishes glass");
   const presented = h.presented.length;
-  for (let i = 0; i < 20; i++) h.bar.hold(1);
+  for (let i = 0; i < 20; i++) h.hold(1);
   assert.equal(h.glass(), queued + 1, "Samples during a stroke do not touch the DOM");
   assert.equal(h.pending().length, 0, "An odd hold keeps the bar hidden");
-  h.bar.hold(0);
-  h.bar.hold(0);
+  h.hold(0);
+  h.hold(0);
   assert.equal(h.pending().length, 1, "Hover replies do not restart the debounce");
   h.advance(179);
   assert.ok(h.bar.root.classList.contains("suppressed"));
@@ -279,10 +285,11 @@ test("each new hold hides the bar at once and it returns once after the debounce
   h.advance(1);
   assert.ok(!h.bar.root.classList.contains("suppressed"));
   assert.equal(h.presented.length, presented + 1, "Reappearing lets the notice move above the bar");
-  assert.equal(h.measures.length, 2, "Reappearing re-places the bar");
+  assert.equal(h.measures.length, 1, "Reappearing uses published geometry without remeasuring");
+  assert.deepEqual(h.reveals.at(-1), {type:"reveal_canvas_bar",context:view().context,hold:0});
   assert.ok(h.bar.bounds());
-  h.bar.hold(2);
-  h.advance(100); h.bar.hold(4); h.advance(100);
+  h.hold(2);
+  h.advance(100); h.hold(4); h.advance(100);
   assert.ok(h.bar.root.classList.contains("suppressed"), "Each camera change restarts the debounce");
   h.advance(80);
   assert.ok(!h.bar.root.classList.contains("suppressed"));
@@ -313,7 +320,7 @@ test("More opens the shared menu for the shown count, toggles closed, and closes
   more.dispatch("pointerdown"); more.click();
   assert.equal(h.menus.length, 2);
   assert.ok(h.menu.open);
-  h.bar.hold(1);
+  h.hold(1);
   assert.equal(h.menu.open, false, "Hiding the bar closes its menu");
 });
 
@@ -434,4 +441,45 @@ test("a new context closes an open bar menu, rebuilds its buttons and queries th
   h.menuButton("refine").click();
   assert.deepEqual(h.choices.at(-1).id, "refine");
   assert.ok(!h.menu.open && !h.bar.menuOpen(), "A menu the core no longer serves opens nothing");
+});
+
+test("a reveal timer only requests the current publication and never shows the bar itself", () => {
+  const h=harness({reveal:false});
+  h.bar.refresh(view());
+  const control=h.find("apply_transform"),reads=control.reads;
+  h.hold(2);h.advance(180);
+  assert.deepEqual(h.reveals,[{type:"reveal_canvas_bar",context:view().context,hold:2}]);
+  assert.equal(h.bar.bounds(),null);
+  assert.ok(h.bar.root.classList.contains("suppressed"));
+  h.publish();
+  assert.ok(h.bar.bounds());
+  assert.equal(h.find("apply_transform"),control);
+  assert.equal(control.reads,reads);
+  assert.equal(h.measures.length,1);
+});
+
+test("geometry publications retain controls and metrics invalidate only intrinsic measurements", () => {
+  const h=harness();h.bar.refresh(view());
+  const control=h.find("apply_transform"),reads=control.reads;
+  for(let i=0;i<20;i++)h.publish();
+  assert.equal(h.measures.length,1);
+  assert.equal(control.reads,reads);
+  h.bar.measure("font-and-scale-2");
+  assert.equal(h.measures.length,2);
+  h.bar.measure("font-and-scale-2");
+  assert.equal(h.measures.length,2);
+  assert.equal(h.find("apply_transform"),control);
+  h.bar.apply({context:view({generation:2n}).context,hold:0,layout:{bounds:{x:2,y:3,width:4,height:5},items:0}});
+  assert.equal(h.bar.bounds(),null);
+  h.publish();assert.ok(h.bar.bounds());
+});
+
+test("a changed choice caption reports intrinsic sizes while retaining its control", () => {
+  const h=harness(),choice=selected=>({label:"Mode",option:{Choice:{id:"mode",label:"Mode",segmented:false,items:["Short","A longer caption"].map((label,i)=>({label,icon:"mode",selected:i===selected,action:{type:"invoke",command:"transform_uniform"}}))}}});
+  h.bar.refresh(view({items:[choice(0)]}));
+  const control=h.row(node=>node.dataset.toolbarChoice==="mode").children[0];
+  h.bar.refresh(view({items:[choice(1)]}));
+  assert.equal(h.row(node=>node.dataset.toolbarChoice==="mode").children[0],control);
+  assert.equal(h.measures.length,2);
+  assert.ok(h.measures[1].items[0]>h.measures[0].items[0]);
 });

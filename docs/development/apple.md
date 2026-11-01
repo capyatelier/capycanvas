@@ -194,9 +194,9 @@ changing the bridge, menus, settings, publications or layers:
 - **Publications.** Handle small `layer-host` packets such as
   `{command_search, revision}` in `EditorSnapshotState.receive` without promoting
   the content revision. Publish `header_presentation` atomically with the
-  resolved layout. Attach visibility queries such as `canvas_bar_layout` to an
-  always present container; `.task` and `.onAppear` do not run on an empty
-  SwiftUI `Group`.
+  resolved layout. Keep canvas-bar controls mounted while hidden: admit intrinsic
+  widths with `MeasureCanvasBar` and apply accepted `workspace_update.canvas_bar`
+  geometry before reveal. `.task` does not run on an empty SwiftUI `Group`.
 - **Retained panels.** Resolve each workspace container by stable ID and read its
   indexed panel values together before constructing lazy content. Constrained
   bodies keep the shared `min_body_height` inside an outer `EditorScrollView`;

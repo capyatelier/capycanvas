@@ -207,9 +207,9 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
     winrt::Windows::Foundation::IAsyncAction canvasBarLanguage(J const& model,J const& locale){
         auto source=std::make_shared<WorkspaceData>();context.apply(source,object(object(model,L"localization"),L"catalog"));
         source->model=J::Parse(model.Stringify());source->state=J::Parse(object(model,L"state").Stringify());source->refreshPalette();
-        auto authored=source->state.Stringify();auto actions=std::make_shared<std::vector<std::string>>();auto queries=std::make_shared<std::vector<J>>();
-        source->send=[actions](std::string value){actions->push_back(std::move(value));};
-        source->query=[queries](CanvasQueryKind kind,std::string value,PreviewReply){auto query=J::Parse(to_hstring(value));require(kind==CanvasQueryKind::Workspace&&str(query,L"type")==L"canvas_bar_layout",L"Unexpected canvas-bar renderer query");queries->push_back(query);return true;};
+        auto authored=source->state.Stringify();auto measurements=std::make_shared<std::vector<J>>();
+        source->send=[measurements](std::string value){auto action=J::Parse(to_hstring(value));require(str(action,L"type")==L"measure_canvas_bar",L"Canvas-bar localization dispatched a non-measurement action");measurements->push_back(object(action,L"measure"));};
+        source->query=[](CanvasQueryKind,std::string,PreviewReply){throw hresult_error(E_FAIL,L"Canvas-bar localization queried a renderer worker");return false;};
         auto state=[&]{
             auto apply=source->common(L"apply"),cancel=source->common(L"cancel");
             auto command=O({{L"id",S(L"fixture_action")},{L"label",S(apply)},{L"tooltip",S(cancel)},{L"enabled",B(true)}});
@@ -223,7 +223,9 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         Canvas surface;surface.Width(1000);surface.Height(180);root.Width(1000);root.Height(240);root.Children().InsertAt(0,surface);
         auto bar=std::make_shared<CanvasActionBar>();bar->data=source;bar->init(surface);auto english=state();bar->Apply(english);
         auto placement=O({{L"bounds",O({{L"x",N(0)},{L"y",N(0)},{L"width",N(1000)},{L"height",N(96)}})},{L"items",N(4)}});
-        require(bar->pending&&queries->size()==1,L"Initial native canvas-bar measurement missing");bar->install(bar->pending,placement);
+        require(bar->pending&&measurements->size()==1,L"Initial native canvas-bar measurement missing");
+        auto publication=[&](J const& state){bar->Published(O({{L"context",object(object(state,L"canvas_bar"),L"context")},{L"hold",N(0)},{L"layout",placement}}));};
+        publication(english);
         co_await wait([&]{return bar->more.IsLoaded()&&bar->more.ActualWidth()>0&&bar->row.IsLoaded();},L"Canvas-bar native row did not arrange");
         auto row=bar->row;auto more=bar->more;auto caption=bar->caption;auto fields=bar->fields;
         std::vector<FrameworkElement> peers;for(auto id:{L"canvas-bar-fixture_action",L"canvas-bar-menu-fixture_menu",L"canvas-bar-choice-fixture_segments",L"canvas-bar-choice-fixture_segments-0",L"canvas-bar-choice-fixture_segments-1",L"canvas-bar-choice-fixture_dropdown"}){auto peer=findElement(row,id);require(bool(peer),L"Canvas-bar native field peer missing");peers.push_back(peer);}
@@ -232,7 +234,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         require(focused.Focus(FocusState::Keyboard),L"Canvas-bar menu native focus prerequisite failed");co_await wait([&]{return FocusManager::GetFocusedElement(root.XamlRoot())==focused;},L"Canvas-bar menu did not actually own native focus");
         auto next=J::Parse(model.Stringify());next.Insert(L"localization",locale);require(source->adoptLocalization(next),L"Canvas-bar Japanese localization was not adopted");source->model=next;
         auto japanese=state();require(str(object(english,L"canvas_bar"),L"label")!=str(object(japanese,L"canvas_bar"),L"label"),L"Canvas-bar fixture has no actual translated label");
-        bar->Apply(japanese);require(queries->size()==2,L"Localized canvas-bar labels did not request new native measurement");bar->install(bar->pending,placement);
+        bar->Apply(japanese);require(measurements->size()==2,L"Localized canvas-bar labels did not admit new native measurement");publication(japanese);
         require(bar->menuOwner.Open()&&lifetime.Current()&&popup.IsOpen()&&FocusManager::GetFocusedElement(root.XamlRoot())==focused,L"Language publication canceled the canvas-bar menu or lost native focus");
         require(bar->row==row&&bar->more==more&&bar->caption==caption,L"Language publication replaced the canvas action bar row or More");
         require(bar->fields.size()==fields.size(),L"Language publication changed canvas-bar field shape");for(size_t i=0;i<fields.size();++i)require(bar->fields[i].slot==fields[i].slot&&bar->fields[i].element==fields[i].element,L"Language publication replaced a canvas-bar native field");
@@ -244,8 +246,8 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         require(AutomationProperties::GetName(peers[5])==apply&&AutomationProperties::GetHelpText(peers[5])==apply,L"Retained canvas-bar dropdown copy stayed English");
         std::function<bool(DependencyObject const&,hstring const&)> text;text=[&](DependencyObject const& node,hstring const& value){if(auto label=node.try_as<TextBlock>();label&&label.Text()==value)return true;for(int i=0;i<VisualTreeHelper::GetChildrenCount(node);++i)if(text(VisualTreeHelper::GetChild(node,i),value))return true;return false;};
         require(text(peers[0],apply)&&text(peers[1],cancel)&&text(peers[3],apply)&&text(peers[4],cancel)&&text(peers[5],cancel),L"Retained canvas-bar visible action/menu/choice text stayed English");
-        auto measured=bar->measure();measured.Insert(L"context",bar->context());require(object(queries->back(),L"measure").Stringify()==measured.Stringify(),L"Localized canvas-bar layout used stale native text measurements");bar->install(nullptr,placement);
-        require(actions->empty()&&source->state.Stringify()==authored,L"Canvas-bar localization dispatched an action or changed authored state");
+        auto measured=bar->measure();measured.Insert(L"context",bar->context());require(measurements->back().Stringify()==measured.Stringify(),L"Localized canvas-bar layout used stale native text measurements");publication(japanese);
+        require(measurements->size()==2&&source->state.Stringify()==authored,L"Canvas-bar localization repeated measurement or changed authored state");
         bar->menuOwner.Cancel();co_await wait([&]{return !popup.IsOpen()&&source->transients.empty()&&source->popupCount==0;},L"Canvas-bar menu did not retire after localization");
         root.Children().RemoveAt(0);bar.reset();root.Width(400);root.Height(240);++checks;
     }

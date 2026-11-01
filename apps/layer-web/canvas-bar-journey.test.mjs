@@ -7,7 +7,7 @@ import {promisify} from 'node:util';
 const bar = '.canvas-action-bar';
 const visible = `(()=>{const b=document.querySelector('${bar}');return !!b&&!b.hidden&&!b.classList.contains('suppressed')})()`;
 
-export async function checkCanvasBar({call,evaluate,settle,device=false}) {
+export async function checkCanvasBar({call,evaluate,settle,device=false,resizeOnly=false}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS??(device?'artifacts/canvas-bar/web-tablet':'artifacts/canvas-bar/web');
   await mkdir(directory,{recursive:true});
   const wait=(expression,timeout=30000)=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+${timeout};function check(){if(${expression})resolve(true);else if(performance.now()>end)reject(Error(${JSON.stringify(expression)}));else setTimeout(check,30);}check();})`);
@@ -89,7 +89,7 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
   };
   const theme=await evaluate('layerApp.state().settings.theme ?? null');
   const transparency=['off','low','medium','high'].indexOf(await evaluate('layerApp.state().settings.transparency'));
-  const devices=['pen','touch','mouse'];
+  const devices=['pen','touch','mouse'],tabletRun=device;
   try {
     await wait(`(()=>{[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Keep for Later')?.click();return !document.querySelector('dialog[open]');})()`);
     await evaluate(`layerApp.app.workspace_input(JSON.stringify({type:'switch',id:'builtin:workspace:illustrator'}));null`);
@@ -98,7 +98,7 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
     await evaluate(`window.barProbe={set:layerApp.app.set_glass,pen:layerApp.app.pen,input:layerApp.app.input,boxes:[],pens:0,pointers:0,shown:0};
       layerApp.app.set_glass=(boxes,...rest)=>{barProbe.boxes=Array.from(boxes);barProbe.glassSets=(barProbe.glassSets??0)+1;return barProbe.set.call(layerApp.app,boxes,...rest);};
       layerApp.app.pen=(...args)=>{barProbe.pens++;return barProbe.pen.apply(layerApp.app,args);};
-      layerApp.app.input=event=>{if(event.type==='pointer')barProbe.pointers++;const r=barProbe.input.call(layerApp.app,event);if(event.type==='pointer')(barProbe.log??=[]).push([event.kind,event.phase,layerApp.app.canvas_bar_hold(),r.handled,r.paint]);return r;};
+      layerApp.app.input=event=>{if(event.type==='pointer')barProbe.pointers++;const r=barProbe.input.call(layerApp.app,event);if(event.type==='pointer')(barProbe.log??=[]).push([event.kind,event.phase,layerApp.app.workspace_update().canvas_bar?.hold,r.handled,r.paint]);return r;};
       barProbe.observer=new MutationObserver(()=>{const b=document.querySelector('${bar}'),on=!b.hidden&&!b.classList.contains('suppressed');if(on&&!barProbe.on)barProbe.shown++;barProbe.on=on;});
       barProbe.observer.observe(document.querySelector('${bar}'),{attributes:true,attributeFilter:['class','hidden']});`);
     await invoke('fit_canvas');
@@ -113,6 +113,32 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
       await drag([at(-160,-120),at(0,-130),at(160,-120),at(170,0),at(160,100),at(0,110),at(-160,100),at(-160,-120)],device==='touch'?'pen':device);
       await wait(`layerApp.state().layer_tools.has_selection && layerApp.state().canvas_bar?.context.kind==='selection' && ${visible}`);
       await settle();
+      if(index===0&&!tabletRun) {
+        const original=await evaluate('({width:innerWidth,height:innerHeight,deviceScaleFactor:devicePixelRatio})'),receipts=[];
+        try {
+          for(const name of ['light','dark']) {
+            await send({type:'set_theme',theme:name});
+            for(const [width,height] of [[820,600],[1200,760]]) {
+              await call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:original.deviceScaleFactor,mobile:false});
+              await settle();
+              await wait(`innerWidth===${width}&&innerHeight===${height}&&layerApp.app.camera().viewport[0]===Math.round(${width}*devicePixelRatio)&&${visible}&&!!layerApp.app.canvas_bar_presentation()?.layout`);
+              const receipt=await evaluate(`(()=>{const p=layerApp.app.canvas_bar_presentation(),v=layerApp.state().canvas_bar,b=document.querySelector('${bar}'),r=b.getBoundingClientRect();return JSON.parse(JSON.stringify({theme:layerApp.state().theme,context:v.context,presentation:p,ratio:devicePixelRatio,viewport:[innerWidth,innerHeight],bounds:{x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom},shown:b.querySelectorAll('.canvas-action-bar-item:not([hidden])').length},(_,v)=>typeof v==='bigint'?String(v):v))})()`);
+              receipts.push(receipt);
+              assert.equal(receipt.theme,name);
+              assert.deepEqual(receipt.presentation.context,receipt.context,`${name}: the current bar owns its placement`);
+              const physical=v=>Math.round(v*receipt.ratio),expected=receipt.presentation.layout.bounds;
+              assert.deepEqual([physical(receipt.bounds.x),physical(receipt.bounds.y)],[physical(expected.x),physical(expected.y)],`${name}: resize applies the published native-pixel placement`);
+              assert.equal(receipt.shown,Number(receipt.presentation.layout.items));
+              assert.ok(receipt.bounds.x>=0&&receipt.bounds.y>=0&&receipt.bounds.right<=width&&receipt.bounds.bottom<=height,`${name}: resize keeps the bar inside the viewport`);
+            }
+          }
+        } finally {
+          await writeFile(`${directory}/published-resize.json`,JSON.stringify(receipts,(_,v)=>typeof v==='bigint'?String(v):v,2));
+          await call('Emulation.setDeviceMetricsOverride',{...original,mobile:false});
+          await send({type:'set_theme',theme});await wait(visible);await settle();
+        }
+        if(resizeOnly) {console.log('PASS published canvas bar resize in light and dark');return;}
+      }
       const shape=await anchor(),box=await rect(bar);
       assert.ok(await beside(box,shape),`${device}: the selection bar sits below the selection, centred within the work area ${JSON.stringify({shape,box})}`);
       const boxes=await glassBoxes();

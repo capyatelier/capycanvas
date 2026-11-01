@@ -247,6 +247,22 @@ class AndroidWorkspacePresentationTest {
         assertRestored(cache.prepare(layout(),1f,aPayload.copyOf(),101L))
     }
 
+    @Test fun heldCanvasBarTokensDoNotInvalidateGeometryReaders() = observedModelReads { observer,invalidated,changed ->
+        fun geometry(hold:Int, bounds:JSONObject?=null)=CanvasBarGeometry.read(obj("context" to obj("generation" to 1,"kind" to "selection"),
+            "hold" to hold,"layout" to bounds?.let { obj("bounds" to it,"items" to 2) }))
+        val current=mutableStateOf(geometry(1))
+        Snapshot.sendApplyNotifications()
+        observer.observeReads("canvas-bar",changed) { current.value.bounds }
+        for(hold in 2..25) {
+            Snapshot.withMutableSnapshot { current.value=geometry(hold) }
+            Snapshot.sendApplyNotifications()
+        }
+        assertTrue(invalidated.isEmpty())
+        Snapshot.withMutableSnapshot { current.value=geometry(26,obj("x" to 20,"y" to 40,"width" to 240,"height" to 36)) }
+        Snapshot.sendApplyNotifications()
+        assertEquals(setOf("canvas-bar"),invalidated)
+    }
+
     @Test fun layoutPublicationInvalidatesOnlyChangedLayoutReaders() = observedModelReads { observer,invalidated,changed ->
         val root=workspaceModel()
         val layout=root.getJSONObject("layout")

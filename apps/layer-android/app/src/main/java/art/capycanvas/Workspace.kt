@@ -382,7 +382,7 @@ private val HiddenChromeShape=object:Shape {
             WorkspaceColumns(host,layout,state,panels,dock,hidden)
             ContentDrawers(host, snapshot, panels, dock)
             PanelWindows(host,layout,panels,dock,state,hidden)
-            CanvasBar(host, dock, layout, IntSize(constraints.maxWidth, constraints.maxHeight))
+            CanvasBar(host, dock, IntSize(constraints.maxWidth, constraints.maxHeight))
             NoticeBubble(host, dock, layout.getJSONObject("notice"))
             CanvasSizePanel(host, dock, layout.getJSONObject("work_area"), state)
             ImageSizePanel(host, dock, layout.getJSONObject("work_area"), state)

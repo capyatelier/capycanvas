@@ -12,7 +12,7 @@ export const barSchema = view => text([view.context, view.label ?? null,
         : ["other", label]]))]);
 
 export function createCanvasBar({ app, workspace, element, button, icon, marker, dispatch, glass, openMenu, presented,
-  reappearMs, setTimer = setTimeout, clearTimer = clearTimeout, explain = revealTooltip }) {
+  reappearMs, metrics = () => "", setTimer = setTimeout, clearTimer = clearTimeout, explain = revealTooltip }) {
   const tiles = app.toolbar_ui({ type: "style", style: "small" });
   const root = element("section", "canvas-action-bar suppressed");
   root.setAttribute("role", "toolbar"); root.setAttribute("aria-label", "Canvas actions");
@@ -26,8 +26,8 @@ export function createCanvasBar({ app, workspace, element, button, icon, marker,
   root.append(label, more); workspace.append(root);
   root.addEventListener("contextmenu", e => e.preventDefault());
   root.addEventListener("mousedown", e => { if (!e.target.closest?.("input,select,textarea")) e.preventDefault(); });
-  let view = null, schema = "", fields = [], sizes = null, layout = null, popup = null;
-  let suppressed = false, held = 0, timer = 0;
+  let view = null, schema = "", widthSchema = "", fields = [], sizes = null, layout = null, popup = null;
+  let publication = null, timer = 0, timerKey = "", metricsKey = "";
   let menu = null, owner = null, reopen = false;
   const shown = { visible: false, transform: "", items: -1 };
   opensMenu(more);
@@ -122,11 +122,14 @@ export function createCanvasBar({ app, workspace, element, button, icon, marker,
     more.before(...fields.slice(0, view.items.length).map(f => f.slot));
     root.append(...fields.slice(view.items.length).map(f => f.slot));
   }
-  function measure() {
+  function measure(key = metrics()) {
+    if (key !== metricsKey) { metricsKey = key; sizes = null; }
+    if (!view || sizes) return;
     root.hidden = false;
     for (const field of fields) field.slot.hidden = false;
     const count = view.items.length, slots = fields.map(f => f.slot);
     const worded = [label, ...slots.flatMap(node => [...node.querySelectorAll(".text-tile > button, .toolbar-segments > button")])];
+    worded.forEach(node => { node.style.width = ""; });
     const natural = worded.map(node => node.getBoundingClientRect().width);
     worded.forEach((node, i) => { node.style.width = natural[i] ? `${Math.ceil(natural[i])}px` : ""; });
     const heights = [more, ...slots].map(node => node.getBoundingClientRect().height);
@@ -138,9 +141,11 @@ export function createCanvasBar({ app, workspace, element, button, icon, marker,
       height: Math.max(...heights), gap: tiles.gap, padding: 0,
     };
     shown.items = -1;
+    dispatch({ type: "measure_canvas_bar", measure: { context: view.context, ...sizes } });
+    apply(publication);
   }
   function present() {
-    const visible = !!(view && layout && !suppressed);
+    const visible = !!(view && layout);
     if (root.hidden !== !view) root.hidden = !view;
     const count = Number(layout?.items ?? 0);
     let changed = visible !== shown.visible;
@@ -156,30 +161,39 @@ export function createCanvasBar({ app, workspace, element, button, icon, marker,
     if (visible !== shown.visible) { root.classList.toggle("suppressed", !visible); shown.visible = visible; }
     if (changed) { glass?.queue(); presented?.(); }
   }
-  function place() {
-    if (suppressed) { present(); return; }
-    if (view && !sizes) measure();
-    layout = view ? app.canvas_bar_layout({ context: view.context, ...sizes }) ?? null : null;
-    present();
-  }
   function refresh(next = null) {
     const nextSchema = next ? barSchema(next) : "";
+    const nextWidths = text(next ? [...next.items, ...next.completion].map(({option}) => {
+      const choice = option.Choice;
+      return choice && !choice.segmented ? (choice.items.find(item => item.selected) || choice.items[0])?.label : null;
+    }) : []);
+    if (nextWidths !== widthSchema) { widthSchema = nextWidths; sizes = null; }
     view = next;
     if (nextSchema !== schema) { schema = nextSchema; rebuild(); }
     else if (view) {
       const options = [...view.items, ...view.completion];
       fields.forEach((field, i) => field.update(options[i].option));
     }
-    place();
+    measure();
+    apply(publication);
   }
-  function hold(value) {
-    if (value === held) return;
-    held = value; clearTimer(timer); timer = 0;
-    if (!suppressed) { suppressed = true; closeMenu(); closePopup(); present(); }
-    if (value % 2 === 0) timer = setTimer(() => { timer = 0; suppressed = false; place(); }, reappearMs);
+  function apply(next) {
+    publication = next;
+    const current = !!(view && next && text(view.context) === text(next.context));
+    layout = current ? next.layout : null;
+    const key = current && sizes && !layout && next.hold % 2 === 0 ? text([next.context, next.hold]) : "";
+    if (key !== timerKey) {
+      clearTimer(timer); timer = 0; timerKey = key;
+      if (key) {
+        const { context, hold } = next;
+        timer = setTimer(() => { timer = 0; dispatch({ type: "reveal_canvas_bar", context, hold }); }, reappearMs);
+      }
+    }
+    if (!layout) { closeMenu(); closePopup(); }
+    present();
   }
   return {
-    root, refresh, place, hold,
+    root, refresh, measure, apply,
     bounds: () => shown.visible ? layout.bounds : null,
     menuOpen: () => !!owner,
   };

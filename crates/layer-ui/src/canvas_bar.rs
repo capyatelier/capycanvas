@@ -253,8 +253,17 @@ pub(super) struct CanvasBarState {
     armed: bool,
     history: bool,
     hides: u32,
+    measure: Option<CanvasBarMeasure>,
+    geometry: Option<CanvasBarGeometry>,
+    presentation: Option<CanvasBarPresentation>,
+    hold: Option<u32>,
+    suppressed: bool,
 }
 impl CanvasBarState {
+    pub(super) fn measured_when_ready<T>(&self, prepare: impl FnOnce(&CanvasBarMeasure) -> T) -> Option<T> {
+        if self.suppressed { None } else { self.measure.as_ref().map(prepare) }
+    }
+
     pub(super) fn history_step(&mut self) {
         self.history = true;
     }
@@ -674,7 +683,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.dispatch(UiAction::Invoke { command }).map(Some)
     }
 
-    pub(super) fn update_canvas_bar(&mut self) -> bool {
+    pub(super) fn update_canvas_bar(&mut self, narrow: Option<(CanvasBarKind, bool)>) -> bool {
         if self.canvas_bar_contact() || self.operation.dragging() {
             return false;
         }
@@ -700,7 +709,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             transaction: if self.operation.active() { self.operation.serial() } else { 0 },
             guide: self.selected_ruler_token().filter(|_| plan.kind == CanvasBarKind::Guide),
             label: plan.label.clone(),
-            narrow: self.canvas_bar_narrow(plan.kind),
+            narrow: narrow.filter(|(kind, _)| *kind == plan.kind).map_or_else(|| self.canvas_bar_narrow(plan.kind), |(_, value)| value),
             anchor: self.canvas_bar_anchor(plan.kind),
             flags: plan
                 .items
@@ -716,7 +725,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let previous = self.canvas_bar.key.replace(key.clone());
         if previous.is_none_or(|p| {
-            p.kind != key.kind || p.toolbar != key.toolbar || p.transaction != key.transaction || p.guide != key.guide
+            p.kind != key.kind || p.toolbar != key.toolbar || p.transaction != key.transaction || p.guide != key.guide || p.narrow != key.narrow
         }) {
             self.canvas_bar.generation += 1;
         }
@@ -797,6 +806,9 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     /// Mode choices collapse into a dropdown where the work area is narrow.
     fn canvas_bar_narrow(&self, kind: CanvasBarKind) -> bool {
+        if self.canvas_bar.suppressed || self.canvas_bar.hold.is_some_and(|hold| hold != self.canvas_bar_hold()) {
+            return self.canvas_bar.key.as_ref().is_some_and(|key| key.narrow);
+        }
         matches!(kind, CanvasBarKind::Transform | CanvasBarKind::Placement)
             && self.logical_viewport.is_some_and(|viewport| self.layout(viewport).work_area.width < CANVAS_BAR_NARROW_WIDTH)
     }
@@ -938,6 +950,23 @@ pub struct CanvasBarMeasure {
     pub padding: f32,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct CanvasBarGeometry {
+    viewport: [f32; 2],
+    area: Bounds,
+    obstacles: Vec<Bounds>,
+    protected: Vec<[f32; 2]>,
+    placement: CanvasBarPlacement,
+    measure: CanvasBarMeasure,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct CanvasBarPresentation {
+    pub context: CanvasBarContext,
+    pub hold: u32,
+    pub layout: Option<CanvasBarLayout>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct CanvasBarLayout {
     pub bounds: Bounds,
@@ -1037,8 +1066,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         area
     }
 
-    fn canvas_bar_protected(&self, kind: CanvasBarKind) -> Option<Bounds> {
-        let points: Vec<[f32; 2]> = match kind {
+    fn canvas_bar_protected_points(&self, kind: CanvasBarKind) -> Vec<[f32; 2]> {
+        match kind {
             CanvasBarKind::Placement | CanvasBarKind::Transform => match self.transform_hull() {
                 Some(hull) => self.transform_handle_points().into_iter().chain(hull).collect(),
                 None => self.object_handle_points(),
@@ -1048,24 +1077,26 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CanvasBarKind::QuickMask
             | CanvasBarKind::SelectionLayer
             | CanvasBarKind::LayerMask
-            | CanvasBarKind::Crop => {
-                return None;
-            }
+            | CanvasBarKind::Crop => Vec::new(),
             CanvasBarKind::Guide => {
                 let to_logical = self.document_to_logical();
                 self.guide_handles().into_iter().map(to_logical).collect()
             }
             CanvasBarKind::Selection | CanvasBarKind::CloneSource => {
                 let [x0, y0, x1, y1] = if kind == CanvasBarKind::Selection {
-                    self.canvas_bar.selection.as_ref()?.1?
+                    match self.canvas_bar.selection.as_ref().and_then(|s| s.1) { Some(bounds) => bounds, None => return Vec::new() }
                 } else {
-                    self.clone_disc_bounds()?
+                    match self.clone_disc_bounds() { Some(bounds) => bounds, None => return Vec::new() }
                 };
                 let to_logical = self.document_to_logical();
                 [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(|[x, y]| to_logical(Point { x, y })).to_vec()
             }
-        };
-        let b = Rect::around(points.into_iter().map(|[x, y]| Point { x, y }))
+        }
+    }
+
+    fn canvas_bar_protected_bounds(points: &[[f32; 2]]) -> Option<Bounds> {
+        if points.is_empty() { return None; }
+        let b = Rect::around(points.iter().map(|&[x, y]| Point { x, y }))
             .outset(crate::session::rulers::HIT_DISTANCE);
         (!b.is_empty()).then_some(Bounds {
             x: b.min.x,
@@ -1075,26 +1106,93 @@ impl<R: CanvasRenderer> UiSession<R> {
         })
     }
 
-    /// Place the bar from host-measured control sizes. Stale contexts return None.
-    pub fn canvas_bar_layout(&self, measure: &CanvasBarMeasure) -> Option<CanvasBarLayout> {
-        let bar = self.state.canvas_bar.as_ref()?;
-        if bar.context != measure.context || measure.items.len() != bar.items.len() {
-            return None;
+    pub(super) fn canvas_bar_retained_narrow(&self) -> Option<(CanvasBarKind, bool)> {
+        self.canvas_bar.key.as_ref().map(|key| (key.kind, key.narrow))
+    }
+
+    pub(super) fn canvas_bar_viewport_changed(&self) -> bool {
+        self.canvas_bar.measure.is_some() && self.canvas_bar.geometry.as_ref().map(|geometry| geometry.viewport) != self.logical_viewport
+    }
+
+    pub fn canvas_bar_presentation(&self) -> Option<&CanvasBarPresentation> {
+        self.canvas_bar.presentation.as_ref()
+    }
+
+    pub(super) fn refresh_canvas_bar_presentation(&mut self, resolved: Option<&ResolvedLayout>) -> bool {
+        let previous = self.canvas_bar.presentation;
+        let Some(bar) = self.state.canvas_bar.as_ref() else {
+            self.canvas_bar.measure = None;
+            self.canvas_bar.geometry = None;
+            self.canvas_bar.presentation = None;
+            self.canvas_bar.hold = None;
+            self.canvas_bar.suppressed = false;
+            return previous.is_some();
+        };
+        let context = bar.context;
+        let placement = bar.placement;
+        let hold = self.canvas_bar_hold();
+        if self.canvas_bar.hold.is_some_and(|old| old != hold) || hold % 2 == 1 {
+            self.canvas_bar.suppressed = true;
         }
-        let viewport = self.logical_viewport?;
-        let layout = self.layout(viewport);
-        let area = self.canvas_bar_area(&layout, viewport, bar_width(measure, measure.items.len().min(1)));
-        let shown = fitted_items(measure, area.width - 2. * CANVAS_BAR_MARGIN);
-        let obstacles: Vec<Bounds> = layout.groups.iter().filter(|g| g.floating).map(|g| g.bounds).collect();
-        let window = area.width > layout.work_area.width;
-        let (bounds, side) = place_canvas_bar(
-            area,
-            &obstacles,
-            self.canvas_bar_protected(bar.context.kind),
-            [bar_width(measure, shown), measure.height],
-            if window { CanvasBarPlacement::BottomEdge } else { bar.placement },
-        );
-        Some(CanvasBarLayout { bounds, items: shown, side })
+        self.canvas_bar.hold = Some(hold);
+        if previous.is_some_and(|old| old.context != context)
+            || self.canvas_bar.measure.as_ref().is_some_and(|measure| measure.items.len() != bar.items.len() || measure.completion.len() != bar.completion.len()) {
+            self.canvas_bar.measure = None;
+            self.canvas_bar.geometry = None;
+        }
+        let geometry = self.canvas_bar.measured_when_ready(|measure| {
+            let viewport = self.logical_viewport?;
+            let computed;
+            let resolved = match resolved { Some(layout) => layout, None => { computed = self.layout(viewport); &computed } };
+            let area = self.canvas_bar_area(resolved, viewport, bar_width(measure, measure.items.len().min(1)));
+            Some(CanvasBarGeometry {
+                viewport,
+                area,
+                obstacles: resolved.groups.iter().filter(|g| g.floating).map(|g| g.bounds).collect(),
+                protected: if placement == CanvasBarPlacement::NearObject { self.canvas_bar_protected_points(context.kind) } else { Vec::new() },
+                placement: if area.width > resolved.work_area.width { CanvasBarPlacement::BottomEdge } else { placement },
+                measure: measure.clone(),
+            })
+        }).flatten();
+        let layout = geometry.and_then(|geometry| {
+            if self.canvas_bar.geometry.as_ref() == Some(&geometry) {
+                return previous.and_then(|value| value.layout);
+            }
+            let measure = &geometry.measure;
+            let shown = fitted_items(measure, geometry.area.width - 2. * CANVAS_BAR_MARGIN);
+            let (bounds, side) = place_canvas_bar(geometry.area, &geometry.obstacles,
+                Self::canvas_bar_protected_bounds(&geometry.protected), [bar_width(measure, shown), measure.height], geometry.placement);
+            self.canvas_bar.geometry = Some(geometry);
+            Some(CanvasBarLayout { bounds, items: shown, side })
+        });
+        self.canvas_bar.presentation = Some(CanvasBarPresentation { context, hold, layout });
+        self.canvas_bar.presentation != previous
+    }
+
+    pub(super) fn measure_canvas_bar(&mut self, measure: CanvasBarMeasure) -> Result<UiChange, String> {
+        if !measure.items.iter().chain(&measure.completion).copied().chain([measure.label, measure.more, measure.height, measure.gap, measure.padding]).all(|value| value.is_finite() && value >= 0.) {
+            return Err("Invalid canvas bar measurement".into());
+        }
+        if self.state.canvas_bar.as_ref().is_none_or(|bar| bar.context != measure.context
+            || bar.items.len() != measure.items.len() || bar.completion.len() != measure.completion.len()) {
+            return Ok(self.changed(0, false));
+        }
+        if self.canvas_bar.measure.as_ref() == Some(&measure) {
+            return Ok(self.changed(0, false));
+        }
+        self.canvas_bar.measure = Some(measure);
+        Ok(self.changed(regions::CANVAS_BAR_GEOMETRY, false))
+    }
+
+    pub(super) fn reveal_canvas_bar(&mut self, context: CanvasBarContext, hold: u32) -> Result<UiChange, String> {
+        if hold % 2 == 1 || hold != self.canvas_bar_hold() || self.state.canvas_bar.as_ref().is_none_or(|bar| bar.context != context)
+            || !self.canvas_bar.suppressed {
+            return Ok(self.changed(0, false));
+        }
+        self.canvas_bar.suppressed = false;
+        self.canvas_bar.geometry = None;
+        let resolved = self.logical_viewport.map(|viewport| self.layout(viewport));
+        Ok(self.changed_with_canvas_bar_layout(regions::CANVAS_BAR_GEOMETRY, false, resolved))
     }
 
     /// The menu of a bar choice or bar menu shown as a dropdown.

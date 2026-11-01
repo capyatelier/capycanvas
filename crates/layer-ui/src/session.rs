@@ -143,7 +143,7 @@ pub use object_editing::{object_handle, object_token};
 pub use source_edit::SourceUse;
 pub use clipboard::{clipboard_document, clipboard_color_changes, ClipboardCapture, LARGE_CLIP_PIXELS, PasteMode, PixelClip};
 pub use notices::{Notice, NoticeAction, NoticeActionId};
-pub use canvas_bar::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarMenu, CanvasBarLayout, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar};
+pub use canvas_bar::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarMenu, CanvasBarLayout, CanvasBarPresentation, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar};
 pub use art_layers::{
     GradientToolSettings, ImageLayerDestination, ImagePlacementContext, LayerAction, LayerCanvasTool, LayerControls, LayerDropHint, LayerDropPosition, LayerDropSurface, LayerFooterButton, LayerFooterSlot, LayersView, RegionSource, layer_footer_overflow,
 };
@@ -475,7 +475,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.refresh_notice_localization();
         self.histogram_copy();
         self.refresh_screen_view();
-        self.update_canvas_bar();
+        self.update_canvas_bar(None);
         self.state.revision += 1;
         self.workspace_model_revision = self.state.revision;
         self.workspace_content_revision = self.state.revision;
@@ -1158,7 +1158,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Small event/reply boundary shared by native and Wasm hosts. Pen samples
     /// are only queued when `paint` is true, without serializing UiState.
     pub fn input(&mut self, input: UiInput) -> Result<InputReply, String> {
-        let reply = self.route_input(input)?;
+        let mut reply = self.route_input(input)?;
+        if self.canvas_bar_presentation().map(|value| value.hold) != self.state.canvas_bar.as_ref().map(|_| self.canvas_bar_hold()) {
+            reply.change = merge_change(reply.change, self.changed(0, false));
+        }
         self.refresh_chrome();
         Ok(InputReply {
             chrome_hidden: self.interaction.hidden,
@@ -1821,6 +1824,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Measure once in logical workspace units; all hosts use the same chrome
     /// insets, docking topology, and tile allocation rules.
     pub fn layout(&self, viewport: [f32; 2]) -> ResolvedLayout {
+        #[cfg(test)]
+        test_support::LAYOUT_RESOLVES.with(|count| count.set(count.get() + 1));
         self.layout_resolve_input().resolve(viewport)
     }
     /// Layout-aware hosts retain controls at content_revision and apply these
@@ -1891,6 +1896,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             revision: self.state.revision,
             model_revision: self.workspace_model_revision,
             content_revision: self.workspace_content_revision,
+            canvas_bar: self.canvas_bar_presentation().copied(),
             drag: self.workspace_drag.map(|drag| WorkspaceDragPresentation {
                 group: drag.floating.and_then(|id| {
                     self.layout(drag.viewport)
@@ -2954,6 +2960,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             return self.dispatch(*action);
         }
+        if let UiAction::MeasureCanvasBar { measure } = action {
+            return self.measure_canvas_bar(measure);
+        }
+        if let UiAction::RevealCanvasBar { context, hold } = action {
+            return self.reveal_canvas_bar(context, hold);
+        }
         if let UiAction::CanvasBarEdit { context, action } = action {
             return self.canvas_bar_edit(context, *action);
         }
@@ -3139,7 +3151,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiAction::Histogram { action } => { self.histogram_action(action)?; (HISTOGRAM, true) }
             UiAction::CommandSearch { .. } | UiAction::PenInput{..} => unreachable!("handled above"),
-            UiAction::ToolbarEdit { .. } | UiAction::CanvasBarEdit { .. } | UiAction::ColorEdit { .. } | UiAction::Notice { .. } => {
+            UiAction::MeasureCanvasBar { .. } | UiAction::RevealCanvasBar { .. } | UiAction::ToolbarEdit { .. } | UiAction::CanvasBarEdit { .. } | UiAction::ColorEdit { .. } | UiAction::Notice { .. } => {
                 unreachable!("validated before dispatch")
             }
             UiAction::ToggleSliderBookmark { control } => {
@@ -6150,7 +6162,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         );
     }
     fn changed(&mut self, regions: u32, canvas_wake: bool) -> UiChange {
-        let mut regions = regions | if std::mem::take(&mut self.host_requests_changed) { regions::HOST } else { 0 };
+        self.changed_with_canvas_bar_layout(regions, canvas_wake, None)
+    }
+    fn changed_with_canvas_bar_layout(&mut self, regions: u32, canvas_wake: bool, resolved_bar: Option<ResolvedLayout>) -> UiChange {
+        let geometry_requested = regions & regions::CANVAS_BAR_GEOMETRY != 0;
+        let mut regions = regions & !regions::CANVAS_BAR_GEOMETRY;
+        regions |= if std::mem::take(&mut self.host_requests_changed) { regions::HOST } else { 0 };
         if regions & (regions::COMMANDS | regions::LAYOUT) != 0 && self.refresh_tool_set() {
             regions |= regions::BRUSH;
         }
@@ -6169,13 +6186,18 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.update_shader_idle();
         self.update_toolbar_context();
         self.note_tool();
-        let regions = regions
-            | if self.update_canvas_bar() { regions::CANVAS_BAR } else { 0 }
-            | self.notice_regions()
-            | self.refresh_screen_view();
         if regions & regions::CAMERA != 0 {
             self.canvas_bar_camera_moved();
         }
+        let narrow = resolved_bar.as_ref().and_then(|layout| self.state.canvas_bar.as_ref().map(|bar|
+            (bar.context.kind, matches!(bar.context.kind, CanvasBarKind::Transform | CanvasBarKind::Placement) && layout.work_area.width < canvas_bar::CANVAS_BAR_NARROW_WIDTH)))
+            .or_else(|| if regions == 0 { self.canvas_bar_retained_narrow() } else { None });
+        let bar_changed = (regions == 0 || resolved_bar.is_some() || regions & !(regions::CAMERA | regions::COLOR_PREVIEW | regions::COMMAND_SEARCH) != 0)
+            && self.update_canvas_bar(narrow);
+        let mut regions = regions
+            | if bar_changed { regions::CANVAS_BAR } else { 0 }
+            | self.notice_regions()
+            | self.refresh_screen_view();
         if regions & (regions::LAYOUT | regions::CUSTOMIZATION) != 0 {
             self.refresh_panel_copy(false);
             self.sync_renderer_telemetry();
@@ -6195,9 +6217,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.state.workspace.layout.measurements=crate::LayoutResolveInput::new(&self.state.workspace.layout,None)
                 .with_cache(cache).measured_layout(viewport).measurements;
         }
+        if (geometry_requested || bar_changed || self.canvas_bar_viewport_changed() || regions & (regions::LAYOUT | regions::CUSTOMIZATION | regions::SETTINGS | regions::DOCUMENT | regions::BRUSH | regions::COMMANDS) != 0
+                || self.canvas_bar_presentation().map(|value| value.hold) != self.state.canvas_bar.as_ref().map(|_| self.canvas_bar_hold()))
+            && self.refresh_canvas_bar_presentation(resolved_bar.as_ref()) {
+            regions |= regions::CANVAS_BAR_GEOMETRY;
+        }
         if regions != 0 {
             self.state.revision += 1;
-            if regions & !(regions::CAMERA | regions::COLOR_PREVIEW | regions::COMMAND_SEARCH) != 0 {
+            if regions & !(regions::CAMERA | regions::COLOR_PREVIEW | regions::COMMAND_SEARCH | regions::CANVAS_BAR_GEOMETRY) != 0 {
                 self.workspace_model_revision = self.state.revision;
                 self.workspace_content_revision = self.state.revision;
             }

@@ -270,7 +270,7 @@ workspace.append(dropIndicator);
 
 function dispatch(action) {
   try {
-    if(documents?.interactionBusy()&&!['pen_input','restore_saved_settings','complete_request','measure_panels','measure_titlebar','measure_workspace_bottom','measure_column_drawers','measure_drawer_tiles','measure_column_scroll'].includes(action.type))return;
+    if(documents?.interactionBusy()&&!['pen_input','restore_saved_settings','complete_request','measure_panels','measure_canvas_bar','reveal_canvas_bar','measure_titlebar','measure_workspace_bottom','measure_column_drawers','measure_drawer_tiles','measure_column_scroll'].includes(action.type))return;
     if (action.type === "measure_column_drawers" && workspaceGesture) workspaceGesture.hits = null;
     if (["move_panel", "move_group", "move_tile", "double_click_panel_handle", "reset_column_width"].includes(action.type))
       action = {
@@ -325,7 +325,6 @@ function publishLanguage(patch) {
 }
 function applyChange(change) {
   if (app.language_pending()) queueLanguage();
-  canvasBar?.hold(app.canvas_bar_hold());
   if (change.regions & 512) {
     state.command_search = app.command_search();
     commandBar?.refresh(state.command_search);
@@ -338,6 +337,7 @@ function applyChange(change) {
     const presentation = app.workspace_update();
     if(change.regions & (1 | 2 | 4 | 8 | 16 | 128 | 256 | 8192)
       && ((change.regions&(1|2|4|8|16|128|256|8192))!==129||workspaceModelRevision!==presentation.model_revision))bubbles?.refresh();
+    canvasBar?.apply(presentation.canvas_bar);
     if (workspaceModelRevision !== presentation.model_revision) {
       if (workspaceContentRevision === presentation.content_revision) {
         queueWorkspaceLayout(presentation);
@@ -721,7 +721,7 @@ function presentWorkspaceLayout(resolved,layoutOnly) {
     resizeCanvas();
     updateZen();
   }
-  canvasBar?.place();
+  canvasBar?.measure();
   selectionUi?.place();
   frequencySeparationUi?.place();
   notice?.place();
@@ -740,7 +740,7 @@ function panelMetrics() {
   }
   return panelMetricContext;
 }
-document.fonts.addEventListener("loadingdone", () => { panelFontGeneration++; queuePanelMeasurements(); });
+document.fonts.addEventListener("loadingdone", () => { panelFontGeneration++; canvasBar?.measure(); queuePanelMeasurements(); });
 const measureBox = element("div", "panel-measure");
 measureBox.hidden = true;
 measureBox.inert = true;
@@ -1150,6 +1150,7 @@ function queueWorkspaceLayout(presentation) {
     state.camera = packet.camera;
     Object.assign(state.workspace.layout, packet.workspace_layout);
     state.workspace.layout.measurements = packet.panel_measurements;
+    canvasBar?.apply(update.canvas_bar);
     arrange(packet.layout, true);
     queueWorkspacePresentation(update);
   });
@@ -1990,7 +1991,7 @@ try {
   capy.id = "zen-capy"; capy.hidden = true;
   customization.target(capy, {kind:"zen_mode"});workspace.append(capy);
   header = createHeader({app,state:()=>state,paintPair:()=>paintPairView,workspace,element,button,icon,place,dispatch,customization,systemStatus,updateZen,documents,capy});
-  canvasBar = createCanvasBar({ app, workspace, element, button, icon, marker: customization.variationMarker, dispatch, glass, reappearMs: catalog.canvas_bar_reappear_ms,
+  canvasBar = createCanvasBar({ app, workspace, element, button, icon, marker: customization.variationMarker, dispatch, glass, reappearMs: catalog.canvas_bar_reappear_ms, metrics: () => `${devicePixelRatio}:${panelFontGeneration}:${catalog.text_size_pt}`,
     openMenu: node => customization.openMenu(node), presented: () => { selectionUi.place(); frequencySeparationUi.place(); notice?.place(); } });
   notice = createNotice({ arrangement: request => app.toolbar_ui(request), workspace, element, button, glass, tiles: app.toolbar_ui({ type: "style", style: "small" }), answer: answerNotice, layout: () => layout, bar: () => selectionUi.bounds() ?? frequencySeparationUi.bounds() ?? canvasBar.bounds() });
   zoomReadout = createZoomReadout({ root: $("view-info"), workspace, canvas, element, button, icon, numberField, catalog,

@@ -34,6 +34,7 @@ use serde_json::{Value, json};
 #[derive(Clone, PartialEq)]
 struct SnapshotKey {
     revision: u64,
+    canvas_bar: Option<layer_ui::CanvasBarPresentation>,
     localization_generation: u64,
     command_search_revision: u64,
     logical: [f32; 2],
@@ -753,9 +754,6 @@ impl NativeHost {
                 action: UiAction,
             },
             SelectionMenu {kind:layer_ui::SelectionMenu},
-            CanvasBarLayout {
-                measure: layer_ui::CanvasBarMeasure,
-            },
             CanvasBarMenu {
                 context: layer_ui::CanvasBarContext,
                 shown: usize,
@@ -940,7 +938,6 @@ impl NativeHost {
             }
             Query::ImageLayerDrop { target, fraction } => json!({"position": self.session.image_layer_drop_hint(target, fraction)}),
             Query::SelectionMenu {kind} => json!(self.session.selection_menu(kind)),
-            Query::CanvasBarLayout { measure } => json!(self.session.canvas_bar_layout(&measure)),
             Query::CanvasBarMenu { context, shown } => json!(self.session.canvas_bar_menu(context, shown)),
             Query::CanvasBarChoiceMenu { context, id } => json!(self.session.canvas_bar_choice_menu(context, &id)),
             Query::ZoomMenu => json!(self.session.zoom_menu()),
@@ -2653,9 +2650,14 @@ mod tests {
         let bar = app.session.state().canvas_bar.clone().expect("transform bar");
         let measure = json!({"context": bar.context, "label": 0, "items": vec![90.; bar.items.len()],
             "completion": vec![70.; bar.completion.len()], "more": 32, "height": 44, "gap": 4, "padding": 6});
-        let layout = app.query(json!({"type": "canvas_bar_layout", "measure": measure})).unwrap();
+        app.dispatch(serde_json::from_value(json!({"type": "measure_canvas_bar", "measure": measure})).unwrap()).unwrap();
+        let presentation = *app.session.canvas_bar_presentation().unwrap();
+        if presentation.layout.is_none() {
+            app.dispatch(UiAction::RevealCanvasBar { context: presentation.context, hold: presentation.hold }).unwrap();
+        }
+        let layout = json!(app.session.canvas_bar_presentation().unwrap().layout.unwrap());
         assert!(layout["bounds"].is_object());
-        assert_eq!(layout, json!(app.session.canvas_bar_layout(&serde_json::from_value(measure).unwrap())));
+        assert_eq!(app.take_value().unwrap()["workspace_update"]["canvas_bar"]["layout"], layout);
         let menu = app.query(json!({"type": "canvas_bar_menu", "context": bar.context, "shown": 0})).unwrap();
         assert!(menu["sections"].is_array());
         assert_eq!(menu, json!(app.session.canvas_bar_menu(bar.context, 0)));
@@ -2773,7 +2775,7 @@ mod tests {
     }
 
     #[test]
-    fn canvas_bar_queries_place_the_bar_and_reject_stale_contexts() {
+    fn canvas_bar_measurements_publish_layout_and_reject_stale_contexts() {
         let mut app = NativeHost::new(layer_ui::Platform::Windows).unwrap();
         app.dispatch(UiAction::RestoreWorkspace {
             workspace: Box::new(layer_ui::WorkspaceState::for_platform(layer_ui::Platform::Windows)),
@@ -2784,16 +2786,23 @@ mod tests {
         app.dispatch(UiAction::Invoke { command: layer_ui::CommandId::Move }).unwrap();
         let bar = app.session.state().canvas_bar.clone().expect("selection bar");
         let measure = |context: layer_ui::CanvasBarContext| {
-            json!({"type": "canvas_bar_layout", "measure": {
-                "context": context, "items": vec![90.; bar.items.len()], "completion": [],
+            json!({"type": "measure_canvas_bar", "measure": {
+                "context": context, "items": vec![90.; bar.items.len()], "completion": vec![80.; bar.completion.len()],
                 "more": 40., "height": 52., "gap": 4., "padding": 6.
             }})
         };
-        let layout = app.query(measure(bar.context)).unwrap();
-        assert!(layout["bounds"]["width"].as_f64().unwrap() > 0., "{layout}");
-        assert!(layout["items"].as_u64().unwrap() > 0);
+        app.dispatch(serde_json::from_value(measure(bar.context)).unwrap()).unwrap();
+        let presentation = *app.session.canvas_bar_presentation().unwrap();
+        if presentation.layout.is_none() {
+            app.dispatch(UiAction::RevealCanvasBar { context: presentation.context, hold: presentation.hold }).unwrap();
+        }
+        let published = *app.session.canvas_bar_presentation().unwrap();
+        let layout = published.layout.unwrap();
+        assert!(layout.bounds.width > 0.);
+        assert!(layout.items > 0);
         let stale = layer_ui::CanvasBarContext { generation: bar.context.generation + 1, ..bar.context };
-        assert!(app.query(measure(stale)).unwrap().is_null());
+        app.dispatch(serde_json::from_value(measure(stale)).unwrap()).unwrap();
+        assert_eq!(app.session.canvas_bar_presentation(), Some(&published));
         let menu = app.query(json!({"type": "canvas_bar_menu", "context": bar.context, "shown": 0})).unwrap();
         assert!(menu.to_string().contains("show_canvas_action_bar"), "{menu}");
         assert!(app.query(json!({"type": "canvas_bar_menu", "context": stale, "shown": 0})).unwrap().is_null());

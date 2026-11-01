@@ -2350,10 +2350,13 @@ impl Workspace {
                 if self.color_panel.headroom() != self.picker_headroom() { change.regions |= regions::BRUSH; }
                 self.proof.sync(self);
                 self.local_tone.sync(self);
-                let hold = self.gpu.borrow().as_ref().map(|g| g.session.canvas_bar_hold());
-                if let Some(hold) = hold {
-                    self.canvas_bar.hold(self, hold);
+                let canvas_bar = self.gpu.borrow().as_ref().and_then(|g| g.session.canvas_bar_presentation().cloned());
+                self.canvas_bar.apply(self, canvas_bar.as_ref());
+                if change.regions == regions::CANVAS_BAR_GEOMETRY {
+                    if change.canvas_wake { self.wake(); }
+                    return;
                 }
+                change.regions &= !regions::CANVAS_BAR_GEOMETRY;
                 let publication = self
                     .gpu
                     .borrow()

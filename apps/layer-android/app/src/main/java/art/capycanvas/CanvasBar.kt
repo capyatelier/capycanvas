@@ -37,32 +37,34 @@ internal val BarElevation = 6.dp
 private val BarShadowMargin = BarElevation * PanelShadowReach
 
 private class BarFrame {
-    var bounds by mutableStateOf<JSONObject?>(null)
+    var bounds by mutableStateOf<Rect?>(null)
+    var revealedContext by mutableStateOf<String?>(null)
 }
 
-@Composable internal fun CanvasBar(host: CanvasHost, dock: DockInteraction, layout: JSONObject, viewportSize: IntSize) {
+@Composable internal fun CanvasBar(host: CanvasHost, dock: DockInteraction, viewportSize: IntSize) {
     val density = LocalDensity.current.density
     val frame = remember { BarFrame() }
     val placement = remember(frame, density) {
         val margin = (BarShadowMargin.value * density).roundToInt()
-        fun px(bounds: JSONObject, key: String) = (bounds.number(key) * density).roundToInt()
+        fun px(value: Float) = (value * density).roundToInt()
+        fun bounds() = host.canvasBarGeometry?.takeIf { host.canvasBarVisible && frame.revealedContext == it.context }?.bounds ?: frame.bounds
         Modifier.zIndex(198f).offset {
-            frame.bounds?.let { IntOffset(px(it, "x") - margin, px(it, "y") - margin) } ?: IntOffset.Zero
+            bounds()?.let { IntOffset(px(it.left) - margin, px(it.top) - margin) } ?: IntOffset.Zero
         }.layout { measurable, _ ->
-            val bounds = frame.bounds
-            val width = bounds?.let { px(it, "width") + 2 * margin } ?: 0
-            val height = bounds?.let { px(it, "height") + 2 * margin } ?: 0
+            val bounds = bounds()
+            val width = bounds?.let { px(it.width) + 2 * margin } ?: 0
+            val height = bounds?.let { px(it.height) + 2 * margin } ?: 0
             val content = measurable.measure(Constraints.fixed(width, height))
             layout(width, height) { content.place(0, 0) }
         }.clipToBounds()
     }
     Box(placement) {
         val view = host.canvasBar ?: return@Box
-        key(view.getJSONObject("context").toString()) { PlacedCanvasBar(host, dock, view, layout, frame, host.canvasBarVisible, viewportSize) }
+        key(view.getJSONObject("context").toString()) { PlacedCanvasBar(host, dock, view, frame, host.canvasBarVisible, viewportSize) }
     }
 }
 
-@Composable private fun PlacedCanvasBar(host: CanvasHost, dock: DockInteraction, view: JSONObject, layout: JSONObject, frame: BarFrame,
+@Composable private fun PlacedCanvasBar(host: CanvasHost, dock: DockInteraction, view: JSONObject, frame: BarFrame,
     visible: Boolean, viewportSize: IntSize) {
     val colors = LocalPalette.current
     val density = LocalDensity.current.density
@@ -90,44 +92,40 @@ private class BarFrame {
     val measure = obj("context" to context, "label" to labelWidth, "items" to JSONArray(items.indices.map { width(itemFields[it], items[it]) }),
         "completion" to JSONArray(completion.indices.map { width(completionFields[it], completion[it]) }), "more" to tile, "height" to tile,
         "gap" to gap, "padding" to 0f).toString()
-    var placed by remember { mutableStateOf<JSONObject?>(null) }
-    var revealed by remember { mutableStateOf(false) }
-    LaunchedEffect(measure, view.opt("anchor")?.toString(), layout) {
-        val next = host.awaitQuery(obj("type" to "canvas_bar_layout", "measure" to JSONObject(measure)))
-        if (next?.toString() != placed?.toString()) {
-            placed = next
-            if (revealed) next?.getJSONObject("bounds")?.let { frame.bounds = it }
-        }
+    val revealed = frame.revealedContext == context.toString()
+    LaunchedEffect(measure) {
+        host.dispatch(obj("type" to "measure_canvas_bar", "measure" to JSONObject(measure)))
     }
     val glass = remember { Any() }
-    val placement = placed ?: return
+    val placement = host.canvasBarGeometry?.takeIf { it.context == context.toString() }
     val shape = SurfaceShape
     LaunchedEffect(visible) {
-        if (!visible) {
-            revealed = false
+        val bounds = placement?.bounds
+        if (!visible || bounds == null) {
+            frame.revealedContext = null
             host.glassBox(glass, null)
             return@LaunchedEffect
         }
-        val bounds = (placed ?: placement).getJSONObject("bounds")
-        fun px(key: String) = (bounds.number(key) * density).roundToInt().toFloat()
+        fun px(value: Float) = (value * density).roundToInt().toFloat()
         val radius = SurfaceRadius.value * density
-        host.glassBox(glass, floatArrayOf(px("x"), px("y"), px("width"), px("height"), radius, radius, radius, radius))
+        host.glassBox(glass, floatArrayOf(px(bounds.left), px(bounds.top), px(bounds.width), px(bounds.height), radius, radius, radius, radius))
         host.glassPresented()
-        frame.bounds = placed?.getJSONObject("bounds") ?: bounds
-        revealed = true
+        frame.bounds = bounds
+        frame.revealedContext = context.toString()
     }
-    val frameBounds = frame.bounds
+    val frameBounds = if (visible && revealed) placement?.bounds ?: frame.bounds else frame.bounds
     SideEffect {
+        if (visible && revealed) placement?.bounds?.let { frame.bounds = it }
         frameBounds?.let { bounds ->
-            fun px(key: String) = (bounds.number(key) * density).roundToInt().toFloat()
-            val left = px("x"); val top = px("y")
-            val slot = Rect(left, top, left + px("width"), top + px("height"))
+            fun px(value: Float) = (value * density).roundToInt().toFloat()
+            val left = px(bounds.left); val top = px(bounds.top)
+            val slot = Rect(left, top, left + px(bounds.width), top + px(bounds.height))
                 .intersect(Rect(0f, 0f, viewportSize.width.toFloat(), viewportSize.height.toFloat())).let { if (it.isEmpty) Rect.Zero else it }
             if (dock.canvasBarSlot != slot) dock.canvasBarSlot = slot
         }
     }
     DisposableEffect(dock) { onDispose { dock.canvasBarSlot = null } }
-    val shown = placement.optInt("items").coerceIn(0, items.size)
+    val shown = (placement?.items ?: 0).coerceIn(0, items.size)
     fun edit(action: JSONObject) = host.dispatch(obj("type" to "canvas_bar_edit", "context" to context, "action" to action))
     fun choiceMenu(id: String, load: (JSONObject?) -> Unit) = host.query(obj("type" to "canvas_bar_choice_menu", "context" to context, "id" to id)) {
         load(it as? JSONObject)

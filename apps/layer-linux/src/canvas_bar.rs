@@ -8,7 +8,7 @@ use crate::workspace::{
 use gtk::{glib, prelude::*};
 use layer_ui::{
     Bounds, CANVAS_BAR_REAPPEAR_MS, CanvasBarItem, CanvasBarLayout, CanvasBarMeasure,
-    CanvasBarView, ToolOption, UiAction,
+    CanvasBarPresentation, CanvasBarView, ToolOption, UiAction,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -29,7 +29,7 @@ pub struct CanvasBar {
     updating: Cell<bool>,
     layout: Cell<Option<CanvasBarLayout>>,
     suppressed: Cell<bool>,
-    hold: Cell<u32>,
+    hold: Cell<Option<(layer_ui::CanvasBarContext, u32)>>,
     reappear: RefCell<Option<glib::SourceId>>,
 }
 
@@ -82,7 +82,7 @@ impl CanvasBar {
             updating: Cell::new(false),
             layout: Cell::new(None),
             suppressed: Cell::new(false),
-            hold: Cell::new(0),
+            hold: Cell::new(None),
             reappear: RefCell::new(None),
         }
     }
@@ -169,7 +169,7 @@ impl CanvasBar {
         }
         self.updating.set(false);
         *self.view.borrow_mut() = view.cloned();
-        self.place(workspace);
+        self.measure(workspace);
     }
 
     fn rebuild(&self, workspace: &Rc<Workspace>, view: Option<&CanvasBarView>) {
@@ -202,11 +202,9 @@ impl CanvasBar {
         }
     }
 
-    pub fn place(&self, workspace: &Rc<Workspace>) {
+    fn measure(&self, workspace: &Rc<Workspace>) {
         let Some(view) = self.view.borrow().clone() else {
-            self.layout.set(None);
-            self.root.set_visible(false);
-            workspace.queue_surface_allocate();
+            self.apply(workspace, None);
             return;
         };
         let width = |w: &gtk::Widget| w.measure(gtk::Orientation::Horizontal, -1).1 as f32;
@@ -232,25 +230,58 @@ impl CanvasBar {
             gap: GAP as f32,
             padding: 0.,
         };
-        let layout = workspace
-            .gpu
-            .borrow()
-            .as_ref()
-            .and_then(|g| g.session.canvas_bar_layout(&measure));
+        for (index, (field, _)) in fields.iter().enumerate() {
+            field.set_visible(index >= view.items.len() || self.layout.get().is_none_or(|layout| index < layout.items));
+        }
+        drop(fields);
+        let result = workspace.gpu.borrow_mut().as_mut()
+            .map(|g| g.session.dispatch(UiAction::MeasureCanvasBar { measure }));
+        if let Some(result) = result { workspace.changed(result); }
+    }
+
+    pub fn apply(&self, workspace: &Rc<Workspace>, presentation: Option<&CanvasBarPresentation>) {
+        let presentation = presentation.filter(|p| self.view.borrow().as_ref().is_some_and(|v| v.context == p.context));
+        let layout = presentation.and_then(|p| p.layout);
+        let allocation = layout.or_else(|| presentation
+            .filter(|p| self.hold.get().is_some_and(|(context, _)| context == p.context))
+            .and_then(|_| self.layout.get()));
+        if self.layout.get() == allocation
+            && self.hold.get() == presentation.map(|p| (p.context, p.hold))
+            && self.suppressed.get() == layout.is_none()
+            && self.root.is_visible() == allocation.is_some() {
+            return;
+        }
+        if let Some(presentation) = presentation {
+            if layout.is_some() {
+                self.hold.set(Some((presentation.context, presentation.hold)));
+                if let Some(source) = self.reappear.borrow_mut().take() { source.remove(); }
+                self.suppressed.set(false);
+            } else {
+                self.hold(workspace, presentation.context, presentation.hold);
+                if !self.suppressed.replace(true) { self.menu.popdown(); }
+            }
+        } else {
+            self.hold.set(None);
+            self.suppressed.set(true);
+            if let Some(source) = self.reappear.borrow_mut().take() { source.remove(); }
+        }
         if let Some(layout) = layout {
-            for (index, (field, _)) in items.iter().enumerate() {
+            let items = self.view.borrow().as_ref().map_or(0, |v| v.items.len());
+            for (index, (field, _)) in self.fields.borrow().iter().take(items).enumerate() {
                 field.set_visible(index < layout.items);
             }
         }
-        self.layout.set(layout);
-        self.root.set_visible(layout.is_some());
+        let changed = self.layout.replace(allocation) != allocation;
+        self.root.set_visible(allocation.is_some());
         self.present();
-        workspace.place_notice();
-        workspace.queue_surface_allocate();
+        if changed {
+            workspace.place_notice();
+            workspace.queue_surface_allocate();
+        }
     }
 
-    pub fn hold(&self, workspace: &Rc<Workspace>, hold: u32) {
-        if self.hold.replace(hold) == hold {
+    fn hold(&self, workspace: &Rc<Workspace>, context: layer_ui::CanvasBarContext, hold: u32) {
+        if self.hold.replace(Some((context, hold))) == Some((context, hold)) {
             return;
         }
         if let Some(source) = self.reappear.borrow_mut().take() {
@@ -271,8 +302,7 @@ impl CanvasBar {
                 move || {
                     let bar = &workspace.canvas_bar;
                     bar.reappear.borrow_mut().take();
-                    bar.suppressed.set(false);
-                    bar.place(&workspace);
+                    workspace.dispatch(UiAction::RevealCanvasBar { context, hold });
                 }
             ),
         );

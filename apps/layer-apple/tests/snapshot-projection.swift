@@ -15,6 +15,7 @@ private final class Changes: @unchecked Sendable {
         return changes
     }
     @MainActor static func main() throws {
+        checkCanvasBarPublication()
         checkWorkspaceMotion()
         checkWorkspaceReflow()
         let model = SnapshotProjection()
@@ -273,4 +274,32 @@ private final class Changes: @unchecked Sendable {
         precondition(editor.snapshot["header_presentation"]["items"][0]["bounds"]["width"].uint == 200)
         print("Workspace reflow checks passed: retained content, atomic geometry/camera, incomplete/stale packet rejection and full completion")
     }
+    @MainActor private static func checkCanvasBarPublication() {
+        let editor = EditorSnapshotState()
+        let context: [String: Any] = ["kind": "selection", "generation": 1]
+        func presentation(_ hold: Int, x: Int?) -> Any {
+            let layout: Any = x.map { ["items": 2, "bounds": ["x": $0, "y": 500, "width": 300, "height": 36]] } ?? NSNull()
+            return ["context": context, "hold": hold, "layout": layout]
+        }
+        func update(_ revision: Int, _ value: Any) -> JSON {
+            JSON(["revision": revision, "model_revision": 10, "content_revision": 10, "drag": NSNull(), "canvas_bar": value])
+        }
+        precondition(editor.receive(JSON(["state": ["revision": 10, "camera": ["zoom": 1], "brush": ["size": 24]],
+            "workspace_update": update(10, presentation(0, x: 100)).raw])) == .full)
+        let content = watch { _ = editor.state["revision"].raw; _ = editor.state["brush"].raw }
+        precondition(editor.receive(JSON(["workspace_update": update(11, presentation(2, x: nil)).raw])) == .workspace)
+        precondition(editor.receive(JSON(["workspace_update": update(12, presentation(4, x: nil)).raw])) == .workspace)
+        precondition(editor.snapshot["workspace_update"]["canvas_bar"]["layout"].isNull && content.value == 0)
+        let layout = watch { _ = editor.snapshot["workspace_update"]["canvas_bar"]["layout"].raw }
+        precondition(editor.receive(JSON(["workspace_update": update(13, presentation(4, x: 200)).raw, "camera": ["zoom": 2]])) == .workspace)
+        precondition(editor.snapshot["workspace_update"]["canvas_bar"]["layout"]["bounds"]["x"].uint == 200)
+        precondition(layout.value == 1 && content.value == 0 && editor.state["camera"]["zoom"].uint == 2)
+        precondition(editor.receive(JSON(["camera": ["zoom": 3]])) == .camera)
+        precondition(editor.snapshot["workspace_update"]["canvas_bar"]["layout"]["bounds"]["x"].uint == 200)
+        precondition(editor.receive(JSON(["workspace_update": update(12, NSNull()).raw])) == .ignored)
+        precondition(editor.receive(JSON(["workspace_update": update(14, NSNull()).raw])) == .workspace)
+        precondition(editor.snapshot["workspace_update"]["canvas_bar"].isNull && content.value == 0)
+        print("Canvas bar projection checks passed: geometry-only/camera publication, retained content, stale rejection and removal")
+    }
+
 }

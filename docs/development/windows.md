@@ -453,6 +453,8 @@ stacks. Run
 for the x64 and ARM64 release build, test and Clippy jobs. Neither workflow
 qualifies hardware rendering or performance.
 
+`canvas-bar:resize-dark` and `canvas-bar:resize-light` check Near Object and Quick Mask bar placement across window resize and restore.
+
 `color-picker:fit-dark` and `color-picker:fit-light` check native HDR Color allocation and the constrained shared fit independently of picker sampling.
 `color-picker:sampling-dark` and `color-picker:sampling-light` open the real native sampling-size popup and verify its choices and shared state.
 

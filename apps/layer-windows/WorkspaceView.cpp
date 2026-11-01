@@ -149,7 +149,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::set<uint32_t> handledColorRequests;
     std::array<std::shared_ptr<PreviewPanel>,2> previewPanels{std::make_shared<PreviewPanel>(),std::make_shared<PreviewPanel>()};
     std::shared_ptr<ResponseCalibration> pressure=std::make_shared<ResponseCalibration>();
-    double cameraRevision=-1;
     hstring previousTheme,previousPalette,paintedTheme;std::vector<uint32_t> publishedBridgeGroups,publishedBridgeColumns;
     Flyout popup{nullptr};
     std::wstring popupControl;
@@ -510,11 +509,12 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         if(!full&&!reflow){
             if(snapshot.HasKey(L"color_preview")){data->colorPreview=object(snapshot,L"color_preview");data->queueColors();}
             else if(WorkspaceData::previewing(data->colorPreview)){data->colorPreview=J{};data->queueColors();}
-            if(update.Size()){++motionUpdates;applyMotion(object(update,L"drag"));canvasBar->Dragging(object(update,L"drag").Size()!=0);}
+            if(update.Size()){++motionUpdates;applyMotion(object(update,L"drag"));}
             if(snapshot.HasKey(L"camera")){
                 auto cameraPatch=object(snapshot,L"camera");
                 data->state.Insert(L"camera",cameraPatch);updateCamera(cameraPatch);colorStrip->present();
             }
+            if(update.Size())canvasBar->Published(object(update,L"canvas_bar"));
             tracePresentation();return true;
         }
         if(full)++fullUpdates;
@@ -623,7 +623,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         }
         if(full)updateConfiguration();
         if(full)commandSearch->Apply(data->state);
-        canvasBar->Dragging(object(update,L"drag").Size()!=0);if(full)canvasBar->Apply(data->state);
+        if(full)canvasBar->Apply(data->state);
+        canvasBar->Published(object(update,L"canvas_bar"));
         for(auto const& panel:previewPanels){panel->Place(layout);if(full)panel->Publish(data->state);}
         if(full){pressure->attach();pressure->Publish();}
         notice->Place(layout);if(full){notice->Publish(data->state);data->queueColors();}
@@ -1251,7 +1252,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         notice->Bar(object(data->chrome,L"canvas_bar"));
     }
     void updateCamera(J const& view){
-        if(double revision=num(view,L"revision",-1);revision!=cameraRevision){cameraRevision=revision;canvasBar->Defer();}
         zoom->Update(view);
     }
 };

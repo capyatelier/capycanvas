@@ -158,7 +158,7 @@ fn measure(bar: &CanvasBarView, item: f32) -> CanvasBarMeasure {
         context: bar.context,
         label: 0.,
         items: vec![item; bar.items.len()],
-        completion: vec![80., 80.],
+        completion: vec![80.; bar.completion.len()],
         more: 40.,
         height: 48.,
         gap: 4.,
@@ -317,12 +317,23 @@ fn hiding_the_canvas_bar_keeps_apply_and_cancel_at_the_bottom_edge() {
     assert!(s.state.workspace.layout.canvas_bar, "the toggle is one workspace history step");
 }
 
+fn measured_bar_layout(s: &mut UiSession<Recorder>, dimensions: CanvasBarMeasure) -> Option<CanvasBarLayout> {
+    let context = dimensions.context;
+    s.dispatch(UiAction::MeasureCanvasBar { measure: dimensions }).unwrap();
+    let presentation = *s.canvas_bar_presentation()?;
+    if presentation.context != context { return None; }
+    if presentation.layout.is_none() {
+        s.dispatch(UiAction::RevealCanvasBar { context, hold: presentation.hold }).unwrap();
+    }
+    s.canvas_bar_presentation().filter(|value| value.context == context)?.layout
+}
+
 #[test]
 fn canvas_bar_layout_fits_items_and_clears_the_transform_handles() {
     let mut s = filled_selection_session();
     invoke(&mut s, CommandId::ScaleRotate);
     let bar = s.state.canvas_bar.clone().unwrap();
-    let layout = s.canvas_bar_layout(&measure(&bar, 80.)).expect("current context");
+    let layout = measured_bar_layout(&mut s, measure(&bar, 80.)).expect("current context");
     assert_eq!(layout.items, bar.items.len());
     assert_eq!(layout.side, CanvasBarSide::Below);
     let lowest = s
@@ -331,12 +342,12 @@ fn canvas_bar_layout_fits_items_and_clears_the_transform_handles() {
         .map(|[_, y]| y)
         .fold(f32::NEG_INFINITY, f32::max);
     assert!(layout.bounds.y > lowest + canvas_bar::CANVAS_BAR_MARGIN);
-    assert_eq!(s.canvas_bar_layout(&measure(&bar, 5000.)).unwrap().items, 0, "items that do not fit go to More");
+    assert_eq!(measured_bar_layout(&mut s, measure(&bar, 5000.)).unwrap().items, 0, "items that do not fit go to More");
     let stale = CanvasBarMeasure {
         context: CanvasBarContext { generation: bar.context.generation + 1, ..bar.context },
         ..measure(&bar, 80.)
     };
-    assert!(s.canvas_bar_layout(&stale).is_none());
+    assert!(measured_bar_layout(&mut s, stale).is_none());
     let menu = s.canvas_bar_menu(bar.context, 0).unwrap();
     let first = &menu.sections[0][0];
     assert_eq!(first.label, "Mode");
@@ -360,8 +371,10 @@ fn canvas_bar_stays_in_the_window_when_docks_leave_no_work_area() {
     s.set_viewport([360., 640.], [360, 640]).unwrap();
     assert!(s.layout([360., 640.]).work_area.width < 200., "the docks fill a phone-width window");
     invoke(&mut s, CommandId::ScaleRotate);
+    let waiting = *s.canvas_bar_presentation().unwrap();
+    s.dispatch(UiAction::RevealCanvasBar { context: waiting.context, hold: waiting.hold }).unwrap();
     let bar = s.state.canvas_bar.clone().unwrap();
-    let layout = s.canvas_bar_layout(&measure(&bar, 90.)).unwrap();
+    let layout = measured_bar_layout(&mut s, measure(&bar, 90.)).unwrap();
     assert_eq!(layout.side, CanvasBarSide::BottomEdge);
     assert!(layout.bounds.x >= 0. && layout.bounds.x + layout.bounds.width <= 360., "{layout:?}");
     assert!(layout.items < bar.items.len(), "items that do not fit the window go to More");
@@ -374,10 +387,10 @@ fn canvas_bar_uses_the_window_width_before_it_would_show_only_more() {
     let bar = s.state.canvas_bar.clone().unwrap();
     assert_eq!(bar.context.kind, CanvasBarKind::Selection);
     let work = s.layout([1600., 1000.]).work_area;
-    let wide = CanvasBarMeasure { completion: Vec::new(), ..measure(&bar, work.width - 60.) };
+    let wide = measure(&bar, work.width - 60.);
     let margin = canvas_bar::CANVAS_BAR_MARGIN;
     assert!(2. * (wide.padding + margin) + wide.more <= work.width, "More alone fits the work area");
-    let layout = s.canvas_bar_layout(&wide).unwrap();
+    let layout = measured_bar_layout(&mut s, wide.clone()).unwrap();
     assert_eq!(layout.items, 1, "the bar leaves the work area to show its first item");
     assert_eq!(layout.side, CanvasBarSide::BottomEdge, "a bar across the docks keeps to the bottom edge");
     assert!(layout.bounds.width > work.width - 2. * margin, "{layout:?} {work:?}");
@@ -398,11 +411,13 @@ fn image_placement_bar_offers_object_commands_and_counts_a_batch() {
     let mut s = placed_photo("bar placement");
     s.set_viewport([1600., 1000.], [1600, 1000]).unwrap();
     s.frame(0, 0).unwrap();
+    let waiting = *s.canvas_bar_presentation().unwrap();
+    s.dispatch(UiAction::RevealCanvasBar { context: waiting.context, hold: waiting.hold }).unwrap();
     let bar = s.state.canvas_bar.clone().expect("placement bar");
     assert_eq!(bar.context.kind, CanvasBarKind::Placement);
     let [x0, y0, x1, y1] = bar.anchor.expect("the bar is anchored to the placed image");
     assert_eq!([x1 - x0, y1 - y0], [20., 10.]);
-    assert_ne!(s.canvas_bar_layout(&measure(&bar, 40.)).unwrap().side, CanvasBarSide::BottomEdge, "the bar sits beside the image");
+    assert_ne!(measured_bar_layout(&mut s, measure(&bar, 40.)).unwrap().side, CanvasBarSide::BottomEdge, "the bar sits beside the image");
     assert_eq!(bar_commands(&bar.items), [CommandId::TransformFlipHorizontal, CommandId::PlacementOriginalSize]);
     assert!(bar.items.iter().all(|item| item.icon_only));
     let more = s.canvas_bar_menu(bar.context, bar.items.len()).unwrap();
@@ -1506,7 +1521,7 @@ fn guide_bar_anchors_to_the_selected_guide_under_ruler_and_move() {
     assert!(bar.completion.is_empty());
     let more = s.canvas_bar_menu(bar.context, bar.items.len()).unwrap();
     assert!(more.sections.concat().iter().any(|i| i.action == Some(UiAction::Invoke { command: CommandId::ShowRulers })), "Guides is in More");
-    let layout = s.canvas_bar_layout(&CanvasBarMeasure { completion: Vec::new(), ..measure(&bar, 80.) }).unwrap();
+    let layout = measured_bar_layout(&mut s, CanvasBarMeasure { completion: Vec::new(), ..measure(&bar, 80.) }).unwrap();
     let (a, b) = s.engine.document().rulers().next().unwrap().geometry.handles();
     let lowest = [a, b.unwrap()].map(|p| s.document_to_logical()(p)[1]).into_iter().fold(f32::NEG_INFINITY, f32::max);
     assert_eq!(layout.side, CanvasBarSide::Below);
@@ -1827,12 +1842,16 @@ fn transform_modes_collapse_into_a_dropdown_where_the_work_area_is_narrow() {
     assert!(modes(&s));
     s.set_viewport([700., 800.], [700, 800]).unwrap();
     s.frame(2, 2).unwrap();
+    let hidden = *s.canvas_bar_presentation().unwrap();
+    s.dispatch(UiAction::RevealCanvasBar { context: hidden.context, hold: hidden.hold }).unwrap();
     assert!(s.layout([700., 800.]).work_area.width < canvas_bar::CANVAS_BAR_NARROW_WIDTH);
     assert!(!modes(&s), "a narrow work area shows the mode as a dropdown");
     let bar = s.state.canvas_bar.clone().unwrap();
     assert_eq!(menu_labels(&s.canvas_bar_choice_menu(bar.context, "transform-mode").unwrap()), [["Scale", "Distort", "Warp"]]);
     s.set_viewport([1600., 1000.], [1600, 1000]).unwrap();
     s.frame(3, 3).unwrap();
+    let hidden = *s.canvas_bar_presentation().unwrap();
+    s.dispatch(UiAction::RevealCanvasBar { context: hidden.context, hold: hidden.hold }).unwrap();
     assert!(modes(&s));
 }
 
@@ -1887,4 +1906,180 @@ fn keep_proportions_is_a_lock_beside_scale() {
     assert_eq!(lock(&s), (true, true), "Scale keeps the lock it had");
     invoke(&mut s, CommandId::TransformUniform);
     assert_eq!(lock(&s), (true, false));
+}
+
+#[test]
+fn canvas_bar_presentation_is_published_without_rebuilding_content() {
+    let mut s = filled_selection_session();
+    invoke(&mut s, CommandId::ScaleRotate);
+    let bar = s.state.canvas_bar.as_ref().unwrap();
+    let packet = serde_json::to_value(s.workspace_update()).unwrap();
+    assert_eq!(packet["canvas_bar"]["context"], serde_json::to_value(bar.context).unwrap());
+    assert!(packet["canvas_bar"]["layout"].is_null());
+}
+
+fn admit_canvas_bar(s: &mut UiSession<Recorder>) -> CanvasBarMeasure {
+    let bar = s.state.canvas_bar.as_ref().unwrap();
+    let mut dimensions = measure(bar, 90.);
+    dimensions.completion = vec![80.; bar.completion.len()];
+    s.dispatch(UiAction::MeasureCanvasBar { measure: dimensions.clone() }).unwrap();
+    dimensions
+}
+
+#[test]
+fn canvas_bar_measurement_admission_and_reveal_are_context_and_hold_checked() {
+    let mut s = filled_selection_session();
+    invoke(&mut s, CommandId::ScaleRotate);
+    let model = s.workspace_model_revision();
+    let content = s.workspace_content_revision();
+    let dimensions = admit_canvas_bar(&mut s);
+    let initial = *s.canvas_bar_presentation().unwrap();
+    assert!(initial.layout.is_some());
+    assert_eq!((s.workspace_model_revision(), s.workspace_content_revision()), (model, content));
+    let revision = s.state.revision;
+    assert_eq!(s.dispatch(UiAction::MeasureCanvasBar { measure: dimensions.clone() }).unwrap().regions, 0);
+    assert_eq!(s.state.revision, revision);
+    let mut stale = dimensions.clone(); stale.context.generation += 1;
+    assert_eq!(s.dispatch(UiAction::MeasureCanvasBar { measure: stale }).unwrap().regions, 0);
+    let mut invalid = dimensions.clone(); invalid.items[0] = f32::NAN;
+    assert!(s.dispatch(UiAction::MeasureCanvasBar { measure: invalid }).is_err());
+    let mut invalid = dimensions; invalid.completion.push(80.);
+    assert_eq!(s.dispatch(UiAction::MeasureCanvasBar { measure: invalid }).unwrap().regions, 0);
+    let pointer = |phase| pointer_input(7, phase, PointerKind::Mouse, PointerButton::Primary, [500., 500.], 0);
+    s.input(pointer(ContactPhase::Down)).unwrap();
+    let held = *s.canvas_bar_presentation().unwrap();
+    assert!(held.hold % 2 == 1 && held.layout.is_none());
+    assert_eq!(s.dispatch(UiAction::RevealCanvasBar { context: held.context, hold: held.hold }).unwrap().regions, 0);
+    s.input(pointer(ContactPhase::Up)).unwrap();
+    let released = *s.canvas_bar_presentation().unwrap();
+    assert!(released.hold % 2 == 0 && released.layout.is_none());
+    assert_eq!(s.dispatch(UiAction::RevealCanvasBar { context: initial.context, hold: held.hold }).unwrap().regions, 0);
+    let shown = s.dispatch(UiAction::RevealCanvasBar { context: released.context, hold: released.hold }).unwrap();
+    assert_eq!(shown.regions, regions::CANVAS_BAR_GEOMETRY);
+    assert!(s.canvas_bar_presentation().unwrap().layout.is_some());
+    let revision = s.state.revision;
+    assert_eq!(s.dispatch(UiAction::RevealCanvasBar { context: released.context, hold: released.hold }).unwrap().regions, 0);
+    assert_eq!(s.state.revision, revision);
+}
+
+#[test]
+fn canvas_bar_hidden_camera_motion_defers_geometry_until_one_current_reveal() {
+    let mut s = filled_selection_session();
+    invoke(&mut s, CommandId::ScaleRotate);
+    let dimensions = admit_canvas_bar(&mut s);
+    let context = dimensions.context;
+    for index in 0..24 {
+        invoke(&mut s, if index % 2 == 0 { CommandId::ZoomIn } else { CommandId::ZoomOut });
+        assert!(s.canvas_bar_presentation().unwrap().layout.is_none());
+        let skipped: Option<()> = s.canvas_bar.measured_when_ready(|_| panic!("hidden bar prepared native geometry"));
+        assert!(skipped.is_none());
+    }
+    let current = *s.canvas_bar_presentation().unwrap();
+    assert_eq!(s.dispatch(UiAction::RevealCanvasBar { context, hold: current.hold.wrapping_sub(2) }).unwrap().regions, 0);
+    let change = s.dispatch(UiAction::RevealCanvasBar { context, hold: current.hold }).unwrap();
+    assert_eq!(change.regions, regions::CANVAS_BAR_GEOMETRY);
+    let layout = s.canvas_bar_presentation().unwrap().layout.unwrap();
+    assert_eq!(layout.bounds.height, dimensions.height);
+    let viewport = s.logical_viewport.unwrap();
+    assert!(layout.bounds.x >= 0. && layout.bounds.x + layout.bounds.width <= viewport[0]);
+    assert!(layout.bounds.y >= 0. && layout.bounds.y + layout.bounds.height <= viewport[1]);
+    let calls = std::cell::Cell::new(0);
+    s.canvas_bar.measured_when_ready(|_| calls.set(calls.get() + 1));
+    assert_eq!(calls.get(), 1);
+    let revision = s.state.revision;
+    assert_eq!(s.dispatch(UiAction::RevealCanvasBar { context, hold: current.hold }).unwrap().regions, 0);
+    assert_eq!(s.state.revision, revision);
+}
+
+#[test]
+fn canvas_bar_published_geometry_follows_viewport_without_content_rebuild() {
+    let mut s = filled_selection_session();
+    invoke(&mut s, CommandId::ScaleRotate);
+    invoke(&mut s, CommandId::ShowCanvasActionBar);
+    admit_canvas_bar(&mut s);
+    let initial = *s.canvas_bar_presentation().unwrap();
+    s.set_viewport([900., 700.], [900, 700]).unwrap();
+    let resized = *s.canvas_bar_presentation().unwrap();
+    assert_eq!(resized.context, initial.context);
+    assert_ne!(resized.layout, initial.layout);
+    assert!(resized.layout.unwrap().bounds.x + resized.layout.unwrap().bounds.width <= 900.);
+}
+
+#[test]
+fn canvas_bar_published_geometry_follows_a_pivot_outside_the_same_object_bounds() {
+    let mut s = filled_selection_session();
+    invoke(&mut s, CommandId::ScaleRotate);
+    admit_canvas_bar(&mut s);
+    let initial = *s.canvas_bar_presentation().unwrap();
+    let bounds = s.transform_document_bounds();
+    s.transform_pen(event(&s, 1, PenPhase::Down, 1.), Point { x: 200., y: 200. }).unwrap();
+    s.transform_pen(event(&s, 2, PenPhase::Move, 1.), Point { x: 200., y: 600. }).unwrap();
+    s.transform_pen(event(&s, 3, PenPhase::Up, 1.), Point { x: 200., y: 600. }).unwrap();
+    s.frame(3, 3).unwrap();
+    assert_eq!(s.transform_document_bounds(), bounds);
+    assert_eq!(s.state.canvas_bar.as_ref().unwrap().context, initial.context);
+    assert_ne!(s.canvas_bar_presentation().unwrap().layout, initial.layout);
+}
+
+#[test]
+fn canvas_bar_published_geometry_avoids_a_moved_floating_obstacle() {
+    let mut s = filled_selection_session();
+    invoke(&mut s, CommandId::ScaleRotate);
+    let viewport = [1600., 1000.];
+    let group = s.layout(viewport).groups[0].id;
+    s.dispatch(UiAction::MoveGroup { group, target: DockTarget::Float { position: [10., 10.] }, viewport }).unwrap();
+    admit_canvas_bar(&mut s);
+    let initial = *s.canvas_bar_presentation().unwrap();
+    let bounds = initial.layout.unwrap().bounds;
+    s.dispatch(UiAction::MoveGroup { group, target: DockTarget::Float { position: [bounds.x, bounds.y] }, viewport }).unwrap();
+    assert_eq!(s.canvas_bar_presentation().unwrap().context, initial.context);
+    assert_ne!(s.canvas_bar_presentation().unwrap().layout, initial.layout);
+}
+
+#[test]
+fn canvas_bar_layout_work_is_zero_while_held_or_stable_and_once_on_reveal() {
+    let mut s = filled_selection_session();
+    invoke(&mut s, CommandId::ScaleRotate);
+    let dimensions = admit_canvas_bar(&mut s);
+    test_support::LAYOUT_RESOLVES.with(|count| count.set(0));
+    for _ in 0..24 {
+        s.gesture([500., 500.], [501., 500.], 1.001, 0.).unwrap();
+    }
+    assert_eq!(test_support::LAYOUT_RESOLVES.with(|count| count.get()), 0);
+    let hidden = *s.canvas_bar_presentation().unwrap();
+    s.dispatch(UiAction::RevealCanvasBar { context: hidden.context, hold: hidden.hold }).unwrap();
+    assert_eq!(test_support::LAYOUT_RESOLVES.with(|count| count.get()), 1);
+    test_support::LAYOUT_RESOLVES.with(|count| count.set(0));
+    s.dispatch(UiAction::MeasureCanvasBar { measure: dimensions }).unwrap();
+    s.dispatch(UiAction::RevealCanvasBar { context: hidden.context, hold: hidden.hold }).unwrap();
+    s.changed(0, false);
+    s.workspace_update();
+    s.canvas_bar_presentation();
+    assert_eq!(test_support::LAYOUT_RESOLVES.with(|count| count.get()), 0);
+    invoke(&mut s, CommandId::ShowCanvasActionBar);
+    admit_canvas_bar(&mut s);
+    test_support::LAYOUT_RESOLVES.with(|count| count.set(0));
+    for _ in 0..24 { s.gesture([500., 500.], [501., 500.], 1.001, 0.).unwrap(); }
+    assert_eq!(test_support::LAYOUT_RESOLVES.with(|count| count.get()), 0);
+    s.set_viewport([1200., 900.], [1200, 900]).unwrap();
+    assert_eq!(test_support::LAYOUT_RESOLVES.with(|count| count.get()), 2);
+}
+
+#[test]
+fn canvas_bar_reveal_refreshes_narrow_content_with_one_layout() {
+    let mut s = filled_selection_session();
+    invoke(&mut s, CommandId::ScaleRotate);
+    admit_canvas_bar(&mut s);
+    let wide = s.state.canvas_bar.as_ref().unwrap().clone();
+    s.set_viewport([700., 900.], [700, 900]).unwrap();
+    let hidden = *s.canvas_bar_presentation().unwrap();
+    assert!(hidden.layout.is_none());
+    test_support::LAYOUT_RESOLVES.with(|count| count.set(0));
+    s.dispatch(UiAction::RevealCanvasBar { context: hidden.context, hold: hidden.hold }).unwrap();
+    assert_eq!(test_support::LAYOUT_RESOLVES.with(|count| count.get()), 1);
+    let narrow = s.state.canvas_bar.as_ref().unwrap();
+    assert_ne!(narrow.items, wide.items);
+    assert!(s.canvas_bar_presentation().unwrap().layout.is_none());
+    admit_canvas_bar(&mut s);
+    assert!(s.canvas_bar_presentation().unwrap().layout.is_some());
 }

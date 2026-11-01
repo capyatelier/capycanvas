@@ -4,6 +4,7 @@ use layer_engine::{SampleFlags, ToolKind};
 use layer_render::{BackendError, FilterPreviewImage, FilterPreviewRequest, FramePacket, HostImage};
 
 thread_local! {
+    pub(super) static LAYOUT_RESOLVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(super) static COMMAND_REFRESHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 

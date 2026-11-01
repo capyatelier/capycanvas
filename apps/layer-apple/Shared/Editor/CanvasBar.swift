@@ -1,18 +1,57 @@
 import SwiftUI
 
 @MainActor final class CanvasBarPresence: ObservableObject {
-    @Published private(set) var visible = true
-    @Published var bounds: CGRect?
-    private var held: UInt32 = 0
+    @Published private(set) var visible = false
+    @Published private(set) var bounds: CGRect?
+    @Published private(set) var layout = JSON()
+    private var context = JSON()
+    private var held: UInt32?
     private var reappear: DispatchWorkItem?
     var delay: TimeInterval = 0
+    var reveal: ((JSON, UInt32) -> Void)?
+    private func show(_ value: Bool) {
+        if visible != value { visible = value }
+        let next = value && !layout.isNull ? layout["bounds"].rect : nil
+        if bounds != next { bounds = next }
+    }
+    func receive(_ presentation: JSON) {
+        guard !presentation.isNull else {
+            reappear?.cancel(); reappear = nil
+            context = JSON(); held = nil
+            if !layout.isNull { layout = JSON() }
+            show(false)
+            return
+        }
+        let nextContext = presentation["context"], next = presentation["layout"]
+        let changed = context.stableKey != nextContext.stableKey
+        if changed {
+            reappear?.cancel(); reappear = nil
+            context = nextContext; held = nil
+        }
+        let retained = !next.isNull ? next : changed ? JSON() : layout
+        if layout.stableKey != retained.stableKey { layout = retained }
+        let hold = UInt32(truncatingIfNeeded: presentation["hold"].uint)
+        if next.isNull {
+            show(false)
+            self.hold(hold)
+        } else {
+            held = hold
+            reappear?.cancel(); reappear = nil
+            show(true)
+        }
+    }
     func hold(_ value: UInt32) {
         guard value != held else { return }
         held = value
         reappear?.cancel(); reappear = nil
-        if visible { visible = false }
-        guard value % 2 == 0 else { return }
-        let work = DispatchWorkItem { [weak self] in self?.visible = true }
+        show(false)
+        guard value % 2 == 0 && !context.isNull else { return }
+        let captured = context
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.reappear != nil, self.held == value, self.context.stableKey == captured.stableKey else { return }
+            self.reappear = nil
+            self.reveal?(captured, value)
+        }
         reappear = work
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
@@ -23,8 +62,11 @@ struct CanvasBarLayer: View {
     @ObservedObject var presence: CanvasBarPresence
     var body: some View {
         let view = store.state["canvas_bar"]
-        if !view.isNull && presence.visible {
-            PlacedCanvasBar(store: store, view: view).id(view["context"].stableKey)
+        if !view.isNull {
+            PlacedCanvasBar(store: store, view: view, placed: presence.layout, visible: presence.visible).id(view["context"].stableKey)
+                .opacity(presence.visible ? 1 : 0)
+                .allowsHitTesting(presence.visible)
+                .accessibilityHidden(!presence.visible)
         }
     }
 }
@@ -32,7 +74,8 @@ struct CanvasBarLayer: View {
 private struct PlacedCanvasBar: View {
     @ObservedObject var store: EditorStore
     let view: JSON
-    @State private var placed = JSON()
+    let placed: JSON
+    let visible: Bool
     private static let captionOpacity = 0.8, textGap: CGFloat = 6, chevron: CGFloat = 12
     private static let preferences = JSON(["sliders": false, "text": true])
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]).glassy }
@@ -64,17 +107,13 @@ private struct PlacedCanvasBar: View {
         store.edit(["type": "canvas_bar_edit", "context": context.raw, "action": action], completion: completion)
     }
     var body: some View {
-        let key = JSON(measure).stableKey + view.stableKey + store.snapshot["layout"]["work_area"].stableKey
+        let key = JSON(measure).stableKey
         ZStack(alignment: .topLeading) {
             if !placed.isNull {
                 bar(shown: min(max(0, Int(placed["items"].uint)), items.count)).placed(placed["bounds"])
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .onChange(of: placed.stableKey, initial: true) { store.canvasBar.bounds = placed.isNull ? nil : placed["bounds"].rect }
-            .onDisappear { store.canvasBar.bounds = nil }
-            .task(id: key) {
-            store.query(["type": "canvas_bar_layout", "measure": measure]) { placed = $0 }
-        }
+            .task(id: key) { store.dispatch(["type": "measure_canvas_bar", "measure": measure]) }
     }
     private func bar(shown: Int) -> some View {
         let hasLabel = !view["label"].isNull
@@ -102,7 +141,7 @@ private struct PlacedCanvasBar: View {
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .foregroundStyle(palette["text"])
             .environment(\.editorPalette, palette)
-            .glassSurface(SquircleShape.surface, fill: palette.glassPanel)
+            .glassSurface(SquircleShape.surface, fill: palette.glassPanel, register: visible)
             .accessibilityElement(children: .contain).accessibilityIdentifier("canvas-action-bar")
             .background { OutsideShadow(shape: SquircleShape.surface, opacity: 0.16, radius: 4, y: 2).accessibilityHidden(true) }
     }

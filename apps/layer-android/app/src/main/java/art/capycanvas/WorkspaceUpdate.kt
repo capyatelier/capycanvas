@@ -20,7 +20,7 @@ internal val TabSlideEasing = Easing { t -> 1f - (1f - t) * (1f - t) * (1f - t) 
 /** Absolute logical geometry for one shared Rust model revision. No widget models
  * or bitmap copies cross the bridge during ordinary movement. */
 internal data class WorkspaceGeometry(val revision: Long, val modelRevision: Long,
-    val group: Int?, val bounds: Rect?, val tab: Tab?, val hint: JSONObject?) {
+    val group: Int?, val bounds: Rect?, val tab: Tab?, val hint: JSONObject?, val canvasBar: CanvasBarPresentation?) {
     data class Tab(val group: Int, val panel: String, val sourceOffset: Float, val offsets: Map<Int, Float>)
     companion object {
         fun read(value: JSONObject): WorkspaceGeometry {
@@ -33,7 +33,20 @@ internal data class WorkspaceGeometry(val revision: Long, val modelRevision: Lon
                     preview.array("offsets").objects().associate { it.getInt("index") to it.number("x") })
             }
             return WorkspaceGeometry(value.getLong("revision"), value.getLong("model_revision"),
-                group?.getInt("id"), group?.getJSONObject("bounds")?.rect(), tab, drag?.objectOrNull("drop_hint"))
+                group?.getInt("id"), group?.getJSONObject("bounds")?.rect(), tab, drag?.objectOrNull("drop_hint"),
+                value.objectOrNull("canvas_bar")?.let { CanvasBarPresentation(it.getInt("hold"), CanvasBarGeometry.read(it)) })
+        }
+    }
+}
+
+internal data class CanvasBarPresentation(val hold: Int, val geometry: CanvasBarGeometry)
+
+internal data class CanvasBarGeometry(val context: String, val bounds: Rect?, val items: Int) {
+    companion object {
+        fun read(value: JSONObject): CanvasBarGeometry {
+            val layout = value.objectOrNull("layout")
+            return CanvasBarGeometry(value.getJSONObject("context").toString(),
+                layout?.getJSONObject("bounds")?.rect(), layout?.getInt("items") ?: 0)
         }
     }
 }

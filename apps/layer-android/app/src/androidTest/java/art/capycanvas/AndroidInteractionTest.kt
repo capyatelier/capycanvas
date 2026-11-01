@@ -3883,7 +3883,11 @@ class AndroidInteractionTest {
                             val hold = kotlinx.coroutines.runBlocking { host.withNative { Native.canvasBarHold(it) } }
                             assertEquals("$theme the real canvas release retires the native bar hold", 0, hold and 1)
                             waitFor("$theme the native bar finishes its normal hold after resize") {
-                                host.canvasBarVisible && shown("canvas-notice") && shown("canvas-action-bar")
+                                val workspace = find("workspace")?.boundsInRoot
+                                val bar = find("canvas-action-bar")?.boundsInRoot
+                                host.canvasBarVisible && shown("canvas-notice") && shown("canvas-action-bar") &&
+                                    workspace != null && bar != null && !bar.isEmpty && bar.left >= workspace.left - 1f &&
+                                    bar.top >= workspace.top - 1f && bar.right <= workspace.right + 1f && bar.bottom <= workspace.bottom + 1f
                             }
                             projection("$theme after resize")
                             captureCanvasBar("move-locked-projected-$theme", "canvas-notice")
@@ -4648,6 +4652,30 @@ class AndroidInteractionTest {
         }
         println("PASS pass through: a finger sets a group to Pass Through, its adjustment reaches the fill below in one undo step; only groups offer it; the preference makes New Group pass through; light and dark")
     }
+    @Test fun canvasBarReturnsFromNativeHoldWhileDocumentInputIsBlocked() {
+        command("select_all"); command("move")
+        val blocked=host.documentInputBlocked
+        val previousTool=tool
+        try {
+            waitFor("the shared bar has a published placement") { barKind()=="selection" && host.canvasBarVisible && shown("canvas-action-bar") }
+            var geometry:CanvasBarGeometry?=null
+            onMain { geometry=host.canvasBarGeometry }
+            tool=MotionEvent.TOOL_TYPE_FINGER
+            val area=state().getJSONObject("camera").array("work_area")
+            event(MotionEvent.ACTION_DOWN,bounds("workspace").topLeft+Offset((area.getDouble(0)+area.getDouble(2)/2).toFloat(),(area.getDouble(1)+area.getDouble(3)/2).toFloat()))
+            waitFor("the native contact holds shared placement") { !host.canvasBarVisible && host.canvasBarGeometry?.bounds==null }
+            onMain { host.documentInputBlocked=true }
+            event(MotionEvent.ACTION_CANCEL)
+            waitFor("the native return applies shared placement while document input is blocked") { host.canvasBarVisible && shown("canvas-action-bar") }
+            onMain { assertEquals(geometry,host.canvasBarGeometry) }
+        } finally {
+            onMain { host.documentInputBlocked=blocked }
+            if(contact)event(MotionEvent.ACTION_CANCEL)
+            tool=previousTool
+            command("deselect")
+        }
+    }
+
     @Test fun canvasActionBarJourneysAcrossDevices() {
         fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))
         fun enabled(command: String) = state().array("commands").objects().any { it.getString("id") == command && it.getBoolean("enabled") }

@@ -132,7 +132,7 @@ mod session;
 mod layer_relationships;
 pub use layer_relationships::{LayerAttachmentControl, LayerConnection, LayerRelation, LayerRelationKind};
 pub use session::{ToolSlotId, ToolVariant, ToolSlotMemory, GradientToolSettings, GradientDestination, GradientEdit, GradientControls};
-pub use session::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarLayout, CanvasBarMenu, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar, COMMAND_SEARCH_STYLE, CommandSearchStyle, CommandDescriptor, CommandFocus, CommandParameter, CommandSearchAction, CommandSearchView, ToolCategory};
+pub use session::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarLayout, CanvasBarPresentation, CanvasBarMenu, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar, COMMAND_SEARCH_STYLE, CommandSearchStyle, CommandDescriptor, CommandFocus, CommandParameter, CommandSearchAction, CommandSearchView, ToolCategory};
 pub mod keymaps;
 mod settings;
 mod saved_state;
@@ -1717,6 +1717,8 @@ pub enum UiAction {
         context: ToolbarContext,
         action: Box<UiAction>,
     },
+    MeasureCanvasBar { measure: CanvasBarMeasure },
+    RevealCanvasBar { context: CanvasBarContext, hold: u32 },
     CanvasBarEdit {
         context: CanvasBarContext,
         action: Box<UiAction>,
@@ -1839,6 +1841,8 @@ impl UiAction {
                 | Self::MeasureDrawerTiles { .. }
                 | Self::MeasureColumnScroll { .. }
                 | Self::MeasurePanels { .. }
+                | Self::MeasureCanvasBar { .. }
+                | Self::RevealCanvasBar { .. }
                 | Self::MeasureTitlebar { .. }
                 | Self::MeasureHeader { .. }
                 | Self::MeasureWorkspaceBottom { .. }
@@ -1881,7 +1885,8 @@ pub mod regions {
     pub const PRESSURE_CALIBRATION: u32 = 4096;
     pub const BUBBLES: u32 = 8192;
     pub const TILT_CALIBRATION: u32 = 16384;
-    pub const ALL: u32 = 32767;
+    pub const CANVAS_BAR_GEOMETRY: u32 = 32768;
+    pub const ALL: u32 = 65535;
 }
 
 #[cfg(test)]

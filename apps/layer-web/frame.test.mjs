@@ -7,6 +7,14 @@ import {colorDialogDom} from './color-dialog-fixture.mjs';
 import {latinKey} from './text-input.js';
 
 const source = readFileSync(new URL("app.js", import.meta.url), "utf8");
+test('document transitions retain canvas bar measurement and reveal reports',()=>{
+  const actions=[],context={documents:{interactionBusy:()=>true},workspaceGesture:null,
+    app:{dispatch(action){actions.push(action);return{};}},applyChange(){},message:assert.fail};
+  runInNewContext(source.slice(source.indexOf('function dispatch(action)'),source.indexOf('let languageTimer')),context);
+  for(const type of ['invoke','measure_canvas_bar','reveal_canvas_bar'])context.dispatch({type});
+  assert.deepEqual(actions.map(action=>action.type),['measure_canvas_bar','reveal_canvas_bar']);
+});
+
 test('retained workspace placement keeps bubble presentation without scheduling GPU work',()=>{
   let refreshes=0,wakes=0,model=1;
   const context={app:{language_pending:()=>false,workspace_update:()=>({model_revision:model,content_revision:1}),state_update:assert.fail},

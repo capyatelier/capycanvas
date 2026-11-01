@@ -13,9 +13,9 @@ fn contact(app: &App, point: [f64; 2], phase: f64) {
 
 fn layout(app: &App, bar: &Value) -> Value {
     let widths = |key: &str| vec![40.0; bar[key].as_array().unwrap().len()];
-    app.request(2, json!({"type": "canvas_bar_layout", "measure": {"context": bar["context"], "label": 0.0,
-        "items": widths("items"), "completion": widths("completion"), "more": 40.0, "height": 52.0, "gap": 4.0, "padding": 6.0}}))
-        .unwrap()
+    app.action(json!({"type": "measure_canvas_bar", "measure": {"context": bar["context"], "label": 0.0,
+        "items": widths("items"), "completion": widths("completion"), "more": 40.0, "height": 52.0, "gap": 4.0, "padding": 6.0}}));
+    app.full_snapshot()["workspace_update"]["canvas_bar"]["layout"].clone()
 }
 
 fn edit(app: &App, bar: &Value, command: &str) -> Result<Option<Value>, String> {
@@ -65,6 +65,10 @@ fn canvas_bar_places_edits_and_hides_during_contacts_through_the_apple_abi() {
         contact(&app, [36., 34.], 3.);
         assert_eq!(hold() % 2, 0, "the bar may return when the contact ends");
         app.draw_until_prepared(true);
+        let hidden = app.full_snapshot()["workspace_update"]["canvas_bar"].clone();
+        assert!(hidden["layout"].is_null(), "native timing cannot reveal shared geometry");
+        app.action(json!({"type": "reveal_canvas_bar", "context": transform["context"], "hold": hidden["hold"]}));
+        assert!(!app.full_snapshot()["workspace_update"]["canvas_bar"]["layout"].is_null());
 
         app.invoke("show_canvas_action_bar");
         let completion = app.state()["canvas_bar"].clone();
@@ -74,5 +78,46 @@ fn canvas_bar_places_edits_and_hides_during_contacts_through_the_apple_abi() {
         assert!(app.state()["canvas_bar"].is_null(), "no selection bar while the toggle is off");
         app.invoke("show_canvas_action_bar");
         assert_eq!(app.state()["canvas_bar"]["context"]["kind"], "selection");
+    }
+}
+
+#[test]
+fn canvas_bar_native_measurements_publish_placement_through_the_apple_abi() {
+    for platform in [0, 1] {
+        let app = selection_app(platform);
+        app.invoke("move");
+        app.invoke("select_all");
+        let bar = app.state()["canvas_bar"].clone();
+        let placed = layout(&app, &bar);
+        let published = app.full_snapshot()["workspace_update"]["canvas_bar"].clone();
+        assert_eq!(published["context"], bar["context"]);
+        assert_eq!(published["layout"], placed, "{platform}: native measurement must publish the bar's placement");
+        assert!(!published["layout"].is_null());
+        contact(&app, [32., 32.], 1.);
+        let held = app.full_snapshot()["workspace_update"]["canvas_bar"].clone();
+        assert!(held["layout"].is_null());
+        app.action(json!({"type": "reveal_canvas_bar", "context": bar["context"], "hold": held["hold"]}));
+        assert!(app.request(7, Value::Null).is_none(), "an odd hold cannot publish a reveal");
+        contact(&app, [36., 34.], 3.);
+        let ready = app.full_snapshot()["workspace_update"]["canvas_bar"].clone();
+        assert!(ready["layout"].is_null());
+        app.action(json!({"type": "reveal_canvas_bar", "context": bar["context"], "hold": held["hold"]}));
+        assert!(app.request(7, Value::Null).is_none(), "a retired hold cannot publish a reveal");
+        app.action(json!({"type": "reveal_canvas_bar", "context": bar["context"], "hold": ready["hold"]}));
+        let shown = app.request(7, Value::Null).unwrap();
+        assert!(shown["state"].is_null(), "reveal retains the current content model");
+        assert!(!shown["workspace_update"]["canvas_bar"]["layout"].is_null());
+        let mode_app = selection_app(platform);
+        mode_app.invoke("quick_mask");
+        let mode = mode_app.state()["canvas_bar"].clone();
+        assert_eq!(mode["context"]["kind"], "quick_mask");
+        assert!(!layout(&mode_app, &mode).is_null());
+        assert_eq!(unsafe { capy_apple_resize(mode_app.0, 840, 600, 1.) }, 0);
+        mode_app.draw_frame();
+        let resized = mode_app.request(7, Value::Null).unwrap();
+        let bounds = &resized["workspace_update"]["canvas_bar"]["layout"]["bounds"];
+        assert!(bounds["width"].as_f64().is_some_and(|width| width > 0.), "resize publishes current bar geometry: {resized}");
+        assert!(bounds["x"].as_f64().unwrap() + bounds["width"].as_f64().unwrap() <= 840.);
+        assert!(bounds["y"].as_f64().unwrap() + bounds["height"].as_f64().unwrap() <= 600.);
     }
 }

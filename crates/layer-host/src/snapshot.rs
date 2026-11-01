@@ -125,6 +125,7 @@ impl NativeHost {
     ) -> Result<Option<S::Ok>, S::Error> {
         let key = SnapshotKey {
             revision: self.session.state().revision,
+            canvas_bar: self.session.canvas_bar_presentation().copied(),
             localization_generation: self.localization_generation(),
             command_search_revision: self.session.command_search_revision(),
             logical: self.logical,
@@ -137,13 +138,28 @@ impl NativeHost {
             error: self.error.clone(),
         };
         let camera = &self.session.state().camera;
-        if self.last_snapshot.as_ref() == Some(&key)
-            && self.last_workspace_model_revision == Some(self.session.workspace_model_revision())
+        let bar_changed = self.last_snapshot.as_ref().is_some_and(|previous| previous.canvas_bar != key.canvas_bar);
+        if self.last_workspace_model_revision == Some(self.session.workspace_model_revision())
+            && self.last_snapshot.as_ref().is_some_and(|previous| {
+                (if bar_changed { SnapshotKey { revision: key.revision, canvas_bar: key.canvas_bar, ..previous.clone() } } else { previous.clone() }) == key
+            })
         {
-            if self.last_camera_revision != Some(camera.revision) {
-                let snapshot =
-                    json!({"camera": camera, "revision": key.revision}).serialize(serializer)?;
+            if self.last_camera_revision != Some(camera.revision) || bar_changed {
+                #[derive(Serialize)]
+                struct Camera<'a> {
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    camera: Option<&'a layer_ui::Camera>,
+                    revision: u64,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    workspace_update: Option<layer_ui::WorkspaceUpdate>,
+                }
+                let snapshot = Camera {
+                    camera: (self.last_camera_revision != Some(camera.revision)).then_some(camera),
+                    revision: key.revision,
+                    workspace_update: bar_changed.then(|| self.session.workspace_update()),
+                }.serialize(serializer)?;
                 self.last_camera_revision = Some(camera.revision);
+                self.last_snapshot = Some(key);
                 return Ok(Some(snapshot));
             }
             return Ok(None);
@@ -178,6 +194,7 @@ impl NativeHost {
             && self.last_snapshot.as_ref().is_some_and(|previous| {
                 SnapshotKey {
                     revision: key.revision,
+                    canvas_bar: key.canvas_bar,
                     ..previous.clone()
                 } == key
             })
@@ -207,6 +224,7 @@ impl NativeHost {
                     revision: key.revision,
                     logical: key.logical,
                     pixel_scale: key.pixel_scale,
+                    canvas_bar: key.canvas_bar,
                     ..previous.clone()
                 } == key
             })
@@ -1134,4 +1152,88 @@ mod tests {
         assert!(update(&mut host).get("state").is_some());
         assert!(host.take_update_bytes().unwrap().is_none());
     }
+    #[test]
+    fn canvas_bar_geometry_and_camera_packets_retain_native_models() {
+        use layer_ui::{CommandId, UiAction};
+        let mut host = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        *host.session = layer_ui::UiSession::new(crate::Renderer::default(),
+            layer_ui::new_drawing(1000, 1000, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),
+            [1600, 1000], layer_ui::Platform::Android).unwrap();
+        host.resize(1600, 1000, 1.).unwrap();
+        host.dispatch(UiAction::Invoke { command: CommandId::SelectAll }).unwrap();
+        host.dispatch(UiAction::Invoke { command: CommandId::Move }).unwrap();
+        let initial = update(&mut host);
+        let bar = host.session.state().canvas_bar.as_ref().unwrap();
+        let context = bar.context;
+        let measure = layer_ui::CanvasBarMeasure { context, label: 0., items: vec![90.; bar.items.len()],
+            completion: vec![80.; bar.completion.len()], more: 40., height: 48., gap: 4., padding: 6. };
+        let revisions = (host.session.workspace_model_revision(), host.session.workspace_content_revision());
+        host.dispatch(UiAction::MeasureCanvasBar { measure: measure.clone() }).unwrap();
+        failed_take(&mut host, false);
+        let measured = update(&mut host);
+        assert!(measured.get("state").is_none());
+        assert!(measured["workspace_update"]["canvas_bar"]["layout"]["bounds"].is_object());
+        assert_eq!((host.session.workspace_model_revision(), host.session.workspace_content_revision()), revisions);
+        assert_eq!(initial["workspace_update"]["model_revision"], measured["workspace_update"]["model_revision"]);
+        host.dispatch(UiAction::MeasureCanvasBar { measure }).unwrap();
+        assert!(host.take_update_bytes().unwrap().is_none());
+        host.gesture([500., 500.], 1.01, 0., false).unwrap();
+        let moved = update(&mut host);
+        assert!(moved.get("state").is_none());
+        assert!(moved["camera"].is_object());
+        assert!(moved["workspace_update"]["canvas_bar"]["layout"].is_null());
+        let hold = host.session.canvas_bar_hold();
+        host.dispatch(UiAction::RevealCanvasBar { context, hold }).unwrap();
+        let revealed = update(&mut host);
+        assert!(revealed.get("state").is_none());
+        assert!(revealed["workspace_update"]["canvas_bar"]["layout"]["bounds"].is_object());
+        assert!(host.take_update_bytes().unwrap().is_none());
+        for bottom in [false, true] {
+            let context = if bottom {
+                host.dispatch(UiAction::Invoke { command: CommandId::QuickMask }).unwrap();
+                update(&mut host);
+                let bar = host.session.state().canvas_bar.as_ref().unwrap();
+                assert_eq!(bar.placement, layer_ui::CanvasBarPlacement::BottomEdge);
+                let measure = layer_ui::CanvasBarMeasure { context: bar.context, label: 180., items: vec![90.; bar.items.len()],
+                    completion: vec![80.; bar.completion.len()], more: 40., height: 48., gap: 4., padding: 6. };
+                let context = bar.context;
+                host.dispatch(UiAction::MeasureCanvasBar { measure }).unwrap();
+                update(&mut host);
+                assert!(host.session.canvas_bar_presentation().unwrap().layout.is_some());
+                context
+            } else { context };
+            for zoom in [false, true] {
+                let mut packets = 0;
+                let mut bar_packets = 0;
+                for _ in 0..24 {
+                    if zoom { host.gesture([500., 500.], 1.001, 0., false).unwrap(); }
+                    else { host.scroll([500., 500.], [3., 0.], 1., false, true).unwrap(); }
+                    let packet = update(&mut host);
+                    packets += 1;
+                    assert!(packet.get("state").is_none());
+                    assert!(packet["camera"].is_object());
+                    let publication = packet.get("workspace_update").and_then(|value| value.get("canvas_bar"));
+                    if let Some(publication) = publication {
+                        bar_packets += 1;
+                        assert!(!bottom);
+                        assert!(publication["layout"].is_null());
+                    }
+                    assert!(host.take_update_bytes().unwrap().is_none());
+                }
+                assert_eq!((packets, bar_packets), (24, if bottom { 0 } else { 24 }));
+                if !bottom {
+                    let hold = host.session.canvas_bar_hold();
+                    host.dispatch(UiAction::RevealCanvasBar { context, hold }).unwrap();
+                    let packet = update(&mut host);
+                    assert!(packet.get("state").is_none());
+                    assert!(packet.get("camera").is_none());
+                    assert!(packet["workspace_update"]["canvas_bar"]["layout"]["bounds"].is_object());
+                    assert!(host.take_update_bytes().unwrap().is_none());
+                }
+                for _ in 0..24 { assert!(host.take_update_bytes().unwrap().is_none()); }
+            }
+        }
+
+    }
+
 }
