@@ -214,7 +214,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         }
         tabsKey=nextTabsKey;std::set<std::wstring> keep;auto weak=weak_from_this();
         for(uint32_t i=0;i<models.Size();++i){
-            bool retained=i<previous.size();Column column=retained?std::move(previous[i]):Column{};double width=num(placements.GetObjectAt(i),L"width");
+            bool retained=i<previous.size();Column column=retained?std::move(previous[i]):Column{};double width=num(placements.GetObjectAt(i),L"width"),bodyWidth=std::max(0.f,pixelBounds(rectangle(placements.GetObjectAt(i)),workspace).Width);
             if(!retained){
                 RowDefinition tabRow;tabRow.Height({tabs.Size()?data->panelMetric(L"tab_bar_height"):0.,GridUnitType::Pixel});column.frame.RowDefinitions().Append(tabRow);
                 RowDefinition bodyRow;bodyRow.Height({1,GridUnitType::Star});column.frame.RowDefinitions().Append(bodyRow);
@@ -271,7 +271,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                 AutomationProperties::SetAutomationId(body.view->Root(),L"drawer-panel-"+hstring(panelId));
                 if(AutomationProperties::GetName(body.view->Root()).empty())
                     AutomationProperties::SetName(body.view->Root(),str(panel,L"title"));
-                body.view->Root().Width(width);body.view->Apply(true);column.stack.Children().Append(body.view->Root());
+                body.view->Root().Width(bodyWidth);body.view->Apply(true);column.stack.Children().Append(body.view->Root());
             }
             AutomationProperties::SetAutomationId(column.scroll,hstring(L"drawer-slot-"+id+L"-"+std::to_wstring(i)));
             if(model.HasKey(L"layer_properties")){
@@ -304,9 +304,9 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         auto placements=array(object(geometry,L"placement"),L"columns");
         for(uint32_t i=0;i<std::min(uint32_t(columns.size()),placements.Size());++i){
             auto placement=placements.GetObjectAt(i);auto& column=columns[i];placeOnPixelGrid(column.frame,placement,workspace);
-            double width=num(placement,L"width");
+            double width=num(placement,L"width"),bodyWidth=std::max(0.f,pixelBounds(rectangle(placement),workspace).Width);
             for(auto const& panelId:column.panels){
-                auto& body=bodies.at(panelId);auto panel=panels.at(panelId);body.view->Root().Width(width);
+                auto& body=bodies.at(panelId);auto panel=panels.at(panelId);body.view->Root().Width(bodyWidth);
                 auto toolbar=toolbarLayouts.find(std::wstring(toolbarKey(panel,width)));
                 if(toolbar!=toolbarLayouts.end()){
                     body.view->Layout(O({{L"tiles",toolbar->second}}));
@@ -316,7 +316,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                     auto available=num(placement,L"height")-(tabs.Size()?data->panelMetric(L"tab_bar_height"):0.);
                     body.view->Root().Height(body.view->drawerMinimum+std::max(0.,available-column.naturalHeight)/std::max(size_t(1),filling));
                 }else{
-                    auto height=body.view->ContentHeight(width);
+                    auto height=body.view->ContentHeight(bodyWidth);
                     if(height>=0)body.view->Root().Height(height);
                 }
                 if(panelId==L"layers"){
@@ -372,7 +372,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         double tabHeight=object(model,L"tabs").Size()?data->panelMetric(L"tab_bar_height"):0.;
         std::vector<double> next;
         for(uint32_t i=0;i<columns.size();++i){
-            auto width=num(placements.GetObjectAt(i),L"width");if(width<=0)return false;
+            auto width=std::max(0.f,pixelBounds(rectangle(placements.GetObjectAt(i)),workspace).Width);if(width<=0)return false;
             auto& column=columns[i];double total=0;
             for(auto const& id:column.panels){auto const& body=bodies.at(id).view;auto natural=body->drawerMinimum>0?body->drawerMinimum:body->ContentHeight(width);
                 if(natural<0){body->Root().Measure({float(width),INFINITY});natural=body->Root().DesiredSize().Height;}

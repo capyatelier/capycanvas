@@ -56,16 +56,16 @@ function Check-MenuEscape{
     [CapyRowPointer]::Key([uint16]0x1B)
     Wait-Until {!@(Menu-Items).Count} 'Menu did not close'
 }
-function Close-Menu{
+function Close-Menu($RetainedFocus=$null){
     $focusFailure=$null;$escaped=$false
     try{
         Wait-Until {
             $focused=[System.Windows.Automation.AutomationElement]::FocusedElement
-            $focused.Current.ProcessId -eq $review.Id -and $focused.Current.ControlType -eq $ControlType::MenuItem
-        } 'Palette menu did not acquire keyboard focus'
+            $focused.Current.ProcessId -eq $review.Id -and $(if($RetainedFocus){[System.Windows.Automation.Automation]::Compare($focused,$RetainedFocus)}else{$focused.Current.ControlType -eq $ControlType::MenuItem})
+        } 'Palette menu keyboard focus did not match its show mode'
     }catch{$focusFailure=$_}
     try{Check-MenuEscape;$escaped=$true}finally{
-        @{keyboard_focus=($null -eq $focusFailure);escape=$escaped;focus_error=$(if($focusFailure){$focusFailure.Exception.Message})}|ConvertTo-Json -Compress|Add-Content (Join-Path $run 'palette-menu-checks.jsonl')
+        @{keyboard_focus=($null -eq $focusFailure);expected_focus=$(if($RetainedFocus){$RetainedFocus.Current.AutomationId}else{'MenuItem'});escape=$escaped;focus_error=$(if($focusFailure){$focusFailure.Exception.Message})}|ConvertTo-Json -Compress|Add-Content (Join-Path $run 'palette-menu-checks.jsonl')
     }
     if($focusFailure){$menuFocusFailures.Add($focusFailure)}
 }
@@ -202,17 +202,22 @@ function Palette-Scrollbars($Scroller){
     })
 }
 function Palette-ScrollState([string]$Id,$Scroller){
-    $view=$Scroller.pattern.Current;$provider=$Scroller.node.Current.BoundingRectangle;$content=Native-Bounds $Id $scale
-    [ordered]@{percent=$view.VerticalScrollPercent;view_size=$view.VerticalViewSize;horizontal_view_size=$view.HorizontalViewSize;provider=@($provider.X,$provider.Y,$provider.Width,$provider.Height);content=@($content.X,$content.Y,$content.Width,$content.Height);six_tiles=@(if($Id -eq 'palette-swatches'){foreach($id in (Swatches)[-6..-1]){$b=Native-Bounds ('palette-swatch-'+$id) $scale;@{id=$id;bounds=@($b.X,$b.Y,$b.Width,$b.Height)}}})}|ConvertTo-Json -Depth 8 -Compress
+    $view=$Scroller.pattern.Current;$provider=$Scroller.node.Current.BoundingRectangle;$node=Control $Id -Arranged;$content=$node.Current.BoundingRectangle
+    $children=@(foreach($child in $node.FindAll([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.Condition]::TrueCondition)){$info=$child.Current;$b=$info.BoundingRectangle;if(!$info.IsOffscreen -and !$b.IsEmpty){[ordered]@{id=$info.AutomationId;bounds=@($b.X,$b.Y,$b.Width,$b.Height)}}})
+    [ordered]@{percent=$view.VerticalScrollPercent;view_size=$view.VerticalViewSize;horizontal_view_size=$view.HorizontalViewSize;provider=@($provider.X,$provider.Y,$provider.Width,$provider.Height);content=@($content.X,$content.Y,$content.Width,$content.Height);children=$children;six_tiles=@(if($Id -eq 'palette-swatches'){foreach($id in (Swatches)[-6..-1]){$b=(Control ('palette-swatch-'+$id)).Current.BoundingRectangle;@{id=$id;bounds=@($b.X,$b.Y,$b.Width,$b.Height)}}})}|ConvertTo-Json -Depth 8 -Compress
 }
 function Check-PaletteScrollModes([string]$Id){
     $scroller=Palette-Scroller $Id
     Scroll-Position (Control $Id -Arranged) 0
-    $top=(Native-Bounds $Id $scale).Y
+    $content=Control $Id -Arranged
+    $anchor=@($content.FindAll([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$ControlType::Button))|Where-Object {!$_.Current.IsOffscreen -and !$_.Current.BoundingRectangle.IsEmpty})[0]
+    if(!$anchor){throw "$Id has no visible native scroll anchor"}
+    $top=$anchor.Current.BoundingRectangle.Y
     Scroll-Position (Control $Id -Arranged) 50
-    Wait-Until {(Native-Bounds $Id $scale).Y -lt $top} "$Id did not publish its actual scrolled content position"
+    Wait-Until {$current=$anchor.Current;$bounds=$current.BoundingRectangle;!$content.Current.IsOffscreen -and !$content.Current.BoundingRectangle.IsEmpty -and ($current.IsOffscreen -or (!$bounds.IsEmpty -and $bounds.Y -lt $top))} "$Id did not move its native scrolled content"
     $panel=(Control 'palettes-panel').Current.BoundingRectangle
-    $safe=@{x=[int]($panel.X+2);y=[int]($panel.Y+2)}
+    $safe=@{x=[int]($panel.X+2);y=[int]($panel.Y+2)};$alternate=@{x=$safe.x+4;y=$safe.y}
+    if(!$panel.Contains([double]$alternate.x,[double]$alternate.y) -or $scroller.node.Current.BoundingRectangle.Contains([double]$alternate.x,[double]$alternate.y)){throw 'Alternate scrollbar transition point is outside owned panel padding'}
     if(!$panel.Contains([double]$safe.x,[double]$safe.y) -or $scroller.node.Current.BoundingRectangle.Contains([double]$safe.x,[double]$safe.y)){throw 'Scrollbar transition point is not inside owned panel padding and outside the scroller'}
     $beforeOrder=(Swatches) -join ',';$beforeColor=(Model).color_panel.definition|ConvertTo-Json -Depth 12 -Compress
     [CapyRowPointer]::Hover($safe.x,$safe.y)
@@ -229,42 +234,159 @@ function Check-PaletteScrollModes([string]$Id){
             $records|ConvertTo-Json -Depth 12|Set-Content $tracePath
             if($state -ne $baseline){throw "$Id $device mode changed exact scroll position, viewport or tile geometry"}
         }finally{if($device -eq 'pen'){[CapyRowPointer]::PenLeave()}else{[CapyRowPointer]::Up()}}
-        [CapyRowPointer]::Hover($safe.x,$safe.y)
+        $cursorBefore=[CapyRowPointer]::Cursor().position
+        $returnPoint=if([Math]::Abs($cursorBefore.x-$safe.x) -le [Math]::Abs($cursorBefore.x-$alternate.x)){$alternate}else{$safe}
+        [CapyRowPointer]::Hover($returnPoint.x,$returnPoint.y)
+        $cursorAfter=[CapyRowPointer]::Cursor().position
+        $records.Add(@{device='mouse-motion';after=$device;requested=$returnPoint;cursor_before=$cursorBefore;cursor_after=$cursorAfter;state_before=($state|ConvertFrom-Json);state_after=((Palette-ScrollState $Id $scroller)|ConvertFrom-Json)})
+        $records|ConvertTo-Json -Depth 12|Set-Content $tracePath
+        if(($cursorBefore.x -eq $cursorAfter.x -and $cursorBefore.y -eq $cursorAfter.y) -or !$panel.Contains([double]$cursorAfter.x,[double]$cursorAfter.y) -or $scroller.node.Current.BoundingRectangle.Contains([double]$cursorAfter.x,[double]$cursorAfter.y)){throw "$Id mouse return did not move the physical cursor to owned padding"}
         Wait-Until {@(Palette-Scrollbars $scroller).Count -eq 1} "$Id mouse mode did not restore its native scrollbar after $device"
         $state=Palette-ScrollState $Id $scroller;$records.Add(@{device='mouse';after=$device;state=($state|ConvertFrom-Json)})
         $records|ConvertTo-Json -Depth 12|Set-Content $tracePath
         if($state -ne $baseline){throw "$Id mouse return changed exact scroll position, viewport or tile geometry"}
     }
     $bar=@(Palette-Scrollbars $scroller)[0]
-    $thumbs=@($bar.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$ControlType::Thumb))|Where-Object {!$_.Current.IsOffscreen -and !$_.Current.BoundingRectangle.IsEmpty})
-    if($thumbs.Count -ne 1){throw "$Id does not expose one arranged native scrollbar thumb"}
-    $thumb=$thumbs[0].Current.BoundingRectangle;$track=$bar.Current.BoundingRectangle;$at=Center $thumbs[0]
-    $to=@{x=$at.x;y=[int]($at.y+[Math]::Min($thumb.Height,$track.Bottom-$thumb.Bottom-1))}
-    if($to.y -le $at.y -or !$track.Contains([double]$to.x,[double]$to.y)){throw "$Id thumb has no owned downward travel"}
-    $percent=$scroller.pattern.Current.VerticalScrollPercent
+    $track=$bar.Current.BoundingRectangle;$at=Center $bar
+    $to=@{x=$at.x;y=[int]($at.y+$track.Height*.05)}
+    $view=$scroller.pattern.Current;$percent=$view.VerticalScrollPercent
+    $dragReceipt=@{bar_before=@($track.X,$track.Y,$track.Width,$track.Height);from=$at;to=$to;percent_before=$percent;view_size_before=$view.VerticalViewSize}
+    $dragPath=Join-Path $run ($Id+'-scrollbar-drag.json');$dragReceipt|ConvertTo-Json -Depth 12|Set-Content $dragPath
+    if($percent -ne 50 -or $view.VerticalViewSize -le 50 -or $view.VerticalViewSize -ge 100 -or $to.y -le $at.y -or !$track.Contains([double]$to.x,[double]$to.y)){throw "$Id scrollbar has no interior center-drag geometry"}
     [CapyRowPointer]::Down('mouse',$at.x,$at.y)
     try{for($i=1;$i -le 8;$i++){[CapyRowPointer]::Move($at.x,[int]($at.y+($to.y-$at.y)*$i/8));Start-Sleep -Milliseconds 16}}finally{[CapyRowPointer]::Up()}
-    Wait-Until {$scroller.pattern.Current.VerticalScrollPercent -gt $percent} "$Id mouse thumb drag did not move the scroll offset"
+    try{Wait-Until {$position=$scroller.pattern.Current.VerticalScrollPercent;$position -gt $percent -and $position -lt 100} "$Id mouse thumb drag did not move to an interior scroll offset"}finally{
+        $after=$scroller.pattern.Current;$afterBar=$bar.Current.BoundingRectangle
+        $dragReceipt.percent_after=$after.VerticalScrollPercent;$dragReceipt.view_size_after=$after.VerticalViewSize;$dragReceipt.bar_after=@($afterBar.X,$afterBar.Y,$afterBar.Width,$afterBar.Height);$dragReceipt|ConvertTo-Json -Depth 12|Set-Content $dragPath
+    }
     if(((Swatches) -join ',') -ne $beforeOrder -or ((Model).color_panel.definition|ConvertTo-Json -Depth 12 -Compress) -ne $beforeColor){throw "$Id scrollbar interaction changed swatches or the exact current color"}
     $records.Add(@{device='mouse-thumb';from=$at;to=$to;state=((Palette-ScrollState $Id $scroller)|ConvertFrom-Json)})
     $records|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ($Id+'-scroll-transitions.json'))
     Capture ($Id+'-mouse-scrollbar')
 }
+function Start-PalettesReview([string]$Name){
+    $script:stderr=Join-Path $run ($Name+'stderr.log')
+    $script:review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
+    $null=$review.Handle;$script:CapyTrace=$null
+    Write-Output "Owned palettes review $($review.Id): $run"
+    $native=@{window=$null}
+    Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window -and (Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy -and (Model).state.theme -eq $Theme} 'Palettes review did not start' 90
+    $script:root=$native.window.Root;$script:drawingWindow=$native.window.Handle
+    $script:scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+    Maximize-DrawingWindow
+    $null=[CapyRowPointer]::SetForegroundWindow($drawingWindow)
+    [CapyRowPointer]::Initialize([uint32]$review.Id)
+}
+function Restart-PalettesReview([string]$Name){
+    Wait-Until {$m=Model;$m.windows_workspace.ready -and !$m.windows_workspace.busy -and !$m.windows_workspace.saving -and !$m.windows_palettes.busy} 'Cold palettes workspace and library did not finish saving'
+    [CapyRowPointer]::Verify();[CapyRowPointer]::Dispose()
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
+    if(!$review.WaitForExit(8000)){throw 'Cold palettes review did not close'}
+    if((Get-Item -LiteralPath $stderr).Length){throw 'Cold palettes review wrote to stderr'}
+    Start-PalettesReview $Name
+}
+function Palette-Measurement([string]$Name){
+    $proof=@{model=$null;request=$null;measurement=$null}
+    try{Wait-Until {
+        $proof.model=Model
+        $proof.request=@($proof.model.layout.measurement_requests|Where-Object panel -eq 'palettes')[0]
+        $proof.measurement=@($proof.model.panel_measurements|Where-Object panel -eq 'palettes')[0]
+        $proof.request.body_measured -and $proof.measurement.content_height -gt 0 -and $proof.measurement.scroll.unit_height -gt 0
+    } 'Palettes did not publish a current accepted body measurement'}
+    finally{$proof|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run ($Name+'-measurement.json'))}
+    $m=$proof.model
+    [ordered]@{process_id=$review.Id;root_process_id=$root.Current.ProcessId;theme=$m.state.theme;dpi=[CapyRowPointer]::GetDpiForWindow($drawingWindow);workspace=$m.windows_workspace.id;viewport=$m.layout.viewport;group=@($m.layout.groups|Where-Object {$_.panels -contains 'palettes'})[0];palette=$m.palette_panel.palette;swatches=@($m.palette_panel.swatches.id);request=$proof.request;measurement=$proof.measurement}
+}
+function Check-ColdPaletteMeasurement{
+    $original=(Panel).palette
+    Invoke 'panel-tab-palettes'
+    if(@(Swatches).Count -lt 17){
+        $ocean=@((Panel).palettes|Where-Object name -eq 'Ocean Study')
+        if($ocean.Count -ne 1){throw 'Cold palettes requires the three-row Ocean Study starter'}
+        Invoke 'palette-selector'
+        (Control 'palette-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($ocean[0].name)
+        Invoke ('palette-choice-'+$ocean[0].id)
+        Wait-Until {(Panel).palette -eq $ocean[0].id -and !(Find 'palette-search')} 'Cold palette preparation did not select Ocean Study'
+    }
+    $prepared=(Panel).palette;$swatches=@(Swatches)
+    $tiles=@(foreach($id in $swatches){$b=Native-Bounds ('palette-swatch-'+$id) $scale;[ordered]@{id=$id;x=$b.X;y=$b.Y;width=$b.Width;height=$b.Height}})
+    $rows=@(foreach($y in ($tiles|ForEach-Object {$_.y}|Sort-Object -Unique)){@($tiles|Where-Object {$_.y -eq $y}).Count})
+    @{swatches=$swatches;tiles=$tiles;rows=$rows}|ConvertTo-Json -Depth 10|Set-Content (Join-Path $run 'cold-palette-rows.json')
+    if($rows.Count -lt 3 -or $rows[0] -ne 6){throw 'Cold palette measurement requires at least three native swatch rows at six columns'}
+    Invoke 'panel-tab-color'
+    Wait-Until {@((Model).layout.groups|Where-Object {$_.panels -contains 'palettes' -and $_.active -eq 'color'}).Count -eq 1} 'Cold palette preparation did not activate Color'
+    Restart-PalettesReview 'cold-color-'
+    $inactive=Palette-Measurement 'cold-inactive'
+    Invoke 'panel-tab-palettes'
+    Wait-Until {@((Model).layout.groups|Where-Object active -eq 'palettes').Count -eq 1} 'Cold inactive palette did not activate'
+    $activated=Palette-Measurement 'cold-activated'
+    Capture 'cold-palette-activated' -WithModel -Composed
+    Restart-PalettesReview 'cold-palettes-'
+    $control=Palette-Measurement 'cold-active-first'
+    Capture 'cold-palette-active-first' -WithModel -Composed
+    @{inactive=$inactive;activated=$activated;active_first=$control}|ConvertTo-Json -Depth 18|Set-Content (Join-Path $run 'cold-palette-comparison.json')
+    if($control.palette -ne $prepared -or ($control.swatches -join ',') -cne ($swatches -join ',')){throw 'Cold palette processes did not retain the prepared three-row swatches'}
+    if($inactive.group.active -ne 'color' -or $control.group.active -ne 'palettes'){throw 'Cold palette processes did not restore their saved active tabs'}
+    $expected=@($control.theme,$control.dpi,$control.workspace,($control.viewport -join ','),$control.palette,($control.swatches -join ','),$control.request.body,$control.request.width) -join '|'
+    foreach($arm in @($inactive,$activated,$control)){
+        $actual=@($arm.theme,$arm.dpi,$arm.workspace,($arm.viewport -join ','),$arm.palette,($arm.swatches -join ','),$arm.request.body,$arm.request.width) -join '|'
+        if($arm.process_id -ne $arm.root_process_id -or $actual -cne $expected){throw 'Cold palette arms differ in their owned window, palette, swatches, body identity or width'}
+        if($arm.measurement.content_height -ne $control.measurement.content_height -or $arm.measurement.scroll.fixed_height -ne $control.measurement.scroll.fixed_height -or $arm.measurement.scroll.unit_height -ne $control.measurement.scroll.unit_height){throw 'Inactive Palettes measurement differs from the cold active-first content height or scroll metrics'}
+    }
+    if((Panel).palette -ne $original){
+        Invoke 'palette-selector'
+        (Control 'palette-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue(@((Panel).palettes|Where-Object id -eq $original)[0].name)
+        Invoke ('palette-choice-'+$original)
+        Wait-Until {(Panel).palette -eq $original -and !(Find 'palette-search')} 'Cold palette comparison did not restore the original palette'
+    }
+}
+function Check-PaletteDrawerHeight{
+    function Drawer-NoteGeometry([string]$Stage){
+        $drawer=Control 'drawer-panel-palettes' -Arranged
+        $panel=$drawer.Current.BoundingRectangle
+        $note=Find 'palette-message' -Within $drawer;$noteBounds=if($note){$note.Current.BoundingRectangle}else{$null}
+        $footerId=if(Find 'palette-name-editor' -Within $drawer){'palette-name-editor'}else{'palette-name'}
+        $footer=(Control $footerId -Arranged -Within $drawer).Current.BoundingRectangle
+        $paletteRoot=(Control 'palettes-panel' -Arranged -Within $drawer).Current.BoundingRectangle
+        $swatchViewport=(Control 'palette-swatches' -Arranged -Within $drawer).Current.BoundingRectangle
+        $history=(Control 'palette-history' -Arranged -Within $drawer).Current.BoundingRectangle
+        $record=@{stage=$Stage;panel=$panel;palette_root=$paletteRoot;note=$noteBounds;footer=$footer;footer_id=$footerId;footer_local_top=$footer.Y-$panel.Y;swatch_viewport=$swatchViewport;history_viewport=$history;message=if($note){$note.Current.Name}else{''};editor_visible=[bool](Find 'palette-name-editor' -Within $drawer);palette=(Panel).palette;swatches=@((Panel).swatches.id)}
+        $record|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ('drawer-'+$Stage+'-note-geometry.json'))
+        $record
+    }
+    $drawer=Control 'drawer-panel-palettes' -Arranged
+    $swatches=@((Panel).swatches);if($swatches.Count -lt 2){throw 'Note sizing requires two distinct starter swatches'}
+    $selected=$swatches[1].id;$duplicate=$swatches[0].name
+    Invoke ('palette-swatch-'+$selected) -Within $drawer
+    Wait-Until {(Control ('palette-swatch-'+$selected) -Within $drawer).Current.ItemStatus -eq 'Selected' -and !(Find 'palette-message' -Within $drawer)} 'Valid swatch did not clear the note'
+    $baseline=Drawer-NoteGeometry 'baseline'
+    Invoke 'palette-name' -Within $drawer;$editor=Control 'palette-name-editor' -Type $ControlType::Edit -Within $drawer
+    $editor.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($duplicate)
+    $editor.SetFocus();(Control 'palette-selector' -Within $drawer).SetFocus()
+    Wait-Until {$message=Find 'palette-message' -Within $drawer;$message -and $message.Current.Name -ne '' -and (Find 'palette-name-editor' -Within $drawer)} 'Blur duplicate did not show its native error'
+    $invalid=Drawer-NoteGeometry 'invalid'
+    $editor=Control 'palette-name-editor' -Type $ControlType::Edit -Within $drawer
+    $unique='Metric-'+[Guid]::NewGuid().ToString('N').Substring(0,8)
+    $editor.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($unique)
+    $editor.SetFocus();(Control 'palette-selector' -Within $drawer).SetFocus()
+    Wait-Until {@((Panel).swatches|Where-Object {$_.id -eq $selected -and $_.name -eq $unique}).Count -eq 1 -and !(Find 'palette-message' -Within $drawer) -and !(Find 'palette-name-editor' -Within $drawer)} 'Blur valid name did not clear its native error'
+    $valid=Drawer-NoteGeometry 'valid'
+    $growth=$invalid.panel.Height-$baseline.panel.Height
+    @{baseline=$baseline;invalid=$invalid;valid=$valid;growth=$growth;note_height=$invalid.note.Height;return_delta=$valid.panel.Height-$baseline.panel.Height}|ConvertTo-Json -Depth 16|Set-Content (Join-Path $run 'drawer-note-height-comparison.json')
+    foreach($record in @($invalid,$valid)){
+        if($record.palette -ne $baseline.palette -or $record.panel.Width -ne $baseline.panel.Width -or $record.palette_root.Width -ne $baseline.palette_root.Width -or $record.swatch_viewport.Width -ne $baseline.swatch_viewport.Width -or $record.history_viewport.Width -ne $baseline.history_viewport.Width -or ($record.swatches -join ',') -cne ($baseline.swatches -join ',')){throw 'Note sizing changed the native width or ordered swatch identities'}
+    }
+    if(!$invalid.note -or $invalid.note.IsEmpty -or !$invalid.palette_root.Contains($invalid.note)){throw 'The visible native note is outside the palette root'}
+    if($growth+1 -lt $invalid.note.Height){throw 'Showing the native note did not grow the drawer body by at least its note height'}
+    if([Math]::Abs(($invalid.footer.Y-$invalid.panel.Y)-($baseline.footer.Y-$baseline.panel.Y)) -gt 1){throw 'Showing the native note compressed the fixed swatch rows above the editor'}
+    if([Math]::Abs($valid.panel.Height-$baseline.panel.Height) -gt 1 -or [Math]::Abs(($valid.footer.Y-$valid.panel.Y)-($baseline.footer.Y-$baseline.panel.Y)) -gt 1){throw 'Clearing the native note did not restore body height and footer position'}
+    if([Math]::Abs($invalid.swatch_viewport.Height-$baseline.swatch_viewport.Height) -gt 1 -or [Math]::Abs($invalid.history_viewport.Height-$baseline.history_viewport.Height) -gt 1){throw 'Showing the native note changed the fixed swatch or history viewport height'}
+}
 try {
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
     [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
-    $stderr=Join-Path $run 'stderr.log'
-    $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
-    $null=$review.Handle
-    Write-Output "Owned palettes review $($review.Id): $run"
-    $native=@{window=$null}
-    Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window -and (Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Palettes review did not start' 90
-    $root=$native.window.Root;$drawingWindow=$native.window.Handle
-    $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
-    Start-Sleep -Milliseconds 600
-    $null=[CapyRowPointer]::SetForegroundWindow($drawingWindow)
-    [CapyRowPointer]::Initialize([uint32]$review.Id)
+    Start-PalettesReview
 
     foreach($workspace in @(@('Paint','builtin:workspace:illustrator'),@('Photo','builtin:workspace:photographer'))){
         Switch-Workspace $workspace[0] $workspace[1]
@@ -276,6 +398,7 @@ try {
     }
     Switch-Workspace 'Paint' 'builtin:workspace:illustrator'
     if(@((Panel).palettes).Count -lt 10){throw 'Starter palettes were not installed'}
+    Check-ColdPaletteMeasurement
     Invoke 'panel-tab-palettes'
     $null=Control 'palettes-panel'
     Wait-Until {@(Swatches).Count -gt 5 -and (Control ('palette-swatch-'+(Swatches)[0])).Current.BoundingRectangle.Y -eq (Control ('palette-swatch-'+(Swatches)[5])).Current.BoundingRectangle.Y} 'Six saved swatches did not render across the first row'
@@ -319,7 +442,7 @@ try {
     $tile=Control ('palette-swatch-'+(Swatches)[1]) -Arranged
     [CapyRowPointer]::Down('touch',(Center $tile).x,(Center $tile).y);Start-Sleep -Milliseconds 900
     Wait-Until {@(Menu-Items|Where-Object {$_.Current.AutomationId -eq 'palette-command-rename_color'}).Count} 'Touch hold did not open the swatch menu' 4
-    [CapyRowPointer]::Up();Close-Menu
+    [CapyRowPointer]::Up();Close-Menu $tile
 
     foreach($device in @('mouse','touch','pen')){
         $before=(Swatches) -join ','
@@ -411,14 +534,19 @@ try {
     Wait-Until {$choice=Find ('palette-choice-'+$overflowPalette[0].id);$choice -and !$choice.Current.IsOffscreen} 'Overflow palette did not arrange in its filtered chooser viewport'
     Invoke ('palette-choice-'+$overflowPalette[0].id)
     Wait-Until {(Panel).palette -eq $overflowPalette[0].id -and !(Find 'palette-search') -and @(Swatches).Count -eq 36} 'Overflow palette did not select and close its chooser'
+    $firstRow=@(foreach($id in (Swatches)[0..5]){(Control ('palette-swatch-'+$id) -Arranged).Current.BoundingRectangle})
+    $initialScroller=Palette-Scroller 'palette-swatches';$initialViewport=$initialScroller.node.Current.BoundingRectangle
+    if($initialScroller.pattern.Current.VerticalScrollPercent -ne 0){throw 'Palette column reference did not start at its native top offset'}
+    foreach($bounds in $firstRow){if(!$initialViewport.Contains($bounds)){throw 'Palette column reference is not fully visible'}}
     Check-PaletteScrollModes 'palette-swatches'
     foreach($device in @('mouse','pen','touch')){
         Scroll-Position (Control 'palette-swatches' -Arranged) 100
         $before=@(Swatches);$beforeOrder=$before -join ','
-        $last=@(foreach($id in $before[-6..-1]){Native-Bounds ('palette-swatch-'+$id) $scale})
+        $last=@(foreach($id in $before[-6..-1]){(Control ('palette-swatch-'+$id) -Arranged).Current.BoundingRectangle})
         $viewport=(Palette-Scroller 'palette-swatches').node.Current.BoundingRectangle
+        @{device=$device;first_row=$firstRow;last_row=$last}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run ('palette-column-widths-'+$device+'.json'))
         for($i=0;$i -lt 6;$i++){
-            if(!$viewport.Contains($last[$i]) -or $last[$i].Y -ne $last[0].Y -or $last[$i].Width -ne $last[0].Width -or $last[$i].Height -ne $last[0].Height -or ($i -gt 0 -and $last[$i].X -le $last[$i-1].Right)){throw 'Last palette row did not expose six equal, separated tiles inside its viewport'}
+            if(!$viewport.Contains($last[$i]) -or $last[$i].Y -ne $last[0].Y -or $last[$i].Width -ne $firstRow[$i].Width -or $last[$i].Height -ne $last[0].Height -or ($i -gt 0 -and $last[$i].X -le $last[$i-1].Right)){throw 'Last palette row did not preserve its six native column widths and separated tiles inside its viewport'}
         }
         $id=$before[-1];$expectedColor=((Panel).swatches|Where-Object id -eq $id).color|ConvertTo-Json -Depth 12 -Compress
         Tap (Center (Control ('palette-swatch-'+$id))) $device
@@ -440,6 +568,7 @@ try {
     Wait-Until {$d=(Model).state.customization.drawer;$d -and ((ConvertTo-Json -InputObject $d.columns -Compress) -eq '[["color","palettes"]]')} 'Sketch color drawer lacks Palettes below the wheel'
     Wait-Until {(Find 'drawer-panel-palettes') -and (Find 'palette-swatches' -Within (Find 'tool-drawer'))} 'Sketch drawer did not render Palettes'
     Capture 'sketch-drawer'
+    Check-PaletteDrawerHeight
     [CapyRowPointer]::Verify();[CapyRowPointer]::Dispose()
 
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved

@@ -17,6 +17,17 @@ using namespace CapyUi;
 namespace Pickers=winrt::Microsoft::Windows::Storage::Pickers;
 namespace {
 constexpr double Cell=40,Gap=4,Pitch=Cell+Gap;
+struct PaletteLayout:PanelT<PaletteLayout>{
+    Grid content;
+    std::function<void(double)> prepare;
+    PaletteLayout(Grid const& child,std::function<void(double)> layout):content(child),prepare(std::move(layout)){Children().Append(content);}
+    Windows::Foundation::Size measure(double width){
+        if(std::isfinite(width))prepare(width);
+        content.Measure({float(width),std::numeric_limits<float>::infinity()});return content.DesiredSize();
+    }
+    Windows::Foundation::Size MeasureOverride(Windows::Foundation::Size available){return measure(available.Width);}
+    Windows::Foundation::Size ArrangeOverride(Windows::Foundation::Size size){content.Arrange({0,0,size.Width,size.Height});return size;}
+};
 struct Tile{uint64_t id=0;Button node{nullptr};Border patch{nullptr},ring{nullptr};J swatch;double x=0,y=0;Microsoft::UI::Composition::Vector3KeyFrameAnimation animation{nullptr};};
 struct Drag{
     uint32_t pointer=0;uint64_t id=0,palette=0;winrt::Windows::Foundation::Point point{},grab{};
@@ -25,6 +36,7 @@ struct Drag{
 };
 struct PalettesView:std::enable_shared_from_this<PalettesView>{
     std::shared_ptr<WorkspaceData> data;
+    com_ptr<PaletteLayout> layout;double rowPitch=Pitch;
     Grid root,body,chooser,footer;StackPanel normal,list,info;Canvas history,grid,expanded,overlays;ScrollView scroll,results;
     TextBox search,editor;Button more{nullptr},selector{nullptr},name{nullptr},add{nullptr};TextBlock selectorLabel,nameLabel,detail,note,empty;
     std::map<uint64_t,Tile> tiles;std::vector<uint64_t> order;std::vector<FrameworkElement> historyCells,expandedCells;
@@ -75,25 +87,30 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         node.HorizontalContentAlignment(HorizontalAlignment::Stretch);node.VerticalContentAlignment(VerticalAlignment::Stretch);return node;
     }
     void place(FrameworkElement const& node,int index,double cell){
-        Canvas::SetLeft(node,std::round((index%columns)*(cell+Gap)));Canvas::SetTop(node,(index/columns)*pitch());node.Width(std::round((index%columns+1)*(cell+Gap))-std::round((index%columns)*(cell+Gap))-Gap);node.Height(pitch()-Gap);
+        auto left=float(std::round((index%columns)*(cell+Gap))),top=float((index/columns)*pitch());
+        auto width=float(std::max(0.,std::round((index%columns+1)*(cell+Gap))-std::round((index%columns)*(cell+Gap))-Gap)),height=float(pitch()-Gap);
+        if(Canvas::GetLeft(node)!=left)Canvas::SetLeft(node,left);if(Canvas::GetTop(node)!=top)Canvas::SetTop(node,top);
+        if(node.Width()!=width)node.Width(width);if(node.Height()!=height)node.Height(height);
     }
-    double cellWidth(double width)const{return (width-Gap*(columns-1))/columns;}
-    double pitch()const{return std::clamp(cellWidth(scroll.ActualWidth()),1.,Cell)+Gap;}
-    void arrange(){
-        double width=scroll.ActualWidth();if(width<=0)return;
-        columns=std::max(6,int((width+Gap)/Pitch));auto cell=cellWidth(width);
+    double cellWidth(double width)const{return std::max(0.,(width-Gap*(columns-1))/columns);}
+    double pitch()const{return rowPitch;}
+    void arrange(double width){
+        auto padding=root.Padding();width=std::max(0.,width-padding.Left-padding.Right);
+        columns=std::max(6,int((width+Gap)/Pitch));auto cell=cellWidth(width);rowPitch=std::clamp(cell,1.,Cell)+Gap;
         int index=0;for(auto id:order){auto& t=tiles.at(id);place(t.node,index,cell);t.x=std::round((index%columns)*(cell+Gap));t.y=(index/columns)*pitch();++index;}
         place(add,index,cell);++index;
-        int rows=(index+columns-1)/columns;grid.Width(width);grid.Height(std::max(0.,rows*pitch()-Gap));
+        int rows=(index+columns-1)/columns;auto gridWidth=float(width),gridHeight=float(std::max(0.,rows*pitch()-Gap));
+        if(grid.Width()!=gridWidth)grid.Width(gridWidth);if(grid.Height()!=gridHeight)grid.Height(gridHeight);
         arrangeHistory(historyCells,1,cell);
         if(expanded.Visibility()==Visibility::Visible){
             int limit=std::min(4,std::max(1,int((body.ActualHeight()+Gap)/pitch())));arrangeHistory(expandedCells,limit,cell);
         }
-        history.Height(pitch()-Gap);scroll.MinHeight(2*pitch()-Gap);scroll.MaxHeight(4*pitch()-Gap);
+        auto historyHeight=float(pitch()-Gap),scrollHeight=float(std::clamp(rows,2,4)*pitch()-Gap);
+        if(history.Height()!=historyHeight)history.Height(historyHeight);if(scroll.Height()!=scrollHeight)scroll.Height(scrollHeight);
     }
     void arrangeHistory(std::vector<FrameworkElement>& cells,int rows,double cell){
         if(cells.empty())return;int capacity=rows*columns;
-        for(size_t i=0;i+1<cells.size();++i){bool shown=int(i)<capacity-1;cells[i].Visibility(shown?Visibility::Visible:Visibility::Collapsed);if(shown)place(cells[i],int(i),cell);}
+        for(size_t i=0;i+1<cells.size();++i){bool shown=int(i)<capacity-1;auto visibility=shown?Visibility::Visible:Visibility::Collapsed;if(cells[i].Visibility()!=visibility)cells[i].Visibility(visibility);if(shown)place(cells[i],int(i),cell);}
         place(cells.back(),capacity-1,cell);
     }
     void historyTiles(Canvas const& target,std::vector<FrameworkElement>& cells,bool open){
@@ -120,7 +137,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
     }
     void expand(bool open){
         chooser.Visibility(Visibility::Collapsed);expanded.Visibility(open?Visibility::Visible:Visibility::Collapsed);normal.IsHitTestVisible(!open);normal.Opacity(open?0:1);
-        arrange();if(open&&!expandedCells.empty())expandedCells.back().as<Control>().Focus(FocusState::Programmatic);
+        layout->InvalidateMeasure();if(open&&!expandedCells.empty())expandedCells.back().as<Control>().Focus(FocusState::Programmatic);
         else if(!open&&!historyCells.empty())if(auto c=historyCells.back().try_as<Control>())c.Focus(FocusState::Programmatic);
     }
     void browse(bool show,bool typing=true){
@@ -448,14 +465,18 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         if(editing&&(hstring(currentNext)!=currentKey||nextChoices!=choicesKey)){editing=false;showLabel();report(L"");}
         currentKey=currentNext;
         selected.reset();for(auto s:array(v,L"swatches"))if(flag(s.GetObject(),L"current")){selected=uint64_t(num(s.GetObject(),L"id"));break;}
-        std::set<uint64_t> live;order.clear();
+        std::set<uint64_t> live;size_t nextOrder=0;bool orderChanged=false;
         for(auto value:array(v,L"swatches")){
-            auto s=value.GetObject();auto id=uint64_t(num(s,L"id"));live.insert(id);order.push_back(id);
+            auto s=value.GetObject();auto id=uint64_t(num(s,L"id"));live.insert(id);
+            if(nextOrder==order.size()){order.push_back(id);orderChanged=true;}
+            else if(order[nextOrder]!=id){order[nextOrder]=id;orderChanged=true;}
+            ++nextOrder;
             if(!tiles.contains(id)){tiles.emplace(id,makeTile(id));grid.Children().Append(tiles.at(id).node);}
             auto& t=tiles.at(id);
             if(t.swatch.Stringify()!=s.Stringify()){fillPatch(t.patch,array(s,L"rgba"));tooltip(t.node,str(s,L"detail"));AutomationProperties::SetName(t.node,str(s,L"detail"));}
             t.swatch=s;
         }
+        if(nextOrder!=order.size()){order.resize(nextOrder);orderChanged=true;}
         for(auto it=tiles.begin();it!=tiles.end();){if(live.contains(it->first)){++it;continue;}uint32_t at;if(grid.Children().IndexOf(it->second.node,at))grid.Children().RemoveAt(at);it=tiles.erase(it);}
         add.IsEnabled(flag(v,L"can_name"));name.IsEnabled(flag(v,L"can_name"));
         auto nextHistory=array(v,L"history").Stringify();
@@ -463,7 +484,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         if(nextChoices!=choicesKey){choicesKey=nextChoices;filter();}
         auto nextName=str(v,L"name");if(selectorLabel.Text()!=nextName){selectorLabel.Text(nextName);tooltip(selector,data->caption(O({{L"type",S(L"choose_palette")},{L"name",S(nextName)}})));}AutomationProperties::SetName(selector,data->caption(L"palettes",L"choose"));
         if(detail.Text()!=str(v,L"color_detail"))detail.Text(str(v,L"color_detail"));
-        sync();arrange();
+        sync();if(orderChanged)layout->InvalidateMeasure();
         auto status=files();auto generation=uint64_t(num(status,L"generation"));
         if(generation!=reportGeneration){reportGeneration=generation;auto error=str(status,L"error");auto notice=str(status,L"notice");
             if(!error.empty())report(error);else if(!notice.empty())report(notice,true);}
@@ -490,6 +511,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
     }
     void init(){
         auto weak=weak_from_this();
+        layout=make_self<PaletteLayout>(root,[weak](double width){if(auto self=weak.lock())self->arrange(width);});
         transient=data->transient([weak]{if(auto self=weak.lock()){bool active=self->drag.has_value()||self->menuOwner.Active();self->finish(true);return active;}return false;});
         root.Padding({8,8,8,8});root.RowSpacing(6);root.MinWidth(0);root.Tag(O({{L"native_keys",B(true)}}));AutomationProperties::SetAutomationId(root,L"palettes-panel");AutomationProperties::SetName(root,data->caption(L"palettes",L"title"));
         for(auto star:{true,false,false,false}){RowDefinition row;row.Height(star?GridLength{1,GridUnitType::Star}:GridLength{1,GridUnitType::Auto});root.RowDefinitions().Append(row);}
@@ -497,7 +519,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         normal.Spacing(6);history.Height(Cell);AutomationProperties::SetAutomationId(history,L"palette-history");AutomationProperties::SetName(history,data->caption(L"palettes",L"recent"));
         tooltip(history,data->caption(L"palettes",L"history_help"));
         normal.Children().Append(history);normal.Children().Append(divider());
-        scroll.MinHeight(84);scroll.MaxHeight(172);scroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);scroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
+        scroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);scroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
         scroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);mouseScrollbars(scroll);grid.Background(clear());scroll.Content(grid);scroll.ContentOrientation(ScrollingContentOrientation::Vertical);panelScrolling(scroll,grid,data);AutomationProperties::SetAutomationId(grid,L"palette-swatches");AutomationProperties::SetName(grid,data->caption(L"palettes",L"saved"));
         normal.Children().Append(scroll);body.Children().Append(normal);body.Children().Append(overlays);
         expanded.Visibility(Visibility::Collapsed);AutomationProperties::SetAutomationId(expanded,L"palette-history-expanded");overlays.Children().Append(expanded);
@@ -547,10 +569,9 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         add=tileButton(data->caption(L"palettes",L"add_current"));Border addFace;{auto radius=data->controlCorner().TopLeft+3;addFace.CornerRadius({radius,radius,radius,radius});}addFace.Background(data->brush(L"input"));addFace.Child(icon(L"plus",data->theme()));add.Content(addFace);
         tooltip(add,data->caption(L"palettes",L"add_current"));AutomationProperties::SetAutomationId(add,L"palette-add");
         add.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->addColor();});grid.Children().Append(add);
-        scroll.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->arrange();});
         body.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock()){
             for(FrameworkElement cover:{FrameworkElement(self->chooser),FrameworkElement(self->expanded)}){cover.Width(self->body.ActualWidth());cover.Height(self->body.ActualHeight());}
-            self->arrange();
+            if(self->expanded.Visibility()==Visibility::Visible)self->arrangeHistory(self->expandedCells,std::min(4,std::max(1,int((self->body.ActualHeight()+Gap)/self->pitch()))),self->cellWidth(self->grid.Width()));
         }});
         root.AddHandler(UIElement::PointerMovedEvent(),box_value(PointerEventHandler([weak](winrt::Windows::Foundation::IInspectable const&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())self->moved(e);})),true);
         root.AddHandler(UIElement::PointerReleasedEvent(),box_value(PointerEventHandler([weak](winrt::Windows::Foundation::IInspectable const&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())self->released(e);})),true);
@@ -562,6 +583,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         root.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock())self->keys(e);});
         root.ContextCanceled([weak](auto&&,auto&&){if(auto self=weak.lock())self->dismissMenu();});
         root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->finish(true);});
+        layout->UseLayoutRounding(false);
         refresh();
     }
     bool openerTouch=false;
@@ -570,14 +592,9 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
 FrameworkElement PalettesPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,std::function<double(double)>* contentHeight,std::function<J()>* scrollMetrics){
     auto view=std::make_shared<PalettesView>();view->data=data;view->init();
     bindings.emplace_back([view]{view->refresh();});
-    if(contentHeight)*contentHeight=[view](double width){
-        view->root.Measure({float(width),std::numeric_limits<float>::infinity()});
-        return double(view->root.DesiredSize().Height);
-    };
+    if(contentHeight)*contentHeight=[view](double width){return double(view->layout->measure(width).Height);};
     if(scrollMetrics)*scrollMetrics=[view]{
-        if(view->root.ActualWidth()<=0)return J{};
-        view->root.Measure({float(view->root.ActualWidth()),std::numeric_limits<float>::infinity()});
         return O({{L"fixed_height",N(std::max(0.,double(view->root.DesiredSize().Height)-double(view->scroll.DesiredSize().Height)))},{L"unit_height",N(view->pitch())}});
     };
-    return view->root;
+    return view->layout.as<Panel>();
 }
