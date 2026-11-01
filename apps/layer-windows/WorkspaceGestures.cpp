@@ -735,7 +735,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         root.AddHandler(UIElement::PointerCanceledEvent(),box_value(PointerEventHandler([weak](auto&&,auto&& e){
             if(auto self=weak.lock())self->observePointer(e,true);
             if(auto self=weak.lock();self&&!self->releasing){
-                if(e.OriginalSource().template try_as<UIElement>()!=self->root&&PointerGesture::Captured(self->root,e.Pointer().PointerId()))return;
+                if(e.OriginalSource().template try_as<UIElement>()!=self->root&&PointerGesture::Captured(self->root,e.Pointer().PointerId())&&e.GetCurrentPoint(self->root).IsInContact())return;
                 if(self->pointer==e.Pointer().PointerId())self->cancel(L"pointer_canceled");
                 if(self->edge&&self->edge->pointer==e.Pointer().PointerId())self->edgeEnd(L"cancel",L"pointer_canceled");
                 if(self->rejectedPointer==e.Pointer().PointerId()){self->rejectedPointer.reset();self->deferClick();}
