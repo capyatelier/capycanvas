@@ -24,6 +24,7 @@ if($LASTEXITCODE -ne 0){throw 'Fixture owner census regression failed.'}
 & (Join-Path $PSScriptRoot '../tests/software-test-runtime.ps1')
 & (Join-Path $PSScriptRoot 'build.ps1') -Configuration $Configuration -Architecture $build.architecture -OutputDirectory $testBuildDirectory
 & (Join-Path $PSScriptRoot 'test-input.ps1') -Configuration $Configuration -OutputDirectory (Join-Path $testBuildDirectory 'tests')
+& (Join-Path $PSScriptRoot '../tests/runtime-staging.ps1') -Output (Join-Path $testBuildDirectory ('runtime-staging-'+[guid]::NewGuid().ToString('N')))
 & (Join-Path $PSScriptRoot '../tests/architecture.ps1')
 & (Join-Path $PSScriptRoot '../tests/application-menu-query.ps1')
 & (Join-Path $PSScriptRoot '../tests/pen-capture.ps1')
