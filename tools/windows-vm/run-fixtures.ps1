@@ -29,7 +29,6 @@ $controlBuilds=@{}
 $scripts = (Resolve-Path (Join-Path $PSScriptRoot '../../apps/layer-windows/scripts')).Path
 function Get-FixtureVariantArguments([string]$Fixture,[string]$Option,[string]$Choice){
     if($Fixture -eq 'switcher-drag' -and $Option -eq 'ContextEnding'){'-ContextHoldOnly'}
-    if($Fixture -eq 'edge-reach' -and $Option -in @('CanvasResetOnly','CancelOnly')){'-Device';'touch'}
     "-$Option";if($Choice){$Choice}
 }
 function ConvertTo-FixtureCommandLine([string[]]$Arguments){
@@ -234,7 +233,7 @@ foreach ($run in $runs.GetEnumerator()) {
         $arguments = if ($null -eq $run.Value) { Start-Shortcuts } else { @('-File', (Join-Path $scripts "exercise-$fixture.ps1"), '-Executable', $Executable) + $run.Value }
         $arguments += @(Get-FixtureCompanionArguments $fixture $run.Value ${function:Build-ControlFixture})
         if ($DebuggerPath) { $arguments += @('-DebuggerPath', $DebuggerPath) }
-        $env:CAPY_WAIT_SCALE = if($HardwareGpu -or $fixture -eq 'idle-brush'){$null}else{'3'}
+        $env:CAPY_WAIT_SCALE = if($HardwareGpu){$null}else{'3'}
         $process = Start-Process (Get-Process -Id $PID).Path -ArgumentList (ConvertTo-FixtureCommandLine (@('-NoProfile', '-Sta') + $arguments)) -NoNewWindow -PassThru -RedirectStandardOutput "$log.log" -RedirectStandardError "$log.err"
         $null = $process.Handle
         $process.PriorityClass='High'

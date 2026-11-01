@@ -13,7 +13,7 @@ Add-Type -Path (Join-Path $scripts 'RowPointerDriver.cs')
 Add-Type -AssemblyName System.Drawing
 $CapyFind='prefer-visible';$CapyPopups=$true;$CapyWaitSeconds=30
 [CapyRowPointer]::VerifyPrivateDesktop($env:CAPY_PRIVATE_DESKTOP)
-if($env:CAPY_WAIT_SCALE -and !$WetRoundOnly){throw 'Readiness checks require default functional deadlines'}
+if(!$WetRoundOnly){$env:CAPY_WAIT_SCALE=$null}
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $run=Join-Path $repo ('artifacts/windows/idle-brush/'+$Theme+'-'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null

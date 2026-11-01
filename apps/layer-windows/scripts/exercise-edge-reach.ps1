@@ -1,5 +1,6 @@
 ﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[switch]$ColumnResetOnly,[switch]$CanvasResetOnly,[switch]$ClosedStripOnly,[switch]$LayerRowOnly,[switch]$CancelOnly,[switch]$EdgeEscapeOnly,[switch]$NumericOnly,[switch]$ControlRoleOnly,[switch]$SweepOnly,[ValidateSet('dark','light')][string]$Theme)
 $ErrorActionPreference='Stop'
+if(($CanvasResetOnly -or $CancelOnly) -and !$PSBoundParameters.ContainsKey('Device')){$Device='touch'}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyPopups=$true
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')

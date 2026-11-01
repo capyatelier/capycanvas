@@ -149,3 +149,18 @@ foreach($case in @(
     elseif($failure){throw "Actual clipboard check rejected numeric identity: linear=$($affine[0..3] -join ','); types=$(@($affine[0..3]|ForEach-Object {$_.GetType().FullName}) -join ','); $failure"}
 }
 Write-Output 'Clipboard affine checks compare exact numbers: default and translated identity accepted; scale, shear and rotation rejected.'
+
+& {
+    $idle=Fixture-Ast 'exercise-idle-brush.ps1'
+    $idlePolicy=@($idle.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.IfStatementAst] -and $_.Extent.Text.Contains('$env:CAPY_WAIT_SCALE')})
+    if($idlePolicy.Count -ne 1){throw 'Missing actual idle readiness deadline policy'}
+    $previous=$env:CAPY_WAIT_SCALE
+    try{
+        foreach($case in @(@{wet=$false;scale='3';expected=$null},@{wet=$true;scale='3';expected='3'},@{wet=$false;scale=$null;expected=$null})){
+            $WetRoundOnly=$case.wet;$env:CAPY_WAIT_SCALE=$case.scale
+            . ([scriptblock]::Create($idlePolicy[0].Extent.Text))
+            if($env:CAPY_WAIT_SCALE -ne $case.expected){throw 'Idle readiness did not select its functional deadlines'}
+        }
+    }finally{$env:CAPY_WAIT_SCALE=$previous}
+}
+Write-Output 'Idle readiness owns its functional deadlines without changing Wet Round scope.'

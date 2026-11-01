@@ -20,65 +20,23 @@ $edgeRuns=& {
 }
 foreach($case in @(@{option='CanvasResetOnly';journey='Check-CanvasReset'},@{option='CancelOnly';journey='Check-NativeEdgeCancel'})){
     $journey=$edgeAst.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $case.journey},$false)
-    $probe=[scriptblock]::Create($edgeAst.ParamBlock.Extent.Text+"`n"+$journey.Body.EndBlock.Statements[0].Extent.Text+"`n"+'$Device')
+    $defaults=$edgeAst.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.IfStatementAst] -and $_.Extent.Text.Contains("PSBoundParameters.ContainsKey('Device')")}
+    $probe=[scriptblock]::Create($edgeAst.ParamBlock.Extent.Text+"`n"+$defaults.Extent.Text+"`n"+$journey.Body.EndBlock.Statements[0].Extent.Text+"`n"+'$Device')
     $arguments=@($edgeRuns[('edge-reach:'+$case.option)])
+    if(($arguments -join ',') -ne ('-'+$case.option)){throw 'Generated native edge variants must leave the script device default intact'}
     $bound=@{Executable='C:\owned\CapyCanvas.exe'}
     for($i=0;$i -lt $arguments.Count;$i++){
         $name=$arguments[$i].TrimStart('-')
         if($name -eq 'Device'){$i++;$bound[$name]=$arguments[$i]}else{$bound[$name]=$true}
     }
     if((& $probe @bound) -ne 'touch'){throw 'Generated native edge variant lost its required touch device'}
+    $bound.Device='touch';if((& $probe @bound) -ne 'touch'){throw 'Explicit touch input changed'}
+    $bound.Device='mouse';$failure=$null
+    try{& $probe @bound|Out-Null}catch{$failure=$_.Exception.Message}
+    if(!$failure -or $failure -notlike ($case.option+' requires *')){throw 'Explicit mouse must retain the native edge guard'}
+    if($case.option -eq 'CancelOnly'){$bound.Device='pen';if((& $probe @bound) -ne 'pen'){throw 'Explicit pen cancellation changed'}}
 }
 if(($edgeRuns['edge-reach:pen'] -join ',') -ne '-Device,pen' -or ($edgeRuns['edge-reach:ColumnResetOnly'] -join ',') -ne '-ColumnResetOnly'){throw 'Native edge routing changed unrelated variants'}
-& {
-    $idleSource=Join-Path $PSScriptRoot '../../apps/layer-windows/scripts/exercise-idle-brush.ps1'
-    $idleAst=[Management.Automation.Language.Parser]::ParseFile($idleSource,[ref]$tokens,[ref]$errors)
-    if(@($errors).Count){throw ($errors|Out-String)}
-    $idleGuard=$idleAst.EndBlock.Statements|Where-Object {$_.Extent.Text -like "if(`$env:CAPY_WAIT_SCALE*"}
-    if(@($idleGuard).Count -ne 1){throw 'Cannot find the actual idle readiness deadline guard'}
-    $setup=$ast.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.IfStatementAst] -and $_.Extent.Text -like 'if ($HardwareGpu)*'}
-    $launch=$ast.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.ForEachStatementAst] -and $_.Extent.Text -like 'foreach ($run in $runs.GetEnumerator())*'}
-    if(@($setup).Count -ne 1 -or @($launch).Count -ne 1){throw 'Cannot find actual fixture environment setup and launch loop'}
-    function Stop-Review {}
-    function Save-Evidence($Log) {}
-    function Save-Screen($Path) {}
-    function Get-Content($Path){if($script:childGuardError){$script:childGuardError}}
-    function Write-FixtureResult($Path,$Json){$script:launchResults.Add(($Json|ConvertFrom-Json))}
-    function Start-Process($FilePath,$ArgumentList,[switch]$NoNewWindow,[switch]$PassThru,$RedirectStandardOutput,$RedirectStandardError){
-        $script:childScales.Add([pscustomobject]@{selector=$run.Key;scale=$env:CAPY_WAIT_SCALE})
-        $script:childGuardError=$null
-        if($fixture -eq 'idle-brush'){
-            $WetRoundOnly=$false;$SessionsOnly=$run.Key -eq 'idle-brush:SessionsOnly'
-            try{. ([scriptblock]::Create($idleGuard.Extent.Text))}catch{$script:childGuardError=$_.Exception.Message}
-        }
-        $fake=[pscustomobject]@{Handle=[IntPtr]1;Id=1;ExitCode=$(if($script:childGuardError){1}else{0});PriorityClass='Normal'}
-        $fake|Add-Member ScriptMethod WaitForExit {param($Milliseconds) $true}
-        $fake
-    }
-    $saved=@{}
-    foreach($name in 'CAPY_WAIT_SCALE','LAYER_TEST_SOFTWARE_GPU','CAPY_FIXTURE_CONTEXT'){$saved[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
-    try{
-        foreach($HardwareGpu in @($false,$true)){
-            $runs=[ordered]@{'idle-brush'=@();'idle-brush:SessionsOnly'=@('-SessionsOnly');'effects'=@()}
-            $planned=@($runs.Keys);$Output=[IO.Path]::GetTempPath();$scripts=$PSScriptRoot
-            $editorExecutable='C:\owned\CapyCanvas.exe';$DebuggerPath=$null;$TimeoutMinutes=20
-            $script:childScales=[Collections.Generic.List[object]]::new()
-            $script:launchResults=[Collections.Generic.List[object]]::new()
-            $env:CAPY_WAIT_SCALE='inherited'
-            . ([scriptblock]::Create($setup.Extent.Text))
-            . ([scriptblock]::Create($launch.Extent.Text))
-            if($launchResults.Count -ne 3 -or @($launchResults|Where-Object exit -ne 0).Count){throw ('Fixture launch violated the unchanged idle readiness guard: '+($launchResults|ConvertTo-Json -Compress))}
-            if($childScales.Count -ne 3){throw 'Fixture environment probe lost a launch'}
-            foreach($child in $childScales){
-                $expected=if($HardwareGpu -or $child.selector -like 'idle-brush*'){$null}else{'3'}
-                if($child.scale -ne $expected){throw ('Wrong child deadline scale: '+$child.selector)}
-            }
-        }
-    }finally{
-        foreach($name in $saved.Keys){[Environment]::SetEnvironmentVariable($name,$saved[$name],'Process')}
-        Remove-Variable childScales,launchResults,childGuardError -Scope Script -ErrorAction SilentlyContinue
-    }
-}
 $available=@('header','header:catalog-only','header:catalog-only-light','popup','popup:light','effects')
 if(((Select-Fixtures $available @()) -join ',') -ne ($available -join ',')){throw 'An empty fixture request must select every available selector'}
 if(((Select-Fixtures $available $null) -join ',') -ne ($available -join ',')){throw 'A null fixture request must select every available selector'}
