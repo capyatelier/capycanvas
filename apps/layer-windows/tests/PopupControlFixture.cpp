@@ -283,6 +283,27 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         window.AppWindow().Resize(wide);
         auto stable=[](Windows::Foundation::Rect const& a,Windows::Foundation::Rect const& b){return a.X>=b.X-1&&a.X<=b.X+1&&a.Y>=b.Y-1&&a.Y<=b.Y+1&&a.Width>=b.Width-1&&a.Width<=b.Width+1&&a.Height>=b.Height-1&&a.Height<=b.Height+1;};
         co_await wait([&]{auto size=root.XamlRoot().Size();return size.Width==sizeWide.Width&&size.Height==sizeWide.Height&&inside(language)&&inside(close)&&stable(bounds(language),languageWide)&&stable(bounds(close),closeWide);},L"Preferences growth did not restore native bounds");retained();
+        object(model,L"preferences").Insert(L"query",S(L"retained resize draft"));
+        auto closedModel=J::Parse(model.Stringify());closedModel.Remove(L"preferences");
+        for(auto closedSize:{narrow,wide}){
+            bool closedNarrow=closedSize.Width==narrow.Width;
+            auto peer=winrt::Microsoft::UI::Xaml::Automation::Peers::FrameworkElementAutomationPeer::CreatePeerForElement(close);
+            peer.GetPattern(winrt::Microsoft::UI::Xaml::Automation::Peers::PatternInterface::Invoke).as<winrt::Microsoft::UI::Xaml::Automation::Provider::IInvokeProvider>().Invoke();
+            co_await wait([actions]{for(auto const& value:*actions)if(str(J::Parse(to_hstring(value)),L"type")==L"close_settings")return true;return false;},L"Preferences Close did not dispatch its shared request");
+            settings->Apply(closedModel);
+            co_await wait([&]{return !settings->IsOpen()&&!workspaceElement(L"preference-choice-language");},L"Preferences Close did not finish");
+            auto ownerRoot=root.XamlRoot();bool resizedClosed=false;
+            auto closedChange=ownerRoot.Changed(auto_revoke,[&](auto&&,auto&&){if(!settings->IsOpen())resizedClosed=true;});
+            window.AppWindow().Resize(closedSize);
+            co_await wait([&]{auto size=ownerRoot.Size();return resizedClosed&&!settings->IsOpen()&&(closedNarrow?size.Width<sizeWide.Width-40:size.Width==sizeWide.Width);},L"Closed Preferences did not receive its owner resize");
+            settings->Apply(model);
+            co_await wait([&]{return settings->IsOpen()&&inside(language)&&inside(close);},L"Reopened Preferences language or Close is outside its owner");
+            edit.Focus(FocusState::Programmatic);edit.Select(2,5);actions->clear();retained();
+            if(closedSize.Width==wide.Width){
+                window.AppWindow().Resize(narrow);
+                co_await wait([&]{return ownerRoot.Size().Width<sizeWide.Width-40&&inside(language)&&inside(close);},L"Reopened Preferences kept its closed-window bounds");retained();
+            }
+        }
         settings->Hide();co_await wait([&]{return !settings->IsOpen()&&!workspaceElement(L"preference-choice-language");},L"Preferences Hide did not finish native dialog close");
         settings.reset();window.AppWindow().Resize(previous);++checks;
     }

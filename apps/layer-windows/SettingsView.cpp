@@ -48,7 +48,7 @@ Button headerButton(std::shared_ptr<WorkspaceData> const& data,hstring const& na
 struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
     static constexpr double HeaderHeight=47,DialogWidth=1000,DialogHeight=744;
     std::shared_ptr<WorkspaceData> data=std::make_shared<WorkspaceData>();
-    ContentDialog dialog;
+    ContentDialog dialog{nullptr};
     Grid frame,body,overlay;
     Border sidebarSurface;
     StackPanel sidebar,pages,results;
@@ -90,8 +90,10 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         if(value!=allocationTrace){allocationTrace=value;AutomationProperties::SetItemStatus(title,value);}
     }
     void init(){
-        dialog.XamlRoot(xamlRoot);inheritLanguage(dialog,data);
         rootChanged=xamlRoot.Changed(auto_revoke,[weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock();self&&self->showing&&!self->closing)self->fit();});
+    }
+    void configure(){
+        dialog.XamlRoot(xamlRoot);inheritLanguage(dialog,data);dialogSurface(data,dialog);
         for(auto [resource,value]:{std::pair{L"ContentDialogMaxWidth",DialogWidth},std::pair{L"ContentDialogMinWidth",0.},
             std::pair{L"ContentDialogMaxHeight",DialogHeight},std::pair{L"ContentDialogMinHeight",0.}})
             dialog.Resources().Insert(box_value(resource),box_value(value));
@@ -102,7 +104,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
                 if(self->stopping){self->closing=true;return;}
                 if(!std::exchange(self->dismissing,false)){
                     e.Cancel(true);
-                    self->dialog.DispatcherQueue().TryEnqueue([weak]{if(auto self=weak.lock())self->escape();});
+                    if(self->dialog)self->dialog.DispatcherQueue().TryEnqueue([weak]{if(auto self=weak.lock())self->escape();});
                     return;
                 }
                 self->closing=true;if(preferences(self->data).Size())self->data->dispatch(O({{L"type",S(L"close_settings")}}));
@@ -124,7 +126,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             }
         });
     }
-    void hide(){dismissing=true;dialog.Hide();}
+    void hide(){if(dialog){dismissing=true;dialog.Hide();}}
     void escape(){
         if(escaped==escapes)return;
         escaped=escapes;
@@ -189,7 +191,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         bindings.emplace_back([this]{
             auto rename=[](auto const& target,hstring const& name){if(AutomationProperties::GetName(target)!=name){AutomationProperties::SetName(target,name);tooltip(target,name);}};
             auto searchName=data->caption(L"shortcuts",L"search_preferences");
-            AutomationProperties::SetName(dialog,data->caption(L"shortcuts",L"preferences"));
+            if(dialog)AutomationProperties::SetName(dialog,data->caption(L"shortcuts",L"preferences"));
             search.PlaceholderText(searchName);AutomationProperties::SetName(search,searchName);rename(searchToggle,searchName);
             rename(back,data->common(L"back"));rename(close,data->common(L"close"));
             empty.Text(data->caption(L"shortcuts",L"no_matching_preferences"));
@@ -238,7 +240,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             }
         }
         frame.Children().Append(body);frame.Children().Append(overlay);
-        dialog.Content(frame);built=true;
+        built=true;
         if(trace)frame.LayoutUpdated([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->publishAllocations();});
     }
     FrameworkElement field(J const& row){
@@ -453,19 +455,14 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
     }
     fire_and_forget show(){
         auto lifetime=shared_from_this();showing=true;closing=false;changed();
-        try{co_await dialog.ShowAsync();}
+        hstring message;
+        try{dialog=ContentDialog();configure();dialog.Content(frame);co_await dialog.ShowAsync();}
         catch(hresult_error const& failure){
-            showing=false;closing=false;showFailed=true;
-            if(!stopping){
-                data->dispatch(O({{L"type",S(L"close_settings")}}));
-                report(to_string(failure.message()));
-            }
-            changed();co_return;
+            showFailed=true;message=failure.message();
         }
-        // The popup disappears before ShowAsync completes. A new shared open
-        // request may arrive during that closing animation; reconcile it only
-        // after the previous operation releases the window's dialog slot.
+        if(dialog)dialog.Content(nullptr);dialog=nullptr;
         showing=false;closing=false;
+        if(showFailed&&!stopping){data->dispatch(O({{L"type",S(L"close_settings")}}));report(to_string(message));}
         changed();
     }
     void fit(){
@@ -481,13 +478,13 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         auto document=str(object(snapshot,L"windows_document"),L"type");bool managing=document==L"workflow"||document==L"workflow_busy";
         if(profileReturn==ProfileReturn::Requested&&managing)profileReturn=ProfileReturn::Managing;
         else if(profileReturn==ProfileReturn::Managing&&!managing){profileReturn=ProfileReturn::None;data->dispatch(O({{L"type",S(L"open_settings")},{L"page",S(L"color")}}));}
-        if(!model.Size()){if(shortcutPage)shortcutPage->Apply(snapshot);showFailed=false;if(showing&&!closing){dismissing=true;dialog.Hide();}return;}
+        if(!model.Size()){if(shortcutPage)shortcutPage->Apply(snapshot);showFailed=false;if(showing&&!closing&&dialog){dismissing=true;dialog.Hide();}return;}
         if(showFailed)return;
         data->updating=true;struct Reset{bool& value;~Reset(){value=false;}}reset{data->updating};
         // Retain native controls and their automation peers across theme changes.
         bool restyle=!built||theme!=data->theme();theme=data->theme();
         if(!built)build(model);
-        dialogSurface(data,dialog);
+        if(dialog)dialogSurface(data,dialog);
         sidebarSurface.Background(data->brush(L"sidebar"));sidebarSurface.BorderBrush(data->line(L"sidebar_border"));
         fit();
         shortcutPage->Apply(snapshot);
@@ -531,5 +528,5 @@ SettingsView::~SettingsView()=default;
 void SettingsView::Apply(Json const& snapshot){impl->apply(snapshot);}
 bool SettingsView::IsOpen()const{return impl->showing;}
 void SettingsView::CommitEdits(){for(auto const& commit:impl->commits)commit();}
-void SettingsView::Hide(){impl->stopping=true;if(impl->showing)impl->dialog.Hide();}
+void SettingsView::Hide(){impl->stopping=true;if(impl->showing&&impl->dialog)impl->dialog.Hide();}
 void SettingsView::SetWindowId(uint64_t id){impl->data->windowId=id;}
