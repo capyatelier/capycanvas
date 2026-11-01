@@ -100,7 +100,7 @@ fn overlay_packet(renderer: &mut RenderWorker, document: &layer_core::Document) 
 fn queued_frame(commands: &mpsc::Receiver<Command>) -> Box<Frame> {
     loop {
         match commands.try_recv() {
-            Ok(Command::Frame(frame)) => return frame,
+            Ok(Command::Frame(frame, _)) => return frame,
             Ok(Command::Wake) => (),
             _ => panic!("expected a Frame without standalone overlay commands"),
         }
@@ -176,6 +176,74 @@ fn backpressure_preserves_pending_overlays_and_unchanged_frames_share_them() {
     let second = queued_frame(&commands);
     assert_eq!(second.overlays.crop, Some(crop));
     assert!(Arc::ptr_eq(&first.overlays, &second.overlays));
+}
+
+#[test]
+fn pending_presentation_keeps_picker_changes_even_when_the_view_and_cursor_are_unchanged() {
+    let view = ViewState { width_px: 320, height_px: 240, document_to_surface: [1., 0., 0., 1., 0., 0.] };
+    let geometry = Geometry { position: [0, 0], scale: 1, corner_radius: 0. };
+    let mut previous = Presentation { view, geometry, cursor: Vec::new(), picker: None };
+    let mut picker = layer_render::ColorPickerOverlay { sample_color_only: false, center: [160., 120.],
+        sample: [160., 180.], scale: 2., classic: false, layer: false, original: [0., 0., 0., 1.], candidate: [1.; 4] };
+    assert!(!previous.matches(view, geometry, &[], Some(picker)));
+    previous.picker = Some(picker);
+    assert!(previous.matches(view, geometry, &[], Some(picker)));
+    picker.candidate = [0.3, 0.5, 0.8, 1.];
+    assert!(!previous.matches(view, geometry, &[], Some(picker)));
+    previous.picker = Some(picker);
+    picker.center[0] += 10.;
+    assert!(!previous.matches(view, geometry, &[], Some(picker)));
+    assert!(!previous.matches(view, geometry, &[], None));
+    previous.picker = None;
+    assert!(previous.matches(view, geometry, &[], None));
+    assert!(!previous.matches(view, Geometry { scale: 2, ..geometry }, &[], None));
+}
+
+fn presenting_frame(presentation: Presentation) -> Command {
+    let (mut renderer, commands, _chrome, _reply) = RenderWorker::channels(Default::default());
+    let document = layer_ui::new_drawing(32, 24, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+    overlay_packet(&mut renderer, &document).unwrap();
+    let mut frame = queued_frame(&commands);
+    frame.view = presentation.view;
+    Command::Frame(frame, Some(presentation))
+}
+
+#[test]
+fn deferred_artwork_cannot_replay_an_older_picker_after_a_newer_presentation() {
+    let view = ViewState { width_px: 320, height_px: 240, document_to_surface: [1., 0., 0., 1., 0., 0.] };
+    let picker = layer_render::ColorPickerOverlay { sample_color_only: false, center: [160., 120.], sample: [160., 180.],
+        scale: 2., classic: false, layer: false, original: [0., 0., 0., 1.], candidate: [1.; 4] };
+    let presentation = |shown: bool| Presentation { view, geometry: Geometry { position: [0, 0], scale: 1, corner_radius: 0. },
+        cursor: Vec::new(), picker: shown.then_some(picker) };
+    for shown in [false, true] {
+        let mut artwork = presenting_frame(presentation(!shown));
+        let received = artwork.take_presentation().unwrap();
+        assert_eq!(received.picker.is_some(), !shown);
+        let mut pending = VecDeque::from([artwork]);
+        let mut newer = Command::Present(Some(presentation(shown)));
+        let latest = newer.take_presentation().unwrap();
+        assert_eq!(latest.picker.is_some(), shown);
+        let mut resumed = pending.pop_front().unwrap();
+        assert!(resumed.take_presentation().is_none());
+        assert!(newer.take_presentation().is_none());
+        assert!(matches!(resumed, Command::Frame(frame, None) if frame.view == view));
+    }
+}
+
+#[test]
+fn deferred_presenting_frame_after_hdr_invalidation_waits_for_a_new_view() {
+    let view = ViewState { width_px: 320, height_px: 240, document_to_surface: [1., 0., 0., 1., 0., 0.] };
+    let mut artwork = presenting_frame(Presentation { view, geometry: Geometry { position: [0, 0], scale: 1, corner_radius: 0. },
+        cursor: Vec::new(), picker: None });
+    let mut last_view = artwork.take_presentation().map(|presentation| presentation.view);
+    let mut pending = VecDeque::from([artwork]);
+    assert!(presentation_needed(last_view, true, |_| false));
+    last_view = None;
+    let ready = pending.pop_front().unwrap();
+    assert!(matches!(ready, Command::Frame(frame, None) if frame.present));
+    assert!(!presentation_needed(last_view, true, |_| panic!("HDR invalidated the view before artwork became ready")));
+    assert!(!presentation_needed(last_view, false, |_| panic!("the old frame must not restore its paint-space view")));
+    assert!(presentation_needed(Some(view), false, |_| true));
 }
 
 fn visible_chrome() -> ChromeHandoff {

@@ -271,10 +271,7 @@ struct Frame {
     composite: bool,
     commit_rasters: bool,
     blend_space: layer_core::BlendSpace,
-    geometry: Geometry,
     present: bool,
-    picker: Option<layer_render::ColorPickerOverlay>,
-    cursor: Vec<CursorSegment>,
     chrome: ChromePresentation,
     stroke_target: Option<crate::wayland::StrokeTarget>,
     // Every queued producer must resolve its immutable roots, even on failure.
@@ -317,6 +314,22 @@ impl Frame {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum StartupMode { VisibleFirst, Unpresented }
 
+#[derive(Clone)]
+struct Presentation {
+    view: ViewState,
+    geometry: Geometry,
+    cursor: Vec<CursorSegment>,
+    picker: Option<layer_render::ColorPickerOverlay>,
+}
+impl Presentation {
+    fn matches(&self, view: ViewState, geometry: Geometry, cursor: &[CursorSegment], picker: Option<layer_render::ColorPickerOverlay>) -> bool {
+        self.view == view && self.geometry == geometry && self.cursor.as_slice() == cursor && self.picker == picker
+    }
+}
+fn presentation_needed(view: Option<ViewState>, changed: bool, scene: impl FnOnce(ViewState) -> bool) -> bool {
+    view.is_some_and(|view| changed || scene(view))
+}
+
 enum Command {
     SeedContext(EvaluationContext),
     CaptureContext(ContextRequest),
@@ -354,9 +367,9 @@ enum Command {
     ColorSample(layer_render::ColorSampleRequest),
     FilterPreviews(u64, layer_render::FilterPreviewRequest),
     CancelFilterPreviews(u64),
-    Frame(Box<Frame>),
+    Frame(Box<Frame>, Option<Presentation>),
     Wake,
-    Present(ViewState, Geometry, Vec<CursorSegment>),
+    Present(Option<Presentation>),
     ReleaseChrome(u64),
     Asset(AssetId, layer_core::ProjectAsset),
     Release(AssetId),
@@ -368,6 +381,14 @@ enum Command {
     FailNextFrame,
     #[cfg(test)]
     PendingDependency(mpsc::Sender<(usize, bool)>),
+}
+impl Command {
+    fn take_presentation(&mut self) -> Option<Presentation> {
+        match self {
+            Self::Frame(_, presentation) | Self::Present(presentation) => presentation.take(),
+            _ => None,
+        }
+    }
 }
 /// What the render thread reports after each frame for the session to read.
 #[derive(Default)]
@@ -460,7 +481,7 @@ pub struct RenderWorker {
     context_seed: EvaluationContext,
     selection_overlays: Arc<layer_core::authored::SelectionOverlays>,
     settling_roots: Vec<layer_core::raster::RasterRevision>,
-    settling_view: Option<(ViewState, Vec<CursorSegment>)>,
+    settling_view: Option<Presentation>,
     pub(super) startup: layer_render_wgpu::StartupProgress,
     startup_generation: u64,
     startup_key: Option<(layer_render_wgpu::ShaderDocument, layer_core::BrushSnapshot, bool)>,
@@ -1002,10 +1023,11 @@ impl CanvasRenderer for RenderWorker {
             .preflight_image_object_affine(scene,object,affine,view).map_err(|_|BackendError("Image sampling request is unsupported"))
     }
     fn poll_pending(&mut self, view: ViewState) -> Result<(), Self::Error> {
-        if self.has_pending_submission() && self.settling_view.as_ref().is_none_or(|(old, cursor)| *old != view || *cursor != self.cursor)
-            && let Some(geometry) = self.geometry {
-            self.send(Command::Present(view, geometry, self.cursor.clone()))?;
-            self.settling_view = Some((view, self.cursor.clone()));
+        if self.has_pending_submission() && let Some(geometry) = self.geometry
+            && self.settling_view.as_ref().is_none_or(|old| !old.matches(view, geometry, &self.cursor, self.picker)) {
+            let next = Presentation { view, geometry, cursor: self.cursor.clone(), picker: self.picker };
+            self.send(Command::Present(Some(next.clone())))?;
+            self.settling_view = Some(next);
         }
         Ok(())
     }
@@ -1355,10 +1377,7 @@ impl CanvasRenderer for RenderWorker {
             composite: packet.composite_all,
             commit_rasters: packet.commit_rasters,
             blend_space: packet.blend_space,
-            geometry,
             present: self.present_frames,
-            picker: self.picker,
-            cursor: self.cursor.clone(),
             chrome: self.chrome_presentation(),
             stroke_target: self.stroke_target,
             #[cfg(test)]
@@ -1368,7 +1387,10 @@ impl CanvasRenderer for RenderWorker {
         self.first_frame_sent = true;
         self.settling_view = None;
         self.settling_roots = if packet.dab_batches.iter().any(|b| b.stroke_end && b.style.execution.heals()) { frame.pending_rasters.clone() } else { Vec::new() };
-        if let Err(e) = self.send(Command::Frame(Box::new(frame))) {
+        let presentation = self.present_frames.then(|| Presentation {
+            view: packet.view, geometry, cursor: self.cursor.clone(), picker: self.picker,
+        });
+        if let Err(e) = self.send(Command::Frame(Box::new(frame), presentation)) {
             self.in_flight.fetch_sub(1, Ordering::Release);
             return Err(e);
         }
@@ -1392,6 +1414,7 @@ struct Worker {
     surface_configured: bool,
     view_color: crate::display_color::ViewColor,
     last_view: Option<ViewState>,
+    pending_presentation: Option<Presentation>,
     surround: [f32; 4],
     geometry: Option<Geometry>,
     geometry_changed: bool,
@@ -1707,7 +1730,7 @@ impl Worker {
                     .recv()
                     .map_err(|_| mpsc::RecvTimeoutError::Disconnected)
             };
-            let command = match next {
+            let mut command = match next {
                 Ok(command) => command,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if !self.pending_present
@@ -1764,6 +1787,7 @@ impl Worker {
                 deferred.push_back(command);
                 continue;
             }
+            if let Some(presentation) = command.take_presentation() { self.pending_presentation = Some(presentation); }
             match command {
                 #[cfg(test)]
                 Command::PendingDependency(reply) => {
@@ -1927,13 +1951,11 @@ impl Worker {
                         self.child.synchronize(false)?;
                     }
                 }
-                Command::Present(view, geometry, cursor) => {
-                    self.set_view(view, geometry)?;
-                    self.cursor = cursor;
-                    self.presenter.set_cursor(self.renderer.device(), &self.cursor, geometry.scale as f32);
+                Command::Present(_) => {
+                    self.apply_presentation()?;
                     if let Some(target) = self.acquire()? { self.publish(target, None, #[cfg(test)] None, #[cfg(test)] None)?; }
                 }
-                Command::Frame(frame) => {
+                Command::Frame(frame, _) => {
                     #[cfg(test)]
                     if fail_next_frame {
                         self.inject_validation_failure();
@@ -2048,6 +2070,7 @@ impl Worker {
             config,
             surface_configured: false,
             last_view: None,
+            pending_presentation: None,
             surround: [0.; 4],
             geometry: None,
             geometry_changed: false,
@@ -2112,6 +2135,7 @@ impl Worker {
         self.config.format = wgpu::TextureFormat::Rgba16Float;
         self.surface_configured = false;
         self.last_view = None;
+        self.pending_presentation = None;
         self.pending_present = false;
         Ok(())
     }
@@ -2202,6 +2226,16 @@ impl Worker {
         self.pending_present = true;
         Ok(())
     }
+    fn apply_presentation(&mut self) -> Result<(), String> {
+        let Some(Presentation { view, geometry, cursor, picker }) = self.pending_presentation.take() else { return Ok(()); };
+        self.set_view(view, geometry)?;
+        self.cursor = cursor;
+        self.picker = picker;
+        self.cursor_scale = geometry.scale as f32;
+        self.presenter.set_color_picker(&self.renderer, self.picker);
+        self.presenter.set_cursor(self.renderer.device(), &self.cursor, self.cursor_scale);
+        Ok(())
+    }
     fn dependencies_ready(&mut self,frame:&Frame)->bool {
         if self.backdrop_submitted {self.renderer.raster_dependencies_ready(frame.packet(),frame.transform_preview.as_ref())}else {
             let scope=SceneScope::Members(Arc::from(frame.scene.view().constant_backdrop()));
@@ -2239,7 +2273,7 @@ impl Worker {
         if frame.present {
             self.set_chrome(&frame.chrome)?;
             self.apply_pending_chrome()?;
-            self.set_view(frame.view, frame.geometry)?;
+            self.apply_presentation()?;
         }
         #[cfg(test)]
         timing.rendering(&self.renderer);
@@ -2269,14 +2303,8 @@ impl Worker {
         #[cfg(test)]
         timing.mark(0);
         if !frame.present {return Ok(());}
-        self.picker = frame.picker;
-        self.presenter.set_color_picker(&self.renderer, self.picker);
-        self.cursor.clone_from(&frame.cursor);
-        self.cursor_scale = frame.geometry.scale as f32;
-        self.presenter
-            .set_cursor(self.renderer.device(), &self.cursor, self.cursor_scale);
-        self.pending_present = self.chrome.changed() || self.geometry_changed
-            || self.presenter.needs_present(&self.renderer, frame.view, self.surround);
+        self.pending_present = presentation_needed(self.last_view, self.chrome.changed() || self.geometry_changed,
+            |view| self.presenter.needs_present(&self.renderer, view, self.surround));
         let target = if self.pending_present {
             #[cfg(test)]
             let target = timing.acquire(|| self.acquire())?;
