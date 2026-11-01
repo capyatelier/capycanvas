@@ -77,6 +77,10 @@ and how parity is checked.
 - [Phone layout](phone-layout.md) defines the fixed short-edge presentation for
   windows under 480 px on their short side: the Capy bar, a phone toolbar per
   workspace, Capy's menu and drawing with a finger.
+- [Memory architecture](memory-architecture.md) keeps RAM and VRAM proportional
+  to the view instead of the document: one process-wide memory budget with a
+  Memory limit setting, a disk-backed session store, edit-ready residency, a
+  per-frame work arbiter and composition pivoted on the edit target.
 - [Photo editing roadmap](photo-editing-roadmap.md) collects deferred inspection,
   presets, export, masking, retouching and host qualification work. Current
   measurements and remaining targets belong in the
