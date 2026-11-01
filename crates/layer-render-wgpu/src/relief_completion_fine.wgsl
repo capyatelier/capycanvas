@@ -39,65 +39,66 @@ fn completion_incident(dab:Dab,direction:vec2<f32>)->Dab {
     return body;
 }
 
-fn completion_strip(o:vec2<f32>,dx:vec2<f32>,direction:vec2<f32>)->vec2<f32> {
-    if dot(direction,direction)<0.00000001 {return vec2<f32>(0.5);}
+fn completion_strip(o:vec2<f32>,dx:vec2<f32>,direction:vec2<f32>,slice:vec2<f32>)->vec2<f32> {
+    if dot(direction,direction)<0.00000001 {return vec2<f32>(slice.y);}
     let transverse=o.x*direction.y-o.y*direction.x;
     let velocity=dx.x*direction.y-dx.y*direction.x;
-    var bounds=vec2<f32>(-0.5,0.5);
+    var bounds=slice;
     if abs(velocity)<0.000001 {
-        if abs(transverse)>1.0 {return vec2<f32>(0.5);}
+        if abs(transverse)>1.0 {return vec2<f32>(slice.y);}
     } else {
         let slab=relief_slab(transverse,velocity,1.0/velocity,1.0);
         bounds=vec2<f32>(max(bounds.x,slab.x),min(bounds.y,slab.y));
     }
     let along=dot(o,direction);let slope=dot(dx,direction);
     if abs(slope)<0.000001 {
-        if along<0.0 {return vec2<f32>(0.5);}
+        if along<0.0 {return vec2<f32>(slice.y);}
     } else if slope>0.0 {bounds.x=max(bounds.x,-along/slope);}
     else {bounds.y=min(bounds.y,-along/slope);}
     return vec2<f32>(bounds.x,max(bounds.x,bounds.y));
 }
 
 fn completion_joint_pixel(dab:Dab,a:Dab,b:Dab,world:vec2<f32>,paper:f32,dose:f32)->f32 {
-    let dx=vec2<f32>(dab.metric.x,dab.metric.z);
-    let dy=vec2<f32>(dab.metric.y,dab.metric.w);
-    let relative=world-dab.center;
-    let half=length(dx)/abs(dab.metric.x*dab.metric.w-dab.metric.y*dab.metric.z);
-    var vertical=vec2<f32>(max(-0.5,-relative.y-half),min(0.5,-relative.y+half));
-    if max(dab.previous_contact.y,dab.previous_contact.w)>0.000001 {vertical.y=0.5;}
-    if min(dab.previous_contact.y,dab.previous_contact.w)<-0.000001 {vertical.x=-0.5;}
-    if vertical.y<=vertical.x {return 0.0;}
+    var support=relief_pixel_support(a,world,paper);
+    if a.contact.x<=0.0 {support=relief_pixel_support(b,world,paper);}
+    let normal=support.xy;
+    let tangent=vec2<f32>(normal.y,-normal.x);
+    let dx=vec2<f32>(dot(tangent,dab.metric.xy),dot(tangent,dab.metric.zw));
+    if a.contact.x>0.0 && b.contact.x>0.0 {
+        let half=0.5*(abs(normal.x)+abs(normal.y));support.z=-half;support.w=half;
+    }
+    if support.w<=support.z {return 0.0;}
+    let taps=select(4u,2u,min(dab.radii.x,dab.radii.y)>=4.0);
     var alpha=0.0;
-    for(var row=0u;row<8u;row+=1u) {
-        var node=0.1834346424956498;
-        var weight=0.3626837833783620;
-        switch row%4u {
-            case 1u: {node=0.5255324099163290;weight=0.3137066458778873;}
-            case 2u: {node=0.7966664774136267;weight=0.2223810344533745;}
-            case 3u: {node=0.9602898564975363;weight=0.1012285362903763;}
-            default: {}
-        }
-        let y=0.5*(vertical.x+vertical.y)+0.5*(vertical.y-vertical.x)*node*select(-1.0,1.0,row>=4u);
-        let o=dx*relative.x+dy*(relative.y+y);
-        var spans=array<vec2<f32>,3>(relief_range(relief_ray(o,dx),1.0,vec2<f32>(-0.5,0.5)),
-            completion_strip(o,dx,-dab.invariants.xy),completion_strip(o,dx,-dab.invariants.zw));
-        for(var i=0u;i<2u;i+=1u) {for(var j=i+1u;j<3u;j+=1u) {
-            if spans[j].x<spans[i].x {let temp=spans[i];spans[i]=spans[j];spans[j]=temp;}
-        }}
-        var end=-0.5;
-        for(var piece=0u;piece<3u;piece+=1u) {
-            let span=vec2<f32>(max(end,spans[piece].x),min(0.5,spans[piece].y));
-            end=max(end,span.y);
-            if span.y<=span.x {continue;}
-            for(var col=0u;col<4u;col+=1u) {
-                let outer=col==0u || col==3u;
-                let x=0.5*(span.x+span.y)+0.5*(span.y-span.x)
-                    *select(0.3399810435848563,0.8611363115940526,outer)*select(-1.0,1.0,col>=2u);
-                let wx=0.5*(span.y-span.x)*select(0.6521451548625461,0.3478548451374538,outer);
-                let sample=world+vec2<f32>(x,y);
-                let exposure=relief_evaluate(a,sample,paper,false,false,0.0).x+relief_evaluate(b,sample,paper,false,false,0.0).x
-                    +completion_exposure(dab,sample,paper).x;
-                alpha+=0.5*(vertical.y-vertical.x)*weight*wx*(1.0-exp(-dose*exposure));
+    for(var row_piece=0u;row_piece<3u;row_piece+=1u) {
+        let vertical=relief_pixel_span(normal,support.zw,row_piece);
+        if vertical.y<=vertical.x {continue;}
+        for(var row=0u;row<taps;row+=1u) {
+            let node=relief_pixel_node(row,taps);
+            let y=0.5*(vertical.x+vertical.y)+0.5*(vertical.y-vertical.x)*node.x;
+            let slice=relief_pixel_slice(normal,y);
+            let position=world+normal*y;
+            let relative=position-dab.center;
+            let o=vec2<f32>(dot(relative,dab.metric.xy),dot(relative,dab.metric.zw));
+            var spans=array<vec2<f32>,3>(relief_range(relief_ray(o,dx),1.0,slice),
+                completion_strip(o,dx,-dab.invariants.xy,slice),completion_strip(o,dx,-dab.invariants.zw,slice));
+            for(var i=0u;i<2u;i+=1u) {for(var j=i+1u;j<3u;j+=1u) {
+                if spans[j].x<spans[i].x {let temp=spans[i];spans[i]=spans[j];spans[j]=temp;}
+            }}
+            var end=slice.x;
+            for(var piece=0u;piece<3u;piece+=1u) {
+                let span=vec2<f32>(max(end,spans[piece].x),min(slice.y,spans[piece].y));
+                end=max(end,span.y);
+                if span.y<=span.x {continue;}
+                for(var col=0u;col<4u;col+=1u) {
+                    let column=relief_pixel_node(col,4u);
+                    let x=0.5*(span.x+span.y)+0.5*(span.y-span.x)*column.x;
+                    let wx=0.5*(span.y-span.x)*column.y;
+                    let sample=position+tangent*x;
+                    let exposure=relief_evaluate(a,sample,paper,false,false,0.0).x+relief_evaluate(b,sample,paper,false,false,0.0).x
+                        +completion_exposure(dab,sample,paper).x;
+                    alpha+=0.5*(vertical.y-vertical.x)*node.y*wx*(1.0-exp(-dose*exposure));
+                }
             }
         }
     }
@@ -120,11 +121,10 @@ fn relief_contact(dab:Dab,world:vec2<f32>,paper:f32,held:f32,required:bool)->vec
     let extent=vec2<f32>(length(vec2<f32>(dab.metric.y,dab.metric.w)),
         length(vec2<f32>(dab.metric.x,dab.metric.z)))/determinant;
     if any(abs(world-dab.center)>extent+vec2<f32>(0.5)) {return vec2<f32>(0.0);}
-    let a=completion_incident(dab,dab.previous_contact.xy);
-    let b=completion_incident(dab,dab.previous_contact.zw);
-    let point=relief_evaluate(a,world,paper,false,false,0.0).x+relief_evaluate(b,world,paper,false,false,0.0).x+coarse.x;
-    let joint=mix(completion_joint_pixel(dab,a,b,world,paper,dose),point,blend);
-    let incoming=relief_segment_contact(a,world,paper,0.0,true);
-    let outgoing=relief_segment_contact(b,world,paper,0.0,true);
+    let filtered=completion_joint_pixel(dab,completion_incident(dab,dab.previous_contact.xy),completion_incident(dab,dab.previous_contact.zw),world,paper,dose);
+    let incoming=relief_segment_contact(completion_incident(dab,dab.previous_contact.xy),world,paper,0.0,true);
+    let outgoing=relief_segment_contact(completion_incident(dab,dab.previous_contact.zw),world,paper,0.0,true);
+    let point=relief_evaluate(completion_incident(dab,dab.previous_contact.xy),world,paper,false,false,0.0).x+relief_evaluate(completion_incident(dab,dab.previous_contact.zw),world,paper,false,false,0.0).x+coarse.x;
+    let joint=mix(filtered,point,blend);
     return vec2<f32>(max(0.0,joint-incoming.x-outgoing.x),max(joint,max(incoming.y,outgoing.y)));
 }

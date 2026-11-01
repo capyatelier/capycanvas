@@ -234,8 +234,8 @@ fn dry_full_strength_and_pressure_color_covers_graphite_and_saturates() {
 #[test]
 fn light_dry_caps_match_additive_reference() {
     for (preset,pressure,hardness,paper,pixel,expected) in [
-        (DefaultBrushPreset::PointyPencil,0.15,0.,0.563,[33,128],71),
-        (DefaultBrushPreset::PointyPencil,0.15,0.25,0.564,[33,128],52),
+        (DefaultBrushPreset::PointyPencil,0.15,0.,0.563,[33,128],57),
+        (DefaultBrushPreset::PointyPencil,0.15,0.25,0.564,[33,128],42),
         (DefaultBrushPreset::Chalk,0.3,0.,0.627,[226,132],193),
     ] {
         let mut brush=default_brush(preset);
@@ -293,10 +293,14 @@ fn material_response(pressure:f64, brush:&BrushSnapshot)->(f64,f64) {
 }
 
 fn reference_exposure(y: usize, pressure: f64, brush: &BrushSnapshot) -> f64 {
+    reference_exposure_at(y as f64,pressure,brush)
+}
+
+fn reference_exposure_at(y: f64, pressure: f64, brush: &BrushSnapshot) -> f64 {
     let contact = brush.contact.unwrap();
     let dry = contact.dry.unwrap();
     let profile = dry.poses[0].relief.map(f64::from);
-    let height = if y % 16 < 8 { 1. } else { 0. };
+    let height = if y.floor() as usize % 16 < 8 { 1. } else { 0. };
     let pressure = material_pressure(pressure, brush);
     let (contact_pressure,loading)=material_response(pressure,brush);
     let d = 0.5 - (0.5 + f64::from(contact.paper) * (height - 0.5)).clamp(0., 1.);
@@ -304,11 +308,11 @@ fn reference_exposure(y: usize, pressure: f64, brush: &BrushSnapshot) -> f64 {
     let mut deposition = 0.;
     for i in 0..16384 {
         let x = (i as f64 + 0.5 - 8192.) / 8192. * f64::from(brush.diameter);
-        let q = contact_q([x, y as f64-128.], brush);
+        let q = contact_q([x, y-128.], brush);
         if q > 1. { continue; }
         chord += 1.;
         let relief_q = if dry.relief_offset == 0. { q } else {
-            relief_q([x, y as f64-128.], brush)
+            relief_q([x, y-128.], brush)
         };
         let recess = profile[0] + profile[1]*relief_q + profile[2]*relief_q*relief_q;
         let x = ((0.5*contact_pressure - recess - (1. + 0.25*recess)*d) / f64::from(dry.softness)).clamp(0., 1.);
@@ -499,6 +503,36 @@ fn dry_exposure_preserves_path_partition_cadence_and_masks() {
             }
         }
     }
+}
+
+#[test]
+fn fine_start_cap_preserves_the_full_pass_across_partitions() {
+    let mut brush=analytic(0.,1.4);brush.diameter=6.;brush.angle_radians=0.4;
+    let reference=line(brush.clone(),0.65,0.,Run {samples:2,cadence:1,..Default::default()});
+    let expected=reference.rgba[(130*256+128)*4+3];
+    for (samples,cadence) in [(2,1),(2,17),(64,1),(64,17)] {
+        let image=line(brush.clone(),0.65,0.,Run {samples,cadence,..Default::default()});
+        image.assert_near(&reference,2,"fine start cap partition");
+        let actual=image.rgba[(130*256+35)*4+3];
+        assert!(actual.abs_diff(expected)<=1,"samples={samples} cadence={cadence}: alpha{actual}, body full chord{expected}");
+    }
+}
+
+#[test]
+fn fine_finite_passes_keep_their_budget_in_both_directions_and_radius_blends() {
+    for diameter in [6.,8.,12.,15.99,16.,16.01] {for length in [4.,192.] {
+        let mut brush=analytic(0.,1.4);brush.diameter=diameter;brush.angle_radians=0.4;
+        brush.stabilization.strength=0.;
+        let pose=|t:f32|([128.5+length*(t-0.5),130.5],0.65,[0.;2]);
+        let reference=paint(brush.clone(),Run {samples:2,cadence:1,..Default::default()},pose);
+        for reverse in [false,true] {
+            let actual=paint(brush.clone(),Run {samples:64,cadence:17,..Default::default()},
+                |t|pose(if reverse {1.-t} else {t}));
+            actual.assert_near(&reference,2,&format!("diameter={diameter} length={length} reverse={reverse}"));
+        }
+        brush.color_rgba_linear[3]=0.;
+        assert!(paint(brush,Run {samples:2,..Default::default()},pose).rgba.iter().all(|&v|v==0));
+    }}
 }
 
 #[test]

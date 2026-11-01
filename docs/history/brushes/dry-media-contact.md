@@ -232,7 +232,8 @@ Coarse full-pass exposure uses exact full-transfer length and three-node
 Gauss–Legendre integration of the ramps. Fine contacts reuse their filtered
 full-pass dose; a tap is its own pass. A completion uses
 `B=K*max(max F, sum E + E_completion)`, so it fills the rest of the same pass.
-Filtered caps retain the full-pass budget of their point-sampled incident contacts.
+Fine elliptical completions share the body filter’s transverse nodes and support
+clipping for incident, joint and full-pass exposure.
 Incident contacts compose in stroke order. Self-overlap beyond a full pass is
 dwell and follows the same grip law, including inner corners and hairpins.
 
@@ -602,7 +603,8 @@ between pixel rows. Filtering geometric exposure alone and then applying an
 exponential can overfill a partially covered pixel, because optical transfer is
 nonlinear. The fine-contact path averages optical alpha over the pixel footprint
 and converts it back to equivalent dose. A moving ellipse uses the pixel
-square's normal projection; a stationary tap uses two dimensions. Dense stamp
+square's normal projection with the same four- or two-node full-pass filter as its
+completions; a stationary tap uses two dimensions. Dense stamp
 subdivision is rejected because its cost grows with distance and can change dose
 with partitioning. Filtering is fully enabled below four pixels in minor radius,
 blends out by eight pixels, and is specialized away for large contacts. These are

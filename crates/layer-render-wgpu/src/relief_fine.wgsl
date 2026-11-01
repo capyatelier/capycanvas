@@ -93,7 +93,7 @@ fn relief_contact(dab:Dab,world:vec2<f32>,paper:f32,held:f32,required:bool)->vec
     return filtered;
 }
 
-fn relief_swept_pixel(dab:Dab,world:vec2<f32>,paper:f32,dose:f32,radius:f32)->vec2<f32> {
+fn relief_pixel_support(dab:Dab,world:vec2<f32>,paper:f32)->vec4<f32> {
     let relative=world-dab.center+dab.motion;
     let transverse=dot(relative,dab.metric.zw);
     let pressure=max(dab.previous_contact.x,dab.contact.x);
@@ -101,8 +101,8 @@ fn relief_swept_pixel(dab:Dab,world:vec2<f32>,paper:f32,dose:f32,radius:f32)->ve
     let depth=0.5-clamp(0.5+style.contact_a.y*(paper-0.5),0.0,1.0);
     var limit=relief_inverse((0.5*clamp(pressure,0.0,1.0)-depth)/(1.0+0.25*depth),profile);
     if !contact_feature(32768u,style.contact_c.z!=0.0) {limit=min(1.0,limit);}
-    if limit<=0.0 {return vec2<f32>(0.0);}
-    var normal=normalize(dab.metric.zw);
+    if limit<=0.0 {return vec4<f32>(0.0);}
+    let normal=normalize(dab.metric.zw);
     var field_transverse=transverse;
     if contact_feature(32768u,style.contact_c.z!=0.0) {field_transverse+=dab.material.z;}
     var bounds=vec2<f32>(-sqrt(limit)-field_transverse,sqrt(limit)-field_transverse)/length(dab.metric.zw);
@@ -110,6 +110,40 @@ fn relief_swept_pixel(dab:Dab,world:vec2<f32>,paper:f32,dose:f32,radius:f32)->ve
         let physical=vec2<f32>(-1.0-transverse,1.0-transverse)/length(dab.metric.zw);
         bounds=vec2<f32>(max(bounds.x,physical.x),min(bounds.y,physical.y));
     }
+    return vec4<f32>(normal,bounds);
+}
+
+fn relief_pixel_span(normal:vec2<f32>,bounds:vec2<f32>,piece:u32)->vec2<f32> {
+    let half=0.5*(abs(normal.x)+abs(normal.y));
+    let flat=0.5*abs(abs(normal.x)-abs(normal.y));
+    var span=vec2<f32>(-half,-flat);
+    if piece==1u {span=vec2<f32>(-flat,flat);}
+    if piece==2u {span=vec2<f32>(flat,half);}
+    return vec2<f32>(max(span.x,bounds.x),min(span.y,bounds.y));
+}
+
+fn relief_pixel_node(i:u32,taps:u32)->vec2<f32> {
+    let outer=taps==4u && (i==0u || i==3u);
+    let abscissa:f32=select(select(0.3399810435848563,0.8611363115940526,outer),0.5773502691896257,taps==2u);
+    let weight:f32=select(select(0.6521451548625461,0.3478548451374538,outer),1.0,taps==2u);
+    return vec2<f32>(abscissa*select(-1.0,1.0,i>=taps/2u),weight);
+}
+
+fn relief_pixel_slice(normal:vec2<f32>,position:f32)->vec2<f32> {
+    let tangent=vec2<f32>(normal.y,-normal.x);
+    let moving=abs(tangent)>vec2<f32>(0.000001);
+    let safe=select(vec2<f32>(1.0),tangent,moving);
+    let a=(vec2<f32>(-0.5)-normal*position)/safe;
+    let b=(vec2<f32>(0.5)-normal*position)/safe;
+    let lo=select(vec2<f32>(-1000000.0),min(a,b),moving);
+    let hi=select(vec2<f32>(1000000.0),max(a,b),moving);
+    return vec2<f32>(max(lo.x,lo.y),min(hi.x,hi.y));
+}
+
+fn relief_swept_pixel(dab:Dab,world:vec2<f32>,paper:f32,dose:f32,radius:f32)->vec2<f32> {
+    let support=relief_pixel_support(dab,world,paper);
+    if support.w<=support.z {return vec2<f32>(0.0);}
+    let normal=support.xy;
     let a=max(abs(normal.x),abs(normal.y));
     let b=min(abs(normal.x),abs(normal.y));
     let half=0.5*(a+b);
@@ -118,18 +152,13 @@ fn relief_swept_pixel(dab:Dab,world:vec2<f32>,paper:f32,dose:f32,radius:f32)->ve
     var exposure=vec2<f32>(0.0);
     var alpha=0.0;
     for(var piece=0u;piece<3u;piece+=1u) {
-        var span=vec2<f32>(-half,-flat);
-        if piece==1u {span=vec2<f32>(-flat,flat);}
-        if piece==2u {span=vec2<f32>(flat,half);}
-        span=vec2<f32>(max(span.x,bounds.x),min(span.y,bounds.y));
+        let span=relief_pixel_span(normal,support.zw,piece);
         if span.y<=span.x {continue;}
         for(var i=0u;i<taps;i+=1u) {
-            let outer=taps==4u && (i==0u || i==3u);
-            let abscissa:f32=select(select(0.3399810435848563,0.8611363115940526,outer),0.5773502691896257,taps==2u);
-            let node=abscissa*select(-1.0,1.0,i>=taps/2u);
-            let position=0.5*(span.x+span.y)+0.5*(span.y-span.x)*node;
+            let node=relief_pixel_node(i,taps);
+            let position=0.5*(span.x+span.y)+0.5*(span.y-span.x)*node.x;
             let probability=select(1.0/a,(half-abs(position))/max(a*b,0.00000001),abs(position)>flat);
-            let weight=0.5*(span.y-span.x)*select(select(0.6521451548625461,0.3478548451374538,outer),1.0,taps==2u)*probability;
+            let weight=0.5*(span.y-span.x)*node.y*probability;
             let sample=world+normal*position;
             let contact=relief_evaluate(dab,sample,paper,!contact_uniform(),false,0.0);
             exposure+=weight*contact;
