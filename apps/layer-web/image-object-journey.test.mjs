@@ -77,7 +77,8 @@ export async function checkImageObjectFixture({call,evaluate,settle,canvasPixels
       assert.equal(objects.length,3);assert.equal(packageObjects(before,'capy.image/1').length,1);
       assert.ok(objects.every(object=>object.data.image.ref===objects[0].data.image.ref));
       assert.equal(objects[0].data.affine[4],16777217.125,'Package preserves the F64 coefficient beyond F32 precision');
-      const imageId=objects[0].data.image.ref,owner=packageOccurrences(before).find(o=>o.data.content.object);
+      const imageId=objects[0].data.image.ref,owner=packageOccurrences(before).find(o=>o.data.content.stack&&packageObject(before,o.data.content.stack).data.entries.some(ref=>packageObject(before,ref).data.content.object?.ref===objects[0].id));
+      assert.ok(owner,'The image objects belong to their positioned stack');
       assert.deepEqual(owner.data.offset,['-16777216','0']);
       const runtime=await evaluate(`Number(layerApp.state().layers[${packageOccurrences(before).findIndex(o=>o.id===owner.id)}].id)`);
       for(const theme of ['light','dark']) {
