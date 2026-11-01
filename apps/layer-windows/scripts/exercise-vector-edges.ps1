@@ -192,6 +192,10 @@ try{
  $null=Search (Label 'toggle_theme') $pick 'Toggle theme'
  Wait-Until {(Model).state.theme -eq $Theme} 'Toggle theme did not switch back'
  $paint=@((Rows)|Where-Object {!$_.selected -and !(Vector $_) -and !$_.paper})[0].id
+ Stroke (Line @(400,800) @(900,800) 4) -Refused
+ $staleTarget=[ordered]@{before=$null;clicked=$null;after=$null}
+ Wait-Until {$n=(Model).state.notice;$n -and $n.id -ne $before -and (Notice-Parts).Contains('canvas-notice-action-new_paint_layer')} 'The stale-target case did not show a fresh refusal'
+ $staleTarget.before=(Model).state.notice
  if((Notice-Parts).Contains('canvas-notice-action-new_paint_layer')){
   $count=@(Rows).Count
   Invoke "layer-$paint-name"
@@ -199,14 +203,17 @@ try{
   $parts=Notice-Parts
   if($parts.Contains('canvas-notice-action-new_paint_layer')){
    $b=$parts['canvas-notice-action-new_paint_layer'].bounds
+   $staleTarget.clicked=(Model).state.notice
+   $offer=@($staleTarget.clicked.actions|Where-Object id -eq 'new_paint_layer')[0]
+   if($staleTarget.clicked.id -ne $staleTarget.before.id -or !$offer -or $parts['canvas-notice-action-new_paint_layer'].name -cne $offer.label){throw 'The stale-target action no longer belongs to the current refusal'}
    [CapyRowPointer]::Down('mouse',[int]($b.X+$b.Width/2),[int]($b.Y+$b.Height/2));Start-Sleep -Milliseconds 40;[CapyRowPointer]::Up();Park
-   Start-Sleep -Milliseconds 500
+   Wait-Until {$staleTarget.after=(Model).state.notice;$staleTarget.after -and $staleTarget.after.id -ne $staleTarget.before.id} 'The changed-target action did not publish a new notice'
    if(@(Rows).Count -ne $count){$findings.Add('A stale notice action added a layer')}
    $said=(Notice-Parts)['canvas-notice-text'].name
-   if(!$said){$findings.Add('A stale notice action showed nothing')}
+   if($staleTarget.after.text -cne "The layer changed, so the action wasn$([char]0x2019)t applied." -or @($staleTarget.after.actions).Count -ne 0 -or $said -cne $staleTarget.after.text){$findings.Add('The stale-target action did not show its shared refusal')}
    Capture "edges-notice-stale-$Theme" -WithModel -Composed
-  }
- }
+  }else{throw 'The fresh stale-target refusal has no native action'}
+ }else{throw 'The stale-target case lost its fresh refusal'}
  Invoke "layer-$v1-name"
  Wait-Until {(Active).id -eq $v1} 'The vector layer was not selected again'
 
