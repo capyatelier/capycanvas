@@ -764,6 +764,35 @@ function Tool-Surfaces{
 function Notice-CachedDescendants($Node){
  foreach($child in $Node.CachedChildren){[pscustomobject]@{Element=$child;Current=$child.Cached};Notice-CachedDescendants $child}
 }
+function Notice-ActionColors($Bitmap,$WindowBounds,$Offers,$Layout,$Palette,[double]$Density){
+ $nativeColors=@();$glass=@($Palette.glass.panel)
+   if($glass.Count-ne4-or@($glass|Where-Object {[double]::IsNaN($_)-or[double]::IsInfinity($_)-or$_-lt0-or$_-gt1}).Count){throw 'The notice panel did not publish valid unit RGBA'}
+   $rgba=@($glass|ForEach-Object {[int][Math]::Round($_*255,0,[MidpointRounding]::AwayFromZero)})
+   $minimum=@(0..2|ForEach-Object {[int][Math]::Floor($rgba[$_]*$rgba[3]/255.)});$maximum=@(0..2|ForEach-Object {[int][Math]::Ceiling($rgba[$_]*$rgba[3]/255.+255-$rgba[3])})
+   foreach($offer in $Offers){
+    $box=@($Layout.actions|Where-Object id -eq $offer.id)[0].bounds
+    $expected=if($offer.accent){[Drawing.ColorTranslator]::FromHtml($Palette.accent).ToArgb()}else{@{rgba=$rgba;minimum=$minimum;maximum=$maximum}}
+    $point=@([int]($box.Left+6*$Density),[int]($box.Y+$box.Height/2))
+    $pixel=$Bitmap.GetPixel($point[0]-[int]$WindowBounds.X,$point[1]-[int]$WindowBounds.Y)
+    $valid=$pixel.A-eq255
+    if($offer.accent){$valid=$valid-and$pixel.ToArgb()-eq$expected}else{$channels=@([int]$pixel.R,[int]$pixel.G,[int]$pixel.B);foreach($i in 0..2){$valid=$valid-and$channels[$i]-ge$minimum[$i]-and$channels[$i]-le$maximum[$i]}}
+    if(!$valid){return @{valid=$false;message=("The retained notice action $($offer.id) sampled ARGB $($pixel.ToArgb()) outside its shared fill: "+($expected|ConvertTo-Json -Compress))}}
+    $nativeColors+=@{id=$offer.id;accent=$offer.accent;point=$point;pixel=$pixel.ToArgb();expected=$expected}
+   }
+ @{valid=$true;colors=$nativeColors}
+}
+function Notice-Painted($Node,$Cache,$Owner,$Offers,$Palette,[double]$Density){
+ $frame=$Node.GetUpdatedCache($Cache);$bounds=$frame.Cached.BoundingRectangle;$window=$Owner.Current.BoundingRectangle
+ if(!$window.Contains($bounds)){return $false}
+ $parts=@(Notice-CachedDescendants $frame);$actions=@()
+ foreach($offer in $Offers){
+  $control=@($parts|Where-Object {$_.Current.AutomationId -eq 'canvas-notice-action-'+$offer.id -and (Test-CapySearchItem $_ $Owner $review.Id)})[0]
+  if(!$control -or !$bounds.Contains($control.Current.BoundingRectangle)){return $false}
+  $actions+=@{id=$offer.id;bounds=$control.Current.BoundingRectangle}
+ }
+ $bitmap=[Drawing.Bitmap]::new([int]$window.Width,[int]$window.Height);$graphics=[Drawing.Graphics]::FromImage($bitmap)
+ try{$graphics.CopyFromScreen([int]$window.X,[int]$window.Y,0,0,$bitmap.Size);(Notice-ActionColors $bitmap $window $Offers @{actions=$actions} $Palette $Density).valid}finally{$graphics.Dispose();$bitmap.Dispose()}
+}
 function Notice-Surface{
  Use-Window $second
  if(!(Model).preferences){Menu-Command 'edit' 'settings'}
@@ -876,14 +905,14 @@ function Notice-Surface{
   Use-Window $second $settingsRoot
   Request-Language $japanese $preparedLanguage
   $script:current=$first;$script:root=$drawingRoot
-  $bitmap=$null;$graphics=$null;$dpi=[CapyWindowApi]::SetThreadDpiAwarenessContext([IntPtr](-4))
+  $bitmap=$null;$graphics=$null;$density=$dpi/96.;$dpi=[CapyWindowApi]::SetThreadDpiAwarenessContext([IntPtr](-4))
   try{
    Wait-Until {
     $frame=[pscustomobject]@{Current=$noticeFrame.GetUpdatedCache($rootCache).Cached}
     if(!(Test-CapySearchItem $frame $notice.owner $review.Id) -or $frame.Current.Name -eq $before.name){return $false}
     $bounds=$frame.Current.BoundingRectangle
     if($notice.bounds -eq $bounds){$notice.stable++}else{$notice.bounds=$bounds;$notice.stable=0}
-    $notice.stable -ge 1
+    $notice.stable -ge 1 -and (Notice-Painted $noticeFrame $noticeCache $notice.owner $before.actions $geometry.view.state.palette $density)
    } 'The retained visible native notice did not adopt its shared text and actions before expiry' 2
    $ownerView=[pscustomobject]@{Current=$drawingRoot.GetUpdatedCache($rootCache).Cached};$nativeFrame=$noticeFrame.GetUpdatedCache($noticeCache)
    $frame=[pscustomobject]@{Element=$nativeFrame;Current=$nativeFrame.Cached};$parts=@(Notice-CachedDescendants $nativeFrame)
@@ -951,21 +980,9 @@ function Notice-Surface{
    if(!$notice.owner.Current.Name.EndsWith(' · '+$appName)){throw 'The retained window title did not use the current app name'}
    if(!$updated.actions[0].accent -or @($updated.actions|Where-Object accent).Count-ne1){throw 'The localized notice did not mark its first suggested action'}
    $density=[CapyRowPointer]::GetDpiForWindow([IntPtr]$first.hwnd)/96.
-   $palette=$notice.palette;$nativeColors=@();$glass=@($palette.glass.panel)
-   if($glass.Count-ne4-or@($glass|Where-Object {[double]::IsNaN($_)-or[double]::IsInfinity($_)-or$_-lt0-or$_-gt1}).Count){throw 'The notice panel did not publish valid unit RGBA'}
-   $rgba=@($glass|ForEach-Object {[int][Math]::Round($_*255,0,[MidpointRounding]::AwayFromZero)})
-   $minimum=@(0..2|ForEach-Object {[int][Math]::Floor($rgba[$_]*$rgba[3]/255.)});$maximum=@(0..2|ForEach-Object {[int][Math]::Ceiling($rgba[$_]*$rgba[3]/255.+255-$rgba[3])})
-   foreach($offer in $updated.actions){
-    $box=@($notice.layout.actions|Where-Object id -eq $offer.id)[0].bounds
-    $expected=if($offer.accent){[Drawing.ColorTranslator]::FromHtml($palette.accent).ToArgb()}else{@{rgba=$rgba;minimum=$minimum;maximum=$maximum}}
-    $point=@([int]($box.Left+6*$density),[int]($box.Y+$box.Height/2))
-    $pixel=$bitmap.GetPixel($point[0]-[int]$windowBounds.X,$point[1]-[int]$windowBounds.Y)
-    $valid=$pixel.A-eq255
-    if($offer.accent){$valid=$valid-and$pixel.ToArgb()-eq$expected}else{$channels=@([int]$pixel.R,[int]$pixel.G,[int]$pixel.B);foreach($i in 0..2){$valid=$valid-and$channels[$i]-ge$minimum[$i]-and$channels[$i]-le$maximum[$i]}}
-    if(!$valid){throw ("The retained notice action $($offer.id) sampled ARGB $($pixel.ToArgb()) outside its shared fill: "+($expected|ConvertTo-Json -Compress))}
-    $nativeColors+=@{id=$offer.id;accent=$offer.accent;point=$point;pixel=$pixel.ToArgb();expected=$expected}
-   }
-   $timing.native_action_colors=$nativeColors
+   $nativeColors=Notice-ActionColors $bitmap $windowBounds $updated.actions $notice.layout $notice.palette $density
+   if(!$nativeColors.valid){throw $nativeColors.message}
+   $timing.native_action_colors=$nativeColors.colors
    Wait-Until {$view=Model;$view -and !$view.state.notice} 'The expired native notice did not clear shared state' 4
    $updated|ConvertTo-Json -Depth 6|Set-Content (Join-Path $run ("notice-localized-$caseName.json")) -Encoding UTF8
    $notice.layout|ConvertTo-Json -Depth 6|Set-Content (Join-Path $run ("notice-layout-$caseName.json"))

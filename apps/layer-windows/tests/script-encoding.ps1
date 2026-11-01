@@ -210,3 +210,33 @@ Write-Output 'Photo monitor resolves null CIM paths through the retained owned h
     if($observed.captures -ne 1 -or $root -ne $windowRoot){throw 'Retained drawer capture lost the owned window context'}
 }
 Write-Output 'Retained color drawer captures use the owned native window after scoped control checks.'
+
+$noticeSource=Fixture-Ast 'LocalizationProperties.ps1'
+$noticeReady=@($noticeSource.FindAll({param($n)$n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Wait-Until' -and $n.Extent.Text.EndsWith("'The retained visible native notice did not adopt its shared text and actions before expiry' 2")},$true))
+if($noticeReady.Count -ne 1){throw 'Missing actual localized notice readiness condition'}
+& {
+    $condition=[scriptblock]::Create($noticeReady[0].CommandElements[1].ScriptBlock.Extent.Text.TrimStart('{').TrimEnd('}'))
+    $snapshot=[pscustomobject]@{Name='Japanese';BoundingRectangle='same'}
+    $noticeFrame=[pscustomobject]@{Snapshot=$snapshot};$noticeFrame|Add-Member ScriptMethod GetUpdatedCache {param($cache)[pscustomobject]@{Cached=$this.Snapshot}}
+    $notice=@{owner=$null;bounds='same';stable=0};$before=@{name='English';actions=@()};$noticeCache=$null;$review=@{Id=33};$geometry=@{view=@{state=@{palette=@{}}}};$density=1.5;$paint=@{samples=0}
+    function Test-CapySearchItem{$true}
+    function Notice-Painted{$paint.samples++;$paint.samples -ge 2}
+    if(& $condition){throw 'Localized notice accepted UIA before requested pixels were painted'}
+    if(!(& $condition) -or $paint.samples -ne 2){throw 'Localized notice did not acknowledge its requested pixels in its existing readiness condition'}
+}
+if($env:OS -eq 'Windows_NT'){
+    Add-Type -AssemblyName System.Drawing
+    $colors=$noticeSource.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Notice-ActionColors'},$true)
+    . ([scriptblock]::Create($colors.Extent.Text))
+    $bitmap=[pscustomobject]@{Colors=@{'6,10'=[Drawing.Color]::FromArgb(255,63,63,63);'26,10'=[Drawing.Color]::FromArgb(255,63,63,63)}}
+    $bitmap|Add-Member ScriptMethod GetPixel {param($x,$y)$this.Colors["$x,$y"]}
+    $window=@{X=0;Y=0};$offers=@(@{id='accent';accent=$true},@{id='plain';accent=$false})
+    $layout=@{actions=@(@{id='accent';bounds=@{Left=0;Y=0;Height=20}},@{id='plain';bounds=@{Left=20;Y=0;Height=20}})}
+    $palette=@{accent='#0078D4';glass=@{panel=@((63/255.),(63/255.),(63/255.),1)}}
+    if((Notice-ActionColors $bitmap $window $offers $layout $palette 1).valid){throw 'Notice colors accepted pixels from the previous layout'}
+    $bitmap.Colors['6,10']=[Drawing.ColorTranslator]::FromHtml('#0078D4')
+    if(!(Notice-ActionColors $bitmap $window $offers $layout $palette 1).valid){throw 'Notice colors rejected the requested action fills'}
+    $bitmap.Colors['6,10']=[Drawing.ColorTranslator]::FromHtml('#0078D3')
+    if((Notice-ActionColors $bitmap $window $offers $layout $palette 1).valid){throw 'Notice colors relaxed the exact accent fill'}
+}
+Write-Output 'Localized notice readiness waits for its exact action fills within its existing deadline.'
