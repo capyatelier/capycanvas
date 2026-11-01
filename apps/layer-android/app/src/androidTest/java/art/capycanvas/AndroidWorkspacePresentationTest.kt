@@ -247,6 +247,26 @@ class AndroidWorkspacePresentationTest {
         assertRestored(cache.prepare(layout(),1f,aPayload.copyOf(),101L))
     }
 
+    @Test fun canvasBarPublicationsDoNotInvalidateDockGeometryReaders() = observedModelReads { observer,_,_ ->
+        fun publication(revision:Long,hold:Int,x:Int=20)=WorkspaceGeometry.read(obj("revision" to revision,"model_revision" to 1,
+            "drag" to obj("group" to obj("id" to 5,"bounds" to obj("x" to x,"y" to 40,"width" to 240,"height" to 320))),
+            "canvas_bar" to obj("context" to obj("generation" to 1,"kind" to "selection"),"hold" to hold,"layout" to null)))
+        val current=mutableStateOf(publication(1,1))
+        var invalidations=0
+        Snapshot.sendApplyNotifications()
+        observer.observeReads("dock-offset",{ _:String -> invalidations++ }) { current.value.takeIf { it.group==5 }?.bounds }
+        for(index in 1..24) {
+            Snapshot.withMutableSnapshot { current.value=publication(index+1L,index*2+1) }
+            Snapshot.sendApplyNotifications()
+        }
+        val metadataInvalidations=invalidations
+        Snapshot.withMutableSnapshot { current.value=publication(26,51,30) }
+        Snapshot.sendApplyNotifications()
+        assertEquals(30f,current.value.bounds!!.left,0f)
+        assertEquals("A real dock bounds change invalidates its offset reader once",1,invalidations-metadataInvalidations)
+        assertEquals("24 bar revision/hold publications leave identical dock readers untouched",0,metadataInvalidations)
+    }
+
     @Test fun heldCanvasBarTokensDoNotInvalidateGeometryReaders() = observedModelReads { observer,invalidated,changed ->
         fun geometry(hold:Int, bounds:JSONObject?=null)=CanvasBarGeometry.read(obj("context" to obj("generation" to 1,"kind" to "selection"),
             "hold" to hold,"layout" to bounds?.let { obj("bounds" to it,"items" to 2) }))

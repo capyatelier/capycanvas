@@ -230,8 +230,8 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
             }
             val drawListener = android.view.ViewTreeObserver.OnDrawListener {
                 if (measuring.get()) {
-                    host.workspaceGeometry?.revision?.let { drawnRevisions.add(it) }
-                    if (modelIdentityTrace) modelDraws.add(ModelDraw(System.nanoTime(), host.workspaceGeometry?.revision, modelValues()))
+                    host.workspaceRevision.takeIf { it >= 0 }?.let { drawnRevisions.add(it) }
+                    if (modelIdentityTrace) modelDraws.add(ModelDraw(System.nanoTime(), host.workspaceRevision.takeIf { it >= 0 }, modelValues()))
                     if (colorWheel) host.snapshot?.objectOrNull("paint_pair")?.array("rgba")?.toString()?.let { drawnPaints.add(it) }
                     val geometry = host.workspaceGeometry
                     val tag = if (columnDrag) "workspace-drop-hint" else if (colorWheel) null else geometry?.tab?.let { "tab-${it.panel}" }

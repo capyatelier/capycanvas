@@ -459,7 +459,9 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
     internal var restartingWindow = false
     private var workspaceContentRevision = -1L
     private var workspaceModelRevision = -1L // Main thread: model required by the geometry.
-    private var lastWorkspaceUpdate: WorkspaceGeometry? = null // Native owner only.
+    internal var workspaceRevision = -1L
+        private set
+    private var lastWorkspaceUpdate: WorkspacePublication? = null // Native owner only.
     internal fun beginWorkspaceGesture() { lastWorkspaceGroup = null }
     private var cameraUpdatesPublished = 0L
     // Buffers have one owner: input callback -> render task -> this bounded pool.
@@ -1012,7 +1014,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
             }
             return
         }
-        val geometry = next.objectOrNull("workspace_update")?.let(WorkspaceGeometry::read)
+        val geometry = next.objectOrNull("workspace_update")?.let(WorkspacePublication::read)
         val vectorSurfaces = next.objectOrNull("layout")?.let { panelVectorCache.prepare(it, surfaceDensity, Native.panelVectors(handle), handle) }
         if (geometry != null) lastWorkspaceUpdate = geometry
         if (!next.has("state") && next.has("layout") && geometry != null) {
@@ -1021,7 +1023,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
             recordPublication()
             main.post {
                 val model = snapshot ?: return@post
-                if (contentRevision != workspaceContentRevision || geometry.revision < (workspaceGeometry?.revision ?: -1L)) return@post
+                if (contentRevision != workspaceContentRevision || geometry.revision < workspaceRevision) return@post
                 androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot {
                 vectorSurfaces?.let(::applyPanelVectors)
                 model.put("layout", next.getJSONObject("layout"))
@@ -1037,7 +1039,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
                     put("workspace", workspace.put("layout", layout))
                 }
                 workspaceModelRevision = geometry.modelRevision
-                applyWorkspaceGeometry(geometry)
+                applyWorkspacePublication(geometry)
                 updateCameraReadout(camera)
                 }
             }
@@ -1048,7 +1050,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
             recordPublication()
             main.post {
                 next.objectOrNull("color_preview")?.let { colorPreview = it }
-                applyWorkspaceGeometry(geometry)
+                applyWorkspacePublication(geometry)
                 next.objectOrNull("camera")?.let { camera ->
                     snapshot?.getJSONObject("state")?.put("camera", camera)
                     updateCameraReadout(camera)
@@ -1115,15 +1117,20 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
             drawingTabs.refresh()
             workspaceContentRevision = next.objectOrNull("workspace_update")?.optLong("content_revision", -1L) ?: -1L
             workspaceModelRevision = geometry?.modelRevision ?: -1L
-            if (geometry != null) applyWorkspaceGeometry(geometry) else workspaceGeometry = null
+            if (geometry != null) applyWorkspacePublication(geometry) else {
+                workspaceGeometry = null
+                workspaceRevision = -1L
+            }
             updateCameraReadout(state.getJSONObject("camera"))
         } }
     }
-    private fun applyWorkspaceGeometry(next: WorkspaceGeometry) {
-        if (next.modelRevision != workspaceModelRevision || next.revision < (workspaceGeometry?.revision ?: -1L)) return
-        workspaceGeometry = next
+    private fun applyWorkspacePublication(next: WorkspacePublication) {
+        if (next.modelRevision != workspaceModelRevision || next.revision < workspaceRevision) return
+        workspaceRevision = next.revision
+        workspaceGeometry = next.geometry
         applyCanvasBar(next.canvasBar)
-        if (next.group != null && next.bounds != null) lastWorkspaceGroup = next.group to next.bounds
+        val geometry = next.geometry
+        if (geometry.group != null && geometry.bounds != null) lastWorkspaceGroup = geometry.group to geometry.bounds
     }
     private fun contentChanged(previous: JSONObject?, next: JSONObject): Boolean {
         val before = previous?.optJSONObject("state") ?: return true

@@ -19,8 +19,7 @@ internal val TabSlideEasing = Easing { t -> 1f - (1f - t) * (1f - t) * (1f - t) 
 
 /** Absolute logical geometry for one shared Rust model revision. No widget models
  * or bitmap copies cross the bridge during ordinary movement. */
-internal data class WorkspaceGeometry(val revision: Long, val modelRevision: Long,
-    val group: Int?, val bounds: Rect?, val tab: Tab?, val hint: JSONObject?, val canvasBar: CanvasBarPresentation?) {
+internal data class WorkspaceGeometry(val group: Int?, val bounds: Rect?, val tab: Tab?) {
     data class Tab(val group: Int, val panel: String, val sourceOffset: Float, val offsets: Map<Int, Float>)
     companion object {
         fun read(value: JSONObject): WorkspaceGeometry {
@@ -32,10 +31,17 @@ internal data class WorkspaceGeometry(val revision: Long, val modelRevision: Lon
                     preview.getJSONObject("bounds").number("x") - tab.getJSONObject("source").number("x"),
                     preview.array("offsets").objects().associate { it.getInt("index") to it.number("x") })
             }
-            return WorkspaceGeometry(value.getLong("revision"), value.getLong("model_revision"),
-                group?.getInt("id"), group?.getJSONObject("bounds")?.rect(), tab, drag?.objectOrNull("drop_hint"),
-                value.objectOrNull("canvas_bar")?.let { CanvasBarPresentation(it.getInt("hold"), CanvasBarGeometry.read(it)) })
+            return WorkspaceGeometry(group?.getInt("id"), group?.getJSONObject("bounds")?.rect(), tab)
         }
+    }
+}
+
+internal data class WorkspacePublication(val revision: Long, val modelRevision: Long,
+    val geometry: WorkspaceGeometry, val hint: JSONObject?, val canvasBar: CanvasBarPresentation?) {
+    companion object {
+        fun read(value: JSONObject) = WorkspacePublication(value.getLong("revision"), value.getLong("model_revision"),
+            WorkspaceGeometry.read(value), value.objectOrNull("drag")?.objectOrNull("drop_hint"),
+            value.objectOrNull("canvas_bar")?.let { CanvasBarPresentation(it.getInt("hold"), CanvasBarGeometry.read(it)) })
     }
 }
 

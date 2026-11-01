@@ -91,10 +91,9 @@ class AndroidInteractionTest {
                 "density" to density, "tool" to tool, "contact" to contact, "system_input" to systemInput,
                 "point" to JSONArray(listOf(point.x, point.y)), "window_focus" to owner.view.hasWindowFocus(),
                 "workspace_geometry" to host.workspaceGeometry?.let { g ->
-                    obj("revision" to g.revision, "model_revision" to g.modelRevision, "group" to g.group,
+                    obj("group" to g.group,
                         "bounds" to g.bounds?.let { b -> obj("x" to b.left, "y" to b.top, "width" to b.width, "height" to b.height) },
-                        "tab" to g.tab?.let { t -> obj("group" to t.group, "panel" to t.panel, "source_offset" to t.sourceOffset, "offsets" to JSONObject(t.offsets.mapKeys { it.key.toString() })) },
-                        "hint" to g.hint)
+                        "tab" to g.tab?.let { t -> obj("group" to t.group, "panel" to t.panel, "source_offset" to t.sourceOffset, "offsets" to JSONObject(t.offsets.mapKeys { it.key.toString() })) })
                 })
         }
         File(instrumentation.targetContext.getExternalFilesDir(null), "$name.json").apply {
@@ -1265,7 +1264,7 @@ class AndroidInteractionTest {
                 event(MotionEvent.ACTION_MOVE, Offset(if (right) target.right - 4 * density else target.left + 4 * density, target.center.y))
                 waitFor("$theme/$pointer tab drag") { workspaceDragging() }
                 waitFor("$theme/$pointer attached tab has no drop hint") {
-                    host.workspaceGeometry?.tab != null && host.workspaceGeometry?.hint == null
+                    host.workspaceGeometry?.tab != null && host.workspaceInteraction?.hint == null
                 }
                 if (pointer == MotionEvent.TOOL_TYPE_MOUSE && right) screenshot("validation/tab-identity/$theme-attached-drag.png")
                 event(MotionEvent.ACTION_UP)
@@ -1285,7 +1284,7 @@ class AndroidInteractionTest {
                 waitFor("$theme tab detaches") { group("sizes").getBoolean("floating") && host.workspaceGeometry?.tab == null }
                 event(MotionEvent.ACTION_MOVE, bounds("tab-tool_settings").center)
                 waitFor("$theme detached tab shows target") {
-                    host.workspaceGeometry?.hint?.objectOrNull("target")?.optString("kind") == "tab"
+                    host.workspaceInteraction?.hint?.objectOrNull("target")?.optString("kind") == "tab"
                 }
                 screenshot("validation/tab-identity/$theme-detached-target.png")
                 event(MotionEvent.ACTION_CANCEL)
@@ -1503,7 +1502,7 @@ class AndroidInteractionTest {
                         event(MotionEvent.ACTION_MOVE, destination); settle()
                     }
                     begin()
-                    val hint = host.workspaceGeometry?.hint ?: error("$label missing hint at $destination; dragging=${workspaceDragging()}")
+                    val hint = host.workspaceInteraction?.hint ?: error("$label missing hint at $destination; dragging=${workspaceDragging()}")
                     val expected = when (zone) {
                         "menu" -> obj("kind" to "split", "group" to 42, "edge" to "top")
                         "stack-menu" -> obj("kind" to "stack_column", "column" to 41, "before" to true)
@@ -1571,7 +1570,7 @@ class AndroidInteractionTest {
                 val destination = if (open) bounds("drawer-tab-$target").let { Offset(it.left + 5 * density, it.center.y) }
                 else bounds("divider-$band").let { Offset(if (right) it.left - 70 * density else it.right + 70 * density, it.center.y) }
                 event(MotionEvent.ACTION_MOVE, destination); settle()
-                assertNotNull("$pointer/$right/$open drop hint", host.workspaceGeometry?.hint)
+                assertNotNull("$pointer/$right/$open drop hint", host.workspaceInteraction?.hint)
                 event(MotionEvent.ACTION_UP); settle()
                 if (open) {
                     // Collapsed groups are represented by their drawer projection.
@@ -1967,9 +1966,9 @@ class AndroidInteractionTest {
                 if (source == "tile") SystemClock.sleep(700)
                 event(MotionEvent.ACTION_MOVE, bounds("workspace").center); settle()
                 event(MotionEvent.ACTION_MOVE, destination)
-                waitFor("$pointer/$source/$mode drop preview") { host.workspaceGeometry?.hint != null && exists("workspace-drop-hint") }; settle()
+                waitFor("$pointer/$source/$mode drop preview") { host.workspaceInteraction?.hint != null && exists("workspace-drop-hint") }; settle()
                 assertEquals(0, popupCount())
-                val hint = host.workspaceGeometry!!.hint!!.getJSONObject("target")
+                val hint = host.workspaceInteraction!!.hint!!.getJSONObject("target")
                 assertEquals(if (append) "split" else "stack_column", hint.getString("kind"))
                 if (append) {
                     assertEquals("bottom", hint.getString("edge"))
@@ -2020,10 +2019,10 @@ class AndroidInteractionTest {
                 event(MotionEvent.ACTION_DOWN, bounds("column-icon-layers").center); SystemClock.sleep(700)
                 event(MotionEvent.ACTION_MOVE, bounds("workspace").center); settle()
                 event(MotionEvent.ACTION_MOVE, destination)
-                waitFor("$edge/$pointer/$mode preview") { host.workspaceGeometry?.hint != null && exists("workspace-drop-hint") }
+                waitFor("$edge/$pointer/$mode preview") { host.workspaceInteraction?.hint != null && exists("workspace-drop-hint") }
                 settle()
                 assertEquals("Pickup closes the held menu", 0, popupCount())
-                val hint = host.workspaceGeometry!!.hint!!
+                val hint = host.workspaceInteraction!!.hint!!
                 val target = hint.getJSONObject("target")
                 if (merge) {
                     assertEquals("tab", target.getString("kind"))
@@ -3246,7 +3245,7 @@ class AndroidInteractionTest {
             event(MotionEvent.ACTION_DOWN, bounds("ribbon-grip-${size.first}").center)
             event(MotionEvent.ACTION_MOVE, workspaceBounds.center); settle()
             event(MotionEvent.ACTION_MOVE, destination); settle()
-            val target = host.workspaceGeometry?.hint?.getJSONObject("target") ?: run { captureToolbar("missing-target"); error("Missing $device/$edge/$alignment target; focus=${owner.view.hasWindowFocus()} dragging=${workspaceDragging()} geometry=${host.workspaceGeometry} grip=${bounds("ribbon-grip-${size.first}")} destination=$destination") }
+            val target = host.workspaceInteraction?.hint?.getJSONObject("target") ?: run { captureToolbar("missing-target"); error("Missing $device/$edge/$alignment target; focus=${owner.view.hasWindowFocus()} dragging=${workspaceDragging()} geometry=${host.workspaceGeometry} grip=${bounds("ribbon-grip-${size.first}")} destination=$destination") }
             assertEquals("compact_edge", target.getString("kind")); assertEquals(edge, target.getString("edge")); assertEquals(alignment, target.getString("alignment"))
             event(MotionEvent.ACTION_UP); settle()
             assertTrue(state().getJSONObject("workspace").getJSONObject("layout").array("bands").objects().any { it.optString("alignment") == alignment && it.getString("edge") == edge })
