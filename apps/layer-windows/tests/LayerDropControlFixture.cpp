@@ -32,7 +32,7 @@ struct Fixture : std::enable_shared_from_this<Fixture> {
     std::deque<Work> work;
     std::optional<Held> held;
     bool stopping=false,armed=false,released=false;
-    bool closeReady=false;
+    bool closeReady=false,discoveryReady=false;
     std::filesystem::path directory;
     Microsoft::UI::Dispatching::DispatcherQueue dispatcher{Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread()};
     Window window{nullptr};
@@ -77,7 +77,7 @@ struct Fixture : std::enable_shared_from_this<Fixture> {
         NativeString value(capy_snapshot(host,&info),capy_string_free);
         if(!value||!info.full){if(ready)dispatcher.TryEnqueue(std::move(ready));return;}
         dispatcher.TryEnqueue([weak=weak_from_this(),bytes=std::move(value.bytes),ready=std::move(ready)]()mutable{
-            if(auto self=weak.lock();self&&!self->isStopping()){self->present(bytes);self->publish(std::move(bytes));if(ready)ready();}
+            if(auto self=weak.lock();self&&!self->isStopping()){self->present(bytes);if(!self->discoveryReady&&flag(object(self->data->model,L"windows_workspace"),L"ready")){HWND hwnd=nullptr;winrt::check_hresult(self->window.as<IWindowNative>()->get_WindowHandle(&hwnd));CapyUi::ReadyRegisteredWindow(hwnd);self->discoveryReady=true;}self->publish(std::move(bytes));if(ready)ready();}
         });
     }
     void present(std::string const& bytes){
@@ -238,7 +238,7 @@ struct Fixture : std::enable_shared_from_this<Fixture> {
             if(auto self=weak.lock();self&&!self->closeReady){args.Cancel(true);self->stop();}
         });
         window.Closed([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->stop();});
-        CapyUi::RegisterFixtureWindow(window,1);
+        CapyUi::RegisterFixtureWindow(window,1,false);
         window.Activate();window.AppWindow().ResizeClient({460,700});
         std::thread([this]{run();}).detach();
     }

@@ -137,6 +137,7 @@ function Owned-ProcessWindows([Diagnostics.Process]$Process,[long]$WindowHandle,
             if($WindowHandle){throw 'The specified registered window is no longer owned by the process'}
             continue
         }
+        if($entry.ready -ne $true){continue}
         $window=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
         if(!$window -or $window.Current.ProcessId -ne $Process.Id -or [long]$window.Current.NativeWindowHandle -ne $handle.ToInt64()){throw 'Registered window automation ownership changed'}
         [pscustomobject]@{Root=$window;Handle=$handle}

@@ -38,7 +38,7 @@ namespace CapyRegisteredDiscoveryTest {
   [CapyRegisteredDiscoveryTest.Native]::Owners[$window]=33
   [CapyRegisteredDiscoveryTest.AutomationElement]::Nodes[$window]=[CapyRegisteredDiscoveryTest.Node]::new($window)
  }
- function Registry($Windows,[int]$Owner=33){@{process_id=$Owner;windows=@($Windows)}|ConvertTo-Json -Depth 8|Set-Content -LiteralPath $registry;[IO.File]::SetLastWriteTimeUtc($registry,$process.StartTime.ToUniversalTime())}
+ function Registry($Windows,[int]$Owner=33){foreach($window in $Windows){if(!$window.ContainsKey('ready')){$window.ready=$true}};@{process_id=$Owner;windows=@($Windows)}|ConvertTo-Json -Depth 8|Set-Content -LiteralPath $registry;[IO.File]::SetLastWriteTimeUtc($registry,$process.StartTime.ToUniversalTime())}
  function Expect-Failure([scriptblock]$Action){$failed=$false;try{&$Action|Out-Null}catch{$failed=$true};if(!$failed){throw 'Expected rejection'};$script:checks++}
  function Assert-NoDiscovery {
   if(@(Owned-ProcessWindows $process).Count -or $null -ne (Owned-DrawingWindow $process $handle $Output) -or [CapyRegisteredDiscoveryTest.AutomationElement]::Calls.Count){throw 'Missing registration reached UI Automation'}
@@ -47,6 +47,12 @@ namespace CapyRegisteredDiscoveryTest {
  Assert-NoDiscovery
  Expect-Failure {Register-CapyFixtureWindow $process $handle $Output}
  Registry @();Assert-NoDiscovery
+ Registry @(@{id=77;hwnd=$handle;ready=$false})
+ Assert-NoDiscovery
+ Registry @(@{id=77;hwnd=$handle;ready=$null})
+ Assert-NoDiscovery
+ @{process_id=33;windows=@(@{id=77;hwnd=$handle})}|ConvertTo-Json -Depth 8|Set-Content -LiteralPath $registry
+ Assert-NoDiscovery
  Registry @(@{id=77;hwnd=$handle})
  [IO.File]::SetLastWriteTimeUtc($registry,$process.StartTime.ToUniversalTime().AddTicks(-1));$script:snapshotReads=0
  Assert-NoDiscovery
@@ -80,6 +86,10 @@ namespace CapyRegisteredDiscoveryTest {
  [CapyRegisteredDiscoveryTest.AutomationElement]::Calls.Clear()
  $missing=Join-Path $Output 'other';New-Item -ItemType Directory $missing|Out-Null
  if(@(Owned-ProcessWindows $process 0 $missing).Count -or [CapyRegisteredDiscoveryTest.AutomationElement]::Calls.Count){throw 'Supplied trace directory fell back to another registry'};$checks++
+ Registry @(@{id=77;hwnd=$handle},@{id=78;hwnd=$second})
+ Registry @(@{id=77;hwnd=$handle;ready=$false},@{id=78;hwnd=$second;ready=$true})
+ $readyWindows=@(Owned-ProcessWindows $process)
+ if($readyWindows.Count -ne 1 -or $readyWindows[0].Handle.ToInt64() -ne $second){throw 'Window readiness was not scoped to its registered identity'};$checks++
  Registry @(@{id=77;hwnd=$handle},@{id=78;hwnd=$second})
  $windows=@(Owned-ProcessWindows $process)
  if($windows.Count -ne 2 -or $windows[0].Handle.ToInt64() -ne $handle -or $windows[1].Handle.ToInt64() -ne $second){throw 'Registered multiwindow identities were not preserved'};$checks++
