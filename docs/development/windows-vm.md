@@ -36,8 +36,9 @@ Every other command acts on one VM made from the base image. `--vm NAME` or
 worktree has its own VM and its own `C:\capycanvas`. The first `start` creates the
 VM as a copy-on-write disk over the base image and prepares it with
 [`prepare.ps1`](../../tools/windows-vm/prepare.ps1): PowerShell 7 if the base lacks
-it, a 2560 × 1600 display at 150 % scale, the dark theme the fixtures were
-written against, and one restart. This takes a few
+it, Japanese Basic input and the private user's Microsoft Japanese IME profile,
+a 2560 × 1600 display at 150 % scale, the dark theme the fixtures were written
+against, and one restart. This takes a few
 minutes; later starts take under a minute. Several VMs can run at once, each with
 its own disk, TPM, SSH port and desktop session.
 
