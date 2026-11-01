@@ -942,9 +942,11 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         if(root.IsLoaded()&&glassChanged)glassChanged();
     }
     void layoutUpdated(){
-        if(!measurementsPending||measuring||presenting||data->updating||!root.IsLoaded())return;
-        measuring=true;measurementsPending=false;
+        if((!measurementsPending&&!trace)||measuring||presenting||data->updating||!root.IsLoaded())return;
+        measuring=true;
         struct Reset{bool& value;~Reset(){value=false;}} reset{measuring};
+        if(!measurementsPending){tracePresentation();return;}
+        measurementsPending=false;
         reportTitlebar();measurePanels();expansion->Apply(configurationHeight());
         presentBackgrounds();tracePresentation();
         if(!popup&&!str(object(data->state,L"customization"),L"control").empty())updatePopup();
