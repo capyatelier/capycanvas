@@ -130,7 +130,7 @@ function Paste-Position([string]$Command,[string]$Shortcut,[uint16[]]$Modifiers,
  if($original.Count -ne 1 -or $owners.Count -ne 1 -or $owners[0].data.content.object.ref -ne $original[0].id){throw 'Position checks require one copied image in one ordinary Object layer'}
  $layer=$owners[0];$a=Effective-Affine $Before $layer;$order=@((Root-Stack $Before).data.entries.ref)
  $image=@($Before.manifest.objects|Where-Object id -eq $original[0].data.image.ref)[0]
- if(($a[0..3] -join ',') -ne '1,0,0,1' -or ($image.data.extent -join 'x') -ne '40x30'){throw 'Position checks require the original unscaled 40x30 image'}
+ if(($a[0] -ne 1 -or $a[1] -ne 0 -or $a[2] -ne 0 -or $a[3] -ne 1) -or ($image.data.extent -join 'x') -ne '40x30'){throw 'Position checks require the original unscaled 40x30 image'}
  $clip=@((Clip-Size) -split 'x'|ForEach-Object {[double]$_})
  $bounds=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle;$camera=(Model).state.camera;$area=$camera.work_area
  $surface=@(($area[0]+$area[2]/2),($area[1]+$area[3]/2));$point=$null;$requested=$null;$hover=$null
@@ -222,7 +222,7 @@ function New-Image([scriptblock]$Action,[string]$Extent,[string]$Name,[int]$Obje
   if(($extents -join ',') -ne (($Sources|Sort-Object) -join ',')){throw "$Name changed the source image extents"}
   foreach($object in $manifest.objects|Where-Object type -eq 'capy.image-object/1'){
    $affine=if($null -eq $object.data.affine){@(1,0,0,1,0,0)}else{$object.data.affine}
-   if(($affine[0..3] -join ',') -ne '1,0,0,1'){throw "$Name scaled or rotated a clipboard image"}
+   if($affine[0] -ne 1 -or $affine[1] -ne 0 -or $affine[2] -ne 0 -or $affine[3] -ne 1){throw "$Name scaled or rotated a clipboard image"}
   }
  }
  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke-Id 'close_document'

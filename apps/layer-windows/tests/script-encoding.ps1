@@ -131,3 +131,21 @@ foreach($fixtureName in @('exercise-clipboard.ps1','ObjectFixture.ps1')){& {
     if($failure -ne 'Wrong owner did not add one independent Object layer'){throw 'Image copy accepted the wrong image owner'}
 } $fixtureName $fixedManifest}
 Write-Output 'Fixed image fixture passed: ordinary Object owners, front/back image lookup, effective affine, independent copy and wrong-owner rejection.'
+
+$newImage=(Fixture-Ast 'exercise-clipboard.ps1').Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'New-Image'},$true)
+$affineLoop=$newImage.Find({param($n)$n -is [Management.Automation.Language.ForEachStatementAst] -and $n.Variable.Extent.Text -eq '$object' -and $n.Extent.Text.Contains('scaled or rotated a clipboard image')},$true)
+if(!$affineLoop){throw 'Missing actual clipboard image affine loop'}
+foreach($case in @(
+    @{data='{}';scaled=$false},
+    @{data='{"affine":[1.0,0.0,0.0,1.0,20.0,0.0]}';scaled=$false},
+    @{data='{"affine":[1.0,0.0,0.0,1.0,0.0,5.0]}';scaled=$false},
+    @{data='{"affine":[0.999999999999999,0.0,0.0,1.0,20.0,0.0]}';scaled=$true},
+    @{data='{"affine":[1.0,0.25,0.0,1.0,20.0,0.0]}';scaled=$true},
+    @{data='{"affine":[0.0,1.0,-1.0,0.0,20.0,0.0]}';scaled=$true}
+)){
+    $manifest=('{"objects":[{"type":"capy.image-object/1","data":'+$case.data+'}]}')|ConvertFrom-Json;$Name='Numeric affine fixture';$failure=$null
+    try{. ([scriptblock]::Create($affineLoop.Extent.Text))}catch{$failure=$_.Exception.Message}
+    if($case.scaled){if($failure -ne "$Name scaled or rotated a clipboard image"){throw 'Actual clipboard check accepted a changed linear transform'}}
+    elseif($failure){throw "Actual clipboard check rejected numeric identity: linear=$($affine[0..3] -join ','); types=$(@($affine[0..3]|ForEach-Object {$_.GetType().FullName}) -join ','); $failure"}
+}
+Write-Output 'Clipboard affine checks compare exact numbers: default and translated identity accepted; scale, shear and rotation rejected.'
