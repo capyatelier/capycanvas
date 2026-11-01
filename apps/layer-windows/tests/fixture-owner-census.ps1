@@ -108,5 +108,29 @@ namespace CapyRegisteredDiscoveryTest {
  $context=Get-Content $env:CAPY_FIXTURE_CONTEXT -Raw|ConvertFrom-Json;$context.windows[0].executable='foreign.exe';$context|ConvertTo-Json -Depth 8|Set-Content $env:CAPY_FIXTURE_CONTEXT
  Expect-Failure {Register-CapyFixtureWindow $process $handle $Output}
  Set-Content $registry '{';Expect-Failure {Owned-ProcessWindows $process}
+ $activation=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-file-activation.ps1'),[ref]$tokens,[ref]$errors)
+ if($errors.Count){throw 'File activation fixture parse failed'}
+ $wait=$activation.Find({param($n)$n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Wait-Until' -and $n.Extent.Text.Contains("'A launch without files did not open a new window in the running app'")},$true)
+ if(!$wait -or $wait.CommandElements[-1].Extent.Text -ne '60'){throw 'Missing original file activation window deadline'}
+ $condition=$wait.CommandElements[1].ScriptBlock.GetScriptBlock()
+ & {
+  $original=@([pscustomobject]@{hwnd=101;ready=$false})
+  function Windows {$script:activationWindows}
+  foreach($case in @(
+   @{windows=@(@{hwnd=101;ready=$false});expected=$false},
+   @{windows=@(@{hwnd=101;ready=$false},@{hwnd=202;ready=$false});expected=$false},
+   @{windows=@(@{hwnd=101;ready=$false},@{hwnd=202;ready=$true});expected=$true},
+   @{windows=@(@{hwnd=101},@{hwnd=202;ready=$true});expected=$true},
+   @{windows=@(@{hwnd=101;ready=$true},@{hwnd=202});expected=$false},
+   @{windows=@(@{hwnd=202;ready=$true},@{hwnd=303;ready=$false});expected=$false},
+   @{windows=@(@{hwnd=101;ready=$true},@{hwnd=202;ready=$true},@{hwnd=303;ready=$true});expected=$false},
+   @{windows=@(@{hwnd=101;ready=$true},@{hwnd=101;ready=$true});expected=$false}
+  )){
+   $script:activationWindows=@($case.windows|ForEach-Object {[pscustomobject]$_})
+   if([bool](& $condition) -ne $case.expected){throw 'File activation accepted an unready or nonunique added window, or discarded its raw original window'}
+   $script:checks++
+  }
+  Remove-Variable activationWindows -Scope Script
+ }
  @{status='passed';cases=$checks;ps=$PSVersionTable.PSVersion.ToString();native_stub_scope='Registered HWND/native-owner/FromHandle only; desktop and descendant identity discovery throw; no app/window/input';helper_sha256=(Get-FileHash $Helper).Hash}|ConvertTo-Json|Set-Content (Join-Path $Output 'result.json')
 } finally {$env:CAPY_FIXTURE_CONTEXT=$before}

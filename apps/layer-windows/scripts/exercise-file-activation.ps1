@@ -96,7 +96,7 @@ try {
     Wait-Until {@(Tabs).Count -eq $before+3 -and (@(Tabs)[-1].title -like 'Relative*')} 'A relative path was not resolved by the launching process' 60
     $original=@(Windows)
     Forward $elsewhere @()
-    Wait-Until {@(Windows).Count -eq 2} 'A launch without files did not open a new window in the running app' 60
+    Wait-Until {$windows=@(Windows);$added=@($windows|Where-Object {$_.hwnd -notin $original.hwnd});$windows.Count -eq 2 -and $added.Count -eq 1 -and $added[0].ready -eq $true} 'A launch without files did not open a new window in the running app' 60
     if(@(Tabs).Count -ne $before+3){throw 'A launch without files changed the existing window'}
     $added=@(Windows|Where-Object {$_.hwnd -notin $original.hwnd})[0]
     (Owned-DrawingWindow $review -WindowHandle $added.hwnd -TraceDirectory $run).Root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close()
