@@ -73,6 +73,52 @@ batch status and failures remain in the
 [final evidence](../../artifacts/android-ui-motion/final-report/affected-rows-final.local.json)
 and [measurement details](../../artifacts/android-ui-motion/final-report/mid-tier-ui-details.local.md).
 
+## Current-photo preview comparison
+
+Measured 2026-11-01 on the reference MovinkPad 11: parent `7c771ed66` → P1
+`7590c695b`, optimized release Rust/benchmark APKs differing only in native code.
+Factory density 240/font scale 1, actual 90 Hz and thermal 0 are verified.
+Each build primes, then runs three eight-second contacts per row on the Sony
+6000 × 4000 photo at Fit, or the default 1920 × 1440 paper at the helper's Fit.
+All 54 navigation contacts and six G-Pen strokes pass their harness assertions.
+Rates are median moving SurfaceFlinger presents; gaps are the worst contact p99.
+
+| Navigation | Parent presents/s | P1 presents/s | Worst gap p99, ms, parent → P1 |
+| --- | ---: | ---: | --- |
+| Photo, Navigator closed, pan | 68.692 | 68.692 | 22.391 → 22.377 |
+| Photo, Navigator closed, pinch | 53.441 | 69.974 | 100.466 → 22.360 |
+| Photo, Navigator closed, rotate | 63.015 | 62.925 | 22.408 → 22.436 |
+| Photo, Navigator open, pan | 80.764 | 80.726 | 22.340 → 22.340 |
+| Photo, Navigator open, pinch | 63.950 | 76.894 | 55.799 → 22.367 |
+| Photo, Navigator open, rotate | 72.561 | 72.537 | 22.373 → 22.388 |
+| Default paper, pan | 71.512 | 71.512 | 22.354 → 22.399 |
+| Default paper, pinch | 70.130 | 70.385 | 22.392 → 22.402 |
+| Default paper, rotate | 64.243 | 64.371 | 22.408 → 22.383 |
+
+Closed/open pinch improves 30.94%/20.24%; other rates stay close. Every row
+retains a shared miss against 85.5 presents/s and 22.222 ms; no passing row
+becomes a miss. The helper's default-paper Fit is not a saved-camera check.
+
+G-Pen 1536 px uses a contained 310 × 150 px ellipse, Navigator closed, 200 Hz
+stylus input and one undone primer. Fresh rates count input-attributed GPU
+completions, not scanout. CPU values below are medians of per-contact quantiles.
+
+| Brush diagnostic | Parent | P1 |
+| --- | ---: | ---: |
+| Fresh updates/s, median | 28.821 | 28.809 |
+| Fresh completion-gap p99, worst ms | 47.705 | 44.139 |
+| Callback wall p50/p99, ms | 33.026 / 43.924 | 33.266 / 43.636 |
+| Owner thread CPU p50/p99, ms | 12.061 / 23.048 | 12.056 / 23.504 |
+| Post-stroke GPU allocated/reserved, median MiB | 1426.943 / 1450.199 | 1435.479 / 1458.199 |
+
+Both builds miss 90 fresh updates/s and 22.222 ms. Callback wall includes waits;
+allocator values are three boundary samples per build, not continuous peaks.
+Contact queue/completion observations do not establish physical first-dab latency.
+Low/Top remain unmeasured. Exact APK/source hashes, full-contact
+counts/onset/longest gaps, CPU/allocator
+samples and setup/cleanup faults are in
+`artifacts/issue24-impl/m11-part1-android-validation.md`.
+
 ## Navigation presentation
 
 Measured 2026-10-25 on the reference Wacom MovinkPad 11, comparing `2d7c4d5d7`
