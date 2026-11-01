@@ -279,9 +279,11 @@ if($useWindow.Count -ne 1){throw 'Missing actual localization window switch'}
         $script:windowResolutions++;[pscustomobject]@{Root=$discovered}
     }
     Use-Window $window $prepared
+    if($script:CapyStateFile -ne (Join-Path $run "ui-state-$($review.Id)-7.json")){throw 'Prepared localization root did not bind its owned presentation trace'}
     if($script:windowRegistrations -ne 0 -or $script:windowResolutions -ne 0){throw 'Prepared window switch performed root discovery or registration'}
     if($script:current -ne $window -or $script:root -ne $prepared -or [CapyOwnedSearchTest.Driver]::Activations -ne 1 -or [CapyOwnedSearchTest.Driver]::GetForegroundWindow() -ne [IntPtr]$window.hwnd){throw 'Prepared window switch did not retain its exact root and activate its owned HWND'}
     Use-Window $window
+    if($script:CapyStateFile -ne (Join-Path $run "ui-state-$($review.Id)-7.json")){throw 'Discovered localization root did not bind its owned presentation trace'}
     if($script:windowRegistrations -ne 1 -or $script:windowResolutions -ne 1 -or $script:root -ne $discovered -or $script:current -ne $window -or [CapyOwnedSearchTest.Driver]::Activations -ne 2){throw 'Unprepared window switch changed its discovery or activation path'}
     foreach($invalid in @(@{pid=99;hwnd=$window.hwnd},@{pid=33;hwnd=132146})){
         $foreign=[CapyOwnedSearchTest.Node]::new('invalid-window',$invalid.pid,0,0);$foreign.NativeWindowHandle=[IntPtr]$invalid.hwnd
@@ -289,6 +291,10 @@ if($useWindow.Count -ne 1){throw 'Missing actual localization window switch'}
         try{Use-Window $window $foreign}catch{if($_.Exception.Message -ne 'Prepared window root does not belong to its registered owner'){throw};$rejected=$true}
         if(!$rejected -or [CapyOwnedSearchTest.Driver]::Activations -ne 2 -or $script:windowRegistrations -ne 1 -or $script:windowResolutions -ne 1 -or $script:root -ne $discovered -or $script:current -ne $window){throw 'Invalid prepared root changed activation, discovery or the current owned window'}
     }
+    $other=[pscustomobject]@{id=8;hwnd=132146}
+    $otherRoot=[CapyOwnedSearchTest.Node]::new('other-owned-window',33,0,0);$otherRoot.NativeWindowHandle=[IntPtr]$other.hwnd
+    Use-Window $other $otherRoot
+    if($script:current -ne $other -or $script:root -ne $otherRoot -or $script:CapyStateFile -ne (Join-Path $run "ui-state-$($review.Id)-8.json")){throw 'Switching localization windows retained the previous presentation trace'}
 }
 Write-Output 'Localization window switching retains prepared owned roots without rediscovery, preserves ordinary discovery, and rejects foreign PID or HWND before activation.'
 

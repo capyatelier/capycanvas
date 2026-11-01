@@ -87,7 +87,7 @@ function Use-Window($Window,$PreparedRoot){
   Register-CapyFixtureWindow $review ([long]$Window.hwnd) $run
   $PreparedRoot=(Owned-DrawingWindow $review -WindowHandle $Window.hwnd -TraceDirectory $run).Root
  }elseif($PreparedRoot.Current.ProcessId -ne $review.Id -or [long]$PreparedRoot.Current.NativeWindowHandle -ne [long]$Window.hwnd){throw 'Prepared window root does not belong to its registered owner'}
- $script:current=$Window;$script:root=$PreparedRoot
+ $script:current=$Window;$script:root=$PreparedRoot;$script:CapyStateFile=Join-Path $run "ui-state-$($review.Id)-$($Window.id).json"
  Wait-Until {[CapyRowPointer]::SetForegroundWindow([IntPtr]$Window.hwnd)|Out-Null;[CapyRowPointer]::GetForegroundWindow() -eq [IntPtr]$Window.hwnd} 'Review window did not own foreground input' 10
 }
 function Focus-Canvas{
