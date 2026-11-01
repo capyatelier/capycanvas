@@ -3,14 +3,17 @@
 use gtk::{glib, prelude::*};
 use std::{cell::RefCell, rc::Rc};
 
-pub(crate) fn current<K: PartialEq>(wanted: K, result: K) -> bool { wanted == result }
-
 pub(crate) struct PreviewRaster<K, Q>(Rc<RefCell<Queue<K, Q>>>);
 struct Queue<K, Q> {
     wanted: Option<K>,
     queued: Option<(K, Q)>,
     running: bool,
     generation: u64,
+}
+impl<K: Copy, Q> Queue<K, Q> {
+    fn accepts(&self, generation: u64, key: K, compatible: fn(K, K) -> bool) -> bool {
+        self.generation == generation && self.wanted.is_some_and(|wanted| compatible(wanted, key))
+    }
 }
 impl<K, Q> Default for PreviewRaster<K, Q> {
     fn default() -> Self {
@@ -38,6 +41,7 @@ impl<K: Copy + PartialEq + 'static, Q: Send + 'static> PreviewRaster<K, Q> {
         input: impl FnOnce() -> Option<Q>,
         work: fn(Q) -> R,
         install: fn(&W, K, R),
+        compatible: fn(K, K) -> bool,
     ) {
         let mut queue = self.0.borrow_mut();
         if queue.wanted == Some(key) {
@@ -50,13 +54,14 @@ impl<K: Copy + PartialEq + 'static, Q: Send + 'static> PreviewRaster<K, Q> {
             queue.generation = queue.generation.wrapping_add(1);
         }
         drop(queue);
-        Self::start(self.0.clone(), widget, work, install);
+        Self::start(self.0.clone(), widget, work, install, compatible);
     }
     fn start<W: IsA<gtk::Widget>, R: Send + 'static>(
         queue: Rc<RefCell<Queue<K, Q>>>,
         widget: &W,
         work: fn(Q) -> R,
         install: fn(&W, K, R),
+        compatible: fn(K, K) -> bool,
     ) {
         let mut pending = queue.borrow_mut();
         if pending.running {
@@ -79,8 +84,7 @@ impl<K: Copy + PartialEq + 'static, Q: Send + 'static> PreviewRaster<K, Q> {
                 pending.queued = None;
                 pending.wanted = None;
             }
-            let accept = pending.generation == generation
-                && pending.wanted.is_some_and(|wanted| current(wanted, key));
+            let accept = pending.accepts(generation, key, compatible);
             if result.is_err() {
                 pending.wanted = None;
             }
@@ -99,24 +103,39 @@ impl<K: Copy + PartialEq + 'static, Q: Send + 'static> PreviewRaster<K, Q> {
                 install(&widget, key, result);
                 widget.queue_draw();
             }
-            Self::start(queue, &widget, work, install);
+            Self::start(queue, &widget, work, install, compatible);
         });
     }
 }
 
 #[cfg(test)]
-pub(crate) fn assert_current_pixels(admitted: bool, old: &gtk::gdk::Texture, current: &gtk::gdk::Texture) {
-    let width = old.width() as usize;
-    assert_eq!((old.width(), old.height()), (current.width(), current.height()));
-    let mut old_pixels = vec![0; width * old.height() as usize * 4];
-    let mut current_pixels = old_pixels.clone();
-    old.download(&mut old_pixels, width * 4);
-    current.download(&mut current_pixels, width * 4);
-    let index = old_pixels.chunks_exact(4).zip(current_pixels.chunks_exact(4)).enumerate()
-        .max_by_key(|(_, (a, b))| a[..3].iter().zip(&b[..3]).map(|(a,b)|a.abs_diff(*b) as u32).sum::<u32>()).unwrap().0 * 4;
-    let old = &old_pixels[index..index+4];
-    let current = &current_pixels[index..index+4];
-    assert!(old[..3].iter().zip(&current[..3]).any(|(a,b)| a.abs_diff(*b) >= 24),
-        "the two input values must produce visibly different pixels: {old:?} / {current:?}");
-    if admitted { assert_eq!(old, current, "obsolete raster admitted under newer input at pixel {}", index/4); }
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compatible_results_publish_while_the_latest_key_is_queued() {
+        let compatible = |a: (u8, u8), b: (u8, u8)| a.0 == b.0;
+        let queue = Queue { wanted: Some((1, 3)), queued: Some(((1, 3), ())), running: true, generation: 7 };
+        assert!(queue.accepts(7, (1, 1), compatible));
+        assert!(queue.accepts(7, (1, 2), compatible));
+        assert!(queue.accepts(7, (1, 3), compatible));
+        assert!(!queue.accepts(7, (2, 1), compatible));
+        assert_eq!(queue.queued.as_ref().map(|(key, _)| *key), Some((1, 3)));
+    }
+
+    #[test]
+    fn cancellation_rejects_an_older_running_result() {
+        let queue = PreviewRaster::<u8, ()>::default();
+        { let mut state = queue.0.borrow_mut(); state.wanted = Some(2); state.queued = Some((2, ())); state.running = true; }
+        queue.cancel();
+        assert!(!queue.0.borrow().accepts(0, 1, |_, _| true));
+        assert!(queue.0.borrow().queued.is_none());
+        assert!(queue.0.borrow().wanted.is_none());
+    }
+
+    #[test]
+    fn cached_current_pixels_supersede_an_older_running_result() {
+        let queue = Queue::<u8, ()> { wanted: Some(1), queued: None, running: true, generation: 2 };
+        assert!(!queue.accepts(1, 2, |_, _| true));
+    }
 }

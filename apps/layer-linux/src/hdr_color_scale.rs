@@ -34,7 +34,10 @@ pub(crate) struct ArcKey {
     color: (RgbColor, ViewColor, f32),
 }
 impl ArcKey {
-
+    fn compatible(self, other: Self) -> bool {
+        self.dpi == other.dpi && self.min == other.min && self.max == other.max
+            && self.color.1 == other.color.1 && self.color.2 == other.color.2
+    }
     fn bounds(self) -> gtk::graphene::Rect {
         let width = self.width as f32 / self.dpi as f32;
         let g = HdrIntensityArc::new(width).unwrap();
@@ -115,7 +118,8 @@ mod imp {
             let ready = cache.as_ref().is_some_and(|(k, _)| *k == key);
             if !self.resizing.get() {
                 self.raster.request(&*obj, key, || (!ready).then_some(key), ArcKey::render,
-                    |scale, key, texture| { *scale.imp().texture.borrow_mut() = Some((key, texture)); });
+                    |scale, key, texture| { *scale.imp().texture.borrow_mut() = Some((key, texture)); },
+                    ArcKey::compatible);
             }
             let mut paths = self.paths.borrow_mut();
             if paths.as_ref().is_none_or(|p| p.key.0 != obj.width()) {
@@ -125,8 +129,14 @@ mod imp {
                 paths.zero = ArcPaths::zero(min, max, &g);
             }
             let paths = paths.as_ref().unwrap();
-            if let Some((_, texture)) = cache.as_ref().filter(|(old, _)| crate::color_preview_raster::current(*old, key)) {
-                snapshot.append_texture(texture, &key.bounds());
+            if let Some((old, texture)) = cache.as_ref() {
+                let bounds = old.bounds();
+                let arc = HdrIntensityArc::new(bounds.width()).unwrap();
+                let scale = g.radius / arc.radius;
+                snapshot.append_texture(texture, &gtk::graphene::Rect::new(
+                    g.center[0] + (bounds.x() - arc.center[0]) * scale,
+                    g.center[1] + (bounds.y() - arc.center[1]) * scale,
+                    bounds.width() * scale, bounds.height() * scale));
             }
             let [cx, cy] = g.point(((obj.value() - min) / (max - min)) as f32);
             let radius = g.marker_radius;
@@ -275,10 +285,12 @@ fn preview_gain(value: f32, gain: f64) -> f32 {
 mod freshness_tests {
     use super::*;
     #[test]
-    fn freshness_rejects_an_obsolete_hdr_arc_color() {
+    fn pending_color_changes_accept_compatible_completed_arcs() {
         let a = ArcKey { width: 192, dpi: 1, min: -2., max: 2.,
             color: (RgbColor::from_linear(layer_core::color::RgbSpace::Srgb,[1.,0.,0.,1.]).unwrap(), ViewColor::Srgb, 1.) };
         let b = ArcKey { color: (RgbColor::from_linear(layer_core::color::RgbSpace::Srgb,[0.,0.,1.,1.]).unwrap(), ViewColor::Srgb, 1.), ..a };
-        crate::color_preview_raster::assert_current_pixels(crate::color_preview_raster::current(b, a), &a.render(), &b.render());
+        assert!(a != b && b.compatible(a));
+        assert!(ArcKey { width: 384, ..b }.compatible(a));
+        assert!(!ArcKey { min: -4., ..b }.compatible(a));
     }
 }

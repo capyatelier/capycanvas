@@ -1337,10 +1337,6 @@ impl Bubble {
             let context = g.session.state().toolbar_context();
             g.session.toolbar_stamp(context, known).ok().flatten()
         });
-        if stamp.as_ref().is_none_or(|stamp| stamp.pending) {
-            if imp.stamp.take().is_some() { self.layer_redraw(); }
-            return true;
-        }
         if let Some(stamp) = stamp.filter(|s| !s.alpha.is_empty()) {
             let size = stamp.size as i32;
             let texture = gdk::MemoryTexture::new(size, size, gdk::MemoryFormat::A8, &glib::Bytes::from_owned(stamp.alpha), stamp.size as usize);
@@ -1349,6 +1345,11 @@ impl Bubble {
             self.layer_redraw();
         }
         true
+    }
+
+    #[cfg(test)]
+    pub(super) fn stamp_receipt(&self) -> Option<(u64, gdk::Texture)> {
+        self.imp().stamp.borrow().as_ref().map(|(id, _, texture)| (*id, texture.clone()))
     }
 
     fn hot_item(&self, p: [f32; 2]) {

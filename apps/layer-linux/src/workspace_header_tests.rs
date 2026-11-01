@@ -4717,7 +4717,7 @@ fn native_caption_toolbar_constructor_before_realize() {
 }
 
 #[path = "preview_freshness_tests.rs"]
-mod preview_freshness;
+pub(super) mod preview_freshness;
 
 
 #[test]

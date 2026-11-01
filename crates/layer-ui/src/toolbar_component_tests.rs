@@ -1578,16 +1578,22 @@ fn slider_stamp_coalesces_full_brush_keys_and_rejects_stale_owners() {
     let mut brush=s.engine.configured_brush().clone();
     brush.tip=layer_core::BrushTip::Mask(AssetId::from("preview-test"));
     s.engine.set_brush(brush.clone()).unwrap();
-    assert!(s.toolbar_stamp(context,Some(first)).unwrap().is_none());
+    let pending=s.toolbar_stamp(context,Some(first)).unwrap().unwrap();
+    assert!(pending.pending && pending.alpha.is_empty());
+    assert_eq!((pending.request_id,pending.extent),(first,ready.extent));
     assert_eq!(s.renderer_mut().requests[1].1.style.tip,brush.tip);
     let second=s.renderer_mut().requests[1].0;
     brush.tip=layer_core::BrushTip::AnalyticEllipse;
     brush.grain=Some(layer_core::BrushGrain{depth:0.5});
     s.engine.set_brush(brush.clone()).unwrap();
-    assert!(s.toolbar_stamp(context,Some(first)).unwrap().is_none());
+    let pending=s.toolbar_stamp(context,Some(first)).unwrap().unwrap();
+    assert!(pending.pending && pending.alpha.is_empty());
+    assert_eq!(pending.request_id,first);
     assert_eq!(s.renderer_mut().requests.len(),2,"one request in flight");
     s.renderer_mut().complete(second,11);
-    assert!(s.toolbar_stamp(context,Some(first)).unwrap().is_none());
+    let intermediate=s.toolbar_stamp(context,Some(first)).unwrap().unwrap();
+    assert!(intermediate.pending);
+    assert_eq!((intermediate.request_id,intermediate.alpha.as_slice()),(second,&[11;4][..]));
     assert_eq!(s.renderer_mut().requests[2].1.style.grain,brush.grain);
     let paper=s.engine.document().paper(None);
     assert_eq!(s.renderer_mut().requests[2].1.style.paper.as_ref().map(|paper|paper.surface.as_ref()),Some(&paper));
@@ -1719,7 +1725,7 @@ fn short_sliders_reclaim_readouts_without_changing_the_saved_preference() {
 }
 
 #[test]
-fn slider_stamp_never_delivers_pixels_from_an_obsolete_value_key() {
+fn slider_stamp_retains_ordered_results_until_the_final_value_is_exact() {
     for platform in Platform::ALL {
         for cached in [false, true] {
             let mut s = UiSession::blank(StampRecorder::default(), [1000, 1000], platform).unwrap();
@@ -1729,30 +1735,69 @@ fn slider_stamp_never_delivers_pixels_from_an_obsolete_value_key() {
             let checkpoint = s.engine.checkpoint();
             assert!(s.toolbar_stamp(context, None).unwrap().is_none());
             let first = s.renderer_mut().requests.last().unwrap().0;
+            let mut accepted = Vec::new();
             let known = if cached {
                 s.renderer_mut().complete(first, 7);
                 let image = s.toolbar_stamp(context, None).unwrap().unwrap();
                 assert!(!image.pending && image.alpha == [7; 4]);
+                accepted.push(image.request_id);
                 Some(first)
             } else { None };
             s.dispatch(UiAction::SetToolSetting { id: "flow".into(), value: 0.5 }).unwrap();
-            s.toolbar_stamp(context, known).unwrap();
-            let obsolete = s.renderer_mut().requests.last().unwrap().clone();
+            let pending = s.toolbar_stamp(context, known).unwrap();
+            if cached {
+                let pending = pending.unwrap();
+                assert!(pending.pending && pending.alpha.is_empty());
+                assert_eq!(pending.request_id, first);
+            } else { assert!(pending.is_none()); }
+            let intermediate = s.renderer_mut().requests.last().unwrap().clone();
             s.dispatch(UiAction::SetToolSetting { id: "flow".into(), value: 1. }).unwrap();
             assert_eq!(s.state().toolbar_context(), context);
             assert_eq!(ToolbarNumericBinding::BrushStrength.field(s.state()).unwrap().value, 1.);
-            s.renderer_mut().complete(obsolete.0, 11);
-            let delivered = s.toolbar_stamp(context, known).unwrap();
-            assert!(delivered.as_ref().is_none_or(|stamp| stamp.alpha.is_empty()),
-                "{platform:?}, cached={cached}: current Strength100 received obsolete request {} pixels {:?}",
-                obsolete.0, delivered.as_ref().map(|stamp| (stamp.request_id, stamp.pending, &stamp.alpha)));
-            let current = s.renderer_mut().requests.last().unwrap().clone();
-            assert_ne!(current.0, obsolete.0);
-            assert_ne!(current.1.dabs, obsolete.1.dabs);
-            s.renderer_mut().complete(current.0, 211);
+            let requests = s.renderer_mut().requests.len();
+            for _ in 0..3 {
+                let pending = s.toolbar_stamp(context, known).unwrap();
+                if cached {
+                    let pending = pending.unwrap();
+                    assert!(pending.pending && pending.alpha.is_empty());
+                    assert_eq!(pending.request_id, first);
+                } else { assert!(pending.is_none()); }
+                assert_eq!(s.renderer_mut().requests.len(), requests, "one request remains in flight");
+            }
+            s.renderer_mut().complete(intermediate.0, 11);
             let delivered = s.toolbar_stamp(context, known).unwrap().unwrap();
+            assert!(delivered.pending, "{platform:?}, cached={cached}: newest accepted result remains visible while the final value renders");
+            assert_eq!((delivered.request_id, delivered.alpha.as_slice()), (intermediate.0, &[11; 4][..]));
+            accepted.push(delivered.request_id);
+            let current = s.renderer_mut().requests.last().unwrap().clone();
+            assert!(current.0 > intermediate.0);
+            assert_ne!(current.1.dabs, intermediate.1.dabs);
+            let (expected, extent) = s.stamp_request().unwrap();
+            assert_eq!(current.1.style, expected.style);
+            assert_eq!(current.1.dabs, expected.dabs);
+            assert_eq!(current.1.bounds, expected.bounds);
+            assert_eq!(current.1.shape_strength, expected.shape_strength);
+            let requests = s.renderer_mut().requests.len();
+            for _ in 0..3 {
+                let pending = s.toolbar_stamp(context, Some(intermediate.0)).unwrap().unwrap();
+                assert!(pending.pending && pending.alpha.is_empty());
+                assert_eq!(pending.request_id, intermediate.0);
+                assert_eq!(s.renderer_mut().requests.len(), requests);
+            }
+            s.renderer_mut().complete(current.0, 211);
+            let delivered = s.toolbar_stamp(context, Some(intermediate.0)).unwrap().unwrap();
             assert!(!delivered.pending);
             assert_eq!((delivered.request_id, delivered.alpha.as_slice()), (current.0, &[211; 4][..]));
+            assert_eq!(delivered.extent, extent);
+            accepted.push(delivered.request_id);
+            assert!(accepted.windows(2).all(|ids| ids[0] < ids[1]));
+            for old in [first, intermediate.0] {
+                s.renderer_mut().complete(old, 29);
+                let retained = s.toolbar_stamp(context, Some(current.0)).unwrap().unwrap();
+                assert_eq!(retained.request_id, current.0, "late old replies cannot replace the displayed result");
+                assert!(!retained.pending && retained.alpha.is_empty());
+                assert_eq!(s.renderer_mut().requests.len(), requests, "the exact final value needs no new request");
+            }
             assert_eq!(s.engine.checkpoint(), checkpoint);
         }
     }

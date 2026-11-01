@@ -961,10 +961,10 @@ mod wheel {
                         (*s, *p, *c, *v) == (side, shape, space, view));
                     let ready = current == Some(key.tuple());
                     self.obj().request_field(key, &state, ready && ring_ready);
-                    if let Some(cache) = self.ring.borrow().as_ref().filter(|_| ring_ready) {
+                    if let Some(cache) = self.ring.borrow().as_ref() {
                         surfaces.append_texture(&cache.4, &bounds);
                     }
-                    if let Some(cache) = self.disc.borrow().as_ref().filter(|_| ready) {
+                    if let Some(cache) = self.disc.borrow().as_ref() {
                         match shape {
                             ColorShape::Circle => {
                                 let radius = geometry.disc_radius();

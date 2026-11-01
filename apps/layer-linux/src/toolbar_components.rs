@@ -1049,16 +1049,11 @@ impl Component {
         let Some(preview) = self.preview.borrow().clone() else { return false; };
         let result = self.context.get().and_then(|context| w.gpu.borrow_mut().as_mut().and_then(|gpu|
             gpu.session.toolbar_stamp(context, preview.request.get()).ok()).flatten());
-        let Some(stamp) = result.filter(|stamp| !stamp.pending) else {
-            preview.request.set(None);
-            preview.extent.set(1.);
-            return preview.image.take().is_some();
-        };
+        let Some(stamp) = result else { return false; };
         if stamp.alpha.is_empty() { return false; }
         let Ok(image) = gtk::cairo::ImageSurface::create_for_data(stamp.alpha,
             gtk::cairo::Format::A8, stamp.size as i32, stamp.size as i32, stamp.size as i32) else {
-            preview.request.set(None);
-            return preview.image.take().is_some();
+            return false;
         };
         preview.request.set(Some(stamp.request_id));
         preview.extent.set(stamp.extent);

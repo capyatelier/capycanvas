@@ -6,10 +6,72 @@ fn includes_texture(node: &gtk::gsk::RenderNode, texture: &gtk::gdk::Texture) ->
         || node.children().into_iter().any(|node| includes_texture(&node, texture))
 }
 
+pub(crate) fn texture_pixels(texture: &gdk::Texture) -> ([i32; 2], Vec<u8>) {
+    let size = [texture.width(), texture.height()];
+    let mut bytes = vec![0; size[0] as usize * size[1] as usize * 4];
+    texture.download(&mut bytes, size[0] as usize * 4);
+    (size, bytes)
+}
+
+pub(crate) struct PreviewPaints {
+    clock: gdk::FrameClock,
+    handler: glib::SignalHandlerId,
+    renderer: gtk::gsk::Renderer,
+    bounds: gtk::graphene::Rect,
+    initial_texture: Option<gdk::Texture>,
+    frames: Rc<RefCell<Vec<(i64, Option<gtk::gsk::RenderNode>, Option<gdk::Texture>)>>>,
+}
+impl PreviewPaints {
+    pub(crate) fn start(widget: &gtk::Widget, texture: impl Fn() -> Option<gdk::Texture> + 'static) -> Self {
+        let widget = widget.clone();
+        let clock = widget.frame_clock().unwrap();
+        let renderer = widget.native().unwrap().renderer().unwrap();
+        let bounds = gtk::graphene::Rect::new(0., 0., widget.width() as f32, widget.height() as f32);
+        let initial_texture = texture();
+        let frames = Rc::new(RefCell::new(Vec::new()));
+        let handler = clock.connect_after_paint(glib::clone!(#[strong] widget, #[strong] frames, move |clock| {
+            let image = gtk::WidgetPaintable::new(Some(&widget)).current_image();
+            let snapshot = gtk::Snapshot::new();
+            image.snapshot(&snapshot, widget.width() as f64, widget.height() as f64);
+            frames.borrow_mut().push((clock.frame_time(), snapshot.to_node(), texture()));
+        }));
+        Self { clock, handler, renderer, bounds, initial_texture, frames }
+    }
+    pub(crate) fn assert_nonempty(self, name: &str) {
+        self.clock.disconnect(self.handler);
+        let frames = self.frames.borrow();
+        assert!(frames.len() > 1, "{name}: multiple actual paints during native drag");
+        for (time, node, _) in frames.iter() {
+            let node = node.as_ref().unwrap_or_else(|| panic!("{name}: blank preview at paint {time}"));
+            let image = self.renderer.render_texture(node, Some(&self.bounds));
+            let mut bytes = vec![0; image.width() as usize * image.height() as usize * 4];
+            image.download(&mut bytes, image.width() as usize * 4);
+            assert!(bytes.chunks_exact(4).any(|pixel| pixel[3] > 0), "{name}: empty preview pixels at paint {time}");
+        }
+    }
+    pub(crate) fn shows(&self, texture: &gdk::Texture) -> bool {
+        self.frames.borrow().last().and_then(|(_, node, _)| node.as_ref()).is_some_and(|node| includes_texture(node, texture))
+    }
+    pub(crate) fn assert_textures(self, name: &str) {
+        self.clock.disconnect(self.handler);
+        let frames = self.frames.borrow();
+        assert!(!frames.is_empty(), "{name}: actual paint observed");
+        let mut previous = self.initial_texture.as_ref();
+        for (time, node, texture) in frames.iter() {
+            let (node, texture) = node.as_ref().zip(texture.as_ref())
+                .unwrap_or_else(|| panic!("{name}: blank preview at actual paint {time}"));
+            let present = includes_texture(node, texture);
+            let transitioning = previous.is_some_and(|old| old != texture && includes_texture(node, old));
+            assert!(present || transitioning, "{name}: accepted preview texture missing from actual paint {time}");
+            previous = Some(texture);
+        }
+    }
+}
+
 #[test]
 #[ignore = "private GTK display"]
-fn native_color_fields_withhold_obsolete_cached_pixels() {
-    use gtk::subclass::prelude::{ObjectSubclassIsExt, WidgetImpl};
+fn native_color_fields_keep_completed_pixels_during_edits() {
+    use gtk::subclass::prelude::ObjectSubclassIsExt;
     let app = native_test_app("art.capycanvas.CachedColorFields");
     for hdr in [false, true] {
         let window: crate::window::Window = glib::Object::builder().property("application", &*app)
@@ -34,22 +96,29 @@ fn native_color_fields_withhold_obsolete_cached_pixels() {
             .and_then(|arc| arc.imp().texture.borrow().as_ref().map(|(_, texture)| texture.clone()));
         let mut current = old.clone();
         current.set_color(layer_core::color::RgbColor::from_linear(layer_core::color::RgbSpace::Srgb, [0.,0.,1.,1.]).unwrap()).unwrap();
+        let paints = PreviewPaints::start(wheel.upcast_ref(), glib::clone!(#[strong] wheel, move ||
+            wheel.imp().disc.borrow().as_ref().map(|disc| disc.7.clone())
+        ));
+        let arc_paints = wheel.intensity().filter(|arc| arc.is_visible()).map(|arc|
+            PreviewPaints::start(arc.upcast_ref(), glib::clone!(#[strong] arc, move ||
+                arc.imp().texture.borrow().as_ref().map(|(_, texture)| texture.clone())
+            ))
+        );
         wheel.set_state(&current, view, 1., false, None);
-        let snapshot = gtk::Snapshot::new();
-        wheel.imp().snapshot(&snapshot);
-        let node = snapshot.to_node().unwrap();
-        assert!(!includes_texture(&node, &old_field), "new hue must not paint the previous field");
-        if let Some(old_arc) = old_arc {
-            let arc = wheel.intensity().unwrap();
-            let snapshot = gtk::Snapshot::new();
-            arc.imp().snapshot(&snapshot);
-            assert!(!snapshot.to_node().is_some_and(|node| includes_texture(&node, &old_arc)),
-                "new base color must not paint the previous intensity arc");
-        }
-        let output = std::path::PathBuf::from(std::env::var_os("LAYER_TEST_ARTIFACTS").unwrap());
-        window.renderer().unwrap().render_texture(&node, None)
-            .save_to_png(output.join(if hdr { "hdr-field-pending.png" } else { "sdr-field-pending.png" })).unwrap();
         super::super::color_panel::settled_wheel(&wheel);
+        let final_field = wheel.imp().disc.borrow().as_ref().unwrap().7.clone();
+        assert_ne!(final_field, old_field, "settled hue uses its exact current field");
+        until(|| paints.shows(&final_field), "current color field reaches an actual paint");
+        if let (Some(paints), Some(arc)) = (arc_paints, wheel.intensity().filter(|arc| arc.is_visible())) {
+            if let Some(old) = old_arc {
+                until(|| arc.imp().texture.borrow().as_ref().is_some_and(|(_, texture)| *texture != old),
+                    "intensity arc finishes its current base color");
+            }
+            let texture = arc.imp().texture.borrow().as_ref().unwrap().1.clone();
+            until(|| paints.shows(&texture), "current intensity arc reaches an actual paint");
+            paints.assert_textures("pending intensity arc retains accepted pixels");
+        }
+        paints.assert_textures("pending color field retains accepted pixels");
         window.destroy();
         until(|| !window.is_realized(), "color field window retired");
     }
@@ -66,60 +135,46 @@ fn thumbnail_freshness_center(texture: &gtk::gdk::Texture) -> [u8; 4] {
 #[test]
 #[ignore = "private display and hardware GPU"]
 fn native_layer_thumbnail_old_pixels_after_undo() {
-    let d = Driver::new("art.capycanvas.ThumbnailFreshness");
+    let mut d = Driver::new("art.capycanvas.ThumbnailFreshness");
+    d.w.customize(CustomizationAction::SetPanelVisible { panel: Panel::Layers, visible: true });
+    d.w.dispatch(UiAction::MovePanel { panel: Panel::Layers,
+        target: DockTarget::Edge { edge: Edge::Left, outer: false },
+        viewport: [d.w.window.width() as f32, 800.] });
+    new_photo::ready(&d.w);
+    until(|| d.w.layer_panel.root.is_mapped(), "explicitly docked Layers panel mapped");
     let id = state(&d.w).layers.iter().find(|layer|
         layer.selected && !layer.group && layer.has_thumbnail && layer.fill_color.is_none() && !layer.selection_layer
     ).expect("selected paint source").id;
     let blank = super::place_source::wait_layer_thumbnail(&d.w, id);
     let blank_pixel = thumbnail_freshness_center(&blank);
+    let row = named::<gtk::Box>(d.w.layer_panel.root.upcast_ref(), &format!("art-layer-{id}"));
+    let thumbnail = find_css(row.upcast_ref(), "layer-thumbnail").expect("content thumbnail button");
+    let picture = descendant::<gtk::Picture>(&thumbnail).expect("actual content Picture");
+    until(|| picture.paintable().is_some(), "first layer thumbnail accepted");
+    let paints = PreviewPaints::start(picture.upcast_ref(), glib::clone!(#[strong] picture, move ||
+        picture.paintable().and_downcast::<gdk::Texture>()
+    ));
     d.w.dispatch(UiAction::SetColor { rgba: [1., 0., 0., 1.] });
-    d.w.dispatch(UiAction::Invoke { command: CommandId::SelectAll });
-    d.w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::FillSelection });
+    d.w.dispatch(UiAction::SelectBrush { id: layer_core::DefaultBrushPreset::GPen as u32 });
+    d.w.dispatch(UiAction::SetBrushSize { value: 128. });
+    d.w.dispatch(UiAction::SetBrushStrength { value: 1. });
+    let at = |fraction| screen_point(d.w.area.upcast_ref(), &d.w.window, [fraction, 0.5]);
+    let mut events = vec![serde_json::json!({"point":at(0.35),"down":true})];
+    events.extend((0..32).map(|i| serde_json::json!({"point":at(0.35 + 0.3 * i as f32 / 31.)})));
+    events.push(serde_json::json!({"down":false}));
+    d.input.perform(serde_json::Value::Array(events));
     let red = super::place_source::wait_layer_thumbnail(&d.w, id);
     let red_pixel = thumbnail_freshness_center(&red);
-    assert!(red_pixel[0] > 180 && red_pixel[1] < 100 && red_pixel[2] < 100,
-        "real GPU thumbnail A is red: {red_pixel:?}");
-    assert_ne!(blank_pixel, red_pixel, "nonvacuous old/current pixel references");
+    assert!(red_pixel[0] > 180 && red_pixel[1] < 100 && red_pixel[2] < 100, "actual stroke thumbnail is red: {red_pixel:?}");
+    assert_ne!(blank_pixel, red_pixel, "nonvacuous stroke and blank references");
+    until(|| paints.shows(&red), "stroke thumbnail reaches an actual paint");
     let previous_revision = state(&d.w).layers.iter().find(|layer| layer.id == id).unwrap().paint_revision;
-
     d.w.dispatch(UiAction::Invoke { command: CommandId::Undo });
     let current_revision = state(&d.w).layers.iter().find(|layer| layer.id == id).unwrap().paint_revision;
-    assert_ne!(current_revision, previous_revision, "Undo publishes a different current source revision synchronously");
-    let current = state(&d.w).layers.iter().find(|layer| layer.id == id).unwrap().clone();
-    let lookup = d.w.layer_panel.preview(&current);
-    let lookup_pixel = lookup.as_ref().map(thumbnail_freshness_center);
-    let row = d.named(&format!("art-layer-{id}"));
-    let thumbnail = find_css(&row, "layer-thumbnail").expect("content thumbnail button");
-    let picture = descendant::<gtk::Picture>(&thumbnail).expect("actual content Picture");
-    let selected = picture.paintable().and_downcast::<gtk::gdk::Texture>();
-    let selected_pixel = selected.as_ref().map(thumbnail_freshness_center);
-
+    assert_ne!(current_revision, previous_revision, "Undo publishes its current source revision");
     let restored = super::place_source::wait_layer_thumbnail(&d.w, id);
-    let restored_pixel = thumbnail_freshness_center(&restored);
-    assert_eq!(restored_pixel, blank_pixel, "actual current GPU thumbnail B restores the blank source");
-    let lookup_is_old = lookup_pixel == Some(red_pixel);
-    let selected_is_old = selected_pixel == Some(red_pixel);
-    let reproduced = lookup_is_old || selected_is_old;
-    let report = serde_json::json!({
-        "protocol": 1,
-        "case": "red-fill-then-undo",
-        "layer": id,
-        "previous_revision": previous_revision,
-        "current_revision": current_revision,
-        "old_gpu_pixel": red_pixel,
-        "initial_blank_gpu_pixel": blank_pixel,
-        "current_gpu_pixel": restored_pixel,
-        "production_preview_lookup_pixel_at_undo": lookup_pixel,
-        "actual_picture_pixel_at_undo": selected_pixel,
-        "production_lookup_returned_old_pixels": lookup_is_old,
-        "actual_picture_selected_old_pixels": selected_is_old,
-        "reproduced": reproduced,
-    });
-    let output = std::path::PathBuf::from(std::env::var_os("LAYER_TEST_ARTIFACTS").expect("LAYER_TEST_ARTIFACTS"));
-    std::fs::create_dir_all(&output).unwrap();
-    red.save_to_png(output.join("thumbnail-old-red.png")).unwrap();
-    restored.save_to_png(output.join("thumbnail-current-blank.png")).unwrap();
-    std::fs::write(output.join("thumbnail-freshness.json"), serde_json::to_vec_pretty(&report).unwrap()).unwrap();
-    d.w.window.destroy();
-    assert!(!reproduced, "current layer revision displayed an older thumbnail");
+    assert_eq!(texture_pixels(&restored), texture_pixels(&blank), "exact current GPU thumbnail restores the blank source");
+    until(|| paints.shows(&restored), "current Undo thumbnail reaches an actual paint");
+    paints.assert_textures("layer thumbnail stays present through stroke and Undo");
+    d.finish();
 }

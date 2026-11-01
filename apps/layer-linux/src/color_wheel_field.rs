@@ -76,7 +76,10 @@ impl Key {
             texture,
         )
     }
-
+    fn compatible(self, other: Self) -> bool {
+        self.shape == other.shape && self.space == other.space
+            && self.view == other.view && self.headroom == other.headroom
+    }
 }
 
 fn render(
@@ -157,6 +160,7 @@ impl ColorWheel {
                 *wheel.imp().disc.borrow_mut() = Some(key.disc(texture));
                 *wheel.imp().ring.borrow_mut() = ring;
             },
+            Key::compatible,
         );
     }
 }
@@ -171,16 +175,18 @@ mod tests {
         state
     }
     #[test]
-    fn freshness_rejects_an_obsolete_hue_field() {
+    fn pending_hue_changes_accept_compatible_completed_fields() {
         let old = color([1.,0.,0.]);
         let current = color([0.,0.,1.]);
         let a = Key::new(48, &old, ViewColor::Srgb, 1.);
         let b = Key::new(48, &current, ViewColor::Srgb, 1.);
-        crate::color_preview_raster::assert_current_pixels(crate::color_preview_raster::current(b, a),
-            &render(a, &old, &mut None), &render(b, &current, &mut None));
+        assert_ne!(a.tuple(), b.tuple());
+        assert!(b.compatible(a));
+        assert!(Key { side: 96, ..b }.compatible(a));
+        assert!(!Key { shape: ColorShape::Circle, ..b }.compatible(a));
     }
     #[test]
-    fn freshness_rejects_an_obsolete_hdr_field_intensity() {
+    fn pending_intensity_changes_accept_compatible_completed_fields() {
         let mut old = color([0.25,0.1,0.5]);
         old.set_hdr_enabled(true).unwrap();
         let mut current = old.clone();
@@ -190,7 +196,8 @@ mod tests {
         }, Default::default());
         let a = Key::new(48, &old, view, 1.);
         let b = Key::new(48, &current, view, 1.);
-        crate::color_preview_raster::assert_current_pixels(crate::color_preview_raster::current(b, a),
-            &render(a, &old, &mut None), &render(b, &current, &mut None));
+        assert_ne!(a.tuple(), b.tuple());
+        assert!(b.compatible(a));
+        assert!(!Key { headroom: 2., ..b }.compatible(a));
     }
 }

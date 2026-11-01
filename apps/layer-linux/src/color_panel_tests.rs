@@ -491,6 +491,24 @@ fn native_color_panel_input() {
         [b.x() + origin[0] + p[0], b.y() + origin[1] + p[1]]
     };
     input.ready();
+    for theme in [Theme::Light, Theme::Dark] {
+        use gtk::subclass::prelude::ObjectSubclassIsExt;
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        w.dispatch(UiAction::Color { action: layer_ui::ColorAction::Select { slot: layer_ui::ColorSlot::Foreground } });
+        w.dispatch(UiAction::SetColor { rgba: [0.2, 0.72, 0.58, 1.] });
+        let wheel = named::<crate::tool_panels::ColorWheel>(root.upcast_ref(), "color-wheel");
+        settled_wheel(&wheel);
+        let paints = super::workspace_header::preview_freshness::PreviewPaints::start(wheel.upcast_ref(),
+            glib::clone!(#[strong] wheel, move || wheel.imp().disc.borrow().as_ref().map(|disc| disc.7.clone())));
+        let mut events = vec![contact("mouse", "down", on_ring(150.))];
+        events.extend((1..=40).map(|i| contact("mouse", "move", on_ring(150. + 90. * i as f32 / 40.))));
+        events.push(contact("mouse", "up", on_ring(240.)));
+        input.perform(serde_json::Value::Array(events));
+        settled_wheel(&wheel);
+        let final_texture = wheel.imp().disc.borrow().as_ref().unwrap().7.clone();
+        until(|| paints.shows(&final_texture), "released hue paints its exact current field");
+        paints.assert_textures(&format!("{theme:?}: native hue drag"));
+    }
     for touch in [false, true] {
         let device = if touch { "touch" } else { "mouse" };
         let mut gesture = |from: [f32; 2], to: [f32; 2]| {

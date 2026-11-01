@@ -1000,12 +1000,31 @@ fn native_bubble_chooser_sliders() {
                 capture(&mut d, &format!("{name}-picked-settings"));
                 let ring = &selected.rings[0];
                 let value = |d: &Driver| state(&d.w).tool_settings.iter().find(|setting| setting.id == ring.setting).unwrap().value;
-                let before = value(&d);
                 let at = center(&d, id);
                 let arc = |f| { let point = ring.arc.point(f); [at[0] + point[0], at[1] + point[1]] };
                 let path = if ring.fill > 0.5 { [0.8, 0.5, 0.2] } else { [0.2, 0.5, 0.8] };
-                stroke(&mut d, device, &path.map(arc));
-                assert_ne!(value(&d), before, "{name}: the shown slider changes its setting");
+                let bubble = d.named(&format!("bubble-{id}")).downcast::<crate::workspace::bubbles::Bubble>().unwrap();
+                d.input.perform(serde_json::json!([contact(device, "down", arc(path[0]))]));
+                until(|| bubble.stamp_receipt().is_some(), "first bubble slider stamp accepted");
+                let (first_request, first_texture) = bubble.stamp_receipt().unwrap();
+                let first_pixels = super::workspace_header::preview_freshness::texture_pixels(&first_texture);
+                let paints = super::workspace_header::preview_freshness::PreviewPaints::start(d.w.bubbles.layer.upcast_ref(),
+                    glib::clone!(#[strong] bubble, move || bubble.stamp_receipt().map(|(_, texture)| texture)));
+                let start_value = value(&d);
+                let leg = |from, to| serde_json::Value::Array((1..=24)
+                    .map(|i| contact(device, "move", arc(from + (to - from) * i as f32 / 24.))).collect());
+                d.input.perform(leg(path[0], path[2]));
+                assert_ne!(value(&d), start_value, "{name}: the shown slider changes its setting during drag");
+                d.input.perform(leg(path[2], path[0]));
+                until(|| bubble.stamp_receipt().is_some_and(|(request, texture)| request > first_request
+                    && super::workspace_header::preview_freshness::texture_pixels(&texture) == first_pixels),
+                    "final bubble slider value paints its exact accepted stamp");
+                let final_texture = bubble.stamp_receipt().unwrap().1;
+                until(|| paints.shows(&final_texture), "final bubble slider stamp reaches an actual paint");
+                let final_value = value(&d);
+                paints.assert_textures(&format!("{name}: bubble slider drag"));
+                d.input.perform(serde_json::json!([contact(device, "up", arc(path[0]))]));
+                assert_eq!(value(&d), final_value, "{name}: release retains the exact final slider value");
                 toggle_bubble_sliders(&mut d, device, id);
                 assert!(find_id(&d, id).unwrap().rings.is_empty(), "{name}: unchecking Show Sliders hides the halo");
                 let spot = canvas_spot(&d, 0.75, 0.5);

@@ -296,7 +296,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn toolbar_stamp(&mut self, context: ToolbarContext, known_request: Option<u64>) -> Result<Option<BrushStamp>, String> {
         if context != self.state().toolbar_context() { return Err("Obsolete brush preview".into()); }
         let key = self.preview_key();
-        if self.brush_stamps.ready.as_ref().is_some_and(|(owner, ready_key, _)| *owner != context || *ready_key != key) {
+        if self.brush_stamps.ready.as_ref().is_some_and(|(owner, _, _)| *owner != context) {
             self.brush_stamps.ready = None;
         }
         let mut delivered = None;
@@ -304,7 +304,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let image = result.map_err(|e| { self.brush_stamps.flight=None; e.to_string() })?;
             if self.brush_stamps.flight.as_ref().is_some_and(|(id,_,_,_)|*id==image.request_id) {
                 let (id,owner,request_key,extent)=self.brush_stamps.flight.take().unwrap();
-                if owner == context && request_key == key {
+                if owner == context {
                     let metadata = BrushStamp { request_id:id, pending:false,
                         size:image.width, extent, alpha:Vec::new() };
                     self.brush_stamps.ready = Some((owner, request_key, metadata.clone()));

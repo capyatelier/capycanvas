@@ -100,9 +100,14 @@ pub struct LayerPanel {
     next_preview: Cell<u64>,
     renderer: Cell<u64>,
 }
-type Previews = Rc<RefCell<HashMap<(u64, bool), (u64, gdk::Texture)>>>;
-fn current_preview<T>(cached: Option<&(u64, T)>, revision: u64) -> Option<&T> {
-    cached.filter(|(key, _)| *key == revision).map(|(_, texture)| texture)
+type Previews = Rc<RefCell<HashMap<(u64, bool), Preview<gdk::Texture>>>>;
+struct Preview<T> {
+    request: u64,
+    revision: u64,
+    texture: T,
+}
+impl<T> Preview<T> {
+    fn accepts(&self, request: u64) -> bool { request > self.request }
 }
 
 #[derive(Clone)]
@@ -434,20 +439,20 @@ impl LayerPanel {
     #[cfg(test)]
     pub(super) fn preview_texture(&self, id: u64, revision: u64, extra: &[Rc<Self>]) -> Option<gdk::Texture> {
         let previews = self.previews.borrow();
-        let (current, texture) = previews.get(&(id, false))?;
-        if *current != revision { return None; }
+        let cached = previews.get(&(id, false))?;
+        if cached.revision != revision { return None; }
         std::iter::once(self).chain(extra.iter().map(|v| v.as_ref()))
             .filter(|view| view.root.is_mapped())
             .find_map(|view| view.rows.borrow().values().find(|row| row.id.get() == id)
                 .and_then(|row| row.content_image.paintable())
                 .and_then(|paintable| paintable.downcast::<gdk::Texture>().ok())
-                .filter(|visible| visible == texture))
+                .filter(|visible| *visible == cached.texture))
     }
     #[cfg(test)]
     pub(super) fn preview_debug(&self, extra: &[Rc<Self>]) -> serde_json::Value {
         serde_json::json!({
             "pending": self.pending.borrow().iter().collect::<Vec<_>>(),
-            "cached": self.previews.borrow().iter().map(|(key,(revision,_))| (key, revision)).collect::<Vec<_>>(),
+            "cached": self.previews.borrow().iter().map(|(key, cached)| (key, cached.revision)).collect::<Vec<_>>(),
             "views": std::iter::once(self).chain(extra.iter().map(|v| v.as_ref())).map(|view| serde_json::json!({
                 "mapped": view.root.is_mapped(),
                 "rows": view.rows.borrow().values().map(|row| serde_json::json!({
@@ -1533,7 +1538,7 @@ impl LayerPanel {
         }
     }
     pub(crate) fn preview(&self, layer: &LayerState) -> Option<gdk::Texture> {
-        layer.has_thumbnail.then(|| current_preview(self.previews.borrow().get(&(layer.id, false)), layer.paint_revision).cloned()).flatten()
+        layer.has_thumbnail.then(|| self.previews.borrow().get(&(layer.id, false)).map(|cached| cached.texture.clone())).flatten()
     }
     fn update_previews(&self, w: &Workspace, extra: &[Rc<Self>], thumbnails: &[(u64, gtk::Picture)]) {
         let views: Vec<&Self> = std::iter::once(self).chain(extra.iter().map(|v| v.as_ref())).filter(|v| v.root.is_mapped()).collect();
@@ -1562,12 +1567,12 @@ impl LayerPanel {
                 && g.session.state().layers.iter().any(|layer| layer.id == id
                     && (if mask { layer.mask_revision } else { layer.paint_revision }) == revision)
             {
+                let mut previews = self.previews.borrow_mut();
+                if previews.get(&(id, mask)).is_some_and(|cached| !cached.accepts(image.request_id)) { continue; }
                 let texture = g.session.engine().backend().view_color.texture(
                     [image.width, image.height], gdk::MemoryFormat::R8g8b8a8,
                     image.stride as usize, image.bytes);
-                self.previews
-                    .borrow_mut()
-                    .insert((id, mask), (revision, texture));
+                previews.insert((id, mask), Preview { request: image.request_id, revision, texture });
             }
         }
         let editing = g.session.engine().has_pending_document_edits();
@@ -1587,9 +1592,10 @@ impl LayerPanel {
         for (id, mask, target, revision, picture) in wanted {
             let key = (id, mask);
             let ready = self.previews.borrow();
-            let texture = target.and_then(|_| current_preview(ready.get(&key), revision));
+            let cached = target.and_then(|_| ready.get(&key));
+            let texture = cached.map(|cached| &cached.texture);
             picture.set_paintable(texture);
-            if target.is_none() || texture.is_some() || editing { continue; }
+            if target.is_none() || cached.is_some_and(|cached| cached.revision == revision) || editing { continue; }
             drop(ready);
             let target = target.unwrap();
             if self.pending.borrow().values().any(|request| *request == (id, mask, revision))
@@ -1700,8 +1706,8 @@ impl Row {
             self.name_entry.set_text("");
         }
         let previews = self.previews.borrow();
-        self.content_image.set_paintable(s.has_thumbnail.then(|| current_preview(previews.get(&(s.id, false)), s.paint_revision)).flatten());
-        self.mask_image.set_paintable(s.has_mask.then(|| current_preview(previews.get(&(s.id, true)), s.mask_revision)).flatten());
+        self.content_image.set_paintable(s.has_thumbnail.then(|| previews.get(&(s.id, false)).map(|cached| &cached.texture)).flatten());
+        self.mask_image.set_paintable(s.has_mask.then(|| previews.get(&(s.id, true)).map(|cached| &cached.texture)).flatten());
         drop(previews);
         self.root.set_widget_name(&format!("art-layer-{}", s.id));
         self.swipe.set_actions(s);
@@ -1803,16 +1809,21 @@ mod copy_tests {
     use super::*;
 
     #[test]
-    fn thumbnail_pixels_are_pending_until_the_current_revision_is_ready() {
+    fn thumbnail_pixels_stay_visible_until_a_newer_request_is_received() {
         let texture = |color: [u8; 4]| gdk::MemoryTexture::new(2, 2, gdk::MemoryFormat::R8g8b8a8,
             &glib::Bytes::from_owned(color.repeat(4)), 8).upcast::<gdk::Texture>();
         let old = texture([255, 0, 0, 255]);
         let new = texture([255; 4]);
-        let cached = (7, old.clone());
-        crate::color_preview_raster::assert_current_pixels(current_preview(Some(&cached), 8).is_some(), &old, &new);
-        assert_eq!(current_preview(Some(&cached), 7), Some(&old));
-        let cached = (8, new.clone());
-        assert_eq!(current_preview(Some(&cached), 8), Some(&new));
+        let mut cached = Preview { request: 4, revision: 7, texture: old.clone() };
+        assert_eq!(cached.texture, old);
+        assert_ne!(cached.revision, 8);
+        assert!(!cached.accepts(3));
+        assert!(!cached.accepts(4));
+        assert!(cached.accepts(5));
+        cached = Preview { request: 5, revision: 8, texture: new.clone() };
+        assert_eq!(cached.texture, new);
+        assert_eq!(cached.revision, 8);
+        assert!(!cached.accepts(4));
     }
 
     #[test]

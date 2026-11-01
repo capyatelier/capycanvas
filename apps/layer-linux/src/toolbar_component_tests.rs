@@ -3190,11 +3190,11 @@ fn native_toolbar_strength_preview_input() {
             d.w.dispatch(UiAction::Customize {action:CustomizationAction::CloseExpanded});pump(250);
             let tile=component_id(&d,ToolbarControl::BrushStrengthSlider);
             d.click_name(&format!("tile-{tile}"));
-            let popup=descendant::<gtk::Popover>(&d.named(&format!("tile-{tile}")).parent().unwrap())
+            let mut popup=descendant::<gtk::Popover>(&d.named(&format!("tile-{tile}")).parent().unwrap())
                 .filter(|p|p.widget_name()=="brush-slider-preview")
                 .or_else(||find_named(d.w.window.upcast_ref(),"brush-slider-preview").and_then(|p|p.downcast::<gtk::Popover>().ok())).unwrap();
             until(||popup.is_mapped(),"Strength popup mapped");
-            let area=popup.child().and_downcast::<gtk::Overlay>().unwrap().child().unwrap();
+            let mut area=popup.child().and_downcast::<gtk::Overlay>().unwrap().child().unwrap();
             let mut low=Vec::new();let delivered=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||until(||{low=slider_stamp_pixels(&area);low.iter().any(|&v|v>0)},"GPU Strength stamp delivered")));
             if let Err(failure)=delivered {
                 capture_popover(&popup,d.input.dir.join(format!("failed-strength-{name}-{theme:?}.png")).to_str().unwrap());
@@ -3206,12 +3206,28 @@ fn native_toolbar_strength_preview_input() {
             let low_sum:u64=low.iter().map(|&v|v as u64).sum();
             capture_popover(&popup,d.input.dir.join(format!("strength-{name}-25-{theme:?}.png")).to_str().unwrap());
             d.w.dispatch(UiAction::SetToolSetting {id:"flow".into(),value:1.});
-            assert!(slider_stamp_pixels(&area).iter().all(|&alpha| alpha == 0),
-                "new Strength metadata withholds the previous key's cached pixels");
+            assert!(slider_stamp_pixels(&area).iter().any(|&alpha| alpha > 0),
+                "pending Strength retains the accepted preview");
             capture_popover(&popup,d.input.dir.join(format!("strength-{name}-pending-{theme:?}.png")).to_str().unwrap());
             let mut full=Vec::new();until(||{full=slider_stamp_pixels(&area);full.iter().map(|&v|v as u64).sum::<u64>()>low_sum},"Strength refreshes the existing popup image");
             assert!(popup.is_mapped());assert_eq!(popup.child().and_downcast::<gtk::Overlay>().unwrap().child().unwrap(),area,"value updates retain popup canvas");
             let full_sum:u64=full.iter().map(|&v|v as u64).sum();assert!(full_sum>low_sum,"{name}: Strength changes rendered alpha");
+            if id == 2 {
+                let track = d.named(&format!("component-slider-{tile}"));
+                let vertical = track.height() > track.width();
+                let at = |fraction| screen_point(&track, &d.w.window, if vertical { [0.5, 1. - fraction] } else { [fraction, 0.5] });
+                let paints = super::preview_freshness::PreviewPaints::start(&area, || None);
+                let mut events = vec![serde_json::json!({"point":at(0.25),"down":true})];
+                events.extend((0..40).map(|i| serde_json::json!({"point":at(0.25 + 0.75 * i as f32 / 39.)})));
+                d.input.perform(serde_json::Value::Array(events));
+                paints.assert_nonempty(&format!("{theme:?}: Strength drag"));
+                d.input.perform(serde_json::json!([{"down":false}]));
+                d.click_name(&format!("tile-{tile}"));
+                popup = d.named("brush-slider-preview").downcast::<gtk::Popover>().unwrap();
+                area = popup.child().and_downcast::<gtk::Overlay>().unwrap().child().unwrap();
+                until(|| slider_stamp_pixels(&area) == full, "released Strength paints the exact final GPU stamp");
+            }
+
             assert!(full.iter().any(|&v|v>0&&v<255),"{name}: textured or soft contact edge");
             capture_popover(&popup,d.input.dir.join(format!("strength-{name}-100-{theme:?}.png")).to_str().unwrap());
             if id==25 {
