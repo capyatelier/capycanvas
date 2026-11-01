@@ -174,12 +174,12 @@ try {
  Wait-Until {(Model).windows_proof.text -eq 'Proof: sRGB'} 'Replacement proof did not apply' 60
  Command 'undo' 'Edit';Wait-Until {(Model).windows_proof.text -eq 'Proof: Display P3'} 'Proof recipe Undo did not rebuild' 60
  Command 'redo' 'Edit';Wait-Until {(Model).windows_proof.text -eq 'Proof: sRGB'} 'Proof recipe Redo did not rebuild' 60
- & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Output (Join-Path $run 'proof.png') -ClientOnly *> (Join-Path $run 'proof.json')
+ & (Join-Path $PSScriptRoot 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Output (Join-Path $run 'proof.png') -ClientOnly *> (Join-Path $run 'proof.json')
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved -StateDirectory $directory
  if((Get-Item (Join-Path $run 'stderr.log')).Length){throw 'Proof stderr requires inspection'}
  [pscustomobject]@{first_use_cancel='passed';shared_options='passed';picker_cancel_draft='passed';library_draft='passed';apply_view_warning='passed';proof_history='passed';artwork_history_pixels='passed';export_uncontaminated='passed';d3d12_device_recovery='passed';save_reopen='passed';scope='Native UIA and D3D12 functional checks; adapter provenance is recorded by the runner; no physical print or performance acceptance'}|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'results.json')
 }catch{
- if($review -and !$review.HasExited){try{& (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Output (Join-Path $run 'failure.png') -ClientOnly *> (Join-Path $run 'failure.json')}catch{}}
+ if($review -and !$review.HasExited){try{& (Join-Path $PSScriptRoot 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Output (Join-Path $run 'failure.png') -ClientOnly *> (Join-Path $run 'failure.json')}catch{}}
  [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
  Exit-CapyEnvironment

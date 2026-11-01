@@ -17,7 +17,7 @@ function Center($Element){$r=$Element.Current.BoundingRectangle;@([int]($r.X+$r.
 function Tap($Element){$at=Center $Element;[CapyRowPointer]::Down('mouse',$at[0],$at[1]);Start-Sleep -Milliseconds 40;[CapyRowPointer]::Up();Start-Sleep -Milliseconds 150}
 function Menu-Item([string]$Id){
     $condition=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,$Id)
-    foreach($item in [System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)){
+    foreach($item in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)){
         if($item.Current.ProcessId -eq $review.Id -and !$item.Current.IsOffscreen){return $item}
     }
 }
@@ -25,7 +25,7 @@ function Desktop-Button([string]$Name){
     $condition=[System.Windows.Automation.AndCondition]::new(
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$Name),
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$ControlType::Button))
-    foreach($scope in @($root,[System.Windows.Automation.AutomationElement]::RootElement)){$hit=$scope.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition);if($hit){return $hit}}
+    $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
 }
 function Open-SizeDialog([string]$Command,[scriptblock]$Opened){
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Image'
@@ -53,7 +53,7 @@ try {
     $owned=@{window=$null}
     Wait-Until {$review.Refresh();if($review.HasExited){throw 'Review exited at startup'};$owned.window=Owned-DrawingWindow $review;$owned.window} 'Size dialog drawing window did not open' 45
     $root=$owned.window.Root;$drawingWindow=$owned.window.Handle
-    @{process_id=$review.Id;main_window=$review.MainWindowHandle.ToInt64();hwnd=$drawingWindow.ToInt64();name=$root.Current.Name;type=$root.Current.ControlType.ProgrammaticName}|ConvertTo-Json|Set-Content (Join-Path $run 'owned-window.json')
+    @{process_id=$review.Id;hwnd=$drawingWindow.ToInt64();name=$root.Current.Name;type=$root.Current.ControlType.ProgrammaticName}|ConvertTo-Json|Set-Content (Join-Path $run 'owned-window.json')
     Wait-Until {(Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Size dialog review did not start' 45
     $checks.theme=(Model).state.theme
     if($PSBoundParameters.ContainsKey('Theme') -and $checks.theme -ne $Theme){throw 'Size dialog did not adopt its explicit isolated theme'}

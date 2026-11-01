@@ -99,7 +99,7 @@ try {
     Wait-Until {@(Windows).Count -eq 2} 'A launch without files did not open a new window in the running app' 60
     if(@(Tabs).Count -ne $before+3){throw 'A launch without files changed the existing window'}
     $added=@(Windows|Where-Object {$_.hwnd -notin $original.hwnd})[0]
-    [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr][int64]$added.hwnd).GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close()
+    (Owned-DrawingWindow $review -WindowHandle $added.hwnd -TraceDirectory $run).Root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close()
     Wait-Until {@(Windows).Count -eq 1} 'The window opened by a later launch did not close' 30
     $env:CAPY_STORAGE_DIR=Join-Path $run 'other-profile'
     $other=Start-Process -FilePath $Executable -WorkingDirectory $elsewhere -ArgumentList ('"'+$first+'"') -PassThru

@@ -15,7 +15,7 @@ function Owned([string]$Value,$Type){
  $condition=[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$Value),
   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
  if($Type){$condition=[System.Windows.Automation.AndCondition]::new($condition,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$Type))}
- [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
+ $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
 }
 function Shown([string]$Id){$item=Find $Id;if($item -and !$item.Current.IsOffscreen){$item}}
 function Notice{(Model).state.notice}

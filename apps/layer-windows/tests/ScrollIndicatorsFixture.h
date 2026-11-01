@@ -1,4 +1,5 @@
 #pragma once
+#include "WindowRegistry.h"
 #include "UiControls.h"
 #include <chrono>
 #include <set>
@@ -132,7 +133,7 @@ struct ScrollIndicatorsFixture:std::enable_shared_from_this<ScrollIndicatorsFixt
             if(self->presses.Size()==16)self->presses.RemoveAt(0);
             self->presses.Append(O({{L"family",S(family)},{L"source",S(source?source.Name():L"")},{L"x",N(point.X)},{L"y",N(point.Y)}}));
         }})),true);
-        window=Window();window.Content(root);window.AppWindow().Move({40,40});window.AppWindow().Resize({1100,850});window.Activate();
+        window=Window();window.Content(root);window.AppWindow().Move({40,40});window.AppWindow().Resize({1100,850});CapyUi::RegisterFixtureWindow(window);window.Activate();
         timer=root.DispatcherQueue().CreateTimer();timer.Interval(std::chrono::milliseconds(30));timer.Tick([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock()){try{self->churn();}catch(winrt::hresult_error const& error){self->churnError=error.message();self->churning=false;}self->status();}});timer.Start();
         window.Closed([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->timer.Stop();});
     }

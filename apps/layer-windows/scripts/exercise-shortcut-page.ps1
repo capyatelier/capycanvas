@@ -55,7 +55,7 @@ $checks=[ordered]@{theme=$Theme}
 function Owned([string]$Value){
  $condition=[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$Value),
   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
- [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
+ $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
 }
 function Prefs{(Model).preferences}
 function Page{(Prefs).shortcut_page}
@@ -79,7 +79,7 @@ function Visit-ProfileManager([string]$CaptureName){
   $condition=[System.Windows.Automation.AndCondition]::new(
    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Done'),
    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
-  $done.item=[System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
+  $done.item=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
   !(Prefs) -and $done.item
  } 'Manage Color Profiles did not open the profile manager'
  $done.item=Control 'Done' -Name -Type ([System.Windows.Automation.ControlType]::Button) -Arranged

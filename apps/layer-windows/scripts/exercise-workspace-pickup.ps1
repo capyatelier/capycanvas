@@ -460,7 +460,7 @@ try {
     try{Model|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'failure-model.json')}catch{}
     @{case=$script:case;error=$failure.ToString();gesture=(Gesture)}|ConvertTo-Json -Depth 10|Set-Content (Join-Path $run 'failure.json')
     if($review -and !$review.HasExited){
-        & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -WindowHandle $drawing.Handle.ToInt64() -Output (Join-Path $run 'failure.png') -ClientOnly *> (Join-Path $run 'failure-window.json')
+        & (Join-Path $PSScriptRoot 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -WindowHandle $drawing.Handle.ToInt64() -Output (Join-Path $run 'failure.png') -ClientOnly *> (Join-Path $run 'failure-window.json')
     }
     throw $failure
 }finally{

@@ -23,7 +23,7 @@ try{
  $owned=@{window=$null}
  Wait-Until {$owned.window=Owned-DrawingWindow $review;$owned.window -and (Model).brush_ready} 'Tooltip review did not start' 45
  $root=$owned.window.Root;$drawingWindow=$owned.window.Handle
- @{process_id=$review.Id;main_window=$review.MainWindowHandle.ToInt64();hwnd=$drawingWindow.ToInt64();name=$root.Current.Name;type=$root.Current.ControlType.ProgrammaticName}|ConvertTo-Json|Set-Content (Join-Path $run 'owned-window.json')
+ @{process_id=$review.Id;hwnd=$drawingWindow.ToInt64();name=$root.Current.Name;type=$root.Current.ControlType.ProgrammaticName}|ConvertTo-Json|Set-Content (Join-Path $run 'owned-window.json')
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  Start-Sleep -Milliseconds 800
  [CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null;[CapyRowPointer]::Initialize([uint32]$review.Id)

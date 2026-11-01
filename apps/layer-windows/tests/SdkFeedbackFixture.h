@@ -1,4 +1,5 @@
 #pragma once
+#include "WindowRegistry.h"
 #include "UiControls.h"
 #include "ChoiceFeedback.h"
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
@@ -80,7 +81,7 @@ struct SdkFeedbackFixture {
         using namespace CapyUi;using namespace winrt::Microsoft::UI::Xaml;
         wchar_t theme[16]{};GetEnvironmentVariableW(L"CAPY_FEEDBACK_THEME",theme,16);dark=std::wstring_view(theme)==L"dark";
         data->catalog=O({{L"panel_metrics",O({{L"control_radius",N(6)},{L"control_height",N(26)},{L"field_padding",N(6)}})}});initChoice(choice,L"sdk-choice-root");initChoice(modalChoice,L"sdk-choice-dialog");root.Spacing(14);root.Padding({48,48,48,48});root.Children().Append(choice);root.Children().Append(action(L"sdk-show",L"Show dialog",[this]{show();}));actions(root,L"sdk-root-");palette();
-        window=Window();window.Content(root);window.AppWindow().Move({40,40});window.AppWindow().Resize({1000,1000});window.Activate();
+        window=Window();window.Content(root);window.AppWindow().Move({40,40});window.AppWindow().Resize({1000,1000});CapyUi::RegisterFixtureWindow(window);window.Activate();
         timer=root.DispatcherQueue().CreateTimer();timer.Interval(std::chrono::milliseconds(30));timer.Tick([this](auto&&,auto&&){status();});timer.Start();
     }
 };

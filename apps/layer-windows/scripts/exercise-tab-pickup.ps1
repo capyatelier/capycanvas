@@ -172,9 +172,9 @@ try {
 }catch{
     $failure=$_
     @{case=$script:case;injection_gap_ms=[CapyRowPointer]::MaxGapMilliseconds;error=$failure.ToString();gesture=(Gesture);presentation=(Presentation)}|ConvertTo-Json -Depth 60|Set-Content (Join-Path $run 'failure.json')
-    try{[System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id),[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::MenuItem)))|ForEach-Object {@{id=$_.Current.AutomationId;name=$_.Current.Name;enabled=$_.Current.IsEnabled}}|ConvertTo-Json|Set-Content (Join-Path $run 'failure-menu.json')}catch{}
+    try{$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id),[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::MenuItem)))|ForEach-Object {@{id=$_.Current.AutomationId;name=$_.Current.Name;enabled=$_.Current.IsEnabled}}|ConvertTo-Json|Set-Content (Join-Path $run 'failure-menu.json')}catch{}
     if($review -and !$review.HasExited){
-        try{& (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Output (Join-Path $run 'failure.png') -ClientOnly *> (Join-Path $run 'failure-capture.json')}catch{}
+        try{& (Join-Path $PSScriptRoot 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Output (Join-Path $run 'failure.png') -ClientOnly *> (Join-Path $run 'failure-capture.json')}catch{}
     }
     throw $failure
 }finally{

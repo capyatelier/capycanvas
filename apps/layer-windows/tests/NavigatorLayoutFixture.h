@@ -1,4 +1,5 @@
 #pragma once
+#include "WindowRegistry.h"
 #include "ControlContext.h"
 #include "NavigatorView.h"
 #include <chrono>
@@ -74,7 +75,7 @@ struct NavigatorLayoutFixture:std::enable_shared_from_this<NavigatorLayoutFixtur
         root.Loaded([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->observe(L"Loaded");});
         root.LayoutUpdated([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->observe(L"LayoutUpdated");});
         host.HorizontalAlignment(HorizontalAlignment::Left);host.VerticalAlignment(VerticalAlignment::Top);host.Margin({32,32,0,0});host.Children().Append(root);
-        window=Window();window.Content(host);window.AppWindow().Move({40,40});window.AppWindow().Resize({800,700});window.Activate();
+        window=Window();window.Content(host);window.AppWindow().Move({40,40});window.AppWindow().Resize({800,700});CapyUi::RegisterFixtureWindow(window);window.Activate();
         timeout=host.DispatcherQueue().CreateTimer();timeout.Interval(std::chrono::seconds(10));timeout.IsRepeating(false);timeout.Tick([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->finish(false,"First-allocation event timed out");});timeout.Start();
     }
     int write()const{

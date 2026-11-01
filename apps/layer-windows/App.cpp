@@ -1,8 +1,7 @@
 #include "pch.h"
+#include "WindowRegistry.h"
 #include "CanvasWindow.h"
 #include "ChoiceFeedback.h"
-#include "TraceFile.h"
-#include <sstream>
 #include <shellapi.h>
 #include <map>
 #include <optional>
@@ -83,16 +82,9 @@ struct App : ApplicationT<App, Markup::IXamlMetadataProvider> {
     std::map<uint64_t,std::shared_ptr<CanvasWindow>> windows;
     void TraceWindows()const {
         if(!GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0))return;
-        auto name=L"windows-"+std::to_wstring(GetCurrentProcessId())+L".json";
-        std::ostringstream stream;
-        stream<<"{\"process_id\":"<<GetCurrentProcessId()<<",\"windows\":[";
-        bool comma=false;
-        for(auto const& [id,window]:windows){
-            if(comma)stream<<",";comma=true;
-            stream<<"{\"id\":"<<id<<",\"hwnd\":"<<uintptr_t(window->Handle())<<"}";
-        }
-        stream<<"]}";
-        WriteTraceFile(name,stream.str());
+        CapyUi::RegisteredWindows registered;
+        for(auto const& [id,window]:windows)registered.emplace_back(id,window->Handle());
+        CapyUi::PublishWindowRegistry(registered);
     }
     void OpenForwarded(std::vector<std::wstring> files) {
         if(files.empty()){AddWindow();return;}

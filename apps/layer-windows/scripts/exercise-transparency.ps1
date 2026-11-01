@@ -244,7 +244,7 @@ function Hover-Contours([string]$Name){
         [CapyRowPointer]::Key([uint32]$review.Id,0x1b)
         [CapyRowPointer]::Hover($park.x,$park.y);Start-Sleep -Milliseconds 200
         $header=[Windows.Rect]::new($selected.Left-7*$scale,$selected.Top,$selected.Width+14*$scale,$selected.Height)
-        Wait-Until {!@([System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants,$tooltip)|Where-Object {
+        Wait-Until {!@($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$tooltip)|Where-Object {
             $b=$_.Current.BoundingRectangle
             !$_.Current.IsOffscreen -and $b.Width -gt 0 -and $b.Height -gt 0 -and $b.Right+24*$scale -gt $header.Left -and $b.Left-24*$scale -lt $header.Right -and $b.Bottom+24*$scale -gt $header.Top -and $b.Top-24*$scale -lt $header.Bottom
         }).Count} 'Tab tooltip did not leave the contour capture area'
@@ -436,7 +436,7 @@ try {
             [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$ControlType::ToolTip),
             [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
         @{cursor=[CapyRowPointer]::Cursor();focus=$(if($focused.Current.ProcessId -eq $review.Id){@{id=$focused.Current.AutomationId;name=$focused.Current.Name;bounds=$focused.Current.BoundingRectangle}});
-            tooltips=@([System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants,$tips)|ForEach-Object {@{name=$_.Current.Name;bounds=$_.Current.BoundingRectangle;offscreen=$_.Current.IsOffscreen}})}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'failure-pointer.json')
+            tooltips=@($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$tips)|ForEach-Object {@{name=$_.Current.Name;bounds=$_.Current.BoundingRectangle;offscreen=$_.Current.IsOffscreen}})}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'failure-pointer.json')
     }catch{}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{

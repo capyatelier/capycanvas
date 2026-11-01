@@ -14,12 +14,12 @@ $checks=[ordered]@{theme=$Theme}
 function Start-App {
     $script:review=Start-Process -FilePath $Executable -WorkingDirectory $run -PassThru -RedirectStandardError (Join-Path $run ('stderr-'+[Guid]::NewGuid().ToString('N')+'.log'))
     $null=$review.Handle
-    Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero} 'Cursor review did not open' 60
-    $script:root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+    Wait-Until {$review.Refresh();$script:registeredWindow=Owned-DrawingWindow $review;$registeredWindow} 'Cursor review did not open' 60
+    $script:root=$registeredWindow.Root
     Wait-Until {(Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Cursor review did not prepare' 120
     if(!(Model).windows_isolated_settings){throw 'Cursor review requires isolated settings'}
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
-    [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
+    [CapyRowPointer]::SetForegroundWindow($registeredWindow.Handle)|Out-Null
     [CapyRowPointer]::Initialize([uint32]$review.Id)
 }
 function Close-App {
@@ -48,7 +48,7 @@ function Choose-Cursor([string]$Label,[string]$Mode) {
 }
 function Tool([string]$Id) {
     $command=@((Model).state.commands|Where-Object id -eq $Id)[0]
-    [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
+    [CapyRowPointer]::SetForegroundWindow($registeredWindow.Handle)|Out-Null
     Wait-Until {
         $canvas=Find 'drawing-canvas' -Visible
         if(!$canvas -or !$canvas.Current.IsEnabled -or !$canvas.Current.IsKeyboardFocusable){return $false}

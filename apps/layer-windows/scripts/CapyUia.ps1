@@ -1,12 +1,8 @@
 ﻿Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 if(!('CapyWindowApi' -as [type])){Add-Type -TypeDefinition @"
-using System;using System.Runtime.InteropServices;using System.Text;using System.Collections.Generic;
+using System;using System.Runtime.InteropServices;using System.Text;
 public static class CapyWindowApi {
- delegate bool EnumWindow(IntPtr window,IntPtr parameter);
- [DllImport("user32.dll",SetLastError=true)]static extern bool EnumWindows(EnumWindow callback,IntPtr parameter);
- [DllImport("kernel32.dll")]static extern void SetLastError(uint error);
  [DllImport("user32.dll")]public static extern uint GetWindowThreadProcessId(IntPtr h,out uint owner);
- public static IntPtr[] Windows(uint process){var windows=new List<IntPtr>();SetLastError(0);if(!EnumWindows((window,parameter)=>{uint owner;GetWindowThreadProcessId(window,out owner);if(owner==process)windows.Add(window);return true;},IntPtr.Zero)){var error=Marshal.GetLastWin32Error();if(error!=0)throw new System.ComponentModel.Win32Exception(error);}return windows.ToArray();}
  [DllImport("user32.dll")]public static extern bool PostMessage(IntPtr h,uint m,UIntPtr w,IntPtr l);
  [DllImport("user32.dll")]public static extern bool SetForegroundWindow(IntPtr h);
  [DllImport("user32.dll")]public static extern bool ShowWindow(IntPtr h,int n);
@@ -97,13 +93,12 @@ function Register-CapyFixtureWindow([Diagnostics.Process]$Process,[long]$WindowH
     if(!$TraceDirectory){$TraceDirectory=if($known.Count){$known[0].trace_directory}elseif($script:CapyTraceDirectory){$script:CapyTraceDirectory}else{Split-Path -Parent $executable}}
     $entry=[ordered]@{process_id=$Process.Id;hwnd=$WindowHandle;executable=$executable;trace_directory=$TraceDirectory;observed_utc=[DateTime]::UtcNow.ToString('o')}
     $registryPath=Join-Path $TraceDirectory ("windows-$($Process.Id).json")
-    if(Test-Path -LiteralPath $registryPath){
-        $registry=Read-Snapshot $registryPath
-        $registered=@($registry.windows|Where-Object hwnd -eq $WindowHandle)
-        if($registry.process_id -ne $Process.Id -or $registered.Count -ne 1){throw 'Fixture census requires the registered owned drawing HWND'}
-        $entry.window_id=[long]$registered[0].id
-        $entry.registered_window=$registered[0]
-    }
+    if(!(Test-Path -LiteralPath $registryPath) -or [IO.File]::GetLastWriteTimeUtc($registryPath) -lt $Process.StartTime.ToUniversalTime()){throw 'Fixture census requires current process window registration'}
+    $registry=Read-Snapshot $registryPath
+    $registered=@($registry.windows|Where-Object hwnd -eq $WindowHandle)
+    if($registry.process_id -ne $Process.Id -or $registered.Count -ne 1 -or [long]$registered[0].id -le 0){throw 'Fixture census requires the registered owned drawing HWND'}
+    $entry.window_id=[long]$registered[0].id
+    $entry.registered_window=$registered[0]
     Update-CapyFixtureContext {
         param($context)
         $windows=@($context.windows|Where-Object {$null -ne $_})
@@ -117,16 +112,34 @@ function Record-CapyFixtureClose([int]$ProcessId,[long]$WindowHandle,[bool]$Wind
     $entry=[ordered]@{process_id=$ProcessId;hwnd=$WindowHandle;contract=$Contract;result='pass';window_only=$WindowOnly;completed_utc=[DateTime]::UtcNow.ToString('o')}
     Update-CapyFixtureContext {param($context);$context.closes=@($context.closes)+@($entry)}
 }
-function Owned-ProcessWindows([Diagnostics.Process]$Process,[long]$WindowHandle){
-    $windows=if($WindowHandle){@([IntPtr]$WindowHandle)}else{[CapyWindowApi]::Windows([uint32]$Process.Id)}
-    foreach($handle in $windows){
-        $owner=[uint32]0
+function Owned-ProcessWindows([Diagnostics.Process]$Process,[long]$WindowHandle,[string]$TraceDirectory=$script:CapyTraceDirectory){
+    if($Process.HasExited){return}
+    $directory=$TraceDirectory
+    if(!$directory){$executable=$Process.Path;if(!$executable){return};$directory=Split-Path -Parent $executable}
+    $path=Join-Path $directory "windows-$($Process.Id).json"
+    if(!(Test-Path -LiteralPath $path) -or [IO.File]::GetLastWriteTimeUtc($path) -lt $Process.StartTime.ToUniversalTime()){return}
+    $trace=Read-Snapshot $path
+    if($trace.process_id -ne $Process.Id){throw 'Window registration belongs to another process'}
+    $windows=@($trace.windows|Where-Object {$null -ne $_})
+    if(!$windows.Count){return}
+    foreach($entry in $windows){
+        if([long]$entry.hwnd -le 0 -or [long]$entry.id -le 0){throw 'Window registration has an invalid identity'}
+    }
+    if(@($windows|Group-Object {[long]$_.hwnd}|Where-Object Count -gt 1).Count -or @($windows|Group-Object {[long]$_.id}|Where-Object Count -gt 1).Count){throw 'Window registration has duplicate identities'}
+    if($WindowHandle){
+        $windows=@($windows|Where-Object {[long]$_.hwnd -eq $WindowHandle})
+        if($windows.Count -ne 1){throw 'The specified window is not registered to the owned process'}
+    }
+    foreach($entry in $windows){
+        $handle=[IntPtr][long]$entry.hwnd;$owner=[uint32]0
         [CapyWindowApi]::GetWindowThreadProcessId($handle,[ref]$owner)|Out-Null
-        if($handle -eq [IntPtr]::Zero -or $owner -ne $Process.Id){continue}
-        $window=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
-        if($window -and $window.Current.ProcessId -eq $Process.Id){
-            [pscustomobject]@{Root=$window;Handle=$handle}
+        if($owner -ne $Process.Id){
+            if($WindowHandle){throw 'The specified registered window is no longer owned by the process'}
+            continue
         }
+        $window=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
+        if(!$window -or $window.Current.ProcessId -ne $Process.Id -or [long]$window.Current.NativeWindowHandle -ne $handle.ToInt64()){throw 'Registered window automation ownership changed'}
+        [pscustomobject]@{Root=$window;Handle=$handle}
     }
 }
 function Owned-ProcessSurface([Diagnostics.Process]$Process,[string]$AutomationId){
@@ -142,36 +155,10 @@ function Owned-ProcessSurface([Diagnostics.Process]$Process,[string]$AutomationI
     if($found.Count){$found[0]}
 }
 function Owned-DrawingWindow([Diagnostics.Process]$Process,[long]$WindowHandle,[string]$TraceDirectory=$script:CapyTraceDirectory){
-    $directory=$TraceDirectory
-    if(!$directory){$executable=$Process.Path;if(!$executable){return $null};$directory=Split-Path -Parent $executable}
-    $registered=$false
-    $path=Join-Path $directory "windows-$($Process.Id).json"
-    if(Test-Path $path){
-        $trace=Read-Snapshot $path
-        if($trace.process_id -eq $Process.Id){
-            if(!$WindowHandle){
-                $windows=@($trace.windows)
-                if($windows.Count -gt 1){throw 'The owned process has multiple drawing windows; specify a window handle'}
-                if(!$windows.Count){return $null}
-                $WindowHandle=$windows[0].hwnd
-            }
-            $registered=$WindowHandle -in $trace.windows.hwnd
-        }
-    }
-    $canvas=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'drawing-canvas')
-    $found=@(Owned-ProcessWindows $Process $WindowHandle|Where-Object {
-        $registered -or $_.Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$canvas)
-    })
+    $found=@(Owned-ProcessWindows $Process $WindowHandle $TraceDirectory)
     if($found.Count -gt 1){throw 'The owned process has multiple drawing windows; specify a window handle'}
-    if($WindowHandle -and $found.Count -ne 1){throw 'The specified window is not an owned drawing window'}
     if($found.Count){
-        $ownedHandle=$found[0].Handle.ToInt64()
-        $path=Join-Path $directory "windows-$($Process.Id).json"
-        if(Test-Path -LiteralPath $path){
-            $trace=Read-Snapshot $path
-            if($trace.process_id -eq $Process.Id -and @($trace.windows|Where-Object hwnd -eq $ownedHandle).Count -eq 0){return $null}
-        }
-        Register-CapyFixtureWindow $Process $ownedHandle $TraceDirectory
+        Register-CapyFixtureWindow $Process $found[0].Handle.ToInt64() $TraceDirectory
         $found[0]
     }
 }
@@ -342,8 +329,8 @@ function Find([string]$Value,[switch]$Name,$Within=$root,$Type,[switch]$Visible,
         if(!$Visible -and 'prefer-visible' -eq $script:CapyFind -and $items.Count){$found=$items[0]}
     }
     if(!$found -and $script:CapyPopups -and !$NoPopups -and $Within -eq $root){
-        $owned=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id)
-        foreach($window in [System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children,$owned)){
+        foreach($registered in Owned-ProcessWindows $review){
+            $window=$registered.Root
             if($window -eq $root){continue}
             foreach($item in $window.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)){
                 if(& $shown $item $window){return $item}
@@ -643,7 +630,7 @@ function Capture([string]$Name,[switch]$WithModel,[switch]$Composed){
     $handle=[IntPtr]$root.Current.NativeWindowHandle;$owner=[uint32]0
     [CapyWindowApi]::GetWindowThreadProcessId($handle,[ref]$owner)|Out-Null
     if($owner -ne $review.Id){throw 'The capture window no longer belongs to the owned process'}
-    & (Join-Path $script:CapyScripts 'inspect-window.ps1') -ProcessId $review.Id -WindowHandle $handle.ToInt64() -Output (Join-Path $run ($Name+'.png')) -ClientOnly -Composed:$Composed -CaptureOnly:($Name -ne 'failure') *> (Join-Path $run ($Name+'.json'))
+    & (Join-Path $script:CapyScripts 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -WindowHandle $handle.ToInt64() -Output (Join-Path $run ($Name+'.png')) -ClientOnly -Composed:$Composed -CaptureOnly:($Name -ne 'failure') *> (Join-Path $run ($Name+'.json'))
     $workspace=Workspace-Root
     if($workspace -and ('CapyRowPointer' -as [type])){
         $layout=@{presentation=($workspace.Current.ItemStatus|ConvertFrom-Json);dpi=[CapyRowPointer]::GetDpiForWindow($handle)}
@@ -682,7 +669,10 @@ function New-DrawingControl([string]$Id,$Within=$root){
     $hit=$Within.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
     if($hit -or $Within -ne $root){return $hit}
     $owned=[System.Windows.Automation.AndCondition]::new($condition,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
-    [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$owned)
+    foreach($window in Owned-ProcessWindows $review){
+        $item=$window.Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$owned)
+        if($item){return $item}
+    }
 }
 function New-DrawingPixels([int]$Width,[int]$Height){
     Wait-Until {(Model).state.new_drawing -and (New-DrawingControl 'document-width') -and (New-DrawingControl 'new-drawing-unit')} 'New drawing did not open' 30
@@ -730,8 +720,8 @@ function Invoke-PickerButton($Picker,[string]$Id='1'){
     if($Picker.Current.ClassName -ne '#32770' -or $Picker.Current.ProcessId -ne $review.Id){throw 'Picker does not belong to the isolated review'}
     $window=[IntPtr]$Picker.Current.NativeWindowHandle;$hit=@{item=$null}
     Wait-Until {
-        $fresh=[System.Windows.Automation.AutomationElement]::FromHandle($window)
-        if($fresh.Current.ProcessId -ne $review.Id -or $fresh.Current.ClassName -ne '#32770'){return $false}
+        $fresh=$Picker
+        if($fresh.Current.ProcessId -ne $review.Id -or $fresh.Current.ClassName -ne '#32770' -or [IntPtr]$fresh.Current.NativeWindowHandle -ne $window){return $false}
         $hit.item=$fresh.FindFirst([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,$Id))
         $hit.item -and $hit.item.Current.ClassName -eq 'Button' -and $hit.item.Current.IsEnabled -and $hit.item.Current.NativeWindowHandle -ne 0
     } 'Native picker confirmation did not become ready' 15
@@ -753,7 +743,10 @@ function Zoom-Item([string]$Id){
     $owned=[System.Windows.Automation.AndCondition]::new(
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,$Id),
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
-    [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$owned)
+    foreach($window in Owned-ProcessWindows $review){
+        $item=$window.Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$owned)
+        if($item){return $item}
+    }
 }
 function Fit-Canvas{
     $focus={
@@ -941,7 +934,7 @@ function Capy-Tooltips([int]$ProcessId){
  $condition=[System.Windows.Automation.AndCondition]::new(
   (Capy-TooltipCondition),
   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$ProcessId))
- @([System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)|Where-Object {!$_.Current.IsOffscreen})
+ @(foreach($window in Owned-ProcessWindows (Get-Process -Id $ProcessId)){ $window.Root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)|Where-Object {!$_.Current.IsOffscreen} })
 }
 
 function Overview-Bounds{

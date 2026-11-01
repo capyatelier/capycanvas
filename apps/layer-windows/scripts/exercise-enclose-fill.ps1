@@ -182,10 +182,8 @@ try {
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
     $null=$review.Handle
     Write-Output "Owned enclose fill review $($review.Id): $run"
-    Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Enclose fill review did not start' 90
-    $native=@{window=$null}
-    Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window} 'The owned drawing window did not appear'
-    $root=$native.window.Root;$drawingWindow=$native.window.Handle
+    Wait-Until {$review.Refresh();$script:registeredWindow=Owned-DrawingWindow $review;$registeredWindow -and (Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Enclose fill review did not start' 90
+    $root=$registeredWindow.Root;$drawingWindow=$registeredWindow.Handle
     Maximize-DrawingWindow
     Use-PaintWorkspace
     $null=[CapyRowPointer]::SetForegroundWindow($drawingWindow)

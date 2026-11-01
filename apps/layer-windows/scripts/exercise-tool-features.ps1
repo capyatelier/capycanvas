@@ -6,7 +6,7 @@ $featureFind=(Get-Command Find).ScriptBlock;$featureControl=(Get-Command Control
 Add-Type -AssemblyName System.Drawing
 if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $scripts 'RowPointerDriver.cs')}
 [CapyRowPointer]::VerifyPrivateDesktop($env:CAPY_PRIVATE_DESKTOP)
-$review=Get-Process -Id $ProcessId;$app=$review;$directory=Split-Path -Parent $review.Path;$CapyStateFile=$StateFile
+$review=Get-Process -Id $ProcessId;$app=$review;$directory=Split-Path -Parent $review.Path;$CapyStateFile=$StateFile;$CapyTraceDirectory=Split-Path -Parent $StateFile
 $native=Owned-DrawingWindow $review -WindowHandle $WindowHandle
 if(!$native){throw 'Owned drawing window unavailable'}
 $root=$native.Root;$drawingWindow=$native.Handle

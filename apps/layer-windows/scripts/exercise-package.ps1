@@ -65,7 +65,7 @@ try {
         if($action -in @('Test stroke','Redo')){Wait-Until {(Model).state.document_file.modified} 'Package stroke did not change the document'}
         if($action -eq 'Undo'){Wait-Until {!(Model).state.document_file.modified} 'Package Undo did not restore the clean document'}
     }
-    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'package.png') -ClientOnly *> (Join-Path $run 'capture.json')
+    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -Output (Join-Path $run 'package.png') -ClientOnly *> (Join-Path $run 'capture.json')
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved -StateDirectory $run
     if((Get-Item -LiteralPath $stderr).Length){throw 'Extracted package stderr requires inspection'}
     [ordered]@{archive_sha256=(Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash.ToLowerInvariant();source_commit=$manifest.source_commit;development=$manifest.development;inventory='passed';app_local_runtimes=$modulePaths;extracted_launch='passed';drawing_undo_redo='passed';pan_resize='passed';zero_exit='passed';scope='extraction and runtime-origin checks on this host; clean-machine installation and physical input/performance remain separate'}|ConvertTo-Json -Depth 5|Tee-Object -FilePath (Join-Path $run 'result.json')
@@ -73,7 +73,7 @@ try {
     $failure=$_
     $failure.ToString()|Set-Content (Join-Path $run 'failure.txt')
     if($review -and !$review.HasExited){
-        & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'failure.png') -ClientOnly *> (Join-Path $run 'failure-capture.json')
+        & (Join-Path $PSScriptRoot 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -Output (Join-Path $run 'failure.png') -ClientOnly *> (Join-Path $run 'failure-capture.json')
     }
     throw $failure
 }finally{

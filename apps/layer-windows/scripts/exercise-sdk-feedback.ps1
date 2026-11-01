@@ -7,7 +7,7 @@ $repo=(Resolve-Path(Join-Path $PSScriptRoot '../../..')).Path
 $run=Join-Path $repo ('artifacts/windows/sdk-feedback/'+$Theme+'-'+[guid]::NewGuid().ToString('N'));[IO.Directory]::CreateDirectory($run)|Out-Null
 $review=$null;$window=[IntPtr]::Zero;$records=[Collections.Generic.List[object]]::new();$passed=0
 function Element([string]$Id){
- $windows=[System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
+ $windows=@(Owned-ProcessWindows $review|ForEach-Object Root)
  foreach($w in $windows){foreach($item in $w.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,$Id))){if(!$item.Current.IsOffscreen){return $item}}}
 }
 function State([string]$Id){$control=Element $Id;if($control-and$control.Current.ItemStatus){$control.Current.ItemStatus|ConvertFrom-Json}}
@@ -55,7 +55,7 @@ function Footer-Captions([string]$Phase,[string]$Suffix){
 try{
  Enter-CapyEnvironment @('CAPY_FEEDBACK_SDK','CAPY_FEEDBACK_THEME');$env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_FEEDBACK_SDK='1';$env:CAPY_FEEDBACK_THEME=$Theme
  $Executable=(Resolve-Path $Executable).Path;$review=Start-Process -FilePath $Executable -WorkingDirectory (Split-Path $Executable) -WindowStyle Hidden -PassThru -RedirectStandardError(Join-Path $run 'stderr.log');$null=$review.Handle
- Wait-Until {foreach($h in [CapyWindowApi]::Windows([uint32]$review.Id)){$candidate=[System.Windows.Automation.AutomationElement]::FromHandle($h);if($candidate.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'sdk-choice-root'))){$script:window=$h;$script:root=$candidate;return $true}};$false} 'SDK fixture did not start' 30
+ Wait-Until {foreach($ownedWindow in Owned-ProcessWindows $review){$candidate=$ownedWindow.Root;if($candidate.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'sdk-choice-root'))){$script:window=$ownedWindow.Handle;$script:root=$candidate;return $true}};$false} 'SDK fixture did not start' 30
  [CapyWindowApi]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null;[CapyWindowApi]::SetForegroundWindow($window)|Out-Null;[CapyRowPointer]::Initialize([uint32]$review.Id)
  Wait-Until {(State 'sdk-choice-root').common} 'SDK fixture metadata unavailable'
  Choice-Contacts 'sdk-choice-root';Keyboard-Choice 'sdk-choice-root'
@@ -80,5 +80,5 @@ try{
  $p=Position 'sdk-footer-close';[CapyRowPointer]::Down('mouse',$p[0],$p[1]);[CapyRowPointer]::Up();Wait-Until {!(Element 'sdk-choice-dialog')} 'Native Close footer did not close dialog'
  [CapyWindowApi]::PostMessage($window,0x10,[UIntPtr]::Zero,[IntPtr]::Zero)|Out-Null;if(!$review.WaitForExit(8000)-or$review.ExitCode-ne0){throw 'SDK fixture did not close cleanly'};if((Get-Item(Join-Path $run 'stderr.log')).Length){throw 'SDK fixture stderr requires inspection'}
  @{passed=$passed;exit_code=$review.ExitCode;executable=$Executable;sha256=(Get-FileHash $Executable).Hash}|ConvertTo-Json|Set-Content(Join-Path $run 'result.json');Write-Output "SDK feedback passed $passed assertions ($Theme); $run"
-}catch{$_|Out-String|Set-Content(Join-Path $run 'failure.txt');try{& (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -WindowHandle $window.ToInt64() -Output(Join-Path $run 'failure.png') -Composed -CaptureOnly}catch{};throw}
+}catch{$_|Out-String|Set-Content(Join-Path $run 'failure.txt');try{& (Join-Path $PSScriptRoot 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -WindowHandle $window.ToInt64() -Output(Join-Path $run 'failure.png') -Composed -CaptureOnly}catch{};throw}
 finally{$records|ConvertTo-Json -Depth 10|Set-Content(Join-Path $run 'states.json');[CapyRowPointer]::Dispose();if($review-and!$review.HasExited){[CapyWindowApi]::PostMessage($window,0x10,[UIntPtr]::Zero,[IntPtr]::Zero)|Out-Null;if(!$review.WaitForExit(8000)){Stop-Process -Id $review.Id}};Exit-CapyEnvironment}

@@ -9,7 +9,7 @@ $run=Join-Path $repo ('artifacts/windows/button-feedback/'+$Theme+'-'+[guid]::Ne
 $owned=$null;$window=[IntPtr]::Zero;$previousTheme=$env:CAPY_FEEDBACK_THEME
 $records=[Collections.Generic.List[object]]::new();$clicks=0
 function Element([string]$Id){
-    $windows=[System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$owned.Id))
+    $windows=@(Owned-ProcessWindows $owned|ForEach-Object Root)
     foreach($candidate in $windows){$found=$candidate.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,$Id));if($found){return $found}}
 }
 function Invoke-Button([string]$Id){(Element $Id).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke();Start-Sleep -Milliseconds 250}

@@ -35,7 +35,7 @@ function Compose($Control,[string]$Romaji,[string]$Preedit){
  $script:imeSequence++
  Focus $Control
  Start-Sleep -Milliseconds 250
- [CapyIme]::Open($review.MainWindowHandle,[uint32]$review.Id)
+ [CapyIme]::Open($registeredWindow.Handle,[uint32]$review.Id)
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(17),20)
  Select-All
  foreach($letter in $Romaji.ToUpperInvariant().ToCharArray()){Key ([uint16]$letter)}
@@ -63,14 +63,14 @@ try{
  $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
  [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
  $review=Start-Process -FilePath $Executable -WorkingDirectory $run -PassThru -RedirectStandardError (Join-Path $run 'stderr.log');$null=$review.Handle
- Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready} 'IME review did not prepare' 120
- $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
- Wait-Until {[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null;[CapyRowPointer]::GetForegroundWindow() -eq $review.MainWindowHandle} 'IME review did not own foreground input'
+ Wait-Until {$review.Refresh();$script:registeredWindow=Owned-DrawingWindow $review;$registeredWindow -and (Model).brush_ready -and (Model).windows_workspace.ready} 'IME review did not prepare' 120
+ $root=$registeredWindow.Root
+ Wait-Until {[CapyRowPointer]::SetForegroundWindow($registeredWindow.Handle)|Out-Null;[CapyRowPointer]::GetForegroundWindow() -eq $registeredWindow.Handle} 'IME review did not own foreground input'
  $initial=Model;$layer=$initial.state.layer_tools.editing_layer.id;$original=$initial.state.layer_tools.editing_layer.label;$gpu=$initial.windows_gpu_generation
  $entry=Begin-Rename
- if([CapyIme]::Language($review.MainWindowHandle,[uint32]$review.Id) -ne 0x411){[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(91),32)}
- Wait-Until {[CapyIme]::Language($review.MainWindowHandle,[uint32]$review.Id) -eq 0x411} 'The owned editor did not activate the Japanese input profile'
- [CapyIme]::Open($review.MainWindowHandle,[uint32]$review.Id)
+ if([CapyIme]::Language($registeredWindow.Handle,[uint32]$review.Id) -ne 0x411){[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(91),32)}
+ Wait-Until {[CapyIme]::Language($registeredWindow.Handle,[uint32]$review.Id) -eq 0x411} 'The owned editor did not activate the Japanese input profile'
+ [CapyIme]::Open($registeredWindow.Handle,[uint32]$review.Id)
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(17),20)
  Compose $entry 'nihonn' 'にほん';Assert-Renaming $original
  $candidate=Value $entry;Key 13

@@ -47,8 +47,8 @@ function Launch([string]$Label){
     $null=$review.Handle
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/toolbar-library-review.json'),(@{process_id=$review.Id;run=$run}|ConvertTo-Json))
     Write-Output "Owned toolbar library review $($review.Id) ($Label)"
-    Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready} 'Manager review did not start' 45
-    $script:root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+    Wait-Until {$review.Refresh();$script:registeredWindow=Owned-DrawingWindow $review;$registeredWindow -and (Model).brush_ready -and (Model).windows_workspace.ready} 'Manager review did not start' 45
+    $script:root=$registeredWindow.Root
 }
 $script:closeFailures=@()
 function Close {

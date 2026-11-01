@@ -641,7 +641,7 @@ function Fail-Gpu([string[]]$Queued=@()) {
     foreach($id in @('new_document','open_document','export_document','undo')){
         if(((Model).state.commands|Where-Object id -eq $id).enabled){throw "GPU failure still enables $id"}
     }
-    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run ("gpu-unavailable-"+$review.Id+".png")) -ClientOnly *> (Join-Path $run ("gpu-unavailable-"+$review.Id+".json"))
+    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -Output (Join-Path $run ("gpu-unavailable-"+$review.Id+".png")) -ClientOnly *> (Join-Path $run ("gpu-unavailable-"+$review.Id+".json"))
 }
 function Start-RecoveryReview([string]$label){
     $script:stderr=Join-Path $run ($label+'.stderr.log')
@@ -779,7 +779,7 @@ function Test-GpuRecovery {
             Wait-Until {(Stroke-InkPixels) -eq 0} 'Pre-recovery Undo did not reach the canvas'
             Invoke-Control 'Test pen begin'
             Wait-Until {(Stroke-InkPixels) -ge 100} 'Active pen stroke did not render before removal'
-            & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'active-pen-before-loss.png') -ClientOnly *> (Join-Path $run 'active-pen-before-loss.json')
+            & (Join-Path $PSScriptRoot 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -Output (Join-Path $run 'active-pen-before-loss.png') -ClientOnly *> (Join-Path $run 'active-pen-before-loss.json')
             Start-GpuLoss @('Test pen end')
         }else{
             Start-GpuLoss @('Test pen')
@@ -804,7 +804,7 @@ function Test-GpuRecovery {
         Wait-Until {(Model).state.document_file.revision -ne $undoRevision -and (Signature) -eq $beforeRecovery} 'Redo after reconstruction did not restore the drawing'
         Wait-Until {$thumbnail=Find-Id "layer-$imported-thumbnail";$thumbnail -and $thumbnail.Current.ItemStatus -eq 'Ready'} 'Imported image thumbnail did not recover' 15
     }
-    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'gpu-recovered.png') -ClientOnly *> (Join-Path $run 'gpu-capture.json')
+    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -Output (Join-Path $run 'gpu-recovered.png') -ClientOnly *> (Join-Path $run 'gpu-capture.json')
 }
 function Test-PaperColorReopen {
     Open-NewDrawing

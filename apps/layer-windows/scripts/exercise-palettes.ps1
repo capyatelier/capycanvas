@@ -44,7 +44,7 @@ function Switch-Workspace([string]$Name,[string]$Id){
 function Panel{(Model).palette_panel}
 function Swatches{@((Panel).swatches|ForEach-Object {[uint64]$_.id})}
 function Menu-Items{
-    $items=[System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+    $items=$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$ControlType::MenuItem))
     @($items|Where-Object {
         $surface=[System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($_)

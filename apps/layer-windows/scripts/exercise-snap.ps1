@@ -136,8 +136,8 @@ try{
     $null=$review.Handle
     @{process_id=$review.Id;executable=$Executable;sha256=(Get-FileHash -LiteralPath $Executable).Hash}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $run 'owner.json')
     Write-Output "Owned Snap review $($review.Id): $run"
-    Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Isolated Snap review did not start' 45
-    $handle=$review.MainWindowHandle;$root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
+    Wait-Until {$review.Refresh();$script:registeredWindow=Owned-DrawingWindow $review;$registeredWindow -and (Model).brush_ready} 'Isolated Snap review did not start' 45
+    $handle=$registeredWindow.Handle;$root=$registeredWindow.Root
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     Ready
     if((Model).state.document_file.modified){throw 'Snap fixture requires a clean document'}

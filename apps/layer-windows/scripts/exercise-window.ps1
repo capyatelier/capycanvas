@@ -81,7 +81,7 @@ if($Action -eq 'Close') {
     if(![CapyWindowApi]::PostMessage($handle,0x10,[UIntPtr]::Zero,[IntPtr]::Zero)){throw 'The owned drawing window did not accept Close.'}
     if($DiscardUnsaved){
         $watch=[Diagnostics.Stopwatch]::StartNew();$lastEpoch=$null;$lastDecision=$null
-        $root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
+        $root=$drawing.Root
         while(!$p.HasExited){
           if($windowOnly -and ![CapyWindowExercise]::IsWindow($handle)){break}
           try {
@@ -142,7 +142,7 @@ if($Action -eq 'Close') {
         $true
     } 'The requested native resize did not receive its model viewport acknowledgement.'
 } elseif($Action -in @('Undo','Redo','Test stroke','Test pan','Test backlog')) {
-    $root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
+    $root=$drawing.Root
     $condition=New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty,$Action)
     $watch=[Diagnostics.Stopwatch]::StartNew()
     do{$button=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition);if(!$button){Start-Sleep -Milliseconds 100}}while(!$button -and $watch.Elapsed.TotalSeconds -lt 10)

@@ -26,8 +26,8 @@ $run=Join-Path $repo ('artifacts/windows/scroll-indicators/'+$Theme+'-'+[guid]::
 $thumbTargets=[Collections.Generic.List[object]]::new();$debugger=$null;$owned=$null;$window=[IntPtr]::Zero;$records=[Collections.Generic.List[object]]::new()
 $previous=@{};foreach($key in @('CAPY_SCROLL_INDICATORS','CAPY_FEEDBACK_THEME','CAPY_STORAGE_DIR','CAPY_FIXTURE_CONTEXT')){$previous[$key]=[Environment]::GetEnvironmentVariable($key)}
 function Element([string]$Id){
-    foreach($handle in [CapyWindowApi]::Windows([uint32]$owned.Id)){
-        $candidate=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
+    foreach($ownedWindow in Owned-ProcessWindows $owned){
+        $candidate=$ownedWindow.Root
         $found=$candidate.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,$Id))
         if($found){return $found}
     }
@@ -69,10 +69,10 @@ try{
     Copy-Item -LiteralPath $PSCommandPath -Destination (Join-Path $run 'executed-controller.ps1')
     Get-FileHash -LiteralPath $Executable,(Join-Path (Split-Path $Executable) 'Microsoft.UI.Xaml.dll') | Select-Object Path,Hash | ConvertTo-Json | Set-Content (Join-Path $run 'identities.json')
     $owned=Start-Process -FilePath $Executable -WorkingDirectory (Split-Path $Executable) -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log');$null=$owned.Handle
-    Wait-Until {foreach($handle in [CapyWindowApi]::Windows([uint32]$owned.Id)){$candidate=[System.Windows.Automation.AutomationElement]::FromHandle($handle);$probe=$candidate.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'indicator-status'));if($probe-and$probe.Current.ItemStatus){$script:window=$handle;return $true}};$false} 'Scroll fixture did not start' 30
-    @{process_pm2=$dpiSet;error=$dpiError;native=[ScrollFixtureDpi]::Bounds($window);client=[ScrollFixtureDpi]::Client($window);uia=[System.Windows.Automation.AutomationElement]::FromHandle($window).Current.BoundingRectangle.ToString()}|ConvertTo-Json -Depth 4|Set-Content (Join-Path $run 'dpi.json')
-    Register-CapyFixtureWindow $owned $window.ToInt64() $run
-    if($DebuggerPath){$debugger=Start-CapyDebugger $owned $DebuggerPath $run ([pscustomobject]@{Handle=$window;Root=[System.Windows.Automation.AutomationElement]::FromHandle($window)})}
+    Wait-Until {foreach($ownedWindow in Owned-ProcessWindows $owned){$candidate=$ownedWindow.Root;$probe=$candidate.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'indicator-status'));if($probe-and$probe.Current.ItemStatus){$script:window=$ownedWindow.Handle;$script:root=$candidate;return $true}};$false} 'Scroll fixture did not start' 30
+    @{process_pm2=$dpiSet;error=$dpiError;native=[ScrollFixtureDpi]::Bounds($window);client=[ScrollFixtureDpi]::Client($window);uia=$root.Current.BoundingRectangle.ToString()}|ConvertTo-Json -Depth 4|Set-Content (Join-Path $run 'dpi.json')
+    Register-CapyFixtureWindow $owned $window.ToInt64() (Split-Path -Parent $Executable)
+    if($DebuggerPath){$debugger=Start-CapyDebugger $owned $DebuggerPath $run ([pscustomobject]@{Handle=$window;Root=$root})}
     [CapyWindowApi]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     [CapyWindowApi]::SetForegroundWindow($window)|Out-Null;Mouse
     Wait-Until {Ready (State)} 'Initial parent indicator owner remains'

@@ -12,6 +12,7 @@ if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowP
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $run=Join-Path $repo ('artifacts/windows/localization/'+[Guid]::NewGuid().ToString('N'))
+$CapyTraceDirectory=$run
 [IO.Directory]::CreateDirectory((Join-Path $run 'profile'))|Out-Null
 $completed=$false
 $numericDraft='１２＋3 {draft}'
@@ -81,7 +82,7 @@ function Search{Trace-Part 'search-state' 'search'}
 function Camera{Trace-Part 'camera-state' 'camera'}
 function Use-Window($Window){
  Register-CapyFixtureWindow $review ([long]$Window.hwnd) $run
- $script:current=$Window;$script:root=[System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$Window.hwnd)
+ $script:current=$Window;$script:root=(Owned-DrawingWindow $review -WindowHandle $Window.hwnd -TraceDirectory $run).Root
  Wait-Until {[CapyRowPointer]::SetForegroundWindow([IntPtr]$Window.hwnd)|Out-Null;[CapyRowPointer]::GetForegroundWindow() -eq [IntPtr]$Window.hwnd} 'Review window did not own foreground input' 10
 }
 function Focus-Canvas{
@@ -136,7 +137,7 @@ function Select-Draft($Control,[string]$Text){
 }
 function Capture-Window($Window,[string]$Name){
  Use-Window $Window;Start-Sleep -Milliseconds 250
- & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -WindowHandle $Window.hwnd -Output (Join-Path $run ($Name+'.png')) -ClientOnly -Composed -CaptureOnly:($Name -ne 'failure') *> (Join-Path $run ($Name+'-capture.json'))
+ & (Join-Path $PSScriptRoot 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -WindowHandle $Window.hwnd -Output (Join-Path $run ($Name+'.png')) -ClientOnly -Composed -CaptureOnly:($Name -ne 'failure') *> (Join-Path $run ($Name+'-capture.json'))
  $workspace=Workspace-Root
  if($workspace){
   $layout=@{presentation=($workspace.Current.ItemStatus|ConvertFrom-Json);dpi=[CapyRowPointer]::GetDpiForWindow([IntPtr]$Window.hwnd)}

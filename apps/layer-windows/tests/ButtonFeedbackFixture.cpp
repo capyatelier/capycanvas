@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "WindowRegistry.h"
 #include "ButtonFeedback.h"
 #include "SdkFeedbackFixture.h"
 #include "NavigatorLayoutFixture.h"
@@ -90,7 +91,7 @@ struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
         hide.Click([this](auto&&,auto&&){flyout.Hide();});popup.Children().Append(hide);flyout.Content(popup);
         Button anchor;anchor.Content(box_value(L"Show flyout"));anchor.Flyout(flyout);
         Automation::AutomationProperties::SetAutomationId(anchor,L"feedback-show-flyout");body.Children().Append(anchor);
-        root.Children().Append(body);window=Window();window.Content(root);window.AppWindow().Move({40,40});window.AppWindow().Resize({1200,1100});window.Activate();
+        root.Children().Append(body);window=Window();window.Content(root);window.AppWindow().Move({40,40});window.AppWindow().Resize({1200,1100});CapyUi::RegisterFixtureWindow(window);window.Activate();
         timer=Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread().CreateTimer();
         timer.Interval(std::chrono::milliseconds(30));timer.Tick([this](auto&&,auto&&){status();});timer.Start();
     }

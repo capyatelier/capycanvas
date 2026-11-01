@@ -163,16 +163,13 @@ function Capture-Failure($Failure){
  try{
   $uia=[System.Windows.Automation.AutomationElement];$scope=[System.Windows.Automation.TreeScope]
   $condition=[System.Windows.Automation.OrCondition]::new([System.Windows.Automation.PropertyCondition]::new($uia::AutomationIdProperty,'drawing-order-undo'),[System.Windows.Automation.PropertyCondition]::new($uia::NameProperty,'Undo tab order'))
-  $owned=[System.Collections.Generic.List[object]]::new();$owned.Add($root)
-  $windows=$uia::RootElement.FindAll($scope::Children,[System.Windows.Automation.PropertyCondition]::new($uia::ProcessIdProperty,[int]$review.Id))
-  foreach($window in $windows){$owned.Add($window)}
-  $candidates=@(foreach($window in $owned){foreach($item in $window.FindAll($scope::Descendants,$condition)){Element-Evidence $item}})
+  $candidates=@(foreach($window in Owned-ProcessWindows $review){foreach($item in $window.Root.FindAll($scope::Descendants,$condition)){Element-Evidence $item}})
   @{at=[DateTime]::UtcNow.ToString('o');state=(NativeTabStatus);candidates=$candidates}|ConvertTo-Json -Depth 10|Set-Content (Join-Path $run 'failure-menu-candidates.json')
  }catch{try{$_.Exception.Message|Set-Content (Join-Path $run 'failure-menu-error.txt')}catch{}}
 }
 function Assert-CanvasInk([string]$Label){
  $capture=Join-Path $run ($Label+'-canvas.png')
- & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output $capture -ClientOnly -Composed *> (Join-Path $run ($Label+'-canvas.json'))
+ & (Join-Path $PSScriptRoot 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -Output $capture -ClientOnly -Composed *> (Join-Path $run ($Label+'-canvas.json'))
  $bitmap=[Drawing.Bitmap]::new($capture)
  try {
   # This fixture uses an 1800x1300 window; these bounds lie inside the canvas,
@@ -967,7 +964,7 @@ try {
   Wait-Until {(Model).color_panel.hdr -and (Model).brush_ready -and (Model).windows_display.analysis.ready} 'Gain-map photo did not reopen as HDR' 60
   Assert-CanvasInk $name
  }
- & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'hdr.png') -ClientOnly -Composed *> (Join-Path $run 'hdr.json')
+ & (Join-Path $PSScriptRoot 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -Output (Join-Path $run 'hdr.png') -ClientOnly -Composed *> (Join-Path $run 'hdr.json')
  $count=@((Model).windows_tabs.tabs).Count
  [CapyWindowApi]::PostMessage($drawingWindow,0x10,[UIntPtr]::Zero,[IntPtr]::Zero)|Out-Null;Button 'Cancel';Idle
  if(@((Model).windows_tabs.tabs).Count -ne $count){throw 'Window close cancellation lost drawings'}

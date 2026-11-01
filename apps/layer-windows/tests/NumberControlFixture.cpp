@@ -1,6 +1,7 @@
 // Separate review executable: /p:CapyControlFixture=true.
 // Uses the production numeric control and Rust resolver without a document/GPU.
 #include "pch.h"
+#include "WindowRegistry.h"
 #include "ControlContext.h"
 #include "UiControls.h"
 #include <fstream>
@@ -131,6 +132,7 @@ struct Fixture : std::enable_shared_from_this<Fixture> {
                 self->timer.Start();
             }
         });
+        CapyUi::RegisterFixtureWindow(window);
         window.AppWindow().Move({40,40});window.Activate();
     }
 };

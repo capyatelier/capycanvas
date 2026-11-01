@@ -1,4 +1,4 @@
-param([int]$ProcessId, [string]$Output = 'artifacts/windows/window.png', [switch]$ClientOnly, [switch]$Composed, [long]$WindowHandle=0, [switch]$CaptureOnly)
+param([int]$ProcessId, [string]$Output = 'artifacts/windows/window.png', [switch]$ClientOnly, [switch]$Composed, [long]$WindowHandle=0, [switch]$CaptureOnly,[string]$TraceDirectory)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes,System.Drawing
@@ -19,10 +19,7 @@ $captureDpi=[CapyWindowCapture]::SetThreadDpiAwarenessContext([IntPtr](-4))
 try {
 $p=Get-Process -Id $ProcessId
 $p.Refresh()
-$owned=@(if($WindowHandle){[pscustomobject]@{Handle=[IntPtr]$WindowHandle;Root=[System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle)}}else{
-    $drawing=Owned-DrawingWindow $p
-    if($drawing){$drawing}else{Owned-ProcessWindows $p|Where-Object {!$_.Root.Current.IsOffscreen -and !$_.Root.Current.BoundingRectangle.IsEmpty}}
-})
+$owned=@(if($WindowHandle){Owned-ProcessWindows $p -WindowHandle $WindowHandle -TraceDirectory $TraceDirectory}else{Owned-DrawingWindow $p -TraceDirectory $TraceDirectory})
 if($owned.Count -ne 1){throw 'Specify one owned visible window to capture.'}
 $handle=$owned[0].Handle;$root=$owned[0].Root
 if(!$CaptureOnly){

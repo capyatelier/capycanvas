@@ -9,7 +9,7 @@ $app=Get-Process -Id $ProcessId
 if($app.ProcessName -ne 'CapyCanvas'){throw 'Expected a controlled CapyCanvas review process.'}
 $app.Refresh()
 if($app.HasExited -or !$WindowHandle){throw 'The controlled drawing window is unavailable'}
-$root=[System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle)
+$root=(Owned-DrawingWindow $app -WindowHandle $WindowHandle -TraceDirectory (Split-Path -Parent $StateFile)).Root
 if(!$root -or $root.Current.ProcessId -ne $ProcessId){throw 'The drawing window does not belong to this review'}
 $script:settingsScope=$root
 $script:swatchAllocations=[Collections.Generic.List[object]]::new()

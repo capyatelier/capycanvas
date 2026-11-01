@@ -232,7 +232,7 @@ try{
  $vectors=@(Vectors).Count
  $at=Center (Control "layer-$v1-name" -Arranged)
  [CapyRowPointer]::RightClick($at[0],$at[1])
- $owned={param($name) [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$name),[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id)))}
+ $owned={param($name) $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$name),[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id)))}
  $menu=@{item=$null}
  Wait-Until {$menu.item=& $owned 'Organize';$null -ne $menu.item} 'The vector row menu did not offer Organize'
  if(!(& $owned (Label 'rasterize_layer'))){$findings.Add("The vector row menu does not offer $(Label 'rasterize_layer')")}

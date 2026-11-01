@@ -134,9 +134,8 @@ function Assert-DocumentSurface{
  foreach($property in @('BoundingRectangle','IsOffscreen','ProcessId','Name','ControlType')){$cache.Add([System.Windows.Automation.AutomationElement]::($property+'Property'))}
  $types=@((Capy-TooltipCondition);foreach($type in @([System.Windows.Automation.ControlType]::Menu,[System.Windows.Automation.ControlType]::Window)){[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$type)})
  $filter=[System.Windows.Automation.OrCondition]::new([System.Windows.Automation.Condition[]]$types)
- $owned=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id)
  $surface=[Windows.Rect]::new($projection.bounds.X+$projection.document_crop.X,$projection.bounds.Y+$projection.document_crop.Y,$projection.document_crop.Width,$projection.document_crop.Height)
- $roots=@($root)+@([System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children,$owned)|Where-Object {$_ -ne $root})
+ $roots=@($root)+@((Owned-ProcessWindows $review|ForEach-Object Root)|Where-Object {$_ -ne $root})
  $scope=$cache.Activate()
  try{
   foreach($owner in $roots){$tree=if($owner -eq $root){[System.Windows.Automation.TreeScope]::Descendants}else{[System.Windows.Automation.TreeScope]::Subtree};foreach($element in $owner.FindAll($tree,$filter)){

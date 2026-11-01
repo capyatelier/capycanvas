@@ -1,10 +1,11 @@
 param(
     [Parameter(Mandatory)][int]$ProcessId,
     [Parameter(Mandatory)][string]$OutputDirectory,
-    [int]$Width=960,[int]$Height=660,[long]$WindowHandle=0
+    [int]$Width=960,[int]$Height=660,[long]$WindowHandle=0,[string]$TraceDirectory
 )
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
+$CapyTraceDirectory=$TraceDirectory
 $CapyWaitSeconds=45
 Add-Type -AssemblyName System.Drawing
 Add-Type -TypeDefinition @'

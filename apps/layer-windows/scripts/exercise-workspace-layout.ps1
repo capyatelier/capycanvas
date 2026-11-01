@@ -393,7 +393,7 @@ try{
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawing.Handle.ToInt64() -Action Resize -Width 1500 -Height 1000
     Wait-Until {$null -ne (Find 'renderer-stat-7')} 'Resize removed Diagnostics content'
     Assert-RendererHealthy $review.Id $drawing
-    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -WindowHandle $drawing.Handle.ToInt64() -Output (Join-Path $run 'diagnostics.png') -ClientOnly *> (Join-Path $run 'diagnostics.json')
+    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -WindowHandle $drawing.Handle.ToInt64() -Output (Join-Path $run 'diagnostics.png') -ClientOnly *> (Join-Path $run 'diagnostics.json')
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window'
     (Control (Panel-Menu 'stats').label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     Wait-Until {$null -eq (Find 'renderer-stat-0')} 'Hidden Diagnostics retained visible widgets'

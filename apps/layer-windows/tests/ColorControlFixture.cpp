@@ -1,5 +1,6 @@
 // Separate production Color control review: build.ps1 -ControlFixture Color.
 #include "pch.h"
+#include "WindowRegistry.h"
 #include "ControlContext.h"
 #include "ColorView.h"
 #include <fstream>
@@ -74,6 +75,7 @@ struct Fixture:std::enable_shared_from_this<Fixture>{
             self->timer.Interval(std::chrono::milliseconds(150));self->timer.IsRepeating(true);
             self->timer.Tick([weak](auto&&,auto&&){if(auto owner=weak.lock())owner->publish();});self->timer.Start();
         }});
+        CapyUi::RegisterFixtureWindow(window);
         window.AppWindow().Move({40,40});window.Activate();
     }
 };

@@ -15,7 +15,7 @@ function Layers{@((Model).state.layers)}
 function Command([string]$Id){(Model).state.commands|Where-Object id -eq $Id|Select-Object -First 1}
 function Menu-Item([string]$Id){
     $condition=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,$Id)
-    foreach($item in [System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)){
+    foreach($item in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)){
         if($item.Current.ProcessId -eq $review.Id -and !$item.Current.IsOffscreen){return $item}
     }
 }
@@ -41,12 +41,12 @@ try {
     $null=$review.Handle
     Write-Output "Owned retouching review $($review.Id): $run"
     $watch=[Diagnostics.Stopwatch]::StartNew()
-    do{$review.Refresh();if($review.HasExited){throw 'Review exited at startup'};Start-Sleep -Milliseconds 100}while($review.MainWindowHandle -eq [IntPtr]::Zero -and $watch.Elapsed.TotalSeconds -lt 45)
-    $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+    do{$review.Refresh();if($review.HasExited){throw 'Review exited at startup'};Start-Sleep -Milliseconds 100;$script:registeredWindow=Owned-DrawingWindow $review}while(!$registeredWindow -and $watch.Elapsed.TotalSeconds -lt 45)
+    $root=$registeredWindow.Root
     Wait-Until {(Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Retouching review did not start' 45
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
     [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
-    [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
+    [CapyRowPointer]::SetForegroundWindow($registeredWindow.Handle)|Out-Null
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     Wait-Until {$b=(Find 'drawing-canvas').Current.BoundingRectangle;$b.Width -gt 1200} 'Maximized canvas did not settle' 10
     Fit-Canvas;Start-Sleep -Milliseconds 300
@@ -78,7 +78,7 @@ try {
 
     Open-Separation
     $panel=Control 'frequency-separation-panel'
-    $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96
+    $scale=[CapyRowPointer]::GetDpiForWindow($registeredWindow.Handle)/96
     if((Find 'frequency-separation-panel').Current.BoundingRectangle.Width/$scale -gt 361){throw 'The preview panel is wider than the shared panel width'}
     if(!(Control 'drawing-canvas').Current.IsEnabled){throw 'Frequency Separation blocked the canvas'}
     $radius=[int](Draft).radius+6

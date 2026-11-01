@@ -48,7 +48,7 @@ function Model($Window=$current){
 function Use-Window($Window){
     [CapyWindowTest]::Check([uint32]$review.Id,[IntPtr]$Window.hwnd)
     $script:current=$Window
-    $script:root=[System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$Window.hwnd)
+    $script:root=(Owned-DrawingWindow $review -WindowHandle $Window.hwnd -TraceDirectory $directory).Root
 }
 function Ready($Window){
     Wait-Until {(Model $Window).brush_ready -and (Model $Window).windows_workspace.ready} "Window $($Window.id) did not become ready" 45

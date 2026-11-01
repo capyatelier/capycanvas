@@ -75,11 +75,11 @@ function Preview-Hash([string]$Id,[switch]$Tinted){
     if($image.Current.ItemStatus -ne 'Ready'){return ''}
     $r=$image.Current.BoundingRectangle
     $window=[CapyRuntimeFilterCapture+Rect]::new()
-    if(![CapyRuntimeFilterCapture]::GetWindowRect($review.MainWindowHandle,[ref]$window)){throw 'Window bounds unavailable'}
+    if(![CapyRuntimeFilterCapture]::GetWindowRect($registeredWindow.Handle,[ref]$window)){throw 'Window bounds unavailable'}
     $bitmap=[Drawing.Bitmap]::new($window.right-$window.left,$window.bottom-$window.top)
     try{
         $graphics=[Drawing.Graphics]::FromImage($bitmap);$dc=$graphics.GetHdc()
-        try{if(![CapyRuntimeFilterCapture]::PrintWindow($review.MainWindowHandle,$dc,2)){throw 'App capture failed'}}
+        try{if(![CapyRuntimeFilterCapture]::PrintWindow($registeredWindow.Handle,$dc,2)){throw 'App capture failed'}}
         finally{$graphics.ReleaseHdc($dc);$graphics.Dispose()}
         $area=[Drawing.Rectangle]::new([int]$r.X-$window.left+2,[int]$r.Y-$window.top+2,[int]$r.Width-4,[int]$r.Height-4)
         $crop=$bitmap.Clone($area,[Drawing.Imaging.PixelFormat]::Format32bppArgb)
@@ -119,10 +119,10 @@ try {
     $null=$review.Handle
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/runtime-filters-review.json'),(@{process_id=$review.Id;run=$run}|ConvertTo-Json))
     Write-Output "Owned runtime filter review $($review.Id)"
-    Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and !(Load-State).pending} 'Runtime filter startup did not finish' 60
+    Wait-Until {$review.Refresh();$script:registeredWindow=Owned-DrawingWindow $review;$registeredWindow -and (Model).brush_ready -and !(Load-State).pending} 'Runtime filter startup did not finish' 60
     if((Load-State).phase -ne 'ready'){throw ((Load-State)|ConvertTo-Json)}
     [CapyRuntimeFilterCapture]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
-    $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+    $root=$registeredWindow.Root
     Invoke 'Test stroke' -Name
     Wait-Until {(Model).state.document_file.modified} 'Controlled drawing did not finish'
     Select-Panel 'adjustments'

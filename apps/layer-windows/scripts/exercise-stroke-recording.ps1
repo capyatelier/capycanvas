@@ -91,8 +91,8 @@ try{
  $stderr=Join-Path $run 'stderr.log'
  $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr;$null=$review.Handle
  Write-Output "Owned stroke recording review $($review.Id): $run"
- Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Recording review did not start' 45
- $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+ Wait-Until {$review.Refresh();$script:registeredWindow=Owned-DrawingWindow $review;$registeredWindow -and (Model).brush_ready} 'Recording review did not start' 45
+ $root=$registeredWindow.Root
  if($Theme){Wait-Until {(Model).state.theme -eq $Theme} 'Recording theme did not apply'}
  Invoke 'panel-tab-stats'
  Wait-Until {(Label) -eq 'Start stroke recording'} 'Diagnostics did not offer stroke recording'
@@ -124,7 +124,7 @@ try{
  Get-Content (Join-Path $run 'results.json')
 }catch{
  [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace)
- if($review -and !$review.HasExited){& (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -ClientOnly -Output (Join-Path $run 'failure.png') *> (Join-Path $run 'failure.json')}
+ if($review -and !$review.HasExited){& (Join-Path $PSScriptRoot 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -ClientOnly -Output (Join-Path $run 'failure.png') *> (Join-Path $run 'failure.json')}
  throw
 }finally{
  if($review -and !$review.HasExited){Stop-Process -Id $review.Id -Force}

@@ -61,7 +61,7 @@ function Set-Viewport {
     throw 'Native viewport did not match the Chrome fixture'
 }
 function Capture([string]$Name){
-    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Output (Join-Path $run ($Name+'.png')) -ClientOnly -CaptureOnly:($Name -ne 'failure') *> (Join-Path $run ($Name+'.json'))
+    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Output (Join-Path $run ($Name+'.png')) -ClientOnly -CaptureOnly:($Name -ne 'failure') *> (Join-Path $run ($Name+'.json'))
     $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
     $canvas=(Control 'drawing-canvas').Current.BoundingRectangle
     $origin=[CapyRowPointer+Point]::new()

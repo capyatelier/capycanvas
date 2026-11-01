@@ -26,7 +26,7 @@ function Close-Preferences {
  Wait-Until {!((Model).preferences)} 'Preferences did not close'
 }
 function Draw([string]$Device){
- [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
+ [CapyRowPointer]::SetForegroundWindow($registeredWindow.Handle)|Out-Null
  # Preferences and the input pane can move or resize the window. Read current
  # physical bounds after they close instead of reusing startup coordinates.
  Start-Sleep -Milliseconds 300
@@ -50,9 +50,9 @@ try {
  $null=$review.Handle
  Write-Output "Owned prediction review $($review.Id): $run"
  $watch=[Diagnostics.Stopwatch]::StartNew()
- do{$review.Refresh();if($review.HasExited){throw 'Review exited at startup'};Start-Sleep -Milliseconds 100}while($review.MainWindowHandle -eq [IntPtr]::Zero -and $watch.Elapsed.TotalSeconds -lt 45)
+ do{$review.Refresh();if($review.HasExited){throw 'Review exited at startup'};Start-Sleep -Milliseconds 100;$script:registeredWindow=Owned-DrawingWindow $review}while(!$registeredWindow -and $watch.Elapsed.TotalSeconds -lt 45)
  [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
- $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+ $root=$registeredWindow.Root
  Wait-Until {(Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Prediction review did not start'
  [CapyRowPointer]::Initialize([uint32]$review.Id)
  Open-Preferences

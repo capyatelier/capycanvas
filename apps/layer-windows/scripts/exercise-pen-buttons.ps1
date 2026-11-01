@@ -28,7 +28,7 @@ function Assert-PaperSegment([string]$Name,[int]$X1,[int]$Y1,[int]$X2,[int]$Y2){
 }
 function Inked([string]$Name,[string]$Baseline,[int]$Y) {
  $patch=Join-Path $run ($Name+'-patch.png');$null=Wait-StablePixels {Stroke-Pixels $Y $patch}
- & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -WindowHandle $ownedDrawing.Handle.ToInt64() -Output (Join-Path $run ($Name+'.png')) -ClientOnly -Composed *> (Join-Path $run ($Name+'.json'))
+ & (Join-Path $PSScriptRoot 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -WindowHandle $ownedDrawing.Handle.ToInt64() -Output (Join-Path $run ($Name+'.png')) -ClientOnly -Composed *> (Join-Path $run ($Name+'.json'))
  $before=[System.Drawing.Bitmap]::new($Baseline);$image=[System.Drawing.Bitmap]::new($patch)
  try {
   $columns=foreach($column in 8..64){
@@ -211,7 +211,7 @@ try {
 } catch {
  $failure=$_
  if($review -and !$review.HasExited -and $ownedDrawing){
-  try { & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -WindowHandle $ownedDrawing.Handle.ToInt64() -Output (Join-Path $run 'failure.png') -ClientOnly -Composed *> (Join-Path $run 'failure-window.json') } catch { Write-Warning $_ }
+  try { & (Join-Path $PSScriptRoot 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -WindowHandle $ownedDrawing.Handle.ToInt64() -Output (Join-Path $run 'failure.png') -ClientOnly -Composed *> (Join-Path $run 'failure-window.json') } catch { Write-Warning $_ }
  }
  throw $failure
 } finally {

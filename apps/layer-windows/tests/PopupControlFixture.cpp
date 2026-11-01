@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "WindowRegistry.h"
 #include "ControlContext.h"
 #include "NativeMenus.h"
 #include "ChromeVisibility.h"
@@ -666,7 +667,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         window.Activated([weak=weak_from_this()](auto&&,WindowActivatedEventArgs const& e){if(e.WindowActivationState()==WindowActivationState::Deactivated)if(auto self=weak.lock()){++self->blurs;self->owner.Cancel();}});
         TextBlock text;text.Text(L"Owned blur target");other.Content(text);other.Title(L"Popup fixture blur target");other.AppWindow().Move({600,80});
         root.Loaded([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->run();});
-        window.Content(root);window.Title(L"Capy Canvas popup review");hwnd=handle(window);window.AppWindow().Move({40,40});window.Activate();
+        window.Content(root);window.Title(L"Capy Canvas popup review");hwnd=handle(window);window.AppWindow().Move({40,40});CapyUi::RegisterFixtureWindow(other);CapyUi::RegisterFixtureWindow(window);window.Activate();
     }
 };
 struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{

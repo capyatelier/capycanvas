@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "WindowRegistry.h"
 #include "LayersView.h"
 #include "NativeHandles.h"
 #include <chrono>
@@ -237,6 +238,7 @@ struct Fixture : std::enable_shared_from_this<Fixture> {
             if(auto self=weak.lock();self&&!self->closeReady){args.Cancel(true);self->stop();}
         });
         window.Closed([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->stop();});
+        CapyUi::RegisterFixtureWindow(window,1);
         window.Activate();window.AppWindow().ResizeClient({460,700});
         std::thread([this]{run();}).detach();
     }

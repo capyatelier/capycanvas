@@ -38,8 +38,7 @@ function Artwork-Pixels{
  if($foreground -ne $drawingWindow){
   $foregroundOwner=[uint32]0
   [CapyRowPointer]::GetWindowThreadProcessId($foreground,[ref]$foregroundOwner)|Out-Null
-  $foregroundClass=try{[System.Windows.Automation.AutomationElement]::FromHandle($foreground).Current.ClassName}catch{'unavailable'}
-  throw "The owned drawing must be foreground for composed artwork samples (actual HWND=$($foreground.ToInt64()), PID=$foregroundOwner, class='$foregroundClass'; expected HWND=$($drawingWindow.ToInt64()), PID=$($review.Id))"
+  throw "The owned drawing must be foreground for composed artwork samples (actual HWND=$($foreground.ToInt64()), PID=$foregroundOwner; expected HWND=$($drawingWindow.ToInt64()), PID=$($review.Id))"
  }
  $bounds=$sampleCanvas.Current.BoundingRectangle;$camera=(Model).state.camera
  if($bounds -ne $sampleProjection.bounds -or (Json @($camera.viewport,$camera.translation,$camera.zoom,$camera.rotation,$camera.flipped)) -ne $sampleCamera){throw "The camera or arranged canvas moved during the image artwork comparison (bounds '$($sampleProjection.bounds)' -> '$bounds'; camera '$sampleCamera' -> '$(Json @($camera.viewport,$camera.translation,$camera.zoom,$camera.rotation,$camera.flipped))')"}

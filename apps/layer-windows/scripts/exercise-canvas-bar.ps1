@@ -87,7 +87,7 @@ function Owned([string]$Id,[switch]$Name,$Type){
  $condition=[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.PropertyCondition]::new($property,$Id),
   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
  if($Type){$condition=[System.Windows.Automation.AndCondition]::new($condition,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$Type))}
- [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
+ $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
 }
 function Bar {$bar=Find 'canvas-action-bar';if($bar -and !$bar.Current.IsOffscreen){$bar}}
 function Kind {(Model).state.canvas_bar.context.kind}
@@ -113,7 +113,7 @@ function MenuOpen{
   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id),
   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::FrameworkIdProperty,'XAML'),
   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::MenuItem))
- $null -ne [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
+ $null -ne $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
 }
 function AnchorQuadrant{$m=Model;$a=$m.state.canvas_bar.anchor;$c=$m.state.camera;$r=(Find 'drawing-canvas').Current.BoundingRectangle
  $point=@([int]($r.X+$c.translation[0]+$c.zoom*($a[0]+3*$a[2])/4),[int]($r.Y+$c.translation[1]+$c.zoom*($a[1]+3*$a[3])/4))

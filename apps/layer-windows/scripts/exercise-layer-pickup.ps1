@@ -935,7 +935,7 @@ try {
     try{
         @{case=$script:case;error=$failure.ToString();script_stack=$failure.ScriptStackTrace;contact=$script:contact;press=$script:press;foreground=$script:foregroundState;gesture=(Gesture);rows=(Rows);workspace_presentation=$(try{(Workspace-Root).Current.ItemStatus}catch{$null})}|ConvertTo-Json -Depth 10|Set-Content (Join-Path $run 'failure.json')
         if($review -and !$review.HasExited){
-            & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Output (Join-Path $run 'failure.png') -ClientOnly *> (Join-Path $run 'failure-window.json')
+            & (Join-Path $PSScriptRoot 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Output (Join-Path $run 'failure.png') -ClientOnly *> (Join-Path $run 'failure-window.json')
         }
     }catch{Write-Warning $_}
     throw $failure

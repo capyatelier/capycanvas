@@ -4,7 +4,7 @@ $ErrorActionPreference='Stop'
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 $review=Get-Process -Id $ProcessId
 if($review.ProcessName -ne 'CapyCanvas'){throw 'Expected an owned CapyCanvas review'}
-$CapyStateFile=$StateFile
+$CapyStateFile=$StateFile;$CapyTraceDirectory=Split-Path -Parent $StateFile
 $native=@{window=$null}
 Wait-Until {$native.window=Owned-DrawingWindow $review; $native.window -and (Model).brush_ready} 'Isolated review did not become ready' 45
 $root=$native.window.Root

@@ -125,7 +125,7 @@ function Relationship-Theme{
     Relationship-Layers
 }
 function Test-LayerRelationships{
-    $null=[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)
+    $null=[CapyRowPointer]::SetForegroundWindow($drawingWindow)
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1780 -Height 1480
     try{

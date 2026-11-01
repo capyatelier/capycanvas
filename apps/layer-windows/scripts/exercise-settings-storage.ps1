@@ -82,13 +82,11 @@ function Start-App {
     Wait-Until {
         $review.Refresh()
         if($review.HasExited){throw 'Review app exited during startup'}
-        $review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready
+        $script:registeredWindow=Owned-DrawingWindow $review;$registeredWindow -and (Model).brush_ready
     } 'Review startup did not complete' 45
     if(!(Model).windows_isolated_settings){throw 'Refusing to change a non-isolated settings profile'}
-    [CapyWindowApi]::ShowWindow($review.MainWindowHandle,3)|Out-Null
-    $native=@{window=$null}
-    Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window} 'Owned drawing window is unavailable'
-    $script:root=$native.window.Root;$script:drawingHandle=$native.window.Handle
+    [CapyWindowApi]::ShowWindow($registeredWindow.Handle,3)|Out-Null
+    $script:root=$registeredWindow.Root;$script:drawingHandle=$registeredWindow.Handle
     $script:scope=$root
 }
 function Check-Exit {
@@ -172,7 +170,7 @@ try {
     Close-Preferences
     $workspaceId=(Model).windows_workspace.id
     Request-CloseError
-    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'preferences-close-error.png') -ClientOnly *> (Join-Path $run 'preferences-close-error.json')
+    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -Output (Join-Path $run 'preferences-close-error.png') -ClientOnly *> (Join-Path $run 'preferences-close-error.json')
     Recovery-Choice 'Keep Open'
     Wait-Until {!(Model).windows_settings_close.requested -and !(Model).state.document_file.close_ready -and !(Close-Error)} 'Keep open did not cancel preferences close'
     if((Model).state.settings.dark_base -ne '#304050' -or (Model).windows_workspace.id -ne $workspaceId -or (Model).windows_workspace.closing){throw 'Keep open lost preferences or released the workspace'}
@@ -257,7 +255,7 @@ try {
 } catch {
     if($review){
         $review.Refresh()
-        if(!$review.HasExited){try{& (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'failure.png') -ClientOnly *> (Join-Path $run 'failure.json')}catch{}}
+        if(!$review.HasExited){try{& (Join-Path $PSScriptRoot 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -Output (Join-Path $run 'failure.png') -ClientOnly *> (Join-Path $run 'failure.json')}catch{}}
     }
     throw
 } finally {

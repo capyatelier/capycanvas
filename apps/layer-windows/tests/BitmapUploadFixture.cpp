@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "WindowRegistry.h"
 #include "ControlContext.h"
 #include "BitmapUpload.h"
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
@@ -554,6 +555,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         image.Width(3);image.Height(2);image.Stretch(Stretch::Fill);image.UseLayoutRounding(false);
         surface.Children().Append(image);window.Content(surface);window.Title(L"Capy Canvas bitmap upload review");
         surface.Loaded([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->run();});
+        CapyUi::RegisterFixtureWindow(window);
         window.Activate();
     }
 };

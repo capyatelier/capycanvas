@@ -44,10 +44,8 @@ function Launch([string]$Label){
     $null=$review.Handle
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/manager-focus-review.json'),(@{process_id=$review.Id;run=$run}|ConvertTo-Json))
     Write-Output "Owned manager review $($review.Id) ($Label)"
-    Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready} 'Manager review did not start' 45
-    $owned=@{window=$null}
-    Wait-Until {$owned.window=Owned-DrawingWindow $review;$null -ne $owned.window} 'Owned drawing window is unavailable'
-    $script:root=$owned.window.Root
+    Wait-Until {$review.Refresh();$script:registeredWindow=Owned-DrawingWindow $review;$registeredWindow -and (Model).brush_ready -and (Model).windows_workspace.ready} 'Manager review did not start' 45
+    $script:root=$registeredWindow.Root
 }
 function Close {
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close

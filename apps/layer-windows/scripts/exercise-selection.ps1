@@ -34,10 +34,7 @@ function Desktop-Find([string]$Value,$Type){
     $condition=[System.Windows.Automation.AndCondition]::new(
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$Value),
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$Type))
-    foreach($scope in @($root,[System.Windows.Automation.AutomationElement]::RootElement)){
-        $hit=$scope.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
-        if($hit){return $hit}
-    }
+    $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
 }
 function Center($element){$b=$element.Current.BoundingRectangle;@{x=[int]($b.X+$b.Width/2);y=[int]($b.Y+$b.Height/2)}}
 function Tap($at,[string]$Device='mouse'){[CapyRowPointer]::Down($Device,$at.x,$at.y);Start-Sleep -Milliseconds 30;[CapyRowPointer]::Up()}
@@ -73,7 +70,7 @@ function Header-Id([string]$Command){
 }
 function Header-Icon([string]$Id){((Model).header.items|Where-Object id -eq $Id).icon}
 function Menu-Items{
-    $items=[System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+    $items=$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$ControlType::MenuItem))
     @($items|Where-Object {$_.Current.ProcessId -eq $review.Id -and !$_.Current.IsOffscreen -and [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($_).Current.ControlType -eq $ControlType::Menu})
 }
