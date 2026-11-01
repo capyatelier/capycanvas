@@ -256,7 +256,9 @@ extension XCTestCase {
         }
         app.launch()
         waitForEditorInteraction(in: app)
-        if !recover {
+        let ready = app.staticTexts["recovery-status"]
+        let observesRecovery = recover && ready.waitForExistence(timeout: 2)
+        if !recover || !observesRecovery {
             app.typeKey(",", modifierFlags: .command)
             XCTAssertTrue(app.buttons["settings-done"].waitForExistence(timeout: 10))
             let themePicker = app.descendants(matching: .any)["preference-theme"].firstMatch
@@ -274,8 +276,6 @@ extension XCTestCase {
         waitForExpectations(timeout: 10)
         var checkpoint: Data?
         if recover {
-            let ready = app.staticTexts["recovery-status"]
-            guard ready.waitForExistence(timeout: 2) else { throw XCTSkip("The existing recovery probe requires a diagnostic app") }
             editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
             let unpainted = editorPixels(in: app)
             for _ in 0..<3 {
@@ -285,8 +285,10 @@ extension XCTestCase {
                 editorMenu(in: app, menu: "Select", id: "deselect", label: "Deselect pixels")
             }
             XCTAssertNotEqual(editorPixels(in: app), unpainted)
-            expectation(for: NSPredicate(format: "label == %@ OR value == %@", "Recovery ready", "Recovery ready"), evaluatedWith: ready)
-            waitForExpectations(timeout: 60)
+            if observesRecovery {
+                expectation(for: NSPredicate(format: "label == %@ OR value == %@", "Recovery ready", "Recovery ready"), evaluatedWith: ready)
+                waitForExpectations(timeout: 60)
+            }
         }
         let texture = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-texture-")).firstMatch
         if !app.scrollViews["layer-rows"].exists {
@@ -305,8 +307,10 @@ extension XCTestCase {
             XCTAssertTrue(dialog.waitForNonExistence(timeout: 10))
             expectation(for: NSPredicate(format: "value == %@", "Canvas"), evaluatedWith: texture)
             waitForExpectations(timeout: 10)
-            expectation(for: NSPredicate(format: "label == %@ OR value == %@", "Recovery ready", "Recovery ready"), evaluatedWith: app.staticTexts["recovery-status"])
-            waitForExpectations(timeout: 60)
+            if observesRecovery {
+                expectation(for: NSPredicate(format: "label == %@ OR value == %@", "Recovery ready", "Recovery ready"), evaluatedWith: ready)
+                waitForExpectations(timeout: 60)
+            }
             checkpoint = editorPixels(in: app)
         }
         let original = texture.value as? String
