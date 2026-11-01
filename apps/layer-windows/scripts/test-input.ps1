@@ -143,6 +143,7 @@ if($LASTEXITCODE -ne 0){throw 'Model update replay failed.'}
 
 & (Join-Path $PSScriptRoot '../tests/paper-relief.ps1')
 & (Join-Path $PSScriptRoot '../tests/stable-pixels.ps1')
+& (Join-Path $PSScriptRoot '../tests/window-resize.ps1')
 
 & {
  $tokens=$null;$errors=$null
