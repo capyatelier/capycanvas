@@ -633,7 +633,7 @@ fn install_example_filter(app: &App) -> &'static str {
 }
 
 #[test]
-fn document_edits_keep_filter_previews_and_their_retry_completes() {
+fn document_edits_keep_filter_previews_and_publish_an_owned_atlas() {
     for platform in [0, 1] {
         let app = App::new(platform);
         app.borrow().host.session.renderer_mut().0 = Some(native_renderer());
@@ -662,15 +662,21 @@ fn document_edits_keep_filter_previews_and_their_retry_completes() {
             assert!((unsafe { capy_apple_error(app.0) }==0));
             if !(atlas==0) {
                 let mut info = std::mem::MaybeUninit::<CapyFilterPreviewInfo>::uninit();
-                unsafe { capy_filter_previews_read(atlas, info.as_mut_ptr()) };
-                assert_eq!(unsafe { info.assume_init() }.request, 2);
+                assert!(unsafe { capy_filter_previews_read(atlas, info.as_mut_ptr()) });
+                let info = unsafe { info.assume_init() };
+                assert_ne!(info.request, 0);
+                let [width, height] = layer_render::FILTER_PREVIEW_SIZE;
+                assert_eq!((info.width, info.height, info.stride, info.count),
+                    (width, height, width * 4, (width * height * 4) as usize));
+                let filters: Value = serde_json::from_slice(handles::take_text(info.filters).to_bytes()).unwrap();
+                assert_eq!(filters, json!([filter]));
                 unsafe { capy_filter_previews_free(atlas) };
                 break;
             }
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
-        assert_eq!(app.pixels(), pixels, "Preview retry cannot change artwork");
+        assert_eq!(app.pixels(), pixels, "Preview delivery cannot change artwork");
         assert_eq!(app.borrow().host.session.filter_preview_revision(), revision);
         app.action(json!({"type":"color", "action":{"op":"definition",
             "color":{"space":"Srgb", "rgba":[1.0,0.0,0.0,1.0]}}}));
@@ -679,7 +685,7 @@ fn document_edits_keep_filter_previews_and_their_retry_completes() {
         assert_ne!(app.pixels(), pixels, "Drawing must still publish new ink");
         app.invoke("undo");
         app.draw_until_idle();
-        assert_eq!(app.pixels(), pixels, "Drawing and Undo still work after cancellation");
+        assert_eq!(app.pixels(), pixels, "Drawing and Undo still work after preview delivery");
     }
 }
 
