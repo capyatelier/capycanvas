@@ -855,6 +855,7 @@ try {
  Check-ZoomCaptions
  Close-Menu
  Capture-ZoomParity
+ Navigation-Focus
  Open-Readout 'mouse'
  Capture "zoom-menu-$Theme"
  $order=@('zoom-field','zoom-zoom_in','zoom-200','zoom-lock-zoom','rotation-field','zoom-reset_rotation','zoom-snap-rotation','zoom-lock-rotation','zoom-button-zoom_out')
