@@ -76,7 +76,7 @@ function Sketch-VectorRoutes([long]$Layer){
  & $switch
  $scale=@((Model).header.items|Where-Object {$_.resolved_control.command-eq'scale_rotate'})[0]
  $frame=Control ('header-item-'+$scale.id) -Arranged
- if(!$scale.enabled -or $scale.disabled_reason -or $frame.Current.HelpText){throw 'Unlocking did not clear the native header reason'}
+ if(!$scale.enabled -or $scale.disabled_reason -or $frame.Current.HelpText-cne$scale.label){throw 'Unlocking did not clear the native header reason'}
  if(@((Model).state.commands|Where-Object id -eq 'deselect')[0].enabled){Shortcut-Command 'deselect'}
  Click $frame
  Wait-Until {(Selected 'move') -and (Selected 'scale_rotate')} 'Sketch Scale/rotate did not enter Move before selecting paths'

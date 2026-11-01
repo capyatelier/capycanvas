@@ -219,3 +219,27 @@ $actual=@(Real-ReadControlSnapshot @('one','two'));if($actual.Count -ne 1 -or $a
     Write-Output 'Actual activation families and editor selection passed with reordered nonordinal tiles, direct/anchored preset actions, exact native drift targets and duplicate/unrelated action rejection; no UI/GPU.'
 }
 Write-Output "UIA projection snapshot passed: $($cases.Count) hierarchy/cache cases, fresh cached-only batch/visibility semantics, per-review canvas reset, live per-pixel bounds/camera/foreground, exact768 prefix and independent dense ARGB hash with nonsampled-pixel change/restoration; no UI/GPU."
+
+$vector=Tree 'exercise-vector-layers.ps1'
+$guards=@($vector.FindAll({param($node)$node -is [Management.Automation.Language.IfStatementAst] -and $node.Extent.Text -like "*throw 'Unlocking did not clear the native header reason'*"},$true))
+if($guards.Count -ne 1){throw 'Unlocked native header assertion is missing or ambiguous'}
+$headerGuard=[scriptblock]::Create($guards[0].Extent.Text)
+$headerCases=@(
+ [pscustomobject]@{enabled=$true;reason=$null;help='Transform';accept=$true},
+ [pscustomobject]@{enabled=$true;reason=$null;help='The active layer is locked';accept=$false},
+ [pscustomobject]@{enabled=$true;reason=$null;help='Unrelated tool';accept=$false},
+ [pscustomobject]@{enabled=$true;reason=$null;help='';accept=$false},
+ [pscustomobject]@{enabled=$false;reason=$null;help='Transform';accept=$false},
+ [pscustomobject]@{enabled=$true;reason='The active layer is locked';help='Transform';accept=$false}
+)
+foreach($case in $headerCases){
+ $scale=[pscustomobject]@{enabled=$case.enabled;disabled_reason=$case.reason;label='Transform'}
+ $frame=[pscustomobject]@{Current=[pscustomobject]@{HelpText=$case.help}}
+ $rejected=$false
+ try{& $headerGuard}catch{
+  if($_.Exception.Message -cne 'Unlocking did not clear the native header reason'){throw}
+  $rejected=$true
+ }
+ if($rejected -eq $case.accept){throw "Unlocked native header assertion rejected or accepted the wrong state: help='$($case.help)', enabled=$($case.enabled), reason='$($case.reason)'"}
+}
+'Unlocked native header reason and ordinary help: 6 passed'
