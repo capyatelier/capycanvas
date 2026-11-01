@@ -963,7 +963,7 @@ function Invoke-ColorUndoChecks{
     Invoke-ColorUndoItem 'Right-clicking the panel hue ring did not offer color undo'
     Wait-Until {(Foreground) -eq $start} 'Panel menu undo did not restore the color from before the whole drag'
     $checks.Add('panel-drag-is-one-step-and-ring-menu-undoes')
-    Right-Click (Panel-Point $wheel.caption[0] ($wheel.caption[1]-$wheel.caption[2]*.5))
+    Right-Click (Panel-Point $wheel.caption.center[0] ($wheel.caption.center[1]+$wheel.caption.radius-$wheel.caption.font_size*.5))
     Wait-Until {@(Menu-Names|Where-Object {$_ -like 'Hide*Color*'}).Count} 'Right-clicking outside the ring did not open the panel menu'
     if(Color-UndoItem){throw 'Outside the ring the panel menu offered color undo'}
     Escape;Wait-Until {!@(Menu-Names|Where-Object {$_ -like 'Hide*Color*'}).Count} 'Escape did not dismiss the panel menu'
