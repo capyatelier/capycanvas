@@ -286,7 +286,15 @@ Check-Projection
 Focus (Field 'opacity')
 Wait-Until {[Math]::Abs((Value 'flow')-$markerFlow) -lt .0001} 'Detached draft overwrote the new brush'
 Select-Preset 1
-if(((Field 'flow').GetRuntimeId() -join ':') -eq $original){throw 'Changing tools retained an old draft context'}
+if(((Field 'flow').GetRuntimeId() -join ':') -ne $original){throw 'Same-schema preset changes replaced the flow editor'}
+Draft 'flow' '63';Focus (Field 'opacity')
+Wait-Until {[Math]::Abs((Value 'flow')-.63) -lt .0001} 'Retained flow editor did not edit G-Pen'
+Select-Preset 7
+Wait-Until {((Field 'flow').GetRuntimeId() -join ':') -eq $original -and [Math]::Abs((Value 'flow')-$markerFlow) -lt .0001} 'Editing G-Pen changed Marker flow or replaced its retained editor'
+Draft 'flow' '61';Focus (Field 'opacity')
+Wait-Until {[Math]::Abs((Value 'flow')-.61) -lt .0001} 'Retained flow editor did not edit Marker'
+Select-Preset 1
+Wait-Until {((Field 'flow').GetRuntimeId() -join ':') -eq $original -and [Math]::Abs((Value 'flow')-.63) -lt .0001} 'Editing Marker changed G-Pen flow or replaced its retained editor'
 if(!@((Model).layout.groups|Where-Object active -eq 'layers').Count){
     Invoke-Id 'column-icon-layers'
     Wait-Until {@((Model).layout.groups|Where-Object active -eq 'layers').Count -gt 0} 'Layers column did not open'
@@ -297,10 +305,7 @@ $oldTarget=(Model).state.layer_tools.editing_layer.id
 $oldField=(Field 'flow').GetRuntimeId() -join ':'
 Invoke-Control 'New layer'
 Wait-Until {(Model).state.layer_tools.editing_layer.id -ne $oldTarget} 'Layer target did not change'
-Wait-Until {((Field 'flow').GetRuntimeId() -join ':') -ne $oldField} 'Layer change retained the old field context'
-# Moving focus to a layer command can commit to the old context before the
-# command runs. Once the target changes, the new field must show acknowledged
-# state and cannot replay an old draft on a later focus change.
+if(((Field 'flow').GetRuntimeId() -join ':') -ne $oldField){throw 'Same-schema layer change replaced the flow editor'}
 $acknowledged=Value 'flow'
 $display=(Field 'flow').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
 if($display -notmatch ('^'+[Math]::Round($acknowledged*100))){throw 'New target retained an unacknowledged draft'}
