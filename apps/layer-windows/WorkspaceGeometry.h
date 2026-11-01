@@ -211,10 +211,16 @@ inline std::vector<Point> panelTabOutline(float width,float height,std::array<fl
     std::vector<Point> outline(points.Size());points.GetMany(0,outline);return outline;
 }
 inline PathGeometry panelTabShape(float width,float height){return polygon(panelTabOutline(width,height));}
+inline void hoverPanelTabShell(Grid const& shell,bool hovered){
+    if(unbox_value_or<hstring>(shell.Tag(),L"")==L"active-panel-tab-shell")return;
+    auto shape=shell.Children().GetAt(0).as<Canvas>().Children().GetAt(0).as<Microsoft::UI::Xaml::Shapes::Path>();
+    auto next=hovered?shape.Tag().try_as<Brush>():Brush(nullptr);if(shape.Fill()!=next)shape.Fill(next);
+}
 inline void selectPanelTabShell(Grid const& shell,bool selected,Brush const& fill=nullptr,J const& presentation=J{}){
+    bool wasSelected=unbox_value_or<hstring>(shell.Tag(),L"")==L"active-panel-tab-shell";
     shell.Tag(box_value(selected?L"active-panel-tab-shell":L"panel-tab-shell"));Canvas::SetZIndex(shell,selected?1:0);
     auto background=shell.Children().GetAt(0).as<Canvas>();auto shape=background.Children().GetAt(0).as<Microsoft::UI::Xaml::Shapes::Path>();
-    shape.Fill(selected?fill:unbox_value_or<bool>(background.Tag(),false)?shape.Tag().try_as<Brush>():Brush(nullptr));
+    if(selected||wasSelected)shape.Fill(selected?fill:Brush(nullptr));
     if(presentation.Size()){
         auto bottom=array(presentation,L"hover_bottom");
         shape.Resources().Insert(box_value(L"TabHoverBottom"),box_value(Thickness{bottom.GetNumberAt(0),0,bottom.GetNumberAt(1),0}));
@@ -235,14 +241,13 @@ inline Grid panelTabShell(FrameworkElement const& content,Brush const& fill,Brus
         auto shape=shell.Children().GetAt(0).as<Canvas>().Children().GetAt(0).as<Microsoft::UI::Xaml::Shapes::Path>();
         selectPanelTabShell(shell,unbox_value_or<hstring>(shell.Tag(),L"")==L"active-panel-tab-shell",shape.Fill());
     }});
-    shell.PointerEntered([weak=make_weak(shell),hover](auto&&,auto&&){if(auto shell=weak.get()){
-        auto background=shell.Children().GetAt(0).as<Canvas>();background.Tag(box_value(true));
-        if(unbox_value_or<hstring>(shell.Tag(),L"")!=L"active-panel-tab-shell")background.Children().GetAt(0).as<Microsoft::UI::Xaml::Shapes::Path>().Fill(hover);
+    shell.PointerEntered([weak=make_weak(shell)](auto&&,Input::PointerRoutedEventArgs const& e){if(auto shell=weak.get()){
+        auto p=e.GetCurrentPoint(shell);auto at=p.Position();auto type=p.PointerDeviceType();
+        hoverPanelTabShell(shell,type!=Microsoft::UI::Input::PointerDeviceType::Touch&&!p.Properties().IsCanceled()
+            &&(type!=Microsoft::UI::Input::PointerDeviceType::Pen||p.Properties().IsInRange())
+            &&at.X>=0&&at.Y>=0&&at.X<shell.ActualWidth()&&at.Y<shell.ActualHeight());
     }});
-    shell.PointerExited([weak=make_weak(shell)](auto&&,auto&&){if(auto shell=weak.get()){
-        auto background=shell.Children().GetAt(0).as<Canvas>();background.Tag(box_value(false));
-        if(unbox_value_or<hstring>(shell.Tag(),L"")!=L"active-panel-tab-shell")background.Children().GetAt(0).as<Microsoft::UI::Xaml::Shapes::Path>().Fill(nullptr);
-    }});
+    shell.PointerExited([weak=make_weak(shell)](auto&&,auto&&){if(auto shell=weak.get())hoverPanelTabShell(shell,false);});
     return shell;
 }
 inline Button panelTabButton(std::shared_ptr<WorkspaceData> const& data,hstring const& title,FrameworkElement const& glyph,J const& presentation,std::function<void()> action){

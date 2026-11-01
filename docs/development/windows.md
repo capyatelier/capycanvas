@@ -460,6 +460,7 @@ positions and order history. Run all `tab-pickup` variants after input changes.
 `tab-drag:release-dark`/`release-light` and `drawer-dark`/`drawer-light` retain composed release-frame sequences and check far-left commits and active-tab feet.
 `tab-drag:chrome-dark`/`chrome-light` check stack and drawer handoffs, retained tab/category icons and idle GPU presentations.
 `tab-drag:cold-dark`/`cold-light` check intrinsic tab measurements and drawer presentation after a fresh Photo launch with collapsed panels.
+`tab-drag:hover-dark`/`hover-light` check resting mouse and pen hover after workspace Undo reorders inactive tabs.
 `header:palette`/`palette-light` and `documents:color-workflows` retain composed frames through theme changes and comparison updates.
 `header:atomic`, `documents:retention`, `layer-pickup:HandoffOnly`, `switcher-drag:HandoffOnly`, `column-stacks:scroll-dark`/`scroll-light` and `tool-bubbles:retire-dark-mouse` check retained content through native handoffs.
 

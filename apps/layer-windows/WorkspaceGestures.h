@@ -15,6 +15,7 @@ public:
         CapyUi::J const& action,CapyUi::J const& context={},bool doubleClick=false,
         CapyUi::J const& tab={},Pickup pickup=Pickup::Immediate);
     void Refresh();
+    winrt::Microsoft::UI::Xaml::UIElement HoverTab()const;
     std::pair<float,bool> TabOffset(uint32_t group)const;
     std::optional<winrt::Windows::Foundation::Rect> TabBounds(uint32_t group,winrt::Microsoft::UI::Xaml::UIElement const& relative)const;
     void Present(CapyUi::J const& drag);

@@ -1,5 +1,5 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','preview-dark','preview-light','release-dark','release-light','drawer-dark','drawer-light','chrome-dark','chrome-light','cold-dark','cold-light')][string]$Journey='full')
-if($Journey -ne 'full'){$Theme=$Journey -replace '^(preview|release|drawer|chrome|cold)-',''}
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','preview-dark','preview-light','release-dark','release-light','drawer-dark','drawer-light','chrome-dark','chrome-light','cold-dark','cold-light','hover-dark','hover-light')][string]$Journey='full')
+if($Journey -ne 'full'){$Theme=$Journey -replace '^(preview|release|drawer|chrome|cold|hover)-',''}
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyCacheModel=$true;$CapyEach={if($env:CAPY_PRIVATE_DESKTOP){[CapyRowPointer]::VerifyPrivateDesktop($env:CAPY_PRIVATE_DESKTOP)};[CapyCanvasTouch]::Verify()}
@@ -113,7 +113,7 @@ function Check-OverviewOverlap([string]$Before,[string]$After) {
 function Walk([double]$FromX,[double]$FromY,[double]$ToX,[double]$ToY){
  for($i=1;$i -le 8;$i++){
   $x=[int]($FromX+($ToX-$FromX)*$i/8);$y=[int]($FromY+($ToY-$FromY)*$i/8)
-  if($Journey -eq 'full'){[CapyCanvasTouch]::Move(1,$x,$y)}else{[CapyRowPointer]::Move($x,$y)}
+  if([CapyRowPointer]::Active){[CapyRowPointer]::Move($x,$y)}else{[CapyCanvasTouch]::Move(1,$x,$y)}
   Start-Sleep -Milliseconds 18
  }
 }
@@ -493,6 +493,96 @@ function Leftward-Tab([string]$Prefix,[string]$Panel,[string]$First,[string]$Dev
   Wait-Until {@((Model).state.customization.column_drawers|Where-Object {$_.tabs.panels -contains $Panel}).Count -eq 1 -and (Find ($Prefix+$Panel) -Visible)} "$name did not reopen its drawer"
  }
 }
+function Hover-Pixels($Image,$Area,$Tab){
+ $x=[int]($Tab.Left+$Tab.Width/2-$Area.Left);$y=[int]($Tab.Top+4*$scale-$Area.Top)
+ @(foreach($dy in -1..1){foreach($dx in -2..2){$pixel=$Image.GetPixel($x+$dx,$y+$dy);[int]$pixel.R;[int]$pixel.G;[int]$pixel.B}})
+}
+function Hover-Delta([int[]]$Actual,[int[]]$Expected){
+ if($Actual.Count -ne $Expected.Count -or !$Actual.Count){throw 'Hover reference pixel counts differ'}
+ $delta=0;for($i=0;$i -lt $Actual.Count;$i++){$delta=[Math]::Max($delta,[Math]::Abs($Actual[$i]-$Expected[$i]))};$delta
+}
+function Hover-Capture([string]$Name,$Area,$Slots,[switch]$Reference){
+ if($Reference){Wait-StablePixels {
+  $null=[TabFrames]::DwmFlush();$image=[TabFrames]::Grab($Area.Left,$Area.Top,$Area.Width,$Area.Height)
+  try{@(foreach($slot in $Slots){Hover-Pixels $image $Area $slot}) -join ','}finally{$image.Dispose()}
+ } -Composed|Out-Null}
+ $null=[TabFrames]::DwmFlush();$image=[TabFrames]::Grab($Area.Left,$Area.Top,$Area.Width,$Area.Height)
+ $image.Save((Join-Path $run ($Name+'.png')));$image
+}
+function Hover-Review{
+ if(![CapyRowPointer]::Initialized){[CapyRowPointer]::Initialize([uint32]$review.Id)}
+ Use-PaintWorkspace
+ $group=@((Model).layout.groups|Where-Object {$_.panels -contains 'tool_settings'})[0].id
+ foreach($panel in @('proof','stats')){
+  if(@((Model).layout.groups|Where-Object {$_.id -eq $group -and $_.panels -contains $panel}).Count){continue}
+  $grip=(Control ('group-grip-'+$group) -Arranged).Current.BoundingRectangle
+  [CapyRowPointer]::RightClick([int]($grip.Left+$grip.Width/2),[int]($grip.Top+$grip.Height/2))
+  (Control 'Add built-in panel' -Name -Type $ControlType::MenuItem).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+  $title=@((Model).panels|Where-Object id -eq $panel)[0].configuration_title -replace '^Configure ',''
+  (Control $title -Name -Type $ControlType::MenuItem).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+  Wait-Until {(Tab-Order $panel) -contains 'tool_settings'} "Hover setup did not add $panel to the source tabs"
+ }
+ $grip=(Control ('group-grip-'+$group) -Arranged).Current.BoundingRectangle
+ [CapyRowPointer]::RightClick([int]($grip.Left+$grip.Width/2),[int]($grip.Top+$grip.Height/2))
+ (Control 'Icons only' -Name -Type $ControlType::MenuItem).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+ Wait-Until {(Workspace-Group 'stats').tab_style -eq 'icon'} 'Hover setup did not select fixed icon tabs'
+ Invoke 'panel-tab-stats'
+ Wait-Until {(Workspace-Group 'stats').active -eq 'stats' -and ((Tab-Order 'stats') -join ',') -eq 'tool_settings,sizes,proof,stats'} 'Hover setup did not retain three inactive tabs and selected Stats'
+ $a=Control 'panel-tab-tool_settings' -Arranged;$b=Control 'panel-tab-sizes' -Arranged;$d=Control 'panel-tab-proof' -Arranged;$c=Control 'panel-tab-stats' -Arranged
+ $first=$a.Current.BoundingRectangle;$selected=$c.Current.BoundingRectangle
+ $slots=@($b.Current.BoundingRectangle,$d.Current.BoundingRectangle)
+ $area=[Drawing.Rectangle]::new([int]$slots[0].Left,[int]$slots[0].Top,[int][Math]::Ceiling($slots[1].Right-$slots[0].Left),[int][Math]::Ceiling($slots[0].Height))
+ if([Math]::Abs($slots[0].Width-$slots[1].Width) -gt 1){throw 'Hover setup requires equal inactive-tab widths'}
+ $canvas=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
+ $away=@{x=[int]($canvas.Left+$canvas.Width/2);y=[int]($canvas.Top+$canvas.Height/2)}
+ $point=@{x=[int]($slots[1].Left+$slots[1].Width/2);y=[int]($slots[1].Top+$slots[1].Height/2)}
+ $images=[Collections.Generic.List[Drawing.Bitmap]]::new();$failures=[Collections.Generic.List[string]]::new();$records=@()
+ try{
+  [CapyRowPointer]::Hover($away.x,$away.y)
+  $plain=Hover-Capture 'hover-unhovered-reference' $area $slots -Reference;$images.Add($plain)
+  $hovered=@()
+  for($i=0;$i -lt 2;$i++){
+   [CapyRowPointer]::Hover([int]($slots[$i].Left+$slots[$i].Width/2),$point.y)
+   $image=Hover-Capture ('hover-hovered-reference-'+$i) $area $slots -Reference;$images.Add($image)
+   $hovered+=,@(Hover-Pixels $image $area $slots[$i])
+  }
+  $unhovered=@(@(Hover-Pixels $plain $area $slots[0]),@(Hover-Pixels $plain $area $slots[1]))
+  @{theme=$Theme;area=$area;slots=$slots;unhovered=$unhovered;hovered=$hovered;selected_endpoints=@($first,$selected);tab_ids=@($a.GetRuntimeId(),$b.GetRuntimeId(),$d.GetRuntimeId(),$c.GetRuntimeId())}|ConvertTo-Json -Depth 10|Set-Content (Join-Path $run 'hover-reference.json')
+  foreach($pixels in @($unhovered)+@($hovered)){foreach($channel in 0..2){
+   $values=@(for($i=$channel;$i -lt $pixels.Count;$i+=3){$pixels[$i]})
+   $range=$values|Measure-Object -Minimum -Maximum
+   if($range.Maximum-$range.Minimum -gt 3){throw 'Inactive-tab reference patch is not a blank uniform fill'}
+  }}
+  for($i=0;$i -lt 2;$i++){if((Hover-Delta $hovered[$i] $unhovered[$i]) -le 6){throw 'Composed inactive-tab hover has no distinct reference fill'}}
+  foreach($device in @('mouse','pen')){
+   [CapyRowPointer]::Hover($away.x,$away.y)
+   $from=$c.Current.BoundingRectangle;$to=$a.Current.BoundingRectangle
+   [CapyRowPointer]::Down('mouse',[int]($from.Left+8*$scale),$point.y)
+   try{Walk ($from.Left+8*$scale) $point.y ($to.Left+4*$scale) $point.y;[CapyRowPointer]::Up()}
+   finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}}
+   Wait-Until {(Workspace-Group 'stats').active -eq 'stats' -and ((Tab-Order 'stats') -join ',') -eq 'stats,tool_settings,sizes,proof' -and $null -eq (Find-Preview) -and [Math]::Abs($a.Current.BoundingRectangle.Left-$slots[0].Left) -le 1 -and [Math]::Abs($b.Current.BoundingRectangle.Left-$slots[1].Left) -le 1 -and [Math]::Abs($c.Current.BoundingRectangle.Left-$first.Left) -le 1} 'Hover setup did not move selected Stats before the three inactive tabs'
+   (Control 'drawing-canvas').SetFocus()
+   [CapyRowPointer]::Hover($away.x,$away.y)
+   if($device -eq 'pen'){[CapyRowPointer]::PenHover($point.x,$point.y)}else{[CapyRowPointer]::Hover($point.x,$point.y)}
+   $before=Hover-Capture ('hover-'+$device+'-parked') $area $slots -Reference;$images.Add($before)
+   $cursorBefore=[CapyRowPointer]::Cursor().position
+   if((Hover-Delta (Hover-Pixels $before $area $slots[0]) $unhovered[0]) -gt 3 -or (Hover-Delta (Hover-Pixels $before $area $slots[1]) $hovered[1]) -gt 3){throw 'Parked input did not establish exactly one hovered inactive tab'}
+   [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11,0x12),0x5A)
+   Wait-Until {(Workspace-Group 'stats').active -eq 'stats' -and ((Tab-Order 'stats') -join ',') -eq 'tool_settings,sizes,proof,stats' -and [Math]::Abs($b.Current.BoundingRectangle.Left-$slots[0].Left) -le 1 -and [Math]::Abs($d.Current.BoundingRectangle.Left-$slots[1].Left) -le 1 -and [Math]::Abs($c.Current.BoundingRectangle.Left-$selected.Left) -le 1} 'Keyboard workspace Undo did not restore the inactive tab positions and selected Stats'
+   $after=Hover-Capture ('hover-'+$device+'-resting-undo') $area $slots;$images.Add($after)
+   $cursorAfter=[CapyRowPointer]::Cursor().position
+   $actual=@(@(Hover-Pixels $after $area $slots[0]),@(Hover-Pixels $after $area $slots[1]))
+   $errors=@((Hover-Delta $actual[0] $unhovered[0]),(Hover-Delta $actual[1] $hovered[1]))
+   $records+=@{device=$device;injected_point=$point;cursor_before=$cursorBefore;cursor_after=$cursorAfter;order=Tab-Order 'stats';active=(Workspace-Group 'stats').active;bounds=@($a.Current.BoundingRectangle,$b.Current.BoundingRectangle,$d.Current.BoundingRectangle,$c.Current.BoundingRectangle);pixels=$actual;errors=$errors;presentation=Presentation;pen_keepalive_same_position=($device -eq 'pen')}
+   @{theme=$Theme;area=$area;slots=$slots;unhovered=$unhovered;hovered=$hovered;cases=$records}|ConvertTo-Json -Depth 18|Set-Content (Join-Path $run 'hover-resting-input.json')
+   if($device -eq 'mouse' -and ($cursorBefore.x -ne $cursorAfter.x -or $cursorBefore.y -ne $cursorAfter.y)){$failures.Add('Resting mouse moved during keyboard workspace Undo')}
+   if(@($errors|Where-Object {$_ -gt 3}).Count){$failures.Add("$device hover did not follow the tabs under its unchanged position")}
+   if($device -eq 'pen'){[CapyRowPointer]::PenLeave()}
+  }
+  if($failures.Count){throw ($failures -join '; ')}
+ }finally{[CapyRowPointer]::PenLeave();foreach($image in $images){$image.Dispose()}}
+ @{theme=$Theme;resting_mouse_workspace_undo='passed';pen_in_range_workspace_undo='passed';pen_input='OS-injected same-position hover keepalive; physical pen remains separate'}|ConvertTo-Json
+}
 function Drawer-Style([uint32]$Group,[string]$Name,[string]$Value){
  $previous=(Control 'drawer-tab-brushes' -Arranged).GetRuntimeId() -join ':'
  $grip=(Control ('drawer-grip-'+$Group) -Arranged).Current.BoundingRectangle
@@ -607,6 +697,13 @@ try{
  $script:frameFailures=@()
  $normal=$baseline.state.workspace.layout|ConvertTo-Json -Depth 80 -Compress
  $baseline|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'before-model.json')
+ if($Journey -like 'hover-*'){
+  Hover-Review
+  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -StateDirectory $run -Action Close -DiscardUnsaved
+  if(!$review.WaitForExit(15000) -or $review.ExitCode -ne 0){throw 'Hover review did not close cleanly'}
+  if((Get-Item -LiteralPath $stderr).Length){throw 'Native hover stderr requires inspection'}
+  return
+ }
  if($Journey -like 'cold-*'){Cold-Review;return}
  if($Journey -in @('chrome-dark','chrome-light')){Chrome-Review;return}
  if($Journey -like 'drawer-*'){Drawer-Review;return}
@@ -767,6 +864,7 @@ try{
  } 'Navigator cancellation did not restore the lower native panel pixels'
  if((Model).state.document_file.modified){throw 'Navigator workspace/camera motion modified the drawing'}
  if($Theme -eq 'dark'){[CapyRowPointer]::Initialize([uint32]$review.Id);Chrome-Review}
+ Hover-Review
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -StateDirectory $run -Action Close -DiscardUnsaved
  if(!$review.WaitForExit(15000)){throw 'Owned tab-drag window did not close'}
  if($review.ExitCode -ne 0){throw "Owned tab-drag process exited $($review.ExitCode)"}
