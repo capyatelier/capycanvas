@@ -13,7 +13,7 @@ function Edit([string]$Id,[string]$Value){(Control $Id).GetCurrentPattern([Syste
 function Button([string]$Name){
     Control $Name -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button)
 }
-function Choose([string]$Name){(Button $Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
+function Choose([string]$Name){Wait-Until {(Button $Name).Current.IsEnabled} "Manager action remained disabled: $Name";(Button $Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
 function Settled {
     Wait-Until {$v=Manager;$null -ne $v -and !$v.loading -and !$v.busy} 'Manager did not settle'
     if((Manager).error){throw (Manager).error}
