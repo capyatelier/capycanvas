@@ -3,6 +3,7 @@
 #include "NativeMenus.h"
 #include "ChromeVisibility.h"
 #include "WorkspaceManagerView.h"
+#include "WorkspaceDialogs.h"
 #include "WorkspaceView.h"
 #include "CanvasActionBar.h"
 #include "SettingsView.h"
@@ -444,6 +445,44 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         }catch(...){if(starter)entry.RemoveHandler(UIElement::PreviewKeyDownEvent(),starter);if(heldKey)try{nativeKey(VK_RETURN,true);}catch(...){}if(heldTrigger)try{nativeKey(VK_F24,true);}catch(...){}dialog.Hide();throw;}
         }
     }
+    winrt::Windows::Foundation::IAsyncAction customizationDraft(){
+        auto actions=std::make_shared<std::vector<J>>();auto errors=std::make_shared<std::vector<std::string>>();
+        auto prompt=O({{L"panel",S(L"fixture-toolbar")},{L"operation",S(L"rename")},{L"title",S(L"Rename Toolbar")},{L"name",S(L"Acknowledged A")},
+            {L"name_label",S(L"Toolbar name")},{L"confirm_label",S(L"Rename")},{L"cancel_label",S(L"Cancel")},{L"can_confirm",B(true)}});
+        auto snapshot=O({{L"state",O({{L"theme",S(root.RequestedTheme()==ElementTheme::Light?L"light":L"dark")}})},{L"toolbar_prompt",prompt}});
+        WorkspaceDialogs dialogs([actions](std::string value){actions->push_back(J::Parse(to_hstring(value)));},data->catalog,context.localization,root.XamlRoot(),[]{},[errors](std::string value){errors->push_back(std::move(value));});
+        auto apply=[&]{dialogs.Apply(J::Parse(snapshot.Stringify()),false);};bool heldKey=false;
+        try{
+            apply();co_await wait([this]{auto entry=workspaceElement(L"toolbar-name").try_as<TextBox>();return entry&&entry.IsLoaded()&&entry.ActualWidth()>0;},L"Customization name did not become arranged");
+            auto entry=workspaceElement(L"toolbar-name").as<TextBox>();auto dialog=workspaceElement(L"toolbar-prompt").as<ContentDialog>();
+            auto primary=workspaceElement(L"PrimaryButton").as<Button>();entry.Focus(FocusState::Keyboard);
+            co_await wait([this,entry]{return FocusManager::GetFocusedElement(root.XamlRoot())==entry;},L"Customization name did not own native focus");privacy();
+            entry.Text(L"Pending B");entry.Text(L"Acknowledged A");
+            require(actions->size()==2&&str(object(actions->at(0),L"action"),L"name")==L"Pending B"&&str(object(actions->at(1),L"action"),L"name")==L"Acknowledged A",L"Returning to an older shared name lost a newer native edit");
+            prompt.Insert(L"name",S(L"Pending B"));apply();
+            require(entry.Text()==L"Acknowledged A"&&!primary.IsEnabled(),L"Delayed name acknowledgement replaced or admitted a newer native edit");
+            prompt.Insert(L"name",S(L"Acknowledged A"));apply();require(primary.IsEnabled(),L"Latest name acknowledgement did not enable confirmation");actions->clear();entry.SelectAll();
+            ScopedComposition composition(*textServices,[trace=imeTrace](hstring api,HRESULT result,uintptr_t pointer){trace->push_back(O({{L"case",S(L"customization-name-ack")},{L"api",S(api)},{L"hresult",N(double(result))},{L"pointer",S(to_hstring(uint64_t(pointer)))}}));});
+            co_await wait([this,entry,&composition]{return composition.focused(entry,root.XamlRoot());},L"Customization name has no native TSF context");composition.begin();
+            co_await wait([this,entry]{return entry.Text()==L"\u5019\u88dc"&&textComposing(entry)&&FocusManager::GetFocusedElement(root.XamlRoot())==entry;},L"Native customization composition did not publish its exact marked name");
+            auto acknowledged=actions->size();require(acknowledged>0&&str(object(actions->back(),L"action"),L"name")==L"\u5019\u88dc",L"Native composition did not dispatch its exact authored name");
+            prompt.Insert(L"name",S(entry.Text()));apply();require(primary.IsEnabled()&&textComposing(entry),L"Marked name acknowledgement did not retain enabled native confirmation");
+            auto notifications=std::make_shared<unsigned>(0);entry.TextChanging([notifications](TextBox const& sender,auto&&){if(sender.Text()==L"\u5019\u88dc")++*notifications;});
+            composition.edit(L"same-name",[&composition](TfEditCookie cookie){com_ptr<ITfRange> range;composition.checked(L"ITfComposition::GetRange",composition.composition->GetRange(range.put()));composition.checked(L"ITfRange::SetText/same-name",range->SetText(cookie,0,L"\u5019\u88dc",2));composition.checked(L"ITfRange::Collapse/same-name",range->Collapse(cookie,TF_ANCHOR_END));TF_SELECTION selection{};selection.range=range.get();selection.style.ase=TF_AE_END;composition.checked(L"ITfContext::SetSelection/same-name",composition.context->SetSelection(cookie,1,&selection));});
+            composition.end();co_await settle();co_await wait([entry]{return !textComposing(entry);},L"Same-name native composition did not retire");
+            require(*notifications>0,L"Same-value native TSF edit did not produce TextChanging");
+            require(primary.IsEnabled(),L"Acknowledged native name completion disabled confirmation");
+            require(actions->size()==acknowledged,L"Same acknowledged native name dispatched a phantom edit");
+            require(dialogs.IsOpen(),L"Same native name completion closed its dialog");
+            require(workspaceElement(L"toolbar-name")==entry,L"Same native name completion replaced its editor");
+            require(FocusManager::GetFocusedElement(root.XamlRoot())==entry,L"Same native name completion moved native focus");
+            require(entry.Text()==L"\u5019\u88dc",(L"Same native name completion changed exact text: "+entry.Text()).c_str());
+            require(entry.SelectionStart()==2&&entry.SelectionLength()==0,(L"Same native name completion changed caret: "+to_hstring(entry.SelectionStart())+L","+to_hstring(entry.SelectionLength())).c_str());
+            nativeKey(VK_RETURN,false);heldKey=true;nativeKey(VK_RETURN,true);heldKey=false;co_await wait([actions,acknowledged]{return actions->size()==acknowledged+1;},L"Ordinary native Enter did not confirm the acknowledged name");
+            require(str(object(actions->back(),L"action"),L"type")==L"confirm_toolbar"&&errors->empty(),L"Acknowledged name produced an incorrect or duplicate confirmation");composition.finish();++imeChecks;
+            dialogs.Hide();co_await wait([&dialogs]{return !dialogs.IsOpen();},L"Customization name fixture did not close");
+        }catch(...){if(heldKey)try{nativeKey(VK_RETURN,true);}catch(...){}dialogs.Hide();throw;}
+    }
     winrt::Windows::Foundation::IAsyncAction workspaceIme(){
         auto dark=root.RequestedTheme()!=ElementTheme::Light;
         auto header=O({{L"this_workspace",S(L"This workspace")},{L"saved_toolbars",S(L"Saved toolbars")},{L"toolbar_actions",S(L"Actions")},
@@ -587,6 +626,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             require(data->dismissTransients(),L"Visible popup ignored cancellation registry");co_await wait([this,beforeClosed]{return closedCount==beforeClosed+1&&!visiblePopup();},L"Native popup Closed acknowledgement or visible-popup retirement timed out");
             require(!shown.Current()&&!shown.Show(anchor,{}),L"Reply reopened closed popup");empty();++checks;
             phase=L"workspace-ime";co_await workspaceIme();
+            phase=L"customization-name-ack";co_await customizationDraft();
             phase=L"native-default-ime";co_await defaultIme();
             phase=L"layer-language-draft";co_await layerLanguageDraft();
             phase=L"settings-resize";co_await settingsResize();

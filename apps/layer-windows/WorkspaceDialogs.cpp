@@ -35,6 +35,10 @@ struct WorkspaceDialogs::Impl:std::enable_shared_from_this<Impl>{
         if(draft&&*draft==value)draft.reset();
         if(!draft)updateText(entry,value);
     }
+    bool edit(TextBox const& entry,wchar_t const* key,std::optional<hstring>& draft){
+        auto value=entry.Text();if(value==draft.value_or(str(view(),key)))return false;
+        draft=value;return true;
+    }
     std::function<void()> changed;
     Dispatch report;
     struct Factory:implements<Factory,IElementFactory>{
@@ -100,18 +104,14 @@ struct WorkspaceDialogs::Impl:std::enable_shared_from_this<Impl>{
         error.TextWrapping(TextWrapping::Wrap);Grid::SetRow(error,4);body.Children().Append(error);
         AutomationProperties::SetAutomationId(error,L"workspace-dialog-error");
         auto weak=weak_from_this();
-        // TextChanging is synchronous; TextChanged arrives after rendering and
-        // can lose a newer edit to an intervening owner snapshot.
-        name.TextChanging([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating&&!self->closing&&!self->cancelPending){
-            self->nameDraft=self->name.Text();
-            self->send(O({{L"type",S(self->kind==L"picker"?L"picker_name":L"toolbar_name")},{L"name",S(self->name.Text())}}));
+        name.TextChanging([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating&&!self->closing&&!self->cancelPending&&self->edit(self->name,L"name",self->nameDraft)){
+            self->send(O({{L"type",S(self->kind==L"picker"?L"picker_name":L"toolbar_name")},{L"name",S(*self->nameDraft)}}));
         }});
         name.TextChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&self->nameDraft){
             self->dialog.IsPrimaryButtonEnabled(false);
         }});
-        search.TextChanging([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating&&!self->closing&&self->kind==L"picker"&&!self->cancelPending){
-            self->searchDraft=self->search.Text();
-            self->send(O({{L"type",S(L"picker_search")},{L"query",S(self->search.Text())}}));
+        search.TextChanging([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating&&!self->closing&&self->kind==L"picker"&&!self->cancelPending&&self->edit(self->search,L"query",self->searchDraft)){
+            self->send(O({{L"type",S(L"picker_search")},{L"query",S(*self->searchDraft)}}));
         }});
         dialog.PrimaryButtonClick([weak](auto&&,ContentDialogButtonClickEventArgs const& e){
             e.Cancel(true);
