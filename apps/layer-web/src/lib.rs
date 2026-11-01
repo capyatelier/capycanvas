@@ -732,7 +732,7 @@ impl WebApp {
                 self.documents.set_localization(&localization);
                 if let Some(controller) = &mut self.workspaces { controller.set_localization(localization); }
                 self.preferences_cache = None;
-                return serialize(&layer_ui::UiChange { revision:self.session.state().revision, regions:layer_ui::regions::ALL, canvas_wake:false });
+                return serialize(&layer_ui::UiChange { revision:self.session.state().revision, regions:layer_ui::regions::ALL, ..Default::default() });
             }
         }
         Ok(JsValue::NULL)

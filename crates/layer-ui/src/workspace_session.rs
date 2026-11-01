@@ -479,6 +479,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             change.revision = next.revision;
             change.regions |= next.regions;
             change.canvas_wake |= next.canvas_wake;
+            change.presentation_wake |= next.presentation_wake;
         }
         Ok(change)
     }

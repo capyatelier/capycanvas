@@ -32,6 +32,7 @@ pub(super) fn merge_change(a: UiChange, b: UiChange) -> UiChange {
         revision: a.revision.max(b.revision),
         regions: a.regions | b.regions,
         canvas_wake: a.canvas_wake || b.canvas_wake,
+        presentation_wake: a.presentation_wake || b.presentation_wake,
     }
 }
 

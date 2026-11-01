@@ -1861,13 +1861,42 @@ pub enum ContactPhase {
     Cancel,
 }
 
-/// Hosts request only the affected state fields. Pen movement normally returns
-/// no UI changes; canvas_wake schedules a display callback, never a GPU wait.
-#[derive(Clone, Copy, Debug, Default, Serialize)]
+/// Hosts refresh affected state fields and schedule canvas work or retained presentation.
+#[derive(Clone, Copy, Debug, Default)]
 pub struct UiChange {
     pub revision: u64,
     pub regions: u32,
     pub canvas_wake: bool,
+    pub presentation_wake: bool,
+}
+impl UiChange {
+    pub fn needs_present(&self) -> bool { self.canvas_wake || self.presentation_wake }
+}
+impl Serialize for UiChange {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut change = serializer.serialize_struct("UiChange", 3)?;
+        change.serialize_field("revision", &self.revision)?;
+        change.serialize_field("regions", &self.regions)?;
+        change.serialize_field("canvas_wake", &self.needs_present())?;
+        change.end()
+    }
+}
+#[cfg(test)]
+mod ui_change_tests {
+    use super::*;
+    #[test]
+    fn presentation_demand_preserves_the_three_field_wire_contract() {
+        for (canvas_wake, presentation_wake, wake) in [
+            (false, false, false), (true, false, true), (false, true, true), (true, true, true),
+        ] {
+            let change = UiChange { revision: 7, regions: regions::SETTINGS, canvas_wake, presentation_wake };
+            assert_eq!(change.needs_present(), wake);
+            assert_eq!(serde_json::to_value(change).unwrap(), serde_json::json!({
+                "revision": 7, "regions": regions::SETTINGS, "canvas_wake": wake,
+            }));
+        }
+    }
 }
 pub mod regions {
     pub const LAYOUT: u32 = 1;

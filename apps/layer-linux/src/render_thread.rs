@@ -31,12 +31,13 @@ fn wake_canvas(area: &gtk::glib::SendWeakRef<gtk::Picture>, status: &Arc<ChromeS
 fn canvas_action(area: &gtk::glib::SendWeakRef<gtk::Picture>, action: &'static str, status: &Arc<ChromeStatus>) {
     let area = area.clone();
     let status = status.clone();
-    gtk::glib::idle_add_once(move || {
-        if !status.accepting.load(Ordering::Acquire) { return; }
+    gtk::glib::idle_add_full(gtk::glib::Priority::HIGH_IDLE, move || {
+        if !status.accepting.load(Ordering::Acquire) { return gtk::glib::ControlFlow::Break; }
         if let Some(area) = area.upgrade() {
             let parameter = (action == "canvas.chrome").then(|| gtk::glib::variant::ToVariant::to_variant(&status.owner));
             let _ = area.activate_action(action, parameter.as_ref());
         }
+        gtk::glib::ControlFlow::Break
     });
 }
 
@@ -92,11 +93,12 @@ struct ChromeHandoff {
 impl ChromeHandoff {
     fn request(&mut self, revision: u64, hold: bool) -> bool {
         if matches!(self.first, FirstChrome::Granted | FirstChrome::Submitted) || revision < self.requested { return false; }
+        self.hold = hold && (self.first != FirstChrome::Visible || revision != self.requested || self.hold);
         self.requested = revision;
-        self.hold = hold;
         true
     }
     fn changed(&self) -> bool { self.requested != self.published }
+    fn needs_publication(&self) -> bool { self.synchronized.is_none() && (self.changed() || self.first == FirstChrome::Granted) }
     fn ready(&mut self) { assert_eq!(self.first, FirstChrome::Preparing); self.first = FirstChrome::Ready; }
     fn grant(&mut self, revision: u64) -> bool {
         if self.first != FirstChrome::Ready { return false; }
@@ -107,13 +109,17 @@ impl ChromeHandoff {
         true
     }
     fn can_present(&self) -> bool {
-        matches!(self.first, FirstChrome::Granted | FirstChrome::Visible) && self.synchronized.is_none()
+        matches!(self.first, FirstChrome::Granted | FirstChrome::Visible)
     }
-    fn should_hold(&self) -> bool { self.first == FirstChrome::Granted || self.changed() && self.hold }
-    fn publish(&mut self) -> Option<u64> {
+    fn release_for_canvas(&mut self) -> bool {
+        if self.first != FirstChrome::Visible { return false; }
+        self.synchronized.take().is_some()
+    }
+    fn should_hold(&self, allow_sync: bool) -> bool { self.first == FirstChrome::Granted || allow_sync && self.changed() && self.hold }
+    fn publish(&mut self, allow_sync: bool) -> Option<u64> {
         assert!(self.can_present());
         if !self.changed() && self.first == FirstChrome::Visible { return None; }
-        if self.should_hold() { self.synchronized = Some(self.requested); }
+        if self.should_hold(allow_sync) { self.synchronized = Some(self.requested); }
         self.published = self.requested;
         self.first = if self.first == FirstChrome::Granted { FirstChrome::Submitted } else { FirstChrome::Visible };
         Some(self.published)
@@ -156,7 +162,20 @@ struct ChromeRequests {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FrameReadiness { Waiting, Dependencies, Ready }
 impl FrameReadiness {
-    fn input_ready(self, order: u64) -> bool { self == Self::Ready && order != 0 }
+    fn ready(self) -> bool { self == Self::Ready }
+}
+fn admit_frame<T, E>(frame: Option<T>, pending: &mut VecDeque<T>, mut draw: impl FnMut(&mut T) -> Result<bool, E>) -> Result<usize, E> {
+    let mut admitted = 0;
+    while let Some(frame) = pending.front_mut() {
+        if !draw(frame)? { break; }
+        pending.pop_front();
+        admitted += 1;
+    }
+    if let Some(mut frame) = frame {
+        if pending.is_empty() && draw(&mut frame)? { admitted += 1; }
+        else { pending.push_back(frame); }
+    }
+    Ok(admitted)
 }
 impl ChromeRequests {
     fn request(&mut self, chrome: ChromePresentation, after_input: u64) {
@@ -169,8 +188,8 @@ impl ChromeRequests {
         }
     }
     fn considered(&mut self, input: u64) { self.considered_input = self.considered_input.max(input); }
-    fn take_ready(&mut self, readiness: FrameReadiness, order: u64) -> Option<ChromePresentation> {
-        if readiness.input_ready(order) || self.first.as_ref().is_none_or(|(after, _)| *after > self.considered_input) { return None; }
+    fn take_ready(&mut self) -> Option<ChromePresentation> {
+        if self.first.as_ref().is_none_or(|(after, _)| *after > self.considered_input) { return None; }
         let (_, chrome) = self.first.take().unwrap();
         self.first = self.latest.take();
         Some(chrome)
@@ -447,7 +466,7 @@ pub struct RenderWorker {
     telemetry_enabled: bool,
     commands: mpsc::Sender<Command>,
     chrome_updates: mpsc::Sender<ChromeUpdate>,
-    chrome_sent: Option<u64>,
+    chrome_sent: Option<(u64, bool)>,
     input_order: u64,
     replies: mpsc::Receiver<Reply>,
     failure: Arc<std::sync::OnceLock<String>>,
@@ -501,10 +520,10 @@ impl RenderWorker {
             style:self.backdrop_style,backdrop_hold:self.backdrop_hold,overviews:self.overviews.clone()}
     }
     pub(super) fn present_chrome(&mut self) -> Result<(), BackendError> {
-        if self.chrome_sent != Some(self.chrome) {
+        if self.chrome_sent != Some((self.chrome, self.chrome_hold)) {
             self.chrome_updates.send(ChromeUpdate::Current(self.chrome_presentation(), self.input_order))
                 .map_err(|_| BackendError("GPU worker stopped"))?;
-            self.chrome_sent = Some(self.chrome);
+            self.chrome_sent = Some((self.chrome, self.chrome_hold));
             self.send(Command::Wake)?;
         }
         Ok(())
@@ -512,7 +531,7 @@ impl RenderWorker {
     pub(super) fn start_chrome(&mut self, revision: u64) -> Result<(), String> {
         assert_eq!(revision, self.chrome);
         self.chrome_updates.send(ChromeUpdate::Initial(self.chrome_presentation())).map_err(error)?;
-        self.chrome_sent = Some(revision);
+        self.chrome_sent = Some((revision, self.chrome_hold));
         self.send(Command::Wake).map_err(error)
     }
     pub(crate) fn chrome_status(&self) -> &Arc<ChromeStatus> { &self.presented_chrome }
@@ -1318,7 +1337,6 @@ impl CanvasRenderer for RenderWorker {
             #[cfg(test)]
             queued_ns: gtk::glib::monotonic_time().max(0) as u64 * 1000,
         };
-        if frame.present && input_order == 0 { self.present_chrome()?; }
         self.in_flight.fetch_add(1, Ordering::Release);
         self.first_frame_sent = true;
         self.settling_view = None;
@@ -1454,7 +1472,7 @@ impl Worker {
                             if self.chrome.first == FirstChrome::Visible {
                                 self.chrome_requests.request(chrome, after_input);
                             } else {
-                                self.set_chrome(&chrome);
+                                self.set_chrome(&chrome)?;
                             }
                         },
                         ChromeUpdate::Initial(chrome) => if self.chrome.grant(chrome.revision) {
@@ -1465,6 +1483,7 @@ impl Worker {
                     }
                 }
             }
+            self.apply_pending_chrome()?;
             if let Some(failure) = self.watch.failure() {
                 return Err(failure);
             }
@@ -1538,98 +1557,102 @@ impl Worker {
                 }
                 self.report_frame(report);
             }
-            loop {
-                let readiness = pending_frames.front().map_or(FrameReadiness::Waiting,
-                    |frame| self.frame_readiness(frame, startup_progress.canvas_ready, startup_progress.brush_ready));
-                let order = pending_frames.front().map_or(0, |frame| frame.input_order);
-                self.publish_chrome(readiness, order)?;
-                match readiness {
-                    FrameReadiness::Waiting => break,
-                    FrameReadiness::Dependencies => { self.report_frame(report); break; }
-                    FrameReadiness::Ready => (),
+            let admitted = admit_frame(None, &mut pending_frames,
+                |frame| self.draw_ready_frame(frame, &startup_progress, report, #[cfg(test)] &mut timing))?;
+            if admitted != 0 {
+                last_canvas_frame = std::time::Instant::now();
+                document_drawn = true;
+                count.fetch_sub(admitted, Ordering::Release);
+            }
+            if context_capture.is_some() && pending_frames.is_empty() && !self.renderer.has_pending_submission() {
+                let request = context_capture.take().unwrap();
+                let _ = request.value.set(Ok(self.renderer.evaluation_context()));
+            }
+            let queued = if context_capture.is_none() && self.initial_completion.is_none() && document_drawn && !deferred.is_empty() {
+                Some(deferred.pop_front().unwrap())
+            } else {
+                match receiver.try_recv() {
+                    Ok(command) => Some(command),
+                    Err(mpsc::TryRecvError::Empty) => None,
+                    Err(mpsc::TryRecvError::Disconnected) => break,
                 }
-                let mut frame = pending_frames.pop_front().unwrap();
+            };
+            if queued.is_none() {
+                if self.pending_present && self.renderer.has_presentable_frame() {
+                    if self.chrome.release_for_canvas() { self.child.synchronize(false)?; }
+                    if let Some(target) = self.acquire()? { self.publish(target, None, false, #[cfg(test)] None, #[cfg(test)] None)?; }
+                } else if pending_frames.is_empty() {
+                    self.publish_chrome(#[cfg(test)] count.load(Ordering::Acquire))?;
+                }
+            }
+            if queued.is_none() {
+                if telemetry_enabled && let Ok(mut snapshot) = worker_telemetry.try_lock() {
+                    *snapshot = self.renderer.telemetry();
+                    snapshot.resident_bytes += self.presenter.proof_storage_bytes();
+                }
                 #[cfg(test)]
-                timing.begin(frame.queued_ns);
-                let backdrop=!self.backdrop_submitted;
-                self.draw(&mut frame,backdrop,#[cfg(test)] &mut timing)?;
-                last_canvas_frame=std::time::Instant::now();
-                if backdrop {pending_frames.push_front(frame);}else {
-                    document_drawn=true;self.report_frame(report);count.fetch_sub(1,Ordering::Release);
-                }
-            }
-            if self.pending_present && self.renderer.has_presentable_frame() && let Some(target) = self.acquire()? {
-                self.publish(target, None, #[cfg(test)] None)?;
-            }
-            if telemetry_enabled && let Ok(mut snapshot) = worker_telemetry.try_lock() {
-                *snapshot = self.renderer.telemetry();
-                snapshot.resident_bytes += self.presenter.proof_storage_bytes();
-            }
-            #[cfg(test)]
-            timing.presented(self.child.take_presented());
-            while let Some(image) = self.renderer.take_thumbnail() {
-                reply
-                    .send(Reply::Thumbnail(image.map_err(error)?))
-                    .map_err(error)?;
-            }
-            if let Some(image) = self.renderer.take_brush_stamp() {
-                stamp_flight = false;
-                reply.send(Reply::BrushStamp(image.map_err(error))).map_err(error)?;
-            }
-            if !stamp_flight && pending_frames.is_empty()
-                && let Some((id,request)) = pending_stamp.as_ref()
-            {
-                match self.renderer.request_brush_stamp(*id,request) {
-                    Ok(true) => { pending_stamp=None; stamp_flight=true; },
-                    Ok(false) => (),
-                    Err(failure) => { pending_stamp=None; reply.send(Reply::BrushStamp(Err(error(failure)))).map_err(error)?; },
-                }
-            }
-            if let Some(color) = self.renderer.take_color_sample() {
-                reply
-                    .send(Reply::ColorSample(color.map_err(error)))
-                    .map_err(error)?;
-            }
-            if let Some(result) = self.renderer.take_selection_paint() {
-                reply.send(Reply::SelectionPaint(selection_generation, result.map_err(error))).map_err(error)?;
-            }
-            if let Some(region) = self.renderer.take_region() {
-                reply
-                    .send(Reply::Region(region_generation, region.map_err(error)))
-                    .map_err(error)?;
-            }
-            // The worker can advance a chunk independently of GTK's UI poll.
-            // Apply the same priority already used for optional thumbnails.
-            if last_canvas_frame.elapsed() >= Duration::from_millis(50) {
-                while let Some(image) = self.renderer.take_filter_previews() {
+                timing.presented(self.child.take_presented());
+                #[cfg(test)]
+                timing.camera_feedback(self.child.take_camera_feedback());
+                while let Some(image) = self.renderer.take_thumbnail() {
                     reply
-                        .send(Reply::FilterPreviews(filter_preview_generation, image.map_err(error)))
+                        .send(Reply::Thumbnail(image.map_err(error)?))
                         .map_err(error)?;
                 }
-            }
-            if let Some(result) = self.renderer.take_effect_validation() {
-                reply.send(Reply::EffectValidation(result)).map_err(error)?;
+                if let Some(image) = self.renderer.take_brush_stamp() {
+                    stamp_flight = false;
+                    reply.send(Reply::BrushStamp(image.map_err(error))).map_err(error)?;
+                }
+                if !stamp_flight && pending_frames.is_empty()
+                    && let Some((id,request)) = pending_stamp.as_ref()
+                {
+                    match self.renderer.request_brush_stamp(*id,request) {
+                        Ok(true) => { pending_stamp=None; stamp_flight=true; },
+                        Ok(false) => (),
+                        Err(failure) => { pending_stamp=None; reply.send(Reply::BrushStamp(Err(error(failure)))).map_err(error)?; },
+                    }
+                }
+                if let Some(color) = self.renderer.take_color_sample() {
+                    reply
+                        .send(Reply::ColorSample(color.map_err(error)))
+                        .map_err(error)?;
+                }
+                if let Some(result) = self.renderer.take_selection_paint() {
+                    reply.send(Reply::SelectionPaint(selection_generation, result.map_err(error))).map_err(error)?;
+                }
+                if let Some(region) = self.renderer.take_region() {
+                    reply
+                        .send(Reply::Region(region_generation, region.map_err(error)))
+                        .map_err(error)?;
+                }
+                // The worker can advance a chunk independently of GTK's UI poll.
+                // Apply the same priority already used for optional thumbnails.
+                if last_canvas_frame.elapsed() >= Duration::from_millis(50) {
+                    while let Some(image) = self.renderer.take_filter_previews() {
+                        reply
+                            .send(Reply::FilterPreviews(filter_preview_generation, image.map_err(error)))
+                            .map_err(error)?;
+                    }
+                }
+                if let Some(result) = self.renderer.take_effect_validation() {
+                    reply.send(Reply::EffectValidation(result)).map_err(error)?;
+                }
             }
             // A small preview can wait through continuous drawing/navigation.
             // Batching bounds interruption when input resumes during idle work;
             // the quiet period keeps those batches from competing every frame.
-            let thumbnail_ready = !pending_thumbnails.is_empty()
+            let thumbnail_ready = queued.is_none() && !pending_thumbnails.is_empty()
                 && last_canvas_frame.elapsed() >= Duration::from_millis(50);
             if context_capture.is_some() {
-                if pending_frames.is_empty() && !self.renderer.has_pending_submission() {
-                    let request = context_capture.take().unwrap();
-                    let _ = request.value.set(Ok(self.renderer.evaluation_context()));
-                } else {
-                    match receiver.recv_timeout(Duration::from_millis(1)) {
-                        Ok(Command::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                        Ok(command) => deferred.push_back(command),
-                        Err(mpsc::RecvTimeoutError::Timeout) => (),
-                    }
-                    continue;
+                match queued.map(Ok).unwrap_or_else(|| receiver.recv_timeout(Duration::from_millis(1))) {
+                    Ok(Command::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Ok(command) => deferred.push_back(command),
+                    Err(mpsc::RecvTimeoutError::Timeout) => (),
                 }
+                continue;
             }
-            let next = if self.initial_completion.is_none() && document_drawn && !deferred.is_empty() {
-                Ok(deferred.pop_front().unwrap())
+            let next = if let Some(command) = queued {
+                Ok(command)
             } else if !startup_progress.complete
                 || !pending_frames.is_empty()
                 || self.renderer.has_pending_submission()
@@ -1873,42 +1896,23 @@ impl Worker {
                     }
                 }
                 Command::Present(view, geometry, cursor) => {
-                    self.set_view(view, geometry);
+                    self.set_view(view, geometry)?;
                     self.cursor = cursor;
                     self.presenter.set_cursor(self.renderer.device(), &self.cursor, geometry.scale as f32);
-                    if let Some(target) = self.acquire()? { self.publish(target, None, #[cfg(test)] None)?; }
+                    if let Some(target) = self.acquire()? { self.publish(target, None, false, #[cfg(test)] None, #[cfg(test)] None)?; }
                 }
-                Command::Frame(mut frame) => {
+                Command::Frame(frame) => {
                     #[cfg(test)]
                     if fail_next_frame {
                         self.inject_validation_failure();
                     }
-                    if !self.renderer.can_submit() || !pending_frames.is_empty()
-                        || !self.dependencies_ready(&frame) || self.backdrop_submitted
-                        && (!startup_progress.canvas_ready
-                            || (!frame.dabs.is_empty() && !startup_progress.brush_ready))
-                    {
-                        self.chrome_requests.considered(frame.input_order);
-                        pending_frames.push_back(frame);
-                        continue;
-                    }
-                    #[cfg(test)]
-                    timing.begin(frame.queued_ns);
-                    let backdrop = !self.backdrop_submitted;
-                    self.draw(
-                        &mut frame,
-                        backdrop,
-                        #[cfg(test)]
-                        &mut timing,
-                    )?;
                     self.chrome_requests.considered(frame.input_order);
-                    last_canvas_frame = std::time::Instant::now();
-                    if backdrop {
-                        pending_frames.push_back(frame);
-                    } else {
+                    let admitted = admit_frame(Some(frame), &mut pending_frames,
+                        |frame| self.draw_ready_frame(frame, &startup_progress, report, #[cfg(test)] &mut timing))?;
+                    if admitted != 0 {
+                        last_canvas_frame = std::time::Instant::now();
                         document_drawn = true;
-                        self.report_frame(report);
-                        count.fetch_sub(1, Ordering::Release);
+                        count.fetch_sub(admitted, Ordering::Release);
                     }
                 }
                 Command::Asset(id, asset) => {
@@ -2121,18 +2125,43 @@ impl Worker {
             FrameReadiness::Dependencies
         } else { FrameReadiness::Ready }
     }
-    fn publish_chrome(&mut self, readiness: FrameReadiness, order: u64) -> Result<(), String> {
-        while let Some(chrome) = self.chrome_requests.take_ready(readiness, order) { self.set_chrome(&chrome); }
-        if !readiness.input_ready(order) && (self.chrome.changed() || self.chrome.first == FirstChrome::Granted)
-            && self.pending_present && self.renderer.has_presentable_frame()
+    fn draw_ready_frame(
+        &mut self,
+        frame: &mut Frame,
+        startup: &layer_render_wgpu::StartupProgress,
+        report: &FrameReport,
+        #[cfg(test)] timing: &mut crate::timing::Timing,
+    ) -> Result<bool, String> {
+        let readiness = self.frame_readiness(frame, startup.canvas_ready, startup.brush_ready);
+        if !readiness.ready() {
+            if readiness == FrameReadiness::Dependencies { self.report_frame(report); }
+            return Ok(false);
+        }
+        #[cfg(test)]
+        timing.begin(frame.queued_ns);
+        let backdrop = !self.backdrop_submitted;
+        self.draw(frame, backdrop, #[cfg(test)] timing)?;
+        if !backdrop { self.report_frame(report); }
+        Ok(!backdrop)
+    }
+    fn apply_pending_chrome(&mut self) -> Result<(), String> {
+        while let Some(chrome) = self.chrome_requests.take_ready() { self.set_chrome(&chrome)?; }
+        Ok(())
+    }
+    fn publish_chrome(&mut self, #[cfg(test)] queued_frames_at_admission: usize) -> Result<(), String> {
+        self.apply_pending_chrome()?;
+        if self.chrome.needs_publication()
+            && self.renderer.has_presentable_frame()
             && let Some(target) = self.acquire()? {
-            self.publish(target, None, #[cfg(test)] None)?;
+            self.publish(target, None, true, #[cfg(test)] None, #[cfg(test)] Some(queued_frames_at_admission))?;
         }
         Ok(())
     }
-    fn set_chrome(&mut self, chrome: &ChromePresentation) {
-        if !self.chrome.request(chrome.revision, chrome.hold) { return; }
+    fn set_chrome(&mut self, chrome: &ChromePresentation) -> Result<(), String> {
+        if !self.chrome.request(chrome.revision, chrome.hold) { return Ok(()); }
+        if !chrome.hold && self.chrome.release_for_canvas() { self.child.synchronize(false)?; }
         self.apply_chrome(chrome);
+        Ok(())
     }
     fn apply_chrome(&mut self, chrome: &ChromePresentation) {
         self.surround = chrome.surround;
@@ -2140,7 +2169,6 @@ impl Worker {
         self.presenter.set_panel_surfaces(&self.renderer, &chrome.panels);
         self.overviews.clone_from(&chrome.overviews);
         self.presenter.set_overviews(&self.renderer, &self.overviews);
-        self.pending_present |= self.last_view.is_some() && self.chrome.changed();
     }
     fn prepare_initial_chrome(&mut self) {
         if self.chrome.first != FirstChrome::Preparing { return; }
@@ -2158,12 +2186,14 @@ impl Worker {
             self.initial_completion = Some(done);
         }
     }
-    fn set_view(&mut self, view: ViewState, geometry: Geometry) {
+    fn set_view(&mut self, view: ViewState, geometry: Geometry) -> Result<(), String> {
+        if self.chrome.release_for_canvas() { self.child.synchronize(false)?; }
         self.presenter.set_corner_radius(geometry.corner_radius * geometry.scale as f32);
         self.last_view = Some(view);
         self.geometry_changed |= self.geometry != Some(geometry);
         self.geometry = Some(geometry);
         self.pending_present = true;
+        Ok(())
     }
     fn dependencies_ready(&mut self,frame:&Frame)->bool {
         if self.backdrop_submitted {self.renderer.raster_dependencies_ready(frame.packet(),frame.transform_preview.as_ref())}else {
@@ -2200,8 +2230,9 @@ impl Worker {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         if frame.present {
-            self.set_chrome(&frame.chrome);
-            self.set_view(frame.view, frame.geometry);
+            self.set_chrome(&frame.chrome)?;
+            self.apply_pending_chrome()?;
+            self.set_view(frame.view, frame.geometry)?;
         }
         #[cfg(test)]
         timing.rendering(&self.renderer);
@@ -2248,8 +2279,11 @@ impl Worker {
             self.publish(
                 target,
                 frame.stroke_target.filter(|_| !backdrop),
+                false,
                 #[cfg(test)]
                 Some(timing),
+                #[cfg(test)]
+                None,
             )?;
         }
         self.child.observe_draw_work(draw_start.elapsed().as_nanos().min(u64::MAX as u128) as u64);
@@ -2262,6 +2296,7 @@ impl Worker {
     }
 
     fn acquire(&mut self) -> Result<Option<wgpu::SurfaceTexture>, String> {
+        if !self.chrome.hold && self.chrome.release_for_canvas() { self.child.synchronize(false)?; }
         if !self.chrome.can_present() { return Ok(None); }
         if !self.presenter.pipelines_ready(&self.renderer) || !self.presenter.chrome_ready() {return Ok(None);}
         if !self.renderer.has_presentable_frame() { return Ok(None); }
@@ -2298,7 +2333,9 @@ impl Worker {
         &mut self,
         target: wgpu::SurfaceTexture,
         stroke_target: Option<crate::wayland::StrokeTarget>,
+        allow_sync: bool,
         #[cfg(test)] timing: Option<&mut crate::timing::Timing>,
+        #[cfg(test)] queued_frames_at_chrome_admission: Option<usize>,
     ) -> Result<(), String> {
         let _presentation = self.renderer.prioritize_raster_presentation();
         self.last_publish = std::time::Instant::now();
@@ -2306,7 +2343,7 @@ impl Worker {
         let surround = self.surround;
         #[cfg(test)]
         if let Some(timing) = &timing {
-            timing.camera_view(camera, &self.renderer);
+            timing.camera_work(&self.renderer);
             timing.hdr_view(self.hdr_rendition);
         }
         let view = target.texture.create_view(&Default::default());
@@ -2329,7 +2366,7 @@ impl Worker {
             timing.encoded(&mut encoder);
         }
         let commands = encoder.finish();
-        if self.chrome.should_hold() { self.child.synchronize(true)?; }
+        if self.chrome.should_hold(allow_sync) { self.child.synchronize(true)?; }
         if self.chrome.first == FirstChrome::Granted { self.child.initial_commit(); }
         let moved = self.child.geometry(self.geometry.expect("rendered geometry"));
         #[cfg(test)]
@@ -2342,7 +2379,7 @@ impl Worker {
             timing.mark(2);
         }
         #[cfg(test)]
-        self.child.feedback(timing.as_ref().map_or(0, |t| t.id()), stroke_target);
+        self.child.feedback_camera(timing.as_ref().map_or(0, |t| t.id()), stroke_target, camera.document_to_surface, self.renderer.canvas_preview_revision(), self.chrome.requested, queued_frames_at_chrome_admission);
         #[cfg(not(test))]
         self.child.feedback(0, stroke_target);
         #[cfg(test)]
@@ -2360,9 +2397,9 @@ impl Worker {
                 }
             });
         }
-        if let Some(revision) = self.chrome.publish() {
+        if let Some(revision) = self.chrome.publish(allow_sync) {
             if self.chrome.first == FirstChrome::Visible { self.presented_chrome.publish(revision); }
-            canvas_action(&self.area, "canvas.chrome", &self.presented_chrome);
+            if self.chrome.hold { canvas_action(&self.area, "canvas.chrome", &self.presented_chrome); }
         }
         if !self.paper_ready.load(Ordering::Acquire) {
             let ready = self.paper_ready.clone();

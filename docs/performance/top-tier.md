@@ -6964,3 +6964,65 @@ difference remains unresolved. Dark terminal deltas are −3.612/+1.380 ms.
 Both variants retain the pre-existing combined-motion target miss. No overall
 latency equivalence is claimed. Exact events, conditions, every pair and
 source-availability limits remain in `artifacts/gtk-overlay-ordering.local/`.
+
+## GTK immediate canvas admission
+
+Measured 2026-11-01 on RTX PRO 6000 Blackwell Max-Q, NVIDIA 615.71.09,
+bundled GTK 4.24.1 and private Mutter 50.5 at 1600 × 1000, scale 1, 120 Hz.
+Pinned `59600c79e` is compared with P1 on the same base: ABBA, two trials per
+build in Light/Medium and Dark/Off. Pen trials contain four six-second contacts.
+Shared CPU/GPU activity, including concurrent functional tests, is retained;
+no contacts are excluded. Morning and remaining appearances are deferred to
+the final comparison. These desktop checks do not qualify the reference tablet.
+
+Rates are contact medians. Gaps are the worst contact p99/maximum; CPU is the
+median contact p95 of actual GTK paint-thread CPU, in milliseconds.
+
+| Journey / appearance | Moving Hz, main → P1 | Gap p99 / maximum, ms | GTK paint CPU p95, ms |
+| --- | ---: | ---: | ---: |
+| Zoom, Navigator open / Light Medium | 99.79 → 119.81 | 16.91/24.90 → 8.57/16.81 | 1.85 → 1.06 |
+| Zoom, Navigator open / Dark Off | 120.01 → 119.90 | 8.56/10.61 → 8.56/16.86 | 1.05 → 1.21 |
+| Outer window / Light Medium | 117.29 → 115.25 | 16.64/24.98 → 19.93/48.28 | 3.64 → 3.52 |
+| Outer window / Dark Off | 117.17 → 111.24 | 16.60/19.15 → 35.98/65.31 | 3.40 → 4.23 |
+| Right divider, allocation proxy / Light Medium | 117.83 → 118.62 | 24.79/25.17 → 16.65/16.86 | 2.00 → 2.32 |
+| Right divider, allocation proxy / Dark Off | 118.92 → 118.73 | 8.74/19.13 → 10.64/33.45 | 2.23 → 2.06 |
+| Group drag, allocation proxy / Light Medium | 120.00 → 120.00 | 8.61/10.63 → 8.54/10.65 | 0.69 → 0.63 |
+| Group drag, allocation proxy / Dark Off | 120.00 → 120.01 | 8.58/10.62 → 8.64/10.69 | 0.71 → 0.75 |
+| Bubble drag / Light Medium | 118.04 → 118.44 | 9.32/33.32 → 16.57/33.36 | 0.45 → 0.54 |
+| Bubble drag / Dark Off | 117.79 → 117.87 | 9.35/33.49 → 16.66/33.33 | 0.60 → 0.60 |
+| Zen plus ink / Light Medium | 110.71 → 110.59 | 34.66/52.52 → 31.89/128.20 | 15.02 → 29.50 |
+| Zen plus ink / Dark Off | 113.37 → 110.93 | 33.23/60.77 → 35.60/51.71 | 13.29 → 29.86 |
+| Drawing and following strokes / Light Medium | 119.91 → 119.93 | 9.20/15.70 → 8.65/13.57 | 0.69 → 0.64 |
+| Drawing and following strokes / Dark Off | 119.91 → 119.92 | 8.65/20.17 → 8.93/22.49 | 0.68 → 0.67 |
+
+Zoom counts fresh actual camera poses, bubbles selected chrome poses, and window
+resize changed window extent at completed GTK frames. Group/divider samples
+join allocated geometry to completed GTK frames; they cannot establish fresh
+selected chrome cadence. Drawing counts observed fresh-ink publications; unknown
+artwork feedback remains explicit rather than inferred.
+
+Light/Medium zoom has 200 → 0 chrome-only publications admitted ahead of a
+queued Frame, joined by exact feedback ID. No unchanged-chrome no-op is found;
+new chrome with no queued Frame remains legitimate. Dark/Off has none on either
+build. The first candidate resize contact is slow in both appearances, while
+the next identical contacts return near control; all results remain included.
+Zen retains its shared rate miss, increased candidate paint CPU and 128.20 ms
+gap. This comparison does not establish overall latency or performance equivalence.
+
+Frame receipt to renderer submission, median/p99 milliseconds:
+
+| Journey / appearance | Submit entry, main → P1 | Submit return, main → P1 |
+| --- | ---: | ---: |
+| Zen plus ink / Light Medium | 0.26/0.43 → 0.26/0.45 | 1.67/3.61 → 1.57/3.08 |
+| Zen plus ink / Dark Off | 0.23/0.40 → 0.27/0.47 | 1.59/3.45 → 1.66/3.20 |
+| Drawing and following / Light Medium | 0.29/0.49 → 0.25/0.44 | 2.14/4.15 → 1.69/3.24 |
+| Drawing and following / Dark Off | 0.27/0.42 → 0.24/0.44 | 1.71/3.32 → 1.75/3.62 |
+
+During Zen, held chrome blocks 4,426 → 0 admitted Frames. Exact receipt-to-present
+matches omit 2,563 → 510 unmatched Frames; their pooled p99 is 18.11 → 32.40 ms
+in Light/Medium and 15.40 → 31.88 ms in Dark/Off. Those differently selected
+subsets cannot establish an overall latency improvement. Ordinary drawing
+matches have about 6 ms medians and 6.4–6.5 ms p99 on both builds. Terminal,
+following-contact and backing-drain submissions remain in the phase appendix.
+Every trial, assertion, unknown, shared-process sample and parked probe is in
+`artifacts/gtk-r2-fix.local/p1-qualification/`.

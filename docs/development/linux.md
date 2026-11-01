@@ -231,6 +231,7 @@ After changing the tablet proxy, run its tests with
 | `native_window_resize_presentations` | `LAYER_NATIVE_EVENT_MS=4`, `LAYER_NATIVE_INPUT_TRACE=1` and `LAYER_TEST_ARTIFACTS`; add `LAYER_NATIVE_RESIZE_RESOURCE_ONLY=1` for allocation and paint-only reports |
 | `native_window_resize_inventory` | `GTK_DEBUG=snapshot`, apart from timing runs |
 | `native_workspace_tab_motion_input` | `LAYER_NATIVE_EVENT_MS=4 LAYER_MOTION_MIN_HZ=114` |
+| `native_large_photo_navigation` | `LAYER_NAVIGATION_MODE=pan` or `zoom`; `LAYER_NAVIGATION_PHOTO=default` for the standard canvas, `LAYER_NAVIGATION_NAVIGATOR=0` or `1` for Navigator visibility |
 
 `native_window_resize_programmatic_cintiq` measures allocations, paint time and
 completed presentations on the assigned physical Cintiq in HDR at native scale 2. Run the test binary

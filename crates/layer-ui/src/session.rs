@@ -428,6 +428,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.workspace_drag.is_some() || self.workspace_tab_drag.is_some()
     }
 
+    pub fn chrome_in_motion(&self, native_animation_active: bool) -> bool {
+        native_animation_active || self.workspace_transition
+            || self.workspace_interaction_active() || self.bubble_state.moving()
+    }
+
+    pub fn camera(&self) -> &crate::Camera { &self.state.camera }
+
     pub fn workspace_view_unchanged(&self) -> bool {
         self.workspace_interaction_active()
             && self.workspace_view_revision==Some(self.state.camera.revision)
@@ -1346,6 +1353,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         })?;
                         reply.change.regions |= change.regions;
                         reply.change.canvas_wake |= change.canvas_wake;
+                        reply.change.presentation_wake |= change.presentation_wake;
                         reply.handled |= canvas;
                     }
                 }
@@ -3129,6 +3137,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     let mut change = self.reveal_panel(Panel::Palettes)?;
                     change.regions |= color.regions;
                     change.canvas_wake |= color.canvas_wake;
+                    change.presentation_wake |= color.presentation_wake;
                     return Ok(change);
                 }
                 self.request(HostRequestKind::ColorSlot { slot, library })?;
@@ -4052,7 +4061,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiAction::SetTheme { theme } => {
                 self.state.settings.theme = theme;
-                (SETTINGS, true)
+                (SETTINGS, false)
             }
             UiAction::ShowClippedColors { visible } => (self.show_clipped_colors(visible), true),
             UiAction::WindowFullscreen { fullscreen } => {
@@ -4063,9 +4072,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             UiAction::SystemThemeChanged { theme, accent } => {
                 self.system_theme = theme;
                 let accent_changed = std::mem::replace(&mut self.system_accent, accent) != accent;
-                if self.state.settings.theme.is_none() && self.state.theme != theme {
-                    (SETTINGS, true)
-                } else if accent_changed {
+                if self.state.settings.theme.is_none() && self.state.theme != theme || accent_changed {
                     (SETTINGS, false)
                 } else {
                     (0, false)
@@ -4107,6 +4114,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 // Validate edits atomically. Search, navigation and recording
                 // change only view state and never trigger storage or rendering.
                 let reveal = matches!(action, PreferenceAction::Reveal { .. });
+                let palette_only = matches!(&action,
+                    PreferenceAction::Edit { id, .. } | PreferenceAction::Reset { id } if id.palette_only());
                 let mut settings = self.state.settings.clone();
                 let mut accepted = false;
                 if !self.platform_prediction_available()
@@ -4148,7 +4157,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     settings.validate_localized(self.localization())?;
                     self.apply_settings(settings)?;
                 }
-                (SETTINGS, save_settings)
+                (SETTINGS, save_settings && !palette_only)
             }
             UiAction::RestoreSettings { settings } => {
                 settings.validate_localized(self.localization())?;
@@ -4927,9 +4936,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.refresh_document();
             changed |= regions::DOCUMENT;
         }
-        if let Some(change) = self.settle_holds()? {
-            changed |= change.regions;
-        }
+        let settled = self.settle_holds()?.unwrap_or_default();
+        changed |= settled.regions;
         changed |= std::mem::take(&mut self.interaction.hold_regions);
         changed |= self.advance_axes(now_ns)?;
         changed |= self.advance_touch_gestures(now_ns)?;
@@ -4946,11 +4954,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             changed |= regions::COMMANDS;
         }
         self.frame_commands_pending = false;
-        Ok(self.changed(
+        Ok(merge_change(settled, self.changed(
             changed,
             analyses_changed != 0 || tonal_changed || self.engine.document().working.generation != working_generation
                 || self.wants_continuous_frames() || self.engine.has_pending_document_edits(),
-        ))
+        )))
     }
 
     fn sync_previews(&mut self, now_ns: u64, presentation_ns: u64) -> Option<[u64; 2]> {
@@ -5673,7 +5681,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 } else {
                     Theme::Dark
                 });
-                Ok((SETTINGS, true))
+                Ok((SETTINGS, false))
             }
             CommandId::PutBackBubbles => {
                 let change = self.bubble_action(BubbleAction::PutBackAll)?;
@@ -6203,12 +6211,15 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.sync_renderer_telemetry();
         }
         self.state.theme = self.state.settings.theme.unwrap_or(self.system_theme);
+        let mut presentation_wake = false;
         if regions & regions::SETTINGS != 0 {
             self.preferences_revision += 1;
-            self.state.palette = self
+            let palette = self
                 .state
                 .settings
                 .palette(self.state.theme, self.state.platform, self.system_accent);
+            presentation_wake = self.state.palette != palette;
+            self.state.palette = palette;
         }
         if regions & (regions::LAYOUT|regions::CUSTOMIZATION|regions::SETTINGS) != 0 {
             let viewport=self.workspace_viewport();
@@ -6234,6 +6245,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             regions,
             canvas_wake: canvas_wake || self.engine.backend().shaders_need_update(
                 self.engine.document(), self.engine.brush(), self.engine.transform_preview().is_some()),
+            presentation_wake,
         }
     }
     fn update_toolbar_context(&mut self) {
@@ -6643,6 +6655,66 @@ mod tests {
                     content_height:measurement.content_height,scroll:measurement.scroll})}
         }).collect();
         PanelMeasurementBatch {context,reports}
+    }
+
+    #[test]
+    fn chrome_motion_tracks_active_workspace_contacts_and_settles() {
+        let viewport = [1200., 900.];
+        for ending in [ContactPhase::Up, ContactPhase::Cancel] {
+            let mut s = session(Platform::Gtk);
+            assert!(!s.chrome_in_motion(false));
+            let divider = s.layout(viewport).dividers[0].clone();
+            let position = [divider.bounds.x + 1., divider.bounds.y + 1.];
+            for phase in [ContactPhase::Down, ContactPhase::Move, ending] {
+                s.dispatch(UiAction::DragDivider { id: divider.id, phase, position, viewport }).unwrap();
+                assert_eq!(s.chrome_in_motion(false), phase != ending);
+            }
+            let group = s.state.workspace.layout.panel_group(Panel::Layers).unwrap();
+            for item in [DockItem::Group { group }, DockItem::Panel { panel: Panel::Adjustments }] {
+                let panel = if matches!(item, DockItem::Group { .. }) { Panel::Layers } else { Panel::Adjustments };
+                let source = s.state.workspace.layout.panel_group(panel).unwrap();
+                let bounds = s.layout(viewport).groups.into_iter().find(|g| g.id == source).unwrap().bounds;
+                let tabs: Vec<_> = s.state.workspace.layout.group_panels(source).unwrap().iter().enumerate()
+                    .map(|(index, _)| TabHit { group: source, index,
+                        bounds: Bounds { x: bounds.x + index as f32 * 60., width: 60., height: TAB_BAR_HEIGHT, ..bounds } }).collect();
+                let position = [bounds.x + 20., bounds.y + 12.];
+                s.drag_workspace(item, ContactPhase::Down, position, viewport, &tabs).unwrap();
+                if matches!(item, DockItem::Panel { .. }) {
+                    s.begin_tab_drag(&tabs, bounds);
+                    assert!(s.workspace_tab_drag.is_some());
+                }
+                assert!(s.chrome_in_motion(false));
+                s.drag_workspace(item, ending, position, viewport, &tabs).unwrap();
+                assert!(!s.chrome_in_motion(false));
+            }
+            s.dispatch(UiAction::MoveGroup { group, target: DockTarget::Float { position: [400., 200.] }, viewport }).unwrap();
+            let bounds = s.layout(viewport).groups.into_iter().find(|g| g.id == group).unwrap().bounds;
+            let position = [bounds.x + bounds.width, bounds.y + bounds.height];
+            for phase in [ContactPhase::Down, ContactPhase::Move, ending] {
+                s.dispatch(UiAction::ResizeFloating { group, edge: ResizeEdge::BottomRight, phase, position, viewport }).unwrap();
+                assert_eq!(s.chrome_in_motion(false), phase != ending);
+            }
+        }
+    }
+
+    #[test]
+    fn chrome_motion_distinguishes_animation_and_transition_from_stationary_drawers() {
+        let mut s = session(Platform::Gtk);
+        s.state.workspace.layout.header = HeaderLayout::painter_for_platform(Platform::Gtk);
+        let id = s.state.workspace.layout.header.entries().find(|entry|
+            matches!(entry.item, HeaderItem::Tool { control: ToolbarControl::Color })).unwrap().id;
+        s.state.customization.drawer = Some(ContentDrawer::for_header(&s.state.workspace.layout, id).unwrap());
+        s.state.customization.expanded = Some(Panel::Layers);
+        assert!(s.state.customization.has_drawer());
+        assert!(!s.chrome_in_motion(false));
+        assert!(s.chrome_in_motion(true));
+        assert!(!s.chrome_in_motion(false));
+        s.state.customization.drawer = None;
+        s.state.customization.expanded = None;
+        s.begin_workspace_transition().unwrap();
+        assert!(s.chrome_in_motion(false));
+        s.end_workspace_transition();
+        assert!(!s.chrome_in_motion(false));
     }
 
     #[test]
@@ -17236,6 +17308,92 @@ mod tests {
     }
 
     #[test]
+    fn idle_appearance_changes_request_presentation_without_engine_work() {
+        for platform in Platform::ALL {
+            let mut s = session(platform);
+            s.frame(1, 1).unwrap();
+            let frames = s.engine.metrics().frames;
+            for action in [
+                UiAction::SetTheme { theme: Some(Theme::Dark) },
+                UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::Theme, value: PreferenceValue::Choice(1) } },
+                UiAction::Invoke { command: CommandId::ToggleTheme },
+                UiAction::SetTheme { theme: None },
+                UiAction::SystemThemeChanged { theme: Theme::Dark, accent: None },
+            ] {
+                let palette = s.state.palette;
+                let change = s.dispatch(action).unwrap();
+                assert_ne!(s.state.palette, palette);
+                assert!(!change.canvas_wake, "{platform:?}");
+                assert!(change.presentation_wake && change.needs_present(), "{platform:?}");
+                assert_eq!(s.engine.metrics().frames, frames);
+            }
+            let change = s.dispatch(UiAction::SetTheme { theme: Some(s.state.theme) }).unwrap();
+            assert!(!change.needs_present());
+        }
+    }
+
+    #[test]
+    fn palette_preference_edits_and_resets_do_not_request_engine_work() {
+        for (id, value) in [
+            (PreferenceId::Theme, PreferenceValue::Choice(2)),
+            (PreferenceId::Transparency, PreferenceValue::Choice(0)),
+            (PreferenceId::LightBase, PreferenceValue::Text("#123456".into())),
+            (PreferenceId::DarkBase, PreferenceValue::Text("#123456".into())),
+            (PreferenceId::Accent, PreferenceValue::Text("#123456".into())),
+        ] {
+            let mut s = session(Platform::Gtk);
+            if id == PreferenceId::DarkBase { s.dispatch(UiAction::SetTheme { theme: Some(Theme::Dark) }).unwrap(); }
+            for action in [PreferenceAction::Edit { id, value }, PreferenceAction::Reset { id }] {
+                let palette = s.state.palette;
+                let change = s.dispatch(UiAction::Preferences { action }).unwrap();
+                assert_ne!(s.state.palette, palette, "{id:?}");
+                assert!(!change.canvas_wake, "{id:?}");
+                assert!(change.presentation_wake, "{id:?}");
+            }
+        }
+        let mut s = session(Platform::Gtk);
+        let change = s.dispatch(UiAction::Preferences { action: PreferenceAction::Edit {
+            id: PreferenceId::DarkBase, value: PreferenceValue::Text("#123456".into()),
+        } }).unwrap();
+        assert!(!change.needs_present());
+        let change = s.dispatch(UiAction::Preferences { action: PreferenceAction::Edit {
+            id: PreferenceId::Feedback, value: PreferenceValue::Bool(false),
+        } }).unwrap();
+        assert!(change.canvas_wake && !change.presentation_wake);
+        let mut settings = s.state.settings.clone();
+        settings.theme = Some(Theme::Dark);
+        let change = s.dispatch(UiAction::RestoreSettings { settings: Box::new(settings) }).unwrap();
+        assert!(change.canvas_wake && change.presentation_wake);
+    }
+
+    #[test]
+    fn palette_changes_preserve_navigation_and_pending_pen_work() {
+        for presentation_first in [false, true] {
+            let mut s = session(Platform::Gtk);
+            s.frame(1, 1).unwrap();
+            let frames = s.engine.metrics().frames;
+            let navigation = s.dispatch(UiAction::SetZoom { zoom: s.state.camera.zoom * 1.5 }).unwrap();
+            let matrix = s.state.camera.document_to_surface();
+            let presentation = s.dispatch(UiAction::SetTheme { theme: Some(Theme::Dark) }).unwrap();
+            let change = if presentation_first { merge_change(presentation, navigation) } else { merge_change(navigation, presentation) };
+            assert!(change.canvas_wake && change.presentation_wake);
+            s.frame(20_000_000, 28_000_000).unwrap();
+            assert_eq!(s.engine.metrics().frames, frames + 1);
+            assert_eq!(s.engine.view().document_to_surface, matrix);
+        }
+        let mut s = session(Platform::Gtk);
+        s.frame(1, 1).unwrap();
+        let frames = s.engine.metrics().frames;
+        pen_at(&mut s, 2, PenPhase::Down, [200., 200.]);
+        pen_at(&mut s, 3, PenPhase::Move, [300., 200.]);
+        let change = s.dispatch(UiAction::SetTheme { theme: Some(Theme::Dark) }).unwrap();
+        assert!(change.presentation_wake && s.engine.has_pending_input());
+        s.frame(40_000_000, 48_000_000).unwrap();
+        assert_eq!(s.engine.metrics().frames, frames + 1);
+        assert!(s.engine.backend().dabs > 0);
+    }
+
+    #[test]
     fn appearance_follows_system_unless_overridden() {
         let mut app = session(Platform::Gtk);
         let check_menu = |state: &UiState| {
@@ -17257,7 +17415,7 @@ mod tests {
                 })
                 .unwrap();
             assert_eq!(app.state.theme, theme);
-            assert!(change.canvas_wake);
+            assert!(!change.canvas_wake && change.presentation_wake);
             assert_eq!(app.state.settings.theme, None);
             check_menu(&app.state);
             assert_ne!(change.regions & regions::COMMANDS, 0);

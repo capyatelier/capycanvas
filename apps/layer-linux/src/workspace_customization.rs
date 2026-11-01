@@ -370,6 +370,9 @@ pub(super) struct Customization {
 }
 
 impl Customization {
+    pub(super) fn animation_active(&self) -> bool {
+        self.animation.borrow().as_ref().is_some_and(|animation| animation.state() == adw::AnimationState::Playing)
+    }
     pub fn new() -> Self {
         let picker = adw::Dialog::builder()
             .content_width(480)

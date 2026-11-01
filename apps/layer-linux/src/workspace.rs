@@ -396,6 +396,13 @@ mod allocation {
             let mut connectors = Vec::new();
             let mut chrome_changed = false;
             if let Some(owner) = &owner {
+                owner.chrome_fading.set(nodes.iter().any(|(slot, node)| {
+                    matches!(slot, Slot::Status | Slot::Group(_) | Slot::Column(_))
+                        && node.as_ref().is_some_and(|node| {
+                            let opacity = crate::glass::opacity(node);
+                            opacity > 0. && opacity < 1.
+                        })
+                }));
                 let palette=owner.palette.get();
                 let style=palette.map(|p|(p.surround_linear,layer_render_wgpu::BackdropBlurStyle {
                     levels:p.glass.blur.levels,offset:p.glass.blur.offset,
@@ -904,6 +911,29 @@ pub(crate) fn system_appearance() -> (Theme, Option<HexColor>) {
     )
 }
 
+#[derive(Default)]
+struct ChromeWindowMotion(Cell<Option<[i32; 2]>>);
+impl ChromeWindowMotion {
+    fn update(&self, size: [i32; 2]) -> bool {
+        self.0.replace(Some(size)).is_some_and(|previous| previous != size)
+    }
+}
+
+#[cfg(test)]
+mod chrome_window_motion_tests {
+    use super::ChromeWindowMotion;
+    #[test]
+    fn resizing_compares_adjacent_gtk_frames() {
+        let motion = ChromeWindowMotion::default();
+        assert!(!motion.update([800, 600]));
+        assert!(motion.update([801, 600]));
+        assert!(motion.update([800, 600]));
+        assert!(!motion.update([800, 600]));
+        assert!(motion.update([800, 601]));
+        assert!(!motion.update([800, 601]));
+    }
+}
+
 pub struct Workspace {
     localization: RefCell<std::sync::Arc<layer_ui::Localizer>>,
     language_transition: RefCell<layer_ui::LanguageTransition>,
@@ -971,6 +1001,10 @@ pub struct Workspace {
     glass: RefCell<Vec<layer_render_wgpu::BackdropRegion>>,
     panel_surfaces: RefCell<Vec<layer_render_wgpu::PanelSurface>>,
     chrome_style: Cell<Option<([f32;4],layer_render_wgpu::BackdropBlurStyle)>>,
+    chrome_window_motion: ChromeWindowMotion,
+    chrome_hold: Cell<bool>,
+    chrome_camera_revision: Cell<u64>,
+    chrome_fading: Cell<bool>,
     chrome: crate::glass::Chrome,
     chrome_released: Cell<u64>,
     chrome_presented: Cell<bool>,
@@ -1354,6 +1388,10 @@ impl Workspace {
             glass: RefCell::new(Vec::new()),
             panel_surfaces: RefCell::new(Vec::new()),
             chrome_style: Cell::new(None),
+            chrome_window_motion: Default::default(),
+            chrome_hold: Cell::new(true),
+            chrome_camera_revision: Cell::new(u64::MAX),
+            chrome_fading: Cell::new(false),
             chrome: Default::default(),
             chrome_released: Cell::new(0),
             chrome_presented: Cell::new(false),
@@ -1687,7 +1725,10 @@ impl Workspace {
             move |_| {
                 if this.area.is_realized() {
                     this.update_backdrop();
-                    this.wake();
+                    let geometry = crate::wayland::Geometry::of(&this.area);
+                    if this.gpu.borrow().as_ref().is_some_and(|g| g.session.engine().backend().geometry != Some(geometry)) {
+                        this.wake();
+                    }
                 }
                 None
             }
@@ -2336,6 +2377,7 @@ impl Workspace {
     pub fn changed(self: &Rc<Self>, result: Result<UiChange, String>) {
         match result {
             Ok(mut change) => {
+                if change.presentation_wake { self.surface.queue_draw(); }
                 if change.regions & regions::SETTINGS != 0 { self.request_language(); }
                 if let Some(g) = self.gpu.borrow_mut().as_mut() {
                     let hdr = g.session.engine().document().composition().color.depth.is_float();
@@ -3087,6 +3129,19 @@ impl Workspace {
         self.update_backdrop();
     }
 
+    fn hold_chrome(&self, g: &GpuCanvas) -> bool {
+        let animation = self.chrome_fading.get() || self.surface.imp().transition.get().is_some()
+            || self.customization.animation_active() || self.bubbles.animation_active()
+            || self.documents.drag_active() || self.header.drag_active() || self.dragging.get()
+            || self.drawers().iter().any(|drawer| drawer.animation_active())
+            || self.groups.borrow().iter().any(|group| group.stack.is_transition_running());
+        let resized = self.chrome_window_motion.update([self.window.width(), self.window.height()]);
+        let camera = g.session.camera().revision;
+        let navigated = self.chrome_camera_revision.replace(camera) != camera;
+        !matches!(g.session.engine().backend().chrome_status().state(), crate::glass::ChromeState::Visible(..))
+            || !(g.session.chrome_in_motion(animation) || resized || navigated)
+    }
+
     fn update_canvas_chrome(&self, g: &mut GpuCanvas) {
         self.chrome.attach(g.session.engine().backend().chrome_status());
         let overviews = self
@@ -3094,7 +3149,7 @@ impl Workspace {
             .placements(g.session.state(), self.area.scale_factor() as f32);
         g.session.renderer_mut().overviews = overviews;
         g.session.renderer_mut().chrome = self.chrome.revision();
-        g.session.renderer_mut().chrome_hold = true;
+        g.session.renderer_mut().chrome_hold = self.chrome_hold.get();
         let scale = self.area.scale_factor() as f32;
         g.session.renderer_mut().panel_surfaces=self.panel_surfaces.borrow().iter().cloned()
             .map(|surface|surface.scaled(scale)).collect();
@@ -3117,26 +3172,31 @@ impl Workspace {
     fn present_chrome(self: &Rc<Self>, snapshot: &gtk::Snapshot, node: Option<gtk::gsk::RenderNode>, changed: bool) {
         let node = node.unwrap_or_else(|| gtk::gsk::ColorNode::new(&gdk::RGBA::TRANSPARENT,
             &gtk::graphene::Rect::new(0., 0., self.surface.width() as f32, self.surface.height() as f32)).upcast());
-        let (node, revision, initial) = self.chrome.compose(node, changed, self.chrome.state());
+        let hold = self.gpu.borrow().as_ref().is_none_or(|g| {
+            self.chrome.attach(g.session.engine().backend().chrome_status());
+            self.hold_chrome(g)
+        });
+        let hold_changed = self.chrome_hold.replace(hold) != hold;
+        let (node, revision, initial) = self.chrome.compose(node, changed, hold, self.chrome.state());
         self.command_bar.selected(self, self.chrome.revision(), revision);
-        if initial {
+        snapshot.append_node(&node);
+        if changed || initial || hold_changed {
             let result = self.gpu.borrow_mut().as_mut().map(|g| {
                 self.update_canvas_chrome(g);
-                g.session.renderer_mut().start_chrome(revision)
+                if initial { g.session.renderer_mut().start_chrome(revision) }
+                else { g.session.renderer_mut().present_chrome().map_err(|error| error.to_string()) }
             });
             if let Some(Err(error)) = result { self.gpu_error(&error); }
         }
-        snapshot.append_node(&node);
-        let weak = Rc::downgrade(self);
-        if changed {
-            glib::idle_add_local_once(glib::clone!(#[strong] weak, move || {
-                if let Some(w) = weak.upgrade() { w.wake_frame(true, false); }
-            }));
-        }
         let shown = self.chrome_released.replace(revision) != revision;
-        if self.chrome_presented.replace(false) || shown {
+        let presented = self.chrome_presented.replace(false);
+        if self.chrome.held() && (presented || shown) {
             if let Some(g) = self.gpu.borrow().as_ref() {
-                glib::idle_add_local_once(g.session.engine().backend().release_chrome(revision));
+                let mut release = Some(g.session.engine().backend().release_chrome(revision));
+                glib::idle_add_local_full(glib::Priority::HIGH_IDLE, move || {
+                    release.take().unwrap()();
+                    glib::ControlFlow::Break
+                });
             }
         }
     }

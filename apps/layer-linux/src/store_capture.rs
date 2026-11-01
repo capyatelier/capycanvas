@@ -166,7 +166,7 @@ fn native_store_capture() {
         let gpu = w.gpu.borrow();
         let stats = gpu.as_ref().unwrap().session.engine().backend().stats.lock().unwrap();
         paints.get() >= 3 && w.frame_timer.borrow().is_none()
-            && stats.camera_views.last().is_some_and(|(frame, _, _)| stats.presented.iter().any(|feedback| feedback[0] >= *frame && feedback[3] == 1))
+            && stats.camera_views.last().is_some_and(|(frame, _, _)| stats.presented.iter().any(|feedback| feedback[0] == *frame && feedback[3] == 1))
     }, "final canvas presentation and GTK frames");
     assert_eq!(w.localization().language(), language);
     assert_eq!(state(&w).theme, theme);

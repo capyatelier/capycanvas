@@ -26,6 +26,7 @@ pub struct Stats {
     /// Frame id, document-to-surface matrix, artwork preview revision. Allows
     /// camera requests to be matched to actual presentation without timing guesses.
     pub camera_views: Vec<(u64, [f32; 6], u64)>,
+    pub camera_publications: Vec<(u64, u64, Option<usize>)>,
     /// Recipe actually used by this presented frame, for local-tone latency.
     pub hdr_views: Vec<(u64, Option<layer_core::color::hdr::SdrRendition>)>,
     /// GTK owner delivery ns, source layer id, surface point, resulting pose.
@@ -92,13 +93,8 @@ impl Timing {
             .filter(|h| scene.paint_source(*h).is_some_and(|p| p.base.is_some()))
             .map(|h| (self.id, layer_ui::occurrence_token(h), scene.occurrence(h).unwrap().offset)));
     }
-    pub fn camera_view(&self, view: layer_render::ViewState, renderer: &WgpuRasterizer) {
+    pub fn camera_work(&self, renderer: &WgpuRasterizer) {
         let mut stats = self.stats.lock().unwrap();
-        stats.camera_views.push((
-            self.id,
-            view.document_to_surface,
-            renderer.canvas_preview_revision(),
-        ));
         let metrics = renderer.metrics();
         stats.camera_work.push([self.id, metrics.composited_pixels,
             metrics.composite_storage_bytes, metrics.source_tile_misses,
@@ -277,6 +273,15 @@ impl Timing {
                     }
                     free.store(true, Ordering::Release);
                 });
+        }
+    }
+    pub fn camera_feedback(&self, samples: Vec<(u64, [f32; 6], u64, u64, Option<usize>)>) {
+        if !samples.is_empty() {
+            let mut stats = self.stats.lock().unwrap();
+            for (id, matrix, artwork, chrome, queued_frames) in samples {
+                stats.camera_views.push((id, matrix, artwork));
+                stats.camera_publications.push((id, chrome, queued_frames));
+            }
         }
     }
     pub fn presented(&self, samples: Vec<[u64; 4]>) {

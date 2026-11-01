@@ -195,6 +195,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let restored = self.bubble_color(wheel.id, ContactPhase::Cancel, wheel.part, [0.; 2])?;
             change.regions |= restored.regions;
             change.canvas_wake |= restored.canvas_wake;
+            change.presentation_wake |= restored.presentation_wake;
             change.revision = change.revision.max(restored.revision);
         }
         self.bubble_state = Bubbles { stroke: self.bubble_state.stroke, ..Bubbles::default() };

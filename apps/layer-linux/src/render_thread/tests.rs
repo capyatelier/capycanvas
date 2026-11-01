@@ -1,4 +1,22 @@
 #[test]
+fn unchanged_worker_revision_cannot_restore_a_hold() {
+    let mut chrome = ChromeHandoff::default();
+    chrome.ready();
+    assert!(chrome.grant(0));
+    assert!(chrome.should_hold(true));
+    assert_eq!(chrome.publish(true), Some(0));
+    assert!(chrome.initial_applied());
+    assert!(chrome.request(1, false));
+    assert!(!chrome.should_hold(true));
+    assert!(chrome.request(1, true));
+    assert!(!chrome.should_hold(true), "an unheld requested revision must stay unheld");
+    assert_eq!(chrome.publish(true), Some(1));
+    assert_eq!(chrome.synchronized, None);
+    assert!(chrome.request(2, true));
+    assert!(chrome.should_hold(true));
+}
+
+#[test]
 fn captured_context_publication_shares_source_roots_and_preserves_authored_output() {
     let document = layer_ui::new_drawing(32,24,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     let mut capture = layer_host::tasks::capture_document(&document);
@@ -164,7 +182,7 @@ fn visible_chrome() -> ChromeHandoff {
     let mut chrome = ChromeHandoff::default();
     chrome.ready();
     assert!(chrome.grant(0));
-    assert_eq!(chrome.publish(), Some(0));
+    assert_eq!(chrome.publish(true), Some(0));
     assert!(chrome.initial_applied());
     chrome
 }
@@ -180,10 +198,10 @@ fn chrome_requests_give_queued_ink_its_admission_turn_before_representing() {
     let ink = input_frame_order(&mut input, 1, false);
     let mut requests = ChromeRequests::default();
     requests.request(chrome_request(7), ink);
-    assert!(requests.take_ready(FrameReadiness::Waiting, 0).is_none());
+    assert!(requests.take_ready().is_none());
     requests.considered(ink);
-    assert_eq!(requests.take_ready(FrameReadiness::Waiting, 0).unwrap().revision, 7);
-    assert!(requests.take_ready(FrameReadiness::Waiting, 0).is_none());
+    assert_eq!(requests.take_ready().unwrap().revision, 7);
+    assert!(requests.take_ready().is_none());
 }
 
 #[test]
@@ -192,14 +210,14 @@ fn chrome_requests_protect_zero_dab_terminals_but_bypass_nonink_work() {
     let mut requests = ChromeRequests::default();
     assert_eq!(input_frame_order(&mut input, 0, false), 0);
     requests.request(chrome_request(1), input);
-    assert_eq!(requests.take_ready(FrameReadiness::Waiting, 0).unwrap().revision, 1);
+    assert_eq!(requests.take_ready().unwrap().revision, 1);
     let terminal = input_frame_order(&mut input, 0, true);
     requests.request(chrome_request(2), terminal);
-    assert!(requests.take_ready(FrameReadiness::Waiting, 0).is_none());
+    assert!(requests.take_ready().is_none());
     requests.considered(0);
-    assert!(requests.take_ready(FrameReadiness::Waiting, 0).is_none());
+    assert!(requests.take_ready().is_none());
     requests.considered(terminal);
-    assert_eq!(requests.take_ready(FrameReadiness::Waiting, 0).unwrap().revision, 2);
+    assert_eq!(requests.take_ready().unwrap().revision, 2);
 }
 
 #[test]
@@ -208,29 +226,107 @@ fn chrome_requests_accept_a_frame_considered_before_the_request() {
     requests.considered(2);
     requests.considered(1);
     requests.request(chrome_request(7), 2);
-    assert_eq!(requests.take_ready(FrameReadiness::Waiting, 0).unwrap().revision, 7);
+    assert_eq!(requests.take_ready().unwrap().revision, 7);
 }
 
 #[test]
-fn chrome_requests_bypass_ready_nonink_work_but_yield_to_ready_input() {
+fn chrome_requests_join_ready_navigation_and_ink_frames() {
     let mut requests = ChromeRequests::default();
     requests.request(chrome_request(7), 1);
     requests.considered(1);
-    assert!(requests.take_ready(FrameReadiness::Ready, 1).is_none());
-    assert_eq!(requests.take_ready(FrameReadiness::Ready, 0).unwrap().revision, 7);
+    assert_eq!(requests.take_ready().unwrap().revision, 7);
+    assert!(requests.take_ready().is_none());
+}
+
+#[test]
+fn ready_navigation_is_admitted_before_receipt_returns() {
+    let (mut renderer, commands, _chrome, _reply) = RenderWorker::channels(Default::default());
+    let document = layer_ui::new_drawing(32, 24, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+    overlay_packet(&mut renderer, &document).unwrap();
+    let mut frame = queued_frame(&commands);
+    assert_eq!(frame.input_order, 0);
+    assert!(frame.present);
+    frame.view.document_to_surface[0] = 2.;
+    assert!(frame.chrome.revision < 7);
+    let expected = (frame.view.document_to_surface, 7);
+    let mut requests = ChromeRequests::default();
+    requests.request(chrome_request(7), 0);
+    let mut chrome = visible_chrome();
+    let mut pending = VecDeque::new();
+    let mut admitted = Vec::new();
+    assert_eq!(admit_frame(Some(frame), &mut pending, |frame| {
+        chrome.request(frame.chrome.revision, frame.chrome.hold);
+        while let Some(request) = requests.take_ready() {
+            chrome.request(request.revision, request.hold);
+        }
+        chrome.release_for_canvas();
+        assert_eq!(chrome.publish(false), Some(7));
+        admitted.push((frame.view.document_to_surface, chrome.published));
+        Ok::<_, ()>(true)
+    }).unwrap(), 1);
+    assert_eq!(admitted, [expected]);
+    assert!(pending.is_empty());
+    assert!(requests.take_ready().is_none());
+    assert_eq!(chrome.synchronized, None);
+}
+
+#[test]
+fn waiting_frame_queues_once_and_is_admitted_when_ready() {
+    let (mut renderer, commands, _chrome, _reply) = RenderWorker::channels(Default::default());
+    let document = layer_ui::new_drawing(32, 24, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+    overlay_packet(&mut renderer, &document).unwrap();
+    let frame = queued_frame(&commands);
+    let expected = frame.view.document_to_surface;
+    let mut pending = VecDeque::new();
+    let mut attempts = 0;
+    assert_eq!(admit_frame(Some(frame), &mut pending, |_| {
+        attempts += 1;
+        Ok::<_, ()>(false)
+    }).unwrap(), 0);
+    assert_eq!(attempts, 1);
+    assert_eq!(pending.len(), 1);
+    let mut admitted = Vec::new();
+    assert_eq!(admit_frame(None, &mut pending, |frame| {
+        attempts += 1;
+        admitted.push(frame.view.document_to_surface);
+        Ok::<_, ()>(true)
+    }).unwrap(), 1);
+    assert_eq!(attempts, 2);
+    assert_eq!(admitted, [expected]);
+    assert!(pending.is_empty());
+}
+
+#[test]
+fn canvas_work_preserves_its_unfinished_predecessor() {
+    let mut pending = VecDeque::new();
+    assert_eq!(admit_frame(Some(1), &mut pending, |_| Ok::<_, ()>(false)).unwrap(), 0);
+    let mut prepared = Vec::new();
+    assert_eq!(admit_frame(Some(2), &mut pending, |frame| {
+        prepared.push(*frame);
+        Ok::<_, ()>(*frame == 2)
+    }).unwrap(), 0);
+    assert_eq!(prepared, [1]);
+    assert_eq!(pending, [1, 2]);
+    let mut drawn = Vec::new();
+    assert_eq!(admit_frame(Some(3), &mut pending, |frame| {
+        drawn.push(*frame);
+        Ok::<_, ()>(true)
+    }).unwrap(), 3);
+    assert_eq!(drawn, [1, 2, 3]);
+    assert!(pending.is_empty());
 }
 
 #[test]
 fn chrome_requests_keep_a_fixed_first_boundary_and_only_the_latest_successor() {
     let mut requests = ChromeRequests::default();
     for revision in 1..=1000 { requests.request(chrome_request(revision), revision); }
-    assert!(requests.take_ready(FrameReadiness::Waiting, 0).is_none());
+    assert!(requests.take_ready().is_none());
     requests.considered(1);
-    assert_eq!(requests.take_ready(FrameReadiness::Waiting, 0).unwrap().revision, 1);
-    assert!(requests.take_ready(FrameReadiness::Waiting, 0).is_none());
+    assert_eq!(requests.take_ready().unwrap().revision, 1);
+    assert!(requests.take_ready().is_none());
     requests.considered(1000);
-    assert_eq!(requests.take_ready(FrameReadiness::Waiting, 0).unwrap().revision, 1000);
-    assert!(requests.take_ready(FrameReadiness::Waiting, 0).is_none());
+    assert_eq!(requests.take_ready().unwrap().revision, 1000);
+    assert!(requests.take_ready().is_none());
 }
 
 #[test]
@@ -240,8 +336,8 @@ fn chrome_requests_coalesce_the_same_input_boundary_and_ignore_older_requests() 
     requests.request(chrome_request(8), 2);
     requests.request(chrome_request(4), 1);
     requests.considered(2);
-    assert_eq!(requests.take_ready(FrameReadiness::Waiting, 0).unwrap().revision, 8);
-    assert!(requests.take_ready(FrameReadiness::Waiting, 0).is_none());
+    assert_eq!(requests.take_ready().unwrap().revision, 8);
+    assert!(requests.take_ready().is_none());
 }
 
 #[test]
@@ -255,13 +351,13 @@ fn chrome_first_present_uses_the_exact_grant_before_newer_or_deferred_requests()
     assert!(!chrome.request(7, false));
     assert!(!chrome.request(4, true));
     assert_eq!(chrome.requested, 7);
-    assert!(chrome.should_hold());
-    assert_eq!(chrome.publish(), Some(7));
+    assert!(chrome.should_hold(true));
+    assert_eq!(chrome.publish(true), Some(7));
     assert!(!chrome.can_present());
     assert!(!chrome.release(7));
     assert!(chrome.initial_applied());
     assert!(chrome.request(8, true));
-    assert_eq!(chrome.publish(), Some(8));
+    assert_eq!(chrome.publish(true), Some(8));
 }
 
 #[test]
@@ -272,8 +368,8 @@ fn chrome_initial_revision_zero_still_requires_a_synchronized_first_commit() {
     chrome.ready();
     assert!(!chrome.can_present());
     assert!(chrome.grant(0));
-    assert!(chrome.should_hold());
-    assert_eq!(chrome.publish(), Some(0));
+    assert!(chrome.should_hold(true));
+    assert_eq!(chrome.publish(true), Some(0));
     assert!(!chrome.can_present());
     assert!(!chrome.release(0));
     assert!(chrome.initial_applied());
@@ -299,7 +395,7 @@ fn chrome_requests_cannot_be_replaced_by_an_older_deferred_frame() {
     chrome.request(7, true);
     chrome.request(4, false);
     assert_eq!(chrome.requested, 7);
-    assert!(chrome.should_hold());
+    assert!(chrome.should_hold(true));
 }
 
 #[test]
@@ -354,42 +450,117 @@ fn workspace_presenter_prepares_chrome_before_first_panel_parameters() {
 }
 
 #[test]
-fn chrome_requests_wait_for_publication_and_coalesce_behind_the_held_buffer() {
+fn chrome_requests_coalesce_without_blocking_canvas_publication() {
     let mut chrome = visible_chrome();
     chrome.request(1, true);
     assert_eq!(chrome.published, 0);
     assert!(chrome.can_present());
-    assert!(chrome.should_hold());
+    assert!(chrome.should_hold(true));
     chrome.request(2, true);
     assert_eq!(chrome.published, 0, "an unacquired buffer cannot acknowledge either request");
-    assert_eq!(chrome.publish(), Some(2));
+    assert_eq!(chrome.publish(true), Some(2));
     chrome.request(3, true);
     chrome.request(4, true);
-    assert!(!chrome.can_present());
+    assert!(chrome.can_present());
     assert_eq!(chrome.published, 2, "new requests must preserve the held buffer's revision");
     assert!(!chrome.release(1));
-    assert!(!chrome.can_present());
+    assert!(chrome.can_present());
     assert!(chrome.release(2), "release matches the held revision, not the latest request");
     assert!(chrome.can_present());
-    assert_eq!(chrome.publish(), Some(4));
+    assert_eq!(chrome.publish(true), Some(4));
     assert!(!chrome.release(2));
     assert!(chrome.release(4));
-    assert_eq!(chrome.publish(), None);
+    assert_eq!(chrome.publish(true), None);
     assert!(chrome.can_present());
 }
 
 #[test]
-fn chrome_holds_until_the_matching_parent_revision_is_released() {
+fn chrome_release_tracks_the_parent_without_blocking_canvas() {
     let mut chrome = visible_chrome();
     chrome.request(1, true);
-    assert_eq!(chrome.publish(), Some(1));
+    assert_eq!(chrome.publish(true), Some(1));
     chrome.request(2, true);
-    assert!(!chrome.can_present());
+    assert!(chrome.can_present());
     assert!(!chrome.release(0));
-    assert!(!chrome.can_present());
+    assert!(chrome.can_present());
     assert!(chrome.release(1));
     assert!(chrome.can_present());
-    assert_eq!(chrome.publish(), Some(2));
+    assert_eq!(chrome.publish(true), Some(2));
+}
+
+#[test]
+fn ready_canvas_desynchronizes_without_waiting_for_a_parent_release() {
+    let mut chrome = visible_chrome();
+    chrome.request(1, true);
+    assert_eq!(chrome.publish(true), Some(1));
+    assert_eq!(chrome.synchronized, Some(1));
+    assert!(chrome.can_present());
+    chrome.request(2, true);
+    assert!(chrome.release_for_canvas());
+    assert!(!chrome.should_hold(false));
+    assert_eq!(chrome.publish(false), Some(2));
+    assert_eq!(chrome.synchronized, None);
+    assert!(!chrome.release(1));
+    assert!(chrome.can_present());
+}
+
+#[test]
+fn unheld_revisions_never_request_synchronization() {
+    let mut chrome = visible_chrome();
+    chrome.request(1, true);
+    assert_eq!(chrome.publish(true), Some(1));
+    chrome.request(2, false);
+    assert!(chrome.release_for_canvas());
+    assert!(!chrome.should_hold(true));
+    assert!(!chrome.should_hold(false));
+    assert_eq!(chrome.publish(true), Some(2));
+    assert_eq!(chrome.synchronized, None);
+    assert!(!chrome.hold);
+}
+
+#[test]
+fn a_held_revision_publishes_only_once_while_synchronized() {
+    let mut chrome = visible_chrome();
+    chrome.request(7, true);
+    let mut presents = Vec::new();
+    let mut synchronizations = 0;
+    for _ in 0..3 {
+        if chrome.needs_publication() {
+            synchronizations += usize::from(chrome.should_hold(true));
+            presents.push(chrome.publish(true));
+        }
+    }
+    assert_eq!(presents, [Some(7)]);
+    assert_eq!(synchronizations, 1);
+    assert_eq!(chrome.synchronized, Some(7));
+    assert!(chrome.can_present());
+}
+
+#[test]
+fn held_chrome_successors_coalesce_without_blocking_canvas() {
+    for canvas in [false, true] {
+        let mut chrome = visible_chrome();
+        chrome.request(1, true);
+        assert_eq!(chrome.publish(true), Some(1));
+        for revision in 2..=4 {
+            chrome.request(revision, true);
+            assert!(!chrome.needs_publication());
+            assert!(chrome.can_present());
+            assert_eq!(chrome.synchronized, Some(1));
+            assert_eq!(chrome.published, 1);
+        }
+        if canvas {
+            assert!(chrome.release_for_canvas());
+            assert!(!chrome.should_hold(false));
+        } else {
+            assert!(chrome.release(1));
+        }
+        assert!(chrome.can_present());
+        assert!(chrome.needs_publication());
+        assert_eq!(chrome.publish(!canvas), Some(4));
+        assert_eq!(chrome.synchronized, if canvas { None } else { Some(4) });
+        assert!(!chrome.needs_publication());
+    }
 }
 
 fn pump_worker_window() {

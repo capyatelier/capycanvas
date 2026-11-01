@@ -163,6 +163,8 @@ impl ProofPreparation {
                 let done = s.dispatch(UiAction::CompleteRequest { id, error: None })?;
                 change.regions |= done.regions;
                 change.revision = done.revision;
+                change.canvas_wake |= done.canvas_wake;
+                change.presentation_wake |= done.presentation_wake;
             }
             Ok(change)
         } else {

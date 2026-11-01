@@ -396,8 +396,11 @@ work-area bounds.
 Drag pickup follows the [drag and reorder convention](drag-and-reorder.md).
 
 `dispatch(UiAction)` returns `Result<UiChange, String>`. `UiChange` contains a
-revision, changed-region bits, and `canvas_wake`. The host updates only affected
-views and schedules a display callback when needed. `state()` is read-only;
+revision, changed-region bits, `canvas_wake` for engine work, and
+`presentation_wake` for a retained presentation. Hosts update affected views and
+use `needs_present()` to schedule a display callback; retained hosts can present
+appearance changes without an engine frame. JSON bridges keep the three-field
+reply and combine both demands in `canvas_wake`. `state()` is read-only;
 it exposes layout, brush controls, layers, document tabs, command availability,
 settings/view state, Zen mode, and camera. Foreign bridges return owned snapshots only when
 UI state changes; the host redraws the affected regions.

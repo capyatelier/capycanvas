@@ -395,6 +395,9 @@ pub enum PreferenceId {
     Dedication,
 }
 impl PreferenceId {
+    pub(crate) fn palette_only(self) -> bool {
+        matches!(self, Self::Theme | Self::Transparency | Self::DarkBase | Self::LightBase | Self::Accent)
+    }
     pub fn key(self) -> &'static str {
         match self {
             Self::PhotoDepth => "photo-depth",

@@ -261,7 +261,7 @@ impl FilterService {
             let result = native.session.load_effect_package(&package.manifest, read, package.mode);
             match result {
                 Ok(change) => {
-                    native.dirty |= change.canvas_wake;
+                    native.dirty |= change.needs_present();
                     self.validating = Some(native.session.state().filter_load.request_id);
                     self.status.phase = "validating";
                 }

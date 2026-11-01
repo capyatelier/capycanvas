@@ -178,7 +178,7 @@ impl<R: layer_render::CanvasRenderer> crate::UiSession<R> {
         let (change, error) = match applied { Ok(change) => (change, None), Err(error) => (None, Some(error)) };
         let done = self.dispatch(crate::UiAction::CompleteRequest { id, error })?;
         Ok(Some(match change {
-            Some(mut change) => { change.regions |= done.regions; change.revision = done.revision; change.canvas_wake |= done.canvas_wake; change }
+            Some(mut change) => { change.regions |= done.regions; change.revision = done.revision; change.canvas_wake |= done.canvas_wake; change.presentation_wake |= done.presentation_wake; change }
             None => done,
         }))
     }

@@ -1094,6 +1094,7 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
             let update = self.dispatch(UiAction::Customize { action })?;
             change.regions |= update.regions;
             change.canvas_wake |= update.canvas_wake;
+            change.presentation_wake |= update.presentation_wake;
         }
         if self.update_slot_drawer() { change.regions |= regions::CUSTOMIZATION; }
         Ok(change)

@@ -2,6 +2,7 @@
 //! Synthetic software gestures do not measure physical device input latency.
 use super::*;
 
+
 #[test]
 #[ignore = "private Wayland display, hardware GPU and native mouse wheel"]
 fn native_scroll_wheel_input() {
@@ -710,14 +711,17 @@ fn native_large_photo_navigation() {
         .as_deref()
         .unwrap_or("60mp")
     {
+        "default" => [1600, 1000],
         "24mp" => [6000, 4000],
         "45mp" => [8192, 5504],
         "60mp" => [8192, 7324],
         "61mp" => [9504, 6336],
-        _ => panic!("LAYER_NAVIGATION_PHOTO must be 24mp, 45mp, 60mp or 61mp"),
+        _ => panic!("LAYER_NAVIGATION_PHOTO must be default, 24mp, 45mp, 60mp or 61mp"),
     };
     let app = native_test_app("art.capycanvas.PhotoNavigation");
-    let mut project = photo(extent);
+    let mut project = if std::env::var("LAYER_NAVIGATION_PHOTO").as_deref() == Ok("default") {
+        new_drawing(extent[0], extent[1], &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap()
+    } else { photo(extent) };
     match std::env::var("LAYER_NAVIGATION_LAYERS").as_deref() {
         Ok("blended") => blended(&mut project),
         Ok("pass_through") => pass_through(&mut project),
@@ -725,6 +729,7 @@ fn native_large_photo_navigation() {
     }
     let startup = Instant::now();
     let w = Workspace::with_project(&app, Some((project, None)));
+    apply_fixture_theme(&w);
     if std::env::var("LAYER_NAVIGATION_MAXIMIZE").as_deref() == Ok("0") {
         w.window.set_default_size(1200, 900);
     } else {
@@ -751,6 +756,36 @@ fn native_large_photo_navigation() {
             break;
         }
         assert!(Instant::now() < deadline, "photo startup must settle");
+    }
+    let requested_navigator = std::env::var("LAYER_NAVIGATION_NAVIGATOR").ok().map(|value| {
+        assert!(matches!(value.as_str(), "0" | "1"));
+        value == "1"
+    });
+    if let Some(visible) = requested_navigator {
+        let mut workspace = state(&w).workspace;
+        workspace.layout.set_panel_visible(Panel::Navigator, visible).unwrap();
+        if visible {
+            let group = workspace.layout.panel_group(Panel::Navigator).unwrap();
+            if let Some(column) = workspace.layout.column_for_group(group) {
+                workspace.layout.set_column_collapsed(column, false,
+                    [w.surface.width() as f32, w.surface.height() as f32]).unwrap();
+            }
+            workspace.layout.select_tab(group, Panel::Navigator).unwrap();
+        }
+        w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+    }
+    set_transparency(&w, "LAYER_MOTION_TRANSPARENCY");
+    pump(300);
+    until(|| w.frame_timer.borrow().is_none(), "navigation layout settled");
+    let navigator_mapped = w.navigator.root.is_mapped();
+    let navigator_child_visible = w.navigator.root.is_child_visible();
+    let navigator_projection_count = w.navigator_overviews.placements(ui_session(&w).state(), w.area.scale_factor() as f32).len();
+    if let Some(visible) = requested_navigator {
+        assert_eq!(navigator_mapped, visible, "Navigator mapping must match the measurement row");
+        if visible {
+            assert!(navigator_child_visible, "Navigator must be the visible tab");
+            assert!(navigator_projection_count > 0, "Navigator must publish a painted overview");
+        }
     }
     let startup_ms = startup.elapsed().as_secs_f64() * 1000.;
     use layer_render::CanvasRenderer;
@@ -820,13 +855,10 @@ fn native_large_photo_navigation() {
         move |_| gtk_phases.borrow_mut().push(("paint", glib::monotonic_time() as u64 * 1000))
     ));
     let mut slow_iterations = Vec::new();
-    // Wake the real GLib event loop without polling sleeps that add artificial
-    // presentation delay. Requests use an absolute 120 Hz schedule, not a wait
-    // for the previous render, so slow frames cannot throttle the workload.
     let tick = glib::timeout_add_local(Duration::from_millis(1), || glib::ControlFlow::Continue);
     let input_phase_ns = std::env::var("LAYER_NAVIGATION_PHASE_NS")
         .ok().map(|v| v.parse::<u64>().unwrap());
-    let start = if let Some(phase) = input_phase_ns {
+    let scheduled_start = || if let Some(phase) = input_phase_ns {
         let gpu = w.gpu.borrow();
         let clock = &gpu.as_ref().unwrap().session.engine().backend().clock;
         let now = glib::monotonic_time() as u64 * 1000;
@@ -836,16 +868,31 @@ fn native_large_photo_navigation() {
     } else { Instant::now() };
     let mut requests = Vec::new();
     let motion_begin_ns = glib::monotonic_time() as u64 * 1000;
-    for (phase, fixed_scale) in [
+    let mode = std::env::var("LAYER_NAVIGATION_MODE").ok();
+    assert!(mode.as_deref().is_none_or(|mode| matches!(mode, "pan" | "zoom")));
+    let steps = std::env::var("LAYER_NAVIGATION_STEPS").ok().map(|v| v.parse::<usize>().unwrap()).unwrap_or(96);
+    let repeats = std::env::var("LAYER_NAVIGATION_REPEATS").ok().map(|v| v.parse::<usize>().unwrap()).unwrap_or(2);
+    assert!(steps > 24 && repeats > 0);
+    let mut contacts = Vec::new();
+    let phases = if let Some(mode) = mode.as_deref() {
+        vec![(mode, if mode == "pan" { fit } else { 0. })]
+    } else { vec![
         ("fit-pan-rotate", fit),
         ("half-pan-rotate", 0.5),
         ("native-pan-rotate", 1.),
         ("double-pan-rotate", 2.),
         ("zoom-pan-rotate", 0.),
-    ] {
-        for repeat in 0..2 {
-            for step in 0..96 {
-                let due = start + Duration::from_secs_f64(requests.len() as f64 / 120.);
+        ("zoom", 0.),
+    ] };
+    for (phase, fixed_scale) in phases {
+        for repeat in 0..repeats + usize::from(mode.is_some()) {
+            pump(300);
+            until(|| w.frame_timer.borrow().is_none(), "previous navigation contact settled");
+            let start = scheduled_start();
+            let contact_begin_ns = glib::monotonic_time() as u64 * 1000;
+            let first_request = requests.len();
+            for step in 0..steps {
+                let due = start + Duration::from_secs_f64(step as f64 / 120.);
                 while Instant::now() < due {
                     let before = glib::monotonic_time() as u64 * 1000;
                     context.iteration(true);
@@ -854,13 +901,14 @@ fn native_large_photo_navigation() {
                         slow_iterations.push([before, after]);
                     }
                 }
-                let angle = step as f32 / 95. * std::f32::consts::TAU;
+                let angle = step as f32 / (steps - 1) as f32 * std::f32::consts::TAU;
                 let scale = if fixed_scale == 0. {
                     fit * (2. / fit).powf((angle.sin() + 1.) * 0.5)
                 } else {
                     fixed_scale
                 };
-                let center = [0.5 + 0.4 * angle.cos(), 0.5 + 0.4 * angle.sin()];
+                let center = if phase == "zoom" { [0.5, 0.5] }
+                    else { [0.5 + 0.4 * angle.cos(), 0.5 + 0.4 * angle.sin()] };
                 let camera = state(&w).camera;
                 let m = camera.document_to_surface();
                 let [x, y] = std::array::from_fn(|i| center[i] * extent[i] as f32);
@@ -871,7 +919,7 @@ fn native_large_photo_navigation() {
                     from,
                     to,
                     scale / camera.zoom,
-                    angle - camera.rotation,
+                    if phase == "zoom" || phase == "pan" { -camera.rotation } else { angle - camera.rotation },
                 );
                 assert!(change.is_ok(), "navigation failed: {change:?}");
                 w.changed(change);
@@ -884,6 +932,10 @@ fn native_large_photo_navigation() {
                     "matrix": state(&w).camera.document_to_surface(),
                 }));
             }
+            let due = start + Duration::from_secs_f64(steps as f64 / 120.);
+            while Instant::now() < due { context.iteration(true); }
+            contacts.push((phase, mode.is_some() && repeat == 0, repeat, contact_begin_ns,
+                glib::monotonic_time() as u64 * 1000, first_request, requests.len()));
         }
     }
     let motion_end_ns = glib::monotonic_time() as u64 * 1000;
@@ -908,6 +960,44 @@ fn native_large_photo_navigation() {
             .camera_views
             .iter()
             .all(|v| v.2 == stats.camera_views[0].2);
+    let views: std::collections::BTreeMap<_, _> = stats.camera_views.iter()
+        .map(|(id, matrix, _)| (*id, *matrix)).collect();
+    let publications: std::collections::BTreeMap<_, _> = stats.camera_publications.iter()
+        .map(|(id, chrome, queued_frames)| (*id, (*chrome, *queued_frames))).collect();
+    let mut contact_reports = Vec::new();
+    let mut zoom_failures = Vec::new();
+    for &(phase, priming, repeat, begin, end, first, last) in &contacts {
+        let mut presentations: Vec<_> = stats.presented.iter()
+            .filter(|p| p[3] == 1 && p[1] >= begin && p[1] <= end).collect();
+        presentations.sort_unstable_by_key(|p| p[1]);
+        let mut previous = None;
+        let mut fresh = Vec::new();
+        let mut repeated_independent = Vec::new();
+        let mut invalid_independent = Vec::new();
+        for p in &presentations {
+            let matrix = *views.get(&p[0]).expect("every presented canvas must have its camera pose");
+            let (chrome, queued_frames) = *publications.get(&p[0]).expect("every presented canvas must have publication metadata");
+            if previous.map(|(matrix, _)| matrix) != Some(matrix) {
+                fresh.push(p[1]);
+            } else if p[0] & (1_u64 << 63) != 0 {
+                repeated_independent.push(p[0]);
+            }
+            if p[0] & (1_u64 << 63) != 0
+                && (queued_frames.is_some_and(|count| count != 0) || previous == Some((matrix, chrome))) {
+                invalid_independent.push(p[0]);
+            }
+            previous = Some((matrix, chrome));
+        }
+        if phase == "zoom" && !priming && (fresh.len() < (last - first) / 2 || !invalid_independent.is_empty()) {
+            zoom_failures.push(format!("{phase}/{repeat}: {} fresh poses for {} requests; invalid independent publications {invalid_independent:?}", fresh.len(), last - first));
+        }
+        contact_reports.push(serde_json::json!({
+            "phase": phase, "priming": priming, "repeat": repeat, "begin_ns": begin, "end_ns": end,
+            "request_range": [first, last], "presentations": presentations.len(),
+            "fresh_presentation_times_ns": fresh, "repeated_independent_presentations": repeated_independent,
+            "invalid_independent_presentations": invalid_independent,
+        }));
+    }
     let telemetry = ui_session(&w).engine().backend().telemetry();
     let mut report = serde_json::json!({
         "startup_ready_ms": startup_ms,
@@ -927,6 +1017,7 @@ fn native_large_photo_navigation() {
         "extent": extent, "space": "ProPhoto", "depth": original.composition().color.depth.bits(), "viewport": viewport,
         "gtk_renderer": w.window.renderer().unwrap().type_().name(),
         "requests": requests, "camera_views": stats.camera_views,
+        "camera_publications": stats.camera_publications,
         "camera_work": stats.camera_work,
         "monitor_scale": w.area.scale_factor(),
         "physical_filter": std::env::var("LAYER_NAVIGATION_PHYSICAL").as_deref() == Ok("1"),
@@ -940,6 +1031,13 @@ fn native_large_photo_navigation() {
         "frame_handler_cpu": stats.frame_handler_cpu,
         "canvas_presentation": stats.presented,
     });
+    report["contacts"] = serde_json::json!(contact_reports);
+    report["mode"] = serde_json::json!(mode);
+    report["steps"] = serde_json::json!(steps);
+    report["actual_theme"] = serde_json::json!(match state(&w).theme { Theme::Light => "light", Theme::Dark => "dark" });
+    report["navigator_mapped"] = serde_json::json!(navigator_mapped);
+    report["navigator_child_visible"] = serde_json::json!(navigator_child_visible);
+    report["navigator_projection_count"] = serde_json::json!(navigator_projection_count);
     drop(stats);
     if let Some(worker) = concurrent { report["concurrent"] = worker.join().unwrap(); }
     std::fs::write(
@@ -947,6 +1045,7 @@ fn native_large_photo_navigation() {
         serde_json::to_vec_pretty(&report).unwrap(),
     )
     .unwrap();
+    assert!(zoom_failures.is_empty(), "ready zoom must publish fresh poses without unchanged Chrome repeats or queued Frame preemption: {}", zoom_failures.join("; "));
     assert!(idle, "idle navigation must stop requesting frames");
     assert!(!suspended);
     assert!(document_unchanged, "navigation must not change the document");

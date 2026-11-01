@@ -56,6 +56,21 @@ fn contact(s: &mut UiSession<Recorder>, grab: BubbleGrab, phase: ContactPhase, p
 }
 
 #[test]
+fn chrome_motion_tracks_bubble_pickup_and_retires_with_its_contact() {
+    for ending in [ContactPhase::Up, ContactPhase::Cancel] {
+        let mut s = desk();
+        let grab = brush(DefaultBrushPreset::PointyPencil);
+        assert!(!s.chrome_in_motion(false));
+        contact(&mut s, grab, ContactPhase::Down, [100., 20.]).unwrap();
+        assert!(s.chrome_in_motion(false));
+        contact(&mut s, grab, ContactPhase::Move, FAR).unwrap();
+        assert!(s.chrome_in_motion(false));
+        contact(&mut s, grab, ending, FAR).unwrap();
+        assert!(!s.chrome_in_motion(false));
+    }
+}
+
+#[test]
 fn bubble_pickup_waits_for_canvas_and_repeated_moves_keep_one_owner() {
     for platform in [Platform::Gtk,Platform::Web,Platform::Windows,Platform::Android,Platform::Mac,Platform::Ios] {
         let mut s=session(platform);s.set_viewport(VIEW,[1200,900]).unwrap();

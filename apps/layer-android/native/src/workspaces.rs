@@ -46,6 +46,6 @@ impl App {
         let before = self.host.session.state().revision;
         let change = c.tick(&mut self.host.session, time);
         self.host.apply_change(before, change);
-        Ok(json!({"view": c.view, "wake": change.canvas_wake, "refresh": change.regions != 0}))
+        Ok(json!({"view": c.view, "wake": change.needs_present(), "refresh": change.regions != 0}))
     }
 }

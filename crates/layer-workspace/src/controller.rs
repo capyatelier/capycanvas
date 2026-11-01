@@ -48,7 +48,23 @@ impl Wake for Signal {
 fn merge(into: &mut UiChange, change: UiChange) {
     into.regions |= change.regions;
     into.canvas_wake |= change.canvas_wake;
+    into.presentation_wake |= change.presentation_wake;
     into.revision = into.revision.max(change.revision);
+}
+#[cfg(test)]
+mod change_tests {
+    use super::*;
+    #[test]
+    fn controller_merges_engine_and_presentation_demand() {
+        let navigation = UiChange { revision: 3, regions: layer_ui::regions::CAMERA, canvas_wake: true, ..Default::default() };
+        let presentation = UiChange { revision: 4, regions: layer_ui::regions::SETTINGS, presentation_wake: true, ..Default::default() };
+        for (mut change, next) in [(navigation, presentation), (presentation, navigation)] {
+            merge(&mut change, next);
+            assert_eq!(change.revision, 4);
+            assert_eq!(change.regions, layer_ui::regions::CAMERA | layer_ui::regions::SETTINGS);
+            assert!(change.canvas_wake && change.presentation_wake && change.needs_present());
+        }
+    }
 }
 struct Task<T> {
     future: Pin<Box<dyn Future<Output = Result<T>>>>,

@@ -369,7 +369,7 @@ impl NativeHost {
             if self.startup.canvas_ready {
                 let previous = self.session.state().revision;
                 let change = self.session.frame(now, presentation)?;
-                self.dirty = change.canvas_wake;
+                self.dirty = change.needs_present();
                 self.apply_change(previous, change);
             }
         } else {
@@ -454,7 +454,7 @@ impl NativeHost {
     /// it; otherwise the next snapshot must still include that pending change.
     pub fn apply_change(&mut self, previous: u64, change: layer_ui::UiChange) {
         self.service_changes |= change.regions;
-        self.dirty |= change.canvas_wake;
+        self.dirty |= change.needs_present();
         if change.regions == layer_ui::regions::CAMERA
             && let Some(key) = &mut self.last_snapshot
             && key.revision == previous
@@ -1176,6 +1176,24 @@ impl NativeHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_theme_presentation_marks_the_native_host_dirty_without_engine_work() {
+        for platform in [layer_ui::Platform::Android, layer_ui::Platform::Mac, layer_ui::Platform::Ios, layer_ui::Platform::Windows] {
+            let mut host = NativeHost::new(platform).unwrap();
+            host.dirty = false;
+            let previous = host.session.state().revision;
+            let frames = host.session.engine().metrics().frames;
+            let theme = if host.session.state().theme == layer_ui::Theme::Dark { layer_ui::Theme::Light } else { layer_ui::Theme::Dark };
+            let change = host.session.dispatch(layer_ui::UiAction::SetTheme { theme: Some(theme) }).unwrap();
+            assert!(!change.canvas_wake && change.presentation_wake);
+            assert!(!host.dirty);
+            host.apply_change(previous, change);
+            assert!(host.dirty);
+            assert_eq!(host.session.engine().metrics().frames, frames);
+            assert!(host.session.engine().backend().0.is_none());
+        }
+    }
 
     #[test]
     fn a_panicking_native_call_stops_the_host() {

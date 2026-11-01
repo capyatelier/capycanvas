@@ -265,6 +265,7 @@ impl WebApp {
             revision: self.session.state().revision,
             regions: layer_ui::regions::ALL,
             canvas_wake: true,
+            ..Default::default()
         })
     }
 }

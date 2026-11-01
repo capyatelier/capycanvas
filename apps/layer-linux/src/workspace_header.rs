@@ -126,6 +126,7 @@ pub(super) struct Header {
     insets: Cell<[f32; 2]>,
 }
 impl Header {
+    pub(super) fn drag_active(&self) -> bool { self.drag.borrow().is_some() }
     pub(super) fn switcher_context_at(&self, id: u32, widget: &gtk::Widget, x: f64, y: f64) -> bool {
         self.items.borrow().iter().any(|item| item.entry.id == id
             && item.entry.item == HeaderItem::Workspaces

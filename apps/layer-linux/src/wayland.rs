@@ -355,6 +355,10 @@ struct Events {
     stroke_pacer: pacing::StrokePacer,
     initial_applied: bool,
     #[cfg(test)]
+    camera_feedback: Vec<(u64, [f32; 6], u64, u64, Option<usize>)>,
+    #[cfg(test)]
+    next_camera_feedback: u64,
+    #[cfg(test)]
     presented: Vec<[u64; 4]>,
 }
 
@@ -459,6 +463,21 @@ impl Child {
     }
     pub fn take_initial_commit(&mut self) -> bool {
         std::mem::take(&mut self.state.initial_applied)
+    }
+
+    #[cfg(test)]
+    pub fn feedback_camera(&mut self, id: u64, stroke: Option<StrokeTarget>, matrix: [f32; 6], revision: u64, chrome_revision: u64, queued_frames_at_chrome_admission: Option<usize>) {
+        let id = if id == 0 {
+            self.state.next_camera_feedback += 1;
+            (1_u64 << 63) | self.state.next_camera_feedback
+        } else { id };
+        self.state.camera_feedback.push((id, matrix, revision, chrome_revision, queued_frames_at_chrome_admission));
+        self.feedback(id, stroke);
+    }
+
+    #[cfg(test)]
+    pub fn take_camera_feedback(&mut self) -> Vec<(u64, [f32; 6], u64, u64, Option<usize>)> {
+        std::mem::take(&mut self.state.camera_feedback)
     }
 
     #[cfg(test)]

@@ -748,7 +748,7 @@ pub unsafe extern "C" fn capy_apple_project_adopt(
             let session = &mut app.host.session;
             session.notify(notice);
             let revision = session.state().revision;
-            app.host.apply_change(revision, layer_ui::UiChange { revision, regions: layer_ui::regions::HOST, canvas_wake: false });
+            app.host.apply_change(revision, layer_ui::UiChange { revision, regions: layer_ui::regions::HOST, ..Default::default() });
         }
         app.document_retired();
         if let (Some(location), Some(fingerprint)) = (fingerprint_location, state.fingerprint.clone()) {

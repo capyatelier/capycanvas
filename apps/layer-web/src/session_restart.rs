@@ -135,7 +135,7 @@ impl WebApp {
             let id=if self.documents.order().contains(&identity){self.documents.append_parked(candidate,tiles,self.session.localization())}else{
                 self.documents.append_parked_with_id(identity,candidate,tiles,self.session.localization()).map_err(|(reason,_)|js(reason))?;identity
             };
-            return serialize(&SessionAdoption{id,change:layer_ui::UiChange{revision:self.session.state().revision,regions:layer_ui::regions::DOCUMENT,canvas_wake:false}});
+            return serialize(&SessionAdoption{id,change:layer_ui::UiChange{revision:self.session.state().revision,regions:layer_ui::regions::DOCUMENT,..Default::default()}});
         }
         self.session.park_document().map_err(js)?;
         self.session.renderer_mut().0.take();
@@ -143,7 +143,7 @@ impl WebApp {
         self.documents.restore_identity(identity).map_err(js)?;
         if let Some(control)=self.tone.pending.take(){control.cancel();}
         self.tone=Default::default();self.proof=Default::default();self.reset_document_views();
-        serialize(&SessionAdoption{id:identity,change:layer_ui::UiChange{revision:self.session.state().revision,regions:layer_ui::regions::ALL,canvas_wake:true}})
+        serialize(&SessionAdoption{id:identity,change:layer_ui::UiChange{revision:self.session.state().revision,regions:layer_ui::regions::ALL,canvas_wake:true,..Default::default()}})
     }
     pub fn restore_session_order(&mut self,order:JsValue)->Result<JsValue,JsValue> {
         let order:Vec<u64>=serde_wasm_bindgen::from_value(order).map_err(js)?;

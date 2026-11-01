@@ -21,7 +21,7 @@ fn native_chrome_during_filter_preparation() {
             let name = format!("chrome-preparation-{theme:?}-{level:?}").to_lowercase();
             input.perform(serde_json::json!([{"record_start":name},{"wait_ms":100}]));
             let frames = sample_after_paint(&w.surface, glib::clone!(#[strong] w, move || {
-                (w.chrome_released.get(), w.chrome.revision(), w.chrome.state())
+                (w.chrome_released.get(), w.chrome.revision(), w.chrome.state(), w.chrome.held(), w.chrome_hold.get())
             }));
             let mut actions = Vec::new();
             for turn in 0..6 {
@@ -35,13 +35,16 @@ fn native_chrome_during_filter_preparation() {
             let frames = frames.finish();
             let mut previous = 0;
             let rows: Vec<_> = frames.iter().map(|frame| {
-                let (shown, requested, state) = frame.state;
+                let (shown, requested, state, selected_held, requested_hold) = frame.state;
                 if shown < previous { violations.push(format!("{name}: {previous} -> {shown}")); }
                 previous = shown;
-                if let crate::glass::ChromeState::Visible(_, confirmed) = state && shown > confirmed {
-                    violations.push(format!("{name}: GTK {shown} ahead of GPU {confirmed}"));
+                if let crate::glass::ChromeState::Visible(_, confirmed) = state && selected_held && shown > confirmed {
+                    violations.push(format!("{name}: held GTK {shown} ahead of GPU {confirmed}"));
                 }
-                serde_json::json!({"paint_us":frame.time,"shown":shown,"requested":requested,"state":format!("{state:?}")})
+                if !requested_hold && shown != requested {
+                    violations.push(format!("{name}: unheld GTK {shown} behind latest revision {requested}"));
+                }
+                serde_json::json!({"paint_us":frame.time,"shown":shown,"requested":requested,"state":format!("{state:?}"),"selected_held":selected_held,"requested_hold":requested_hold})
             }).collect();
             assert!(!rows.is_empty(), "filter preparation paints chrome");
             input.perform(serde_json::json!([{"wait_ms":100},{"record_stop":true}]));
@@ -351,6 +354,12 @@ fn native_active_tab_matches_panel() {
         for theme in [Theme::Light, Theme::Dark] {
             let name = format!("theme-transition-{theme:?}-{level:?}").to_lowercase();
             let frames = record_pixels(&w, &mut input, &name, [tab_point, body_point, surround], || {
+                assert_eq!(ui_session(&w).engine().backend().geometry,
+                    Some(crate::wayland::Geometry::of(&w.area)), "outline fixture has unchanged geometry");
+                let scheduled = w.frame_timer.borrow().is_some();
+                w.window.emit_by_name::<()>("outline-changed", &[]);
+                assert_eq!(w.frame_timer.borrow().is_some(), scheduled,
+                    "an unchanged window outline must not schedule canvas work");
                 w.dispatch(UiAction::SetTheme { theme: Some(theme) });
             });
             transition_pixels(&name, &frames, &mut mismatches);

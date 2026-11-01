@@ -1216,7 +1216,6 @@ impl Documents {
             }
         ));
     }
-    #[cfg(test)]
     pub fn drag_active(&self) -> bool {
         self.dragging.get()
     }

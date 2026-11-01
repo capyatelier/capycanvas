@@ -1911,6 +1911,11 @@ pub(crate) struct Bubbles {
 }
 
 impl Bubbles {
+    pub(super) fn animation_active(&self) -> bool {
+        self.tick.borrow().is_some() || self.layer.bubbles().iter().any(|bubble| {
+            bubble.imp().ticking.get() || bubble.imp().fold.get().is_some()
+        })
+    }
     pub(super) fn new() -> Self {
         let layer: Layer = glib::Object::new();
         layer.set_widget_name("tool-bubbles");
@@ -2046,7 +2051,7 @@ impl Bubbles {
         let result = w.gpu.borrow_mut().as_mut().map(|g| g.session.dispatch(action));
         let accepted = matches!(result, Some(Ok(_)));
         match result {
-            Some(Ok(change)) if change.regions == 0 && !change.canvas_wake => {}
+            Some(Ok(change)) if change.regions == 0 && !change.needs_present() => {}
             Some(Ok(change)) => w.changed(Ok(change)),
             _ => {}
         }

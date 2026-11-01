@@ -621,7 +621,7 @@ fn install_example_filter(app: &App) -> &'static str {
             |name| std::fs::read_to_string(directory.join(name)).map(std::sync::Arc::from).map_err(|error| error.to_string()),
             layer_core::EffectInstallMode::Add,
         ).unwrap();
-        apple.host.dirty |= change.canvas_wake;
+        apple.host.dirty |= change.needs_present();
     });
     let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while app.state()["filter_load"]["pending"] == true {
@@ -1117,7 +1117,7 @@ fn custom_catalog_load_preserves_document_filters() {
                 .map(std::sync::Arc::from).map_err(|error| error.to_string()),
             layer_core::EffectInstallMode::Add,
         ).unwrap();
-        host.dirty |= change.canvas_wake;
+        host.dirty |= change.needs_present();
         });
         assert_eq!(unsafe { capy_apple_project_ready(app.0) }, 1);
         let end = std::time::Instant::now() + std::time::Duration::from_secs(30);

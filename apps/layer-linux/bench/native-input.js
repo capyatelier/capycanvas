@@ -22,7 +22,7 @@ let captureFailure;
 let capturePipeline, captureSink;
 const captureFrame = name => {
     if (!captureDir || !/^[a-z0-9-]+$/.test(name)) throw Error('Invalid native capture request');
-    const sample = captureSink?.try_pull_sample(0);
+    const sample = captureSink?.try_pull_sample(0) ?? captureSink?.last_sample;
     if (!sample) return false;
     const {Gst, GstVideo, GdkPixbuf} = imports.gi;
     const info = GstVideo.VideoInfo.new_from_caps(sample.get_caps());

@@ -750,6 +750,7 @@ fn native_sketch_layer_drawer_auto_height() {
                 change.revision = next.revision;
                 change.regions |= next.regions;
                 change.canvas_wake |= next.canvas_wake;
+                change.presentation_wake |= next.presentation_wake;
             }
             change
         };

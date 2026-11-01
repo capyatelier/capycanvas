@@ -276,7 +276,7 @@ impl NativeWorkspaces {
             };
             step(controller, &mut gpu.session)
         };
-        if change.regions != 0 || change.canvas_wake {
+        if change.regions != 0 || change.needs_present() {
             w.changed(Ok(change));
         }
         true

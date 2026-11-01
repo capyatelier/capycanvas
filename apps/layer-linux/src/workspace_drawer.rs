@@ -567,6 +567,9 @@ pub(crate) struct Drawer {
     generation: Cell<u64>,
 }
 impl Drawer {
+    pub(super) fn animation_active(&self) -> bool {
+        self.animation.borrow().as_ref().is_some_and(|animation| animation.state() == adw::AnimationState::Playing)
+    }
     pub fn refresh_theme(&self) {
         if let Some(tabs) = self.view.borrow().as_ref().and_then(|view| view.tab_strip.as_ref()) {
             tabs.queue_draw();
