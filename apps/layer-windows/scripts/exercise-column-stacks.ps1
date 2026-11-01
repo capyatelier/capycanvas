@@ -20,10 +20,10 @@ function Layout {
     } 'Workspace publication did not settle'
     $settled.value
 }
-function At([string]$Id,[switch]$Name){
+function At([string]$Id,[switch]$Name,[double]$Fraction=.5){
     if($Id -match '^collapsed-column-(\d+)$'){return Screen (Column ([int]$Matches[1])).empty}
     $bounds=(Control $Id -Name:$Name -Arranged).Current.BoundingRectangle
-    @{x=[int]($bounds.X+$bounds.Width*.5);y=[int]($bounds.Y+$bounds.Height*.5);id=$Id;name=[bool]$Name}
+    @{x=[int]($bounds.X+$bounds.Width*$Fraction);y=[int]($bounds.Y+$bounds.Height*.5);id=$Id;name=[bool]$Name;fraction=$Fraction}
 }
 function Screen($Bounds){
     $point=[CapyRowPointer+Point]::new()
@@ -106,23 +106,26 @@ function Check-ColumnInteractions {
     if(!(Column 12).open){Tap 'column-icon-layers'}
     Check-Open 12
 }
+function Dock-Point($Target){
+    if($Target.surface -eq 'header'){
+        $point=At ('column-grip-'+$Target.column)
+        $header=(Control 'title-bar' -Arranged).Current.BoundingRectangle
+        $point.y=[int]($header.Top+$header.Height*.5);$point.header=$header
+        return $point
+    }
+    if($Target.surface -eq 'body'){return At 'layer-list'}
+    At 'panel-tab-layers' -Fraction .25
+}
 function Check-DockTargets {
-    # Keep this target/history check within the right column. Direct injected
-    # cross-canvas tear-off has a separately documented capture limitation.
     foreach($surface in @('tab-slot','body','header')){
         $before=Layout
         if($surface -eq 'header'){
-            $bounds=(Column 12).bounds
-            $to=Screen @{x=$bounds.x+$bounds.width*.5;y=$bounds.y*.5;width=0;height=0}
             $expected=@{surface=$surface;kind='stack_column';column=12}
         }else{
             $group=(Model).layout.groups|Where-Object active -eq 'layers'|Select-Object -First 1
-            $bounds=$group.bounds
-            $y=if($surface -eq 'body'){$bounds.y+$bounds.height*.5}else{$bounds.y+39}
-            $x=if($surface -eq 'body'){$bounds.x+$bounds.width*.5}else{$bounds.x+8}
-            $to=Screen @{x=$x;y=$y;width=0;height=0}
             $expected=@{surface=$surface;kind='tab';group=$group.id;body=($surface -eq 'body')}
         }
+        $to=Dock-Point $expected
         Drag 'panel-tab-properties' $to -Cancel -Expected $expected
         if((Layout) -ne $before){throw 'Canceled new docking target changed the layout'}
         Drag 'panel-tab-properties' $to -Expected $expected
@@ -200,6 +203,14 @@ function Drag([string]$Id,$To,[switch]$Cancel,[switch]$Hold,[switch]$Stack,[swit
     [CapyRowPointer]::Move($To.x,$To.y)
     Wait-Until {(Gesture).phase -eq 'dragging'} 'Source did not drag after movement slop'
     if((Gesture).menu_open){throw 'Dragging retained the held context menu'}
+    if($Expected){
+        Wait-Until {$drag=(Presentation).workspace_update.drag;$drag.group -or $drag.tab -or $drag.drop_hint} 'Shared drag preview did not acknowledge native pickup'
+        $beforeTarget=@{point=$To;drag=(Presentation).workspace_update.drag;gesture=(Gesture)}
+        $To=Dock-Point $Expected
+        [CapyRowPointer]::Move($To.x,$To.y)
+        $script:dragProbe.target_refresh=@{before=$beforeTarget;after=@{point=$To;drag=(Presentation).workspace_update.drag;gesture=(Gesture)}}
+        $script:dragProbe|ConvertTo-Json -Depth 60|Set-Content (Join-Path $run ('target-refresh-'+(Gesture).generation+'.json'))
+    }
     if($Stack -or $Expected){
         Wait-Until {
             if($Stack){$footer=At $To.id -Name:$To.name;[CapyRowPointer]::Move($footer.x,$footer.y)}

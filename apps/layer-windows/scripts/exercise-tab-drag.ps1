@@ -117,16 +117,23 @@ function Walk([double]$FromX,[double]$FromY,[double]$ToX,[double]$ToY){
   Start-Sleep -Milliseconds 18
  }
 }
+function Save-TabReferenceState([string]$Stage){
+ $focused=[System.Windows.Automation.AutomationElement]::FocusedElement;$presentation=Presentation
+ @{process_id=$review.Id;focused=$(if($focused -and $focused.Current.ProcessId -eq $review.Id){@{process_id=$focused.Current.ProcessId;id=$focused.Current.AutomationId;name=$focused.Current.Name;runtime_id=($focused.GetRuntimeId() -join ':')}}else{$null});canvas_focused=(Control 'drawing-canvas').Current.HasKeyboardFocus;shaders_ready=$presentation.shaders_ready;chrome_revision=$presentation.chrome_revision;presented_chrome_revision=$presentation.presented_chrome_revision}|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ($Stage+'-state.json'))
+}
 function Start-Slide([double]$Grab=8){
  (Control 'drawing-canvas').SetFocus()
  Invoke 'panel-tab-tool_settings'
  Wait-Until {@((Model).layout.groups|Where-Object {$_.panels -contains 'tool_settings'})[0].active -eq 'tool_settings'} 'Selected preview setup did not select Tool'
  if($Journey -notlike 'release-*' -and !$script:previewSelectionChecked){
+  (Control 'drawing-canvas').SetFocus()
+  Wait-Until {(Control 'drawing-canvas').Current.HasKeyboardFocus -and (Presentation).shaders_ready} 'Selected tab reference needs canvas focus and ready shaders'
   Wait-StablePixels {
    $box=(Control 'panel-tab-tool_settings' -Arranged).Current.BoundingRectangle
    "$box/$(Screen-Pixels ([int]($box.Left+$box.Width/2)) ([int]($box.Top+$box.Height/2)))"
   } -Composed|Set-Content (Join-Path $run 'selected-stable-pixels.txt')
   Capture 'selected-before-slide' -Composed
+  Save-TabReferenceState 'selected-before-slide'
  }
  $selectedSource=(Control 'panel-tab-tool_settings' -Arranged).Current.BoundingRectangle
  $selectedNeighbor=(Control 'panel-tab-sizes' -Arranged).Current.BoundingRectangle
@@ -160,6 +167,7 @@ function Start-Slide([double]$Grab=8){
    Screen-Pixels ([int]($client.x+($box.x+$box.width/2)*$scale)) ([int]($client.y+($box.y+$box.height/2)*$scale))
   } -Composed|Set-Content (Join-Path $run 'preview-stable-pixels.txt')
   Capture 'inactive-source-preview' -Composed
+  Save-TabReferenceState 'inactive-source-preview'
   $origin=[CapyRowPointer+Point]::new();if(![CapyRowPointer]::ClientToScreen($drawingWindow,[ref]$origin)){throw 'Cannot locate preview capture'}
   $before=[Drawing.Bitmap]::new((Join-Path $run 'selected-before-slide.png'))
   $after=[Drawing.Bitmap]::new((Join-Path $run 'inactive-source-preview.png'))
