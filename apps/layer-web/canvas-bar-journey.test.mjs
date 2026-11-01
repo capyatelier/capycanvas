@@ -417,6 +417,8 @@ export async function checkCanvasBar({call,evaluate,settle,device=false,resizeOn
       return (await state()).canvas_bar.anchor;
     };
     const tablet=device,viewport=width=>call('Emulation.setDeviceMetricsOverride',{width,height:1000,deviceScaleFactor:1,mobile:false});
+    await invoke('fill');
+    await send({type:'set_tool_setting',id:'grain_depth',value:0});
     for(const device of devices) {
       const wide=!tablet&&device==='mouse';
       let origin=at;
