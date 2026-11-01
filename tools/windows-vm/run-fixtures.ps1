@@ -29,7 +29,8 @@ $controlBuilds=@{}
 $scripts = (Resolve-Path (Join-Path $PSScriptRoot '../../apps/layer-windows/scripts')).Path
 function Get-FixtureVariantArguments([string]$Fixture,[string]$Option,[string]$Choice){
     if($Fixture -eq 'switcher-drag' -and $Option -eq 'ContextEnding'){'-ContextHoldOnly'}
-    "-$Option";$Choice
+    if($Fixture -eq 'edge-reach' -and $Option -in @('CanvasResetOnly','CancelOnly')){'-Device';'touch'}
+    "-$Option";if($Choice){$Choice}
 }
 function ConvertTo-FixtureCommandLine([string[]]$Arguments){
     (@($Arguments|ForEach-Object {'"'+($_ -replace '(\\*)"','$1$1\"' -replace '(\\+)$','$1$1')+'"'}) -join ' ')
@@ -44,7 +45,7 @@ foreach ($script in Get-ChildItem (Join-Path $scripts 'exercise-*.ps1')) {
     $runs[$fixture] = @()
     foreach ($parameter in $parameters) {
         $option = $parameter.Name.VariablePath.UserPath
-        if ($parameter.StaticType -eq [switch]) { $runs["${fixture}:$option"] = @("-$option") }
+        if ($parameter.StaticType -eq [switch]) { $runs["${fixture}:$option"] = @(Get-FixtureVariantArguments $fixture $option $null) }
         $choices = ($parameter.Attributes | Where-Object { $_.TypeName.Name -eq 'ValidateSet' }).PositionalArguments.Value
         foreach ($choice in $choices | Where-Object { $null -ne $_ -and $_ -ne $parameter.DefaultValue.Value }) { $runs["${fixture}:$choice"] = @(Get-FixtureVariantArguments $fixture $option $choice) }
     }
@@ -210,10 +211,8 @@ New-Item -ItemType Directory -Force $Output | Out-Null
 "$($area.Width)x$($area.Height) work area at $([CapyVm.Native]::GetDpiForSystem()) dpi" | Set-Content (Join-Path $Output 'display.txt')
 if ($HardwareGpu) {
     $env:LAYER_TEST_SOFTWARE_GPU = $null
-    $env:CAPY_WAIT_SCALE = $null
 } else {
     $env:LAYER_TEST_SOFTWARE_GPU = '1'
-    $env:CAPY_WAIT_SCALE = '3'
 }
 $env:NO_COLOR = '1'
 @{runs=$planned;timeout_minutes=$TimeoutMinutes;hardware_gpu=[bool]$HardwareGpu}|ConvertTo-Json|Set-Content (Join-Path $Output 'plan.json')
@@ -235,6 +234,7 @@ foreach ($run in $runs.GetEnumerator()) {
         $arguments = if ($null -eq $run.Value) { Start-Shortcuts } else { @('-File', (Join-Path $scripts "exercise-$fixture.ps1"), '-Executable', $Executable) + $run.Value }
         $arguments += @(Get-FixtureCompanionArguments $fixture $run.Value ${function:Build-ControlFixture})
         if ($DebuggerPath) { $arguments += @('-DebuggerPath', $DebuggerPath) }
+        $env:CAPY_WAIT_SCALE = if($HardwareGpu -or $fixture -eq 'idle-brush'){$null}else{'3'}
         $process = Start-Process (Get-Process -Id $PID).Path -ArgumentList (ConvertTo-FixtureCommandLine (@('-NoProfile', '-Sta') + $arguments)) -NoNewWindow -PassThru -RedirectStandardOutput "$log.log" -RedirectStandardError "$log.err"
         $null = $process.Handle
         $process.PriorityClass='High'
