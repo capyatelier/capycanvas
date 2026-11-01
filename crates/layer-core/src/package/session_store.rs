@@ -71,7 +71,7 @@ pub fn packed_sessions(root: &Path) -> Result<PathBuf, String> {
     create_directory(&packed)?;
     Ok(packed)
 }
-pub fn relocate_session(source: &Path, destination: &Path) -> Result<(), String> {
+fn relocate_session<Owner>(source: &Path, destination: &Path, _owner: Owner) -> Result<(), String> {
     let parent = source.parent().ok_or("Session has no parent directory")?;
     let target = destination.parent().ok_or("Session has no destination directory")?;
     if metadata_optional(destination)?.is_some() { return Err("The saved session exists in both versions; both copies were kept".into()); }
@@ -86,6 +86,7 @@ pub fn relocate_session(source: &Path, destination: &Path) -> Result<(), String>
         let owner = OwnerLock::claim(&lock)?.ok_or("Recovery drawing is already open")?;
         stores.push(owner);
     }
+    #[cfg(windows)] drop((stores, _owner));
     fs::rename(source, destination).map_err(|e| e.to_string())?;
     sync_directory(target)?;
     sync_directory(parent)
@@ -116,9 +117,9 @@ fn import_with_owner_using<Owner>(root: &Path, manifest: &str, lock: &str, mut c
         let source = entry.path();
         if !entry.file_type().map_err(|e| e.to_string())?.is_dir()
             || !metadata_optional(&source.join(manifest))?.is_some_and(|metadata| metadata.is_file()) { continue; }
-        let Some(_owner) = claim(&source.join(lock))? else { continue; };
+        let Some(owner) = claim(&source.join(lock))? else { continue; };
         let destination = packed.join(entry.file_name());
-        relocate_session(&source, &destination)?;
+        relocate_session(&source, &destination, owner)?;
     }
     Ok(packed)
 }
@@ -153,7 +154,8 @@ fn relocate_flat_sessions(root: &Path, packed: &Path, boundary: &mut impl FnMut(
             if original.is_some() && moved.is_none() { moves.push((from, to)); }
         }
         if busy { continue; }
-        for (from, to) in moves { relocate_session(&from, &to)?; boundary("store")?; }
+        #[cfg(windows)] drop(owners);
+        for (from, to) in moves { relocate_session(&from, &to, ())?; boundary("store")?; }
         relocate_entry(&source, &destination)?; boundary("manifest")?;
         relocate_entry(&source.with_extension("lock"), &destination.with_extension("lock"))?; boundary("lock")?;
     }
@@ -1217,7 +1219,7 @@ mod tests {
         let directory = Directory::new(); let cancel = AtomicBool::new(false); let first = capture(1); let second = capture(2);
         let mut store = SessionStore::open(&directory.0).unwrap(); store.commit(&first, &cancel).unwrap();
         let owner = resource_owner(&store, tile_resource(&first).payload.id(), tile_resource(&first).bytes);
-        OpenOptions::new().append(true).open(&owner.path).unwrap().set_len(PACK_BYTES).unwrap();
+        OpenOptions::new().write(true).open(&owner.path).unwrap().set_len(PACK_BYTES).unwrap();
         for _ in 0..10 {
             assert!(store.commit_using(&second, &cancel, Interrupted { operation: 2, after: false, count: 0 }).is_err());
             assert_eq!(count(&directory.0.join("packs")), 2); assert_eq!(marker(&mut store), 1);
@@ -1254,7 +1256,7 @@ mod tests {
         let mut store = SessionStore::open(&directory.0).unwrap(); store.commit(&original, &cancel).unwrap();
         let owner = resource_owner(&store, tile_resource(&original).payload.id(), tile_resource(&original).bytes);
         store._owner.readers.lock().unwrap().push(Arc::downgrade(&owner));
-        OpenOptions::new().append(true).open(&owner.path).unwrap().set_len(PACK_BYTES).unwrap();
+        OpenOptions::new().write(true).open(&owner.path).unwrap().set_len(PACK_BYTES).unwrap();
         store.commit(&second, &cancel).unwrap();
         let next = resource_owner(&store, tile_resource(&second).payload.id(), tile_resource(&second).bytes);
         assert_ne!(owner.path, next.path); assert_eq!(count(&directory.0.join("packs")), 2);
@@ -1282,6 +1284,31 @@ mod tests {
             }
             assert!(StoredGeneration::parse(&serde_json::to_vec(&value).unwrap(), ProjectLimits::default()).is_err());
         }
+    }
+    #[cfg(windows)]
+    #[test]
+    fn competing_owner_at_directory_rename_preserves_the_original_session() {
+        struct Reclaim { owner: Option<OwnerLock>, path: PathBuf, competing: Arc<Mutex<Option<OwnerLock>>> }
+        impl Drop for Reclaim {
+            fn drop(&mut self) {
+                drop(self.owner.take());
+                *self.competing.lock().unwrap() = Some(OwnerLock::claim(&self.path).unwrap().unwrap());
+            }
+        }
+        let root = Directory::new(); let source = root.0.join("scene"); create_directory(&source).unwrap();
+        fs::write(source.join("window.json"), b"original membership").unwrap();
+        let mut store = SessionStore::open(&source.join("drawing")).unwrap();
+        store.commit(&capture(1), &AtomicBool::new(false)).unwrap(); drop(store);
+        let head = fs::read(source.join("drawing/head.json")).unwrap();
+        let competing = Arc::new(Mutex::new(None));
+        assert!(import_session_directories_with_owner(&root.0, "window.json", ".lock", |path| {
+            Ok(OwnerLock::claim(path)?.map(|owner| Reclaim { owner: Some(owner), path: path.into(), competing: competing.clone() }))
+        }).is_err());
+        assert!(competing.lock().unwrap().is_some());
+        assert!(OwnerLock::claim(&source.join(".lock")).unwrap().is_none());
+        assert!(!root.0.join("packed/scene").exists());
+        assert_eq!(fs::read(source.join("window.json")).unwrap(), b"original membership");
+        assert_eq!(fs::read(source.join("drawing/head.json")).unwrap(), head);
     }
     #[test]
     fn native_namespace_import_preserves_live_and_downgrade_sessions() {
