@@ -22,6 +22,31 @@ fn write_compat_fixtures() {
 }
 
 #[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn truncated_released_files_fail_without_changing_the_source() {
+    let fixture = root().join("1.0.15/samples-U8.capy");
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(&fixture).unwrap()).unwrap();
+    let resource = archive.by_name("data/tiles-1.bin").unwrap();
+    let cuts = [resource.central_header_start()+16, resource.data_start().unwrap()+resource.size()/2];
+    let directory = std::env::temp_dir().join(format!("capy-truncated-package-{}",PortableId::random()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("drawing.capy");
+    let cancel = AtomicBool::new(false);
+    for cut in cuts {
+        std::fs::copy(&fixture,&path).unwrap();
+        std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(cut).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let source = crate::package::transport::spool(&mut std::fs::File::open(&path).unwrap(),&directory,cut,&cancel).unwrap();
+        assert_eq!(source.resident_bytes(),0);
+        let opened = open(source,ProjectLimits::default(),&cancel);
+        assert!(matches!(&opened,Err(_) | Ok(OpenOutcome::Failure {..} | OpenOutcome::RecoveredView {..})), "cut {cut}: {opened:?}");
+        drop(opened);
+        assert_eq!(std::fs::read(&path).unwrap(),original,"cut {cut}");
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn release_fixtures_load_without_loss() {
     for entry in std::fs::read_dir(root()).unwrap() {
         let path=entry.unwrap().path();

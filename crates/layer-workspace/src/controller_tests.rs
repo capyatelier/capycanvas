@@ -1991,8 +1991,7 @@ fn start<S: WorkspaceStore + 'static>(
 fn released_or_incomplete_editing_states_keep_readable_fields_without_a_notice() {
     for version in [1, 3, 999] {
         let obsolete = version == 1;
-        let mut editing = layer_ui::EditingState::default();
-        editing.version = version;
+        let mut editing = layer_ui::EditingState { version, ..Default::default() };
         if obsolete {
             editing.region_values.insert("smoothing".into(), 0.5);
         }
@@ -2368,6 +2367,57 @@ fn sqlite_startup_creates_one_workspace_and_keeps_unreadable_rows() {
     assert!(restored.color_library.palettes.iter().any(|palette|palette.name=="Release palette"));
     assert!(!directory.join("workspaces.unreadable.sqlite3").exists());
     let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn sqlite_startup_preserves_damaged_files_and_recovers_a_complete_wal() {
+    let released = include_bytes!("../tests/compat/1.0.15/workspaces.sqlite3");
+    for bytes in [&released[..released.len()/2], b"not a SQLite database".as_slice()] {
+        for sidecars in [true, false] {
+            let directory = crate::test_support::temp_dir("damaged-workspace-file");
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(directory.join("workspaces.sqlite3"), bytes).unwrap();
+            if sidecars {
+                for name in ["workspaces.sqlite3-wal", "workspaces.sqlite3-shm"] {
+                    std::fs::write(directory.join(name), b"unreadable sidecar bytes").unwrap();
+                }
+            }
+            let stored = || {
+                let mut files = std::fs::read_dir(&directory).unwrap().map(|entry|entry.unwrap().path())
+                    .filter(|path|path.is_file() && path.file_name().unwrap()!="workspaces.sqlite3-shm")
+                    .map(|path|(path.file_name().unwrap().to_owned(),std::fs::read(path).unwrap()))
+                    .collect::<std::collections::BTreeMap<_,_>>();
+                files.entry("workspaces.sqlite3-wal".into()).or_default();
+                files
+            };
+            let original = stored();
+            for launch in ["damaged start", "damaged restart"] {
+                let (controller, mut host) = start_native(&directory);
+                assert_started(&controller, &mut host, launch);
+                assert!(controller.manager.in_memory(), "{launch}");
+                assert!(stored()==original, "{launch}: database, WAL or copies changed; SQLite owns SHM and may create an empty WAL");
+                close_native(controller, &mut host);
+                assert!(stored()==original, "{launch} after close: database, WAL or copies changed; SQLite owns SHM and may create an empty WAL");
+            }
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
+    let directory = crate::test_support::temp_dir("repairing-workspace-wal");
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("workspaces.sqlite3");
+    std::fs::write(&path, released).unwrap();
+    let sql = rusqlite::Connection::open(std::fs::canonicalize(&path).unwrap()).unwrap();
+    sql.set_db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true).unwrap();
+    sql.execute_batch("PRAGMA wal_autocheckpoint=0; VACUUM;").unwrap();
+    drop(sql);
+    std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len((released.len()/2) as u64).unwrap();
+    let (controller, mut host) = start_native(&directory);
+    assert!(controller.view.ready && controller.view.error.is_none());
+    assert!(!controller.manager.in_memory());
+    assert!(controller.manager.editing().unwrap().color_library.palettes.iter().any(|palette|palette.name=="Release palette"));
+    assert!(host.session.state().workspace_ready && host.session.capture_workspace().is_ok());
+    close_native(controller, &mut host);
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]

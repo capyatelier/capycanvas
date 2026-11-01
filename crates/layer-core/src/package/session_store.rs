@@ -945,15 +945,20 @@ mod tests {
 
     #[test]
     fn corrupt_current_falls_back_and_unsupported_current_stays_preserved() {
-        for corruption in 0..3 {
+        for corruption in 0..4 {
             let directory = Directory::new();
             let mut store = SessionStore::open(&directory.0).unwrap();
-            store.commit(&capture(1), &AtomicBool::new(false)).unwrap();
+            let previous = store.commit(&capture(1), &AtomicBool::new(false)).unwrap();
             let second = capture(2);
             let generation = store.commit(&second, &AtomicBool::new(false)).unwrap();
             match corruption {
                 0 => fs::write(store.resource_path(tile_resource(&second).payload.id()), b"broken").unwrap(),
                 1 => fs::write(store.generation_path(generation), b"broken").unwrap(),
+                3 => {
+                    let path = store.generation_path(generation);
+                    let metadata = fs::read(&path).unwrap();
+                    fs::write(path,&metadata[..metadata.len()/2]).unwrap();
+                }
                 _ => {
                     let mut metadata: serde_json::Value = serde_json::from_slice(second.metadata()).unwrap();
                     let resource = metadata["resources"].as_array_mut().unwrap().iter_mut().find(|record| record["id"] == json!(tile_resource(&second).payload.id())).unwrap();
@@ -964,11 +969,11 @@ mod tests {
                     fs::write(store.path.join("head.json"), serde_json::to_vec(&head).unwrap()).unwrap();
                 }
             }
+            let metadata = fs::read(store.generation_path(generation)).unwrap();
+            let head = fs::read(store.path.join("head.json")).unwrap();
             drop(store);
             let mut store = SessionStore::open(&directory.0).unwrap();
             if corruption==2 {
-                let metadata=fs::read(store.generation_path(generation)).unwrap();
-                let head=fs::read(store.path.join("head.json")).unwrap();
                 assert_eq!(store.load(ProjectLimits::default(),&AtomicBool::new(false)).err().unwrap(),"Unsupported session artwork");
                 assert_eq!(store.loaded_generation(),None);assert_eq!(store.generation(),Some(generation));
                 assert_eq!(fs::read(store.generation_path(generation)).unwrap(),metadata);
@@ -976,6 +981,9 @@ mod tests {
                 continue;
             }
             assert_eq!(marker(&mut store), 1);
+            assert_eq!(store.loaded_generation(),Some(previous));
+            assert_eq!(fs::read(store.generation_path(generation)).unwrap(),metadata);
+            assert_eq!(fs::read(store.path.join("head.json")).unwrap(),head);
             store.commit(&capture(3), &AtomicBool::new(false)).unwrap();
             assert_eq!(marker(&mut store), 3);
             assert_eq!(count(&directory.0.join("generations")), 2);

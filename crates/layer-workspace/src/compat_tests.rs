@@ -43,11 +43,10 @@ fn generate(output: &Path) {
     for (index,value) in options.region_sources.iter_mut().enumerate() { *value = if index == 0 {Default::default()} else {layer_ui::RegionSource::Editing}; }
     if let Some(smoothing) = options.region_values.get_mut("smoothing") { *smoothing = 1.; }
     write_json(&directory,"editing-options.json",&options);
-    let mut settings = layer_ui::Settings::default();
-    settings.theme = Some(layer_ui::Theme::Dark);
-    settings.pan_speed = 1.5;
-    settings.zoom_speed = 0.75;
-    settings.quick_pinch_fit = false;
+    let mut settings = layer_ui::Settings {
+        theme: Some(layer_ui::Theme::Dark), pan_speed: 1.5, zoom_speed: 0.75,
+        quick_pinch_fit: false, ..Default::default()
+    };
     settings.shortcuts.insert("command.Undo".into(), vec![]);
     settings.validate_localized(&localizer).unwrap();
     write_json(&directory, "settings.json", &settings);
@@ -179,7 +178,7 @@ fn generated_compat_fixtures_load_without_expectations() {
 
 fn check_inputs(directory: &Path, check: impl Fn(&str, Value)) {
     let english = Localizer::shared(UiLanguage::English);
-    let mut paths: Vec<_> = std::fs::read_dir(&directory).unwrap().map(|p|p.unwrap().path()).collect();
+    let mut paths: Vec<_> = std::fs::read_dir(directory).unwrap().map(|p|p.unwrap().path()).collect();
     paths.sort();
     for path in paths {
         let name = path.file_name().unwrap().to_str().unwrap();
