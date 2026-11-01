@@ -30,7 +30,7 @@ function Windows {
     try{
         $path=Join-Path $directory ("windows-"+$review.Id+".json")
         if([IO.File]::GetLastWriteTimeUtc($path) -ge $review.StartTime.ToUniversalTime()){
-            $v=Get-Content $path -Raw|ConvertFrom-Json;if($v.process_id -eq $review.Id){return @($v.windows)}
+            $v=Read-Snapshot $path;if($v.process_id -eq $review.Id){return @($v.windows)}
         }
     }catch{}
     @()
@@ -39,7 +39,7 @@ function Model($Window=$current){
     try{
         $path=Join-Path $directory ("ui-state-"+$review.Id+"-"+$Window.id+".json")
         if([IO.File]::GetLastWriteTimeUtc($path) -ge $review.StartTime.ToUniversalTime()){
-            $v=Get-Content $path -Raw|ConvertFrom-Json
+            $v=Read-Snapshot $path
             if($v.process_id -eq $review.Id -and $v.window_id -eq $Window.id -and $v.model.windows_isolated_settings){return $v.model}
         }
     }catch{}
