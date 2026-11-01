@@ -180,7 +180,7 @@ function Shortcut([uint16[]]$Modifiers,[uint16]$Key){
  (Canvas-Peer).SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,$Modifiers,$Key)
 }
 function Select-Preset([string]$Label,[int]$Id){
- if((Model).state.brush.preset -ne $Id){
+ if((Model).state.brush.preset -ne $Id -or (Model).state.layer_tools.tool -ne 'paint'){
  Shortcut @(0x11) 0x4b
  Wait-Until {Find 'command-search' -Visible} 'Command search did not open'
  (Control 'command-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Label)
@@ -200,7 +200,7 @@ function Select-Preset([string]$Label,[int]$Id){
  if($result.Current.Name -ne $match.label -or !$result.Current.IsEnabled){throw 'The native brush result differs from the shared search result'}
  $result.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
  }
- Wait-Until {!(Find 'command-search' -Visible) -and (Model).state.brush.preset -eq $Id -and (Model).brush_ready} "The requested brush did not become ready: $Label/$Id" 90
+ Wait-Until {!(Find 'command-search' -Visible) -and (Model).state.brush.preset -eq $Id -and (Model).state.layer_tools.tool -eq 'paint' -and (Model).brush_ready} "The requested brush did not become ready: $Label/$Id" 90
  $size=Control 'tool-setting-size';$size.SetFocus()
  $size.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('64')
  [CapyRowPointer]::Key([uint32]$review.Id,0x0d)
