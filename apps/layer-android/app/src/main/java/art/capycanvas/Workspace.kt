@@ -66,6 +66,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.TextStyle
@@ -381,7 +382,7 @@ private val HiddenChromeShape=object:Shape {
             WorkspaceColumns(host,layout,state,panels,dock,hidden)
             ContentDrawers(host, snapshot, panels, dock)
             PanelWindows(host,layout,panels,dock,state,hidden)
-            CanvasBar(host, dock, layout)
+            CanvasBar(host, dock, layout, IntSize(constraints.maxWidth, constraints.maxHeight))
             NoticeBubble(host, dock, layout.getJSONObject("notice"))
             CanvasSizePanel(host, dock, layout.getJSONObject("work_area"), state)
             ImageSizePanel(host, dock, layout.getJSONObject("work_area"), state)

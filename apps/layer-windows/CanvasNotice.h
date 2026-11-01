@@ -134,7 +134,7 @@ struct CanvasNotice:std::enable_shared_from_this<CanvasNotice>{
             auto natural=[&](Thickness padding){text.Margin(padding);text.Measure({INFINITY,INFINITY});return double(text.DesiredSize().Width);};
             actions.Measure({INFINITY,INFINITY});
             double message=natural({12,6,offered?8.:12.,6}),offers=offered?actions.DesiredSize().Width:0.;
-            bool stacked=offered&&message+offers+gap>limit&&limit-offers-gap<anchor.minText;
+            bool stacked=!flag(toolbarUi(data->localization.get(),O({{L"type",S(L"notice_layout")},{L"text",N(message)},{L"content",N(limit)},{L"actions",N(offers)},{L"gap",N(gap)},{L"min_text_width",N(anchor.minText)}})).GetObject(),L"beside");
             if(stacked)message=natural({12,10,12,2});
             row.Width(std::min(limit,std::ceil(stacked?std::max(message,offers):message+spacing+offers)+1));
             row.ColumnDefinitions().GetAt(1).Width(stacked?GridLength{0,GridUnitType::Pixel}:GridLength{1,GridUnitType::Auto});

@@ -24,12 +24,13 @@ const area = { x: 60, y: 48, width: 1000, height: 800 }, status = { x: 60, y: 82
 const placement = { x: 560, y: floor - MARGIN, max_width: 960, min_text_width: 960, window: false, bar_floor: floor - 72 };
 const tiles = { gap: 2, size: [36, 36] };
 const layout = { work_area: area, status, notice: placement };
-function harness({ bar = null } = {}) {
+function harness({ bar = null, arrangement = () => ({ beside: true }) } = {}) {
   const workspace = new FakeElement("main"), answers = [], timers = [], glass = { queued: 0, queue() { this.queued++; } };
   let clock = 0, barBounds = bar;
   const element = (tag, className, text) => { const node = new FakeElement(tag, className); if (text != null) node.textContent = text; return node; };
   const button = (text, click, className = "") => { const node = element("button", className, text); node.addEventListener("click", click); return node; };
   const notice = createNotice({
+    arrangement,
     workspace, element, button, answer: (id, accept, action) => answers.push(action === undefined ? [id, accept] : [id, accept, action]),
     layout: () => layout, bar: () => barBounds, tiles, glass,
     setTimer: (callback, ms) => { const timer = { id: timers.length + 1, callback, at: clock + ms }; timers.push(timer); return timer.id; },
@@ -178,7 +179,8 @@ test("the notice follows the shared placement and sits above a canvas action bar
 });
 
 test("text shares a row with the actions only on one line, and otherwise the actions stack below it", () => {
-  const h = harness();
+  const requests = [], replies = [true, true, false, true];
+  const h = harness({ arrangement: request => { requests.push(request); return { beside: replies.shift() }; } });
   h.text.width = 300; h.actions.width = 240;
   h.notice.publish(objects(30n));
   assert.equal(h.notice.root.classList.contains("stacked"), false, "short text and actions share a row");
@@ -192,10 +194,13 @@ test("text shares a row with the actions only on one line, and otherwise the act
   h.text.width = 2000;
   h.notice.publish(refusal(31n));
   assert.equal(h.notice.root.classList.contains("stacked"), false, "text without actions wraps in its row");
+  assert.deepEqual(requests.map(({ text, actions }) => ({ text, actions })), [{ text: 300, actions: 240 }, { text: 718, actions: 240 }, { text: 719, actions: 240 }, { text: 2000, actions: 0 }]);
+  assert.ok(requests.every(request => request.type === 'notice_layout' && request.content === 960 && request.gap === 2 && request.min_text_width === 960));
+  assert.deepEqual(h.answers, []);
 });
 
 test("the first layout of a new notice measures its actions", () => {
-  const h = harness();
+  const h = harness({ arrangement: () => ({ beside: false }) });
   h.text.width = placement.max_width - 100; h.actions.width = 240;
   h.notice.publish(objects(32n));
   assert.equal(h.notice.root.classList.contains("stacked"), true);
@@ -232,4 +237,21 @@ test("showing, moving and hiding the notice refreshes its glass", () => {
   assert.equal(h.glass.queued, shown + 3, "a hidden notice leaves the glass");
   h.notice.publish(refusal(51n));
   assert.equal(h.glass.queued, shown + 4, "the same notice shown again is measured again");
+});
+
+test("native notice measurements use the shared arrangement answer", () => {
+  const requests = [];
+  const h = harness({ arrangement: request => { requests.push(request); return { beside: false }; } });
+  h.text.width = 100; h.actions.width = 80;
+  h.notice.publish(objects(60n));
+  assert.deepEqual(requests.at(-1), { type: "notice_layout", text: 100, content: 960, actions: 80, gap: 2, min_text_width: 960 });
+  assert.equal(h.notice.root.classList.contains("stacked"), true);
+  assert.equal(requests.length, 1);
+  h.notice.publish(objects(61n));
+  assert.equal(requests.length, 2, "a visible replacement makes one shared query");
+  h.notice.publish(objects(61n));
+  assert.equal(requests.length, 3, "an existing notice makes one shared query");
+  h.notice.hide(); h.notice.place();
+  assert.equal(requests.length, 3, "a hidden notice makes no shared query");
+  assert.deepEqual(h.answers, []);
 });

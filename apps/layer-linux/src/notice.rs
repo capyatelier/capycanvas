@@ -127,8 +127,7 @@ impl NoticeBubble {
         let natural = |widget: &gtk::Widget| widget.measure(gtk::Orientation::Horizontal, -1).1 as f32;
         let content = placement.max_width;
         let actions = if self.actions.get_visible() { natural(self.actions.upcast_ref()) } else { 0. };
-        let beside = actions == 0. || natural(self.text.upcast_ref()) + GAP as f32 + actions <= content
-            || placement.actions_beside(content, actions, GAP as f32);
+        let beside = placement.actions_beside(natural(self.text.upcast_ref()), content, actions, GAP as f32);
         let orientation = if beside { gtk::Orientation::Horizontal } else { gtk::Orientation::Vertical };
         if self.root.orientation() != orientation { self.root.set_orientation(orientation); }
         if beside { self.root.remove_css_class("stacked"); } else { self.root.add_css_class("stacked"); }

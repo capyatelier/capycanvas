@@ -10,10 +10,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.Layout
-import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.layout
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -22,6 +21,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import org.json.JSONArray
@@ -40,7 +40,7 @@ private class BarFrame {
     var bounds by mutableStateOf<JSONObject?>(null)
 }
 
-@Composable internal fun CanvasBar(host: CanvasHost, dock: DockInteraction, layout: JSONObject) {
+@Composable internal fun CanvasBar(host: CanvasHost, dock: DockInteraction, layout: JSONObject, viewportSize: IntSize) {
     val density = LocalDensity.current.density
     val frame = remember { BarFrame() }
     val placement = remember(frame, density) {
@@ -58,12 +58,12 @@ private class BarFrame {
     }
     Box(placement) {
         val view = host.canvasBar ?: return@Box
-        key(view.getJSONObject("context").toString()) { PlacedCanvasBar(host, dock, view, layout, frame, host.canvasBarVisible) }
+        key(view.getJSONObject("context").toString()) { PlacedCanvasBar(host, dock, view, layout, frame, host.canvasBarVisible, viewportSize) }
     }
 }
 
 @Composable private fun PlacedCanvasBar(host: CanvasHost, dock: DockInteraction, view: JSONObject, layout: JSONObject, frame: BarFrame,
-    visible: Boolean) {
+    visible: Boolean, viewportSize: IntSize) {
     val colors = LocalPalette.current
     val density = LocalDensity.current.density
     val context = view.getJSONObject("context")
@@ -116,6 +116,16 @@ private class BarFrame {
         frame.bounds = placed?.getJSONObject("bounds") ?: bounds
         revealed = true
     }
+    val frameBounds = frame.bounds
+    SideEffect {
+        frameBounds?.let { bounds ->
+            fun px(key: String) = (bounds.number(key) * density).roundToInt().toFloat()
+            val left = px("x"); val top = px("y")
+            val slot = Rect(left, top, left + px("width"), top + px("height"))
+                .intersect(Rect(0f, 0f, viewportSize.width.toFloat(), viewportSize.height.toFloat())).let { if (it.isEmpty) Rect.Zero else it }
+            if (dock.canvasBarSlot != slot) dock.canvasBarSlot = slot
+        }
+    }
     DisposableEffect(dock) { onDispose { dock.canvasBarSlot = null } }
     val shown = placement.optInt("items").coerceIn(0, items.size)
     fun edit(action: JSONObject) = host.dispatch(obj("type" to "canvas_bar_edit", "context" to context, "action" to action))
@@ -125,10 +135,7 @@ private class BarFrame {
     suspend fun choiceCopy(id: String) = host.menuCopy(obj("type" to "canvas_bar_choice_menu", "context" to context, "id" to id))
     Layout(content = {
         Box(Modifier.padding(BarShadowMargin).fillMaxSize().testTag("canvas-action-bar")
-            .then(if (revealed) Modifier.chromeRegion(dock) else Modifier).onGloballyPositioned {
-                val bounds = it.boundsInRoot().translate(-dock.origin)
-                if (dock.canvasBarSlot != bounds) dock.canvasBarSlot = bounds
-            }
+            .then(if (revealed) Modifier.chromeRegion(dock) else Modifier)
             .panelSurface(BarElevation, shape).glass(shape, key = glass)
             .semantics { contentDescription = host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("canvas_actions") }) {
             CompositionLocalProvider(LocalPalette provides colors.onGlass) {

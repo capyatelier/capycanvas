@@ -6,7 +6,7 @@ export function noticePlacement({ notice }, bar) {
   return { x: notice.x, y, width: notice.max_width, minText: notice.min_text_width };
 }
 
-export function createNotice({ workspace, element, button, answer, layout, bar, tiles, glass,
+export function createNotice({ workspace, element, button, answer, layout, bar, tiles, glass, arrangement,
   timeoutMs = TIMEOUT_MS, setTimer = setTimeout, clearTimer = clearTimeout }) {
   const root = element("div", "canvas-notice");
   root.setAttribute("role", "status");
@@ -49,7 +49,7 @@ export function createNotice({ workspace, element, button, answer, layout, bar, 
     root.style.maxWidth = "none"; root.classList.remove("stacked");
     const natural = node => node.hidden ? 0 : node.getBoundingClientRect().width;
     const content = placement.width, words = natural(text), offers = natural(actions);
-    const beside = !offers || words + tiles.gap + offers <= content || content - offers - tiles.gap >= placement.minText;
+    const beside = arrangement({ type: "notice_layout", text: words, content, actions: offers, gap: tiles.gap, min_text_width: placement.minText }).beside;
     root.classList.toggle("stacked", !beside);
     root.style.maxWidth = `${placement.width}px`;
     const next = `translate(${align(placement.x)}px, ${align(placement.y)}px) translate(-50%, -100%)`;
@@ -62,8 +62,7 @@ export function createNotice({ workspace, element, button, answer, layout, bar, 
     text.textContent = notice.text;
     root.setAttribute("aria-label", notice.name);
     show(notice.actions ?? []);
-    if (!root.hidden) place();
-    if (shown === notice.id) return;
+    if (shown === notice.id) { if (!root.hidden) place(); return; }
     const id = shown = notice.id;
     root.hidden = false;
     place();

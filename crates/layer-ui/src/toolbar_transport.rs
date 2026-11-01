@@ -7,6 +7,13 @@ use serde::Deserialize;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolbarUiRequest {
     Metrics,
+    NoticeLayout {
+        text: f32,
+        content: f32,
+        actions: f32,
+        gap: f32,
+        min_text_width: f32,
+    },
     SliderPreview {
         control: ToolbarControl,
         style: TileStyle,
@@ -92,6 +99,9 @@ pub fn toolbar_ui(request: ToolbarUiRequest, localizer: &Localizer) -> Result<se
     use serde_json::json;
     Ok(match request {
         ToolbarUiRequest::Metrics => toolbar_metrics(),
+        ToolbarUiRequest::NoticeLayout { text, content, actions, gap, min_text_width } => {
+            json!({"beside": NoticePlacement { min_text_width, ..NoticePlacement::default() }.actions_beside(text, content, actions, gap)})
+        }
         ToolbarUiRequest::SliderPreview {
             control,
             style,

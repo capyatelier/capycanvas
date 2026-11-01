@@ -141,6 +141,23 @@ fn native_notice_wand_offers_a_reference() {
     assert!(button.is_visible());
     assert_eq!(button.label().as_deref(), Some("Use Current ink as Reference"));
     assert!(w.area.has_focus());
+    let text = w.notice.root.first_child().unwrap();
+    let actions = find_named(w.notice.root.upcast_ref(), "canvas-notice-actions").unwrap();
+    let text_width = text.measure(gtk::Orientation::Horizontal, -1).1 as f32;
+    let actions_width = actions.measure(gtk::Orientation::Horizontal, -1).1 as f32;
+    let original = w.notice_placement();
+    for delta in [-1., 0., 1.] {
+        let placement = layer_ui::NoticePlacement { max_width: text_width + actions_width + layer_ui::TILE_GAP + delta, ..original };
+        w.notice.place(placement);
+        assert_eq!(w.notice.root.orientation(), if delta >= 0. { gtk::Orientation::Horizontal } else { gtk::Orientation::Vertical },
+            "native notice arrangement at intrinsic boundary {delta}");
+        assert_eq!(w.notice.root.has_css_class("stacked"), delta < 0.);
+    }
+    w.notice.place(original);
+    if let Some(output) = std::env::var_os("LAYER_TEST_ARTIFACTS") {
+        let path = std::path::PathBuf::from(output).join("notice-reference.png");
+        capture_reference(&w, path.to_str().unwrap(), 1.);
+    }
     let b = button.compute_bounds(&w.window).unwrap();
     input.click([b.x() + b.width() * 0.5, b.y() + b.height() * 0.5]);
     until(

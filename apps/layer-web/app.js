@@ -1991,7 +1991,7 @@ try {
   header = createHeader({app,state:()=>state,paintPair:()=>paintPairView,workspace,element,button,icon,place,dispatch,customization,systemStatus,updateZen,documents,capy});
   canvasBar = createCanvasBar({ app, workspace, element, button, icon, marker: customization.variationMarker, dispatch, glass, reappearMs: catalog.canvas_bar_reappear_ms,
     openMenu: node => customization.openMenu(node), presented: () => { selectionUi.place(); frequencySeparationUi.place(); notice?.place(); } });
-  notice = createNotice({ workspace, element, button, glass, tiles: app.toolbar_ui({ type: "style", style: "small" }), answer: answerNotice, layout: () => layout, bar: () => selectionUi.bounds() ?? frequencySeparationUi.bounds() ?? canvasBar.bounds() });
+  notice = createNotice({ arrangement: request => app.toolbar_ui(request), workspace, element, button, glass, tiles: app.toolbar_ui({ type: "style", style: "small" }), answer: answerNotice, layout: () => layout, bar: () => selectionUi.bounds() ?? frequencySeparationUi.bounds() ?? canvasBar.bounds() });
   zoomReadout = createZoomReadout({ root: $("view-info"), workspace, canvas, element, button, icon, numberField, catalog,
     menu: () => app.zoom_menu(), renderMenu: customization.renderMenu, refreshMenu: customization.refreshMenu,
     dispatch, camera: () => state.camera, toggled: updateZen });

@@ -94,10 +94,10 @@ internal data class CanvasNotice(val id: Long?, val name: String, val text: Stri
                     val start = LabelStart.dp.roundToPx()
                     val end = (if (notice.actions.isEmpty()) LabelStart else LabelEnd).dp.roundToPx()
                     val spacing = gap.roundToPx()
-                    val offers = if (notice.actions.isEmpty()) 0 else actions.maxIntrinsicWidth(Constraints.Infinity).coerceAtMost(constraints.maxWidth)
+                    val offers = if (notice.actions.isEmpty()) 0 else actions.maxIntrinsicWidth(Constraints.Infinity)
                     val words = start + text.maxIntrinsicWidth(Constraints.Infinity) + end
-                    val inline = offers == 0 || words + spacing + offers <= constraints.maxWidth
-                        || constraints.maxWidth - offers - spacing >= placement.number("min_text_width") * density
+                    val inline = toolbarUi(host.languageTag, obj("type" to "notice_layout", "text" to words, "content" to constraints.maxWidth,
+                        "actions" to offers, "gap" to spacing, "min_text_width" to placement.number("min_text_width") * density)).getBoolean("beside")
                     if (inline) {
                         val row = actions.measure(Constraints(maxWidth = offers))
                         val beside = if (offers == 0) 0 else spacing + row.width

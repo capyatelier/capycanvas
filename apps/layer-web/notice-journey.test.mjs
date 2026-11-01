@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
+import {MARGIN} from './notice.js';
 
 const notice='.canvas-notice',action=`${notice} .canvas-notice-action`,bar='.canvas-action-bar';
 const shown=`(()=>{const n=document.querySelector('${notice}');return !!n&&!n.hidden})()`;
@@ -16,6 +17,10 @@ export async function checkNotices({call,evaluate,settle,device=false}) {
   const state=()=>evaluate('JSON.parse(JSON.stringify(layerApp.state(),(_,v)=>typeof v==="bigint"?Number(v):v))');
   const current=()=>evaluate('(n=>n==null?null:JSON.parse(JSON.stringify(n,(_,v)=>typeof v==="bigint"?Number(v):v)))(layerApp.state().notice)');
   const rect=selector=>evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom}})()`);
+  const canvasCenter=async()=>{
+    const c=await evaluate('(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{v:c.viewport,a:c.work_area,r:{x:r.x,y:r.y,width:r.width,height:r.height}}})()');
+    center={x:c.r.x+(c.a[0]+c.a[2]/2)*c.r.width/c.v[0],y:c.r.y+(c.a[1]+c.a[3]/2)*c.r.height/c.v[1]};
+  };
   const middle=async selector=>{const r=await rect(selector);return{x:r.x+r.width/2,y:r.y+r.height/2};};
   let touchId=70;
   const pointer=(type,p,kind)=>kind==='touch'
@@ -42,11 +47,10 @@ export async function checkNotices({call,evaluate,settle,device=false}) {
   let center;
   try {
     await wait(`(()=>{[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Keep for Later')?.click();return !document.querySelector('dialog[open]');})()`);
-    await evaluate(`window.noticeProbe={frame:layerApp.app.frame,frames:0};layerApp.app.frame=(...args)=>{noticeProbe.frames++;return noticeProbe.frame.apply(layerApp.app,args);};`);
+    await evaluate(`window.noticeProbe={frame:layerApp.app.frame,frames:0,toolbar:layerApp.app.toolbar_ui,queries:[],dispatch:layerApp.app.dispatch,dispatches:0};layerApp.app.frame=(...args)=>{noticeProbe.frames++;return noticeProbe.frame.apply(layerApp.app,args);};layerApp.app.dispatch=(...args)=>{noticeProbe.dispatches++;return noticeProbe.dispatch.apply(layerApp.app,args);};layerApp.app.toolbar_ui=request=>{const before=noticeProbe.dispatches,reply=noticeProbe.toolbar.call(layerApp.app,request);if(request.type==='notice_layout')noticeProbe.queries.push({request,reply,before,after:noticeProbe.dispatches});return reply;};`);
     if(await evaluate('layerApp.state().layer_tools.has_selection'))await invoke('deselect');
     await invoke('fit_canvas');
-    const c=await evaluate('(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{v:c.viewport,a:c.work_area,r:{x:r.x,y:r.y,width:r.width,height:r.height}}})()');
-    center={x:c.r.x+(c.a[0]+c.a[2]/2)*c.r.width/c.v[0],y:c.r.y+(c.a[1]+c.a[3]/2)*c.r.height/c.v[1]};
+    await canvasCenter();
 
     await send({type:'layer',action:{op:'new',group:false,clipped:false}});
     const layers=(await state()).layers,top=layers.findIndex(l=>l.editing),below=layers[top+1];
@@ -78,10 +82,35 @@ export async function checkNotices({call,evaluate,settle,device=false}) {
       assert.equal((await state()).layers.find(l=>l.id===below.id).reference,false);
     }
 
-    for(const name of ['light','dark']) {
-      await send({type:'set_theme',theme:name});await pause(150);
-      await canvasTap('pen');await wait(shown);await screenshot(`wand-${name}`);
-    }
+    const workspace=await evaluate('layerApp.app.workspace_persistence()'),boundaries=[];
+    try {
+      for(const name of ['light','dark']) {
+        await send({type:'restore_workspace',workspace});await send({type:'set_theme',theme:name});await pause(150);await canvasCenter();
+        await canvasTap('pen');await wait(shown);await screenshot(`wand-${name}`);
+        const measured=await evaluate('noticeProbe.queries.at(-1).request'),threshold=measured.text+measured.actions+measured.gap;
+        for(const offset of [-1,0,1]) {
+          await send({type:'restore_workspace',workspace});
+          const band=workspace.layout.bands.find(b=>b.edge==='right'),layout=await evaluate('layerApp.app.layout(innerWidth,innerHeight)');assert.ok(band,'The normal workspace has a right column');
+          const divider=layout.dividers.find(d=>d.id===band.id);assert.ok(divider,'The right column has a native divider');
+          const from={x:divider.bounds.x+divider.bounds.width/2,y:divider.bounds.y+divider.bounds.height/2},to={x:from.x-(layout.work_area.width-2*MARGIN-threshold-offset),y:from.y};
+          await pointer('mousePressed',from,'mouse');
+          try {await call('Input.dispatchMouseEvent',{type:'mouseMoved',...to,button:'left',buttons:1,pointerType:'mouse'});}finally{await pointer('mouseReleased',to,'mouse');}
+          await settle();await canvasCenter();
+          const before=await evaluate('noticeProbe.queries.length');await canvasTap('pen');await wait(shown);
+          const query=await evaluate('noticeProbe.queries.at(-1)'),text=await rect(`${notice} .canvas-notice-text`),actions=await rect(`${notice} .canvas-notice-actions`),stacked=await evaluate(`document.querySelector('${notice}').classList.contains('stacked')`);
+          boundaries.push({theme:name,offset,measured,layout,workspace:await evaluate('layerApp.app.workspace_persistence()'),query,text,actions,queries:await evaluate('noticeProbe.queries.length')-before});
+          assert.ok(Math.abs(query.request.content-query.request.text-query.request.actions-query.request.gap-offset)<1/32,`Native measurements reach the exact notice boundary: ${JSON.stringify(boundaries.at(-1))}`);
+          assert.equal(query.reply.beside,offset>=0);assert.equal(stacked,!query.reply.beside);
+          assert.equal(query.before,query.after,'A notice layout query dispatches no action');
+          if(stacked)assert.ok(actions.y>=text.bottom-1/32,'Stacked actions follow the complete text');else assert.ok(actions.x>=text.right-1/32,'Beside actions follow the text');
+          await screenshot(`boundary-${name}-${offset}`);
+        }
+        const before=await evaluate('({queries:noticeProbe.queries.length,frames:noticeProbe.frames})');
+        for(let frame=0;frame<8;frame++){await evaluate('layerApp.wake()');await settle();}
+        const after=await evaluate('({queries:noticeProbe.queries.length,frames:noticeProbe.frames})');assert.ok(after.frames>before.frames);assert.equal(after.queries,before.queries,'Steady frames perform no notice layout query');
+        boundaries.push({theme:name,idle_frames:after.frames-before.frames,idle_queries:after.queries-before.queries});
+      }
+    } finally {await send({type:'restore_workspace',workspace});await canvasCenter();await writeFile(`${directory}/boundaries.json`,JSON.stringify(boundaries,null,2));}
     await canvasTap('mouse');
     await wait(shown);
     const first=(await current()).id;
@@ -176,7 +205,8 @@ export async function checkNotices({call,evaluate,settle,device=false}) {
       tool:layerApp.state().layer_tools.tool,layers:layerApp.state().layers.map(l=>[l.id,l.label,l.editing,l.reference])},(_,v)=>typeof v==="bigint"?String(v):v)`));
     throw error;
   } finally {
-    await evaluate('if(window.noticeProbe){layerApp.app.frame=noticeProbe.frame;delete window.noticeProbe;}');
+    await writeFile(`${directory}/layout-queries.json`,JSON.stringify(await evaluate('noticeProbe?.queries??[]'),null,2));
+    await evaluate('if(window.noticeProbe){layerApp.app.frame=noticeProbe.frame;layerApp.app.toolbar_ui=noticeProbe.toolbar;layerApp.app.dispatch=noticeProbe.dispatch;delete window.noticeProbe;}');
     await send({type:'set_theme',theme});
   }
 }

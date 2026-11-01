@@ -48,8 +48,8 @@ impl NoticePlacement {
 
     /// Whether actions `actions` wide keep the text's row in a bubble whose
     /// content is `content` wide with `gap` between text and actions.
-    pub fn actions_beside(&self, content: f32, actions: f32, gap: f32) -> bool {
-        content - actions - gap >= self.min_text_width
+    pub fn actions_beside(&self, text: f32, content: f32, actions: f32, gap: f32) -> bool {
+        actions == 0. || text + gap + actions <= content || content - actions - gap >= self.min_text_width
     }
 }
 
@@ -78,8 +78,24 @@ mod tests {
     fn text_that_needs_a_second_line_puts_the_actions_on_their_own_row() {
         for placement in [NoticePlacement::resolve([1600., 900.], area(300., 1000.), Bounds::default()), NoticePlacement::resolve([400., 900.], area(0., 30.), Bounds::default())] {
             assert_eq!(placement.min_text_width, placement.max_width);
-            assert!(!placement.actions_beside(placement.max_width, 120., 2.), "text never wraps beside the actions");
+            assert!(!placement.actions_beside(placement.max_width, placement.max_width, 120., 2.), "text never wraps beside the actions");
         }
+    }
+
+    #[test]
+    fn intrinsic_notice_text_shares_the_exact_available_row() {
+        for (content, expected) in [(301., false), (302., true), (303., true)] {
+            let placement = NoticePlacement { min_text_width: content, ..NoticePlacement::default() };
+            let text = 220.; let actions = 80.; let gap = 2.;
+            assert_eq!(placement.actions_beside(text, content, actions, gap), expected);
+            let request = serde_json::from_value(serde_json::json!({"type":"notice_layout","text":text,"content":content,"actions":actions,"gap":gap,"min_text_width":content})).unwrap();
+            let reply = crate::toolbar_ui(request, &crate::Localizer::shared(crate::UiLanguage::English)).unwrap();
+            assert_eq!(reply["beside"], expected);
+        }
+        let placement = NoticePlacement { min_text_width: 100., ..NoticePlacement::default() };
+        assert!(placement.actions_beside(1000., 182., 80., 2.));
+        assert!(!placement.actions_beside(1000., 181., 80., 2.));
+        assert!(placement.actions_beside(1000., 0., 0., 2.));
     }
 
     #[test]

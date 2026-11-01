@@ -3778,6 +3778,69 @@ class AndroidInteractionTest {
                 waitFor("$name the notice times out", 8_000) { notice() == null && !shown("canvas-notice") }
                 assertTrue("$name the notice stays about 4 s", SystemClock.uptimeMillis() - shownAt in 3_000..6_000)
 
+                if (device == MotionEvent.TOOL_TYPE_STYLUS) {
+                    val originalWidth = activity.window.attributes.width
+                    val originalHeight = activity.window.attributes.height
+                    fun raiseNotice() {
+                        val area = state().getJSONObject("camera").array("work_area")
+                        val at = bounds("workspace").topLeft + Offset((area.getDouble(0) + area.getDouble(2) / 2).toFloat(), (area.getDouble(1) + area.getDouble(3) / 2).toFloat())
+                        onCanvas { drag(at, at + shift) }
+                    }
+                    fun projection(label: String) {
+                        val currentWork = bounds("workspace")
+                        val currentBar = bounds("canvas-action-bar")
+                        val expected = if (currentBar.isEmpty) Rect.Zero else currentBar.translate(-currentWork.topLeft)
+                        val slot = checkNotNull(host.workspaceInteraction!!.canvasBarSlot)
+                        assertEquals("$label published bar left matches native clipping", expected.left, slot.left, 1f)
+                        assertEquals("$label published bar top matches native clipping", expected.top, slot.top, 1f)
+                        assertEquals("$label published bar right matches native clipping", expected.right, slot.right, 1f)
+                        assertEquals("$label published bar bottom matches native clipping", expected.bottom, slot.bottom, 1f)
+                        val bubble = bounds("canvas-notice")
+                        val placement = snapshot().getJSONObject("layout").getJSONObject("notice")
+                        val anchor = currentWork.top + placement.number("y") * density
+                        val floor = currentWork.top + placement.number("bar_floor") * density
+                        val bottom = if (currentBar.bottom > floor) minOf(anchor, currentBar.top - 12 * density) else anchor
+                        assertEquals("$label notice follows the shared anchor and actual bar", bottom, bubble.bottom, 1f)
+                        assertFalse("$label notice does not overlap the actual bar", bubble.overlaps(currentBar))
+                    }
+                    for (theme in listOf("light", "dark")) {
+                        action(obj("type" to "set_theme", "theme" to theme))
+                        raiseNotice()
+                        waitFor("$theme the native bar is painted before resize") {
+                            host.canvasBarVisible && shown("canvas-notice") && shown("canvas-action-bar") && find("canvas-action-bar")?.boundsInRoot?.let {
+                                !it.isEmpty && find("workspace")!!.boundsInRoot.overlaps(it)
+                            } == true
+                        }
+                        projection("$theme before resize")
+                        captureCanvasBar("move-locked-before-resize-$theme", "canvas-notice")
+                        try {
+                            onMain { activity.window.setLayout(kotlin.math.round(600 * density).toInt(), kotlin.math.round(600 * density).toInt()) }
+                            waitFor("$theme the native viewport acknowledges its allocation") {
+                                val box = find("workspace")?.boundsInRoot
+                                val viewport = state().getJSONObject("camera").array("viewport")
+                                box != null && kotlin.math.abs(box.width - 600 * density) <= 1f && kotlin.math.abs(box.height - 600 * density) <= 1f &&
+                                    kotlin.math.abs(viewport.getDouble(0) - box.width) <= 1f && kotlin.math.abs(viewport.getDouble(1) - box.height) <= 1f
+                            }
+                            val area = state().getJSONObject("camera").array("work_area")
+                            assertTrue("$theme uses a nonempty tablet canvas", area.getDouble(2) >= 480 * density && area.getDouble(3) > 0)
+                            raiseNotice()
+                            val hold = kotlinx.coroutines.runBlocking { host.withNative { Native.canvasBarHold(it) } }
+                            assertEquals("$theme the real canvas release retires the native bar hold", 0, hold and 1)
+                            waitFor("$theme the native bar finishes its normal hold after resize") {
+                                host.canvasBarVisible && shown("canvas-notice") && shown("canvas-action-bar")
+                            }
+                            projection("$theme after resize")
+                            captureCanvasBar("move-locked-projected-$theme", "canvas-notice")
+                        } finally { onMain { activity.window.setLayout(originalWidth, originalHeight) } }
+                        waitFor("$theme the native viewport returns") {
+                            val box = find("workspace")?.boundsInRoot
+                            val viewport = state().getJSONObject("camera").array("viewport")
+                            box != null && kotlin.math.abs(box.width - work.width) <= 1f && kotlin.math.abs(box.height - work.height) <= 1f &&
+                                kotlin.math.abs(viewport.getDouble(0) - box.width) <= 1f && kotlin.math.abs(viewport.getDouble(1) - box.height) <= 1f
+                        }
+                    }
+                }
+
                 idle(name)
                 layer(obj("op" to "lock", "id" to top, "value" to false))
                 layer(obj("op" to "reference", "id" to below))
