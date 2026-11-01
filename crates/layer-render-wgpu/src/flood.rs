@@ -134,9 +134,6 @@ impl Flood {
         if !self.lines.building() {self.lines.allocate(device,extent,labels.side,&windows)?;}
         self.lines.build(input,encoder,paper,budget,demand,dirty)
     }
-    pub fn needs_seals(&self,close:bool)->bool {self.lines.needs_seals(close)}
-    pub fn prepare_seals(&mut self,device:&PipelineDevice,encoder:&mut crate::submission::CommandEncoder,paper:&wgpu::TextureView,close:bool,budget:f64)->Result<(bool,f64),GpuRasterError> {self.lines.prepare_seals(device,encoder,paper,close,budget)}
-    pub fn begin_tap(&mut self) {self.lines.begin_tap();}
     pub fn lines_ready(&mut self,demand:bool)->Result<bool,GpuRasterError> {self.lines.ready(demand)}
     pub fn lines_submitted(&self)->bool {self.lines.submitted()}
     pub fn lines_discarded(&self)->bool {self.lines.discarded()}
@@ -161,6 +158,7 @@ impl Flood {
         paper: &wgpu::TextureView,
         stop: Option<&wgpu::Buffer>,
     ) -> Result<Region, GpuRasterError> {
+        let refinement=RegionRefinement {close_gaps:refinement.close_gaps && self.lines.has_seals(),..refinement};
         let [w, h] = extent;
         if w == 0
             || h == 0

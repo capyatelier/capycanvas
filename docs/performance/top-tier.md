@@ -265,12 +265,19 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 ## Reference Fill completion
 
 The bounded-window layout removes the former 61 MP single-component binding
-limit. At 9504 × 6336 the largest modeled binding is 91,202,472 bytes, below
+limit. At 9504 × 6336 the largest modeled binding is 97,868,200 bytes, below
 128 MiB; the device must also admit a texture dimension of at least 9504.
 This is a buffer-layout check, not a reference-device motion or OOM qualification.
 Retained classification and skeleton planes add 15,054,336 bytes at this size;
 endpoint compaction reuses the existing window scratch. The allocation boundaries
 remain in `artifacts/fill-tools/m4a1-cache-memory.json`.
+
+The end table allows one record per 256 pixels, with a 16,384-record floor
+clipped to the canvas and device limit. At this size its 235,224 records use
+15,054,336 bytes and still fit the existing 16 MiB compaction scratch.
+Pathological density beyond that capacity closes no gaps, matching Off;
+there is no streamed overflow pass. Exact modeled bounds are in
+`artifacts/fill-tools/m4a2-cache-memory.json`.
 
 A separate NVIDIA workstation 24 MP comparison covers 1/3/8 references in cell
 and background areas: warm medians improve from 24/275/930 ms to 15–18 ms,

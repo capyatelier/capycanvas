@@ -367,10 +367,9 @@ fn fill_keeps_the_tapped_thin_region_between_target_colours() {
 }
 
 #[test]
-fn region_cache_sparse_overflow_preserves_seals_across_blocks_and_warm_requests() {
+fn region_cache_overflow_matches_off_for_all_edges_and_warm_requests() {
     let extent = [1280, 1152];
     let expected = [vec![[1061., 129.], [1239., 129.], [1239., 299.], [1061., 299.]]];
-    let mut control = Vec::new();
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     for dense in [false, true] {
         let alpha = (0..extent[0] * extent[1]).map(|i| {
@@ -384,24 +383,25 @@ fn region_cache_sparse_overflow_preserves_seals_across_blocks_and_warm_requests(
         r.prepare_regions(Some(&RegionPreparation { source: source.clone(), reference_count: None, paper: None, tolerance: 0., refinement:Default::default(),enclosed: false }));
         submit_settled(&mut r, packet(document.scene(), extent));
         assert!(!r.regions.as_ref().unwrap().background_pending());
-        assert_eq!(r.regions.as_ref().unwrap().flood.needs_seals(true), dense);
-        assert!(!r.regions.as_ref().unwrap().flood.needs_seals(false));
-        for (index, close_gaps) in [true, false, true].into_iter().enumerate() {
-            let mut query = request(source.clone(), rectangle([0, 0, 1, 1]), RegionRefinement { close_gaps, ..exact() }, 0.);
-            query.enclosure = None;
-            query.position = [1150, 210];
-            let result = receive_request(&mut r, query);
-            assert_eq!((result.request_id, result.placement, result.pixels.extent()), (91, Affine::IDENTITY, extent));
-            assert!(!r.regions.as_ref().unwrap().background_pending());
-            assert_eq!(value(&result.pixels, 1150, 210), 255);
-            assert_eq!(value(&result.pixels, 1270, 400), if close_gaps { 0 } else { 255 });
-            if close_gaps {
-                assert!(!r.regions.as_ref().unwrap().flood.needs_seals(true));
-                score_geometry(&result.pixels, &expected, [0, 0], &[], "overflow contour").unwrap();
+        for edges in [RegionEdges::Exact,RegionEdges::LineMiddle,RegionEdges::GrowShrink(2)] {
+            let mut off=None;
+            for close_gaps in [false,true,true] {
+                let mut query = request(source.clone(), rectangle([0, 0, 1, 1]), RegionRefinement { close_gaps,edges,..exact() }, 0.);
+                query.enclosure = None;
+                query.position = [1150, 210];
+                let result = receive_request(&mut r, query);
+                assert_eq!((result.request_id, result.placement, result.pixels.extent()), (91, Affine::IDENTITY, extent));
+                assert!(!r.regions.as_ref().unwrap().background_pending());
+                assert_eq!(value(&result.pixels, 1150, 210), 255);
+                assert_eq!(value(&result.pixels, 1270, 400), if close_gaps && !dense {0}else{255});
+                let actual=(result.pixels.bounds(),result.pixels.words().to_vec(),
+                    result.underfill.as_ref().map(|pixels|(pixels.bounds(),pixels.words().to_vec())));
+                if !close_gaps {off=Some(actual);}
+                else if dense {assert_eq!(&actual,off.as_ref().unwrap(),"overflow Auto must equal Off for {edges:?}");}
+                else if !matches!(edges,RegionEdges::GrowShrink(_)) {
+                    score_geometry(&result.pixels, &expected, [0, 0], &[], "sparse contour").unwrap();
+                }
             }
-            let pixels = (0..extent[1]).flat_map(|y| (1056..extent[0]).map(move |x| (x, y)))
-                .map(|(x, y)| value(&result.pixels, x, y)).collect::<Vec<_>>();
-            if dense { assert_eq!(pixels, control[index]); } else { control.push(pixels); }
         }
         r.prepare_regions(None);
     }

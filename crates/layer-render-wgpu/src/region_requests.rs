@@ -78,7 +78,7 @@ impl RegionRequests {
     }
     /// Drop the request in progress; a readback already in flight is ignored.
     pub(super) fn cancel(&mut self) {
-        self.raw.cancel();self.flood.begin_tap();
+        self.raw.cancel();
         self.cache_request=None;self.stop_mask=None;
         self.waiting = None;
         self.running = None;
@@ -236,14 +236,6 @@ impl RegionRequests {
         if let Some(count)=request.reference_count && count<request.source.sources().len() && self.stop_mask.is_none() {
             let target=RegionRequest {source:request.source.sources()[count].clone(),reference_count:None,limit:None,..request.clone()};
             self.classify_target(r,&target,encoder)?;
-        }
-        if self.flood.needs_seals(request.refinement.close_gaps) {
-            if self.chunk_timing.is_some() {return Err(GpuRasterError::DeferredObjectWork);}
-            let (paper,_,_)=Self::paper(r,request)?;
-            let budget=self.refiner(r).chunk();self.chunk_timing=self.refiner(r).begin_timing(encoder);
-            let (ready,taps)=self.flood.prepare_seals(&r.device,encoder,&paper,request.refinement.close_gaps,budget)?;
-            self.refiner.as_mut().unwrap().end_timing(encoder,self.chunk_timing,taps);
-            if !ready {return Err(GpuRasterError::DeferredObjectWork);}
         }
         Ok(classified)
     }
@@ -812,7 +804,6 @@ impl WgpuRasterizer {
             .take()
             .unwrap_or_else(|| RegionRequests::new(self));
         if regions.pending.is_some() || regions.waiting.is_some() || regions.running.is_some() {self.regions=Some(regions);return Ok(false);}
-        regions.flood.begin_tap();
         regions.sampling=region_sources::Sampling::Transparent;
         regions.cache_request=None;
         let result = regions.start(self, request);

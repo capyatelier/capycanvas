@@ -462,7 +462,7 @@ fn seal_candidates(@builtin(global_invocation_id) id:vec3<u32>, @builtin(num_wor
     }
 }
 fn active_line_attempt()->bool{return line.job.w!=0u || line.job.y==0u || first[line.job.z+5u]==0u;}
-fn clear_open(p:vec2<i32>){if valid(p){atomicAnd(&eligible[line.options.w+u32(p.y)*line.extent.z+u32(p.x)/32u],~(1u<<(u32(p.x)%32u)));}}
+fn clear_open(p:vec2<i32>){if valid(p){atomicAnd(&eligible[u32(p.y)*line.extent.z+u32(p.x)/32u],~(1u<<(u32(p.x)%32u)));}}
 @compute @workgroup_size(64)
 fn apply_seals(@builtin(global_invocation_id) id:vec3<u32>, @builtin(num_workgroups) groups:vec3<u32>){
     if !active_line_attempt(){return;}
@@ -615,11 +615,4 @@ fn reset_ends(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroup
     if line.options.x==2u {if index==0u{atomicStore(&cached[line.offsets.y+3u],0u);}return;}
     if index==0u {atomicStore(&cached[line.offsets.y],0u);atomicStore(&cached[line.offsets.y+1u],0u);}
     if index<line.offsets.z-line.offsets.y-4u {atomicStore(&cached[line.offsets.y+4u+index],0u);}
-    if line.options.x!=0u && index<3u*line.offsets.x {atomicStore(&eligible[index],0xffffffffu);}
-}
-@compute @workgroup_size(64)
-fn apply_seal_plane(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>){
-    if !active_line_attempt(){return;}
-    let index=id.x+id.y*groups.x*64u+line.job.x;
-    if index<line.offsets.x {atomicAnd(&eligible[index],second[line.options.x+index]);}
 }

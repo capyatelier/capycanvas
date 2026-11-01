@@ -1,7 +1,8 @@
 use super::*;
 use wgpu::util::DeviceExt;
 
-const ENDS_BYTES: u64 = 8 * 1024 * 1024;
+const PIXELS_PER_END:u64=256;
+const MIN_END_CAPACITY:u64=16384;
 const MAX_LINE_WIDTH:u32=16;
 const UNDERFILL_HALF_PIXELS:u32=48;
 const DISTANCE_LIMIT_HALF_PIXELS:u32=UNDERFILL_HALF_PIXELS+1;
@@ -13,7 +14,7 @@ const NEIGHBOUR_REACH:u32=64;
 const PARAMS: u64 = 112;
 const PARAMETER_BATCH_BYTES:u64=64*1024;
 type Step = (&'static str,u64,Vec<u32>);
-struct Build { steps:std::collections::VecDeque<Step>, submission:Option<crate::submission::Submission>,in_flight:std::sync::Arc<std::sync::atomic::AtomicU32>, ends:Option<mpsc::Receiver<Result<[u32;2],GpuRasterError>>>, ranked:bool, sealing:bool, incremental:bool }
+struct Build { steps:std::collections::VecDeque<Step>, submission:Option<crate::submission::Submission>,in_flight:std::sync::Arc<std::sync::atomic::AtomicU32>, ends:Option<mpsc::Receiver<Result<[u32;2],GpuRasterError>>>, ranked:bool, incremental:bool }
 impl Build {
     fn available(&self,demand:bool)->bool {
         let count=self.in_flight.load(std::sync::atomic::Ordering::Acquire);
@@ -22,7 +23,7 @@ impl Build {
             && (count<u32::from(demand)+1 || demand && self.ranked && self.steps.is_empty())
     }
 }
-const STAGES: [&str; 23] = ["grain_bits", "distance_seeds", "jump_distance", "store_distance", "skeleton_seeds", "skeleton_ridges", "skeleton_prune", "line_ends", "refine_ends", "seal_candidates", "open_bits", "apply_seals", "region_seeds", "assign_region", "hold_barriers", "grow_region", "intersect_bits", "remember_thin", "check_seeds", "barrier_plane", "snap_seed", "reset_ends", "apply_seal_plane"];
+const STAGES: [&str; 22] = ["grain_bits", "distance_seeds", "jump_distance", "store_distance", "skeleton_seeds", "skeleton_ridges", "skeleton_prune", "line_ends", "refine_ends", "seal_candidates", "open_bits", "apply_seals", "region_seeds", "assign_region", "hold_barriers", "grow_region", "intersect_bits", "remember_thin", "check_seeds", "barrier_plane", "snap_seed", "reset_ends"];
 
 pub(crate) struct Input<'a> {pub device:&'a PipelineDevice,pub mask:&'a wgpu::Buffer,pub paper:&'a wgpu::TextureView}
 pub(super) struct Lines {
@@ -36,8 +37,6 @@ pub(super) struct Lines {
     building:Option<Build>,
     ends:u32,
     overflow:bool,
-    seals:Option<wgpu::Buffer>,
-    seals_ready:bool,
 }
 impl Lines {
     pub fn new(device: &PipelineDevice) -> Self {
@@ -51,10 +50,10 @@ impl Lines {
         });
         let shader=Deferred::wgsl(device,"region line stages",include_str!("region_lines.wgsl"));
         let pipelines=STAGES.into_iter().map(|entry|(entry,Deferred::compute(device,entry,&pipeline_layout,&shader,entry))).collect();
-        Self {layout,pipelines,scratch:None,data:None,extent:[0;2],offsets:[0;4],windows:Vec::new(),building:None,ends:0,overflow:false,seals:None,seals_ready:false}
+        Self {layout,pipelines,scratch:None,data:None,extent:[0;2],offsets:[0;4],windows:Vec::new(),building:None,ends:0,overflow:false}
     }
     pub fn storage_bytes(&self)->u64 {
-        self.seals.as_ref().map_or(0,wgpu::Buffer::size)+self.data.as_ref().map_or(0,wgpu::Buffer::size)+self.scratch.as_ref().map_or(0,|buffers|buffers.iter().map(wgpu::Buffer::size).sum())
+        self.data.as_ref().map_or(0,wgpu::Buffer::size)+self.scratch.as_ref().map_or(0,|buffers|buffers.iter().map(wgpu::Buffer::size).sum())
     }
     pub fn prepare_cache(&self,compiler:&startup::Compiler,priority:u8)->bool {
         compiler.require(STAGES.iter().filter(|entry|self.building.as_ref().map_or_else(
@@ -64,12 +63,11 @@ impl Lines {
     pub fn prepare(&self,compiler:&startup::Compiler,priority:u8,refinement:RegionRefinement)->bool {
         let prewarm=priority==startup::OTHER;
         self.prepare_cache(compiler,priority) & compiler.require(STAGES[8..].iter().filter(|entry|match **entry {
-            "refine_ends"|"seal_candidates"=>prewarm || self.overflow && refinement.close_gaps,
+            "refine_ends"|"seal_candidates"=>prewarm && !self.overflow,
             "grow_region"=>matches!(refinement.edges,layer_render::RegionEdges::GrowShrink(_)),
             "assign_region"=>matches!(refinement.edges,layer_render::RegionEdges::LineMiddle),
             "region_seeds"=>!matches!(refinement.edges,layer_render::RegionEdges::Exact),
-            "apply_seals"=>refinement.close_gaps && (prewarm || self.ends>0),
-            "apply_seal_plane"=>refinement.close_gaps && self.overflow,
+            "apply_seals"=>refinement.close_gaps && !self.overflow && (prewarm || self.ends>0),
             _=>true,
         }).map(|entry|&self.pipelines[entry]),priority)
     }
@@ -194,17 +192,15 @@ impl Lines {
     }
     pub fn submitted(&self)->bool {self.building.as_ref().is_none_or(|work|work.submission.as_ref().is_none_or(|owner|owner.submitted()))}
     pub fn discarded(&self)->bool {self.building.as_ref().is_some_and(|work|work.submission.as_ref().is_some_and(|owner|owner.discarded()))}
-    pub fn cancel(&mut self) {self.building=None;self.seals_ready=false;}
-    pub fn begin_tap(&mut self) {if self.building.as_ref().is_some_and(|work|work.sealing){self.building=None;}self.seals_ready=false;}
+    pub fn cancel(&mut self) {self.building=None;}
     pub fn build(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,paper:([f32;4],u32,bool),budget:f64,demand:bool,dirty:&std::collections::BTreeSet<[u32;2]>)->Result<(bool,f64),GpuRasterError> {
         let (grain,radius,has_paper)=paper;
         use std::sync::{Arc,atomic::AtomicU32};
         if self.building.is_none() {
             let incremental=!dirty.is_empty() && !self.overflow;
             if !incremental {encoder.clear_buffer(self.data.as_ref().unwrap(),0,None);self.ends=0;self.overflow=false;}
-            self.seals_ready=false;
             let empty=std::collections::BTreeSet::new();
-            self.building=Some(Build {steps:self.build_steps(grain,radius,has_paper,if incremental {dirty}else{&empty}).into(),submission:None,in_flight:Arc::new(AtomicU32::new(0)),ends:None,ranked:false,sealing:false,incremental});
+            self.building=Some(Build {steps:self.build_steps(grain,radius,has_paper,if incremental {dirty}else{&empty}).into(),submission:None,in_flight:Arc::new(AtomicU32::new(0)),ends:None,ranked:false,incremental});
         }
         self.advance(input,encoder,radius,budget,demand)
     }
@@ -240,41 +236,14 @@ impl Lines {
         if !encoded && work.steps.is_empty() && work.ranked {return Ok((true,spent));}
         self.building=Some(work);Ok((false,spent))
     }
-    pub fn needs_seals(&self,close:bool)->bool {close && self.overflow && !self.seals_ready}
-    pub fn has_seals(&self)->bool {self.overflow || self.ends!=0}
-    pub fn prepare_seals(&mut self,device:&PipelineDevice,encoder:&mut crate::submission::CommandEncoder,paper:&wgpu::TextureView,close:bool,budget:f64)->Result<(bool,f64),GpuRasterError> {
-        if !close || !self.overflow || self.seals_ready {return Ok((true,0.));}
-        if self.building.is_none() {
-            let bytes=u64::from(self.offsets[0])*12;
-            if bytes>device.limits().max_storage_buffer_binding_size.min(device.limits().max_buffer_size) {return Err(GpuRasterError::SizeOverflow);}
-            if self.seals.as_ref().is_none_or(|buffer|buffer.size()<bytes) {self.seals=Some(device.create_buffer(&wgpu::BufferDescriptor {label:Some("uncached region seals"),size:bytes,usage:wgpu::BufferUsages::STORAGE,mapped_at_creation:false}));}
-            let mut steps=vec![("reset_ends",u64::from(self.offsets[0])*3,self.params([0;4],[0;4],[1,0,0,0],[1.,1.,0.,0.]))];
-            let side=(0..=8).rev().map(|power|1u32<<power).find(|side|
-                u64::from(self.extent[0].min(side+160))*u64::from(self.extent[1].min(side+160))<=u64::from(self.offsets[3])).ok_or(GpuRasterError::SizeOverflow)?;
-            for &(core,_) in &self.windows {
-                for y in (core[1]..core[1]+core[3]).step_by(side as usize) {for x in (core[0]..core[0]+core[2]).step_by(side as usize) {
-                    let block=[x,y,side.min(core[0]+core[2]-x),side.min(core[1]+core[3]-y)];
-                    let window=analysis_window(block,self.extent);let count=u64::from(window[2])*u64::from(window[3]);
-                    steps.push(("reset_ends",u64::from(self.offsets[2]-self.offsets[1]-4).max(1),self.params(block,window,[0;4],[1.,1.,0.,0.])));
-                    self.end_steps(&mut steps,window,window,[1.,1.,0.,0.]);
-                    for entry in ["refine_ends","seal_candidates"] {steps.push((entry,count,self.params(block,window,[MAX_LINE_WIDTH*3/2,0,0,0],[1.,1.,0.,0.])));}
-                    for bucket in 0..3 {steps.push(("apply_seals",count,self.params(block,window,[0,0,bucket,bucket*self.offsets[0]],[1.,1.,0.,0.])));}
-                }}
-            }
-            self.building=Some(Build {steps:steps.into(),submission:None,in_flight:std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),ends:None,ranked:true,sealing:true,incremental:false});
-        }
-        let mask=self.seals.as_ref().unwrap().clone();let result=self.advance(&Input {device,mask:&mask,paper},encoder,1,budget,true)?;
-        self.seals_ready=result.0;Ok(result)
-    }
+    pub fn has_seals(&self)->bool {!self.overflow && self.ends!=0}
     pub fn barriers(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,close:bool,reach:u32,job:[u32;4],parents:&wgpu::Buffer) {
         let params=|mut steps:Vec<Step>| {
             for (_,_,params) in &mut steps {params[24..28].copy_from_slice(&job);}
             steps
         };
         self.encode(input,encoder,Some(parents),None,params(vec![("open_bits",u64::from(self.offsets[0]),self.params([0;4],[0;4],[0;4],[1.,1.,0.,0.]))]));
-        if close && self.overflow {
-            self.encode(input,encoder,Some(parents),self.seals.as_ref(),params(vec![("apply_seal_plane",u64::from(self.offsets[0]),self.params([0;4],[0;4],[(reach/16-1)*self.offsets[0],0,0,0],[1.,1.,0.,0.]))]));
-        } else if close {
+        if close && self.has_seals() {
             self.encode(input,encoder,Some(parents),None,params(vec![("apply_seals",u64::from(self.ends),self.params([0;4],[0;4],[0,0,reach/16-1,0],[1.,1.,0.,0.]))]));
         }
         self.encode(input,encoder,Some(parents),None,params(vec![("hold_barriers",u64::from(self.offsets[0]),self.params([0;4],[0;4],[0;4],[1.,1.,0.,0.]))]));
@@ -347,10 +316,11 @@ fn storage_layout(extent:[u32;2],limits:&wgpu::Limits)->Option<([u32;4],u64)> {
         let summary=bits+distance;
         let sparse=summary+4+u64::from(w.div_ceil(128))*u64::from(h.div_ceil(128));
         let dense=(sparse+bits*2)*4;
-        let capacity=ENDS_BYTES.min(limits.max_storage_buffer_binding_size.min(limits.max_buffer_size).saturating_sub(dense))
-            .min(u64::from(w)*u64::from(h)*64)/64;
+        let area=u64::from(w)*u64::from(h);
+        let capacity=area.div_ceil(PIXELS_PER_END).max(MIN_END_CAPACITY).min(area)
+            .min(limits.max_storage_buffer_binding_size.min(limits.max_buffer_size).saturating_sub(dense)/64);
         let size=dense+capacity*64;
-        if capacity<u64::from(w.min(161))*u64::from(h.min(161)) || size>limits.max_storage_buffer_binding_size || size>limits.max_buffer_size || w>=65535 || h>=65535 {return None;}
+        if capacity==0 || size>limits.max_storage_buffer_binding_size || size>limits.max_buffer_size || w>=65535 || h>=65535 {return None;}
     Some(([bits as u32,summary as u32,sparse as u32,capacity as u32],size))
 }
 
@@ -359,22 +329,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn overflow_preparation_covers_every_fallback_stage() {
-        let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-        let compiler=startup::Compiler::new().unwrap();compiler.idle(true,true);compiler.start();
-        let mut lines=Lines::new(&r.device);
-        lines.allocate(&r.device,[64;2],64,&[(0,[0,0,64,64])]).unwrap();
-        lines.overflow=true;
-        let deadline=std::time::Instant::now()+crate::READBACK_TIMEOUT;
-        while !lines.prepare(&compiler,startup::OTHER,Default::default()) {
-            compiler.check().unwrap();
-            assert!(std::time::Instant::now()<deadline,"overflow recipes must finish preparing");
-            std::thread::yield_now();
+    fn end_storage_scales_with_canvas_area_and_fits_61mp() {
+        let limits=wgpu::Limits {max_storage_buffer_binding_size:128*1024*1024,max_buffer_size:128*1024*1024,..Default::default()};
+        for (extent,ends,bytes) in [([4248,2832],46994,19560968),([6000,4000],93750,39030032),([9504,6336],235224,97868200)] {
+            let (offsets,size)=storage_layout(extent,&limits).unwrap();
+            assert_eq!((offsets[3],size),(ends,bytes));
+            assert!(size<=limits.max_storage_buffer_binding_size);
         }
-        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        assert!(!lines.prepare_seals(&r.device,&mut encoder,&r.empty_paper_view,true,0.).unwrap().0);
-        for (entry,_,_) in &lines.building.as_ref().unwrap().steps {
-            assert!(lines.pipelines[entry].ready(),"overflow stage {entry} must prepare before encoding");
-        }
+        assert!(storage_layout([9504,6336],&wgpu::Limits {max_storage_buffer_binding_size:64,..limits}).is_none());
     }
 }
