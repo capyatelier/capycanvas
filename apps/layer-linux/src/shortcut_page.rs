@@ -761,7 +761,7 @@ impl ShortcutPage {
                 }
             }
         ));
-        let filters = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let filters = adw::WrapBox::builder().child_spacing(8).line_spacing(8).build();
         filters.set_widget_name("shortcut-filters");
         filters.append(search);
         filters.append(&self.context);

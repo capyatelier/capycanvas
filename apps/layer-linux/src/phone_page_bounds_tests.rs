@@ -2,7 +2,7 @@ use super::*;
 use gtk::glib;
 use std::sync::{Arc, Mutex};
 
-fn size_warnings() -> Arc<Mutex<Vec<String>>> {
+pub(super) fn size_warnings() -> Arc<Mutex<Vec<String>>> {
     let warnings = Arc::new(Mutex::new(Vec::new()));
     let captured = warnings.clone();
     glib::log_set_writer_func(move |level, fields| {

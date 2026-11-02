@@ -896,11 +896,16 @@ impl Preferences {
                             if let PreferenceKind::Link { label, url } = &row.kind {
                                 let link = gtk::LinkButton::with_label(url, label);
                                 link.set_valign(gtk::Align::Center);
+                                if let Some(text) = link.child().and_downcast::<gtk::Label>() {
+                                    text.set_wrap(true);
+                                    text.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+                                    text.set_xalign(1.);
+                                }
                                 control.add_suffix(&link);
                                 control.set_activatable_widget(Some(&link));
                             } else if let PreferenceKind::Info { value } = &row.kind {
-                                let text = gtk::Label::new(Some(value));
-                                text.set_selectable(true);
+                                let text = gtk::Label::builder().label(value).selectable(true).wrap(true)
+                                    .wrap_mode(gtk::pango::WrapMode::WordChar).xalign(1.).build();
                                 control.add_suffix(&text);
                             }
                             Field::Info(control)

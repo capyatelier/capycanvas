@@ -320,13 +320,13 @@ fn export_page(d: &mut Driver, frame: &gtk::Widget, tag: &str) {
     let nav = named::<adw::NavigationView>(frame, "export-navigation");
     let row = named::<adw::ActionRow>(frame, &format!("export-open-{tag}"));
     let scroll = named::<gtk::ScrolledWindow>(frame, "export-main-scroll");
-    assert!(row.grab_focus());
+    super::histogram::scroll_to(row.upcast_ref());
     until(|| row.compute_bounds(&scroll).is_some_and(|bounds| {
         let visible = bounds.y() >= -1. && bounds.y() + bounds.height() <= scroll.height() as f32 + 1.;
         row.is_mapped() && bounds.width() > 0. && bounds.height() > 0. && visible
     }), "Export link scrolls into its native viewport");
     d.click(row.upcast_ref());
-    until(|| nav.visible_page_tag().as_deref() == Some(tag), "Export opens its native subpage");
+    until(|| nav.visible_page_tag().as_deref() == Some(tag), &format!("Export opens its native {tag} subpage"));
     page_header(frame);
 }
 
@@ -410,6 +410,7 @@ fn restored_headers(headers: &[(adw::HeaderBar, gtk::Widget, bool, bool, Option<
 #[ignore = "private compositor: --native-test=native_phone_navigation_headers --native-storage; phone viewport, light/dark"]
 fn native_phone_navigation_headers() {
     let mut d = super::phone_motion::setup("art.capycanvas.NavigationHeaders");
+    let warnings = bounds::size_warnings();
     assert!(adw::ComboRow::new().factory().is_some(), "a fresh native ComboRow exposes its built-in factory");
     assert!(d.w.surface.width().min(d.w.surface.height()) < 480);
     let checkpoint = ui_session(&d.w).engine().checkpoint();
@@ -480,6 +481,8 @@ fn native_phone_navigation_headers() {
             assert_eq!(popup_checks.len(), 2, "both selected preference options are checked");
             assert!(popup_checks.iter().all(|(_, checked)| *checked), "selected preference options retain their native checkmark: {popup_checks:?}");
         }
+        let captured = warnings.lock().unwrap().clone();
+        assert!(captured.is_empty(), "Preferences {}: GTK size warnings: {captured:?}", settings.key());
         let subpage = navigation_header(&d, &frame, false);
         assert!(gtk::prelude::GtkWindowExt::default_widget(&d.w.window).is_none(), "Preferences has no synthesized primary");
         if settings == SettingsPage::Shortcuts {
