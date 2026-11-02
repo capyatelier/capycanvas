@@ -318,7 +318,7 @@ fn vector_line_previews_reach_predicted_samples_without_drawing_them() {
     assert!(s.engine.backend().vector_preview.is_none());
 }
 
-fn surface_at(s: &UiSession<Recorder>, doc: [f64; 2]) -> Point {
+pub(super) fn surface_at(s: &UiSession<Recorder>, doc: [f64; 2]) -> Point {
     let [a, b, c, d, x, y] = s.state.camera.view().document_to_surface;
     let [px, py] = doc.map(|v| v as f32);
     Point { x: a * px + c * py + x, y: b * px + d * py + y }
@@ -3115,7 +3115,7 @@ fn vector_fill_gestures_use_settled_gap_reach_off_and_auto() {
     }
 }
 
-fn vector_gap_fill_session(platform:Platform,origins:&[[f64;2]],outer:bool)->(UiSession<Recorder>,OccurrenceHandle) {
+pub(super) fn vector_gap_fill_session(platform:Platform,origins:&[[f64;2]],outer:bool)->(UiSession<Recorder>,OccurrenceHandle) {
     let (mut s,target)=vector_session_on(platform);let mut paths=Vec::new();
     for &[x,y] in origins {
         for points in [[[x,y],[x+80.,y]],[[x+120.,y],[x+200.,y]],[[x+200.,y],[x+200.,y+200.]],[[x+200.,y+200.],[x,y+200.]],[[x,y+200.],[x,y]]] {
@@ -3191,15 +3191,24 @@ fn vector_fill_cancel_escape_and_second_contact_restore_artwork_and_settled_valu
 
 #[test]
 fn vector_fill_drag_crosses_three_gappy_faces_in_one_undo() {
-    for platform in Platform::ALL {
+    for platform in Platform::ALL {for painted in [false,true] {
         let (mut s,target)=vector_gap_fill_session(platform,&[[100.,100.],[400.,100.],[700.,100.]],false);
+        if painted {let p=surface_at(&s,[500.,200.]);press(&mut s,10,&[p,p]);}
         let original=s.engine.document().scene().vector_layer(target).unwrap().clone();let checkpoint=s.engine.checkpoint();
-        let points=[[200.,200.],[500.,200.],[800.,200.],[800.,200.]].map(|p|surface_at(&s,p));press(&mut s,10,&points);
-        let changed=s.engine.document().scene().vector_layer(target).unwrap();assert_eq!(changed.path_count(),original.path_count()+3);
-        for point in [[200.,200.],[500.,200.],[800.,200.]] {assert_eq!(changed.paths().filter(|(_,p)|original.find(p.id).is_none()&&p.encloses(point,0.01)).count(),1);}
+        pen_at(&mut s,30,PenPhase::Down,[200.,200.]);s.frame(300_000_000,300_000_000).unwrap();
+        let first=s.engine.document().scene().vector_layer(target).unwrap().clone();assert_eq!(first.path_count(),original.path_count()+1);
+        pen_at(&mut s,31,PenPhase::Move,[500.,200.]);assert_eq!(s.engine.document().scene().vector_layer(target),Some(&first));
+        s.frame(310_000_000,310_000_000).unwrap();
+        let second=s.engine.document().scene().vector_layer(target).unwrap().clone();assert_eq!(second.path_count(),original.path_count()+if painted {1}else{2});
+        if painted {assert_eq!(second,first);}
+        pen_at(&mut s,32,PenPhase::Move,[800.,200.]);assert_eq!(s.engine.document().scene().vector_layer(target),Some(&second));
+        s.frame(320_000_000,320_000_000).unwrap();
+        pen_at(&mut s,33,PenPhase::Up,[800.,200.]);s.frame(330_000_000,330_000_000).unwrap();
+        let changed=s.engine.document().scene().vector_layer(target).unwrap();assert_eq!(changed.path_count(),original.path_count()+if painted {2}else{3});
+        for point in [[200.,200.],[500.,200.],[800.,200.]] {assert_eq!(changed.paths().filter(|(_,p)|original.find(p.id).is_none()&&p.encloses(point,0.01)).count(),usize::from(!painted||point[0]!=500.));}
         for (_,path) in original.paths() {assert_eq!(changed.paths().find(|(_,p)|p.id==path.id).map(|(_,p)|p),Some(path));}
         assert!(s.renderer_mut().region_requests.is_empty());invoke(&mut s,CommandId::Undo);assert_eq!(s.engine.checkpoint(),checkpoint);assert_eq!(s.engine.document().scene().vector_layer(target),Some(&original));
-    }
+    }}
 }
 
 #[test]

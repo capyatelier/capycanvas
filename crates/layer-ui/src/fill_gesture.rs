@@ -60,7 +60,7 @@ pub(super) struct VectorFill {
     preview:std::sync::Arc<Style>,
     slots:[Option<Option<VectorFace>>;5],
     active:usize,
-    excluded:Vec<SealId>,
+    probed:[f32;2],
     faces:Vec<VectorFace>,
 }
 pub(super) struct VectorCompleted {
@@ -202,7 +202,7 @@ impl<R:CanvasRenderer> UiSession<R> {
                 }
                 self.finish_fill_reveal();
                 if let Err(cause)=self.slide_fill_gesture(){self.notify(cause);}
-                if let Err(cause)=self.continue_fill_trail(){self.notify(cause);}
+                if self.region_tools.gesture.as_ref().is_some_and(|gesture|gesture.vector.is_none()) && let Err(cause)=self.continue_fill_trail(){self.notify(cause);}
             },
             PenPhase::Up=> {
                 if self.region_tools.reveal.as_ref().is_some_and(|reveal|reveal.started.is_some()){self.finish_fill_reveal();}
@@ -271,7 +271,7 @@ impl<R:CanvasRenderer> UiSession<R> {
         if hit.is_some_and(|(_,path)|face.as_ref().is_none_or(|face|face.boundary.len()==1 && std::ptr::eq(lines[*face.boundary.first().unwrap()].path,path))) {return Ok(true);}
         let active=layer_render::RegionGapMasks::STOPS.iter().position(|r|Some(*r)==reach.or_else(||face.as_ref().map(|face|face.reach))).unwrap_or(1);
         let mut slots=std::array::from_fn(|_|None);slots[active]=Some(face.clone());
-        let vector=VectorFill {layer,source,point,original,checkpoint,style,preview:std::sync::Arc::new(preview),slots,active,excluded:Vec::new(),faces:face.into_iter().collect()};
+        let vector=VectorFill {layer,source,point,original,checkpoint,style,preview:std::sync::Arc::new(preview),slots,active,probed:point.map(|v|v as f32),faces:face.into_iter().collect()};
         self.region_tools.gesture=Some(Gesture {transaction:self.region_tools.generation,owner:self.engine.document().owner,device:event.device_id,started:event.timestamp_ns,
             start:event.surface_position,point:event.surface_position,tool:event.tool,touch:(event.tool==ToolKind::Finger).then_some(event.device_id),admitted:event.tool!=ToolKind::Finger,
             released:false,hold:None,waiting:false,tick:0,dragging:false,original_tolerance:self.region_tools.tolerance,original_reach:self.region_tools.gap_reach,
@@ -282,21 +282,26 @@ impl<R:CanvasRenderer> UiSession<R> {
     fn vector_fill_slot(&mut self,slot:usize) {
         let Some(vector)=self.region_tools.gesture.as_ref().and_then(|gesture|gesture.vector.as_ref()).filter(|vector|vector.slots[slot].is_none()) else{return;};
         let (_,lines)=self.vector_line_sources(vector.layer,vector.source);
-        let face=layer_core::authored::vector::vector_face(&lines,vector.point,Some(layer_render::RegionGapMasks::STOPS[slot]),&vector.excluded);
+        let face=layer_core::authored::vector::vector_face(&lines,vector.point,Some(layer_render::RegionGapMasks::STOPS[slot]),&[]);
         self.region_tools.gesture.as_mut().unwrap().vector.as_mut().unwrap().slots[slot]=Some(face);
     }
     fn continue_vector_fill(&mut self)->Result<(),String> {
-        let Some(gesture)=self.region_tools.gesture.as_ref().filter(|gesture|gesture.dragging) else{return Ok(());};
-        let vector=gesture.vector.as_ref().unwrap();let point=gesture.path.last().unwrap().map(f64::from);
+        let tolerance=0.25*self.document_per_surface_pixel();
+        let Some(gesture)=self.region_tools.gesture.as_mut().filter(|gesture|gesture.dragging && gesture.vector.is_some()) else{return Ok(());};
+        let vector=gesture.vector.as_mut().unwrap();let point=*gesture.path.last().unwrap();
+        if point==vector.probed {return Ok(());}vector.probed=point;let point=point.map(f64::from);
         if vector.faces.iter().any(|face| {
             let mut path=PathItem::new(ItemId(0),std::sync::Arc::new(face.geometry.clone()),vector.style.clone());path.fill_rule=FillRule::EvenOdd;
-            path.encloses(point,0.25*self.document_per_surface_pixel())
+            path.encloses(point,tolerance)
         }) {return Ok(());}
-        let (_,lines)=self.vector_line_sources(vector.layer,vector.source);
-        let face=layer_core::authored::vector::vector_face(&lines,point,Some(layer_render::RegionGapMasks::STOPS[vector.active]),&vector.excluded);
+        let (layer,source,active)=(vector.layer,vector.source,vector.active);let doc=self.engine.document();let [ox,oy]=doc.scene().occurrence_offset64(layer);
+        if self.vector_fill_hit(doc.scene().vector_layer(layer).ok_or("The vector layer was removed")?,[point[0]-ox,point[1]-oy],source)
+            .is_some_and(|(_,path)|path.style.entries.iter().any(|entry|matches!(entry,PaintEntry::Fill(_)))) {return Ok(());}
+        let (_,lines)=self.vector_line_sources(layer,source);
+        let face=layer_core::authored::vector::vector_face(&lines,point,Some(layer_render::RegionGapMasks::STOPS[active]),&[]);
         if let Some(face)=face {
             let vector=self.region_tools.gesture.as_mut().unwrap().vector.as_mut().unwrap();
-            if vector.faces.is_empty() {vector.point=point;vector.slots=std::array::from_fn(|_|None);vector.slots[vector.active]=Some(Some(face.clone()));}
+            if vector.faces.is_empty() {vector.point=point;}
             vector.faces.push(face);self.show_fill_preview()?;
         }
         Ok(())
@@ -312,7 +317,7 @@ impl<R:CanvasRenderer> UiSession<R> {
         if let Err(cause)=result {self.region_tools.gesture=Some(gesture);self.region_tools.cancel();self.clear_fill_preview();return Err(cause);}
         if let [face]=vector.faces.as_slice() {
             self.region_tools.vector_completed=Some(VectorCompleted {checkpoint:self.engine.checkpoint(),owner:gesture.owner,layer:vector.layer,source:vector.source,path,point:vector.point,
-                reach:layer_render::RegionGapMasks::STOPS[vector.active],excluded:vector.excluded.clone(),seals:face.seals.clone()});
+                reach:layer_render::RegionGapMasks::STOPS[vector.active],excluded:Vec::new(),seals:face.seals.clone()});
         }
         self.refresh_tools();Ok(())
     }
@@ -549,7 +554,8 @@ impl<R:CanvasRenderer> UiSession<R> {
             vector.checkpoint!=self.engine.checkpoint() || gesture.owner!=self.engine.document().owner || self.engine.document().working.occurrence!=Some(vector.layer))) {
             self.region_tools.cancel();self.restore_fill_cancel();
         }
-        let slot=self.region_tools.gesture.as_ref().filter(|gesture|!gesture.released).and_then(|gesture|gesture.vector.as_ref())
+        if let Err(cause)=self.continue_vector_fill(){self.notify(cause);}
+        let slot=self.region_tools.gesture.as_ref().filter(|gesture|!gesture.released && !gesture.dragging && gesture.tool!=ToolKind::Finger).and_then(|gesture|gesture.vector.as_ref())
             .and_then(|vector|(0..5).filter(|&slot|vector.slots[slot].is_none()).min_by_key(|&slot|(slot.abs_diff(vector.active),slot)));
         if let Some(slot)=slot {self.vector_fill_slot(slot);}
         self.engage_fill_hold();
@@ -580,4 +586,24 @@ fn segment_distance(point:[f64;2],a:[f64;2],b:[f64;2])->f64 {
     let d=[b[0]-a[0],b[1]-a[1]];let square=d[0]*d[0]+d[1]*d[1];
     let t=if square==0. {0.}else{(((point[0]-a[0])*d[0]+(point[1]-a[1])*d[1])/square).clamp(0.,1.)};
     (point[0]-a[0]-t*d[0]).hypot(point[1]-a[1]-t*d[1])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::tests::{surface_at,vector_gap_fill_session};
+
+    #[test]
+    fn vector_fill_finger_prepares_only_the_active_slot() {
+        for platform in Platform::ALL {
+            let (mut s,_)=vector_gap_fill_session(platform,&[[100.,100.]],false);
+            let point=surface_at(&s,[200.,200.]);
+            s.input(UiInput::Pointer {id:41,kind:PointerKind::Touch,button:PointerButton::Primary,
+                position:[point.x,point.y],time_ns:100_000_000,phase:ContactPhase::Down}).unwrap();
+            for now in [100_000_000,110_000_000,120_000_000] {s.frame(now,now).unwrap();}
+            let vector=s.region_tools.gesture.as_ref().unwrap().vector.as_ref().unwrap();
+            assert!(vector.slots[vector.active].is_some());
+            assert_eq!(vector.slots.iter().filter(|slot|slot.is_some()).count(),1,"{platform:?}");
+        }
+    }
 }
