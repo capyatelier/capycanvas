@@ -115,6 +115,8 @@ Filter categories: GTK `native_filter_category_footer` checks initial clipping a
 
 Tool lists: GTK `native_tool_list_alignment` compares Select and Healing rows at 412×891 and 1600×1000 in light and dark.
 
+Export layout: GTK `native_export_narrow_bounds` checks the previews, fields and header actions at 280, 320 and 412 px in light and dark.
+
 ### Tonal journeys
 
 The GTK journeys are `native_composite_histogram_updates_without_changing_the_drawing`,

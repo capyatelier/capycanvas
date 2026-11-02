@@ -25,6 +25,24 @@ fn native_new_drawing_preview_spacing() {
     d.finish();
 }
 
+#[test]
+#[ignore = "private compositor: --native-test=native_export_narrow_bounds --native-storage; viewport/theme external"]
+fn native_export_narrow_bounds() {
+    let mut d = super::phone_motion::setup("art.capycanvas.ExportNarrowBounds");
+    d.w.dispatch(UiAction::Invoke { command: CommandId::ExportDocument });
+    let (dialog, frame) = page_frame(&d);
+    until(|| find_named(&frame, "color-preview-after").and_then(|widget| widget.downcast::<gtk::Picture>().ok())
+        .is_some_and(|picture| picture.paintable().is_some()), "Export publishes its preview");
+    for name in ["export-format", "export-open-size", "export-open-color", "color-preview-before", "color-preview-after"] {
+        let bounds = find_named(&frame, name).unwrap().compute_bounds(&frame).unwrap();
+        assert!(bounds.x() >= 0. && bounds.x() + bounds.width() <= frame.width() as f32 + 1., "Export control fits: {name} {bounds:?}");
+    }
+    page(&d);
+    super::phone::capture(&mut d, "export-narrow-bounds");
+    close(&d, &dialog);
+    d.finish();
+}
+
 fn page_header(frame: &gtk::Widget) -> adw::HeaderBar {
     until(|| descendants::<adw::HeaderBar>(frame).into_iter().filter(|header| header.is_mapped()).count() == 1,
         "native navigation leaves one mapped header");

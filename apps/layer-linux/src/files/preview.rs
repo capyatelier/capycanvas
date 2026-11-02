@@ -138,7 +138,6 @@ impl Comparison {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 6);
         let pictures = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         pictures.set_homogeneous(true);
-        pictures.set_halign(gtk::Align::Center);
         let labels = labels.map(|label| gtk::Label::builder().label(label.as_ref()).wrap(true).build());
         let make = |label: &gtk::Label, name: &str| {
             let column = gtk::Box::new(gtk::Orientation::Vertical, 4);
@@ -146,12 +145,12 @@ impl Comparison {
             picture.set_widget_name(name);
             picture.set_alternative_text(Some(&label.text()));
             picture.set_can_shrink(true);
-            picture.set_size_request(160, 100);
+            picture.set_height_request(100);
             column.append(label);
             // Measure a bounded preview area, not the image's height-for-width
             // request at the entire dialog width. Contain retains all edges.
             let preview = gtk::Overlay::new();
-            preview.set_child(Some(&gtk::DrawingArea::builder().content_width(160).content_height(120).build()));
+            preview.set_child(Some(&gtk::DrawingArea::builder().content_height(120).build()));
             preview.add_overlay(&picture);
             column.append(&preview);
             pictures.append(&column);
@@ -165,7 +164,7 @@ impl Comparison {
             .xalign(0.)
             .build();
         status.set_widget_name("color-preview-status");
-        widget.append(&pictures);
+        widget.append(&adw::Clamp::builder().maximum_size(2 * 160 + 12).child(&pictures).build());
         widget.append(&status);
         Rc::new(Self {
             localization_bound: Cell::new(false), copy: RefCell::new(copy), localization: RefCell::new(localization), output_labels: Cell::new(None), failure: RefCell::new(None),
