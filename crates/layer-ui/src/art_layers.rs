@@ -1,7 +1,7 @@
 //! Artwork commands and gestures. Native layer panels only render this model.
 use super::*;
 use layer_core::{Attachment, Edit, LayerBlend, Point, Selection, CoverageSnapshot};
-use layer_core::authored::{Occurrence, OccurrenceContent, OccurrenceHandle, PaintSource, RecordChange, SourceTarget, Stack};
+use layer_core::authored::{Occurrence, OccurrenceContent, OccurrenceHandle, PaintSource, RecordChange, SourceTarget, Stack, StackHandle};
 use super::session::{occurrence_handle, occurrence_token};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -245,7 +245,7 @@ pub(super) fn swipe_actions(doc: &Document, id: OccurrenceHandle, layer: &Occurr
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum NewContent { Paint, Group, Vector }
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum NewPlacement { Above, Clipped, Below, Under }
+pub(super) enum NewPlacement { Above, Clipped, Below, Under }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -807,6 +807,23 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(layer.clone())
     }
     pub(super) fn new_paint_layer_under(&mut self) -> Result<(), String> { self.new_layer(NewContent::Paint, NewPlacement::Under) }
+    pub(super) fn new_layer_insertion(&self,placement:NewPlacement)->Result<(Option<OccurrenceHandle>,StackHandle,usize,[i64;2]),String> {
+        let doc=self.engine.document();let scene=doc.scene();let active=doc.working.occurrence;
+        let parent = active.and_then(|h| if placement == NewPlacement::Above && scene.occurrence(h).is_some_and(|l| l.kind() == LayerKind::Group) { Some(h) } else { scene.parent(h) });
+        if parent.is_some_and(|p| doc.is_locked(p)) { return Err("The destination group is locked".into()); }
+        let stack_handle = match parent { Some(h) => match scene.occurrence(h).unwrap().content { OccurrenceContent::Stack(h) => h, _ => unreachable!() }, None => doc.composition().result };
+        let stack = doc.artwork.stacks.get(stack_handle).ok_or("Unknown stack")?;
+        let index = active.and_then(|h| match placement {
+            NewPlacement::Below => {
+                let base = if scene.occurrence(h).is_some_and(|o| o.attachment == Attachment::Clip) { doc.clipping_base(h).unwrap_or(h) } else { h };
+                stack.entries.iter().position(|id| *id == base).map(|index| index + 1)
+            }
+            NewPlacement::Under => stack.entries.iter().position(|id| *id == h).map(|index| index + 1),
+            NewPlacement::Clipped => stack.entries.iter().position(|id| *id == scene.attached_effects(h).last().copied().unwrap_or(h)),
+            NewPlacement::Above => stack.entries.iter().position(|id| *id == doc.clipping_stack_top(h).unwrap_or(h)),
+        }).unwrap_or(0);
+        Ok((parent,stack_handle,index,scene.layer_origin(parent).map(|v|-v)))
+    }
     fn new_layer(&mut self, kind: NewContent, placement: NewPlacement) -> Result<(), String> {
         self.return_to_artwork()?;
         let doc = self.engine.document();
@@ -817,19 +834,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         if clipped && !active.is_some_and(|h| scene.eligible_target(h)) {
             return Err("Choose a paint layer, object layer or isolated group to clip to".into());
         }
-        let parent = active.and_then(|h| if placement == NewPlacement::Above && scene.occurrence(h).is_some_and(|l| l.kind() == LayerKind::Group) { Some(h) } else { scene.parent(h) });
-        if parent.is_some_and(|p| doc.is_locked(p)) { return Err("The destination group is locked".into()); }
-        let stack_handle = match parent { Some(h) => match scene.occurrence(h).unwrap().content { OccurrenceContent::Stack(h) => h, _ => unreachable!() }, None => doc.composition().result };
-        let mut stack = doc.artwork.stacks.get(stack_handle).ok_or("Unknown stack")?.clone();
-        let index = active.and_then(|h| match placement {
-            NewPlacement::Below => {
-                let base = if scene.occurrence(h).is_some_and(|o| o.attachment == Attachment::Clip) { doc.clipping_base(h).unwrap_or(h) } else { h };
-                stack.entries.iter().position(|id| *id == base).map(|index| index + 1)
-            }
-            NewPlacement::Under => stack.entries.iter().position(|id| *id == h).map(|index| index + 1),
-            NewPlacement::Clipped => stack.entries.iter().position(|id| *id == scene.attached_effects(h).last().copied().unwrap_or(h)),
-            NewPlacement::Above => stack.entries.iter().position(|id| *id == doc.clipping_stack_top(h).unwrap_or(h)),
-        }).unwrap_or(0);
+        let (parent,stack_handle,index,_)=self.new_layer_insertion(placement)?;
+        let mut stack=doc.artwork.stacks.get(stack_handle).unwrap().clone();
         let mut edits = Vec::new();
         let (content, name) = match kind {
             NewContent::Group => {

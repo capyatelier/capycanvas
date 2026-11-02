@@ -273,19 +273,12 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     fn insert_flat_areas(&mut self,raster:layer_core::raster::RasterRevision)->Result<(),String> {
         use layer_core::{Edit,authored::{Occurrence,OccurrenceContent,PaintSource,RecordChange}};
-        let doc=self.engine.document();let scene=doc.scene();let active=doc.working.occurrence;
-        let parent=active.and_then(|id|scene.parent(id));
-        if parent.is_some_and(|id|doc.is_locked(id)) {return Err("The destination group is locked".into());}
-        let stack=parent.map_or(doc.composition().result,|id|match scene.occurrence(id).unwrap().content {OccurrenceContent::Stack(handle)=>handle,_=>unreachable!()});
-        let mut entries=doc.artwork.stacks.get(stack).unwrap().clone();
-        let index=active.and_then(|id| {
-            let base=if scene.occurrence(id).is_some_and(|o|o.attachment==layer_core::Attachment::Clip) {doc.clipping_base(id).unwrap_or(id)}else{id};
-            entries.entries.iter().position(|other|*other==base).map(|index|index+1)
-        }).unwrap_or(0);
+        let (parent,stack,index,offset)=self.new_layer_insertion(crate::session::art_layers::NewPlacement::Below)?;
+        let doc=self.engine.document();let mut entries=doc.artwork.stacks.get(stack).unwrap().clone();
         let paint=RecordChange::insert(&doc.artwork.paint,PaintSource {color_mode:Default::default(),domain:doc.composition().size,raster,base:None,operations:Default::default()});
         let target=SourceTarget::Paint(paint.handle);
         let mut occurrence=Occurrence::new(OccurrenceContent::Paint(paint.handle),self.localization().text(MessageId::DOCUMENTS_FLATS_NAME));
-        occurrence.offset=scene.layer_origin(parent).map(|v|-v);
+        occurrence.offset=offset;
         let occurrence=RecordChange::insert(&doc.artwork.occurrences,occurrence);let id=occurrence.handle;
         entries.entries.insert(index,id);let mut working=doc.working.clone();
         working.occurrence=Some(id);working.target=Some(target);working.inspect_mask=None;
