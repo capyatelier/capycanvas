@@ -128,6 +128,14 @@ fn footer() -> gtk::Box {
     footer
 }
 
+fn footer_actions(buttons: &[&gtk::Button]) -> adw::WrapBox {
+    let actions = adw::WrapBox::builder().child_spacing(8).line_spacing(8).align(1.).build();
+    actions.set_halign(gtk::Align::End);
+    actions.add_css_class("new-drawing-actions");
+    for button in buttons { actions.append(*button); }
+    actions
+}
+
 fn gap() -> gtk::Box {
     let gap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     gap.set_hexpand(true);
@@ -213,6 +221,8 @@ struct Page {
     paper_color_name: gtk::Label,
     presets: gtk::Button,
     presets_label: gtk::Label,
+    footer: gtk::Box,
+    gap: gtk::Box,
     cancel: gtk::Button,
     create: gtk::Button,
 }
@@ -227,7 +237,11 @@ struct Browser {
     summary_name: gtk::Label,
     summary_size: gtk::Label,
     summary_details: gtk::Label,
+    summary_top: gtk::Box,
     actions: gtk::Stack,
+    footer: gtk::Box,
+    saving: gtk::Box,
+    save_fields: gtk::Box,
     cancel: gtk::Button,
     save_as: gtk::Button,
     select: gtk::Button,
@@ -248,6 +262,8 @@ struct PaperDrawer {
     relief_label: gtk::Label,
     relief: NumberControl,
     relief_unit: gtk::Label,
+    footer: gtk::Box,
+    gap: gtk::Box,
     cancel: gtk::Button,
     apply: gtk::Button,
 }
@@ -267,6 +283,8 @@ struct ColorDrawer {
     add: RefCell<Option<gtk::Button>>,
     palette_colors: RefCell<Vec<(RgbColor, String)>>,
     menu: gtk::Popover,
+    footer: gtk::Box,
+    gap: gtk::Box,
     cancel: gtk::Button,
     apply: gtk::Button,
     form: RefCell<Option<Rc<ColorForm>>>,
@@ -517,7 +535,8 @@ impl NewDrawing {
         let cancel = footer_button("new-drawing-cancel", false);
         let create = footer_button("new-drawing-create", true);
         let main_footer = footer();
-        for widget in [presets.upcast_ref::<gtk::Widget>(), gap().upcast_ref(), cancel.upcast_ref(), create.upcast_ref()] { main_footer.append(widget); }
+        let main_gap = gap();
+        for widget in [presets.upcast_ref::<gtk::Widget>(), main_gap.upcast_ref(), footer_actions(&[&cancel, &create]).upcast_ref()] { main_footer.append(widget); }
         let main = gtk::Box::new(gtk::Orientation::Vertical, 0);
         main.append(&page_scroll);
         main.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
@@ -577,12 +596,7 @@ impl NewDrawing {
             let cancel = footer_button("new-drawing-browser-cancel", false);
             let save_as = footer_button("new-drawing-save-as", false);
             let select = footer_button("new-drawing-select", true);
-            let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            buttons.add_css_class("new-drawing-actions");
-            buttons.set_halign(gtk::Align::End);
-            buttons.append(&cancel);
-            buttons.append(&save_as);
-            buttons.append(&select);
+            let buttons = footer_actions(&[&cancel, &save_as, &select]);
             let save_name = gtk::Entry::builder().width_chars(10).build();
             save_name.set_widget_name("new-drawing-save-name");
             let save_group = gtk::DropDown::from_strings(&[]);
@@ -590,13 +604,13 @@ impl NewDrawing {
             let save_cancel = footer_button("new-drawing-save-cancel", false);
             let save_confirm = footer_button("new-drawing-save-confirm", true);
             let saving = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            saving.add_css_class("new-drawing-actions");
             saving.set_halign(gtk::Align::End);
-            saving.append(&save_name);
-            saving.append(&save_group);
-            saving.append(&save_cancel);
-            saving.append(&save_confirm);
-            let actions = gtk::Stack::builder().hhomogeneous(false).interpolate_size(true).transition_type(gtk::StackTransitionType::Crossfade).build();
+            let save_fields = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            save_fields.append(&save_name);
+            save_fields.append(&save_group);
+            saving.append(&save_fields);
+            saving.append(&footer_actions(&[&save_cancel, &save_confirm]));
+            let actions = gtk::Stack::builder().hhomogeneous(false).vhomogeneous(false).interpolate_size(true).transition_type(gtk::StackTransitionType::Crossfade).build();
             actions.add_named(&buttons, Some("buttons"));
             actions.add_named(&saving, Some("save"));
             let bottom = footer();
@@ -606,8 +620,8 @@ impl NewDrawing {
             let menu = gtk::Popover::builder().has_arrow(false).build();
             menu.set_widget_name("new-drawing-preset-menu");
             Browser {
-                slide: SlideSheet::new(&overlay, &sheet), search, tabs, grid, empty, summary_art, summary_name, summary_size, summary_details, actions,
-                cancel, save_as, select, save_name, save_group, save_cancel, save_confirm, menu,
+                slide: SlideSheet::new(&overlay, &sheet), search, tabs, grid, empty, summary_art, summary_name, summary_size, summary_details, summary_top: top, actions,
+                footer: bottom, saving, save_fields, cancel, save_as, select, save_name, save_group, save_cancel, save_confirm, menu,
             }
         };
 
@@ -638,9 +652,10 @@ impl NewDrawing {
             let cancel = footer_button("new-drawing-paper-cancel", false);
             let apply = footer_button("new-drawing-paper-use", true);
             let bottom = footer();
-            for widget in [relief_row.upcast_ref::<gtk::Widget>(), gap().upcast_ref(), cancel.upcast_ref(), apply.upcast_ref()] { bottom.append(widget); }
+            let spacer = gap();
+            for widget in [relief_row.upcast_ref::<gtk::Widget>(), spacer.upcast_ref(), footer_actions(&[&cancel, &apply]).upcast_ref()] { bottom.append(widget); }
             let sheet = drawer("new-drawing-paper-drawer", &title, &grid, &bottom);
-            PaperDrawer { slide: SlideSheet::new(&overlay, &sheet), title, grid, import, import_label, relief_row, relief_label, relief, relief_unit, cancel, apply }
+            PaperDrawer { slide: SlideSheet::new(&overlay, &sheet), title, grid, import, import_label, relief_row, relief_label, relief, relief_unit, footer: bottom, gap: spacer, cancel, apply }
         };
 
         let colors = {
@@ -676,12 +691,14 @@ impl NewDrawing {
             let cancel = footer_button("new-drawing-color-cancel", false);
             let apply = footer_button("new-drawing-color-use", true);
             let bottom = footer();
-            for widget in [gap().upcast_ref::<gtk::Widget>(), cancel.upcast_ref(), apply.upcast_ref()] { bottom.append(widget); }
+            let spacer = gap();
+            bottom.append(&spacer);
+            bottom.append(&footer_actions(&[&cancel, &apply]));
             let sheet = drawer("new-drawing-color-drawer", &title, &content, &bottom);
             let menu = gtk::Popover::builder().has_arrow(false).build();
             ColorDrawer {
                 slide: SlideSheet::new(&overlay, &sheet), title, content, color_mode, transparent_mode, color_label, transparent_label, palette_count, well, palette, palette_title, add: RefCell::default(), palette_colors: RefCell::default(), menu,
-                cancel, apply, form: RefCell::default(),
+                footer: bottom, gap: spacer, cancel, apply, form: RefCell::default(),
             }
         };
 
@@ -690,7 +707,7 @@ impl NewDrawing {
             width_slot, height_slot, numbers: RefCell::default(), link, unit, portrait, landscape, resolution_label, resolution, resolution_unit,
             resolutions, resolution_menu, resolution_choices, size, color_heading, space_label, depth_label, blending_label, space, depth, blending,
             paper_heading, texture, texture_thumbnail, texture_name, texture_relief, paper_color, paper_patch, paper_color_name, presets,
-            presets_label, cancel, create,
+            presets_label, footer: main_footer, gap: main_gap, cancel, create,
         };
         crate::page_dialog::configure(&dialog, crate::page_dialog::Metadata::new().title(&page.title, "label").primary(&page.create).hide(&page.cancel));
         let this = Rc::new_cyclic(|this| Self {
@@ -1378,6 +1395,17 @@ impl NewDrawing {
         let orientation = if narrow { gtk::Orientation::Vertical } else { gtk::Orientation::Horizontal };
         if page.body.orientation() == orientation { return; }
         page.body.set_orientation(orientation);
+        for footer in [&page.footer, &self.browser.footer, &self.browser.saving, &self.browser.save_fields, &self.papers.footer, &self.colors.footer] {
+            footer.set_orientation(orientation);
+        }
+        for gap in [&page.gap, &self.papers.gap, &self.colors.gap] { gap.set_visible(!narrow); }
+        self.browser.saving.set_halign(if narrow { gtk::Align::Fill } else { gtk::Align::End });
+        self.browser.summary_top.set_orientation(orientation);
+        for label in [&self.browser.summary_name, &self.browser.summary_details] {
+            label.set_wrap(narrow);
+            label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+            label.set_ellipsize(if narrow { gtk::pango::EllipsizeMode::None } else { gtk::pango::EllipsizeMode::End });
+        }
         page.left.set_halign(if narrow { gtk::Align::Center } else { gtk::Align::Fill });
         page.left.set_vexpand(!narrow);
         let (bounds, fit) = if narrow { (NARROW_PREVIEW, NARROW_PREVIEW_FIT) } else { (PREVIEW, PREVIEW_FIT) };

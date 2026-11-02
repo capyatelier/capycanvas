@@ -73,6 +73,60 @@ fn native_new_drawing_dimension_controls_fit() {
     assert!(!find_named(&frame, "new-drawing-size").unwrap().downcast::<gtk::Label>().unwrap().layout().is_ellipsized(), "the pixel size stays readable");
     super::histogram::scroll_to(&find_named(&frame, "new-drawing-paper-color").unwrap());
     super::phone::capture(&mut d, "new-drawing-dimensions-fit-bottom");
+    let window = d.w.window.clone();
+    let settled_sheet = |name: &str| {
+        let sheet = find_named(&frame, name).unwrap();
+        drop(idle_paint(&window));
+        until(|| sheet.is_mapped() && sheet.parent().and_then(|parent| sheet.compute_bounds(&parent))
+            .is_some_and(|bounds| bounds.y().abs() <= 1.), "the New Drawing sheet reaches its open position");
+        drop(idle_paint(&window));
+        sheet
+    };
+    let footer_fits = |name: &str| {
+        let action = find_named(&frame, name).unwrap();
+        let footer = std::iter::successors(action.parent(), |parent| parent.parent())
+            .find(|parent| parent.has_css_class("dialog-footer")).unwrap();
+        assert!(footer.is_mapped());
+        for child in widgets(&footer).filter(|child| child.is_mapped()) {
+            let bounds = child.compute_bounds(&frame).unwrap();
+            assert!(bounds.x() >= -1. && bounds.x() + bounds.width() <= frame.width() as f32 + 1.,
+                "New Drawing footer child fits: {name} {} {bounds:?}", child.widget_name());
+        }
+    };
+    for (opener, sheet, action, cancel, tag) in [
+        ("new-drawing-presets-button", "new-drawing-browser", "new-drawing-select", "new-drawing-browser-cancel", "presets"),
+        ("new-drawing-texture", "new-drawing-paper-drawer", "new-drawing-paper-use", "new-drawing-paper-cancel", "paper"),
+        ("new-drawing-paper-color", "new-drawing-color-drawer", "new-drawing-color-use", "new-drawing-color-cancel", "paper-color"),
+    ] {
+        let opener = find_named(&frame, opener).unwrap();
+        super::histogram::scroll_to(&opener);
+        d.click(&opener);
+        let sheet = settled_sheet(sheet);
+        capture(&mut d, &format!("new-drawing-footer-{tag}"));
+        footer_fits(action);
+        if tag == "presets" {
+            let summary = named::<gtk::Label>(&frame, "new-drawing-summary-name");
+            assert!(summary.is_mapped() && !summary.layout().is_ellipsized(), "the preset summary name stays readable");
+            d.click(&find_named(&frame, "new-drawing-save-as").unwrap());
+            let name = named::<gtk::Entry>(&frame, "new-drawing-save-name");
+            let stack = name.ancestor(gtk::Stack::static_type()).unwrap().downcast::<gtk::Stack>().unwrap();
+            until(|| name.is_mapped() && !stack.is_transition_running(), "Save Preset finishes opening");
+            drop(idle_paint(&window));
+            capture(&mut d, "new-drawing-footer-save-preset");
+            footer_fits("new-drawing-save-confirm");
+            let natural = name.measure(gtk::Orientation::Horizontal, -1).1;
+            let width = name.compute_bounds(&name.parent().unwrap()).unwrap().width();
+            assert!(width + 1. >= natural as f32, "Save Preset name keeps its natural width: {width} < {natural}");
+            d.click(&find_named(&frame, "new-drawing-save-cancel").unwrap());
+            until(|| !name.is_mapped() && !stack.is_transition_running(), "Save Preset returns to browsing");
+        } else if tag == "paper" {
+            let field = find_named(&frame, "new-drawing-paper-relief-field").unwrap();
+            let label = field.parent().unwrap().first_child().unwrap().downcast::<gtk::Label>().unwrap();
+            assert!(label.is_mapped() && !label.layout().is_ellipsized(), "Texture visibility stays readable");
+        }
+        d.click(&find_named(&frame, cancel).unwrap());
+        until(|| !sheet.is_mapped(), "the New Drawing sheet closes before the next footer");
+    }
     close(&d, &dialog);
     d.finish();
 }

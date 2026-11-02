@@ -114,7 +114,9 @@ and its `.new-drawing-*` styles. Drawers slide up over the page; inputs are
 34 px high with 6 px between controls, 10 px between rows and 14 px between
 sections.
 When the controls narrow, units and orientation wrap below the dimensions;
-the pixel-size summary wraps below Resolution before losing text.
+the pixel-size summary wraps below Resolution before losing text. Footer
+summaries and preset fields stack above their right-aligned action buttons.
+Summary text and action rows wrap to the available width.
 
 ## Checks
 
