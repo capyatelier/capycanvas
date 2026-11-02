@@ -68,18 +68,24 @@ fn release_fixtures_load_without_loss() {
 
 fn check_release(release:&str) {
     let root=Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/compat");
+    check_inputs(&root.join(release),|name,actual| {
+        let expected=root.join("expected").join(release).join(name);
+        if std::env::var_os("CAPY_BLESS").as_deref()==Some(std::ffi::OsStr::new("1")) {
+            std::fs::create_dir_all(expected.parent().unwrap()).unwrap();
+            std::fs::write(&expected,serde_json::to_vec_pretty(&actual).unwrap()).unwrap();
+        }
+        assert_eq!(actual,serde_json::from_slice::<serde_json::Value>(&std::fs::read(expected).unwrap()).unwrap());
+    });
+}
+
+pub(crate) fn check_inputs(directory:&Path,check:impl Fn(&str,serde_json::Value)) {
     let temporary=std::env::temp_dir().join(format!("capy-release-session-{}",PortableId::random()));
-    copy_tree(&root.join(release).join("session"),&temporary);
+    copy_tree(&directory.join("session"),&temporary);
     let cancel=AtomicBool::new(false);let mut store=SessionStore::open(&temporary).unwrap();
     let loaded=store.load(ProjectLimits::default(),&cancel).unwrap().unwrap();
     let mut editor=loaded.editor;let metadata=loaded.metadata.value;
     let actual=history_snapshot(&mut editor,&metadata);
-    let expected=root.join("expected").join(release).join("session.json");
-    if std::env::var_os("CAPY_BLESS").as_deref()==Some(std::ffi::OsStr::new("1")) {
-        std::fs::create_dir_all(expected.parent().unwrap()).unwrap();
-        std::fs::write(&expected,serde_json::to_vec_pretty(&actual).unwrap()).unwrap();
-    }
-    assert_eq!(actual,serde_json::from_slice::<serde_json::Value>(&std::fs::read(expected).unwrap()).unwrap());
+    check("session.json",actual.clone());
     let loaded=store.load(ProjectLimits::default(),&cancel).unwrap().unwrap();
     store.commit(&prepared(&loaded.editor,loaded.metadata),&cancel).unwrap();
     drop(loaded.editor);drop(editor);drop(store);
@@ -87,7 +93,7 @@ fn check_release(release:&str) {
     let mut loaded=upgraded.load(ProjectLimits::default(),&cancel).unwrap().unwrap();
     assert_eq!(history_snapshot(&mut loaded.editor,&loaded.metadata.value),actual);
     drop(loaded);drop(upgraded);std::fs::remove_dir_all(&temporary).unwrap();
-    let source=root.join(release).join("unsupported-session");copy_tree(&source,&temporary);
+    let source=directory.join("unsupported-session");copy_tree(&source,&temporary);
     let mut store=SessionStore::open(&temporary).unwrap();
     assert!(store.load(ProjectLimits::default(),&cancel).err().unwrap().contains("not approved"));
     drop(store);

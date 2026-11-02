@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+import argparse
+from contextlib import contextmanager
+import getpass
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+
+
+ROOT = Path(__file__).resolve().parents[2]
+CRATES = ("layer-workspace", "layer-core", "layer-ui", "layer-host")
+MODES = ("rust", "upgrade", "downgrade")
+
+
+def cargo(crate, test, ignored=False):
+    command = ["cargo", "test", "--locked", "-p", crate]
+    if crate == "layer-workspace":
+        command += ["--features", "native"]
+    command.append(test)
+    if ignored:
+        command += ["--", "--ignored"]
+    return command
+
+
+class Runner:
+    def __init__(self, args, root=ROOT):
+        self.args = args
+        self.root = root
+        self.work = args.work.resolve()
+        self.work.mkdir(parents=True, exist_ok=True)
+        self.scratch = self.work / "scratch"
+        self.scratch.mkdir()
+        self.owned = [self.scratch]
+        self.logs = self.work / "logs"
+        self.logs.mkdir(exist_ok=True)
+        self.checks = []
+        self.releases = []
+        self.env = dict(os.environ)
+        for key in ("CAPY_BLESS", "CAPY_COMPAT_IN", "CAPY_COMPAT_OUT", "CAPY_RELEASE_VERSION"):
+            self.env.pop(key, None)
+        temporary = self.scratch / "tmp"
+        temporary.mkdir()
+        self.env.update(CARGO_TARGET_DIR=str(self.scratch / "target"),
+                        CAPY_STORAGE_DIR=str(self.scratch / "storage"), CARGO_TERM_COLOR="never",
+                        TMPDIR=str(temporary), TMP=str(temporary), TEMP=str(temporary))
+
+    def record(self, status, name, reason="", **details):
+        self.checks.append(dict(status=status, name=name, reason=reason, **details))
+        print(f"{status} {name}" + (f" {reason}" if reason else ""), flush=True)
+
+    def git(self, *args):
+        return subprocess.run(["git", *args], cwd=self.root, env=self.env,
+                              check=True, capture_output=True, text=True).stdout.strip()
+
+    def select_releases(self):
+        if self.args.releases == "all":
+            versions = []
+            for tag in self.git("tag", "--list").splitlines():
+                match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", tag)
+                if match and (version := tuple(map(int, match.groups()))) >= (1, 0, 15):
+                    versions.append((version, tag))
+            self.releases = [tag for _, tag in sorted(versions)]
+        else:
+            self.releases = list(dict.fromkeys(tag.strip() for tag in self.args.releases.split(",")))
+            for tag in self.releases:
+                self.git("show-ref", "--verify", f"refs/tags/{tag}")
+
+    def contains(self, release, function):
+        result = subprocess.run(["git", "grep", "-q", "-F", f"fn {function}",
+                                 f"refs/tags/{release}", "--", "crates"],
+                                cwd=self.root, env=self.env, capture_output=True, text=True)
+        if result.returncode not in (0, 1):
+            raise RuntimeError(result.stderr)
+        return result.returncode == 0
+
+    def check(self, name, command, tree, extra=None, output=None):
+        log = self.logs / f"{len(self.checks) + 1:03d}.log"
+        env = dict(self.env, **(extra or {}))
+        try:
+            with log.open("w") as stream:
+                result = subprocess.run(command, cwd=tree, env=env, stdout=stream,
+                                        stderr=subprocess.STDOUT)
+            reason = f"exit {result.returncode}" if result.returncode else ""
+            if not reason and output is not None and not any(output.iterdir()):
+                reason = "generator wrote no inputs"
+        except OSError as error:
+            reason = str(error)
+        self.record("FAIL" if reason else "PASS", name, reason,
+                    command=command, log=str(log.relative_to(self.work)))
+        return not reason
+
+    @contextmanager
+    def release_tree(self, release):
+        tree = self.scratch / "trees" / release
+        tree.parent.mkdir(parents=True, exist_ok=True)
+        self.git("worktree", "add", "--detach", str(tree), f"refs/tags/{release}")
+        try:
+            yield tree
+        finally:
+            self.git("worktree", "remove", "--force", str(tree))
+
+    def output_root(self, mode):
+        output = self.work / mode
+        output.mkdir()
+        self.owned.append(output)
+        return output
+
+    def generate(self, tree, output, name, release=None):
+        okay = True
+        for crate in CRATES:
+            directory = output / crate
+            directory.mkdir(parents=True)
+            extra = dict(CAPY_COMPAT_OUT=str(directory))
+            if release:
+                extra["CAPY_RELEASE_VERSION"] = release.removeprefix("v")
+            okay = self.check(f"{name}.generate.{crate}", cargo(crate, "write_compat_fixtures", True),
+                              tree, extra, directory) and okay
+        return okay
+
+    def load(self, tree, inputs, name):
+        for crate in CRATES:
+            self.check(f"{name}.load.{crate}", cargo(crate, "external_compat_inputs_load"),
+                       tree, dict(CAPY_COMPAT_IN=str(inputs / crate)))
+
+    def rust(self):
+        self.check("rust.compat", ["cargo", "test", "--locked", "-p", "layer-core", "-p", "layer-ui",
+                   "-p", "layer-workspace", "--features", "layer-workspace/native", "compat"], self.root)
+        self.check("rust.paper-compat", cargo("layer-host", "papers::tests::compat"), self.root)
+        self.check("rust.tolerance", ["cargo", "test", "--locked", "-p", "layer-core", "-p", "layer-ui",
+                   "-p", "layer-workspace", "-p", "layer-host", "--features", "layer-workspace/native",
+                   "saved_documents_tolerate_missing_and_unknown_fields"], self.root)
+
+    def skip_preview(self, mode):
+        self.record("SKIP", f"{mode}.gtk-preview", "GTK native_write_compat_fixtures needs a GPU; "
+                    "committed app-rendered preview fixtures are covered in rust")
+
+    def upgrade(self):
+        self.skip_preview("upgrade")
+        output = self.output_root("upgrade")
+        for release in self.releases:
+            if not self.contains(release, "write_compat_fixtures"):
+                self.record("SKIP", f"upgrade.{release}", "committed fixtures cover this release in `rust`")
+                continue
+            with self.release_tree(release) as tree:
+                if self.generate(tree, output / release, f"upgrade.{release}", release):
+                    self.load(self.root, output / release, f"upgrade.{release}")
+
+    def downgrade(self):
+        self.skip_preview("downgrade")
+        output = self.output_root("downgrade") / "current"
+        if not self.generate(self.root, output, "downgrade.current"):
+            return
+        for release in self.releases:
+            if not self.contains(release, "external_compat_inputs_load"):
+                self.record("SKIP", f"downgrade.{release}",
+                            "first eligible release is the one after this test lands")
+                continue
+            with self.release_tree(release) as tree:
+                self.load(tree, output, f"downgrade.{release}")
+
+    def finish(self):
+        if not self.args.keep:
+            for path in reversed(self.owned):
+                try:
+                    shutil.rmtree(path)
+                except OSError as error:
+                    self.record("FAIL", "cleanup", str(error))
+        report = dict(mode=self.args.mode, releases=self.releases, checks=self.checks)
+        (self.work / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+        return int(any(check["status"] == "FAIL" for check in self.checks))
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Run saved-data compatibility checks without a GPU.")
+    parser.add_argument("mode", choices=(*MODES, "all"))
+    parser.add_argument("--releases", default="all", help="Comma-separated tags; default all v1.0.15+ tags")
+    default = (Path(os.environ["RUNNER_TEMP"]) / "capy-compat" if "RUNNER_TEMP" in os.environ
+               else Path("/mnt/localssd") / f"capy-compat-{os.environ.get('USER', getpass.getuser())}")
+    parser.add_argument("--work", type=Path, default=default)
+    parser.add_argument("--keep", action="store_true", help="Retain generated inputs and build scratch too")
+    args = parser.parse_args(argv)
+    try:
+        runner = Runner(args)
+    except OSError as error:
+        print(f"FAIL work {error}", flush=True)
+        return 1
+    try:
+        runner.select_releases()
+        for mode in MODES if args.mode == "all" else (args.mode,):
+            getattr(runner, mode)()
+    except (OSError, RuntimeError, subprocess.CalledProcessError, KeyboardInterrupt) as error:
+        runner.record("FAIL", "runner", str(error))
+    return runner.finish()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

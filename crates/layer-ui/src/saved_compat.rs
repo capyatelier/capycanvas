@@ -78,23 +78,33 @@ fn release_fixtures_load_without_loss() {
 }
 
 fn check_release(release:&str) {
-    let directory=root().join(release);let english=Localizer::shared(crate::UiLanguage::English);
-    for entry in std::fs::read_dir(&directory).unwrap() {
+    check_inputs(&root().join(release),|name,value|expect(release,name,value));
+}
+
+#[test]
+fn external_compat_inputs_load() {
+    let Some(directory)=std::env::var_os("CAPY_COMPAT_IN") else {return;};
+    check_inputs(&PathBuf::from(directory),|_,_|{});
+}
+
+fn check_inputs(directory:&Path,check:impl Fn(&str,Value)) {
+    let english=Localizer::shared(crate::UiLanguage::English);
+    for entry in std::fs::read_dir(directory).unwrap() {
         let path=entry.unwrap().path();let name=path.file_name().unwrap().to_str().unwrap();
         if name.starts_with("editing") && name.ends_with(".json") {
-            let saved=std::fs::read_to_string(&path).unwrap();expect(release,name,serde_json::to_value(EditingState::restore(&saved,&english)).unwrap());
+            let saved=std::fs::read_to_string(&path).unwrap();check(name,serde_json::to_value(EditingState::restore(&saved,&english)).unwrap());
         } else if name.starts_with("settings") && name.ends_with(".json") {
-            let saved=std::fs::read_to_string(&path).unwrap();expect(release,name,serde_json::to_value(Settings::restore(&saved)).unwrap());
+            let saved=std::fs::read_to_string(&path).unwrap();check(name,serde_json::to_value(Settings::restore(&saved)).unwrap());
         } else if name=="export-presets-complete" {
-            expect(release,"export-presets-complete.json",serde_json::to_value(crate::ExportPresets::restore(&std::fs::read(path).unwrap())).unwrap());
+            check("export-presets-complete.json",serde_json::to_value(crate::ExportPresets::restore(&std::fs::read(path).unwrap())).unwrap());
         } else if name=="bindings-complete.capykeys" {
             let imported=crate::keymaps::import_typed(&Settings::default(),&std::fs::read_to_string(path).unwrap(),Platform::Gtk,&english).unwrap();
-            expect(release,"bindings-complete.json",serde_json::from_str(&crate::keymaps::export(&imported.settings)).unwrap());
+            check("bindings-complete.json",serde_json::from_str(&crate::keymaps::export(&imported.settings)).unwrap());
         }
     }
     let keymap=std::fs::read_to_string(directory.join("bindings.capykeys")).unwrap();
     let imported=crate::keymaps::import_typed(&Settings::default(),&keymap,Platform::Gtk,&english).unwrap();
-    expect(release,"bindings.json",serde_json::from_str(&crate::keymaps::export(&imported.settings)).unwrap());
+    check("bindings.json",serde_json::from_str(&crate::keymaps::export(&imported.settings)).unwrap());
     let records:Vec<crate::profile_library::ProfileRecord>=serde_json::from_slice(&std::fs::read(directory.join("profiles.json")).unwrap()).unwrap();
     let entries:Vec<_>=records.iter().map(|record| {
         let bytes=std::fs::read(directory.join(format!("{}.icc",record.id))).unwrap();
@@ -104,7 +114,7 @@ fn check_release(release:&str) {
     }).collect();
     let hidden:Vec<String>=serde_json::from_slice(&std::fs::read(directory.join("hidden-profiles.json")).unwrap()).unwrap();
     let hidden=crate::profile_library::ProfileLibraryAction::Visibility{hidden,id:None,visible:None}.execute(&[]).unwrap();
-    expect(release,"profiles.json",json!({"entries":entries,"hidden":hidden}));
+    check("profiles.json",json!({"entries":entries,"hidden":hidden}));
     let presets=crate::ExportPresets::restore(&std::fs::read(directory.join("export-presets-icc")).unwrap());
     assert_eq!(presets.names().collect::<Vec<_>>(),["Release ICC"]);
     let recipes:Vec<_>=[0,4].into_iter().map(|index| {
@@ -113,10 +123,10 @@ fn check_release(release:&str) {
         let profile=recipe.profile.clone().with_profile(crate::profile_library::profile_identity(bytes));
         recipe.with_profile(profile)
     }).collect();
-    expect(release,"export-presets-icc.json",json!(recipes));
+    check("export-presets-icc.json",json!(recipes));
     for name in ["session.json","session-icc.json"] {
         let manifest=SessionManifest::parse(&std::fs::read(directory.join(name)).unwrap()).unwrap();
-        expect(release,if name=="session.json" {"membership.json"}else{"membership-icc.json"},serde_json::to_value(&manifest).unwrap());
+        check(if name=="session.json" {"membership.json"}else{"membership-icc.json"},serde_json::to_value(&manifest).unwrap());
         let temporary=std::env::temp_dir().join(format!("capy-release-ui-{}",PortableId::random()));
         copy_tree(&directory.join(&manifest.drawings[0].key),&temporary);
         let cancel=AtomicBool::new(false);let mut store=layer_core::package::session_store::SessionStore::open(&temporary).unwrap();
@@ -125,12 +135,14 @@ fn check_release(release:&str) {
             layer_core::color::ColorProfile::Icc(bytes)=>Some(crate::profile_library::profile_identity(bytes)),_=>None,
         });
         let metadata=serde_json::to_value(&restored.state).unwrap();
+        let modified=restored.state.unpublished || restored.editor.checkpoint()!=restored.state.saved_checkpoint
+            || (restored.state.location.is_some() && restored.state.destination.is_none());
         let mut target=UiSession::from_project(Recorder::default(),restored.document().clone(),None,[500,400],Platform::Gtk).unwrap();
         target.frame(0,0).unwrap();let observed=restored.state.destination.clone();target.restore_session(restored,false,observed).unwrap();
-        assert!(!target.state.document_file.modified);assert!(target.engine.can_undo());
+        assert_eq!(target.state.document_file.modified,modified);assert!(target.engine.can_undo());
         let mut actual=json!({"metadata":metadata,"camera":target.session_document_state().camera,"checkpoint":target.engine.checkpoint(),"saved":target.files.saved_checkpoint});
         if let Some(profile)=profile {actual["export_profile_sha256"]=profile.into();}
-        expect(release,name,actual);
+        check(name,actual);
         drop(target);drop(store);std::fs::remove_dir_all(temporary).unwrap();
     }
 }
@@ -233,6 +245,7 @@ fn assert_struct_fields(name:&str,generated:&Value,default:&Value,pairs:&[Struct
 fn generated_saved_documents_set_every_field() {
     let directory=std::env::temp_dir().join(format!("capy-complete-{}",PortableId::random()));
     let authored=generate(&directory);
+    check_inputs(&directory,|_,_|{});
     let english=Localizer::shared(UiLanguage::English);
     let editing=serde_json::to_value(serde_json::from_slice::<EditingState>(&std::fs::read(directory.join("editing.json")).unwrap()).unwrap()).unwrap();
     let restored=EditingState::restore(&editing.to_string(),&english);

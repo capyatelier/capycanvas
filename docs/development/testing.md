@@ -125,6 +125,18 @@ times on the private 120 Hz display.
 
 ### Saved data compatibility
 
+**Extensive compatibility run.** Use `python3 tools/compat/run.py rust`, `upgrade`
+or `downgrade` (`all` runs all three) without a GPU. `--releases` takes comma-separated
+tags and defaults to every stable tag from v1.0.15 onward. `--work` holds private
+storage and builds; reports and check logs remain there, while `--keep` also
+retains generated inputs and build scratch. Upgrade and downgrade run only the
+four CPU Cargo generators and print `SKIP` for the GTK preview generator;
+committed app-rendered preview fixtures are covered by `rust`. Releases without
+generators or external-input tests print their skip reasons. The normal
+`external_compat_inputs_load` tests accept `CAPY_COMPAT_IN` without comparing
+expectations. Android remains a local `AndroidSavedStateTest` journey on a
+reserved tablet; there is no Android compatibility job in GitHub Actions.
+
 `release_fixtures_load_without_loss` in `layer-workspace` (with `--features native`),
 `layer-core`, `layer-ui` and `layer-host` opens released inputs through the real
 store, import and recovery readers and compares reviewed authored values and

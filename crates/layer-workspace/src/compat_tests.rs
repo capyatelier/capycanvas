@@ -176,6 +176,12 @@ fn generated_compat_fixtures_load_without_expectations() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
+#[test]
+fn external_compat_inputs_load() {
+    let Some(directory) = std::env::var_os("CAPY_COMPAT_IN") else {return;};
+    check_inputs(&PathBuf::from(directory), |_,_| {});
+}
+
 fn check_inputs(directory: &Path, check: impl Fn(&str, Value)) {
     let english = Localizer::shared(UiLanguage::English);
     let mut paths: Vec<_> = std::fs::read_dir(directory).unwrap().map(|p|p.unwrap().path()).collect();

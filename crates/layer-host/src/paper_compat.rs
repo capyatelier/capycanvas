@@ -18,7 +18,24 @@ fn release_fixtures_load_without_loss() {
 }
 
 fn check_release(release:&str) {
-    let source=root().join(release).join("papers");
+    check_inputs(&root().join(release),|name,value| {
+        let expected=root().join("expected").join(release).join(name);
+        if std::env::var_os("CAPY_BLESS").as_deref()==Some(std::ffi::OsStr::new("1")) {
+            std::fs::create_dir_all(expected.parent().unwrap()).unwrap();
+            std::fs::write(&expected,serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+        }
+        assert_eq!(value,serde_json::from_slice::<serde_json::Value>(&std::fs::read(expected).unwrap()).unwrap());
+    });
+}
+
+#[test]
+fn external_compat_inputs_load() {
+    let Some(directory)=std::env::var_os("CAPY_COMPAT_IN") else {return;};
+    check_inputs(&PathBuf::from(directory),|_,_|{});
+}
+
+fn check_inputs(source:&Path,check:impl Fn(&str,serde_json::Value)) {
+    let source=source.join("papers");
     let directory=std::env::temp_dir().join(format!("capy-release-papers-{}",layer_core::PortableId::random()));
     std::fs::create_dir_all(&directory).unwrap();
     for entry in std::fs::read_dir(source).unwrap() {
@@ -31,12 +48,7 @@ fn check_release(release:&str) {
         assert_eq!(layer_core::paper::image_preview(&paper).unwrap().as_slice(),entry.preview.as_ref());
         serde_json::json!({"id":entry.id,"name":entry.name,"bytes":entry.bytes,"preview_sha256":layer_ui::profile_library::profile_identity(&entry.preview)})
     }).collect();
-    let expected=root().join("expected").join(release).join("papers.json");let value=serde_json::json!(values);
-    if std::env::var_os("CAPY_BLESS").as_deref()==Some(std::ffi::OsStr::new("1")) {
-        std::fs::create_dir_all(expected.parent().unwrap()).unwrap();
-        std::fs::write(&expected,serde_json::to_vec_pretty(&value).unwrap()).unwrap();
-    }
-    assert_eq!(value,serde_json::from_slice::<serde_json::Value>(&std::fs::read(expected).unwrap()).unwrap());
+    check("papers.json",serde_json::json!(values));
     std::fs::remove_dir_all(directory).unwrap();
 }
 

@@ -59,7 +59,26 @@ fn release_fixtures_load_without_loss() {
 }
 
 fn check_release(release:&str) {
-    for path in std::fs::read_dir(root().join(release)).unwrap().map(|entry|entry.unwrap().path()) {
+    check_inputs(&root().join(release),|name,actual| {
+        let expected = root().join("expected").join(release).join(format!("{name}.json"));
+        if std::env::var_os("CAPY_BLESS").as_deref() == Some(std::ffi::OsStr::new("1")) {
+            std::fs::create_dir_all(expected.parent().unwrap()).unwrap();
+            std::fs::write(&expected,serde_json::to_vec_pretty(&actual).unwrap()).unwrap();
+        }
+        assert_eq!(actual,serde_json::from_slice::<Value>(&std::fs::read(&expected).unwrap()).unwrap(),"{}",expected.display());
+    });
+}
+
+#[test]
+fn external_compat_inputs_load() {
+    let Some(directory)=std::env::var_os("CAPY_COMPAT_IN") else {return;};
+    let directory=PathBuf::from(directory);
+    check_inputs(&directory,|_,_|{});
+    crate::package::session::persistence_tests::compat::check_inputs(&directory,|_,_|{});
+}
+
+fn check_inputs(directory:&Path,check:impl Fn(&str,Value)) {
+    for path in std::fs::read_dir(directory).unwrap().map(|entry|entry.unwrap().path()) {
         if path.extension().and_then(|value|value.to_str()) != Some("capy") {continue;}
         let bytes = std::fs::read(&path).unwrap();
         let actual = match open(backing(bytes.clone()),ProjectLimits::default(),&AtomicBool::new(false)).unwrap() {
@@ -80,12 +99,7 @@ fn check_release(release:&str) {
             }
             outcome => panic!("{}: {outcome:?}",path.display()),
         };
-        let expected = root().join("expected").join(release).join(format!("{}.json",path.file_name().unwrap().to_str().unwrap()));
-        if std::env::var_os("CAPY_BLESS").as_deref() == Some(std::ffi::OsStr::new("1")) {
-            std::fs::create_dir_all(expected.parent().unwrap()).unwrap();
-            std::fs::write(&expected,serde_json::to_vec_pretty(&actual).unwrap()).unwrap();
-        }
-        assert_eq!(actual,serde_json::from_slice::<Value>(&std::fs::read(&expected).unwrap()).unwrap(),"{}",expected.display());
+        check(path.file_name().unwrap().to_str().unwrap(),actual);
     }
 }
 
