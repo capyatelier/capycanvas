@@ -522,11 +522,11 @@ mod tests {
 #[test]
 fn gaussian_consumers_admit_extended_sigma_with_bounded_preparation_and_support() {
     use crate::{EffectParameterKind,EffectValue,NumericMapping};
-    for id in ["gaussian_blur","unsharp_mask","high_pass","bloom","soft_focus","pencil"] {
+    for (id,max,soft) in [("gaussian_blur",100.,100.),("unsharp_mask",85.,21.),("high_pass",85.,21.),("bloom",85.,21.),("soft_focus",85.,21.),("pencil",85.,21.)] {
         let mut effect=crate::bundled_effect_catalog().get(id).unwrap().preview().unwrap();
         let sigma=effect.program.parameters.iter().find(|p|p.key.as_ref()=="sigma").unwrap();
-        assert!(matches!(sigma.kind,EffectParameterKind::Number{min:0.,max:85.,..}),"{id}");
-        assert_eq!(sigma.soft_bounds,Some([0.,21.]),"{id}");
+        assert!(matches!(sigma.kind,EffectParameterKind::Number{min:0.,max:m,..} if m==max),"{id}");
+        assert_eq!(sigma.soft_bounds,Some([0.,soft]),"{id}");
         assert_eq!(sigma.mapping,NumericMapping::Power{exponent:0.5},"{id}");
         let lookup=&effect.program.lookups[0];
         assert_eq!((lookup.values,lookup.workgroup_size,lookup.workgroups),(129,[256,1,1],[1,1,1]),"{id}");
@@ -540,6 +540,14 @@ fn gaussian_consumers_admit_extended_sigma_with_bounded_preparation_and_support(
         assert_eq!(effect.program.passes.iter().map(|pass|pass.sampling.radius((&effect).into()).unwrap()).collect::<Vec<_>>(),[510,510],"{id}");
         assert!(effect.set("sigma",EffectValue::Number(-0.5)).is_err(),"{id}");
     }
+}
+#[test]
+fn gaussian_blur_inserts_at_twenty_pixels_and_slides_to_one_hundred() {
+    let program=crate::bundled_effect_catalog().get("gaussian_blur").unwrap().program();
+    assert_eq!(crate::EffectInstance::new(program.clone()).value("sigma"),Some(&crate::EffectValue::Number(20.)));
+    let sigma=program.parameters.iter().find(|p|p.key.as_ref()=="sigma").unwrap();
+    assert!(matches!(sigma.kind,crate::EffectParameterKind::Number{max:100.,..}));
+    assert_eq!(sigma.soft_bounds,Some([0.,100.]));
 }
 
 }

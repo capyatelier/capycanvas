@@ -393,7 +393,7 @@ fn bake_bounds_follow_content_photos_and_effects() {
     effect(&mut doc, "Levels", "levels");
     assert_eq!(bounds(&doc, &["Levels", "Upper"]), expected);
     effect(&mut doc, "Levels", "gaussian_blur");
-    assert_eq!(bounds(&doc, &["Levels", "Upper"]), expected.outset(18.));
+    assert_eq!(bounds(&doc, &["Levels", "Upper"]), Rect { min: Point { x: 246., y: 0. }, max: Point { x: 742., y: 396. } });
     effect(&mut doc, "Levels", "solid_color");
     assert_eq!(bounds(&doc, &["Levels", "Upper"]), Rect { min: Point { x: 100., y: 0. }, max: Point { x: 1024., y: 768. } }, "a fill reaches its authored frame, not the whole bake");
 }

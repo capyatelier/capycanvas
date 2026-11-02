@@ -125,8 +125,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.require_document_idle()?;
         refused(self.separation_refusal())?;
         if self.refuse_object_content() { return Ok(()); }
-        let parameter = SeparationFilters::radius_parameter(&self.effect_catalog).ok_or("Gaussian Blur is missing")?;
-        let numeric = effects::number_control(parameter).ok_or("Gaussian Blur has no radius")?;
+        let parameter = SeparationFilters::radius_parameter(&self.effect_catalog).ok_or("High Pass is missing")?;
+        let numeric = effects::number_control(parameter).ok_or("High Pass has no radius")?;
         let radius = DEFAULT_RADIUS.clamp(numeric.min as f32, numeric.max as f32);
         let filters = SeparationFilters::new(&self.effect_catalog, radius)?;
         let doc = self.engine.document();

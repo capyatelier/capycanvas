@@ -671,11 +671,11 @@
         "parameters": [
           {
             "dimension": "composition_pixels",
-            "default": {"kind":"number","value":3},
+            "default": {"kind":"number","value":20},
             "key": "sigma",
-            "soft_bounds": [0,21],
+            "soft_bounds": [0,100],
             "mapping": {"type":"power","exponent":0.5},
-            "kind": {"decimals":1,"kind":"number","max":85,"min":0,"step":0.1,"unit":"px"},
+            "kind": {"decimals":1,"kind":"number","max":100,"min":0,"step":0.1,"unit":"px"},
             "label": {"message":"resources-parameter-gaussian-blur-sigma"}
           }
         ],

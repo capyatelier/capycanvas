@@ -1238,7 +1238,7 @@ mod tests {
     #[test]
     fn image_footprints_follow_parameters_and_validate_their_bounds() {
         let mut blur = EffectInstance::new(fixture("gaussian_blur").program());
-        assert_eq!(blur.damage_radius(), Some(18));
+        assert_eq!(blur.damage_radius(), Some(120));
         blur.set("sigma", EffectValue::Number(1.)).unwrap();
         assert_eq!(blur.damage_radius(), Some(6));
         blur.set("sigma", EffectValue::Number(0.)).unwrap();

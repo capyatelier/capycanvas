@@ -19,6 +19,7 @@ pub struct SeparationFilters {
 }
 impl SeparationFilters {
     pub const BLUR: &'static str = "gaussian_blur";
+    const DETAIL: &'static str = "high_pass";
     const RADIUS: &'static str = "sigma";
 
     pub fn new(catalog: &EffectCatalog, radius: f32) -> Result<Self, &'static str> {
@@ -29,9 +30,9 @@ impl SeparationFilters {
         Ok(Self { blur: Arc::new(blur) })
     }
 
-    /// The blur's radius parameter, which bounds the radius a dialog offers.
+    /// High Pass's radius parameter, which bounds the radius a dialog offers.
     pub fn radius_parameter(catalog: &EffectCatalog) -> Option<&EffectParameter> {
-        catalog.get(Self::BLUR)?.program.parameters.iter().find(|p| p.key.as_ref() == Self::RADIUS)
+        catalog.get(Self::DETAIL)?.program.parameters.iter().find(|p| p.key.as_ref() == Self::RADIUS)
     }
 }
 #[derive(Clone, Debug)]
