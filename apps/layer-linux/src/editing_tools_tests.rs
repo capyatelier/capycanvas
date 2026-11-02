@@ -234,7 +234,7 @@ fn native_enclose_fill_pointer_workflow() {
         let tools = w.panel_widget(Panel::Brushes);
         let groups = widgets(&tools).find(|widget| widget.has_css_class("tool-groups")).unwrap();
         assert_eq!(state(&w).tool_set.groups.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>(),
-            ["Fill", "Lasso fill", "Enclose and Fill"]);
+            ["Fill", "Lasso fill", "Enclose and Fill", "Paint unfilled areas"]);
         for label in ["Lasso fill", "Enclose and Fill", "Fill", "Enclose and Fill"] {
             input.click(screen_point(&mapped_label(&groups, label).unwrap(), &w.window, [0.5, 0.5]));
         }
@@ -266,13 +266,8 @@ fn native_enclose_fill_pointer_workflow() {
         invoke(&w, CommandId::Redo); ready(&w);
         assert!(!ui_session(&w).engine().document().scene().occurrence(reference).unwrap().reference);
         invoke(&w, CommandId::Undo); ready(&w);
-        let stop = named::<gtk::CheckButton>(&w.panel_widget(Panel::ToolSettings), "tool-action-StopAtColors");
-        histogram::scroll_to(stop.upcast_ref());
-        assert!(stop.is_active() && ui_session(&w).command(CommandId::StopAtColors).selected);
-        for selected in [false, true] {
-            input.click(screen_point(stop.upcast_ref(), &w.window, [0.5, 0.5]));
-            assert_eq!(ui_session(&w).command(CommandId::StopAtColors).selected, selected);
-        }
+        assert!(find_named(&w.panel_widget(Panel::ToolSettings), "tool-action-StopAtColors").is_none());
+        assert!(ui_session(&w).command(CommandId::FillAreasTransparent).selected);
         capture_ui(&w, &output, &format!("enclose-controls-{theme:?}.png"));
         let source = find_named(&w.panel_widget(Panel::ToolSettings), "tool-choice-bar-selection-source").unwrap();
         histogram::scroll_to(&source);
@@ -351,6 +346,13 @@ fn native_enclose_fill_pointer_workflow() {
         let lines = named::<gtk::ToggleButton>(&w.panel_widget(Panel::ToolSettings), "tool-choice-selection-source-0");
         histogram::scroll_to(lines.upcast_ref());
         input.click(screen_point(lines.upcast_ref(), &w.window, [0.5, 0.5]));
+        let stop = named::<gtk::CheckButton>(&w.panel_widget(Panel::ToolSettings), "tool-action-StopAtColors");
+        histogram::scroll_to(stop.upcast_ref());
+        assert!(stop.is_active() && ui_session(&w).command(CommandId::StopAtColors).selected);
+        for selected in [false, true] {
+            input.click(screen_point(stop.upcast_ref(), &w.window, [0.5, 0.5]));
+            assert_eq!(ui_session(&w).command(CommandId::StopAtColors).selected, selected);
+        }
         for (index, everywhere) in [(0, false), (1, true)] {
             let scope = named::<gtk::DropDown>(&w.panel_widget(Panel::ToolSettings), "tool-action-group-fill-scope");
             histogram::scroll_to(scope.upcast_ref());

@@ -15,6 +15,7 @@ fn apple_enclose_fill_flat_choices_and_source_use_native_transport() {
             let fill = label("fill");
             let lasso = label("lasso_fill");
             let enclose = label("enclose_fill");
+            let unfilled = label("paint_unfilled");
             let choose = |section: &str, label: &Value| app.action(app.state()["tool_set"][section]
                 .as_array().unwrap().iter().find(|item| item["label"] == *label).unwrap()["action"].clone());
             let selected = |command: &str| app.state()["commands"].as_array().unwrap().iter()
@@ -28,7 +29,7 @@ fn apple_enclose_fill_flat_choices_and_source_use_native_transport() {
             assert!(selected("lasso_fill"));
             choose("groups", &enclose);
             let state = app.full_snapshot()["state"].clone();
-            assert_eq!(state["tool_set"]["groups"].as_array().unwrap().iter().map(|item| item["label"].clone()).collect::<Vec<_>>(), [fill, lasso.clone(), enclose.clone()]);
+            assert_eq!(state["tool_set"]["groups"].as_array().unwrap().iter().map(|item| item["label"].clone()).collect::<Vec<_>>(), [fill, lasso.clone(), enclose.clone(), unfilled]);
             assert!(state["tool_set"]["subtools"].as_array().unwrap().is_empty());
             assert!(selected("enclose_fill"));
             for source in ["selection_visible", "selection_editing", "selection_reference"] {

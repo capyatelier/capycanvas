@@ -812,7 +812,7 @@ class AndroidRasterTest {
             chooseTool("tool-group-$fill", "fill")
             chooseTool("tool-group-$enclose", "enclose_fill")
             val tools = published().getJSONObject("tool_set")
-            assertEquals(listOf(fill, lasso, enclose), tools.array("groups").objects().map { it.getString("label") })
+            assertEquals(listOf(fill, lasso, enclose, label("paint_unfilled")), tools.array("groups").objects().map { it.getString("label") })
             assertEquals(enclose, tools.array("groups").objects().single { it.getBoolean("selected") }.getString("label"))
             val group = host.snapshot!!.getJSONObject("layout").array("groups").objects().first { "tool_settings" in it.array("panels").values() }.getInt("id")
             ui(obj("type" to "select_panel_tab", "group" to group, "panel" to "tool_settings"))
@@ -826,6 +826,12 @@ class AndroidRasterTest {
                     assertEquals(2.0, field.getJSONObject("numeric").getDouble("max"), 0.0)
                 }
             }
+            ui(obj("type" to "invoke", "command" to "fill"))
+            settings("tool-action-stop_at_colors").performScrollTo().assertIsOn().performClick(); host.drain()
+            assertFalse(selected("stop_at_colors"))
+            settings("tool-action-stop_at_colors").performClick(); host.drain()
+            assertTrue(selected("stop_at_colors"))
+            ui(obj("type" to "invoke", "command" to "enclose_fill"))
             for (command in listOf("selection_visible", "selection_editing", "selection_reference")) {
                 val source = published().array("tool_extra").objects().single { it.has("Choice") && it.getJSONObject("Choice").getString("id") == "selection-source" }.getJSONObject("Choice")
                 val index = source.array("items").objects().indexOfFirst { it.getJSONObject("action").getString("command") == command }
@@ -840,10 +846,8 @@ class AndroidRasterTest {
             settings("tool-check-reference-layers-$referenceIndex").assertIsOff()
             ui(obj("type" to "invoke", "command" to "undo"))
             settings("tool-check-reference-layers-$referenceIndex").assertIsOn()
-            settings("tool-action-stop_at_colors").performScrollTo().assertIsOn().performClick(); host.drain()
-            assertFalse(selected("stop_at_colors"))
-            settings("tool-action-stop_at_colors").performClick(); host.drain()
-            assertTrue(selected("stop_at_colors"))
+            settings("tool-action-stop_at_colors").assertDoesNotExist()
+            assertTrue(selected("fill_areas_transparent"))
             for (id in listOf("close-gaps", "region-edges")) {
                 val choice = published().array("tool_extra").objects().single { it.has("Choice") && it.getJSONObject("Choice").getString("id") == id }.getJSONObject("Choice")
                 for ((index, item) in choice.array("items").objects().withIndex()) {
