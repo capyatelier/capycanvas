@@ -231,6 +231,7 @@ pub(super) struct Startup {
     transform: bool,
     pub(super) document: Requirements,
     pub(super) current: Requirements,
+    pub(super) strokes: Requirements,
     resized: Requirements,
     preparation: Arc<std::sync::atomic::AtomicU64>,
     effects: Option<mpsc::Receiver<Result<effects::Effects, String>>>,
@@ -298,6 +299,7 @@ impl Startup {
             transform: false,
             document: Requirements::default(),
             current: Requirements::default(),
+            strokes: Requirements::default(),
             resized: Requirements::default(),
             preparation: Default::default(),
             effects: None,
@@ -501,6 +503,7 @@ impl WgpuRasterizer {
             }
         }
         let mut current = Requirements::default();
+        let mut strokes = Requirements::default();
         let mut resized = Requirements::default();
         // Native publication must be ready before accepting a brush contact,
         // but blank paper does not depend on writeback/promotion/validation.
@@ -518,7 +521,7 @@ impl WgpuRasterizer {
                 self.papers.require(&self.device, Some(&startup.compiler), binding, BRUSH)?;
             }
             let mask = startup.document_key.as_ref().unwrap().key.mask;
-            current.style(self, &style, dry_material::Reach::of(brush), mask, true);
+            strokes.style(self, &style, dry_material::Reach::of(brush), mask, true);
             resized.style(self, &style, dry_material::Reach::of(brush).any_size(), mask, true);
         }
         // Live transforms do not change document revision or brush settings.
@@ -536,7 +539,9 @@ impl WgpuRasterizer {
             current.compute.extend(compute);
         }
         current.enqueue(&startup.compiler, BRUSH);
+        strokes.enqueue(&startup.compiler, BRUSH);
         startup.current = current;
+        startup.strokes = strokes;
         startup.resized = resized;
         startup.preparation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         startup.brush = Some(ShaderBrushKey::new(document, brush));
@@ -596,7 +601,7 @@ impl WgpuRasterizer {
         #[cfg(target_arch = "wasm32")]
         let canvas_ready = canvas_ready && startup.compiler.ready_through(DOCUMENT);
         let brush_ready =
-            canvas_ready && startup.current.ready() && startup.masks.ready_through(BRUSH) && self.papers.ready_through(BRUSH);
+            canvas_ready && startup.current.ready() && startup.strokes.ready() && startup.masks.ready_through(BRUSH) && self.papers.ready_through(BRUSH);
         #[cfg(target_arch = "wasm32")]
         let brush_ready = brush_ready && startup.compiler.ready_through(BRUSH);
         startup.brush_ready = brush_ready;
@@ -835,7 +840,7 @@ mod tests {
         brush.opacity *= 0.5;
         assert!(!renderer.startup_needs_update(&document, &brush, false));
         let style = brush_style(&document, &brush, StrokeTool::Brush);
-        assert!(!renderer.startup.as_ref().unwrap().current.covers(&style));
+        assert!(!renderer.startup.as_ref().unwrap().strokes.covers(&style));
         let damage = layer_core::Rect { min: layer_core::Point { x: 1., y: 1. }, max: layer_core::Point { x: 12., y: 12. } };
         let batches = [crate::test_support::dab_batch(document.drawing_target().unwrap(), style, damage)];
         let packet = layer_render::FramePacket { dab_batches: &batches, ..crate::test_support::packet(document.scene(), [128; 2]) };
@@ -1324,8 +1329,13 @@ mod gpu_tests {
         ]).unwrap());
         document.revision += 1;
         renderer.prepare_startup(&document, &brush, false).unwrap();
-        crate::test_support::wait_startup(&mut renderer, deadline, |p| p.brush_ready, format_args!("selected Pencil"));
         let selected = layer_render::DabStyle { selection: document.working.selection.clone().map(Arc::new), ..style.clone() };
+        assert!(![FINE_TIP, 0].into_iter().all(|extra| renderer.pipelines.dry_material.selected_kernel(&selected, plan.material, plan.state.coverage, extra).ready()),
+            "the selection needs new stroke kernels");
+        assert!(renderer.raster_dependencies_ready(crate::test_support::packet(document.scene(), [128; 2]), None),
+            "a frame without strokes does not wait for the selected brush");
+        assert!(!renderer.poll_startup().unwrap().brush_ready, "pen contacts still wait for the selected brush");
+        crate::test_support::wait_startup(&mut renderer, deadline, |p| p.brush_ready, format_args!("selected Pencil"));
         let committed = &renderer.pipelines.dry_material;
         assert!([FINE_TIP, 0].into_iter().all(|extra| committed.selected_kernel(&selected, plan.material, plan.state.coverage, extra).ready()),
             "a selection clips each dab, so its strokes use the mixed-pigment kernels");

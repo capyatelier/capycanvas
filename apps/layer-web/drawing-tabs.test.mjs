@@ -91,9 +91,9 @@ export async function checkDrawingTabRecovery({cdp,call,evaluate,settle}) {
     }
   } finally {await call('Page.removeScriptToEvaluateOnNewDocument',{identifier:counter.identifier});}
   await ready();await installSave();
-  const first=(await tabs()).selected;
+  const first=(await tabs()).selected,known=(await tabs()).tabs.map(tab=>String(tab.id));
+  await evaluate(`window.sessionCaptureOriginal=layerApp.app.capture_tab_session.bind(layerApp.app);layerApp.app.capture_tab_session=id=>${JSON.stringify(known)}.includes(String(id))?sessionCaptureOriginal(id):{write:async()=>{throw Error('Injected first checkpoint failure')},free(){}};`);
   const pending=await create();
-  await evaluate(`window.sessionCaptureOriginal=layerApp.app.capture_tab_session.bind(layerApp.app);layerApp.app.capture_tab_session=id=>String(id)===String(${pending})?{write:async()=>{throw Error('Injected first checkpoint failure')},free(){}}:sessionCaptureOriginal(id);`);
   try {
     assert.equal(await evaluate('layerApp.documents.autosave().then(()=>false,()=>true)'),true,'First checkpoint failure is reported');
     assert.equal(await evaluate(`(async()=>{const store=(await import(${JSON.stringify(storeUrl)})).createRestartStore();for(const key of await store.windows()){const manifest=await store.manifest(key),drawing=manifest.drawings.find(drawing=>String(drawing.id)===String(${pending}));if(drawing)return !(await store.read(drawing.key));}return false;})()`),true,'First checkpoint failure retains authoritative membership for retry');

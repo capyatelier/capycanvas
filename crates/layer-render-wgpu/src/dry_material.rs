@@ -593,7 +593,7 @@ impl WgpuRasterizer {
             pass.set_bind_group(2, job.inputs(), &[job.record_offset]);
             let cropped=!job.coverage && cropped;
             let kernel=pipelines.selected_kernel(&batch.style,operation,job.coverage,extra);
-            debug_assert!(kernel.ready() || !self.startup.as_ref().is_some_and(|s| s.current.covers(&batch.style)), "dry kernel {extra:#x} was not prepared for its brush");
+            debug_assert!(kernel.ready() || !self.startup.as_ref().is_some_and(|s| s.strokes.covers(&batch.style)), "dry kernel {extra:#x} was not prepared for its brush");
             pass.set_pipeline(kernel);
             let dirty=job.dirty;
             let size=if cropped {[dirty.max_x().div_ceil(block)-dirty.min_x()/block,

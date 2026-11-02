@@ -1937,7 +1937,7 @@ impl WgpuRasterizer {
                 }
             }
             ready &= self.brush_textures_ready(&batch.style);
-            if let Some(startup) = &self.startup && !startup.current.covers(&batch.style) {
+            if let Some(startup) = &self.startup && !startup.strokes.covers(&batch.style) {
                 let dabs = packet.dabs.get(batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize).unwrap_or_default();
                 let mask = layer_masks::MaskRenderer::is_mask(packet.scene, batch.target);
                 let mut required = startup::Requirements::default();
