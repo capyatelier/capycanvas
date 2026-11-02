@@ -22,6 +22,8 @@ reset action. Theme colors use the shared
 
 In GTK phone pages, Back moves from a shortcut category to its list, then to the
 Preferences list, with one Back button at each step.
+GTK dropdown values without icons keep short values whole on one line. Longer
+values can shorten in narrow rows while their title and subtitle wrap.
 
 An accepted preference edit applies immediately and requests persistence.
 **Language** updates the running session, including open dialogs, search results,

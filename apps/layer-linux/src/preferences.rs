@@ -768,6 +768,21 @@ impl Preferences {
                                 });
                                 control.set_factory(Some(&factory));
                                 control.set_list_factory(Some(&factory));
+                            } else {
+                                let factory = gtk::SignalListItemFactory::new();
+                                factory.connect_setup(|_, item| {
+                                    let label = gtk::Label::builder().wrap(false)
+                                        .ellipsize(gtk::pango::EllipsizeMode::End).width_chars(14).xalign(1.).build();
+                                    label.set_widget_name("preference-choice-value");
+                                    item.downcast_ref::<gtk::ListItem>().unwrap().set_child(Some(&label));
+                                });
+                                factory.connect_bind(|_, item| {
+                                    let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+                                    let text = item.item().and_downcast::<gtk::StringObject>().unwrap().string();
+                                    item.child().and_downcast::<gtk::Label>().unwrap().set_text(&text);
+                                });
+                                control.set_factory(Some(&factory));
+                                control.set_list_factory(Some(&factory));
                             }
                             control.connect_selected_notify(glib::clone!(
                                 #[weak]

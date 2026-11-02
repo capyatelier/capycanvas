@@ -432,6 +432,24 @@ fn native_phone_navigation_headers() {
         until(|| split.shows_content(), "Preferences opens its page from the root list");
         capture(&mut d, &format!("preferences-{}", settings.key()));
         assert!(split.is_collapsed(), "Preferences {} keeps one pane on a phone", settings.key());
+        let preferences = ui_session(&d.w).preferences().unwrap();
+        let page = preferences.pages.iter().find(|page| page.id == settings).unwrap();
+        for row in page.groups.iter().flat_map(|group| &group.rows).filter(|row| row.visible
+            && matches!(&row.kind, PreferenceKind::Choice { icons, presentation: ChoicePresentation::Dropdown, .. } if icons.is_empty())) {
+            let native = named::<adw::ComboRow>(&frame, &format!("setting-{}", row.id.key()));
+            super::histogram::scroll_to(native.upcast_ref());
+            drop(idle_paint(&d.w.window));
+            let values = descendants::<gtk::Label>(native.upcast_ref()).into_iter()
+                .filter(|label| label.is_mapped() && label.widget_name() == "preference-choice-value").collect::<Vec<_>>();
+            assert!(!values.is_empty(), "Preferences {} choice {} presents its selected value", settings.key(), row.id.key());
+            for label in &values {
+                assert_eq!(label.layout().line_count(), 1, "Preferences {} choice {} stays on one line", settings.key(), row.id.key());
+                if frame.width() >= 412 || label.text().chars().count() <= 14 {
+                    assert!(!label.layout().is_ellipsized(), "Preferences {} choice {} keeps its whole value: {:?}", settings.key(), row.id.key(), label.text());
+                }
+            }
+            capture(&mut d, &format!("preferences-{}-{}", settings.key(), row.id.key()));
+        }
         let subpage = navigation_header(&d, &frame, false);
         assert!(gtk::prelude::GtkWindowExt::default_widget(&d.w.window).is_none(), "Preferences has no synthesized primary");
         if settings == SettingsPage::Shortcuts {
