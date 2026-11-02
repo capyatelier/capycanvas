@@ -117,12 +117,13 @@ action, and report unfinished verification. Documented unavailable hardware
 checks need not block an otherwise passing implementation milestone, but remain
 unverified and cannot support a claim of fully verified parity.
 
-Commit complete feature milestones and push each as soon as its relevant checks
-pass; `origin/main` changes faster than heavy suites run. Fetch and rebase before
+Commit complete feature milestones and push each once its relevant checks pass,
+with the commit size and cadence in the [commit guide](COMMIT_GUIDE.md#sharing-main);
+`origin/main` changes faster than heavy suites run. Fetch and rebase before
 pushing, inspect new upstream commits, update the target and ledger, and rerun
 only the checks that conflicts or upstream changes to the same code affect, never
 heavy validation because unrelated commits landed. When in doubt, push first,
-then validate further and fix what you find in a separate commit.
+then validate further and fold what you find into the next milestone commit.
 Finish against the final fetched target SHA; later commits belong to the next
 batch. Advance the watermark only through a contiguous range with all required
 work closed, using `Ported Windows origin/main through <sha>` in the commit body.
