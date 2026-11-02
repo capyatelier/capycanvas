@@ -45,8 +45,8 @@ workspace-included-description = { $description }
 workspace-delete-confirm = 要刪除「{ $name }」嗎？此動作無法復原。
 workspace-delete-active-confirm = 要刪除「{ $name }」嗎？此動作無法復原。此視窗將切換至可用的預設工作區。
 workspace-update-toolbar-confirm = 從{ $workspace }中選擇工具列，取代已儲存的{ $toolbar }。現有工作區副本保持不變。
-workspace-reset-default-confirm = 恢復此工作區最新的預設版面配置。此對話方塊後方顯示的版面配置是預覽。可透過{ $menu } → 復原版面配置變更來復原此次恢復。
-workspace-reset-saved-confirm = 恢復此工作區已儲存的初始版面配置。此對話方塊後方顯示的版面配置是預覽。可透過{ $menu } → 復原版面配置變更來復原此次恢復。
+workspace-reset-default-confirm = 恢復此工作區最新的預設版面配置。此對話方塊後方顯示的版面配置是預覽。可透過{ $menu } → { $undo }來復原此次恢復。
+workspace-reset-saved-confirm = 恢復此工作區已儲存的初始版面配置。此對話方塊後方顯示的版面配置是預覽。可透過{ $menu } → { $undo }來復原此次恢復。
 workspace-history-added = 新增{ $panels }
 workspace-history-deleted = 刪除{ $panels }
 workspace-history-moved = 移動{ $panels }
@@ -707,4 +707,4 @@ workspace-launch-window-size = 初始視窗大小
 
 workspace-phone-tool-limit = 手機工具列最多可容納十個工具。
 
-workspace-reset-phone-confirm = 恢復此工作區起始的手機工具列。可透過{ $menu } → 復原版面配置變更來復原此次恢復。
+workspace-reset-phone-confirm = 恢復此工作區起始的手機工具列。可透過{ $menu } → { $undo }來復原此次恢復。

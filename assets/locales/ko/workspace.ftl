@@ -45,8 +45,8 @@ workspace-included-description = { $description }
 workspace-delete-confirm = “{ $name }” 항목을 삭제할까요? 되돌릴 수 없습니다.
 workspace-delete-active-confirm = “{ $name }” 작업 영역을 삭제할까요? 되돌릴 수 없습니다. 이 창은 사용 가능한 기본 작업 영역으로 전환됩니다.
 workspace-update-toolbar-confirm = 저장된 { $toolbar } 도구 모음을 교체할 도구 모음을 { $workspace } 작업 영역에서 선택하세요. 기존 작업 영역의 복사본은 그대로 유지됩니다.
-workspace-reset-default-confirm = 이 작업 영역의 최신 기본 레이아웃을 복원합니다. 대화 상자 뒤에 보이는 배치는 미리 보기입니다. { $menu } → 레이아웃 변경 실행 취소로 복원을 되돌릴 수 있습니다.
-workspace-reset-saved-confirm = 이 작업 영역에 저장된 시작 레이아웃을 복원합니다. 대화 상자 뒤에 보이는 배치는 미리 보기입니다. { $menu } → 레이아웃 변경 실행 취소로 복원을 되돌릴 수 있습니다.
+workspace-reset-default-confirm = 이 작업 영역의 최신 기본 레이아웃을 복원합니다. 대화 상자 뒤에 보이는 배치는 미리 보기입니다. { $menu } → { $undo }로 복원을 되돌릴 수 있습니다.
+workspace-reset-saved-confirm = 이 작업 영역에 저장된 시작 레이아웃을 복원합니다. 대화 상자 뒤에 보이는 배치는 미리 보기입니다. { $menu } → { $undo }로 복원을 되돌릴 수 있습니다.
 workspace-history-added = 추가: { $panels }
 workspace-history-deleted = 삭제: { $panels }
 workspace-history-moved = 이동: { $panels }
@@ -707,4 +707,4 @@ workspace-launch-window-size = 시작 창 크기
 
 workspace-phone-tool-limit = 휴대폰 도구 모음에는 도구를 최대 10개까지 넣을 수 있습니다.
 
-workspace-reset-phone-confirm = 이 작업 영역의 초기 휴대폰 도구 모음을 복원합니다. { $menu } → 레이아웃 변경 실행 취소로 복원을 되돌릴 수 있습니다.
+workspace-reset-phone-confirm = 이 작업 영역의 초기 휴대폰 도구 모음을 복원합니다. { $menu } → { $undo }로 복원을 되돌릴 수 있습니다.

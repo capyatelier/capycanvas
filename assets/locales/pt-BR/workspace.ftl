@@ -46,8 +46,8 @@ workspace-included-description = { $description }
 workspace-delete-confirm = Excluir “{ $name }”? Esta ação é permanente.
 workspace-delete-active-confirm = Excluir “{ $name }”? Esta ação é permanente. Esta janela mudará para uma área de trabalho padrão disponível.
 workspace-update-toolbar-confirm = Escolha uma barra de ferramentas de { $workspace } para substituir { $toolbar } salva. As cópias existentes nas áreas de trabalho permanecem como estão.
-workspace-reset-default-confirm = Restaurar o layout padrão mais recente desta área de trabalho. A organização mostrada atrás deste diálogo é uma prévia. Você pode desfazer a restauração em { $menu } → Desfazer alteração de layout.
-workspace-reset-saved-confirm = Restaurar o layout inicial salvo desta área de trabalho. A organização mostrada atrás deste diálogo é uma prévia. Você pode desfazer a restauração em { $menu } → Desfazer alteração de layout.
+workspace-reset-default-confirm = Restaurar o layout padrão mais recente desta área de trabalho. A organização mostrada atrás deste diálogo é uma prévia. Você pode desfazer a restauração em { $menu } → { $undo }.
+workspace-reset-saved-confirm = Restaurar o layout inicial salvo desta área de trabalho. A organização mostrada atrás deste diálogo é uma prévia. Você pode desfazer a restauração em { $menu } → { $undo }.
 workspace-history-added = Adicionado: { $panels }
 workspace-history-deleted = Excluído: { $panels }
 workspace-history-moved = Movido: { $panels }
@@ -687,4 +687,4 @@ workspace-launch-window-size = Tamanho inicial da janela
 
 workspace-phone-tool-limit = A barra de ferramentas do celular comporta até dez ferramentas.
 
-workspace-reset-phone-confirm = Restaurar a barra de ferramentas inicial do celular desta área de trabalho. Você pode desfazer a restauração em { $menu } → Desfazer alteração de layout.
+workspace-reset-phone-confirm = Restaurar a barra de ferramentas inicial do celular desta área de trabalho. Você pode desfazer a restauração em { $menu } → { $undo }.

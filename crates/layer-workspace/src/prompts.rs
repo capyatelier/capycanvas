@@ -197,7 +197,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 }
                 ManagerPrompt::confirm(
                     self.localization().text(layer_ui::MessageId::WORKSPACE_RESTORE_STARTING_LAYOUT).to_string(),
-                    message(&self.localization(), if phone { layer_ui::MessageId::WORKSPACE_RESET_PHONE_CONFIRM } else if s.builtin && is_default_item(id) { layer_ui::MessageId::WORKSPACE_RESET_DEFAULT_CONFIRM } else { layer_ui::MessageId::WORKSPACE_RESET_SAVED_CONFIRM }, &[("menu", self.localization().text(layer_ui::MessageId::WORKSPACE_MENU).to_string())]),
+                    message(&self.localization(), if phone { layer_ui::MessageId::WORKSPACE_RESET_PHONE_CONFIRM } else if s.builtin && is_default_item(id) { layer_ui::MessageId::WORKSPACE_RESET_DEFAULT_CONFIRM } else { layer_ui::MessageId::WORKSPACE_RESET_SAVED_CONFIRM }, &[("menu", self.localization().text(layer_ui::MessageId::WORKSPACE_MENU).to_string()), ("undo", self.localization().text(layer_ui::MessageId::COMMAND_UNDO_WORKSPACE).to_string())]),
                     self.localization().text(layer_ui::MessageId::WORKSPACE_RESTORE).to_string(),
                 )
             }

@@ -954,7 +954,8 @@ fn starting_layout_dialog_previews_without_saving_and_restore_is_undoable() {
                 )
                 .unwrap();
             assert_eq!(prompt.message, expected.message);
-            assert!(prompt.message.contains("Window → Undo Workspace"));
+            assert!(prompt.message.contains(&format!("{} → {}", f.host.session.localization().text(layer_ui::MessageId::WORKSPACE_MENU),
+                f.host.session.command(layer_ui::CommandId::UndoWorkspace).label)));
             if builtin.is_some() {
                 assert!(prompt.message.contains("latest default"));
             } else {
@@ -2770,3 +2771,6 @@ fn focus_refresh_keeps_pending_and_submitted_paths_and_saves_remote_palettes_wit
     assert!(!c.session.editing_state().region_smooth_edges);
     }
 }
+
+#[path = "phone_restore_command_tests.rs"]
+mod phone_restore_commands;

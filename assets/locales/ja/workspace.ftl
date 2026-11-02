@@ -45,8 +45,8 @@ workspace-included-description = { $description }
 workspace-delete-confirm = 「{ $name }」を削除しますか？この操作は元に戻せません。
 workspace-delete-active-confirm = 「{ $name }」を削除しますか？この操作は元に戻せません。このウィンドウは、使用できる初期設定のワークスペースに切り替わります。
 workspace-update-toolbar-confirm = { $workspace }からツールバーを選び、保存済みの{ $toolbar }を置き換えます。既存のワークスペース内のコピーは変わりません。
-workspace-reset-default-confirm = このワークスペースを最新の初期レイアウトに戻します。この画面の後ろに表示されている配置はプレビューです。復元は「{ $menu }」→「レイアウトの変更を元に戻す」で取り消せます。
-workspace-reset-saved-confirm = このワークスペースに保存されている開始時のレイアウトに戻します。この画面の後ろに表示されている配置はプレビューです。復元は「{ $menu }」→「レイアウトの変更を元に戻す」で取り消せます。
+workspace-reset-default-confirm = このワークスペースを最新の初期レイアウトに戻します。この画面の後ろに表示されている配置はプレビューです。復元は「{ $menu }」→「{ $undo }」で取り消せます。
+workspace-reset-saved-confirm = このワークスペースに保存されている開始時のレイアウトに戻します。この画面の後ろに表示されている配置はプレビューです。復元は「{ $menu }」→「{ $undo }」で取り消せます。
 workspace-history-added = { $panels }を追加
 workspace-history-deleted = { $panels }を削除
 workspace-history-moved = { $panels }を移動
@@ -707,4 +707,4 @@ workspace-launch-window-size = 起動時のウィンドウサイズ
 
 workspace-phone-tool-limit = スマートフォンのツールバーには、最大10個のツールを配置できます。
 
-workspace-reset-phone-confirm = このワークスペースのスマートフォン用ツールバーを初期状態に戻します。「{ $menu }」→「レイアウトの変更を元に戻す」で取り消せます。
+workspace-reset-phone-confirm = このワークスペースのスマートフォン用ツールバーを初期状態に戻します。「{ $menu }」→「{ $undo }」で取り消せます。

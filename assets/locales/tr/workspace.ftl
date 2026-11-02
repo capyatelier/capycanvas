@@ -45,8 +45,8 @@ workspace-included-description = { $description }
 workspace-delete-confirm = “{ $name }” silinsin mi? Bu işlem kalıcıdır.
 workspace-delete-active-confirm = “{ $name }” silinsin mi? Bu işlem kalıcıdır. Bu pencere kullanılabilir bir varsayılan çalışma alanına geçer.
 workspace-update-toolbar-confirm = Kaydedilen { $toolbar } çubuğunu değiştirmek için { $workspace } çalışma alanından bir araç çubuğu seçin. Mevcut çalışma alanı kopyaları aynı kalır.
-workspace-reset-default-confirm = Bu çalışma alanının en yeni varsayılan düzenini geri yükleyin. İletişim kutusunun arkasında gösterilen düzen bir önizlemedir. Geri yüklemeyi { $menu } → Düzen değişikliğini geri al ile geri alabilirsiniz.
-workspace-reset-saved-confirm = Bu çalışma alanının kaydedilmiş başlangıç düzenini geri yükleyin. İletişim kutusunun arkasında gösterilen düzen bir önizlemedir. Geri yüklemeyi { $menu } → Düzen değişikliğini geri al ile geri alabilirsiniz.
+workspace-reset-default-confirm = Bu çalışma alanının en yeni varsayılan düzenini geri yükleyin. İletişim kutusunun arkasında gösterilen düzen bir önizlemedir. Geri yüklemeyi { $menu } → { $undo } ile geri alabilirsiniz.
+workspace-reset-saved-confirm = Bu çalışma alanının kaydedilmiş başlangıç düzenini geri yükleyin. İletişim kutusunun arkasında gösterilen düzen bir önizlemedir. Geri yüklemeyi { $menu } → { $undo } ile geri alabilirsiniz.
 workspace-history-added = Eklendi: { $panels }
 workspace-history-deleted = Silindi: { $panels }
 workspace-history-moved = Taşındı: { $panels }
@@ -681,4 +681,4 @@ workspace-launch-window-size = Başlangıç pencere boyutu
 
 workspace-phone-tool-limit = Telefon araç çubuğu en fazla on araç alabilir.
 
-workspace-reset-phone-confirm = Bu çalışma alanının başlangıçtaki telefon araç çubuğunu geri yükleyin. Geri yüklemeyi { $menu } → Düzen değişikliğini geri al ile geri alabilirsiniz.
+workspace-reset-phone-confirm = Bu çalışma alanının başlangıçtaki telefon araç çubuğunu geri yükleyin. Geri yüklemeyi { $menu } → { $undo } ile geri alabilirsiniz.

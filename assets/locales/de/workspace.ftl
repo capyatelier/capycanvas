@@ -45,8 +45,8 @@ workspace-included-description = { $description }
 workspace-delete-confirm = „{ $name }“ löschen? Dies ist endgültig.
 workspace-delete-active-confirm = „{ $name }“ löschen? Dies ist endgültig. Dieses Fenster wechselt zu einem verfügbaren Standardarbeitsbereich.
 workspace-update-toolbar-confirm = Eine Werkzeugleiste aus { $workspace } wählen, um die gespeicherte Werkzeugleiste { $toolbar } zu ersetzen. Vorhandene Arbeitsbereichskopien bleiben erhalten.
-workspace-reset-default-confirm = Das aktuelle Standardlayout dieses Arbeitsbereichs wiederherstellen. Die Anordnung hinter diesem Dialog ist eine Vorschau. Das Wiederherstellen lässt sich mit { $menu } → Layoutänderung rückgängig wieder aufheben.
-workspace-reset-saved-confirm = Das gespeicherte Ausgangslayout dieses Arbeitsbereichs wiederherstellen. Die Anordnung hinter diesem Dialog ist eine Vorschau. Das Wiederherstellen lässt sich mit { $menu } → Layoutänderung rückgängig wieder aufheben.
+workspace-reset-default-confirm = Das aktuelle Standardlayout dieses Arbeitsbereichs wiederherstellen. Die Anordnung hinter diesem Dialog ist eine Vorschau. Das Wiederherstellen lässt sich mit { $menu } → { $undo } wieder aufheben.
+workspace-reset-saved-confirm = Das gespeicherte Ausgangslayout dieses Arbeitsbereichs wiederherstellen. Die Anordnung hinter diesem Dialog ist eine Vorschau. Das Wiederherstellen lässt sich mit { $menu } → { $undo } wieder aufheben.
 workspace-history-added = { $panels } hinzugefügt
 workspace-history-deleted = { $panels } gelöscht
 workspace-history-moved = { $panels } verschoben
@@ -684,4 +684,4 @@ workspace-launch-window-size = Anfängliche Fenstergröße
 
 workspace-phone-tool-limit = Die Telefon-Werkzeugleiste bietet Platz für bis zu zehn Werkzeuge.
 
-workspace-reset-phone-confirm = Die ursprüngliche Telefon-Werkzeugleiste dieses Arbeitsbereichs wiederherstellen. Das lässt sich mit { $menu } → Layoutänderung rückgängig wieder aufheben.
+workspace-reset-phone-confirm = Die ursprüngliche Telefon-Werkzeugleiste dieses Arbeitsbereichs wiederherstellen. Das lässt sich mit { $menu } → { $undo } wieder aufheben.

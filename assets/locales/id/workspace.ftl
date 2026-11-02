@@ -86,9 +86,9 @@ workspace-delete-active-confirm = Hapus “{ $name }”? Ini permanen. Jendela i
 
 workspace-update-toolbar-confirm = Pilih bilah alat dari { $workspace } untuk mengganti { $toolbar } tersimpan. Salinan ruang kerja yang ada tetap seperti semula.
 
-workspace-reset-default-confirm = Pulihkan tata letak bawaan terbaru untuk ruang kerja ini. Susunan di belakang dialog ini adalah pratinjau. Anda dapat mengurungkan pemulihan dengan { $menu } → Urungkan Perubahan Tata Letak.
+workspace-reset-default-confirm = Pulihkan tata letak bawaan terbaru untuk ruang kerja ini. Susunan di belakang dialog ini adalah pratinjau. Anda dapat mengurungkan pemulihan dengan { $menu } → { $undo }.
 
-workspace-reset-saved-confirm = Pulihkan tata letak awal tersimpan ruang kerja ini. Susunan di belakang dialog ini adalah pratinjau. Anda dapat mengurungkan pemulihan dengan { $menu } → Urungkan Perubahan Tata Letak.
+workspace-reset-saved-confirm = Pulihkan tata letak awal tersimpan ruang kerja ini. Susunan di belakang dialog ini adalah pratinjau. Anda dapat mengurungkan pemulihan dengan { $menu } → { $undo }.
 
 workspace-history-added = Menambahkan { $panels }
 
@@ -1258,4 +1258,4 @@ workspace-launch-window-size = Ukuran awal jendela
 
 workspace-phone-tool-limit = Bilah alat ponsel dapat memuat hingga sepuluh alat.
 
-workspace-reset-phone-confirm = Pulihkan bilah alat ponsel awal ruang kerja ini. Anda dapat mengurungkan pemulihan dengan { $menu } → Urungkan Perubahan Tata Letak.
+workspace-reset-phone-confirm = Pulihkan bilah alat ponsel awal ruang kerja ini. Anda dapat mengurungkan pemulihan dengan { $menu } → { $undo }.

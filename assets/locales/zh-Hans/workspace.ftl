@@ -45,8 +45,8 @@ workspace-included-description = { $description }
 workspace-delete-confirm = 删除“{ $name }”吗？此操作无法撤销。
 workspace-delete-active-confirm = 删除“{ $name }”吗？此操作无法撤销。此窗口将切换到可用的默认工作区。
 workspace-update-toolbar-confirm = 从{ $workspace }中选择工具栏，替换已保存的{ $toolbar }。现有工作区副本保持不变。
-workspace-reset-default-confirm = 恢复此工作区最新的默认布局。此对话框后方显示的布局是预览。可通过{ $menu } → 撤销布局更改来撤销恢复。
-workspace-reset-saved-confirm = 恢复此工作区已保存的初始布局。此对话框后方显示的布局是预览。可通过{ $menu } → 撤销布局更改来撤销恢复。
+workspace-reset-default-confirm = 恢复此工作区最新的默认布局。此对话框后方显示的布局是预览。可通过{ $menu } → { $undo }来撤销恢复。
+workspace-reset-saved-confirm = 恢复此工作区已保存的初始布局。此对话框后方显示的布局是预览。可通过{ $menu } → { $undo }来撤销恢复。
 workspace-history-added = 添加{ $panels }
 workspace-history-deleted = 删除{ $panels }
 workspace-history-moved = 移动{ $panels }
@@ -707,4 +707,4 @@ workspace-launch-window-size = 初始窗口大小
 
 workspace-phone-tool-limit = 手机工具栏最多可容纳十个工具。
 
-workspace-reset-phone-confirm = 恢复此工作区初始的手机工具栏。可通过{ $menu } → 撤销布局更改来撤销恢复。
+workspace-reset-phone-confirm = 恢复此工作区初始的手机工具栏。可通过{ $menu } → { $undo }来撤销恢复。

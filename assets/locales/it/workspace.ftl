@@ -45,8 +45,8 @@ workspace-included-description = { $description }
 workspace-delete-confirm = Eliminare «{ $name }»? È un'azione permanente.
 workspace-delete-active-confirm = Eliminare «{ $name }»? È un'azione permanente. Questa finestra passerà a un'area di lavoro predefinita disponibile.
 workspace-update-toolbar-confirm = Scegli una barra strumenti da { $workspace } per sostituire quella salvata { $toolbar }. Le copie esistenti nelle aree di lavoro rimangono invariate.
-workspace-reset-default-confirm = Ripristina la disposizione predefinita più recente di questa area di lavoro. La disposizione dietro questa finestra è un'anteprima. Puoi annullare il ripristino con { $menu } → Annulla modifica disposizione.
-workspace-reset-saved-confirm = Ripristina la disposizione iniziale salvata di questa area di lavoro. La disposizione dietro questa finestra è un'anteprima. Puoi annullare il ripristino con { $menu } → Annulla modifica disposizione.
+workspace-reset-default-confirm = Ripristina la disposizione predefinita più recente di questa area di lavoro. La disposizione dietro questa finestra è un'anteprima. Puoi annullare il ripristino con { $menu } → { $undo }.
+workspace-reset-saved-confirm = Ripristina la disposizione iniziale salvata di questa area di lavoro. La disposizione dietro questa finestra è un'anteprima. Puoi annullare il ripristino con { $menu } → { $undo }.
 workspace-history-added = Aggiunti { $panels }
 workspace-history-deleted = Eliminati { $panels }
 workspace-history-moved = Spostati { $panels }
@@ -681,4 +681,4 @@ workspace-launch-window-size = Dimensioni iniziali della finestra
 
 workspace-phone-tool-limit = La barra degli strumenti del telefono può contenere fino a dieci strumenti.
 
-workspace-reset-phone-confirm = Ripristina la barra degli strumenti iniziale del telefono di questa area di lavoro. Puoi annullare il ripristino con { $menu } → Annulla modifica disposizione.
+workspace-reset-phone-confirm = Ripristina la barra degli strumenti iniziale del telefono di questa area di lavoro. Puoi annullare il ripristino con { $menu } → { $undo }.

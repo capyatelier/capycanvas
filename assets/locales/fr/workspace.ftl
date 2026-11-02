@@ -45,8 +45,8 @@ workspace-included-description = { $description }
 workspace-delete-confirm = Supprimer « { $name } » ? Cette action est définitive.
 workspace-delete-active-confirm = Supprimer « { $name } » ? Cette action est définitive. Cette fenêtre passera à un espace de travail par défaut disponible.
 workspace-update-toolbar-confirm = Choisir une barre d’outils de { $workspace } pour remplacer { $toolbar } enregistré. Les copies existantes des espaces de travail restent inchangées.
-workspace-reset-default-confirm = Restaurer la dernière disposition par défaut de cet espace de travail. La disposition derrière ce dialogue est un aperçu. Vous pouvez annuler sa restauration avec { $menu } → Annuler le changement d’espace de travail.
-workspace-reset-saved-confirm = Restaurer la disposition initiale enregistrée de cet espace de travail. La disposition derrière ce dialogue est un aperçu. Vous pouvez annuler sa restauration avec { $menu } → Annuler le changement d’espace de travail.
+workspace-reset-default-confirm = Restaurer la dernière disposition par défaut de cet espace de travail. La disposition derrière ce dialogue est un aperçu. Vous pouvez annuler sa restauration avec { $menu } → { $undo }.
+workspace-reset-saved-confirm = Restaurer la disposition initiale enregistrée de cet espace de travail. La disposition derrière ce dialogue est un aperçu. Vous pouvez annuler sa restauration avec { $menu } → { $undo }.
 workspace-history-added = { $panels } ajoutés
 workspace-history-deleted = { $panels } supprimés
 workspace-history-moved = { $panels } déplacés
@@ -684,4 +684,4 @@ workspace-launch-window-size = Taille initiale de la fenêtre
 
 workspace-phone-tool-limit = La barre d’outils du téléphone peut contenir jusqu’à dix outils.
 
-workspace-reset-phone-confirm = Restaurer la barre d’outils initiale du téléphone de cet espace de travail. Vous pouvez annuler cette restauration avec { $menu } → Annuler le changement d’espace de travail.
+workspace-reset-phone-confirm = Restaurer la barre d’outils initiale du téléphone de cet espace de travail. Vous pouvez annuler cette restauration avec { $menu } → { $undo }.

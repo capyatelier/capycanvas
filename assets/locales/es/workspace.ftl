@@ -45,8 +45,8 @@ workspace-included-description = { $description }
 workspace-delete-confirm = ¿Eliminar «{ $name }»? Esta acción es permanente.
 workspace-delete-active-confirm = ¿Eliminar «{ $name }»? Esta acción es permanente. Esta ventana cambiará a un espacio de trabajo predeterminado disponible.
 workspace-update-toolbar-confirm = Elige una barra de herramientas de { $workspace } para reemplazar la barra { $toolbar } guardada. Las copias existentes en los espacios de trabajo se conservan.
-workspace-reset-default-confirm = Restaura la distribución predeterminada más reciente de este espacio de trabajo. La distribución que se muestra detrás de este diálogo es una vista previa. Puedes deshacer la restauración con { $menu } → Deshacer cambio de distribución.
-workspace-reset-saved-confirm = Restaura la distribución inicial guardada de este espacio de trabajo. La distribución que se muestra detrás de este diálogo es una vista previa. Puedes deshacer la restauración con { $menu } → Deshacer cambio de distribución.
+workspace-reset-default-confirm = Restaura la distribución predeterminada más reciente de este espacio de trabajo. La distribución que se muestra detrás de este diálogo es una vista previa. Puedes deshacer la restauración con { $menu } → { $undo }.
+workspace-reset-saved-confirm = Restaura la distribución inicial guardada de este espacio de trabajo. La distribución que se muestra detrás de este diálogo es una vista previa. Puedes deshacer la restauración con { $menu } → { $undo }.
 workspace-history-added = Se añadió { $panels }
 workspace-history-deleted = Se eliminó { $panels }
 workspace-history-moved = Se movió { $panels }
@@ -684,4 +684,4 @@ workspace-launch-window-size = Tamaño inicial de la ventana
 
 workspace-phone-tool-limit = La barra de herramientas del teléfono admite hasta diez herramientas.
 
-workspace-reset-phone-confirm = Restaura la barra de herramientas inicial del teléfono de este espacio de trabajo. Puedes deshacer la restauración con { $menu } → Deshacer cambio de distribución.
+workspace-reset-phone-confirm = Restaura la barra de herramientas inicial del teléfono de este espacio de trabajo. Puedes deshacer la restauración con { $menu } → { $undo }.

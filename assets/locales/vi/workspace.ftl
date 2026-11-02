@@ -44,8 +44,8 @@ workspace-included-description = { $description }
 workspace-delete-confirm = Xóa “{ $name }”? Không thể khôi phục.
 workspace-delete-active-confirm = Xóa “{ $name }”? Không thể khôi phục. Cửa sổ này sẽ chuyển sang không gian làm việc mặc định khả dụng.
 workspace-update-toolbar-confirm = Chọn thanh công cụ từ { $workspace } để thay { $toolbar } đã lưu. Bản sao trong các không gian làm việc hiện có giữ nguyên.
-workspace-reset-default-confirm = Khôi phục bố cục mặc định mới nhất cho không gian làm việc này. Cách sắp xếp sau hộp thoại là bản xem trước. Bạn có thể hoàn tác khôi phục bằng { $menu } → Hoàn tác thay đổi bố cục.
-workspace-reset-saved-confirm = Khôi phục bố cục ban đầu đã lưu của không gian làm việc này. Cách sắp xếp sau hộp thoại là bản xem trước. Bạn có thể hoàn tác khôi phục bằng { $menu } → Hoàn tác thay đổi bố cục.
+workspace-reset-default-confirm = Khôi phục bố cục mặc định mới nhất cho không gian làm việc này. Cách sắp xếp sau hộp thoại là bản xem trước. Bạn có thể hoàn tác khôi phục bằng { $menu } → { $undo }.
+workspace-reset-saved-confirm = Khôi phục bố cục ban đầu đã lưu của không gian làm việc này. Cách sắp xếp sau hộp thoại là bản xem trước. Bạn có thể hoàn tác khôi phục bằng { $menu } → { $undo }.
 workspace-history-added = Đã thêm { $panels }
 workspace-history-deleted = Đã xóa { $panels }
 workspace-history-moved = Đã di chuyển { $panels }
@@ -678,4 +678,4 @@ workspace-launch-window-size = Kích thước cửa sổ ban đầu
 
 workspace-phone-tool-limit = Thanh công cụ trên điện thoại chứa tối đa mười công cụ.
 
-workspace-reset-phone-confirm = Khôi phục thanh công cụ điện thoại ban đầu của không gian làm việc này. Bạn có thể hoàn tác khôi phục bằng { $menu } → Hoàn tác thay đổi bố cục.
+workspace-reset-phone-confirm = Khôi phục thanh công cụ điện thoại ban đầu của không gian làm việc này. Bạn có thể hoàn tác khôi phục bằng { $menu } → { $undo }.

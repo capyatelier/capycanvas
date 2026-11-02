@@ -45,8 +45,8 @@ workspace-included-description = { $description }
 workspace-delete-confirm = Delete “{ $name }”? This is permanent.
 workspace-delete-active-confirm = Delete “{ $name }”? This is permanent. This window will switch to an available default workspace.
 workspace-update-toolbar-confirm = Choose a toolbar from { $workspace } to replace the saved { $toolbar }. Existing workspace copies stay as they are.
-workspace-reset-default-confirm = Restore the latest default layout for this workspace. The arrangement shown behind this dialog is a preview. You can undo restoring it with { $menu } → Undo Workspace.
-workspace-reset-saved-confirm = Restore this workspace’s saved starting layout. The arrangement shown behind this dialog is a preview. You can undo restoring it with { $menu } → Undo Workspace.
+workspace-reset-default-confirm = Restore the latest default layout for this workspace. The arrangement shown behind this dialog is a preview. You can undo restoring it with { $menu } → { $undo }.
+workspace-reset-saved-confirm = Restore this workspace’s saved starting layout. The arrangement shown behind this dialog is a preview. You can undo restoring it with { $menu } → { $undo }.
 workspace-history-added = Added { $panels }
 workspace-history-deleted = Deleted { $panels }
 workspace-history-moved = Moved { $panels }
@@ -684,4 +684,4 @@ workspace-launch-window-size = Initial window size
 
 workspace-phone-tool-limit = The phone toolbar holds up to ten tools.
 
-workspace-reset-phone-confirm = Restore this workspace’s starting phone toolbar. You can undo restoring it with { $menu } → Undo Layout Change.
+workspace-reset-phone-confirm = Restore this workspace’s starting phone toolbar. You can undo restoring it with { $menu } → { $undo }.

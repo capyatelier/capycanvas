@@ -42,8 +42,8 @@ workspace-included-description = { $description }
 workspace-delete-confirm = ลบ “{ $name }” หรือไม่? ลบถาวร
 workspace-delete-active-confirm = ลบ “{ $name }” หรือไม่? ลบถาวร หน้าต่างนี้จะสลับไปพื้นที่ทำงานเริ่มต้นที่ใช้ได้
 workspace-update-toolbar-confirm = เลือกแถบเครื่องมือจาก { $workspace } เพื่อแทนที่ { $toolbar } ที่บันทึกไว้ สำเนาพื้นที่ทำงานเดิมยังคงเดิม
-workspace-reset-default-confirm = คืนค่าผังเริ่มต้นล่าสุดของพื้นที่ทำงานนี้ ผังที่แสดงหลังกล่องโต้ตอบเป็นตัวอย่าง เลิกทำการคืนค่าได้ด้วย { $menu } → เลิกทำการเปลี่ยนผัง
-workspace-reset-saved-confirm = คืนค่าผังเริ่มต้นที่บันทึกไว้ของพื้นที่ทำงานนี้ ผังที่แสดงหลังกล่องโต้ตอบเป็นตัวอย่าง เลิกทำการคืนค่าได้ด้วย { $menu } → เลิกทำการเปลี่ยนผัง
+workspace-reset-default-confirm = คืนค่าผังเริ่มต้นล่าสุดของพื้นที่ทำงานนี้ ผังที่แสดงหลังกล่องโต้ตอบเป็นตัวอย่าง เลิกทำการคืนค่าได้ด้วย { $menu } → { $undo }
+workspace-reset-saved-confirm = คืนค่าผังเริ่มต้นที่บันทึกไว้ของพื้นที่ทำงานนี้ ผังที่แสดงหลังกล่องโต้ตอบเป็นตัวอย่าง เลิกทำการคืนค่าได้ด้วย { $menu } → { $undo }
 workspace-history-added = เพิ่ม { $panels }
 workspace-history-deleted = ลบ { $panels }
 workspace-history-moved = ย้าย { $panels }
@@ -669,4 +669,4 @@ workspace-launch-window-size = ขนาดหน้าต่างเริ่�
 
 workspace-phone-tool-limit = แถบเครื่องมือบนโทรศัพท์มีเครื่องมือได้สูงสุดสิบรายการ
 
-workspace-reset-phone-confirm = คืนค่าแถบเครื่องมือบนโทรศัพท์เริ่มต้นของพื้นที่ทำงานนี้ เลิกทำการคืนค่าได้ด้วย { $menu } → เลิกทำการเปลี่ยนผัง
+workspace-reset-phone-confirm = คืนค่าแถบเครื่องมือบนโทรศัพท์เริ่มต้นของพื้นที่ทำงานนี้ เลิกทำการคืนค่าได้ด้วย { $menu } → { $undo }
