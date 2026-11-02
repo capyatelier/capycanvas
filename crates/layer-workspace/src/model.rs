@@ -246,6 +246,9 @@ impl StoreError {
     pub fn known(kind: ErrorKind, reason: WorkspaceRefusal) -> Self {
         Self { kind, message: reason.message_id().key().into(), numeric: None, known: Some(reason) }
     }
+    pub(crate) fn has_raw_detail(&self) -> bool {
+        self.known.is_none() && self.numeric.is_none()
+    }
     pub fn workspace(reason: layer_ui::WorkspaceValidationError) -> Self {
         match reason {
             layer_ui::WorkspaceValidationError::Numeric(reason) => Self { kind: ErrorKind::InvalidData, message: reason.code().into(), numeric: Some(reason), known: None },
@@ -261,9 +264,9 @@ impl StoreError {
         }
     }
     pub fn localized_message(&self, localization: &layer_ui::Localizer) -> String {
+        if self.has_raw_detail() { eprintln!("Workspace storage {:?}: {}", self.kind, self.message); }
         if let Some(reason) = &self.numeric { return reason.message(localization); }
         if let Some(reason) = self.known { return reason.message(localization).to_string(); }
-        eprintln!("Workspace storage {:?}: {}", self.kind, self.message);
         use layer_ui::MessageId as M;
         let id = match self.kind {
             ErrorKind::Conflict => M::WORKSPACE_REFUSAL_THIS_ITEM_CHANGED_IN_ANOTHER_WINDOW,

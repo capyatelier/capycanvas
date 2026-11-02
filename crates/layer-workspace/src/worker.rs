@@ -82,7 +82,7 @@ impl StoreWorker {
                         } else {
                             Err(StoreError::new(ErrorKind::Unavailable,"Only a damaged database can be set aside."))
                         };
-                        if let Err(error) = &result { eprintln!("Workspace storage {:?}: {}",error.kind,error.message); }
+                        if let Err(error) = &result && error.has_raw_detail() { eprintln!("Workspace storage {:?}: {}",error.kind,error.message); }
                         let _ = reply.try_send(result);
                         continue;
                     }
@@ -95,7 +95,7 @@ impl StoreWorker {
                         Ok(store) => store.handle(request),
                         Err(error) => Err(error.clone()),
                     };
-                    if let Err(error) = &result { eprintln!("Workspace storage {:?}: {}",error.kind,error.message); }
+                    if let Err(error) = &result && error.has_raw_detail() { eprintln!("Workspace storage {:?}: {}",error.kind,error.message); }
                     // A dropped receiver leaves the persisted receipt/pending payload
                     // available for retry. It must never imply that a write failed.
                     let _ = reply.try_send(result);
