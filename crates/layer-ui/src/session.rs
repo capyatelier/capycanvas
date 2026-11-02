@@ -1601,6 +1601,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 self.interaction.pointer = None;
                                 reply.cancel_paint = true;
                                 reply.change = merge_change(reply.change, self.changed(regions::DOCUMENT, true));
+                                reply.change = merge_change(reply.change, self.dispatch(UiAction::Customize {
+                                    action: CustomizationAction::CloseExpanded,
+                                })?);
                             }
                             reply.handled = true;
                             return Ok(reply);

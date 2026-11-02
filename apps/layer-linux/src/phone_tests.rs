@@ -1700,3 +1700,50 @@ fn native_phone_inventory() {
     super::page_dialog::inventory(&mut d);
     d.finish();
 }
+
+#[test]
+#[ignore = "private compositor: --native-test=native_transform_escape --native-storage; 412x891 or1600x1000 light/dark"]
+fn native_transform_escape() {
+    let mut d = setup("art.capycanvas.TransformEscape");
+    let sample = layer_core::color::source::rgba8_source([64, 64], |x, y|
+        if (x / 16 + y / 16) % 2 == 0 { [76, 112, 144, 255] } else { [208, 176, 128, 255] });
+    ui_session_mut(&d.w).import_layer_source("Escape marks", std::sync::Arc::unwrap_or_clone(sample)).unwrap();
+    d.w.wake();
+    new_photo::ready(&d.w);
+    d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
+        layout: WorkspacePreset::Painter.layout(Platform::Gtk), ..Default::default()
+    }) });
+    let control = ToolbarControl::Command { command: CommandId::ScaleRotate };
+    let phone = d.w.surface.width().min(d.w.surface.height()) < 480;
+    let opener = if phone { tool(&d, control) } else {
+        let layout = state(&d.w).workspace.layout;
+        layout.header.entries().filter(|entry| entry.item == HeaderItem::Tool { control })
+            .map(|entry| format!("header-item-{}", entry.id))
+            .chain(layout.panels.iter().flat_map(|panel| panel.tiles()).filter(|tile| tile.control == control)
+                .map(|tile| format!("tile-{}", tile.id)))
+            .find(|name| find_named(d.w.window.upcast_ref(), name).is_some_and(|widget| widget.is_mapped())).unwrap()
+    };
+    click(&mut d, &opener);
+    new_photo::ready(&d.w);
+    if phone && state(&d.w).customization.drawer.is_none() { click(&mut d, &opener); }
+    until(|| ui_session(&d.w).command(CommandId::CancelTransform).enabled,
+        "Scale/rotate has a cancellable transform");
+    d.w.dispatch(UiAction::SetToolSetting { id: "transform_angle".into(), value: 0.3 });
+    new_photo::ready(&d.w);
+    assert!((state(&d.w).tool_settings.iter().find(|setting| setting.id == "transform_angle").unwrap().value - 0.3).abs() < 1e-6);
+    let checkpoint = ui_session(&d.w).engine().checkpoint();
+    capture_current(&mut d, "transform-escape-before");
+    let frames = sample_after_paint(&d.w.window, || ());
+    d.input.key(0xff1b);
+    d.w.window.queue_draw();
+    until(|| !frames.samples.borrow().is_empty() && !d.w.drawer.animation_active(), "physical Escape reaches native after-paint");
+    drop(frames.finish());
+    capture_current(&mut d, "transform-escape-after");
+    assert!(state(&d.w).customization.drawer.is_none() && d.w.drawer.is_closed(),
+        "one physical Escape closes the transform drawer");
+    assert!(!ui_session(&d.w).command(CommandId::CancelTransform).enabled,
+        "one physical Escape cancels the pending transform");
+    assert!(state(&d.w).canvas_bar.is_none(), "the cancelled transform leaves no canvas bar");
+    assert_eq!(ui_session(&d.w).engine().checkpoint(), checkpoint, "Escape never commits the pending transform");
+    d.finish();
+}

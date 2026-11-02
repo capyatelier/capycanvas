@@ -107,6 +107,8 @@ host guide describes.
 
 Tab sizing: `cargo test --locked -p layer-ui tab_measurement_tests`; Android `AndroidHostTest#crowdedTabReordersKeepPanelWidthsAndBodies` covers English/Russian reorder after resize in both themes.
 
+Pending transform cancellation: GTK `native_transform_escape` at 412×891 and 1600×1000 in light and dark checks one physical Escape, drawer closure and unchanged artwork history.
+
 ### Tonal journeys
 
 The GTK journeys are `native_composite_histogram_updates_without_changing_the_drawing`,

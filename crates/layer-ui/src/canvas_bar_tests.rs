@@ -64,6 +64,36 @@ fn filled_selection_session() -> UiSession<Recorder> {
 }
 
 #[test]
+fn escape_cancels_pending_transform_and_retires_its_drawer_together() {
+    for viewport in [[412, 891], [1600, 1000]] {
+        let mut s = filled_selection_session();
+        invoke(&mut s, CommandId::Deselect);
+        s.state.workspace.layout = WorkspacePreset::Painter.layout(Platform::Gtk);
+        s.set_viewport(viewport.map(|value| value as f32), viewport).unwrap();
+        let control = ToolbarControl::Command { command: CommandId::ScaleRotate };
+        invoke(&mut s, CommandId::ScaleRotate);
+        s.set_transform_control("transform_angle", 0.3).unwrap();
+        let anchor = if viewport[0] < 480 {
+            let tile = s.state.workspace.layout.phone.as_ref().unwrap().iter().find(|tile| tile.control == control).unwrap().id;
+            DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Tool(tile) }
+        } else {
+            let panel = s.state.workspace.layout.panel(Panel::Commands).unwrap();
+            DrawerAnchor::Tile { panel: panel.id, tile: panel.tiles().iter().find(|tile| tile.control == control).unwrap().id }
+        };
+        s.state.customization.drawer = Some(ContentDrawer::for_control(control, anchor).unwrap());
+        let checkpoint = s.engine.checkpoint();
+        assert!(s.operation.active() && s.state.canvas_bar.is_some());
+        let reply = key(&mut s, "Escape", true, false, false);
+        assert!(reply.handled && reply.cancel_paint);
+        assert!(!s.operation.active() && !s.command(CommandId::CancelTransform).enabled);
+        assert!(s.state.customization.drawer.is_none(), "Escape retires the cancelled tool's drawer");
+        assert!(s.state.canvas_bar.is_none());
+        assert_ne!(reply.change.regions & regions::CUSTOMIZATION, 0);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+    }
+}
+
+#[test]
 fn transforms_restore_the_previous_tool_and_cancellation_keeps_history() {
     for outline in [false, true] {
         for selection in [false, true] {
