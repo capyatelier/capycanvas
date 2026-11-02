@@ -1550,7 +1550,13 @@ fn native_phone_menu_gestures() {
 
 fn inventory_close(d: &mut Driver) {
     if let Some(dialog) = d.w.visible_dialog() { crate::page_dialog::close_dialog(&dialog); }
-    if state(&d.w).phone.menu || state(&d.w).customization.drawer.is_some() { d.input.key(0xff1b); }
+    if state(&d.w).phone.menu { d.w.dispatch(UiAction::Phone { action: PhoneAction::Capy }); }
+    if state(&d.w).customization.drawer.is_some() {
+        d.w.dispatch(UiAction::Customize { action: CustomizationAction::CloseExpanded });
+    }
+    if ui_session(&d.w).command(CommandId::CancelTransform).enabled {
+        d.w.dispatch(UiAction::Invoke { command: CommandId::CancelTransform });
+    }
     until(|| d.w.visible_dialog().is_none() && !d.w.pages.root.is_transition_running()
         && !state(&d.w).phone.menu && state(&d.w).customization.drawer.is_none()
         && d.w.drawer.is_closed(), "the inventory surface closes before the next view");
@@ -1574,6 +1580,11 @@ fn inventory_monitor(d: &mut Driver, name: &str) {
 #[ignore = "private compositor: --native-test=native_phone_inventory --native-storage; phone viewport/theme external"]
 fn native_phone_inventory() {
     let mut d = setup("art.capycanvas.PhoneInventory");
+    let sample = layer_core::color::source::rgba8_source([64, 64], |x, y|
+        if (x / 16 + y / 16) % 2 == 0 { [76, 112, 144, 255] } else { [208, 176, 128, 255] });
+    ui_session_mut(&d.w).import_layer_source("Inventory marks", std::sync::Arc::unwrap_or_clone(sample)).unwrap();
+    d.w.wake();
+    new_photo::ready(&d.w);
     let compact = d.w.surface.width().min(d.w.surface.height()) < 320;
     for preset in WorkspacePreset::ALL {
         let tag = preset.name().to_lowercase();
@@ -1602,6 +1613,7 @@ fn native_phone_inventory() {
                 | ToolbarControl::Command { command: CommandId::DrawingBrush }) { continue; }
             let name = format!("phone-tool-{}", tile.id);
             click(&mut d, &name);
+            new_photo::ready(&d.w);
             if state(&d.w).customization.drawer.is_none() { click(&mut d, &name); }
             inventory_drawer_ready(&d);
             let label = match tile.control {
