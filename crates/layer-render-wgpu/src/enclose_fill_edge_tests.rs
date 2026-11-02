@@ -237,7 +237,12 @@ fn fill_recolours_antialiased_edges_like_direct_geometry() {
         let anchors=result.anchors.clone();
         let primary=result.pixels.clone();
         if matches!(case.border,Border::WideAboveWhite) {
-            assert_eq!(result.underfill.as_ref().map_or(0,|pixels|value(pixels,64,48)),255,"transparent Target mode must retain ownership eight pixels into the wide opaque reference");
+            let band=result.underfill.as_ref().unwrap();
+            if value(band,56,48)!=255 {failures.push(format!("wide reference soft rim 56: {} != 255",value(band,56,48)));}
+            for x in 57..80 {
+                let support=if x<59 {64}else{0};
+                if value(band,x,48)>support {failures.push(format!("wide reference plateau {x}: {} > {support}",value(band,x,48)));}
+            }
         }
         let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.document().artwork.coverage.next_handle(),extent,[0;2]);
         coverage.source.default_coverage=0.;coverage.selection=Some(Selection::pixels(result.pixels));
@@ -454,4 +459,74 @@ fn fill_unmix_reconstructs_quantised_red_blue_edges_without_old_red() {
         let actual=result[0].0.map(|value|(layer_core::color::srgb_encode(value).clamp(0.,1.)*255.).round() as u8);
         assert_eq!(actual,[0,225,137,255],"codec {maximum}, mantissa {mantissa}");
     }
+}
+
+#[test]
+fn recolouring_a_shape_never_paints_outside_it() {
+    let extent=[128u32,96];
+    let coverage=|x:u32,y:u32|((32.-(x as f32+0.5-64.).abs()).min(24.-(y as f32+0.5-48.).abs())+0.25).clamp(0.,1.);
+    for opaque in [false,true] {
+        for mode in [layer_render::RegionColourMode::AlphaBorder,layer_render::RegionColourMode::ColourOnSolid] {
+            let mut document=paint_document(extent,"Recoloured shape");
+            placement::set_source(&mut document,crate::test_support::depth_source(extent,SampleDepth::F32,layer_core::color::RgbSpace::Srgb,128*96*16+4096,|x,y| {
+                let alpha=coverage(x,y);
+                if opaque {[1.,1.-alpha,1.-alpha,1.]}else{[1.,0.,0.,alpha]}
+            }));
+            let target=target(&document);
+            let renderer=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+            let mut engine=layer_engine::CanvasEngine::new(renderer,document,layer_engine::input_queue(8).1,
+                crate::test_support::view(extent),layer_engine::ViewTransform::IDENTITY).unwrap();
+            flush_engine(&mut engine);let before=engine.backend_mut().readback_srgb_rgba8().unwrap();
+            let snapshot=engine.document().snapshot();
+            let mut query=request(RegionSource::Scene {snapshot:snapshot.clone(),scope:layer_core::SceneScope::Raw(target)},
+                rectangle([0,0,1,1]),RegionRefinement {close_gaps:false,edges:RegionEdges::LineMiddle,smooth_edges:true},1./32.);
+            query.colour_mode=mode;query.enclosure=None;query.position=[64,48];query.fill=Some(Default::default());
+            let tolerance=query.tolerance;
+            let result=receive_request(engine.backend_mut(),query);
+            let mut selection=layer_core::CoverageSnapshot::reveal_all(engine.document().artwork.coverage.next_handle(),extent,[0;2]);
+            selection.source.default_coverage=0.;selection.selection=Some(Selection::pixels(result.pixels));
+            let edges=result.underfill.as_ref().map(|_|Box::new(layer_core::FillEdges {snapshot:snapshot.clone(),position:Point {x:64.,y:48.},tolerance,anchors:result.anchors.clone(),lines:Vec::new()}));
+            let operation=layer_core::RasterOperation {placement:Affine::IDENTITY,coverage:selection,kind:layer_core::RasterOperationKind::Fill {
+                color:F,texture:layer_core::FillTexture {strength:1.,paper:None},alpha_locked:false,edges,underfill:result.underfill.map(Selection::pixels)}};
+            engine.append_raster_operation(target,operation).unwrap();flush_engine(&mut engine);
+            let actual=engine.backend_mut().readback_srgb_rgba8().unwrap();
+            for y in 0..96u32 {for x in 0..128u32 {
+                let at=((y*128+x)*4) as usize;
+                if coverage(x,y)==0. {assert_eq!(actual[at..at+4],before[at..at+4],"{mode:?} opaque={opaque} {x},{y}");}
+            }}
+        }
+    }
+}
+
+#[test]
+fn alpha_below_zero_tolerance_keeps_the_transparent_band_pixel() {
+    let extent=[96,80];
+    let geometry=Geometry {case:CASES[0],normal:[1.,0.],offset:0.25,center:[48.,40.],extent};
+    let (document,target,references)=geometry.document(false);
+    let (direct,_,_)=geometry.document(true);
+    let mut direct_renderer=WgpuRasterizer::new_native_headless(direct.composition().color).unwrap();
+    frame(&mut direct_renderer,&direct,extent);
+    let expected=direct_renderer.readback_srgb_rgba8().unwrap();
+    let renderer=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+    let mut engine=layer_engine::CanvasEngine::new(renderer,document,layer_engine::input_queue(8).1,
+        crate::test_support::view(extent),layer_engine::ViewTransform::IDENTITY).unwrap();
+    flush_engine(&mut engine);
+    let snapshot=engine.document().snapshot();
+    let mut query=request(RegionSource::Scene {snapshot:snapshot.clone(),scope:layer_core::SceneScope::Raw(references[0])},
+        rectangle([0,0,1,1]),RegionRefinement {close_gaps:false,edges:RegionEdges::LineMiddle,smooth_edges:true},0.);
+    query.colour_mode=layer_render::RegionColourMode::AlphaBorder;
+    query.enclosure=None;query.position=[16,70];query.fill=Some(Default::default());
+    let result=receive_request(engine.backend_mut(),query);
+    assert_eq!(value(&result.pixels,43,40),255,"transparent pixel belongs to the primary mask");
+    assert_eq!(value(result.underfill.as_ref().unwrap(),43,40),255,"transparent pixel belongs to the under-fill band");
+    let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.document().artwork.coverage.next_handle(),extent,[0;2]);
+    coverage.source.default_coverage=0.;coverage.selection=Some(Selection::pixels(result.pixels));
+    let edges=Box::new(layer_core::FillEdges {snapshot:snapshot.clone(),position:Point {x:16.,y:70.},tolerance:0.,anchors:result.anchors,
+        lines:references.iter().map(|reference|layer_core::FillLine {snapshot:snapshot.clone(),scope:layer_core::SceneScope::Raw(*reference),fill_above:false}).collect()});
+    let operation=layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,kind:layer_core::RasterOperationKind::Fill {
+        color:F,texture:layer_core::FillTexture {strength:1.,paper:None},alpha_locked:false,edges:Some(edges),underfill:result.underfill.map(Selection::pixels)}};
+    engine.append_raster_operation(target,operation).unwrap();flush_engine(&mut engine);
+    let actual=engine.backend_mut().readback_srgb_rgba8().unwrap();
+    let at=((40*96+43)*4) as usize;
+    assert_eq!(actual[at..at+4],expected[at..at+4],"zero-tolerance AlphaBelow fill must paint its transparent band pixel");
 }

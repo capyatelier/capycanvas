@@ -432,7 +432,7 @@ impl Flood {
             if enclosed {run(encoder,if attempts>1 {2}else{0},0,0,&["restore_components"]);}
             if band {
                 self.lines.barrier_plane(&input,encoder,&region.coverage,store,0,2);
-                let captured=self.lines.assign(&input,encoder,output==if multiple {1}else{0});
+                let captured=self.lines.assign(&input,encoder,output==if multiple {1}else{0},fill.is_some());
                 if !captured.is_empty() {anchors=captured;}
             }
             if let layer_render::RegionEdges::GrowShrink(value)=refinement.edges && value!=0 {self.lines.grow(&input,encoder,value);}

@@ -72,6 +72,55 @@ fn exact() -> RegionRefinement {
 }
 
 #[test]
+fn line_middle_thick_shapes_keep_primary_and_underfill_inside_their_soft_rim() {
+    let extent=[128,96];
+    let coverage=|x:u32,y:u32|((32.-(x as f32+0.5-64.).abs()).min(24.-(y as f32+0.5-48.).abs())+0.25).clamp(0.,1.);
+    for opaque in [false,true] {
+        let mut document=paint_document(extent,"Thick fill border");
+        placement::set_source(&mut document,depth_source(extent,SampleDepth::F32,RgbSpace::Srgb,128*96*16+4096,|x,y| {
+            let alpha=coverage(x,y);
+            if opaque {[1.,1.-alpha,1.-alpha,1.]}else{[1.,0.,0.,alpha]}
+        }));
+        let target=target(&document);
+        let mut renderer=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        frame(&mut renderer,&document,extent);
+        for mode in [layer_render::RegionColourMode::AlphaBorder,layer_render::RegionColourMode::ColourOnSolid,layer_render::RegionColourMode::Target(target)] {
+            let mut query=request(RegionSource::Source(target),rectangle([0,0,128,96]),RegionRefinement {edges:RegionEdges::LineMiddle,..exact()},0.);
+            query.enclosure=None;query.position=[64,48];query.colour_mode=mode;
+            let result=receive_request(&mut renderer,query);let band=result.underfill.as_ref().unwrap();
+            for y in 0..96 {for x in 0..128 {
+                if coverage(x,y)==0. {
+                    assert_eq!(value(&result.pixels,x,y),0,"primary {mode:?} opaque={opaque} {x},{y}");
+                    assert_eq!(value(band,x,y),0,"band {mode:?} opaque={opaque} {x},{y}");
+                }else{assert_eq!(value(&result.pixels,x,y),255,"shape {mode:?} opaque={opaque} {x},{y}");}
+            }}
+        }
+    }
+}
+
+#[test]
+fn line_middle_beside_a_wide_colour_block_covers_only_its_soft_rim() {
+    let extent=[160,96];
+    for opaque in [false,true] {
+        let mut document=paint_document(extent,"Wide neighbouring block");
+        placement::set_source(&mut document,depth_source(extent,SampleDepth::F32,RgbSpace::Srgb,160*96*16+4096,|x,_| {
+            let alpha=if x<63 {0.}else if x==63 {0.25}else{1.};
+            if opaque {[1.-alpha,0.,alpha,1.]}else{[0.,0.,1.,alpha]}
+        }));
+        let target=target(&document);let mut renderer=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        frame(&mut renderer,&document,extent);
+        let mut query=request(RegionSource::Source(target),rectangle([0,0,160,96]),RegionRefinement {edges:RegionEdges::LineMiddle,..exact()},0.);
+        query.enclosure=None;query.position=[32,48];
+        let result=receive_request(&mut renderer,query);let band=result.underfill.as_ref().unwrap();
+        assert_eq!(value(band,63,48),255,"rim opaque={opaque}");
+        for y in 0..96 {for x in 64..160 {
+            assert_eq!(value(&result.pixels,x,y),0,"primary plateau opaque={opaque} {x},{y}");
+            assert_eq!(value(band,x,y),0,"band plateau opaque={opaque} {x},{y}");
+        }}
+    }
+}
+
+#[test]
 fn line_middle_same_layer_alpha_border_keeps_ink_and_fills_behind_the_fringe() {
     let extent = [128; 2];
     let source = |x: u32, y: u32| {
@@ -842,7 +891,7 @@ fn enclose_fill_line_middle_ignores_a_cross_shaped_thin_pocket() {
             _ => false,
         };
         let border = (16..112).contains(&x) && (24..112).contains(&y)
-            && (y < 56 || y >= 96 || !(32..96).contains(&x));
+            && (y < 36 || y >= 96 || !(32..96).contains(&x));
         [0., 0., 0., if pocket { (9 + (x + y) % 4) as f32 / 255. } else if border { 0.5 } else { 0. }]
     };
     let mut document = paint_document(extent, "Thin pocket line middle");
@@ -856,10 +905,12 @@ fn enclose_fill_line_middle_ignores_a_cross_shaped_thin_pocket() {
     query.position = [64, 80];
     query.enclosure = None;
     let result = receive_request(&mut r, query);
-    for [x, y] in [[64, 80], [64, 56], [64, 41]] {
+    for [x, y] in [[64, 80], [64, 36], [64, 31], [62, 33]] {
         assert_eq!(value(&result.pixels, x, y), 255, "selected interior {x},{y}");
     }
-    assert_eq!(value(&result.pixels, 64, 23), 0);
+    for [x, y] in [[64, 23], [64, 27]] {
+        assert_eq!(value(&result.pixels, x, y), 0, "outer side {x},{y}");
+    }
     assert_eq!(r.readback_srgb_rgba8().unwrap(), before);
 }
 

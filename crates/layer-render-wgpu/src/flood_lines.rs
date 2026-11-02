@@ -9,6 +9,7 @@ const GAP_REACH:u32=64;
 pub(super) const WINDOW_HALO:u32=GAP_REACH+2*MAX_LINE_WIDTH;
 const MAX_LINE_WIDTH:u32=16;
 const THIN_CUTOFF:u32=MAX_LINE_WIDTH*3/2;
+const RIM_HALF_PIXELS:u32=3;
 pub(crate) const UNDERFILL_HALF_PIXELS:u32=48;
 const DISTANCE_LIMIT_HALF_PIXELS:u32=UNDERFILL_HALF_PIXELS+1;
 const DISTANCE_HALO:u32=64;
@@ -326,7 +327,7 @@ impl Lines {
         self.encode(input,encoder,Some(parents),None,params(vec![("hold_barriers",u64::from(self.offsets[0]),self.params([0;4],[0;4],[0;4],[1.,1.,0.,0.]))]));
     }
 
-    pub fn assign(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,capture:bool)->Vec<([u32;4],wgpu::Buffer)> {
+    pub fn assign(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,capture:bool,fill:bool)->Vec<([u32;4],wgpu::Buffer)> {
         let mut captures=Vec::new();
         let mut steps=Vec::new();
         for &(core,window) in &self.windows {
@@ -334,7 +335,8 @@ impl Lines {
             let words=(window[0]+window[2]).div_ceil(32)-window[0]/32;
             steps.push(("region_seeds",u64::from(words)*u64::from(window[3]),self.params(core,window,[0,5,0,0],[1.,1.,0.,0.])));
             let nearest=self.jump_steps(&mut steps,core,window,"region_seeds",4,UNDERFILL_HALF_PIXELS.div_ceil(2));
-            steps.push(("assign_region",word_count(core),self.params(core,window,[UNDERFILL_HALF_PIXELS,4,0,nearest],[1.,1.,0.,0.])));
+            let mut params=self.params(core,window,[UNDERFILL_HALF_PIXELS,RIM_HALF_PIXELS,THIN_CUTOFF,nearest],[1.,1.,0.,0.]);params[25]=u32::from(fill);
+            steps.push(("assign_region",word_count(core),params));
             if capture {
                 let output=self.anchors.as_ref().unwrap();encoder.clear_buffer(output,0,None);
                 self.encode(input,encoder,None,None,std::mem::take(&mut steps));

@@ -526,10 +526,17 @@ fn assign_nearest(q:vec2<u32>)->u32 {
     if !active_barrier(vec2<i32>(q)) || (ink(vec2<i32>(q)) && distance(vec2<i32>(q))>line.options.x) {return INVALID;}
     return input(local_index(q-line.window.xy));
 }
+fn deep_beyond(p:vec2<i32>,edge:vec2<u32>,depth:u32)->bool {
+    let v=vec2<f32>(p-vec2<i32>(edge));let t=p+vec2<i32>(round(v*(f32((line.options.z+5u-depth)/2u)/length(v))));
+    return ink(t) && distance(t)>line.options.z;
+}
 fn assign_point(q:vec2<u32>) {
     let nearest=assign_nearest(q);if nearest==INVALID{return;}
-    let at=coord(nearest);let selected=(atomicLoad(&eligible[at.y*line.extent.z+at.x/32u])&(1u<<(at.x%32u)))!=0u;
-    if selected{atomicOr(&eligible[q.y*line.extent.z+q.x/32u],1u<<(q.x%32u));}
+    let at=coord(nearest);if (atomicLoad(&eligible[at.y*line.extent.z+at.x/32u])&(1u<<(at.x%32u)))==0u {return;}
+    let p=vec2<i32>(q);let depth=distance(p);
+    let trimmed=line.job.y!=0u && atomicLoad(&cached[line.offsets.y+4u])!=0u;
+    if ink(p) && !trimmed && depth>line.options.y && (depth>line.options.z || deep_beyond(p,at,depth) || distance(middle(p))>line.options.z) {return;}
+    atomicOr(&eligible[q.y*line.extent.z+q.x/32u],1u<<(q.x%32u));
 }
 @compute @workgroup_size(64)
 fn assign_region(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>) {

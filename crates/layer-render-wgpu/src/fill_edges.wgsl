@@ -111,7 +111,7 @@ fn fill_edge_value(world:vec2<f32>,pixel:vec4<f32>,paint:vec4<f32>,support:bool)
     let seed=textureLoad(fill_source,vec2(0,i32(textureDimensions(fill_source).y)-1),0);
     var amount=paint.a*(1.-textureLoad(fill_cover,local,0).a);
     if seed.a<.99999 || pixel.a<.99999 {
-        if support && fill_line_alpha(local)==0. {return pixel;}
+        if (support || (seed.a>0. && !fill_near_seed(vec4(0.),seed))) && fill_line_alpha(local)==0. {return pixel;}
         amount*=fill_line_middle(world,local,support)/max(fill_selection_at(world),.000001);
         return pixel+vec4(settings.color.rgb,1.)*amount*select(1.-pixel.a,0.,settings.options.w>.5);
     }
