@@ -33,6 +33,9 @@ pub enum ToolKind {
     Unknown,
 }
 impl ToolKind {
+    pub const fn is_pen(self) -> bool {
+        matches!(self, Self::Pen | Self::Eraser | Self::Brush | Self::Pencil | Self::Airbrush)
+    }
     fn pointer_class(self)->u8 {match self {Self::Finger=>0,Self::Mouse=>1,_=>2}}
 }
 

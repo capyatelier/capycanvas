@@ -654,10 +654,5 @@ window.capy-workspace.glass .dock-panel.gpu-panel-surface .tab-strip-end { backg
 
 .phone-menu-native { padding: 0; margin: 0; }
 .phone-menu-native > contents { background: transparent; border: 0; border-radius: 0; box-shadow: none; }
-.phone-menu-controls modelbutton:dir(ltr) { padding-left: 0; }
-.phone-menu-controls modelbutton:dir(rtl) { padding-right: 0; }
-.phone-menu-controls modelbutton check { padding: 0; }
-.phone-menu-controls modelbutton check.left { margin-right: 0; }
-.phone-menu-controls modelbutton check.right { margin-left: 0; }
 #phone-menu > scrolledwindow + scrolledwindow { border-left: 0; }
 #phone-menu-separator { color: var(--popover-fg-color); --border-opacity: var(--line-panel-border-opacity); }

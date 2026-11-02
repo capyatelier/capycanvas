@@ -303,7 +303,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 _ => (),
                             }
                         } else if phase == ContactPhase::Down {
-                            if self.eyedropper.picking.touch.is_none() && self.eyedropper.editor {
+                            if self.eyedropper.picking.touch.is_none() && (self.eyedropper.editor || self.finger_drawing()) {
                                 self.eyedropper.picking.touch = Some(id);
                                 self.picker_position(position);
                             } else if self.eyedropper.picking.touch.is_some() {

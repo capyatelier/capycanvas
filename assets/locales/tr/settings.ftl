@@ -181,3 +181,6 @@ settings-wheel-zoom = Yakınlaştır
 settings-rotate-with-two-fingers = İki parmakla döndür
 settings-quick-pinch-fit = Hızlı sıkıştırarak sığdır
 settings-quick-pinch-restore = Ters sıkıştırmayla görünümü geri yükle
+
+settings-draw-with-finger = Parmakla çiz
+settings-auto = Otomatik

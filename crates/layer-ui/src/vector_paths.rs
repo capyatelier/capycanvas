@@ -6,13 +6,18 @@ use std::sync::Arc;
 
 const CLOSE_REACH: f64 = 6.;
 
+#[derive(Clone)]
 struct Draft { layer: OccurrenceHandle, paint: Option<SourceTarget>, origin: [f64; 2], anchors: Vec<Anchor>, dragging: bool, handle_drag: bool, continues: Option<(PathItem, [f64; 2], bool)> }
 
-#[derive(Default)]
-pub(super) struct VectorPaths { draft: Option<Draft>, revision: u64 }
+#[derive(Clone, Default)]
+pub(super) struct VectorPaths { draft: Option<Draft>, revision: u64, closing: bool }
 impl VectorPaths {
     pub fn drafting(&self) -> bool { self.draft.is_some() }
-    pub fn placing(&self) -> bool { self.draft.as_ref().is_some_and(|draft| draft.dragging) }
+    pub fn placing(&self) -> bool { self.closing || self.draft.as_ref().is_some_and(|draft| draft.dragging) }
+    pub(super) fn restore_contact(&mut self, before: Self) {
+        self.draft = before.draft;
+        self.closing = before.closing;
+    }
 }
 
 fn simplified(points: &[[f64; 2]], tolerance: f64) -> Vec<[f64; 2]> {
@@ -57,6 +62,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Ok(true);
         };
         let point = [f64::from(p.x) - ox, f64::from(p.y) - oy];
+        if event.phase == PenPhase::Up && self.vector_paths.closing {
+            return self.finish_vector_path(true).map(|()| true);
+        }
         match event.phase {
             PenPhase::Down => {
                 if self.engine.document().is_locked(layer) { return Err(self.localization().text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED).to_string()); }
@@ -64,7 +72,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let reach = CLOSE_REACH * self.document_per_surface_pixel();
                 let near = |p: [f64; 2]| (p[0] - point[0]).hypot(p[1] - point[1]) <= reach;
                 let first = self.vector_paths.draft.as_ref().filter(|draft| draft.anchors.len() >= 2).map(|draft| draft.continues.as_ref().map_or(draft.anchors[0].point(), |(_, far, _)| *far));
-                if first.is_some_and(near) { return self.finish_vector_path(true).map(|()| true); }
+                if first.is_some_and(near) {
+                    self.vector_paths.closing = true;
+                    self.show_vector_path_preview()?;
+                    return Ok(true);
+                }
                 if self.vector_paths.draft.is_none() && paint.is_none() && let Some((original, at_end)) = self.selected_open_end(layer, point, reach) {
                     let [start, end] = original.open_ends().unwrap();
                     let (from, far) = if at_end { (end, start) } else { (start, end) };
@@ -117,9 +129,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         Ok(Some((draft.layer, PathItem::new(id, Arc::new(geometry), Arc::new(style)))))
     }
-    fn show_vector_path_preview(&mut self) -> Result<(), String> {
+    pub(super) fn show_vector_path_preview(&mut self) -> Result<(), String> {
         let on_paint = self.vector_paths.draft.as_ref().is_some_and(|draft| draft.paint.is_some());
-        let preview = self.drafted_path(false)?.filter(|_| !on_paint).map(|(owner, path)| {
+        let preview = self.drafted_path(self.vector_paths.closing)?.filter(|_| !on_paint).map(|(owner, path)| {
             self.vector_paths.revision += 1;
             layer_render::VectorPreview { owner, path: Arc::new(path), revision: self.vector_paths.revision }
         });
@@ -179,6 +191,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.select_vector_items(layer, [id].into()).map(|_| ())
     }
     pub(super) fn cancel_vector_path(&mut self) -> bool {
+        self.vector_paths.closing = false;
         if self.vector_paths.draft.take().is_none() { return false; }
         self.engine.backend_mut().set_vector_preview(None);
         self.layer_interaction.changed = true;

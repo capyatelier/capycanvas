@@ -174,6 +174,7 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     animation_seed: f32,
     evaluation_context: layer_core::authored::EvaluationContext,
     metrics: EngineMetrics,
+    admitted_pen: bool,
 }
 
 /// Published pixels with no watercolor or wet material state, so an erase
@@ -259,6 +260,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             animation_seed: evaluation_context.elapsed,
             evaluation_context,
             metrics: EngineMetrics::default(),
+            admitted_pen: false,
         })
     }
 
@@ -291,7 +293,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             completed_clone_start:_,restore_rasters:_,pending_frame:_,rebuild_completed:_,estimates:_,
             pending_chunk_dabs:_,dabs:_,batches:_,liquify_preview:_,transform_preview:_,transform_selection:_,selection_display:_,
             scene_preview:_,rebuild_all:_,composite_all:_,raster_dirty:_,animation_origin_ns:_,animation_time:_,
-            animation_seed:_,evaluation_context:_,metrics:_}=self;
+            animation_seed:_,evaluation_context:_,metrics:_,admitted_pen:_}=self;
         editor.capture_session(self.capture_artwork(session_generation)?)
     }
 
@@ -413,6 +415,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     pub fn has_active_stroke(&self) -> bool {
         self.active_stroke.is_some()
     }
+    pub fn take_admitted_pen(&mut self) -> bool { std::mem::take(&mut self.admitted_pen) }
 
     pub fn brush(&self) -> &BrushSnapshot {
         self.active_stroke
@@ -1993,6 +1996,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     momentum: None,
                 };
                 self.active_stroke = Some(active);
+                self.admitted_pen |= event.tool.is_pen();
                 self.recording.begin(
                     event.timestamp_ns,
                     crate::recording::Policy {

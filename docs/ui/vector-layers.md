@@ -462,9 +462,12 @@ WebGPU pixels from screenshots, so run it headed ([Web](../development/web.md)).
 
 The edge journeys walk what painters do around these tools. On GTK,
 `native_vector_input_kinds` (`--tablet`) draws with pen and mouse, checks that one
-finger neither draws nor pans, cuts lines with the pen's eraser end, checks every
+finger neither draws nor pans with Draw with Finger Off, cuts lines with the pen's eraser end, checks every
 tool's refusal cursor by pen and mouse, and moves paths by pen, mouse and touch,
 with two fingers landing mid-stroke and mid-drag.
+`native_finger_drawing` and `native_finger_pen_priority` cover explicit On and
+provisional cancellation in the phone layout. Shared tests also preserve open
+path drafts and defer path closing and double-tap anchor edits until release.
 `native_vector_keys_and_touch_points` (`--tablet`) covers Ctrl+A, Escape, Enter,
 Delete, Ctrl+E and Ctrl+Z, including Escape and Ctrl+Z during a drag or stroke,
 and Edit Points by touch. `native_vector_notices_and_german_labels` switches to

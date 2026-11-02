@@ -394,6 +394,7 @@ fn color_picker_retires_touches_that_predate_toolbar_entry() {
         for terminal in [ContactPhase::Up, ContactPhase::Cancel] {
             for finger_cancels in [false, true] {
                 let mut s = session(platform);
+                s.state.settings.finger_drawing = FingerDrawing::Off;
                 let camera = s.state.camera.clone();
                 picker_pointer(&mut s, 10, ContactPhase::Down, PointerKind::Touch, [200., 200.]);
                 s.dispatch(UiAction::ColorPicker { action: ColorPickerAction::Toggle }).unwrap();

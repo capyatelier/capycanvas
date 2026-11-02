@@ -1749,6 +1749,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let doc = self.engine.document();
                 let id = doc.working.occurrence.ok_or("Unknown layer")?;
                 let layer = doc.scene().occurrence(id).ok_or("Unknown layer")?;
+                if doc.is_locked(id) { return Err(self.localization().text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED).to_string()); }
                 match self.layer_interaction.tool {
                     LayerCanvasTool::Figure { .. } | LayerCanvasTool::LassoFill if self.vector_figure_layer().is_some() => (),
                     LayerCanvasTool::Figure { .. } | LayerCanvasTool::LassoFill if self.editing_vector_layer().is_some() => {

@@ -185,6 +185,7 @@ impl Menu {
                             row.set_property("text", &item.label);
                         }
                         match &item.action {
+                            Some(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::FingerDrawing, .. } }) => row.set_widget_name("phone-finger"),
                             Some(UiAction::Phone { action: PhoneAction::SwapSides }) => row.set_widget_name("phone-swap"),
                             Some(UiAction::Invoke { command: CommandId::ZenMode }) => row.set_widget_name("phone-zen"),
                             Some(UiAction::Invoke { command: CommandId::SearchCommands }) if index == 0 => {
@@ -232,7 +233,6 @@ impl Menu {
                 widget.set_orientation(gtk::Orientation::Vertical);
                 widget.add_css_class("menu");
                 widget.add_css_class("phone-menu-native");
-                if index == 0 { widget.add_css_class("phone-menu-controls"); }
                 widget.append(&contents);
                 self.bodies[index].append(&widget);
                 self.panes.borrow_mut().push(Pane { _popup: popup, widget, stack, navigation_handler });

@@ -177,3 +177,6 @@ settings-wheel-zoom = Thu phóng
 settings-rotate-with-two-fingers = Xoay bằng hai ngón tay
 settings-quick-pinch-fit = Chụm nhanh để vừa khung
 settings-quick-pinch-restore = Mở hai ngón tay để khôi phục góc nhìn
+
+settings-draw-with-finger = Vẽ bằng ngón tay
+settings-auto = Tự động

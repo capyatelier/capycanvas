@@ -6,7 +6,7 @@ const call = (path, iface, method, signature, values) => Gio.DBus.session.call_s
     Gio.DBusCallFlags.NONE, 5000, null,
 ).deep_unpack();
 
-function cropWindowPixels(pixels, width, height, stride) {
+function cropWindowPixels(pixels, width, height, stride, maximized = false) {
     const rawAlpha = {transparent: 0, partial: 0, opaque: 0};
     let left = width, top = height, right = -1, bottom = -1;
     for (let y = 0; y < height; y++) {
@@ -21,11 +21,17 @@ function cropWindowPixels(pixels, width, height, stride) {
             }
         }
     }
-    if (!rawAlpha.transparent || !rawAlpha.partial || !rawAlpha.opaque)
-        throw Error('Window capture requires transparent corners, native shadow and opaque content');
-    if (left < 2 || top < 2 || right >= width - 2 || bottom >= height - 2)
-        throw Error('Window capture clips its native shadow');
-    const crop = {x: left - 2, y: top - 2, width: right - left + 5, height: bottom - top + 5};
+    if (maximized) {
+        if (rawAlpha.opaque !== width * height)
+            throw Error('Maximized window capture requires fully opaque full-extent content');
+    } else {
+        if (!rawAlpha.transparent || !rawAlpha.partial || !rawAlpha.opaque)
+            throw Error('Window capture requires transparent corners, native shadow and opaque content');
+        if (left < 2 || top < 2 || right >= width - 2 || bottom >= height - 2)
+            throw Error('Window capture clips its native shadow');
+    }
+    const crop = maximized ? {x: 0, y: 0, width, height}
+        : {x: left - 2, y: top - 2, width: right - left + 5, height: bottom - top + 5};
     const cropped = new Uint8Array(crop.width * crop.height * 4);
     const alpha = {transparent: 0, partial: 0, opaque: 0};
     for (let y = 0; y < crop.height; y++) {
@@ -40,7 +46,7 @@ function cropWindowPixels(pixels, width, height, stride) {
     }
     const corners = [0, crop.width - 1, (crop.height - 1) * crop.width, crop.height * crop.width - 1]
         .map(pixel => cropped[pixel * 4 + 3]);
-    if (corners.some(a => a !== 0)) throw Error('Window capture corners are not transparent');
+    if (!maximized && corners.some(a => a !== 0)) throw Error('Window capture corners are not transparent');
     return {pixels: cropped, metadata: {raw_size: [width, height], crop,
         dimensions: [crop.width, crop.height], raw_alpha: rawAlpha, alpha: {...alpha, corners}}};
 }
@@ -52,12 +58,16 @@ var WindowCapture = class {
         this.active = null;
     }
 
-    capture(name) {
+    capture(request) {
+        const name = typeof request === 'object' && request ? request.name : request;
+        const maximized = typeof request === 'object' && request ? request.maximized : false;
         if (!this.directory || typeof name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name))
             throw Error('Invalid native window capture request');
+        if (typeof maximized !== 'boolean') throw Error('Invalid native window capture mode');
         try {
-            if (!this.active) this.begin(name);
-            if (this.active.name !== name) throw Error('Another window capture is pending');
+            if (!this.active) this.begin(name, maximized);
+            if (this.active.name !== name || this.active.maximized !== maximized)
+                throw Error('Another window capture is pending');
             if (this.error) throw this.error;
             if (GLib.get_monotonic_time() >= this.active.deadline)
                 throw Error(`Compositor window capture timed out: ${name}`);
@@ -74,10 +84,10 @@ var WindowCapture = class {
         }
     }
 
-    begin(name) {
+    begin(name, maximized) {
         const {Gst, GstApp} = imports.gi;
         Gst.init(null);
-        this.active = {name, deadline: GLib.get_monotonic_time() + 15000000};
+        this.active = {name, maximized, deadline: GLib.get_monotonic_time() + 15000000};
         this.active.session = call('/org/gnome/Mutter/ScreenCast', destination,
             'CreateSession', '(a{sv})', [{}])[0];
         const stream = call(this.active.session, `${destination}.Session`, 'RecordWindow', '(a{sv})',
@@ -113,10 +123,11 @@ var WindowCapture = class {
         if (!ok) throw Error('Cannot map compositor window capture');
         let result;
         try {
-            result = cropWindowPixels(map.data, info.width, info.height, info.stride[0]);
+            result = cropWindowPixels(map.data, info.width, info.height, info.stride[0], this.active.maximized);
         } finally {
             buffer.unmap(map);
         }
+        result.metadata.maximized = this.active.maximized;
         const [width, height] = result.metadata.dimensions;
         GLib.mkdir_with_parents(this.directory, 0o700);
         GdkPixbuf.Pixbuf.new_from_bytes(new GLib.Bytes(result.pixels), GdkPixbuf.Colorspace.RGB,

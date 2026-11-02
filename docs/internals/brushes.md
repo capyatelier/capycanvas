@@ -347,8 +347,9 @@ Aligned flag, the flips and, once an aligned stroke has started, its offset.
 - **Source disc.** The session draws the disc from cursor segments and sets a new
   document's source in the middle of the view when the tool is first selected.
   Set Source (held Alt, a bound side button, or its button for one contact) makes
-  the next pen or mouse contact set the source; a finger never does. The disc
-  drags at once with every device, and a tap shows the
+  the next drawing contact set the source, including a finger when Draw with
+  Finger is On. Cancelling that contact restores the source and leaves Set
+  Source armed. The disc drags at once with every device, and a tap shows the
   [clone source bar](../ui/canvas-action-bar.md#contexts).
 
 Only translation is supported: the source is not rotated or scaled.

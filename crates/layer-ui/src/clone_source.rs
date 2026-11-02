@@ -90,13 +90,13 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn clone_source_contact(&self, kind: PointerKind, position: [f32; 2]) -> bool {
         self.cloning()
             && self.interaction.navigation.is_none()
-            && (self.clone_disc_hit(position) || (self.retouch.armed && kind != PointerKind::Touch))
+            && (self.clone_disc_hit(position) || (self.retouch.armed && (kind != PointerKind::Touch || self.finger_drawing())))
     }
 
     pub(super) fn begin_clone_source_contact(&mut self, id: u64, kind: PointerKind, position: [f32; 2]) {
         let before = self.engine.clone_source();
         let p = self.surface_to_document(position);
-        let sets = self.retouch.armed && kind != PointerKind::Touch;
+        let sets = self.retouch.armed && (kind != PointerKind::Touch || self.finger_drawing());
         let grab = match before.point.filter(|_| !sets) {
             Some(center) => [center.x - p.x, center.y - p.y],
             None => {
@@ -139,7 +139,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.retouch.drag = None;
             self.interaction.pointer = None;
             let held = self.interaction.momentary.iter().any(|(_, restore)| matches!(restore, Restore::Toggle(CommandId::CloneSourceArm, _)));
-            if drag.sets && !held {
+            if drag.sets && !held && phase == ContactPhase::Up {
                 self.retouch.armed = false;
             } else if phase == ContactPhase::Up && !drag.moved {
                 self.retouch.bar = !self.retouch.bar;

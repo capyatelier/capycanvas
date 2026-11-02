@@ -1157,7 +1157,7 @@ impl Driver {
     fn label(&self, text: &str) -> gtk::Widget {
         mapped_label(self.w.window.upcast_ref(), text).unwrap_or_else(|| panic!("no visible label {text}"))
     }
-    fn click_label(&mut self, text: &str) {
+    pub(super) fn click_label(&mut self, text: &str) {
         // Native menu pages animate and can scroll at short window heights.
         // A mapped label is not necessarily inside its visible viewport.
         pump(250);

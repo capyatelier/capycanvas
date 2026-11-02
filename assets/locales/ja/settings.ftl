@@ -181,3 +181,6 @@ settings-wheel-zoom = ズーム
 settings-rotate-with-two-fingers = 2本指で回転
 settings-quick-pinch-fit = 素早くピンチインして全体表示
 settings-quick-pinch-restore = ピンチアウトで前の表示に戻す
+
+settings-draw-with-finger = 指で描く
+settings-auto = 自動

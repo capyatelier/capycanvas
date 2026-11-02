@@ -31,10 +31,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                     && !self.state.settings_open
                     && !self.interaction.facts.popup_open
                     && self.state.command_search.is_none()
-                    && self.interaction.pointer.is_none()
+                    && (self.interaction.pointer.is_none() || self.finger.recognizing())
                     && self.eyedropper.picking.previous.is_none()
-                    && self.touch_canvas_idle()
-                    && (indirect || phase != ContactPhase::Down || !self.object_touch_hit(position));
+                    && (self.touch_canvas_idle() || self.finger.recognizing())
+                    && (self.finger.recognizing() || indirect || phase != ContactPhase::Down || !self.object_touch_hit(position));
                 let policy = self.interaction.touch_policy;
                 self.interaction.gestures.contact(id, phase, position, time_ns, policy, eligible)
                     .filter(|gesture| !indirect || matches!(gesture, TouchGesture::Scrub | TouchGesture::QuickPinch { .. }))
@@ -119,7 +119,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn advance_touch_gestures(&mut self, now_ns: u64) -> Result<u32, String> {
         if self.state.settings_open || self.interaction.facts.popup_open || self.state.command_search.is_some()
-            || self.workspace_transition || self.workspace_read_only || !self.touch_canvas_idle() {
+            || self.workspace_transition || self.workspace_read_only || (!self.touch_canvas_idle() && !self.finger.recognizing()) {
             self.interaction.gestures.fail();
         }
         let mut reply = InputReply::default();

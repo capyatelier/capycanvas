@@ -546,6 +546,7 @@ pub fn install(workspace: &Rc<Workspace>) {
                     position: position.map(|v| v * scale),
                     time_ns,
                 });
+                input.cancel_paint(&workspace, &reply);
                 if reply.paint {
                     input.touch_pen(&workspace, id, phase, located, time_ns);
                 } else {
@@ -1003,6 +1004,7 @@ impl Input {
             } else {PointerButton::Primary},
             position:[routing.surface_position.x,routing.surface_position.y],time_ns:routing.timestamp_ns,
         });
+        self.cancel_paint(workspace, &reply);
         #[cfg(test)]
         if let Some(gpu)=workspace.gpu.borrow().as_ref() {
             gpu.session.engine().backend().stats.lock().unwrap().pen_routes.push((event.timestamp_ns,
@@ -1135,7 +1137,7 @@ impl Input {
     pub(crate) fn cancel_touch(&self, workspace: &Rc<Workspace>, sequence: &gdk::EventSequence, time: u32) {
         let Some(id) = self.touches.borrow_mut().remove(sequence) else { return };
         self.picker_hold.input(workspace, id, ContactPhase::Cancel, [0.; 2], self.touches.borrow().len());
-        workspace.interact(UiInput::Pointer {
+        let reply = workspace.interact(UiInput::Pointer {
             id,
             phase: ContactPhase::Cancel,
             kind: PointerKind::Touch,
@@ -1143,11 +1145,16 @@ impl Input {
             position: [0.; 2],
             time_ns: self.timestamp(time),
         });
+        self.cancel_paint(workspace, &reply);
         self.touch_points.borrow_mut().remove(&id);
     }
     fn cancel(&self, workspace: &Rc<Workspace>) {
         self.picker_hold.cancel();
         let reply = workspace.interact(UiInput::Blur);
+        self.cancel_paint(workspace, &reply);
+        self.touches.borrow_mut().clear();
+    }
+    fn cancel_paint(&self, workspace: &Rc<Workspace>, reply: &layer_ui::InputReply) {
         if reply.cancel_paint
             && let Some(event) = self.last.get()
         {
@@ -1159,7 +1166,6 @@ impl Input {
                 },
             );
         }
-        self.touches.borrow_mut().clear();
     }
 }
 

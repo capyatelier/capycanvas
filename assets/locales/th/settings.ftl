@@ -165,3 +165,6 @@ settings-wheel-zoom = ซูม
 settings-rotate-with-two-fingers = หมุนด้วยสองนิ้ว
 settings-quick-pinch-fit = จีบนิ้วเร็วเพื่อพอดีหน้าจอ
 settings-quick-pinch-restore = กางนิ้วเพื่อคืนค่ามุมมอง
+
+settings-draw-with-finger = วาดด้วยนิ้ว
+settings-auto = อัตโนมัติ

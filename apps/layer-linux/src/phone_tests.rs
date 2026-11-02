@@ -40,23 +40,29 @@ fn click(d: &mut Driver, name: &str) {
 fn capture_current(d: &mut Driver, name: &str) {
     if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
         let theme = std::env::var("CAPY_NATIVE_TEST_THEME").unwrap_or_else(|_| "light".into());
-        d.input.perform(serde_json::json!([{"capture":format!("phone-{}x{}-{theme}-{name}",d.w.surface.width(),d.w.surface.height())}]));
+        d.input.perform(serde_json::json!([{ "capture_window": {
+            "name": format!("phone-{}x{}-{theme}-{name}", d.w.surface.width(), d.w.surface.height()),
+            "maximized": d.w.window.is_maximized(),
+        } }]));
     }
 }
 
-fn capture(d: &mut Driver, name: &str) {
-    if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
-        let capy = d.named("zen-capy");
-        let tooltip = capy.has_tooltip();
-        capy.set_has_tooltip(false);
-        d.input.perform(serde_json::json!([{"point": d.point(&capy)}]));
-        until(|| ui_session_mut(&d.w).canvas_cursor().is_none(), "pointer leaves the canvas before capture");
-        until(|| ui_session(&d.w).engine().backend().frames_idle(), "capture uses the published canvas frame");
-        capy.set_has_tooltip(false);
-        capy.trigger_tooltip_query();
-        capture_current(d,name);
-        capy.set_has_tooltip(tooltip);
-    }
+pub(super) fn capture(d: &mut Driver, name: &str) {
+    let capy = d.named("zen-capy");
+    let tooltip = capy.has_tooltip();
+    capy.set_has_tooltip(false);
+    clear_canvas_pointer(d);
+    capy.set_has_tooltip(false);
+    capy.trigger_tooltip_query();
+    capture_current(d, name);
+    capy.set_has_tooltip(tooltip);
+}
+
+pub(super) fn clear_canvas_pointer(d: &mut Driver) {
+    let capy = d.named("zen-capy");
+    d.input.perform(serde_json::json!([{ "point": d.point(&capy) }]));
+    until(|| ui_session_mut(&d.w).canvas_cursor().is_none(), "pointer leaves the canvas before capture");
+    until(|| ui_session(&d.w).engine().backend().frames_idle(), "capture uses the published canvas frame");
 }
 
 fn tool(d: &Driver, control: ToolbarControl) -> String {

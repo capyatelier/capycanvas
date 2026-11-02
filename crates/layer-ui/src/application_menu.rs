@@ -268,8 +268,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             model.sections.pop();
             let mut swap = ContextMenuItem::command(self.localization().text(MessageId::WORKSPACE_PHONE_SWAP_SIDES).to_string(), UiAction::Phone { action: PhoneAction::SwapSides });
             swap.selected = Some(self.state.settings.phone_swap_sides);
+            let mut finger = ContextMenuItem::command(self.localization().text(MessageId::SETTINGS_DRAW_WITH_FINGER).to_string(),
+                UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::FingerDrawing,
+                    value: PreferenceValue::Choice(if self.finger_drawing() { 2 } else { 1 }) } });
+            finger.selected = Some(self.finger_drawing());
             model.sections.insert(0, vec![command(CommandId::SearchCommands)]);
-            model.sections.insert(1, vec![command(CommandId::ZenMode), swap]);
+            model.sections.insert(1, vec![finger, command(CommandId::ZenMode), swap]);
         }
         model.title = menu.localized_label(self.localization()).to_string();
         model.with_shortcuts_localized(&self.state.settings, self.state.platform, self.localization())

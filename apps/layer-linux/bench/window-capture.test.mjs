@@ -136,6 +136,46 @@ test('pending capture times out and releases pipeline, bus watch, signal and ses
     assert.equal(state.writes.length, 0);
 });
 
+test('explicit maximized capture preserves full opaque extent and stride', () => {
+    const {context, state, frame, capture} = harness();
+    for (let y = 0; y < frame.height; y++)
+        for (let x = 0; x < frame.width; x++) frame.pixels.set([17, 29, 43, 255], y * frame.stride + x * 4);
+    state.sample = state.frame;
+    const pixels = context.cropWindowPixels(frame.pixels, frame.width, frame.height, frame.stride, true).pixels;
+    assert.equal(pixels.length, frame.width * frame.height * 4);
+    assert.deepEqual(Array.from(pixels.slice(frame.width * 4, frame.width * 4 + 4)), [17, 29, 43, 255]);
+    assert.equal(capture.capture({name: 'maximized', maximized: true}), true);
+    const metadata = JSON.parse(state.writes[1].value);
+    assert.deepEqual(metadata.dimensions, [frame.width, frame.height]);
+    assert.deepEqual(metadata.crop, {x: 0, y: 0, width: frame.width, height: frame.height});
+    assert.deepEqual(metadata.alpha.corners, [255, 255, 255, 255]);
+    assert.equal(metadata.alpha.opaque, frame.width * frame.height);
+    assert.equal(metadata.maximized, true);
+    assertClosed(state, capture);
+});
+
+test('maximized mode rejects transparent or partial pixels and closes resources', () => {
+    for (const alpha of [0, 128]) {
+        const {state, frame, capture} = harness();
+        frame.pixels.fill(255);
+        frame.pixels[3] = alpha;
+        state.sample = state.frame;
+        assert.throws(() => capture.capture({name: 'invalid-maximized', maximized: true}), /fully opaque full-extent/);
+        assertClosed(state, capture);
+        assert.equal(state.mapped, state.unmapped);
+        assert.equal(state.writes.length, 0);
+    }
+});
+
+test('pending capture identity includes mode and invalid modes create no session', () => {
+    const {state, capture} = harness();
+    assert.throws(() => capture.capture({name: 'invalid', maximized: 'yes'}), /Invalid native window capture mode/);
+    assert.equal(state.calls.length, 0);
+    assert.equal(capture.capture({name: 'same-name', maximized: true}), false);
+    assert.throws(() => capture.capture('same-name'), /Another window capture is pending/);
+    assertClosed(state, capture);
+});
+
 test('RecordWindow, pipeline startup and pipeline bus errors propagate with cleanup', () => {
     for (const failure of ['recordFailure', 'startFailure', 'busFailure']) {
         const {state, capture} = harness();

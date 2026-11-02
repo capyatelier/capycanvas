@@ -81,6 +81,14 @@ calibration utility so painters can test the curve on the canvas. Apply saves
 the preview; Cancel and Close discard it. GTK places **[Pen tilt](pen-tilt.md)**
 next, with a per-pen response curve and direction correction in the same utility.
 
+**Draw with Finger**, in Input's Pointer group, offers Auto (default), On and
+Off. Auto draws on phones and tablets until a pen first draws; desktops keep
+fingers for gestures. GTK is a desktop regardless of window size: choose On here
+or with the switch in the phone layout's Capy menu to paint with touch. The switch
+shows the effective state and selects On or Off. Pen detection persists across
+windows and restarts; hover, refused drawing and cancelled held contacts do not
+count. Existing preferences retain their values when these fields are absent.
+
 ## Keyboard shortcuts
 
 [`shortcuts.rs`](../../crates/layer-ui/src/shortcuts.rs) associates key chords with

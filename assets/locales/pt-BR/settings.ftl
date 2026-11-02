@@ -185,3 +185,6 @@ settings-wheel-zoom = Zoom
 settings-rotate-with-two-fingers = Girar com dois dedos
 settings-quick-pinch-fit = Pinçar rápido para ajustar
 settings-quick-pinch-restore = Afastar os dedos para restaurar a vista
+
+settings-draw-with-finger = Desenhar com o dedo
+settings-auto = Automático

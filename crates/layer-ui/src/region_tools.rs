@@ -193,7 +193,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 );
             }
             PenPhase::Up => {
+                let checkpoint = self.engine.checkpoint();
                 if let Some(point) = self.region_tools.contact.take() { self.request_region_at(point, None, None); }
+                self.finger.admitted_pen |= event.tool.is_pen() && (self.region_tools.target.is_some() || self.engine.checkpoint() != checkpoint);
                 self.layer_interaction.fill_texture = None;
             }
             PenPhase::Cancel => { self.region_tools.cancel(); self.layer_interaction.fill_texture = None; },

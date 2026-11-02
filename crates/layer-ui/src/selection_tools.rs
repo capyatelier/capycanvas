@@ -230,7 +230,7 @@ pub(super) fn constrained_corners(
         },
     )
 }
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct SelectionTools {
     pub options: SelectionOptions,
     hover: Option<Point>,
@@ -239,6 +239,10 @@ pub(super) struct SelectionTools {
     pub start_modifiers: Modifiers,
 }
 impl SelectionTools {
+    pub(super) fn restore_contact(&mut self, mut before: Self) {
+        before.options = self.options.clone();
+        *self = before;
+    }
     pub fn cancel(&mut self) -> bool {
         let active = self.contact || self.hover.is_some();
         self.contact = false;

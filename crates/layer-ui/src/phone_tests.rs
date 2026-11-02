@@ -310,8 +310,12 @@ fn phone_main_menu_extras_follow_header_and_title_bar_edit_is_refused() {
         assert_eq!(s.main_menu_extras(), [true, true]);
         let primary = s.application_menu(ApplicationMenu::Primary);
         assert!(matches!(primary.sections[0][0].action, Some(UiAction::Invoke { command: CommandId::SearchCommands })));
-        assert!(matches!(primary.sections[1][0].action, Some(UiAction::Invoke { command: CommandId::ZenMode })));
-        assert!(matches!(primary.sections[1][1].action, Some(UiAction::Phone { action: PhoneAction::SwapSides })));
+        assert!(matches!(primary.sections[1][0].action, Some(UiAction::Preferences { action: PreferenceAction::Edit {
+            id: PreferenceId::FingerDrawing, value: PreferenceValue::Choice(1),
+        } })));
+        assert_eq!(primary.sections[1][0].selected, Some(false));
+        assert!(matches!(primary.sections[1][1].action, Some(UiAction::Invoke { command: CommandId::ZenMode })));
+        assert!(matches!(primary.sections[1][2].action, Some(UiAction::Phone { action: PhoneAction::SwapSides })));
         assert_eq!(primary.sections[2].iter().map(|item| item.label.as_str()).collect::<Vec<_>>(),
             ApplicationMenu::ALL.iter().map(|menu| menu.localized_label(s.localization()).to_string()).collect::<Vec<_>>());
         assert!(!primary.sections.iter().flatten().any(|item| matches!(item.action,
@@ -411,6 +415,8 @@ fn phone_presentation_waits_for_each_hosts_capability() {
                 assert_eq!(resolved.work_area, desktop.work_area);
                 assert_eq!(resolved.groups.len(), desktop.groups.len());
             }
+            let rows = s.state.settings.pages(platform).into_iter().flat_map(|page| page.groups).flat_map(|group| group.rows);
+            assert_eq!(rows.into_iter().any(|row| row.id == PreferenceId::FingerDrawing), platform == Platform::Gtk);
             assert!(s.state.workspace.layout.phone.is_some());
         }
     }

@@ -41,6 +41,20 @@ impl Platform {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum DeviceClass { #[default] Desktop, Phone, Tablet }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FingerDrawing { #[default] Auto, On, Off }
+impl FingerDrawing {
+    pub const ALL: [Self; 3] = [Self::Auto, Self::On, Self::Off];
+    pub fn enabled(self, device: DeviceClass, pen_seen: bool) -> bool {
+        self == Self::On || (self == Self::Auto && device != DeviceClass::Desktop && !pen_seen)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ZenIcon {
     #[default]
     LookingUp,
@@ -81,6 +95,8 @@ pub struct Settings {
     pub zen_icon: ZenIcon,
     pub zen_show_capy: bool,
     pub phone_swap_sides: bool,
+    pub finger_drawing: FingerDrawing,
+    pub pen_seen: bool,
     /// Shared by Quick Mask and every saved selection, across documents.
     pub selection_painting: layer_core::SelectionPaintBehavior,
     pub pressure_curve: layer_core::PressureResponse,
@@ -154,6 +170,8 @@ impl Default for Settings {
             zen_icon: ZenIcon::default(),
             zen_show_capy: true,
             phone_swap_sides: false,
+            finger_drawing: FingerDrawing::Auto,
+            pen_seen: false,
             selection_painting: Default::default(),
             pressure_curve: layer_core::PressureResponse::default(),
             tilt_calibrations: BTreeMap::new(),
@@ -376,6 +394,7 @@ pub enum PreferenceId {
     Accent,
     Cursor,
     HideCursorWhileDrawing,
+    FingerDrawing,
     PanSpeed,
     ZoomSpeed,
     WheelBehavior,
@@ -415,6 +434,7 @@ impl PreferenceId {
             Self::Accent => "accent",
             Self::Cursor => "cursor",
             Self::HideCursorWhileDrawing => "hide-cursor-while-drawing",
+            Self::FingerDrawing => "finger-drawing",
             Self::PanSpeed => "pan-speed",
             Self::ZoomSpeed => "zoom-speed",
             Self::WheelBehavior => "wheel-behavior",
@@ -1178,6 +1198,13 @@ impl Settings {
                 PreferenceGroup {
                     title: localizer.text(MessageId::SETTINGS_POINTER).to_string(),
                     rows: vec![
+                        row(FingerDrawing, &localizer.text(MessageId::SETTINGS_DRAW_WITH_FINGER), "", PreferenceKind::Choice {
+                            presentation: ChoicePresentation::Dropdown,
+                            options: [MessageId::SETTINGS_AUTO, MessageId::SETTINGS_ON, MessageId::SETTINGS_OFF]
+                                .into_iter().map(|id| localizer.text(id).to_string()).collect(),
+                            icons: Vec::new(),
+                            selected: crate::FingerDrawing::ALL.iter().position(|mode| *mode == self.finger_drawing).unwrap() as u32,
+                        }),
                         row(
                             Cursor,
                             &localizer.text(MessageId::SETTINGS_CURSOR_SHAPE),
@@ -1339,11 +1366,11 @@ impl Settings {
         SettingsPage::ALL
             .into_iter()
             .zip(groups)
-            .map(|(id, groups)| PreferencePage {
-                id,
-                title: id.localized_title(localizer),
-                icon: id.icon().into(),
-                groups,
+            .map(|(id, mut groups)| {
+                if !platform.presents_phone_layout() {
+                    for group in &mut groups { group.rows.retain(|row| row.id != PreferenceId::FingerDrawing); }
+                }
+                PreferencePage { id, title: id.localized_title(localizer), icon: id.icon().into(), groups }
             })
             .collect()
     }
@@ -1454,6 +1481,7 @@ impl Settings {
                 self.transparency = crate::Transparency::CHOICES[value.choice().unwrap() as usize].0
             }
             Cursor => self.cursor = CursorMode::CHOICES[value.choice().unwrap() as usize].0,
+            FingerDrawing => self.finger_drawing = crate::FingerDrawing::ALL[value.choice().unwrap() as usize],
             HideCursorWhileDrawing => {
                 self.hide_cursor_while_drawing = matches!(value, PreferenceValue::Bool(true))
             }

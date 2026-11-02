@@ -95,6 +95,8 @@ mod vector_properties;
 mod transform_frame;
 #[path = "deferred_edits.rs"]
 mod deferred_edits;
+#[path = "finger_input.rs"]
+mod finger_input;
 pub use painted_selections::SelectionBrushOptions;
 #[path = "selection_masks.rs"]
 mod selection_masks;
@@ -276,6 +278,7 @@ pub struct UiSession<R: CanvasRenderer> {
     notices: notices::Notices,
     pen: InputProducer<PenEvent>,
     pen_input: layer_engine::PenInput,
+    finger: finger_input::FingerInput,
     input_pending: bool,
     host_requests_changed: bool,
     pen_contact: bool,
@@ -539,6 +542,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             host_requests_changed: false,
             pen_contact: false,
             pen_input: Default::default(),
+            finger: finger_input::FingerInput::new(platform),
             discarded_contacts: Vec::new(),
             rendering_suspended: false,
             touch: TouchGesture::default(),
@@ -1173,6 +1177,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// are only queued when `paint` is true, without serializing UiState.
     pub fn input(&mut self, input: UiInput) -> Result<InputReply, String> {
         let mut reply = self.route_input(input)?;
+        self.finger.finish_input();
         if self.canvas_bar_presentation().map(|value| value.hold) != self.state.canvas_bar.as_ref().map(|_| self.canvas_bar_hold()) {
             reply.change = merge_change(reply.change, self.changed(0, false));
         }
@@ -1220,8 +1225,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         } = &input {
             self.touch.release(*id);
         }
-        let gesture = self.recognize_touch_gesture(&input);
         let mut reply = InputReply::default();
+        if self.finger_input(&input, &mut reply)? { return Ok(reply); }
+        let gesture = self.recognize_touch_gesture(&input);
         let mut contact = None;
         if self.workspace_transition {
             reply.handled = true;
@@ -1691,12 +1697,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 let navigation_contact = kind == PointerKind::Touch
                     && phase == ContactPhase::Down && self.interaction.pointer.is_none() && !self.touch.is_active()
-                    && matches!(self.navigation_mode(), Some(NavigationMode::Zoom | NavigationMode::ZoomOut | NavigationMode::Rotate));
+                    && (matches!(self.navigation_mode(), Some(NavigationMode::Zoom | NavigationMode::ZoomOut | NavigationMode::Rotate))
+                        || (self.finger_drawing() && self.navigation_mode().is_some()));
                 let transform_contact = kind == PointerKind::Touch
                     && (self.interaction.pointer.is_some_and(|contact| contact.id == id && contact.kind == kind)
                         || (phase == ContactPhase::Down && self.interaction.pointer.is_none()
                             && !self.touch.is_active() && self.object_touch_hit(position)));
-                if kind == PointerKind::Touch && !transform_contact && !navigation_contact {
+                let finger_contact = kind == PointerKind::Touch && self.finger.owns(id);
+                if kind == PointerKind::Touch && !transform_contact && !navigation_contact && !finger_contact {
                     if self.interaction.gestures.scrubbed {
                         reply.handled = true;
                     } else if self.interaction.pointer.is_none() && !self.state.settings_open {
@@ -1718,7 +1726,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         && (paint || self.navigation_idle())
                         && button != PointerButton::Other
                     {
-                        self.touch.clear();
+                        if !finger_contact { self.touch.clear(); }
                         let navigation = (!paint).then(|| self.begin_navigation(button, position));
                         self.interaction.pointer = Some(PointerContact {
                             id,
@@ -4538,6 +4546,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn pen(&mut self, event: PenEvent) {
         let Some(event)=self.filter_pen(event) else {return;};
         if event.phase==PenPhase::Down && !event.flags.contains(layer_engine::SampleFlags::PREDICTED){self.finish_fill_reveal();}
+        if event.tool == layer_engine::ToolKind::Finger {
+            self.finger.raw = (!matches!(event.phase, PenPhase::Up | PenPhase::Cancel)).then_some(event.device_id);
+        }
         self.prepare_tilt_input(event);
         if !event.flags.contains(layer_engine::SampleFlags::PREDICTED) && !event.flags.contains(layer_engine::SampleFlags::CORRECTION) {
             self.bubble_stroke(event.phase, [event.surface_position.x, event.surface_position.y]);
@@ -4561,6 +4572,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn pen_ready(&mut self, mut event: PenEvent) -> Result<(), PenEvent> {
         self.eraser_end(&mut event);
+        self.capture_finger_draft(&event);
         if event.phase == PenPhase::Down
             && !event.flags.contains(layer_engine::SampleFlags::PREDICTED)
             && !event.flags.contains(layer_engine::SampleFlags::CORRECTION)
@@ -4587,6 +4599,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         if result.is_err() { (self.selection_tools.gesture_mode, self.selection_tools.start_modifiers) = gesture; }
         if result.is_ok() && event.phase == PenPhase::Down {
             self.dismiss_notice_unless_raised(notice);
+            self.finger.admitted_pen |= event.tool.is_pen() && !self.pen_contact
+                && (!self.canvas_contact_idle() || self.operation.dragging());
         }
         if result.is_ok() && (event.phase == PenPhase::Cancel || (event.phase == PenPhase::Up && self.layer_interaction.path.is_empty())) {
             self.selection_tools.gesture_mode = None;
@@ -4633,7 +4647,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             // Hand input is routed through UiInput::Pointer's pan gesture.
             return Ok(());
         }
-        let kind = if event.tool == layer_engine::ToolKind::Mouse { PointerKind::Mouse } else { PointerKind::Pen };
+        let kind = match event.tool {
+            layer_engine::ToolKind::Mouse => PointerKind::Mouse,
+            layer_engine::ToolKind::Finger => PointerKind::Touch,
+            _ => PointerKind::Pen,
+        };
         if self.eyedropper.picking.previous.is_some()
             || self.eyedropper.picking.consumed.contains(&(kind, event.device_id)) {
             if event.phase == PenPhase::Hover {
@@ -5035,6 +5053,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.engine
             .render_frame_for(now_ns, presentation_ns)
             .map_err(error)?;
+        changed |= self.save_admitted_pen()?;
         if self.engine.metrics().input_budget_completions!=budget_completions {
             self.raise_message_notice(MessageId::COMMON_STROKE_INPUT_LIMIT);
         }
@@ -6291,6 +6310,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 || self.vector_lines.active() || self.vector_lines.erasing()))
     }
     fn paint_contact_busy(&self) -> bool {
+        if self.finger.withdrawn { return false; }
         self.pen_contact || (!self.engine.backend().has_pending_submission()
             && (self.engine.has_pending_input() || self.engine.has_active_stroke()))
     }
@@ -7294,6 +7314,7 @@ mod tests {
     include!("move_pixels_tests.rs");
     include!("held_action_tests.rs");
     include!("gesture_tests.rs");
+    include!("finger_tests.rs");
     include!("keymap_tests.rs");
     include!("binding_tests.rs");
     include!("view_tests.rs");
@@ -8546,6 +8567,8 @@ mod tests {
         s.pen(event(&s, 2, PenPhase::Up, 0.7));
         assert!(s.park_document().is_err());
         s.frame(30_000_000, 38_000_000).unwrap();
+        let saved = s.state.requests.iter().find(|r| matches!(r.kind, HostRequestKind::SaveSettings { .. })).unwrap().id;
+        s.dispatch(UiAction::CompleteRequest { id: saved, error: None }).unwrap();
         let document = s.engine.document().clone();
         let checkpoint = s.engine.checkpoint();
         s.park_document().unwrap();
@@ -8605,7 +8628,10 @@ mod tests {
         assert!(s.engine.has_active_stroke());
         assert!(s.state.document_file.modified);
         assert_eq!(change.regions & regions::DOCUMENT, 0);
-        assert_eq!(s.state.revision, revision, "pen-down must not republish the editor model");
+        assert_ne!(change.regions & regions::SETTINGS, 0);
+        assert!(s.state.settings.pen_seen);
+        assert!(s.state.revision > revision, "first admitted pen publishes its detected state once");
+        let revision = s.state.revision;
         s.pen(event(&s, 1, PenPhase::Up, 0.3));
         let change = s.frame(20_000_000, 28_000_000).unwrap();
         assert!(!s.engine.has_active_stroke());
@@ -8856,6 +8882,8 @@ mod tests {
         s.request_document_close().unwrap();
         s.pen(event(&s, 1, PenPhase::Down, 1.));
         s.frame(10_000_000, 18_000_000).unwrap();
+        let saved = s.state.requests.iter().find(|r| matches!(r.kind, HostRequestKind::SaveSettings { .. })).unwrap().id;
+        s.dispatch(UiAction::CompleteRequest { id: saved, error: None }).unwrap();
         s.complete_document_request(id, Ok(true)).unwrap();
         assert!(!s.state.document_file.close_ready);
         assert!(s.state.requests.is_empty());

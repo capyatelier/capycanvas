@@ -2254,8 +2254,10 @@ fn toolbars_can_stay_in_zen_mode() {
 
 #[test]
 fn an_edge_swipe_in_zen_peeks_that_edges_toolbars_until_a_contact_elsewhere() {
+    for mode in [FingerDrawing::On, FingerDrawing::Off] {
     for platform in Platform::ALL {
         let mut s = session(platform);
+        s.state.settings.finger_drawing = mode;
         s.set_viewport(VIEW, [1200, 900]).unwrap();
         let layout = s.layout(VIEW);
         let group = layout.groups.iter().find(|g| !g.floating && s.state.workspace.layout.group_edge(g.id).is_some()).unwrap().clone();
@@ -2273,8 +2275,8 @@ fn an_edge_swipe_in_zen_peeks_that_edges_toolbars_until_a_contact_elsewhere() {
         let touch = |s: &mut UiSession<Recorder>, phase, position| {
             s.input(UiInput::Pointer { id: 9, phase, kind: PointerKind::Touch, button: PointerButton::Primary, position, time_ns: 0 }).unwrap()
         };
-        touch(&mut s, ContactPhase::Down, start);
-        touch(&mut s, ContactPhase::Move, at(20.));
+        assert!(!touch(&mut s, ContactPhase::Down, start).paint);
+        assert!(!touch(&mut s, ContactPhase::Move, at(20.)).paint);
         assert!(!s.zen_keeps(group.id), "a short swipe keeps chrome hidden");
         let peek = touch(&mut s, ContactPhase::Move, at(60.));
         assert_ne!(peek.change.regions & regions::LAYOUT, 0);
@@ -2291,6 +2293,7 @@ fn an_edge_swipe_in_zen_peeks_that_edges_toolbars_until_a_contact_elsewhere() {
         touch(&mut s, ContactPhase::Down, [600., 450.]);
         touch(&mut s, ContactPhase::Move, [700., 450.]);
         assert!(!s.zen_keeps(group.id), "swipes away from the edges do nothing");
+    }
     }
 }
 

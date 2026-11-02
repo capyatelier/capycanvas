@@ -211,20 +211,21 @@ its overflow, as today.
 
 ## Draw with Finger
 
-Today a finger never paints or pans with a drawing tool (`camera.rs`: "A single
-finger never paints or pans"). It picks colors with a hold, moves handles,
-objects and vector paths, and pans only with the Hand tool. Two fingers navigate,
-and two to four fingers tap.
+Shared Rust and GTK implement the modes below. Off retains gesture-only drawing
+contacts: color-picker holds, handle/object/path drags and Hand navigation. Two
+fingers navigate, and two to four fingers tap. Other hosts still need their own
+native input integration and qualification.
 
 | Mode | One finger |
 | --- | --- |
 | **Auto** (default) | On phones and tablets, paints until a pen first draws on this installation, then behaves as Off. On desktops, behaves as Off. |
 | **On** | Does what a pen does, with every tool. |
-| **Off** | Today's behavior. |
+| **Off** | Gesture-only behavior. |
 
 Every platform starts in Auto. The switch in Capy's menu shows what the current
 mode does now; choosing it sets On or Off. Settings → Input offers all three.
-Desktops show it only in Settings.
+GTK counts as Desktop at every window size, so Auto stays Off. Choose On in
+Settings → Input or the phone layout's Capy menu to test finger painting.
 
 ### When a finger paints
 
@@ -251,8 +252,8 @@ Desktops show it only in Settings.
 
 ### Pen detection and device class
 
-- Settings gains `finger_drawing` (Auto, On, Off) and `pen_seen`, on the Input page,
-  both with defaults (Auto, not seen) so older preferences read unchanged. Swap
+- Settings stores `finger_drawing` (Auto, On, Off) and internal `pen_seen`;
+  the mode appears on the Input page. Both default (Auto, not seen) so older preferences read unchanged. Swap
   Sides adds a third preference with the same rule.
 - A pen counts when its drawing is admitted, in the input routing every host
   shares: not when a locked or unsupported layer refuses it, and not when it is
@@ -263,7 +264,8 @@ Desktops show it only in Settings.
   pointers.
 - `pen_seen` is saved like other settings and reaches every window; GTK, macOS,
   Windows and iPad scenes each run their own session.
-- Hosts report a device class, which nothing reads today: Apple from the device type,
+- The session uses a device class independently of window geometry. GTK is
+  Desktop; shared tests cover Phone and Tablet. The remaining host integration uses Apple device type,
   Android from the display's (not the window's) smallest width at 600 dp, Web from a
   coarse pointer and the screen size. GTK, macOS and Windows are desktops. An iPad in
   a narrow window gets the phone layout but stays a tablet here.

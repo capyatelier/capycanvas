@@ -82,9 +82,12 @@ impl<R:CanvasRenderer> UiSession<R> {
         self.region_tools.gesture.as_ref().map_or((self.region_tools.tolerance,self.region_tools.gap_reach,self.region_tools.refinement.close_gaps),
             |gesture|(gesture.original_tolerance,gesture.original_reach,gesture.original_close))
     }
+    pub(in crate::session) fn uses_fill_gesture(&self)->bool {
+        matches!(self.layer_interaction.tool,LayerCanvasTool::Region {fill:true,..})
+            && self.selection_masks.target().is_none() && self.editing_vector_layer().is_none()
+    }
     pub(in crate::session) fn fill_pen(&mut self,event:PenEvent)->bool {
-        if !matches!(self.layer_interaction.tool,LayerCanvasTool::Region {fill:true,..})
-            || self.selection_masks.target().is_some() || self.editing_vector_layer().is_some() {return false;}
+        if !self.uses_fill_gesture() {return false;}
         if event.phase!=PenPhase::Down && self.region_tools.gesture.as_ref().is_some_and(|gesture|gesture.device!=event.device_id){return true;}
         if matches!(event.phase,PenPhase::Move|PenPhase::Up) && self.region_tools.gesture.as_ref().is_some_and(|gesture|gesture.touch.is_some()
             && (event.surface_position.x-gesture.start.x).hypot(event.surface_position.y-gesture.start.y)>self.interaction.touch_policy.slop) {
@@ -270,7 +273,7 @@ impl<R:CanvasRenderer> UiSession<R> {
             }
         }
         if kind!=PointerKind::Touch {return;}
-        if !matches!(self.layer_interaction.tool,LayerCanvasTool::Region {fill:true,..}) || self.selection_masks.target().is_some() || self.editing_vector_layer().is_some() {
+        if !self.uses_fill_gesture() {
             self.region_tools.finger=None;return;
         }
         if phase==ContactPhase::Down && !self.touch.is_active() && self.interaction.pointer.is_none() && !self.state.settings_open {

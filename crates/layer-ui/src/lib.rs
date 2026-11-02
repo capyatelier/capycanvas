@@ -200,7 +200,7 @@ pub use session::{NewDrawingAction, NewDrawingChoice, NewDrawingCopy, NewDrawing
 pub use session::{FrequencySeparationAction, FrequencySeparationView};
 pub use session::{LayerControls, PreparedWorkspace, ProofMode, UiSession, SelectionBrushOptions, SelectionMenu, SelectionAction, RefineKind, SelectionRefineView, SelectionDisplayOptions, MaskEditingView, SelectionTool, SelectionConstraint, SelectionOptions, SelectionMode};
 pub use settings::{
-    ChoicePresentation, HostRequest, HostRequestKind, Platform,
+    ChoicePresentation, DeviceClass, FingerDrawing, HostRequest, HostRequestKind, Platform,
     PreferenceAction,
     PreferenceGroup, PreferenceId, PreferenceKind, PreferencePage, PreferenceReset, PreferenceRow,
     PreferenceSearchResult, PreferenceValue, PreferencesState, PreferencesView, Settings,

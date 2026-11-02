@@ -8,6 +8,9 @@ pub(crate) struct ZenPeek {
     edge: Option<Edge>,
     swipe: Option<(u64, Edge, [f32; 2])>,
 }
+impl ZenPeek {
+    pub fn swiping(&self) -> bool { self.swipe.is_some() }
+}
 
 impl<R: CanvasRenderer> UiSession<R> {
     pub fn layout_resolve_input(&self)->crate::LayoutResolveInput<'_> {

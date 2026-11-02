@@ -231,10 +231,12 @@ mod enclose_fill_checks {
 
     #[test]
     fn fill_quick_touch_taps_keep_both_released_contacts_in_order() {
-        for platform in Platform::ALL {
-            let mut s=session(platform);invoke(&mut s,CommandId::Fill);
+        for (platform,mode) in Platform::ALL.into_iter().flat_map(|platform|FingerDrawing::ALL.map(move |mode|(platform,mode))) {
+            let mut s=session(platform);s.state.settings.finger_drawing=mode;invoke(&mut s,CommandId::Fill);
             let pointer=|id,phase,x|UiInput::Pointer {id,kind:PointerKind::Touch,button:PointerButton::Primary,position:[x,240.],time_ns:id*1_000_000,phase};
-            for (id,x) in [(41,200.),(42,400.)] {s.input(pointer(id,ContactPhase::Down,x)).unwrap();s.input(pointer(id,ContactPhase::Up,x)).unwrap();}
+            for (id,x) in [(41,200.),(42,400.)] {
+                for phase in [ContactPhase::Down,ContactPhase::Up] {assert!(!s.input(pointer(id,phase,x)).unwrap().paint);}
+            }
             s.frame(50_000_000,50_000_000).unwrap();let first=s.renderer_mut().region_requests.last().unwrap().clone();
             reply(&mut s,&first);
             for now in 51..56 {s.frame(now*1_000_000,now*1_000_000).unwrap();}
@@ -247,10 +249,10 @@ mod enclose_fill_checks {
 
     #[test]
     fn fill_touch_computes_on_press_and_cancels_on_a_second_finger() {
-        for platform in Platform::ALL {
-            let mut s=session(platform);invoke(&mut s,CommandId::Fill);
+        for (platform,mode) in Platform::ALL.into_iter().flat_map(|platform|FingerDrawing::ALL.map(move |mode|(platform,mode))) {
+            let mut s=session(platform);s.state.settings.finger_drawing=mode;invoke(&mut s,CommandId::Fill);
             let pointer=|id,phase|UiInput::Pointer {id,kind:PointerKind::Touch,button:PointerButton::Primary,position:[200.,240.],time_ns:10_000_000,phase};
-            s.input(pointer(41,ContactPhase::Down)).unwrap();s.frame(20_000_000,20_000_000).unwrap();
+            assert!(!s.input(pointer(41,ContactPhase::Down)).unwrap().paint);s.frame(20_000_000,20_000_000).unwrap();
             let request=s.renderer_mut().region_requests.last().unwrap().clone();reply(&mut s,&request);s.frame(30_000_000,30_000_000).unwrap();
             assert!(s.renderer_mut().fill_preview.is_none());assert!(!s.engine.can_undo());
             s.input(pointer(42,ContactPhase::Down)).unwrap();s.input(pointer(41,ContactPhase::Up)).unwrap();s.input(pointer(42,ContactPhase::Up)).unwrap();

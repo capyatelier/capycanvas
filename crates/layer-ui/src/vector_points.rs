@@ -12,12 +12,14 @@ pub(super) struct PointRef { path: ItemId, at: AnchorRef }
 #[derive(Clone, Copy)]
 enum Part { Anchor(PointRef), Handle(PointRef, bool), Segment(ItemId, SegmentHit) }
 
+#[derive(Clone)]
 enum Gesture {
+    Switch { layer: OccurrenceHandle, original: VectorObject, anchor: PointRef },
     Drag { layer: OccurrenceHandle, part: Part, press: [f64; 2], original: VectorObject, moved: bool, latest: Option<([f64; 2], Modifiers)>, edited: Option<BTreeMap<Position, PathItem>> },
     Marquee { layer: OccurrenceHandle, start: [f64; 2], end: [f64; 2], adding: bool },
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct VectorPoints { gesture: Option<Gesture>, selected: BTreeSet<PointRef>, layer: Option<OccurrenceHandle>, geometries: BTreeMap<ItemId, Arc<PathGeometry>>, click: Option<(PointRef, [f64; 2], u64)> }
 impl VectorPoints {
     pub(super) fn gesturing(&self) -> bool { self.gesture.is_some() }
@@ -101,7 +103,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if let Part::Anchor(r) = part {
                     let double = self.vector_points.click.is_some_and(|(last, previous, at)| last == r && distance(previous, point) <= reach && event.timestamp_ns.saturating_sub(at) <= DOUBLE_CLICK_NS);
                     self.vector_points.click = Some((r, point, event.timestamp_ns));
-                    if double { return self.switch_anchor_kind(layer, &object, r).map(|()| true); }
+                    if double {
+                        self.switch_anchor_kind(layer, &object, r, false)?;
+                        self.vector_points.gesture = Some(Gesture::Switch { layer, original: object, anchor: r });
+                        return Ok(true);
+                    }
                     if self.interaction.modifiers.shift {
                         if !self.vector_points.selected.remove(&r) { self.vector_points.selected.insert(r); }
                     } else if !self.vector_points.selected.contains(&r) {
@@ -114,6 +120,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             PenPhase::Move | PenPhase::Up => {
                 let (modifiers, reach) = (self.interaction.modifiers, REACH * self.document_per_surface_pixel());
                 match &mut self.vector_points.gesture {
+                    Some(Gesture::Switch { .. }) => (),
                     Some(Gesture::Marquee { end, .. }) => *end = point,
                     Some(Gesture::Drag { press, moved, latest, .. }) => {
                         *moved |= distance(point, *press) >= reach * 0.5;
@@ -215,6 +222,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn finish_vector_points(&mut self) -> Result<(), String> {
         let Some(gesture) = self.vector_points.gesture.take() else { return Ok(()) };
         match gesture {
+            Gesture::Switch { layer, original, anchor } => self.switch_anchor_kind(layer, &original, anchor, true),
             Gesture::Drag { layer, original, edited: Some(edited), .. } => self.commit_vector_points(layer, original, edited),
             Gesture::Drag { layer, part: Part::Segment(id, hit), original, edited: None, .. } => {
                 let path = path_of(&original, id).ok_or("The path was removed")?.with_anchor_inserted(hit.subpath, hit.segment, hit.t).map_err(str::to_string)?;
@@ -243,12 +251,17 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         }
     }
-    fn switch_anchor_kind(&mut self, layer: OccurrenceHandle, object: &VectorObject, r: PointRef) -> Result<(), String> {
+    fn switch_anchor_kind(&mut self, layer: OccurrenceHandle, object: &VectorObject, r: PointRef, commit: bool) -> Result<(), String> {
         let original = path_of(object, r.path).ok_or("The path was removed")?;
         let path = original.with_anchor_kind_switched(r.at).map_err(str::to_string)?;
         self.vector_points.click = None;
         if path.geometry == original.geometry { return Ok(()); }
         let position = object.find(r.path).ok_or("The path was removed")?;
+        if !commit {
+            self.preview_vector_paths(layer, Arc::new([r.path].into()), vec![path].into());
+            return Ok(());
+        }
+        self.end_path_preview();
         let edit = self.engine.document().vector_object_edit(layer, object.replace([(position, Some(Record::Path(path)))])).map_err(|e| e.to_string())?;
         self.layer_edit(edit)?;
         self.remember_vector_points(layer);
@@ -256,7 +269,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn cancel_vector_points(&mut self) -> bool {
         let Some(gesture) = self.vector_points.gesture.take() else { return false };
-        if let Gesture::Drag { edited: Some(_), .. } = gesture { self.end_path_preview(); }
+        if matches!(gesture, Gesture::Drag { edited: Some(_), .. } | Gesture::Switch { .. }) { self.end_path_preview(); }
         self.layer_interaction.changed = true;
         true
     }
