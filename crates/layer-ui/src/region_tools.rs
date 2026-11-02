@@ -376,7 +376,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.vector_figure_style(FigurePaint::Fill, layer_core::authored::vector::Cap::Butt, layer_core::authored::vector::Join::Miter)?.entries.first().cloned()
         };
         let innermost = object.paths().filter(|(_, path)| (lines_from!=RegionSource::Reference || path.style.strokes().next().is_none()) && path.pickable() && path.encloses(local, tolerance))
-            .map(|(position, path)| (path.area_around(local, tolerance), position, path)).min_by(|a, b| a.0.total_cmp(&b.0));
+            .map(|(position, path)| (path.area_around(local, tolerance), position, path)).min_by(|a, b| a.0.total_cmp(&b.0)
+                .then_with(|| b.2.style.entries.iter().any(|e|matches!(e,PaintEntry::Fill(_))).cmp(&a.2.style.entries.iter().any(|e|matches!(e,PaintEntry::Fill(_))))));
         let found = innermost.map(|(_, position, path)| {
             let paints=path.style.entries.iter().filter_map(|entry|match entry {PaintEntry::Fill(fill)=>Some(&fill.paint),_=>None}).collect::<Vec<_>>();
             let everywhere=self.region_tools.scope==FillScope::Everywhere && !paints.is_empty();

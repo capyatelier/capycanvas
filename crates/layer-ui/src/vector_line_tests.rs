@@ -1428,6 +1428,33 @@ fn path_ids(s: &UiSession<Recorder>, layer: OccurrenceHandle) -> Vec<layer_core:
 }
 
 #[test]
+fn vector_fill_prefers_painted_paths_at_equal_area_without_skipping_inner_outlines() {
+    use layer_core::authored::vector::{Cap,Join,PaintEntry};
+    for platform in Platform::ALL {
+        let (mut s,layer)=vector_session_on(platform);
+        s.dispatch(UiAction::SetColor {rgba:[0.1,0.7,0.3,1.]}).unwrap();
+        let outline=straight(1,&[[100.,100.],[400.,100.],[400.,400.],[100.,400.]],true);
+        let mut painted=outline.clone();painted.id=layer_core::authored::vector::ItemId(2);
+        painted.style=Arc::new(s.vector_figure_style(FigurePaint::Fill,Cap::Butt,Join::Miter).unwrap());
+        let inner=straight(3,&[[200.,200.],[300.,200.],[300.,300.],[200.,300.]],true);
+        put_paths(&mut s,layer,vec![outline.clone(),painted.clone(),inner.clone()]);
+        s.layer_action(LayerAction::Tool {tool:LayerCanvasTool::Region {fill:true,source:crate::RegionSource::Editing}}).unwrap();
+        let original=s.engine.document().scene().vector_layer(layer).unwrap().clone();let checkpoint=s.engine.checkpoint();
+        let point=surface_at(&s,[150.,150.]);press(&mut s,10,&[point,point]);
+        assert_eq!(s.engine.checkpoint(),checkpoint,"{platform:?}: painted face repeat is a no-op");
+        assert_eq!(s.engine.document().scene().vector_layer(layer),Some(&original));
+        s.dispatch(UiAction::SetColor {rgba:[0.8,0.2,0.1,1.]}).unwrap();
+        let point=surface_at(&s,[250.,250.]);press(&mut s,20,&[point,point]);
+        let changed=s.engine.document().scene().vector_layer(layer).unwrap();
+        assert_eq!(changed.paths().find(|(_,p)|p.id==outline.id).unwrap().1,&outline);
+        assert_eq!(changed.paths().find(|(_,p)|p.id==painted.id).unwrap().1,&painted);
+        assert!(matches!(changed.paths().find(|(_,p)|p.id==inner.id).unwrap().1.style.entries[..],[PaintEntry::Fill(_),PaintEntry::Stroke(_)]));
+        invoke(&mut s,CommandId::Undo);assert_eq!(s.engine.checkpoint(),checkpoint);
+        assert_eq!(s.engine.document().scene().vector_layer(layer),Some(&original));
+    }
+}
+
+#[test]
 fn fill_ignores_clicks_off_the_canvas_and_fills_that_change_nothing() {
     let (mut s, handle) = vector_session();
     put_paths(&mut s, handle, vec![straight(1, &[[100., 100.], [400., 100.], [400., 400.], [100., 400.]], true)]);
