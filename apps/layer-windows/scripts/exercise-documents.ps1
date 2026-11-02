@@ -1590,7 +1590,9 @@ $entry.SetFocus();$entry.GetCurrentPattern([System.Windows.Automation.ValuePatte
 $reopenedDrawing=@((Model).state.tabs|Where-Object active)[0].id
 Request-Close -WithPreferences
 Wait-Closed 'Session close did not finish'
-Assert-DocumentStderr ([IO.File]::ReadAllText($stderr)) -PreservedPackage
+$stderrStream=[IO.File]::Open($stderr,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+$stderrReader=[IO.StreamReader]::new($stderrStream)
+try{Assert-DocumentStderr ($stderrReader.ReadToEnd()) -PreservedPackage}finally{$stderrReader.Dispose()}
 $stderr=Join-Path $run 'reopened.stderr.log'
 $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
 $null=$review.Handle

@@ -240,3 +240,29 @@ if($env:OS -eq 'Windows_NT'){
     if((Notice-ActionColors $bitmap $window $offers $layout $palette 1).valid){throw 'Notice colors relaxed the exact accent fill'}
 }
 Write-Output 'Localized notice readiness waits for its exact action fills within its existing deadline.'
+
+& {
+    $documents=Fixture-Ast 'exercise-documents.ps1'
+    $assert=$documents.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Assert-DocumentStderr'},$true)
+    $close=@($documents.FindAll({param($n)$n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Wait-Closed' -and $n.Extent.Text -eq "Wait-Closed 'Session close did not finish'"},$true))
+    if(!$assert -or $close.Count -ne 1){throw 'Missing actual document close stderr assertion'}
+    . ([scriptblock]::Create($assert.Extent.Text))
+    $checks=@($close[0].Parent.Parent.Statements|Where-Object {$_.Find({param($n)$n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Assert-DocumentStderr'},$true)})
+    if($checks.Count -ne 1){throw 'Missing actual document close stderr reader'}
+    $start=$close[0].Parent.Extent.EndOffset
+    $read=[scriptblock]::Create($documents.Extent.Text.Substring($start,$checks[0].Extent.EndOffset-$start))
+    $logDirectory=Join-Path $repo ('artifacts/windows/script-encoding/'+[Guid]::NewGuid().ToString('N'))
+    [IO.Directory]::CreateDirectory($logDirectory)|Out-Null
+    $stderr=Join-Path $logDirectory 'live-stderr.log'
+    $writer=[IO.File]::Open($stderr,[IO.FileMode]::Create,[IO.FileAccess]::Write,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    try{
+        $bytes=[Text.Encoding]::UTF8.GetBytes("Drawing open: Unknown layer blend future-package-blend`n")
+        $writer.Write($bytes,0,$bytes.Length);$writer.Flush()
+        & $read
+        $bytes=[Text.Encoding]::UTF8.GetBytes("unexpected diagnostic`n")
+        $writer.Write($bytes,0,$bytes.Length);$writer.Flush();$rejected=$false
+        try{& $read}catch{if($_.Exception.Message -ne 'Native review reported stderr'){throw};$rejected=$true}
+        if(!$rejected){throw 'Actual document stderr assertion accepted an unexpected live diagnostic'}
+    }finally{$writer.Dispose();[IO.File]::Delete($stderr);[IO.Directory]::Delete($logDirectory)}
+}
+Write-Output 'Document stderr reads share the retained live writer and preserve permitted and unexpected diagnostic assertions.'
