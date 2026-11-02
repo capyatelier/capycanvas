@@ -359,7 +359,8 @@ export async function checkEncloseFill({call,evaluate,settle}) {
       await contact('#new-drawing-presets-button');
       const digital=await evaluate('layerApp.state().new_drawing.drawer.tabs.findIndex(t=>t.label==="Digital")');assert.ok(digital>=0);
       await contact(`#new-drawing-tabs [data-new-drawing-tab="${digital}"]`);
-      await send({type:'new_drawing',action:{op:'search',query:'Full HD'}});
+      await contact('#new-drawing-search');await call('Input.insertText',{text:'Full HD'});await settle();
+      assert.equal(await evaluate('layerApp.state().new_drawing.drawer.query'),'Full HD');
       const preset=await evaluate('layerApp.state().new_drawing.drawer.tiles.findIndex(t=>t.name==="Full HD")');assert.ok(preset>=0);
       await contact(`#new-drawing-presets [data-new-drawing-preset="${preset}"]`);await contact('#new-drawing-select');
       assert.equal(await evaluate('layerApp.state().new_drawing.setup.paper.texture??null'),null,'Digital Full HD uses No paper');
