@@ -781,8 +781,8 @@ impl Preferences {
                                     let text = item.item().and_downcast::<gtk::StringObject>().unwrap().string();
                                     item.child().and_downcast::<gtk::Label>().unwrap().set_text(&text);
                                 });
+                                control.set_list_factory(control.factory().as_ref());
                                 control.set_factory(Some(&factory));
-                                control.set_list_factory(Some(&factory));
                             }
                             control.connect_selected_notify(glib::clone!(
                                 #[weak]

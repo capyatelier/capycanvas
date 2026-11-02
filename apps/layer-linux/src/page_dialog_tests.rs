@@ -410,6 +410,7 @@ fn restored_headers(headers: &[(adw::HeaderBar, gtk::Widget, bool, bool, Option<
 #[ignore = "private compositor: --native-test=native_phone_navigation_headers --native-storage; phone viewport, light/dark"]
 fn native_phone_navigation_headers() {
     let mut d = super::phone_motion::setup("art.capycanvas.NavigationHeaders");
+    assert!(adw::ComboRow::new().factory().is_some(), "a fresh native ComboRow exposes its built-in factory");
     assert!(d.w.surface.width().min(d.w.surface.height()) < 480);
     let checkpoint = ui_session(&d.w).engine().checkpoint();
     let original = header_state(d.w.preferences.dialog.upcast_ref());
@@ -424,6 +425,7 @@ fn native_phone_navigation_headers() {
     let root = navigation_header(&d, &frame, true);
     let close_button = icon_button(&root, "window-close-symbolic").unwrap();
     capture(&mut d, "preferences-root");
+    let mut popup_checks = Vec::new();
     for settings in SettingsPage::ALL {
         let title = settings.localized_title(&d.w.localization());
         let row = mapped_label(&frame, &title).unwrap();
@@ -449,6 +451,34 @@ fn native_phone_navigation_headers() {
                 }
             }
             capture(&mut d, &format!("preferences-{}-{}", settings.key(), row.id.key()));
+            if frame.width() == 412 && matches!(row.id, PreferenceId::Language | PreferenceId::MissingProfile) {
+                d.click(native.upcast_ref());
+                until(|| descendants::<gtk::Popover>(native.upcast_ref()).iter().any(|popup| popup.is_mapped()), "the native preference choice popup opens");
+                let popup = descendants::<gtk::Popover>(native.upcast_ref()).into_iter().find(|popup| popup.is_mapped()).unwrap();
+                let list = descendants::<gtk::ListView>(popup.upcast_ref()).into_iter().find(|list| list.is_mapped()).unwrap();
+                drop(idle_paint(&d.w.window));
+                capture(&mut d, &format!("preferences-{}-popup", row.id.key()));
+                let options = descendants::<gtk::Label>(list.upcast_ref()).into_iter()
+                    .filter(|label| label.is_mapped()).collect::<Vec<_>>();
+                assert!(!options.is_empty());
+                let selected = native.selected_item().and_downcast::<gtk::StringObject>().unwrap().string();
+                for label in &options {
+                    let list_row = std::iter::successors(label.parent(), |parent| parent.parent())
+                        .find(|parent| parent.parent().as_ref() == Some(list.upcast_ref())).unwrap();
+                    let bounds = label.compute_bounds(&list_row).unwrap();
+                    assert!(bounds.x() >= 0. && bounds.x() <= 24., "the preference popup option starts beside its row: {bounds:?}");
+                    if label.text() == selected {
+                        popup_checks.push((row.id, descendants::<gtk::Image>(&list_row).iter().any(|icon|
+                            icon.is_mapped() && icon.opacity() > 0. && icon.icon_name().as_deref() == Some("object-select-symbolic"))));
+                    }
+                }
+                keys(&mut d, 0xff1b);
+                until(|| !popup.is_mapped(), "Escape closes the native preference choice popup");
+            }
+        }
+        if settings == SettingsPage::Color && frame.width() == 412 {
+            assert_eq!(popup_checks.len(), 2, "both selected preference options are checked");
+            assert!(popup_checks.iter().all(|(_, checked)| *checked), "selected preference options retain their native checkmark: {popup_checks:?}");
         }
         let subpage = navigation_header(&d, &frame, false);
         assert!(gtk::prelude::GtkWindowExt::default_widget(&d.w.window).is_none(), "Preferences has no synthesized primary");
