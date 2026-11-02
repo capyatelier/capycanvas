@@ -454,24 +454,52 @@ $textureSpan=@($paperAst.FindAll({param($n)$n -is [Management.Automation.Languag
 if($textureSpan.Count -ne 1){throw 'Missing actual Texture-Span geometry'}
 $rowAssignment=@($textureSpan[0].Body.FindAll({param($n)$n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$rowEvidence'},$true))
 if($rowAssignment.Count -ne 1){throw 'Missing actual texture row evidence assignment'}
-$heightAssignment=@($textureSpan[0].Body.FindAll({param($n)$n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$naturalHeight'},$true)|Where-Object {$_.Extent.StartOffset -lt $rowAssignment[0].Extent.StartOffset -or $_.Extent.EndOffset -gt $rowAssignment[0].Extent.EndOffset})
-$rowGeometry=[scriptblock]::Create(((@($heightAssignment.Extent.Text)+@($rowAssignment[0].Extent.Text)) -join "`n"))
+$statements=@($rowAssignment[0].Parent.Statements);$last=[array]::IndexOf($statements,$rowAssignment[0])
+$start=@(for($i=0;$i -lt $last;$i++){if($statements[$i] -is [Management.Automation.Language.AssignmentStatementAst] -and $statements[$i].Left.Extent.Text -eq '$rows'){$i}})[-1]
+if($null -eq $start){throw 'Missing actual texture row grouping'}
+$rowGeometry=[scriptblock]::Create("param(`$tiles,`$viewport)`n"+($statements[$start..$last].Extent.Text -join "`n")+"`n`$rowEvidence")
 & {
-    $scale=1.25
-    foreach($case in @('rounded-spacing','viewport-edge','partial-tile')){
+    foreach($case in @('rounded-spacing','viewport-edge','partial-tile','heterogeneous','top-aligned','bottom-touching')){
         $viewport=[CapyOwnedSearchTest.Rect]::new(830,393,900,661)
         $tiles=@(for($i=0;$i -lt 4;$i++){
             $top=@(462,636,808,982)[$i];$height=if($i -eq 3){72}else{156};$left=850
             if($i -eq 1 -and $case -eq 'viewport-edge'){$left=829}
             if($i -eq 1 -and $case -eq 'partial-tile'){$height=74}
-            [pscustomobject]@{id=$i;bounds=[CapyOwnedSearchTest.Rect]::new($left,$top,128,$height)}
+            $previewHeight=if($height -lt 156){$height-4}else{120}
+            [pscustomobject]@{id=$i;bounds=[CapyOwnedSearchTest.Rect]::new($left,$top,128,$height);preview=[CapyOwnedSearchTest.Rect]::new(($left+4),($top+4),120,$previewHeight)}
         })
-        $rows=@($tiles|Group-Object {$_.bounds.Top}|Sort-Object {[double]$_.Name})
-        . $rowGeometry
-        $complete=@($rowEvidence|Where-Object full)
-        $expected=if($case -eq 'rounded-spacing'){3}else{2}
-        if($complete.Count -ne $expected -or $rowEvidence[3].full -or !$rowEvidence[0].full -or !$rowEvidence[2].full){throw "Texture row geometry misclassified $case native bounds"}
-        if($case -ne 'rounded-spacing' -and $rowEvidence[1].full){throw "Texture row geometry accepted $case"}
+        if($case -eq 'heterogeneous'){
+            $viewport=[CapyOwnedSearchTest.Rect]::new(740,313,1079,793)
+            $tiles=@(for($row=0;$row -lt 4;$row++){
+                $count=if($row -eq 3){3}else{6}
+                for($column=0;$column -lt $count;$column++){
+                    $top=@(313,452,659,866)[$row];$left=770+171*$column
+                    $height=if($row -eq 0){118}elseif($row -eq 3 -and $column -eq 2){210}else{186}
+                    $previewTop=if($row -eq 0){313}else{$top+5};$previewHeight=if($row -eq 0){81}else{144}
+                    [pscustomobject]@{id=6*$row+$column;bounds=[CapyOwnedSearchTest.Rect]::new($left,$top,155,$height);preview=[CapyOwnedSearchTest.Rect]::new(($left+5),$previewTop,144,$previewHeight)}
+                }
+            })
+        }
+        if($case -in @('top-aligned','bottom-touching')){
+            $viewport=[CapyOwnedSearchTest.Rect]::new(740,313,1079,793)
+            $top=if($case -eq 'top-aligned'){313}else{920}
+            $tiles=@(
+                [pscustomobject]@{id=0;bounds=[CapyOwnedSearchTest.Rect]::new(770,$top,155,186);preview=[CapyOwnedSearchTest.Rect]::new(775,($top+5),144,144)}
+                [pscustomobject]@{id=1;bounds=[CapyOwnedSearchTest.Rect]::new(770,520,155,186);preview=[CapyOwnedSearchTest.Rect]::new(775,525,144,144)}
+            )
+        }
+        $rowEvidence=@(& $rowGeometry $tiles $viewport);$complete=@($rowEvidence|Where-Object full)
+        if($case -eq 'heterogeneous'){
+            if($complete.Count -ne 3 -or $rowEvidence[0].full -or !$rowEvidence[1].full -or !$rowEvidence[2].full -or !$rowEvidence[3].full){throw 'Texture row geometry misclassified heterogeneous preview bounds'}
+        }elseif($case -eq 'top-aligned'){
+            if($complete.Count -ne 2 -or !$rowEvidence[0].full){throw 'Texture row geometry rejected a top-aligned square preview at its natural inset'}
+        }elseif($case -eq 'bottom-touching'){
+            if($complete.Count -ne 1 -or $rowEvidence[1].full){throw 'Texture row geometry accepted a bottom-touching tile'}
+        }else{
+            $expected=if($case -eq 'rounded-spacing'){3}else{2}
+            if($complete.Count -ne $expected -or $rowEvidence[3].full -or !$rowEvidence[0].full -or !$rowEvidence[2].full){throw "Texture row geometry misclassified $case native bounds"}
+            if($case -ne 'rounded-spacing' -and $rowEvidence[1].full){throw "Texture row geometry accepted $case"}
+        }
     }
 }
-Write-Output 'Texture rows use observed native tile height at 120 DPI despite alternating rounded row spacing and exclude clipped rows, viewport edges and partial tiles.'
+Write-Output 'Texture rows classify unclipped square previews at their natural inset, retaining heterogeneous, aligned, bottom-edge and partial cases without input.'
