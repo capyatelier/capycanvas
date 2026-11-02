@@ -94,7 +94,17 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,ControlSurface surf
     bool preference=presentation.preference,compact=presentation.compact&&!preference;
     bool dial=str(spec,L"kind")==L"dial"&&!preference&&!valueOnly&&!inlineTrack,ranged=str(spec,L"kind")==L"slider"||dial;
     bool panel=ranged&&!preference&&!valueOnly&&!inlineTrack;
+    auto measureText=[data,local](hstring const& value){
+        if(local->measuredWidth>=0&&local->measuredText==value)return local->measuredWidth;
+        auto measure=label(data,value,false,false);measure.UseLayoutRounding(false);
+        measure.Measure({std::numeric_limits<float>::infinity(),std::numeric_limits<float>::infinity()});
+        auto extent=measure.DesiredSize();local->measuredText=value;
+        local->measuredWidth=extent.Width;local->measuredHeight=extent.Height;return local->measuredWidth;
+    };
+    measureText(L"0");
+    double optical=data->textSize()*262./4096.;
     double valueHeight=compact?data->controlHeight():preference?34.:(ranged?24.:32.),stepSize=panel?16.:compact?data->panelMetric(L"control_height"):ranged&&!preference?24.:32.;
+    valueHeight=std::max(valueHeight,std::ceil(local->measuredHeight+2+2*optical));
     StackPanel root;root.Spacing(0);root.Background(clear());edgeTag(root,L"edge_contact",S(L"input"));
     auto numberId=identifier.empty()?title:identifier;
     AutomationProperties::SetAutomationId(root,L"number-root-"+numberId);
@@ -223,17 +233,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,ControlSurface surf
         return true;
     };
     data->copyView(presentCaption);bindings.emplace_back([presentCaption]{presentCaption();});
-    auto measureText=[data,local](hstring const& value){
-        // Routine model updates retain the measured extent of unchanged text.
-        if(local->measuredWidth>=0&&local->measuredText==value)return local->measuredWidth;
-        auto measure=label(data,value,false,false);measure.UseLayoutRounding(false);
-        measure.Measure({std::numeric_limits<float>::infinity(),std::numeric_limits<float>::infinity()});
-        auto extent=measure.DesiredSize();local->measuredText=value;
-        local->measuredWidth=extent.Width;local->measuredHeight=extent.Height;return local->measuredWidth;
-    };
-    measureText(L"0");
     double textInset=std::max(0.,(valueHeight-local->measuredHeight)/2);
-    double optical=data->textSize()*262./4096.;
     entry.Padding({preference?8.:data->panelMetric(L"field_padding")-1,textInset-1-optical,preference?8.:data->panelMetric(L"field_padding")-1,textInset-1+optical});
     auto surface=make_weak(valueSurface);
     auto setText=[data,local,measureText,readout,panelValueBox,surface,hiddenText,ranged,valueOnly,inlineTrack,preference,panel,dialWeak,dialDot,dialSize,scale=num(spec,L"scale",1),weak=make_weak(entry)](hstring const& value){
