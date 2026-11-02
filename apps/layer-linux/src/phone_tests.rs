@@ -472,11 +472,61 @@ fn color_drawer(d: &Driver) {
     }
 }
 
+fn drawer_selection_colors(d: &mut Driver) {
+    let captures = std::path::PathBuf::from(std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").expect("drawer colour captures"));
+    let original = (state(&d.w).theme, state(&d.w).settings.transparency);
+    let mut samples = Vec::new();
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for level in [layer_ui::Transparency::Off, layer_ui::Transparency::Medium] {
+            use_transparency(&d.w, level);
+            d.w.dispatch(UiAction::Invoke { command: CommandId::DrawingBrush });
+            let opener = tool(d, ToolbarControl::Command { command: CommandId::DrawingBrush });
+            click(d, &opener);
+            inventory_drawer_ready(d);
+            let row = widgets(d.w.window.upcast_ref()).find(|widget| widget.is_mapped()
+                && widget.has_css_class("brush-choice") && widget.has_css_class("selected-tool")).unwrap();
+            super::histogram::scroll_to(&row);
+            let tile = d.named(&opener);
+            assert!(tile.has_css_class("selected-tool") && tile.has_css_class("drawer-open"));
+            let points = [tile, row].map(|widget| {
+                let bounds = widget.compute_bounds(&d.w.window).unwrap();
+                [bounds.x() + 3., bounds.y() + bounds.height() * 0.5]
+            });
+            let name = format!("selection-{theme:?}-{level:?}").to_lowercase();
+            capture(d, &name);
+            let fixture_theme = std::env::var("CAPY_NATIVE_TEST_THEME").unwrap_or_else(|_| "light".into());
+            let path = captures.join(format!("phone-{}x{}-{fixture_theme}-{name}.png", d.w.surface.width(), d.w.surface.height()));
+            let size = [d.w.window.width() as f32, d.w.window.height() as f32];
+            let pixels = glib::MainContext::default().block_on(gtk::gio::spawn_blocking(move || {
+                let mut reader = png::Decoder::new(std::fs::File::open(path).unwrap()).read_info().unwrap();
+                let mut bytes = vec![0; reader.output_buffer_size()];
+                let frame = reader.next_frame(&mut bytes).unwrap();
+                assert_eq!(frame.color_type, png::ColorType::Rgba);
+                points.map(|point| {
+                    let [x, y] = [0, 1].map(|axis| (point[axis] / size[axis]
+                        * [frame.width, frame.height][axis] as f32).floor() as usize);
+                    let offset = (y * frame.width as usize + x) * 4;
+                    <[u8; 4]>::try_from(&bytes[offset..offset + 4]).unwrap()
+                })
+            })).unwrap();
+            samples.push((name, points, pixels, if level == layer_ui::Transparency::Off { 3 } else { 6 }));
+            d.input.key(0xff1b);
+            until(|| state(&d.w).customization.drawer.is_none() && d.w.drawer.is_closed(), "Escape closes the sampled drawer");
+        }
+    }
+    d.w.dispatch(UiAction::SetTheme { theme: Some(original.0) });
+    use_transparency(&d.w, original.1);
+    assert!(samples.iter().all(|(_, _, pixels, tolerance)| pixels[0][..3].iter().zip(&pixels[1][..3])
+        .all(|(tile, row)| tile.abs_diff(*row) <= *tolerance)), "selected tile and drawer row differ: {samples:#?}");
+}
+
 #[test]
 #[ignore = "private compositor: --native-test=native_phone_drawers --native-storage; phone viewport and theme supplied externally"]
 fn native_phone_drawers() {
     let mut d = setup("art.capycanvas.PhoneDrawers");
     let checkpoint = ui_session(&d.w).engine().checkpoint();
+    drawer_selection_colors(&mut d);
     for swapped in [false, true] {
         if swapped { menu(&mut d); click(&mut d, "phone-swap"); }
         for (name, control, panel) in [
@@ -489,11 +539,7 @@ fn native_phone_drawers() {
             click(&mut d, &opener);
             if !selected { click(&mut d, &opener); }
             until(|| state(&d.w).customization.drawer.is_some(), "phone tool opens its drawer");
-            until(|| d.w.drawer.placement().is_some_and(|place| {
-                let width = place.columns.iter().map(|column| column.x + column.width).fold(0., f32::max);
-                let height = place.columns.iter().map(|column| column.y + column.height).fold(0., f32::max);
-                (place.bounds.width - width).abs() < 0.01 && (place.bounds.height - height).abs() < 0.01
-            }), "drawer opening reaches its final column geometry");
+            inventory_drawer_ready(&d);
             let drawer = state(&d.w).customization.drawer.unwrap();
             assert!(drawer.columns.iter().flatten().any(|shown| *shown == panel));
             let place = d.w.drawer.placement().unwrap();
@@ -1183,19 +1229,13 @@ fn native_phone_control_feedback() {
         d.input.key(0xff1b);
         until(|| state(&d.w).customization.drawer.is_none() && d.w.drawer.is_closed() && !state(&d.w).phone.menu, "the phone surface closes");
     }
-    fn settled(d: &Driver) {
-        until(|| d.w.drawer.placement().is_some_and(|place| {
-            let height = place.columns.iter().map(|b| b.y + b.height).fold(0., f32::max);
-            (height - place.bounds.height).abs() < 0.01
-        }), "the drawer reaches its shared geometry");
-    }
     let mut d = setup("art.capycanvas.PhoneControlFeedback");
     assert_eq!([d.w.surface.width(), d.w.surface.height()], [412, 891]);
     for command in [CommandId::DrawingBrush, CommandId::Fill, CommandId::Select] {
         d.w.dispatch(UiAction::Invoke { command });
         click(&mut d, "phone-tool-settings");
         until(|| state(&d.w).customization.drawer.as_ref().is_some_and(|drawer| drawer.columns == vec![vec![Panel::ToolSettings]]), "the fixed tile opens current Tool settings alone");
-        settled(&d);
+        inventory_drawer_ready(&d);
         let place = d.w.drawer.placement().unwrap();
         let button = d.named("phone-tool-settings").compute_bounds(&d.w.surface).unwrap();
         assert!([place.anchor.x - button.x(), place.anchor.y - button.y(), place.anchor.width - button.width(), place.anchor.height - button.height()]
@@ -1209,7 +1249,7 @@ fn native_phone_control_feedback() {
     let brush = tool(&d, ToolbarControl::Command { command: CommandId::DrawingBrush });
     click(&mut d, &brush);
     until(|| state(&d.w).customization.drawer.is_some(), "Brush opens its list");
-    settled(&d);
+    inventory_drawer_ready(&d);
     assert!(!state(&d.w).customization.drawer.unwrap().panels().any(|p| p == Panel::ToolSettings));
     capture(&mut d, "brush-without-settings");
     close(&mut d);
@@ -1221,7 +1261,7 @@ fn native_phone_control_feedback() {
             capture(&mut d, &format!("{tag}-closed"));
             click(&mut d, &brush);
             until(|| state(&d.w).customization.drawer.is_some(), "tool drawer opens for material comparison");
-            settled(&d);
+            inventory_drawer_ready(&d);
             capture(&mut d, &format!("{tag}-tool"));
             assert!(!d.w.zen_capy.has_css_class("drawer-open"));
             assert!(!d.w.zen_capy.state_flags().intersects(gtk::StateFlags::PRELIGHT | gtk::StateFlags::ACTIVE));
@@ -1233,7 +1273,7 @@ fn native_phone_control_feedback() {
             assert!(!d.w.zen_capy.has_css_class("drawer-open"), "closing a menu restores Capy's chip");
             menu(&mut d);
             menu_layers(&mut d);
-            settled(&d);
+            inventory_drawer_ready(&d);
             assert!(d.w.zen_capy.has_css_class("drawer-open"));
             capture(&mut d, &format!("{tag}-capy-layers"));
             close(&mut d);

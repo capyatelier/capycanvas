@@ -648,7 +648,9 @@ window.capy-workspace.glass .dock-panel.gpu-panel-surface .tab-strip-end { backg
 .phone-frame .header-tool.selected-tool { background: var(--header-selection); }
 .phone-frame .phone-controls, .phone-frame .phone-controls > button { min-width: 0; min-height: 0; padding: 0; margin: 0; }
 .phone-frame windowcontrols > button.close > image { background-color: mix(var(--header-control-bg), currentColor, .1); }
-.phone-frame .header-tool.drawer-open { background: var(--panel-bg); }
+.phone-frame .header-tool.drawer-open:not(.selected-tool) { background: var(--panel-bg); }
+.phone-frame .header-tool.selected-tool.drawer-open { background-color: var(--panel-bg); background-image: image(var(--selection-bg)); }
+window.capy-workspace.glass .phone-frame .header-tool.selected-tool.drawer-open { background-color: var(--glass-panel); background-image: image(var(--selection-bg)); }
 .phone-frame .brush-track { margin: 0; }
 .zen-capy.phone-capy { min-width: 0; min-height: 0; background-color: transparent; }
 .zen-capy.phone-capy.drawer-open { background: var(--panel-bg); }

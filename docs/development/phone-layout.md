@@ -106,6 +106,8 @@ bounds without grips; tracks and handles scale from the desktop Brush controls.
   corners, rounding only exposed corners. This works from either side bar, from the
   top or bottom bar, and from Capy to its menu, including mirrored layouts and glass
   chips.
+- **Selected tools** stay blue while their drawer is open. Their tile uses the
+  drawer's selected-row color over the panel surface, including glass panels.
 - **Sliders** show their value and brush preview beside the handle, inside the
   window, including when the bars are swapped. On the track, input follows the
   handle. Moving away blends toward the whole window along the slider axis over
