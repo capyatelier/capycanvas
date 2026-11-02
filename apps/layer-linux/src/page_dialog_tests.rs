@@ -320,7 +320,10 @@ fn export_page(d: &mut Driver, frame: &gtk::Widget, tag: &str) {
     let nav = named::<adw::NavigationView>(frame, "export-navigation");
     let row = named::<adw::ActionRow>(frame, &format!("export-open-{tag}"));
     let scroll = named::<gtk::ScrolledWindow>(frame, "export-main-scroll");
+    until(|| find_named(frame, "color-preview-after").and_then(|widget| widget.downcast::<gtk::Picture>().ok())
+        .is_some_and(|picture| picture.paintable().is_some()), "Export publishes its preview before native navigation");
     super::histogram::scroll_to(row.upcast_ref());
+    drop(idle_paint(&d.w.window));
     until(|| row.compute_bounds(&scroll).is_some_and(|bounds| {
         let visible = bounds.y() >= -1. && bounds.y() + bounds.height() <= scroll.height() as f32 + 1.;
         row.is_mapped() && bounds.width() > 0. && bounds.height() > 0. && visible
