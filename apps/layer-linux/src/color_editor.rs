@@ -29,6 +29,11 @@ type Accepted = Box<dyn FnOnce(&Rc<Workspace>, RgbColor, Option<f32>)>;
 type Viewed = Box<dyn Fn(&ColorEditorView)>;
 type Blocked = Box<dyn Fn(bool)>;
 
+fn grid_position(grid: &gtk::Grid, widget: &gtk::Widget, column: i32, row: i32, columns: i32, rows: i32) {
+    let child = grid.layout_manager().unwrap().layout_child(widget).downcast::<gtk::GridLayoutChild>().unwrap();
+    child.set_column(column); child.set_row(row); child.set_column_span(columns); child.set_row_span(rows);
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Target {
     Dialog,
@@ -98,6 +103,8 @@ pub(crate) struct Row {
     names: gtk::Stack,
     pub(crate) choices: Vec<gtk::CheckButton>,
     space: gtk::Label,
+    heading: gtk::Box,
+    values: adw::WrapBox,
     pub(crate) fields: [Rc<Field>; 3],
     pub(crate) copy: gtk::Button,
     text: RefCell<String>,
@@ -114,6 +121,7 @@ pub(crate) struct ColorForm {
     pub(crate) error: RefCell<Option<(Target, ColorEditorError)>>,
     pub(crate) picking: Cell<bool>,
     updating: Cell<bool>,
+    compact: Cell<bool>,
     pub(crate) wheel: ColorWheel,
     pub(crate) shape_toggles: Vec<gtk::ToggleButton>,
     pub(crate) current: gtk::Button,
@@ -130,9 +138,14 @@ pub(crate) struct ColorForm {
     pub(crate) intensity: Rc<Field>,
     pub(crate) validation: gtk::Label,
     pub(crate) body: crate::dialog_content::DialogContent,
-    right: gtk::Box,
+    panes: gtk::Grid,
     pub(crate) left: gtk::Box,
     pub(crate) header: gtk::Grid,
+    header_pair: gtk::Box,
+    header_captions: gtk::Box,
+    hex_row: gtk::Box,
+    header_extra: RefCell<Option<gtk::Widget>>,
+    component_grid: gtk::Grid,
     pub(crate) values: gtk::Box,
     viewed: RefCell<Option<Viewed>>,
     blocked: RefCell<Option<Blocked>>,
@@ -290,6 +303,8 @@ impl ColorForm {
         let grid = gtk::Grid::builder().column_spacing(4).row_spacing(2).build();
         grid.set_widget_name("edit-color-rows");
         grid.add_css_class("edit-color-rows");
+        let menu_widths = gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
+        let space_widths = gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
         let rows = std::array::from_fn(|row| {
             let menu = gtk::MenuButton::new();
             menu.add_css_class("flat");
@@ -317,16 +332,21 @@ impl ColorForm {
             space.set_valign(gtk::Align::Center);
             space.set_halign(gtk::Align::Start);
             space.set_hexpand(true);
-            grid.attach(&menu, 0, row as i32, 1, 1);
-            grid.attach(&space, 1, row as i32, 1, 1);
+            menu_widths.add_widget(&menu); space_widths.add_widget(&space);
+            let heading = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            heading.append(&menu); heading.append(&space);
+            grid.attach(&heading, 0, row as i32, 2, 1);
+            let values = adw::WrapBox::builder().child_spacing(4).line_spacing(2).justify(adw::JustifyMode::Fill).build();
+            values.set_hexpand(false);
             let fields = std::array::from_fn(|index| {
                 let field = Field::new(Target::Number(ColorEditorTarget::Value { row, index }), &format!("edit-color-value-{row}-{index}"), 6);
-                grid.attach(&field.stack, 2 + index as i32, row as i32, 1, 1);
+                values.append(&field.stack);
                 field
             });
             let copy = copy_button(&format!("edit-color-copy-{row}"));
-            grid.attach(&copy, 5, row as i32, 1, 1);
-            Row { menu, names, choices, space, fields, copy, text: RefCell::default() }
+            values.append(&copy);
+            grid.attach(&values, 2, row as i32, 4, 1);
+            Row { menu, names, choices, space, heading, values, fields, copy, text: RefCell::default() }
         });
         let intensity_label = gtk::Label::builder().xalign(0.).build();
         intensity_label.add_css_class("edit-color-intensity-label");
@@ -341,8 +361,11 @@ impl ColorForm {
         values.append(&grid);
         values.append(&validation);
         let body = crate::dialog_content::new(gtk::Orientation::Horizontal, 24);
-        let right = gtk::Box::new(gtk::Orientation::Vertical, 14);
-        right.set_hexpand(true);
+        let panes = gtk::Grid::builder().column_spacing(24).row_spacing(14).hexpand(true).build();
+        panes.attach(&left, 0, 0, 1, 2);
+        panes.attach(&header, 1, 0, 1, 1);
+        panes.attach(&values, 1, 1, 1, 1);
+        body.append(&panes);
         let form = Rc::new_cyclic(|this| Self {
             this: this.clone(),
             localization: RefCell::new(workspace.localization()),
@@ -352,6 +375,7 @@ impl ColorForm {
             error: RefCell::new(None),
             picking: Cell::new(false),
             updating: Cell::new(false),
+            compact: Cell::new(false),
             wheel,
             shape_toggles,
             current,
@@ -368,15 +392,36 @@ impl ColorForm {
             intensity,
             validation,
             body,
-            right,
+            panes,
             left,
             header,
+            header_pair: pair_box,
+            header_captions: captions,
+            hex_row,
+            header_extra: RefCell::default(),
+            component_grid: grid,
             values,
             viewed: RefCell::default(),
             blocked: RefCell::default(),
         });
         form.arrange(false);
+        let weak = form.this.clone();
+        crate::dialog_content::on_resize(&form.body, move |width| if let Some(form) = weak.upgrade() {
+            let minimum = form.wide_minimum();
+            form.arrange(!layer_ui::dialog_panes_fit(width as f32, minimum, 24.));
+            form.arrange_fields((width as f32) < minimum[1]);
+        });
         form
+    }
+
+    pub(crate) fn replace_picker(&self, widget: &impl IsA<gtk::Widget>) {
+        self.arrange_fields(false);
+        self.header.remove(&self.pick);
+        self.header.remove(&self.hex_row);
+        self.hex_row.set_hexpand(false); self.hex_row.set_halign(gtk::Align::Start);
+        self.header.attach(&self.hex_row, 1, 0, 1, 1);
+        self.header.attach(widget, 2, 0, 1, 1);
+        self.header_extra.replace(Some(widget.as_ref().clone()));
     }
 
     pub(crate) fn show_single_color(&self) {
@@ -393,22 +438,48 @@ impl ColorForm {
 
     pub(crate) fn arrange(&self, narrow: bool) {
         let orientation = if narrow { gtk::Orientation::Vertical } else { gtk::Orientation::Horizontal };
-        if self.left.parent().is_some() && self.body.orientation() == orientation { return; }
-        for widget in [self.left.upcast_ref::<gtk::Widget>(), self.header.upcast_ref(), self.values.upcast_ref(), self.right.upcast_ref()] {
-            if let Some(parent) = widget.parent().and_downcast::<gtk::Box>() { parent.remove(widget); }
-        }
+        if self.body.orientation() == orientation { return; }
         self.left.set_halign(if narrow { gtk::Align::Center } else { gtk::Align::Fill });
-        if narrow {
-            self.body.set_spacing(14);
-            for widget in [self.header.upcast_ref::<gtk::Widget>(), self.left.upcast_ref(), self.values.upcast_ref()] { self.body.append(widget); }
-        } else {
-            self.body.set_spacing(24);
-            self.right.append(&self.header);
-            self.right.append(&self.values);
-            self.body.append(&self.left);
-            self.body.append(&self.right);
-        }
+        grid_position(&self.panes, self.header.upcast_ref(), i32::from(!narrow), 0, 1, 1);
+        grid_position(&self.panes, self.left.upcast_ref(), 0, i32::from(narrow), 1, if narrow { 1 } else { 2 });
+        grid_position(&self.panes, self.values.upcast_ref(), i32::from(!narrow), if narrow { 2 } else { 1 }, 1, 1);
         self.body.set_orientation(orientation);
+    }
+
+    fn arrange_fields(&self, compact: bool) {
+        if self.compact.replace(compact) == compact { return; }
+        let extra = self.header_extra.borrow();
+        let accessory = extra.as_ref().unwrap_or(self.pick.upcast_ref());
+        grid_position(&self.header, accessory, if compact || extra.is_none() { 1 } else { 2 }, 0, 1, 1);
+        grid_position(&self.header, self.hex_row.upcast_ref(), if compact { 0 } else if extra.is_some() { 1 } else { 2 }, if compact { 2 } else { 0 }, if compact { 2 } else { 1 }, 1);
+        for (index, row) in self.rows.iter().enumerate() {
+            let top = index as i32 * if compact { 2 } else { 1 };
+            grid_position(&self.component_grid, row.heading.upcast_ref(), 0, top, if compact { 6 } else { 2 }, 1);
+            grid_position(&self.component_grid, row.values.upcast_ref(), if compact { 0 } else { 2 }, top + i32::from(compact), if compact { 6 } else { 4 }, 1);
+            row.values.set_hexpand(compact);
+        }
+        grid_position(&self.component_grid, self.intensity_label.upcast_ref(), 0, if compact { 6 } else { 3 }, if compact { 6 } else { 2 }, 1);
+        grid_position(&self.component_grid, self.intensity.stack.upcast_ref(), if compact { 0 } else { 2 }, if compact { 7 } else { 3 }, if compact { 6 } else { 3 }, 1);
+    }
+
+    fn wide_minimum(&self) -> [f32; 2] {
+        let width = |widget: &gtk::Widget| widget.measure(gtk::Orientation::Horizontal, -1).0;
+        let mut columns = [0; 6];
+        for row in &self.rows {
+            let widgets = [row.menu.upcast_ref(), row.space.upcast_ref(), row.fields[0].stack.upcast_ref(),
+                row.fields[1].stack.upcast_ref(), row.fields[2].stack.upcast_ref(), row.copy.upcast_ref()];
+            for (column, widget) in columns.iter_mut().zip(widgets) { *column = (*column).max(width(widget)); }
+        }
+        let spacing = self.component_grid.column_spacing() as i32;
+        let values = columns.iter().sum::<i32>() + 5 * spacing
+            + (width(self.intensity_label.upcast_ref()) - columns[0] - columns[1] - spacing).max(0)
+            + (width(self.intensity.stack.upcast_ref()) - columns[2] - columns[3] - columns[4] - 2 * spacing).max(0);
+        let extra_header = self.header_extra.borrow();
+        let header = width(self.header_pair.upcast_ref()).max(width(self.header_captions.upcast_ref()))
+            + width(extra_header.as_ref().unwrap_or(self.pick.upcast_ref())) + width(self.hex_row.upcast_ref()) + 2 * self.header.column_spacing() as i32;
+        let extra = std::iter::successors(self.values.first_child(), |widget| widget.next_sibling())
+            .filter(|widget| *widget != self.component_grid).map(|widget| width(&widget)).max().unwrap_or(0);
+        [width(self.left.upcast_ref()) as f32, values.max(header).max(extra) as f32]
     }
 
     pub(crate) fn relabel(&self) {
@@ -1003,11 +1074,6 @@ impl Editor {
         self.form.bind(can_pick);
         self.relabel();
         let weak = self.this.clone();
-        crate::dialog_content::on_resize(&self.form.body, glib::clone!(#[strong] weak, move |width| if let Some(editor) = weak.upgrade() {
-            let minimum = [editor.form.left.measure(gtk::Orientation::Horizontal, -1).0 as f32,
-                editor.form.values.measure(gtk::Orientation::Horizontal, -1).0 as f32];
-            editor.arrange(!layer_ui::dialog_panes_fit(width as f32, minimum, 24.));
-        }));
         self.pick.connect_clicked(glib::clone!(#[strong] weak, move |_| if let Some(editor) = weak.upgrade() { editor.start_pick(); }));
         self.swatches.connect_clicked(glib::clone!(#[strong] weak, move |_| {
             if let Some(editor) = weak.upgrade() { editor.show_sheet(!editor.slide.is_open()); }

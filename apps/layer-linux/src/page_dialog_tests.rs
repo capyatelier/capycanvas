@@ -95,6 +95,48 @@ fn native_export_narrow_bounds() {
     d.finish();
 }
 
+#[test]
+#[ignore = "private compositor: --native-test=native_edit_color_narrow_bounds --native-storage; viewport/theme external"]
+fn native_edit_color_narrow_bounds() {
+    let mut d = super::phone_motion::setup("art.capycanvas.EditColorNarrowBounds");
+    crate::color_editor::show(&d.w, layer_ui::ColorSlot::Foreground);
+    let (dialog, frame) = page_frame(&d);
+    let last = find_named(&frame, "edit-color-copy-2").unwrap();
+    super::histogram::scroll_to(&last);
+    super::phone::capture(&mut d, "edit-color-narrow-values");
+    let mut controls = vec!["edit-color-hex".to_owned(), "edit-color-hex-copy".to_owned()];
+    for row in 0..3 {
+        controls.push(format!("edit-color-copy-{row}"));
+        for column in 0..3 { controls.push(format!("edit-color-value-{row}-{column}")); }
+    }
+    for name in controls {
+        let widget = find_named(&frame, &name).unwrap();
+        let bounds = widget.compute_bounds(&frame).unwrap();
+        assert!(bounds.x() >= 0. && bounds.x() + bounds.width() <= frame.width() as f32, "Color control fits: {name} {bounds:?}");
+        for label in descendants::<gtk::Label>(&widget).into_iter().filter(|label| label.is_mapped()) {
+            assert!(!label.layout().is_ellipsized(), "Color value stays readable: {name}");
+        }
+    }
+    let editor = d.w.color_editors.borrow().last().unwrap().clone();
+    let field = &editor.form.rows[0].fields[0];
+    super::histogram::scroll_to(field.show.upcast_ref());
+    d.click(field.show.upcast_ref());
+    until(|| field.editing(), "the color value opens for editing");
+    field.entry.set_text("0.25");
+    let draft = editor.form.draft.borrow().value();
+    let parent = field.stack.parent().unwrap();
+    for width in [1000, 264, 1000, 264] {
+        editor.form.body.measure(gtk::Orientation::Vertical, width);
+        assert_eq!(field.stack.parent().as_ref(), Some(&parent), "reflow keeps the number's parent");
+        assert!(field.editing() && field.entry.text() == "0.25", "reflow preserves the unfinished number edit");
+        assert_eq!(editor.form.draft.borrow().value(), draft, "reflow never commits the unfinished value");
+        assert!(gtk::prelude::RootExt::focus(&d.w.window).is_some_and(|focus| focus == field.entry || focus.is_ancestor(&field.entry)),
+            "reflow keeps native focus within the number entry");
+    }
+    close(&d, &dialog);
+    d.finish();
+}
+
 fn page_header(frame: &gtk::Widget) -> adw::HeaderBar {
     until(|| descendants::<adw::HeaderBar>(frame).into_iter().filter(|header| header.is_mapped()).count() == 1,
         "native navigation leaves one mapped header");

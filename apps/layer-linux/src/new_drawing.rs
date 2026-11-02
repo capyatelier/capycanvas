@@ -1127,14 +1127,7 @@ impl NewDrawing {
         form.hex_copy.set_visible(false);
         for row in &form.rows { row.copy.set_visible(false); }
         for widget in [self.colors.well.upcast_ref::<gtk::Widget>(), self.colors.palette.upcast_ref()] { detach(widget); }
-        form.header.remove(&form.pick);
-        if let Some(hex) = form.header.child_at(2, 0) {
-            form.header.remove(&hex);
-            hex.set_hexpand(false);
-            hex.set_halign(gtk::Align::Start);
-            form.header.attach(&hex, 1, 0, 1, 1);
-        }
-        form.header.attach(&self.colors.well, 2, 0, 1, 1);
+        form.replace_picker(&self.colors.well);
         form.values.append(&self.colors.palette);
         let weak = self.this.clone();
         form.connect_viewed(move |viewed| if let Some(dialog) = weak.upgrade() { dialog.send(NewDrawingAction::PaperColorValue { color: viewed.value }); });

@@ -119,6 +119,9 @@ eyedropper and a large hex, then three rows of numbers. Current and New match
 the eyedropper's height, and the eyedropper and hex center on them, not on
 their captions. In narrow windows the page stacks: Current, New and hex, then
 the wheel, then the rows; a short window scrolls the page.
+When a number row no longer fits, its format and color space sit above the
+values. Values and copy buttons wrap within the page. Resizing keeps an active
+number edit open.
 
 Shared [`ColorEditor`](../../crates/layer-ui/src/color/editor.rs) owns the
 draft. It wraps a copy of the panel's `ColorState`, so the wheel, hue memory and
