@@ -539,6 +539,10 @@ pub(crate) fn hovered(widget: &impl IsA<gtk::Widget>) -> bool {
             .is_some_and(|point| widget.contains(point.x() as f64, point.y() as f64))
 }
 
+fn pointer_leave_clears<T: PartialEq>(owner: Option<T>, leaving: Option<T>) -> bool {
+    owner.zip(leaving).is_none_or(|(owner, leaving)| owner == leaving)
+}
+
 pub(crate) fn update_hover(widget: &impl IsA<gtk::Widget>) {
     let hovered = hovered(widget);
     if hovered { widget.add_css_class("hovered"); } else { widget.remove_css_class("hovered"); }
@@ -979,6 +983,7 @@ pub struct Workspace {
     popovers: RefCell<Vec<glib::WeakRef<gtk::Popover>>>,
     chrome_contacts: RefCell<std::collections::HashMap<ChromeContact, gdk::Event>>,
     pointer_position: Cell<Option<gtk::graphene::Point>>,
+    pointer_device: RefCell<Option<gdk::Device>>,
     dragging: Cell<bool>,
     drag_targets: RefCell<Vec<(glib::WeakRef<gtk::Widget>, DragTarget)>>,
     workspace_drag: RefCell<Option<NativeWorkspaceDrag>>,
@@ -1342,6 +1347,7 @@ impl Workspace {
             popovers: RefCell::new(Vec::new()),
             chrome_contacts: RefCell::default(),
             pointer_position: Cell::new(None),
+            pointer_device: RefCell::new(None),
             dragging: Cell::new(false),
             drag_targets: RefCell::new(Vec::new()),
             workspace_drag: RefCell::new(None),
@@ -1847,13 +1853,15 @@ impl Workspace {
     fn install_pointer_motion(self: &Rc<Self>) {
         let motion = gtk::EventControllerMotion::new();
         motion.set_propagation_phase(gtk::PropagationPhase::Capture);
-        motion.connect_enter(glib::clone!(#[weak(rename_to = this)] self, move |_, x, y| {
+        motion.connect_enter(glib::clone!(#[weak(rename_to = this)] self, move |motion, x, y| {
+            this.pointer_device.replace(motion.current_event_device());
             this.pointer_position.set(Some(gtk::graphene::Point::new(x as f32, y as f32)));
         }));
         motion.connect_motion(glib::clone!(
             #[weak(rename_to = this)]
             self,
-            move |_, x, y| {
+            move |motion, x, y| {
+                this.pointer_device.replace(motion.current_event_device());
                 this.pointer_position.set(Some(gtk::graphene::Point::new(x as f32, y as f32)));
                 this.chrome_event(ChromeEvent::Motion);
             }
@@ -1861,8 +1869,11 @@ impl Workspace {
         motion.connect_leave(glib::clone!(
             #[weak(rename_to = this)]
             self,
-            move |_| {
-                this.pointer_position.set(None);
+            move |motion| {
+                let leaving = motion.current_event_device();
+                if pointer_leave_clears(this.pointer_device.borrow().as_ref(), leaving.as_ref()) {
+                    this.pointer_position.set(None);
+                }
                 this.chrome_event(ChromeEvent::Refresh);
             }
         ));

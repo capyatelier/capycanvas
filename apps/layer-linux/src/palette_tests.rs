@@ -1,6 +1,19 @@
 //! Compositor-delivered input and screenshots of the retained palette surfaces.
 use super::*;
 
+#[test]
+fn pointer_leave_clears_only_its_owner_or_unknown_devices() {
+    for (owner, leaving, clears) in [
+        (Some(1), Some(2), false),
+        (Some(1), Some(1), true),
+        (None, Some(1), true),
+        (Some(1), None, true),
+        (None, None, true),
+    ] {
+        assert_eq!(pointer_leave_clears(owner, leaving), clears, "owner={owner:?}, leaving={leaving:?}");
+    }
+}
+
 fn capture_palette(d: &mut Driver, name: &str) {
     d.capture_canvas(name);
     if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
