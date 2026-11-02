@@ -55,12 +55,12 @@ namespace CapyOwnedSearchTest {
  }
  public static class GeometryDriver{public static int GetDpiForWindow(IntPtr window){return 144;}}
  public class Node {
-  public string AutomationId,Name;public object ControlType="control";public int ProcessId;bool offscreen;Rect bounds;public Node Parent;public Scroll Provider,TargetScroll;public int? ContentY;
+  public string AutomationId,Name;public object ControlType="control";public int ProcessId;bool offscreen;Rect bounds;public Node Parent;public Scroll Provider,TargetScroll;public int? ContentY;public bool UnclippedBounds;
   public bool HasKeyboardFocus;public IntPtr NativeWindowHandle=new IntPtr(1);
   public bool Enabled=true,InvokeAvailable,ToggleAvailable;public DateTime EnableAtUtc=DateTime.MinValue;public int Invocations,Toggles,DisabledReads;
   public bool IsEnabled{get{bool ready=Enabled&&DateTime.UtcNow>=EnableAtUtc;if(!ready)DisabledReads++;return ready;}}
   public void Activate(bool toggle){if(!IsEnabled)throw new InvalidOperationException("Disabled action invoked");if(toggle)Toggles++;else Invocations++;}
-  public Rect BoundingRectangle{get{if(ContentY.HasValue){int y=ContentY.Value-(int)(TargetScroll.VerticalScrollPercent*2);return y>=100||y+20<=0?new Rect():new Rect(0,y,80,20);}return bounds;}set{bounds=value;}}
+  public Rect BoundingRectangle{get{if(ContentY.HasValue){int y=ContentY.Value-(int)(TargetScroll.VerticalScrollPercent*2);return !UnclippedBounds&&(y>=100||y+20<=0)?new Rect():new Rect(0,y,80,20);}return bounds;}set{bounds=value;}}
   public bool IsOffscreen{get{return ContentY.HasValue?BoundingRectangle.IsEmpty:offscreen;}set{offscreen=value;}}
   public void SetFocus(){HasKeyboardFocus=true;}
   public bool TryGetCurrentPattern(object pattern,out object result){if((Object.Equals(pattern,InvokePattern.Pattern)&&InvokeAvailable)||(Object.Equals(pattern,TogglePattern.Pattern)&&ToggleAvailable)){result=new ActionPattern(this);return true;}result=Provider==null?null:new Pattern(Provider);return result!=null;}
@@ -178,6 +178,7 @@ if($scrollPattern.Count -ne 1){throw 'Missing actual Scroll-Pattern helper'}
 . ([scriptblock]::Create($scrollPattern[0].Extent.Text.Replace('System.Windows.Automation.','CapyOwnedSearchTest.').Replace('[CapyRowPointer]','[CapyOwnedSearchTest.Driver]')))
 . ([scriptblock]::Create($reveal[0].Extent.Text.Replace('System.Windows.Automation.','CapyOwnedSearchTest.').Replace('[CapyRowPointer]','[CapyOwnedSearchTest.Driver]')))
 function Native-Bounds([string]$Id,[double]$Scale){[CapyOwnedSearchTest.Rect]::new(0,0,100,100)}
+function Workspace-Root {[pscustomobject]@{Current=[pscustomobject]@{ItemStatus='{"elements":[]}'}}}
 foreach($case in @(
     @{name='empty above at bottom';position=10;percent=100;resets=1},
     @{name='empty below at top';position=270;percent=0;resets=0},
@@ -201,6 +202,41 @@ foreach($case in @(
     if($item.HasKeyboardFocus){throw 'Reveal changed focus without its Focus switch'}
 }
 Write-Output 'Actual Reveal passed: empty targets above/below, visible/partial bounds and absent rejection; at most one real-provider reset and unchanged focus.'
+
+$revealFailures=[Collections.Generic.List[string]]::new()
+foreach($case in @(
+    @{name='inflated presenter';body=$true;top=0;height=300;steps=2},
+    @{name='nested scroller';body=$true;top=20;height=60;steps=3},
+    @{name='panel without body';body=$false;top=0;height=300;steps=0}
+)){
+    $root=[CapyOwnedSearchTest.Node]::new('root',33,0,0);$root.BoundingRectangle=[CapyOwnedSearchTest.Rect]::new(0,0,100,300)
+    $group=[CapyOwnedSearchTest.Node]::new('workspace-group-24',33,0,0);$group.Parent=$root;$root.Children.Add($group)
+    $provider=[CapyOwnedSearchTest.Node]::new('PART_ScrollPresenter',33,0,$case.top)
+    $provider.BoundingRectangle=[CapyOwnedSearchTest.Rect]::new(0,$case.top,100,$case.height);$provider.Parent=$group;$group.Children.Add($provider)
+    $provider.Provider=[CapyOwnedSearchTest.Scroll]::new()
+    $item=[CapyOwnedSearchTest.Node]::new('target',33,0,0);$item.Parent=$provider;$provider.Children.Add($item)
+    $item.ContentY=160;$item.UnclippedBounds=$true;$item.TargetScroll=$provider.Provider
+    $script:traceReads=0;$script:nativeReads=0
+    function Workspace-Root {
+        $script:traceReads++
+        $elements=if($case.body){@(@{id='panel-body-scroll-24'})}else{@()}
+        [pscustomobject]@{Current=[pscustomobject]@{ItemStatus=(@{elements=$elements}|ConvertTo-Json -Depth 4 -Compress)}}
+    }
+    function Native-Bounds([string]$Id,[double]$Scale){
+        $script:nativeReads++
+        if(!$case.body){throw 'Absent body viewport must not be awaited'}
+        if($Id -cne 'panel-body-scroll-24'){throw 'Reveal derived the wrong body viewport'}
+        [CapyOwnedSearchTest.Rect]::new(0,0,100,100)
+    }
+    $failure=$null;$actual=$null
+    try{$actual=Reveal 'target'}catch{$failure=$_}
+    if($failure -or $actual -ne $item -or $provider.Provider.Steps -ne $case.steps -or $script:traceReads -ne 1 -or (!$case.body -and $script:nativeReads)){
+        $revealFailures.Add("Owned body clip $($case.name): steps=$($provider.Provider.Steps), trace=$script:traceReads, native=$script:nativeReads, failure=$failure")
+    }
+}
+if($revealFailures.Count){throw ($revealFailures -join [Environment]::NewLine)}
+function Native-Bounds([string]$Id,[double]$Scale){[CapyOwnedSearchTest.Rect]::new(0,0,100,100)}
+Write-Output 'Reveal intersects the published body viewport with inflated or nested scrollers and never awaits an unpublished body.'
 
 $root=[CapyOwnedSearchTest.Node]::new('root',33,0,0);$root.BoundingRectangle=[CapyOwnedSearchTest.Rect]::new(0,0,100,100)
 $parked=[CapyOwnedSearchTest.Node]::new('target',33,-100000,0);$parked.Parent=$root;$root.Children.Add($parked)

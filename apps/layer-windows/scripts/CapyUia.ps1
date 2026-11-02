@@ -427,7 +427,7 @@ function Scroll-Pattern($Control,[switch]$Focus,[string]$ViewportId){
     $pattern
 }
 function Reveal([string]$Id,[switch]$Focus,[string]$ViewportId){
- $scroll=$null;$viewport=$null;$item=$null
+ $scroll=$null;$viewport=$null;$item=$null;$derivedViewport=$false
  if($ViewportId){
   if(Find $ViewportId -Visible -NoPopups){$viewport=Control $ViewportId -Arranged -NoPopups}
   else{
@@ -442,7 +442,11 @@ function Reveal([string]$Id,[switch]$Focus,[string]$ViewportId){
    $pattern=$null
    if(!$scroll -and $node.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$pattern) -and $pattern.Current.VerticallyScrollable){$scroll=$pattern;$viewport=$node}
    if($node.Current.AutomationId -match '^panel-body-scroll-\d+$'){$ViewportId=$node.Current.AutomationId;break}
-   if($node.Current.AutomationId -match '^workspace-group-(\d+)$'){break}
+   if($node.Current.AutomationId -match '^workspace-group-(\d+)$'){
+    $bodyId='panel-body-scroll-'+$Matches[1];$workspace=Workspace-Root
+    if($workspace -and @((($workspace.Current.ItemStatus|ConvertFrom-Json).elements)|Where-Object id -eq $bodyId).Count){$ViewportId=$bodyId;$derivedViewport=$true}
+    break
+   }
    if($node.Equals($root)){break}
    $node=$walker.GetParent($node)
   }
@@ -452,6 +456,7 @@ function Reveal([string]$Id,[switch]$Focus,[string]$ViewportId){
   $item=if($viewport){Find $Id -Within $viewport -NoPopups}else{Control $Id}
   $bounds=if($item){$item.Current.BoundingRectangle}else{$null}
   $clip=if($ViewportId){Native-Bounds $ViewportId ([CapyRowPointer]::GetDpiForWindow([IntPtr]$root.Current.NativeWindowHandle)/96.)}elseif($viewport){$viewport.Current.BoundingRectangle}else{$root.Current.BoundingRectangle}
+  if($derivedViewport -and $viewport){$clip.Intersect($viewport.Current.BoundingRectangle)}
   $clip.Intersect($root.Current.BoundingRectangle);$clip.Inflate(1,1)
   if($item -and !$item.Current.IsOffscreen -and !$bounds.IsEmpty -and $clip.Contains($bounds)){
    $ready=if($viewport){Control $Id -Within $viewport -Arranged -NoPopups}else{Control $Id -Arranged}
