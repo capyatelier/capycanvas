@@ -9,6 +9,9 @@ participates in workspace undo/redo as a single item.
 Toolbars can also use [compact edge regions](compact-toolbar-edges.md).
 They are not title-bar items.
 
+Brush category names wrap between words. A single word too long for its column
+ellipsizes, with the full name available in the tooltip.
+
 ## Included workspaces
 
 Sketch centers Size and Strength in a compact toolbar on the left edge. Photo appends

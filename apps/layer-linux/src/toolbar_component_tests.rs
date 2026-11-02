@@ -79,6 +79,45 @@ fn native_tool_list_alignment() {
     d.finish();
 }
 
+#[test]
+#[ignore = "private compositor: --native-test=native_brush_category_word_wrap --native-storage; 280x560 light/dark"]
+fn native_brush_category_word_wrap() {
+    let mut d = super::phone_motion::setup("art.capycanvas.BrushCategoryWordWrap");
+    let tile = state(&d.w).workspace.layout.phone.unwrap().into_iter()
+        .find(|tile| tile.control == ToolbarControl::Command { command: CommandId::DrawingBrush }).unwrap();
+    d.click_name(&format!("phone-tool-{}", tile.id));
+    until(|| d.w.drawer.placement().is_some() && !d.w.drawer.animation_active(), "brush drawer opens");
+    super::phone::capture(&mut d, "brush-category-word-wrap");
+    let categories = d.named("drawer-panel-BrushSets");
+    let viewport = categories.ancestor(gtk::Viewport::static_type()).unwrap().compute_bounds(&d.w.surface).unwrap();
+    let buttons = descendants::<gtk::Button>(&categories).into_iter().filter(|button| button.is_mapped()
+        && button.has_css_class("tool-group")).collect::<Vec<_>>();
+    assert!(!buttons.is_empty());
+    for button in buttons {
+        let label = button.child().unwrap().last_child().unwrap().downcast::<gtk::Label>().unwrap();
+        let column = categories.compute_bounds(&d.w.surface).unwrap();
+        let cell = button.compute_bounds(&d.w.surface).unwrap();
+        let text_bounds = label.compute_bounds(&d.w.surface).unwrap();
+        assert!(cell.x() >= column.x() && cell.x() + cell.width() <= column.x() + column.width(), "category fits its column");
+        assert!(text_bounds.x() >= cell.x() && text_bounds.x() + text_bounds.width() <= cell.x() + cell.width(), "category label fits its cell");
+        assert!(cell.x() >= viewport.x() && cell.x() + cell.width() <= viewport.x() + viewport.width(), "category fits its visible viewport");
+        let text = label.text();
+        let layout = label.layout();
+        for line in layout.lines_readonly() {
+            let start = line.start_index() as usize;
+            assert!(start == 0 || text[..start].chars().last().is_some_and(char::is_whitespace), "category breaks between words: {text}, byte {start}");
+        }
+        let natural = layout.copy();
+        natural.set_width(-1); natural.set_ellipsize(gtk::pango::EllipsizeMode::None);
+        if text.split_whitespace().count() == 1 && natural.pixel_size().0 > label.width() {
+            assert!(layout.is_ellipsized(), "a long category word ellipsizes: {text}");
+        }
+        assert!(layout.pixel_size().0 <= label.width() + 1, "category text stays in its column: {text}");
+        assert_eq!(button.tooltip_text().as_deref(), Some(text.as_str()), "the full category name remains available");
+    }
+    d.finish();
+}
+
 fn restore(d: &Driver, preset: WorkspacePreset) {
     d.w.dispatch(UiAction::RestoreWorkspace {
         workspace: Box::new(WorkspaceState {

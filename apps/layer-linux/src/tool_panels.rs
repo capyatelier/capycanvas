@@ -96,7 +96,7 @@ impl ToolSet {
                 );
                 let content = aligned_icon_label(&item.label, item.icon, if media { 0.0 } else { 1.0 });
                 if let Some(label) = content.last_child().and_downcast::<gtk::Label>() {
-                    if media { crate::panel_controls::two_lines(&label); }
+                    if media { label.set_wrap(true); label.set_wrap_mode(gtk::pango::WrapMode::Word); label.set_width_chars(1); }
                     else { label.set_max_width_chars(-1); }
                 }
                 button.set_child(Some(&content));
@@ -153,6 +153,7 @@ impl ToolSet {
         for (button, item) in self.group_buttons.borrow().iter().zip(&view.groups) {
             selected(button, item.selected);
             show_availability(button, item);
+            if item.disabled_reason.is_none() { button.set_tooltip_text(Some(&item.label)); }
         }
         let theme_changed = self.theme.replace(Some(theme)) != Some(theme);
         for ((_, button, preview), item) in self.buttons.borrow().iter().zip(&view.subtools) {
