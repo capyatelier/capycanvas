@@ -522,12 +522,14 @@ fn region_seeds(@builtin(global_invocation_id) id:vec3<u32>, @builtin(num_workgr
     first[index]=select(INVALID,point(q),open);
     if line.options.y==4u && open {second[index]=point(q);}
 }
+fn assign_nearest(q:vec2<u32>)->u32 {
+    if !active_barrier(vec2<i32>(q)) || (ink(vec2<i32>(q)) && distance(vec2<i32>(q))>line.options.x) {return INVALID;}
+    return input(local_index(q-line.window.xy));
+}
 fn assign_point(q:vec2<u32>) {
-    let nearest=input(local_index(q-line.window.xy));if nearest==INVALID{return;}
-    if active_barrier(vec2<i32>(q)) && (!ink(vec2<i32>(q)) || distance(vec2<i32>(q))<=line.options.x) {
-        let at=coord(nearest);let selected=(atomicLoad(&eligible[at.y*line.extent.z+at.x/32u])&(1u<<(at.x%32u)))!=0u;
-        if selected{atomicOr(&eligible[q.y*line.extent.z+q.x/32u],1u<<(q.x%32u));}
-    }
+    let nearest=assign_nearest(q);if nearest==INVALID{return;}
+    let at=coord(nearest);let selected=(atomicLoad(&eligible[at.y*line.extent.z+at.x/32u])&(1u<<(at.x%32u)))!=0u;
+    if selected{atomicOr(&eligible[q.y*line.extent.z+q.x/32u],1u<<(q.x%32u));}
 }
 @compute @workgroup_size(64)
 fn assign_region(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>) {
@@ -713,4 +715,34 @@ fn reset_ends(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroup
     if line.options.x==2u {if index==0u{atomicStore(&cached[line.offsets.y+3u],select(0u,INVALID,line.options.z!=0u));}return;}
     if index==0u {atomicStore(&cached[line.offsets.y],0u);atomicStore(&cached[line.offsets.y+1u],0u);}
     if index<line.offsets.z-line.offsets.y-HEADER_WORDS {atomicStore(&cached[line.offsets.y+HEADER_WORDS+index],0u);}
+}
+
+@compute @workgroup_size(64)
+fn assign_tokens(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>) {
+    if atomicLoad(&cached[line.offsets.y+3u])==0u {return;}
+    let block=line_block(id.x+id.y*groups.x*64u+line.job.x,line.core,true);var bits=block.z;
+    loop {
+        if bits==0u {break;}let bit=countTrailingZeros(bits);bits&=bits-1u;let q=block.xy+vec2(bit,0u);
+        if any(q<line.core.xy) || any(q>=line.core.xy+line.core.zw) {continue;}
+        let nearest=assign_nearest(q);if nearest==INVALID {continue;}
+        let source=8u+local_index(coord(nearest)-line.window.xy);let output_index=8u+local_index(q-line.window.xy);
+        if line.options.w==0u {second[output_index]=second[source];}else{first[output_index]=first[source];}
+    }
+}
+@group(0) @binding(7) var area_output:texture_storage_2d<rgba32float,write>;
+@compute @workgroup_size(64)
+fn colour_tokens(@builtin(global_invocation_id) id:vec3<u32>) {
+    let index=id.x+id.y*256u*64u;let p=vec2(index%line.job.z,index/line.job.z);
+    if p.y>=line.job.z {return;}let q=line.job.xy+p;
+    if any(q<line.core.xy) || any(q>=line.core.xy+line.core.zw) || any(q>=line.extent.xy) {return;}
+    let token=first[8u+local_index(q-line.window.xy)];var colour=vec4(0.);
+    if token!=0u {
+        let hash=token*0x9e3779b9u;let hue=f32(hash>>8u)/16777216.;
+        let lightness=array<f32,3>(.52,.62,.72)[((hash>>6u)&3u)%3u];
+        let chroma=(1.-abs(2.*lightness-1.))*.65;
+        let phase=abs(fract(vec3(hue)+vec3(0.,2./3.,1./3.))*6.-vec3(3.));
+        colour=vec4(vec3(lightness)+chroma*(clamp(phase-vec3(1.),vec3(0.),vec3(1.))-vec3(.5)),1.);
+        colour=vec4(sdr_decode(colour.rgb,WORKING_SPACE),1.);
+    }
+    textureStore(area_output,vec2<i32>(p),colour);
 }

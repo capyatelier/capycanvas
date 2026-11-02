@@ -289,11 +289,11 @@ fn region_cache_prewarm_completes_reuses_and_schedules_changed_preparation() {
         let mut query = request(source.clone(), rectangle([10, 10, 503, 247]), exact(), 0.);
         query.position = [100, 100];
         if !enclosed { query.enclosure = None; }
-        assert!(r.request_region(query.clone()).unwrap());
+        assert!(r.request_region(query.clone().into()).unwrap());
         assert!(!r.regions.as_ref().unwrap().background_pending(), "a prepared tap must reuse its reference geometry");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let result = loop {
-            if let Some(result) = r.take_region() { break result.unwrap(); }
+            if let Some(result) = r.take_region() { break crate::test_support::mask_result(result.unwrap()); }
             assert!(std::time::Instant::now() < deadline, "prepared region readback timed out");
             std::thread::yield_now();
         };
@@ -333,7 +333,7 @@ fn region_cache_foreground_promotion_cancel_drops_the_old_request() {
     assert!(r.regions.as_ref().unwrap().background_pending());
     let mut query = request(source, rectangle([0, 0, 1, 1]), exact(), 0.);
     query.enclosure = None; query.position = [100, 100]; query.request_id = 90;
-    assert!(r.request_region(query).unwrap());
+    assert!(r.request_region(query.into()).unwrap());
     assert!(r.region_pending());
     r.prepare_regions(Some(&RegionPreparation { source: RegionSource::Composite, reference_count: Some(2), paper: None, tolerance: 0., refinement:Default::default(),enclosed: false }));
     assert!(r.region_pending());

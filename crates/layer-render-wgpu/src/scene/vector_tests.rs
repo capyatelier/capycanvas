@@ -1475,7 +1475,7 @@ fn crowded_vector_layer_fill_outside_frames() {
             position: [extent[0] - 2, extent[1] - 2], tolerance: 0.1, refinement: Default::default(), limit: None,
         };
         let (start, passes) = (std::time::Instant::now(), r.metrics.command_passes);
-        assert!(r.request_region(request).unwrap());
+        assert!(r.request_region(request.into()).unwrap());
         let requested = start.elapsed().as_secs_f64() * 1e3;
         let passes = r.metrics.command_passes - passes;
         let mut frames = Vec::new();
@@ -1484,7 +1484,7 @@ fn crowded_vector_layer_fill_outside_frames() {
             r.submit(FramePacket { view, composite_all: false, ..packet(editor.document().scene(), extent) }).unwrap();
             let polled = r.take_region();
             frames.push((frame.elapsed().as_secs_f64() * 1e3, frame.elapsed().as_secs_f64() * 1e3));
-            if let Some(result) = polled { break result.unwrap(); }
+            if let Some(result) = polled { break crate::test_support::mask_result(result.unwrap()); }
             assert!(start.elapsed() < std::time::Duration::from_secs(60), "the region must finish");
         };
         let total = start.elapsed().as_secs_f64() * 1e3;

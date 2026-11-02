@@ -697,3 +697,4 @@ command-fill-areas-transparent = 투명
 command-fill-areas-transparent-or-white = 투명 또는 흰색
 command-fill-areas-any-colour = 모든 색상
 commands-help-paint-unfilled = 닫힌 빈 영역 위를 칠해 채웁니다.
+command-flat-all-areas = 모든 영역 밑색 채우기

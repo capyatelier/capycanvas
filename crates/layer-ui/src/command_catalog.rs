@@ -9,7 +9,7 @@ pub(super) fn document_action(command: CommandId) -> bool {
         | CommandId::PasteImage | CommandId::PasteAsNewImage | CommandId::PasteInPlace | CommandId::PasteAtView | CommandId::PasteAtCursor
         | CommandId::PasteInto | CommandId::Copy | CommandId::Cut | CommandId::CopyMerged | CommandId::CopyPixels | CommandId::DocumentProperties
         | CommandId::NewDocument | CommandId::OpenDocument | CommandId::ExportDocument | CommandId::ExportAgain | CommandId::UseReferenceBelow
-        | CommandId::SelectAll | CommandId::Deselect | CommandId::InvertSelection | CommandId::ClearLayer | CommandId::FillSelection
+        | CommandId::SelectAll | CommandId::Deselect | CommandId::InvertSelection | CommandId::ClearLayer | CommandId::FillSelection | CommandId::FlatAllAreas
         | CommandId::ClearSelected | CommandId::ClearOutside | CommandId::CopySelectionToLayer | CommandId::CutSelectionToLayer
         | CommandId::DiscardPaintEdits | CommandId::LiquifyAdjust | CommandId::LiquifyReset | CommandId::MergeDown | CommandId::MergeGroup
         | CommandId::MergeVisible | CommandId::FlattenImage | CommandId::StampVisible | CommandId::NewDodgeBurnLayer

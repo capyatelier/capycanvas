@@ -19,9 +19,10 @@ pub(super) struct Flood {
     lines: lines::Lines,
     trail:Option<(u64,[u32;2],wgpu::Buffer)>,
 }
-const STAGES: [&str; 13] = ["initialize", "merge", "mark_exterior", "export_border", "seam_merge", "propagate_flags", "resolve_seed", "component_mask", "finish_attempt", "save_base", "restore_base", "restore_components", "pack"];
+const STAGES: [&str; 14] = ["initialize", "merge", "mark_exterior", "export_border", "seam_merge", "propagate_flags", "resolve_seed", "component_mask", "finish_attempt", "save_base", "restore_base", "restore_components", "pack", "area_tokens"];
 fn stages(refinement: RegionRefinement, enclosed: bool, contiguous: bool) -> impl Iterator<Item = &'static str> {
     STAGES.into_iter().filter(move |entry| match *entry {
+        "area_tokens"=>false,
         "resolve_seed" | "finish_attempt" => contiguous && !enclosed,
         "save_base" | "restore_base" => refinement.close_gaps && contiguous,
         "restore_components"=>enclosed,
@@ -44,6 +45,12 @@ impl Region {
         self.coverage.size() + self.underfill.as_ref().filter(|(buffer,_)|buffer!=&self.coverage).map_or(0,|(buffer,_)|buffer.size())
             + self.gaps.as_ref().map_or(0,|gaps|gaps.variants.iter().map(Region::storage_bytes).sum::<u64>()+gaps.seal_metadata.as_ref().map_or(0,wgpu::Buffer::size))
     }
+}
+pub(super) struct Areas {
+    pub extent:[u32;2],
+    pub windows:Vec<(u32,[u32;4])>,
+    labels:Labels,
+    empty:wgpu::Buffer,
 }
 /// Word offsets of the label storage: window parents or a bit plane, border
 /// slots, exterior flags, window marks and the seed.
@@ -142,6 +149,73 @@ impl Flood {
         let windows:Vec<_>=labels.windows(extent).collect();
         if !self.lines.building() {self.lines.allocate(device,extent,labels.side,&windows)?;}
         self.lines.build(input,encoder,paper,budget,demand,dirty)
+    }
+    pub fn prepare_areas(&self,compiler:&startup::Compiler,priority:u8)->bool {
+        self.lines.prepare_areas(compiler,priority) & compiler.require(["initialize","merge","mark_exterior","export_border","seam_merge","propagate_flags","area_tokens"].map(|entry|&self.pipelines[entry]),priority)
+    }
+    pub fn area_tokens(&self)->&wgpu::Buffer {self.lines.token_buffer()}
+    pub fn area_window(core:[u32;4],extent:[u32;2])->[u32;4] {lines::analysis_window(core,extent)}
+    pub fn assign_area_tokens(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,core:[u32;4],window:[u32;4]) {
+        self.lines.hold_barriers(input,encoder);self.lines.assign_tokens(input,encoder,core,window);
+    }
+    pub fn colour_area_tokens(&self,device:&PipelineDevice,encoder:&mut crate::submission::CommandEncoder,core:[u32;4],window:[u32;4],page:[u32;2],output:&wgpu::TextureView) {
+        self.lines.colour_tokens(device,encoder,core,window,page,output);
+    }
+    pub fn begin_areas(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,extent:[u32;2],reach:Option<u32>)->Result<Areas,GpuRasterError> {
+        let labels=Labels::new(extent,&input.device.limits()).ok_or(GpuRasterError::SizeOverflow)?;
+        if labels.words*4>self.capacity {
+            self.labels=Some(input.device.create_buffer(&wgpu::BufferDescriptor {label:Some("flood reusable labels"),size:labels.words*4,
+                usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::COPY_SRC,mapped_at_creation:false}));
+            self.capacity=labels.words*4;
+        }
+        let store=self.labels.as_ref().unwrap();
+        encoder.clear_buffer(store,labels.flags*4,Some((labels.words-labels.flags)*4));
+        self.lines.barriers(input,encoder,reach.is_some(),reach.unwrap_or(16),[0;4],store);
+        Ok(Areas {extent,windows:labels.windows(extent).collect(),labels,empty:input.device.create_buffer(&wgpu::BufferDescriptor {label:Some("area metadata"),size:48,usage:wgpu::BufferUsages::STORAGE,mapped_at_creation:false})})
+    }
+    pub fn label_area_core(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,areas:&Areas,at:usize) {
+        let labels=areas.labels;
+        encoder.clear_buffer(self.labels.as_ref().unwrap(),labels.marks*4,Some((labels.seed-labels.marks)*4));
+        self.area_stages(input,encoder,areas,at,[0;4],&areas.empty,&["initialize","merge","mark_exterior","export_border"]);
+    }
+    pub fn join_areas(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,areas:&Areas) {
+        self.area_stages(input,encoder,areas,0,[0;4],&areas.empty,&["seam_merge","propagate_flags"]);
+    }
+    pub fn replay_area_core(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,areas:&Areas,at:usize,output:[u32;4],tokens:&wgpu::Buffer) {
+        let labels=areas.labels;
+        encoder.clear_buffer(self.labels.as_ref().unwrap(),labels.marks*4,Some((labels.seed-labels.marks)*4));
+        self.area_stages(input,encoder,areas,at,output,tokens,&["initialize","merge","mark_exterior","area_tokens"]);
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn area_stages(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,areas:&Areas,at:usize,output:[u32;4],tokens:&wgpu::Buffer,entries:&[&str]) {
+        let labels=areas.labels;let (index,window)=areas.windows[at];
+        let values=[areas.extent[0],areas.extent[1],output[0],output[1],output[2],output[3],1f32.to_bits(),0,
+            0,0,0,0,window[0],window[1],window[2],window[3],index,labels.grid[0],labels.grid[1],labels.side,
+            labels.slots as u32,labels.flags as u32,labels.marks as u32,labels.seed as u32];
+        let bytes:Vec<_>=values.into_iter().flat_map(u32::to_ne_bytes).collect();
+        let uniform=input.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {label:Some("area window"),contents:&bytes,usage:wgpu::BufferUsages::UNIFORM});
+        let group=input.device.create_bind_group(&wgpu::BindGroupDescriptor {label:Some("area window"),layout:&self.layout,entries:&[
+            wgpu::BindGroupEntry {binding:1,resource:uniform.as_entire_binding()},
+            wgpu::BindGroupEntry {binding:2,resource:self.labels.as_ref().unwrap().as_entire_binding()},
+            wgpu::BindGroupEntry {binding:3,resource:tokens.as_entire_binding()},
+            wgpu::BindGroupEntry {binding:4,resource:self.empty.as_entire_binding()},
+            wgpu::BindGroupEntry {binding:5,resource:input.mask.as_entire_binding()},
+        ]});
+        let mut pass=encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {label:Some("area window"),timestamp_writes:None});
+        pass.set_bind_group(0,&group,&[0]);
+        let [_,_,w,h]=window;
+        for entry in entries {
+            pass.set_pipeline(&self.pipelines[*entry]);
+            if *entry=="initialize" {pass.dispatch_workgroups(w.div_ceil(16),h.div_ceil(16),1);continue;}
+            let count=match *entry {
+                "merge"=>u64::from(w)*u64::from((h-1)/16)+u64::from(h)*u64::from((w-1)/16),
+                "export_border"=>perimeter([w,h]),
+                "seam_merge"=>u64::from(labels.grid[0]-1)*u64::from(areas.extent[1])+u64::from(labels.grid[1]-1)*u64::from(areas.extent[0]),
+                "propagate_flags"=>labels.flags-labels.slots,
+                _=>u64::from(w.div_ceil(32))*u64::from(h),
+            };
+            if count!=0 {dispatch_linear(&mut pass,count,input.device.limits().max_compute_workgroups_per_dimension);}
+        }
     }
     pub fn lines_ready(&mut self,demand:bool)->Result<bool,GpuRasterError> {self.lines.ready(demand)}
     pub fn lines_submitted(&self)->bool {self.lines.submitted()}

@@ -704,3 +704,4 @@ command-fill-areas-transparent = Прозрачные
 command-fill-areas-transparent-or-white = Прозрачные или белые
 command-fill-areas-any-colour = Любого цвета
 commands-help-paint-unfilled = Проведите по замкнутым незаполненным областям, чтобы залить их.
+command-flat-all-areas = Залить все области

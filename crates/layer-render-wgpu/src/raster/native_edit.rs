@@ -506,6 +506,10 @@ impl WgpuRasterizer {
         Ok(job.frame.capture.take().unwrap())
     }
 
+    pub(crate) fn submit_private_tiles(&self,capture:NativeCapture)->Result<(),GpuRasterError> {
+        self.raster.as_ref().unwrap().worker.as_ref().unwrap().submit_batch(capture)
+    }
+
     pub(crate) fn step_native_rasters(&mut self, job: &mut NativeJob, encoder: &mut submission::CommandEncoder) -> Result<bool, GpuRasterError> {
         let native = self.native_edit.as_ref().unwrap();
         let capture = job.frame.capture.as_mut().unwrap();

@@ -630,11 +630,11 @@ fn cold_composite_region_classification_progresses_beyond_its_capture_cache() {
     let (doc, _, _) = document(extent, vec![object]);
     let mut r = cold_query_renderer(&doc);
     let before = r.device.source_samples.stats();
-    assert!(r.request_region(RegionRequest { fill_areas: None, colour_mode: Default::default(), fill: None, reference_count: None, paper: None,request_id:200,source:RegionSource::Composite,position:[0;2],tolerance:0.,contiguous:false,selection:None,refinement:Default::default(),limit:None,enclosure:None}).unwrap());
+    assert!(r.request_region(RegionRequest { fill_areas: None, colour_mode: Default::default(), fill: None, reference_count: None, paper: None,request_id:200,source:RegionSource::Composite,position:[0;2],tolerance:0.,contiguous:false,selection:None,refinement:Default::default(),limit:None,enclosure:None}.into()).unwrap());
     assert_eq!(r.device.source_samples.stats(), before);
     let deadline = std::time::Instant::now() + crate::READBACK_TIMEOUT;
     let result = loop {
-        if let Some(result) = r.take_region() { break result.unwrap(); }
+        if let Some(result) = r.take_region() { break crate::test_support::mask_result(result.unwrap()); }
         assert!(std::time::Instant::now() < deadline, "classification must retain completed batches while cold windows advance");
         std::thread::sleep(std::time::Duration::from_millis(1));
     };
@@ -655,7 +655,7 @@ fn cancelling_a_cold_object_region_never_publishes_into_its_replacement() {
     let (mut doc, owner, _) = document([32; 2], vec![ImageObject::new(image([16; 2], [255, 0, 0, 255]))]);
     let mut r = cold_query_renderer(&doc);
     let request = RegionRequest { fill_areas: None, colour_mode: Default::default(), fill: None, reference_count: None, paper: None,request_id:300,source:RegionSource::Composite,position:[8;2],tolerance:0.,contiguous:true,selection:None,refinement:Default::default(),limit:None,enclosure:None};
-    assert!(r.request_region(request.clone()).unwrap());
+    assert!(r.request_region(request.clone().into()).unwrap());
     assert!(r.region_pending());
     r.cancel_region();
     assert!(!r.region_pending());

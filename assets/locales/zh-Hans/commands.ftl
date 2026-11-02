@@ -697,3 +697,4 @@ command-fill-areas-transparent = 透明
 command-fill-areas-transparent-or-white = 透明或白色
 command-fill-areas-any-colour = 任意颜色
 commands-help-paint-unfilled = 在封闭的未填充区域上涂抹以填充。
+command-flat-all-areas = 平涂所有区域

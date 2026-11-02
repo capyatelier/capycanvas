@@ -619,7 +619,7 @@ fn mapped_pixel_selections_resample_through_perspective_like_a_cpu_reference() {
         refinement: Default::default(),
         limit: None,
     };
-    assert!(r.request_region(contours).is_err(), "contours map exactly on the CPU");
+    assert!(r.request_region(contours.into()).is_err(), "contours map exactly on the CPU");
 }
 
 /// Warps seeded from perspectives, with a node and a tangent moved, and a net

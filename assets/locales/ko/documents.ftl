@@ -347,3 +347,4 @@ documents-drop-mixed = 그림 열기와 이미지 배치 중 하나를 선택하
 documents-drop-images = 캔버스에 이미지 배치
 documents-package-unsupported-body = 이 버전의 { common-app-name }에서 편집할 수 없는 레이어 또는 설정이 포함되어 있습니다.
 documents-package-damaged-body = 이 파일의 일부가 손상되었습니다.
+documents-flats-name = 밑색

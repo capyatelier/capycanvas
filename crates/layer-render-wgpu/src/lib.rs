@@ -58,6 +58,8 @@ use brush_tiles::BrushTile;
 mod export_readback;
 mod view_color;
 mod working_color;
+#[cfg(test)]
+mod flat_areas_tests;
 pub use view_color::SdrSurfaceColor;
 mod raster;
 mod deferred;
@@ -3894,11 +3896,11 @@ impl CanvasRenderer for WgpuRasterizer {
     fn set_fill_reveal(&mut self,reveal:Option<layer_render::FillReveal>) {self.fill_reveal=reveal;}
     fn request_region(
         &mut self,
-        request: layer_render::RegionRequest,
+        request: layer_render::RegionTask,
     ) -> Result<bool, Self::Error> {
         self.start_region(request)
     }
-    fn take_region(&mut self) -> Option<Result<layer_render::RegionResult, Self::Error>> {
+    fn take_region(&mut self) -> Option<Result<layer_render::RegionOutput, Self::Error>> {
         self.poll_region()
     }
     fn cancel_region(&mut self) {

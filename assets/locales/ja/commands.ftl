@@ -697,3 +697,4 @@ command-fill-areas-transparent = 透明
 command-fill-areas-transparent-or-white = 透明または白
 command-fill-areas-any-colour = すべての色
 commands-help-paint-unfilled = 閉じた塗り残しの上をなぞって塗ります。
+command-flat-all-areas = すべての領域を下塗り

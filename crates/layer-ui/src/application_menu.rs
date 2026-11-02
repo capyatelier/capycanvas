@@ -185,7 +185,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         [CommandId::PasteInPlace, CommandId::PasteAtView, CommandId::PasteAtCursor].map(command).into(),
                         [CommandId::PasteInto, CommandId::PasteAsNewImage].map(command).into(),
                     ])]).collect(),
-                [CommandId::FillSelection, CommandId::ClearSelected, CommandId::ClearOutside].map(command).into(),
+                [CommandId::FillSelection, CommandId::FlatAllAreas, CommandId::ClearSelected, CommandId::ClearOutside].map(command).into(),
                 vec![command(CommandId::ScaleRotate), command(CommandId::TransformAgain), ContextMenuItem::submenu(&self.localization().text(MessageId::MENU_PATH), vec![
                     [CommandId::JoinPaths, CommandId::ClosePath, CommandId::SplitPath, CommandId::ReversePath].map(command).into(),
                     [CommandId::MakeCompoundPath, CommandId::ReleaseCompoundPath].map(command).into(),

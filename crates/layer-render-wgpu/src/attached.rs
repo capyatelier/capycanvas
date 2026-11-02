@@ -140,11 +140,11 @@ impl CanvasRenderer for AttachedRenderer {
     }
     fn request_region(
         &mut self,
-        request: layer_render::RegionRequest,
+        request: layer_render::RegionTask,
     ) -> Result<bool, Self::Error> {
         self.gpu()?.request_region(request)
     }
-    fn take_region(&mut self) -> Option<Result<layer_render::RegionResult, Self::Error>> {
+    fn take_region(&mut self) -> Option<Result<layer_render::RegionOutput, Self::Error>> {
         self.0.as_mut()?.take_region()
     }
     fn cancel_region(&mut self) {

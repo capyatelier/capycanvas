@@ -346,3 +346,4 @@ documents-drop-mixed = Mở bản vẽ hoặc đặt hình ảnh, không làm c�
 documents-drop-images = Đặt hình ảnh lên khung vẽ
 documents-package-unsupported-body = Tệp có các lớp hoặc thiết lập mà phiên bản { common-app-name } này không thể chỉnh sửa.
 documents-package-damaged-body = Một phần của tệp này bị hỏng.
+documents-flats-name = Màu phẳng

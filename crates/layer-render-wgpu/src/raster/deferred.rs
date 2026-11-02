@@ -70,6 +70,7 @@ pub(crate) struct NativeCapture {
     pub queue: wgpu::Queue,
 }
 impl NativeCapture {
+    pub fn append(&mut self, mut other:Self) {self.outputs.append(&mut other.outputs);}
     pub fn storage_bytes(&self) -> u64 {
         self.outputs.iter().map(|o| o.resource.bytes()).sum::<u64>()
     }

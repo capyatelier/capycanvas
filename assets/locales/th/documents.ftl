@@ -343,3 +343,4 @@ documents-drop-mixed = เลือกเปิดภาพวาดหรือ
 documents-drop-images = วางรูปภาพบนผืนผ้าใบ
 documents-package-unsupported-body = มีเลเยอร์หรือการตั้งค่าที่ { common-app-name } เวอร์ชันนี้แก้ไขไม่ได้
 documents-package-damaged-body = ไฟล์นี้เสียหายบางส่วน
+documents-flats-name = สีพื้น

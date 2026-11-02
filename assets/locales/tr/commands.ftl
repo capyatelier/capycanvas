@@ -698,3 +698,4 @@ command-fill-areas-transparent = Saydam
 command-fill-areas-transparent-or-white = Saydam veya beyaz
 command-fill-areas-any-colour = Herhangi bir renk
 commands-help-paint-unfilled = Doldurmak için kapalı, doldurulmamış alanların üzerinden boya.
+command-flat-all-areas = Tüm Alanları Düz Boya

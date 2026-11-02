@@ -201,11 +201,11 @@ fn cold_native_color_composition_sampling_and_thumbnails_match_resident_tiles() 
                         tolerance: 0.,
                         refinement: Default::default(),
                         limit: None,
-                    })
+                    }.into())
                     .unwrap()
                 );
                 complete(r);
-                r.take_region().unwrap().unwrap().pixels
+                crate::test_support::mask_result(r.take_region().unwrap().unwrap()).pixels
             };
             assert_eq!(
                 region(&mut cold),

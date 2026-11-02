@@ -136,11 +136,11 @@ fn composite_queries_ignore_inspection_and_need_no_display_texture() {
                 tolerance: 0.,
                 refinement: Default::default(),
                 limit: None
-            })
+            }.into())
             .unwrap()
         );
         complete(&r);
-        let selected = r.take_region().unwrap().unwrap().pixels;
+        let selected = crate::test_support::mask_result(r.take_region().unwrap().unwrap()).pixels;
         assert_eq!(selected.bounds(), [0, 0, 256, 273]);
         assert_eq!(
             crate::layer_tests::page_bytes(&r, &visible),

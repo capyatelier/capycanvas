@@ -123,3 +123,30 @@ fn refined_coverage(p: vec2<i32>) -> f32 {
     samples = select(min(samples, 3u), max(samples, 1u), center);
     return f32(samples)*.25;
 }
+
+@compute @workgroup_size(64)
+fn area_tokens(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>) {
+    let p=window_word(id,groups);if p.y>=size().y {return;}
+    let output_size=vec2(bitcast<u32>(params.options.x),bitcast<u32>(params.options.y));
+    let output_origin=params.extent_seed.zw;var thin=0u;
+    for(var i=0u;i<32u && p.x+i<size().x;i++) {
+        let local=p+vec2(i,0u);let q=origin()+local;
+        let label=root(local_index(local,size()));var global=NONE;var token=0u;
+        if label!=NONE {
+            if label<perimeter(size()) {global=root(slots()+slot_base(window_index())+label);}
+            let wide=wide_component(label,global);
+            if !wide {thin|=1u<<i;}
+            else {
+                var exterior=false;
+                if label<perimeter(size()) {exterior=bit_set(flags(),global-slots());}
+                else {exterior=bit_set(marks(),label);}
+                if !exterior {token=area_token(label,global);}
+            }
+        }
+        if all(q>=output_origin) && all(q<output_origin+output_size) {
+            let at=q-output_origin;atomicStore(&coverage.values[at.y*output_size.x+at.x],token);
+        }
+    }
+    let q=origin()+p;let word=q.y*mask_stride()+q.x/32u;
+    region_mask[word]&=~thin;
+}

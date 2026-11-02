@@ -697,3 +697,4 @@ command-fill-areas-transparent = โปร่งใส
 command-fill-areas-transparent-or-white = โปร่งใสหรือสีขาว
 command-fill-areas-any-colour = ทุกสี
 commands-help-paint-unfilled = ระบายผ่านพื้นที่ปิดที่ยังไม่เติมสีเพื่อเติมสี
+command-flat-all-areas = ลงสีพื้นทุกพื้นที่

@@ -1281,3 +1281,4 @@ command-fill-areas-transparent = Transparan
 command-fill-areas-transparent-or-white = Transparan atau putih
 command-fill-areas-any-colour = Warna apa pun
 commands-help-paint-unfilled = Sapukan pada area tertutup yang belum terisi untuk mewarnainya.
+command-flat-all-areas = Warnai Semua Area

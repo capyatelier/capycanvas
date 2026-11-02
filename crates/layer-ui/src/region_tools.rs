@@ -3,7 +3,7 @@
 use crate::localization::{Localizer, MessageId};
 use super::*;
 use layer_core::{Point, Selection, authored::{OccurrenceHandle,SceneScope,SourceTarget}};
-use layer_render::RegionRequest;
+use layer_render::{RegionRequest,RegionTask,RegionOutput};
 use layer_core::authored::vector::{ContourTrace, PathGeometry, Style, Subpath};
 #[path="fill_gesture.rs"]
 mod gesture;
@@ -35,7 +35,7 @@ pub(super) struct RegionTools {
     finger:Option<u64>,
     contact: Option<Point>,
     generation: u64,
-    queued: Option<RegionRequest>,
+    queued: Option<RegionTask>,
     pending: bool,
     target: Option<Target>,
     trace: Option<TraceJob>,
@@ -70,6 +70,7 @@ impl Target {
     }
 }
 enum Purpose {
+    FlatAreas,
     Trace {layer:OccurrenceHandle,style:std::sync::Arc<Style>,at_back:bool},
     Region {
         operation: Option<layer_core::RasterOperationKind>,
@@ -198,7 +199,7 @@ impl RegionTools {
             || self.gesture.as_ref().is_some_and(|gesture|!gesture.released && !gesture.holding() && gesture.tool!=layer_engine::ToolKind::Finger)
     }
     pub fn publishing_edit(&self) -> bool {
-        self.trace.is_some() || self.gesture.is_some() || self.target.as_ref().is_some_and(|t| matches!(t.purpose, Purpose::Region { .. }|Purpose::Trace {..}))
+        self.trace.is_some() || self.gesture.is_some() || self.target.as_ref().is_some_and(|t| matches!(t.purpose, Purpose::Region { .. }|Purpose::Trace {..}|Purpose::FlatAreas))
     }
     pub fn applying_transform(&self) -> bool {
         self.target.as_ref().is_some_and(|t| matches!(t.purpose, Purpose::Transform))
@@ -244,6 +245,54 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn enclose_painted_footprint(&mut self,enclosure:Selection,paint:EnclosurePaint) {
         self.request_region_at(Point{x:0.,y:0.},Some(enclosure),None,Some(paint));
+    }
+    pub(super) fn can_flat_all_areas(&self)->bool {
+        let doc=self.engine.document();let scene=doc.scene();
+        self.require_action_idle().is_ok() && scene.order().iter().any(|id|scene.occurrence(*id).is_some_and(|o|matches!(o.content,layer_core::authored::OccurrenceContent::Paint(_)|layer_core::authored::OccurrenceContent::Vector(_))))
+            && doc.working.occurrence.and_then(|id|scene.parent(id)).is_none_or(|id|!doc.is_locked(id))
+    }
+    pub(super) fn flat_all_areas(&mut self)->Result<(),String> {
+        self.require_action_idle()?;
+        let doc=self.engine.document();let extent=doc.composition().size;
+        let pages=extent.map(|n|u64::from(n.div_ceil(layer_core::raster::TILE_SIZE)));
+        let bytes=doc.composition().color.paint_descriptor().byte_len([layer_core::raster::TILE_SIZE;2]).map(|bytes|bytes as u64);
+        let fits=bytes.and_then(|bytes|pages[0].checked_mul(pages[1]).and_then(|count|count.checked_mul(bytes)))
+            .is_some_and(|bytes|bytes<=layer_core::raster::MAX_PUBLICATION_BYTES);
+        if !fits || !self.engine.backend().region_fits(extent) {return Err(self.localization().text(MessageId::DOCUMENTS_TOO_LARGE_MEMORY).to_string());}
+        let source=self.lines_from(self.region_tools.source[1]);
+        let target=doc.working.occurrence.and_then(|id|doc.scene().source_target(id));
+        let reference_count=(source==RegionSource::Reference).then(||doc.scene().reference_leaves().len());
+        let paper=doc.nearest_paper_binding(target);
+        let Some(source)=self.region_source(source,None,target,false) else{return Ok(());};
+        let reach=self.region_tools.gap_reach.or_else(||(!self.region_tools.refinement.close_gaps).then_some(0)).unwrap_or(16);
+        let request=RegionRequest {fill_areas:Some(FillAreas::TransparentOrWhite),colour_mode:Default::default(),
+            fill:Some(layer_render::RegionFillQuery {reach:Some(reach),..Default::default()}),reference_count,paper,
+            enclosure:None,contiguous:false,selection:None,request_id:0,source,position:[0;2],tolerance:self.region_tools.tolerance,
+            refinement:layer_render::RegionRefinement {close_gaps:reach>0,edges:layer_render::RegionEdges::LineMiddle,smooth_edges:false},limit:None};
+        self.queue_region_task(RegionTask::FlatAreas(request),Purpose::FlatAreas);Ok(())
+    }
+    fn insert_flat_areas(&mut self,raster:layer_core::raster::RasterRevision)->Result<(),String> {
+        use layer_core::{Edit,authored::{Occurrence,OccurrenceContent,PaintSource,RecordChange}};
+        let doc=self.engine.document();let scene=doc.scene();let active=doc.working.occurrence;
+        let parent=active.and_then(|id|scene.parent(id));
+        if parent.is_some_and(|id|doc.is_locked(id)) {return Err("The destination group is locked".into());}
+        let stack=parent.map_or(doc.composition().result,|id|match scene.occurrence(id).unwrap().content {OccurrenceContent::Stack(handle)=>handle,_=>unreachable!()});
+        let mut entries=doc.artwork.stacks.get(stack).unwrap().clone();
+        let index=active.and_then(|id| {
+            let base=if scene.occurrence(id).is_some_and(|o|o.attachment==layer_core::Attachment::Clip) {doc.clipping_base(id).unwrap_or(id)}else{id};
+            entries.entries.iter().position(|other|*other==base).map(|index|index+1)
+        }).unwrap_or(0);
+        let paint=RecordChange::insert(&doc.artwork.paint,PaintSource {color_mode:Default::default(),domain:doc.composition().size,raster,base:None,operations:Default::default()});
+        let target=SourceTarget::Paint(paint.handle);
+        let mut occurrence=Occurrence::new(OccurrenceContent::Paint(paint.handle),self.localization().text(MessageId::DOCUMENTS_FLATS_NAME));
+        occurrence.offset=scene.layer_origin(parent).map(|v|-v);
+        let occurrence=RecordChange::insert(&doc.artwork.occurrences,occurrence);let id=occurrence.handle;
+        entries.entries.insert(index,id);let mut working=doc.working.clone();
+        working.occurrence=Some(id);working.target=Some(target);working.inspect_mask=None;
+        working.layer_selection=std::collections::BTreeSet::from([id]);working.layer_anchor=Some(id);
+        self.layer_edit(Edit::Batch(vec![Edit::Paint(paint),Edit::Occurrence(occurrence),
+            Edit::Stack(RecordChange::replace(&doc.artwork.stacks,stack,Some(entries)).map_err(error)?),Edit::Working(working)]))?;
+        if let Some(parent)=parent {self.layer_interaction.collapsed.remove(&parent);}Ok(())
     }
     fn vector_fill_style(&self)->Result<std::sync::Arc<Style>,String> {
         self.vector_figure_style(FigurePaint::Fill,layer_core::authored::vector::Cap::Butt,layer_core::authored::vector::Join::Miter).map(std::sync::Arc::new)
@@ -393,7 +442,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if source != RegionSource::Auto { return source; }
         if self.engine.document().scene().references().is_empty() { RegionSource::Visible } else { RegionSource::Reference }
     }
-    fn region_source(&mut self, source: RegionSource, from: Option<layer_render::RegionSource>, source_target: Option<SourceTarget>) -> Option<layer_render::RegionSource> {
+    fn region_source(&mut self, source: RegionSource, from: Option<layer_render::RegionSource>, source_target: Option<SourceTarget>,include_stop:bool) -> Option<layer_render::RegionSource> {
         let doc = self.engine.document();
         let source = self.lines_from(source);
         let mut sources = match (from, source) {
@@ -426,7 +475,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     doc.scene().reference_leaves().into_iter().filter_map(|leaf| layer_render::RegionSource::reference(snapshot.clone(), leaf)).collect()
                 }
             };
-        if self.region_tools.stop_at_colors && source == RegionSource::Reference && !self.layer_interaction.tool.encloses() {
+        if include_stop && self.region_tools.stop_at_colors && source == RegionSource::Reference && !self.layer_interaction.tool.encloses() {
             let doc = self.engine.document();
             if let Some(target) = source_target.and_then(|target| doc.target_owner(target))
                 && !doc.scene().reference_leaves().contains(&target)
@@ -451,7 +500,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let target=doc.drawing_target().or(doc.active_target());
         let reference_count=(source==RegionSource::Reference).then(||doc.scene().reference_leaves().len());
         let paper=doc.nearest_paper_binding(doc.drawing_content());
-        let Some(source)=self.region_source(source,None,target) else {return;};
+        let Some(source)=self.region_source(source,None,target,true) else {return;};
         self.engine.backend_mut().prepare_regions(Some(&layer_render::RegionPreparation {
             source,reference_count,paper,tolerance:self.region_tools.tolerance,refinement:self.region_tools.refinement,
             enclosed,
@@ -482,7 +531,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let source_target=if mask_target.is_some() {
             self.selection_masks.artwork().and_then(|h|doc.scene().source_target(h))
         } else {doc.drawing_target().or(doc.active_target())};
-        let Some(mut resolved) = self.region_source(source, from.clone(), source_target) else { return };
+        let Some(mut resolved) = self.region_source(source, from.clone(), source_target,true) else { return };
         let reference=source==RegionSource::Reference;
         let mut reference_count=reference.then(||self.engine.document().scene().reference_leaves().len());
         let vector=(fill && mask_target.is_none()).then(||self.editing_vector_layer()).flatten();
@@ -599,7 +648,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         }));}
         operation
     }
-    fn queue_region(&mut self, mut request: RegionRequest, mut purpose: Purpose) {
+    fn queue_region(&mut self,request:RegionRequest,purpose:Purpose) {self.queue_region_task(RegionTask::Mask(request),purpose);}
+    fn queue_region_task(&mut self,mut task:RegionTask,mut purpose:Purpose) {
+        let request=match &mut task {RegionTask::Mask(request)|RegionTask::FlatAreas(request)=>request};
         if let Purpose::Region {operation:Some(layer_core::RasterOperationKind::Fill {edges:Some(edges),..}),..}=&mut purpose {
             edges.position=Point{x:request.position[0] as f32,y:request.position[1] as f32};
             edges.tolerance=request.tolerance;
@@ -620,7 +671,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             purpose,
         });
         if let Some(gesture)=&mut self.region_tools.gesture {gesture.request=Some(request.clone());}
-        self.region_tools.queued = Some(request);
+        self.region_tools.queued = Some(task);
     }
     pub(super) fn queue_selection(&mut self, selection: Selection, options: layer_render::SelectionRefinement) {
         let request = RegionRequest { fill_areas: None, colour_mode: Default::default(), fill: None, reference_count: None, paper: None,
@@ -654,7 +705,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.region_tools.pending = false;
             let queued = self.region_tools.queued.is_some();
             let target = self.region_tools.target.take_if(|t| {
-                result.as_ref().map_or(!queued, |result| t.generation == result.request_id)
+                result.as_ref().map_or(!queued, |result| t.generation == result.request_id())
             });
             let result = result.map_err(|cause| {
                 if target.as_ref().is_some_and(|t| matches!(t.purpose, Purpose::Transform)) { self.discard_mode_actions(); }
@@ -663,7 +714,15 @@ impl<R: CanvasRenderer> UiSession<R> {
             })?;
             let doc = self.engine.document();
             if let Some(target) = target.filter(|t| t.current(doc)) {
+                let result=match result {
+                    RegionOutput::FlatAreas {raster,..}=> {
+                        if !matches!(target.purpose,Purpose::FlatAreas) {return Err("Unexpected region result".into());}
+                        self.insert_flat_areas(raster)?;return Ok(regions::DOCUMENT|regions::COMMANDS);
+                    }
+                    RegionOutput::Mask(result)=>result,
+                };
                 match target.purpose {
+                    Purpose::FlatAreas=>return Err("Unexpected region result".into()),
                     Purpose::Trace {..}=> {
                         self.region_tools.trace=Some(TraceJob {target,marching:Some(ContourTrace::new((*result.pixels).clone())),contours:Default::default(),fitting:None,subpaths:Vec::new()});
                         return Ok(0);

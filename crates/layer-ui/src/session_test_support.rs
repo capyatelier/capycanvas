@@ -40,6 +40,8 @@ pub(crate) struct Recorder {
     pub(crate) selection_reply: Option<layer_render::SelectionPaintResult>,
     pub(crate) selection_wait: bool,
     pub(crate) region_requests: Vec<layer_render::RegionRequest>,
+    pub(crate) flat_requests: Vec<layer_render::RegionRequest>,
+    pub(crate) region_output: Option<layer_render::RegionOutput>,
     pub(crate) region_preparation: Option<layer_render::RegionPreparation>,
     pub(crate) region_reply: Option<layer_render::RegionResult>,
     pub(crate) fill_preview: Option<layer_render::FillPreview>,
@@ -156,14 +158,14 @@ impl CanvasRenderer for Recorder {
     fn set_canvas_transition(&mut self,alpha:Option<f32>) {self.canvas_transition=alpha;self.canvas_transition_updates+=1;}
     fn request_region(
         &mut self,
-        request: layer_render::RegionRequest,
+        request: layer_render::RegionTask,
     ) -> Result<bool, Self::Error> {
-        self.region_requests.push(request);
+        match request {layer_render::RegionTask::Mask(request)=>self.region_requests.push(request),layer_render::RegionTask::FlatAreas(request)=>self.flat_requests.push(request)}
         Ok(true)
     }
-    fn take_region(&mut self) -> Option<Result<layer_render::RegionResult, Self::Error>> {
+    fn take_region(&mut self) -> Option<Result<layer_render::RegionOutput, Self::Error>> {
         let fails = self.region_fails;
-        self.region_reply.take().map(|reply| if fails { Err(BackendError("readback failed")) } else { Ok(reply) })
+        self.region_output.take().or_else(||self.region_reply.take().map(layer_render::RegionOutput::Mask)).map(|reply| if fails { Err(BackendError("readback failed")) } else { Ok(reply) })
     }
     fn cancel_region(&mut self) {
         self.region_cancels += 1;

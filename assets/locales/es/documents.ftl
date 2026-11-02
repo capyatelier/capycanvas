@@ -349,3 +349,4 @@ documents-drop-mixed = Abre dibujos o coloca imágenes, no ambas cosas
 documents-drop-images = Colocar imágenes en el lienzo
 documents-package-unsupported-body = Contiene capas o ajustes que esta versión de { common-app-name } no puede editar.
 documents-package-damaged-body = Parte de este archivo está dañada.
+documents-flats-name = Colores planos

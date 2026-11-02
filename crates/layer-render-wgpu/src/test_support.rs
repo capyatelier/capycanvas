@@ -264,15 +264,19 @@ pub(crate) fn document_texture(r: &WgpuRasterizer) -> &wgpu::Texture {
 }
 
 pub(crate) fn receive_request(r: &mut WgpuRasterizer, request: layer_render::RegionRequest) -> layer_render::RegionResult {
-    assert!(r.request_region(request).unwrap());
+    assert!(r.request_region(request.into()).unwrap());
     let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
     loop {
         if let Some(result) = r.take_region() {
-            return result.unwrap();
+            return mask_result(result.unwrap());
         }
         assert!(std::time::Instant::now() < deadline, "region readback timed out");
         std::thread::yield_now();
     }
+}
+
+pub(crate) fn mask_result(output:layer_render::RegionOutput)->layer_render::RegionResult {
+    let layer_render::RegionOutput::Mask(result)=output else {panic!("expected region mask")};result
 }
 
 /// Solve H(u, v) = p for row-major H. None without a nearby preimage where w > 0.

@@ -346,3 +346,4 @@ documents-drop-mixed = 請選擇開啟繪圖或放置影像，不能同時進行
 documents-drop-images = 將影像放置到畫布上
 documents-package-unsupported-body = 其中包含此版本的{ common-app-name }無法編輯的圖層或設定。
 documents-package-damaged-body = 此檔案的部分內容已損壞。
+documents-flats-name = 平塗

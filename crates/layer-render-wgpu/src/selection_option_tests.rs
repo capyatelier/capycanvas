@@ -544,12 +544,12 @@ fn cancelling_a_modify_job_drops_its_result() {
     r.set_refine_chunk(Some(3000.));
     let mut long = modify_request(from_bytes(&square), &[ModifyStep { feather: 20., ..Default::default() }], None);
     long.request_id = 1;
-    assert!(r.request_region(long).unwrap());
+    assert!(r.request_region(long.into()).unwrap());
     for _ in 0..3 {
         crate::test_support::complete(&r);
         assert!(r.take_region().is_none(), "the long job is still running");
     }
-    assert!(!r.request_region(modify_request(from_bytes(&square), &[resize(2)], None)).unwrap(), "one job at a time");
+    assert!(!r.request_region(modify_request(from_bytes(&square), &[resize(2)], None).into()).unwrap(), "one job at a time");
     r.cancel_region();
     let grown = modify(&mut r, from_bytes(&square), &[resize(2)], None);
     assert_eq!(grown.request_id, 7);

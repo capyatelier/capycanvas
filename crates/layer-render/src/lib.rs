@@ -749,6 +749,14 @@ pub struct RegionResult {
     /// exact result.
     pub placement: layer_core::Affine,
 }
+#[derive(Clone,Debug)]
+pub enum RegionTask {Mask(RegionRequest),FlatAreas(RegionRequest)}
+impl From<RegionRequest> for RegionTask {fn from(request:RegionRequest)->Self {Self::Mask(request)}}
+#[derive(Clone,Debug)]
+pub enum RegionOutput {Mask(RegionResult),FlatAreas {request_id:u64,raster:layer_core::raster::RasterRevision}}
+impl RegionOutput {
+    pub fn request_id(&self)->u64 {match self {Self::Mask(result)=>result.request_id,Self::FlatAreas {request_id,..}=>*request_id}}
+}
 
 /// Absolute, disposable transform of one immutable layer-local source. Keep the
 /// transaction id and selection fixed while dragging; a new id captures anew.
@@ -1019,10 +1027,10 @@ pub trait CanvasRenderer {
     }
     /// Single-flight connected region. GPU work is asynchronous; the result is
     /// retained once in host memory for history/recovery, not rasterized there.
-    fn request_region(&mut self, _request: RegionRequest) -> Result<bool, Self::Error> {
+    fn request_region(&mut self, _request: RegionTask) -> Result<bool, Self::Error> {
         Ok(false)
     }
-    fn take_region(&mut self) -> Option<Result<RegionResult, Self::Error>> {
+    fn take_region(&mut self) -> Option<Result<RegionOutput, Self::Error>> {
         None
     }
     /// Abandon the requested region: no result follows, and the next request

@@ -355,3 +355,19 @@ fn restore_base(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgro
     let index=mask_word_id(id,groups);
     if index<size().x*size().y {atomicStore(&parents[index],atomicLoad(&coverage.values[index]));}
 }
+
+fn local_pixel(index:u32,s:vec2<u32>)->vec2<u32> {
+    let border=perimeter(s);
+    if index<border {return border_pixel(index,s);}
+    let at=index-border;
+    return vec2(at%(s.x-2u)+1u,at/(s.x-2u)+1u);
+}
+fn area_token(label:u32,global:u32)->u32 {
+    if label>=perimeter(size()) {
+        let q=origin()+local_pixel(label,size());return 1u+q.y*params.extent_seed.x+q.x;
+    }
+    let slot=global-slots();let window=slot/(4u*side());
+    let at=vec2(window%params.grid.y,window/params.grid.y)*side();
+    let q=at+border_pixel(slot%(4u*side()),window_extent(at));
+    return 1u+q.y*params.extent_seed.x+q.x;
+}

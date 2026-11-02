@@ -701,3 +701,4 @@ command-fill-areas-transparent = Transparent
 command-fill-areas-transparent-or-white = Transparent oder weiß
 command-fill-areas-any-colour = Jede Farbe
 commands-help-paint-unfilled = Über geschlossene ungefüllte Bereiche malen, um sie zu füllen.
+command-flat-all-areas = Alle Bereiche flach füllen

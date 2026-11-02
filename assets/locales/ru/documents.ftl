@@ -351,3 +351,4 @@ documents-drop-mixed = Открывайте рисунки или размеща
 documents-drop-images = Разместить изображения на холсте
 documents-package-unsupported-body = В нём есть слои или настройки, которые эта версия { common-app-name } не может редактировать.
 documents-package-damaged-body = Часть этого файла повреждена.
+documents-flats-name = Заливки

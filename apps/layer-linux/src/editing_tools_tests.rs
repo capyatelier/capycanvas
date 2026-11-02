@@ -847,77 +847,119 @@ fn native_fill_scribble_geometry() {
     for theme in [Theme::Light, Theme::Dark] {
         fill_edge_plates(&app,&mut input,theme,&output);
         for paper in ["cold_press", "rough"] {
-            let mut project = new_drawing(sheet.size[0], sheet.size[1], &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-            assert_eq!(project.composition().color.depth, SampleDepth::U8);
-            project.set_paper_texture(layer_core::paper::built_in_paper(paper).unwrap().texture.clone());project.set_paper_relief(100.);
-            let w = Workspace::with_project(&app, Some((project, None)));w.window.maximize();w.window.present();ready(&w);
-            w.dispatch(UiAction::SetTheme { theme: Some(theme) });invoke(&w, CommandId::FitCanvas);
-            w.dispatch(UiAction::SetColor { rgba: [0., 0., 0., 1.] });
-            for case in sheet.cases.iter().filter(|case| case.paper == paper) {
-                if case.vector {
-                    w.dispatch(UiAction::Layer { action: LayerAction::ReferenceSelection });
-                    w.dispatch(UiAction::Layer { action: LayerAction::NewVector });
-                    let session = ui_session(&w);let document = session.engine().document();
-                    assert!(document.working.occurrence.is_some_and(|layer| document.scene().vector_layer(layer).is_some()));
-                }
-                w.dispatch(UiAction::SelectBrush { id: case.preset });w.dispatch(UiAction::SetBrushSize { value: case.size });
-                w.dispatch(UiAction::SetToolSetting { id: "smoothing_strength".into(), value: 0. });
-                for path in &case.paths { scribble_path(&mut input, &w, path); }
-                if case.vector {
-                    let session = ui_session(&w);let document = session.engine().document();
-                    assert!(document.scene().vector_layer(document.working.occurrence.unwrap()).unwrap().paths().next().is_some());
-                }
-                if !case.eraser.is_empty() {
-                    let before = raster(&w);
-                    w.dispatch(UiAction::SelectBrush { id: layer_core::DefaultBrushPreset::Eraser as u32 });
-                    w.dispatch(UiAction::SetBrushSize { value: case.gap as f32 });assert!(ui_session(&w).command(CommandId::Eraser).selected);scribble_path(&mut input, &w, &case.eraser);
-                    assert_ne!(raster(&w), before, "the real eraser contact cuts the reference ink");
-                }
-            }
-            let paper_layer=ui_session(&w).engine().document().bottom_paper().unwrap();
-            w.dispatch(UiAction::Layer {action:LayerAction::Visibility {id:layer_ui::occurrence_token(paper_layer),value:false}});ready(&w);
-            let reference=ui_session(&w).engine().backend().document_pixels(3).unwrap();
-            gtk::gdk::MemoryTexture::new(reference.width as i32,reference.height as i32,gtk::gdk::MemoryFormat::R8g8b8a8,
-                &glib::Bytes::from_owned(reference.bytes.clone()),reference.stride as usize)
-                .save_to_png(output.join(format!("scribble-reference-raster-{paper}-{theme:?}.png"))).unwrap();
-            invoke(&w,CommandId::Undo);ready(&w);
-            assert!(ui_session(&w).engine().document().scene().visible(paper_layer));
-            capture_ui(&w, &output, &format!("scribble-reference-{paper}-{theme:?}.png"));
-            w.dispatch(UiAction::Layer { action: LayerAction::ReferenceSelection });w.dispatch(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } });
-            let workspace = tool_settings_workspace(&w, &[CommandId::Fill], true, false);w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
-            invoke(&w, CommandId::FitCanvas);invoke(&w, CommandId::Fill);invoke(&w, CommandId::SelectionReference);
-            tool_controls_compact::select_group(&w, "close-gaps", 0);tool_controls_compact::select_group(&w, "region-edges", 0);
-            w.dispatch(UiAction::SetToolSetting { id: "grain_depth".into(), value: 0. });w.dispatch(UiAction::SetToolSetting { id: "tolerance".into(), value: 0.05 });
-            w.dispatch(UiAction::SetBrushOpacity { value: 1. });
-            assert!(state(&w).tool_settings.iter().any(|field| field.id == "grain_depth" && field.value == 0.));
-            w.dispatch(UiAction::SetColor { rgba: [0.85, 0.1, 0.05, 1.] });
-            let empty = pixels(&raster(&w));
-            let mut fringe_samples=0;let mut profiles=Vec::new();
-            for case in sheet.cases.iter().filter(|case| case.paper == paper) {
-                for region in &case.regions {
-                    let before = raster(&w);
-                    scribble_path(&mut input, &w, &[region.seed, region.seed]);
-                    committed(&w, &before);
-                    capture_ui(&w, &output, &format!("scribble-{}-{}-{paper}-{theme:?}.png", case.preset, region.side));
-                    let filled = pixels(&raster(&w));
-                    let [left, top, width, height] = case.bounds;
-                    capture_scribble(&filled,[0,0,sheet.size[0],sheet.size[1]],&output.join(format!("scribble-target-{}-{}-{paper}-{theme:?}.png",case.preset,region.side)));
-                    let tile_size = layer_core::raster::TILE_SIZE;let mut outside_cell = 0;
-                    for (key, bytes) in &filled {for (index, pixel) in bytes.chunks_exact(4).enumerate() {
-                        let x = key.coordinate[0] * tile_size + index as u32 % tile_size;let y = key.coordinate[1] * tile_size + index as u32 / tile_size;
-                        if pixel[3] != 0 && !((x >= left && y >= top && x < left + width && y < top + height) || scribble_distance(case,region,[x as f32 + 0.5,y as f32 + 0.5]) <= case.size * 0.5 + 1.5) {outside_cell += 1;}
-                    }}
-                    let (samples,profile)=score_scribble(case, region, &filled, &reference, outside_cell);fringe_samples+=samples;
-                    profiles.push(serde_json::json!({"case":case.name,"side":region.side,"fractional_source_samples":samples,"fringe":profile}));
-                    invoke(&w, CommandId::Undo);ready(&w);
-                    assert_eq!(pixels(&raster(&w)), empty, "{} {} Undo restores exact empty target", case.name, region.side);
-                    eprintln!("PASS {theme:?} {paper} {} {}: {}° corner, {} px {} break, checked geometry bounds and exact Undo", case.name, region.side, case.angle, case.gap, case.direction);
-                }
-            }
-            assert!(fringe_samples>0,"{paper} {theme:?} requires fractional source-alpha probes");
-            std::fs::write(output.join(format!("scribble-fringes-{paper}-{theme:?}.json")),serde_json::to_vec_pretty(&profiles).unwrap()).unwrap();
-            healthy(&w);w.window.destroy();pump(100);
+            scribble_sheet(&app,&mut input,theme,paper,&sheet,&output,false);
         }
     }
+    input.finish();
+}
+
+fn scribble_sheet(app:&adw::Application,input:&mut RemoteInput,theme:Theme,paper:&str,sheet:&ScribbleSheet,output:&std::path::Path,all_areas:bool) {
+    let mut project = new_drawing(sheet.size[0], sheet.size[1], &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+    assert_eq!(project.composition().color.depth, SampleDepth::U8);
+    project.set_paper_texture(layer_core::paper::built_in_paper(paper).unwrap().texture.clone());project.set_paper_relief(100.);
+    let w = Workspace::with_project(app, Some((project, None)));w.window.maximize();w.window.present();ready(&w);
+    w.dispatch(UiAction::SetTheme { theme: Some(theme) });invoke(&w, CommandId::FitCanvas);
+    w.dispatch(UiAction::SetColor { rgba: [0., 0., 0., 1.] });
+    for case in sheet.cases.iter().filter(|case| case.paper == paper) {
+        if case.vector {
+            w.dispatch(UiAction::Layer { action: LayerAction::ReferenceSelection });
+            w.dispatch(UiAction::Layer { action: LayerAction::NewVector });
+            let session = ui_session(&w);let document = session.engine().document();
+            assert!(document.working.occurrence.is_some_and(|layer| document.scene().vector_layer(layer).is_some()));
+        }
+        w.dispatch(UiAction::SelectBrush { id: case.preset });w.dispatch(UiAction::SetBrushSize { value: case.size });
+        w.dispatch(UiAction::SetToolSetting { id: "smoothing_strength".into(), value: 0. });
+        for path in &case.paths { scribble_path(input, &w, path); }
+        if case.vector {
+            let session = ui_session(&w);let document = session.engine().document();
+            assert!(document.scene().vector_layer(document.working.occurrence.unwrap()).unwrap().paths().next().is_some());
+        }
+        if !case.eraser.is_empty() {
+            let before = raster(&w);
+            w.dispatch(UiAction::SelectBrush { id: layer_core::DefaultBrushPreset::Eraser as u32 });
+            w.dispatch(UiAction::SetBrushSize { value: case.gap as f32 });assert!(ui_session(&w).command(CommandId::Eraser).selected);scribble_path(input, &w, &case.eraser);
+            assert_ne!(raster(&w), before, "the real eraser contact cuts the reference ink");
+        }
+    }
+    let paper_layer=ui_session(&w).engine().document().bottom_paper().unwrap();
+    w.dispatch(UiAction::Layer {action:LayerAction::Visibility {id:layer_ui::occurrence_token(paper_layer),value:false}});ready(&w);
+    let reference=ui_session(&w).engine().backend().document_pixels(3).unwrap();
+    gtk::gdk::MemoryTexture::new(reference.width as i32,reference.height as i32,gtk::gdk::MemoryFormat::R8g8b8a8,
+        &glib::Bytes::from_owned(reference.bytes.clone()),reference.stride as usize)
+        .save_to_png(output.join(format!("scribble-reference-raster-{paper}-{theme:?}.png"))).unwrap();
+    invoke(&w,CommandId::Undo);ready(&w);
+    assert!(ui_session(&w).engine().document().scene().visible(paper_layer));
+    capture_ui(&w, &output, &format!("scribble-reference-{paper}-{theme:?}.png"));
+    w.dispatch(UiAction::Layer { action: LayerAction::ReferenceSelection });w.dispatch(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } });
+    let workspace = tool_settings_workspace(&w, &[CommandId::Fill], true, false);w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+    invoke(&w, CommandId::FitCanvas);invoke(&w, CommandId::Fill);invoke(&w, CommandId::SelectionReference);
+    tool_controls_compact::select_group(&w, "close-gaps", 0);tool_controls_compact::select_group(&w, "region-edges", 0);
+    w.dispatch(UiAction::SetToolSetting { id: "grain_depth".into(), value: 0. });w.dispatch(UiAction::SetToolSetting { id: "tolerance".into(), value: 0.05 });
+    w.dispatch(UiAction::SetBrushOpacity { value: 1. });
+    assert!(state(&w).tool_settings.iter().any(|field| field.id == "grain_depth" && field.value == 0.));
+    w.dispatch(UiAction::SetColor { rgba: [0.85, 0.1, 0.05, 1.] });
+    let empty = pixels(&raster(&w));
+    if all_areas {
+        let layers=state(&w).layers.iter().map(|layer|layer.id).collect::<Vec<_>>();
+        let active=state(&w).layers.iter().find(|layer|layer.editing).unwrap().id;
+        let before=raster(&w);invoke(&w,CommandId::FlatAllAreas);committed(&w,&before);
+        let rows=state(&w).layers;let flat=rows.iter().find(|layer|layer.editing).unwrap();
+        assert_eq!(flat.label,"Flats");
+        {let session=ui_session(&w);let document=session.engine().document();assert!(document.scene().paint_source(document.working.occurrence.unwrap()).is_some());}
+        let position=rows.iter().position(|layer|layer.id==active).unwrap();
+        assert_eq!(rows[position+1].id,flat.id);assert_eq!(rows.len(),layers.len()+1);
+        let flats=pixels(&raster(&w));assert_eq!(sample(&flats,0,0)[3],0);
+        if let Some(case)=sheet.cases.iter().find(|case|case.paper==paper && case.preset==1) {
+            for region in &case.regions {
+                let [x,y]=region.seed.map(|v|v.floor() as u32);let colour=sample(&flats,x,y);assert_eq!(colour[3],255);
+                for dy in -2..=2 {for dx in -2..=2 {assert_eq!(sample(&flats,(x as i32+dx) as u32,(y as i32+dy) as u32),colour);}}
+            }
+            for x in 1814..=1818 {assert_eq!(sample(&flats,x,668)[3],255,"Shared G-Pen line middle has no gap");}
+        }
+        capture_scribble(&flats,[0,0,sheet.size[0],sheet.size[1]],&output.join(format!("scribble-flats-raster-{paper}-{theme:?}.png")));
+        capture_ui(&w,&output,&format!("scribble-flats-{paper}-{theme:?}.png"));
+        invoke(&w,CommandId::Undo);ready(&w);assert_eq!(state(&w).layers.iter().map(|layer|layer.id).collect::<Vec<_>>(),layers);assert_eq!(pixels(&raster(&w)),empty);
+        invoke(&w,CommandId::Redo);ready(&w);assert_eq!(pixels(&raster(&w)),flats);
+        invoke(&w,CommandId::Undo);ready(&w);assert_eq!(pixels(&raster(&w)),empty);
+        eprintln!("PASS {theme:?} {paper}: Flat All Areas placement, hard ownership, exterior, Undo and exact Redo");
+        healthy(&w);w.window.destroy();pump(100);return;
+    }
+    let mut fringe_samples=0;let mut profiles=Vec::new();
+    for case in sheet.cases.iter().filter(|case| case.paper == paper) {
+        for region in &case.regions {
+            let before = raster(&w);
+            scribble_path(input, &w, &[region.seed, region.seed]);
+            committed(&w, &before);
+            capture_ui(&w, &output, &format!("scribble-{}-{}-{paper}-{theme:?}.png", case.preset, region.side));
+            let filled = pixels(&raster(&w));
+            let [left, top, width, height] = case.bounds;
+            capture_scribble(&filled,[0,0,sheet.size[0],sheet.size[1]],&output.join(format!("scribble-target-{}-{}-{paper}-{theme:?}.png",case.preset,region.side)));
+            let tile_size = layer_core::raster::TILE_SIZE;let mut outside_cell = 0;
+            for (key, bytes) in &filled {for (index, pixel) in bytes.chunks_exact(4).enumerate() {
+                let x = key.coordinate[0] * tile_size + index as u32 % tile_size;let y = key.coordinate[1] * tile_size + index as u32 / tile_size;
+                if pixel[3] != 0 && !((x >= left && y >= top && x < left + width && y < top + height) || scribble_distance(case,region,[x as f32 + 0.5,y as f32 + 0.5]) <= case.size * 0.5 + 1.5) {outside_cell += 1;}
+            }}
+            let (samples,profile)=score_scribble(case, region, &filled, &reference, outside_cell);fringe_samples+=samples;
+            profiles.push(serde_json::json!({"case":case.name,"side":region.side,"fractional_source_samples":samples,"fringe":profile}));
+            invoke(&w, CommandId::Undo);ready(&w);
+            assert_eq!(pixels(&raster(&w)), empty, "{} {} Undo restores exact empty target", case.name, region.side);
+            eprintln!("PASS {theme:?} {paper} {} {}: {}° corner, {} px {} break, checked geometry bounds and exact Undo", case.name, region.side, case.angle, case.gap, case.direction);
+        }
+    }
+    assert!(fringe_samples>0,"{paper} {theme:?} requires fractional source-alpha probes");
+    std::fs::write(output.join(format!("scribble-fringes-{paper}-{theme:?}.json")),serde_json::to_vec_pretty(&profiles).unwrap()).unwrap();
+    healthy(&w);w.window.destroy();pump(100);
+}
+
+#[test]
+#[ignore = "private Wayland display, hardware GPU and --tablet"]
+fn native_flat_all_areas_scribbles() {
+    let sheet:ScribbleSheet=serde_json::from_str(include_str!("../../../tools/fixtures/fill-scribble.json")).unwrap();
+    let app=native_test_app("art.capycanvas.FlatScribbles");
+    let output=std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap());std::fs::create_dir_all(&output).unwrap();
+    let mut input=RemoteInput::new().timeout_secs(30);input.ready();
+    for theme in [Theme::Light,Theme::Dark] {for paper in ["cold_press","rough"] {
+        scribble_sheet(&app,&mut input,theme,paper,&sheet,&output,true);
+    }}
     input.finish();
 }

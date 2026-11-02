@@ -2785,6 +2785,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         l.kind() != LayerKind::Selection
                     })
             }
+            CommandId::FlatAllAreas => self.can_flat_all_areas(),
             CommandId::FillConnected | CommandId::FillEverywhere => idle && matches!(self.layer_interaction.tool, LayerCanvasTool::Region { fill: true, .. }),
             CommandId::CloseGapsAuto | CommandId::CloseGapsOff => idle && self.layer_interaction.tool.region().is_some_and(|(fill, _, contiguous)| contiguous && (!fill || self.region_tools.scope != FillScope::Everywhere)),
             CommandId::EdgesLineMiddle | CommandId::EdgesExact | CommandId::EdgesGrowShrink => idle && self.layer_interaction.tool.region().is_some(),
@@ -5823,6 +5824,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 working.selection = Some(selection);
                 self.layer_edit(layer_core::Edit::Working(working))?;
                 Ok((DOCUMENT, true))
+            }
+            CommandId::FlatAllAreas => {
+                self.flat_all_areas()?;Ok((COMMANDS,false))
             }
             CommandId::ClearLayer
             | CommandId::FillSelection

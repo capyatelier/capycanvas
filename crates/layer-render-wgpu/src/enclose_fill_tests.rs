@@ -287,7 +287,7 @@ fn regions_whose_coverage_exceeds_the_device_are_refused_and_the_renderer_keeps_
     frame(&mut r, &document, large);
     let mut query = request(RegionSource::Composite, rectangle([0, 0, 1, 1]), Default::default(), 0.);
     query.enclosure = None;
-    assert!(matches!(r.request_region(query.clone()), Err(GpuRasterError::SizeOverflow)));
+    assert!(matches!(r.request_region(query.clone().into()), Err(GpuRasterError::SizeOverflow)));
     assert_eq!(r.regions.as_ref().unwrap().flood.storage_bytes(), 48);
     let alpha = vec![0.; (extent[0] * extent[1]) as usize];
     frame(&mut r, &uniform_document(extent, &alpha), extent);

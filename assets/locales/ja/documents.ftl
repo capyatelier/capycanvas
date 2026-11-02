@@ -347,3 +347,4 @@ documents-drop-mixed = 絵を開くか画像を配置するか、どちらかを
 documents-drop-images = キャンバスに画像を配置
 documents-package-unsupported-body = このバージョンの{ common-app-name }では編集できないレイヤーや設定が含まれています。
 documents-package-damaged-body = このファイルの一部が破損しています。
+documents-flats-name = 下塗り

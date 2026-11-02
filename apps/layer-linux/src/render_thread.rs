@@ -468,7 +468,7 @@ enum Command {
     SelectionPaint(u64, layer_render::SelectionPaint),
     CancelSelectionPaint(u64),
     QuickMaskThumbnail(Option<layer_core::Selection>),
-    Region(u64, layer_render::RegionRequest),
+    Region(u64, layer_render::RegionTask),
     CancelRegion(u64),
     EffectValidation(layer_render::EffectValidationRequest),
     Telemetry(bool),
@@ -526,7 +526,7 @@ enum Reply {
         layer_render_wgpu::StartupProgress,
         HashMap<AssetId, BrushSource>,
     ),
-    Region(u64, Result<layer_render::RegionResult, String>),
+    Region(u64, Result<layer_render::RegionOutput, String>),
     SelectionPaintAck(u64, Result<bool, String>),
     SelectionPaint(u64, Result<layer_render::SelectionPaintResult, String>),
     EffectValidation(layer_render::EffectValidationResult),
@@ -603,7 +603,7 @@ pub struct RenderWorker {
     pub(super) startup: layer_render_wgpu::StartupProgress,
     startup_generation: u64,
     startup_key: Option<(layer_render_wgpu::ShaderDocument, layer_core::BrushSnapshot, bool)>,
-    region: Option<Result<layer_render::RegionResult, String>>,
+    region: Option<Result<layer_render::RegionOutput, String>>,
     region_pending: bool,
     region_generation: u64,
     selection_generation: u64,
@@ -1301,7 +1301,7 @@ impl CanvasRenderer for RenderWorker {
     }
     fn request_region(
         &mut self,
-        request: layer_render::RegionRequest,
+        request: layer_render::RegionTask,
     ) -> Result<bool, Self::Error> {
         if self.region_pending {
             return Ok(false);
@@ -1316,7 +1316,7 @@ impl CanvasRenderer for RenderWorker {
         self.region = None;
         let _ = self.send(Command::CancelRegion(self.region_generation));
     }
-    fn take_region(&mut self) -> Option<Result<layer_render::RegionResult, Self::Error>> {
+    fn take_region(&mut self) -> Option<Result<layer_render::RegionOutput, Self::Error>> {
         self.ready().ok()?;
         self.region
             .take()

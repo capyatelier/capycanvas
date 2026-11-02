@@ -699,3 +699,4 @@ command-fill-areas-transparent = Trong suốt
 command-fill-areas-transparent-or-white = Trong suốt hoặc trắng
 command-fill-areas-any-colour = Mọi màu
 commands-help-paint-unfilled = Vẽ qua các vùng kín chưa được tô để tô màu.
+command-flat-all-areas = Tô màu tất cả vùng

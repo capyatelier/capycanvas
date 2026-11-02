@@ -492,3 +492,4 @@ documents-drop-mixed = Buka gambar atau tempatkan citra, jangan keduanya sekalig
 documents-drop-images = Tempatkan citra di kanvas
 documents-package-unsupported-body = Ada lapisan atau pengaturan yang tidak dapat diedit oleh versi { common-app-name } ini.
 documents-package-damaged-body = Sebagian berkas ini rusak.
+documents-flats-name = Warna Datar

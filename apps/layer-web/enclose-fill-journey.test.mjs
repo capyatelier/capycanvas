@@ -64,7 +64,7 @@ function scoreScribble(caseData,region,result,reference,outsideCell=0) {
   return fringes;
 }
 
-export async function checkEncloseFill({call,evaluate,settle,fillAreasOnly=false}) {
+export async function checkEncloseFill({call,evaluate,settle,fillAreasOnly=false,flatAreasOnly=false}) {
   const scribbles=JSON.parse(await readFile(new URL('../../tools/fixtures/fill-scribble.json',import.meta.url),'utf8'));
   const edges=JSON.parse(await readFile(new URL('../../tools/fixtures/fill-edges.json',import.meta.url),'utf8'));
   const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/enclose-fill/web';
@@ -180,7 +180,7 @@ export async function checkEncloseFill({call,evaluate,settle,fillAreasOnly=false
       console.log(`PASS ${theme}/${name}: direct F, exact interior, unchanged far side and Undo`);
     }
   };
-  const scribblePaper=async(theme,paper)=>{
+  const drawSheet=async(theme,paper)=>{
     await invoke('new_document');await wait('!!layerApp.state().new_drawing');
     await contact('#new-drawing-texture');
     const paperIndex=await evaluate(`layerApp.state().new_drawing.drawer.tiles.findIndex(tile=>tile.id===${JSON.stringify(paper)})`);assert.ok(paperIndex>=0);
@@ -217,6 +217,34 @@ export async function checkEncloseFill({call,evaluate,settle,fillAreasOnly=false
     const baseline=rasterIdentity(await save());
     const visibility=await evaluate('layerApp.state().layers.map(l=>({id:Number(l.id),visible:l.visible}))');
     const references=await evaluate('layerApp.state().layers.filter(l=>!l.editing&&l.visible).map(l=>Number(l.id))');
+    return {cases,reference,baseline,visibility,references};
+  };
+  const flatPaper=async(theme,paper,{baseline,cases})=>{
+    const flatBefore=await evaluate('layerApp.state().layers.map(l=>Number(l.id))'),flatActive=await evaluate('Number(layerApp.state().layers.find(l=>l.editing).id)');
+    await invoke('flat_all_areas');await idle();
+    const flatRows=await evaluate('layerApp.state().layers.map(l=>({id:Number(l.id),label:l.label,editing:l.editing,icon:l.content_icon}))'),flatLayer=flatRows.find(l=>l.editing);
+    assert.equal(flatLayer.label,'Flats');assert.equal(flatLayer.icon,undefined);assert.equal(flatRows.length,flatBefore.length+1);
+    assert.equal(flatRows[flatRows.findIndex(l=>l.id===flatActive)+1].id,flatLayer.id);
+    await writeFile(`${directory}/scribble-flats-${paper}-${theme}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    const flatCommit=rasterIdentity(await save()),flatHidden=[];
+    for(const layer of await evaluate('layerApp.state().layers.filter(l=>l.visible&&!l.editing).map(l=>Number(l.id))')) {await send({type:'layer',action:{op:'visibility',id:layer,value:false}});flatHidden.push(layer);}
+    try {
+      const flats=await output();await writeFile(`${directory}/scribble-flats-raster-${paper}-${theme}.png`,Buffer.from(await evaluate('Array.from(placementTest.saved)')));
+      const sample=(x,y)=>flats.pixels.slice((y*flats.extent[0]+x)*4,(y*flats.extent[0]+x)*4+4);assert.equal(sample(0,0)[3],0);
+      const gpen=cases.find(c=>c.preset===1);
+      if(gpen) {
+        gpen.regions.forEach(region=>{const [x,y]=region.seed.map(Math.floor),colour=sample(x,y);assert.equal(colour[3],255);for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++)assert.deepEqual(sample(x+dx,y+dy),colour);});
+        for(let x=1814;x<=1818;x++)assert.equal(sample(x,668)[3],255,'Shared G-Pen line middle has no gap');
+      }
+    } finally {for(let i=flatHidden.length;i>0;i--){await invoke('undo');await idle();}}
+    await invoke('undo');await idle();assert.deepEqual(await evaluate('layerApp.state().layers.map(l=>Number(l.id))'),flatBefore);assert.deepEqual(rasterIdentity(await save()),baseline,'One Undo removes the Flats layer');
+    await invoke('redo');await idle();assert.deepEqual(rasterIdentity(await save()),flatCommit,'Redo restores exact Flats pixels');
+    await invoke('undo');await idle();assert.deepEqual(rasterIdentity(await save()),baseline);
+    console.log(`PASS ${theme}/${paper}: Flats placement, opaque areas, line middles, transparent exterior and exact Undo/Redo`);
+  };
+  const scribblePaper=async(theme,paper)=>{
+    const sheet=await drawSheet(theme,paper),{cases,reference,baseline,visibility,references}=sheet;
+    await flatPaper(theme,paper,sheet);
     let fringes=0;
     for(const caseData of cases)for(const region of caseData.regions){
       await scribblePath([region.seed,region.seed]);
@@ -307,6 +335,7 @@ export async function checkEncloseFill({call,evaluate,settle,fillAreasOnly=false
   try {
     await send({type:'preferences',action:{type:'edit',id:'missing_profile',value:0}});
     await send({type:'customize',action:{type:'set_panel_visible',panel:'tool_settings',visible:true}});
+    if(flatAreasOnly){for(const theme of ['light','dark']){await send({type:'set_theme',theme});for(const paper of ['cold_press','rough'])await flatPaper(theme,paper,await drawSheet(theme,paper));}return;}
     if(fillAreasOnly){for(const theme of ['light','dark']){await send({type:'set_theme',theme});await fillAreas(theme);}return;}
     for(const theme of ['light','dark']) {
       await invoke('open_document');

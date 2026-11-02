@@ -611,7 +611,7 @@ impl RawRegions {
                 .collect()
         };
         for (i, tiles) in batches.into_iter().enumerate().skip(self.progress.as_ref().unwrap().batch) {
-            if i==0 && tone.is_none() && (matches!(sampling,Sampling::Transparent|Sampling::Enclosed|Sampling::Retained) || request.enclosure.is_some()) {
+            if i==0 && tone.is_none() && (matches!(sampling,Sampling::Transparent|Sampling::Enclosed|Sampling::Retained|Sampling::Areas(_)) || request.enclosure.is_some()) {
                 if sampling==Sampling::Retained {encoder.copy_buffer_to_buffer(self.seeds.as_ref().unwrap(),self.progress.as_ref().unwrap().source as u64*16,&self.seed,0,16);} else {encoder.clear_buffer(&self.seed,0,None);}
                 self.progress.as_mut().unwrap().batch=1;
                 continue;

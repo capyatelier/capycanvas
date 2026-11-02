@@ -1195,6 +1195,128 @@ mod fill_option_checks {
         }
     }
 
+    fn flats_raster(s:&UiSession<Recorder>)->layer_core::raster::RasterRevision {
+        use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey};
+        let descriptor=RasterPlane::Color.descriptor(s.engine.document().composition().color);
+        let tile=RasterTile::backed(TileBlob::encode(descriptor,&[64,128,192,255].repeat(256*256)).unwrap());
+        RasterRevision::backed(RasterData {tiles:[(TileKey {plane:RasterPlane::Color,coordinate:[0;2]},tile)].into(),watercolor:None})
+    }
+
+    #[test]
+    fn flat_all_areas_reads_fill_settings_without_stop_or_current_selection() {
+        for source in [RegionSource::Editing,RegionSource::Visible,RegionSource::Reference] {
+            for (fixed,close,expected) in [(None,false,0),(None,true,16),(Some(32),true,32),(Some(48),false,48)] {
+                let mut s=session(Platform::Gtk);let reference=s.engine.document().working.occurrence.unwrap();
+                layer(&mut s,LayerAction::Reference {id:occurrence_token(reference)});
+                layer(&mut s,LayerAction::New {group:false,clipped:false});
+                let active=s.engine.document().working.occurrence.unwrap();let layers=s.engine.document().scene().children(None).to_vec();
+                select(&mut s,rectangle([20.,20.,40.,40.]));
+                s.region_tools.source=[RegionSource::Reference,source,RegionSource::Visible];
+                s.region_tools.stop_at_colors=true;s.region_tools.tolerance=0.37;s.region_tools.gap_reach=fixed;
+                s.region_tools.refinement=layer_render::RegionRefinement {close_gaps:close,edges:layer_render::RegionEdges::GrowShrink(8),smooth_edges:true};
+                let tool=s.layer_interaction.tool;
+                invoke(&mut s,CommandId::FlatAllAreas);
+                assert_eq!(s.engine.document().scene().children(None),layers);
+                assert_eq!(s.layer_interaction.tool,tool);
+                assert!(!s.command(CommandId::FlatAllAreas).enabled);
+                s.region_tools.tolerance=0.9;s.frame(10,10).unwrap();
+                assert!(s.renderer_mut().region_requests.is_empty());
+                let request=s.renderer_mut().flat_requests.last().unwrap().clone();
+                assert_eq!(request.tolerance,0.37);assert_eq!(request.fill.as_ref().unwrap().reach,Some(expected));
+                assert!(request.fill.as_ref().unwrap().trail.is_none());
+                assert_eq!(request.fill_areas,Some(FillAreas::TransparentOrWhite));
+                assert_eq!(request.refinement.edges,layer_render::RegionEdges::LineMiddle);
+                assert_eq!(request.refinement.close_gaps,expected>0);assert!(!request.refinement.smooth_edges);
+                assert!(!request.contiguous);assert!(request.enclosure.is_none() && request.limit.is_none() && request.selection.is_none());
+                assert_eq!(request.source.sources().len(),1);
+                let layer_render::RegionSource::Scene {scope,..}=&request.source.sources()[0] else{panic!("scene source");};
+                match source {
+                    RegionSource::Editing=>assert_eq!(scope,&SceneScope::Raw(s.engine.document().scene().source_target(active).unwrap())),
+                    RegionSource::Visible=>assert_eq!(scope,&SceneScope::All),
+                    RegionSource::Reference=>assert_eq!(scope,&SceneScope::Members(vec![reference].into())),
+                    RegionSource::Auto=>unreachable!(),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn flat_all_areas_adds_document_aligned_pixels_below_the_active_layer_in_one_undo() {
+        use layer_core::{Edit,authored::RecordChange};
+        for (platform,clipped) in Platform::ALL.into_iter().flat_map(|platform|[false,true].map(move |clipped|(platform,clipped))) {
+            let mut s=session(platform);
+            layer(&mut s,LayerAction::New {group:true,clipped:false});let group=s.engine.document().working.occurrence.unwrap();
+            layer(&mut s,LayerAction::New {group:false,clipped:false});
+            layer(&mut s,LayerAction::New {group:false,clipped});let active=s.engine.document().working.occurrence.unwrap();
+            let mut moved=s.engine.document().scene().occurrence(group).unwrap().clone();moved.offset=[30,-20];
+            let edit=Edit::Occurrence(RecordChange::replace(&s.engine.document().artwork.occurrences,group,Some(moved)).unwrap());
+            s.engine.apply_edit(edit).unwrap();
+            let original=s.engine.document().clone();let before=s.engine.checkpoint();let layers=original.scene().children(Some(group)).to_vec();
+            let clipping_base=original.scene().clipping_base(active);assert_eq!(clipping_base.is_some(),clipped);
+            let index=layers.iter().position(|id|*id==clipping_base.unwrap_or(active)).unwrap();let raster=flats_raster(&s);
+            invoke(&mut s,CommandId::FlatAllAreas);assert_eq!(s.engine.checkpoint(),before);
+            s.frame(10,10).unwrap();let request_id=s.renderer_mut().flat_requests.last().unwrap().request_id;
+            s.renderer_mut().region_output=Some(layer_render::RegionOutput::FlatAreas {request_id,raster:raster.clone()});
+            s.frame(20,20).unwrap();let filled=s.engine.document().clone();let flats=filled.working.occurrence.unwrap();
+            let mut expected=layers.clone();expected.insert(index+1,flats);
+            assert_eq!(filled.scene().children(Some(group)),expected);
+            assert_eq!(filled.scene().clipping_base(active),clipping_base);
+            assert_eq!(filled.scene().occurrence(flats).unwrap().name.as_ref(),s.localization().text(MessageId::DOCUMENTS_FLATS_NAME).as_ref());
+            assert_eq!(filled.scene().occurrence(flats).unwrap().attachment,layer_core::Attachment::None);
+            assert_eq!(filled.scene().occurrence_offset(flats),[0;2]);
+            let paint=filled.scene().paint_source(flats).unwrap();
+            assert_eq!(paint.raster,raster);assert_eq!(paint.domain,filled.composition().size);
+            assert!(paint.operations.is_empty() && paint.base.is_none());
+            invoke(&mut s,CommandId::Undo);s.frame(30,30).unwrap();
+            assert_eq!(s.engine.checkpoint(),before);assert_eq!(s.engine.document().scene().children(Some(group)),layers);
+            assert_eq!(s.engine.document().working.occurrence,Some(active));
+            invoke(&mut s,CommandId::Redo);s.frame(40,40).unwrap();
+            assert_eq!(s.engine.document().scene().paint_source(flats).unwrap().raster,raster);
+            assert_eq!(s.engine.document().scene().children(Some(group)),expected);
+            assert_eq!(s.engine.document().scene().clipping_base(active),clipping_base);
+        }
+    }
+
+    #[test]
+    fn flat_all_areas_discards_cancelled_stale_and_failed_results_without_a_layer() {
+        for cause in 0..4 {
+            let mut s=session(Platform::Gtk);invoke(&mut s,CommandId::FlatAllAreas);s.frame(10,10).unwrap();
+            let request_id=s.renderer_mut().flat_requests.last().unwrap().request_id;let raster=flats_raster(&s);
+            match cause {
+                0=>{key(&mut s,"Escape",true,false,false);},
+                1=>{invoke(&mut s,CommandId::Move);},
+                2=>{let id=s.engine.document().working.occurrence.unwrap();let mut layer=s.engine.document().scene().occurrence(id).unwrap().clone();layer.opacity=0.5;
+                    let edit=layer_core::Edit::Occurrence(layer_core::RecordChange::replace(&s.engine.document().artwork.occurrences,id,Some(layer)).unwrap());s.engine.apply_edit(edit).unwrap();},
+                _=>s.renderer_mut().region_fails=true,
+            }
+            let before=s.engine.document().clone();let checkpoint=s.engine.checkpoint();
+            s.renderer_mut().region_output=Some(layer_render::RegionOutput::FlatAreas {request_id,raster});
+            let result=s.frame(20,20);if cause==3 {assert!(result.is_err());}else{result.unwrap();}
+            assert_eq!(s.engine.document().scene().order(),before.scene().order());
+            assert_eq!(s.engine.checkpoint(),checkpoint);assert!(!s.region_tools.publishing_edit());
+        }
+    }
+
+    #[test]
+    fn flat_all_areas_requires_a_readable_layer_and_an_unlocked_destination() {
+        let mut s=session(Platform::Gtk);assert!(s.command(CommandId::FlatAllAreas).enabled);
+        let paint=s.engine.document().working.occurrence.unwrap();layer(&mut s,LayerAction::Delete {id:occurrence_token(paint)});
+        assert!(!s.command(CommandId::FlatAllAreas).enabled);
+        layer(&mut s,LayerAction::NewVector);assert!(s.command(CommandId::FlatAllAreas).enabled);
+        layer(&mut s,LayerAction::New {group:true,clipped:false});let group=s.engine.document().working.occurrence.unwrap();
+        layer(&mut s,LayerAction::New {group:false,clipped:false});layer(&mut s,LayerAction::Lock {id:occurrence_token(group),value:true});
+        assert!(!s.command(CommandId::FlatAllAreas).enabled);
+        let mut s=session(Platform::Gtk);s.renderer_mut().region_pixels=Some(1);let before=s.engine.checkpoint();
+        assert_eq!(s.flat_all_areas().unwrap_err(),s.localization().text(MessageId::DOCUMENTS_TOO_LARGE_MEMORY).as_ref());
+        assert_eq!(s.engine.checkpoint(),before);assert!(s.renderer_mut().flat_requests.is_empty());
+        let mut document=Document::new(layer_core::PortableId::random(),8193,8193,layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+        document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.depth=layer_core::color::SampleDepth::F32;
+        let mut s=UiSession::new(Recorder {color:document.composition().color,..Default::default()},document,[1000;2],Platform::Gtk).unwrap();
+        let before=s.engine.checkpoint();assert!(s.engine.backend().region_fits([8193;2]));
+        assert_eq!(s.flat_all_areas().unwrap_err(),s.localization().text(MessageId::DOCUMENTS_TOO_LARGE_MEMORY).as_ref());
+        assert_eq!(s.engine.checkpoint(),before);assert!(s.renderer_mut().flat_requests.is_empty());
+    }
+
 
 }
 
@@ -1237,4 +1359,5 @@ fn raster_line_enclosure_traces_the_vector_target_without_a_paint_layer() {
         assert_eq!(s.engine.checkpoint(), checkpoint);
         assert_eq!(s.engine.document().scene().vector_layer(target).unwrap().path_count(), 0);
     }
+
 }

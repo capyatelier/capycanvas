@@ -681,7 +681,7 @@ fn command_section(command: CommandId) -> ShortcutSection {
     use CommandId as C;
     match command {
         C::Undo | C::Redo | C::UndoWorkspace | C::RedoWorkspace | C::Copy | C::Cut | C::CopyMerged | C::CopyPixels | C::PasteImage
-        | C::PasteAsNewImage | C::PasteInPlace | C::PasteAtView | C::PasteAtCursor | C::PasteInto | C::ClearLayer | C::FillSelection
+        | C::PasteAsNewImage | C::PasteInPlace | C::PasteAtView | C::PasteAtCursor | C::PasteInto | C::ClearLayer | C::FillSelection | C::FlatAllAreas
         | C::ClearSelected | C::ClearOutside | C::CanvasSize | C::CropCanvasToSelection | C::ImageSize
         | C::RotateImageLeft | C::RotateImageRight | C::RotateImage180 | C::FlipImageHorizontal
         | C::FlipImageVertical | C::Trim | C::RevealAll => ShortcutSection::Edit,

@@ -28,11 +28,13 @@ impl Build {
             && (count<u32::from(demand)+1 || demand && self.ranked && self.steps.is_empty())
     }
 }
-const STAGES: [&str; 23] = ["grain_bits", "distance_seeds", "jump_distance", "store_distance", "skeleton_seeds", "skeleton_ridges", "skeleton_prune", "line_ends", "refine_ends", "seal_candidates", "open_bits", "apply_seals", "region_seeds", "assign_region", "hold_barriers", "grow_region", "intersect_bits", "remember_thin", "check_seeds", "barrier_plane", "snap_seed", "reset_ends", "capture_anchors"];
+const STAGES: [&str; 24] = ["grain_bits", "distance_seeds", "jump_distance", "store_distance", "skeleton_seeds", "skeleton_ridges", "skeleton_prune", "line_ends", "refine_ends", "seal_candidates", "open_bits", "apply_seals", "region_seeds", "assign_region", "hold_barriers", "grow_region", "intersect_bits", "remember_thin", "check_seeds", "barrier_plane", "snap_seed", "reset_ends", "capture_anchors", "assign_tokens"];
 
 pub(crate) struct Input<'a> {pub device:&'a PipelineDevice,pub mask:&'a wgpu::Buffer,pub paper:&'a wgpu::TextureView}
 pub(super) struct Lines {
     layout: wgpu::BindGroupLayout,
+    colour_layout:wgpu::BindGroupLayout,
+    colour:Deferred<wgpu::ComputePipeline>,
     pipelines: std::collections::HashMap<&'static str, Deferred<wgpu::ComputePipeline>>,
     scratch: Option<[wgpu::Buffer; 2]>,
     anchors:Option<wgpu::Buffer>,
@@ -54,9 +56,18 @@ impl Lines {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label:Some("region line stages"),bind_group_layouts:&[Some(&layout)],immediate_size:0,
         });
-        let shader=Deferred::wgsl(device,"region line stages",include_str!("region_lines.wgsl"));
+        let shader=Deferred::wgsl(device,"region line stages",compose_wgsl(&[&working_color::shader(device),include_str!("region_lines.wgsl")]));
         let pipelines=STAGES.into_iter().map(|entry|(entry,Deferred::compute(device,entry,&pipeline_layout,&shader,entry))).collect();
-        Self {layout,pipelines,scratch:None,anchors:None,data:None,extent:[0;2],offsets:[0;4],windows:Vec::new(),building:None,ends:0,overflow:false}
+        let colour_layout=crate::bindings::layout(device,"area colours",&[
+            crate::bindings::buffer(1,wgpu::ShaderStages::COMPUTE,wgpu::BufferBindingType::Uniform,false,wgpu::BufferSize::new(PARAMS)),
+            crate::bindings::buffer(2,wgpu::ShaderStages::COMPUTE,wgpu::BufferBindingType::Storage {read_only:false},false,None),
+            crate::bindings::storage_texture(7,wgpu::ShaderStages::COMPUTE,wgpu::TextureFormat::Rgba32Float,wgpu::StorageTextureAccess::WriteOnly),
+        ]);
+        let colour_pipeline_layout=device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label:Some("area colours"),bind_group_layouts:&[Some(&colour_layout)],immediate_size:0,
+        });
+        let colour=Deferred::compute(device,"area colours",&colour_pipeline_layout,&shader,"colour_tokens");
+        Self {layout,colour_layout,colour,pipelines,scratch:None,anchors:None,data:None,extent:[0;2],offsets:[0;4],windows:Vec::new(),building:None,ends:0,overflow:false}
     }
     pub fn storage_bytes(&self)->u64 {
         self.anchors.as_ref().map_or(0,wgpu::Buffer::size)+self.data.as_ref().map_or(0,wgpu::Buffer::size)+self.scratch.as_ref().map_or(0,|buffers|buffers.iter().map(wgpu::Buffer::size).sum())
@@ -69,6 +80,7 @@ impl Lines {
     pub fn prepare(&self,compiler:&startup::Compiler,priority:u8,refinement:RegionRefinement)->bool {
         let prewarm=priority==startup::OTHER;
         self.prepare_cache(compiler,priority) & compiler.require(STAGES[8..].iter().filter(|entry|match **entry {
+            "assign_tokens"=>false,
             "capture_anchors"=>matches!(refinement.edges,layer_render::RegionEdges::LineMiddle),
             "refine_ends"|"seal_candidates"=>prewarm && !self.overflow,
             "grow_region"=>matches!(refinement.edges,layer_render::RegionEdges::GrowShrink(_)),
@@ -77,6 +89,38 @@ impl Lines {
             "apply_seals"=>refinement.close_gaps && !self.overflow && (prewarm || self.ends>0),
             _=>true,
         }).map(|entry|&self.pipelines[entry]),priority)
+    }
+    pub fn prepare_areas(&self,compiler:&startup::Compiler,priority:u8)->bool {
+        self.prepare_cache(compiler,priority)
+            & compiler.require(["open_bits","apply_seals","hold_barriers","reset_ends","region_seeds","jump_distance","assign_tokens"].map(|entry|&self.pipelines[entry]),priority)
+            & compiler.require([&self.colour],priority)
+    }
+    pub fn token_buffer(&self)->&wgpu::Buffer {self.anchors.as_ref().unwrap()}
+    pub fn hold_barriers(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder) {
+        self.encode(input,encoder,None,None,vec![("hold_barriers",u64::from(self.offsets[0]),self.params([0;4],[0;4],[0;4],[1.,1.,0.,0.]))]);
+    }
+    pub fn assign_tokens(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,core:[u32;4],window:[u32;4]) {
+        let mut steps=vec![("reset_ends",1,self.params(core,window,[2,0,0,0],[1.,1.,0.,0.]))];
+        let words=(window[0]+window[2]).div_ceil(32)-window[0]/32;
+        steps.push(("region_seeds",u64::from(words)*u64::from(window[3]),self.params(core,window,[0,5,0,0],[1.,1.,0.,0.])));
+        let nearest=self.jump_steps(&mut steps,core,window,"region_seeds",4,UNDERFILL_HALF_PIXELS.div_ceil(2));
+        self.encode(input,encoder,None,None,steps);
+        let scratch=self.scratch.as_ref().unwrap();let tokens=self.token_buffer();
+        let (first,second)=if nearest==0 {(&scratch[0],tokens)}else{(tokens,&scratch[1])};
+        self.encode(input,encoder,Some(first),Some(second),vec![("assign_tokens",word_count(core),self.params(core,window,[UNDERFILL_HALF_PIXELS,4,0,nearest],[1.,1.,0.,0.]))]);
+    }
+    pub fn colour_tokens(&self,device:&PipelineDevice,encoder:&mut crate::submission::CommandEncoder,core:[u32;4],window:[u32;4],page:[u32;2],output:&wgpu::TextureView) {
+        let mut params=self.params(core,window,[0;4],[1.,1.,0.,0.]);
+        params[24..28].copy_from_slice(&[page[0],page[1],256,0]);
+        let bytes:Vec<_>=params.into_iter().flat_map(u32::to_ne_bytes).collect();
+        let uniform=device.create_buffer_init(&wgpu::util::BufferInitDescriptor {label:Some("area colour parameters"),contents:&bytes,usage:wgpu::BufferUsages::UNIFORM});
+        let group=device.create_bind_group(&wgpu::BindGroupDescriptor {label:Some("area colours"),layout:&self.colour_layout,entries:&[
+            wgpu::BindGroupEntry {binding:1,resource:uniform.as_entire_binding()},
+            wgpu::BindGroupEntry {binding:2,resource:self.token_buffer().as_entire_binding()},
+            wgpu::BindGroupEntry {binding:7,resource:wgpu::BindingResource::TextureView(output)},
+        ]});
+        let mut pass=encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {label:Some("area colours"),timestamp_writes:None});
+        pass.set_pipeline(&self.colour);pass.set_bind_group(0,&group,&[]);pass.dispatch_workgroups(256,4,1);
     }
     pub fn allocate(&mut self,device:&PipelineDevice,extent:[u32;2],side:u32,windows:&[(u32,[u32;4])])->Result<(),GpuRasterError> {
         let (offsets,size)=storage_layout(extent,&device.limits()).ok_or(GpuRasterError::SizeOverflow)?;
@@ -90,7 +134,7 @@ impl Lines {
             self.scratch=Some(std::array::from_fn(|index|device.create_buffer(&wgpu::BufferDescriptor {label:Some("region window coordinates"),size:if index==0 {compact_bytes}else{scratch_bytes},
                 usage:wgpu::BufferUsages::STORAGE,mapped_at_creation:false})));
         }
-        let anchor_words=windows.iter().map(|(_,core)|1+2*word_count(*core)+u64::from(core[2])*u64::from(core[3])).max().unwrap_or(1);
+        let anchor_words=windows.iter().map(|(_,core)|1+2*word_count(*core)+u64::from(core[2])*u64::from(core[3])).max().unwrap_or(1).max(8+scratch_bytes/4);
         if self.anchors.as_ref().is_none_or(|buffer|buffer.size()<anchor_words*4) {
             self.anchors=Some(device.create_buffer(&wgpu::BufferDescriptor {label:Some("region window anchors"),size:anchor_words*4,
                 usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_SRC|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false}));
@@ -376,7 +420,7 @@ impl Lines {
 
 }
 
-fn analysis_window(core:[u32;4],extent:[u32;2])->[u32;4] {
+pub(super) fn analysis_window(core:[u32;4],extent:[u32;2])->[u32;4] {
     let x=core[0].saturating_sub(WINDOW_HALO);let y=core[1].saturating_sub(WINDOW_HALO);
     [x,y,(core[0]+core[2]+WINDOW_HALO).min(extent[0])-x,(core[1]+core[3]+WINDOW_HALO).min(extent[1])-y]
 }

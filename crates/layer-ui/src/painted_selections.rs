@@ -425,7 +425,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 job.started = self
                     .engine
                     .backend_mut()
-                    .request_region(job.request.clone())
+                    .request_region(layer_render::RegionTask::Mask(job.request.clone()))
                     .map_err(error)?;
                 return Ok(0);
             }
@@ -433,7 +433,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let Some(result) = self.engine.backend_mut().take_region() else {
                 return Ok(0);
             };
-            let result = result.map_err(error)?;
+            let layer_render::RegionOutput::Mask(result)=result.map_err(error)? else{return Err("Unexpected mask region capture".into());};
             if result.request_id != job.request.request_id {
                 return Err("Unexpected mask region capture".into());
             }

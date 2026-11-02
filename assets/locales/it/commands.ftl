@@ -700,3 +700,4 @@ command-fill-areas-transparent = Trasparenti
 command-fill-areas-transparent-or-white = Trasparenti o bianche
 command-fill-areas-any-colour = Qualsiasi colore
 commands-help-paint-unfilled = Passa sulle aree chiuse non riempite per riempirle.
+command-flat-all-areas = Colora tutte le aree
