@@ -272,6 +272,7 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
         category.Children().Append(modifierCategory.section);categoryResults.Spacing(24);category.Children().Append(categoryResults);
     }
     void chord(KeyRoutedEventArgs const& e){
+        if(composingKey(e))return;
         using winrt::Windows::System::VirtualKey;
         auto key=e.Key();
         bool control=(GetKeyState(VK_CONTROL)&0x8000)!=0,alt=(GetKeyState(VK_MENU)&0x8000)!=0,shift=(GetKeyState(VK_SHIFT)&0x8000)!=0;

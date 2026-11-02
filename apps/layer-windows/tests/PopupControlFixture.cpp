@@ -8,6 +8,7 @@
 #include "WorkspaceView.h"
 #include "CanvasActionBar.h"
 #include "SettingsView.h"
+#include "ShortcutPage.h"
 #include <msctf.h>
 #pragma comment(lib,"uuid.lib")
 #include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
@@ -474,6 +475,29 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         }catch(...){if(starter)entry.RemoveHandler(UIElement::PreviewKeyDownEvent(),starter);if(heldKey)try{nativeKey(VK_RETURN,true);}catch(...){}if(heldTrigger)try{nativeKey(VK_F24,true);}catch(...){}dialog.Hide();throw;}
         }
     }
+    winrt::Windows::Foundation::IAsyncAction shortcutSearchIme(){
+        auto source=std::make_shared<WorkspaceData>();context.apply(source);source->state=O({{L"theme",S(root.RequestedTheme()==ElementTheme::Light?L"light":L"dark")}});
+        auto actions=std::make_shared<std::vector<J>>();source->send=[actions](std::string value){actions->push_back(J::Parse(to_hstring(value)));};
+        auto chords=[actions]{return std::count_if(actions->begin(),actions->end(),[](J const& action){return str(object(action,L"action"),L"type")==L"search_shortcut_key";});};
+        auto previous=window.AppWindow().Size();Grid overlay;StackPanel content;ShortcutPage page(source,overlay);page.Container(L"shortcuts",content);
+        ScrollViewer scroll;scroll.Content(content);scroll.Height(600);root.Width(800);root.Height(760);root.Children().InsertAt(0,scroll);window.AppWindow().Resize({900,900});
+        co_await wait([&]{auto field=findElement(content,L"shortcuts-search").try_as<TextBox>();return field&&field.IsLoaded()&&field.ActualWidth()>0;},L"Shortcut search did not arrange");
+        auto entry=findElement(content,L"shortcuts-search").as<TextBox>();captureTextComposition(entry);entry.Text(L"Draft");entry.SelectAll();entry.Focus(FocusState::Keyboard);
+        ScopedComposition composition(*textServices,[trace=imeTrace](hstring api,HRESULT result,uintptr_t pointer){trace->push_back(O({{L"case",S(L"shortcut-search-ime")},{L"api",S(api)},{L"hresult",N(double(result))},{L"pointer",S(to_hstring(uint64_t(pointer)))}}));});
+        co_await wait([this,entry,&composition]{return composition.focused(entry,root.XamlRoot());},L"Shortcut search has no native TSF context");composition.begin();
+        co_await wait([entry]{return textComposing(entry)&&entry.Text()==L"\u5019\u88dc";},L"Shortcut search did not retain exact marked text");
+        auto text=entry.Text();auto start=entry.SelectionStart(),length=entry.SelectionLength();actions->clear();
+        auto presses=std::make_shared<unsigned>(0);entry.AddHandler(UIElement::PreviewKeyDownEvent(),box_value(KeyEventHandler([presses](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==Windows::System::VirtualKey::F7)++*presses;})),true);
+        nativeKey(VK_F7,false);nativeKey(VK_F7,true);co_await wait([presses]{return *presses==1;},L"Native conversion F7 did not reach shortcut search");
+        require(chords()==0,L"Composition-owned F7 dispatched a shortcut search");
+        require(entry.Text()==text&&entry.SelectionStart()==start&&entry.SelectionLength()==length,L"Composition-owned F7 changed the native draft or selection");
+        require(textComposing(entry)&&FocusManager::GetFocusedElement(root.XamlRoot())==entry,L"Composition-owned F7 retired composition or focus");
+        composition.finish();co_await wait([entry]{return !textComposing(entry);},L"Shortcut search composition did not retire");actions->clear();
+        nativeKey(VK_F7,false);nativeKey(VK_F7,true);co_await wait([chords]{return chords()==1;},L"Ordinary F7 did not search shortcuts");
+        require(chords()==1,L"Ordinary F7 did not dispatch exactly one shortcut search");
+        require(entry.Text()==text&&entry.SelectionStart()==0&&entry.SelectionLength()==int32_t(text.size()),L"Ordinary F7 did not preserve and select the native search text");
+        anchor.Focus(FocusState::Programmatic);root.Children().RemoveAt(0);root.Width(400);root.Height(240);window.AppWindow().Resize(previous);++imeChecks;
+    }
     winrt::Windows::Foundation::IAsyncAction customizationDraft(){
         auto actions=std::make_shared<std::vector<J>>();auto errors=std::make_shared<std::vector<std::string>>();
         auto prompt=O({{L"panel",S(L"fixture-toolbar")},{L"operation",S(L"rename")},{L"title",S(L"Rename Toolbar")},{L"name",S(L"Acknowledged A")},
@@ -698,6 +722,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             require(data->dismissTransients(),L"Visible popup ignored cancellation registry");co_await wait([this,beforeClosed]{return closedCount==beforeClosed+1&&!visiblePopup();},L"Native popup Closed acknowledgement or visible-popup retirement timed out");
             require(!shown.Current()&&!shown.Show(anchor,{}),L"Reply reopened closed popup");empty();++checks;
             phase=L"workspace-ime";co_await workspaceIme();
+            phase=L"shortcut-search-ime";co_await shortcutSearchIme();
             phase=L"customization-name-ack";co_await customizationDraft();
             phase=L"native-default-ime";co_await defaultIme();
             phase=L"layer-language-draft";co_await layerLanguageDraft();
