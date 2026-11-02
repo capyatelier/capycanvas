@@ -700,3 +700,7 @@ diagnostics-memory-sampled-label = 샘플 최대값
 diagnostics-memory-vulkan-label = Vulkan 힙
 diagnostics-memory-dxgi-label = DXGI 로컬
 diagnostics-memory-metal-label = Metal 할당량
+
+workspace-phone-swap-sides = 좌우 바꾸기
+workspace-phone-title-bar-unavailable = 휴대폰 레이아웃에서는 제목 표시줄을 편집할 수 없습니다
+workspace-launch-window-size = 시작 창 크기

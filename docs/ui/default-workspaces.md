@@ -16,6 +16,12 @@ or delay its restoration.
 Drawing recovery carries that workspace's readiness and current editing state
 into the restored editor before its controls appear.
 
+Each workspace also saves its own phone toolbar. Sketch, Paint and Photo have
+the [phone defaults](../development/phone-layout.md#phone-toolbar); New Workspace
+copies its source's phone toolbar. Loading an older built-in workspace fills a
+missing list from its stable preset ID; custom workspaces use Sketch. An empty
+saved list stays empty, and the tablet arrangement is independent.
+
 ## Design criteria
 
 - **Familiar layouts.** Arrangements follow what artists know from established
@@ -30,7 +36,7 @@ into the restored editor before its controls appear.
   Do not add placeholders for missing features (text, comic frames, line
   correction). A delivered command that is unavailable in the
   current state is disabled and publishes its reason.
-- **Menus.** The application menus are **File, Edit, Layer, Select, Filter,
+- **Menus.** The application menus are **File, Edit, Image, Layer, Select, Filter,
   View, Window**, in that order, and fit beside a centered title in a
   1200px-wide window. File owns documents, windows, open, save and export; Edit
   owns document undo and editing; Layer projects the layer context menu's

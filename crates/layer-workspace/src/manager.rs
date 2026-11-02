@@ -78,10 +78,19 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         true
     }
     pub(crate) async fn execute(&self, request: StoreRequest) -> Result<StoreResponse> {
-        if let Some(memory) = self.memory.borrow_mut().as_mut() {
-            return memory.execute(request, self.clock.get());
+        let mut response = if self.in_memory() {
+            self.memory
+                .borrow_mut()
+                .as_mut()
+                .unwrap()
+                .execute(request, self.clock.get())?
+        } else {
+            self.store.execute(request).await?
+        };
+        if let StoreResponse::Entity(stored) = &mut response {
+            stored.entity.resolve_phone()?;
         }
-        self.store.execute(request).await
+        Ok(response)
     }
     pub(crate) async fn set_aside_storage(&self) -> Result<()> {
         *self.state.borrow_mut() = State::default();

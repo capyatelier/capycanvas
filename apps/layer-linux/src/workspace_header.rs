@@ -52,13 +52,7 @@ mod imp {
                 .iter()
                 .filter(|c| c.is_visible() && c.is_child_visible())
             {
-                if child.is::<gtk::WindowControls>() {
-                    let round = gtk::Snapshot::new();
-                    self.obj().snapshot_child(child, &round);
-                    crate::squircle::append_round(snapshot, round);
-                } else {
-                    self.obj().snapshot_child(child, snapshot);
-                }
+                crate::squircle::snapshot_child(self.obj().upcast_ref(), child, snapshot);
             }
             if let Some(w) = self.owner.borrow().upgrade() {
                 w.header.snapshot(snapshot);

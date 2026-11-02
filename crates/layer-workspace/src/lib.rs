@@ -9,6 +9,8 @@ pub use prompts::*;
 mod history_presentation;
 pub use history_presentation::*;
 mod model;
+#[cfg(test)]
+mod phone_tests;
 mod package;
 mod protocol;
 pub use package::*;

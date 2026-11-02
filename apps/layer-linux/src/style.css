@@ -75,10 +75,10 @@ window, label, text { font-size: var(--ui-text-size); }
 .header-editor .linked > button { border-radius: 0; }
 .header-editor .linked > button:first-child { border-top-left-radius: var(--control-radius); border-bottom-left-radius: var(--control-radius); }
 .header-editor .linked > button:last-child { border-top-right-radius: var(--control-radius); border-bottom-right-radius: var(--control-radius); }
-.window-bar windowcontrols { margin: 0; padding: 0; }
-.window-bar windowcontrols button { margin: 0; padding: 0; min-width: 36px; min-height: 36px; }
-.window-bar.header-medium windowcontrols button { min-width: 48px; min-height: 48px; }
-.window-bar.header-large windowcontrols button { min-width: 60px; min-height: 60px; }
+.window-bar:not(.phone-frame) windowcontrols { margin: 0; padding: 0; }
+.window-bar:not(.phone-frame) windowcontrols button { margin: 0; padding: 0; min-width: 36px; min-height: 36px; }
+.window-bar.header-medium:not(.phone-frame) windowcontrols button { min-width: 48px; min-height: 48px; }
+.window-bar.header-large:not(.phone-frame) windowcontrols button { min-width: 60px; min-height: 60px; }
 .document-title { font-weight: 600; min-height: 24px; padding: 6px 8px; }
 .header-clock { min-height: 36px; padding: 0 8px; }
 .window-bar .workspace-switcher { background: var(--glass-switcher); }
@@ -160,10 +160,10 @@ button.flat.unavailable-tool > * { color: alpha(currentColor, .3); }
 .dock-panel.join-ne { border-top-right-radius: 0; }
 .dock-panel.join-se { border-bottom-right-radius: 0; }
 .dock-panel.join-sw { border-bottom-left-radius: 0; }
-.toolbar-controls button.drawer-origin-top, .collapsed-column button.drawer-origin-top { border-top-left-radius: 0; border-top-right-radius: 0; }
-.toolbar-controls button.drawer-origin-bottom, .collapsed-column button.drawer-origin-bottom { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
-.toolbar-controls button.drawer-origin-left, .collapsed-column button.drawer-origin-left { border-top-left-radius: 0; border-bottom-left-radius: 0; }
-.toolbar-controls button.drawer-origin-right, .collapsed-column button.drawer-origin-right { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.toolbar-controls button.drawer-origin-top, .collapsed-column button.drawer-origin-top, .phone-frame button.drawer-origin-top, .zen-capy.phone-capy.drawer-origin-top { border-top-left-radius: 0; border-top-right-radius: 0; }
+.toolbar-controls button.drawer-origin-bottom, .collapsed-column button.drawer-origin-bottom, .phone-frame button.drawer-origin-bottom, .zen-capy.phone-capy.drawer-origin-bottom { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.toolbar-controls button.drawer-origin-left, .collapsed-column button.drawer-origin-left, .phone-frame button.drawer-origin-left, .zen-capy.phone-capy.drawer-origin-left { border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.toolbar-controls button.drawer-origin-right, .collapsed-column button.drawer-origin-right, .phone-frame button.drawer-origin-right, .zen-capy.phone-capy.drawer-origin-right { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .drawer-shadow.join-nw, .drawer-source-nw { border-top-left-radius: 0; }
 .drawer-shadow.join-ne, .drawer-source-ne { border-top-right-radius: 0; }
 .drawer-shadow.join-se, .drawer-source-se { border-bottom-right-radius: 0; }
@@ -643,3 +643,21 @@ window.capy-workspace .dock-panel.gpu-panel-surface .tab-strip-end,
 window.capy-workspace.glass .dock-panel.gpu-panel-surface.tabbed:not(.expanded-panel) .panel-body,
 window.capy-workspace.glass .dock-panel.gpu-panel-surface.tabbed:not(.expanded-panel) .panel-footer,
 window.capy-workspace.glass .dock-panel.gpu-panel-surface .tab-strip-end { background: transparent; }
+
+.phone-frame .header-tool { min-width: 0; min-height: 0; padding: 0; background: transparent; border-radius: var(--header-radius); }
+.phone-frame .header-tool.selected-tool { background: var(--header-selection); }
+.phone-frame .phone-controls, .phone-frame .phone-controls > button { min-width: 0; min-height: 0; padding: 0; margin: 0; }
+.phone-frame windowcontrols > button.close > image { background-color: mix(var(--header-control-bg), currentColor, .1); }
+.phone-frame .header-tool.drawer-open { background: var(--panel-bg); }
+.zen-capy.phone-capy { min-width: 0; min-height: 0; }
+.zen-capy.phone-capy.drawer-open { background: var(--panel-bg); }
+
+.phone-menu-native { padding: 0; margin: 0; }
+.phone-menu-native > contents { background: transparent; border: 0; border-radius: 0; box-shadow: none; }
+.phone-menu-controls modelbutton:dir(ltr) { padding-left: 0; }
+.phone-menu-controls modelbutton:dir(rtl) { padding-right: 0; }
+.phone-menu-controls modelbutton check { padding: 0; }
+.phone-menu-controls modelbutton check.left { margin-right: 0; }
+.phone-menu-controls modelbutton check.right { margin-left: 0; }
+#phone-menu > scrolledwindow + scrolledwindow { border-left: 0; }
+#phone-menu-separator { color: var(--popover-fg-color); --border-opacity: var(--line-panel-border-opacity); }

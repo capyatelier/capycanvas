@@ -8,6 +8,7 @@
   "new_document": {},
   "pan_speed": 1.5,
   "pass_through_groups": false,
+  "phone_swap_sides": false,
   "photo_open": {
     "missing_profile": "assume_srgb",
     "promote_to_16": false

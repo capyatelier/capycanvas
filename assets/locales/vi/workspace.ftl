@@ -671,3 +671,7 @@ diagnostics-memory-sampled-label = Đỉnh lấy mẫu
 diagnostics-memory-vulkan-label = Vùng nhớ Vulkan
 diagnostics-memory-dxgi-label = DXGI cục bộ
 diagnostics-memory-metal-label = Cấp phát Metal
+
+workspace-phone-swap-sides = Đổi bên
+workspace-phone-title-bar-unavailable = Không thể sửa thanh tiêu đề trong bố cục điện thoại
+workspace-launch-window-size = Kích thước cửa sổ ban đầu

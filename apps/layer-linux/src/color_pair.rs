@@ -65,6 +65,9 @@ impl ColorPair {
         obj.set_widget_name("layer-colors-symbolic");
         obj
     }
+    pub fn set_size(&self, size: i32) {
+        if self.imp().size.replace(size) != size { self.queue_resize(); }
+    }
     pub fn set_colors(&self, colors: [RgbColor; 2], front: ColorSlot, view: ViewColor, headroom: f32) {
         let changed = self.imp().key.replace(Some((colors, view, headroom))) != Some((colors, view, headroom));
         if changed {

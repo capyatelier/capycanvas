@@ -421,6 +421,14 @@ impl LayerDrawerSizing {
             sizing.height()
         })
     }
+    pub fn presented_pages(measurement: crate::PanelScrollMeasurement, rows: usize, viewport_height: f32, properties_height: f32, phone: Option<&crate::PhoneLayout>) -> [f32; 2] {
+        phone.map_or_else(|| Self::pages(measurement, rows, viewport_height, properties_height), |p|
+            Self::phone_pages(measurement, rows, if p.edge == crate::Edge::Top { p.work_area.height } else { p.bars[0].height }, p.edge != crate::Edge::Top, properties_height))
+    }
+    pub fn phone_pages(measurement: crate::PanelScrollMeasurement, rows: usize, available: f32, landscape: bool, properties_height: f32) -> [f32; 2] {
+        [measurement.fixed_height + rows as f32 * measurement.unit_height, properties_height]
+            .map(|h| if landscape { available } else { (h + Self::FOOTER_HEIGHT).min(available) })
+    }
     pub fn height(self) -> f32 { self.height }
     pub fn update(&mut self, measurement: crate::PanelScrollMeasurement, rows: usize, viewport_height: f32, properties_height: Option<f32>) -> bool {
         let limit = viewport_height * Self::MAX_HEIGHT_FRACTION;

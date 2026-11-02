@@ -674,3 +674,7 @@ diagnostics-memory-sampled-label = Örneklenen tepe
 diagnostics-memory-vulkan-label = Vulkan yığını
 diagnostics-memory-dxgi-label = DXGI yerel
 diagnostics-memory-metal-label = Metal ayırmaları
+
+workspace-phone-swap-sides = Tarafları değiştir
+workspace-phone-title-bar-unavailable = Telefon düzeninde başlık çubuğu düzenlenemez
+workspace-launch-window-size = Başlangıç pencere boyutu

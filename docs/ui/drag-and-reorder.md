@@ -111,6 +111,10 @@ container it keeps its ordinary scrolling and click behavior, so this does not
 add a pickup delay or steal list scrolling. A held tile drag still reorders; when
 it is released on the canvas past the 80-pixel line it takes a bubble too.
 
+GTK's phone bars move the window immediately from unused bar space. Hold Capy
+and release it on the opposite toolbar edge to Swap Sides; releasing elsewhere
+keeps the current side. Rotating or crossing the phone threshold cancels the hold.
+
 ## Scrolling, menus, and cancellation
 
 - Pen drags scroll lists like touch on every host (GTK's shared pen scroller,

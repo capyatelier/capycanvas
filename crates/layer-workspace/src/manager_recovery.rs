@@ -117,13 +117,15 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 Some(self.load(&write.id).await?.entity)
             };
             let mut entity=Entity {
-                id:new_id(),
+                id: write.id.clone(),
                 metadata:write.metadata.clone().or_else(||base.as_ref().map(|e|e.metadata.clone())).ok_or_else(||StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::TheInterruptedItemIsMissingMetadata))?,
                 content:if let Some(content)=&write.content_json {
                     protocol::unpack(content,|id|batch.components.get(id).cloned().ok_or_else(||StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::AnInterruptedResourceIsMissing)))?
                 } else {base.as_ref().ok_or_else(||StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::TheInterruptedItemIsMissingItsLayout))?.content.clone()},
                 working:if let Some(working)=&write.working_json {Some(serde_json::from_str(working)?)} else {base.as_ref().and_then(|e|e.working.clone())},
             };
+            entity.resolve_phone()?;
+            entity.id = new_id();
             entity.metadata.name = message(&self.localization(), layer_ui::MessageId::WORKSPACE_RECOVERED_NAME,
                 &[("name", self.display_name(&write.id, &entity.metadata).chars().take(90).collect())])
                 .chars().take(100).collect();

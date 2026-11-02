@@ -375,7 +375,7 @@ pub struct GestureTrigger {
 pub const GESTURE_TRIGGERS: [GestureTrigger; 6] = [
     GestureTrigger { id: "touch.tap.2", label: MessageId::SHORTCUT_TWO_FINGER_TAP, default: "command.Undo", held: false },
     GestureTrigger { id: "touch.tap.3", label: MessageId::SHORTCUT_THREE_FINGER_TAP, default: "command.Redo", held: false },
-    GestureTrigger { id: "touch.tap.4", label: MessageId::SHORTCUT_FOUR_FINGER_TAP, default: "", held: false },
+    GestureTrigger { id: "touch.tap.4", label: MessageId::SHORTCUT_FOUR_FINGER_TAP, default: "command.ZenMode", held: false },
     GestureTrigger { id: "pen.button.primary", label: MessageId::SHORTCUT_LOWER_SIDE_BUTTON, default: "", held: true },
     GestureTrigger { id: "pen.button.secondary", label: MessageId::SHORTCUT_UPPER_SIDE_BUTTON, default: "", held: true },
     GestureTrigger { id: "pen.button.tertiary", label: MessageId::SHORTCUT_THIRD_SIDE_BUTTON, default: "", held: true },

@@ -444,6 +444,9 @@ pub struct DocumentTabLabel {
     pub modified: bool,
 }
 impl DocumentTabLabel {
+    pub fn menu_label(&self, count: usize) -> String {
+        format!("{}{}{}", if self.modified { "• " } else { "" }, self.title, if count > 1 { format!(" ({count})") } else { String::new() })
+    }
     pub fn new(id: u64, file: &DocumentFileState, localization: &Localizer) -> Self {
         let title = if file.location.is_none() && file.unsaved_name.is_none() {
             Self::untitled(id, localization)

@@ -15,15 +15,16 @@ pub(super) enum TileWidget {
 impl TileWidget {
     pub fn new(
         w: &Rc<Workspace>,
-        config: &PanelConfig,
+        config: Option<&PanelConfig>,
         tile: &ToolbarTile,
         style: TileStyle,
         choice: &ToolChoice,
     ) -> Self {
         if tile.control.is_component() {
-            return Self::Component(Component::new(w, config.id, tile, style, choice));
+            return Self::Component(Component::new(w, config.map(|c| c.id), tile, style, choice));
         }
-        let button = customization::tile_button(w, config, tile, style, choice);
+        let anchor = config.map_or(DrawerAnchor::Phone { tile: Some(tile.id) }, |c| DrawerAnchor::Tile { panel: c.id, tile: tile.id });
+        let button = customization::tile_button(w, anchor, tile, style, choice);
         if tile.control.has_variants() {
             customization::tool_group_marker(&button);
         }
@@ -32,20 +33,11 @@ impl TileWidget {
         button.set_hexpand(true);
         button.set_vexpand(true);
         root.append(&button);
-        w.install_panel_drag(
-            &root,
-            DockItem::Tile {
-                panel: config.id,
-                tile: tile.id,
-            },
-        );
-        w.install_context(
-            &root,
-            ContextTarget::Tile {
-                panel: config.id,
-                tile: tile.id,
-            },
-        );
+        if config.is_none() { customization::extend_button(w, &root, &button, Some(tile.control)); }
+        if let Some(config) = config {
+            w.install_panel_drag(&root, DockItem::Tile { panel: config.id, tile: tile.id });
+            w.install_context(&root, ContextTarget::Tile { panel: config.id, tile: tile.id });
+        }
         Self::Button {
             root: root.upcast(),
             button,
@@ -63,6 +55,16 @@ impl TileWidget {
             Self::Component(c) => c.button.clone(),
         }
     }
+    pub fn refresh_selection(&self, value: bool, variants: bool) {
+        if let Self::Button { button, .. } = self {
+            selected(button, value);
+            if variants {
+                button.update_state(&[gtk::accessible::State::Pressed(if value {
+                    gtk::AccessibleTristate::True
+                } else { gtk::AccessibleTristate::False })]);
+            }
+        }
+    }
     pub fn refresh(&self, w: &Rc<Workspace>, tile: &TileView, view: Option<&ToolbarComponentView>) {
         match self {
             Self::Component(c) => {
@@ -71,12 +73,7 @@ impl TileWidget {
                 }
             }
             Self::Button { button, .. } => {
-                selected(button, tile.choice.selected);
-                if tile.has_variants {
-                    button.update_state(&[gtk::accessible::State::Pressed(if tile.choice.selected {
-                        gtk::AccessibleTristate::True
-                    } else { gtk::AccessibleTristate::False })]);
-                }
+                self.refresh_selection(tile.choice.selected, tile.has_variants);
                 button.set_sensitive(tile.enabled || tile.has_variants);
                 if let Some(content) = customization::tool_button_content(button) {
                     content.set_opacity(if tile.enabled { 1. } else { 0.45 });
@@ -133,6 +130,9 @@ mod imp {
         pub readout_unit: RefCell<Option<gtk::Label>>,
         pub readout_row: RefCell<Option<gtk::Box>>,
         pub readout_scale: Cell<f64>,
+        pub fit_cross: Cell<bool>,
+        pub visual_scale: Cell<f32>,
+        pub preview: glib::WeakRef<gtk::Popover>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for ComponentBody {
@@ -161,6 +161,8 @@ mod imp {
             } else {
                 Axis::Horizontal
             };
+            let factor = if self.fit_cross.get() { toolbar_slider_scale(if self.vertical.get() { width } else { height } as f32) } else { 1. };
+            self.visual_scale.set(factor);
             let allocate = |child: &gtk::Widget, b: Bounds| {
                 let visible = b.width >= 1.0 && b.height >= 1.0;
                 child.set_child_visible(visible);
@@ -174,14 +176,16 @@ mod imp {
                         }
                         content = w.next_sibling();
                     }
-                    crate::workspace::allocate_at(child, b);
+                    if factor == 1. { crate::workspace::allocate_at(child, b); }
+                    else { child.allocate(b.width.round() as i32, b.height.round() as i32, -1,
+                        Some(gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(b.x * factor, b.y * factor)).scale(factor, factor))); }
                     if let Some(editor) = editor {
                         editor.present_popover();
                     }
                 }
             };
             if self.slider.get() {
-                let layout = toolbar_slider_styled_layout(width as f32, height as f32, axis,
+                let layout = toolbar_slider_styled_layout(width as f32 / factor, height as f32 / factor, axis,
                     self.style.get(), self.slider_style.get());
                 let bounds = [layout.cap, layout.track];
                 if let Some(content) = children[0].first_child().and_then(|button|button.first_child()) { content.set_visible(layout.show_value); }
@@ -274,6 +278,7 @@ mod imp {
                     }
                 }
             }
+            self.obj().position_preview();
         }
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             if self.slider.get()
@@ -310,6 +315,42 @@ glib::wrapper! {
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 impl ComponentBody {
+    fn position_preview(&self) {
+        let Some(popover) = self.imp().preview.upgrade() else { return; };
+        let Some(window) = popover.parent() else { return; };
+        let children = self.imp().children.borrow();
+        let Some(scale) = children.get(1).and_then(|child| child.downcast_ref::<gtk::Scale>()) else { return; };
+        let Some(component) = self.compute_bounds(&window) else { return; };
+        let strip = if self.imp().fit_cross.get() { component } else {
+            self.parent().and_then(|parent| parent.compute_bounds(&window)).unwrap_or(component)
+        };
+        let vertical = self.imp().vertical.get();
+        let range = scale.range_rect();
+        let (start, end) = scale.slider_range();
+        let points = if vertical { [[range.x() as f32, start as f32],[(range.x() + range.width()) as f32,end as f32]] }
+            else { [[start as f32,range.y() as f32],[end as f32,(range.y() + range.height()) as f32]] };
+        let [Some(near),Some(far)] = points.map(|[x,y]|scale.compute_point(&window,&gtk::graphene::Point::new(x,y))) else { return; };
+        let Some(child) = popover.child() else { return; };
+        let side = child.measure(gtk::Orientation::Horizontal,-1).1 as f32;
+        let (edge,bounds) = toolbar_slider_preview_placement(
+            Bounds {x:near.x(),y:near.y(),width:far.x()-near.x(),height:far.y()-near.y()},
+            Bounds {x:strip.x(),y:strip.y(),width:strip.width(),height:strip.height()},
+            Bounds {width:window.width() as f32,height:window.height() as f32,..Bounds::default()},
+            if vertical {Axis::Vertical} else {Axis::Horizontal},side);
+        let (position,x,y)=match edge {
+            Edge::Right=>(gtk::PositionType::Right,bounds.x-1.,bounds.y+side*0.5),
+            Edge::Left=>(gtk::PositionType::Left,bounds.x+side,bounds.y+side*0.5),
+            Edge::Bottom=>(gtk::PositionType::Bottom,bounds.x+side*0.5,bounds.y-1.),
+            Edge::Top=>(gtk::PositionType::Top,bounds.x+side*0.5,bounds.y+side),
+        };
+        let anchor=gdk::Rectangle::new(x.round() as i32,y.round() as i32,1,1);
+        let moved=popover.position()!=position || popover.pointing_to()!=(true,anchor);
+        if moved {
+            popover.set_position(position);
+            popover.set_pointing_to(Some(&anchor));
+            if popover.is_mapped() { popover.present(); }
+        }
+    }
     fn append(&self, child: &impl IsA<gtk::Widget>) {
         child.set_parent(self);
         self.imp()
@@ -612,6 +653,7 @@ pub(super) struct Component {
     contact_context: Cell<Option<ToolbarContext>>,
     updating: Cell<bool>,
     slider: Option<gtk::Scale>,
+    drag: RefCell<Option<gtk::GestureDrag>>,
     preview: RefCell<Option<Rc<BrushPreview>>>,
     readout: Option<SliderReadout>,
     outside: RefCell<Option<(gtk::Window, gtk::EventControllerLegacy)>>,
@@ -619,46 +661,50 @@ pub(super) struct Component {
     fields: RefCell<Vec<OptionField>>,
 }
 impl Component {
-    pub fn new(w: &Rc<Workspace>, panel: Panel, tile: &ToolbarTile, style: TileStyle, choice: &ToolChoice) -> Rc<Self> {
+    pub fn new(w: &Rc<Workspace>, panel: Option<Panel>, tile: &ToolbarTile, style: TileStyle, choice: &ToolChoice) -> Rc<Self> {
+        Self::build(w, tile.control, tile.slider_style, panel.map(|panel| TileAnchor { panel, tile: tile.id }), style, choice)
+    }
+    pub fn slider(w: &Rc<Workspace>, control: ToolbarControl, style: TileStyle, choice: &ToolChoice) -> Rc<Self> {
+        assert!(control.slider().is_some());
+        Self::build(w, control, ToolbarSliderStyle::default(), None, style, choice)
+    }
+    fn build(w: &Rc<Workspace>, control: ToolbarControl, slider_style: ToolbarSliderStyle, source: Option<TileAnchor>, style: TileStyle, choice: &ToolChoice) -> Rc<Self> {
+        let name = source.map_or_else(|| match control.slider().unwrap() { ToolbarNumericBinding::BrushSize => "size", ToolbarNumericBinding::BrushStrength => "strength" }.to_string(), |source| source.tile.to_string());
         let root: ComponentBody = glib::Object::new();
         root.set_overflow(gtk::Overflow::Hidden);
         root.add_css_class("toolbar-component");
         root.add_css_class("small-component");
         root.add_css_class("customizable-target");
-        root.imp().slider_style.set(tile.slider_style);
+        root.imp().slider_style.set(slider_style);
+        root.imp().fit_cross.set(source.is_none());
+        root.imp().visual_scale.set(1.);
         root.update_property(&[gtk::accessible::Property::Label(
             &choice.label,
         )]);
-        let binding = tile.control.slider();
+        let binding = control.slider();
         let button = gtk::Button::new();
         button.set_hexpand(true);
         button.set_vexpand(true);
         button.add_css_class("flat");
-        button.set_widget_name(&format!("tile-{}", tile.id));
+        button.set_widget_name(&format!("component-cap-{name}"));
         button.set_tooltip_text(Some(&choice.label));
         let cap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         cap.append(&button);
-        let target = ContextTarget::Tile {
-            panel,
-            tile: tile.id,
-        };
-        w.install_panel_drag(
-            &cap,
-            DockItem::Tile {
-                panel,
-                tile: tile.id,
-            },
-        );
-        w.install_context(&cap, target);
+        let target = source.map(|s| ContextTarget::Tile { panel: s.panel, tile: s.tile });
+        if let Some(source) = source {
+            button.set_widget_name(&format!("tile-{}", source.tile));
+            w.install_panel_drag(&cap, DockItem::Tile { panel: source.panel, tile: source.tile });
+            w.install_context(&cap, target.unwrap());
+        }
         root.append(&cap);
-        let readout = (binding.is_some() && tile.slider_style.show_value).then(|| {
+        let readout = (binding.is_some() && slider_style.show_value).then(|| {
             let label = gtk::Label::new(None);
-            label.set_widget_name(&format!("slider-value-{}", tile.id));
+            label.set_widget_name(&format!("slider-value-{name}"));
             label.add_css_class("slider-value");
             label.set_halign(gtk::Align::Center);
             label.set_valign(gtk::Align::Center);
             let unit = gtk::Label::new(None);
-            unit.set_widget_name(&format!("slider-unit-{}", tile.id));
+            unit.set_widget_name(&format!("slider-unit-{name}"));
             unit.add_css_class("number-unit");
             unit.add_css_class("slider-unit");
             unit.set_halign(gtk::Align::Center);
@@ -692,12 +738,12 @@ impl Component {
             let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0., 1., 0.001);
             scale.set_draw_value(false);
             scale.set_hexpand(true);
-            scale.set_widget_name(&format!("component-slider-{}", tile.id));
+            scale.set_widget_name(&format!("component-slider-{name}"));
             scale.update_property(&[gtk::accessible::Property::Label(
                 &choice.label,
             )]);
             root.append(&scale);
-            w.install_menu(&scale, target);
+            if let Some(target) = target { w.install_menu(&scale, target); }
             root.imp().slider.set(true);
             root.imp()
                 .opacity
@@ -708,21 +754,22 @@ impl Component {
         } else {
             root.imp()
                 .options
-                .set(tile.control.options_style().unwrap());
+                .set(control.options_style().unwrap());
             button.set_child(Some(&crate::icons::image("layer-more-symbolic")));
             button.set_tooltip_text(Some(&w.localization().text(layer_ui::MessageId::WORKSPACE_TOOLBAR_MORE_OPTIONS)));
             button.update_property(&[gtk::accessible::Property::Label(&w.localization().text(layer_ui::MessageId::WORKSPACE_TOOLBAR_MORE_OPTIONS))]);
-            w.install_context(&root, target);
+            if let Some(target) = target { w.install_context(&root, target); }
             None
         };
         let component = Rc::new(Self {
             root,
             button,
-            control: tile.control,
+            control,
             context: Cell::new(None),
             contact_context: Cell::new(None),
             updating: Cell::new(false),
             slider,
+            drag: RefCell::default(),
             preview: RefCell::default(),
             readout,
             outside: RefCell::default(),
@@ -730,13 +777,12 @@ impl Component {
             fields: RefCell::default(),
         });
         component.root.set_presentation(Axis::Horizontal, style);
-        let id = tile.id;
         if component.slider.is_none() {
             component.button.connect_clicked(glib::clone!(
                 #[weak]
                 w,
                 move |_| {
-                    w.dispatch(UiAction::ActivateTile { panel, tile: id });
+                    if let Some(source) = source { w.dispatch(UiAction::ActivateTile { panel: source.panel, tile: source.tile }); }
                 }
             ));
         }
@@ -748,6 +794,7 @@ impl Component {
                 #[weak]
                 w,
                 move |scale| {
+                    component.root.queue_allocate();
                     if component.updating.get() {
                         return;
                     }
@@ -800,6 +847,10 @@ impl Component {
             self.button.set_sensitive(enabled);
             if changed_context {
                 self.close_preview();
+                if self.contact_context.get().is_some()
+                    && let Some(drag) = self.drag.borrow().as_ref() {
+                    drag.set_state(gtk::EventSequenceState::Denied);
+                }
             }
             let Some(field) = &state.numeric else {
                 if let Some(readout) = &self.readout {
@@ -824,13 +875,13 @@ impl Component {
             }
             self.refresh_stamp(w);
             self.root.queue_draw();
-            self.update_preview(&w.localization());
             let value = field
                 .numeric
                 .resolve(field.value as f64, NumericOperation::Format)
                 .unwrap();
             slider.set_value(value.fill);
             slider.update_property(&[gtk::accessible::Property::ValueText(&value.text)]);
+            self.update_preview(&w.localization());
         } else {
             let options = &state.options;
             let mut fields = self.fields.take();
@@ -872,6 +923,7 @@ impl Component {
     }
 
     fn close_preview(&self) {
+        self.root.imp().preview.set(None);
         if let Some(preview) = self.preview.take() {
             if let Some(poll)=preview.poll.take() { poll.remove(); }
             preview.popover.popdown();
@@ -903,40 +955,9 @@ impl Component {
             popover.set_autohide(false);
             popover.add_css_class("brush-preview");
             popover.set_widget_name("brush-slider-preview");
-            let slider = self.slider.as_ref().unwrap();
-            popover.set_parent(slider);
+            popover.set_parent(&w.window);
             popover.set_child(Some(&overlay));
-            let vertical = self.root.imp().vertical.get();
-            popover.set_position(if vertical {
-                gtk::PositionType::Right
-            } else {
-                gtk::PositionType::Bottom
-            });
-            if let Some(component) = self.root.compute_bounds(slider) {
-                let toolbar = self.root
-                    .parent()
-                    .and_then(|p| p.compute_bounds(slider))
-                    .unwrap_or(component);
-                // Grow the anchor on both sides. A directional offset points
-                // back into the toolbar when GTK flips a bottom/right popup.
-                let (x, y, width, height) = if vertical {
-                    (
-                        toolbar.x() - 8., component.y(),
-                        toolbar.width() + 16., component.height(),
-                    )
-                } else {
-                    (
-                        component.x(), toolbar.y() - 8.,
-                        component.width(), toolbar.height() + 16.,
-                    )
-                };
-                popover.set_pointing_to(Some(&gdk::Rectangle::new(
-                    x.floor() as i32,
-                    y.floor() as i32,
-                    width.ceil() as i32,
-                    height.ceil() as i32,
-                )));
-            }
+            self.root.imp().preview.set(Some(&popover));
             area.set_draw_func(glib::clone!(
                 #[weak(rename_to=component)]
                 self,
@@ -1106,6 +1127,7 @@ impl Component {
         if let Some(icon) = preview.bookmark.child().and_downcast::<gtk::Image>() {
             icon.set_pixel_size(layout.icon as i32);
         }
+        self.root.position_preview();
         preview.area.queue_draw();
     }
     fn install_slider_input(self: &Rc<Self>, w: &Rc<Workspace>) {
@@ -1172,6 +1194,7 @@ impl Component {
             .replace(Some((w.window.clone().upcast(), outside)));
         let scale = self.slider.as_ref().unwrap();
         let gesture = gtk::GestureDrag::new();
+        *self.drag.borrow_mut() = Some(gesture.clone());
         gesture.set_button(1);
         gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
         let origin = Rc::new(Cell::new([0., 0.]));
@@ -1190,6 +1213,7 @@ impl Component {
                 origin.set([x, y]);
                 moved.set(false);
                 component.contact_context.set(component.context.get());
+                w.dispatch(UiAction::Phone { action: PhoneAction::Slider { control: component.control, phase: ContactPhase::Down } });
                 component.pick_slider([x, y], true, &w.localization());
                 component.show_preview(&w);
             }
@@ -1219,6 +1243,7 @@ impl Component {
             #[strong]
             moved,
             move |_, _, _| {
+                w.dispatch(UiAction::Phone { action: PhoneAction::Slider { control: component.control, phase: ContactPhase::Up } });
                 component.contact_context.set(None);
                 if moved.get() {
                     component.close_preview();
@@ -1230,7 +1255,10 @@ impl Component {
         gesture.connect_cancel(glib::clone!(
             #[weak(rename_to=component)]
             self,
+            #[weak]
+            w,
             move |_, _| {
+                w.dispatch(UiAction::Phone { action: PhoneAction::Slider { control: component.control, phase: ContactPhase::Cancel } });
                 component.contact_context.set(None);
                 component.close_preview();
             }
@@ -1527,8 +1555,8 @@ fn paint_track(
         return;
     };
     let range = scale.range_rect();
-    let x = b.x() as f64 + range.x() as f64;
-    let y = b.y() as f64 + range.y() as f64;
+    let x = range.x() as f64;
+    let y = range.y() as f64;
     let w = range.width() as f64;
     let h = range.height() as f64;
     let length = if vertical { h } else { w };
@@ -1541,6 +1569,9 @@ fn paint_track(
         b.width(),
         b.height(),
     ));
+    cr.translate(b.x() as f64,b.y() as f64);
+    let factor=root.imp().visual_scale.get() as f64;
+    cr.scale(factor,factor);
     if vertical {
         cr.translate(x + w * 0.5, y + h - 6.);
         cr.rotate(-std::f64::consts::FRAC_PI_2);
@@ -1595,6 +1626,7 @@ fn paint_bookmarks(root: &ComponentBody, snapshot: &gtk::Snapshot, bookmarks: &[
     } as f32
         - half * 2.;
     let color = root.color();
+    let factor = root.imp().visual_scale.get();
     for mark in bookmarks {
         // GTK rounds its thumb allocation. Use that actual center for a selected
         // mark so the line stays centered at every value and display scale.
@@ -1610,17 +1642,17 @@ fn paint_bookmarks(root: &ComponentBody, snapshot: &gtk::Snapshot, bookmarks: &[
         };
         let rect = if vertical {
             gtk::graphene::Rect::new(
-                b.x() + range.x() as f32 + range.width() as f32 / 2. - 7.,
-                b.y() + range.y() as f32 + position - 1.,
-                14.,
-                2.,
+                b.x() + (range.x() as f32 + range.width() as f32 / 2. - 7.) * factor,
+                b.y() + (range.y() as f32 + position - 1.) * factor,
+                14. * factor,
+                2. * factor,
             )
         } else {
             gtk::graphene::Rect::new(
-                b.x() + range.x() as f32 + position - 1.,
-                b.y() + range.y() as f32 + range.height() as f32 / 2. - 7.,
-                2.,
-                14.,
+                b.x() + (range.x() as f32 + position - 1.) * factor,
+                b.y() + (range.y() as f32 + range.height() as f32 / 2. - 7.) * factor,
+                2. * factor,
+                14. * factor,
             )
         };
         let [r, g, b] = root.imp().bookmark_selected.get();

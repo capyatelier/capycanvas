@@ -1251,3 +1251,7 @@ diagnostics-memory-sampled-label = Puncak sampel
 diagnostics-memory-vulkan-label = Heap Vulkan
 diagnostics-memory-dxgi-label = DXGI lokal
 diagnostics-memory-metal-label = Alokasi Metal
+
+workspace-phone-swap-sides = Tukar Sisi
+workspace-phone-title-bar-unavailable = Bilah judul tidak dapat diedit dalam tata letak ponsel
+workspace-launch-window-size = Ukuran awal jendela

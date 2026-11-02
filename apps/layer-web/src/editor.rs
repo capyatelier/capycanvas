@@ -207,7 +207,7 @@ impl WebApp {
             drawer.and_then(|d| {
                 state.customization.drawer_placement(
                     d,
-                    &state.workspace.layout,
+                    &self.session.layout_resolve_input(),
                     q.viewport,
                     &q.heights,
                 )

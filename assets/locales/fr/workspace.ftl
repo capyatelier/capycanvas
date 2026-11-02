@@ -677,3 +677,7 @@ diagnostics-memory-sampled-label = Pic observé
 diagnostics-memory-vulkan-label = Tas Vulkan
 diagnostics-memory-dxgi-label = DXGI local
 diagnostics-memory-metal-label = Allocations Metal
+
+workspace-phone-swap-sides = Inverser les côtés
+workspace-phone-title-bar-unavailable = La barre de titre ne peut pas être modifiée dans la disposition pour téléphone
+workspace-launch-window-size = Taille initiale de la fenêtre

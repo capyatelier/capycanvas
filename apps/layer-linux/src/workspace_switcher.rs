@@ -273,6 +273,12 @@ impl NativeWorkspaces {
                 && w.window.visible_dialog().is_none() { source.grab_focus(); }
         }));
         self.switch_options.set_create_popup_func(glib::clone!(#[weak] w, move |button| {
+            if w.gpu.borrow().as_ref().is_some_and(|g| g.session.phone_layout().is_some()) {
+                button.set_popover(gtk::Popover::NONE);
+                button.set_active(false);
+                w.phone.workspaces(&w);
+                return;
+            }
             button.set_popover(Some(&w.workspaces.options_popup(&w)));
         }));
         self.install_switcher_context(w, &self.switcher);

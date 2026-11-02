@@ -11,6 +11,24 @@ pub enum WorkspacePreset {
 }
 
 impl WorkspacePreset {
+    pub fn phone_controls(self) -> &'static [ToolbarControl] {
+        use crate::{CommandId as C, ToolSlotId as S};
+        use ToolbarControl::{Color, Command as T, Divider as D, Panel as P, ToolSlot as Slot};
+        match self {
+            Self::Painter => &[
+                P { panel: Panel::Adjustments }, T { command: C::Select }, T { command: C::ScaleRotate }, D,
+                T { command: C::DrawingBrush }, T { command: C::Sculpt }, T { command: C::Eraser }, P { panel: Panel::Layers }, Color,
+            ],
+            Self::Illustrator => &[
+                T { command: C::Select }, Slot { slot: S::Gradient }, D,
+                T { command: C::DrawingBrush }, Slot { slot: S::Blend }, T { command: C::Eraser }, Slot { slot: S::Fill }, P { panel: Panel::Layers }, Color,
+            ],
+            Self::Photographer => &[
+                T { command: C::Crop }, T { command: C::Select }, Slot { slot: S::Healing }, D,
+                T { command: C::DrawingBrush }, T { command: C::Eraser }, P { panel: Panel::Adjustments }, P { panel: Panel::Layers }, Color,
+            ],
+        }
+    }
     pub const ALL: [Self; 3] = [Self::Painter, Self::Illustrator, Self::Photographer];
 
     pub fn initial(platform: crate::Platform, mobile_browser: bool) -> Self {
@@ -33,7 +51,11 @@ impl WorkspacePreset {
 
     pub fn layout_for_device(self, platform: crate::Platform, tablet: bool) -> DockLayout {
         let mut layout = match self {
-            Self::Painter => return Self::painter_layout(platform),
+            Self::Painter => {
+                let mut layout = Self::painter_layout(platform);
+                layout.resolve_phone_defaults(self).expect("phone toolbar defaults");
+                return layout;
+            },
             Self::Illustrator => {
                 let mut layout = Self::columns_layout(platform);
                 insert_proof(&mut layout);
@@ -84,6 +106,7 @@ impl WorkspacePreset {
             }
             fit_right_column(&mut layout);
         }
+        layout.resolve_phone_defaults(self).expect("phone toolbar defaults");
         layout
     }
 

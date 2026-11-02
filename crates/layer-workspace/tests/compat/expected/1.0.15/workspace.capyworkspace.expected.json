@@ -815,7 +815,8 @@
           "id": "toolbar:21",
           "tile_style": "small"
         }
-      ]
+      ],
+      "phone": null
     },
     "history": {
       "current": "r0",
@@ -1642,7 +1643,8 @@
                 "id": "toolbar:21",
                 "tile_style": "small"
               }
-            ]
+            ],
+            "phone": null
           },
           "timestamp_ms": "1000"
         }

@@ -1650,6 +1650,56 @@ impl PanelCopy {
     }
 }
 
+pub(crate) fn tile_view(state: &UiState, tile: &ToolbarTile, mut choice: ToolChoice, tooltip: &str) -> TileView {
+    let mut enabled = true;
+    choice.selected = match tile.control {
+        ToolbarControl::ColorPicker => {
+            let state = crate::tool_state(state, tile.control);
+            enabled = state.0;
+            state.1
+        }
+        ToolbarControl::Command { command } => {
+            if let Some(command) = state.commands.iter().find(|c| c.id == command) {
+                enabled = command.enabled;
+                choice.label = command.label.to_string();
+                choice.icon = command.icon.unwrap_or(choice.icon);
+                command.selected
+            } else {
+                false
+            }
+        }
+        ToolbarControl::Brush { id } => {
+            state.brush.preset == id && state.layer_tools.tool == LayerCanvasTool::Paint
+        }
+        ToolbarControl::Size { tenths } => {
+            (state.brush.diameter - tenths as f32 / 10.).abs() < 0.01
+        }
+        _ => false,
+    };
+    let (choice,enabled,tooltip,resolved_control)=if let Some(group)=state.resolve_group(tile.control) {
+        group
+    } else {
+        let tooltip=match tile.control {
+            ToolbarControl::Command {command}=>state.commands.iter().find(|c|c.id==command).map_or_else(||tooltip.to_string(),|c|c.tooltip.clone()),
+            _=>tooltip.to_string(),
+        };
+        (choice,enabled,tooltip,tile.control)
+    };
+    TileView {
+        slider_style: tile.slider_style,
+        double_click: resolved_control.double_click_command().is_some(),
+        tears_bubble: crate::BubbleSource::tears_without_hold(tile.control),
+        has_variants: tile.control.has_variants(),
+        resolved_control,
+        id: tile.id,
+        component: state.toolbar_component(tile.control),
+        tooltip,
+        disabled_reason: (!enabled).then(|| crate::header::control_disabled_reason(state, resolved_control)).flatten(),
+        choice,
+        enabled,
+    }
+}
+
 pub(crate) fn panel_view(state: &UiState, panel: Panel, copy: &PanelCopy) -> Result<PanelView, String> {
     let localization = &state.localization;
     let config = state.workspace.layout.panel(panel)?;
@@ -1667,54 +1717,7 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel, copy: &PanelCopy) -> Res
         .iter()
         .map(|tile| {
             let (_, choice, tooltip) = copy.tiles.iter().find(|(id, choice, _)| *id == tile.id && choice.control == tile.control).ok_or("The tool no longer exists")?;
-            let mut choice = choice.clone();
-            let mut enabled = true;
-            choice.selected = match tile.control {
-                ToolbarControl::ColorPicker => {
-                    let state = crate::tool_state(state, tile.control);
-                    enabled = state.0;
-                    state.1
-                }
-                ToolbarControl::Command { command } => {
-                    if let Some(command) = state.commands.iter().find(|c| c.id == command) {
-                        enabled = command.enabled;
-                        choice.label = command.label.to_string();
-                        choice.icon = command.icon.unwrap_or(choice.icon);
-                        command.selected
-                    } else {
-                        false
-                    }
-                }
-                ToolbarControl::Brush { id } => {
-                    state.brush.preset == id && state.layer_tools.tool == LayerCanvasTool::Paint
-                }
-                ToolbarControl::Size { tenths } => {
-                    (state.brush.diameter - tenths as f32 / 10.).abs() < 0.01
-                }
-                _ => false,
-            };
-            let (choice,enabled,tooltip,resolved_control)=if let Some(group)=state.resolve_group(tile.control) {
-                group
-            } else {
-                let tooltip=match tile.control {
-                    ToolbarControl::Command {command}=>state.commands.iter().find(|c|c.id==command).map_or_else(||tooltip.to_string(),|c|c.tooltip.clone()),
-                    _=>tooltip.to_string(),
-                };
-                (choice,enabled,tooltip,tile.control)
-            };
-            Ok(TileView {
-                slider_style: tile.slider_style,
-                double_click: resolved_control.double_click_command().is_some(),
-                tears_bubble: crate::BubbleSource::tears_without_hold(tile.control),
-                has_variants: tile.control.has_variants(),
-                resolved_control,
-                id: tile.id,
-                component: state.toolbar_component(tile.control),
-                tooltip,
-                disabled_reason: (!enabled).then(|| crate::header::control_disabled_reason(state, resolved_control)).flatten(),
-                choice,
-                enabled,
-            })
+            Ok(tile_view(state, tile, choice.clone(), tooltip))
         })
         .collect::<Result<Vec<_>, &str>>()?;
     Ok(PanelView {
@@ -2292,7 +2295,7 @@ impl CustomizationState {
                 };
                 drawer.configure_picker(layout);
                 if self
-                    .drawer_placement(&drawer, layout, viewport, &vec![0.0; drawer.columns.len()])
+                    .drawer_placement(&drawer, &crate::LayoutResolveInput::new(layout, None), viewport, &vec![0.0; drawer.columns.len()])
                     .is_none()
                 {
                     return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THE_ORIGINATING_TILE_IS_NOT_VISIBLE).to_string());

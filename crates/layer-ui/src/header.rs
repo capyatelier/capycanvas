@@ -1076,6 +1076,7 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
             DrawerAnchor::Tile { panel, tile } => {
                 self.switches_toolbar_drawer(TileAnchor { panel, tile })
             }
+            DrawerAnchor::Phone { .. } => open.is_some_and(|old| old != anchor),
             _ => false,
         };
         let mut change = if activate || !has_drawer {
@@ -1084,14 +1085,18 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
             UiChange::default()
         };
         if has_drawer && (!activate || switching || open == Some(anchor)) {
-            let action = match anchor {
-                DrawerAnchor::Header { id } => CustomizationAction::ToggleHeaderDrawer { id },
-                DrawerAnchor::Tile { panel, tile } => CustomizationAction::ToggleToolDrawer {
-                    anchor: TileAnchor { panel, tile },
-                },
-                _ => return Err("Not a tool origin".into()),
+            let update = if matches!(anchor, DrawerAnchor::Phone { .. }) {
+                self.toggle_phone_drawer(control, anchor)?
+            } else {
+                let action = match anchor {
+                    DrawerAnchor::Header { id } => CustomizationAction::ToggleHeaderDrawer { id },
+                    DrawerAnchor::Tile { panel, tile } => CustomizationAction::ToggleToolDrawer {
+                        anchor: TileAnchor { panel, tile },
+                    },
+                    _ => return Err("Not a tool origin".into()),
+                };
+                self.dispatch(UiAction::Customize { action })?
             };
-            let update = self.dispatch(UiAction::Customize { action })?;
             change.regions |= update.regions;
             change.canvas_wake |= update.canvas_wake;
             change.presentation_wake |= update.presentation_wake;

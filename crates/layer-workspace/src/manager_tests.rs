@@ -912,6 +912,10 @@ fn duplication_switching_and_original_baselines_are_independent() {
             .await
             .unwrap();
         assert_eq!(
+            duplicate.entity.capture().unwrap().history.layout().phone,
+            capture.history.layout().phone
+        );
+        assert_eq!(
             duplicate.entity.capture().unwrap().history.revisions.len(),
             2
         );

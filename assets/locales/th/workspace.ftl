@@ -662,3 +662,7 @@ diagnostics-memory-sampled-label = สูงสุดจากตัวอย่
 diagnostics-memory-vulkan-label = ฮีป Vulkan
 diagnostics-memory-dxgi-label = DXGI ภายใน
 diagnostics-memory-metal-label = การจัดสรร Metal
+
+workspace-phone-swap-sides = สลับด้าน
+workspace-phone-title-bar-unavailable = ไม่สามารถแก้ไขแถบชื่อเรื่องในรูปแบบโทรศัพท์ได้
+workspace-launch-window-size = ขนาดหน้าต่างเริ่มต้น

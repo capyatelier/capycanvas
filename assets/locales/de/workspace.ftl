@@ -677,3 +677,7 @@ diagnostics-memory-sampled-label = Gemessener Höchstwert
 diagnostics-memory-vulkan-label = Vulkan-Heap
 diagnostics-memory-dxgi-label = DXGI lokal
 diagnostics-memory-metal-label = Metal-Belegung
+
+workspace-phone-swap-sides = Seiten tauschen
+workspace-phone-title-bar-unavailable = Die Titelleiste kann im Telefonlayout nicht bearbeitet werden
+workspace-launch-window-size = Anfängliche Fenstergröße

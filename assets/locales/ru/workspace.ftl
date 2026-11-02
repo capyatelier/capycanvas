@@ -680,3 +680,7 @@ diagnostics-memory-sampled-label = Пик замеров
 diagnostics-memory-vulkan-label = Куча Vulkan
 diagnostics-memory-dxgi-label = DXGI локальная
 diagnostics-memory-metal-label = Выделено Metal
+
+workspace-phone-swap-sides = Поменять стороны
+workspace-phone-title-bar-unavailable = В раскладке для телефона нельзя редактировать строку заголовка
+workspace-launch-window-size = Начальный размер окна

@@ -450,6 +450,22 @@ pub struct Entity {
     pub working: Option<WorkspaceWorkingState>,
 }
 impl Entity {
+    pub(crate) fn resolve_phone(&mut self) -> Result<(), StoreError> {
+        let preset = DEFAULT_WORKSPACES
+            .iter()
+            .find(|(id, _)| *id == self.id)
+            .map_or(layer_ui::WorkspacePreset::Painter, |(_, preset)| *preset);
+        if let ItemContent::Workspace { history, baseline } = &mut self.content {
+            for layout in std::iter::once(baseline.as_mut())
+                .chain(history.revisions.values_mut().map(|r| &mut r.layout))
+            {
+                layout
+                    .resolve_phone_defaults(preset)
+                    .map_err(StoreError::invalid)?;
+            }
+        }
+        Ok(())
+    }
     /// The same platform-specific definition seeds and repairs included workspaces.
     pub(crate) fn included_workspace(
         id: &str,

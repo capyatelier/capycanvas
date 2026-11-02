@@ -82,6 +82,10 @@ The launcher runs `cargo run` with the `dev-perf` profile and forwards its
 arguments to the app; set `CAPY_RUST_PROFILE=release` for release comparisons.
 See [build profiles](environment.md#build-profiles).
 
+Use `./apps/layer-linux/run.sh --window-size=412x891` to open a phone-sized
+window. Sizes are logical pixels; both dimensions must be at least 320.
+The option sets the initial size and is not saved.
+
 To develop against system GTK without building the local runtime, run Cargo
 directly with no local GTK override in `LD_LIBRARY_PATH`:
 
@@ -159,6 +163,8 @@ native compositor keys.
 
 ## Tests
 
+`native_phone_window_move` uses `--native-storage` and a 1600×1000 private display to check unmaximized phone-bar movement with mouse and touch in both orientations.
+
 Model tests run with `cargo test --locked -p layer-linux`, which also builds
 `capy-photo-reader` for the confined `photo_reader` integration test. A
 standalone `--lib` run needs `cargo build --locked -p layer-linux --bin capy-photo-reader`
@@ -223,6 +229,8 @@ After changing the tablet proxy, run its tests with
 | --- | --- |
 | `native_session_restart`, `native_session_restart_saved_origins`, `native_document_files`, `native_object_only_shared_images`, `native_document_tabs_blocked_writer_keeps_canvas_live` | `--native-recovery` |
 | `native_dialog_lines_match_the_palette` | `--native-storage` |
+| `native_phone_motion` | `--native-storage`, `LAYER_NATIVE_EVENT_MS=4`, a phone `LAYER_MOTION_VIEWPORT`, and `LAYER_PHONE_MOTION_REPORT` under the test artifacts directory. |
+| `native_phone_frame`, `native_phone_drawers` | `--native-storage`, `LAYER_MOTION_VIEWPORT=412x891` (also `891x412` and `320x568`); both `CAPY_NATIVE_TEST_THEME=light` and `dark`. Set `LAYER_NATIVE_CAPTURE_DIR` for composed captures; `LAYER_PHONE_DECORATION_LAYOUT` selects a GTK button layout for native-control checks; `LAYER_PHONE_TEXT_PT=18` checks larger UI text. |
 | `native_workspace_switcher_press_feedback` | `--native-storage`, then again with `--tablet` |
 | `native_three_finger_scrub`, `native_pressure_calibration` | `--tablet` |
 | `native_layer_relationship_review`, pen branch | `LAYER_RELATIONSHIP_PEN=1` and `--tablet` |

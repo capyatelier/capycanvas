@@ -538,6 +538,30 @@ pub fn toolbar_slider_layout(width: f32, height: f32, axis: Axis) -> [Bounds; 2]
     [layout.cap, layout.track]
 }
 
+pub fn toolbar_slider_scale(cross: f32) -> f32 {
+    if cross.is_finite() && cross > 0. { cross / TILE_SIZE } else { 1. }
+}
+
+pub fn toolbar_slider_preview_placement(handle: Bounds, strip: Bounds, viewport: Bounds, axis: Axis, side: f32) -> (Edge, Bounds) {
+    let vertical = axis == Axis::Vertical;
+    let leading = if vertical { strip.x + strip.width * 0.5 < viewport.x + viewport.width * 0.5 }
+        else { strip.y + strip.height * 0.5 < viewport.y + viewport.height * 0.5 };
+    let before = if vertical { strip.x - viewport.x } else { strip.y - viewport.y };
+    let after = if vertical { viewport.x + viewport.width - strip.x - strip.width }
+        else { viewport.y + viewport.height - strip.y - strip.height };
+    let leading = if leading { after >= side + 8. || after >= before } else { before < side + 8. && after > before };
+    let direction = if vertical { if leading { Edge::Right } else { Edge::Left } }
+        else if leading { Edge::Bottom } else { Edge::Top };
+    let (x, y) = match direction {
+        Edge::Right => (strip.x + strip.width + 8., handle.y + handle.height * 0.5 - side * 0.5),
+        Edge::Left => (strip.x - side - 8., handle.y + handle.height * 0.5 - side * 0.5),
+        Edge::Bottom => (handle.x + handle.width * 0.5 - side * 0.5, strip.y + strip.height + 8.),
+        Edge::Top => (handle.x + handle.width * 0.5 - side * 0.5, strip.y - side - 8.),
+    };
+    (direction, Bounds { x: x.clamp(viewport.x + 8., (viewport.x + viewport.width - side - 8.).max(viewport.x + 8.)),
+        y: y.clamp(viewport.y + 8., (viewport.y + viewport.height - side - 8.).max(viewport.y + 8.)), width: side, height: side })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct ToolbarSliderLayout {
     pub cap: Bounds,
@@ -637,5 +661,49 @@ pub fn tool_setting_icon(id: &str) -> &'static str {
         "persistence" => "persistence",
         "pressure_refill" => "pressure-refill",
         _ => "settings",
+    }
+}
+
+#[cfg(test)]
+mod slider_geometry_tests {
+    use super::*;
+
+    #[test]
+    fn phone_slider_scales_the_existing_small_brush_control() {
+        for cross in [28., 35.5, 36., 40.5, 42.375, 47., 48.] {
+            let scale = toolbar_slider_scale(cross);
+            assert!((36. * scale - cross).abs() < 0.0001);
+            assert!((16. * scale / cross - 16. / 36.).abs() < 0.0001);
+            assert!((26. * scale / cross - 26. / 36.).abs() < 0.0001);
+        }
+    }
+
+    #[test]
+    fn slider_preview_follows_the_handle_inside_every_window_edge() {
+        for viewport in [Bounds {width:412.,height:891.,..Bounds::default()},
+            Bounds {width:891.,height:412.,..Bounds::default()},Bounds {width:320.,height:568.,..Bounds::default()},
+            Bounds {width:320.,height:320.,..Bounds::default()}] {
+            for edge in [Edge::Top,Edge::Right,Edge::Bottom,Edge::Left] {
+                let vertical=matches!(edge,Edge::Left|Edge::Right);
+                let axis=if vertical {Axis::Vertical} else {Axis::Horizontal};
+                let strip=match edge {
+                    Edge::Top=>Bounds {x:8.,y:8.,width:viewport.width-16.,height:47.},
+                    Edge::Bottom=>Bounds {x:8.,y:viewport.height-55.,width:viewport.width-16.,height:47.},
+                    Edge::Left=>Bounds {x:8.,y:8.,width:47.,height:viewport.height-16.},
+                    Edge::Right=>Bounds {x:viewport.width-55.,y:8.,width:47.,height:viewport.height-16.},
+                };
+                for position in [0.,0.25,0.5,0.75,1.] {
+                    let handle=if vertical {Bounds {y:strip.y+(strip.height-10.)*position,height:10.,..strip}}
+                        else {Bounds {x:strip.x+(strip.width-10.)*position,width:10.,..strip}};
+                    let (direction,popup)=toolbar_slider_preview_placement(handle,strip,viewport,axis,180.);
+                    assert_eq!(direction,match edge {Edge::Top=>Edge::Bottom,Edge::Bottom=>Edge::Top,Edge::Left=>Edge::Right,Edge::Right=>Edge::Left});
+                    assert!(popup.x>=8. && popup.y>=8. && popup.x+popup.width<=viewport.width-8. && popup.y+popup.height<=viewport.height-8.);
+                    let center=if vertical {popup.y+90.} else {popup.x+90.};
+                    let expected=if vertical {handle.y+handle.height*0.5} else {handle.x+handle.width*0.5};
+                    let length=if vertical {viewport.height} else {viewport.width};
+                    assert!((center-expected.clamp(98.,length-98.)).abs()<0.0001);
+                }
+            }
+        }
     }
 }

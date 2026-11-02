@@ -28,6 +28,7 @@ pub struct ColumnDrawerMeasurement {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DrawerAnchor {
+    Phone { tile: Option<u32> },
     Header {
         id: u32,
     },
@@ -151,13 +152,7 @@ pub fn drawer_frame(source: &str) -> Result<serde_json::Value, String> {
     }
     if let Some(scale)=request.pixel_scale {
         if !scale.is_finite() || scale<=0. {return Err("Invalid drawer pixel scale".into());}
-        let snap=|b:Bounds| {let x=(b.x*scale).round()/scale;let y=(b.y*scale).round()/scale;
-            Bounds {x,y,width:((b.x+b.width)*scale).round()/scale-x,height:((b.y+b.height)*scale).round()/scale-y}};
-        let origin=placement.bounds;placement.bounds=snap(origin);placement.anchor=snap(placement.anchor);
-        for column in &mut placement.columns {
-            let b=snap(Bounds {x:origin.x+column.x,y:origin.y+column.y,..*column});
-            *column=Bounds {x:b.x-placement.bounds.x,y:b.y-placement.bounds.y,..b};
-        }
+        placement=placement.snapped(scale);
     }
     Ok(serde_json::json!({"connection": placement.connection(), "placement": placement}))
 }
@@ -219,6 +214,16 @@ impl DrawerConnection {
     }
 }
 impl DrawerPlacement {
+    pub fn snapped(mut self, scale: f32) -> Self {
+        let snap=|b:Bounds| {let x=(b.x*scale).round()/scale;let y=(b.y*scale).round()/scale;
+            Bounds {x,y,width:((b.x+b.width)*scale).round()/scale-x,height:((b.y+b.height)*scale).round()/scale-y}};
+        let origin=self.bounds;self.bounds=snap(origin);self.anchor=snap(self.anchor);
+        for column in &mut self.columns {
+            let b=snap(Bounds {x:origin.x+column.x,y:origin.y+column.y,..*column});
+            *column=Bounds {x:b.x-self.bounds.x,y:b.y-self.bounds.y,..b};
+        }
+        self
+    }
     /// Ancestor clipping must not round off a tile's connected corners.
     /// Only flatten container corners whose rounding reaches the originating tile.
     pub fn source_corners(&self, container: Bounds) -> [bool; 4] {
@@ -438,11 +443,13 @@ impl ContentDrawer {
     pub fn panels(&self) -> impl Iterator<Item = Panel> + '_ {
         self.columns.iter().flatten().copied().chain(self.layer_properties.map(|_| Panel::Properties))
     }
-    fn for_control(control: ToolbarControl, anchor: DrawerAnchor) -> Result<Self, String> {
+    pub(crate) fn for_control(control: ToolbarControl, anchor: DrawerAnchor) -> Result<Self, String> {
         Ok(Self {
             layer_properties: matches!(control, ToolbarControl::Panel {panel:Panel::Layers}).then_some(false),
             anchor,
-            columns: control.drawer_columns().ok_or("This item has no tool drawer")?,
+            columns: if matches!(anchor, DrawerAnchor::Phone { .. }) && matches!(control, ToolbarControl::Color | ToolbarControl::Panel { panel: Panel::Color }) {
+                vec![vec![Panel::Color], vec![Panel::Palettes]]
+            } else { control.drawer_columns().ok_or("This item has no tool drawer")? },
             dismissal: DrawerDismissal::OutsideContact,
             tabs: None, compact: false, tool_set: None,
         })
@@ -542,13 +549,33 @@ impl ContentDrawer {
     }
 
     fn place(&self, layout: &DockLayout, viewport: [f32; 2], heights: &[f32], measured_tile: Option<Bounds>) -> Option<DrawerPlacement> {
-        self.measure(layout, viewport, measured_tile)?.placement(heights)
+        self.measure(layout, viewport, measured_tile, None)?.placement(heights)
     }
 
-    fn measure(&self, layout: &DockLayout, viewport: [f32; 2], measured_tile: Option<Bounds>) -> Option<DrawerMeasure> {
+    fn measure(&self, layout: &DockLayout, viewport: [f32; 2], measured_tile: Option<Bounds>, phone: Option<crate::PhoneLayout>) -> Option<DrawerMeasure> {
         if self.columns.is_empty() || !viewport.into_iter().all(f32::is_finite)
             || viewport[0] <= 2.0 * WORKSPACE_SPACING || viewport[1] <= HEADER_HEIGHT + WORKSPACE_SPACING {
             return None;
+        }
+        if let DrawerAnchor::Phone { tile } = self.anchor {
+            let phone = phone?;
+            let portrait = phone.edge == Edge::Top;
+            let available = if portrait { phone.bars[0].width } else { phone.work_area.width };
+            let sets = (available - crate::PANEL_MIN_WIDTH - 8.).clamp(crate::BRUSH_SETS_MIN_WIDTH, 160.);
+            let stage = crate::ColorPanelLayout::stage_for_wheel(if portrait { 300. } else { 312. })?;
+            let color = self.columns.iter().position(|panels| panels.contains(&Panel::Color));
+            let widths = self.columns.iter().map(|panels| panels.iter().map(|panel| match panel {
+                Panel::BrushSets | Panel::SculptSets | Panel::FilterTypes => sets,
+                Panel::Tools | Panel::Brushes => (available - sets - 8.).clamp(crate::TOOL_PANEL_MIN_WIDTH, crate::PANEL_MIN_WIDTH),
+                Panel::Layers => if portrait { available } else { 280. },
+                Panel::Color => if portrait { available } else { (stage + 2. * crate::PANEL_CONTENT_INSET).min((available - crate::PANEL_MIN_WIDTH - 8.).max(144.)) },
+                Panel::Palettes if color.is_some() && portrait => available,
+                Panel::Palettes => crate::PANEL_MIN_WIDTH,
+                _ => panel.default_width(viewport[0]),
+            }).fold(0., f32::max)).collect::<Vec<_>>();
+            let placement = phone.drawer(phone.anchor(layout, tile)?, viewport, &widths, &vec![0.; widths.len()], 8.)?;
+            return Some(DrawerMeasure { placement, available: phone.work_area, viewport_height: viewport[1],
+                options: false, fits_content: true, layer_properties: self.layer_properties.is_some(), color, phone: Some((phone, viewport, widths)) });
         }
         let resolved = layout.resolved(viewport);
         let (mut anchor, edge, axis) = if let DrawerAnchor::Header { id } = self.anchor {
@@ -682,7 +709,7 @@ impl ContentDrawer {
                 bounds, anchor, direction, columns,
                 tab_presentations:self.tabs.as_ref().map_or_else(Vec::new,|tabs|layout.tab_presentations(tabs.group,bounds.width)),
             },
-            available, viewport_height:viewport[1], options:options.is_some(),
+            color: None, phone: None, available, viewport_height:viewport[1], options:options.is_some(),
             fits_content:self.compact || self.layer_properties.is_some(), layer_properties:self.layer_properties.is_some(),
         })
     }
@@ -697,9 +724,24 @@ pub struct DrawerMeasure {
     options:bool,
     fits_content:bool,
     layer_properties:bool,
+    #[serde(default)]
+    color: Option<usize>,
+    #[serde(default)]
+    phone: Option<(crate::PhoneLayout, [f32; 2], Vec<f32>)>,
 }
 impl DrawerMeasure {
+    pub(crate) fn phone_layout(&self) -> Option<&crate::PhoneLayout> { self.phone.as_ref().map(|(phone, _, _)| phone) }
     pub fn placement(&self, heights:&[f32])->Option<DrawerPlacement> {
+        if let Some((phone, viewport, widths)) = &self.phone {
+            if heights.len() != widths.len() || heights.len() > 19 { return None; }
+            let mut fitted = [0.; 19];
+            fitted[..heights.len()].copy_from_slice(heights);
+            if let Some(color) = self.color.filter(|_| phone.edge == Edge::Top) {
+                let other = heights.iter().enumerate().filter(|(i, _)| *i != color).map(|(_, h)| *h).sum::<f32>();
+                fitted[color] = heights[color].min((phone.work_area.height - other - 8.).max(144.));
+            }
+            return phone.drawer(self.placement.anchor, *viewport, widths, &fitted[..heights.len()], 8.);
+        }
         if heights.len()!=self.placement.columns.len() || !heights.iter().copied().all(f32::is_finite) {return None;}
         let DrawerPlacement {anchor,direction,bounds,..}=&self.placement;
         let anchor=*anchor; let direction=*direction; let width=bounds.width; let available=self.available;
@@ -863,16 +905,17 @@ impl CustomizationState {
     pub fn drawer_placement(
         &self,
         drawer: &ContentDrawer,
-        layout: &DockLayout,
+        input: &crate::LayoutResolveInput<'_>,
         viewport: [f32; 2],
         heights: &[f32],
     ) -> Option<DrawerPlacement> {
-        self.drawer_measure(drawer,layout,viewport)?.placement(heights)
+        self.drawer_measure(drawer,input,viewport)?.placement(heights)
     }
-    pub fn drawer_measure(&self,drawer:&ContentDrawer,layout:&DockLayout,viewport:[f32;2])->Option<DrawerMeasure> {
+    pub fn drawer_measure(&self,drawer:&ContentDrawer,input:&crate::LayoutResolveInput<'_>,viewport:[f32;2])->Option<DrawerMeasure> {
+        let layout: &DockLayout = input;
         let measured=drawer.anchor.tile().and_then(|anchor|self.drawer_tiles.iter()
             .find(|m|m.anchor==anchor && self.accepts_drawer_tile(m)));
-        drawer.measure(layout,viewport,measured.map(|m|m.bounds))
+        drawer.measure(layout,viewport,measured.map(|m|m.bounds),input.phone_presentation(viewport))
     }
 }
 

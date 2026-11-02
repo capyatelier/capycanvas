@@ -36,7 +36,7 @@ struct Request {
 }
 
 impl CustomizationState {
-    pub fn layer_drawer_sizing(&self,drawer:Option<&ContentDrawer>,layout:&DockLayout,viewport:[f32;2],
+    pub fn layer_drawer_sizing(&self,drawer:Option<&ContentDrawer>,layout:&LayoutResolveInput<'_>,viewport:[f32;2],
         measurement:PanelScrollMeasurement,rows:usize,properties_height:f32)->Result<Value,String> {
         if drawer.is_some_and(|drawer|drawer.columns.len()!=1||drawer.layer_properties.is_none()) {
             return Err("Invalid layer drawer measurements".into());
@@ -52,7 +52,7 @@ pub(crate) fn layer_sizes(measure:Option<&DrawerMeasure>,measurement:PanelScroll
         .all(|value|value.is_finite()&&value>=0.) {
         return Err("Invalid layer drawer measurements".into());
     }
-    let heights=LayerDrawerSizing::pages(measurement,rows,viewport_height,properties_height);
+    let heights=LayerDrawerSizing::presented_pages(measurement,rows,viewport_height,properties_height,measure.and_then(DrawerMeasure::phone_layout));
     let placements=heights.map(|height|measure.and_then(|measure|measure.placement(&[height])));
     Ok(json!({"measurement":measurement,"properties_height":properties_height,"heights":heights,"placements":placements,"footer_height":LayerDrawerSizing::FOOTER_HEIGHT}))
 }
@@ -70,7 +70,8 @@ impl LayoutResolveInput<'_> {
         let layout=self.measured_layout(viewport);
         let mut customization=CustomizationState {column_drawers:request.column_drawers.into_iter().map(Geometry::drawer).collect(),..Default::default()};
         customization.measure_drawer_tiles(&layout,request.tiles)?;
-        let measure=customization.drawer_measure(&drawer,&layout,viewport);
+        let input=LayoutResolveInput::new(&layout,None).with_phone(self.phone_state());
+        let measure=customization.drawer_measure(&drawer,&input,viewport);
         let placement=measure.as_ref().and_then(|measure|request.heights.as_ref().and_then(|heights|measure.placement(heights)));
         let mut toolbars=Vec::new();
         if request.toolbars&&let Some(measure)=&measure {
@@ -83,7 +84,7 @@ impl LayoutResolveInput<'_> {
             }
         }
         let sizes=if let Some(layer)=request.layer {
-            customization.layer_drawer_sizing(Some(&drawer),&layout,viewport,layer.measurement,layer.rows,layer.properties_height)?
+            customization.layer_drawer_sizing(Some(&drawer),&input,viewport,layer.measurement,layer.rows,layer.properties_height)?
         }else{Value::Null};
         Ok(json!({"measure":measure,"placement":placement,"toolbars":toolbars,"sizes":sizes}))
     }
@@ -109,7 +110,7 @@ fn collapsed_group_and_nested_live_tile_use_current_owner_and_measured_origin() 
     layout.set_column_collapsed(group,true,VIEWPORT).unwrap();
     let parent=ContentDrawer::for_column(&layout,group,Panel::Toolbar).unwrap();
     let height=[450.];
-    let parent_live=CustomizationState::default().drawer_placement(&parent,&layout,VIEWPORT,&height);
+    let parent_live=CustomizationState::default().drawer_placement(&parent,&LayoutResolveInput::new(&layout,None),VIEWPORT,&height);
     assert_eq!(pure_drawer(&layout,&parent,&[],&[],&height)["placement"],
         serde_json::to_value(parent_live).unwrap());
 
@@ -122,7 +123,7 @@ fn collapsed_group_and_nested_live_tile_use_current_owner_and_measured_origin() 
     live.column_drawers=vec![parent.clone()];
     let first=DrawerTileMeasurement {column,anchor,bounds:Bounds {x:80.,y:200.,width:36.,height:36.}};
     live.measure_drawer_tiles(&layout,vec![first]).unwrap();
-    let expected=live.drawer_placement(&child,&layout,VIEWPORT,&heights);
+    let expected=live.drawer_placement(&child,&LayoutResolveInput::new(&layout,None),VIEWPORT,&heights);
     let reply=pure_drawer(&layout,&child,&live.column_drawers,&[first],&heights);
     assert_eq!(reply["placement"],serde_json::to_value(expected).unwrap());
     assert_eq!(reply["placement"]["anchor"]["y"],serde_json::json!(200.));
@@ -130,7 +131,7 @@ fn collapsed_group_and_nested_live_tile_use_current_owner_and_measured_origin() 
     let moved=DrawerTileMeasurement {bounds:Bounds {y:160.,height:20.,..first.bounds},..first};
     live.measure_drawer_tiles(&layout,vec![moved]).unwrap();
     let reply=pure_drawer(&layout,&child,&live.column_drawers,&[moved],&heights);
-    assert_eq!(reply["placement"],serde_json::to_value(live.drawer_placement(&child,&layout,VIEWPORT,&heights)).unwrap());
+    assert_eq!(reply["placement"],serde_json::to_value(live.drawer_placement(&child,&LayoutResolveInput::new(&layout,None),VIEWPORT,&heights)).unwrap());
     assert_eq!(reply["placement"]["anchor"]["y"],serde_json::json!(160.));
 
     let before=serde_json::to_value(&layout).unwrap();
@@ -184,6 +185,57 @@ fn native_drawer_frames_snap_columns_and_the_connection_to_the_same_edges() {
         for b in [snapped.bounds,snapped.anchor] {for v in [b.x,b.y,b.x+b.width,b.y+b.height] {assert!((v*scale-(v*scale).round()).abs()<0.0001);}}
         let connection:DrawerConnection=serde_json::from_value(frame["connection"].clone()).unwrap();
         assert!((connection.bounds.y+connection.bounds.height-snapped.bounds.y).abs()<0.0001);
+    }
+}
+
+#[test]
+fn snapped_drawer_bridges_meet_both_surfaces_on_every_edge_and_alignment() {
+    for direction in [Edge::Top, Edge::Right, Edge::Bottom, Edge::Left] {
+        for mirrored in [false, true] {
+            let anchor=Bounds {x:100.2,y:100.3,width:36.4,height:36.5};
+            let along=if mirrored {56.7} else {92.1};
+            let bounds=match direction {
+                Edge::Bottom=>Bounds {x:along,y:144.8,width:88.7,height:90.3},
+                Edge::Top=>Bounds {x:along,y:2.1,width:88.7,height:90.2},
+                Edge::Right=>Bounds {x:144.6,y:along,width:90.3,height:88.7},
+                Edge::Left=>Bounds {x:2.1,y:along,width:90.1,height:88.7},
+            };
+            for scale in [1.,1.25,1.5,2.] {
+                let placement=DrawerPlacement {bounds,anchor,direction,columns:Vec::new(),tab_presentations:Vec::new()}.snapped(scale);
+                for b in [placement.anchor,placement.bounds] {
+                    for edge in [b.x,b.y,b.x+b.width,b.y+b.height] {
+                        assert!((edge*scale-(edge*scale).round()).abs()<0.0001);
+                    }
+                }
+                let connection=placement.connection().unwrap();
+                let [xx,yx,xy,yy,tx,ty]=connection.transform;
+                let world=|v:f32|[connection.bounds.x+xx*connection.length*0.5+xy*v+tx,
+                    connection.bounds.y+yx*connection.length*0.5+yy*v+ty];
+                let (axis,near,far)=match direction {
+                    Edge::Bottom=>(1,placement.anchor.y+placement.anchor.height,placement.bounds.y),
+                    Edge::Top=>(1,placement.anchor.y,placement.bounds.y+placement.bounds.height),
+                    Edge::Right=>(0,placement.anchor.x+placement.anchor.width,placement.bounds.x),
+                    Edge::Left=>(0,placement.anchor.x,placement.bounds.x+placement.bounds.width),
+                };
+                assert!((world(0.)[axis]-near).abs()<0.0001,"{direction:?}/{mirrored}/{scale}");
+                assert!((world(connection.depth)[axis]-far).abs()<0.0001,"{direction:?}/{mirrored}/{scale}");
+            }
+        }
+    }
+}
+
+#[test]
+fn portrait_color_drawer_uses_its_column_width_when_the_height_fits() {
+    let layout=WorkspacePreset::Painter.layout(Platform::Gtk);
+    let drawer=ContentDrawer::for_control(ToolbarControl::Color,DrawerAnchor::Phone {tile:None}).unwrap();
+    let input=LayoutResolveInput::new(&layout,None).with_phone(PhoneState { platform: Some(Platform::Gtk), ..Default::default() });
+    for viewport in [[412.,891.],[375.,812.],[360.,780.],[320.,780.],[280.,780.]] {
+        let phone=PhoneState { platform: Some(Platform::Gtk), ..Default::default() }.resolve(&layout,viewport).unwrap();
+        let width=phone.bars[0].width;
+        let color=ColorPanelLayout::new(width-2.*PANEL_CONTENT_INSET).unwrap().height()+2.*PANEL_CONTENT_INSET;
+        let placement=CustomizationState::default().drawer_placement(&drawer,&input,viewport,&[color,220.]).unwrap();
+        assert_eq!(placement.columns[0].width,width);
+        assert!((placement.columns[0].height-color).abs()<0.001,"{viewport:?}: {placement:?}");
     }
 }
 

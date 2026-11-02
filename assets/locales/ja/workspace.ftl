@@ -700,3 +700,7 @@ diagnostics-memory-sampled-label = 観測した最大値
 diagnostics-memory-vulkan-label = Vulkanヒープ
 diagnostics-memory-dxgi-label = DXGIローカル
 diagnostics-memory-metal-label = Metal割り当て
+
+workspace-phone-swap-sides = 左右を入れ替え
+workspace-phone-title-bar-unavailable = スマートフォンのレイアウトではタイトルバーを編集できません
+workspace-launch-window-size = 起動時のウィンドウサイズ

@@ -816,7 +816,8 @@
             "id": "toolbar:21",
             "tile_style": "small"
           }
-        ]
+        ],
+        "phone": null
       },
       "history": {
         "current": "r0",
@@ -1643,7 +1644,8 @@
                   "id": "toolbar:21",
                   "tile_style": "small"
                 }
-              ]
+              ],
+              "phone": null
             },
             "timestamp_ms": "1000"
           }
@@ -6212,7 +6214,8 @@
             "id": "toolbar:19",
             "tile_style": "medium"
           }
-        ]
+        ],
+        "phone": null
       },
       "history": {
         "current": "r0",
@@ -6805,7 +6808,8 @@
                   "id": "toolbar:19",
                   "tile_style": "medium"
                 }
-              ]
+              ],
+              "phone": null
             },
             "timestamp_ms": "1000"
           }
@@ -7647,7 +7651,8 @@
             "id": "toolbar:21",
             "tile_style": "small"
           }
-        ]
+        ],
+        "phone": null
       },
       "history": {
         "current": "r0",
@@ -8474,7 +8479,8 @@
                   "id": "toolbar:21",
                   "tile_style": "small"
                 }
-              ]
+              ],
+              "phone": null
             },
             "timestamp_ms": "1000"
           }
@@ -9251,7 +9257,8 @@
             "id": "commands",
             "tile_style": "small"
           }
-        ]
+        ],
+        "phone": null
       },
       "history": {
         "current": "r0",
@@ -10013,7 +10020,8 @@
                   "id": "commands",
                   "tile_style": "small"
                 }
-              ]
+              ],
+              "phone": null
             },
             "timestamp_ms": "1000"
           }

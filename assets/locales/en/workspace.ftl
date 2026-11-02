@@ -677,3 +677,7 @@ diagnostics-memory-sampled-label = Sampled peak
 diagnostics-memory-vulkan-label = Vulkan heap
 diagnostics-memory-dxgi-label = DXGI local
 diagnostics-memory-metal-label = Metal allocations
+
+workspace-phone-swap-sides = Swap Sides
+workspace-phone-title-bar-unavailable = Title bar editing is unavailable in the phone layout
+workspace-launch-window-size = Initial window size

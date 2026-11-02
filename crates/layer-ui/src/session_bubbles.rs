@@ -112,6 +112,7 @@ fn inset(bounds: Bounds, by: f32) -> Bounds {
 
 impl<R: CanvasRenderer> UiSession<R> {
     pub fn bubbles(&self) -> Vec<BubbleView> {
+        if self.phone_layout().is_some() { return Vec::new(); }
         self.state.workspace.layout.bubbles.bubbles.iter().map(|bubble| self.bubble_view(bubble)).collect()
     }
 
@@ -216,6 +217,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn can_take_bubble(&mut self, grab: BubbleGrab, position: [f32; 2], viewport: [f32; 2]) -> bool {
+        if self.phone_layout().is_some() { return false; }
         valid_viewport(viewport).is_ok() && position.into_iter().all(f32::is_finite)
             && self.bubble_canvas(viewport).contains(position[0], position[1])
             && self.grab_source(grab, viewport).is_ok_and(|(_, bounds)| !self.bubble_homing(viewport, position, bounds))

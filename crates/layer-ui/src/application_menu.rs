@@ -264,6 +264,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         };
         if menu==M::View {model.sections.push(vec![command(CommandId::SelectionOutline)]);}
+        if menu == M::Primary && self.phone_layout().is_some() {
+            model.sections.pop();
+            let mut swap = ContextMenuItem::command(self.localization().text(MessageId::WORKSPACE_PHONE_SWAP_SIDES).to_string(), UiAction::Phone { action: PhoneAction::SwapSides });
+            swap.selected = Some(self.state.settings.phone_swap_sides);
+            model.sections.insert(0, vec![command(CommandId::SearchCommands)]);
+            model.sections.insert(1, vec![command(CommandId::ZenMode), swap]);
+        }
         model.title = menu.localized_label(self.localization()).to_string();
         model.with_shortcuts_localized(&self.state.settings, self.state.platform, self.localization())
     }

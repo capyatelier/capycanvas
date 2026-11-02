@@ -16,6 +16,14 @@ pub fn append_round(snapshot: &gtk::Snapshot, round: gtk::Snapshot) {
     }
 }
 
+pub(crate) fn snapshot_child(parent: &gtk::Widget, child: &gtk::Widget, snapshot: &gtk::Snapshot) {
+    if child.is::<gtk::WindowControls>() {
+        let round = gtk::Snapshot::new();
+        parent.snapshot_child(child, &round);
+        append_round(snapshot, round);
+    } else { parent.snapshot_child(child, snapshot); }
+}
+
 pub(crate) fn corner(cr: &cairo::Context, center: [f64; 2], start: [f64; 2], end: [f64; 2]) {
     for step in 1..=CORNER_SEGMENTS {
         let angle = f64::from(step) / f64::from(CORNER_SEGMENTS) * FRAC_PI_2;

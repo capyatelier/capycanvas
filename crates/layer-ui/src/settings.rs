@@ -20,6 +20,7 @@ pub enum Platform {
 }
 impl Platform {
     pub const ALL: [Self; 6] = [Self::Gtk, Self::Web, Self::Windows, Self::Mac, Self::Ios, Self::Android];
+    pub const fn presents_phone_layout(self) -> bool { matches!(self, Self::Gtk) }
     pub fn apple(self) -> bool {
         matches!(self, Self::Mac | Self::Ios)
     }
@@ -79,6 +80,7 @@ pub struct Settings {
     pub accent: Option<HexColor>,
     pub zen_icon: ZenIcon,
     pub zen_show_capy: bool,
+    pub phone_swap_sides: bool,
     /// Shared by Quick Mask and every saved selection, across documents.
     pub selection_painting: layer_core::SelectionPaintBehavior,
     pub pressure_curve: layer_core::PressureResponse,
@@ -151,6 +153,7 @@ impl Default for Settings {
             accent: None,
             zen_icon: ZenIcon::default(),
             zen_show_capy: true,
+            phone_swap_sides: false,
             selection_painting: Default::default(),
             pressure_curve: layer_core::PressureResponse::default(),
             tilt_calibrations: BTreeMap::new(),

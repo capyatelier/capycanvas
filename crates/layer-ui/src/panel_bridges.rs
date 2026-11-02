@@ -230,6 +230,7 @@ impl ResolvedLayout {
             return Err("Invalid panel measurements".into());
         }
         let mut layout=Self {
+            phone: self.phone.clone(),
             measurement_requests:Vec::new(),
             groups:self.groups.iter().filter(|g|groups.contains(&g.id)).cloned().collect(),
             collapsed:self.collapsed.iter().filter(|c|columns.contains(&c.id)).cloned().collect(),

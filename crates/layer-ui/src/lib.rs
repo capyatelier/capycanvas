@@ -33,6 +33,8 @@ mod camera;
 mod zoom_tool;
 pub use zoom_tool::{ZoomDirection, ZoomDrag, ZoomToolAction, ZoomToolSettings};
 mod document_tabs;
+mod phone;
+pub use phone::{PhoneAction, PhoneLayout, PhoneMenuGeometry, PhoneMenuNavigation, PhoneMenuPage, PhoneState};
 pub use document_tabs::{DocumentTabDrag, DocumentTabHit, DocumentTabSlide, DocumentTabs};
 mod document_sessions;
 pub use document_sessions::{DocumentSessionError, DocumentTransportRefusal, document_storage_retained, document_recovery_unavailable, DocumentAdmission, DocumentBudget, DocumentSessions, DocumentTabLabel, ParkedDocument, RetainedClipboard, TrimWait};
@@ -92,7 +94,7 @@ pub use color::{
     ColorHexNote, ColorHexNoteKind, ColorRowView, ColorScrubSpeed, ColorShapeChoice, ColorStripCorner, ColorStripPlacement, ColorStripView, ColorValueName, ColorValueView,
     ColorValidationCopy, ColorPreview, ColorUiRequest, color_preview, color_validation_localized, color_ui_localized,
     ColorLibrary, ColorLibraryAction, ColorPalette, ColorReorderPreview, SavedColor,
-    PaletteChoiceView, PaletteCommand, PaletteExport, PaletteFileRequest, PaletteFormat, palette_file, PaletteMenuItem, PaletteMenuTarget, PalettePanelView,
+    PaletteChoiceView, PaletteCommand, PaletteExport, PaletteFileRequest, PaletteFormat, PaletteGridLayout, palette_file, PaletteMenuItem, PaletteMenuTarget, PalettePanelView,
     PaletteTileView, SwatchSectionView, SwatchSheetView, selected_swatch,
     HdrIntensityArc, ColorBubbleArc, ColorBubbleLayout, ColorAction, ColorEditContext, ColorComponentView, ColorHueStop, ColorArcCaption, BareColorWheel, ColorPanelFit, ColorPanelLayout, ColorPanelView, ColorReadout, ColorShape, ColorSlot, ColorSpace, ColorState,
     ColorSwatchView, PaintPairView, PaintSwatchView, ColorWheelGeometry, ColorWheelPart, render_color_field, render_hue_guide_in, render_hue_ring_f16_in,
@@ -1478,6 +1480,7 @@ pub struct UiState {
     /// Observed native/browser window state; never stored in workspace preferences.
     pub fullscreen: bool,
     pub workspace: WorkspaceState,
+    pub phone: PhoneState,
     pub workspace_ready: bool,
     pub brush: BrushState,
     pub colors: ColorState,
@@ -1525,6 +1528,7 @@ pub struct UiState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiAction {
+    Phone { action: PhoneAction },
     FileDrop { id: u32, intent: ImportIntent },
     ColorSlotMenu { slot: ColorSlot, library: bool },
     CurveEditor { target: CurveEditorTarget, action: CurveEditorAction },

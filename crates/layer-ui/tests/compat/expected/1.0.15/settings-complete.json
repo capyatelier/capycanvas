@@ -249,6 +249,7 @@
       "drawing": "command.Redo"
     }
   },
+  "phone_swap_sides": false,
   "photo_open": {
     "missing_profile": "ask",
     "promote_to_16": true

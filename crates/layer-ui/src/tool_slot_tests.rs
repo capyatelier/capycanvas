@@ -1153,7 +1153,7 @@ fn fill_family_cycles_siblings_and_keeps_the_group_choice_after_temporary_use() 
         assert_eq!(selected_slot_variant(&s, anchor), remembered);
         assert!(s.command(remembered.command()).selected);
         assert!(crate::shortcuts::hold_id("command.Fill").is_some());
-        assert_eq!(s.state().settings.gesture_binding("touch.tap.4"), "");
+        assert_eq!(s.state().settings.gesture_binding("touch.tap.4"), "command.ZenMode");
     }
 }
 

@@ -1930,7 +1930,7 @@ impl Bubbles {
             let Some(card) = view.as_ref().and_then(|view| view.card.as_ref()) else { return };
             let body = bubble.imp().card.borrow();
             let Some(body) = body.as_ref() else { return };
-            let (measurement, properties_height) = body.inspector.measure(card.size[0].round() as i32, w.surface.height() as f32);
+            let (measurement, properties_height) = body.inspector.measure(card.size[0].round() as i32, w.surface.height() as f32, None);
             (bubble.id(), card.full, measurement, properties_height)
         };
         if w.gpu.borrow().as_ref().is_none_or(|gpu| gpu.session.bubble_card_metrics() == Some(metrics)) { return; }

@@ -677,3 +677,7 @@ diagnostics-memory-sampled-label = Máximo muestreado
 diagnostics-memory-vulkan-label = Bloque Vulkan
 diagnostics-memory-dxgi-label = DXGI local
 diagnostics-memory-metal-label = Asignaciones Metal
+
+workspace-phone-swap-sides = Cambiar de lado
+workspace-phone-title-bar-unavailable = La barra de título no se puede editar en la vista de teléfono
+workspace-launch-window-size = Tamaño inicial de la ventana

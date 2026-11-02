@@ -3,13 +3,11 @@
 use gtk::{glib, prelude::*, subclass::prelude::*};
 use std::cell::{Cell, RefCell};
 
-const TILE: i32 = 40;
-pub(crate) const GAP: i32 = 4;
-const MIN_COLUMNS: i32 = 6;
+pub(crate) const GAP: i32 = layer_ui::PaletteGridLayout::GAP;
 
 pub(crate) fn cells(width: i32) -> (i32, i32) {
-    let columns = ((width + GAP) / (TILE + GAP)).max(MIN_COLUMNS);
-    (columns, ((width + GAP) / columns).clamp(GAP + 1, TILE + GAP))
+    let layout = layer_ui::PaletteGridLayout::new(width);
+    (layout.columns, layout.pitch)
 }
 
 struct Slide {
@@ -28,17 +26,8 @@ impl Slide {
 }
 
 fn cell_bounds(width: i32, index: usize) -> gtk::graphene::Rect {
-    let (columns, pitch) = cells(width);
-    let cell = (width + GAP) as f32 / columns as f32;
-    let index = index as i32;
-    let x = ((index % columns) as f32 * cell).round();
-    let next = (((index % columns) + 1) as f32 * cell).round();
-    gtk::graphene::Rect::new(
-        x,
-        (index / columns * pitch) as f32,
-        next - x - GAP as f32,
-        (pitch - GAP) as f32,
-    )
+    let b = layer_ui::PaletteGridLayout::new(width).cell(index);
+    gtk::graphene::Rect::new(b.x, b.y, b.width, b.height)
 }
 mod imp {
     use super::*;
@@ -70,7 +59,7 @@ mod imp {
         }
         fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
             let minimum = (layer_ui::PANEL_MIN_WIDTH - 2. * layer_ui::PANEL_CONTENT_INSET) as i32;
-            let (columns, pitch) = cells(for_size.max(minimum));
+            let (columns, pitch) = cells(if for_size < 0 { minimum } else { for_size });
             let size = if orientation == gtk::Orientation::Horizontal {
                 minimum
             } else {
@@ -82,7 +71,8 @@ mod imp {
                 rows * pitch - GAP
             };
             (
-                if orientation == gtk::Orientation::Vertical && self.history_rows.get() > 0 {
+                if orientation == gtk::Orientation::Horizontal { 0 }
+                else if self.history_rows.get() > 0 {
                     pitch - GAP
                 } else {
                     size

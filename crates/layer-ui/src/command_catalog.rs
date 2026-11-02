@@ -989,6 +989,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn disabled_reason_unchecked(&self, command: CommandId) -> Arc<str> {
         let l = self.localization();
         use CommandId as C;
+        if command == C::CustomizeWorkspaceUi && self.phone_layout().is_some() {
+            return l.text(MessageId::WORKSPACE_PHONE_TITLE_BAR_UNAVAILABLE);
+        }
         if !command.available_on(self.state.platform) {
             return l.text(MessageId::COMMANDS_NOT_AVAILABLE_ON_THIS_PLATFORM);
         }

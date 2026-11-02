@@ -140,6 +140,9 @@ Changing workspaces preserves this bounded cache without copying outgoing
 unkeyed heights into the destination. Neither keys nor measurements are saved
 in artwork or authored workspace JSON.
 
+GTK retains `UiSession::layout_presentation_input` to allocate from already
+published measurements; `layout_resolve_input` also publishes measurement requests.
+
 Hosts send `MeasurePanels { measurements: PanelMeasurementBatch }`. Each batch
 contains the current `PanelMetricContext` and reports that retain the request
 and context from the measurement itself. Capture these before storing an
@@ -262,6 +265,24 @@ draggable/reorderable. A tabbed tool ribbon has no duplicate internal grip. Ther
 are no panel move menus.
 
 ## Window chrome and Zen mode
+
+GTK's phone presentation uses the same shared threshold in either orientation:
+the window's short side is below 480 logical pixels. It keeps the canvas at the
+full window size and publishes the space between the bars for Fit Canvas.
+Crossing the threshold or rotating closes drawers and menus and cancels chrome
+drags without saving; an active painting stroke continues.
+
+In the phone presentation, Zen Mode, Tab and four-finger tap hide the bars.
+Capy stays available and restores them; Escape also restores them after closing
+an active interaction. This visibility is transient and does not change the
+workspace's saved Zen setting. Swap Sides persists for the installation.
+`UiState.phone` carries window state through `LayoutResolveInput`; it never
+changes the saved arrangement or its equality. Tool bubbles stay hidden in the
+phone presentation. Shared `PhoneMenuNavigation` owns the in-place menu pages
+and the Window → Workspaces route; `PhoneMenuGeometry` publishes its two columns
+and separator. GTK presents the existing native menu rows.
+Slider track and handle proportions scale together, and shared preview placement
+keeps the readout beside the handle inside the window.
 
 GTK uses an `AdwHeaderBar` with native window controls and drag region; the dock
 widget allocates the full-window GPU picture, transparent header, HUD and panels.

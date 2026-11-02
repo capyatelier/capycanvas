@@ -1,5 +1,29 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug)]
+pub struct PaletteGridLayout {
+    pub columns: i32,
+    pub pitch: i32,
+    width: i32,
+}
+impl PaletteGridLayout {
+    pub const GAP: i32 = 4;
+    pub fn new(width: i32) -> Self {
+        let width = width.max(1);
+        let columns = ((width + Self::GAP) / (40 + Self::GAP)).max(6)
+            .min(((width + Self::GAP) / (Self::GAP + 1)).max(1));
+        Self { columns, pitch: ((width + Self::GAP) / columns).clamp(Self::GAP + 1, 40 + Self::GAP), width }
+    }
+    pub fn cell(self, index: usize) -> crate::Bounds {
+        let cell = (self.width + Self::GAP) as f32 / self.columns as f32;
+        let index = index as i32;
+        let x = ((index % self.columns) as f32 * cell).round();
+        let next = (((index % self.columns) + 1) as f32 * cell).round();
+        crate::Bounds { x, y: (index / self.columns * self.pitch) as f32,
+            width: next - x - Self::GAP as f32, height: (self.pitch - Self::GAP) as f32 }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum PaletteCommand {
@@ -325,6 +349,26 @@ impl PalettePanelView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn palette_grid_cells_fit_constrained_columns_without_horizontal_overflow() {
+        for width in 1..=900 {
+            let grid = PaletteGridLayout::new(width);
+            for index in 0..grid.columns as usize * 5 {
+                let cell = grid.cell(index);
+                assert!(cell.width > 0. && cell.height > 0., "{width}: {cell:?}");
+                assert!(cell.x >= 0. && cell.x + cell.width <= width as f32, "{width}: {cell:?}");
+                if index % grid.columns as usize > 0 {
+                    let previous = grid.cell(index - 1);
+                    assert_eq!(cell.x - previous.x - previous.width, PaletteGridLayout::GAP as f32);
+                }
+            }
+        }
+        for (width, columns, pitch) in [(225, 6, 38), (226, 6, 38), (264, 6, 44), (396, 9, 44)] {
+            let grid = PaletteGridLayout::new(width);
+            assert_eq!((grid.columns, grid.pitch), (columns, pitch));
+        }
+    }
     #[test]
     fn swatch_search_matches_width_and_canonical_names_without_rewriting_them() {
         let english = crate::Localizer::shared(crate::UiLanguage::English);

@@ -184,7 +184,7 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
             let measured=if let crate::DrawerAnchor::Column{group,..}=drawer.anchor {
                 customization.column_drawer_bounds.iter().find(|m|m.group==group).map(|m|m.bounds)
             } else {None};
-            if let Some(bounds)=measured.or_else(||customization.drawer_placement(drawer,&self.state.workspace.layout,viewport,&vec![viewport[1];drawer.columns.len()]).map(|p|p.bounds)) {
+            if let Some(bounds)=measured.or_else(||customization.drawer_placement(drawer,&self.layout_resolve_input(),viewport,&vec![viewport[1];drawer.columns.len()]).map(|p|p.bounds)) {
                 obstacles.push(bounds);
             }
         }

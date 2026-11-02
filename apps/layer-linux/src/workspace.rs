@@ -30,6 +30,10 @@ mod drawers;
 mod edge_grab;
 #[path = "workspace_header.rs"]
 mod header;
+#[path = "workspace_phone.rs"]
+mod phone;
+#[path = "workspace_phone_menu.rs"]
+mod phone_menu;
 #[path = "workspace_manager.rs"]
 mod manager;
 #[path = "workspace_tab_drag.rs"]
@@ -162,7 +166,7 @@ mod allocation {
 
     #[derive(Default)]
     pub struct DockSurface {
-        pub(super) layout: RefCell<DockLayout>,
+        pub(super) layout: RefCell<LayoutResolveInput<'static>>,
         pub(super) children: RefCell<Vec<(Slot, gtk::Widget)>>,
         pub(super) owner: RefCell<std::rc::Weak<Workspace>>,
         pub(super) transition: Cell<Option<(u32, Bounds, f32)>>,
@@ -187,9 +191,9 @@ mod allocation {
             // Dock allocation can shrink below an individual panel's natural
             // size. Content panels scroll; tool ribbons clip their overflow.
             if orientation == gtk::Orientation::Horizontal {
-                (640, 1200, -1, -1)
+                (320, 1200, -1, -1)
             } else {
-                (480, 900, -1, -1)
+                (320, 900, -1, -1)
             }
         }
         fn size_allocate(&self, width: i32, height: i32, _: i32) {
@@ -199,13 +203,11 @@ mod allocation {
                 owner.command_bar.allocate(width, height);
                 owner.bubbles.measure_cards(&owner);
             }
-            let mut resolved = self.layout.borrow().workspace(
-                width as f32,
-                height as f32,
-                HEADER_HEIGHT,
-                STATUS_HEIGHT,
-            ).with_panel_bridges();
+            let mut resolved = self.layout.borrow().resolve([width as f32, height as f32]).with_panel_bridges();
             if let Some(owner)=self.owner.borrow().upgrade() {
+                if let Some(phone) = &resolved.phone {
+                    owner.phone.allocate(&owner, phone, self.layout.borrow().phone_state());
+                }
                 owner.present_tab_presentations(&resolved);
             }
             if let Some((id, from, progress)) = self.transition.get()
@@ -242,6 +244,9 @@ mod allocation {
                 }
                 let bounds = match slot {
                     // Native surface, input and cursor share full-window coordinates.
+                    Slot::Phone => resolved.phone.as_ref().map(|_| Bounds { x: 0., y: 0., width: width as f32, height: height as f32 }),
+                    Slot::Bubbles if resolved.phone.is_some() => None,
+                    Slot::Header | Slot::Status if resolved.phone.is_some() => None,
                     Slot::Canvas | Slot::Bubbles | Slot::CommandSearch => Some(Bounds {
                         x: 0.0,
                         y: 0.0,
@@ -330,7 +335,7 @@ mod allocation {
                             .and_then(|p| p.connection().map(|c| c.bounds)),
                         Slot::CanvasBar => owner.canvas_bar.bounds(),
                         Slot::PressureCalibration => owner.pressure_calibration.bounds(),
-                        Slot::ZenCapy => Some(owner.header.zen_button_bounds()),
+                        Slot::ZenCapy => Some(resolved.phone.as_ref().map_or_else(|| owner.header.zen_button_bounds(), |p| p.capy_hit)),
                         _ => continue,
                     };
                     child.set_child_visible(bounds.is_some());
@@ -606,6 +611,7 @@ impl PanelColumns {
 
 #[derive(Clone, Copy, PartialEq)]
 enum Slot {
+    Phone,
     Canvas,
     Header,
     ZenCapy,
@@ -979,6 +985,7 @@ pub struct Workspace {
     fill_gesture:crate::fill_gesture::Overlay,
     header: header::Header,
     zen_capy: gtk::Button,
+    phone: phone::Phone,
     system_status: Rc<crate::system_status::SystemStatus>,
     popovers: RefCell<Vec<glib::WeakRef<gtk::Popover>>>,
     chrome_contacts: RefCell<std::collections::HashMap<ChromeContact, gdk::Event>>,
@@ -1178,7 +1185,13 @@ impl Workspace {
             .property("title", localization.language().app_name())
             .property("default-width", 1200)
             .property("default-height", 900)
+            .property("width-request", 320)
+            .property("height-request", 320)
             .build();
+        if let Some(size) = unsafe { app.data::<(i32, i32)>("capy-window-size") } {
+            let (width, height) = unsafe { *size.as_ref() };
+            window.set_default_size(width, height);
+        }
         window.set_icon_name(Some("art.capycanvas.CapyCanvas"));
         static NEXT_WINDOW: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         window.add_css_class("capy-workspace");
@@ -1218,6 +1231,7 @@ impl Workspace {
         surface.set_overflow(gtk::Overflow::Hidden);
         surface.set_opacity(0.0);
         let header = header::Header::new();
+        let phone = phone::Phone::new();
         let system_status = crate::system_status::SystemStatus::new();
         let view_info = crate::zoom_readout::ZoomReadout::new(localization.clone());
         let status_bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
@@ -1238,6 +1252,7 @@ impl Workspace {
         status_bar.append(&view_info.root);
         surface.add(Slot::Canvas, &area);
         surface.add(Slot::Header, &header.root);
+        surface.add(Slot::Phone, &phone.root);
         surface.add(Slot::Status, &status_bar);
         let canvas_bar = crate::canvas_bar::CanvasBar::new();
         surface.add(Slot::CanvasBar, &canvas_bar.root);
@@ -1294,7 +1309,10 @@ impl Workspace {
         zen_capy.add_css_class("zen-capy");
         let capy_icon = crate::icons::image("layer-zen-looking-up-symbolic");
         zen_capy.set_child(Some(&capy_icon));
-        surface.add(Slot::ZenCapy, &zen_capy);
+        let capy_hit = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        capy_hit.append(&zen_capy);
+        zen_capy.bind_property("visible", &capy_hit, "visible").sync_create().build();
+        surface.add(Slot::ZenCapy, &capy_hit);
         // Notices must not resize the full-window canvas, change its viewport,
         // or recreate the GPU swapchain while opening/saving a workspace.
         let notices = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -1343,6 +1361,7 @@ impl Workspace {
             fill_gesture,
             header,
             zen_capy,
+            phone,
             system_status,
             popovers: RefCell::new(Vec::new()),
             chrome_contacts: RefCell::default(),
@@ -1472,10 +1491,12 @@ impl Workspace {
         this.zen_capy.connect_clicked(glib::clone!(
             #[weak]
             this,
-            move |_| this.dispatch(UiAction::Invoke {
-                command: CommandId::ZenMode
-            })
+            move |_| {
+                let action = this.gpu.borrow().as_ref().map(|g| g.session.capy_action());
+                if let Some(action) = action { this.dispatch(action); }
+            }
         ));
+        this.phone.bind(&this);
         this.install_context(&this.zen_capy, ContextTarget::ZenMode);
         this.install_chrome();
         this.tooltips.install(&this.window);
@@ -1910,9 +1931,13 @@ impl Workspace {
                     .map(|g| g.session.application_menu(id));
                 if let Some(model) = model {
                     w.populate_workspace_menu(popup, model);
+                    if id == ApplicationMenu::Primary { w.phone.main_menu(&w, popup); }
                 }
             }
         ));
+        if id == ApplicationMenu::Primary {
+            popover.connect_closed(glib::clone!(#[weak(rename_to = w)] self, move |_| w.phone.restore_loans()));
+        }
         self.watch_popover(popover.upcast_ref());
         menu.set_popover(Some(&popover));
         self.on_localization(glib::clone!(#[weak] menu, #[upgrade_or] false, move |localization| {
@@ -2043,11 +2068,12 @@ impl Workspace {
         let facts = ChromeFacts {
             contact_tab,
             expanded_panel: self.customization.placement(),
-            content_drawer: self.drawer.placement().map(|p| p.bounds),
+            content_drawer: self.drawer.placement().map(|p| p.bounds).or_else(|| self.phone.placement.borrow().as_ref().map(|p| p.bounds)),
             drawer_connection: self
                 .drawer
                 .placement()
-                .and_then(|p| p.connection().map(|c| c.bounds)),
+                .and_then(|p| p.connection().map(|c| c.bounds))
+                .or_else(|| self.phone.placement.borrow().as_ref().and_then(|p| p.connection().map(|c| c.bounds))),
             held: !self.chrome_contacts.borrow().is_empty(),
             dragging: self.dragging.get(),
             popup_open: self.command_bar.owns_input() || self
@@ -2164,7 +2190,8 @@ impl Workspace {
 
     fn present_interaction(&self, reply: InputReply) {
         self.set_chrome_hidden(reply.chrome_hidden);
-        self.zen_capy.set_visible(reply.keep_zen_button || (!reply.chrome_hidden && self.header.capy_visible()));
+        let phone = self.gpu.borrow().as_ref().is_some_and(|g| g.session.phone_layout().is_some());
+        self.zen_capy.set_visible(reply.keep_zen_button || phone || (!reply.chrome_hidden && self.header.capy_visible()));
         let cursor = Some(match reply.navigation_cursor {
             Some(layer_ui::NavigationMode::Pan) => "grab",
             Some(layer_ui::NavigationMode::Zoom) => "zoom-in",
@@ -2977,8 +3004,20 @@ impl Workspace {
             self.histogram.refresh(self, &state);self.waveform.refresh(self, &state);self.effects.refresh_histograms(self,&state);
         }
         self.documents.refresh(self);
-        if regions != regions::CAMERA && !self.workspaces.loading() {
+        let phone = regions != regions::CAMERA
+            && state.phone_presentation([self.surface.width() as f32, self.surface.height() as f32]).is_some();
+        let structural = regions & !(regions::BRUSH | regions::CAMERA) != 0;
+        if regions != regions::CAMERA && !self.workspaces.loading()
+            && (structural || !phone) {
             self.header.refresh(self, &state);
+        }
+        if regions != regions::CAMERA {
+            if structural && phone {
+                let caption = self.gpu.borrow().as_ref().unwrap().session.capy_caption([self.surface.width() as f32, self.surface.height() as f32]);
+                self.zen_capy.set_tooltip_text(Some(&caption));
+                self.zen_capy.update_property(&[gtk::accessible::Property::Label(&caption)]);
+            }
+            self.phone.refresh(self, &state, regions);
         }
         self.view_info
             .root
@@ -3082,7 +3121,7 @@ impl Workspace {
                 | regions::HISTOGRAM)
             != 0
         {
-            self.customization.refresh(self);
+            if structural || !phone || state.customization.is_open() { self.customization.refresh(self); }
             self.columns.refresh_drawers(self, &state, regions);
             self.drawer
                 .refresh(self, &state, regions, state.customization.drawer.as_ref());
@@ -3275,12 +3314,9 @@ impl Workspace {
     }
 
     fn resolved(&self) -> ResolvedLayout {
-        self.surface.imp().layout.borrow().workspace(
-            self.surface.width().max(1) as f32,
-            self.surface.height().max(1) as f32,
-            HEADER_HEIGHT,
-            STATUS_HEIGHT,
-        ).with_panel_bridges()
+        self.surface.imp().layout.borrow().resolve([
+            self.surface.width().max(1) as f32, self.surface.height().max(1) as f32,
+        ]).with_panel_bridges()
     }
     fn queue_panel_measurements(self: &Rc<Self>) {
         if self.measuring_panels.replace(true) {
@@ -3388,7 +3424,12 @@ impl Workspace {
         layer_ui::PanelMeasurementBatch {context,reports}
     }
     fn present_toolbars(self: &Rc<Self>) {
-        if !self.customization.presentation_stale(&self.resolved()) {
+        let resolved = self.resolved();
+        if resolved.phone.is_some() != self.zen_capy.has_css_class("phone-capy") {
+            self.refresh(regions::LAYOUT | regions::BRUSH);
+            return;
+        }
+        if !self.customization.presentation_stale(&resolved) {
             return;
         }
         let Some(layout) = self.gpu.borrow().as_ref().map(|g| g.session.state().workspace.layout.clone()) else {
@@ -3400,7 +3441,11 @@ impl Workspace {
         self.refreshing.set(false);
     }
     fn reconcile_layout(self: &Rc<Self>, layout: &DockLayout) {
+        let input = self.gpu.borrow().as_ref().map_or_else(|| layout.clone().into(), |g| g.session.layout_presentation_input().into_owned());
         let size = layout.header.size;
+        if input.phone_presentation([self.surface.width() as f32, self.surface.height() as f32]).is_none() {
+            phone::Phone::button_in_hit(&self.zen_capy, Bounds::default(), Bounds::default());
+        }
         self.zen_capy.set_size_request(size.tile() as i32, size.tile() as i32);
         for variant in HeaderSize::ALL {
             let class = format!("header-{}", variant.id());
@@ -3411,7 +3456,7 @@ impl Workspace {
             image.set_pixel_size(size.capy_icon());
         }
 
-        *self.surface.imp().layout.borrow_mut() = layout.clone();
+        *self.surface.imp().layout.borrow_mut() = input;
         let resolved = self.resolved();
         if !self.customization.reconcile_toolbars(self, layout, &resolved) { return; }
         let stale: Vec<GroupView> = {

@@ -358,7 +358,7 @@ fn complete_settings()->Settings {
     let options=json!({
         "theme":"dark","language":{"Explicit":"ja"},"transparency":"high",
         "dark_base":"#444444","light_base":"#cccccc","accent":"#b85050",
-        "zen_icon":"sleeping","zen_show_capy":false,"selection_painting":"black_white",
+        "zen_icon":"sleeping","zen_show_capy":false,"phone_swap_sides":true,"selection_painting":"black_white",
         "pressure_curve":[[0.,0.],[1.,1.]],"tilt_calibrations":{"coverage":layer_core::TiltCalibration::default()},
         "cursor":"cross","hide_cursor_while_drawing":false,"pan_speed":1.5,"zoom_speed":0.75,
         "zoom_tool":{"zoom_out":true,"drag":"area","direction":"vertical","center_clicked_point":true},

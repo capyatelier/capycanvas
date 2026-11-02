@@ -627,6 +627,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 revision: 0,
                 fullscreen: false,
                 workspace: WorkspaceState::for_platform(platform),
+                phone: PhoneState { platform: Some(platform), ..Default::default() },
                 workspace_ready: false,
                 brush: BrushState {
                     preset: DefaultBrushPreset::Pencil as u32,
@@ -897,8 +898,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         // Keep the editor entry reachable above the long panel list, also
         // in the recovery menu on a short tablet-sized window.
-        menu.sections
-            .insert(0, vec![command(CommandId::CustomizeWorkspaceUi)]);
+        if self.phone_layout().is_none() {
+            menu.sections.insert(0, vec![command(CommandId::CustomizeWorkspaceUi)]);
+        }
         menu.with_shortcuts_localized(&self.state.settings, self.state.platform, self.localization())
     }
     fn workspace_panel_items(&self, kind: PanelKind) -> Vec<ContextMenuItem> {
@@ -917,8 +919,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         let labels = &copy.workspace_labels.as_ref().unwrap().labels;
         let restored = &copy.workspace_labels.as_ref().unwrap().restored;
         let mut items: Vec<_> = labels.iter().filter(|(panel, _)| panel.kind() == kind).map(|(panel, label)| {
-            let selected = layout.panel_group(*panel).is_some();
-            let mut item = ContextMenuItem::edit(label, CustomizationAction::SetPanelVisible { panel: *panel, visible: !selected });
+            let selected = self.phone_layout().is_none() && layout.panel_group(*panel).is_some();
+            let mut item = if self.phone_layout().is_some() {
+                ContextMenuItem::command(label.clone(), UiAction::Phone { action: PhoneAction::Panel { panel: *panel } })
+            } else { ContextMenuItem::edit(label, CustomizationAction::SetPanelVisible { panel: *panel, visible: !selected }) };
             item.selected = Some(selected);
             item
         }).collect();
@@ -1175,7 +1179,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.refresh_chrome();
         Ok(InputReply {
             chrome_hidden: self.interaction.hidden,
-            keep_zen_button: self.interaction.hidden && self.state.settings.zen_show_capy,
+            keep_zen_button: self.interaction.hidden && (self.phone_layout().is_some() || self.state.settings.zen_show_capy),
             ..reply
         })
     }
@@ -1279,6 +1283,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let was_hidden = self.interaction.hidden;
                 self.interaction.facts = facts;
                 self.interaction.viewport = Some(viewport);
+                if let ChromeEvent::Contact { position, canvas } = event
+                    && self.state.phone.menu
+                    && !facts.content_drawer.is_some_and(|b| b.contains(position[0], position[1]))
+                    && !facts.drawer_connection.is_some_and(|b| b.contains(position[0], position[1]))
+                    && !self.phone_layout().is_some_and(|p| p.capy.contains(position[0], position[1])) {
+                    self.state.phone.menu = false;
+                    reply.change = self.changed(regions::CUSTOMIZATION, false);
+                    reply.handled |= canvas;
+                }
                 if matches!(event, ChromeEvent::Contact { .. }) {
                     released_chrome_pin =
                         std::mem::take(&mut self.interaction.keep_chrome_until_contact);
@@ -1388,7 +1401,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .customization
                         .drawer_placement(
                             drawer,
-                            &self.state.workspace.layout,
+                            &self.layout_resolve_input(),
                             viewport,
                             &vec![0.0; drawer.columns.len()],
                         )
@@ -1741,6 +1754,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             UiInput::Blur => {
+                self.state.phone.capy_drag = false;
                 let previous_modifiers = self.interaction.modifiers;
                 self.pen_input.clear();
                 if self.finish_transform_nudge(true)? {
@@ -1817,6 +1831,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn refresh_chrome(&mut self) {
+        if self.phone_layout().is_some() {
+            self.zen_peek = Default::default();
+            self.interaction.hidden = self.state.phone.hidden;
+            return;
+        }
         if !self.state.workspace.zen_mode {
             self.interaction.keep_chrome_until_contact = false;
             self.zen_peek = Default::default();
@@ -2499,6 +2518,12 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// drawers, then what the canvas bar edits or an enabled Escape binding,
     /// then open columns.
     fn escape_one(&mut self, modifiers: Modifiers) -> Result<Option<UiChange>, String> {
+        if self.phone_layout().is_some() && (self.state.phone.menu || self.state.phone.hidden) {
+            self.state.phone.menu = false;
+            self.state.phone.hidden = false;
+            self.refresh_chrome();
+            return Ok(Some(self.changed(regions::LAYOUT | regions::CUSTOMIZATION | regions::COMMANDS, false)));
+        }
         if self.state.customization.drawer.as_ref().is_some_and(|d| d.layer_properties == Some(true)) {
             return self.dispatch(UiAction::Customize { action: CustomizationAction::ToggleLayerDrawerProperties }).map(Some);
         }
@@ -2528,7 +2553,38 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         Ok(change)
     }
+    fn cancel_phone_slider(&mut self) -> Result<(), String> {
+        if let Some((control, value, context)) = self.state.phone.slider.take()
+            && context == self.state.toolbar_context() {
+            self.dispatch(control.slider().ok_or("Not a slider")?.action(value))?;
+        }
+        Ok(())
+    }
+    pub(crate) fn toggle_phone_drawer(&mut self, control: ToolbarControl, anchor: DrawerAnchor) -> Result<UiChange, String> {
+        self.state.customization.drawer = if self.state.customization.drawer.as_ref().is_some_and(|d| d.anchor == anchor) {
+            None
+        } else { Some(ContentDrawer::for_control(control, anchor)?) };
+        Ok(self.changed(regions::CUSTOMIZATION, false))
+    }
+    pub fn capy_action(&self) -> UiAction {
+        if self.phone_layout().is_some() { UiAction::Phone { action: PhoneAction::Capy } }
+        else { UiAction::Invoke { command: CommandId::ZenMode } }
+    }
+    pub fn capy_caption(&self, viewport: [f32; 2]) -> std::sync::Arc<str> {
+        self.localization().text(if self.state.phone_presentation(viewport).is_some() && !self.state.phone.hidden {
+            MessageId::MENU_MAIN_MENU
+        } else { MessageId::WORKSPACE_HEADER_CAPY })
+    }
+    pub fn phone_layout(&self) -> Option<crate::PhoneLayout> {
+        self.state.phone_presentation(self.workspace_viewport())
+    }
+    pub fn main_menu_extras(&self) -> [bool; 2] {
+        let phone = self.phone_layout().is_some();
+        [phone || !self.state.workspace.layout.header.entries().any(|e| matches!(e.item, HeaderItem::DocumentTitle)),
+            phone || !self.state.workspace.layout.header.entries().any(|e| matches!(e.item, HeaderItem::Workspaces))]
+    }
     fn command_flags(&self, id: CommandId) -> (bool, bool) {
+        if id == CommandId::CustomizeWorkspaceUi && self.phone_layout().is_some() { return (false, false); }
         if self.workspace_read_only
             && !matches!(id, CommandId::ApplyTransform | CommandId::CancelTransform)
         {
@@ -2892,7 +2948,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     )
             )
             || self.crop_selected(id)
-            || (id == CommandId::ZenMode && self.state.workspace.zen_mode)
+            || (id == CommandId::ZenMode && self.phone_layout().map_or(self.state.workspace.zen_mode, |_| self.state.phone.hidden))
             || (id == CommandId::ShowCanvasActionBar && self.state.workspace.layout.canvas_bar)
             || (id == CommandId::Fullscreen && self.state.fullscreen)
             || (id == CommandId::PreviewSdr && self.state.preview_sdr)
@@ -2927,6 +2983,20 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn dispatch_inner(&mut self, action: UiAction) -> Result<UiChange, String> {
+        if self.phone_layout().is_some() {
+            if matches!(action, UiAction::Invoke { command: CommandId::CustomizeWorkspaceUi }
+                | UiAction::Customize { action: CustomizationAction::Header { action: HeaderAction::Edit { editing: true } } }) {
+                return Err(self.localization().text(MessageId::WORKSPACE_PHONE_TITLE_BAR_UNAVAILABLE).to_string());
+            }
+            if matches!(action, UiAction::Invoke { command: CommandId::ZenMode }) {
+                self.state.phone.hidden = !self.state.phone.hidden;
+                self.state.phone.menu = false;
+                self.state.customization.drawer = None;
+                self.refresh_chrome();
+                self.refresh_commands();
+                return Ok(self.changed(regions::LAYOUT | regions::CUSTOMIZATION | regions::COMMANDS, false));
+            }
+        }
         let Some(swap) = color_history_session::paint_edit(&action).filter(|_| !self.defers(&action)) else {
             return self.dispatch_action(action);
         };
@@ -3140,6 +3210,74 @@ impl<R: CanvasRenderer> UiSession<R> {
         );
         let mut save_settings = matches!(&action, UiAction::SetTheme { .. } | UiAction::ZoomTool { .. });
         let (mut changed, wake) = match action {
+            UiAction::Phone { action } => {
+                match action {
+                    PhoneAction::Slider { control, phase } => {
+                        let binding = control.slider().ok_or("Not a slider")?;
+                        match phase {
+                            ContactPhase::Down => {
+                                self.state.phone.slider = binding.field(&self.state)
+                                    .map(|field| (control, field.value, self.state.toolbar_context()));
+                            }
+                            ContactPhase::Cancel => self.cancel_phone_slider()?,
+                            ContactPhase::Up => self.state.phone.slider = None,
+                            ContactPhase::Move => (),
+                        }
+                        return Ok(self.changed(BRUSH, false));
+                    }
+                    PhoneAction::Panel { panel } => {
+                        self.state.workspace.layout.panel(panel)?;
+                        self.state.phone.menu = false;
+                        self.state.customization.drawer = Some(ContentDrawer::for_control(ToolbarControl::Panel { panel }, DrawerAnchor::Phone { tile: None })?);
+                    }
+                    PhoneAction::Tool { tile } => {
+                        let control = self.state.workspace.layout.anchor_control(DrawerAnchor::Phone { tile: Some(tile) }).ok_or("The tool no longer exists")?;
+                        return self.activate_tool(control, DrawerAnchor::Phone { tile: Some(tile) });
+                    }
+                    PhoneAction::CapyHold => {
+                        self.state.phone.capy_drag = self.phone_layout().is_some();
+                        return Ok(UiChange::default());
+                    }
+                    PhoneAction::CapyDrop { position } => {
+                        if std::mem::take(&mut self.state.phone.capy_drag)
+                            && let Some(phone) = self.phone_layout() {
+                            let viewport = self.workspace_viewport();
+                            let inside = position.iter().zip(viewport).all(|(v, max)| v.is_finite() && *v >= 0. && *v <= max);
+                            let target = match phone.edge {
+                                Edge::Left => position[0] <= phone.bars[0].x + phone.tile,
+                                Edge::Right => position[0] >= phone.bars[0].x,
+                                _ => position[1] <= phone.bars[0].y + phone.tile,
+                            };
+                            if inside && target { return self.dispatch(UiAction::Phone { action: PhoneAction::SwapSides }); }
+                        }
+                        return Ok(UiChange::default());
+                    }
+                    PhoneAction::Capy => {
+                        let state = &mut self.state.phone;
+                        if state.hidden { state.hidden = false; } else { state.menu = !state.menu; }
+                        self.state.customization.drawer = None;
+                    }
+                    PhoneAction::SwapSides => {
+                        self.state.settings.phone_swap_sides = !self.state.settings.phone_swap_sides;
+                        self.state.phone.swapped = self.state.settings.phone_swap_sides;
+                        self.state.phone.menu = false;
+                        self.state.customization.drawer = None;
+                        save_settings = true;
+                    }
+                    PhoneAction::Metrics { native, native_counts, insets } => {
+                        if native.iter().chain(&insets).any(|v| !v.is_finite() || *v < 0.) || native_counts.iter().any(|n| *n > 4) {
+                            return Err("Invalid native control metrics".into());
+                        }
+                        let state = &mut self.state.phone;
+                        if (state.native, state.native_counts, state.insets) == (native, native_counts, insets) { return Ok(UiChange::default()); }
+                        state.native = native;
+                        state.native_counts = native_counts;
+                        state.insets = insets;
+                    }
+                }
+                self.refresh_chrome();
+                (LAYOUT | CUSTOMIZATION | COMMANDS, false)
+            }
             UiAction::ColorSlotMenu { slot, library } => {
                 self.color_slot_menu(slot)?;
                 if library {
@@ -3185,13 +3323,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if self.managed_workspace.is_none() {
                     return Err("Workspace management is not connected".into());
                 }
-                if let WorkspaceCommand::Switch { id } = &command
-                    && self.managed_workspace.as_ref().is_some_and(|w| &w.id == id)
-                {
+                let current = matches!(&command, WorkspaceCommand::Switch { id }
+                    if self.managed_workspace.as_ref().is_some_and(|w| &w.id == id));
+                if !current { self.request(HostRequestKind::Workspace { command })?; }
+                let closed = std::mem::take(&mut self.state.phone.menu);
+                if current && !closed {
                     return Ok(UiChange::default());
                 }
-                self.request(HostRequestKind::Workspace { command })?;
-                (HOST, false)
+                (if closed { LAYOUT | CUSTOMIZATION } else { 0 } | if current { 0 } else { HOST }, false)
             }
             UiAction::BeginTabDrag { tabs, clip } => {
                 self.begin_tab_drag(&tabs, clip);
@@ -3638,9 +3777,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             UiAction::Invoke { command } => {
                 if let Some(reason) = self.command_disabled_reason(command) { return Err(reason); }
                 let settings = self.state.settings.clone();
-                let invoked = self.invoke(command)?;
+                let menu = self.state.phone.menu;
+                let (changed, wake) = self.invoke(command)?;
+                self.state.phone.menu = false;
                 save_settings |= self.state.settings != settings;
-                invoked
+                (changed | if menu { LAYOUT | CUSTOMIZATION } else { 0 }, wake)
             }
             UiAction::SelectBrush { id } => {
                 self.select_brush(id)?;
@@ -4265,6 +4406,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                         if let DrawerAnchor::Header { id } = d.anchor {
                             layout.header.entry(id).is_err()
                                 || !layout.header_presentation.items.iter().any(|m| m.id == id)
+                        } else if let DrawerAnchor::Phone { tile } = d.anchor {
+                            self.phone_layout().is_none()
+                                || tile.is_some() && layout.anchor_control(d.anchor).is_none()
                         } else {
                             d.anchor.tile().is_none_or(|a| {
                                 layout.active_panel(a.panel) != Some(a.panel)
@@ -4653,6 +4797,23 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return Ok(self.changed(0, false));
         }
+        let before = self.phone_layout().map(|p| p.edge);
+        let after = self.state.phone_presentation(logical).map(|p| p.edge);
+        let transition = before != after;
+        if transition {
+            self.cancel_phone_slider()?;
+            self.state.phone.capy_drag = false;
+            self.state.toolbar_context_generation += 1;
+            self.workspace_history.cancel(&mut self.state.workspace);
+            self.workspace_drag = None;
+            self.workspace_tab_drag = None;
+            self.divider_drag = None;
+            self.floating_resize = None;
+            self.state.customization.cancel_header(&mut self.state.workspace.layout);
+            self.state.customization.drawer = None;
+            self.state.customization.column_drawers.clear();
+            self.state.phone.menu = false;
+        }
         let old_scale = self
             .logical_viewport
             .map_or(1.0, |v| self.state.camera.viewport[0] as f32 / v[0]);
@@ -4682,11 +4843,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         self.automatic_camera_revision=self.state.camera.revision.checked_sub(navigation).ok_or("Camera revision moved backwards")?;
         Ok(self.changed(
-            if resized || fit || bounds_changed {
-                regions::CAMERA
-            } else {
-                0
-            },
+            (if resized || fit || bounds_changed { regions::CAMERA } else { 0 })
+                | if transition { regions::LAYOUT | regions::CUSTOMIZATION | regions::COMMANDS | regions::BUBBLES | regions::BRUSH } else { 0 },
             resized || fit,
         ))
     }
@@ -6203,6 +6361,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     fn changed_with_canvas_bar_layout(&mut self, regions: u32, canvas_wake: bool, resolved_bar: Option<ResolvedLayout>) -> UiChange {
         let geometry_requested = regions & regions::CANVAS_BAR_GEOMETRY != 0;
+        self.state.phone.swapped = self.state.settings.phone_swap_sides;
         let mut regions = regions & !regions::CANVAS_BAR_GEOMETRY;
         regions |= if std::mem::take(&mut self.host_requests_changed) { regions::HOST } else { 0 };
         if regions & (regions::COMMANDS | regions::LAYOUT) != 0 && self.refresh_tool_set() {
@@ -7118,6 +7277,7 @@ mod tests {
     include!("session_source_tests.rs");
     include!("layer_relationship_tests.rs");
     include!("layer_drawer_tests.rs");
+    include!("phone_tests.rs");
     include!("selection_tests.rs");
     include!("navigation_tests.rs");
     include!("enclose_fill_tests.rs");
@@ -15069,7 +15229,7 @@ mod tests {
                     .customization
                     .drawer_placement(
                         s.state.customization.drawer.as_ref().unwrap(),
-                        &s.state.workspace.layout,
+                        &s.layout_resolve_input(),
                         viewport,
                         &[400., 450.],
                     )

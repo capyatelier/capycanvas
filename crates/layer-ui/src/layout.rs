@@ -1040,6 +1040,8 @@ mod floating_drop_tests;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DockLayout {
+    #[serde(default)]
+    pub phone: Option<Vec<ToolbarTile>>,
     pub header: crate::HeaderLayout,
     pub canvas_info: crate::CanvasInfoLayout,
     pub canvas_bar: bool,
@@ -1075,6 +1077,7 @@ pub struct DockLayout {
 
 #[derive(Clone, Debug)]
 pub struct LayoutResolveInput<'a> {
+    phone_state: crate::PhoneState,
     layout: std::borrow::Cow<'a,DockLayout>,
     zen_peek_edge: Option<Edge>,
     cache: Option<crate::panel_measurements::PanelMeasurementCache>,
@@ -1083,6 +1086,8 @@ pub struct LayoutResolveInput<'a> {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LayoutResolveWire<'a> {
+    #[serde(default)]
+    phone_state: crate::PhoneState,
     layout: std::borrow::Cow<'a,DockLayout>,
     header_presentation: std::borrow::Cow<'a,crate::HeaderPresentation>,
     column_scroll: std::borrow::Cow<'a,[(u32,f32)]>,
@@ -1096,7 +1101,19 @@ struct LayoutResolveWire<'a> {
 
 impl<'a> LayoutResolveInput<'a> {
     pub(crate) fn new(layout:&'a DockLayout,zen_peek_edge:Option<Edge>)->Self {
-        Self {layout:std::borrow::Cow::Borrowed(layout),zen_peek_edge,cache:None}
+        Self {layout:std::borrow::Cow::Borrowed(layout),zen_peek_edge,cache:None,phone_state:Default::default()}
+    }
+    pub fn with_phone(mut self, state: crate::PhoneState) -> Self {
+        self.phone_state = state;
+        self
+    }
+    pub fn phone_state(&self) -> crate::PhoneState { self.phone_state }
+    pub fn phone_presentation(&self, viewport: [f32; 2]) -> Option<crate::PhoneLayout> {
+        self.phone_state.resolve(&self.layout, viewport)
+    }
+    pub fn into_owned(self) -> LayoutResolveInput<'static> {
+        LayoutResolveInput { layout: std::borrow::Cow::Owned(self.layout.into_owned()),
+            phone_state: self.phone_state, zen_peek_edge: self.zen_peek_edge, cache: self.cache }
     }
     pub(crate) fn keeps(&self,group:u32)->bool {
         self.layout.shows_in_zen(group)
@@ -1123,6 +1140,12 @@ impl<'a> LayoutResolveInput<'a> {
         layout
     }
     pub fn resolve(&self,viewport:[f32;2])->ResolvedLayout {
+        if let Some(phone) = self.phone_presentation(viewport) {
+            return ResolvedLayout { viewport, work_area: phone.work_area,
+                notice: NoticePlacement::resolve(viewport, phone.work_area, Bounds::default()), phone: Some(phone),
+                vector_surfaces: Vec::new(), measurement_requests: Vec::new(), tab_bar_height: TAB_BAR_HEIGHT,
+                status: Bounds::default(), groups: Vec::new(), collapsed: Vec::new(), dividers: Vec::new() };
+        }
         let mut result=if self.cache.is_some(){self.measured_layout(viewport).resolved(viewport)}else{self.layout.resolved(viewport)};
         if let Some(cache)=&self.cache {
             result.measurement_requests=self.requests(cache,&result).into_iter().filter(|request|request.width>0.).collect();
@@ -1138,10 +1161,27 @@ impl<'a> LayoutResolveInput<'a> {
 
 }
 
+impl Default for LayoutResolveInput<'static> {
+    fn default() -> Self { Self::from(DockLayout::default()) }
+}
+impl From<DockLayout> for LayoutResolveInput<'static> {
+    fn from(layout: DockLayout) -> Self {
+        Self { layout: std::borrow::Cow::Owned(layout), phone_state: Default::default(), zen_peek_edge: None, cache: None }
+    }
+}
+impl std::ops::Deref for LayoutResolveInput<'_> {
+    type Target = DockLayout;
+    fn deref(&self) -> &DockLayout { &self.layout }
+}
+impl std::ops::DerefMut for LayoutResolveInput<'_> {
+    fn deref_mut(&mut self) -> &mut DockLayout { self.layout.to_mut() }
+}
+
 impl Serialize for LayoutResolveInput<'_> {
     fn serialize<S:serde::Serializer>(&self,serializer:S)->Result<S::Ok,S::Error> {
         let layout=self.layout.as_ref();
         LayoutResolveWire {
+            phone_state: self.phone_state,
             layout:std::borrow::Cow::Borrowed(layout),
             header_presentation:std::borrow::Cow::Borrowed(&layout.header_presentation),
             column_scroll:std::borrow::Cow::Borrowed(&layout.column_scroll),
@@ -1168,7 +1208,7 @@ impl<'de> Deserialize<'de> for LayoutResolveInput<'_> {
         layout.header_presentation=wire.header_presentation.into_owned();
         layout.column_scroll=wire.column_scroll.into_owned();layout.measurements=wire.measurements.into_owned();
         layout.titlebar_insets=wire.titlebar_insets;layout.bottom_inset=wire.bottom_inset;
-        Ok(Self {layout:std::borrow::Cow::Owned(layout),zen_peek_edge:wire.zen_peek_edge,cache:wire.cache})
+        Ok(Self {layout:std::borrow::Cow::Owned(layout),zen_peek_edge:wire.zen_peek_edge,cache:wire.cache,phone_state:wire.phone_state})
     }
 }
 
@@ -1442,6 +1482,8 @@ pub struct Divider {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResolvedLayout {
+    #[serde(default)]
+    pub phone: Option<crate::PhoneLayout>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vector_surfaces: Vec<crate::PanelVectorSurface>,
     #[serde(default,skip_serializing_if="Vec::is_empty")]
@@ -1814,6 +1856,7 @@ impl Default for DockLayout {
         };
         Self {
             panels: PanelConfig::defaults(),
+            phone: None,
             header: Default::default(),
             canvas_info: Default::default(),
             canvas_bar: true,
@@ -1870,6 +1913,17 @@ impl Default for DockLayout {
 }
 
 impl DockLayout {
+    pub fn resolve_phone_defaults(&mut self, preset: crate::WorkspacePreset) -> Result<(), String> {
+        if self.phone.is_some() {
+            return Ok(());
+        }
+        let controls = preset.phone_controls();
+        let end = self.next_tile_id.checked_add(controls.len() as u32).ok_or("Toolbar tile IDs exhausted")?;
+        self.phone = Some(controls.iter().zip(self.next_tile_id..end)
+            .map(|(&control, id)| ToolbarTile { id, control, slider_style: Default::default() }).collect());
+        self.next_tile_id = end;
+        Ok(())
+    }
     /// Visible panels occur exactly once; hidden panels retain their registry entry.
     /// globally unique IDs, finite dimensions, and valid active tabs/ratios.
     pub fn validate(&self) -> Result<(), String> {
@@ -1949,6 +2003,23 @@ impl DockLayout {
             }
         }
         let mut tile_ids = std::collections::BTreeSet::new();
+        if let Some(tiles) = &self.phone {
+            if tiles.iter().filter(|t| t.control != ToolbarControl::Divider).count() > 10
+                || tiles.len() > 19
+            {
+                return Err("Phone toolbar is full".into());
+            }
+            for tile in tiles {
+                if tile.id == 0
+                    || !tile_ids.insert(tile.id)
+                    || matches!(tile.control,
+                        ToolbarControl::BrushSizeSlider | ToolbarControl::BrushStrengthSlider
+                            | ToolbarControl::ToolOptions { .. })
+                {
+                    return Err("Invalid phone toolbar tile".into());
+                }
+            }
+        }
         let mut names = std::collections::BTreeSet::new();
         for (index, config) in self.panels.iter().enumerate() {
             config.validate()?;
@@ -3454,6 +3525,7 @@ impl DockLayout {
             height: finite_extent(height),
         };
         let mut result = ResolvedLayout {
+            phone: None,
             vector_surfaces: Vec::new(),
             measurement_requests: Vec::new(),
             viewport: [width, height],

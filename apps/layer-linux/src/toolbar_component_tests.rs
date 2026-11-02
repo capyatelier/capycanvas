@@ -37,6 +37,8 @@ fn anchor_widget(d: &Driver, anchor: DrawerAnchor) -> gtk::Widget {
     d.named(&match anchor {
         DrawerAnchor::Tile { tile, .. } => format!("tile-{tile}"),
         DrawerAnchor::Header { id } => format!("header-item-{id}"),
+        DrawerAnchor::Phone { tile: Some(tile) } => format!("phone-tool-{tile}"),
+        DrawerAnchor::Phone { tile: None } => "zen-capy".into(),
         DrawerAnchor::Column { .. } => unreachable!(),
     })
 }

@@ -419,6 +419,18 @@ the same controls.
 
 ## Tool drawers
 
+In GTK's phone presentation, tools open drawers from their phone toolbar edge.
+Columns share a row when their minimum widths fit and continue below otherwise;
+Brush's sets and tools stay alongside each other while Color and Palettes stack
+in portrait. Landscape drawers fill the available edge height. Portrait drawers
+fit their content up to the Capy bar, and overflowing bodies scroll. Layers keeps
+its 280-unit width in landscape; portrait drawers span the toolbar. Layers sizes
+its list from the measured header and footer rather than the tablet's six-row
+minimum. Panels chosen in Window open from Capy. Color's wheel fills its column
+with the docked panel's inset; short drawers scroll vertically. Palettes fits
+its column without horizontal scrolling. Drawer and opener bounds snap to the
+same pixel edges so their bridge meets both surfaces.
+
 Rust owns tile semantics, drawer open/closed state, contents, placement and
 animation geometry ([`drawers.rs`](../../crates/layer-ui/src/drawers.rs)). Hosts
 report tile bounds, content measurements and input.

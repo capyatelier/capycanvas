@@ -129,6 +129,30 @@ fn portable(mut entity: Entity) -> Value {
     serde_json::to_value(entity).unwrap()
 }
 
+fn with_phone_defaults(mut entity: Entity) -> Entity {
+    let original = entity.clone();
+    entity.resolve_phone().unwrap();
+    if let (ItemContent::Workspace { history: before, baseline: first }, ItemContent::Workspace { history: after, baseline: next }) = (&original.content, &entity.content) {
+        let preset = DEFAULT_WORKSPACES.iter().find(|(id, _)| *id == entity.id).map_or(layer_ui::WorkspacePreset::Painter, |(_, preset)| *preset);
+        let old = std::iter::once(first.as_ref()).chain(before.revisions.values().map(|revision| &revision.layout));
+        let new = std::iter::once(next.as_ref()).chain(after.revisions.values().map(|revision| &revision.layout));
+        for (old, new) in old.zip(new) {
+            if old.phone.is_some() { assert_eq!(old, new); }
+            else {
+                let phone = new.phone.as_ref().unwrap();
+                assert_eq!(phone.iter().map(|tile| tile.control).collect::<Vec<_>>(), preset.phone_controls());
+                let old = serde_json::to_value(old).unwrap();
+                let mut desktop = serde_json::to_value(new).unwrap();
+                assert_eq!(desktop["next_tile_id"].as_u64().unwrap(), old["next_tile_id"].as_u64().unwrap() + phone.len() as u64);
+                desktop["phone"] = Value::Null;
+                desktop["next_tile_id"] = old["next_tile_id"].clone();
+                assert_eq!(desktop, old);
+            }
+        }
+    }
+    entity
+}
+
 #[test]
 fn saved_documents_tolerate_missing_and_unknown_fields() {
     let entities:Vec<Entity>=serde_json::from_slice(&std::fs::read(fixture_root().join("1.0.15/entities.json")).unwrap()).unwrap();
@@ -228,7 +252,7 @@ fn check_inputs(directory: &Path, check: impl Fn(&str, Value)) {
         assert!(host.session.state().notice.is_none());
         for entity in &entities {
             let loaded = pollster::block_on(controller.manager.load(&entity.id)).unwrap();
-            assert_eq!(portable(loaded.entity),portable(entity.clone()));
+            assert_eq!(portable(loaded.entity),portable(with_phone_defaults(entity.clone())));
         }
         crate::controller_tests::close_native(controller,&mut host);
     }

@@ -27,7 +27,10 @@ plan.
 
 ## When it applies
 
-- On every host, the phone layout replaces the arrangement whenever the window's
+- GTK currently presents the phone layout. Each host enables its shared
+  `Platform::presents_phone_layout` capability when its bars and finger input
+  are wired; saved phone toolbars remain available on every host.
+- On enabled hosts, the phone layout replaces the arrangement whenever the window's
   short side is under 480 logical pixels (dp on Android, points on Apple). That
   covers phones, tablets in split screen, narrow iPad windows, and narrow desktop
   and browser windows.
@@ -47,11 +50,11 @@ plan.
 ## Layout
 
 - **Capy bar** on the holding hand's short edge (left in landscape, bottom in
-  portrait): Capy, which opens Capy's menu, then the brush Size and Strength
-  sliders sharing the rest of the edge. It is the same in every workspace and is
-  neither saved nor customized.
+  portrait): Capy in its own chip, which opens Capy's menu, then brush Size and
+  Strength together in one chip sharing the rest of the edge. It is the same in
+  every workspace and is neither saved nor customized.
 - **Phone toolbar** on the other short edge: the workspace's phone toolbar in
-  its saved order. Dividers split it into separate chips.
+  its saved order. All tools share one chip; dividers are lines inside it.
 - **Style:** title bar chips at the Medium size. Each bar is one tile thick, 8
   from its edge, with 2 between tiles and 8 between chips. Chips are glass filled
   with the canvas surround, opaque at panel transparency Off; Capy paints its own
@@ -60,16 +63,26 @@ plan.
   The Capy bar uses the same size. Bars never wrap; the toolbar holds up to ten
   tools.
 
-| Window | Example | Tiles | Sliders | Fit area, landscape |
-| --- | --- | --- | --- | --- |
-| 412 × 891 | Galaxy S26 Ultra | 47 | 166 | 765 × 412 |
-| 393 × 852 | iPhone 15 Pro, with its safe area | 43 | 152 | 632 × 393 |
-| 375 × 667 | iPhone SE | 42.4 | 150 | 550 × 375 |
-| 360 × 780 | Many Android phones | 40.5 | 144 | 667 × 360 |
-| 320 × 568 | iPhone SE with Display Zoom, narrow iPad window | 35.5 | 126 | 465 × 320 |
+Examples without safe insets or native controls; slider lengths include their
+end insets:
 
-These are for Sketch's eight tools. Ten tools at 320 get 27-unit tiles.
+| Window | Tiles | Slider length | Fit area, landscape |
+| --- | ---: | ---: | --- |
+| 412 × 891 | 47 | 169.5 | 765 × 412 |
+| 393 × 852 | 44.6 | 161.2 | 730.8 × 393 |
+| 375 × 667 | 42.4 | 153.3 | 550.3 × 375 |
+| 360 × 780 | 40.5 | 147.8 | 667 × 360 |
+| 320 × 568 | 35.5 | 129.3 | 465 × 320 |
 
+These use Sketch's eight tools. Native controls and additional tools participate
+in the same fit calculation. Size and Strength have a 2-unit internal gap; their
+chip sits 8 units from Capy. Their track and handle proportions scale from the
+existing desktop Brush controls.
+
+- **Native controls:** GTK keeps its normal circular close button and other
+  configured window buttons outside the chips. They align to the bar's
+  centerline, with symmetric space toward the edge and adjacent tools. Empty
+  space on either bar moves the window without a hold.
 - **Safe area:** each bar sits 8 from its edge, or past the platform's safe inset
   where that is larger, and its ends follow the same rule. Android reports a
   camera cutout only on its own edge and, from Android 12, the rounded corners.
@@ -86,26 +99,26 @@ These are for Sketch's eight tools. Ten tools at 320 get 27-unit tiles.
   corners, rounding only exposed corners. This works from either side bar, from the
   top or bottom bar, and from Capy to its menu, including mirrored layouts and glass
   chips.
-- **Sliders** show their value beside the handle and the brush outline on the
-  canvas while dragged.
+- **Sliders** show their value and brush preview beside the handle, inside the
+  window, including when the bars are swapped.
 
 ### Color and Layers drawers
 
 - **Color** keeps all of today's contents: the wheel (or chosen shape), the color
   slots and readout, Palettes (recent colors, saved swatches, the palette chooser
   and the color's name) and, for HDR drawings, the intensity ramp. In landscape the
-  wheel and Palettes sit side by side: 632 × 396 on the S26 Ultra with a 312 wheel.
-  In portrait they stack: 396 × 612 with a 300 wheel and three swatch rows. The
-  wheel takes what Palettes' minimum (242 wide, two swatch rows) leaves: 181 at
-  320 × 568 and 147 at 568 × 320.
+  wheel and Palettes sit side by side.
+  In portrait they stack. The wheel fills its column with the same inset as the
+  docked Color panel. Short drawers scroll vertically; Palettes fits its width
+  without horizontal scrolling.
 - **No Color Picker button is added**, so Color matches every other layout.
   Touch and hold picks a color. That hold works for fingers only today, so a pen
   picks through a pen-button binding or a Color Picker tile added to the phone
   toolbar.
 - **Layers** keeps its single column and contents: the header rows (blend mode,
   opacity, locks), the list, the action bar, and the Layer properties footer that
-  opens Properties in place. It keeps its own 280 width, leaving most of the canvas
-  visible.
+  opens Properties in place. It keeps its own 280 width in landscape, leaving
+  most of the canvas visible; in portrait it spans the phone toolbar.
 - **Heights.** In the phone layout, drawer heights replace Layers' 85% and six-row
   budget (`LayerDrawerSizing` in `effects.rs`): in landscape a drawer is as tall as
   the edge, and in portrait it fits its content up to the Capy bar. Visible rows
@@ -118,7 +131,8 @@ These are for Sketch's eight tools. Ten tools at 320 get 27-unit tiles.
 
 ## Phone toolbar
 
-- `DockLayout` gains `phone: Vec<ToolbarTile>`. As part of the arrangement, it is
+- `DockLayout` gains `phone: Option<Vec<ToolbarTile>>`. `None` means never saved;
+  `Some([])` keeps an empty toolbar. As part of the arrangement, it is
   saved and validated with it, undone with Undo Layout Change, restored by Restore
   Starting Layout and copied by New Workspace. Following
   [saved-state rules](../ui/settings.md#saving-and-loading), a workspace saved
@@ -145,7 +159,7 @@ These are for Sketch's eight tools. Ten tools at 320 get 27-unit tiles.
 | Workspace | Phone toolbar |
 | --- | --- |
 | Sketch | Filters (`Panel::Adjustments`), Select, Scale/rotate │ Brush, Sculpt, Eraser, Layers, Color: its title bar's tools |
-| Paint | Select, Fill, Gradient │ Brush, Blend, Eraser, Layers, Color |
+| Paint | Select, Gradient │ Brush, Blend, Eraser, Fill, Layers, Color |
 | Photo | Crop, Select, Healing │ Brush, Eraser, Filters, Layers, Color |
 
 Brush, Sculpt and Eraser stay separate tiles: painters switch between them
@@ -158,17 +172,32 @@ Capy's menu is the phone's Main Menu. From the top:
 1. **Drawing row:** the current drawing's name and unsaved dot, and the clock and
    battery the hidden status bar would show. With several drawings it adds a count
    and opens **Open drawings**, the tab strip's compact selector (current drawing,
-   unsaved dots, a close button each, New Drawing… last).
+   unsaved dots, a close button each, and its existing tab-order actions).
 2. **Workspace switcher:** the title bar's switcher, from the same shared model.
    It shows pinned workspaces in saved order, and the current one first if
    unpinned. When they overflow it scrolls with the current one in view, and the
-   fixed ⋮ opens Workspace options (the pin checklist, then Manage Workspaces…).
-3. **Search:** opens the existing command bar and closes the menu. The bar already
-   fits above the on-screen keyboard (Web's visual viewport, Android's IME padding).
+   fixed ⋮ opens Window → Workspaces in the menu's navigation pane, with the
+   pin checklist and Manage Workspaces… there.
+3. **Search and Preferences:** Search opens the existing command bar and closes
+   the menu. A separate bar-sized gear tile at Search's trailing end opens
+   Preferences, with its tooltip and accessible name. The command bar already
+   fits above the on-screen keyboard (Web's visual viewport, Android's IME
+   padding).
 4. **Switches:** Draw with Finger, Zen Mode and Swap Sides. Web adds Full Screen.
-5. **File, Edit, Layer, Select, Filter, View, Window**, then **Settings**. A panel
+5. **The app menus.** A panel
    row in Window opens that panel as a drawer from Capy, replacing the menu and
    joined to Capy by the bridge, since a phone has nowhere to dock it.
+
+In landscape, the drawing row, switcher, Search and switches form the first
+column; the app menus form the second. They sit side by side when
+both minimum widths fit, or stack with scrolling otherwise. The menu stays
+within the Capy bar's span, starting beside Capy at the bar's top. It uses the
+app's existing menu rows, check marks, separators, text and carets. Submenus slide
+in place with a back row and keep the same outer bounds. In a single column,
+the submenu occupies the menu. With columns beside each other, the navigation
+pane changes while the first column stays visible. Row text shares the desktop menu's inset; check
+marks use the leading space without shifting the text. Sections and columns use
+the native separator line and spacing.
 
 Undo and Redo (finger taps and Edit), Save and Open (File) and toolbar editing
 (on the toolbar) are not repeated there.

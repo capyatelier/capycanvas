@@ -4,12 +4,13 @@ use super::*;
 impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub async fn create_from_snapshot(
         &self,
-        source: Entity,
+        mut source: Entity,
         name: &str,
         duplicate: bool,
         now: u64,
     ) -> Result<StoredEntity> {
         self.flush().await?;
+        source.resolve_phone()?;
         let capture = source.capture()?;
         let ItemContent::Workspace { baseline, .. } = source.content else {
             unreachable!()

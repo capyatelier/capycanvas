@@ -397,6 +397,7 @@ impl DockLayout {
     }
     pub(crate) fn anchor_control(&self, anchor: DrawerAnchor) -> Option<ToolbarControl> {
         match anchor {
+            DrawerAnchor::Phone { tile: Some(id) } => self.phone.as_ref()?.iter().find(|t| t.id == id).map(|t| t.control),
             DrawerAnchor::Tile { panel, tile } => self
                 .panel(panel)
                 .ok()?
@@ -496,6 +497,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         if let Some((anchor, group)) = origin
             && layout.anchor_control(anchor).and_then(|c| c.tool_group()) == Some(group)
             && group.active(&self.state) {
+            return Some((group, Some(anchor)));
+        }
+        if self.phone_layout().is_some()
+            && let Some((anchor, group)) = layout.phone.iter().flatten().filter_map(|t| t.control.tool_group().map(|g| (DrawerAnchor::Phone { tile: Some(t.id) }, g)))
+                .find(|(_, group)| group.active(&self.state)) {
             return Some((group, Some(anchor)));
         }
         if let Some((anchor, slot)) = layout.tool_slots().find(|(_, slot)| ToolControlGroup::Slot(*slot).active(&self.state)) {
@@ -846,6 +852,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         self.tool_origin = Some((anchor, group));
         self.refresh_tools();
+        if matches!(anchor, DrawerAnchor::Phone { .. }) {
+            self.state.customization.drawer = if open == Some(anchor) { None } else { Some(ContentDrawer::for_control(self.state.workspace.layout.anchor_control(anchor).ok_or("Not a tool origin")?, anchor)?) };
+            self.update_slot_drawer();
+            return Ok(self.changed(regions::BRUSH | regions::CUSTOMIZATION, false));
+        }
         let action = match anchor {
             DrawerAnchor::Tile { panel, tile } => CustomizationAction::ToggleToolDrawer {
                 anchor: TileAnchor { panel, tile },

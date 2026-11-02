@@ -912,6 +912,7 @@ fn starting_layout_dialog_previews_without_saving_and_restore_is_undoable() {
             }).unwrap();
             *f.backend.database.borrow_mut() = BrowserDatabase::decode(&database.to_string()).unwrap();
             f.input(serde_json::json!({"type":"switch", "id":id}));
+            old.resolve_phone_defaults(preset).unwrap();
             assert_eq!(f.host.session.capture_workspace().unwrap().history.layout(), &old);
             assert!(f.host.session.command(layer_ui::CommandId::ResetLayout).enabled,
                 "An unchanged old baseline must still offer the latest default");

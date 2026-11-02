@@ -174,6 +174,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.system_theme = previous.system_theme;
         self.system_accent = previous.system_accent;
         self.state.workspace = previous.state.workspace.clone();
+        self.state.phone = PhoneState { menu: false, capy_drag: false, slider: None, ..previous.state.phone };
         self.state.workspace_ready = previous.state.workspace_ready;
         self.state.tool_slots = previous.state.tool_slots.clone();
         self.region_tools.last_fill = previous.region_tools.last_fill.or(self.region_tools.last_fill);

@@ -722,7 +722,7 @@ impl NativeHost {
             ExportValidation { recipe: layer_ui::ExportRecipe },
             ExportDraft { recipe: layer_ui::ExportRecipe, action: layer_ui::ExportDraftAction },
             Header { request: header::HeaderRequest },
-            PanelBridges { layout: layer_ui::ResolvedLayout, measure: layer_ui::PanelBridgeMeasure },
+            PanelBridges { layout: Box<layer_ui::ResolvedLayout>, measure: layer_ui::PanelBridgeMeasure },
             Catalog,
             NativeCaption { caption: layer_ui::NativeCaption },
             DocumentDeliveryMessage { message: layer_ui::DocumentDeliveryMessage },
@@ -1058,7 +1058,7 @@ impl NativeHost {
                     drawer.and_then(|d| {
                         state.customization.drawer_placement(
                             d,
-                            &state.workspace.layout,
+                            &self.session.layout_resolve_input(),
                             self.logical,
                             &heights,
                         )
@@ -1085,7 +1085,7 @@ impl NativeHost {
             }
             Query::LayerDrawerSizing {measurement, properties_height} => {
                 let state = self.session.state();
-                state.customization.layer_drawer_sizing(state.customization.drawer.as_ref(),&state.workspace.layout,
+                state.customization.layer_drawer_sizing(state.customization.drawer.as_ref(),&self.session.layout_resolve_input(),
                     self.logical,measurement,state.layers.len(),properties_height)?
             }
             Query::DrawerToolbar {

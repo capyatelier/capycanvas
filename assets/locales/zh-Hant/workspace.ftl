@@ -700,3 +700,7 @@ diagnostics-memory-sampled-label = 取樣峰值
 diagnostics-memory-vulkan-label = Vulkan 記憶體堆積
 diagnostics-memory-dxgi-label = DXGI 本機
 diagnostics-memory-metal-label = Metal 配置
+
+workspace-phone-swap-sides = 交換兩側
+workspace-phone-title-bar-unavailable = 手機版面配置中無法編輯標題列
+workspace-launch-window-size = 初始視窗大小

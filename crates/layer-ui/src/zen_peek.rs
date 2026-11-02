@@ -11,11 +11,14 @@ pub(crate) struct ZenPeek {
 
 impl<R: CanvasRenderer> UiSession<R> {
     pub fn layout_resolve_input(&self)->crate::LayoutResolveInput<'_> {
-        crate::LayoutResolveInput::new(&self.state.workspace.layout,self.zen_peek.edge)
+        self.layout_presentation_input()
             .with_cache(self.panel_measurement_cache().for_publication())
     }
+    pub fn layout_presentation_input(&self)->crate::LayoutResolveInput<'_> {
+        crate::LayoutResolveInput::new(&self.state.workspace.layout,self.zen_peek.edge).with_phone(self.state.phone)
+    }
     pub fn zen_keeps(&self, group: u32) -> bool {
-        self.layout_resolve_input().keeps(group)
+        self.layout_presentation_input().keeps(group)
     }
 
     fn edge_groups(&self, edge: Edge) -> impl Iterator<Item = GroupPlacement> + '_ {

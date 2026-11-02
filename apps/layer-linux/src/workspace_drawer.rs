@@ -14,6 +14,7 @@ mod allocation {
         pub children: RefCell<Vec<gtk::Widget>>,
         pub geometry: RefCell<Vec<Bounds>>,
         pub natural_height: Cell<Option<i32>>,
+        pub child_input: Cell<bool>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for Columns {
@@ -29,6 +30,12 @@ mod allocation {
         }
     }
     impl WidgetImpl for Columns {
+        fn contains(&self, x: f64, y: f64) -> bool {
+            if !self.child_input.get() { return self.parent_contains(x, y); }
+            self.children.borrow().iter().filter(|child| child.is_visible() && child.is_child_visible() && child.can_target())
+                .any(|child| self.obj().compute_point(child, &gtk::graphene::Point::new(x as f32, y as f32))
+                    .is_some_and(|point| child.contains(point.x() as f64, point.y() as f64)))
+        }
         fn measure(&self, orientation: gtk::Orientation, _: i32) -> (i32, i32, i32, i32) {
             (0, if orientation == gtk::Orientation::Vertical {self.natural_height.get().unwrap_or(0)} else {0}, -1, -1)
         }
@@ -39,10 +46,11 @@ mod allocation {
                 .iter()
                 .zip(self.geometry.borrow().iter())
             {
+                if !child.is_child_visible() { continue; }
                 let (width, height) = if self.natural_height.get().is_some() {
                     let width = bounds.width.max(child.measure(gtk::Orientation::Horizontal, -1).0 as f32);
                     (width, (height as f32).max(child.measure(gtk::Orientation::Vertical, width as i32).0 as f32))
-                } else { (bounds.width, height as f32) };
+                } else { (bounds.width, bounds.height) };
                 allocate_at(
                     child,
                     Bounds {
@@ -54,7 +62,7 @@ mod allocation {
         }
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             for child in self.children.borrow().iter() {
-                self.obj().snapshot_child(child, snapshot);
+                crate::squircle::snapshot_child(self.obj().upcast_ref(), child, snapshot);
             }
         }
     }
@@ -176,10 +184,10 @@ impl LayerInspector {
         self.button.update_property(&[gtk::accessible::Property::Label(label), gtk::accessible::Property::Description(if open {""} else {&disclosure.summary})]);
         if open { self.button.add_css_class("open"); } else { self.button.remove_css_class("open"); }
     }
-    pub(super) fn measure(&self, width: i32, viewport_height: f32) -> (PanelScrollMeasurement,f32) {
+    pub(super) fn measure(&self, width: i32, viewport_height: f32, phone: Option<&PhoneLayout>) -> (PanelScrollMeasurement,f32) {
         let measurement = self.layers.scroll_measurement(width);
         let properties_height = self.effects.properties.measure(gtk::Orientation::Vertical, width).1 as f32;
-        let heights = layer_ui::LayerDrawerSizing::pages(measurement, self.rows.get(), viewport_height, properties_height);
+        let heights = layer_ui::LayerDrawerSizing::presented_pages(measurement, self.rows.get(), viewport_height, properties_height, phone);
         for (page, height) in self.pages.iter().zip(heights) {
             let height = (height - layer_ui::LayerDrawerSizing::FOOTER_HEIGHT).max(0.).round() as i32;
             if page.imp().natural_height.replace(Some(height)) != Some(height) { page.queue_resize(); }
@@ -257,7 +265,7 @@ impl ToolbarBody {
             self.strip.set_style(config.tile_style);
             *self.items.borrow_mut() = config.tiles().iter().filter_map(|tile| {
                 let choice = &view.tiles.iter().find(|view| view.id == tile.id && view.choice.control == tile.control)?.choice;
-                let item = toolbar_components::TileWidget::new(w, config, tile, config.tile_style, choice);
+                let item = toolbar_components::TileWidget::new(w, Some(config), tile, config.tile_style, choice);
                 self.strip.append(&item.root());
                 Some(item)
             }).collect();
@@ -341,13 +349,7 @@ struct View {
     tab_clip: Option<gtk::ScrolledWindow>,
     tab_strip: Option<crate::panel_tabs::PanelTabs>,
 }
-impl View {
-    fn new(w: &Rc<Workspace>, drawer: &ContentDrawer, previous: Option<&Self>) -> Self {
-        let connection = previous.map(|view| view.connection.clone()).unwrap_or_default();
-        connection.set_widget_name("drawer-connection");
-        connection.add_css_class("drawer-connection");
-        let connection_geometry = previous.map(|view| view.connection_geometry.clone()).unwrap_or_default();
-        let geometry = connection_geometry.clone();
+pub(super) fn paint_connection(connection: &gtk::DrawingArea, geometry: Rc<Cell<Option<layer_ui::DrawerConnection>>>) {
         connection.set_draw_func(move |area, cr, _, _| {
             let Some(c) = geometry.get() else {
                 return;
@@ -366,9 +368,17 @@ impl View {
             concave_foot(cr, c.length.into(), c.depth.into(), c.radii[1].into(), 1.0);
             let _ = cr.fill();
         });
+}
+impl View {
+    fn new(w: &Rc<Workspace>, drawer: &ContentDrawer, previous: Option<&Self>) -> Self {
+        let connection = previous.map(|view| view.connection.clone()).unwrap_or_default();
+        connection.set_widget_name("drawer-connection");
+        connection.add_css_class("drawer-connection");
+        let connection_geometry = previous.map(|view| view.connection_geometry.clone()).unwrap_or_default();
+        paint_connection(&connection, connection_geometry.clone());
         let root: Columns = previous.map(|view| view.root.clone()).unwrap_or_else(glib::Object::new);
         root.set_widget_name(&match drawer.anchor {
-            DrawerAnchor::Header { .. } => "tool-drawer".into(),
+            DrawerAnchor::Phone { .. } | DrawerAnchor::Header { .. } => "tool-drawer".into(),
             DrawerAnchor::Tile { .. } => "tool-drawer".into(),
             DrawerAnchor::Column { column, .. } => format!("column-drawer-{column}"),
         });
@@ -785,6 +795,7 @@ impl Drawer {
     fn source_button(&self, w: &Workspace) -> Option<gtk::Button> {
         let anchor = self.state.borrow().as_ref()?.anchor;
         match anchor {
+            DrawerAnchor::Phone { tile } => w.phone.button(w, tile),
             DrawerAnchor::Header { id } => w.header.drawer_button(id),
             DrawerAnchor::Tile { panel, tile } => {
                 w.columns
@@ -822,7 +833,7 @@ impl Drawer {
         };
         let sizing = place(&vec![0.0; view.columns.len()])?;
         for body in &view.bodies {
-            if let Body::LayerInspector(inspector) = body { inspector.measure(sizing.columns[0].width as i32, viewport[1]); }
+            if let Body::LayerInspector(inspector) = body { inspector.measure(sizing.columns[0].width as i32, viewport[1], layout.phone_presentation(viewport).as_ref()); }
         }
         if let (Some(panel), Some(column)) = (
             view.bodies.iter().find_map(|body| if let Body::Palettes(panel) = body { Some(panel) } else { None }),
@@ -865,7 +876,7 @@ impl Drawer {
         let result = self.from.borrow().as_ref().map_or_else(
             || end.clone(),
             |from| end.interpolate_from(from, self.progress.get()),
-        );
+        ).snapped(1.);
         if let Some(view) = self.view.borrow().as_ref() {
             if let Some(strip)=&view.tab_strip {strip.set_presentations(&result.tab_presentations);}
             let geometry = result.columns.clone();
@@ -908,6 +919,7 @@ impl Drawer {
             })
             .zip(direction);
         w.header.mark_drawer_origin(header);
+        w.phone.mark_origin(w, anchor, direction);
         let origin = anchor.and_then(DrawerAnchor::tile).zip(direction);
         w.customization.mark_drawer_origin(origin);
         for parent in w.columns.drawers.borrow().iter() {

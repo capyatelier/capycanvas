@@ -32,7 +32,7 @@ mod palette_file;
 pub use palette_file::{PaletteExport, PaletteFileRequest, PaletteFormat, palette_file};
 mod palette_view;
 pub use palette_view::{
-    PaletteChoiceView, PaletteCommand, PaletteMenuItem, PaletteMenuTarget, PalettePanelView, PaletteTileView, SwatchSectionView, SwatchSheetView,
+    PaletteChoiceView, PaletteCommand, PaletteGridLayout, PaletteMenuItem, PaletteMenuTarget, PalettePanelView, PaletteTileView, SwatchSectionView, SwatchSheetView,
     selected_swatch,
 };
 pub use library::{ColorLibrary, ColorLibraryAction, ColorPalette, ColorReorderPreview, SavedColor};
