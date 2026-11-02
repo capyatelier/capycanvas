@@ -2797,23 +2797,27 @@ referenced reports.
 
 ## Vector face search
 
-M7a on `cfeb418f5` plus the milestone changes, 2026-11-02. The release
+M7c on `13189317f` plus the milestone changes, 2026-11-02. The release
 `vector_face_busy_page` test searches 2,002 stroked paths, with 2,000 hatch
 strokes inside the large face. Timers cover the first search for each face,
 including flattening and window doubling; fixture construction is excluded.
-This measures inline CPU search, not presentation or frame rate. The previous
-version had no vector face search, so there is no matched before latency.
+This measures inline CPU search, not presentation or frame rate. Auto finds
+these closed faces at reach 0. TCL results are means of two fresh-process first
+calls per variant in a matched main/M7c/M7c/main sequence, with default CPU
+affinity and no governor changes.
 
-| Device | Small face | Large face | Inline gate | Result |
+| Device | Small face, main → M7c | Large face, main → M7c | Inline gate | Result |
 | --- | --- | --- | --- | --- |
-| TCL TAB 11 Gen 2, native ARM64 release | 1.793 ms | 12.065 ms | ≤16 ms | Met |
-| Workstation, native release | 0.234 ms | 1.660 ms | ≤8 ms | Met |
-| Workstation, own-line join correction on `d454f7c2f` | 0.221 ms | 1.518 ms | ≤8 ms | Met; TCL not rerun |
+| TCL TAB 11 Gen 2, native ARM64 release | 3.494 → 1.883 ms | 15.680 → 15.244 ms | ≤16 ms | Shared slight miss; large-face worst 16.330 → 16.339 ms |
+| Workstation, native release (candidate only) | — → 0.173 ms | — → 1.497 ms | ≤8 ms | Met; diagnostic |
 
-The workstation result does not qualify a reference tablet tier. Source and
-binary hashes, first-call logs and the profile that led to shared flattening
-and BVH reuse are in `artifacts/fill-tools/m7a-native/` and
-`artifacts/fill-tools/m7a-core-busy-allocation.log`.
+TCL large-face ranges are 15.029–16.330 ms on main and 14.148–16.339 ms on M7c;
+the mean decreases 2.78%. This records the shared miss against matched main,
+not an all-calls pass. Source and binary hashes, every first-call row and
+earlier failed candidates remain in `artifacts/fill-tools/m7c-native/`;
+`matched-slim/` holds the final comparison. Fixed-core stage profiles there
+are diagnostic and do not qualify the tier.
+The workstation row does not qualify tablet performance.
 
 ## Vector mask tracing
 

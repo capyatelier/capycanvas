@@ -2968,3 +2968,115 @@ fn a_large_antialiased_disc_trace_finishes_within_the_existing_frame_quota() {
     assert!(path.geometry.subpaths()[0].closed);
     assert!(path.encloses(center, 0.01));
 }
+
+#[test]
+fn vector_everywhere_recolors_equal_paints_and_transparent_removes_them_in_one_undo() {
+    use layer_core::authored::vector::{Cap, Fill, Join, Paint, PaintEntry, Style, UnknownProperty, COPY_SAFE, IGNORABLE};
+    for platform in Platform::ALL {
+        for transparent in [false, true] {
+            let (mut s, target) = vector_session_on(platform);
+            let red = layer_core::color::RgbColor::new(Default::default(), [0.8, 0.1, 0.2, 1.]).unwrap();
+            let blue = layer_core::color::RgbColor::new(Default::default(), [0.1, 0.2, 0.8, 1.]).unwrap();
+            let paths = (1..=4).map(|id| {
+                let left = 100. + (id - 1) as f64 * 200.;
+                let mut path = straight(id, &[[left, 100.], [left + 120., 100.], [left + 120., 300.], [left, 300.]], true);
+                let unknown = (id != 1).then(|| vec![UnknownProperty { tag: 256 | COPY_SAFE | IGNORABLE, value: vec![id as u8].into() }].into());
+                let mut entries = vec![PaintEntry::Fill(Fill { paint: Paint::color(if id == 4 { blue } else { red }), unknown })];
+                if id == 2 { entries.extend(path.style.entries.iter().cloned()); }
+                path.style = Arc::new(Style::new(entries));path
+            }).collect();
+            put_paths(&mut s, target, paths);
+            let original = s.engine.document().scene().vector_layer(target).unwrap().clone();
+            let checkpoint = s.engine.checkpoint();
+            s.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Region { fill: true, source: crate::RegionSource::Editing } }).unwrap();
+            invoke(&mut s, CommandId::FillEverywhere);
+            let expected = if transparent {
+                s.dispatch(UiAction::Color { action: ColorAction::Select { slot: ColorSlot::Transparent } }).unwrap();None
+            } else {
+                s.dispatch(UiAction::SetColor { rgba: [0.1, 0.7, 0.3, 1.] }).unwrap();
+                let style = s.vector_figure_style(FigurePaint::Fill, Cap::Butt, Join::Miter).unwrap();
+                let PaintEntry::Fill(fill) = &style.entries[0] else { unreachable!() };Some(fill.paint.clone())
+            };
+            assert!(!s.uses_fill_gesture());
+            let point = surface_at(&s, [160., 200.]);
+            press(&mut s, 100, &[point, point]);
+            let changed = s.engine.document().scene().vector_layer(target).unwrap();
+            assert_eq!(changed.path_count(), if transparent { 2 } else { 4 });
+            for (_, before) in original.paths() {
+                let after = changed.paths().find(|(_, path)| path.id == before.id).map(|(_, path)| path);
+                if before.id.0 == 4 { assert_eq!(after, Some(before));continue; }
+                if transparent && before.id.0 != 2 { assert!(after.is_none());continue; }
+                let after = after.unwrap();
+                assert_eq!(after.geometry, before.geometry);
+                let strokes = |path: &layer_core::authored::vector::PathItem| path.style.entries.iter().filter(|entry|matches!(entry, PaintEntry::Stroke(_))).cloned().collect::<Vec<_>>();
+                assert_eq!(strokes(after), strokes(before));
+                let paints: Vec<_> = after.style.entries.iter().filter_map(|entry|if let PaintEntry::Fill(fill)=entry {Some(fill.paint.clone())}else{None}).collect();
+                assert_eq!(paints, expected.iter().cloned().collect::<Vec<_>>());
+            }
+            assert!(s.renderer_mut().region_requests.is_empty());
+            assert!(s.state.fill_gesture.is_none());
+            invoke(&mut s, CommandId::Undo);
+            assert_eq!(s.engine.checkpoint(), checkpoint);
+            assert_eq!(s.engine.document().scene().vector_layer(target), Some(&original));
+        }
+    }
+}
+
+#[test]
+fn vector_everywhere_unfilled_and_empty_hits_match_connected() {
+    use layer_core::authored::vector::{Fill, Paint, PaintEntry, Style};
+    for platform in Platform::ALL {
+        for hit in [[160., 200.], [900., 900.]] {
+            let mut results = Vec::new();
+            for scope in [CommandId::FillConnected, CommandId::FillEverywhere] {
+                let (mut s, target) = vector_session_on(platform);
+                let paths = (1..=3).map(|id| {
+                    let left = 100. + (id - 1) as f64 * 300.;
+                    let mut path = straight(id, &[[left, 100.], [left + 120., 100.], [left + 120., 300.], [left, 300.]], true);
+                    if id == 2 { path.style = Arc::new(Style::new(vec![PaintEntry::Fill(Fill {paint:Paint::color(layer_core::color::RgbColor::BLACK),unknown:None})])); }
+                    path
+                }).collect();
+                put_paths(&mut s, target, paths);
+                let original = s.engine.document().scene().vector_layer(target).unwrap().clone();
+                let checkpoint = s.engine.checkpoint();
+                s.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Region { fill: true, source: crate::RegionSource::Editing } }).unwrap();
+                invoke(&mut s, scope);
+                s.dispatch(UiAction::SetColor { rgba: [0.1, 0.7, 0.3, 1.] }).unwrap();
+                let point = surface_at(&s, hit);press(&mut s, 100, &[point, point]);
+                let changed = s.engine.document().scene().vector_layer(target).unwrap().clone();
+                if hit[0] == 900. { assert_eq!(changed, original);assert_eq!(s.engine.checkpoint(), checkpoint); }
+                else {
+                    let first = changed.paths().find(|(_, path)|path.id.0==1).unwrap().1;
+                    assert!(matches!(first.style.entries[..], [PaintEntry::Fill(_),PaintEntry::Stroke(_)]));
+                    for (_, before) in original.paths().filter(|(_, path)|path.id.0!=1) { assert_eq!(changed.paths().find(|(_, path)|path.id==before.id).unwrap().1,before); }
+                }
+                assert!(s.renderer_mut().region_requests.is_empty());results.push(changed);
+            }
+            assert_eq!(results[0], results[1]);
+        }
+    }
+}
+
+#[test]
+fn vector_taps_use_settled_gap_reach_off_and_auto_without_a_raster_gesture() {
+    for platform in Platform::ALL {
+        for (reach, close, fills) in [(Some(32),true,false),(Some(48),true,true),(None,false,false),(None,true,true),(Some(48),false,true)] {
+            let (mut s, target) = vector_session_on(platform);
+            let segments = [[[100.,100.],[180.,100.]],[[220.,100.],[300.,100.]],[[300.,100.],[300.,300.]],[[300.,300.],[100.,300.]],[[100.,300.],[100.,100.]]];
+            put_paths(&mut s, target, segments.into_iter().enumerate().map(|(i, points)|straight(i as u64+1,&points,false)).collect());
+            let original = s.engine.document().scene().vector_layer(target).unwrap().clone();
+            let checkpoint = s.engine.checkpoint();
+            s.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Region { fill: true, source: crate::RegionSource::Editing } }).unwrap();
+            let mut editing=s.editing_state();editing.region_gap_reach=reach;editing.region_close_gaps=close;s.restore_editing(editing).unwrap();
+            assert!(!s.uses_fill_gesture());
+            let point=surface_at(&s,[200.,200.]);press(&mut s,100,&[point,point]);
+            let object=s.engine.document().scene().vector_layer(target).unwrap();
+            assert_eq!(object.path_count(),original.path_count()+usize::from(fills),"{platform:?} reach={reach:?} close={close}");
+            if fills {assert!(object.paths().any(|(_, path)|path.style.strokes().next().is_none()&&path.encloses([200.,200.],0.01)));invoke(&mut s,CommandId::Undo);}
+            assert_eq!(s.engine.checkpoint(),checkpoint);
+            assert!(s.state.fill_gesture.is_none());
+            assert!(s.renderer_mut().fill_preview.is_none());assert!(s.renderer_mut().fill_reveal.is_none());
+            assert!(s.renderer_mut().region_requests.is_empty());
+        }
+    }
+}

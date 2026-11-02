@@ -336,17 +336,21 @@ impl<R: CanvasRenderer> UiSession<R> {
         let innermost = object.paths().filter(|(_, path)| (lines_from!=RegionSource::Reference || path.style.strokes().next().is_none()) && path.pickable() && path.encloses(local, tolerance))
             .map(|(position, path)| (path.area_around(local, tolerance), position, path)).min_by(|a, b| a.0.total_cmp(&b.0));
         let found = innermost.map(|(_, position, path)| {
-            let mut entries: Vec<PaintEntry> = path.style.entries.iter().filter(|entry| !matches!(entry, PaintEntry::Fill(_))).cloned().collect();
-            if let Some(fill) = fill.clone() { entries.insert(0, fill); }
-            (*path.style.entries != entries[..]).then(|| {
-                let restyled = (!entries.is_empty()).then(||Record::Path(path.with_style(std::sync::Arc::new(Style::new(entries)))));
-                doc.vector_object_edit(layer, object.replace([(position, restyled)])).map_err(|e| e.to_string())
-            }).transpose()
+            let paints=path.style.entries.iter().filter_map(|entry|match entry {PaintEntry::Fill(fill)=>Some(&fill.paint),_=>None}).collect::<Vec<_>>();
+            let everywhere=self.region_tools.scope==FillScope::Everywhere && !paints.is_empty();
+            let changes=object.paths().filter(|(at,candidate)|*at==position || everywhere && candidate.style.entries.iter()
+                .filter_map(|entry|match entry {PaintEntry::Fill(fill)=>Some(&fill.paint),_=>None}).eq(paints.iter().copied())).filter_map(|(at,candidate)| {
+                let mut entries:Vec<_>=candidate.style.entries.iter().filter(|entry|!matches!(entry,PaintEntry::Fill(_))).cloned().collect();
+                if let Some(fill)=fill.clone() {entries.insert(0,fill);}
+                (*candidate.style.entries!=entries[..]).then(||(at,(!entries.is_empty()).then(||Record::Path(candidate.with_style(std::sync::Arc::new(Style::new(entries)))))))
+            }).collect::<Vec<_>>();
+            (!changes.is_empty()).then(||doc.vector_object_edit(layer,object.replace(changes)).map_err(|e|e.to_string())).transpose()
         }).transpose()?;
         if let Some(edit) = found { return edit.map_or(Ok(()), |edit| self.layer_edit(edit)); }
         if self.state.colors.transparent() { return Ok(()); }
         let (raster,lines)=self.vector_line_sources(layer,lines_from);
-        if let Some(face)=layer_core::authored::vector::vector_face(&lines,[f64::from(point.x),f64::from(point.y)]) {
+        if let Some(face)=layer_core::authored::vector::vector_face(&lines,[f64::from(point.x),f64::from(point.y)],
+            self.region_tools.gap_reach.or_else(||(!self.region_tools.refinement.close_gaps).then_some(0))) {
             return self.insert_vector_fills(layer,vec![face.geometry],std::sync::Arc::new(Style::new(fill.into_iter().collect())),false);
         }
         if !raster {return Ok(());}

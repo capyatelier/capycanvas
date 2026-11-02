@@ -1531,3 +1531,110 @@ fn crowded_vector_layer_bake_frames() {
         eprintln!("  complete after {total:.1} ms");
     }
 }
+
+#[test]
+fn vector_reference_line_middle_tracks_pressure_stroke_centrelines() {
+    use layer_core::{CoverageSnapshot, FillEdges, FillLine, Point, RasterOperation, RasterOperationKind, Selection};
+    use layer_render::{RegionEdges, RegionRefinement, RegionRequest, RegionSource};
+    let extent = [336, 336];
+    let mut maximum = 0_f64;
+    let mut failures = Vec::new();
+    for (i, width) in [2., 4., 6., 8., 10., 12.].into_iter().enumerate() {
+        let angle: f64 = [0., 17., -31.][i % 3];
+        let (sin, cos) = angle.to_radians().sin_cos();
+        let center = [168., 168.];
+        let corners = [[-70., -70.], [70., -70.], [70., 70.], [-70., 70.]].map(|p| Anchor::corner([center[0] + cos * p[0] - sin * p[1], center[1] + sin * p[0] + cos * p[1]]).point());
+        let profile = Arc::new(WidthProfile::new((0..4).flat_map(|segment| [WidthKnot::new(segment, 0., 2. / width, 2. / width),
+            WidthKnot::new(segment, 0.5, 1., 1.), WidthKnot::new(segment, 1., 2. / width, 2. / width)]).collect()).unwrap());
+        let mut line = Stroke::new(paint([0., 0., 0., 1.]), width);
+        line.cap = Cap::Round; line.join = Join::Round; line.profile = Some(profile.clone());
+        let path = PathItem::new(ItemId(1), Arc::new(PathGeometry::new(vec![Subpath::new(&corners.map(Anchor::corner), true)]).unwrap()),
+            Arc::new(Style::new(vec![PaintEntry::Stroke(line)])));
+        let mut artwork = layer_core::authored::Artwork::new(extent).unwrap();
+        let (destination_layer, destination) = crate::test_support::add_paint(&mut artwork, "Raster flats", extent);
+        let mut editor = layer_core::Editor::new(layer_core::Document::from_artwork(artwork).unwrap());
+        let (reference, edit) = editor.document().create_vector_layer_edit("Vector reference", VectorObject::from_records(vec![Record::Path(path)]), None, 0).unwrap();
+        editor.perform(edit).unwrap();
+        let order = editor.document().scene().order();
+        assert!(order.iter().position(|id| *id == reference).unwrap() < order.iter().position(|id| *id == destination_layer).unwrap());
+        let mut engine = engine_for(editor.document().clone());
+        crate::test_support::flush_engine(&mut engine);
+        let snapshot = engine.document().snapshot();
+        let source = RegionSource::reference(snapshot.clone(), reference).unwrap();
+        let RegionSource::Scene { snapshot: line_snapshot, scope } = source.clone() else { unreachable!() };
+        let position = [center[0] as u32, center[1] as u32];
+        let result = crate::test_support::receive_request(engine.backend_mut(), RegionRequest {
+            request_id: width as u64, source, position, contiguous: true, tolerance: 0.1,
+            refinement: RegionRefinement { close_gaps: false, edges: RegionEdges::LineMiddle, smooth_edges: true },
+            limit: None, enclosure: None, selection: None, fill: Some(layer_render::RegionFillQuery { reach: Some(0), ..Default::default() }), reference_count: Some(1),
+            paper: None, fill_areas: None, colour_mode: Default::default(),
+        });
+        let mut coverage = CoverageSnapshot::reveal_all(engine.allocate_coverage_handle(), extent, [0; 2]);
+        coverage.selection = Some(Selection::pixels(result.pixels.clone()));
+        engine.append_raster_operation(destination, RasterOperation {
+            placement: result.placement, coverage, kind: RasterOperationKind::Fill {
+                color: [0.1, 0.7, 0.2, 1.], texture: Default::default(), alpha_locked: false,
+                edges: Some(Box::new(FillEdges { snapshot, position: Point { x: center[0] as f32, y: center[1] as f32 }, tolerance: 0.1,
+                    anchors: result.anchors, lines: vec![FillLine { snapshot: line_snapshot, scope, fill_above: false }] })),
+                underfill: result.underfill.map(Selection::pixels),
+            },
+        }).unwrap();
+        crate::test_support::flush_engine(&mut engine);
+        let pixels = engine.backend().snapshot_gpu().capture_scene(engine.document().snapshot(), layer_core::SceneScope::Raw(destination), Default::default()).unwrap()
+            .read_region([0, 0, extent[0], extent[1]]).unwrap();
+        let alpha = |p: [f64; 2]| {
+            let [x, y] = p.map(|v| v - 0.5);
+            let [ix, iy] = [x.floor() as usize, y.floor() as usize];
+            let [fx, fy] = [x.fract(), y.fract()];
+            let at = |x: usize, y: usize| f64::from(pixels[y * extent[0] as usize + x][3]);
+            (at(ix, iy) * (1. - fx) + at(ix + 1, iy) * fx) * (1. - fy)
+                + (at(ix, iy + 1) * (1. - fx) + at(ix + 1, iy + 1) * fx) * fy
+        };
+        for side in 0..4 {
+            let (a, b) = (corners[side], corners[(side + 1) % 4]);
+            let d = [b[0] - a[0], b[1] - a[1]];
+            let length = d[0].hypot(d[1]);
+            let point = [(a[0] + b[0]) * 0.5 + d[1] / length * 6., (a[1] + b[1]) * 0.5 - d[0] / length * 6.];
+            let outside = alpha(point);
+            assert!(outside < 0.1, "closed reference leaked for width{width} angle{angle} side{side}: alpha{outside}");
+        }
+        let mut errors = Vec::new();
+        let mut missing = 0;
+        for side in 0..4 {
+            let (a, b) = (corners[side], corners[(side + 1) % 4]);
+            let d = [b[0] - a[0], b[1] - a[1]];
+            let length = d[0].hypot(d[1]);
+            let normal = [-d[1] / length, d[0] / length];
+            for sample in 0..25 {
+                let t = 0.2 + f64::from(sample) * 0.025;
+                let point = [a[0] + d[0] * t, a[1] + d[1] * t];
+                let along = |s: f64| alpha([point[0] + normal[0] * s, point[1] + normal[1] * s]);
+                let reach = width * 0.5 + 4.;
+                let count = (reach * 8.).ceil() as usize;
+                let mut brackets = Vec::new();
+                for step in 0..count {
+                    let low = -reach + 2. * reach * step as f64 / count as f64;
+                    let high = -reach + 2. * reach * (step + 1) as f64 / count as f64;
+                    if along(low) < 0.5 && along(high) >= 0.5 { brackets.push((low, high)); }
+                }
+                let crossing = if brackets.len() == 1 && along(-reach) < 0.1 && along(reach) > 0.9 {
+                    let (mut low, mut high) = brackets[0];
+                    for _ in 0..40 { let middle = (low + high) * 0.5; if along(middle) >= 0.5 { high = middle; } else { low = middle; } }
+                    Some((low + high) * 0.5)
+                } else { None };
+                let (mut low, mut high) = (0., 1.);
+                for _ in 0..40 { let middle = (low + high) * 0.5; if middle * middle * (3. - 2. * middle) < t { low = middle; } else { high = middle; } }
+                let parameter = (low + high) * 0.5;
+                let actual_width = width * profile.at(side as u32, parameter)[0];
+                let limit = (actual_width / 8.).max(0.25);
+                if let Some(crossing) = crossing { errors.push(crossing.abs()); maximum = maximum.max(crossing.abs()); } else { missing += 1; }
+                if crossing.is_none_or(|crossing| crossing.abs() > limit) && failures.len() < 16 {
+                    failures.push(format!("peak_width={width} angle_degrees={angle} side={side} t={t} parameter={parameter} width={actual_width} limit={limit} centreline={point:?} normal={normal:?} crossing_offset={crossing:?} error={:?} crossings={} outside_alpha={} inside_alpha={}", crossing.map(f64::abs), brackets.len(), along(-reach), along(reach)));
+                }
+            }
+        }
+        errors.sort_by(f64::total_cmp);
+        eprintln!("vector_reference_line_middle_summary peak_width={width} angle_degrees={angle} samples={} missing={missing} maximum={:?} p95={:?}", errors.len(), errors.last(), errors.get((errors.len()*95).div_ceil(100).saturating_sub(1)));
+    }
+    assert!(failures.is_empty(), "vector reference centreline maximum {maximum} exceeds the local width gate or has missing crossings: {failures:#?}");
+}

@@ -293,6 +293,68 @@ fn native_vector_fill_between_open_strokes() {
 }
 
 #[test]
+#[ignore = "isolated native-input.js --native-test=native_vector_gap_fill_and_everywhere --tablet"]
+fn native_vector_gap_fill_and_everywhere() {
+    let mut d=Driver::new("art.capycanvas.VectorSeals");
+    for theme in [Theme::Light,Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme {theme:Some(theme)});
+        add_vector_layer(&mut d);
+        d.w.dispatch(UiAction::SelectBrush {id:layer_core::DefaultBrushPreset::GPen as u32});
+        d.w.dispatch(UiAction::SetBrushSize {value:6.});d.w.dispatch(UiAction::SetColor {rgba:[0.,0.,0.,1.]});
+        tool(&d,LayerCanvasTool::Paint);
+        pen_points(&mut d,&[[662.,400.],[900.,400.],[900.,800.],[400.,800.],[400.,400.],[638.,400.]]);
+        let original=until_paths(&d,"one open vector outline with a 24 px gap",|paths|paths.len()==1);
+        assert!(!original[0].encloses([650.,600.],0.05));
+        let target=ui_session(&d.w).engine().document().working.occurrence.unwrap();
+        let order=ui_session(&d.w).engine().document().scene().order().to_vec();
+        d.w.dispatch(UiAction::SetColor {rgba:[0.15,0.7,0.25,1.]});
+        tool(&d,LayerCanvasTool::Region {fill:true,source:layer_ui::RegionSource::Editing});
+        d.w.dispatch(UiAction::Invoke {command:CommandId::FillConnected});
+        assert!(ui_session(&d.w).command(CommandId::CloseGapsAuto).selected,"vector Fill starts with Auto closing");
+        pen_points(&mut d,&[[650.,600.],[650.,600.]]);
+        let filled=until_paths(&d,"Auto fills the gappy vector face",|paths|paths.len()==2);
+        assert_eq!(filled.iter().find(|path|path.id==original[0].id),Some(&original[0]));
+        assert!(filled.iter().any(|path|path.style.strokes().next().is_none()&&path.encloses([650.,600.],0.05)));
+        assert_eq!(ui_session(&d.w).engine().document().working.occurrence,Some(target));
+        assert_eq!(ui_session(&d.w).engine().document().scene().order(),order);
+        wait_for("the Auto-closed face is green",||greenish(presented(&d,[650.,600.])));
+        capture(&d,&format!("vector-gap-auto-{theme:?}.png"));
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});until_paths(&d,"Undo removes only the sealed face",|paths|paths==original.as_slice());
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Redo});until_paths(&d,"Redo restores the sealed vector face",|paths|paths==filled.as_slice());
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});until_paths(&d,"the gappy stroke remains exact",|paths|paths==original.as_slice());
+        add_vector_layer(&mut d);
+        for index in 0..4 {
+            d.w.dispatch(UiAction::SetColor {rgba:if index==3 {[0.1,0.2,0.9,1.]}else{[0.15,0.7,0.25,1.]}});
+            tool(&d,LayerCanvasTool::Figure {shape:layer_core::FigureShape::Rectangle,paint:layer_core::FigurePaint::Fill});
+            let x=350.+index as f32*200.;pen_points(&mut d,&[[x,400.],[x+150.,550.]]);
+            until_paths(&d,"four filled vector regions",|paths|paths.len()==index+1);
+        }
+        let original=paths(&d);assert!(original.iter().all(|path|path.style.strokes().next().is_none()));
+        let different=original.iter().find(|path|path.encloses([1025.,475.],0.05)).unwrap();
+        let target=ui_session(&d.w).engine().document().working.occurrence.unwrap();
+        let order=ui_session(&d.w).engine().document().scene().order().to_vec();
+        wait_for("the different region is blue",|| {let p=presented(&d,[1025.,475.]);i16::from(p[2])-i16::from(p[0]).max(i16::from(p[1]))>40});
+        let blue=presented(&d,[1025.,475.]);
+        tool(&d,LayerCanvasTool::Region {fill:true,source:layer_ui::RegionSource::Editing});
+        d.w.dispatch(UiAction::Invoke {command:CommandId::FillEverywhere});assert!(ui_session(&d.w).command(CommandId::FillEverywhere).selected);
+        d.w.dispatch(UiAction::SetColor {rgba:[0.85,0.1,0.05,1.]});
+        pen_points(&mut d,&[[425.,475.],[425.,475.]]);
+        let recoloured=until_paths(&d,"Everywhere recolours the three matching fills",|paths|paths.len()==4&&original.iter().filter(|old|paths.iter().find(|path|path.id==old.id).is_some_and(|path|path.style!=old.style)).count()==3);
+        assert_eq!(recoloured.iter().find(|path|path.id==different.id),Some(different));
+        for old in &original {assert_eq!(recoloured.iter().find(|path|path.id==old.id).unwrap().geometry,old.geometry);}
+        assert_eq!(ui_session(&d.w).engine().document().working.occurrence,Some(target));assert_eq!(ui_session(&d.w).engine().document().scene().order(),order);
+        wait_for("all three matching regions are red",||[425.,625.,825.].into_iter().all(|x| {let p=presented(&d,[x,475.]);i16::from(p[0])-i16::from(p[1]).max(i16::from(p[2]))>40}));
+        assert_eq!(presented(&d,[1025.,475.]),blue,"Everywhere preserves the different-colour region");
+        capture(&d,&format!("vector-everywhere-{theme:?}.png"));
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});until_paths(&d,"one Undo restores all three original fills",|paths|paths==original.as_slice());
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Redo});until_paths(&d,"one Redo restores the Everywhere edit",|paths|paths==recoloured.as_slice());
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});until_paths(&d,"all original vector regions remain exact",|paths|paths==original.as_slice());
+        eprintln!("PASS {theme:?}: Auto seals a 24 px vector gap; Everywhere recolours three matching fills and preserves the fourth; exact one-edit Undo/Redo");
+    }
+    d.finish();
+}
+
+#[test]
 #[ignore = "isolated native-input.js --native-test=native_vector_trace_raster_and_enclose --tablet"]
 fn native_vector_trace_raster_and_enclose() {
     let mut d=Driver::new("art.capycanvas.VectorTrace");

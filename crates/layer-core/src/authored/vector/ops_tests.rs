@@ -261,7 +261,7 @@ fn face_line(id: u64, points: &[[f64; 2]], closed: bool, width: f64) -> PathItem
     PathItem::new(ItemId(id), Arc::new(PathGeometry::new(vec![Subpath::new(&points.iter().copied().map(Anchor::corner).collect::<Vec<_>>(), closed)]).unwrap()), Arc::new(Style::new(vec![PaintEntry::Stroke(Stroke::new(paint(), width))])))
 }
 fn face_at(paths: &[PathItem], point: [f64; 2]) -> VectorFace {
-    vector_face(&paths.iter().map(|path| FaceLine { path, offset: [0.; 2] }).collect::<Vec<_>>(), point).expect("a bounded face")
+    vector_face(&paths.iter().map(|path| FaceLine { path, offset: [0.; 2] }).collect::<Vec<_>>(), point, Some(0)).expect("a bounded face")
 }
 fn face_path(face: &VectorFace) -> PathItem {
     let mut path = PathItem::new(ItemId(100_000), Arc::new(face.geometry.clone()), Arc::new(Style::new(vec![PaintEntry::Fill(Fill { paint: paint(), unknown: None })])));
@@ -309,7 +309,7 @@ fn vector_face_joins_visible_endpoint_contacts_but_leaves_real_gaps_open() {
     let face = face_at(&make(3.), [50., 50.]);
     assert!(face_path(&face).encloses([50., 50.], 0.001));
     let paths = make(8.);
-    assert!(vector_face(&paths.iter().map(|path| FaceLine { path, offset: [0.; 2] }).collect::<Vec<_>>(), [50., 50.]).is_none());
+    assert!(vector_face(&paths.iter().map(|path| FaceLine { path, offset: [0.; 2] }).collect::<Vec<_>>(), [50., 50.], Some(0)).is_none());
 }
 
 #[test]
@@ -341,7 +341,7 @@ fn vector_face_keeps_only_outermost_holes_and_selects_the_innermost_face() {
 #[test]
 fn vector_face_doubles_its_window_and_preserves_document_offsets() {
     let square = face_box(1, 0., 1200.);
-    let face = vector_face(&[FaceLine { path: &square, offset: [2000., -300.] }], [2600., 300.]).unwrap();
+    let face = vector_face(&[FaceLine { path: &square, offset: [2000., -300.] }], [2600., 300.], Some(0)).unwrap();
     assert_eq!(face.geometry.hull(), [2000., -300., 3200., 900.]);
     assert_eq!(face.boundary, [0].into());
     let paths = [
@@ -367,7 +367,7 @@ fn vector_face_busy_page() {
     let lines: Vec<_> = paths.iter().map(|path| FaceLine { path, offset: [0.; 2] }).collect();
     for (name, point, expected) in [("small", [50., 50.], [0., 0., 100., 100.]), ("large", [1000., 1400.], [200., 200., 1800., 1800.])] {
         let start = std::time::Instant::now();
-        let face = vector_face(&lines, point).unwrap();
+        let face = vector_face(&lines, point, None).unwrap();
         let elapsed = start.elapsed().as_micros();
         eprintln!("vector_face_busy_page {name} elapsed_us={elapsed} path_count={}", paths.len());
         assert_eq!(face.geometry.hull(), expected);
@@ -417,7 +417,7 @@ fn vector_faces_enumerates_adjacent_faces_with_the_same_tap_boundaries() {
     let faces = vector_faces(&lines, [0., -20., 340., 110.]);
     assert_eq!(faces.len(), 3);
     for x in [70., 170., 270.] {
-        let tapped = vector_face(&lines, [x, 40.]).unwrap();
+        let tapped = vector_face(&lines, [x, 40.], Some(0)).unwrap();
         let face = faces.iter().find(|face| face_path(face).encloses([x, 40.], 0.001)).unwrap();
         assert_eq!(face.geometry.hull(), tapped.geometry.hull());
         assert_eq!(face.boundary, tapped.boundary);
@@ -435,11 +435,90 @@ fn vector_faces_enumerates_nested_faces_with_only_their_immediate_holes() {
     let faces = vector_faces(&lines, [-10., -10., 210., 210.]);
     assert_eq!(faces.len(), 3);
     for (point, holes) in [([25., 25.], 1), ([60., 60.], 1), ([100., 100.], 0)] {
-        let tapped = vector_face(&lines, point).unwrap();
+        let tapped = vector_face(&lines, point, Some(0)).unwrap();
         let face = faces.iter().find(|face| face_path(face).encloses(point, 0.001)).unwrap();
         assert_eq!(face.geometry.hull(), tapped.geometry.hull());
         assert_eq!(face.boundary, tapped.boundary);
         assert_eq!(face.geometry.subpaths().len(), holes + 1);
     }
     assert_eq!(faces.iter().filter(|face| face_path(face).encloses([100., 100.], 0.001)).count(), 1);
+}
+
+fn gappy_face(gap: f64, angle: f64) -> PathItem {
+    let (s, c) = angle.to_radians().sin_cos();
+    let points = [[50. - gap * 0.5, 0.], [0., 0.], [0., 100.], [100., 100.], [100., 0.], [50. + gap * 0.5, 0.]]
+        .map(|[x, y]| [50. + (x - 50.) * c - (y - 50.) * s, 50. + (x - 50.) * s + (y - 50.) * c]);
+    face_line(1, &points, false, 2.)
+}
+fn reached_face(paths: &[PathItem], point: [f64; 2], reach: Option<u32>) -> Option<VectorFace> {
+    vector_face(&paths.iter().map(|path| FaceLine { path, offset: [0.; 2] }).collect::<Vec<_>>(), point, reach)
+}
+
+#[test]
+fn vector_seals_close_rotated_gaps_at_the_first_allowed_reach() {
+    for angle in [0., 30., 60., 90.] {
+        let paths = [gappy_face(10., angle)];
+        assert!(reached_face(&paths, [50., 50.], Some(0)).is_none(), "{angle}");
+        assert!(face_path(&reached_face(&paths, [50., 50.], None).unwrap()).encloses([50., 50.], 0.001));
+    }
+    for (gap, reach) in [(40., 48), (56., 64)] {
+        let paths = [gappy_face(gap, 0.)];
+        assert!(reached_face(&paths, [50., 50.], Some(32)).is_none());
+        assert!(reached_face(&paths, [50., 50.], Some(reach)).is_some());
+        assert_eq!(reached_face(&paths, [50., 50.], None).is_some(), gap == 40.);
+    }
+}
+
+#[test]
+fn vector_seals_pair_facing_ends_once_and_keep_enclosure_enumeration_open() {
+    let paths = [gappy_face(10., 0.)];
+    let face = reached_face(&paths, [50., 50.], Some(16)).unwrap();
+    assert_eq!(face.geometry.subpaths().len(), 1);
+    assert_eq!(face.geometry.subpaths()[0].len(), 6);
+    assert_eq!(face.boundary, [0].into());
+    let lines = [FaceLine { path: &paths[0], offset: [0.; 2] }];
+    assert!(vector_faces(&lines, [-20., -20., 120., 120.]).is_empty());
+}
+
+#[test]
+fn vector_seal_ray_splits_the_actual_mid_edge_parameter() {
+    for overlapping in [false, true] {
+        let mut paths = vec![face_line(1, &[[0., 0.], [100., 0.], [100., 100.], [10., 100.], [10., 25.]], false, 2.)];
+        if overlapping { paths.push(face_line(2, &[[-20., 0.], [100., 0.]], false, 2.)); }
+        let face = reached_face(&paths, [50., 50.], Some(32)).unwrap();
+        let points = face.geometry.subpaths()[0].anchors().map(Anchor::point).collect::<Vec<_>>();
+        assert!(points.contains(&[10., 0.]), "{overlapping}: {points:?}");
+        assert_eq!(face.geometry.hull(), [10., 0., 100., 100.]);
+    }
+}
+
+#[test]
+fn vector_seals_do_not_turn_away_pointing_spurs_into_face_boundaries() {
+    let paths = [gappy_face(20., 0.), face_line(2, &[[100., 50.], [125., 50.]], false, 2.)];
+    let face = reached_face(&paths, [50., 50.], None).unwrap();
+    assert_eq!(face.boundary, [0].into());
+    assert_eq!(face.geometry.hull(), [0., 0., 100., 100.]);
+}
+
+#[test]
+fn vector_touch_joined_end_does_not_seal_into_another_face() {
+    let paths = [face_box(1, 0., 40.), face_line(2, &[[40., 20.], [60., 20.]], false, 2.)];
+    let off = reached_face(&paths, [20., 30.], Some(0)).unwrap();
+    let auto = reached_face(&paths, [20., 30.], Some(48)).unwrap();
+    assert_eq!(off.geometry, auto.geometry);
+    assert_eq!(off.boundary, auto.boundary);
+}
+
+#[test]
+fn vector_auto_reuses_flattening_without_admitting_inactive_cached_lines() {
+    let mut path = gappy_face(10., 0.);
+    let mut subpaths = vec![Subpath::new(&[[280., -60.], [0., -60.]].map(Anchor::corner), false)];
+    subpaths.extend(path.geometry.subpaths().iter().cloned());
+    path.geometry = Arc::new(PathGeometry::new(subpaths).unwrap());
+    let distant = face_line(2, &[[310., -80.], [300., -70.], [290., -60.], [290., -50.]], false, 2.);
+    let paths = [path, distant];
+    let auto = reached_face(&paths, [50., 50.], None).unwrap();
+    let fixed = reached_face(&paths, [50., 50.], Some(16)).unwrap();
+    assert_eq!(auto.geometry, fixed.geometry);
+    assert_eq!(auto.boundary, [0].into());
 }
