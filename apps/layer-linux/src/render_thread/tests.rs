@@ -858,3 +858,102 @@ fn native_late_shader_failure_after_startup() {
     let cause = result.expect("GPU owner panicked").expect_err("GPU owner ignored the compiler failure");
     assert!(cause.contains(CAUSE), "GPU owner lost the recorded cause: {cause}");
 }
+
+#[test]
+fn switch_transition_failure_is_ready_before_its_wake() {
+    let transition = CanvasTransition::default();
+    let (commands, receiver) = mpsc::channel();
+    transition.listen(commands);
+    assert!(transition.take().is_none());
+    drop(TransitionReply(transition.clone(), None));
+    assert!(matches!(receiver.try_recv(), Ok(Command::Wake)));
+    assert!(matches!(transition.take(), Some(None)));
+    assert!(receiver.try_recv().is_err());
+}
+
+#[test]
+fn switch_transition_completion_before_attach_wakes_the_incoming_worker() {
+    let transition = CanvasTransition::default();
+    TransitionReply(transition.clone(), None).finish(None);
+    let (commands, receiver) = mpsc::channel();
+    transition.listen(commands);
+    assert!(matches!(receiver.try_recv(), Ok(Command::Wake)));
+    assert!(matches!(transition.take(), Some(None)));
+}
+
+#[test]
+fn switch_transition_forwards_an_unfinished_switch_without_waiting() {
+    let first = CanvasTransition::default();
+    let next = CanvasTransition::default();
+    let (commands, receiver) = mpsc::channel();
+    next.listen(commands);
+    let old_parent = Arc::new(ParentReleased::default());
+    let next_parent = Arc::new(ParentReleased::default());
+    first.state.lock().unwrap().forward = Some(TransitionReply(next.clone(), Some(ParentRelease(next_parent.clone()))));
+    assert!(first.take().is_none());
+    assert!(next.take().is_none());
+    assert!(!old_parent.done.load(Ordering::Acquire));
+    assert!(!next_parent.done.load(Ordering::Acquire));
+    drop(TransitionReply(first, Some(ParentRelease(old_parent.clone()))));
+    assert!(old_parent.done.load(Ordering::Acquire));
+    assert!(next_parent.done.load(Ordering::Acquire));
+    assert!(matches!(receiver.try_recv(), Ok(Command::Wake)));
+    assert!(matches!(next.take(), Some(None)));
+    assert!(receiver.try_recv().is_err());
+}
+
+#[test]
+fn switch_transition_receipt_does_not_wait_for_the_producer_lock() {
+    let transition = CanvasTransition::default();
+    let state = transition.state.lock().unwrap();
+    assert!(transition.take().is_none());
+    drop(state);
+    TransitionReply(transition.clone(), None).finish(None);
+    assert!(matches!(transition.take(), Some(None)));
+}
+
+#[test]
+fn resized_switch_invalidates_the_native_handoff_without_waiting_for_its_producer() {
+    let transition = CanvasTransition::new([2560, 1600]);
+    let state = transition.state.lock().unwrap();
+    transition.resize([2560, 1600]);
+    assert!(!transition.invalidated.load(Ordering::Acquire));
+    transition.resize([1100, 750]);
+    transition.resize([2560, 1600]);
+    assert!(transition.invalidated.load(Ordering::Acquire));
+    drop(state);
+    TransitionReply(transition.clone(), None).finish(None);
+    assert!(matches!(transition.take(), Some(None)));
+}
+
+#[test]
+fn switch_transition_parent_release_wakes_its_async_retirement() {
+    use std::{future::Future, task::{Context, Poll, Wake, Waker}};
+    struct WakeCount(AtomicUsize);
+    impl Wake for WakeCount { fn wake(self: Arc<Self>) { self.0.fetch_add(1, Ordering::Release); } }
+    let released = Arc::new(ParentReleased::default());
+    let parent = ParentRelease(released.clone());
+    let wake = Arc::new(WakeCount(AtomicUsize::new(0)));
+    let waker = Waker::from(wake.clone());
+    let mut context = Context::from_waker(&waker);
+    let mut wait = Box::pin(released.wait());
+    assert_eq!(wait.as_mut().poll(&mut context), Poll::Pending);
+    drop(parent);
+    assert_eq!(wake.0.load(Ordering::Acquire), 1);
+    assert_eq!(wait.as_mut().poll(&mut context), Poll::Ready(()));
+}
+
+#[test]
+fn reused_child_initial_publication_commits_parent_without_geometry_change() {
+    let mut chrome = ChromeHandoff::default();
+    chrome.ready();
+    assert!(!chrome.needs_parent_commit(false));
+    assert!(chrome.grant(0));
+    assert!(chrome.should_hold());
+    assert!(chrome.needs_parent_commit(false));
+    assert_eq!(chrome.publish(), Some(0));
+    assert!(!chrome.needs_parent_commit(false));
+    assert!(chrome.initial_applied());
+    assert!(!chrome.needs_parent_commit(false));
+    assert!(chrome.needs_parent_commit(true));
+}

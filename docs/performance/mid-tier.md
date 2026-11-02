@@ -2148,3 +2148,25 @@ Evidence is under `artifacts/rotation-snap/android/performance/`.
 
 The [architecture](../architecture.md) defines the worker and queue bounds.
 Warm canvas motion keeps its existing preparation and GPU paths.
+
+## Canvas tab transitions
+
+Measured 2026-11-02 on MovinkPad 11 at verified 90 Hz, thermal status 0,
+release Rust and the same 6000 × 4000 paper drawings. Ten switches per arm
+compare this transition with its refinement pause diagnostically disabled → enabled.
+
+| Metric | Pause disabled → enabled |
+| --- | --- |
+| Fade presents/s | 12.72 → 22.59 |
+| Presentation gap p99 | 200.94 → 89.31 ms |
+| Showing → logical settled, median | 1273.31 → 1303.09 ms |
+
+Both arms miss 90 Hz. Logical settlement means the backend reports no pending
+work or edits, including background caches. On the same build and blue drawing,
+one five-second steady pan has viewport GPU median/p99 14.865/16.618 ms;
+fade samples have 20.211/22.400 ms, about 36%/35% higher. The fade adds a
+full-surface held-image read and blend; it uses retained attachment loads while
+pan uses FIFO clears, so the entire difference cannot be assigned to blending.
+Reducing this additional cost remains follow-up work. The longer post-presenter
+waits remain unattributed; these results do not qualify the fade's frame rate.
+Raw runs: `/mnt/localssd/capycanvas7-issue24-impl/switch-transition-android/`.

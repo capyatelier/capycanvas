@@ -44,6 +44,9 @@ pub(crate) struct Recorder {
     pub(crate) region_reply: Option<layer_render::RegionResult>,
     pub(crate) fill_preview: Option<layer_render::FillPreview>,
     pub(crate) fill_reveal: Option<layer_render::FillReveal>,
+    pub(crate) showing_drawing: bool,
+    pub(crate) canvas_transition: Option<f32>,
+    pub(crate) canvas_transition_updates: usize,
     pub(crate) region_fails: bool,
     pub(crate) region_cancels: usize,
     pub(crate) bounds_requests: Vec<layer_core::ContentBoundsRequest>,
@@ -149,6 +152,8 @@ impl CanvasRenderer for Recorder {
     fn set_fill_preview(&mut self,preview:Option<layer_render::FillPreview>) {self.fill_preview=preview;}
     fn fill_preview_ready(&self)->Option<(u64,u64)> {self.fill_preview.as_ref().filter(|_|!self.settling).map(|preview|(preview.transaction,preview.revision))}
     fn set_fill_reveal(&mut self,reveal:Option<layer_render::FillReveal>) {self.fill_reveal=reveal;}
+    fn showing_drawing(&self)->bool {self.showing_drawing}
+    fn set_canvas_transition(&mut self,alpha:Option<f32>) {self.canvas_transition=alpha;self.canvas_transition_updates+=1;}
     fn request_region(
         &mut self,
         request: layer_render::RegionRequest,

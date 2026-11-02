@@ -7,7 +7,7 @@ use layer_host::{
     scene::SceneDisplay,
 };
 use layer_render::CanvasRenderer;
-use layer_render_wgpu::ViewportPresenter;
+use layer_render_wgpu::{HeldCanvas, ViewportPresenter};
 use layer_ui::{CanvasCursor, PointerButton};
 use std::{
     cell::RefCell,
@@ -103,6 +103,7 @@ pub struct CapyHost {
     config: Option<wgpu::SurfaceConfiguration>,
     surface_invalid: bool,
     presenter: Option<ViewportPresenter>,
+    held_canvas: Option<HeldCanvas>,
     native: NativeHost,
     instance: wgpu::Instance,
     cursor: CanvasCursor,
@@ -285,6 +286,7 @@ impl CapyHost {
             config: None,
             surface_invalid: false,
             presenter: None,
+            held_canvas: None,
             native,
             instance,
             cursor: CanvasCursor::default(),
@@ -330,7 +332,13 @@ impl CapyHost {
         if epoch != self.document_epoch {
             self.document_epoch = epoch;
             self.target = None;
-            self.presenter = None;
+            if let Some(mut presenter) = self.presenter.take() {
+                let gpu = self.native.session.engine().backend().0.as_ref()
+                    .map(|gpu| (gpu.device(), gpu.queue()))
+                    .or_else(|| self.documents.as_ref().and_then(|documents| documents.gpu_context())
+                        .map(|gpu| (&gpu.device, &gpu.queue)));
+                self.held_canvas = gpu.and_then(|(device, queue)| presenter.capture_held(device, queue));
+            }
             self.presenter_key = None;
             self.surface_ready.retire_chrome();
             self.cursor = Default::default();
@@ -405,6 +413,7 @@ impl CapyHost {
             // CPU assets, history and input remain in the same UiSession.
             if let Some(service) = &mut self.documents { service.renderer_unavailable(&mut self.native)?; }
             self.presenter = None;
+            self.held_canvas = None;
             self.presenter_key = None;
             self.surface_ready.retire_chrome();
             let renderer = layer_host::Renderer(self.native.session.renderer_mut().0.take());
@@ -441,7 +450,8 @@ impl CapyHost {
         let renderer = layer_host::GpuContext::from_factory(gpu.factory).rasterizer(
             self.native.session.engine().document().composition().color, &self.native.renderer_options(), false)?;
         let encoding = self.display.encoding(config.format);
-        let presenter = ViewportPresenter::for_surface(&renderer, config.format, encoding).map_err(err)?;
+        let mut presenter = ViewportPresenter::for_surface(&renderer, config.format, encoding).map_err(err)?;
+        presenter.adopt_held(self.held_canvas.take());
         self.presenter_key = Some((renderer.document_color(), encoding));
         presenter.pipelines_ready(&renderer);
         gpu_state.check()?;
@@ -496,7 +506,12 @@ impl CapyHost {
         let headroom = self.display.available_headroom(config.format);
         let key = (gpu.document_color(), encoding);
         if self.presenter_key != Some(key) {
-            let presenter = ViewportPresenter::for_surface(gpu, config.format, encoding).map_err(err)?;
+            let held = match self.presenter.as_mut() {
+                Some(presenter) => presenter.capture_held(gpu.device(), gpu.queue()),
+                None => self.held_canvas.take(),
+            };
+            let mut presenter = ViewportPresenter::for_surface(gpu, config.format, encoding).map_err(err)?;
+            presenter.adopt_held(held);
             presenter.pipelines_ready(gpu);
             self.presenter = Some(presenter);
             self.presenter_key = Some(key);
@@ -1592,6 +1607,7 @@ pub unsafe extern "C" fn capy_suspend_renderer(host: u64) -> i32 {
         host.native.suspend_renderer()?;
         host.native.reset_canvas_frame_rate();
         host.presenter = None;
+        host.held_canvas = None;
         host.surface_ready = Default::default();
         host.chrome.reset_presented();
         drop(host.native.session.renderer_mut().0.take());

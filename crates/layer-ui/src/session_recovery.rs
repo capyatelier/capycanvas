@@ -186,7 +186,7 @@ impl<R:CanvasRenderer> UiSession<R> {
             workspace_drag_tabs:_,workspace_model_revision:_,workspace_content_revision:_,workspace_history:_,
             workspace_transition:_,workspace_read_only:_,workspace_preview:_,managed_workspace:_,interaction:_,
             cursor:_,next_request:_,layer_interaction:_,layer_preview_revisions:_,effect_catalog:_,pending_filters:_,
-            tilt_calibration:_,tilt_meter_changed:_,tools:_,tool_origin:_,pending_tool_drawer:_,new_drawing:_,new_drawing_order:_}=self;
+            tilt_calibration:_,tilt_meter_changed:_,tools:_,tool_origin:_,pending_tool_drawer:_,new_drawing:_,new_drawing_order:_,canvas_transition:_}=self;
         self.require_raster_snapshot()?;
         let profiles=self.files.last_export.as_ref().and_then(|last|match &last.recipe.profile.profile {layer_core::color::ColorProfile::Icc(bytes)=>Some(layer_core::color::ColorProfile::Icc(bytes.clone())),_=>None}).into_iter().collect();
         Ok(SessionCapture {editor:engine.capture_session(state.document_file.epoch).map_err(error)?,state:self.session_document_state(),profiles})

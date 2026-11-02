@@ -907,6 +907,8 @@ pub trait CanvasRenderer {
     fn set_fill_preview(&mut self, _preview: Option<FillPreview>) {}
     fn fill_preview_ready(&self)->Option<(u64,u64)> {None}
     fn set_fill_reveal(&mut self, _reveal: Option<FillReveal>) {}
+    fn showing_drawing(&self) -> bool { false }
+    fn set_canvas_transition(&mut self, _alpha: Option<f32>) {}
     /// A retouching stroke whose source was not ready while the pen was down.
     /// It must be replayed once, after contact ends. Each stroke is reported
     /// once; renderers without retouch sources report none.

@@ -407,6 +407,8 @@ pub(crate) struct DocumentService {
     recording_save: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
 }
 impl DocumentService {
+    #[cfg(target_os = "windows")]
+    pub(crate) fn gpu_context(&self) -> Option<&layer_host::GpuContext> { self.window.gpu.as_ref() }
     #[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
     pub(crate) fn set_localization(&mut self, localization: Arc<layer_ui::Localizer>) -> Result<(), String> {
         if self.window.set_localization(localization.clone()) {

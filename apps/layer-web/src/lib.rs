@@ -1163,7 +1163,9 @@ impl WebApp {
                 surface.surface.configure(gpu.device(), &surface.config);
                 surface.presenter.set_target_retention(true);
             } else if surface.presenter_color != gpu.document_color() {
+                let held = surface.presenter.capture_held(gpu.device(), gpu.queue());
                 surface.presenter = ViewportPresenter::for_surface(gpu, surface.config.format, color).map_err(js)?;
+                surface.presenter.adopt_held(held);
                 surface.presenter_color = gpu.document_color();
                 surface.presenter.set_target_retention(true);
             }

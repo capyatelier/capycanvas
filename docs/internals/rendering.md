@@ -217,6 +217,15 @@ them.
 reference white; a raw linear clear is incorrect for an encoded UNORM target.
 Standalone transparent overview targets retain their transparent clear.
 
+Before a drawing's first non-backdrop composition, the presenter shows the
+surround or the previous drawing's held artwork. A held image contains only the
+surface-sized artwork pass; chrome and cursor overlays stay live above it.
+`UiSession` starts a 150 ms fade when the renderer reports Showing. Rapid
+switches through Waiting drawings retain the original image. A size, format,
+encoding or device mismatch discards it; completion releases its transient GPU
+charge. GTK transfers the native child surface with the image so replacing a
+worker preserves the displayed pixels.
+
 The artwork pipelines leave out the paper lighting code; a second set with it
 compiles the first time paper lighting shows, in the background where a startup
 compiler runs, and the plain set draws until it is ready.

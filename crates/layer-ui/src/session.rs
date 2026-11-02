@@ -41,6 +41,9 @@ mod held_actions;
 #[path = "color_history_session.rs"]
 mod color_history_session;
 use held_actions::{ERASER_END, merge_change};
+#[path = "canvas_transition.rs"]
+mod canvas_transition;
+use canvas_transition::CanvasTransition;
 #[path = "session_bubbles.rs"]
 mod session_bubbles;
 #[path = "zen_peek.rs"]
@@ -299,6 +302,7 @@ pub struct UiSession<R: CanvasRenderer> {
     filter_previews: filter_previews::Previews,
     eyedropper: crate::eyedropper::Eyedropper,
     region_tools: region_tools::RegionTools,
+    canvas_transition: CanvasTransition,
     selection_tools: selection_tools::SelectionTools,
     tonal_tools: tonal_selection::TonalTools,
     painted_selections: painted_selections::PaintedSelections,
@@ -560,6 +564,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             filter_previews: Default::default(),
             eyedropper: Default::default(),
             region_tools: Default::default(),
+            canvas_transition: Default::default(),
             selection_tools: Default::default(),
             tonal_tools: Default::default(),
             painted_selections: Default::default(),
@@ -691,6 +696,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         session.refresh_commands();
         session.refresh_shortcuts(true);
         session.update_toolbar_context();
+        session.engine.set_canvas_transition(Some(1.));
         Ok(session)
     }
 
@@ -5011,7 +5017,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     /// Includes shared background work as well as the drawing engine's needs.
     pub fn wants_continuous_frames(&self) -> bool {
-        self.input_ui_pending() || self.edge_catching_up() || self.effect_analyses.busy() || (self.histogram.demand && !self.histogram.settled) || (self.tonal_histogram.demand && !self.tonal_histogram.settled)
+        self.canvas_transition.started.is_some() || self.input_ui_pending() || self.edge_catching_up() || self.effect_analyses.busy() || (self.histogram.demand && !self.histogram.settled) || (self.tonal_histogram.demand && !self.tonal_histogram.settled)
             || self.interaction.axes.active()
             || self.touch_repeat_pending()
             || self.layer_interaction.touches.pending()
@@ -5061,6 +5067,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .render_frame_for(now_ns, presentation_ns)
             .map_err(error)?;
         changed |= self.save_admitted_pen()?;
+        let transition_changed = self.advance_canvas_transition(now_ns);
         if self.engine.metrics().input_budget_completions!=budget_completions {
             self.raise_message_notice(MessageId::COMMON_STROKE_INPUT_LIMIT);
         }
@@ -5160,11 +5167,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             changed |= regions::COMMANDS;
         }
         self.frame_commands_pending = false;
-        Ok(merge_change(settled, self.changed(
+        let mut change = merge_change(settled, self.changed(
             changed,
             analyses_changed != 0 || tonal_changed || self.engine.document().working.generation != working_generation
                 || self.wants_continuous_frames() || self.engine.has_pending_document_edits(),
-        )))
+        ));
+        change.presentation_wake |= transition_changed;
+        Ok(change)
     }
 
     fn sync_previews(&mut self, now_ns: u64, presentation_ns: u64) -> Option<[u64; 2]> {

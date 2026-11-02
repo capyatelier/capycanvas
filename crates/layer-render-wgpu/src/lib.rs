@@ -112,6 +112,8 @@ mod layer_tests;
 #[cfg(test)]
 mod test_support;
 mod present;
+mod present_transition;
+pub use present_transition::HeldCanvas;
 mod backdrop_blur;
 pub use backdrop_blur::{BackdropBlurStyle, BackdropRegion};
 mod panel_surface;
@@ -1046,6 +1048,7 @@ pub struct WgpuRasterizer {
     color_sampler: color_sample::ColorSampler,
     composite_revision: u64,
     presentation: DrawingPresentation,
+    canvas_transition: Option<f32>,
     artwork_revision: u64,
     evaluated_object_revision: Option<u64>,
     composite_damage: PixelRect,
@@ -1441,6 +1444,7 @@ impl WgpuRasterizer {
             color_sampler: color_sample::ColorSampler::new(),
             composite_revision: 0,
             presentation: DrawingPresentation::default(),
+            canvas_transition: None,
             artwork_revision: 0,
             evaluated_object_revision: None,
             composite_damage: PixelRect::EMPTY,
@@ -3738,6 +3742,7 @@ impl CanvasRenderer for WgpuRasterizer {
     }
     fn raster_dependencies_ready(&mut self, packet: FramePacket<'_>, preview: Option<&layer_render::TransformPreview>) -> bool {
         self.activate_presentation(packet.scene);
+        if self.retained_transition_frame(packet, preview) { return true; }
         if self.bake_preflight.as_ref().is_some_and(|state|!state.matches(packet,self.document_color())) {self.bake_preflight=None;}
         let mut required = startup::Requirements::default();
         self.transforms.as_ref().unwrap().require_frame(self, packet, preview, &mut required);
@@ -3954,6 +3959,8 @@ impl CanvasRenderer for WgpuRasterizer {
         #[cfg(not(target_arch = "wasm32"))]
         if enabled { self.factory.start_memory_samples(); }
     }
+    fn showing_drawing(&self) -> bool { self.presentation.showing }
+    fn set_canvas_transition(&mut self, alpha: Option<f32>) { self.canvas_transition=alpha; }
     fn telemetry(&self) -> layer_render::RendererTelemetry {
         let mut t = self.telemetry.snapshot(&self.device, &self.queue);
         #[cfg(not(target_arch = "wasm32"))]
@@ -3962,7 +3969,7 @@ impl CanvasRenderer for WgpuRasterizer {
         t.submissions = m.submissions;
         t.dabs = m.dabs;
         t.dirty_pixels = m.composited_pixels;
-        t.resident_bytes = self.raster_staging_bytes()
+        t.resident_bytes = self.device.transient_display.load(std::sync::atomic::Ordering::Acquire) + self.raster_staging_bytes()
             + self.source_tiles.borrow().gpu_bytes()
             + self.moving_images.storage_bytes()
             + m.paint_storage_bytes
@@ -4127,6 +4134,26 @@ impl CanvasRenderer for WgpuRasterizer {
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> { self.submit_frame(packet, None) }
 }
 impl WgpuRasterizer {
+    fn empty_artwork_frame(&self, packet: FramePacket<'_>, preview: Option<&layer_render::TransformPreview>) -> bool {
+        packet.commit_rasters && !packet.composite_all && !packet.reset_layers && packet.restore_rasters.is_empty()
+            && packet.dabs.is_empty() && packet.dab_batches.is_empty()
+            && preview.is_none() && self.transform_preview.is_none()
+            && self.fill_preview.as_ref().map(layer_render::FillPreview::key)==self.fill_preview_shown
+            && self.transform_damage.is_empty()
+            && self.moving_layer.is_none() && self.moving_pixels.is_none()
+            && self.vector_preview.as_ref().map(|p| (p.owner, p.revision)) == self.vector_preview_shown.map(|(owner, revision, _)| (owner, revision))
+            && self.vector_motion.as_ref() == self.vector_motion_drawn.as_ref().map(|(motion, _)| motion)
+            && self.vector_motion_paths.as_ref().filter(|_| self.vector_motion.is_some()).map(Arc::as_ptr) == self.vector_motion_paths_drawn.as_ref().map(Arc::as_ptr)
+            && !self.vector_selection_changed
+            && self.artwork_frame.as_ref().is_some_and(|frame| frame.view == packet.view && frame.same_artwork(packet))
+    }
+    fn retained_transition_frame(&self, packet: FramePacket<'_>, preview: Option<&layer_render::TransformPreview>) -> bool {
+        self.canvas_transition.is_some() && self.presentation.showing && !self.analysis_dirty
+            && self.empty_artwork_frame(packet, preview)
+            && (self.document_damage.is_empty() || self.object_deferred
+                && self.evaluated_object_revision == Some(packet.scene.revision())
+                && self.scale_display.as_ref().is_some_and(|cache|cache.deferred_presentation().is_some()))
+    }
     fn clear_preview_stamps(&self) {
         for page in &self.preview_pages {page.primary.preview.set(None);if let Some(secondary)=&page.secondary {secondary.preview.set(None);}}
     }
@@ -4185,28 +4212,20 @@ impl WgpuRasterizer {
 
     fn submit_frame_inner(&mut self, packet: FramePacket<'_>, settled_commit: Option<raster::native_edit::NativeFrame>) -> Result<(), GpuRasterError> {
         if let Some(error)=self.take_bake_failure().or_else(||self.take_restore_failure()) {return Err(error);}
+        let retained_transition = self.retained_transition_frame(packet, self.transform_preview.as_ref());
         let analysis_dirty = std::mem::take(&mut self.analysis_dirty);
         let packet = FramePacket {composite_all: packet.composite_all || analysis_dirty, ..packet};
         let packet = FramePacket { inspect_mask: if self.clipping_preview.iter().any(|enabled| *enabled) { None } else { packet.inspect_mask }, ..packet };
         if packet.document_extent.iter().any(|n| *n > self.max_document_dimension()) {
             return Err(GpuRasterError::ExtentUnsupported);
         }
-        if !self.background_ready.load(std::sync::atomic::Ordering::Acquire) && !self.navigator.pending()
+        if settled_commit.is_none() && (retained_transition
+            || !self.background_ready.load(std::sync::atomic::Ordering::Acquire) && !self.navigator.pending()
             && !self.moving_images_pending()
             && !self.object_deferred && !self.scene.as_ref().is_some_and(|scene| scene.objects_pending())
             && !self.scale_display.as_ref().is_some_and(scene::scale::Cache::approximating)
-            && packet.commit_rasters && !packet.composite_all && !packet.reset_layers && packet.restore_rasters.is_empty()
-            && packet.dabs.is_empty() && packet.dab_batches.is_empty()
-            && settled_commit.is_none() && self.transform_preview.is_none()
-            && self.fill_preview.as_ref().map(layer_render::FillPreview::key)==self.fill_preview_shown
-            && self.transform_damage.is_empty() && self.document_damage.is_empty()
-            && self.moving_layer.is_none() && self.moving_pixels.is_none()
-            && self.vector_preview.as_ref().map(|p| (p.owner, p.revision)) == self.vector_preview_shown.map(|(owner, revision, _)| (owner, revision))
-            && self.vector_motion.as_ref() == self.vector_motion_drawn.as_ref().map(|(motion, _)| motion)
-            && self.vector_motion_paths.as_ref().filter(|_| self.vector_motion.is_some()).map(Arc::as_ptr) == self.vector_motion_paths_drawn.as_ref().map(Arc::as_ptr)
-            && !self.vector_selection_changed
-            && self.artwork_frame.as_ref().is_some_and(|frame|
-                frame.view == packet.view && frame.same_artwork(packet))
+            && self.document_damage.is_empty()
+            && self.empty_artwork_frame(packet, self.transform_preview.as_ref()))
         { return Ok(()); }
         self.update_paper_lighting(packet.scene)?;
         let display_request = scene::scale::request(self, packet)?;
@@ -6450,6 +6469,8 @@ fn lattice_noise(x: u32, y: u32, seed: u32) -> f32 {
     (value & 0x00ff_ffff) as f32 / 0x00ff_ffff_u32 as f32
 }
 
+#[cfg(test)]
+mod canvas_transition_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -116,6 +116,7 @@ impl ChromeHandoff {
         self.synchronized.take().is_some()
     }
     fn should_hold(&self) -> bool { self.first == FirstChrome::Granted || self.changed() && self.hold }
+    fn needs_parent_commit(&self, moved: bool) -> bool { moved || self.first == FirstChrome::Granted }
     fn publish(&mut self) -> Option<u64> {
         assert!(self.can_present());
         if !self.changed() && self.first == FirstChrome::Visible { return None; }
@@ -346,9 +347,106 @@ fn presentation_needed(view: Option<ViewState>, changed: bool, scene: impl FnOnc
     view.is_some_and(|view| changed || scene(view))
 }
 
+#[derive(Clone, Default)]
+pub(crate) struct CanvasTransition {
+    state: Arc<std::sync::Mutex<TransitionState>>,
+    extent: [u32; 2],
+    invalidated: Arc<AtomicBool>,
+}
+#[derive(Default)]
+struct TransitionState {
+    ready: bool,
+    value: Option<NativeTransition>,
+    wake: Option<mpsc::Sender<Command>>,
+    forward: Option<TransitionReply>,
+}
+impl Drop for TransitionState {
+    fn drop(&mut self) {
+        if let Some(native) = self.value.take() { gtk::gio::spawn_blocking(move || drop(native)); }
+    }
+}
+struct NativeTransition {
+    extent: [u32; 2],
+    surface: wgpu::Surface<'static>,
+    instance: wgpu::Instance,
+    child: Child,
+    held: Option<layer_render_wgpu::HeldCanvas>,
+    parents: Vec<ParentRelease>,
+}
+#[derive(Default)]
+struct ParentReleased {
+    done: AtomicBool,
+    waker: std::sync::Mutex<Option<std::task::Waker>>,
+}
+impl ParentReleased {
+    async fn wait(&self) {
+        std::future::poll_fn(|context| {
+            let mut waker = self.waker.lock().unwrap();
+            if self.done.load(Ordering::Acquire) { std::task::Poll::Ready(()) }
+            else { *waker = Some(context.waker().clone()); std::task::Poll::Pending }
+        }).await
+    }
+}
+struct ParentRelease(Arc<ParentReleased>);
+impl Drop for ParentRelease {
+    fn drop(&mut self) {
+        let waker = {
+            let mut waker = self.0.waker.lock().unwrap();
+            self.0.done.store(true, Ordering::Release);
+            waker.take()
+        };
+        if let Some(waker) = waker { waker.wake(); }
+    }
+}
+struct TransitionReply(CanvasTransition, Option<ParentRelease>);
+impl CanvasTransition {
+    pub(crate) fn new(extent: [u32; 2]) -> Self { Self { extent, ..Default::default() } }
+    fn resize(&self, extent: [u32; 2]) {
+        if extent == self.extent || self.invalidated.swap(true, Ordering::AcqRel) { return; }
+        let transition = self.clone();
+        gtk::gio::spawn_blocking(move || {
+            let native = transition.state.lock().unwrap().value.take();
+            drop(native);
+        });
+    }
+    fn listen(&self, commands: mpsc::Sender<Command>) {
+        let mut state = self.state.lock().unwrap();
+        if state.ready { let _ = commands.send(Command::Wake); }
+        else { state.wake = Some(commands); }
+    }
+    fn take(&self) -> Option<Option<NativeTransition>> {
+        let mut state = self.state.try_lock().ok()?;
+        state.ready.then(|| self.take_value(&mut state))
+    }
+    fn take_value(&self, state: &mut TransitionState) -> Option<NativeTransition> {
+        if self.invalidated.load(Ordering::Acquire) { None } else { state.value.take() }
+    }
+}
+impl TransitionReply {
+    fn finish(mut self, value: Option<NativeTransition>) { self.publish(value); }
+    fn publish(&mut self, mut value: Option<NativeTransition>) {
+        let mut state = self.0.state.lock().unwrap();
+        if state.ready { return; }
+        if let Some(native) = &mut value && let Some(parent) = self.1.take() { native.parents.push(parent); }
+        if value.as_ref().is_some_and(|native| self.0.invalidated.load(Ordering::Acquire) || native.extent != self.0.extent) {
+            let native = value.take().unwrap();
+            gtk::gio::spawn_blocking(move || drop(native));
+        }
+        state.ready = true;
+        let forward = state.forward.take();
+        if forward.is_none() { state.value = value; }
+        else { drop(state); forward.unwrap().finish(value); return; }
+        if let Some(wake) = state.wake.take() { let _ = wake.send(Command::Wake); }
+    }
+}
+impl Drop for TransitionReply {
+    fn drop(&mut self) { self.publish(None); }
+}
+
 enum Command {
     SeedContext(EvaluationContext),
     CaptureContext(ContextRequest),
+    CanvasTransition(Option<f32>),
     LocalTone(Option<Arc<layer_render_wgpu::local_tone::GpuToneGuide>>, mpsc::Sender<Result<(),String>>),
     Proof(Option<Arc<layer_color::ProofLut>>, bool, bool, mpsc::Sender<Result<(), String>>),
     Screen(u64, f32, Option<layer_render_wgpu::ScreenCheck>),
@@ -394,6 +492,7 @@ enum Command {
     DocumentPixels(u64, mpsc::Sender<Result<ReadbackImage, String>>),
     Capture(crate::display_color::ViewColor, mpsc::Sender<Result<ReadbackImage, String>>),
     Stop,
+    Park(TransitionReply),
     #[cfg(test)]
     FailNextFrame,
     #[cfg(test)]
@@ -417,6 +516,7 @@ struct FrameReport {
     retouch_miss: std::sync::atomic::AtomicU64,
     retouch_waiting: std::sync::atomic::AtomicU64,
     paper_drawn: std::sync::atomic::AtomicU64,
+    showing_drawing: AtomicBool,
 }
 enum Reply {
     ColorAdopted(u64, HashMap<AssetId, BrushSource>, layer_render_wgpu::snapshot::SnapshotGpu, Option<layer_render_wgpu::ShaderActivity>),
@@ -470,6 +570,7 @@ impl<T> WorkerJob<T> {
 /// waits on a worker lock, Vulkan acquire, or a GPU completion fence.
 pub struct RenderWorker {
     parent: Option<NativeParent>,
+    transition: Option<CanvasTransition>,
     retirement: Option<crate::retirement::Retirement>,
     overlays: Arc<Overlays>,
     snapshot_job: Option<WorkerJob<layer_render_wgpu::snapshot::SnapshotJob>>,
@@ -568,6 +669,9 @@ impl RenderWorker {
             backdrops:self.backdrops.clone(),panels:self.panel_surfaces.clone(),
             style:self.backdrop_style,backdrop_hold:self.backdrop_hold,overviews:self.overviews.clone()}
     }
+    pub(crate) fn resize_transition(&self, extent: [u32; 2]) {
+        if let Some(transition) = &self.transition { transition.resize(extent); }
+    }
     pub(super) fn present_chrome(&mut self) -> Result<(), BackendError> {
         if self.chrome_sent != Some((self.chrome, self.chrome_hold)) {
             self.chrome_updates.send(ChromeUpdate::Current(self.chrome_presentation(), self.input_order))
@@ -649,6 +753,7 @@ impl RenderWorker {
         area: &gtk::Picture,
         color: layer_core::color::DocumentColor,
         localization: Arc<layer_ui::Localizer>,
+        transition: Option<CanvasTransition>,
     ) -> Result<Self, String> {
         use gtk::prelude::*;
         let window = area.root().and_downcast::<crate::window::Window>().ok_or("The canvas has no window")?;
@@ -659,6 +764,7 @@ impl RenderWorker {
         let area: gtk::glib::SendWeakRef<gtk::Picture> = area.downgrade().into();
         let (mut renderer, receiver, chrome_requests, reply) = Self::channels(color);
         renderer.parent = Some(lease);
+        renderer.transition = transition.clone();
         #[cfg(test)]
         { renderer.startup_pause = NEXT_STARTUP_PAUSE.lock().unwrap().take(); }
         #[cfg(test)]
@@ -671,6 +777,7 @@ impl RenderWorker {
         let failure_area = area.clone();
         let worker_chrome = renderer.presented_chrome.clone();
         let finished_chrome = renderer.presented_chrome.clone();
+        if let Some(transition) = &transition { transition.listen(renderer.commands.clone()); }
         let preparation = Arc::new(PreparationSignal { commands: renderer.commands.clone(), enabled: AtomicBool::new(true), queued: AtomicBool::new(false) });
         #[cfg(test)]
         let worker_stats = renderer.stats.clone();
@@ -688,6 +795,7 @@ impl RenderWorker {
                         }
                     }
                     let mut worker = Worker::new(parent, area, worker_clock, worker_chrome, color, &localization)?;
+                    worker.transition = transition;
                     let signal = preparation.clone();
                     worker.renderer.set_preparation_wake(Arc::new(move || signal.notify()));
                     worker.preparation = Some(preparation);
@@ -736,6 +844,7 @@ impl RenderWorker {
         let presented_chrome = Arc::new(ChromeStatus::new(proof_owner));
         let renderer = Self {
             parent: None,
+            transition: None,
             retirement: None,
             overlays: Arc::default(),
             context_seed: EvaluationContext::default(),
@@ -985,13 +1094,26 @@ impl RenderWorker {
         }
         self.snapshot_gpu.clone().ok_or_else(|| "Canvas renderer is still preparing".into())
     }
-    pub(super) fn stop(&mut self) -> crate::retirement::Retirement {
+    pub(crate) fn stop_for_switch(&mut self, transition: CanvasTransition) -> crate::retirement::Retirement {
+        let parent = self.parent.take();
+        let released = Arc::new(ParentReleased::default());
+        let retirement = self.stop_with(Command::Park(TransitionReply(transition, Some(ParentRelease(released.clone())))));
+        let retired = retirement.clone();
+        gtk::glib::spawn_future_local(async move {
+            released.wait().await;
+            retired.await;
+            drop(parent);
+        });
+        retirement
+    }
+    pub(super) fn stop(&mut self) -> crate::retirement::Retirement { self.stop_with(Command::Stop) }
+    fn stop_with(&mut self, command: Command) -> crate::retirement::Retirement {
         if let Some(retirement) = &self.retirement { return retirement.clone(); }
         #[cfg(test)]
         if let Some(pause) = &self.startup_pause { pause.store(false, Ordering::Release); }
         let _ = self.discard_prepared_color();
         self.presented_chrome.accepting.store(false, Ordering::Release);
-        let _ = self.send(Command::Stop);
+        let _ = self.send(command);
         self.commands = mpsc::channel().0;
         self.chrome_updates = mpsc::channel().0;
         let replies = std::mem::replace(&mut self.replies, mpsc::channel().1);
@@ -1078,6 +1200,10 @@ impl CanvasRenderer for RenderWorker {
     fn set_fill_preview(&mut self,preview:Option<layer_render::FillPreview>) {self.fill_preview=preview;}
     fn fill_preview_ready(&self)->Option<(u64,u64)> {self.report.fill_preview.try_read().ok().and_then(|key|*key)}
     fn set_fill_reveal(&mut self,reveal:Option<layer_render::FillReveal>) {self.fill_reveal=reveal;}
+    fn showing_drawing(&self) -> bool { self.report.showing_drawing.load(Ordering::Acquire) }
+    fn set_canvas_transition(&mut self, alpha: Option<f32>) {
+        let _ = self.send(Command::CanvasTransition(alpha));
+    }
     fn prepare_moving_layer(&mut self, layer: Option<OccurrenceHandle>) {
         if self.moving_layer != layer && self.send(Command::MovingLayer(layer)).is_ok() {
             self.moving_layer = layer;
@@ -1421,6 +1547,8 @@ impl CanvasRenderer for RenderWorker {
 }
 
 struct Worker {
+    clock: Arc<crate::wayland::FrameClock>,
+    transition: Option<CanvasTransition>,
     preparation: Option<Arc<PreparationSignal>>,
     watch: layer_host::DeviceWatch,
     backdrop_submitted: bool,
@@ -1526,6 +1654,7 @@ impl Worker {
         let mut startup_progress = layer_render_wgpu::StartupProgress::default();
         let mut pending_frames: VecDeque<Box<Frame>> = VecDeque::new();
         let mut context_capture: Option<ContextRequest> = None;
+        let mut park = None;
         let mut deferred = VecDeque::new();
         let mut selection_generation = 0;
         let mut region_generation = 0;
@@ -1721,6 +1850,7 @@ impl Worker {
             if context_capture.is_some() {
                 match queued.map(Ok).unwrap_or_else(|| receiver.recv_timeout(Duration::from_millis(1))) {
                     Ok(Command::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Ok(Command::Park(reply)) => { park = Some(reply); break; },
                     Ok(command) => deferred.push_back(command),
                     Err(mpsc::RecvTimeoutError::Timeout) => (),
                 }
@@ -1801,7 +1931,7 @@ impl Worker {
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             };
-            if self.initial_completion.is_some() && !matches!(command, Command::Stop | Command::Wake | Command::PreparationReady | Command::ReleaseChrome(_)) {
+            if self.initial_completion.is_some() && !matches!(command, Command::Stop | Command::Park(_) | Command::CanvasTransition(_) | Command::Wake | Command::PreparationReady | Command::ReleaseChrome(_)) {
                 deferred.push_back(command);
                 continue;
             }
@@ -2030,10 +2160,25 @@ impl Worker {
                 Command::Capture(view, reply) => {
                     let _ = reply.send(self.capture(view));
                 }
+                Command::CanvasTransition(alpha) => {
+                    self.renderer.set_canvas_transition(alpha);
+                    self.pending_present = self.last_view.is_some();
+                }
                 Command::Stop => break,
+                Command::Park(reply) => { park = Some(reply); break; },
             }
         }
         let _ = report.final_context.set(Ok(self.renderer.evaluation_context()));
+        if let Some(reply) = park {
+            if let Some(transition) = self.transition.take() {
+                let mut state = transition.state.lock().unwrap();
+                if state.ready { reply.finish(transition.take_value(&mut state)); }
+                else { state.forward = Some(reply); }
+            } else {
+                let held = self.presenter.capture_held(self.renderer.device(), self.renderer.queue());
+                reply.finish(Some(NativeTransition { extent: [self.config.width,self.config.height], surface: self.surface, instance: self.instance, child: self.child, held, parents: Vec::new() }));
+            }
+        }
         Ok(())
     }
     fn new(
@@ -2044,7 +2189,7 @@ impl Worker {
         color: layer_core::color::DocumentColor,
         localization: &layer_ui::Localizer,
     ) -> Result<Self, String> {
-        let mut child = Child::new(parent, clock)?;
+        let mut child = Child::new(parent, clock.clone())?;
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.backends = wgpu::Backends::VULKAN;
         descriptor.flags = descriptor.flags.with_env();
@@ -2092,6 +2237,8 @@ impl Worker {
         eprintln!("Wayland canvas color: {:?}; available: {:?}", config.color_space, caps.format_capabilities);
         let presenter = workspace_presenter(&renderer, config.format, hdr_encoding.unwrap_or_else(|| view_color.surface()))?;
         Ok(Self {
+            clock,
+            transition: None,
             watch: gpu.watch,
             preparation: None,
             view_color,
@@ -2139,6 +2286,10 @@ impl Worker {
     /// idle canvas when it newly does. A retouching stroke that missed its
     /// source is kept for the session to replay.
     fn report_frame(&mut self, report: &FrameReport) {
+        let showing = self.renderer.showing_drawing();
+        if report.showing_drawing.swap(showing, Ordering::AcqRel) != showing {
+            wake_canvas(&self.area, &self.presented_chrome);
+        }
         if let Ok(mut key)=report.fill_preview.try_write(){*key=self.renderer.fill_preview_ready();}
         if let Ok(mut context) = report.context.try_write() { *context = self.renderer.evaluation_context(); }
         if let Some(stroke) = self.renderer.take_retouch_miss() {
@@ -2369,6 +2520,20 @@ impl Worker {
     }
 
     fn acquire(&mut self) -> Result<Option<wgpu::SurfaceTexture>, String> {
+        if let Some(transition) = &self.transition {
+            let Some(native) = transition.take() else { return Ok(None); };
+            self.transition = None;
+            if let Some(mut native) = native {
+                native.child.set_clock(self.clock.clone());
+                if self.hdr_encoding.is_some() { let _ = native.child.describe_hdr()?; }
+                else { let _ = native.child.describe_sdr()?; }
+                self.surface = native.surface;
+                self.instance = native.instance;
+                self.child = native.child;
+                self.surface_configured = false;
+                self.presenter.adopt_held(native.held);
+            }
+        }
         if self.chrome.release_unheld() { self.child.synchronize(false)?; }
         if !self.chrome.can_present() { return Ok(None); }
         if !self.presenter.pipelines_ready(&self.renderer) || !self.presenter.chrome_ready() {return Ok(None);}
@@ -2459,7 +2624,7 @@ impl Worker {
             timing.mark(3);
         }
         self.renderer.queue().present(target);
-        if moved {
+        if self.chrome.needs_parent_commit(moved) {
             let area = self.area.clone();
             let status = self.presented_chrome.clone();
             gtk::glib::idle_add_once(move || {

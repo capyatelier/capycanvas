@@ -272,8 +272,7 @@ unsafe extern "C" {
     fn gdk_wayland_surface_force_next_commit(surface: *mut gdk::ffi::GdkSurface);
 }
 
-/// Borrowed addresses, sent only while GpuCanvas keeps the GDK parent alive.
-/// Its Drop joins the worker before GTK's unrealize destroys that parent.
+/// Borrowed Wayland handles protected by a NativeParent lease.
 #[derive(Clone, Copy)]
 pub struct Parent {
     display: usize,
@@ -363,6 +362,7 @@ struct Events {
 }
 
 impl Child {
+    pub fn set_clock(&mut self, clock: Arc<FrameClock>) { self.state.clock = clock; }
     pub fn new(parent: Parent, clock: Arc<FrameClock>) -> Result<Self, String> {
         // The system backend creates its OWN queue on the borrowed display.
         // Neither this backend nor Vulkan dispatches GTK's event queue.

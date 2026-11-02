@@ -366,11 +366,15 @@ impl App {
             complete: false,
         };
         if let Some(surface) = &mut self.surface {
-            surface.presenter = ViewportPresenter::for_surface(
-                self.host.session.renderer_mut().0.as_ref().unwrap(),
+            let gpu = self.host.session.renderer_mut().0.as_ref().unwrap();
+            let held = surface.presenter.capture_held(gpu.device(), gpu.queue());
+            let mut presenter = ViewportPresenter::for_surface(
+                gpu,
                 surface.config.format,
                 surface.color,
             ).expect("The negotiated surface encoding remains valid");
+            presenter.adopt_held(held);
+            surface.presenter = presenter;
             surface.presenter.set_target_retention(surface.config.present_mode == wgpu::PresentMode::SharedDemandRefresh);
             surface.last_view = None;
             surface.last_paint_start = self.host.paint_start_sequence();
@@ -603,7 +607,9 @@ impl App {
         let format = if hdr_output { wgpu::TextureFormat::Rgba16Float } else { surface.sdr_format };
         let output_changed = surface.color!=color || surface.config.format!=format;
         if output_changed {
-            let presenter=ViewportPresenter::for_surface(gpu,format,color).map_err(error)?;
+            let held=surface.presenter.capture_held(gpu.device(),gpu.queue());
+            let mut presenter=ViewportPresenter::for_surface(gpu,format,color).map_err(error)?;
+            presenter.adopt_held(held);
             surface.config.format=format;
             surface.config.color_space=color.surface_color_space();
             surface.presenter=presenter;

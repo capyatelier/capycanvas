@@ -16,10 +16,14 @@ pub struct GpuCanvas {
 }
 impl GpuCanvas {
     pub fn reattach(&mut self, area: &gtk::Picture) -> Result<(), String> {
+        self.reattach_with_transition(area, None)
+    }
+    pub(crate) fn reattach_with_transition(&mut self, area: &gtk::Picture, transition: Option<crate::render_thread::CanvasTransition>) -> Result<(), String> {
         let renderer = RenderWorker::new(
             area,
             self.session.engine().document().composition().color,
             self.session.localization().clone(),
+            transition,
         )?;
         let (previous, _) = self.session.replace_renderer(renderer)?;
         drop(previous);
@@ -46,6 +50,15 @@ impl GpuCanvas {
         localization: std::sync::Arc<layer_ui::Localizer>,
         settings: Option<layer_ui::Settings>,
     ) -> Result<Self, String> {
+        Self::with_project_transition(area, project, localization, settings, None)
+    }
+    pub(crate) fn with_project_transition(
+        area: &gtk::Picture,
+        project: Option<(layer_core::Document, Option<layer_ui::DocumentLocation>)>,
+        localization: std::sync::Arc<layer_ui::Localizer>,
+        settings: Option<layer_ui::Settings>,
+        transition: Option<crate::render_thread::CanvasTransition>,
+    ) -> Result<Self, String> {
         let parent = area
             .native()
             .and_then(|native| native.surface())
@@ -63,7 +76,7 @@ impl GpuCanvas {
             None => (layer_ui::startup_drawing(crate::new_drawing::screen(&parent), &localization)?, None),
         };
         let color = project.composition().color;
-        let renderer = RenderWorker::new(area, color, localization.clone())?;
+        let renderer = RenderWorker::new(area, color, localization.clone(), transition)?;
         let mut session =
             UiSession::from_project_localized(renderer, project, location, extent(area), layer_ui::Platform::Gtk, localization)?;
         if startup { session.mark_startup_drawing(); }
@@ -135,6 +148,7 @@ impl GpuCanvas {
     pub fn render(&mut self, area: &gtk::Picture, now_ns: u64, paced: bool) -> Result<UiChange, String> {
         #[cfg(test)]
         let start = std::time::Instant::now();
+        self.session.engine().backend().resize_transition(extent(area));
         let engine = self.session.engine();
         let transform = engine.transform_preview().is_some();
         if engine

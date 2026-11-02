@@ -829,7 +829,7 @@ impl Documents {
             }
         ));
     }
-    async fn prepare_switch(&self, w: &Rc<Workspace>) -> Result<(), String> {
+    async fn prepare_switch(&self, w: &Rc<Workspace>) -> Result<crate::render_thread::CanvasTransition, String> {
         if w.gpu.borrow().is_none() {
             return Err("Wait for the drawing canvas to finish opening".into());
         }
@@ -890,9 +890,10 @@ impl Documents {
             return Err(layer_ui::bootstrap_view(&w.localization()).editor_closed.to_string());
         }
         self.paused.set(true);
+        let transition = crate::render_thread::CanvasTransition::new(w.gpu.borrow().as_ref().unwrap().session.state().camera.viewport);
         let parked = w.gpu.borrow_mut().as_mut().map(|g| {
             g.session.park_document()?;
-            Ok::<_, String>(g.session.renderer_mut().stop())
+            Ok::<_, String>(g.session.renderer_mut().stop_for_switch(transition.clone()))
         }).transpose();
         if let Err(error) = parked {
             self.paused.set(false);
@@ -901,7 +902,7 @@ impl Documents {
             w.local_tone.resume();
             return Err(error);
         }
-        Ok(())
+        Ok(transition)
     }
     fn park(&self, w: &Workspace) -> Option<GpuCanvas> {
         w.gpu.borrow_mut().take()
@@ -938,14 +939,14 @@ impl Documents {
         if !self.model.borrow().contains_parked(id) {
             return Err(layer_ui::DocumentSessionError::TabClosed.message(&w.localization()));
         }
-        self.prepare_switch(w).await?;
+        let transition = self.prepare_switch(w).await?;
         let previous = self.park(w).ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization()))?;
         let tiles = previous.session.retained_document_tiles();
         let error = {
             let mut model = self.model.borrow_mut();
             let next = model.parked_owner_mut(id).unwrap();
             next.canvas.session.inherit_window_state(&previous.session).err()
-                .or_else(|| next.canvas.reattach(&w.area).err())
+                .or_else(|| next.canvas.reattach_with_transition(&w.area, Some(transition.clone())).err())
         };
         let next = self.model.borrow_mut().exchange(id, Parked { canvas: previous, recovery: w.recovery() }, tiles)
             .unwrap_or_else(|_| unreachable!("validated drawing target"));
@@ -1040,19 +1041,20 @@ impl Documents {
             return self.show_unsupported(w, imported.as_ref(), original, reason).await;
         }
         let mut replace_initial=replace_initial&&w.gpu.borrow().as_ref().is_some_and(|gpu|startup.as_ref().is_some_and(|stamp|gpu.session.can_replace_startup_session(stamp)));
-        self.prepare_switch(w).await?;
+        let mut transition = self.prepare_switch(w).await?;
         let mut previous = Box::new(self.park(w).ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization()))?);
         if self.closing_window.get() || self.cancel_open.get() {
-            let error = previous.reattach(&w.area).err();
+            let error = previous.reattach_with_transition(&w.area, Some(transition.clone())).err();
             *w.gpu.borrow_mut() = Some(*previous);
             self.finish_switch(w, error);
             return Err("Opening was cancelled because the window is closing".into());
         }
-        let candidate = GpuCanvas::with_project_localized(&w.area, Some((project, location)), w.localization(), Some(previous.session.state().settings.clone())).map(Box::new);
+        let candidate = GpuCanvas::with_project_transition(&w.area, Some((project, location)), w.localization(), Some(previous.session.state().settings.clone()), Some(transition.clone())).map(Box::new);
         let candidate = match candidate {
             Ok(mut next) if imported.is_some() || restored.is_some() => match next.prepare_import(|| !w.window.is_visible() || self.closing_window.get() || self.cancel_open.get()).await {
                 Ok(()) => Ok(next), Err(error) => {
-                    let retirement = next.session.renderer_mut().stop();
+                    transition = crate::render_thread::CanvasTransition::new(next.session.state().camera.viewport);
+                    let retirement = next.session.renderer_mut().stop_for_switch(transition.clone());
                     drop(next);
                     retirement.await;
                     Err(error)
@@ -1063,7 +1065,7 @@ impl Documents {
         let mut next = match candidate {
             Ok(next) => next,
             Err(error) => {
-                let restart_error = previous.reattach(&w.area).err();
+                let restart_error = previous.reattach_with_transition(&w.area, Some(transition.clone())).err();
                 *w.gpu.borrow_mut() = Some(*previous);
                 self.finish_switch(w, restart_error);
                 return self.show_unsupported(w, imported.as_ref(), original, error).await;
@@ -1076,10 +1078,11 @@ impl Documents {
                 .or_else(|| next.session.inherit_initial_drawing_tools(&previous.session).err()) };
         let recovery = if let Some((restored,recovery,observed))=restored {
             if let Err(error)=next.session.restore_session(restored,recovery.recovered.get(),observed) {
-                let retirement = next.session.renderer_mut().stop();
+                transition = crate::render_thread::CanvasTransition::new(next.session.state().camera.viewport);
+                let retirement = next.session.renderer_mut().stop_for_switch(transition.clone());
                 drop(next);
                 retirement.await;
-                let restart_error=previous.reattach(&w.area).err();
+                let restart_error=previous.reattach_with_transition(&w.area, Some(transition.clone())).err();
                 *w.gpu.borrow_mut()=Some(*previous);
                 self.finish_switch(w,restart_error);
                 return Err(error);
@@ -1196,14 +1199,17 @@ impl Documents {
             w,
             async move {
                 w.documents.changing.set(false);
-                if let Err(error)=w.documents.prepare_switch(&w).await {
+                let transition = match w.documents.prepare_switch(&w).await {
+                    Ok(transition) => transition,
+                    Err(error) => {
                     w.documents.closing_tab.set(false);w.documents.closing_window.set(false);
                     if let Some(gpu)=w.gpu.borrow_mut().as_mut() {gpu.session.reset_document_close();}
                     w.changed(Err(error));return;
-                }
+                    }
+                };
                 let removal=async {w.recovery().prepare_retirement().await?;w.restart.remove(&w,w.documents.selected()).await}.await;
                 if let Err(error)=removal {
-                    let resume=w.gpu.borrow_mut().as_mut().and_then(|gpu| {gpu.session.reset_document_close();gpu.reattach(&w.area).err()});
+                    let resume=w.gpu.borrow_mut().as_mut().and_then(|gpu| {gpu.session.reset_document_close();gpu.reattach_with_transition(&w.area, Some(transition.clone())).err()});
                     w.documents.closing_tab.set(false);w.documents.closing_window.set(false);
                     w.documents.finish_switch(&w,resume);w.changed(Err(error));return;
                 }
@@ -1216,7 +1222,7 @@ impl Documents {
                     .session
                     .inherit_window_state(&previous.session)
                     .err()
-                    .or_else(|| next.canvas.reattach(&w.area).err());
+                    .or_else(|| next.canvas.reattach_with_transition(&w.area, Some(transition.clone())).err());
                 *w.gpu.borrow_mut() = Some(next.canvas);
                 *w.recovery.borrow_mut() = next.recovery;
                 drop(previous);

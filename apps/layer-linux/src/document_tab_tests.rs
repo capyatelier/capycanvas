@@ -220,7 +220,7 @@ fn native_canvas_background_during_startup_and_tab_switch() {
                 .open(&w, (new_drawing(128, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)),
         )
         .unwrap();
-    capture(&mut input, "new-tab-wait", Some([51; 3]));
+    capture(&mut input, "new-tab-wait", Some([255; 3]));
     assert!(
         w.documents.parked_memory().1,
         "inactive GPU worker still stops"
@@ -233,7 +233,7 @@ fn native_canvas_background_during_startup_and_tab_switch() {
     glib::MainContext::default()
         .block_on(w.documents.activate(&w, 1))
         .unwrap();
-    capture(&mut input, "switch-wait", Some([51; 3]));
+    capture(&mut input, "switch-wait", Some([255; 3]));
     w.window.unmaximize();
     w.window.set_default_size(1100, 750);
     pump(350);
@@ -1419,72 +1419,97 @@ fn native_import_admission_failure_preserves_package_and_current_drawing() {
 
 #[test]
 #[ignore = "isolated native-input.js with compositor capture"]
-fn native_document_tabs_waiting_background() {
+fn native_document_tabs_canvas_transition() {
     use layer_core::color::{ColorProfile, RgbSpace, SampleDepth, source::*};
     use layer_core::authored::OccurrenceContent;
     use std::sync::{Arc, atomic::Ordering};
     struct Resume(Arc<std::sync::atomic::AtomicBool>);
     impl Drop for Resume {fn drop(&mut self) {self.0.store(false,Ordering::Release);}}
-    let app = native_test_app("art.capycanvas.WaitingTabBackground");
+    let (app,windows)=crate::application("art.capycanvas.CanvasTransition");
+    let app=NativeTestApp(app); app.register(None::<&gtk::gio::Cancellable>).unwrap();
     let localization = layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
-    let w = Workspace::with_project(&app, Some((new_drawing(256, 256, &localization).unwrap(), None)));
+    let drawing=|rgb:[u8;3]| {
+        let mut drawing=new_drawing(256,256,&localization).unwrap();
+        let mut source=SourceBuilder::new([256,256],SourceInterpretation {
+            channels:SourceChannels::Rgba,depth:SampleDepth::U8,profile:ColorProfile::Builtin(RgbSpace::Srgb),profile_assumed:false,
+        },1024*1024).unwrap();
+        let row:Vec<u8>=(0..256).flat_map(|_|[rgb[0],rgb[1],rgb[2],255]).collect();
+        for _ in 0..256 {source.push_row(&row).unwrap();}
+        let active=drawing.working.occurrence.unwrap();
+        let OccurrenceContent::Paint(paint)=drawing.scene().occurrence(active).unwrap().content else {unreachable!()};
+        drawing.artwork.paint.get_mut(paint).unwrap().base=Some(layer_core::PaintBase::new(Arc::new(source.finish().unwrap()).into()));
+        drawing
+    };
+    crate::open_workspace(&app,&windows,Some((drawing([216,48,24]),None)));
+    until(||!windows.borrow().is_empty(),"transition window created");
+    let w=windows.borrow()[0].clone();
     w.window.maximize(); w.window.present(); new_photo::ready(&w);
-    let mut input = RemoteInput::new().settle_ms(0).timeout_secs(30);
-    input.ready();
-    let mut photo = layer_ui::NewDocumentOptions {extent:[256,256],background:layer_ui::DocumentBackground::Transparent,..Default::default()}.project(&localization).unwrap();
-    let mut source = SourceBuilder::new([256,256],SourceInterpretation {
-        channels:SourceChannels::Rgba,depth:SampleDepth::U8,profile:ColorProfile::Builtin(RgbSpace::Srgb),profile_assumed:false,
-    },1024*1024).unwrap();
-    let row:Vec<u8>=(0..256).flat_map(|x|[24,80,216,if x<128 {255}else {0}]).collect();
-    for _ in 0..256 {source.push_row(&row).unwrap();}
-    let active=photo.working.occurrence.unwrap();
-    let OccurrenceContent::Paint(paint)=photo.scene().occurrence(active).unwrap().content else {unreachable!()};
-    let paint=photo.artwork.paint.get_mut(paint).unwrap();
-    paint.base=Some(layer_core::PaintBase::new(Arc::new(source.finish().unwrap()).into()));
-    glib::MainContext::default().block_on(w.documents.open(&w,(photo,None))).unwrap();
+    w.dispatch(UiAction::Invoke {command:CommandId::FitCanvas}); new_photo::ready(&w);
+    let mut input=RemoteInput::new().settle_ms(0).timeout_secs(30); input.ready();
+    glib::MainContext::default().block_on(w.documents.open(&w,(drawing([24,80,216]),None))).unwrap();
     new_photo::ready(&w);
     w.dispatch(UiAction::Invoke {command:CommandId::FitCanvas}); new_photo::ready(&w);
-    let incoming=w.documents.selected();
-    let point=|document| {
-        let [x,y]=super::canvas_bar_tests::canvas_point(&w,document);
-        let point=w.window.compute_point(&w.surface,&gtk::graphene::Point::new(x,y)).unwrap();
-        [point.x(),point.y()]
-    };
-    let transparent=point([192.,128.]);
-    let artwork=point([64.,128.]);
-    let points: [[f32;2];1025]=std::array::from_fn(|i|if i==1024 {artwork}else {
-        [transparent[0]+(i%32) as f32-16.,transparent[1]+(i/32) as f32-16.]
-    });
+    let incoming=std::cell::Cell::new(w.documents.selected());
+    let file=std::path::PathBuf::from(std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").unwrap()).join("transition-blue.capy");
+    crate::files::choose_next_save(file.clone()); new_photo::invoke(&w,CommandId::SaveDocument);
+    until(||file.exists() && !w.servicing.get() && !state(&w).document_file.modified,"transition source saved");
+    let [x,y]=super::canvas_bar_tests::canvas_point(&w,[160.,128.]);
+    let center=w.window.compute_point(&w.surface,&gtk::graphene::Point::new(x,y)).unwrap();
+    let points:[[f32;2];1024]=std::array::from_fn(|i|[center.x()+(i%32) as f32-16.,center.y()+(i/32) as f32-16.]);
     switch(&w,1);
-    for (theme,name,surround) in [(Theme::Light,"waiting-tab-light",[184u8;3]),(Theme::Dark,"waiting-tab-dark",[51u8;3])] {
+    for theme in [Theme::Light,Theme::Dark] {
         w.dispatch(UiAction::SetTheme {theme:Some(theme)}); new_photo::ready(&w);
-        let pause=crate::render_thread::pause_next_startup();
-        let _resume=Resume(pause.clone());
+        for operation in ["select","close","open"] {
+        until(||!ui_session(&w).wants_continuous_frames(),"old artwork presentation settled");
+        let name=format!("canvas-transition-{theme:?}-{operation}").to_lowercase();
+        let mut prepared=if operation=="open" {
+            let path=file.clone(); let names=layer_ui::photo_document_names("transition-blue.capy",&localization);
+            Some(glib::MainContext::default().block_on(gtk::gio::spawn_blocking(move || {
+                match layer_ui::read_import(std::io::BufReader::new(std::fs::File::open(path).unwrap()),layer_ui::ImportIntent::Open,Default::default(),names,Default::default(),Default::default(),&std::sync::atomic::AtomicBool::new(false)).unwrap() {
+                    layer_ui::ImportOutcome::Editable(imported)=>imported,_=>panic!("transition package must be editable"),
+                }
+            })).unwrap())
+        }else {None};
+        let pause=crate::render_thread::pause_next_startup(); let _resume=Resume(pause.clone());
         let paints=sample_after_paint(&w.surface,||());
-        let frames=super::ui_motion::record_pixels(&w,&mut input,name,points,|| {
+        let frames=super::ui_motion::record_pixels(&w,&mut input,&name,points,|| {
             let changed=glib::monotonic_time();
-            glib::MainContext::default().block_on(w.documents.activate(&w,incoming)).unwrap();
-            until(||paints.samples.borrow().iter().any(|paint|paint.time>=changed),"incoming tab background painted");
-            assert!(!ui_session(&w).engine().backend().startup.complete);
+            match operation {
+                "select"=>glib::MainContext::default().block_on(w.documents.activate(&w,incoming.get())).unwrap(),
+                "close"=> {w.documents.select(&w,incoming.get(),true); until(||w.documents.len()==1 && !w.documents.changing.get(),"active tab closed into its parked neighbour");},
+                "open"=> {w.documents.enqueue_imported(&w,prepared.take().unwrap(),Some(layer_ui::DocumentLocation {uri:gtk::gio::File::for_path(&file).uri().to_string(),name:"transition-blue.capy".into()})); until(||w.documents.changing.get(),"prepared file admission started");},
+                _=>unreachable!(),
+            }
+            if operation!="open" {
+                until(||paints.samples.borrow().iter().any(|paint|paint.time>=changed),"incoming tab selected while old canvas is held");
+                assert!(!ui_session(&w).engine().backend().startup.complete);
+            }
             pause.store(false,Ordering::Release);
+            if operation=="open" {until(||w.documents.len()==2 && !w.documents.changing.get() && !w.documents.has_pending_open(),"prepared file opened in this window");incoming.set(w.documents.selected());}
             new_photo::ready(&w);
+            until(||!ui_session(&w).wants_continuous_frames(),"incoming artwork presentation settled");
         });
         paints.finish();
-        let mut waiting=0;
-        let mut showing=0;
+        let old=frames.first().unwrap()[0]; let new=frames.last().unwrap()[0];
+        assert!(old[0].abs_diff(new[0])>50 && old[2].abs_diff(new[2])>50,"{name}: distinct old and new artwork endpoints {old:?} -> {new:?}");
+        let mut mixed=0;
+        let mut previous_phase=0f32;
         for (index,frame) in frames.iter().enumerate() {
-            let pixel=frame[1024];
-            let artwork=pixel[2]>pixel[0].saturating_add(50) && pixel[2]>pixel[1].saturating_add(30);
-            let uniform=frame[..1024].iter().all(|pixel|pixel.iter().zip(surround).all(|(a,b)|a.abs_diff(b)<=4));
-            if artwork {
-                showing+=1;
-                assert!(frame[..1024].iter().any(|pixel|pixel.iter().zip(frame[0]).any(|(a,b)|a.abs_diff(b)>6)),"{name} frame {index}: transparent artwork shows the checkerboard");
-            } else if showing==0 {
-                assert!(frame[..1024].iter().all(|pixel|pixel.iter().zip(frame[0]).all(|(a,b)|a.abs_diff(b)<=4)),"{name} frame {index}: no checkerboard before the first artwork frame");
-                if uniform {waiting+=1;}
-            }
+            let pixel=frame[0];
+            assert!(frame.iter().all(|p|p.iter().zip(pixel).all(|(a,b)|a.abs_diff(b)<=4)),"{name} frame {index}: no checkerboard during the transition");
+            assert!(pixel.iter().enumerate().all(|(c,value)|*value>=old[c].min(new[c]).saturating_sub(8) && *value<=old[c].max(new[c]).saturating_add(8)),"{name} frame {index}: no surround or paper flash {pixel:?}");
+            let phase=[false,true].into_iter().find_map(|linear| {
+                let decode=|v:u8|if linear {(v as f32/255.).powf(2.2)}else {v as f32/255.};
+                let t:[f32;2]=[0,2].map(|c|(decode(pixel[c])-decode(old[c]))/(decode(new[c])-decode(old[c])));
+                ((t[0]-t[1]).abs()<=0.16).then_some((t[0]+t[1])*0.5)
+            });
+            let phase=phase.unwrap_or_else(||panic!("{name} frame {index}: expected old, blended, or new artwork, got {pixel:?}"));
+            assert!(phase+0.08>=previous_phase,"{name} frame {index}: fade moved backwards from {previous_phase} to {phase}");
+            previous_phase=previous_phase.max(phase);
+            if phase>0.05 && phase<0.95 {mixed+=1;}
         }
-        assert!(waiting>0 && showing>0,"{name}: waiting and meaningful artwork frames were presented ({waiting}, {showing})");
+        assert!(mixed>0,"{name}: presented at least one intermediate fade frame");
+        }
         switch(&w,1);
     }
     input.finish(); w.window.destroy(); pump(100);

@@ -50,7 +50,6 @@ impl Drop for ColorSurface {
     }
 }
 impl Child {
-    /// Runs during worker initialization, before configuring any swapchain.
     /// A compositor without color management uses the explicit sRGB fallback.
     pub fn describe_sdr(&mut self) -> Result<ViewColor, String> {
         let Some(color) = self.color.as_mut() else {
@@ -132,10 +131,9 @@ impl Child {
                 }
                 match self.state.color.ready.take().unwrap() {
                     Ok(()) => {
-                        let surface = color.manager.get_surface(&self.surface, &qh, ());
+                        let surface = color.surface.get_or_insert_with(|| color.manager.get_surface(&self.surface, &qh, ()));
                         surface.set_image_description(&image, manager::RenderIntent::Perceptual);
-                        color.surface = Some(surface);
-                        color.image = Some(image);
+                        if let Some(old) = color.image.replace(image) { old.destroy(); }
                         self.connection.flush().map_err(error)?;
                         eprintln!(
                             "Wayland SDR description: {view:?}, {}",

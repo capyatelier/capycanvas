@@ -214,6 +214,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.sync_camera();
         self.refresh_layer_presentation();
         self.refresh_commands();
+        self.begin_canvas_transition();
         Ok(self.changed(regions::ALL, true))
     }
 
@@ -383,6 +384,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             pending.validated = false;
         }
         self.refresh_commands();
+        self.begin_canvas_transition();
         let change = self.changed(regions::DOCUMENT | regions::BRUSH | regions::COMMANDS, true);
         Ok((previous, change))
     }

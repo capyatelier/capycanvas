@@ -23,6 +23,7 @@ impl Drop for CompileTrace<'_> {
 }
 #[derive(Clone)]
 pub(crate) struct DeviceRecipes {
+    pub transient_display: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub bounds_pipeline: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::thumbnails::BoundsPipeline>>>,
     pub levels_pipeline:std::sync::Arc<std::sync::OnceLock<std::sync::Arc<crate::snapshot::levels::LevelsPipeline>>>,
     pub statistics_pipeline: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<crate::snapshot::statistics::StatisticsPipeline>>>,
@@ -33,6 +34,7 @@ pub(crate) struct DeviceRecipes {
 impl From<&PipelineDevice> for DeviceRecipes {
     fn from(device: &PipelineDevice) -> Self {
         Self {
+            transient_display: device.transient_display.clone(),
             bounds_pipeline: device.bounds_pipeline.clone(),
             levels_pipeline: device.levels_pipeline.clone(),
             statistics_pipeline: device.statistics_pipeline.clone(),
@@ -44,6 +46,7 @@ impl From<&PipelineDevice> for DeviceRecipes {
 }
 #[derive(Clone)]
 pub(crate) struct PipelineDevice {
+    pub transient_display: std::sync::Arc<std::sync::atomic::AtomicU64>,
     device: wgpu::Device,
     working_space: layer_core::color::RgbSpace,
     depth: layer_core::color::SampleDepth,
@@ -64,6 +67,7 @@ impl From<wgpu::Device> for PipelineDevice {
     fn from(device: wgpu::Device) -> Self {
         Self {
             device,
+            transient_display: Default::default(),
             tone_pipelines: Default::default(),
             dehaze_pipelines: Default::default(),
             bounds_pipeline: Default::default(),
@@ -91,6 +95,7 @@ impl std::ops::Deref for PipelineDevice {
 }
 impl PipelineDevice {
     pub fn with_device_recipes(mut self, recipes: &DeviceRecipes) -> Self {
+        self.transient_display = recipes.transient_display.clone();
         self.bounds_pipeline = recipes.bounds_pipeline.clone();
         self.levels_pipeline = recipes.levels_pipeline.clone();
         self.statistics_pipeline = recipes.statistics_pipeline.clone();
@@ -108,7 +113,7 @@ impl PipelineDevice {
         }
     }
     pub fn for_recipe(&self) -> Self {
-        Self { working_space: self.working_space, depth: self.depth, ..Self::from(self.device.clone()) }
+        Self { working_space: self.working_space, depth: self.depth, transient_display: self.transient_display.clone(), ..Self::from(self.device.clone()) }
     }
     /// A working attachment choice, independent of native integer backing and
     /// document primaries. All deferred recipes retain this same choice.

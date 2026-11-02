@@ -78,6 +78,7 @@ impl OverviewPlacement {
 pub(super) struct Recipes {
     pipeline: [crate::Deferred<wgpu::RenderPipeline>; 3],
     surround: crate::Deferred<wgpu::RenderPipeline>,
+    transition: crate::present_transition::TransitionRecipes,
     cursor: crate::Deferred<wgpu::RenderPipeline>,
     layout: wgpu::BindGroupLayout,
     shader: wgpu::ShaderModule,
@@ -139,6 +140,11 @@ pub struct ViewportPresenter {
     history: crate::present_damage::Retained,
     presented_view: Option<(ViewState, [f32; 4], u32, f32)>,
     presented_drawing: Option<crate::DrawingPresentation>,
+    last_artwork_pipeline: Option<wgpu::RenderPipeline>,
+    transition_device: crate::PipelineDevice,
+    held: Option<crate::HeldCanvas>,
+    held_draw: Option<crate::present_transition::TransitionDraw>,
+    held_alpha: Option<f32>,
     presented_selection_overlay: Option<layer_render::SelectionOverlay>,
     presented_motion: Option<([f32; 24], crate::pixel_rect::DocRect, u64)>,
     motion_views: Option<[wgpu::TextureView; 2]>,
@@ -328,7 +334,7 @@ impl Recipes {
                 attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32, 3 => Float32, 4 => Float32],
             }),
             format, Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING));
-        Self { pipeline, surround: surround_pipeline, cursor: cursor_pipeline, layout, shader, pipeline_layout, cursor_icons,
+        Self { transition: crate::present_transition::TransitionRecipes::new(device,format), pipeline, surround: surround_pipeline, cursor: cursor_pipeline, layout, shader, pipeline_layout, cursor_icons,
             paper: Default::default(), overviews: Default::default(), backdrop: Default::default(), panels: Default::default(), picker: Default::default(), screen: Default::default() }
     }
 }
@@ -585,7 +591,7 @@ impl ViewportPresenter {
     }
 
     pub async fn prepare(&mut self, renderer: &WgpuRasterizer) -> Result<(), GpuRasterError> {
-        crate::Deferred::prepare_all(self.pipeline.iter().chain([&self.surround_pipeline, &self.cursor_pipeline]).chain(self.backdrop.iter().flat_map(|b|b.pipelines())))
+        crate::Deferred::prepare_all(self.pipeline.iter().chain([&self.surround_pipeline, &self.cursor_pipeline, &self.recipes.transition.pipeline]).chain(self.backdrop.iter().flat_map(|b|b.pipelines())))
             .await.map_err(GpuRasterError::Effect)?;
         if let Some(panels) = &self.panels {
             crate::Deferred::prepare_all([&panels.pipeline,&panels.mask_pipeline]).await.map_err(GpuRasterError::Effect)?;
@@ -611,7 +617,7 @@ impl ViewportPresenter {
 
     pub fn pipelines_ready(&self, renderer: &WgpuRasterizer) -> bool {
         let Some(startup) = &renderer.startup else { return true; };
-        let mut ready = startup.compiler.require(self.pipeline.iter().chain([&self.surround_pipeline, &self.cursor_pipeline]), crate::startup::DOCUMENT);
+        let mut ready = startup.compiler.require(self.pipeline.iter().chain([&self.surround_pipeline, &self.cursor_pipeline, &self.recipes.transition.pipeline]), crate::startup::DOCUMENT);
         ready &= startup.compiler.require(self.overview_pipeline.iter().chain(self.picker.pipeline.iter()), crate::startup::BRUSH);
         if let Some(backdrop) = &self.backdrop { ready &= startup.compiler.require(backdrop.pipelines(), crate::startup::DOCUMENT); }
         if let Some(panels) = &self.panels {
@@ -750,6 +756,11 @@ impl ViewportPresenter {
             retained: false,
             history: Default::default(),
             presented_drawing: None,
+            last_artwork_pipeline: None,
+            transition_device: device.for_recipe(),
+            held: None,
+            held_draw: None,
+            held_alpha: None,
             presented_view: None,
             presented_selection_overlay: None,
             presented_motion: None,
@@ -932,6 +943,7 @@ impl ViewportPresenter {
         let geometry=renderer.display_geometry().unwrap_or(&self.disabled_local_buffer);
         let previous = &self.history;
         !previous.valid
+            || (self.held.is_some() && self.held_alpha != renderer.canvas_transition)
             || self.presented_drawing != Some(renderer.presentation)
             || self.presented_view != Some((view, surround_linear, self.quarter_turns, self.corner_radius))
             || self.presented_selection_overlay != renderer.selection_overlay
@@ -1006,6 +1018,24 @@ impl ViewportPresenter {
         self.encode_content(renderer, encoder, target, view, surround_linear, false)
     }
 
+    fn capture_into(&mut self, encoder:&mut wgpu::CommandEncoder)->Option<crate::HeldCanvas> {
+        if !self.presented_drawing.is_some_and(|drawing|drawing.showing) {return self.held.take();}
+        let (view,_,rotation,_)=self.presented_view?;
+        let size=if rotation.is_multiple_of(2) {[view.width_px,view.height_px]}else{[view.height_px,view.width_px]};
+        Some(crate::HeldCanvas::capture(&self.transition_device,encoder,size,self.format,self.color,
+            self.last_artwork_pipeline.as_ref()?,self.bind_group.as_ref()?))
+    }
+    pub fn capture_held(&mut self, device:&wgpu::Device, queue:&wgpu::Queue)->Option<crate::HeldCanvas> {
+        if *self.transition_device!=*device {return None;}
+        let mut encoder=device.create_command_encoder(&Default::default());
+        let held=self.capture_into(&mut encoder);
+        queue.submit([encoder.finish()]);held
+    }
+    pub fn adopt_held(&mut self, held:Option<crate::HeldCanvas>) {
+        self.held=held.filter(|held|held.device==*self.transition_device && held.format==self.format && held.encoding==self.color);
+        self.held_draw=None;self.history.valid=false;
+    }
+
     fn overview_view(extent: [u32;2]) -> ViewState {
         ViewState {width_px:extent[0],height_px:extent[1],document_to_surface:[1.,0.,0.,1.,0.,0.]}
     }
@@ -1059,6 +1089,22 @@ impl ViewportPresenter {
         surround_linear: [f32; 4],
         overview_only: bool,
     ) -> Result<(), GpuRasterError> {
+        if !overview_only {
+            let size = [target.texture().width(),target.texture().height()];
+            if self.presented_drawing.is_some_and(|old|old.showing && old.document!=renderer.presentation.document) {
+                let held=self.capture_into(encoder);
+                self.adopt_held(held);
+            }
+            if self.held.as_ref().is_some_and(|held|!held.compatible(&renderer.device,size,self.format,self.color))
+                || renderer.presentation.showing && renderer.canvas_transition.is_none() {
+                self.held=None;self.held_draw=None;
+            }
+            if let Some(held)=&self.held {
+                let draw=self.held_draw.get_or_insert_with(||crate::present_transition::TransitionDraw::new(&renderer.device,&self.recipes.transition,held));
+                draw.update(&mut self.uploads,encoder,if renderer.presentation.showing {renderer.canvas_transition.unwrap_or(0.)}else{1.})?;
+                held.retain_until_complete(encoder);
+            }
+        }
         if self.fill_before.as_ref().is_some_and(|(id,image)|renderer.fill_reveal.is_none_or(|reveal|reveal.transaction!=*id)
             || [image.texture().width(),image.texture().height()]!=if self.quarter_turns.is_multiple_of(2) {[view.width_px,view.height_px]}else{[view.height_px,view.width_px]}) {
             self.fill_before=None;self.bind_group=None;
@@ -1277,6 +1323,8 @@ impl ViewportPresenter {
                 .then_some(renderer.display_selection_damage)
                 .filter(|_| previous.outline_revision.wrapping_add(1) == renderer.display_selection_revision);
             let content = !previous.valid
+                || self.held.is_some() && self.held_alpha != renderer.canvas_transition
+                || self.held_alpha.is_some() && self.held.is_none()
                 || self.presented_drawing != Some(renderer.presentation)
                 || previous.hdr != self.hdr_options
                 || previous.proof != self.proof_options
@@ -1407,6 +1455,7 @@ impl ViewportPresenter {
                     pass.set_pipeline(pipeline);
                     pass.set_bind_group(0, group, &[SOURCE_CAMERA]);
                     pass.draw(0..3, 0..1);
+                    if let Some(draw)=&self.held_draw {draw.draw(&self.recipes.transition,pass,true);}
                 },
                 timestamp_writes.as_ref().map(|t| wgpu::RenderPassTimestampWrites { end_of_pass_write_index: None, ..t.clone() }),
                 &mut glass,
@@ -1510,6 +1559,10 @@ impl ViewportPresenter {
                     }
                 }
                 pass.set_scissor_rect(repaint.min_x(), repaint.min_y(), repaint.width(), repaint.height());
+                if let Some(draw)=&self.held_draw {
+                    draw.draw(&self.recipes.transition,&mut pass,false);
+                    pass.set_bind_group(0,self.bind_group.as_ref().unwrap(),&[0]);
+                }
                 if shade.is_some_and(|(_, _, flash)| flash) {
                     renderer.paper_overlay_drawn.set(true);
                 }
@@ -1539,6 +1592,8 @@ impl ViewportPresenter {
         // Works both for present() and hosts submitting encode() themselves.
         self.uploads.finish(encoder);
         self.presented_view = Some((view, surround_linear, self.quarter_turns, self.corner_radius));
+        if showing {self.last_artwork_pipeline=Some((**pipeline).clone());}
+        self.held_alpha=if self.held.is_some() {renderer.canvas_transition}else{None};
         self.presented_drawing = Some(renderer.presentation);
         self.presented_selection_overlay = renderer.selection_overlay;
         self.presented_paper = Some(lit);
@@ -1646,11 +1701,56 @@ mod tests {
         assert_eq!(checker(&hidden), transparent);
         let replacement = layer_core::Document::from_artwork(document.artwork.clone()).unwrap();
         renderer.prepare_startup(&replacement, &layer_core::default_brush(layer_core::DefaultBrushPreset::GPen), false).unwrap();
-        assert_eq!(pixels(&renderer, &mut presenter), waiting);
+        assert_eq!(pixels(&renderer, &mut presenter), hidden);
         let backdrop = layer_core::SceneScope::Members(replacement.scene().constant_backdrop().into());
         crate::test_support::submit_settled(&mut renderer,
             layer_render::FramePacket {scene:replacement.scene().with_scope(&backdrop),..crate::test_support::packet(replacement.scene(),extent)});
-        assert_eq!(pixels(&renderer, &mut presenter), waiting);
+        assert_eq!(pixels(&renderer, &mut presenter), hidden);
+    }
+    #[test]
+    fn persistent_presenter_holds_the_previous_artwork_then_fades_below_chrome() {
+        use crate::layer_tests::placement::{paint_document,set_source};
+        let extent=[64;2];
+        let mut a=paint_document(extent,"red");
+        set_source(&mut a,layer_core::color::source::rgba8_source(extent,|_,_|[255,0,0,255]));
+        let mut renderer=WgpuRasterizer::new_native_headless(a.composition().color).unwrap();
+        crate::test_support::submit_settled(&mut renderer,crate::test_support::packet(a.scene(),extent));
+        let mut presenter=ViewportPresenter::for_renderer(&renderer,wgpu::TextureFormat::Rgba8Unorm);
+        pollster::block_on(presenter.prepare(&renderer)).unwrap();
+        presenter.set_target_retention(true);
+        let (texture,target)=crate::create_target(renderer.device(),extent,wgpu::TextureFormat::Rgba8Unorm,"transition target");
+        let view=crate::test_support::view(extent);
+        presenter.present(&renderer,&target,view,[0.,1.,0.,1.]).unwrap();
+        let red=crate::layer_tests::page_bytes(&renderer,&texture);
+        renderer.set_canvas_transition(Some(1.));
+        let mut b=paint_document(extent,"blue");
+        set_source(&mut b,layer_core::color::source::rgba8_source(extent,|_,_|[0,0,255,255]));
+        renderer.prepare_startup(&b,&layer_core::default_brush(layer_core::DefaultBrushPreset::GPen),false).unwrap();
+        presenter.present(&renderer,&target,view,[0.,1.,0.,1.]).unwrap();
+        assert_eq!(crate::layer_tests::page_bytes(&renderer,&texture),red);
+        presenter.set_cursor(renderer.device(),&[CursorSegment {from:[16.,16.],to:[48.,48.],distance:0.,marker:2.,scale:1.}],1.);
+        presenter.present(&renderer,&target,view,[0.,1.,0.,1.]).unwrap();
+        assert!(crate::layer_tests::page_bytes(&renderer,&texture)!=red,"The live cursor is drawn above the held artwork");
+        presenter.set_cursor(renderer.device(),&[],1.);
+        let c=layer_core::Document::from_artwork(b.artwork.clone()).unwrap();
+        renderer.prepare_startup(&c,&layer_core::default_brush(layer_core::DefaultBrushPreset::GPen),false).unwrap();
+        presenter.present(&renderer,&target,view,[0.,1.,0.,1.]).unwrap();
+        assert_eq!(crate::layer_tests::page_bytes(&renderer,&texture),red);
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(30);
+        while !renderer.showing_drawing() {
+            crate::test_support::submit_ready(&mut renderer,crate::test_support::packet(c.scene(),extent)).unwrap();
+            renderer.wait_idle().unwrap();
+            assert!(std::time::Instant::now()<deadline,"The incoming drawing publishes meaningful pixels");
+        }
+        for (alpha,expected) in [(Some(1.),[255,0,0,255]),(Some(0.125),[32,0,223,255]),(None,[0,0,255,255])] {
+            renderer.set_canvas_transition(alpha);
+            presenter.present(&renderer,&target,view,[0.,1.,0.,1.]).unwrap();
+            let bytes=crate::layer_tests::page_bytes(&renderer,&texture);
+            for (actual,expected) in bytes[..4].iter().zip(expected) {assert!(actual.abs_diff(expected)<=1);}
+        }
+        assert!(presenter.held.is_none());
+        renderer.device().poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        assert_eq!(renderer.device.transient_display.load(std::sync::atomic::Ordering::Acquire),0);
     }
     #[test]
     fn backdrop_scope_defers_native_paint_restore_until_the_full_document_is_prepared() {
@@ -1775,7 +1875,7 @@ mod tests {
         let empty=layer_render::FramePacket {scene:replacement.scene().with_scope(&backdrop),..empty};
         settle(&mut renderer,empty);
         let hidden=capture(&renderer);
-        assert_eq!(&hidden[surface_at..surface_at+4],&[255;4],"A replaced drawing's backdrop presents only the surround");
+        assert_eq!(&hidden[surface_at..surface_at+4],&[255;4],"A fresh presenter without a held canvas shows the surround");
         settle(&mut renderer,frame);
         assert_eq!(capture(&renderer),before,"Objects return after the backdrop is replaced again");
     }

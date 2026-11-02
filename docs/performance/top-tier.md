@@ -7175,3 +7175,32 @@ The control GPen trial with an 821.325 ms maximum gap and 103.646 Hz cadence
 is retained; no trial is excluded or retried.
 Both builds retain the 8.333 ms p99 diagnostic miss. These canvas-publication
 fixtures do not establish fresh-pose or full-contact reference-tablet qualification.
+
+## GTK canvas tab transitions
+
+Measured 2026-11-02 on NVIDIA RTX PRO 6000 Blackwell Max-Q, release,
+2560 × 1600 / 120 Hz. Three trials reuse the frozen `cf8e5c4dc` control;
+canvas cadence includes the six-second request and input drain.
+
+| Workload | Canvas cadence, Hz | Gap p99, ms | Worker thread CPU p95, ms |
+| --- | --- | --- | --- |
+| GPen | 119.565 → 119.699 | 9.106 → 8.749 | 1.837 → 1.427 |
+| Pan | 120.010 → 120.001 | 8.643 → 8.640 | 0.847 → 0.786 |
+
+The control's 1457 ms maximum GPen gap remains included. CPU ranges overlap;
+both builds retain the 8.333 ms p99 diagnostic miss. These publication counts
+do not qualify fresh-ink or reference-tablet motion.
+
+Ten-layer switching, one process and ten switches per build, compares
+`7de40d44e` with the transition. Logical meaningful-artwork presentation is
+333.6 → 298.5 ms for the first switch and 329.6 → 330.3 ms for later medians.
+Compositor-pull observations of at least 5% new colour are 349.4 → 380.6 ms
+first and 340.8 → 361.9 ms later; fully new colour is 349.4 → 432.1 and
+340.8 → 454.5 ms. These observations include pull jitter, rather than measuring
+exact scanout. Temporary Child/Surface creation costs a median 0.329/0.040 ms;
+adopted-child colour setup is 0.158 ms median, 0.328 ms maximum.
+The native handoff is taken a median 32.0 ms after activation; the old worker
+retires independently at 69.3 ms. One cold process per diagnostic arm measures
+Showing → renderer idle at 202.4 → 368.5 ms without → with the refinement
+pause. The pause also applies to the first drawing, where no held image exists.
+Raw runs: `/mnt/localssd/capycanvas7-issue24-impl/switch-transition/`.
