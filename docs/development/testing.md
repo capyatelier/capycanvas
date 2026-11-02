@@ -285,6 +285,7 @@ changing a decoder, a vendored codec patch or a reader of outside files.
 | Area | Checks |
 | --- | --- |
 | GTK chrome ordering | `native_chrome_during_filter_preparation`, `native_diagnostics_and_gpu_failure_recovery`, `native_document_tab_input` and `native_canvas_background_during_startup_and_tab_switch`; cold startup: `native_startup_latency` with `__GL_SHADER_DISK_CACHE=0`. |
+| Waiting canvas | Renderer `waiting_drawing_shows_surround_until_full_composition_and_keeps_transparency_after_edits`; GTK `native_document_tabs_waiting_background` and Web `--drawing-tabs` check surround → artwork and checkerboard in both themes. |
 | GTK drawer snapshot | `drawer_glass_uses_the_allocated_frame_until_the_next_allocation`, `native_column_drawer_snapshot_purity` and matched `native_column_drawer_snapshot_motion`; native checks cover light/dark and Off/Medium. |
 | Drags and reorder | GTK `workspace-motion.sh gtk --drag-pickup` and `--column-drops`; Web `--drag-pickup`, `--layer-hold`, `--long-press-drag` and `--drag-cursors`; Android `AndroidInteractionTest`; Windows `exercise-layer-pickup.ps1` and `exercise-workspace-pickup.ps1`. |
 | Cursor ownership | GTK `native_palette_reorder_input` and `native_palette_reorder_pen`; Web `--edge-reach`; Android `AndroidInteractionTest#nativeCursorDoesNotRetainDividerAfterQuickTabReorder`, `#nativeMouseCursorDoesNotRetainDividerOnNeutralChrome` and `#tileDropLosingWindowFocusRetiresDragState`. |

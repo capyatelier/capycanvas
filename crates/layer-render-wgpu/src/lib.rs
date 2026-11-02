@@ -930,6 +930,12 @@ enum Initialization {
     Snapshot,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct DrawingPresentation {
+    document: Option<(u64, layer_core::PortableId)>,
+    showing: bool,
+}
+
 /// Headless-capable wgpu brush renderer. A platform presenter can sample the
 /// same composite texture rather than requesting readback.
 pub struct WgpuRasterizer {
@@ -1039,6 +1045,7 @@ pub struct WgpuRasterizer {
     navigator: scene::scale::Navigator,
     color_sampler: color_sample::ColorSampler,
     composite_revision: u64,
+    presentation: DrawingPresentation,
     artwork_revision: u64,
     evaluated_object_revision: Option<u64>,
     composite_damage: PixelRect,
@@ -1433,6 +1440,7 @@ impl WgpuRasterizer {
             navigator: Default::default(),
             color_sampler: color_sample::ColorSampler::new(),
             composite_revision: 0,
+            presentation: DrawingPresentation::default(),
             artwork_revision: 0,
             evaluated_object_revision: None,
             composite_damage: PixelRect::EMPTY,
@@ -1586,6 +1594,13 @@ impl WgpuRasterizer {
         self.selected_display_cache().map(|cache|[cache.view(),cache.coarse_view(),cache.next_view()])
     }
     pub fn has_presentable_frame(&self) -> bool { self.presentation_views().is_some() }
+    fn activate_presentation(&mut self, scene: layer_core::SceneView<'_>) {
+        let document = (scene.owner(), scene.artwork().id);
+        if self.presentation.document != Some(document) {
+            self.presentation.document = Some(document);
+            self.presentation.showing = false;
+        }
+    }
     pub(crate) fn presentation_views(&self)->Option<[&wgpu::TextureView;3]> {
         if self.display_backup.is_some() {return self.display_views();}
         self.selected_display_cache().map(|cache|{let [moved,kept]=cache.presented_views();[moved,cache.coarse_view(),kept]})
@@ -3722,6 +3737,7 @@ impl CanvasRenderer for WgpuRasterizer {
         self.startup.as_ref().is_none_or(|startup| startup.brush_ready) && !self.startup_needs_update(document, brush, transform)
     }
     fn raster_dependencies_ready(&mut self, packet: FramePacket<'_>, preview: Option<&layer_render::TransformPreview>) -> bool {
+        self.activate_presentation(packet.scene);
         if self.bake_preflight.as_ref().is_some_and(|state|!state.matches(packet,self.document_color())) {self.bake_preflight=None;}
         let mut required = startup::Requirements::default();
         self.transforms.as_ref().unwrap().require_frame(self, packet, preview, &mut required);
@@ -4115,10 +4131,16 @@ impl WgpuRasterizer {
         for page in &self.preview_pages {page.primary.preview.set(None);if let Some(secondary)=&page.secondary {secondary.preview.set(None);}}
     }
     fn submit_frame(&mut self, packet: FramePacket<'_>, native_commit: Option<raster::native_edit::NativeFrame>) -> Result<(), GpuRasterError> {
+        self.activate_presentation(packet.scene);
+        let revision = self.composite_revision;
         let submitted = self.metrics.submissions;
         if let Err(error)=self.submit_frame_inner(packet, native_commit) {
             self.clear_preview_stamps();
             return Err(error);
+        }
+        if self.composite_revision != revision && self.has_presentable_frame()
+            && matches!(packet.scene.scope(), None | Some(layer_core::SceneScope::All)) {
+            self.presentation.showing = true;
         }
         if self.metrics.submissions != submitted {
             let context = self.submitted_context.as_ref().unwrap();

@@ -383,6 +383,7 @@ impl WgpuRasterizer {
         brush: &BrushSnapshot,
         transform: bool,
     ) -> Result<(), GpuRasterError> {
+        self.activate_presentation(document.scene());
         let Some(mut startup) = self.startup.take() else {
             return Ok(());
         };

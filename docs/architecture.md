@@ -162,8 +162,8 @@ rasterizing the artwork again. UI notifications separately identify affected sec
 the layer list or tool settings. These are not pixel rectangles: they tell hosts
 which controls need refreshing.
 
-Shader startup is staged. The host can show controls and constant bottom fills
-while the renderer prepares the current document and selected brush. Other tools
+Shader startup is staged. Controls and the canvas surround appear while the
+renderer prepares the current document and selected brush. Other tools
 prepare on first use and reuse their compiled recipes. A prepared drawing uses its renderer's readiness for its first
 presentation, including after recovery or a tab change; the startup background
 must not replace its rendered artwork. Painting

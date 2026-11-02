@@ -7158,3 +7158,20 @@ receipt-to-present latency or following-stroke fresh-ink latency. GTK paint-thre
 CPU was not sampled in this quick check; paint wall spans are not CPU time.
 Trial details, source/binary hashes, full-contact counts, failures and shared
 process samples are in `artifacts/gtk-r2-fix.local/flicker-f1-f3/qualification/`.
+
+## GTK waiting-canvas presentation
+
+Measured 2026-11-02 on NVIDIA RTX PRO 6000 with the release build, private
+Mutter at 2560 × 1600 / 120 Hz, a 6000 × 4000 document and Navigator visible.
+Three paired trials compare `d5b457aea` with surround-only Waiting presentation.
+The GPen is 384 px; each motion request lasts six seconds plus input drain.
+
+| Workload | Canvas cadence, Hz | Gap p99, ms | Worker thread CPU p95, ms |
+| --- | --- | --- | --- |
+| GPen | 119.538 → 119.571 | 9.049 → 9.034 | 1.576 → 1.533 |
+| Pan | 120.009 → 120.011 | 8.675 → 8.647 | 0.824 → 0.820 |
+
+The control GPen trial with an 821.325 ms maximum gap and 103.646 Hz cadence
+is retained; no trial is excluded or retried.
+Both builds retain the 8.333 ms p99 diagnostic miss. These canvas-publication
+fixtures do not establish fresh-pose or full-contact reference-tablet qualification.

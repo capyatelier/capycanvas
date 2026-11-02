@@ -1416,3 +1416,76 @@ fn native_import_admission_failure_preserves_package_and_current_drawing() {
     pump(100);
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+#[ignore = "isolated native-input.js with compositor capture"]
+fn native_document_tabs_waiting_background() {
+    use layer_core::color::{ColorProfile, RgbSpace, SampleDepth, source::*};
+    use layer_core::authored::OccurrenceContent;
+    use std::sync::{Arc, atomic::Ordering};
+    struct Resume(Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for Resume {fn drop(&mut self) {self.0.store(false,Ordering::Release);}}
+    let app = native_test_app("art.capycanvas.WaitingTabBackground");
+    let localization = layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
+    let w = Workspace::with_project(&app, Some((new_drawing(256, 256, &localization).unwrap(), None)));
+    w.window.maximize(); w.window.present(); new_photo::ready(&w);
+    let mut input = RemoteInput::new().settle_ms(0).timeout_secs(30);
+    input.ready();
+    let mut photo = layer_ui::NewDocumentOptions {extent:[256,256],background:layer_ui::DocumentBackground::Transparent,..Default::default()}.project(&localization).unwrap();
+    let mut source = SourceBuilder::new([256,256],SourceInterpretation {
+        channels:SourceChannels::Rgba,depth:SampleDepth::U8,profile:ColorProfile::Builtin(RgbSpace::Srgb),profile_assumed:false,
+    },1024*1024).unwrap();
+    let row:Vec<u8>=(0..256).flat_map(|x|[24,80,216,if x<128 {255}else {0}]).collect();
+    for _ in 0..256 {source.push_row(&row).unwrap();}
+    let active=photo.working.occurrence.unwrap();
+    let OccurrenceContent::Paint(paint)=photo.scene().occurrence(active).unwrap().content else {unreachable!()};
+    let paint=photo.artwork.paint.get_mut(paint).unwrap();
+    paint.base=Some(layer_core::PaintBase::new(Arc::new(source.finish().unwrap()).into()));
+    glib::MainContext::default().block_on(w.documents.open(&w,(photo,None))).unwrap();
+    new_photo::ready(&w);
+    w.dispatch(UiAction::Invoke {command:CommandId::FitCanvas}); new_photo::ready(&w);
+    let incoming=w.documents.selected();
+    let point=|document| {
+        let [x,y]=super::canvas_bar_tests::canvas_point(&w,document);
+        let point=w.window.compute_point(&w.surface,&gtk::graphene::Point::new(x,y)).unwrap();
+        [point.x(),point.y()]
+    };
+    let transparent=point([192.,128.]);
+    let artwork=point([64.,128.]);
+    let points: [[f32;2];1025]=std::array::from_fn(|i|if i==1024 {artwork}else {
+        [transparent[0]+(i%32) as f32-16.,transparent[1]+(i/32) as f32-16.]
+    });
+    switch(&w,1);
+    for (theme,name,surround) in [(Theme::Light,"waiting-tab-light",[184u8;3]),(Theme::Dark,"waiting-tab-dark",[51u8;3])] {
+        w.dispatch(UiAction::SetTheme {theme:Some(theme)}); new_photo::ready(&w);
+        let pause=crate::render_thread::pause_next_startup();
+        let _resume=Resume(pause.clone());
+        let paints=sample_after_paint(&w.surface,||());
+        let frames=super::ui_motion::record_pixels(&w,&mut input,name,points,|| {
+            let changed=glib::monotonic_time();
+            glib::MainContext::default().block_on(w.documents.activate(&w,incoming)).unwrap();
+            until(||paints.samples.borrow().iter().any(|paint|paint.time>=changed),"incoming tab background painted");
+            assert!(!ui_session(&w).engine().backend().startup.complete);
+            pause.store(false,Ordering::Release);
+            new_photo::ready(&w);
+        });
+        paints.finish();
+        let mut waiting=0;
+        let mut showing=0;
+        for (index,frame) in frames.iter().enumerate() {
+            let pixel=frame[1024];
+            let artwork=pixel[2]>pixel[0].saturating_add(50) && pixel[2]>pixel[1].saturating_add(30);
+            let uniform=frame[..1024].iter().all(|pixel|pixel.iter().zip(surround).all(|(a,b)|a.abs_diff(b)<=4));
+            if artwork {
+                showing+=1;
+                assert!(frame[..1024].iter().any(|pixel|pixel.iter().zip(frame[0]).any(|(a,b)|a.abs_diff(b)>6)),"{name} frame {index}: transparent artwork shows the checkerboard");
+            } else if showing==0 {
+                assert!(frame[..1024].iter().all(|pixel|pixel.iter().zip(frame[0]).all(|(a,b)|a.abs_diff(b)<=4)),"{name} frame {index}: no checkerboard before the first artwork frame");
+                if uniform {waiting+=1;}
+            }
+        }
+        assert!(waiting>0 && showing>0,"{name}: waiting and meaningful artwork frames were presented ({waiting}, {showing})");
+        switch(&w,1);
+    }
+    input.finish(); w.window.destroy(); pump(100);
+}

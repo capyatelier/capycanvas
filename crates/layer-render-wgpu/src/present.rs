@@ -138,6 +138,7 @@ pub struct ViewportPresenter {
     retained: bool,
     history: crate::present_damage::Retained,
     presented_view: Option<(ViewState, [f32; 4], u32, f32)>,
+    presented_drawing: Option<crate::DrawingPresentation>,
     presented_selection_overlay: Option<layer_render::SelectionOverlay>,
     presented_motion: Option<([f32; 24], crate::pixel_rect::DocRect, u64)>,
     motion_views: Option<[wgpu::TextureView; 2]>,
@@ -748,6 +749,7 @@ impl ViewportPresenter {
             quarter_turns: 0,
             retained: false,
             history: Default::default(),
+            presented_drawing: None,
             presented_view: None,
             presented_selection_overlay: None,
             presented_motion: None,
@@ -922,14 +924,19 @@ impl ViewportPresenter {
     }
 
     pub fn needs_present(&self, renderer: &WgpuRasterizer, view: ViewState, surround_linear: [f32; 4]) -> bool {
-        let Some([composite,coarse,next]) = renderer.presentation_views() else { return false; };
-        let geometry=renderer.display_geometry().unwrap();
+        let [composite,coarse,next] = match renderer.presentation_views() {
+            Some(views) => views,
+            None if renderer.presentation.showing => return false,
+            None => [&renderer.empty_view; 3],
+        };
+        let geometry=renderer.display_geometry().unwrap_or(&self.disabled_local_buffer);
         let previous = &self.history;
         !previous.valid
+            || self.presented_drawing != Some(renderer.presentation)
             || self.presented_view != Some((view, surround_linear, self.quarter_turns, self.corner_radius))
             || self.presented_selection_overlay != renderer.selection_overlay
             || self.presented_motion != renderer.display_motion().map(|(_, values, moved, revision)| (values, moved, revision))
-            || (self.presented_paper == Some(false) && renderer.paper_shade().is_some()
+            || (renderer.presentation.showing && self.presented_paper == Some(false) && renderer.paper_shade().is_some()
                 && self.paper_pipeline.as_ref().is_some_and(|paper| paper.iter().all(crate::Deferred::ready)))
             || (previous.revision != renderer.composite_revision
                 && (previous.artwork_revision != renderer.artwork_revision || renderer.scale_display.as_ref().is_none_or(|cache|!cache.has_pending_work(renderer))))
@@ -941,7 +948,7 @@ impl ViewportPresenter {
             || self.overlays_changed
             || self.panel_surfaces_changed
             || self.panels.as_ref().is_some_and(|p|p.needs_refresh())
-            || self.shade.changed(renderer)
+            || (renderer.presentation.showing && self.shade.changed(renderer))
             || self.picker.changed()
             || self.fill_reveal!=renderer.fill_reveal
             || self.camera_data.is_none_or(|old| old[62..64] != renderer.clipping_preview.map(f32::from))
@@ -1056,13 +1063,18 @@ impl ViewportPresenter {
             || [image.texture().width(),image.texture().height()]!=if self.quarter_turns.is_multiple_of(2) {[view.width_px,view.height_px]}else{[view.height_px,view.width_px]}) {
             self.fill_before=None;self.bind_group=None;
         }
-        let Some([composite,coarse,next]) = renderer.presentation_views() else { return Ok(()); };
-        if renderer.display_backup.is_none() && let Some(cache) = renderer.selected_display_cache() { cache.refresh_half(renderer, encoder, &mut self.uploads)?; }
-        let lit = self.prepare_paper_lighting(renderer);
+        let showing = renderer.presentation.showing;
+        let [composite,coarse,next] = match renderer.presentation_views() {
+            Some(views) => views,
+            None if showing => return Ok(()),
+            None => [&renderer.empty_view; 3],
+        };
+        if showing && renderer.display_backup.is_none() && let Some(cache) = renderer.selected_display_cache() { cache.refresh_half(renderer, encoder, &mut self.uploads)?; }
+        let lit = showing && self.prepare_paper_lighting(renderer);
         let navigator = renderer.navigator.view().unwrap_or(&renderer.empty_view);
         let motion = renderer.display_motion();
         let motion_views = motion.map_or([&renderer.empty_view; 2], |(views, ..)| views);
-        let geometry = renderer.display_geometry().unwrap();
+        let geometry = renderer.display_geometry().unwrap_or(&self.disabled_local_buffer);
         let levels = [composite, next].map(|view| if view.texture().format() == wgpu::TextureFormat::Rgba16Float { view } else { &self.empty_level });
         let device = &renderer.device;
         let selection = renderer.display_selection.as_ref();
@@ -1142,7 +1154,7 @@ impl ViewportPresenter {
             .0;
         let overlay = renderer.selection_overlay;
         let overlay_color = overlay.map_or([0.;4],|o| o.color);
-        let crop = renderer.crop_overlay.filter(|c| c.to_crop.inverse().is_some());
+        let crop = renderer.crop_overlay.filter(|c| showing && c.to_crop.inverse().is_some());
         let [ca, cb, cc, cd, cx, cy] = crop.map_or([0.; 6], |c| c.to_crop.0);
         let mut data = [0.; 160];
         data[..40].copy_from_slice(&[
@@ -1175,9 +1187,11 @@ impl ViewportPresenter {
             ca, cb, cc, cd,
             cx, cy, crop.map_or(0., |c| c.dim.clamp(0., 1.)), f32::from(crop.is_some()),
         ]);
-        data[40..60].copy_from_slice(&renderer.display_placement());
-        for (value, bytes) in data[64..].iter_mut().zip(renderer.display_resample().as_chunks::<4>().0.iter()) {
-            *value = f32::from_le_bytes(*bytes);
+        if renderer.has_presentable_frame() {
+            data[40..60].copy_from_slice(&renderer.display_placement());
+            for (value, bytes) in data[64..].iter_mut().zip(renderer.display_resample().as_chunks::<4>().0.iter()) {
+                *value = f32::from_le_bytes(*bytes);
+            }
         }
         data[60] = f32::from(renderer.blend_space == layer_core::BlendSpace::Perceptual);
         data[61] = renderer.navigator.scale();
@@ -1263,6 +1277,7 @@ impl ViewportPresenter {
                 .then_some(renderer.display_selection_damage)
                 .filter(|_| previous.outline_revision.wrapping_add(1) == renderer.display_selection_revision);
             let content = !previous.valid
+                || self.presented_drawing != Some(renderer.presentation)
                 || previous.hdr != self.hdr_options
                 || previous.proof != self.proof_options
                 || previous.screen != self.screen_options
@@ -1362,7 +1377,7 @@ impl ViewportPresenter {
             })
         };
         let mut began = false;
-        let pipeline = match &self.paper_pipeline { Some(paper) if lit => &paper[data[53] as usize], _ => &self.pipeline[data[53] as usize] };
+        let pipeline = if !showing { &self.surround_pipeline } else { match &self.paper_pipeline { Some(paper) if lit => &paper[data[53] as usize], _ => &self.pipeline[data[53] as usize] } };
         let capture_before=renderer.fill_reveal.filter(|reveal|!overview_only && reveal.radius<0. && self.fill_before.as_ref().is_none_or(|(id,_)|*id!=reveal.transaction));
         if let Some(reveal)=capture_before {
             let texture=renderer.device.create_texture(&wgpu::TextureDescriptor {label:Some("fill reveal before"),
@@ -1514,7 +1529,7 @@ impl ViewportPresenter {
                     pass.set_bind_group(0,self.bind_group.as_ref().unwrap(),&[0]);
                 }
             }
-            if !self.overviews.is_empty() {
+            if showing && !self.overviews.is_empty() {
                 pass.set_pipeline(self.overview_pipeline.as_ref().unwrap());
                 pass.set_vertex_buffer(0, self.overview_buffer.as_ref().unwrap().slice(..));
                 pass.draw(0..6, 0..self.overviews.len() as u32);
@@ -1524,6 +1539,7 @@ impl ViewportPresenter {
         // Works both for present() and hosts submitting encode() themselves.
         self.uploads.finish(encoder);
         self.presented_view = Some((view, surround_linear, self.quarter_turns, self.corner_radius));
+        self.presented_drawing = Some(renderer.presentation);
         self.presented_selection_overlay = renderer.selection_overlay;
         self.presented_paper = Some(lit);
         if !overview_only {self.fill_reveal=renderer.fill_reveal;}
@@ -1584,6 +1600,59 @@ mod fill_tests;
 mod tests {
     use super::*;
     #[test]
+    fn waiting_drawing_shows_surround_until_full_composition_and_keeps_transparency_after_edits() {
+        use crate::layer_tests::placement::{paint_document, set_source, occurrence_id};
+        use layer_core::authored::RecordChange;
+        let extent = [96; 2];
+        let mut document = paint_document(extent, "Transparent photo");
+        set_source(&mut document, layer_core::color::source::rgba8_source(extent, |x, _|
+            if x < 32 { [0, 255, 0, 255] } else { [0; 4] }));
+        let mut renderer = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        let mut presenter = ViewportPresenter::for_renderer(&renderer, wgpu::TextureFormat::Rgba8UnormSrgb);
+        presenter.set_target_retention(true);
+        let (texture, surface) = crate::create_target(renderer.device(), extent, wgpu::TextureFormat::Rgba8UnormSrgb, "waiting drawing");
+        let surround = [0.04, 0.12, 0.22, 1.];
+        let view = crate::test_support::view(extent);
+        let pixels = |renderer: &WgpuRasterizer, presenter: &mut ViewportPresenter| {
+            assert!(presenter.needs_present(renderer, view, surround));
+            presenter.present(renderer, &surface, view, surround).unwrap();
+            assert!(!presenter.needs_present(renderer, view, surround));
+            crate::layer_tests::page_bytes(renderer, &texture)
+        };
+        let waiting = pixels(&renderer, &mut presenter);
+        assert!(waiting.as_chunks::<4>().0.iter().all(|pixel| *pixel == waiting[..4]));
+        assert_eq!(waiting[3], 255);
+        renderer.prepare_startup(&document, &layer_core::default_brush(layer_core::DefaultBrushPreset::GPen), false).unwrap();
+        assert_eq!(pixels(&renderer, &mut presenter), waiting);
+        let all = layer_core::SceneScope::All;
+        crate::test_support::submit_settled(&mut renderer,
+            layer_render::FramePacket {scene:document.scene().with_scope(&all),..crate::test_support::packet(document.scene(),extent)});
+        let shown = pixels(&renderer, &mut presenter);
+        assert_eq!(&shown[(48 * 96 + 16) * 4..][..4], &[0, 255, 0, 255]);
+        renderer.analysis_changed();
+        let other_surround = [1., 0., 0., 1.];
+        assert!(!presenter.needs_present(&renderer, view, other_surround));
+        presenter.present(&renderer, &surface, view, other_surround).unwrap();
+        assert_eq!(crate::layer_tests::page_bytes(&renderer, &texture), shown);
+        let checker = |bytes: &[u8]| (48..80).flat_map(|y| (48..80).map(move |x| <[u8; 4]>::try_from(&bytes[(y * 96 + x) * 4..][..4]).unwrap())).collect::<Vec<_>>();
+        let transparent = checker(&shown);
+        assert!(transparent.iter().any(|pixel| *pixel != transparent[0]));
+        let handle = occurrence_id(&document);
+        let mut hidden = document.scene().occurrence(handle).unwrap().clone();
+        hidden.visible = false;
+        document.apply(layer_core::Edit::Occurrence(RecordChange::replace(&document.artwork.occurrences, handle, Some(hidden)).unwrap())).unwrap();
+        crate::test_support::submit_settled(&mut renderer,crate::test_support::packet(document.scene(),extent));
+        let hidden = pixels(&renderer, &mut presenter);
+        assert_eq!(checker(&hidden), transparent);
+        let replacement = layer_core::Document::from_artwork(document.artwork.clone()).unwrap();
+        renderer.prepare_startup(&replacement, &layer_core::default_brush(layer_core::DefaultBrushPreset::GPen), false).unwrap();
+        assert_eq!(pixels(&renderer, &mut presenter), waiting);
+        let backdrop = layer_core::SceneScope::Members(replacement.scene().constant_backdrop().into());
+        crate::test_support::submit_settled(&mut renderer,
+            layer_render::FramePacket {scene:replacement.scene().with_scope(&backdrop),..crate::test_support::packet(replacement.scene(),extent)});
+        assert_eq!(pixels(&renderer, &mut presenter), waiting);
+    }
+    #[test]
     fn backdrop_scope_defers_native_paint_restore_until_the_full_document_is_prepared() {
         use crate::layer_tests::placement::{paint, target, reveal_all};
         use layer_engine::{CanvasEngine, ViewTransform, input_queue};
@@ -1638,7 +1707,7 @@ mod tests {
                 renderer.paint_layers.iter().map(|layer| layer.pages.len()).sum::<usize>());
             let (texture, surface) = crate::create_target(renderer.device(), extent, wgpu::TextureFormat::Rgba8UnormSrgb, "restored backdrop");
             presenter.present(&renderer, &surface, packet.view, [0., 0., 0., 1.]).unwrap();
-            assert!(crate::layer_tests::page_bytes(&renderer, &texture).as_chunks::<4>().0.iter().all(|pixel| *pixel == [255; 4]));
+            assert!(crate::layer_tests::page_bytes(&renderer, &texture).as_chunks::<4>().0.iter().all(|pixel| *pixel == [0, 0, 0, 255]));
             assert_eq!(restored, (false, 0, 0), "backdrop-only frame must leave excluded native paint undecoded");
             renderer.prepare_startup(&document, &layer_core::default_brush(layer_core::DefaultBrushPreset::GPen), false).unwrap();
             crate::test_support::wait_startup(&mut renderer, Instant::now() + Duration::from_secs(30),
@@ -1701,9 +1770,12 @@ mod tests {
         assert_eq!(&native[native_at..native_at+4],&[0,159,121,89]);
         assert_eq!(before,after,"Exact readback preserves the accepted displayed frame");
         assert!(before[surface_at+1].abs_diff(before[surface_at])>10,"Visible green objects replace the neutral checkerboard");
+        let replacement=layer_core::Document::from_artwork(document.artwork.clone()).unwrap();
+        let frame=layer_render::FramePacket {scene:replacement.scene(),..frame};
+        let empty=layer_render::FramePacket {scene:replacement.scene().with_scope(&backdrop),..empty};
         settle(&mut renderer,empty);
         let hidden=capture(&renderer);
-        assert_eq!(hidden[surface_at],hidden[surface_at+1],"Empty backdrop restores the neutral checkerboard");
+        assert_eq!(&hidden[surface_at..surface_at+4],&[255;4],"A replaced drawing's backdrop presents only the surround");
         settle(&mut renderer,frame);
         assert_eq!(capture(&renderer),before,"Objects return after the backdrop is replaced again");
     }
