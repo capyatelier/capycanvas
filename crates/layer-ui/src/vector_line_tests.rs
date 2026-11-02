@@ -2898,3 +2898,73 @@ fn vector_enclosure_skips_grazed_faces_and_paint_unfilled_adds_only_the_remainin
         assert_eq!(s.engine.document().scene().vector_layer(target), Some(&original));
     }
 }
+
+#[test]
+fn a_traced_region_fits_two_hundred_holes_within_one_shared_point_budget() {
+    let (mut s, target) = raster_reference_vector_target(Platform::Gtk);
+    let point = surface_at(&s, [2., 2.]);
+    press(&mut s, 100, &[point, point]);
+    let request = s.renderer_mut().region_requests.last().unwrap().clone();
+    let extent = [128_u32, 80_u32];
+    let stride = extent[0].div_ceil(8) as usize;
+    let mut words = vec![0x4444_4444_u32; stride * extent[1] as usize];
+    for hole in 0..200_u32 {
+        let left = 4 + hole % 20 * 6;
+        let top = 4 + hole / 20 * 6;
+        for y in top..top + 3 { for x in left..left + 3 {
+            words[y as usize * stride + (x / 8) as usize] &= !(0xf << (x % 8 * 4));
+        }}
+    }
+    let pixels = Arc::new(layer_core::SelectionPixels::new(extent, [0, 0, extent[0], extent[1]], words).unwrap());
+    let mut marching = layer_core::authored::vector::ContourTrace::new((*pixels).clone());
+    let mut marching_calls = 0;
+    loop {
+        marching_calls += 1;
+        if let Some(contours) = marching.advance(262_144) {
+            assert_eq!(contours.len(), 201);
+            assert!(contours.iter().map(Vec::len).sum::<usize>() <= 20_000);
+            break;
+        }
+    }
+    s.renderer_mut().region_reply = Some(layer_render::RegionResult { anchors: None, gaps: None, underfill: None, tonal_sample: None,
+        placement: layer_core::Affine::IDENTITY, request_id: request.request_id, pixels });
+    s.frame(2_000_000_000, 2_000_000_000).unwrap();
+    assert!(s.region_tools.busy());
+    for call in 1..=marching_calls + 2 {
+        s.frame(2_000_000_000 + call * 16_000_000, 2_000_000_000 + call * 16_000_000).unwrap();
+        if !s.region_tools.busy() { break; }
+    }
+    assert!(!s.region_tools.busy(), "201 contours must finish within {marching_calls} marching calls plus two advances");
+    let object = s.engine.document().scene().vector_layer(target).unwrap();
+    assert_eq!(object.path_count(), 1);
+    assert_eq!(object.paths().next().unwrap().1.geometry.subpaths().len(), 201);
+}
+
+#[test]
+fn a_large_antialiased_disc_trace_finishes_within_the_existing_frame_quota() {
+    let (mut s, target) = raster_reference_vector_target(Platform::Gtk);
+    let extent = s.engine.document().composition().size;
+    let center = extent.map(|size| f64::from(size) * 0.5);
+    let radius = f64::from(extent[0].min(extent[1])) * 0.35;
+    let point = surface_at(&s, center);
+    press(&mut s, 100, &[point, point]);
+    let request = s.renderer_mut().region_requests.last().unwrap().clone();
+    let stride = extent[0].div_ceil(4) as usize;
+    let mut words = vec![0_u32; stride * extent[1] as usize];
+    for y in 0..extent[1] { for x in 0..extent[0] {
+        let distance = (f64::from(x) + 0.5 - center[0]).hypot(f64::from(y) + 0.5 - center[1]);
+        let coverage = ((radius + 0.5 - distance).clamp(0., 1.) * 255.).round() as u32;
+        words[y as usize * stride + (x / 4) as usize] |= coverage << (x % 4 * 8);
+    }}
+    let pixels = Arc::new(layer_core::SelectionPixels::bytes(extent, [0, 0, extent[0], extent[1]], words).unwrap());
+    s.renderer_mut().region_reply = Some(layer_render::RegionResult { anchors: None, gaps: None, underfill: None, tonal_sample: None,
+        placement: layer_core::Affine::IDENTITY, request_id: request.request_id, pixels });
+    s.frame(2_000_000_000, 2_000_000_000).unwrap();
+    finish_vector_trace(&mut s);
+    let object = s.engine.document().scene().vector_layer(target).unwrap();
+    assert_eq!(object.path_count(), 1);
+    let path = object.paths().next().unwrap().1;
+    assert_eq!(path.geometry.subpaths().len(), 1);
+    assert!(path.geometry.subpaths()[0].closed);
+    assert!(path.encloses(center, 0.01));
+}

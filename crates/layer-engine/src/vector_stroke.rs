@@ -151,6 +151,9 @@ fn dot(a: [f64; 2], b: [f64; 2]) -> f64 { a[0] * b[0] + a[1] * b[1] }
 fn distance(a: [f64; 2], b: [f64; 2]) -> f64 { let d = sub(a, b); dot(d, d).sqrt() }
 fn unit(v: [f64; 2]) -> [f64; 2] { let l = dot(v, v).sqrt(); if l > 1e-12 { scale(v, 1. / l) } else { [0.; 2] } }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Phase { Turn, Samples, Fit, Anchors, Done }
+
 pub struct PolylineFit {
     points: Vec<[f64; 2]>,
     closed: bool,
@@ -158,7 +161,7 @@ pub struct PolylineFit {
     cursor: usize,
     first: usize,
     turn: f64,
-    phase: u8,
+    phase: Phase,
     anchors: Vec<Anchor>,
     result: Option<Subpath>,
 }
@@ -167,22 +170,16 @@ impl PolylineFit {
         if closed && points.first() == points.last() { points.pop(); }
         let invalid = !tolerance.is_finite() || tolerance <= 0. || points.len() < if closed { 3 } else { 2 };
         Self { points, closed, fit: LineFit::new(tolerance, tolerance * 8.), cursor: 0, first: 0, turn: f64::INFINITY,
-            phase: if invalid { 4 } else { 0 }, anchors: Vec::new(), result: None }
+            phase: if invalid { Phase::Done } else { Phase::Turn }, anchors: Vec::new(), result: None }
     }
-    pub fn advance(&mut self, quota: usize) -> bool {
-        if self.phase == 4 { return true; }
-        if self.phase == 2 {
-            if !self.fit.prepare(false, quota) { return false; }
-            self.fit.progress(false, quota);
-            if self.fit.pieces.last().is_some_and(|piece| piece.end + 1 == self.fit.kept.len()) { self.phase = 3; self.cursor = 0; }
-            return false;
-        }
-        for _ in 0..quota {
+    pub fn advance(&mut self, mut quota: usize) -> bool {
+        while quota > 0 {
             match self.phase {
-                0 => {
+                Phase::Turn => {
+                    quota -= 1;
                     let n = self.points.len();
                     let i = self.cursor;
-                    if !self.points[i].iter().all(|v| v.is_finite()) { self.phase = 4; return true; }
+                    if !self.points[i].iter().all(|v| v.is_finite()) { self.phase = Phase::Done; return true; }
                     if self.closed {
                         let a = unit(sub(self.points[i], self.points[(i + n - 1) % n]));
                         let b = unit(sub(self.points[(i + 1) % n], self.points[i]));
@@ -190,20 +187,30 @@ impl PolylineFit {
                         if turn < self.turn { self.turn = turn; self.first = i; }
                     }
                     self.cursor += 1;
-                    if self.cursor == n { self.phase = 1; self.cursor = 0; }
+                    if self.cursor == n { self.phase = Phase::Samples; self.cursor = 0; }
                 }
-                1 => {
+                Phase::Samples => {
+                    quota -= 1;
                     let n = self.points.len();
                     let point = self.points[(self.first + self.cursor) % n];
                     self.fit.push_sample((point, 1.));
                     self.cursor += 1;
                     if self.cursor == n + usize::from(self.closed) {
                         if self.closed && let Some(last) = self.fit.kept.last_mut() { last.0 = self.points[self.first]; *self.fit.points.last_mut().unwrap() = last.0; }
-                        if self.fit.kept.len() < 2 { self.phase = 4; return true; }
-                        self.phase = 2; return false;
+                        if self.fit.kept.len() < 2 { self.phase = Phase::Done; return true; }
+                        self.phase = Phase::Fit;
                     }
                 }
-                3 => {
+                Phase::Fit => {
+                    let (ready, spent) = self.fit.prepare(false, quota);
+                    quota = quota.saturating_sub(spent);
+                    if !ready { break; }
+                    quota = quota.saturating_sub(self.fit.progress(false, quota));
+                    if self.fit.pieces.last().is_none_or(|piece| piece.end + 1 != self.fit.kept.len()) { break; }
+                    self.phase = Phase::Anchors; self.cursor = 0;
+                }
+                Phase::Anchors => {
+                    quota -= 1;
                     self.fit.push_anchors(self.cursor, &mut self.anchors);
                     self.cursor += 1;
                     if self.cursor == self.fit.pieces.len() {
@@ -213,13 +220,13 @@ impl PolylineFit {
                             *first = Anchor::new(first.point(), last.in_handle(), first.out_handle(), first.kind);
                         }
                         if self.anchors.len() >= 2 { self.result = Some(Subpath::new(&self.anchors, self.closed)); }
-                        self.phase = 4; return true;
+                        self.phase = Phase::Done; return true;
                     }
                 }
-                _ => return self.phase == 4,
+                Phase::Done => return true,
             }
         }
-        false
+        self.phase == Phase::Done
     }
     pub fn take(&mut self) -> Option<Subpath> { self.result.take() }
 }
@@ -582,7 +589,7 @@ impl LineFit {
         self.take(samples);
         self.progress(true, budget);
     }
-    fn prepare(&mut self, open: bool, budget: usize) -> bool {
+    fn prepare(&mut self, open: bool, budget: usize) -> (bool, usize) {
         let points = &self.points;
         let visible = if open { points.len().saturating_sub(1) } else { points.len() };
         let mut spent = 0;
@@ -603,9 +610,9 @@ impl LineFit {
             if angle > limit && angle >= self.angles[i - 1].0 && angle > self.angles[i + 1].0 && distance(points[i], points[previous]) > self.reach * 0.5 { self.corners.push(i); }
             self.examined += 1;
         }
-        self.angles.len() >= visible && self.examined + 1 >= self.angles.len()
+        (self.angles.len() >= visible && self.examined + 1 >= self.angles.len(), spent)
     }
-    fn progress(&mut self, open: bool, budget: usize) {
+    fn progress(&mut self, open: bool, budget: usize) -> usize {
         self.prepare(open, usize::MAX);
         let points = std::mem::take(&mut self.points);
         let visible = if open { points.len().saturating_sub(1) } else { points.len() };
@@ -645,6 +652,7 @@ impl LineFit {
             self.pieces.push(Piece { start: piece.start + first, end: piece.end + first, hint: piece.hint + first, seen: piece.seen + first, ..piece });
         }
         self.points = points;
+        spent
     }
     fn fitted(&self, samples: &[Sample]) -> Option<(PathGeometry, Option<WidthProfile>, f64)> {
         let half = samples.iter().map(|s| s.1).fold(0., f64::max);
@@ -973,6 +981,14 @@ mod tests {
         eprintln!("trace_and_fit_large_region_budgeted complete calls={calls} maximum_us={maximum}");
     }
 
+    #[test]
+    fn small_closed_polylines_finish_within_one_available_quota() {
+        let points = vec![[0., 0.], [3., 0.], [3., 3.], [0., 3.]];
+        let expected = fit_polyline(&points, 0.25, true).unwrap();
+        let mut fit = PolylineFit::new(points, 0.25, true);
+        assert!(fit.advance(20_000));
+        assert_eq!(fit.take(), Some(expected));
+    }
     #[test]
     fn closed_polyline_retains_two_anchor_cubic_loops() {
         let points = (0..16).map(|i| { let angle = f64::from(i) * std::f64::consts::TAU / 16.; [8. + 3. * angle.cos(), 8. + 3. * angle.sin()] }).collect::<Vec<_>>();

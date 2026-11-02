@@ -2819,8 +2819,8 @@ and BVH reuse are in `artifacts/fill-tools/m7a-native/` and
 
 M7b on `63619fd8f` plus the milestone changes, 2026-11-02. The native release
 `trace_and_fit_large_region_budgeted` test traces a 2,000 × 2,000 pixel face
-and fits its contours at 0.25 px. Each advance processes at most 262,144 mask
-cells or 20,000 fitting points, without clocks in the job.
+and fits its contours at 0.25 px. Each call processes at most 262,144 mask
+cells or shares a 20,000-point fitting budget across contours, without clocks.
 
 | Device | Quota advances | Trace maximum | Fitting maximum | 8 ms per-call gate |
 | --- | --- | --- | --- | --- |
@@ -2828,8 +2828,8 @@ cells or 20,000 fitting points, without clocks in the job.
 | Workstation, native release | 19 | 1.005 ms | 0.093 ms | Diagnostic |
 
 First-call setup, handoff, destruction and final geometry construction are
-included; mask creation is excluded. The UI schedules one advance per frame,
-plus the initial mask-admission frame. These are job calls, not measured
+included; mask creation is excluded. The UI advances one shared budget per
+frame, plus the initial mask-admission frame. These are job calls, not measured
 presentations. Main had no equivalent vector tracing latency to compare.
 Source/binary hashes and all calls, including the rejected first version, are
 in `artifacts/fill-tools/m7b-native/`.

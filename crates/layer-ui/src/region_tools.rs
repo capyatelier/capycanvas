@@ -61,7 +61,7 @@ struct TraceJob {
     target:Target,
     marching:Option<ContourTrace>,
     contours:std::collections::VecDeque<Vec<[f64;2]>>,
-    fitting:Option<layer_engine::PolylineFit>,
+    fitting:Option<(layer_engine::PolylineFit,usize)>,
     subpaths:Vec<Subpath>,
 }
 impl Target {
@@ -303,9 +303,15 @@ impl<R: CanvasRenderer> UiSession<R> {
             if let Some(contours)=trace.advance(262_144) {job.contours=contours.into();job.marching=None;}
             self.region_tools.trace=Some(job);return Ok(0);
         }
-        if job.fitting.is_none() && let Some(points)=job.contours.pop_front() {job.fitting=Some(layer_engine::PolylineFit::new(points,0.25,true));}
-        if let Some(fit)=&mut job.fitting {
-            if !fit.advance(20_000) {self.region_tools.trace=Some(job);return Ok(0);}
+        let mut budget=20_000;
+        while budget>0 {
+            if job.fitting.is_none() {
+                let Some(points)=job.contours.pop_front() else{break;};
+                let count=points.len();job.fitting=Some((layer_engine::PolylineFit::new(points,0.25,true),count));
+            }
+            let (fit,count)=job.fitting.as_mut().unwrap();
+            if !fit.advance(budget) {self.region_tools.trace=Some(job);return Ok(0);}
+            budget=budget.saturating_sub(*count);
             if let Some(path)=fit.take() {job.subpaths.push(path);}
             job.fitting=None;
         }
