@@ -216,12 +216,14 @@ struct FloatingResize {
 #[derive(Clone, PartialEq)]
 struct CustomizationLayoutKey {
     panels: Vec<(Panel, customization::PanelContent, bool)>,
+    phone: Option<Vec<ToolbarTile>>,
     header_entries: Option<[Vec<u32>; 3]>,
     target_validity: Option<Result<(), String>>,
 }
 impl CustomizationLayoutKey {
     fn matches(&self, layout: &DockLayout) -> bool {
         self.panels.len() == layout.panels.len()
+            && self.phone.as_ref().is_none_or(|phone| layout.phone.as_ref() == Some(phone))
             && self.panels.iter().zip(&layout.panels).all(|((id, content, visible), panel)|
                 *id == panel.id && content == &panel.content && *visible == layout.panel_group(panel.id).is_some())
             && self.header_entries.as_ref().is_none_or(|zones| zones.iter().zip(&layout.header.zones).all(|(ids, entries)|
@@ -231,6 +233,7 @@ impl CustomizationLayoutKey {
         Self {
             panels: layout.panels.iter().map(|p| (p.id, p.content.clone(), layout.panel_group(p.id).is_some())).collect(),
             header_entries: Default::default(),
+            phone: None,
             target_validity: None,
         }
     }
@@ -899,7 +902,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let drawings = menu.sections.remove(0);
             let workspaces = workspace.menu(
                 self.require_workspace_idle().is_ok(),
-                durable_layout(&self.state.workspace.layout) != workspace.baseline,
+                self.state.workspace.layout.starting_layout_available(&workspace.baseline, self.phone_layout().is_some()),
                 self.localization(),
             );
             let toolbars =
@@ -979,6 +982,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             if matches!(picker.destination, customization::ToolDestination::Header { .. }) {
                 key.header_entries = Some(self.state.workspace.layout.header.zones.each_ref().map(|zone| zone.iter().map(|entry| entry.id).collect()));
             }
+            if matches!(picker.destination, customization::ToolDestination::Phone { .. }) { key.phone = self.state.workspace.layout.phone.clone(); }
             copy.picker = Some((picker.clone(), key, std::sync::Arc::new(picker.view_localized(&self.state.workspace.layout, self.state.platform, self.localization()))));
         }
         Some(copy.picker.as_ref().unwrap().2.as_ref().clone())
@@ -2674,7 +2678,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     && self
                         .managed_workspace
                         .as_ref()
-                        .is_some_and(|w| durable_layout(&self.state.workspace.layout) != w.baseline)
+                        .is_some_and(|w| self.state.workspace.layout.starting_layout_available(&w.baseline, self.phone_layout().is_some()))
             }
             CommandId::RepairSourceProfile | CommandId::RasterizeSource => {
                 self.require_action_idle().is_ok() && !self.state.document_file.busy
@@ -3195,6 +3199,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let workspace_before = matches!(
             &action,
             UiAction::Customize { .. }
+                | UiAction::Phone { action: PhoneAction::RemoveTool { .. } | PhoneAction::MoveTool { .. } }
                 | UiAction::MovePanel { .. }
                 | UiAction::MoveGroup { .. }
                 | UiAction::MoveColumn { .. }
@@ -3260,6 +3265,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                     PhoneAction::Tool { tile } => {
                         let control = self.state.workspace.layout.anchor_control(DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Tool(tile) }).ok_or("The tool no longer exists")?;
                         return self.activate_tool(control, DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Tool(tile) });
+                    }
+                    PhoneAction::RemoveTool { tile } => self.state.workspace.layout.remove_phone_tool(tile)?,
+                    PhoneAction::MoveTool { tile, before } => self.state.workspace.layout.move_phone_tool(tile, before)?,
+                    PhoneAction::InsertTools { before } => {
+                        self.state.phone.menu = false;
+                        self.state.workspace.layout.resolve_phone_defaults(WorkspacePreset::Painter)?;
+                        self.state.customization.picker = Some(customization::ToolPicker {
+                            destination: customization::ToolDestination::Phone { before }, query: String::new(), selected: Vec::new(), error: None,
+                        });
+                        self.state.customization.drawer = None;
                     }
                     PhoneAction::ToolSettings => return self.activate_tool(PhoneLayout::SETTINGS, DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::ToolSettings }),
                     PhoneAction::CapyHold => {

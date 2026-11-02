@@ -681,3 +681,7 @@ diagnostics-memory-metal-label = Metal allocations
 workspace-phone-swap-sides = Swap Sides
 workspace-phone-title-bar-unavailable = Title bar editing is unavailable in the phone layout
 workspace-launch-window-size = Initial window size
+
+workspace-phone-tool-limit = The phone toolbar holds up to ten tools.
+
+workspace-reset-phone-confirm = Restore this workspace’s starting phone toolbar. You can undo restoring it with { $menu } → Undo Layout Change.

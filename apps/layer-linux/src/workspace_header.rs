@@ -3,6 +3,7 @@ use super::*;
 
 #[path = "workspace_header_drag.rs"]
 mod drag;
+pub(super) use drag::snapshot_pickup;
 #[path = "workspace_header_editor.rs"]
 mod editor;
 

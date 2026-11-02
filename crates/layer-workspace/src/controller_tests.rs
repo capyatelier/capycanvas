@@ -931,6 +931,7 @@ fn starting_layout_dialog_previews_without_saving_and_restore_is_undoable() {
         f.save();
         let before = f.host.session.capture_workspace().unwrap();
         let before_layout = f.host.session.state().workspace.layout.clone();
+        let baseline = before_layout.starting_layout_candidate(&baseline, false).unwrap();
         assert_ne!(before.history.layout(), &baseline);
         for confirm in [false, true] {
             let saved = f.controller.manager.current().unwrap();

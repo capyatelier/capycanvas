@@ -684,3 +684,7 @@ diagnostics-memory-metal-label = Выделено Metal
 workspace-phone-swap-sides = Поменять стороны
 workspace-phone-title-bar-unavailable = В раскладке для телефона нельзя редактировать строку заголовка
 workspace-launch-window-size = Начальный размер окна
+
+workspace-phone-tool-limit = На панели телефона можно разместить до десяти инструментов.
+
+workspace-reset-phone-confirm = Восстановить исходную панель инструментов телефона для этого пространства. Восстановление можно отменить через { $menu } → Отменить изменение рабочего пространства.

@@ -9,6 +9,7 @@ impl Workspace {
 
 pub(super) struct Phone {
     pub root: drawers::Columns,
+    contact: Rc<RefCell<Option<(PhoneBarContact, gdk::Event)>>>,
     tools: RefCell<Vec<(ToolbarTile, toolbar_components::TileWidget, ToolbarControl)>>,
     sliders: RefCell<Vec<Rc<toolbar_components::Component>>>,
     settings: RefCell<Option<toolbar_components::TileWidget>>,
@@ -37,7 +38,7 @@ impl Phone {
         bridge.set_can_target(false);
         let connection = Rc::new(Cell::new(None));
         drawers::paint_connection(&bridge, connection.clone());
-        Self { root, tools: RefCell::default(), sliders: RefCell::default(), settings: RefCell::default(), chips: RefCell::default(),
+        Self { root, contact: Rc::default(), tools: RefCell::default(), sliders: RefCell::default(), settings: RefCell::default(), chips: RefCell::default(),
             native: [gtk::WindowControls::new(gtk::PackType::Start), gtk::WindowControls::new(gtk::PackType::End)],
             buttons: RefCell::default(), decoration: RefCell::default(), reported: Cell::new(None), menu, menu_key: Cell::new(None),
             loans: RefCell::default(), bridge, connection, placement: RefCell::default() }
@@ -47,6 +48,7 @@ impl Phone {
         self.bind_window_move(w);
         let held = Rc::new(Cell::new(false));
         let root = w.zen_capy.parent().unwrap();
+        root.add_css_class("customizable-target");
         let (click, suppress) = customization::extend_button(w, &root, &w.zen_capy, None);
         let hold = gtk::GestureLongPress::new();
         hold.set_touch_only(false);
@@ -80,7 +82,8 @@ impl Phone {
         w.window.add_controller(release);
     }
     fn bind_window_move(&self, w: &Rc<Workspace>) {
-        let contact = Rc::new(RefCell::new(None::<(PhoneBarContact, gdk::Event)>));
+        let contact = self.contact.clone();
+        w.install_menu(&self.root, ContextTarget::PhoneToolbar);
         let drag = gtk::GestureDrag::new();
         drag.set_propagation_phase(gtk::PropagationPhase::Capture);
         drag.connect_drag_begin(glib::clone!(#[weak] w, #[strong] contact, move |gesture, x, y| {
@@ -94,14 +97,25 @@ impl Phone {
                     widget.is::<gtk::Button>() && widget.ancestor(gtk::WindowControls::static_type()).is_some());
                 let gpu = w.gpu.borrow();
                 if gpu.as_ref()?.session.state().phone.hidden { return None; }
-                gpu.as_ref()?.session.phone_layout().and_then(|layout| PhoneBarContact::begin(&layout, [p.x(), p.y()], native))
+                gpu.as_ref()?.session.phone_layout().and_then(|layout| PhoneBarContact::begin(&layout, [p.x(), p.y()], native)).map(|mut contact| { contact.set_tools(gpu.as_ref().unwrap().session.state().workspace.layout.phone.as_deref().unwrap_or(&[])); contact })
             });
             contact.replace(start.zip(gesture.current_event()));
             if contact.borrow().is_none() { gesture.set_state(gtk::EventSequenceState::Denied); }
         }));
         drag.connect_drag_update(glib::clone!(#[weak] w, #[strong] contact, move |gesture, dx, dy| {
             let past_slop = w.window.drag_check_threshold(0, 0, dx as i32, dy as i32);
-            if !contact.borrow().as_ref().is_some_and(|(contact, _)| contact.move_window(past_slop)) { return; }
+            let outcome = {
+                let mut active = contact.borrow_mut();
+                let Some((active, press)) = active.as_mut() else { return; };
+                let gpu = w.gpu.borrow();
+                let Some(gpu) = gpu.as_ref() else { return; };
+                let Some(layout) = gpu.session.phone_layout() else { return; };
+                let Some((x,y)) = press.position() else { return; };
+                active.motion(&layout, gpu.session.state().workspace.layout.phone.as_deref().unwrap_or(&[]), [(x+dx) as f32,(y+dy) as f32], past_slop)
+            };
+            if matches!(outcome, PhoneBarOutcome::Held | PhoneBarOutcome::Dragging) { gesture.set_state(gtk::EventSequenceState::Claimed); w.surface.queue_allocate(); return; }
+            if outcome == PhoneBarOutcome::Cancel { contact.take(); gesture.set_state(gtk::EventSequenceState::Claimed); return; }
+            if outcome != PhoneBarOutcome::WindowMove { return; }
             let (_, press) = contact.take().unwrap();
             if let (Some(surface), Some(device), Some((x, y))) =
                 (w.window.surface().and_downcast::<gdk::Toplevel>(), press.device(), press.position()) {
@@ -111,15 +125,46 @@ impl Phone {
                 surface.begin_move(&device, 1, x, y, press.time());
             }
         }));
-        drag.connect_drag_end(glib::clone!(#[strong] contact, move |_, _, _| { contact.take(); }));
-        drag.connect_cancel(glib::clone!(#[strong] contact, move |_, _| { contact.take(); }));
-        w.window.add_controller(drag);
+        drag.connect_drag_end(glib::clone!(#[weak] w, #[strong] contact, move |gesture, dx, dy| {
+            let Some((mut active, press)) = contact.take() else { return; };
+            let outcome = w.gpu.borrow().as_ref().and_then(|g| g.session.phone_layout().map(|layout| {
+                let (x,y) = press.position().unwrap_or_default();
+                active.finish(&layout, g.session.state().workspace.layout.phone.as_deref().unwrap_or(&[]), [(x+dx) as f32,(y+dy) as f32])
+            })).unwrap_or(PhoneBarOutcome::Cancel);
+            match outcome {
+                PhoneBarOutcome::Move { tile, before } => w.dispatch(UiAction::Phone { action: PhoneAction::MoveTool { tile, before } }),
+                PhoneBarOutcome::Menu(tile) => {
+                    gesture.set_state(gtk::EventSequenceState::Claimed);
+                    let (x,y) = press.position().unwrap_or_default();
+                    w.show_context(w.surface.upcast_ref(), tile.map_or(ContextTarget::PhoneToolbar, |tile| ContextTarget::PhoneTile { tile }), x, y);
+                }
+                PhoneBarOutcome::Cancel => { gesture.set_state(gtk::EventSequenceState::Claimed); }
+                _ => ()
+            }
+            w.surface.queue_allocate();
+        }));
+        drag.connect_cancel(glib::clone!(#[weak] w, #[strong] contact, move |_, _| { contact.take(); w.surface.queue_allocate(); }));
+        w.window.add_controller(drag.clone());
         let hold = gtk::GestureLongPress::new();
         hold.set_touch_only(false);
         hold.set_propagation_phase(gtk::PropagationPhase::Capture);
-        hold.connect_pressed(move |_, _, _| { if let Some((contact, _)) = contact.borrow_mut().as_mut() { contact.hold(); } });
-        w.window.add_controller(hold);
+        hold.connect_pressed(glib::clone!(#[weak] w, move |gesture, _, _| {
+            if let Some((active, _)) = contact.borrow_mut().as_mut() && active.arm() == PhoneBarOutcome::Held { gesture.set_state(gtk::EventSequenceState::Claimed); }
+            w.surface.queue_allocate();
+        }));
+        w.window.add_controller(hold.clone());
+        hold.group_with(&drag);
+        let key = gtk::EventControllerKey::new();
+        key.set_propagation_phase(gtk::PropagationPhase::Capture);
+        key.connect_key_pressed(glib::clone!(#[weak] w, #[upgrade_or] glib::Propagation::Proceed, move |_, key, _, _| {
+            if key == gdk::Key::Escape && let Some((mut contact, _)) = w.phone.contact.take() {
+                contact.cancel(); w.surface.queue_allocate(); return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        }));
+        w.window.add_controller(key);
     }
+
     fn add(&self, child: &impl IsA<gtk::Widget>) {
         child.set_parent(&self.root);
         self.root.imp().children.borrow_mut().push(child.clone().upcast());
@@ -170,6 +215,8 @@ impl Phone {
     pub fn refresh(&self, w: &Rc<Workspace>, state: &UiState, regions: u32) {
         let viewport = [w.surface.width() as f32, w.surface.height() as f32];
         let Some(_) = state.phone_presentation(viewport) else {
+            self.contact.take();
+            self.root.imp().lifted.borrow_mut().take();
             if w.zen_capy.has_css_class("phone-capy") {
                 self.restore_loans();
                 w.zen_capy.remove_css_class("phone-capy");
@@ -251,6 +298,7 @@ impl Phone {
             for tile in tiles {
                 let choice = tool_choice_localized(tile.control, &w.localization());
                 let item = toolbar_components::TileWidget::new(w, None, tile, TileStyle::Medium, &choice);
+                w.install_menu(&item.root(), ContextTarget::PhoneTile { tile: tile.id });
                 item.button().set_widget_name(&format!("phone-tool-{}", tile.id));
                 item.button().add_css_class("header-tool");
                 item.button().add_css_class("in-bar");
@@ -282,6 +330,7 @@ impl Phone {
         let settings = state.phone_settings();
         if self.settings.borrow().is_none() {
             let item = toolbar_components::TileWidget::control_button(w, DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::ToolSettings }, PhoneLayout::SETTINGS, TileStyle::Medium, &settings.choice);
+            item.root().add_css_class("customizable-target");
             item.button().set_widget_name("phone-tool-settings");
             item.button().add_css_class("header-tool");
             self.add(&item.root());
@@ -324,14 +373,25 @@ impl Phone {
         button.set_margin_bottom(((hit.y + hit.height).round() - (visual.y + visual.height).round()) as i32);
     }
     pub fn allocate(&self, w: &Workspace, p: &PhoneLayout, state: PhoneState) {
+        let tool_bounds = {
+            let mut active = self.contact.borrow_mut();
+            if active.as_ref().is_some_and(|(contact, _)| !contact.valid(p, self.tools.borrow().iter().map(|(tile, _, _)| tile))) { active.take(); }
+            let lifted = active.as_ref().and_then(|(contact, _)| contact.lifted());
+            let color = w.palette.get().map_or([48,48,48], |palette| palette.panel.0);
+            self.root.imp().lifted.replace(lifted.map(|i| (self.tools.borrow()[i].1.root(),
+                gdk::RGBA::new(color[0] as f32 / 255., color[1] as f32 / 255., color[2] as f32 / 255., 1.))));
+            active.as_ref().map_or(p.tools, |(contact, _)| contact.geometry(p))
+        };
         let vertical = p.edge != Edge::Top;
         for (index, (tile, item, _)) in self.tools.borrow().iter().enumerate() {
             if tile.control == ToolbarControl::Divider {
-                item.root().set_can_target(false);
+                item.root().set_can_target(true);
                 if let Some(line) = item.button().child().and_downcast::<gtk::Separator>() {
                     crate::tiles::orient_divider(&line, if vertical { gtk::Orientation::Horizontal } else { gtk::Orientation::Vertical });
                 }
-            } else { Self::button_in_hit(&item.button(), p.tools[index], p.tool_hits[index]); }
+            } else {
+                Self::button_in_hit(&item.button(), tool_bounds[index], if self.root.imp().lifted.borrow().is_some() { tool_bounds[index] } else { p.tool_hits[index] });
+            }
             let size = p.icon.round().max(1.) as i32;
             if let Some(content) = customization::tool_button_content(&item.button()) {
                 if let Some(image) = content.downcast_ref::<gtk::Image>() {
@@ -390,7 +450,7 @@ impl Phone {
                     } else { None }
                 }
                 else if let Some(index) = self.tools.borrow().iter().position(|(_, item, _)| child == &item.root()) {
-                    Some(if self.tools.borrow()[index].0.control == ToolbarControl::Divider { p.tools[index] } else { p.tool_hits[index] })
+                    Some(if self.root.imp().lifted.borrow().is_some() || self.tools.borrow()[index].0.control == ToolbarControl::Divider { tool_bounds[index] } else { p.tool_hits[index] })
                 }
                 else if let Some(index) = self.sliders.borrow().iter().position(|s| child == &s.root) { Some([p.size, p.strength][index]) }
                 else { None };

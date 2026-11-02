@@ -666,3 +666,7 @@ diagnostics-memory-metal-label = การจัดสรร Metal
 workspace-phone-swap-sides = สลับด้าน
 workspace-phone-title-bar-unavailable = ไม่สามารถแก้ไขแถบชื่อเรื่องในรูปแบบโทรศัพท์ได้
 workspace-launch-window-size = ขนาดหน้าต่างเริ่มต้น
+
+workspace-phone-tool-limit = แถบเครื่องมือบนโทรศัพท์มีเครื่องมือได้สูงสุดสิบรายการ
+
+workspace-reset-phone-confirm = คืนค่าแถบเครื่องมือบนโทรศัพท์เริ่มต้นของพื้นที่ทำงานนี้ เลิกทำการคืนค่าได้ด้วย { $menu } → เลิกทำการเปลี่ยนผัง

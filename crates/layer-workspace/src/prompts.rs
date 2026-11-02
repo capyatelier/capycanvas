@@ -117,6 +117,14 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         action: &ManagerAction,
         source: Option<&Metadata>,
     ) -> Result<ManagerPrompt, StoreError> {
+        self.form_prompt_for_scope(action, source, false)
+    }
+    pub(crate) fn form_prompt_for_scope(
+        &self,
+        action: &ManagerAction,
+        source: Option<&Metadata>,
+        phone: bool,
+    ) -> Result<ManagerPrompt, StoreError> {
         use ManagerAction as A;
         let source = || source.ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseAnItem));
         Ok(match action {
@@ -189,7 +197,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 }
                 ManagerPrompt::confirm(
                     self.localization().text(layer_ui::MessageId::WORKSPACE_RESTORE_STARTING_LAYOUT).to_string(),
-                    message(&self.localization(), if s.builtin && is_default_item(id) { layer_ui::MessageId::WORKSPACE_RESET_DEFAULT_CONFIRM } else { layer_ui::MessageId::WORKSPACE_RESET_SAVED_CONFIRM }, &[("menu", self.localization().text(layer_ui::MessageId::WORKSPACE_MENU).to_string())]),
+                    message(&self.localization(), if phone { layer_ui::MessageId::WORKSPACE_RESET_PHONE_CONFIRM } else if s.builtin && is_default_item(id) { layer_ui::MessageId::WORKSPACE_RESET_DEFAULT_CONFIRM } else { layer_ui::MessageId::WORKSPACE_RESET_SAVED_CONFIRM }, &[("menu", self.localization().text(layer_ui::MessageId::WORKSPACE_MENU).to_string())]),
                     self.localization().text(layer_ui::MessageId::WORKSPACE_RESTORE).to_string(),
                 )
             }

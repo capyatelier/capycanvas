@@ -357,20 +357,19 @@ impl Header {
                 draw(visual, at, snapshot, scale);
             }
         }
-        let b = drag.preview.held;
-        let shape = gtk::gsk::RoundedRect::from_rect(
-            gtk::graphene::Rect::new(b.x, b.y, b.width, b.height),
-            b.width.min(b.height) / 2. * crate::squircle::CORNER_FIT,
-        );
-        snapshot.push_rounded_clip(&shape);
-        snapshot.append_color(&drag.background, shape.bounds());
-        snapshot.pop();
-        draw(&drag.held, b, snapshot, scale);
         let color = if drag.preview.detached && matches!(drag.source, HeaderDragSource::Item(_)) {
             gdk::RGBA::new(0.95, 0.38, 0.36, 1.)
-        } else {
-            gdk::RGBA::new(0.35, 0.65, 1., 1.)
-        };
-        snapshot.append_border(&shape, &[2.; 4], &[color; 4]);
+        } else { gdk::RGBA::new(0.35, 0.65, 1., 1.) };
+        snapshot_pickup(snapshot, drag.preview.held, &drag.background, &color, || draw(&drag.held, drag.preview.held, snapshot, scale));
     }
+}
+
+pub(crate) fn snapshot_pickup(snapshot: &gtk::Snapshot, b: Bounds, background: &gdk::RGBA, color: &gdk::RGBA, paint: impl FnOnce()) {
+    let shape = gtk::gsk::RoundedRect::from_rect(gtk::graphene::Rect::new(b.x, b.y, b.width, b.height),
+        b.width.min(b.height) / 2. * crate::squircle::CORNER_FIT);
+    snapshot.push_rounded_clip(&shape);
+    snapshot.append_color(background, shape.bounds());
+    snapshot.pop();
+    paint();
+    snapshot.append_border(&shape, &[2.; 4], &[*color; 4]);
 }

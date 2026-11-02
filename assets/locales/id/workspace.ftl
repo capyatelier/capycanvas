@@ -1255,3 +1255,7 @@ diagnostics-memory-metal-label = Alokasi Metal
 workspace-phone-swap-sides = Tukar Sisi
 workspace-phone-title-bar-unavailable = Bilah judul tidak dapat diedit dalam tata letak ponsel
 workspace-launch-window-size = Ukuran awal jendela
+
+workspace-phone-tool-limit = Bilah alat ponsel dapat memuat hingga sepuluh alat.
+
+workspace-reset-phone-confirm = Pulihkan bilah alat ponsel awal ruang kerja ini. Anda dapat mengurungkan pemulihan dengan { $menu } → Urungkan Perubahan Tata Letak.

@@ -166,6 +166,37 @@ fn collapse_toolbar_dividers(tiles: &mut Vec<ToolbarTile>) {
         a.control == ToolbarControl::Divider && b.control == ToolbarControl::Divider
     });
 }
+enum ToolbarSplice<'a> {
+    Insert(Option<u32>, &'a [ToolbarControl]),
+    Remove(u32),
+    Place(Option<u32>, ToolbarTile),
+}
+impl<'a> ToolbarSplice<'a> {
+    fn insert(before: Option<u32>, controls: &'a [ToolbarControl]) -> Result<Self, String> {
+        if controls.is_empty() { return Err("Select at least one tool".into()); }
+        for control in controls { control.validate()?; }
+        Ok(Self::Insert(before, controls))
+    }
+}
+fn splice_toolbar(tiles: &mut Vec<ToolbarTile>, next_id: &mut u32, edit: ToolbarSplice<'_>, normalize: bool, limit: Option<usize>) -> Result<(), String> {
+    match edit {
+        ToolbarSplice::Remove(id) => { let index = tiles.iter().position(|t| t.id == id).ok_or("The tool no longer exists")?; tiles.remove(index); }
+        ToolbarSplice::Place(before, tile) => {
+            let index = before.map(|id| tiles.iter().position(|t| t.id == id).ok_or("The target tool no longer exists")).transpose()?.unwrap_or(tiles.len());
+            tiles.insert(index, tile);
+        }
+        ToolbarSplice::Insert(before, controls) => {
+            let index = before.map(|id| tiles.iter().position(|t| t.id == id).ok_or("The target tool no longer exists")).transpose()?.unwrap_or(tiles.len());
+            if limit.is_some_and(|limit| tiles.iter().filter(|t| t.control != ToolbarControl::Divider).count()
+                + controls.iter().filter(|c| **c != ToolbarControl::Divider).count() > limit) { return Err("Phone toolbar is full".into()); }
+            let end = next_id.checked_add(u32::try_from(controls.len()).map_err(|_| "Too many tools")?).ok_or("Toolbar tile ID space exhausted")?;
+            tiles.splice(index..index, controls.iter().zip(*next_id..end).map(|(&control, id)| ToolbarTile { id, control, slider_style: Default::default() }));
+            *next_id = end;
+        }
+    }
+    if normalize { collapse_toolbar_dividers(tiles); }
+    Ok(())
+}
 fn toolbar_span(tiles: &[ToolbarTile], along: f32, gap: f32, axis: Axis) -> f32 {
     tiles
         .iter()
@@ -1913,16 +1944,67 @@ impl Default for DockLayout {
 }
 
 impl DockLayout {
+    pub fn starting_layout_candidate(&self, starting: &Self, phone: bool) -> Result<Self, String> {
+        let mut candidate = if phone { self.clone() } else { starting.clone() };
+        candidate.phone = if phone { starting.phone.clone() } else { self.phone.clone() };
+        let desktop: std::collections::BTreeSet<_> = candidate.panels.iter().flat_map(|p| p.tiles()).map(|t| t.id).collect();
+        let highest = desktop.iter().copied().chain(candidate.phone.iter().flatten().map(|t| t.id)).max().unwrap_or(0);
+        candidate.next_tile_id = self.next_tile_id.max(starting.next_tile_id).max(highest.checked_add(1).ok_or("Toolbar tile ID space exhausted")?);
+        for tile in candidate.phone.iter_mut().flatten() {
+            if desktop.contains(&tile.id) {
+                tile.id = candidate.next_tile_id;
+                candidate.next_tile_id = candidate.next_tile_id.checked_add(1).ok_or("Toolbar tile ID space exhausted")?;
+            }
+        }
+        candidate.validate()?;
+        Ok(candidate)
+    }
+    pub fn starting_layout_available(&self, starting: &Self, phone: bool) -> bool {
+        let Ok(mut candidate) = self.starting_layout_candidate(starting, phone) else { return false; };
+        let mut current = self.clone();
+        for layout in [&mut current, &mut candidate] {
+            for tile in layout.phone.iter_mut().flatten() { tile.id = 0; }
+            layout.next_tile_id = 0;
+        }
+        crate::durable_layout(&current) != crate::durable_layout(&candidate)
+    }
     pub fn resolve_phone_defaults(&mut self, preset: crate::WorkspacePreset) -> Result<(), String> {
         if self.phone.is_some() {
             return Ok(());
         }
-        let controls = preset.phone_controls();
-        let end = self.next_tile_id.checked_add(controls.len() as u32).ok_or("Toolbar tile IDs exhausted")?;
-        self.phone = Some(controls.iter().zip(self.next_tile_id..end)
-            .map(|(&control, id)| ToolbarTile { id, control, slider_style: Default::default() }).collect());
-        self.next_tile_id = end;
+        let mut tiles = Vec::new();
+        splice_toolbar(&mut tiles, &mut self.next_tile_id, ToolbarSplice::insert(None, preset.phone_controls())?, false, None)?;
+        self.phone = Some(tiles);
         Ok(())
+    }
+    fn edit_phone(&mut self, edit: impl FnOnce(&mut Vec<ToolbarTile>, &mut u32) -> Result<(), String>) -> Result<(), String> {
+        let mut tiles = self.phone.clone().unwrap_or_default();
+        let mut next = self.next_tile_id;
+        if self.phone.is_none() {
+            splice_toolbar(&mut tiles, &mut next, ToolbarSplice::insert(None, WorkspacePreset::Painter.phone_controls())?, false, None)?;
+        }
+        edit(&mut tiles, &mut next)?;
+        self.phone = Some(tiles); self.next_tile_id = next;
+        Ok(())
+    }
+    pub fn insert_phone_tools(&mut self, before: Option<u32>, controls: &[ToolbarControl]) -> Result<(), String> {
+        if controls.iter().any(|control| !crate::phone::tool_allowed(*control)) {
+            return Err("This tool cannot be placed in the phone toolbar".into());
+        }
+        let edit = ToolbarSplice::insert(before, controls)?;
+        self.edit_phone(|tiles, next| splice_toolbar(tiles, next, edit, true, Some(10)))
+    }
+    pub fn remove_phone_tool(&mut self, tile: u32) -> Result<(), String> {
+        self.edit_phone(|tiles, next| splice_toolbar(tiles, next, ToolbarSplice::Remove(tile), true, None))
+    }
+    pub fn move_phone_tool(&mut self, tile: u32, before: Option<u32>) -> Result<(), String> {
+        self.edit_phone(|tiles, next| {
+            let source = tiles.iter().find(|t| t.id == tile).ok_or("The tool no longer exists")?.clone();
+            if before.is_some_and(|id| !tiles.iter().any(|t| t.id == id)) { return Err("The target tool no longer exists".into()); }
+            if before == Some(tile) { return Ok(()); }
+            splice_toolbar(tiles, next, ToolbarSplice::Remove(tile), false, None)?;
+            splice_toolbar(tiles, next, ToolbarSplice::Place(before, source), true, None)
+        })
     }
     /// Visible panels occur exactly once; hidden panels retain their registry entry.
     /// globally unique IDs, finite dimensions, and valid active tabs/ratios.
@@ -2005,7 +2087,7 @@ impl DockLayout {
         let mut tile_ids = std::collections::BTreeSet::new();
         if let Some(tiles) = &self.phone {
             if tiles.iter().filter(|t| t.control != ToolbarControl::Divider).count() > 10
-                || tiles.len() > 19
+                || tiles.len() > 21
             {
                 return Err("Phone toolbar is full".into());
             }
@@ -2363,33 +2445,10 @@ impl DockLayout {
         before: Option<u32>,
         controls: &[ToolbarControl],
     ) -> Result<(), String> {
-        if controls.is_empty() {
-            return Err("Select at least one tool".into());
-        }
-        for control in controls {
-            control.validate()?;
-        }
-        let tiles = self.panel(panel)?.tiles();
-        let index = match before {
-            Some(id) => tiles
-                .iter()
-                .position(|t| t.id == id)
-                .ok_or("The target tool no longer exists")?,
-            None => tiles.len(),
-        };
-        let end = self
-            .next_tile_id
-            .checked_add(u32::try_from(controls.len()).map_err(|_| "Too many tools")?)
-            .ok_or("Toolbar tile ID space exhausted")?;
-        let added = controls
-            .iter()
-            .zip(self.next_tile_id..end)
-            .map(|(&control, id)| ToolbarTile { slider_style: Default::default(), id, control })
-            .collect::<Vec<_>>();
-        let tiles = self.panel_mut(panel)?.tiles_mut()?;
-        tiles.splice(index..index, added);
-        collapse_toolbar_dividers(tiles);
-        self.next_tile_id = end;
+        let edit = ToolbarSplice::insert(before, controls)?;
+        let mut next_id = self.next_tile_id;
+        splice_toolbar(self.panel_mut(panel)?.tiles_mut()?, &mut next_id, edit, true, None)?;
+        self.next_tile_id = next_id;
         Ok(())
     }
 
@@ -2401,13 +2460,8 @@ impl DockLayout {
 
     // Moves must preserve the destination separator until insertion completes.
     fn remove_tool_raw(&mut self, panel: Panel, tile: u32) -> Result<(), String> {
-        let tiles = self.panel_mut(panel)?.tiles_mut()?;
-        let index = tiles
-            .iter()
-            .position(|t| t.id == tile)
-            .ok_or("The tool no longer exists")?;
-        tiles.remove(index);
-        Ok(())
+        let mut next_id = self.next_tile_id;
+        splice_toolbar(self.panel_mut(panel)?.tiles_mut()?, &mut next_id, ToolbarSplice::Remove(tile), false, None)
     }
 
     /// Upgrade existing empty toolbar groups without changing nonempty groups.
@@ -2446,12 +2500,8 @@ impl DockLayout {
         }
         // All fallible lookups are checked before either toolbar changes.
         self.remove_tool_raw(panel, tile)?;
-        let tiles = self.panel_mut(destination)?.tiles_mut()?;
-        let index = before
-            .and_then(|id| tiles.iter().position(|t| t.id == id))
-            .unwrap_or(tiles.len());
-        tiles.insert(index, source);
-        collapse_toolbar_dividers(tiles);
+        let mut next_id = self.next_tile_id;
+        splice_toolbar(self.panel_mut(destination)?.tiles_mut()?, &mut next_id, ToolbarSplice::Place(before, source), true, None)?;
         if panel != destination {
             collapse_toolbar_dividers(self.panel_mut(panel)?.tiles_mut()?);
         }

@@ -685,8 +685,8 @@ fn native_phone_window_move() {
             for bar in 0..2 {
                 let layout = presentation(&d);
                 let center = |b: Bounds| [b.x + b.width * 0.5, b.y + b.height * 0.5];
-                let gap = if layout.edge == Edge::Top { [layout.capy.x + layout.tile + 4., layout.capy.y + layout.tile * 0.5] }
-                    else { [layout.capy.x + layout.tile * 0.5, layout.capy.y + layout.tile + 4.] };
+                let gap = if layout.edge == Edge::Top { [(layout.capy.x + layout.capy.width + layout.size.x) * 0.5, layout.capy.y + layout.tile * 0.5] }
+                    else { [layout.capy.x + layout.tile * 0.5, (layout.capy.y + layout.capy.height + layout.size.y) * 0.5] };
                 let top = if layout.edge == Edge::Top {
                     [layout.chips[0].x + layout.chips[0].width + 4., layout.bars[0].y + layout.tile * 0.5]
                 } else { [layout.bars[0].x + layout.tile * 0.5, layout.chips[0].y - 4.] };
@@ -1775,3 +1775,6 @@ fn native_transform_escape() {
     assert_eq!(ui_session(&d.w).engine().checkpoint(), checkpoint, "Escape never commits the pending transform");
     d.finish();
 }
+
+#[path = "phone_customize_tests.rs"]
+mod customize;

@@ -618,6 +618,7 @@ impl Customization {
         ));
         body.append(&self.catalog.root);
         self.count.set_xalign(0.0);
+        self.count.set_wrap(true);
         self.count.add_css_class("dim-label");
         body.append(&self.count);
         self.error.set_xalign(0.0);
@@ -1223,8 +1224,7 @@ impl Customization {
             }
             self.error.set_text(view.error.as_deref().unwrap_or(""));
             self.error.set_visible(view.error.is_some());
-            self.count
-                .set_text(&format!("{} selected", view.selected_count));
+            self.count.set_text(&view.selected_label);
             let choice_rows = view.choices.clone();
             let key = serde_json::to_string(&view.choices.iter().map(|choice| choice.control).collect::<Vec<_>>()).expect("serializable tools");
             self.catalog.update(key, |catalog| {
@@ -1254,6 +1254,7 @@ impl Customization {
             });
             for (index, choice) in choice_rows.iter().enumerate() {
                 if let Some(row) = self.catalog.choices.row_at_index(index as i32).and_downcast::<adw::ActionRow>() {
+                    row.set_sensitive(!view.disabled.contains(&choice.control));
                     row.set_title(&choice.label);
                     row.set_subtitle(&choice.description);
                     if let Some(check) = row.activatable_widget().and_downcast::<gtk::CheckButton>() { check.set_active(choice.selected); }

@@ -681,3 +681,7 @@ diagnostics-memory-metal-label = Asignaciones Metal
 workspace-phone-swap-sides = Cambiar de lado
 workspace-phone-title-bar-unavailable = La barra de título no se puede editar en la vista de teléfono
 workspace-launch-window-size = Tamaño inicial de la ventana
+
+workspace-phone-tool-limit = La barra de herramientas del teléfono admite hasta diez herramientas.
+
+workspace-reset-phone-confirm = Restaura la barra de herramientas inicial del teléfono de este espacio de trabajo. Puedes deshacer la restauración con { $menu } → Deshacer cambio de distribución.

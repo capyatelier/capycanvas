@@ -247,6 +247,15 @@ retain their ordinary docked Properties panels.
 
 ## Workspace manager
 
+The phone toolbar supports up to ten tools. Dividers do not count toward that
+limit. Hold a tile to remove it, insert tools before it or drag it into a new
+position; hold unused toolbar space to append tools. Each confirmed edit is one
+Undo Layout Change step.
+
+Restore Starting Layout restores only the phone toolbar while the phone layout
+is active. On desktop it restores the desktop arrangement and keeps the phone
+toolbar. Both scopes preserve the other arrangement and support Undo and Redo.
+
 | Term | Meaning |
 | --- | --- |
 | Workspace | A named layout and its latest tool settings, saved automatically |

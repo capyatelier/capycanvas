@@ -704,3 +704,7 @@ diagnostics-memory-metal-label = Metal 分配
 workspace-phone-swap-sides = 交换两侧
 workspace-phone-title-bar-unavailable = 手机布局中无法编辑标题栏
 workspace-launch-window-size = 初始窗口大小
+
+workspace-phone-tool-limit = 手机工具栏最多可容纳十个工具。
+
+workspace-reset-phone-confirm = 恢复此工作区初始的手机工具栏。可通过{ $menu } → 撤销布局更改来撤销恢复。

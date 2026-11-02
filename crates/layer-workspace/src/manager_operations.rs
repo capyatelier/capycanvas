@@ -197,6 +197,9 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         revision: Option<&str>,
         now: u64,
     ) -> Result<StoredEntity> {
+        self.change_layout_for_scope(id, revision, now, false).await
+    }
+    pub(crate) async fn change_layout_for_scope(&self, id: &str, revision: Option<&str>, now: u64, phone: bool) -> Result<StoredEntity> {
         self.flush().await?;
         let stored = self.claim(id).await?;
         let result: Result<StoredEntity> = async {
@@ -216,7 +219,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     .layout
                     .clone()
             } else {
-                stored.entity.starting_layout(self.platform, self.tablet.get())?
+                history.layout().starting_layout_candidate(&stored.entity.starting_layout(self.platform, self.tablet.get())?, phone).map_err(StoreError::invalid)?
             };
             self.publish_layout(
                 &stored,

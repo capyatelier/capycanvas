@@ -681,3 +681,7 @@ diagnostics-memory-metal-label = Allocations Metal
 workspace-phone-swap-sides = Inverser les côtés
 workspace-phone-title-bar-unavailable = La barre de titre ne peut pas être modifiée dans la disposition pour téléphone
 workspace-launch-window-size = Taille initiale de la fenêtre
+
+workspace-phone-tool-limit = La barre d’outils du téléphone peut contenir jusqu’à dix outils.
+
+workspace-reset-phone-confirm = Restaurer la barre d’outils initiale du téléphone de cet espace de travail. Vous pouvez annuler cette restauration avec { $menu } → Annuler le changement d’espace de travail.

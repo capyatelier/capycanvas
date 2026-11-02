@@ -609,3 +609,72 @@ fn phone_editor_panels_notices_and_search_stay_between_the_bars() {
         assert!(contains(s.state.pressure_calibration.as_ref().unwrap().bounds));
     }
 }
+
+#[test]
+fn phone_toolbar_splices_preserve_ids_and_reject_overflow_atomically() {
+    let mut layout = WorkspacePreset::Painter.layout(Platform::Gtk);
+    layout.phone = Some(Vec::new());
+    let color = ToolbarControl::Color;
+    layout.insert_phone_tools(None, &[color; 9]).unwrap();
+    let first = layout.phone.as_ref().unwrap()[0].id;
+    layout.insert_phone_tools(Some(first), &[ToolbarControl::Divider, color]).unwrap();
+    let before = layout.clone();
+    assert!(layout.insert_phone_tools(None, &[color]).is_err());
+    assert_eq!(layout, before);
+    layout.move_phone_tool(first, None).unwrap();
+    assert_eq!(layout.phone.as_ref().unwrap().last().unwrap().id, first);
+    layout.remove_phone_tool(first).unwrap();
+    assert!(!layout.phone.as_ref().unwrap().iter().any(|tile| tile.id == first));
+    layout.insert_phone_tools(None, &[ToolbarControl::Divider, ToolbarControl::Divider, color, ToolbarControl::Divider]).unwrap();
+    assert!(!layout.phone.as_ref().unwrap().windows(2).any(|tiles| tiles.iter().all(|tile| tile.control == ToolbarControl::Divider)));
+    layout.validate().unwrap();
+    let mut unresolved = DockLayout::default();
+    let before = unresolved.clone();
+    assert!(unresolved.insert_phone_tools(None, &[color; 3]).is_err());
+    assert_eq!(unresolved, before);
+    unresolved.insert_phone_tools(None, &[color]).unwrap();
+    assert_eq!(unresolved.phone.as_ref().unwrap().len(), WorkspacePreset::Painter.phone_controls().len() + 1);
+}
+
+#[test]
+fn phone_toolbar_dividers_are_free_at_both_ends_and_empty_stays_empty() {
+    let mut layout = WorkspacePreset::Painter.layout(Platform::Gtk);
+    layout.phone = Some(Vec::new());
+    let controls: Vec<_> = (0..21).map(|index| if index % 2 == 0 { ToolbarControl::Divider } else { ToolbarControl::Color }).collect();
+    layout.insert_phone_tools(None, &controls).unwrap();
+    layout.validate().unwrap();
+    let presentation = PhoneLayout::resolve(&layout, [412., 891.], [0.; 4], [0.; 2], [0; 2], false).unwrap();
+    assert!(presentation.tools[20].width > 0.);
+    for tile in layout.phone.clone().unwrap() { layout.remove_phone_tool(tile.id).unwrap(); }
+    layout.resolve_phone_defaults(WorkspacePreset::Photographer).unwrap();
+    assert_eq!(layout.phone, Some(Vec::new()));
+    assert_eq!(serde_json::from_str::<DockLayout>(&serde_json::to_string(&layout).unwrap()).unwrap().phone, Some(Vec::new()));
+}
+
+#[test]
+fn phone_picker_limits_tools_keeps_divider_enabled_and_records_one_edit() {
+    let mut s = phone_session([412, 891]);
+    let original = s.state.workspace.layout.clone();
+    s.dispatch(UiAction::Phone { action: PhoneAction::InsertTools { before: None } }).unwrap();
+    for command in [CommandId::Undo, CommandId::Redo] {
+        s.dispatch(UiAction::Customize { action: CustomizationAction::PickerSelect { control: ToolbarControl::Command { command }, selected: true } }).unwrap();
+    }
+    let picker = s.tool_picker().unwrap();
+    assert_eq!(picker.selected_label, "The phone toolbar holds up to ten tools.");
+    assert!(picker.choices.iter().all(|choice| crate::phone::tool_allowed(choice.control)));
+    assert!(!picker.disabled.contains(&ToolbarControl::Divider));
+    assert!(picker.disabled.contains(&ToolbarControl::Color));
+    assert!(s.dispatch(UiAction::Customize { action: CustomizationAction::PickerSelect { control: ToolbarControl::Color, selected: true } }).is_err());
+    s.dispatch(UiAction::Customize { action: CustomizationAction::ConfirmTools }).unwrap();
+    let inserted = s.state.workspace.layout.clone();
+    s.dispatch(UiAction::Invoke { command: CommandId::UndoWorkspace }).unwrap();
+    assert_eq!(s.state.workspace.layout, original);
+    assert!(!s.workspace_history.can_undo());
+    s.dispatch(UiAction::Invoke { command: CommandId::RedoWorkspace }).unwrap();
+    assert_eq!(s.state.workspace.layout, inserted);
+    s.dispatch(UiAction::Phone { action: PhoneAction::InsertTools { before: None } }).unwrap();
+    s.dispatch(UiAction::Customize { action: CustomizationAction::CancelTools }).unwrap();
+    assert_eq!(s.state.workspace.layout, inserted);
+}
+
+include!("phone_restore_tests.rs");

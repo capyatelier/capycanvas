@@ -15,6 +15,7 @@ mod allocation {
         pub geometry: RefCell<Vec<Bounds>>,
         pub natural_height: Cell<Option<i32>>,
         pub child_input: Cell<bool>,
+        pub lifted: RefCell<Option<(gtk::Widget, gdk::RGBA)>>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for Columns {
@@ -61,8 +62,13 @@ mod allocation {
             }
         }
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
-            for child in self.children.borrow().iter() {
+            let lifted = self.lifted.borrow();
+            for child in self.children.borrow().iter().filter(|child| lifted.as_ref().is_none_or(|(widget, _)| *child != widget)) {
                 crate::squircle::snapshot_child(self.obj().upcast_ref(), child, snapshot);
+            }
+            if let Some((child, background)) = lifted.as_ref() && let Some(b) = child.compute_bounds(&*self.obj()) {
+                super::super::header::snapshot_pickup(snapshot, Bounds { x: b.x(), y: b.y(), width: b.width(), height: b.height() }, background,
+                    &gdk::RGBA::new(0.35, 0.65, 1., 1.), || crate::squircle::snapshot_child(self.obj().upcast_ref(), child, snapshot));
             }
         }
     }

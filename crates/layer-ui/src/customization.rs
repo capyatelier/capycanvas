@@ -528,6 +528,8 @@ pub enum ContextTarget {
     Panel { panel: Panel },
     Group { group: u32 },
     Tile { panel: Panel, tile: u32 },
+    PhoneTile { tile: u32 },
+    PhoneToolbar,
     Ribbon { panel: Panel },
     Bubble { id: u32 },
     BubblePalettes { id: u32 },
@@ -829,6 +831,16 @@ impl DockLayout {
                     )],
                 ]);
                 (localization.text(MessageId::WORKSPACE_GROUP_TITLE).to_string(), sections)
+            }
+            ContextTarget::PhoneTile { .. } | ContextTarget::PhoneToolbar => {
+                let tile = if let ContextTarget::PhoneTile { tile } = target {
+                    Some(self.phone.iter().flatten().find(|t| t.id == tile).ok_or("The tool no longer exists")?)
+                } else { None };
+                let mut items = Vec::new();
+                if let Some(tile) = tile { items.push(ContextMenuItem::command(localization.text(MessageId::WORKSPACE_REMOVE_TOOL_MENU).to_string(), UiAction::Phone { action: crate::PhoneAction::RemoveTool { tile: tile.id } })); }
+                items.push(ContextMenuItem::command(localization.text(if tile.is_some() { MessageId::WORKSPACE_INSERT_TOOLS_MENU } else { MessageId::WORKSPACE_ADD_TOOLS_MENU }).to_string(),
+                    UiAction::Phone { action: crate::PhoneAction::InsertTools { before: tile.map(|t| t.id) } }));
+                (tile.map_or_else(String::new, |t| tool_choice_localized(t.control, localization).label), vec![items])
             }
             ContextTarget::Tile { panel, tile } => {
                 let p = self.panel(panel)?;
@@ -1526,6 +1538,7 @@ pub enum ToolDestination {
         panel: Panel,
         before: Option<u32>,
     },
+    Phone { before: Option<u32> },
     Header {
         zone: HeaderZone,
         before: Option<u32>,
@@ -1581,6 +1594,8 @@ pub struct ToolPickerView {
     pub search_hint: std::sync::Arc<str>,
     pub query: String,
     pub choices: Vec<ToolChoice>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub disabled: Vec<ToolbarControl>,
     pub selected_count: usize,
     pub selected_label: String,
     pub can_confirm: bool,
@@ -1750,6 +1765,16 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel, copy: &PanelCopy) -> Res
     })
 }
 impl ToolPicker {
+    fn remaining(&self, layout: &DockLayout) -> Option<usize> {
+        matches!(self.destination, ToolDestination::Phone { .. }).then(||
+            10usize.saturating_sub(layout.phone.as_ref().map_or(crate::WorkspacePreset::Painter.phone_controls().len(),
+                |tiles| tiles.iter().filter(|t| t.control != ToolbarControl::Divider).count())))
+    }
+    fn accepts(&self, layout: &DockLayout, control: ToolbarControl) -> bool {
+        self.remaining(layout).is_none_or(|remaining| crate::phone::tool_allowed(control)
+            && (control == ToolbarControl::Divider || self.selected.contains(&control)
+                || self.selected.iter().filter(|c| **c != ToolbarControl::Divider).count() < remaining))
+    }
     pub(crate) fn validate(&self, layout: &DockLayout, localization: &Localizer) -> Result<(), String> {
         self.validate_refusal(layout).map_err(|reason| reason.message(localization))
     }
@@ -1768,6 +1793,17 @@ impl ToolPicker {
                 }
                 if before.is_some_and(|id| !p.tiles().iter().any(|t| t.id == id)) {
                     return Err(CustomizationErrorSource::Message(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THE_TARGET_TOOL_NO_LONGER_EXISTS));
+                }
+            }
+            ToolDestination::Phone { before } => {
+                if before.is_some_and(|id| !layout.phone.iter().flatten().any(|t| t.id == id)) {
+                    return Err(CustomizationErrorSource::Message(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THE_TARGET_TOOL_NO_LONGER_EXISTS));
+                }
+                if self.selected.iter().any(|control| !crate::phone::tool_allowed(*control)) {
+                    return Err(CustomizationErrorSource::Message(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THIS_TOOL_IS_NOT_AVAILABLE));
+                }
+                if self.selected.iter().filter(|c| **c != ToolbarControl::Divider).count() > self.remaining(layout).unwrap() {
+                    return Err(CustomizationErrorSource::Message(MessageId::WORKSPACE_PHONE_TOOL_LIMIT));
                 }
             }
             ToolDestination::Header { zone, before } => {
@@ -1794,9 +1830,10 @@ impl ToolPicker {
             _ => None,
         };
         let words = crate::search::normalize(&self.query);
-        let choices = tool_catalog_localized(platform, localization)
+        let choices: Vec<_> = tool_catalog_localized(platform, localization)
             .into_iter()
             .filter(|c| !matches!(self.destination, ToolDestination::Header { .. }) || !c.control.is_component())
+            .filter(|c| !matches!(self.destination, ToolDestination::Phone { .. }) || crate::phone::tool_allowed(c.control))
             .filter_map(|mut choice| {
                 choice.selected = self.selected.contains(&choice.control);
                 let english = canonical_tool_choice(choice.control);
@@ -1824,9 +1861,12 @@ impl ToolPicker {
             name_label: localization.text(MessageId::WORKSPACE_TOOLBAR_NAME),
             search_hint: localization.text(MessageId::WORKSPACE_PICKER_SEARCH_HINT),
             query: self.query.clone(),
+            disabled: choices.iter().filter(|choice| !self.accepts(layout, choice.control)).map(|choice| choice.control).collect(),
             choices,
             selected_count: self.selected.len(),
-            selected_label: { let mut args = crate::FluentArgs::new(); args.set("count", self.selected.len()); localization.format(MessageId::WORKSPACE_PICKER_SELECTED, &args) },
+            selected_label: if self.remaining(layout).is_some_and(|remaining| self.selected.iter().filter(|c| **c != ToolbarControl::Divider).count() >= remaining) {
+                localization.text(MessageId::WORKSPACE_PHONE_TOOL_LIMIT).to_string()
+            } else { let mut args = crate::FluentArgs::new(); args.set("count", self.selected.len()); localization.format(MessageId::WORKSPACE_PICKER_SELECTED, &args) },
             can_confirm: self.validate(layout, localization).is_ok(),
             error: self.error.as_ref().map(|error| error.source.message(localization)).or_else(|| match &self.destination {
                 ToolDestination::NewToolbar { name, .. } => {
@@ -2509,6 +2549,7 @@ impl CustomizationState {
                     return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THIS_TOOL_IS_NOT_AVAILABLE).to_string());
                 }
                 let p = self.picker.as_mut().ok_or_else(|| localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THE_TOOL_PICKER_IS_CLOSED).to_string())?;
+                if selected && !p.accepts(layout, control) { return Err(localization.text(MessageId::WORKSPACE_PHONE_TOOL_LIMIT).to_string()); }
                 if selected && !p.selected.contains(&control) {
                     p.selected.push(control);
                 }
@@ -2528,6 +2569,7 @@ impl CustomizationState {
                         ToolDestination::Insert { panel, before } => {
                             layout.insert_tools(*panel, *before, &picker.selected)
                         }
+                        ToolDestination::Phone { before } => layout.insert_phone_tools(*before, &picker.selected),
                         ToolDestination::Header { zone, before } => layout.header.add(
                             *zone,
                             *before,

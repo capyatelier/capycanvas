@@ -36,7 +36,7 @@ mod document_tabs;
 mod phone;
 mod dialog_presentation;
 pub use dialog_presentation::{DialogRole, DialogPresentation, dialog_panes_fit};
-pub use phone::{PhoneAction, PhoneBarContact, PhoneLayout, PhoneMenu, PhoneMenuGeometry, PhoneMenuNavigation, PhoneMenuSwipe, PhoneMenuPage, PhoneState};
+pub use phone::{PhoneAction, PhoneBarContact, PhoneBarOutcome, PhoneLayout, PhoneMenu, PhoneMenuGeometry, PhoneMenuNavigation, PhoneMenuSwipe, PhoneMenuPage, PhoneState};
 pub use document_tabs::{DocumentTabDrag, DocumentTabHit, DocumentTabSlide, DocumentTabs};
 mod document_sessions;
 pub use document_sessions::{DocumentSessionError, DocumentTransportRefusal, document_storage_retained, document_recovery_unavailable, DocumentAdmission, DocumentBudget, DocumentSessions, DocumentTabLabel, DrawingSelector, ParkedDocument, RetainedClipboard, TrimWait};

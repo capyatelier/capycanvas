@@ -118,6 +118,12 @@ menu or reorder meaning. Hold Capy
 and release it on the opposite toolbar edge to Swap Sides; releasing elsewhere
 keeps the current side. Rotating or crossing the phone threshold cancels the hold.
 
+On phone tool tiles, a stationary hold lifts the tile. Releasing opens Remove
+Tool and Insert Tools; moving after the hold reorders along the bar. Releasing
+more than one tile beyond the bar cancels. A hold on empty toolbar space opens
+Add Tools. These rules apply to mouse, pen and touch. Escape, resize and rotation
+cancel without a layout change; phone drags never create tool bubbles.
+
 ## Scrolling, menus, and cancellation
 
 - Pen drags scroll lists like touch on every host (GTK's shared pen scroller,

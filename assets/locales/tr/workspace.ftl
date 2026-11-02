@@ -678,3 +678,7 @@ diagnostics-memory-metal-label = Metal ayırmaları
 workspace-phone-swap-sides = Tarafları değiştir
 workspace-phone-title-bar-unavailable = Telefon düzeninde başlık çubuğu düzenlenemez
 workspace-launch-window-size = Başlangıç pencere boyutu
+
+workspace-phone-tool-limit = Telefon araç çubuğu en fazla on araç alabilir.
+
+workspace-reset-phone-confirm = Bu çalışma alanının başlangıçtaki telefon araç çubuğunu geri yükleyin. Geri yüklemeyi { $menu } → Düzen değişikliğini geri al ile geri alabilirsiniz.

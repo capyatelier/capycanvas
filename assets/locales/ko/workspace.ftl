@@ -704,3 +704,7 @@ diagnostics-memory-metal-label = Metal 할당량
 workspace-phone-swap-sides = 좌우 바꾸기
 workspace-phone-title-bar-unavailable = 휴대폰 레이아웃에서는 제목 표시줄을 편집할 수 없습니다
 workspace-launch-window-size = 시작 창 크기
+
+workspace-phone-tool-limit = 휴대폰 도구 모음에는 도구를 최대 10개까지 넣을 수 있습니다.
+
+workspace-reset-phone-confirm = 이 작업 영역의 초기 휴대폰 도구 모음을 복원합니다. { $menu } → 레이아웃 변경 실행 취소로 복원을 되돌릴 수 있습니다.

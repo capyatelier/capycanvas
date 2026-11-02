@@ -681,3 +681,7 @@ diagnostics-memory-metal-label = Metal-Belegung
 workspace-phone-swap-sides = Seiten tauschen
 workspace-phone-title-bar-unavailable = Die Titelleiste kann im Telefonlayout nicht bearbeitet werden
 workspace-launch-window-size = Anfängliche Fenstergröße
+
+workspace-phone-tool-limit = Die Telefon-Werkzeugleiste bietet Platz für bis zu zehn Werkzeuge.
+
+workspace-reset-phone-confirm = Die ursprüngliche Telefon-Werkzeugleiste dieses Arbeitsbereichs wiederherstellen. Das lässt sich mit { $menu } → Layoutänderung rückgängig wieder aufheben.

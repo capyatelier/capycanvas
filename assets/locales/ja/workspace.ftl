@@ -704,3 +704,7 @@ diagnostics-memory-metal-label = Metal割り当て
 workspace-phone-swap-sides = 左右を入れ替え
 workspace-phone-title-bar-unavailable = スマートフォンのレイアウトではタイトルバーを編集できません
 workspace-launch-window-size = 起動時のウィンドウサイズ
+
+workspace-phone-tool-limit = スマートフォンのツールバーには、最大10個のツールを配置できます。
+
+workspace-reset-phone-confirm = このワークスペースのスマートフォン用ツールバーを初期状態に戻します。「{ $menu }」→「レイアウトの変更を元に戻す」で取り消せます。

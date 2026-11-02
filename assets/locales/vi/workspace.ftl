@@ -675,3 +675,7 @@ diagnostics-memory-metal-label = Cấp phát Metal
 workspace-phone-swap-sides = Đổi bên
 workspace-phone-title-bar-unavailable = Không thể sửa thanh tiêu đề trong bố cục điện thoại
 workspace-launch-window-size = Kích thước cửa sổ ban đầu
+
+workspace-phone-tool-limit = Thanh công cụ trên điện thoại chứa tối đa mười công cụ.
+
+workspace-reset-phone-confirm = Khôi phục thanh công cụ điện thoại ban đầu của không gian làm việc này. Bạn có thể hoàn tác khôi phục bằng { $menu } → Hoàn tác thay đổi bố cục.

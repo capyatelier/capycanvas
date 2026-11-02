@@ -1,6 +1,10 @@
 use crate::{Bounds, DockLayout, DrawerPlacement, Edge, ToolbarControl};
 use serde::{Deserialize, Serialize};
 
+pub(crate) fn tool_allowed(control: ToolbarControl) -> bool {
+    !control.is_component() && control != PhoneLayout::SETTINGS
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PhoneState {
@@ -21,6 +25,9 @@ pub enum PhoneAction {
     CapyHold,
     CapyDrop { position: [f32; 2] },
     Tool { tile: u32 },
+    RemoveTool { tile: u32 },
+    InsertTools { before: Option<u32> },
+    MoveTool { tile: u32, before: Option<u32> },
     ToolSettings,
     Panel { panel: crate::Panel },
     Drawing { id: u64, close: bool },
@@ -52,8 +59,8 @@ impl PhoneState {
             phone.strength = Bounds::default();
             phone.settings = Bounds::default();
             phone.settings_hit = Bounds::default();
-            phone.tools = [Bounds::default(); 19];
-            phone.tool_hits = [Bounds::default(); 19];
+            phone.tools = [Bounds::default(); 21];
+            phone.tool_hits = [Bounds::default(); 21];
             phone.chips = [Bounds::default(), phone.capy];
             phone.controls = [Bounds::default(); 2];
             phone.bars = [Bounds::default(); 2];
@@ -78,24 +85,94 @@ pub struct PhoneLayout {
     pub strength: Bounds,
     pub settings: Bounds,
     pub settings_hit: Bounds,
-    pub tools: [Bounds; 19],
-    pub tool_hits: [Bounds; 19],
+    pub tools: [Bounds; 21],
+    pub tool_hits: [Bounds; 21],
     pub chips: [Bounds; 2],
     pub controls: [Bounds; 2],
     pub bars: [Bounds; 2],
     pub work_area: Bounds,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PhoneBarOutcome { Pending, Held, Dragging, WindowMove, Cancel, Tap(u32), Menu(Option<u32>), Move { tile: u32, before: Option<u32> } }
 #[derive(Clone, Copy, Debug, Default)]
-pub struct PhoneBarContact { held: bool }
+pub struct PhoneBarContact {
+    held: bool, dragged: bool, editable: bool, index: Option<usize>,
+    origin: [f32; 2], point: [f32; 2], key: Option<(Edge, Bounds, Bounds)>, ids: [u32; 21], dividers: [bool; 21], count: usize,
+}
 impl PhoneBarContact {
     pub fn begin(layout: &PhoneLayout, point: [f32; 2], native_button: bool) -> Option<Self> {
         let contains = |b: &Bounds| b.width > 0. && b.height > 0. && b.contains(point[0], point[1]);
         (layout.bars.iter().chain(&layout.tool_hits).chain([&layout.capy_hit, &layout.settings_hit]).any(contains)
-            && !native_button && ![layout.size, layout.strength].iter().any(contains)).then(Self::default)
+            && !native_button && ![layout.size, layout.strength].iter().any(contains)).then(|| Self {
+                editable: ![layout.capy_hit, layout.settings_hit].iter().any(contains),
+                index: layout.tool_hits.iter().position(contains).or_else(|| layout.tools.iter().position(contains)), origin: point, point,
+                key: Some((layout.edge, layout.bars[0], layout.work_area)), ..Default::default()
+            })
+    }
+    pub fn set_tools(&mut self, tiles: &[crate::ToolbarTile]) {
+        self.count = tiles.len().min(21);
+        for (i, tile) in tiles.iter().take(21).enumerate() { self.ids[i] = tile.id; self.dividers[i] = tile.control == ToolbarControl::Divider; }
+    }
+    pub fn valid<'a>(&self, layout: &PhoneLayout, tiles: impl IntoIterator<Item = &'a crate::ToolbarTile>) -> bool {
+        if self.key != Some((layout.edge, layout.bars[0], layout.work_area)) { return false; }
+        let mut ids = tiles.into_iter().map(|tile| tile.id);
+        (0..self.count).all(|i| ids.next() == Some(self.ids[i])) && ids.next().is_none()
     }
     pub fn hold(&mut self) { self.held = true; }
+    pub fn arm(&mut self) -> PhoneBarOutcome { self.hold(); if self.editable { PhoneBarOutcome::Held } else { PhoneBarOutcome::Pending } }
+    pub fn cancel(&mut self) -> PhoneBarOutcome { self.key = None; PhoneBarOutcome::Cancel }
     pub fn move_window(&self, past_slop: bool) -> bool { past_slop && !self.held }
+    pub fn motion(&mut self, layout: &PhoneLayout, tiles: &[crate::ToolbarTile], point: [f32; 2], past_slop: bool) -> PhoneBarOutcome {
+        if !self.valid(layout, tiles) { return PhoneBarOutcome::Cancel; }
+        self.point = point;
+        if self.move_window(past_slop) { return PhoneBarOutcome::WindowMove; }
+        if self.held && self.index.is_some() {
+            self.dragged |= past_slop;
+            if self.dragged { PhoneBarOutcome::Dragging } else { PhoneBarOutcome::Held }
+        } else { PhoneBarOutcome::Pending }
+    }
+    pub fn lifted(&self) -> Option<usize> { self.index.filter(|_| self.held) }
+    fn destination(&self, layout: &PhoneLayout) -> Option<u32> {
+        let axis = usize::from(layout.edge != Edge::Top);
+        (0..self.count).filter(|i| Some(*i) != self.index).find(|i| {
+            let b = layout.tools[*i]; self.point[axis] < if axis == 0 { b.x + b.width / 2. } else { b.y + b.height / 2. }
+        }).map(|i| self.ids[i])
+    }
+    pub fn finish(&mut self, layout: &PhoneLayout, tiles: &[crate::ToolbarTile], point: [f32; 2]) -> PhoneBarOutcome {
+        if !self.valid(layout, tiles) { return PhoneBarOutcome::Cancel; }
+        self.point = point;
+        if self.dragged {
+            let b = layout.bars[0]; let t = layout.tile;
+            if !(Bounds { x: b.x-t, y: b.y-t, width: b.width+2.*t, height: b.height+2.*t }).contains(point[0],point[1]) { return PhoneBarOutcome::Cancel; }
+            return PhoneBarOutcome::Move { tile: self.ids[self.index.unwrap()], before: self.destination(layout) };
+        }
+        if self.held && self.editable { PhoneBarOutcome::Menu(self.index.map(|i| self.ids[i])) }
+        else if !self.held { self.index.map_or(PhoneBarOutcome::Pending, |i| PhoneBarOutcome::Tap(self.ids[i])) }
+        else { PhoneBarOutcome::Pending }
+    }
+    pub fn geometry(&self, layout: &PhoneLayout) -> [Bounds; 21] {
+        let mut bounds = layout.tools;
+        let Some(source) = self.index.filter(|_| self.held) else { return bounds; };
+        let axis = usize::from(layout.edge != Edge::Top);
+        let scale = ((if axis == 0 { layout.work_area.width } else { layout.work_area.height }) / 320.).min(1.);
+        if self.dragged {
+            let mut order: [usize; 21] = std::array::from_fn(|i| i);
+            let target = self.destination(layout).and_then(|id| self.ids[..self.count].iter().position(|v| *v == id)).unwrap_or(self.count);
+            if target > source { order[source..target].rotate_left(1); } else { order[target..=source].rotate_right(1); }
+            let first = layout.tools[0];
+            let mut along = if axis == 0 { first.x } else { first.y } + if self.dividers[0] { 2. * scale } else { 0. };
+            for &i in &order[..self.count] {
+                if axis == 0 { bounds[i].x = along - if self.dividers[i] { 2. * scale } else { 0. }; }
+                else { bounds[i].y = along - if self.dividers[i] { 2. * scale } else { 0. }; }
+                along += if self.dividers[i] { 6. * scale } else { layout.tile + 2. * scale };
+            }
+            if axis == 0 { bounds[source].x = layout.tools[source].x + self.point[0] - self.origin[0]; }
+            else { bounds[source].y = layout.tools[source].y + self.point[1] - self.origin[1]; }
+        }
+        bounds[source].x -= 2.; bounds[source].y -= 2.; bounds[source].width += 4.; bounds[source].height += 4.;
+        bounds
+    }
 }
 
 impl PhoneLayout {
@@ -266,9 +343,9 @@ impl PhoneLayout {
         }
         let start = if vertical { native_counts[side] as f32 * tile } else { native_counts[0] as f32 * tile };
         let mut along = if start > 0. { start + 8. } else { 0. };
-        let mut tools = [Bounds::default(); 19];
+        let mut tools = [Bounds::default(); 21];
         let tool_start = along;
-        for (i, t) in tiles.iter().enumerate().take(19) {
+        for (i, t) in tiles.iter().enumerate().take(tools.len()) {
             if t.control == ToolbarControl::Divider {
                 tools[i] = point(edge, along - 2., 8.);
                 along += 6.;
@@ -738,3 +815,7 @@ mod menu_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "phone_contact_tests.rs"]
+mod contact_tests;

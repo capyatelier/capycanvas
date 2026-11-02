@@ -704,3 +704,7 @@ diagnostics-memory-metal-label = Metal 配置
 workspace-phone-swap-sides = 交換兩側
 workspace-phone-title-bar-unavailable = 手機版面配置中無法編輯標題列
 workspace-launch-window-size = 初始視窗大小
+
+workspace-phone-tool-limit = 手機工具列最多可容納十個工具。
+
+workspace-reset-phone-confirm = 恢復此工作區起始的手機工具列。可透過{ $menu } → 復原版面配置變更來復原此次恢復。

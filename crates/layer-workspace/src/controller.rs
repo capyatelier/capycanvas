@@ -320,7 +320,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         if let (Some(action), Some(previous)) = (&self.view.prompt_action, &self.view.prompt) {
             let refreshed = match action {
                 ManagerAction::RecoverInterrupted => recover_prompt(&self.localization, self.interrupted_choices()),
-                _ => self.manager.form_prompt(action, self.prompt_source.as_ref()),
+                _ => self.manager.form_prompt_for_scope(action, self.prompt_source.as_ref(), !self.preview_open),
             };
             if let Ok(mut prompt) = refreshed {
                 prompt.name = previous.name.clone();
@@ -1139,7 +1139,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         };
         let prompt = match &action {
             ManagerAction::RecoverInterrupted => recover_prompt(&self.localization, self.interrupted_choices())?,
-            _ => self.manager.form_prompt(&action, source.as_ref())?,
+            _ => self.manager.form_prompt_for_scope(&action, source.as_ref(), session.phone_layout().is_some())?,
         };
         self.start_transition(session)?;
         let mut change = if matches!(action, ManagerAction::Rename(_) | ManagerAction::Delete(_))
@@ -1151,7 +1151,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             merge(
                 &mut change,
                 session
-                    .preview_workspace_layout(&entity.starting_layout(self.manager.platform, self.manager.tablet.get())?)
+                    .preview_workspace_layout(&session.state().workspace.layout.starting_layout_candidate(&entity.starting_layout(self.manager.platform, self.manager.tablet.get())?, false).map_err(StoreError::invalid)?)
                     .map_err(StoreError::invalid)?,
             );
         }
@@ -1190,6 +1190,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         };
         self.start_transition(session)?;
         let m = self.manager.clone();
+        let phone = session.phone_layout().is_some();
         if action == ManagerAction::ResetBrushes {
             merge(
                 &mut change,
@@ -1237,7 +1238,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     Some(s) => Outcome::adopt(s),
                     None => Outcome::Done,
                 },
-                ManagerAction::Reset(id) => Outcome::adopt(m.change_layout(&id, None, now).await?),
+                ManagerAction::Reset(id) => Outcome::adopt(m.change_layout_for_scope(&id, None, now, phone).await?),
                 ManagerAction::SaveAsNew => {
                     Outcome::adopt(m.save_as_new(capture.unwrap(), &name, now).await?)
                 }
