@@ -21,11 +21,10 @@ struct PaletteLayout:PanelT<PaletteLayout>{
     Grid content;
     std::function<void(double)> prepare;
     PaletteLayout(Grid const& child,std::function<void(double)> layout):content(child),prepare(std::move(layout)){Children().Append(content);}
-    Windows::Foundation::Size measure(double width){
-        if(std::isfinite(width))prepare(width);
-        content.Measure({float(width),std::numeric_limits<float>::infinity()});return content.DesiredSize();
+    Windows::Foundation::Size MeasureOverride(Windows::Foundation::Size available){
+        if(std::isfinite(available.Width))prepare(available.Width);
+        content.Measure({available.Width,std::numeric_limits<float>::infinity()});return content.DesiredSize();
     }
-    Windows::Foundation::Size MeasureOverride(Windows::Foundation::Size available){return measure(available.Width);}
     Windows::Foundation::Size ArrangeOverride(Windows::Foundation::Size size){content.Arrange({0,0,size.Width,size.Height});return size;}
 };
 struct Tile{uint64_t id=0;Button node{nullptr};Border patch{nullptr},ring{nullptr};J swatch;double x=0,y=0;Microsoft::UI::Composition::Vector3KeyFrameAnimation animation{nullptr};};
@@ -599,7 +598,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
 FrameworkElement PalettesPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,std::function<double(double)>* contentHeight,std::function<J()>* scrollMetrics){
     auto view=std::make_shared<PalettesView>();view->data=data;view->init();
     bindings.emplace_back([view]{view->refresh();});
-    if(contentHeight)*contentHeight=[view](double width){return double(view->layout->measure(width).Height);};
+    if(contentHeight)*contentHeight=[view](double){auto const& content=view->root;return content.IsLoaded()&&content.Visibility()==Visibility::Visible&&Primitives::LayoutInformation::GetAvailableSize(content).Width>0?double(content.DesiredSize().Height):-1.;};
     if(scrollMetrics)*scrollMetrics=[view]{
         return O({{L"fixed_height",N(std::max(0.,double(view->root.DesiredSize().Height)-double(view->scroll.DesiredSize().Height)))},{L"unit_height",N(view->pitch())}});
     };

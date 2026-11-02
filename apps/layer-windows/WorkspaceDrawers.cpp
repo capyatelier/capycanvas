@@ -115,6 +115,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     hstring toolbarKey(J const& panel,double width)const{
         return O({{L"panel",panelStructure(panel)},{L"width",N(width)}}).Stringify();
     }
+    static double toolbarHeight(J const& layout){return std::max(36.,num(layout,L"content_height"));}
     J resolve(bool toolbars,J const& layer=J{})const{
         A measured;for(auto height:heights)measured.Append(N(height));
         auto request=O({{L"model",model},{L"column_drawers",array(object(data->state,L"customization"),L"column_drawers")},
@@ -266,7 +267,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                     if(toolbar!=toolbarLayouts.end())placement.Insert(L"tiles",toolbar->second);
                     body.view=std::make_unique<PanelBody>(data,panel,placement,[weak]{if(auto self=weak.lock())self->measured();},gestures,false,[weak]{if(auto self=weak.lock();self&&self->id==L"tool")return object(self->model,L"tool_set");return J{};});
                     body.key=bodyKey;body.splitFilters=splitFilters;
-                    if(toolbar!=toolbarLayouts.end())body.view->Root().Height(std::max(36.,num(toolbar->second,L"content_height")));
+                    if(toolbar!=toolbarLayouts.end())body.view->Root().Height(toolbarHeight(toolbar->second));
                 }
                 AutomationProperties::SetAutomationId(body.view->Root(),L"drawer-panel-"+hstring(panelId));
                 if(AutomationProperties::GetName(body.view->Root()).empty())
@@ -310,7 +311,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                 auto toolbar=toolbarLayouts.find(std::wstring(toolbarKey(panel,width)));
                 if(toolbar!=toolbarLayouts.end()){
                     body.view->Layout(O({{L"tiles",toolbar->second}}));
-                    body.view->Root().Height(std::max(36.,num(toolbar->second,L"content_height")));
+                    body.view->Root().Height(toolbarHeight(toolbar->second));
                 }else if(body.view->drawerMinimum>0&&!inspector){
                     size_t filling=0;for(auto const& member:column.panels)if(bodies.at(member).view->drawerMinimum>0)++filling;
                     auto available=num(placement,L"height")-(tabs.Size()?data->panelMetric(L"tab_bar_height"):0.);
@@ -373,9 +374,11 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         for(uint32_t i=0;i<columns.size();++i){
             auto width=std::max(0.f,pixelBounds(rectangle(placements.GetObjectAt(i)),workspace).Width);if(width<=0)return false;
             auto& column=columns[i];double total=0;
-            for(auto const& id:column.panels){auto const& body=bodies.at(id).view;auto natural=body->drawerMinimum>0?body->drawerMinimum:body->ContentHeight(width);
-                if(natural<0){body->Root().Measure({float(width),INFINITY});natural=body->Root().DesiredSize().Height;}
-                else {auto margin=body->Root().Margin();natural+=margin.Top+margin.Bottom;}total+=natural;
+            for(auto const& id:column.panels){auto const& body=bodies.at(id).view;
+                auto toolbar=toolbarLayouts.find(std::wstring(toolbarKey(panels.at(id),num(placements.GetObjectAt(i),L"width"))));
+                auto natural=toolbar!=toolbarLayouts.end()?toolbarHeight(toolbar->second):body->drawerMinimum>0?body->drawerMinimum:body->ContentHeight(width);
+                if(natural<0)return false;
+                auto margin=body->Root().Margin();natural+=margin.Top+margin.Bottom;total+=natural;
             }
             if(column.panels.size()>1)total+=(column.panels.size()-1)*column.stack.Spacing();column.naturalHeight=total;next.push_back(total+tabHeight);
         }

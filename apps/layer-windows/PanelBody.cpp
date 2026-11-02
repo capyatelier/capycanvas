@@ -158,7 +158,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
             StackPanel content;content.Background(clear());content.Spacing(data->panelMetric(L"group_spacing"));auto panelId=str(panel,L"id");
             bool scope=panelId==L"histogram"||panelId==L"waveform";
             double inset=data->panelMetric(L"inset");
-            contentHeight=[content](double width){content.Measure({float(width),INFINITY});return content.DesiredSize().Height;};
+            contentHeight=[content](double){return content.IsLoaded()&&content.Visibility()==Visibility::Visible&&Primitives::LayoutInformation::GetAvailableSize(content).Width>0?double(content.DesiredSize().Height):-1.;};
             content.Padding(Thickness{inset,inset,inset,inset});
             if(panelId==L"proof"){content.VerticalAlignment(VerticalAlignment::Top);content.Children().Append(ProofPanel(data,bindings));}
             FrameworkElement fittedControl{nullptr};std::function<double(double)> fittedHeight;size_t visibleControls=0;
@@ -207,7 +207,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
             if(fittedControl){
                 Grid fitted;fitted.Padding({inset,inset,inset,inset});fitted.Children().Append(fittedControl);root=fitted;
                 contentHeight=[fittedHeight,inset](double width){return fittedHeight(std::max(0.,width-2*inset))+2*inset;};
-            }else if(!scrollable)root=content;
+            }else if(!scrollable){StackPanel natural;natural.Background(clear());natural.Children().Append(content);root=natural;}
             else if(scope||str(panel,L"id")==L"proof"){StackPanel natural;natural.Children().Append(content);root=natural;}
             else{
                 scrollMetrics=[] {return O({{L"fixed_height",N(0)},{L"unit_height",N(0)}});};
