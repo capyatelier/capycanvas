@@ -128,13 +128,11 @@ full support.
 The 128-byte shared and 160-byte renderer contact records retain their sizes,
 and completion adds no persistent pixel state.
 
-Small elliptical completions average joint body-plus-completion alpha over
-clipped pixel support, then subtract the incident body's existing
-filtered optical dose. The correction is confined to the vertex contact's
-conservative pixel bounds. Filtering applies fully below a four-pixel minor
-radius and blends out by eight pixels. This preserves the segment filter and avoids
-compositing two independently averaged alpha edges. Small beveled contacts
-retain point-sampled body exposure and area-filtered completion.
+Fine completions average the analytic completion alpha over a 3×3 pixel grid
+and recover optical exposure before deposit. Filtering applies fully below a
+four-pixel minor radius and blends to the point evaluator by eight pixels.
+The segment filter is unchanged. Small beveled contacts retain point-sampled
+body exposure and use the same completion filter.
 
 For each pixel, the dry evaluator integrates `contact*loading` over the current
 segment and divides by the full geometric contact chord. Subdividing a fixed-pose
@@ -174,9 +172,8 @@ uses a bounded two-dimensional integral. Paper remains anchored to the output
 pixel. Contacts up to four pixels in minor radius use this filtering fully,
 then blend to the point evaluator at eight pixels. The normal projection's three
 pieces use four Gauss–Legendre nodes each below four pixels and two above.
-Radial completions share these nodes and support clipping for incident, joint
-and full-pass exposure. These fixed pixel thresholds
-control antialiasing cost, independently of material softness `W`. Large brushes
+These fixed pixel thresholds control antialiasing cost independently of material
+softness `W`. Large brushes
 specialize the filter out of their shader.
 `fine_start_cap_preserves_the_full_pass_across_partitions` checks the body full chord across sample counts and render cadences.
 

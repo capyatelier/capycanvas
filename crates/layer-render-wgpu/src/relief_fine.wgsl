@@ -129,17 +129,6 @@ fn relief_pixel_node(i:u32,taps:u32)->vec2<f32> {
     return vec2<f32>(abscissa*select(-1.0,1.0,i>=taps/2u),weight);
 }
 
-fn relief_pixel_slice(normal:vec2<f32>,position:f32)->vec2<f32> {
-    let tangent=vec2<f32>(normal.y,-normal.x);
-    let moving=abs(tangent)>vec2<f32>(0.000001);
-    let safe=select(vec2<f32>(1.0),tangent,moving);
-    let a=(vec2<f32>(-0.5)-normal*position)/safe;
-    let b=(vec2<f32>(0.5)-normal*position)/safe;
-    let lo=select(vec2<f32>(-1000000.0),min(a,b),moving);
-    let hi=select(vec2<f32>(1000000.0),max(a,b),moving);
-    return vec2<f32>(max(lo.x,lo.y),min(hi.x,hi.y));
-}
-
 fn relief_swept_pixel(dab:Dab,world:vec2<f32>,paper:f32,dose:f32,radius:f32)->vec2<f32> {
     let support=relief_pixel_support(dab,world,paper);
     if support.w<=support.z {return vec2<f32>(0.0);}

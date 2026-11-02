@@ -2058,6 +2058,28 @@ the binary and source snapshot are under `artifacts/layer-modes/rebased-build/`.
 
 ## Brushes
 
+### Fine dry completion filter
+
+Measured 2026-11-02 against `1e7fc12fa`, using one candidate commit for both
+APKs and restoring only the two fine WGSL files for the control. Optimized
+release diagnostic APKs use identical compile timing hooks. The 9504 × 6336
+tier photo is at Fit, tilt 45°,
+factory density/font and 120 Hz, thermal 0. ABBA has three six-second contacts
+per block; rates are medians of six contacts per arm, gaps the worst fresh
+completion P99. These count completed GPU updates, not scanout.
+
+| Brush | Completed updates/s, main → G3B | Fresh updates/s, main → G3B | Worst fresh gap P99, ms, main → G3B |
+| --- | ---: | ---: | ---: |
+| Pencil 9 | 256.390 → 258.654 | 174.600 → 174.296 | 17.336 → 17.798 |
+| Charcoal 24 | 263.065 → 261.178 | 175.969 → 175.575 | 16.615 → 16.466 |
+| Pencil 1024 | 226.982 → 234.497 | 181.553 → 181.677 | 13.818 → 14.152 |
+
+All completed/fresh contact ranges overlap; no separated throughput regression
+is observed. Pencil 9 retains its shared 16.667 ms gap miss; Charcoal 24 and
+Pencil 1024 meet the 120/s and 16.667 ms fresh-completion profile in both arms.
+Startup timing, CPU quantiles, temporal pairs and cleanup are in
+[the gate report](../../artifacts/warp-fine-kernel/phase9.local.md).
+
 ### Dry-media contact model
 
 Measured on 2026-10-17 UTC with dry kernels specialized to normal blending and

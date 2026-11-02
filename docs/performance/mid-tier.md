@@ -1208,6 +1208,28 @@ Run ranges overlap; the samples do not establish a throughput change. This
 12 MP comparison on Huion does not qualify the 24 MP reference-tier targets.
 Reports: `artifacts/simplification-cleanup/performance/m28/`.
 
+### Fine dry completion filter
+
+Measured 2026-11-02 against `1e7fc12fa`, using one candidate commit for both
+APKs and restoring only the two fine WGSL files for the control. Optimized
+release diagnostic APKs use identical compile timing hooks. The 6000 × 4000
+tier photo is at Fit, tilt 45°,
+factory density/font and 60 Hz, thermal 0. ABBA has three six-second contacts
+per block; rates are medians of six contacts per arm, gaps the worst fresh
+completion P99. These count completed GPU updates, not scanout.
+
+| Brush | Completed updates/s, main → G3B | Fresh updates/s, main → G3B | Worst fresh gap P99, ms, main → G3B |
+| --- | ---: | ---: | ---: |
+| Pencil 9 | 313.552 → 314.151 | 197.526 → 197.398 | 9.999 → 9.829 |
+| Charcoal 24 | 309.152 → 310.717 | 197.404 → 197.457 | 9.016 → 9.087 |
+| Pencil 1024 | 69.553 → 69.691 | 69.553 → 69.691 | 26.115 → 25.839 |
+
+All completed/fresh contact ranges overlap; no separated throughput regression
+is observed. Pencil 1024 retains the shared 90/s and 22.222 ms miss. The
+60 Hz display does not qualify 90 Hz presentation.
+Startup timing, CPU quantiles, temporal pairs and cleanup are in
+[the gate report](../../artifacts/warp-fine-kernel/phase9.local.md).
+
 ### Dry-media contact model
 
 Measured on 2026-10-17 UTC with dry kernels specialized to normal blending and
