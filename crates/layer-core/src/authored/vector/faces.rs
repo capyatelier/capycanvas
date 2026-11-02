@@ -185,7 +185,7 @@ fn graph(sources:&[FaceLine<'_>],selected:&[usize],point:Option<[f64;2]>,reach:f
         }).collect::<Vec<_>>();
         for (id,choice) in choices.iter().enumerate() {
             let Some(choice)=choice else{continue;};let end=&ends[id];
-            if let Some(other)=choice.end && (other<id || choices[other].as_ref().is_none_or(|c|c.end!=Some(id))) {continue;}
+            if let Some(other)=choice.end && other<id && choices[other].as_ref().is_some_and(|c|c.end==Some(id)) {continue;}
             joined[end.line][usize::from(end.end)]=true;cuts[choice.line].push(choice.place);
             if let Some(other)=choice.end {joined[ends[other].line][usize::from(ends[other].end)]=true;}
             joins.push((lines[end.line].source,lines[choice.line].source,end.point,choice.point));

@@ -455,6 +455,15 @@ fn reached_face(paths: &[PathItem], point: [f64; 2], reach: Option<u32>) -> Opti
 }
 
 #[test]
+fn vector_seals_close_a_corner_whose_far_end_points_away() {
+    let paths = [face_line(1, &[[90., 0.], [0., 0.], [0., 100.], [100., 100.], [100., 8.]], false, 2.)];
+    assert!(reached_face(&paths, [50., 50.], Some(0)).is_none());
+    for reach in [Some(32), None] {
+        assert_eq!(reached_face(&paths, [50., 50.], reach).unwrap().geometry.hull(), [0., 0., 100., 100.]);
+    }
+}
+
+#[test]
 fn vector_seals_close_rotated_gaps_at_the_first_allowed_reach() {
     for angle in [0., 30., 60., 90.] {
         let paths = [gappy_face(10., angle)];
