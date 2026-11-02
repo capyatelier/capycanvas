@@ -2637,9 +2637,15 @@ fn vector_fill_honors_the_selected_source_on_every_platform() {
             let reference = *s.engine.document().scene().children(None).iter().find(|h| **h != vector).unwrap();
             layer(&mut s, LayerAction::Reference { id: occurrence_token(reference) });
             s.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Region { fill: true, source } }).unwrap();
+            let checkpoint = s.engine.checkpoint();
             let p = surface_at(&s, if source == crate::RegionSource::Reference { [250., 250.] } else { [700., 600.] });
             press(&mut s, 10, &[p, p]);
             assert_eq!(s.engine.document().scene().vector_layer(vector).unwrap(), &original, "{platform:?}: source-based fills do not restyle the vector path");
+            if source == crate::RegionSource::Editing {
+                assert_eq!(s.engine.checkpoint(), checkpoint, "vector-only open space adds no paint layer or history");
+                assert!(s.renderer_mut().region_requests.is_empty());
+                continue;
+            }
             let request = s.renderer_mut().region_requests.last().unwrap();
             let layer_render::RegionSource::Scene { scope, .. } = &request.source.sources()[0] else { panic!("a scene source is required") };
             let expected = match source {
@@ -2676,4 +2682,111 @@ fn path_figure_cursors_match_transparent_paint_refusals_on_every_platform() {
             }
         }
     }
+}
+
+#[test]
+fn vector_face_fill_keeps_strokes_above_its_style_and_roundtrips_history() {
+    use layer_core::authored::vector::PaintEntry;
+    for platform in Platform::ALL {
+        let (mut s, handle) = vector_session_on(platform);
+        put_paths(&mut s, handle, vec![
+            straight(1, &[[800., 100.], [900., 100.]], false),
+            straight(2, &[[100., 100.], [400., 100.]], false),
+            straight(3, &[[400., 100.], [400., 400.]], false),
+            straight(4, &[[400., 400.], [100., 400.]], false),
+            straight(5, &[[100., 400.], [100., 100.]], false),
+        ]);
+        let original = s.engine.document().scene().vector_layer(handle).unwrap().clone();
+        let order = s.engine.document().scene().order().to_vec();
+        s.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Region { fill: true, source: crate::RegionSource::Editing } }).unwrap();
+        let p = surface_at(&s, [250., 250.]);
+        press(&mut s, 10, &[p, p]);
+        let filled = s.engine.document().scene().vector_layer(handle).unwrap().clone();
+        let paths: Vec<_> = filled.paths().map(|(_, path)| path).collect();
+        assert_eq!(paths.len(), 6, "{platform:?}");
+        assert_eq!(paths[0].id, layer_core::authored::vector::ItemId(1));
+        assert!(matches!(paths[5].style.entries[..], [PaintEntry::Fill(_)]));
+        assert!(paths[5].encloses([250., 250.], 0.01));
+        assert_eq!(paths[..5].iter().map(|p| p.id).collect::<Vec<_>>(), original.paths().map(|(_, p)| p.id).collect::<Vec<_>>());
+        assert_eq!(s.engine.document().scene().order(), &order[..]);
+        assert!(s.renderer_mut().region_requests.is_empty());
+        let reopened = package_roundtrip(s.engine.document());
+        assert_eq!(reopened.scene().order().iter().find_map(|id| reopened.scene().vector_layer(*id)), Some(&filled));
+        invoke(&mut s, CommandId::Undo);
+        s.frame(120_000_000, 120_000_000).unwrap();
+        assert_eq!(s.engine.document().scene().vector_layer(handle), Some(&original));
+        invoke(&mut s, CommandId::Redo);
+        s.frame(130_000_000, 130_000_000).unwrap();
+        assert_eq!(s.engine.document().scene().vector_layer(handle), Some(&filled));
+        s.dispatch(UiAction::Color { action: ColorAction::Select { slot: ColorSlot::Transparent } }).unwrap();
+        press(&mut s, 20, &[p, p]);
+        assert!(s.engine.document().scene().vector_layer(handle).unwrap().paths().all(|(_, path)| path.style.entries.iter().all(|entry| !matches!(entry, PaintEntry::Fill(_)))));
+    }
+}
+
+#[test]
+fn vector_face_fill_translates_reference_lines_into_the_target_layer() {
+    use layer_core::{Edit, authored::RecordChange};
+    for source in [crate::RegionSource::Reference, crate::RegionSource::Visible] {
+        let (mut s, target) = vector_session();
+        layer(&mut s, LayerAction::NewVector);
+        let reference = s.engine.document().working.occurrence.unwrap();
+        put_paths(&mut s, reference, vec![
+            straight(1, &[[0., 0.], [100., 0.]], false),
+            straight(2, &[[100., 0.], [100., 100.]], false),
+            straight(3, &[[100., 100.], [0., 100.]], false),
+            straight(4, &[[0., 100.], [0., 0.]], false),
+        ]);
+        for (id, offset) in [(target, [40, -25]), (reference, [200, 100])] {
+            let doc = s.engine.document();
+            let mut occurrence = doc.scene().occurrence(id).unwrap().clone();
+            occurrence.offset = offset;
+            s.engine.apply_edit(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences, id, Some(occurrence)).unwrap())).unwrap();
+        }
+        s.set_references([reference].into()).unwrap();
+        layer(&mut s, LayerAction::Select { id: occurrence_token(target), mask: false });
+        s.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Region { fill: true, source } }).unwrap();
+        let p = surface_at(&s, [250., 150.]);
+        press(&mut s, 10, &[p, p]);
+        let object = s.engine.document().scene().vector_layer(target).unwrap().clone();
+        assert_eq!(object.path_count(), 1, "{source:?}");
+        let path = object.paths().next().unwrap().1;
+        assert_eq!(path.geometry.hull(), [160., 125., 260., 225.]);
+        assert!(path.encloses([210., 175.], 0.01));
+        assert!(path.style.strokes().next().is_none());
+        assert!(s.renderer_mut().region_requests.is_empty());
+        s.select_brush(DefaultBrushPreset::Pencil as u32).unwrap();
+        assert_eq!(s.engine.document().scene().vector_layer(target), Some(&object));
+        assert_eq!(s.engine.document().scene().vector_layer(reference).unwrap().path_count(), 4);
+    }
+}
+
+#[test]
+fn vector_face_fill_holes_remain_empty_when_tapped_and_reopened() {
+    let (mut s, target) = vector_session();
+    let mut paths = Vec::new();
+    for (lo, hi) in [(100., 700.), (300., 500.), (350., 450.)] {
+        let corners = [[lo, lo], [hi, lo], [hi, hi], [lo, hi]];
+        for i in 0..4 { paths.push(straight(paths.len() as u64 + 1, &[corners[i], corners[(i + 1) % 4]], false)); }
+    }
+    put_paths(&mut s, target, paths);
+    s.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Region { fill: true, source: crate::RegionSource::Editing } }).unwrap();
+    let p = surface_at(&s, [200., 200.]);
+    press(&mut s, 10, &[p, p]);
+    let object = s.engine.document().scene().vector_layer(target).unwrap().clone();
+    let filled = object.paths().find(|(_, p)| p.style.strokes().next().is_none()).unwrap().1;
+    assert_eq!(filled.fill_rule, layer_core::authored::vector::FillRule::EvenOdd);
+    assert_eq!(filled.geometry.subpaths().len(), 2);
+    assert!(filled.encloses([200., 200.], 0.01));
+    assert!(!filled.encloses([320., 320.], 0.01));
+    assert!(!filled.encloses([400., 400.], 0.01));
+    let checkpoint = s.engine.checkpoint();
+    for (first, at) in [(20, [320., 320.]), (30, [400., 400.])] {
+        let p = surface_at(&s, at);
+        press(&mut s, first, &[p, p]);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        assert_eq!(s.engine.document().scene().vector_layer(target), Some(&object));
+    }
+    let reopened = package_roundtrip(s.engine.document());
+    assert_eq!(reopened.scene().order().iter().find_map(|id| reopened.scene().vector_layer(*id)), Some(&object));
 }

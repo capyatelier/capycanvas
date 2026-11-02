@@ -284,57 +284,73 @@ fn crossing(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> Option<f64> {
 }
 
 #[derive(Clone, Copy)]
-struct Edge { a: [f64; 2], b: [f64; 2], segment: Segment, from: f64, to: f64, base: f64, subpath: usize, index: usize }
-fn path_edges(subpath: &Subpath, id: usize, tolerance: f64) -> Vec<Edge> {
+pub(super) struct Edge { pub a: [f64; 2], pub b: [f64; 2], pub segment: Segment, pub from: f64, pub to: f64, pub base: f64, pub subpath: usize, pub index: usize }
+pub(super) fn path_edges(subpath: &Subpath, id: usize, tolerance: f64) -> Vec<Edge> {
+    if subpath.segments().all(|segment|segment.is_line()) {
+        return subpath.segments().enumerate().map(|(index,segment)|Edge {
+            a:segment.from,b:segment.to,segment,from:0.,to:1.,base:index as f64,subpath:id,index,
+        }).collect();
+    }
     polyline(subpath, tolerance).windows(2).enumerate().map(|(index, pair)| {
         let base = (pair[0].1.floor() as usize).min(subpath.segment_count().saturating_sub(1));
         Edge { a: pair[0].0, b: pair[1].0, segment: subpath.segment(base), from: pair[0].1 - base as f64, to: pair[1].1 - base as f64, base: base as f64, subpath: id, index }
     }).collect()
 }
-struct Edges { bounds: [f64; 4], edges: Vec<Edge>, children: Option<Box<[Edges; 2]>> }
+pub(super) struct Edges { bounds: [f64; 4], edges: Arc<[Edge]>, indices: Vec<usize>, children: Option<Box<[Edges; 2]>> }
 impl Edges {
-    fn new(mut edges: Vec<Edge>) -> Self {
-        let bounds = edges.iter().flat_map(|e| [e.a, e.b]).fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
-        let children = if edges.len() > 8 {
-            let axis = usize::from(bounds[3] - bounds[1] > bounds[2] - bounds[0]);
-            let middle = edges.len() / 2;
-            edges.select_nth_unstable_by(middle, |a, b| (a.a[axis] + a.b[axis]).total_cmp(&(b.a[axis] + b.b[axis])));
-            let right = edges.split_off(middle);
-            Some(Box::new([Self::new(std::mem::take(&mut edges)), Self::new(right)]))
-        } else { None };
-        Self { bounds, edges, children }
+    pub(super) fn new(edges: Vec<Edge>) -> Self {
+        let indices=(0..edges.len()).collect();Self::partition(edges.into(),indices)
     }
-    fn near(&self, a: [f64; 2], b: [f64; 2], emit: &mut impl FnMut(&Edge)) {
-        if a[0].min(b[0]) > self.bounds[2] || a[0].max(b[0]) < self.bounds[0] || a[1].min(b[1]) > self.bounds[3] || a[1].max(b[1]) < self.bounds[1] { return; }
-        if let Some(children) = &self.children { for child in children.iter() { child.near(a, b, emit); } }
-        else { for edge in &self.edges { emit(edge); } }
+    fn partition(edges:Arc<[Edge]>,mut indices:Vec<usize>)->Self {
+        let bounds=indices.iter().flat_map(|i|[edges[*i].a,edges[*i].b]).fold([f64::INFINITY,f64::INFINITY,f64::NEG_INFINITY,f64::NEG_INFINITY],|b,p|
+            [b[0].min(p[0]),b[1].min(p[1]),b[2].max(p[0]),b[3].max(p[1])]);
+        let children=if indices.len()>8 {
+            let axis=usize::from(bounds[3]-bounds[1]>bounds[2]-bounds[0]);let middle=indices.len()/2;
+            indices.select_nth_unstable_by(middle,|a,b|(edges[*a].a[axis]+edges[*a].b[axis]).total_cmp(&(edges[*b].a[axis]+edges[*b].b[axis])));
+            let right=indices.split_off(middle);
+            Some(Box::new([Self::partition(edges.clone(),std::mem::take(&mut indices)),Self::partition(edges.clone(),right)]))
+        }else{None};
+        Self {bounds,edges,indices,children}
+    }
+    pub(super) fn near(&self,a:[f64;2],b:[f64;2],emit:&mut impl FnMut(&Edge)) {
+        if a[0].min(b[0])>self.bounds[2] || a[0].max(b[0])<self.bounds[0] || a[1].min(b[1])>self.bounds[3] || a[1].max(b[1])<self.bounds[1] {return;}
+        if let Some(children)=&self.children {for child in children.iter() {child.near(a,b,emit);}}
+        else {for &i in &self.indices {let edge=&self.edges[i];
+            if edge.a[0].min(edge.b[0])<=a[0].max(b[0]) && edge.a[0].max(edge.b[0])>=a[0].min(b[0])
+                && edge.a[1].min(edge.b[1])<=a[1].max(b[1]) && edge.a[1].max(edge.b[1])>=a[1].min(b[1]) {emit(edge);}
+        }}
     }
 }
 
-impl PathItem {
-    /// Where each subpath crosses `others` or another part of itself, in segment-plus-`t` places.
-    fn crossings(&self, others: &[&PathItem]) -> Vec<Vec<f64>> {
-        let lines: Vec<Vec<Edge>> = self.geometry.subpaths().iter().enumerate().map(|(i, s)| path_edges(s, i, 0.05)).collect();
-        let edges = Edges::new(lines.iter().flatten().copied().chain(others.iter().flat_map(|other| other.geometry.subpaths().iter().flat_map(|s| path_edges(s, usize::MAX, 0.05)))).collect());
-        lines.iter().enumerate().map(|(i, line)| {
-            let mut stops = Vec::new();
-            let closed = self.geometry.subpaths()[i].closed;
-            let last = line.len().saturating_sub(1);
-            for edge in line {
-                let k = edge.index;
-                edges.near(edge.a, edge.b, &mut |other| {
-                    let m = other.index;
-                    let adjacent = m + 1 >= k && m <= k + 1 || closed && (k == 0 && m == last || m == 0 && k == last);
-                    if other.subpath == i && adjacent { return; }
-                    if let (Some(t), Some(u)) = (crossing(edge.a, edge.b, other.a, other.b), crossing(other.a, other.b, edge.a, edge.b))
-                        && let Some(place) = refined_crossing(edge, other, t, u) { stops.push(place); }
-                });
-            }
-            stops.sort_by(f64::total_cmp);
-            stops.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
-            stops
-        }).collect()
-    }
+pub(super) fn crossing_stops(lines: &[Vec<Edge>], others: &[Edge]) -> Vec<Vec<f64>> {
+    let tree=Edges::new(lines.iter().flatten().copied().chain(others.iter().copied()).collect());
+    lines.iter().map(|line| {
+        let mut stops=Vec::new();
+        let closed=line.first().zip(line.last()).is_some_and(|(a,b)|a.a==b.b);
+        let last=line.len().saturating_sub(1);
+        for edge in line {
+            tree.near(edge.a,edge.b,&mut |other| {
+                let (k,m)=(edge.index,other.index);
+                if other.subpath==edge.subpath && (m.abs_diff(k)<=1 || closed && (k==0 && m==last || m==0 && k==last)) {return;}
+                if let (Some(t),Some(u))=(crossing(edge.a,edge.b,other.a,other.b),crossing(other.a,other.b,edge.a,edge.b)) {
+                    if let Some(place)=refined_crossing(edge,other,t,u) {stops.push(place);}
+                } else {
+                    let d=[edge.b[0]-edge.a[0],edge.b[1]-edge.a[1]];let length=d[0]*d[0]+d[1]*d[1];
+                    if length==0. {return;}
+                    for p in [other.a,other.b] {
+                        let q=[p[0]-edge.a[0],p[1]-edge.a[1]];
+                        if (q[0]*d[1]-q[1]*d[0]).abs()>1e-9*length.sqrt() {continue;}
+                        let t=(q[0]*d[0]+q[1]*d[1])/length;
+                        if (0. ..=1.).contains(&t) {
+                            let (at,_)=super::points::closest_segment(edge.segment,p,edge.from,edge.to);
+                            stops.push(edge.base+at);
+                        }
+                    }
+                }
+            });
+        }
+        stops.sort_by(f64::total_cmp);stops.dedup_by(|a,b|(*a-*b).abs()<1e-9);stops
+    }).collect()
 }
 
 fn build(subpath: &Subpath, piece: &[(usize, f64, f64)]) -> Subpath {
@@ -418,7 +434,12 @@ impl PathItem {
             let at = *base; *base += subpath.segment_count() as u32; Some(cut(self, subpath, at, eraser))
         }).collect();
         if cuts.iter().all(Option::is_none) { return None; }
-        let stops = crossed.map(|others| self.crossings(&others()));
+        let stops = crossed.map(|others| {
+            let lines=self.geometry.subpaths().iter().enumerate().map(|(i,s)|path_edges(s,i,0.05)).collect::<Vec<_>>();
+            let others=others().into_iter().filter(|path|!path.hidden && path.style.strokes().next().is_some())
+                .flat_map(|path|path.geometry.subpaths().iter().flat_map(|s|path_edges(s,usize::MAX,0.05))).collect::<Vec<_>>();
+            crossing_stops(&lines,&others)
+        });
         let results: Vec<Option<Pieces>> = self.geometry.subpaths().iter().zip(cuts).enumerate()
             .map(|(i, (subpath, cut))| cut.map(|removed| kept(subpath, removed, stops.as_ref().map(|stops| stops[i].as_slice())))).collect();
         let compound = self.geometry.subpaths().len() > 1;

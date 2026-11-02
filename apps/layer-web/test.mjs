@@ -27,7 +27,7 @@ import {checkToolbarComponents} from "./toolbar-components.test.mjs";
 import {checkToolVariations} from "./tool-variations.test.mjs";
 import {checkSelectionTools} from "./selection-tools.test.mjs";
 import {checkEncloseFill} from './enclose-fill-journey.test.mjs';
-import {checkVectorTools} from './vector-tools-journey.test.mjs';
+import {checkVectorTools,checkVectorFill} from './vector-tools-journey.test.mjs';
 import {checkVectorMilestone} from './vector-milestone-journey.test.mjs';
 import {checkVectorEdges,checkVectorFiles} from './vector-edges-journey.test.mjs';
 import {checkLayerPropertiesDrawer} from "./layer-properties-drawer.test.mjs";
@@ -155,7 +155,7 @@ const cdp = await launchChrome(
     "--window-size=1440,1000",
   ],
   {
-    timeout: process.argv.includes('--transform-footprint')?60000:process.argv.some(x=>['--capture-readiness','--hdr-bubbles','--color-undo','--vector-edges','--vector-files','--layer-properties-drawer','--drawing-tabs-recovery','--scopes','--tonal-controls','--gradients','--panel-controls'].includes(x))?300000:process.argv.some(x=>["--saved-data-ux","--fill-areas","--enclose-fill","--vector-tools","--vector-milestone","--selection-tools","--color-mixing","--contact-brushes","--layer-properties-drawer","--filter-drawer","--artistic-filters","--filter-previews","--spatial-filter-windows","--lookup-transport","--local-adjustments","--drawing-tabs","--shared-workflows","--live-language-color","--live-language-proof","--live-language-delivery","--live-language-surfaces","--live-language-toolbar","--live-language-effects","--hdr","--hdr-performance","--proof","--portable-photo","--image-object-fixture","--image-rows","--image-layers","--package-view","--export-metadata","--filter-investigation","--paper-texture-readiness","--pipeline-readiness","--tip-resize-readiness","--gpu-failure-lifecycle","--callback-boundaries","--blending","--editor","--new-drawing"].includes(x)) ? 180000 : 30000,
+    timeout: process.argv.includes('--transform-footprint')?60000:process.argv.some(x=>['--capture-readiness','--hdr-bubbles','--color-undo','--vector-edges','--vector-files','--layer-properties-drawer','--drawing-tabs-recovery','--scopes','--tonal-controls','--gradients','--panel-controls'].includes(x))?300000:process.argv.some(x=>["--saved-data-ux","--fill-areas","--enclose-fill","--vector-tools","--vector-fill","--vector-milestone","--selection-tools","--color-mixing","--contact-brushes","--layer-properties-drawer","--filter-drawer","--artistic-filters","--filter-previews","--spatial-filter-windows","--lookup-transport","--local-adjustments","--drawing-tabs","--shared-workflows","--live-language-color","--live-language-proof","--live-language-delivery","--live-language-surfaces","--live-language-toolbar","--live-language-effects","--hdr","--hdr-performance","--proof","--portable-photo","--image-object-fixture","--image-rows","--image-layers","--package-view","--export-metadata","--filter-investigation","--paper-texture-readiness","--pipeline-readiness","--tip-resize-readiness","--gpu-failure-lifecycle","--callback-boundaries","--blending","--editor","--new-drawing"].includes(x)) ? 180000 : 30000,
     onEvent: (event) => {
       if (
         event.method === "Runtime.consoleAPICalled" &&
@@ -399,6 +399,7 @@ try {
     [process.argv.includes("--selection-tools"), () => checkSelectionTools({call,evaluate,settle}), checkErrors],
     [process.argv.includes('--enclose-fill')||process.argv.includes('--fill-areas'), () => checkEncloseFill({call,evaluate,settle,fillAreasOnly:process.argv.includes('--fill-areas')}), checkErrors],
     [process.argv.includes('--vector-tools'), () => checkVectorTools({call,evaluate,settle}), checkErrors],
+    [process.argv.includes('--vector-fill'), () => checkVectorFill({call,evaluate,settle}), checkErrors],
     [process.argv.includes('--vector-milestone'), () => checkVectorMilestone({call,evaluate,settle}), checkErrors],
     [process.argv.includes('--vector-edges'), () => checkVectorEdges({call,evaluate,settle}), checkErrors],
     [process.argv.includes('--vector-files'), () => checkVectorFiles({call,evaluate,settle}), checkErrors],

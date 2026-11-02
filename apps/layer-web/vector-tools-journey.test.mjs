@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import {vectorHarness} from './vector-journey-fixture.mjs';
 import {createDrawing} from './new-drawing-fixture.mjs';
+import {placementSave} from './image-placement-motion.test.mjs';
+import {authoredIdentity,rasterIdentity,packageOccurrences,packageObject} from './package-fixture.test.mjs';
 
 export async function checkVectorTools({call,evaluate,settle}) {
   const {send,invoke,tool,stroke,line,key,color:sampleColor,capture,until}=await vectorHarness({call,evaluate,settle},{directory:'artifacts/vector-tools/web',keyDown:'keyDown'});
@@ -71,4 +73,31 @@ export async function checkVectorTools({call,evaluate,settle}) {
     await send({type:'layer',action:{op:'delete_selected'}});
     await invoke('pen');
   }
+}
+
+export async function checkVectorFill({call,evaluate,settle}) {
+  const {send,invoke,tool,state,until,idle,line,draw,color,park,capture,brush,activeVector}=await vectorHarness({call,evaluate,settle},{directory:'artifacts/vector-fill/web'});
+  const save=placementSave({evaluate,invoke,idle});
+  await evaluate(`window.vectorFillSave=window.showSaveFilePicker;window.placementTest={};window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){return{async write(value){placementTest.saved=new Uint8Array(value instanceof Blob?await value.arrayBuffer():value)},async close(){},async abort(){}}}})`);
+  try {
+    for(const theme of ['light','dark']){
+      await invoke('new_document');await evaluate(createDrawing({width:640,height:480}));await idle();await send({type:'set_theme',theme});
+      await send({type:'layer',action:{op:'new_vector'}});await until('vector target',activeVector);await invoke('fit_canvas');
+      await send({type:'select_brush',id:await brush('G-Pen')});await send({type:'set_brush_size',value:8});await send({type:'set_color',rgba:[0,0,0,1]});await idle();
+      for(const [from,to]of [[[160,120],[440,120]],[[440,120],[440,360]],[[440,360],[160,360]],[[160,360],[160,120]]]){await draw('pen',line(from,to));await idle();}
+      const target=await state('Number(s.layers.find(layer=>layer.editing).id)'),label=await state('s.layers.find(layer=>layer.editing).label'),layers=await state('s.layers.map(layer=>Number(layer.id))'),before=await save(),outside=await color([500,240],true);
+      const vectorId=packageOccurrences(before).find(occurrence=>occurrence.data.name===label).data.content.object.ref,vector=manifest=>packageObject(manifest,vectorId),next=BigInt(vector(before).data.next_item);assert.equal(vector(before).type,'capy.vector-object/1');
+      await tool({region:{fill:true,source:'editing'}});await send({type:'set_color',rgba:[.1,.75,.2,1]});await draw('pen',[[300,240]]);await idle();await park();await settle();
+      const filled=await save();assert.equal(BigInt(vector(filled).data.next_item),next+1n,'A face tap creates one vector path');
+      assert.deepEqual(await state('s.layers.map(layer=>Number(layer.id))'),layers,'Vector lines create no hidden paint layer');assert.equal(await state('Number(s.layers.find(layer=>layer.editing).id)'),target);assert.deepEqual(rasterIdentity(filled),rasterIdentity(before),'Vector Fill does not author raster tiles');
+      assert.deepEqual(await color([500,240],true),outside,'Outside the vector face stays unchanged');const green=await color([300,240],true);assert.ok(green[1]>green[0]+60&&green[1]>green[2]+60,`${theme}: face is green ${green}`);await capture(`vector-fill-${theme}-created`);
+      await send({type:'set_color',rgba:[.8,.1,.2,1]});await draw('pen',[[300,240]]);await idle();await park();await settle();
+      const recoloured=await save();assert.equal(BigInt(vector(recoloured).data.next_item),next+1n,'Recolour reuses the filled path');assert.deepEqual(await state('s.layers.map(layer=>Number(layer.id))'),layers);
+      const red=await color([300,240],true);assert.ok(red[0]>red[1]+60&&red[0]>red[2]+60,`${theme}: face is recoloured ${red}`);await capture(`vector-fill-${theme}-recoloured`);
+      await invoke('undo');await idle();assert.deepEqual(authoredIdentity(await save()),authoredIdentity(filled),'One Undo restores the original face colour');
+      await invoke('undo');await idle();assert.deepEqual(authoredIdentity(await save()),authoredIdentity(before),'Second Undo removes only the new face');
+      await invoke('redo');await idle();assert.deepEqual(authoredIdentity(await save()),authoredIdentity(filled),'Redo restores the vector face');await capture(`vector-fill-${theme}-undo-redo`);
+      console.log(`PASS ${theme}: vector face, recolour, exact Undo/Redo and no hidden paint`);
+    }
+  } finally {await evaluate('window.showSaveFilePicker=window.vectorFillSave;delete window.vectorFillSave;delete window.placementTest');}
 }

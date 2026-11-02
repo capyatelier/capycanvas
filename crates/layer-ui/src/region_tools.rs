@@ -228,7 +228,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn enclose_painted_footprint(&mut self,enclosure:Selection,paint:EnclosurePaint) {
         self.request_region_at(Point{x:0.,y:0.},Some(enclosure),None,Some(paint));
     }
-    fn fill_vector_layer(&mut self, layer: OccurrenceHandle, point: Point, source: layer_render::RegionSource, paths: bool) -> Result<(), String> {
+    fn fill_vector_layer(&mut self, layer: OccurrenceHandle, point: Point, source: layer_render::RegionSource, lines_from: RegionSource) -> Result<(), String> {
         use layer_core::authored::vector::{PaintEntry, Record, Style};
         let doc = self.engine.document();
         if doc.is_locked(layer) { return Err(self.localization().text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED).to_string()); }
@@ -239,11 +239,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         let fill = if self.state.colors.transparent() { None } else {
             self.vector_figure_style(FigurePaint::Fill, layer_core::authored::vector::Cap::Butt, layer_core::authored::vector::Join::Miter)?.entries.first().cloned()
         };
-        let innermost = object.paths().filter(|(_, path)| paths && path.pickable() && path.encloses(local, tolerance))
+        if object.paths().any(|(_,path)|path.pickable() && path.fill_rule==layer_core::authored::vector::FillRule::EvenOdd
+            && path.style.entries.iter().any(|entry|matches!(entry,PaintEntry::Fill(_)))
+            && !path.encloses(local,tolerance) && path.area_around(local,tolerance).is_finite()) {return Ok(());}
+        let innermost = object.paths().filter(|(_, path)| (lines_from!=RegionSource::Reference || path.style.strokes().next().is_none()) && path.pickable() && path.encloses(local, tolerance))
             .map(|(position, path)| (path.area_around(local, tolerance), position, path)).min_by(|a, b| a.0.total_cmp(&b.0));
         let found = innermost.map(|(_, position, path)| {
             let mut entries: Vec<PaintEntry> = path.style.entries.iter().filter(|entry| !matches!(entry, PaintEntry::Fill(_))).cloned().collect();
-            if let Some(fill) = fill { entries.insert(0, fill); }
+            if let Some(fill) = fill.clone() { entries.insert(0, fill); }
             (*path.style.entries != entries[..]).then(|| {
                 let restyled = Record::Path(path.with_style(std::sync::Arc::new(Style::new(entries))));
                 doc.vector_object_edit(layer, object.replace([(position, Some(restyled))])).map_err(|e| e.to_string())
@@ -251,6 +254,30 @@ impl<R: CanvasRenderer> UiSession<R> {
         }).transpose()?;
         if let Some(edit) = found { return edit.map_or(Ok(()), |edit| self.layer_edit(edit)); }
         if self.state.colors.transparent() { return Ok(()); }
+        let layers=match lines_from {
+            RegionSource::Editing=>vec![layer],
+            RegionSource::Reference=>doc.scene().reference_leaves(),
+            _=>doc.scene().order().iter().copied().filter(|id|doc.scene().visible(*id)).collect(),
+        };
+        let raster=layers.iter().any(|id|doc.scene().vector_layer(*id).is_none()
+            && doc.scene().occurrence(*id).is_some_and(|o|matches!(o.kind(),LayerKind::Paint|LayerKind::Object)));
+        let paths=layers.iter().flat_map(|id|doc.scene().vector_layer(*id).into_iter().flat_map(move |object|object.paths().map(move |(position,path)|(*id,position,path))))
+            .filter(|(_,_,path)|!path.hidden && path.style.strokes().next().is_some()).collect::<Vec<_>>();
+        let lines=paths.iter().map(|(owner,_,path)|layer_core::authored::vector::FaceLine {path,offset:doc.scene().occurrence_offset64(*owner)}).collect::<Vec<_>>();
+        if let Some(face)=layer_core::authored::vector::vector_face(&lines,[f64::from(point.x),f64::from(point.y)]) {
+            let geometry=face.geometry.transformed(|p|[p[0]-ox,p[1]-oy]).map_err(str::to_string)?;
+            let mut path=layer_core::authored::vector::PathItem::new(object.allocate_ids().next().unwrap_or_default(),std::sync::Arc::new(geometry),
+                std::sync::Arc::new(Style::new(fill.into_iter().collect())));
+            if path.geometry.subpaths().len()>1 {path.fill_rule=layer_core::authored::vector::FillRule::EvenOdd;}
+            let position=face.boundary.iter().filter_map(|i|{let (owner,position,_)=paths[*i];(owner==layer).then_some(position)}).max();
+            let record=Record::Path(path);
+            let changed=if let Some(position)=position {
+                object.splice([(position,vec![object.record(position).unwrap().clone(),record])].into())
+            }else{object.insert_front(vec![record])};
+            let edit=doc.vector_object_edit(layer,changed).map_err(|e|e.to_string())?;
+            return self.layer_edit(edit);
+        }
+        if !raster {return Ok(());}
         if !self.engine.backend().region_fits(doc.composition().size) { return Err(self.localization().text(MessageId::DOCUMENTS_TOO_LARGE_MEMORY).to_string()); }
         self.new_paint_layer_under()?;
         self.request_region_at(point, None, Some(source), None);
@@ -392,7 +419,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             resolved=layer_render::RegionSource::Intersection(sources);
         }
         if fill && from.is_none() && !enclosed && self.selection_masks.target().is_none() && let Some(layer) = self.editing_vector_layer() {
-            if let Err(error) = self.fill_vector_layer(layer, point, resolved, source != RegionSource::Reference) { self.notify(error); }
+            if let Err(error) = self.fill_vector_layer(layer, point, resolved, source) { self.notify(error); }
             return;
         }
         if !self.engine.backend().region_fits(extent) {

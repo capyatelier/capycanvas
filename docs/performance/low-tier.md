@@ -2795,6 +2795,25 @@ physical presentation or photon latency. These supplemental XP-Pen measurements
 in `artifacts/curve-fit-production/xppen-candidate-optimized-summary.json` and its
 referenced reports.
 
+## Vector face search
+
+M7a on `cfeb418f5` plus the milestone changes, 2026-11-02. The release
+`vector_face_busy_page` test searches 2,002 stroked paths, with 2,000 hatch
+strokes inside the large face. Timers cover the first search for each face,
+including flattening and window doubling; fixture construction is excluded.
+This measures inline CPU search, not presentation or frame rate. The previous
+version had no vector face search, so there is no matched before latency.
+
+| Device | Small face | Large face | Inline gate | Result |
+| --- | --- | --- | --- | --- |
+| TCL TAB 11 Gen 2, native ARM64 release | 1.793 ms | 12.065 ms | ≤16 ms | Met |
+| Workstation, native release | 0.234 ms | 1.660 ms | ≤8 ms | Met |
+
+The workstation result does not qualify a reference tablet tier. Source and
+binary hashes, first-call logs and the profile that led to shared flattening
+and BVH reuse are in `artifacts/fill-tools/m7a-native/` and
+`artifacts/fill-tools/m7a-core-busy-allocation.log`.
+
 ## Vector layers
 
 Measured 2026-10-20 on the reference TCL at `2567874a7`, built from `git archive`

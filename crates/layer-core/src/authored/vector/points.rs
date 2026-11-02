@@ -8,6 +8,17 @@ pub struct SegmentHit { pub subpath: u32, pub segment: u32, pub t: f64, pub dist
 
 fn offset(a: [f64; 2], b: [f64; 2]) -> [f64; 2] { [b[0] - a[0], b[1] - a[1]] }
 
+pub(super) fn closest_segment(segment:Segment,point:[f64;2],from:f64,to:f64)->(f64,f64) {
+    let distance=|t| {let p=segment.point(t);(p[0]-point[0]).hypot(p[1]-point[1])};
+    let (mut lo,mut hi)=(from,to);
+    for _ in 0..40 {
+        let (a,b)=(lo+(hi-lo)/3.,hi-(hi-lo)/3.);
+        if distance(a)<distance(b) {hi=b;}else{lo=a;}
+    }
+    let at=[from,(lo+hi)*0.5,to].into_iter().min_by(|a,b|distance(*a).total_cmp(&distance(*b))).unwrap();
+    (at,distance(at))
+}
+
 impl PathItem {
     fn bases(&self) -> Vec<u32> {
         self.geometry.subpaths().iter().scan(0u32, |base, subpath| { let at = *base; *base += subpath.segment_count() as u32; Some(at) }).collect()
@@ -30,14 +41,7 @@ impl PathItem {
                     let u = if length > 0. { (((point[0] - last[0]) * d[0] + (point[1] - last[1]) * d[1]) / length).clamp(0., 1.) } else { 0. };
                     let distance = (last[0] + d[0] * u - point[0]).hypot(last[1] + d[1] * u - point[1]);
                     if best.is_none_or(|b| distance - tolerance <= b.distance) {
-                        let distance = |t| { let p = segment.point(t); (p[0] - point[0]).hypot(p[1] - point[1]) };
-                        let (mut lo, mut hi) = (last_t, t);
-                        for _ in 0..40 {
-                            let (a, b) = (lo + (hi - lo) / 3., hi - (hi - lo) / 3.);
-                            if distance(a) < distance(b) { hi = b } else { lo = a }
-                        }
-                        let at = [last_t, (lo + hi) * 0.5, t].into_iter().min_by(|a, b| distance(*a).total_cmp(&distance(*b))).unwrap();
-                        let distance = distance(at);
+                        let (at,distance)=closest_segment(segment,point,last_t,t);
                         if best.is_none_or(|b| distance < b.distance) { best = Some(SegmentHit { subpath: s as u32, segment: index as u32, t: at, distance }); }
                     }
                     (last, last_t) = (p, t);

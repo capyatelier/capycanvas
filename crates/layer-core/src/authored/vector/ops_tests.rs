@@ -256,3 +256,135 @@ fn erasing_along_a_frames_segments_matches_erasing_them_one_at_a_time() {
         along.validate().unwrap();
     }
 }
+
+fn face_line(id: u64, points: &[[f64; 2]], closed: bool, width: f64) -> PathItem {
+    PathItem::new(ItemId(id), Arc::new(PathGeometry::new(vec![Subpath::new(&points.iter().copied().map(Anchor::corner).collect::<Vec<_>>(), closed)]).unwrap()), Arc::new(Style::new(vec![PaintEntry::Stroke(Stroke::new(paint(), width))])))
+}
+fn face_at(paths: &[PathItem], point: [f64; 2]) -> VectorFace {
+    vector_face(&paths.iter().map(|path| FaceLine { path, offset: [0.; 2] }).collect::<Vec<_>>(), point).expect("a bounded face")
+}
+fn face_path(face: &VectorFace) -> PathItem {
+    let mut path = PathItem::new(ItemId(100_000), Arc::new(face.geometry.clone()), Arc::new(Style::new(vec![PaintEntry::Fill(Fill { paint: paint(), unknown: None })])));
+    path.fill_rule = if face.geometry.subpaths().len() > 1 { FillRule::EvenOdd } else { FillRule::NonZero };
+    path
+}
+fn face_box(id: u64, lo: f64, hi: f64) -> PathItem {
+    face_line(id, &[[lo, lo], [hi, lo], [hi, hi], [lo, hi]], true, 2.)
+}
+
+#[test]
+fn vector_face_splits_crossings_and_prunes_overshoots_at_t_junctions() {
+    let paths = vec![
+        face_line(1, &[[-20., 0.], [120., 0.]], false, 2.),
+        face_line(2, &[[100., -20.], [100., 120.]], false, 2.),
+        face_line(3, &[[120., 100.], [-20., 100.]], false, 2.),
+        face_line(4, &[[0., 120.], [0., -20.]], false, 2.),
+        face_line(5, &[[50., 0.], [50., 100.]], false, 2.),
+    ];
+    let face = face_at(&paths, [25., 50.]);
+    let filled = face_path(&face);
+    assert_eq!(face.geometry.hull(), [0., 0., 50., 100.]);
+    assert!(filled.encloses([25., 50.], 0.001));
+    assert!(!filled.encloses([75., 50.], 0.001));
+    assert_eq!(face.boundary, [0, 2, 3, 4].into());
+}
+
+#[test]
+fn vector_face_uses_self_crossings_and_overlapping_shape_boundaries() {
+    let bow = face_line(1, &[[0., 0.], [100., 100.], [0., 100.], [100., 0.]], true, 2.);
+    let face = face_at(&[bow], [50., 20.]);
+    assert!(face_path(&face).encloses([50., 20.], 0.001));
+    assert!(!face_path(&face).encloses([50., 80.], 0.001));
+    let face = face_at(&[face_box(1, 0., 100.), face_box(2, 50., 150.)], [75., 75.]);
+    assert_eq!(face.geometry.hull(), [50., 50., 100., 100.]);
+    assert_eq!(face.boundary, [0, 1].into());
+}
+
+#[test]
+fn vector_face_joins_visible_endpoint_contacts_but_leaves_real_gaps_open() {
+    let make = |gap| vec![
+        face_line(1, &[[0., 0.], [100., 0.], [100., 100.], [0., 100.]], false, 6.),
+        face_line(2, &[[0., 100.], [0., gap]], false, 6.),
+    ];
+    let face = face_at(&make(3.), [50., 50.]);
+    assert!(face_path(&face).encloses([50., 50.], 0.001));
+    let paths = make(8.);
+    assert!(vector_face(&paths.iter().map(|path| FaceLine { path, offset: [0.; 2] }).collect::<Vec<_>>(), [50., 50.]).is_none());
+}
+
+#[test]
+fn vector_face_pressure_changes_contact_reach_not_the_centre_line_boundary() {
+    let mut square = face_box(1, 0., 100.);
+    let mut stroke = square.style.strokes().next().unwrap().clone();
+    stroke.width = 40.;
+    stroke.profile = Some(Arc::new(WidthProfile::new(vec![WidthKnot::new(0, 0., 0.1, 0.8), WidthKnot::new(3, 1., 1., 0.2)]).unwrap()));
+    square.style = Arc::new(Style::new(vec![PaintEntry::Stroke(stroke)]));
+    let face = face_at(&[square], [50., 50.]);
+    assert_eq!(face.geometry.hull(), [0., 0., 100., 100.]);
+}
+
+#[test]
+fn vector_face_keeps_only_outermost_holes_and_selects_the_innermost_face() {
+    let paths = [face_box(1, 0., 200.), face_box(2, 50., 150.), face_box(3, 75., 125.)];
+    let face = face_at(&paths, [25., 25.]);
+    assert_eq!(face.geometry.subpaths().len(), 2);
+    assert_eq!(face.boundary, [0, 1].into());
+    let filled = face_path(&face);
+    assert!(filled.encloses([25., 25.], 0.001));
+    assert!(!filled.encloses([60., 60.], 0.001));
+    assert!(!filled.encloses([100., 100.], 0.001));
+    let inner = face_at(&paths, [100., 100.]);
+    assert_eq!(inner.geometry.hull(), [75., 75., 125., 125.]);
+    assert_eq!(inner.boundary, [2].into());
+}
+
+#[test]
+fn vector_face_doubles_its_window_and_preserves_document_offsets() {
+    let square = face_box(1, 0., 1200.);
+    let face = vector_face(&[FaceLine { path: &square, offset: [2000., -300.] }], [2600., 300.]).unwrap();
+    assert_eq!(face.geometry.hull(), [2000., -300., 3200., 900.]);
+    assert_eq!(face.boundary, [0].into());
+    let paths = [
+        face_line(1, &[[0., 0.], [1200., 0.]], false, 6.),
+        face_line(2, &[[1200., 3.], [1200., 100.]], false, 6.),
+        face_line(3, &[[1200., 100.], [0., 100.]], false, 6.),
+        face_line(4, &[[0., 100.], [0., 3.]], false, 6.),
+    ];
+    let face = face_at(&paths, [600., 50.]);
+    assert_eq!(face.geometry.hull(), [0., 0., 1200., 100.]);
+    assert_eq!(face.boundary, [0, 1, 2, 3].into());
+    assert!(face_path(&face).encloses([600., 50.], 0.001));
+}
+
+#[test]
+fn vector_face_busy_page() {
+    let mut paths = vec![face_box(1, 0., 100.), face_box(2, 200., 1800.)];
+    paths.extend((0..2000).map(|i| {
+        let x = 300. + f64::from(i % 50) * 20.;
+        let y = 300. + f64::from(i / 50) * 20.;
+        face_line(i as u64 + 3, &[[x, y], [x + 10., y + 10.]], false, 2.)
+    }));
+    let lines: Vec<_> = paths.iter().map(|path| FaceLine { path, offset: [0.; 2] }).collect();
+    for (name, point, expected) in [("small", [50., 50.], [0., 0., 100., 100.]), ("large", [1000., 1400.], [200., 200., 1800., 1800.])] {
+        let start = std::time::Instant::now();
+        let face = vector_face(&lines, point).unwrap();
+        let elapsed = start.elapsed().as_micros();
+        eprintln!("vector_face_busy_page {name} elapsed_us={elapsed} path_count={}", paths.len());
+        assert_eq!(face.geometry.hull(), expected);
+        assert!(face_path(&face).encloses(point, 0.001));
+    }
+}
+
+#[test]
+fn line_picking_and_intersection_erasing_ignore_fill_only_paths() {
+    let line = face_line(1, &[[0., 50.], [100., 50.]], false, 2.);
+    let face = face_at(&[face_box(2, 40., 60.)], [50., 50.]);
+    let fill = face_path(&face);
+    let object = VectorObject::from_records(vec![Record::Path(fill.clone()), Record::Path(line)]);
+    let mut index = VectorIndex::default();
+    assert_eq!(index.hit(&object, [50., 45.], 0.1), None);
+    assert_eq!(index.hit(&object, [50., 50.], 0.1), Some(ItemId(1)));
+    let erased = object.erase(&mut index, &Eraser { from: [10., 50.], to: [10., 50.], radius: 1. }, EraseMode::ToIntersection).unwrap();
+    let remaining: Vec<_> = erased.paths().map(|(_, path)| path).collect();
+    assert_eq!(remaining, [&fill]);
+}

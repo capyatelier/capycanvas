@@ -3,6 +3,7 @@ use crate::color::RgbColor;
 use std::{collections::{BTreeMap, BTreeSet, HashSet}, hash::{BuildHasherDefault, Hasher}, sync::{Arc, OnceLock}};
 
 mod erase;
+mod faces;
 mod index;
 mod ops;
 mod outline;
@@ -10,6 +11,7 @@ mod outline;
 mod ops_tests;
 mod points;
 pub use erase::{EraseMode, Eraser};
+pub use faces::{FaceLine, VectorFace, vector_face};
 pub use points::{AnchorRef, SegmentHit};
 pub use index::VectorIndex;
 

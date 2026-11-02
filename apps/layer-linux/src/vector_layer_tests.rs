@@ -237,6 +237,62 @@ fn native_vector_discover_and_wrong_brush() {
 }
 
 #[test]
+#[ignore = "isolated native-input.js --native-test=native_vector_fill_between_open_strokes --tablet"]
+fn native_vector_fill_between_open_strokes() {
+    let mut d=Driver::new("art.capycanvas.VectorFaces");
+    for theme in [Theme::Light,Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme {theme:Some(theme)});
+        add_vector_layer(&mut d);
+        let target=ui_session(&d.w).engine().document().working.occurrence.unwrap();
+        d.w.dispatch(UiAction::SelectBrush {id:layer_core::DefaultBrushPreset::GPen as u32});
+        d.w.dispatch(UiAction::SetBrushSize {value:6.});
+        d.w.dispatch(UiAction::SetColor {rgba:[0.,0.,0.,1.]});
+        tool(&d,LayerCanvasTool::Paint);
+        for (index,(from,to)) in [([350.,400.],[950.,400.]),([900.,350.],[900.,900.]),([950.,850.],[350.,850.]),([400.,900.],[400.,350.])].into_iter().enumerate() {
+            pen_points(&mut d,&stroke(from,to));
+            until_paths(&d,"a separate open bounding stroke",|paths|paths.len()==index+1);
+        }
+        let boundary=[[650.,400.],[900.,625.],[650.,850.],[400.,625.]];
+        wait_for("the four bounding strokes on screen",||boundary.into_iter().all(|point|inked(presented(&d,point))));
+        let boundary_pixels=boundary.map(|point|presented(&d,point));
+        let original=paths(&d);
+        assert!(original.iter().all(|path|path.style.strokes().next().is_some()&&!path.encloses([650.,625.],0.05)));
+        let layers=ui_session(&d.w).engine().document().scene().order().to_vec();
+        d.w.dispatch(UiAction::SetColor {rgba:[0.15,0.7,0.25,1.]});
+        tool(&d,LayerCanvasTool::Region {fill:true,source:layer_ui::RegionSource::Editing});
+        pen_points(&mut d,&[[650.,625.],[650.,625.]]);
+        let filled=until_paths(&d,"a vector face between separate open strokes",|paths|paths.len()==5);
+        assert!(active_vector(&d));
+        assert_eq!(ui_session(&d.w).engine().document().working.occurrence,Some(target));
+        assert_eq!(ui_session(&d.w).engine().document().scene().order(),layers,"vector lines do not create a paint fallback layer");
+        let face=filled.iter().find(|path|path.style.strokes().next().is_none()).unwrap();
+        assert!(face.encloses([650.,625.],0.05));
+        assert_eq!(filled.iter().position(|path|path.id==face.id),Some(original.len()),"the fill sits below its four bounding strokes");
+        for path in &original {assert_eq!(filled.iter().find(|candidate|candidate.id==path.id),Some(path));}
+        wait_for("the green vector face on screen",||greenish(presented(&d,[650.,625.])));
+        assert_eq!(boundary.map(|point|presented(&d,point)),boundary_pixels,"opaque line centres stay above the new face");
+        capture(&d,&format!("vector-face-{theme:?}.png"));
+        d.w.dispatch(UiAction::SetColor {rgba:[0.1,0.2,0.9,1.]});
+        pen_points(&mut d,&[[650.,625.],[650.,625.]]);
+        let recoloured=until_paths(&d,"recolouring the same vector face",|paths|paths.len()==5&&paths.iter().find(|path|path.id==face.id).is_some_and(|path|path.style!=face.style));
+        for path in &original {assert_eq!(recoloured.iter().find(|candidate|candidate.id==path.id),Some(path));}
+        wait_for("the blue vector face on screen",|| {let p=presented(&d,[650.,625.]);i16::from(p[2])-i16::from(p[0]).max(i16::from(p[1]))>40});
+        assert_eq!(boundary.map(|point|presented(&d,point)),boundary_pixels,"recolour preserves the opaque line centres");
+        capture(&d,&format!("vector-face-recoloured-{theme:?}.png"));
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});
+        until_paths(&d,"one Undo restores the original face colour",|paths|paths==filled.as_slice());
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});
+        until_paths(&d,"one Undo removes only the face",|paths|paths==original.as_slice());
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Redo});
+        until_paths(&d,"Redo restores the vector face",|paths|paths==filled.as_slice());
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});
+        until_paths(&d,"the bounding strokes remain exact",|paths|paths==original.as_slice());
+        eprintln!("PASS {theme:?}: separate open vector strokes, face Fill, recolour and exact Undo/Redo");
+    }
+    d.finish();
+}
+
+#[test]
 #[ignore = "isolated native-input.js --native-test=native_vector_color_and_canvas_changes --tablet"]
 fn native_vector_color_and_canvas_changes() {
     use layer_core::{FigurePaint, FigureShape};

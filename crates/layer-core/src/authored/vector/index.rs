@@ -82,7 +82,7 @@ impl VectorIndex {
     pub fn hit(&mut self, object: &VectorObject, point: [f64; 2], slop: f64) -> Option<ItemId> {
         self.update(object);
         self.candidates([point[0] - slop, point[1] - slop, point[0] + slop, point[1] + slop]).into_iter()
-            .filter_map(|at| self.path(at)).find(|path| path.pickable() && path.hit(point, slop)).map(|path| path.id)
+            .filter_map(|at| self.path(at)).find(|path| path.pickable() && path.style.strokes().next().is_some() && path.hit(point, slop)).map(|path| path.id)
     }
     pub fn near(&mut self, object: &VectorObject, area: [f64; 4]) -> Vec<Position> {
         self.update(object);
@@ -91,7 +91,7 @@ impl VectorIndex {
     pub fn within(&mut self, object: &VectorObject, area: [f64; 4]) -> BTreeSet<ItemId> {
         self.update(object);
         let inside = |b: [f64; 4]| b[0] >= area[0] && b[1] >= area[1] && b[2] <= area[2] && b[3] <= area[3];
-        self.candidates(area).into_iter().filter_map(|at| self.path(at)).filter(|path| path.pickable() && inside(path.visual_bounds())).map(|path| path.id).collect()
+        self.candidates(area).into_iter().filter_map(|at| self.path(at)).filter(|path| path.pickable() && path.style.strokes().next().is_some() && inside(path.visual_bounds())).map(|path| path.id).collect()
     }
 }
 
