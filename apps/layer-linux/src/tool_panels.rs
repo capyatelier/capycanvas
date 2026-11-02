@@ -174,7 +174,7 @@ fn show_availability(button: &gtk::Button, item: &ToolSetItem) {
     if item.enabled && item.disabled_reason.is_some() { button.add_css_class("unavailable-tool"); } else { button.remove_css_class("unavailable-tool"); }
 }
 fn tool_label(item: &ToolSetItem) -> gtk::Box {
-    let row = aligned_icon_label(&item.label, item.icon, if matches!(item.action, UiAction::ColorPicker { .. }) { 0.0 } else { 1.0 });
+    let row = icon_label(&item.label, item.icon);
     if let Some(label) = row.last_child().and_downcast::<gtk::Label>() { crate::panel_controls::two_lines(&label); }
     row
 }

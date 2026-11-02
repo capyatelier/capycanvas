@@ -33,6 +33,52 @@ fn native_filter_category_footer() {
     d.finish();
 }
 
+#[test]
+#[ignore = "private compositor: --native-test=native_tool_list_alignment --native-storage; phone or desktop viewport/theme external"]
+fn native_tool_list_alignment() {
+    let mut d = super::phone_motion::setup("art.capycanvas.ToolListAlignment");
+    let phone = d.w.surface.width().min(d.w.surface.height()) < 480;
+    for (preset, control, tag, desktop) in [
+        (WorkspacePreset::Painter, ToolbarControl::Command { command: CommandId::Select }, "sketch-select", true),
+        (WorkspacePreset::Illustrator, ToolbarControl::Command { command: CommandId::Select }, "paint-select", false),
+        (WorkspacePreset::Photographer, ToolbarControl::Command { command: CommandId::Select }, "photo-select", false),
+        (WorkspacePreset::Photographer, ToolbarControl::ToolSlot { slot: ToolSlotId::Healing }, "photo-healing", true),
+    ] {
+        if !phone && !desktop { continue; }
+        restore(&d, preset);
+        let layout = state(&d.w).workspace.layout;
+        let opener = if phone {
+            format!("phone-tool-{}", layout.phone.as_ref().unwrap().iter().find(|tile| tile.control == control).unwrap().id)
+        } else {
+            layout.header.entries().filter(|entry| entry.item == HeaderItem::Tool { control })
+                .map(|entry| format!("header-item-{}", entry.id))
+                .chain(layout.panels.iter().flat_map(|panel| panel.tiles()).filter(|tile| tile.control == control)
+                    .map(|tile| format!("tile-{}", tile.id)))
+                .find(|name| find_named(d.w.window.upcast_ref(), name).is_some_and(|widget| widget.is_mapped())).unwrap()
+        };
+        d.click_name(&opener);
+        new_photo::ready(&d.w);
+        if state(&d.w).customization.drawer.is_none() { d.click_name(&opener); }
+        until(|| d.w.drawer.placement().is_some() && !d.w.drawer.animation_active(), "tool list opens");
+        let tools = d.named("tool-drawer");
+        let rows = descendants::<gtk::Button>(&tools).into_iter().filter(|button| button.is_mapped()
+            && button.has_css_class("brush-choice") && !button.has_css_class("tool-preview-choice")).collect::<Vec<_>>();
+        assert!(!rows.is_empty(), "{tag} presents tool rows");
+        for row in rows {
+            let content = row.child().unwrap();
+            let label = content.last_child().unwrap().downcast::<gtk::Label>().unwrap();
+            assert_eq!(label.xalign(), 0., "{tag}: tool text alignment");
+            let icon = content.first_child().unwrap().compute_bounds(&row).unwrap();
+            let text = label.compute_bounds(&row).unwrap();
+            assert!((text.x() - icon.x() - icon.width() - 6.).abs() <= 1., "{tag}: shared icon-to-label spacing");
+        }
+        super::phone::capture(&mut d, &format!("tool-list-{tag}"));
+        d.w.dispatch(UiAction::Customize { action: CustomizationAction::CloseExpanded });
+        until(|| d.w.drawer.is_closed(), "tool list closes");
+    }
+    d.finish();
+}
+
 fn restore(d: &Driver, preset: WorkspacePreset) {
     d.w.dispatch(UiAction::RestoreWorkspace {
         workspace: Box::new(WorkspaceState {

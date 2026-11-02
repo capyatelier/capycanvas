@@ -113,6 +113,8 @@ New drawing spacing: GTK `native_new_drawing_preview_spacing` checks stacked pre
 
 Filter categories: GTK `native_filter_category_footer` checks initial clipping and scrolls the last row above Cancel at 412×891 and 280×560.
 
+Tool lists: GTK `native_tool_list_alignment` compares Select and Healing rows at 412×891 and 1600×1000 in light and dark.
+
 ### Tonal journeys
 
 The GTK journeys are `native_composite_histogram_updates_without_changing_the_drawing`,
