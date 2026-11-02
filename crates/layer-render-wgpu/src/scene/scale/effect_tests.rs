@@ -1515,6 +1515,7 @@ fn animated_filters_move_on_the_reduced_grid_and_match_native_reduction() {
             [(x / 4) as u8 / (1 + check), (y / 3) as u8, 200 - 120 * check, 255]
         })).into()));
         let current = effect(&mut doc, id); insert_occurrence(&mut doc, current, 0);
+        if id == "film_grain" { set_effect_value(&mut doc, current, "animate", EffectValue::Toggle(true)); }
         let mut reduced = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         let mut native = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         native.test.exact_display = true;
