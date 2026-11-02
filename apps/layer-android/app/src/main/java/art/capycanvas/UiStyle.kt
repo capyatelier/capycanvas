@@ -394,8 +394,10 @@ private class TileTooltipPositionProvider(private val gap: Int) : PopupPositionP
     var text by remember(label) { mutableStateOf(label) }
     val currentResolve by rememberUpdatedState(resolve)
     LaunchedEffect(hovered && enabled, label) {
+        if (hovered && enabled) currentResolve?.invoke { text = it }
+    }
+    LaunchedEffect(hovered && enabled) {
         if (hovered && enabled) {
-            currentResolve?.invoke { text = it }
             delay(500)
             state.show()
         } else state.dismiss()

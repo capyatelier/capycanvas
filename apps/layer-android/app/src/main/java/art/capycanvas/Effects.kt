@@ -473,6 +473,7 @@ private data class CurveTap(val position: Offset, val time: Long, val epoch: Lon
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable internal fun RendererStatsPanel(host: CanvasHost) {
     var stats by remember { mutableStateOf<JSONObject?>(null) }
     LaunchedEffect(host) {
@@ -491,8 +492,9 @@ private data class CurveTap(val position: Offset, val time: Long, val epoch: Lon
         stats?.let { view ->
             view.array("rows").objects().forEachIndexed { index, row ->
                 HoverTip(row.getString("description")) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(row.getString("label")); Text(row.getString("value"))
+                    FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(row.getString("label"), Modifier.weight(1f))
+                        Text(row.getString("value"), maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.End)
                     }
                 }
                 if (index + 1 == view.getInt("chart_after_rows")) {

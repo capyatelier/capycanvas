@@ -2021,15 +2021,48 @@ class AndroidHostTest {
     @Test fun diagnosticsFollowSharedOrder() {
         customize(obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true))
         floatPanel("stats", 650f, 120f)
+        compose.waitUntil(180_000) { host.snapshot?.let { it.optBoolean("shaders_ready") && it.optBoolean("canvas_ready") }==true && runBlocking {host.withNative {!Native.renderingPending(it)}} }
         compose.waitUntil(10_000) { compose.onAllNodesWithTag("renderer-stats-chart").fetchSemanticsNodes().isNotEmpty() }
-        for (theme in listOf("light", "dark")) {
+        val themes=androidx.test.platform.app.InstrumentationRegistry.getArguments().getString("theme")?.let {listOf(it)} ?: listOf("light","dark")
+        for(theme in themes) {
             action(obj("type" to "set_theme", "theme" to theme))
-            val gpu = compose.onNodeWithText("GPU · ms").fetchSemanticsNode().boundsInRoot
-            val chart = compose.onNodeWithTag("renderer-stats-chart").fetchSemanticsNode().boundsInRoot
-            val frames = compose.onNodeWithText("Frames").fetchSemanticsNode().boundsInRoot
-            val storage = compose.onNodeWithText("Canvas storage").fetchSemanticsNode().boundsInRoot
-            assertTrue(chart.top >= gpu.bottom && frames.top >= chart.bottom && storage.top >= frames.bottom)
-            capture("diagnostics-order-$theme")
+            customize(obj("type" to "set_panel_visible", "panel" to "stats", "visible" to false))
+            compose.waitUntil(10_000) {compose.onAllNodesWithTag("renderer-stats-chart").fetchSemanticsNodes().isEmpty()}
+            compose.waitForIdle();runBlocking {host.glassPresented()}
+            customize(obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true))
+            compose.waitUntil(10_000) {compose.onAllNodesWithTag("renderer-stats-chart").fetchSemanticsNodes().isNotEmpty()}
+            compose.waitForIdle();runBlocking {host.glassPresented()}
+            val stats=runBlocking {host.withNative {JSONObject(Native.query(it,obj("type" to "renderer_stats").toString()))}}
+            val labels=stats.array("rows").objects().map {it.getString("label")}.toSet()
+            val values=mutableListOf<Pair<String,Int>>()
+            val matcher=hasAnyAncestor(hasTestTag("renderer-stats")) and !hasAnyAncestor(hasTestTag("stroke-recording")) and SemanticsMatcher("Stats values") {node ->
+                node.config.getOrNull(SemanticsProperties.Text)?.joinToString(""){it.text}?.let {it !in labels}==true
+            }
+            val nodes=compose.onAllNodes(matcher,useUnmergedTree=true).fetchSemanticsNodes()
+            compose.runOnIdle {for(node in nodes) {
+                val layouts=mutableListOf<TextLayoutResult>()
+                assertTrue(node.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(layouts))
+                values.add(node.config[SemanticsProperties.Text].joinToString(""){it.text} to layouts.single().lineCount)
+            }}
+            screenshot("validation/stats-layout-$theme.png")
+            val tips=mutableListOf<Pair<String,Boolean>>()
+            for((label,fragment) in listOf("Canvas storage" to "Tracked paint","Process RSS" to "Resident memory for this process")) {
+                compose.onNodeWithText(label).assertIsDisplayed().performMouseInput {enter(center);moveTo(center)}
+                var shown=false
+                try {compose.waitUntil(2_000) {compose.onAllNodes(hasText(fragment,substring=true)).fetchSemanticsNodes().isNotEmpty()};shown=true}
+                catch(_:ComposeTimeoutException) {}
+                tips.add(label to shown)
+                screenshot("validation/stats-tooltip-${label.replace(' ','-')}-$theme.png")
+                compose.onNodeWithText(label).performMouseInput {exit()}
+            }
+            assertEquals(labels.size,values.size)
+            assertTrue("Stats values stay on one line: $values",values.all {it.second==1})
+            assertTrue("Static and live Stats descriptions appear: $tips",tips.all {it.second})
+            for(label in labels)compose.onNodeWithText(label).assertIsDisplayed()
+            val gpu=compose.onNodeWithText("GPU · ms").fetchSemanticsNode().boundsInRoot
+            val chart=compose.onNodeWithTag("renderer-stats-chart").fetchSemanticsNode().boundsInRoot
+            val frames=compose.onNodeWithText("Frames").fetchSemanticsNode().boundsInRoot
+            assertTrue(chart.top>=gpu.bottom && frames.top>=chart.bottom)
         }
     }
     private fun preferences() = host.snapshot!!.getJSONObject("preferences")
