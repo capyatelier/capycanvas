@@ -206,7 +206,7 @@ fn navigation_header(d: &Driver, frame: &gtk::Widget, root: bool) -> adw::Header
 fn page_frame(d: &Driver) -> (adw::Dialog, gtk::Widget) {
     until(|| d.w.visible_dialog().is_some_and(|dialog| {
         let frame = crate::page_dialog::parent(&dialog);
-        frame != dialog.clone().upcast::<gtk::Widget>() && frame.is_mapped()
+        frame != dialog.clone().upcast::<gtk::Widget>() && frame.is_mapped() && frame.width() > 0 && frame.height() > 0
             && !d.w.pages.root.is_transition_running()
     }), "the editor page is mapped and settled");
     let dialog = d.w.visible_dialog().unwrap();
@@ -248,7 +248,7 @@ fn capture(d: &mut Driver, name: &str) {
 
 fn close(d: &Driver, dialog: &adw::Dialog) {
     crate::page_dialog::close_dialog(dialog);
-    until(|| d.w.visible_dialog().is_none() && !d.w.pages.root.is_transition_running(), "the page closes");
+    until(|| d.w.visible_dialog().is_none() && !d.w.pages.root.is_transition_running() && !d.w.servicing.get(), "the page closes");
 }
 
 fn keys(d: &mut Driver, key: u32) {
@@ -550,6 +550,27 @@ fn native_phone_editor_pages() {
     d.w.dispatch(UiAction::Preferences { action: PreferenceAction::CancelShortcut });
     crate::page_dialog::close_dialog(&recording);
     until(|| d.w.visible_dialog().as_ref() == Some(&dialog) && !d.w.pages.root.is_transition_running(), "the shortcut form returns to Settings");
+    let settings = gtk::Settings::default().unwrap();
+    let animations = settings.is_gtk_enable_animations();
+    settings.set_gtk_enable_animations(false);
+    let original_keymap = state(&d.w).settings.keymap;
+    let text = serde_json::json!({"format": "capycanvas-keymap", "version": 1, "keymap": {"id": "photoshop", "revision": 1}}).to_string();
+    for response in ["cancel", "import"] {
+        d.w.dispatch(UiAction::Preferences { action: PreferenceAction::ImportKeymap { text: text.clone() } });
+        until(|| d.w.window.visible_dialog().is_some_and(|alert| alert.is::<adw::AlertDialog>() && alert.is_mapped() && alert.width() > 0 && alert.height() > 0), "keymap import alert maps over Preferences");
+        let alert = d.w.window.visible_dialog().unwrap().downcast::<adw::AlertDialog>().unwrap();
+        assert_eq!(d.w.pages.visible().as_ref(), Some(&dialog), "Preferences remains the page below the native alert");
+        assert!(crate::page_dialog::parent(&dialog).is_mapped());
+        capture(&mut d, &format!("keymap-import-{response}"));
+        let button = find_button(alert.upcast_ref(), &alert.response_label(response)).unwrap();
+        d.click(button.upcast_ref());
+        until(|| !alert.is_mapped() && d.w.window.visible_dialog().is_none()
+            && ui_session(&d.w).preferences().unwrap().keymap.import.is_none(), "the native keymap response closes its preview");
+        assert_eq!(d.w.visible_dialog().as_ref(), Some(&dialog));
+        if response == "cancel" { assert_eq!(state(&d.w).settings.keymap, original_keymap, "Cancel preserves the keymap"); }
+    }
+    assert_eq!(state(&d.w).settings.keymap.as_ref().map(|keymap| keymap.id.as_str()), Some("photoshop"));
+    settings.set_gtk_enable_animations(animations);
     keys(&mut d, 0xff1b);
     until(|| d.w.visible_dialog().is_none() && !d.w.pages.root.is_transition_running(), "Escape closes Preferences without a synthesized Done");
     assert!(!crate::page_dialog::parent(&dialog).is_mapped());

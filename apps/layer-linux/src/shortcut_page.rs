@@ -1531,7 +1531,7 @@ impl ShortcutPage {
                         PreferenceAction::CancelKeymapImport
                     })
                 ));
-                alert.present(Some(dialog));
+                crate::page_dialog::present_role(&alert, dialog, layer_ui::DialogRole::Alert);
                 *self.import.borrow_mut() = Some(alert);
             }
             (Some(preview), Some(alert)) => {
