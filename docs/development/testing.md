@@ -126,7 +126,7 @@ times on the private 120 Hz display.
 ### Saved data compatibility
 
 **Extensive compatibility run.** Use `python3 tools/compat/run.py rust`, `upgrade`,
-`downgrade`, `web` or `app-data` (`all` runs them all) without a GPU.
+`downgrade`, `web`, `app-data` or `windows` (`all` runs them all) without a GPU.
 `--releases` takes comma-separated
 tags and defaults to every stable tag from v1.0.15 onward. `--work` holds private
 storage and builds; reports and check logs remain there, while `--keep` also
@@ -141,6 +141,10 @@ through native startup; repeat `--app-data DIR` to report on copies of other
 folders. User-folder outcomes are reported without failing the run. Run the
 shared checker directly on a copy with
 `cargo run --locked -p layer-workspace --features native --example check-saved-data -- DIR`.
+`windows` runs the registered `saved-data` fixtures on one CPU-pool runner;
+without a configured Linux/KVM pool it prints `SKIP`. The manual Compatibility
+workflow accepts comma-separated `releases` and `modes` (both default to `all`),
+keeps each mode's report and logs, and calls Windows readiness on hosted WARP.
 Android remains a local `AndroidSavedStateTest` journey on a
 reserved tablet; there is no Android compatibility job in GitHub Actions.
 

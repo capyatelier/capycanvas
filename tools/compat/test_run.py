@@ -131,6 +131,38 @@ class RunnerTest(unittest.TestCase):
             self.assertTrue((destination / name).is_file(), name)
         self.assertTrue(list((destination / "data/color-profiles").glob("*.icc")))
 
+    def test_windows_without_a_local_pool_reports_a_skip(self):
+        runner = run.Runner(self.args)
+        with patch.object(run.os, "access", return_value=False), patch.object(run.subprocess, "run") as command:
+            runner.windows()
+        command.assert_not_called()
+        self.assertEqual(runner.checks[0]["status"], "SKIP")
+        self.assertIn("Linux/KVM", runner.checks[0]["reason"])
+        self.assertEqual(runner.finish(), 0)
+
+    def test_windows_uses_one_cpu_runner_and_stops_only_the_primary_it_started(self):
+        for running in [False, True]:
+            with self.subTest(running=running):
+                runner = run.Runner(self.args)
+                runner.env["CAPYCANVAS_VM"] = "compat-test"
+                listing = "compat-test\t" + ("running, ssh port 12345" if running else "stopped")
+                responses = [subprocess.CompletedProcess([], 0, stdout=listing),
+                             subprocess.CompletedProcess([], 7)]
+                if not running:
+                    responses.append(subprocess.CompletedProcess([], 0))
+                with patch.object(run.sys, "platform", "linux"), patch.object(run.os, "access", return_value=True), \
+                     patch.object(Path, "is_file", return_value=True), \
+                     patch.object(run.subprocess, "run", side_effect=responses) as command:
+                    runner.windows()
+                fixture = command.call_args_list[1]
+                self.assertEqual(fixture.args[0][-4:], ["fixtures", "--runners", "1", "saved-data"])
+                self.assertEqual(fixture.args[0][2:4], ["--vm", "compat-test"])
+                self.assertEqual(fixture.kwargs["env"]["CAPYCANVAS_VM_ARTIFACTS"], str(runner.work / "windows"))
+                self.assertEqual(command.call_count, 2 if running else 3)
+                if not running:
+                    self.assertEqual(command.call_args.args[0][-1], "stop")
+                self.assertEqual(runner.finish(), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

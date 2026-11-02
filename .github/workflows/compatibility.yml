@@ -1,0 +1,88 @@
+name: Compatibility
+on:
+  workflow_dispatch:
+    inputs:
+      releases:
+        description: Comma-separated release tags, or all
+        type: string
+        default: all
+      modes:
+        description: Comma-separated modes, or all
+        type: string
+        default: all
+permissions:
+  contents: read
+env:
+  CARGO_TERM_COLOR: never
+  RUST_VERSION: "1.99.0"
+jobs:
+  select:
+    runs-on: ubuntu-24.04
+    outputs:
+      ubuntu: ${{ steps.modes.outputs.ubuntu }}
+      windows: ${{ steps.modes.outputs.windows }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - id: modes
+        env:
+          MODES: ${{ inputs.modes }}
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, sys
+          sys.path.insert(0, 'tools/compat')
+          from run import MODES
+          requested = os.environ['MODES'].strip()
+          selected = list(MODES) if requested == 'all' else list(dict.fromkeys(mode.strip() for mode in requested.split(',')))
+          if set(selected) - set(MODES):
+              sys.exit('Unknown compatibility mode')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('ubuntu=' + json.dumps([mode for mode in selected if mode != 'windows']) + '\n')
+              output.write('windows=' + str('windows' in selected).lower() + '\n')
+          PYTHON
+
+  checks:
+    needs: select
+    if: needs.select.outputs.ubuntu != '[]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: ${{ fromJSON(needs.select.outputs.ubuntu) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+      - if: matrix.mode == 'web'
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo install wasm-bindgen-cli --version 0.2.128 --locked
+          sudo apt-get update && sudo apt-get install -y google-chrome-stable
+          node -e 'if (Number(process.versions.node.split(".")[0]) < 22) process.exit(1)'
+      - name: Run compatibility checks
+        env:
+          RELEASES: ${{ inputs.releases }}
+          MODE: ${{ matrix.mode }}
+        run: python3 tools/compat/run.py "$MODE" --releases "$RELEASES"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: compatibility-${{ matrix.mode }}
+          path: |
+            ${{ runner.temp }}/capy-compat/report.json
+            ${{ runner.temp }}/capy-compat/logs/
+          if-no-files-found: error
+
+  windows:
+    needs: select
+    if: needs.select.outputs.windows == 'true'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/windows-readiness.yml
+    with:
+      source_ref: ${{ github.sha }}
+      fixtures: '["saved-data"]'

@@ -16,7 +16,7 @@ from threading import Thread
 
 ROOT = Path(__file__).resolve().parents[2]
 CRATES = ("layer-workspace", "layer-core", "layer-ui", "layer-host")
-MODES = ("rust", "upgrade", "downgrade", "web", "app-data")
+MODES = ("rust", "upgrade", "downgrade", "web", "app-data", "windows")
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -243,6 +243,26 @@ class Runner:
         for index, directory in enumerate(self.args.app_data):
             self.check(f"app-data.user-{index}", [str(executable), str(directory.resolve())], self.root,
                        inspect=lambda log: saved_data_result(log, False))
+
+    def windows(self):
+        state = Path(self.env.get("CAPYCANVAS_VM_DIR") or
+                     Path(self.env.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "capycanvas/windows-vm")
+        if sys.platform != "linux" or not os.access("/dev/kvm", os.R_OK | os.W_OK) or not (state / "base/disk.qcow2").is_file():
+            self.record("SKIP", "windows.saved-data", "local Windows CPU pool needs Linux/KVM and a configured base; "
+                        "Actions uses windows-readiness.yml")
+            return
+        name = self.env.get("CAPYCANVAS_VM") or re.sub(r"[^a-z0-9]+", "-", self.root.name.lower()).strip("-")[:32] or "default"
+        helper = [sys.executable, "tools/windows-vm/windows-vm.py", "--vm", name]
+        listing = subprocess.run([*helper, "list"], cwd=self.root, env=self.env,
+                                 check=True, capture_output=True, text=True).stdout
+        running = any(line.startswith(name + "\trunning") for line in listing.splitlines())
+        output = self.output_root("windows")
+        try:
+            self.check("windows.saved-data", [*helper, "fixtures", "--runners", "1", "saved-data"], self.root,
+                       dict(CAPYCANVAS_VM_ARTIFACTS=str(output)))
+        finally:
+            if not running:
+                self.check("windows.stop", [*helper, "stop"], self.root)
 
     def finish(self):
         if not self.args.keep:

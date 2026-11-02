@@ -20,6 +20,26 @@ on:
         required: false
         type: boolean
         default: false
+  workflow_call:
+    inputs:
+      source_ref:
+        description: Full source commit SHA (defaults to this workflow commit)
+        required: false
+        type: string
+      fixtures:
+        description: JSON array of registered fixture names
+        required: false
+        type: string
+        default: '["vector-layers:default","vector-layers:light","vector-layers:ToolsOnly","vector-edges:default","vector-edges:light","idle-brush:default","idle-brush:light","touch-gestures:ThreeFinger","tool-bubbles:default","tool-bubbles:light-mouse","tool-bubbles:SlidersOnly","header:zen"]'
+      runtime_run_id:
+        description: Reuse the runtime artifact from a run with the same source_ref
+        required: false
+        type: string
+      capture_crashes:
+        description: Attach CDB to selected fixtures that support console debugging
+        required: false
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
