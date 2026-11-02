@@ -307,6 +307,8 @@ release the tracker lock first, preserving the declared lock order.
 Window-free noop-backend tests check the handoffs and callback reentry with
 `RUSTFLAGS='--cfg wgpu_validate_locks'` as well as ordinary locks.
 
+`wgpu-completion-snapshot.patch` samples completed fences under the lifetime lock so concurrent polls retire resources and report queue completion from one snapshot.
+
 `wgpu-presentation-admission.patch` separates successful artwork submissions from
 bounded viewport and timestamp submissions. `Queue::try_present` checks the
 artwork fence without waiting and excludes concurrent submissions through the

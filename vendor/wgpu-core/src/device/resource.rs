@@ -889,17 +889,6 @@ impl Device {
             }
         }
 
-        // Get the currently finished submission index. This may be higher than the requested
-        // wait, or it may be less than the requested wait if the wait failed.
-        let fence_value_result = unsafe { self.raw().get_fence_value(self.fence.as_ref()) };
-        let current_finished_submission = match fence_value_result {
-            Ok(fence_value) => fence_value,
-            Err(e) => {
-                let hal_error: WaitIdleError = self.handle_hal_error(e).into();
-                return (user_closures, Err(hal_error));
-            }
-        };
-
         // Prevent new commands from being submitted as we want to act on `queue_empty`.
         let command_indices = self.command_indices.read();
         // Check that the device is valid. This is combined with queue empty to decide whether
@@ -914,15 +903,8 @@ impl Device {
         //
         // We don't use the result of the wait here, as we want to progress forward as far as
         // possible and the wait could have been for submissions that finished long ago.
-        let mut queue_empty = false;
-        if let Some(queue) = self.get_queue() {
-            let queue_result = queue.maintain(current_finished_submission, &snatch_guard);
-            (
-                user_closures.submissions,
-                user_closures.mappings,
-                user_closures.blas_compact_ready,
-                queue_empty,
-            ) = queue_result;
+        let completion = if let Some(queue) = self.get_queue() {
+            let queue_result = queue.maintain(&snatch_guard);
             // DEADLOCK PREVENTION: We must drop `snatch_guard` before `queue` goes out of scope.
             //
             // `Queue::drop` acquires the snatch guard. If we still hold it when `queue` is dropped
@@ -937,8 +919,17 @@ impl Device {
             // - When `queue` goes out of scope here, `Queue::drop` runs and tries to acquire the
             //   snatch guard — but Thread A (this thread) still holds it, causing a deadlock.
             drop(snatch_guard);
+            queue_result.map(|(closures, empty, finished)| {
+                user_closures = closures;
+                (empty, finished)
+            })
         } else {
             drop(snatch_guard);
+            unsafe { self.raw().get_fence_value(self.fence.as_ref()) }.map(|finished| (false, finished))
+        };
+        let (queue_empty, current_finished_submission) = match completion {
+            Ok(completion) => completion,
+            Err(error) => return (user_closures, Err(self.handle_hal_error(error).into())),
         };
 
         // Based on the queue empty status, and the current finished submission index, determine

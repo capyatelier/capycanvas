@@ -308,10 +308,111 @@ struct PresentationProbe {
     hold_submissions: AtomicBool,
     fail_submission: AtomicBool,
     fail_present: AtomicBool,
+    fence_sample: std::sync::Mutex<Option<polling::FenceSample>>,
     before_submit: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>,
     presents: core::sync::atomic::AtomicUsize,
     discards: core::sync::atomic::AtomicUsize,
     device: std::sync::Mutex<Option<alloc::sync::Weak<Device>>>,
+}
+
+mod polling {
+    use super::{Any, Arc, Box, Duration, PresentationProbe, Vec};
+    use hal::{
+        AccelerationStructureBuildSizes, AccelerationStructureDescriptor, BindGroupDescriptor,
+        BindGroupLayoutDescriptor, BufferDescriptor, BufferMapping, CommandEncoderDescriptor,
+        ComputePipelineDescriptor, DeviceError, FenceValue,
+        GetAccelerationStructureBuildSizesDescriptor, Label, MemoryRange, PipelineCacheDescriptor,
+        PipelineCacheError, PipelineError, PipelineLayoutDescriptor,
+        RayTracingPipelineDescriptor, RenderPipelineDescriptor, SamplerDescriptor, ShaderError,
+        ShaderInput, ShaderModuleDescriptor, TextureDescriptor, TextureViewDescriptor, TlasInstance,
+    };
+
+    use hal::{
+        DynAccelerationStructure, DynBindGroup, DynBindGroupLayout, DynBuffer, DynCommandEncoder,
+        DynComputePipeline, DynFence, DynPipelineCache, DynPipelineLayout, DynQuerySet, DynQueue,
+        DynRayTracingPipeline, DynRenderPipeline, DynSampler,
+        DynShaderModule, DynTexture, DynTextureView,
+    };
+
+    pub(super) struct FenceSample {
+        pub(super) caller: std::thread::ThreadId,
+        pub(super) sampled: std::sync::mpsc::Sender<u64>,
+        pub(super) resume: std::sync::mpsc::Receiver<()>,
+    }
+
+    pub(super) struct PollingDevice {
+        pub(super) inner: Box<dyn hal::DynDevice>,
+        pub(super) probe: Arc<PresentationProbe>,
+    }
+    impl hal::DynResource for PollingDevice {
+        fn as_any(&self) -> &dyn Any { self.inner.as_any() }
+        fn as_any_mut(&mut self) -> &mut dyn Any { self.inner.as_any_mut() }
+    }
+    impl hal::DynDevice for PollingDevice {
+        unsafe fn create_buffer(&self, desc: &BufferDescriptor) -> Result<Box<dyn DynBuffer>, DeviceError> { unsafe { self.inner.create_buffer(desc) } }
+        unsafe fn destroy_buffer(&self, buffer: Box<dyn DynBuffer>) { unsafe { self.inner.destroy_buffer(buffer) } }
+        unsafe fn add_raw_buffer(&self, buffer: &dyn DynBuffer) { unsafe { self.inner.add_raw_buffer(buffer) } }
+        unsafe fn map_buffer(&self, buffer: &dyn DynBuffer, range: MemoryRange) -> Result<BufferMapping, DeviceError> { unsafe { self.inner.map_buffer(buffer, range) } }
+        unsafe fn unmap_buffer(&self, buffer: &dyn DynBuffer) { unsafe { self.inner.unmap_buffer(buffer) } }
+        unsafe fn flush_mapped_ranges(&self, buffer: &dyn DynBuffer, ranges: &[MemoryRange]) { unsafe { self.inner.flush_mapped_ranges(buffer, ranges) } }
+        unsafe fn invalidate_mapped_ranges(&self, buffer: &dyn DynBuffer, ranges: &[MemoryRange]) { unsafe { self.inner.invalidate_mapped_ranges(buffer, ranges) } }
+        unsafe fn create_texture(&self, desc: &TextureDescriptor) -> Result<Box<dyn DynTexture>, DeviceError> { unsafe { self.inner.create_texture(desc) } }
+        unsafe fn destroy_texture(&self, texture: Box<dyn DynTexture>) { unsafe { self.inner.destroy_texture(texture) } }
+        unsafe fn add_raw_texture(&self, texture: &dyn DynTexture) { unsafe { self.inner.add_raw_texture(texture) } }
+        unsafe fn create_texture_view(&self, texture: &dyn DynTexture, desc: &TextureViewDescriptor) -> Result<Box<dyn DynTextureView>, DeviceError> { unsafe { self.inner.create_texture_view(texture, desc) } }
+        unsafe fn destroy_texture_view(&self, view: Box<dyn DynTextureView>) { unsafe { self.inner.destroy_texture_view(view) } }
+        unsafe fn create_sampler(&self, desc: &SamplerDescriptor) -> Result<Box<dyn DynSampler>, DeviceError> { unsafe { self.inner.create_sampler(desc) } }
+        unsafe fn destroy_sampler(&self, sampler: Box<dyn DynSampler>) { unsafe { self.inner.destroy_sampler(sampler) } }
+        unsafe fn create_command_encoder(&self, desc: &CommandEncoderDescriptor<dyn DynQueue>) -> Result<Box<dyn DynCommandEncoder>, DeviceError> { unsafe { self.inner.create_command_encoder(desc) } }
+        unsafe fn create_bind_group_layout(&self, desc: &BindGroupLayoutDescriptor) -> Result<Box<dyn DynBindGroupLayout>, DeviceError> { unsafe { self.inner.create_bind_group_layout(desc) } }
+        unsafe fn destroy_bind_group_layout(&self, bg_layout: Box<dyn DynBindGroupLayout>) { unsafe { self.inner.destroy_bind_group_layout(bg_layout) } }
+        unsafe fn create_pipeline_layout(&self, desc: &PipelineLayoutDescriptor<dyn DynBindGroupLayout>) -> Result<Box<dyn DynPipelineLayout>, DeviceError> { unsafe { self.inner.create_pipeline_layout(desc) } }
+        unsafe fn destroy_pipeline_layout(&self, pipeline_layout: Box<dyn DynPipelineLayout>) { unsafe { self.inner.destroy_pipeline_layout(pipeline_layout) } }
+        unsafe fn create_bind_group(&self, desc: &BindGroupDescriptor<dyn DynBindGroupLayout, dyn DynBuffer, dyn DynSampler, dyn DynTextureView, dyn DynAccelerationStructure>) -> Result<Box<dyn DynBindGroup>, DeviceError> { unsafe { self.inner.create_bind_group(desc) } }
+        unsafe fn destroy_bind_group(&self, group: Box<dyn DynBindGroup>) { unsafe { self.inner.destroy_bind_group(group) } }
+        unsafe fn create_shader_module(&self, desc: &ShaderModuleDescriptor, shader: ShaderInput) -> Result<Box<dyn DynShaderModule>, ShaderError> { unsafe { self.inner.create_shader_module(desc, shader) } }
+        unsafe fn destroy_shader_module(&self, module: Box<dyn DynShaderModule>) { unsafe { self.inner.destroy_shader_module(module) } }
+        unsafe fn create_render_pipeline(&self, desc: &RenderPipelineDescriptor<dyn DynPipelineLayout, dyn DynShaderModule, dyn DynPipelineCache>) -> Result<Box<dyn DynRenderPipeline>, PipelineError> { unsafe { self.inner.create_render_pipeline(desc) } }
+        unsafe fn destroy_render_pipeline(&self, pipeline: Box<dyn DynRenderPipeline>) { unsafe { self.inner.destroy_render_pipeline(pipeline) } }
+        unsafe fn create_compute_pipeline(&self, desc: &ComputePipelineDescriptor<dyn DynPipelineLayout, dyn DynShaderModule, dyn DynPipelineCache>) -> Result<Box<dyn DynComputePipeline>, PipelineError> { unsafe { self.inner.create_compute_pipeline(desc) } }
+        unsafe fn destroy_compute_pipeline(&self, pipeline: Box<dyn DynComputePipeline>) { unsafe { self.inner.destroy_compute_pipeline(pipeline) } }
+        unsafe fn create_ray_tracing_pipeline(&self, desc: &RayTracingPipelineDescriptor<dyn DynPipelineLayout, dyn DynShaderModule, dyn DynPipelineCache>) -> Result<Box<dyn DynRayTracingPipeline>, PipelineError> { unsafe { self.inner.create_ray_tracing_pipeline(desc) } }
+        unsafe fn destroy_ray_tracing_pipeline(&self, pipeline: Box<dyn DynRayTracingPipeline>) { unsafe { self.inner.destroy_ray_tracing_pipeline(pipeline) } }
+        unsafe fn get_raytracing_pipeline_group_data(&self, pipeline: &dyn DynRayTracingPipeline, groups: core::ops::Range<u32>) -> Result<Vec<u8>, DeviceError> { unsafe { self.inner.get_raytracing_pipeline_group_data(pipeline, groups) } }
+        unsafe fn create_pipeline_cache(&self, desc: &PipelineCacheDescriptor<'_>) -> Result<Box<dyn DynPipelineCache>, PipelineCacheError> { unsafe { self.inner.create_pipeline_cache(desc) } }
+        fn pipeline_cache_validation_key(&self) -> Option<[u8; 16]> { self.inner.pipeline_cache_validation_key() }
+        unsafe fn destroy_pipeline_cache(&self, cache: Box<dyn DynPipelineCache>) { unsafe { self.inner.destroy_pipeline_cache(cache) } }
+        unsafe fn create_query_set(&self, desc: &wgt::QuerySetDescriptor<Label>) -> Result<Box<dyn DynQuerySet>, DeviceError> { unsafe { self.inner.create_query_set(desc) } }
+        unsafe fn destroy_query_set(&self, set: Box<dyn DynQuerySet>) { unsafe { self.inner.destroy_query_set(set) } }
+        unsafe fn create_fence(&self) -> Result<Box<dyn DynFence>, DeviceError> { unsafe { self.inner.create_fence() } }
+        unsafe fn destroy_fence(&self, fence: Box<dyn DynFence>) { unsafe { self.inner.destroy_fence(fence) } }
+        unsafe fn start_graphics_debugger_capture(&self) -> bool { unsafe { self.inner.start_graphics_debugger_capture() } }
+        unsafe fn stop_graphics_debugger_capture(&self) { unsafe { self.inner.stop_graphics_debugger_capture() } }
+        unsafe fn pipeline_cache_get_data(&self, cache: &dyn DynPipelineCache) -> Option<Vec<u8>> { unsafe { self.inner.pipeline_cache_get_data(cache) } }
+        unsafe fn create_acceleration_structure(&self, desc: &AccelerationStructureDescriptor) -> Result<Box<dyn DynAccelerationStructure>, DeviceError> { unsafe { self.inner.create_acceleration_structure(desc) } }
+        unsafe fn get_acceleration_structure_build_sizes(&self, desc: &GetAccelerationStructureBuildSizesDescriptor<dyn DynBuffer>) -> AccelerationStructureBuildSizes { unsafe { self.inner.get_acceleration_structure_build_sizes(desc) } }
+        unsafe fn get_acceleration_structure_device_address(&self, acceleration_structure: &dyn DynAccelerationStructure) -> wgt::BufferAddress { unsafe { self.inner.get_acceleration_structure_device_address(acceleration_structure) } }
+        unsafe fn destroy_acceleration_structure(&self, acceleration_structure: Box<dyn DynAccelerationStructure>) { unsafe { self.inner.destroy_acceleration_structure(acceleration_structure) } }
+        fn tlas_instance_to_bytes(&self, instance: TlasInstance) -> Vec<u8> { self.inner.tlas_instance_to_bytes(instance) }
+        fn get_internal_counters(&self) -> wgt::HalCounters { self.inner.get_internal_counters() }
+        fn generate_allocator_report(&self) -> Option<wgt::AllocatorReport> { self.inner.generate_allocator_report() }
+        fn check_if_oom(&self) -> Result<(), DeviceError> { self.inner.check_if_oom() }
+        unsafe fn get_fence_value(&self, fence: &dyn DynFence) -> Result<FenceValue, DeviceError> {
+            let value = unsafe { self.inner.get_fence_value(fence) }?;
+            let sample = {
+                let mut armed = self.probe.fence_sample.lock().unwrap();
+                if armed.as_ref().is_some_and(|sample| sample.caller == std::thread::current().id()) { armed.take() } else { None }
+            };
+            if let Some(sample) = sample {
+                let _ = sample.sampled.send(value);
+                let _ = sample.resume.recv_timeout(Duration::from_secs(2));
+            }
+            Ok(value)
+        }
+        unsafe fn wait(&self, fence: &dyn DynFence, value: FenceValue, _timeout: Option<Duration>) -> Result<bool, DeviceError> {
+            Ok(unsafe { self.inner.get_fence_value(fence) }? >= value)
+        }
+    }
 }
 
 struct PresentationQueue {
@@ -356,6 +457,7 @@ impl hal::DynAdapter for PresentationAdapter {
     unsafe fn open(&self, features: wgt::Features, limits: &wgt::Limits, hints: &wgt::MemoryHints) -> Result<hal::DynOpenDevice, hal::DeviceError> {
         let mut open = unsafe { self.inner.open(features, limits, hints) }?;
         open.queue = Box::new(PresentationQueue { inner: open.queue, probe: self.probe.clone() });
+        open.device = Box::new(polling::PollingDevice { inner: open.device, probe: self.probe.clone() });
         Ok(open)
     }
     unsafe fn texture_format_capabilities(&self, format: wgt::TextureFormat) -> hal::TextureFormatCapabilities { unsafe { self.inner.texture_format_capabilities(format) } }
@@ -618,4 +720,64 @@ fn traced_global_surface_entrypoints_preserve_admission_and_lock_order() {
     assert!(global.surface_get_current_texture(id, None).unwrap().texture.is_some());
     assert!(matches!(global.surface_present(id), Ok(wgt::SurfaceStatus::Good)));
     assert_eq!(f.probe.presents.load(Ordering::Acquire), 2);
+}
+
+#[test]
+fn concurrent_waits_sample_completion_with_the_lifetime_tracker() {
+    use core::sync::atomic::AtomicUsize;
+    use std::sync::mpsc;
+    let mut failures = Vec::new();
+    for implicit in [false, true] {
+        let f = PresentationFixture::new();
+        f.probe.hold_submissions.store(true, Ordering::Release);
+        let target = f.queue.submit(&[]).unwrap();
+        let callbacks = Arc::new([AtomicUsize::new(0), AtomicUsize::new(0)]);
+        let first = callbacks.clone();
+        f.queue.on_submitted_work_done(Box::new(move || { first[0].fetch_add(1, Ordering::AcqRel); }));
+        let (sampled_tx, sampled_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let device = f.device.clone();
+        let probe = f.probe.clone();
+        let observer = std::thread::spawn(move || {
+            *probe.fence_sample.lock().unwrap() = Some(polling::FenceSample {
+                caller: std::thread::current().id(), sampled: sampled_tx, resume: resume_rx,
+            });
+            device.poll(wgt::PollType::Wait {
+                submission_index: if implicit { None } else { Some(target) }, timeout: Some(Duration::from_millis(10)),
+            })
+        });
+        let sampled = sampled_rx.recv_timeout(Duration::from_secs(5));
+        if !matches!(sampled, Ok(value) if value < target) {
+            let _ = resume_tx.send(());
+            let _ = observer.join();
+            panic!("poll did not sample the held submission: {sampled:?}");
+        }
+        let device = f.device.clone();
+        let queue = f.queue.clone();
+        let probe = f.probe.clone();
+        let second = callbacks.clone();
+        let (completed_tx, completed_rx) = mpsc::channel();
+        let completer = std::thread::spawn(move || {
+            probe.hold_submissions.store(false, Ordering::Release);
+            let released = queue.submit_for_present(&[]).unwrap();
+            queue.on_submitted_work_done(Box::new(move || { second[1].fetch_add(1, Ordering::AcqRel); }));
+            let result = device.poll(wgt::PollType::Wait {
+                submission_index: Some(released), timeout: Some(Duration::from_millis(10)),
+            });
+            let _ = completed_tx.send(result);
+        });
+        let completed = completed_rx.recv_timeout(Duration::from_secs(5));
+        let _ = resume_tx.send(());
+        let observed = observer.join();
+        let joined = completer.join();
+        assert!(joined.is_ok(), "completion owner panicked");
+        assert!(matches!(completed, Ok(Ok(wgt::PollStatus::QueueEmpty))), "completion owner did not finish: {completed:?}");
+        if !matches!(observed, Ok(Err(crate::device::WaitIdleError::Timeout))) {
+            failures.push(alloc::format!("implicit={implicit}: stale completion result {observed:?}"));
+        }
+        assert_eq!(callbacks[0].load(Ordering::Acquire), 1);
+        assert_eq!(callbacks[1].load(Ordering::Acquire), 1);
+        f.assert_retained();
+    }
+    assert!(failures.is_empty(), "{}", failures.join("; "));
 }

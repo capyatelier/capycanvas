@@ -13,7 +13,7 @@ use wgt::{
     AccelerationStructureFlags,
 };
 
-use super::{life::LifetimeTracker, Device};
+use super::{life::LifetimeTracker, Device, UserClosures};
 #[cfg(feature = "trace")]
 use crate::device::trace::{Action, IntoTrace};
 use crate::{
@@ -31,7 +31,7 @@ use crate::{
     id::{self, BlasId, QueueId},
     init_tracker::{has_copy_partial_init_tracker_coverage, TextureInitRange},
     lock::{rank, Mutex, MutexGuard, RwLock, RwLockWriteGuard},
-    ray_tracing::{BlasCompactReadyPendingClosure, CompactBlasError},
+    ray_tracing::CompactBlasError,
     resource::{
         Blas, BlasCompactState, Buffer, BufferAccessError, BufferMapState, DestroyedBuffer,
         DestroyedQuerySet, DestroyedResourceError, DestroyedTexture, Fallible,
@@ -239,28 +239,28 @@ impl Queue {
     /// [`Device::command_indices`]
     pub(crate) fn maintain(
         &self,
-        submission_index: u64,
         snatch_guard: &SnatchGuard,
-    ) -> (
-        SmallVec<[SubmittedWorkDoneClosure; 1]>,
-        Vec<super::BufferMapPendingClosure>,
-        Vec<BlasCompactReadyPendingClosure>,
-        bool,
-    ) {
+    ) -> Result<(UserClosures, bool, hal::FenceValue), hal::DeviceError> {
         let mut life_tracker = self.lock_life();
-        let submission_closures = life_tracker.triage_submissions(submission_index);
+        let submission_index = unsafe { self.device.raw().get_fence_value(self.device.fence.as_ref()) }?;
+        let (closures, empty) = Self::maintain_completed(&mut life_tracker, submission_index, snatch_guard);
+        Ok((closures, empty, submission_index))
+    }
 
-        let mapping_closures = life_tracker.handle_mapping(snatch_guard);
-        let blas_closures = life_tracker.handle_compact_read_back();
-
-        let queue_empty = life_tracker.queue_empty();
-
-        (
-            submission_closures,
-            mapping_closures,
-            blas_closures,
-            queue_empty,
-        )
+    fn maintain_completed(
+        life_tracker: &mut LifetimeTracker,
+        submission_index: hal::FenceValue,
+        snatch_guard: &SnatchGuard,
+    ) -> (UserClosures, bool) {
+        let submissions = life_tracker.triage_submissions(submission_index);
+        let mappings = life_tracker.handle_mapping(snatch_guard);
+        let blas_compact_ready = life_tracker.handle_compact_read_back();
+        (UserClosures {
+            submissions,
+            mappings,
+            blas_compact_ready,
+            device_lost_invocations: SmallVec::new(),
+        }, life_tracker.queue_empty())
     }
 }
 
@@ -296,18 +296,12 @@ impl Drop for Queue {
             .load(Ordering::Acquire);
 
         let snatch_guard = self.device.snatchable_lock.read();
-        let (submission_closures, mapping_closures, blas_compact_ready_closures, queue_empty) =
-            self.maintain(last_successful_submission_index, &snatch_guard);
+        let (closures, queue_empty) = Self::maintain_completed(
+            &mut self.lock_life(), last_successful_submission_index, &snatch_guard,
+        );
         drop(snatch_guard);
 
         assert!(queue_empty);
-
-        let closures = crate::device::UserClosures {
-            mappings: mapping_closures,
-            blas_compact_ready: blas_compact_ready_closures,
-            submissions: submission_closures,
-            device_lost_invocations: SmallVec::new(),
-        };
 
         closures.fire();
     }
