@@ -229,7 +229,7 @@ fn native_half_float_multiply_brush_saturates_finite_output() {
     let id=target(&document);
     let (mut input,mut live)=engine(document);
     live.append_raster_operation(id,layer_core::RasterOperation {placement:layer_core::Affine::IDENTITY,coverage:reveal_all([256;2],[0,0]),
-        kind:layer_core::RasterOperationKind::Fill { underfill: None, texture: Default::default(),color:[40000.,40000.,40000.,1.],alpha_locked:false}}).unwrap();
+        kind:layer_core::RasterOperationKind::Fill { edges: None, underfill: None, texture: Default::default(),color:[40000.,40000.,40000.,1.],alpha_locked:false}}).unwrap();
     flush(&mut live);
     let mut brush=layer_core::BrushSnapshot {color_rgba_linear:[2.,2.,2.,1.],diameter:64.,hardness:1.,opacity:1.,flow:1.,mappings:Arc::from([]),..Default::default()};
     brush.rendering.blend_mode=layer_core::BrushBlendMode::Multiply;
@@ -372,7 +372,7 @@ fn native_extended_fill_gradient_and_figure_pixels_survive_history_and_save() {
             };
             let start = Point { x: 64., y: 32. };
             let end = Point { x: 320., y: 96. };
-            let mut kinds = vec![RasterOperationKind::Fill { underfill: None, texture: Default::default(), color: colors[0], alpha_locked: false }];
+            let mut kinds = vec![RasterOperationKind::Fill { edges: None, underfill: None, texture: Default::default(), color: colors[0], alpha_locked: false }];
             for (shape, reverse) in layer_core::GradientShape::ALL.into_iter().flat_map(|shape| [false, true].map(move |reverse| (shape, reverse))) {
                 for transparent in [false, true] {
                     let mut colors = colors;
@@ -1366,7 +1366,7 @@ fn layer_color_modes_convert_originals_constrain_edits_and_survive_history_and_r
             assert_eq!(reopened.backend_mut().readback_srgb_rgba8().unwrap(), live.backend_mut().readback_srgb_rgba8().unwrap());
             let id = target(reopened.document());
             reopened.append_raster_operation(id, layer_core::RasterOperation { placement: layer_core::Affine::IDENTITY,
-                coverage: reveal_all([256; 2], [0, 0]), kind: layer_core::RasterOperationKind::Fill { underfill: None, texture: Default::default(), color: [0.1, 0.8, 0.2, 0.8], alpha_locked: false } }).unwrap();
+                coverage: reveal_all([256; 2], [0, 0]), kind: layer_core::RasterOperationKind::Fill { edges: None, underfill: None, texture: Default::default(), color: [0.1, 0.8, 0.2, 0.8], alpha_locked: false } }).unwrap();
             flush(&mut reopened);
             let filled = reopened.backend_mut().readback_srgb_rgba8().unwrap();
             assert!(filled.as_chunks::<4>().0.iter().all(|p| (p[..3] == [0; 3] || p[..3] == [255; 3]) && p[3] == 255));
@@ -1510,7 +1510,7 @@ fn native_fill_texture_matches_contact_and_flat_pixels_through_history() {
                     gradient: layer_core::GradientDefinition::new([0., 1.].map(|position| layer_core::GradientStop { position,
                         color: layer_core::color::RgbColor::from_linear(RgbSpace::Srgb, color).unwrap() }).to_vec()),
                     shape: layer_core::GradientShape::Linear, reverse: false, opacity: 1., alpha_locked: false }
-                } else { RasterOperationKind::Fill { underfill: None, texture, color, alpha_locked: false } };
+                } else { RasterOperationKind::Fill { edges: None, underfill: None, texture, color, alpha_locked: false } };
                 let mut coverage = reveal_all(extent, [0; 2]);
                 coverage.source.default_coverage = 0.4;
                 live.append_raster_operation(id, RasterOperation { placement: Affine::IDENTITY, coverage, kind }).unwrap();
@@ -1574,7 +1574,7 @@ fn native_fill_texture_matches_contact_and_flat_pixels_through_history() {
         .map(|[x, y]| Point { x, y }).to_vec()).unwrap();
     live.append_raster_operation(id, RasterOperation { placement: Affine::IDENTITY,
         coverage: reveal_all(extent, [0; 2]), kind: RasterOperationKind::Fill {
-            texture: Default::default(), color: [1., 0., 0., 0.5], alpha_locked: false, underfill: Some(band) } }).unwrap();
+            texture: Default::default(), color: [1., 0., 0., 0.5], alpha_locked: false, edges: None, underfill: Some(band) } }).unwrap();
     flush(&mut live);
     let pixels = backing(&paint(live.document()).raster);
     let composite = live.backend_mut().readback_srgb_rgba8().unwrap();

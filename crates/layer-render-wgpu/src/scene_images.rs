@@ -209,7 +209,7 @@ impl Scene {
                 sources: [r.empty_view.clone(), r.empty_view.clone(), r.empty_view.clone(), r.empty_paper_view.clone()],
                 data: fill,
                 over: false,
-                clip: Some(region),source_target:None,
+                clip: Some(region),source_target:None,edges:None,
             };
             for job in &mut self.jobs[start + 1..] {
                 let Job::Draw {

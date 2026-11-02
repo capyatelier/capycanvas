@@ -287,6 +287,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Enclose and Fill: loop drag and navigation during completion | 60 | Motion unmeasured; completion latency does not qualify moving-frame cadence | [Reference Fill completion](#reference-fill-completion) |
 | G-Pen and pan while Fill prepares eight references | 60 | **M4a.1 partial AB:** G-Pen 32.50 → 32.40 completed updates/s, a shared 60 Hz miss; pan 60.02 on both. Full ABBA pending | [Reference Fill completion](#reference-fill-completion) |
 | Reference Fill completion, 12 MP | Cold and warm response | Prepared stroke 5.5 → 3.6–3.8 s. **First-open cold regression:** 5.6–5.8 → 7.6–7.8 s | [Reference Fill completion](#reference-fill-completion) |
+| Reference Fill opaque-edge warm completion, 12 MP | Within 5% of M5 | **Not met:** 3.695–3.883 → 4.112–4.278 s, **+10.7%** at bracket midpoints | [Reference Fill completion](#reference-fill-completion) |
 | Fill reveal while holding the pen, 12 MP | 60 | **Not met.** AB8 → AB9: moving viewport callbacks 46.2 → 57.3/s; largest start gap 38.5 → 37.4 ms. Scanout unobservable; no physical 60 Hz qualification | 2026-11-01; `artifacts/fill-tools/m5-reveal/damage-ab-results.json`; full matrix deferred |
 | Selection Brush or Quick Mask, 1024 px | 60 | | |
 | Grow, Shrink or Feather drag, full canvas | 60, soft | | |
@@ -342,6 +343,15 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Interface language change | 60 | Current lifecycle binary unmeasured. Earlier German checkpoint: cold publication 169.2–195.5 ms; warm 144.4–194.4 ms; preparation-only maximum 4.095 ms | Matched Web language checkpoint below; no tier qualification |
 
 ## Reference Fill completion
+
+M4b's matched native opaque-edge check on TCL compares M5 `c668c28ba` with
+the packed-support build `d3fbd4a6…`. Warm completion is
+3.695–3.883 → 4.112–4.278 s (**+10.7%** at bracket midpoints); first contact
+is 17.637–17.818 → 20.229–20.392 s. These static response measurements do
+not qualify motion. The regression is retained for the final performance pass:
+capture band pages in one batch per source instead of flushing and rendering
+each page's halo separately. Evidence:
+`artifacts/fill-tools/m4b-native-candidate/candidate4-results.json`.
 
 M4a uses the TCL TAB 11 Gen 2 at 4248 × 2832. The final native eight-reference
 ABBA covers three fresh eight-second G-Pen and pan trials per leg, 24 motions

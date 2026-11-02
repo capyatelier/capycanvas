@@ -367,6 +367,19 @@ pub struct FillTexture {
     pub paper: Option<crate::paper::PaperBinding>,
 }
 #[derive(Clone, Debug, PartialEq)]
+pub struct FillLine {
+    pub snapshot: Arc<SceneSnapshot>,
+    pub scope: SceneScope,
+    pub fill_above: bool,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct FillEdges {
+    pub snapshot: Arc<SceneSnapshot>,
+    pub position: Point,
+    pub tolerance: f32,
+    pub lines: Vec<FillLine>,
+}
+#[derive(Clone, Debug, PartialEq)]
 pub enum RasterOperationKind {
     ColorMode(crate::color::LayerColorMode),
     ApplyMask,
@@ -383,6 +396,7 @@ pub enum RasterOperationKind {
         texture: FillTexture,
         color: [f32; 4],
         alpha_locked: bool,
+        edges: Option<Box<FillEdges>>,
         underfill: Option<Selection>,
     },
     Gradient {
@@ -1140,7 +1154,7 @@ mod organization_tests {
     fn paint_operations_accept_extended_rgb_and_reject_invalid_coverage() {
         let operations = |color| {
             [
-                RasterOperationKind::Fill { underfill: None, texture: Default::default(), color, alpha_locked: false },
+                RasterOperationKind::Fill { edges: None, underfill: None, texture: Default::default(), color, alpha_locked: false },
                 RasterOperationKind::Gradient { texture: Default::default(),
                     start: Point { x: 10., y: 20. },
                     end: Point { x: 80., y: 60. },

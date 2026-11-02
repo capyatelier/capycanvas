@@ -51,7 +51,7 @@ fn fill_reveal_presents_before_after_and_circles_without_raster_work() {
     let mut coverage=reveal_all(extent,[0;2]);coverage.source.default_coverage=0.;
     coverage.selection=Some(Selection::polygon(vec![Point{x:8.,y:8.},Point{x:56.,y:8.},Point{x:56.,y:56.},Point{x:8.,y:56.}]).unwrap());
     let operation=RasterOperation {placement:Affine::IDENTITY,coverage,
-        kind:RasterOperationKind::Fill {color:[1.,0.,0.,1.],texture:Default::default(),alpha_locked:false,underfill:None}};
+        kind:RasterOperationKind::Fill {color:[1.,0.,0.,1.],texture:Default::default(),alpha_locked:false,edges: None, underfill:None}};
     let reveal=FillReveal {transaction:7,center:[32.5,32.5],radius:-1.};
     engine.set_fill_reveal(Some(reveal));engine.render_frame().unwrap();
     assert_eq!(capture(&mut presenter,&engine),before);

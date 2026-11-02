@@ -190,7 +190,7 @@ impl FilterPreviews {
                 sources: [source.clone(), r.empty_view.clone(), r.empty_view.clone(), r.empty_paper_view.clone()],
                 data,
                 over: false,
-                clip: None,source_target:None,
+                clip: None,source_target:None,edges:None,
             });
             encoded.1.clone()
         } else {
@@ -230,7 +230,7 @@ impl FilterPreviews {
                 data,
                 over: false,
                 clip: None,
-                source_target:None,
+                source_target:None,edges:None,
             });
         }
         self.scene.encode_jobs(r, &mut encoder)?;

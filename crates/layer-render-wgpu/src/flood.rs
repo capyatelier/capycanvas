@@ -6,7 +6,7 @@ use wgpu::util::DeviceExt;
 
 #[path = "flood_lines.rs"]
 mod lines;
-pub(super) use lines::Input;
+pub(super) use lines::{Input,UNDERFILL_HALF_PIXELS};
 const WINDOW: u32 = 2048;
 const PARAMETER_BYTES: u64 = 96;
 
@@ -239,7 +239,8 @@ impl Flood {
             let params = [
                 w,h,seed[0],seed[1],
                 tolerance.to_bits(),if band {(output_words+16) as u32}else{0},
-                if mode==4 {output_words as u32}else{(attempts as f32).to_bits()},f32::from(refinement.smooth_edges).to_bits(),
+                if mode==4 {output_words as u32}else{(attempts as f32).to_bits()},
+                (f32::from(refinement.smooth_edges)*(1.+f32::from(fill.is_some()))).to_bits(),
                 mode,u32::from(!contiguous),u32::from(enclosed),attempt,
                 window[0],window[1],window[2],window[3],
                 *index,labels.grid[0],labels.grid[1],labels.side,

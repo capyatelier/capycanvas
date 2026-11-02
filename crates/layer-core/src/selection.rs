@@ -289,18 +289,25 @@ impl SelectionPixels {
     /// Exact `[x0, y0, x1, y1]` bounds of the nonzero coverage, scanned
     /// within the stored bounds, which may be conservative. Empty when none.
     pub fn coverage_bounds(&self) -> [u32; 4] {
+        self.coverage_bounds_in(self.bounds)
+    }
+    pub fn coverage_bounds_in(&self, bounds:[u32;4]) -> [u32;4] {
         let count = self.pixels_per_word();
         let bits = 32 / count;
         let stride = self.extent[0].div_ceil(count) as usize;
-        let [x0, y0, x1, y1] = self.bounds;
+        let [x0,y0]=std::array::from_fn(|axis|bounds[axis].max(self.bounds[axis]));
+        let [x1,y1]=std::array::from_fn(|axis|bounds[axis+2].min(self.bounds[axis+2]));
+        if x0>=x1 || y0>=y1 {return [0;4];}
         let mut result = [u32::MAX, u32::MAX, 0, 0];
         for y in y0..y1 {
             let row = &self.words[y as usize * stride..(y as usize + 1) * stride];
             for (index, &word) in row.iter().enumerate().take(x1.div_ceil(count) as usize).skip((x0 / count) as usize) {
+                let x=index as u32*count;
+                let start=x0.max(x)-x;let end=x1.min(x+count)-x;
+                let word=word&(u32::MAX<<(start*bits))&(u32::MAX>>((count-end)*bits));
                 if word == 0 {
                     continue;
                 }
-                let x = index as u32 * count;
                 result[0] = result[0].min(x + word.trailing_zeros() / bits);
                 result[2] = result[2].max(x + count - word.leading_zeros() / bits);
                 result[1] = result[1].min(y);
@@ -576,6 +583,35 @@ mod selection_tests {
             Err(DocumentError::InvalidLayerOperation(Selection::RESAMPLE_PIXELS))
         );
     }
+    #[test]
+    fn packed_coverage_bounds_clip_partial_words_and_empty_windows() {
+        for byte_coverage in [false,true] {
+            let count=if byte_coverage {4}else{8};let bits=32/count;let extent=[count*3,4];
+            let mut words=vec![0;12];
+            for (x,y,value) in [(0,0,1),(0,1,2),(2,1,3),(count+1,2,1),(2*count-1,2,2),(3*count-1,3,4)] {
+                words[(y*3+x/count) as usize]|=value<<((x%count)*bits);
+            }
+            let pixels=if byte_coverage {SelectionPixels::bytes(extent,[0,0,extent[0],4],words)}
+                else {SelectionPixels::new(extent,[0,0,extent[0],4],words)}.unwrap();
+            assert_eq!(pixels.coverage_bounds(),[0,0,extent[0],4]);
+            for (window,expected) in [
+                ([1,1,2*count-1,3],[2,1,count+2,3]),
+                ([1,1,count,2],[2,1,3,2]),
+                ([count,2,2*count-1,3],[count+1,2,count+2,3]),
+                ([count,1,2*count,3],[count+1,2,2*count,3]),
+                ([count,1,count+1,3],[0;4]),
+                ([2,1,2,3],[0;4]),
+                ([0,2,extent[0],2],[0;4]),
+                ([extent[0]+1,0,extent[0]+2,4],[0;4]),
+                ([extent[0],3,0,1],[0;4]),
+            ] {assert_eq!(pixels.coverage_bounds_in(window),expected,"byte coverage {byte_coverage}, window {window:?}");}
+            let empty=if byte_coverage {SelectionPixels::bytes(extent,[0,0,extent[0],4],vec![0;12])}
+                else {SelectionPixels::new(extent,[0,0,extent[0],4],vec![0;12])}.unwrap();
+            assert_eq!(empty.coverage_bounds_in([1,1,2*count-1,3]),[0;4]);
+            assert_eq!(empty.coverage_bounds(),[0;4]);
+        }
+    }
+
     #[test]
     fn packed_coverage_validation_checks_all_nibbles_and_dimensions() {
         for value in 0..16 {

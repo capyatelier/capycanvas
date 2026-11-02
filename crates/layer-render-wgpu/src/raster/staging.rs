@@ -271,8 +271,18 @@ impl WgpuRasterizer {
                     coordinates.extend(watercolor_update_damages(packet.dab_batches,index,packet.scene.target_extent(batch.target)).into_iter()
                         .flat_map(page_coordinates).flat_map(|coordinate|source_access::neighborhood(coordinate,[[0,0],[-1,0],[1,0],[0,-1],[0,1]].map(Some))));
                 }
-                if matches!(batch.kind,DabBatchKind::RasterOperation(_)) {coordinates.extend(page_coordinates(batch_pixel_rect(batch,packet.scene.target_extent(batch.target))));}
+                if let DabBatchKind::RasterOperation(index)=batch.kind {
+                    let extent=packet.scene.target_extent(batch.target);let bounds=batch_pixel_rect(batch,extent);
+                    let bounds=packet.scene.operations(batch.target).and_then(|operations|operations.get(index as usize))
+                        .map_or(bounds,|operation|scene::operation_read_bounds(operation,bounds,extent));
+                    coordinates.extend(page_coordinates(bounds));
+                }
             }
+        }
+        if let Some(fill)=&self.fill_preview {
+            let extent=packet.scene.target_extent(fill.target);
+            let bounds=scene::operation_read_bounds(&fill.operation,pixel_rect(fill.operation.bounds(extent),extent),extent);
+            required.entry(fill.target).or_default().extend(page_coordinates(bounds));
         }
         liquify::Liquify::required_sources(self,packet,&plans,&mut required);
         self.required_retouch_sources(packet,&plans,&mut required);

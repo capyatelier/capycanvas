@@ -29,6 +29,56 @@ mod enclose_fill_checks {
         pixels
     }
 
+    fn fill_edges(operation:&layer_core::RasterOperationKind)->&layer_core::FillEdges {
+        let layer_core::RasterOperationKind::Fill {edges:Some(edges),..}=operation else {panic!("Fill edge metadata")};edges
+    }
+
+    #[test]
+    fn fill_press_classifies_reference_stacking_and_visible_group_leaves() {
+        for platform in Platform::ALL {
+            let mut s=session(platform);let below=s.engine.document().working.occurrence.unwrap();
+            layer(&mut s,LayerAction::New {group:false,clipped:false});let leaf=s.engine.document().working.occurrence.unwrap();
+            layer(&mut s,LayerAction::New {group:true,clipped:false});let group=s.engine.document().working.occurrence.unwrap();
+            layer(&mut s,LayerAction::Drop {id:occurrence_token(leaf),target:occurrence_token(group),fraction:0.5,surface:LayerDropSurface::Row});
+            layer(&mut s,LayerAction::New {group:false,clipped:false});let target=s.engine.document().working.occurrence.unwrap();
+            layer(&mut s,LayerAction::Drop {id:occurrence_token(target),target:occurrence_token(group),fraction:0.,surface:LayerDropSurface::Row});
+            layer(&mut s,LayerAction::New {group:false,clipped:false});let hidden=s.engine.document().working.occurrence.unwrap();
+            layer(&mut s,LayerAction::Drop {id:occurrence_token(hidden),target:occurrence_token(group),fraction:0.5,surface:LayerDropSurface::Row});
+            layer(&mut s,LayerAction::Visibility {id:occurrence_token(hidden),value:false});
+            layer(&mut s,LayerAction::Select {id:occurrence_token(target),mask:false});
+            layer(&mut s,LayerAction::New {group:false,clipped:false});let above=s.engine.document().working.occurrence.unwrap();
+            s.set_references([below,group,above].into()).unwrap();
+            s.dispatch(UiAction::SetLayerOpacity {id:Some(occurrence_token(leaf)),opacity:0.5}).unwrap();
+            let scene=s.engine.document().scene();assert_eq!(scene.parent(leaf),Some(group));assert_eq!(scene.parent(hidden),Some(group));
+            let position=|id|scene.order().iter().position(|layer|*layer==id).unwrap();
+            assert!(position(above)<position(target)&&position(target)<position(leaf)&&position(leaf)<position(below));
+            for (working,source,expected,hide_group) in [
+                (target,CommandId::SelectionReference,vec![(above,false),(leaf,true),(below,true)],false),
+                (below,CommandId::SelectionReference,vec![(above,false),(leaf,false)],false),
+                (target,CommandId::SelectionEditing,vec![],false),
+                (target,CommandId::SelectionReference,vec![(above,false),(below,true)],true),
+                (target,CommandId::SelectionVisible,vec![(above,false),(leaf,true),(below,true)],false),
+            ] {
+                layer(&mut s,LayerAction::Visibility {id:occurrence_token(group),value:!hide_group});
+                layer(&mut s,LayerAction::Select {id:occurrence_token(working),mask:false});
+                invoke(&mut s,CommandId::Fill);invoke(&mut s,source);invoke(&mut s,CommandId::EdgesLineMiddle);
+                contact(&mut s,PenPhase::Down,[40.,60.]);s.frame(20_000_000,20_000_000).unwrap();
+                let request=s.renderer_mut().region_requests.last().unwrap().clone();reply(&mut s,&request);s.frame(30_000_000,30_000_000).unwrap();
+                let preview=s.renderer_mut().fill_preview.clone().unwrap();let edges=fill_edges(&preview.operation.kind);
+                assert_eq!(edges.position,Point {x:40.,y:60.});assert_eq!(edges.tolerance,request.tolerance);
+                let actual=edges.lines.iter().map(|line| {
+                    let SceneScope::Members(members)=&line.scope else {panic!("reference leaves")};assert_eq!(members.len(),1);
+                    if members[0]==leaf {assert_eq!(line.snapshot.view().occurrence(leaf).unwrap().opacity,if source==CommandId::SelectionReference {1.}else{0.5});}
+                    (members[0],line.fill_above)
+                }).collect::<Vec<_>>();
+                assert_eq!(actual.len(),expected.len(),"{platform:?} {source:?} hidden group {hide_group}: {actual:?}");
+                assert_eq!(actual.into_iter().collect::<std::collections::BTreeSet<_>>(),expected.into_iter().collect());
+                assert_eq!(s.engine.document().scene().occurrence(leaf).unwrap().opacity,0.5);
+                contact(&mut s,PenPhase::Cancel,[40.,60.]);s.frame(40_000_000,40_000_000).unwrap();
+            }
+        }
+    }
+
     #[test]
     fn fill_reveal_waits_for_preparation_and_starts_with_a_fresh_frame() {
         for platform in Platform::ALL {
@@ -142,6 +192,8 @@ mod enclose_fill_checks {
             assert_ne!(older.request_id,newest.request_id);assert!(newest.tolerance>older.tolerance);
             reply(&mut s,&newest);s.frame(550_000_000,550_000_000).unwrap();s.frame(560_000_000,560_000_000).unwrap();
             assert!(s.engine.can_undo());assert_eq!(s.region_tools.tolerance,newest.tolerance);
+            let edges=fill_edges(&s.engine.backend().pending_operations.last().unwrap().1.kind);
+            assert_eq!(edges.tolerance,newest.tolerance);assert_eq!(edges.position,Point {x:newest.position[0] as f32,y:newest.position[1] as f32});
             invoke(&mut s,CommandId::Undo);assert!(!s.engine.can_undo());
         }
     }
@@ -165,6 +217,8 @@ mod enclose_fill_checks {
             s.renderer_mut().region_reply.as_mut().unwrap().gaps=Some(layer_render::RegionGapMasks {next:None,active:0,line_bounded:true,seals:Default::default(),
                 regions:std::array::from_fn(|_|layer_render::RegionCoverage {pixels:pixels.clone(),underfill:None})});
             s.frame(70_000_000,70_000_000).unwrap();s.frame(80_000_000,80_000_000).unwrap();
+            let edges=fill_edges(&s.engine.backend().pending_operations.last().unwrap().1.kind);
+            assert_eq!(edges.position,Point {x:121.,y:60.});assert_eq!(edges.tolerance,last.tolerance);
             assert!(s.engine.can_undo());invoke(&mut s,CommandId::Undo);assert!(!s.engine.can_undo());
         }
     }

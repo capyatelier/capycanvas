@@ -5,6 +5,8 @@ use layer_render::{RegionRefinement, RegionRequest, RegionResult, RegionSource, 
 use std::sync::Arc;
 #[path = "region_cache_tests.rs"]
 mod region_cache;
+#[path = "enclose_fill_edge_tests.rs"]
+mod edges;
 
 fn polygon(points: &[[u32; 2]]) -> Selection {
     Selection::polygon(points.iter().map(|&[x, y]| Point { x: x as f32, y: y as f32 }).collect()).unwrap()
@@ -69,14 +71,15 @@ fn exact() -> RegionRefinement {
     RegionRefinement { close_gaps: false, edges: RegionEdges::Exact, smooth_edges: false }
 }
 
-fn same_layer_middle_fill(flattened: bool) {
+#[test]
+fn line_middle_same_layer_alpha_border_keeps_ink_and_fills_behind_the_fringe() {
     let extent = [128; 2];
     let source = |x: u32, y: u32| {
         let distance = x.abs_diff(64).max(y.abs_diff(64));
         let alpha = match distance { 34 | 42 => 0.25, 35 | 41 => 0.75, 36..=40 => 1., _ => 0. };
         if [x, y] == [60, 60] {
-            if flattened { [1., 1., 1., 31. / 32.] } else { [0.25, 0.5, 0.25, 1. / 32.] }
-        } else if flattened { [1. - alpha, 1. - alpha, 1. - alpha, 1.] }
+            [0.25, 0.5, 0.25, 1. / 32.]
+        }
         else { [0., 0.125, 0.25, alpha] }
     };
     let mut document = paint_document(extent, "Same-layer line middle");
@@ -93,10 +96,12 @@ fn same_layer_middle_fill(flattened: bool) {
     query.refinement.edges = RegionEdges::LineMiddle;
     let result = receive_request(&mut r, query);
     let band = result.underfill.as_ref().unwrap();
-    for [x, y] in [[64, 64], [60, 60], [97, 64]] {
+    for [x, y] in [[64, 64], [60, 60]] {
         assert_eq!(value(&interior.pixels, x, y), 255, "interior {x},{y}");
         assert_eq!(value(band, x, y), 0, "interior band {x},{y}");
     }
+    assert_eq!(value(&interior.pixels,97,64),255);
+    assert_eq!(value(band,97,64),255);
     assert_eq!(value(&interior.pixels, 98, 64), 0);
     assert_eq!(value(&result.pixels, 98, 64), 255);
     assert_eq!(value(band, 98, 64), 255);
@@ -106,7 +111,7 @@ fn same_layer_middle_fill(flattened: bool) {
     let color = [1., 0., 0., 0.75];
     let operation = RasterOperation { placement: result.placement, coverage,
         kind: RasterOperationKind::Fill { texture: Default::default(), color, alpha_locked: false,
-            underfill: Some(Selection::pixels(band.clone())) } };
+            edges: None, underfill: Some(Selection::pixels(band.clone())) } };
     let command = DabBatch { kind: DabBatchKind::RasterOperation(0), dab_count: 0,
         damage: operation.bounds(extent), ..batch(target(&document)) };
     paint_mut(&mut document).operations = Arc::new(vec![operation]);
@@ -119,7 +124,7 @@ fn same_layer_middle_fill(flattened: bool) {
         let amount = value(&result.pixels, x, y) as f32 / 255.;
         let behind = value(band, x, y) != 0;
         let interior_value = value(&interior.pixels, x, y);
-        assert_eq!(behind, amount != 0. && interior_value == 0, "band {x},{y}");
+        assert!(!behind || amount>0., "band {x},{y}");
         if interior_value != 0 { assert_eq!(value(&result.pixels, x, y), interior_value, "interior coverage {x},{y}"); }
         if amount == 0. || (old[3] == 1. && value(&interior.pixels, x, y) == 0) {
             assert_eq!(after[index..index + 4], before[index..index + 4], "preserved {x},{y}");
@@ -136,16 +141,6 @@ fn same_layer_middle_fill(flattened: bool) {
         assert!(after[index..index + 4].iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1),
             "{x},{y} behind={behind}: {:?} != {expected:?}", &after[index..index + 4]);
     }}
-}
-
-#[test]
-fn line_middle_same_layer_alpha_border_keeps_ink_and_fills_behind_the_fringe() {
-    same_layer_middle_fill(false);
-}
-
-#[test]
-fn line_middle_same_layer_flattened_line_keeps_opaque_mixes_and_fills_the_interior() {
-    same_layer_middle_fill(true);
 }
 
 fn rectangles(extent: [u32; 2], boxes: &[[u32; 4]]) -> Vec<u8> {

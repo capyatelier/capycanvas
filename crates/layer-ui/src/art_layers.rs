@@ -1926,7 +1926,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let brush = self.engine.brush();
         let mut color = brush.color_rgba_linear;
         color[3] *= brush.opacity;
-        layer_core::RasterOperationKind::Fill { underfill: None,
+        layer_core::RasterOperationKind::Fill { edges: None, underfill: None,
             texture: self.fill_texture(),
             color,
             alpha_locked: self
@@ -1966,6 +1966,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let to_local = layer_core::offsets::point(self.engine.document().target_offset(id).map(|v| -v));
         if let layer_core::RasterOperationKind::Fill { underfill: Some(selection), .. } = &mut kind {
             *selection = selection.translated(to_local);
+        }
+        if let layer_core::RasterOperationKind::Fill {edges:Some(edges),..}=&mut kind {
+            edges.position=Point{x:edges.position.x+to_local.x,y:edges.position.y+to_local.y};
         }
         let placement = if matches!(kind,layer_core::RasterOperationKind::Gradient {..}) { layer_core::Affine::translation(to_local) } else { layer_core::Affine::IDENTITY };
         let domain = self.engine.document().target_extent(id);

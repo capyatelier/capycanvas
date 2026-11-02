@@ -247,6 +247,20 @@ var<workgroup> lows: array<vec4<u32>,64>;
 var<workgroup> highs: array<vec4<u32>,64>;
 var<workgroup> counts: array<u32,64>;
 
+fn original_column(x:u32,y:u32)->u32 {
+    let stride=mask_stride();
+    return atomicLoad(&parents[y*stride+x])
+        & atomicLoad(&parents[select(y-1u,y,y==0u)*stride+x])
+        & atomicLoad(&parents[min(y+1u,params.extent_seed.y-1u)*stride+x]);
+}
+fn original_interior(x:u32,y:u32)->u32 {
+    let word=x/32u;let rows=original_column(word,y);
+    var left=0xffffffffu;var right=0xffffffffu;
+    if word>0u {left=original_column(word-1u,y);}
+    if word+1u<mask_stride() {right=original_column(word+1u,y);}
+    return rows&((rows<<1u)|(left>>31u))&((rows>>1u)|(right<<31u));
+}
+
 @compute @workgroup_size(64)
 fn pack(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocation_index) lane: u32,
         @builtin(num_workgroups) groups: vec3<u32>) {
@@ -264,14 +278,27 @@ fn pack(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocation_
     var count = 0u;
     if y < extent.y {
         var original=0u;
-        if band_offset!=0u {original=atomicLoad(&parents[y*mask_stride()+x/32u]);}
+        if band_offset!=0u {original=original_interior(x,y);}
+        var support_bits=0u;
+        if band_offset!=0u && params.options.w>1.5 {
+            let column=i32(x/32u);var rows=0u;var left=0u;var right=0u;
+            for(var dy=-2;dy<=2;dy++) {
+                let row=i32(y)+dy;rows|=open_word(vec2(column,row));
+                if x%32u==0u {left|=open_word(vec2(column-1,row));}
+                if x%32u==24u {right|=open_word(vec2(column+1,row));}
+            }
+            support_bits=rows|(rows<<1u)|(rows<<2u)|(rows>>1u)|(rows>>2u)|(left>>30u)|(left>>31u)|(right<<30u)|(right<<31u);
+        }
         for (var i = 0u; i < 8u && x+i < extent.x; i++) {
-            let value = refined_coverage(vec2<i32>(i32(x+i),i32(y)));
+            let p=vec2<i32>(i32(x+i),i32(y));
+            var value = refined_coverage(p);
+            var support=false;
+            if value==0. && (support_bits&(1u<<((x+i)%32u)))!=0u {value=.25;support=true;}
             let samples = u32(round(value * brush_selection_at(vec2<f32>(f32(x+i)+.5, f32(y)+.5))*4.));
             if samples != 0u {
                 packed |= samples << (i*4u);
                 if band_offset!=0u && (original&(1u<<((x+i)%32u)))==0u {
-                    band|=4u<<(i*4u);
+                    band|=select(4u,1u,support)<<(i*4u);
                     band_low=min(band_low,vec2<u32>(x+i,y));band_high=max(band_high,vec2<u32>(x+i+1u,y+1u));
                 }
                 low = min(low, vec2<u32>(x+i,y));

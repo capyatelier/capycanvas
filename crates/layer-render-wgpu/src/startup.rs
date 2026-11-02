@@ -808,7 +808,7 @@ mod tests {
         let target = document.drawing_target().unwrap();
         let operation = layer_core::RasterOperation { placement: layer_core::Affine::IDENTITY,
             coverage: crate::layer_tests::placement::reveal_all([128; 2], [0; 2]),
-            kind: layer_core::RasterOperationKind::Fill { underfill: None, color: [0.2, 0.4, 0.8, 1.], alpha_locked: false,
+            kind: layer_core::RasterOperationKind::Fill { edges: None, underfill: None, color: [0.2, 0.4, 0.8, 1.], alpha_locked: false,
                 texture: layer_core::FillTexture { strength: 1., paper: document.nearest_paper_binding(Some(target)) } } };
         crate::layer_tests::placement::paint_mut(&mut document).operations = Arc::new(vec![operation]);
         let batches = [DabBatch { kind: DabBatchKind::RasterOperation(0), dab_count: 0,
@@ -879,7 +879,7 @@ mod tests {
         let before = document.target_raster(target).unwrap().identity();
         let operation = layer_core::RasterOperation { placement: layer_core::Affine::IDENTITY,
             coverage: crate::layer_tests::placement::reveal_all([64; 2], [0; 2]),
-            kind: layer_core::RasterOperationKind::Fill { underfill: None, color: [0.2, 0.4, 0.8, 1.], alpha_locked: false,
+            kind: layer_core::RasterOperationKind::Fill { edges: None, underfill: None, color: [0.2, 0.4, 0.8, 1.], alpha_locked: false,
                 texture: layer_core::FillTexture { strength: 1., paper: Some(binding) } } };
         let damage = operation.bounds([64; 2]);
         crate::layer_tests::placement::paint_mut(&mut document).operations = Arc::new(vec![operation]);
@@ -1094,7 +1094,7 @@ mod gpu_tests {
             layer_core::FillTexture { strength: 1., paper: None }] {
             let operation = layer_core::RasterOperation { placement: layer_core::Affine::IDENTITY,
                 coverage: crate::layer_tests::placement::reveal_all([128; 2], [0; 2]),
-                kind: layer_core::RasterOperationKind::Fill { underfill: None, color: [0.2, 0.4, 0.8, 1.], alpha_locked: false, texture } };
+                kind: layer_core::RasterOperationKind::Fill { edges: None, underfill: None, color: [0.2, 0.4, 0.8, 1.], alpha_locked: false, texture } };
             let damage = operation.bounds([128; 2]);
             crate::layer_tests::placement::paint_mut(&mut document).operations = Arc::new(vec![operation]);
             document.revision += 1;

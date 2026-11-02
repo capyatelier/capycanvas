@@ -258,7 +258,7 @@ fn fill_preview_becomes_ready_after_deferred_object_composition() {
     r.scene.as_mut().unwrap().object_results.clear();
     let operation=layer_core::RasterOperation {placement:layer_core::Affine::IDENTITY,
         coverage:CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(),extent,[0;2]),
-        kind:layer_core::RasterOperationKind::Fill {color:[1.,0.,0.,1.],texture:Default::default(),alpha_locked:false,underfill:None}};
+        kind:layer_core::RasterOperationKind::Fill {color:[1.,0.,0.,1.],texture:Default::default(),alpha_locked:false,edges: None, underfill:None}};
     r.set_fill_preview(Some(layer_render::FillPreview {transaction:91,revision:3,target,operation}));
     crate::test_support::submit_ready(&mut r,frame).unwrap();
     r.wait_idle().unwrap();

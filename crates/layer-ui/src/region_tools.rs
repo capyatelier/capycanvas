@@ -399,7 +399,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return;
         }
         let purpose = Purpose::Region {
-            operation: fill.then(|| self.fill_operation()),
+            operation: fill.then(|| self.fill_region_operation(&request)),
             color: (fill
                 && !self.state.colors.transparent()
                 && self.state.brush.opacity > 0.)
@@ -408,7 +408,39 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         self.queue_region(request, purpose);
     }
-    fn queue_region(&mut self, mut request: RegionRequest, purpose: Purpose) {
+    fn fill_region_operation(&self,request:&RegionRequest)->layer_core::RasterOperationKind {
+        let mut operation=self.fill_operation();
+        if !matches!(request.refinement.edges,layer_render::RegionEdges::LineMiddle) {return operation;}
+        let doc=self.engine.document();let scene=doc.scene();
+        let Some(target)=doc.drawing_content().and_then(|target|scene.source_owner(target)) else{return operation;};
+        let order=scene.order();let Some(index)=order.iter().position(|id|*id==target) else{return operation;};
+        let mut leaves=std::collections::BTreeSet::new();
+        for source in request.source.sources().iter().take(request.reference_count.unwrap_or(usize::MAX)) {
+            match source {
+                layer_render::RegionSource::Source(_)=>(),
+                layer_render::RegionSource::Scene {scope:SceneScope::Raw(_),..}=>(),
+                layer_render::RegionSource::Scene {scope:SceneScope::Members(members),..}=>leaves.extend(members.iter().copied()),
+                _=>leaves.extend(order.iter().copied().filter(|id|scene.visible(*id) && scene.effect(*id).is_none())),
+            }
+        }
+        let snapshot=doc.snapshot();
+        let lines=leaves.into_iter().filter(|leaf|scene.visible(*leaf) && scene.occurrence(*leaf).is_some_and(|layer|matches!(layer.kind(),layer_core::LayerKind::Paint|layer_core::LayerKind::Object))
+                && order.iter().position(|id|id==leaf).is_some_and(|position|position!=index))
+            .filter_map(|leaf|match if request.reference_count.is_some() {layer_render::RegionSource::reference(snapshot.clone(),leaf)}
+                else{Some(layer_render::RegionSource::Scene {snapshot:snapshot.clone(),scope:SceneScope::Members(vec![leaf].into())})} {
+                Some(layer_render::RegionSource::Scene {snapshot,scope})=>Some(layer_core::FillLine {snapshot,scope,
+                    fill_above:order.iter().position(|id|*id==leaf).unwrap()>index}),_=>None,
+            }).collect();
+        if let layer_core::RasterOperationKind::Fill {edges,..}=&mut operation {*edges=Some(Box::new(layer_core::FillEdges {
+            snapshot,position:Point{x:request.position[0] as f32,y:request.position[1] as f32},tolerance:request.tolerance,lines,
+        }));}
+        operation
+    }
+    fn queue_region(&mut self, mut request: RegionRequest, mut purpose: Purpose) {
+        if let Purpose::Region {operation:Some(layer_core::RasterOperationKind::Fill {edges:Some(edges),..}),..}=&mut purpose {
+            edges.position=Point{x:request.position[0] as f32,y:request.position[1] as f32};
+            edges.tolerance=request.tolerance;
+        }
         let gesture=matches!(&purpose,Purpose::Region {operation:Some(_),..}).then(||self.region_tools.gesture.take()).flatten();
         let reveal=gesture.as_ref().and(self.region_tools.reveal.take());
         self.region_tools.cancel();

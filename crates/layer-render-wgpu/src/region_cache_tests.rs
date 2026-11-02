@@ -18,7 +18,7 @@ fn fill_preview_matches_commit_and_swaps_without_changing_the_document() {
     coverage.source.default_coverage=0.;coverage.selection=Some(rectangle([20,12,40,36]));
     let operation=layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,
         kind:layer_core::RasterOperationKind::Fill {color:[1.,0.,0.,1.],texture:Default::default(),alpha_locked:false,
-            underfill:Some(rectangle([20,12,24,36]))}};
+            edges: None, underfill:Some(rectangle([20,12,24,36]))}};
     engine.set_fill_preview(Some(layer_render::FillPreview {transaction:1,revision:0,target,operation:operation.clone()}));
     flush_engine(&mut engine);
     let shown=engine.backend_mut().readback_srgb_rgba8().unwrap();
@@ -73,7 +73,7 @@ fn fill_tolerance_preview_and_commit_keep_the_latest_three_band_mask() {
         coverage.source.default_coverage=0.;coverage.selection=Some(Selection::pixels(result.pixels));
         let operation=layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,
             kind:layer_core::RasterOperationKind::Fill {color:[1.,0.,0.,1.],texture:Default::default(),alpha_locked:false,
-                underfill:result.underfill.map(Selection::pixels)}};
+                edges: None, underfill:result.underfill.map(Selection::pixels)}};
         engine.set_fill_preview(Some(layer_render::FillPreview {transaction:51,revision:revision as u64,target,operation:operation.clone()}));
         flush_engine(&mut engine);
         shown=engine.backend_mut().readback_srgb_rgba8().unwrap();
@@ -102,7 +102,7 @@ fn fill_amendment_restores_the_original_source_and_keeps_one_undo_entry() {
     let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.document().artwork.coverage.next_handle(),extent,[0;2]);
     coverage.source.default_coverage=0.;coverage.selection=Some(rectangle([8,8,16,24]));
     let mut operation=layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,kind:layer_core::RasterOperationKind::Fill {
-        color:[1.,0.,0.,1.],texture:Default::default(),alpha_locked:false,underfill:None}};
+        color:[1.,0.,0.,1.],texture:Default::default(),alpha_locked:false,edges: None, underfill:None}};
     engine.append_raster_operation(target,operation.clone()).unwrap();flush_engine(&mut engine);
     let checkpoint=engine.checkpoint();let filled=engine.backend_mut().readback_srgb_rgba8().unwrap();
     let filled_source=engine.document().artwork.paint.get(handle).unwrap().clone();
@@ -516,7 +516,7 @@ fn fill_retained_gap_masks_render_the_selected_coverage() {
     let selected=receive_request(engine.backend_mut(),query);let masks=selected.gaps.as_ref().unwrap();assert_eq!(masks.active,1);
     let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.document().artwork.coverage.next_handle(),extent,[0;2]);coverage.source.default_coverage=0.;
     let mut operation=layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,kind:layer_core::RasterOperationKind::Fill {
-        color:[1.,0.,0.,1.],texture:Default::default(),alpha_locked:false,underfill:None}};
+        color:[1.,0.,0.,1.],texture:Default::default(),alpha_locked:false,edges: None, underfill:None}};
     for (revision,slot) in [1,0,4].into_iter().enumerate() {
         operation.coverage.selection=Some(Selection::pixels(masks.regions[slot].pixels.clone()));
         engine.set_fill_preview(Some(layer_render::FillPreview {transaction:77,revision:revision as u64,target,operation:operation.clone()}));flush_engine(&mut engine);

@@ -123,6 +123,11 @@ fn scene_clip(v:Vertex) {
     scene_clip(v);
     let op=u32(settings.options.x);
     if op==0u {return settings.color;}
+    if op==23u {
+        let pixel=textureLoad(front,vec2<i32>(floor(v.position.xy-settings.rect.xy)),0);
+        let seed=textureLoad(front,vec2(0,i32(textureDimensions(front).y)-1),0);
+        return select(pixel,vec4(0.),all(pixel==seed));
+    }
     let raw=scene_read(front,v);
     if op==1u || op==7u || op==13u || op==14u || op==17u || op==19u {return scene_pointwise(raw,v);}
     if op==2u {let m=mix(raw.r,1.-raw.r,settings.options.z);return vec4<f32>(m);}
@@ -165,7 +170,11 @@ fn scene_operation_over(src:vec4<f32>,dst:vec4<f32>)->vec4<f32> {
     let raw=scene_read(front,v);
     let src=scene_operation_paper(vec4<f32>(settings.color.rgb*settings.color.a,settings.color.a)*raw.r,scene_operation_local(v));
     let dst=scene_read(back,v);
-    if settings.options.z>.5 && scene_read(scene_extra,v).r>.5 {return dst+src*select(1.-dst.a,0.,settings.options.w>.5);}
+    if settings.options.z>.5 {
+        let band=scene_read(scene_extra,v).r;
+        if settings.operation_linear.z==1. && band>0. {return fill_edge_value(scene_operation_local(v),dst,src,band<.5);}
+        if band>.5 {return dst+src*select(1.-dst.a,0.,settings.options.w>.5);}
+    }
     return scene_operation_over(src,dst);
 }
 @fragment fn fragment_gradient(v:Vertex)->@location(0) vec4<f32> {

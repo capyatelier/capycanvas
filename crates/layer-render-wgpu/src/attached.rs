@@ -269,7 +269,7 @@ fn attached_renderer_forwards_fill_preview_and_reveal() {
     let preview=layer_render::FillPreview {transaction:1,revision:2,target:crate::layer_tests::placement::target(&document),
         operation:layer_core::RasterOperation {placement:layer_core::Affine::IDENTITY,
             coverage:crate::layer_tests::placement::reveal_all([32;2],[0;2]),kind:layer_core::RasterOperationKind::Fill {
-                color:[1.,0.,0.,1.],texture:Default::default(),alpha_locked:false,underfill:None}}};
+                color:[1.,0.,0.,1.],texture:Default::default(),alpha_locked:false,edges: None, underfill:None}}};
     let reveal=layer_render::FillReveal {transaction:1,center:[16.;2],radius:8.};
     let mut renderer=AttachedRenderer(Some(Box::new(WgpuRasterizer::new_native_headless(Default::default()).unwrap())));
     renderer.set_fill_preview(Some(preview.clone()));renderer.set_fill_reveal(Some(reveal));

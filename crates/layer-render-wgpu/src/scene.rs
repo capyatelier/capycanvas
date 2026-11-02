@@ -1,6 +1,8 @@
 //! Tiled layer composition with explicit cached image boundaries. Pointwise
 //! scratch follows nesting depth. Masks never download or rewrite paint.
 use super::*;
+mod fill_edges;
+pub(crate) use fill_edges::read_bounds as operation_read_bounds;
 use layer_core::{SceneView, SourceTarget, LayerKind, RasterOperationKind};
 use layer_core::authored::{OccurrenceHandle, MaskUse, CoverageSource};
 #[path = "scene_images.rs"]
@@ -63,7 +65,7 @@ fn fragment_pipeline(operation: u32, over: bool) -> Option<usize> {
         21 | 22 => 2,
         12 => 7,
         10 => 8,
-        0 | 1 | 2 | 3 | 5 | 7 | 13 | 14 | 16 | 17 | 19 | 20 => usize::from(over),
+        0 | 1 | 2 | 3 | 5 | 7 | 13 | 14 | 16 | 17 | 19 | 20 | 23 => usize::from(over),
         4 => 6,
         _ => panic!("Unknown scene draw operation {operation}"),
     })
@@ -117,6 +119,7 @@ enum Job {
         over: bool,
         clip: Option<PixelRect>,
         source_target: Option<SourceTarget>,
+        edges: Option<wgpu::BindGroup>,
     },
     Clear(wgpu::TextureView, wgpu::Color),
     Watercolor {
@@ -238,6 +241,8 @@ pub(super) struct Scene {
     image_evaluation_origin: [i64; 2],
     stop_before: Option<OccurrenceHandle>,
     image_damage: Option<scale::Damage>,
+    fill_capture: Option<Box<fill_edges::Capture>>,
+    edge_binding: wgpu::BindGroup,
 }
 
 pub(super) enum PaintOperation<'a> { Stored(usize),Preview(&'a layer_core::RasterOperation) }
@@ -256,6 +261,7 @@ pub(super) struct Pipelines {
     pub pipeline: [Deferred<wgpu::RenderPipeline>; FRAGMENTS.len()],
     pub source: sources::Pipelines,
     pub constant: (wgpu::BindGroupLayout, wgpu::BindGroupLayout, Deferred<wgpu::ComputePipeline>),
+    edges: wgpu::BindGroupLayout,
 }
 
 fn is_compute(job: &Job) -> bool {
@@ -410,7 +416,7 @@ impl Scene {
             let Some(view) = self.source_tile(r, scene, target, coordinate)? else { continue; };
             let mut data = [0.; 32];
             data[..10].copy_from_slice(&[0., 0., 256., 256., 256., 256., 0., 0., 1., 1.]);
-            self.jobs.push(Job::Draw { target: output, sources: [view, r.empty_view.clone(), r.empty_view.clone(), r.empty_paper_view.clone()], data, over: false, clip: None, source_target:None });
+            self.jobs.push(Job::Draw { target: output, sources: [view, r.empty_view.clone(), r.empty_view.clone(), r.empty_paper_view.clone()], data, over: false, clip: None, source_target:None, edges:None });
         }
         Ok(())
     }
@@ -515,7 +521,7 @@ impl Scene {
             image_output: None,
             image_evaluation_origin: [0; 2],
             stop_before: None,
-            image_damage: None,
+            image_damage: None,fill_capture:None,edge_binding:fill_edges::binding(r,&r.empty_view,&r.empty_view,&r.empty_view,&r.unclipped,None),
         }))
     }
     pub(super) fn retire_changed_cells(&mut self,buffers:&[wgpu::Buffer]) {
@@ -997,7 +1003,7 @@ impl Scene {
             sources,
             data,
             over,
-            clip: None, source_target:None,
+            clip: None, source_target:None, edges:None,
         });
     }
     #[allow(clippy::too_many_arguments)] // Explicit composite operands.
@@ -1442,15 +1448,18 @@ impl Scene {
             let view = r.papers.view(&id).ok_or_else(|| GpuRasterError::MissingBrushMask(id.clone()))?.clone();
             Ok::<_, GpuRasterError>((view, tile.grain(binding), strength * r.papers.relief(&id).unwrap()))
         }).transpose()?;
-        let Some(stored) = r.paint_layers.iter().find(|l| l.id == target) else {
+        let edge_settings=match &op.kind {RasterOperationKind::Fill {edges:Some(edges),underfill:Some(_),..}=>Some(edges.as_ref()),_=>None};
+        if let Some(edges)=edge_settings {self.prepare_fill_edges(r,packet,target,edges,op,encoder)?;}
+        let Some(stored_index) = r.paint_layers.iter().position(|l| l.id == target) else {
             return Ok(());
         };
+        let stored=&r.paint_layers[stored_index];
         let settles = match op.kind {
             RasterOperationKind::ApplyMask => true,
             RasterOperationKind::Erase { .. } => damage == PixelRect::full(extent),
             _ => false,
         };
-        let pages: Vec<_> = if preview {&r.preview_pages}else{&stored.pages}
+        let mut pages: Vec<_> = if preview {&r.preview_pages}else{&stored.pages}
             .iter()
             .filter(|p| !damage.page_local(p.coordinate).is_empty())
             .map(|p| {
@@ -1461,11 +1470,13 @@ impl Scene {
                 )
             })
             .collect();
+        if edge_settings.is_some() {pages.sort_unstable_by_key(|(coordinate,_,_)|(coordinate[1],coordinate[0]));}
         let watercolor = stored.watercolor.is_some() && settles;
         let erase = f32::from(matches!(op.kind, RasterOperationKind::Erase { .. }));
         let gradient = if let RasterOperationKind::Gradient {gradient,..}=&op.kind {Some(crate::gradient::texture(r,gradient)?)} else {None};
         let underfill_coverage = layer_masks::underfill_coverage(op);
         for (c, source, destination) in pages {
+            let edge_input=edge_settings.map(|_|self.fill_edge_page(r,packet,target,op,c,encoder)).transpose()?.flatten();
             let mask = self.command_mask_at(r, &op.coverage, c, (target, operation_index as u32, false))?;
             let underfill = underfill_coverage.as_ref().map(|coverage| self.command_mask_at(r, coverage, c, (target, operation_index as u32, true))).transpose()?;
             let out = self.alloc(r, wgpu::Color::TRANSPARENT)?;
@@ -1478,7 +1489,7 @@ impl Scene {
                 RasterOperationKind::ApplyMask | RasterOperationKind::Erase { .. } => {
                     let mut resolved = None;
                     if watercolor {
-                        let binding = self.watercolor_binding(r, packet.scene, target, stored, c, false)?;
+                        let binding = self.watercolor_binding(r, packet.scene, target, &r.paint_layers[stored_index], c, false)?;
                         let p = self.alloc(r, wgpu::Color::TRANSPARENT)?;
                         let held = self.own(p);
                         self.jobs.push(Job::Watercolor {
@@ -1538,7 +1549,7 @@ impl Scene {
                         false,
                         Convert::None,
                     );
-                    if let Some(Job::Draw { data, sources, .. }) = self.jobs.last_mut() {
+                    if let Some(Job::Draw { data, sources, edges, .. }) = self.jobs.last_mut() {
                         if let Some(gradient)=&gradient {sources[2]=gradient.clone();}
                         if let Some(underfill)=&underfill {sources[2]=underfill.view.clone();}
                         data[6..8].copy_from_slice(&c.map(|v| (v * PAGE_SIZE) as f32));
@@ -1550,6 +1561,10 @@ impl Scene {
                             sources[3] = view.clone();
                             data[16..20].copy_from_slice(grain);
                             data[30] = *strength;
+                        }
+                        if let Some((binding,crop))=edge_input {
+                            *edges=Some(binding);data[20..24].copy_from_slice(&crop);
+                            data[24..28].copy_from_slice(&[edge_settings.unwrap().tolerance,fill_edges::RADIUS as f32,1.,0.]);
                         }
                     }
                 }
@@ -1573,6 +1588,7 @@ impl Scene {
             self.free(out);
         }
         self.encode_jobs(r, encoder)?;
+        self.fill_capture=None;
         if settles {
             // Appearance is baked before discarding material state. Hidden
             // reservoirs/wet pigment must not bring discarded content back.
@@ -2491,7 +2507,8 @@ impl Scene {
                                     })
                                 });
                                 pass.set_bind_group(3, masks, &[]);
-                            } else if let Job::Draw { over, data, .. } = job {
+                            } else if let Job::Draw { over, data, edges, .. } = job {
+                                pass.set_bind_group(2,edges.as_ref().unwrap_or(&self.edge_binding),&[]);
                                 pass.set_pipeline(&self.pipeline[fragment_pipeline(data[8] as u32,*over).expect("fragment draw operation")]);
                             }
                             pass.set_bind_group(0, &self.binding, &[((base + j) * self.stride) as u32]);
@@ -2552,7 +2569,7 @@ pub(super) fn operation_pipeline(kind: &RasterOperationKind) -> Option<usize> {
 fn shader_source(space: layer_core::color::RgbSpace) -> Cow<'static,str> {
     compose_wgsl(&[&working_color::source(space), &crate::view_color::hdr_shader(space, layer_core::color::RgbSpace::Srgb),
         include_str!("blend_codes.wgsl"), include_str!("blend_modes.wgsl"), include_str!("scene_vertex.wgsl"),
-        include_str!("relief_transfer.wgsl"), include_str!("paper_sample.wgsl"), include_str!("scene.wgsl"),
+        include_str!("relief_transfer.wgsl"), include_str!("paper_sample.wgsl"), &fill_edges::shader(),include_str!("scene.wgsl"),
         "@group(1) @binding(3) var scene_extra:texture_2d<f32>; @group(1) @binding(4) var scene_paper:texture_2d<f32>; @group(1) @binding(5) var paper_sampling:sampler; fn gradient_record(base:u32,index:u32)->vec4<f32>{return textureLoad(scene_extra,vec2<i32>(i32(index),0),0);}",
         include_str!("float_number.wgsl"), crate::gradient::SOURCE, include_str!("scene_constant.wgsl")])
 }
@@ -2591,6 +2608,7 @@ impl Pipelines {
             crate::bindings::texture(4, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, true),
             crate::bindings::sampler(5, wgpu::ShaderStages::FRAGMENT, wgpu::SamplerBindingType::Filtering),
         ]);
+        let edges=fill_edges::layout(device);
         let shader = Deferred::new({
             let device = device.clone();
             move || {
@@ -2602,7 +2620,7 @@ impl Pipelines {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("scene composition"),
-            bind_group_layouts: &[Some(&uniforms), Some(&layout)],
+            bind_group_layouts: &[Some(&uniforms), Some(&layout),Some(&edges)],
             immediate_size: 0,
         });
         let pipeline = FRAGMENTS.into_iter().enumerate().map(|(i, (entry,label))| {
@@ -2641,7 +2659,7 @@ impl Pipelines {
             resample: resample::Resample::new(device),
             fine_resample: resample::Resample::with_fine(device,true),
             source: sources::Pipelines::new(device, &uniforms),
-            constant,
+            constant,edges,
             uniforms,
             layout,
             pipeline,
@@ -2864,6 +2882,7 @@ mod shader_tests {
             [Some(0),Some(1)],
             [Some(2),Some(2)],
             [Some(2),Some(2)],
+            [Some(0),Some(1)],
         ];
         for (operation,pipelines) in expected.into_iter().enumerate() {
             for over in [false,true] {
@@ -2876,7 +2895,7 @@ mod shader_tests {
                 }
             }
         }
-        for operation in [23,u32::MAX] {
+        for operation in [u32::MAX] {
             for over in [false,true] {
                 assert!(std::panic::catch_unwind(|| fragment_pipeline(operation,over)).is_err(),
                     "unknown operation {operation} over={over} selected a fragment pipeline");

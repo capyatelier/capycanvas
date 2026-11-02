@@ -519,6 +519,114 @@ fn native_portable_paint_pointer_workflow() {
 
 
 #[derive(serde::Deserialize)]
+struct FillEdgeSheet { size:[u32;2], alpha:FillAlphaPlate, solid:FillSolidPlate }
+#[derive(serde::Deserialize)]
+struct FillAlphaPlate { r#box:[u32;4], width:u32, line:[u8;4], fill:[u8;4], seed:[u32;2] }
+#[derive(serde::Deserialize)]
+struct FillSolidPlate { edge_x:u32, ramp:[u32;2], seed:[u32;2], source:[u8;4], neighbor:[u8;4], fill:[u8;4] }
+fn fringe_error_summary(errors:&mut [u8])->serde_json::Value {
+    errors.sort_unstable();let count=errors.len();
+    serde_json::json!({"samples":count,"max":errors.last().copied().unwrap_or(0),
+        "p95":if count==0 {0}else{errors[(count*95).div_ceil(100)-1]}})
+}
+fn fill_edge_plates(app:&adw::Application,input:&mut RemoteInput,theme:Theme,output:&std::path::Path) {
+    let sheet:FillEdgeSheet=serde_json::from_str(include_str!("../../../tools/fixtures/fill-edges.json")).unwrap();
+    assert!(sheet.solid.ramp[0]<sheet.solid.edge_x&&sheet.solid.edge_x<sheet.solid.ramp[1]);
+    let decode=|color:[u8;4]|color.map(|code|layer_core::color::srgb_decode(f32::from(code)/255.));
+    let encode=|color:[f32;4]|std::array::from_fn(|channel| {
+        let value=if channel==3 {color[channel]}else{layer_core::color::srgb_encode(color[channel])};
+        (value.clamp(0.,1.)*255.).round() as u8
+    });
+    for solid in [false,true] {
+        let name=if solid {"solid"}else{"alpha-above"};
+        let fill=if solid {sheet.solid.fill}else{sheet.alpha.fill};
+        let seed=if solid {sheet.solid.seed}else{sheet.alpha.seed};
+        let grid=(0..sheet.size[0]*sheet.size[1]).map(|index| {
+            let [x,y]=[index%sheet.size[0],index/sheet.size[0]];
+            if solid {
+                let fraction=((sheet.solid.ramp[1] as f32-x as f32-0.5)/(sheet.solid.ramp[1]-sheet.solid.ramp[0]) as f32).clamp(0.,1.);
+                let source=decode(sheet.solid.source);let neighbor=decode(sheet.solid.neighbor);let replacement=decode(fill);
+                let mix=|color:[f32;4]|encode(std::array::from_fn(|channel|if channel==3 {1.}else{fraction*color[channel]+(1.-fraction)*neighbor[channel]}));
+                (mix(source),mix(replacement),fraction==1.,fraction==0.)
+            }else{
+                let [left,top,right,bottom]=sheet.alpha.r#box.map(|v|v as f32);
+                let [px,py]=[x as f32+0.5,y as f32+0.5];
+                let inside=px>left&&px<right&&py>top&&py<bottom;
+                let distance=if inside {(px-left).min(right-px).min(py-top).min(bottom-py)}
+                    else{(left-px).max(px-right).max(0.).hypot((top-py).max(py-bottom).max(0.))};
+                let coverage=(sheet.alpha.width as f32*0.5+0.5-distance).clamp(0.,1.);
+                let mut original=sheet.alpha.line;original[3]=(f32::from(original[3])*coverage).round() as u8;
+                let alpha=f32::from(original[3])/255.;let remaining=if inside {1.-alpha}else{0.};
+                let combined=remaining+alpha*(1.-remaining);
+                let line=original.map(|code|f32::from(code)/255.);let replacement=fill.map(|code|f32::from(code)/255.);
+                let expected=if combined==0. {[0;4]}else{std::array::from_fn(|channel| {
+                    let value=if channel==3 {combined}else{(replacement[channel]*remaining+line[channel]*alpha*(1.-remaining))/combined};
+                    (value.clamp(0.,1.)*255.).round() as u8
+                })};
+                (original,expected,inside&&alpha==0.,!inside)
+            }
+        }).collect::<Vec<_>>();
+        assert!(grid.iter().any(|(pixel,_,_,_)|if solid {*pixel!=sheet.solid.source&&*pixel!=sheet.solid.neighbor}else{pixel[3]>0&&pixel[3]<255}));
+        let w=Workspace::with_project(app,Some((new_drawing(sheet.size[0],sheet.size[1],&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),None)));
+        w.window.maximize();w.window.present();ready(&w);w.dispatch(UiAction::SetTheme {theme:Some(theme)});
+        assert_eq!(ui_session(&w).engine().document().composition().blend,layer_core::BlendSpace::Perceptual);
+        let source=layer_core::color::source::rgba8_source(sheet.size,|x,y|grid[(y*sheet.size[0]+x) as usize].0);
+        ui_session_mut(&w).import_layer_source("Edge source",std::sync::Arc::unwrap_or_clone(source)).unwrap();w.wake();ready(&w);
+        let reference=ui_session(&w).engine().document().working.occurrence.unwrap();let original_source=active_paint(ui_session(&w).engine().document()).clone();
+        if !solid {w.dispatch(UiAction::Layer {action:LayerAction::ReferenceSelection});w.dispatch(UiAction::Layer {action:LayerAction::New {group:false,clipped:false}});}
+        let workspace=tool_settings_workspace(&w,&[CommandId::Fill],true,false);w.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(workspace)});
+        invoke(&w,CommandId::FitCanvas);invoke(&w,CommandId::Fill);
+        invoke(&w,if solid {CommandId::SelectionEditing}else{CommandId::SelectionReference});
+        invoke(&w,CommandId::CloseGapsOff);invoke(&w,CommandId::EdgesLineMiddle);
+        if ui_session(&w).command(CommandId::SmoothRegionEdges).selected {invoke(&w,CommandId::SmoothRegionEdges);}
+        w.dispatch(UiAction::SetToolSetting {id:"grain_depth".into(),value:0.});w.dispatch(UiAction::SetToolSetting {id:"tolerance".into(),value:0.05});
+        w.dispatch(UiAction::SetBrushOpacity {value:1.});w.dispatch(UiAction::SetColor {rgba:fill.map(|v|f32::from(v)/255.)});ready(&w);
+        let before=raster(&w);let before_pixels=pixels(&before);
+        scribble_path(input,&w,&[seed.map(|v|v as f32),seed.map(|v|v as f32)]);committed(&w,&before);invoke(&w,CommandId::FitCanvas);ready(&w);
+        let filled=pixels(&raster(&w));
+        for (index,(_,_,interior,other)) in grid.iter().enumerate() {
+            let [x,y]=[index as u32%sheet.size[0],index as u32/sheet.size[0]];let actual=sample(&filled,x,y);
+            if *interior {assert_eq!(actual,fill,"{name} exact interior {x},{y}");}
+            if solid&&!*other {assert_eq!(actual[0],0,"solid retained old red at {x},{y}: {actual:?}");}
+            if *other {let original=if solid {grid[index].0}else{sample(&before_pixels,x,y)};
+                assert!(actual.iter().zip(original).all(|(a,b)|a.abs_diff(b)<=1),"{name} changed other face {x},{y}: {actual:?} != {original:?}");}
+        }
+        if !solid {assert_eq!(ui_session(&w).engine().document().scene().paint_source(reference).unwrap(),&original_source);}
+        input.perform(serde_json::json!([{"pen":"move","point":screen_point(command(&w,CommandId::Fill).upcast_ref(),&w.window,[0.5,0.5])}]));
+        capture_ui(&w,output,&format!("edge-{name}-{theme:?}.png"));
+        let actual=ui_session(&w).engine().backend().document_pixels(1).unwrap();
+        assert_eq!([actual.width,actual.height],sheet.size);
+        let direct=Workspace::with_project(app,Some((new_drawing(sheet.size[0],sheet.size[1],&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),None)));
+        direct.window.maximize();direct.window.present();ready(&direct);direct.dispatch(UiAction::SetTheme {theme:Some(theme)});
+        let source=layer_core::color::source::rgba8_source(sheet.size,|x,y|grid[(y*sheet.size[0]+x) as usize].1);
+        ui_session_mut(&direct).import_layer_source("Direct F",std::sync::Arc::unwrap_or_clone(source)).unwrap();direct.wake();ready(&direct);
+        let workspace=tool_settings_workspace(&direct,&[CommandId::Fill],true,false);direct.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(workspace)});invoke(&direct,CommandId::FitCanvas);ready(&direct);
+        invoke(&direct,CommandId::Fill);
+        let expected=ui_session(&direct).engine().backend().document_pixels(2).unwrap();
+        assert_eq!([expected.width,expected.height],sheet.size);
+        let mut corner_errors=Vec::new();
+        for (index,(_,_,_,other)) in grid.iter().enumerate() {
+            let [x,y]=[index as u32%sheet.size[0],index as u32/sheet.size[0]];let point=[x as f32+0.5,y as f32+0.5];
+            let read=|image:&layer_render::ReadbackImage|<[u8;4]>::try_from(&image.bytes[(y*image.stride+x*4) as usize..][..4]).unwrap();
+            let a=read(&actual);let b=read(&expected);let error=a.iter().zip(b).map(|(a,b)|a.abs_diff(b)).max().unwrap();
+            let [left,top,right,bottom]=sheet.alpha.r#box.map(|v|v as f32);let radius=sheet.alpha.width as f32*0.5+0.5;
+            let corner=!solid&&(point[0]-left).abs().min((point[0]-right).abs())<radius
+                &&(point[1]-top).abs().min((point[1]-bottom).abs())<radius;
+            if corner {corner_errors.push(error);}
+            if !corner||*other {let bound=if *other {1}else{3};
+                assert!(error<=bound,"{name} direct F {x},{y}: {a:?} != {b:?} ({bound} codes)");
+            }
+        }
+        let summary=fringe_error_summary(&mut corner_errors);
+        std::fs::write(output.join(format!("edge-{name}-profiles-{theme:?}.json")),serde_json::to_vec_pretty(&summary).unwrap()).unwrap();
+        eprintln!("PROFILE {theme:?} {name} overlapping corners: {summary}");
+        direct.window.destroy();pump(100);invoke(&w,CommandId::Undo);ready(&w);assert_eq!(pixels(&raster(&w)),before_pixels,"{name} exact Undo");
+        if solid {assert_eq!(active_paint(ui_session(&w).engine().document()),&original_source);}
+        healthy(&w);w.window.destroy();pump(100);eprintln!("PASS {theme:?} {name}: direct F, exact interior, unchanged far side and Undo");
+    }
+}
+
+#[derive(serde::Deserialize)]
 struct ScribbleSheet { size: [u32; 2], cases: Vec<ScribbleCase> }
 #[derive(serde::Deserialize)]
 struct ScribbleCase {
@@ -548,21 +656,27 @@ fn scribble_distance(case: &ScribbleCase, region: &ScribbleRegion, point: [f32; 
     let edge = region.polygon.iter().zip(region.polygon.iter().cycle().skip(1)).map(|(a, b)| geometry_distance(point, *a, *b));
     edge.chain(case.paths.iter().flat_map(|path| path.windows(2)).map(|p| geometry_distance(point, p[0], p[1]))).fold(f32::INFINITY, f32::min)
 }
-fn score_scribble(case: &ScribbleCase, region: &ScribbleRegion, paint: &BTreeMap<TileKey, Vec<u8>>, reference: &BTreeMap<TileKey, Vec<u8>>, outside_cell: usize) {
+fn score_scribble(case: &ScribbleCase, region: &ScribbleRegion, paint: &BTreeMap<TileKey, Vec<u8>>, reference: &layer_render::ReadbackImage, outside_cell: usize) -> (usize,serde_json::Value) {
     let band = case.size * 0.5 + 1.5;
+    let source_pixel=|x:u32,y:u32|<[u8;4]>::try_from(&reference.bytes[(y*reference.stride+x*4) as usize..][..4]).unwrap();
+    let coverage=|x,y| {
+        let source=source_pixel(x,y)[3];let alpha=sample(paint,x,y)[3];
+        if source==255 {assert_eq!(alpha,0,"{} painted over opaque reference at {x},{y}",case.name);255}
+        else{(f32::from(alpha)*255./f32::from(255-source)).round().min(255.) as u8}
+    };
     let mut missed = 0;let mut leaked = outside_cell;
     for y in case.bounds[1]..case.bounds[1] + case.bounds[3] {
         for x in case.bounds[0]..case.bounds[0] + case.bounds[2] {
             let point = [x as f32 + 0.5, y as f32 + 0.5];
             let line = scribble_distance(case, region, point);
             let alpha = sample(paint, x, y)[3];
-            let junction_ink = sample(reference, x, y)[3] > 0 && case.junctions.iter().any(|junction| geometry_distance(point, *junction, *junction) <= 24.);
+            let junction_ink = source_pixel(x,y)[3] > 0 && case.junctions.iter().any(|junction| geometry_distance(point, *junction, *junction) <= 24.);
             if geometry_inside(point, &region.polygon) {
-                if line > band && !junction_ink && alpha < 250 { missed += 1; }
+                if line > band && !junction_ink && coverage(x,y) < 250 { missed += 1; }
             } else if line > band && !junction_ink && alpha != 0 {leaked += 1;}
         }
     }
-    for &[x,y] in &region.wash_samples {assert!(sample(paint,x,y)[3] >= 250, "{} missed bottom wash at [{x},{y}]",case.name);}
+    for &[x,y] in &region.wash_samples {assert!(coverage(x,y) >= 250, "{} missed bottom wash at [{x},{y}]",case.name);}
     let leak_ceiling = region.known_leaks.get("gtk").copied().unwrap_or(0);
     assert!(leaked <= leak_ceiling, "{} {} leaked {leaked} unexpected pixels (ceiling {leak_ceiling})",case.name,region.side);
     if leak_ceiling > 0 {eprintln!("{} {} known leak: {leaked}/{leak_ceiling}; shrink or remove when improved",case.name,region.side);}
@@ -574,16 +688,43 @@ fn score_scribble(case: &ScribbleCase, region: &ScribbleRegion, paint: &BTreeMap
         let covered = (-1..=1).any(|dy| (-1..=1).any(|dx| {
             let x = centre[0].round() as i32 + dx;let y = centre[1].round() as i32 + dy;
             let p = [x as f32 + 0.5, y as f32 + 0.5];
-            x >= 0 && y >= 0 && geometry_distance(p, *centre, *centre) <= 1.5 && geometry_inside(p, &region.polygon) && sample(paint, x as u32, y as u32)[3] > 0
+            x >= 0 && y >= 0 && geometry_distance(p, *centre, *centre) <= 1.5 && geometry_inside(p, &region.polygon) && coverage(x as u32,y as u32) > 0
         }));
         if region.known_empty_centres.contains(centre) {known_missing += usize::from(!covered);}
         else {assert!(covered, "{} has no fill under centre line {centre:?}",case.name);}
+    }
+    let mut fringe_samples=0;let mut profile_errors=Vec::new();
+    if !case.vector {
+        for centre in region.centres.iter().filter(|centre|!region.known_empty_centres.contains(centre)) {
+            for dy in -1..=1 {for dx in -1..=1 {
+                let [x,y]=[centre[0].round() as i32+dx,centre[1].round() as i32+dy];
+                let point=[x as f32+0.5,y as f32+0.5];
+                if x<0||y<0||geometry_distance(point,*centre,*centre)>1.5
+                    || ![[x as f32,y as f32],[x as f32+1.,y as f32],[x as f32,y as f32+1.],[x as f32+1.,y as f32+1.]]
+                        .into_iter().all(|corner|geometry_inside(corner,&region.polygon)) {continue;}
+                let source=source_pixel(x as u32,y as u32);
+                if source[3]==0||source[3]==255 {continue;}
+                let actual=sample(paint,x as u32,y as u32);
+                let alpha_error=actual[3].abs_diff(255-source[3]);
+                let line_alpha=f32::from(source[3])/255.;let ideal=1.-line_alpha;let coverage=f32::from(actual[3])/255.;
+                let mut color_error=0;
+                for background in [0.,255.] {for (channel,fill) in [217.,26.,13.].into_iter().enumerate() {
+                    let over=|paint:f32,coverage:f32|(paint*coverage+f32::from(source[channel])*line_alpha*(1.-coverage)
+                        +background*(1.-line_alpha)*(1.-coverage)).round() as u8;
+                    color_error=color_error.max(over(f32::from(actual[channel]),coverage).abs_diff(over(fill,ideal)));
+                }}
+                profile_errors.push(alpha_error.max(color_error));
+                fringe_samples+=1;
+            }}
+        }
     }
     if !region.known_empty_centres.is_empty() {eprintln!("{} {} known centre misses: {known_missing}/{}; remove only after all hosts cover them",case.name,region.side,region.known_empty_centres.len());}
     let known_probes = region.known_filled_probes.get("gtk").map(Vec::as_slice).unwrap_or(&[]);
     assert!(known_probes.iter().all(|index| *index < region.empty_probes.len()));
     for (index,point) in region.empty_probes.iter().enumerate() {assert!(sample(paint,point[0].floor() as u32,point[1].floor() as u32)[3] == 0 || leaked > 0 && leak_ceiling > 0 && known_probes.contains(&index), "{} {} filled the far side at {point:?}",case.name,region.side);}
+    (fringe_samples,fringe_error_summary(&mut profile_errors))
 }
+
 fn capture_scribble(paint: &BTreeMap<TileKey, Vec<u8>>, [left,top,width,height]: [u32;4], path: &std::path::Path) {
     let mut rgba = Vec::with_capacity((width * height * 4) as usize);
     for y in top..top + height {for x in left..left + width {rgba.extend_from_slice(&sample(paint,x,y));}}
@@ -610,6 +751,7 @@ fn native_fill_scribble_geometry() {
     let output = std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap());std::fs::create_dir_all(&output).unwrap();
     let mut input = RemoteInput::new().timeout_secs(30);input.ready();
     for theme in [Theme::Light, Theme::Dark] {
+        fill_edge_plates(&app,&mut input,theme,&output);
         for paper in ["cold_press", "rough"] {
             let mut project = new_drawing(sheet.size[0], sheet.size[1], &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
             assert_eq!(project.composition().color.depth, SampleDepth::U8);
@@ -617,10 +759,8 @@ fn native_fill_scribble_geometry() {
             let w = Workspace::with_project(&app, Some((project, None)));w.window.maximize();w.window.present();ready(&w);
             w.dispatch(UiAction::SetTheme { theme: Some(theme) });invoke(&w, CommandId::FitCanvas);
             w.dispatch(UiAction::SetColor { rgba: [0., 0., 0., 1.] });
-            let mut reference = None;
             for case in sheet.cases.iter().filter(|case| case.paper == paper) {
                 if case.vector {
-                    reference = Some(pixels(&raster(&w)));
                     w.dispatch(UiAction::Layer { action: LayerAction::ReferenceSelection });
                     w.dispatch(UiAction::Layer { action: LayerAction::NewVector });
                     let session = ui_session(&w);let document = session.engine().document();
@@ -640,8 +780,14 @@ fn native_fill_scribble_geometry() {
                     assert_ne!(raster(&w), before, "the real eraser contact cuts the reference ink");
                 }
             }
-            let reference = reference.unwrap_or_else(|| pixels(&raster(&w)));
-            capture_scribble(&reference,[0,0,sheet.size[0],sheet.size[1]],&output.join(format!("scribble-reference-raster-{paper}-{theme:?}.png")));
+            let paper_layer=ui_session(&w).engine().document().bottom_paper().unwrap();
+            w.dispatch(UiAction::Layer {action:LayerAction::Visibility {id:layer_ui::occurrence_token(paper_layer),value:false}});ready(&w);
+            let reference=ui_session(&w).engine().backend().document_pixels(3).unwrap();
+            gtk::gdk::MemoryTexture::new(reference.width as i32,reference.height as i32,gtk::gdk::MemoryFormat::R8g8b8a8,
+                &glib::Bytes::from_owned(reference.bytes.clone()),reference.stride as usize)
+                .save_to_png(output.join(format!("scribble-reference-raster-{paper}-{theme:?}.png"))).unwrap();
+            invoke(&w,CommandId::Undo);ready(&w);
+            assert!(ui_session(&w).engine().document().scene().visible(paper_layer));
             capture_ui(&w, &output, &format!("scribble-reference-{paper}-{theme:?}.png"));
             w.dispatch(UiAction::Layer { action: LayerAction::ReferenceSelection });w.dispatch(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } });
             let workspace = tool_settings_workspace(&w, &[CommandId::Fill], true, false);w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
@@ -652,6 +798,7 @@ fn native_fill_scribble_geometry() {
             assert!(state(&w).tool_settings.iter().any(|field| field.id == "grain_depth" && field.value == 0.));
             w.dispatch(UiAction::SetColor { rgba: [0.85, 0.1, 0.05, 1.] });
             let empty = pixels(&raster(&w));
+            let mut fringe_samples=0;let mut profiles=Vec::new();
             for case in sheet.cases.iter().filter(|case| case.paper == paper) {
                 for region in &case.regions {
                     let before = raster(&w);
@@ -666,12 +813,15 @@ fn native_fill_scribble_geometry() {
                         let x = key.coordinate[0] * tile_size + index as u32 % tile_size;let y = key.coordinate[1] * tile_size + index as u32 / tile_size;
                         if pixel[3] != 0 && !((x >= left && y >= top && x < left + width && y < top + height) || scribble_distance(case,region,[x as f32 + 0.5,y as f32 + 0.5]) <= case.size * 0.5 + 1.5) {outside_cell += 1;}
                     }}
-                    score_scribble(case, region, &filled, &reference, outside_cell);
+                    let (samples,profile)=score_scribble(case, region, &filled, &reference, outside_cell);fringe_samples+=samples;
+                    profiles.push(serde_json::json!({"case":case.name,"side":region.side,"fractional_source_samples":samples,"fringe":profile}));
                     invoke(&w, CommandId::Undo);ready(&w);
                     assert_eq!(pixels(&raster(&w)), empty, "{} {} Undo restores exact empty target", case.name, region.side);
                     eprintln!("PASS {theme:?} {paper} {} {}: {}° corner, {} px {} break, checked geometry bounds and exact Undo", case.name, region.side, case.angle, case.gap, case.direction);
                 }
             }
+            assert!(fringe_samples>0,"{paper} {theme:?} requires fractional source-alpha probes");
+            std::fs::write(output.join(format!("scribble-fringes-{paper}-{theme:?}.json")),serde_json::to_vec_pretty(&profiles).unwrap()).unwrap();
             healthy(&w);w.window.destroy();pump(100);
         }
     }

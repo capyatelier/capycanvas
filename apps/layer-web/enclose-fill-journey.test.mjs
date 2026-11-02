@@ -12,18 +12,25 @@ function scribbleDistance(caseData,region,point) {
   return Math.min(...region.polygon.map((a,i)=>distance(point,a,region.polygon[(i+1)%region.polygon.length])),...caseData.paths.flatMap(path=>path.slice(1).map((b,i)=>distance(point,path[i],b))));
 }
 
+function fringeProfile(name,errors) {
+  if(!errors.length)return;
+  errors.sort((a,b)=>a-b);
+  console.log(`PROFILE ${name}: ${errors.length} pixels, max ${errors.at(-1)}, p95 ${errors[Math.ceil(errors.length*.95)-1]} codes`);
+}
+
 function scoreScribble(caseData,region,result,reference,outsideCell=0) {
   const band=caseData.size/2+1.5;
   const inside=p=>{let hit=false;for(let i=0;i<region.polygon.length;i++){const a=region.polygon[i],b=region.polygon[(i+1)%region.polygon.length];if((a[1]>p[1])!==(b[1]>p[1])&&p[0]<(b[0]-a[0])*(p[1]-a[1])/(b[1]-a[1])+a[0])hit=!hit;}return hit;};
   const alpha=(x,y)=>result.pixels[(y*result.extent[0]+x)*4+3];
+  const coverage=(x,y)=>{const source=reference.pixels[(y*reference.extent[0]+x)*4+3],actual=alpha(x,y);if(source===255){assert.equal(actual,0,`${caseData.name}: no paint over opaque ink at ${x},${y}`);return 255;}return Math.min(255,Math.round(actual*255/(255-source)));};
   let missed=0,leaked=outsideCell;
   const [left,top,width,height]=caseData.bounds;
   for(let y=top;y<top+height;y++)for(let x=left;x<left+width;x++) {
     const point=[x+.5,y+.5],line=scribbleDistance(caseData,region,point),junctionInk=reference.pixels[(y*reference.extent[0]+x)*4+3]>0&&caseData.junctions.some(junction=>Math.hypot(point[0]-junction[0],point[1]-junction[1])<=24);
-    if(inside(point)){if(line>band&&!junctionInk&&alpha(x,y)<250)missed++;}
+    if(inside(point)){if(line>band&&!junctionInk&&coverage(x,y)<250)missed++;}
     else if(line>band&&!junctionInk&&alpha(x,y))leaked++;
   }
-  for(const [x,y] of region.wash_samples)assert.ok(alpha(x,y)>=250,`${caseData.name}: missed bottom wash at ${x},${y}`);
+  for(const [x,y] of region.wash_samples)assert.ok(coverage(x,y)>=250,`${caseData.name}: missed bottom wash at ${x},${y}`);
   const leakCeiling=region.known_leaks?.web??0;
   assert.ok(leaked<=leakCeiling,`${caseData.name} ${region.side}: ${leaked} unexpected leaked pixels (ceiling ${leakCeiling})`);
   if(leakCeiling)console.log(`${caseData.name} ${region.side} known leak: ${leaked}/${leakCeiling}; shrink or remove when improved`);
@@ -32,18 +39,34 @@ function scoreScribble(caseData,region,result,reference,outsideCell=0) {
   if(ceiling>4)console.log(`${caseData.name} ${region.side} known misses: ${missed}/${ceiling}; shrink or remove the ceiling when improved`);
   let knownMissing=0;
   for(const centre of region.centres){
-    const covered=[-1,0,1].some(dy=>[-1,0,1].some(dx=>{const x=Math.round(centre[0])+dx,y=Math.round(centre[1])+dy;return Math.hypot(x+.5-centre[0],y+.5-centre[1])<=1.5&&inside([x+.5,y+.5])&&alpha(x,y)>0;}));
+    const covered=[-1,0,1].some(dy=>[-1,0,1].some(dx=>{const x=Math.round(centre[0])+dx,y=Math.round(centre[1])+dy;return Math.hypot(x+.5-centre[0],y+.5-centre[1])<=1.5&&inside([x+.5,y+.5])&&coverage(x,y)>0;}));
     if(region.known_empty_centres.some(known=>known.every((value,i)=>value===centre[i])))knownMissing+=Number(!covered);
     else assert.ok(covered,`${caseData.name}: no fill under centre line ${centre}`);
   }
   if(region.known_empty_centres.length)console.log(`${caseData.name} ${region.side} known centre misses: ${knownMissing}/${region.known_empty_centres.length}; remove only after all hosts cover them`);
+  let fringes=0;const profile=[];
+  if(!caseData.vector)for(const centre of region.centres.filter(c=>!region.known_empty_centres.some(known=>known.every((v,i)=>v===c[i]))))for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
+    const x=Math.round(centre[0])+dx,y=Math.round(centre[1])+dy,point=[x+.5,y+.5];
+    if(x<0||y<0||Math.hypot(point[0]-centre[0],point[1]-centre[1])>1.5||![[x,y],[x+1,y],[x,y+1],[x+1,y+1]].every(inside))continue;
+    const source=reference.pixels.slice((y*reference.extent[0]+x)*4,(y*reference.extent[0]+x)*4+4);if(source[3]===0||source[3]===255)continue;
+    const actual=result.pixels.slice((y*result.extent[0]+x)*4,(y*result.extent[0]+x)*4+4),errors=[Math.abs(actual[3]-(255-source[3]))],a=source[3]/255,c=1-a;
+    for(const backdrop of [0,255])for(const [i,fill]of [217,26,13].entries()){
+      const composite=(value,coverage)=>Math.round(value*coverage+source[i]*a*(1-coverage)+backdrop*(1-a)*(1-coverage));
+      errors.push(Math.abs(composite(actual[i],actual[3]/255)-composite(fill,c)));
+    }
+    profile.push(Math.max(...errors));
+    fringes++;
+  }
+  fringeProfile(`${caseData.name}/${region.side} fringe`,profile);
   const knownProbes=region.known_filled_probes?.web??[];
   assert.ok(knownProbes.every(index=>Number.isInteger(index)&&index>=0&&index<region.empty_probes.length));
   for(const [index,point] of region.empty_probes.entries())assert.ok(alpha(Math.floor(point[0]),Math.floor(point[1]))===0||leaked>0&&leakCeiling>0&&knownProbes.includes(index),`${caseData.name} ${region.side}: far side stays empty at ${point}`);
+  return fringes;
 }
 
 export async function checkEncloseFill({call,evaluate,settle}) {
   const scribbles=JSON.parse(await readFile(new URL('../../tools/fixtures/fill-scribble.json',import.meta.url),'utf8'));
+  const edges=JSON.parse(await readFile(new URL('../../tools/fixtures/fill-edges.json',import.meta.url),'utf8'));
   const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/enclose-fill/web';
   await mkdir(directory,{recursive:true});
   const wait=expression=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+30000;function poll(){if(${expression})resolve();else if(performance.now()>end)reject(Error(${JSON.stringify(expression)}));else setTimeout(poll,30)}poll()})`);
@@ -99,6 +122,65 @@ export async function checkEncloseFill({call,evaluate,settle}) {
     for(let i=0;i<points.length;i++){await call('Input.dispatchMouseEvent',{type:i?'mouseMoved':'mousePressed',...await screen(points[i]),button:'left',buttons:1,clickCount:1,pointerType:'pen',force:.5});await settle();}
     await call('Input.dispatchMouseEvent',{type:'mouseReleased',...await screen(points.at(-1)),button:'left',buttons:0,clickCount:1,pointerType:'pen',force:0});await settle();await idle();
   };
+  const openPng=async(name,bytes)=>{
+    await evaluate(`window.enclosePickers.fixture=window.showOpenFilePicker;window.showOpenFilePicker=async()=>[{name:${JSON.stringify(name)},async getFile(){return new File([Uint8Array.from(atob('${bytes.toString('base64')}'),c=>c.charCodeAt(0))],${JSON.stringify(name)},{type:'image/png'})}}]`);
+    try{await invoke('open_document');await wait(`!layerApp.documents.busy()&&layerApp.state().layers.some(l=>l.editing&&l.label===${JSON.stringify(name.replace(/\.png$/,''))})&&layerApp.app.brush_ready()`);await idle();}
+    finally{await evaluate('window.showOpenFilePicker=enclosePickers.fixture;delete enclosePickers.fixture');}
+  };
+  const edgePlates=async theme=>{
+    const decode=v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4;};
+    const encode=v=>Math.round(255*Math.max(0,Math.min(1,v<=.0031308?v*12.92:1.055*v**(1/2.4)-.055)));
+    assert.ok(edges.solid.ramp[0]<edges.solid.edge_x&&edges.solid.edge_x<edges.solid.ramp[1]);
+    for(const solid of [false,true]){
+      const name=solid?'solid':'alpha-above',plate=solid?edges.solid:edges.alpha,fill=plate.fill;
+      const grid=Array.from({length:edges.size[0]*edges.size[1]},(_,index)=>{
+        const x=index%edges.size[0],y=Math.floor(index/edges.size[0]);
+        if(solid){
+          const t=Math.max(0,Math.min(1,(plate.ramp[1]-x-.5)/(plate.ramp[1]-plate.ramp[0])));
+          const mix=color=>[...color.slice(0,3).map((v,i)=>encode(t*decode(v)+(1-t)*decode(plate.neighbor[i]))),255];
+          return{source:mix(plate.source),expected:mix(fill),interior:t===1,other:t===0};
+        }
+        const [left,top,right,bottom]=plate.box,px=x+.5,py=y+.5,inside=px>left&&px<right&&py>top&&py<bottom;
+        const distance=inside?Math.min(px-left,right-px,py-top,bottom-py):Math.hypot(Math.max(left-px,px-right,0),Math.max(top-py,py-bottom,0));
+        const alpha=Math.round(plate.line[3]*Math.max(0,Math.min(1,plate.width/2+.5-distance))),a=alpha/255,remaining=inside?1-a:0,combined=remaining+a*(1-remaining);
+        const expected=combined?[...fill.slice(0,3).map((v,i)=>Math.round((v*remaining+plate.line[i]*a*(1-remaining))/combined)),Math.round(combined*255)]:[0,0,0,0];
+        const corner=Math.min(Math.abs(px-left),Math.abs(px-right))<plate.width/2+.5&&Math.min(Math.abs(py-top),Math.abs(py-bottom))<plate.width/2+.5;
+        return{source:[...plate.line.slice(0,3),alpha],expected,interior:inside&&alpha===0,other:!inside,remaining,corner};
+      });
+      await openPng(`Edge ${name}.png`,png(...edges.size,(x,y)=>grid[y*edges.size[0]+x].source,4));
+      const paper=await evaluate('layerApp.state().layers.find(l=>l.content_icon==="layer-paper-symbolic"&&l.visible)?.id?.toString()??null');
+      if(paper)await send({type:'layer',action:{op:'visibility',id:Number(paper),value:false}});
+      const original=rasterIdentity(await save()),referenceId=await evaluate('Number(layerApp.state().layers.find(l=>l.editing).id)');
+      if(!solid){await send({type:'layer',action:{op:'reference_selection'}});await send({type:'layer',action:{op:'new',group:false,clipped:false}});}
+      await invoke('fit_canvas');await invoke('fill');await chooseToolActionGroup({call,evaluate,settle},'selection-source',solid?'selection_editing':'selection_reference');
+      await chooseToolActionGroup({call,evaluate,settle},'close-gaps','close_gaps_off');await chooseToolActionGroup({call,evaluate,settle},'region-edges','edges_line_middle');
+      if(await selected('smooth_region_edges'))await contact('[data-tool-action="smooth_region_edges"]');
+      for(const [id,value]of [['grain_depth',0],['tolerance',.05],['opacity',1]])await send({type:'set_tool_setting',id,value});
+      await send({type:'set_color',rgba:fill.map(v=>v/255)});const before=rasterIdentity(await save()),point=await screen(plate.seed);
+      await pointer('mousePressed',point,'pen');await pointer('mouseReleased',point,'pen');await idle();
+      const actual=await output(),errors=grid.map(()=>0);assert.deepEqual(actual.extent,edges.size);
+      for(const [index,pixel]of grid.entries()){
+        const rgba=actual.pixels.slice(index*4,index*4+4),bound=pixel.other?1:3;
+        if(pixel.interior)assert.deepEqual(rgba,fill,`${name}: exact interior at ${index}`);
+        if(solid&&!pixel.other)assert.equal(rgba[0],0,`Solid: no residual old-seed red at ${index}`);
+        errors[index]=Math.max(...pixel.expected.map((expected,channel)=>Math.abs(rgba[channel]-expected)));
+        if(!pixel.corner||pixel.other||pixel.interior)assert.ok(errors[index]<=bound,`${name}: direct F at ${index}: ${rgba} != ${pixel.expected}`);
+      }
+      if(!solid){
+        const sources=rasterIdentity(await save());for(const source of original)assert.deepEqual(sources.find(s=>s.id===source.id),source,'Alpha-above preserves the line source');
+        await send({type:'layer',action:{op:'visibility',id:referenceId,value:false}});const target=await output();
+        for(const [index,pixel]of grid.entries()){
+          const error=Math.abs(target.pixels[index*4+3]-Math.round(pixel.remaining*255));errors[index]=Math.max(errors[index],error);
+          if(!pixel.corner||pixel.other||pixel.interior)assert.ok(error<=(pixel.other?1:3),`Alpha-above literal coverage at ${index}`);
+        }
+        await invoke('undo');await idle();
+      }
+      fringeProfile(`${theme}/${name} corner`,grid.flatMap((pixel,index)=>pixel.corner&&!pixel.other&&!pixel.interior?[errors[index]]:[]));
+      await writeFile(`${directory}/edge-${name}-${theme}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+      await invoke('undo');await idle();assert.deepEqual(rasterIdentity(await save()),before,`${name}: exact Undo`);
+      console.log(`PASS ${theme}/${name}: direct F, exact interior, unchanged far side and Undo`);
+    }
+  };
   const scribblePaper=async(theme,paper)=>{
     await invoke('new_document');await wait('!!layerApp.state().new_drawing');
     await contact('#new-drawing-texture');
@@ -136,6 +218,7 @@ export async function checkEncloseFill({call,evaluate,settle}) {
     const baseline=rasterIdentity(await save());
     const visibility=await evaluate('layerApp.state().layers.map(l=>({id:Number(l.id),visible:l.visible}))');
     const references=await evaluate('layerApp.state().layers.filter(l=>!l.editing&&l.visible).map(l=>Number(l.id))');
+    let fringes=0;
     for(const caseData of cases)for(const region of caseData.regions){
       await scribblePath([region.seed,region.seed]);
       await writeFile(`${directory}/scribble-${caseData.preset}-${region.side}-${paper}-${theme}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
@@ -145,13 +228,14 @@ export async function checkEncloseFill({call,evaluate,settle}) {
         const result=await output();assert.deepEqual(result.extent,scribbles.size,'Geometry scoring reads original exported pixels');
         await writeFile(`${directory}/scribble-target-${caseData.preset}-${region.side}-${paper}-${theme}.png`,Buffer.from(await evaluate("Array.from(placementTest.saved)")));
         let outsideCell=0;for(let y=0;y<result.extent[1];y++)for(let x=0;x<result.extent[0];x++)if(result.pixels[(y*result.extent[0]+x)*4+3]&&!((x>=caseData.bounds[0]&&y>=caseData.bounds[1]&&x<caseData.bounds[0]+caseData.bounds[2]&&y<caseData.bounds[1]+caseData.bounds[3])||scribbleDistance(caseData,region,[x+.5,y+.5])<=caseData.size/2+1.5))outsideCell++;
-        scoreScribble(caseData,region,result,reference,outsideCell);
+        fringes+=scoreScribble(caseData,region,result,reference,outsideCell);
       } finally {for(let i=hidden.length;i>0;i--){await invoke('undo');await idle();}}
       assert.deepEqual(await evaluate('layerApp.state().layers.map(l=>({id:Number(l.id),visible:l.visible}))'),visibility,`${caseData.name} ${region.side}: isolation Undo restores original visibility`);
       await invoke('undo');await idle();
       assert.deepEqual(rasterIdentity(await save()),baseline,`${caseData.name} ${region.side}: Undo restores exact empty target`);
       console.log(`PASS ${theme}/${paper}/${caseData.name}/${region.side}: checked geometry bounds and exact Undo`);
     }
+    assert.ok(fringes>0,`${paper}/${theme}: fractional source-alpha probes`);
   };
   const settings=await evaluate('layerApp.state().settings');
   const workspace=await evaluate('layerApp.state().workspace');
@@ -334,8 +418,7 @@ export async function checkEncloseFill({call,evaluate,settle}) {
         }
       }
       const colours=png(384,256,(x,y)=>x<128?[64,64,64,255]:x<256?[80,80,80,255]:[160,160,160,255],4);
-      await evaluate(`window.enclosePickers.fixture=window.showOpenFilePicker;window.showOpenFilePicker=async()=>[{name:'Fill colours.png',async getFile(){return new File([Uint8Array.from(atob('${colours.toString('base64')}'),c=>c.charCodeAt(0))],'Fill colours.png',{type:'image/png'})}}]`);
-      await invoke('open_document');await wait('!layerApp.documents.busy()&&layerApp.state().layers.some(l=>l.editing&&l.label==="Fill colours")&&layerApp.app.brush_ready()');await idle();await evaluate('window.showOpenFilePicker=enclosePickers.fixture;delete enclosePickers.fixture');await invoke('fit_canvas');await invoke('fill');
+      await openPng('Fill colours.png',colours);await invoke('fit_canvas');await invoke('fill');
       await chooseToolActionGroup({call,evaluate,settle},'selection-source','selection_editing');
       await send({type:'set_color',rgba:[.85,.1,.05,1]});await send({type:'set_tool_setting',id:'grain_depth',value:0});await send({type:'set_tool_setting',id:'tolerance',value:.1});
       const colourBase=rasterIdentity(await save()),toleranceLabel=await evaluate('layerApp.state().tool_settings.find(f=>f.id==="tolerance").label'),colourPoint=await screen([85,110]);
@@ -367,6 +450,7 @@ export async function checkEncloseFill({call,evaluate,settle}) {
       await wait(`(()=>{const n=document.querySelector('#new-drawing-create'),r=n.getBoundingClientRect();return !layerApp.state().new_drawing.drawer&&n.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))})()`);
       await contact('#new-drawing-create');await wait('!layerApp.state().new_drawing');await idle();
       assert.ok(await evaluate('!!layerApp.state().layer_tools.add_paper'),'Digital drawing has no Paper layer');
+      await edgePlates(theme);
       for(const paper of ['cold_press','rough'])await scribblePaper(theme,paper);
       assert.equal(await evaluate('layerApp.state().host_error??null'),null);
       console.log(`PASS ${theme}: Enclose and Fill reference holes, untouched ink/exterior/reference, exact single undo/redo and Escape`);
