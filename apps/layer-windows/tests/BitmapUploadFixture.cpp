@@ -12,6 +12,7 @@
 #include "ColorEditor.h"
 #include "CanvasActionBar.h"
 #include "ToolView.h"
+#include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
 #include <winrt/Windows.Storage.Streams.h>
 #include <robuffer.h>
 #include <atomic>
@@ -558,13 +559,37 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         require(actions->size()==1&&str(actions->back(),L"type")==L"set_tool_setting"&&num(actions->back(),L"value")==63,
             L"Retained numeric field did not edit the new tool target");++checks;
     }
+    winrt::Windows::Foundation::IAsyncAction tonalToolRows(){
+        auto data=workspace();A choices;
+        for(auto const& [command,title]:{std::pair{L"rectangle_select",L"Rectangle select"},std::pair{L"tonal_select",L"Tonal range"}})
+            choices.Append(O({{L"label",S(title)},{L"icon",S(std::wstring_view(command)==L"tonal_select"?L"tonal-select":L"rectangle-select")},{L"enabled",B(true)},
+                {L"action",O({{L"type",S(L"choose_tool_variant")},{L"anchor",O({{L"kind",S(L"header")},{L"id",N(4)}})},
+                    {L"variant",O({{L"type",S(L"command")},{L"command",S(command)}})}})}}));
+        auto tools=O({{L"subtools",choices}});Bindings bindings;
+        auto panel=ToolSetPanel(data,bindings,L"tools",[tools]{return tools;});panel.Width(264);surface.Children().Append(panel);
+        auto refresh=[&]{for(auto const& bind:bindings)bind();};refresh();co_await rendered(panel);
+        auto row=element(panel,L"tool-subtool-0");require(bool(row),L"Selection tool row was not created");
+        using Automation::Peers::FrameworkElementAutomationPeer;
+        auto peer=FrameworkElementAutomationPeer::CreatePeerForElement(row);
+        require(bool(peer),L"Selection tool row did not expose an automation peer");
+        for(auto theme:{L"dark",L"light"})for(auto height:{44.,36.,44.}){
+            data->state.Insert(L"theme",S(theme));A extra;
+            if(height==36)extra.Append(O({{L"Choice",O({{L"id",S(L"tonal-tones")}})}}));
+            data->state.Insert(L"tool_extra",extra);refresh();co_await rendered(panel);
+            auto current=element(panel,L"tool-subtool-0");
+            require(current==row&&FrameworkElementAutomationPeer::CreatePeerForElement(current)==peer,
+                L"Tonal tool layout replaced the retained row or its automation peer");
+            require(current.ActualHeight()==height,L"Selection tool rows did not follow the active Tonal layout height");
+        }
+        ++checks;
+    }
     winrt::Windows::Foundation::IAsyncAction retentionCases(){
         std::vector<hstring> errors;upload->Close();upload=BitmapUpload::Create();image.Source(nullptr);
         for(auto const& [name,run]:std::vector<std::pair<hstring,std::function<winrt::Windows::Foundation::IAsyncAction()>>>{
             {L"filter-key",[this]{return filterRetention(false);}},{L"filter-context",[this]{return filterRetention(true);}},
             {L"filter-upload",[this]{return filterUpload(false);}},{L"filter-stale-upload",[this]{return filterUpload(true);}},{L"filter-row",[this]{return filterRows();}},
             {L"layer-row",[this]{return layerRow();}},{L"waveform-resize",[this]{return waveformResize();}},{L"wheel-ring-first",[this]{return wheelLayout(true);}},{L"wheel-field-first",[this]{return wheelLayout(false);}},
-            {L"row-pickup-pending",[this]{return rowPickup();}},{L"action-bar-pending",[this]{return actionBarPending();}},{L"tool-context",[this]{return toolContext();}}}){
+            {L"row-pickup-pending",[this]{return rowPickup();}},{L"action-bar-pending",[this]{return actionBarPending();}},{L"tool-context",[this]{return toolContext();}},{L"tonal-tool-rows",[this]{return tonalToolRows();}}}){
             phase=name;hstring failure;try{co_await run();}catch(hresult_error const& e){failure=e.message();}catch(...){failure=L"Unhandled fixture failure";}
             retentionResults.Append(O({{L"case",S(name)},{L"passed",B(failure.empty())},{L"error",S(failure)}}));if(!failure.empty())errors.push_back(name+L": "+failure);
             surface.Children().Clear();surface.Children().Append(image);upload->Close();upload=BitmapUpload::Create();image.Source(nullptr);

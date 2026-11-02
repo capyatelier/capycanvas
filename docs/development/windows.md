@@ -593,6 +593,7 @@ Pass the native reports to the `number-controls` and `color-panel` scenarios of
 `test-desktop.ps1`. The Bitmap build reads its input from an absolute
 `CAPY_BITMAP_FIXTURE` path and writes `bitmap-upload-fixture-result.json` beside
 it, with named preview-retention cases in `bitmap-retention-fixture-result.json`. Rebuild normally before using the editor again.
+The `tonal-tool-rows` case checks row heights and retained control identity.
 
 The VM fixture runner builds and routes the LayerDrop companion automatically.
 

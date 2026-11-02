@@ -109,7 +109,7 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
     void refresh(){
         auto view=projection?projection():J{};
         if(!view.Size())view=panel==L"brushes"?object(data->state,L"tool_set"):object(object(data->state,L"tool_panels"),panel.c_str());
-        bool selection=false;for(auto value:array(view,L"subtools"))selection|=str(object(value.GetObject(),L"action"),L"command")==L"tonal_select";
+        bool tonal=false;for(auto value:array(data->state,L"tool_extra"))tonal|=str(object(value.GetObject(),L"Choice"),L"id")==L"tonal-tones";
         bool themeChanged=paintedTheme!=data->theme();paintedTheme=data->theme();
         for(bool group:{true,false}){
             auto items=array(view,group?L"groups":L"subtools");auto key=itemSchema(items);
@@ -123,7 +123,7 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
                 bool enabled=flag(item,L"enabled",true);auto reason=str(item,L"disabled_reason");
                 buttons[i].IsEnabled(enabled);buttons[i].IsHitTestVisible(enabled);buttons[i].Opacity(enabled?1:.36);buttons[i].Content().as<UIElement>().Opacity(enabled&&!reason.empty()?.36:1);
                 if(titleChanged||AutomationProperties::GetHelpText(buttons[i])!=reason){AutomationProperties::SetHelpText(buttons[i],reason);tooltip(shells.GetAt(i),reason.empty()?title:reason);}
-                if(!group)buttons[i].MinHeight(brush?num(object(data->catalog,L"tool_preview_metrics"),L"minimum_height"):selection?32:44);
+                if(!group)buttons[i].MinHeight(brush?num(object(data->catalog,L"tool_preview_metrics"),L"minimum_height"):tonal?36:44);
                 AutomationProperties::SetItemStatus(buttons[i],active?data->caption(L"search",L"selected"):hstring());
             }
         }
