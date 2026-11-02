@@ -447,3 +447,31 @@ $headerGeometry=[scriptblock]::Create(($statements[$start..$last].Extent.Text -j
     }
 }
 Write-Output 'Response headers use fractional native geometry at 100, 150 and 200 percent and retain their one-DIP centerline bound.'
+
+$paperAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/layer-paper.ps1'),[ref]$tokens,[ref]$errors)
+if(@($errors).Count){throw ($errors|Out-String)}
+$textureSpan=@($paperAst.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Texture-Span'},$true))
+if($textureSpan.Count -ne 1){throw 'Missing actual Texture-Span geometry'}
+$rowAssignment=@($textureSpan[0].Body.FindAll({param($n)$n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$rowEvidence'},$true))
+if($rowAssignment.Count -ne 1){throw 'Missing actual texture row evidence assignment'}
+$heightAssignment=@($textureSpan[0].Body.FindAll({param($n)$n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$naturalHeight'},$true)|Where-Object {$_.Extent.StartOffset -lt $rowAssignment[0].Extent.StartOffset -or $_.Extent.EndOffset -gt $rowAssignment[0].Extent.EndOffset})
+$rowGeometry=[scriptblock]::Create(((@($heightAssignment.Extent.Text)+@($rowAssignment[0].Extent.Text)) -join "`n"))
+& {
+    $scale=1.25
+    foreach($case in @('rounded-spacing','viewport-edge','partial-tile')){
+        $viewport=[CapyOwnedSearchTest.Rect]::new(830,393,900,661)
+        $tiles=@(for($i=0;$i -lt 4;$i++){
+            $top=@(462,636,808,982)[$i];$height=if($i -eq 3){72}else{156};$left=850
+            if($i -eq 1 -and $case -eq 'viewport-edge'){$left=829}
+            if($i -eq 1 -and $case -eq 'partial-tile'){$height=74}
+            [pscustomobject]@{id=$i;bounds=[CapyOwnedSearchTest.Rect]::new($left,$top,128,$height)}
+        })
+        $rows=@($tiles|Group-Object {$_.bounds.Top}|Sort-Object {[double]$_.Name})
+        . $rowGeometry
+        $complete=@($rowEvidence|Where-Object full)
+        $expected=if($case -eq 'rounded-spacing'){3}else{2}
+        if($complete.Count -ne $expected -or $rowEvidence[3].full -or !$rowEvidence[0].full -or !$rowEvidence[2].full){throw "Texture row geometry misclassified $case native bounds"}
+        if($case -ne 'rounded-spacing' -and $rowEvidence[1].full){throw "Texture row geometry accepted $case"}
+    }
+}
+Write-Output 'Texture rows use observed native tile height at 120 DPI despite alternating rounded row spacing and exclude clipped rows, viewport edges and partial tiles.'

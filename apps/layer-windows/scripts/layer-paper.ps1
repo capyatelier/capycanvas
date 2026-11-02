@@ -86,10 +86,9 @@ function Texture-Span([string]$Prefix,$Expected){
         $viewport=$scroll.Current.BoundingRectangle
         $tiles=@(for($i=0;$i -lt (Texture-Tiles).Count;$i++){$tile=Find "texture-tile-$i" -Within $frame;if($tile -and $tile.Current.BoundingRectangle.Height -gt 0){[pscustomobject]@{id=$i;bounds=$tile.Current.BoundingRectangle}}})
         $rows=@($tiles|Group-Object {$_.bounds.Top}|Sort-Object {[double]$_.Name})
-        $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+        $naturalHeight=($tiles|ForEach-Object {$_.bounds.Height}|Measure-Object -Maximum).Maximum
         $rowEvidence=@(for($row=0;$row -lt $rows.Count;$row++){
             $members=$rows[$row].Group
-            $naturalHeight=if($row+1 -lt $rows.Count){[double]$rows[$row+1].Name-[double]$rows[$row].Name-14*$scale}else{($rows[$row-1].Group|ForEach-Object {$_.bounds.Height}|Measure-Object -Maximum).Maximum}
             $fullHeight=($members|ForEach-Object {$_.bounds.Height}|Measure-Object -Maximum).Maximum
             [pscustomobject]@{top=[double]$rows[$row].Name;natural_height=$naturalHeight;observed_height=$fullHeight;tiles=@($members);full=([Math]::Abs($fullHeight-$naturalHeight) -le 1 -and !@($members|Where-Object {!$viewport.Contains($_.bounds)}).Count)}
         })
