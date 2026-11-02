@@ -634,7 +634,7 @@ pub fn toolbar_slider_styled_layout(width: f32, height: f32, axis: Axis, tile: T
 /// Icons belong to the shared field schema, including compact native hosts.
 pub fn tool_setting_icon(id: &str) -> &'static str {
     match id {
-        "size" => "brush-size",
+        "size" | "unfilled_size" => "brush-size",
         "size_jitter" => "size-variation",
         "opacity" => "opacity",
         "flow" => "flow",
