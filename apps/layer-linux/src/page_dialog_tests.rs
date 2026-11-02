@@ -268,7 +268,10 @@ fn export_page(d: &mut Driver, frame: &gtk::Widget, tag: &str) {
 }
 
 pub(super) fn inventory(d: &mut Driver) {
-    let compact = d.w.surface.width().min(d.w.surface.height()) < 320;
+    inventory_with(d, capture);
+}
+
+fn inventory_with(d: &mut Driver, mut visit: impl FnMut(&mut Driver, &str)) {
     d.w.dispatch(UiAction::Invoke { command: CommandId::Settings });
     let (dialog, frame) = page_frame(d);
     let split = descendants::<adw::NavigationSplitView>(&frame).pop().unwrap();
@@ -277,53 +280,52 @@ pub(super) fn inventory(d: &mut Driver) {
         until(|| !split.shows_content(), "Preferences returns to its root list");
         page_header(&frame);
     }
-    capture(d, "preferences-root");
+    visit(d, "preferences-root");
     let appearance = SettingsPage::Appearance.localized_title(&d.w.localization());
     d.click(&mapped_label(&frame, &appearance).unwrap());
     until(|| split.shows_content(), "Preferences opens its page");
     if split.is_collapsed() { page_header(&frame); }
-    capture(d, "preferences-subpage");
+    visit(d, "preferences-subpage");
     close(d, &dialog);
 
-    if !compact {
-        d.w.dispatch(UiAction::Invoke { command: CommandId::NewDocument });
-        let (dialog, _) = page_frame(d);
-        capture(d, "new-drawing");
-        close(d, &dialog);
-    }
+    d.w.dispatch(UiAction::Invoke { command: CommandId::NewDocument });
+    let (dialog, _) = page_frame(d);
+    visit(d, "new-drawing");
+    close(d, &dialog);
     d.w.dispatch(UiAction::Invoke { command: CommandId::ExportDocument });
     let (dialog, frame) = page_frame(d);
     until(|| find_named(&frame, "color-preview-after").and_then(|widget| widget.downcast::<gtk::Picture>().ok())
         .is_some_and(|picture| picture.paintable().is_some()), "Export publishes its inventory preview");
-    capture(d, "export");
+    visit(d, "export");
     export_page(d, &frame, "size");
-    capture(d, "export-size");
+    visit(d, "export-size");
     close(d, &dialog);
-    if compact { return; }
 
     d.w.dispatch(UiAction::Invoke { command: CommandId::CanvasSize });
     let (dialog, _) = page_frame(d);
-    capture(d, "canvas-size");
+    visit(d, "canvas-size");
     close(d, &dialog);
     crate::color_editor::show(&d.w, layer_ui::ColorSlot::Foreground);
     let (dialog, _) = page_frame(d);
-    capture(d, "color");
+    visit(d, "color");
     close(d, &dialog);
     d.w.workspaces.ui.show(&d.w, layer_workspace::ManagerPage::Workspaces);
     let (dialog, _) = page_frame(d);
-    capture(d, "workspaces");
+    visit(d, "workspaces");
     close(d, &dialog);
     d.w.workspaces.ui.show(&d.w, layer_workspace::ManagerPage::ThisWorkspace);
     let (dialog, frame) = page_frame(d);
-    capture(d, "workspace-manager-root");
+    visit(d, "workspace-manager-root");
     let split = descendants::<adw::NavigationSplitView>(&frame).pop().unwrap();
     if split.is_mapped() {
         let list = named::<gtk::ListBox>(&frame, "workspace-manager-items");
-        d.click(list.row_at_index(0).unwrap().upcast_ref());
+        let row = list.row_at_index(0).unwrap();
+        super::histogram::scroll_to(row.upcast_ref());
+        d.click(row.upcast_ref());
         until(|| split.shows_content(), "the workspace manager opens its inventory details");
         page_header(&frame);
     }
-    capture(d, "workspace-manager-detail");
+    visit(d, "workspace-manager-detail");
     close(d, &dialog);
 }
 
@@ -655,3 +657,6 @@ fn native_phone_editor_page_dark_surfaces() {
     }
     d.finish();
 }
+
+#[path = "phone_page_bounds_tests.rs"]
+mod bounds;

@@ -1565,6 +1565,28 @@ fn inventory_close(d: &mut Driver) {
 fn inventory_drawer_ready(d: &Driver) {
     until(|| state(&d.w).customization.drawer.is_some() && d.w.drawer.placement().is_some()
         && !d.w.drawer.animation_active(), "the inventory drawer finishes opening");
+    until(|| {
+        let view = state(&d.w);
+        let drawer = view.customization.drawer.as_ref().unwrap();
+        let panels = drawer.columns.iter().flatten().copied().collect::<Vec<_>>();
+        if panels.contains(&Panel::Layers) && drawer.layer_properties != Some(true) {
+            let Some(layers) = d.w.drawer.layers() else { return false; };
+            let Some(id) = view.layer_tools.editing_layer.as_ref().map(|row| row.id) else { return false; };
+            if layers.list.width() <= 0 || layers.list.height() <= 0 || !find_named(layers.list.upcast_ref(), &format!("art-layer-{id}"))
+                .filter(|row| row.is_mapped()).and_then(|row| row.compute_bounds(&layers.list))
+                .is_some_and(|bounds| bounds.width() > 0. && bounds.height() > 0.
+                    && bounds.y() >= -1. && bounds.y() + bounds.height() <= layers.list.height() as f32 + 1.) { return false; }
+        }
+        if panels.contains(&Panel::Color) {
+            let Some(content) = find_named(d.w.window.upcast_ref(), "drawer-panel-Color").filter(|widget| widget.is_mapped()) else { return false; };
+            let Some(wheel) = find_named(&content, "color-wheel").and_downcast::<crate::tool_panels::ColorWheel>() else { return false; };
+            let Some(scroll) = wheel.ancestor(gtk::ScrolledWindow::static_type()) else { return false; };
+            let (diameter, origin) = wheel.drawing_bounds();
+            if !wheel.is_mapped() || scroll.width() <= 0 || scroll.height() <= 0 || wheel.width() <= 0
+                || diameter < 127.5 || origin[1] < -0.5 || origin[1] + diameter > wheel.height() as f32 + 0.5 { return false; }
+        }
+        true
+    }, "the inventory drawer has allocated its visible contents");
 }
 
 fn inventory_monitor(d: &mut Driver, name: &str) {
@@ -1599,8 +1621,14 @@ fn native_phone_inventory() {
             d.w.dispatch(UiAction::Phone { action: PhoneAction::SwapSides });
             capture(&mut d, "inventory-swapped");
             d.w.dispatch(UiAction::Phone { action: PhoneAction::SwapSides });
+            let w = d.w.clone();
+            let frames = sample_after_paint(&d.w.window, move || state(&w).phone.hidden
+                && std::iter::successors(w.phone.root.first_child(), |child| child.next_sibling())
+                    .all(|child| child.is_mapped() == (child.widget_name() == "phone-sliders-chip"))
+                && find_named(w.phone.root.upcast_ref(), "component-slider-size").is_some_and(|slider| !slider.is_mapped()));
             d.input.key(0xff09);
-            until(|| state(&d.w).phone.hidden, "Zen hides the inventory bars");
+            until(|| frames.samples.borrow().iter().any(|sample| sample.state), "Zen's hidden controls reach native after-paint");
+            drop(frames.finish());
             capture(&mut d, "inventory-hidden");
             d.input.key(0xff1b);
             until(|| !state(&d.w).phone.hidden, "Escape restores the inventory bars");
