@@ -27,9 +27,12 @@ for (const key of ['Enter', 'Escape', 'ArrowDown']) {
     send('compositionstart', {timeStamp:10});
     assert.ok(composingKey(send('keydown', {key:'Process', code:key, keyCode:229, timeStamp:20})));
     send('compositionend', {timeStamp:22});
-    assert.equal(!!composingKey(send('keydown', {key, code:key, keyCode:key === 'Enter' ? 13 : 0, timeStamp:20})), key !== 'Enter');
-    assert.equal(!!composingKey(send('keydown', {key, code:key, keyCode:key === 'Enter' ? 13 : 0, repeat:true, timeStamp:25})), key !== 'Enter');
-    assert.equal(!!composingKey(send('keyup', {key, code:key, keyCode:key === 'Enter' ? 13 : 0, timeStamp:30})), key !== 'Enter');
+    assert.ok(composingKey(send('keydown', {key:'Process', code:key, timeStamp:23})));
+    assert.equal(!!composingKey(send('keydown', {key, code:key, keyCode:key === 'Enter' ? 13 : 0, timeStamp:20})), false);
+    assert.equal(!!composingKey(send('keydown', {key, code:key, keyCode:key === 'Enter' ? 13 : 0, repeat:true, timeStamp:25})), false);
+    assert.ok(compositionBusy());
+    assert.equal(!!composingKey(send('keyup', {key, code:key, keyCode:key === 'Enter' ? 13 : 0, timeStamp:30})), false);
+    assert.ok(!compositionBusy());
     assert.ok(!composingKey(send('keydown', {key, code:key, timeStamp:40})));
   });
 }
@@ -56,19 +59,28 @@ test('a passed Enter submits the committed Korean form once despite an older tim
   send('keyup', {key:'Enter', code:'Enter', keyCode:13, timeStamp:41});
 });
 
-test('candidate Escape suppresses the dialog default cancellation until release', () => {
-  const {send, dialog, field} = editor();
+test('passed Escape permits the dialog default cancellation once until release', () => {
+  let open = true, cancelled = 0;
+  const {send, dialog, root, field} = editor({}, undefined, undefined, event => {
+    if (event.type === 'cancel' && open) { open = false; cancelled++; }
+  });
   send('compositionstart', {timeStamp:10});
   send('compositionend', {timeStamp:22});
-  send('keydown', {key:'Escape', code:'Escape', timeStamp:20});
-  assert.ok(composingKey({target:field}));
-  assert.ok(send('cancel', {timeStamp:25}, dialog).defaultPrevented);
-  send('keyup', {key:'Escape', code:'Escape', timeStamp:30});
+  assert.ok(!composingKey(send('keydown', {key:'Escape', code:'Escape', timeStamp:20})));
   assert.ok(!composingKey({target:field}));
-  assert.ok(!send('cancel', {timeStamp:45}, dialog).defaultPrevented);
+  assert.ok(compositionBusy());
+  assert.equal(send('cancel', {timeStamp:25}, dialog).defaultPrevented, false);
+  assert.equal(cancelled, 1);
+  send('focusout'); root.activeElement = {};
+  send('keyup', {key:'Process', code:'Escape', keyCode:229, timeStamp:29}, root.activeElement);
+  assert.ok(compositionBusy());
+  send('keyup', {key:'Escape', code:'Escape', timeStamp:30}, root.activeElement);
+  assert.ok(!compositionBusy());
+  send('cancel', {timeStamp:45}, dialog);
+  assert.equal(cancelled, 1);
 });
 
-test('candidate Escape preserves committed search text before its native default', () => {
+test('passed Escape clears the committed search with its native default', () => {
   const field = {value:'mc0001 한글'}, releases = [];
   const {send} = editor(field, event => {
     assert.ok(composingKey(event));
@@ -80,16 +92,17 @@ test('candidate Escape preserves committed search text before its native default
   assert.equal(send('keydown', {key:'Process', code:'Escape', keyCode:229, isComposing:true, timeStamp:21295.8}).defaultPrevented, false);
   send('compositionend', {data:'글', timeStamp:21297});
   const candidate = send('keydown', {key:'Escape', code:'Escape', keyCode:27, isComposing:false, timeStamp:21296.3});
-  assert.equal(field.value, 'mc0001 한글');
-  assert.equal(candidate.defaultPrevented, true);
+  assert.equal(field.value, '');
+  assert.equal(candidate.defaultPrevented, false);
+  assert.ok(compositionBusy());
   assert.equal(send('keyup', {key:'Process', code:'Escape', keyCode:229, timeStamp:21296.5}).defaultPrevented, false);
   assert.equal(send('keyup', {key:'Escape', code:'Escape', keyCode:27, timeStamp:21296.6}).defaultPrevented, false);
-  assert.deepEqual(releases, ['Process', 'Escape']);
+  assert.deepEqual(releases, ['Process']);
   assert.ok(!composingKey({target:field, timeStamp:21300}));
   assert.equal(send('keydown', {key:'Escape', code:'Escape', keyCode:27, timeStamp:21310}).defaultPrevented, false);
   assert.equal(field.value, '');
   send('keyup', {key:'Escape', code:'Escape', keyCode:27, timeStamp:21311});
-  assert.deepEqual(releases, ['Process', 'Escape']);
+  assert.deepEqual(releases, ['Process']);
 });
 
 test('passed Enter inserts the committed Korean textarea newline once', () => {

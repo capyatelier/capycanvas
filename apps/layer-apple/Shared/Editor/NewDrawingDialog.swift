@@ -61,8 +61,7 @@ private struct NewDrawingDialog: View {
                 if closed && drawer["kind"].string == "presets" { focused = "search" }
             }
             .onChange(of: drawer["query"].string) { _, shared in if shared.isEmpty { query = "" } }
-            .onKeyPress(.escape) {
-                guard !NativeTextContext.composing else { return .ignored }
+            .onNativeTextKey(.escape) {
                 send(["op": "back"]); return .handled
             }
             .onDisappear { closePaperColor() }

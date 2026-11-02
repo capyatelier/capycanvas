@@ -245,6 +245,7 @@ impl CommandBar {
                 }
             }
         ));
+        crate::input::stop_search(&self.entry, glib::clone!(#[weak] w, move |_| w.command_bar.cancel(&w)));
         self.entry.connect_activate(glib::clone!(
             #[weak]
             w,
@@ -260,13 +261,20 @@ impl CommandBar {
         let keys = gtk::EventControllerKey::new();
         keys.set_name(Some("command-search-navigation"));
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
-        keys.connect_key_pressed(glib::clone!(
+        keys.connect_key_pressed(glib::clone!(#[weak] w, #[upgrade_or] glib::Propagation::Proceed, move |_, _, keycode, _| {
+            w.command_bar.composition.capture(keycode);
+            glib::Propagation::Proceed
+        }));
+        let composed = gtk::EventControllerKey::new();
+        composed.set_name(Some("command-search-composed-key"));
+        composed.set_propagation_phase(gtk::PropagationPhase::Bubble);
+        composed.connect_key_pressed(glib::clone!(
             #[weak]
             w,
             #[upgrade_or]
             glib::Propagation::Proceed,
-            move |_, key, keycode, modifiers| {
-                if w.command_bar.composition.capture(keycode) { return glib::Propagation::Proceed; }
+            move |controller, key, keycode, modifiers| {
+                if w.command_bar.composition.bubble(controller, keycode) == glib::Propagation::Stop { return glib::Propagation::Stop; }
                 if !w.command_bar.is_open() { return glib::Propagation::Stop; }
                 if matches!(key, gdk::Key::Tab | gdk::Key::ISO_Left_Tab) {
                     let direction = if key == gdk::Key::ISO_Left_Tab || modifiers.contains(gdk::ModifierType::SHIFT_MASK) {
@@ -281,17 +289,8 @@ impl CommandBar {
                 let action = match key {
                     gdk::Key::Up => Some(CommandSearchAction::Move { delta: -1 }),
                     gdk::Key::Down => Some(CommandSearchAction::Move { delta: 1 }),
-                    gdk::Key::Escape
-                        if w.command_bar
-                            .view
-                            .borrow()
-                            .as_ref()
-                            .is_some_and(|v| v.parameter.is_some()) =>
-                    {
-                        Some(CommandSearchAction::Back)
-                    }
                     gdk::Key::Escape => {
-                        w.close_command_search();
+                        w.command_bar.cancel(&w);
                         return glib::Propagation::Stop;
                     }
                     _ => None,
@@ -314,14 +313,16 @@ impl CommandBar {
             }
         ));
         self.root.add_controller(keys);
-        let composed = gtk::EventControllerKey::new();
-        composed.set_name(Some("command-search-composed-key"));
-        composed.set_propagation_phase(gtk::PropagationPhase::Bubble);
-        composed.connect_key_pressed(glib::clone!(#[weak] w, #[upgrade_or] glib::Propagation::Proceed, move |controller, key, code, _| w.command_bar.composition.bubble(controller, key, code)));
         self.root.add_controller(composed);
         let focus = gtk::EventControllerFocus::new();
         focus.connect_leave(glib::clone!(#[weak] w, move |_| w.command_bar.composition.clear()));
         self.root.add_controller(focus);
+    }
+
+    fn cancel(&self, w: &Rc<Workspace>) {
+        if self.view.borrow().as_ref().is_some_and(|view| view.parameter.is_some()) {
+            w.dispatch(UiAction::CommandSearch { action: CommandSearchAction::Back });
+        } else { w.close_command_search(); }
     }
 
     fn execute(&self, w: &Rc<Workspace>, index: Option<usize>) {

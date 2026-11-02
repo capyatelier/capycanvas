@@ -146,7 +146,7 @@ private struct CommandSearchBar: View {
             .textFieldStyle(.plain).editorSearchInput().focused($focused)
             .accessibilityIdentifier("command-search").accessibilityLabel(label)
             .onNativeTextSubmit(text) { committed in text = committed; send(["type": "commit", "text": committed]); focused = true }
-            .onKeyPress(.escape) { guard !NativeTextContext.composing else { return .ignored }; back(); return .handled }
+            .onNativeTextKey(.escape) { back(); return .handled }
             .onKeyPress(.upArrow) { NativeTextContext.composing ? .ignored : move(-1) }
             .onKeyPress(.downArrow) { NativeTextContext.composing ? .ignored : move(1) }
         #endif

@@ -154,7 +154,7 @@ struct ColorEditor: View {
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
         }.padding(16).frame(maxWidth: .infinity, maxHeight: .infinity).background(palette["settings"])
-            .onKeyPress(.escape) { guard !NativeTextContext.composing else { return .ignored }; escapeSearch(); return .handled }
+            .onNativeTextKey(.escape) { escapeSearch(); return .handled }
             .accessibilityElement(children: .contain).accessibilityIdentifier("color-sheet")
     }
     private func tile(_ entry: JSON, kind: String) -> some View {
@@ -166,7 +166,6 @@ struct ColorEditor: View {
             .accessibilityIdentifier("color-tile-\(kind)")
     }
     private func escapeSearch() {
-        guard !NativeTextContext.composing else { return }
         if searchFocused && !search.isEmpty { search = "" } else { setSheet(false) }
     }
     private func setSheet(_ open: Bool) {
@@ -444,7 +443,7 @@ private struct ColorValueField: View {
                     .onAppear { DispatchQueue.main.async { focus.wrappedValue = name } }
                     .onChange(of: focus.wrappedValue) { _, now in if now != name { opened = false } }
                     .onNativeTextSubmit(draft ?? shown["edit"].string) { draft = $0; focus.wrappedValue = nil }
-                    .onKeyPress(.escape) { draft = nil; session.dismissError(name); opened = false; focus.wrappedValue = nil; return .handled }
+                    .onNativeTextKey(.escape) { draft = nil; session.dismissError(name); opened = false; focus.wrappedValue = nil; return .handled }
                     .onKeyPress(keys: [.upArrow, .downArrow]) { press in
                         guard scrub != nil else { return .ignored }
                         step(press.key == .upArrow ? 2 : -2, speed: press.modifiers.contains(.shift) ? "fast" : !press.modifiers.intersection([.option, .control]).isEmpty ? "fine" : "normal"); return .handled

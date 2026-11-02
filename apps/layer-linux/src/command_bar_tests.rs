@@ -546,14 +546,54 @@ fn native_command_bar_preedit_guard() {
             text.emit_preedit_changed(preedit);
             assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
             text.emit_preedit_changed("");
-            assert!(bubble.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
-            assert!(state(&d.w).command_search.is_some());
+            if preedit == "한국어" {
+                assert!(bubble.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+                assert!(state(&d.w).command_search.is_none());
+                assert!(crate::input::localization_input_busy(&d.w.window));
+            } else {
+                assert!(state(&d.w).command_search.is_some());
+                keys.emit_by_name::<()>("key-released", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]);
+                assert!(keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()])
+                    || bubble.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+                assert!(state(&d.w).command_search.is_none());
+            }
             keys.emit_by_name::<()>("key-released", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]);
-            assert!(keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
-            assert!(state(&d.w).command_search.is_none());
+            assert!(!crate::input::localization_input_busy(&d.w.window));
         }
     }
     command_search_native_composition(&mut d);
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        d.w.workspaces.open(&d.w, layer_workspace::ManagerPage::Workspaces);
+        until(|| d.w.workspaces.view().page.is_some() && !d.w.workspaces.busy(), "Manager ready for nested name form");
+        d.w.workspaces.send(&d.w, layer_workspace::WorkspaceInput::Form { action: layer_workspace::ManagerAction::New });
+        until(|| find_named(d.w.window.upcast_ref(), "workspace-item-name").is_some_and(|entry| entry.is_mapped()), "Name form mapped");
+        let entry = named::<gtk::Entry>(d.w.window.upcast_ref(), "workspace-item-name");
+        let text = entry.delegate().and_downcast::<gtk::Text>().unwrap();
+        let composition = crate::input::guard_entry_activation(&entry);
+        let controllers = text.observe_controllers();
+        let capture = (0..controllers.n_items()).find_map(|i| controllers.item(i).and_downcast::<gtk::EventControllerKey>()
+            .filter(|keys| keys.propagation_phase() == gtk::PropagationPhase::Capture)).unwrap();
+        let retire = capture.connect_key_pressed(glib::clone!(#[weak] text, #[upgrade_or] glib::Propagation::Proceed, move |_, key, _, _| {
+            if key == gdk::Key::Escape { text.emit_preedit_changed(""); }
+            glib::Propagation::Proceed
+        }));
+        entry.set_text("한글");
+        assert!(text.grab_focus());
+        text.emit_preedit_changed("글");
+        let artwork = ui_session(&d.w).engine().document().artwork.clone();
+        d.input.perform(serde_json::json!([{"key":0xff1b,"down":true}]));
+        until(|| d.w.workspaces.view().prompt.is_none() && !entry.is_mapped(), "Passed Escape cancels the name form");
+        assert!(composition.busy());
+        assert!(!composition.active());
+        d.input.perform(serde_json::json!([{"key":0xff1b,"down":false}]));
+        assert!(!composition.busy(), "Passed key release crosses the retained manager's modal event boundary");
+        assert!(!crate::input::localization_input_busy(&d.w.window));
+        assert_eq!(ui_session(&d.w).engine().document().artwork, artwork);
+        capture.disconnect(retire);
+        d.w.workspaces.send(&d.w, layer_workspace::WorkspaceInput::Dismiss);
+        until(|| d.w.workspaces.view().page.is_none(), "Manager dismissed");
+    }
     d.w.window.close();
     pump(160);
 }

@@ -263,7 +263,7 @@ private struct PaletteFooter: View {
                         .focused($editorFocused)
                         .onAppear { DispatchQueue.main.async { editorFocused = true } }
                         .onNativeTextSubmit(controller.editText) { controller.editText = String($0.prefix(64)); controller.commitName(controller.editText) }
-                        .onKeyPress(.escape) { guard !NativeTextContext.composing else { return .ignored }; controller.cancelEditing(); return .handled }
+                        .onNativeTextKey(.escape) { controller.cancelEditing(); return .handled }
                         .onChange(of: editorFocused) { _, focused in if !focused { controller.commitName(controller.editText) } }
                         .accessibilityIdentifier("palette-name-editor")
                 } else {
@@ -297,7 +297,7 @@ private struct PaletteChooser: View {
                 HStack(spacing: 6) {
                     SharedIcon(name: "search", size: 14).opacity(0.6)
                     TextField(store.catalog["native_copy"]["palettes"]["find"].string, text: $query).textFieldStyle(.plain).focused($searching)
-                        .onKeyPress(.escape) { guard !NativeTextContext.composing else { return .ignored }; controller.chooser = false; return .handled }
+                        .onNativeTextKey(.escape) { controller.chooser = false; return .handled }
                         .accessibilityIdentifier("palette-search")
                 }.padding(.horizontal, 6).frame(height: store.panelMetrics.height).background(palette["input"], in: SquircleShape.control)
                 Button { controller.openMenu(.library, owner: rows.owner) } label: {

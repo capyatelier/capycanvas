@@ -52,7 +52,11 @@ struct NumericTextField: UIViewRepresentable {
         field.accessibilityLanguage = interfaceLanguage.isEmpty ? nil : interfaceLanguage
         field.interfaceLanguage = interfaceLanguage
         field.accessibilityLabel = label; field.accessibilityIdentifier = identifier
-        field.cancel = cancel; field.step = step; field.submit = submit
+        field.cancel = { [weak field, coordinator = context.coordinator] in
+            guard let field, let text = NativeTextContext.committedText(in: field) else { return }
+            coordinator.parent.text = text; coordinator.parent.cancel()
+        }
+        field.step = step; field.submit = submit
         if focused && !field.isFirstResponder {
             let coordinator = context.coordinator
             DispatchQueue.main.async { [weak field] in
@@ -97,7 +101,7 @@ struct NumericTextField: UIViewRepresentable {
         }
         func textFieldDidEndEditing(_ textField: UITextField) { if parent.focused { parent.focused = false } }
         func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-            guard let text = NativeTextContext.submittedText(in: textField) else { return false }
+            guard let text = NativeTextContext.committedText(in: textField) else { return false }
             parent.text = text
             return parent.submit(true)
         }

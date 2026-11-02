@@ -83,7 +83,7 @@ struct WorkspaceManagerView: View {
             }
         }.padding(20).frame(minWidth: 340, idealWidth: workspaces.page == "workspaces" ? 460 : workspaces.page == "history" ? 480 : 620, maxWidth: workspaces.page == "workspaces" ? 620 : 800,
             minHeight: workspaces.page == "workspaces" ? 0 : 360, idealHeight: workspaces.page == "workspaces" ? workspaceRowsHeight+176 : 600, maxHeight: 900)
-            .onKeyPress(.escape) { guard !NativeTextContext.composing else{return .ignored};if workspaces.inlineRename { workspaces.cancelPrompt() } else { workspaces.dismiss() }; return .handled }
+            .onNativeTextKey(.escape) { if workspaces.inlineRename { workspaces.cancelPrompt() } else { workspaces.dismiss() }; return .handled }
             .accessibilityElement(children: .contain).accessibilityIdentifier("workspace-library-manager")
             .onChange(of: workspaces.page) { _, _ in query = "" }
             .onChange(of: [language] + view["rows"].array.map { $0["title"].string }, initial: true) { _, _ in refreshCaptions() }

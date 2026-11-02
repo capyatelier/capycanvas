@@ -22,7 +22,7 @@ struct AdjustmentPanel: View {
                         .background(palette["input"], in: SquircleShape.control)
                         .overlay(SquircleShape.control.stroke(palette["text"].opacity(0.4), lineWidth: 1))
                         .focused($searching).accessibilityIdentifier("filter-search")
-                        .onKeyPress(.escape) { send(["op": "toggle_search"]); return .handled }
+                        .onNativeTextKey(.escape) { send(["op": "toggle_search"]); return .handled }
                 } else {
                     SharedIcon(name: categories.first { $0["id"].string == picker["category"].string }?["icon"].string ?? "adjustments")
                     EditorChoice(label: store.catalog["native_copy"]["color"]["category"].string, options: categories.map { $0["label"].string },

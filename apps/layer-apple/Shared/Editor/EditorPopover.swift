@@ -102,7 +102,7 @@ private struct EditorPopoverLayer: View {
                 .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
                 .offset(x: origin.x, y: origin.y)
                 .accessibilityAddTraits(.isModal)
-        }.onKeyPress(.escape) { request.dismiss(); return .handled }
+        }.onNativeTextKey(.escape) { request.dismiss(); return .handled }
             .onChange(of: phase) { _, phase in if phase != .active { request.dismiss() } }
     }
 }

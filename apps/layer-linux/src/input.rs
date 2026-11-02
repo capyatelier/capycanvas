@@ -33,8 +33,7 @@ impl CompositionKeys {
     }
     fn busy(&self) -> bool { !self.owned.borrow().is_empty() || !self.passed.borrow().is_empty() }
     fn pass(&self, keycode: u32) -> bool {
-        self.owned.borrow_mut().remove(&keycode);
-        self.passed.borrow_mut().insert(keycode)
+        self.owned.borrow_mut().remove(&keycode) && self.passed.borrow_mut().insert(keycode)
     }
     pub(crate) fn release(&self, keycode: u32) -> bool {
         self.passed.borrow_mut().remove(&keycode);
@@ -61,8 +60,8 @@ impl EntryComposition {
     pub(crate) fn capture(&self, keycode: u32) -> bool { self.keys.capture(keycode, self.composing.get()) }
     pub(crate) fn release(&self, keycode: u32) -> bool { self.keys.release(keycode) }
     pub(crate) fn clear(&self) { self.composing.set(false); self.keys.clear(); }
-    pub(crate) fn bubble(self: &Rc<Self>, controller: &gtk::EventControllerKey, key: gdk::Key, keycode: u32) -> glib::Propagation {
-        if matches!(key, gdk::Key::Return | gdk::Key::KP_Enter | gdk::Key::ISO_Enter) && !self.marked() && self.keys.pass(keycode)
+    pub(crate) fn bubble(self: &Rc<Self>, controller: &gtk::EventControllerKey, keycode: u32) -> glib::Propagation {
+        if !self.marked() && self.keys.pass(keycode)
             && let Some(widget) = controller.widget() && let Some(releases) = composition_releases(&widget) {
             releases.borrow_mut().push(self.clone());
         }
@@ -78,6 +77,7 @@ fn composition_releases(widget: &impl IsA<gtk::Widget>) -> Option<CompositionRel
     let releases = CompositionReleases::default();
     let keys = gtk::EventControllerKey::new();
     keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    keys.set_propagation_limit(gtk::PropagationLimit::None);
     keys.connect_key_released(glib::clone!(#[strong] releases, move |_, _, code, _| {
         releases.borrow_mut().retain(|entry| { entry.release(code); entry.busy() });
     }));
@@ -122,7 +122,7 @@ pub(crate) fn guard_editable_activation(entry: &(impl IsA<gtk::Widget> + IsA<gtk
     editable.add_controller(keys);
     let bubble = gtk::EventControllerKey::new();
     bubble.set_propagation_phase(gtk::PropagationPhase::Bubble);
-    bubble.connect_key_pressed(glib::clone!(#[strong] ownership, move |controller, key, code, _| ownership.bubble(controller, key, code)));
+    bubble.connect_key_pressed(glib::clone!(#[strong] ownership, move |controller, _, code, _| ownership.bubble(controller, code)));
     editable.add_controller(bubble);
     let focus = gtk::EventControllerFocus::new();
     focus.connect_leave(glib::clone!(#[strong] ownership, move |_| ownership.clear()));
@@ -1167,18 +1167,19 @@ impl Input {
 mod tests {
     #[test]
     fn passed_composition_key_stays_busy_after_retirement_until_release() {
-        for composing in [true, false] {
+        for (keycode, composing) in [36, 9, 111, 116, 23, 38].into_iter().flat_map(|key| [true, false].map(|composing| (key, composing))) {
             let keys = super::CompositionKeys::default();
-            assert_eq!(keys.capture(36, composing), composing);
-            assert!(keys.pass(36));
+            assert_eq!(keys.capture(keycode, composing), composing);
+            assert_eq!(keys.pass(keycode), composing);
             assert!(!keys.active());
-            assert!(keys.busy());
-            assert!(!keys.capture(36, true));
+            assert_eq!(keys.busy(), composing);
+            if composing { assert!(!keys.capture(keycode, true)); }
             keys.clear();
-            assert!(keys.busy());
-            assert!(!keys.release(36));
+            assert_eq!(keys.busy(), composing);
+            assert!(!keys.release(keycode));
             assert!(!keys.busy());
-            assert!(keys.pass(36));
+            assert!(keys.capture(keycode, true));
+            assert!(keys.pass(keycode));
             keys.cancel();
             assert!(!keys.busy());
         }

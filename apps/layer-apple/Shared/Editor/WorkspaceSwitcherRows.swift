@@ -73,7 +73,7 @@ struct WorkspaceSwitcherRows: View {
                                 .onAppear {editing=true;workspaces.validateName(required:true)}
                                 .onChange(of:workspaces.formName) {_,_ in workspaces.validateName(required:true)}
                                 .onChange(of:editing) {_,focused in if !focused {workspaces.finishName()}}
-                                .onKeyPress(.escape) {guard !NativeTextContext.composing else{return .ignored};workspaces.cancelPrompt();return .handled}
+                                .onNativeTextKey(.escape) { workspaces.cancelPrompt(); return .handled }
                         }
                         }.frame(minHeight:metrics.height).accessibilityIdentifier("workspace-name-slot-"+id)
                         if !row["subtitle"].string.isEmpty {Text(row["subtitle"].string).font(.caption).foregroundStyle(.secondary).lineLimit(1).padding(.horizontal,metrics.padding)}

@@ -51,7 +51,7 @@ struct TextComposition : implements<TextComposition,Windows::Foundation::IInspec
     }
     void Start(TextBox const& field){
         entry=make_weak(field);
-        keys.Update(true,uint32_t(GetMessageTime()));Notify();
+        keys.Update(true);Notify();
         auto library=GetModuleHandleW(L"msctf.dll");
         auto getManager=library?reinterpret_cast<HRESULT(WINAPI*)(ITfThreadMgr**)>(GetProcAddress(library,"TF_GetThreadMgr")):nullptr;
         com_ptr<ITfThreadMgr> manager;com_ptr<ITfDocumentMgr> document;com_ptr<ITfContext> context;
@@ -65,7 +65,7 @@ struct TextComposition : implements<TextComposition,Windows::Foundation::IInspec
         com_ptr<ITfContext> active;active.copy_from(context);if(active.try_as<ITfSource>()!=source)return S_OK;
         com_ptr<ITfContextComposition> composing;com_ptr<IEnumITfCompositionView> items;com_ptr<ITfCompositionView> item;ULONG count=0;
         if(SUCCEEDED(context->QueryInterface(__uuidof(ITfContextComposition),composing.put_void()))&&SUCCEEDED(composing->EnumCompositions(items.put()))&&SUCCEEDED(items->Next(1,item.put(),&count)))
-            keys.Update(count!=0,uint32_t(GetTickCount()));
+            keys.Update(count!=0);
         NotifyAfterInput();return S_OK;
     }
 };
@@ -94,7 +94,7 @@ void captureTextComposition(TextBox const& entry,std::function<void(bool)> local
     if(entry.Resources().HasKey(captured))return;
     entry.Resources().Insert(captured,box_value(true));
     entry.TextCompositionStarted([](TextBox const& entry,auto&&){if(auto state=composition(entry))state->Start(entry);});
-    entry.TextCompositionEnded([](TextBox const& entry,auto&&){if(auto state=composition(entry);state&&!state->source&&state->entry.get()==entry){state->keys.Update(false,uint32_t(GetTickCount()));state->NotifyAfterInput();}});
+    entry.TextCompositionEnded([](TextBox const& entry,auto&&){if(auto state=composition(entry);state&&!state->source&&state->entry.get()==entry){state->keys.Update(false);state->NotifyAfterInput();}});
     entry.LostFocus([](auto&& sender,auto&&){auto entry=sender.template as<TextBox>();if(auto state=composition(entry))state->Clear(entry);});
     entry.Unloaded([](auto&& sender,auto&&){auto entry=sender.template as<TextBox>();if(auto state=composition(entry))state->Clear(entry);});
     entry.PreviewKeyDown([](auto&&,KeyRoutedEventArgs const& event){if(composingKey(event))event.Handled(true);});

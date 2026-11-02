@@ -161,7 +161,7 @@ import SwiftUI
                 guard header.enabled, header.selected != nil else { return .ignored }
                 header.removeSelected(); return .handled
             }
-            .onKeyPress(.escape) {
+            .onNativeTextKey(.escape) {
                 guard header.enabled else { return .ignored }
                 if header.contact.dragging { header.cancel() }
                 else if header.overflowZone != nil { header.closeOverflow() }

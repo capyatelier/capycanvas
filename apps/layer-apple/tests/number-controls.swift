@@ -9,12 +9,19 @@ import SwiftUI
 @main struct NumberControlCaptures {
     @MainActor static func main() async throws {
         _ = NSApplication.shared; NSApp.setActivationPolicy(.prohibited)
-        let composing = NSTextView()
-        composing.string = "한"
-        composing.setMarkedText("글", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: 1, length: 0))
-        precondition(composing.hasMarkedText())
-        precondition(NativeTextContext.submittedText(in: composing) == "한글" && !composing.hasMarkedText(),
-            "A delivered native submit must commit and read the final Korean syllable")
+        for (action, selector) in [("submit", #selector(NSResponder.insertNewline(_:))), ("cancel", #selector(NSResponder.cancelOperation(_:)))] {
+            var text = "한", actions: [String] = []
+            let field = NumericTextField(label: "Name", text: Binding(get: { text }, set: { text = $0 }), focused: .constant(true),
+                fontSize: 14, color: .black, identifier: "native-passed-key", submit: { _ in actions.append("submit:" + text); return true },
+                cancel: { actions.append("cancel:" + text) })
+            let composing = NSTextView()
+            composing.string = "한"
+            composing.setMarkedText("글", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: 1, length: 0))
+            precondition(composing.hasMarkedText())
+            precondition(field.makeCoordinator().control(NSTextField(), textView: composing, doCommandBy: selector))
+            precondition(!composing.hasMarkedText() && text == "한글" && actions == [action + ":한글"],
+                "A delivered native key must commit the full Korean text before its one action")
+        }
         let env = ProcessInfo.processInfo.environment
         let directory = URL(fileURLWithPath: env["CAPY_NUMBER_CAPTURES"]!)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

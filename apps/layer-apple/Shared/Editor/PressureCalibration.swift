@@ -115,7 +115,7 @@ private struct PenResponsePanel: View {
                 .onChange(of: touching) { _, active in
                     if !active && dragging { dragging = false; send(["kind": "drag", "phase": "cancel", "position": [0, 0], "viewport": [viewport.size.width, viewport.size.height]]) }
                 }
-                .onKeyPress(.escape) { guard !NativeTextContext.composing else { return .ignored }; escape(); return .handled }
+                .onNativeTextKey(.escape) { escape(); return .handled }
                 .offset(x: bounds["x"].number, y: bounds["y"].number)
                 .opacity(exposed ? 1 : 0).allowsHitTesting(exposed).accessibilityHidden(!exposed)
                 .onChange(of: fitted, initial: true) { _, ready in if ready { exposed = true; store.measuredPenResponse = kind } }

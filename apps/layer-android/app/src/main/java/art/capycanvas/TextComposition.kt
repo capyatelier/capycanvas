@@ -8,15 +8,15 @@ internal class TextComposition {
     @Volatile private var owner: Any? = null
     private val candidateKeys = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
     private val passedKeys = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
-    private var enter: Pair<Any, () -> Unit>? = null
+    private var commit: Pair<Any, () -> Unit>? = null
     fun update(owner: Any, value: TextFieldValue, focused: Boolean, commit: (() -> Unit)? = null) {
         if (focused && value.composition != null) this.owner = owner else if (this.owner === owner) this.owner = null
-        if (focused && commit != null) enter = owner to commit
+        if (focused && commit != null) this.commit = owner to commit
         if (!focused) clear(owner)
     }
     fun clear(owner: Any) {
         if (this.owner === owner) this.owner = null
-        if (enter?.first === owner) enter = null
+        if (commit?.first === owner) commit = null
     }
     fun window(window: Window): () -> Unit {
         val previous = window.callback
@@ -28,24 +28,22 @@ internal class TextComposition {
     private class Input(val previous: Window.Callback, val composition: TextComposition) : Window.Callback by previous {
         var fields = 0
         override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-            if (fields > 0 && composition.active && composition.consumes(event)) return true
-            if (fields > 0 && event.keyCode in listOf(KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER)) {
-                composition.owns(event)
-                if (event.action == KeyEvent.ACTION_DOWN) composition.enter?.second?.invoke()
+            if (fields > 0) {
+                if (composition.candidateKeys.contains(event.keyCode) || event.keyCode == KeyEvent.KEYCODE_UNKNOWN) {
+                    if (composition.owns(event)) return true
+                } else if (event.action == KeyEvent.ACTION_DOWN) {
+                    composition.passedKeys.add(event.keyCode)
+                    if (!KeyEvent.isModifierKey(event.keyCode)) composition.commit?.second?.invoke()
+                }
             }
-            return previous.dispatchKeyEvent(event)
+            return try { previous.dispatchKeyEvent(event) } finally {
+                if (event.action == KeyEvent.ACTION_UP) composition.passedKeys.remove(event.keyCode)
+            }
         }
-    }
-    private fun consumes(event: KeyEvent): Boolean = when (event.keyCode) {
-        KeyEvent.KEYCODE_ESCAPE, KeyEvent.KEYCODE_BACK,
-        KeyEvent.KEYCODE_TAB, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
-        KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> owns(event)
-        else -> false
     }
     val active: Boolean get() = owner != null || candidateKeys.isNotEmpty() || passedKeys.isNotEmpty()
     fun owns(event: KeyEvent): Boolean {
-        if (event.keyCode == KeyEvent.KEYCODE_ENTER || event.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) {
-            if (event.action == KeyEvent.ACTION_DOWN) passedKeys.add(event.keyCode)
+        if (passedKeys.contains(event.keyCode)) {
             if (event.action == KeyEvent.ACTION_UP) passedKeys.remove(event.keyCode)
             return false
         }

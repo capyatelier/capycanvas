@@ -388,7 +388,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         enum class DefaultIme{Active,Retired,Stale};
         for(auto mode:{DefaultIme::Active,DefaultIme::Retired,DefaultIme::Stale}){
         bool stale=mode==DefaultIme::Stale,retired=mode==DefaultIme::Retired;
-        hstring label=stale?L"native-default-stale-enter":retired?L"native-default-retired-enter":L"native-default-enter";
+        hstring label=stale?L"native-default-stale-enter":retired?L"native-default-retired-ordinary-enter":L"native-default-enter";
         auto busy=std::make_shared<bool>(false);auto pending=std::make_shared<bool>(false),published=std::make_shared<bool>(false);auto trace=imeTrace;
         auto complete=std::make_shared<std::function<void()>>();Windows::Foundation::IInspectable completion{nullptr};
         ContentDialog dialog;TextBox entry;entry.Text(L"Draft");
@@ -396,8 +396,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             completion=box_value(KeyEventHandler([complete](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==Windows::System::VirtualKey::Enter&&*complete)(*complete)();}));
             entry.AddHandler(UIElement::PreviewKeyDownEvent(),completion,true);
         }
-        if(!stale)captureTextComposition(entry,[busy,pending,published](bool value){*busy=value;if(*pending&&!value)*published=true;});
-        else captureTextComposition(entry);
+        captureTextComposition(entry,[busy,pending,published](bool value){*busy=value;if(*pending&&!value)*published=true;});
         dialog.XamlRoot(root.XamlRoot());dialog.RequestedTheme(root.RequestedTheme());dialog.Title(box_value(L"Native default action"));dialog.Content(entry);
         dialog.PrimaryButtonText(L"Save");dialog.CloseButtonText(L"Cancel");dialog.DefaultButton(ContentDialogButton::Primary);
         auto primary=std::make_shared<unsigned>(0),events=std::make_shared<unsigned>(0);auto closed=std::make_shared<bool>(false);
@@ -425,7 +424,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             };
             co_await wait([this,entry,&composition]{return composition.focused(entry,root.XamlRoot());},L"Native default TextBox did not acquire its TSF context");
             composition.begin();co_await wait([entry]{return textComposing(entry)&&entry.Text()==L"\u5019\u88dcDraft";},L"Native default TextBox did not acquire exact marked text");
-            if(!stale)require(*busy,L"Marked native input did not notify localization ownership");
+            require(*busy,L"Marked native input did not notify localization ownership");
             *pending=true;
             if(stale){
                 auto triggered=std::make_shared<bool>(false);std::exception_ptr callbackFailure;auto oldTime=GetTickCount()-1000;
@@ -461,11 +460,11 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             }else{
                 co_await wait([closed,entry]{return *closed&&!entry.IsLoaded();},L"Passed Enter did not submit and unload its native form");
                 require(*primary==1&&entry.Text()==L"\u5019\u88dcDraft",L"Passed Enter did not submit exact completed text once");
-                if(!stale)require(*busy&&!*published,L"Form submission dropped held passed-Enter language ownership");
+                require(!*busy,L"Retired ordinary Enter acquired language ownership without an IME press");
             }
             auto release=*events;nativeKey(VK_RETURN,true);heldKey=false;
             if(mode==DefaultIme::Active)co_await wait([events,release]{return *events>release;},L"Candidate Enter release did not reach the native dialog route");
-            if(!stale)co_await wait([published]{return *published;},L"Physical confirmation release did not admit publication");
+            co_await wait([published]{return *published;},L"Completed native input did not admit publication");
             require(*primary==(mode==DefaultIme::Active?0u:1u),L"Native Enter release invoked an extra default action");
             nativeKey(VK_RETURN,false);nativeKey(VK_RETURN,true);
             if(mode==DefaultIme::Active)co_await wait([primary]{return *primary>0;},L"Ordinary Enter did not recover the native default button");
@@ -534,8 +533,8 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         auto close=[this](WorkspaceManagerView& manager)->winrt::Windows::Foundation::IAsyncAction{
             manager.Hide();co_await wait([&manager]{return !manager.IsOpen();},L"Workspace IME dialog did not close");
         };
-        for(auto [key,label]:{std::pair<WORD,wchar_t const*>{WORD(VK_RETURN),L"inline-enter"},{WORD(VK_ESCAPE),L"inline-escape"},{WORD(VK_F2),L"inline-f2"},{WORD(VK_ESCAPE),L"form-escape"},{WORD(0),L"form-primary"},{WORD(VK_RETURN),L"retired-korean-enter"}}){
-            bool retired=label[0]==L'r',heldKey=false,inlineName=label[0]==L'i';auto inputs=std::make_shared<std::vector<J>>();auto events=std::make_shared<unsigned>(0);
+        for(auto [key,label]:{std::pair<WORD,wchar_t const*>{WORD(VK_RETURN),L"inline-enter"},{WORD(VK_ESCAPE),L"inline-escape"},{WORD(VK_F2),L"inline-f2"},{WORD(VK_ESCAPE),L"form-escape"},{WORD(0),L"form-primary"},{WORD(VK_RETURN),L"retired-ordinary-korean-enter"},{WORD(VK_ESCAPE),L"retired-ordinary-inline-escape"},{WORD(VK_ESCAPE),L"retired-ordinary-form-escape"}}){
+            bool retired=label[0]==L'r',heldKey=false,inlineName=label[0]==L'i'||hstring(label)==L"retired-ordinary-inline-escape";auto inputs=std::make_shared<std::vector<J>>();auto events=std::make_shared<unsigned>(0);
             auto activeModel=J::Parse(model.Stringify());
             activeModel.Insert(L"prompt_action",inlineName?O({{L"type",S(L"rename")},{L"value",S(L"fixture-custom")}}):O({{L"type",S(L"new")}}));
             activeModel.Insert(L"prompt",O({{L"title",S(L"Workspace name")},{L"name",S(L"Fixture draft")},{L"confirm",S(L"Create")},{L"message",S(L"")},{L"destructive",B(false)}}));
@@ -564,13 +563,13 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
                 dialog.PrimaryButtonClick([trace,label,editor=make_weak(entry)](auto&&,ContentDialogButtonClickEventArgs const& e){trace->push_back(O({{L"case",S(label)},{L"native_event",S(L"PrimaryButtonClick")},{L"canceled",B(e.Cancel())},{L"composing",B(textComposing(editor.get()))}}));});
                 trace->push_back(O({{L"case",S(label)},{L"module_path",S(hstring(textServices->path))},{L"module_worker",N(textServices->worker)},{L"ui_thread",N(GetCurrentThreadId())}}));
                 auto complete=std::make_shared<std::function<void()>>();Windows::Foundation::IInspectable completion{nullptr},starter{nullptr};
-                if(retired){completion=box_value(KeyEventHandler([complete](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==Windows::System::VirtualKey::Enter&&*complete)(*complete)();}));dialog.AddHandler(UIElement::PreviewKeyDownEvent(),completion,true);}
+                if(retired){completion=box_value(KeyEventHandler([complete,key](auto&&,KeyRoutedEventArgs const& e){if(uint32_t(e.Key())==key&&*complete)(*complete)();}));dialog.AddHandler(UIElement::PreviewKeyDownEvent(),completion,true);}
                 ScopedComposition composition(*textServices,[trace,label](hstring api,HRESULT result,uintptr_t pointer){
                     wchar_t hex[11]{};swprintf_s(hex,L"0x%08X",static_cast<unsigned>(result));
                     trace->push_back(O({{L"case",S(label)},{L"api",S(api)},{L"hresult",S(hex)},{L"code",N(int32_t(result))},{L"pointer",N(double(pointer))},{L"thread",N(GetCurrentThreadId())},{L"time",N(double(GetTickCount64()))}}));
                 });
                 CompletionRoute completionRoute{dialog,{&completion,&starter},complete};std::exception_ptr completionFailure;
-                if(retired)*complete=[&composition,&completionFailure]{try{composition.end();}catch(...){completionFailure=std::current_exception();}};
+                if(retired)*complete=[entry,&composition,&completionFailure]{try{composition.end();require(!textComposing(entry)&&entry.Text()==L"\ud55c\uae00",L"Passed key did not retain the full committed Korean name");}catch(...){completionFailure=std::current_exception();}};
                 if(retired)entry.SelectAll();
                 co_await wait([this,entry,&composition]{return composition.focused(entry,root.XamlRoot());},L"Owned TextBox real TSF document/context did not become focused within the existing five-second prerequisite");
                 trace->push_back(O({{L"case",S(label)},{L"focus_probes",N(composition.probes)},{L"context_ready",B(true)}}));composition.begin(retired?L"\ud55c\uae00":L"\u5019\u88dc");
@@ -591,13 +590,17 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
                 }
                 if(retired){
                     if(completionFailure)std::rethrow_exception(completionFailure);
-                    co_await wait([inputs]{return inputs->size()==1;},L"Passed Korean Enter did not submit its workspace form");
-                    require(str(object(inputs->front(),L"input"),L"type")==L"submit"&&str(object(inputs->front(),L"input"),L"name")==L"\ud55c\uae00",L"Korean workspace Enter lost the final syllable or submitted twice");
+                    co_await wait([inputs]{return inputs->size()==1;},L"Passed Korean key did not perform its workspace action");
+                    auto action=object(inputs->front(),L"input");
+                    require(str(action,L"type")== (key==VK_ESCAPE?L"cancel":L"submit"),L"Passed Korean key performed an incorrect workspace action");
+                    require(entry.Text()==L"\ud55c\uae00",L"Passed workspace key lost committed Korean text");
+                    if(key==VK_RETURN)require(str(action,L"name")==L"\ud55c\uae00",L"Korean workspace Enter lost the final syllable");
+                    if(key==VK_ESCAPE)manager.Apply(O({{L"state",state},{L"windows_workspace",model}}),false);
                     co_await close(manager);anchor.Focus(FocusState::Keyboard);
-                    require(*busy,L"Closing a submitted workspace form dropped held Enter");
-                    nativeKey(key,true);heldKey=false;co_await wait([busy]{return !*busy;},L"Workspace passed Enter did not release language ownership");
+                    require(!*busy,L"Retired ordinary workspace key acquired language ownership without an IME press");
+                    nativeKey(key,true);heldKey=false;co_await wait([busy]{return !*busy;},L"Ordinary workspace key left language publication busy");
                     nativeKey(key,false);heldKey=true;nativeKey(key,true);heldKey=false;co_await settle();
-                    require(inputs->size()==1,L"Second Enter submitted a retired workspace form again");composition.finish();++imeChecks;continue;
+                    require(inputs->size()==1,L"A second key dispatched from a retired workspace form");composition.finish();++imeChecks;continue;
                 }
                 require(inputs->empty(),L"Composition-owned input dispatched a workspace submit, cancel, select, form or dismissal");
                 require(manager.IsOpen()&&workspaceElement(id)==entry&&entry.IsLoaded(),L"Composition-owned input closed or replaced its native manager control");

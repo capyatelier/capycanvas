@@ -170,9 +170,9 @@ Screen feedback caches HDR headroom by language and brightness. Histogram views
 retain status identities, and calibration, targeted-curve and reference notices
 retain their reasons, literal names and actions when their captions change.
 
-Native text editors own Escape while editing, including composition. Shared
-shortcuts leave surrounding popups and drawers open until focus leaves the editor.
-An Enter consumed by the input method only confirms; an Enter passed to the field after commitment performs its normal action once with the committed text.
+A key consumed by the input method belongs to composition; a key passed after
+commitment performs the focused editor's normal action once with the committed text before ancestors handle it.
+Shared shortcuts leave surrounding popups and drawers open until focus leaves the editor.
 
 Create the localization context before editing begins. Share it with the owners
 that need its text; prepare catalogs and static labels outside painting, pointer

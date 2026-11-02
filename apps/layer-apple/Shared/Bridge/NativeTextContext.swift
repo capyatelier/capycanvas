@@ -44,23 +44,23 @@ extension KeyPress {
     }
 }
 @MainActor enum NativeTextContext {
-    static func submittedText(_ fallback: String) -> String? {
+    static func committedText(_ fallback: String) -> String? {
         #if os(macOS)
         guard let editor = NSApp.keyWindow?.firstResponder as? NSTextView else { return composing ? nil : fallback }
-        return submittedText(in: editor)
+        return committedText(in: editor)
         #else
         guard let window = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
             .flatMap(\.windows).first(where: \.isKeyWindow), let input = textInput(in: window) else { return fallback }
-        return submittedText(in: input)
+        return committedText(in: input)
         #endif
     }
     #if os(macOS)
-    static func submittedText(in editor: NSTextView) -> String? {
+    static func committedText(in editor: NSTextView) -> String? {
         editor.unmarkText()
         return editor.hasMarkedText() ? nil : editor.string
     }
     #else
-    static func submittedText(in input: any UITextInput) -> String? {
+    static func committedText(in input: any UITextInput) -> String? {
         input.unmarkText()
         guard input.markedTextRange == nil, let range = input.textRange(from: input.beginningOfDocument, to: input.endOfDocument) else { return nil }
         return input.text(in: range)
@@ -132,9 +132,15 @@ extension KeyPress {
     #endif
 }
 extension View {
+    func onNativeTextKey(_ key: KeyEquivalent, action: @escaping () -> KeyPress.Result) -> some View {
+        onKeyPress(key) {
+            guard !NativeTextContext.composing else { return .ignored }
+            return action()
+        }
+    }
     func onNativeTextSubmit(_ fallback: String, action: @escaping (String) -> Void) -> some View {
         onSubmit {
-            guard let text = NativeTextContext.submittedText(fallback) else { return }
+            guard let text = NativeTextContext.committedText(fallback) else { return }
             action(text)
         }
     }

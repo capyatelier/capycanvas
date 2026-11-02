@@ -7,6 +7,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
@@ -67,11 +68,8 @@ class AndroidTextCompositionTest {
                     compose.onNodeWithTag("color-value-$field").performClick()
                     val candidate = connection(tag, text, true)
                     nativeKey(candidate, KeyEvent.KEYCODE_ESCAPE)
-                    assertEquals(text, literal(tag)); assertEquals(0, used)
-                    compose.runOnIdle { assertTrue(candidate.finishComposingText()) }
-                    compose.waitForIdle()
-                    nativeKey(candidate, KeyEvent.KEYCODE_ESCAPE)
                     compose.waitUntil(10_000) { findTag(tag) == null }
+                    assertEquals(0, used)
                     compose.onNodeWithTag("color-value-$field").performClick()
                     nativeKey(connection(tag, text, false), KeyEvent.KEYCODE_ENTER, KeyEvent.FLAG_SOFT_KEYBOARD)
                     compose.waitUntil(10_000) { findTag(tag) == null }
@@ -81,7 +79,7 @@ class AndroidTextCompositionTest {
                 compose.runOnIdle { assertTrue(search.setComposingText("日本", 1)) }
                 compose.waitForIdle()
                 nativeKey(search, KeyEvent.KEYCODE_ESCAPE)
-                assertTrue(literal("color-sheet-search").startsWith("keep "))
+                assertEquals("", literal("color-sheet-search"))
                 compose.onNodeWithTag("color-sheet-close").performClick()
                 compose.waitUntil(10_000) { findTag("color-sheet-search") == null }
                 compose.onNodeWithTag("color-value-hex").performClick()
@@ -110,8 +108,6 @@ class AndroidTextCompositionTest {
                     val input = connection("toolbar-name", "日本 toolbar", true)
                     compose.runOnIdle { assertTrue("Name field has native preedit before Escape", host.textComposition.active) }
                     nativeKey(input, KeyEvent.KEYCODE_ESCAPE)
-                    assertEquals("日本 toolbar", literal("toolbar-name"))
-                    compose.onNodeWithTag("tool-picker-cancel").performClick()
                     compose.waitUntil(10_000) { findTag("tool-picker") == null }
                     compose.runOnIdle { assertFalse(host.textComposition.active) }
                 } finally { compose.runOnIdle { window.setFlags(flags, -1) } }
@@ -413,7 +409,8 @@ class AndroidTextCompositionTest {
             for (theme in listOf("light", "dark")) for (ime in listOf(
                 android.view.inputmethod.EditorInfo.IME_ACTION_DONE, android.view.inputmethod.EditorInfo.IME_ACTION_GO,
                 android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH, android.view.inputmethod.EditorInfo.IME_ACTION_SEND,
-                -KeyEvent.KEYCODE_ENTER, -KeyEvent.KEYCODE_NUMPAD_ENTER)) {
+                -KeyEvent.KEYCODE_ENTER, -KeyEvent.KEYCODE_NUMPAD_ENTER, -KeyEvent.KEYCODE_ESCAPE,
+                -KeyEvent.KEYCODE_BACK, -KeyEvent.KEYCODE_TAB, -KeyEvent.KEYCODE_DPAD_LEFT)) {
                 host.drain(obj("type" to "set_theme", "theme" to theme))
                 val value = androidx.compose.runtime.mutableStateOf(TextFieldValue(""))
                 val submitted = androidx.compose.runtime.mutableStateOf(false)
@@ -428,7 +425,13 @@ class AndroidTextCompositionTest {
                         androidx.compose.runtime.CompositionLocalProvider(LocalCanvasHost provides host, LocalPalette provides palette) {
                             val submit = { names.add(value.value.text); submitted.value = true }
                             if (!submitted.value) CoreTextField(value.value, { value.value = it },
-                                androidx.compose.ui.Modifier.testTag("korean-name"),
+                                androidx.compose.ui.Modifier.testTag("korean-name").onPreviewKeyEvent { event ->
+                                    val native = event.nativeKeyEvent
+                                    if (native.action == KeyEvent.ACTION_DOWN && native.keyCode in listOf(
+                                        KeyEvent.KEYCODE_ESCAPE, KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_TAB, KeyEvent.KEYCODE_DPAD_LEFT)) {
+                                        submit(); true
+                                    } else false
+                                },
                                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = when (ime) {
                                     android.view.inputmethod.EditorInfo.IME_ACTION_GO -> androidx.compose.ui.text.input.ImeAction.Go
                                     android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH -> androidx.compose.ui.text.input.ImeAction.Search
@@ -487,29 +490,62 @@ class AndroidTextCompositionTest {
         for(text in listOf("日本語", "한국어", "中文", "{ $"+"name }\u2068字\u2069")) {
             val value=TextFieldValue(text,TextRange(text.length),TextRange(0,text.length))
             state.update(owner,value,true)
-            for(code in listOf(KeyEvent.KEYCODE_ESCAPE,KeyEvent.KEYCODE_DPAD_UP,KeyEvent.KEYCODE_DPAD_DOWN)) {
+            for(code in listOf(KeyEvent.KEYCODE_UNKNOWN,KeyEvent.KEYCODE_ESCAPE,KeyEvent.KEYCODE_BACK,KeyEvent.KEYCODE_ENTER,KeyEvent.KEYCODE_TAB,KeyEvent.KEYCODE_DPAD_UP,KeyEvent.KEYCODE_DPAD_DOWN)) {
                 for(action in listOf(KeyEvent.ACTION_DOWN,KeyEvent.ACTION_UP)) assertTrue(state.owns(KeyEvent(action,code)))
             }
-            assertFalse(state.owns(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)))
-            assertFalse(state.owns(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER)))
             assertEquals(TextRange(0,text.length),value.composition)
             state.update(owner,value.copy(composition=null),true)
-            assertFalse(state.owns(KeyEvent(KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_ENTER)))
+            assertFalse(state.owns(KeyEvent(KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_A)))
         }
     }
     @Test fun languageBoundaryWaitsUntilCandidateKeyRelease() {
-        for (code in listOf(KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER)) {
-            val state = TextComposition()
-            val owner = Any()
-            state.update(owner, TextFieldValue("한글", composition = TextRange(1, 2)), true)
-            assertFalse(state.owns(KeyEvent(KeyEvent.ACTION_DOWN, code)))
-            state.update(owner, TextFieldValue("한글"), true)
-            state.clear(owner)
-            assertTrue("Passed Enter remains busy after the field retires", state.active)
-            assertFalse(state.owns(KeyEvent(KeyEvent.ACTION_DOWN, code)))
-            assertFalse(state.owns(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_A)))
-            assertFalse(state.owns(KeyEvent(KeyEvent.ACTION_UP, code)))
-            assertFalse(state.active)
+        launchCapy(compose = compose).use { scenario ->
+            val window = scenario.activity().window
+            for (code in listOf(KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_ESCAPE,
+                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_TAB, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_A, KeyEvent.KEYCODE_SHIFT_LEFT)) {
+                compose.runOnIdle {
+                    val state = TextComposition()
+                    val owner = Any()
+                    var value = TextFieldValue("한글", composition = TextRange(1, 2))
+                    var actions = 0
+                    val previous = window.callback
+                    window.callback = object : android.view.Window.Callback by previous {
+                        override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+                            assertFalse("Passed key $code is not owned", state.owns(event))
+                            if (event.action == KeyEvent.ACTION_DOWN) {
+                                if (KeyEvent.isModifierKey(code)) assertNotNull(value.composition) else assertNull(value.composition)
+                                assertEquals("한글", value.text)
+                                actions++
+                            }
+                            return true
+                        }
+                    }
+                    val release = state.window(window)
+                    try {
+                        state.update(owner, value, true) {
+                            value = value.copy(composition = null)
+                            state.update(owner, value, true)
+                        }
+                        for (phase in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP))
+                            assertTrue(window.callback.dispatchKeyEvent(KeyEvent(phase, KeyEvent.KEYCODE_UNKNOWN)))
+                        assertNotNull(value.composition)
+                        assertEquals(0, actions)
+                        assertTrue(state.owns(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP)))
+                        state.update(owner, value.copy(composition = null), true)
+                        assertTrue(window.callback.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_UP)))
+                        assertEquals(0, actions)
+                        state.update(owner, value, true)
+                        assertTrue(window.callback.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, code)))
+                        state.clear(owner)
+                        release()
+                        assertTrue("Passed key remains busy after the field retires", state.active)
+                        assertEquals(1, actions)
+                        assertTrue(window.callback.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code)))
+                        assertFalse(state.active)
+                        assertEquals("Release never repeats the action", 1, actions)
+                    } finally { window.callback = previous }
+                }
+            }
         }
     }
     @Test fun imeKeysAndRetiredFieldsCannotBeClaimedByEditorCaptures() {

@@ -1304,23 +1304,29 @@ mod activation_tests {
                     text.emit_preedit_changed(preedit);
                     assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
                     assert!(bubble.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
-                    text.emit_preedit_changed("");
-                    assert!(bubble.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
                     let stopped_before = stopped.get();
                     if field.is::<gtk::SearchEntry>() {
                         search.emit_by_name::<()>("stop-search", &[]);
                         assert_eq!(search.text(), "한글");
                         assert_eq!(stopped.get(), stopped_before);
                     }
-                    keys.emit_by_name::<()>("key-released", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]);
-                    assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
-                    assert!(!bubble.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+                    text.emit_preedit_changed("");
+                    if passed {
+                        assert!(!bubble.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+                        assert!(crate::input::localization_input_busy(&window));
+                    } else {
+                        assert_eq!(field.clone().dynamic_cast::<gtk::Editable>().unwrap().text(), "한글");
+                        keys.emit_by_name::<()>("key-released", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]);
+                        assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+                        assert!(!bubble.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+                    }
                     if field.is::<gtk::SearchEntry>() {
                         search.emit_by_name::<()>("stop-search", &[]);
                         assert!(search.text().is_empty());
                         assert_eq!(stopped.get(), stopped_before + 1);
                     }
                     keys.emit_by_name::<()>("key-released", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]);
+                    assert!(!crate::input::localization_input_busy(&window));
                 }
                 let ownership = unsafe { text.data::<Rc<crate::input::EntryComposition>>("capy-entry-composition").unwrap().as_ref().clone() };
                 let outer = unsafe { field.data::<Rc<crate::input::EntryComposition>>("capy-entry-composition").unwrap().as_ref().clone() };
@@ -1345,12 +1351,16 @@ mod activation_tests {
             text.emit_preedit_changed("한국어");
             assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
             text.emit_preedit_changed("");
-            assert!(escape.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
-            assert!(panel.editing.get());
-            keys.emit_by_name::<()>("key-released", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]);
-            assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+            let controllers = text.observe_controllers();
+            let bubble = (0..controllers.n_items()).find_map(|index| controllers.item(index)
+                .and_downcast::<gtk::EventControllerKey>()
+                .filter(|keys| keys.propagation_phase() == gtk::PropagationPhase::Bubble)).unwrap();
+            assert!(!bubble.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
             assert!(escape.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
             assert!(!panel.editing.get());
+            assert!(crate::input::localization_input_busy(&window));
+            keys.emit_by_name::<()>("key-released", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]);
+            assert!(!crate::input::localization_input_busy(&window));
             let text = default_entry.delegate().and_downcast::<gtk::Text>().unwrap();
             assert!(text.grab_focus());
             let ownership = crate::input::guard_entry_activation(&default_entry);
@@ -1358,7 +1368,9 @@ mod activation_tests {
             let bubble = (0..controllers.n_items()).find_map(|index| controllers.item(index)
                 .and_downcast::<gtk::EventControllerKey>()
                 .filter(|keys| keys.propagation_phase() == gtk::PropagationPhase::Bubble)).unwrap();
+            text.emit_preedit_changed("한국어");
             ownership.capture(36);
+            text.emit_preedit_changed("");
             assert!(!bubble.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
             assert!(crate::input::localization_input_busy(&window));
             window.set_visible(false);
