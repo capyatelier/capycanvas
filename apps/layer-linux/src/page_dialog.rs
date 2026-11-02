@@ -9,6 +9,15 @@ thread_local! { static WINDOWS: RefCell<Vec<Weak<Workspace>>> = const { RefCell:
 mod specification;
 pub use specification::{Action, Metadata, configure, primary};
 
+fn viewport(w: &Workspace) -> [f32; 2] {
+    let parent = w.pages.root.parent().unwrap();
+    [parent.width() as f32, parent.height() as f32]
+}
+pub fn single_pane(w: &Workspace) -> bool {
+    w.gpu.borrow().as_ref().is_some_and(|gpu|
+        gpu.session.state().dialog_presentation(layer_ui::DialogRole::Editor, viewport(w)).single_pane())
+}
+
 struct Page {
     dialog: adw::Dialog,
     body: gtk::Widget,
@@ -60,7 +69,7 @@ impl Pages {
         self.pages.borrow().iter().any(|page| page.dialog.upcast_ref::<gtk::Widget>() == widget)
     }
     pub fn allocation(&self, w: &Workspace) -> gtk::gdk::Rectangle {
-        let viewport = [self.root.parent().unwrap().width() as f32, self.root.parent().unwrap().height() as f32];
+        let viewport = viewport(w);
         let pages = self.pages.borrow();
         let page = pages.iter().rev().find(|page| !page.closing.get()).or_else(|| pages.last());
         let role = page.map_or(layer_ui::DialogRole::Editor, |page| page.role);

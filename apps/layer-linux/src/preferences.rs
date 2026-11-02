@@ -496,7 +496,7 @@ impl Preferences {
             let p = &w.preferences;
             let minimum = [p.sidebar.measure(gtk::Orientation::Horizontal, -1).0 as f32,
                 p.content_view.measure(gtk::Orientation::Horizontal, -1).0 as f32];
-            let narrow = !dialog_panes_fit(width as f32, minimum, 0.);
+            let narrow = crate::page_dialog::single_pane(&w) || !dialog_panes_fit(width as f32, minimum, 0.);
             p.split.set_collapsed(narrow);
             p.sidebar.set_mode(if narrow { adw::SidebarMode::Page } else { adw::SidebarMode::Sidebar });
         }));

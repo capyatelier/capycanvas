@@ -344,13 +344,15 @@ fn restored_headers(headers: &[(adw::HeaderBar, gtk::Widget, bool, bool, Option<
 }
 
 #[test]
-#[ignore = "private compositor: --native-test=native_phone_navigation_headers --native-storage; 412x891 light/dark"]
+#[ignore = "private compositor: --native-test=native_phone_navigation_headers --native-storage; phone viewport, light/dark"]
 fn native_phone_navigation_headers() {
     let mut d = super::phone_motion::setup("art.capycanvas.NavigationHeaders");
-    assert_eq!([d.w.surface.width(), d.w.surface.height()], [412, 891]);
+    assert!(d.w.surface.width().min(d.w.surface.height()) < 480);
     let checkpoint = ui_session(&d.w).engine().checkpoint();
     let original = header_state(d.w.preferences.dialog.upcast_ref());
-    d.w.dispatch(UiAction::Invoke { command: CommandId::Settings });
+    d.click(&d.named("zen-capy"));
+    until(|| state(&d.w).phone.menu, "Capy opens its icon strip");
+    d.click(&d.named("phone-preferences"));
     let (_, frame) = page(&d);
     let split = descendants::<adw::NavigationSplitView>(&frame).pop().unwrap();
     assert!(split.is_collapsed() && split.shows_content());
@@ -359,15 +361,20 @@ fn native_phone_navigation_headers() {
     let root = navigation_header(&d, &frame, true);
     let close_button = icon_button(&root, "window-close-symbolic").unwrap();
     capture(&mut d, "preferences-root");
-    let appearance = SettingsPage::Appearance.localized_title(&d.w.localization());
-    d.click(&mapped_label(&frame, &appearance).unwrap());
-    until(|| split.shows_content(), "Preferences opens Appearance from its root list");
-    let subpage = navigation_header(&d, &frame, false);
-    assert!(gtk::prelude::GtkWindowExt::default_widget(&d.w.window).is_none(), "Preferences has no synthesized primary");
-    capture(&mut d, "preferences-subpage");
-    d.click(icon_button(&subpage, "go-previous-symbolic").unwrap().upcast_ref());
-    until(|| !split.shows_content(), "Preferences Back preserves the dialog");
-    assert_eq!(navigation_header(&d, &frame, true), root);
+    for settings in SettingsPage::ALL {
+        let title = settings.localized_title(&d.w.localization());
+        let row = mapped_label(&frame, &title).unwrap();
+        super::histogram::scroll_to(&row);
+        d.click(&row);
+        until(|| split.shows_content(), "Preferences opens its page from the root list");
+        capture(&mut d, &format!("preferences-{}", settings.key()));
+        assert!(split.is_collapsed(), "Preferences {} keeps one pane on a phone", settings.key());
+        let subpage = navigation_header(&d, &frame, false);
+        assert!(gtk::prelude::GtkWindowExt::default_widget(&d.w.window).is_none(), "Preferences has no synthesized primary");
+        d.click(icon_button(&subpage, "go-previous-symbolic").unwrap().upcast_ref());
+        until(|| !split.shows_content(), "Preferences Back preserves the dialog");
+        assert_eq!(navigation_header(&d, &frame, true), root);
+    }
     d.click(close_button.upcast_ref());
     until(|| d.w.visible_dialog().is_none() && !d.w.pages.root.is_transition_running(), "root Close closes Preferences");
     assert!(!state(&d.w).settings_open && close_button.parent().is_none());
@@ -414,9 +421,11 @@ fn native_phone_navigation_headers() {
     capture(&mut d, "workspace-manager-root");
     let close_button = icon_button(&root, "window-close-symbolic").unwrap();
     let split = descendants::<adw::NavigationSplitView>(&frame).pop().unwrap();
+    assert!(split.is_mapped() && split.is_collapsed(), "Manage Toolbars root keeps one pane on a phone");
     let list = named::<gtk::ListBox>(&frame, "workspace-manager-items");
     d.click(list.row_at_index(0).unwrap().upcast_ref());
     until(|| split.shows_content(), "the workspace manager opens toolbar details");
+    assert!(split.is_mapped() && split.is_collapsed(), "Manage Toolbars detail keeps one pane on a phone");
     let subpage = navigation_header(&d, &frame, false);
     assert_eq!(subpage, root, "the manager keeps its existing header at the top");
     let title = d.w.workspaces.view().details.as_ref().unwrap().title.clone();

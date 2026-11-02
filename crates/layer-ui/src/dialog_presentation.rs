@@ -10,6 +10,7 @@ pub enum DialogPresentation {
     CanvasPanel(Bounds),
 }
 impl DialogPresentation {
+    pub fn single_pane(self) -> bool { matches!(self, Self::Page(_)) }
     pub fn bounds(self, measured: [f32; 2]) -> Option<Bounds> {
         match self {
             Self::Floating => None,
@@ -45,6 +46,14 @@ impl UiState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_editor_pages_require_one_navigation_pane() {
+        for (presentation, single) in [(DialogPresentation::Floating, false),
+            (DialogPresentation::Page(Bounds::default()), true),
+            (DialogPresentation::CanvasPanel(Bounds::default()), false)] {
+            assert_eq!(presentation.single_pane(), single);
+        }
+    }
     #[test]
     fn panes_use_their_measured_minimum_widths() {
         assert!(!dialog_panes_fit(399., [190., 200.], 10.));
