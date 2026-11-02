@@ -316,7 +316,8 @@ Restore Starting Layout…; and Reset All Brushes…. Captions come from
   Creating or deleting a workspace from Manage Workspaces keeps the manager open.
   Creation and active-workspace deletion select the resulting current workspace;
   dismissing the manager during publication does not reopen it when the work finishes.
-- Failed saves offer Retry and Save as New Workspace, and a failed close keeps
+- Failed saves offer Retry and Save as New Workspace. In narrow windows, the
+  actions wrap below the message and align at the right. A failed close keeps
   the option to leave the window open.
 
 Hosts keep workspace decisions in shared Rust:

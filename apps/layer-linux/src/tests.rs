@@ -13825,8 +13825,16 @@ fn native_workspace_unavailable_close_recovery() {
         .set_gtk_enable_animations(false);
     let w = Workspace::new(&app);
     apply_fixture_theme(&w);
+    w.window.maximize();
     w.window.present();
     wait_workspaces(&w);
+    if let Ok(viewport) = std::env::var("LAYER_MOTION_VIEWPORT") {
+        let (width, height) = viewport.split_once('x').unwrap();
+        let expected = [width.parse::<i32>().unwrap(), height.parse::<i32>().unwrap()];
+        until(|| [w.surface.width(), w.surface.height()] == expected, "the storage journey uses its requested private viewport");
+        assert_eq!(state(&w).phone_presentation(expected.map(|value| value as f32)).is_some(),
+            expected[0].min(expected[1]) < 480, "the storage notice uses the requested phone or desktop presentation");
+    }
     let copy = layer_ui::bootstrap_view(&w.localization());
     w.dispatch(UiAction::SetBrushSize { value: 83. });
     let other = rusqlite::Connection::open(&database).unwrap();
@@ -13845,6 +13853,36 @@ fn native_workspace_unavailable_close_recovery() {
     assert!(w.window.is_visible());
     assert_eq!(state(&w).brush.diameter, 83.);
     assert!(!state(&w).document_file.close_ready);
+    until(|| w.workspaces.root.is_mapped(), "the failed save shows its storage notice");
+    drop(idle_paint(&w.window));
+    let root = w.workspaces.root.upcast_ref::<gtk::Widget>();
+    let buttons = descendants::<gtk::Button>(root).into_iter().filter(|button| button.is_mapped()).collect::<Vec<_>>();
+    assert_eq!(buttons.len(), 2, "the storage error offers Retry and Save as New Workspace");
+    for button in &buttons {
+        let bounds = button.compute_bounds(&w.window).unwrap();
+        assert!(bounds.x() >= -1. && bounds.y() >= -1. && bounds.x() + bounds.width() <= w.window.width() as f32 + 1.
+            && bounds.y() + bounds.height() <= w.window.height() as f32 + 1., "storage notice buttons fit the window: {bounds:?}");
+        let labels = descendants::<gtk::Label>(button.upcast_ref()).into_iter().filter(|label| label.is_mapped()).collect::<Vec<_>>();
+        assert!(!labels.is_empty() && labels.iter().all(|label| !label.layout().is_ellipsized()), "storage action labels stay readable");
+    }
+    let message = w.workspaces.label.compute_bounds(root).unwrap();
+    assert!(message.width() >= 200., "the storage error message keeps readable width: {message:?}");
+    let actions = buttons[0].parent().unwrap();
+    assert_eq!(buttons[1].parent().as_ref(), Some(&actions), "storage actions share one horizontal row");
+    let actions = actions.compute_bounds(root).unwrap();
+    if w.surface.width().min(w.surface.height()) < 480 {
+        assert!(actions.y() >= message.y() + message.height() - 1., "phone storage actions wrap below the message");
+        assert!((actions.x() + actions.width() - message.x() - message.width()).abs() <= 1.,
+            "wrapped storage actions align with the message end: {message:?} {actions:?}");
+    } else {
+        assert!(message.x() < actions.x() && message.x() + message.width() <= actions.x() + 1.,
+            "desktop storage message stays left of its actions: {message:?} {actions:?}");
+        assert!(message.y() < actions.y() + actions.height() && actions.y() < message.y() + message.height(),
+            "desktop storage message and actions share one line: {message:?} {actions:?}");
+    }
+    if let Some(dir) = std::env::var_os("LAYER_NATIVE_CAPTURE_DIR") {
+        capture_reference(&w, std::path::Path::new(&dir).join("workspace-storage-notice.png").to_str().unwrap(), 1.);
+    }
     w.window.close();
     let dialog = prompt();
     find_button(&dialog, &copy.recovery.close_without_saving)

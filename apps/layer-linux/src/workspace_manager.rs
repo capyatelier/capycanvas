@@ -38,7 +38,7 @@ pub(crate) struct NativeWorkspaces {
     store: RefCell<Option<StoreWorker>>,
     controller: RefCell<Option<Controller>>,
     view: RefCell<WorkspaceView>,
-    pub root: gtk::Box,
+    pub root: adw::WrapBox,
     pub label: gtk::Label,
     pub switcher: gtk::Box,
     switch_options: gtk::MenuButton,
@@ -62,7 +62,8 @@ impl NativeWorkspaces {
     pub fn new() -> Self {
         let localization = crate::launch_localization();
         let store = crate::storage::workspaces().and_then(|directory| StoreWorker::shared(directory).ok());
-        let root = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let root = adw::WrapBox::builder().child_spacing(8).line_spacing(6)
+            .justify(adw::JustifyMode::Spread).justify_last_line(true).build();
         root.set_widget_name("workspace-save-status");
         root.add_css_class("workspace-save-status");
         for set in [
@@ -78,11 +79,14 @@ impl NativeWorkspaces {
         let retry = gtk::Button::with_label(&localization.text(layer_ui::MessageId::WORKSPACE_ACTION_RETRY_STORAGE));
         retry.set_widget_name("workspace-save-retry");
         retry.set_visible(false);
+        let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        actions.set_halign(gtk::Align::End);
         root.append(&label);
-        root.append(&retry);
+        actions.append(&retry);
         let recovery = gtk::Button::with_label(&localization.text(layer_ui::MessageId::WORKSPACE_ACTION_SAVE_AS_NEW_WORKSPACE));
         recovery.set_visible(false);
-        root.append(&recovery);
+        actions.append(&recovery);
+        root.append(&actions);
         root.set_visible(store.is_some());
         let (switcher, switch_body, switch_options) = switcher::build();
         switcher.set_sensitive(false);
