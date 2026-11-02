@@ -410,6 +410,7 @@ impl Preferences {
         header.set_show_start_title_buttons(false);
         let shortcut_page = shortcut_page::ShortcutPage::new();
         header.pack_start(&shortcut_page.back);
+        shortcut_page.back.bind_property("visible", &header, "show-back-button").invert_boolean().sync_create().build();
         content_view.add_top_bar(&header);
         let search = gtk::SearchEntry::builder()
             .placeholder_text(copy.shortcuts.search_preferences.as_ref())

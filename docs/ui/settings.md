@@ -20,6 +20,9 @@ reset action. Theme colors use the shared
 [palette transformation](theme-colors.md); numeric controls use the same
 [parsing and stepping policy](numeric-controls.md) as tool panels.
 
+In GTK phone pages, Back moves from a shortcut category to its list, then to the
+Preferences list, with one Back button at each step.
+
 An accepted preference edit applies immediately and requests persistence.
 **Language** updates the running session, including open dialogs, search results,
 validation errors and shortcut recording. It preserves the drawing and unfinished

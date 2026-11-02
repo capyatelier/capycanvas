@@ -260,8 +260,10 @@ fn export_page(d: &mut Driver, frame: &gtk::Widget, tag: &str) {
     let row = named::<adw::ActionRow>(frame, &format!("export-open-{tag}"));
     let scroll = named::<gtk::ScrolledWindow>(frame, "export-main-scroll");
     assert!(row.grab_focus());
-    until(|| row.compute_bounds(&scroll).is_some_and(|bounds| bounds.y() >= -1.
-        && bounds.y() + bounds.height() <= scroll.height() as f32 + 1.), "Export link scrolls into its native viewport");
+    until(|| row.compute_bounds(&scroll).is_some_and(|bounds| {
+        let visible = bounds.y() >= -1. && bounds.y() + bounds.height() <= scroll.height() as f32 + 1.;
+        row.is_mapped() && bounds.width() > 0. && bounds.height() > 0. && visible
+    }), "Export link scrolls into its native viewport");
     d.click(row.upcast_ref());
     until(|| nav.visible_page_tag().as_deref() == Some(tag), "Export opens its native subpage");
     page_header(frame);
@@ -371,6 +373,44 @@ fn native_phone_navigation_headers() {
         assert!(split.is_collapsed(), "Preferences {} keeps one pane on a phone", settings.key());
         let subpage = navigation_header(&d, &frame, false);
         assert!(gtk::prelude::GtkWindowExt::default_widget(&d.w.window).is_none(), "Preferences has no synthesized primary");
+        if settings == SettingsPage::Shortcuts {
+            let one_back = |header: &adw::HeaderBar| {
+                let buttons = descendants::<gtk::Button>(header.upcast_ref()).into_iter().filter(|button| button.is_mapped()
+                    && (button.icon_name().as_deref() == Some("go-previous-symbolic")
+                        || descendants::<gtk::Image>(button.upcast_ref()).iter().any(|image| image.icon_name().as_deref() == Some("go-previous-symbolic"))))
+                    .collect::<Vec<_>>();
+                assert_eq!(buttons.len(), 1, "Shortcuts has exactly one mapped Back button in its header");
+                buttons.into_iter().next().unwrap()
+            };
+            let categories = named::<gtk::ListBox>(&frame, "shortcut-categories");
+            let first = categories.row_at_index(0).unwrap();
+            super::histogram::scroll_to(first.upcast_ref());
+            d.click(first.upcast_ref());
+            until(|| ui_session(&d.w).preferences().unwrap().shortcut_page.category.is_some()
+                && !categories.is_mapped(), "the first Shortcuts category finishes opening");
+            let category = named::<adw::PreferencesPage>(&frame, "shortcut-category-page");
+            let category_header = navigation_header(&d, &frame, false);
+            let back = one_back(&category_header);
+            capture(&mut d, "preferences-shortcuts-category");
+            d.click(back.upcast_ref());
+            until(|| ui_session(&d.w).preferences().unwrap().shortcut_page.category.is_none()
+                && categories.is_mapped() && !category.is_mapped(), "category Back returns to the Shortcuts list");
+            one_back(&navigation_header(&d, &frame, false));
+            if state(&d.w).theme == Theme::Dark {
+                let nav = named::<adw::NavigationView>(&frame, "shortcut-navigation");
+                let content = nav.visible_page().unwrap().child().unwrap();
+                let scrolls = descendants::<gtk::ScrolledWindow>(&content).into_iter().filter(|scroll| scroll.is_mapped()).collect::<Vec<_>>();
+                let positions = scrolls.iter().map(|scroll| scroll.vadjustment().value()).collect::<Vec<_>>();
+                for scroll in &scrolls {
+                    let adjustment = scroll.vadjustment();
+                    adjustment.set_value((adjustment.upper() - adjustment.page_size()).max(adjustment.lower()));
+                }
+                drop(idle_paint(&d.w.window));
+                capture(&mut d, "preferences-shortcuts-bottom");
+                one_back(&page_header(&frame));
+                for (scroll, position) in scrolls.iter().zip(positions) { scroll.vadjustment().set_value(position); }
+            }
+        }
         d.click(icon_button(&subpage, "go-previous-symbolic").unwrap().upcast_ref());
         until(|| !split.shows_content(), "Preferences Back preserves the dialog");
         assert_eq!(navigation_header(&d, &frame, true), root);
@@ -401,8 +441,9 @@ fn native_phone_navigation_headers() {
         let action = gtk::prelude::GtkWindowExt::default_widget(&d.w.window).unwrap().downcast::<gtk::Button>().unwrap();
         assert_eq!(action.label(), primary.label());
         if tag == "size" { capture(&mut d, "export-size"); }
+        let outgoing = nav.visible_page().unwrap();
         d.click(icon_button(&subpage, "go-previous-symbolic").unwrap().upcast_ref());
-        until(|| nav.visible_page_tag().as_deref() == Some("main"), "Export Back returns to its existing draft");
+        until(|| nav.visible_page_tag().as_deref() == Some("main") && !outgoing.is_mapped(), "Export Back returns to its existing draft");
         assert_eq!(navigation_header(&d, &frame, true), root);
     }
     d.click(close_button.upcast_ref());
