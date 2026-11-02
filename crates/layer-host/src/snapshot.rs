@@ -138,13 +138,15 @@ impl NativeHost {
             error: self.error.clone(),
         };
         let camera = &self.session.state().camera;
+        let color_preview = serde_json::to_value(self.color_preview()).map_err(serde::ser::Error::custom)?;
+        let color_preview_changed = self.last_color_preview.as_ref() != Some(&color_preview);
         let bar_changed = self.last_snapshot.as_ref().is_some_and(|previous| previous.canvas_bar != key.canvas_bar);
         if self.last_workspace_model_revision == Some(self.session.workspace_model_revision())
             && self.last_snapshot.as_ref().is_some_and(|previous| {
                 (if bar_changed { SnapshotKey { revision: key.revision, canvas_bar: key.canvas_bar, ..previous.clone() } } else { previous.clone() }) == key
             })
         {
-            if self.last_camera_revision != Some(camera.revision) || bar_changed {
+            if self.last_camera_revision != Some(camera.revision) || bar_changed || color_preview_changed {
                 #[derive(Serialize)]
                 struct Camera<'a> {
                     #[serde(skip_serializing_if = "Option::is_none")]
@@ -152,13 +154,17 @@ impl NativeHost {
                     revision: u64,
                     #[serde(skip_serializing_if = "Option::is_none")]
                     workspace_update: Option<layer_ui::WorkspaceUpdate>,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    color_preview: Option<&'a serde_json::Value>,
                 }
                 let snapshot = Camera {
                     camera: (self.last_camera_revision != Some(camera.revision)).then_some(camera),
                     revision: key.revision,
                     workspace_update: bar_changed.then(|| self.session.workspace_update()),
+                    color_preview: color_preview_changed.then_some(&color_preview),
                 }.serialize(serializer)?;
                 self.last_camera_revision = Some(camera.revision);
+                self.last_color_preview = Some(color_preview);
                 self.last_snapshot = Some(key);
                 return Ok(Some(snapshot));
             }
@@ -166,7 +172,7 @@ impl NativeHost {
         }
         // Search has independent state: retaining the workspace model must not
         // mistake a query/open/close for an ordinary geometry-only publication.
-        if self.last_workspace_model_revision == Some(self.session.workspace_model_revision())
+        if !color_preview_changed && self.last_workspace_model_revision == Some(self.session.workspace_model_revision())
             && self.last_camera_revision == Some(camera.revision)
             && self.last_snapshot.as_ref().is_some_and(|previous| {
                 previous.command_search_revision != key.command_search_revision
@@ -203,21 +209,22 @@ impl NativeHost {
             struct Motion<'a> {
                 workspace_update: &'a layer_ui::WorkspaceUpdate,
                 #[serde(skip_serializing_if = "Option::is_none")]
-                color_preview: Option<layer_ui::PickerPreview<'a>>,
+                color_preview: Option<&'a serde_json::Value>,
                 #[serde(skip_serializing_if = "Option::is_none")]
                 camera: Option<&'a layer_ui::Camera>,
             }
             let snapshot = Motion {
                 workspace_update: &update,
-                color_preview: (self.session.state().layer_tools.tool.picks_color() || self.session.state().layer_tools.tool.region().is_some_and(|(fill,_,_)|fill)).then(|| self.color_preview()),
+                color_preview: color_preview_changed.then_some(&color_preview),
                 camera: (self.last_camera_revision != Some(camera.revision)).then_some(camera),
             }
             .serialize(serializer)?;
             self.last_camera_revision = Some(camera.revision);
+            self.last_color_preview = Some(color_preview);
             self.last_snapshot = Some(key);
             return Ok(Some(snapshot));
         }
-        if layout
+        if layout && !color_preview_changed
             && self.last_workspace_content_revision == Some(update.content_revision)
             && self.last_snapshot.as_ref().is_some_and(|previous| {
                 SnapshotKey {
@@ -245,6 +252,7 @@ impl NativeHost {
         self.last_workspace_content_revision = Some(update.content_revision);
         self.last_workspace_model_revision = Some(update.model_revision);
         self.last_camera_revision = Some(self.session.state().camera.revision);
+        self.last_color_preview = Some(color_preview);
         Ok(Some(snapshot))
     }
 
@@ -576,6 +584,59 @@ mod tests {
             }
             let snapshot = host.take_value().unwrap();
             assert_eq!(snapshot["color_preview"]["view"], snapshot["color_panel"], "{platform:?}");
+        }
+    }
+    #[test]
+    fn picker_camera_packets_omit_preview_and_picker_end_replaces_it() {
+        use layer_ui::ColorPickerAction;
+        for end in [UiAction::ColorPicker {action:ColorPickerAction::Toggle}, UiAction::Invoke {command:CommandId::Brush}] {
+            let mut host=host(Platform::Windows);
+            workspace_fixture(&mut host);
+            host.session.renderer_mut().0=Some(Box::new(layer_render_wgpu::WgpuRasterizer::new_native_headless(Default::default()).unwrap()));
+            assert!(update(&mut host)["color_preview"].is_object());
+            let original=host.session.state().colors.definition();
+            host.dispatch(UiAction::ColorPicker {action:ColorPickerAction::Editor {original,touch_offset:0.}}).unwrap();
+            let opened=update(&mut host);
+            assert_eq!(opened["color_preview"]["picker"]["editor"],true);
+            let camera=&host.session.state().camera;
+            let at=layer_core::Affine(camera.document_to_surface()).map(layer_core::Point {x:1000.,y:800.});
+            host.session.cursor_input(Some(layer_engine::PenEvent {device_id:1,sequence:1,timestamp_ns:0,
+                view_revision:camera.revision,surface_position:at,pressure:1.,tilt_radians:[0.;2],twist_radians:0.,distance:0.,
+                phase:layer_engine::PenPhase::Hover,tool:layer_engine::ToolKind::Mouse,flags:layer_engine::SampleFlags::PRIMARY}));
+            let deadline=std::time::Instant::now()+std::time::Duration::from_secs(60);
+            let mut now=0;
+            while host.session.state().color_picker.preview.is_none() {
+                now+=8_000_000;host.prepare_canvas_frame(now,now,true).unwrap();
+                assert!(std::time::Instant::now()<deadline,"the picker must receive an actual GPU sample");
+            }
+            assert!(update(&mut host)["color_preview"]["picker"]["preview"].is_object());
+            let bounds=host.session.layout(host.logical).groups.into_iter().find(|g|g.id==41).unwrap().bounds;
+            let start=[bounds.x+10.,bounds.y+10.];
+            drag(&mut host,layer_ui::ContactPhase::Down,start);update(&mut host);
+            host.dispatch(UiAction::BeginTabDrag {tabs:vec![layer_ui::TabHit {group:41,index:0,bounds:layer_ui::Bounds {width:36.,height:36.,..bounds}}],
+                clip:layer_ui::Bounds {width:bounds.width-20.,height:36.,..bounds}}).unwrap();
+            drag(&mut host,layer_ui::ContactPhase::Move,[start[0]+3.,start[1]]);
+            let motion=update(&mut host);
+            assert!(motion.get("state").is_none());
+            assert!(motion.get("color_preview").is_none(),"unchanged preview must be omitted from retained workspace motion");
+            drag(&mut host,layer_ui::ContactPhase::Cancel,start);update(&mut host);
+            host.gesture([500.,500.],1.01,0.,false).unwrap();
+            let camera=update(&mut host);
+            assert!(camera["camera"].is_object() && camera.get("state").is_none());
+            assert!(camera.get("color_preview").is_none());
+            assert!(host.session.state().color_picker.editor);
+            host.dispatch(end).unwrap();
+            assert_eq!(host.session.state().layer_tools.tool,layer_ui::LayerCanvasTool::Paint);
+            failed_take(&mut host,false);
+            let ended=update(&mut host);
+            assert_eq!(ended["color_preview"]["picker"]["editor"],false);
+            assert!(ended["color_preview"]["picker"]["preview"].is_null());
+            host.gesture([500.,500.],1.01,0.,false).unwrap();
+            assert!(update(&mut host).get("color_preview").is_none());
+            host.invalidate_snapshot();
+            let full=update(&mut host);
+            assert!(full["state"].is_object());
+            assert_eq!(full["color_preview"],ended["color_preview"]);
         }
     }
     #[test]
