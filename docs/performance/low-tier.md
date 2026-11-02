@@ -2797,27 +2797,42 @@ referenced reports.
 
 ## Vector face search
 
-M7c on `13189317f` plus the milestone changes, 2026-11-02. The release
+M7d on `0a2497514` plus the milestone changes, 2026-11-02. The release
 `vector_face_busy_page` test searches 2,002 stroked paths, with 2,000 hatch
-strokes inside the large face. Timers cover the first search for each face,
+strokes inside the large face. Timers cover the first search for each case,
 including flattening and window doubling; fixture construction is excluded.
-This measures inline CPU search, not presentation or frame rate. Auto finds
-these closed faces at reach 0. TCL results are means of two fresh-process first
-calls per variant in a matched main/M7c/M7c/main sequence, with default CPU
-affinity and no governor changes.
+This measures inline CPU search, not presentation or frame rate. Auto now seals
+at 16 px even when a closed frame already bounds the region. TCL results are
+means of two fresh-process first calls per variant in a matched
+main/M7d/M7d/main sequence, with default CPU affinity and no governor changes.
+Workstation results are one first call per case and do not qualify the tablet.
 
-| Device | Small face, main → M7c | Large face, main → M7c | Inline gate | Result |
+| Case | TCL main → M7d, ms | TCL gate | Workstation main → M7d, ms | Workstation gate |
 | --- | --- | --- | --- | --- |
-| TCL TAB 11 Gen 2, native ARM64 release | 3.494 → 1.883 ms | 15.680 → 15.244 ms | ≤16 ms | Shared slight miss; large-face worst 16.330 → 16.339 ms |
-| Workstation, native release (candidate only) | — → 0.173 ms | — → 1.497 ms | ≤8 ms | Met; diagnostic |
+| Off small | 2.886 → 2.567 | No mean regression | 0.187 → 0.211 | +0.024 ms; single-call diagnostic |
+| Off large | 17.890 → 14.163 | No mean regression | 1.627 → 1.594 | No observed regression |
+| Auto small | 0.936 → 1.017 | ≤16 ms: met | 0.032 → 0.041 | Diagnostic |
+| Auto large | 11.916 → 49.372 | ≤64 ms: met | 1.173 → 7.881 | ≤8 ms: met |
+| Auto miss | 647.792 → 114.258 | ≤64 ms: missed | 150.178 → 16.472 | ≤8 ms: missed |
 
-TCL large-face ranges are 15.029–16.330 ms on main and 14.148–16.339 ms on M7c;
-the mean decreases 2.78%. This records the shared miss against matched main,
-not an all-calls pass. Source and binary hashes, every first-call row and
-earlier failed candidates remain in `artifacts/fill-tools/m7c-native/`;
-`matched-slim/` holds the final comparison. Fixed-core stage profiles there
-are diagnostic and do not qualify the tier.
-The workstation row does not qualify tablet performance.
+TCL Auto large ranges from 49.315 to 49.429 ms; Auto miss ranges from 113.795
+to 114.721 ms. Auto miss improves 82.36% against main but remains over budget
+on both devices. At reach 48, hatch terminal ends 20 px apart in the same row
+or column seal sideways at the 45° cone limit, joining the chains into a mesh
+of about 2,000 faces. Each free line has two attachments, so pruning correctly
+keeps it. Workstation profiling of that graph attributes 2.1 ms to crossings,
+2.2 ms to links and 1.3 ms to the prune.
+
+Open item: limit an escalation to lines in the closure of the point's face at
+the previous reach. New seals only subdivide that face; this would skip the
+hatch mesh inside the closed box.
+
+The control retains the earlier 16 ms Off-large miss
+(19.985 ms worst); both candidate Off-large calls are below 16 ms
+(13.274–15.051 ms). All first calls, source/binary hashes and the matched
+control fixture are in `artifacts/fill-tools/m7d-native/`; workstation rows
+are in `artifacts/fill-tools/m7d-workstation-main-busy.json` and
+`artifacts/fill-tools/m7d-core-results.json`.
 
 ## Vector mask tracing
 

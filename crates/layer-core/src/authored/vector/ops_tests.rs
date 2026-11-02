@@ -365,13 +365,19 @@ fn vector_face_busy_page() {
         face_line(i as u64 + 3, &[[x, y], [x + 10., y + 10.]], false, 2.)
     }));
     let lines: Vec<_> = paths.iter().map(|path| FaceLine { path, offset: [0.; 2] }).collect();
-    for (name, point, expected) in [("small", [50., 50.], [0., 0., 100., 100.]), ("large", [1000., 1400.], [200., 200., 1800., 1800.])] {
+    for (name, point, reach, expected) in [
+        ("off_small", [50., 50.], Some(0), Some([0., 0., 100., 100.])),
+        ("off_large", [1000., 1400.], Some(0), Some([200., 200., 1800., 1800.])),
+        ("auto_small", [50., 50.], None, Some([0., 0., 100., 100.])),
+        ("auto_large", [1000., 1400.], None, Some([200., 200., 1800., 1800.])),
+        ("auto_miss", [150., 150.], None, None),
+    ] {
         let start = std::time::Instant::now();
-        let face = vector_face(&lines, point, None).unwrap();
+        let face = vector_face(&lines, point, reach);
         let elapsed = start.elapsed().as_micros();
         eprintln!("vector_face_busy_page {name} elapsed_us={elapsed} path_count={}", paths.len());
-        assert_eq!(face.geometry.hull(), expected);
-        assert!(face_path(&face).encloses(point, 0.001));
+        assert_eq!(face.as_ref().map(|face|face.geometry.hull()), expected);
+        if let Some(face)=face {assert!(face_path(&face).encloses(point, 0.001));}
     }
 }
 
@@ -461,6 +467,52 @@ fn vector_seals_close_a_corner_whose_far_end_points_away() {
     for reach in [Some(32), None] {
         assert_eq!(reached_face(&paths, [50., 50.], reach).unwrap().geometry.hull(), [0., 0., 100., 100.]);
     }
+}
+
+#[test]
+fn vector_seal_choice_is_monotone_in_reach() {
+    let wall=31.984375;
+    let paths=[
+        face_line(1,&[[50.,-40.],[50.,-60.],[-10.,-60.],[-10.,0.],[0.,0.]],false,2.),
+        face_line(2,&[[wall,-40.],[60.,-40.],[60.,40.],[wall,40.]],true,2.),
+        face_line(3,&[[28.,15.5],[28.,25.5]],false,2.),
+    ];
+    assert!(reached_face(&paths,[10.,-20.],Some(16)).is_none());
+    for reach in [Some(32),Some(48),None] {
+        assert_eq!(reached_face(&paths,[10.,-20.],reach).unwrap().geometry.hull(),[-10.,-60.,50.,0.]);
+    }
+}
+
+#[test]
+fn vector_auto_closes_a_gappy_shape_inside_a_closed_frame_like_raster() {
+    let frame=face_box(1,0.,300.);let shape=gappy_face(10.,0.);
+    let lines=[FaceLine {path:&frame,offset:[0.;2]},FaceLine {path:&shape,offset:[100.;2]}];
+    let auto=vector_face(&lines,[150.;2],None).unwrap();
+    assert_eq!(auto.geometry.hull(),[100.,100.,200.,200.]);
+    let off=vector_face(&lines,[150.;2],Some(0)).unwrap();
+    assert_eq!(off.geometry.hull(),[0.,0.,300.,300.]);assert_eq!(off.geometry.subpaths().len(),1);
+}
+
+#[test]
+fn vector_seals_keep_free_stroke_cycles_and_dashed_dividers() {
+    let paths=[[[10.,0.],[90.,0.]],[[100.,10.],[100.,90.]],[[90.,100.],[10.,100.]],[[0.,90.],[0.,10.]]]
+        .into_iter().enumerate().map(|(id,p)|face_line(id as u64+1,&p,false,2.)).collect::<Vec<_>>();
+    assert_eq!(reached_face(&paths,[50.;2],None).unwrap().geometry.hull(),[0.,0.,100.,100.]);
+    let mut paths=vec![face_line(1,&[[0.,0.],[210.,0.],[210.,200.],[0.,200.]],true,2.)];
+    paths.extend((0..5).map(|i| {let x=10.+f64::from(i)*40.;face_line(i as u64+2,&[[x,100.],[x+30.,100.]],false,2.)}));
+    assert_eq!(reached_face(&paths,[105.,50.],None).unwrap().geometry.hull(),[0.,0.,210.,100.]);
+    assert_eq!(reached_face(&paths,[105.,50.],Some(0)).unwrap().geometry.hull(),[0.,0.,210.,200.]);
+}
+
+#[test]
+fn vector_auto_matches_the_first_fixed_reach_that_closes() {
+    for angle in [0.,30.,60.,90.] {for gap in [10.,20.,30.,40.,56.] {
+        let paths=[gappy_face(gap,angle)];
+        let fixed=[16,32,48].into_iter().find_map(|reach|reached_face(&paths,[50.;2],Some(reach)));
+        let auto=reached_face(&paths,[50.;2],None);
+        assert_eq!(auto.as_ref().map(|f|&f.geometry),fixed.as_ref().map(|f|&f.geometry),"gap={gap} angle={angle}");
+        assert_eq!(auto.as_ref().map(|f|&f.boundary),fixed.as_ref().map(|f|&f.boundary));
+    }}
 }
 
 #[test]

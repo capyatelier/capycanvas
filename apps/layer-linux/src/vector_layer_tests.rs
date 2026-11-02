@@ -302,8 +302,8 @@ fn native_vector_gap_fill_and_everywhere() {
         d.w.dispatch(UiAction::SelectBrush {id:layer_core::DefaultBrushPreset::GPen as u32});
         d.w.dispatch(UiAction::SetBrushSize {value:6.});d.w.dispatch(UiAction::SetColor {rgba:[0.,0.,0.,1.]});
         tool(&d,LayerCanvasTool::Paint);
-        pen_points(&mut d,&[[662.,400.],[900.,400.],[900.,800.],[400.,800.],[400.,400.],[638.,400.]]);
-        let original=until_paths(&d,"one open vector outline with a 24 px gap",|paths|paths.len()==1);
+        pen_points(&mut d,&[[670.,400.],[900.,400.],[900.,800.],[400.,800.],[400.,400.],[630.,400.]]);
+        let original=until_paths(&d,"one open vector outline with a 40 px gap",|paths|paths.len()==1);
         assert!(!original[0].encloses([650.,600.],0.05));
         let target=ui_session(&d.w).engine().document().working.occurrence.unwrap();
         let order=ui_session(&d.w).engine().document().scene().order().to_vec();
@@ -349,7 +349,7 @@ fn native_vector_gap_fill_and_everywhere() {
         d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});until_paths(&d,"one Undo restores all three original fills",|paths|paths==original.as_slice());
         d.w.dispatch(UiAction::Invoke {command:CommandId::Redo});until_paths(&d,"one Redo restores the Everywhere edit",|paths|paths==recoloured.as_slice());
         d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});until_paths(&d,"all original vector regions remain exact",|paths|paths==original.as_slice());
-        eprintln!("PASS {theme:?}: Auto seals a 24 px vector gap; Everywhere recolours three matching fills and preserves the fourth; exact one-edit Undo/Redo");
+        eprintln!("PASS {theme:?}: Auto seals a 40 px vector gap; Everywhere recolours three matching fills and preserves the fourth; exact one-edit Undo/Redo");
     }
     d.finish();
 }

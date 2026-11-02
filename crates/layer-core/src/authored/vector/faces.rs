@@ -1,5 +1,5 @@
 use super::*;
-use super::erase::{Edge, Edges, crossing_stops, path_edges};
+use super::erase::{Edge, Edges, crossing, crossing_stops, path_edges};
 use std::collections::{HashMap, VecDeque};
 
 pub struct FaceLine<'a> { pub path: &'a PathItem, pub offset: [f64; 2] }
@@ -8,11 +8,12 @@ pub struct VectorFace { pub geometry: PathGeometry, pub boundary: BTreeSet<usize
 struct Line { edges: Arc<[Edge]>, source: usize, other: Option<usize>, base: u32, closed: bool }
 struct Link { ends: [usize; 2], points: Vec<[f64; 2]>, sources: BTreeSet<usize> }
 struct Cycle { points: Vec<[f64; 2]>, sources: BTreeSet<usize>, component: usize, area: f64 }
-struct Cache { paths: Vec<Option<std::ops::Range<usize>>>, lines: Vec<Line>, trees: Vec<Edges>, next: usize, maxima: Vec<f64>, lengths: HashMap<usize, Box<[f64]>> }
+struct Cache { paths: Vec<Option<std::ops::Range<usize>>>, lines: Vec<Line>, trees: Vec<Edges>, next: usize, maxima: Vec<f64>, maximum: f64, lengths: HashMap<usize, Box<[f64]>>, free: Vec<Option<bool>>, seals: HashMap<(usize,bool),Search> }
 impl Cache {
     fn new(lines:&[FaceLine<'_>])->Self {
-        Self {paths:vec![None;lines.len()],lines:Vec::new(),trees:Vec::new(),next:0,lengths:HashMap::new(),maxima:lines.iter().map(|s|
-            s.path.style.strokes().map(|stroke|stroke.width*0.5*stroke.profile.as_ref().map_or(1.,|p|p.max_factor())).fold(0.,f64::max)).collect()}
+        let maxima=lines.iter().map(|s|s.path.style.strokes().map(|stroke|stroke.width*0.5*stroke.profile.as_ref().map_or(1.,|p|p.max_factor())).fold(0.,f64::max)).collect::<Vec<_>>();
+        let maximum=maxima.iter().copied().fold(0.,f64::max);
+        Self {paths:vec![None;lines.len()],lines:Vec::new(),trees:Vec::new(),next:0,lengths:HashMap::new(),maxima,maximum,free:Vec::new(),seals:HashMap::new()}
     }
     fn length(&self,line:&Line,index:usize)->f64 {
         if line.edges.len()>1 {self.lengths[&line.edges[0].subpath][index]}else if index==0 {0.}else {
@@ -56,12 +57,30 @@ fn piece(edges:&[Edge],from:f64,to:f64)->Vec<[f64;2]> {
 }
 
 struct End {line:usize,end:bool,point:[f64;2],direction:[f64;2],radius:f64}
-struct Choice {distance:f64,line:usize,place:f64,point:[f64;2],end:Option<usize>}
-fn choose(nearest:&mut Option<Choice>,candidate:Choice) {
-    if nearest.as_ref().is_none_or(|old| {
-        let tie=(candidate.distance-old.distance).abs()<=0.05;
-        if tie && candidate.end.is_some()!=old.end.is_some() {candidate.end.is_some()}else{candidate.distance<old.distance}
-    }) {*nearest=Some(candidate);}
+#[derive(Clone,Copy)]
+struct Target {subpath:usize,place:f64,point:[f64;2],distance:f64,end:Option<(usize,bool)>}
+#[derive(Clone,Copy)]
+struct Search {reach:f64,ray:Option<Target>,end:Option<Target>}
+struct Seal {from:usize,end:bool,target:Target,edge:Edge}
+fn choose(ray:Option<Target>,end:Option<Target>,reach:f64)->Option<Target> {
+    if nearest_distance(ray,end)>reach {return None;}
+    match (ray,end) {
+        (Some(ray),Some(end))=>Some(if end.distance<=ray.distance || (end.point[0]-ray.point[0]).hypot(end.point[1]-ray.point[1])<=0.05 {end}else{ray}),
+        (ray,end)=>ray.or(end),
+    }
+}
+fn nearest_distance(ray:Option<Target>,end:Option<Target>)->f64 {
+    ray.map_or(f64::INFINITY,|t|t.distance).min(end.map_or(f64::INFINITY,|t|t.distance))
+}
+fn within(window:[f64;4],b:[f64;4])->bool {
+    b[0]>=window[0] && b[1]>=window[1] && b[2]<=window[2] && b[3]<=window[3]
+}
+fn turning(edges:&[Edge])->f64 {
+    let mut previous:Option<[f64;2]>=None;
+    edges.iter().filter(|e|e.a!=e.b).map(|e| {
+        let d=[e.b[0]-e.a[0],e.b[1]-e.a[1]];
+        let angle=previous.map_or(0.,|p|(p[0]*d[1]-p[1]*d[0]).atan2(p[0]*d[0]+p[1]*d[1]).abs());previous=Some(d);angle
+    }).sum()
 }
 fn ray_hit(e:[f64;2],d:[f64;2],edge:&Edge)->Option<(f64,f64)> {
     let v=[edge.b[0]-edge.a[0],edge.b[1]-edge.a[1]];let q=[edge.a[0]-e[0],edge.a[1]-e[1]];
@@ -75,7 +94,44 @@ fn ray_hit(e:[f64;2],d:[f64;2],edge:&Edge)->Option<(f64,f64)> {
     (s>0. && (0. ..=1.).contains(&u)).then_some((s,u))
 }
 
-fn graph(sources:&[FaceLine<'_>],selected:&[usize],point:Option<[f64;2]>,reach:f64,cache:&mut Cache)->Vec<VectorFace> {
+fn prune_free(lines:&[Line],free:&[bool],seals:&[Seal],cache:&Cache,lookup:&[usize],active:Option<&[usize]>)->(Vec<bool>,Vec<bool>) {
+    if seals.is_empty() {return (free.to_vec(),Vec::new());}
+    let mut anchored=vec![false;seals.len()];let mut counts=vec![0;lines.len()];
+    let mut attachments=HashMap::<(usize,[i64;2]),usize>::new();
+    let cell=|p:[f64;2]|p.map(|v|(v*GRID).round() as i64);
+    let mut attach=|line:usize,p:[f64;2]|if free[line] {
+        let count=attachments.entry((line,cell(p))).or_default();if *count==0 {counts[line]+=1;}*count+=1;
+    };
+    let tree=Edges::new(seals.iter().map(|s|s.edge).collect());
+    let mut incident=vec![Vec::new();lines.len()];
+    for (id,seal) in seals.iter().enumerate() {
+        let edge=&seal.edge;
+        for (line,p) in [(seal.from,edge.a),(lookup[seal.target.subpath],edge.b)] {attach(line,p);incident[line].push(id);}
+        cache.near(edge.a,edge.b,active,&mut |other| {
+            if let Some(t)=crossing(edge.a,edge.b,other.a,other.b) && t>1e-6 && t<1.-1e-6 {
+                anchored[id]=true;attach(lookup[other.subpath],[edge.a[0]+t*(edge.b[0]-edge.a[0]),edge.a[1]+t*(edge.b[1]-edge.a[1])]);
+            }
+        });
+        tree.near(edge.a,edge.b,&mut |other| {
+            if let Some(t)=crossing(edge.a,edge.b,other.a,other.b) && t>1e-6 && t<1.-1e-6 {anchored[id]=true;}
+        });
+    }
+    let mut dead=vec![false;lines.len()];let mut live=vec![true;seals.len()];
+    let mut queue=free.iter().enumerate().filter(|(id,free)|**free && counts[*id]<=1).map(|(id,_)|id).collect::<VecDeque<_>>();
+    while let Some(line)=queue.pop_front() {
+        if dead[line] {continue;}dead[line]=true;
+        for &id in &incident[line] {
+            if !live[id] || anchored[id] {continue;}live[id]=false;let seal=&seals[id];
+            for (other,p) in [(seal.from,seal.edge.a),(lookup[seal.target.subpath],seal.edge.b)] {
+                if !free[other] {continue;}let key=(other,cell(p));let count=attachments.get_mut(&key).unwrap();*count-=1;
+                if *count==0 {attachments.remove(&key);counts[other]-=1;if counts[other]<=1 && !dead[other] {queue.push_back(other);}}
+            }
+        }
+    }
+    (dead,live)
+}
+
+fn graph(sources:&[FaceLine<'_>],selected:&[usize],point:Option<[f64;2]>,reach:f64,window:[f64;4],cache:&mut Cache)->Vec<VectorFace> {
     let mut lines=Vec::new();let mut added=Vec::new();
     for &source in selected {
         if cache.paths[source].is_none() {
@@ -84,11 +140,13 @@ fn graph(sources:&[FaceLine<'_>],selected:&[usize],point:Option<[f64;2]>,reach:f
                 let edges=path_edges(subpath,cache.next,0.05).into_iter().map(|e|translated(e,sources[source].offset)).collect::<Vec<_>>();
                 if !edges.is_empty() {
                     added.extend(&edges);cache.next+=1;
-                    if !subpath.closed && edges.len()>1 {
+                    let turn=if !subpath.closed && edges.len()>1 {
                         let lengths=std::iter::once(0.).chain(edges.iter().scan(0.,|length,edge| {
                             *length+=(edge.b[0]-edge.a[0]).hypot(edge.b[1]-edge.a[1]);Some(*length)
                         })).collect();cache.lengths.insert(edges[0].subpath,lengths);
-                    }
+                        turning(&edges)
+                    }else{0.};
+                    cache.free.push((subpath.closed || turn>=std::f64::consts::TAU/3.).then_some(false));
                     cache.lines.push(Line {edges:edges.into(),source,other:None,base,closed:subpath.closed});
                 }
                 base+=subpath.segment_count() as u32;
@@ -102,17 +160,19 @@ fn graph(sources:&[FaceLine<'_>],selected:&[usize],point:Option<[f64;2]>,reach:f
     let mut lookup=vec![usize::MAX;cache.next];
     for (id,line) in lines.iter().enumerate() {lookup[line.edges[0].subpath]=id;}
     let active=(lines.len()!=cache.next).then_some(lookup.as_slice());
-    let maxima=&cache.maxima;
-    let maximum=selected.iter().map(|i|maxima[*i]).fold(0.,f64::max);
-    let isolated=lines.iter().map(|line| {
-        if line.closed || line.edges.len()!=1 {return false;}
-        let edge=line.edges[0];let reach=maxima[line.source]+maximum+0.5+0.05;let mut other=false;
-        cache.near([edge.a[0].min(edge.b[0])-reach,edge.a[1].min(edge.b[1])-reach],
-            [edge.a[0].max(edge.b[0])+reach,edge.a[1].max(edge.b[1])+reach],active,&mut |edge|other|=edge.subpath!=line.edges[0].subpath);
-        !other
+    let maximum=cache.maximum;
+    let free=lines.iter().map(|line| {
+        let subpath=line.edges[0].subpath;
+        if let Some(free)=cache.free[subpath] {return free;}
+        let b=bounds(line.edges.iter().flat_map(|edge|[edge.a,edge.b]));let pad=cache.maxima[line.source]+maximum+0.55;
+        let b=[b[0]-pad,b[1]-pad,b[2]+pad,b[3]+pad];let mut other=false;
+        cache.near([b[0],b[1]],[b[2],b[3]],active,&mut |edge|other|=edge.subpath!=subpath);
+        if other || within(window,b) {cache.free[subpath]=Some(!other);}
+        !other && within(window,b)
     }).collect::<Vec<_>>();
+    let maxima=&cache.maxima;
     let mut joins=Vec::new();let mut cuts=vec![Vec::new();lines.len()];let mut joined=vec![[false;2];lines.len()];
-    for (id,line) in lines.iter().enumerate().filter(|(id,line)|!line.closed && !isolated[*id]) {
+    for (id,line) in lines.iter().enumerate().filter(|(id,line)|!line.closed && !free[*id]) {
         for end in [false,true] {
             let edge=if end {line.edges.last().unwrap()}else{&line.edges[0]};
             let place=edge.base+if end {edge.to}else{edge.from};let e=if end {edge.b}else{edge.a};
@@ -142,6 +202,7 @@ fn graph(sources:&[FaceLine<'_>],selected:&[usize],point:Option<[f64;2]>,reach:f
             }
         }
     }
+    let mut seals=Vec::new();
     if reach>0. {
         let mut ends=Vec::new();let mut end_ids=vec![[None;2];lines.len()];
         for (id,line) in lines.iter().enumerate().filter(|(_,line)|!line.closed) {
@@ -157,51 +218,71 @@ fn graph(sources:&[FaceLine<'_>],selected:&[usize],point:Option<[f64;2]>,reach:f
             }
         }
         let choices=ends.iter().enumerate().map(|(id,end)| {
-            let mut nearest=None;let e=end.point;let d=end.direction;
-            cache.near([e[0]-reach,e[1]-reach],[e[0]+reach,e[1]+reach],active,&mut |edge| {
+            let e=end.point;let d=end.direction;let key=(lines[end.line].edges[0].subpath,end.end);
+            if let Some(&Search {reach:searched,ray,end:other})=cache.seals.get(&key) {
+                let n=nearest_distance(ray,other);
+                if n<=reach.min(searched) || n>reach && reach<=searched {return choose(ray,other,reach);}
+            }
+            let search=reach+0.05;let mut nearest_end:Option<Target>=None;let mut hit:Option<(f64,f64,Edge)>=None;
+            cache.near([e[0]-search,e[1]-search],[e[0]+search,e[1]+search],active,&mut |edge| {
                 let line_id=lookup[edge.subpath];let line=&lines[line_id];
                 for other_end in [false,true] {
                     if if other_end {edge.index+1!=line.edges.len()}else{edge.index!=0} {continue;}
                     let Some(other)=end_ids[line_id][usize::from(other_end)].filter(|other|*other!=id) else{continue;};
                     let q=ends[other].point;let delta=[q[0]-e[0],q[1]-e[1]];let distance=delta[0].hypot(delta[1]);
                     let dot=delta[0]*d[0]+delta[1]*d[1];
-                    if distance>0. && distance<=reach && dot>=0. && 2.*dot*dot>=distance*distance {
+                    if distance>0. && distance<=search && dot>=0. && (delta[0]*d[1]-delta[1]*d[0]).abs()<=dot
+                        && nearest_end.as_ref().is_none_or(|old|distance<old.distance || distance==old.distance && other<end_ids[lookup[old.subpath]][usize::from(old.end.unwrap().1)].unwrap()) {
                         let place=if other_end {line.edges.last().unwrap().base+line.edges.last().unwrap().to}else{line.edges[0].base+line.edges[0].from};
-                        choose(&mut nearest,Choice {distance,line:line_id,place,point:q,end:Some(other)});
+                        nearest_end=Some(Target {distance,subpath:edge.subpath,place,point:q,end:Some((edge.subpath,other_end))});
                     }
                 }
-                if let Some((s,_))=ray_hit(e,d,edge) && s>0. && s<=reach {
-                    let hit=[e[0]+d[0]*s,e[1]+d[1]*s];
-                    let (t,_)=super::points::closest_segment(edge.segment,hit,edge.from,edge.to);let place=edge.base+t;
-                    let point=edge.segment.point(t);let delta=[point[0]-e[0],point[1]-e[1]];let distance=delta[0].hypot(delta[1]);
-                    if distance>reach || delta[0]*d[0]+delta[1]*d[1]<=0. {return;}
+                if let Some((s,u))=ray_hit(e,d,edge) && s<=search && hit.as_ref().is_none_or(|old|s<old.0) {
                     if line_id==end.line {
-                        let along=cache.length(line,edge.index)+(point[0]-edge.a[0]).hypot(point[1]-edge.a[1]).min(cache.length(line,edge.index+1)-cache.length(line,edge.index));
-                        if (if end.end {cache.length(line,line.edges.len())-along}else{along})<=2.*(end.radius+reach) {return;}
+                        let along=cache.length(line,edge.index)+u*(edge.b[0]-edge.a[0]).hypot(edge.b[1]-edge.a[1]);
+                        if (if end.end {cache.length(line,line.edges.len())-along}else{along})<=2.*(end.radius+s) {return;}
                     }
-                    choose(&mut nearest,Choice {distance,line:line_id,place,point,end:None});
+                    hit=Some((s,u,*edge));
                 }
-            });nearest
+            });
+            let ray=hit.and_then(|(s,u,edge)| {
+                let t=if u==0. {edge.from}else if u==1. {edge.to}else {
+                    super::points::closest_segment(edge.segment,[e[0]+d[0]*s,e[1]+d[1]*s],edge.from,edge.to).0
+                };
+                let point=edge.segment.point(t);let delta=[point[0]-e[0],point[1]-e[1]];
+                (delta[0]*d[0]+delta[1]*d[1]>0.).then(||Target {subpath:edge.subpath,place:edge.base+t,point,distance:delta[0].hypot(delta[1]),end:None})
+            });
+            let stable=reach+2.*maximum+0.6;
+            if within(window,[e[0]-stable,e[1]-stable,e[0]+stable,e[1]+stable]) {cache.seals.insert(key,Search {reach,ray,end:nearest_end});}
+            choose(ray,nearest_end,reach)
         }).collect::<Vec<_>>();
         for (id,choice) in choices.iter().enumerate() {
             let Some(choice)=choice else{continue;};let end=&ends[id];
-            if let Some(other)=choice.end && other<id && choices[other].as_ref().is_some_and(|c|c.end==Some(id)) {continue;}
-            joined[end.line][usize::from(end.end)]=true;cuts[choice.line].push(choice.place);
-            if let Some(other)=choice.end {joined[ends[other].line][usize::from(ends[other].end)]=true;}
-            joins.push((lines[end.line].source,lines[choice.line].source,end.point,choice.point));
+            if let Some((subpath,far_end))=choice.end {
+                let other=end_ids[lookup[subpath]][usize::from(far_end)].unwrap();
+                if other<id && choices[other].as_ref().is_some_and(|c|c.end==Some((lines[end.line].edges[0].subpath,end.end))) {continue;}
+            }
+            let segment=Segment {from:end.point,control:[end.point,choice.point],to:choice.point};
+            seals.push(Seal {from:end.line,end:end.end,target:*choice,edge:Edge {a:end.point,b:choice.point,segment,from:0.,to:1.,base:0.,subpath:cache.next+seals.len(),index:0}});
         }
     }
+    let (mut dead,live)=prune_free(&lines,&free,&seals,cache,&lookup,active);
+    for (seal,live) in seals.into_iter().zip(live) {if live {
+        let target=lookup[seal.target.subpath];joined[seal.from][usize::from(seal.end)]=true;cuts[target].push(seal.target.place);
+        if let Some((subpath,end))=seal.target.end {joined[lookup[subpath]][usize::from(end)]=true;}
+        joins.push((lines[seal.from].source,lines[target].source,seal.edge.a,seal.edge.b));
+    }}
     for (source,other,a,b) in joins {
         let segment=Segment {from:a,control:[a,b],to:b};let subpath=cache.next+lines.len();
         lines.push(Line {edges:vec![Edge {a,b,segment,from:0.,to:1.,base:0.,subpath,index:0}].into(),source,other:Some(other),base:0,closed:false});
-        cuts.push(Vec::new());
+        cuts.push(Vec::new());dead.push(false);
     }
-    let flattened=lines.iter().enumerate().map(|(i,l)|if isolated.get(i)==Some(&true) && !joined[i].iter().any(|joined|*joined) && cuts[i].is_empty() {Vec::new()}else{l.edges.to_vec()}).collect::<Vec<_>>();
+    let flattened=lines.iter().enumerate().map(|(i,l)|if dead[i] {Vec::new()}else{l.edges.to_vec()}).collect::<Vec<_>>();
     let crossings=crossing_stops(&flattened,&[]);
     let mut vertices=Vec::<[f64;2]>::new();let mut cells=HashMap::<[i64;2],usize>::new();
     let mut links=Vec::<Link>::new();let mut duplicate=HashMap::<Vec<[i64;2]>,usize>::new();
     for (id,line) in lines.iter().enumerate() {
-        if line.other.is_none() && !line.closed && !joined[id].iter().any(|joined|*joined) && cuts[id].is_empty() && crossings[id].is_empty() {continue;}
+        if dead[id] || line.other.is_none() && !line.closed && !joined[id].iter().any(|joined|*joined) && cuts[id].is_empty() && crossings[id].is_empty() {continue;}
         cuts[id].extend(&crossings[id]);cuts[id].extend([line.edges[0].base+line.edges[0].from,line.edges.last().unwrap().base+line.edges.last().unwrap().to]);
         cuts[id].sort_by(f64::total_cmp);cuts[id].dedup_by(|a,b|(*a-*b).abs()<1e-9);
         for stops in cuts[id].windows(2) {
@@ -290,14 +371,16 @@ pub fn vector_face(lines:&[FaceLine<'_>],point:[f64;2],reach:Option<u32>)->Optio
     let all=bounds(paths.iter().flat_map(|b|[[b[0],b[1]],[b[2],b[3]]]));
     let limit=[(point[0]-all[0]).abs(),(point[0]-all[2]).abs(),(point[1]-all[1]).abs(),(point[1]-all[3]).abs()].into_iter().fold(0.,f64::max)+1.;
     if !limit.is_finite() {return None;}
-    let attempts=reach.map_or_else(||vec![0,16,32,48],|r|vec![r]);
-    for reach in attempts {let mut half=128_f64;
-    loop {
+    let mut search=|reach:f64,mut half:f64,doubling:bool|loop {
         let window=[point[0]-half,point[1]-half,point[0]+half,point[1]+half];
         let selected=selected_lines(lines,&paths,window);
-        if let Some(face)=graph(lines,&selected,Some(point),f64::from(reach),&mut cache).into_iter().next() {let b=face.geometry.hull();if b[0]>window[0] && b[1]>window[1] && b[2]<window[2] && b[3]<window[3] {return Some(face);}}
-        if half>=limit {break;}half=(half*2.).min(limit);
-    }}None
+        if let Some(face)=graph(lines,&selected,Some(point),reach,window,&mut cache).into_iter().next() {let b=face.geometry.hull();if b[0]>window[0] && b[1]>window[1] && b[2]<window[2] && b[3]<window[3] {return Some(face);}}
+        if !doubling || half>=limit {return None;}half=(half*2.).min(limit);
+    };
+    if let Some(reach)=reach {return search(f64::from(reach),128.,true);}
+    if let Some(face)=search(16.,128.,true) {return Some(face);}
+    let wide=search(48.,limit,false)?;
+    search(32.,limit,false).or(Some(wide))
 }
 
 fn line_bounds(lines:&[FaceLine<'_>])->Vec<[f64;4]> {
@@ -309,7 +392,7 @@ fn selected_lines(lines:&[FaceLine<'_>],paths:&[[f64;4]],window:[f64;4])->Vec<us
 }
 pub fn vector_faces(lines:&[FaceLine<'_>],window:[f64;4])->Vec<VectorFace> {
     let selected=selected_lines(lines,&line_bounds(lines),window);
-    graph(lines,&selected,None,0.,&mut Cache::new(lines)).into_iter().filter(|face| {
+    graph(lines,&selected,None,0.,window,&mut Cache::new(lines)).into_iter().filter(|face| {
         let b=face.geometry.hull();b[0]>=window[0] && b[1]>=window[1] && b[2]<=window[2] && b[3]<=window[3]
     }).collect()
 }

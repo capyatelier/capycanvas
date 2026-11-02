@@ -250,10 +250,15 @@ fn trim_cap(path: &PathItem, subpath: &Subpath, base: u32, piece: &mut Vec<(usiz
     false
 }
 
+const CROSSING_TOLERANCE:f64=1./(GRID*32.);
+fn closest_edge(edge:&Edge,p:[f64;2])->(f64,f64) {
+    let a=(p[0]-edge.a[0]).hypot(p[1]-edge.a[1]);if a<=CROSSING_TOLERANCE {return (edge.from,a);}
+    let b=(p[0]-edge.b[0]).hypot(p[1]-edge.b[1]);if b<=CROSSING_TOLERANCE {return (edge.to,b);}
+    super::points::closest_segment(edge.segment,p,edge.from,edge.to)
+}
 fn refined_crossing(a: &Edge, b: &Edge, mut t: f64, mut u: f64) -> Option<f64> {
     t = a.from + (a.to - a.from) * t;
     u = b.from + (b.to - b.from) * u;
-    let tolerance = 1. / (GRID * 32.);
     let derivative = |s: &Segment, t: f64| std::array::from_fn::<_, 2, _>(|i| {
         3. * ((s.control[0][i] - s.from[i]) * (1. - t).powi(2)
             + 2. * (s.control[1][i] - s.control[0][i]) * (1. - t) * t
@@ -263,16 +268,16 @@ fn refined_crossing(a: &Edge, b: &Edge, mut t: f64, mut u: f64) -> Option<f64> {
     for _ in 0..24 {
         let (p, q) = (a.segment.point(t), b.segment.point(u));
         let error = [p[0] - q[0], p[1] - q[1]];
-        if error[0].hypot(error[1]) <= tolerance { return Some(a.base + t); }
+        if error[0].hypot(error[1]) <= CROSSING_TOLERANCE { return Some(a.base + t); }
         let (da, db) = (derivative(&a.segment, t), derivative(&b.segment, u));
         let denominator = cross(da, db);
         if denominator.abs() < 1e-12 {
             let (place, distance) = if u == 0. || u == 1. {
-                super::points::closest_segment(a.segment, q, a.from, a.to)
+                closest_edge(a,q)
             } else if t == 0. || t == 1. {
-                (t, super::points::closest_segment(b.segment, p, b.from, b.to).1)
+                (t, closest_edge(b,p).1)
             } else { return None; };
-            return (distance <= tolerance).then_some(a.base + place);
+            return (distance <= CROSSING_TOLERANCE).then_some(a.base + place);
         }
         t = (t - cross(error, db) / denominator).clamp(0., 1.);
         u = (u - cross(error, da) / denominator).clamp(0., 1.);
@@ -280,7 +285,7 @@ fn refined_crossing(a: &Edge, b: &Edge, mut t: f64, mut u: f64) -> Option<f64> {
     None
 }
 
-fn crossing(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> Option<f64> {
+pub(super) fn crossing(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> Option<f64> {
     let r = [b[0] - a[0], b[1] - a[1]];
     let s = [d[0] - c[0], d[1] - c[1]];
     let denominator = r[0] * s[1] - r[1] * s[0];
@@ -350,7 +355,7 @@ pub(super) fn crossing_stops(lines: &[Vec<Edge>], others: &[Edge]) -> Vec<Vec<f6
                         if (q[0]*d[1]-q[1]*d[0]).abs()>1e-9*length.sqrt() {continue;}
                         let t=(q[0]*d[0]+q[1]*d[1])/length;
                         if (0. ..=1.).contains(&t) {
-                            let (at,_)=super::points::closest_segment(edge.segment,p,edge.from,edge.to);
+                            let (at,_)=closest_edge(edge,p);
                             stops.push(edge.base+at);
                         }
                     }

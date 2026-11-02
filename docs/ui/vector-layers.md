@@ -196,8 +196,9 @@ Solid fills stay attached to cut paths; erasing does not subtract filled areas.
 paint removes its fill; on a fill-only path it removes the path. A tap between
 vector strokes creates a closed fill path below the intersecting strokes,
 including interior detail lines. A hole can be filled as its own face.
-**Close gaps** uses the chosen reach; Auto tries 0, 16, 32 and 48 document
-pixels. The fill follows the closed gap without adding a visible stroke.
+**Close gaps** uses the chosen reach. Auto tries 16, 32 and 48 document pixels
+while the tapped area stays open. The fill follows the closed gap without
+adding a visible stroke.
 **Everywhere** recolors paths with the same ordered fill paints in one undo
 step, keeping their outlines. Transparent removes the matching fills.
 
