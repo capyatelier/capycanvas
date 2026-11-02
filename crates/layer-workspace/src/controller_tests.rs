@@ -13,6 +13,7 @@ struct Backend {
     fail_preferences: Cell<bool>,
     lose_reply: Cell<bool>,
     deliveries: RefCell<Vec<String>>,
+    loads: RefCell<Vec<String>>,
     load_gate: RefCell<Option<async_channel::Receiver<()>>>,
     editing_gate: RefCell<Option<async_channel::Receiver<()>>>,
     commit_gate: RefCell<Option<async_channel::Receiver<()>>>,
@@ -32,7 +33,8 @@ impl WorkspaceStore for Store {
         if self.0.fail_preferences.get() && matches!(request, StoreRequest::UpdateSwitcher { .. } | StoreRequest::UpdateWorkspaceOrder { .. }) {
             return Err(StoreError::new(ErrorKind::StorageFull, "Storage full"));
         }
-        if matches!(request, StoreRequest::Load { .. }) {
+        if let StoreRequest::Load { id } = &request {
+            self.0.loads.borrow_mut().push(id.clone());
             let gate = self.0.load_gate.borrow_mut().take();
             if let Some(gate) = gate {
                 let _ = gate.recv().await;
@@ -142,6 +144,39 @@ fn active_workspace_deletion_keeps_the_manager_open() {
     assert!(f.controller.view.rows.iter().any(|row| row.id == fallback && row.current));
     assert!(f.controller.manager.items().iter().all(|item| item.id != created));
     assert!(f.controller.view.error.is_none());
+}
+
+fn delete_selected_item_without_reloading(f: &mut Fixture, id: String, page: ManagerPage) {
+    f.input(serde_json::json!({"type":"open","page":page}));
+    f.input(serde_json::json!({"type":"select","id":id}));
+    assert!(f.controller.view.details.is_some());
+    f.input(serde_json::json!({"type":"form","action":{"type":"delete","value":id}}));
+    f.backend.loads.borrow_mut().clear();
+    f.input(serde_json::json!({"type":"submit"}));
+    assert!(!f.backend.loads.borrow().contains(&id), "deleted selection was loaded again");
+    assert!(f.controller.manager.items().iter().all(|item| item.id != id));
+    assert!(f.controller.view.selected.is_none());
+    assert!(f.controller.view.details.is_none());
+    assert!(!f.controller.view.loading);
+    assert_eq!(f.controller.view.page, Some(page));
+    assert!(f.controller.view.error.is_none());
+}
+
+#[test]
+fn deleting_selected_workspace_does_not_reload_the_deleted_item() {
+    let mut f = Fixture::new();
+    let id = f.controller.manager.active_id().unwrap();
+    f.input(serde_json::json!({"type":"switch","id":DEFAULT_WORKSPACES[0].0}));
+    delete_selected_item_without_reloading(&mut f, id, ManagerPage::Workspaces);
+}
+
+#[test]
+fn deleting_selected_saved_toolbar_does_not_reload_the_deleted_item() {
+    let mut f = Fixture::new();
+    f.input(serde_json::json!({"type":"open","page":"this_workspace"}));
+    let panel = serde_json::from_str(&f.controller.view.rows[0].id).unwrap();
+    let id = pollster::block_on(f.controller.manager.save_toolbar(panel, "Saved toolbar", 1000)).unwrap();
+    delete_selected_item_without_reloading(&mut f, id, ManagerPage::ToolbarLibrary);
 }
 
 #[test]

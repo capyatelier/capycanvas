@@ -206,6 +206,7 @@ enum Outcome {
     Adopt(Box<StoredEntity>),
     Editing(Option<Box<StoredEntity>>),
     Done,
+    Deleted(String),
     Restart,
     Dismiss,
     Closed,
@@ -1247,7 +1248,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 }
                 ManagerAction::Delete(id) => match m.delete_item(&id, None, now).await? {
                     Some(s) => Outcome::adopt(s),
-                    None => Outcome::Done,
+                    None => Outcome::Deleted(id),
                 },
                 ManagerAction::Reset(id) => Outcome::adopt(m.change_layout_for_scope(&id, None, now, phone).await?),
                 ManagerAction::SaveAsNew => {
@@ -1673,6 +1674,9 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                             self.view.selected = Some(id);
                         }
                         Outcome::Done => {}
+                        Outcome::Deleted(id) => {
+                            if self.view.selected.as_ref() == Some(&id) { self.view.selected = None; }
+                        }
                     }
                     if self.incoming.is_none() && !self.preview_open {
                         merge(&mut change, session.cancel_workspace_layout_preview());
