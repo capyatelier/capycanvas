@@ -679,7 +679,7 @@ try{
   $preferenceView=Fresh-Model $script:current $tag
   foreach($page in $preferenceView.preferences.pages){if((Control ('preference-page-'+$page.id)).Current.Name -ne $page.title){throw 'Native Preferences page accessibility name differs from the shared current copy'}}
   $seen+=$choice
-  Use-Window $textWindow;Check-Identities $workspaceIdentities;Check-WorkspaceGrips $textView $tag
+  Use-Window $textWindow;Layers-Footer;Check-Identities $workspaceIdentities;Check-WorkspaceGrips $textView $tag
   $attachment=Control 'layer-attachment';$attachmentCopy=$textView.state.layer_tools.attachment
   if($attachment.Current.Name -ne $attachmentCopy.label -or $attachment.Current.HelpText -ne $attachmentCopy.description){throw 'Retained attachment control did not follow shared contextual copy'}
   foreach($id in $workspaceCopies.Keys){$copy=$workspaceCopies[$id];if((Control $id).Current.Name -ne (Catalog-Text $tag $copy[0] $copy[1])){throw "Retained workspace control did not follow current canonical copy: $id"}}
