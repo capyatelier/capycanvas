@@ -5265,7 +5265,7 @@ fn native_zen_icons() {
         let row = find_named(w.preferences.dialog.upcast_ref(), "setting-zen-icon").unwrap();
         let grid = find_css(&row, "image-selector")
             .unwrap()
-            .downcast::<gtk::Grid>()
+            .downcast::<gtk::FlowBox>()
             .unwrap();
         let scroll = grid
             .ancestor(gtk::ScrolledWindow::static_type())
@@ -5281,7 +5281,8 @@ fn native_zen_icons() {
         );
         for (i, (symbol, label)) in layer_ui::ZenIcon::CHOICES.into_iter().enumerate() {
             let tile = grid
-                .child_at(i as i32, 0)
+                .child_at_index(i as i32)
+                .unwrap().child()
                 .unwrap()
                 .downcast::<gtk::ToggleButton>()
                 .unwrap();
@@ -5301,7 +5302,8 @@ fn native_zen_icons() {
             assert_eq!(zen.compute_bounds(&w.surface).unwrap(), bounds);
             for other in 0..4 {
                 assert_eq!(
-                    grid.child_at(other, 0)
+                    grid.child_at_index(other)
+                        .unwrap().child()
                         .unwrap()
                         .downcast::<gtk::ToggleButton>()
                         .unwrap()
@@ -5319,7 +5321,8 @@ fn native_zen_icons() {
         });
         pump(100);
         assert!(
-            grid.child_at(0, 0)
+            grid.child_at_index(0)
+                .unwrap().child()
                 .unwrap()
                 .downcast::<gtk::ToggleButton>()
                 .unwrap()

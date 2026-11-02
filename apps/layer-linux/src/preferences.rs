@@ -391,7 +391,7 @@ impl Preferences {
             .content_height(744)
             .build();
         dialog.add_css_class("layer-preferences");
-        let stack = adw::ViewStack::new();
+        let stack = adw::ViewStack::builder().hhomogeneous(false).vhomogeneous(false).build();
         let sidebar = adw::ViewSwitcherSidebar::builder().stack(&stack).build();
         let sidebar_view = adw::ToolbarView::new();
         sidebar_view.set_widget_name("preferences-sidebar");

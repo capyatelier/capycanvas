@@ -26,6 +26,34 @@ fn native_new_drawing_preview_spacing() {
 }
 
 #[test]
+#[ignore = "private compositor: --native-test=native_preferences_inline_controls_fit --native-storage; viewport/theme external"]
+fn native_preferences_inline_controls_fit() {
+    let mut d = super::phone_motion::setup("art.capycanvas.PreferencesInlineFit");
+    d.w.dispatch(UiAction::Invoke { command: CommandId::Settings });
+    let (dialog, frame) = page_frame(&d);
+    let split = descendants::<adw::NavigationSplitView>(&frame).pop().unwrap();
+    let appearance = SettingsPage::Appearance.localized_title(&d.w.localization());
+    d.click(&mapped_label(&frame, &appearance).unwrap());
+    until(|| split.shows_content(), "Preferences opens Appearance");
+    if split.is_collapsed() { page_header(&frame); }
+    super::phone::capture(&mut d, "preferences-inline-fit");
+    for group in descendants::<adw::PreferencesGroup>(&frame).into_iter().filter(|group| group.is_mapped()) {
+        let bounds = group.compute_bounds(&frame).unwrap();
+        assert!(bounds.x() >= 0. && bounds.x() + bounds.width() <= frame.width() as f32 + 1., "Appearance group fits: {bounds:?}");
+    }
+    let choices = widgets(&frame).filter(|widget| widget.is_mapped() && widget.widget_name().starts_with("setting-")
+        && (widget.widget_name().contains("-circle-") || widget.widget_name().contains("-swatch-"))).collect::<Vec<_>>();
+    assert!(choices.iter().any(|widget| widget.widget_name().contains("-circle-"))
+        && choices.iter().any(|widget| widget.widget_name().contains("-swatch-")), "Appearance presents both choice kinds");
+    for widget in &choices {
+        let bounds = widget.compute_bounds(&frame).unwrap();
+        assert!(bounds.x() >= 0. && bounds.x() + bounds.width() <= frame.width() as f32 + 1., "Appearance control fits: {bounds:?}");
+    }
+    close(&d, &dialog);
+    d.finish();
+}
+
+#[test]
 #[ignore = "private compositor: --native-test=native_export_narrow_bounds --native-storage; viewport/theme external"]
 fn native_export_narrow_bounds() {
     let mut d = super::phone_motion::setup("art.capycanvas.ExportNarrowBounds");

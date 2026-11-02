@@ -255,7 +255,7 @@ button.flat.unavailable-tool > * { color: alpha(currentColor, .3); }
 .image-selector button { min-width: 48px; min-height: 48px; padding: 8px; border-radius: calc(32px * var(--corner-fit)); background: alpha(var(--window-fg-color), .04); }
 .image-selector button:checked { background: var(--selection-bg); box-shadow: inset 0 0 0 2px var(--accent-bg-color); }
 .paper-preview { border-radius: calc(14px * var(--corner-fit)); }
-.texture-grid flowboxchild { padding: 0; border-radius: var(--control-radius); background: none; color: inherit; }
+.texture-grid flowboxchild, .image-selector flowboxchild { padding: 0; border-radius: var(--control-radius); background: none; color: inherit; }
 .texture-tile { padding: 3px; border-radius: calc(51px * var(--corner-fit)); }
 .texture-tile .paper-preview { border-radius: calc(48px * var(--corner-fit)); background: alpha(var(--window-fg-color), .06); }
 .texture-grid flowboxchild:hover .texture-tile { background: alpha(currentColor, .10); }

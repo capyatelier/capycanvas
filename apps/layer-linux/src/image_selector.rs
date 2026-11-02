@@ -3,7 +3,7 @@ use adw::prelude::*;
 use std::rc::Rc;
 
 pub struct ImageSelector {
-    pub widget: gtk::Grid,
+    pub widget: gtk::FlowBox,
     buttons: Vec<gtk::ToggleButton>,
 }
 impl ImageSelector {
@@ -15,9 +15,13 @@ impl ImageSelector {
     ) -> Self {
         assert_eq!(labels.len(), icons.len());
         assert!(columns > 0);
-        let widget = gtk::Grid::builder()
+        let widget = gtk::FlowBox::builder()
             .column_spacing(6)
             .row_spacing(6)
+            .homogeneous(true)
+            .min_children_per_line(1)
+            .max_children_per_line(columns)
+            .selection_mode(gtk::SelectionMode::None)
             .halign(gtk::Align::Center)
             .build();
         widget.add_css_class("image-selector");
@@ -37,13 +41,7 @@ impl ImageSelector {
             // Click, not toggled: applying a core snapshot must not send edits.
             let select = select.clone();
             button.connect_clicked(move |_| select(i as u32));
-            widget.attach(
-                &button,
-                i as i32 % columns as i32,
-                i as i32 / columns as i32,
-                1,
-                1,
-            );
+            widget.append(&gtk::FlowBoxChild::builder().focusable(false).child(&button).build());
             buttons.push(button);
         }
         Self { widget, buttons }
