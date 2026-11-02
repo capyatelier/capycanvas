@@ -1379,6 +1379,7 @@ impl NewDrawing {
         let page = &self.page;
         page.body.set_orientation(if narrow { gtk::Orientation::Vertical } else { gtk::Orientation::Horizontal });
         page.left.set_halign(if narrow { gtk::Align::Center } else { gtk::Align::Fill });
+        page.left.set_vexpand(!narrow);
         let (bounds, fit) = if narrow { (NARROW_PREVIEW, NARROW_PREVIEW_FIT) } else { (PREVIEW, PREVIEW_FIT) };
         page.left.set_size_request(bounds[0], -1);
         page.art.resize(bounds, fit);

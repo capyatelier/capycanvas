@@ -109,6 +109,8 @@ Tab sizing: `cargo test --locked -p layer-ui tab_measurement_tests`; Android `An
 
 Pending transform cancellation: GTK `native_transform_escape` at 412×891 and 1600×1000 in light and dark checks one physical Escape, drawer closure and unchanged artwork history.
 
+New drawing spacing: GTK `native_new_drawing_preview_spacing` checks stacked preview height and the wide two-pane layout in light and dark.
+
 ### Tonal journeys
 
 The GTK journeys are `native_composite_histogram_updates_without_changing_the_drawing`,

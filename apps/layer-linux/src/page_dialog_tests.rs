@@ -1,6 +1,30 @@
 use super::*;
 use super::workspace_header::Driver;
 
+#[test]
+#[ignore = "private compositor: --native-test=native_new_drawing_preview_spacing --native-storage; viewport/theme external"]
+fn native_new_drawing_preview_spacing() {
+    let mut d = super::phone_motion::setup("art.capycanvas.NewDrawingPreviewSpacing");
+    d.w.dispatch(UiAction::Invoke { command: CommandId::NewDocument });
+    let (_, frame) = page_frame(&d);
+    let caption = find_named(&frame, "new-drawing-capacity").unwrap();
+    let name = find_named(&frame, "new-drawing-name").unwrap();
+    let left = caption.parent().unwrap().parent().unwrap();
+    let body = left.parent().unwrap().downcast::<gtk::Box>().unwrap();
+    let caption = caption.compute_bounds(&frame).unwrap();
+    let name = name.compute_bounds(&frame).unwrap();
+    if body.orientation() == gtk::Orientation::Vertical {
+        let gap = name.y() - caption.y() - caption.height();
+        assert!((gap - body.spacing() as f32).abs() <= 1., "stacked preview keeps section spacing: {gap}");
+        assert!(!left.compute_expand(gtk::Orientation::Vertical), "stacked preview uses its content height");
+    } else {
+        assert!(name.x() >= caption.x() + caption.width(), "wide preview stays beside the form");
+    }
+    super::phone::capture(&mut d, "new-drawing-preview-spacing");
+    crate::page_dialog::close_dialog(&d.w.visible_dialog().unwrap());
+    d.finish();
+}
+
 fn page_header(frame: &gtk::Widget) -> adw::HeaderBar {
     until(|| descendants::<adw::HeaderBar>(frame).into_iter().filter(|header| header.is_mapped()).count() == 1,
         "native navigation leaves one mapped header");
