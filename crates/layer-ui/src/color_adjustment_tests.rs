@@ -24,6 +24,17 @@ fn color_adjustment_set(s:&mut UiSession<Recorder>,key:&str,value:layer_core::Ef
 }
 
 #[test]
+fn film_grain_inserts_still_and_saved_animation_survives_reopening() {
+    use layer_core::EffectValue;
+    let mut s=color_adjustment_session("film_grain");
+    let animate=|s:&UiSession<Recorder>|s.engine.document().scene().effect(s.engine.document().scene().order()[0]).unwrap().value("animate").cloned();
+    assert_eq!(animate(&s),Some(EffectValue::Toggle(false)));
+    color_adjustment_set(&mut s,"animate",EffectValue::Toggle(true));
+    let reopened=package_roundtrip(s.engine.document());
+    assert_eq!(reopened.scene().effect(reopened.scene().order()[0]).unwrap().value("animate"),Some(&EffectValue::Toggle(true)));
+}
+
+#[test]
 fn colorize_filters_empty_pages_preserves_range_values_and_undo_restores_controls() {
     use layer_core::EffectValue;
     let mut s=color_adjustment_session("hue_saturation");let layer=s.engine.document().working.occurrence.unwrap();

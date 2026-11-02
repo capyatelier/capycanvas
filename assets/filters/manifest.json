@@ -1061,7 +1061,7 @@
             "label": {"message":"resources-parameter-film-grain-speed"}
           },
           {
-            "default": {"kind":"toggle","value":true},
+            "default": {"kind":"toggle","value":false},
             "key": "animate",
             "kind": {"kind":"toggle"},
             "label": {"message":"resources-parameter-film-grain-animate"},
