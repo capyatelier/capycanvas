@@ -93,12 +93,13 @@ impl ToolSet {
                 button.add_css_class("flat");
                 button.add_css_class("tool-group");
                 let media = matches!(self.panel, layer_ui::Panel::BrushSets | layer_ui::Panel::SculptSets);
+                if !media { button.set_halign(gtk::Align::Start); }
                 if media { button.set_widget_name(&format!("{}-{}", if self.panel == layer_ui::Panel::SculptSets { "sculpt-set" } else { "brush-set" }, item.icon)); }
                 button.set_size_request(
                     if media { (layer_ui::BRUSH_SETS_MIN_WIDTH - 2.0 * layer_ui::PANEL_CONTENT_INSET) as i32 } else { -1 },
                     if media { TOOL_ROW_HEIGHT } else { layer_ui::PANEL_CONTROL_METRICS.control_height as i32 },
                 );
-                let content = aligned_icon_label(&item.label, item.icon, if media { 0.0 } else { 1.0 });
+                let content = aligned_icon_label(&item.label, item.icon, 0.0);
                 if let Some(label) = content.last_child().and_downcast::<gtk::Label>() {
                     if media { label.set_wrap(true); label.set_wrap_mode(gtk::pango::WrapMode::Word); label.set_width_chars(1); }
                     else { label.set_max_width_chars(-1); }

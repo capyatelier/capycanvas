@@ -521,6 +521,20 @@ fn drawer_selection_colors(d: &mut Driver) {
         .all(|(tile, row)| tile.abs_diff(*row) <= *tolerance)), "selected tile and drawer row differ: {samples:#?}");
 }
 
+pub(super) fn assert_group_chip(button: &gtk::Button, natural: bool, context: &str) {
+    let content = button.child().unwrap();
+    let icon = content.first_child().unwrap().compute_bounds(button).unwrap();
+    let label = content.last_child().unwrap().downcast::<gtk::Label>().unwrap();
+    let text = label.compute_bounds(button).unwrap().x() + label.layout_offsets().0 as f32;
+    let gap = text - icon.x() - icon.width();
+    assert!((-1. ..=8.).contains(&gap), "{context}: rendered label stays beside its icon: {gap}");
+    if natural {
+        let width = button.compute_bounds(&button.parent().unwrap()).unwrap().width();
+        let natural = button.measure(gtk::Orientation::Horizontal, -1).1 as f32;
+        assert!((width - natural).abs() <= 1., "{context}: chip keeps its natural width: {width} vs {natural}");
+    }
+}
+
 fn tool_drawer_sets(d: &mut Driver) {
     use ToolbarControl::{Command as C, ToolSlot as S};
     for (preset, name, control) in [
@@ -556,6 +570,9 @@ fn tool_drawer_sets(d: &mut Driver) {
             let body = d.named(&format!("drawer-panel-{panel:?}"));
             let groups = widgets(&body).filter(|widget| widget.has_css_class("tool-group")).count();
             let rows = widgets(&body).filter(|widget| widget.has_css_class("brush-choice")).count();
+            for button in descendants::<gtk::Button>(&body).into_iter().filter(|button| button.has_css_class("tool-group") && button.is_mapped()) {
+                assert_group_chip(&button, !matches!(panel, Panel::BrushSets | Panel::SculptSets), name);
+            }
             if matches!(panel, Panel::BrushSets | Panel::SculptSets) {
                 assert!(groups > 0 && rows == 0 && descendants::<gtk::Picture>(&body).is_empty(), "{name}: set columns build groups only");
             } else if panel == Panel::Tools && drawer.sets_column {

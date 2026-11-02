@@ -88,7 +88,8 @@ fn native_brush_category_word_wrap() {
     d.click_name(&format!("phone-tool-{}", tile.id));
     until(|| d.w.drawer.placement().is_some() && !d.w.drawer.animation_active(), "brush drawer opens");
     super::phone::capture(&mut d, "brush-category-word-wrap");
-    let categories = d.named("drawer-panel-BrushSets");
+    let panel = state(&d.w).customization.drawer.as_ref().unwrap().columns[0][0];
+    let categories = d.named(&format!("drawer-panel-{panel:?}"));
     let viewport = categories.ancestor(gtk::Viewport::static_type()).unwrap().compute_bounds(&d.w.surface).unwrap();
     let buttons = descendants::<gtk::Button>(&categories).into_iter().filter(|button| button.is_mapped()
         && button.has_css_class("tool-group")).collect::<Vec<_>>();
@@ -678,7 +679,7 @@ fn native_paint_toolbar_dividers_input() {
     d.finish();
 }
 
-fn assert_blend_category_cells(d: &mut Driver, buttons: &[gtk::Button], wide: bool, context: &str) {
+fn assert_blend_category_cells(buttons: &[gtk::Button], wide: bool, context: &str) {
     assert_eq!(buttons.len(), 3);
     let flow = buttons[0].parent().unwrap().parent().unwrap();
     let bounds = buttons.iter().map(|button| button.compute_bounds(&flow).unwrap()).collect::<Vec<_>>();
@@ -696,35 +697,12 @@ fn assert_blend_category_cells(d: &mut Driver, buttons: &[gtk::Button], wide: bo
         if wide { assert!(!label.layout().is_ellipsized(), "default width retains full category captions"); }
         let cell = button.parent().unwrap();
         let native = button.compute_bounds(&cell).unwrap();
-        assert!(native.x().abs() < 1. && (native.width() - cell.width() as f32).abs() < 1.);
+        assert!(native.x().abs() < 1.);
+        super::super::phone::assert_group_chip(button, wide, context);
         for previous in &bounds[..index] {
             let current = bounds[index];
             assert!(current.x() >= previous.x() + previous.width() - 1.
                 || current.y() >= previous.y() + previous.height() - 1., "category cells do not overlap");
-        }
-        for at in [[0.05,0.5], [0.95,0.5]] {
-            let mut point = screen_point(&cell, &d.w.window, at);
-            let mut hit = d.w.window.pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT).unwrap();
-            if hit != *button && !hit.is_ancestor(button) {
-                let scrollbar = if hit.is::<gtk::Scrollbar>() { Some(hit.clone()) }
-                    else { hit.ancestor(gtk::Scrollbar::static_type()) };
-                if let Some(scrollbar) = scrollbar {
-                    let blocker = hit.compute_bounds(&d.w.window).unwrap();
-                    let exposed = cell.compute_bounds(&d.w.window).unwrap();
-                    let vertical = scrollbar.downcast_ref::<gtk::Scrollbar>().unwrap().orientation() == gtk::Orientation::Vertical;
-                    if vertical {
-                        point[0] = if blocker.x() > exposed.x() + exposed.width() * 0.5 { blocker.x() - 1. }
-                            else { blocker.x() + blocker.width() + 1. };
-                    } else {
-                        point[1] = if blocker.y() > exposed.y() + exposed.height() * 0.5 { blocker.y() - 1. }
-                            else { blocker.y() + blocker.height() + 1. };
-                    }
-                    assert!(point[0] >= exposed.x() && point[0] < exposed.x() + exposed.width()
-                        && point[1] >= exposed.y() && point[1] < exposed.y() + exposed.height());
-                    hit = d.w.window.pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT).unwrap();
-                }
-            }
-            assert!(hit == *button || hit.is_ancestor(button), "the whole category cell targets its button: {context}/index{index}");
         }
     }
 }
@@ -752,15 +730,15 @@ fn native_tool_set_category_input() {
                 if command == CommandId::Blend {
                     let group = d.w.resolved().groups.into_iter().find(|group| group.active == Panel::Brushes).unwrap();
                     assert_eq!(group.bounds.width, 280.);
-                    assert_blend_category_cells(&mut d, &buttons, true, &format!("{theme:?}/floating{floating}/width280"));
+                    assert_blend_category_cells(&buttons, true, &format!("{theme:?}/floating{floating}/width280"));
                 }
                 for button in &buttons {
                     assert_eq!(button.height(), 26, "{command:?}/{theme:?}/{floating}: category height");
                     let cell = button.parent().unwrap();
                     let bounds = button.compute_bounds(&cell).unwrap();
-                    assert!(bounds.x().abs() < 1. && (bounds.width() - cell.width() as f32).abs() < 1.,
-                        "category fills its cell: {command:?}/{theme:?}/{floating}: {bounds:?}, cell {}", cell.width());
-                    let point = screen_point(&cell, &d.w.window, [0.85, 0.5]);
+                    assert!(bounds.x().abs() < 1., "the chip starts its cell: {bounds:?}");
+                    super::super::phone::assert_group_chip(button, true, &format!("{command:?}/{theme:?}/{floating}"));
+                    let point = screen_point(button.upcast_ref(), &d.w.window, [0.85, 0.5]);
                     let hit = d.w.window.pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT).unwrap();
                     assert!(hit == *button || hit.is_ancestor(button), "category edge belongs to its button");
                     d.input.perform(serde_json::json!([{"point": point}]));
@@ -783,7 +761,7 @@ fn native_tool_set_category_input() {
                         assert_eq!(d.w.resolved().groups.into_iter().find(|view| view.id == group.id).unwrap().bounds.width, width);
                         assert_eq!(*d.w.tool_set.group_buttons.borrow(), buttons, "width changes retain category buttons");
                         d.capture_canvas(&format!("blend-category-{theme:?}-{width}.png"));
-                        assert_blend_category_cells(&mut d, &buttons, width == 280., &format!("{theme:?}/floating{floating}/width{width}"));
+                        assert_blend_category_cells(&buttons, width == 280., &format!("{theme:?}/floating{floating}/width{width}"));
                     }
                 }
             }

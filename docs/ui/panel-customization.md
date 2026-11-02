@@ -66,13 +66,12 @@ tool is active. Fill presents Fill, Lasso Fill and Enclose and Fill at one level
 in its menu, drawer and Tool Set. Single-preset tools open settings directly;
 the vector Eraser also retains its erase-mode choices.
 
-Tool Set category buttons fill their grid cells, so hover, selection and input
-cover the whole category. GTK categories use the same 26-pixel height and squircle
+Tool Set category chips keep their natural width at the start of each grid cell,
+with the name beside the icon. GTK chips use the same 26-pixel height and squircle
 corners as panel buttons and dropdowns. Their columns follow the names' natural
 widths, allowing short and long categories to share a row without clipping.
-Tool rows keep the icon at the leading edge and
-right-align the name, as brush rows do; only the Color Picker and Eyedropper
-styles keep the name beside the icon. A thin horizontal divider separates
+Media set columns keep fixed-width rows with wrapping names.
+Plain tool rows also keep the name beside the icon. A thin horizontal divider separates
 categories from tools when both are shown, using the toolbar's inset separator
 style.
 GTK tool preview rows have a 54-pixel minimum and a 66-pixel natural height at
