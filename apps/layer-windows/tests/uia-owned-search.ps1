@@ -463,6 +463,38 @@ if($scopesReveal.Count -ne 1){throw 'Missing actual scopes Reveal helper'}
     if($state.waits -ne 1 -or $visible.Bottom -ne 100 -or $visible.Height -ne 100){throw 'Scopes Reveal did not acknowledge native chart bounds within its viewport'}
 }
 Write-Output 'Scopes Reveal scrolls the full native chart despite clipped UIA bounds and acknowledges its native arranged position.'
+$scopePlot=@($scopesAst.FindAll({param($n)$n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$plot' -and $n.Right.Extent.Text.Contains("'-chart'")},$true))
+if($scopePlot.Count -ne 1){throw 'Missing actual scope plot geometry'}
+$statements=@($scopePlot[0].Parent.Statements);$start=[array]::IndexOf($statements,$scopePlot[0]);if($start -gt 0 -and $statements[$start-1].Extent.Text.Contains("'-chart'")){$start--}
+$last=@(for($i=$start;$i -lt $statements.Count;$i++){if($statements[$i] -is [Management.Automation.Language.ForEachStatementAst] -and $statements[$i].Extent.Text.Contains('exceeds the plot width')){$i}})
+if($last.Count -ne 1){throw 'Missing actual scope width assertions'}
+$scopeGeometry=[scriptblock]::Create(($statements[$start..$last[0]].Extent.Text -join "`n"))
+& {
+    $drawingWindow=[IntPtr]1;$tag='en';$width=1500;$native=@{};$measured=@{}
+    function Scope-Rect([double]$X,[double]$Y,[double]$Width,[double]$Height){[pscustomobject]@{Left=$X;Top=$Y;Right=$X+$Width;Bottom=$Y+$Height;Width=$Width;Height=$Height}}
+    function Control([string]$Id,[switch]$Arranged){if(!$Arranged -or !$native.ContainsKey($Id)){throw 'Scope geometry lost its arranged control precondition'};$measured[$Id]=$true;[pscustomobject]@{Current=[pscustomobject]@{BoundingRectangle=$(if($Id.EndsWith('-chart')){Scope-Rect ((100.25+4/1.5)*$scale) (50*$scale) (11/1.5*$scale) (28*$scale)}else{$native[$Id]})}}}
+    function Native-Bounds([string]$Id,[double]$Scale){if(!$measured[$Id] -or $Scale -ne $expectedScale){throw 'Scope geometry did not arrange its owned native target'};$native[$Id]}
+    foreach($scale in @(1,1.5,2)){
+        $expectedScale=$scale
+        foreach($prefix in 'histogram','waveform'){
+            $native.Clear();$measured.Clear()
+            $native[$prefix+'-chart']=Scope-Rect (100.25*$scale) (50*$scale) (225.5*$scale) (160*$scale)
+            $native[$prefix+'-log']=Scope-Rect (100.25*$scale) (214*$scale) (95.5*$scale) (26*$scale)
+            $native[$prefix+'-status']=Scope-Rect (100.25*$scale) (246.25*$scale) (150*$scale) (19.5*$scale)
+            $native[$prefix+'-shadows']=Scope-Rect (273.75*$scale) (244*$scale) (26*$scale) (26*$scale)
+            $native[$prefix+'-highlights']=Scope-Rect (299.75*$scale) (244*$scale) (26*$scale) (26*$scale)
+            . $scopeGeometry
+            foreach($id in 'log','status','shadows','highlights'){
+                $before=$native[$prefix+'-'+$id];$native[$prefix+'-'+$id]=Scope-Rect $before.Left $before.Top ($native[$prefix+'-chart'].Right-$before.Left+1.25) $before.Height
+                $rejected=$false;try{. $scopeGeometry}catch{if(!$_.Exception.Message.StartsWith("$tag $prefix-$id at $width pixels exceeds the plot width")){throw};$rejected=$true}
+                if(!$rejected){throw 'Scope geometry accepted a native control more than one pixel outside the plot'}
+                $native[$prefix+'-'+$id]=$before
+            }
+        }
+    }
+}
+Write-Output 'Scope width assertions use full native arranged bounds despite clipped UIA charts at 100, 150 and 200 percent, rejecting real native overflow.'
+
 
 & {
     $switcher=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-switcher-drag.ps1'),[ref]$tokens,[ref]$errors)

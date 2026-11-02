@@ -215,14 +215,14 @@ function Localized-Layout{
                 Select-Panel $prefix
                 if($compactOnly){foreach($choice in 'source','channel'){Compact-Choice ($prefix+'-'+$choice) ([CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.)|Out-Null}}
                 $null=Reveal ($prefix+'-highlights')
-                $plot=(Control ($prefix+'-chart') -Arranged).Current.BoundingRectangle
-                $log=Control ($prefix+'-log') -Arranged
-                $status=Control ($prefix+'-status') -Arranged
-                $bounds=$log.Current.BoundingRectangle;$footer=$status.Current.BoundingRectangle
+                $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+                $null=Control ($prefix+'-chart') -Arranged;$plot=Native-Bounds ($prefix+'-chart') $scale
+                $null=Control ($prefix+'-log') -Arranged;$null=Control ($prefix+'-status') -Arranged
+                $bounds=Native-Bounds ($prefix+'-log') $scale;$footer=Native-Bounds ($prefix+'-status') $scale
                 if($bounds.Bottom -gt $footer.Top+1){throw "$tag $prefix at $width pixels crowds Log counts into the precision row"}
                 foreach($id in 'log','status','shadows','highlights'){
-                    $box=(Control ($prefix+'-'+$id) -Arranged).Current.BoundingRectangle
-                    if($box.Left -lt $plot.Left-1 -or $box.Right -gt $plot.Right+1 -or $box.Width -le 0){throw "$tag $prefix-$id at $width pixels exceeds the plot width"}
+                    $null=Control ($prefix+'-'+$id) -Arranged;$box=Native-Bounds ($prefix+'-'+$id) $scale
+                    if($box.Left -lt $plot.Left-1 -or $box.Right -gt $plot.Right+1 -or $box.Width -le 0){throw "$tag $prefix-$id at $width pixels exceeds the plot width: id=$id box=$box plot=$plot"}
                 }
                 Wait-Until {
                     $view=View $prefix;$log=Find ($prefix+'-log');$status=Find ($prefix+'-status')
