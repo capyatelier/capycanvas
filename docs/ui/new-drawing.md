@@ -117,6 +117,8 @@ When the controls narrow, units and orientation wrap below the dimensions;
 the pixel-size summary wraps below Resolution before losing text. Footer
 summaries and preset fields stack above their right-aligned action buttons.
 Summary text and action rows wrap to the available width.
+The paper color mode switch moves below the swatch when they cannot fit beside
+each other.
 
 ## Checks
 

@@ -123,6 +123,13 @@ fn native_new_drawing_dimension_controls_fit() {
             let field = find_named(&frame, "new-drawing-paper-relief-field").unwrap();
             let label = field.parent().unwrap().first_child().unwrap().downcast::<gtk::Label>().unwrap();
             assert!(label.is_mapped() && !label.layout().is_ellipsized(), "Texture visibility stays readable");
+        } else if tag == "paper-color" {
+            let well = find_named(&frame, "new-drawing-color-mode").unwrap();
+            let bounds = well.compute_bounds(&frame).unwrap();
+            assert!(bounds.x() >= -1. && bounds.x() + bounds.width() <= frame.width() as f32 + 1., "the paper color switch fits: {bounds:?}");
+            let labels = descendants::<gtk::Label>(&well).into_iter().filter(|label| label.is_mapped()).collect::<Vec<_>>();
+            assert_eq!(labels.len(), 2, "Color and Transparent are both visible");
+            assert!(labels.iter().all(|label| !label.layout().is_ellipsized()), "paper color switch labels stay readable");
         }
         d.click(&find_named(&frame, cancel).unwrap());
         until(|| !sheet.is_mapped(), "the New Drawing sheet closes before the next footer");

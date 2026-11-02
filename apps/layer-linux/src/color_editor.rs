@@ -409,15 +409,16 @@ impl ColorForm {
         crate::dialog_content::on_resize(&form.body, move |width| if let Some(form) = weak.upgrade() {
             let minimum = form.wide_minimum();
             form.arrange(!layer_ui::dialog_panes_fit(width as f32, minimum, 24.));
-            form.arrange_fields((width as f32) < minimum[1]);
+            form.arrange_fields((width as f32) < minimum[1], width);
         });
         form
     }
 
     pub(crate) fn replace_picker(&self, widget: &impl IsA<gtk::Widget>) {
-        self.arrange_fields(false);
+        self.arrange_fields(false, self.body.width());
         self.header.remove(&self.pick);
         self.header.remove(&self.hex_row);
+        self.header_pair.set_halign(gtk::Align::Start);
         self.hex_row.set_hexpand(false); self.hex_row.set_halign(gtk::Align::Start);
         self.header.attach(&self.hex_row, 1, 0, 1, 1);
         self.header.attach(widget, 2, 0, 1, 1);
@@ -446,12 +447,14 @@ impl ColorForm {
         self.body.set_orientation(orientation);
     }
 
-    fn arrange_fields(&self, compact: bool) {
-        if self.compact.replace(compact) == compact { return; }
+    fn arrange_fields(&self, compact: bool, width: i32) {
         let extra = self.header_extra.borrow();
         let accessory = extra.as_ref().unwrap_or(self.pick.upcast_ref());
-        grid_position(&self.header, accessory, if compact || extra.is_none() { 1 } else { 2 }, 0, 1, 1);
-        grid_position(&self.header, self.hex_row.upcast_ref(), if compact { 0 } else if extra.is_some() { 1 } else { 2 }, if compact { 2 } else { 0 }, if compact { 2 } else { 1 }, 1);
+        let wrap = compact && extra.is_some() && width < self.header_pair.measure(gtk::Orientation::Horizontal, -1).0
+            + accessory.measure(gtk::Orientation::Horizontal, -1).0 + self.header.column_spacing() as i32;
+        grid_position(&self.header, accessory, if wrap { 0 } else if compact || extra.is_none() { 1 } else { 2 }, if wrap { 2 } else { 0 }, if wrap { 2 } else { 1 }, 1);
+        grid_position(&self.header, self.hex_row.upcast_ref(), if compact { 0 } else if extra.is_some() { 1 } else { 2 }, if wrap { 3 } else if compact { 2 } else { 0 }, if compact { 2 } else { 1 }, 1);
+        if self.compact.replace(compact) == compact { return; }
         for (index, row) in self.rows.iter().enumerate() {
             let top = index as i32 * if compact { 2 } else { 1 };
             grid_position(&self.component_grid, row.heading.upcast_ref(), 0, top, if compact { 6 } else { 2 }, 1);
