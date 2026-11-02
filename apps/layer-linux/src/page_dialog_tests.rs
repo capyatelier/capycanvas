@@ -596,6 +596,41 @@ fn native_phone_editor_pages() {
     capture(&mut d, "paper");
     close(&d, &dialog);
     d.w.dispatch(UiAction::SelectLayer { id: selected });
+    let color_tile = state(&d.w).workspace.layout.phone.as_ref().unwrap().iter()
+        .find(|tile| tile.control == ToolbarControl::Color).unwrap().id;
+    d.click(&d.named(&format!("phone-tool-{color_tile}")));
+    until(|| d.w.drawer.placement().is_some() && !d.w.drawer.animation_active()
+        && find_named(d.w.window.upcast_ref(), "palette-chooser").is_some_and(|widget| widget.is_mapped() && widget.width() > 0 && widget.height() > 0), "Color opens its palette chooser");
+    let chooser = d.named("palette-chooser");
+    super::histogram::scroll_to(&chooser);
+    d.click(&chooser);
+    until(|| find_named(d.w.window.upcast_ref(), "palette-library-add").is_some_and(|widget| widget.is_mapped() && widget.width() > 0 && widget.height() > 0), "the palette library opens");
+    d.click(&d.named("palette-library-add"));
+    let new_palette = d.w.localization().text(layer_ui::MessageId::NATIVE_PALETTES_MENU_NEW);
+    d.click_label(&new_palette);
+    let (dialog, frame) = page(&d);
+    let field = named::<gtk::Entry>(&frame, "palette-library-name");
+    let alert = dialog.clone().downcast::<adw::AlertDialog>().unwrap();
+    for name in ["new-palette", "new-palette-reopened"] {
+        let (_, frame) = page(&d);
+        assert_eq!(named::<gtk::Entry>(&frame, "palette-library-name"), field, "reopening keeps the same name field");
+        let scroll = field.ancestor(gtk::ScrolledWindow::static_type()).unwrap().downcast::<gtk::ScrolledWindow>().unwrap();
+        drop(idle_paint(&d.w.window));
+        capture(&mut d, name);
+        let bounds = field.compute_bounds(&scroll).unwrap();
+        let natural = field.measure(gtk::Orientation::Vertical, field.width()).1 as f32;
+        assert!((bounds.height() - natural).abs() <= 1., "New Palette keeps its name field's natural height: {bounds:?}, natural {natural}");
+        assert!(bounds.y() >= -1. && bounds.y() <= 24., "New Palette places the name field at the top of its content: {bounds:?}");
+        close(&d, &dialog);
+        assert_eq!(alert.extra_child().as_ref(), Some(field.upcast_ref()), "closing restores the alert's extra child");
+        if name == "new-palette" { crate::page_dialog::present_role(&alert, &d.w.window, layer_ui::DialogRole::Editor); }
+    }
+    let browser = d.named("palette-browser");
+    assert!(browser.is_visible(), "cancelling New Palette returns to its library chooser");
+    keys(&mut d, 0xff1b);
+    until(|| !browser.is_visible(), "Escape closes the palette library chooser");
+    d.w.dispatch(UiAction::Customize { action: CustomizationAction::CloseExpanded });
+    until(|| d.w.drawer.is_closed(), "Color closes after cancelling New Palette");
     for (command, name) in [
         (CommandId::ImageSize, "image-size"),
         (CommandId::DocumentProperties, "properties"),
@@ -680,11 +715,11 @@ fn native_phone_editor_pages() {
     until(|| alert.is_mapped(), "a compact alert keeps its native presentation");
     assert_eq!(crate::page_dialog::parent(&alert), alert.clone().upcast::<gtk::Widget>());
     alert.close();
-    until(|| d.w.visible_dialog().is_none(), "the compact alert closes");
+    until(|| d.w.visible_dialog().is_none() && !alert.is_mapped(), "the compact alert closes");
     assert_eq!(ui_session(&d.w).engine().checkpoint(), checkpoint);
     assert_eq!(active_raster(ui_session(&d.w).engine().document()), &authored);
     d.click(&d.named("zen-capy"));
-    until(|| d.named("phone-menu-column-0").is_mapped(), "the root Capy menu opens");
+    until(|| state(&d.w).phone.menu && find_named(d.w.window.upcast_ref(), "phone-menu").is_some_and(|widget| widget.is_mapped()), "the root Capy menu opens");
     super::phone::capture(&mut d, "editor-pages-menu");
     keys(&mut d, 0xff1b);
     d.finish();

@@ -27,7 +27,6 @@ struct Page {
     hidden: Vec<(gtk::Widget, bool)>,
     responses: Vec<(String, gtk::Button)>,
     headers: Vec<(adw::HeaderBar, bool, bool)>,
-    content: gtk::Box,
     responded: Rc<Cell<bool>>,
     closed: RefCell<Option<glib::SignalHandlerId>>,
     default: Option<glib::WeakRef<gtk::Widget>>,
@@ -126,12 +125,13 @@ impl Pages {
             description.set_use_markup(alert.is_body_use_markup());
             content.append(&description);
         }
-        body.set_vexpand(true);
         if alert.is_some() {
+            let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            holder.append(&body);
             let scroll = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
-                .hscrollbar_policy(gtk::PolicyType::Never).vexpand(true).child(&body).build());
+                .hscrollbar_policy(gtk::PolicyType::Never).vexpand(true).child(&holder).build());
             content.append(&scroll);
-        } else { content.append(&body); }
+        } else { body.set_vexpand(true); content.append(&body); }
         for action in meta.secondary {
             if let Action::Response(id) = &action && alert.is_none_or(|alert| !alert.has_response(id)) { continue; }
             let button = action.project(dialog, w);
@@ -171,7 +171,7 @@ impl Pages {
         let closed = alert.map(|alert| alert.connect_closed(glib::clone!(#[strong] responded, move |alert| {
             if responded.get() { alert.stop_signal_emission_by_name("closed"); }
         })));
-        let page = Rc::new(Page { dialog: dialog.clone(), body, frame, content, controllers, keys, hidden: saved, responses, headers, responded, closed: RefCell::new(closed), default, dialog_default, response: RefCell::new(response), focus, closing: Cell::new(false), role, header, loan, title: previous_title, projected, bindings: RefCell::new(bindings) });
+        let page = Rc::new(Page { dialog: dialog.clone(), body, frame, controllers, keys, hidden: saved, responses, headers, responded, closed: RefCell::new(closed), default, dialog_default, response: RefCell::new(response), focus, closing: Cell::new(false), role, header, loan, title: previous_title, projected, bindings: RefCell::new(bindings) });
         self.root.add_child(&page.frame);
         self.pages.borrow_mut().push(page.clone());
         self.root.set_visible(true);
@@ -205,10 +205,7 @@ impl Pages {
         for page in closed {
             for (object, handler) in page.bindings.borrow_mut().drain(..) { object.disconnect(handler); }
             if let Some(handler) = page.response.take() { page.dialog.disconnect(handler); }
-            if let Some(scroll) = page.body.parent().and_then(|parent| parent.ancestor(gtk::ScrolledWindow::static_type())).and_downcast::<gtk::ScrolledWindow>() {
-                if let Some(viewport) = scroll.child().and_downcast::<gtk::Viewport>() { viewport.set_child(gtk::Widget::NONE); }
-                scroll.set_child(gtk::Widget::NONE);
-            } else { page.content.remove(&page.body); }
+            if let Some(parent) = page.body.parent().and_downcast::<gtk::Box>() { parent.remove(&page.body); }
             if let Some(alert) = page.dialog.downcast_ref::<adw::AlertDialog>() { alert.set_extra_child(Some(&page.body)); }
             else { page.dialog.set_child(Some(&page.body)); }
             if let Some(handler) = page.closed.take() { page.dialog.disconnect(handler); }

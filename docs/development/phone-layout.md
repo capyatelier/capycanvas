@@ -378,6 +378,7 @@ always uses a full-screen page.
 - Every page uses the dialog's opaque surface and one title. Dialogs declare
   their title, primary and cancel actions explicitly. Opening preserves the
   dialog's focus when present, without focusing close or selecting label text.
+  Short forms keep their fields at natural height at the top of the scrolling body.
   Preferences and Export keep their own navigation headers, without an outer
   page header. Their root header has close; subpages keep Back only. The declared
   primary action follows the visible header. The workspace manager keeps its

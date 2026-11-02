@@ -1094,8 +1094,16 @@ fn check_palette_context(devices: &[&str]) {
                     .expect("native row menu opens naming dialog");
             let entry = named::<gtk::Entry>(dialog.upcast_ref(), "palette-library-name");
             assert_eq!(entry.text(), library.palettes[1].name);
+            let alert = dialog.clone().downcast::<adw::AlertDialog>().unwrap();
             dialog.close();
-            pump(150);
+            until(|| !dialog.is_mapped(), "the palette naming alert closes");
+            assert_eq!(alert.extra_child().as_ref(), Some(entry.upcast_ref()), "closing keeps the desktop alert's extra child");
+            crate::page_dialog::present_role(&alert, &d.w.window, layer_ui::DialogRole::Editor);
+            until(|| dialog.is_mapped() && entry.is_mapped(), "the same desktop palette alert reopens");
+            assert_eq!(alert.extra_child().as_ref(), Some(entry.upcast_ref()), "reopening keeps the desktop alert's extra child");
+            dialog.close();
+            until(|| !dialog.is_mapped(), "the reopened palette naming alert closes");
+            assert_eq!(alert.extra_child().as_ref(), Some(entry.upcast_ref()));
             assert_eq!(state(&d.w).color_library, library);
         }
         if !devices.contains(&"pen") {
