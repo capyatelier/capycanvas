@@ -388,3 +388,20 @@ fn line_picking_and_intersection_erasing_ignore_fill_only_paths() {
     let remaining: Vec<_> = erased.paths().map(|(_, path)| path).collect();
     assert_eq!(remaining, [&fill]);
 }
+
+#[test]
+fn vector_face_open_short_edge_arcs_do_not_make_their_own_holes() {
+    let arc = (0..40).map(|i| { let angle = f64::from(i) * 0.08; [100. + 20. * angle.cos(), 100. + 20. * angle.sin()] }).collect::<Vec<_>>();
+    let face = face_at(&[face_box(1, 0., 200.), face_line(2, &arc, false, 6.)], [20., 180.]);
+    assert_eq!(face.geometry.subpaths().len(), 1);
+    assert_eq!(face.boundary, [0].into());
+}
+
+#[test]
+fn vector_face_one_stroke_circle_joins_its_nearby_ends() {
+    let circle = (0..80).map(|i| { let angle = f64::from(i) / 79. * (std::f64::consts::TAU - 0.08); [100. + 25. * angle.cos(), 100. + 25. * angle.sin()] }).collect::<Vec<_>>();
+    let face = face_at(&[face_line(1, &circle, false, 6.)], [100., 100.]);
+    assert_eq!(face.geometry.subpaths().len(), 1);
+    assert_eq!(face.boundary, [0].into());
+    assert!(face_path(&face).encloses([100., 100.], 0.001));
+}

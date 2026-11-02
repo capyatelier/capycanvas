@@ -239,17 +239,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         let fill = if self.state.colors.transparent() { None } else {
             self.vector_figure_style(FigurePaint::Fill, layer_core::authored::vector::Cap::Butt, layer_core::authored::vector::Join::Miter)?.entries.first().cloned()
         };
-        if object.paths().any(|(_,path)|path.pickable() && path.fill_rule==layer_core::authored::vector::FillRule::EvenOdd
-            && path.style.entries.iter().any(|entry|matches!(entry,PaintEntry::Fill(_)))
-            && !path.encloses(local,tolerance) && path.area_around(local,tolerance).is_finite()) {return Ok(());}
         let innermost = object.paths().filter(|(_, path)| (lines_from!=RegionSource::Reference || path.style.strokes().next().is_none()) && path.pickable() && path.encloses(local, tolerance))
             .map(|(position, path)| (path.area_around(local, tolerance), position, path)).min_by(|a, b| a.0.total_cmp(&b.0));
         let found = innermost.map(|(_, position, path)| {
             let mut entries: Vec<PaintEntry> = path.style.entries.iter().filter(|entry| !matches!(entry, PaintEntry::Fill(_))).cloned().collect();
             if let Some(fill) = fill.clone() { entries.insert(0, fill); }
             (*path.style.entries != entries[..]).then(|| {
-                let restyled = Record::Path(path.with_style(std::sync::Arc::new(Style::new(entries))));
-                doc.vector_object_edit(layer, object.replace([(position, Some(restyled))])).map_err(|e| e.to_string())
+                let restyled = (!entries.is_empty()).then(||Record::Path(path.with_style(std::sync::Arc::new(Style::new(entries)))));
+                doc.vector_object_edit(layer, object.replace([(position, restyled)])).map_err(|e| e.to_string())
             }).transpose()
         }).transpose()?;
         if let Some(edit) = found { return edit.map_or(Ok(()), |edit| self.layer_edit(edit)); }
@@ -261,19 +258,22 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         let raster=layers.iter().any(|id|doc.scene().vector_layer(*id).is_none()
             && doc.scene().occurrence(*id).is_some_and(|o|matches!(o.kind(),LayerKind::Paint|LayerKind::Object)));
-        let paths=layers.iter().flat_map(|id|doc.scene().vector_layer(*id).into_iter().flat_map(move |object|object.paths().map(move |(position,path)|(*id,position,path))))
-            .filter(|(_,_,path)|!path.hidden && path.style.strokes().next().is_some()).collect::<Vec<_>>();
-        let lines=paths.iter().map(|(owner,_,path)|layer_core::authored::vector::FaceLine {path,offset:doc.scene().occurrence_offset64(*owner)}).collect::<Vec<_>>();
+        let lines=layers.iter().flat_map(|id|doc.scene().vector_layer(*id).into_iter().flat_map(move |object|object.paths()
+            .map(move |(_,path)|layer_core::authored::vector::FaceLine {path,offset:doc.scene().occurrence_offset64(*id)})))
+            .filter(|line|!line.path.hidden && line.path.style.strokes().next().is_some()).collect::<Vec<_>>();
         if let Some(face)=layer_core::authored::vector::vector_face(&lines,[f64::from(point.x),f64::from(point.y)]) {
             let geometry=face.geometry.transformed(|p|[p[0]-ox,p[1]-oy]).map_err(str::to_string)?;
             let mut path=layer_core::authored::vector::PathItem::new(object.allocate_ids().next().unwrap_or_default(),std::sync::Arc::new(geometry),
                 std::sync::Arc::new(Style::new(fill.into_iter().collect())));
             if path.geometry.subpaths().len()>1 {path.fill_rule=layer_core::authored::vector::FillRule::EvenOdd;}
-            let position=face.boundary.iter().filter_map(|i|{let (owner,position,_)=paths[*i];(owner==layer).then_some(position)}).max();
+            let hull=path.geometry.hull();
+            let position=object.paths().filter(|(_,path)|path.style.strokes().next().is_some()).filter(|(_,path)| {
+                let b=path.visual_bounds();b[0]<=hull[2] && b[2]>=hull[0] && b[1]<=hull[3] && b[3]>=hull[1]
+            }).map(|(position,_)|position).max();
             let record=Record::Path(path);
             let changed=if let Some(position)=position {
                 object.splice([(position,vec![object.record(position).unwrap().clone(),record])].into())
-            }else{object.insert_front(vec![record])};
+            }else{object.insert_back(vec![record])};
             let edit=doc.vector_object_edit(layer,changed).map_err(|e|e.to_string())?;
             return self.layer_edit(edit);
         }

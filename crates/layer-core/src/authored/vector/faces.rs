@@ -75,23 +75,30 @@ fn graph(sources:&[FaceLine<'_>],selected:&[usize],point:[f64;2],cache:&mut Cach
     }).collect::<Vec<_>>();
     let mut joins=Vec::new();let mut cuts=vec![Vec::new();lines.len()];let mut joined=vec![false;lines.len()];
     for (id,line) in lines.iter().enumerate().filter(|(id,line)|!line.closed && !isolated[*id]) {
+        let lengths=std::iter::once(0.).chain(line.edges.iter().scan(0.,|length,edge| {
+            *length+=(edge.b[0]-edge.a[0]).hypot(edge.b[1]-edge.a[1]);Some(*length)
+        })).collect::<Vec<_>>();
         for end in [false,true] {
             let edge=if end {line.edges.last().unwrap()}else{&line.edges[0]};
             let place=edge.base+if end {edge.to}else{edge.from};let e=if end {edge.b}else{edge.a};
             let reach=radius(&sources[line.source],line.base,place);let search=reach+maximum+0.5;
             let mut nearest:Option<(f64,usize,f64,[f64;2])>=None;
             cache.near([e[0]-search,e[1]-search],[e[0]+search,e[1]+search],&mut |candidate| {
-                if candidate.subpath==line.edges[0].subpath && if end {candidate.index+2>=line.edges.len()}else{candidate.index<=1} {return;}
                 let other_id=lookup[candidate.subpath];let other=&lines[other_id];
                 let d=[candidate.b[0]-candidate.a[0],candidate.b[1]-candidate.a[1]];let square=d[0]*d[0]+d[1]*d[1];
                 let u=if square==0. {0.}else{((e[0]-candidate.a[0])*d[0]+(e[1]-candidate.a[1])*d[1])/square}.clamp(0.,1.);
                 let distance=(candidate.a[0]+d[0]*u-e[0]).hypot(candidate.a[1]+d[1]*u-e[1]);
                 if distance>reach+maxima[other.source]+0.5+0.05 || nearest.as_ref().is_some_and(|n|distance>n.0+0.05) {return;}
                 let (t,distance)=super::points::closest_segment(candidate.segment,e,candidate.from,candidate.to);
-                let place=candidate.base+t;
-                if distance<=reach+radius(&sources[other.source],other.base,place)+0.5
+                let place=candidate.base+t;let q=candidate.segment.point(t);
+                let limit=reach+radius(&sources[other.source],other.base,place)+0.5;
+                if candidate.subpath==line.edges[0].subpath {
+                    let i=candidate.index;let along=lengths[i]+(q[0]-candidate.a[0]).hypot(q[1]-candidate.a[1]).min(lengths[i+1]-lengths[i]);
+                    if (if end {lengths.last().unwrap()-along}else{along})<=2.*limit {return;}
+                }
+                if distance<=limit
                     && nearest.as_ref().is_none_or(|n|distance<n.0) {
-                    nearest=Some((distance,other_id,place,candidate.segment.point(t)));
+                    nearest=Some((distance,other_id,place,q));
                 }
             });
             if let Some((distance,other,place,q))=nearest {

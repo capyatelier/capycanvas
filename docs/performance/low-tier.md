@@ -2808,6 +2808,7 @@ version had no vector face search, so there is no matched before latency.
 | --- | --- | --- | --- | --- |
 | TCL TAB 11 Gen 2, native ARM64 release | 1.793 ms | 12.065 ms | ≤16 ms | Met |
 | Workstation, native release | 0.234 ms | 1.660 ms | ≤8 ms | Met |
+| Workstation, own-line join correction on `d454f7c2f` | 0.221 ms | 1.518 ms | ≤8 ms | Met; TCL not rerun |
 
 The workstation result does not qualify a reference tablet tier. Source and
 binary hashes, first-call logs and the profile that led to shared flattening

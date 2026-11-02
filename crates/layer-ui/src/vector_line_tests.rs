@@ -2695,6 +2695,7 @@ fn vector_face_fill_keeps_strokes_above_its_style_and_roundtrips_history() {
             straight(3, &[[400., 100.], [400., 400.]], false),
             straight(4, &[[400., 400.], [100., 400.]], false),
             straight(5, &[[100., 400.], [100., 100.]], false),
+            straight(6, &[[200., 220.], [300., 220.]], false),
         ]);
         let original = s.engine.document().scene().vector_layer(handle).unwrap().clone();
         let order = s.engine.document().scene().order().to_vec();
@@ -2703,11 +2704,11 @@ fn vector_face_fill_keeps_strokes_above_its_style_and_roundtrips_history() {
         press(&mut s, 10, &[p, p]);
         let filled = s.engine.document().scene().vector_layer(handle).unwrap().clone();
         let paths: Vec<_> = filled.paths().map(|(_, path)| path).collect();
-        assert_eq!(paths.len(), 6, "{platform:?}");
+        assert_eq!(paths.len(), 7, "{platform:?}");
         assert_eq!(paths[0].id, layer_core::authored::vector::ItemId(1));
-        assert!(matches!(paths[5].style.entries[..], [PaintEntry::Fill(_)]));
-        assert!(paths[5].encloses([250., 250.], 0.01));
-        assert_eq!(paths[..5].iter().map(|p| p.id).collect::<Vec<_>>(), original.paths().map(|(_, p)| p.id).collect::<Vec<_>>());
+        assert!(matches!(paths[6].style.entries[..], [PaintEntry::Fill(_)]));
+        assert!(paths[6].encloses([250., 250.], 0.01));
+        assert_eq!(paths[..6].iter().map(|p| p.id).collect::<Vec<_>>(), original.paths().map(|(_, p)| p.id).collect::<Vec<_>>());
         assert_eq!(s.engine.document().scene().order(), &order[..]);
         assert!(s.renderer_mut().region_requests.is_empty());
         let reopened = package_roundtrip(s.engine.document());
@@ -2729,6 +2730,7 @@ fn vector_face_fill_translates_reference_lines_into_the_target_layer() {
     use layer_core::{Edit, authored::RecordChange};
     for source in [crate::RegionSource::Reference, crate::RegionSource::Visible] {
         let (mut s, target) = vector_session();
+        put_paths(&mut s, target, vec![straight(1, &[[800., 800.], [900., 800.]], false)]);
         layer(&mut s, LayerAction::NewVector);
         let reference = s.engine.document().working.occurrence.unwrap();
         put_paths(&mut s, reference, vec![
@@ -2749,8 +2751,9 @@ fn vector_face_fill_translates_reference_lines_into_the_target_layer() {
         let p = surface_at(&s, [250., 150.]);
         press(&mut s, 10, &[p, p]);
         let object = s.engine.document().scene().vector_layer(target).unwrap().clone();
-        assert_eq!(object.path_count(), 1, "{source:?}");
-        let path = object.paths().next().unwrap().1;
+        assert_eq!(object.path_count(), 2, "{source:?}");
+        assert_eq!(object.paths().next().unwrap().1.id, layer_core::authored::vector::ItemId(1));
+        let path = object.paths().last().unwrap().1;
         assert_eq!(path.geometry.hull(), [160., 125., 260., 225.]);
         assert!(path.encloses([210., 175.], 0.01));
         assert!(path.style.strokes().next().is_none());
@@ -2762,7 +2765,7 @@ fn vector_face_fill_translates_reference_lines_into_the_target_layer() {
 }
 
 #[test]
-fn vector_face_fill_holes_remain_empty_when_tapped_and_reopened() {
+fn vector_face_fill_holes_accept_separate_fills_with_independent_undo() {
     let (mut s, target) = vector_session();
     let mut paths = Vec::new();
     for (lo, hi) in [(100., 700.), (300., 500.), (350., 450.)] {
@@ -2780,13 +2783,44 @@ fn vector_face_fill_holes_remain_empty_when_tapped_and_reopened() {
     assert!(filled.encloses([200., 200.], 0.01));
     assert!(!filled.encloses([320., 320.], 0.01));
     assert!(!filled.encloses([400., 400.], 0.01));
-    let checkpoint = s.engine.checkpoint();
-    for (first, at) in [(20, [320., 320.]), (30, [400., 400.])] {
+    let original_fill = filled.clone();
+    let mut previous = object;
+    for (first, at, hull, subpaths) in [(20, [320., 320.], [300., 300., 500., 500.], 2), (30, [400., 400.], [350., 350., 450., 450.], 1)] {
         let p = surface_at(&s, at);
         press(&mut s, first, &[p, p]);
-        assert_eq!(s.engine.checkpoint(), checkpoint);
-        assert_eq!(s.engine.document().scene().vector_layer(target), Some(&object));
+        let changed = s.engine.document().scene().vector_layer(target).unwrap().clone();
+        assert_eq!(changed.path_count(), previous.path_count() + 1);
+        assert_eq!(changed.paths().find(|(_, p)| p.id == original_fill.id).unwrap().1, &original_fill);
+        let added = changed.paths().find(|(_, p)| previous.find(p.id).is_none()).unwrap().1;
+        assert_eq!(added.geometry.hull(), hull);
+        assert_eq!(added.geometry.subpaths().len(), subpaths);
+        assert!(added.encloses(at, 0.01));
+        invoke(&mut s, CommandId::Undo);
+        s.frame((first + 2) * 10_000_000, (first + 2) * 10_000_000).unwrap();
+        assert_eq!(s.engine.document().scene().vector_layer(target), Some(&previous));
+        invoke(&mut s, CommandId::Redo);
+        s.frame((first + 3) * 10_000_000, (first + 3) * 10_000_000).unwrap();
+        assert_eq!(s.engine.document().scene().vector_layer(target), Some(&changed));
+        previous = changed;
     }
     let reopened = package_roundtrip(s.engine.document());
-    assert_eq!(reopened.scene().order().iter().find_map(|id| reopened.scene().vector_layer(*id)), Some(&object));
+    assert_eq!(reopened.scene().order().iter().find_map(|id| reopened.scene().vector_layer(*id)), Some(&previous));
+}
+
+#[test]
+fn transparent_vector_face_fill_removes_the_record_and_undo_restores_it() {
+    use layer_core::authored::vector::{Fill, Paint, PaintEntry, Style};
+    let (mut s, target) = vector_session();
+    let mut path = straight(1, &[[100., 100.], [400., 100.], [400., 400.], [100., 400.]], true);
+    path.style = Arc::new(Style::new(vec![PaintEntry::Fill(Fill { paint: Paint::color(layer_core::color::RgbColor::BLACK), unknown: None })]));
+    put_paths(&mut s, target, vec![path]);
+    let original = s.engine.document().scene().vector_layer(target).unwrap().clone();
+    s.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Region { fill: true, source: crate::RegionSource::Editing } }).unwrap();
+    s.dispatch(UiAction::Color { action: ColorAction::Select { slot: ColorSlot::Transparent } }).unwrap();
+    let p = surface_at(&s, [250., 250.]);
+    press(&mut s, 10, &[p, p]);
+    assert_eq!(s.engine.document().scene().vector_layer(target).unwrap().path_count(), 0);
+    invoke(&mut s, CommandId::Undo);
+    s.frame(120_000_000, 120_000_000).unwrap();
+    assert_eq!(s.engine.document().scene().vector_layer(target), Some(&original));
 }
