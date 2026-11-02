@@ -98,16 +98,15 @@ These rules cover tests, benchmark harnesses and tools as much as production cod
   failure excerpts. A subagent does its task itself instead of delegating again.
 - Never force-push `main`, `git reset --hard` or bare `git stash` in a shared
   checkout, or delete another session's worktree, branch, build, install or files.
-- When your task says to push, push finished work in reviewable chunks, never one
-  commit at a time. Make one commit per root cause or feature milestone, with its
-  tests, and group test-only fixes by fixture family. Several commits for one
+- When your task says to push: a fix to a bug already on `main` ships alone, with
+  its regression test, as soon as that test and the affected checks pass. Feature
+  work is bundled into milestone commits, each with its tests. Make one commit per
+  root cause, and group test-only fixes by fixture family. Several commits for one
   cause, or a commit per selector, assertion, probe, fixup or WIP step, is commit
-  spam: squash locally before pushing. Push each fix cycle or milestone once its
-  checks pass, about every 1–1.5 hours while fixing bugs; push crash and data-loss
-  fixes at once, and never hold a finished fix behind unrelated work. Install the
-  hooks with `sh tools/git/install-hooks.sh`; never bypass them or add agent
-  `Co-Authored-By` trailers. The [commit guide](docs/COMMIT_GUIDE.md#sharing-main)
-  covers commit size, push cadence, rebasing and rechecks.
+  spam: squash locally before pushing. Install the hooks with
+  `sh tools/git/install-hooks.sh`; never bypass them or add agent `Co-Authored-By`
+  trailers. The [commit guide](docs/COMMIT_GUIDE.md#sharing-main) covers commit
+  size, push timing, rebasing and rechecks.
 
 ### Devices and user data
 

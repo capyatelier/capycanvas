@@ -123,7 +123,8 @@ with the commit size and cadence in the [commit guide](COMMIT_GUIDE.md#sharing-m
 pushing, inspect new upstream commits, update the target and ledger, and rerun
 only the checks that conflicts or upstream changes to the same code affect, never
 heavy validation because unrelated commits landed. When in doubt, push first,
-then validate further and fold what you find into the next milestone commit.
+then validate further and fold what you find into the next milestone commit. A
+fix to a bug already on `main` ships alone, with its regression test.
 Finish against the final fetched target SHA; later commits belong to the next
 batch. Advance the watermark only through a contiguous range with all required
 work closed, using `Ported Windows origin/main through <sha>` in the commit body.

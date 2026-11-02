@@ -45,18 +45,19 @@ Work lands on `origin/main` directly, and other sessions push to it while you
 work. There are no long-lived port or feature branches.
 
 - Branch from a fresh `origin/main` in your own worktree.
-- Commit complete units of work: one fix per root cause, or one feature
-  milestone, with its tests, that builds, passes its checks and leaves the
-  feature usable. Group test-script-only corrections by fixture family.
-- Don't spam commits. Several commits for one cause, or a commit per selector,
-  assertion, probe, fixup, WIP step or review comment, must be squashed locally
-  before pushing. If another session's commit needs a follow-up from you, make it
-  one commit for that cause.
-- Don't hold fixes either. Push each fix cycle or milestone once its checks pass,
-  about every 1–1.5 hours while fixing bugs, and push crash and data-loss fixes
-  at once. Never hold a finished fix behind unrelated later work. Once the checks
-  pass, push rather than waiting for longer validation, and fold what later
-  validation finds into the next commit for that cause.
+- A fix to a bug already on `main` ships alone, with its regression test, as
+  soon as that test and the affected checks pass. Don't hold it for later work
+  or batch it with unrelated fixes.
+- Bundle feature work into complete milestones: each builds, passes its checks,
+  includes its tests and leaves the feature usable. Squash WIP, probes and
+  experiments locally.
+- Don't spam commits. Make one commit per root cause, and group
+  test-script-only corrections by fixture family. Several commits for one cause,
+  or a commit per selector, assertion, probe, fixup, WIP step or review comment,
+  must be squashed locally before pushing. If another session's commit needs a
+  follow-up from you, make it one commit for that cause.
+- Once a commit's checks pass, push rather than waiting for longer validation,
+  and fold what later validation finds into the next commit for that cause.
 - Before pushing, run the [checks](development/testing.md) for every affected
   area, exercise affected UI and input on each affected host, and report what
   was not verified and any remaining failures.
