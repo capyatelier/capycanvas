@@ -35,7 +35,7 @@ try {
         $startup.Stop()
         if ($delay) { Start-Sleep -Milliseconds $delay }
         $watch = [Diagnostics.Stopwatch]::StartNew()
-        if (!$review.CloseMainWindow()) { throw 'Owned review rejected the close request.' }
+        if (!(Close-OwnedDrawing $review)) { throw 'Owned review rejected the close request.' }
         $within = $review.WaitForExit(5000)
         # Gather evidence from this same process after a slow close, without
         # changing the five-second acceptance gate or restarting the app.
@@ -71,7 +71,7 @@ try {
     if ($null -ne $review) {
         $review.Refresh()
         if (!$review.HasExited) {
-            $null = $review.CloseMainWindow()
+            $null = (Close-OwnedDrawing $review)
             $null = $review.WaitForExit(5000)
         }
         $review.Dispose()

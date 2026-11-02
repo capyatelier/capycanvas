@@ -40,6 +40,8 @@ namespace CapyOwnedSearchTest {
  public class TreeWalker{public static TreeWalker ControlViewWalker=new TreeWalker();public Node GetParent(Node node){return node.Parent;}}
  public static class Driver {
   public static IntPtr Foreground;public static int Activations,Injected;
+  public static IntPtr PostedWindow,PostedLparam;public static UIntPtr PostedWparam;public static uint PostedMessage;public static int Posts;public static bool PostResult=true;
+  public static bool PostMessage(IntPtr window,uint message,UIntPtr wparam,IntPtr lparam){PostedWindow=window;PostedMessage=message;PostedWparam=wparam;PostedLparam=lparam;Posts++;return PostResult;}
   public static void Down(string device,int x,int y){Injected++;}public static void Up(bool hover){Injected++;}
   public static int GetDpiForWindow(IntPtr window){return 96;}
   public static bool SetForegroundWindow(IntPtr window){Foreground=window;Activations++;return true;}
@@ -65,7 +67,7 @@ namespace CapyOwnedSearchTest {
   public static Node FromHandle(IntPtr window){return RootElement.Children.Find(node=>node.NativeWindowHandle==window);}
  }
  public class ElementNotAvailableException:Exception{}
- public class Review{public int Id=33;public IntPtr MainWindowHandle=new IntPtr(132146);public bool HasExited=false;public int ExitCode=0;public void Refresh(){}}
+ public class Review{public int Id=33;public IntPtr MainWindowHandle=new IntPtr(132146);public bool HasExited=false;public int ExitCode=0;public void Refresh(){}public bool CloseMainWindow(){return Driver.PostMessage(MainWindowHandle,0x0010,UIntPtr.Zero,IntPtr.Zero);}}
 }
 '@
 foreach($name in @('Test-CapySearchItem','Find','Control','Wait-Until')){
@@ -259,6 +261,28 @@ if($ready.Count -ne 1 -or $statements[$ready[0]+1].Left.Extent.Text -ne '$script
     if($script:persistenceResolutions -ne 1 -or $script:persistenceWaitSeconds -ne 45){throw 'Persistence launch did not resolve its drawing within the original readiness wait'}
 }
 Write-Output 'Persistence launch uses its owned drawing when MainWindowHandle names an input overlay, within its original readiness deadline.'
+
+$closeOwned=@($ast.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Close-OwnedDrawing'},$true))
+if($closeOwned.Count -ne 1){throw 'Missing actual owned drawing close helper'}
+& {
+    . ([scriptblock]::Create($closeOwned[0].Extent.Text.Replace('[Diagnostics.Process]','[CapyOwnedSearchTest.Review]').Replace('[CapyWindowApi]','[CapyOwnedSearchTest.Driver]')))
+    $review=[CapyOwnedSearchTest.Review]::new();$registered=[IntPtr]131956;$state=@{available=$true;resolutions=0}
+    function Owned-DrawingWindow($Process,[long]$WindowHandle){
+        if($Process -ne $review -or ($WindowHandle -and $WindowHandle -ne $registered.ToInt64())){throw 'Close changed its owned window inputs'}
+        $state.resolutions++;if($state.available){[pscustomobject]@{Handle=$registered}}
+    }
+    [CapyOwnedSearchTest.Driver]::Posts=0
+    foreach($handle in @(0,$registered.ToInt64())){
+        if(!(Close-OwnedDrawing $review $handle)){throw 'Registered drawing close did not return the native post result'}
+        if([CapyOwnedSearchTest.Driver]::PostedWindow -ne $registered -or [CapyOwnedSearchTest.Driver]::PostedWindow -eq $review.MainWindowHandle -or [CapyOwnedSearchTest.Driver]::PostedMessage -ne 0x0010 -or [CapyOwnedSearchTest.Driver]::PostedWparam -ne [UIntPtr]::Zero -or [CapyOwnedSearchTest.Driver]::PostedLparam -ne [IntPtr]::Zero){throw 'Close targeted the input overlay instead of posting WM_CLOSE to the registered drawing'}
+    }
+    if($state.resolutions -ne 2 -or [CapyOwnedSearchTest.Driver]::Posts -ne 2){throw 'Close did not resolve and post once per owned drawing request'}
+    $state.available=$false
+    if((Close-OwnedDrawing $review) -or [CapyOwnedSearchTest.Driver]::Posts -ne 2){throw 'Close posted to an unavailable owned drawing'}
+    $state.available=$true;[CapyOwnedSearchTest.Driver]::PostResult=$false
+    try{if(Close-OwnedDrawing $review){throw 'Close hid a rejected native WM_CLOSE'}}finally{[CapyOwnedSearchTest.Driver]::PostResult=$true}
+}
+Write-Output 'Owned close posts WM_CLOSE to its registered drawing instead of MainWindowHandle input overlays and retains native failure results.'
 
 $localizationAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-localization.ps1'),[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw ($errors|Out-String)}

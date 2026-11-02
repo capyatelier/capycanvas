@@ -24,7 +24,7 @@ function Start-App {
 }
 function Close-App {
     [CapyRowPointer]::Dispose()
-    $review.CloseMainWindow()|Out-Null
+    (Close-OwnedDrawing $review)|Out-Null
     Wait-Until {$review.Refresh();$review.HasExited} 'Cursor review did not close' 60 -Closing
 }
 function Cursor-Row {@((Model).preferences.pages.groups.rows|Where-Object id -eq 'cursor')[0]}

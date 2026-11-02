@@ -10,8 +10,8 @@ $review=$null
 function Launch([string]$Name){
     $script:review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run ($Name+'-stderr.log'))
     $null=$review.Handle
-    Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).windows_workspace.ready -and ($Name -eq 'damaged' -or (Model).brush_ready)} 'Saved-data window did not become ready' 120
-    [CapyWindowApi]::ShowWindow($review.MainWindowHandle,3)|Out-Null
+    Wait-Until {$review.Refresh();(Owned-DrawingWindow $review) -and (Model).windows_workspace.ready -and ($Name -eq 'damaged' -or (Model).brush_ready)} 'Saved-data window did not become ready' 120
+    [CapyWindowApi]::ShowWindow((Owned-DrawingWindow $review).Handle,3)|Out-Null
     $owned=@{window=$null}
     Wait-Until {$owned.window=Owned-DrawingWindow $review;$null -ne $owned.window} 'Owned saved-data window is unavailable'
     $script:root=$owned.window.Root
@@ -75,7 +75,7 @@ try {
     if($review -and !$review.HasExited){try{Capture 'failure' -WithModel}catch{}}
     throw
 }finally{
-    if($review -and !$review.HasExited){$null=$review.CloseMainWindow();$null=$review.WaitForExit(30000)}
+    if($review -and !$review.HasExited){$null=(Close-OwnedDrawing $review);$null=$review.WaitForExit(30000)}
     if($review){$review.Dispose()}
     Exit-CapyEnvironment
 }

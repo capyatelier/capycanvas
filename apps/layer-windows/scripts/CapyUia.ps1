@@ -163,6 +163,11 @@ function Owned-DrawingWindow([Diagnostics.Process]$Process,[long]$WindowHandle,[
         $found[0]
     }
 }
+function Close-OwnedDrawing([Diagnostics.Process]$Process,[long]$WindowHandle){
+    $window=Owned-DrawingWindow $Process $WindowHandle
+    if(!$window){return $false}
+    [CapyWindowApi]::PostMessage($window.Handle,0x0010,[UIntPtr]::Zero,[IntPtr]::Zero)
+}
 function Drawing-Checkpoint{
  $m=Model;$stamp=@($m.windows_tabs.session_stamps|Where-Object id -eq $m.windows_tabs.selected)
  if($stamp.Count -ne 1 -or $null -eq $stamp[0].stamp.checkpoint){throw 'Drawing has no unique current checkpoint'}
