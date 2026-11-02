@@ -3176,8 +3176,8 @@ impl Workspace {
     fn hold_chrome(&self, g: &GpuCanvas) -> bool {
         let animation = self.chrome_fading.get() || self.surface.imp().transition.get().is_some()
             || self.customization.animation_active() || self.bubbles.animation_active()
-            || self.documents.drag_active() || self.header.drag_active() || self.dragging.get()
-            || self.drawers().iter().any(|drawer| drawer.animation_active())
+            || self.documents.drag_active() || self.palette_panel.drag_active() || self.header.drag_active() || self.dragging.get()
+            || self.drawers().iter().any(|drawer| drawer.animation_active() || drawer.palette_drag_active())
             || self.groups.borrow().iter().any(|group| group.stack.is_transition_running());
         let resized = self.chrome_window_motion.update([self.window.width(), self.window.height()]);
         let input = self.chrome_navigation_input.get();

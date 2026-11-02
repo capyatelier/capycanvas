@@ -570,6 +570,10 @@ impl Drawer {
     pub(super) fn animation_active(&self) -> bool {
         self.animation.borrow().as_ref().is_some_and(|animation| animation.state() == adw::AnimationState::Playing)
     }
+    pub(super) fn palette_drag_active(&self) -> bool {
+        self.view.borrow().as_ref().is_some_and(|view| view.bodies.iter().any(|body|
+            matches!(body, Body::Palettes(panel) if panel.drag_active())))
+    }
     pub fn refresh_theme(&self) {
         if let Some(tabs) = self.view.borrow().as_ref().and_then(|view| view.tab_strip.as_ref()) {
             tabs.queue_draw();

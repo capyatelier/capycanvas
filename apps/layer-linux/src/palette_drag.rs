@@ -34,6 +34,10 @@ pub(super) struct Contact {
     last_frame: i64,
 }
 impl PalettePanel {
+    pub(crate) fn drag_active(&self) -> bool {
+        self.drag.borrow().as_ref().is_some_and(|drag| drag.started)
+    }
+
     pub(super) fn bind_reorder(self: &Rc<Self>, w: &Rc<Workspace>) {
         // GtkGestureSingle resets on buttonless mouse motion even while a pen
         // owns its contact. Popup mapping can synthesize just such a hover.

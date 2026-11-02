@@ -93,6 +93,12 @@ fn check_palette_reorder(devices: &[&str]) {
             let current = state(&d.w).colors.definition();
             // Immediate pickup and dragging out of a held menu use the same contact.
             for (hold_ms, cancel) in [(0, true), (850, true), (0, false)] {
+                let marker = (hold_ms == 0 && cancel && *device != "pen").then(|| {
+                    let css = paint_color(&tile, "#ff00ff");
+                    let bounds = idle_paint(&tile).color_bounds(&d.w.window, [255, 0, 255, 255])
+                        .expect("source swatch paints a distinguishable drag marker");
+                    (css, bounds)
+                });
                 d.input.perform(
                     serde_json::json!([contact(device, "down", start), {"wait_ms":hold_ms}]),
                 );
@@ -130,7 +136,34 @@ fn check_palette_reorder(devices: &[&str]) {
                         )
                     })
                     .collect();
+                let drag_theme = state(&d.w).theme;
+                let paints = marker.as_ref().map(|_| {
+                    let frames = Rc::new(RefCell::new(Vec::new()));
+                    let observed = frames.clone();
+                    let workspace = d.w.clone();
+                    let changed_theme = Cell::new(false);
+                    let clock = d.w.surface.frame_clock().unwrap();
+                    let handler = clock.connect_after_paint(move |clock| {
+                        let position = workspace.surface.drag_overlay_position();
+                        observed.borrow_mut().push((clock.frame_time(), workspace.chrome.selected_node(),
+                            position, workspace.chrome.revision()));
+                        if position.is_some() && !changed_theme.replace(true) {
+                            let workspace = workspace.clone();
+                            glib::idle_add_local_once(move || workspace.dispatch(UiAction::SetTheme {
+                                theme: Some(if drag_theme == Theme::Light { Theme::Dark } else { Theme::Light }),
+                            }));
+                        }
+                    });
+                    (clock, handler, frames)
+                });
                 d.input.perform(serde_json::json!(motion));
+                if let Some((clock, handler, paints)) = paints {
+                    clock.disconnect(handler);
+                    let (css, marker) = marker.as_ref().unwrap();
+                    assert_palette_drag_composition(&d.w, paints.take(), marker.clone(), surface, device);
+                    d.w.dispatch(UiAction::SetTheme { theme: Some(drag_theme) });
+                    gtk::style_context_remove_provider_for_display(&tile.display(), css);
+                }
                 assert!(
                     tile.has_css_class("palette-drag-source"),
                     "{surface} {device}: dragging after {hold_ms}ms"
@@ -1083,4 +1116,35 @@ fn check_palette_context(devices: &[&str]) {
     }
     d.w.window.destroy();
     pump(100);
+}
+
+fn assert_palette_drag_composition(
+    w: &Workspace,
+    frames: Vec<(i64, Option<gtk::gsk::RenderNode>, Option<gtk::graphene::Point>, u64)>,
+    marker: gtk::graphene::Rect,
+    surface: &str,
+    device: &str,
+) {
+    let initial_revision = frames.first().expect("palette drag produces actual paints").3;
+    let positions: Vec<_> = frames.iter().filter(|(_, _, _, revision)| *revision != initial_revision)
+        .filter_map(|(_, _, point, _)| point.map(|point| [point.x(), point.y()])).collect();
+    assert!(positions.len() > 1 && positions.windows(2).any(|pair| pair[0] != pair[1]),
+        "{surface}/{device}: swatch keeps moving after the theme changes the chrome revision");
+    for (time, node, position, _) in frames {
+        let Some(position) = position else { continue };
+        let node = node.unwrap_or_else(|| panic!("{surface}/{device}: active swatch drag has blank selected chrome at paint {time}"));
+        let expected = [position.x() + marker.x(), position.y() + marker.y(), marker.width(), marker.height()];
+        let bounds = gtk::graphene::Rect::new(expected[0] - 2., expected[1] - 2., expected[2] + 4., expected[3] + 4.);
+        let selected = PaintedSample { time, node, bounds, state: () };
+        let actual = selected.color_bounds(&w.window, [255, 0, 255, 255])
+            .map(|bounds| [bounds.x(), bounds.y(), bounds.width(), bounds.height()]);
+        let follows = actual.is_some_and(|actual| actual.into_iter().zip(expected).all(|(a,b)|(a-b).abs()<=1.));
+        if !follows {
+            let path = std::path::PathBuf::from(std::env::var_os("LAYER_TEST_ARTIFACTS").unwrap());
+            w.window.renderer().unwrap().render_texture(&selected.node, Some(&selected.bounds))
+                .save_to_png(path.join(format!("palette-motion-{surface}-{device}-{time}.png"))).unwrap();
+        }
+        assert!(follows,
+            "{surface}/{device}: selected chrome swatch trails native drag at paint {}: {actual:?} vs {expected:?}", selected.time);
+    }
 }
