@@ -615,7 +615,7 @@ fn phone_toolbar_splices_preserve_ids_and_reject_overflow_atomically() {
     let mut layout = WorkspacePreset::Painter.layout(Platform::Gtk);
     layout.phone = Some(Vec::new());
     let color = ToolbarControl::Color;
-    layout.insert_phone_tools(None, &[color; 9]).unwrap();
+    layout.insert_phone_tools(None, &[color; PhoneLayout::MAX_TOOLS - 1]).unwrap();
     let first = layout.phone.as_ref().unwrap()[0].id;
     layout.insert_phone_tools(Some(first), &[ToolbarControl::Divider, color]).unwrap();
     let before = layout.clone();
@@ -630,21 +630,24 @@ fn phone_toolbar_splices_preserve_ids_and_reject_overflow_atomically() {
     layout.validate().unwrap();
     let mut unresolved = DockLayout::default();
     let before = unresolved.clone();
-    assert!(unresolved.insert_phone_tools(None, &[color; 3]).is_err());
+    for error in [unresolved.insert_phone_tools(None, &[color]), unresolved.remove_phone_tool(first), unresolved.move_phone_tool(first, None)] {
+        assert_eq!(error.unwrap_err(), "The phone toolbar isn't resolved");
+    }
     assert_eq!(unresolved, before);
+    unresolved.resolve_phone_defaults(WorkspacePreset::Photographer).unwrap();
     unresolved.insert_phone_tools(None, &[color]).unwrap();
-    assert_eq!(unresolved.phone.as_ref().unwrap().len(), WorkspacePreset::Painter.phone_controls().len() + 1);
+    assert_eq!(unresolved.phone.as_ref().unwrap().len(), WorkspacePreset::Photographer.phone_controls().len() + 1);
 }
 
 #[test]
 fn phone_toolbar_dividers_are_free_at_both_ends_and_empty_stays_empty() {
     let mut layout = WorkspacePreset::Painter.layout(Platform::Gtk);
     layout.phone = Some(Vec::new());
-    let controls: Vec<_> = (0..21).map(|index| if index % 2 == 0 { ToolbarControl::Divider } else { ToolbarControl::Color }).collect();
+    let controls: Vec<_> = (0..PhoneLayout::MAX_TOOLS * 2 + 1).map(|index| if index % 2 == 0 { ToolbarControl::Divider } else { ToolbarControl::Color }).collect();
     layout.insert_phone_tools(None, &controls).unwrap();
     layout.validate().unwrap();
     let presentation = PhoneLayout::resolve(&layout, [412., 891.], [0.; 4], [0.; 2], [0; 2], false).unwrap();
-    assert!(presentation.tools[20].width > 0.);
+    assert!(presentation.tools[PhoneLayout::MAX_TOOLS * 2].width > 0.);
     for tile in layout.phone.clone().unwrap() { layout.remove_phone_tool(tile.id).unwrap(); }
     layout.resolve_phone_defaults(WorkspacePreset::Photographer).unwrap();
     assert_eq!(layout.phone, Some(Vec::new()));

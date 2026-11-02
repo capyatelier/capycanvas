@@ -159,7 +159,7 @@ fn native_phone_customize() {
     menu_action(&mut d, "Insert Tools…");
     select(&mut d, 1);
     confirm(&mut d);
-    assert_eq!(layout(&d).phone.as_ref().unwrap().iter().filter(|tile| tile.control != ToolbarControl::Divider).count(), 10);
+    assert_eq!(layout(&d).phone.as_ref().unwrap().iter().filter(|tile| tile.control != ToolbarControl::Divider).count(), PhoneLayout::MAX_TOOLS);
     hold(&mut d, None);
     menu_action(&mut d, "Add Tools…");
     let frame = picker(&d);

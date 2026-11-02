@@ -59,8 +59,8 @@ impl PhoneState {
             phone.strength = Bounds::default();
             phone.settings = Bounds::default();
             phone.settings_hit = Bounds::default();
-            phone.tools = [Bounds::default(); 21];
-            phone.tool_hits = [Bounds::default(); 21];
+            phone.tools = [Bounds::default(); PhoneLayout::MAX_TILES];
+            phone.tool_hits = [Bounds::default(); PhoneLayout::MAX_TILES];
             phone.chips = [Bounds::default(), phone.capy];
             phone.controls = [Bounds::default(); 2];
             phone.bars = [Bounds::default(); 2];
@@ -85,8 +85,8 @@ pub struct PhoneLayout {
     pub strength: Bounds,
     pub settings: Bounds,
     pub settings_hit: Bounds,
-    pub tools: [Bounds; 21],
-    pub tool_hits: [Bounds; 21],
+    pub tools: [Bounds; PhoneLayout::MAX_TILES],
+    pub tool_hits: [Bounds; PhoneLayout::MAX_TILES],
     pub chips: [Bounds; 2],
     pub controls: [Bounds; 2],
     pub bars: [Bounds; 2],
@@ -98,7 +98,7 @@ pub enum PhoneBarOutcome { Pending, Held, Dragging, WindowMove, Cancel, Tap(u32)
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PhoneBarContact {
     held: bool, dragged: bool, editable: bool, index: Option<usize>,
-    origin: [f32; 2], point: [f32; 2], key: Option<(Edge, Bounds, Bounds)>, ids: [u32; 21], dividers: [bool; 21], count: usize,
+    origin: [f32; 2], point: [f32; 2], key: Option<(Edge, Bounds, Bounds)>, ids: [u32; PhoneLayout::MAX_TILES], dividers: [bool; PhoneLayout::MAX_TILES], count: usize,
 }
 impl PhoneBarContact {
     pub fn begin(layout: &PhoneLayout, point: [f32; 2], native_button: bool) -> Option<Self> {
@@ -111,8 +111,8 @@ impl PhoneBarContact {
             })
     }
     pub fn set_tools(&mut self, tiles: &[crate::ToolbarTile]) {
-        self.count = tiles.len().min(21);
-        for (i, tile) in tiles.iter().take(21).enumerate() { self.ids[i] = tile.id; self.dividers[i] = tile.control == ToolbarControl::Divider; }
+        self.count = tiles.len().min(PhoneLayout::MAX_TILES);
+        for (i, tile) in tiles.iter().take(PhoneLayout::MAX_TILES).enumerate() { self.ids[i] = tile.id; self.dividers[i] = tile.control == ToolbarControl::Divider; }
     }
     pub fn valid<'a>(&self, layout: &PhoneLayout, tiles: impl IntoIterator<Item = &'a crate::ToolbarTile>) -> bool {
         if self.key != Some((layout.edge, layout.bars[0], layout.work_area)) { return false; }
@@ -151,21 +151,21 @@ impl PhoneBarContact {
         else if !self.held { self.index.map_or(PhoneBarOutcome::Pending, |i| PhoneBarOutcome::Tap(self.ids[i])) }
         else { PhoneBarOutcome::Pending }
     }
-    pub fn geometry(&self, layout: &PhoneLayout) -> [Bounds; 21] {
+    pub fn geometry(&self, layout: &PhoneLayout) -> [Bounds; PhoneLayout::MAX_TILES] {
         let mut bounds = layout.tools;
         let Some(source) = self.index.filter(|_| self.held) else { return bounds; };
         let axis = usize::from(layout.edge != Edge::Top);
         let scale = ((if axis == 0 { layout.work_area.width } else { layout.work_area.height }) / 320.).min(1.);
         if self.dragged {
-            let mut order: [usize; 21] = std::array::from_fn(|i| i);
+            let mut order: [usize; PhoneLayout::MAX_TILES] = std::array::from_fn(|i| i);
             let target = self.destination(layout).and_then(|id| self.ids[..self.count].iter().position(|v| *v == id)).unwrap_or(self.count);
             if target > source { order[source..target].rotate_left(1); } else { order[target..=source].rotate_right(1); }
             let first = layout.tools[0];
-            let mut along = if axis == 0 { first.x } else { first.y } + if self.dividers[0] { 2. * scale } else { 0. };
+            let mut along = if axis == 0 { first.x } else { first.y } - PhoneLayout::tool_metrics(self.dividers[0], layout.tile, scale).0;
             for &i in &order[..self.count] {
-                if axis == 0 { bounds[i].x = along - if self.dividers[i] { 2. * scale } else { 0. }; }
-                else { bounds[i].y = along - if self.dividers[i] { 2. * scale } else { 0. }; }
-                along += if self.dividers[i] { 6. * scale } else { layout.tile + 2. * scale };
+                let (offset, _, advance) = PhoneLayout::tool_metrics(self.dividers[i], layout.tile, scale);
+                if axis == 0 { bounds[i].x = along + offset; } else { bounds[i].y = along + offset; }
+                along += advance;
             }
             if axis == 0 { bounds[source].x = layout.tools[source].x + self.point[0] - self.origin[0]; }
             else { bounds[source].y = layout.tools[source].y + self.point[1] - self.origin[1]; }
@@ -176,6 +176,15 @@ impl PhoneBarContact {
 }
 
 impl PhoneLayout {
+    pub const MAX_TOOLS: usize = 10;
+    pub(crate) const MAX_TILES: usize = Self::MAX_TOOLS * 2 + 1;
+    const TOOL_GAP: f32 = 2.;
+    const DIVIDER_WIDTH: f32 = 8.;
+    fn tool_metrics(divider: bool, tile: f32, scale: f32) -> (f32, f32, f32) {
+        let gap = Self::TOOL_GAP * scale;
+        if divider { let width = Self::DIVIDER_WIDTH * scale; (-gap, width, width - gap) }
+        else { (0., tile, tile + gap) }
+    }
     pub const MENU_GAP: f32 = 1.;
     pub const MENU_MARGIN: f32 = 8.;
     pub const MENU_TILE_GAP: f32 = 2.;
@@ -320,7 +329,7 @@ impl PhoneLayout {
         } else {
             native_counts.iter().filter(|count| **count > 0).count() as f32 * 8.
         };
-        let gaps = dividers as f32 * 8. + count.saturating_sub(dividers + 1) as f32 * 2.;
+        let gaps = dividers as f32 * Self::DIVIDER_WIDTH + count.saturating_sub(dividers + 1) as f32 * Self::TOOL_GAP;
         let tile = ((length - reservation - gaps) / (count as u32 + count_on_bar).max(1) as f32)
             .clamp(1., 48.);
         let point = |edge: Edge, along: f32, extent: f32| match edge {
@@ -343,16 +352,12 @@ impl PhoneLayout {
         }
         let start = if vertical { native_counts[side] as f32 * tile } else { native_counts[0] as f32 * tile };
         let mut along = if start > 0. { start + 8. } else { 0. };
-        let mut tools = [Bounds::default(); 21];
+        let mut tools = [Bounds::default(); PhoneLayout::MAX_TILES];
         let tool_start = along;
         for (i, t) in tiles.iter().enumerate().take(tools.len()) {
-            if t.control == ToolbarControl::Divider {
-                tools[i] = point(edge, along - 2., 8.);
-                along += 6.;
-                continue;
-            }
-            tools[i] = point(edge, along, tile);
-            along += tile + 2.;
+            let (offset, extent, advance) = Self::tool_metrics(t.control == ToolbarControl::Divider, tile, 1.);
+            tools[i] = point(edge, along + offset, extent);
+            along += advance;
         }
         let capy_start = if vertical {
             let n = native_counts[usize::from(other == Edge::Right)] as f32 * tile;
@@ -365,7 +370,7 @@ impl PhoneLayout {
         let mut size = point(other, capy_start + tile + 2., slider);
         let mut strength = point(other, capy_start + tile + 4. + slider, slider);
         let mut settings = point(other, length - tile, tile);
-        let mut chips = [if count > 0 { point(edge, tool_start, along - tool_start - 2.) } else { Bounds::default() },
+        let mut chips = [if count > 0 { point(edge, tool_start, along - tool_start - Self::TOOL_GAP) } else { Bounds::default() },
             point(other, capy_start, length - capy_start)];
         if !vertical && swapped {
             for b in [&mut capy, &mut size, &mut strength, &mut settings, &mut chips[1]] {

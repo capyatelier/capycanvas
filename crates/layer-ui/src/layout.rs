@@ -1978,11 +1978,8 @@ impl DockLayout {
         Ok(())
     }
     fn edit_phone(&mut self, edit: impl FnOnce(&mut Vec<ToolbarTile>, &mut u32) -> Result<(), String>) -> Result<(), String> {
-        let mut tiles = self.phone.clone().unwrap_or_default();
+        let mut tiles = self.phone.clone().ok_or("The phone toolbar isn't resolved")?;
         let mut next = self.next_tile_id;
-        if self.phone.is_none() {
-            splice_toolbar(&mut tiles, &mut next, ToolbarSplice::insert(None, WorkspacePreset::Painter.phone_controls())?, false, None)?;
-        }
         edit(&mut tiles, &mut next)?;
         self.phone = Some(tiles); self.next_tile_id = next;
         Ok(())
@@ -1992,7 +1989,7 @@ impl DockLayout {
             return Err("This tool cannot be placed in the phone toolbar".into());
         }
         let edit = ToolbarSplice::insert(before, controls)?;
-        self.edit_phone(|tiles, next| splice_toolbar(tiles, next, edit, true, Some(10)))
+        self.edit_phone(|tiles, next| splice_toolbar(tiles, next, edit, true, Some(crate::PhoneLayout::MAX_TOOLS)))
     }
     pub fn remove_phone_tool(&mut self, tile: u32) -> Result<(), String> {
         self.edit_phone(|tiles, next| splice_toolbar(tiles, next, ToolbarSplice::Remove(tile), true, None))
@@ -2086,8 +2083,8 @@ impl DockLayout {
         }
         let mut tile_ids = std::collections::BTreeSet::new();
         if let Some(tiles) = &self.phone {
-            if tiles.iter().filter(|t| t.control != ToolbarControl::Divider).count() > 10
-                || tiles.len() > 21
+            if tiles.iter().filter(|t| t.control != ToolbarControl::Divider).count() > crate::PhoneLayout::MAX_TOOLS
+                || tiles.len() > crate::PhoneLayout::MAX_TILES
             {
                 return Err("Phone toolbar is full".into());
             }

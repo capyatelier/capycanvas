@@ -3269,8 +3269,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     PhoneAction::RemoveTool { tile } => self.state.workspace.layout.remove_phone_tool(tile)?,
                     PhoneAction::MoveTool { tile, before } => self.state.workspace.layout.move_phone_tool(tile, before)?,
                     PhoneAction::InsertTools { before } => {
+                        if self.state.workspace.layout.phone.is_none() { return Err("The phone toolbar isn't resolved".into()); }
                         self.state.phone.menu = false;
-                        self.state.workspace.layout.resolve_phone_defaults(WorkspacePreset::Painter)?;
                         self.state.customization.picker = Some(customization::ToolPicker {
                             destination: customization::ToolDestination::Phone { before }, query: String::new(), selected: Vec::new(), error: None,
                         });

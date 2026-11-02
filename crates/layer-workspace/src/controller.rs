@@ -252,6 +252,12 @@ struct WorkspaceNotice {
 }
 type Selection = (Option<StoredEntity>, Option<DockLayout>);
 type EditingRefresh = (Box<layer_ui::EditingState>,Box<layer_ui::EditingState>);
+#[derive(Clone, Copy, PartialEq)]
+enum RestoreScope { Desktop, Phone }
+impl RestoreScope {
+    fn phone(self) -> bool { self == Self::Phone }
+}
+
 pub struct WorkspaceController<S: WorkspaceStore + 'static> {
     localization: Arc<layer_ui::Localizer>,
     localization_generation: u64,
@@ -293,6 +299,7 @@ pub struct WorkspaceController<S: WorkspaceStore + 'static> {
     renew_error: Option<StoreError>,
     details_source: Option<StoredEntity>,
     prompt_source: Option<Metadata>,
+    prompt_scope: RestoreScope,
     routed: UiChange,
     startup: Option<Startup>,
     startup_error: Option<StoreError>,
@@ -320,7 +327,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         if let (Some(action), Some(previous)) = (&self.view.prompt_action, &self.view.prompt) {
             let refreshed = match action {
                 ManagerAction::RecoverInterrupted => recover_prompt(&self.localization, self.interrupted_choices()),
-                _ => self.manager.form_prompt_for_scope(action, self.prompt_source.as_ref(), !self.preview_open),
+                _ => self.manager.form_prompt_for_scope(action, self.prompt_source.as_ref(), self.prompt_scope.phone()),
             };
             if let Ok(mut prompt) = refreshed {
                 prompt.name = previous.name.clone();
@@ -411,6 +418,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             renew_error: None,
             details_source: None,
             prompt_source: None,
+            prompt_scope: RestoreScope::Desktop,
             routed: UiChange::default(),
             startup: None,
             startup_error: None,
@@ -614,6 +622,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         self.view.prompt = None;
         self.view.prompt_action = None;
         self.prompt_source = None;
+        self.prompt_scope = RestoreScope::Desktop;
     }
     fn renaming_workspace(&self) -> bool {
         matches!(self.view.prompt_action, Some(ManagerAction::Rename(_)))
@@ -1137,25 +1146,27 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 .map(|i| i.metadata),
             _ => None,
         };
+        let scope = if session.phone_layout().is_some() { RestoreScope::Phone } else { RestoreScope::Desktop };
         let prompt = match &action {
             ManagerAction::RecoverInterrupted => recover_prompt(&self.localization, self.interrupted_choices())?,
-            _ => self.manager.form_prompt_for_scope(&action, source.as_ref(), session.phone_layout().is_some())?,
+            _ => self.manager.form_prompt_for_scope(&action, source.as_ref(), scope.phone())?,
         };
         self.start_transition(session)?;
         let mut change = if matches!(action, ManagerAction::Rename(_) | ManagerAction::Delete(_))
             && source.as_ref().is_some_and(|source| source.kind == ItemKind::Workspace)
         { UiChange::default() } else { self.stop_preview(session) };
-        if let (ManagerAction::Reset(_), Some(entity)) = (&action, &current) && session.phone_layout().is_none() {
+        if let (ManagerAction::Reset(_), Some(entity)) = (&action, &current) && scope == RestoreScope::Desktop {
             session.begin_workspace_layout_preview().map_err(StoreError::invalid)?;
             self.preview_open = true;
             merge(
                 &mut change,
                 session
-                    .preview_workspace_layout(&session.state().workspace.layout.starting_layout_candidate(&entity.starting_layout(self.manager.platform, self.manager.tablet.get())?, false).map_err(StoreError::invalid)?)
+                    .preview_workspace_layout(&session.state().workspace.layout.starting_layout_candidate(&entity.starting_layout(self.manager.platform, self.manager.tablet.get())?, scope.phone()).map_err(StoreError::invalid)?)
                     .map_err(StoreError::invalid)?,
             );
         }
         self.prompt_source = source;
+        self.prompt_scope = scope;
         self.view.prompt = Some(prompt);
         self.view.prompt_action = Some(action);
         Ok(change)
@@ -1190,7 +1201,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         };
         self.start_transition(session)?;
         let m = self.manager.clone();
-        let phone = session.phone_layout().is_some();
+        let phone = self.prompt_scope.phone();
         if action == ManagerAction::ResetBrushes {
             merge(
                 &mut change,

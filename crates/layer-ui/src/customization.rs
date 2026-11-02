@@ -1767,8 +1767,7 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel, copy: &PanelCopy) -> Res
 impl ToolPicker {
     fn remaining(&self, layout: &DockLayout) -> Option<usize> {
         matches!(self.destination, ToolDestination::Phone { .. }).then(||
-            10usize.saturating_sub(layout.phone.as_ref().map_or(crate::WorkspacePreset::Painter.phone_controls().len(),
-                |tiles| tiles.iter().filter(|t| t.control != ToolbarControl::Divider).count())))
+            crate::PhoneLayout::MAX_TOOLS.saturating_sub(layout.phone.iter().flatten().filter(|t| t.control != ToolbarControl::Divider).count()))
     }
     fn accepts(&self, layout: &DockLayout, control: ToolbarControl) -> bool {
         self.remaining(layout).is_none_or(|remaining| crate::phone::tool_allowed(control)
