@@ -253,6 +253,7 @@ fn trim_cap(path: &PathItem, subpath: &Subpath, base: u32, piece: &mut Vec<(usiz
 fn refined_crossing(a: &Edge, b: &Edge, mut t: f64, mut u: f64) -> Option<f64> {
     t = a.from + (a.to - a.from) * t;
     u = b.from + (b.to - b.from) * u;
+    let tolerance = 1. / (GRID * 32.);
     let derivative = |s: &Segment, t: f64| std::array::from_fn::<_, 2, _>(|i| {
         3. * ((s.control[0][i] - s.from[i]) * (1. - t).powi(2)
             + 2. * (s.control[1][i] - s.control[0][i]) * (1. - t) * t
@@ -262,10 +263,17 @@ fn refined_crossing(a: &Edge, b: &Edge, mut t: f64, mut u: f64) -> Option<f64> {
     for _ in 0..24 {
         let (p, q) = (a.segment.point(t), b.segment.point(u));
         let error = [p[0] - q[0], p[1] - q[1]];
-        if error[0].hypot(error[1]) <= 1. / (GRID * 32.) { return Some(a.base + t); }
+        if error[0].hypot(error[1]) <= tolerance { return Some(a.base + t); }
         let (da, db) = (derivative(&a.segment, t), derivative(&b.segment, u));
         let denominator = cross(da, db);
-        if denominator.abs() < 1e-12 { return None; }
+        if denominator.abs() < 1e-12 {
+            let (place, distance) = if u == 0. || u == 1. {
+                super::points::closest_segment(a.segment, q, a.from, a.to)
+            } else if t == 0. || t == 1. {
+                (t, super::points::closest_segment(b.segment, p, b.from, b.to).1)
+            } else { return None; };
+            return (distance <= tolerance).then_some(a.base + place);
+        }
         t = (t - cross(error, db) / denominator).clamp(0., 1.);
         u = (u - cross(error, da) / denominator).clamp(0., 1.);
     }
@@ -600,6 +608,22 @@ mod tests {
         assert_eq!(pieces.len(), 2);
         for point in [pieces[0].open_ends().unwrap()[1], pieces[1].open_ends().unwrap()[0]] {
             assert!(curved.nearest_segment(point, 0.001).unwrap().distance <= 1. / GRID, "{point:?} lies at the curved crossing");
+        }
+    }
+    #[test]
+    fn intersection_erasing_stops_at_asymmetric_t_endpoints() {
+        let path = line(&[[0., 0.], [100., 0.]], 2., Cap::Butt);
+        for x in [25., 75.] {
+            for reversed in [false, true] {
+                let points = if reversed { [[x, 100.], [x, 0.]] } else { [[x, 0.], [x, 100.]] };
+                let other = line(&points, 2., Cap::Butt);
+                let pieces = path.erased(&eraser([5., 0.], 1.), Some(&[&other])).unwrap();
+                assert_eq!(pieces.len(), 1, "T at {x}, reversed={reversed}");
+                let ends = pieces[0].open_ends().unwrap();
+                assert!((ends[0][0] - x).abs() <= 1. / GRID && ends[0][1].abs() <= 1. / GRID, "{ends:?}");
+                assert!(pieces[0].hit([90., 0.], 0.));
+                assert!(!pieces[0].hit([5., 0.], 0.));
+            }
         }
     }
     #[test]
