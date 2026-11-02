@@ -750,4 +750,4 @@ mod tests {
 
 #[cfg(test)]
 #[path="session_tests.rs"]
-mod persistence_tests;
+pub(crate) mod persistence_tests;

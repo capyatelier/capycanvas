@@ -137,6 +137,10 @@ history so intermediate input edits cannot hide behind a later restore.
 generator in private temporary storage and reads every generated input through
 the release loaders without expectation files; output excludes markers and locks.
 
+`generated_saved_documents_set_every_field` (UI) checks non-default saved fields,
+including serde omissions; `generated_fixtures_cover_every_record_kind` (core)
+checks generator record coverage.
+
 `saved_documents_tolerate_missing_and_unknown_fields` in the affected suites
 removes defaultable app-state options and adds unknown struct fields; required
 identities and structure still fail validation. Closed artwork records keep

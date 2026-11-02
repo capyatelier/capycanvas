@@ -1,0 +1,1465 @@
+{
+  "canvas_tool": "hand",
+  "color_library": {
+    "active": 400,
+    "history": [
+      {
+        "linear_rgb": [
+          0.12999999523162842,
+          0.27000001072883606,
+          0.6299999952316284
+        ],
+        "rgba": [
+          0.3958812654018402,
+          0.5563933253288269,
+          0.8152506351470947,
+          0.699999988079071
+        ],
+        "space": "DisplayP3"
+      }
+    ],
+    "next_id": 402,
+    "palettes": [
+      {
+        "id": 400,
+        "name": "Coverage",
+        "swatches": [
+          {
+            "color": {
+              "linear_rgb": [
+                0.12999999523162842,
+                0.27000001072883606,
+                0.6299999952316284
+              ],
+              "rgba": [
+                0.3958812654018402,
+                0.5563933253288269,
+                0.8152506351470947,
+                0.699999988079071
+              ],
+              "space": "DisplayP3"
+            },
+            "id": 401,
+            "name": "Ink"
+          }
+        ]
+      }
+    ],
+    "pending_name": [
+      {
+        "linear_rgb": [
+          0.12999999523162842,
+          0.27000001072883606,
+          0.6299999952316284
+        ],
+        "rgba": [
+          0.3958812654018402,
+          0.5563933253288269,
+          0.8152506351470947,
+          0.699999988079071
+        ],
+        "space": "DisplayP3"
+      },
+      "Named paint"
+    ],
+    "selected": 401,
+    "starters_installed": false
+  },
+  "colors": {
+    "background": {
+      "linear_rgb": [
+        0.22999998927116394,
+        0.27000001072883606,
+        0.6299999952316284
+      ],
+      "rgba": [
+        0.5168810486793518,
+        0.5563933253288269,
+        0.8152506351470947,
+        0.699999988079071
+      ],
+      "space": "DisplayP3"
+    },
+    "coordinates": [
+      {
+        "hls": [
+          217.0352325439453,
+          60.55659484863281,
+          53.1609001159668
+        ],
+        "hsv": [
+          217.0352325439453,
+          51.44054412841797,
+          81.52506256103516
+        ],
+        "okhsv": [
+          255.21287536621094,
+          55.3386344909668,
+          82.72335815429688
+        ],
+        "rgb": [
+          0.3958812654018402,
+          0.5563933253288269,
+          0.8152506351470947
+        ]
+      },
+      {
+        "hls": [
+          232.0543670654297,
+          66.60658264160156,
+          44.67490768432617
+        ],
+        "hsv": [
+          232.0543670654297,
+          36.5985107421875,
+          81.52506256103516
+        ],
+        "okhsv": [
+          275.271484375,
+          43.72905349731445,
+          82.83151245117188
+        ],
+        "rgb": [
+          0.5168810486793518,
+          0.5563933253288269,
+          0.8152506351470947
+        ]
+      },
+      {
+        "hls": [
+          252.35853576660156,
+          68.58219909667969,
+          41.19596481323242
+        ],
+        "hsv": [
+          252.35853576660156,
+          31.751867294311523,
+          81.52506256103516
+        ],
+        "okhsv": [
+          294.42486572265625,
+          42.14900207519531,
+          82.9029541015625
+        ],
+        "rgb": [
+          0.6097115874290466,
+          0.5563933253288269,
+          0.8152506351470947
+        ]
+      }
+    ],
+    "editor": {
+      "forms": [
+        "linear_rgb",
+        "hsl",
+        "oklab"
+      ],
+      "search": "Coverage"
+    },
+    "foreground": {
+      "linear_rgb": [
+        0.12999999523162842,
+        0.27000001072883606,
+        0.6299999952316284
+      ],
+      "rgba": [
+        0.3958812654018402,
+        0.5563933253288269,
+        0.8152506351470947,
+        0.699999988079071
+      ],
+      "space": "DisplayP3"
+    },
+    "hdr_depth": "F32",
+    "hdr_picker": [
+      {
+        "base": {
+          "linear_rgb": [
+            0.12999999523162842,
+            0.27000001072883606,
+            0.6299999952316284
+          ],
+          "rgba": [
+            0.3958812654018402,
+            0.5563933253288269,
+            0.8152506351470947,
+            0.699999988079071
+          ],
+          "space": "DisplayP3"
+        },
+        "stops": 0.0
+      },
+      {
+        "base": {
+          "linear_rgb": [
+            0.22999998927116394,
+            0.27000001072883606,
+            0.6299999952316284
+          ],
+          "rgba": [
+            0.5168810486793518,
+            0.5563933253288269,
+            0.8152506351470947,
+            0.699999988079071
+          ],
+          "space": "DisplayP3"
+        },
+        "stops": 0.0
+      },
+      {
+        "base": {
+          "linear_rgb": [
+            0.32999998331069946,
+            0.27000001072883606,
+            0.6299999952316284
+          ],
+          "rgba": [
+            0.6097115874290466,
+            0.5563933253288269,
+            0.8152506351470947,
+            0.699999988079071
+          ],
+          "space": "DisplayP3"
+        },
+        "stops": 0.0
+      }
+    ],
+    "hues": [
+      217.0352325439453,
+      232.0543670654297,
+      252.35853576660156
+    ],
+    "paint_slot": "background",
+    "readout": "rgb",
+    "rgb_space": "DisplayP3",
+    "shape": "triangle",
+    "slot": "background",
+    "temporary": {
+      "linear_rgb": [
+        0.32999998331069946,
+        0.27000001072883606,
+        0.6299999952316284
+      ],
+      "rgba": [
+        0.6097115874290466,
+        0.5563933253288269,
+        0.8152506351470947,
+        0.699999988079071
+      ],
+      "space": "DisplayP3"
+    }
+  },
+  "figure": [
+    "ellipse",
+    "fill"
+  ],
+  "fill_scope": "connected",
+  "gradient": {
+    "definition": {
+      "interpolation": "Oklab",
+      "stops": [
+        {
+          "color": {
+            "linear_rgb": [
+              0.12999999523162842,
+              0.27000001072883606,
+              0.6299999952316284
+            ],
+            "rgba": [
+              0.3958812654018402,
+              0.5563933253288269,
+              0.8152506351470947,
+              0.699999988079071
+            ],
+            "space": "DisplayP3"
+          },
+          "position": 0.0
+        },
+        {
+          "color": {
+            "linear_rgb": [
+              0.12999999523162842,
+              0.27000001072883606,
+              0.6299999952316284
+            ],
+            "rgba": [
+              0.3958812654018402,
+              0.5563933253288269,
+              0.8152506351470947,
+              0.699999988079071
+            ],
+            "space": "DisplayP3"
+          },
+          "position": 1.0
+        }
+      ]
+    },
+    "shape": "Radial"
+  },
+  "mask_colors": {
+    "background": {
+      "linear_rgb": [
+        0.22999998927116394,
+        0.27000001072883606,
+        0.6299999952316284
+      ],
+      "rgba": [
+        0.5168810486793518,
+        0.5563933253288269,
+        0.8152506351470947,
+        0.699999988079071
+      ],
+      "space": "DisplayP3"
+    },
+    "coordinates": [
+      {
+        "hls": [
+          217.0352325439453,
+          60.55659484863281,
+          53.1609001159668
+        ],
+        "hsv": [
+          217.0352325439453,
+          51.44054412841797,
+          81.52506256103516
+        ],
+        "okhsv": [
+          255.21287536621094,
+          55.3386344909668,
+          82.72335815429688
+        ],
+        "rgb": [
+          0.3958812654018402,
+          0.5563933253288269,
+          0.8152506351470947
+        ]
+      },
+      {
+        "hls": [
+          232.0543670654297,
+          66.60658264160156,
+          44.67490768432617
+        ],
+        "hsv": [
+          232.0543670654297,
+          36.5985107421875,
+          81.52506256103516
+        ],
+        "okhsv": [
+          275.271484375,
+          43.72905349731445,
+          82.83151245117188
+        ],
+        "rgb": [
+          0.5168810486793518,
+          0.5563933253288269,
+          0.8152506351470947
+        ]
+      },
+      {
+        "hls": [
+          252.35853576660156,
+          68.58219909667969,
+          41.19596481323242
+        ],
+        "hsv": [
+          252.35853576660156,
+          31.751867294311523,
+          81.52506256103516
+        ],
+        "okhsv": [
+          294.42486572265625,
+          42.14900207519531,
+          82.9029541015625
+        ],
+        "rgb": [
+          0.6097115874290466,
+          0.5563933253288269,
+          0.8152506351470947
+        ]
+      }
+    ],
+    "editor": {
+      "forms": [
+        "linear_rgb",
+        "hsl",
+        "oklab"
+      ],
+      "search": "Coverage"
+    },
+    "foreground": {
+      "linear_rgb": [
+        0.12999999523162842,
+        0.27000001072883606,
+        0.6299999952316284
+      ],
+      "rgba": [
+        0.3958812654018402,
+        0.5563933253288269,
+        0.8152506351470947,
+        0.699999988079071
+      ],
+      "space": "DisplayP3"
+    },
+    "hdr_depth": "F32",
+    "hdr_picker": [
+      {
+        "base": {
+          "linear_rgb": [
+            0.12999999523162842,
+            0.27000001072883606,
+            0.6299999952316284
+          ],
+          "rgba": [
+            0.3958812654018402,
+            0.5563933253288269,
+            0.8152506351470947,
+            0.699999988079071
+          ],
+          "space": "DisplayP3"
+        },
+        "stops": 0.0
+      },
+      {
+        "base": {
+          "linear_rgb": [
+            0.22999998927116394,
+            0.27000001072883606,
+            0.6299999952316284
+          ],
+          "rgba": [
+            0.5168810486793518,
+            0.5563933253288269,
+            0.8152506351470947,
+            0.699999988079071
+          ],
+          "space": "DisplayP3"
+        },
+        "stops": 0.0
+      },
+      {
+        "base": {
+          "linear_rgb": [
+            0.32999998331069946,
+            0.27000001072883606,
+            0.6299999952316284
+          ],
+          "rgba": [
+            0.6097115874290466,
+            0.5563933253288269,
+            0.8152506351470947,
+            0.699999988079071
+          ],
+          "space": "DisplayP3"
+        },
+        "stops": 0.0
+      }
+    ],
+    "hues": [
+      217.0352325439453,
+      232.0543670654297,
+      252.35853576660156
+    ],
+    "paint_slot": "background",
+    "readout": "rgb",
+    "rgb_space": "DisplayP3",
+    "shape": "triangle",
+    "slot": "background",
+    "temporary": {
+      "linear_rgb": [
+        0.32999998331069946,
+        0.27000001072883606,
+        0.6299999952316284
+      ],
+      "rgba": [
+        0.6097115874290466,
+        0.5563933253288269,
+        0.8152506351470947,
+        0.699999988079071
+      ],
+      "space": "DisplayP3"
+    }
+  },
+  "preset": 42,
+  "region_close_gaps": true,
+  "region_edges": {
+    "grow_shrink": 3
+  },
+  "region_gap_reach": null,
+  "region_smooth_edges": true,
+  "region_sources": [
+    "visible",
+    "reference",
+    "auto"
+  ],
+  "region_stop_at_colors": true,
+  "region_values": {
+    "expansion": 3.0,
+    "gap_closing": 2.0,
+    "smoothing": 0.5,
+    "tolerance": 0.4000000059604645
+  },
+  "selection": {
+    "antialias": false,
+    "brush": {
+      "hardness": 0.4000000059604645,
+      "opacity": 0.6000000238418579,
+      "pressure_size": true,
+      "size": 19.0,
+      "subtract": true
+    },
+    "constrain_angles": true,
+    "constraint": "ratio",
+    "display": {
+      "color": [
+        0.20000000298023224,
+        0.30000001192092896,
+        0.800000011920929,
+        0.4000000059604645
+      ],
+      "outline": false,
+      "overlay": false
+    },
+    "feather": 2.0,
+    "from_center": true,
+    "mode": "add",
+    "ratio": [
+      2.0,
+      3.0
+    ],
+    "size": [
+      123.0,
+      234.0
+    ],
+    "tonal": {
+      "custom": [
+        -2.0,
+        2.0
+      ],
+      "softness": 0.5,
+      "tone": 7
+    },
+    "tool": "ellipse"
+  },
+  "tool_slots": {
+    "choices": {
+      "automatic_selection": {
+        "command": "tonal_select",
+        "type": "command"
+      },
+      "blend": {
+        "group": "effects",
+        "type": "brush_group"
+      },
+      "drawing": {
+        "command": "airbrush",
+        "type": "command"
+      },
+      "figure": {
+        "shape": "path",
+        "type": "figure"
+      },
+      "fill": {
+        "command": "enclose_fill",
+        "type": "command"
+      },
+      "gradient": {
+        "shape": "Reflected",
+        "type": "gradient"
+      },
+      "healing": {
+        "command": "heal",
+        "type": "command"
+      },
+      "lasso": {
+        "command": "polygon_select",
+        "type": "command"
+      },
+      "manual_selection": {
+        "command": "selection_brush",
+        "type": "command"
+      },
+      "marquee": {
+        "command": "ellipse_select",
+        "type": "command"
+      },
+      "operation": {
+        "command": "crop",
+        "type": "command"
+      },
+      "photo_fill": {
+        "command": "enclose_fill",
+        "type": "command"
+      },
+      "retouch": {
+        "id": 42,
+        "type": "brush_preset"
+      },
+      "ruler": {
+        "kind": "radial",
+        "type": "ruler"
+      }
+    }
+  },
+  "tools": {
+    "drawing": 9,
+    "groups": {
+      "airbrush": 8,
+      "blend": 62,
+      "effects": 55,
+      "eraser": 3,
+      "liquify": 64,
+      "oil": 59,
+      "paint": 9,
+      "pastel": 17,
+      "pen": 7,
+      "pencil": 26,
+      "retouch": 42,
+      "watercolor": 21,
+      "wet_paint": 47
+    },
+    "overrides": {
+      "1": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "10": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "grain_depth": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "pull": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "spread": 0.0,
+        "streaks": 1.0
+      },
+      "11": {
+        "angle": -3.1415927410125732,
+        "average_pickup": 1.0,
+        "dilution": 0.0,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "paint": 0.0,
+        "pressure_refill": 1.0,
+        "pull": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "12": {
+        "angle": -3.1415927410125732,
+        "distortion": 1.0,
+        "hardness": 0.0,
+        "momentum": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "strength": 0.0
+      },
+      "13": {
+        "angle": -3.1415927410125732,
+        "distortion": 1.0,
+        "hardness": 0.0,
+        "momentum": 1.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "strength": 0.0
+      },
+      "14": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "15": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "grain_depth": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "16": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "grain_depth": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "17": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "grain_depth": 0.0,
+        "material_hardness": 0.0,
+        "opacity": 0.0,
+        "size": 0.5,
+        "smoothing_strength": 0.0
+      },
+      "18": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "grain_depth": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "19": {
+        "angle": -3.1415927410125732,
+        "average_pickup": 1.0,
+        "dilution": 0.0,
+        "flow": 0.0,
+        "grain_depth": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "paint": 0.0,
+        "pressure_refill": 1.0,
+        "pull": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "2": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "grain_depth": 0.0,
+        "material_hardness": 0.0,
+        "opacity": 0.0,
+        "size": 0.5,
+        "smoothing_strength": 0.0
+      },
+      "20": {
+        "angle": -3.1415927410125732,
+        "dilution": 0.0,
+        "distance": 0.0,
+        "dry_flow": 0.0,
+        "edge_width": 0.0,
+        "flow": 0.0,
+        "opacity": 0.0,
+        "paint": 0.0,
+        "pull": 0.0,
+        "rotation_jitter": 0.0,
+        "size": 0.5,
+        "size_jitter": 0.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "water_load": 0.0,
+        "wet_edge": 0.0,
+        "wet_flow": 0.0
+      },
+      "21": {
+        "angle": -3.1415927410125732,
+        "dilution": 0.0,
+        "distance": 0.0,
+        "dry_flow": 0.0,
+        "edge_width": 0.0,
+        "flow": 0.0,
+        "opacity": 0.0,
+        "paint": 0.0,
+        "pull": 0.0,
+        "rotation_jitter": 0.0,
+        "size": 0.5,
+        "size_jitter": 0.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "water_load": 0.0,
+        "wet_edge": 0.0,
+        "wet_flow": 0.0
+      },
+      "22": {
+        "angle": -3.1415927410125732,
+        "average_pickup": 1.0,
+        "dilution": 0.0,
+        "flow": 0.0,
+        "grain_depth": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "paint": 0.0,
+        "pressure_refill": 1.0,
+        "pull": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "23": {
+        "angle": -3.1415927410125732,
+        "average_pickup": 1.0,
+        "dilution": 0.0,
+        "flow": 0.0,
+        "grain_depth": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "paint": 0.0,
+        "pressure_refill": 1.0,
+        "pull": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "24": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "grain_depth": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "pull": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "spread": 0.0,
+        "streaks": 0.0
+      },
+      "25": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "grain_depth": 0.0,
+        "material_hardness": 0.0,
+        "opacity": 0.0,
+        "size": 0.5,
+        "smoothing_strength": 0.0
+      },
+      "26": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "grain_depth": 0.0,
+        "material_hardness": 0.0,
+        "opacity": 0.0,
+        "size": 0.5,
+        "smoothing_strength": 0.0
+      },
+      "27": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "grain_depth": 0.0,
+        "material_hardness": 0.0,
+        "opacity": 0.0,
+        "size": 0.5,
+        "smoothing_strength": 0.0
+      },
+      "28": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "29": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "3": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "30": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "31": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "32": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "33": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "34": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "35": {
+        "angle": -3.1415927410125732,
+        "bristle_load": 0.0,
+        "bristle_scale": 0.25,
+        "flow": 0.0,
+        "grain_depth": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "36": {
+        "angle": -3.1415927410125732,
+        "distortion": 1.0,
+        "hardness": 0.0,
+        "momentum": 1.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "strength": 0.0
+      },
+      "37": {
+        "angle": -3.1415927410125732,
+        "distortion": 1.0,
+        "hardness": 0.0,
+        "momentum": 1.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "strength": 0.0
+      },
+      "38": {
+        "angle": -3.1415927410125732,
+        "distortion": 1.0,
+        "hardness": 0.0,
+        "momentum": 1.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "strength": 0.0
+      },
+      "39": {
+        "angle": -3.1415927410125732,
+        "distortion": 0.0,
+        "hardness": 0.0,
+        "momentum": 1.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "strength": 0.0
+      },
+      "4": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "grain_depth": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "40": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "41": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "42": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "43": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "grain_depth": 0.0,
+        "material_hardness": 0.0,
+        "opacity": 0.0,
+        "size": 0.5,
+        "smoothing_strength": 0.0
+      },
+      "44": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "45": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "grain_depth": 1.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "pull": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "spread": 0.0,
+        "streaks": 1.0
+      },
+      "46": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "spread": 0.0
+      },
+      "47": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "grain_depth": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "pull": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "spread": 0.0,
+        "streaks": 0.0
+      },
+      "48": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "grain_depth": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "pull": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "spread": 0.0
+      },
+      "49": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "grit": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "pull": 0.0,
+        "rotation_jitter": 1.0,
+        "scatter_cell_size": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "spread": 0.0
+      },
+      "5": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "50": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "pull": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "spread": 0.0,
+        "stretch": 0.0
+      },
+      "51": {
+        "angle": -3.1415927410125732,
+        "cell_size": 0.0,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "spread": 0.0,
+        "stretch": 4.0
+      },
+      "52": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "pull": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "swirl": 0.0,
+        "swirl_size": 0.0
+      },
+      "53": {
+        "angle": -3.1415927410125732,
+        "edge_keeping": 1.0,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "spread": 0.0
+      },
+      "55": {
+        "angle": -3.1415927410125732,
+        "dither_cell_size": 1.0,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "spread": 0.0
+      },
+      "56": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "grain_depth": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "pull": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "streaks": 0.0
+      },
+      "57": {
+        "angle": -3.1415927410125732,
+        "average_pickup": 1.0,
+        "dilution": 1.0,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "paint": 1.0,
+        "pressure_refill": 1.0,
+        "pull": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "58": {
+        "angle": -3.1415927410125732,
+        "average_pickup": 0.0,
+        "dilution": 1.0,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "paint": 1.0,
+        "persistence": 0.0,
+        "pressure_refill": 1.0,
+        "pull": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "59": {
+        "angle": -3.1415927410125732,
+        "average_pickup": 1.0,
+        "dilution": 0.0,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "paint": 0.0,
+        "pressure_refill": 0.0,
+        "pull": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "6": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "grain_depth": 0.0,
+        "material_hardness": 0.0,
+        "opacity": 0.0,
+        "size": 0.5,
+        "smoothing_strength": 0.0
+      },
+      "60": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "sharpness": 0.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "spread": 0.0
+      },
+      "61": {
+        "angle": -3.1415927410125732,
+        "detail_size": 0.0,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "pull": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "spread": 0.0,
+        "texture_kept": 0.0
+      },
+      "62": {
+        "angle": -3.1415927410125732,
+        "blend_lightness": 1.0,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "pull": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "spread": 0.0
+      },
+      "63": {
+        "angle": -3.1415927410125732,
+        "distortion": 1.0,
+        "hardness": 0.0,
+        "momentum": 1.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "strength": 0.0
+      },
+      "64": {
+        "angle": -3.1415927410125732,
+        "hardness": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "strength": 0.0
+      },
+      "65": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "grain_depth": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "pull": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "spread": 0.0,
+        "streaks": 1.0
+      },
+      "66": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "grain_depth": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "pull": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291,
+        "spread": 0.0,
+        "streaks": 1.0
+      },
+      "7": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "8": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 0.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      },
+      "9": {
+        "angle": -3.1415927410125732,
+        "flow": 0.0,
+        "grain_depth": 0.0,
+        "hardness": 0.0,
+        "opacity": 0.0,
+        "rotation_jitter": 1.0,
+        "size": 0.5,
+        "size_jitter": 1.0,
+        "smoothing_strength": 0.0,
+        "spacing": 0.004999999888241291
+      }
+    },
+    "sculpt": 42,
+    "tools": {
+      "airbrush": 8,
+      "blend": 55,
+      "brush": 9,
+      "clone": 40,
+      "eraser": 3,
+      "heal": 41,
+      "liquify": 64,
+      "pen": 7,
+      "pencil": 17,
+      "spot_heal": 42
+    }
+  },
+  "version": 4
+}

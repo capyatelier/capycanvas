@@ -1,0 +1,319 @@
+{
+  "version": 1,
+  "new_document": {
+    "paper": "coverage",
+    "setups": [
+      {
+        "name": "Coverage",
+        "group": "yours",
+        "setup": {
+          "unit": "mm",
+          "width": 297000,
+          "height": 210000,
+          "resolution": 300,
+          "color": {
+            "space": "Srgb",
+            "depth": "U8"
+          },
+          "blend_space": "Perceptual",
+          "paper": {
+            "texture": "coverage",
+            "color": {
+              "space": "DisplayP3",
+              "rgba": [
+                0.39588127,
+                0.5563933,
+                0.81525064,
+                0.7
+              ],
+              "linear_rgb": [
+                0.13,
+                0.27,
+                0.63
+              ]
+            },
+            "transparent": true,
+            "relief": 100
+          }
+        }
+      }
+    ],
+    "recent": [
+      {
+        "type": "saved",
+        "id": "Coverage"
+      }
+    ],
+    "last": {
+      "unit": "mm",
+      "width": 297000,
+      "height": 210000,
+      "resolution": 300,
+      "color": {
+        "space": "Srgb",
+        "depth": "U8"
+      },
+      "blend_space": "Perceptual",
+      "paper": {
+        "texture": "coverage",
+        "color": {
+          "space": "DisplayP3",
+          "rgba": [
+            0.39588127,
+            0.5563933,
+            0.81525064,
+            0.7
+          ],
+          "linear_rgb": [
+            0.13,
+            0.27,
+            0.63
+          ]
+        },
+        "transparent": true,
+        "relief": 100
+      }
+    },
+    "paper_colors": [
+      {
+        "space": "DisplayP3",
+        "rgba": [
+          0.39588127,
+          0.5563933,
+          0.81525064,
+          0.7
+        ],
+        "linear_rgb": [
+          0.13,
+          0.27,
+          0.63
+        ]
+      }
+    ]
+  },
+  "photo_open": {
+    "promote_to_16": true,
+    "missing_profile": "ask"
+  },
+  "language": {
+    "Explicit": "ja"
+  },
+  "theme": "dark",
+  "transparency": "high",
+  "dark_base": "#444444",
+  "light_base": "#cccccc",
+  "accent": "#b85050",
+  "zen_icon": "sleeping",
+  "zen_show_capy": false,
+  "selection_painting": "black_white",
+  "pressure_curve": [
+    [
+      0.0,
+      0.0
+    ],
+    [
+      1.0,
+      1.0
+    ]
+  ],
+  "tilt_calibrations": {
+    "coverage": {
+      "response": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0
+        ]
+      ],
+      "axes": {
+        "reverse_horizontal": false,
+        "reverse_vertical": false,
+        "swap": false
+      }
+    }
+  },
+  "cursor": "cross",
+  "hide_cursor_while_drawing": false,
+  "pan_speed": 1.5,
+  "zoom_speed": 0.75,
+  "zoom_tool": {
+    "zoom_out": true,
+    "drag": "area",
+    "direction": "vertical",
+    "center_clicked_point": true
+  },
+  "wheel_zoom": true,
+  "rotate_with_two_fingers": false,
+  "quick_pinch_fit": false,
+  "quick_pinch_restore": false,
+  "snap_rotation": false,
+  "pass_through_groups": true,
+  "feedback": false,
+  "platform_prediction": false,
+  "prediction_ms": 12.0,
+  "shortcuts": {
+    "command.Undo": []
+  },
+  "gestures": {
+    "touch.tap.2": "command.Redo"
+  },
+  "pen_buttons": {
+    "pen.button.primary": {
+      "drawing": "command.Redo"
+    }
+  },
+  "hold_keys": [
+    {
+      "key": {
+        "key": " ",
+        "command": false,
+        "shift": false,
+        "alt": false
+      },
+      "actions": {
+        "drawing": "command.Hand",
+        "erasing": "command.Hand",
+        "blending": "command.Hand",
+        "warping": "command.Hand",
+        "selection": "command.Hand",
+        "fill_gradient": "command.Hand",
+        "shapes_rulers": "command.Hand",
+        "move_transform": "command.Hand",
+        "color_sampling": "command.Hand",
+        "navigation": "command.Hand",
+        "retouching": "command.Hand"
+      }
+    },
+    {
+      "key": {
+        "key": " ",
+        "command": true,
+        "shift": false,
+        "alt": false
+      },
+      "actions": {
+        "drawing": "command.Zoom",
+        "erasing": "command.Zoom",
+        "blending": "command.Zoom",
+        "warping": "command.Zoom",
+        "selection": "command.Zoom",
+        "fill_gradient": "command.Zoom",
+        "shapes_rulers": "command.Zoom",
+        "move_transform": "command.Zoom",
+        "color_sampling": "command.Zoom",
+        "navigation": "command.Zoom",
+        "retouching": "command.Zoom"
+      }
+    },
+    {
+      "key": {
+        "key": " ",
+        "command": false,
+        "shift": true,
+        "alt": false
+      },
+      "actions": {
+        "drawing": "command.RotateView",
+        "erasing": "command.RotateView",
+        "blending": "command.RotateView",
+        "warping": "command.RotateView",
+        "selection": "command.RotateView",
+        "fill_gradient": "command.RotateView",
+        "shapes_rulers": "command.RotateView",
+        "move_transform": "command.RotateView",
+        "color_sampling": "command.RotateView",
+        "navigation": "command.RotateView",
+        "retouching": "command.RotateView"
+      }
+    },
+    {
+      "key": {
+        "key": "control",
+        "command": false,
+        "shift": false,
+        "alt": false
+      },
+      "actions": {
+        "drawing": "command.Eyedropper",
+        "blending": "command.Eyedropper",
+        "fill_gradient": "command.Eyedropper"
+      }
+    },
+    {
+      "key": {
+        "key": " ",
+        "command": false,
+        "shift": false,
+        "alt": true
+      },
+      "actions": {
+        "drawing": "command.ZoomOut",
+        "erasing": "command.ZoomOut",
+        "blending": "command.ZoomOut",
+        "warping": "command.ZoomOut",
+        "selection": "command.ZoomOut",
+        "fill_gradient": "command.ZoomOut",
+        "shapes_rulers": "command.ZoomOut",
+        "move_transform": "command.ZoomOut",
+        "color_sampling": "command.ZoomOut",
+        "navigation": "command.ZoomOut",
+        "retouching": "command.ZoomOut"
+      }
+    },
+    {
+      "key": {
+        "key": " ",
+        "command": true,
+        "shift": false,
+        "alt": true
+      },
+      "actions": {
+        "drawing": "command.ZoomOut",
+        "erasing": "command.ZoomOut",
+        "blending": "command.ZoomOut",
+        "warping": "command.ZoomOut",
+        "selection": "command.ZoomOut",
+        "fill_gradient": "command.ZoomOut",
+        "shapes_rulers": "command.ZoomOut",
+        "move_transform": "command.ZoomOut",
+        "color_sampling": "command.ZoomOut",
+        "navigation": "command.ZoomOut",
+        "retouching": "command.ZoomOut"
+      }
+    },
+    {
+      "key": {
+        "key": "alt",
+        "command": false,
+        "shift": false,
+        "alt": false
+      },
+      "actions": {
+        "retouching": "command.CloneSourceArm"
+      }
+    }
+  ],
+  "eraser_end": {
+    "tool": "pencil",
+    "erase": false
+  },
+  "vector_eraser": "whole_paths",
+  "keep_outline_widths": true,
+  "keymap": {
+    "id": "krita",
+    "revision": 5
+  },
+  "slider_bookmarks": {
+    "2": {
+      "size": [
+        19.0
+      ],
+      "strength": [
+        0.4
+      ]
+    }
+  }
+}

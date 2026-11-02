@@ -12,6 +12,10 @@ fn prepared(editor:&Editor,metadata:impl Into<crate::package::session::SessionMe
 #[ignore]
 fn write_compat_fixtures() {
     let directory=PathBuf::from(std::env::var_os("CAPY_COMPAT_OUT").expect("CAPY_COMPAT_OUT"));
+    generate(&directory);
+}
+
+pub(crate) fn generate(directory:&Path) {
     let mut unsupported=fixture();perform_all(&mut unsupported);unsupported.undo().unwrap();unsupported.undo().unwrap();
     SessionStore::open(&directory.join("unsupported-session")).unwrap()
         .commit(&prepared(&unsupported,json!({"tab":"Release 色"})),&AtomicBool::new(false)).unwrap();
