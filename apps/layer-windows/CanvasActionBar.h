@@ -10,7 +10,7 @@ namespace CapyUi {
 struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
     static constexpr double Offscreen=-100000;
     struct Field {FrameworkElement slot{nullptr},element{nullptr};};
-    struct Prepared {StackPanel row;TextBlock caption{nullptr};Button more{nullptr};std::vector<Field> fields;J view,sizes;hstring schema,theme;};
+    struct Prepared {StackPanel row;TextBlock caption{nullptr};std::vector<Field> fields;J view,sizes;hstring schema,theme;};
     std::shared_ptr<WorkspaceData> data;
     std::function<void()> changed;
     Canvas host{nullptr};
@@ -37,6 +37,8 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
         host=root;
         auto style=toolbarUi(data->localization.get(),O({{L"type",S(L"style")},{L"style",S(L"small")}})).GetObject();
         tile=array(style,L"size").GetNumberAt(1);gap=num(style,L"gap",gap);glyph=num(style,L"icon",glyph);
+        more=button(data,L"",[weak=weak_from_this()]{if(auto self=weak.lock())self->openMenu();});tiled(more);
+        AutomationProperties::SetAutomationId(more,L"canvas-bar-more");copyName(data,more,data->copyCommon(L"more"),true);more.Content(face(L"more",data->theme(),false));
         surface.IsHitTestVisible(false);content.Children().Append(surface);content.Children().Append(row);
         frame.Child(content);frame.Background(clear());
         AutomationProperties::SetAutomationId(frame,L"canvas-action-bar");copyName(data,frame,data->copyCaption(L"color",L"canvas_actions"));
@@ -206,8 +208,6 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
         next->row.Orientation(Orientation::Horizontal);next->row.Spacing(gap);
         next->caption=label(data,str(model,L"label"));next->caption.VerticalAlignment(VerticalAlignment::Center);next->caption.Margin({12,0,8,0});next->caption.Opacity(.8);
         next->caption.Visibility(str(model,L"label").empty()?Visibility::Collapsed:Visibility::Visible);next->row.Children().Append(next->caption);
-        next->more=button(data,L"",[weak=weak_from_this()]{if(auto self=weak.lock())self->openMenu();});tiled(next->more);
-        AutomationProperties::SetAutomationId(next->more,L"canvas-bar-more");copyName(data,next->more,data->copyCommon(L"more"),true);
         auto append=[&](wchar_t const* list){
             for(auto value:array(model,list)){
                 auto item=value.GetObject();auto made=field(item);
@@ -215,8 +215,7 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
                 next->row.Children().Append(entry.slot);next->fields.push_back(entry);
             }
         };
-        append(L"items");next->row.Children().Append(next->more);append(L"completion");
-        next->more.Content(face(L"more",data->theme(),false));return next;
+        append(L"items");append(L"completion");return next;
     }
     void Apply(J const& state){
         auto value=state.GetNamedValue(L"canvas_bar",JsonValue::CreateNullValue());
@@ -236,7 +235,7 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
     }
     J measure(std::shared_ptr<Prepared> const& prepared={}){
         auto const& measuredFields=prepared?prepared->fields:fields;auto measuredView=prepared?prepared->view:view;
-        auto measuredCaption=prepared?prepared->caption:caption;auto measuredMore=prepared?prepared->more:more;
+        auto measuredCaption=prepared?prepared->caption:caption;
         std::vector<double> widths;
         double height=0;
         auto extent=[&](FrameworkElement const& element){element.Measure({INFINITY,INFINITY});height=std::max(height,double(element.DesiredSize().Height));return double(element.DesiredSize().Width);};
@@ -245,13 +244,16 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
         A itemWidths,completionWidths;
         for(size_t i=0;i<widths.size();++i)(i<count?itemWidths:completionWidths).Append(N(widths[i]));
         return O({{L"label",N(measuredCaption.Visibility()==Visibility::Visible?extent(measuredCaption):0)},
-            {L"items",itemWidths},{L"completion",completionWidths},{L"more",N(extent(measuredMore))},
+            {L"items",itemWidths},{L"completion",completionWidths},{L"more",N(more.Width())},
             {L"height",N(std::max(height,tile))},{L"gap",N(gap)},{L"padding",N(0)}});
     }
     void install(std::shared_ptr<Prepared> const& prepared,J const& result){
         if(prepared){
             menuOwner.Cancel();view=prepared->view;sizes=prepared->sizes;schema=prepared->schema;theme=prepared->theme;
-            row=prepared->row;caption=prepared->caption;more=prepared->more;fields=prepared->fields;pending.reset();
+            uint32_t index;if(row.Children().IndexOf(more,index))row.Children().RemoveAt(index);
+            prepared->row.Children().InsertAt(1+array(prepared->view,L"items").Size(),more);
+            row=prepared->row;caption=prepared->caption;fields=prepared->fields;pending.reset();
+            more.Content(face(L"more",data->theme(),false));
             content.Children().SetAt(1,row);surface.Fill(data->glass(L"panel"));restore();
         }
         bounds=object(result,L"bounds");shown=size_t(num(result,L"items"));

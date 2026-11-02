@@ -252,6 +252,15 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         require(text(peers[0],apply)&&text(peers[1],cancel)&&text(peers[3],apply)&&text(peers[4],cancel)&&text(peers[5],cancel),L"Retained canvas-bar visible action/menu/choice text stayed English");
         auto measured=bar->measure();measured.Insert(L"context",bar->context());require(measurements->back().Stringify()==measured.Stringify(),L"Localized canvas-bar layout used stale native text measurements");publication(japanese);
         require(measurements->size()==2&&source->state.Stringify()==authored,L"Canvas-bar localization repeated measurement or changed authored state");
+        auto narrowed=J::Parse(japanese.Stringify());object(object(narrowed,L"canvas_bar"),L"context").Insert(L"generation",N(2));
+        bar->Apply(narrowed);
+        require(bar->pending&&measurements->size()==3,L"Changed canvas-bar context did not prepare its replacement row");
+        require(num(measurements->back(),L"more")==num(measured,L"more"),L"Prepared canvas-bar row changed the retained More extent");
+        require(bar->row==row&&bar->more==more&&VisualTreeHelper::GetParent(more)==row,L"Canvas-bar preparation detached the retained More before publication");
+        publication(narrowed);
+        require(bar->more==more,L"Canvas-bar context publication replaced the retained More control");
+        require(AutomationProperties::GetName(more)==source->common(L"more")&&AutomationProperties::GetHelpText(more)==source->common(L"more"),L"Retained More copy changed after canvas-bar context publication");
+        require(!bar->menuOwner.Open(),L"Changed canvas-bar context retained its old owned menu");
         bar->menuOwner.Cancel();co_await wait([&]{return !popup.IsOpen()&&source->transients.empty()&&source->popupCount==0;},L"Canvas-bar menu did not retire after localization");
         root.Children().RemoveAt(0);bar.reset();root.Width(400);root.Height(240);++checks;
     }
