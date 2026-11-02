@@ -12,7 +12,7 @@ pub(crate) struct ManagerUi {
     presented: Cell<bool>,
     closing: Cell<bool>,
     page: Cell<Option<ManagerPage>>,
-    tabs: gtk::Box,
+    tabs: adw::WrapBox,
     search: gtk::SearchEntry,
     list: gtk::ListBox,
     list_scroll: gtk::ScrolledWindow,
@@ -70,7 +70,7 @@ impl ManagerUi {
         view.add_top_bar(&header);
         let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
         body.add_css_class("dialog-page");
-        let tabs = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let tabs = adw::WrapBox::builder().child_spacing(6).line_spacing(6).build();
         body.append(&tabs);
         let intro = gtk::Label::new(None);
         intro.set_xalign(0.);
@@ -167,8 +167,9 @@ impl ManagerUi {
         footer.append(&apply);
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
         content.add_css_class("dialog-content");
-        let page = crate::squircle::Squircles::new(&body);
-        page.set_vexpand(true);
+        let page = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never).propagate_natural_height(true).vexpand(true)
+            .child(&crate::squircle::Squircles::new(&body)).build());
         content.append(&page);
         content.append(&crate::squircle::Squircles::new(&footer));
         view.set_content(Some(&content));
@@ -406,9 +407,13 @@ impl ManagerUi {
     fn arrange(&self, w: &Workspace, width: i32) {
         let compact = matches!(self.page.get(), Some(ManagerPage::Workspaces | ManagerPage::History));
         let phone = w.gpu.borrow().as_ref().is_some_and(|gpu| gpu.session.phone_layout().is_some());
-        let minimum = [self.sidebar.measure(gtk::Orientation::Horizontal, -1).0 as f32,
-            self.details.first_child().map_or(0., |_| self.details.measure(gtk::Orientation::Horizontal, -1).0 as f32)];
+        let detail_minimum = (PANEL_MIN_WIDTH as i32 + self.details.margin_start() + self.details.margin_end())
+            .max(self.details.measure(gtk::Orientation::Horizontal, -1).0);
+        let minimum = [self.sidebar.measure(gtk::Orientation::Horizontal, -1).0.max(220) as f32,
+            self.details.first_child().map_or(0., |_| detail_minimum as f32)];
         let narrow = !compact && phone && !dialog_panes_fit(width as f32, minimum, 12.);
+        self.sidebar.set_width_request(if narrow { -1 } else { 220 });
+        self.details.set_width_request(if narrow { -1 } else { PANEL_MIN_WIDTH as i32 });
         self.detail_title.set_visible(!narrow);
         let shown = self.panes.visible_child_name().as_deref() == Some("narrow");
         if narrow && !shown {
@@ -447,7 +452,7 @@ impl ManagerUi {
         self.dialog
             .set_content_height(if compact { 500 } else { 600 });
         self.tabs.set_visible(toolbar);
-        clear(&self.tabs);
+        while let Some(child) = self.tabs.first_child() { self.tabs.remove(&child); }
         if toolbar {
             for tab in [ManagerPage::ThisWorkspace, ManagerPage::ToolbarLibrary] {
                 let button = gtk::ToggleButton::with_label(&tab.label(&w.localization()));

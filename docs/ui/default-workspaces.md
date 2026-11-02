@@ -255,6 +255,9 @@ retain their ordinary docked Properties panels.
 
 Web is the visual reference for the manager's layout and controls across clients.
 Native dialog shells, menus and input retain platform conventions.
+The GTK manager wraps its toolbar-library tabs and fits each detail page within
+the available width, including phone windows down to 280 logical pixels. Short
+pages scroll below the navigation header so Close and Back stay available.
 
 The Window menu starts with Customize Title Bar…, then Undo Layout Change and
 Redo Layout Change, then the **Workspaces** and **Quick Access Toolbars**

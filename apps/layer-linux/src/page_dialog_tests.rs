@@ -137,6 +137,37 @@ fn native_edit_color_narrow_bounds() {
     d.finish();
 }
 
+#[test]
+#[ignore = "private compositor: --native-test=native_toolbar_manager_narrow_bounds --native-storage; viewport/theme external"]
+fn native_toolbar_manager_narrow_bounds() {
+    let mut d = super::phone_motion::setup("art.capycanvas.ToolbarManagerNarrowBounds");
+    d.w.workspaces.ui.show(&d.w, layer_workspace::ManagerPage::ThisWorkspace);
+    let (dialog, frame) = page_frame(&d);
+    super::phone::capture(&mut d, "toolbar-manager-narrow-bounds");
+    let header = page_header(&frame).compute_bounds(&d.w.window).unwrap();
+    assert!(header.y() >= 0. && header.y() + header.height() <= d.w.window.height() as f32,
+        "the manager header stays inside the window: {header:?}");
+    let body = crate::page_dialog::content(&dialog).unwrap();
+    assert!(body.measure(gtk::Orientation::Horizontal, -1).0 <= frame.width(), "toolbar manager body fits the page");
+    for tab in [layer_workspace::ManagerPage::ThisWorkspace, layer_workspace::ManagerPage::ToolbarLibrary] {
+        let label = mapped_label(&frame, &tab.label(&d.w.localization())).unwrap();
+        let bounds = label.compute_bounds(&frame).unwrap();
+        assert!(bounds.x() >= 0. && bounds.x() + bounds.width() <= frame.width() as f32, "toolbar manager tab fits: {bounds:?}");
+    }
+    page(&d);
+    let list = named::<gtk::ListBox>(&frame, "workspace-manager-items");
+    let row = list.row_at_index(0).unwrap();
+    super::histogram::scroll_to(row.upcast_ref());
+    d.click(row.upcast_ref());
+    let split = descendants::<adw::NavigationSplitView>(&frame).into_iter().find(|view| view.is_mapped()).unwrap();
+    until(|| split.shows_content(), "the native manager opens its detail page");
+    super::phone::capture(&mut d, "toolbar-manager-detail-minimum");
+    let details = find_named(&frame, "workspace-manager-details").unwrap();
+    assert!(details.measure(gtk::Orientation::Horizontal, -1).0 <= details.parent().unwrap().width(), "manager detail minimum fits its allocated parent");
+    close(&d, &dialog);
+    d.finish();
+}
+
 fn page_header(frame: &gtk::Widget) -> adw::HeaderBar {
     until(|| descendants::<adw::HeaderBar>(frame).into_iter().filter(|header| header.is_mapped()).count() == 1,
         "native navigation leaves one mapped header");
