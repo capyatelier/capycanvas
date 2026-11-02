@@ -42,6 +42,7 @@ impl Sheet {
         let view = adw::ToolbarView::new();
         view.add_top_bar(&header);
         dialog.set_child(Some(&view));
+        crate::page_dialog::configure(&dialog, crate::page_dialog::Metadata::new().title(&title, "title").header(&view, &header));
         Self { dialog, title, header, view, shown: Cell::new(false) }
     }
 
@@ -66,11 +67,11 @@ impl Sheet {
     fn show(&self, open: bool, parent: &adw::Dialog) -> bool {
         match (self.shown.replace(open), open) {
             (false, true) => {
-                self.dialog.present(Some(parent));
+                crate::page_dialog::present(&self.dialog, parent);
                 true
             }
             (true, false) => {
-                self.dialog.close();
+                crate::page_dialog::close_dialog(&self.dialog);
                 false
             }
             _ => false,
@@ -150,7 +151,8 @@ impl Form {
         if self.sheet.dialog.content_height() != natural {
             self.sheet.dialog.set_content_height(natural);
         }
-        let focused = self.sheet.dialog.root().and_then(|root| root.focus()).is_some_and(|f| f.is_ancestor(&self.sheet.dialog));
+        let page = crate::page_dialog::parent(&self.sheet.dialog);
+        let focused = page.root().and_then(|root| root.focus()).is_some_and(|focus| focus.is_ancestor(&page));
         if let Some(row) = self.recording.borrow().as_ref().filter(|_| opened || !focused) {
             row.set_focusable(true);
             row.grab_focus();
@@ -783,7 +785,7 @@ impl ShortcutPage {
         ));
         let picker = self.picker.dialog.clone();
         crate::input::stop_search(&self.picker_search, move |_| {
-            picker.close();
+            crate::page_dialog::close_dialog(&picker);
         });
         self.picker_reset.connect_clicked(glib::clone!(
             #[weak]
@@ -822,7 +824,7 @@ impl ShortcutPage {
                     if w.preferences.shortcut_page.recording() {
                         send(&w, PreferenceAction::CancelShortcut);
                     } else {
-                        dialog.close();
+                        crate::page_dialog::close_dialog(&dialog);
                     }
                 }
             ));
@@ -854,7 +856,7 @@ impl ShortcutPage {
         for sheet in [&self.picker, &self.details] {
             let dialog = sheet.dialog.clone();
             sheet.dismiss_outside(move || {
-                dialog.close();
+                crate::page_dialog::close_dialog(&dialog);
             });
         }
         self.editor.sheet.dialog.connect_closed(glib::clone!(
@@ -935,7 +937,7 @@ impl ShortcutPage {
         self.recording.set(false);
         for sheet in [&self.editor.sheet, &self.modifier.sheet, &self.picker, &self.details] {
             if sheet.shown.replace(false) {
-                sheet.dialog.close();
+                crate::page_dialog::close_dialog(&sheet.dialog);
             }
         }
         if let Some(alert) = self.import.take() {

@@ -85,9 +85,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             PressureCalibrationAction::Measure { extent, viewport } => {
                 if self.pressure_calibration.placement.is_none() {self.pressure_calibration.placement=self.response_calibration_placement(extent,viewport);}
-                self.pressure_calibration.fit(extent, viewport);
+                let area = self.response_calibration_area(viewport); self.pressure_calibration.fit(extent, area);
             },
-            PressureCalibrationAction::Drag { phase, position, viewport } => self.pressure_calibration.drag(phase,position,viewport),
+            PressureCalibrationAction::Drag { phase, position, viewport } => { let area = self.response_calibration_area(viewport); self.pressure_calibration.drag(phase,position,area); },
         }
         if placement_only {
             if let (Some(view), Some(bounds)) = (&mut self.state.pressure_calibration, self.pressure_calibration.placement) { view.bounds = bounds; }

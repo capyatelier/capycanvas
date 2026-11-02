@@ -44,13 +44,13 @@ impl Workspace {
                 }
                 if w.documents.loading.get() {
                     w.documents.cancel_open.set(true);
-                    if let Some(dialog) = w.window.visible_dialog() { dialog.force_close(); }
+                    if let Some(dialog) = w.visible_dialog() { crate::page_dialog::force_close(&dialog); }
                     return glib::Propagation::Stop;
                 }
                 if w.servicing.get() {
                     w.documents.close_pending.set(true);
                     w.documents.cancel_open.set(true);
-                    if let Some(dialog) = w.window.visible_dialog() { dialog.force_close(); }
+                    if let Some(dialog) = w.visible_dialog() { crate::page_dialog::force_close(&dialog); }
                     return glib::Propagation::Stop;
                 }
                 if w.documents.exit_ready.get() {

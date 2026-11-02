@@ -853,8 +853,9 @@ Five pages cover Appearance/Zen, Canvas/navigation, Pen & Input, Keyboard
 Shortcuts and About. `Platform` selects native-window commands, predicted-sample
 controls and renderer information. Core validation checks field availability,
 dependencies, value ranges, shortcut collisions and persisted versions.
-GTK uses libadwaita 1.9's `AdwViewSwitcherSidebar`/`AdwNavigationSplitView` in
-`AdwDialog`; web uses native DOM controls in a matching adaptive modal.
+GTK uses libadwaita 1.9's `AdwViewSwitcherSidebar`/`AdwNavigationSplitView`, in
+an in-window page for the shared phone layout and `AdwDialog` otherwise; web uses
+native DOM controls in an adaptive modal.
 Android uses a full-screen, top-sliding Settings overlay without a global header.
 A full-height sidebar starts with a persistent search field; the main pane has
 its own title and filled Done button. Setting rows render the core name and
@@ -864,10 +865,13 @@ adapt to list/page navigation on narrow screens.
 Printable keys outside editable controls start preferences search through the
 shared input router; the view's transient `search_focus` revision asks each host
 to reveal and focus its search field. Native text editing and shortcut recording
-keep ownership of their input. GTK/web dialogs target 1000 × 744 logical pixels
-and shrink to fit smaller windows. They have no footer or Done button: × or
-Escape closes them, following libadwaita, without custom outside-click
-dismissal. Errors appear below the header only while present.
+keep ownership of their input. GTK's floating dialog and the web dialog target
+1000 × 744 logical pixels and shrink to fit smaller windows. They have no footer
+or Done button: × or Escape closes them, following libadwaita, without custom
+outside-click dismissal. GTK's phone page fills the safe area with its dialog
+surface and close in the header. Settings has no primary action. Pane allocation
+uses measured minimum widths to choose sidebar or list/page navigation. Errors
+appear below the header only while present.
 Android renders simple choices as native anchored dropdowns, with options,
 icons and the selected value supplied by Rust. Selection submits `Edit` without
 navigating. `ImageTiles` renders centered selectable previews instead; both

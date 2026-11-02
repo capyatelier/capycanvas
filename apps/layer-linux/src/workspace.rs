@@ -200,10 +200,10 @@ mod allocation {
             if let Some(owner) = self.owner.borrow().upgrade() {
                 owner.present_toolbars();
                 owner.pressure_calibration.measure(&owner);
-                owner.command_bar.allocate(width, height);
                 owner.bubbles.measure_cards(&owner);
             }
             let mut resolved = self.layout.borrow().resolve([width as f32, height as f32]).with_panel_bridges();
+            if let Some(owner) = self.owner.borrow().upgrade() { owner.command_bar.allocate(width, height, resolved.work_area, resolved.phone.is_some()); }
             if let Some(owner)=self.owner.borrow().upgrade() {
                 if let Some(phone) = &resolved.phone {
                     owner.phone.allocate(&owner, phone, self.layout.borrow().phone_state());
@@ -960,6 +960,7 @@ mod chrome_window_motion_tests {
 }
 
 pub struct Workspace {
+    pub(crate) pages: crate::page_dialog::Pages,
     localization: RefCell<std::sync::Arc<layer_ui::Localizer>>,
     language_transition: RefCell<layer_ui::LanguageTransition>,
     localization_callbacks: RefCell<Vec<crate::LocalizationCallback>>,
@@ -1335,8 +1336,11 @@ impl Workspace {
         content.add_overlay(&image_drop_label);
         let color_strip = crate::color_editor::Strip::new();
         content.add_overlay(&color_strip.root);
+        let pages = crate::page_dialog::Pages::new();
+        content.add_overlay(&pages.root);
         window.set_content(Some(&crate::squircle::Squircles::new(&content)));
         let this = Rc::new(Self {
+            pages,
             localization: RefCell::new(localization.clone()),
             language_transition: RefCell::new(layer_ui::LanguageTransition::new(localization.clone())),
             localization_callbacks: RefCell::new(Vec::new()),
@@ -1464,6 +1468,10 @@ impl Workspace {
             tooltips: Rc::default(),
         });
         this.screen.bind(&this);
+        this.pages.bind(&this);
+        content.connect_get_child_position(glib::clone!(#[weak] this, #[upgrade_or] None, move |_, child| {
+            (child == this.pages.root.upcast_ref::<gtk::Widget>()).then(|| this.pages.allocation(&this))
+        }));
         let (theme, accent) = system_appearance();
         this.apply_palette(Settings::default().palette(theme, Platform::Gtk, accent));
         *this.surface.imp().owner.borrow_mut() = Rc::downgrade(&this);
@@ -1631,7 +1639,7 @@ impl Workspace {
                 // Native sheets own their keys. The main Preferences dialog
                 // retains the shared type-to-search behavior; its focused text
                 // inputs and nested sheets still own ordinary typing.
-                if this.window.visible_dialog().is_some_and(|d| d != this.preferences.dialog)
+                if this.visible_dialog().is_some_and(|d| d != this.preferences.dialog)
                     || this.header.is_editing()
                 {
                     return glib::Propagation::Proceed;
@@ -1670,7 +1678,7 @@ impl Workspace {
             self,
             move |_, key, keycode, modifiers| {
                 if this.command_bar.owns_input() { return; }
-                if this.window.visible_dialog().is_some_and(|d| d != this.preferences.dialog)
+                if this.visible_dialog().is_some_and(|d| d != this.preferences.dialog)
                     && !this.preferences.editing_shortcut()
                 {
                     return;
@@ -1829,7 +1837,7 @@ impl Workspace {
                 let touch = matches!(kind, gdk::EventType::TouchBegin | gdk::EventType::TouchUpdate | gdk::EventType::TouchEnd | gdk::EventType::TouchCancel);
                 let key = (event.device(), touch.then(|| event.event_sequence()), event.downcast_ref::<gdk::ButtonEvent>().map_or(0, |e| e.button()));
                 let was_held = !this.chrome_contacts.borrow().is_empty();
-                if down && this.window.visible_dialog().is_none() && this.header.root.can_target() && picked.as_ref().is_some_and(|widget|
+                if down && this.visible_dialog().is_none() && this.header.root.can_target() && picked.as_ref().is_some_and(|widget|
                     widget == &this.header.root || widget.is_ancestor(&this.header.root) || widget == &this.zen_capy || widget.is_ancestor(&this.zen_capy)) {
                     this.chrome_contacts.borrow_mut().insert(key.clone(), event.clone());
                 } else if matches!(kind, gdk::EventType::ButtonRelease | gdk::EventType::TouchEnd) {
@@ -1848,7 +1856,7 @@ impl Workspace {
                         | gdk::ModifierType::BUTTON3_MASK | gdk::ModifierType::BUTTON4_MASK | gdk::ModifierType::BUTTON5_MASK) {
                     this.chrome_contacts.borrow_mut().retain(|(device, sequence, _), _| device != &key.0 || sequence.is_some());
                 }
-                if down && this.window.visible_dialog().is_none()
+                if down && this.visible_dialog().is_none()
                     && let Some(position) = point
                     && picked.is_none_or(|widget| widget != this.area)
                     && this
@@ -2109,7 +2117,14 @@ impl Workspace {
         reply
     }
 
+    pub(crate) fn visible_dialog(&self) -> Option<adw::Dialog> { self.window.visible_dialog().or_else(|| self.pages.visible()) }
+
     pub fn interact(self: &Rc<Self>, input: UiInput) -> InputReply {
+        if let Some(dialog) = self.visible_dialog()
+            && (matches!(input, UiInput::Pointer { phase: ContactPhase::Down | ContactPhase::Move, .. } | UiInput::ColorPickerHold { .. })
+                || (dialog != self.preferences.dialog && !self.preferences.recording() && matches!(input, UiInput::Key { pressed: true, .. }))) {
+            return InputReply { handled: true, ..Default::default() };
+        }
         let navigation = matches!(input, UiInput::Pointer { phase: ContactPhase::Move, .. });
         if matches!(input, UiInput::Key { pressed: true, .. } | UiInput::Pointer { phase: ContactPhase::Down, .. }) { self.remember_command_focus(); }
         if matches!(input, UiInput::Pointer { phase: ContactPhase::Down, .. }) { self.notice.hide(); }
@@ -2317,7 +2332,7 @@ impl Workspace {
         self.gpu.borrow().as_ref().map_or(1., |g| g.session.engine().backend().display_headroom)
     }
     fn remember_command_focus(&self) {
-        if self.command_bar.owns_input() || self.window.visible_dialog().is_some() { return; }
+        if self.command_bar.owns_input() || self.visible_dialog().is_some() { return; }
         let Some(focus) = gtk::prelude::GtkWindowExt::focus(&self.window) else { return; };
         if focus.native().is_some_and(|n| n.is::<gtk::Popover>()) { return; }
         let mut ancestor = Some(focus.clone());

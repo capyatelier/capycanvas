@@ -95,7 +95,7 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
         #[weak]
         dialog,
         move |ready| {
-            dialog.set_response_enabled("apply", ready);
+            crate::page_dialog::set_response_enabled(&dialog, "apply", ready);
         }
     )));
     let weak = dialog.downgrade(); let current = current.downgrade(); let space_weak = space.downgrade();
@@ -106,8 +106,8 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
         let copy = layer_ui::color_feature_copy::DocumentColorCopy::new(localization);
         dialog.set_heading(Some(&copy.repair_title));
         dialog.set_body(if baked { &copy.source_baked_help } else { &copy.source_native_help });
-        dialog.set_response_label("cancel", &copy.common.cancel);
-        dialog.set_response_label("apply", if baked { &copy.add_source } else { &copy.apply_profile });
+        crate::page_dialog::set_response_label(&dialog, "cancel", &copy.common.cancel);
+        crate::page_dialog::set_response_label(&dialog, "apply", if baked { &copy.add_source } else { &copy.apply_profile });
         if let Some(space) = space_weak.upgrade() { space.set_title(&copy.correct_profile); }
         if let Some(hint) = hint_weak.upgrade() && let Some(reason) = localized_hint.borrow().as_ref() { hint.set_label(&reason.message(localization)); }
         if let Some(current) = current.upgrade() {
@@ -162,7 +162,7 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
     let profile = gio::spawn_blocking(move || super::profile::describe(embedded)).await
         .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile reader failed".into()).profile_message(&w.localization()))?.map_err(|reason| reason.profile_message(&w.localization()))?;
     (chooser.restore)(profile);
-    let response = crate::alert::choose(dialog, &w.window).await;
+    let response = crate::alert::choose_editor(dialog, &w.window, Some("apply"), &[]).await;
     let compared = comparison.ready.get();
     comparison.close();
     comparison.finish().await;

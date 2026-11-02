@@ -38,6 +38,12 @@ impl NoticePlacement {
         Self { x, y, max_width, min_text_width: max_width, window, bar_floor: if window { viewport[1] } else { floor - Self::BAR_REACH } }
     }
 
+    pub fn within(area: Bounds) -> Self {
+        let max_width = (area.width - 2. * Self::MARGIN).clamp(0., Self::MAX_WIDTH);
+        Self { x: area.x + area.width * 0.5, y: area.y + area.height - Self::MARGIN,
+            max_width, min_text_width: max_width, window: false, bar_floor: area.y + area.height - Self::BAR_REACH }
+    }
+
     /// The anchor above a canvas bar placed along the canvas bottom.
     pub fn above(self, bar: Option<Bounds>) -> Self {
         match bar {

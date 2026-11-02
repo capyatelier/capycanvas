@@ -49,6 +49,12 @@ pub const COMMAND_SEARCH_STYLE: CommandSearchStyle = CommandSearchStyle {
 };
 
 impl CommandSearchStyle {
+    pub fn placement(&self, viewport: [f32; 2], work_area: crate::Bounds, phone: bool) -> crate::Bounds {
+        let top = if viewport[0] < 600. { 16. } else { self.top(viewport[1]) };
+        let area = if phone { work_area } else { crate::Bounds { x: 0., y: 0., width: viewport[0], height: viewport[1] } };
+        let width = (area.width - self.inset as f32 * 4.).max(0.).min(self.width as f32);
+        crate::Bounds { x: area.x + (area.width - width) * 0.5, y: area.y + top.min(area.height), width, height: (area.height - top).max(0.) }
+    }
     pub fn top(&self, height: f32) -> f32 {
         (height / 5.).clamp(self.top_min as f32, self.top_max as f32)
     }

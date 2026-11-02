@@ -230,11 +230,12 @@ impl ToolbarManagerUi {
     }
     fn bind(&self, w: &Rc<Workspace>) {
         let view = adw::ToolbarView::new();
-        view.add_top_bar(&adw::HeaderBar::new());
+        let header = adw::HeaderBar::new();
+        view.add_top_bar(&header);
+        crate::page_dialog::configure(&self.dialog, crate::page_dialog::Metadata::new().header(&view, &header).done());
         let body = gtk::Box::new(gtk::Orientation::Vertical, 18);
         margins(&body, 24);
         self.description.set_xalign(0.0);
-        self.description.set_focusable(true);
         self.description.set_wrap(true);
         self.description.add_css_class("dim-label");
         body.append(&self.description);
@@ -303,7 +304,7 @@ impl ToolbarManagerUi {
     fn refresh(&self, w: &Rc<Workspace>, model: Option<ToolbarManagerView>) {
         let Some(model) = model else {
             if self.shown.replace(false) {
-                self.dialog.close();
+                crate::page_dialog::close_dialog(&self.dialog);
             }
             return;
         };
@@ -351,8 +352,7 @@ impl ToolbarManagerUi {
                 .as_ref(),
         );
         if !self.shown.replace(true) {
-            self.dialog.set_focus(Some(&self.description));
-            self.dialog.present(Some(&w.window));
+            crate::page_dialog::present(&self.dialog, &w.window);
         }
     }
 }
@@ -460,7 +460,7 @@ impl Customization {
                     .take()
                     .and_then(|p| p.upgrade());
                 if let Some(source) = source.filter(|s| s.is_mapped())
-                    && w.window.visible_dialog().is_none()
+                    && w.visible_dialog().is_none()
                 {
                     source.grab_focus();
                 }
@@ -591,6 +591,7 @@ impl Customization {
         body.append(&self.error);
         view.set_content(Some(&body));
         self.picker.set_child(Some(&view));
+        crate::page_dialog::configure(&self.picker, crate::page_dialog::Metadata::new().header(&view, &header).primary(&self.confirm).cancel(&cancel));
         self.picker.connect_closed(glib::clone!(
             #[weak]
             w,
@@ -1224,7 +1225,7 @@ impl Customization {
                 }
             }
             if !self.picker_shown.replace(true) {
-                self.picker.present(Some(&w.window));
+                crate::page_dialog::present(&self.picker, &w.window);
                 if view.name.is_some() {
                     self.name.grab_focus();
                 } else {
@@ -1232,23 +1233,19 @@ impl Customization {
                 }
             }
         } else if self.picker_shown.replace(false) {
-            self.picker.close();
+            crate::page_dialog::close_dialog(&self.picker);
             self.catalog.clear();
         }
         self.manager.refresh(w, manager);
         if let Some(view) = prompt {
             self.toolbar_dialog.set_heading(Some(&view.title));
             self.toolbar_dialog.set_body(&view.message);
-            self.toolbar_dialog
-                .extra_child()
+            crate::page_dialog::content(&self.toolbar_dialog)
                 .unwrap()
                 .set_visible(view.name.is_some() || view.error.is_some());
-            self.toolbar_dialog
-                .set_response_label("cancel", &view.cancel_label);
-            self.toolbar_dialog
-                .set_response_label("confirm", &view.confirm_label);
-            self.toolbar_dialog
-                .set_response_enabled("confirm", view.can_confirm);
+            crate::page_dialog::set_response_label(&self.toolbar_dialog, "cancel", &view.cancel_label);
+            crate::page_dialog::set_response_label(&self.toolbar_dialog, "confirm", &view.confirm_label);
+            crate::page_dialog::set_response_enabled(&self.toolbar_dialog, "confirm", view.can_confirm);
             self.toolbar_dialog.set_response_appearance(
                 "confirm",
                 if view.destructive {
@@ -1268,13 +1265,14 @@ impl Customization {
                 .set_label(view.error.as_deref().unwrap_or(""));
             self.toolbar_error.set_visible(view.error.is_some());
             if !self.toolbar_shown.replace(true) {
-                self.toolbar_dialog.present(Some(&w.window));
+                if view.destructive { self.toolbar_dialog.present(Some(&w.window)); }
+                else { crate::page_dialog::present_with(&self.toolbar_dialog, &w.window, layer_ui::DialogRole::Editor, crate::page_dialog::Metadata::responses(Some("confirm"), "cancel", &[])); }
                 if !view.destructive {
                     self.toolbar_name.grab_focus();
                 }
             }
         } else if self.toolbar_shown.replace(false) {
-            self.toolbar_dialog.close();
+            crate::page_dialog::close_dialog(&self.toolbar_dialog);
         }
         self.updating.set(false);
         w.present_popovers();

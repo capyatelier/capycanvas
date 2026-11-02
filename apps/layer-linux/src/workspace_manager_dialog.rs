@@ -17,6 +17,7 @@ pub(crate) struct ManagerUi {
     list: gtk::ListBox,
     list_scroll: gtk::ScrolledWindow,
     details: gtk::Box,
+    detail_title: gtk::Label,
     pub note: gtk::Label,
     rows: RefCell<Vec<String>>,
     rows_key: RefCell<String>,
@@ -27,6 +28,12 @@ pub(crate) struct ManagerUi {
     actions: gtk::Box,
     intro: gtk::Label,
     split: gtk::Paned,
+    panes: gtk::Stack,
+    resize: crate::dialog_content::DialogContent,
+    navigation: adw::NavigationSplitView,
+    sidebar_page: adw::NavigationPage,
+    detail_view: adw::ToolbarView,
+    sidebar: gtk::Box,
     details_view: gtk::ScrolledWindow,
     apply: gtk::Button,
     footer: gtk::Box,
@@ -53,6 +60,9 @@ impl ManagerUi {
         dialog.add_css_class("workspace-manager");
         let view = adw::ToolbarView::new();
         let header = adw::HeaderBar::new();
+        let title = adw::WindowTitle::new(&dialog.title(), "");
+        dialog.bind_property("title", &title, "title").sync_create().build();
+        header.set_title_widget(Some(&title));
         let create = crate::icons::button("layer-plus-symbolic");
         create.set_widget_name("workspace-manager-new");
         create.set_tooltip_text(Some(&localization.text(layer_ui::MessageId::WORKSPACE_NEW_WORKSPACE)));
@@ -113,6 +123,7 @@ impl ManagerUi {
         list_actions.append(&remove);
         sidebar.append(&list_actions);
         let details = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        details.set_width_request(PANEL_MIN_WIDTH as i32);
         details.set_widget_name("workspace-manager-details");
         details.set_margin_start(18);
         details.set_margin_end(8);
@@ -124,7 +135,18 @@ impl ManagerUi {
                 .build(),
         );
         split.set_end_child(Some(&details_view));
-        body.append(&split);
+        let sidebar_page = adw::NavigationPage::builder().title(&*localization.text(layer_ui::MessageId::WORKSPACE_WORKSPACES)).build();
+        let detail_view = adw::ToolbarView::new();
+        let detail_header = adw::HeaderBar::new();
+        detail_view.add_top_bar(&detail_header);
+        let detail_page = adw::NavigationPage::new(&detail_view, &localization.text(layer_ui::MessageId::WORKSPACE_WORKSPACES));
+        let navigation = adw::NavigationSplitView::builder().sidebar(&sidebar_page).content(&detail_page).collapsed(true).build();
+        let panes = gtk::Stack::builder().hhomogeneous(false).vhomogeneous(false).vexpand(true).build();
+        panes.add_named(&split, Some("wide"));
+        panes.add_named(&navigation, Some("narrow"));
+        let resize = crate::dialog_content::new(gtk::Orientation::Vertical, 0);
+        resize.append(&panes);
+        body.append(&resize);
         let apply = gtk::Button::with_label(&localization.text(layer_ui::MessageId::WORKSPACE_ACTION_SWITCH));
         apply.set_widget_name("workspace-manager-apply");
         apply.add_css_class("suggested-action");
@@ -138,7 +160,7 @@ impl ManagerUi {
             #[weak]
             dialog,
             move |_| {
-                dialog.close();
+                crate::page_dialog::close_dialog(&dialog);
             }
         ));
         footer.append(&cancel);
@@ -151,6 +173,7 @@ impl ManagerUi {
         content.append(&crate::squircle::Squircles::new(&footer));
         view.set_content(Some(&content));
         dialog.set_child(Some(&view));
+        crate::page_dialog::configure(&dialog, crate::page_dialog::Metadata::new().header(&view, &header).primary(&apply).cancel(&cancel).top_navigation(&navigation, &detail_page, &detail_header));
         Self {
             dialog,
             presented: Cell::new(false),
@@ -161,6 +184,7 @@ impl ManagerUi {
             list,
             list_scroll: scroll,
             details,
+            detail_title: { let label = gtk::Label::new(None); label.add_css_class("title-2"); label.set_xalign(0.); label },
             note,
             rows: RefCell::new(Vec::new()),
             rows_key: RefCell::new(String::new()),
@@ -170,7 +194,7 @@ impl ManagerUi {
             rebuilding: Cell::new(false),
             actions,
             intro,
-            split,
+            split, panes, resize, navigation, sidebar_page, detail_view, sidebar,
             details_view,
             apply,
             footer,
@@ -187,6 +211,8 @@ impl ManagerUi {
         }
     }
     pub fn bind(&self, w: &Rc<Workspace>) {
+        crate::dialog_content::on_resize(&self.resize, glib::clone!(#[weak] w, move |width| w.workspaces.ui.arrange(&w, width)));
+
         w.workspaces.bind_input_gate(w, &self.dialog);
         let outside = gtk::GestureClick::new();
         outside.set_button(0);
@@ -195,7 +221,7 @@ impl ManagerUi {
         outside.connect_pressed(glib::clone!(#[weak] w, #[weak] dialog, move |_, _, x, y| {
             let rows: Vec<_> = w.workspaces.ui.workspace_rows.borrow().values().cloned().collect();
             for row in rows {
-                if row.swipe.is_open() && !dialog.compute_point(&row.row, &gtk::graphene::Point::new(x as f32, y as f32))
+                if row.swipe.is_open() && !crate::page_dialog::parent(&dialog).compute_point(&row.row, &gtk::graphene::Point::new(x as f32, y as f32))
                     .is_some_and(|point| point.x() >= 0. && point.y() >= 0. && point.x() < row.row.width() as f32 && point.y() < row.row.height() as f32)
                 { row.swipe.reveal(false); }
             }
@@ -299,11 +325,7 @@ impl ManagerUi {
                     w.workspaces.ui.list.select_row(Some(row));
                     return;
                 }
-                // Enter selects a row; the explicitly labeled primary button applies it.
-                w.workspaces
-                    .ui
-                    .details
-                    .child_focus(gtk::DirectionType::TabForward);
+                if w.workspaces.ui.panes.visible_child_name().as_deref() == Some("narrow") { w.workspaces.ui.navigation.set_show_content(true); }
             }
         ));
     }
@@ -336,7 +358,7 @@ impl ManagerUi {
             self.rows_key.borrow_mut().clear();
             if self.presented.get() {
                 self.closing.set(true);
-                self.dialog.close();
+                crate::page_dialog::close_dialog(&self.dialog);
                 self.closing.set(false);
             }
             self.render_prompt(w, view);
@@ -347,6 +369,8 @@ impl ManagerUi {
             self.configure(w, page, &view.query);
         }
         self.dialog.set_title(&view.title);
+        self.sidebar_page.set_title(&view.title);
+        if let Some(page) = self.detail_view.ancestor(adw::NavigationPage::static_type()).and_downcast::<adw::NavigationPage>() { page.set_title(view.details.as_ref().map_or(view.title.as_str(), |details| details.title.as_str())); }
         self.intro.set_text(&view.intro);
         self.intro.set_visible(!view.intro.is_empty());
         let note = view.error.as_ref().or(view.switcher_error.as_ref());
@@ -359,7 +383,7 @@ impl ManagerUi {
         if page == ManagerPage::Workspaces && view.query.is_empty() && !view.rows.is_empty() {
             let rows_height: i32 = (0..view.rows.len().min(7)).filter_map(|index| self.list.row_at_index(index as i32))
                 .map(|row| row.measure(gtk::Orientation::Vertical, -1).1).sum();
-            let controls_height = self.dialog.child().unwrap().measure(gtk::Orientation::Vertical, -1).1
+            let controls_height = crate::page_dialog::content(&self.dialog).unwrap().measure(gtk::Orientation::Vertical, -1).1
                 - self.list_scroll.measure(gtk::Orientation::Vertical, -1).1;
             self.dialog.set_content_height(controls_height + rows_height);
         }
@@ -368,22 +392,50 @@ impl ManagerUi {
         }
         self.apply.set_label(&view.primary);
         self.apply.set_sensitive(view.enabled);
+        self.arrange(w, self.resize.width());
         self.remove.set_sensitive(view.rows.iter().find(|row| Some(&row.id) == view.selected.as_ref())
             .is_some_and(|row| row.options.iter().any(|button| button.enabled && matches!(button.action, ManagerAction::Delete(_)))));
         if !self.presented.replace(true) {
-            self.dialog.present(Some(&w.window));
+            crate::page_dialog::present(&self.dialog, &w.window);
         }
         self.render_prompt(w, view);
-        if page == ManagerPage::Workspaces && w.window.visible_dialog().as_ref() == Some(&self.dialog)
-            && gtk::prelude::RootExt::focus(&w.window).is_none_or(|focus| !focus.is_ancestor(&self.dialog))
+        if page == ManagerPage::Workspaces && w.visible_dialog().as_ref() == Some(&self.dialog)
+            && gtk::prelude::RootExt::focus(&w.window).is_none_or(|focus| !focus.is_ancestor(&crate::page_dialog::parent(&self.dialog)))
         { self.focus_workspace_selection(); }
     }
+    fn arrange(&self, w: &Workspace, width: i32) {
+        let compact = matches!(self.page.get(), Some(ManagerPage::Workspaces | ManagerPage::History));
+        let phone = w.gpu.borrow().as_ref().is_some_and(|gpu| gpu.session.phone_layout().is_some());
+        let minimum = [self.sidebar.measure(gtk::Orientation::Horizontal, -1).0 as f32,
+            self.details.first_child().map_or(0., |_| self.details.measure(gtk::Orientation::Horizontal, -1).0 as f32)];
+        let narrow = !compact && phone && !dialog_panes_fit(width as f32, minimum, 12.);
+        self.detail_title.set_visible(!narrow);
+        let shown = self.panes.visible_child_name().as_deref() == Some("narrow");
+        if narrow && !shown {
+            self.split.set_start_child(gtk::Widget::NONE);
+            self.split.set_end_child(gtk::Widget::NONE);
+            self.sidebar_page.set_child(Some(&self.sidebar));
+            self.detail_view.set_content(Some(&self.details_view));
+            self.navigation.set_show_content(false);
+            self.panes.set_visible_child_name("narrow");
+        } else if !narrow {
+            if shown {
+                self.sidebar_page.set_child(gtk::Widget::NONE);
+                self.detail_view.set_content(gtk::Widget::NONE);
+                self.split.set_start_child(Some(&self.sidebar));
+                self.panes.set_visible_child_name("wide");
+            }
+            self.split.set_end_child((!compact).then_some(&self.details_view));
+        }
+    }
     fn configure(&self, w: &Rc<Workspace>, page: ManagerPage, query: &str) {
+        self.navigation.set_show_content(false);
         let toolbar = matches!(
             page,
             ManagerPage::ThisWorkspace | ManagerPage::ToolbarLibrary
         );
         let compact = !toolbar;
+        crate::page_dialog::primary(&self.dialog, Some(if toolbar { crate::page_dialog::Action::Close } else { crate::page_dialog::Action::Button(self.apply.clone()) }));
         let empty = gtk::Label::new(Some(&w.localization().text(layer_ui::MessageId::NATIVE_HEADER_NO_ITEMS)));
         margins(&empty, 18);
         self.list.set_placeholder(Some(&empty));
@@ -394,11 +446,7 @@ impl ManagerUi {
             .set_content_width(if compact { 460 } else { 780 });
         self.dialog
             .set_content_height(if compact { 500 } else { 600 });
-        self.split.set_end_child(if compact {
-            None
-        } else {
-            Some(&self.details_view)
-        });
+        self.tabs.set_visible(toolbar);
         clear(&self.tabs);
         if toolbar {
             for tab in [ManagerPage::ThisWorkspace, ManagerPage::ToolbarLibrary] {
@@ -412,10 +460,11 @@ impl ManagerUi {
                 self.tabs.append(&button);
             }
         }
-        self.tabs.set_visible(toolbar);
+        self.actions.set_visible(page == ManagerPage::ThisWorkspace);
         clear(&self.actions);
         if page == ManagerPage::ThisWorkspace {
             let button = gtk::Button::with_label(&ManagerAction::NewToolbar(None).label(&w.localization()));
+            button.set_widget_name("workspace-manager-new-toolbar");
             button.connect_clicked(glib::clone!(
                 #[weak]
                 w,
@@ -428,7 +477,6 @@ impl ManagerUi {
             ));
             self.actions.append(&button);
         }
-        self.actions.set_visible(self.actions.first_child().is_some());
         self.details_key.borrow_mut().clear();
         clear(&self.details);
         self.rebuilding.set(true);
@@ -531,14 +579,13 @@ impl ManagerUi {
             }
             return;
         };
-        let title = gtk::Label::new(Some(&details.title));
-        title.add_css_class("title-2");
-        title.set_xalign(0.);
-        self.details.append(&title);
+        self.detail_title.set_label(&details.title);
+        self.details.append(&self.detail_title);
         let description = gtk::Label::new(Some(&details.description));
         description.set_xalign(0.);
         description.set_wrap(true);
         description.set_selectable(true);
+        description.set_focusable(false);
         self.details.append(&description);
         let mut secondary = Vec::new();
         for button in details.actions.iter().cloned() {
@@ -563,7 +610,7 @@ impl ManagerUi {
             *self.draft.borrow_mut() = None;
             let dialog = self.prompt.borrow_mut().take();
             if let Some(dialog) = dialog {
-                dialog.force_close();
+                crate::page_dialog::force_close(&dialog);
             }
             return;
         };
@@ -572,18 +619,18 @@ impl ManagerUi {
             *self.draft.borrow_mut() = None;
             let dialog = self.prompt.borrow_mut().take();
             if let Some(dialog) = dialog {
-                dialog.force_close();
+                crate::page_dialog::force_close(&dialog);
             }
         }
         if let Some(dialog) = self.prompt.borrow().as_ref() {
             dialog.set_heading(Some(&prompt.title));
             dialog.set_body(&prompt.message);
-            dialog.set_response_label("confirm", &prompt.confirm);
-            dialog.set_response_label("cancel", prompt.cancel.as_deref().unwrap_or(&w.localization().text(layer_ui::MessageId::COMMON_CANCEL)));
+            crate::page_dialog::set_response_label(&dialog, "confirm", &prompt.confirm);
+            crate::page_dialog::set_response_label(&dialog, "cancel", prompt.cancel.as_deref().unwrap_or(&w.localization().text(layer_ui::MessageId::COMMON_CANCEL)));
             if let Some(localization) = unsafe { dialog.data::<Rc<RefCell<std::sync::Arc<layer_ui::Localizer>>>>("capy-prompt-localization") } {
                 *unsafe { localization.as_ref() }.borrow_mut() = w.localization();
             }
-            crate::text_language::visit(dialog.upcast_ref(), &mut |widget| {
+            crate::text_language::visit(&crate::page_dialog::parent(dialog), &mut |widget| {
                 if let Some(entry) = widget.downcast_ref::<gtk::Entry>() {
                     let id = match entry.widget_name().as_str() {
                         "workspace-item-name" => Some(layer_ui::MessageId::COMMON_NAME),
@@ -636,7 +683,9 @@ impl ManagerUi {
         );
         *self.prompt_choices.borrow_mut() = prompt.choices.iter().map(|c| c.id.clone()).collect();
         *self.prompt.borrow_mut() = Some(dialog.clone());
-        dialog.present(Some(&w.window));
+        if prompt.name.is_some() || prompt.description.is_some() || !prompt.choices.is_empty() {
+            crate::page_dialog::present_with(&dialog, &w.window, layer_ui::DialogRole::Editor, crate::page_dialog::Metadata::responses(Some("confirm"), "cancel", &[]));
+        } else { dialog.present(Some(&w.window)); }
     }
 }
 fn prompt_dialog(
@@ -690,7 +739,7 @@ fn prompt_dialog(
             validation,
             move |entry| {
                 let result = layer_workspace::validate_name(entry.text().trim());
-                dialog.set_response_enabled("confirm", result.is_ok());
+                crate::page_dialog::set_response_enabled(&dialog, "confirm", result.is_ok());
                 validation.set_text(
                     &result
                         .as_ref()
@@ -700,8 +749,7 @@ fn prompt_dialog(
                 validation.set_visible(result.is_err());
             }
         ));
-        dialog.set_response_enabled(
-            "confirm",
+        crate::page_dialog::set_response_enabled(&dialog, "confirm",
             layer_workspace::validate_name(name.trim()).is_ok(),
         );
         form.append(&entry);
@@ -742,7 +790,7 @@ fn prompt_values(
     choices: &[String],
 ) -> (String, String, Option<String>) {
     let mut values = (String::new(), String::new(), None);
-    let mut child = dialog.extra_child().and_then(|form| form.first_child());
+    let mut child = crate::page_dialog::content(dialog).and_then(|form| form.first_child());
     while let Some(widget) = child {
         match widget.widget_name().as_str() {
             "workspace-item-name" => {

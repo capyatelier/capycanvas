@@ -855,7 +855,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
     }));
     let numeric_rows = dimensions.iter().chain([&quality, &ppi]).cloned().collect::<Vec<_>>();
     export.connect_clicked(glib::clone!(#[weak] dialog, #[strong] response, #[strong] numeric_rows, move |_| {
-        if numeric_inputs_ready(&numeric_rows, true) { response.set("export"); dialog.close(); }
+        if numeric_inputs_ready(&numeric_rows, true) { response.set("export"); crate::page_dialog::close_dialog(&dialog); }
     }));
     let validate: Rc<dyn Fn()> = Rc::new(glib::clone!(
         #[weak] w,
@@ -1005,28 +1005,30 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
     content.append(&links);
     content.append(&clipping_group);
     content.append(&validation);
-    let header = navigation::page(&nav, copy.title.as_ref(), "main", &content);
+    let (_, header) = navigation::page(&nav, copy.title.as_ref(), "main", &content);
     let cancel = gtk::Button::with_label(copy.common.cancel.as_ref());
     cancel.set_widget_name("export-cancel");
-    cancel.connect_clicked(glib::clone!(#[weak] dialog, move |_| { dialog.close(); }));
+    cancel.connect_clicked(glib::clone!(#[weak] dialog, move |_| { crate::page_dialog::close_dialog(&dialog); }));
     header.set_show_end_title_buttons(false);
     header.pack_start(&cancel);
     header.pack_end(&export);
     let size_body = gtk::Box::new(gtk::Orientation::Vertical, 12);
     size_body.append(&group);
     size_body.append(&size_note);
-    navigation::page(&nav, copy.image_size.as_ref(), "size", &size_body);
+    let (_, size_header) = navigation::page(&nav, copy.image_size.as_ref(), "size", &size_body);
     let color_body = gtk::Box::new(gtk::Orientation::Vertical, 12);
     color_body.append(&color_group);
     color_body.append(&jpeg_hint);
     color_body.append(&profile.error);
     color_body.append(&note);
     color_body.append(&advanced_group);
-    navigation::page(&nav, copy.color_transparency.as_ref(), "color", &color_body);
+    let (_, color_header) = navigation::page(&nav, copy.color_transparency.as_ref(), "color", &color_body);
     let presets_body = gtk::Box::new(gtk::Orientation::Vertical, 12);
     presets_body.append(&preset_group);
-    navigation::page(&nav, copy.presets.as_ref(), "presets", &presets_body);
+    let (_, presets_header) = navigation::page(&nav, copy.presets.as_ref(), "presets", &presets_body);
     dialog.set_child(Some(&nav));
+    crate::page_dialog::configure(&dialog, crate::page_dialog::Metadata::new().root_header(&header).primary(&export).cancel(&cancel)
+        .navigation_header(&size_header).navigation_header(&color_header).navigation_header(&presets_header));
     preset.connect_selected_notify(glib::clone!(#[weak] preset_link, move |preset| {
         if let Some(value) = preset.selected_item().and_downcast::<gtk::StringObject>() { preset_link.set_subtitle(&value.string()); }
     }));

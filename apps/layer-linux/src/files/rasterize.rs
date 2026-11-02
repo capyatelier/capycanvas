@@ -39,12 +39,12 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
     dialog.set_close_response("cancel");
     dialog.set_default_response(Some("cancel"));
     dialog.set_response_appearance("apply", adw::ResponseAppearance::Suggested);
-    dialog.set_response_enabled("apply", false);
+    crate::page_dialog::set_response_enabled(&dialog, "apply", false);
     *comparison.changed.borrow_mut() = Some(Box::new(glib::clone!(
         #[weak]
         dialog,
         move |ready| {
-            dialog.set_response_enabled("apply", ready);
+            crate::page_dialog::set_response_enabled(&dialog, "apply", ready);
         }
     )));
     let control = CaptureControl::default();
@@ -59,7 +59,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
         let mut args = layer_ui::FluentArgs::new(); args.set("space", color.space.name());
         let bits = color.depth.bits().to_string(); args.set("bits", bits.as_str());
         dialog.set_body(&localization.format(layer_ui::MessageId::COLOR_FEATURES_COLOR_RASTERIZE_DETAILS, &args));
-        dialog.set_response_label("cancel", &copy.common.cancel); dialog.set_response_label("apply", &copy.rasterize);
+        crate::page_dialog::set_response_label(&dialog, "cancel", &copy.common.cancel); crate::page_dialog::set_response_label(&dialog, "apply", &copy.rasterize);
         if let Some(explanation) = explanation_weak.upgrade() { explanation.set_label(match clipped.get() { Some(true) => &copy.source_clipped, Some(false) => &copy.rasterize_compare, None => &copy.rasterize_comparison }); }
         true
     });
@@ -93,7 +93,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
             }
         }
     ));
-    let response = crate::alert::choose(dialog, &w.window).await;
+    let response = crate::alert::choose_editor(dialog, &w.window, Some("apply"), &[]).await;
     control.cancel();
     let compared = comparison.ready.get();
     comparison.close();

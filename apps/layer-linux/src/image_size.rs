@@ -163,7 +163,7 @@ impl ImageSizeDialog {
         let can_apply = self.can_apply.clone();
         number.connect_input_changed(glib::clone!(#[weak(rename_to=dialog)] self.dialog, move |_| {
             if let Some(numbers) = numbers.upgrade() {
-                dialog.set_response_enabled("apply", can_apply.get() && numbers.borrow().iter().flatten().all(|(_, number)| number.input_valid()));
+                crate::page_dialog::set_response_enabled(&dialog, "apply", can_apply.get() && numbers.borrow().iter().flatten().all(|(_, number)| number.input_valid()));
             }
         }));
         let workspace = self.workspace.borrow().clone();
@@ -189,14 +189,14 @@ impl ImageSizeDialog {
     pub fn refresh(&self, w: &Workspace, state: &layer_ui::UiState) {
         let Some(view) = &state.layer_tools.image_size else {
             if self.shown.replace(false) {
-                self.dialog.close();
+                crate::page_dialog::close_dialog(&self.dialog);
             }
             return;
         };
         self.updating.set(true);
         {
-            self.dialog.set_response_label("apply", &view.apply_label);
-            self.dialog.set_response_label("cancel", &view.cancel_label);
+            crate::page_dialog::set_response_label(&self.dialog, "apply", &view.apply_label);
+            crate::page_dialog::set_response_label(&self.dialog, "cancel", &view.cancel_label);
             let units: Vec<_> = view.units.iter().map(|choice| choice.label.as_ref()).collect();
             self.unit.set_model(Some(&gtk::StringList::new(&units)));
             let labels: Vec<_> = view.resamples.iter().map(|choice| choice.label.as_ref()).collect();
@@ -205,7 +205,7 @@ impl ImageSizeDialog {
         self.present(view, &w.localization());
         self.updating.set(false);
         if !self.shown.replace(true) {
-            self.dialog.present(Some(&w.window));
+            crate::page_dialog::present_with(&self.dialog, &w.window, layer_ui::DialogRole::Editor, crate::page_dialog::Metadata::responses(Some("apply"), "cancel", &[]));
         }
     }
 
@@ -222,6 +222,6 @@ impl ImageSizeDialog {
         self.resample.set_selected(ImageResample::ALL.iter().position(|r| *r == view.resample).unwrap_or(0) as u32);
         self.message.set_text(&view.message);
         self.can_apply.set(view.can_apply);
-        self.dialog.set_response_enabled("apply", view.can_apply && self.numbers.borrow().iter().flatten().all(|(_, number)| number.input_valid()));
+        crate::page_dialog::set_response_enabled(&self.dialog, "apply", view.can_apply && self.numbers.borrow().iter().flatten().all(|(_, number)| number.input_valid()));
     }
 }

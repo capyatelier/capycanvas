@@ -68,6 +68,7 @@ mod imp {
     impl WidgetImpl for Window {}
     impl WindowImpl for Window {
         fn close_request(&self) -> glib::Propagation {
+            if crate::page_dialog::close_window(&*self.obj()) { return glib::Propagation::Stop; }
             self.obj().destroy();
             glib::Propagation::Stop
         }

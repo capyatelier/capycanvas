@@ -236,12 +236,11 @@ pub(super) fn install(
                                     "save",
                                     adw::ResponseAppearance::Suggested,
                                 );
-                                dialog.set_response_enabled("save", false);
+                                crate::page_dialog::set_response_enabled(&dialog, "save", false);
                                 entry.connect_changed(glib::clone!(
                                     #[weak]
                                     dialog,
-                                    move |entry| dialog.set_response_enabled(
-                                        "save",
+                                    move |entry| crate::page_dialog::set_response_enabled(&dialog, "save",
                                         !entry.text().trim().is_empty()
                                     )
                                 ));
@@ -249,11 +248,11 @@ pub(super) fn install(
                                     let copy = layer_ui::color_feature_copy::ExportCopy::new(localization);
                                     entry.set_title(&copy.preset_name);
                                     dialog.set_heading(Some(&copy.save_preset_title));
-                                    dialog.set_response_label("cancel", &copy.common.cancel);
-                                    dialog.set_response_label("save", &copy.common.save);
+                                    crate::page_dialog::set_response_label(&dialog, "cancel", &copy.common.cancel);
+                                    crate::page_dialog::set_response_label(&dialog, "save", &copy.common.save);
                                     true
                                 }));
-                                if crate::alert::choose(dialog, &parent).await != "save" {
+                                if crate::alert::choose_editor(dialog, &parent, Some("save"), &[]).await != "save" {
                                     return Ok(None);
                                 }
                                 Some(entry.text().to_string())

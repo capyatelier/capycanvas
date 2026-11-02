@@ -1142,7 +1142,7 @@ impl<'a> LayoutResolveInput<'a> {
     pub fn resolve(&self,viewport:[f32;2])->ResolvedLayout {
         if let Some(phone) = self.phone_presentation(viewport) {
             return ResolvedLayout { viewport, work_area: phone.work_area,
-                notice: NoticePlacement::resolve(viewport, phone.work_area, Bounds::default()), phone: Some(phone),
+                notice: NoticePlacement::within(phone.work_area), phone: Some(phone),
                 vector_surfaces: Vec::new(), measurement_requests: Vec::new(), tab_bar_height: TAB_BAR_HEIGHT,
                 status: Bounds::default(), groups: Vec::new(), collapsed: Vec::new(), dividers: Vec::new() };
         }

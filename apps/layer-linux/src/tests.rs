@@ -113,6 +113,7 @@ mod phone;
 #[path = "phone_motion_tests.rs"]
 mod phone_motion;
 #[path = "finger_tests.rs"] mod finger;
+#[path = "page_dialog_tests.rs"] mod page_dialog;
 #[path = "bubble_tests.rs"]
 mod bubble_journeys;
 #[path = "workspace_drag_edge_tests.rs"]

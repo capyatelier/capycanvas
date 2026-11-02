@@ -268,6 +268,11 @@ pub struct NewDrawingDialogView {
     pub can_create: bool,
     pub drawer: Option<NewDrawingDrawerView>,
 }
+impl NewDrawingDialogView {
+    pub fn close_action(&self) -> NewDrawingAction {
+        if self.drawer.is_some() { NewDrawingAction::Back } else { NewDrawingAction::Cancel }
+    }
+}
 
 struct PresetSave {
     name: String,

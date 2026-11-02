@@ -1,4 +1,6 @@
 mod alert;
+mod page_dialog;
+mod dialog_content;
 mod canvas;
 mod canvas_bar;
 mod canvas_size;

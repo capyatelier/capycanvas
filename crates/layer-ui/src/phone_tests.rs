@@ -421,3 +421,45 @@ fn phone_presentation_waits_for_each_hosts_capability() {
         }
     }
 }
+
+#[test]
+fn dialog_roles_follow_the_same_phone_threshold_and_safe_area_as_chrome() {
+    let mut session = phone_session([412, 891]);
+    let state = &mut session.state;
+    state.phone.insets = [6., 12., 4., 8.];
+    for viewport in [[412., 891.], [891., 412.], [320., 568.]] {
+        assert_eq!(state.dialog_presentation(DialogRole::Editor, viewport),
+            DialogPresentation::Page(Bounds { x: 6., y: 12., width: viewport[0] - 10., height: viewport[1] - 20. }));
+        assert_eq!(state.dialog_presentation(DialogRole::CanvasPanel, viewport),
+            DialogPresentation::CanvasPanel(state.phone_presentation(viewport).unwrap().work_area));
+        assert_eq!(state.dialog_presentation(DialogRole::Alert, viewport), DialogPresentation::Floating);
+    }
+    assert_eq!(state.dialog_presentation(DialogRole::Editor, [480., 891.]), DialogPresentation::Floating);
+}
+
+#[test]
+fn phone_editor_panels_notices_and_search_stay_between_the_bars() {
+    for viewport in [[412, 891], [891, 412], [320, 568], [320, 320]] {
+        let mut s = phone_session(viewport);
+        let viewport = viewport.map(|v| v as f32);
+        let area = s.phone_layout().unwrap().work_area;
+        let contains = |bounds: Bounds| bounds.x >= area.x && bounds.y >= area.y
+            && bounds.x + bounds.width <= area.x + area.width + 0.01
+            && bounds.y + bounds.height <= area.y + area.height + 0.01;
+        let panel = s.state.dialog_presentation(DialogRole::CanvasPanel, viewport).bounds([500., 800.]).unwrap();
+        assert!(contains(panel));
+        let notice = s.layout(viewport).notice;
+        assert!(!notice.window && notice.y < area.y + area.height);
+        let search = COMMAND_SEARCH_STYLE.placement(viewport, area, true);
+        assert!(contains(search));
+        if viewport[0] < 600. { assert_eq!(search.y, area.y + 16.); }
+        s.dispatch(UiAction::Invoke { command: CommandId::PenPressure }).unwrap();
+        s.dispatch(UiAction::PressureCalibration { action: PressureCalibrationAction::Measure { extent: [384., 360.], viewport } }).unwrap();
+        let before = s.state.pressure_calibration.as_ref().unwrap().bounds;
+        assert!(contains(before));
+        for (phase, position) in [(ContactPhase::Down, [before.x, before.y]), (ContactPhase::Move, [-1000., 1000.])] {
+            s.dispatch(UiAction::PressureCalibration { action: PressureCalibrationAction::Drag { phase, position, viewport } }).unwrap();
+        }
+        assert!(contains(s.state.pressure_calibration.as_ref().unwrap().bounds));
+    }
+}

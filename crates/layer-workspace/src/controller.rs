@@ -838,10 +838,8 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             self.view.details = Some(self.manager.toolbar_details(panel, true)?);
             return Ok(change);
         }
-        if page != ManagerPage::ToolbarLibrary {
-            session
-                .begin_workspace_layout_preview()
-                .map_err(StoreError::invalid)?;
+        if page != ManagerPage::ToolbarLibrary && session.phone_layout().is_none() {
+            session.begin_workspace_layout_preview().map_err(StoreError::invalid)?;
             self.preview_open = true;
         }
         let m = self.manager.clone();
@@ -1147,10 +1145,8 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         let mut change = if matches!(action, ManagerAction::Rename(_) | ManagerAction::Delete(_))
             && source.as_ref().is_some_and(|source| source.kind == ItemKind::Workspace)
         { UiChange::default() } else { self.stop_preview(session) };
-        if let (ManagerAction::Reset(_), Some(entity)) = (&action, &current) {
-            session
-                .begin_workspace_layout_preview()
-                .map_err(StoreError::invalid)?;
+        if let (ManagerAction::Reset(_), Some(entity)) = (&action, &current) && session.phone_layout().is_none() {
+            session.begin_workspace_layout_preview().map_err(StoreError::invalid)?;
             self.preview_open = true;
             merge(
                 &mut change,

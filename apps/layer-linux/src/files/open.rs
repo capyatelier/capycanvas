@@ -77,7 +77,7 @@ async fn run(
             let Some(dialog) = weak.upgrade() else { return false };
             let copy = layer_ui::bootstrap_view(localization);
             dialog.set_heading(Some(&copy.opening_files)); dialog.set_body(&copy.preparing_document);
-            dialog.set_response_label("cancel", &copy.common.cancel);
+            crate::page_dialog::set_response_label(&dialog, "cancel", &copy.common.cancel);
             true
         });
     }
@@ -155,7 +155,7 @@ async fn interpret_window(
             let Some(dialog) = weak.upgrade() else { return false };
             let copy = layer_ui::color_feature_copy::ProfileCopy::new(localization);
             dialog.set_heading(Some(&copy.interpret_title)); dialog.set_body(&copy.interpret_help);
-            dialog.set_response_label("cancel", &copy.common.cancel); dialog.set_response_label("use", &copy.use_profile);
+            crate::page_dialog::set_response_label(&dialog, "cancel", &copy.common.cancel); crate::page_dialog::set_response_label(&dialog, "use", &copy.use_profile);
             if let Some(space) = space.upgrade() { space.set_title(&copy.interpret_as); }
             true
         });
@@ -166,10 +166,10 @@ async fn interpret_window(
         #[strong(rename_to=select)]
         chooser.selected,
         move || {
-            dialog.set_response_enabled("use", select().is_ok());
+            crate::page_dialog::set_response_enabled(&dialog, "use", select().is_ok());
         }
     ));
-    if crate::alert::choose(dialog, window).await != "use" {
+    if crate::alert::choose_editor(dialog, window, Some("use"), &[]).await != "use" {
         return Ok(None);
     }
     source.interpretation.profile = (chooser.selected)()?.profile;
@@ -220,13 +220,13 @@ pub(crate) async fn show_package(
                 gtk::gdk::MemoryFormat::R8g8b8a8,&glib::Bytes::from_owned(preview.pixels().clone()),width as usize*4);
             let picture = gtk::Picture::for_paintable(&texture);
             picture.set_can_shrink(true);
-            picture.set_size_request(320,240);
+            picture.set_size_request(0,240);
             dialog.set_extra_child(Some(&picture));
         }
         dialog.add_responses(&[("close",summary.close.as_ref()),("copy",summary.copy_original.as_ref())]);
         if summary.capabilities.export { dialog.add_response("export", &summary.export_preview); }
         dialog.set_close_response("close");
-        let response = crate::alert::choose(dialog,window).await;
+        let response = crate::alert::choose_editor(dialog,window, None, &["copy", "export"]).await;
         let preview = response == "export";
         if response != "copy" && !preview { return Ok(()); }
         let title = if preview { &summary.export_preview } else { &summary.copy_original };

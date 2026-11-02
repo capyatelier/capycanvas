@@ -59,13 +59,14 @@ impl<R: EditableResponse> Calibration<R> {
     pub fn sensitivity(&mut self,more:bool) {
         if let Some(draft)=&mut self.draft { self.selected=Some(draft.sensitivity(more));self.compile(); }
     }
-    pub fn drag(&mut self,phase:ContactPhase,position:[f32;2],viewport:[f32;2]) {
-        if position.iter().chain(&viewport).any(|v|!v.is_finite()) { return; }
+    pub fn drag(&mut self,phase:ContactPhase,position:[f32;2],area:Bounds) {
+        if position.iter().chain(&[area.x,area.y,area.width,area.height]).any(|v|!v.is_finite()) { return; }
         match phase {
             ContactPhase::Down=>self.frame_drag=self.placement.map(|b|(b,position)),
             ContactPhase::Move|ContactPhase::Up=>if let Some((mut b,press))=self.frame_drag {
                 b.x+=position[0]-press[0];b.y+=position[1]-press[1];self.placement=Some(b);
-                if phase==ContactPhase::Up { self.fit([b.width,b.height],viewport);self.frame_drag=None; }
+                self.fit([b.width,b.height],area);
+                if phase==ContactPhase::Up {self.frame_drag=None;}
             },
             ContactPhase::Cancel=>if let Some((b,_))=self.frame_drag.take() {self.placement=Some(b);},
         }
@@ -101,11 +102,11 @@ impl<R: EditableResponse> Calibration<R> {
         if let Some((bounds,_))=self.frame_drag.take() { self.placement=Some(bounds); }
         self.draft.take()
     }
-    pub fn fit(&mut self, extent: [f32; 2], viewport: [f32; 2]) {
-        if extent.iter().chain(&viewport).any(|v| !v.is_finite() || *v <= 0.) { return; }
+    pub fn fit(&mut self, extent: [f32; 2], area: Bounds) {
+        if extent.iter().chain(&[area.width,area.height]).any(|v| !v.is_finite() || *v <= 0.) { return; }
         let mut b = self.placement.unwrap_or_default();
-        b.width = extent[0].min(viewport[0]); b.height = extent[1].min(viewport[1]);
-        b.x = b.x.clamp(0., viewport[0] - b.width); b.y = b.y.clamp(0., viewport[1] - b.height);
+        b.width = extent[0].min(area.width); b.height = extent[1].min(area.height);
+        b.x = b.x.clamp(area.x, area.x + area.width - b.width); b.y = b.y.clamp(area.y, area.y + area.height - b.height);
         self.placement = Some(b);
     }
     pub fn action(&mut self, action: CurveEditorAction) -> bool {
@@ -173,8 +174,12 @@ impl<R: EditableResponse> Calibration<R> {
 }
 
 impl<R: layer_render::CanvasRenderer> UiSession<R> {
+    pub(crate) fn response_calibration_area(&self, viewport: [f32; 2]) -> Bounds {
+        self.phone_layout().map_or(Bounds { x: 0., y: 0., width: viewport[0], height: viewport[1] }, |phone| phone.work_area)
+    }
     pub(crate) fn response_calibration_placement(&self,extent:[f32;2],viewport:[f32;2])->Option<Bounds> {
         if extent.iter().chain(&viewport).any(|v|!v.is_finite() || *v<=0.) {return None;}
+        if let Some(phone) = self.phone_layout() { return crate::DialogPresentation::CanvasPanel(phone.work_area).bounds(extent); }
         let layout=self.layout(viewport);let mut area=layout.work_area;
         if layout.status.height>0. {area.height=area.height.min((layout.status.y-area.y).max(0.));}
         let mut obstacles:Vec<_>=layout.groups.iter().map(|g|g.bounds)

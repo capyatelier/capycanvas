@@ -336,12 +336,13 @@ pub(crate) async fn manage_for_window(
         #[weak]
         dialog,
         move |_| {
-            dialog.close();
+            crate::page_dialog::close_dialog(&dialog);
         }
     ));
     body.append(&done);
     view.set_content(Some(&body));
     dialog.set_child(Some(&view));
+    crate::page_dialog::configure(&dialog, crate::page_dialog::Metadata::new().header(&view, &header).primary(&done));
     let state = Rc::new(Manager {
         copy: RefCell::new(copy), localization: RefCell::new(localization.clone()),
         w: workspace.map_or_else(std::rc::Weak::new, Rc::downgrade),
@@ -389,7 +390,7 @@ pub(crate) async fn manage_for_window(
         move |_| state.render()
     ));
     state.render();
-    dialog.present(Some(window));
+    crate::page_dialog::present(&dialog, window);
     Ok(())
 }
 
@@ -451,7 +452,7 @@ mod tests {
             }
             assert_eq!(std::fs::read(&path).unwrap(), bytes); assert_eq!(std::fs::read_to_string(path.with_extension("name")).unwrap(), literal);
             eprintln!("GTK library {:?}: all fifteen row/button/popover identities, raw profiles, search draft/selection and menu deferral passed", theme);
-            dialog.force_close(); window.destroy();
+            crate::page_dialog::force_close(&dialog); window.destroy();
         }
     }
 }

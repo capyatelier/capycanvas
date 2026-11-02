@@ -311,20 +311,33 @@ iOS defers the edges the bars occupy.
 
 ## Dialogs
 
-Today most dialogs float with a margin. On Web they are up to 800 px wide inside
-a 30 px side and 20 px top and bottom margin, which leaves a 412 px tall
-landscape phone cramped. Only Settings fills the window: always on Android, as a
-full-screen overlay that slides down from the top, and on Web below 480 px wide.
+GTK presents editor dialogs as pages whenever the shared phone layout is active,
+using their existing bodies and actions. Close and the primary action stay in
+the header; compact confirmations remain native alerts. Settings, New Drawing,
+Edit Color and the workspace manager adapt their panes during allocation, with
+no tick callback while idle. Manage Workspaces and Layout History defer layout
+adoption until confirmation. Other hosts still need the remaining dialog rules
+below; Web Settings already fills windows below 480 px wide and Android Settings
+always uses a full-screen page.
 
 - In the phone layout, every dialog opens the way Android's Settings does: a
   full-window page that slides down from the top, inside the safe area.
-- Its actions move into the page's header: close on the left, and the primary
-  action as a filled button on the right, like Settings' Done. Neither a short
+- Its actions move into the page's header: close on the left, and an existing
+  primary action as a filled button on the right. Pages without a primary action,
+  such as Preferences and Document Properties, have close only. Neither a short
   landscape window nor the on-screen keyboard can hide them; the body scrolls and
   keeps a focused field above the keyboard. Close does what the current subpage's
   cancel or back does today, so leaving New Drawing's preset browser keeps the
   drawing's draft. Secondary actions, such as Save As or Export's Preview, stay in
   the body.
+- Every page uses the dialog's opaque surface and one title. Dialogs declare
+  their title, primary and cancel actions explicitly. Opening preserves the
+  dialog's focus when present, without focusing close or selecting label text.
+  Preferences and Export keep their own navigation headers, without an outer
+  page header. Their root header has close; subpages keep Back only. The declared
+  primary action follows the visible header. The workspace manager keeps its
+  single header above the tabs and binds its title and Back/Close to the current
+  navigation page, hiding its inner header.
 - A page is modal like the dialog it replaces: it owns focus, keyboard shortcuts
   and canvas contacts while open, except during Edit Color's eyedropper, and gives
   focus back to its opener when it closes.
@@ -344,26 +357,26 @@ full-screen overlay that slides down from the top, and on Web below 480 px wide.
 
 - **One rule in shared Rust.** Shared Rust decides each dialog's presentation (page
   or floating dialog) and whether its panes sit side by side or stack, and hosts
-  drop their own breakpoints. Today they disagree and none reads the window's
-  height: Settings collapses at 620 sp on GTK, 680 px on Web, 840 dp on Android, by
+  drop their own breakpoints. GTK uses measured pane minima. Other hosts still
+  disagree: Settings collapses at 680 px on Web, 840 dp on Android, by
   the system on Apple and never on Windows; New Drawing and Edit Color stack at
   632–744 depending on the host.
 - **Pages live inside the window**, as Android's Settings overlay does, rather than
   in a toolkit dialog. GTK's automatic bottom sheet (at most 450 wide or 360 tall)
   and Apple's fitted sheets don't apply in the phone layout.
-- **Minimum sizes larger than a phone window go:** Apple's sheet minimums (340–380
-  wide, 420–440 tall), GTK Settings' 360 × 360 request and its 320 px open-summary
-  picture, and Windows' 360 px drawing selector.
+- **Minimum sizes larger than a phone window go:** GTK removes its Settings,
+  New Drawing and Edit Color requests and the open-summary picture minimum.
+  Apple's sheet minimums (340–380 wide, 420–440 tall) and Windows' 360 px drawing
+  selector still need the same treatment.
 - **Side-by-side panes without a narrow form gain one:** Settings on Windows (a
-  fixed 210 sidebar), the workspace manager's toolbar pages on GTK (a 280 list in a
-  paned view) and every workspace manager page on Windows, which leaves 20 px of
-  details at 320 wide.
+  fixed 210 sidebar) and every workspace manager page on Windows, which leaves
+  20 px of details at 320 wide.
+  GTK's workspace manager reuses its list and details in list/page navigation
+  when their measured widths do not fit.
 - **Panels that work on the canvas stay panels**, placed in the space between the
   bars: Refine and Frequency Separation, and the pen response and tilt calibration
-  panels. Their shared placement uses that space in the phone layout rather than the
-  whole window: today the notice anchor (`NoticePlacement`) falls back to the window
-  bottom when the work area is narrow, which at 320 × 568 is under the Capy bar, and
-  the calibration panels clamp to the whole viewport. Their content scrolls when
+  panels. Their shared placement and the notice anchor (`NoticePlacement`) stay
+  within that space in the phone layout. Their content scrolls when
   it doesn't fit. Canvas Size and Image Size become pages like other dialogs,
   including on Android, where they are a panel today.
 - **Command search** keeps its narrow placement (16 from the top below 600 wide),

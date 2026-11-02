@@ -105,6 +105,7 @@ pub struct Preferences {
     pub dialog: adw::Dialog,
     stack: adw::ViewStack,
     split: adw::NavigationSplitView,
+    resize: crate::dialog_content::DialogContent,
     content_page: adw::NavigationPage,
     sidebar_page: adw::NavigationPage,
     content_view: adw::ToolbarView,
@@ -388,8 +389,6 @@ impl Preferences {
             .title(title.as_ref())
             .content_width(1000)
             .content_height(744)
-            .width_request(360)
-            .height_request(360)
             .build();
         dialog.add_css_class("layer-preferences");
         let stack = adw::ViewStack::new();
@@ -448,16 +447,14 @@ impl Preferences {
             .sidebar_width_fraction(0.26)
             .vexpand(true)
             .build();
+        let resize = crate::dialog_content::new(gtk::Orientation::Vertical, 0);
+        resize.append(&split);
+        crate::page_dialog::configure(&dialog, crate::page_dialog::Metadata::new().root_header(&sidebar_header).navigation_header(&header));
         sidebar.connect_activated(glib::clone!(
             #[weak]
             split,
             move |_| split.set_show_content(true)
         ));
-        let breakpoint =
-            adw::Breakpoint::new(adw::BreakpointCondition::parse("max-width: 620sp").unwrap());
-        breakpoint.add_setter(&split, "collapsed", Some(&true.to_value()));
-        breakpoint.add_setter(&sidebar, "mode", Some(&adw::SidebarMode::Page.to_value()));
-        dialog.add_breakpoint(breakpoint);
         let error = gtk::Label::builder().wrap(true).xalign(0.0).build();
         error.add_css_class("error");
         let shortcut_search = gtk::SearchEntry::builder()
@@ -474,6 +471,7 @@ impl Preferences {
             stack,
             split,
             content_page,
+            resize,
             sidebar_page,
             content_view,
             sidebar,
@@ -494,6 +492,14 @@ impl Preferences {
         }
     }
     pub fn bind(&self, w: &Rc<Workspace>) {
+        crate::dialog_content::on_resize(&self.resize, glib::clone!(#[weak] w, move |width| {
+            let p = &w.preferences;
+            let minimum = [p.sidebar.measure(gtk::Orientation::Horizontal, -1).0 as f32,
+                p.content_view.measure(gtk::Orientation::Horizontal, -1).0 as f32];
+            let narrow = !dialog_panes_fit(width as f32, minimum, 0.);
+            p.split.set_collapsed(narrow);
+            p.sidebar.set_mode(if narrow { adw::SidebarMode::Page } else { adw::SidebarMode::Sidebar });
+        }));
         // Touch has no hover position. Native mouse emulation can leave a row
         // prelit; suppress that visual until an actual pointing device returns.
         let pointer = gtk::EventControllerLegacy::new();
@@ -526,7 +532,7 @@ impl Preferences {
         margins(&self.error, 12);
         self.error.set_visible(false);
         self.content_view.add_top_bar(&self.error);
-        self.dialog.set_child(Some(&self.split));
+        self.dialog.set_child(Some(&self.resize));
         self.dialog.connect_closed(glib::clone!(
             #[weak]
             w,
@@ -1051,12 +1057,8 @@ impl Preferences {
             // A closing dialog remains rooted during its animation. Present
             // on the model's closed -> open transition, even while rooted.
             if !was_open {
-                self.dialog.present(Some(&w.window));
+                crate::page_dialog::present(&self.dialog, &w.window);
                 self.split.set_show_content(true);
-                // A retained dialog can remember a focus widget that was
-                // hidden on close. Re-establish native focus after presenting
-                // the content page so Tab and Escape work on every opening.
-                self.content_view.child_focus(gtk::DirectionType::TabForward);
             }
             if self.reveal.replace(view.reveal) != view.reveal
                 && let Some(id) = view.reveal
@@ -1070,7 +1072,7 @@ impl Preferences {
         if !open {
             self.shortcut_page.close_dialogs();
             if was_open {
-                self.dialog.close();
+                crate::page_dialog::close_dialog(&self.dialog);
             }
         }
         self.updating.set(false);

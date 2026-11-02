@@ -158,6 +158,7 @@ impl Menu {
             if !self.navigation.borrow_mut().select(&model[1], &selected) {
                 *self.navigation.borrow_mut() = PhoneMenuNavigation::default();
             }
+            let indicators = gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
             for (index, menu) in model.iter().enumerate() {
                 let (popup, stack) = w.inline_workspace_menu(menu.clone());
                 stack.set_transition_type(gtk::StackTransitionType::SlideLeftRight);
@@ -181,6 +182,7 @@ impl Menu {
                         back.set_widget_name("phone-menu-back");
                     }
                     for (item, row) in page.menu.sections.iter().flatten().filter(|item| !item.is_heading()).zip(rows) {
+                        if page.path.is_empty() { row.set_property("indicator-size-group", &indicators); }
                         if item.action.is_none() && item.enabled && !item.sections.is_empty() {
                             row.set_property("text", &item.label);
                         }

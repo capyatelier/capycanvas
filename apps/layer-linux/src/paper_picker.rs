@@ -124,7 +124,7 @@ pub(crate) fn open(workspace: &Rc<Workspace>, layer: u64) {
     let dialog = TextureDialog::build(workspace, layer, state.document_file.epoch);
     dialog.update(&view, selected);
     *workspace.texture_dialog.borrow_mut() = Some(dialog.clone());
-    dialog.dialog.present(Some(&workspace.window));
+    crate::page_dialog::present(&dialog.dialog, &workspace.window);
     let viewport = dialog.viewport.clone();
     dialog.grid.add_tick_callback(move |grid, _| {
         let Some(child) = grid.selected_children().into_iter().next() else { return glib::ControlFlow::Break };
@@ -177,7 +177,7 @@ pub(crate) fn texture_tile(thumbnail: &PaperThumbnail, workspace: &Workspace, id
 
 impl TextureDialog {
     fn build(workspace: &Rc<Workspace>, layer: u64, epoch: u64) -> Rc<Self> {
-        let dialog = adw::Dialog::builder().content_width(720).content_height(560).width_request(320).height_request(300).build();
+        let dialog = adw::Dialog::builder().content_width(720).content_height(560).build();
         dialog.set_widget_name("texture-dialog");
         dialog.add_css_class("picker-dialog");
         let title = gtk::Label::new(None);
@@ -214,6 +214,7 @@ impl TextureDialog {
         content.append(&crate::squircle::Squircles::new(&bottom));
         dialog.set_child(Some(&content));
         dialog.set_default_widget(Some(&apply));
+        crate::page_dialog::configure(&dialog, crate::page_dialog::Metadata::new().title(&title, "label").primary(&apply).cancel(&cancel));
         let menu = gtk::Popover::builder().has_arrow(false).build();
         menu.set_widget_name("paper-tile-menu");
         let texture = Rc::new_cyclic(|this| Self {
@@ -235,14 +236,14 @@ impl TextureDialog {
         self.import.connect_clicked(glib::clone!(#[strong] weak, move |_| {
             let Some(dialog) = weak.upgrade() else { return };
             let action = dialog.view.borrow().as_ref().and_then(|view| view.import.clone());
-            dialog.dialog.close();
+            crate::page_dialog::close_dialog(&dialog.dialog);
             if let (Some(action), Some(workspace)) = (action, dialog.workspace.upgrade()) { act(&workspace, action.action); }
         }));
-        self.cancel.connect_clicked(glib::clone!(#[strong] weak, move |_| if let Some(dialog) = weak.upgrade() { dialog.dialog.close(); }));
+        self.cancel.connect_clicked(glib::clone!(#[strong] weak, move |_| if let Some(dialog) = weak.upgrade() { crate::page_dialog::close_dialog(&dialog.dialog); }));
         self.apply.connect_clicked(glib::clone!(#[strong] weak, move |_| {
             let Some(dialog) = weak.upgrade() else { return };
             dialog.finish();
-            dialog.dialog.close();
+            crate::page_dialog::close_dialog(&dialog.dialog);
         }));
         self.dialog.connect_closed(glib::clone!(#[strong] weak, move |_| {
             let Some(dialog) = weak.upgrade() else { return };

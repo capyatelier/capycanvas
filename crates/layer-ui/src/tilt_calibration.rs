@@ -204,9 +204,9 @@ impl<R:CanvasRenderer> UiSession<R> {
                 },
                 PressureCalibrationAction::Measure{extent,viewport}=>{
                     if self.tilt_calibration.editor.placement.is_none() {self.tilt_calibration.editor.placement=self.response_calibration_placement(extent,viewport);}
-                    self.tilt_calibration.editor.fit(extent,viewport);
+                    let area = self.response_calibration_area(viewport); self.tilt_calibration.editor.fit(extent,area);
                 },
-                PressureCalibrationAction::Drag{phase,position,viewport}=>self.tilt_calibration.editor.drag(phase,position,viewport),
+                PressureCalibrationAction::Drag{phase,position,viewport}=>{let area = self.response_calibration_area(viewport);self.tilt_calibration.editor.drag(phase,position,area);},
             },
         }
         if placement_only {

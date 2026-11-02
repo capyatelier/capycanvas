@@ -57,8 +57,8 @@ pub(crate) async fn show(w: &Rc<Workspace>) -> Result<bool, String> {
         let Some(dialog) = weak.upgrade() else { return false };
         let view = layer_ui::document_properties(&inspected, localization);
         dialog.set_heading(Some(&view.title));
-        dialog.set_response_label("done", &view.done);
-        dialog.set_response_label("appearance", &view.proof);
+        crate::page_dialog::set_response_label(&dialog, "done", &view.done);
+        crate::page_dialog::set_response_label(&dialog, "appearance", &view.proof);
         for (row, (title, subtitle)) in rows.iter().zip(&view.rows) {
             if let Some(row) = row.upgrade() { row.set_title(title); row.set_subtitle(subtitle); }
         }
@@ -68,6 +68,6 @@ pub(crate) async fn show(w: &Rc<Workspace>) -> Result<bool, String> {
         }
         true
     });
-    if crate::alert::choose(dialog, &w.window).await == "appearance" { super::proof::run(w)?; }
+    if crate::alert::choose_editor(dialog, &w.window, None, &["appearance"]).await == "appearance" { super::proof::run(w)?; }
     Ok(true)
 }

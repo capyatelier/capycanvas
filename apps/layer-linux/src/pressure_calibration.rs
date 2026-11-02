@@ -223,8 +223,10 @@ impl PressurePanel {
         let Some(bounds) = self.bounds.get() else { return };
         if !self.root.is_visible() { return; }
         let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-        let width = 384f32.max(self.column.measure(gtk::Orientation::Horizontal,-1).0 as f32).min(viewport[0]);
-        let extent = [width,360f32.max(self.column.measure(gtk::Orientation::Vertical,width as i32).1 as f32).min(viewport[1])];
+        let area = w.gpu.borrow().as_ref().and_then(|gpu| gpu.session.phone_layout()).map(|phone| phone.work_area)
+            .unwrap_or(Bounds { x: 0., y: 0., width: viewport[0], height: viewport[1] });
+        let width = 384f32.max(self.column.measure(gtk::Orientation::Horizontal,-1).0 as f32).min(area.width);
+        let extent = [width,360f32.max(self.column.measure(gtk::Orientation::Vertical,width as i32).1 as f32).min(area.height)];
         if self.measured.replace(Some((extent, viewport))) != Some((extent, viewport))
             || (bounds.width-extent[0]).abs() >= 0.5 || (bounds.height-extent[1]).abs() >= 0.5 {
             w.measure(self.panel_action(PressureCalibrationAction::Measure{extent,viewport}));

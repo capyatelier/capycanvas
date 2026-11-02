@@ -962,12 +962,12 @@ impl PalettePanel {
             let common = layer_ui::CommonCopy::new(localization);
             let copy = layer_ui::NativeCopy::new(localization).palettes;
             dialog.set_heading(Some(if id.is_some() { &copy.rename_title } else { &copy.new_title }));
-            dialog.set_response_label("cancel", &common.cancel);
-            dialog.set_response_label("save", &common.save);
+            crate::page_dialog::set_response_label(&dialog, "cancel", &common.cancel);
+            crate::page_dialog::set_response_label(&dialog, "save", &common.save);
             entry.set_placeholder_text(Some(&copy.palette_name));
             let action = if let Some(id) = id { Action::RenamePalette { id, name: entry.text().into() } } else { Action::CreatePalette { name: entry.text().into() } };
             let result = callback_library.check(action, localization);
-            dialog.set_response_enabled("save", result.is_ok());
+            crate::page_dialog::set_response_enabled(&dialog, "save", result.is_ok());
             entry.set_tooltip_text(result.err().as_deref());
             true
         }));
@@ -988,7 +988,7 @@ impl PalettePanel {
                     }
                 };
                 let result = library.check(action, &w.localization());
-                dialog.set_response_enabled("save", result.is_ok());
+                crate::page_dialog::set_response_enabled(&dialog, "save", result.is_ok());
                 entry.set_tooltip_text(result.err().as_deref());
             }
         ));
@@ -997,7 +997,7 @@ impl PalettePanel {
             #[weak(rename_to=panel)]
             self,
             async move {
-                if crate::alert::choose(dialog, &w.window).await == "save" {
+                if crate::alert::choose_editor(dialog, &w.window, Some("save"), &[]).await == "save" {
                     let action = if let Some(id) = id {
                         Action::RenamePalette {
                             id,
@@ -1086,8 +1086,8 @@ impl PalettePanel {
             let common = layer_ui::CommonCopy::new(localization);
             dialog.set_heading(Some(&copy.remove_title));
             dialog.set_body(&layer_ui::NativeCaption::RemovePalette { name: name.clone() }.message(localization));
-            dialog.set_response_label("cancel", &common.cancel);
-            dialog.set_response_label("remove", &common.remove);
+            crate::page_dialog::set_response_label(&dialog, "cancel", &common.cancel);
+            crate::page_dialog::set_response_label(&dialog, "remove", &common.remove);
             true
         }));
         dialog.set_close_response("cancel");

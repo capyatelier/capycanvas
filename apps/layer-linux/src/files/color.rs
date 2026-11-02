@@ -216,11 +216,11 @@ pub(super) async fn run(
     dialog.set_close_response("cancel");
     dialog.set_default_response(Some("cancel"));
     dialog.set_response_appearance("apply", adw::ResponseAppearance::Suggested);
-    dialog.set_response_enabled("apply", false);
+    crate::page_dialog::set_response_enabled(&dialog, "apply", false);
     *comparison.changed.borrow_mut() = Some(Box::new(glib::clone!(
         #[weak]
         dialog,
-        move |ready| dialog.set_response_enabled("apply", ready)
+        move |ready| crate::page_dialog::set_response_enabled(&dialog, "apply", ready)
     )));
     let state = Rc::new(Conversion {
         copy: RefCell::new(copy.as_ref().clone()),
@@ -264,7 +264,7 @@ pub(super) async fn run(
             ][intent.selected() as usize];
             dither.set_sensitive(depth == SampleDepth::U8);
             let flattened = operation == DocumentColorOperation::Convert && result.selected() == 1;
-            dialog.set_response_label("apply", if flattened { copy.create_copy.as_ref() } else { copy.common.apply.as_ref() });
+            crate::page_dialog::set_response_label(&dialog, "apply", if flattened { copy.create_copy.as_ref() } else { copy.common.apply.as_ref() });
             let space = RgbSpace::ALL[space.selected() as usize];
             state.request(Choice {
                 flattened,
@@ -298,8 +298,8 @@ pub(super) async fn run(
         let export = layer_ui::color_feature_copy::ExportCopy::new(localization);
         dialog.set_heading(Some(&request.title(localization)));
         dialog.set_body(match operation { DocumentColorOperation::Assign => &copy.assign_native_help, DocumentColorOperation::Convert => &copy.convert_native_help, DocumentColorOperation::Depth => &copy.depth_native_help });
-        dialog.set_response_label("cancel", &copy.common.cancel);
-        dialog.set_response_label("apply", if result_weak.upgrade().is_some_and(|row| operation == DocumentColorOperation::Convert && row.selected() == 1) { &copy.create_copy } else { &copy.common.apply });
+        crate::page_dialog::set_response_label(&dialog, "cancel", &copy.common.cancel);
+        crate::page_dialog::set_response_label(&dialog, "apply", if result_weak.upgrade().is_some_and(|row| operation == DocumentColorOperation::Convert && row.selected() == 1) { &copy.create_copy } else { &copy.common.apply });
         if let Some(space) = space_weak.upgrade() { space.set_title(&export.profile); }
         for (row, title, labels) in [
             (depth_weak.upgrade(), &export.depth, vec![&copy.depth_8, &copy.depth_16, &copy.depth_float16, &copy.depth_float32]),
@@ -327,7 +327,7 @@ pub(super) async fn run(
         move |_| refresh()
     });
     refresh();
-    let response = crate::alert::choose(dialog, &w.window).await;
+    let response = crate::alert::choose_editor(dialog, &w.window, Some("apply"), &[]).await;
     let compared = state.comparison.ready.get();
     state.finish().await;
     if response != "apply" {
@@ -388,7 +388,7 @@ async fn adopt(
         let Some(dialog) = weak.upgrade() else { return false };
         let copy = layer_ui::color_feature_copy::DocumentColorCopy::new(localization);
         dialog.set_heading(Some(&copy.preparing_title)); dialog.set_body(&copy.preparing_help);
-        dialog.set_response_label("cancel", &copy.common.cancel);
+        crate::page_dialog::set_response_label(&dialog, "cancel", &copy.common.cancel);
         true
     });
     let cancelled = Rc::new(Cell::new(false));

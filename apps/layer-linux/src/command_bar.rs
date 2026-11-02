@@ -159,10 +159,19 @@ impl CommandBar {
 
     pub(crate) fn owns_input(&self) -> bool { self.is_open() || self.closing.get().is_some() }
 
-    pub(crate) fn allocate(&self, width: i32, height: i32) {
+    pub(crate) fn allocate(&self, width: i32, height: i32, area: Bounds, phone: bool) {
         if !self.root.is_visible() { return; }
-        self.card.set_width_request((width - COMMAND_SEARCH_STYLE.inset * 4).clamp(240, COMMAND_SEARCH_STYLE.width));
-        self.card.set_margin_top(COMMAND_SEARCH_STYLE.top(height as f32) as i32);
+        let viewport = [width as f32, height as f32];
+        let bounds = COMMAND_SEARCH_STYLE.placement(viewport, area, phone);
+        self.card.set_halign(gtk::Align::Start);
+        self.card.set_margin_start(bounds.x.round() as i32);
+        self.card.set_width_request(bounds.width.round() as i32);
+        self.card.set_margin_top(bounds.y.round() as i32);
+        if let Some(scroll) = self.viewport.parent().and_downcast::<gtk::ScrolledWindow>() {
+            let reserved = self.card.measure(gtk::Orientation::Vertical, bounds.width as i32).0
+                - scroll.measure(gtk::Orientation::Vertical, bounds.width as i32).0;
+            scroll.set_max_content_height((bounds.height as i32 - reserved).max(1));
+        }
     }
 
     pub(crate) fn selected(&self, w: &Workspace, requested: u64, shown: u64) {
@@ -180,7 +189,7 @@ impl CommandBar {
         self.disconnect_paint();
         let focus = self.previous_focus.take().and_then(|focus| focus.upgrade()).filter(|focus| focus.is_mapped());
         self.root.set_visible(false);
-        if restore && w.window.is_mapped() && w.window.visible_dialog().is_none() {
+        if restore && w.window.is_mapped() && w.visible_dialog().is_none() {
             if let Some(focus) = focus { focus.grab_focus(); } else { w.area.grab_focus(); }
         }
     }
@@ -203,7 +212,7 @@ impl CommandBar {
             if terminal { self.contacts.borrow_mut().remove(index); self.finish_close(w); }
             return true;
         }
-        if w.window.visible_dialog().is_some() || event.surface() != w.window.surface() { return false; }
+        if w.visible_dialog().is_some() || event.surface() != w.window.surface() { return false; }
         let pointer = matches!(kind, gdk::EventType::ButtonPress | gdk::EventType::ButtonRelease | gdk::EventType::MotionNotify
             | gdk::EventType::TouchBegin | gdk::EventType::TouchUpdate | gdk::EventType::TouchEnd | gdk::EventType::TouchCancel | gdk::EventType::Scroll);
         if !pointer { return false; }
@@ -363,7 +372,7 @@ impl CommandBar {
                 self.closing.set(Some(Closing::Requested(None)));
                 self.card.set_visible(false);
                 if self.root.is_mapped() {
-                    if w.window.visible_dialog().is_none() { self.root.grab_focus(); }
+                    if w.visible_dialog().is_none() { self.root.grab_focus(); }
                     let clock = self.root.frame_clock().unwrap();
                     let handler = clock.connect_after_paint(glib::clone!(#[weak] w, move |clock| {
                         if let Some(closing) = w.command_bar.closing.get() {
@@ -488,7 +497,9 @@ impl CommandBar {
             if let Some(adjustment) = self.viewport.vadjustment() { adjustment.set_value(0.); }
             self.card.set_visible(true);
             self.root.set_visible(true);
-            self.allocate(w.surface.width(), w.surface.height());
+            let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+            let layout = w.gpu.borrow().as_ref().map(|gpu| gpu.session.layout(viewport)).unwrap();
+            self.allocate(w.surface.width(), w.surface.height(), layout.work_area, layout.phone.is_some());
             w.surface.queue_allocate();
             self.entry.grab_focus();
         }

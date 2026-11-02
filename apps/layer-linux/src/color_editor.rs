@@ -129,7 +129,7 @@ pub(crate) struct ColorForm {
     intensity_label: gtk::Label,
     pub(crate) intensity: Rc<Field>,
     pub(crate) validation: gtk::Label,
-    pub(crate) body: gtk::Box,
+    pub(crate) body: crate::dialog_content::DialogContent,
     right: gtk::Box,
     pub(crate) left: gtk::Box,
     pub(crate) header: gtk::Grid,
@@ -340,7 +340,7 @@ impl ColorForm {
         let values = gtk::Box::new(gtk::Orientation::Vertical, 6);
         values.append(&grid);
         values.append(&validation);
-        let body = gtk::Box::new(gtk::Orientation::Horizontal, 24);
+        let body = crate::dialog_content::new(gtk::Orientation::Horizontal, 24);
         let right = gtk::Box::new(gtk::Orientation::Vertical, 14);
         right.set_hexpand(true);
         let form = Rc::new_cyclic(|this| Self {
@@ -392,22 +392,23 @@ impl ColorForm {
     }
 
     pub(crate) fn arrange(&self, narrow: bool) {
+        let orientation = if narrow { gtk::Orientation::Vertical } else { gtk::Orientation::Horizontal };
+        if self.left.parent().is_some() && self.body.orientation() == orientation { return; }
         for widget in [self.left.upcast_ref::<gtk::Widget>(), self.header.upcast_ref(), self.values.upcast_ref(), self.right.upcast_ref()] {
             if let Some(parent) = widget.parent().and_downcast::<gtk::Box>() { parent.remove(widget); }
         }
         self.left.set_halign(if narrow { gtk::Align::Center } else { gtk::Align::Fill });
         if narrow {
-            self.body.set_orientation(gtk::Orientation::Vertical);
             self.body.set_spacing(14);
             for widget in [self.header.upcast_ref::<gtk::Widget>(), self.left.upcast_ref(), self.values.upcast_ref()] { self.body.append(widget); }
         } else {
-            self.body.set_orientation(gtk::Orientation::Horizontal);
             self.body.set_spacing(24);
             self.right.append(&self.header);
             self.right.append(&self.values);
             self.body.append(&self.left);
             self.body.append(&self.right);
         }
+        self.body.set_orientation(orientation);
     }
 
     pub(crate) fn relabel(&self) {
@@ -727,7 +728,7 @@ impl ColorForm {
 impl Editor {
     fn build(workspace: &Rc<Workspace>, draft: ColorEditor, epoch: u64, accepted: Accepted) -> Rc<Self> {
         let form = ColorForm::build(workspace, draft);
-        let dialog = adw::Dialog::builder().content_width(720).width_request(320).height_request(300).build();
+        let dialog = adw::Dialog::builder().content_width(720).build();
         dialog.set_widget_name("edit-color-dialog");
         dialog.add_css_class("edit-color-dialog");
         dialog.add_css_class("picker-dialog");
@@ -810,6 +811,7 @@ impl Editor {
         content.append(&crate::squircle::Squircles::new(&bottom));
         dialog.set_child(Some(&content));
         dialog.set_default_widget(Some(&apply_button));
+        crate::page_dialog::configure(&dialog, crate::page_dialog::Metadata::new().title(&title, "label").primary(&apply_button).cancel(&cancel));
         let editor = Rc::new_cyclic(|this| Self {
             this: this.clone(),
             workspace: Rc::downgrade(workspace),
@@ -947,7 +949,7 @@ impl Editor {
         let Some(workspace) = self.workspace.upgrade() else { return; };
         let original = self.draft.borrow().value();
         self.picking.set(true);
-        self.dialog.close();
+        crate::page_dialog::hide(&self.dialog);
         let touch_offset = crate::color_picker::finger_offset(&workspace);
         workspace.dispatch(UiAction::ColorPicker { action: ColorPickerAction::Editor { original, touch_offset } });
         refresh_display(&workspace);
@@ -974,7 +976,7 @@ impl Editor {
             let result = self.apply(ColorEditorAction::Color { color });
             self.report(Target::Dialog, result);
         }
-        self.dialog.present(Some(&workspace.window));
+        crate::page_dialog::present(&self.dialog, &workspace.window);
         self.pick.grab_focus();
     }
 
@@ -1001,10 +1003,11 @@ impl Editor {
         self.form.bind(can_pick);
         self.relabel();
         let weak = self.this.clone();
-        let narrow = adw::Breakpoint::new(adw::BreakpointCondition::parse("max-width: 700sp").unwrap());
-        narrow.connect_apply(glib::clone!(#[strong] weak, move |_| if let Some(editor) = weak.upgrade() { editor.arrange(true); }));
-        narrow.connect_unapply(glib::clone!(#[strong] weak, move |_| if let Some(editor) = weak.upgrade() { editor.arrange(false); }));
-        self.dialog.add_breakpoint(narrow);
+        crate::dialog_content::on_resize(&self.form.body, glib::clone!(#[strong] weak, move |width| if let Some(editor) = weak.upgrade() {
+            let minimum = [editor.form.left.measure(gtk::Orientation::Horizontal, -1).0 as f32,
+                editor.form.values.measure(gtk::Orientation::Horizontal, -1).0 as f32];
+            editor.arrange(!layer_ui::dialog_panes_fit(width as f32, minimum, 24.));
+        }));
         self.pick.connect_clicked(glib::clone!(#[strong] weak, move |_| if let Some(editor) = weak.upgrade() { editor.start_pick(); }));
         self.swatches.connect_clicked(glib::clone!(#[strong] weak, move |_| {
             if let Some(editor) = weak.upgrade() { editor.show_sheet(!editor.slide.is_open()); }
@@ -1031,7 +1034,7 @@ impl Editor {
         clipboard_keys.connect_key_pressed(glib::clone!(#[strong] weak, move |_, key, _, modifiers| {
             let Some(editor) = weak.upgrade() else { return glib::Propagation::Proceed; };
             if !modifiers.contains(gdk::ModifierType::CONTROL_MASK)
-                || editor.dialog.root().and_then(|root| root.focus()).is_some_and(|focus| focus.is::<gtk::Text>()) {
+                || crate::page_dialog::parent(&editor.dialog).root().and_then(|root| root.focus()).is_some_and(|focus| focus.is::<gtk::Text>()) {
                 return glib::Propagation::Proceed;
             }
             match key.to_lower() {
@@ -1051,12 +1054,12 @@ impl Editor {
             glib::Propagation::Stop
         }));
         self.dialog.add_controller(clipboard_keys);
-        self.cancel.connect_clicked(glib::clone!(#[strong] weak, move |_| if let Some(editor) = weak.upgrade() { editor.dialog.close(); }));
+        self.cancel.connect_clicked(glib::clone!(#[strong] weak, move |_| if let Some(editor) = weak.upgrade() { crate::page_dialog::close_dialog(&editor.dialog); }));
         self.apply_button.connect_clicked(glib::clone!(#[strong] weak, move |_| {
             let Some(editor) = weak.upgrade() else { return; };
             if editor.error.borrow().is_some() { return; }
             editor.finish(true);
-            editor.dialog.close();
+            crate::page_dialog::close_dialog(&editor.dialog);
         }));
         self.dialog.connect_closed(glib::clone!(#[strong] weak, move |_| {
             let Some(editor) = weak.upgrade() else { return; };
@@ -1237,10 +1240,10 @@ fn open(
         }
     };
     let Some(epoch) = workspace.gpu.borrow().as_ref().map(|g| g.session.state().document_file.epoch) else { return; };
-    let can_pick = workspace.window.visible_dialog().is_none();
+    let can_pick = workspace.visible_dialog().is_none();
     let editor = Editor::build(workspace, draft, epoch, Box::new(accepted));
     editor.bind(workspace, can_pick);
-    editor.dialog.present(Some(&workspace.window));
+    crate::page_dialog::present(&editor.dialog, &workspace.window);
 }
 
 pub struct ColorButton {

@@ -14,8 +14,8 @@ use std::{cell::{Cell, RefCell}, rc::{Rc, Weak}, sync::Arc, task::{Poll, Waker}}
 
 const PREVIEW: [i32; 2] = [232, 250];
 const PREVIEW_FIT: [i32; 2] = [196, 214];
-const NARROW_PREVIEW: [i32; 2] = [348, 140];
-const NARROW_PREVIEW_FIT: [i32; 2] = [312, 104];
+const NARROW_PREVIEW: [i32; 2] = [232, 140];
+const NARROW_PREVIEW_FIT: [i32; 2] = [196, 104];
 const PRESET_TILE: i32 = 128;
 const PRESET_FRAME: [i32; 2] = [116, 86];
 const PRESET_FIT: i32 = 74;
@@ -171,7 +171,7 @@ fn title() -> gtk::Label {
 
 struct Page {
     title: gtk::Label,
-    body: gtk::Box,
+    body: crate::dialog_content::DialogContent,
     left: gtk::Box,
     art: SheetArt,
     preview: gtk::Button,
@@ -304,7 +304,7 @@ pub(crate) async fn run(w: &Rc<Workspace>) -> Result<Option<NewDrawingOrder>, St
     opened?;
     let dialog = NewDrawing::build(w);
     *w.new_drawing.borrow_mut() = Rc::downgrade(&dialog);
-    dialog.dialog.present(Some(&w.window));
+    crate::page_dialog::present(&dialog.dialog, &w.window);
     let waiting = dialog.clone();
     std::future::poll_fn(move |context| {
         let mut done = waiting.done.borrow_mut();
@@ -318,7 +318,7 @@ pub(crate) async fn run(w: &Rc<Workspace>) -> Result<Option<NewDrawingOrder>, St
 impl NewDrawing {
     fn build(w: &Rc<Workspace>) -> Rc<Self> {
         let localization = w.localization();
-        let dialog = adw::Dialog::builder().content_width(720).content_height(500).width_request(320).height_request(300).build();
+        let dialog = adw::Dialog::builder().content_width(720).content_height(500).build();
         dialog.set_widget_name("new-drawing-dialog");
         dialog.add_css_class("picker-dialog");
         dialog.add_css_class("new-drawing-dialog");
@@ -485,7 +485,7 @@ impl NewDrawing {
         for section in [name_row.upcast_ref::<gtk::Widget>(), size_section.upcast_ref(), color_section.upcast_ref(), paper_section.upcast_ref()] {
             right.append(section);
         }
-        let body = gtk::Box::new(gtk::Orientation::Horizontal, 24);
+        let body = crate::dialog_content::new(gtk::Orientation::Horizontal, 24);
         body.append(&left);
         body.append(&right);
         let page_title = title();
@@ -687,6 +687,7 @@ impl NewDrawing {
             paper_heading, texture, texture_thumbnail, texture_name, texture_relief, paper_color, paper_patch, paper_color_name, presets,
             presets_label, cancel, create,
         };
+        crate::page_dialog::configure(&dialog, crate::page_dialog::Metadata::new().title(&page.title, "label").primary(&page.create).hide(&page.cancel));
         let this = Rc::new_cyclic(|this| Self {
             this: this.clone(),
             workspace: Rc::downgrade(w),
@@ -725,7 +726,7 @@ impl NewDrawing {
             done.1.take()
         };
         self.close_colors();
-        self.dialog.close();
+        crate::page_dialog::force_close(&self.dialog);
         if let Some(waker) = waker { waker.wake(); }
     }
 
@@ -1348,12 +1349,16 @@ impl NewDrawing {
             glib::Propagation::Stop
         });
         self.dialog.add_controller(keys);
-        let narrow = adw::Breakpoint::new(adw::BreakpointCondition::parse("max-width: 700sp").unwrap());
+        self.dialog.set_can_close(false);
         let weak = self.this.clone();
-        narrow.connect_apply(move |_| if let Some(dialog) = weak.upgrade() { dialog.arrange(true); });
+        self.dialog.connect_close_attempt(move |_| {
+            if let Some(dialog) = weak.upgrade() && let Some(view) = dialog.view() { dialog.send(view.close_action()); }
+        });
         let weak = self.this.clone();
-        narrow.connect_unapply(move |_| if let Some(dialog) = weak.upgrade() { dialog.arrange(false); });
-        self.dialog.add_breakpoint(narrow);
+        crate::dialog_content::on_resize(&self.page.body, move |width| if let Some(dialog) = weak.upgrade() {
+            let minimum = [dialog.page.left.measure(gtk::Orientation::Horizontal, -1).0 as f32, 320.];
+            dialog.arrange(!dialog_panes_fit(width as f32, minimum, 24.));
+        });
         let weak = self.this.clone();
         self.dialog.connect_closed(move |_| {
             let Some(dialog) = weak.upgrade() else { return };

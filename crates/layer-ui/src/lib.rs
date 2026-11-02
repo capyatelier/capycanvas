@@ -34,6 +34,8 @@ mod zoom_tool;
 pub use zoom_tool::{ZoomDirection, ZoomDrag, ZoomToolAction, ZoomToolSettings};
 mod document_tabs;
 mod phone;
+mod dialog_presentation;
+pub use dialog_presentation::{DialogRole, DialogPresentation, dialog_panes_fit};
 pub use phone::{PhoneAction, PhoneLayout, PhoneMenuGeometry, PhoneMenuNavigation, PhoneMenuPage, PhoneState};
 pub use document_tabs::{DocumentTabDrag, DocumentTabHit, DocumentTabSlide, DocumentTabs};
 mod document_sessions;

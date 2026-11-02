@@ -109,9 +109,9 @@ pub(crate) async fn rename(w: &Rc<Workspace>, id: String, name: String) {
     dialog.set_default_response(Some("rename"));
     dialog.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
     entry.connect_changed(glib::clone!(#[weak] dialog, move |entry| {
-        dialog.set_response_enabled("rename", layer_ui::paper_library::paper_name(&entry.text()).is_some());
+        crate::page_dialog::set_response_enabled(&dialog, "rename", layer_ui::paper_library::paper_name(&entry.text()).is_some());
     }));
-    if crate::alert::choose(dialog, &w.window).await == "rename" {
+    if crate::alert::choose_editor(dialog, &w.window, Some("rename"), &[]).await == "rename" {
         w.dispatch(layer_ui::UiAction::Effect { action: layer_ui::EffectAction::RenamePaper { id, name: entry.text().into() } });
     }
 }

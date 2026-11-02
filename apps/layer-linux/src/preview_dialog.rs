@@ -97,11 +97,11 @@ impl PreviewDialog {
             self.number(&view, &w.localization()).set_value(view.value);
             if !self.shown.replace(true) {
                 w.window.add_css_class(Self::PREVIEW_CLASS);
-                self.dialog.present(Some(&w.window));
+                crate::page_dialog::present_with(&self.dialog, &w.window, layer_ui::DialogRole::CanvasPanel, crate::page_dialog::Metadata::responses(Some("apply"), "cancel", &[]));
             }
         } else if self.shown.replace(false) {
             w.window.remove_css_class(Self::PREVIEW_CLASS);
-            self.dialog.close();
+            crate::page_dialog::close_dialog(&self.dialog);
         }
     }
 }

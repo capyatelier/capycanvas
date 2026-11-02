@@ -366,6 +366,7 @@ fn deleting_an_unselected_workspace_preserves_the_presented_preview_through_comp
 fn workspace_selection_and_confirmation_wait_for_an_accepted_rename() {
     for confirm in [false, true] {
         let mut f = Fixture::new();
+        f.host.session.set_viewport([1200., 900.], [1200, 900]).unwrap();
         let active = f.controller.manager.active_id();
         let custom = f.controller.manager.items().into_iter().find(|item| !item.metadata.builtin).unwrap().id;
         let photo = "builtin:workspace:photographer";
@@ -402,6 +403,7 @@ fn workspace_selection_and_confirmation_wait_for_an_accepted_rename() {
 fn workspace_metadata_prompts_preserve_settled_and_pending_selected_previews() {
     for pending in [false, true] {
         let mut f = Fixture::new();
+        f.host.session.set_viewport([1200., 900.], [1200, 900]).unwrap();
         let active = f.controller.manager.active_id();
         let custom = f.controller.manager.items().into_iter().find(|item| !item.metadata.builtin).unwrap().id;
         let photo = "builtin:workspace:photographer";
@@ -689,9 +691,12 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::for_platform(Platform::Web)
+    }
+    fn for_platform(platform: Platform) -> Self {
         let backend = Rc::new(Backend::default());
         backend.now.set(1000);
-        let mut host = layer_host::NativeHost::new(Platform::Web).unwrap();
+        let mut host = layer_host::NativeHost::new(platform).unwrap();
         let capture = host.session.capture_workspace().unwrap();
         let baseline = capture.history.layout().clone();
         let entity = Entity::workspace("My Workspace", capture, baseline, 1000);
@@ -705,7 +710,7 @@ impl Fixture {
         )
         .unwrap();
         pollster::block_on(Store(backend.clone()).execute(StoreRequest::Commit { batch })).unwrap();
-        let controller = WorkspaceController::new_localized(Store(backend.clone()), Platform::Web, 1000, Localizer::shared(UiLanguage::English));
+        let controller = WorkspaceController::new_localized(Store(backend.clone()), platform, 1000, Localizer::shared(UiLanguage::English));
         let mut f = Self {
             backend,
             controller,
@@ -896,6 +901,7 @@ fn active_deletion_uses_available_defaults_and_persists_the_replacement() {
 fn starting_layout_dialog_previews_without_saving_and_restore_is_undoable() {
     for builtin in [None, Some(DEFAULT_WORKSPACES[0]), Some(DEFAULT_WORKSPACES[1]), Some(DEFAULT_WORKSPACES[2])] {
         let mut f = Fixture::new();
+        f.host.session.set_viewport([1200., 900.], [1200, 900]).unwrap();
         let baseline = if let Some((id, preset)) = builtin {
             // Persist an older baseline with user edits, so ordinary adoption must
             // preserve it and only explicit Restore selects the current default.
@@ -1751,6 +1757,35 @@ fn toolbar_pages_skip_layout_preview_and_reject_stale_actions() {
         f.controller.view.details.as_ref().unwrap().actions[0].action,
         ManagerAction::ShowToolbar(panel, visible)
     );
+}
+
+#[test]
+fn phone_manager_selection_keeps_the_live_layout_until_confirmation() {
+    for page in ["workspaces", "history"] {
+        let mut f = Fixture::for_platform(Platform::Gtk);
+        f.action(serde_json::json!({"type":"move_panel","panel":"toolbar","viewport":[1200,900],"target":{"kind":"float","position":[480,220]}}));
+        f.save();
+        f.host.session.set_viewport([412., 891.], [412, 891]).unwrap();
+        assert!(f.host.session.phone_layout().is_some());
+        let before = f.host.session.capture_workspace().unwrap();
+        let live = f.host.session.state().workspace.layout.clone();
+        let selected = if page == "workspaces" { "builtin:workspace:photographer" } else { "r0" };
+        let expected = if page == "workspaces" {
+            pollster::block_on(f.controller.manager.load(selected)).unwrap().entity.capture().unwrap().history.layout().clone()
+        } else {
+            before.history.revisions[selected].layout.clone()
+        };
+        f.input(serde_json::json!({"type":"open","page":page}));
+        f.input(serde_json::json!({"type":"select","id":selected}));
+        assert_eq!(f.controller.view.selected.as_deref(), Some(selected));
+        assert!(f.controller.view.enabled);
+        if page == "workspaces" { assert!(f.controller.view.details.is_some()); }
+        assert_eq!(f.host.session.state().workspace.layout, live);
+        assert_eq!(f.host.session.capture_workspace().unwrap(), before);
+        f.input(serde_json::json!({"type":"confirm"}));
+        assert_eq!(f.host.session.capture_workspace().unwrap().history.layout(), &expected);
+        assert!(f.controller.view.page.is_none());
+    }
 }
 
 #[test]

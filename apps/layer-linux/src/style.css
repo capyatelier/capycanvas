@@ -7,7 +7,7 @@ popover.pen-tooltip { padding:0; margin:0; }
 popover.pen-tooltip > contents { padding:6px 10px; border-radius:9px; background:rgba(0,0,6,.8); border:1px solid rgba(255,255,255,.1); color:white; box-shadow:none; }
 window.capy-workspace { --window-bg-color: var(--capy-bg); --window-fg-color: var(--capy-text); --headerbar-bg-color: var(--capy-panel); --headerbar-backdrop-color: var(--capy-panel); --view-bg-color: var(--capy-view); --popover-bg-color: var(--capy-panel); --panel-bg: var(--capy-panel); --tabbar-bg: var(--capy-tabbar); --input-bg: var(--capy-input); --sidebar-bg-color: var(--capy-sidebar); --sidebar-backdrop-color: var(--capy-sidebar-backdrop); --dialog-bg-color: var(--capy-settings); --corner-fit: .54; --surface-radius: calc(18px * var(--corner-fit)); --control-radius: calc(var(--panel-control-radius) * var(--corner-fit)); --tile-radius: 18px; --accent-bg-color: var(--capy-accent); --accent-fg-color: var(--capy-accent-foreground); --selection-bg: var(--capy-selection); --header-selection: var(--capy-header-selection); --header-selection-hover: var(--capy-header-selection-hover); --line-card-ring: var(--line-surround-card-ring); --line-card-shadow: var(--line-surround-card-shadow); --line-card-far-shadow: var(--line-surround-card-far-shadow); }
 /* libadwaita's line colors, matched to the background each dialog sits on (theme.rs Lines). */
-window.capy-workspace dialog { --window-bg-color: var(--dialog-bg-color); --headerbar-bg-color: var(--dialog-bg-color); --headerbar-backdrop-color: var(--dialog-bg-color); }
+window.capy-workspace dialog, .phone-dialog-page { --window-bg-color: var(--dialog-bg-color); --headerbar-bg-color: var(--dialog-bg-color); --headerbar-backdrop-color: var(--dialog-bg-color); }
 window.capy-workspace dialog sheet { --card-shade-color: var(--line-settings-card-shade); --line-card-ring: var(--line-settings-card-ring); --line-card-shadow: var(--line-settings-card-shadow); --line-card-far-shadow: var(--line-settings-card-far-shadow); --shade-color: var(--line-settings-shade); --border-opacity: var(--line-settings-border-opacity); --line-highlight: var(--line-settings-highlight); --sidebar-border-color: var(--line-sidebar-border); --sidebar-shade-color: var(--line-sidebar-shade); }
 window.capy-workspace popover { --border-opacity: var(--line-panel-border-opacity); --popover-shade-color: var(--line-panel-shade); }
 .panel-configuration { --card-shade-color: var(--line-panel-card-shade); --line-card-ring: var(--line-panel-card-ring); --line-card-shadow: var(--line-panel-card-shadow); --line-card-far-shadow: var(--line-panel-card-far-shadow); }
@@ -656,3 +656,6 @@ window.capy-workspace.glass .dock-panel.gpu-panel-surface .tab-strip-end { backg
 .phone-menu-native > contents { background: transparent; border: 0; border-radius: 0; box-shadow: none; }
 #phone-menu > scrolledwindow + scrolledwindow { border-left: 0; }
 #phone-menu-separator { color: var(--popover-fg-color); --border-opacity: var(--line-panel-border-opacity); }
+
+.phone-dialog-page { background-color: var(--dialog-bg-color); color: var(--dialog-fg-color); }
+.phone-dialog-page .dialog-page { padding: 8px; }

@@ -26,12 +26,21 @@ impl Drop for Wait {
             self.dialog.disconnect(handler);
         }
         if !self.completed {
-            self.dialog.force_close();
+            crate::page_dialog::force_close(&self.dialog);
         }
     }
 }
 
 pub async fn choose(dialog: adw::AlertDialog, parent: &impl IsA<gtk::Widget>) -> glib::GString {
+    choose_role(dialog, parent, layer_ui::DialogRole::Alert, crate::page_dialog::Metadata::new()).await
+}
+
+pub async fn choose_editor(dialog: adw::AlertDialog, parent: &impl IsA<gtk::Widget>, primary: Option<&str>, secondary: &[&str]) -> glib::GString {
+    let metadata = crate::page_dialog::Metadata::responses(primary, &dialog.close_response(), secondary);
+    choose_role(dialog, parent, layer_ui::DialogRole::Editor, metadata).await
+}
+
+async fn choose_role(dialog: adw::AlertDialog, parent: &impl IsA<gtk::Widget>, role: layer_ui::DialogRole, metadata: crate::page_dialog::Metadata) -> glib::GString {
     let state = Rc::new(RefCell::new(Response::default()));
     let handler = dialog.connect_response(None, {
         let state = state.clone();
@@ -53,7 +62,7 @@ pub async fn choose(dialog: adw::AlertDialog, parent: &impl IsA<gtk::Widget>) ->
         handler: Some(handler),
         completed: false,
     };
-    wait.dialog.present(Some(parent));
+    crate::page_dialog::present_with(&wait.dialog, parent, role, metadata);
     let response = std::future::poll_fn(|cx| {
         let mut state = state.borrow_mut();
         if let Some(value) = state.value.take() {

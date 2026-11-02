@@ -2,7 +2,7 @@
 use super::*;
 use std::{cell::{Cell, RefCell}, task::{Poll, Waker}};
 
-pub(super) fn page(nav: &adw::NavigationView, title: &str, tag: &str, body: &gtk::Box) -> adw::HeaderBar {
+pub(super) fn page(nav: &adw::NavigationView, title: &str, tag: &str, body: &gtk::Box) -> (adw::ToolbarView, adw::HeaderBar) {
     let toolbar = adw::ToolbarView::new();
     let header = adw::HeaderBar::new();
     toolbar.add_top_bar(&header);
@@ -18,7 +18,7 @@ pub(super) fn page(nav: &adw::NavigationView, title: &str, tag: &str, body: &gtk
     toolbar.set_content(Some(&scroll));
     let page = adw::NavigationPage::builder().title(title).tag(tag).child(&toolbar).build();
     nav.add(&page);
-    header
+    (toolbar, header)
 }
 
 pub(super) fn link(group: &adw::PreferencesGroup, nav: &adw::NavigationView, title: &str, tag: &str) -> adw::ActionRow {
@@ -36,7 +36,7 @@ struct Guard(adw::Dialog, Option<glib::SignalHandlerId>);
 impl Drop for Guard {
     fn drop(&mut self) {
         if let Some(handler) = self.1.take() { self.0.disconnect(handler); }
-        self.0.force_close();
+        crate::page_dialog::force_close(&self.0);
     }
 }
 pub(super) async fn choose(dialog: &adw::Dialog, parent: &adw::ApplicationWindow, response: &Cell<&'static str>) -> &'static str {
@@ -47,7 +47,7 @@ pub(super) async fn choose(dialog: &adw::Dialog, parent: &adw::ApplicationWindow
         move |_| { closed.set(true); if let Some(waker) = waker.take() { waker.wake(); } }
     });
     let _guard = Guard(dialog.clone(), Some(handler));
-    dialog.present(Some(parent));
+    crate::page_dialog::present(dialog, parent);
     std::future::poll_fn(|cx| {
         if closed.get() { Poll::Ready(()) } else { *waker.borrow_mut() = Some(cx.waker().clone()); Poll::Pending }
     }).await;
