@@ -182,7 +182,8 @@ impl<R:CanvasRenderer> UiSession<R> {
         let Some(ready)=self.region_tools.gesture.as_ref().and_then(|gesture|gesture.ready.as_ref()) else{return Ok(None);};
         let selection=Selection::pixels(ready.result.pixels.clone()).transformed(ready.basis).map_err(error)?;
         let mut operation=ready.operation.clone();
-        if let layer_core::RasterOperationKind::Fill {underfill,..}=&mut operation {
+        if let layer_core::RasterOperationKind::Fill {underfill,edges,..}=&mut operation {
+            if let Some(edges)=edges {edges.anchors=ready.result.anchors.clone();}
             *underfill=ready.result.underfill.clone().map(Selection::pixels).map(|selection|selection.transformed(ready.basis)).transpose().map_err(error)?;
         }
         Ok(Some((selection,operation,ready.color)))

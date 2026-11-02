@@ -3,7 +3,7 @@ use crate::test_support::flush_engine;
 use layer_core::authored::{PaintBase, PaintSource};
 
 #[derive(Clone, Copy)]
-enum Border { Below, Same, Above, AboveWhite, Solid, Flat, Junction, Soft }
+enum Border { Below, Same, Above, AboveWhite, Solid, Flat, Junction, Soft, WideFlat, InsideSoft, WideAboveWhite }
 #[derive(Clone, Copy)]
 struct Case { name: &'static str, border: Border, ink: [f32; 4] }
 const CASES: [Case; 11] = [
@@ -33,7 +33,12 @@ impl Geometry {
     }
     fn selected(self,d:[f32;2])->bool {d[0]<0. && (!matches!(self.case.border,Border::Junction) || d[1]>0.)}
     fn alpha(self,d:[f32;2])->f32 {
-        if matches!(self.case.border,Border::Flat){return 0.;}
+        if matches!(self.case.border,Border::Flat|Border::WideFlat){return 0.;}
+        if matches!(self.case.border,Border::WideAboveWhite) {return f32::from(d[0].abs()<24.)*self.case.ink[3];}
+        if matches!(self.case.border,Border::InsideSoft) {
+            let distance=(d[0]+8.).hypot((d[1].abs()-16.).max(0.));
+            return ((6.-distance)/4.).clamp(0.,1.)*self.case.ink[3];
+        }
         let distance=if matches!(self.case.border,Border::Junction){d[0].abs().min(d[1].abs())}else{d[0].abs()};
         let coverage=if matches!(self.case.border,Border::Soft){((8.-distance)/6.).clamp(0.,1.)}else{f32::from(distance<4.)};
         coverage*self.case.ink[3]
@@ -42,13 +47,14 @@ impl Geometry {
         let d=self.distances(x,y);let selected=self.selected(d);let alpha=self.alpha(d);
         let stroke=[self.case.ink[0]*alpha,self.case.ink[1]*alpha,self.case.ink[2]*alpha,alpha];
         let flat=if selected {if replacement {F}else{A}}else if matches!(self.case.border,Border::Junction) && d[0]<0. {OTHER}else{N};
-        let opaque=matches!(self.case.border,Border::Solid|Border::Flat|Border::Junction|Border::Soft);
+        let flat=if matches!(self.case.border,Border::WideFlat) && d[0]>=64. {A}else{flat};
+        let opaque=matches!(self.case.border,Border::Solid|Border::Flat|Border::Junction|Border::Soft|Border::WideFlat|Border::InsideSoft);
         if opaque {return over(stroke,flat);}
         if plane==1 {return stroke;}
         let fill=if replacement && selected {F}else{[0.;4]};
         match self.case.border {
             Border::Same=>over(stroke,fill),
-            Border::Above|Border::AboveWhite=>fill.map(|v|v*(1.-alpha)),
+            Border::Above|Border::AboveWhite|Border::WideAboveWhite=>fill.map(|v|v*(1.-alpha)),
             _=>fill,
         }
     }
@@ -60,9 +66,9 @@ impl Geometry {
         }}
         pixel.map(|value|value as f32)
     }
-    fn projection(self,tolerance:f32)->Vec<u8> {
+    fn projection(self,tolerance:f32,anchors:&layer_core::FillAnchors,primary:&SelectionPixels,half:bool)->Vec<u8> {
         let [width,height]=self.extent;
-        let original=(0..height).flat_map(|y|(0..width).map(move|x|self.pixel(x,y,false,0))).collect::<Vec<_>>();
+        let original=(0..height).flat_map(|y|(0..width).map(move|x|{let pixel=self.pixel(x,y,false,0);if half {pixel.map(|v|layer_core::color::f16::from_f32(v).to_f32())}else{pixel}})).collect::<Vec<_>>();
         let seed=original[((self.center[1] as u32+30)*width+self.center[0] as u32-32) as usize];
         let distance=|pixel:[f32;4]|pixel.iter().zip(seed).map(|(p,s)|(p-s)*(p-s)).sum::<f32>();
         let mut result=Vec::with_capacity((width*height*4) as usize);
@@ -70,16 +76,46 @@ impl Geometry {
             let pixel=original[(y*width+x) as usize];let mut output=pixel;
             let d=self.distances(x as f32+0.5,y as f32+0.5);
             if self.selected(d) {
-                let mut neighbour=pixel;let mut maximum=-1.;
-                for ny in y.saturating_sub(24)..=(y+24).min(height-1) {for nx in x.saturating_sub(24)..=(x+24).min(width-1) {
-                    if nx.abs_diff(x).pow(2)+ny.abs_diff(y).pow(2)>24*24 {continue;}
-                    let candidate=original[(ny*width+nx) as usize];let score=distance(candidate);
-                    if score>tolerance*tolerance && score>maximum {maximum=score;neighbour=candidate;}
-                }}
-                output=if maximum<tolerance*tolerance {F}else{
+                let mut neighbour=pixel;let mut owned=false;let mut legacy_neighbour=false;
+                if let Some(q)=anchors.get([x,y])
+                    && q[0]<width && q[1]<height && value(primary,q[0],q[1])>0 {
+                    owned=true;
+                    let delta=[i64::from(x)-i64::from(q[0]),i64::from(y)-i64::from(q[1])];
+                    let steps=delta[0].abs().max(delta[1].abs());
+                    let length=delta[0]*delta[0]+delta[1]*delta[1];
+                    legacy_neighbour=steps==0;
+                    if length*4>9 {owned=false;}
+                    if steps!=0 && owned {
+                        let mut current=original[(q[1]*width+q[0]) as usize];let mut plateau=false;
+                        for i in 1_i64..=24 {
+                            if i*i*length>24*24*steps*steps {break;}
+                            let at=std::array::from_fn::<_,2,_>(|axis|i64::from(q[axis])+delta[axis].signum()*((delta[axis].abs()*i+steps/2)/steps));
+                            if at[0]<0 || at[1]<0 || at[0]>=i64::from(width) || at[1]>=i64::from(height) {legacy_neighbour=true;break;}
+                            let next=original[(at[1] as u32*width+at[0] as u32) as usize];
+                            if fill_equal_cpu(current,next,half) && distance(current)>=tolerance*tolerance {
+                                if i-1<steps {owned=false;}
+                                neighbour=current;plateau=true;break;
+                            }
+                            current=next;
+                        }
+                        if !plateau {neighbour=current;}
+                    }
+                    if legacy_neighbour {
+                        let mut maximum=-1.;
+                        for ny in y.saturating_sub(24)..=(y+24).min(height-1) {for nx in x.saturating_sub(24)..=(x+24).min(width-1) {
+                            if nx.abs_diff(x).pow(2)+ny.abs_diff(y).pow(2)>24*24 {continue;}
+                            let candidate=original[(ny*width+nx) as usize];let score=distance(candidate);
+                            if score>maximum {maximum=score;neighbour=candidate;}
+                        }}
+                    }
+                }
+                output=if distance(pixel)<tolerance*tolerance {F}else if !owned {pixel}else if legacy_neighbour {
+                    fill_fraction_cpu(pixel,seed,neighbour,half).map_or(pixel,|t|std::array::from_fn(|c|neighbour[c]+t*(F[c]-neighbour[c])))
+                }else{
                     let delta=std::array::from_fn::<_,4,_>(|channel|seed[channel]-neighbour[channel]);
                     let square=delta.iter().map(|v|v*v).sum::<f32>();
-                    let fraction=(pixel.iter().zip(neighbour).zip(delta).map(|((p,n),d)|(p-n)*d).sum::<f32>()/square.max(1e-12)).clamp(0.,1.);
+                    let fraction=if square==0. {0.}else{(pixel.iter().zip(neighbour).zip(delta).map(|((p,n),d)|(p-n)*d).sum::<f32>()/square).clamp(0.,1.)};
+                    let fraction=fraction.min(seed_limit(pixel,seed));
                     std::array::from_fn(|channel|pixel[channel]+fraction*(F[channel]-seed[channel]))
                 };
             }
@@ -89,40 +125,6 @@ impl Geometry {
             }
         }}
         result
-    }
-    fn preserved(self,r:&WgpuRasterizer,tolerance:f32,band:Option<&SelectionPixels>)->(Vec<bool>,usize,usize,f32,f32) {
-        let [width,height]=self.extent;let count=(width*height) as usize;let mut flags=vec![false;count];
-        let Some(band)=band else{return (flags,0,0,0.,0.);};
-        if matches!(self.case.border,Border::Below|Border::Same|Border::Above|Border::AboveWhite){return (flags,0,0,0.,0.);}
-        let half=r.device.working_format()==wgpu::TextureFormat::Rgba16Float;
-        let store=|pixel:[f32;4]|if half {pixel.map(|v|layer_core::color::f16::from_f32(v).to_f32())}else{pixel};
-        let original=(0..height).flat_map(|y|(0..width).map(move|x|store(self.pixel(x,y,false,0)))).collect::<Vec<_>>();
-        let seed=original[((self.center[1] as u32+30)*width+self.center[0] as u32-32) as usize];
-        let distance=|pixel:[f32;4]|pixel.iter().zip(seed).map(|(p,s)|(p-s)*(p-s)).sum::<f32>();
-        let mut cases=Vec::new();let mut positions=Vec::new();
-        for y in 0..height {for x in 0..width {
-            if value(band,x,y)==0 {continue;}
-            let pixel=original[(y*width+x) as usize];if pixel==seed {continue;}
-            let mut neighbour=pixel;let mut maximum=-1.;
-            for ny in y.saturating_sub(24)..=(y+24).min(height-1) {for nx in x.saturating_sub(24)..=(x+24).min(width-1) {
-                if nx.abs_diff(x).pow(2)+ny.abs_diff(y).pow(2)>24*24 {continue;}
-                let candidate=original[(ny*width+nx) as usize];let score=distance(candidate);
-                if score>tolerance*tolerance && score>maximum {maximum=score;neighbour=candidate;}
-            }}
-            if maximum<tolerance*tolerance {continue;}
-            cases.push([pixel,seed,neighbour,F]);positions.push([x,y]);
-        }}
-        if cases.is_empty(){return (flags,0,0,0.,0.);}
-        let results=unmix_gpu(r,&cases,[0,0,if half{10}else{23},if half{24}else{149}]);
-        let mut total=0;let mut residual=Vec::new();
-        for ([x,y],(_,ambiguous,t)) in positions.into_iter().zip(results) {
-            if !ambiguous {continue;}
-            flags[(y*width+x) as usize]=true;total+=1;
-            if self.selected(self.distances(x as f32+0.5,y as f32+0.5)){residual.push(t);}
-        }
-        residual.sort_by(f32::total_cmp);let maximum=residual.last().copied().unwrap_or(0.);
-        let p95=residual.get((residual.len()*95).div_ceil(100).saturating_sub(1)).copied().unwrap_or(0.);
-        (flags,total,residual.len(),maximum,p95)
     }
     fn image(self,replacement:bool,plane:u8)->Arc<layer_core::color::source::SourceImage> {self.image_depth(replacement,plane,SampleDepth::F32)}
     fn image_depth(self,replacement:bool,plane:u8,depth:SampleDepth)->Arc<layer_core::color::source::SourceImage> {
@@ -137,7 +139,7 @@ impl Geometry {
         let root=document.artwork.root;document.artwork.compositions.get_mut(root).unwrap().blend=layer_core::BlendSpace::Linear;
         placement::set_source(&mut document,self.image(replacement,0));
         let target=target(&document);
-        let separate=matches!(self.case.border,Border::Below|Border::Above|Border::AboveWhite);
+        let separate=matches!(self.case.border,Border::Below|Border::Above|Border::AboveWhite|Border::WideAboveWhite);
         let reference=if separate {
             let (_,reference)=placement::append_paint(&mut document,"Reference",PaintSource {domain:self.extent,color_mode:Default::default(),
                 raster:Default::default(),base:Some(PaintBase::new(self.image(false,1).into())),operations:Default::default()});
@@ -148,7 +150,7 @@ impl Geometry {
             reference
         }else{target};
         let mut references=vec![reference];
-        if matches!(self.case.border,Border::AboveWhite) {
+        if matches!(self.case.border,Border::AboveWhite|Border::WideAboveWhite) {
             let white=depth_source(self.extent,SampleDepth::F32,RgbSpace::Srgb,self.extent[0] as usize*self.extent[1] as usize*16+4096,|_,_|[1.;4]);
             let (_,background)=placement::append_paint(&mut document,"Opaque white reference",PaintSource {domain:self.extent,color_mode:Default::default(),
                 raster:Default::default(),base:Some(PaintBase::new(white.into())),operations:Default::default()});
@@ -157,15 +159,61 @@ impl Geometry {
         (document,target,references)
     }
 }
+fn fill_fraction_cpu(pixel:[f32;4],seed:[f32;4],neighbour:[f32;4],half:bool)->Option<f32> {
+    let interval=|value:f32| {
+        let magnitude=value.abs();
+        let (previous,next)=if half {
+            let bits=layer_core::color::f16::from_f32(magnitude).to_bits();
+            (layer_core::color::f16::from_bits(bits.saturating_sub(1)).to_f32(),layer_core::color::f16::from_bits(bits+1).to_f32())
+        }else{let bits=magnitude.to_bits();(f32::from_bits(bits.saturating_sub(1)),f32::from_bits(bits+1))};
+        let high=(next-magnitude)*0.5;let low=if magnitude==0. {high}else{(magnitude-previous)*0.5};
+        if value<0. {(high,low)}else{(low,high)}
+    };
+    let greater=|a:(i64,i64),b:(i64,i64)|i128::from(a.0)*i128::from(b.1)>i128::from(b.0)*i128::from(a.1);
+    let mut lower=(0,1);let mut upper=(1,1);
+    for channel in 0..4 {
+        let (pl,ph)=interval(pixel[channel]);let (sl,sh)=interval(seed[channel]);let (nl,nh)=interval(neighbour[channel]);
+        let largest=(pixel[channel].abs()+pl.max(ph)).max(seed[channel].abs()+sl.max(sh)).max(neighbour[channel].abs()+nl.max(nh));
+        let exponent=((largest.to_bits()>>23)&255) as i32-127;let scale=2_f32.powi((27-exponent).min(127));
+        let quantize=|v:f32,lo:f32,hi:f32|((v*scale).round_ties_even() as i64,(lo*scale+0.5).ceil() as i64,(hi*scale+0.5).ceil() as i64);
+        let (qp,pl,ph)=quantize(pixel[channel],pl,ph);let (qs,sl,sh)=quantize(seed[channel],sl,sh);let (qn,nl,nh)=quantize(neighbour[channel],nl,nh);
+        let a=qs+sh-qn-nh;let b=qp-pl-qn-nh;
+        if a==0 && b>0 {return None;}
+        if a>0 && greater((b,a),lower) {lower=(b,a);}
+        if a<0 && greater(upper,(-b,-a)) {upper=(-b,-a);}
+        let c=qs-sl-qn+nl;let d=qp+ph-qn+nl;
+        if c==0 && d<0 {return None;}
+        if c>0 && greater(upper,(d,c)) {upper=(d,c);}
+        if c<0 && greater((-d,-c),lower) {lower=(-d,-c);}
+    }
+    (!greater(lower,upper)).then(||0.5*(lower.0 as f32/lower.1 as f32+upper.0 as f32/upper.1 as f32))
+}
+fn fill_equal_cpu(a:[f32;4],b:[f32;4],half:bool)->bool {fill_fraction_cpu(a,b,b,half).is_some()}
+fn seed_limit(pixel:[f32;4],seed:[f32;4])->f32 {
+    let mut limit=1_f32;
+    for channel in 0..4 {if seed[channel]>0. {limit=limit.min(pixel[channel]/seed[channel]);}}
+    for channel in 0..3 {
+        let alpha=seed[3]-seed[channel];
+        if alpha>0. {limit=limit.min((pixel[3]-pixel[channel])/alpha);}
+    }
+    limit.clamp(0.,1.)
+}
 fn over(top:[f32;4],bottom:[f32;4])->[f32;4] {std::array::from_fn(|channel|top[channel]+bottom[channel]*(1.-top[3]))}
 
 #[test]
 fn fill_recolours_antialiased_edges_like_direct_geometry() {
     let mut failures=Vec::new();
-    for case in CASES {for (degrees,offset,center,extent) in [
+    let poses=[
         (0_f32,0.25_f32,[48_f32,40_f32],[96,80]),(17.,0.6,[48.,40.],[96,80]),(-31.,0.35,[48.,40.],[96,80]),
-        (17.,0.6,[256.,40.],[384,80]),(17.,0.6,[256.,256.],[384,384]),
-    ] {
+        (17.,0.6,[256.,40.],[384,80]),(17.,0.6,[256.,256.],[384,384]),(17.,0.6,[48.,0.],[96,80]),
+    ];
+    let rows=CASES.into_iter().flat_map(|case|poses.map(move |(angle,offset,center,extent)|(case,angle,offset,center,extent,false))).chain([
+        (Case {name:"64px neighbouring flat",border:Border::WideFlat,ink:[0.;4]},0.,0.25,[64.,48.],[160,96],false),
+        (Case {name:"12px soft stroke inside flat",border:Border::InsideSoft,ink:[0.03,0.08,0.24,0.65]},0.,0.25,[64.,48.],[160,96],false),
+        (Case {name:"all visible opaque target",border:Border::WideFlat,ink:[0.;4]},0.,0.25,[64.,48.],[160,96],true),
+        (Case {name:"all visible transparent wide target",border:Border::WideAboveWhite,ink:[0.03,0.11,0.19,1.]},0.,0.25,[80.,48.],[192,96],true),
+    ]);
+    for (case,degrees,offset,center,extent,all_visible) in rows {
         let angle=degrees.to_radians();let geometry=Geometry {case,normal:[angle.cos(),angle.sin()],offset,center,extent};
         let (document,target,references)=geometry.document(false);
         let (direct,_,_)=geometry.document(true);
@@ -175,40 +223,48 @@ fn fill_recolours_antialiased_edges_like_direct_geometry() {
         let mut engine=layer_engine::CanvasEngine::new(renderer,document,layer_engine::input_queue(8).1,
             crate::test_support::view(extent),layer_engine::ViewTransform::IDENTITY).unwrap();
         flush_engine(&mut engine);let before=engine.backend_mut().readback_srgb_rgba8().unwrap();
-        let scope=if references.len()==1 {layer_core::SceneScope::Raw(references[0])}else {
+        let scope=if all_visible {layer_core::SceneScope::All}else if references.len()==1 {layer_core::SceneScope::Raw(references[0])}else {
             layer_core::SceneScope::Members(references.iter().map(|reference|engine.document().scene().source_owner(*reference).unwrap()).collect::<Vec<_>>().into())
         };
         let mut query=request(RegionSource::Scene {snapshot:engine.document().snapshot(),scope},
             rectangle([0,0,1,1]),RegionRefinement {close_gaps:false,edges:RegionEdges::LineMiddle,smooth_edges:true},1./32.);
+        query.colour_mode=if all_visible {layer_render::RegionColourMode::Target(target)}
+            else if matches!(case.border,Border::Solid|Border::Flat|Border::Junction|Border::Soft|Border::WideFlat|Border::InsideSoft) {layer_render::RegionColourMode::ColourOnSolid}
+            else {layer_render::RegionColourMode::AlphaBorder};
         query.enclosure=None;query.position=[center[0] as u32-32,center[1] as u32+30];query.fill=Some(Default::default());
         let snapshot=engine.document().snapshot();let position=Point {x:query.position[0] as f32,y:query.position[1] as f32};let tolerance=query.tolerance;
         let result=receive_request(engine.backend_mut(),query);
-        let band=result.underfill.clone();
+        let anchors=result.anchors.clone();
+        let primary=result.pixels.clone();
+        if matches!(case.border,Border::WideAboveWhite) {
+            assert_eq!(result.underfill.as_ref().map_or(0,|pixels|value(pixels,64,48)),255,"transparent Target mode must retain ownership eight pixels into the wide opaque reference");
+        }
         let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.document().artwork.coverage.next_handle(),extent,[0;2]);
         coverage.source.default_coverage=0.;coverage.selection=Some(Selection::pixels(result.pixels));
-        let edges=result.underfill.as_ref().map(|_|Box::new(layer_core::FillEdges {snapshot:snapshot.clone(),position,tolerance,
-            lines:if matches!(case.border,Border::Below|Border::Above|Border::AboveWhite){references.iter().map(|reference|layer_core::FillLine {snapshot:snapshot.clone(),scope:layer_core::SceneScope::Raw(*reference),fill_above:matches!(case.border,Border::Above|Border::AboveWhite)}).collect()}else{Vec::new()}}));
+        let edges=result.underfill.as_ref().map(|_|Box::new(layer_core::FillEdges {snapshot:snapshot.clone(),position,tolerance,anchors:anchors.clone(),
+            lines:if matches!(case.border,Border::Below|Border::Above|Border::AboveWhite|Border::WideAboveWhite){references.iter().map(|reference|layer_core::FillLine {snapshot:snapshot.clone(),scope:layer_core::SceneScope::Raw(*reference),fill_above:matches!(case.border,Border::Above|Border::AboveWhite|Border::WideAboveWhite)}).collect()}else{Vec::new()}}));
         let operation=layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,kind:layer_core::RasterOperationKind::Fill {
             color:F,texture:layer_core::FillTexture {strength:1.,paper:None},alpha_locked:false,edges,underfill:result.underfill.map(Selection::pixels)}};
         engine.append_raster_operation(target,operation).unwrap();flush_engine(&mut engine);
         let actual=engine.backend_mut().readback_srgb_rgba8().unwrap();
-        let projected=matches!(case.border,Border::Junction|Border::Soft).then(||geometry.projection(tolerance));
-        let (preserved,preserved_total,preserved_region,old_seed_max,old_seed_p95)=geometry.preserved(engine.backend(),tolerance,band.as_deref());
-        if matches!(case.border,Border::Solid|Border::Flat){assert_eq!(preserved_region,0,"seed-side two-colour geometry must never be preserved: {} {degrees} {offset} {center:?}",case.name);}
-        if matches!(case.border,Border::Flat){assert_eq!(preserved_total,0,"flat-to-flat mixtures must never be preserved");}
-        eprintln!("FILL_EDGE_PRESERVED case={} angle={degrees} offset={offset} center={center:?} total={preserved_total} region={preserved_region} old_seed_fraction_max={old_seed_max} p95={old_seed_p95}",case.name);
+        let projected=matches!(case.border,Border::Junction|Border::Soft|Border::InsideSoft).then(||geometry.projection(tolerance,anchors.as_deref().expect("colour fill returns assignment anchors"),&primary,engine.backend().device.working_format()==wgpu::TextureFormat::Rgba16Float));
         let mut direct_errors=Vec::new();
-        let mut maximum=[0u8;4];let mut first_bad=None;
+        let mut maximum=[0u8;4];let mut first_bad=None;let mut preserved_seed=0;let mut formula_preserved=0;
         for y in 0..extent[1] {for x in 0..extent[0] {
             let d=geometry.distances(x as f32+0.5,y as f32+0.5);let selected=geometry.selected(d);
-            let edge=d[0].abs()<12. || matches!(case.border,Border::Junction) && d[1].abs()<12.;
-            let complex=matches!(case.border,Border::Junction|Border::Soft);
+            let edge=d[0].abs()<12. || matches!(case.border,Border::Junction) && d[1].abs()<12.
+                || matches!(case.border,Border::InsideSoft) && (d[0]+8.).hypot((d[1].abs()-16.).max(0.))<6.+std::f32::consts::FRAC_1_SQRT_2;
+            let complex=matches!(case.border,Border::Junction|Border::Soft)
+                || matches!(case.border,Border::InsideSoft) && (d[0]+8.).hypot((d[1].abs()-16.).max(0.))<6.+std::f32::consts::FRAC_1_SQRT_2;
             let outside=d[0]>std::f32::consts::FRAC_1_SQRT_2 || matches!(case.border,Border::Junction) && d[1]< -std::f32::consts::FRAC_1_SQRT_2;
             let unchanged=outside || complex && !selected;
-            let conservative=complex && preserved[(y*extent[0]+x) as usize];
-            let limit=if unchanged {1}else if !edge {0}else if conservative {1}else if complex {2}else{3};
+            let limit=if unchanged {1}else if !edge {0}else if complex {2}else{3};
             let at=((y*extent[0]+x)*4) as usize;
-            let reference=if unchanged || conservative {&before[at..at+4]}else if let Some(projected)=&projected {&projected[at..at+4]}else{&expected[at..at+4]};
+            let reference=if unchanged {&before[at..at+4]}else if complex {&projected.as_ref().unwrap()[at..at+4]}else{&expected[at..at+4]};
+            if complex && selected && edge && actual[at..at+4]==before[at..at+4] {
+                if expected[at..at+4]!=before[at..at+4] {preserved_seed+=1;}
+                if reference!=&before[at..at+4] {formula_preserved+=1;}
+            }
             if selected && edge {direct_errors.push(actual[at..at+4].iter().zip(&expected[at..at+4]).map(|(a,b)|a.abs_diff(*b)).max().unwrap());}
             let category=if unchanged {3}else if !edge {0}else if complex {2}else{1};
             for channel in 0..4 {
@@ -218,10 +274,11 @@ fn fill_recolours_antialiased_edges_like_direct_geometry() {
         }}
         direct_errors.sort_unstable();let direct_max=direct_errors.last().copied().unwrap_or(0);
         let direct_p95=direct_errors.get((direct_errors.len()*95).div_ceil(100).saturating_sub(1)).copied().unwrap_or(0);
+        eprintln!("FILL_EDGE_PRESERVED case={} angle={degrees} offset={offset} center={center:?} seed_side={preserved_seed} formula_side={formula_preserved}",case.name);
         eprintln!("FILL_EDGE_DIRECT case={} angle={degrees} offset={offset} center={center:?} region_edge_max={direct_max} p95={direct_p95}",case.name);
         eprintln!("FILL_EDGE_ROW case={} angle={degrees} offset={offset} center={center:?} maximum_interior_edge_complex_far={maximum:?} first_bad={first_bad:?}",case.name);
         if let Some(failure)=first_bad {failures.push(failure);}
-    }}
+    }
     assert!(failures.is_empty(),"{}",failures.join("\n"));
 }
 
@@ -265,7 +322,7 @@ fn check(@builtin(global_invocation_id) id:vec3<u32>) {
     let input=r.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {label:Some("fill unmix cases"),contents:&bytes,usage:wgpu::BufferUsages::STORAGE});
     let output=r.device.create_buffer(&wgpu::BufferDescriptor {label:Some("fill unmix results"),size:cases.len() as u64*32,usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_SRC,mapped_at_creation:false});
     let mut bytes=[1f32,0.,0.,0.,0.,1.,0.,0.,0.,0.,1.,0.].into_iter().flat_map(f32::to_ne_bytes).collect::<Vec<_>>();
-    bytes.extend(codes.into_iter().flat_map(u32::to_ne_bytes));
+    bytes.extend(codes.into_iter().flat_map(u32::to_ne_bytes));bytes.extend([0_u8;16]);
     let precision=r.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {label:Some("fill unmix source precision"),contents:&bytes,usage:wgpu::BufferUsages::UNIFORM});
     let binding=crate::bindings::group(&r.device,"fill unmix test io",&io,[input.as_entire_binding(),output.as_entire_binding()]);
     let precision_binding=r.device.create_bind_group(&wgpu::BindGroupDescriptor {label:Some("fill unmix test precision"),layout:&precision_layout,entries:&[wgpu::BindGroupEntry {binding:4,resource:precision.as_entire_binding()}]});
@@ -273,7 +330,7 @@ fn check(@builtin(global_invocation_id) id:vec3<u32>) {
     {let mut pass=encoder.begin_compute_pass(&Default::default());pass.set_pipeline(&pipeline);pass.set_bind_group(0,&binding,&[]);pass.set_bind_group(2,&precision_binding,&[]);pass.dispatch_workgroups((cases.len() as u32).div_ceil(64),1,1);}
     r.queue.submit([encoder.finish()]);
     let bytes=pollster::block_on(crate::local_tone::read_buffer_async(&r.device,&r.queue,&output)).unwrap();
-    bytes.chunks_exact(32).map(|bytes| {
+    bytes.as_chunks::<32>().0.iter().map(|bytes| {
         let word=|index|u32::from_le_bytes(bytes[index*4..index*4+4].try_into().unwrap());
         (std::array::from_fn(|i|f32::from_bits(word(i))),word(4)!=0,f32::from_bits(word(5)))
     }).collect()
@@ -291,14 +348,20 @@ fn fill_unmix_precision_preserves_every_two_colour_fraction() {
     }
     let counterexample=cases.len();cases.push([[0.2645,0.276,0.324,1.],A,N,F]);
     cases.push([[0.412,0.064,0.064,1.],A,N,F]);
+    cases.push([[0.035,0.11,0.3675,1.],A,[0.02,0.05,0.12,1.],F]);
+    cases.push([[0.,0.276,0.324,1.],A,N,F]);
+    cases.push([[0.25,0.9,0.4,0.9],A,N,F]);
     for maximum in [0,255,65535] {for (mantissa,minimum) in [(10,24),(23,149)] {
         let results=unmix_gpu(&r,&cases,[maximum,0,mantissa,minimum]);
         for (index,(_,ambiguous,_)) in results[..counterexample].iter().enumerate() {assert!(!ambiguous,"two-colour fraction {index}, codec {maximum}, mantissa {mantissa}");}
         assert!(results[counterexample].1,"non-collinear soft mixture must remain ambiguous");
         assert!(results[counterexample+1].1,"non-collinear junction mixture must remain ambiguous");
         if maximum==0 && mantissa==23 {
-            let golden=[0.2645,0.276,0.324,1.];
+            let golden=[0.06971533,0.24772481,0.24231611,1.];
             assert!(results[counterexample].0.iter().zip(golden).all(|(a,b)|(a-b).abs()<1e-6));
+            for (index,golden) in [(2,[0.004,0.1055,0.3545,1.]),(3,[0.,0.276,0.324,1.]),(4,[0.25,0.9,0.4,0.9])] {
+                assert!(results[counterexample+index].0.iter().zip(golden).all(|(a,b)|(a-b).abs()<1e-6),"gamut case {index}: {:?}",results[counterexample+index].0);
+            }
         }
     }}
 }
@@ -332,13 +395,15 @@ fn fill_imported_u8_edge_keeps_precision_after_an_unrelated_page_edit() {
         let snapshot=engine.document().snapshot();
         let mut query=request(RegionSource::Scene {snapshot:snapshot.clone(),scope:layer_core::SceneScope::Raw(target)},rectangle([0,0,1,1]),
             RegionRefinement {close_gaps:false,edges:RegionEdges::LineMiddle,smooth_edges:true},1./32.);
+        query.colour_mode=layer_render::RegionColourMode::ColourOnSolid;
         query.enclosure=None;query.position=[64,70];query.fill=Some(Default::default());
         let result=receive_request(engine.backend_mut(),query);
+        let anchors=result.anchors.clone();
         let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.allocate_coverage_handle(),extent,[0;2]);
         coverage.source.default_coverage=0.;coverage.selection=Some(Selection::pixels(result.pixels));
         engine.append_raster_operation(target,layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,
             kind:layer_core::RasterOperationKind::Fill {color:F,texture:layer_core::FillTexture {strength:1.,paper:None},alpha_locked:false,
-                edges:Some(Box::new(layer_core::FillEdges {snapshot,position:Point {x:64.,y:70.},tolerance:1./32.,lines:Vec::new()})),
+                edges:Some(Box::new(layer_core::FillEdges {snapshot,position:Point {x:64.,y:70.},tolerance:1./32.,anchors,lines:Vec::new()})),
                 underfill:result.underfill.map(Selection::pixels)}}).unwrap();flush_engine(&mut engine);
         let actual=engine.backend_mut().readback_srgb_rgba8().unwrap();
         for y in 0..extent[1] {for x in 0..extent[0] {
@@ -370,7 +435,7 @@ fn fill_support_without_a_valid_line_profile_preserves_the_source() {
     let snapshot=engine.document().snapshot();
     engine.append_raster_operation(target,layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,
         kind:layer_core::RasterOperationKind::Fill {color:F,texture:layer_core::FillTexture {strength:1.,paper:None},alpha_locked:false,
-            edges:Some(Box::new(layer_core::FillEdges {snapshot,position:Point {x:8.,y:8.},tolerance:1./32.,lines:Vec::new()})),
+            edges:Some(Box::new(layer_core::FillEdges {snapshot,position:Point {x:8.,y:8.},tolerance:1./32.,anchors:None,lines:Vec::new()})),
             underfill:Some(Selection::pixels(Arc::new(SelectionPixels::new(extent,[32,32,33,33],band).unwrap())))}}).unwrap();
     flush_engine(&mut engine);let actual=engine.backend_mut().readback_srgb_rgba8().unwrap();
     let support=(32*64+32)*4;let selected=(32*64+34)*4;

@@ -215,7 +215,24 @@ impl RegionRequests {
         self.stop_mask=Some(Self::copy(&r.device,encoder,&stop,"Stop target eligibility"));
         Ok(())
     }
+    fn sample_colour_mode(&mut self,r:&mut WgpuRasterizer,request:&RegionRequest,encoder:&mut crate::submission::CommandEncoder)->Result<(),GpuRasterError> {
+        self.raw.encode_sampling(r,request,encoder,region_sources::Sampling::TargetSeed)?;
+        let mask=self.raw.mask().ok_or(GpuRasterError::InvalidExtent)?;
+        let (paper,_,_)=Self::paper(r,request)?;
+        self.flood.colour_mode(&flood::Input {device:&r.device,mask:&mask,paper:&paper},encoder,request.colour_mode,Some(self.raw.seed()));
+        Ok(())
+    }
     fn classify_lines(&mut self,r:&mut WgpuRasterizer,request:&RegionRequest,encoder:&mut crate::submission::CommandEncoder)->Result<wgpu::Buffer,GpuRasterError> {
+        let target=if let layer_render::RegionColourMode::Target(target)=request.colour_mode {
+            let source=match request.source.sources().first() {
+                Some(layer_render::RegionSource::Scene {snapshot,..})=>layer_render::RegionSource::Scene {snapshot:snapshot.clone(),scope:SceneScope::Raw(target)},
+                _=>layer_render::RegionSource::Source(target),
+            };
+            Some(RegionRequest {source,reference_count:None,limit:None,..request.clone()})
+        }else{None};
+        let target_sampled=target.as_ref().is_some_and(|target|self.raw.processing(&target.source,region_sources::Sampling::TargetSeed));
+        if target_sampled {self.sample_colour_mode(r,target.as_ref().unwrap(),encoder)?;}
+
         if let Some(count)=request.reference_count && count<request.source.sources().len()
             && self.raw.processing(&request.source.sources()[count],region_sources::Sampling::Target) {
             let target=RegionRequest {source:request.source.sources()[count].clone(),reference_count:None,limit:None,..request.clone()};
@@ -236,6 +253,12 @@ impl RegionRequests {
         if let Some(count)=request.reference_count && count<request.source.sources().len() && self.stop_mask.is_none() {
             let target=RegionRequest {source:request.source.sources()[count].clone(),reference_count:None,limit:None,..request.clone()};
             self.classify_target(r,&target,encoder)?;
+        }
+        if let Some(target)=&target {
+            if !target_sampled {self.sample_colour_mode(r,target,encoder)?;}
+        }else{
+            let (paper,_,_)=Self::paper(r,request)?;
+            self.flood.colour_mode(&flood::Input {device:&r.device,mask:&classified,paper:&paper},encoder,request.colour_mode,None);
         }
         Ok(classified)
     }
@@ -395,7 +418,7 @@ impl RegionRequests {
             selection, map, ..
         } = &request.source
         {
-            flood::Region { gaps: None,
+            flood::Region { anchors:Vec::new(), gaps: None,
                 coverage: self.resample_mapped(r, &mut encoder, extent, selection, map)?,
                 bounds_offset: 0,
                 underfill: None,
@@ -412,7 +435,7 @@ impl RegionRequests {
                 mapped_at_creation: false,
             });
             encoder.copy_buffer_to_buffer(buffer, 0, &copy, 0, buffer.size());
-            flood::Region { gaps: None,
+            flood::Region { anchors:Vec::new(), gaps: None,
                 coverage: copy,
                 bounds_offset: 0,
                 underfill: None,
@@ -437,7 +460,7 @@ impl RegionRequests {
                 },
             };
             if !lines {
-                flood::Region { gaps: None,
+                flood::Region { anchors:Vec::new(), gaps: None,
                     coverage: classified,
                     bounds_offset: 0,
                     underfill: None,
@@ -705,9 +728,12 @@ impl RegionRequests {
             if let Some((buffer,offset))=&region.underfill {encoder.copy_buffer_to_buffer(buffer,offset-32,readback,mask_size,band_size);}
             if index==0 && let Some(metadata)=seal_metadata {encoder.copy_buffer_to_buffer(metadata,0,readback,mask_size+band_size,metadata_bytes);}
             if extra_size>0 {encoder.copy_buffer_to_buffer(&self.raw.tonal_statistics,0,readback,mask_size+band_size+metadata_bytes,extra_size);}
-            captures.push(selection_readback::Capture {buffer:readback.clone(),size,coverage_size:region.bounds_offset,
+            captures.push(selection_readback::Capture {anchors:None,buffer:readback.clone(),size,coverage_size:region.bounds_offset,
                 underfill_offset:(band_size>0).then_some(mask_size+32),seal_records:(metadata_bytes/20) as usize});
             if gaps {encoder.clear_buffer(&region.coverage,24,Some(8));}
+        }
+        for &(bounds,ref buffer) in &region.anchors {
+            captures.push(selection_readback::Capture {anchors:Some(bounds),buffer:buffer.clone(),size:buffer.size(),coverage_size:0,underfill_offset:None,seal_records:0});
         }
         r.uploads.finish(&encoder);
         r.metrics.command_passes += encoder.pass_count();
@@ -740,7 +766,7 @@ impl WgpuRasterizer {
             if regions.cache.as_ref().is_some_and(|cache|!cache.ready) {regions.cache=None;}
         }
         let previous=regions.preparation.take();
-        regions.preparation=preparation.map(|p|Preparation {request:RegionRequest { fill: None,
+        regions.preparation=preparation.map(|p|Preparation {request:RegionRequest { colour_mode: Default::default(), fill: None,
             source:p.source.clone(),reference_count:p.reference_count,paper:p.paper.clone(),tolerance:p.tolerance,
             enclosure:None,
             position:[0;2],request_id:0,refinement:p.refinement,contiguous:true,limit:None,selection:None,
@@ -901,7 +927,7 @@ pub(crate) mod tests {
     }
 
     fn reference_query(source: RegionSource) -> RegionRequest {
-        RegionRequest { fill: None, source, reference_count: None, paper: None, enclosure: None,
+        RegionRequest { colour_mode: Default::default(), fill: None, source, reference_count: None, paper: None, enclosure: None,
             contiguous: true, selection: None, request_id: 91, position: [32, 32], tolerance: 0.,
             refinement: RegionRefinement { close_gaps: false, edges: layer_render::RegionEdges::Exact, smooth_edges: false }, limit: None }
     }

@@ -645,8 +645,16 @@ impl RegionPreparation {
                 | RegionSource::Objects(_) | RegionSource::Scene { .. } | RegionSource::Intersection(_))
     }
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RegionColourMode {
+    #[default]
+    AlphaBorder,
+    ColourOnSolid,
+    Target(SourceTarget),
+}
 #[derive(Clone, Debug)]
 pub struct RegionRequest {
+    pub colour_mode: RegionColourMode,
     pub fill: Option<RegionFillQuery>,
     pub reference_count: Option<usize>,
     pub paper: Option<layer_core::paper::PaperBinding>,
@@ -729,6 +737,7 @@ impl RegionRefinement {
 }
 #[derive(Clone, Debug)]
 pub struct RegionResult {
+    pub anchors: Option<std::sync::Arc<layer_core::FillAnchors>>,
     pub gaps: Option<RegionGapMasks>,
     pub request_id: u64,
     pub tonal_sample: Option<TonalSample>,

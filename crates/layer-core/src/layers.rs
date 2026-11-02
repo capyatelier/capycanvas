@@ -373,7 +373,26 @@ pub struct FillLine {
     pub fill_above: bool,
 }
 #[derive(Clone, Debug, PartialEq)]
+pub struct FillAnchors {pub extent:[u32;2],pub windows:Arc<[FillAnchorWindow]>}
+#[derive(Clone, Debug, PartialEq)]
+pub struct FillAnchorWindow {pub bounds:[u32;4],pub words:Arc<[u32]>}
+impl FillAnchorWindow {
+    pub fn get(&self,p:[u32;2])->Option<[u32;2]> {
+        let [x,y,w,h]=self.bounds;
+        if p[0]<x || p[1]<y || p[0]>=x+w || p[1]>=y+h {return None;}
+        let local=[p[0]-x,p[1]-y];let columns=w.div_ceil(32);let word=local[1]*columns+local[0]/32;
+        let bits=self.words[1+word as usize*2];let bit=1u32<<(local[0]%32);
+        if bits&bit==0 {return None;}
+        let offset=self.words[2+word as usize*2]+(bits&(bit-1)).count_ones();
+        let q=self.words[(1+2*columns*h+offset) as usize];Some([q&65535,q>>16])
+    }
+}
+impl FillAnchors {
+    pub fn get(&self,p:[u32;2])->Option<[u32;2]> {self.windows.iter().find_map(|window|window.get(p))}
+}
+#[derive(Clone, Debug, PartialEq)]
 pub struct FillEdges {
+    pub anchors: Option<Arc<FillAnchors>>,
     pub snapshot: Arc<SceneSnapshot>,
     pub position: Point,
     pub tolerance: f32,

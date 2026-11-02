@@ -2,6 +2,7 @@ use super::*;
 use layer_render::{RegionCoverage,RegionResult};
 
 pub(super) struct Capture {
+    pub anchors: Option<[u32;4]>,
     pub buffer: wgpu::Buffer,
     pub size: u64,
     pub coverage_size: u64,
@@ -16,6 +17,14 @@ struct Captured {
     extra: Vec<u8>,
     seals: Vec<layer_render::RegionSeal>,
     next:Option<[u32;2]>,
+}
+enum Part {Coverage(Captured),Anchors(layer_core::FillAnchorWindow)}
+fn read_anchors(bytes:&[u8],bounds:[u32;4])->Result<Part,GpuRasterError> {
+    let count=u32::from_le_bytes(bytes[..4].try_into().unwrap())&0x7fffffff;
+    let length=1+2*bounds[2].div_ceil(32)*bounds[3]+count;
+    if length as usize*4>bytes.len() {return Err(GpuRasterError::SizeOverflow);}
+    let words=bytes[..length as usize*4].as_chunks::<4>().0.iter().map(|word|u32::from_le_bytes(*word)).collect::<Vec<_>>().into();
+    Ok(Part::Anchors(layer_core::FillAnchorWindow {bounds,words}))
 }
 fn read_coverage(bytes:&[u8],extent:[u32;2],byte_coverage:bool,coverage_size:u64,underfill_offset:Option<u64>,seal_records:usize)->Result<Captured,GpuRasterError> {
     let read=|offset:usize|u32::from_le_bytes(bytes[offset..offset+4].try_into().unwrap());
@@ -62,12 +71,12 @@ pub(super) fn capture_selection<T:Send+'static>(
     tx:mpsc::Sender<Result<T,GpuRasterError>>,
     convert:impl FnOnce(RegionResult,bool,&[u8])->T+Send+'static,
 ) {
-    let parts=(0..captures.len()).map(|_|None).collect::<Vec<Option<Captured>>>();
+    let parts=(0..captures.len()).map(|_|None).collect::<Vec<Option<Part>>>();
     let state=std::sync::Arc::new(std::sync::Mutex::new((parts,Some(convert))));
     for (index,capture) in captures.into_iter().enumerate() {
-        let Capture {buffer,size,coverage_size,underfill_offset,seal_records}=capture;
+        let Capture {buffer,size,coverage_size,underfill_offset,seal_records,anchors}=capture;
         let state=state.clone();let tx=tx.clone();
-        crate::raster::map_then(None,&buffer,size,move|bytes|read_coverage(bytes,extent,byte_coverage,coverage_size,underfill_offset,seal_records),move|part| {
+        crate::raster::map_then(None,&buffer,size,move|bytes|match anchors {Some(bounds)=>read_anchors(bytes,bounds),None=>read_coverage(bytes,extent,byte_coverage,coverage_size,underfill_offset,seal_records).map(Part::Coverage)},move|part| {
             let mut state=state.lock().unwrap();
             if state.1.is_none(){return;}
             match part {
@@ -75,8 +84,12 @@ pub(super) fn capture_selection<T:Send+'static>(
                 Ok(part)=>state.0[index]=Some(part),
             }
             if state.0.iter().any(Option::is_none){return;}
-            let mut parts=std::mem::take(&mut state.0).into_iter().map(Option::unwrap).collect::<Vec<_>>();
+            let mut parts=Vec::new();let mut windows=Vec::new();
+            for part in std::mem::take(&mut state.0).into_iter().map(Option::unwrap) {match part {
+                Part::Coverage(part)=>parts.push(part),Part::Anchors(window)=>windows.push(window),
+            }}
             let convert=state.1.take().unwrap();drop(state);
+            let anchors=(!windows.is_empty()).then(||std::sync::Arc::new(layer_core::FillAnchors {extent,windows:windows.into()}));
             let seals=std::mem::take(&mut parts[0].seals).into();
             let primary=&parts[0];
             let result=(|| {
@@ -90,7 +103,7 @@ pub(super) fn capture_selection<T:Send+'static>(
                         active,line_bounded:selected.line_bounded,seals})
                 }else{None};
                 let selected=masks.as_ref().map_or(&primary.coverage,|masks|&masks.regions[masks.active]);
-                Ok(convert(RegionResult {request_id,tonal_sample:None,pixels:selected.pixels.clone(),underfill:selected.underfill.clone(),
+                Ok(convert(RegionResult { anchors,request_id,tonal_sample:None,pixels:selected.pixels.clone(),underfill:selected.underfill.clone(),
                     placement:layer_core::Affine::IDENTITY,gaps:masks},primary.stale,&primary.extra))
             })();
             let _=tx.send(result);

@@ -745,6 +745,15 @@ fn scribble_path(input: &mut RemoteInput, w: &Rc<Workspace>, points: &[[f32; 2]]
 
 #[test]
 #[ignore = "private Wayland display, hardware GPU and --tablet"]
+fn native_fill_antialiased_edge_plates() {
+    let app = native_test_app("art.capycanvas.FillEdgePlates");
+    let output = std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap());std::fs::create_dir_all(&output).unwrap();
+    let mut input = RemoteInput::new().timeout_secs(30);input.ready();
+    for theme in [Theme::Light, Theme::Dark] {fill_edge_plates(&app,&mut input,theme,&output);}
+}
+
+#[test]
+#[ignore = "private Wayland display, hardware GPU and --tablet"]
 fn native_fill_scribble_geometry() {
     let sheet: ScribbleSheet = serde_json::from_str(include_str!("../../../tools/fixtures/fill-scribble.json")).unwrap();
     let app = native_test_app("art.capycanvas.FillScribbles");

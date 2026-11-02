@@ -263,7 +263,7 @@ mod selection_tools_checks {
                 layer_core::SelectionPixels::bytes([4, 1], [0, 0, 4, 1], vec![0xff0000ff]).unwrap(),
             );
             let subtracted = Some(layer_core::Selection::pixels(pixels.clone()));
-            s.renderer_mut().region_reply = Some(layer_render::RegionResult { gaps: None, underfill: None,
+            s.renderer_mut().region_reply = Some(layer_render::RegionResult { anchors: None, gaps: None, underfill: None,
                 tonal_sample: None, placement: layer_core::Affine::IDENTITY,
                 request_id: request.request_id, pixels,
             });
@@ -299,7 +299,7 @@ mod selection_tools_checks {
             assert!(!request.refinement.close_gaps);
             assert!(s.command(command).selected);
             invoke(&mut s, CommandId::Lasso);
-            s.renderer_mut().region_reply = Some(layer_render::RegionResult { gaps: None, underfill: None,
+            s.renderer_mut().region_reply = Some(layer_render::RegionResult { anchors: None, gaps: None, underfill: None,
                 tonal_sample: None,
                 placement: layer_core::Affine::IDENTITY,
                 request_id: request.request_id,
@@ -471,7 +471,7 @@ mod selection_tools_checks {
                 original,
                 "no partial history entry"
             );
-            s.renderer_mut().region_reply = Some(layer_render::RegionResult { gaps: None, underfill: None,
+            s.renderer_mut().region_reply = Some(layer_render::RegionResult { anchors: None, gaps: None, underfill: None,
                 tonal_sample: None,
                 placement: layer_core::Affine::IDENTITY,
                 request_id: request.request_id,
@@ -520,7 +520,7 @@ mod selection_tools_checks {
         send(&mut s, PenPhase::Up, [80., 80.]);
         let id = s.renderer_mut().region_requests.last().unwrap().request_id;
         invoke(&mut s, CommandId::SelectionSubtract);
-        s.renderer_mut().region_reply = Some(layer_render::RegionResult { gaps: None, underfill: None,
+        s.renderer_mut().region_reply = Some(layer_render::RegionResult { anchors: None, gaps: None, underfill: None,
                 tonal_sample: None,
                 placement: layer_core::Affine::IDENTITY,
             request_id: id,

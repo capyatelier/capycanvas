@@ -196,7 +196,7 @@ fn native_stroke_publication_keeps_prepared_reference_pages_and_matches_fresh_ma
         submit_settled(&mut fresh,crate::test_support::packet(snapshot.view(),extent));
         for edges in [RegionEdges::Exact,RegionEdges::LineMiddle,RegionEdges::GrowShrink(2)] {
             for position in [[120,128],[3600,128]] {
-                let query=RegionRequest { fill: None,source:preparation.source.clone(),reference_count:None,paper:None,enclosure:None,
+                let query=RegionRequest { colour_mode: Default::default(), fill: None,source:preparation.source.clone(),reference_count:None,paper:None,enclosure:None,
                     contiguous:true,selection:None,request_id:91,position,tolerance:0.,
                     refinement:RegionRefinement {edges,..Default::default()},limit:None};
                 let cached=receive_request(live.backend_mut(),query.clone());

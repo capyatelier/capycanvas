@@ -1,4 +1,4 @@
-struct FillPrecision {source:mat3x3<f32>,codes:vec4<u32>}
+struct FillPrecision {source:mat3x3<f32>,codes:vec4<u32>,extent:vec4<i32>}
 @group(2) @binding(4) var<uniform> fill_precision:FillPrecision;
 struct FillSample {value:vec4<f32>,low:vec4<f32>,high:vec4<f32>}
 
@@ -66,8 +66,23 @@ fn fill_fraction(pixel:vec4<f32>,seed:vec4<f32>,neighbour:vec4<f32>)->f32 {
     if fill_ratio_greater(lower,upper) {return -1.;}
     return .5*(f32(lower.x)/f32(lower.y)+f32(upper.x)/f32(upper.y));
 }
+fn fill_equal(a:vec4<f32>,b:vec4<f32>)->bool {return fill_fraction(a,b,b)>=0.;}
+fn fill_seed_limit(pixel:vec4<f32>,seed:vec4<f32>)->f32 {
+    var limit=1.;
+    for(var channel=0u;channel<4u;channel++) {
+        if seed[channel]>0. {limit=min(limit,pixel[channel]/seed[channel]);}
+        if channel<3u && seed.a>seed[channel] {limit=min(limit,(pixel.a-pixel[channel])/(seed.a-seed[channel]));}
+    }
+    return clamp(limit,0.,1.);
+}
 fn fill_reconstruct(pixel:vec4<f32>,seed:vec4<f32>,neighbour:vec4<f32>,paint:vec4<f32>,amount:f32)->vec4<f32> {
     let fraction=fill_fraction(pixel,seed,neighbour);
-    if fraction<0. {return pixel;}
+    if fraction<0. {
+        let p=fill_sample(pixel).value;let s=fill_sample(seed).value;let n=fill_sample(neighbour).value;
+        let delta=s-n;let square=dot(delta,delta);
+        if square==0. {return pixel;}
+        let t=min(clamp(dot(p-n,delta)/square,0.,1.),fill_seed_limit(p,s));
+        return pixel+amount*t*(paint-seed);
+    }
     return mix(pixel,mix(neighbour,paint,fraction),amount);
 }

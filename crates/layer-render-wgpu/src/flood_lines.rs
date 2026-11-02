@@ -4,9 +4,11 @@ use wgpu::util::DeviceExt;
 const PIXELS_PER_END:u64=256;
 const MIN_END_CAPACITY:u64=16384;
 const END_WORDS:u64=20;
+const HEADER_WORDS:u32=5;
 const GAP_REACH:u32=64;
 pub(super) const WINDOW_HALO:u32=GAP_REACH+2*MAX_LINE_WIDTH;
 const MAX_LINE_WIDTH:u32=16;
+const THIN_CUTOFF:u32=MAX_LINE_WIDTH*3/2;
 pub(crate) const UNDERFILL_HALF_PIXELS:u32=48;
 const DISTANCE_LIMIT_HALF_PIXELS:u32=UNDERFILL_HALF_PIXELS+1;
 const DISTANCE_HALO:u32=64;
@@ -26,13 +28,14 @@ impl Build {
             && (count<u32::from(demand)+1 || demand && self.ranked && self.steps.is_empty())
     }
 }
-const STAGES: [&str; 22] = ["grain_bits", "distance_seeds", "jump_distance", "store_distance", "skeleton_seeds", "skeleton_ridges", "skeleton_prune", "line_ends", "refine_ends", "seal_candidates", "open_bits", "apply_seals", "region_seeds", "assign_region", "hold_barriers", "grow_region", "intersect_bits", "remember_thin", "check_seeds", "barrier_plane", "snap_seed", "reset_ends"];
+const STAGES: [&str; 23] = ["grain_bits", "distance_seeds", "jump_distance", "store_distance", "skeleton_seeds", "skeleton_ridges", "skeleton_prune", "line_ends", "refine_ends", "seal_candidates", "open_bits", "apply_seals", "region_seeds", "assign_region", "hold_barriers", "grow_region", "intersect_bits", "remember_thin", "check_seeds", "barrier_plane", "snap_seed", "reset_ends", "capture_anchors"];
 
 pub(crate) struct Input<'a> {pub device:&'a PipelineDevice,pub mask:&'a wgpu::Buffer,pub paper:&'a wgpu::TextureView}
 pub(super) struct Lines {
     layout: wgpu::BindGroupLayout,
     pipelines: std::collections::HashMap<&'static str, Deferred<wgpu::ComputePipeline>>,
     scratch: Option<[wgpu::Buffer; 2]>,
+    anchors:Option<wgpu::Buffer>,
     data: Option<wgpu::Buffer>,
     extent: [u32; 2],
     offsets: [u32; 4],
@@ -53,10 +56,10 @@ impl Lines {
         });
         let shader=Deferred::wgsl(device,"region line stages",include_str!("region_lines.wgsl"));
         let pipelines=STAGES.into_iter().map(|entry|(entry,Deferred::compute(device,entry,&pipeline_layout,&shader,entry))).collect();
-        Self {layout,pipelines,scratch:None,data:None,extent:[0;2],offsets:[0;4],windows:Vec::new(),building:None,ends:0,overflow:false}
+        Self {layout,pipelines,scratch:None,anchors:None,data:None,extent:[0;2],offsets:[0;4],windows:Vec::new(),building:None,ends:0,overflow:false}
     }
     pub fn storage_bytes(&self)->u64 {
-        self.data.as_ref().map_or(0,wgpu::Buffer::size)+self.scratch.as_ref().map_or(0,|buffers|buffers.iter().map(wgpu::Buffer::size).sum())
+        self.anchors.as_ref().map_or(0,wgpu::Buffer::size)+self.data.as_ref().map_or(0,wgpu::Buffer::size)+self.scratch.as_ref().map_or(0,|buffers|buffers.iter().map(wgpu::Buffer::size).sum())
     }
     pub fn prepare_cache(&self,compiler:&startup::Compiler,priority:u8)->bool {
         compiler.require(STAGES.iter().filter(|entry|self.building.as_ref().map_or_else(
@@ -66,6 +69,7 @@ impl Lines {
     pub fn prepare(&self,compiler:&startup::Compiler,priority:u8,refinement:RegionRefinement)->bool {
         let prewarm=priority==startup::OTHER;
         self.prepare_cache(compiler,priority) & compiler.require(STAGES[8..].iter().filter(|entry|match **entry {
+            "capture_anchors"=>matches!(refinement.edges,layer_render::RegionEdges::LineMiddle),
             "refine_ends"|"seal_candidates"=>prewarm && !self.overflow,
             "grow_region"=>matches!(refinement.edges,layer_render::RegionEdges::GrowShrink(_)),
             "assign_region"=>matches!(refinement.edges,layer_render::RegionEdges::LineMiddle),
@@ -86,6 +90,11 @@ impl Lines {
             self.scratch=Some(std::array::from_fn(|index|device.create_buffer(&wgpu::BufferDescriptor {label:Some("region window coordinates"),size:if index==0 {compact_bytes}else{scratch_bytes},
                 usage:wgpu::BufferUsages::STORAGE,mapped_at_creation:false})));
         }
+        let anchor_words=windows.iter().map(|(_,core)|1+2*word_count(*core)+u64::from(core[2])*u64::from(core[3])).max().unwrap_or(1);
+        if self.anchors.as_ref().is_none_or(|buffer|buffer.size()<anchor_words*4) {
+            self.anchors=Some(device.create_buffer(&wgpu::BufferDescriptor {label:Some("region window anchors"),size:anchor_words*4,
+                usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_SRC|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false}));
+        }
         self.extent=extent;self.offsets=offsets;
         self.windows=windows.iter().map(|(_,core)|(*core,analysis_window(*core,extent))).collect();
         Ok(())
@@ -95,6 +104,9 @@ impl Lines {
         [vec![w,h,w.div_ceil(32),w.div_ceil(4)],window.to_vec(),core.to_vec(),self.offsets.to_vec(),options.to_vec(),paper.map(f32::to_bits).to_vec(),vec![0;4]].concat()
     }
     fn encode(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,first:Option<&wgpu::Buffer>,second:Option<&wgpu::Buffer>,steps:Vec<Step>) {
+        self.encode_with_data(input,encoder,first,second,self.data.as_ref().unwrap(),steps);
+    }
+    fn encode_with_data(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,first:Option<&wgpu::Buffer>,second:Option<&wgpu::Buffer>,data:&wgpu::Buffer,steps:Vec<Step>) {
         let Input {device,mask,paper}=input;
         let alignment=u64::from(device.limits().min_uniform_buffer_offset_alignment);
         let stride=PARAMS.next_multiple_of(alignment);
@@ -109,7 +121,7 @@ impl Lines {
                 wgpu::BindGroupEntry {binding:1,resource:wgpu::BindingResource::Buffer(wgpu::BufferBinding {buffer:&uniform,offset:0,size:wgpu::BufferSize::new(PARAMS)})},
                 wgpu::BindGroupEntry {binding:2,resource:first.unwrap_or(&scratch[0]).as_entire_binding()},
                 wgpu::BindGroupEntry {binding:3,resource:second.unwrap_or(&scratch[1]).as_entire_binding()},
-                wgpu::BindGroupEntry {binding:4,resource:self.data.as_ref().unwrap().as_entire_binding()},
+                wgpu::BindGroupEntry {binding:4,resource:data.as_entire_binding()},
                 wgpu::BindGroupEntry {binding:5,resource:mask.as_entire_binding()},
                 wgpu::BindGroupEntry {binding:6,resource:wgpu::BindingResource::TextureView(paper)},
             ]});
@@ -156,7 +168,7 @@ impl Lines {
             for &(core,_) in &end_windows {steps.push(("reset_ends",u64::from(self.ends),self.params(core,[0;4],[4,self.ends,0,0],grain)));}
             let candidate_halo=end_halo+2*(NEIGHBOUR_REACH+2*FIT_DISPLACEMENT);
             for (core,_) in windows(changed(candidate_halo),0) {steps.push(("reset_ends",u64::from(self.ends),self.params(core,[0;4],[5,self.ends,0,0],grain)));}
-            steps.push(("reset_ends",u64::from(self.offsets[2]-self.offsets[1]-4).max(1),self.params([0;4],[0;4],[0;4],grain)));
+            steps.push(("reset_ends",u64::from(self.offsets[2]-self.offsets[1]-HEADER_WORDS).max(1),self.params([0;4],[0;4],[0;4],grain)));
             steps.push(("reset_ends",u64::from(self.ends),self.params([0;4],[0;4],[6,self.ends,0,0],grain)));
             steps.push(("reset_ends",u64::from(self.offsets[0]),self.params([0;4],[0;4],[7,0,0,0],grain)));
         }
@@ -189,7 +201,7 @@ impl Lines {
         if let Some(rx)=&work.ends {
             let metadata=match rx.try_recv() {Ok(result)=>result?,Err(mpsc::TryRecvError::Empty)=>{self.building=Some(work);return Ok(false);},Err(error)=>return Err(GpuRasterError::MapFailed(error.to_string()))};
             self.overflow=metadata[1]!=0;self.ends=metadata[0].min(self.offsets[3]);work.ends=None;work.ranked=true;
-            if !self.overflow && self.ends>0 {for entry in ["refine_ends","seal_candidates"] {work.steps.push_back((entry,u64::from(self.ends),self.params([0;4],[0;4],[MAX_LINE_WIDTH*3/2,u32::from(work.incremental),0,0],[1.,1.,0.,0.])));}}
+            if !self.overflow && self.ends>0 {for entry in ["refine_ends","seal_candidates"] {work.steps.push_back((entry,u64::from(self.ends),self.params([0;4],[0;4],[THIN_CUTOFF,u32::from(work.incremental),0,0],[1.,1.,0.,0.])));}}
         }
         self.building=Some(work);Ok(true)
     }
@@ -270,16 +282,27 @@ impl Lines {
         self.encode(input,encoder,Some(parents),None,params(vec![("hold_barriers",u64::from(self.offsets[0]),self.params([0;4],[0;4],[0;4],[1.,1.,0.,0.]))]));
     }
 
-    pub fn assign(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder) {
+    pub fn assign(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,capture:bool)->Vec<([u32;4],wgpu::Buffer)> {
+        let mut captures=Vec::new();
         let mut steps=Vec::new();
         for &(core,window) in &self.windows {
             steps.push(("reset_ends",1,self.params(core,window,[2,0,0,0],[1.,1.,0.,0.])));
             let words=(window[0]+window[2]).div_ceil(32)-window[0]/32;
             steps.push(("region_seeds",u64::from(words)*u64::from(window[3]),self.params(core,window,[0,5,0,0],[1.,1.,0.,0.])));
-            let input=self.jump_steps(&mut steps,core,window,"region_seeds",4,UNDERFILL_HALF_PIXELS.div_ceil(2));
-            steps.push(("assign_region",word_count(core),self.params(core,window,[UNDERFILL_HALF_PIXELS,4,0,input],[1.,1.,0.,0.])));
+            let nearest=self.jump_steps(&mut steps,core,window,"region_seeds",4,UNDERFILL_HALF_PIXELS.div_ceil(2));
+            steps.push(("assign_region",word_count(core),self.params(core,window,[UNDERFILL_HALF_PIXELS,4,0,nearest],[1.,1.,0.,0.])));
+            if capture {
+                let output=self.anchors.as_ref().unwrap();encoder.clear_buffer(output,0,None);
+                self.encode(input,encoder,None,None,std::mem::take(&mut steps));
+                let source=Input {mask:self.data.as_ref().unwrap(),..*input};
+                self.encode_with_data(&source,encoder,None,None,output,vec![("capture_anchors",word_count(core),self.params(core,window,[UNDERFILL_HALF_PIXELS,0,0,nearest],[1.,1.,0.,0.]))]);
+                let size=(1+2*word_count(core)+u64::from(core[2])*u64::from(core[3]))*4;
+                let buffer=input.device.create_buffer(&wgpu::BufferDescriptor {label:Some("fill anchor capture"),size,
+                    usage:wgpu::BufferUsages::MAP_READ|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false});
+                encoder.copy_buffer_to_buffer(output,0,&buffer,0,size);captures.push((core,buffer));
+            }
         }
-        self.encode(input,encoder,None,None,steps);
+        self.encode(input,encoder,None,None,steps);captures
     }
     pub fn grow(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,value:i32) {
         let kind=if value<0 {3} else {2};
@@ -308,7 +331,7 @@ impl Lines {
     pub fn boundary(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,coverage:&wgpu::Buffer) {
         self.encode(input,encoder,Some(coverage),None,vec![
             ("reset_ends",1,self.params([0;4],[0;4],[2,0,0,0],[1.,1.,0.,0.])),
-            ("barrier_plane",u64::from(self.offsets[0]),self.params([0;4],[0;4],[3,0,MAX_LINE_WIDTH*3/2,0],[1.,1.,0.,0.])),
+            ("barrier_plane",u64::from(self.offsets[0]),self.params([0;4],[0;4],[3,0,THIN_CUTOFF,0],[1.,1.,0.,0.])),
         ]);
         encoder.copy_buffer_to_buffer(self.data.as_ref().unwrap(),u64::from(self.offsets[1]+3)*4,coverage,28,4);
     }
@@ -331,14 +354,18 @@ impl Lines {
         if let Some(limit)=limit {encoder.copy_buffer_to_buffer(limit,0,&path,bytes.len() as u64,limit.size());}
         self.encode(input,encoder,Some(trail),Some(&path),vec![
             ("reset_ends",1,self.params([0;4],[0;4],[2,0,1,0],[1.,1.,0.,0.])),
-            ("barrier_plane",u64::from(count.max(1)),self.params([bytes.len() as u32/4,u32::from(limit.is_some()),0,0],[0;4],[6,count,points.len().saturating_sub(1) as u32,MAX_LINE_WIDTH*3/2],[1.,1.,0.,0.])),
+            ("barrier_plane",u64::from(count.max(1)),self.params([bytes.len() as u32/4,u32::from(limit.is_some()),0,0],[0;4],[6,count,points.len().saturating_sub(1) as u32,THIN_CUTOFF],[1.,1.,0.,0.])),
             ("barrier_plane",1,self.params([0;4],[0;4],[7,count,points.len().saturating_sub(1) as u32,0],[1.,1.,0.,0.])),
         ]);
     }
 
     pub fn check_seeds(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,old:&wgpu::Buffer,new:&wgpu::Buffer,position:[u32;2]) {
         encoder.clear_buffer(self.data.as_ref().unwrap(),u64::from(self.offsets[1]+2)*4,Some(4));
-        self.encode(input,encoder,Some(old),Some(new),vec![("check_seeds",old.size()/4,self.params([0;4],[0;4],[position[0],position[1],MAX_LINE_WIDTH*3/2,0],[1.,1.,0.,0.]))]);
+        self.encode(input,encoder,Some(old),Some(new),vec![("check_seeds",old.size()/4,self.params([0;4],[0;4],[position[0],position[1],THIN_CUTOFF,0],[1.,1.,0.,0.]))]);
+    }
+    pub fn colour_mode(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,mode:layer_render::RegionColourMode,seed:Option<&wgpu::Buffer>) {
+        self.encode(input,encoder,seed,None,vec![("check_seeds",1,self.params([0;4],[0;4],
+            [u32::from(matches!(mode,layer_render::RegionColourMode::ColourOnSolid)),u32::from(seed.is_some()),0,1],[1.,1.,0.,0.]))]);
     }
     pub fn snap_seed(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,parents:&wgpu::Buffer,seed:u32,position:[u32;2]) {
         self.encode(input,encoder,Some(parents),None,vec![("snap_seed",1,self.params([0;4],[0;4],[position[0],position[1],seed,0],[1.,1.,0.,0.]))]);
@@ -366,7 +393,7 @@ fn storage_layout(extent:[u32;2],limits:&wgpu::Limits)->Option<([u32;4],u64)> {
         let bits=u64::from(w.div_ceil(32))*u64::from(h);
         let distance=u64::from(w.div_ceil(4))*u64::from(h);
         let summary=bits+distance;
-        let sparse=summary+4+u64::from(w.div_ceil(128))*u64::from(h.div_ceil(128));
+        let sparse=summary+u64::from(HEADER_WORDS)+u64::from(w.div_ceil(128))*u64::from(h.div_ceil(128));
         let dense=(sparse+bits*2)*4;
         let area=u64::from(w)*u64::from(h);
         let capacity=area.div_ceil(PIXELS_PER_END).max(MIN_END_CAPACITY).min(area)
@@ -383,7 +410,7 @@ mod tests {
     #[test]
     fn end_storage_scales_with_canvas_area_and_fits_61mp() {
         let limits=wgpu::Limits {max_storage_buffer_binding_size:128*1024*1024,max_buffer_size:128*1024*1024,..Default::default()};
-        for (extent,ends,bytes) in [([4248,2832],46994,20312872),([6000,4000],93750,40530032),([9504,6336],235224,101631784)] {
+        for (extent,ends,bytes) in [([4248,2832],46994,20312876),([6000,4000],93750,40530036),([9504,6336],235224,101631788)] {
             let (offsets,size)=storage_layout(extent,&limits).unwrap();
             assert_eq!((offsets[3],size),(ends,bytes));
             assert!(size<=limits.max_storage_buffer_binding_size);

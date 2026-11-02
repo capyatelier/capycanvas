@@ -393,7 +393,7 @@ impl SelectionPainter {
         r.last_submission = Some(encoder.submit(&r.queue));
         if let Some(readback) = &self.pending {
             selection_readback::capture_selection(
-                vec![selection_readback::Capture {buffer:readback.clone(),size:size+32,coverage_size:size,underfill_offset:None,seal_records:0}],
+                vec![selection_readback::Capture {anchors:None,buffer:readback.clone(),size:size+32,coverage_size:size,underfill_offset:None,seal_records:0}],
                 extent,true,update.id,false,
                 self.tx.clone(),
                 |result, changed, _| SelectionPaintResult {

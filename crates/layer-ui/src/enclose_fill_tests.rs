@@ -22,7 +22,7 @@ mod enclose_fill_checks {
 
     fn reply(s: &mut UiSession<Recorder>, request: &RegionRequest) -> Arc<SelectionPixels> {
         let pixels = Arc::new(SelectionPixels::bytes([8, 1], [0, 0, 8, 1], vec![0xffffffff; 2]).unwrap());
-        s.renderer_mut().region_reply = Some(RegionResult { gaps: None, underfill: None,
+        s.renderer_mut().region_reply = Some(RegionResult { anchors: None, gaps: None, underfill: None,
             request_id: request.request_id, pixels: pixels.clone(),
             placement: layer_core::Affine::IDENTITY, tonal_sample: None,
         });
@@ -64,6 +64,12 @@ mod enclose_fill_checks {
                 invoke(&mut s,CommandId::Fill);invoke(&mut s,source);invoke(&mut s,CommandId::EdgesLineMiddle);
                 contact(&mut s,PenPhase::Down,[40.,60.]);s.frame(20_000_000,20_000_000).unwrap();
                 let request=s.renderer_mut().region_requests.last().unwrap().clone();reply(&mut s,&request);s.frame(30_000_000,30_000_000).unwrap();
+                let mode=match source {
+                    CommandId::SelectionEditing=>layer_render::RegionColourMode::ColourOnSolid,
+                    CommandId::SelectionVisible=>layer_render::RegionColourMode::Target(s.engine.document().drawing_target().unwrap()),
+                    _=>layer_render::RegionColourMode::AlphaBorder,
+                };
+                assert_eq!(request.colour_mode,mode);
                 let preview=s.renderer_mut().fill_preview.clone().unwrap();let edges=fill_edges(&preview.operation.kind);
                 assert_eq!(edges.position,Point {x:40.,y:60.});assert_eq!(edges.tolerance,request.tolerance);
                 let actual=edges.lines.iter().map(|line| {
@@ -675,7 +681,7 @@ mod enclose_fill_checks {
         enclose(&mut s);
         s.frame(2, 2).unwrap();
         let request = s.renderer_mut().region_requests.last().unwrap().clone();
-        s.renderer_mut().region_reply = Some(RegionResult { gaps: None, underfill: None,
+        s.renderer_mut().region_reply = Some(RegionResult { anchors: None, gaps: None, underfill: None,
             request_id: request.request_id,
             pixels: Arc::new(SelectionPixels::bytes([8, 1], [0; 4], vec![0; 2]).unwrap()),
             placement: layer_core::Affine::IDENTITY, tonal_sample: None,

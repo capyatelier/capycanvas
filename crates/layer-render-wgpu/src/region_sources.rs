@@ -14,7 +14,7 @@ struct Binding {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Sampling { Pixels, Seeds, Transparent, Enclosed, Retained, Target }
+pub(super) enum Sampling { Pixels, Seeds, Transparent, Enclosed, Retained, Target, TargetSeed }
 
 pub(super) struct RawRegions {
     capture: artwork::Capture,
@@ -329,12 +329,17 @@ impl RawRegions {
     }
     pub fn mask(&self)->Option<wgpu::Buffer> {self.mask.clone()}
     pub fn seeds(&self)->&wgpu::Buffer {self.seeds.as_ref().unwrap()}
+    pub fn seed(&self)->&wgpu::Buffer {&self.seed}
+    fn clear_parameters(&mut self) {self.bindings.clear();self.uniform=None;self.parameters.clear();}
     pub fn encode_sampling(&mut self,r:&mut WgpuRasterizer,request:&layer_render::RegionRequest,
         encoder:&mut crate::submission::CommandEncoder,sampling:Sampling)->Result<wgpu::Buffer,GpuRasterError> {
-        if self.progress.is_none(){self.request_source=Some((request.source.clone(),sampling));}
+        if self.progress.is_none(){
+            if self.request_source.as_ref().is_none_or(|(source,mode)|source!=&request.source || *mode!=sampling) {self.clear_parameters();}
+            self.request_source=Some((request.source.clone(),sampling));
+        }
         self.begin(r, request)?;
         let bytes=request.source.sources().len() as u64*16;
-        if sampling!=Sampling::Target && self.seeds.as_ref().is_none_or(|buffer|buffer.size()!=bytes) {
+        if !matches!(sampling,Sampling::Target|Sampling::TargetSeed) && self.seeds.as_ref().is_none_or(|buffer|buffer.size()!=bytes) {
             self.seeds=Some(r.device.create_buffer(&wgpu::BufferDescriptor {label:Some("reference seed keys"),size:bytes,
                 usage:wgpu::BufferUsages::COPY_SRC|wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::STORAGE,mapped_at_creation:false}));
         }
@@ -343,15 +348,13 @@ impl RawRegions {
             let sources = request.source.sources();
             let source = layer_render::RegionRequest { source: sources[index].clone(), ..request.clone() };
             let result = self.encode_source(r, &source, encoder, index > 0,sampling)?;
-            if sampling!=Sampling::Target {encoder.copy_buffer_to_buffer(&self.seed,0,self.seeds.as_ref().unwrap(),index as u64*16,16);}
+            if !matches!(sampling,Sampling::Target|Sampling::TargetSeed) {encoder.copy_buffer_to_buffer(&self.seed,0,self.seeds.as_ref().unwrap(),index as u64*16,16);}
             if index + 1 == sources.len() { self.progress = None; self.pages=None; return Ok(result); }
             self.progress = None;
             let next = layer_render::RegionRequest { source: sources[index + 1].clone(), ..request.clone() };
             self.begin(r, &next)?;
             self.progress.as_mut().unwrap().source = index + 1;
-            self.bindings.clear();
-            self.uniform = None;
-            self.parameters.clear();
+            self.clear_parameters();
         }
     }
     fn encode_source(&mut self, r: &mut WgpuRasterizer, request: &layer_render::RegionRequest,
@@ -529,7 +532,7 @@ impl RawRegions {
         let batches: Vec<_> = (tone.is_none())
             .then_some(std::slice::from_ref(&seed_tile))
             .into_iter()
-            .chain((sampling!=Sampling::Seeds).then_some(tiles.chunks(if placed { 1 } else { self.progress.as_ref().unwrap().batch_tiles })).into_iter().flatten())
+            .chain((!matches!(sampling,Sampling::Seeds|Sampling::TargetSeed)).then_some(tiles.chunks(if placed { 1 } else { self.progress.as_ref().unwrap().batch_tiles })).into_iter().flatten())
             .collect();
         let stride =
             (PARAMETER_BYTES as u32).next_multiple_of(limit.min_uniform_buffer_offset_alignment);
@@ -825,7 +828,7 @@ mod tests {
         for pixel in capture.read_region([0,0,extent[0],extent[1]]).unwrap() {
             for channel in 0..4 { assert!((pixel[channel]-expected[channel]).abs()<0.0005, "{pixel:?}"); }
         }
-        let result = crate::test_support::receive_request(&mut r, RegionRequest { fill: None, reference_count: None, paper: None,
+        let result = crate::test_support::receive_request(&mut r, RegionRequest { colour_mode: Default::default(), fill: None, reference_count: None, paper: None,
             enclosure: None, request_id:42,source:RegionSource::Scene {snapshot:normalized,scope},position:[63,63],tolerance:0.,
             contiguous:true,selection:None,refinement:Default::default(),limit:None,
         });

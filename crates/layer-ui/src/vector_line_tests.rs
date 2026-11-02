@@ -1994,7 +1994,7 @@ fn filling_outside_paths_names_the_new_paint_layer_and_leads_back() {
     let expected_paper = s.engine.document().nearest_paper_binding(s.engine.document().drawing_content());
     let request = s.renderer_mut().region_requests.last().unwrap().clone();
     let pixels = Arc::new(layer_core::SelectionPixels::bytes([8, 1], [0, 0, 8, 1], vec![0xffffffff; 2]).unwrap());
-    s.renderer_mut().region_reply = Some(layer_render::RegionResult { gaps: None, underfill: None, tonal_sample: None, placement: layer_core::Affine::IDENTITY, request_id: request.request_id, pixels });
+    s.renderer_mut().region_reply = Some(layer_render::RegionResult { anchors: None, gaps: None, underfill: None, tonal_sample: None, placement: layer_core::Affine::IDENTITY, request_id: request.request_id, pixels });
     s.frame(6_000_000_000, 6_000_000_000).unwrap();
     let target = s.engine.document().drawing_content().unwrap();
     assert!(expected_paper.is_some());

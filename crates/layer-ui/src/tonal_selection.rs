@@ -226,7 +226,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if probe.is_some() {
             draft.mode = mode;
         }
-        let request = RegionRequest { fill: None, reference_count: None, paper: None,
+        let request = RegionRequest { colour_mode: Default::default(), fill: None, reference_count: None, paper: None,
             enclosure: None, request_id: 0,
             source: layer_render::RegionSource::Tonal(Box::new(TonalRequest {
                 source: layer_render::RegionSource::Scene {snapshot:doc.snapshot(),scope:layer_core::authored::SceneScope::All},

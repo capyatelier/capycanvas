@@ -521,7 +521,7 @@ impl Scene {
             image_output: None,
             image_evaluation_origin: [0; 2],
             stop_before: None,
-            image_damage: None,fill_capture:None,edge_binding:fill_edges::binding(r,&r.empty_view,&r.empty_view,&r.empty_view,&r.unclipped,None),
+            image_damage: None,fill_capture:None,edge_binding:fill_edges::binding(r,&r.empty_view,&r.empty_view,&r.empty_view,&r.unclipped,&r.unclipped,None),
         }))
     }
     pub(super) fn retire_changed_cells(&mut self,buffers:&[wgpu::Buffer]) {

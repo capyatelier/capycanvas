@@ -31,7 +31,7 @@ fn frame(r: &mut WgpuRasterizer, document: &Document, extent: [u32; 2]) {
     submit_ready(r, FramePacket { reset_layers: true, ..packet(document.scene(), extent) }).unwrap();
 }
 fn request(source: RegionSource, enclosure: Selection, refinement: RegionRefinement, tolerance: f32) -> RegionRequest {
-    RegionRequest { fill: None, reference_count: None, paper: None,
+    RegionRequest { colour_mode: Default::default(), fill: None, reference_count: None, paper: None,
         request_id: 91,
         source,
         contiguous: true,

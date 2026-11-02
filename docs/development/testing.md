@@ -86,7 +86,7 @@ host guide describes.
 | Color Lookup | `lut3d_tests` in `layer-core`, `layer-ui` and `layer-render-wgpu`; GTK `native_color_lookup_import_replace_and_persistence`; Web `--lookup-transport`; Android `colorLookupImportPresetsAndResourceLifetime`. |
 | Levels, Curves and scopes | `artwork_statistics_tests`, `levels_statistics_tests` and `curves_calibration_tests`; the [tonal journeys](#tonal-journeys); Web `--tonal-controls`. |
 | Fill line geometry | Renderer `enclose_fill_geometry*`, including CPU `enclose_fill_geometry_known_misses_only_shrink`; remove fixed cases from `KNOWN_MISSES`. GTK `native_fill_scribble_geometry --tablet`; Web `--enclose-fill`, using `tools/fixtures/fill-scribble.json`. |
-| Fill anti-aliased edges | Renderer `enclose_fill::edges`; GTK `native_fill_scribble_geometry` and Web `--enclose-fill` use `tools/fixtures/fill-edges.json`. |
+| Fill anti-aliased edges | Renderer `enclose_fill::edges`; GTK `native_fill_antialiased_edge_plates` and Web `--enclose-fill` use `tools/fixtures/fill-edges.json`. |
 | Fill cache | Renderer `region_cache_`, `background_cache_prepares_query_recipes_before_becoming_idle`, `end_storage_scales_with_canvas_area_and_fits_61mp`, `native_stroke_publication_keeps_prepared_reference_pages_and_matches_fresh_masks` and `command_mask_reuse_preserves_fractional_coverage_and_placement`; GTK `native_enclose_fill_pointer_workflow`; Web `--enclose-fill`. |
 | Fill texture | `native_fill_texture_matches_contact_and_flat_pixels_through_history`; GTK `native_fill_texture_controls_and_papers`. |
 | Gradients | Core `gradient`; UI `shared_gradient`; GTK `native_gradient_editor_modes_contacts_and_archive` and `native_gradient_tool_editor_shapes_and_reverse`. |

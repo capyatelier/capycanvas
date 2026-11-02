@@ -1,4 +1,5 @@
 const END_WORDS:u32=20u;
+const HEADER_WORDS:u32=5u;
 struct LineParams {
     extent: vec4<u32>,
     window: vec4<u32>,
@@ -293,7 +294,7 @@ fn line_ends(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgrou
     atomicStore(&cached[base+2u],width|(length<<16u));
     atomicStore(&cached[base+11u],1u);atomicStore(&cached[base+15u],point(q));
     let page=(q.y/128u)*((line.extent.x+127u)/128u)+q.x/128u;
-    atomicStore(&cached[base+3u],atomicExchange(&cached[line.offsets.y+4u+page],slot+1u));
+    atomicStore(&cached[base+3u],atomicExchange(&cached[line.offsets.y+HEADER_WORDS+page],slot+1u));
 }
 fn tangent(value:u32)->vec2<i32>{return vec2<i32>(i32(value<<16u)>>16,i32(value)>>16);}
 fn middle(p:vec2<i32>)->vec2<i32>{
@@ -377,7 +378,7 @@ fn refine_ends(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgrou
         let lower=vec2<u32>(max(start-vec2<i32>(64),vec2<i32>(0)))/128u;
         let upper=vec2<u32>(min(start+vec2<i32>(64),vec2<i32>(line.extent.xy)-vec2<i32>(1)))/128u;
         for(var y=lower.y;y<=upper.y;y++){for(var x=lower.x;x<=upper.x;x++){
-            var link=atomicLoad(&cached[line.offsets.y+4u+y*((line.extent.x+127u)/128u)+x]);
+            var link=atomicLoad(&cached[line.offsets.y+HEADER_WORDS+y*((line.extent.x+127u)/128u)+x]);
             loop {
                 if link==0u{break;}let other=line.offsets.z+(link-1u)*END_WORDS;link=atomicLoad(&cached[other+3u]);
                 if atomicLoad(&cached[other+2u])>>16u<16u {continue;}
@@ -408,7 +409,7 @@ fn seal_candidates(@builtin(global_invocation_id) id:vec3<u32>, @builtin(num_wor
     let lower=vec2<u32>(max(start-vec2<i32>(80),vec2<i32>(0)))/128u;
     let upper=vec2<u32>(min(start+vec2<i32>(80),vec2<i32>(line.extent.xy)-vec2<i32>(1)))/128u;
     for(var y=lower.y;y<=upper.y;y++){for(var x=lower.x;x<=upper.x;x++){
-        var link=atomicLoad(&cached[line.offsets.y+4u+y*((line.extent.x+127u)/128u)+x]);
+        var link=atomicLoad(&cached[line.offsets.y+HEADER_WORDS+y*((line.extent.x+127u)/128u)+x]);
         loop {
             if link==0u {break;}
             let other=line.offsets.z+(link-1u)*END_WORDS;let same=link-1u==index;link=atomicLoad(&cached[other+3u]);if same{continue;}
@@ -541,6 +542,29 @@ fn assign_region(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgr
 
 
 @compute @workgroup_size(64)
+fn capture_anchors(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>) {
+    let index=id.x+id.y*groups.x*64u;let columns=(line.core.z+31u)/32u;
+    let row=index/columns;if row>=line.core.w{return;}
+    if index==0u {atomicOr(&cached[0],atomicLoad(&eligible[line.offsets.y+4u])<<31u);}
+    if atomicLoad(&eligible[line.offsets.y+3u])==0u {return;}
+    let origin=line.core.xy+vec2(index%columns*32u,row);var bits=0u;
+    for(var bit=0u;bit<32u;bit++) {
+        let p=origin+vec2(bit,0u);if p.x>=line.core.x+line.core.z {break;}
+        let barrier=line.offsets.z+line.offsets.w*END_WORDS;
+        var band=!raw_ink(vec2<i32>(p)) || (atomicLoad(&eligible[barrier+p.y*line.extent.z+p.x/32u])&(1u<<(p.x%32u)))!=0u;
+        for(var n=0u;n<8u;n++){let at=vec2<i32>(p)+AROUND[n];band=band || (valid(at) && !raw_ink(at));}
+        if !band {continue;}
+        let q=input(local_index(p-line.window.xy));
+        if q!=INVALID && square(p,coord(q))*4u<=line.options.x*line.options.x {bits|=1u<<bit;}
+    }
+    let offset=atomicAdd(&cached[0],countOneBits(bits))&0x7fffffffu;atomicStore(&cached[1u+index*2u],bits);atomicStore(&cached[2u+index*2u],offset);
+    let base=1u+2u*columns*line.core.w+offset;var at=0u;
+    loop {if bits==0u {break;}let bit=countTrailingZeros(bits);bits&=bits-1u;
+        atomicStore(&cached[base+at],input(local_index(origin+vec2(bit,0u)-line.window.xy)));at++;
+    }
+}
+
+@compute @workgroup_size(64)
 fn hold_barriers(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>){
     if !active_line_attempt(){return;}
     let index=id.x+id.y*groups.x*64u+line.job.x;
@@ -571,7 +595,11 @@ fn remember_thin(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgr
 
 @compute @workgroup_size(64)
 fn check_seeds(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>){
-    let index=id.x+id.y*groups.x*64u+line.job.x;if index>=arrayLength(&first){return;}
+    let index=id.x+id.y*groups.x*64u+line.job.x;
+    if line.options.w!=0u {
+        if index==0u {atomicStore(&cached[line.offsets.y+4u],u32(line.options.x!=0u || (line.options.y!=0u && first[3u]==bitcast<u32>(1.))));}return;
+    }
+    if index>=arrayLength(&first){return;}
     let p=vec2<i32>(line.options.xy);
     if ink(p) && distance(middle(p))<=line.options.z {return;}
     if ((first[index/4u*4u+3u]|second[index/4u*4u+3u])&0x7fffffffu)==0u {return;}
@@ -673,7 +701,7 @@ fn reset_ends(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroup
             let slot=atomicAdd(&cached[line.offsets.y],1u);let base=line.offsets.z+slot*END_WORDS;
             for(var word=0u;word<END_WORDS;word++){atomicStore(&cached[base+word],first[at+word]);}
             let q=coord(first[at+15u]);let page=(q.y/128u)*((line.extent.x+127u)/128u)+q.x/128u;
-            atomicStore(&cached[base+3u],atomicExchange(&cached[line.offsets.y+4u+page],slot+1u));
+            atomicStore(&cached[base+3u],atomicExchange(&cached[line.offsets.y+HEADER_WORDS+page],slot+1u));
         }else{
             let q=coord(first[at+15u]);
             if all(q>=line.core.xy) && all(q<line.core.xy+line.core.zw) {
@@ -684,5 +712,5 @@ fn reset_ends(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroup
     }
     if line.options.x==2u {if index==0u{atomicStore(&cached[line.offsets.y+3u],select(0u,INVALID,line.options.z!=0u));}return;}
     if index==0u {atomicStore(&cached[line.offsets.y],0u);atomicStore(&cached[line.offsets.y+1u],0u);}
-    if index<line.offsets.z-line.offsets.y-4u {atomicStore(&cached[line.offsets.y+4u+index],0u);}
+    if index<line.offsets.z-line.offsets.y-HEADER_WORDS {atomicStore(&cached[line.offsets.y+HEADER_WORDS+index],0u);}
 }

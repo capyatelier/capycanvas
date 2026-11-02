@@ -359,6 +359,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.notify(self.localization().text(MessageId::DOCUMENTS_TOO_LARGE_MEMORY).to_string());
             return;
         }
+        let colour_mode=if from.is_some() {layer_render::RegionColourMode::AlphaBorder}else{match source {
+            RegionSource::Editing=>layer_render::RegionColourMode::ColourOnSolid,
+            RegionSource::Visible=>source_target.map_or(layer_render::RegionColourMode::AlphaBorder,layer_render::RegionColourMode::Target),
+            _=>layer_render::RegionColourMode::AlphaBorder,
+        }};
         let source = resolved;
         let doc = self.engine.document();
         let basis = layer_core::Affine::IDENTITY;
@@ -366,7 +371,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.notify_drawing_refusal();
             return;
         }
-        let request = RegionRequest { fill: (fill && !enclosed && self.region_tools.gesture.is_some()).then(||layer_render::RegionFillQuery {
+        let request = RegionRequest { colour_mode, fill: (fill && !enclosed && self.region_tools.gesture.is_some()).then(||layer_render::RegionFillQuery {
                 reach:self.region_tools.gap_reach.or_else(||(!self.region_tools.refinement.close_gaps).then_some(0)),excluded_seals:Default::default(),
                 trail:self.fill_query_trail()}),
             reference_count: (self.lines_from(self.layer_interaction.tool.region().unwrap().1) == RegionSource::Reference).then(|| doc.scene().reference_leaves().len()),
@@ -431,7 +436,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Some(layer_render::RegionSource::Scene {snapshot,scope})=>Some(layer_core::FillLine {snapshot,scope,
                     fill_above:order.iter().position(|id|*id==leaf).unwrap()>index}),_=>None,
             }).collect();
-        if let layer_core::RasterOperationKind::Fill {edges,..}=&mut operation {*edges=Some(Box::new(layer_core::FillEdges {
+        if let layer_core::RasterOperationKind::Fill {edges,..}=&mut operation {*edges=Some(Box::new(layer_core::FillEdges { anchors: None,
             snapshot,position:Point{x:request.position[0] as f32,y:request.position[1] as f32},tolerance:request.tolerance,lines,
         }));}
         operation
@@ -459,7 +464,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.region_tools.queued = Some(request);
     }
     pub(super) fn queue_selection(&mut self, selection: Selection, options: layer_render::SelectionRefinement) {
-        let request = RegionRequest { fill: None, reference_count: None, paper: None,
+        let request = RegionRequest { colour_mode: Default::default(), fill: None, reference_count: None, paper: None,
             enclosure: None, request_id: 0, contiguous: false, selection: Some(options),
             source: layer_render::RegionSource::Selection(std::sync::Arc::new(selection)),
             position: [0, 0], tolerance: 0., refinement: Default::default(), limit: None,
@@ -523,7 +528,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     Purpose::Region { operation, color, basis } => {
                         let selection = Selection::pixels(result.pixels).transformed(basis).map_err(error)?;
                         if let Some(mut operation) = operation {
-                            if let layer_core::RasterOperationKind::Fill { underfill, .. } = &mut operation {
+                            if let layer_core::RasterOperationKind::Fill { underfill, edges, .. } = &mut operation {
+                                if let Some(edges)=edges {edges.anchors=result.anchors.clone();}
                                 *underfill = result.underfill.map(Selection::pixels).map(|selection| selection.transformed(basis)).transpose().map_err(error)?;
                             }
                             self.paint_operation(Some(selection), operation, color.as_slice())?;
