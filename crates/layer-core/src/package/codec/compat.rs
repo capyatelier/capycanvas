@@ -3,8 +3,23 @@ use crate::ProjectLimits;
 use std::path::{Path, PathBuf};
 use sha2::{Digest,Sha256};
 
+#[path="sweep.rs"]
+mod sweep;
+
 fn root() -> PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/compat") }
 fn digest(bytes:&[u8])->String {Sha256::digest(bytes).iter().map(|b|format!("{b:02x}")).collect()}
+fn resource_digest(payload:&resources::Payload)->String {
+    let mut hash=crate::package::trusted_programs::HashWriter::default();
+    if let resources::Payload::Opaque(resource)=payload {
+        let mut offset=0;
+        while offset<resource.length {
+            let count=(resource.length-offset).min(MAX_RANGE_BYTES as u64) as usize;
+            hash.write_all(&resource.read_chunk(offset,count,&AtomicBool::new(false)).unwrap()).unwrap();
+            offset+=count as u64;
+        }
+    } else {hash.write_all(&payload.encoded().unwrap().bytes).unwrap();}
+    hash.hex()
+}
 
 #[test]
 #[ignore]
@@ -18,11 +33,12 @@ pub(crate) fn generate(directory:&Path) {
     for depth in [SampleDepth::U8,SampleDepth::U16,SampleDepth::F16,SampleDepth::F32] {
         std::fs::write(directory.join(format!("samples-{depth:?}.capy")),serialize(&prepare(&fixture(depth),true))).unwrap();
     }
-    for name in ["authored-filters.capy","shared-image-objects.capy","vector-objects.capy","illustration-conversions.capy","layer-color-modes.capy","papers.capy","unsupported-pass-through.capy"] {
+    for name in ["authored-filters.capy","shared-image-objects.capy","vector-objects.capy","vector-future.capy","illustration-conversions.capy","layer-color-modes.capy","papers.capy","unsupported-pass-through.capy"] {
         let bytes = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/package/codec/fixtures").join(name)).unwrap();
         let bytes = if name.starts_with("unsupported") {bytes} else {serialize(&prepare(&editable(bytes),true))};
         std::fs::write(directory.join(name),bytes).unwrap();
     }
+    sweep::generate(directory);
 }
 
 #[test]
@@ -90,7 +106,7 @@ fn check_inputs(directory:&Path,check:impl Fn(&str,Value)) {
                 assert_eq!(prepare(&reopened,false).manifest(),prepared.manifest());
                 super::roundtrip_semantics::exact_rasters(&artwork,&reopened);
                 let resources:std::collections::BTreeMap<_,_>=prepared.resources().entries.iter()
-                    .map(|entry|(entry.record["id"].as_str().unwrap().to_owned(),digest(&entry.payload.encoded().unwrap().bytes))).collect();
+                    .map(|entry|(entry.record["id"].as_str().unwrap().to_owned(),resource_digest(&entry.payload))).collect();
                 json!({"manifest":manifest,"resources":resources,"preview":preview.map(|p|json!({"size":p.size(),"pixels":digest(p.pixels())}))})
             }
             OpenOutcome::Preserved {source,..} if path.file_name().unwrap() == "unsupported-pass-through.capy" => {
@@ -104,35 +120,12 @@ fn check_inputs(directory:&Path,check:impl Fn(&str,Value)) {
 }
 
 #[test]
-fn generated_fixtures_cover_every_record_kind() {
-    fn visit(value:&Value,types:&mut std::collections::BTreeSet<String>) {
-        match value {
-            Value::Object(fields)=> {
-                if let Some(kind)=fields.get("type").and_then(Value::as_str) {types.insert(kind.into());}
-                for value in fields.values() {visit(value,types);}
-            }
-            Value::Array(values)=>for value in values {visit(value,types);},
-            _=>{},
-        }
-    }
-    fn collect(path:&Path,types:&mut std::collections::BTreeSet<String>) {
-        for entry in std::fs::read_dir(path).unwrap() {
-            let path=entry.unwrap().path();
-            if path.is_dir() {collect(&path,types);}
-            else if path.extension().is_some_and(|extension|extension=="capy") {
-                let mut zip=zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
-                let value:Value=serde_json::from_reader(zip.by_name("manifest.json").unwrap()).unwrap();visit(&value,types);
-            } else if path.parent().unwrap().file_name().is_some_and(|name|name=="generations") {
-                let value:Value=serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();visit(&value,types);
-            }
-        }
-    }
+fn generated_fixtures_cover_every_saved_value() {
     let directory=std::env::temp_dir().join(format!("capy-record-coverage-{}",PortableId::random()));
     let codec=directory.join("codec");let sessions=directory.join("sessions");
     std::fs::create_dir_all(&codec).unwrap();std::fs::create_dir_all(&sessions).unwrap();
     generate(&codec);crate::package::session::persistence_tests::compat::generate(&sessions);
-    let mut types=std::collections::BTreeSet::new();collect(&directory,&mut types);
-    let missing:Vec<_>=crate::package::registry::RECORDS.iter().filter(|record|!types.contains(record.type_id)).map(|record|record.type_id).collect();
-    assert!(missing.is_empty(),"fixture generators omit record kinds: {missing:?}");
+    check_inputs(&codec,|_,_|{});
+    sweep::check(&directory);
     std::fs::remove_dir_all(directory).unwrap();
 }

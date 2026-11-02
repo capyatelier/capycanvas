@@ -176,6 +176,28 @@ fn properties(data: &[u8]) -> DecodeResult<Fields<'_>> {
     }
     Ok(Fields(Bytes::new(data)))
 }
+
+#[cfg(test)]
+pub(crate) fn item_words(data: &[u8]) -> DecodeResult<(std::collections::BTreeSet<u64>, std::collections::BTreeSet<u64>)> {
+    fn visit(data: &[u8], depth: u32, kinds: &mut std::collections::BTreeSet<u64>, tags: &mut std::collections::BTreeSet<u64>) -> DecodeResult<()> {
+        if depth > MAX_DEPTH { return Err(invalid("nesting exceeds the admitted depth")); }
+        let mut bytes = Bytes::new(data);
+        let mut reading = Reading::default();
+        while !bytes.done() {
+            if let Some(record) = framed(&mut bytes, &mut reading)? {
+                kinds.insert(record.kind);
+                for (tag, value) in properties(record.properties)? {
+                    tags.insert(tag);
+                    if ValueClass::of(tag) == ValueClass::Nested { visit(value, depth + 1, kinds, tags)?; }
+                }
+            }
+        }
+        Ok(())
+    }
+    let (mut kinds, mut tags) = Default::default();
+    visit(data, 0, &mut kinds, &mut tags)?;
+    Ok((kinds, tags))
+}
 fn listed(value: &[u8], mut accept: impl FnMut(u64) -> DecodeResult<()>) -> DecodeResult<()> {
     let mut bytes = Bytes::new(value);
     while !bytes.done() { accept(bytes.varuint()?)?; }
