@@ -1051,8 +1051,7 @@ def fixture_durations():
         for line in path.read_text(encoding="utf-8-sig").splitlines():
             try:
                 row = json.loads(line)
-                if row.get("exit") == 0:
-                    durations[row["name"]] = row["seconds"]
+                durations[row["name"]] = row["seconds"]
             except (ValueError, KeyError):
                 continue
     return durations

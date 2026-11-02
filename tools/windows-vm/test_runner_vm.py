@@ -152,6 +152,28 @@ class RunnerVmTests(unittest.TestCase):
             vm.import_fixture_build(machine, vm.SOFTWARE_BUILD + "-dev-perf", record, archive, record["inputs"], "dev-perf")
         self.assertFalse(path.exists())
 
+    def test_latest_failed_and_timed_out_durations_start_before_short_fixtures(self):
+        artifacts = self.root / "evidence"
+        results = artifacts / "runner" / "run" / "results.jsonl"
+        results.parent.mkdir(parents=True)
+        rows = [
+            {"name": "fast", "exit": 0, "seconds": 30},
+            {"name": "file-activation", "exit": 0, "seconds": 10},
+            {"name": "file-activation", "exit": 1, "seconds": 1202},
+            {"name": "file-activation:light", "exit": "timeout", "seconds": 1201},
+        ]
+        results.write_text("".join(json.dumps(row) + "\n" for row in rows) + 'not json\n{"name":"incomplete"}\n')
+        with patch.object(vm, "ARTIFACTS", artifacts), patch.object(vm, "SETTINGS", {"artifacts": str(artifacts)}):
+            durations = vm.fixture_durations()
+        selectors = ["fast", "file-activation", "file-activation:light", "unknown"]
+        with vm.fixture_shards.Queue(selectors, ["r1"], durations, artifacts / "plan.json") as queue:
+            for expected in ["file-activation", "file-activation:light", "unknown", "fast"]:
+                request = Request(f"http://127.0.0.1:{queue.server.server_port}/r1", method="POST",
+                                  headers={"Authorization": "Bearer " + queue.tokens["r1"]})
+                with urlopen(request, timeout=5) as response:
+                    self.assertEqual(json.load(response)["selector"], expected)
+        self.assertEqual(durations, {"fast": 30, "file-activation": 1202, "file-activation:light": 1201})
+
     def test_sharded_cli_rejects_gpu_and_requires_explicit_sharding_for_keep(self):
         with patch.object(vm, "boot") as boot:
             with self.assertRaisesRegex(ValueError, "cannot be used"):
