@@ -336,6 +336,7 @@ pub(crate) struct MipDecodeQueue {
 struct DecodeContext {
     cache:Arc<layer_core::raster::DecodedTileCache>,destination:RgbSpace,
     send:std::sync::mpsc::SyncSender<PreparedImageWork>,ready:Arc<std::sync::atomic::AtomicUsize>,
+    wake: std::sync::OnceLock<Arc<dyn Fn() + Send + Sync>>,
 }
 #[cfg(not(target_arch="wasm32"))]
 struct DecodeJob {request:MipDecodeRequest,context:Weak<DecodeContext>}
@@ -351,6 +352,7 @@ impl DecodeJob {
         let result=prepare_request(self.request,destination,&cache,decoders);
         if let Some(context)=self.context.upgrade() && context.send.send(result).is_ok() {
             context.ready.fetch_add(1,Ordering::AcqRel);
+            if let Some(wake)=context.wake.get() {wake();}
         }
     }
 }
@@ -430,9 +432,11 @@ impl MipDecodeQueue {
         let capacity=pool.capacity;
         let ready=Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let (send,results)=std::sync::mpsc::sync_channel(capacity);
-        let context=Arc::new(DecodeContext {cache,destination,send,ready:ready.clone()});
+        let context=Arc::new(DecodeContext {cache,destination,send,ready:ready.clone(),wake:Default::default()});
         Ok(Self {pool,context,waiting:None,results,ready,outstanding:Vec::new(),capacity})
     }
+    #[cfg(not(target_arch="wasm32"))]
+    pub(crate) fn set_wake(&self, wake: Arc<dyn Fn() + Send + Sync>) {let _=self.context.wake.set(wake);}
     pub(crate) fn request(&mut self,id:PortableId,source:Arc<SourceImage>,coordinate:[u32;2])->bool {
         let weak=Arc::downgrade(&source);
         self.enqueue(MipDecodeRequest::Image(ImageDecodeRequest {id,source,coordinate}),Some(DecodeKey::Image(weak,coordinate)))
@@ -497,8 +501,54 @@ mod tests {
     fn queued(requests:std::sync::mpsc::SyncSender<DecodeJob>,results:std::sync::mpsc::Receiver<PreparedImageWork>,
         ready:Arc<std::sync::atomic::AtomicUsize>,outstanding:Vec<Option<DecodeKey>>,capacity:usize)->MipDecodeQueue {
         let (send,_)=std::sync::mpsc::sync_channel(capacity);
-        let context=Arc::new(DecodeContext {cache:Arc::new(layer_core::raster::DecodedTileCache::new(0)),destination:RgbSpace::Srgb,send,ready:ready.clone()});
+        let context=Arc::new(DecodeContext {cache:Arc::new(layer_core::raster::DecodedTileCache::new(0)),destination:RgbSpace::Srgb,send,ready:ready.clone(),wake:Default::default()});
         MipDecodeQueue {pool:Arc::new(DecodePool {requests,capacity,epoch:Default::default()}),context,waiting:None,results,ready,outstanding,capacity}
+    }
+    #[cfg(not(target_arch="wasm32"))]
+    #[test]
+    fn completed_preparation_publishes_pixels_and_readiness_before_one_wake() {
+        use std::sync::{Mutex,mpsc,atomic::AtomicUsize};
+        use std::time::Duration;
+        let cache=Arc::new(layer_core::raster::DecodedTileCache::new(0));
+        let mut queue=MipDecodeQueue::native(cache,RgbSpace::Srgb).unwrap();
+        let context=Arc::downgrade(&queue.context);
+        let calls=Arc::new(AtomicUsize::new(0));let notified=calls.clone();
+        let (wake,awakened)=mpsc::channel();let (release,held)=mpsc::channel();let held=Mutex::new(held);
+        let (finished,completed)=mpsc::channel();
+        queue.set_wake(Arc::new(move|| {
+            let ready=context.upgrade().unwrap().ready.load(Ordering::Acquire);
+            notified.fetch_add(1,Ordering::Relaxed);
+            if wake.send(ready).is_ok() {let _=held.lock().unwrap().recv();}
+            let _=finished.send(());
+        }));
+        let target=Arc::new(Mutex::new(None));let destination=Arc::downgrade(&target);
+        assert!(queue.request_coordinates([1.,0.,0.,1.,3.,-2.],[256;2],17,1,destination.clone()));
+        let ready=awakened.recv_timeout(Duration::from_secs(5));
+        let result=queue.poll();let pending=queue.pending();let still_ready=queue.ready();
+        let _=release.send(());
+        completed.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(ready.unwrap(),1);
+        let PreparedImageWork::Coordinates {destination:received,pixels}=result.unwrap() else {panic!("Coordinate preparation must be queued before notification");};
+        assert!(received.ptr_eq(&destination));
+        assert_eq!(pixels.unwrap().as_slice(),[20_i32,-2].into_iter().flat_map(i32::to_le_bytes).collect::<Vec<_>>());
+        assert!(!pending);assert!(!still_ready);assert!(queue.poll().is_none());
+        assert_eq!(calls.load(Ordering::Relaxed),1);assert!(awakened.try_recv().is_err());
+    }
+    #[cfg(not(target_arch="wasm32"))]
+    #[test]
+    fn dropped_preparation_queue_releases_its_wake_and_abandoned_jobs_never_notify() {
+        use std::sync::{Mutex,atomic::AtomicUsize};
+        let queue=MipDecodeQueue::native(Arc::new(layer_core::raster::DecodedTileCache::new(0)),RgbSpace::Srgb).unwrap();
+        let calls=Arc::new(AtomicUsize::new(0));let notified=calls.clone();
+        let callback_owner=Arc::new(());let callback_lifetime=Arc::downgrade(&callback_owner);
+        queue.set_wake(Arc::new(move|| {let _=&callback_owner;notified.fetch_add(1,Ordering::Relaxed);}));
+        let target=Arc::new(Mutex::new(None));let ready=queue.ready.clone();
+        let job=DecodeJob {context:Arc::downgrade(&queue.context),request:MipDecodeRequest::Coordinates(CoordinateRequest {
+            inverse:[1.,0.,0.,1.,0.,0.],size:[256;2],first:0,count:1,destination:Arc::downgrade(&target)})};
+        drop(queue);assert!(callback_lifetime.upgrade().is_none());
+        job.run(&mut Decoders::new());
+        assert_eq!(calls.load(Ordering::Relaxed),0);assert_eq!(ready.load(Ordering::Acquire),0);
+        assert!(target.lock().unwrap().is_none());
     }
     #[test]
     fn obsolete_image_decode_failure_is_visible_only_to_its_requested_source_and_context() {

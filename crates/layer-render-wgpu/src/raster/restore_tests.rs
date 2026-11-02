@@ -39,6 +39,61 @@ fn live_pixels(r: &WgpuRasterizer) -> Vec<(RasterPlane, [u32; 2], Vec<u8>)> {
 }
 
 #[test]
+fn ready_restore_requires_consumed_preparation_progress_between_iterations() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let color = DocumentColor::default();
+    let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
+    let document = restore_document(color);
+    let source = target(&document);
+    r.ensure_document_metadata([9504, 6336], document.scene()).unwrap();
+    let first = data(color, 1, &[RasterPlane::Color], 1);
+    let previous = r.preparation_progress();
+    prepare(&mut r, |r| r.restore_raster(source, &RasterData::default(), &first)).unwrap();
+    assert!(r.preparation_progress() > previous);
+    let original = live_pixels(&r);
+
+    let compiler = Arc::new(crate::startup::Compiler::new().unwrap());
+    let (entered, entered_rx) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
+    compiler.enqueue(crate::startup::DOCUMENT, move || {
+        entered.send(()).unwrap();
+        let _ = release_rx.recv();
+        Ok(())
+    });
+    compiler.start();
+    entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    r.scene_pipelines.source = crate::scene::Pipelines::new(&r.device).source;
+    assert!(!r.scene_pipelines.source.pipeline.ready());
+    r.preparation_compiler = Some(compiler);
+
+    let second = data(color, 1, &[RasterPlane::Color], 2);
+    let blob = second.tiles.values().next().unwrap().wait_backing().unwrap();
+    let pixels = crate::object_image_mips::prepare_raster_tile(&blob, color.space, &r.device.source_samples);
+    r.source_results.push_back((color.space, crate::object_image_mips::PreparedImageWork::Raster(
+        crate::object_image_mips::PreparedRasterTile {
+            blob, space: color.space, destination: color.space, scalar: false, pixels,
+        },
+    )));
+    assert!(matches!(r.restore_raster(source, &first, &second), Err(GpuRasterError::DeferredObjectWork)));
+    assert!(r.held_result_ready());
+    assert!(r.raster_preparation_ready(previous));
+    let current = r.preparation_progress();
+    for _ in 0..2 {
+        assert!(matches!(r.restore_raster(source, &first, &second), Err(GpuRasterError::DeferredObjectWork)));
+        assert_eq!(r.preparation_progress(), current);
+        assert!(r.held_result_ready());
+        assert!(!r.raster_preparation_ready(current));
+    }
+
+    release.send(()).unwrap();
+    prepare(&mut r, |r| r.restore_raster(source, &first, &second)).unwrap();
+    assert!(r.preparation_progress() > current);
+    assert_ne!(live_pixels(&r), original);
+}
+
+#[test]
 fn native_raster_restore_batches_keep_pixels_reuse_and_late_failure_atomicity() {
     for color in [DocumentColor::default(), DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U16 }] {
         let mut r = WgpuRasterizer::new_native_headless(color).unwrap();

@@ -161,6 +161,22 @@ struct ChromeRequests {
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FrameReadiness { Waiting, Dependencies, Ready }
+enum PreparationCommand<T> { Command(T), Ready, Wait, Closed }
+fn preparation_command<T>(receiver: &mpsc::Receiver<T>, ready: bool) -> PreparationCommand<T> {
+    match receiver.try_recv() {
+        Ok(command) => PreparationCommand::Command(command),
+        Err(mpsc::TryRecvError::Empty) if ready => PreparationCommand::Ready,
+        Err(mpsc::TryRecvError::Empty) => PreparationCommand::Wait,
+        Err(mpsc::TryRecvError::Disconnected) => PreparationCommand::Closed,
+    }
+}
+struct PreparationSignal { commands: mpsc::Sender<Command>, enabled: AtomicBool, queued: AtomicBool }
+impl PreparationSignal {
+    fn notify(&self) {
+        if self.enabled.load(Ordering::Acquire) && !self.queued.swap(true,Ordering::AcqRel)
+            && self.commands.send(Command::PreparationReady).is_err() {self.queued.store(false,Ordering::Release);}
+    }
+}
 impl FrameReadiness {
     fn ready(self) -> bool { self == Self::Ready }
 }
@@ -369,6 +385,7 @@ enum Command {
     CancelFilterPreviews(u64),
     Frame(Box<Frame>, Option<Presentation>),
     Wake,
+    PreparationReady,
     Present(Option<Presentation>),
     ReleaseChrome(u64),
     Asset(AssetId, layer_core::ProjectAsset),
@@ -654,6 +671,7 @@ impl RenderWorker {
         let failure_area = area.clone();
         let worker_chrome = renderer.presented_chrome.clone();
         let finished_chrome = renderer.presented_chrome.clone();
+        let preparation = Arc::new(PreparationSignal { commands: renderer.commands.clone(), enabled: AtomicBool::new(true), queued: AtomicBool::new(false) });
         #[cfg(test)]
         let worker_stats = renderer.stats.clone();
         renderer.thread = Some(std::thread::Builder::new()
@@ -669,7 +687,11 @@ impl RenderWorker {
                             std::thread::sleep(Duration::from_millis(1));
                         }
                     }
-                    Worker::new(parent, area, worker_clock, worker_chrome, color, &localization)?.run(
+                    let mut worker = Worker::new(parent, area, worker_clock, worker_chrome, color, &localization)?;
+                    let signal = preparation.clone();
+                    worker.renderer.set_preparation_wake(Arc::new(move || signal.notify()));
+                    worker.preparation = Some(preparation);
+                    worker.run(
                         &receiver,
                         &chrome_requests,
                         &reply,
@@ -1399,6 +1421,7 @@ impl CanvasRenderer for RenderWorker {
 }
 
 struct Worker {
+    preparation: Option<Arc<PreparationSignal>>,
     watch: layer_host::DeviceWatch,
     backdrop_submitted: bool,
     paper_ready: Arc<AtomicBool>,
@@ -1515,6 +1538,8 @@ impl Worker {
         #[cfg(test)]
         let mut fail_next_frame = false;
         loop {
+            let preparation_progress = self.renderer.preparation_progress();
+            if document_drawn && let Some(preparation)=&self.preparation {preparation.enabled.store(false,Ordering::Release);}
             if !matches!(self.chrome.first, FirstChrome::Granted | FirstChrome::Submitted) {
                 for request in chrome_requests.try_iter() {
                     match request {
@@ -1610,6 +1635,7 @@ impl Worker {
             let admitted = admit_frame(None, &mut pending_frames,
                 |frame| self.draw_ready_frame(frame, &startup_progress, report, #[cfg(test)] &mut timing))?;
             if admitted != 0 {
+                if let Some(preparation)=&self.preparation {preparation.enabled.store(false,Ordering::Release);}
                 last_canvas_frame = std::time::Instant::now();
                 document_drawn = true;
                 count.fetch_sub(admitted, Ordering::Release);
@@ -1700,6 +1726,15 @@ impl Worker {
                 }
                 continue;
             }
+            let ready = !document_drawn && self.initial_completion.is_none() && startup_progress.canvas_ready
+                && pending_frames.front().is_some_and(|frame|frame.dabs.is_empty() || startup_progress.brush_ready)
+                && self.renderer.can_submit() && self.renderer.raster_preparation_ready(preparation_progress);
+            let queued = match queued.map(PreparationCommand::Command).unwrap_or_else(|| preparation_command(receiver,ready)) {
+                PreparationCommand::Command(command)=>Some(command),
+                PreparationCommand::Ready=>continue,
+                PreparationCommand::Wait=>None,
+                PreparationCommand::Closed=>break,
+            };
             let next = if let Some(command) = queued {
                 Ok(command)
             } else if !startup_progress.complete
@@ -1766,7 +1801,7 @@ impl Worker {
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             };
-            if self.initial_completion.is_some() && !matches!(command, Command::Stop | Command::Wake | Command::ReleaseChrome(_)) {
+            if self.initial_completion.is_some() && !matches!(command, Command::Stop | Command::Wake | Command::PreparationReady | Command::ReleaseChrome(_)) {
                 deferred.push_back(command);
                 continue;
             }
@@ -1946,6 +1981,7 @@ impl Worker {
                     }
                 }
                 Command::Wake => (),
+                Command::PreparationReady => if let Some(preparation)=&self.preparation {preparation.queued.store(false,Ordering::Release);},
                 Command::ReleaseChrome(revision) => {
                     if self.chrome.release(revision) {
                         self.child.synchronize(false)?;
@@ -2057,6 +2093,7 @@ impl Worker {
         let presenter = workspace_presenter(&renderer, config.format, hdr_encoding.unwrap_or_else(|| view_color.surface()))?;
         Ok(Self {
             watch: gpu.watch,
+            preparation: None,
             view_color,
             backdrop_submitted: false,
             paper_ready: Arc::new(AtomicBool::new(false)),

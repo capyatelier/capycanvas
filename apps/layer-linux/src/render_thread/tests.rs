@@ -46,6 +46,88 @@ fn retired_context_capture_resolves_failure_without_changing_sources() {
 use super::*;
 use gtk::prelude::*;
 
+struct ReadyPreparation {
+    remaining: usize,
+    steps: usize,
+}
+impl ReadyPreparation {
+    fn ready(&self) -> bool { self.remaining != 0 }
+    fn step(&mut self) {
+        assert!(self.ready());
+        self.remaining -= 1;
+        self.steps += 1;
+    }
+}
+
+#[test]
+fn ready_preparation_finishes_each_cpu_step_without_a_receiver_wait() {
+    const STEPS: usize = 37;
+    let (_commands, receiver) = mpsc::channel::<()>();
+    let mut renderer = ReadyPreparation { remaining: STEPS, steps: 0 };
+    for _ in 0..STEPS {
+        assert!(matches!(preparation_command(&receiver, renderer.ready()), PreparationCommand::Ready));
+        renderer.step();
+    }
+    assert_eq!(renderer.steps, STEPS);
+    assert!(matches!(preparation_command(&receiver, renderer.ready()), PreparationCommand::Wait));
+}
+
+#[test]
+fn input_queued_during_ready_preparation_waits_at_most_one_cpu_step() {
+    const STEPS: usize = 37;
+    const INPUT_AT: usize = 11;
+    let (commands, receiver) = mpsc::channel();
+    let mut renderer = ReadyPreparation { remaining: STEPS, steps: 0 };
+    let mut handled_at = None;
+    for _ in 0..STEPS {
+        if renderer.steps == INPUT_AT { commands.send(7).unwrap(); }
+        renderer.step();
+        match preparation_command(&receiver, renderer.ready()) {
+            PreparationCommand::Command(7) => handled_at = Some(renderer.steps),
+            PreparationCommand::Ready => assert!(renderer.ready()),
+            PreparationCommand::Wait => assert!(!renderer.ready()),
+            _ => panic!("preparation lost its input channel or command"),
+        }
+    }
+    assert_eq!(handled_at, Some(INPUT_AT + 1));
+    assert_eq!(renderer.steps, STEPS);
+    assert!(matches!(receiver.try_recv(), Err(mpsc::TryRecvError::Empty)));
+}
+
+#[test]
+fn preparation_waits_without_ready_work_and_prioritizes_queued_commands() {
+    let (commands, receiver) = mpsc::channel();
+    assert!(matches!(preparation_command(&receiver, false), PreparationCommand::Wait));
+    commands.send(7).unwrap();
+    assert!(matches!(preparation_command(&receiver, false), PreparationCommand::Command(7)));
+    commands.send(9).unwrap();
+    drop(commands);
+    assert!(matches!(preparation_command(&receiver, true), PreparationCommand::Command(9)));
+    assert!(matches!(preparation_command(&receiver, true), PreparationCommand::Closed));
+    assert!(matches!(preparation_command(&receiver, false), PreparationCommand::Closed));
+}
+
+#[test]
+fn preparation_notifications_coalesce_and_stop_when_disabled() {
+    let (commands, receiver) = mpsc::channel();
+    let signal = PreparationSignal {
+        commands,
+        enabled: AtomicBool::new(true),
+        queued: AtomicBool::new(false),
+    };
+    for _ in 0..128 { signal.notify(); }
+    assert!(matches!(receiver.try_recv(), Ok(Command::PreparationReady)));
+    assert!(matches!(receiver.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    signal.queued.store(false, Ordering::Release);
+    signal.notify();
+    assert!(matches!(receiver.try_recv(), Ok(Command::PreparationReady)));
+    signal.queued.store(false, Ordering::Release);
+    signal.enabled.store(false, Ordering::Release);
+    for _ in 0..128 { signal.notify(); }
+    assert!(!signal.queued.load(Ordering::Acquire));
+    assert!(matches!(receiver.try_recv(), Err(mpsc::TryRecvError::Empty)));
+}
+
 #[test]
 fn stop_retires_the_owner_without_waiting_for_its_worker_or_accepting_late_replies() {
     let context = gtk::glib::MainContext::new();

@@ -991,6 +991,9 @@ pub struct WgpuRasterizer {
     moving_projection: Option<MovingProjection>,
     moving_images_waiting: bool,
     moving_decode: Option<(layer_core::color::RgbSpace, object_image_mips::MipDecodeQueue)>,
+    preparation_progress: u64,
+    #[cfg(not(target_arch = "wasm32"))]
+    preparation_wake: Option<Arc<dyn Fn() + Send + Sync>>,
     failed_image_tiles: Vec<moving_projection::FailedImageTile>,
     failed_raster_tiles: Vec<(std::sync::Weak<layer_core::raster::TileBlob>,layer_core::color::RgbSpace,layer_core::color::RgbSpace,String)>,
     #[cfg(target_arch = "wasm32")]
@@ -1373,6 +1376,9 @@ impl WgpuRasterizer {
             moving_projection: None,
             moving_images_waiting: false,
             moving_decode: None,
+            preparation_progress: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            preparation_wake: None,
             failed_image_tiles: Vec::new(),
             failed_raster_tiles: Vec::new(),
             #[cfg(target_arch = "wasm32")]
@@ -3423,12 +3429,16 @@ impl WgpuRasterizer {
         let Some(prepared)=held.and_then(|index|self.source_results.remove(index)).map(|(_,result)|result)
             .or_else(||self.moving_decode.as_mut().and_then(|(_,queue)|queue.poll())) else {return Ok(None);};
         let prepared=match prepared {
-            object_image_mips::PreparedImageWork::Raster(prepared) if prepared.scalar=>{self.hold_restore_scalar(prepared);return Ok(None);},
+            object_image_mips::PreparedImageWork::Raster(prepared) if prepared.scalar=>{
+                self.preparation_progress=self.preparation_progress.saturating_add(1);
+                self.hold_restore_scalar(prepared);return Ok(None);
+            },
             prepared=>prepared,
         };
         if let Some(receipt)=receipt && !Self::receipt_matches(&receipt,&prepared) {
             self.source_results.push_back((space,prepared));return Ok(None);
         }
+        self.preparation_progress=self.preparation_progress.saturating_add(1);
         let prepared = match prepared {
             object_image_mips::PreparedImageWork::Image(prepared) => prepared,
             object_image_mips::PreparedImageWork::Coordinates {destination,pixels} => {
@@ -3487,8 +3497,24 @@ impl WgpuRasterizer {
         }).await
     }
     fn image_decode_queue(&mut self,space:layer_core::color::RgbSpace)->Result<&mut object_image_mips::MipDecodeQueue,GpuRasterError> {
-        if self.moving_decode.is_none() {self.moving_decode=Some((space,object_image_mips::MipDecodeQueue::new(&self.device)?));}
+        if self.moving_decode.is_none() {
+            let queue=object_image_mips::MipDecodeQueue::new(&self.device)?;
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(wake)=&self.preparation_wake {queue.set_wake(wake.clone());}
+            self.moving_decode=Some((space,queue));
+        }
         Ok(&mut self.moving_decode.as_mut().unwrap().1)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_preparation_wake(&mut self, wake: Arc<dyn Fn() + Send + Sync>) {
+        if let Some((_,queue))=&self.moving_decode {queue.set_wake(wake.clone());}
+        self.preparation_wake=Some(wake);
+    }
+    pub fn preparation_progress(&self) -> u64 { self.preparation_progress }
+    pub fn raster_preparation_ready(&self, previous: u64) -> bool {
+        self.preparation_progress()>previous && self.restore_preparation_pending() && (self.restore_pages_ready()
+            || self.source_tiles.borrow().can_upload_bytes(scene::sources::FLOAT_TILE_BYTES)
+                && (self.held_result_ready() || self.moving_decode.as_ref().is_some_and(|(_,queue)|queue.ready())))
     }
     pub(crate) fn request_image_decode(&mut self, id: layer_core::authored::PortableId, source: Arc<layer_core::color::source::SourceImage>, coordinate: [u32; 2]) -> Result<bool, GpuRasterError> {
         #[cfg(target_arch="wasm32")]

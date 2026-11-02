@@ -68,6 +68,12 @@ impl TargetRestore {
         })
     }
     fn complete(&self)->bool {self.next==self.pending.len()}
+    fn ready(&self,r:&WgpuRasterizer)->bool {
+        let Some(SourcePage::Raster(key,tile))=self.pending.get(self.next) else {return false;};
+        let Some(Ok(blob))=tile.try_backing() else {return false;};
+        if key.plane==RasterPlane::Color {r.source_tiles.borrow().prepared_raster_view(&blob,r.document_color().space,r.document_color().space).is_some()}
+        else {self.held(&blob).is_some() && r.source_tiles.borrow().can_upload_bytes(native_tiles::scalar::COVERAGE_TILE_BYTES)}
+    }
     fn advance(&mut self,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder)->Result<(),GpuRasterError> {
         let space=r.document_color().space;
         for source in self.pending.iter().skip(self.next).take(PREFETCH) {
@@ -209,6 +215,9 @@ impl WgpuRasterizer {
         std::mem::swap(&mut self.uploads,&mut self.restore_uploads);
         let result=work(self,&mut encoder);
         if encoder.has_work() {
+            self.preparation_progress=self.preparation_progress.saturating_add(1);
+            #[cfg(not(target_arch="wasm32"))]
+            if let Some(wake)=self.preparation_wake.clone() {encoder.on_submitted_work_done(move||wake());}
             self.uploads.finish(&encoder);self.last_submission=Some(encoder.submit(&self.queue));self.metrics.native_restore_submissions+=1;
         }
         std::mem::swap(&mut self.uploads,&mut self.restore_uploads);result
@@ -233,6 +242,8 @@ impl WgpuRasterizer {
         if ready {Ok(())}else {Err(GpuRasterError::DeferredObjectWork)}
     }
     pub(crate) fn restore_preparation_pending(&self)->bool {self.restore_preflight.as_ref().is_some_and(|restore|!restore.complete())}
+    pub(crate) fn restore_pages_ready(&self)->bool {self.restore_preflight.as_ref()
+        .and_then(|restore|restore.targets.iter().flatten().find(|target|!target.complete())).is_some_and(|target|target.ready(self))}
     fn replace_restore(&mut self,key:Key,requests:Vec<Request>) {
         if self.restore_preflight.as_ref().is_none_or(|restore|restore.key!=key || restore.consumed) {
             self.restore_preflight=Some(RestorePreflight::new(self,key,requests));
