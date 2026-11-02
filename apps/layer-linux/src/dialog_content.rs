@@ -6,7 +6,7 @@ mod imp {
     #[derive(Default)]
     pub struct Content {
         pub body: gtk::Box,
-        pub width: Cell<i32>,
+        pub preparing: Cell<bool>,
         pub resized: RefCell<Option<Box<dyn Fn(i32)>>>,
     }
     #[glib::object_subclass]
@@ -25,18 +25,22 @@ mod imp {
         }
         fn request_mode(&self) -> gtk::SizeRequestMode { gtk::SizeRequestMode::HeightForWidth }
         fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
+            if orientation == gtk::Orientation::Vertical { self.prepare(for_size); }
             let (minimum, natural, min_baseline, nat_baseline) = self.body.measure(orientation, for_size);
             (if orientation == gtk::Orientation::Horizontal { 0 } else { minimum }, natural, min_baseline, nat_baseline)
         }
         fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
-            if width > 0 && self.width.replace(width) != width {
-                if let Some(resized) = self.resized.borrow().as_ref() { resized(width); }
-                let content = self.obj().downgrade();
-                glib::idle_add_local_once(move || if let Some(content) = content.upgrade() { content.queue_resize(); });
-            }
+            self.prepare(width);
             self.body.allocate(width, height, baseline, None);
         }
         fn snapshot(&self, snapshot: &gtk::Snapshot) { self.obj().snapshot_child(&self.body, snapshot); }
+    }
+    impl Content {
+        fn prepare(&self, width: i32) {
+            if width <= 0 || self.preparing.replace(true) { return; }
+            if let Some(resized) = self.resized.borrow().as_ref() { resized(width); }
+            self.preparing.set(false);
+        }
     }
 }
 glib::wrapper! {
@@ -60,3 +64,7 @@ pub fn new(orientation: gtk::Orientation, spacing: i32) -> DialogContent {
 pub fn on_resize(content: &DialogContent, resized: impl Fn(i32) + 'static) {
     *content.imp().resized.borrow_mut() = Some(Box::new(resized));
 }
+
+#[cfg(test)]
+#[path = "dialog_content_tests.rs"]
+mod tests;

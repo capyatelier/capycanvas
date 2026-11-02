@@ -1356,7 +1356,7 @@ impl NewDrawing {
         });
         let weak = self.this.clone();
         crate::dialog_content::on_resize(&self.page.body, move |width| if let Some(dialog) = weak.upgrade() {
-            let minimum = [dialog.page.left.measure(gtk::Orientation::Horizontal, -1).0 as f32, 320.];
+            let minimum = [PREVIEW[0] as f32, 320.];
             dialog.arrange(!dialog_panes_fit(width as f32, minimum, 24.));
         });
         let weak = self.this.clone();
@@ -1377,7 +1377,9 @@ impl NewDrawing {
 
     fn arrange(&self, narrow: bool) {
         let page = &self.page;
-        page.body.set_orientation(if narrow { gtk::Orientation::Vertical } else { gtk::Orientation::Horizontal });
+        let orientation = if narrow { gtk::Orientation::Vertical } else { gtk::Orientation::Horizontal };
+        if page.body.orientation() == orientation { return; }
+        page.body.set_orientation(orientation);
         page.left.set_halign(if narrow { gtk::Align::Center } else { gtk::Align::Fill });
         page.left.set_vexpand(!narrow);
         let (bounds, fit) = if narrow { (NARROW_PREVIEW, NARROW_PREVIEW_FIT) } else { (PREVIEW, PREVIEW_FIT) };

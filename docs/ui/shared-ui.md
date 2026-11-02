@@ -284,6 +284,10 @@ and separator. GTK presents the existing native menu rows.
 Slider track and handle proportions scale together, and shared preview placement
 keeps the readout beside the handle inside the window.
 
+GTK dialog bodies choose their pane layout before measuring height at the
+available width. Changes to text or controls also re-evaluate that layout when
+the window width stays the same.
+
 GTK uses an `AdwHeaderBar` with native window controls and drag region; the dock
 widget allocates the full-window GPU picture, transparent header, HUD and panels.
 On Wayland, an app-owned Vulkan subsurface presents the full viewport below
