@@ -207,7 +207,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
             if(fittedControl){
                 Grid fitted;fitted.Padding({inset,inset,inset,inset});fitted.Children().Append(fittedControl);root=fitted;
                 contentHeight=[fittedHeight,inset](double width){return fittedHeight(std::max(0.,width-2*inset))+2*inset;};
-            }else if(!scrollable)root=content;
+            }else if(!scrollable){Grid natural;natural.Children().Append(content);root=natural;}
             else if(scope||str(panel,L"id")==L"proof"){StackPanel natural;natural.Children().Append(content);root=natural;}
             else{
                 scrollMetrics=[] {return O({{L"fixed_height",N(0)},{L"unit_height",N(0)}});};
