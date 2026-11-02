@@ -349,7 +349,7 @@ private val HiddenChromeShape=object:Shape {
         // SurfaceView punches through the window background. Cover its empty
         // layer with normal Android UI until this surface has a finished buffer.
         // This requires none of the application's Vulkan shaders.
-        if (!host.surfaceReady || host.drawingTabs.switching) {
+        if (!host.surfaceReady) {
             Box(Modifier.fillMaxSize().background(colors.surround).testTag("canvas-placeholder"))
         }
         if (snapshot != null && !snapshot.optBoolean("brush_ready") && host.failure == null) {

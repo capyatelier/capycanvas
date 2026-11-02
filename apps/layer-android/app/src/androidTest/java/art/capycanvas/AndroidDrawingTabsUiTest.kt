@@ -179,6 +179,23 @@ class AndroidDrawingTabsUiTest {
     @After fun cleanup() {
         if (::scenario.isInitialized) scenario.close()
     }
+    @Test fun switchingKeepsReadyCanvasVisible() {
+        val first=tabs().getLong("selected");create()
+        waitFor("ready canvas surface") {ui {host.surfaceReady}}
+        val gate=CompletableDeferred<Unit>();val control=Native.captureControl()
+        ui {host.drawingTabs.registerInspection(control,host.viewModelScope.launch {gate.await()});activity.window.decorView.requestFocus()}
+        try {
+            val now=SystemClock.uptimeMillis()
+            for(action in listOf(KeyEvent.ACTION_DOWN,KeyEvent.ACTION_UP)) instrumentation.sendKeySync(KeyEvent(now,SystemClock.uptimeMillis(),action,KeyEvent.KEYCODE_PAGE_UP,0,KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON,-1,0,0,InputDevice.SOURCE_KEYBOARD))
+            waitFor("switch draining inspection") {ui {host.drawingTabs.switching}}
+            val drawn=java.util.concurrent.CountDownLatch(1)
+            ui {activity.window.decorView.postOnAnimation {activity.window.decorView.postOnAnimation {drawn.countDown()}}}
+            assertTrue("Switch UI frame",drawn.await(10,java.util.concurrent.TimeUnit.SECONDS))
+            assertTrue(ui {host.surfaceReady})
+            assertNull("A ready canvas stays visible while switching",point(tag("canvas-placeholder")))
+        } finally {gate.complete(Unit);ui {host.drawingTabs.releaseInspection(control)};Native.captureFree(control)}
+        waitFor("drawing selected") {tabs().getLong("selected")==first};ready()
+    }
     @Test fun handToolPreservesDrawingCycleKeys() {
         val first = tabs().getLong("selected")
         val second = create()
