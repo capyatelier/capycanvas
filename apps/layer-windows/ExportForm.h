@@ -39,7 +39,16 @@ struct ExportFormView : std::enable_shared_from_this<ExportFormView> {
         while(profile.Items().Size()>profiles.Size())profile.Items().RemoveAtEnd();
         profile.SelectedIndex(selected);profileId=selected<0?hstring{}:str(profiles.GetObjectAt(uint32_t(selected)),L"library");
     }
-    void choices(ComboBox const& box,A const& values,hstring const& selected){box.Items().Clear();for(uint32_t i=0;i<values.Size();++i){auto choice=values.GetObjectAt(i);comboOption(box,str(choice,L"label"));if(str(choice,L"value")==selected)box.SelectedIndex(i);}}
+    void choices(ComboBox const& box,A const& values,hstring const& selected){
+        int index=-1;
+        for(uint32_t i=0;i<values.Size();++i){
+            auto choice=values.GetObjectAt(i);auto label=str(choice,L"label");
+            if(i<box.Items().Size())comboOptionText(box,i,label);else comboOption(box,label);
+            if(str(choice,L"value")==selected)index=int(i);
+        }
+        while(box.Items().Size()>values.Size())box.Items().RemoveAtEnd();
+        if(box.SelectedIndex()!=index)box.SelectedIndex(index);
+    }
     void normalize(J action){
         draft=exportDraft(localization.get(),O({{L"recipe",recipe},{L"action",action},{L"color",color}}));
         if(draft.HasKey(L"error"))throw hresult_invalid_argument(str(draft,L"error"));recipe=object(draft,L"recipe");
