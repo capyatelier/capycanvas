@@ -1,6 +1,38 @@
 //! Real GTK input on the private Mutter display (including the tablet proxy).
 use super::*;
 
+#[test]
+#[ignore = "private compositor: --native-test=native_filter_category_footer --native-storage; viewport/theme external"]
+fn native_filter_category_footer() {
+    let mut d = super::phone_motion::setup("art.capycanvas.FilterCategoryFooter");
+    let layout = state(&d.w).workspace.layout;
+    let tile = layout.phone.as_ref().unwrap().iter()
+        .find(|tile| tile.control == ToolbarControl::Panel { panel: Panel::Adjustments }).unwrap();
+    d.click_name(&format!("phone-tool-{}", tile.id));
+    until(|| d.w.drawer.placement().is_some() && !d.w.drawer.animation_active(), "filter drawer opens");
+    let column = d.named("drawer-panel-FilterTypes");
+    let cancel = find_named(&column, "cancel-filter").unwrap();
+    let scroll = descendant::<gtk::ScrolledWindow>(&column).unwrap();
+    let viewport = scroll.child().unwrap();
+    let list = viewport.downcast_ref::<gtk::Viewport>().unwrap().child().unwrap();
+    let last = list.last_child().unwrap();
+    let initial_clip = scroll.compute_bounds(&column).unwrap();
+    let initial_footer = cancel.compute_bounds(&column).unwrap();
+    assert!(initial_clip.y() + initial_clip.height() + 1. <= initial_footer.y(), "Cancel starts below the unscrolled category viewport");
+    super::phone::capture(&mut d, "filter-category-footer-initial");
+    super::histogram::scroll_to(&last);
+    let bounds = |widget: &gtk::Widget| widget.compute_bounds(&column).unwrap();
+    let row = bounds(&last);
+    let footer = bounds(&cancel);
+    let clip = bounds(scroll.upcast_ref());
+    assert!(row.y() >= clip.y() - 1. && row.y() + row.height() <= clip.y() + clip.height() + 1., "the last category scrolls fully into view");
+    assert!(clip.y() + clip.height() + 1. <= footer.y(), "Cancel has its own row below the category viewport");
+    assert!(row.y() + row.height() + 1. <= footer.y(), "Cancel never covers the last category");
+    super::phone::capture(&mut d, "filter-category-footer");
+    d.click(&cancel);
+    d.finish();
+}
+
 fn restore(d: &Driver, preset: WorkspacePreset) {
     d.w.dispatch(UiAction::RestoreWorkspace {
         workspace: Box::new(WorkspaceState {

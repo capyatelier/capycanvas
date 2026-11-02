@@ -111,6 +111,8 @@ Pending transform cancellation: GTK `native_transform_escape` at 412×891 and 16
 
 New drawing spacing: GTK `native_new_drawing_preview_spacing` checks stacked preview height and the wide two-pane layout in light and dark.
 
+Filter categories: GTK `native_filter_category_footer` checks initial clipping and scrolls the last row above Cancel at 412×891 and 280×560.
+
 ### Tonal journeys
 
 The GTK journeys are `native_composite_histogram_updates_without_changing_the_drawing`,
