@@ -941,7 +941,7 @@ impl ShortcutPage {
             }
         }
         if let Some(alert) = self.import.take() {
-            alert.close();
+            crate::page_dialog::close_dialog(&alert);
         }
     }
 
@@ -1542,7 +1542,7 @@ impl ShortcutPage {
             }
             (None, Some(alert)) => {
                 self.import.borrow_mut().take();
-                alert.close();
+                crate::page_dialog::close_dialog(&alert);
             }
             _ => {}
         }

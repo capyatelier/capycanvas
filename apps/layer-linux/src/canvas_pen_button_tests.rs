@@ -733,12 +733,29 @@ fn native_shortcut_page() {
     d.w.dispatch(UiAction::Preferences { action: PreferenceAction::KeymapDetails { open: false } });
     pump(300);
     let text = serde_json::json!({"format": "capycanvas-keymap", "version": 1, "keymap": {"id": "photoshop", "revision": 1}}).to_string();
-    d.w.dispatch(UiAction::Preferences { action: PreferenceAction::ImportKeymap { text } });
-    pump(400);
-    let alert = descendants::<adw::AlertDialog>(&root(&d)).into_iter().next().expect("import preview");
-    alert.emit_by_name::<()>("response", &[&"import"]);
-    pump(400);
-    assert_eq!(state(&d.w).settings.keymap.as_ref().map(|k| k.id.as_str()), Some("photoshop"));
+    let settings = gtk::Settings::default().unwrap();
+    let animations = settings.is_gtk_enable_animations();
+    settings.set_gtk_enable_animations(false);
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        combo.set_selected(titles.iter().position(|title| title == "Krita Style").unwrap() as u32);
+        let original_keymap = state(&d.w).settings.keymap;
+        for response in ["cancel", "import"] {
+            d.w.dispatch(UiAction::Preferences { action: PreferenceAction::ImportKeymap { text: text.clone() } });
+            until(|| d.w.window.visible_dialog().is_some_and(|alert| alert.is::<adw::AlertDialog>()
+                && alert.is_mapped() && alert.width() > 0 && alert.height() > 0), "the keymap confirmation is allocated");
+            let alert = d.w.window.visible_dialog().unwrap().downcast::<adw::AlertDialog>().unwrap();
+            shot(&d, &format!("keymap-import-{theme:?}-{response}").to_lowercase());
+            let button = find_button(alert.upcast_ref(), &alert.response_label(response)).unwrap();
+            d.click(button.upcast_ref());
+            until(|| !alert.is_mapped() && alert.parent().is_none()
+                && ui_session(&d.w).preferences().unwrap().keymap.import.is_none(), "the native response detaches its confirmation");
+            assert_eq!(d.w.window.visible_dialog().as_ref(), Some(&d.w.preferences.dialog));
+            if response == "cancel" { assert_eq!(state(&d.w).settings.keymap, original_keymap, "Cancel preserves the current keymap"); }
+        }
+        assert_eq!(state(&d.w).settings.keymap.as_ref().map(|keymap| keymap.id.as_str()), Some("photoshop"));
+    }
+    settings.set_gtk_enable_animations(animations);
     combo.set_selected(0);
     pump(200);
     d.finish();

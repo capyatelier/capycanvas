@@ -124,7 +124,8 @@ supplies native dialogs and project/photo transport.
   awaiting dialogs or worker results; when committing a prepared result,
   reborrow and check that its operation is still current.
 - **Await alerts with `alert::choose`.** `choose_future` in libadwaita-rs 0.9.2
-  keeps an `adw::AlertDialog` alive after it closes.
+  keeps an `adw::AlertDialog` alive after it closes. Dismiss retained alerts with
+  `page_dialog::close_dialog`, which also handles an already completed response.
 
 ## Session restart
 
