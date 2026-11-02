@@ -12,8 +12,8 @@ import uuid
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--simulator", help="Booted iPad simulator UUID; required if several are booted")
-    parser.add_argument("--fixture", choices=["rows", "scenes", "scroll"], default="rows",
-                        help="Row scrolling, scene cancellation, or scroll observation")
+    parser.add_argument("--fixture", choices=["rows", "scenes", "scroll", "sheets"], default="rows",
+                        help="Row scrolling, scene cancellation, scroll observation, or fitted sheets")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[3]
     apple = root / "apps/layer-apple"
@@ -46,6 +46,7 @@ def main():
         "rows": ("native-row-menus.swift", "PASS: native row sessions"),
         "scenes": ("reorder-scene-lifecycle.swift", "PASS: native reorder scenes"),
         "scroll": ("scroll-observation.swift", "PASS: native scroll observation"),
+        "sheets": ("fitted-sheet-sizing.swift", "PASS: fitted sheet sizing"),
     }[args.fixture]
     sources = ["Shared/Bridge/JSON.swift", "Shared/Bridge/ReorderContact.swift",
                "Shared/Bridge/NativeReorderModel.swift", "Shared/Bridge/AppleContextMenu.swift",
@@ -56,10 +57,12 @@ def main():
     if args.fixture == "scroll":
         sources = ["Shared/Bridge/NativeInputGate.swift", "Shared/Editor/EditorScrollView.swift", "iOS/Platform/NativeScrollObservation.swift",
                    "iOS/Platform/NativePenScroll.swift", "tests/" + fixture]
-    minimum = "17.5" if args.fixture == "scroll" else "18.0"
+    if args.fixture == "sheets":
+        sources = ["Shared/Editor/EditorLegacyFittedPresentation.swift", "tests/" + fixture]
+    minimum = "17.5" if args.fixture in ("scroll", "sheets") else "18.0"
     run("compile", ["xcrun", "--sdk", "iphonesimulator", "swiftc", "-parse-as-library",
                     "-sdk", sdk, "-target", f"arm64-apple-ios{minimum}-simulator",
-                    *(["-swift-version", "5", "-disable-sandbox"] if args.fixture == "scroll" else []),
+                    *(["-swift-version", "5", "-disable-sandbox"] if args.fixture in ("scroll", "sheets") else []),
                     *[str(apple / name) for name in sources], "-o", str(app / "RowChecks")])
     bundle = "art.capycanvas.tests.rowcallbacks.run" + token
     info = {
@@ -68,7 +71,7 @@ def main():
         "CFBundleVersion": "1", "CFBundleShortVersionString": "1.0",
         "MinimumOSVersion": minimum, "UIDeviceFamily": [2], "LSRequiresIPhoneOS": True,
     }
-    if args.fixture == "scenes":
+    if args.fixture in ("scenes", "sheets"):
         info["UIApplicationSceneManifest"] = {
             "UIApplicationSupportsMultipleScenes": True,
             "UISceneConfigurations": {"UIWindowSceneSessionRoleApplication": [

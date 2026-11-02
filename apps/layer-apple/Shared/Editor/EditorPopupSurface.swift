@@ -1,54 +1,6 @@
 import SwiftUI
 
 #if os(iOS)
-private struct EditorIdealHeightLayout: Layout {
-    let changed: (CGSize) -> Void
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        subviews.first?.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil)) ?? .zero
-    }
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        guard let content = subviews.first else { return }
-        let ideal = content.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
-        content.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: ideal.height))
-        if ideal.width.isFinite && ideal.width > 0 && ideal.height.isFinite && ideal.height > 0 {
-            DispatchQueue.main.async { changed(ideal) }
-        }
-    }
-}
-
-private struct EditorFittedSheet: UIViewControllerRepresentable {
-    let size: CGSize
-    final class Controller: UIViewController {
-        var size = CGSize.zero
-        override func didMove(toParent parent: UIViewController?) {
-            super.didMove(toParent: parent)
-            fit()
-        }
-        override func viewWillAppear(_ animated: Bool) {
-            super.viewWillAppear(animated)
-            fit()
-        }
-        func fit() {
-            guard size.width > 0 && size.height > 0 else { return }
-            var ancestor = parent
-            while let controller = ancestor {
-                if controller.presentingViewController?.presentedViewController === controller,
-                    let sheet = controller.presentationController as? UISheetPresentationController {
-                    if sheet.prefersPageSizing { sheet.prefersPageSizing = false }
-                    if controller.preferredContentSize != size { controller.preferredContentSize = size }
-                    return
-                }
-                ancestor = controller.parent
-            }
-        }
-    }
-    func makeUIViewController(context: Context) -> Controller { Controller() }
-    func updateUIViewController(_ controller: Controller, context: Context) {
-        controller.size = size
-        controller.fit()
-    }
-}
-
 @available(iOS 18.0, *)
 private struct EditorPreferredPresentationSizing: PresentationSizing {
     func proposedSize(for root: PresentationSizingRoot, context: PresentationSizingContext) -> ProposedViewSize {
@@ -58,25 +10,13 @@ private struct EditorPreferredPresentationSizing: PresentationSizing {
 #endif
 
 struct EditorFittedPresentation: ViewModifier {
-    @State private var size = CGSize(width: 0, height: 500)
-    #if os(iOS)
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    #endif
     @ViewBuilder func body(content: Content) -> some View {
         #if os(iOS)
         if #available(iOS 18.0, *) {
             content.fixedSize(horizontal: false, vertical: true)
                 .presentationSizing(EditorPreferredPresentationSizing())
         } else {
-            let fitted = EditorIdealHeightLayout(changed: { if size != $0 { size = $0 } }) {
-                content
-            }
-                .background(EditorFittedSheet(size: size))
-            if horizontalSizeClass == .compact {
-                fitted.presentationDetents([.height(size.height)])
-            } else {
-                fitted
-            }
+            content.modifier(EditorLegacyFittedPresentation())
         }
         #else
         content.presentationSizing(.fitted)

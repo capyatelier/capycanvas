@@ -365,7 +365,7 @@ Other runners:
 | `scripts/test-project-access.py` | Project writes through a file-only App Sandbox grant |
 | `tests/background-expiration.py` | iPad background-task lease ordering |
 | `scripts/test-persistence.sh` | Atomic settings files, backup exclusion and the settings owner |
-| `scripts/test-native-rows.py` | UIKit row scrolling and contacts on one booted iPad simulator; `--fixture scenes` for per-scene cancellation, `--fixture scroll` for scroll observation |
+| `scripts/test-native-rows.py` | UIKit row scrolling and contacts on one booted iPad simulator; `--fixture scenes` for per-scene cancellation, `--fixture scroll` for scroll observation, `--fixture sheets` for stable fitted sheet sizing |
 | `scripts/test-workspace-scrolling.py` | Long workspace list on an iPad simulator |
 
 ### UI tests
