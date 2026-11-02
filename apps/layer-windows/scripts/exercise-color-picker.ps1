@@ -102,15 +102,15 @@ function Color-FitHeight{
     Wait-Until {(Model).color_panel.hdr -and (Model).brush_ready -and !(Model).state.document_file.busy} 'HDR Color fit drawing did not open' 60
     Invoke 'panel-tab-color';Color-Resize 'color-hdr-resized'
     $controls=Control 'color-controls' -Arranged;$retained=$controls.GetRuntimeId() -join ':'
-    $bounds=$controls.Current.BoundingRectangle;$scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
-    $proof=@{controls=$bounds;scale=$scale;theme=$Theme;measurement=@((Model).panel_measurements|Where-Object panel -eq 'color')[0];request=@{type='fit_layout';width=[Math]::Floor($bounds.Width)/$scale;height=$bounds.Height/$scale;hdr=[bool](Model).color_panel.hdr};constrained_request=@{type='fit_layout';width=280;height=184;hdr=$true}}
+    $bounds=$controls.Current.BoundingRectangle;$scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.;$hdr=[bool](Model).color_panel.hdr
+    $proof=@{controls=$bounds;scale=$scale;theme=$Theme;measurement=@((Model).panel_measurements|Where-Object panel -eq 'color')[0];request=@{type='fit_layout';width=[Math]::Floor($bounds.Width)/$scale;height=$bounds.Height/$scale;hdr=$hdr};upper_request=@{type='fit_layout';width=[Math]::Floor($bounds.Width)/$scale;height=($bounds.Height+1)/$scale;hdr=$hdr};constrained_request=@{type='fit_layout';width=280;height=184;hdr=$true}}
     try{
-        foreach($case in @(@('shared','request'),@('constrained','constrained_request'))){$proof[$case[0]]=[CapyBubbleFixtureNative]::ColorQuery((Join-Path $directory 'layer_windows.dll'),($proof[$case[1]]|ConvertTo-Json -Compress))|ConvertFrom-Json}
+        foreach($case in @(@('shared','request'),@('upper','upper_request'),@('constrained','constrained_request'))){$proof[$case[0]]=[CapyBubbleFixtureNative]::ColorQuery((Join-Path $directory 'layer_windows.dll'),($proof[$case[1]]|ConvertTo-Json -Compress))|ConvertFrom-Json}
         $proof.stage=(Control 'color-panel' -Arranged).Current.BoundingRectangle;$proof.wheel=(Control 'color-wheel' -Arranged).Current.BoundingRectangle
         if($proof.constrained.size -ne 159){throw 'The constrained HDR transport did not select the shared 159 DIP stage'}
         Wait-Until {
             $proof.stage=(Control 'color-panel' -Arranged).Current.BoundingRectangle;$proof.wheel=(Control 'color-wheel' -Arranged).Current.BoundingRectangle
-            [Math]::Abs($proof.stage.Width-$proof.shared.size*$scale) -le 1 -and [Math]::Abs($proof.wheel.Width/$scale-$proof.shared.wheel[2]) -le 1
+            @(@($proof.shared,$proof.upper)|Where-Object {[Math]::Abs($proof.stage.Width-$_.size*$scale) -le 1 -and [Math]::Abs($proof.wheel.Width/$scale-$_.wheel[2]) -le 1}).Count -gt 0
         } 'Native HDR Color stage and wheel did not apply the shared fit at their actual allocation'
         if(($controls.GetRuntimeId() -join ':') -ne $retained){throw 'Color fit rebuilt its native control'}
         Capture 'color-fit-height' -WithModel -Composed
