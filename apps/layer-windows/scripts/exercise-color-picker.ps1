@@ -219,6 +219,9 @@ try {
         Wait-Until {(Model).state.color_picker.layer -ne $layer} 'Second finger did not toggle the picker source'
         Capture 'glass-layer-touch'
         [CapyCanvasTouch]::Up(2)
+        [CapyCanvasTouch]::Down(2,($finger.x+160),$finger.y)
+        Wait-Until {(Model).state.color_picker.layer -eq $layer} 'Second finger did not restore the picker source'
+        [CapyCanvasTouch]::Up(2)
     }
     $bounds=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle;$area=(Model).state.camera.work_area
     $scanLeft=[Math]::Max($bounds.Left,$bounds.X+$area[0])+3;$scanRight=[Math]::Min($bounds.Right,$bounds.X+$area[0]+$area[2])-3
