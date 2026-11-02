@@ -29,7 +29,7 @@ function Capture-Desktop([string]$Name){
  $bounds=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds
  $bitmap=[Drawing.Bitmap]::new($bounds.Width,$bounds.Height);$graphics=[Drawing.Graphics]::FromImage($bitmap)
  try{$graphics.CopyFromScreen($bounds.Location,[Drawing.Point]::Empty,$bounds.Size);$bitmap.Save((Join-Path $run ($Name+'.png')))}finally{$graphics.Dispose();$bitmap.Dispose()}
- (Model)|ConvertTo-Json -Depth 80|Set-Content (Join-Path $run ($Name+'-model.json'))
+ (Model)|ConvertTo-Json -Depth 80|Set-Content (Join-Path $run ($Name+'-model.json')) -Encoding UTF8
 }
 function Compose($Control,[string]$Romaji,[string]$Preedit){
  $script:imeSequence++
@@ -40,7 +40,7 @@ function Compose($Control,[string]$Romaji,[string]$Preedit){
  Select-All
  foreach($letter in $Romaji.ToUpperInvariant().ToCharArray()){Key ([uint16]$letter)}
  try{Wait-Until {(Value $Control) -eq $Preedit} 'The installed Japanese IME did not produce genuine Hiragana preedit' 15}catch{
-  @{romaji=$Romaji;expected=$Preedit;actual=(Value $Control);text=($Control.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern).DocumentRange.GetText(-1));control=$Control.Current.AutomationId}|ConvertTo-Json|Set-Content (Join-Path $run 'preedit-failure.json')
+  @{romaji=$Romaji;expected=$Preedit;actual=(Value $Control);text=($Control.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern).DocumentRange.GetText(-1));control=$Control.Current.AutomationId}|ConvertTo-Json|Set-Content (Join-Path $run 'preedit-failure.json') -Encoding UTF8
   Capture-Desktop 'preedit-failure';throw
  }
  Capture-Desktop "$script:imeSequence-hiragana-preedit"
