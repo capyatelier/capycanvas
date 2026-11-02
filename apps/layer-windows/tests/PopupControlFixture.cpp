@@ -621,6 +621,22 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         auto self=shared_from_this();hstring error;
         try {
             co_await wait([this]{return anchor.IsLoaded()&&untagged.ActualWidth()>0&&GetForegroundWindow()==hwnd;},L"Fixture did not become arranged and foreground");privacy();
+            phase=L"tooltip-help";
+            Border semantic,owned;TranslateTransform metadata;
+            AutomationProperties::SetHelpText(semantic,L"Selected texture");tooltip(semantic,L"Texture");tooltip(semantic,L"Texture updated");
+            require(AutomationProperties::GetHelpText(semantic)==L"Selected texture",L"Tooltip replaced pre-existing semantic help");
+            tooltip(semantic,L"");require(AutomationProperties::GetHelpText(semantic)==L"Selected texture",L"Clearing a tooltip cleared semantic help");
+            tooltip(owned,L"First tooltip");tooltip(owned,L"Second tooltip");
+            require(AutomationProperties::GetHelpText(owned)==L"Second tooltip",L"Tooltip-owned help did not update");
+            AutomationProperties::SetHelpText(owned,L"Graph counts");tooltip(owned,L"Third tooltip");tooltip(owned,L"Fourth tooltip");
+            require(AutomationProperties::GetHelpText(owned)==L"Graph counts",L"Repeated tooltip updates replaced explicit caller help");
+            AutomationProperties::SetHelpText(owned,L"Fourth tooltip");tooltip(owned,L"Fifth tooltip");
+            require(AutomationProperties::GetHelpText(owned)==L"Fourth tooltip",L"Tooltip claimed a caption it had never written as help");
+            AutomationProperties::SetHelpText(owned,L"");tooltip(owned,L"Reclaimed tooltip");
+            require(AutomationProperties::GetHelpText(owned)==L"Reclaimed tooltip",L"Tooltip did not acquire empty help");
+            tooltip(owned,L"");require(AutomationProperties::GetHelpText(owned).empty(),L"Clearing tooltip-owned help retained its caption");
+            tooltip(metadata,L"First metadata tooltip");tooltip(metadata,L"Second metadata tooltip");tooltip(metadata,L"");
+            require(AutomationProperties::GetHelpText(metadata).empty(),L"Nonvisual tooltip-owned help did not update and clear");
             phase=L"primitives";
             ComboBox choice;comboOption(choice,L"One");auto selected=comboOption(choice,L"Two");choiceColors(data,choice,ControlSurface::Settings,ChoiceFeedbackMode::Field,Windows::UI::Text::FontWeights::Bold());
             require(choice.Background().as<SolidColorBrush>().Color()!=data->brush(L"settings").Color(),L"Settings choice has no visible face");

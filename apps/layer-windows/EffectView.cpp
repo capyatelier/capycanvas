@@ -85,7 +85,7 @@ struct TextureField : std::enable_shared_from_this<TextureField> {
         auto tiles=array(object(model,L"paper"),L"tiles");auto selected=uint32_t(num(object(model,L"value"),L"value"));
         auto tile=selected<tiles.Size()?tiles.GetObjectAt(selected):J{};
         thumbnail->show(tile.GetNamedValue(L"id",JsonValue::CreateNullValue()),str(tile,L"label"));name.Text(str(tile,L"label"));
-        AutomationProperties::SetName(pick,title);tooltip(pick,title);AutomationProperties::SetHelpText(pick,str(tile,L"label"));
+        AutomationProperties::SetName(pick,title);AutomationProperties::SetHelpText(pick,str(tile,L"label"));tooltip(pick,title);
         pick.IsEnabled(property->current()&&flag(property->view(),L"enabled"));
     }
 };

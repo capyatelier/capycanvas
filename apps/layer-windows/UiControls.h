@@ -562,7 +562,13 @@ inline void segmentColors(std::shared_ptr<WorkspaceData> const& data,Primitives:
     buttonColors(data,button,20,data->brush(L"header_selection"));
 }
 inline bool& touchContact(){thread_local bool touch=false;return touch;}
-struct TooltipOwner {weak_ref<FrameworkElement> owner;hstring text;};
+struct TooltipOwner {
+    weak_ref<DependencyObject> owner;hstring text,lastHelpText;
+    void updateAutomationHelpText(DependencyObject const& target,hstring const& value){
+        auto current=AutomationProperties::GetHelpText(target);
+        if(current.empty()||current==lastHelpText){AutomationProperties::SetHelpText(target,value);lastHelpText=value;}
+    }
+};
 inline std::unordered_map<void*,TooltipOwner>& tooltipOwners(){thread_local std::unordered_map<void*,TooltipOwner> owners;return owners;}
 inline bool tooltipFocusOwner(FrameworkElement const& owner,RoutedEventArgs const& event){
     for(auto node=event.OriginalSource().try_as<DependencyObject>();node;node=VisualTreeHelper::GetParent(node)){
@@ -626,15 +632,18 @@ inline void setTouchContact(bool touch){
     touchContact()=touch;if(touch)tooltipPresentation().Hide();
 }
 inline void tooltip(DependencyObject const& target,hstring const& text){
-    AutomationProperties::SetHelpText(target,text);
+    auto& owners=tooltipOwners();auto found=owners.find(get_abi(target));
+    bool known=found!=owners.end()&&found->second.owner.get()==target;
+    if(!known){
+        if(owners.size()>=1024)std::erase_if(owners,[](auto const& entry){return !entry.second.owner.get();});
+        found=owners.insert_or_assign(get_abi(target),TooltipOwner{make_weak(target)}).first;
+    }
+    auto& owner=found->second;owner.updateAutomationHelpText(target,text);
+    bool changed=owner.text!=text;owner.text=text;
     auto view=target.try_as<FrameworkElement>();if(!view)return;
-    auto& owners=tooltipOwners();
-    if(auto found=owners.find(get_abi(target));found!=owners.end()&&found->second.owner.get()==view){
-        bool changed=found->second.text!=text;found->second.text=text;
+    if(known){
         auto& shown=tooltipPresentation();if(shown.owner.get()==view){if(text.empty())shown.Hide();else if(changed&&shown.popup&&shown.popup.IsOpen())shown.Refresh(view,text);}return;
     }
-    if(owners.size()>=1024)std::erase_if(owners,[](auto const& entry){return !entry.second.owner.get();});
-    owners.insert_or_assign(get_abi(target),TooltipOwner{make_weak(view),text});
     view.PointerEntered([weak=make_weak(view)](auto&&,PointerRoutedEventArgs const& event){
         if(event.IsGenerated()||event.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Touch)return;
         if(auto view=weak.get();view&&!event.GetCurrentPoint(view).IsInContact()){
