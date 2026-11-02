@@ -249,14 +249,7 @@ class AndroidVectorLayerTest {
             tool(obj("region" to obj("fill" to true, "source" to "visible")))
             tap(Offset(.66f, .43f))
             awaitPixel("$theme-filled-inside", Offset(.66f, .47f), true)
-            val unfilled = state().getJSONArray("layers").objects().map { it.getLong("id") }.toSet()
-            tap(Offset(.66f, .7f))
-            awaitPixel("$theme-filled-below", Offset(.66f, .74f), true)
             screenshot("vector-$theme-color.png")
-            val filled = state().getJSONArray("layers").objects().first { it.getLong("id") !in unfilled }.getLong("id")
-            fromDrawer("panel", "layers", { compose.onAllNodesWithTag("layer-content-$filled", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }) {
-                try { awaitThumbnail(filled) } finally { screenshot("vector-$theme-fill-below-thumbnail.png") }
-            }
 
             action(obj("type" to "set_color", "rgba" to org.json.JSONArray(listOf(.1, .1, .12, 1.0))))
             clickNewVectorLayer()
@@ -718,15 +711,6 @@ class AndroidVectorLayerTest {
                     device.portrait(compose.activityRule.scenario); host.awaitReady(compose = compose); compose.waitForIdle(); fitPaper()
                     action(obj("type" to "layer", "action" to obj("op" to "rename", "id" to selectedLayer(), "name" to "Inked outlines for the second chapter cover, final pass")))
                 }
-                tool(obj("region" to obj("fill" to true, "source" to "visible")))
-                tap(onPaper(Offset(.2f, .85f)))
-                awaitState("$theme-filled-below") { s -> s.optJSONObject("notice")?.getJSONArray("actions")?.objects()?.map { it.getString("id") } == listOf("back_to_layer") }
-                compose.waitForIdle()
-                noticeShape("$theme fill below", findings)
-                screenshot("vector-sketch-$theme-fill-notice.png")
-                noticeAction("back_to_layer")
-                awaitState("$theme-back-to-vector") { vectorSelected() }
-
                 val vector = selectedLayer()
                 action(obj("type" to "layer", "action" to obj("op" to "lock", "id" to vector, "value" to true)))
                 val locked = state().getJSONArray("commands").objects().first { it.getString("id") == "scale_rotate" }.optString("disabled_reason")

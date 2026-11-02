@@ -4,6 +4,7 @@ use crate::localization::{Localizer, MessageId};
 use super::*;
 use layer_core::{Point, Selection, authored::{OccurrenceHandle,SceneScope,SourceTarget}};
 use layer_render::RegionRequest;
+use layer_core::authored::vector::{ContourTrace, PathGeometry, Style, Subpath};
 #[path="fill_gesture.rs"]
 mod gesture;
 pub use gesture::{FillGestureView,FillPillView};
@@ -37,7 +38,7 @@ pub(super) struct RegionTools {
     queued: Option<RegionRequest>,
     pending: bool,
     target: Option<Target>,
-    filled_below: Option<OccurrenceHandle>,
+    trace: Option<TraceJob>,
 }
 pub(super) struct EnclosurePaint {
     operation:layer_core::RasterOperationKind,
@@ -45,6 +46,7 @@ pub(super) struct EnclosurePaint {
     tolerance:f32,
     refinement:layer_render::RegionRefinement,
     areas:FillAreas,
+    vector_style:Option<std::sync::Arc<Style>>,
 }
 struct Target {
     tool:LayerCanvasTool,
@@ -55,7 +57,20 @@ struct Target {
     owner: u64,
     purpose: Purpose,
 }
+struct TraceJob {
+    target:Target,
+    marching:Option<ContourTrace>,
+    contours:std::collections::VecDeque<Vec<[f64;2]>>,
+    fitting:Option<layer_engine::PolylineFit>,
+    subpaths:Vec<Subpath>,
+}
+impl Target {
+    fn current(&self,doc:&layer_core::Document)->bool {
+        doc.owner==self.owner && doc.revision==self.revision && doc.working.occurrence==self.layer && doc.working.target==self.source
+    }
+}
 enum Purpose {
+    Trace {layer:OccurrenceHandle,style:std::sync::Arc<Style>,at_back:bool},
     Region {
         operation: Option<layer_core::RasterOperationKind>,
         color: Option<layer_core::color::RgbColor>,
@@ -93,7 +108,7 @@ impl Default for RegionTools {
             queued: None,
             pending: false,
             target: None,
-            filled_below: None,
+            trace: None,
         }
     }
 }
@@ -155,7 +170,7 @@ impl RegionTools {
         Ok(())
     }
     pub(super) fn reconfigure(&mut self) {
-        if self.target.as_ref().is_none_or(|target|!matches!(target.tool,LayerCanvasTool::PaintUnfilled {..})) {self.cancel();}
+        if self.target.as_ref().or_else(||self.trace.as_ref().map(|job|&job.target)).is_none_or(|target|!matches!(target.tool,LayerCanvasTool::PaintUnfilled {..})) {self.cancel();}
     }
     pub fn cancel(&mut self) {
         if let Some(gesture)=self.gesture.take() {
@@ -167,6 +182,7 @@ impl RegionTools {
         self.contact = None;
         self.queued = None;
         self.target = None;
+        self.trace = None;
     }
     /// Cancel, and report whether the renderer was working on a request.
     pub fn abandon(&mut self) -> bool {
@@ -178,11 +194,11 @@ impl RegionTools {
         self.pending = false;
     }
     pub fn busy(&self) -> bool {
-        self.pending || self.queued.is_some() || self.reveal.is_some() || self.rollback.is_some() || self.preview_active && self.gesture.is_none()
+        self.trace.is_some() || self.pending || self.queued.is_some() || self.reveal.is_some() || self.rollback.is_some() || self.preview_active && self.gesture.is_none()
             || self.gesture.as_ref().is_some_and(|gesture|!gesture.released && !gesture.holding() && gesture.tool!=layer_engine::ToolKind::Finger)
     }
     pub fn publishing_edit(&self) -> bool {
-        self.gesture.is_some() || self.target.as_ref().is_some_and(|t| matches!(t.purpose, Purpose::Region { .. }))
+        self.trace.is_some() || self.gesture.is_some() || self.target.as_ref().is_some_and(|t| matches!(t.purpose, Purpose::Region { .. }|Purpose::Trace {..}))
     }
     pub fn applying_transform(&self) -> bool {
         self.target.as_ref().is_some_and(|t| matches!(t.purpose, Purpose::Transform))
@@ -191,7 +207,7 @@ impl RegionTools {
         self.target.as_ref().is_some_and(|t| matches!(t.purpose, Purpose::Refine))
     }
     pub fn cancellable(&self) -> bool {
-        self.gesture.is_some() || self.contact.is_some() || self.target.is_some()
+        self.trace.is_some() || self.gesture.is_some() || self.contact.is_some() || self.target.is_some()
     }
 }
 impl<R: CanvasRenderer> UiSession<R> {
@@ -223,10 +239,82 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn capture_enclosure_paint(&self)->EnclosurePaint {
         EnclosurePaint {operation:self.fill_operation(),color:(!self.state.colors.transparent() && self.state.brush.opacity>0.).then(||self.state.colors.definition()),
-            tolerance:self.region_tools.tolerance,refinement:self.region_tools.refinement,areas:self.region_tools.fill_areas}
+            tolerance:self.region_tools.tolerance,refinement:self.region_tools.refinement,areas:self.region_tools.fill_areas,
+            vector_style:self.editing_vector_layer().and_then(|_|self.vector_fill_style().ok())}
     }
     pub(super) fn enclose_painted_footprint(&mut self,enclosure:Selection,paint:EnclosurePaint) {
         self.request_region_at(Point{x:0.,y:0.},Some(enclosure),None,Some(paint));
+    }
+    fn vector_fill_style(&self)->Result<std::sync::Arc<Style>,String> {
+        self.vector_figure_style(FigurePaint::Fill,layer_core::authored::vector::Cap::Butt,layer_core::authored::vector::Join::Miter).map(std::sync::Arc::new)
+    }
+    fn vector_line_sources(&self,layer:OccurrenceHandle,source:RegionSource)->(bool,Vec<layer_core::authored::vector::FaceLine<'_>>) {
+        let doc=self.engine.document();let scene=doc.scene();
+        let layers=match source {
+            RegionSource::Editing=>vec![layer],RegionSource::Reference=>scene.reference_leaves(),
+            _=>scene.order().iter().copied().filter(|id|scene.visible(*id)).collect(),
+        };
+        let raster=layers.iter().any(|id|scene.vector_layer(*id).is_none()
+            && scene.occurrence(*id).is_some_and(|o|matches!(o.kind(),LayerKind::Paint|LayerKind::Object)));
+        let lines=layers.iter().flat_map(|id|scene.vector_layer(*id).into_iter().flat_map(move |object|object.paths()
+            .map(move |(_,path)|layer_core::authored::vector::FaceLine {path,offset:scene.occurrence_offset64(*id)})))
+            .filter(|line|!line.path.hidden && line.path.style.strokes().next().is_some()).collect();
+        (raster,lines)
+    }
+    fn insert_vector_fills(&mut self,layer:OccurrenceHandle,geometries:Vec<PathGeometry>,style:std::sync::Arc<Style>,at_back:bool)->Result<(),String> {
+        use layer_core::authored::vector::{FillRule,PathItem,Record};
+        if geometries.is_empty() {return Ok(());}
+        let doc=self.engine.document();
+        if doc.is_locked(layer) {return Err(self.localization().text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED).to_string());}
+        let [ox,oy]=doc.scene().occurrence_offset64(layer);
+        let mut object=doc.scene().vector_layer(layer).ok_or("The vector layer was removed")?.clone();
+        for geometry in geometries {
+            let geometry=geometry.transformed(|p|[p[0]-ox,p[1]-oy]).map_err(str::to_string)?;
+            let hull=geometry.hull();let position=(!at_back).then(||object.paths().filter(|(_,path)|path.style.strokes().next().is_some()).filter(|(_,path)| {
+                let b=path.visual_bounds();b[0]<=hull[2] && b[2]>=hull[0] && b[1]<=hull[3] && b[3]>=hull[1]
+            }).map(|(position,_)|position).max()).flatten();
+            let mut path=PathItem::new(object.allocate_id(),std::sync::Arc::new(geometry),style.clone());
+            path.fill_rule=FillRule::EvenOdd;
+            let record=Record::Path(path);
+            object=if let Some(position)=position {object.splice([(position,vec![object.record(position).unwrap().clone(),record])].into())}
+                else{object.insert_back(vec![record])};
+        }
+        let edit=doc.vector_object_edit(layer,object).map_err(|e|e.to_string())?;
+        self.layer_edit(edit)
+    }
+    fn enclose_vector_faces(&mut self,layer:OccurrenceHandle,enclosure:&Selection,source:RegionSource,style:std::sync::Arc<Style>)->Result<bool,String> {
+        let (raster,lines)=self.vector_line_sources(layer,source);if raster {return Ok(false);}
+        let bounds=enclosure.coverage_bounds();
+        let faces=layer_core::authored::vector::vector_faces(&lines,[f64::from(bounds.min.x),f64::from(bounds.min.y),f64::from(bounds.max.x),f64::from(bounds.max.y)]);
+        let doc=self.engine.document();let [ox,oy]=doc.scene().occurrence_offset64(layer);let object=doc.scene().vector_layer(layer).unwrap();
+        let geometries=faces.into_iter().filter(|face|face.geometry.subpaths()[0].anchors().all(|a| {
+            let p=a.point();enclosure.coverage_at(Point{x:p[0] as f32,y:p[1] as f32})>=0.5
+        })).filter(|face| {
+            let hull=face.geometry.hull();!object.paths().any(|(_,path)|path.style.strokes().next().is_none() && !path.style.entries.is_empty() && {
+                let b=path.geometry.hull();[b[0]+ox,b[1]+oy,b[2]+ox,b[3]+oy].into_iter().zip(hull).all(|(a,b)|(a-b).abs()<=0.5)
+            })
+        }).map(|face|face.geometry).collect();
+        self.insert_vector_fills(layer,geometries,style,false)?;Ok(true)
+    }
+    fn advance_vector_trace(&mut self)->Result<u32,String> {
+        let Some(mut job)=self.region_tools.trace.take() else{return Ok(0);};
+        if !job.target.current(self.engine.document()) {self.region_tools.cancel();return Ok(0);}
+        if let Some(trace)=&mut job.marching {
+            if let Some(contours)=trace.advance(262_144) {job.contours=contours.into();job.marching=None;}
+            self.region_tools.trace=Some(job);return Ok(0);
+        }
+        if job.fitting.is_none() && let Some(points)=job.contours.pop_front() {job.fitting=Some(layer_engine::PolylineFit::new(points,0.25,true));}
+        if let Some(fit)=&mut job.fitting {
+            if !fit.advance(20_000) {self.region_tools.trace=Some(job);return Ok(0);}
+            if let Some(path)=fit.take() {job.subpaths.push(path);}
+            job.fitting=None;
+        }
+        if !job.contours.is_empty() {self.region_tools.trace=Some(job);return Ok(0);}
+        if !job.subpaths.is_empty() && let Purpose::Trace {layer,style,at_back}=job.target.purpose {
+            let geometry=PathGeometry::new(job.subpaths).map_err(str::to_string)?;
+            self.insert_vector_fills(layer,vec![geometry],style,at_back)?;return Ok(regions::DOCUMENT);
+        }
+        Ok(0)
     }
     fn fill_vector_layer(&mut self, layer: OccurrenceHandle, point: Point, source: layer_render::RegionSource, lines_from: RegionSource) -> Result<(), String> {
         use layer_core::authored::vector::{PaintEntry, Record, Style};
@@ -251,37 +339,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         }).transpose()?;
         if let Some(edit) = found { return edit.map_or(Ok(()), |edit| self.layer_edit(edit)); }
         if self.state.colors.transparent() { return Ok(()); }
-        let layers=match lines_from {
-            RegionSource::Editing=>vec![layer],
-            RegionSource::Reference=>doc.scene().reference_leaves(),
-            _=>doc.scene().order().iter().copied().filter(|id|doc.scene().visible(*id)).collect(),
-        };
-        let raster=layers.iter().any(|id|doc.scene().vector_layer(*id).is_none()
-            && doc.scene().occurrence(*id).is_some_and(|o|matches!(o.kind(),LayerKind::Paint|LayerKind::Object)));
-        let lines=layers.iter().flat_map(|id|doc.scene().vector_layer(*id).into_iter().flat_map(move |object|object.paths()
-            .map(move |(_,path)|layer_core::authored::vector::FaceLine {path,offset:doc.scene().occurrence_offset64(*id)})))
-            .filter(|line|!line.path.hidden && line.path.style.strokes().next().is_some()).collect::<Vec<_>>();
+        let (raster,lines)=self.vector_line_sources(layer,lines_from);
         if let Some(face)=layer_core::authored::vector::vector_face(&lines,[f64::from(point.x),f64::from(point.y)]) {
-            let geometry=face.geometry.transformed(|p|[p[0]-ox,p[1]-oy]).map_err(str::to_string)?;
-            let mut path=layer_core::authored::vector::PathItem::new(object.allocate_ids().next().unwrap_or_default(),std::sync::Arc::new(geometry),
-                std::sync::Arc::new(Style::new(fill.into_iter().collect())));
-            if path.geometry.subpaths().len()>1 {path.fill_rule=layer_core::authored::vector::FillRule::EvenOdd;}
-            let hull=path.geometry.hull();
-            let position=object.paths().filter(|(_,path)|path.style.strokes().next().is_some()).filter(|(_,path)| {
-                let b=path.visual_bounds();b[0]<=hull[2] && b[2]>=hull[0] && b[1]<=hull[3] && b[3]>=hull[1]
-            }).map(|(position,_)|position).max();
-            let record=Record::Path(path);
-            let changed=if let Some(position)=position {
-                object.splice([(position,vec![object.record(position).unwrap().clone(),record])].into())
-            }else{object.insert_back(vec![record])};
-            let edit=doc.vector_object_edit(layer,changed).map_err(|e|e.to_string())?;
-            return self.layer_edit(edit);
+            return self.insert_vector_fills(layer,vec![face.geometry],std::sync::Arc::new(Style::new(fill.into_iter().collect())),false);
         }
         if !raster {return Ok(());}
         if !self.engine.backend().region_fits(doc.composition().size) { return Err(self.localization().text(MessageId::DOCUMENTS_TOO_LARGE_MEMORY).to_string()); }
-        self.new_paint_layer_under()?;
         self.request_region_at(point, None, Some(source), None);
-        self.region_tools.filled_below = Some(layer);
         Ok(())
     }
     pub(super) fn region_controls(&self) -> Vec<ToolOption> {
@@ -411,16 +475,30 @@ impl<R: CanvasRenderer> UiSession<R> {
         let Some(mut resolved) = self.region_source(source, from.clone(), source_target) else { return };
         let reference=source==RegionSource::Reference;
         let mut reference_count=reference.then(||self.engine.document().scene().reference_leaves().len());
+        let vector=(fill && mask_target.is_none()).then(||self.editing_vector_layer()).flatten();
+        if let Some(layer)=vector && from.is_none() && !enclosed {
+            if let Err(error)=self.fill_vector_layer(layer,point,resolved,source) {self.notify(error);}
+            return;
+        }
+        let trace_style=if let Some(layer)=vector {
+            if self.engine.document().is_locked(layer) {self.notify_drawing_refusal();return;}
+            let style=if let Some(paint)=&paint {paint.vector_style.clone()}else if self.state.colors.transparent() {None}else {
+                match self.vector_fill_style() {Ok(style)=>Some(style),Err(cause)=>{self.notify(cause);return;}}
+            };
+            let Some(style)=style else{return;};
+            if let Some(enclosure)=&enclosure {
+                match self.enclose_vector_faces(layer,enclosure,source,style.clone()) {
+                    Ok(true)=>return,Ok(false)=>(),Err(cause)=>{self.notify(cause);return;}
+                }
+            }
+            Some(style)
+        }else{None};
         let fill_areas=(enclosed && fill && areas!=FillAreas::AnyColour).then_some(areas);
         if fill_areas.is_some() {
-            let Some(target)=source_target else{return;};
+            let scope=if let Some(target)=source_target {SceneScope::Raw(target)}else if let Some(layer)=vector {SceneScope::RawObjects(layer)}else{return;};
             let mut sources=resolved.sources().to_vec();reference_count=Some(sources.len());
-            sources.push(layer_render::RegionSource::Scene {snapshot:self.engine.document().snapshot(),scope:SceneScope::Raw(target)});
+            sources.push(layer_render::RegionSource::Scene {snapshot:self.engine.document().snapshot(),scope});
             resolved=layer_render::RegionSource::Intersection(sources);
-        }
-        if fill && from.is_none() && !enclosed && self.selection_masks.target().is_none() && let Some(layer) = self.editing_vector_layer() {
-            if let Err(error) = self.fill_vector_layer(layer, point, resolved, source) { self.notify(error); }
-            return;
         }
         if !self.engine.backend().region_fits(extent) {
             self.notify(self.localization().text(MessageId::DOCUMENTS_TOO_LARGE_MEMORY).to_string());
@@ -434,7 +512,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let source = resolved;
         let doc = self.engine.document();
         let basis = layer_core::Affine::IDENTITY;
-        if fill && mask_target.is_none() && doc.drawing_content().is_none() {
+        if fill && mask_target.is_none() && trace_style.is_none() && doc.drawing_content().is_none() {
             self.notify_drawing_refusal();
             return;
         }
@@ -469,6 +547,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         if let Some(target) = mask_target {
             if let Err(error) = self.queue_mask_region(target, request, basis, true) { self.notify(error); }
             return;
+        }
+        if let Some(layer)=vector && let Some(style)=trace_style {
+            self.queue_region(request,Purpose::Trace {layer,style,at_back:true});return;
         }
         let (operation,color)=if let Some(paint)=paint {(Some(self.fill_region_operation(&request,paint.operation,reference)),paint.color)}else{(
             fill.then(|| self.fill_region_operation(&request,self.fill_operation(),reference)),
@@ -556,6 +637,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.queue_region(request, Purpose::Refine);
     }
     pub(super) fn poll_region_tool(&mut self) -> Result<u32, String> {
+        if self.region_tools.trace.is_some() {return self.advance_vector_trace();}
         if self.region_tools.pending && !self.engine.raster_backing_pending()
             && let Some(result) = self.engine.backend_mut().take_region()
         {
@@ -570,8 +652,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 error(cause)
             })?;
             let doc = self.engine.document();
-            if let Some(target) = target.filter(|t| doc.owner == t.owner && doc.revision == t.revision && doc.working.occurrence == t.layer && doc.working.target == t.source) {
+            if let Some(target) = target.filter(|t| t.current(doc)) {
                 match target.purpose {
+                    Purpose::Trace {..}=> {
+                        self.region_tools.trace=Some(TraceJob {target,marching:Some(ContourTrace::new((*result.pixels).clone())),contours:Default::default(),fitting:None,subpaths:Vec::new()});
+                        return Ok(0);
+                    }
                     Purpose::Tonal => {
                         self.tonal_result(result)?;
                         return Ok(0);
@@ -587,7 +673,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                         };
                     }
                     Purpose::Region { operation, .. } if operation.is_some() && result.pixels.bounds() == [0; 4] && self.region_tools.gesture.is_none() => {
-                        self.region_tools.filled_below = None;
                         return Ok(0);
                     }
                     Purpose::Region {operation:Some(operation),color,basis} if self.region_tools.gesture.is_some()=> {
@@ -601,14 +686,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 *underfill = result.underfill.map(Selection::pixels).map(|selection| selection.transformed(basis)).transpose().map_err(error)?;
                             }
                             self.paint_operation(Some(selection), operation, color.as_slice())?;
-                            if let Some(vector) = self.region_tools.filled_below.take() { self.notify_filled_below(vector); }
                         } else {
                             self.set_mask_coverage(layer_core::SelectionTarget::Current,selection)?;
                         }
                     }
                 }
             } else {
-                self.region_tools.filled_below = None;
                 if !queued {self.region_tools.cancel();}
             }
         }

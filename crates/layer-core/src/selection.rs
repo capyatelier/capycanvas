@@ -334,6 +334,31 @@ pub struct Selection {
     pub inverted: bool,
 }
 impl Selection {
+    pub fn coverage_at(&self, point: Point) -> f32 {
+        let Some(inverse)=self.affine.inverse() else{return 0.;};
+        let p=inverse.map(point);
+        if !p.x.is_finite() || !p.y.is_finite() {return 0.;}
+        let coverage=match &self.shape {
+            SelectionShape::Pixels(pixels)=> {
+                let [x0,y0,x1,y1]=pixels.bounds();let w=pixels.extent()[0];
+                if p.x<x0 as f32 || p.y<y0 as f32 || p.x>=x1 as f32 || p.y>=y1 as f32 {0.}else {
+                    let count=pixels.pixels_per_word();let bits=32/count;
+                    let word=pixels.words()[p.y as usize*w.div_ceil(count) as usize+p.x as usize/count as usize];
+                    ((word>>((p.x as u32%count)*bits))&((1<<bits)-1)) as f32/if bits==8 {255.}else{4.}
+                }
+            }
+            SelectionShape::Contours(paths)=> {
+                let mut inside=false;let mut boundary=false;
+                for path in paths.iter() {for (a,b) in path.iter().zip(path.iter().cycle().skip(1)).take(path.len()) {
+                    let cross=(b.x-a.x)*(p.y-a.y)-(b.y-a.y)*(p.x-a.x);
+                    boundary|=cross==0. && p.x>=a.x.min(b.x) && p.x<=a.x.max(b.x) && p.y>=a.y.min(b.y) && p.y<=a.y.max(b.y);
+                    if (a.y>p.y)!=(b.y>p.y) && a.x+(p.y-a.y)*(b.x-a.x)/(b.y-a.y)>p.x {inside = !inside;}
+                }}
+                if inside || boundary {1.}else{0.}
+            }
+        };
+        if self.inverted {1.-coverage}else{coverage}
+    }
     pub fn empty() -> Self {
         Self {
             shape: SelectionShape::Contours(Arc::default()),
@@ -485,6 +510,26 @@ impl Selection {
 #[cfg(test)]
 mod selection_tests {
     use super::*;
+
+    #[test]
+    fn selection_coverage_samples_packed_values_and_transformed_contours() {
+        let bytes=soft_mask();
+        assert_eq!(bytes.coverage_at(Point{x:1.5,y:0.5}),64./255.);
+        assert_eq!(bytes.coverage_at(Point{x:2.5,y:0.5}),128./255.);
+        assert_eq!(bytes.coverage_at(Point{x:-0.5,y:0.5}),0.);
+        let bounded=Selection::pixels(Arc::new(SelectionPixels::bytes([4,1],[1,0,3,1],vec![u32::MAX]).unwrap()));
+        assert_eq!(bounded.coverage_at(Point{x:0.5,y:0.5}),0.);
+        assert_eq!(bounded.coverage_at(Point{x:1.5,y:0.5}),1.);
+        let nibble=Selection::pixels(Arc::new(SelectionPixels::new([4,1],[0,0,4,1],vec![0x4320]).unwrap()));
+        assert_eq!(nibble.coverage_at(Point{x:1.5,y:0.5}),0.5);
+        let mut contour=Selection::polygon(vec![Point{x:0.,y:0.},Point{x:10.,y:0.},Point{x:10.,y:10.},Point{x:0.,y:10.}]).unwrap().translated(Point{x:20.,y:30.});
+        assert_eq!(contour.coverage_at(Point{x:25.,y:35.}),1.);
+        assert_eq!(contour.coverage_at(Point{x:20.,y:35.}),1.);
+        assert_eq!(contour.coverage_at(Point{x:5.,y:5.}),0.);
+        contour.inverted=true;
+        assert_eq!(contour.coverage_at(Point{x:25.,y:35.}),0.);
+        assert_eq!(contour.coverage_at(Point{x:5.,y:5.}),1.);
+    }
 
     fn soft_mask() -> Selection {
         Selection::pixels(Arc::new(

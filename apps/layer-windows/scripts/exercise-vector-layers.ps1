@@ -373,23 +373,11 @@ try{
  Stroke (Line @(1250,400) @(1250,400) 1)
  Expect 'filled inside the outline' @(1250,400) 'green' $true 60
  if(@(Rows).Count -ne $before -or (Active).id -ne $v2){throw 'Filling inside the outline changed the layers'}
- Stroke (Line @(1600,900) @(1600,900) 1)
- Wait-Until {$a=Active;@(Rows).Count -eq $before+1 -and $a -and !(Vector $a)} 'Filling outside the lines did not add a paint layer' 60
- $p3=(Active).id
- $back=@((Model).state.notice.actions|Where-Object id -eq 'back_to_layer')[0]
- if(!$back){throw 'The outside-path fill did not offer Back to Layer'}
- $null=Accept-Notice 'back_to_layer' @('back_to_layer') 'outside-fill' $back.label
- Wait-Until {(Active).id-eq$v2} 'Back to Layer did not return to its exact vector owner'
- if((Position $p3) -ne (Position $v2)+1){throw 'The filled paint layer is not directly below the lines'}
- Expect 'filled below the lines' @(1600,900) 'green' $true 90
- Expect 'the outline keeps its fill' @(1250,400) 'green'
- Expect 'the outline stays above the fill' @(1250,300) 'ink'
  Capture "3-color-$Theme" -WithModel -Composed
- $null=Select-Brush 'G-Pen';Invoke "layer-$p3-name"
- Wait-Until {(Active).id-eq$p3 -and (Model).state.brush.preset-eq$gpen} 'The explicitly chosen pen did not survive leaving the vector layer'
+ $null=Select-Brush 'G-Pen'
  Set-Color '#1A1A1F'
- $checks.color_lines=[ordered]@{vector_layer=$v2;paint_below=$p3}
- Write-Output 'PASS: Fill colors inside the outline and below the lines'
+ $checks.color_lines=[ordered]@{vector_layer=$v2}
+ Write-Output 'PASS: Fill colors inside the outline without adding a layer'
 
  $v3=New-VectorLayer
  Select-Tool 'pen'

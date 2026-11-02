@@ -1210,3 +1210,31 @@ fn legacy_region_values_survive_session_adoption_and_save() {
     s.restore_editing(saved.clone()).unwrap();
     assert_eq!(s.editing_state(),saved);
 }
+
+#[test]
+fn raster_line_enclosure_traces_the_vector_target_without_a_paint_layer() {
+    for platform in Platform::ALL {
+        let (mut s, target) = raster_reference_vector_target(platform);
+        let layers = s.engine.document().scene().children(None).to_vec();
+        let checkpoint = s.engine.checkpoint();
+        invoke(&mut s, CommandId::EncloseFill);
+        invoke(&mut s, CommandId::SelectionReference);
+        let enclosure = [[0., 0.], [80., 0.], [80., 80.], [0., 80.]].map(|point| surface_at(&s, point));
+        press(&mut s, 100, &enclosure);
+        assert!(s.renderer_mut().region_requests.last().unwrap().enclosure.is_some());
+        assert_eq!(s.engine.document().working.occurrence, Some(target));
+        assert_eq!(s.engine.document().scene().children(None), layers);
+        vector_trace_reply(&mut s, 32);
+        finish_vector_trace(&mut s);
+        let object = s.engine.document().scene().vector_layer(target).unwrap();
+        assert_eq!(object.path_count(), 1);
+        let path = object.paths().next().unwrap().1;
+        assert!(path.style.strokes().next().is_none());
+        assert!(path.encloses([16., 16.], 0.01));
+        assert_eq!(s.engine.document().working.occurrence, Some(target));
+        assert_eq!(s.engine.document().scene().children(None), layers);
+        invoke(&mut s, CommandId::Undo);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        assert_eq!(s.engine.document().scene().vector_layer(target).unwrap().path_count(), 0);
+    }
+}

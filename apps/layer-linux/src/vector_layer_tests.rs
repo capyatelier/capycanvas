@@ -293,6 +293,74 @@ fn native_vector_fill_between_open_strokes() {
 }
 
 #[test]
+#[ignore = "isolated native-input.js --native-test=native_vector_trace_raster_and_enclose --tablet"]
+fn native_vector_trace_raster_and_enclose() {
+    let mut d=Driver::new("art.capycanvas.VectorTrace");
+    for theme in [Theme::Light,Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme {theme:Some(theme)});
+        let size=ui_session(&d.w).engine().document().composition().size;
+        let source=layer_core::color::source::rgba8_source(size,|x,y| {
+            if (400..900).contains(&x)&&(400..850).contains(&y)&&(x<406||x>=894||y<406||y>=844) {[0,0,0,255]}else{[0;4]}
+        });
+        ui_session_mut(&d.w).import_layer_source("Raster face lines",std::sync::Arc::unwrap_or_clone(source)).unwrap();d.w.wake();
+        new_photo::ready(&d.w);
+        let reference=ui_session(&d.w).engine().document().working.occurrence.unwrap();
+        let original_reference=ui_session(&d.w).engine().document().scene().paint_source(reference).unwrap().clone();
+        d.w.dispatch(UiAction::Layer {action:LayerAction::ReferenceSelection});
+        add_vector_layer(&mut d);
+        let target=ui_session(&d.w).engine().document().working.occurrence.unwrap();
+        let layers=ui_session(&d.w).engine().document().scene().order().to_vec();
+        let empty=paths(&d);assert!(empty.is_empty());
+        d.w.dispatch(UiAction::SetColor {rgba:[0.15,0.7,0.25,1.]});
+        tool(&d,LayerCanvasTool::Region {fill:true,source:layer_ui::RegionSource::Reference});
+        d.w.dispatch(UiAction::Invoke {command:CommandId::CloseGapsOff});
+        d.w.dispatch(UiAction::Invoke {command:CommandId::EdgesExact});
+        pen_points(&mut d,&[[650.,625.],[650.,625.]]);
+        let traced=until_paths(&d,"one traced vector fill from raster lines",|paths|paths.len()==1);
+        assert!(traced[0].style.strokes().next().is_none()&&traced[0].encloses([650.,625.],0.05));
+        assert!(!traced[0].encloses([950.,625.],0.05));
+        assert_eq!(ui_session(&d.w).engine().document().working.occurrence,Some(target));
+        assert_eq!(ui_session(&d.w).engine().document().scene().order(),layers);
+        assert_eq!(ui_session(&d.w).engine().document().scene().paint_source(reference),Some(&original_reference));
+        wait_for("the traced fill is green",||greenish(presented(&d,[650.,625.])));
+        capture(&d,&format!("vector-raster-trace-{theme:?}.png"));
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});
+        until_paths(&d,"one Undo removes the traced vector fill",|paths|paths==empty.as_slice());
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Redo});
+        until_paths(&d,"Redo restores the traced vector fill",|paths|paths==traced.as_slice());
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});
+        until_paths(&d,"the vector colour layer is empty again",|paths|paths.is_empty());
+        add_vector_layer(&mut d);
+        let target=ui_session(&d.w).engine().document().working.occurrence.unwrap();
+        d.w.dispatch(UiAction::SelectBrush {id:layer_core::DefaultBrushPreset::GPen as u32});
+        d.w.dispatch(UiAction::SetBrushSize {value:6.});d.w.dispatch(UiAction::SetColor {rgba:[0.,0.,0.,1.]});
+        tool(&d,LayerCanvasTool::Paint);
+        for (index,(from,to)) in [([350.,400.],[1050.,400.]),([350.,700.],[1050.,700.]),([400.,350.],[400.,750.]),([600.,350.],[600.,750.]),([800.,350.],[800.,750.]),([1000.,350.],[1000.,750.])].into_iter().enumerate() {
+            pen_points(&mut d,&stroke(from,to));until_paths(&d,"three vector faces",|paths|paths.len()==index+1);
+        }
+        let original=paths(&d);let layers=ui_session(&d.w).engine().document().scene().order().to_vec();
+        d.w.dispatch(UiAction::SetColor {rgba:[0.15,0.7,0.25,1.]});
+        tool(&d,LayerCanvasTool::EncloseFill {source:layer_ui::RegionSource::Editing});
+        pen_points(&mut d,&[[380.,380.],[850.,380.],[850.,720.],[380.,720.],[380.,380.]]);
+        let enclosed=until_paths(&d,"two wholly enclosed vector faces",|paths|paths.len()==8);
+        let fills=enclosed.iter().filter(|path|path.style.strokes().next().is_none()).collect::<Vec<_>>();assert_eq!(fills.len(),2);
+        assert!(fills.iter().any(|path|path.encloses([500.,550.],0.05))&&fills.iter().any(|path|path.encloses([700.,550.],0.05)));
+        assert!(fills.iter().all(|path|!path.encloses([900.,550.],0.05)),"the grazed third face stays empty");
+        for path in &original {assert_eq!(enclosed.iter().find(|candidate|candidate.id==path.id),Some(path));}
+        assert_eq!(ui_session(&d.w).engine().document().working.occurrence,Some(target));
+        assert_eq!(ui_session(&d.w).engine().document().scene().order(),layers);
+        wait_for("both enclosed vector faces are visible",||greenish(presented(&d,[500.,550.]))&&greenish(presented(&d,[700.,550.])));
+        assert!(!greenish(presented(&d,[900.,550.])));
+        capture(&d,&format!("vector-enclose-{theme:?}.png"));
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});until_paths(&d,"one Undo removes both faces",|paths|paths==original.as_slice());
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Redo});until_paths(&d,"Redo restores both vector faces",|paths|paths==enclosed.as_slice());
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});until_paths(&d,"the vector outlines remain exact",|paths|paths==original.as_slice());
+        eprintln!("PASS {theme:?}: raster lines trace into the same vector layer; Enclose fills only contained vector faces; exact Undo/Redo");
+    }
+    d.finish();
+}
+
+#[test]
 #[ignore = "isolated native-input.js --native-test=native_vector_color_and_canvas_changes --tablet"]
 fn native_vector_color_and_canvas_changes() {
     use layer_core::{FigurePaint, FigureShape};
@@ -307,8 +375,11 @@ fn native_vector_color_and_canvas_changes() {
     until_paths(&d, "filling inside the outline", |paths| paths.iter().any(|p| p.id == ellipse.id && p.style.entries.len() == 2));
     wait_for("the fill on screen", || greenish(presented(&d, [600., 460.])));
     d.capture_canvas("color-inside.png");
+    let order=ui_session(&d.w).engine().document().scene().order().to_vec();
     pen_points(&mut d, &[[1100., 700.], [1100., 700.]]);
-    wait_for("a paint layer below filled from the lines", || !active_vector(&d) && greenish(presented(&d, [1100., 760.])));
+    until_paths(&d,"a traced outside fill on the vector layer",|paths|paths.len()==2);
+    assert!(active_vector(&d));assert_eq!(ui_session(&d.w).engine().document().scene().order(),order);
+    wait_for("the traced outside fill is visible",||greenish(presented(&d,[1100.,760.])));
     assert!(greenish(presented(&d, [600., 460.])), "the path keeps its fill");
     capture(&d, "color-outside.png");
 

@@ -464,7 +464,7 @@ Canvas gestures that would change nothing say why through `UiState.notice`,
 published under `regions::HOST`:
 - Move on a locked layer, and Move over a selection on a group,
   an effect layer or a layer with no pixels;
-- Fill, Gradient, Figure, Lasso Fill and Enclose and Fill with no paint content to act on;
+- Fill, Gradient, Figure, Lasso Fill and Enclose and Fill with no compatible paint or vector target;
 - brushes with no paint target, and erasing under alpha lock;
 - a layer-mask stroke that paints dry coverage instead of the brush's wet or
   blending behavior, once per mask-editing session;
@@ -472,9 +472,7 @@ published under `regions::HOST`:
   **Use *layer* as Reference**, which marks the nearest visible paint or photo
   layer below the active layer;
 - choosing a brush or tool that cannot act on the edited vector or image layer,
-  before any stroke ([vector layers](vector-layers.md#drawing));
-- Fill outside a vector layer's paths, once the fill has landed on the new layer
-  below; the notice offers **Back to *layer***.
+  before any stroke ([vector layers](vector-layers.md#drawing)).
 
 The core writes the text and the action's label, and keeps the action. Every
 notice has a new `id`, so a repeated refusal shows again.

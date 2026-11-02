@@ -127,7 +127,7 @@ fn native_vector_input_kinds() {
         ("Figure", Box::new(|d| tool(d, LayerCanvasTool::Figure { shape: FigureShape::Star, paint: FigurePaint::Both })), false),
         ("Fill", Box::new(|d| tool(d, LayerCanvasTool::Region { fill: true, source: RegionSource::Visible })), false),
         ("Lasso Fill", Box::new(|d| tool(d, LayerCanvasTool::LassoFill)), false),
-        ("Enclose Fill", Box::new(|d| tool(d, LayerCanvasTool::EncloseFill { source: RegionSource::Visible })), true),
+        ("Enclose Fill", Box::new(|d| tool(d, LayerCanvasTool::EncloseFill { source: RegionSource::Visible })), false),
         ("Gradient", Box::new(|d| tool(d, LayerCanvasTool::Gradient { shape: layer_core::GradientShape::Linear })), true),
         ("Move", Box::new(|d| d.w.dispatch(UiAction::Invoke { command: CommandId::Move })), false),
         ("Edit Points", Box::new(|d| d.w.dispatch(UiAction::Invoke { command: CommandId::EditPoints })), false),
@@ -990,15 +990,6 @@ fn native_vector_sketch_paths_and_explanations() {
     press_notice(&mut d, NoticeActionId::UseVectorPen);
     wait_for("Use G-Pen", || state(&d.w).brush.preset == DefaultBrushPreset::GPen as u32 && state(&d.w).notice.is_none());
 
-    tool(&d, LayerCanvasTool::Region { fill: true, source: RegionSource::Visible });
-    super::vector_layers::pen_points(&mut d, &[[200., 700.], [200., 700.]]);
-    wait_for("the fill names its new layer", || notice_offers(&d, NoticeActionId::BackToLayer) && !active_vector(&d));
-    findings.extend(notice_findings(&d, &format!("{theme} fill")));
-    findings.extend(notice_shape_findings(&d, &format!("{theme} fill")));
-    live_capture(&mut d, &format!("sketch-fill-notice-{theme}"));
-    capture(&d, &format!("sketch-fill-below-{theme}.png"));
-    press_notice(&mut d, NoticeActionId::BackToLayer);
-    wait_for("back on the vector layer", || active_vector(&d));
     let vector = state(&d.w).layers.iter().find(|l| l.selected).unwrap().id;
     d.w.dispatch(UiAction::Layer { action: LayerAction::Lock { id: vector, value: true } });
     pump(300);

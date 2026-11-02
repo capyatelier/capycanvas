@@ -1760,7 +1760,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         return Ok(());
                     }
                     LayerCanvasTool::LassoFill | LayerCanvasTool::EncloseFill { .. } | LayerCanvasTool::Gradient { .. } | LayerCanvasTool::Figure { .. }
-                        if doc.drawing_content().is_none() && self.selection_masks.target().is_none() =>
+                        if doc.drawing_content().is_none() && self.selection_masks.target().is_none() && !self.vector_tool_accepts() =>
                     {
                         self.notify_drawing_refusal();
                         return Ok(());

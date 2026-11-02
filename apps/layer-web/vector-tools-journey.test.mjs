@@ -97,7 +97,21 @@ export async function checkVectorFill({call,evaluate,settle}) {
       await invoke('undo');await idle();assert.deepEqual(authoredIdentity(await save()),authoredIdentity(filled),'One Undo restores the original face colour');
       await invoke('undo');await idle();assert.deepEqual(authoredIdentity(await save()),authoredIdentity(before),'Second Undo removes only the new face');
       await invoke('redo');await idle();assert.deepEqual(authoredIdentity(await save()),authoredIdentity(filled),'Redo restores the vector face');await capture(`vector-fill-${theme}-undo-redo`);
-      console.log(`PASS ${theme}: vector face, recolour, exact Undo/Redo and no hidden paint`);
+      await invoke('undo');await idle();await tool({enclose_fill:{source:'editing'}});await send({type:'set_color',rgba:[.1,.2,.85,1]});
+      await draw('pen',[[140,100],[460,100],[460,380],[140,380],[140,100]]);await until('vector enclosure published','layerApp.app.document_park_ready()');
+      const enclosed=await save();assert.equal(BigInt(vector(enclosed).data.next_item),next+1n,'Vector enclosure creates one face path');assert.deepEqual(await state('s.layers.map(layer=>Number(layer.id))'),layers);assert.deepEqual(rasterIdentity(enclosed),rasterIdentity(before));
+      await park();await settle();const blue=await color([300,240],true);assert.ok(blue[2]>blue[0]+60&&blue[2]>blue[1]+60,`${theme}: enclosed vector face is blue ${blue}`);await capture(`vector-fill-${theme}-enclosed`);
+      await invoke('undo');await idle();assert.deepEqual(authoredIdentity(await save()),authoredIdentity(before),'One Undo removes the vector enclosure');
+      await invoke('new_document');await evaluate(createDrawing({width:640,height:480}));await idle();await send({type:'layer',action:{op:'new',group:false,clipped:false}});await invoke('fit_canvas');
+      await send({type:'select_brush',id:await brush('G-Pen')});await send({type:'set_brush_size',value:8});await send({type:'set_color',rgba:[0,0,0,1]});await tool({figure:{shape:'rectangle',paint:'outline'}});await draw('pen',line([160,120],[440,360]));await idle();await until('raster reference published','layerApp.app.document_park_ready()');
+      await send({type:'layer',action:{op:'reference_selection'}});await send({type:'layer',action:{op:'new_vector'}});await until('vector colour layer',activeVector);await invoke('lower_layer');
+      const traceTarget=await state('Number(s.layers.find(layer=>layer.editing).id)'),traceLabel=await state('s.layers.find(layer=>layer.editing).label'),traceLayers=await state('s.layers.map(layer=>Number(layer.id))'),traceBefore=await save();
+      const traceId=packageOccurrences(traceBefore).find(occurrence=>occurrence.data.name===traceLabel).data.content.object.ref,traceVector=manifest=>packageObject(manifest,traceId);assert.equal((traceVector(traceBefore).data.items??[]).length,0,'Trace starts on an empty vector layer');
+      await tool({region:{fill:true,source:'reference'}});await send({type:'set_color',rgba:[.1,.75,.2,1]});await draw('pen',[[300,240]]);await until('traced fill published','layerApp.app.document_park_ready()');
+      const traced=await save();assert.equal(BigInt(traceVector(traced).data.next_item),2n,'Raster region becomes one vector path');assert.deepEqual(await state('s.layers.map(layer=>Number(layer.id))'),traceLayers,'Raster tracing creates no layer');assert.equal(await state('Number(s.layers.find(layer=>layer.editing).id)'),traceTarget);assert.deepEqual(rasterIdentity(traced),rasterIdentity(traceBefore),'Tracing preserves raster sources');
+      await park();await settle();const tracedGreen=await color([300,240],true);assert.ok(tracedGreen[1]>tracedGreen[0]+60&&tracedGreen[1]>tracedGreen[2]+60,`${theme}: traced vector face is green ${tracedGreen}`);await capture(`vector-fill-${theme}-raster-reference`);
+      await invoke('undo');await idle();assert.deepEqual(authoredIdentity(await save()),authoredIdentity(traceBefore),'One Undo removes the traced path');
+      console.log(`PASS ${theme}: vector face/recolour, vector Enclose, raster-to-vector Fill, exact Undo and no hidden paint`);
     }
   } finally {await evaluate('window.showSaveFilePicker=window.vectorFillSave;delete window.vectorFillSave;delete window.placementTest');}
 }

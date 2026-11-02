@@ -10,10 +10,12 @@ mod outline;
 #[cfg(test)]
 mod ops_tests;
 mod points;
+mod trace;
 pub use erase::{EraseMode, Eraser};
-pub use faces::{FaceLine, VectorFace, vector_face};
+pub use faces::{FaceLine, VectorFace, vector_face, vector_faces};
 pub use points::{AnchorRef, SegmentHit};
 pub use index::VectorIndex;
+pub use trace::ContourTrace;
 
 pub const ANCHOR_RUN: usize = 256;
 pub const CHUNK_RECORDS: usize = 64;

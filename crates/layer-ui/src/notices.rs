@@ -19,7 +19,7 @@ pub struct Notice {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum NoticeActionId { CloneSource, UseReference, Flatten, AddMask, EditMask, NewPaintLayer, NewPaintLayerBelow, RasterizeLayer, UseVectorPen, ResetSetting, Merge, BackToLayer }
+pub enum NoticeActionId { CloneSource, UseReference, Flatten, AddMask, EditMask, NewPaintLayer, NewPaintLayerBelow, RasterizeLayer, UseVectorPen, ResetSetting, Merge }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct NoticeAction {
@@ -36,7 +36,6 @@ enum NoticeCopy {
     Drawing(DrawingRefusal), Stroke(StrokeRefusal), Message(MessageId), Reference { message: MessageId, name: std::sync::Arc<str> },
     Object { layer: OccurrenceHandle, name: std::sync::Arc<str> }, Flatten { hidden: usize, names: Vec<std::sync::Arc<str>> },
     Vector { layer: OccurrenceHandle, name: std::sync::Arc<str>, reason: VectorRefusal },
-    FilledBelow { layer: OccurrenceHandle, name: std::sync::Arc<str> },
     Rasterizing { command: CommandId, names: Vec<std::sync::Arc<str>> },
 }
 
@@ -72,10 +71,6 @@ impl NoticeCopy {
                     VectorRefusal::Tool { tool: None, .. } => MessageId::OBJECTS_VECTOR_REFUSAL_LAYER,
                 };
                 return localization.format(message, &args);
-            }
-            Self::FilledBelow { name, .. } => {
-                let mut args = FluentArgs::new(); args.set("layer", name.as_ref());
-                return localization.format(MessageId::OBJECTS_VECTOR_FILLED_BELOW, &args);
             }
             Self::Flatten { hidden, names } => {
                 let mut args = FluentArgs::new(); args.set("count", *hidden);
@@ -115,11 +110,7 @@ impl NoticeCopy {
                 let mut args = FluentArgs::new(); args.set("brush", tools::brush_label_localized(*pen, localization).unwrap_or_default().to_string());
                 localization.format(MessageId::OBJECTS_ACTION_USE_BRUSH, &args)
             }
-            (Self::FilledBelow { name, .. }, NoticeActionId::BackToLayer) => {
-                let mut args = FluentArgs::new(); args.set("layer", name.as_ref());
-                localization.format(MessageId::OBJECTS_ACTION_BACK_TO_LAYER, &args)
-            }
-            (_, NoticeActionId::UseVectorPen | NoticeActionId::ResetSetting | NoticeActionId::BackToLayer) => String::new(),
+            (_, NoticeActionId::UseVectorPen | NoticeActionId::ResetSetting) => String::new(),
         }
     }
 }
@@ -277,15 +268,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.notices.copy = Some(copy);
     }
 
-    pub(super) fn notify_filled_below(&mut self, layer: OccurrenceHandle) {
-        let Some(name) = self.engine.document().scene().occurrence(layer).map(|o| o.name.clone()) else { return; };
-        let copy = NoticeCopy::FilledBelow { layer, name };
-        let back = UiAction::Layer { action: LayerAction::Select { id: occurrence_token(layer), mask: false } };
-        let actions = vec![self.notice_choice(&copy, NoticeActionId::BackToLayer, NoticeRun::Dispatch(Box::new(back)), None)];
-        self.raise_notice(copy.text(self.localization()), actions);
-        self.notices.copy = Some(copy);
-    }
-
     pub(super) fn explain_chosen_tool(&mut self) {
         self.forget_brush_restore();
         let doc = self.engine.document();
@@ -397,10 +379,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         let current = self.notices.owner == self.engine.document().owner && self.notices.epoch == self.state.document_file.epoch;
         self.dismiss_notice();
         let Some(run) = chosen else { return Ok(self.changed(0, false)); };
-        if let Some(NoticeCopy::FilledBelow { layer, .. }) = &copy && (!current || self.engine.document().scene().vector_layer(*layer).is_none()) {
-            self.raise_message_notice(MessageId::OBJECTS_NOTICE_STALE);
-            return Ok(self.changed(0, false));
-        }
         if let Some(NoticeCopy::Object { layer, .. } | NoticeCopy::Vector { layer, .. }) = &copy {
             let doc = self.engine.document();
             let kept = match copy { Some(NoticeCopy::Vector { .. }) => doc.scene().vector_layer(*layer).is_some(), _ => doc.scene().object_layer(*layer).is_some() };

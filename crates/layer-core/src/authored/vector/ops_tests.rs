@@ -405,3 +405,41 @@ fn vector_face_one_stroke_circle_joins_its_nearby_ends() {
     assert_eq!(face.boundary, [0].into());
     assert!(face_path(&face).encloses([100., 100.], 0.001));
 }
+
+#[test]
+fn vector_faces_enumerates_adjacent_faces_with_the_same_tap_boundaries() {
+    let paths = [
+        face_line(1, &[[0., 0.], [300., 0.], [300., 100.], [0., 100.]], true, 2.),
+        face_line(2, &[[100., 0.], [100., 100.]], false, 2.),
+        face_line(3, &[[200., 0.], [200., 100.]], false, 2.),
+    ];
+    let lines = paths.iter().map(|path| FaceLine { path, offset: [20., -10.] }).collect::<Vec<_>>();
+    let faces = vector_faces(&lines, [0., -20., 340., 110.]);
+    assert_eq!(faces.len(), 3);
+    for x in [70., 170., 270.] {
+        let tapped = vector_face(&lines, [x, 40.]).unwrap();
+        let face = faces.iter().find(|face| face_path(face).encloses([x, 40.], 0.001)).unwrap();
+        assert_eq!(face.geometry.hull(), tapped.geometry.hull());
+        assert_eq!(face.boundary, tapped.boundary);
+        assert_eq!(face.geometry.subpaths().len(), 1);
+    }
+    let clipped = vector_faces(&lines, [0., -20., 250., 110.]);
+    assert_eq!(clipped.len(), 2);
+    assert!(clipped.iter().all(|face| face.geometry.hull()[2] <= 250.));
+}
+
+#[test]
+fn vector_faces_enumerates_nested_faces_with_only_their_immediate_holes() {
+    let paths = [face_box(1, 0., 200.), face_box(2, 50., 150.), face_box(3, 75., 125.)];
+    let lines = paths.iter().map(|path| FaceLine { path, offset: [0.; 2] }).collect::<Vec<_>>();
+    let faces = vector_faces(&lines, [-10., -10., 210., 210.]);
+    assert_eq!(faces.len(), 3);
+    for (point, holes) in [([25., 25.], 1), ([60., 60.], 1), ([100., 100.], 0)] {
+        let tapped = vector_face(&lines, point).unwrap();
+        let face = faces.iter().find(|face| face_path(face).encloses(point, 0.001)).unwrap();
+        assert_eq!(face.geometry.hull(), tapped.geometry.hull());
+        assert_eq!(face.boundary, tapped.boundary);
+        assert_eq!(face.geometry.subpaths().len(), holes + 1);
+    }
+    assert_eq!(faces.iter().filter(|face| face_path(face).encloses([100., 100.], 0.001)).count(), 1);
+}

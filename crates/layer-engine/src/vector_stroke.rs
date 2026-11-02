@@ -151,6 +151,85 @@ fn dot(a: [f64; 2], b: [f64; 2]) -> f64 { a[0] * b[0] + a[1] * b[1] }
 fn distance(a: [f64; 2], b: [f64; 2]) -> f64 { let d = sub(a, b); dot(d, d).sqrt() }
 fn unit(v: [f64; 2]) -> [f64; 2] { let l = dot(v, v).sqrt(); if l > 1e-12 { scale(v, 1. / l) } else { [0.; 2] } }
 
+pub struct PolylineFit {
+    points: Vec<[f64; 2]>,
+    closed: bool,
+    fit: LineFit,
+    cursor: usize,
+    first: usize,
+    turn: f64,
+    phase: u8,
+    anchors: Vec<Anchor>,
+    result: Option<Subpath>,
+}
+impl PolylineFit {
+    pub fn new(mut points: Vec<[f64; 2]>, tolerance: f64, closed: bool) -> Self {
+        if closed && points.first() == points.last() { points.pop(); }
+        let invalid = !tolerance.is_finite() || tolerance <= 0. || points.len() < if closed { 3 } else { 2 };
+        Self { points, closed, fit: LineFit::new(tolerance, tolerance * 8.), cursor: 0, first: 0, turn: f64::INFINITY,
+            phase: if invalid { 4 } else { 0 }, anchors: Vec::new(), result: None }
+    }
+    pub fn advance(&mut self, quota: usize) -> bool {
+        if self.phase == 4 { return true; }
+        if self.phase == 2 {
+            if !self.fit.prepare(false, quota) { return false; }
+            self.fit.progress(false, quota);
+            if self.fit.pieces.last().is_some_and(|piece| piece.end + 1 == self.fit.kept.len()) { self.phase = 3; self.cursor = 0; }
+            return false;
+        }
+        for _ in 0..quota {
+            match self.phase {
+                0 => {
+                    let n = self.points.len();
+                    let i = self.cursor;
+                    if !self.points[i].iter().all(|v| v.is_finite()) { self.phase = 4; return true; }
+                    if self.closed {
+                        let a = unit(sub(self.points[i], self.points[(i + n - 1) % n]));
+                        let b = unit(sub(self.points[(i + 1) % n], self.points[i]));
+                        let turn = dot(a, b);
+                        if turn < self.turn { self.turn = turn; self.first = i; }
+                    }
+                    self.cursor += 1;
+                    if self.cursor == n { self.phase = 1; self.cursor = 0; }
+                }
+                1 => {
+                    let n = self.points.len();
+                    let point = self.points[(self.first + self.cursor) % n];
+                    self.fit.push_sample((point, 1.));
+                    self.cursor += 1;
+                    if self.cursor == n + usize::from(self.closed) {
+                        if self.closed && let Some(last) = self.fit.kept.last_mut() { last.0 = self.points[self.first]; *self.fit.points.last_mut().unwrap() = last.0; }
+                        if self.fit.kept.len() < 2 { self.phase = 4; return true; }
+                        self.phase = 2; return false;
+                    }
+                }
+                3 => {
+                    self.fit.push_anchors(self.cursor, &mut self.anchors);
+                    self.cursor += 1;
+                    if self.cursor == self.fit.pieces.len() {
+                        if self.closed {
+                            let last = self.anchors.pop().unwrap();
+                            let first = &mut self.anchors[0];
+                            *first = Anchor::new(first.point(), last.in_handle(), first.out_handle(), first.kind);
+                        }
+                        if self.anchors.len() >= 2 { self.result = Some(Subpath::new(&self.anchors, self.closed)); }
+                        self.phase = 4; return true;
+                    }
+                }
+                _ => return self.phase == 4,
+            }
+        }
+        false
+    }
+    pub fn take(&mut self) -> Option<Subpath> { self.result.take() }
+}
+
+pub fn fit_polyline(points: &[[f64; 2]], tolerance: f64, closed: bool) -> Option<Subpath> {
+    let mut fit = PolylineFit::new(points.to_vec(), tolerance, closed);
+    while !fit.advance(20_000) {}
+    fit.take()
+}
+
 pub fn polyline(samples: &[Sample]) -> Option<(PathGeometry, Option<WidthProfile>, f64)> {
     let half = samples.iter().map(|s| s.1).fold(0., f64::max);
     if samples.is_empty() || half <= 0. { return None; }
@@ -463,11 +542,21 @@ impl LineFit {
         self.kept.pop();
         self.points.pop();
         for (i, sample) in samples.iter().enumerate().skip(self.group) {
-            if let Some(last) = self.kept.last_mut() && distance(last.0, sample.0) < self.tolerance * 0.25 { last.1 = last.1.max(sample.1); continue; }
-            self.kept.push(*sample);
-            self.points.push(sample.0);
-            self.group = i;
+            if self.push_sample(*sample) { self.group = i; }
         }
+    }
+    fn push_sample(&mut self, sample: Sample) -> bool {
+        if let Some(last) = self.kept.last_mut() && distance(last.0, sample.0) < self.tolerance * 0.25 { last.1 = last.1.max(sample.1); return false; }
+        self.kept.push(sample); self.points.push(sample.0); true
+    }
+    fn push_anchors(&self, i: usize, anchors: &mut Vec<Anchor>) {
+        let [from, out, into, to] = self.pieces[i].cubic;
+        match anchors.last_mut() {
+            Some(anchor) => *anchor = anchor.with_out_handle(sub(out, from)),
+            None => anchors.push(Anchor::new(from, [0.; 2], sub(out, from), AnchorKind::CORNER)),
+        }
+        let kind = if self.pieces.get(i + 1).is_none_or(|next| self.corners.contains(&next.start)) { AnchorKind::CORNER } else { AnchorKind::SMOOTH };
+        anchors.push(Anchor::new(to, sub(into, to), [0.; 2], kind));
     }
     fn extend(&mut self, samples: &[Sample]) {
         let earlier = std::mem::take(&mut self.kept);
@@ -493,24 +582,33 @@ impl LineFit {
         self.take(samples);
         self.progress(true, budget);
     }
-    fn progress(&mut self, open: bool, budget: usize) {
-        let points = std::mem::take(&mut self.points);
+    fn prepare(&mut self, open: bool, budget: usize) -> bool {
+        let points = &self.points;
         let visible = if open { points.len().saturating_sub(1) } else { points.len() };
-        while self.angles.len() < visible {
+        let mut spent = 0;
+        while self.angles.len() < visible && spent < budget {
+            spent += 1;
             let i = self.angles.len();
             if i + 1 == visible && !open { self.angles.push((0., i)); continue; }
             let Some((forward, seen)) = ahead(&points[..visible], i, self.reach, open) else { break };
-            let backward = tangent_at(&points, i, -1, self.reach);
+            let backward = tangent_at(points, i, -1, self.reach);
             self.angles.push(((-dot(backward, forward)).clamp(-1., 1.).acos(), seen));
         }
         let limit = 55f64.to_radians();
-        while self.examined + 1 < self.angles.len() {
+        while self.examined + 1 < self.angles.len() && spent < budget {
+            spent += 1;
             let i = self.examined;
             let angle = self.angles[i].0;
             let previous = *self.corners.last().unwrap();
             if angle > limit && angle >= self.angles[i - 1].0 && angle > self.angles[i + 1].0 && distance(points[i], points[previous]) > self.reach * 0.5 { self.corners.push(i); }
             self.examined += 1;
         }
+        self.angles.len() >= visible && self.examined + 1 >= self.angles.len()
+    }
+    fn progress(&mut self, open: bool, budget: usize) {
+        self.prepare(open, usize::MAX);
+        let points = std::mem::take(&mut self.points);
+        let visible = if open { points.len().saturating_sub(1) } else { points.len() };
         let mut spent = 0;
         while spent < budget && (!open || points.len() >= self.wait) {
             let cursor = self.pieces.last().map_or(0, |piece| piece.end);
@@ -568,13 +666,7 @@ impl LineFit {
         let mut anchors: Vec<Anchor> = Vec::with_capacity(fit.pieces.len() + 1);
         let mut params = vec![(0, 0.); fit.kept.len()];
         for (i, piece) in fit.pieces.iter().enumerate() {
-            let [from, out, into, to] = piece.cubic;
-            match anchors.last_mut() {
-                Some(anchor) => *anchor = anchor.with_out_handle(sub(out, from)),
-                None => anchors.push(Anchor::new(from, [0.; 2], sub(out, from), AnchorKind::CORNER)),
-            }
-            let kind = if fit.pieces.get(i + 1).is_none_or(|next| fit.corners.contains(&next.start)) { AnchorKind::CORNER } else { AnchorKind::SMOOTH };
-            anchors.push(Anchor::new(to, sub(into, to), [0.; 2], kind));
+            fit.push_anchors(i, &mut anchors);
             for (k, t) in piece.u.iter().enumerate().skip(1) { params[piece.start + k] = (i, *t); }
         }
         let geometry = PathGeometry::new(vec![Subpath::new(&anchors, false)]).ok()?;
@@ -784,4 +876,116 @@ mod tests {
         let (dot, _, width) = fit_line(&[([5., 5.], 2.)], 0.25).unwrap();
         assert_eq!((dot.anchor_count(), width), (1, 4.));
     }
+    fn coverage_disc(size: u32, radius: f64) -> layer_core::SelectionPixels {
+        let stride = size.div_ceil(4) as usize;
+        let mut words = vec![0; stride * size as usize];
+        for y in 0..size { for x in 0..size {
+            let d = (f64::from(x) + 0.5 - f64::from(size) * 0.5).hypot(f64::from(y) + 0.5 - f64::from(size) * 0.5);
+            let value = ((radius + 0.5 - d).clamp(0., 1.) * 255.).round() as u32;
+            words[y as usize * stride + (x / 4) as usize] |= value << (x % 4 * 8);
+        } }
+        layer_core::SelectionPixels::bytes([size; 2], [0, 0, size, size], words).unwrap()
+    }
+    fn traced(pixels: layer_core::SelectionPixels) -> Vec<Vec<[f64; 2]>> {
+        let mut trace = layer_core::authored::vector::ContourTrace::new(pixels);
+        loop { if let Some(contours) = trace.advance(262_144) { return contours; } }
+    }
+    #[test]
+    fn fitted_contours_preserve_disc_accuracy_and_closed_handles() {
+        let contours = traced(coverage_disc(128, 50.));
+        assert_eq!(contours.len(), 1);
+        let subpath = fit_polyline(&contours[0], 0.25, true).unwrap();
+        assert!(subpath.closed);
+        assert_ne!(subpath.anchor(0).point(), subpath.anchor(subpath.len() - 1).point());
+        assert_ne!(subpath.anchor(0).in_handle(), [0.; 2]);
+        let error = (0..subpath.segment_count()).flat_map(|i| (0..=256).map(move |j| (i, f64::from(j) / 256.)))
+            .map(|(i, t)| { let p = subpath.segment(i).point(t); ((p[0] - 64.).hypot(p[1] - 64.) - 50.).abs() }).fold(0., f64::max);
+        assert!(error <= 0.25, "circle error {error}");
+        let path = layer_core::authored::vector::PathItem::new(layer_core::authored::vector::ItemId(1), std::sync::Arc::new(PathGeometry::new(vec![subpath]).unwrap()), std::sync::Arc::new(layer_core::authored::vector::Style::new(Vec::new())));
+        let error = contours[0].iter().map(|p| path.nearest_segment(*p, 0.001).unwrap().distance).fold(0., f64::max);
+        assert!(error <= 0.25, "iso-line error {error}");
+        let error = path.geometry.segments().flat_map(|segment| (0..=256).map(move |i| segment.point(f64::from(i) / 256.)))
+            .map(|p| contours[0].iter().zip(contours[0].iter().cycle().skip(1)).map(|(a, b)| chord_distance(p, *a, *b)).fold(f64::INFINITY, f64::min)).fold(0., f64::max);
+        assert!(error <= 0.25, "curve to iso-line error {error}");
+    }
+    #[test]
+    fn polyline_fit_quotas_keep_sharp_corners_and_the_same_geometry() {
+        let mut points = Vec::new();
+        for i in 0..100 { points.push([f64::from(i), 0.]); }
+        for i in 0..100 { points.push([99., f64::from(i)]); }
+        for i in 0..100 { points.push([99. - f64::from(i), 99.]); }
+        for i in 0..100 { points.push([0., 99. - f64::from(i)]); }
+        let expected = fit_polyline(&points, 0.25, true).unwrap();
+        for quota in [1, 37, 20_000] {
+            let mut fit = PolylineFit::new(points.clone(), 0.25, true);
+            while !fit.advance(quota) {}
+            assert_eq!(fit.take(), Some(expected.clone()));
+        }
+        for corner in [[0., 0.], [99., 0.], [99., 99.], [0., 99.]] {
+            assert!(expected.anchors().any(|a| distance(a.point(), corner) <= 0.25));
+        }
+        assert!(fit_polyline(&[], 0.25, true).is_none());
+        assert!(fit_polyline(&[[f64::NAN, 0.], [1., 1.]], 0.25, false).is_none());
+    }
+    #[test]
+    fn trace_and_fit_large_region_budgeted() {
+        let extent = [2000, 2000];
+        let pixels = layer_core::SelectionPixels::new(extent, [0, 0, 2000, 2000], vec![0x4444_4444; 250 * 2000]).unwrap();
+        let first_begin = std::time::Instant::now();
+        let mut trace = Some(layer_core::authored::vector::ContourTrace::new(pixels));
+        let mut first_begin = Some(first_begin);
+        let mut calls = 0;
+        let mut maximum = 0;
+        let mut contours = loop {
+            let begin = first_begin.take().unwrap_or_else(std::time::Instant::now);
+            let result = trace.as_mut().unwrap().advance(262_144);
+            let result = result.map(std::collections::VecDeque::from);
+            if result.is_some() { trace = None; }
+            let elapsed = begin.elapsed().as_micros();
+            maximum = maximum.max(elapsed); calls += 1;
+            eprintln!("trace_and_fit_large_region_budgeted phase=trace call={calls} quota=262144 elapsed_us={elapsed}");
+            if let Some(contours) = result { break contours; }
+        };
+        assert_eq!(contours.len(), 1);
+        let mut fit = None;
+        let mut subpaths = Vec::new();
+        let geometry = loop {
+            let begin = std::time::Instant::now();
+            let current = fit.get_or_insert_with(|| PolylineFit::new(contours.pop_front().unwrap(), 0.25, true));
+            let done = current.advance(20_000);
+            let mut geometry = None;
+            if done {
+                subpaths.push(current.take().unwrap());
+                fit = None;
+                if contours.is_empty() { geometry = Some(PathGeometry::new(std::mem::take(&mut subpaths)).unwrap()); }
+            }
+            let elapsed = begin.elapsed().as_micros();
+            maximum = maximum.max(elapsed); calls += 1;
+            eprintln!("trace_and_fit_large_region_budgeted phase=fit call={calls} quota=20000 elapsed_us={elapsed}");
+            if let Some(geometry) = geometry { break geometry; }
+        };
+        assert_eq!(geometry.subpaths().len(), 1);
+        assert!(geometry.subpaths()[0].closed);
+        let iso = [[0., 0.5], [0.5, 0.], [1999.5, 0.], [2000., 0.5], [2000., 1999.5], [1999.5, 2000.], [0.5, 2000.], [0., 1999.5]];
+        let error = geometry.segments().flat_map(|segment| (0..=1024).map(move |i| segment.point(f64::from(i) / 1024.)))
+            .map(|p| iso.iter().zip(iso.iter().cycle().skip(1)).map(|(a, b)| chord_distance(p, *a, *b)).fold(f64::INFINITY, f64::min)).fold(0., f64::max);
+        assert!(error <= 0.25, "square iso-line error {error}");
+        eprintln!("trace_and_fit_large_region_budgeted complete calls={calls} maximum_us={maximum}");
+    }
+
+    #[test]
+    fn closed_polyline_retains_two_anchor_cubic_loops() {
+        let points = (0..16).map(|i| { let angle = f64::from(i) * std::f64::consts::TAU / 16.; [8. + 3. * angle.cos(), 8. + 3. * angle.sin()] }).collect::<Vec<_>>();
+        let subpath = fit_polyline(&points, 0.25, true).unwrap();
+        assert!(subpath.closed);
+        assert_eq!(subpath.len(), 2);
+        let curve = subpath.segments().flat_map(|segment| (0..256).map(move |i| segment.point(f64::from(i) / 256.))).collect::<Vec<_>>();
+        let area = curve.iter().zip(curve.iter().cycle().skip(1)).map(|(a, b)| a[0] * b[1] - b[0] * a[1]).sum::<f64>().abs() * 0.5;
+        assert!(area >= 4.);
+        let error = curve.iter().map(|p| points.iter().zip(points.iter().cycle().skip(1)).map(|(a, b)| chord_distance(*p, *a, *b)).fold(f64::INFINITY, f64::min)).fold(0., f64::max);
+        assert!(error <= 0.25, "two-anchor curve error {error}");
+        let path = layer_core::authored::vector::PathItem::new(layer_core::authored::vector::ItemId(1), std::sync::Arc::new(PathGeometry::new(vec![subpath]).unwrap()), std::sync::Arc::new(layer_core::authored::vector::Style::new(Vec::new())));
+        assert!(points.iter().all(|p| path.nearest_segment(*p, 0.001).unwrap().distance <= 0.25));
+    }
+
 }

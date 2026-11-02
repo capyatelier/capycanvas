@@ -192,20 +192,20 @@ Solid fills stay attached to cut paths; erasing does not subtract filled areas.
 
 ## Coloring line art
 
-With **Fill** source **Visible** or **Editing** on a vector layer, a click inside
-a filled path, or inside a path whose parts are all closed, fills it with the
-foreground color below its outline, in one undo step; where such paths nest or overlap, the smallest one
-around the click fills. Transparent paint removes the fill. A click
-anywhere else, or using source **Reference**, adds a paint layer directly below
-the vector layer, clipped to the same base when the vector layer is clipped,
-and fills it there from the chosen source: all visible artwork, the edited vector layer's
-lines, or the marked reference layers. Once the fill lands, a notice says it
-went on a new layer and offers **Back to “Vector 1”**. Missing references are resolved before
-adding a paint layer. Fill keeps its tolerance, gap closing,
-expansion and smoothing; the new layer and the fill are two undo steps.
-**Lasso Fill** on a vector layer adds a filled closed path, with holes where
-the outline crosses itself, and selects it. Gradient and Enclose Fill offer
-New Paint Layer Below.
+**Fill** recolors the smallest enclosing path in one undo step. Transparent
+paint removes its fill; on a fill-only path it removes the path. A tap between
+vector strokes creates a closed fill path below the intersecting strokes,
+including interior detail lines. A hole can be filled as its own face.
+
+Raster line sources produce a traced vector fill on the edited vector layer,
+using the same region settings as a raster fill. Each result is one undo step.
+**Enclose and Fill** and **Paint unfilled areas** also work on vector layers.
+With vector lines, they fill faces wholly inside the enclosure or painted
+footprint and keep faces that already have fills. Raster lines produce traced
+fill paths from the enclosed regions.
+
+**Lasso Fill** adds a filled closed path, with holes where the outline crosses
+itself, and selects it. Gradient offers New Paint Layer Below.
 
 ## Moving paths
 
@@ -336,13 +336,14 @@ same path as fitting at pen-up.
 `the_layer_menu_offers_new_vector_layer_in_every_state`,
 `painting_brushes_on_vector_layers_offer_a_pen_a_paint_layer_or_rasterizing`,
 `a_pen_setting_that_stops_paths_is_named_and_reset_from_the_refusal`,
-`fill_tools_on_vector_layers_offer_a_paint_layer_below`,
+`gradient_on_vector_layers_offers_a_paint_layer_below`,
 `select_all_transform_flip_escape_and_delete_act_on_paths`,
 `path_commands_join_split_close_reverse_and_compound_selected_paths`,
 `pens_and_the_path_tool_continue_a_selected_paths_open_end`,
 `figure_options_shape_rectangles_polygons_and_stars_on_both_layer_kinds`,
 `erasing_up_to_intersection_stops_at_crossing_lines`,
-`fill_colors_paths_or_fills_a_new_paint_layer_below_from_the_lines`,
+`fill_colors_closed_paths_without_adding_a_layer`,
+`raster_reference_fill_traces_one_path_on_the_vector_target_with_one_undo`,
 `lasso_fill_adds_a_filled_path_on_vector_layers`,
 `merging_vector_layers_keeps_paths_and_baking_them_asks_first`,
 `fill_ignores_clicks_off_the_canvas_and_fills_that_change_nothing`,

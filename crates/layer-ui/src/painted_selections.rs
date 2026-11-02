@@ -316,7 +316,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 return Err("Selection capture is still catching up".into());
             }
             if unfilled {
-                if self.engine.document().drawing_content().is_none() {self.notify_drawing_refusal();return Ok(());}
+                if self.engine.document().drawing_content().is_none() && !self.vector_tool_accepts() {self.notify_drawing_refusal();return Ok(());}
             }else{refused(self.mask_brush_reason())?;}
             let physical_eraser =
                 event.tool == ToolKind::Eraser || event.flags.contains(SampleFlags::INVERTED);

@@ -10,6 +10,10 @@ struct Link { ends: [usize; 2], points: Vec<[f64; 2]>, sources: BTreeSet<usize> 
 struct Cycle { points: Vec<[f64; 2]>, sources: BTreeSet<usize>, component: usize, area: f64 }
 struct Cache { paths: Vec<Option<std::ops::Range<usize>>>, lines: Vec<Line>, trees: Vec<Edges>, next: usize, maxima: Vec<f64> }
 impl Cache {
+    fn new(lines:&[FaceLine<'_>])->Self {
+        Self {paths:vec![None;lines.len()],lines:Vec::new(),trees:Vec::new(),next:0,maxima:lines.iter().map(|s|
+            s.path.style.strokes().map(|stroke|stroke.width*0.5*stroke.profile.as_ref().map_or(1.,|p|p.max_factor())).fold(0.,f64::max)).collect()}
+    }
     fn near(&self,a:[f64;2],b:[f64;2],emit:&mut impl FnMut(&Edge)) {
         for tree in &self.trees {tree.near(a,b,emit);}
     }
@@ -43,7 +47,7 @@ fn piece(edges:&[Edge],from:f64,to:f64)->Vec<[f64;2]> {
     points.push(at(edges,to));points
 }
 
-fn graph(sources:&[FaceLine<'_>],selected:&[usize],point:[f64;2],cache:&mut Cache)->Option<VectorFace> {
+fn graph(sources:&[FaceLine<'_>],selected:&[usize],point:Option<[f64;2]>,cache:&mut Cache)->Vec<VectorFace> {
     let mut lines=Vec::new();let mut added=Vec::new();
     for &source in selected {
         if cache.paths[source].is_none() {
@@ -60,7 +64,7 @@ fn graph(sources:&[FaceLine<'_>],selected:&[usize],point:[f64;2],cache:&mut Cach
         }
         lines.extend(cache.lines[cache.paths[source].as_ref().unwrap().clone()].iter().cloned());
     }
-    if lines.is_empty() {return None;}
+    if lines.is_empty() {return Vec::new();}
     if !added.is_empty() {cache.trees.push(Edges::new(added));}
     let mut lookup=vec![0;cache.next];
     for (id,line) in lines.iter().enumerate() {lookup[line.edges[0].subpath]=id;}
@@ -170,6 +174,7 @@ fn graph(sources:&[FaceLine<'_>],selected:&[usize],point:[f64;2],cache:&mut Cach
         let area=points.iter().zip(points.iter().cycle().skip(1)).map(|(a,b)|a[0]*b[1]-b[0]*a[1]).sum::<f64>()*0.5;
         cycles.push(Cycle {points,sources:provenance,component:components[links[first/2].ends[0]],area});
     }
+    let outers=if let Some(point)=point {
     let mut hits=Vec::new();
     for (index,link) in links.iter().enumerate().filter(|(i,_)|live[*i]) {
         for pair in link.points.windows(2) {let (a,b)=(pair[0],pair[1]);if (a[1]>point[1])==(b[1]>point[1]) {continue;}
@@ -182,7 +187,10 @@ fn graph(sources:&[FaceLine<'_>],selected:&[usize],point:[f64;2],cache:&mut Cach
     let outer=hits.into_iter().find_map(|(_,half)| {let id=cycle_of[half];let cycle=&cycles[id];
         if excluded.contains(&cycle.component) {return None;}
         if cycle.area>0. && inside(&cycle.points,point) {Some(id)}else{excluded.insert(cycle.component);None}
-    })?;
+    });
+    outer.into_iter().collect::<Vec<_>>()
+    }else{cycles.iter().enumerate().filter(|(_,c)|c.area>0.).map(|(i,_)|i).collect()};
+    outers.into_iter().filter_map(|outer| {
     let face=&cycles[outer];
     let holes=cycles.iter().enumerate().filter(|(_,c)|c.component!=face.component && c.area<0. && inside(&face.points,c.points[0])).map(|(i,_)|i).collect::<Vec<_>>();
     let holes=holes.iter().copied().filter(|&i|!holes.iter().any(|&j|j!=i && inside(&cycles[j].points,cycles[i].points[0]))).collect::<Vec<_>>();
@@ -193,20 +201,33 @@ fn graph(sources:&[FaceLine<'_>],selected:&[usize],point:[f64;2],cache:&mut Cach
         Subpath::new(&anchors,true)
     }).collect();
     Some(VectorFace {geometry:PathGeometry::new(subpaths).ok()?,boundary})
+    }).collect()
 }
 
 pub fn vector_face(lines:&[FaceLine<'_>],point:[f64;2])->Option<VectorFace> {
-    let mut cache=Cache {paths:vec![None;lines.len()],lines:Vec::new(),trees:Vec::new(),next:0,maxima:lines.iter().map(|s|
-        s.path.style.strokes().map(|stroke|stroke.width*0.5*stroke.profile.as_ref().map_or(1.,|p|p.max_factor())).fold(0.,f64::max)).collect()};
-    let paths=lines.iter().map(|line| {let b=line.path.bounds();[b[0]+line.offset[0],b[1]+line.offset[1],b[2]+line.offset[0],b[3]+line.offset[1]]}).collect::<Vec<_>>();
+    let mut cache=Cache::new(lines);
+    let paths=line_bounds(lines);
     let all=bounds(paths.iter().flat_map(|b|[[b[0],b[1]],[b[2],b[3]]]));
     let limit=[(point[0]-all[0]).abs(),(point[0]-all[2]).abs(),(point[1]-all[1]).abs(),(point[1]-all[3]).abs()].into_iter().fold(0.,f64::max)+1.;
     if !limit.is_finite() {return None;}let mut half=128_f64;
     loop {
         let window=[point[0]-half,point[1]-half,point[0]+half,point[1]+half];
-        let selected=paths.iter().enumerate().filter(|(i,b)|!lines[*i].path.hidden && lines[*i].path.style.strokes().next().is_some()
-            && b[0]<=window[2] && b[2]>=window[0] && b[1]<=window[3] && b[3]>=window[1]).map(|(i,_)|i).collect::<Vec<_>>();
-        if let Some(face)=graph(lines,&selected,point,&mut cache) {let b=face.geometry.hull();if b[0]>window[0] && b[1]>window[1] && b[2]<window[2] && b[3]<window[3] {return Some(face);}}
+        let selected=selected_lines(lines,&paths,window);
+        if let Some(face)=graph(lines,&selected,Some(point),&mut cache).into_iter().next() {let b=face.geometry.hull();if b[0]>window[0] && b[1]>window[1] && b[2]<window[2] && b[3]<window[3] {return Some(face);}}
         if half>=limit {return None;}half=(half*2.).min(limit);
     }
+}
+
+fn line_bounds(lines:&[FaceLine<'_>])->Vec<[f64;4]> {
+    lines.iter().map(|line| {let b=line.path.bounds();[b[0]+line.offset[0],b[1]+line.offset[1],b[2]+line.offset[0],b[3]+line.offset[1]]}).collect()
+}
+fn selected_lines(lines:&[FaceLine<'_>],paths:&[[f64;4]],window:[f64;4])->Vec<usize> {
+    paths.iter().enumerate().filter(|(i,b)|!lines[*i].path.hidden && lines[*i].path.style.strokes().next().is_some()
+        && b[0]<=window[2] && b[2]>=window[0] && b[1]<=window[3] && b[3]>=window[1]).map(|(i,_)|i).collect()
+}
+pub fn vector_faces(lines:&[FaceLine<'_>],window:[f64;4])->Vec<VectorFace> {
+    let selected=selected_lines(lines,&line_bounds(lines),window);
+    graph(lines,&selected,None,&mut Cache::new(lines)).into_iter().filter(|face| {
+        let b=face.geometry.hull();b[0]>=window[0] && b[1]>=window[1] && b[2]<=window[2] && b[3]<=window[3]
+    }).collect()
 }

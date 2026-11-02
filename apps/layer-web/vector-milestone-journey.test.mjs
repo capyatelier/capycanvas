@@ -42,18 +42,6 @@ export async function checkVectorMilestone({call,evaluate,settle}) {
   });
   const layersPanel='e.item.control?.panel==="layers"';
   const newVectorLayer=(label,name)=>fromDrawer(layersPanel,`.layer-footer [aria-label=${JSON.stringify(label)}]`,name,activeVector);
-  const greenThumbnail=(id,name)=>inDrawer(layersPanel,`[data-layer="${id}"] .layer-thumbnail canvas`,`the thumbnail of layer ${id}`,async()=>{
-    const end=Date.now()+30000;let seen;
-    do{
-      seen=await evaluate(`(()=>{const layer=layerApp.state().layers.find(l=>Number(l.id)===${id}),c=document.querySelector('[data-layer="${id}"] .layer-thumbnail canvas');if(!layer||!c)return null;
-        const d=c.getContext('2d',{willReadFrequently:true}).getImageData(0,0,c.width,c.height).data;let green=0;for(let i=0;i<d.length;i+=4)if(d[i+3]>128&&d[i+1]-Math.max(d[i],d[i+2])>40)green++;
-        return{green,revision:c.dataset.previewRevision,paint:String(layer.paint_revision)}})()`);
-      if(seen?.green>0)break;
-      await new Promise(r=>setTimeout(r,100));
-    }while(Date.now()<end);
-    await capture(`milestone-${name}-thumbnail`);
-    assert.ok(seen?.green>0,`${name}: the filled layer's thumbnail shows no fill ${JSON.stringify(seen)}`);
-  });
   const [pencil,gpen,rough]=[await brush('Pencil'),await brush('G-Pen'),await brush('Rough G-Pen')];
   const items='[s.tool_set,...Object.values(s.tool_panels??{}),s.customization?.drawer?.tool_set].filter(Boolean).flatMap(v=>[...v.groups,...v.subtools])';
   const noticeShown=id=>`(s.notice?.actions??[]).some(a=>a.id===${JSON.stringify(id)})&&!document.querySelector('.canvas-notice').hidden`;
@@ -161,15 +149,6 @@ export async function checkVectorMilestone({call,evaluate,settle}) {
     await tool({region:{fill:true,source:'visible'}});
     await tap([1250,400]);
     await expect(`${theme} filled inside the outline`,[1250,450],green);
-    const unfilled=await state('s.layers.map(l=>Number(l.id))');
-    await tap([1600,900]);
-    await until('the fill names its new layer',`${noticeShown('back_to_layer')}&&!(${activeVector})`);
-    assert.deepEqual(await noticeShape(`${theme} fill below`),[]);
-    await capture(`milestone-${theme}-fill-below-notice`);
-    await noticeAction('back_to_layer');
-    await until('back on the vector layer',activeVector);
-    await expect(`${theme} filled below the lines`,[1600,960],green);
-    await greenThumbnail(await state(`Number(s.layers.find(l=>!${JSON.stringify(unfilled)}.includes(Number(l.id))).id)`),`${theme}-fill-below`);
     await capture(`milestone-${theme}-color`);
     await send({type:'set_color',rgba:[.1,.1,.12,1]});
     await newVectorLayer(label,'a vector layer for crossing lines');

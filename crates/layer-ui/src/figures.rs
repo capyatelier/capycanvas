@@ -110,7 +110,7 @@ impl<B: CanvasRenderer> UiSession<B> {
     pub(super) fn vector_tool_accepts(&self) -> bool {
         let layer = match self.layer_interaction.tool {
             LayerCanvasTool::Figure { .. } | LayerCanvasTool::LassoFill => self.vector_figure_layer(),
-            LayerCanvasTool::Region { fill: true, .. } => self.editing_vector_layer(),
+            LayerCanvasTool::Region { fill: true, .. } | LayerCanvasTool::EncloseFill {..} | LayerCanvasTool::PaintUnfilled {..} => self.editing_vector_layer(),
             _ => None,
         };
         layer.is_some_and(|layer| !self.engine.document().is_locked(layer))

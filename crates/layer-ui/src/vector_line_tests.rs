@@ -1033,7 +1033,7 @@ fn a_pen_setting_that_stops_paths_is_named_and_reset_from_the_refusal() {
 }
 
 #[test]
-fn fill_tools_on_vector_layers_offer_a_paint_layer_below() {
+fn gradient_on_vector_layers_offers_a_paint_layer_below() {
     let (mut s, handle) = vector_session();
     draw_line(&mut s, 1, 20);
     s.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Gradient { shape: layer_core::GradientShape::Linear } }).unwrap();
@@ -1351,7 +1351,7 @@ fn erasing_up_to_intersection_stops_at_crossing_lines() {
 }
 
 #[test]
-fn fill_colors_paths_or_fills_a_new_paint_layer_below_from_the_lines() {
+fn fill_colors_closed_paths_without_adding_a_layer() {
     let (mut s, handle) = vector_session();
     s.dispatch(UiAction::Layer { action: LayerAction::Tool { tool: LayerCanvasTool::Figure { shape: FigureShape::Ellipse, paint: FigurePaint::Outline } } }).unwrap();
     let drag = [surface_at(&s, [200., 200.]), surface_at(&s, [300., 260.]), surface_at(&s, [400., 320.])];
@@ -1370,16 +1370,6 @@ fn fill_colors_paths_or_fills_a_new_paint_layer_below_from_the_lines() {
     s.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
     s.frame(5_000_000_000, 5_000_000_000).unwrap();
     assert!(s.engine.document().scene().vector_layer(handle).unwrap().paths().next().unwrap().1.style.entries.len() == 1, "one undo step");
-    let requests = s.renderer_mut().region_requests.len();
-    let outside = surface_at(&s, [700., 600.]);
-    press(&mut s, 20, &[outside, outside]);
-    let paint = s.engine.document().working.occurrence.unwrap();
-    let order = s.engine.document().scene().children(None).to_vec();
-    assert!(s.engine.document().scene().paint_source(paint).is_some());
-    assert_eq!(order.iter().position(|h| *h == paint), order.iter().position(|h| *h == handle).map(|i| i + 1), "elsewhere fills a new paint layer below the lines");
-    assert_eq!(s.renderer_mut().region_requests.len(), requests + 1);
-    let request = s.renderer_mut().region_requests.last().unwrap().clone();
-    assert!(matches!(request.source, layer_render::RegionSource::Scene { scope: SceneScope::All, .. }), "Visible fill reads the visible artwork");
 }
 
 #[test]
@@ -1885,7 +1875,7 @@ fn fill_takes_the_innermost_path_around_the_click() {
 }
 
 #[test]
-fn paint_layers_under_a_clipped_vector_layer_stay_in_its_clip() {
+fn the_new_paint_layer_below_notice_action_preserves_the_vector_clip() {
     let mut s = session(Platform::Gtk);
     let base = s.engine.document().working.occurrence.unwrap();
     layer(&mut s, LayerAction::NewVector);
@@ -1905,11 +1895,6 @@ fn paint_layers_under_a_clipped_vector_layer_stay_in_its_clip() {
         assert_eq!(at(new), at(vector) + 1, "the paint layer sits directly under the lines");
         assert_eq!(doc.clipping_base(new), Some(base), "and clips to the same base");
     };
-    s.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Region { fill: true, source: crate::RegionSource::Visible } }).unwrap();
-    let outside = surface_at(&s, [600., 600.]);
-    press(&mut s, 10, &[outside, outside]);
-    placed(&s);
-    layer(&mut s, LayerAction::Select { id: occurrence_token(vector), mask: false });
     s.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Gradient { shape: layer_core::GradientShape::Linear } }).unwrap();
     let start = surface_at(&s, [100., 100.]);
     press(&mut s, 20, &[start, Point { x: start.x + 80., y: start.y }]);
@@ -1976,44 +1961,6 @@ fn choosing_pen_after_leaving_a_vector_layer_keeps_the_pen() {
     layer(&mut s, LayerAction::Select { id: occurrence_token(paint), mask: false });
     invoke(&mut s, CommandId::Pen);
     assert_eq!(s.state.brush.preset, DefaultBrushPreset::GPen as u32, "Pen gives the pen, not the brush held before the vector layer");
-}
-
-#[test]
-fn filling_outside_paths_names_the_new_paint_layer_and_leads_back() {
-    let mut s = session(Platform::Gtk);
-    s.select_brush(DefaultBrushPreset::Pencil as u32).unwrap();
-    invoke(&mut s, CommandId::NewVectorLayer);
-    let vector = s.engine.document().working.occurrence.unwrap();
-    s.dispatch(UiAction::SetColor { rgba: [0.2, 0.6, 0.3, 1.] }).unwrap();
-    layer(&mut s, LayerAction::Tool { tool: LayerCanvasTool::Region { fill: true, source: crate::RegionSource::Visible } });
-    let outside = surface_at(&s, [700., 600.]);
-    press(&mut s, 20, &[outside, outside]);
-    let filled = s.engine.document().working.occurrence.unwrap();
-    assert!(s.engine.document().scene().paint_source(filled).is_some());
-    assert_eq!(s.state.notice, None, "the notice waits for the fill to land");
-    let expected_paper = s.engine.document().nearest_paper_binding(s.engine.document().drawing_content());
-    let request = s.renderer_mut().region_requests.last().unwrap().clone();
-    let pixels = Arc::new(layer_core::SelectionPixels::bytes([8, 1], [0, 0, 8, 1], vec![0xffffffff; 2]).unwrap());
-    s.renderer_mut().region_reply = Some(layer_render::RegionResult { anchors: None, gaps: None, underfill: None, tonal_sample: None, placement: layer_core::Affine::IDENTITY, request_id: request.request_id, pixels });
-    s.frame(6_000_000_000, 6_000_000_000).unwrap();
-    let target = s.engine.document().drawing_content().unwrap();
-    assert!(expected_paper.is_some());
-    assert_eq!(s.engine.document().target_operations(target).unwrap().last().unwrap().kind.fill_texture().unwrap().paper, expected_paper);
-    s.frame(6_016_000_000, 6_016_000_000).unwrap();
-    let notice = s.state.notice.clone().expect("the fill says where it went");
-    let name = s.engine.document().scene().occurrence(vector).unwrap().name.to_string();
-    let mut args = FluentArgs::new(); args.set("layer", name.as_str());
-    assert_eq!(notice.text, s.localization().format(MessageId::OBJECTS_VECTOR_FILLED_BELOW, &args));
-    assert_eq!(notice.actions.iter().map(|a| (a.id, a.label.clone())).collect::<Vec<_>>(), [(NoticeActionId::BackToLayer, format!("Back to “{name}”"))]);
-    invoke(&mut s, CommandId::Pen);
-    assert_eq!(s.state.brush.preset, DefaultBrushPreset::GPen as u32, "Pen stays the pen on the new layer");
-    s.dispatch(UiAction::Notice { id: notice.id, accept: true, action: Some(NoticeActionId::BackToLayer) }).unwrap();
-    assert_eq!(s.engine.document().working.occurrence, Some(vector));
-    let again = surface_at(&s, [650., 650.]);
-    layer(&mut s, LayerAction::Tool { tool: LayerCanvasTool::Region { fill: true, source: crate::RegionSource::Visible } });
-    layer(&mut s, LayerAction::Select { id: occurrence_token(filled), mask: false });
-    press(&mut s, 40, &[again, again]);
-    assert_eq!(s.state.notice, None, "filling the paint layer adds no layer and says nothing");
 }
 
 #[test]
@@ -2823,4 +2770,131 @@ fn transparent_vector_face_fill_removes_the_record_and_undo_restores_it() {
     invoke(&mut s, CommandId::Undo);
     s.frame(120_000_000, 120_000_000).unwrap();
     assert_eq!(s.engine.document().scene().vector_layer(target), Some(&original));
+}
+
+fn raster_reference_vector_target(platform: Platform) -> (UiSession<Recorder>, OccurrenceHandle) {
+    let mut s = session(platform);
+    s.select_brush(DefaultBrushPreset::GPen as u32).unwrap();
+    let reference = s.engine.document().working.occurrence.unwrap();
+    draw_line(&mut s, 1, 3);
+    for tick in 4..=8 {
+        if !s.engine.has_pending_document_edits() { break; }
+        s.frame(tick * 10_000_000, tick * 10_000_000).unwrap();
+    }
+    assert!(!s.engine.has_pending_document_edits());
+    layer(&mut s, LayerAction::Reference { id: occurrence_token(reference) });
+    layer(&mut s, LayerAction::NewVector);
+    let target = s.engine.document().working.occurrence.unwrap();
+    assert!(s.engine.document().scene().vector_layer(target).is_some());
+    s.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Region { fill: true, source: crate::RegionSource::Reference } }).unwrap();
+    (s, target)
+}
+
+fn vector_trace_reply(s: &mut UiSession<Recorder>, size: u32) {
+    let request = s.renderer_mut().region_requests.last().unwrap().clone();
+    let pixels = Arc::new(layer_core::SelectionPixels::bytes([size, size], [0, 0, size, size], vec![u32::MAX; size.div_ceil(4) as usize * size as usize]).unwrap());
+    s.renderer_mut().region_reply = Some(layer_render::RegionResult { anchors: None, gaps: None, underfill: None, tonal_sample: None,
+        placement: layer_core::Affine::IDENTITY, request_id: request.request_id, pixels });
+    s.frame(2_000_000_000, 2_000_000_000).unwrap();
+}
+
+fn finish_vector_trace(s: &mut UiSession<Recorder>) {
+    for tick in 1..=32 {
+        s.frame(2_000_000_000 + tick * 16_000_000, 2_000_000_000 + tick * 16_000_000).unwrap();
+        if !s.region_tools.busy() { return; }
+    }
+    panic!("The bounded trace fixture did not finish");
+}
+
+#[test]
+fn raster_reference_fill_traces_one_path_on_the_vector_target_with_one_undo() {
+    use layer_core::authored::vector::PaintEntry;
+    for platform in Platform::ALL {
+        let (mut s, target) = raster_reference_vector_target(platform);
+        let layers = s.engine.document().scene().children(None).to_vec();
+        let checkpoint = s.engine.checkpoint();
+        let point = surface_at(&s, [16., 16.]);
+        press(&mut s, 100, &[point, point]);
+        assert_eq!(s.engine.document().working.occurrence, Some(target));
+        assert_eq!(s.engine.document().scene().children(None), layers);
+        vector_trace_reply(&mut s, 32);
+        finish_vector_trace(&mut s);
+        let object = s.engine.document().scene().vector_layer(target).unwrap();
+        assert_eq!(object.path_count(), 1);
+        let path = object.paths().next().unwrap().1;
+        assert!(matches!(path.style.entries[..], [PaintEntry::Fill(_)]));
+        assert!(path.encloses([16., 16.], 0.01));
+        assert_eq!(s.engine.document().working.occurrence, Some(target));
+        assert_eq!(s.engine.document().scene().children(None), layers);
+        assert!(s.state.notice.is_none());
+        invoke(&mut s, CommandId::Undo);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        assert_eq!(s.engine.document().scene().vector_layer(target).unwrap().path_count(), 0);
+    }
+}
+
+#[test]
+fn revision_change_and_undo_discard_pending_vector_traces() {
+    for undo in [false, true] {
+        let (mut s, target) = raster_reference_vector_target(Platform::Gtk);
+        put_paths(&mut s, target, vec![straight(1, &[[100., 100.], [300., 100.]], false)]);
+        let point = surface_at(&s, [16., 16.]);
+        press(&mut s, 100, &[point, point]);
+        vector_trace_reply(&mut s, 2000);
+        assert!(s.region_tools.busy());
+        if undo {
+            invoke(&mut s, CommandId::Undo);
+        } else {
+            let object = layer_core::authored::vector::VectorObject::from_records(vec![layer_core::authored::vector::Record::Path(straight(2, &[[200., 200.], [400., 200.]], false))]);
+            let edit = s.engine.document().vector_object_edit(target, object).unwrap();
+            s.engine.apply_edit(edit).unwrap();
+        }
+        let checkpoint = s.engine.checkpoint();
+        let object = s.engine.document().scene().vector_layer(target).unwrap().clone();
+        finish_vector_trace(&mut s);
+        assert!(!s.region_tools.busy());
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        assert_eq!(s.engine.document().scene().vector_layer(target), Some(&object));
+    }
+}
+
+#[test]
+fn vector_enclosure_skips_grazed_faces_and_paint_unfilled_adds_only_the_remaining_face() {
+    for platform in Platform::ALL {
+        let (mut s, target) = vector_session_on(platform);
+        let paths = [(100., 250.), (300., 450.), (550., 750.)].into_iter().enumerate().map(|(i, (left, right))|
+            straight(i as u64 + 1, &[[left, 100.], [right, 100.], [right, 250.], [left, 250.]], true)).collect();
+        put_paths(&mut s, target, paths);
+        let original = s.engine.document().scene().vector_layer(target).unwrap().clone();
+        let checkpoint = s.engine.checkpoint();
+        invoke(&mut s, CommandId::EncloseFill);
+        invoke(&mut s, CommandId::SelectionEditing);
+        let enclosure = [[80., 80.], [650., 80.], [650., 300.], [80., 300.]].map(|point| surface_at(&s, point));
+        press(&mut s, 100, &enclosure);
+        assert!(s.renderer_mut().region_requests.is_empty());
+        let enclosed = s.engine.document().scene().vector_layer(target).unwrap().clone();
+        assert_eq!(enclosed.path_count(), original.path_count() + 2);
+        let fills: Vec<_> = enclosed.paths().filter(|(_, path)| path.style.strokes().next().is_none()).map(|(_, path)| path).collect();
+        assert_eq!(fills.len(), 2);
+        for point in [[175., 175.], [375., 175.]] { assert!(fills.iter().any(|path| path.encloses(point, 0.01))); }
+        assert!(!fills.iter().any(|path| path.encloses([650., 175.], 0.01)));
+        invoke(&mut s, CommandId::PaintUnfilled);
+        invoke(&mut s, CommandId::SelectionEditing);
+        s.dispatch(UiAction::SetBrushSize { value: 400. }).unwrap();
+        let enclosure = [[80., 80.], [780., 80.], [780., 300.], [80., 300.]].map(|point| surface_at(&s, point));
+        press(&mut s, 200, &enclosure);
+        let update = s.renderer_mut().selection_updates.last().unwrap().clone();
+        assert!(update.finish);
+        let pixels = Arc::new(layer_core::SelectionPixels::bytes([800, 400], [0, 0, 800, 400], vec![u32::MAX; 800 * 400 / 4]).unwrap());
+        s.renderer_mut().selection_reply = Some(layer_render::SelectionPaintResult { request_id: update.id, pixels, changed: true });
+        s.frame(3_000_000_000, 3_000_000_000).unwrap();
+        let painted = s.engine.document().scene().vector_layer(target).unwrap();
+        assert_eq!(painted.path_count(), enclosed.path_count() + 1);
+        assert!(painted.paths().any(|(_, path)| path.style.strokes().next().is_none() && path.encloses([650., 175.], 0.01)));
+        invoke(&mut s, CommandId::Undo);
+        assert_eq!(s.engine.document().scene().vector_layer(target), Some(&enclosed));
+        invoke(&mut s, CommandId::Undo);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        assert_eq!(s.engine.document().scene().vector_layer(target), Some(&original));
+    }
 }
