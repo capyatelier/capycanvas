@@ -362,16 +362,17 @@ mod tests {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Ios, Platform::Mac, Platform::Windows] {
             let session = session(platform);
             let edit = session.application_menu(ApplicationMenu::Edit);
-            assert_eq!(edit.sections.iter().map(Vec::len).sum::<usize>(), 17);
+            assert_eq!(edit.sections.iter().map(Vec::len).sum::<usize>(), 18);
             assert_eq!(edit.sections[0].iter().map(|item| item.action.clone()).collect::<Vec<_>>(),
                 [CommandId::Undo, CommandId::Redo].map(|command| Some(UiAction::Invoke { command })));
             let mut commands = Vec::new();
             check(&session, &edit.sections, &mut commands);
+            assert!(commands.contains(&CommandId::FlatAllAreas));
             for command in [CommandId::ClearLayer, CommandId::RasterizeSource, CommandId::DiscardPaintEdits, CommandId::AssignProfile, CommandId::ConvertColorSpace, CommandId::ChangeBitDepth] {
                 assert!(!commands.contains(&command), "{platform:?}: {command:?} belongs outside Edit");
             }
             check(&session, &session.application_menu(ApplicationMenu::Image).sections, &mut commands);
-            assert_eq!(commands.len(), 45, "{platform:?}: all remaining Edit/Image commands survive exactly once");
+            assert_eq!(commands.len(), 46, "{platform:?}: all remaining Edit/Image commands survive exactly once");
         }
     }
 
