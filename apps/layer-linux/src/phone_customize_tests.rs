@@ -167,10 +167,29 @@ fn native_phone_customize() {
     assert_eq!(view.selected_label, "The phone toolbar holds up to ten tools.");
     assert!(mapped_label(&frame, &view.selected_label).is_some());
     for choice in &view.choices {
-        assert_eq!(view.disabled.contains(&choice.control), choice.control != ToolbarControl::Divider);
+        let enabled = choice.control == ToolbarControl::Divider;
+        assert_eq!(view.disabled.contains(&choice.control), !enabled);
+        let check = named::<gtk::CheckButton>(&frame, &format!("tool-choice-{}", serde_json::to_string(&choice.control).unwrap()));
+        let row = check.ancestor(adw::ActionRow::static_type()).unwrap().downcast::<adw::ActionRow>().unwrap();
+        assert_eq!(row.get_sensitive(), enabled, "native catalog row: {:?}", choice.control);
+        assert_eq!(row.is_sensitive(), enabled);
+        assert_eq!(check.is_sensitive(), enabled, "native checkbox inherits row sensitivity");
+        assert_eq!(check.state_flags().contains(gtk::StateFlags::INSENSITIVE), !enabled);
     }
     assert!(!view.can_confirm);
     capture(&mut d, "customize-capacity");
+    let disabled = view.choices.iter().find(|choice| choice.control != ToolbarControl::Divider).unwrap().control;
+    let check = named::<gtk::CheckButton>(&frame, &format!("tool-choice-{}", serde_json::to_string(&disabled).unwrap()));
+    super::super::histogram::scroll_to(check.upcast_ref());
+    d.click(check.upcast_ref());
+    assert!(!check.is_active(), "native clicking cannot select a tool at capacity");
+    assert_eq!(ui_session(&d.w).tool_picker().unwrap().selected_count, 0);
+    let divider = named::<gtk::CheckButton>(&frame, &format!("tool-choice-{}", serde_json::to_string(&ToolbarControl::Divider).unwrap()));
+    super::super::histogram::scroll_to(divider.upcast_ref());
+    d.click(divider.upcast_ref());
+    assert!(divider.is_active() && divider.is_sensitive(), "Divider remains natively selectable at capacity");
+    assert!(ui_session(&d.w).tool_picker().unwrap().can_confirm);
+    capture(&mut d, "customize-capacity-divider");
     let unchanged = history(&d);
     d.input.key(0xff1b);
     until(|| ui_session(&d.w).tool_picker().is_none() && d.w.visible_dialog().is_none()
