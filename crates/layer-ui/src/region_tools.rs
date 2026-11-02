@@ -229,7 +229,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             PenPhase::Up => {
                 let checkpoint = self.engine.checkpoint();
-                if let Some(point) = self.region_tools.contact.take() { self.request_region_at(point, None, None, None); }
+                if let Some(point)=self.region_tools.contact.take() {match self.tap_vector_fill_seal(point) {
+                    Ok(true)=>(),Ok(false)=>self.request_region_at(point,None,None,None),Err(cause)=>self.notify(cause),
+                }}
                 self.finger.admitted_pen |= event.tool.is_pen() && (self.region_tools.target.is_some() || self.engine.checkpoint() != checkpoint);
                 self.layer_interaction.fill_texture = None;
             }
@@ -371,6 +373,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         Ok(0)
     }
+    fn vector_fill_hit<'a>(&self,object:&'a layer_core::authored::vector::VectorObject,local:[f64;2],lines_from:RegionSource)->Option<(layer_core::authored::vector::Position,&'a layer_core::authored::vector::PathItem)> {
+        use layer_core::authored::vector::PaintEntry;
+        let tolerance=0.25*self.document_per_surface_pixel();
+        object.paths().filter(|(_,path)|(lines_from!=RegionSource::Reference || path.style.strokes().next().is_none()) && path.pickable() && path.encloses(local,tolerance))
+            .map(|(position,path)|(path.area_around(local,tolerance),position,path)).min_by(|a,b|a.0.total_cmp(&b.0)
+                .then_with(||b.2.style.entries.iter().any(|e|matches!(e,PaintEntry::Fill(_))).cmp(&a.2.style.entries.iter().any(|e|matches!(e,PaintEntry::Fill(_))))))
+            .map(|(_,position,path)|(position,path))
+    }
     fn fill_vector_layer(&mut self, layer: OccurrenceHandle, point: Point, source: layer_render::RegionSource, lines_from: RegionSource) -> Result<(), String> {
         use layer_core::authored::vector::{PaintEntry, Record, Style};
         let doc = self.engine.document();
@@ -378,14 +388,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         let object = doc.scene().vector_layer(layer).ok_or("The vector layer was removed")?;
         let [ox, oy] = doc.scene().occurrence_offset64(layer);
         let local = [f64::from(point.x) - ox, f64::from(point.y) - oy];
-        let tolerance = 0.25 * self.document_per_surface_pixel();
         let fill = if self.state.colors.transparent() { None } else {
             self.vector_figure_style(FigurePaint::Fill, layer_core::authored::vector::Cap::Butt, layer_core::authored::vector::Join::Miter)?.entries.first().cloned()
         };
-        let innermost = object.paths().filter(|(_, path)| (lines_from!=RegionSource::Reference || path.style.strokes().next().is_none()) && path.pickable() && path.encloses(local, tolerance))
-            .map(|(position, path)| (path.area_around(local, tolerance), position, path)).min_by(|a, b| a.0.total_cmp(&b.0)
-                .then_with(|| b.2.style.entries.iter().any(|e|matches!(e,PaintEntry::Fill(_))).cmp(&a.2.style.entries.iter().any(|e|matches!(e,PaintEntry::Fill(_))))));
-        let found = innermost.map(|(_, position, path)| {
+        let found = self.vector_fill_hit(object,local,lines_from).map(|(position, path)| {
             let paints=path.style.entries.iter().filter_map(|entry|match entry {PaintEntry::Fill(fill)=>Some(&fill.paint),_=>None}).collect::<Vec<_>>();
             let everywhere=self.region_tools.scope==FillScope::Everywhere && !paints.is_empty();
             let changes=object.paths().filter(|(at,candidate)|*at==position || everywhere && candidate.style.entries.iter()

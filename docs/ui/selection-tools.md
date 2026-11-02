@@ -81,7 +81,8 @@ slop. A second contact cancels; touch-and-hold remains colour picking.
 
 On vector layers with vector line sources, presses show a half-opacity face
 preview without a reveal. The same hold slider and drag-through gesture apply.
-Recolouring existing vector fills and filling from raster lines use taps.
+Taps on an existing fill, inside a plain closed outline, or with raster lines
+apply on lift.
 
 Dashed seals remain visible after Fill. Pressing a seal within 6 logical pixels
 removes it and refills in the same undo step. Presses outside that radius fill

@@ -131,12 +131,7 @@ impl<R:CanvasRenderer> UiSession<R> {
             && self.selection_masks.target().is_none() && self.editing_vector_layer().is_none_or(|layer|!self.vector_line_sources(layer,self.lines_from(self.region_tools.source[1])).0)
     }
     pub(in crate::session) fn fill_pen(&mut self,event:PenEvent)->bool {
-        if event.phase==PenPhase::Down && matches!(self.layer_interaction.tool,LayerCanvasTool::Region {fill:true,..})
-            && self.selection_masks.target().is_none() && let Some(layer)=self.editing_vector_layer() {
-            let point=self.state.camera.input_transform().map(event.surface_position);
-            match self.tap_vector_fill_seal(layer,point) {Ok(true)=>return true,Ok(false)=>(),Err(cause)=>{self.notify(cause);return true;}}
-        }
-        if !self.uses_fill_gesture() {return false;}
+        if !self.uses_fill_gesture() || event.phase!=PenPhase::Down && self.region_tools.contact.is_some() {return false;}
         if event.phase!=PenPhase::Down && self.region_tools.gesture.as_ref().is_some_and(|gesture|gesture.device!=event.device_id){return true;}
         if matches!(event.phase,PenPhase::Move|PenPhase::Up) && self.region_tools.gesture.as_ref().is_some_and(|gesture|gesture.touch.is_some()
             && (event.surface_position.x-gesture.start.x).hypot(event.surface_position.y-gesture.start.y)>self.interaction.touch_policy.slop) {
@@ -148,8 +143,9 @@ impl<R:CanvasRenderer> UiSession<R> {
                 self.region_tools.cancel();self.clear_fill_preview();
                 let point=self.state.camera.input_transform().map(event.surface_position);
                 if let Some(layer)=self.editing_vector_layer() {
-                    if let Err(cause)=self.begin_vector_fill(layer,point,event){self.notify(cause);self.region_tools.cancel();self.clear_fill_preview();}
-                    return true;
+                    return match self.begin_vector_fill(layer,point,event) {
+                        Ok(tap)=>!tap,Err(cause)=>{self.notify(cause);self.region_tools.cancel();self.clear_fill_preview();true},
+                    };
                 }
                 let previous=self.region_tools.completed.take().filter(|completed|completed.checkpoint==self.engine.checkpoint()
                     && completed.owner==self.engine.document().owner
@@ -224,54 +220,55 @@ impl<R:CanvasRenderer> UiSession<R> {
         }
         true
     }
-    fn tap_vector_fill_seal(&mut self,layer:OccurrenceHandle,point:Point)->Result<bool,String> {
-        let point=[f64::from(point.x),f64::from(point.y)];
-        let previous=self.region_tools.vector_completed.take().filter(|completed|completed.checkpoint==self.engine.checkpoint()
-            && completed.owner==self.engine.document().owner && completed.layer==layer);
-        if let Some(mut completed)=previous {
-            let scale=self.logical_viewport.map_or(1.,|logical|self.state.camera.viewport[0] as f32/logical[0]);
-            let limit=6.*f64::from(scale/self.state.camera.zoom);
-            let ids=completed.seals.iter().filter(|(a,b,_)|segment_distance(point,*a,*b)<=limit).map(|(_,_,id)|*id).collect::<Vec<_>>();
-            if !ids.is_empty() {
-                self.region_tools.cancel();self.clear_fill_preview();
-                let excluded=completed.excluded.iter().copied().chain(ids).collect::<Vec<_>>();
-                let (_,lines)=self.vector_line_sources(layer,completed.source);
-                if let Some(face)=layer_core::authored::vector::vector_face(&lines,completed.point,Some(completed.reach),&excluded) {
-                    let doc=self.engine.document();let object=doc.scene().vector_layer(layer).ok_or("The vector layer was removed")?;
-                    if let Some(position)=object.find(completed.path) && let Some(Record::Path(path))=object.record(position) {
-                        let [ox,oy]=doc.scene().occurrence_offset64(layer);
-                        let geometry=face.geometry.transformed(|p|[p[0]-ox,p[1]-oy]).map_err(str::to_string)?;
-                        let changed=object.replace([(position,Some(Record::Path(path.with_geometry(std::sync::Arc::new(geometry)))))]);
-                        let edit=doc.vector_object_edit(layer,changed).map_err(error)?;
-                        self.engine.amend_edit(edit).map_err(error)?;self.layer_interaction.changed=true;
-                        completed.checkpoint=self.engine.checkpoint();completed.excluded=excluded;completed.seals=face.seals;
-                    }
-                }
-                self.region_tools.vector_completed=Some(completed);return Ok(true);
+    fn vector_seal_hits(&self,layer:OccurrenceHandle,point:[f64;2])->Vec<SealId> {
+        let Some(completed)=self.region_tools.vector_completed.as_ref().filter(|completed|completed.checkpoint==self.engine.checkpoint()
+            && completed.owner==self.engine.document().owner && completed.layer==layer) else{return Vec::new();};
+        let scale=self.logical_viewport.map_or(1.,|logical|self.state.camera.viewport[0] as f32/logical[0]);
+        let limit=6.*f64::from(scale/self.state.camera.zoom);
+        completed.seals.iter().filter(|(a,b,_)|segment_distance(point,*a,*b)<=limit).map(|(_,_,id)|*id).collect()
+    }
+    pub(super) fn tap_vector_fill_seal(&mut self,point:Point)->Result<bool,String> {
+        if !matches!(self.layer_interaction.tool,LayerCanvasTool::Region {fill:true,..}) {return Ok(false);}
+        let Some(layer)=self.editing_vector_layer() else{return Ok(false);};
+        let ids=self.vector_seal_hits(layer,[f64::from(point.x),f64::from(point.y)]);if ids.is_empty(){return Ok(false);}
+        let mut completed=self.region_tools.vector_completed.take().unwrap();
+        self.region_tools.cancel();self.clear_fill_preview();
+        let excluded=completed.excluded.iter().copied().chain(ids).collect::<Vec<_>>();
+        let (_,lines)=self.vector_line_sources(layer,completed.source);
+        if let Some(face)=layer_core::authored::vector::vector_face(&lines,completed.point,Some(completed.reach),&excluded) {
+            let doc=self.engine.document();let object=doc.scene().vector_layer(layer).ok_or("The vector layer was removed")?;
+            if let Some(position)=object.find(completed.path) && let Some(Record::Path(path))=object.record(position) {
+                let [ox,oy]=doc.scene().occurrence_offset64(layer);
+                let geometry=face.geometry.transformed(|p|[p[0]-ox,p[1]-oy]).map_err(str::to_string)?;
+                let changed=object.replace([(position,Some(Record::Path(path.with_geometry(std::sync::Arc::new(geometry)))))]);
+                let edit=doc.vector_object_edit(layer,changed).map_err(error)?;
+                self.engine.amend_edit(edit).map_err(error)?;self.layer_interaction.changed=true;
+                completed.checkpoint=self.engine.checkpoint();completed.excluded=excluded;completed.seals=face.seals;
             }
         }
-        Ok(false)
+        self.region_tools.vector_completed=Some(completed);Ok(true)
     }
-    fn begin_vector_fill(&mut self,layer:OccurrenceHandle,point:Point,event:PenEvent)->Result<(),String> {
-        let source=self.lines_from(self.region_tools.source[1]);
+    fn begin_vector_fill(&mut self,layer:OccurrenceHandle,point:Point,event:PenEvent)->Result<bool,String> {
         let point=[f64::from(point.x),f64::from(point.y)];
+        if !self.vector_seal_hits(layer,point).is_empty(){return Ok(true);}
+        self.region_tools.vector_completed=None;
+        let source=self.lines_from(self.region_tools.source[1]);
         let extent=self.engine.document().composition().size.map(f64::from);
-        if !(0. ..extent[0]).contains(&point[0]) || !(0. ..extent[1]).contains(&point[1]) {return Ok(());}
+        if !(0. ..extent[0]).contains(&point[0]) || !(0. ..extent[1]).contains(&point[1]) {return Ok(false);}
         let target=self.engine.document().scene().source_target(layer);
-        if self.region_source(source,None,target,true).is_none(){return Ok(());}
+        if self.region_source(source,None,target,true).is_none(){return Ok(false);}
         let doc=self.engine.document();let [ox,oy]=doc.scene().occurrence_offset64(layer);
         let object=doc.scene().vector_layer(layer).ok_or("The vector layer was removed")?;
-        if object.paths().any(|(_,path)|(source!=RegionSource::Reference || path.style.strokes().next().is_none()) && path.pickable() && path.style.entries.iter().any(|entry|matches!(entry,PaintEntry::Fill(_)))
-            && path.encloses([point[0]-ox,point[1]-oy],0.25*self.document_per_surface_pixel())) {
-            self.request_region_at(Point{x:point[0] as f32,y:point[1] as f32},None,None,None);return Ok(());
-        }
-        if self.state.colors.transparent(){return Ok(());}
+        let hit=self.vector_fill_hit(object,[point[0]-ox,point[1]-oy],source);
+        if hit.is_some_and(|(_,path)|path.style.entries.iter().any(|entry|matches!(entry,PaintEntry::Fill(_)))) {return Ok(true);}
+        if self.state.colors.transparent(){return Ok(false);}
         let original=object.clone();let checkpoint=self.engine.checkpoint();let style=self.vector_fill_style()?;
         let mut preview=style.as_ref().clone();
         for entry in &mut preview.entries {if let PaintEntry::Fill(fill)=entry && let Paint::Color {color,..}=&mut fill.paint {color.rgba[3]*=0.5;}}
         let (_,lines)=self.vector_line_sources(layer,source);
         let reach=self.region_tools.gap_reach.or_else(||(!self.region_tools.refinement.close_gaps).then_some(0));
         let face=layer_core::authored::vector::vector_face(&lines,point,reach,&[]);
+        if hit.is_some_and(|(_,path)|face.as_ref().is_none_or(|face|face.boundary.len()==1 && std::ptr::eq(lines[*face.boundary.first().unwrap()].path,path))) {return Ok(true);}
         let active=layer_render::RegionGapMasks::STOPS.iter().position(|r|Some(*r)==reach.or_else(||face.as_ref().map(|face|face.reach))).unwrap_or(1);
         let mut slots=std::array::from_fn(|_|None);slots[active]=Some(face.clone());
         let vector=VectorFill {layer,source,point,original,checkpoint,style,preview:std::sync::Arc::new(preview),slots,active,excluded:Vec::new(),faces:face.into_iter().collect()};
@@ -280,7 +277,7 @@ impl<R:CanvasRenderer> UiSession<R> {
             released:false,hold:None,waiting:false,tick:0,dragging:false,original_tolerance:self.region_tools.tolerance,original_reach:self.region_tools.gap_reach,
             original_close:self.region_tools.refinement.close_gaps,vector:Some(vector),request:None,ready:None,revision:0,path:vec![point.map(|v|v as f32)],before:None,amendment:None});
         if event.tool!=ToolKind::Finger {self.show_fill_preview()?;}
-        Ok(())
+        Ok(false)
     }
     fn vector_fill_slot(&mut self,slot:usize) {
         let Some(vector)=self.region_tools.gesture.as_ref().and_then(|gesture|gesture.vector.as_ref()).filter(|vector|vector.slots[slot].is_none()) else{return;};
