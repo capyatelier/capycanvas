@@ -521,6 +521,91 @@ fn drawer_selection_colors(d: &mut Driver) {
         .all(|(tile, row)| tile.abs_diff(*row) <= *tolerance)), "selected tile and drawer row differ: {samples:#?}");
 }
 
+fn tool_drawer_sets(d: &mut Driver) {
+    use ToolbarControl::{Command as C, ToolSlot as S};
+    for (preset, name, control) in [
+        (WorkspacePreset::Painter, "sketch-brush", C { command: CommandId::DrawingBrush }),
+        (WorkspacePreset::Painter, "sketch-sculpt", C { command: CommandId::Sculpt }),
+        (WorkspacePreset::Illustrator, "paint-brush", C { command: CommandId::DrawingBrush }),
+        (WorkspacePreset::Illustrator, "paint-sculpt", C { command: CommandId::Sculpt }),
+        (WorkspacePreset::Illustrator, "paint-fill", S { slot: ToolSlotId::Fill }),
+        (WorkspacePreset::Illustrator, "paint-gradient", S { slot: ToolSlotId::Gradient }),
+        (WorkspacePreset::Photographer, "photo-healing", S { slot: ToolSlotId::Healing }),
+        (WorkspacePreset::Photographer, "photo-eraser", C { command: CommandId::Eraser }),
+    ] {
+        d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
+            layout: preset.layout(Platform::Gtk), ..Default::default()
+        }) });
+        new_photo::ready(&d.w);
+        let opener = tool(d, control);
+        click(d, &opener);
+        new_photo::ready(&d.w);
+        if state(&d.w).customization.drawer.is_none() {
+            assert!(d.named(&opener).has_css_class("selected-tool"), "{name}: the first tap selects the tool");
+            click(d, &opener);
+        }
+        inventory_drawer_ready(d);
+        let drawer = state(&d.w).customization.drawer.unwrap();
+        let adaptive = matches!(control, C { command: CommandId::DrawingBrush | CommandId::Sculpt });
+        if adaptive {
+            let sets = if control == (C { command: CommandId::Sculpt }) { Panel::SculptSets } else { Panel::BrushSets };
+            assert_eq!(drawer.sets_column, presentation(d).edge != Edge::Top, "{name}");
+            assert_eq!(drawer.columns, if drawer.sets_column { vec![vec![sets], vec![Panel::Tools]] } else { vec![vec![Panel::Brushes]] }, "{name}");
+        } else { assert!(!drawer.sets_column, "{name}: existing choice drawers keep their arrangement"); }
+        for panel in drawer.panels() {
+            let body = d.named(&format!("drawer-panel-{panel:?}"));
+            let groups = widgets(&body).filter(|widget| widget.has_css_class("tool-group")).count();
+            let rows = widgets(&body).filter(|widget| widget.has_css_class("brush-choice")).count();
+            if matches!(panel, Panel::BrushSets | Panel::SculptSets) {
+                assert!(groups > 0 && rows == 0 && descendants::<gtk::Picture>(&body).is_empty(), "{name}: set columns build groups only");
+            } else if panel == Panel::Tools && drawer.sets_column {
+                assert!(groups == 0 && rows > 0, "{name}: the Tools column builds its list without chips");
+            } else if adaptive || matches!(control, S { slot: ToolSlotId::Fill | ToolSlotId::Gradient }) {
+                assert!(groups > 0, "{name}: the set choices remain visible");
+            }
+            for button in descendants::<gtk::Button>(&body).into_iter().filter(|button| button.is_mapped()) {
+                let bounds = button.compute_bounds(&body).unwrap();
+                assert!(bounds.x() >= -1. && bounds.x() + bounds.width() <= body.width() as f32 + 1., "{name}: a drawer button exceeds its column: {bounds:?}");
+            }
+        }
+        if drawer.sets_column {
+            let sets = d.named(&format!("drawer-panel-{:?}", drawer.columns[0][0]));
+            let tools = d.named("drawer-panel-Tools");
+            let sets = sets.ancestor(gtk::ScrolledWindow::static_type()).and_downcast::<gtk::ScrolledWindow>().unwrap();
+            let tools = tools.ancestor(gtk::ScrolledWindow::static_type()).and_downcast::<gtk::ScrolledWindow>().unwrap();
+            assert_ne!(sets, tools, "{name}: the two columns own separate scrollers");
+            let adjustment = sets.vadjustment();
+            if adjustment.upper() - adjustment.page_size() > 1. {
+                let before = adjustment.value();
+                let tools_before = tools.vadjustment().value();
+                let point = screen_point(sets.upcast_ref(), &d.w.window, [0.5, 0.5]);
+                let direction = if before < adjustment.upper() - adjustment.page_size() { 1 } else { -1 };
+                d.input.perform(serde_json::json!([{"point":point},{"wheel":[0,direction]}]));
+                until(|| (adjustment.value() - before).abs() > 0.5, "the set column scrolls from native wheel input");
+                assert_eq!(tools.vadjustment().value(), tools_before, "{name}: scrolling sets leaves the Tools list in place");
+                adjustment.set_value(before);
+            }
+        }
+        scroll_overflow(d);
+        capture(d, name);
+        if adaptive {
+            let view = drawer.tool_set.as_ref().unwrap();
+            let next = view.groups.iter().find(|item| !item.selected && item.enabled).unwrap();
+            let body = d.named(&format!("drawer-panel-{:?}", drawer.columns[0][0]));
+            let row = mapped_label(&body, &next.label).unwrap();
+            super::histogram::scroll_to(&row);
+            d.click(&row);
+            until(|| state(&d.w).customization.drawer.as_ref().and_then(|drawer| drawer.tool_set.as_ref())
+                .is_some_and(|updated| updated.subtools != view.subtools), "choosing a set replaces the drawer list");
+            inventory_drawer_ready(d);
+            let updated = state(&d.w).customization.drawer.unwrap();
+            assert_eq!((updated.columns, updated.sets_column), (drawer.columns, drawer.sets_column), "{name}: choosing a set keeps the arrangement");
+            capture(d, &format!("{name}-other-set"));
+        }
+        inventory_close(d);
+    }
+}
+
 #[test]
 #[ignore = "private compositor: --native-test=native_phone_drawers --native-storage; phone viewport and theme supplied externally"]
 fn native_phone_drawers() {
@@ -530,7 +615,7 @@ fn native_phone_drawers() {
     for swapped in [false, true] {
         if swapped { menu(&mut d); click(&mut d, "phone-swap"); }
         for (name, control, panel) in [
-            ("brush", ToolbarControl::Command { command: CommandId::DrawingBrush }, Panel::BrushSets),
+            ("brush", ToolbarControl::Command { command: CommandId::DrawingBrush }, if presentation(&d).edge == Edge::Top { Panel::Brushes } else { Panel::BrushSets }),
             ("color", ToolbarControl::Color, Panel::Color),
             ("layers", ToolbarControl::Panel { panel: Panel::Layers }, Panel::Layers),
         ] {
@@ -633,6 +718,7 @@ fn native_phone_drawers() {
             assert_ne!(slider.value(), before, "the real slider changes its brush value");
         }
     }
+    tool_drawer_sets(&mut d);
     assert_eq!(ui_session(&d.w).engine().checkpoint(), checkpoint, "drawers and sliders do not paint");
     d.finish();
 }

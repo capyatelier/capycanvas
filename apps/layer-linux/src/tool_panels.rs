@@ -63,9 +63,13 @@ impl ToolSet {
         }
     }
     pub fn refresh_state(&self, workspace: &Rc<Workspace>, state: &UiState) {
-        self.refresh(workspace, state.tool_panel(self.panel), state.theme);
+        self.refresh(workspace, state.tool_panel(self.panel), state.theme, false);
     }
-    pub fn refresh(&self, workspace: &Rc<Workspace>, view: &ToolSetView, theme: Theme) {
+    pub fn refresh(&self, workspace: &Rc<Workspace>, view: &ToolSetView, theme: Theme, sets_column: bool) {
+        let view = ToolSetView {
+            groups: if self.panel == layer_ui::Panel::Tools && sets_column { Vec::new() } else { view.groups.clone() },
+            subtools: if matches!(self.panel, layer_ui::Panel::BrushSets | layer_ui::Panel::SculptSets) { Vec::new() } else { view.subtools.clone() },
+        };
         let same = |a: &[ToolSetItem], b: &[ToolSetItem]| {
             a.len() == b.len()
                 && a.iter().zip(b).all(|(a, b)| {
@@ -166,7 +170,7 @@ impl ToolSet {
             }
         }
         drop(previous);
-        *self.view.borrow_mut() = view.clone();
+        *self.view.borrow_mut() = view;
     }
 }
 fn show_availability(button: &gtk::Button, item: &ToolSetItem) {

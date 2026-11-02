@@ -83,6 +83,8 @@ pub struct ContentDrawer {
     pub layer_properties: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_set: Option<ToolSetView>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub sets_column: bool,
     pub anchor: DrawerAnchor,
     /// Each column contains vertically stacked, undecorated panel bodies.
     pub columns: Vec<Vec<Panel>>,
@@ -463,7 +465,7 @@ impl ContentDrawer {
             anchor,
             columns: Self::presented_columns(anchor, columns),
             dismissal: DrawerDismissal::OutsideContact,
-            tabs: None, compact: false, tool_set: None,
+            tabs: None, compact: false, tool_set: None, sets_column: false,
         })
     }
     pub(crate) fn for_header(layout: &DockLayout, id: u32) -> Result<Self, String> {
@@ -507,6 +509,7 @@ impl ContentDrawer {
             tabs: Some(DrawerTabs { group, panels: panels.to_vec(), active }),
             compact: false,
             tool_set: None,
+            sets_column: false,
             dismissal: if layout.column_stack(column).auto_hide {
                 DrawerDismissal::OutsideContact
             } else {

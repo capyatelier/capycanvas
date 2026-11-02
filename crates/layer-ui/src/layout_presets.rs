@@ -21,7 +21,7 @@ impl WorkspacePreset {
             ],
             Self::Illustrator => &[
                 T { command: C::Select }, Slot { slot: S::Gradient },
-                T { command: C::DrawingBrush }, Slot { slot: S::Blend }, T { command: C::Eraser }, Slot { slot: S::Fill }, P { panel: Panel::Layers }, Color,
+                T { command: C::DrawingBrush }, T { command: C::Sculpt }, T { command: C::Eraser }, Slot { slot: S::Fill }, P { panel: Panel::Layers }, Color,
             ],
             Self::Photographer => &[
                 T { command: C::Crop }, T { command: C::Select }, Slot { slot: S::Healing },

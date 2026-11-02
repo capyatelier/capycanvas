@@ -97,8 +97,9 @@ bounds without grips; tracks and handles scale from the desktop Brush controls.
   Web reads `env(safe-area-inset-*)`. The canvas still runs edge to edge.
 - **Drawers** from the phone toolbar open along its edge and are only as deep as
   their content needs, up to the space between the bars. Their columns sit side by
-  side when their minimum widths fit and stack otherwise, so Brush's sets and tools
-  stay side by side in portrait while Color stacks. They close on the next stroke
+  side when their minimum widths fit and stack otherwise. Brush and Sculpt show
+  set chips above their tools in portrait and a separate scrolling sets column
+  in landscape. Color stacks in portrait. Drawers close on the next stroke
   as today. Tool drawers with other content omit Tool settings; its fixed tile
   on the Capy bar opens those settings alone. Settings-only drawers keep them.
 - **Every drawer keeps its bridge**, as from Sketch's title bar: the opener tile
@@ -176,11 +177,13 @@ bounds without grips; tracks and handles scale from the desktop Brush controls.
 | Workspace | Phone toolbar |
 | --- | --- |
 | Sketch | Filters (`Panel::Adjustments`), Select, Scale/rotate, Brush, Sculpt, Eraser, Layers, Color: its title bar's tools |
-| Paint | Select, Gradient, Brush, Blend, Eraser, Fill, Layers, Color |
+| Paint | Select, Gradient, Brush, Sculpt, Eraser, Fill, Layers, Color |
 | Photo | Crop, Select, Healing, Brush, Eraser, Filters, Layers, Color |
 
 Brush, Sculpt and Eraser stay separate tiles: painters switch between them
 mid-drawing, and each remembers its own tool.
+Paint's Sculpt drawer offers Blend, Paint mixing, Effects, Liquify and Retouch.
+An authored Blend tile keeps its Blend, Paint mixing and Effects choices.
 
 ## Capy's menu and the Main Menu
 

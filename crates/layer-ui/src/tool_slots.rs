@@ -674,15 +674,18 @@ impl<R: CanvasRenderer> UiSession<R> {
                         return false;
                     }
                     let mut columns = control.drawer_columns().unwrap();
-                    let choices = self.current_tool_set();
-                    if matches!(group, ToolControlGroup::Brush(_)) && choices.groups.len() + choices.subtools.len() <= 1 {
-                        columns.retain(|column| !column.iter().all(|panel| matches!(panel, Panel::Tools | Panel::Brushes)));
+                    if matches!(group, ToolControlGroup::Brush(_)) {
+                        let choices = self.current_tool_set();
+                        if choices.groups.len() + choices.subtools.len() <= 1 {
+                            columns.retain(|column| !column.iter().all(|panel| matches!(panel, Panel::Tools | Panel::Brushes)));
+                        }
                     }
-                    let columns = ContentDrawer::presented_columns(anchor, columns);
+                    let (columns, tool_set, sets_column) = self.phone_tool_drawer(anchor, Some(group), columns, None);
                     let drawer = self.state.customization.drawer.as_mut().unwrap();
-                    if drawer.columns != columns || drawer.tool_set.is_some() {
+                    if drawer.columns != columns || drawer.tool_set != tool_set || drawer.sets_column != sets_column {
                         drawer.columns = columns;
-                        drawer.tool_set = None;
+                        drawer.tool_set = tool_set;
+                        drawer.sets_column = sets_column;
                         return true;
                     }
                     return false;
@@ -691,7 +694,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             },
             _ => return false,
         };
-        let (columns, tool_set) = if let Some((origin, slot)) = slot {
+        let (group, columns, tool_set) = if let Some((origin, slot)) = slot {
             if slot.active(&self.state).is_none() {
                 if !self.interaction.applying_hold && self.interaction.hold_base.is_none() {
                     self.state.customization.drawer = None;
@@ -700,6 +703,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 return false;
             }
             (
+                Some(ToolControlGroup::Slot(slot)),
                 ToolbarControl::ToolSlot { slot }.drawer_columns().unwrap(),
                 Some(self.group_tool_set(ToolControlGroup::Slot(slot), Some(origin))),
             )
@@ -714,17 +718,41 @@ impl<R: CanvasRenderer> UiSession<R> {
             let Some(columns) = control.drawer_columns() else {
                 return false;
             };
-            (columns, None)
+            (control.tool_group(), columns, None)
         };
-        let columns = ContentDrawer::presented_columns(anchor, columns);
+        let (columns, tool_set, sets_column) = self.phone_tool_drawer(anchor, group, columns, tool_set);
         let drawer = self.state.customization.drawer.as_mut().unwrap();
-        if drawer.columns != columns || drawer.tool_set != tool_set {
+        if drawer.columns != columns || drawer.tool_set != tool_set || drawer.sets_column != sets_column {
             drawer.columns = columns;
             drawer.tool_set = tool_set;
+            drawer.sets_column = sets_column;
             true
         } else {
             false
         }
+    }
+    fn phone_tool_drawer(&self, anchor: DrawerAnchor, group: Option<ToolControlGroup>, columns: Vec<Vec<Panel>>,
+        tool_set: Option<ToolSetView>) -> (Vec<Vec<Panel>>, Option<ToolSetView>, bool) {
+        let columns = ContentDrawer::presented_columns(anchor, columns);
+        let Some(phone) = self.phone_layout().filter(|_| matches!(anchor, DrawerAnchor::Phone { .. })) else {
+            return (columns, tool_set, false);
+        };
+        let view = match group {
+            Some(group @ (ToolControlGroup::Drawing | ToolControlGroup::Sculpt)) => Some(ToolSetView {
+                groups: self.group_choices(group, None).into_iter().map(|(_, item)| item).collect(),
+                subtools: self.current_tool_set().subtools,
+            }),
+            Some(ToolControlGroup::Slot(_)) => None,
+            _ => return (columns, tool_set, false),
+        };
+        if view.as_ref().or(tool_set.as_ref()).is_none_or(|view| view.groups.len() < 2 || view.subtools.is_empty()) {
+            return (columns, tool_set, false);
+        }
+        let sets_column = phone.edge != Edge::Top;
+        let columns = if sets_column {
+            vec![vec![if group == Some(ToolControlGroup::Sculpt) { Panel::SculptSets } else { Panel::BrushSets }], vec![Panel::Tools]]
+        } else { vec![vec![Panel::Brushes]] };
+        (columns, view.or(tool_set), sets_column)
     }
     pub(crate) fn slot_drawer_matches(&self) -> bool {
         self.state.customization.drawer.as_ref().is_some_and(|d| {
@@ -751,6 +779,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             anchor,
             columns,
             tool_set: None,
+            sets_column: false,
             dismissal: DrawerDismissal::OutsideContact,
             tabs: None,
             compact: false,

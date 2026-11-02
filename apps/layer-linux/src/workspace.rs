@@ -3044,7 +3044,7 @@ impl Workspace {
             self.navigator.refresh(&state);
         }
         if regions & (regions::BRUSH | regions::SETTINGS | regions::DOCUMENT) != 0 {
-            self.tool_set.refresh(self, &state.tool_set, state.theme);
+            self.tool_set.refresh(self, &state.tool_set, state.theme, false);
             self.brush_sets.refresh_state(self, &state);
             self.sculpt_sets.refresh_state(self, &state);
             self.subtools.refresh_state(self, &state);

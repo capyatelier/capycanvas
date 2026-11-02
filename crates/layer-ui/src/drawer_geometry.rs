@@ -13,7 +13,7 @@ struct Geometry {
 impl Geometry {
     fn drawer(self)->ContentDrawer {
         ContentDrawer {anchor:self.anchor,columns:self.columns,tabs:self.tabs,compact:self.compact,
-            layer_properties:self.layer_properties,tool_set:None,dismissal:DrawerDismissal::OutsideContact}
+            layer_properties:self.layer_properties,tool_set:None,sets_column:false,dismissal:DrawerDismissal::OutsideContact}
     }
 }
 
@@ -165,7 +165,7 @@ fn supplied_drawer_geometry_rejects_invalid_measurements() {
 #[test]
 fn layer_drawer_width_is_stable_across_scaled_viewports() {
     let drawer=ContentDrawer {anchor:DrawerAnchor::Header {id:1},columns:vec![vec![Panel::Layers]],
-        tabs:None,compact:false,layer_properties:None,tool_set:None,dismissal:DrawerDismissal::OutsideContact};
+        tabs:None,compact:false,layer_properties:None,tool_set:None,sets_column:false,dismissal:DrawerDismissal::OutsideContact};
     assert_eq!(drawer.column_widths(1920.),[280.]);
     for scale in [1.,1.25,1.5,2.] {assert_eq!(drawer.column_widths(1920./scale),[280.]);}
 }

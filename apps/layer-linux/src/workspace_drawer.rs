@@ -303,7 +303,7 @@ impl Body {
             },
         }
     }
-    fn refresh(&self, w: &Rc<Workspace>, state: &UiState, regions: u32, tool_set: Option<&ToolSetView>) -> bool {
+    fn refresh(&self, w: &Rc<Workspace>, state: &UiState, regions: u32, tool_set: Option<&ToolSetView>, sets_column: bool) -> bool {
         let inputs = match self {
             Self::Toolbar(_) => regions::LAYOUT | regions::BRUSH | regions::COMMANDS,
             Self::Tools(_) => regions::BRUSH | regions::SETTINGS | regions::DOCUMENT | regions::COMMANDS,
@@ -326,7 +326,7 @@ impl Body {
         }
         match self {
             Self::Toolbar(v) => v.refresh(w, state),
-            Self::Tools(v) if tool_set.is_some() => v.refresh(w, tool_set.unwrap(), state.theme),
+            Self::Tools(v) if tool_set.is_some() => v.refresh(w, tool_set.unwrap(), state.theme, sets_column),
             Self::Tools(v) => v.refresh_state(w, state),
             Self::Settings(v) => v.refresh(w, state),
             Self::Color(v) => v.refresh(&state.preview_colors(), w.paint_view_color(), w.picker_headroom()),
@@ -1150,7 +1150,7 @@ impl Drawer {
                 if let Body::LayerInspector(inspector) = body {
                     rows_changed |= !rebuild && inspector.rows.get() != state.layer_tools.presented_rows(&state.layers);
                 }
-                refreshed |= body.refresh(w, state, if rebuild || changed { regions::ALL } else { regions }, next.tool_set.as_ref());
+                refreshed |= body.refresh(w, state, if rebuild || changed { regions::ALL } else { regions }, next.tool_set.as_ref(), next.sets_column);
             }
         }
         if !changed && !refreshed && regions & regions::LAYOUT == 0 {

@@ -268,6 +268,118 @@ fn phone_brush_sets_and_tools_share_a_row_without_settings() {
 }
 
 #[test]
+fn phone_tool_drawers_adapt_sets_and_keep_their_origin_when_a_set_changes() {
+    let mut portrait_views = [None, None];
+    for viewport in [[412, 891], [891, 412]] {
+        for control in [ToolbarControl::Command { command: CommandId::DrawingBrush },
+            ToolbarControl::Command { command: CommandId::Sculpt }, ToolbarControl::ToolSlot { slot: ToolSlotId::Blend }] {
+            let landscape = viewport[0] > viewport[1];
+            if matches!(control, ToolbarControl::ToolSlot { .. }) && !landscape { continue; }
+            let mut s = phone_session(viewport);
+            if matches!(control, ToolbarControl::ToolSlot { .. }) {
+                let first = s.state.workspace.layout.phone.as_ref().unwrap()[0].id;
+                s.state.workspace.layout.remove_phone_tool(first).unwrap();
+                s.state.workspace.layout.insert_phone_tools(None, &[control]).unwrap();
+            }
+            let tile = s.state.workspace.layout.phone.as_ref().unwrap().iter().find(|tile| tile.control == control).unwrap().id;
+            let anchor = DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Tool(tile) };
+            match control {
+                ToolbarControl::Command { command } => { invoke(&mut s, command); },
+                ToolbarControl::ToolSlot { slot } => { s.dispatch(slot_choice(&s, anchor, slot.variants()[0])).unwrap(); },
+                _ => unreachable!(),
+            }
+            s.dispatch(UiAction::Phone { action: PhoneAction::Tool { tile } }).unwrap();
+            let drawer = s.state.customization.drawer.as_ref().unwrap();
+            let sets = if control == (ToolbarControl::Command { command: CommandId::Sculpt }) { Panel::SculptSets } else { Panel::BrushSets };
+            let columns = if landscape { vec![vec![sets], vec![Panel::Tools]] } else { vec![vec![Panel::Brushes]] };
+            assert_eq!(drawer.anchor, anchor);
+            assert_eq!(drawer.columns, columns, "{viewport:?}/{control:?}");
+            assert_eq!(drawer.sets_column, landscape);
+            assert_eq!(serde_json::to_value(drawer).unwrap().get("sets_column").and_then(|value| value.as_bool()), landscape.then_some(true));
+            let view = drawer.tool_set.as_ref().unwrap().clone();
+            assert!(!view.subtools.is_empty());
+            if let ToolbarControl::Command { command } = control {
+                let portrait = &mut portrait_views[usize::from(command == CommandId::Sculpt)];
+                if landscape { assert_eq!(portrait.as_ref(), Some(&view)); } else { *portrait = Some(view.clone()); }
+            }
+            let labels = view.groups.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>();
+            match control {
+                ToolbarControl::Command { command: CommandId::Sculpt } => assert_eq!(labels, ["Blend", "Paint mixing", "Effects", "Liquify", "Retouch"]),
+                ToolbarControl::ToolSlot { .. } => assert_eq!(labels, ["Blend", "Paint mixing", "Effects"]),
+                _ => assert_eq!(view.groups, s.state.tool_panel(Panel::BrushSets).groups),
+            }
+            let action = view.groups.iter().find(|item| !item.selected).unwrap().action.clone();
+            s.dispatch(action.clone()).unwrap();
+            let drawer = s.state.customization.drawer.as_ref().unwrap();
+            assert_eq!(drawer.anchor, anchor);
+            assert_eq!(drawer.columns, columns);
+            assert_eq!(drawer.sets_column, landscape);
+            let updated = drawer.tool_set.as_ref().unwrap();
+            assert!(updated.groups.iter().any(|item| item.selected && item.action == action));
+            assert_ne!(updated.subtools.iter().map(|item| &item.action).collect::<Vec<_>>(),
+                view.subtools.iter().map(|item| &item.action).collect::<Vec<_>>());
+            assert_eq!(updated.groups.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>(), labels);
+        }
+    }
+}
+
+#[test]
+fn phone_paint_defaults_offer_sculpt_and_preserve_an_authored_blend_tile() {
+    let sculpt = ToolbarControl::Command { command: CommandId::Sculpt };
+    let blend = ToolbarControl::ToolSlot { slot: ToolSlotId::Blend };
+    let starting = WorkspacePreset::Illustrator.layout(Platform::Gtk);
+    let controls = WorkspacePreset::Illustrator.phone_controls();
+    assert!(controls.contains(&sculpt));
+    assert!(!controls.contains(&blend));
+    assert!(WorkspacePreset::Photographer.phone_controls().contains(&ToolbarControl::ToolSlot { slot: ToolSlotId::Healing }));
+    assert!(starting.panel(Panel::Toolbar).unwrap().tiles().iter().any(|tile| tile.control == blend));
+    let mut saved = starting.clone();
+    saved.phone.as_mut().unwrap().iter_mut().find(|tile| tile.control == sculpt).unwrap().control = blend;
+    let mut restored: DockLayout = serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+    restored.resolve_phone_defaults(WorkspacePreset::Illustrator).unwrap();
+    assert_eq!(restored, saved);
+    let reset = restored.starting_layout_candidate(&starting, true).unwrap();
+    assert_eq!(reset.phone.as_ref().unwrap().iter().map(|tile| tile.control).collect::<Vec<_>>(), controls);
+    assert_eq!(reset.panels, saved.panels);
+}
+
+#[test]
+fn phone_choice_only_and_leaf_drawers_keep_their_existing_presentations() {
+    for viewport in [[412, 891], [891, 412]] {
+        for control in [ToolbarControl::ToolSlot { slot: ToolSlotId::Fill },
+            ToolbarControl::ToolSlot { slot: ToolSlotId::Gradient }, ToolbarControl::Command { command: CommandId::Select },
+            ToolbarControl::ToolSlot { slot: ToolSlotId::Healing }] {
+            let mut s = phone_session(viewport);
+            s.state.workspace.layout.phone = Some(Vec::new());
+            s.state.workspace.layout.insert_phone_tools(None, &[control]).unwrap();
+            let tile = s.state.workspace.layout.phone.as_ref().unwrap()[0].id;
+            let anchor = DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Tool(tile) };
+            match control {
+                ToolbarControl::Command { command } => { invoke(&mut s, command); },
+                ToolbarControl::ToolSlot { slot } => { s.dispatch(slot_choice(&s, anchor, slot.variants()[0])).unwrap(); },
+                _ => unreachable!(),
+            }
+            s.dispatch(UiAction::Phone { action: PhoneAction::Tool { tile } }).unwrap();
+            let drawer = s.state.customization.drawer.as_ref().unwrap();
+            assert_eq!(drawer.anchor, anchor);
+            assert_eq!(drawer.columns, [vec![if matches!(control, ToolbarControl::Command { .. } | ToolbarControl::ToolSlot { slot: ToolSlotId::Fill }) { Panel::Tools } else { Panel::Brushes }]]);
+            assert!(!drawer.sets_column);
+            assert!(serde_json::to_value(drawer).unwrap().get("sets_column").is_none());
+            if let ToolbarControl::ToolSlot { slot } = control {
+                let view = drawer.tool_set.as_ref().unwrap();
+                let (choices, empty) = if slot == ToolSlotId::Healing { (&view.subtools, &view.groups) } else { (&view.groups, &view.subtools) };
+                assert!(empty.is_empty());
+                assert_eq!(choices.iter().map(|item| item.action.clone()).collect::<Vec<_>>(),
+                    slot.variants().iter().map(|&variant| UiAction::ChooseToolVariant { anchor, variant }).collect::<Vec<_>>());
+            } else {
+                assert!(drawer.tool_set.is_none());
+                assert!(!s.state.tool_panel(Panel::Tools).subtools.is_empty());
+            }
+        }
+    }
+}
+
+#[test]
 fn phone_layers_use_full_edge_and_retain_scroll_content() {
     for viewport in [[891, 412], [568, 320], [320, 568]] {
         let s = phone_session(viewport);
