@@ -12,7 +12,9 @@ function Storage {(Model).windows_workspace}
 function Manager {$w=(Model).windows_workspace;if($w -and ($null -ne $w.page -or $null -ne $w.prompt)){$w}}
 function Layout {(Model).state.workspace|ConvertTo-Json -Depth 80 -Compress}
 function Choose([string]$Name){
-    (Control $Name -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    $button=@{item=$null}
+    Wait-Until {$button.item=Control $Name -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button);$button.item.Current.IsEnabled} "Manager action remained disabled: $Name"
+    $button.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 }
 function Settled {
     Wait-Until {$v=Manager;$s=Storage;$null -ne $v -and !$v.loading -and !$v.busy -and !$s.switcher_busy} 'Manager did not settle'
