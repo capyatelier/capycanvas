@@ -1947,6 +1947,7 @@
     "line",
     "outline"
   ],
+  "fill_areas": "transparent",
   "fill_scope": "connected",
   "gradient": {
     "definition": null,
