@@ -54,6 +54,30 @@ fn native_preferences_inline_controls_fit() {
 }
 
 #[test]
+#[ignore = "private compositor: --native-test=native_new_drawing_dimension_controls_fit --native-storage; viewport/theme external"]
+fn native_new_drawing_dimension_controls_fit() {
+    let mut d = super::phone_motion::setup("art.capycanvas.NewDrawingDimensionFit");
+    d.w.dispatch(UiAction::Invoke { command: CommandId::NewDocument });
+    let (dialog, frame) = page_frame(&d);
+    super::phone::capture(&mut d, "new-drawing-dimensions-fit");
+    for name in ["new-drawing-name", "new-drawing-width", "new-drawing-link", "new-drawing-height", "new-drawing-unit", "new-drawing-orientation",
+        "new-drawing-resolution", "new-drawing-size", "new-drawing-space", "new-drawing-depth", "new-drawing-blending", "new-drawing-texture", "new-drawing-paper-color"] {
+        let control = find_named(&frame, name).unwrap();
+        let bounds = control.compute_bounds(&frame).unwrap();
+        assert!(bounds.x() >= 0. && bounds.x() + bounds.width() <= frame.width() as f32 + 1., "New drawing control fits: {name} {bounds:?}");
+    }
+    let unit = find_named(&frame, "new-drawing-unit").unwrap().downcast::<gtk::DropDown>().unwrap();
+    let value = unit.selected_item().and_downcast::<gtk::StringObject>().unwrap().string();
+    let label = mapped_label(unit.upcast_ref(), &value).unwrap().downcast::<gtk::Label>().unwrap();
+    assert!(!label.layout().is_ellipsized(), "the dimension unit stays readable");
+    assert!(!find_named(&frame, "new-drawing-size").unwrap().downcast::<gtk::Label>().unwrap().layout().is_ellipsized(), "the pixel size stays readable");
+    super::histogram::scroll_to(&find_named(&frame, "new-drawing-paper-color").unwrap());
+    super::phone::capture(&mut d, "new-drawing-dimensions-fit-bottom");
+    close(&d, &dialog);
+    d.finish();
+}
+
+#[test]
 #[ignore = "private compositor: --native-test=native_export_narrow_bounds --native-storage; viewport/theme external"]
 fn native_export_narrow_bounds() {
     let mut d = super::phone_motion::setup("art.capycanvas.ExportNarrowBounds");

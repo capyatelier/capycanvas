@@ -370,6 +370,9 @@ impl NewDrawing {
         link.set_widget_name("new-drawing-link");
         let unit = crate::panel_controls::dropdown(&[]);
         unit.set_widget_name("new-drawing-unit");
+        unit.set_factory(Some(&crate::panel_controls::choice_factory(false)));
+        unit.set_hexpand(true);
+        unit.set_halign(gtk::Align::Start);
         let orientation = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         orientation.set_widget_name("new-drawing-orientation");
         orientation.add_css_class("choice-well");
@@ -386,10 +389,10 @@ impl NewDrawing {
         linked.append(&width_slot);
         linked.append(&link);
         linked.append(&height_slot);
-        let dimensions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        for widget in [linked.upcast_ref::<gtk::Widget>(), unit.upcast_ref(), gap().upcast_ref(), orientation.upcast_ref()] {
-            dimensions.append(widget);
-        }
+        let dimensions = adw::WrapBox::builder().child_spacing(6).line_spacing(6).build();
+        dimensions.append(&linked);
+        dimensions.append(&unit);
+        dimensions.append(&orientation);
 
         let resolution_label = row_label();
         resolution_label.set_margin_end(4);
@@ -420,11 +423,13 @@ impl NewDrawing {
         }));
         let size = dim("new-drawing-small");
         size.set_hexpand(true);
-        size.set_margin_start(10);
         size.set_widget_name("new-drawing-size");
-        let resolution_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        resolution_row.append(&resolution_label);
-        resolution_row.append(&resolution_field);
+        let resolution_setting = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        resolution_setting.append(&resolution_label);
+        resolution_setting.append(&resolution_field);
+        let resolution_row = adw::WrapBox::builder().child_spacing(16).line_spacing(6)
+            .wrap_policy(adw::WrapPolicy::Natural).build();
+        resolution_row.append(&resolution_setting);
         resolution_row.append(&size);
         let size_rows = gtk::Box::new(gtk::Orientation::Vertical, 10);
         size_rows.append(&dimensions);

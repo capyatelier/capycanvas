@@ -82,7 +82,7 @@ pub(crate) fn two_lines(label: &gtk::Label) {
     label.set_ellipsize(gtk::pango::EllipsizeMode::End);
 }
 
-fn choice_factory(shrink: bool) -> gtk::SignalListItemFactory {
+pub(crate) fn choice_factory(shrink: bool) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
     factory.connect_setup(move |_, object| {
         let item = object.downcast_ref::<gtk::ListItem>().unwrap();
