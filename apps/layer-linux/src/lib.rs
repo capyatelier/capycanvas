@@ -105,6 +105,16 @@ fn stylesheet_provider() -> gtk::CssProvider {
     css
 }
 
+pub fn check_saved_data_cli() -> Option<gtk::glib::ExitCode> {
+    if !std::env::args_os().any(|argument| argument == "--check-saved-data") { return None; }
+    let Some(roots) = storage::roots() else { return Some(gtk::glib::ExitCode::FAILURE); };
+    let report = layer_workspace::check_saved_data(roots);
+    match serde_json::to_string(&report) {
+        Ok(json) => { println!("{json}"); Some(gtk::glib::ExitCode::SUCCESS) },
+        Err(error) => { eprintln!("{error}"); Some(gtk::glib::ExitCode::FAILURE) },
+    }
+}
+
 pub fn run() -> gtk::glib::ExitCode {
     glib::set_application_name(launch_localization().language().app_name());
     let (app, active) = application(storage::APP_ID);

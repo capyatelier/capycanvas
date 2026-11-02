@@ -94,6 +94,11 @@ without tablet-pad input or with a distribution GTK containing the crash fix;
 the [runtime guide](../../tools/build/gtk-runtime/README.md#using-system-gtk)
 explains the upstream bug.
 
+`cargo run --locked -p layer-linux -- --check-saved-data` prints a JSON saved-data
+report and exits before GTK or the GPU initializes. It honors `CAPY_STORAGE_DIR`;
+use a private folder for tests. The [compatibility runner](testing.md#saved-data-compatibility)
+checks copies instead.
+
 External photo import decodes in `capy-photo-reader`, a confined helper that
 requires seccomp and `/proc`; without confinement the import is refused. The
 package ships the helper beside the application, and `run.sh` builds it.

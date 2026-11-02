@@ -15,7 +15,7 @@ pub(crate) mod ownership;
 pub trait Clock: Send + Sync {
     fn now_ms(&self) -> u64;
 }
-struct SystemClock;
+pub(crate) struct SystemClock;
 impl Clock for SystemClock {
     fn now_ms(&self) -> u64 {
         SystemTime::now()

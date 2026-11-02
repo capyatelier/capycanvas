@@ -2,6 +2,11 @@
 //! on their editor owner and render `view`; storage futures never borrow a UI
 //! session and preview replies are fenced by a selection/lifetime generation.
 use crate::*;
+#[cfg(feature = "native")]
+#[path = "saved_data.rs"]
+mod saved_data;
+#[cfg(feature = "native")]
+pub use saved_data::*;
 use layer_render::CanvasRenderer;
 use layer_ui::{
     CustomizationAction, DockLayout, HostRequestKind, Panel, PanelConfig, Platform,

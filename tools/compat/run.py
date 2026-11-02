@@ -2,6 +2,8 @@
 import argparse
 from contextlib import contextmanager
 import getpass
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
@@ -9,11 +11,47 @@ import re
 import shutil
 import subprocess
 import sys
+from threading import Thread
 
 
 ROOT = Path(__file__).resolve().parents[2]
 CRATES = ("layer-workspace", "layer-core", "layer-ui", "layer-host")
-MODES = ("rust", "upgrade", "downgrade")
+MODES = ("rust", "upgrade", "downgrade", "web", "app-data")
+
+
+class Handler(SimpleHTTPRequestHandler):
+    def log_message(self, *_):
+        pass
+
+
+def saved_data_result(log, strict):
+    report = json.loads(log.read_text().strip().splitlines()[-1])
+    intact = (report["startup"] == "stored" and not report["notices"] and not report["editing_dropped"]
+              and all(store["loaded"] for store in report["stores"].values())
+              and all(session["loaded"] for session in report["sessions"]))
+    return ("saved data was reset or could not be loaded" if strict and not intact else "", {"report": report})
+
+
+def assemble_release(root, release, destination):
+    version = release.removeprefix("v")
+    fixtures = {crate: root / "crates" / crate / "tests/compat" / version for crate in CRATES}
+    for folder in ["config", "data/workspaces", "data/color-profiles", "state/sessions"]:
+        (destination / folder).mkdir(parents=True)
+    for source, target in [("settings.json", "config/settings.json"), ("export-presets", "config/export-presets"),
+                           ("workspaces.sqlite3", "data/workspaces/workspaces.sqlite3")]:
+        shutil.copy2(fixtures["layer-workspace"] / source, destination / target)
+    shutil.copytree(fixtures["layer-host"] / "papers", destination / "data/papers")
+    ui = fixtures["layer-ui"]
+    for path in ui.glob("*.icc"):
+        shutil.copy2(path, destination / "data/color-profiles" / path.name)
+    for identity in json.loads((ui / "hidden-profiles.json").read_text()):
+        (destination / "data/color-profiles" / f"{identity}.hidden").touch()
+    for manifest in ui.glob("session*.json"):
+        shutil.copy2(manifest, destination / "state/sessions" / manifest.name)
+        for drawing in json.loads(manifest.read_text())["drawings"]:
+            target = destination / "state/sessions" / drawing["key"]
+            if not target.exists():
+                shutil.copytree(ui / drawing["key"], target)
 
 
 def cargo(crate, test, ignored=False):
@@ -77,9 +115,10 @@ class Runner:
             raise RuntimeError(result.stderr)
         return result.returncode == 0
 
-    def check(self, name, command, tree, extra=None, output=None):
+    def check(self, name, command, tree, extra=None, output=None, inspect=None):
         log = self.logs / f"{len(self.checks) + 1:03d}.log"
         env = dict(self.env, **(extra or {}))
+        details = {}
         try:
             with log.open("w") as stream:
                 result = subprocess.run(command, cwd=tree, env=env, stdout=stream,
@@ -87,10 +126,12 @@ class Runner:
             reason = f"exit {result.returncode}" if result.returncode else ""
             if not reason and output is not None and not any(output.iterdir()):
                 reason = "generator wrote no inputs"
-        except OSError as error:
+            if not reason and inspect is not None:
+                reason, details = inspect(log)
+        except (OSError, ValueError, KeyError, IndexError) as error:
             reason = str(error)
         self.record("FAIL" if reason else "PASS", name, reason,
-                    command=command, log=str(log.relative_to(self.work)))
+                    command=command, log=str(log.relative_to(self.work)), **details)
         return not reason
 
     @contextmanager
@@ -162,6 +203,47 @@ class Runner:
             with self.release_tree(release) as tree:
                 self.load(tree, output, f"downgrade.{release}")
 
+    def web(self):
+        browser = self.env.get("CHROME") or next((path for name in ("google-chrome", "chromium", "chromium-browser")
+                                                if (path := shutil.which(name))), None)
+        if browser is None:
+            self.record("FAIL", "web.browser", "Chrome or Chromium was not found")
+            return
+        output = self.output_root("web")
+        if not self.check("web.build", ["bash", "apps/layer-web/build.sh", str(output / "pkg"), "dev"], self.root):
+            return
+        shutil.copy2(self.root / "tools/compat/web/index.html", output / "index.html")
+        shutil.copy2(self.root / "apps/layer-web/workspace-store.js", output / "workspace-store.js")
+        contract = output / "contract.json"
+        if not self.check("web.contract-fixture", cargo("layer-workspace", "browser_transactions_match_sqlite_contract"),
+                          self.root, dict(CAPY_STORE_CONTRACT_FIXTURE=str(contract))):
+            return
+        server = ThreadingHTTPServer(("127.0.0.1", 0), partial(Handler, directory=str(output)))
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            self.check("web.indexeddb", ["node", "tools/compat/web/check.mjs", f"http://127.0.0.1:{server.server_port}/"],
+                       self.root, dict(CAPY_STORE_CONTRACT_FIXTURE=str(contract), CHROME=browser))
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+
+    def app_data(self):
+        if not self.check("app-data.build", ["cargo", "build", "--locked", "-p", "layer-workspace", "--features", "native",
+                          "--example", "check-saved-data"], self.root):
+            return
+        output = self.output_root("app-data")
+        executable = Path(self.env["CARGO_TARGET_DIR"]) / "debug/examples" / ("check-saved-data.exe" if os.name == "nt" else "check-saved-data")
+        for release in self.releases:
+            directory = output / release
+            assemble_release(self.root, release, directory)
+            self.check(f"app-data.{release}", [str(executable), str(directory)], self.root,
+                       inspect=lambda log: saved_data_result(log, True))
+        for index, directory in enumerate(self.args.app_data):
+            self.check(f"app-data.user-{index}", [str(executable), str(directory.resolve())], self.root,
+                       inspect=lambda log: saved_data_result(log, False))
+
     def finish(self):
         if not self.args.keep:
             for path in reversed(self.owned):
@@ -182,6 +264,7 @@ def main(argv=None):
                else Path("/mnt/localssd") / f"capy-compat-{os.environ.get('USER', getpass.getuser())}")
     parser.add_argument("--work", type=Path, default=default)
     parser.add_argument("--keep", action="store_true", help="Retain generated inputs and build scratch too")
+    parser.add_argument("--app-data", type=Path, action="append", default=[], help="Additional data folders to report on copies")
     args = parser.parse_args(argv)
     try:
         runner = Runner(args)
@@ -191,7 +274,7 @@ def main(argv=None):
     try:
         runner.select_releases()
         for mode in MODES if args.mode == "all" else (args.mode,):
-            getattr(runner, mode)()
+            getattr(runner, mode.replace("-", "_"))()
     except (OSError, RuntimeError, subprocess.CalledProcessError, KeyboardInterrupt) as error:
         runner.record("FAIL", "runner", str(error))
     return runner.finish()

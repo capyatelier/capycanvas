@@ -102,6 +102,35 @@ class RunnerTest(unittest.TestCase):
         self.assertTrue(Path(runner.env["CAPY_STORAGE_DIR"]).is_relative_to(runner.work))
         runner.finish()
 
+    def test_release_reports_reject_resets_but_user_reports_keep_the_outcome(self):
+        report = dict(startup="stored", notices=[], editing_dropped=False,
+                      stores={"workspaces": dict(loaded=True)}, sessions=[dict(loaded=True)])
+        log = self.base / "native.json"
+        for field, value in [("startup", "set aside"), ("startup", "in memory"), ("editing_dropped", True),
+                             ("sessions", [dict(loaded=False)]), ("stores", {"workspaces": dict(loaded=False)})]:
+            with self.subTest(field=field, value=value):
+                damaged = dict(report, **{field:value})
+                log.write_text(json.dumps(damaged))
+                self.assertTrue(run.saved_data_result(log, True)[0])
+                reason, details = run.saved_data_result(log, False)
+                self.assertEqual(reason, "")
+                self.assertEqual(details["report"], damaged)
+        log.write_text(json.dumps(report))
+        self.assertEqual(run.saved_data_result(log, True)[0], "")
+
+    def test_release_assembly_has_native_paths_and_preserves_source_bytes(self):
+        destination = self.base / "assembled"
+        source = run.ROOT / "crates/layer-workspace/tests/compat/1.0.15/workspaces.sqlite3"
+        before = source.read_bytes()
+        run.assemble_release(run.ROOT, "v1.0.15", destination)
+        self.assertEqual((destination / "data/workspaces/workspaces.sqlite3").read_bytes(), before)
+        self.assertEqual(source.read_bytes(), before)
+        for name in ["config/settings.json", "config/export-presets", "data/papers/index.json",
+                     "state/sessions/session.json", "state/sessions/drawing-a/head.json",
+                     "state/sessions/session-icc.json", "state/sessions/drawing-icc/head.json"]:
+            self.assertTrue((destination / name).is_file(), name)
+        self.assertTrue(list((destination / "data/color-profiles").glob("*.icc")))
+
 
 if __name__ == "__main__":
     unittest.main()

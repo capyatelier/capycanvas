@@ -6,12 +6,18 @@ edition.workspace = true
 license.workspace = true
 description = "Shared workspace records, management policy and asynchronous persistence"
 
+[[example]]
+name = "check-saved-data"
+required-features = ["native"]
+
 [features]
-native = ["dep:rusqlite", "dep:async-channel", "dep:libc"]
+native = ["dep:rusqlite", "dep:async-channel", "dep:libc", "dep:layer-host"]
 
 [dependencies]
 layer-ui = { path = "../layer-ui" }
+layer-core = { path = "../layer-core" }
 layer-render = { path = "../layer-render" }
+layer-host = { path = "../layer-host", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "=0.11.0"
@@ -29,4 +35,3 @@ libc = { version = "0.2", optional = true }
 
 [dev-dependencies]
 pollster = "0.4"
-layer-host = { path = "../layer-host" }

@@ -1591,6 +1591,7 @@ name = "layer-workspace"
 version = "1.0.15"
 dependencies = [
  "async-channel",
+ "layer-core",
  "layer-host",
  "layer-render",
  "layer-ui",
