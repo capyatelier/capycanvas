@@ -10,10 +10,6 @@ $run=Join-Path $repo ('artifacts/windows/toolbar-library/'+[Guid]::NewGuid().ToS
 function Manager {$w=(Model).windows_workspace;if($w -and ($null -ne $w.page -or $null -ne $w.prompt)){$w}}
 function Layout {(Model).state.workspace | ConvertTo-Json -Depth 80 -Compress}
 function Edit([string]$Id,[string]$Value){(Control $Id).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Value)}
-function Button([string]$Name){
-    Control $Name -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button)
-}
-function Choose([string]$Name){Wait-Until {(Button $Name).Current.IsEnabled} "Manager action remained disabled: $Name";(Button $Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
 function Settled {
     Wait-Until {$v=Manager;$null -ne $v -and !$v.loading -and !$v.busy} 'Manager did not settle'
     if((Manager).error){throw (Manager).error}
@@ -95,21 +91,21 @@ try {
     Capture 'this-workspace'
     Toolbar-Action 'save_toolbar'; Settled
     Edit 'workspace-manager-name' 'Shared review tools'
-    Choose (Manager).prompt.confirm; Prompt-Done
+    Invoke (Manager).prompt.confirm -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button); Prompt-Done
     Saved-Page
     $saved=Row 'Shared review tools'
     if(!$saved){throw 'Saved toolbar did not appear in the library'}
     $savedId=$saved.id
     $null=Select-Row $savedId
     Capture 'saved-library'
-    Choose 'Cancel'; Closed; Close
+    Invoke 'Cancel' -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button); Closed; Close
     Launch 'library-restart'
     Menu 'New Toolbar…'
     if(@((Manager).prompt.choices|Where-Object id -eq $savedId).Count -ne 1){throw 'Restart did not restore the saved toolbar choice'}
     Edit 'workspace-manager-name' 'Independent review tools'
     Source-Choice 'Shared review tools'
     Capture 'new-from-library'
-    Choose 'Add to Workspace'; Closed
+    Invoke 'Add to Workspace' -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button); Closed
     $copy=Config 'Independent review tools'; Check-Copy $source $copy
     $copyId=$copy.id
     Close
@@ -120,22 +116,22 @@ try {
     $null=Select-Row $savedId
     Toolbar-Action 'rename'; Settled
     Edit 'workspace-manager-name' 'Renamed library review'
-    Choose 'Rename'; Prompt-Done
+    Invoke 'Rename' -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button); Prompt-Done
     if(!(Row 'Renamed library review')){throw 'Library rename did not update the native row'}
     if(!(Config 'Independent review tools')){throw 'Library rename altered an installed copy'}
     $null=Select-Row $savedId
-    Choose 'Add to Workspace'; Closed
+    Invoke 'Add to Workspace' -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button); Closed
     Check-Copy $source (Config 'Renamed library review')
     Menu 'Manage Toolbars…'; Saved-Page
     $null=Select-Row $savedId
     Toolbar-Action 'delete'; Settled
-    Choose 'Cancel'; Prompt-Done
+    Invoke 'Cancel' -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button); Prompt-Done
     if(!(Row 'Renamed library review')){throw 'Cancelling delete changed the library'}
     $null=Select-Row $savedId
     Toolbar-Action 'delete'; Settled
-    Choose 'Delete'; Prompt-Done
+    Invoke 'Delete' -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button); Prompt-Done
     if(@((Manager).rows|Where-Object id -eq $savedId).Count){throw 'Confirmed delete kept the saved toolbar'}
-    Choose 'Cancel'; Closed
+    Invoke 'Cancel' -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button); Closed
     if(!(Config 'Independent review tools') -or !(Config 'Renamed library review')){throw 'Library deletion changed installed copies'}
     Close
     Launch 'deletion-restart'
@@ -143,7 +139,7 @@ try {
     Check-Copy $source (Config 'Renamed library review')
     Menu 'New Toolbar…'
     if(@((Manager).prompt.choices|Where-Object id -eq $savedId).Count){throw 'Deleted library item reappeared after restart'}
-    Choose 'Cancel'; Closed
+    Invoke 'Cancel' -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button); Closed
     Close
     [pscustomobject]@{save_to_library='passed';library_restart='passed';new_from_saved='passed';copy_restart='passed';independent_identity_and_contents='passed';library_rename='passed';add_to_workspace='passed';delete_cancel_confirm='passed';copies_survive_library_deletion='passed';deletion_restart='passed';zero_exit='passed';scope='native UI Automation and isolated SQLite profiles; visual parity, physical input and presentation acceptance remain separate'}|ConvertTo-Json
     if($closeFailures.Count){throw ('Five-second close acceptance failed for '+$closeFailures.Count+' launch(es); functional results above do not waive this gate.')}

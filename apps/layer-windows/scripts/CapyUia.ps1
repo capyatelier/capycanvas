@@ -544,10 +544,11 @@ function Scroll-Position($Control,[ValidateRange(0,100)][double]$Percent){
     $scroll.SetScrollPercent([System.Windows.Automation.ScrollPattern]::NoScroll,$Percent)
     Wait-Until {[Math]::Abs($scroll.Current.VerticalScrollPercent-$Percent) -lt .01} 'Native options did not acknowledge their scroll position'
 }
-function Invoke([string]$Value,[switch]$Name,$Within=$root){
-    $item=Control $Value -Name:$Name -Within $Within;$pattern=$null
-    if($item.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)){$pattern.Invoke()}
-    else{$item.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()}
+function Invoke([string]$Value,[switch]$Name,$Within=$root,$Type){
+    $target=@{item=$null};$pattern=$null
+    Wait-Until {$target.item=Control $Value -Name:$Name -Within $Within -Type $Type;$target.item.Current.IsEnabled} "$Value remained disabled"
+    if($target.item.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)){$pattern.Invoke()}
+    else{$target.item.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()}
 }
 function Read-Snapshot([string]$Path,[switch]$Raw){
     for($attempt=0;$attempt -lt 20;$attempt++){

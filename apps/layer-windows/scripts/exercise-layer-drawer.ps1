@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -AssemblyName System.Drawing
@@ -30,16 +30,13 @@ function Visible-DrawerBounds {
 }
 function Drawer {try{(Control 'tool-drawer').Current.ItemStatus|ConvertFrom-Json}catch{}}
 function Layer([long]$Id){@((Model).state.layers|Where-Object id -eq $Id)[0]}
-function Dialog-Action([string]$Id,[string]$Name){
- (Control $Name -Name -Within (Control $Id) -Type ([System.Windows.Automation.ControlType]::Button)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-}
 function Custom-Toolbar {
  [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window'
  (Control 'Quick Access Toolbars' -Name).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
  Press 'new_toolbar'
  (Control 'workspace-manager-name').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Combined panels review')
- Dialog-Action 'workspace-manager' 'Add to Workspace'
+ Invoke 'Add to Workspace' -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button)
  $target=@{panel=$null}
  Wait-Until {$target.panel=@((Model).panels|Where-Object title -eq 'Combined panels review')[0];$target.panel} 'Custom toolbar did not enter the workspace'
  $panel=$target.panel.id
@@ -56,7 +53,7 @@ function Custom-Toolbar {
   }
  }
  Wait-Until {(Model).picker.selected_count -eq 3} 'Custom toolbar did not select Layers and both Color controls'
- Dialog-Action 'tool-picker' ((Model).picker.confirm_label)
+ Invoke ((Model).picker.confirm_label) -Name -Within (Control 'tool-picker') -Type ([System.Windows.Automation.ControlType]::Button)
  Wait-Until {@(@((Model).panels|Where-Object id -eq $panel)[0].tiles).Count -eq 3} 'Custom toolbar did not receive three controls'
  foreach($tile in @(@((Model).panels|Where-Object id -eq $panel)[0].tiles)){
   Press ('tile-'+$panel+'-'+$tile.id)

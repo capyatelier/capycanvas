@@ -11,11 +11,6 @@ $run=Join-Path $repo ('artifacts/windows/switcher/'+[Guid]::NewGuid().ToString('
 function Storage {(Model).windows_workspace}
 function Manager {$w=(Model).windows_workspace;if($w -and ($null -ne $w.page -or $null -ne $w.prompt)){$w}}
 function Layout {(Model).state.workspace|ConvertTo-Json -Depth 80 -Compress}
-function Choose([string]$Name){
-    $button=@{item=$null}
-    Wait-Until {$button.item=Control $Name -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button);$button.item.Current.IsEnabled} "Manager action remained disabled: $Name"
-    $button.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-}
 function Settled {
     Wait-Until {$v=Manager;$s=Storage;$null -ne $v -and !$v.loading -and !$v.busy -and !$s.switcher_busy} 'Manager did not settle'
     if((Manager).error){throw (Manager).error}
@@ -139,7 +134,7 @@ function Check-Options {
     }
     Invoke 'workspace-switcher-options';Options;Invoke 'Manage Workspaces…' -Name
     Wait-Until {$null -ne (Find 'workspace-manager')} 'Options footer did not open the workspace manager'
-    Settled;Choose 'Cancel';Closed
+    Settled;Invoke 'Cancel' -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button);Closed
     if((Storage).id -ne $active -or (Layout) -ne $layout){throw 'Opening the manager disturbed the workspace'}
 }
 function Check-Compact {
@@ -167,7 +162,7 @@ function Check-Compact {
     Dismiss 'header-workspace-menu'
     Invoke 'header-workspace-menu';Invoke 'Manage Workspaces…' -Name
     Wait-Until {$null -ne (Find 'workspace-manager')} 'Compact footer did not open the manager'
-    Settled;Choose 'Cancel';Closed
+    Settled;Invoke 'Cancel' -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button);Closed
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
 }
 function Preference([string]$Id,[string]$Action){
@@ -264,7 +259,7 @@ try {
     if((Manager).selected -ne $preview -or (Layout) -ne $previewLayout){throw 'Preferences disturbed the selected preview'}
     if(((Control ('workspace-manager-row-'+$preview)).GetRuntimeId() -join ':') -ne $retained){throw 'Reorder replaced a retained row'}
     Capture 'configured-preview'
-    Choose 'Cancel';Closed
+    Invoke 'Cancel' -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button);Closed
     if((Layout) -ne $original){throw 'Cancel did not restore the original layout'}
     $key=$preview
     (Control ('workspace-switch-'+$key)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
@@ -273,7 +268,7 @@ try {
     Open-Manager
     foreach($id in @((Storage).switcher.id)){Preference $id 'show'}
     if(@((Storage).switcher_display).Count -ne 1 -or (Storage).switcher_display[0].id -ne $preview){throw 'Empty pins did not retain the current workspace'}
-    Choose 'Cancel';Closed
+    Invoke 'Cancel' -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button);Closed
     $at=At 'workspace-switcher-options';[CapyRowPointer]::Down('mouse',$at.x,$at.y);[CapyRowPointer]::Up()
     Options;Dismiss 'workspace-switcher-options'
     $emptyOrder=@((Storage).order)
@@ -285,7 +280,7 @@ try {
         Open-Manager
         (Control ('workspace-manager-row-'+$expandedWorkspace)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
         Wait-Until {$m=Manager;$m.selected -eq $expandedWorkspace -and $m.enabled -and !$m.loading} 'Paint workspace selection did not become ready'
-        Settled;Choose (Manager).primary;Closed
+        Settled;Invoke (Manager).primary -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button);Closed
         Wait-Until {(Storage).id -eq $expandedWorkspace -and !(Storage).busy} 'Paint workspace was not adopted before overflow creation'
     }
     $headerBefore=(Model).header.model
@@ -308,9 +303,9 @@ try {
         Invoke 'workspace-manager-create'
         Wait-Until {(Manager).prompt.title -eq 'New Workspace'} 'Creation prompt missing'
         (Control 'workspace-manager-name').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue("Switcher overflow workspace $i")
-        Choose 'Create and Switch';Settled
+        Invoke 'Create and Switch' -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button);Settled
         Wait-Until {$null -eq (Manager).prompt -and (Manager).page -eq 'workspaces'} 'Creation closed the manager'
-        Choose 'Cancel';Closed
+        Invoke 'Cancel' -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button);Closed
         Wait-Until {$s=Storage;$s.switcher.id -contains $s.id -and $s.switcher_display.id -contains $s.id} 'Created workspace was not pinned'
     }
     $inline=@{item=$null};Wait-Until {$inline.item=Find 'workspace-switcher';$null -ne $inline.item} 'Expanded workspace switcher did not appear'
@@ -329,7 +324,7 @@ try {
     Wait-Until {$scroller.Current.HorizontalScrollPercent -le 1} 'Unpinned current workspace did not scroll into view'
     if((Storage).switcher_display[0].id -ne $overflowCurrent){throw 'Overflow lost the unpinned current workspace'}
     Capture 'overflow-current-fallback'
-    Choose 'Cancel';Closed
+    Invoke 'Cancel' -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button);Closed
     Check-Compact
     Close
     @{theme=$Theme;device=$Device;options_context_hold_keyboard='passed';options_toggle='passed';compact_options='passed';fixed_options='passed';pinning='passed';complete_order='passed';preview_cancel_and_row_retention='passed';current_fallback='passed';empty_pins_restart='passed';created_workspaces_pinned='passed';header_overflow='passed';current_fallback_scrolled_into_view='passed';zero_exit='passed';scope='native UI Automation; physical row pickup and input timing are separate'}|ConvertTo-Json|Set-Content (Join-Path $run 'results.json')

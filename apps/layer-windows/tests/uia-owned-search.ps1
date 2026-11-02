@@ -7,7 +7,7 @@ Add-Type -TypeDefinition @'
 using System;using System.Collections.Generic;
 namespace CapyOwnedSearchTest {
  public enum TreeScope{Children,Descendants}
- public static class ControlType{public static object Menu="menu",MenuItem="menu-item";}
+ public static class ControlType{public static object Menu="menu",MenuItem="menu-item",Button="button";}
  public class Condition{public virtual bool Matches(Node n){return true;}}
  public class PropertyCondition:Condition {
   string property;object value;public PropertyCondition(object p,object v){property=(string)p;value=v;}
@@ -26,6 +26,12 @@ namespace CapyOwnedSearchTest {
   public void Inflate(int x,int y){X-=x;Y-=y;Width+=2*x;Height+=2*y;}
  }
  public enum ScrollAmount{NoAmount,SmallDecrement,SmallIncrement}
+ public static class InvokePattern{public static object Pattern="invoke";}
+ public static class TogglePattern{public static object Pattern="toggle";}
+ public class ActionPattern {
+  Node node;public ActionPattern(Node value){node=value;}
+  public void Invoke(){node.Activate(false);}public void Toggle(){node.Activate(true);}
+ }
  public static class ScrollPattern{public static object Pattern="scroll";public static double NoScroll=-1;}
  public class Scroll {
   public double VerticalScrollPercent,VerticalViewSize=50;public int Resets,Steps;public bool VerticallyScrollable=true;public Scroll Current{get{return this;}}
@@ -51,10 +57,13 @@ namespace CapyOwnedSearchTest {
  public class Node {
   public string AutomationId,Name;public object ControlType="control";public int ProcessId;bool offscreen;Rect bounds;public Node Parent;public Scroll Provider,TargetScroll;public int? ContentY;
   public bool HasKeyboardFocus;public IntPtr NativeWindowHandle=new IntPtr(1);
+  public bool Enabled=true,InvokeAvailable,ToggleAvailable;public DateTime EnableAtUtc=DateTime.MinValue;public int Invocations,Toggles,DisabledReads;
+  public bool IsEnabled{get{bool ready=Enabled&&DateTime.UtcNow>=EnableAtUtc;if(!ready)DisabledReads++;return ready;}}
+  public void Activate(bool toggle){if(!IsEnabled)throw new InvalidOperationException("Disabled action invoked");if(toggle)Toggles++;else Invocations++;}
   public Rect BoundingRectangle{get{if(ContentY.HasValue){int y=ContentY.Value-(int)(TargetScroll.VerticalScrollPercent*2);return y>=100||y+20<=0?new Rect():new Rect(0,y,80,20);}return bounds;}set{bounds=value;}}
   public bool IsOffscreen{get{return ContentY.HasValue?BoundingRectangle.IsEmpty:offscreen;}set{offscreen=value;}}
   public void SetFocus(){HasKeyboardFocus=true;}
-  public bool TryGetCurrentPattern(object pattern,out object result){result=Provider==null?null:new Pattern(Provider);return result!=null;}
+  public bool TryGetCurrentPattern(object pattern,out object result){if((Object.Equals(pattern,InvokePattern.Pattern)&&InvokeAvailable)||(Object.Equals(pattern,TogglePattern.Pattern)&&ToggleAvailable)){result=new ActionPattern(this);return true;}result=Provider==null?null:new Pattern(Provider);return result!=null;}
   public object GetCurrentPattern(object pattern){object result;if(!TryGetCurrentPattern(pattern,out result))throw new InvalidOperationException("Missing pattern");return result;}
   public Node Current{get{return this;}}public List<Node> Children=new List<Node>();
   public Node(string id,int pid,int x,int y){AutomationId=id;Name=id;ProcessId=pid;BoundingRectangle=new Rect(x,y);}
@@ -70,7 +79,7 @@ namespace CapyOwnedSearchTest {
  public class Review{public int Id=33;public IntPtr MainWindowHandle=new IntPtr(132146);public bool HasExited=false;public int ExitCode=0;public void Refresh(){}public bool CloseMainWindow(){return Driver.PostMessage(MainWindowHandle,0x0010,UIntPtr.Zero,IntPtr.Zero);}}
 }
 '@
-foreach($name in @('Test-CapySearchItem','Find','Control','Wait-Until')){
+foreach($name in @('Test-CapySearchItem','Find','Control','Wait-Until','Invoke')){
     $fn=@($ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name}.GetNewClosure(),$true))
     if($fn.Count -ne 1){throw 'Missing actual UIA helper'}
     . ([scriptblock]::Create($fn[0].Extent.Text.Replace('System.Windows.Automation.','CapyOwnedSearchTest.')))
@@ -129,6 +138,29 @@ foreach($offscreen in @($false,$true)){
 $root.Children.Clear();$firstList=[CapyOwnedSearchTest.Node]::new('layer-list',33,209,197);$firstRow=[CapyOwnedSearchTest.Node]::new('layer-7-content',33,219,207);$firstList.Children.Add($firstRow);$root.Children.Add($firstList)
 if((Control 'layer-7-content' -Arranged -NoPopups) -ne $firstRow -or $firstRow.Current.BoundingRectangle.X -ne 219 -or $firstRow.Current.BoundingRectangle.Y -ne 207){throw 'Root-only layer row did not retain current-root bounds'}
 Write-Output 'Owned UIA search passed: actual Find/Control AST waits for current-root canvas, excludes second/foreign windows and preserves registered menu roots; no UI or GPU.'
+
+$invokeFailures=[Collections.Generic.List[string]]::new()
+foreach($byName in @($false,$true)){
+    $root.Children.Clear();$button=[CapyOwnedSearchTest.Node]::new('deferred-action',33,219,207)
+    $button.Name='Deferred action';$button.Parent=$root;$button.InvokeAvailable=$true;$root.Children.Add($button)
+    $value=if($byName){$button.Name}else{$button.AutomationId}
+    $button.EnableAtUtc=[DateTime]::UtcNow.AddMilliseconds(150)
+    $failure=$null;try{Invoke $value -Name:$byName}catch{$failure=$_}
+    if($failure -or $button.Invocations -ne 1 -or !$button.DisabledReads){$invokeFailures.Add("Delayed action $value was not awaited: $failure")}
+}
+$caption=[CapyOwnedSearchTest.Node]::new('caption',33,219,207);$caption.Name=$button.Name;$root.Children.Insert(0,$caption)
+$button.ControlType=[CapyOwnedSearchTest.ControlType]::Button
+Invoke $button.Name -Name -Within $root -Type ([CapyOwnedSearchTest.ControlType]::Button)
+if($button.Invocations -ne 2){throw 'Shared Invoke lost the requested control type or scope'}
+$root.Children.Clear();$button=[CapyOwnedSearchTest.Node]::new('disabled-action',33,219,207)
+$button.Name='Never apply';$button.Parent=$root;$button.InvokeAvailable=$true;$button.Enabled=$false;$root.Children.Add($button)
+$failure=$null;try{Invoke $button.Name -Name}catch{$failure=$_}
+if(!$failure -or $failure.Exception.Message -cne 'Never apply remained disabled' -or $button.Invocations){$invokeFailures.Add("Permanently disabled action had the wrong outcome: $failure")}
+$button.Enabled=$true;$button.InvokeAvailable=$false;$button.ToggleAvailable=$true
+Invoke $button.AutomationId
+if($button.Toggles -ne 1){throw 'Shared Invoke lost its enabled Toggle fallback'}
+if($invokeFailures.Count){throw ($invokeFailures -join [Environment]::NewLine)}
+Write-Output 'Actual Invoke waits for delayed enabled state by ID/name, rejects a permanently disabled named action and preserves Toggle fallback.'
 
 $CapyFind='prefer-visible'
 foreach($bounds in @([CapyOwnedSearchTest.Rect]::new(0,0,0,0),[CapyOwnedSearchTest.Rect]::new(-100000,197))){

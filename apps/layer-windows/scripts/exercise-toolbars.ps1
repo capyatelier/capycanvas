@@ -80,7 +80,6 @@ function DialogButton([string]$Id,[string]$Name){
     Wait-Until {$found.item=$dialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$buttonMatch);$null -ne $found.item} "Missing dialog button $Name"
     $found.item
 }
-function InvokeDialog([string]$Id,[string]$Name){(DialogButton $Id $Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
 try{
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
@@ -105,7 +104,7 @@ try{
     $nameValue=(Control 'workspace-manager-name').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
     foreach($draft in @('W','Windows','Windows tools','Windows tools review')){$nameValue.SetValue($draft)}
     if($nameValue.Current.Value -ne 'Windows tools review'){throw 'A delayed snapshot overwrote the name draft'}
-    InvokeDialog 'workspace-manager' 'Add to Workspace'
+    Invoke 'Add to Workspace' -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button)
     Wait-Until {$null -eq (Find 'workspace-manager') -and @((Model).state.workspace.layout.panels).Count -eq $initial+1} 'Create did not add one empty toolbar'
     $created=@((Model).panels|Where-Object title -eq 'Windows tools review')[0]
     if(!$created -or $created.id -notlike 'toolbar:*' -or @($created.tiles).Count -ne 0){throw 'Empty toolbar did not have an independent identity'}
@@ -132,7 +131,7 @@ try{
     Edit 'tool-picker-search' 'pen'
     Wait-Until {(DialogButton 'tool-picker' ((Model).picker.confirm_label)).Current.IsEnabled} 'Valid selection did not enable Add Tools'
     Capture 'picker'
-    InvokeDialog 'tool-picker' ((Model).picker.confirm_label)
+    Invoke ((Model).picker.confirm_label) -Name -Within (Control 'tool-picker') -Type ([System.Windows.Automation.ControlType]::Button)
     Wait-Until {$null -eq (Model).picker -and @((Toolbar $toolbarId).tiles).Count -eq 1} 'Picker did not add exactly one tool'
     Wait-Until {$null -eq (Find 'tool-picker') -and (Control 'drawing-canvas').Current.IsEnabled} 'Picker did not release its modal slot'
     if((Toolbar $toolbarId).tiles[0].control.command -ne 'pen'){throw 'Created toolbar contains the wrong control'}
@@ -142,7 +141,7 @@ try{
     Capture 'toolbar-rename-dialog' -WithModel -Composed
     Edit 'toolbar-name' 'Windows renamed review'
     Wait-Until {(Model).toolbar_prompt.name -eq 'Windows renamed review'} 'Rename draft did not reach Core'
-    InvokeDialog 'toolbar-prompt' 'Rename'
+    Invoke 'Rename' -Name -Within (Control 'toolbar-prompt') -Type ([System.Windows.Automation.ControlType]::Button)
     Wait-Until {$null -eq (Find 'toolbar-prompt') -and (Toolbar $toolbarId).title -eq 'Windows renamed review'} 'Rename did not update the toolbar'
     Wait-Until {(Control $gripId).Current.Name -eq 'Move Windows renamed review'} 'Native toolbar label did not update'
     WindowCommand 'undo_workspace'
@@ -155,7 +154,7 @@ try{
     $null=Control 'toolbar-prompt'
     Edit 'toolbar-name' 'Windows toolbar duplicate'
     Wait-Until {(Model).toolbar_prompt.name -eq 'Windows toolbar duplicate'} 'Duplicate draft did not reach Core'
-    InvokeDialog 'toolbar-prompt' 'Duplicate'
+    Invoke 'Duplicate' -Name -Within (Control 'toolbar-prompt') -Type ([System.Windows.Automation.ControlType]::Button)
     Wait-Until {$null -eq (Find 'toolbar-prompt') -and @((Model).state.workspace.layout.panels).Count -eq $initial+2} 'Duplicate did not add exactly one toolbar'
     $copy=@((Model).panels|Where-Object title -eq 'Windows toolbar duplicate')[0]
     if(!$copy -or $copy.id -eq $toolbarId -or @($copy.tiles).Count -ne 1 -or $copy.tiles[0].control.command -ne 'pen'){throw 'Duplicate did not preserve tools with independent identity'}
@@ -168,7 +167,7 @@ try{
     Wait-Until {(Model).picker.query -eq 'pencil'} 'Insert picker did not search'
     (Control 'picker-choice-command-pencil').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     Wait-Until {(Model).picker.selected_count -eq 1} 'Insert picker did not select a tool'
-    InvokeDialog 'tool-picker' ((Model).picker.confirm_label)
+    Invoke ((Model).picker.confirm_label) -Name -Within (Control 'tool-picker') -Type ([System.Windows.Automation.ControlType]::Button)
     Wait-Until {$null -eq (Find 'tool-picker') -and @( (Toolbar $toolbarId).tiles).Count -eq 2} 'Insert picker did not add to the existing toolbar'
     if((Toolbar $toolbarId).tiles[1].control.command -ne 'pencil'){throw 'Insert picker added the wrong tool'}
     WindowCommand 'undo_workspace'
@@ -183,7 +182,7 @@ try{
     Invoke 'workspace-toolbar-actions';Invoke 'workspace-toolbar-delete_toolbar'
     $prompt=Control 'toolbar-prompt'
     Wait-Until {(Model).toolbar_prompt.destructive -and (Model).toolbar_prompt.message -like '*Windows tools review*'} 'Delete prompt does not name the owned toolbar'
-    InvokeDialog 'toolbar-prompt' 'Cancel'
+    Invoke 'Cancel' -Name -Within (Control 'toolbar-prompt') -Type ([System.Windows.Automation.ControlType]::Button)
     Wait-Until {$null -eq (Model).toolbar_prompt -and $null -eq (Find 'workspace-manager')} 'Cancel did not return to the editor'
     if(@((Model).state.workspace.layout.panels).Count -ne $initial+1){throw 'Cancel deleted the toolbar'}
     WindowCommand 'manage_toolbars'
@@ -194,7 +193,7 @@ try{
     Invoke 'workspace-toolbar-actions';Invoke 'workspace-toolbar-delete_toolbar'
     $null=Control 'toolbar-prompt'
     Capture 'delete-prompt' -WithModel -Composed
-    InvokeDialog 'toolbar-prompt' 'Delete Toolbar'
+    Invoke 'Delete Toolbar' -Name -Within (Control 'toolbar-prompt') -Type ([System.Windows.Automation.ControlType]::Button)
     Wait-Until {$null -eq (Model).toolbar_prompt -and @((Model).state.workspace.layout.panels).Count -eq $initial} 'Delete did not remove exactly the owned toolbar'
     Wait-Until {$null -eq (Find 'toolbar-prompt')} 'Toolbar prompt did not close'
     WindowCommand 'undo_workspace'
@@ -203,7 +202,7 @@ try{
     Wait-Until {@((Model).state.workspace.layout.panels).Count -eq $initial} 'Workspace Redo did not delete the toolbar again'
     WindowCommand 'new_toolbar'
     $null=Control 'workspace-manager'
-    InvokeDialog 'workspace-manager' 'Cancel'
+    Invoke 'Cancel' -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button)
     Wait-Until {$null -eq (Model).windows_workspace.page -and $null -eq (Model).windows_workspace.prompt -and $null -eq (Find 'workspace-manager') -and (Control 'drawing-canvas').Current.IsEnabled} 'Cancel did not close New Toolbar and release painting'
     Invoke 'Test stroke' -Name
     Wait-Until {(Model).state.document_file.modified} 'Controlled stroke did not dirty the review'
