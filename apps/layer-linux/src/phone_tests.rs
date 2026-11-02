@@ -163,6 +163,13 @@ fn frame(d: &Driver) {
     }
 }
 
+fn menu_row_height(d: &Driver) -> f32 {
+    let stack = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
+    widgets(&stack.child_by_name("main").unwrap()).find(|row|
+        row.type_().name() == "GtkModelButton" && row.widget_name() != "phone-drawing").unwrap()
+        .measure(gtk::Orientation::Vertical, -1).1 as f32
+}
+
 fn menu(d: &mut Driver) {
     if !state(&d.w).phone.menu { click(d, "zen-capy"); }
     until(|| state(&d.w).phone.menu && d.w.phone.placement.borrow().is_some()
@@ -174,7 +181,7 @@ fn menu(d: &mut Driver) {
     inside(d, &root);
     let placement = d.w.phone.placement.borrow().as_ref().unwrap().clone();
     assert_eq!(placement.columns.len(), 1);
-    let geometry = presentation(d).menu_geometry(&placement);
+    let geometry = presentation(d).menu_geometry(&placement, menu_row_height(d));
     for (name, expected) in [("phone-menu-scroll", geometry.list), ("phone-menu-separator", geometry.separator)] {
         let widget = d.named(name);
         inside(d, &widget);
@@ -193,6 +200,9 @@ fn menu(d: &mut Driver) {
         assert!([actual.x() - expected.x, actual.y() - expected.y, actual.width() - expected.width,
             actual.height() - expected.height].into_iter().all(|delta| delta.abs() <= 1.),
             "{name} keeps its fixed icon-strip slot");
+        assert!((actual.width() - menu_row_height(d)).abs() <= 1. && (actual.height() - menu_row_height(d)).abs() <= 1.);
+        assert!(button.has_css_class("header-tool"));
+        assert_eq!(button.first_child().and_downcast::<gtk::Image>().unwrap().pixel_size(), geometry.icon.round() as i32);
         assert!(button.tooltip_text().is_some_and(|text| !text.is_empty()));
         assert!(gtk::test_accessible_has_property(&button, gtk::AccessibleProperty::Label));
         assert_eq!(button.is_sensitive(), item.enabled);
@@ -926,13 +936,31 @@ fn menu_bounds(d: &Driver, initial: Bounds) {
 
 fn menu_separator(d: &Driver) {
     let placement = d.w.phone.placement.borrow().as_ref().unwrap().clone();
-    let expected = presentation(d).menu_geometry(&placement).separator;
+    let expected = presentation(d).menu_geometry(&placement, menu_row_height(d)).separator;
     let separator = d.named("phone-menu-separator").downcast::<gtk::Separator>().unwrap();
     inside(d, separator.upcast_ref());
     let actual = separator.compute_bounds(&d.named("phone-menu")).unwrap();
     assert!([actual.x() - expected.x, actual.y() - expected.y, actual.width() - expected.width,
         actual.height() - expected.height].into_iter().all(|delta| delta.abs() <= 1.));
     assert_eq!(separator.orientation(), if expected.width > expected.height { gtk::Orientation::Horizontal } else { gtk::Orientation::Vertical });
+}
+
+#[test]
+#[ignore = "private compositor: --native-test=native_phone_menu_strip --native-storage; viewport/theme external"]
+fn native_phone_menu_strip() {
+    let mut d = setup("art.capycanvas.PhoneMenuStrip");
+    for swapped in [false, true] {
+        if state(&d.w).phone.swapped != swapped { d.w.dispatch(UiAction::Phone { action: PhoneAction::SwapSides }); }
+        menu(&mut d);
+        if let Some(directory) = std::env::var_os("LAYER_NATIVE_CAPTURE_DIR") {
+            let placement = d.w.phone.placement.borrow().as_ref().unwrap().clone();
+            let view = presentation(&d).menu_geometry(&placement, menu_row_height(&d));
+            std::fs::write(std::path::PathBuf::from(directory).join(format!("menu-strip-{swapped}.json")),
+                serde_json::to_vec(&serde_json::json!({"menu": placement.bounds, "strip": view.strip, "separator": view.separator,
+                    "row_height": menu_row_height(&d), "icon": view.icon})).unwrap()).unwrap();
+        }
+    }
+    d.finish();
 }
 
 #[test]
@@ -1628,7 +1656,9 @@ fn native_phone_inventory() {
         d.w.dispatch(UiAction::Invoke { command: CommandId::DrawingBrush });
         let scale = d.named("component-slider-size").downcast::<gtk::Scale>().unwrap();
         let from = d.point(scale.upcast_ref());
-        d.input.perform(serde_json::json!([contact("mouse", "down", from)]));
+        let phone = presentation(&d);
+        let along = if phone.edge == Edge::Top { [from[0] + 12., from[1]] } else { [from[0], from[1] - 12.] };
+        d.input.perform(serde_json::json!([contact("mouse", "down", from), contact("mouse", "move", along)]));
         until(|| d.named("brush-slider-preview").is_mapped(), "the track preview is visible");
         inventory_monitor(&mut d, "slider-track");
         let phone = presentation(&d);

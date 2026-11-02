@@ -100,41 +100,45 @@ impl PhoneBarContact {
 
 impl PhoneLayout {
     pub const MENU_GAP: f32 = 1.;
+    pub const MENU_MARGIN: f32 = 8.;
+    pub const MENU_TILE_GAP: f32 = 2.;
     pub const SETTINGS: ToolbarControl = ToolbarControl::Panel { panel: crate::Panel::ToolSettings };
     pub const SLIDERS: [ToolbarControl; 2] = [ToolbarControl::BrushSizeSlider, ToolbarControl::BrushStrengthSlider];
     pub fn slider_stretch_distance(&self) -> f32 { 2. * self.tile }
-    pub fn menu_width(&self, minimum: f32, natural: f32) -> f32 {
+    fn menu_strip_extent(row_height: f32) -> f32 { row_height.max(1.) + 2. * Self::MENU_MARGIN }
+    pub fn menu_width(&self, minimum: f32, natural: f32, row_height: f32) -> f32 {
         if self.edge == Edge::Top { self.bars[0].width }
-        else { natural.max(minimum).max(crate::PANEL_MIN_WIDTH).min((self.work_area.width - self.tile - Self::MENU_GAP).max(1.)) }
+        else { natural.max(minimum).max(crate::PANEL_MIN_WIDTH).min((self.work_area.width - Self::menu_strip_extent(row_height) - Self::MENU_GAP).max(1.)) }
     }
-    pub fn menu(&self, viewport: [f32; 2], width: f32, height: f32) -> Option<DrawerPlacement> {
+    pub fn menu(&self, viewport: [f32; 2], width: f32, height: f32, row_height: f32) -> Option<DrawerPlacement> {
         let vertical = self.edge != Edge::Top;
+        let strip = Self::menu_strip_extent(row_height) + Self::MENU_GAP;
         self.drawer(self.capy, viewport,
-            &[if vertical { width + self.tile + Self::MENU_GAP } else { width }],
-            &[if vertical { height } else { height + self.tile + Self::MENU_GAP }], Self::MENU_GAP)
+            &[if vertical { width + strip } else { width }],
+            &[if vertical { height } else { height + strip }], Self::MENU_GAP)
     }
-    pub fn menu_geometry(&self, placement: &DrawerPlacement) -> PhoneMenuGeometry {
+    pub fn menu_geometry(&self, placement: &DrawerPlacement, row_height: f32) -> PhoneMenuGeometry {
         let Bounds { width, height, .. } = placement.bounds;
         let vertical = self.edge != Edge::Top;
+        let tile = row_height.max(1.);
+        let extent = Self::menu_strip_extent(row_height);
         let strip = if vertical {
-            Bounds { x: if placement.direction == Edge::Left { width - self.tile } else { 0. }, y: 0., width: self.tile, height }
-        } else { Bounds { x: 0., y: height - self.tile, width, height: self.tile } };
+            Bounds { x: if placement.direction == Edge::Left { width - extent } else { 0. }, y: 0., width: extent, height }
+        } else { Bounds { x: 0., y: height - extent, width, height: extent } };
         let separator = if vertical {
-            Bounds { x: if strip.x == 0. { self.tile } else { strip.x - Self::MENU_GAP }, y: 0., width: Self::MENU_GAP, height }
+            Bounds { x: if strip.x == 0. { extent } else { strip.x - Self::MENU_GAP }, y: 0., width: Self::MENU_GAP, height }
         } else { Bounds { x: 0., y: strip.y - Self::MENU_GAP, width, height: Self::MENU_GAP } };
         let list = if vertical {
-            Bounds { x: if strip.x == 0. { separator.x + separator.width } else { 0. }, y: 0., width: width - self.tile - Self::MENU_GAP, height }
+            Bounds { x: if strip.x == 0. { separator.x + separator.width } else { 0. }, y: 0., width: width - extent - Self::MENU_GAP, height }
         } else { Bounds { x: 0., y: 0., width, height: separator.y } };
-        let length = if vertical { height } else { width };
-        let gap = 2. * ((if vertical { self.work_area.height } else { self.work_area.width }) / 320.).min(1.);
-        let start = (length - 5. * self.tile - 4. * gap) * 0.5;
         let reversed = !vertical && self.capy.x > self.settings.x;
         let buttons = std::array::from_fn(|index| {
-            let along = start + (if reversed { 4 - index } else { index }) as f32 * (self.tile + gap);
-            if vertical { Bounds { x: strip.x, y: along, width: self.tile, height: self.tile } }
-            else { Bounds { x: along, y: strip.y, width: self.tile, height: self.tile } }
+            let along = Self::MENU_MARGIN + index as f32 * (tile + Self::MENU_TILE_GAP);
+            if vertical { Bounds { x: strip.x + Self::MENU_MARGIN, y: along, width: tile, height: tile } }
+            else { Bounds { x: if reversed { width - along - tile } else { along }, y: strip.y + Self::MENU_MARGIN, width: tile, height: tile } }
         });
-        PhoneMenuGeometry { list, strip, separator, buttons }
+        PhoneMenuGeometry { list, strip, separator, buttons,
+            icon: tile * crate::HeaderSize::Medium.icon() as f32 / crate::HeaderSize::Medium.tile() }
     }
     pub fn anchor(&self, layout: &DockLayout, anchor: crate::PhoneDrawerAnchor) -> Option<Bounds> {
         match anchor {
@@ -516,6 +520,7 @@ pub struct PhoneMenuGeometry {
     pub strip: Bounds,
     pub separator: Bounds,
     pub buttons: [Bounds; 5],
+    pub icon: f32,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct PhoneMenuPage {
@@ -675,21 +680,39 @@ mod menu_tests {
         }
     }
     #[test]
-    fn menu_keeps_one_list_beside_its_bar_parallel_icon_strip() {
+    fn menu_strip_tiles_match_rows_and_pack_from_capy_with_shared_margins() {
         let layout = crate::WorkspacePreset::Painter.layout(crate::Platform::Gtk);
         for viewport in [[412., 891.], [891., 412.], [320., 568.], [280., 560.], [560., 280.]] {
             for swapped in [false, true] {
                 let phone = PhoneLayout::resolve(&layout, viewport, [0.; 4], [0.; 2], [0; 2], swapped).unwrap();
-                let width = phone.menu_width(242., 340.);
-                let placement = phone.menu(viewport, width, 400.).unwrap();
-                let geometry = phone.menu_geometry(&placement);
-                assert!(geometry.list.intersection(geometry.strip).is_none());
-                for button in geometry.buttons {
-                    assert!(button.x >= geometry.strip.x && button.y >= geometry.strip.y);
-                    assert!(button.x + button.width <= geometry.strip.x + geometry.strip.width + 0.001);
-                    assert!(button.y + button.height <= geometry.strip.y + geometry.strip.height + 0.001);
+                for row in [28., 32., 44.] {
+                    let width = phone.menu_width(242., 340., row);
+                    let placement = phone.menu(viewport, width, 400., row).unwrap();
+                    let geometry = phone.menu_geometry(&placement, row);
+                    assert!(geometry.list.intersection(geometry.strip).is_none());
+                    assert_eq!(geometry.icon, row * crate::HeaderSize::Medium.icon() as f32 / crate::HeaderSize::Medium.tile());
+                    for (index, button) in geometry.buttons.into_iter().enumerate() {
+                        assert_eq!([button.width, button.height], [row; 2]);
+                        assert!(button.x >= geometry.strip.x && button.y >= geometry.strip.y);
+                        assert!(button.x + row <= geometry.strip.x + geometry.strip.width + 0.001);
+                        assert!(button.y + row <= geometry.strip.y + geometry.strip.height + 0.001);
+                        let along = PhoneLayout::MENU_MARGIN + index as f32 * (row + PhoneLayout::MENU_TILE_GAP);
+                        if phone.edge == Edge::Top {
+                            assert_eq!(button.x, if swapped { placement.bounds.width - along - row } else { along });
+                            assert_eq!(button.y - geometry.strip.y, PhoneLayout::MENU_MARGIN);
+                            assert_eq!(geometry.strip.y + geometry.strip.height - button.y - row, PhoneLayout::MENU_MARGIN);
+                            assert_eq!(button.y - geometry.separator.y - geometry.separator.height, PhoneLayout::MENU_MARGIN);
+                        } else {
+                            assert_eq!(button.y, along);
+                            assert_eq!(button.x - geometry.strip.x, PhoneLayout::MENU_MARGIN);
+                            assert_eq!(geometry.strip.x + geometry.strip.width - button.x - row, PhoneLayout::MENU_MARGIN);
+                            let gap = if swapped { button.x - geometry.separator.x - geometry.separator.width }
+                                else { geometry.separator.x - button.x - row };
+                            assert_eq!(gap, PhoneLayout::MENU_MARGIN);
+                        }
+                    }
+                    assert_eq!(geometry.separator.width.min(geometry.separator.height), PhoneLayout::MENU_GAP);
                 }
-                assert_eq!(geometry.separator.width.min(geometry.separator.height), PhoneLayout::MENU_GAP);
             }
         }
     }

@@ -18,7 +18,7 @@ pub(super) struct Phone {
     decoration: RefCell<String>,
     reported: Cell<Option<([f32; 2], [u32; 2])>>,
     menu: phone_menu::Menu,
-    menu_key: Cell<Option<([f32; 2], Bounds, Bounds, Bounds)>>,
+    menu_key: Cell<Option<([f32; 2], Bounds, Bounds, Bounds, f32)>>,
     loans: RefCell<Vec<(gtk::Widget, gtk::Widget, gtk::Box)>>,
     bridge: gtk::DrawingArea,
     connection: Rc<Cell<Option<DrawerConnection>>>,
@@ -353,12 +353,13 @@ impl Phone {
         let axis = if vertical { Axis::Vertical } else { Axis::Horizontal };
         for slider in self.sliders.borrow().iter() { slider.root.set_presentation(axis, TileStyle::Medium); }
         let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+        let row_height = if state.menu { self.menu.row_height() } else { 0. };
         if state.menu {
-            let key = (viewport, p.capy, p.bars[0], p.work_area);
+            let key = (viewport, p.capy, p.bars[0], p.work_area, row_height);
             if self.menu_key.get() != Some(key) {
                 self.menu_key.set(Some(key));
-                let (width, height) = self.menu.measure(p);
-                let placement = p.menu(viewport, width, height).map(|p| p.snapped(1.));
+                let (width, height) = self.menu.measure(p, row_height);
+                let placement = p.menu(viewport, width, height, row_height).map(|p| p.snapped(1.));
                 *self.placement.borrow_mut() = placement;
             }
         } else {
@@ -367,7 +368,7 @@ impl Phone {
         }
         let menu = self.placement.borrow();
         if let Some(placement) = menu.as_ref() {
-            self.menu.allocate(p, placement);
+            self.menu.allocate(p, placement, row_height);
         }
         self.connection.set(menu.as_ref().and_then(|p| p.connection()));
         self.bridge.queue_draw();

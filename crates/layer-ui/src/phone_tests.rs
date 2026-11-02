@@ -81,7 +81,7 @@ fn phone_menu_keeps_its_bridge_and_dismisses_only_outside_contacts() {
             let mut s = phone_session(viewport);
             s.state.phone.swapped = swapped;
             s.dispatch(UiAction::Phone { action: PhoneAction::Capy }).unwrap();
-            let placement = s.phone_layout().unwrap().menu(viewport.map(|v| v as f32), 242., 500.).unwrap();
+            let placement = s.phone_layout().unwrap().menu(viewport.map(|v| v as f32), 242., 500., 32.).unwrap();
             let bridge = placement.connection().unwrap().bounds;
             let facts = ChromeFacts { content_drawer: Some(placement.bounds), drawer_connection: Some(bridge), ..Default::default() };
             let checkpoint = s.engine().checkpoint();
@@ -203,7 +203,7 @@ fn phone_drawers_stay_inside_the_window_during_resize() {
             for swapped in [false, true] {
                 let phone = PhoneLayout::resolve(&layout, viewport, [0.; 4], [0.; 2], [0; 2], swapped).unwrap();
                 let drawer = phone.drawer(phone.tools[0], viewport, &[160., 240.], &[360., 240.], 8.).unwrap();
-                let menu = phone.menu(viewport, 242., 500.).unwrap();
+                let menu = phone.menu(viewport, 242., 500., 32.).unwrap();
                 for bounds in [drawer.bounds, menu.bounds] {
                     assert!(bounds.x >= 0. && bounds.y >= 0., "{viewport:?}/{swapped}: {bounds:?}");
                     assert!(bounds.x + bounds.width <= viewport[0] + 0.001, "{viewport:?}/{swapped}: {bounds:?}");
@@ -498,7 +498,7 @@ fn phone_main_menu_extras_follow_header_and_title_bar_edit_is_refused() {
             s.dispatch(UiAction::Phone { action: PhoneAction::Capy }).unwrap();
             assert!(s.state.phone.menu);
             let phone = s.phone_layout().unwrap();
-            let p = phone.menu(viewport.map(|v| v as f32), PANEL_MIN_WIDTH, 700.).unwrap();
+            let p = phone.menu(viewport.map(|v| v as f32), PANEL_MIN_WIDTH, 700., 32.).unwrap();
             assert_eq!(p.columns.len(), 1);
             assert!(p.bounds.x >= 0. && p.bounds.y >= 0.);
             assert!(p.bounds.x + p.bounds.width <= viewport[0] as f32 + 0.01);

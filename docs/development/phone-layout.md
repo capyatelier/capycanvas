@@ -184,9 +184,13 @@ mid-drawing, and each remembers its own tool.
 
 Capy's menu has one list and an icon strip parallel to the Capy bar, on the
 menu's edge nearest that bar. The strip runs from Capy's end: Preferences,
-Search Commands, Draw with Finger, Zen mode, Swap Sides. Its tiles use the bar's
-size and 2-unit gap, centered along the strip, with tooltips and accessible names.
-A native separator divides it from the list.
+Search Commands, Draw with Finger, Zen mode, Swap Sides. Square tiles match the
+measured native File–Window row height, with the Medium tile's icon ratio and
+standard hover, active and selected treatment. They pack from the left in
+portrait (right when swapped), or from the top in landscape, with a 2-unit gap.
+Keep 8 between the tiles and the drawer edges and 8 before the native separator
+that divides the strip from the list. Spare length stays at the far end; row,
+tile and icon sizes follow the native text size together.
 
 ```text
 Portrait                         Landscape
@@ -197,9 +201,12 @@ Portrait                         Landscape
 │ Edit                  › │      │ ◐ │ Edit               › │
 │ …                       │      │ ⇄ │ …                    │
 │ Window                › │      │   │ Window             › │
-│ ─────────────────────── │      └───┴──────────────────────┘
-│  ⚙   ⌕   ☝   ◐   ⇄      │
+│ ─────────────────────── │      │   │                      │
+│                         │      └───┴──────────────────────┘
+│ ⚙ ⌕ ☝ ◐ ⇄               │       ↑ 8 to tiles at the top
+│                         │
 └─────────────────────────┘
+  ↑ 8 from Capy's end; 8 above/below the strip tiles
 ```
 
 Swapping sides mirrors the strip beside the Capy bar. Draw with Finger and Swap

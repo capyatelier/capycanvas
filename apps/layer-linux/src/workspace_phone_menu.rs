@@ -63,6 +63,7 @@ struct Pane {
     stack: gtk::Stack,
     navigation_handler: Option<glib::SignalHandlerId>,
     state: customization::InlineMenuState,
+    row: gtk::Widget,
 }
 impl Drop for Pane {
     fn drop(&mut self) {
@@ -143,25 +144,28 @@ impl Menu {
         self.model.borrow_mut().take();
         *self.navigation.borrow_mut() = PhoneMenuNavigation::default();
     }
-    pub fn measure(&self, phone: &PhoneLayout) -> (f32, f32) {
+    pub fn row_height(&self) -> f32 {
+        self.pane.borrow().as_ref().map_or(0., |pane| pane.row.measure(gtk::Orientation::Vertical, -1).1 as f32)
+    }
+    pub fn measure(&self, phone: &PhoneLayout, row_height: f32) -> (f32, f32) {
         let pane = self.pane.borrow();
         let Some(root) = pane.as_ref().and_then(|pane| pane.stack.child_by_name("main")) else { return (0., 0.); };
         let pane = pane.as_ref().unwrap();
         let (minimum, natural, _, _) = pane.widget.measure(gtk::Orientation::Horizontal, -1);
         let inset = (natural - root.measure(gtk::Orientation::Horizontal, -1).1).max(0);
-        let width = phone.menu_width(minimum as f32, natural as f32);
+        let width = phone.menu_width(minimum as f32, natural as f32, row_height);
         let content_width = (width as i32 - inset).max(1);
         let fixed = (pane.widget.measure(gtk::Orientation::Vertical, width as i32).1
             - pane.stack.measure(gtk::Orientation::Vertical, content_width).1).max(0);
         (width, (root.measure(gtk::Orientation::Vertical, content_width).1 + fixed) as f32)
     }
-    pub fn allocate(&self, phone: &PhoneLayout, placement: &DrawerPlacement) {
-        let view = phone.menu_geometry(placement);
+    pub fn allocate(&self, phone: &PhoneLayout, placement: &DrawerPlacement, row_height: f32) {
+        let view = phone.menu_geometry(placement, row_height);
         self.separator.set_orientation(if phone.edge == Edge::Top { gtk::Orientation::Horizontal } else { gtk::Orientation::Vertical });
         let [a, b, c, d, e] = view.buttons;
         let geometry = [view.list, view.separator, a, b, c, d, e];
         for button in &self.buttons {
-            if let Some(image) = button.child().and_downcast::<gtk::Image>() { image.set_pixel_size(phone.icon.round().max(1.) as i32); }
+            if let Some(image) = button.child().and_downcast::<gtk::Image>() { image.set_pixel_size(view.icon.round().max(1.) as i32); }
         }
         if self.root.imp().geometry.borrow().as_slice() != geometry.as_slice() {
             self.root.imp().geometry.borrow_mut().copy_from_slice(&geometry);
@@ -211,6 +215,7 @@ impl Menu {
             stack.set_hhomogeneous(false); stack.set_vhomogeneous(false);
             stack.set_widget_name("phone-menu-pages");
             let pages = PhoneMenuNavigation::pages(&model.list);
+            let mut menu_row = None;
             for page in &pages {
                 let child = stack.child_by_name(&page.name()).unwrap();
                 stack.page(&child).set_title(&page.menu.title);
@@ -228,7 +233,7 @@ impl Menu {
                     if page.path.is_empty() && item == &selector.page {
                         row.set_widget_name("phone-drawing"); row.set_hexpand(true);
                         *self.drawing.borrow_mut() = Some(row.clone());
-                    }
+                    } else if page.path.is_empty() { menu_row.get_or_insert_with(|| row.clone()); }
                     match &item.action {
                         Some(UiAction::Invoke { command: CommandId::NewDocument }) if page.path == [[0, 0]] => row.set_widget_name("phone-new-drawing"),
                         Some(UiAction::Phone { action: PhoneAction::Drawing { id, .. } }) => {
@@ -260,7 +265,7 @@ impl Menu {
             widget.set_orientation(gtk::Orientation::Vertical);
             widget.add_css_class("menu"); widget.add_css_class("phone-menu-native"); widget.append(&contents);
             self.body.append(&widget);
-            let mut pane = Pane { _popup: popup, widget, stack, navigation_handler: None, state: live };
+            let mut pane = Pane { _popup: popup, widget, stack, navigation_handler: None, state: live, row: menu_row.unwrap() };
             if let Some(page) = pages.iter().find(|page| page.name() == self.navigation.borrow().name()) { pane.select(page); }
             let menu = model.list.clone(); let navigation = self.navigation.clone();
             pane.navigation_handler = Some(pane.stack.connect_visible_child_name_notify(glib::clone!(#[weak] w, move |stack| {
