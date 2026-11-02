@@ -638,9 +638,13 @@ pub(super) fn document(w: &Workspace) -> layer_core::Document {
 
 /// Fill a lasso selection on `layer` and wait for its bar.
 pub(super) fn filled_selection(w: &Rc<Workspace>, layer: u64) {
+    filled_selection_at(w, layer, [650., 500., 1150., 850.]);
+}
+
+fn filled_selection_at(w: &Rc<Workspace>, layer: u64, [x0, y0, x1, y1]: [f32; 4]) {
     w.dispatch(UiAction::SelectLayer { id: layer });
     w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
-    native_pen_path(w, &[[650., 500.], [1150., 500.], [1150., 850.], [650., 850.], [650., 500.]]);
+    native_pen_path(w, &[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]);
     w.dispatch(UiAction::Layer { action: LayerAction::FillSelection });
     until(
         || state(w).canvas_bar.is_some_and(|b| b.context.kind == layer_ui::CanvasBarKind::Selection) && shown(w),
@@ -954,6 +958,84 @@ fn drag(native: &mut RemoteInput, device: Device, from: [f32; 2], to: [f32; 2]) 
             {"pen": "move", "point": to}, {"wait_ms": 20}, {"pen": "up"}, {"pen": "leave"}
         ]),
     });
+}
+
+pub(super) fn assert_preview_panel(w: &Workspace, field: &gtk::Widget) {
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let Some(phone) = state(w).phone_presentation(viewport) else { return; };
+    until(|| field.is_mapped() && field.width() > 0 && field.height() > 0
+        && !w.pages.root.is_transition_running(), "the canvas panel finishes opening");
+    drop(idle_paint(&w.window));
+    let dialog = w.visible_dialog().unwrap();
+    let frame = crate::page_dialog::parent(&dialog);
+    assert_ne!(frame, dialog.clone().upcast::<gtk::Widget>());
+    let bounds = frame.compute_bounds(&w.surface).unwrap();
+    let area = phone.work_area;
+    assert!(bounds.x() >= area.x - 1. && bounds.y() >= area.y - 1.
+        && bounds.x() + bounds.width() <= area.x + area.width + 1.
+        && bounds.y() + bounds.height() <= area.y + area.height + 1., "canvas panel stays between phone bars: {bounds:?}, {area:?}");
+    assert!(bounds.width() + 1. >= area.width.min(360.), "the canvas panel uses its available useful width: {bounds:?}");
+    let headers = descendants::<adw::HeaderBar>(&frame).into_iter().filter(|header| header.is_mapped()).collect::<Vec<_>>();
+    assert_eq!(headers.len(), 1, "the canvas panel has one visible header");
+    let header = &headers[0];
+    let title = header.title_widget().unwrap().downcast::<gtk::Label>().unwrap();
+    assert!(title.is_mapped() && !title.text().is_empty());
+    let alert = dialog.downcast::<adw::AlertDialog>().unwrap();
+    for widget in [title.upcast::<gtk::Widget>(),
+        descendants::<gtk::Button>(header.upcast_ref()).into_iter().find(|button| button.is_mapped()
+            && button.icon_name().as_deref() == Some("window-close-symbolic")).unwrap().upcast(),
+        find_button(header.upcast_ref(), &alert.response_label("apply")).unwrap().upcast()] {
+        let bounds = widget.compute_bounds(&frame).unwrap();
+        assert!(widget.is_mapped() && bounds.x() >= -1. && bounds.y() >= -1.
+            && bounds.x() + bounds.width() <= frame.width() as f32 + 1.
+            && bounds.y() + bounds.height() <= frame.height() as f32 + 1., "canvas panel header stays visible: {bounds:?}");
+    }
+    let track = find_css(field, "number-track").unwrap();
+    let bounds = track.compute_bounds(field).unwrap();
+    assert!((bounds.x() - 36.).abs() <= 1. && (field.width() as f32 - bounds.x() - bounds.width() - 76.).abs() <= 1.,
+        "the slider track fills the panel after its existing gutters: {bounds:?}, field {}", field.width());
+    let slider = descendant::<gtk::Scale>(&track).unwrap();
+    assert!((slider.compute_bounds(&track).unwrap().width() - bounds.width()).abs() <= 1., "the slider fills its track");
+    let bounds = slider.compute_bounds(&frame).unwrap();
+    let painted = idle_paint(&frame);
+    let renderer = w.window.renderer().unwrap();
+    let textures = [0., 6.].map(|offset| renderer.render_texture(&painted.node, Some(&gtk::graphene::Rect::new(
+        painted.bounds.x() + bounds.x() + bounds.width() * 0.8,
+        painted.bounds.y() + bounds.y() + bounds.height() * 0.5 + offset, 1., 1.))));
+    let [trough, adjacent] = glib::MainContext::default().block_on(gtk::gio::spawn_blocking(move || textures.map(|texture| {
+        let mut pixel = [0; 4];
+        texture.download(&mut pixel, 4);
+        pixel
+    }))).unwrap();
+    assert!(trough.iter().zip(adjacent).take(3).any(|(a, b)| a.abs_diff(b) >= 8),
+        "the unfilled trough stays visible against its panel: {trough:?}, {adjacent:?}");
+    assert!(state(w).host_error.is_none(), "{:?}", state(w).host_error);
+}
+
+#[test]
+#[ignore = "private compositor: --native-test=native_phone_refine_panel --native-storage; phone viewport, light/dark"]
+fn native_phone_refine_panel() {
+    let mut d = super::phone_motion::setup("art.capycanvas.PhoneRefinePanel");
+    let w = d.w.clone();
+    assert!(state(&w).phone_presentation([w.surface.width() as f32, w.surface.height() as f32]).is_some());
+    let [width, height] = document(&w).composition().size.map(|value| value as f32);
+    let layer = document(&w).working.occurrence.unwrap();
+    filled_selection_at(&w, layer_ui::occurrence_token(layer),
+        [(width * 0.5).round(), (height * 0.5).round(), (width * 0.85).round(), (height * 0.85).round()]);
+    let original = document(&w).working.selection;
+    w.dispatch(UiAction::Invoke { command: CommandId::FeatherSelection });
+    let field = until_some(|| find_named(w.window.upcast_ref(), "selection-refine-value").filter(|field| field.is_mapped()),
+        "Feather opens its phone panel");
+    assert_preview_panel(&w, &field);
+    super::phone::capture(&mut d, "refine-panel-initial");
+    let frame = crate::page_dialog::parent(&w.visible_dialog().unwrap());
+    let close = descendants::<gtk::Button>(&frame).into_iter().find(|button| button.is_mapped()
+        && button.icon_name().as_deref() == Some("window-close-symbolic")).unwrap();
+    d.click(close.upcast_ref());
+    until(|| state(&w).layer_tools.selection_resize.is_none() && w.visible_dialog().is_none()
+        && !w.pages.root.is_transition_running(), "native Cancel closes Feather");
+    assert_eq!(document(&w).working.selection, original, "Cancel preserves the original selection");
+    d.finish();
 }
 
 fn soft_edged(selection: &layer_core::Selection) -> bool {

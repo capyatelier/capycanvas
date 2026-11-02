@@ -16,7 +16,7 @@ impl DialogPresentation {
             Self::Floating => None,
             Self::Page(bounds) => Some(bounds),
             Self::CanvasPanel(area) => {
-                let width = measured[0].min(area.width).max(0.);
+                let width = area.width.min(measured[0].max(360.));
                 let height = measured[1].min(area.height).max(0.);
                 Some(Bounds { x: area.x + (area.width - width) * 0.5, y: area.y + area.height - height, width, height })
             }
@@ -52,6 +52,18 @@ mod tests {
             (DialogPresentation::Page(Bounds::default()), true),
             (DialogPresentation::CanvasPanel(Bounds::default()), false)] {
             assert_eq!(presentation.single_pane(), single);
+        }
+    }
+    #[test]
+    fn canvas_panels_keep_a_useful_width_inside_the_work_area() {
+        for available in [396., 770.] {
+            let area = Bounds { x: 8., y: 52., width: available, height: 300. };
+            for measured in [216_f32, 360., 900.] {
+                let bounds = DialogPresentation::CanvasPanel(area).bounds([measured, 100.]).unwrap();
+                assert_eq!(bounds.width, available.min(measured.max(360.)));
+                assert_eq!(bounds.x, area.x + (available - bounds.width) / 2.);
+                assert_eq!(bounds.y + bounds.height, area.y + area.height);
+            }
         }
     }
     #[test]

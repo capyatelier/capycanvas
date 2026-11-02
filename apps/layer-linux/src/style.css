@@ -241,6 +241,7 @@ button.flat.unavailable-tool > * { color: alpha(currentColor, .3); }
 .number-panel entry.number-entry { min-width: 0; }
 .number-panel .number-track { margin: -6px 76px 0 36px; }
 .number-panel.number-control scale { min-width: 0; min-height: 16px; padding: 0; margin: 0; }
+window.capy-workspace dialog .number-panel.number-control scale trough, .phone-dialog-page .number-panel.number-control scale trough { background: var(--panel-bg); }
 .number-panel.number-control scale highlight { background: mix(var(--panel-bg), var(--window-fg-color), .5); }
 .number-panel.number-control scale slider { min-width: 0; min-height: 0; padding: 0; border: 0; margin: 0; opacity: 0; }
 .number-dial { background: radial-gradient(circle closest-side, var(--input-bg) 92%, transparent 100%); color: mix(var(--panel-bg), var(--window-fg-color), .5); outline: none; }
