@@ -189,6 +189,7 @@ pub fn layer_footer_overflow(footer: &[LayerFooterSlot], width: f32) -> Vec<Cont
     footer.iter().filter(|slot| !slot.shown(width)).map(|slot| slot.item.clone()).collect()
 }
 impl LayersView {
+    pub fn presented_rows(&self, rows: &[LayerState]) -> usize { rows.len() + usize::from(self.add_paper.is_some()) }
     pub fn drawer_reveal_row(&self, rows: &[LayerState], epoch: u64, previous: Option<(u64, Option<u64>)>) -> Option<u32> {
         let id = self.editing_layer.as_ref().map(|layer| layer.id);
         if previous == Some((epoch, id)) { return None; }

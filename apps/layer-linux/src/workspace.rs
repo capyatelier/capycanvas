@@ -191,9 +191,9 @@ mod allocation {
             // Dock allocation can shrink below an individual panel's natural
             // size. Content panels scroll; tool ribbons clip their overflow.
             if orientation == gtk::Orientation::Horizontal {
-                (320, 1200, -1, -1)
+                (280, 1200, -1, -1)
             } else {
-                (320, 900, -1, -1)
+                (280, 900, -1, -1)
             }
         }
         fn size_allocate(&self, width: i32, height: i32, _: i32) {
@@ -1186,8 +1186,8 @@ impl Workspace {
             .property("title", localization.language().app_name())
             .property("default-width", 1200)
             .property("default-height", 900)
-            .property("width-request", 320)
-            .property("height-request", 320)
+            .property("width-request", 280)
+            .property("height-request", 280)
             .build();
         if let Some(size) = unsafe { app.data::<(i32, i32)>("capy-window-size") } {
             let (width, height) = unsafe { *size.as_ref() };
@@ -2288,7 +2288,7 @@ impl Workspace {
         let gpu = self.gpu.borrow();
         let keeps = |group: u32| gpu.as_ref().is_some_and(|g| g.session.zen_keeps(group));
         for (slot, widget) in self.surface.imp().children.borrow().iter() {
-            if !matches!(slot, Slot::Canvas | Slot::CanvasBar | Slot::ZenCapy | Slot::Bubbles | Slot::CommandSearch) {
+            if !matches!(slot, Slot::Canvas | Slot::CanvasBar | Slot::ZenCapy | Slot::Bubbles | Slot::CommandSearch | Slot::Phone) {
                 let hidden = hidden
                     && !widget.has_css_class("floating-panel")
                     && !matches!(slot, Slot::Group(id) if keeps(*id));

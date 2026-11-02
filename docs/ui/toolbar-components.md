@@ -22,6 +22,10 @@ Paint keeps it hidden. See [default workspaces](default-workspaces.md#arrangemen
 Sliders occupy one lane and prefer four tiles of length, including tile gaps.
 They work horizontally or vertically; vertical values increase upward. They
 follow the active tool’s Size or Strength setting and disable when unavailable.
+While the contact stays in the slider band, it follows the track. Moving away
+blends toward a linear mapping of the whole window along that axis over four
+tiles. Size keeps its logarithmic numeric curve. The phone bars use two tiles.
+Returning to the band restores the track mapping.
 Multiple instances and existing panels share the same state and preset memory.
 Size tracks widen toward larger values. Both orientations use equal end padding:
 6px end insets and rounded ends, with the theme text color at 22% for size.
@@ -53,7 +57,8 @@ touch and pen hold the cap. Holding the track keeps editing its value.
 Dragging opens a rounded floating stamp preview
 beside the slider, updates it continuously, and
 closes it on release or cancellation. A tap keeps the preview open until an
-outside tap or context change. The preview has the toolbar's tile radius and
+outside tap or context change. Dragging passes through the preview; after a tap
+its bookmark button accepts input. The preview has the toolbar's tile radius and
 no border. Its header is one row of that toolbar's tiles: the bookmark button
 is a full tile with the tile's icon size in the top-end corner, and the value
 and units are vertically centered beside it. The header fade scales with the

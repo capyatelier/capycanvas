@@ -23,9 +23,17 @@ impl TileWidget {
         if tile.control.is_component() {
             return Self::Component(Component::new(w, config.map(|c| c.id), tile, style, choice));
         }
-        let anchor = config.map_or(DrawerAnchor::Phone { tile: Some(tile.id) }, |c| DrawerAnchor::Tile { panel: c.id, tile: tile.id });
-        let button = customization::tile_button(w, anchor, tile, style, choice);
-        if tile.control.has_variants() {
+        let anchor = config.map_or(DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Tool(tile.id) }, |c| DrawerAnchor::Tile { panel: c.id, tile: tile.id });
+        let item = Self::control_button(w, anchor, tile.control, style, choice);
+        if let Some(config) = config {
+            w.install_panel_drag(&item.root(), DockItem::Tile { panel: config.id, tile: tile.id });
+            w.install_context(&item.root(), ContextTarget::Tile { panel: config.id, tile: tile.id });
+        }
+        item
+    }
+    pub fn control_button(w: &Rc<Workspace>, anchor: DrawerAnchor, control: ToolbarControl, style: TileStyle, choice: &ToolChoice) -> Self {
+        let button = customization::tile_button(w, anchor, control, style, choice);
+        if control.has_variants() {
             customization::tool_group_marker(&button);
         }
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -33,11 +41,7 @@ impl TileWidget {
         button.set_hexpand(true);
         button.set_vexpand(true);
         root.append(&button);
-        if config.is_none() { customization::extend_button(w, &root, &button, Some(tile.control)); }
-        if let Some(config) = config {
-            w.install_panel_drag(&root, DockItem::Tile { panel: config.id, tile: tile.id });
-            w.install_context(&root, ContextTarget::Tile { panel: config.id, tile: tile.id });
-        }
+        if matches!(anchor, DrawerAnchor::Phone { .. }) { customization::extend_button(w, &root, &button, Some(control)); }
         Self::Button {
             root: root.upcast(),
             button,
@@ -52,7 +56,7 @@ impl TileWidget {
     pub fn button(&self) -> gtk::Button {
         match self {
             Self::Button { button, .. } => button.clone(),
-            Self::Component(c) => c.button.clone(),
+            Self::Component(c) => c.button.as_ref().unwrap().clone(),
         }
     }
     pub fn refresh_selection(&self, value: bool, variants: bool) {
@@ -125,6 +129,7 @@ mod imp {
         pub style: Cell<TileStyle>,
         pub options: Cell<ToolOptionsStyle>,
         pub slider_style: Cell<ToolbarSliderStyle>,
+        pub slider_grip: Cell<bool>,
         pub readout_label: RefCell<Option<gtk::Label>>,
         pub readout_title: RefCell<Option<gtk::Label>>,
         pub readout_unit: RefCell<Option<gtk::Label>>,
@@ -132,6 +137,7 @@ mod imp {
         pub readout_scale: Cell<f64>,
         pub fit_cross: Cell<bool>,
         pub visual_scale: Cell<f32>,
+        pub stretch_distance: Cell<f32>,
         pub preview: glib::WeakRef<gtk::Popover>,
     }
     #[glib::object_subclass]
@@ -186,9 +192,10 @@ mod imp {
             };
             if self.slider.get() {
                 let layout = toolbar_slider_styled_layout(width as f32 / factor, height as f32 / factor, axis,
-                    self.style.get(), self.slider_style.get());
+                    self.style.get(), self.slider_style.get(), self.slider_grip.get());
+                self.stretch_distance.set(layout.stretch_distance * factor);
                 let bounds = [layout.cap, layout.track];
-                if let Some(content) = children[0].first_child().and_then(|button|button.first_child()) { content.set_visible(layout.show_value); }
+                if self.slider_grip.get() && let Some(content) = children[0].first_child().and_then(|button|button.first_child()) { content.set_visible(layout.show_value); }
                 if layout.show_value && let (Some(label), Some(unit)) = (self.readout_label.borrow().as_ref(), self.readout_unit.borrow().as_ref()) {
                     let metrics = toolbar_slider_readout_metrics(self.style.get(), axis, &label.text());
                     if let Some(row) = self.readout_row.borrow().as_ref() {
@@ -205,7 +212,7 @@ mod imp {
                         [available_width, (bounds[0].height as i32 - native_inset[1] - 2 * metrics.inset as i32 - title_height).max(1)],
                         metrics.gap as i32, metrics.units_below, self.readout_scale.get()));
                 }
-                for (child, b) in children.iter().zip(bounds)
+                for (child, b) in children.iter().zip(bounds.into_iter().skip(usize::from(!self.slider_grip.get())))
                 {
                     allocate(child, b);
                 }
@@ -282,15 +289,11 @@ mod imp {
         }
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             if self.slider.get()
-                && let Some(scale) = self
-                    .children
-                    .borrow()
-                    .get(1)
-                    .and_then(|w| w.downcast_ref::<gtk::Scale>())
+                && let Some(scale) = self.obj().scale()
                 {
                     paint_track(
                         &self.obj(),
-                        scale,
+                        &scale,
                         snapshot,
                         self.opacity.get(),
                         self.vertical.get(),
@@ -315,11 +318,13 @@ glib::wrapper! {
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 impl ComponentBody {
+    fn scale(&self) -> Option<gtk::Scale> {
+        self.imp().children.borrow().iter().find_map(|child| child.downcast_ref::<gtk::Scale>()).cloned()
+    }
     fn position_preview(&self) {
         let Some(popover) = self.imp().preview.upgrade() else { return; };
         let Some(window) = popover.parent() else { return; };
-        let children = self.imp().children.borrow();
-        let Some(scale) = children.get(1).and_then(|child| child.downcast_ref::<gtk::Scale>()) else { return; };
+        let Some(scale) = self.scale() else { return; };
         let Some(component) = self.compute_bounds(&window) else { return; };
         let strip = if self.imp().fit_cross.get() { component } else {
             self.parent().and_then(|parent| parent.compute_bounds(&window)).unwrap_or(component)
@@ -372,12 +377,7 @@ impl ComponentBody {
             self.remove_css_class("vertical-component");
         }
         if self.imp().slider.get()
-            && let Some(scale) = self
-                .imp()
-                .children
-                .borrow()
-                .get(1)
-                .and_then(|w| w.downcast_ref::<gtk::Scale>())
+            && let Some(scale) = self.scale()
             {
                 scale.set_orientation(if vertical {
                     gtk::Orientation::Vertical
@@ -647,7 +647,7 @@ pub(crate) fn segment_buttons(
 }
 pub(super) struct Component {
     pub root: ComponentBody,
-    pub button: gtk::Button,
+    pub button: Option<gtk::Button>,
     pub control: ToolbarControl,
     context: Cell<Option<ToolbarContext>>,
     contact_context: Cell<Option<ToolbarContext>>,
@@ -662,13 +662,13 @@ pub(super) struct Component {
 }
 impl Component {
     pub fn new(w: &Rc<Workspace>, panel: Option<Panel>, tile: &ToolbarTile, style: TileStyle, choice: &ToolChoice) -> Rc<Self> {
-        Self::build(w, tile.control, tile.slider_style, panel.map(|panel| TileAnchor { panel, tile: tile.id }), style, choice)
+        Self::build(w, tile.control, tile.slider_style, panel.map(|panel| TileAnchor { panel, tile: tile.id }), style, choice, true)
     }
     pub fn slider(w: &Rc<Workspace>, control: ToolbarControl, style: TileStyle, choice: &ToolChoice) -> Rc<Self> {
         assert!(control.slider().is_some());
-        Self::build(w, control, ToolbarSliderStyle::default(), None, style, choice)
+        Self::build(w, control, ToolbarSliderStyle::default(), None, style, choice, false)
     }
-    fn build(w: &Rc<Workspace>, control: ToolbarControl, slider_style: ToolbarSliderStyle, source: Option<TileAnchor>, style: TileStyle, choice: &ToolChoice) -> Rc<Self> {
+    fn build(w: &Rc<Workspace>, control: ToolbarControl, slider_style: ToolbarSliderStyle, source: Option<TileAnchor>, style: TileStyle, choice: &ToolChoice, grip: bool) -> Rc<Self> {
         let name = source.map_or_else(|| match control.slider().unwrap() { ToolbarNumericBinding::BrushSize => "size", ToolbarNumericBinding::BrushStrength => "strength" }.to_string(), |source| source.tile.to_string());
         let root: ComponentBody = glib::Object::new();
         root.set_overflow(gtk::Overflow::Hidden);
@@ -676,28 +676,33 @@ impl Component {
         root.add_css_class("small-component");
         root.add_css_class("customizable-target");
         root.imp().slider_style.set(slider_style);
+        root.imp().slider_grip.set(grip);
         root.imp().fit_cross.set(source.is_none());
         root.imp().visual_scale.set(1.);
         root.update_property(&[gtk::accessible::Property::Label(
             &choice.label,
         )]);
         let binding = control.slider();
-        let button = gtk::Button::new();
-        button.set_hexpand(true);
-        button.set_vexpand(true);
-        button.add_css_class("flat");
-        button.set_widget_name(&format!("component-cap-{name}"));
-        button.set_tooltip_text(Some(&choice.label));
-        let cap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        cap.append(&button);
         let target = source.map(|s| ContextTarget::Tile { panel: s.panel, tile: s.tile });
-        if let Some(source) = source {
-            button.set_widget_name(&format!("tile-{}", source.tile));
-            w.install_panel_drag(&cap, DockItem::Tile { panel: source.panel, tile: source.tile });
-            w.install_context(&cap, target.unwrap());
-        }
-        root.append(&cap);
-        let readout = (binding.is_some() && slider_style.show_value).then(|| {
+        let button = grip.then(|| {
+            let button = gtk::Button::new();
+            button.set_hexpand(true);
+            button.set_vexpand(true);
+            button.add_css_class("flat");
+            button.set_widget_name(&format!("component-cap-{name}"));
+            button.set_tooltip_text(Some(&choice.label));
+            let cap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            cap.append(&button);
+            if let Some(source) = source {
+                button.set_widget_name(&format!("tile-{}", source.tile));
+                w.install_panel_drag(&cap, DockItem::Tile { panel: source.panel, tile: source.tile });
+                w.install_context(&cap, target.unwrap());
+            }
+            root.append(&cap);
+            button
+        });
+        let readout = (grip && binding.is_some() && slider_style.show_value).then(|| {
+            let button = button.as_ref().unwrap();
             let label = gtk::Label::new(None);
             label.set_widget_name(&format!("slider-value-{name}"));
             label.add_css_class("slider-value");
@@ -734,7 +739,7 @@ impl Component {
             SliderReadout { value: label, unit, title }
         });
         let slider = if let Some(ref binding) = binding {
-            button.add_css_class("slider-cap");
+            if let Some(button) = &button { button.add_css_class("slider-cap"); }
             let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0., 1., 0.001);
             scale.set_draw_value(false);
             scale.set_hexpand(true);
@@ -752,6 +757,7 @@ impl Component {
             scale.add_css_class("brush-track");
             Some(scale)
         } else {
+            let button = button.as_ref().unwrap();
             root.imp()
                 .options
                 .set(control.options_style().unwrap());
@@ -778,7 +784,7 @@ impl Component {
         });
         component.root.set_presentation(Axis::Horizontal, style);
         if component.slider.is_none() {
-            component.button.connect_clicked(glib::clone!(
+            component.button.as_ref().unwrap().connect_clicked(glib::clone!(
                 #[weak]
                 w,
                 move |_| {
@@ -844,7 +850,7 @@ impl Component {
         if let Some(slider) = &self.slider {
             let enabled = state.numeric.is_some();
             slider.set_sensitive(enabled);
-            self.button.set_sensitive(enabled);
+            if let Some(button) = &self.button { button.set_sensitive(enabled); }
             if changed_context {
                 self.close_preview();
                 if self.contact_context.get().is_some()
@@ -1062,6 +1068,7 @@ impl Component {
         self.update_preview(&w.localization());
         let preview = self.preview.borrow().clone();
         if let Some(preview) = preview {
+            preview.popover.set_can_target(self.contact_context.get().is_none());
             preview.popover.popup();
             preview.popover.present();
         }
@@ -1214,7 +1221,7 @@ impl Component {
                 moved.set(false);
                 component.contact_context.set(component.context.get());
                 w.dispatch(UiAction::Phone { action: PhoneAction::Slider { control: component.control, phase: ContactPhase::Down } });
-                component.pick_slider([x, y], true, &w.localization());
+                component.pick_slider(&w, [x, y], true);
                 component.show_preview(&w);
             }
         ));
@@ -1232,7 +1239,7 @@ impl Component {
                     return;
                 }
                 moved.set(true);
-                component.pick_slider([origin.get()[0] + x, origin.get()[1] + y], false, &w.localization());
+                component.pick_slider(&w, [origin.get()[0] + x, origin.get()[1] + y], false);
             }
         ));
         gesture.connect_drag_end(glib::clone!(
@@ -1264,15 +1271,17 @@ impl Component {
             }
         ));
         scale.add_controller(gesture);
-        self.button.connect_clicked(glib::clone!(
-            #[weak(rename_to=component)]
-            self,
-            #[weak]
-            w,
-            move |_| component.show_preview(&w)
-        ));
+        if let Some(button) = &self.button {
+            button.connect_clicked(glib::clone!(
+                #[weak(rename_to=component)]
+                self,
+                #[weak]
+                w,
+                move |_| component.show_preview(&w)
+            ));
+        }
     }
-    fn pick_slider(&self, point: [f64; 2], snap: bool, localization: &layer_ui::Localizer) {
+    fn pick_slider(&self, w: &Workspace, point: [f64; 2], snap: bool) {
         let scale = self.slider.as_ref().unwrap();
         let vertical = self.root.imp().vertical.get();
         let range = scale.range_rect();
@@ -1287,19 +1296,26 @@ impl Component {
         if length <= 0. {
             return;
         }
-        let p = if vertical {
-            point[1] - range.y() as f64
-        } else {
-            point[0] - range.x() as f64
+        let Some(band) = self.root.compute_bounds(&w.window) else { return; };
+        let points = if vertical {
+            [[0., range.y() as f64 + half + length], [0., range.y() as f64 + half], point]
+        } else { [[range.x() as f64 + half, 0.], [range.x() as f64 + half + length, 0.], point] };
+        let [Some(start), Some(end), Some(point)] = points.map(|[x, y]| scale.compute_point(&w.window, &gtk::graphene::Point::new(x as f32, y as f32))) else { return; };
+        let transition = w.gpu.borrow().as_ref().and_then(|g| g.session.phone_layout())
+            .map_or(self.root.imp().stretch_distance.get(), |p| p.slider_stretch_distance());
+        let geometry = ToolbarSliderStretch {
+            track: if vertical { [start.y(), end.y()] } else { [start.x(), end.x()] },
+            band: if vertical { [band.x(), band.x() + band.width()] } else { [band.y(), band.y() + band.height()] },
+            extent: if vertical { w.window.height() } else { w.window.width() } as f32,
+            transition,
         };
-        let position = ((p - half) / length).clamp(0., 1.);
-        let position = if vertical { 1. - position } else { position };
+        let position = toolbar_slider_stretch(geometry, if vertical { [point.y(), point.x()] } else { [point.x(), point.y()] });
         let values: Vec<_> = if snap {
             self.root.imp().bookmarks.borrow().iter().map(|m| m.value).collect()
         } else {
             Vec::new()
         };
-        let value = slider_bookmark_value(self.control, &values, position, length, localization);
+        let value = slider_bookmark_value(self.control, &values, position as f64, length, &w.localization());
         if let Ok(value) = value {
             let number = self
                 .control
@@ -1608,10 +1624,7 @@ fn paint_track(
 }
 
 fn paint_bookmarks(root: &ComponentBody, snapshot: &gtk::Snapshot, bookmarks: &[SliderBookmark]) {
-    let children = root.imp().children.borrow();
-    let Some(scale) = children.get(1).and_then(|w| w.downcast_ref::<gtk::Scale>()) else {
-        return;
-    };
+    let Some(scale) = root.scale() else { return; };
     let Some(b) = scale.compute_bounds(root) else {
         return;
     };

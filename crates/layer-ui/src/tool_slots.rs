@@ -397,7 +397,8 @@ impl DockLayout {
     }
     pub(crate) fn anchor_control(&self, anchor: DrawerAnchor) -> Option<ToolbarControl> {
         match anchor {
-            DrawerAnchor::Phone { tile: Some(id) } => self.phone.as_ref()?.iter().find(|t| t.id == id).map(|t| t.control),
+            DrawerAnchor::Phone { anchor: crate::PhoneDrawerAnchor::ToolSettings } => self.phone.as_ref().map(|_| crate::PhoneLayout::SETTINGS),
+            DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Tool(id) } => self.phone.as_ref()?.iter().find(|t| t.id == id).map(|t| t.control),
             DrawerAnchor::Tile { panel, tile } => self
                 .panel(panel)
                 .ok()?
@@ -500,7 +501,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Some((group, Some(anchor)));
         }
         if self.phone_layout().is_some()
-            && let Some((anchor, group)) = layout.phone.iter().flatten().filter_map(|t| t.control.tool_group().map(|g| (DrawerAnchor::Phone { tile: Some(t.id) }, g)))
+            && let Some((anchor, group)) = layout.phone.iter().flatten().filter_map(|t| t.control.tool_group().map(|g| (DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Tool(t.id) }, g)))
                 .find(|(_, group)| group.active(&self.state)) {
             return Some((group, Some(anchor)));
         }
@@ -675,6 +676,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     if matches!(group, ToolControlGroup::Brush(_)) && choices.groups.len() + choices.subtools.len() <= 1 {
                         columns.retain(|column| !column.iter().all(|panel| matches!(panel, Panel::Tools | Panel::Brushes)));
                     }
+                    let columns = ContentDrawer::presented_columns(anchor, columns);
                     let drawer = self.state.customization.drawer.as_mut().unwrap();
                     if drawer.columns != columns || drawer.tool_set.is_some() {
                         drawer.columns = columns;
@@ -712,6 +714,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             };
             (columns, None)
         };
+        let columns = ContentDrawer::presented_columns(anchor, columns);
         let drawer = self.state.customization.drawer.as_mut().unwrap();
         if drawer.columns != columns || drawer.tool_set != tool_set {
             drawer.columns = columns;

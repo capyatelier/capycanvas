@@ -36,7 +36,7 @@ fn navigation_header(d: &Driver, frame: &gtk::Widget, root: bool) -> adw::Header
     header
 }
 
-fn page(d: &Driver) -> (adw::Dialog, gtk::Widget) {
+fn page_frame(d: &Driver) -> (adw::Dialog, gtk::Widget) {
     until(|| d.w.visible_dialog().is_some_and(|dialog| {
         let frame = crate::page_dialog::parent(&dialog);
         frame != dialog.clone().upcast::<gtk::Widget>() && frame.is_mapped()
@@ -44,6 +44,11 @@ fn page(d: &Driver) -> (adw::Dialog, gtk::Widget) {
     }), "the editor page is mapped and settled");
     let dialog = d.w.visible_dialog().unwrap();
     let frame = crate::page_dialog::parent(&dialog);
+    (dialog, frame)
+}
+
+fn page(d: &Driver) -> (adw::Dialog, gtk::Widget) {
+    let (dialog, frame) = page_frame(d);
     assert!(!dialog.is_mapped(), "the original native dialog is detached");
     let bounds = frame.compute_bounds(&d.w.window).unwrap();
     assert!(bounds.x().abs() <= 1. && bounds.y().abs() <= 1., "{bounds:?}");
@@ -81,6 +86,78 @@ fn close(d: &Driver, dialog: &adw::Dialog) {
 
 fn keys(d: &mut Driver, key: u32) {
     d.input.perform(serde_json::json!([{ "key": key, "down": true }, { "key": key, "down": false }]));
+}
+
+fn export_page(d: &mut Driver, frame: &gtk::Widget, tag: &str) {
+    let nav = named::<adw::NavigationView>(frame, "export-navigation");
+    let row = named::<adw::ActionRow>(frame, &format!("export-open-{tag}"));
+    let scroll = named::<gtk::ScrolledWindow>(frame, "export-main-scroll");
+    assert!(row.grab_focus());
+    until(|| row.compute_bounds(&scroll).is_some_and(|bounds| bounds.y() >= -1.
+        && bounds.y() + bounds.height() <= scroll.height() as f32 + 1.), "Export link scrolls into its native viewport");
+    d.click(row.upcast_ref());
+    until(|| nav.visible_page_tag().as_deref() == Some(tag), "Export opens its native subpage");
+    page_header(frame);
+}
+
+pub(super) fn inventory(d: &mut Driver) {
+    let compact = d.w.surface.width().min(d.w.surface.height()) < 320;
+    d.w.dispatch(UiAction::Invoke { command: CommandId::Settings });
+    let (dialog, frame) = page_frame(d);
+    let split = descendants::<adw::NavigationSplitView>(&frame).pop().unwrap();
+    if split.is_collapsed() && split.shows_content() {
+        d.click(icon_button(&page_header(&frame), "go-previous-symbolic").unwrap().upcast_ref());
+        until(|| !split.shows_content(), "Preferences returns to its root list");
+        page_header(&frame);
+    }
+    capture(d, "preferences-root");
+    let appearance = SettingsPage::Appearance.localized_title(&d.w.localization());
+    d.click(&mapped_label(&frame, &appearance).unwrap());
+    until(|| split.shows_content(), "Preferences opens its page");
+    if split.is_collapsed() { page_header(&frame); }
+    capture(d, "preferences-subpage");
+    close(d, &dialog);
+
+    if !compact {
+        d.w.dispatch(UiAction::Invoke { command: CommandId::NewDocument });
+        let (dialog, _) = page_frame(d);
+        capture(d, "new-drawing");
+        close(d, &dialog);
+    }
+    d.w.dispatch(UiAction::Invoke { command: CommandId::ExportDocument });
+    let (dialog, frame) = page_frame(d);
+    until(|| find_named(&frame, "color-preview-after").and_then(|widget| widget.downcast::<gtk::Picture>().ok())
+        .is_some_and(|picture| picture.paintable().is_some()), "Export publishes its inventory preview");
+    capture(d, "export");
+    export_page(d, &frame, "size");
+    capture(d, "export-size");
+    close(d, &dialog);
+    if compact { return; }
+
+    d.w.dispatch(UiAction::Invoke { command: CommandId::CanvasSize });
+    let (dialog, _) = page_frame(d);
+    capture(d, "canvas-size");
+    close(d, &dialog);
+    crate::color_editor::show(&d.w, layer_ui::ColorSlot::Foreground);
+    let (dialog, _) = page_frame(d);
+    capture(d, "color");
+    close(d, &dialog);
+    d.w.workspaces.ui.show(&d.w, layer_workspace::ManagerPage::Workspaces);
+    let (dialog, _) = page_frame(d);
+    capture(d, "workspaces");
+    close(d, &dialog);
+    d.w.workspaces.ui.show(&d.w, layer_workspace::ManagerPage::ThisWorkspace);
+    let (dialog, frame) = page_frame(d);
+    capture(d, "workspace-manager-root");
+    let split = descendants::<adw::NavigationSplitView>(&frame).pop().unwrap();
+    if split.is_mapped() {
+        let list = named::<gtk::ListBox>(&frame, "workspace-manager-items");
+        d.click(list.row_at_index(0).unwrap().upcast_ref());
+        until(|| split.shows_content(), "the workspace manager opens its inventory details");
+        page_header(&frame);
+    }
+    capture(d, "workspace-manager-detail");
+    close(d, &dialog);
 }
 
 fn header_state(root: &gtk::Widget) -> Vec<(adw::HeaderBar, gtk::Widget, bool, bool, Option<gtk::Widget>)> {
@@ -143,13 +220,7 @@ fn native_phone_navigation_headers() {
     let parent = source.parent();
     let primary = gtk::prelude::GtkWindowExt::default_widget(&d.w.window).unwrap().downcast::<gtk::Button>().unwrap();
     for tag in ["size", "color", "presets"] {
-        let row = named::<adw::ActionRow>(&frame, &format!("export-open-{tag}"));
-        let scroll = named::<gtk::ScrolledWindow>(&frame, "export-main-scroll");
-        assert!(row.grab_focus());
-        until(|| row.compute_bounds(&scroll).is_some_and(|bounds| bounds.y() >= -1.
-            && bounds.y() + bounds.height() <= scroll.height() as f32 + 1.), "Export link scrolls into its native viewport");
-        d.click(row.upcast_ref());
-        until(|| nav.visible_page_tag().as_deref() == Some(tag), "Export opens its native subpage");
+        export_page(&mut d, &frame, tag);
         let subpage = navigation_header(&d, &frame, false);
         let action = gtk::prelude::GtkWindowExt::default_widget(&d.w.window).unwrap().downcast::<gtk::Button>().unwrap();
         assert_eq!(action.label(), primary.label());

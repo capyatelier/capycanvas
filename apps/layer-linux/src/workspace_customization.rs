@@ -2,6 +2,40 @@
 //! GTK owns gestures/widgets; catalogs, selection, validation and edits are Rust UI policy.
 use super::*;
 
+pub(super) struct InlineMenuState {
+    model: Rc<RefCell<ContextMenu>>,
+    actions: gtk::gio::SimpleActionGroup,
+}
+impl InlineMenuState {
+    pub fn update(&self, next: &ContextMenu) -> bool {
+        fn same(a: &[Vec<ContextMenuItem>], b: &[Vec<ContextMenuItem>]) -> bool {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| a.len() == b.len() && a.iter().zip(b).all(|(a, b)|
+                a.label == b.label && a.icon == b.icon && a.hint == b.hint && a.bindings == b.bindings
+                && a.selected.is_some() == b.selected.is_some() && (a.action == b.action || a.keep_open() && b.keep_open()) && same(&a.sections, &b.sections)))
+        }
+        fn update(sections: &[Vec<ContextMenuItem>], prefix: &str, actions: &gtk::gio::SimpleActionGroup) {
+            for (s, section) in sections.iter().enumerate() { for (i, item) in section.iter().enumerate() {
+                let id = format!("{prefix}-{s}-{i}");
+                if let Some(action) = actions.lookup_action(&id).and_downcast::<gtk::gio::SimpleAction>() {
+                    action.set_enabled(item.enabled);
+                    if let Some(selected) = item.selected { action.set_state(&selected.to_variant()); }
+                }
+                update(&item.sections, &id, actions);
+            } }
+        }
+        if !same(&self.model.borrow().sections, &next.sections) { return false; }
+        *self.model.borrow_mut() = next.clone();
+        update(&next.sections, "item", &self.actions);
+        true
+    }
+    fn item(menu: &ContextMenu, path: &[[usize; 2]]) -> Option<ContextMenuItem> {
+        let mut sections = &menu.sections;
+        let mut found = None;
+        for &[s, i] in path { let item = sections.get(s)?.get(i)?; sections = &item.sections; found = Some(item); }
+        found.cloned()
+    }
+}
+
 pub(super) fn square_corners(widget: &impl IsA<gtk::Widget>, corners: [bool; 4]) {
     for (square, class) in corners.into_iter().zip(["join-nw", "join-ne", "join-se", "join-sw"]) {
         if square { widget.add_css_class(class); } else { widget.remove_css_class(class); }
@@ -80,11 +114,11 @@ pub(super) fn extend_button(w: &Rc<Workspace>, root: &impl IsA<gtk::Widget>, but
         let outside = gesture.widget().and_then(|root| button.compute_bounds(&root))
             .is_some_and(|b| !b.contains_point(&gtk::graphene::Point::new(x as f32, y as f32)));
         margin.set(outside);
-        if outside { gesture.set_state(gtk::EventSequenceState::Claimed); }
     }));
     click.connect_released(glib::clone!(#[weak] w, #[weak] button, #[strong] margin, #[strong] suppress, move |gesture, count, x, y| {
         if margin.replace(false) && !suppress.replace(false)
             && gesture.widget().is_some_and(|root| root.contains(x, y)) {
+            gesture.set_state(gtk::EventSequenceState::Claimed);
             if let Some(control) = control.filter(|c| count == 2 && c.double_click_command().is_some()) {
                 w.dispatch(UiAction::DoubleClickTool { control });
             } else { button.emit_clicked(); }
@@ -97,11 +131,10 @@ pub(super) fn extend_button(w: &Rc<Workspace>, root: &impl IsA<gtk::Widget>, but
 pub(super) fn tile_button(
     w: &Rc<Workspace>,
     anchor: DrawerAnchor,
-    tile: &ToolbarTile,
+    control: ToolbarControl,
     style: TileStyle,
     choice: &ToolChoice,
 ) -> gtk::Button {
-    let id = tile.id;
     let button = gtk::Button::builder().tooltip_text(&choice.label).build();
     let icon = w.customization.icon(w, choice.icon, style.icon_size() as i32);
     let label_lines = style.label_lines();
@@ -134,13 +167,14 @@ pub(super) fn tile_button(
         button.set_child(Some(&icon));
     }
     button.add_css_class("flat");
-    button.set_widget_name(&format!("tile-{id}"));
+    if let DrawerAnchor::Tile { tile, .. } | DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Tool(tile) } = anchor {
+        button.set_widget_name(&format!("tile-{tile}"));
+    }
     button.update_property(&[gtk::accessible::Property::Label(&choice.label)]);
-    if matches!(tile.control, ToolbarControl::ColorPicker | ToolbarControl::Command { command: CommandId::Eyedropper }) {
-        crate::color_picker::bind_button(w, &button, anchor, tile.control);
+    if matches!(control, ToolbarControl::ColorPicker | ToolbarControl::Command { command: CommandId::Eyedropper }) {
+        crate::color_picker::bind_button(w, &button, anchor, control);
     } else {
-        let double = tool_double_click(&button, tile.control);
-        let control = tile.control;
+        let double = tool_double_click(&button, control);
         button.connect_clicked(glib::clone!(
             #[weak]
             w,
@@ -153,13 +187,14 @@ pub(super) fn tile_button(
                 w.dispatch(if double.replace(false) { UiAction::DoubleClickTool { control } }
                     else { match anchor {
                         DrawerAnchor::Tile { panel, tile } => UiAction::ActivateTile { panel, tile },
-                        DrawerAnchor::Phone { tile: Some(tile) } => UiAction::Phone { action: PhoneAction::Tool { tile } },
+                        DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Tool(tile) } => UiAction::Phone { action: PhoneAction::Tool { tile } },
+                        DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::ToolSettings } => UiAction::Phone { action: PhoneAction::ToolSettings },
                         _ => unreachable!(),
                     } });
             }
         ));
     }
-    if tile.control == ToolbarControl::Divider {
+    if control == ToolbarControl::Divider {
         button.set_child(Some(&crate::tiles::divider_line(gtk::Orientation::Horizontal)));
         button.add_css_class("toolbar-divider");
     }
@@ -971,7 +1006,7 @@ impl Customization {
             toolbar.strip.set_style(style);
             toolbar.style = style;
             toolbar.items = config.tiles().iter().filter_map(|tile| {
-                let choice = &view.tiles.iter().find(|view| view.id == tile.id && view.choice.control == tile.control)?.choice;
+                let choice = &view.tiles.iter().find(|view| view.id == Some(tile.id) && view.choice.control == tile.control)?.choice;
                 let item = toolbar_components::TileWidget::new(w, Some(config), tile, style, choice);
                 toolbar.strip.append(&item.root());
                 Some(item)
@@ -1765,7 +1800,7 @@ impl Workspace {
 
     fn fill_menu(self: &Rc<Self>, popover: &gtk::PopoverMenu, menu: layer_ui::ContextMenu, keep_toggles: bool) {
         let checks = RefCell::new(Vec::new());
-        let root = self.menu_model(popover, menu, keep_toggles.then_some(&checks), None, None);
+        let root = self.menu_model(popover, menu, keep_toggles.then_some(&checks), None, None, None);
         popover.set_menu_model(Some(&root));
         for (id, check) in checks.borrow().iter() {
             popover.add_child(check, id);
@@ -1803,15 +1838,16 @@ impl Workspace {
         popover: &gtk::PopoverMenu,
         menu: layer_ui::ContextMenu,
     ) -> gtk::gio::Menu {
-        self.menu_model(popover, menu, None, None, None)
+        self.menu_model(popover, menu, None, None, None, None)
     }
 
-    pub(crate) fn inline_workspace_menu(self: &Rc<Self>, menu: layer_ui::ContextMenu) -> (gtk::PopoverMenu, gtk::Stack) {
+    pub(super) fn inline_workspace_menu(self: &Rc<Self>, menu: layer_ui::ContextMenu) -> (gtk::PopoverMenu, gtk::Stack, InlineMenuState) {
         let popup = gtk::PopoverMenu::from_model(gtk::gio::MenuModel::NONE);
         let viewport = popup.child().and_downcast::<gtk::ScrolledWindow>().unwrap()
             .child().and_downcast::<gtk::Viewport>().unwrap();
         let content = viewport.child().and_downcast::<gtk::Stack>().unwrap();
-        let model = self.menu_model(&popup, menu, None, None, Some(content.upcast_ref()));
+        let state = InlineMenuState { model: Rc::new(RefCell::new(menu.clone())), actions: gtk::gio::SimpleActionGroup::new() };
+        let model = self.menu_model(&popup, menu, None, None, Some(content.upcast_ref()), Some(&state));
         popup.set_menu_model(Some(&model));
         Self::menu_icons(content.upcast_ref());
         unsafe {
@@ -1820,7 +1856,7 @@ impl Workspace {
                 std::ptr::null_mut(), popup.as_ptr().cast());
         }
         viewport.set_child(gtk::Widget::NONE);
-        (popup, content)
+        (popup, content, state)
     }
 
     pub(crate) fn workspace_switcher_menu_model(
@@ -1829,7 +1865,7 @@ impl Workspace {
         menu: layer_ui::ContextMenu,
     ) -> (gtk::gio::Menu, Vec<(String, gtk::CheckButton)>) {
         let checks = RefCell::new(Vec::new());
-        let model = self.menu_model(popover, menu, None, Some(&checks), None);
+        let model = self.menu_model(popover, menu, None, Some(&checks), None, None);
         (model, checks.into_inner())
     }
 
@@ -1866,6 +1902,7 @@ impl Workspace {
         checks: Option<&RefCell<Vec<(String, gtk::CheckButton)>>>,
         visibility_checks: Option<&RefCell<Vec<(String, gtk::CheckButton)>>>,
         action_root: Option<&gtk::Widget>,
+        live: Option<&InlineMenuState>,
     ) -> gtk::gio::Menu {
         popover.set_flags(if visibility_checks.is_some() || action_root.is_some() { gtk::PopoverMenuFlags::empty() } else { gtk::PopoverMenuFlags::NESTED });
         fn model(
@@ -1877,6 +1914,7 @@ impl Workspace {
             checks: Option<&RefCell<Vec<(String, gtk::CheckButton)>>>,
             visibility_checks: Option<&RefCell<Vec<(String, gtk::CheckButton)>>>,
             path: Option<Vec<[usize; 2]>>,
+            live: Option<&InlineMenuState>,
         ) -> gtk::gio::Menu {
             let root = gtk::gio::Menu::new();
             for (s, items) in sections.into_iter().enumerate() {
@@ -1886,6 +1924,7 @@ impl Workspace {
                 }
                 let section = gtk::gio::Menu::new();
                 for (i, item) in items.into_iter().enumerate().skip(usize::from(heading.is_some())) {
+                    let keep_open = item.keep_open();
                     let id = format!("{prefix}-{s}-{i}");
                     let entry = gtk::gio::MenuItem::new(Some(&item.label), None);
                     if let Some(icon) = item.icon {
@@ -1898,7 +1937,7 @@ impl Workspace {
                             entry.set_label(Some(&PhoneMenuNavigation::page_name(&path)));
                             path
                         });
-                        let submenu = model(w, popup, item.sections, &id, actions, checks, visibility_checks, path);
+                        let submenu = model(w, popup, item.sections, &id, actions, checks, visibility_checks, path, live);
                         entry.set_submenu(Some(&submenu));
                         section.append_item(&entry);
                         continue;
@@ -1963,14 +2002,18 @@ impl Workspace {
                         );
                     }
                     if let Some(dispatch) = item.action {
+                        let current = live.map(|state| state.model.clone());
+                        let mut item_path = path.clone().unwrap_or_default();
+                        item_path.push([s, i]);
                         action.connect_activate(glib::clone!(
                             #[weak]
                             w,
                             #[weak]
                             popup,
                             move |_, _| {
-                                popup.popdown();
-                                w.dispatch(dispatch.clone());
+                                let item = current.as_ref().and_then(|model| InlineMenuState::item(&model.borrow(), &item_path));
+                                if !item.as_ref().map_or(keep_open, ContextMenuItem::keep_open) { popup.popdown(); }
+                                w.dispatch(item.and_then(|item| item.action).unwrap_or_else(|| dispatch.clone()));
                             }
                         ));
                     }
@@ -1981,7 +2024,7 @@ impl Workspace {
             }
             root
         }
-        let actions = gtk::gio::SimpleActionGroup::new();
+        let actions = live.map(|state| state.actions.clone()).unwrap_or_default();
         let root = model(
             self,
             popover,
@@ -1991,6 +2034,7 @@ impl Workspace {
             checks,
             visibility_checks,
             action_root.map(|_| Vec::new()),
+            live,
         );
         popover.insert_action_group("context", Some(&actions));
         if let Some(widget) = action_root { widget.insert_action_group("context", Some(&actions)); }

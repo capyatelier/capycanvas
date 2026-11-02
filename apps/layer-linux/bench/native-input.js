@@ -35,20 +35,21 @@ const captureFrame = name => {
         info.width, info.height, info.stride[0]).savev(`${captureDir}/${name}.png`, 'png', [], []);
     return true;
 };
-const recording = {name: null, samples: [], timer: 0, events: []};
+const recording = {name: null, samples: [], timer: 0, events: [], sink: null, window: false};
 const pullRecorded = () => {
-    for (let sample; (sample = captureSink.try_pull_sample(0));)
+    for (let sample; (sample = recording.sink.try_pull_sample(0));)
         recording.samples.push({sample, ns: GLib.get_monotonic_time() * 1000});
 };
-const startRecording = name => {
-    if (!captureDir || !/^[a-z0-9-]+$/.test(name) || recording.name || !captureSink)
+const startRecording = (name, sink = captureSink, window = false) => {
+    if (!captureDir || !/^[a-z0-9-]+$/.test(name) || recording.name || !sink)
         throw Error('Invalid native recording request');
     recording.name = name;
-    captureSink.try_pull_sample(0);
-    const sample = captureSink.last_sample;
+    recording.sink = sink;
+    recording.window = window;
+    const sample = sink.try_pull_sample(0) ?? sink.last_sample;
     recording.samples = sample ? [{sample, ns: GLib.get_monotonic_time() * 1000}] : [];
     recording.events = [];
-    captureSink.set_property('max-buffers', 600);
+    sink.set_property('max-buffers', 600);
     recording.timer = GLib.timeout_add(GLib.PRIORITY_HIGH, 2, () => {
         pullRecorded();
         return GLib.SOURCE_CONTINUE;
@@ -58,7 +59,7 @@ const stopRecording = () => {
     if (!recording.name) throw Error('No native recording is active');
     GLib.source_remove(recording.timer);
     pullRecorded();
-    captureSink.set_property('max-buffers', 1);
+    recording.sink.set_property('max-buffers', 1);
     const {Gst, GstVideo} = imports.gi;
     const directory = `${captureDir}/${recording.name}`;
     GLib.mkdir_with_parents(directory, 0o755);
@@ -69,13 +70,15 @@ const stopRecording = () => {
         if (!ok) throw Error('Cannot map recorded frame');
         GLib.file_set_contents(`${directory}/${String(index).padStart(4, '0')}.rgb`, map.data);
         buffer.unmap(map);
-        return {pts_ns: buffer.pts, pulled_ns: ns, width: info.width, height: info.height, stride: info.stride[0]};
+        return {pts_ns: buffer.pts, pulled_ns: ns, width: info.width, height: info.height, stride: info.stride[0], format: sample.get_caps().get_structure(0).get_string('format')};
     });
     GLib.file_set_contents(`${directory}/frames.json`, JSON.stringify(frames));
     GLib.file_set_contents(`${directory}/events.json`, JSON.stringify(recording.events));
     print(`Recorded ${frames.length} compositor frames: ${recording.name}`);
+    if (recording.window) windowCapture.close();
     recording.name = null;
     recording.samples = [];
+    recording.sink = null;
 };
 const ready = Gio.File.new_for_path(`${output}/ready`);
 if (ready.query_exists(null)) throw new Error('Use a fresh output directory');
@@ -267,6 +270,18 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
                 }
                 if (event.capture) {
                     if (!captureFrame(event.capture)) index--;
+                    return GLib.SOURCE_CONTINUE;
+                }
+                if (event.record_window) {
+                    const {name, maximized = false} = event.record_window;
+                    if (!captureDir || typeof name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name))
+                        throw Error('Invalid window recording request');
+                    if (!windowCapture.active) windowCapture.begin(name, maximized, true);
+                    if (windowCapture.error) throw windowCapture.error;
+                    if (GLib.get_monotonic_time() >= windowCapture.active.deadline)
+                        throw Error('Window recording timed out');
+                    if (!windowCapture.active.sink?.last_sample) index--;
+                    else startRecording(name, windowCapture.active.sink, true);
                     return GLib.SOURCE_CONTINUE;
                 }
                 if (event.record_start) {

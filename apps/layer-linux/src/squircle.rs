@@ -1164,9 +1164,20 @@ mod imp {
         type ParentType = gtk::Popover;
     }
 
-    impl ObjectImpl for Popover {}
+    impl ObjectImpl for Popover {
+        fn constructed(&self) {
+            self.parent_constructed();
+            self.obj().connect_can_target_notify(|popover| popover.queue_allocate());
+        }
+    }
 
     impl WidgetImpl for Popover {
+        fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
+            self.parent_size_allocate(width, height, baseline);
+            if !self.obj().can_target() && let Some(surface) = self.obj().surface() {
+                surface.set_input_region(Some(&cairo::Region::create()));
+            }
+        }
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             let content = gtk::Snapshot::new();
             self.parent_snapshot(&content);

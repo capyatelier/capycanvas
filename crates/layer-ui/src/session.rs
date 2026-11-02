@@ -3176,7 +3176,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             && self.state.customization.drawer.as_ref().is_some_and(|drawer|
                 drawer.columns.iter().flatten().any(|p| matches!(p, Panel::BrushSets | Panel::SculptSets)));
         let choosing_selection = self.layer_interaction.tool.selection_tool().is_some()
-            && self.state.customization.drawer.as_ref().is_some_and(|drawer| drawer.columns == [vec![Panel::Tools], vec![Panel::ToolSettings]])
+            && self.state.customization.drawer.as_ref().is_some_and(|drawer| drawer.columns == ContentDrawer::presented_columns(drawer.anchor, vec![vec![Panel::Tools], vec![Panel::ToolSettings]]))
             && matches!(&action, UiAction::Invoke { command } if SelectionTool::ALL.iter().any(|tool| tool.command() == *command)
                 || matches!(command, CommandId::SelectionVisible | CommandId::SelectionEditing | CommandId::SelectionReference));
         let explicit_color = matches!(action, UiAction::Color { .. } | UiAction::SetColor { .. });
@@ -3220,6 +3220,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         let (mut changed, wake) = match action {
             UiAction::Phone { action } => {
                 match action {
+                    PhoneAction::Drawing { id, close } => {
+                        if id == 0 { return Err("Invalid drawing identity".into()); }
+                        self.request(HostRequestKind::SelectDrawing { id, close })?;
+                        self.state.phone.menu = false;
+                        self.refresh_chrome();
+                        return Ok(self.changed(HOST | LAYOUT | CUSTOMIZATION, false));
+                    }
                     PhoneAction::Slider { control, phase } => {
                         let binding = control.slider().ok_or("Not a slider")?;
                         match phase {
@@ -3236,12 +3243,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                     PhoneAction::Panel { panel } => {
                         self.state.workspace.layout.panel(panel)?;
                         self.state.phone.menu = false;
-                        self.state.customization.drawer = Some(ContentDrawer::for_control(ToolbarControl::Panel { panel }, DrawerAnchor::Phone { tile: None })?);
+                        self.state.customization.drawer = Some(ContentDrawer::for_control(ToolbarControl::Panel { panel }, DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Capy })?);
                     }
                     PhoneAction::Tool { tile } => {
-                        let control = self.state.workspace.layout.anchor_control(DrawerAnchor::Phone { tile: Some(tile) }).ok_or("The tool no longer exists")?;
-                        return self.activate_tool(control, DrawerAnchor::Phone { tile: Some(tile) });
+                        let control = self.state.workspace.layout.anchor_control(DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Tool(tile) }).ok_or("The tool no longer exists")?;
+                        return self.activate_tool(control, DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Tool(tile) });
                     }
+                    PhoneAction::ToolSettings => return self.activate_tool(PhoneLayout::SETTINGS, DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::ToolSettings }),
                     PhoneAction::CapyHold => {
                         self.state.phone.capy_drag = self.phone_layout().is_some();
                         return Ok(UiChange::default());
@@ -3268,7 +3276,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     PhoneAction::SwapSides => {
                         self.state.settings.phone_swap_sides = !self.state.settings.phone_swap_sides;
                         self.state.phone.swapped = self.state.settings.phone_swap_sides;
-                        self.state.phone.menu = false;
                         self.state.customization.drawer = None;
                         save_settings = true;
                     }
@@ -4414,9 +4421,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                         if let DrawerAnchor::Header { id } = d.anchor {
                             layout.header.entry(id).is_err()
                                 || !layout.header_presentation.items.iter().any(|m| m.id == id)
-                        } else if let DrawerAnchor::Phone { tile } = d.anchor {
+                        } else if let DrawerAnchor::Phone { anchor } = d.anchor {
                             self.phone_layout().is_none()
-                                || tile.is_some() && layout.anchor_control(d.anchor).is_none()
+                                || anchor != PhoneDrawerAnchor::Capy && layout.anchor_control(d.anchor).is_none()
                         } else {
                             d.anchor.tile().is_none_or(|a| {
                                 layout.active_panel(a.panel) != Some(a.panel)
@@ -6977,7 +6984,7 @@ mod tests {
         let assert_panels = |s: &UiSession<Recorder>| {
             for panel in &s.state.workspace.layout.panels {
                 let view = s.panel_view(panel.id).unwrap();
-                assert_eq!(view.tiles.iter().map(|tile| (tile.id, tile.choice.control)).collect::<Vec<_>>(), panel.tiles().iter().map(|tile| (tile.id, tile.control)).collect::<Vec<_>>());
+                assert_eq!(view.tiles.iter().map(|tile| (tile.id.unwrap(), tile.choice.control)).collect::<Vec<_>>(), panel.tiles().iter().map(|tile| (tile.id, tile.control)).collect::<Vec<_>>());
                 assert_eq!(view.title, panel.title_localized(s.localization()));
             }
         };
@@ -17184,7 +17191,7 @@ mod tests {
                                 .unwrap()
                                 .tiles
                                 .iter()
-                                .find(|t| t.id == tile)
+                                .find(|t| t.id == Some(tile))
                                 .unwrap()
                                 .choice
                                 .selected
@@ -17262,7 +17269,7 @@ mod tests {
                     .unwrap()
                     .tiles
                     .iter()
-                    .find(|t| t.id == brush)
+                    .find(|t| t.id == Some(brush))
                     .unwrap()
                     .choice
                     .selected

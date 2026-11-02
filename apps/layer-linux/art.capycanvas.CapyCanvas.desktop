@@ -52,3 +52,5 @@ Keywords[it]=Disegno;Pittura;Illustrazione;
 StartupNotify=true
 StartupWMClass=art.capycanvas.CapyCanvas
 MimeType=application/vnd.capycanvas;image/jpeg;image/png;image/tiff;image/webp;image/bmp;image/gif;image/heif;image/heic;image/avif;image/x-exr;
+X-Purism-FormFactor=Workstation;Mobile;
+X-KDE-FormFactor=desktop;tablet;handset;

@@ -839,6 +839,7 @@ mod wheel {
         pub bubble_layout: Cell<Option<layer_ui::ColorBubbleLayout>>,
         // Background precedes foreground so their deliberate overlap also picks correctly.
         pub corners: RefCell<Vec<WheelButton>>,
+        pub fit: Cell<Option<layer_ui::ColorPanelFit>>,
         pub view: Cell<ViewColor>,
         pub headroom: Cell<f32>,
         pub linear_field: RefCell<Option<super::field::LinearField>>,
@@ -888,6 +889,11 @@ mod wheel {
                     let (low, high) = self.bare_range.get();
                     (low, high, -1, -1)
                 };
+            }
+            if let Some(fit) = self.fit.get() {
+                return if orientation == gtk::Orientation::Vertical {
+                    (fit.height.ceil() as i32, fit.height.ceil() as i32, -1, -1)
+                } else { (fit.size.ceil() as i32, fit.size.ceil() as i32, -1, -1) };
             }
             if orientation == gtk::Orientation::Vertical {
                 let height = |size: i32| if self.hdr.get() {
@@ -1194,6 +1200,7 @@ impl ColorWheel {
             let Some(layout)=layer_ui::BareColorWheel::fit(self.width() as f32,self.height() as f32,self.imp().hdr.get()) else {return (0.,[0.;2]);};
             return (layout.stage,[(self.width() as f32-layout.wheel)*0.5-layout.inset,-layout.inset]);
         }
+        if let Some(fit) = self.imp().fit.get() { return (fit.size, [(self.width() as f32 - fit.size) * 0.5, 0.]); }
         let width = self.width() as f32;
         let height = self.height() as f32;
         let Some(fit) = ColorPanelLayout::fit(width, Some(height), 0., self.imp().hdr.get()) else { return (0., [0.; 2]); };
@@ -1221,6 +1228,13 @@ pub struct ColorPanel {
     edit_color: WheelButton,
 }
 impl ColorPanel {
+    pub fn set_fit(&self, fit: layer_ui::ColorPanelFit) {
+        if self.wheel.imp().fit.get().is_none_or(|old| old.size != fit.size || old.height != fit.height) {
+            self.wheel.imp().fit.set(Some(fit));
+            self.wheel.queue_resize();
+        }
+    }
+    pub fn hdr(&self) -> bool { self.wheel.imp().hdr.get() }
     pub fn new() -> Self {
         let localization = crate::launch_localization().clone();
         let copy = layer_ui::NativeCopy::new(&localization).color;

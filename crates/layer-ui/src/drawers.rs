@@ -26,9 +26,13 @@ pub struct ColumnDrawerMeasurement {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "id", rename_all = "snake_case")]
+pub enum PhoneDrawerAnchor { Capy, ToolSettings, Tool(u32) }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DrawerAnchor {
-    Phone { tile: Option<u32> },
+    Phone { anchor: PhoneDrawerAnchor },
     Header {
         id: u32,
     },
@@ -443,13 +447,21 @@ impl ContentDrawer {
     pub fn panels(&self) -> impl Iterator<Item = Panel> + '_ {
         self.columns.iter().flatten().copied().chain(self.layer_properties.map(|_| Panel::Properties))
     }
+    pub(crate) fn presented_columns(anchor: DrawerAnchor, mut columns: Vec<Vec<Panel>>) -> Vec<Vec<Panel>> {
+        if matches!(anchor, DrawerAnchor::Phone { .. }) && columns.iter().flatten().any(|panel| *panel != Panel::ToolSettings) {
+            for column in &mut columns { column.retain(|panel| *panel != Panel::ToolSettings); }
+            columns.retain(|column| !column.is_empty());
+        }
+        columns
+    }
     pub(crate) fn for_control(control: ToolbarControl, anchor: DrawerAnchor) -> Result<Self, String> {
+        let columns = if matches!(anchor, DrawerAnchor::Phone { .. }) && matches!(control, ToolbarControl::Color | ToolbarControl::Panel { panel: Panel::Color }) {
+            vec![vec![Panel::Color], vec![Panel::Palettes]]
+        } else { control.drawer_columns().ok_or("This item has no tool drawer")? };
         Ok(Self {
             layer_properties: matches!(control, ToolbarControl::Panel {panel:Panel::Layers}).then_some(false),
             anchor,
-            columns: if matches!(anchor, DrawerAnchor::Phone { .. }) && matches!(control, ToolbarControl::Color | ToolbarControl::Panel { panel: Panel::Color }) {
-                vec![vec![Panel::Color], vec![Panel::Palettes]]
-            } else { control.drawer_columns().ok_or("This item has no tool drawer")? },
+            columns: Self::presented_columns(anchor, columns),
             dismissal: DrawerDismissal::OutsideContact,
             tabs: None, compact: false, tool_set: None,
         })
@@ -557,23 +569,24 @@ impl ContentDrawer {
             || viewport[0] <= 2.0 * WORKSPACE_SPACING || viewport[1] <= HEADER_HEIGHT + WORKSPACE_SPACING {
             return None;
         }
-        if let DrawerAnchor::Phone { tile } = self.anchor {
+        if let DrawerAnchor::Phone { anchor } = self.anchor {
             let phone = phone?;
             let portrait = phone.edge == Edge::Top;
             let available = if portrait { phone.bars[0].width } else { phone.work_area.width };
             let sets = (available - crate::PANEL_MIN_WIDTH - 8.).clamp(crate::BRUSH_SETS_MIN_WIDTH, 160.);
             let stage = crate::ColorPanelLayout::stage_for_wheel(if portrait { 300. } else { 312. })?;
+            let minimum_color = crate::ColorPanelLayout::stage_for_wheel(128.)?.ceil() + 2. * crate::PANEL_CONTENT_INSET;
             let color = self.columns.iter().position(|panels| panels.contains(&Panel::Color));
             let widths = self.columns.iter().map(|panels| panels.iter().map(|panel| match panel {
                 Panel::BrushSets | Panel::SculptSets | Panel::FilterTypes => sets,
                 Panel::Tools | Panel::Brushes => (available - sets - 8.).clamp(crate::TOOL_PANEL_MIN_WIDTH, crate::PANEL_MIN_WIDTH),
                 Panel::Layers => if portrait { available } else { 280. },
-                Panel::Color => if portrait { available } else { (stage + 2. * crate::PANEL_CONTENT_INSET).min((available - crate::PANEL_MIN_WIDTH - 8.).max(144.)) },
+                Panel::Color => if portrait { available } else { (stage + 2. * crate::PANEL_CONTENT_INSET).min((available - crate::PANEL_MIN_WIDTH - 8.).max(minimum_color)) },
                 Panel::Palettes if color.is_some() && portrait => available,
                 Panel::Palettes => crate::PANEL_MIN_WIDTH,
                 _ => panel.default_width(viewport[0]),
             }).fold(0., f32::max)).collect::<Vec<_>>();
-            let placement = phone.drawer(phone.anchor(layout, tile)?, viewport, &widths, &vec![0.; widths.len()], 8.)?;
+            let placement = phone.drawer(phone.anchor(layout, anchor)?, viewport, &widths, &vec![0.; widths.len()], 8.)?;
             return Some(DrawerMeasure { placement, available: phone.work_area, viewport_height: viewport[1],
                 options: false, fits_content: true, layer_properties: self.layer_properties.is_some(), color, phone: Some((phone, viewport, widths)) });
         }
@@ -731,16 +744,31 @@ pub struct DrawerMeasure {
 }
 impl DrawerMeasure {
     pub(crate) fn phone_layout(&self) -> Option<&crate::PhoneLayout> { self.phone.as_ref().map(|(phone, _, _)| phone) }
+    pub fn color_fit(&self, heights: &[f32], fixed_height: f32, hdr: bool) -> Option<crate::ColorPanelFit> {
+        let color = self.color?;
+        let (phone, _, _) = self.phone.as_ref()?;
+        if heights.len() != self.placement.columns.len() { return None; }
+        let stacked = self.placement.columns.windows(2).any(|pair| pair[1].y > pair[0].y);
+        let other = if stacked { heights.iter().enumerate().filter(|(i, _)| *i != color).map(|(_, h)| *h + 8.).sum() } else { 0. };
+        let height = if phone.edge == Edge::Top { phone.work_area.height } else { phone.bars[0].height };
+        crate::ColorPanelLayout::fit_wheel(
+            (self.placement.columns[color].width - 2. * crate::PANEL_CONTENT_INSET).max(0.),
+            height, fixed_height + other, hdr, 128.,
+        )
+    }
     pub fn placement(&self, heights:&[f32])->Option<DrawerPlacement> {
         if let Some((phone, viewport, widths)) = &self.phone {
             if heights.len() != widths.len() || heights.len() > 19 { return None; }
-            let mut fitted = [0.; 19];
-            fitted[..heights.len()].copy_from_slice(heights);
-            if let Some(color) = self.color.filter(|_| phone.edge == Edge::Top) {
-                let other = heights.iter().enumerate().filter(|(i, _)| *i != color).map(|(_, h)| *h).sum::<f32>();
-                fitted[color] = heights[color].min((phone.work_area.height - other - 8.).max(144.));
+            let mut placement = phone.drawer(self.placement.anchor, *viewport, widths, heights, 8.)?;
+            if self.color.is_some() {
+                let stacked = placement.columns.windows(2).any(|pair| pair[1].y > pair[0].y);
+                let mut y = 0.;
+                for (column, height) in placement.columns.iter_mut().zip(heights) {
+                    column.height = *height;
+                    if stacked { column.y = y; y += height + 8.; }
+                }
             }
-            return phone.drawer(self.placement.anchor, *viewport, widths, &fitted[..heights.len()], 8.);
+            return Some(placement);
         }
         if heights.len()!=self.placement.columns.len() || !heights.iter().copied().all(f32::is_finite) {return None;}
         let DrawerPlacement {anchor,direction,bounds,..}=&self.placement;

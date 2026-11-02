@@ -105,6 +105,7 @@ impl Workspace {
             self,
             async move {
                 let _hold = hold;
+                let mut selection = None;
                 loop {
                     let next = w
                         .gpu
@@ -181,7 +182,14 @@ impl Workspace {
                                     else { crate::color_editor::show(&w, slot); }
                                     Ok(())
                                 }
-                                HostRequestKind::Drawings => { w.documents.show_selector(&w); Ok(()) }
+                                HostRequestKind::Drawings => {
+                                    w.show_drawings();
+                                    Ok(())
+                                }
+                                HostRequestKind::SelectDrawing { id, close } => {
+                                    selection = Some((id, close));
+                                    Ok(())
+                                }
                                 HostRequestKind::SdrRendition => crate::hdr::open(&w),
                                 HostRequestKind::SoftProofSetup => proof::run(&w),
                                 HostRequestKind::Histogram => {
@@ -228,6 +236,7 @@ impl Workspace {
                     }
                 }
                 w.servicing.set(false);
+                if let Some((id, close)) = selection { w.documents.select(&w, id, close); }
                 w.documents.close_completed(&w);
             }
         ));

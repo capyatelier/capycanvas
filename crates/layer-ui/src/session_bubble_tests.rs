@@ -2507,9 +2507,9 @@ fn native_source_pickup_flags_match_the_original_header_and_tile_controls() {
             }
             for panel in &s.state.workspace.layout.panels {
                 for tile in s.panel_view(panel.id).unwrap().tiles {
-                    let grab = BubbleGrab::Tile { panel: panel.id, tile: tile.id };
+                    let grab = BubbleGrab::Tile { panel: panel.id, tile: tile.id.unwrap() };
                     let expected = s.bubble_grab(grab, false).is_some();
-                    assert_eq!(tile.tears_bubble, expected, "{platform:?}/{command:?}/{:?}/tile {}", panel.id, tile.id);
+                    assert_eq!(tile.tears_bubble, expected, "{platform:?}/{command:?}/{:?}/tile {}", panel.id, tile.id.unwrap());
                     plain += usize::from(expected);
                     blocked += usize::from(!expected);
                 }

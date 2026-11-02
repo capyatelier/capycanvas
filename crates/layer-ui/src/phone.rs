@@ -21,12 +21,19 @@ pub enum PhoneAction {
     CapyHold,
     CapyDrop { position: [f32; 2] },
     Tool { tile: u32 },
+    ToolSettings,
     Panel { panel: crate::Panel },
+    Drawing { id: u64, close: bool },
     SwapSides,
     Slider { control: ToolbarControl, phase: crate::ContactPhase },
     Metrics { native: [f32; 2], native_counts: [u32; 2], insets: [f32; 4] },
 }
 impl crate::UiState {
+    pub fn phone_settings(&self) -> crate::TileView {
+        let choice = crate::customization::tool_choice_localized(PhoneLayout::SETTINGS, &self.localization);
+        let label = choice.label.clone();
+        crate::customization::control_view(self, PhoneLayout::SETTINGS, None, Default::default(), choice, &label)
+    }
     pub fn phone_tools(&self) -> Vec<crate::TileView> {
         self.workspace.layout.phone.iter().flatten().map(|tile| {
             let choice = crate::customization::tool_choice_localized(tile.control, &self.localization);
@@ -39,7 +46,19 @@ impl PhoneState {
     pub fn resolve(self, layout: &DockLayout, viewport: [f32; 2]) -> Option<PhoneLayout> {
         if !self.platform.is_some_and(crate::Platform::presents_phone_layout) { return None; }
         layout.phone.as_ref()?;
-        PhoneLayout::resolve(layout, viewport, self.insets, self.native, self.native_counts, self.swapped)
+        let mut phone = PhoneLayout::resolve(layout, viewport, self.insets, self.native, self.native_counts, self.swapped)?;
+        if self.hidden {
+            phone.size = Bounds::default();
+            phone.strength = Bounds::default();
+            phone.settings = Bounds::default();
+            phone.settings_hit = Bounds::default();
+            phone.tools = [Bounds::default(); 19];
+            phone.tool_hits = [Bounds::default(); 19];
+            phone.chips = [Bounds::default(), phone.capy];
+            phone.controls = [Bounds::default(); 2];
+            phone.bars = [Bounds::default(); 2];
+        }
+        Some(phone)
     }
 }
 impl crate::UiState {
@@ -57,6 +76,8 @@ pub struct PhoneLayout {
     pub capy_hit: Bounds,
     pub size: Bounds,
     pub strength: Bounds,
+    pub settings: Bounds,
+    pub settings_hit: Bounds,
     pub tools: [Bounds; 19],
     pub tool_hits: [Bounds; 19],
     pub chips: [Bounds; 2],
@@ -65,26 +86,61 @@ pub struct PhoneLayout {
     pub work_area: Bounds,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PhoneBarContact { held: bool }
+impl PhoneBarContact {
+    pub fn begin(layout: &PhoneLayout, point: [f32; 2], native_button: bool) -> Option<Self> {
+        let contains = |b: &Bounds| b.width > 0. && b.height > 0. && b.contains(point[0], point[1]);
+        (layout.bars.iter().chain(&layout.tool_hits).chain([&layout.capy_hit, &layout.settings_hit]).any(contains)
+            && !native_button && ![layout.size, layout.strength].iter().any(contains)).then(Self::default)
+    }
+    pub fn hold(&mut self) { self.held = true; }
+    pub fn move_window(&self, past_slop: bool) -> bool { past_slop && !self.held }
+}
+
 impl PhoneLayout {
     pub const MENU_GAP: f32 = 1.;
+    pub const SETTINGS: ToolbarControl = ToolbarControl::Panel { panel: crate::Panel::ToolSettings };
     pub const SLIDERS: [ToolbarControl; 2] = [ToolbarControl::BrushSizeSlider, ToolbarControl::BrushStrengthSlider];
-    pub fn menu_column_widths(&self, minimum_widths: [f32; 2], natural_widths: [f32; 2]) -> [f32; 2] {
-        if self.edge == Edge::Top { return [self.bars[0].width; 2]; }
-        let minimum = minimum_widths.map(|width| width.max(crate::PANEL_MIN_WIDTH).min(self.work_area.width));
-        let natural = std::array::from_fn::<_, 2, _>(|i| natural_widths[i].max(minimum[i]).min(self.work_area.width));
-        let available = self.work_area.width - Self::MENU_GAP;
-        if minimum.iter().sum::<f32>() > available { return natural; }
-        let growth = natural.iter().sum::<f32>() - minimum.iter().sum::<f32>();
-        let factor = if growth > 0. { ((available - minimum.iter().sum::<f32>()) / growth).min(1.) } else { 0. };
-        std::array::from_fn(|i| minimum[i] + (natural[i] - minimum[i]) * factor)
+    pub fn slider_stretch_distance(&self) -> f32 { 2. * self.tile }
+    pub fn menu_width(&self, minimum: f32, natural: f32) -> f32 {
+        if self.edge == Edge::Top { self.bars[0].width }
+        else { natural.max(minimum).max(crate::PANEL_MIN_WIDTH).min((self.work_area.width - self.tile - Self::MENU_GAP).max(1.)) }
     }
-    pub fn menu(&self, viewport: [f32; 2], minimum_widths: [f32; 2], heights: [f32; 2]) -> Option<DrawerPlacement> {
-        self.drawer(self.capy, viewport, &self.menu_column_widths(minimum_widths, minimum_widths), &heights, Self::MENU_GAP)
+    pub fn menu(&self, viewport: [f32; 2], width: f32, height: f32) -> Option<DrawerPlacement> {
+        let vertical = self.edge != Edge::Top;
+        self.drawer(self.capy, viewport,
+            &[if vertical { width + self.tile + Self::MENU_GAP } else { width }],
+            &[if vertical { height } else { height + self.tile + Self::MENU_GAP }], Self::MENU_GAP)
     }
-    pub fn anchor(&self, layout: &DockLayout, tile: Option<u32>) -> Option<Bounds> {
-        match tile {
-            None => Some(self.capy),
-            Some(id) => layout.phone.as_ref()?.iter().position(|t| t.id == id).map(|i| self.tools[i]),
+    pub fn menu_geometry(&self, placement: &DrawerPlacement) -> PhoneMenuGeometry {
+        let Bounds { width, height, .. } = placement.bounds;
+        let vertical = self.edge != Edge::Top;
+        let strip = if vertical {
+            Bounds { x: if placement.direction == Edge::Left { width - self.tile } else { 0. }, y: 0., width: self.tile, height }
+        } else { Bounds { x: 0., y: height - self.tile, width, height: self.tile } };
+        let separator = if vertical {
+            Bounds { x: if strip.x == 0. { self.tile } else { strip.x - Self::MENU_GAP }, y: 0., width: Self::MENU_GAP, height }
+        } else { Bounds { x: 0., y: strip.y - Self::MENU_GAP, width, height: Self::MENU_GAP } };
+        let list = if vertical {
+            Bounds { x: if strip.x == 0. { separator.x + separator.width } else { 0. }, y: 0., width: width - self.tile - Self::MENU_GAP, height }
+        } else { Bounds { x: 0., y: 0., width, height: separator.y } };
+        let length = if vertical { height } else { width };
+        let gap = 2. * ((if vertical { self.work_area.height } else { self.work_area.width }) / 320.).min(1.);
+        let start = (length - 5. * self.tile - 4. * gap) * 0.5;
+        let reversed = !vertical && self.capy.x > self.settings.x;
+        let buttons = std::array::from_fn(|index| {
+            let along = start + (if reversed { 4 - index } else { index }) as f32 * (self.tile + gap);
+            if vertical { Bounds { x: strip.x, y: along, width: self.tile, height: self.tile } }
+            else { Bounds { x: along, y: strip.y, width: self.tile, height: self.tile } }
+        });
+        PhoneMenuGeometry { list, strip, separator, buttons }
+    }
+    pub fn anchor(&self, layout: &DockLayout, anchor: crate::PhoneDrawerAnchor) -> Option<Bounds> {
+        match anchor {
+            crate::PhoneDrawerAnchor::Capy => Some(self.capy),
+            crate::PhoneDrawerAnchor::ToolSettings => Some(self.settings),
+            crate::PhoneDrawerAnchor::Tool(id) => layout.phone.as_ref()?.iter().position(|t| t.id == id).map(|i| self.tools[i]),
         }
     }
     pub fn drawer(&self, anchor: Bounds, viewport: [f32; 2], widths: &[f32], heights: &[f32], gap: f32) -> Option<DrawerPlacement> {
@@ -134,7 +190,7 @@ impl PhoneLayout {
         }
         let direction = if vertical { if anchor.x < viewport[0] / 2. { Edge::Right } else { Edge::Left } }
             else if anchor.y < viewport[1] / 2. { Edge::Bottom } else { Edge::Top };
-        let x = match direction { Edge::Right => anchor.x + anchor.width + 8., Edge::Left => anchor.x - width - 8., _ => anchor.x.clamp(available.x, available.x + available.width - width) };
+        let x = match direction { Edge::Right => anchor.x + anchor.width + 8., Edge::Left => anchor.x - width - 8., _ => anchor.x.clamp(available.x, available.x + (available.width - width).max(0.)) };
         let y = match direction { Edge::Bottom => anchor.y + anchor.height + 8., Edge::Top => anchor.y - height - 8., _ => available.y };
         Some(DrawerPlacement { bounds: Bounds { x, y, width, height }, anchor, direction, columns, tab_presentations: Vec::new() })
     }
@@ -154,6 +210,17 @@ impl PhoneLayout {
         native_counts: [u32; 2], swapped: bool) -> Option<Self> {
         if viewport.iter().any(|v| !v.is_finite() || *v <= 0.) || viewport[0].min(viewport[1]) >= 480. {
             return None;
+        }
+        let scale = (viewport[0].min(viewport[1]) / 320.).min(1.);
+        if scale < 1. {
+            let mut p = Self::resolve(layout, viewport.map(|v| (v / scale).max(320.)), insets.map(|v| v / scale), native, native_counts, swapped)?;
+            let scaled = |b: &mut Bounds| { b.x *= scale; b.y *= scale; b.width *= scale; b.height *= scale; };
+            for b in [&mut p.capy, &mut p.capy_hit, &mut p.size, &mut p.strength, &mut p.settings, &mut p.settings_hit, &mut p.work_area]
+                .into_iter().chain(&mut p.tools).chain(&mut p.tool_hits).chain(&mut p.chips).chain(&mut p.controls).chain(&mut p.bars) { scaled(b); }
+            p.tile *= scale;
+            p.icon *= scale;
+            p.capy_icon *= scale;
+            return Some(p);
         }
         let vertical = viewport[0] > viewport[1];
         let edge = if vertical { if swapped { Edge::Left } else { Edge::Right } } else { Edge::Top };
@@ -212,14 +279,15 @@ impl PhoneLayout {
         } else {
             0.
         };
-        let slider = (length - capy_start - tile - 10.).max(2.) / 2.;
+        let slider = (length - capy_start - 2. * tile - 6.).max(2.) / 2.;
         let mut capy = point(other, capy_start, tile);
-        let mut size = point(other, capy_start + tile + 8., slider);
-        let mut strength = point(other, capy_start + tile + 10. + slider, slider);
+        let mut size = point(other, capy_start + tile + 2., slider);
+        let mut strength = point(other, capy_start + tile + 4. + slider, slider);
+        let mut settings = point(other, length - tile, tile);
         let mut chips = [if count > 0 { point(edge, tool_start, along - tool_start - 2.) } else { Bounds::default() },
-            point(other, capy_start + tile + 8., 2. * slider + 2.)];
+            point(other, capy_start, length - capy_start)];
         if !vertical && swapped {
-            for b in [&mut capy, &mut size, &mut strength, &mut chips[1]] {
+            for b in [&mut capy, &mut size, &mut strength, &mut settings, &mut chips[1]] {
                 b.x = available.x + available.width - (b.x - available.x) - b.width;
             }
         }
@@ -241,7 +309,7 @@ impl PhoneLayout {
             }
         };
         Some(Self { tile, icon: tile * crate::HeaderSize::Medium.icon() as f32 / 48., capy_icon: tile * 440. / 512.,
-            edge, capy, capy_hit: hit(capy, other), size, strength, tools,
+            edge, capy, capy_hit: hit(capy, other), size, strength, settings, settings_hit: hit(settings, other), tools,
             tool_hits: std::array::from_fn(|i| if tiles.get(i).is_some_and(|t| t.control != ToolbarControl::Divider) { hit(tools[i], edge) } else { Bounds::default() }),
             chips, controls, bars, work_area })
     }
@@ -251,19 +319,66 @@ impl PhoneLayout {
 mod tests {
     use super::*;
     #[test]
+    fn phone_bar_contacts_keep_sliders_buttons_and_holds_out_of_window_movement() {
+        let layout = crate::WorkspacePreset::Painter.layout(crate::Platform::Gtk);
+        for viewport in [[320., 568.], [412., 891.], [891., 412.]] {
+            for swapped in [false, true] {
+                let p = PhoneLayout::resolve(&layout, viewport, [0.; 4], [0., 48.], [0, 1], swapped).unwrap();
+                let center = |b: Bounds| [b.x + b.width * 0.5, b.y + b.height * 0.5];
+                for b in p.tools.into_iter().filter(|b| b.width > 0.).chain([p.capy, p.settings]) {
+                    let mut contact = PhoneBarContact::begin(&p, center(b), false).unwrap();
+                    assert!(!contact.move_window(false));
+                    assert!(contact.move_window(true));
+                    contact.hold();
+                    assert!(!contact.move_window(true));
+                }
+                for b in [p.size, p.strength, p.work_area] { assert!(PhoneBarContact::begin(&p, center(b), false).is_none()); }
+                for b in p.controls.into_iter().filter(|b| b.width > 0.) {
+                    assert!(PhoneBarContact::begin(&p, center(b), true).is_none());
+                    assert!(PhoneBarContact::begin(&p, center(b), false).is_some(), "native gaps belong to the bar");
+                }
+                assert_eq!(p.anchor(&layout, crate::PhoneDrawerAnchor::ToolSettings), Some(p.settings));
+                assert!(p.settings.intersection(p.size).is_none() && p.settings.intersection(p.strength).is_none());
+                assert!(p.chips[1].contains(p.capy.x, p.capy.y));
+                let length = if p.edge == Edge::Top { p.size.width } else { p.size.height };
+                assert!(length >= 90., "the fixed settings tile preserves a usable slider at {viewport:?}");
+            }
+        }
+    }
+    #[test]
+    fn hidden_phone_keeps_capy_and_reallocates_its_existing_chip() {
+        let layout = crate::WorkspacePreset::Painter.layout(crate::Platform::Gtk);
+        for viewport in [[412., 891.], [891., 412.], [280., 280.], [280., 560.], [560., 280.]] {
+            for swapped in [false, true] {
+                let state = PhoneState { platform: Some(crate::Platform::Gtk), swapped, ..Default::default() };
+                let visible = state.resolve(&layout, viewport).unwrap();
+                let hidden = PhoneState { hidden: true, ..state }.resolve(&layout, viewport).unwrap();
+                assert_eq!(hidden.capy, visible.capy);
+                assert_eq!(hidden.capy_hit, visible.capy_hit);
+                assert_eq!(hidden.chips[1], visible.capy);
+                assert!(hidden.tools.iter().chain(&hidden.tool_hits).chain(&hidden.controls).chain(&hidden.bars)
+                    .chain([&hidden.chips[0], &hidden.size, &hidden.strength, &hidden.settings, &hidden.settings_hit])
+                    .all(|b| *b == Bounds::default()));
+            }
+        }
+    }
+    #[test]
     fn phone_geometry_matrix() {
         let layout = crate::WorkspacePreset::Painter.layout(crate::Platform::Gtk);
+        for preset in crate::WorkspacePreset::ALL { assert!(!preset.phone_controls().contains(&ToolbarControl::Divider)); }
         let paint = crate::WorkspacePreset::Illustrator.phone_controls();
         let position = |control| paint.iter().position(|value| *value == control).unwrap();
         let fill = position(ToolbarControl::ToolSlot { slot: crate::ToolSlotId::Fill });
         assert_eq!(fill, position(ToolbarControl::Command { command: crate::CommandId::Eraser }) + 1);
         assert_eq!(position(ToolbarControl::Panel { panel: crate::Panel::Layers }), fill + 1);
         for (short, long, expected) in [
-            (412., 891., 47.),
-            (375., 667., 42.375),
-            (360., 780., 40.5),
-            (320., 568., 35.5),
-            (320., 320., 35.5),
+            (412., 891., 47.75),
+            (375., 667., 43.125),
+            (360., 780., 41.25),
+            (320., 568., 36.25),
+            (320., 320., 36.25),
+            (280., 280., 31.71875),
+            (280., 560., 31.71875),
         ] {
             for viewport in [[short, long], [long, short]] {
                 for insets in [[0.; 4], [30., 0., 0., 0.], [59., 0., 59., 0.], [0., 59., 0., 34.]] {
@@ -290,7 +405,7 @@ mod tests {
                                 assert!((p.tile - expected).abs() < 0.01);
                             }
                             assert!(p.work_area.width > 0. && p.work_area.height > 0.);
-                            let sliders = [p.size, p.strength];
+                            let sliders = [p.size, p.strength, p.settings];
                             for (chip, contents) in [
                                 (p.chips[0], p.tools.as_slice()),
                                 (p.chips[1], sliders.as_slice()),
@@ -309,7 +424,7 @@ mod tests {
                             } else {
                                 p.size.x - p.capy.x - p.capy.width
                             };
-                            assert!((gap - 8.).abs() < 0.01);
+                            assert!((gap - 2. * (short / 320.).min(1.)).abs() < 0.01);
                             let gap = if viewport[0] > viewport[1] {
                                 p.strength.y - p.size.y - p.size.height
                             } else if swapped {
@@ -317,7 +432,7 @@ mod tests {
                             } else {
                                 p.strength.x - p.size.x - p.size.width
                             };
-                            assert!((gap - 2.).abs() < 0.01);
+                            assert!((gap - 2. * (short / 320.).min(1.)).abs() < 0.01);
                             if viewport[0] > viewport[1] {
                                 for side in 0..2 {
                                     for index in 0..native_counts[side] {
@@ -336,10 +451,8 @@ mod tests {
                                         assert!(slot.is_none());
                                     } else {
                                         let slot = slot.unwrap();
-                                        assert_eq!(
-                                            (slot.width, slot.height),
-                                            (native_counts[side] as f32 * p.tile, p.tile)
-                                        );
+                                        assert!((slot.width - native_counts[side] as f32 * p.tile).abs() < 0.0001);
+                                        assert!((slot.height - p.tile).abs() < 0.0001);
                                     }
                                     assert!(p.native_control(side, 1).is_none());
                                 }
@@ -394,11 +507,15 @@ mod tests {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PhoneMenuNavigation {
     path: Vec<[usize; 2]>,
+    swipe_axis: Option<crate::Axis>,
+    swipe_progress: f32,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PhoneMenuGeometry {
-    pub columns: [Bounds; 2],
+    pub list: Bounds,
+    pub strip: Bounds,
     pub separator: Bounds,
+    pub buttons: [Bounds; 5],
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct PhoneMenuPage {
@@ -452,27 +569,58 @@ impl PhoneMenuNavigation {
         self.path = page.path;
         true
     }
-    pub fn geometry(&self, placement: &DrawerPlacement) -> PhoneMenuGeometry {
-        let mut columns = std::array::from_fn(|i| placement.columns.get(i).copied().unwrap_or_default());
-        let stacked = columns[1].y > columns[0].y;
-        let separator = if !self.is_root() && stacked {
-            columns = [Bounds::default(), Bounds { x: 0., y: 0., width: placement.bounds.width, height: placement.bounds.height }];
-            Bounds::default()
-        } else if stacked {
-            Bounds { x: 6., y: (columns[0].y + columns[0].height + columns[1].y) * 0.5 - 0.5,
-                width: (placement.bounds.width - 12.).max(0.), height: 1. }
-        } else {
-            Bounds { x: (columns[0].x + columns[0].width + columns[1].x) * 0.5 - 0.5, y: 6.,
-                width: 1., height: (placement.bounds.height - 12.).max(0.) }
-        };
-        PhoneMenuGeometry { columns, separator }
+    pub fn drawings(&mut self, menu: &crate::ContextMenu, localization: &crate::Localizer) -> bool {
+        let title = localization.text(crate::MessageId::NATIVE_HEADER_DRAWINGS);
+        let Some(page) = Self::pages(menu).into_iter().find(|page| page.path.len() == 1 && page.menu.title == title.as_ref()) else { return false; };
+        self.path = page.path;
+        true
+    }
+    pub fn begin_swipe(&mut self) { self.swipe_axis = None; self.swipe_progress = 0.; }
+    pub fn swipe(&mut self, delta: [f32; 2], width: f32, past_slop: bool, rtl: bool) -> PhoneMenuSwipe {
+        if self.is_root() { return PhoneMenuSwipe::Scroll; }
+        let along = delta[0] * if rtl { -1. } else { 1. };
+        if self.swipe_axis.is_none() && past_slop {
+            self.swipe_axis = Some(if along > delta[1].abs() { crate::Axis::Horizontal } else { crate::Axis::Vertical });
+        }
+        match self.swipe_axis {
+            None => PhoneMenuSwipe::Pending,
+            Some(crate::Axis::Vertical) => PhoneMenuSwipe::Scroll,
+            Some(crate::Axis::Horizontal) => {
+                self.swipe_progress = (along / width.max(1.)).clamp(0., 1.);
+                PhoneMenuSwipe::Back(self.swipe_progress)
+            }
+        }
+    }
+    pub fn end_swipe(&mut self, velocity: f32) -> bool {
+        let complete = self.swipe_axis == Some(crate::Axis::Horizontal)
+            && (self.swipe_progress >= 0.3 || velocity > 0.5) && self.back();
+        self.begin_swipe();
+        complete
     }
 }
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PhoneMenuSwipe { Pending, Scroll, Back(f32) }
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct PhoneMenu {
+    pub strip: Vec<crate::ContextMenuItem>,
+    pub list: crate::ContextMenu,
+}
+
 impl<R: layer_render::CanvasRenderer> crate::UiSession<R> {
-    pub fn phone_menu_columns(&self) -> [crate::ContextMenu; 2] {
-        let mut first = self.application_menu(crate::ApplicationMenu::Primary);
-        let second = crate::ContextMenu { title: first.title.clone(), sections: first.sections.split_off(2) };
-        [first, second]
+    pub fn phone_menu(&self) -> Option<PhoneMenu> {
+        self.phone_layout()?;
+        let mut primary = self.application_menu(crate::ApplicationMenu::Primary);
+        let list = crate::ContextMenu { title: primary.title.clone(), sections: primary.sections.split_off(2) };
+        let settings = self.command(crate::CommandId::Settings);
+        let mut strip = vec![crate::ContextMenuItem { enabled: settings.enabled,
+            ..crate::ContextMenuItem::command(settings.label.to_string(), crate::UiAction::Invoke { command: crate::CommandId::Settings }) }];
+        strip.extend(primary.sections.into_iter().flatten());
+        let zen = format!("layer-{}-symbolic", self.state().settings.zen_icon.icon());
+        for (index, (item, icon)) in strip.iter_mut().zip(["layer-settings-symbolic", "layer-search-symbolic", "layer-finger-draw-symbolic", &zen, "layer-swap-orientation-symbolic"]).enumerate() {
+            item.icon = Some(icon.into());
+            if !matches!(index, 2 | 4) { item.selected = None; }
+        }
+        Some(PhoneMenu { strip, list })
     }
 }
 
@@ -527,37 +675,43 @@ mod menu_tests {
         }
     }
     #[test]
-    fn menu_uses_native_row_widths_without_displacing_columns_that_fit() {
+    fn menu_keeps_one_list_beside_its_bar_parallel_icon_strip() {
         let layout = crate::WorkspacePreset::Painter.layout(crate::Platform::Gtk);
-        let phone = PhoneLayout::resolve(&layout, [891., 412.], [0.; 4], [0.; 2], [0; 2], false).unwrap();
-        assert_eq!(phone.menu_column_widths([242.; 2], [340., 242.]), [340., 242.]);
-        let widths = phone.menu_column_widths([242.; 2], [900.; 2]);
-        assert!(widths.iter().all(|width| *width >= 242.));
-        assert!((widths.iter().sum::<f32>() + PhoneLayout::MENU_GAP - phone.work_area.width).abs() < 0.001);
-        let narrow = phone.menu_column_widths([600., 242.], [600., 242.]);
-        let placement = phone.menu([891., 412.], narrow, [200.; 2]).unwrap();
-        assert!(placement.columns[1].y > placement.columns[0].y);
+        for viewport in [[412., 891.], [891., 412.], [320., 568.], [280., 560.], [560., 280.]] {
+            for swapped in [false, true] {
+                let phone = PhoneLayout::resolve(&layout, viewport, [0.; 4], [0.; 2], [0; 2], swapped).unwrap();
+                let width = phone.menu_width(242., 340.);
+                let placement = phone.menu(viewport, width, 400.).unwrap();
+                let geometry = phone.menu_geometry(&placement);
+                assert!(geometry.list.intersection(geometry.strip).is_none());
+                for button in geometry.buttons {
+                    assert!(button.x >= geometry.strip.x && button.y >= geometry.strip.y);
+                    assert!(button.x + button.width <= geometry.strip.x + geometry.strip.width + 0.001);
+                    assert!(button.y + button.height <= geometry.strip.y + geometry.strip.height + 0.001);
+                }
+                assert_eq!(geometry.separator.width.min(geometry.separator.height), PhoneLayout::MENU_GAP);
+            }
+        }
     }
-
     #[test]
-    fn submenu_occupies_the_existing_single_column_menu_bounds() {
-        let menu = menu();
-        let layout = crate::WorkspacePreset::Painter.layout(crate::Platform::Gtk);
-        for viewport in [[412., 891.], [891., 412.], [320., 568.], [568., 320.], [320., 320.]] {
-            let layout = PhoneLayout::resolve(&layout, viewport, [0.; 4], [0.; 2], [0; 2], false).unwrap();
-            let placement = layout.menu(viewport, [242., 242.], [200., 300.]).unwrap();
-            let mut navigation = PhoneMenuNavigation::default();
-            let root = navigation.geometry(&placement);
-            assert_eq!(root.columns.as_slice(), placement.columns.as_slice());
-            assert!(root.separator.width > 0. && root.separator.height > 0.);
-            assert!(navigation.select(&menu, "page-0-0"));
-            let page = navigation.geometry(&placement);
-            let columns = page.columns;
-            if placement.columns[1].y > placement.columns[0].y {
-                assert_eq!(columns[0], Bounds::default());
-                assert_eq!(columns[1], Bounds { x: 0., y: 0., width: placement.bounds.width, height: placement.bounds.height });
-                assert_eq!(page.separator, Bounds::default());
-            } else { assert_eq!(page, root); }
+    fn back_swipes_lock_axes_and_use_distance_or_release_velocity() {
+        for rtl in [false, true] {
+            let sign = if rtl { -1. } else { 1. };
+            for (distance, velocity, back) in [(29., 0., false), (30., 0., true), (10., 0.5, false), (10., 0.501, true)] {
+                let mut nav = PhoneMenuNavigation::default();
+                assert!(nav.select(&menu(), "page-0-0"));
+                nav.begin_swipe();
+                assert_eq!(nav.swipe([sign * distance, 0.], 100., false, rtl), PhoneMenuSwipe::Pending);
+                assert_eq!(nav.swipe([sign * distance, 0.], 100., true, rtl), PhoneMenuSwipe::Back(distance / 100.));
+                assert!(matches!(nav.swipe([sign * distance, 200.], 100., true, rtl), PhoneMenuSwipe::Back(_)));
+                assert_eq!(nav.end_swipe(velocity), back);
+                assert_eq!(nav.is_root(), back);
+            }
+            let mut nav = PhoneMenuNavigation::default();
+            nav.select(&menu(), "page-0-0");
+            assert_eq!(nav.swipe([0., 20.], 100., true, rtl), PhoneMenuSwipe::Scroll);
+            assert_eq!(nav.swipe([sign * 80., 20.], 100., true, rtl), PhoneMenuSwipe::Scroll);
+            assert!(!nav.end_swipe(2.));
         }
     }
 }

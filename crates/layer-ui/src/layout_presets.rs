@@ -13,18 +13,18 @@ pub enum WorkspacePreset {
 impl WorkspacePreset {
     pub fn phone_controls(self) -> &'static [ToolbarControl] {
         use crate::{CommandId as C, ToolSlotId as S};
-        use ToolbarControl::{Color, Command as T, Divider as D, Panel as P, ToolSlot as Slot};
+        use ToolbarControl::{Color, Command as T, Panel as P, ToolSlot as Slot};
         match self {
             Self::Painter => &[
-                P { panel: Panel::Adjustments }, T { command: C::Select }, T { command: C::ScaleRotate }, D,
+                P { panel: Panel::Adjustments }, T { command: C::Select }, T { command: C::ScaleRotate },
                 T { command: C::DrawingBrush }, T { command: C::Sculpt }, T { command: C::Eraser }, P { panel: Panel::Layers }, Color,
             ],
             Self::Illustrator => &[
-                T { command: C::Select }, Slot { slot: S::Gradient }, D,
+                T { command: C::Select }, Slot { slot: S::Gradient },
                 T { command: C::DrawingBrush }, Slot { slot: S::Blend }, T { command: C::Eraser }, Slot { slot: S::Fill }, P { panel: Panel::Layers }, Color,
             ],
             Self::Photographer => &[
-                T { command: C::Crop }, T { command: C::Select }, Slot { slot: S::Healing }, D,
+                T { command: C::Crop }, T { command: C::Select }, Slot { slot: S::Healing },
                 T { command: C::DrawingBrush }, T { command: C::Eraser }, P { panel: Panel::Adjustments }, P { panel: Panel::Layers }, Color,
             ],
         }

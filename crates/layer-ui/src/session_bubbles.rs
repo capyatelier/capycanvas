@@ -238,9 +238,10 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn card_size(&self) -> [f32; 2] {
         let viewport = self.bubble_viewport();
+        let rows = self.state.layer_tools.presented_rows(&self.state.layers);
         let measured = self.bubble_card_metrics().map(|(_, _, measurement, properties_height)|
-            LayerDrawerSizing::pages(measurement, self.state.layers.len(), viewport[1], properties_height));
-        layers_card(viewport, self.state.layers.len(), measured, self.bubble_state.properties)
+            LayerDrawerSizing::pages(measurement, rows, viewport[1], properties_height));
+        layers_card(viewport, rows, measured, self.bubble_state.properties)
     }
 
     fn hdr_color_bubbles(&self) -> bool {

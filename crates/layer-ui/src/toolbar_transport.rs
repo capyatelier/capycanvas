@@ -138,7 +138,7 @@ pub fn toolbar_ui(request: ToolbarUiRequest, localizer: &Localizer) -> Result<se
             style,
             slider_style,
         } => {
-            json!(toolbar_slider_styled_layout(width, height, axis, style, slider_style))
+            json!(toolbar_slider_styled_layout(width, height, axis, style, slider_style, true))
         }
         ToolbarUiRequest::SliderReadout { style, axis, control, value } => {
             let text = control.compact_value(value);
@@ -192,7 +192,7 @@ fn slider_queries_publish_styled_geometry_and_unit_placement() {
             }
             let slider_style = ToolbarSliderStyle { show_value: true, expand: true };
             let bounds = toolbar_ui(ToolbarUiRequest::SliderLayout { width: 400., height: 400., axis, style, slider_style }, &localizer).unwrap();
-            assert_eq!(bounds, serde_json::to_value(toolbar_slider_styled_layout(400., 400., axis, style, slider_style)).unwrap());
+            assert_eq!(bounds, serde_json::to_value(toolbar_slider_styled_layout(400., 400., axis, style, slider_style, true)).unwrap());
         }
     }
 }

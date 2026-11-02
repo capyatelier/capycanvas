@@ -484,6 +484,30 @@ impl DocumentTabLabel {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct DrawingSelector {
+    pub label: String,
+    pub count: String,
+    pub page: crate::ContextMenuItem,
+}
+impl DrawingSelector {
+    pub fn new(labels: &[DocumentTabLabel], current: u64, new: &crate::CommandState, localization: &Localizer) -> Self {
+        let caption = |label: &DocumentTabLabel| format!("{}{}", if label.modified { "• " } else { "" }, label.title);
+        let rows = labels.iter().map(|label| {
+            let mut row = crate::ContextMenuItem::command(caption(label), crate::UiAction::Phone { action: crate::PhoneAction::Drawing { id: label.id, close: false } });
+            row.selected = Some(label.id == current);
+            row.hint = crate::NativeCaption::CloseDrawing { title: label.title.clone() }.message(localization);
+            row
+        }).collect();
+        let mut create = crate::ContextMenuItem::command(format!("{}…", localization.text(MessageId::DOCUMENTS_NEW)), crate::UiAction::Invoke { command: crate::CommandId::NewDocument });
+        create.enabled = new.enabled;
+        create.bindings = new.bindings.clone();
+        Self { label: labels.iter().find(|label| label.id == current).map(caption).unwrap_or_default(),
+            count: if labels.len() > 1 { labels.len().to_string() } else { String::new() },
+            page: crate::ContextMenuItem::submenu(&localization.text(MessageId::NATIVE_HEADER_DRAWINGS), vec![rows, vec![create]]) }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

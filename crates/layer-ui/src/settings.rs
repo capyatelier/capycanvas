@@ -885,6 +885,7 @@ pub enum HostRequestKind {
     ColorSlot { slot: crate::ColorSlot, library: bool },
     AdjacentDrawing { forward: bool },
     Drawings,
+    SelectDrawing { id: u64, close: bool },
     SdrRendition,
     SoftProofSetup,
     Histogram,

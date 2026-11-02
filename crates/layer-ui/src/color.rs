@@ -1237,9 +1237,15 @@ impl BareColorWheel {
 
 impl ColorPanelLayout {
     pub fn fit(width: f32, height: Option<f32>, fixed_height: f32, hdr: bool) -> Option<ColorPanelFit> {
+        Self::fit_minimum(width, height, fixed_height, hdr, 128.)
+    }
+    pub fn fit_wheel(width: f32, height: f32, fixed_height: f32, hdr: bool, minimum_wheel: f32) -> Option<ColorPanelFit> {
+        Self::fit_minimum(width, Some(height), fixed_height, hdr, Self::stage_for_wheel(minimum_wheel)?.ceil())
+    }
+    fn fit_minimum(width: f32, height: Option<f32>, fixed_height: f32, hdr: bool, minimum: f32) -> Option<ColorPanelFit> {
         if !width.is_finite() || width < 0. || !fixed_height.is_finite() || fixed_height < 0.
             || height.is_some_and(|h| !h.is_finite() || h < 0.) { return None; }
-        let width = width.max(128.);
+        let width = width.max(minimum);
         let geometry = |size| if hdr { Self::with_hdr(size) } else { Self::new(size) };
         let natural = geometry(width)?;
         let natural_height = natural.height().max(width);
@@ -1247,23 +1253,23 @@ impl ColorPanelLayout {
         let (size, layout) = match room {
             Some(room) if natural_height > room => {
                 if hdr {
-                    let minimum = Self::new(128.)?;
+                    let minimum_layout = Self::new(minimum)?;
                     let wheel = ColorWheelGeometry::new(1.)?;
                     let expansion = wheel.outer - wheel.disc_radius();
                     let rate = 0.5 + wheel.outer + expansion;
-                    let offset = minimum.readout_radius - 128. * wheel.outer
-                        - 2. * minimum.wheel[0] * expansion
-                        + ColorArcCaption::font_size(128.) + ColorArcCaption::BOTTOM;
-                    let upper = ((room - offset) / rate).ceil().min(width.floor()).max(128.) as u32;
-                    match (128..=upper).rev().find_map(|size| {
+                    let offset = minimum_layout.readout_radius - minimum * wheel.outer
+                        - 2. * minimum_layout.wheel[0] * expansion
+                        + ColorArcCaption::font_size(minimum) + ColorArcCaption::BOTTOM;
+                    let upper = ((room - offset) / rate).ceil().min(width.floor()).max(minimum) as u32;
+                    match (minimum as u32..=upper).rev().find_map(|size| {
                         let layout = geometry(size as f32)?;
                         (layout.height().max(size as f32) <= room).then_some((size as f32, layout))
                     }) {
                         Some(fit) => fit,
-                        None => (128., geometry(128.)?),
+                        None => (minimum, geometry(minimum)?),
                     }
                 } else {
-                    let size = width.min(room).floor().max(128.);
+                    let size = width.min(room).floor().max(minimum);
                     (size, geometry(size)?)
                 }
             }

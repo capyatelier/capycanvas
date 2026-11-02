@@ -649,8 +649,11 @@ window.capy-workspace.glass .dock-panel.gpu-panel-surface .tab-strip-end { backg
 .phone-frame .phone-controls, .phone-frame .phone-controls > button { min-width: 0; min-height: 0; padding: 0; margin: 0; }
 .phone-frame windowcontrols > button.close > image { background-color: mix(var(--header-control-bg), currentColor, .1); }
 .phone-frame .header-tool.drawer-open { background: var(--panel-bg); }
-.zen-capy.phone-capy { min-width: 0; min-height: 0; }
+.phone-frame .brush-track { margin: 0; }
+.zen-capy.phone-capy { min-width: 0; min-height: 0; background-color: transparent; }
 .zen-capy.phone-capy.drawer-open { background: var(--panel-bg); }
+window.capy-workspace.glass .phone-frame .header-tool.drawer-open:not(.selected-tool),
+window.capy-workspace.glass .zen-capy.phone-capy.drawer-open { background: var(--glass-panel); }
 
 .phone-menu-native { padding: 0; margin: 0; }
 .phone-menu-native > contents { background: transparent; border: 0; border-radius: 0; box-shadow: none; }

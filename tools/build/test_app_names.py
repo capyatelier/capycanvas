@@ -44,7 +44,7 @@ class StoreMetadataTests(unittest.TestCase):
               <component type="desktop-application"><id>art.capycanvas.CapyCanvas</id>
                 <summary xml:lang="ja">\xe7\xb5\xb5\xe3\x82\x92\xe6\x8f\x8f\xe3\x81\x8f</summary>
                 <supports><internet>offline-only</internet><control>tablet</control></supports>
-                <requires><display_length>600</display_length></requires>
+                <requires><display_length>280</display_length></requires>
                 <languages><lang percentage="20">obsolete</lang></languages>
               </component>
               <component><id>another.app</id><languages><lang>fr</lang></languages></component>
@@ -58,7 +58,7 @@ class StoreMetadataTests(unittest.TestCase):
             self.assertEqual(component.findtext('summary'), '絵を描く')
             self.assertEqual(component.findtext('supports/internet'), 'offline-only')
             self.assertEqual(component.findtext('supports/control'), 'tablet')
-            self.assertEqual(component.findtext('requires/display_length'), '600')
+            self.assertEqual(component.findtext('requires/display_length'), '280')
             languages = {element.text: element.attrib for element in component.findall('languages/lang')}
             self.assertEqual(len(languages), 15)
             for locale in ['en', 'ja', 'zh_CN', 'zh_TW', 'pt_BR', 'th']:

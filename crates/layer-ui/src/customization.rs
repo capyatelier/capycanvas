@@ -682,11 +682,17 @@ impl Serialize for ContextMenuItem {
         fields.serialize_field("bindings", &self.bindings)?;
         fields.serialize_field("sections", &self.sections)?;
         fields.serialize_field("is_heading", &self.is_heading())?;
-        fields.serialize_field("keep_open", &matches!(self.action, Some(UiAction::Bubble { action: BubbleAction::Option { .. } | BubbleAction::ToggleSliders { .. } | BubbleAction::ToggleRingSetting { .. } } | UiAction::WorkspaceManager { command: crate::WorkspaceCommand::ShowInSwitcher { .. } })))?;
+        fields.serialize_field("keep_open", &self.keep_open())?;
         fields.end()
     }
 }
 impl ContextMenuItem {
+    pub fn keep_open(&self) -> bool {
+        matches!(self.action, Some(UiAction::Bubble { action: BubbleAction::Option { .. } | BubbleAction::ToggleSliders { .. } | BubbleAction::ToggleRingSetting { .. } }
+            | UiAction::WorkspaceManager { command: crate::WorkspaceCommand::ShowInSwitcher { .. } }
+            | UiAction::Phone { action: crate::PhoneAction::SwapSides }
+            | UiAction::Preferences { action: crate::PreferenceAction::Edit { id: crate::PreferenceId::FingerDrawing, .. } }))
+    }
     pub fn command(label: impl Into<String>, action: UiAction) -> Self {
         Self {
             label: label.into(),
@@ -1592,7 +1598,8 @@ pub struct TileView {
     pub has_variants: bool,
     pub tears_bubble: bool,
     pub resolved_control: ToolbarControl,
-    pub id: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<u32>,
     #[serde(flatten)]
     pub choice: ToolChoice,
     pub enabled: bool,
@@ -1650,11 +1657,14 @@ impl PanelCopy {
     }
 }
 
-pub(crate) fn tile_view(state: &UiState, tile: &ToolbarTile, mut choice: ToolChoice, tooltip: &str) -> TileView {
+pub(crate) fn tile_view(state: &UiState, tile: &ToolbarTile, choice: ToolChoice, tooltip: &str) -> TileView {
+    control_view(state, tile.control, Some(tile.id), tile.slider_style, choice, tooltip)
+}
+pub(crate) fn control_view(state: &UiState, control: ToolbarControl, id: Option<u32>, slider_style: crate::ToolbarSliderStyle, mut choice: ToolChoice, tooltip: &str) -> TileView {
     let mut enabled = true;
-    choice.selected = match tile.control {
+    choice.selected = match control {
         ToolbarControl::ColorPicker => {
-            let state = crate::tool_state(state, tile.control);
+            let state = crate::tool_state(state, control);
             enabled = state.0;
             state.1
         }
@@ -1676,23 +1686,23 @@ pub(crate) fn tile_view(state: &UiState, tile: &ToolbarTile, mut choice: ToolCho
         }
         _ => false,
     };
-    let (choice,enabled,tooltip,resolved_control)=if let Some(group)=state.resolve_group(tile.control) {
+    let (choice,enabled,tooltip,resolved_control)=if let Some(group)=state.resolve_group(control) {
         group
     } else {
-        let tooltip=match tile.control {
+        let tooltip=match control {
             ToolbarControl::Command {command}=>state.commands.iter().find(|c|c.id==command).map_or_else(||tooltip.to_string(),|c|c.tooltip.clone()),
             _=>tooltip.to_string(),
         };
-        (choice,enabled,tooltip,tile.control)
+        (choice,enabled,tooltip,control)
     };
     TileView {
-        slider_style: tile.slider_style,
+        slider_style,
         double_click: resolved_control.double_click_command().is_some(),
-        tears_bubble: crate::BubbleSource::tears_without_hold(tile.control),
-        has_variants: tile.control.has_variants(),
+        tears_bubble: crate::BubbleSource::tears_without_hold(control),
+        has_variants: control.has_variants(),
         resolved_control,
-        id: tile.id,
-        component: state.toolbar_component(tile.control),
+        id,
+        component: state.toolbar_component(control),
         tooltip,
         disabled_reason: (!enabled).then(|| crate::header::control_disabled_reason(state, resolved_control)).flatten(),
         choice,

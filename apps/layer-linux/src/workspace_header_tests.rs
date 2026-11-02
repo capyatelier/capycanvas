@@ -292,7 +292,7 @@ fn panel_surfaces(theme:Theme) {
             let opener=match scope {
                 "header" => Some(d.named(&d.header_tool(control))),
                 "toolbar" => {
-                    let id=ui_session(&d.w).panel_view(toolbar.unwrap()).unwrap().tiles[0].id;
+                    let id=ui_session(&d.w).panel_view(toolbar.unwrap()).unwrap().tiles[0].id.unwrap();
                     Some(widgets(d.w.surface.upcast_ref()).find(|widget|widget.is_mapped() && widget.widget_name()==format!("tile-{id}")).unwrap())
                 }
                 "column" => {
@@ -426,7 +426,7 @@ fn native_layer_drawer_any_toolbar() {
         d.w.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(WorkspaceState {layout,..Default::default()})});
         pump(250);
         let header=d.named(&d.header_tool(layers));
-        let tile=ui_session(&d.w).panel_view(toolbar).unwrap().tiles.iter().find(|tile|tile.choice.control==layers).unwrap().id;
+        let tile=ui_session(&d.w).panel_view(toolbar).unwrap().tiles.iter().find(|tile|tile.choice.control==layers).unwrap().id.unwrap();
         let tile=widgets(d.w.surface.upcast_ref()).find(|widget|widget.is_mapped() && widget.widget_name()==format!("tile-{tile}")).unwrap();
         for (origin,opener) in [("header",header),("toolbar",tile)] {
             d.click(&opener);
@@ -447,7 +447,7 @@ fn native_layer_drawer_any_toolbar() {
             d.click(&opener); wait_for_drawer_close(&d.w);
         }
         for control in [ToolbarControl::Color,ToolbarControl::Panel {panel:Panel::Color}] {
-            let id=ui_session(&d.w).panel_view(toolbar).unwrap().tiles.iter().find(|tile|tile.choice.control==control).unwrap().id;
+            let id=ui_session(&d.w).panel_view(toolbar).unwrap().tiles.iter().find(|tile|tile.choice.control==control).unwrap().id.unwrap();
             let tile=widgets(d.w.surface.upcast_ref()).find(|widget|widget.is_mapped() && widget.widget_name()==format!("tile-{id}")).unwrap();
             d.click(&tile);
             let drawer=state(&d.w).customization.drawer.unwrap();
@@ -4682,7 +4682,7 @@ fn native_caption_toolbar_constructor_before_realize() {
     let view = ui_session(&w).panel_view(Panel::Toolbar).unwrap();
     assert!(!view.tiles.is_empty());
     for tile in &view.tiles {
-        let button = find_named(w.toolbar.upcast_ref(), &format!("tile-{}", tile.id)).unwrap().downcast::<gtk::Button>().unwrap();
+        let button = find_named(w.toolbar.upcast_ref(), &format!("tile-{}", tile.id.unwrap())).unwrap().downcast::<gtk::Button>().unwrap();
         let tooltip = if matches!(tile.choice.control, ToolbarControl::ColorPicker | ToolbarControl::Command { command: CommandId::Eyedropper }) {
             ui_session(&w).color_picker_button_label(tile.choice.control).to_string()
         } else { tile.tooltip.clone() };
@@ -4697,7 +4697,7 @@ fn native_caption_toolbar_constructor_before_realize() {
     ] { w.dispatch(UiAction::Customize { action }); }
     let view = ui_session(&w).panel_view(Panel::Toolbar).unwrap();
     let tile = view.tiles.iter().find(|tile| tile.choice.control == control).unwrap();
-    let name = format!("tile-{}", tile.id);
+    let name = format!("tile-{}", tile.id.unwrap());
     let button = find_named(w.toolbar.upcast_ref(), &name).unwrap().downcast::<gtk::Button>().unwrap();
     let caption = button.child().and_downcast::<gtk::Box>().unwrap().last_child().and_downcast::<gtk::Label>().unwrap();
     let before = caption.text();

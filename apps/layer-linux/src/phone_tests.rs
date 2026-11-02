@@ -59,8 +59,12 @@ pub(super) fn capture(d: &mut Driver, name: &str) {
 }
 
 pub(super) fn clear_canvas_pointer(d: &mut Driver) {
-    let capy = d.named("zen-capy");
-    d.input.perform(serde_json::json!([{ "point": d.point(&capy) }]));
+    let view = state(&d.w);
+    let point = view.phone_presentation([d.w.surface.width() as f32, d.w.surface.height() as f32]).filter(|_| !view.phone.hidden).map_or_else(|| d.point(&d.named("zen-capy")), |phone| {
+        if phone.edge != Edge::Top { [phone.capy.x + phone.tile * 0.5, phone.capy.y + phone.tile + 4.] }
+        else { [if view.phone.swapped { phone.capy.x - 4. } else { phone.capy.x + phone.tile + 4. }, phone.capy.y + phone.tile * 0.5] }
+    });
+    d.input.perform(serde_json::json!([{ "point": point }]));
     until(|| ui_session_mut(&d.w).canvas_cursor().is_none(), "pointer leaves the canvas before capture");
     until(|| ui_session(&d.w).engine().backend().frames_idle(), "capture uses the published canvas frame");
 }
@@ -87,6 +91,16 @@ fn frame(d: &Driver) {
     }
     for name in ["zen-capy", "component-slider-size", "component-slider-strength"] { inside(d, &d.named(name)); }
     let phone = presentation(d);
+    for name in ["component-slider-size", "component-slider-strength"] {
+        let slider = d.named(name);
+        let parent = slider.parent().unwrap();
+        assert_eq!(parent.first_child().as_ref(), Some(&slider), "phone sliders create no grip widget");
+        assert!(slider.next_sibling().is_none());
+        let track = slider.compute_bounds(&parent).unwrap();
+        assert!(track.x().abs() <= 1. && track.y().abs() <= 1.
+            && (track.width() - parent.width() as f32).abs() <= 1.
+            && (track.height() - parent.height() as f32).abs() <= 1., "the phone slider uses its whole bounds");
+    }
     let first = state(&d.w).workspace.layout.phone.unwrap().into_iter().find(|tile| tile.control != ToolbarControl::Divider).unwrap();
     let button = d.named(&format!("phone-tool-{}", first.id));
     let bounds = button.compute_bounds(&d.w.surface).unwrap();
@@ -102,7 +116,7 @@ fn frame(d: &Driver) {
             .into_iter().all(|difference| difference.abs() <= 1.), "{name} uses shared continuous geometry");
     }
     for (index, chip) in [(0, phone.chips[0]), (1, phone.chips[1])] {
-        let parts = if index == 0 { phone.tools.to_vec() } else { vec![phone.size, phone.strength] };
+        let parts = if index == 0 { phone.tools.to_vec() } else { vec![phone.capy, phone.size, phone.strength, phone.settings] };
         for part in parts.into_iter().filter(|part| part.width > 0. && part.height > 0.) {
             assert!(part.x >= chip.x-0.01 && part.y >= chip.y-0.01 && part.x + part.width <= chip.x + chip.width + 0.01
                 && part.y + part.height <= chip.y + chip.height + 0.01,
@@ -114,7 +128,8 @@ fn frame(d: &Driver) {
         else { phone.size.x-phone.strength.x-phone.strength.width }
     }
         else { phone.strength.y-phone.size.y-phone.size.height };
-    assert!((gap-2.).abs() <= 0.01, "sliders share one chip with the internal gap");
+    let scale = (d.w.surface.width().min(d.w.surface.height()) as f32 / 320.).min(1.);
+    assert!((gap - 2. * scale).abs() <= 0.01, "sliders share one chip with the scaled internal gap");
     for button in widgets(d.w.phone.root.upcast_ref()).filter(|widget| widget.is_mapped() && widget.is::<gtk::Button>()
         && widget.has_css_class("close")) {
         let bounds = button.compute_bounds(&d.w.surface).unwrap();
@@ -149,97 +164,50 @@ fn frame(d: &Driver) {
 }
 
 fn menu(d: &mut Driver) {
-    click(d, "zen-capy");
-    until(|| state(&d.w).phone.menu, "Capy's menu opens");
-    let menu = d.named("phone-menu");
-    until(|| d.w.phone.placement.borrow().is_some(), "phone menu placement is published");
+    if !state(&d.w).phone.menu { click(d, "zen-capy"); }
+    until(|| state(&d.w).phone.menu && d.w.phone.placement.borrow().is_some()
+        && find_named(d.w.window.upcast_ref(), "phone-menu-scroll").is_some_and(|w| w.is_mapped() && w.width() > 0),
+        "Capy's list and fixed strip are allocated");
     let swapped = state(&d.w).phone.swapped;
     capture(d, &format!("menu-open-{swapped}"));
-    inside(d, &menu);
-    let scrollers = [0, 1].map(|index| d.named(&format!("phone-menu-scroll-{index}")).downcast::<gtk::ScrolledWindow>().unwrap());
-    for scroll in &scrollers { inside(d, scroll.upcast_ref()); }
-    let columns = [0, 1].map(|index| d.named(&format!("phone-menu-column-{index}")));
+    let root = d.named("phone-menu");
+    inside(d, &root);
     let placement = d.w.phone.placement.borrow().as_ref().unwrap().clone();
-    assert_eq!(placement.columns.len(), 2);
-    let [first, second] = [placement.columns[0], placement.columns[1]];
-    let measurements = columns.each_ref().map(|column| column.measure(gtk::Orientation::Horizontal, -1));
-    let widths = presentation(d).menu_column_widths(measurements.map(|m| m.0 as f32), measurements.map(|m| m.1 as f32));
-    if d.w.surface.width() <= d.w.surface.height() {
-        assert!(second.y >= first.y + first.height, "portrait menu columns stack");
-        assert!((placement.bounds.width - presentation(d).bars[1].width).abs() <= 1.);
-    } else if widths.iter().sum::<f32>() + PhoneLayout::MENU_GAP <= presentation(d).work_area.width {
-        assert!((first.y - second.y).abs() <= 1. && second.x >= first.x + first.width,
-            "landscape menu columns sit side by side when their minimum widths fit");
+    assert_eq!(placement.columns.len(), 1);
+    let geometry = presentation(d).menu_geometry(&placement);
+    for (name, expected) in [("phone-menu-scroll", geometry.list), ("phone-menu-separator", geometry.separator)] {
+        let widget = d.named(name);
+        inside(d, &widget);
+        let actual = widget.compute_bounds(&root).unwrap();
+        assert!([actual.x() - expected.x, actual.y() - expected.y, actual.width() - expected.width,
+            actual.height() - expected.height].into_iter().all(|delta| delta.abs() <= 1.),
+            "{name} uses shared list/strip geometry: {actual:?}, {expected:?}");
     }
-    let drawing = d.named("phone-drawing");
-    let visible = |widget: &gtk::Widget, scroll: &gtk::ScrolledWindow| widget.compute_bounds(scroll).is_some_and(|bounds|
-        bounds.x() >= -1. && bounds.x() + bounds.width() <= scroll.width() as f32 + 1.
-            && bounds.y() >= -1. && bounds.y() + bounds.height() <= scroll.height() as f32 + 1.);
-    assert!(visible(&drawing, &scrollers[0]), "the drawing row is initially visible");
-    assert!(visible(d.w.workspaces.switcher.upcast_ref(), &scrollers[0]), "the workspace switcher is initially visible");
-    if d.w.surface.width() > d.w.surface.height() {
-        let span = presentation(d).bars[1];
-        let bounds = menu.compute_bounds(&d.w.surface).unwrap();
-        assert!(bounds.y() >= span.y - 1. && bounds.y() + bounds.height() <= span.y + span.height + 1.,
-            "the whole landscape menu stays in the Capy bar's span");
+    let model = ui_session(&d.w).phone_menu().unwrap();
+    assert_eq!(model.strip.len(), 5);
+    for ((name, expected), item) in ["phone-preferences", "phone-search", "phone-finger", "phone-zen", "phone-swap"]
+        .into_iter().zip(geometry.buttons).zip(model.strip) {
+        let button = d.named(name);
+        inside(d, &button);
+        let actual = button.compute_bounds(&root).unwrap();
+        assert!([actual.x() - expected.x, actual.y() - expected.y, actual.width() - expected.width,
+            actual.height() - expected.height].into_iter().all(|delta| delta.abs() <= 1.),
+            "{name} keeps its fixed icon-strip slot");
+        assert!(button.tooltip_text().is_some_and(|text| !text.is_empty()));
+        assert!(gtk::test_accessible_has_property(&button, gtk::AccessibleProperty::Label));
+        assert_eq!(button.is_sensitive(), item.enabled);
     }
     assert_eq!(d.named("phone-swap").property::<bool>("active"), state(&d.w).phone.swapped);
-    assert_eq!(d.named("phone-zen").property::<bool>("active"), state(&d.w).phone.hidden);
-    let swap = d.named("phone-swap");
-    let check = widgets(&swap).find(|widget| widget.css_name()=="check").unwrap();
-    assert_eq!(check.type_().name(),"GtkBuiltinIcon");
-    assert_eq!(check.state_flags().contains(gtk::StateFlags::CHECKED),state(&d.w).phone.swapped);
-    if state(&d.w).phone.swapped {
-        inside(d,&check);
-        let label = widgets(&swap).filter_map(|widget| widget.downcast::<gtk::Label>().ok())
-            .find(|label| label.text()==swap.property::<String>("text")).unwrap();
-        let marker = check.compute_bounds(&swap).unwrap();
-        let text = label.compute_bounds(&swap).unwrap();
-        assert!(if swap.direction()==gtk::TextDirection::Rtl {marker.x() >= text.x()+text.width()-1.}
-            else {marker.x()+marker.width() <= text.x()+1.}, "native checked glyph stays in the leading space");
-    }
-    let models = ui_session(&d.w).phone_menu_columns();
-    for (index, model) in models.iter().enumerate() {
-        let column = &columns[index];
-        let mut previous = -1.;
-        let mut last = None;
-        for item in model.sections.iter().flatten() {
-            let label = widgets(column).filter_map(|widget| widget.downcast::<gtk::Label>().ok())
-                .find(|label| label.is_mapped() && label.text() == item.label).unwrap();
-            let bounds = label.compute_bounds(column).unwrap();
-            let text_start = bounds.x()+label.layout_offsets().0 as f32;
-            assert!((text_start-18.).abs() <= 1., "menu column {index} uses the desktop text start: {} at {text_start}", item.label);
-            let y = bounds.y();
-            assert!(y >= previous, "menu column {index} retains shared row order");
-            previous = y;
-            last = Some(label.clone().upcast::<gtk::Widget>());
-            assert!(std::iter::successors(Some(label.clone().upcast::<gtk::Widget>()), |widget| widget.parent())
-                .any(|widget| widget.type_().name() == "GtkModelButton"), "menu uses native rows: {}", item.label);
-        }
-        let mut last = last.unwrap();
-        while !last.is_focusable() { last = last.parent().unwrap(); }
-        assert!(last.grab_focus());
-        until(|| visible(&last, &scrollers[index]), "menu column scroll reaches its last action");
-    }
-    assert!(d.named("zen-capy").grab_focus());
-    for scroll in &scrollers { scroll.vadjustment().set_value(0.); }
-    until(|| visible(&drawing, &scrollers[0]), "menu capture returns to its drawing row");
-    menu_separator(d,"main");
-    let file_label = ApplicationMenu::File.localized_label(&d.w.localization());
-    let file = widgets(&columns[1]).find(|widget| widget.is_mapped() && widget.type_().name()=="GtkModelButton"
-        && widget.property::<String>("text")==file_label.as_ref()).unwrap();
-    let ranges_fit = scrollers.iter().all(|scroll| scroll.vadjustment().upper() <= scroll.vadjustment().page_size()+0.5);
-    if visible(&swap,&scrollers[0]) && visible(&file,&scrollers[1]) {
-        let a = swap.compute_bounds(&menu).unwrap();
-        let separator = d.named("phone-menu-separator").downcast::<gtk::Separator>().unwrap();
-        let b = separator.compute_bounds(&menu).unwrap();
-        let c = file.compute_bounds(&menu).unwrap();
-        let gaps = if separator.orientation()==gtk::Orientation::Horizontal {
-            [b.y()-a.y()-a.height(),c.y()-b.y()-b.height()]
-        } else { [b.x()-a.x()-a.width(),c.x()-b.x()-b.width()] };
-        assert!(gaps.into_iter().all(|gap| (gap-6.).abs() <= 1.),
-            "native section boundary keeps 6+1+6 spacing: {gaps:?}; Swap={a:?}, separator={b:?}, File={c:?}");
-    } else { assert!(!ranges_fit,"boundary rows stay visible when both sections fit"); }
+    assert_eq!(d.named("phone-finger").property::<bool>("active"), ui_session(&d.w).finger_drawing());
+    let scroll = d.named("phone-menu-scroll").downcast::<gtk::ScrolledWindow>().unwrap();
+    scroll_overflow(d);
+    scroll.vadjustment().set_value(0.);
+    let stack = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
+    menu_semantics(d, &stack);
+}
+
+fn menu_page_name(d: &Driver, title: &str) -> String {
+    PhoneMenuNavigation::pages(&navigation_model(d)).into_iter().find(|page| page.menu.title == title).unwrap().name()
 }
 
 #[test]
@@ -289,6 +257,9 @@ fn native_phone_frame() {
     click(&mut d, "phone-swap");
     until(|| state(&d.w).phone.swapped, "Swap Sides mirrors the bars");
     assert_ne!(presentation(&d).capy, before);
+    assert!(state(&d.w).phone.menu);
+    d.input.key(0xff1b);
+    until(|| !state(&d.w).phone.menu, "close the kept-open menu before capturing the swapped bars");
     frame(&d);
     capture(&mut d, "swapped");
     menu(&mut d);
@@ -299,7 +270,8 @@ fn native_phone_frame() {
     assert!(!d.named("component-slider-size").is_mapped());
     assert!(!d.named(&tool(&d, ToolbarControl::Color)).is_mapped());
     for child in std::iter::successors(d.w.phone.root.first_child(), |child| child.next_sibling()) {
-        assert!(!child.is_mapped(), "hidden phone child {} is unmapped", child.widget_name());
+        assert_eq!(child.is_mapped(), child.widget_name() == "phone-sliders-chip",
+            "only the retained Capy chip stays mapped: {}", child.widget_name());
     }
     assert!(d.w.phone.placement.borrow().is_none());
     inside(&d, &d.named("zen-capy"));
@@ -326,7 +298,7 @@ fn native_phone_frame() {
         ("fill", ToolbarControl::ToolSlot { slot: ToolSlotId::Fill })] {
         let tile = tool(&d, control);
         click(&mut d, &tile);
-        let view = state(&d.w).phone_tools().into_iter().find(|view| format!("phone-tool-{}",view.id) == tile).unwrap();
+        let view = state(&d.w).phone_tools().into_iter().find(|view| format!("phone-tool-{}",view.id.unwrap()) == tile).unwrap();
         let ToolbarControl::Command { command } = view.resolved_control else { panic!("selected phone tool resolves to a command") };
         assert!(ui_session(&d.w).command(command).selected);
         capture(&mut d, &format!("paint-{name}-selected"));
@@ -448,7 +420,44 @@ fn scroll_overflow(d: &mut Driver) {
             let direction = if before < adjustment.upper() - adjustment.page_size() { 1 } else { -1 };
             d.input.perform(serde_json::json!([{"point": point}, {"wheel": [axis, direction]}]));
             until(|| (adjustment.value() - before).abs() > 0.5, &diagnostic);
+            let restored = adjustment.clone();
+            let frames = sample_after_paint(&scroll, move || restored.value());
             adjustment.set_value(before);
+            scroll.queue_draw();
+            until(|| frames.samples.borrow().iter().any(|sample| (sample.state - before).abs() < 0.01),
+                "the restored scroller allocation reaches native after-paint before the next input");
+            drop(frames.finish());
+        }
+    }
+}
+
+fn color_drawer(d: &Driver) {
+    let wheel = d.named("color-wheel").downcast::<crate::tool_panels::ColorWheel>().unwrap();
+    let content = d.named("drawer-panel-Color");
+    let (diameter, origin) = wheel.drawing_bounds();
+    assert!(diameter >= 127.5 && origin[1] >= -0.5 && origin[1] + diameter <= wheel.height() as f32 + 0.5);
+    assert!(wheel.width() <= content.width());
+    let scroll = wheel.ancestor(gtk::ScrolledWindow::static_type()).unwrap();
+    assert_eq!(scroll.widget_name(), "color-drawer-scroll", "the wheel has only the whole drawer scroller");
+    let palettes = d.named("drawer-panel-Palettes");
+    let adjustment = scroll.clone().downcast::<gtk::ScrolledWindow>().unwrap().vadjustment();
+    if adjustment.upper() <= adjustment.page_size() + 0.5 { inside(d, &palettes); }
+    else { assert!(diameter <= 128.5, "whole-drawer scrolling starts only at the wheel minimum"); }
+    let top = wheel.compute_point(&scroll, &gtk::graphene::Point::new(origin[0], origin[1])).unwrap();
+    assert!(top.x() >= -0.5 && top.y() >= -0.5
+        && top.x() + diameter <= scroll.width() as f32 + 0.5
+        && top.y() + diameter <= scroll.height() as f32 + 0.5, "the whole wheel fits its drawer viewport");
+    for scroll in widgets(&palettes).filter_map(|widget| widget.downcast::<gtk::ScrolledWindow>().ok())
+        .filter(|scroll| scroll.is_mapped()) {
+        let adjustment = scroll.hadjustment();
+        assert!(adjustment.upper() <= adjustment.page_size() + 0.5,
+            "palette has no horizontal overflow: {} > {}", adjustment.upper(), adjustment.page_size());
+    }
+    for grid in widgets(&palettes).filter_map(|widget| widget.downcast::<crate::palette_grid::PaletteGrid>().ok()) {
+        for child in std::iter::successors(grid.first_child(), |child| child.next_sibling()).filter(|child| child.is_mapped()) {
+            let bounds = grid.visual_bounds(&child).unwrap();
+            assert!(bounds.x() >= 0. && bounds.x() + bounds.width() <= grid.width() as f32,
+                "palette cell stays inside its grid: {bounds:?}");
         }
     }
 }
@@ -505,27 +514,7 @@ fn native_phone_drawers() {
             let viewport = content.ancestor(gtk::ScrolledWindow::static_type()).unwrap_or(content);
             inside(&d, &viewport);
             if panel == Panel::Color {
-                let wheel = d.named("color-wheel").downcast::<crate::tool_panels::ColorWheel>().unwrap();
-                let content = d.named("drawer-panel-Color");
-                assert_eq!(wheel.width(), content.width(), "color wheel fills its content column");
-                let expected = layer_ui::ColorPanelLayout::new(content.width() as f32).unwrap().wheel[2];
-                assert!((wheel.drawing_bounds().0 - expected).abs() <= 1.,
-                    "phone wheel uses the docked Color panel proportions");
-                let palettes = d.named("drawer-panel-Palettes");
-                inside(&d, &palettes);
-                for scroll in widgets(&palettes).filter_map(|widget| widget.downcast::<gtk::ScrolledWindow>().ok())
-                    .filter(|scroll| scroll.is_mapped()) {
-                    let adjustment = scroll.hadjustment();
-                    assert!(adjustment.upper() <= adjustment.page_size() + 0.5,
-                        "palette has no horizontal overflow: {} > {}", adjustment.upper(), adjustment.page_size());
-                }
-                for grid in widgets(&palettes).filter_map(|widget| widget.downcast::<crate::palette_grid::PaletteGrid>().ok()) {
-                    for child in std::iter::successors(grid.first_child(), |child| child.next_sibling()).filter(|child| child.is_mapped()) {
-                        let bounds = grid.visual_bounds(&child).unwrap();
-                        assert!(bounds.x() >= 0. && bounds.x() + bounds.width() <= grid.width() as f32,
-                            "palette cell stays inside its grid: {bounds:?}");
-                    }
-                }
+                color_drawer(&d);
             }
             scroll_overflow(&mut d);
             capture(&mut d, &format!("{name}-{}", if swapped { "swapped" } else { "normal" }));
@@ -674,7 +663,7 @@ fn native_phone_window_move() {
         }
     }
     let mut origin = origin.expect("calibrate private window position from native pointer motion");
-    for size in [[412, 700], [700, 412]] {
+    for size in [[891, 412], [412, 891]] {
         d.w.window.set_default_size(size[0], size[1]);
         until(|| [d.w.surface.width(), d.w.surface.height()] == size, "phone movement orientation is ready");
         let probe = [origin[0] + 200., origin[1] + 200.];
@@ -685,36 +674,41 @@ fn native_phone_window_move() {
         for device in ["mouse", "touch"] {
             for bar in 0..2 {
                 let layout = presentation(&d);
-                let bounds = layout.bars[bar];
-                let point = (1..100).map(|step| {
-                    let t = step as f32 / 100.;
-                    if size[0] < size[1] { [bounds.x + bounds.width * t, bounds.y + bounds.height * 0.5] }
-                    else { [bounds.x + bounds.width * 0.5, bounds.y + bounds.height * t] }
-                }).find(|point| {
-                    !layout.tool_hits.iter().chain([&layout.capy_hit, &layout.size, &layout.strength])
-                        .chain(layout.controls.iter()).any(|b| point[0] >= b.x && point[0] <= b.x + b.width
-                            && point[1] >= b.y && point[1] <= b.y + b.height)
-                }).expect("phone bar has empty draggable space");
-                let from = [origin[0] + point[0], origin[1] + point[1]];
-                let delta = if bar == 0 { [60., 30.] } else { [-60., -30.] };
-                let to = [from[0] + delta[0], from[1] + delta[1]];
-                let before = layer_ui::durable_layout(&state(&d.w).workspace.layout);
-                let checkpoint = ui_session(&d.w).engine().checkpoint();
-                d.input.perform(serde_json::json!([contact(device,"down",from),
-                    contact(device,"move",[from[0]+delta[0]*0.3,from[1]+delta[1]*0.3]),
-                    contact(device,"move",to),contact(device,"up",to)]));
-                let probe = [origin[0] + size[0] as f32 * 0.5, origin[1] + size[1] as f32 * 0.5];
-                observed.set(None);
-                d.input.perform(serde_json::json!([{"point":[probe[0]-1.,probe[1]]},{"point":probe}]));
-                let local = observed.get().expect("pointer inside moved phone window");
-                let moved = [probe[0] - local[0], probe[1] - local[1]];
-                assert!((moved[0] - origin[0]) * delta[0].signum() > 30.
-                    && (moved[1] - origin[1]) * delta[1].signum() > 10.,
-                    "{size:?}/{device}/bar {bar}: actual origin {origin:?} -> {moved:?}, expected delta {delta:?}");
-                assert_eq!(layer_ui::durable_layout(&state(&d.w).workspace.layout), before);
-                assert_eq!(ui_session(&d.w).engine().checkpoint(), checkpoint);
-                assert!(d.w.chrome_contacts.borrow().is_empty());
-                origin = moved;
+                let center = |b: Bounds| [b.x + b.width * 0.5, b.y + b.height * 0.5];
+                let gap = if layout.edge == Edge::Top { [layout.capy.x + layout.tile + 4., layout.capy.y + layout.tile * 0.5] }
+                    else { [layout.capy.x + layout.tile * 0.5, layout.capy.y + layout.tile + 4.] };
+                let top = if layout.edge == Edge::Top {
+                    [layout.chips[0].x + layout.chips[0].width + 4., layout.bars[0].y + layout.tile * 0.5]
+                } else { [layout.bars[0].x + layout.tile * 0.5, layout.chips[0].y - 4.] };
+                let points = if bar == 0 { vec![center(layout.tools[0]), top] }
+                    else { vec![center(layout.capy), center(layout.settings), gap] };
+                for (source, point) in points.into_iter().enumerate() {
+                    let from = [origin[0] + point[0], origin[1] + point[1]];
+                    let delta = [if origin[0] + size[0] as f32 * 0.5 > monitor.width() as f32 * 0.5 { -60. } else { 60. },
+                        if origin[1] + size[1] as f32 * 0.5 > monitor.height() as f32 * 0.5 { -30. } else { 30. }];
+                    let to = [from[0] + delta[0], from[1] + delta[1]];
+                    let before = layer_ui::durable_layout(&state(&d.w).workspace.layout);
+                    let checkpoint = ui_session(&d.w).engine().checkpoint();
+                    let selected = state(&d.w).layer_tools.tool;
+                    d.input.perform(serde_json::json!([contact(device,"down",from),
+                        contact(device,"move",[from[0]+delta[0]*0.3,from[1]+delta[1]*0.3]),
+                        contact(device,"move",to),contact(device,"up",to)]));
+                    assert!(d.w.chrome_contacts.borrow().is_empty(), "compositor handoff retires chrome capture before any pointer probe");
+                    assert_eq!(state(&d.w).layer_tools.tool, selected);
+                    assert!(!state(&d.w).phone.menu && !widgets(d.w.window.upcast_ref()).any(|widget| widget.is_mapped() && widget.is::<gtk::Popover>()));
+                    let probe = [origin[0] + size[0] as f32 * 0.5, origin[1] + size[1] as f32 * 0.5];
+                    observed.set(None);
+                    d.input.perform(serde_json::json!([{"point":[probe[0]-1.,probe[1]]},{"point":probe}]));
+                    let local = observed.get().expect("pointer inside moved phone window");
+                    let moved = [probe[0] - local[0], probe[1] - local[1]];
+                    assert!((moved[0] - origin[0]) * delta[0].signum() > 30.
+                        && (moved[1] - origin[1]) * delta[1].signum() > 10.,
+                        "{size:?}/{device}/bar {bar}/source {source}: actual origin {origin:?} -> {moved:?}, expected delta {delta:?}");
+                    assert_eq!(layer_ui::durable_layout(&state(&d.w).workspace.layout), before);
+                    assert_eq!(ui_session(&d.w).engine().checkpoint(), checkpoint);
+                    assert!(d.w.chrome_contacts.borrow().is_empty());
+                    origin = moved;
+                }
             }
         }
     }
@@ -735,27 +729,16 @@ fn menu_pages(d: &mut Driver) {
     inside(d, &search);
     assert!(prefs.tooltip_text().is_some_and(|label| !label.is_empty()));
     assert!(gtk::test_accessible_has_property(&prefs, gtk::AccessibleProperty::Label));
-    let a = prefs.compute_bounds(&d.w.surface).unwrap();
-    let b = search.compute_bounds(&d.w.surface).unwrap();
-    assert!((a.y() + a.height() * 0.5 - b.y() - b.height() * 0.5).abs() <= 1.,
-        "Preferences gear is beside Search");
-    let phone = presentation(d);
-    assert!((a.width()-phone.tile).abs() <= 1. && (a.height()-phone.tile).abs() <= 1.,
-        "Preferences uses the same square tile as the bar");
-    assert!(prefs.has_css_class("header-tool") && prefs.parent().unwrap().has_css_class("header-bar"));
-    let icon = prefs.first_child().unwrap().downcast::<gtk::Image>().unwrap();
-    assert!((icon.pixel_size() as f32-phone.icon).abs() <= 1., "Preferences uses the bar icon size");
-    assert_eq!(search.type_().name(), "GtkModelButton");
-    assert!((7. ..=9.).contains(&(a.x()-b.x()-b.width())), "Preferences is separate at Search's trailing end");
-    let submenus = ui_session(&d.w).phone_menu_columns()[1].sections.iter().flatten()
+    assert!(search.is::<gtk::Button>(), "Search is an icon-strip button");
+    let submenus = ui_session(&d.w).phone_menu().unwrap().list.sections.iter().flatten()
         .filter(|item| !item.sections.is_empty()).take(2).map(|item| item.label.clone()).collect::<Vec<_>>();
     assert_eq!(submenus.len(), 2);
     for (index, label) in submenus.into_iter().enumerate() {
-        let row = widgets(&d.named("phone-menu-column-1")).find(|widget|
+        let row = widgets(&d.named("phone-menu-list")).find(|widget|
             widget.is_mapped() && widget.type_().name() == "GtkModelButton"
                 && widget.property::<String>("text") == label).unwrap();
         d.click(&row);
-        until(|| stack.visible_child_name().as_deref() == Some(format!("page-0-{index}").as_str())
+        until(|| stack.visible_child_name().as_deref() == Some(menu_page_name(d, &label).as_str())
             && !stack.is_transition_running(), "phone submenu slides in place");
         submenu(d, &stack, &format!("submenu-{index}-{swapped}"), initial);
         assert!(!d.w.popovers.borrow().iter().filter_map(|popup| popup.upgrade()).any(|popup| popup.is_mapped()),
@@ -767,16 +750,20 @@ fn menu_pages(d: &mut Driver) {
         menu_bounds(d, initial);
         menu_semantics(d, &stack);
     }
-    click(d, "workspace-switcher-options");
-    until(|| stack.visible_child_name().as_deref() == Some("page-0-7-1-0") && !stack.is_transition_running(),
-        "workspace options navigates the menu to Window Workspaces");
+    let window_label = ApplicationMenu::Window.localized_label(&d.w.localization());
+    d.click_label(&window_label);
+    let window_page = menu_page_name(d, &window_label);
+    until(|| stack.visible_child_name().as_deref() == Some(window_page.as_str()) && !stack.is_transition_running(),
+        "Window opens inside the one menu list");
+    d.click_label("Workspaces");
+    let workspaces_page = menu_page_name(d, "Workspaces");
+    until(|| stack.visible_child_name().as_deref() == Some(workspaces_page.as_str()) && !stack.is_transition_running(),
+        "Workspaces opens inside Window");
     submenu(d, &stack, &format!("workspaces-{swapped}"), initial);
-    assert!(!d.w.popovers.borrow().iter().filter_map(|popup| popup.upgrade()).any(|popup| popup.is_mapped()),
-        "workspace options stays inside Capy's menu");
-    for page in ["page-0-7", "main"] {
+    for page in [window_page.as_str(), "main"] {
         click(d, "phone-menu-back");
         until(|| stack.visible_child_name().as_deref() == Some(page) && !stack.is_transition_running(),
-            "Workspaces back row follows the menu hierarchy");
+            "Workspaces Back follows its native menu hierarchy");
         capture(d, &format!("workspaces-back-{page}-{swapped}"));
         menu_bounds(d, initial);
         menu_semantics(d, &stack);
@@ -787,13 +774,13 @@ fn menu_pages(d: &mut Driver) {
     capture_current(d,&format!("preferences-hover-{swapped}"));
     d.input.perform(serde_json::json!([contact("mouse","down",point)]));
     assert!(prefs.state_flags().contains(gtk::StateFlags::ACTIVE));
-    assert!(!d.w.preferences.dialog.is_mapped(), "press capture does not activate Preferences");
+    assert!(d.w.visible_dialog().as_ref() != Some(&d.w.preferences.dialog), "press capture does not activate Preferences");
     capture_current(d,&format!("preferences-pressed-{swapped}"));
-    assert!(!d.w.preferences.dialog.is_mapped(), "Preferences opens on release");
+    assert!(d.w.visible_dialog().as_ref() != Some(&d.w.preferences.dialog), "Preferences opens on release");
     d.input.perform(serde_json::json!([contact("mouse","up",point)]));
-    until(|| d.w.preferences.dialog.is_mapped(), "Preferences gear opens Settings");
-    d.w.preferences.dialog.close();
-    until(|| !d.w.preferences.dialog.is_mapped(), "Settings closes");
+    until(|| d.w.visible_dialog().as_ref() == Some(&d.w.preferences.dialog), "Preferences gear opens Settings");
+    crate::page_dialog::close_dialog(&d.w.preferences.dialog);
+    until(|| d.w.visible_dialog().as_ref() != Some(&d.w.preferences.dialog), "Settings closes");
     if !state(&d.w).phone.menu { menu(d); }
     let retired = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
     d.input.key(0xff1b);
@@ -806,16 +793,8 @@ fn menu_pages(d: &mut Driver) {
     capture(d, &format!("retired-menu-stack-{swapped}"));
     assert_eq!(current.visible_child_name().as_deref(), Some("main"));
     menu_semantics(d, &current);
-    assert!(d.named("phone-menu-column-0").is_mapped());
-    let placement = d.w.phone.placement.borrow().as_ref().unwrap().clone();
-    let menu_root = d.named("phone-menu");
-    for (index, expected) in placement.columns.iter().enumerate() {
-        let scroll = d.named(&format!("phone-menu-scroll-{index}"));
-        assert!(scroll.is_mapped());
-        let actual = scroll.compute_bounds(&menu_root).unwrap();
-        assert!([actual.x()-expected.x,actual.y()-expected.y,actual.width()-expected.width,actual.height()-expected.height]
-            .into_iter().all(|difference| difference.abs() <= 1.), "retired stack leaves current root column geometry intact");
-    }
+    assert!(d.named("phone-search").is_mapped(), "the icon strip survives navigation");
+    menu_bounds(d, initial);
     d.w.dispatch(UiAction::Invoke { command: CommandId::ActualPixels });
     d.w.dispatch(UiAction::Invoke { command: CommandId::ZoomIn });
     new_photo::ready(&d.w);
@@ -828,7 +807,7 @@ fn menu_pages(d: &mut Driver) {
     let row = widgets(&camera_stack.visible_child().unwrap()).find(|widget| widget.is_mapped()
         && widget.type_().name()=="GtkModelButton" && widget.property::<String>("text")==label.as_ref()).unwrap();
     d.click(&row);
-    until(|| camera_stack.visible_child_name().as_deref()==Some("page-0-0") && !camera_stack.is_transition_running(),
+    until(|| camera_stack.visible_child_name().as_deref()==Some(menu_page_name(d, &label).as_str()) && !camera_stack.is_transition_running(),
         "File opens at free zoom");
     let bounds = d.w.phone.placement.borrow().as_ref().unwrap().bounds;
     submenu(d,&camera_stack,&format!("camera-close-file-{swapped}"),bounds);
@@ -841,7 +820,7 @@ fn menu_pages(d: &mut Driver) {
     capture(d,&format!("camera-reopened-root-{swapped}"));
     assert_eq!(reopened.visible_child_name().as_deref(),Some("main"));
     menu_semantics(d,&reopened);
-    assert!(d.named("phone-menu-column-0").is_mapped());
+    assert!(d.named("phone-search").is_mapped(), "the icon strip survives navigation");
     menu_bounds(d,d.w.phone.placement.borrow().as_ref().unwrap().bounds);
     d.w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
     new_photo::ready(&d.w);
@@ -852,7 +831,7 @@ fn submenu(d: &mut Driver, stack: &gtk::Stack, name: &str, initial: Bounds) {
     capture(d, name);
     menu_bounds(d, initial);
     menu_semantics(d, stack);
-    let scroll = d.named("phone-menu-scroll-1").downcast::<gtk::ScrolledWindow>().unwrap();
+    let scroll = d.named("phone-menu-scroll").downcast::<gtk::ScrolledWindow>().unwrap();
     inside(d, scroll.upcast_ref());
     let viewport = scroll.compute_bounds(&d.w.surface).unwrap();
     let menu = initial;
@@ -878,8 +857,30 @@ fn submenu(d: &mut Driver, stack: &gtk::Stack, name: &str, initial: Bounds) {
     scroll_overflow(d);
 }
 
+fn drawing_selector(d: &Driver) -> DrawingSelector {
+    let gpu = d.w.gpu.borrow();
+    let session = &gpu.as_ref().unwrap().session;
+    let labels = d.w.documents.model.borrow().labels(&session.state().document_file, |parked| &parked.canvas.session.state().document_file, &d.w.localization());
+    DrawingSelector::new(&labels, d.w.documents.selected(), &session.command(CommandId::NewDocument), &d.w.localization())
+}
+
+fn navigation_model(d: &Driver) -> ContextMenu {
+    let selector = drawing_selector(d);
+    let mut model = ui_session(&d.w).phone_menu().unwrap().list;
+    model.sections.insert(0, vec![selector.page]);
+    model
+}
+
+fn drawings_ready(d: &Driver) -> bool {
+    if !state(&d.w).phone.menu || d.w.pages.root.is_visible() { return false; }
+    let stack = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
+    stack.is_mapped() && stack.visible_child_name().as_deref() == Some("page-0-0") && !stack.is_transition_running()
+        && stack.visible_child().and_then(|page| find_named(&page, "phone-menu-back"))
+            .is_some_and(|back| back.is_mapped() && back.width() > 0 && back.height() > 0)
+}
+
 fn menu_semantics(d: &Driver, stack: &gtk::Stack) {
-    let model = ui_session(&d.w).phone_menu_columns()[1].clone();
+    let model = navigation_model(d);
     let pages = PhoneMenuNavigation::pages(&model);
     let name = stack.visible_child_name().unwrap();
     let expected = pages.iter().find(|page| page.name()==name.as_str()).unwrap();
@@ -894,10 +895,12 @@ fn menu_semantics(d: &Driver, stack: &gtk::Stack) {
     }
     let rows = rows.collect::<Vec<_>>();
     let items = expected.menu.sections.iter().enumerate().flat_map(|(s, section)| section.iter().enumerate()
-        .filter(|(_,item)| !item.is_heading()).map(move |(i,item)| (s,i,item))).collect::<Vec<_>>();
+        .filter(move |(_,item)| !item.is_heading()).map(move |(i,item)| (s,i,item))).collect::<Vec<_>>();
     assert_eq!(rows.len(), items.len(), "{name}: the whole native page matches the shared menu");
+    let caption = drawing_selector(d).label;
     for (row,(section,index,item)) in rows.iter().zip(items) {
-        assert_eq!(row.property::<String>("text"), item.label, "{name}: actual menu contents");
+        let label = if row.widget_name() == "phone-drawing" { caption.as_str() } else { item.label.as_str() };
+        assert_eq!(row.property::<String>("text"), label, "{name}: actual menu contents");
         if item.action.is_none() && item.enabled && !item.sections.is_empty() {
             let mut path = expected.path.clone();
             path.push([section,index]);
@@ -905,40 +908,753 @@ fn menu_semantics(d: &Driver, stack: &gtk::Stack) {
                 "{name}: native forward destination");
         }
     }
-    menu_separator(d,name.as_str());
+    menu_separator(d);
 }
 
 fn menu_bounds(d: &Driver, initial: Bounds) {
     assert_eq!(d.w.phone.placement.borrow().as_ref().unwrap().bounds, initial,
-        "navigation preserves the initial published menu bounds");
-    for widget in std::iter::once(d.named("phone-menu")).chain((0..2)
-        .map(|index| d.named(&format!("phone-menu-scroll-{index}"))).filter(|widget| widget.is_mapped())) {
+        "navigation preserves the original menu shell");
+    for name in ["phone-menu", "phone-menu-scroll", "phone-preferences", "phone-search", "phone-finger", "phone-zen", "phone-swap"] {
+        let widget = d.named(name);
+        assert!(widget.is_mapped());
         let bounds = widget.compute_bounds(&d.w.surface).unwrap();
-        assert!(bounds.x() >= initial.x-1. && bounds.y() >= initial.y-1.
-            && bounds.x()+bounds.width() <= initial.x+initial.width+1.
-            && bounds.y()+bounds.height() <= initial.y+initial.height+1.,
-            "{} stays inside the initial menu bounds: {bounds:?}, {initial:?}", widget.widget_name());
+        assert!(bounds.x() >= initial.x - 1. && bounds.y() >= initial.y - 1.
+            && bounds.x() + bounds.width() <= initial.x + initial.width + 1.
+            && bounds.y() + bounds.height() <= initial.y + initial.height + 1., "{name}: {bounds:?}, {initial:?}");
     }
 }
 
-fn menu_separator(d: &Driver, page: &str) {
-    let model = ui_session(&d.w).phone_menu_columns()[1].clone();
-    let mut navigation = PhoneMenuNavigation::default();
-    assert!(navigation.select(&model,page));
+fn menu_separator(d: &Driver) {
     let placement = d.w.phone.placement.borrow().as_ref().unwrap().clone();
-    let expected = navigation.geometry(&placement).separator;
+    let expected = presentation(d).menu_geometry(&placement).separator;
     let separator = d.named("phone-menu-separator").downcast::<gtk::Separator>().unwrap();
-    let shown = expected.width > 0. && expected.height > 0.;
-    assert_eq!(separator.is_mapped(),shown,"{page}: section separator visibility matches the projected panes");
-    assert_eq!(separator.is_child_visible(),shown);
-    if shown {
-        inside(d,separator.upcast_ref());
-        let native = widgets(&d.named("phone-menu-column-0")).find(|widget| widget.is_mapped() && widget.is::<gtk::Separator>()).unwrap();
-        assert_eq!(separator.color(),native.color(),"the pane boundary matches the native menu separator foreground");
-        assert_eq!(separator.opacity(),native.opacity(),"the pane boundary matches the native menu separator opacity");
-        let actual = separator.compute_bounds(&d.named("phone-menu")).unwrap();
-        assert!([actual.x()-expected.x,actual.y()-expected.y,actual.width()-expected.width,actual.height()-expected.height]
-            .into_iter().all(|difference| difference.abs() <= 1.), "native section separator uses shared geometry: {actual:?}, {expected:?}");
-        assert_eq!(separator.orientation(),if expected.width > expected.height {gtk::Orientation::Horizontal} else {gtk::Orientation::Vertical});
+    inside(d, separator.upcast_ref());
+    let actual = separator.compute_bounds(&d.named("phone-menu")).unwrap();
+    assert!([actual.x() - expected.x, actual.y() - expected.y, actual.width() - expected.width,
+        actual.height() - expected.height].into_iter().all(|delta| delta.abs() <= 1.));
+    assert_eq!(separator.orientation(), if expected.width > expected.height { gtk::Orientation::Horizontal } else { gtk::Orientation::Vertical });
+}
+
+#[test]
+#[ignore = "private compositor: --native-test=native_phone_menu_feedback --native-storage; 412x891 or891x412 light"]
+fn native_phone_menu_feedback() {
+    let mut d = setup("art.capycanvas.PhoneMenuFeedback");
+    assert_eq!(state(&d.w).theme, Theme::Light);
+    let first = d.w.documents.selected();
+    d.w.dispatch(UiAction::Invoke { command: CommandId::AddLayer });
+    until(|| !ui_session(&d.w).engine().has_pending_document_edits(), "the first drawing is modified");
+    d.w.documents.enqueue(&d.w, (new_drawing_at(128, 96, layer_core::color::SampleDepth::U8), None));
+    until(|| d.w.documents.len() == 2 && !d.w.documents.changing.get(), "a second drawing opens");
+    new_photo::ready(&d.w);
+    let second = d.w.documents.selected();
+    menu(&mut d);
+    let caption = d.named("phone-drawing");
+    let root_bounds = d.w.phone.placement.borrow().as_ref().unwrap().bounds;
+    assert_eq!(caption.type_().name(), "GtkModelButton");
+    assert!(caption.is_sensitive());
+    assert!(!gtk::test_accessible_has_property(&caption, gtk::AccessibleProperty::KeyShortcuts), "the count is no keyboard shortcut");
+    assert!(widgets(&caption).filter_map(|w| w.downcast::<gtk::Label>().ok()).any(|label| label.css_name() == "accelerator" && label.text() == "2"));
+    assert!(!d.w.system_status.clock.is_ancestor(&d.named("phone-menu")) && !d.w.system_status.battery.is_ancestor(&d.named("phone-menu")));
+    let file = widgets(&d.named("phone-menu-list")).find(|row| row.type_().name() == "GtkModelButton" && row.property::<String>("text") == ApplicationMenu::File.localized_label(&d.w.localization()).as_ref()).unwrap();
+    assert_eq!(caption.height(), file.height(), "the drawing opener has native menu-row height");
+    let row_height = file.height();
+    let text_start = |row: &gtk::Widget| {
+        let label = widgets(row).filter_map(|w| w.downcast::<gtk::Label>().ok()).find(|label| label.css_name() == "label").unwrap();
+        label.compute_bounds(&d.w.surface).unwrap().x() + label.layout_offsets().0 as f32
+    };
+    assert!((text_start(&caption) - text_start(&file)).abs() <= 1., "the drawing label keeps the native page inset and check gutter");
+    capture(&mut d, "feedback-root-two");
+    for name in ["phone-finger", "phone-swap"] {
+        let row = d.named(name); let before = row.property::<bool>("active");
+        for selected in [!before, before] {
+            click(&mut d, name);
+            until(|| state(&d.w).phone.menu && d.named(name).property::<bool>("active") == selected, "the toggle updates without closing");
+            assert_eq!(row, d.named(name), "the native check row is updated in place");
+        }
     }
+    click(&mut d, "phone-drawing");
+    let stack = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
+    until(|| drawings_ready(&d), "Drawings slides into the navigation pane");
+    menu_bounds(&d, root_bounds);
+    menu_semantics(&d, &stack);
+    assert!(!d.w.popovers.borrow().iter().filter_map(|p| p.upgrade()).any(|p| p.is_mapped()), "Drawings has no floating selector");
+    for id in [first, second] {
+        let row = d.named(&format!("phone-drawing-{id}"));
+        assert_eq!(row.type_().name(), "GtkModelButton");
+        assert_eq!(row.height(), row_height, "drawing rows retain native menu height beside their close controls");
+        assert_eq!(row.property::<bool>("active"), id == second);
+        inside(&d, &row); inside(&d, &d.named(&format!("phone-drawing-close-{id}")));
+    }
+    assert!(d.named("phone-search").is_mapped(), "the icon strip stays visible on Drawings");
+    capture(&mut d, "feedback-drawings-two");
+    click(&mut d, &format!("phone-drawing-{first}"));
+    until(|| d.w.documents.selected() == first && !state(&d.w).phone.menu && !d.w.documents.changing.get(), "a drawing selection switches and closes");
+    new_photo::ready(&d.w);
+    d.w.dispatch(UiAction::Invoke { command: CommandId::Drawings });
+    until(|| drawings_ready(&d), "the Drawings command opens the phone page");
+    menu_bounds(&d, root_bounds);
+    let current = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
+    assert_ne!(stack, current);
+    let old_back = widgets(&stack.visible_child().unwrap()).find(|row| row.type_().name() == "GtkModelButton").unwrap();
+    old_back.emit_by_name::<()>("clicked", &[]);
+    assert_eq!(current.visible_child_name().as_deref(), Some("page-0-0"), "a retained page owns its external opener and cannot change current navigation");
+    assert!(d.named(&format!("phone-drawing-{first}")).property::<bool>("active"));
+    capture(&mut d, "feedback-drawings-current");
+    d.w.dispatch(UiAction::Phone { action: PhoneAction::Drawing { id: second, close: false } });
+    let choice = if ui_session(&d.w).finger_drawing() { 2 } else { 1 };
+    d.w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::FingerDrawing, value: PreferenceValue::Choice(choice) } });
+    until(|| d.w.documents.selected() == second && !d.w.documents.changing.get() && !d.w.servicing.get(), "selection survives queued settings persistence");
+    new_photo::ready(&d.w);
+    d.w.dispatch(UiAction::Invoke { command: CommandId::Drawings });
+    until(|| drawings_ready(&d), "Drawings reopens after queued selection");
+    menu_bounds(&d, root_bounds);
+    click(&mut d, "phone-menu-back");
+    until(|| {
+        let stack = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
+        stack.visible_child_name().as_deref() == Some("main") && !stack.is_transition_running() && d.named("phone-drawing").is_mapped()
+    }, "Drawings Back returns to the menu");
+    menu_bounds(&d, root_bounds);
+    click(&mut d, "phone-drawing");
+    until(|| drawings_ready(&d), "Drawings is ready before New");
+    click(&mut d, "phone-new-drawing");
+    until(|| d.w.visible_dialog().is_some_and(|dialog| dialog.widget_name() == "new-drawing-dialog"), "New drawing keeps its normal editor");
+    crate::page_dialog::close_dialog(&d.w.visible_dialog().unwrap());
+    until(|| d.w.visible_dialog().is_none() && !d.w.pages.root.is_transition_running() && !d.w.servicing.get(), "New drawing cancels and releases modal input");
+    d.w.dispatch(UiAction::Invoke { command: CommandId::Drawings });
+    until(|| drawings_ready(&d), "the close control is visible");
+    click(&mut d, &format!("phone-drawing-close-{first}"));
+    until(|| d.w.window.visible_dialog().is_some_and(|dialog| dialog.is::<adw::AlertDialog>()), "closing an unsaved drawing asks to save");
+    new_photo::response(&d.w, "discard");
+    until(|| d.w.documents.len() == 1 && !d.w.documents.changing.get(), "discard closes only that drawing");
+    new_photo::ready(&d.w); menu(&mut d);
+    assert!(!widgets(&d.named("phone-drawing")).filter_map(|w| w.downcast::<gtk::Label>().ok()).any(|label| label.css_name() == "accelerator" && label.is_mapped()));
+    click(&mut d, "phone-zen");
+    until(|| state(&d.w).phone.hidden && !state(&d.w).phone.menu, "Zen closes the menu and hides bars");
+    d.finish();
+}
+
+#[test]
+#[ignore = "private compositor: --native-test=native_phone_layers_live_height --native-storage; 412x891 light"]
+fn native_phone_layers_live_height() {
+    fn settled(d: &Driver) {
+        until(|| {
+            if ui_session(&d.w).engine().has_pending_document_edits() { return false; }
+            let Some(placement) = d.w.drawer.placement() else { return false; };
+            let Some(layers) = d.w.drawer.layers() else { return false; };
+            let Some(stack) = layers.root.ancestor(gtk::Stack::static_type()).and_downcast::<gtk::Stack>() else { return false; };
+            if !stack.is_mapped() || stack.is_transition_running() { return false; }
+            let view = state(&d.w);
+            let properties = view.customization.drawer.as_ref().is_some_and(|drawer| drawer.layer_properties == Some(true));
+            let measurement = layers.scroll_measurement(placement.bounds.width as i32);
+            let properties_height = d.w.drawer.effects().unwrap().properties.measure(gtk::Orientation::Vertical, placement.bounds.width as i32).1 as f32;
+            let expected = LayerDrawerSizing::presented_pages(measurement, view.layer_tools.presented_rows(&view.layers),
+                d.w.surface.height() as f32, properties_height, Some(&presentation(d)))[usize::from(properties)];
+            if (placement.bounds.height - expected).abs() > 1. { return false; }
+            if properties { return true; }
+            let Some(id) = view.layer_tools.editing_layer.as_ref().map(|row| row.id) else { return false; };
+            find_named(layers.list.upcast_ref(), &format!("art-layer-{id}")).filter(|row| row.is_mapped())
+                .and_then(|row| row.compute_bounds(&layers.list)).is_some_and(|b| b.y() >= -1. && b.y() + b.height() <= layers.list.height() as f32 + 1.)
+        }, "the open drawer follows shared sizing and reveals its selected row");
+    }
+    let mut d = setup("art.capycanvas.PhoneLayersHeight");
+    gtk::Settings::default().unwrap().set_gtk_enable_animations(true);
+    assert_eq!([d.w.surface.width(), d.w.surface.height()], [412, 891]);
+    assert_eq!(state(&d.w).theme, Theme::Light);
+    let name = tool(&d, ToolbarControl::Panel { panel: Panel::Layers });
+    click(&mut d, &name);
+    until(|| d.w.drawer.layers().is_some(), "Layers opens once");
+    let anchor = state(&d.w).customization.drawer.unwrap().anchor;
+    settled(&d);
+    assert_eq!(state(&d.w).layers.len(), 2);
+    capture(&mut d, "layers-live-2");
+    let mut was_capped = false;
+    let mut grew_while_capped = false;
+    for count in 3..=24 {
+        if was_capped {
+            let adjustment = d.w.drawer.layers().unwrap().list.vadjustment();
+            adjustment.set_value((adjustment.upper() - adjustment.page_size()).max(adjustment.lower()));
+        }
+        click(&mut d, "layer-add-layer-symbolic");
+        until(|| state(&d.w).layers.len() == count, "the native action adds a layer while the drawer stays open");
+        settled(&d);
+        assert_eq!(state(&d.w).customization.drawer.unwrap().anchor, anchor);
+        if [5, 12].contains(&count) { capture(&mut d, &format!("layers-live-{count}")); }
+        let capped = (d.w.drawer.placement().unwrap().bounds.height - presentation(&d).work_area.height).abs() <= 1.;
+        grew_while_capped |= was_capped && capped;
+        was_capped = capped;
+        if grew_while_capped && count >= 12 { break; }
+    }
+    assert!(grew_while_capped, "a new layer remains visible after height reaches the cap");
+    let layers = d.w.drawer.layers().unwrap();
+    assert!(layers.list.vadjustment().upper() > layers.list.vadjustment().page_size());
+    capture(&mut d, "layers-live-capped");
+    while state(&d.w).layers.len() > 5 {
+        let count = state(&d.w).layers.len();
+        click(&mut d, "delete-selected-layers");
+        until(|| state(&d.w).layers.len() == count - 1, "the native action removes a layer");
+        settled(&d);
+    }
+    assert!(d.w.drawer.placement().unwrap().bounds.height < presentation(&d).work_area.height);
+    click(&mut d, "layer-folder-symbolic");
+    until(|| state(&d.w).layer_tools.editing_layer.is_some_and(|layer| layer.group), "the native action creates a group");
+    let group = state(&d.w).layer_tools.editing_layer.unwrap().id;
+    click(&mut d, "layer-add-layer-symbolic");
+    settled(&d);
+    let expanded = d.w.drawer.placement().unwrap().bounds.height;
+    d.w.dispatch(UiAction::Layer { action: LayerAction::Collapse { id: group } });
+    settled(&d);
+    assert!(d.w.drawer.placement().unwrap().bounds.height < expanded);
+    d.w.dispatch(UiAction::Layer { action: LayerAction::Collapse { id: group } });
+    settled(&d);
+    assert_eq!(d.w.drawer.placement().unwrap().bounds.height, expanded);
+    let heights = Rc::new(RefCell::new(Vec::new()));
+    let clock = d.w.surface.frame_clock().unwrap();
+    let w = d.w.clone();
+    let handler = clock.connect_after_paint(glib::clone!(#[weak] w, #[strong] heights, move |_| {
+        if let Some(placement) = w.drawer.placement() { heights.borrow_mut().push(placement.bounds.height); }
+    }));
+    click(&mut d, "layer-properties-disclosure");
+    until(|| state(&d.w).customization.drawer.is_some_and(|drawer| drawer.layer_properties == Some(true)), "Properties opens in the same drawer");
+    settled(&d);
+    let properties_height = d.w.drawer.placement().unwrap().bounds.height;
+    clock.disconnect(handler);
+    assert!((expanded - properties_height).abs() > 2., "the fixture changes page height");
+    assert!(heights.borrow().iter().any(|height| *height > expanded.min(properties_height) + 1. && *height < expanded.max(properties_height) - 1.), "the drawer shell follows the page slide through intermediate heights");
+    click(&mut d, "layer-properties-disclosure");
+    until(|| state(&d.w).customization.drawer.is_some_and(|drawer| drawer.layer_properties == Some(false)), "the footer returns to Layers");
+    settled(&d);
+    capture(&mut d, "layers-live-return");
+    d.input.key(0xff1b);
+    d.finish();
+}
+
+fn menu_layers(d: &mut Driver) {
+    fn layers_path(sections: &[Vec<ContextMenuItem>]) -> Option<Vec<String>> {
+        sections.iter().flatten().find_map(|item| {
+            if matches!(item.action, Some(UiAction::Phone { action: PhoneAction::Panel { panel: Panel::Layers } })) { Some(vec![item.label.clone()]) }
+            else { layers_path(&item.sections).map(|mut path| { path.insert(0, item.label.clone()); path }) }
+        })
+    }
+    let path = layers_path(&ui_session(&d.w).phone_menu().unwrap().list.sections).unwrap();
+    for label in path {
+        let stack = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
+        until(|| !stack.is_transition_running() && widgets(stack.upcast_ref()).any(|row| row.is_mapped() && row.type_().name() == "GtkModelButton" && row.property::<String>("text") == label), "Window panel action is mapped after its page slide");
+        let row = widgets(stack.upcast_ref()).find(|row| row.is_mapped() && row.type_().name() == "GtkModelButton" && row.property::<String>("text") == label).unwrap();
+        assert!(row.grab_focus());
+        let scroll = row.ancestor(gtk::ScrolledWindow::static_type()).and_downcast::<gtk::ScrolledWindow>().unwrap();
+        until(|| row.compute_bounds(&scroll).is_some_and(|b| b.y() >= -1. && b.y() + b.height() <= scroll.height() as f32 + 1.), "the Window action scrolls into view");
+        d.click(&row);
+    }
+    until(|| state(&d.w).customization.drawer.as_ref().is_some_and(|drawer| drawer.anchor == DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Capy }), "Window Layers opens from Capy");
+}
+
+#[test]
+#[ignore = "private compositor: --native-test=native_phone_control_feedback --native-storage; 412x891 light"]
+fn native_phone_control_feedback() {
+    fn close(d: &mut Driver) {
+        d.input.key(0xff1b);
+        until(|| state(&d.w).customization.drawer.is_none() && d.w.drawer.is_closed() && !state(&d.w).phone.menu, "the phone surface closes");
+    }
+    fn settled(d: &Driver) {
+        until(|| d.w.drawer.placement().is_some_and(|place| {
+            let height = place.columns.iter().map(|b| b.y + b.height).fold(0., f32::max);
+            (height - place.bounds.height).abs() < 0.01
+        }), "the drawer reaches its shared geometry");
+    }
+    let mut d = setup("art.capycanvas.PhoneControlFeedback");
+    assert_eq!([d.w.surface.width(), d.w.surface.height()], [412, 891]);
+    for command in [CommandId::DrawingBrush, CommandId::Fill, CommandId::Select] {
+        d.w.dispatch(UiAction::Invoke { command });
+        click(&mut d, "phone-tool-settings");
+        until(|| state(&d.w).customization.drawer.as_ref().is_some_and(|drawer| drawer.columns == vec![vec![Panel::ToolSettings]]), "the fixed tile opens current Tool settings alone");
+        settled(&d);
+        let place = d.w.drawer.placement().unwrap();
+        let button = d.named("phone-tool-settings").compute_bounds(&d.w.surface).unwrap();
+        assert!([place.anchor.x - button.x(), place.anchor.y - button.y(), place.anchor.width - button.width(), place.anchor.height - button.height()]
+            .into_iter().all(|difference| difference.abs() <= 0.5), "the bridge starts on the allocated Tool settings tile");
+        assert!(place.connection().is_some());
+        inside(&d, &d.named("drawer-panel-ToolSettings"));
+        capture(&mut d, &format!("fixed-settings-{command:?}").to_lowercase());
+        close(&mut d);
+    }
+    d.w.dispatch(UiAction::Invoke { command: CommandId::DrawingBrush });
+    let brush = tool(&d, ToolbarControl::Command { command: CommandId::DrawingBrush });
+    click(&mut d, &brush);
+    until(|| state(&d.w).customization.drawer.is_some(), "Brush opens its list");
+    settled(&d);
+    assert!(!state(&d.w).customization.drawer.unwrap().panels().any(|p| p == Panel::ToolSettings));
+    capture(&mut d, "brush-without-settings");
+    close(&mut d);
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for material in [0, 2] {
+            d.w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::Transparency, value: PreferenceValue::Choice(material) } });
+            let tag = format!("material-{theme:?}-{material}").to_lowercase();
+            capture(&mut d, &format!("{tag}-closed"));
+            click(&mut d, &brush);
+            until(|| state(&d.w).customization.drawer.is_some(), "tool drawer opens for material comparison");
+            settled(&d);
+            capture(&mut d, &format!("{tag}-tool"));
+            assert!(!d.w.zen_capy.has_css_class("drawer-open"));
+            assert!(!d.w.zen_capy.state_flags().intersects(gtk::StateFlags::PRELIGHT | gtk::StateFlags::ACTIVE));
+            close(&mut d);
+            menu(&mut d);
+            capture(&mut d, &format!("{tag}-menu"));
+            assert!(d.w.zen_capy.has_css_class("drawer-open"));
+            close(&mut d);
+            assert!(!d.w.zen_capy.has_css_class("drawer-open"), "closing a menu restores Capy's chip");
+            menu(&mut d);
+            menu_layers(&mut d);
+            settled(&d);
+            assert!(d.w.zen_capy.has_css_class("drawer-open"));
+            capture(&mut d, &format!("{tag}-capy-layers"));
+            close(&mut d);
+        }
+    }
+    d.finish();
+}
+
+#[test]
+#[ignore = "private compositor: --native-test=native_toolbar_slider_stretch --native-storage; 412x891 or 1600x1000 light"]
+fn native_toolbar_slider_stretch() {
+    let mut d = setup("art.capycanvas.ToolbarSliderStretch");
+    let phone = state(&d.w).phone_presentation([d.w.surface.width() as f32, d.w.surface.height() as f32]);
+    let name = if phone.is_some() { "component-slider-size".to_string() } else {
+        let (panel, id) = state(&d.w).workspace.layout.panels.iter().find_map(|panel| panel.tiles().iter()
+            .find(|tile| tile.control == ToolbarControl::BrushSizeSlider).map(|tile| (panel.id, tile.id))).unwrap();
+        d.w.dispatch(UiAction::MovePanel { panel, target: DockTarget::CompactEdge { edge: Edge::Top, alignment: EdgeAlignment::Center },
+            viewport: [d.w.surface.width() as f32, d.w.surface.height() as f32] });
+        format!("component-slider-{id}")
+    };
+    until(|| widgets(d.w.window.upcast_ref()).any(|widget| widget.is_mapped() && widget.widget_name() == name
+        && widget.width() > widget.height()), "the horizontal brush slider is allocated");
+    let scale = d.named(&name).downcast::<gtk::Scale>().unwrap();
+    let component = scale.parent().unwrap();
+    let band = component.compute_bounds(&d.w.window).unwrap();
+    let transition = phone.as_ref().map_or(4. * band.height(), |p| p.slider_stretch_distance());
+    let measure = || {
+        let range = scale.range_rect();
+        let (start, end) = scale.slider_range();
+        let half = (end - start) as f32 * 0.5;
+        let to_window = |x| scale.compute_point(&d.w.window, &gtk::graphene::Point::new(x, 0.)).unwrap().x();
+        ToolbarSliderStretch { track: [to_window(range.x() as f32 + half), to_window((range.x() + range.width()) as f32 - half)],
+            band: [band.y(), band.y() + band.height()], extent: d.w.window.width() as f32, transition }
+    };
+    let mut geometry = measure();
+    let x = geometry.track[0] + (geometry.track[1] - geometry.track[0]) * 0.35;
+    let y = band.y() + band.height() * 0.5;
+    let far_y = if phone.is_some() { band.y() - transition } else { band.y() + band.height() + transition };
+    let points = [[x, y], [x + 8., y], [x + 8., far_y], [1., far_y], [geometry.extent - 1., far_y], [x + 8., y]]
+        .map(|point| point.map(|v| (v * 256.).round() / 256.));
+    for (i, point) in points.into_iter().enumerate() {
+        d.input.perform(serde_json::json!([contact("mouse", if i == 0 { "down" } else { "move" }, point)]));
+        if i == 0 { geometry = measure(); }
+        let expected = toolbar_slider_stretch(geometry, point);
+        if i > 0 {
+            let value = ToolbarControl::BrushSizeSlider.slider().unwrap().numeric().resolve(0., NumericOperation::Position { position: expected as f64 }).unwrap();
+            let expected = ToolbarControl::BrushSizeSlider.slider().unwrap().numeric().resolve(value.value, NumericOperation::Format).unwrap().fill;
+            until(|| (scale.value() - expected).abs() < 0.00001, "native value and handle follow the shared stretched mapping");
+            let label = d.named("slider-preview-label").downcast::<gtk::Label>().unwrap();
+            let text = slider_preview_layout(ToolbarControl::BrushSizeSlider, TileStyle::Medium, state(&d.w).brush.diameter, 200., 1., &d.w.localization()).unwrap().text;
+            assert_eq!(label.text(), text);
+            if i == 2 { d.input.perform(serde_json::json!([{ "capture": "slider-stretch-far-preview" }])); }
+        }
+    }
+    d.input.perform(serde_json::json!([contact("mouse", "up", points[points.len() - 1])]));
+    capture(&mut d, "slider-stretch-return");
+    d.input.perform(serde_json::json!([contact("mouse", "down", points[points.len() - 1]), contact("mouse", "up", points[points.len() - 1])]));
+    let bookmark = d.named("slider-bookmark");
+    let popup = bookmark.ancestor(gtk::Popover::static_type()).and_downcast::<gtk::Popover>().unwrap();
+    until(|| popup.is_mapped() && popup.can_target(), "the retained tap preview accepts input again");
+    let count = state(&d.w).toolbar_component(ToolbarControl::BrushSizeSlider).unwrap().bookmarks.len();
+    d.click(&bookmark);
+    until(|| state(&d.w).toolbar_component(ToolbarControl::BrushSizeSlider).unwrap().bookmarks.len() != count, "the retained preview bookmark receives native input");
+    d.finish();
+}
+
+#[test]
+#[ignore = "private compositor: --native-test=native_phone_settings_small_bar --native-storage; 320x568 light"]
+fn native_phone_settings_small_bar() {
+    let mut d = setup("art.capycanvas.PhoneSettingsSmallBar");
+    assert_eq!([d.w.surface.width(), d.w.surface.height()], [320, 568]);
+    inside(&d, &d.named("phone-tool-settings"));
+    for name in ["size", "strength"] {
+        let scale = d.named(&format!("component-slider-{name}")).downcast::<gtk::Scale>().unwrap();
+        let range = scale.range_rect();
+        let (start, end) = scale.slider_range();
+        let a = scale.compute_point(&d.w.window, &gtk::graphene::Point::new(range.x() as f32, 0.)).unwrap();
+        let b = scale.compute_point(&d.w.window, &gtk::graphene::Point::new((range.x() + range.width() - end + start) as f32, 0.)).unwrap();
+        let track = b.x() - a.x();
+        assert!(track >= 70., "{name} retains a usable drag track: {track}");
+        println!("320 {name} usable track {track:.2}");
+    }
+    capture(&mut d, "fixed-settings-small-bar");
+    d.finish();
+}
+
+#[test]
+#[ignore = "private compositor: --native-test=native_phone_color_resize --native-storage; 412x891 viewport, theme external"]
+fn native_phone_color_resize() {
+    let d = setup("art.capycanvas.PhoneColorResize");
+    d.w.window.unmaximize();
+    d.w.window.set_default_size(318, 568);
+    until(|| !d.w.window.is_maximized() && [d.w.surface.width(), d.w.surface.height()] == [318, 568],
+        "the unmaximized phone window is allocated before opening Color");
+    for swapped in [false, true] {
+        if state(&d.w).phone.swapped != swapped {
+            d.w.dispatch(UiAction::Phone { action: PhoneAction::SwapSides });
+            until(|| d.w.drawer.is_closed(), "Swap Sides closes the previous drawer");
+        }
+        let opener = tool(&d, ToolbarControl::Color);
+        descendant::<gtk::Button>(&d.named(&opener)).unwrap().emit_clicked();
+        until(|| d.w.drawer.placement().is_some() && !d.w.drawer.animation_active(), "Color opens before resizing");
+        for size in [[317, 568], [318, 568], [280, 560], [320, 568], [318, 568]] {
+            d.w.window.set_default_size(size[0], size[1]);
+            until(|| [d.w.surface.width(), d.w.surface.height()] == size && !d.w.drawer.animation_active(),
+                "the open Color drawer follows the resized window");
+            color_drawer(&d);
+        }
+    }
+    d.finish();
+}
+
+#[test]
+#[ignore = "private compositor: --native-test=native_phone_color_budget --native-storage; viewport/theme external"]
+fn native_phone_color_budget() {
+    let mut d = setup("art.capycanvas.PhoneColorBudget");
+    let opener = tool(&d, ToolbarControl::Color);
+    click(&mut d, &opener);
+    until(|| d.w.drawer.placement().is_some() && !d.w.drawer.animation_active()
+        && find_named(d.w.window.upcast_ref(), "color-drawer-scroll")
+            .is_some_and(|scroll| scroll.is_mapped() && scroll.width() > 0 && scroll.height() > 0),
+        "the Color drawer is allocated");
+    color_drawer(&d);
+    capture(&mut d, "color-budget-top");
+    let scroll = d.named("color-drawer-scroll").downcast::<gtk::ScrolledWindow>().unwrap();
+    let adjustment = scroll.vadjustment();
+    if adjustment.upper() > adjustment.page_size() + 0.5 {
+        scroll_overflow(&mut d);
+        adjustment.set_value(adjustment.upper() - adjustment.page_size());
+        until(|| (adjustment.value() + adjustment.page_size() - adjustment.upper()).abs() <= 0.5,
+            "the whole Color drawer scrolls to its bottom");
+        capture(&mut d, "color-budget-bottom");
+    }
+    d.input.key(0xff1b);
+    d.finish();
+}
+
+fn paper_under_bars(d: &mut Driver) {
+    let size = ui_session(&d.w).engine().document().composition().size;
+    let zoom = 4. * (d.w.surface.width() as f32 / size[0] as f32).max(d.w.surface.height() as f32 / size[1] as f32);
+    d.w.dispatch(UiAction::SetZoom { zoom });
+    new_photo::ready(&d.w);
+}
+
+#[test]
+#[ignore = "private compositor: --native-test=native_phone_bar_surfaces --native-storage; phone viewport/theme external"]
+fn native_phone_bar_surfaces() {
+    let mut d = setup("art.capycanvas.PhoneBarSurfaces");
+    frame(&d);
+    capture(&mut d, "bar-no-grips");
+    paper_under_bars(&mut d);
+    d.input.key(0xff09);
+    until(|| state(&d.w).phone.hidden, "Tab hides the bars over paper");
+    capture_current(&mut d, "bar-hidden-over-paper");
+    d.finish();
+}
+
+#[test]
+#[ignore = "private compositor: --native-test=native_phone_bar_flicker --native-storage; 412x891 or891x412, theme external"]
+fn native_phone_bar_flicker() {
+    let mut d = setup("art.capycanvas.PhoneBarFlicker");
+    let viewport = [d.w.surface.width(), d.w.surface.height()];
+    assert!(matches!(viewport, [412, 891] | [891, 412]));
+    paper_under_bars(&mut d);
+    let theme = format!("{:?}", state(&d.w).theme).to_lowercase();
+    for material in [0, 2] {
+        d.w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit {
+            id: PreferenceId::Transparency, value: PreferenceValue::Choice(material),
+        } });
+        for swapped in [false, true] {
+            if state(&d.w).phone.hidden {
+                d.input.key(0xff1b);
+                until(|| !state(&d.w).phone.hidden, "Escape restores the next recording reference");
+            }
+            if state(&d.w).phone.swapped != swapped {
+                d.w.dispatch(UiAction::Phone { action: PhoneAction::SwapSides });
+            }
+            let tag = format!("bar-flicker-{}x{}-{theme}-{material}-{swapped}", viewport[0], viewport[1]);
+            clear_canvas_pointer(&mut d);
+            let capy = d.named("zen-capy").compute_bounds(&d.w.surface).unwrap();
+            let region = [capy.x().round() as i32, capy.y().round() as i32,
+                capy.width().round() as i32, capy.height().round() as i32];
+            frame(&d);
+            d.input.key(0xff09);
+            until(|| state(&d.w).phone.hidden, "prepare the rounded hidden reference");
+            capture_current(&mut d, &format!("{tag}-hidden"));
+            d.input.key(0xff1b);
+            until(|| !state(&d.w).phone.hidden, "prepare the continuous bar reference");
+            capture_current(&mut d, &format!("{tag}-rest"));
+            println!("CAPY_FLICKER {}", serde_json::json!({
+                "name": tag, "region": region, "viewport": viewport,
+                "reference": format!("phone-{}x{}-{theme}-{tag}-rest.png", viewport[0], viewport[1]),
+                "hidden_reference": format!("phone-{}x{}-{theme}-{tag}-hidden.png", viewport[0], viewport[1]),
+            }));
+            d.input.perform(serde_json::json!([{ "record_window": { "name": tag, "maximized": true } }]));
+            for hidden in [true, false, true] {
+                let w = d.w.clone();
+                let frames = sample_after_paint(&d.w.window, move || state(&w).phone.hidden);
+                d.input.key(if hidden { 0xff09 } else { 0xff1b });
+                until(|| state(&d.w).phone.hidden == hidden, "native hide/show reaches its declared state");
+                d.w.window.queue_draw();
+                until(|| frames.samples.borrow().iter().any(|sample| sample.state == hidden),
+                    "each recorded hide/show state reaches after-paint");
+                println!("CAPY_STATES {}", serde_json::json!({ "name": tag, "frames": frames.finish().into_iter()
+                    .map(|frame| serde_json::json!({ "time_us": frame.time, "hidden": frame.state })).collect::<Vec<_>>() }));
+                let bounds = d.named("zen-capy").compute_bounds(&d.w.surface).unwrap();
+                assert_eq!([bounds.x().round() as i32, bounds.y().round() as i32,
+                    bounds.width().round() as i32, bounds.height().round() as i32], region,
+                    "Capy keeps its exact native tile through hide/show");
+                if hidden { assert_eq!(presentation(&d).chips[1], presentation(&d).capy); }
+                d.input.perform(serde_json::json!([{ "wait_ms": 200 }]));
+            }
+            d.input.perform(serde_json::json!([{ "record_stop": true }]));
+        }
+    }
+    d.finish();
+}
+
+fn open_menu_page(d: &mut Driver, label: &str) -> gtk::Stack {
+    d.click_label(label);
+    let stack = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
+    let name = menu_page_name(d, label);
+    until(|| stack.is_mapped() && stack.visible_child_name().as_deref() == Some(name.as_str())
+        && !stack.is_transition_running(), "the native menu page is ready");
+    stack
+}
+
+fn menu_rows_released(stack: &gtk::Stack) {
+    let active = widgets(stack.upcast_ref()).filter(|widget| widget.is_mapped()
+        && widget.type_().name() == "GtkModelButton" && widget.state_flags().contains(gtk::StateFlags::ACTIVE))
+        .map(|widget| widget.property::<String>("text")).collect::<Vec<_>>();
+    assert!(active.is_empty(), "a claimed scroll or swipe releases every native row: {active:?}");
+}
+
+fn menu_back_swipe(d: &mut Driver, stack: &gtk::Stack, initial: Bounds) {
+    let checkpoint = ui_session(&d.w).engine().checkpoint();
+    let page = stack.visible_child().unwrap();
+    assert!(gtk::prelude::GtkWindowExt::focus(&d.w.window).is_some_and(|focus| focus.is_ancestor(&page)),
+        "a tapped menu row transfers keyboard focus into its subpage");
+    let name = stack.visible_child_name().unwrap();
+    let scroll = d.named("phone-menu-scroll").downcast::<gtk::ScrolledWindow>().unwrap();
+    let sign = if scroll.direction() == gtk::TextDirection::Rtl { -1. } else { 1. };
+    let from = screen_point(scroll.upcast_ref(), &d.w.window, [if sign < 0. { 0.85 } else { 0.15 }, 0.5]);
+    let width = stack.width() as f32;
+    let point = |fraction: f32| [from[0] + sign * width * fraction, from[1]];
+    d.input.perform(serde_json::json!([
+        contact("touch", "down", from), contact("touch", "move", point(0.1)),
+        contact("touch", "move", point(0.12)), contact("touch", "move", point(0.13)),
+        { "wait_ms": 250 },
+        contact("touch", "up", point(0.13))
+    ]));
+    until(|| stack.can_target(), "a short cancelled swipe restores list input");
+    assert_eq!(stack.visible_child_name(), Some(name.clone()));
+    assert!(d.w.visible_dialog().is_none());
+    capture(d, "menu-swipe-cancelled");
+    d.input.perform(serde_json::json!([
+        contact("touch", "down", from), contact("touch", "move", point(0.2)),
+        contact("touch", "move", point(0.5))
+    ]));
+    until(|| !stack.can_target(), "the back gesture owns the held touch");
+    assert_eq!(stack.visible_child_name(), Some(name));
+    assert!(stack.child_by_name("main").unwrap().is_child_visible(), "the live parent page is exposed behind the current page");
+    menu_bounds(d, initial);
+    menu_rows_released(stack);
+    capture_current(d, "menu-swipe-halfway");
+    d.input.perform(serde_json::json!([contact("touch", "up", point(0.5))]));
+    until(|| stack.visible_child_name().as_deref() == Some("main") && stack.can_target()
+        && !stack.is_transition_running(), "a completed native swipe returns to the parent");
+    menu_bounds(d, initial);
+    assert_eq!(ui_session(&d.w).engine().checkpoint(), checkpoint);
+    capture(d, "menu-swipe-completed");
+}
+
+#[test]
+#[ignore = "private compositor: --native-test=native_phone_menu_gestures --native-storage; phone viewport/theme external"]
+fn native_phone_menu_gestures() {
+    let mut d = setup("art.capycanvas.PhoneMenuGestures");
+    menu(&mut d);
+    let initial = d.w.phone.placement.borrow().as_ref().unwrap().bounds;
+    let root = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
+    let longest = PhoneMenuNavigation::pages(&navigation_model(&d)).into_iter().filter(|page| page.path.len() == 1)
+        .max_by_key(|page| root.child_by_name(&page.name()).unwrap().measure(gtk::Orientation::Vertical, root.width()).1)
+        .unwrap().menu.title;
+    let stack = open_menu_page(&mut d, &longest);
+    let name = stack.visible_child_name().unwrap();
+    let checkpoint = ui_session(&d.w).engine().checkpoint();
+    let drawing = d.w.documents.selected();
+    let scroll = d.named("phone-menu-scroll").downcast::<gtk::ScrolledWindow>().unwrap();
+    let adjustment = scroll.vadjustment();
+    assert!(adjustment.upper() > adjustment.page_size() + 1., "the longest native submenu provides a real scrolling workload");
+    let from = screen_point(scroll.upcast_ref(), &d.w.window, [0.5, 0.75]);
+    let delta = (scroll.height() as f32 * 0.4).min(100.);
+    d.input.perform(serde_json::json!([
+        contact("touch", "down", from), contact("touch", "move", [from[0], from[1] - delta * 0.4]),
+        contact("touch", "move", [from[0], from[1] - delta])
+    ]));
+    until(|| adjustment.value() > 1., "touch scrolling moves the native list");
+    menu_rows_released(&stack);
+    capture_current(&mut d, "menu-touch-scrolling");
+    d.input.perform(serde_json::json!([contact("touch", "up", [from[0], from[1] - delta])]));
+    assert_eq!(stack.visible_child_name(), Some(name.clone()));
+    assert!(d.w.visible_dialog().is_none(), "scrolling never activates a command");
+    assert_eq!(d.w.documents.selected(), drawing);
+    assert_eq!(ui_session(&d.w).engine().checkpoint(), checkpoint);
+    capture(&mut d, "menu-touch-scrolled");
+    inventory_close(&mut d);
+    menu(&mut d);
+    let file = ApplicationMenu::File.localized_label(&d.w.localization());
+    let stack = open_menu_page(&mut d, &file);
+    menu_back_swipe(&mut d, &stack, initial);
+    assert_eq!(ui_session(&d.w).engine().checkpoint(), checkpoint);
+    d.finish();
+}
+
+fn inventory_close(d: &mut Driver) {
+    if let Some(dialog) = d.w.visible_dialog() { crate::page_dialog::close_dialog(&dialog); }
+    if state(&d.w).phone.menu || state(&d.w).customization.drawer.is_some() { d.input.key(0xff1b); }
+    until(|| d.w.visible_dialog().is_none() && !d.w.pages.root.is_transition_running()
+        && !state(&d.w).phone.menu && state(&d.w).customization.drawer.is_none()
+        && d.w.drawer.is_closed(), "the inventory surface closes before the next view");
+}
+
+fn inventory_drawer_ready(d: &Driver) {
+    until(|| state(&d.w).customization.drawer.is_some() && d.w.drawer.placement().is_some()
+        && !d.w.drawer.animation_active(), "the inventory drawer finishes opening");
+}
+
+fn inventory_monitor(d: &mut Driver, name: &str) {
+    let frames = sample_after_paint(&d.w.window, || ());
+    d.w.window.queue_draw();
+    until(|| !frames.samples.borrow().is_empty(), "the inventory overlay has been painted");
+    drop(frames.finish());
+    let theme = format!("{:?}", state(&d.w).theme).to_lowercase();
+    d.input.perform(serde_json::json!([{ "capture": format!("inventory-{}x{}-{theme}-{name}", d.w.surface.width(), d.w.surface.height()) }]));
+}
+
+#[test]
+#[ignore = "private compositor: --native-test=native_phone_inventory --native-storage; phone viewport/theme external"]
+fn native_phone_inventory() {
+    let mut d = setup("art.capycanvas.PhoneInventory");
+    let compact = d.w.surface.width().min(d.w.surface.height()) < 320;
+    for preset in WorkspacePreset::ALL {
+        let tag = preset.name().to_lowercase();
+        d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
+            layout: preset.layout(Platform::Gtk), ..Default::default()
+        }) });
+        until(|| state(&d.w).workspace.layout.phone.as_ref().is_some_and(|tiles|
+            tiles.iter().map(|tile| tile.control).collect::<Vec<_>>() == preset.phone_controls()),
+            "the inventory workspace uses its actual phone preset");
+        capture(&mut d, &format!("inventory-{tag}-rest"));
+        if preset == WorkspacePreset::Painter {
+            d.w.dispatch(UiAction::Phone { action: PhoneAction::SwapSides });
+            capture(&mut d, "inventory-swapped");
+            d.w.dispatch(UiAction::Phone { action: PhoneAction::SwapSides });
+            d.input.key(0xff09);
+            until(|| state(&d.w).phone.hidden, "Zen hides the inventory bars");
+            capture(&mut d, "inventory-hidden");
+            d.input.key(0xff1b);
+            until(|| !state(&d.w).phone.hidden, "Escape restores the inventory bars");
+        }
+        if compact && preset != WorkspacePreset::Painter { continue; }
+        let tiles = state(&d.w).workspace.layout.phone.unwrap();
+        for tile in tiles.into_iter().filter(|tile| tile.control != ToolbarControl::Divider) {
+            if compact && !matches!(tile.control, ToolbarControl::Color
+                | ToolbarControl::Panel { panel: Panel::Layers }
+                | ToolbarControl::Command { command: CommandId::DrawingBrush }) { continue; }
+            let name = format!("phone-tool-{}", tile.id);
+            click(&mut d, &name);
+            if state(&d.w).customization.drawer.is_none() { click(&mut d, &name); }
+            inventory_drawer_ready(&d);
+            let label = match tile.control {
+                ToolbarControl::Command { command } => format!("{command:?}"),
+                ToolbarControl::ToolSlot { slot } => format!("{slot:?}"),
+                ToolbarControl::Panel { panel } => format!("{panel:?}"),
+                _ => "Color".to_string(),
+            }.to_lowercase();
+            capture(&mut d, &format!("inventory-{tag}-{label}"));
+            inventory_close(&mut d);
+        }
+    }
+    d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
+        layout: WorkspacePreset::Painter.layout(Platform::Gtk), ..Default::default()
+    }) });
+    for command in [CommandId::DrawingBrush, CommandId::Fill, CommandId::Select] {
+        if compact && command != CommandId::DrawingBrush { continue; }
+        d.w.dispatch(UiAction::Invoke { command });
+        click(&mut d, "phone-tool-settings");
+        inventory_drawer_ready(&d);
+        capture(&mut d, &format!("inventory-settings-{}", format!("{command:?}").to_lowercase()));
+        inventory_close(&mut d);
+    }
+    d.w.documents.enqueue(&d.w, (new_drawing_at(128, 96, layer_core::color::SampleDepth::U8), None));
+    until(|| d.w.documents.len() == 2 && !d.w.documents.changing.get(), "two drawings are ready for the inventory");
+    new_photo::ready(&d.w);
+    menu(&mut d);
+    capture(&mut d, "inventory-menu-root");
+    click(&mut d, "phone-drawing");
+    until(|| drawings_ready(&d), "the inventory Drawings page is ready");
+    capture(&mut d, "inventory-menu-drawings");
+    click(&mut d, "phone-menu-back");
+    until(|| d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap().visible_child_name().as_deref() == Some("main"), "Drawings returns to the inventory root");
+    if d.w.surface.height() > 280 {
+        let initial = d.w.phone.placement.borrow().as_ref().unwrap().bounds;
+        let label = ApplicationMenu::File.localized_label(&d.w.localization());
+        let stack = open_menu_page(&mut d, &label);
+        capture(&mut d, "inventory-menu-file");
+        menu_back_swipe(&mut d, &stack, initial);
+    }
+    if !compact {
+        let label = ApplicationMenu::Window.localized_label(&d.w.localization());
+        open_menu_page(&mut d, &label);
+        open_menu_page(&mut d, "Workspaces");
+        capture(&mut d, "inventory-menu-workspaces");
+        inventory_close(&mut d);
+        menu(&mut d);
+        menu_layers(&mut d);
+        inventory_drawer_ready(&d);
+        capture(&mut d, "inventory-capy-layers");
+        inventory_close(&mut d);
+        d.w.dispatch(UiAction::Invoke { command: CommandId::DrawingBrush });
+        let scale = d.named("component-slider-size").downcast::<gtk::Scale>().unwrap();
+        let from = d.point(scale.upcast_ref());
+        d.input.perform(serde_json::json!([contact("mouse", "down", from)]));
+        until(|| d.named("brush-slider-preview").is_mapped(), "the track preview is visible");
+        inventory_monitor(&mut d, "slider-track");
+        let phone = presentation(&d);
+        let far = if phone.edge == Edge::Top { [from[0], from[1] - phone.slider_stretch_distance()] }
+            else { [from[0] + phone.slider_stretch_distance(), from[1]] };
+        d.input.perform(serde_json::json!([contact("mouse", "move", far)]));
+        inventory_monitor(&mut d, "slider-away");
+        d.input.perform(serde_json::json!([contact("mouse", "up", far)]));
+        d.input.key(0xff1b);
+        d.w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit {
+            id: PreferenceId::FingerDrawing, value: PreferenceValue::Choice(1),
+        } });
+        d.w.dispatch(UiAction::SetColor { rgba: [0., 0., 0., 1.] });
+        until(|| {
+            let gpu = d.w.gpu.borrow();
+            let engine = gpu.as_ref().unwrap().session.engine();
+            engine.backend().paint_ready(engine.document(), engine.brush(), false)
+        }, "the inventory brush is ready before holding");
+        let point = screen_point(d.w.surface.upcast_ref(), &d.w.window, [0.5, 0.5]);
+        let hold = gtk::Settings::default().unwrap().gtk_long_press_time() + 100;
+        d.input.perform(serde_json::json!([{ "touch": "down", "point": point }, { "wait_ms": hold }]));
+        until(|| ui_session(&d.w).color_picker_overlay().is_some(), "the inventory finger hold exposes its loupe");
+        inventory_monitor(&mut d, "finger-hold");
+        d.input.perform(serde_json::json!([{ "touch": "up" }]));
+        until(|| ui_session(&d.w).color_picker_overlay().is_none(), "the inventory hold finishes");
+    } else { inventory_close(&mut d); }
+    super::page_dialog::inventory(&mut d);
+    d.finish();
 }

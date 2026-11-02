@@ -37,8 +37,9 @@ fn anchor_widget(d: &Driver, anchor: DrawerAnchor) -> gtk::Widget {
     d.named(&match anchor {
         DrawerAnchor::Tile { tile, .. } => format!("tile-{tile}"),
         DrawerAnchor::Header { id } => format!("header-item-{id}"),
-        DrawerAnchor::Phone { tile: Some(tile) } => format!("phone-tool-{tile}"),
-        DrawerAnchor::Phone { tile: None } => "zen-capy".into(),
+        DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Tool(tile) } => format!("phone-tool-{tile}"),
+        DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Capy } => "zen-capy".into(),
+        DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::ToolSettings } => "phone-tool-settings".into(),
         DrawerAnchor::Column { .. } => unreachable!(),
     })
 }
@@ -307,7 +308,7 @@ fn paint_blend_variations(d: &mut Driver, theme: Theme) {
                 assert_eq!(state(&d.w).brush.preset, preset);
                 let DrawerAnchor::Tile { panel, tile } = anchor else { unreachable!() };
                 let view = ui_session(&d.w).panel_view(panel).unwrap();
-                let choice = &view.tiles.iter().find(|view| view.id == tile).unwrap().choice;
+                let choice = &view.tiles.iter().find(|view| view.id == Some(tile)).unwrap().choice;
                 assert!(choice.selected, "{group:?}/{preset}: Blend stays selected");
                 let icon = format!("layer-{}-symbolic", choice.icon);
                 assert!(find_named(&opener, &icon).is_some());
@@ -394,7 +395,7 @@ fn paint_retouch_variations(d: &mut Driver, theme: Theme) {
             assert!(ui_session(&d.w).command(command).selected);
             let DrawerAnchor::Tile { panel, tile } = anchor else { unreachable!() };
             let view = ui_session(&d.w).panel_view(panel).unwrap();
-            assert!(view.tiles.iter().find(|view| view.id == tile).unwrap().choice.selected);
+            assert!(view.tiles.iter().find(|view| view.id == Some(tile)).unwrap().choice.selected);
             let icon = format!("layer-{}-symbolic", ui_session(&d.w).command(command).icon.unwrap());
             assert!(find_named(&opener, &icon).is_some());
             if drawer {
@@ -1210,7 +1211,7 @@ fn native_toolbar_variations_input() {
             assert_eq!(ui_session(&d.w).engine().document().revision, revision);
             assert_eq!(d.named(&name), button, "variant switches retain the native tile");
             let view = ui_session(&d.w).panel_view(panel).unwrap();
-            let choice = &view.tiles.iter().find(|view| view.id == tile).unwrap().choice;
+            let choice = &view.tiles.iter().find(|view| view.id == Some(tile)).unwrap().choice;
             let icon = descendant::<gtk::Image>(&button).unwrap();
             assert_eq!(crate::icons::name(&icon).as_deref(), Some(format!("layer-{}-symbolic", choice.icon).as_str()));
             assert!(choice.selected);

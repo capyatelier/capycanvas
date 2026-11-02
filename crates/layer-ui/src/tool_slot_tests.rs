@@ -81,7 +81,7 @@ fn tool_group_commands_publish_medium_choices_and_remember_dynamic_icons() {
                 assert_eq!(tools::group(remembered), group);
                 for active in [true, false] {
                     if !active { invoke(&mut s, CommandId::Hand); }
-                    let tile_view = s.panel_view(panel).unwrap().tiles.into_iter().find(|item| item.id == ids[0]).unwrap();
+                    let tile_view = s.panel_view(panel).unwrap().tiles.into_iter().find(|item| item.id == Some(ids[0])).unwrap();
                     assert!(tile_view.has_variants);
                     assert_eq!(tile_view.choice.control, control);
                     assert_eq!(tile_view.choice.icon, group.icon());
@@ -147,8 +147,8 @@ fn tool_group_temporary_brushes_preserve_memory_from_a_nonpainting_tool() {
         assert_eq!(selected_slot_variant(&s, brush), watercolor);
         for anchor in [drawing, header] { assert_eq!(selected_slot_variant(&s, anchor), pen); }
         let tiles = s.panel_view(panel).unwrap().tiles;
-        assert_eq!(tiles.iter().find(|tile| tile.id == ids[0]).unwrap().choice.icon, ToolGroup::Watercolor.icon());
-        assert_eq!(tiles.iter().find(|tile| tile.id == ids[1]).unwrap().choice.icon, ToolGroup::Pen.icon());
+        assert_eq!(tiles.iter().find(|tile| tile.id == Some(ids[0])).unwrap().choice.icon, ToolGroup::Watercolor.icon());
+        assert_eq!(tiles.iter().find(|tile| tile.id == Some(ids[1])).unwrap().choice.icon, ToolGroup::Pen.icon());
         let DrawerAnchor::Header { id } = header else { unreachable!() };
         assert_eq!(s.header_view().items.iter().find(|item| item.id == id).unwrap().icon, ToolGroup::Pen.icon());
         let during = s.editing_state();
@@ -200,7 +200,7 @@ fn blend_offers_its_sets_and_keeps_its_own_icon() {
     for group in [ToolGroup::Blend, ToolGroup::WetPaint, ToolGroup::Effects] {
         s.dispatch(slot_choice(&s, tile, ToolVariant::BrushGroup { group })).unwrap();
         assert_eq!((tools::group(s.state().brush.preset), s.state().brush.tool), (group, Tool::Blend));
-        let tile_view = s.panel_view(panel).unwrap().tiles.into_iter().find(|item| item.id == ids[0]).unwrap();
+        let tile_view = s.panel_view(panel).unwrap().tiles.into_iter().find(|item| item.id == Some(ids[0])).unwrap();
         assert_eq!(tile_view.choice.icon, "blend");
     }
 }
@@ -232,14 +232,14 @@ fn paint_groups_keep_all_blenders_at_their_origin() {
             s.dispatch(action).unwrap();
             assert_eq!(s.state().customization.drawer.as_ref().unwrap().anchor, anchor);
             assert_eq!(selected_slot_variant(&s, anchor), variant);
-            let choice = &s.panel_view(Panel::Toolbar).unwrap().tiles.into_iter().find(|item| item.id == tile).unwrap().choice;
+            let choice = &s.panel_view(Panel::Toolbar).unwrap().tiles.into_iter().find(|item| item.id == Some(tile)).unwrap().choice;
             assert!(choice.selected);
             assert_eq!(choice.icon, tools::icon(id));
         }
         activate_slot(&mut s, anchor);
         let remembered = s.state().brush.preset;
         invoke(&mut s, CommandId::Pen);
-        let choice = &s.panel_view(Panel::Toolbar).unwrap().tiles.into_iter().find(|item| item.id == tile).unwrap().choice;
+        let choice = &s.panel_view(Panel::Toolbar).unwrap().tiles.into_iter().find(|item| item.id == Some(tile)).unwrap().choice;
         assert!(!choice.selected);
         assert_eq!(choice.icon, tools::icon(remembered));
         assert_eq!(selected_slot_variant(&s, anchor), variant);
@@ -282,7 +282,7 @@ fn tool_group_presets_leave_pinned_brushes_as_leaf_controls() {
         let (mut s, panel, ids) = group_fixture(Platform::Gtk, &[control]);
         let anchor = DrawerAnchor::Tile { panel, tile: ids[0] };
         let header = add_group_header(&mut s, control);
-        assert!(!s.panel_view(panel).unwrap().tiles.iter().find(|item| item.id == ids[0]).unwrap().has_variants);
+        assert!(!s.panel_view(panel).unwrap().tiles.iter().find(|item| item.id == Some(ids[0])).unwrap().has_variants);
         let DrawerAnchor::Header { id } = header else { unreachable!() };
         assert!(!s.header_view().items.iter().find(|item| item.id == id).unwrap().has_variants);
         assert!(s.context_menu(ContextTarget::ToolVariants { anchor }).is_err());
@@ -346,7 +346,7 @@ fn paint_retouch_slot_keeps_leaf_icons_memory_and_restored_selection() {
                 matches!(item.action, UiAction::SelectBrush { .. } | UiAction::SelectToolGroup { .. })));
             activate_slot(&mut s, anchor);
             invoke(&mut s, CommandId::Hand);
-            let choice = &s.panel_view(panel).unwrap().tiles.into_iter().find(|item| item.id == ids[0]).unwrap().choice;
+            let choice = &s.panel_view(panel).unwrap().tiles.into_iter().find(|item| item.id == Some(ids[0])).unwrap().choice;
             assert_eq!(choice.icon, tools::icon(id));
             assert!(!choice.selected);
             assert_eq!(selected_slot_variant(&s, anchor), variant);
@@ -384,7 +384,7 @@ fn tool_group_sketch_markers_memory_and_drawer_origins() {
                     id, bounds: Bounds { x: 800., y: 0., width: 40., height: 60. },
                 }] }).unwrap();
             }
-            assert!(s.panel_view(panel).unwrap().tiles.iter().find(|tile| tile.id == id).unwrap().has_variants);
+            assert!(s.panel_view(panel).unwrap().tiles.iter().find(|tile| tile.id == Some(id)).unwrap().has_variants);
             if let Some(DrawerAnchor::Header { id }) = header {
                 assert!(s.header_view().items.iter().find(|item| item.id == id).unwrap().has_variants);
             }
@@ -399,7 +399,7 @@ fn tool_group_sketch_markers_memory_and_drawer_origins() {
                 assert_eq!(selected_slot_variant(&s, header.unwrap()), variant);
             }
             invoke(&mut s, CommandId::Hand);
-            assert_eq!(s.panel_view(panel).unwrap().tiles.iter().find(|tile| tile.id == id).unwrap().choice.icon, expected_icon);
+            assert_eq!(s.panel_view(panel).unwrap().tiles.iter().find(|tile| tile.id == Some(id)).unwrap().choice.icon, expected_icon);
             assert_eq!(selected_slot_variant(&s, anchor), variant);
             if let Some(DrawerAnchor::Header { id }) = header {
                 let view = s.header_view();
@@ -490,7 +490,7 @@ fn tool_group_existing_nonpaint_commands_keep_layout_identity() {
             s.dispatch(slot_choice(&s, anchor, variant)).unwrap();
             crate::session::test_support::finish_fixture_content_bounds(&mut s);
             let view = s.panel_view(panel).unwrap();
-            let tile = view.tiles.iter().find(|tile| tile.id == ids[0]).unwrap();
+            let tile = view.tiles.iter().find(|tile| tile.id == Some(ids[0])).unwrap();
             assert!(tile.has_variants && tile.choice.selected);
             assert_eq!(tile.choice.control, control);
             assert_eq!(tile.choice.icon, variant.icon());
@@ -499,7 +499,7 @@ fn tool_group_existing_nonpaint_commands_keep_layout_identity() {
             if s.command(CommandId::CancelTransform).enabled { invoke(&mut s, CommandId::CancelTransform); }
             invoke(&mut s, CommandId::Hand);
             let view = s.panel_view(panel).unwrap();
-            let tile = view.tiles.iter().find(|tile| tile.id == ids[0]).unwrap();
+            let tile = view.tiles.iter().find(|tile| tile.id == Some(ids[0])).unwrap();
             assert!(!tile.choice.selected);
             assert_eq!(tile.choice.icon, variant.icon());
             assert_eq!(selected_slot_variant(&s, anchor), variant);
@@ -648,7 +648,7 @@ fn slot_menus_publish_only_member_choices_and_activate_their_leaf_tools() {
                 }
             }
             let view = s.panel_view(panel).unwrap();
-            let item = view.tiles.iter().find(|item| item.id == tile).unwrap();
+            let item = view.tiles.iter().find(|item| item.id == Some(tile)).unwrap();
             assert!(item.has_variants);
             assert_eq!(item.choice.control, ToolbarControl::ToolSlot { slot });
         }
@@ -664,7 +664,7 @@ fn choosing_a_variant_selects_once_and_active_slot_clicks_keep_settings_drawers(
         s.dispatch(slot_choice(&s, anchor, airbrush)).unwrap();
         assert!(s.command(CommandId::Airbrush).selected);
         assert!(s.state().customization.drawer.is_none());
-        let chosen = s.panel_view(panel).unwrap().tiles.into_iter().find(|item| item.id == ids[0]).unwrap();
+        let chosen = s.panel_view(panel).unwrap().tiles.into_iter().find(|item| item.id == Some(ids[0])).unwrap();
         assert!(chosen.choice.selected);
         assert_eq!(chosen.choice.icon, s.command(CommandId::Airbrush).icon.unwrap());
         invoke(&mut s, CommandId::Eraser);
@@ -939,7 +939,7 @@ fn duplicated_slot_toolbars_copy_memory_and_pinned_tools_stay_single_choices() {
     customize(&mut s, CustomizationAction::ConfirmTools);
     let pinned = s.state().workspace.layout.panel(panel).unwrap().tiles().iter().find(|tile|
         tile.control == pinned_control).unwrap().id;
-    let pinned_view = s.panel_view(panel).unwrap().tiles.into_iter().find(|tile| tile.id == pinned).unwrap();
+    let pinned_view = s.panel_view(panel).unwrap().tiles.into_iter().find(|tile| tile.id == Some(pinned)).unwrap();
     assert!(!pinned_view.has_variants);
     assert!(s.context_menu(ContextTarget::ToolVariants { anchor: DrawerAnchor::Tile { panel, tile: pinned } }).is_err());
     s.dispatch(UiAction::ActivateTile { panel, tile: pinned }).unwrap();
@@ -1125,7 +1125,7 @@ fn preset_icons_follow_catalog_rows_remembered_tiles_and_canvas_cursors() {
             assert_eq!(s.canvas_cursor().unwrap().segments[0].marker,
                 layer_render::tool_cursor_marker(icon).unwrap());
             invoke(&mut s, CommandId::Eraser);
-            let tile = s.panel_view(panel).unwrap().tiles.into_iter().find(|item| item.id == ids[0]).unwrap();
+            let tile = s.panel_view(panel).unwrap().tiles.into_iter().find(|item| item.id == Some(ids[0])).unwrap();
             assert!(!tile.choice.selected);
             assert_eq!(tile.choice.icon, icon);
             activate_slot(&mut s, anchor);

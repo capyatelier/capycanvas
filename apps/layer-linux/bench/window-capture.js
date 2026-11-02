@@ -84,7 +84,7 @@ var WindowCapture = class {
         }
     }
 
-    begin(name, maximized) {
+    begin(name, maximized, recording = false) {
         const {Gst, GstApp} = imports.gi;
         Gst.init(null);
         this.active = {name, maximized, deadline: GLib.get_monotonic_time() + 15000000};
@@ -97,7 +97,7 @@ var WindowCapture = class {
             (_connection, _sender, _path, _iface, _signal, parameters) => {
                 try {
                     this.active.pipeline = Gst.parse_launch(
-                        `pipewiresrc path=${parameters.deep_unpack()[0]} ! video/x-raw,format=BGRA ! videoconvert ! video/x-raw,format=RGBA ! appsink name=frames max-buffers=1 drop=true sync=false`);
+                        `pipewiresrc path=${parameters.deep_unpack()[0]} ! video/x-raw,format=BGRA ! videoconvert ! video/x-raw,format=RGBA ! appsink name=frames max-buffers=${recording ? 600 : 1} drop=${!recording} sync=false`);
                     this.active.sink = this.active.pipeline.get_by_name('frames');
                     this.active.bus = this.active.pipeline.get_bus();
                     this.active.bus.add_signal_watch();

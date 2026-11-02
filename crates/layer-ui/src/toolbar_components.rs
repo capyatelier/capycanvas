@@ -534,12 +534,31 @@ pub fn toolbar_slider_readout_extent(along: f32, axis: Axis) -> f32 {
 /// Equal end insets around the editable track. The empty leading inset remains
 /// a hold-to-reorder target without reserving space for a numeric readout.
 pub fn toolbar_slider_layout(width: f32, height: f32, axis: Axis) -> [Bounds; 2] {
-    let layout = toolbar_slider_styled_layout(width, height, axis, TileStyle::Small, ToolbarSliderStyle::default());
+    let layout = toolbar_slider_styled_layout(width, height, axis, TileStyle::Small, ToolbarSliderStyle::default(), true);
     [layout.cap, layout.track]
 }
 
 pub fn toolbar_slider_scale(cross: f32) -> f32 {
     if cross.is_finite() && cross > 0. { cross / TILE_SIZE } else { 1. }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ToolbarSliderStretch {
+    pub track: [f32; 2],
+    pub band: [f32; 2],
+    pub extent: f32,
+    pub transition: f32,
+}
+
+pub fn toolbar_slider_stretch(geometry: ToolbarSliderStretch, point: [f32; 2]) -> f32 {
+    let ToolbarSliderStretch { track, band, extent, transition } = geometry;
+    let near = ((point[0] - track[0]) / (track[1] - track[0])).clamp(0., 1.);
+    let distance = (band[0] - point[1]).max(point[1] - band[1]).max(0.);
+    let along = |a: f32| if track[1] < track[0] { extent - a } else { a };
+    let far = (along(point[0]) / extent).clamp(0., 1.);
+    let t = (distance / transition.max(f32::EPSILON)).clamp(0., 1.);
+    let t = t * t * (3. - 2. * t);
+    near + (far - near) * t
 }
 
 pub fn toolbar_slider_preview_placement(handle: Bounds, strip: Bounds, viewport: Bounds, axis: Axis, side: f32) -> (Edge, Bounds) {
@@ -567,14 +586,15 @@ pub struct ToolbarSliderLayout {
     pub cap: Bounds,
     pub track: Bounds,
     pub show_value: bool,
+    pub stretch_distance: f32,
 }
 
-pub fn toolbar_slider_styled_layout(width: f32, height: f32, axis: Axis, tile: TileStyle, style: ToolbarSliderStyle) -> ToolbarSliderLayout {
+pub fn toolbar_slider_styled_layout(width: f32, height: f32, axis: Axis, tile: TileStyle, style: ToolbarSliderStyle, grip: bool) -> ToolbarSliderLayout {
     let width = finite_size(width);
     let height = finite_size(height);
     let vertical = axis == Axis::Vertical;
-    let cap = 8_f32.min(if vertical { height } else { width } / 2.);
-    let show_value = style.show_value && (if vertical { height } else { width }) >= 4. * tile.size()[usize::from(vertical)];
+    let cap = if grip { 8_f32.min(if vertical { height } else { width } / 2.) } else { 0. };
+    let show_value = grip && style.show_value && (if vertical { height } else { width }) >= 4. * tile.size()[usize::from(vertical)];
     let header = if show_value {
         toolbar_slider_readout_extent(tile.size()[usize::from(vertical)], axis).min(
             (if vertical { height } else { width }) - cap)
@@ -608,7 +628,7 @@ pub fn toolbar_slider_styled_layout(width: f32, height: f32, axis: Axis, tile: T
             },
         ]
     };
-    ToolbarSliderLayout { cap, track, show_value }
+    ToolbarSliderLayout { cap, track, show_value, stretch_distance: 4. * if vertical { width } else { height } }
 }
 
 /// Icons belong to the shared field schema, including compact native hosts.
@@ -667,6 +687,36 @@ pub fn tool_setting_icon(id: &str) -> &'static str {
 #[cfg(test)]
 mod slider_geometry_tests {
     use super::*;
+
+    #[test]
+    fn slider_stretch_blends_continuously_to_the_linear_window_extent() {
+        for (extent, transition) in [(412., 94.), (891., 94.), (320., 71.), (1600., 192.)] {
+            let geometry = ToolbarSliderStretch { track: [60., 150.], band: [10., 57.], extent, transition };
+            for distance in [0., 0.001, transition * 0.25, transition * 0.5, transition, transition + 1.] {
+                let y = 57. + distance;
+                let mut previous = -1.;
+                for step in 0..=1000 {
+                    let x = extent * step as f32 / 1000.;
+                    let value = toolbar_slider_stretch(geometry, [x, y]);
+                    assert!(value >= previous - 0.00001 && (0. ..=1.).contains(&value));
+                    previous = value;
+                    let mirrored = ToolbarSliderStretch { track: geometry.track.map(|a| extent - a), ..geometry };
+                    let other = toolbar_slider_stretch(mirrored, [extent - x, y]);
+                    assert!((value - other).abs() < 0.00001);
+                    if distance == 0. { assert!((value - ((x - 60.) / 90.).clamp(0., 1.)).abs() < 0.00001); }
+                    if distance >= transition { assert!((value - x / extent).abs() < 0.00001); }
+                }
+            }
+            for x in [0., extent * 0.5, extent] {
+                assert_eq!(toolbar_slider_stretch(geometry, [x, 57. + transition]), x / extent);
+                for distance in [0., transition * 0.5, transition] {
+                    let before = toolbar_slider_stretch(geometry, [x, 57. + distance - 0.0001]);
+                    let after = toolbar_slider_stretch(geometry, [x, 57. + distance + 0.0001]);
+                    assert!((before - after).abs() < 0.00001);
+                }
+            }
+        }
+    }
 
     #[test]
     fn phone_slider_scales_the_existing_small_brush_control() {

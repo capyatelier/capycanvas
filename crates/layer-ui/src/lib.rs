@@ -36,10 +36,10 @@ mod document_tabs;
 mod phone;
 mod dialog_presentation;
 pub use dialog_presentation::{DialogRole, DialogPresentation, dialog_panes_fit};
-pub use phone::{PhoneAction, PhoneLayout, PhoneMenuGeometry, PhoneMenuNavigation, PhoneMenuPage, PhoneState};
+pub use phone::{PhoneAction, PhoneBarContact, PhoneLayout, PhoneMenu, PhoneMenuGeometry, PhoneMenuNavigation, PhoneMenuSwipe, PhoneMenuPage, PhoneState};
 pub use document_tabs::{DocumentTabDrag, DocumentTabHit, DocumentTabSlide, DocumentTabs};
 mod document_sessions;
-pub use document_sessions::{DocumentSessionError, DocumentTransportRefusal, document_storage_retained, document_recovery_unavailable, DocumentAdmission, DocumentBudget, DocumentSessions, DocumentTabLabel, ParkedDocument, RetainedClipboard, TrimWait};
+pub use document_sessions::{DocumentSessionError, DocumentTransportRefusal, document_storage_retained, document_recovery_unavailable, DocumentAdmission, DocumentBudget, DocumentSessions, DocumentTabLabel, DrawingSelector, ParkedDocument, RetainedClipboard, TrimWait};
 mod document_creation;
 mod new_drawing;
 pub use new_drawing::*;
@@ -119,7 +119,7 @@ mod drawer_geometry;
 mod panel_bridges;
 pub use panel_bridges::{PanelBridge, PanelBridgeReceiver, PanelBridgeMeasure, PanelColumnMeasure, PanelBridgeFrame, PanelBridgePath, PanelColumnGeometry, PanelVectorSurface, PanelVectorCache};
 pub use drawers::{
-    ColumnDrawerMeasurement, ContentDrawer, DrawerAnchor, DrawerConnection, DrawerDismissal,
+    ColumnDrawerMeasurement, ContentDrawer, DrawerAnchor, PhoneDrawerAnchor, DrawerConnection, DrawerDismissal,
     DrawerMeasure, DrawerPlacement, DrawerTabs, DrawerTileMeasurement, TileAnchor, drawer_frame,
 };
 mod interaction;

@@ -957,7 +957,7 @@ mod navigation_controls {
                 if command == CommandId::Zoom { invoke(&mut s, command); }
                 else { let choice = slot_choice(&s, anchor, ToolVariant::Command { command }); s.dispatch(choice).unwrap(); }
                 let view = s.panel_view(panel).unwrap();
-                let button = view.tiles.iter().find(|item| item.id == tile).unwrap();
+                let button = view.tiles.iter().find(|item| item.id == Some(tile)).unwrap();
                 assert_eq!(Some(button.choice.icon), command.icon());
                 assert!(button.double_click);
                 s.dispatch(UiAction::SetZoom { zoom: 3.1 }).unwrap();

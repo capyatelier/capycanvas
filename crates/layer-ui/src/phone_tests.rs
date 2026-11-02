@@ -6,6 +6,51 @@ fn phone_session(viewport: [u32; 2]) -> UiSession<Recorder> {
 }
 
 #[test]
+fn phone_menu_toggles_keep_the_menu_open_and_zen_closes_it() {
+    let mut s = phone_session([412, 891]);
+    s.dispatch(UiAction::Phone { action: PhoneAction::Capy }).unwrap();
+    for _ in 0..2 {
+        let first = s.phone_menu().unwrap().strip;
+        for item in [&first[2], &first[4]] {
+            assert!(item.keep_open());
+            assert_eq!(serde_json::to_value(item).unwrap()["keep_open"], true);
+            s.dispatch(item.action.clone().unwrap()).unwrap();
+            assert!(s.state.phone.menu);
+        }
+    }
+    assert!(!s.finger_drawing() && !s.state.phone.swapped);
+    let zen = s.phone_menu().unwrap().strip[3].clone();
+    assert!(!zen.keep_open());
+    s.dispatch(zen.action.unwrap()).unwrap();
+    assert!(s.state.phone.hidden && !s.state.phone.menu);
+}
+
+#[test]
+fn drawing_selector_preserves_order_current_dirty_text_and_new_action() {
+    let mut s = phone_session([412, 891]);
+    let labels = [1, 2].map(|id| DocumentTabLabel { id, title: format!("Study {id}"), location: String::new(), uri: None, export_uri: None, modified: id == 2 });
+    let selector = DrawingSelector::new(&labels, 2, &s.command(CommandId::NewDocument), s.localization());
+    assert_eq!(selector.label, "• Study 2"); assert_eq!(selector.count, "2");
+    let rows = &selector.page.sections[0];
+    assert_eq!(rows.iter().map(|row| row.label.as_str()).collect::<Vec<_>>(), ["Study 1", "• Study 2"]);
+    assert_eq!(rows.iter().map(|row| row.selected).collect::<Vec<_>>(), [Some(false), Some(true)]);
+    for (id, row) in [1, 2].into_iter().zip(rows) {
+        assert!(matches!(row.action, Some(UiAction::Phone { action: PhoneAction::Drawing { id: actual, close: false } }) if actual == id));
+        assert!(row.hint.contains(&format!("Study {id}")));
+    }
+    let create = &selector.page.sections.last().unwrap()[0];
+    assert!(matches!(create.action, Some(UiAction::Invoke { command: CommandId::NewDocument })));
+    assert_eq!(create.bindings, s.command(CommandId::NewDocument).bindings);
+    assert!(DrawingSelector::new(&labels[..1], 1, &s.command(CommandId::NewDocument), s.localization()).count.is_empty());
+    let mut menu = s.phone_menu().unwrap().list; menu.sections[0].insert(0, selector.page);
+    let mut navigation = PhoneMenuNavigation::default();
+    assert!(navigation.drawings(&menu, s.localization()));
+    assert_eq!(navigation.name(), "page-0-0"); assert!(navigation.back() && navigation.is_root());
+    s.dispatch(UiAction::Phone { action: PhoneAction::Drawing { id: 1, close: true } }).unwrap();
+    assert!(s.state.requests.iter().any(|r| matches!(r.kind, HostRequestKind::SelectDrawing { id: 1, close: true })));
+}
+
+#[test]
 fn phone_menu_command_closure_notifies_layout_and_refusals_keep_it_open() {
     let mut s = phone_session([412, 891]);
     let layout = s.state.workspace.layout.clone();
@@ -36,7 +81,7 @@ fn phone_menu_keeps_its_bridge_and_dismisses_only_outside_contacts() {
             let mut s = phone_session(viewport);
             s.state.phone.swapped = swapped;
             s.dispatch(UiAction::Phone { action: PhoneAction::Capy }).unwrap();
-            let placement = s.phone_layout().unwrap().menu(viewport.map(|v| v as f32), [242.; 2], [200., 300.]).unwrap();
+            let placement = s.phone_layout().unwrap().menu(viewport.map(|v| v as f32), 242., 500.).unwrap();
             let bridge = placement.connection().unwrap().bounds;
             let facts = ChromeFacts { content_drawer: Some(placement.bounds), drawer_connection: Some(bridge), ..Default::default() };
             let checkpoint = s.engine().checkpoint();
@@ -111,7 +156,7 @@ fn phone_transitions_cancel_chrome_without_recording_layout_or_zen() {
         s.state.workspace.layout.header.size = HeaderSize::Large;
         s.state.phone.menu = true;
         s.state.customization.drawer = Some(ContentDrawer::for_control(
-            ToolbarControl::Color, DrawerAnchor::Phone { tile: None },
+            ToolbarControl::Color, DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Capy },
         ).unwrap());
         s.set_viewport(viewport.map(|v| v as f32), viewport).unwrap();
         assert!(s.workspace_history.gesture_start().is_none());
@@ -151,53 +196,73 @@ fn phone_transitions_cancel_chrome_without_recording_layout_or_zen() {
 }
 
 #[test]
-fn phone_color_drawer_wraps_and_keeps_overflow_reachable() {
-    let mut s = phone_session([320, 568]);
-    let action = s.application_menu(ApplicationMenu::Window).sections.into_iter().flatten()
-        .filter_map(|item| item.action)
-        .find(|action| matches!(action, UiAction::Phone { action: PhoneAction::Panel { panel: Panel::Color } }))
-        .unwrap();
-    s.dispatch(action).unwrap();
-    let drawer = s.state.customization.drawer.as_ref().unwrap();
-    assert_eq!(drawer.anchor, DrawerAnchor::Phone { tile: None });
-    assert_eq!(drawer.columns, vec![vec![Panel::Color], vec![Panel::Palettes]]);
-    let p = s.state.customization.drawer_placement(
-        drawer, &s.layout_resolve_input(), [320., 568.], &[220., 500.],
-    ).unwrap();
-    assert_eq!(p.columns[0].x, p.columns[1].x);
-    assert_eq!(p.bounds.x, s.phone_layout().unwrap().bars[0].x);
-    assert_eq!(p.bounds.width, s.phone_layout().unwrap().bars[0].width);
-    assert!(p.columns[1].y >= p.columns[0].y + p.columns[0].height);
-    assert!(p.columns[1].height < 500.);
-    assert!(p.columns[0].height < 220.);
-    assert!(p.columns.iter().all(|c| c.y + c.height <= p.bounds.height + 0.01));
-    assert!(p.bounds.y + p.bounds.height <= s.phone_layout().unwrap().capy.y);
-    assert!(p.connection().is_some());
-    s.dispatch(UiAction::Phone { action: PhoneAction::Metrics {
-        native: [0., 48.], native_counts: [0, 1], insets: [0.; 4],
-    } }).unwrap();
-    assert_eq!(s.state.customization.drawer.as_ref().unwrap().anchor, DrawerAnchor::Phone { tile: None });
+fn phone_drawers_stay_inside_the_window_during_resize() {
+    let layout = WorkspacePreset::Painter.layout(Platform::Gtk);
+    for short in std::iter::once(317).chain(280..480) {
+        for viewport in [[short as f32, 568.], [568., short as f32]] {
+            for swapped in [false, true] {
+                let phone = PhoneLayout::resolve(&layout, viewport, [0.; 4], [0.; 2], [0; 2], swapped).unwrap();
+                let drawer = phone.drawer(phone.tools[0], viewport, &[160., 240.], &[360., 240.], 8.).unwrap();
+                let menu = phone.menu(viewport, 242., 500.).unwrap();
+                for bounds in [drawer.bounds, menu.bounds] {
+                    assert!(bounds.x >= 0. && bounds.y >= 0., "{viewport:?}/{swapped}: {bounds:?}");
+                    assert!(bounds.x + bounds.width <= viewport[0] + 0.001, "{viewport:?}/{swapped}: {bounds:?}");
+                    assert!(bounds.y + bounds.height <= viewport[1] + 0.001, "{viewport:?}/{swapped}: {bounds:?}");
+                }
+            }
+        }
+    }
 }
 
 #[test]
-fn phone_brush_sets_and_tools_share_a_row_before_settings_wrap() {
+fn phone_color_drawer_budgets_the_whole_wheel_before_scrolling() {
+    for viewport in [[320, 568], [320, 320], [412, 891], [891, 412], [412, 320]] {
+        let mut s = phone_session(viewport);
+        s.dispatch(UiAction::Phone { action: PhoneAction::Panel { panel: Panel::Color } }).unwrap();
+        let drawer = s.state.customization.drawer.as_ref().unwrap();
+        let measure = s.state.customization.drawer_measure(drawer, &s.layout_resolve_input(), viewport.map(|v| v as f32)).unwrap();
+        for hdr in [false, true] {
+            let fit = measure.color_fit(&[0., 240.], 16., hdr).unwrap();
+            let phone = s.phone_layout().unwrap();
+            let stacked = measure.placement.columns[1].y > measure.placement.columns[0].y;
+            let available = if phone.edge == Edge::Top { phone.work_area.height } else { phone.bars[0].height };
+            let budget = available - if stacked { 248. } else { 0. };
+            let minimum = ColorPanelLayout::stage_for_wheel(128.).unwrap().ceil();
+            let width = measure.placement.columns[0].width - 16.;
+            let expected = (minimum as u32..=width.floor() as u32).rev().find(|stage| {
+                let layout = if hdr { ColorPanelLayout::with_hdr(*stage as f32) } else { ColorPanelLayout::new(*stage as f32) }.unwrap();
+                layout.height().max(*stage as f32) <= budget - 16.
+            }).map_or(minimum, |size| size as f32);
+            assert_eq!(fit.size, expected, "{viewport:?}/{hdr}");
+            assert!(fit.size <= width && fit.layout.height() <= fit.height);
+            assert!(fit.layout.wheel[2] >= 128.);
+            let p = measure.placement(&[fit.height + 16., 240.]).unwrap();
+            assert_eq!(p.columns[0].height, fit.height + 16.);
+            let natural = p.columns.iter().map(|b| b.y + b.height).fold(0., f32::max);
+            assert_eq!(natural > p.bounds.height + 0.01, [ [320, 320], [412, 320] ].contains(&viewport));
+            if natural > p.bounds.height + 0.01 { assert_eq!(fit.size, minimum); }
+        }
+    }
+}
+
+#[test]
+fn phone_brush_sets_and_tools_share_a_row_without_settings() {
     let s = phone_session([320, 568]);
     let tile = s.state.workspace.layout.phone.as_ref().unwrap().iter().find(|t| {
         t.control == ToolbarControl::Command { command: CommandId::DrawingBrush }
     }).unwrap().id;
     let drawer = ContentDrawer::for_control(
         ToolbarControl::Command { command: CommandId::DrawingBrush },
-        DrawerAnchor::Phone { tile: Some(tile) },
+        DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Tool(tile) },
     ).unwrap();
     let p = s.state.customization.drawer_placement(
-        &drawer, &s.layout_resolve_input(), [320., 568.], &[160., 240., 200.],
+        &drawer, &s.layout_resolve_input(), [320., 568.], &[160., 240.],
     ).unwrap();
-    assert_eq!(p.columns.len(), 3);
+    assert_eq!(p.columns.len(), 2);
     assert_eq!(p.bounds.x, s.phone_layout().unwrap().bars[0].x);
     assert_eq!(p.bounds.width, s.phone_layout().unwrap().bars[0].width);
     assert_eq!(p.columns[0].y, p.columns[1].y);
     assert!(p.columns[1].x >= p.columns[0].x + p.columns[0].width);
-    assert!(p.columns[2].y >= p.columns[1].y + p.columns[1].height);
     assert!(p.columns.iter().all(|c| c.x + c.width <= p.bounds.width + 0.01));
     assert!(p.connection().is_some());
 }
@@ -207,7 +272,7 @@ fn phone_layers_use_full_edge_and_retain_scroll_content() {
     for viewport in [[891, 412], [568, 320], [320, 568]] {
         let s = phone_session(viewport);
         let drawer = ContentDrawer::for_control(
-            ToolbarControl::Panel { panel: Panel::Layers }, DrawerAnchor::Phone { tile: None },
+            ToolbarControl::Panel { panel: Panel::Layers }, DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Capy },
         ).unwrap();
         let phone = s.phone_layout().unwrap();
         let p = s.state.customization.drawer_placement(
@@ -250,6 +315,92 @@ fn phone_layers_use_full_edge_and_retain_scroll_content() {
         }).to_string()).unwrap();
         assert_eq!(retained["sizes"], sizes);
         assert!(p.connection().is_some());
+    }
+}
+
+#[test]
+fn open_phone_layers_follow_edits_and_visible_rows_up_to_the_bar() {
+    let mut s = phone_session([412, 891]);
+    let paper = occurrence_token(s.engine.document().bottom_paper().unwrap());
+    s.dispatch(UiAction::SelectLayer { id: paper }).unwrap();
+    invoke(&mut s, CommandId::DeleteLayer);
+    assert!(s.state.layer_tools.add_paper.is_some());
+    let tile = s.state.workspace.layout.phone.as_ref().unwrap().iter()
+        .find(|tile| tile.control == ToolbarControl::Panel { panel: Panel::Layers }).unwrap().id;
+    s.dispatch(UiAction::Phone { action: PhoneAction::Tool { tile } }).unwrap();
+    let drawer = s.state.customization.drawer.clone().unwrap();
+    let measurement = PanelScrollMeasurement { fixed_height: 116., unit_height: 40. };
+    let height = |s: &UiSession<Recorder>| {
+        assert_eq!(s.state.customization.drawer.as_ref(), Some(&drawer));
+        let rows = s.state.layer_tools.presented_rows(&s.state.layers);
+        assert_eq!(rows, s.state.layers.len() + 1, "Add Paper occupies a visible row");
+        let sizes = s.state.customization.layer_drawer_sizing(Some(&drawer), &s.layout_resolve_input(), [412., 891.], measurement, rows, 200.).unwrap();
+        let h = sizes["placements"][0]["bounds"]["height"].as_f64().unwrap() as f32;
+        let content = measurement.fixed_height + rows as f32 * measurement.unit_height + LayerDrawerSizing::FOOTER_HEIGHT;
+        assert_eq!(h, content.min(s.phone_layout().unwrap().work_area.height));
+        (h, content)
+    };
+    let before = height(&s).0;
+    invoke(&mut s, CommandId::AddLayer);
+    assert_eq!(height(&s).0, before + measurement.unit_height);
+    invoke(&mut s, CommandId::DeleteLayer);
+    assert_eq!(height(&s).0, before);
+    s.dispatch(UiAction::Layer { action: LayerAction::New { group: true, clipped: false } }).unwrap();
+    let group = s.state.layer_tools.editing_layer.as_ref().unwrap().id;
+    invoke(&mut s, CommandId::AddLayer);
+    let expanded = height(&s).0;
+    s.dispatch(UiAction::Layer { action: LayerAction::Collapse { id: group } }).unwrap();
+    assert_eq!(height(&s).0, expanded - measurement.unit_height);
+    s.dispatch(UiAction::Layer { action: LayerAction::Collapse { id: group } }).unwrap();
+    assert_eq!(height(&s).0, expanded);
+    for _ in 0..20 { invoke(&mut s, CommandId::AddLayer); }
+    let (capped, content) = height(&s);
+    assert_eq!(capped, s.phone_layout().unwrap().work_area.height);
+    assert!(content > capped && s.state.layers.len() > 20, "the capped drawer retains scrollable rows");
+}
+
+#[test]
+fn phone_tool_settings_uses_its_fixed_tile_and_releases_multi_column_drawers() {
+    let mut s = phone_session([412, 891]);
+    let view = s.state.phone_settings();
+    assert_eq!(view.id, None);
+    assert_eq!(view.resolved_control, PhoneLayout::SETTINGS);
+    assert!(serde_json::to_value(view).unwrap().get("id").is_none());
+    let desktop = s.panel_view(Panel::Toolbar).unwrap();
+    assert!(!desktop.tiles.is_empty());
+    for tile in desktop.tiles {
+        let id = tile.id.unwrap();
+        assert_eq!(serde_json::to_value(tile).unwrap()["id"].as_u64(), Some(id as u64));
+    }
+    let before = s.capture_workspace().unwrap();
+    s.dispatch(UiAction::Phone { action: PhoneAction::ToolSettings }).unwrap();
+    let drawer = s.state.customization.drawer.as_ref().unwrap();
+    assert_eq!(drawer.anchor, DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::ToolSettings });
+    assert_eq!(drawer.columns, vec![vec![Panel::ToolSettings]]);
+    assert_eq!(s.capture_workspace().unwrap(), before);
+    for command in [CommandId::DrawingBrush, CommandId::Select] {
+        invoke(&mut s, command);
+        let tile = s.state.workspace.layout.phone.as_ref().unwrap().iter().find(|tile| tile.control == ToolbarControl::Command { command }).unwrap().id;
+        s.dispatch(UiAction::Phone { action: PhoneAction::Tool { tile } }).unwrap();
+        assert!(!s.state.customization.drawer.as_ref().unwrap().panels().any(|panel| panel == Panel::ToolSettings));
+        if command == CommandId::Select {
+            let anchor = s.state.customization.drawer.as_ref().unwrap().anchor;
+            invoke(&mut s, CommandId::RectangleSelect);
+            let drawer = s.state.customization.drawer.as_ref().unwrap();
+            assert_eq!(drawer.anchor, anchor);
+            assert!(!drawer.panels().any(|panel| panel == Panel::ToolSettings));
+        }
+    }
+    for control in [ToolbarControl::ToolSlot { slot: ToolSlotId::Drawing }, ToolbarControl::Command { command: CommandId::Fill },
+        ToolbarControl::Command { command: CommandId::Select }, ToolbarControl::Command { command: CommandId::Sculpt }] {
+        let phone = ContentDrawer::for_control(control, DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Tool(1) }).unwrap();
+        let desktop = ContentDrawer::for_control(control, DrawerAnchor::Header { id: 1 }).unwrap();
+        assert!(!phone.panels().any(|panel| panel == Panel::ToolSettings));
+        assert!(desktop.panels().any(|panel| panel == Panel::ToolSettings));
+        assert!(!phone.columns.is_empty());
+    }
+    for control in [ToolbarControl::ColorPicker, ToolbarControl::Command { command: CommandId::Crop }] {
+        assert_eq!(ContentDrawer::for_control(control, DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Tool(1) }).unwrap().columns, vec![vec![Panel::ToolSettings]]);
     }
 }
 
@@ -320,9 +471,12 @@ fn phone_main_menu_extras_follow_header_and_title_bar_edit_is_refused() {
             ApplicationMenu::ALL.iter().map(|menu| menu.localized_label(s.localization()).to_string()).collect::<Vec<_>>());
         assert!(!primary.sections.iter().flatten().any(|item| matches!(item.action,
             Some(UiAction::Invoke { command: CommandId::Settings }))));
-        let columns = s.phone_menu_columns();
-        assert_eq!(columns[0].sections, primary.sections[..2]);
-        assert_eq!(columns[1].sections, primary.sections[2..]);
+        let menu = s.phone_menu().unwrap();
+        assert_eq!(menu.strip.len(), 5);
+        assert_eq!(menu.strip.iter().map(|item| item.selected).collect::<Vec<_>>(), [None, None, Some(false), None, Some(false)]);
+        assert!(matches!(menu.strip[0].action, Some(UiAction::Invoke { command: CommandId::Settings })));
+        assert_eq!(menu.strip[1..].iter().map(|item| &item.action).collect::<Vec<_>>(), primary.sections[..2].iter().flatten().map(|item| &item.action).collect::<Vec<_>>());
+        assert_eq!(menu.list.sections, primary.sections[2..]);
         assert!(!s.application_menu(ApplicationMenu::Window).sections.iter().flatten().any(|item|
             matches!(item.action, Some(UiAction::Invoke { command: CommandId::CustomizeWorkspaceUi }))));
         assert!(!s.command(CommandId::CustomizeWorkspaceUi).enabled);
@@ -344,8 +498,8 @@ fn phone_main_menu_extras_follow_header_and_title_bar_edit_is_refused() {
             s.dispatch(UiAction::Phone { action: PhoneAction::Capy }).unwrap();
             assert!(s.state.phone.menu);
             let phone = s.phone_layout().unwrap();
-            let p = phone.menu(viewport.map(|v| v as f32), [PANEL_MIN_WIDTH; 2], [600., 700.]).unwrap();
-            assert_eq!(p.columns.len(), 2);
+            let p = phone.menu(viewport.map(|v| v as f32), PANEL_MIN_WIDTH, 700.).unwrap();
+            assert_eq!(p.columns.len(), 1);
             assert!(p.bounds.x >= 0. && p.bounds.y >= 0.);
             assert!(p.bounds.x + p.bounds.width <= viewport[0] as f32 + 0.01);
             assert!(p.bounds.y + p.bounds.height <= viewport[1] as f32 + 0.01);
@@ -355,18 +509,10 @@ fn phone_main_menu_extras_follow_header_and_title_bar_edit_is_refused() {
             if viewport[0] > viewport[1] {
                 assert!(p.bounds.y >= phone.bars[1].y);
                 assert!(p.bounds.y + p.bounds.height <= phone.bars[1].y + phone.bars[1].height + 0.01);
-                if viewport[0] == 891 {
-                    assert_eq!(p.columns[0].y, p.columns[1].y);
-                    assert!(p.columns[1].x >= p.columns[0].x + p.columns[0].width);
-                } else {
-                    assert_eq!(p.columns[0].x, p.columns[1].x);
-                    assert!(p.columns[1].y >= p.columns[0].y + p.columns[0].height);
-                }
             } else {
                 assert_eq!(p.bounds.x, phone.bars[0].x);
                 assert_eq!(p.bounds.width, phone.bars[0].width);
-                assert_eq!(p.columns[0].x, p.columns[1].x);
-                assert!(p.columns[1].y >= p.columns[0].y + p.columns[0].height);
+                assert_eq!(p.columns[0].x, 0.);
             }
             assert!(p.connection().is_some());
             assert_eq!(s.state.workspace.layout, layout);
@@ -386,7 +532,7 @@ fn phone_workspace_options_enter_window_workspaces_and_keep_both_back_destinatio
         id: "paint".into(), name: "Paint".into(), baseline: s.state.workspace.layout.clone(),
         choices: vec![WorkspaceChoice { id: "sketch".into(), name: "Sketch".into() }],
     }).unwrap();
-    let [_, menu] = s.phone_menu_columns();
+    let menu = s.phone_menu().unwrap().list;
     let mut navigation = PhoneMenuNavigation::default();
     assert!(navigation.workspaces(&menu, s.localization()));
     assert_eq!(navigation.name(), "page-0-7-1-0");

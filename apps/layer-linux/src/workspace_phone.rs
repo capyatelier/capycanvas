@@ -1,9 +1,17 @@
 use super::*;
 
+impl Workspace {
+    pub(crate) fn show_drawings(self: &Rc<Self>) {
+        if self.gpu.borrow().as_ref().is_some_and(|gpu| gpu.session.phone_layout().is_some()) { self.phone.drawings(self); }
+        else { self.documents.show_selector(self); }
+    }
+}
+
 pub(super) struct Phone {
     pub root: drawers::Columns,
     tools: RefCell<Vec<(ToolbarTile, toolbar_components::TileWidget, ToolbarControl)>>,
     sliders: RefCell<Vec<Rc<toolbar_components::Component>>>,
+    settings: RefCell<Option<toolbar_components::TileWidget>>,
     chips: RefCell<Vec<gtk::WindowHandle>>,
     native: [gtk::WindowControls; 2],
     buttons: RefCell<Vec<(usize, gtk::WindowControls)>>,
@@ -29,13 +37,14 @@ impl Phone {
         bridge.set_can_target(false);
         let connection = Rc::new(Cell::new(None));
         drawers::paint_connection(&bridge, connection.clone());
-        Self { root, tools: RefCell::default(), sliders: RefCell::default(), chips: RefCell::default(),
+        Self { root, tools: RefCell::default(), sliders: RefCell::default(), settings: RefCell::default(), chips: RefCell::default(),
             native: [gtk::WindowControls::new(gtk::PackType::Start), gtk::WindowControls::new(gtk::PackType::End)],
             buttons: RefCell::default(), decoration: RefCell::default(), reported: Cell::new(None), menu, menu_key: Cell::new(None),
             loans: RefCell::default(), bridge, connection, placement: RefCell::default() }
     }
     pub fn bind(&self, w: &Rc<Workspace>) {
         self.menu.bind(w);
+        self.bind_window_move(w);
         let held = Rc::new(Cell::new(false));
         let root = w.zen_capy.parent().unwrap();
         let (click, suppress) = customization::extend_button(w, &root, &w.zen_capy, None);
@@ -69,6 +78,47 @@ impl Phone {
             glib::Propagation::Proceed
         }));
         w.window.add_controller(release);
+    }
+    fn bind_window_move(&self, w: &Rc<Workspace>) {
+        let contact = Rc::new(RefCell::new(None::<(PhoneBarContact, gdk::Event)>));
+        let drag = gtk::GestureDrag::new();
+        drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+        drag.connect_drag_begin(glib::clone!(#[weak] w, #[strong] contact, move |gesture, x, y| {
+            if w.visible_dialog().is_some() { gesture.set_state(gtk::EventSequenceState::Denied); return; }
+            let point = w.window.compute_point(&w.surface, &gtk::graphene::Point::new(x as f32, y as f32));
+            let start = point.and_then(|p| {
+                let picked = w.surface.pick(p.x() as f64, p.y() as f64, gtk::PickFlags::DEFAULT)?;
+                let capy = w.zen_capy.parent()?;
+                if ![w.phone.root.upcast_ref::<gtk::Widget>(), &capy].iter().any(|root| picked == **root || picked.is_ancestor(*root)) { return None; }
+                let native = std::iter::successors(Some(picked), |widget| widget.parent()).any(|widget|
+                    widget.is::<gtk::Button>() && widget.ancestor(gtk::WindowControls::static_type()).is_some());
+                let gpu = w.gpu.borrow();
+                if gpu.as_ref()?.session.state().phone.hidden { return None; }
+                gpu.as_ref()?.session.phone_layout().and_then(|layout| PhoneBarContact::begin(&layout, [p.x(), p.y()], native))
+            });
+            contact.replace(start.zip(gesture.current_event()));
+            if contact.borrow().is_none() { gesture.set_state(gtk::EventSequenceState::Denied); }
+        }));
+        drag.connect_drag_update(glib::clone!(#[weak] w, #[strong] contact, move |gesture, dx, dy| {
+            let past_slop = w.window.drag_check_threshold(0, 0, dx as i32, dy as i32);
+            if !contact.borrow().as_ref().is_some_and(|(contact, _)| contact.move_window(past_slop)) { return; }
+            let (_, press) = contact.take().unwrap();
+            if let (Some(surface), Some(device), Some((x, y))) =
+                (w.window.surface().and_downcast::<gdk::Toplevel>(), press.device(), press.position()) {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                w.chrome_contacts.borrow_mut().retain(|_, event| event.as_ptr() != press.as_ptr());
+                w.update_zen();
+                surface.begin_move(&device, 1, x, y, press.time());
+            }
+        }));
+        drag.connect_drag_end(glib::clone!(#[strong] contact, move |_, _, _| { contact.take(); }));
+        drag.connect_cancel(glib::clone!(#[strong] contact, move |_, _| { contact.take(); }));
+        w.window.add_controller(drag);
+        let hold = gtk::GestureLongPress::new();
+        hold.set_touch_only(false);
+        hold.set_propagation_phase(gtk::PropagationPhase::Capture);
+        hold.connect_pressed(move |_, _, _| { if let Some((contact, _)) = contact.borrow_mut().as_mut() { contact.hold(); } });
+        w.window.add_controller(hold);
     }
     fn add(&self, child: &impl IsA<gtk::Widget>) {
         child.set_parent(&self.root);
@@ -229,14 +279,17 @@ impl Phone {
         for slider in self.sliders.borrow().iter() {
             if let Some(view) = state.toolbar_component(slider.control) { slider.refresh(w, &view); }
         }
+        let settings = state.phone_settings();
+        if self.settings.borrow().is_none() {
+            let item = toolbar_components::TileWidget::control_button(w, DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::ToolSettings }, PhoneLayout::SETTINGS, TileStyle::Medium, &settings.choice);
+            item.button().set_widget_name("phone-tool-settings");
+            item.button().add_css_class("header-tool");
+            self.add(&item.root());
+            self.settings.replace(Some(item));
+        }
+        self.settings.borrow().as_ref().unwrap().refresh(w, &settings, None);
         if state.phone.menu {
             if structural { self.menu.refresh(w, state); }
-            self.loan(&w.workspaces.switcher, &self.menu.bodies[0]);
-            self.menu.bodies[0].reorder_child_after(&w.workspaces.switcher, Some(&self.menu.drawing_row));
-            self.loan(&w.system_status.clock, &self.menu.drawing_row);
-            self.loan(&w.system_status.battery, &self.menu.drawing_row);
-            w.system_status.set_components(true, true);
-            w.system_status.set_visibility(true);
         } else {
             self.menu.clear();
             self.menu_key.set(None);
@@ -244,13 +297,24 @@ impl Phone {
         if changed || structural { w.surface.queue_allocate(); }
     }
     pub fn workspaces(&self, w: &Rc<Workspace>) { self.menu.workspaces(w); }
-    pub fn button(&self, w: &Workspace, tile: Option<u32>) -> Option<gtk::Button> {
-        tile.map_or_else(|| Some(w.zen_capy.clone()), |id| self.tools.borrow().iter().find(|(tile, _, _)| tile.id == id).map(|(_, item, _)| item.button()))
+    pub fn drawings(&self, w: &Rc<Workspace>) {
+        if !w.gpu.borrow().as_ref().is_some_and(|g| g.session.state().phone.menu) { w.dispatch(UiAction::Phone { action: PhoneAction::Capy }); }
+        self.menu.drawings(w);
+    }
+    pub fn button(&self, w: &Workspace, anchor: PhoneDrawerAnchor) -> Option<gtk::Button> {
+        match anchor {
+            PhoneDrawerAnchor::Capy => Some(w.zen_capy.clone()),
+            PhoneDrawerAnchor::ToolSettings => self.settings.borrow().as_ref().map(|item| item.button()),
+            PhoneDrawerAnchor::Tool(id) => self.tools.borrow().iter().find(|(tile, _, _)| tile.id == id).map(|(_, item, _)| item.button()),
+        }
     }
     pub fn mark_origin(&self, w: &Workspace, anchor: Option<DrawerAnchor>, direction: Option<Edge>) {
-        customization::drawer_origin(&w.zen_capy, direction.filter(|_| anchor == Some(DrawerAnchor::Phone { tile: None })));
+        customization::drawer_origin(&w.zen_capy, direction.filter(|_| anchor == Some(DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Capy })));
         for (tile, item, _) in self.tools.borrow().iter() {
-            customization::drawer_origin(&item.button(), direction.filter(|_| anchor == Some(DrawerAnchor::Phone { tile: Some(tile.id) })));
+            customization::drawer_origin(&item.button(), direction.filter(|_| anchor == Some(DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Tool(tile.id) })));
+        }
+        if let Some(item) = self.settings.borrow().as_ref() {
+            customization::drawer_origin(&item.button(), direction.filter(|_| anchor == Some(DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::ToolSettings })));
         }
     }
     pub fn button_in_hit(button: &gtk::Button, visual: Bounds, hit: Bounds) {
@@ -276,6 +340,10 @@ impl Phone {
             }
         }
         let tile = p.tile.round().max(1.) as i32;
+        if let Some(item) = self.settings.borrow().as_ref() {
+            Self::button_in_hit(&item.button(), p.settings, p.settings_hit);
+            if let Some(image) = customization::tool_button_content(&item.button()).and_downcast::<gtk::Image>() { image.set_pixel_size(p.icon.round().max(1.) as i32); }
+        }
         w.zen_capy.set_size_request(tile, tile);
         Self::button_in_hit(&w.zen_capy, p.capy, p.capy_hit);
         if let Some(image) = w.zen_capy.child().and_downcast::<gtk::Image>() {
@@ -286,14 +354,11 @@ impl Phone {
         for slider in self.sliders.borrow().iter() { slider.root.set_presentation(axis, TileStyle::Medium); }
         let viewport = [w.surface.width() as f32, w.surface.height() as f32];
         if state.menu {
-            self.menu.size_controls(p);
             let key = (viewport, p.capy, p.bars[0], p.work_area);
             if self.menu_key.get() != Some(key) {
                 self.menu_key.set(Some(key));
-                let widths = self.menu.bodies.each_ref().map(|body| body.measure(gtk::Orientation::Horizontal, -1));
-                let columns = p.menu_column_widths(widths.map(|width| width.0 as f32), widths.map(|width| width.1 as f32));
-                let heights = std::array::from_fn(|index| self.menu.bodies[index].measure(gtk::Orientation::Vertical, columns[index] as i32).1);
-                let placement = p.menu(viewport, columns, heights.map(|height| height as f32)).map(|p| p.snapped(1.));
+                let (width, height) = self.menu.measure(p);
+                let placement = p.menu(viewport, width, height).map(|p| p.snapped(1.));
                 *self.placement.borrow_mut() = placement;
             }
         } else {
@@ -302,19 +367,7 @@ impl Phone {
         }
         let menu = self.placement.borrow();
         if let Some(placement) = menu.as_ref() {
-            let view = self.menu.geometry(placement);
-            let geometry = [view.columns[0], view.columns[1], view.separator];
-            self.menu.separator.set_orientation(if view.separator.width > view.separator.height {
-                gtk::Orientation::Horizontal
-            } else { gtk::Orientation::Vertical });
-            for (child, bounds) in self.menu.root.imp().children.borrow().iter().zip(&geometry) {
-                child.set_child_visible(bounds.width > 0. && bounds.height > 0.);
-            }
-            let mut current = self.menu.root.imp().geometry.borrow_mut();
-            if current.as_slice() != geometry.as_slice() {
-                current.copy_from_slice(&geometry);
-                self.menu.root.queue_allocate();
-            }
+            self.menu.allocate(p, placement);
         }
         self.connection.set(menu.as_ref().and_then(|p| p.connection()));
         self.bridge.queue_draw();
@@ -327,6 +380,7 @@ impl Phone {
                     Some(if index < 2 { p.chips[index] } else { p.bars[index - 2] })
                 } else if child == &self.menu.root { menu.as_ref().map(|p| p.bounds) }
                 else if child == &self.bridge { self.connection.get().map(|p| p.bounds) }
+                else if self.settings.borrow().as_ref().is_some_and(|item| child == &item.root()) { Some(p.settings_hit) }
                 else if let Some(side) = self.native.iter().position(|n| child == n) { (!vertical).then_some(p.controls[side]) }
                 else if let Some((side, _)) = self.buttons.borrow().iter().find(|(_, b)| child == b) {
                     if vertical {
@@ -339,7 +393,7 @@ impl Phone {
                 }
                 else if let Some(index) = self.sliders.borrow().iter().position(|s| child == &s.root) { Some([p.size, p.strength][index]) }
                 else { None };
-            let b = b.filter(|b| b.width > 0. && b.height > 0. && !state.hidden);
+            let b = b.filter(|b| b.width > 0. && b.height > 0.);
             changed |= child.is_child_visible() != b.is_some();
             child.set_child_visible(b.is_some());
             if let Some(b) = b && *bounds != b {

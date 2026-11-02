@@ -163,7 +163,7 @@ impl LayerInspector {
             }
             self.target.set(target);
         }
-        self.rows.set(state.layers.len());
+        self.rows.set(state.layer_tools.presented_rows(&state.layers));
         let previous = self.properties.replace(open);
         if previous != open {
             if let Some((clock, callback)) = self.restore.borrow_mut().take() { clock.disconnect(callback); }
@@ -184,17 +184,16 @@ impl LayerInspector {
         self.button.update_property(&[gtk::accessible::Property::Label(label), gtk::accessible::Property::Description(if open {""} else {&disclosure.summary})]);
         if open { self.button.add_css_class("open"); } else { self.button.remove_css_class("open"); }
     }
-    pub(super) fn measure(&self, width: i32, viewport_height: f32, phone: Option<&PhoneLayout>) -> (PanelScrollMeasurement,f32) {
+    pub(super) fn measure(&self, width: i32, viewport_height: f32, phone: Option<&PhoneLayout>) -> (PanelScrollMeasurement,f32,[f32; 2]) {
         let measurement = self.layers.scroll_measurement(width);
         let properties_height = self.effects.properties.measure(gtk::Orientation::Vertical, width).1 as f32;
         let heights = layer_ui::LayerDrawerSizing::presented_pages(measurement, self.rows.get(), viewport_height, properties_height, phone);
         for (page, height) in self.pages.iter().zip(heights) {
             let height = (height - layer_ui::LayerDrawerSizing::FOOTER_HEIGHT).max(0.).round() as i32;
-            if page.imp().natural_height.replace(Some(height)) != Some(height) { page.queue_resize(); }
-            let mut geometry = page.imp().geometry.borrow_mut();
-            if geometry[0].width != width as f32 { geometry[0].width = width as f32; page.queue_allocate(); }
+            page.imp().natural_height.set(Some(height));
+            page.imp().geometry.borrow_mut()[0].width = width as f32;
         }
-        (measurement,properties_height)
+        (measurement,properties_height,heights)
     }
     fn restore_anchor(&self, w: &Rc<Workspace>) {
         let Some(clock) = self.root.frame_clock() else { self.anchor.set(None); return; };
@@ -264,7 +263,7 @@ impl ToolbarBody {
             self.strip.set_tiles(config.tiles());
             self.strip.set_style(config.tile_style);
             *self.items.borrow_mut() = config.tiles().iter().filter_map(|tile| {
-                let choice = &view.tiles.iter().find(|view| view.id == tile.id && view.choice.control == tile.control)?.choice;
+                let choice = &view.tiles.iter().find(|view| view.id == Some(tile.id) && view.choice.control == tile.control)?.choice;
                 let item = toolbar_components::TileWidget::new(w, Some(config), tile, config.tile_style, choice);
                 self.strip.append(&item.root());
                 Some(item)
@@ -339,6 +338,7 @@ impl Body {
 }
 struct View {
     root: Columns,
+    content: Columns,
     shadow: gtk::Box,
     connection: gtk::DrawingArea,
     connection_geometry: Rc<Cell<Option<DrawerConnection>>>,
@@ -389,6 +389,8 @@ impl View {
         }
 
         root.set_overflow(gtk::Overflow::Hidden);
+        let color = matches!(drawer.anchor, DrawerAnchor::Phone { .. }) && drawer.columns.iter().flatten().any(|panel| *panel == Panel::Color);
+        let content: Columns = if color { glib::Object::new() } else { root.clone() };
         let shadow = previous.map(|view| view.shadow.clone()).unwrap_or_else(|| gtk::Box::new(gtk::Orientation::Vertical, 0));
         shadow.add_css_class("drawer-shadow");
         shadow.set_widget_name("drawer-shadow");
@@ -456,7 +458,9 @@ impl View {
                 column.append(&widget);
                 bodies.push(body);
             }
-            let scroller = if drawer.layer_properties.is_some() {
+            let scroller = if color {
+                column.clone().upcast()
+            } else if drawer.layer_properties.is_some() {
                 let widget = bodies.last().unwrap().widget();
                 column.remove(&widget);
                 widget
@@ -468,7 +472,7 @@ impl View {
                 scroller
             };
             clips.push(scroller.clone());
-            let child = if let Some(previous) = previous {
+            let child = if let Some(previous) = previous.filter(|_| !color) {
                 let child = previous.root.imp().children.borrow()[columns.len()].clone();
                 let container = child.downcast_ref::<gtk::Box>().unwrap();
                 container.remove(&container.last_child().unwrap());
@@ -543,14 +547,24 @@ impl View {
                 scroller
             };
             if previous.is_none() {
-                child.set_parent(&root);
-                root.imp().children.borrow_mut().push(child);
+                child.set_parent(&content);
+                content.imp().children.borrow_mut().push(child);
             }
             columns.push(column);
         }
 
+        if color {
+            let viewport = gtk::Viewport::builder().vscroll_policy(gtk::ScrollablePolicy::Natural).child(&content).build();
+            let scroller = scroll(&viewport);
+            scroller.set_widget_name("color-drawer-scroll");
+            scroller.set_parent(&root);
+            root.imp().children.borrow_mut().push(scroller);
+            root.imp().geometry.borrow_mut().push(Bounds::default());
+        }
+
         Self {
             root,
+            content,
             shadow,
             connection,
             connection_geometry,
@@ -795,7 +809,7 @@ impl Drawer {
     fn source_button(&self, w: &Workspace) -> Option<gtk::Button> {
         let anchor = self.state.borrow().as_ref()?.anchor;
         match anchor {
-            DrawerAnchor::Phone { tile } => w.phone.button(w, tile),
+            DrawerAnchor::Phone { anchor } => w.phone.button(w, anchor),
             DrawerAnchor::Header { id } => w.header.drawer_button(id),
             DrawerAnchor::Tile { panel, tile } => {
                 w.columns
@@ -831,21 +845,26 @@ impl Drawer {
             ui.customization
                 .drawer_placement(state, &layout, viewport, heights)
         };
-        let sizing = place(&vec![0.0; view.columns.len()])?;
-        for body in &view.bodies {
-            if let Body::LayerInspector(inspector) = body { inspector.measure(sizing.columns[0].width as i32, viewport[1], layout.phone_presentation(viewport).as_ref()); }
-        }
+        let measure = {
+            let gpu = w.gpu.borrow();
+            gpu.as_ref()?.session.state().customization.drawer_measure(state, &layout, viewport)?
+        };
+        let sizing = measure.placement(&vec![0.0; view.columns.len()])?;
+        let layer_height = view.bodies.iter().find_map(|body| if let Body::LayerInspector(inspector) = body {
+            let (_, _, heights) = inspector.measure(sizing.columns[0].width as i32, viewport[1], layout.phone_presentation(viewport).as_ref());
+            Some(heights[usize::from(state.layer_properties == Some(true))])
+        } else { None });
         if let (Some(panel), Some(column)) = (
             view.bodies.iter().find_map(|body| if let Body::Palettes(panel) = body { Some(panel) } else { None }),
             state.columns.iter().position(|panels| panels.contains(&Panel::Palettes)),
         ) { panel.content_measurement(sizing.columns[column].width as i32); }
 
-        let heights: Vec<_> = view
+        let mut heights: Vec<_> = view
             .columns
             .iter()
             .zip(&sizing.columns)
             .map(|(body, b)| {
-                view.bodies.iter().find_map(|body| if let Body::LayerInspector(v) = body {Some(v.root.measure(gtk::Orientation::Vertical, b.width as i32).1 as f32)} else {None})
+                layer_height
                     .unwrap_or_else(|| body.measure(gtk::Orientation::Vertical, b.width as i32).1 as f32)
                     + if state.tabs.is_some() {
                         TAB_BAR_HEIGHT
@@ -854,6 +873,13 @@ impl Drawer {
                     }
             })
             .collect();
+        if let Some(panel) = view.bodies.iter().find_map(|body| if let Body::Color(panel) = body { Some(panel) } else { None }) {
+            if let Some(fit) = measure.color_fit(&heights, 2. * PANEL_CONTENT_INSET, panel.hdr()) {
+                panel.set_fit(fit);
+                let column = state.columns.iter().position(|panels| panels.contains(&Panel::Color))?;
+                heights[column] = fit.height.ceil() + 2. * PANEL_CONTENT_INSET;
+            }
+        }
         place(&heights)
     }
     pub fn allocate(&self, w: &Workspace) -> Option<DrawerPlacement> {
@@ -880,10 +906,14 @@ impl Drawer {
         if let Some(view) = self.view.borrow().as_ref() {
             if let Some(strip)=&view.tab_strip {strip.set_presentations(&result.tab_presentations);}
             let geometry = result.columns.clone();
-            if *view.root.imp().geometry.borrow() != geometry {
-                *view.root.imp().geometry.borrow_mut() = geometry;
-                // GTK can skip size_allocate when the outer rectangle is
-                // unchanged. Internal panel splits still need live allocation.
+            if view.content != view.root {
+                let height = geometry.iter().map(|b| b.y + b.height).fold(0., f32::max).ceil() as i32;
+                view.content.set_height_request(height);
+                view.root.imp().geometry.borrow_mut()[0] = Bounds { x: 0., y: 0., width: result.bounds.width, height: result.bounds.height };
+            }
+            if *view.content.imp().geometry.borrow() != geometry {
+                *view.content.imp().geometry.borrow_mut() = geometry;
+                view.content.queue_allocate();
                 view.root.queue_allocate();
             }
             let connection = result.connection();
@@ -1052,6 +1082,7 @@ impl Drawer {
             return;
         };
         let changed = self.state.borrow().as_ref() != Some(next) || self.closing.get();
+        let page_changed = self.state.borrow().as_ref().is_some_and(|old| old.layer_properties != next.layer_properties);
         let switching = self
             .state
             .borrow()
@@ -1111,7 +1142,7 @@ impl Drawer {
             }
             for body in &view.bodies {
                 if let Body::LayerInspector(inspector) = body {
-                    rows_changed |= !rebuild && inspector.rows.get() != state.layers.len();
+                    rows_changed |= !rebuild && inspector.rows.get() != state.layer_tools.presented_rows(&state.layers);
                 }
                 refreshed |= body.refresh(w, state, if rebuild || changed { regions::ALL } else { regions }, next.tool_set.as_ref());
             }
@@ -1136,7 +1167,7 @@ impl Drawer {
                 .zip(self.placement())
                 .is_some_and(|(to, from)| to.bounds != from.bounds);
         if !switching && (changed || resized || rows_changed) {
-            if next.layer_properties.is_some() && !rebuild { self.finish_animation(); }
+            if next.layer_properties.is_some() && !rebuild && !page_changed { self.finish_animation(); }
             else { self.animate(w, false); }
         }
         w.surface.raise_drawer(self.id);

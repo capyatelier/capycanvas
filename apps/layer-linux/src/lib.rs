@@ -250,7 +250,7 @@ fn application(id: &str) -> (adw::Application, Rc<RefCell<Vec<Rc<workspace::Work
     app.connect_handle_local_options(|app, options| {
         if let Ok(Some(size)) = options.lookup::<String>("window-size") {
             let size = size.split_once('x').and_then(|(w, h)| Some((w.parse::<i32>().ok()?, h.parse::<i32>().ok()?)));
-            let Some((w, h)) = size.filter(|(w, h)| *w >= 320 && *h >= 320) else { return std::ops::ControlFlow::Break(glib::ExitCode::FAILURE); };
+            let Some((w, h)) = size.filter(|(w, h)| *w >= 280 && *h >= 280) else { return std::ops::ControlFlow::Break(glib::ExitCode::FAILURE); };
             unsafe { app.set_data("capy-window-size", (w, h)); }
         }
         std::ops::ControlFlow::Continue(())

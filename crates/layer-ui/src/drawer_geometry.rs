@@ -227,7 +227,7 @@ fn snapped_drawer_bridges_meet_both_surfaces_on_every_edge_and_alignment() {
 #[test]
 fn portrait_color_drawer_uses_its_column_width_when_the_height_fits() {
     let layout=WorkspacePreset::Painter.layout(Platform::Gtk);
-    let drawer=ContentDrawer::for_control(ToolbarControl::Color,DrawerAnchor::Phone {tile:None}).unwrap();
+    let drawer=ContentDrawer::for_control(ToolbarControl::Color,DrawerAnchor::Phone {anchor:PhoneDrawerAnchor::Capy}).unwrap();
     let input=LayoutResolveInput::new(&layout,None).with_phone(PhoneState { platform: Some(Platform::Gtk), ..Default::default() });
     for viewport in [[412.,891.],[375.,812.],[360.,780.],[320.,780.],[280.,780.]] {
         let phone=PhoneState { platform: Some(Platform::Gtk), ..Default::default() }.resolve(&layout,viewport).unwrap();

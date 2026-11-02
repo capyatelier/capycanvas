@@ -70,7 +70,7 @@
   <url type="contribute">https://github.com/capyatelier/capycanvas#contributing</url>
   <content_rating type="oars-1.1" />
   <requires>
-    <display_length side="shortest" compare="ge">600</display_length>
+    <display_length side="shortest" compare="ge">280</display_length>
   </requires>
   <supports>
     <control>keyboard</control>

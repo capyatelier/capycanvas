@@ -872,7 +872,7 @@ fn slider_expansion_fills_rows_without_stretching_neighbors() {
         let stacked = toolbar_tile_layout(w, height, Axis::Vertical, &tiles[..2], true, style);
         assert!(stacked.tiles[0].y + stacked.tiles[0].height <= stacked.tiles[1].y);
         for axis in [Axis::Horizontal, Axis::Vertical] {
-            let parts = toolbar_slider_styled_layout(a.width, a.height, axis, style, tiles[0].slider_style);
+            let parts = toolbar_slider_styled_layout(a.width, a.height, axis, style, tiles[0].slider_style, true);
             assert!([parts.cap, parts.track].iter().all(|b| b.width >= 0. && b.height >= 0.));
             assert!(parts.cap.intersection(parts.track).is_none());
         }
@@ -1713,9 +1713,9 @@ fn short_sliders_reclaim_readouts_without_changing_the_saved_preference() {
             let style = ToolbarSliderStyle { show_value: true, expand: true };
             for extent in [0., 4., threshold - 1., threshold, threshold + 100., threshold - 1.] {
                 let (width, height) = if vertical { (w, extent) } else { (extent, h) };
-                let layout = toolbar_slider_styled_layout(width, height, axis, tile, style);
+                let layout = toolbar_slider_styled_layout(width, height, axis, tile, style, true);
                 assert_eq!(layout.show_value, extent >= threshold);
-                let hidden = toolbar_slider_styled_layout(width, height, axis, tile, ToolbarSliderStyle { show_value: false, ..style });
+                let hidden = toolbar_slider_styled_layout(width, height, axis, tile, ToolbarSliderStyle { show_value: false, ..style }, true);
                 assert!(!hidden.show_value);
                 if extent < threshold { assert_eq!(layout, hidden); }
                 for part in [layout.cap, layout.track] { assert!(part.width >= 0. && part.height >= 0.); }
@@ -1800,5 +1800,20 @@ fn slider_stamp_retains_ordered_results_until_the_final_value_is_exact() {
             }
             assert_eq!(s.engine.checkpoint(), checkpoint);
         }
+    }
+}
+
+#[test]
+fn fixed_phone_sliders_use_the_whole_track_without_grips() {
+    for (width, height, axis) in [(147.25, 47.75, Axis::Horizontal), (31.71875, 98.65625, Axis::Vertical)] {
+        let style = ToolbarSliderStyle::default();
+        let phone = toolbar_slider_styled_layout(width, height, axis, TileStyle::Small, style, false);
+        assert_eq!(phone.track, Bounds { width, height, ..Bounds::default() });
+        assert_eq!(if axis == Axis::Horizontal { phone.cap.width } else { phone.cap.height }, 0.);
+        let desktop = toolbar_slider_styled_layout(width, height, axis, TileStyle::Small, style, true);
+        let (leading, trailing) = if axis == Axis::Horizontal {
+            (desktop.track.x, width - desktop.track.x - desktop.track.width)
+        } else { (desktop.track.y, height - desktop.track.y - desktop.track.height) };
+        assert_eq!((leading, trailing), (8., 8.));
     }
 }
