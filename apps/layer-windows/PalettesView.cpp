@@ -40,8 +40,8 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
     Grid root,body,chooser,footer;StackPanel normal,list,info;Canvas history,grid,expanded,overlays;ScrollView scroll,results;
     TextBox search,editor;Button more{nullptr},selector{nullptr},name{nullptr},add{nullptr};TextBlock selectorLabel,nameLabel,detail,note,empty;
     std::map<uint64_t,Tile> tiles;std::vector<uint64_t> order;std::vector<FrameworkElement> historyCells,expandedCells;
-    hstring viewKey,historyKey,choicesKey,currentKey,checkerKey;Imaging::WriteableBitmap checker{nullptr};
-    std::optional<uint64_t> selected;bool editing=false,animate=true;int columns=6;uint64_t reportGeneration=0,previewGeneration=0;
+    hstring viewKey,historyKey,choicesKey,colorKey,checkerKey;Imaging::WriteableBitmap checker{nullptr};
+    std::optional<uint64_t> selected,editingSwatch;bool editing=false,animate=true;int columns=6;uint64_t reportGeneration=0,previewGeneration=0,editingPalette=0;
     std::optional<Drag> drag;Microsoft::UI::Dispatching::DispatcherQueueTimer scrollTimer{nullptr};double scrollCarry=0;
     bool ignoreClick=false;uint64_t gestureGeneration=0;
     MenuFlyout openMenu{nullptr};OwnedPopup menuOwner;uint64_t transient=0;
@@ -157,16 +157,16 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         });
     }
     void editName(){
-        editing=true;hstring value;
-        if(selected)if(auto s=swatch(*selected))value=str(*s,L"name");
-        if(!selected){auto pending=array(object(data->state,L"color_library"),L"pending_name");
+        editing=true;editingSwatch=selected;editingPalette=uint64_t(num(view(),L"palette"));hstring value;
+        if(editingSwatch)if(auto s=swatch(*editingSwatch))value=str(*s,L"name");
+        if(!editingSwatch){auto pending=array(object(data->state,L"color_library"),L"pending_name");
             if(pending.Size()==2&&pending.GetAt(1).ValueType()==JsonValueType::String&&pending.GetStringAt(1)==str(view(),L"color_name"))value=pending.GetStringAt(1);}
         editor.Text(value);name.Visibility(Visibility::Collapsed);editor.Visibility(Visibility::Visible);editor.Focus(FocusState::Programmatic);editor.SelectAll();
     }
     void showLabel(){editor.Visibility(Visibility::Collapsed);name.Visibility(Visibility::Visible);}
     void commitName(){
         if(!editing)return;editing=false;auto weak=weak_from_this();
-        auto action=selected?O({{L"op",S(L"rename")},{L"id",N(double(*selected))},{L"name",S(editor.Text())}}):O({{L"op",S(L"name_current")},{L"color",current()},{L"name",S(editor.Text())}});
+        auto action=editingSwatch?O({{L"op",S(L"rename")},{L"id",N(double(*editingSwatch))},{L"name",S(editor.Text())}}):O({{L"op",S(L"name_current")},{L"color",current()},{L"name",S(editor.Text())}});
         showLabel();
         library(action,[weak](hstring error){if(auto self=weak.lock();self&&!error.empty()){self->editing=true;self->name.Visibility(Visibility::Collapsed);self->editor.Visibility(Visibility::Visible);self->report(error);self->editor.Focus(FocusState::Programmatic);}});
     }
@@ -469,10 +469,10 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         ensureChecker();
         auto v=view();auto palette=uint64_t(num(v,L"palette"));
         if(drag&&(palette!=drag->palette||!swatch(drag->id)))finish(true);
-        std::wstring currentNext;{A marks;for(auto s:array(v,L"swatches"))marks.Append(B(flag(s.GetObject(),L"current")));currentNext=(str(v,L"color_detail")+marks.Stringify()).c_str();}
+        auto nextColor=current().Stringify();
         auto nextChoices=array(v,L"palettes").Stringify();
-        if(editing&&(hstring(currentNext)!=currentKey||nextChoices!=choicesKey)){editing=false;showLabel();report(L"");}
-        currentKey=currentNext;
+        if(editing&&(palette!=editingPalette||(editingSwatch?!swatch(*editingSwatch):nextColor!=colorKey))){editing=false;showLabel();report(L"");}
+        colorKey=nextColor;
         selected.reset();for(auto s:array(v,L"swatches"))if(flag(s.GetObject(),L"current")){selected=uint64_t(num(s.GetObject(),L"id"));break;}
         std::set<uint64_t> live;size_t nextOrder=0;bool orderChanged=false;
         for(auto value:array(v,L"swatches")){

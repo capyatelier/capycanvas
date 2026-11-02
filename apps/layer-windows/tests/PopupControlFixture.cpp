@@ -9,6 +9,7 @@
 #include "CanvasActionBar.h"
 #include "SettingsView.h"
 #include "ShortcutPage.h"
+#include "PalettesView.h"
 #include <msctf.h>
 #pragma comment(lib,"uuid.lib")
 #include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
@@ -309,7 +310,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         settings.reset();window.AppWindow().Resize(previous);++checks;
     }
     winrt::Windows::Foundation::IAsyncAction layerLanguageDraft(){
-        auto theme=root.RequestedTheme();std::string snapshot,catalog,translated;NativeLayoutInput layout;
+        auto theme=root.RequestedTheme();std::string snapshot,catalog,translated,paletteChanged,paletteRemoved,paletteSwitched;NativeLayoutInput layout;
         co_await resume_background();
         {
             struct Apartment{Apartment(){init_apartment(apartment_type::multi_threaded);}~Apartment(){uninit_apartment();}} apartment;
@@ -330,6 +331,10 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             action(R"({"type":"customize","action":{"type":"set_panel_visible","panel":"layers","visible":true}})");
             action(R"({"type":"move_panel","panel":"layers","target":{"kind":"float","position":[20,20]},"viewport":[1000,700]})");
             action(R"({"type":"layer","action":{"op":"new","group":false,"clipped":false}})");
+            auto paletteQuery=[&](J request){NativeString value(capy_query(host.get(),to_string(request.Stringify()).c_str()));require(bool(value),L"Palette fixture query failed");auto reply=J::Parse(to_hstring(value.bytes));require(str(reply,L"error").empty(),L"Palette fixture action failed");return reply;};
+            auto palette=paletteQuery(O({{L"type",S(L"palette_panel")},{L"query",S(L"")}}));
+            auto swatch=num(array(palette,L"swatches").GetObjectAt(0),L"id"),other=num(array(palette,L"palettes").GetObjectAt(1),L"id");
+            paletteQuery(O({{L"type",S(L"palette_action")},{L"action",O({{L"op",S(L"use")},{L"id",N(swatch)}})}}));
             CapySnapshotInfo info{};NativeString initial(capy_snapshot(host.get(),&info));require(bool(initial)&&info.full,L"Layer fixture full model missing");
             auto model=J::Parse(to_hstring(initial.bytes));auto id=num(object(object(object(model,L"state"),L"layer_tools"),L"editing_layer"),L"id");
             action(to_string(O({{L"type",S(L"layer")},{L"action",O({{L"op",S(L"begin_rename")},{L"id",N(id)}})}}).Stringify()));
@@ -340,6 +345,12 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             auto tags=array(object(presentation,L"bootstrap"),L"shipped_tags");uint32_t japanese=0;for(uint32_t i=0;i<tags.Size();++i)if(tags.GetStringAt(i)==L"ja")japanese=i+1;
             require(japanese>0,L"Japanese fixture language choice missing");action(to_string(O({{L"type",S(L"preferences")},{L"action",O({{L"type",S(L"edit")},{L"id",S(L"language")},{L"value",N(japanese)}})}}).Stringify()));
             waitModel([&](J const&){return str(object(presentation,L"bootstrap"),L"active_tag")==L"ja";},L"Japanese fixture presentation did not publish");translated=to_string(presentation.Stringify());
+            paletteQuery(O({{L"type",S(L"palette_action")},{L"action",O({{L"op",S(L"rename_palette")},{L"id",N(other)},{L"name",S(L"Remote palette metadata")}})}}));
+            NativeString refreshed(capy_snapshot(host.get(),&info));require(bool(refreshed)&&info.full,L"Remote palette full model missing");paletteChanged=std::move(refreshed.bytes);
+            paletteQuery(O({{L"type",S(L"palette_action")},{L"action",O({{L"op",S(L"remove")},{L"id",N(swatch)}})}}));
+            NativeString removed(capy_snapshot(host.get(),&info));require(bool(removed)&&info.full,L"Removed swatch full model missing");paletteRemoved=std::move(removed.bytes);
+            paletteQuery(O({{L"type",S(L"palette_action")},{L"action",O({{L"op",S(L"select_palette")},{L"id",N(other)}})}}));
+            NativeString switched(capy_snapshot(host.get(),&info));require(bool(switched)&&info.full,L"Changed palette full model missing");paletteSwitched=std::move(switched.bytes);
             require(capy_finish_services(host.get())>=0,L"Layer fixture service shutdown failed");
         }
         co_await apartment;
@@ -376,6 +387,38 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         }}
         root.Children().RemoveAt(0);view.reset();root.Width(400);root.Height(240);++imeChecks;
         phase=L"canvas-bar-language";co_await canvasBarLanguage(model,locale);
+        phase=L"palette-name-draft";co_await paletteNameDraft(model,locale,J::Parse(to_hstring(paletteChanged)),J::Parse(to_hstring(paletteRemoved)),J::Parse(to_hstring(paletteSwitched)));
+    }
+    winrt::Windows::Foundation::IAsyncAction paletteNameDraft(J const& model,J const& locale,J const& refreshed,J const& removed,J const& switched){
+        auto source=std::make_shared<WorkspaceData>();context.apply(source);source->model=J::Parse(model.Stringify());source->state=object(source->model,L"state");
+        auto requests=std::make_shared<std::vector<J>>();source->query=[requests](CanvasQueryKind kind,std::string value,PreviewReply){require(kind==CanvasQueryKind::Workspace,L"Palette draft queried a renderer");requests->push_back(J::Parse(to_hstring(value)));return false;};
+        auto before=object(model,L"palette_panel"),after=object(refreshed,L"palette_panel");double target=0;for(auto value:array(before,L"swatches"))if(flag(value.GetObject(),L"current"))target=num(value.GetObject(),L"id");
+        require(target>0&&num(before,L"palette")==num(after,L"palette"),L"Palette fixture needs the same edited swatch and palette");
+        require(array(before,L"swatches").Stringify()==array(after,L"swatches").Stringify()&&str(before,L"color_detail")==str(after,L"color_detail"),L"Remote palette rename changed the edited color");
+        require(array(before,L"palettes").Stringify()!=array(after,L"palettes").Stringify(),L"Remote palette publication did not change choices metadata");
+        Bindings bindings;auto surface=PalettesPanel(source,bindings);surface.Width(500);surface.Height(400);root.Width(600);root.Height(500);root.Children().InsertAt(0,surface);
+        co_await wait([&]{auto name=findElement(surface,L"palette-name");return name&&name.IsLoaded()&&name.ActualWidth()>0;},L"Palette name did not arrange");
+        auto name=findElement(surface,L"palette-name").as<Button>();auto peer=Automation::Peers::FrameworkElementAutomationPeer::CreatePeerForElement(name);
+        peer.GetPattern(Automation::Peers::PatternInterface::Invoke).as<Automation::Provider::IInvokeProvider>().Invoke();
+        auto entry=findElement(surface,L"palette-name-editor").as<TextBox>();
+        co_await wait([this,entry]{return entry.Visibility()==Visibility::Visible&&FocusManager::GetFocusedElement(root.XamlRoot())==entry;},L"Native swatch editor did not own focus");
+        entry.Text(L"\u65e5\u672c draft");entry.Select(1,2);requests->clear();
+        auto retained=[&]{require(findElement(surface,L"palette-name-editor")==entry&&entry.Visibility()==Visibility::Visible&&FocusManager::GetFocusedElement(root.XamlRoot())==entry,L"Palette metadata publication retired the native swatch editor");require(entry.Text()==L"\u65e5\u672c draft"&&entry.SelectionStart()==1&&entry.SelectionLength()==2,L"Palette publication changed exact draft or selection");for(auto const& request:*requests)require(str(request,L"type")!=L"palette_action",L"Palette publication committed an unsubmitted draft");};
+        auto apply=[&](J snapshot){source->model=std::move(snapshot);source->state=object(source->model,L"state");source->adoptLocalization(source->model);for(auto const& binding:bindings)binding();};
+        auto translated=J::Parse(model.Stringify());translated.Insert(L"localization",locale);apply(translated);retained();
+        auto remote=J::Parse(refreshed.Stringify());remote.Insert(L"localization",locale);apply(remote);retained();
+        nativeKey(VK_RETURN,false);nativeKey(VK_RETURN,true);
+        co_await wait([requests]{return std::any_of(requests->begin(),requests->end(),[](J const& request){return str(request,L"type")==L"palette_action";});},L"Retained swatch draft did not submit");
+        unsigned renames=0;for(auto const& request:*requests)if(str(request,L"type")==L"palette_action"){auto action=object(request,L"action");require(str(action,L"op")==L"rename"&&num(action,L"id")==target&&str(action,L"name")==L"\u65e5\u672c draft",L"Retained draft renamed a different swatch or lost text");++renames;}
+        require(renames==1&&entry.Visibility()==Visibility::Collapsed,L"Swatch draft did not commit exactly once");
+        for(auto invalid:{removed,switched}){
+            apply(translated);peer.GetPattern(Automation::Peers::PatternInterface::Invoke).as<Automation::Provider::IInvokeProvider>().Invoke();
+            co_await wait([this,entry]{return entry.Visibility()==Visibility::Visible&&FocusManager::GetFocusedElement(root.XamlRoot())==entry;},L"Swatch editor did not reopen for target invalidation");
+            entry.Text(L"Unsubmitted");requests->clear();invalid.Insert(L"localization",locale);apply(invalid);
+            require(entry.Visibility()==Visibility::Collapsed,L"Removing the edited swatch or changing palette retained an invalid editor");
+            for(auto const& request:*requests)require(str(request,L"type")!=L"palette_action",L"Target invalidation committed an unsubmitted name");
+        }
+        anchor.Focus(FocusState::Programmatic);root.Children().RemoveAt(0);bindings.clear();root.Width(400);root.Height(240);++imeChecks;
     }
     void nativeKey(WORD key,bool released,DWORD time=0){
         privacy();INPUT event{};event.type=INPUT_KEYBOARD;event.ki.wVk=key;event.ki.dwFlags=released?KEYEVENTF_KEYUP:0;event.ki.time=time;
