@@ -261,7 +261,7 @@ fn face_line(id: u64, points: &[[f64; 2]], closed: bool, width: f64) -> PathItem
     PathItem::new(ItemId(id), Arc::new(PathGeometry::new(vec![Subpath::new(&points.iter().copied().map(Anchor::corner).collect::<Vec<_>>(), closed)]).unwrap()), Arc::new(Style::new(vec![PaintEntry::Stroke(Stroke::new(paint(), width))])))
 }
 fn face_at(paths: &[PathItem], point: [f64; 2]) -> VectorFace {
-    vector_face(&paths.iter().map(|path| FaceLine { path, offset: [0.; 2] }).collect::<Vec<_>>(), point, Some(0)).expect("a bounded face")
+    vector_face(&paths.iter().map(|path| FaceLine { path, offset: [0.; 2] }).collect::<Vec<_>>(), point, Some(0), &[]).expect("a bounded face")
 }
 fn face_path(face: &VectorFace) -> PathItem {
     let mut path = PathItem::new(ItemId(100_000), Arc::new(face.geometry.clone()), Arc::new(Style::new(vec![PaintEntry::Fill(Fill { paint: paint(), unknown: None })])));
@@ -309,7 +309,7 @@ fn vector_face_joins_visible_endpoint_contacts_but_leaves_real_gaps_open() {
     let face = face_at(&make(3.), [50., 50.]);
     assert!(face_path(&face).encloses([50., 50.], 0.001));
     let paths = make(8.);
-    assert!(vector_face(&paths.iter().map(|path| FaceLine { path, offset: [0.; 2] }).collect::<Vec<_>>(), [50., 50.], Some(0)).is_none());
+    assert!(vector_face(&paths.iter().map(|path| FaceLine { path, offset: [0.; 2] }).collect::<Vec<_>>(), [50., 50.], Some(0), &[]).is_none());
 }
 
 #[test]
@@ -341,7 +341,7 @@ fn vector_face_keeps_only_outermost_holes_and_selects_the_innermost_face() {
 #[test]
 fn vector_face_doubles_its_window_and_preserves_document_offsets() {
     let square = face_box(1, 0., 1200.);
-    let face = vector_face(&[FaceLine { path: &square, offset: [2000., -300.] }], [2600., 300.], Some(0)).unwrap();
+    let face = vector_face(&[FaceLine { path: &square, offset: [2000., -300.] }], [2600., 300.], Some(0), &[]).unwrap();
     assert_eq!(face.geometry.hull(), [2000., -300., 3200., 900.]);
     assert_eq!(face.boundary, [0].into());
     let paths = [
@@ -373,7 +373,7 @@ fn vector_face_busy_page() {
         ("auto_miss", [150., 150.], None, None),
     ] {
         let start = std::time::Instant::now();
-        let face = vector_face(&lines, point, reach);
+        let face = vector_face(&lines, point, reach, &[]);
         let elapsed = start.elapsed().as_micros();
         eprintln!("vector_face_busy_page {name} elapsed_us={elapsed} path_count={}", paths.len());
         assert_eq!(face.as_ref().map(|face|face.geometry.hull()), expected);
@@ -423,7 +423,7 @@ fn vector_faces_enumerates_adjacent_faces_with_the_same_tap_boundaries() {
     let faces = vector_faces(&lines, [0., -20., 340., 110.]);
     assert_eq!(faces.len(), 3);
     for x in [70., 170., 270.] {
-        let tapped = vector_face(&lines, [x, 40.], Some(0)).unwrap();
+        let tapped = vector_face(&lines, [x, 40.], Some(0), &[]).unwrap();
         let face = faces.iter().find(|face| face_path(face).encloses([x, 40.], 0.001)).unwrap();
         assert_eq!(face.geometry.hull(), tapped.geometry.hull());
         assert_eq!(face.boundary, tapped.boundary);
@@ -441,7 +441,7 @@ fn vector_faces_enumerates_nested_faces_with_only_their_immediate_holes() {
     let faces = vector_faces(&lines, [-10., -10., 210., 210.]);
     assert_eq!(faces.len(), 3);
     for (point, holes) in [([25., 25.], 1), ([60., 60.], 1), ([100., 100.], 0)] {
-        let tapped = vector_face(&lines, point, Some(0)).unwrap();
+        let tapped = vector_face(&lines, point, Some(0), &[]).unwrap();
         let face = faces.iter().find(|face| face_path(face).encloses(point, 0.001)).unwrap();
         assert_eq!(face.geometry.hull(), tapped.geometry.hull());
         assert_eq!(face.boundary, tapped.boundary);
@@ -457,7 +457,7 @@ fn gappy_face(gap: f64, angle: f64) -> PathItem {
     face_line(1, &points, false, 2.)
 }
 fn reached_face(paths: &[PathItem], point: [f64; 2], reach: Option<u32>) -> Option<VectorFace> {
-    vector_face(&paths.iter().map(|path| FaceLine { path, offset: [0.; 2] }).collect::<Vec<_>>(), point, reach)
+    vector_face(&paths.iter().map(|path| FaceLine { path, offset: [0.; 2] }).collect::<Vec<_>>(), point, reach, &[])
 }
 
 #[test]
@@ -487,9 +487,9 @@ fn vector_seal_choice_is_monotone_in_reach() {
 fn vector_auto_closes_a_gappy_shape_inside_a_closed_frame_like_raster() {
     let frame=face_box(1,0.,300.);let shape=gappy_face(10.,0.);
     let lines=[FaceLine {path:&frame,offset:[0.;2]},FaceLine {path:&shape,offset:[100.;2]}];
-    let auto=vector_face(&lines,[150.;2],None).unwrap();
+    let auto=vector_face(&lines,[150.;2],None,&[]).unwrap();
     assert_eq!(auto.geometry.hull(),[100.,100.,200.,200.]);
-    let off=vector_face(&lines,[150.;2],Some(0)).unwrap();
+    let off=vector_face(&lines,[150.;2],Some(0),&[]).unwrap();
     assert_eq!(off.geometry.hull(),[0.,0.,300.,300.]);assert_eq!(off.geometry.subpaths().len(),1);
 }
 
@@ -526,7 +526,9 @@ fn vector_seals_close_rotated_gaps_at_the_first_allowed_reach() {
         let paths = [gappy_face(gap, 0.)];
         assert!(reached_face(&paths, [50., 50.], Some(32)).is_none());
         assert!(reached_face(&paths, [50., 50.], Some(reach)).is_some());
-        assert_eq!(reached_face(&paths, [50., 50.], None).is_some(), gap == 40.);
+        let auto=reached_face(&paths,[50.,50.],None);
+        assert_eq!(auto.is_some(),gap==40.);
+        if let Some(face)=auto {assert_eq!(face.reach,48);}
     }
 }
 
@@ -538,6 +540,19 @@ fn vector_seals_pair_facing_ends_once_and_keep_enclosure_enumeration_open() {
     assert_eq!(face.geometry.subpaths()[0].len(), 6);
     assert_eq!(face.boundary, [0].into());
     let lines = [FaceLine { path: &paths[0], offset: [0.; 2] }];
+    assert_eq!(face.reach,16);
+    assert_eq!(face.seals.len(),1);
+    assert_eq!(face.seals,vector_face(&lines,[50.;2],Some(16),&[]).unwrap().seals);
+    let seal=face.seals[0].2;
+    assert_eq!(seal,(0,0,false));
+    assert!(vector_face(&lines,[50.;2],Some(16),&[seal]).is_none());
+    assert!(vector_face(&lines,[50.;2],Some(16),&[(seal.0,seal.1,!seal.2)]).is_none());
+    let other=gappy_face(10.,0.);
+    let lines=[FaceLine {path:&paths[0],offset:[0.;2]},FaceLine {path:&other,offset:[300.,0.]}];
+    let unrelated=vector_face(&lines,[350.,50.],Some(16),&[]).unwrap().seals[0].2;
+    let unchanged=vector_face(&lines,[50.;2],Some(16),&[unrelated]).unwrap();
+    assert_eq!(unchanged.geometry,face.geometry);
+    assert_eq!(unchanged.seals,face.seals);
     assert!(vector_faces(&lines, [-20., -20., 120., 120.]).is_empty());
 }
 

@@ -30,7 +30,8 @@ pub(super) struct RegionTools {
     preview_active: bool,
     pub(super) reduced_motion: bool,
     completed:Option<gesture::Completed>,
-    rollback:Option<(u64,u64,layer_core::authored::PaintHandle,layer_core::authored::PaintSource)>,
+    vector_completed:Option<gesture::VectorCompleted>,
+    rollback:Option<(u64,u64,gesture::Rollback)>,
     now_ns: u64,
     finger:Option<u64>,
     contact: Option<Point>,
@@ -101,7 +102,7 @@ impl Default for RegionTools {
             reveal: None,
             preview_active: false,
             reduced_motion: false,
-            completed:None,rollback:None,
+            completed:None,vector_completed:None,rollback:None,
             now_ns: 0,
             finger:None,
             contact: None,
@@ -175,7 +176,8 @@ impl RegionTools {
     }
     pub fn cancel(&mut self) {
         if let Some(gesture)=self.gesture.take() {
-            if let Some((checkpoint,source))=gesture.amendment && let Some((handle,_))=gesture.before {self.rollback=Some((checkpoint,gesture.owner,handle,source));}
+            if let Some(vector)=gesture.vector {self.rollback=Some((vector.checkpoint,gesture.owner,gesture::Rollback::Vector(vector.layer,vector.original)));}
+            else if let Some((checkpoint,source))=gesture.amendment && let Some((handle,_))=gesture.before {self.rollback=Some((checkpoint,gesture.owner,gesture::Rollback::Paint(handle,source)));}
             self.tolerance=gesture.original_tolerance;self.gap_reach=gesture.original_reach;self.refinement.close_gaps=gesture.original_close;
         }
         self.reveal=None;
@@ -304,12 +306,18 @@ impl<R: CanvasRenderer> UiSession<R> {
         (raster,lines)
     }
     fn insert_vector_fills(&mut self,layer:OccurrenceHandle,geometries:Vec<PathGeometry>,style:std::sync::Arc<Style>,at_back:bool)->Result<(),String> {
-        use layer_core::authored::vector::{FillRule,PathItem,Record};
         if geometries.is_empty() {return Ok(());}
+        let doc=self.engine.document();
+        let original=doc.scene().vector_layer(layer).ok_or("The vector layer was removed")?.clone();
+        let object=self.vector_fill_object(layer,original,geometries,style,at_back)?;
+        let edit=doc.vector_object_edit(layer,object).map_err(|e|e.to_string())?;
+        self.layer_edit(edit)
+    }
+    fn vector_fill_object(&self,layer:OccurrenceHandle,mut object:layer_core::authored::vector::VectorObject,geometries:Vec<PathGeometry>,style:std::sync::Arc<Style>,at_back:bool)->Result<layer_core::authored::vector::VectorObject,String> {
+        use layer_core::authored::vector::{FillRule,PathItem,Record};
         let doc=self.engine.document();
         if doc.is_locked(layer) {return Err(self.localization().text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED).to_string());}
         let [ox,oy]=doc.scene().occurrence_offset64(layer);
-        let mut object=doc.scene().vector_layer(layer).ok_or("The vector layer was removed")?.clone();
         for geometry in geometries {
             let geometry=geometry.transformed(|p|[p[0]-ox,p[1]-oy]).map_err(str::to_string)?;
             let hull=geometry.hull();let position=(!at_back).then(||object.paths().filter(|(_,path)|path.style.strokes().next().is_some()).filter(|(_,path)| {
@@ -321,8 +329,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             object=if let Some(position)=position {object.splice([(position,vec![object.record(position).unwrap().clone(),record])].into())}
                 else{object.insert_back(vec![record])};
         }
-        let edit=doc.vector_object_edit(layer,object).map_err(|e|e.to_string())?;
-        self.layer_edit(edit)
+        Ok(object)
     }
     fn enclose_vector_faces(&mut self,layer:OccurrenceHandle,enclosure:&Selection,source:RegionSource,style:std::sync::Arc<Style>)->Result<bool,String> {
         let (raster,lines)=self.vector_line_sources(layer,source);if raster {return Ok(false);}
@@ -393,7 +400,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.state.colors.transparent() { return Ok(()); }
         let (raster,lines)=self.vector_line_sources(layer,lines_from);
         if let Some(face)=layer_core::authored::vector::vector_face(&lines,[f64::from(point.x),f64::from(point.y)],
-            self.region_tools.gap_reach.or_else(||(!self.region_tools.refinement.close_gaps).then_some(0))) {
+            self.region_tools.gap_reach.or_else(||(!self.region_tools.refinement.close_gaps).then_some(0)),&[]) {
             return self.insert_vector_fills(layer,vec![face.geometry],std::sync::Arc::new(Style::new(fill.into_iter().collect())),false);
         }
         if !raster {return Ok(());}

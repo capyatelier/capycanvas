@@ -1456,23 +1456,25 @@ fn vector_fill_prefers_painted_paths_at_equal_area_without_skipping_inner_outlin
 
 #[test]
 fn fill_ignores_clicks_off_the_canvas_and_fills_that_change_nothing() {
-    let (mut s, handle) = vector_session();
-    put_paths(&mut s, handle, vec![straight(1, &[[100., 100.], [400., 100.], [400., 400.], [100., 400.]], true)]);
-    s.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Region { fill: true, source: crate::RegionSource::Visible } }).unwrap();
-    let steps = |s: &UiSession<Recorder>| (s.engine.document().scene().children(None).len(), s.engine.checkpoint());
-    let click = |s: &mut UiSession<Recorder>, first: u64, at: [f64; 2]| { let p = surface_at(s, at); press(s, first, &[p, p]); };
-    let before = steps(&s);
-    click(&mut s, 10, [-50., 250.]);
-    assert_eq!(steps(&s), before, "a click off the canvas adds no layer");
-    s.dispatch(UiAction::Color { action: ColorAction::Select { slot: ColorSlot::Transparent } }).unwrap();
-    click(&mut s, 20, [250., 250.]);
-    assert_eq!(steps(&s), before, "transparent paint inside an unfilled outline has nothing to remove");
-    s.dispatch(UiAction::Color { action: ColorAction::Select { slot: ColorSlot::Foreground } }).unwrap();
-    click(&mut s, 30, [250., 250.]);
-    let filled = steps(&s);
-    assert!(filled.0 == before.0 && filled.1 != before.1, "a click inside fills the outline");
-    click(&mut s, 40, [250., 250.]);
-    assert_eq!(steps(&s), filled, "the same fill again adds no undo step");
+    for platform in Platform::ALL {for source in [crate::RegionSource::Visible,crate::RegionSource::Editing] {
+        let (mut s, handle) = vector_session_on(platform);
+        put_paths(&mut s, handle, vec![straight(1, &[[-100., 100.], [400., 100.], [400., 400.], [-100., 400.]], true)]);
+        s.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Region { fill: true, source } }).unwrap();
+        let steps = |s: &UiSession<Recorder>| (s.engine.document().scene().children(None).len(), s.engine.checkpoint());
+        let click = |s: &mut UiSession<Recorder>, first: u64, at: [f64; 2]| { let p = surface_at(s, at); press(s, first, &[p, p]); };
+        let before = steps(&s);
+        click(&mut s, 10, [-50., 250.]);
+        assert_eq!(steps(&s), before, "a click off the canvas adds no layer");
+        s.dispatch(UiAction::Color { action: ColorAction::Select { slot: ColorSlot::Transparent } }).unwrap();
+        click(&mut s, 20, [250., 250.]);
+        assert_eq!(steps(&s), before, "transparent paint inside an unfilled outline has nothing to remove");
+        s.dispatch(UiAction::Color { action: ColorAction::Select { slot: ColorSlot::Foreground } }).unwrap();
+        click(&mut s, 30, [250., 250.]);
+        let filled = steps(&s);
+        assert!(filled.0 == before.0 && filled.1 != before.1, "a click inside fills the outline");
+        click(&mut s, 40, [250., 250.]);
+        assert_eq!(steps(&s), filled, "{platform:?} {source:?}: the same fill again adds no undo step");
+    }}
 }
 
 #[test]
@@ -3024,9 +3026,12 @@ fn vector_everywhere_recolors_equal_paints_and_transparent_removes_them_in_one_u
                 let style = s.vector_figure_style(FigurePaint::Fill, Cap::Butt, Join::Miter).unwrap();
                 let PaintEntry::Fill(fill) = &style.entries[0] else { unreachable!() };Some(fill.paint.clone())
             };
-            assert!(!s.uses_fill_gesture());
-            let point = surface_at(&s, [160., 200.]);
-            press(&mut s, 100, &[point, point]);
+            assert!(s.uses_fill_gesture());
+            pen_at(&mut s,100,PenPhase::Down,[160.,200.]);s.frame(1_000_000_000,1_000_000_000).unwrap();
+            assert!(s.state.fill_gesture.is_none());assert_ne!(s.engine.checkpoint(),checkpoint);
+            let committed=s.engine.checkpoint();
+            pen_at(&mut s,101,PenPhase::Up,[160.,200.]);s.frame(1_010_000_000,1_010_000_000).unwrap();
+            assert_eq!(s.engine.checkpoint(),committed);
             let changed = s.engine.document().scene().vector_layer(target).unwrap();
             assert_eq!(changed.path_count(), if transparent { 2 } else { 4 });
             for (_, before) in original.paths() {
@@ -3073,9 +3078,10 @@ fn vector_everywhere_unfilled_and_empty_hits_match_connected() {
                 let changed = s.engine.document().scene().vector_layer(target).unwrap().clone();
                 if hit[0] == 900. { assert_eq!(changed, original);assert_eq!(s.engine.checkpoint(), checkpoint); }
                 else {
-                    let first = changed.paths().find(|(_, path)|path.id.0==1).unwrap().1;
-                    assert!(matches!(first.style.entries[..], [PaintEntry::Fill(_),PaintEntry::Stroke(_)]));
-                    for (_, before) in original.paths().filter(|(_, path)|path.id.0!=1) { assert_eq!(changed.paths().find(|(_, path)|path.id==before.id).unwrap().1,before); }
+                    assert_eq!(changed.path_count(),original.path_count()+1);
+                    for (_, before) in original.paths() {assert_eq!(changed.paths().find(|(_,path)|path.id==before.id).map(|(_,path)|path),Some(before));}
+                    let added=changed.paths().find(|(_, path)|original.find(path.id).is_none()).unwrap().1;
+                    assert!(matches!(added.style.entries[..],[PaintEntry::Fill(_)]));assert!(added.encloses(hit,0.01));
                 }
                 assert!(s.renderer_mut().region_requests.is_empty());results.push(changed);
             }
@@ -3085,7 +3091,7 @@ fn vector_everywhere_unfilled_and_empty_hits_match_connected() {
 }
 
 #[test]
-fn vector_taps_use_settled_gap_reach_off_and_auto_without_a_raster_gesture() {
+fn vector_fill_gestures_use_settled_gap_reach_off_and_auto() {
     for platform in Platform::ALL {
         for (reach, close, fills) in [(Some(32),true,false),(Some(48),true,true),(None,false,false),(None,true,true),(Some(48),false,true)] {
             let (mut s, target) = vector_session_on(platform);
@@ -3095,15 +3101,176 @@ fn vector_taps_use_settled_gap_reach_off_and_auto_without_a_raster_gesture() {
             let checkpoint = s.engine.checkpoint();
             s.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Region { fill: true, source: crate::RegionSource::Editing } }).unwrap();
             let mut editing=s.editing_state();editing.region_gap_reach=reach;editing.region_close_gaps=close;s.restore_editing(editing).unwrap();
-            assert!(!s.uses_fill_gesture());
+            assert!(s.uses_fill_gesture());
             let point=surface_at(&s,[200.,200.]);press(&mut s,100,&[point,point]);
             let object=s.engine.document().scene().vector_layer(target).unwrap();
             assert_eq!(object.path_count(),original.path_count()+usize::from(fills),"{platform:?} reach={reach:?} close={close}");
-            if fills {assert!(object.paths().any(|(_, path)|path.style.strokes().next().is_none()&&path.encloses([200.,200.],0.01)));invoke(&mut s,CommandId::Undo);}
+            if fills {assert!(object.paths().any(|(_, path)|path.style.strokes().next().is_none()&&path.encloses([200.,200.],0.01)));assert!(!s.state.fill_gesture.as_ref().unwrap().seals.is_empty());invoke(&mut s,CommandId::Undo);s.frame(1_020_000_000,1_020_000_000).unwrap();}
             assert_eq!(s.engine.checkpoint(),checkpoint);
             assert!(s.state.fill_gesture.is_none());
             assert!(s.renderer_mut().fill_preview.is_none());assert!(s.renderer_mut().fill_reveal.is_none());
             assert!(s.renderer_mut().region_requests.is_empty());
         }
+    }
+}
+
+fn vector_gap_fill_session(platform:Platform,origins:&[[f64;2]],outer:bool)->(UiSession<Recorder>,OccurrenceHandle) {
+    let (mut s,target)=vector_session_on(platform);let mut paths=Vec::new();
+    for &[x,y] in origins {
+        for points in [[[x,y],[x+80.,y]],[[x+120.,y],[x+200.,y]],[[x+200.,y],[x+200.,y+200.]],[[x+200.,y+200.],[x,y+200.]],[[x,y+200.],[x,y]]] {
+            paths.push(straight(paths.len() as u64+1,&points,false));
+        }
+    }
+    if outer {paths.push(straight(paths.len() as u64+1,&[[20.,20.],[380.,20.],[380.,380.],[20.,380.]],true));}
+    put_paths(&mut s,target,paths);
+    s.layer_action(LayerAction::Tool {tool:LayerCanvasTool::Region {fill:true,source:crate::RegionSource::Editing}}).unwrap();
+    s.dispatch(UiAction::SetColor {rgba:[0.1,0.7,0.3,1.]}).unwrap();
+    (s,target)
+}
+
+#[test]
+fn vector_fill_press_previews_half_alpha_and_lift_commits_one_undo() {
+    use layer_core::authored::vector::PaintEntry;
+    for platform in Platform::ALL {
+        let (mut s,target)=vector_gap_fill_session(platform,&[[100.,100.]],false);
+        let before=s.engine.document().artwork.clone();let original=s.engine.document().scene().vector_layer(target).unwrap().clone();let checkpoint=s.engine.checkpoint();
+        pen_at(&mut s,10,PenPhase::Down,[200.,200.]);s.frame(100_000_000,100_000_000).unwrap();
+        let object=s.engine.document().scene().vector_layer(target).unwrap();assert_eq!(object.path_count(),original.path_count()+1);
+        let path=object.paths().find(|(_,path)|original.find(path.id).is_none()).unwrap().1;
+        let [PaintEntry::Fill(fill)]=&path.style.entries[..] else {panic!("fill-only preview")};
+        assert_eq!(fill.paint.rgb().unwrap().rgba[3],0.5);assert!(path.encloses([200.,200.],0.01));assert_eq!(s.engine.checkpoint(),checkpoint);
+        assert!(s.renderer_mut().region_requests.is_empty());assert!(s.renderer_mut().fill_preview.is_none());assert!(s.renderer_mut().fill_reveal.is_none());
+        pen_at(&mut s,11,PenPhase::Up,[200.,200.]);s.frame(110_000_000,110_000_000).unwrap();
+        let object=s.engine.document().scene().vector_layer(target).unwrap();assert_eq!(object.path_count(),original.path_count()+1);
+        let path=object.paths().find(|(_,path)|original.find(path.id).is_none()).unwrap().1;
+        let [PaintEntry::Fill(fill)]=&path.style.entries[..] else {panic!("committed fill")};assert_eq!(fill.paint.rgb().unwrap().rgba[3],1.);
+        assert_ne!(s.engine.checkpoint(),checkpoint);invoke(&mut s,CommandId::Undo);assert_eq!(s.engine.checkpoint(),checkpoint);assert_eq!(s.engine.document().artwork,before);
+    }
+}
+
+#[test]
+fn vector_fill_hold_uses_auto_48_and_slides_off_then_back_to_48() {
+    for platform in Platform::ALL {
+        let (mut s,target)=vector_gap_fill_session(platform,&[[100.,100.]],false);
+        let original=s.engine.document().scene().vector_layer(target).unwrap().clone();let checkpoint=s.engine.checkpoint();
+        pen_at(&mut s,10,PenPhase::Down,[200.,200.]);s.frame(100_000_000,100_000_000).unwrap();s.frame(700_000_000,700_000_000).unwrap();
+        let view=s.state.fill_gesture.as_ref().unwrap();let pill=view.pill.as_ref().unwrap();
+        assert_eq!(pill.value.as_ref(),NumericControl::whole_pixels(0.,64.).compact_text(48.));assert_eq!(s.region_tools.gap_reach,None);
+        let tip=view.tip;let off=pill.track[0];
+        let mut movement=event(&s,71,PenPhase::Move,1.);movement.surface_position=Point {x:off,y:tip[1]};s.pen(movement);s.frame(710_000_000,710_000_000).unwrap();
+        assert_eq!(s.region_tools.gap_reach,None);assert!(!s.region_tools.refinement.close_gaps);assert_eq!(s.engine.document().scene().vector_layer(target),Some(&original));assert_eq!(s.engine.checkpoint(),checkpoint);
+        movement=event(&s,72,PenPhase::Move,1.);movement.surface_position=Point {x:tip[0],y:tip[1]};s.pen(movement);s.frame(720_000_000,720_000_000).unwrap();
+        assert_eq!(s.region_tools.gap_reach,Some(48));assert!(s.region_tools.refinement.close_gaps);assert_eq!(s.engine.document().scene().vector_layer(target).unwrap().path_count(),original.path_count()+1);
+        movement=event(&s,73,PenPhase::Up,1.);movement.surface_position=Point {x:tip[0],y:tip[1]};s.pen(movement);s.frame(730_000_000,730_000_000).unwrap();
+        assert_eq!(s.editing_state().region_gap_reach,Some(48));assert_eq!(s.engine.document().scene().vector_layer(target).unwrap().path_count(),original.path_count()+1);
+        invoke(&mut s,CommandId::Undo);assert_eq!(s.engine.checkpoint(),checkpoint);assert_eq!(s.engine.document().scene().vector_layer(target),Some(&original));
+    }
+}
+
+#[test]
+fn vector_fill_cancel_escape_and_second_contact_restore_artwork_and_settled_values() {
+    for platform in Platform::ALL {for cancel in 0..3 {
+        let (mut s,_)=vector_gap_fill_session(platform,&[[100.,100.]],false);
+        let mut editing=s.editing_state();editing.region_gap_reach=Some(64);s.restore_editing(editing).unwrap();
+        let before=s.engine.document().artwork.clone();let checkpoint=s.engine.checkpoint();let saved=s.editing_state();
+        pen_at(&mut s,10,PenPhase::Down,[200.,200.]);s.frame(100_000_000,100_000_000).unwrap();s.frame(700_000_000,700_000_000).unwrap();
+        let view=s.state.fill_gesture.as_ref().unwrap();let off=view.pill.as_ref().unwrap().track[0];let y=view.tip[1];
+        let mut movement=event(&s,71,PenPhase::Move,1.);movement.surface_position=Point {x:off,y};s.pen(movement);s.frame(710_000_000,710_000_000).unwrap();
+        assert_eq!(s.region_tools.gap_reach,None);assert!(!s.region_tools.refinement.close_gaps);assert_eq!(s.editing_state(),saved);
+        match cancel {
+            0=>{movement=event(&s,72,PenPhase::Cancel,0.);movement.surface_position=Point {x:off,y};s.pen(movement);},
+            1=>{key(&mut s,"escape",true,false,false);key(&mut s,"escape",false,false,false);},
+            _=>{s.input(UiInput::Pointer {id:42,kind:PointerKind::Touch,button:PointerButton::Primary,position:[off,y],time_ns:720_000_000,phase:ContactPhase::Down}).unwrap();},
+        }
+        s.frame(730_000_000,730_000_000).unwrap();
+        assert_eq!(s.engine.document().artwork,before,"{platform:?} cancellation {cancel}");assert_eq!(s.engine.checkpoint(),checkpoint);assert_eq!(s.editing_state(),saved);
+        assert_eq!(s.region_tools.gap_reach,Some(64));assert!(s.region_tools.refinement.close_gaps);assert!(s.state.fill_gesture.is_none());assert!(s.renderer_mut().region_requests.is_empty());
+    }}
+}
+
+#[test]
+fn vector_fill_drag_crosses_three_gappy_faces_in_one_undo() {
+    for platform in Platform::ALL {
+        let (mut s,target)=vector_gap_fill_session(platform,&[[100.,100.],[400.,100.],[700.,100.]],false);
+        let original=s.engine.document().scene().vector_layer(target).unwrap().clone();let checkpoint=s.engine.checkpoint();
+        let points=[[200.,200.],[500.,200.],[800.,200.],[800.,200.]].map(|p|surface_at(&s,p));press(&mut s,10,&points);
+        let changed=s.engine.document().scene().vector_layer(target).unwrap();assert_eq!(changed.path_count(),original.path_count()+3);
+        for point in [[200.,200.],[500.,200.],[800.,200.]] {assert_eq!(changed.paths().filter(|(_,p)|original.find(p.id).is_none()&&p.encloses(point,0.01)).count(),1);}
+        for (_,path) in original.paths() {assert_eq!(changed.paths().find(|(_,p)|p.id==path.id).map(|(_,p)|p),Some(path));}
+        assert!(s.renderer_mut().region_requests.is_empty());invoke(&mut s,CommandId::Undo);assert_eq!(s.engine.checkpoint(),checkpoint);assert_eq!(s.engine.document().scene().vector_layer(target),Some(&original));
+    }
+}
+
+#[test]
+fn vector_fill_seal_amends_to_outer_face_or_preserves_an_unfillable_exclusion() {
+    for platform in Platform::ALL {for outer in [false,true] {
+        let (mut s,target)=vector_gap_fill_session(platform,&[[100.,100.]],outer);
+        if outer {let mut editing=s.editing_state();editing.region_gap_reach=Some(48);s.restore_editing(editing).unwrap();}
+        let original=s.engine.document().scene().vector_layer(target).unwrap().clone();let checkpoint=s.engine.checkpoint();
+        let p=surface_at(&s,[200.,200.]);press(&mut s,10,&[p,p]);
+        let filled=s.engine.document().scene().vector_layer(target).unwrap().clone();let first=s.engine.checkpoint();
+        let path=filled.paths().find(|(_,p)|original.find(p.id).is_none()).unwrap().1;let id=path.id;assert!(!path.encloses([30.,30.],0.01));
+        let seals=s.state.fill_gesture.as_ref().unwrap().seals.clone();assert!(!seals.is_empty());
+        if outer {invoke(&mut s,CommandId::SelectionReference);}
+        let [a,b]=seals[0];
+        let scale=s.logical_viewport.map_or(1.,|logical|s.state.camera.viewport[0] as f32/logical[0]);
+        let p=Point {x:(a[0]+b[0])*0.5*scale,y:(a[1]+b[1])*0.5*scale};press(&mut s,20,&[p,p]);
+        let changed=s.engine.document().scene().vector_layer(target).unwrap();assert_eq!(changed.path_count(),filled.path_count());
+        if outer {let amended=changed.paths().find(|(_,p)|p.id==id).unwrap().1;assert!(amended.encloses([30.,30.],0.01));assert_ne!(amended.geometry,filled.paths().find(|(_,p)|p.id==id).unwrap().1.geometry);}
+        else {assert_eq!(changed,&filled);assert_eq!(s.engine.checkpoint(),first);assert_eq!(s.state.fill_gesture.as_ref().unwrap().seals,seals);}
+        invoke(&mut s,CommandId::Undo);assert_eq!(s.engine.checkpoint(),checkpoint);assert_eq!(s.engine.document().scene().vector_layer(target),Some(&original));
+    }}
+}
+
+#[test]
+fn raster_reference_vector_fill_stays_tap_only() {
+    for platform in Platform::ALL {
+        let (mut s,target)=raster_reference_vector_target(platform);let original=s.engine.document().scene().vector_layer(target).unwrap().clone();
+        assert!(!s.uses_fill_gesture());pen_at(&mut s,10,PenPhase::Down,[200.,200.]);s.frame(100_000_000,100_000_000).unwrap();
+        assert!(s.state.fill_gesture.is_none());assert!(s.renderer_mut().region_requests.is_empty());assert_eq!(s.engine.document().scene().vector_layer(target),Some(&original));
+        pen_at(&mut s,11,PenPhase::Up,[200.,200.]);s.frame(110_000_000,110_000_000).unwrap();assert_eq!(s.renderer_mut().region_requests.len(),1);
+    }
+}
+
+#[test]
+#[ignore="workstation vector Fill preview and slot timing"]
+fn vector_fill_gesture_busy_page_timings() {
+    use layer_core::authored::vector::{FaceLine,Paint,PaintEntry,Stroke,Style,vector_face};
+    for (name,point,expected) in [("small",[50.,50.],true),("large",[1000.,1400.],true),("miss",[150.,150.],false)] {
+        let (mut s,target)=vector_session();
+        let doc=s.engine.document();let mut composition=doc.composition().clone();composition.size=[2000,2000];
+        let edit=layer_core::Edit::Composition(layer_core::authored::RecordChange::replace(&doc.artwork.compositions,doc.artwork.root,Some(composition)).unwrap());s.engine.apply_edit(edit).unwrap();
+        let mut paths=vec![straight(1,&[[0.,0.],[100.,0.],[100.,100.],[0.,100.]],true),straight(2,&[[200.,200.],[1800.,200.],[1800.,1800.],[200.,1800.]],true)];
+        paths.extend((0..2000).map(|i|{let x=300.+f64::from(i%50)*20.;let y=300.+f64::from(i/50)*20.;straight(i as u64+3,&[[x,y],[x+10.,y+10.]],false)}));
+        for path in &mut paths {path.style=Arc::new(Style::new(vec![PaintEntry::Stroke(Stroke::new(Paint::color(layer_core::color::RgbColor::BLACK),2.))]));}
+        put_paths(&mut s,target,paths.clone());invoke(&mut s,CommandId::FitCanvas);
+        s.layer_action(LayerAction::Tool {tool:LayerCanvasTool::Region {fill:true,source:crate::RegionSource::Editing}}).unwrap();
+        let lines=paths.iter().map(|path|FaceLine {path,offset:[0.;2]}).collect::<Vec<_>>();
+        let checkpoint=s.engine.checkpoint();let start=std::time::Instant::now();
+        pen_at(&mut s,10,PenPhase::Down,point.map(|n|n as f32));s.frame(100_000_000,100_000_000).unwrap();let micros=start.elapsed().as_micros();
+        assert_eq!(s.engine.document().scene().vector_layer(target).unwrap().path_count(),2002+usize::from(expected));assert_eq!(s.engine.checkpoint(),checkpoint);
+        eprintln!("vector_fill_gesture_busy_page {name} press_preview_us={micros} path_count=2002");
+        pen_at(&mut s,11,PenPhase::Cancel,point.map(|n|n as f32));s.frame(110_000_000,110_000_000).unwrap();
+        for reach in [0,16,32,48,64] {
+            let start=std::time::Instant::now();let face=vector_face(&lines,point,Some(reach),&[]);let micros=start.elapsed().as_micros();
+            assert_eq!(face.is_some(),expected);eprintln!("vector_fill_gesture_busy_page {name} slot={reach} elapsed_us={micros}");
+        }
+    }
+}
+
+#[test]
+fn vector_fill_far_from_a_completed_seal_adds_an_independent_undo() {
+    for platform in Platform::ALL {
+        let (mut s,target)=vector_gap_fill_session(platform,&[[100.,100.],[400.,100.]],false);
+        let original=s.engine.document().scene().vector_layer(target).unwrap().clone();let checkpoint=s.engine.checkpoint();
+        let p=surface_at(&s,[200.,200.]);press(&mut s,10,&[p,p]);
+        let first=s.engine.document().scene().vector_layer(target).unwrap().clone();let first_checkpoint=s.engine.checkpoint();
+        let first_fill=first.paths().find(|(_,p)|original.find(p.id).is_none()).unwrap().1.clone();assert!(!s.state.fill_gesture.as_ref().unwrap().seals.is_empty());
+        let p=surface_at(&s,[500.,200.]);press(&mut s,20,&[p,p]);
+        let second=s.engine.document().scene().vector_layer(target).unwrap();assert_eq!(second.path_count(),original.path_count()+2);
+        assert_eq!(second.paths().find(|(_,p)|p.id==first_fill.id).unwrap().1,&first_fill);
+        assert!(second.paths().any(|(_,p)|first.find(p.id).is_none()&&p.encloses([500.,200.],0.01)));assert_ne!(s.engine.checkpoint(),first_checkpoint);
+        invoke(&mut s,CommandId::Undo);s.frame(300_000_000,300_000_000).unwrap();assert_eq!(s.engine.checkpoint(),first_checkpoint);assert_eq!(s.engine.document().scene().vector_layer(target),Some(&first));
+        invoke(&mut s,CommandId::Undo);s.frame(400_000_000,400_000_000).unwrap();assert_eq!(s.engine.checkpoint(),checkpoint);assert_eq!(s.engine.document().scene().vector_layer(target),Some(&original));
     }
 }

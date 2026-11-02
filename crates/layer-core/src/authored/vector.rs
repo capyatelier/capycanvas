@@ -12,7 +12,7 @@ mod ops_tests;
 mod points;
 mod trace;
 pub use erase::{EraseMode, Eraser};
-pub use faces::{FaceLine, VectorFace, vector_face, vector_faces};
+pub use faces::{FaceLine, SealId, VectorFace, vector_face, vector_faces};
 pub use points::{AnchorRef, SegmentHit};
 pub use index::VectorIndex;
 pub use trace::ContourTrace;

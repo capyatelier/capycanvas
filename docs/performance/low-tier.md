@@ -2834,6 +2834,28 @@ control fixture are in `artifacts/fill-tools/m7d-native/`; workstation rows
 are in `artifacts/fill-tools/m7d-workstation-main-busy.json` and
 `artifacts/fill-tools/m7d-core-results.json`.
 
+M9 on `2632b14bf` plus the milestone changes, 2026-11-02, retains the same
+2,002-path geometry. Workstation release core ABBA means, main → M9: Off small
+0.111 → 0.121 ms, Off large 1.340 → 1.363 ms, Auto small 0.025 → 0.025 ms,
+Auto large 6.872 → 6.356 ms, Auto miss 13.869 → 13.667 ms. The miss remains
+above the earlier 8 ms workstation budget. Two fresh calls per variant are
+diagnostic; they do not qualify tablet motion.
+
+The shared UI release test measures CPU press through first-frame preview
+publication, excluding GPU presentation. Fixed slots are separate core calls.
+
+| Case | Preview publication, ms | Off / 16 / 32 / 48 / 64 px slot, ms |
+| --- | --- | --- |
+| Small face | 0.693 | 0.033 / 0.025 / 0.022 / 0.021 / 0.020 |
+| Large face | 8.382 | 0.964 / 5.813 / 22.071 / 23.737 / 26.789 |
+| Miss | 16.052 | 1.022 / 6.068 / 21.341 / 22.384 / 26.073 |
+
+The matched main diagnostic also spends 18.9–25.0 ms on fixed 32–64 px
+searches in the hatch mesh. M9 computes one missing slot per frame, so these
+costs remain an open motion risk. TCL gesture qualification joins the final
+matrix. Raw measurements and hashes are in `artifacts/m9-picker-results/`
+and `artifacts/fill-tools/m9-vector-ui-results.json`.
+
 ## Vector mask tracing
 
 M7b on `63619fd8f` plus the milestone changes, 2026-11-02. The native release

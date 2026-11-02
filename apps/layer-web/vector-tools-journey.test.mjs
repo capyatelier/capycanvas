@@ -76,8 +76,17 @@ export async function checkVectorTools({call,evaluate,settle}) {
 }
 
 export async function checkVectorFill({call,evaluate,settle}) {
-  const {send,invoke,tool,state,until,idle,line,draw,color,park,capture,brush,activeVector}=await vectorHarness({call,evaluate,settle},{directory:'artifacts/vector-fill/web'});
+  const {send,invoke,tool,state,until,idle,line,draw,color,park,capture,brush,activeVector,screen,mouseEvent}=await vectorHarness({call,evaluate,settle},{directory:'artifacts/vector-fill/web'});
   const save=placementSave({evaluate,invoke,idle});
+  const gesture=()=>evaluate('JSON.parse(JSON.stringify(layerApp.app.color_preview().fill_gesture,(_,value)=>typeof value==="bigint"?String(value):value))');
+  const pointer=(type,point)=>mouseEvent(type,point,'pen',{buttons:type==='mouseReleased'?0:1});
+  const presented=async()=>{await evaluate('layerApp.app.wait_for_canvas()');await settle();};
+  const shownSeal=async()=>{
+    const view=await gesture();assert.ok(view.seals.length>0,'Committed vector fill shows its actual seals');
+    const [a,b]=view.seals[0],origin=await evaluate('(()=>{const r=layerApp.canvas.getBoundingClientRect();return{x:r.x,y:r.y}})()');
+    return {x:origin.x+(a[0]+b[0])/2,y:origin.y+(a[1]+b[1])/2};
+  };
+
   await evaluate(`window.vectorFillSave=window.showSaveFilePicker;window.placementTest={};window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){return{async write(value){placementTest.saved=new Uint8Array(value instanceof Blob?await value.arrayBuffer():value)},async close(){},async abort(){}}}})`);
   try {
     for(const theme of ['light','dark']){
@@ -116,9 +125,23 @@ export async function checkVectorFill({call,evaluate,settle}) {
       for(const [from,to]of [[[100,100],[160,100]],[[200,100],[260,100]],[[260,100],[260,260]],[[260,260],[100,260]],[[100,260],[100,100]]]){await draw('pen',line(from,to));await idle();}
       const gapLabel=await state('s.layers.find(layer=>layer.editing).label'),gapLayers=await state('s.layers.map(layer=>Number(layer.id))'),gapBefore=await save();
       const gapId=packageOccurrences(gapBefore).find(occurrence=>occurrence.data.name===gapLabel).data.content.object.ref,gapVector=manifest=>packageObject(manifest,gapId),gapNext=BigInt(gapVector(gapBefore).data.next_item);
-      await tool({region:{fill:true,source:'editing'}});await invoke('fill_connected');await invoke('close_gaps_auto');await send({type:'set_color',rgba:[.1,.75,.2,1]});await draw('pen',[[180,180]]);await until('Auto vector fill published','layerApp.app.document_park_ready()');
+      await tool({region:{fill:true,source:'editing'}});await invoke('fill_connected');await invoke('close_gaps_auto');await send({type:'set_color',rgba:[.1,.75,.2,1]});
+      const press=await screen([180,180]),unfilled=await color([190,190],true),origin=await evaluate('layerApp.canvas.getBoundingClientRect().x'),gapCaption=await state('s.tool_extra.find(o=>o.Choice?.id==="close-gaps").Choice.label');
+      await pointer('mousePressed',press);await presented();
+      assert.ok(!(await gesture()).pill,'The press preview precedes the held control');const preview=await color([190,190],true);assert.ok(preview[1]>preview[0]+20&&preview[1]>preview[2]+20&&preview[0]>100,`${theme}: half-alpha vector face is visible before lift: ${preview}`);await capture(`vector-fill-${theme}-press-preview`);
+      await until('vector Close gaps hold','!!layerApp.app.color_preview().fill_gesture?.pill');
+      const held=await gesture();assert.equal(held.pill.label,gapCaption);assert.equal(parseFloat(held.pill.value),48);assert.ok(await evaluate('document.querySelector(".fill-gesture-pill").checkVisibility()'));
+      let release;
+      for(const [slot,reach] of [[0,0],[3,48]]) {
+        release={x:origin+held.pill.track[0]+(held.pill.track[1]-held.pill.track[0])*slot/4,y:press.y};await pointer('mouseMoved',release);await settle();
+        await until(`vector gap ${reach}`,reach===0?'layerApp.app.color_preview().fill_gesture?.pill?.value===s.commands.find(c=>c.id==="close_gaps_off").label':'parseFloat(layerApp.app.color_preview().fill_gesture?.pill?.value)===48');await presented();
+        const pixel=await color([190,190],true);if(reach===0)assert.deepEqual(pixel,unfilled,'Off removes the held face preview');else assert.ok(pixel[1]>pixel[0]+20&&pixel[1]>pixel[2]+20,'48 restores the held face preview');
+        await capture(`vector-fill-${theme}-hold-${reach}`);
+      }
+      await pointer('mouseReleased',release);await settle();await until('Auto vector fill published','layerApp.app.document_park_ready()');
       const gapFilled=await save();assert.equal(BigInt(gapVector(gapFilled).data.next_item),gapNext+1n,'Auto closes the 40px vector gap with one fill path');assert.deepEqual(await state('s.layers.map(layer=>Number(layer.id))'),gapLayers);assert.deepEqual(rasterIdentity(gapFilled),rasterIdentity(gapBefore));
       await park();await settle();const gapGreen=await color([180,180],true);assert.ok(gapGreen[1]>gapGreen[0]+60&&gapGreen[1]>gapGreen[2]+60,`${theme}: Auto fills the gappy face ${gapGreen}`);await capture(`vector-fill-${theme}-auto-gap`);
+      const noFaceSeal=await shownSeal();await pointer('mousePressed',noFaceSeal);await pointer('mouseReleased',noFaceSeal);await settle();await idle();assert.deepEqual(authoredIdentity(await save()),authoredIdentity(gapFilled),'Removing the only seal without a fallback face leaves the fill unchanged');
       await invoke('undo');await idle();assert.deepEqual(authoredIdentity(await save()),authoredIdentity(gapBefore),'One Undo removes the Auto fill');await invoke('redo');await idle();assert.deepEqual(authoredIdentity(await save()),authoredIdentity(gapFilled));
       await tool({figure:{shape:'rectangle',paint:'fill'}});await send({type:'set_color',rgba:[.1,.75,.2,1]});
       for(const [from,to]of [[[330,100],[430,210]],[[100,330],[230,430]]]){await draw('pen',line(from,to));await idle();}
@@ -128,7 +151,16 @@ export async function checkVectorFill({call,evaluate,settle}) {
       const everywhereAfter=await save();assert.equal(gapVector(everywhereAfter).data.next_item,everywhereNext,'Everywhere recolours existing paths');assert.deepEqual(await state('s.layers.map(layer=>Number(layer.id))'),gapLayers);assert.deepEqual(rasterIdentity(everywhereAfter),rasterIdentity(everywhereBefore));await park();await settle();
       for(const point of samePaintPoints){const value=await color(point,true);assert.ok(value[0]>value[1]+60&&value[0]>value[2]+60,`${theme}: Everywhere recolours same paint at ${point}: ${value}`);}assert.deepEqual(await color([395,360],true),different,'Everywhere preserves different paint');await capture(`vector-fill-${theme}-everywhere-after`);
       await invoke('undo');await idle();assert.deepEqual(authoredIdentity(await save()),authoredIdentity(everywhereBefore),'One Undo restores all three same-paint regions');await capture(`vector-fill-${theme}-everywhere-undo`);await invoke('fill_connected');
-      console.log(`PASS ${theme}: vector baseline, Enclose/trace, Auto gap, Everywhere three same paints and exact Undo without raster/layer edits`);
+      for(let i=0;i<4;i++){await invoke('undo');await idle();}assert.deepEqual(authoredIdentity(await save()),authoredIdentity(gapBefore));
+      await send({type:'select_brush',id:await brush('G-Pen')});await send({type:'set_color',rgba:[0,0,0,1]});
+      for(const [from,to]of [[[70,70],[290,70]],[[290,70],[290,290]],[[290,290],[70,290]],[[70,290],[70,70]]]){await draw('pen',line(from,to));await idle();}
+      const framed=await save(),fallbackBefore=await color([85,180],true);await tool({region:{fill:true,source:'editing'}});assert.equal(parseFloat(await state('s.tool_extra.find(o=>o.Choice?.id==="close-gaps").Choice.items[0].label')),48,'The framed fill retains the settled 48px reach');await send({type:'set_color',rgba:[.1,.75,.2,1]});await draw('pen',[[180,180]]);await until('framed vector fill published','layerApp.app.document_park_ready()');
+      const sealed=await save();assert.deepEqual(await color([85,180],true),fallbackBefore,'The initial face stays inside the gappy contour');
+      const seal=await shownSeal();await pointer('mousePressed',seal);await pointer('mouseReleased',seal);await settle();await until('vector seal amendment published','layerApp.app.document_park_ready()');
+      const amended=await save();assert.equal(gapVector(amended).data.next_item,gapVector(sealed).data.next_item,'Seal removal reuses the filled path');assert.deepEqual(await state('s.layers.map(layer=>Number(layer.id))'),gapLayers);assert.deepEqual(rasterIdentity(amended),rasterIdentity(framed));
+      await park();await settle();const fallback=await color([85,180],true);assert.ok(fallback[1]>fallback[0]+60&&fallback[1]>fallback[2]+60,'Removing the shown seal refills the outer closed face');await capture(`vector-fill-${theme}-seal-amended`);
+      await invoke('undo');await idle();assert.deepEqual(authoredIdentity(await save()),authoredIdentity(framed),'One Undo removes the original fill and its seal amendment');await invoke('redo');await idle();assert.deepEqual(authoredIdentity(await save()),authoredIdentity(amended),'Redo restores the amended face');
+      console.log(`PASS ${theme}: vector baseline, Enclose/trace, 40px preview/hold/lift, shown-seal amendment, Everywhere and exact Undo without raster/layer edits`);
     }
   } finally {await evaluate('window.showSaveFilePicker=window.vectorFillSave;delete window.vectorFillSave;delete window.placementTest');}
 }

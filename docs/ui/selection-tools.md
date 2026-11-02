@@ -69,8 +69,8 @@ Fill, Lasso fill, Enclose and Fill, Fill Selection and Gradient share Texture
 strength, from 0–200%, starting at 100%. They use the nearest Paper at or below
 the target when the fill starts; 0% or No paper gives a flat fill.
 
-Pen and mouse presses preview Fill as soon as its mask is ready. A short radial
-reveal follows the press; reduced motion skips it. Moving immediately fills
+On paint layers, pen and mouse presses preview Fill as soon as its mask is ready.
+A short radial reveal follows the press; reduced motion skips it. Moving immediately fills
 every crossed region in one undo step. Holding still opens a panel slider for
 Close gaps on line-bounded regions, or Tolerance on colour-bounded regions.
 Close gaps swaps five exact masks from the press request: Off, 16, 32, 48 and
@@ -78,6 +78,10 @@ Close gaps swaps five exact masks from the press request: Off, 16, 32, 48 and
 Release commits once and remembers the value; cancellation restores the option.
 Finger presses compute speculatively and commit only on lift within the native
 slop. A second contact cancels; touch-and-hold remains colour picking.
+
+On vector layers with vector line sources, presses show a half-opacity face
+preview without a reveal. The same hold slider and drag-through gesture apply.
+Recolouring existing vector fills and filling from raster lines use taps.
 
 Dashed seals remain visible after Fill. Pressing a seal within 6 logical pixels
 removes it and refills in the same undo step. Presses outside that radius fill

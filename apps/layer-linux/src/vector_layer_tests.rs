@@ -149,6 +149,10 @@ pub(super) fn capture(d: &Driver, name: &str) {
     pump(120);
     crate::snapshot(&d.w).save_to_png(d.input.dir.join(name)).unwrap();
 }
+fn gesture_point(d:&Driver,point:[f32;2])->[f32;2] {
+    let point=d.w.area.compute_point(&d.w.window,&gtk::graphene::Point::new(point[0],point[1])).unwrap();
+    [point.x(),point.y()]
+}
 pub(super) fn inked(pixel: [u8; 4]) -> bool { pixel[..3].iter().all(|v| *v < 100) }
 pub(super) fn marked(pixel: [u8; 4]) -> bool { pixel[..3].iter().map(|v| u16::from(*v)).sum::<u16>() < 600 }
 fn greenish(pixel: [u8; 4]) -> bool { i16::from(pixel[1]) - i16::from(pixel[0]).max(i16::from(pixel[2])) > 40 }
@@ -310,9 +314,36 @@ fn native_vector_gap_fill_and_everywhere() {
         d.w.dispatch(UiAction::SetColor {rgba:[0.15,0.7,0.25,1.]});
         tool(&d,LayerCanvasTool::Region {fill:true,source:layer_ui::RegionSource::Editing});
         d.w.dispatch(UiAction::Invoke {command:CommandId::FillConnected});
+        d.w.dispatch(UiAction::Invoke {command:CommandId::CloseGapsAuto});
         assert!(ui_session(&d.w).command(CommandId::CloseGapsAuto).selected,"vector Fill starts with Auto closing");
-        pen_points(&mut d,&[[650.,600.],[650.,600.]]);
-        let filled=until_paths(&d,"Auto fills the gappy vector face",|paths|paths.len()==2);
+        let checkpoint=ui_session(&d.w).engine().checkpoint();let at=canvas_point(&d,[650.,600.]);
+        d.input.perform(serde_json::json!([{"pen":"move","point":at},{"pen":"down","point":at}]));
+        until_paths(&d,"press previews the gappy vector face",|paths|paths.len()==2);
+        assert_eq!(ui_session(&d.w).engine().checkpoint(),checkpoint,"press preview creates no history");
+        wait_for("vector hold publishes Close gaps",||state(&d.w).fill_gesture.is_some_and(|view|view.pill.is_some()));
+        let held=state(&d.w).fill_gesture.unwrap();let pill=held.pill.as_ref().unwrap();
+        assert_eq!(pill.label.as_ref(),"Close gaps");assert_eq!(pill.value.as_ref(),"48 px");
+        capture(&d,&format!("vector-gap-held-48-{theme:?}.png"));
+        let off=gesture_point(&d,[pill.track[0],held.tip[1]]);
+        d.input.perform(serde_json::json!([{"pen":"move","point":off}]));
+        until_paths(&d,"Off previews no face through the open gap",|paths|paths==original.as_slice());
+        assert_eq!(state(&d.w).fill_gesture.unwrap().pill.unwrap().value.as_ref(),"Off");
+        assert_eq!(ui_session(&d.w).engine().checkpoint(),checkpoint);
+        capture(&d,&format!("vector-gap-held-off-{theme:?}.png"));
+        let forty_eight=gesture_point(&d,held.tip);
+        d.input.perform(serde_json::json!([{"pen":"move","point":forty_eight}]));
+        until_paths(&d,"48 previews the inner face again",|paths|paths.len()==2);
+        assert_eq!(state(&d.w).fill_gesture.unwrap().pill.unwrap().value.as_ref(),"48 px");
+        d.input.perform(serde_json::json!([{"pen":"up"},{"pen":"leave"}]));
+        wait_for("lift commits one vector fill edit",||ui_session(&d.w).engine().checkpoint()!=checkpoint);
+        let filled=until_paths(&d,"lift commits the gappy vector face",|paths|paths.len()==2);
+        assert!(state(&d.w).tool_extra.iter().any(|option|matches!(option,layer_ui::ToolOption::Choice {id:"close-gaps",items,..} if items.iter().any(|item|item.selected && item.label.as_ref()=="48 px"))),"lift settles the48pxslot");
+        let seals=state(&d.w).fill_gesture.unwrap().seals;assert!(!seals.is_empty());
+        let [a,b]=seals[0];let seal=gesture_point(&d,[(a[0]+b[0])*0.5,(a[1]+b[1])*0.5]);
+        let sealed_checkpoint=ui_session(&d.w).engine().checkpoint();
+        d.input.perform(serde_json::json!([{"pen":"move","point":seal},{"pen":"down","point":seal},{"pen":"up"},{"pen":"leave"}]));
+        pump(200);assert_eq!(paths(&d),filled,"removing the only seal without a fallback face changes nothing");
+        assert_eq!(ui_session(&d.w).engine().checkpoint(),sealed_checkpoint);
         assert_eq!(filled.iter().find(|path|path.id==original[0].id),Some(&original[0]));
         assert!(filled.iter().any(|path|path.style.strokes().next().is_none()&&path.encloses([650.,600.],0.05)));
         assert_eq!(ui_session(&d.w).engine().document().working.occurrence,Some(target));
@@ -322,6 +353,25 @@ fn native_vector_gap_fill_and_everywhere() {
         d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});until_paths(&d,"Undo removes only the sealed face",|paths|paths==original.as_slice());
         d.w.dispatch(UiAction::Invoke {command:CommandId::Redo});until_paths(&d,"Redo restores the sealed vector face",|paths|paths==filled.as_slice());
         d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});until_paths(&d,"the gappy stroke remains exact",|paths|paths==original.as_slice());
+        d.w.dispatch(UiAction::SetColor {rgba:[0.,0.,0.,1.]});
+        tool(&d,LayerCanvasTool::Figure {shape:layer_core::FigureShape::Rectangle,paint:layer_core::FigurePaint::Outline});
+        pen_points(&mut d,&[[340.,340.],[960.,860.]]);
+        let framed=until_paths(&d,"the gappy shape has a closed outer frame",|paths|paths.len()==2);
+        d.w.dispatch(UiAction::SetColor {rgba:[0.15,0.7,0.25,1.]});
+        tool(&d,LayerCanvasTool::Region {fill:true,source:layer_ui::RegionSource::Editing});
+        let before_inner=ui_session(&d.w).engine().checkpoint();
+        pen_points(&mut d,&[[650.,600.],[650.,600.]]);
+        wait_for("inner face lift commits",||ui_session(&d.w).engine().checkpoint()!=before_inner);
+        let inner=until_paths(&d,"the inner face fills inside its frame",|paths|paths.len()==3);
+        let fill_id=inner.iter().find(|path|path.style.strokes().next().is_none()).unwrap().id;
+        let seals=state(&d.w).fill_gesture.unwrap().seals;assert!(!seals.is_empty());
+        let [a,b]=seals[0];let seal=gesture_point(&d,[(a[0]+b[0])*0.5,(a[1]+b[1])*0.5]);
+        d.input.perform(serde_json::json!([{"pen":"move","point":seal},{"pen":"down","point":seal},{"pen":"up"},{"pen":"leave"}]));
+        let amended=until_paths(&d,"seal removal refills the outer face",|paths|paths.len()==3&&paths.iter().any(|path|path.id==fill_id&&path.encloses([360.,600.],0.05)));
+        capture(&d,&format!("vector-gap-seal-removed-{theme:?}.png"));
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});until_paths(&d,"one Undo removes the amended fill",|paths|paths==framed.as_slice());
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Redo});until_paths(&d,"Redo restores the amended outer face",|paths|paths==amended.as_slice());
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});until_paths(&d,"both outlines remain unchanged",|paths|paths==framed.as_slice());
         add_vector_layer(&mut d);
         for index in 0..4 {
             d.w.dispatch(UiAction::SetColor {rgba:if index==3 {[0.1,0.2,0.9,1.]}else{[0.15,0.7,0.25,1.]}});
@@ -349,7 +399,7 @@ fn native_vector_gap_fill_and_everywhere() {
         d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});until_paths(&d,"one Undo restores all three original fills",|paths|paths==original.as_slice());
         d.w.dispatch(UiAction::Invoke {command:CommandId::Redo});until_paths(&d,"one Redo restores the Everywhere edit",|paths|paths==recoloured.as_slice());
         d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});until_paths(&d,"all original vector regions remain exact",|paths|paths==original.as_slice());
-        eprintln!("PASS {theme:?}: Auto seals a 40 px vector gap; Everywhere recolours three matching fills and preserves the fourth; exact one-edit Undo/Redo");
+        eprintln!("PASS {theme:?}: 40 px vector gap press/hold Off/48, seal exclusion with and without fallback, Everywhere recolours three matching fills; exact one-edit Undo/Redo");
     }
     d.finish();
 }

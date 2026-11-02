@@ -1900,6 +1900,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let selection = self.selection_tools.cancel();
         let region = self.region_tools.cancellable();
         self.region_tools.cancel();
+        self.restore_fill_cancel();
         self.layer_interaction.fill_texture = None;
         if self.layer_interaction.path.is_empty() {
             return Ok(tonal || selection || region || transform || effect || sdr);
