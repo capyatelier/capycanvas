@@ -62,6 +62,12 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           test "$GITHUB_REF_NAME" = "v$VERSION"
+          for crate in layer-workspace layer-core layer-ui layer-host; do
+            if [ ! -d "crates/$crate/tests/compat/$VERSION" ] || [ ! -d "crates/$crate/tests/compat/expected/$VERSION" ]; then
+              echo "::error::Generate the saved-data fixtures for $VERSION before tagging (docs/development/releasing.md#saved-data-fixtures)."
+              exit 1
+            fi
+          done
           status=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" -q .status)
           test "$status" = identical || test "$status" = behind
 

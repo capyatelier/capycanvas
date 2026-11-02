@@ -151,7 +151,9 @@ code and never edited or resaved. Expectations live separately under
 `tests/compat/expected/<release>/`; `CAPY_BLESS=1` rewrites only expectations.
 Review the first expectation against the source input field by field, including
 references and resource bytes, before accepting it. Later expectation diffs get
-the same review as code. The [push guard](../COMMIT_GUIDE.md#hooks-and-attribution)
+the same review as code. Commit reviewed expectations with the
+[compatibility explanation](../COMMIT_GUIDE.md#commit-messages).
+The [push guard](../COMMIT_GUIDE.md#hooks-and-attribution)
 enforces immutable inputs; the [release procedure](releasing.md#saved-data-fixtures)
 adds new ones. Never freeze old Rust types or change an input to hide a regression.
 

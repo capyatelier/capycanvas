@@ -125,12 +125,12 @@ class CommitHooksTest(unittest.TestCase):
         self.assert_rejected(self.git("push", "--force", "origin", "topic", ok=False))
         self.git("push", "origin", ":refs/heads/topic")
 
-    def commit_file(self, path, text):
+    def commit_file(self, path, text, message="Write fixture"):
         target = self.repo / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text)
         self.git("add", path)
-        self.git("commit", "-m", "Write fixture")
+        self.git("commit", "-m", message)
 
     def released_input(self):
         path = "crates/layer-ui/tests/compat/1.0.15/settings.json"
@@ -142,14 +142,74 @@ class CommitHooksTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("released compatibility inputs", result.stderr)
 
+    def assert_expectation_rejected(self, result, commit):
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            'error: expected compatibility values changed without a "Compatibility:" '
+            'line saying which values changed and why no released value was lost '
+            f'({commit}).', result.stderr,
+        )
+
     def test_release_inputs_allow_additions_and_reviewed_expectations(self):
         self.released_input()
         expected = "crates/layer-ui/tests/compat/expected/1.0.15/settings.json"
         for value in ["first expectation", "reviewed expectation"]:
-            self.commit_file(expected, value)
+            self.commit_file(expected, value, "Write fixture\n\nCompatibility: Review saved settings values")
             self.git("push", "origin", "main")
         self.commit_file("crates/layer-core/tests/compat/1.0.16/artwork.capy", "next release")
         self.git("push", "origin", "main")
+
+    def test_expected_additions_and_edits_require_compatibility_line(self):
+        expected = "crates/layer-ui/tests/compat/expected/1.0.15/settings.json"
+        guard = self.repo / ".git/hooks/check-commit-messages.sh"
+        for value in ["first expectation", "reviewed expectation"]:
+            with self.subTest(value=value):
+                base = self.git("rev-parse", "HEAD").stdout.strip()
+                self.commit_file(expected, value)
+                commit = self.git("rev-parse", "HEAD").stdout.strip()
+                self.assert_expectation_rejected(self.git("push", "origin", "main", ok=False), commit)
+                self.assert_expectation_rejected(self.run_command(
+                    ["sh", str(guard), "release-inputs", base, "HEAD"], cwd=self.repo, ok=False,
+                ), commit)
+                self.git("commit", "--amend", "-m", "Write fixture\n\nCompatibility: Review saved settings values")
+                self.run_command(["sh", str(guard), "release-inputs", base, "HEAD"], cwd=self.repo)
+                self.git("push", "origin", "main")
+
+    def test_commits_without_expected_changes_need_no_compatibility_line(self):
+        base = self.git("rev-parse", "HEAD").stdout.strip()
+        self.commit_file("docs/example.md", "Documentation")
+        guard = self.repo / ".git/hooks/check-commit-messages.sh"
+        self.run_command(["sh", str(guard), "release-inputs", base, "HEAD"], cwd=self.repo)
+        self.git("push", "origin", "main")
+
+    def test_expected_compatibility_line_checks_merges_and_ancestors(self):
+        base = self.git("rev-parse", "HEAD").stdout.strip()
+        expected = "crates/layer-ui/tests/compat/expected/1.0.15/settings.json"
+        guard = self.repo / ".git/hooks/check-commit-messages.sh"
+        message = "Review fixture\n\nCompatibility: Retain saved settings values"
+        self.git("checkout", "-b", "reviewed")
+        self.commit_file(expected, "reviewed expectation", message)
+        self.git("checkout", "main")
+        self.git("merge", "--no-ff", "reviewed", "-m", "Merge reviewed fixture")
+        merge = self.git("rev-parse", "HEAD").stdout.strip()
+        self.assert_expectation_rejected(self.git("push", "origin", "main", ok=False), merge)
+        self.assert_expectation_rejected(self.run_command(
+            ["sh", str(guard), "release-inputs", base, "HEAD"], cwd=self.repo, ok=False,
+        ), merge)
+        self.git("commit", "--amend", "-m", message)
+        self.run_command(["sh", str(guard), "release-inputs", base, "HEAD"], cwd=self.repo)
+        self.git("push", "origin", "main")
+        base = self.git("rev-parse", "HEAD").stdout.strip()
+        self.git("checkout", "-b", "unreviewed")
+        self.commit_file(expected, "unreviewed expectation")
+        bad = self.git("rev-parse", "HEAD").stdout.strip()
+        self.commit_file(expected, "reviewed expectation", message)
+        self.git("checkout", "main")
+        self.git("merge", "--no-ff", "unreviewed", "-m", message)
+        self.assert_expectation_rejected(self.git("push", "origin", "main", ok=False), bad)
+        self.assert_expectation_rejected(self.run_command(
+            ["sh", str(guard), "release-inputs", base, "HEAD"], cwd=self.repo, ok=False,
+        ), bad)
 
     def test_release_input_edits_deletions_and_renames_are_rejected(self):
         path, base = self.released_input()

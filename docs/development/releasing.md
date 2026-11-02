@@ -386,7 +386,8 @@ sample depths; app-rendered previews; session history and UI membership; paper
 and profile content/indexes; and exported workspace, toolbar and keymap files.
 Keep unsupported files byte for byte. Follow the
 [expectation review](testing.md#saved-data-compatibility), rerun without
-`CAPY_BLESS`, and commit new inputs and reviewed expectations with the version.
+`CAPY_BLESS`, and commit new inputs and reviewed expectations with the version and
+the [compatibility explanation](../COMMIT_GUIDE.md#commit-messages).
 Exercise upgrading and reopening private release stores on the affected hosts;
 do not replace an old input with the new writer's output.
 

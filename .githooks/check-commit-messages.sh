@@ -42,6 +42,15 @@ check_release_inputs() {
             printf '%s\n' "$changed" >&2
             return 1
         fi
+        changed=$(git diff-tree --root -m -r --no-commit-id --name-only --no-renames \
+            --diff-filter=AMDT "$commit" -- ':(glob)crates/*/tests/compat/expected/**') || return 1
+        if [ -n "$changed" ]; then
+            message=$(git log -1 --format=%B "$commit") || return 1
+            if ! printf '%s\n' "$message" | grep -Eq '^Compatibility: .+'; then
+                echo "error: expected compatibility values changed without a \"Compatibility:\" line saying which values changed and why no released value was lost ($commit)." >&2
+                return 1
+            fi
+        fi
     done
 }
 

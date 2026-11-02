@@ -35,6 +35,8 @@ Delete superseded code in the same change. Refactors should not add lines.
   trailing period, and says what changes for the user or the code, for example
   "Keep drag release frames free of allocation".
 - The body explains what changed and why, in prose or bullets.
+- Changes under `crates/*/tests/compat/expected/` require a `Compatibility: ...`
+  line naming the changed values and why no released value was lost.
 - End with the evidence: a `Tests:` line naming the suites run, for performance
   changes `Measured on <device> at <commit>: before -> after`, and the net line
   count for production, tests and tools, and docs. Explain any growth.
