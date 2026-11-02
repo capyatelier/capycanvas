@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[string]$DebuggerPath,[switch]$RecoverGpu,[switch]$FailGpu,[ValidateSet('full','new-drawing','new-drawing-problem','paper-color','gpu-recovery','gpu-unavailable','color-workflows','color-workflows-light','native-writeback','native-writeback-light','retention')][string]$Journey='full')
+﻿param([Parameter(Mandatory)][string]$Executable,[string]$DebuggerPath,[switch]$RecoverGpu,[switch]$FailGpu,[ValidateSet('full','new-drawing','new-drawing-problem','paper-color','gpu-recovery','gpu-unavailable','color-workflows','color-workflows-light','native-writeback','native-writeback-light','retention','transition')][string]$Journey='full')
 $gpuRecovery=$Journey -eq 'gpu-recovery'
 $gpuUnavailable=$Journey -eq 'gpu-unavailable'
 $focusedGpu=$gpuRecovery -or $gpuUnavailable
@@ -10,6 +10,7 @@ $ErrorActionPreference='Stop'
 $focusedColor=$Journey.StartsWith('color-workflows')
 $nativeWriteback=$Journey.StartsWith('native-writeback')
 $retention=$Journey -eq 'retention'
+$transition=$Journey -eq 'transition'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 Add-Type -Path (Join-Path $PSScriptRoot 'PackageFixture.cs') -ReferencedAssemblies @(
@@ -76,7 +77,7 @@ $env:CAPY_SMOKE_TEST='1'
 $env:CAPY_TEST_DISPLAY='1'
 $env:CAPY_TEST_PRIMARY='1'
 $stderr=Join-Path $run 'stderr.log'
-if($focusedColor -or $nativeWriteback -or $focusedGpu -or $retention){[IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$(if($Journey.EndsWith('-light')){'light'}else{'dark'})}|ConvertTo-Json -Depth 4))}
+if($focusedColor -or $nativeWriteback -or $focusedGpu -or $retention -or $transition){[IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$(if($Journey.EndsWith('-light')){'light'}else{'dark'})}|ConvertTo-Json -Depth 4))}
 $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
 $null=$review.Handle
 [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/document-ui-review.pid'),[string]$review.Id)
@@ -928,7 +929,41 @@ if($focusedGpu -or $nativeWriteback){
 }
 if($Journey -eq 'paper-color'){Test-PaperColorReopen}
 elseif($Journey -eq 'new-drawing-problem'){Test-NewDrawingProblem 'dark'}
-elseif($focusedColor -or $focusedGpu -or $retention){New-FocusedDrawing}elseif(!$nativeWriteback){New-Journey 'dark' -Full}
+elseif($focusedColor -or $focusedGpu -or $retention -or $transition){New-FocusedDrawing}elseif(!$nativeWriteback){New-Journey 'dark' -Full}
+if($transition){
+    Wait-Until {(Model).brush_ready -and (Model).canvas_ready} 'First transition drawing did not become ready' 60
+    $firstId=(Model).windows_tabs.selected
+    $revision=(Model).state.document_file.revision
+    Invoke-Control 'Test pen'
+    Wait-Until {(Model).state.document_file.revision -gt $revision -and (Model).brush_ready} 'Transition source stroke did not complete' 60
+    Capture 'transition-ink' -Composed -WithModel
+    New-FocusedDrawing
+    Wait-Until {(Model).brush_ready -and (Model).canvas_ready} 'Second transition drawing did not become ready' 60
+    $secondId=(Model).windows_tabs.selected
+    if($firstId -eq $secondId){throw 'Transition needs two distinct drawings'}
+    Capture 'transition-before' -Composed -WithModel
+    $canvas=(Owned 'drawing-canvas').Current.BoundingRectangle
+    $area=[Drawing.Rectangle]::new([int]($canvas.Left+$canvas.Width/2-200),[int]($canvas.Top+$canvas.Height/2-150),400,300)
+    $tab=Owned ('drawing-tab-'+$firstId)
+    $sample=Sample-Frames $area {param($i)if($i -eq 3){Choose-Item $tab}}
+    try{
+        for($i=0;$i -lt $sample.frames.Count;$i++){$sample.frames[$i].Save((Join-Path $run ('transition-frame-{0:D3}.png' -f $i)))}
+        Wait-Until {(Model).windows_tabs.selected -eq $firstId -and (Model).brush_ready -and (Model).canvas_ready} 'Transition destination did not settle' 60
+        $envelope=[TabFrames+Envelope]::new($sample.frames[2],$sample.frames[$sample.frames.Count-1]);$scores=@();$covered=@()
+        if(([TabFrames+Envelope]::new($sample.frames[2],$sample.frames[2])).Difference($sample.frames[$sample.frames.Count-1]) -eq 0){throw 'Transition did not display distinct drawing pixels'}
+        for($i=0;$i -lt $sample.frames.Count;$i++){
+            $outside=$envelope.Difference($sample.frames[$i]);$scores+=@{frame=$i;outside_endpoint_envelope=$outside}
+            if($outside -gt $area.Width*$area.Height/2){$covered+=@($i)}
+        }
+        @{source=$secondId;destination=$firstId;area=@($area.Left,$area.Top,$area.Width,$area.Height);frequency=[Diagnostics.Stopwatch]::Frequency;action_frame=3;times=$sample.times;scores=$scores;covered_frames=$covered}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'transition-frames.json')
+        if($covered.Count){throw "Drawing transition covered its retained canvas in frames $($covered -join ','); captures: $run"}
+        Capture 'transition-after' -Composed -WithModel
+        (Owned ('drawing-tab-'+$firstId)).SetFocus()
+        if(!(Owned ('drawing-tab-'+$firstId)).Current.HasKeyboardFocus){throw 'Live drawing selector did not accept focus after transition'}
+        Write-Output ('TRANSITION_CAPTURE '+$run)
+    }finally{foreach($image in $sample.frames){$image.Dispose()}}
+    return
+}
 if($Journey -in @('new-drawing','new-drawing-problem','paper-color')){
     Request-Close;Wait-Closed 'New drawing review close did not finish'
     if((Get-Item -LiteralPath $stderr).Length){throw 'New drawing native review reported stderr'}

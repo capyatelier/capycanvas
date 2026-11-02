@@ -467,6 +467,7 @@ positions and order history. Run all `tab-pickup` variants after input changes.
 `tab-drag:cold-dark`/`cold-light` check intrinsic tab measurements and drawer presentation after a fresh Photo launch with collapsed panels.
 `tab-drag:hover-dark`/`hover-light` check resting mouse and pen hover after workspace Undo reorders inactive tabs.
 `header:palette`/`palette-light` and `documents:color-workflows` retain composed frames through theme changes and comparison updates.
+`documents:transition` checks retained drawing pixels and live native tabs through a drawing switch.
 `header:atomic`, `documents:retention`, `layer-pickup:HandoffOnly`, `switcher-drag:HandoffOnly`, `column-stacks:scroll-dark`/`scroll-light` and `tool-bubbles:retire-dark-mouse` check retained content through native handoffs.
 
 Fixtures share the helpers in `CapyUia.ps1`, such as `Owned-DrawingWindow`,

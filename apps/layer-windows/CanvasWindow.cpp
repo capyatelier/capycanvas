@@ -1830,25 +1830,18 @@ bool CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model,Nativ
         if(message.empty())message=str(object(model,L"windows_recovery"),L"error");
         if(message.empty()&&str(object(model,L"windows_document"),L"type")==L"workflow_busy")message=str(bootstrap,L"preparing_document");
         if(message.empty())message=str(object(model,L"windows_filter_load"),L"error");
-        if(message.empty()&&!flag(model,L"brush_ready"))message=str(bootstrap,L"preparing_brush");
         if(message.empty()&&flag(object(model,L"windows_filter_load"),L"pending"))message=str(bootstrap,L"loading_filters");
         if(message.empty())message=str(object(model,L"windows_proof"),L"text");
         status.Text(message);status.Visibility(message.empty()?Visibility::Collapsed:Visibility::Visible);
     }
     if(sections&CanvasWindowState){
-    auto suspended=flag(model,L"windows_rendering_suspended");
-    workspace->Root().Visibility(suspended||!workspaceReady?Visibility::Collapsed:Visibility::Visible);
-    panel.Visibility(suspended?Visibility::Collapsed:Visibility::Visible);
+    workspace->Root().Visibility(!workspaceReady?Visibility::Collapsed:Visibility::Visible);
     {std::lock_guard lock(mutex);penSources.Select(to_string(object(model,L"windows_tabs").GetNamedValue(L"selected",JsonValue::CreateNullValue()).Stringify()+L"/"+object(state,L"document_file").GetNamedValue(L"epoch",JsonValue::CreateNullValue()).Stringify()));}
     if(surfaceState.CanAttach(uint64_t(num(model,L"windows_gpu_generation")),flag(model,L"windows_surface_ready"))){
         check_hresult(panel.as<ISwapChainPanelNative2>()->SetSwapChainHandle(surfaceHandle));surfaceState.DidAttach();
     }
-    if(suspended||!surfaceState.Attached())root.Background(SolidColorBrush(color(str(object(state,L"palette"),L"bg",L"#323232"))));
+    if(!surfaceState.Attached())root.Background(SolidColorBrush(color(str(object(state,L"palette"),L"bg",L"#323232"))));
     else root.Background(nullptr);
-    status.VerticalAlignment(suspended?VerticalAlignment::Center:VerticalAlignment::Bottom);
-    status.TextAlignment(suspended?TextAlignment::Center:TextAlignment::Left);
-    status.TextWrapping(suspended?TextWrapping::Wrap:TextWrapping::NoWrap);
-    status.Margin(suspended?Thickness{24,24,24,24}:Thickness{0,0,0,40});
     SendLaunchFiles(model);
     if(auto sessionWindows=uint32_t(num(object(model,L"windows_recovery"),L"windows"));sessionWindows&&!sessionWindowsOpened&&createWindow){
         sessionWindowsOpened=true;
