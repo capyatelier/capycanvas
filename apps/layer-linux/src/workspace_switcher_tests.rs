@@ -579,10 +579,16 @@ fn grip_drop_painted_order(w: &Rc<Workspace>, input: &mut RemoteInput, output: &
             let timing = if pending { "pending-after-end" } else { "same-move-ack-before-end" };
             let list = named::<gtk::ListBox>(w.window.upcast_ref(), "workspace-manager-items");
             let source_row = row(w, &p);
-            let released = Rc::new(Cell::new(false));
-            let frames = sample_after_paint(&list, glib::clone!(#[weak] w, #[weak] source_row, #[strong] released,
-                #[upgrade_or_default] move || (released.get(), source_row.has_css_class("workspace-row-dragging"),
-                    w.workspaces.view().switcher_busy, w.workspaces.view().rows.iter().map(|row|row.id.clone()).collect::<Vec<_>>())));
+            let accepted = Rc::new(Cell::new(false));
+            let ended = Rc::new(Cell::new(false));
+            let controllers = source_row.observe_controllers();
+            let drag = (0..controllers.n_items()).find_map(|index|
+                controllers.item(index).and_downcast::<gtk::DragSource>()).unwrap();
+            let end_handler = drag.connect_drag_end(glib::clone!(#[strong] ended,
+                move |_, _, _| ended.set(true)));
+            let frames = sample_after_paint(&list, glib::clone!(#[weak] w, #[weak] source_row, #[strong] accepted, #[strong] ended,
+                #[upgrade_or_default] move || (accepted.get(), source_row.has_css_class("workspace-row-dragging"),
+                    w.workspaces.view().switcher_busy, w.workspaces.view().rows.iter().map(|row|row.id.clone()).collect::<Vec<_>>(), ended.get())));
             let mut lock = pending.then(|| {
                 let ready = input.dir.join(format!("drop-paint-lock-{name}"));
                 let database = crate::storage::workspaces().unwrap().join("workspaces.sqlite3");
@@ -606,8 +612,23 @@ fn grip_drop_painted_order(w: &Rc<Workspace>, input: &mut RemoteInput, output: &
                 until(|| manager.workspace_ids()==moved && !w.workspaces.view().switcher_busy, "same move acknowledged while native contact held");
                 assert!(source_row.has_css_class("workspace-row-dragging"), "acknowledgement precedes native drag_end");
             }
-            released.set(true);
+            assert!(drag.drag().is_some() && !ended.get(), "native pickup precedes Drop");
+            let controllers = list.observe_controllers();
+            let drop = (0..controllers.n_items()).find_map(|index|
+                controllers.item(index).and_downcast::<gtk::DropTarget>()).unwrap();
+            let target = row(w, &f).compute_bounds(&list).unwrap();
+            accepted.set(true);
+            assert!(drop.emit_by_name::<bool>("drop", &[
+                &glib::BoxedValue(format!("capy-workspace:{p}").to_value()),
+                &0f64, &(target.y() as f64 + target.height() as f64 * 0.85),
+            ]), "native target accepts the workspace Drop");
+            until(|| frames.samples.borrow().iter().any(|frame| frame.state.0 && !frame.state.4),
+                "accepted Drop reaches an actual paint before DragEnd");
+            assert!(drag.drag().is_some() && !ended.get(), "painted Drop precedes native DragEnd");
+            let drop_cleared = !source_row.has_css_class("workspace-row-dragging");
             input.perform(serde_json::json!([contact("mouse", "up", end)]));
+            assert!(ended.get(), "native release delivers DragEnd");
+            drag.disconnect(end_handler);
             assert!(!source_row.has_css_class("workspace-row-dragging"), "native release completes drag_end");
             let pending_at_end = w.workspaces.view().switcher_busy;
             let frames = frames.finish();
@@ -619,16 +640,21 @@ fn grip_drop_painted_order(w: &Rc<Workspace>, input: &mut RemoteInput, output: &
                 && frame.color_bounds(&w.window, [255,0,255,255]).is_some()
                 && frame.color_bounds(&w.window, [0,255,0,255]).is_some()
                 && frame.color_bounds(&w.window, [255,0,0,255]).is_some());
-            let first = frames.iter().find(|frame| frame.state.0 && !frame.state.1);
+            let first = frames.iter().find(|frame| frame.state.0 && !frame.state.4);
             let bounds = |frame: &PaintedSample<_>, color| frame.color_bounds(&w.window, color)
                 .map(|b|[b.x(),b.y(),b.width(),b.height()]);
             let initial_bounds = initial.map(|frame|[bounds(frame,[255,0,255,255]),bounds(frame,[0,255,0,255]),bounds(frame,[255,0,0,255])]);
             let painted_bounds = first.map(|frame|[bounds(frame,[255,0,255,255]),bounds(frame,[0,255,0,255]),bounds(frame,[255,0,0,255])]);
-            let correct = painted_bounds.is_some_and(|b| matches!(b,[Some(source),Some(next),Some(last)] if next[1]<last[1] && last[1]<source[1]));
+            let correct = drop_cleared && painted_bounds.is_some_and(|b| matches!(b,[Some(source),Some(next),Some(last)] if next[1]<last[1] && last[1]<source[1]))
+                && frames.iter().filter(|frame| frame.state.0 && !frame.state.4).all(|frame| {
+                    let positions = [bounds(frame,[255,0,255,255]),bounds(frame,[0,255,0,255]),bounds(frame,[255,0,0,255])];
+                    !frame.state.1 && frame.state.3 == moved
+                        && matches!(positions,[Some(source),Some(next),Some(last)] if next[1]<last[1] && last[1]<source[1])
+                });
             std::fs::write(output.join(format!("drop-paint-{name}-{timing}.json")),serde_json::to_vec_pretty(&serde_json::json!({
-                "timing":timing,"pending_at_end":pending_at_end,"expected_order":moved,"initial_marker_bounds":initial_bounds,
-                "first_post_end_marker_bounds":painted_bounds,"first_post_end_state":first.map(|frame|&frame.state),
-                "first_post_end_time":first.map(|frame|frame.time),"painted_order_correct":correct,
+                "timing":timing,"pending_at_end":pending_at_end,"drop_cleared_before_end":drop_cleared,"expected_order":moved,"initial_marker_bounds":initial_bounds,
+                "first_post_drop_marker_bounds":painted_bounds,"first_post_drop_state":first.map(|frame|&frame.state),
+                "first_post_drop_time":first.map(|frame|frame.time),"painted_order_correct":correct,
                 "frames":frames.iter().map(|frame|serde_json::json!({"time":frame.time,"state":frame.state})).collect::<Vec<_>>()
             })).unwrap()).unwrap();
             if let Some(frame) = first {
@@ -637,7 +663,7 @@ fn grip_drop_painted_order(w: &Rc<Workspace>, input: &mut RemoteInput, output: &
             }
             assert!(initial_bounds.is_some_and(|b| matches!(b,[Some(source),Some(next),Some(last)] if source[1]<next[1] && next[1]<last[1])), "{name}/{timing}: mapped initial cached list paints source/next/last identities in original order: {initial_bounds:?}");
             assert!(!pending || pending_at_end, "storage acknowledgement stays pending after drag_end");
-            if !correct { failures.push(format!("{name}/{timing}: first post-drop painted order must be next,last,source; actual {painted_bounds:?}, state {:?}",first.map(|frame|&frame.state))); }
+            if !correct { failures.push(format!("{name}/{timing}: accepted Drop must clear its source and every paint before DragEnd must be next,last,source; cleared={drop_cleared}, actual {painted_bounds:?}, state {:?}",first.map(|frame|&frame.state))); }
             until(|| manager.workspace_ids()==moved && !w.workspaces.view().switcher_busy, "drop move stored before fixture restore");
             w.workspaces.send(w, layer_workspace::WorkspaceInput::EditSwitcher {
                 edit: layer_workspace::SwitcherEdit::Move { id: p.clone(), before: Some(i.clone()) },

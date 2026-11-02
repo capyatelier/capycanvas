@@ -416,7 +416,12 @@ impl ManagerUi {
                 w.workspaces.ui.clear_reorder_hint();
                 w.workspaces
                     .ui
-                    .edit_switcher(&w, SwitcherEdit::Move { id, before });
+                    .edit_switcher(&w, SwitcherEdit::Move { id: id.clone(), before });
+                *w.workspaces.ui.dragged.borrow_mut() = None;
+                if let Some(row) = w.workspaces.ui.workspace_rows.borrow().get(&id) {
+                    row.row.remove_css_class("workspace-row-dragging");
+                }
+                w.workspaces.render(&w);
                 true
             }
         ));
