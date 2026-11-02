@@ -899,13 +899,17 @@ impl Preferences {
                                 if let Some(text) = link.child().and_downcast::<gtk::Label>() {
                                     text.set_wrap(true);
                                     text.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+                                    text.set_natural_wrap_mode(gtk::NaturalWrapMode::None);
+                                    let attributes = text.attributes().and_then(|attributes| attributes.copy()).unwrap_or_else(gtk::pango::AttrList::new);
+                                    attributes.insert(gtk::pango::AttrInt::new_insert_hyphens(false));
+                                    text.set_attributes(Some(&attributes));
                                     text.set_xalign(1.);
                                 }
                                 control.add_suffix(&link);
                                 control.set_activatable_widget(Some(&link));
                             } else if let PreferenceKind::Info { value } = &row.kind {
                                 let text = gtk::Label::builder().label(value).selectable(true).wrap(true)
-                                    .wrap_mode(gtk::pango::WrapMode::WordChar).xalign(1.).build();
+                                    .wrap_mode(gtk::pango::WrapMode::Word).natural_wrap_mode(gtk::NaturalWrapMode::None).xalign(1.).build();
                                 control.add_suffix(&text);
                             }
                             Field::Info(control)

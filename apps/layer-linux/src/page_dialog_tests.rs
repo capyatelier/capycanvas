@@ -437,6 +437,35 @@ fn native_phone_navigation_headers() {
         assert!(split.is_collapsed(), "Preferences {} keeps one pane on a phone", settings.key());
         let preferences = ui_session(&d.w).preferences().unwrap();
         let page = preferences.pages.iter().find(|page| page.id == settings).unwrap();
+        if settings == SettingsPage::About {
+            for row in page.groups.iter().flat_map(|group| &group.rows) {
+                let (text, link) = match &row.kind {
+                    PreferenceKind::Info { value } => (value.as_str(), false),
+                    PreferenceKind::Link { label, .. } => (label.as_str(), true),
+                    _ => continue,
+                };
+                let native = named::<adw::ActionRow>(&frame, &format!("setting-{}", row.id.key()));
+                super::histogram::scroll_to(native.upcast_ref());
+                drop(idle_paint(&d.w.window));
+                let label = descendants::<gtk::Label>(native.upcast_ref()).into_iter().find(|label| label.text() == text).unwrap();
+                let layout = label.layout();
+                let joined = layout.lines_readonly().iter().map(|line| {
+                    let start = line.start_index() as usize;
+                    &text[start..start + line.length() as usize]
+                }).collect::<String>();
+                assert_eq!(joined, text, "About {} preserves its complete text", row.id.key());
+                if !text.contains(' ') && (!link || row.id == PreferenceId::Website) {
+                    assert_eq!(layout.line_count(), 1, "About {} keeps its short token whole", row.id.key());
+                }
+                if link {
+                    let attributes = label.attributes().unwrap();
+                    let hyphens = attributes.iterator().get(gtk::pango::AttrType::InsertHyphens).unwrap().downcast::<gtk::pango::AttrInt>().unwrap();
+                    assert_eq!(hyphens.value(), 0, "About links never insert synthetic hyphens");
+                    assert!(native.activatable_widget().is_some_and(|widget| widget.is::<gtk::LinkButton>()));
+                }
+            }
+            capture(&mut d, "preferences-about-values");
+        }
         for row in page.groups.iter().flat_map(|group| &group.rows).filter(|row| row.visible
             && matches!(&row.kind, PreferenceKind::Choice { icons, presentation: ChoicePresentation::Dropdown, .. } if icons.is_empty())) {
             let native = named::<adw::ComboRow>(&frame, &format!("setting-{}", row.id.key()));

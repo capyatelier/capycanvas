@@ -27,6 +27,7 @@ values can shorten in narrow rows while their title and subtitle wrap.
 Popup options remain left-aligned.
 At narrow widths, shortcut filters reflow and About values wrap within their
 rows; links remain clickable.
+Short About values stay whole, and wrapped links preserve their URL text.
 
 An accepted preference edit applies immediately and requests persistence.
 **Language** updates the running session, including open dialogs, search results,
