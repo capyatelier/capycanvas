@@ -10,6 +10,7 @@
 #include "SettingsView.h"
 #include "ShortcutPage.h"
 #include "PalettesView.h"
+#include "TextureDialog.h"
 #include <msctf.h>
 #pragma comment(lib,"uuid.lib")
 #include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
@@ -518,6 +519,59 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         }catch(...){if(starter)entry.RemoveHandler(UIElement::PreviewKeyDownEvent(),starter);if(heldKey)try{nativeKey(VK_RETURN,true);}catch(...){}if(heldTrigger)try{nativeKey(VK_F24,true);}catch(...){}dialog.Hide();throw;}
         }
     }
+    winrt::Windows::Foundation::IAsyncAction paperNameIme(){
+        auto source=std::make_shared<WorkspaceData>();context.apply(source);
+        A actions,tiles,controls;
+        actions.Append(O({{L"label",S(L"Rename")},{L"action",O({{L"op",S(L"rename_paper")},{L"id",S(L"fixture-paper")},{L"name",S(L"Fixture scan")}})}}));
+        tiles.Append(O({{L"id",S(L"fixture-paper")},{L"label",S(L"Fixture scan")},{L"actions",actions}}));
+        controls.Append(O({{L"kind",O({{L"kind",S(L"choice")}})},{L"key",S(L"paper")},{L"value",O({{L"value",N(0)}})},{L"paper",O({{L"tiles",tiles}})}}));
+        source->state=O({{L"theme",S(root.RequestedTheme()==ElementTheme::Light?L"light":L"dark")},{L"document_file",O({{L"epoch",N(1)}})},
+            {L"layer_properties",O({{L"layer",N(1)},{L"enabled",B(true)},{L"controls",controls}})}});
+        auto sent=std::make_shared<std::vector<J>>();source->send=[sent](std::string json){sent->push_back(J::Parse(to_hstring(json)));};
+        auto invoke=[](FrameworkElement const& element){auto peer=Automation::Peers::FrameworkElementAutomationPeer::CreatePeerForElement(element);
+            peer.GetPattern(Automation::Peers::PatternInterface::Invoke).as<Automation::Provider::IInvokeProvider>().Invoke();};
+        ChooseTexture(source,anchor,1);
+        co_await wait([this]{auto tile=workspaceElement(L"texture-tile-0").try_as<Button>();return tile&&tile.IsLoaded()&&tile.ActualWidth()>0;},L"Paper fixture tile did not arrange");
+        auto tile=workspaceElement(L"texture-tile-0").as<Button>();auto menu=tile.ContextFlyout().as<MenuFlyout>();auto command=menu.Items().GetAt(0).as<MenuFlyoutItem>();
+        auto opened=std::make_shared<bool>(false);menu.Opened([opened](auto&&,auto&&){*opened=true;});menu.ShowAt(tile);
+        co_await wait([command,opened]{return *opened&&command.IsLoaded()&&command.ActualWidth()>0;},L"Paper rename context command did not open");
+        invoke(command);
+        co_await wait([this]{auto entry=workspaceElement(L"paper-rename-name").try_as<TextBox>();return entry&&entry.IsLoaded()&&entry.ActualWidth()>0;},L"Real paper name prompt did not arrange");
+        auto entry=workspaceElement(L"paper-rename-name").as<TextBox>();auto prompt=workspaceElement(L"paper-rename-dialog").as<ContentDialog>();
+        auto complete=std::make_shared<std::function<void()>>();Windows::Foundation::IInspectable completion{nullptr},starter{nullptr};
+        CompletionRoute route{prompt,{&completion,&starter},complete};bool heldKey=false;
+        completion=box_value(KeyEventHandler([complete](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==Windows::System::VirtualKey::Enter&&*complete)(*complete)();}));
+        prompt.AddHandler(UIElement::PreviewKeyDownEvent(),completion,true);
+        try{
+            captureTextComposition(entry);entry.Focus(FocusState::Keyboard);entry.Text(L"");
+            co_await wait([entry,prompt]{return entry.Text().empty()&&!prompt.IsPrimaryButtonEnabled();},L"Empty paper name did not disable native Primary");
+            require(sent->empty(),L"Paper rename dispatched before confirmation");
+            ScopedComposition composition(*textServices,[trace=imeTrace](hstring api,HRESULT result,uintptr_t pointer){trace->push_back(O({{L"case",S(L"paper-name-ime")},{L"api",S(api)},{L"code",N(int32_t(result))},{L"pointer",N(double(pointer))}}));});
+            co_await wait([this,entry,&composition]{return composition.focused(entry,root.XamlRoot());},L"Paper name did not acquire its native TSF context");
+            composition.begin(L" ");
+            co_await wait([entry,prompt]{return textComposing(entry)&&entry.Text()==L" "&&!prompt.IsPrimaryButtonEnabled();},L"Blank marked paper name did not retain disabled Primary");
+            auto triggered=std::make_shared<bool>(false);std::exception_ptr failure;
+            *complete=[this,entry,prompt,&composition,&failure,triggered]{
+                try{
+                    require(FocusManager::GetFocusedElement(root.XamlRoot())==entry&&!prompt.IsPrimaryButtonEnabled(),L"Paper name lost its disabled native default precondition");
+                    composition.edit(L"paper-name",[&composition](TfEditCookie cookie){com_ptr<ITfRange> range;check_hresult(composition.composition->GetRange(range.put()));check_hresult(range->SetText(cookie,0,L"\ud55c\uae00",2));});composition.end();
+                    require(!textComposing(entry)&&entry.Text()==L"\ud55c\uae00",L"Paper Return did not follow full synchronous Korean TSF completion");
+                }catch(...){failure=std::current_exception();}
+                *triggered=true;
+            };
+            nativeKey(VK_RETURN,false);heldKey=true;
+            co_await wait([triggered]{return *triggered;},L"Paper TSF completion trigger did not reach native input");
+            *complete={};if(failure)std::rethrow_exception(failure);
+            co_await wait([sent,entry]{return sent->size()==1&&!entry.IsLoaded();},L"Passed Korean Enter did not submit the real paper name prompt");
+            auto request=sent->front();auto effect=object(request,L"action");auto rename=object(effect,L"action");
+            require(str(request,L"windows_epoch")==L"1"&&str(effect,L"type")==L"effect"&&str(rename,L"op")==L"rename_paper"&&str(rename,L"id")==L"fixture-paper"&&str(rename,L"name")==L"\ud55c\uae00",
+                L"Paper default action did not preserve exact full name and original identity");
+            nativeKey(VK_RETURN,true);heldKey=false;co_await settle();require(sent->size()==1,L"Paper Return release submitted a duplicate rename");composition.finish();
+            co_await wait([this]{auto cancel=workspaceElement(L"texture-cancel").try_as<Button>();return cancel&&cancel.IsLoaded();},L"Paper chooser did not return after rename");
+            invoke(workspaceElement(L"texture-cancel").as<FrameworkElement>());
+            co_await wait([this]{return !workspaceElement(L"texture-dialog");},L"Paper chooser did not close");++imeChecks;
+        }catch(...){if(heldKey)try{nativeKey(VK_RETURN,true);}catch(...){}prompt.Hide();throw;}
+    }
     winrt::Windows::Foundation::IAsyncAction shortcutSearchIme(){
         auto source=std::make_shared<WorkspaceData>();context.apply(source);source->state=O({{L"theme",S(root.RequestedTheme()==ElementTheme::Light?L"light":L"dark")}});
         auto actions=std::make_shared<std::vector<J>>();source->send=[actions](std::string value){actions->push_back(J::Parse(to_hstring(value)));};
@@ -768,6 +822,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             phase=L"shortcut-search-ime";co_await shortcutSearchIme();
             phase=L"customization-name-ack";co_await customizationDraft();
             phase=L"native-default-ime";co_await defaultIme();
+            phase=L"paper-name-ime";co_await paperNameIme();
             phase=L"layer-language-draft";co_await layerLanguageDraft();
             phase=L"settings-resize";co_await settingsResize();
             phase=L"window-close";auto closed=owner.Begin(data,anchor,menu());window.Close();co_await settle();

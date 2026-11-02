@@ -308,7 +308,7 @@ struct TextureDialog : std::enable_shared_from_this<TextureDialog> {
         AutomationProperties::SetAutomationId(prompt,L"paper-rename-dialog");
         TextBox input;input.Header(box_value(data->common(L"name")));input.Text(str(action,L"name"));input.MaxLength(64);AutomationProperties::SetAutomationId(input,L"paper-rename-name");
         auto validate=[source=data,prompt=make_weak(prompt),input=make_weak(input)]{auto view=prompt.get();auto entry=input.get();if(view&&entry)view.IsPrimaryButtonEnabled(source->caption(O({{L"type",S(L"paper_name_error")},{L"name",S(entry.Text())}})).empty());};
-        input.TextChanged([validate](auto&&,auto&&){validate();});validate();prompt.Content(input);
+        input.TextChanging([validate](auto&&,auto&&){validate();});validate();prompt.Content(input);
         input.Loaded([weak=make_weak(input)](auto&&,auto&&){if(auto input=weak.get()){input.Focus(FocusState::Programmatic);input.SelectAll();}});
         data->popup(true);bool saved=false;
         try{saved=co_await prompt.ShowAsync()==ContentDialogResult::Primary;}catch(hresult_error const&){}
