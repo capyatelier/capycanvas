@@ -96,6 +96,50 @@ class AdaptiveIdentityTest(unittest.TestCase):
 
 
 class AdaptiveCleanupTest(unittest.TestCase):
+    def test_brush_refresh_setup_precedes_prime_release_and_timed_go(self):
+        script = Path(__file__).with_name('android-brush-benchmark.py')
+        spec = importlib.util.spec_from_file_location('brush_adaptive_test', script)
+        collector = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(collector)
+        events = []
+        process = Mock()
+        process.poll.return_value = None
+        def wait(**kwargs):
+            process.poll.return_value = 0
+        process.wait.side_effect = wait
+        primary = subprocess.CalledProcessError(1, ['timed-go'])
+        with tempfile.TemporaryDirectory() as directory:
+            def run(command, **kwargs):
+                parts = command[3:]
+                if parts[:2] == ['shell', 'touch']:
+                    self.assertEqual(events, ['settings'])
+                    events.append('prime-go')
+                if len(parts) == 2 and parts[1].startswith('test -f '):
+                    self.assertEqual(events, ['settings', 'prime-go'])
+                    events.append('prime-ready')
+                if parts[0] == 'pull' and parts[1].endswith('-info.json'):
+                    Path(parts[2]).write_text('{}')
+                if len(parts) == 2 and parts[1].startswith('touch '):
+                    events.append('timed-go')
+                    raise primary
+                return subprocess.CompletedProcess(command, 0)
+            argv = [str(script), directory, '--serial', 'serial', '--package', PACKAGE, '--presets', '1',
+                    '--adaptive-script', __file__, '--adaptive-label', LABEL, '--adaptive-apk', 'own.apk',
+                    '--adaptive-aapt', 'aapt', '--target-hz', '90']
+            with patch.dict(os.environ, CAPY_ANDROID_SERIAL='serial', CAPY_APPLICATION_ID=PACKAGE), \
+                    patch.object(sys, 'argv', argv), patch.object(collector, 'validate_identity'), \
+                    patch.object(collector, 'enable_adaptive', side_effect=lambda *args: events.append('settings')), \
+                    patch.object(collector, 'restore_adaptive') as restore, \
+                    patch.object(collector, 'validate_setup'), patch.object(collector.time, 'sleep'), \
+                    patch.object(collector.subprocess, 'run', side_effect=run), \
+                    patch.object(collector.subprocess, 'Popen', return_value=process) as launch:
+                with self.assertRaises(subprocess.CalledProcessError) as caught:
+                    collector.main()
+            self.assertIs(caught.exception, primary)
+            self.assertEqual(events, ['settings', 'prime-go', 'prime-ready', 'timed-go'])
+            self.assertEqual(launch.call_args.args[0][:8], ['adb', '-s', 'serial', 'shell', 'am', 'instrument', '-w', '-r'])
+            restore.assert_called_once()
+
     def test_cleanup_attempts_every_step_and_preserves_the_benchmark_failure(self):
         primary = subprocess.CalledProcessError(1, ['adb', 'motion'])
         cleanup = subprocess.CalledProcessError(2, ['adb', 'restore'])

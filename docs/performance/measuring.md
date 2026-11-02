@@ -354,6 +354,8 @@ python3 tools/performance/android-brush-benchmark.py OUT --serial "$CAPY_ANDROID
 python3 tools/performance/android-brush-report.py OUT --package art.capycanvas.brushbench
 ```
 
+On Adaptive Refresh devices, `--adaptive-script`, `--adaptive-label`, `--adaptive-apk`, `--adaptive-aapt` and `--target-hz` use the shared owned-app setup barrier before the existing prime stroke.
+
 The runner defaults to the dry presets. Pass `--presets` to include the wet,
 smudge and Liquify presets. Liquify qualification also requires
 `--paint-layer-name Photo`: without it, the runner creates an empty layer above

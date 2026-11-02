@@ -14,6 +14,8 @@ import pathlib
 import shlex
 import subprocess
 import time
+import uuid
+from android_adaptive import cleanup_steps, enable_adaptive, restore_adaptive, validate_identity
 from android_brush_metrics import completion_window, validate_setup
 
 PRESETS = {
@@ -42,6 +44,11 @@ def main():
     p.add_argument("--adb", default="adb")
     p.add_argument("--serial", required=True, help="Target adb device serial")
     p.add_argument("--package", default="art.capycanvas.brushbench")
+    p.add_argument("--adaptive-script", type=pathlib.Path, help="Configure the owned app's refresh policy before the prime stroke")
+    p.add_argument("--adaptive-label")
+    p.add_argument("--adaptive-apk", type=pathlib.Path)
+    p.add_argument("--adaptive-aapt", type=pathlib.Path)
+    p.add_argument("--target-hz", type=float)
     p.add_argument("--presets", default=",".join(map(str, DRY_PRESETS)))
     p.add_argument("--wait-for-warmup", action="store_true", help="Wait for the full shader catalogue after early photo adoption")
     p.add_argument("--probe-presets", help="Measure selected-brush preparation before the motion workload")
@@ -95,6 +102,10 @@ def main():
     p.add_argument("--stats", action="store_true", help="Open Stats and enable GPU timing; omit for the default workspace")
     p.add_argument("--prefix", default="screen")
     args = p.parse_args()
+    if args.adaptive_script and (not args.adaptive_script.is_file() or not args.adaptive_label or not args.adaptive_label.strip()
+            or not args.adaptive_apk or not args.adaptive_aapt or not args.target_hz or not math.isfinite(args.target_hz)
+            or args.target_hz <= 0 or args.mode in ("pinch", "vector")):
+        p.error("Adaptive brush setup requires a helper, unique label, APK, aapt, positive target rate and brush motion")
     if (args.canvas_width is None) != (args.canvas_height is None):
         p.error("specify both --canvas-width and --canvas-height")
     if args.photo.endswith(".capy") and args.canvas_width is None:
@@ -131,6 +142,8 @@ def main():
         args.warmup_idle_ms = 0
     args.output.mkdir(parents=True, exist_ok=True)
     adb = [args.adb, "-s", args.serial]
+    if args.adaptive_script:
+        validate_identity(adb, args.package, args.adaptive_label, args.adaptive_apk, args.adaptive_aapt)
     remote = f"/sdcard/Android/data/{args.package}/files/brush-benchmark"
     failures = []
 
@@ -181,6 +194,8 @@ def main():
         print(f"START {label}", flush=True)
         # Delete only this runner's synchronization files, never app documents.
         run("shell", f"rm -f {remote}/{label}-ready {remote}/{label}-go")
+        if args.adaptive_script:
+            run("shell", "rm", "-f", *(f"{remote}/{name}" for name in ["ready", "go", "refresh-before-primer.json"]))
         with (args.output / f"{label}-environment-before.txt").open("w") as out:
             run("shell", "cat /proc/meminfo; dumpsys thermalservice; dumpsys battery", stdout=out)
         cmd = adb + ["shell", "am", "instrument", "-w", "-r", "-e", "brushBenchmark", "true"]
@@ -226,12 +241,26 @@ def main():
         if args.canvas_width is not None:
             cmd += ["-e", "width", str(args.canvas_width), "-e", "height", str(args.canvas_height)]
         cmd += [f"{args.package}/art.capycanvas.BrushBenchmarkInstrumentation"]
+        if args.adaptive_script:
+            token = uuid.uuid4().hex
+            cmd[-1:-1] = ["-e", "waitForGo", "true", "-e", "benchmarkReadyToken", token, "-e", "expectedRefreshHz", str(args.target_hz)]
         trace = None
         profile = None
-        with (args.output / f"{label}-instrumentation.txt").open("w") as log:
+        process = None
+        with (args.output / f"{label}-instrumentation.txt").open("w") as log, cleanup_steps(
+            lambda: run("shell", "am", "force-stop", args.package) if args.adaptive_script and process is not None and process.poll() is None else None,
+            lambda: process.wait(timeout=30) if args.adaptive_script and process is not None and process.poll() is None else None,
+            lambda: run("pull", f"{remote}/refresh-before-primer.json", str(args.output)) if args.adaptive_script else None,
+            lambda: restore_adaptive(adb, args.package, args.adaptive_script, args.output, args.adaptive_label, args.adaptive_apk, args.adaptive_aapt) if args.adaptive_script else None,
+        ):
             process = subprocess.Popen(cmd, stdout=log, stderr=log)
             deadline = time.monotonic() + 600
+            prepared = not args.adaptive_script
             while process.poll() is None:
+                if not prepared and subprocess.run(adb + ["shell", "test", "-f", f"{remote}/ready"], capture_output=True).returncode == 0:
+                    enable_adaptive(adb, args.package, args.adaptive_script, args.output, args.adaptive_label, args.adaptive_apk, args.adaptive_aapt, remote, token)
+                    run("shell", "touch", f"{remote}/go")
+                    prepared = True
                 check = subprocess.run(adb + ["shell", f"test -f {remote}/{label}-ready"], capture_output=True)
                 if check.returncode == 0:
                     break

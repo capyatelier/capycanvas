@@ -656,6 +656,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 "state" to state(), "display" to displayInfo, "resources" to resources(), "renderer" to stats(),
                 "setup_stages" to setupStages,
                 "center" to JSONArray(listOf(cx, cy)), "radii" to JSONArray(listOf(rx, ry))).toString(2))
+            awaitBenchmarkRefreshPolicy(arguments, output, this, host, active.window.decorView)
             val unprimed = state().getJSONObject("document_file").getLong("revision")
             if (objectWorkload) {
                 File(output, "$label-cold-setup.json").writeText(report(false)
