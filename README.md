@@ -112,10 +112,20 @@ without the all of the basics (proofing, effect chains, the whole enchilada)
 
 > The *Photo* workspace enables stunning visuals for a new generation of wide-gamut screens.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/photo-workspace-dark.svg">
-  <img src="docs/assets/photo-workspace-light.svg" width="1920" alt="A terrarium photograph in Photo, with the Tonal range selection tool and Curves and Vibrance adjustment layers.">
-</picture>
+<p>
+  <a href="docs/assets/photo-workspace-light.webp#gh-light-mode-only">
+    <picture>
+      <source type="image/webp" media="(prefers-reduced-motion: no-preference)" srcset="docs/assets/photo-workspace-light.webp">
+      <img src="docs/assets/photo-workspace-light.svg" width="1920" alt="A terrarium photograph in Photo, with the subject saved as a selection layer above the photo.">
+    </picture>
+  </a>
+  <a href="docs/assets/photo-workspace-dark.webp#gh-dark-mode-only">
+    <picture>
+      <source type="image/webp" media="(prefers-reduced-motion: no-preference)" srcset="docs/assets/photo-workspace-dark.webp">
+      <img src="docs/assets/photo-workspace-dark.svg" width="1920" alt="A terrarium photograph in Photo, with the subject saved as a selection layer above the photo.">
+    </picture>
+  </a>
+</p>
 
 ## Tools
 
