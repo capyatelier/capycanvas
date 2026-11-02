@@ -1,5 +1,3 @@
-override FILL_PAPER: bool = false;
-override FILL_GRADIENT: bool = false;
 // operation_offset.w converts the color a layer draw contributes: 1 encodes
 // linear layer pixels into the Perceptual composite, 2 decodes the composite.
 // 3 keeps a composite's coverage within 0–1 for a layer's pages, and 4 also
@@ -118,77 +116,98 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
     let background=vec4<f32>(settings.source_over.rgb*settings.source_over.a,settings.source_over.a);
     return foreground*outline+background*interior;
 }
-@fragment fn fragment_main(v: Vertex) -> @location(0) vec4<f32> {
-    if settings.options.x!=12. && (any(v.uv<vec2<f32>(0.)) || any(v.uv>vec2<f32>(1.))) { discard; }
-    return scene_value(v);
+fn scene_clip(v:Vertex) {
+    if any(v.uv<vec2<f32>(0.)) || any(v.uv>vec2<f32>(1.)) {discard;}
 }
-fn scene_value(v: Vertex) -> vec4<f32> {
-    let op = select(u32(settings.options.x), select(6u, 18u, FILL_GRADIENT), FILL_PAPER);
-    if !FILL_PAPER && settings.options.x==12. {return scene_space(scene_image(v))*settings.options.y;}
-    if !FILL_PAPER && op == 0u { return settings.color; }
-    if !FILL_PAPER && op == 10u {
-        let spread=max(settings.color.zw/settings.rect.zw-1.,vec2<f32>(0.))/3.;
-        var ink=vec4<f32>(0.);
-        for (var j=-1;j<=1;j++) {
-            for (var i=-1;i<=1;i++) {
-                let p=settings.color.xy+v.uv*settings.color.zw+vec2<f32>(f32(i),f32(j))*spread;
-                ink+=scene_sample(front,p/vec2<f32>(textureDimensions(front)));
-            }
-        }
-        return hdr_map_sdr(ink/9.,settings.operation_linear,settings.operation_offset);
+@fragment fn fragment_main(v:Vertex)->@location(0) vec4<f32> {
+    scene_clip(v);
+    let op=u32(settings.options.x);
+    if op==0u {return settings.color;}
+    let raw=scene_read(front,v);
+    if op==1u || op==7u || op==13u || op==14u || op==17u || op==19u {return scene_pointwise(raw,v);}
+    if op==2u {let m=mix(raw.r,1.-raw.r,settings.options.z);return vec4<f32>(m);}
+    if op==20u {return working_decode(vec4<f32>(vec3<f32>(raw.r),1.));}
+    let dst=scene_read(back,v);
+    if op==16u {return raw*settings.options.y+dst*settings.options.z;}
+    if op==3u {let coverage=select(dst.a,dst.r,settings.options.y==2.);return raw*mix(coverage,1.-coverage,settings.options.z);}
+    let a=(1.-raw.a)*.42;
+    return scene_space(vec4<f32>(.46,.12,.8,1.)*a);
+}
+@fragment fn fragment_coverage(v:Vertex)->@location(0) vec4<f32> {
+    scene_clip(v);
+    let raw=scene_read(front,v);
+    let dst=scene_read(back,v);
+    if settings.options.x==22. {return vec4<f32>(raw.r*(1.-dst.r));}
+    let gray=clamp(dot(sdr_encode(working_to_srgb(working_unassociate(raw)),0u),vec3<f32>(.2126,.7152,.0722)),0.,1.)*raw.a;
+    return vec4<f32>(clamp(gray+dst.r*(1.-raw.a),0.,1.));
+}
+fn scene_operation_local(v:Vertex)->vec2<f32> {
+    return settings.extent.zw+v.uv*settings.rect.zw;
+}
+fn scene_operation_point(local:vec2<f32>)->vec2<f32> {
+    return mat2x2<f32>(settings.operation_linear.xy,settings.operation_linear.zw)*local+settings.operation_offset.xy;
+}
+fn scene_operation_paper(src:vec4<f32>,local:vec2<f32>)->vec4<f32> {
+    if settings.operation_offset.z>0. {
+        let paper=paper_sample(scene_paper,paper_sampling,local,settings.source_over);
+        let h=clamp(.5+settings.operation_offset.z*(paper-.5),0.,1.);
+        let contact=relief_transfer((.25-(.5-h))/.05);
+        return src*((1.-exp(-6.*contact))/(1.-exp(-6.)));
     }
-    let raw = scene_read(front,v);
-    if FILL_PAPER || op == 6u || op == 11u || op == 18u {
-        // Constant fills are the degenerate case (equal endpoint colors).
-        let local = settings.extent.zw + v.uv * settings.rect.zw;
-        let p = mat2x2<f32>(settings.operation_linear.xy, settings.operation_linear.zw) * local + settings.operation_offset.xy;
-        var src: vec4<f32>;
-        if !FILL_PAPER && op == 11u { src = figure_color(p)*raw.r; }
-        else if op==18u {
-            let flags=u32(settings.options.z);
-            let t=gradient_shape(p-settings.backdrop.xy,settings.backdrop.zw-settings.backdrop.xy,flags%4u,flags>=4u);
-            let sample=gradient_sample(0xffffffffu,t);
-            let color=gradient_dither(sample.color,p,settings.options.y,sample.dither);
-            src=vec4(color.rgb*color.a,color.a)*settings.color.x*raw.r;
-        } else {src=vec4(settings.color.rgb*settings.color.a,settings.color.a)*raw.r;}
-        if FILL_PAPER && settings.operation_offset.z > 0. {
-            let paper = paper_sample(scene_paper, paper_sampling, local, settings.source_over);
-            let h = clamp(.5 + settings.operation_offset.z * (paper - .5), 0., 1.);
-            let contact = relief_transfer((.25 - (.5 - h)) / .05);
-            src *= (1. - exp(-6. * contact)) / (1. - exp(-6.));
-        }
-        let dst = scene_read(back,v);
-        if !FILL_PAPER && op==11u && settings.options.y>=16. {
-            return select(dst*(1.-src.a),dst,settings.options.w>.5);
-        }
-        if op==6u && settings.options.z>.5 && scene_read(scene_extra,v).r>.5 {
-            return dst+src*select(1.-dst.a,0.,settings.options.w>.5);
-        }
-        if settings.options.w > .5 {
-            return vec4<f32>(src.rgb * dst.a + dst.rgb * (1. - src.a), dst.a);
-        }
-        return src + dst * (1. - src.a);
-    }
-    if op == 1u || op == 7u || op == 13u || op == 14u || op == 17u || op == 19u { return scene_pointwise(raw,v); }
-    // Store pooled mask coverage in alpha to avoid an sRGB encode/decode
-    // round trip quantizing feather coverage through a color channel.
-    if op == 2u { let m = mix(raw.r,1.-raw.r,settings.options.z); return vec4<f32>(m); }
-    let dst = scene_read(back,v);
-    if op == 20u { return working_decode(vec4<f32>(vec3<f32>(raw.r), 1.)); }
-    if op == 21u {
-        let gray = clamp(dot(sdr_encode(working_to_srgb(working_unassociate(raw)), 0u), vec3<f32>(.2126, .7152, .0722)), 0., 1.) * raw.a;
-        return vec4<f32>(clamp(gray + dst.r * (1. - raw.a), 0., 1.));
-    }
-    if op == 22u { return vec4<f32>(raw.r * (1. - dst.r)); }
-    if op == 16u { return raw * settings.options.y + dst * settings.options.z; }
-    if op == 3u {
-        let coverage=select(dst.a,dst.r,settings.options.y==2.);
-        return raw*mix(coverage,1.-coverage,settings.options.z);
-    }
-    if op == 5u { let a = (1.-raw.a)*.42; return scene_space(vec4<f32>(.46,.12,.8,1.)*a); }
-    let src = blend_opacity(raw,settings.options.y);
-    if settings.options.w > .5 { return blend_clip(src,dst,u32(settings.options.z)); }
+    return src;
+}
+fn scene_operation_over(src:vec4<f32>,dst:vec4<f32>)->vec4<f32> {
+    if settings.options.w>.5 {return vec4<f32>(src.rgb*dst.a+dst.rgb*(1.-src.a),dst.a);}
+    return src+dst*(1.-src.a);
+}
+@fragment fn fragment_fill(v:Vertex)->@location(0) vec4<f32> {
+    scene_clip(v);
+    let raw=scene_read(front,v);
+    let src=scene_operation_paper(vec4<f32>(settings.color.rgb*settings.color.a,settings.color.a)*raw.r,scene_operation_local(v));
+    let dst=scene_read(back,v);
+    if settings.options.z>.5 && scene_read(scene_extra,v).r>.5 {return dst+src*select(1.-dst.a,0.,settings.options.w>.5);}
+    return scene_operation_over(src,dst);
+}
+@fragment fn fragment_gradient(v:Vertex)->@location(0) vec4<f32> {
+    scene_clip(v);
+    let local=scene_operation_local(v);
+    let p=scene_operation_point(local);
+    let flags=u32(settings.options.z);
+    let t=gradient_shape(p-settings.backdrop.xy,settings.backdrop.zw-settings.backdrop.xy,flags%4u,flags>=4u);
+    let sample=gradient_sample(0xffffffffu,t);
+    let color=gradient_dither(sample.color,p,settings.options.y,sample.dither);
+    let raw=scene_read(front,v);
+    let src=scene_operation_paper(vec4(color.rgb*color.a,color.a)*settings.color.x*raw.r,local);
+    return scene_operation_over(src,scene_read(back,v));
+}
+@fragment fn fragment_figure(v:Vertex)->@location(0) vec4<f32> {
+    scene_clip(v);
+    let src=figure_color(scene_operation_point(scene_operation_local(v)))*scene_read(front,v).r;
+    let dst=scene_read(back,v);
+    if settings.options.y>=16. {return select(dst*(1.-src.a),dst,settings.options.w>.5);}
+    return scene_operation_over(src,dst);
+}
+@fragment fn fragment_blend(v:Vertex)->@location(0) vec4<f32> {
+    scene_clip(v);
+    let src=blend_opacity(scene_read(front,v),settings.options.y);
+    let dst=scene_read(back,v);
+    if settings.options.w>.5 {return blend_clip(src,dst,u32(settings.options.z));}
     return blend_composite(src,dst,u32(settings.options.z));
+}
+@fragment fn fragment_image(v:Vertex)->@location(0) vec4<f32> {
+    return scene_space(scene_image(v))*settings.options.y;
+}
+@fragment fn fragment_tone(v:Vertex)->@location(0) vec4<f32> {
+    scene_clip(v);
+    let spread=max(settings.color.zw/settings.rect.zw-1.,vec2<f32>(0.))/3.;
+    var ink=vec4<f32>(0.);
+    for (var j=-1;j<=1;j++) {
+        for (var i=-1;i<=1;i++) {
+            let p=settings.color.xy+v.uv*settings.color.zw+vec2<f32>(f32(i),f32(j))*spread;
+            ink+=scene_sample(front,p/vec2<f32>(textureDimensions(front)));
+        }
+    }
+    return hdr_map_sdr(ink/9.,settings.operation_linear,settings.operation_offset);
 }
 
 fn scene_pointwise(raw: vec4<f32>, v: Vertex) -> vec4<f32> {

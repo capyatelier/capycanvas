@@ -122,6 +122,7 @@ impl FilterPreviews {
                 self.scene.effects.prepare(r, snapshot.view(), &[self.programs[&effect.program.id]], effects::Execution::Preview, 0., 0, preview_space(effect.view(), snapshot.view().composition().blend))?;
             }
             let mut ready = self.scene.effects.enqueue_active(&startup.compiler, startup::OTHER);
+            ready &= startup.compiler.require([&self.scene.pipeline[fragment_pipeline(10,false).expect("tone fragment pipeline")]], startup::OTHER);
             // Preview readback uses the same conversion as document export.
             ready &= r.ui_readback_ready();
             startup.compiler.start();

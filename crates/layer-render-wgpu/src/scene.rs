@@ -42,6 +42,33 @@ pub(crate) mod bake_preflight;
 pub(crate) mod resample;
 pub(crate) mod scale;
 
+const FRAGMENTS: [(&str, &str); 9] = [
+    ("fragment_main", "tile layer composition"),
+    ("fragment_main", "tile layer over"),
+    ("fragment_coverage", "tile mask coverage"),
+    ("fragment_fill", "raster fill operation"),
+    ("fragment_gradient", "raster gradient operation"),
+    ("fragment_figure", "raster figure operation"),
+    ("fragment_blend", "tile layer blend"),
+    ("fragment_image", "tile image placement"),
+    ("fragment_tone", "tile tone mapping"),
+];
+
+fn fragment_pipeline(operation: u32, over: bool) -> Option<usize> {
+    Some(match operation {
+        15 => return None,
+        6 => 3,
+        18 => 4,
+        11 => 5,
+        21 | 22 => 2,
+        12 => 7,
+        10 => 8,
+        0 | 1 | 2 | 3 | 5 | 7 | 13 | 14 | 16 | 17 | 19 | 20 => usize::from(over),
+        4 => 6,
+        _ => panic!("Unknown scene draw operation {operation}"),
+    })
+}
+
 #[derive(Clone)]
 pub(super) struct Image {
     texture: wgpu::Texture,
@@ -201,7 +228,8 @@ pub(super) struct Scene {
     capacity: usize,
     record_count: usize,
     upload: Vec<u8>,
-    pipeline: [Deferred<wgpu::RenderPipeline>; 5],
+    pipeline: [Deferred<wgpu::RenderPipeline>; FRAGMENTS.len()],
+    pending_pipelines: u16,
     pub(super) effects: effects::Effects,
     pub effect_passes: u64,
     images: images::ImageStages,
@@ -225,9 +253,23 @@ pub(super) struct Pipelines {
     pub fine_resample: resample::Resample,
     uniforms: wgpu::BindGroupLayout,
     layout: wgpu::BindGroupLayout,
-    pub pipeline: [Deferred<wgpu::RenderPipeline>; 5],
+    pub pipeline: [Deferred<wgpu::RenderPipeline>; FRAGMENTS.len()],
     pub source: sources::Pipelines,
     pub constant: (wgpu::BindGroupLayout, wgpu::BindGroupLayout, Deferred<wgpu::ComputePipeline>),
+}
+
+fn is_compute(job: &Job) -> bool {
+    if matches!(job,Job::Effect {prepared:effects::PreparedEffect {pipeline:effects::Pipeline::Compute(_),..},..}) {return true;}
+    let Job::Draw { data, over: false, clip, .. } = job else { return false; };
+    if data[8] == 15. || (data[8] == 13. && clip.is_some()) { return true; }
+    if !matches!(data[8] as u32, 1 | 13 | 14 | 17 | 19) { return false; }
+    data[..4].iter().all(|v| v.fract() == 0.) && clip.is_none_or(|clip| {
+        clip == PixelRect::new(data[0].clamp(0., data[4]) as u32, data[1].clamp(0., data[5]) as u32,
+            (data[0] + data[2]).clamp(0., data[4]) as u32,
+            (data[1] + data[3]).clamp(0., data[5]) as u32)
+            || (data[0] >= 0. && data[1] >= 0. && [clip.min_x(), clip.min_y()] == [data[0] as u32, data[1] as u32]
+                && clip.max_x() as f32 <= data[0] + data[2] && clip.max_y() as f32 <= data[1] + data[3])
+    })
 }
 
 impl Scene {
@@ -465,6 +507,7 @@ impl Scene {
             record_count: 0,
             upload: Vec::new(),
             pipeline,
+            pending_pipelines: 0,
             effects,
             effect_passes: 0,
             images: images::ImageStages::default(),
@@ -1392,7 +1435,7 @@ impl Scene {
             }
             return self.encode_jobs(r, encoder);
         }
-        let paper = fill_pipeline(&op.kind).and_then(|(_, texture)| texture.paper.as_ref().map(|binding| (texture.strength, binding))).map(|(strength, binding)| {
+        let paper = fill_texture(&op.kind).and_then(|texture| texture.paper.as_ref().map(|binding| (texture.strength, binding))).map(|(strength, binding)| {
             r.prepare_paper_binding(binding, startup::BRUSH)?;
             let tile = crate::paper::PaperTile::new(&binding.surface)?;
             let id = tile.id(&binding.surface);
@@ -1708,6 +1751,9 @@ impl Scene {
     }
 
     pub(crate) async fn prepare_capture_work_async(&mut self,r:&mut WgpuRasterizer)->Result<(),GpuRasterError> {
+        Deferred::prepare_all(self.pipeline.iter().enumerate().filter_map(|(i,pipeline)|
+            (self.pending_pipelines & (1 << i) != 0).then_some(pipeline))).await.map_err(GpuRasterError::Effect)?;
+        self.pending_pipelines = 0;
         #[cfg(not(target_arch="wasm32"))]
         self.effects.compile();
         #[cfg(target_arch="wasm32")]
@@ -2043,30 +2089,50 @@ impl Scene {
         self.encode_query_jobs(r, encoder, None)
     }
 
-    fn effect_jobs_ready(&self,r:&WgpuRasterizer)->bool {
-        if self.effects.preparation_ready() && self.jobs.iter().all(|job|!matches!(job,
-            Job::Effect {prepared,..} if !prepared.pipeline.ready())) {return true;}
+    fn jobs_ready(&mut self,r:&WgpuRasterizer)->bool {
+        self.pending_pipelines = 0;
+        let mut effects_ready = self.effects.preparation_ready();
+        for job in &self.jobs {
+            match job {
+                Job::Draw {data,over,..} => {
+                    if let Some(index) = fragment_pipeline(data[8] as u32,*over)
+                        && !self.pipeline[index].ready() && !is_compute(job) {self.pending_pipelines |= 1 << index;}
+                }
+                Job::Effect {prepared,..} => effects_ready &= prepared.pipeline.ready(),
+                _ => {}
+            }
+        }
+        if effects_ready && self.pending_pipelines == 0 {return true;}
         let compiler=r.startup.as_ref().map(|startup|&startup.compiler).or(r.preparation_compiler.as_ref());
         if let Some(compiler)=compiler {
-            self.effects.enqueue(compiler,startup::DOCUMENT);
+            if !effects_ready {self.effects.enqueue(compiler,startup::DOCUMENT);}
+            compiler.require(self.pipeline.iter().enumerate().filter_map(|(index,pipeline)|
+                (self.pending_pipelines & (1 << index) != 0).then_some(pipeline)),startup::DOCUMENT);
             compiler.start();
             return false;
         }
         #[cfg(not(target_arch="wasm32"))]
-        {self.effects.compile();true}
+        {
+            self.effects.compile();
+            for (index,pipeline) in self.pipeline.iter().enumerate() {
+                if self.pending_pipelines & (1 << index) != 0 {pipeline.compile();}
+            }
+            self.pending_pipelines = 0;
+            true
+        }
         #[cfg(target_arch="wasm32")]
         {false}
     }
     fn encode_query_jobs(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder, grid: Option<[u32;4]>) -> Result<(), GpuRasterError> {
         if self.ordered {return self.encode_ordered_jobs(r,encoder).and_then(|ready|if ready {Ok(())}else {Err(GpuRasterError::DeferredObjectWork)});}
-        if !self.effect_jobs_ready(r) {self.discard_unencoded_jobs();return Err(GpuRasterError::DeferredObjectWork);}
+        if !self.jobs_ready(r) {self.discard_unencoded_jobs();return Err(GpuRasterError::DeferredObjectWork);}
         let result = self.encode_jobs_inner(r, encoder, grid);
         if result.is_err() {self.discard_unencoded_jobs();}
         result
     }
 
     fn encode_ordered_jobs(&mut self,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder)->Result<bool,GpuRasterError> {
-        if !self.effect_jobs_ready(r) {return Ok(false);}
+        if !self.jobs_ready(r) {return Ok(false);}
         let end=self.jobs.iter().position(|job|matches!(job,Job::DecodedTile(source) if source.prepared().is_none())).unwrap_or(self.jobs.len());
         let remaining=self.jobs.split_off(end);
         let ranges=std::mem::take(&mut self.source_jobs);
@@ -2156,19 +2222,6 @@ impl Scene {
                 &self.upload,
             )?;
         }
-        let is_compute = |job: &Job| {
-            if matches!(job,Job::Effect {prepared:effects::PreparedEffect {pipeline:effects::Pipeline::Compute(_),..},..}) {return true;}
-            let Job::Draw { data, over: false, clip, .. } = job else { return false; };
-            if data[8] == 15. || (data[8] == 13. && clip.is_some()) { return true; }
-            if !matches!(data[8] as u32, 1 | 13 | 14 | 17 | 19) { return false; }
-            data[..4].iter().all(|v| v.fract() == 0.) && clip.is_none_or(|clip| {
-                clip == PixelRect::new(data[0].clamp(0., data[4]) as u32, data[1].clamp(0., data[5]) as u32,
-                    (data[0] + data[2]).clamp(0., data[4]) as u32,
-                    (data[1] + data[3]).clamp(0., data[5]) as u32)
-                    || (data[0] >= 0. && data[1] >= 0. && [clip.min_x(), clip.min_y()] == [data[0] as u32, data[1] as u32]
-                        && clip.max_x() as f32 <= data[0] + data[2] && clip.max_y() as f32 <= data[1] + data[3])
-            })
-        };
         let overwritten_clear = |i: usize| {
             let Job::Clear(target, _) = &self.jobs[i] else { return false; };
             self.jobs.get(i + 1).is_some_and(|next|
@@ -2439,7 +2492,7 @@ impl Scene {
                                 });
                                 pass.set_bind_group(3, masks, &[]);
                             } else if let Job::Draw { over, data, .. } = job {
-                                pass.set_pipeline(&self.pipeline[if data[30] > 0. && matches!(data[8] as u32, 6 | 18) { 3 + usize::from(data[8] == 18.) } else if matches!(data[8] as u32, 21 | 22) { 2 } else { usize::from(*over) }]);
+                                pass.set_pipeline(&self.pipeline[fragment_pipeline(data[8] as u32,*over).expect("fragment draw operation")]);
                             }
                             pass.set_bind_group(0, &self.binding, &[((base + j) * self.stride) as u32]);
                             pass.set_bind_group(1, binding, &[]);
@@ -2483,16 +2536,34 @@ impl Scene {
     }
 }
 
-pub(super) fn fill_pipeline(kind: &RasterOperationKind) -> Option<(usize, &layer_core::FillTexture)> {
+pub(super) fn fill_texture(kind: &RasterOperationKind) -> Option<&layer_core::FillTexture> {
     kind.fill_texture().filter(|texture| texture.strength > 0. && texture.paper.is_some())
-        .map(|texture| (3 + usize::from(matches!(kind, RasterOperationKind::Gradient { .. })), texture))
+}
+
+pub(super) fn operation_pipeline(kind: &RasterOperationKind) -> Option<usize> {
+    match kind {
+        RasterOperationKind::Fill { .. } => Some(3),
+        RasterOperationKind::Gradient { .. } => Some(4),
+        RasterOperationKind::Figure(_) => Some(5),
+        _ => None,
+    }
+}
+
+fn shader_source(space: layer_core::color::RgbSpace) -> Cow<'static,str> {
+    compose_wgsl(&[&working_color::source(space), &crate::view_color::hdr_shader(space, layer_core::color::RgbSpace::Srgb),
+        include_str!("blend_codes.wgsl"), include_str!("blend_modes.wgsl"), include_str!("scene_vertex.wgsl"),
+        include_str!("relief_transfer.wgsl"), include_str!("paper_sample.wgsl"), include_str!("scene.wgsl"),
+        "@group(1) @binding(3) var scene_extra:texture_2d<f32>; @group(1) @binding(4) var scene_paper:texture_2d<f32>; @group(1) @binding(5) var paper_sampling:sampler; fn gradient_record(base:u32,index:u32)->vec4<f32>{return textureLoad(scene_extra,vec2<i32>(i32(index),0),0);}",
+        include_str!("float_number.wgsl"), crate::gradient::SOURCE, include_str!("scene_constant.wgsl")])
 }
 
 impl Pipelines {
     pub fn for_scene(&self, scene: SceneView<'_>) -> impl Iterator<Item = &Deferred<wgpu::RenderPipeline>> {
-        let mut fills = [false; 2];
-        for (pipeline, _) in scene.targets().filter_map(|target| scene.operations(target)).flatten().filter_map(|op| fill_pipeline(&op.kind)) { fills[pipeline - 3] = true; }
-        self.pipeline[..3].iter().chain(self.pipeline[3..].iter().zip(fills).filter_map(|(pipeline, used)| used.then_some(pipeline)))
+        let mut used = [false; FRAGMENTS.len()];
+        used[..3].fill(true);
+        used[6] = true;
+        for pipeline in scene.targets().filter(|target| !target.is_coverage()).filter_map(|target| scene.operations(target)).flatten().filter_map(|op| operation_pipeline(&op.kind)) {used[pipeline] = true;}
+        self.pipeline.iter().zip(used).filter_map(|(pipeline,used)| used.then_some(pipeline))
     }
     pub fn scale_pipelines(&self) -> [&Deferred<wgpu::ComputePipeline>; 6] {
         [&self.scale.reduce, &self.scale.reduce_phased, &self.scale.reduce_pair, &self.scale.compose, &self.scale.half, &self.resample.area]
@@ -2525,7 +2596,7 @@ impl Pipelines {
             move || {
                 device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("layer scene"),
-                    source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[&working_color::shader(&device), &crate::view_color::hdr_shader(device.working_space(), layer_core::color::RgbSpace::Srgb), include_str!("blend_codes.wgsl"), include_str!("blend_modes.wgsl"), include_str!("scene_vertex.wgsl"), include_str!("relief_transfer.wgsl"), include_str!("paper_sample.wgsl"), include_str!("scene.wgsl"), "@group(1) @binding(3) var scene_extra:texture_2d<f32>; @group(1) @binding(4) var scene_paper:texture_2d<f32>; @group(1) @binding(5) var paper_sampling:sampler; fn gradient_record(base:u32,index:u32)->vec4<f32>{return textureLoad(scene_extra,vec2<i32>(i32(index),0),0);}", include_str!("float_number.wgsl"), crate::gradient::SOURCE, include_str!("scene_constant.wgsl")])),
+                    source: wgpu::ShaderSource::Wgsl(shader_source(device.working_space())),
                 })
             }
         });
@@ -2534,14 +2605,13 @@ impl Pipelines {
             bind_group_layouts: &[Some(&uniforms), Some(&layout)],
             immediate_size: 0,
         });
-        let pipeline = [None, Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING), None, None, None].into_iter().enumerate().map(|(i, blend)| {
+        let pipeline = FRAGMENTS.into_iter().enumerate().map(|(i, (entry,label))| {
             let (device, pipeline_layout, shader) =
                 (device.clone(), pipeline_layout.clone(), shader.clone());
             Deferred::pipeline(move |mode| {
-                let target = wgpu::ColorTargetState { format: if i == 2 { device.scalar_format() } else { device.working_format() }, blend, write_mask: wgpu::ColorWrites::ALL };
-                fullscreen_pipeline_targets_with_constants_recipe(mode, &device, &pipeline_layout, &shader,
-                    "fragment_main", &[Some(target)], &[("FILL_PAPER", f64::from(i >= 3)), ("FILL_GRADIENT", f64::from(i == 4))],
-                    if i == 4 { "raster gradient operation" } else if i == 3 { "raster paint operation" } else { "tile layer composition" })
+                fullscreen_pipeline_recipe(mode, &device, &pipeline_layout, &shader, entry,
+                    (i == 1).then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    if i == 2 { device.scalar_format() } else { device.working_format() }, label)
             })
         }).collect::<Vec<_>>().try_into().ok().unwrap();
         let constant = {
@@ -2761,3 +2831,85 @@ mod display_backup_tests;
 
 #[cfg(test)]
 mod capture_readiness_tests;
+
+#[cfg(test)]
+mod shader_tests {
+    use super::*;
+
+    #[test]
+    fn fragment_operations_select_only_their_assigned_pipeline() {
+        assert_eq!(FRAGMENTS.map(|(entry,_)| entry), ["fragment_main","fragment_main","fragment_coverage",
+            "fragment_fill","fragment_gradient","fragment_figure","fragment_blend","fragment_image","fragment_tone"]);
+        let expected = [
+            [Some(0),Some(1)],
+            [Some(0),Some(1)],
+            [Some(0),Some(1)],
+            [Some(0),Some(1)],
+            [Some(6),Some(6)],
+            [Some(0),Some(1)],
+            [Some(3),Some(3)],
+            [Some(0),Some(1)],
+            [None,None],
+            [None,None],
+            [Some(8),Some(8)],
+            [Some(5),Some(5)],
+            [Some(7),Some(7)],
+            [Some(0),Some(1)],
+            [Some(0),Some(1)],
+            [None,None],
+            [Some(0),Some(1)],
+            [Some(0),Some(1)],
+            [Some(4),Some(4)],
+            [Some(0),Some(1)],
+            [Some(0),Some(1)],
+            [Some(2),Some(2)],
+            [Some(2),Some(2)],
+        ];
+        for (operation,pipelines) in expected.into_iter().enumerate() {
+            for over in [false,true] {
+                if matches!(operation,8|9) {
+                    assert!(std::panic::catch_unwind(|| fragment_pipeline(operation as u32,over)).is_err(),
+                        "undefined operation {operation} over={over} selected a fragment pipeline");
+                } else {
+                    assert_eq!(fragment_pipeline(operation as u32,over),pipelines[usize::from(over)],
+                        "operation {operation} over={over}");
+                }
+            }
+        }
+        for operation in [23,u32::MAX] {
+            for over in [false,true] {
+                assert!(std::panic::catch_unwind(|| fragment_pipeline(operation,over)).is_err(),
+                    "unknown operation {operation} over={over} selected a fragment pipeline");
+            }
+        }
+    }
+
+    #[test]
+    fn fragment_families_omit_unrelated_operations() {
+        let families = ["gradient_shape", "ellipse_distance", "scene_image", "hdr_map_sdr", "blend_composite", "paper_sample"];
+        for space in layer_core::color::RgbSpace::ALL {
+            let source = shader_source(space);
+            let module = crate::shader_limits::ValidatedModule::parse(&source).unwrap().into_parts().0;
+            for (entry, required) in [
+                ("fragment_main", &[][..]),
+                ("fragment_coverage", &[][..]),
+                ("fragment_fill", &["paper_sample"][..]),
+                ("fragment_gradient", &["gradient_shape", "paper_sample"][..]),
+                ("fragment_figure", &["ellipse_distance"][..]),
+                ("fragment_blend", &["blend_composite"][..]),
+                ("fragment_image", &["scene_image"][..]),
+                ("fragment_tone", &["hdr_map_sdr"][..]),
+                ("compose_constant", &[][..]),
+            ] {
+                let mut selected = module.clone();
+                selected.entry_points.retain(|e| e.name == entry);
+                assert_eq!(selected.entry_points.len(), 1, "{entry}/{space:?}");
+                naga::compact::compact(&mut selected, naga::compact::KeepUnused::No);
+                for family in families {
+                    let retained = selected.functions.iter().any(|(_, function)| function.name.as_deref() == Some(family));
+                    assert_eq!(retained, required.contains(&family), "{entry}/{space:?} family {family}");
+                }
+            }
+        }
+    }
+}

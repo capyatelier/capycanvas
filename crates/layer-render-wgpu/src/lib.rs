@@ -1895,13 +1895,16 @@ impl WgpuRasterizer {
         let mut ready = true;
         for batch in packet.dab_batches {
             if let DabBatchKind::RasterOperation(index) = batch.kind
-                && let Some((pipeline, texture)) = packet.scene.operations(batch.target).and_then(|ops| ops.get(index as usize)).and_then(|op| scene::fill_pipeline(&op.kind))
+                && let Some(operation) = packet.scene.operations(batch.target).and_then(|ops| ops.get(index as usize))
             {
-                if let Some(startup) = &self.startup {
+                if !batch.target.is_coverage()
+                    && let Some(pipeline) = scene::operation_pipeline(&operation.kind)
+                    && let Some(startup) = &self.startup {
                     ready &= startup.compiler.require([&self.scene_pipelines.pipeline[pipeline]], startup::BRUSH);
                     startup.compiler.start();
                 }
-                if let Some(binding) = &texture.paper
+                if let Some(texture) = scene::fill_texture(&operation.kind)
+                    && let Some(binding) = &texture.paper
                     && self.prepare_paper_binding(binding, startup::BRUSH).is_ok() {
                     ready &= paper::PaperTile::id_for(binding).is_none_or(|id| self.papers.view(&id).is_some());
                 }
@@ -3702,7 +3705,7 @@ impl CanvasRenderer for WgpuRasterizer {
             ready
         });
         let fill_ready=if let Some(fill)=self.fill_preview.clone() {
-            let pipeline=scene::fill_pipeline(&fill.operation.kind).map_or(0,|(pipeline,_)|pipeline);
+            let pipeline=scene::operation_pipeline(&fill.operation.kind).unwrap_or(0);
             self.startup.as_ref().is_none_or(|startup| {
                 let ready=startup.compiler.require([&self.scene_pipelines.pipeline[pipeline],&self.layer_masks.initialize],startup::BRUSH)
                     & startup.compiler.require(self.selection_clip.pipelines(),startup::BRUSH);

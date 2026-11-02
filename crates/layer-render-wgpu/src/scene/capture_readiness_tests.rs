@@ -5,6 +5,91 @@ use layer_core::color::{RgbColor, RgbSpace};
 
 const EXTENT: [u32; 2] = [17, 19];
 
+#[cfg(not(target_arch="wasm32"))]
+#[test]
+fn cold_fragment_family_defers_before_encoding_and_capture_prepares_only_that_family() {
+    for ordered in [false,true] {
+        let reference = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let mut r = staged_renderer(&reference,Default::default());
+        let mut scene = Scene::new(&r).unwrap();
+        let compiler = r.startup.as_ref().unwrap().compiler.clone();
+        let (output,view) = create_color_target(&r.device,EXTENT,"cold fill output");
+        let (coverage,coverage_view) = create_target(&r.device,EXTENT,r.device.scalar_format(),"cold fill coverage");
+        let pixels:Vec<_> = (0..EXTENT[0]*EXTENT[1]).flat_map(|_| 0.5_f32.to_le_bytes()).collect();
+        r.queue.write_texture(coverage.as_image_copy(),&pixels,wgpu::TexelCopyBufferLayout {
+            offset:0,bytes_per_row:Some(EXTENT[0]*4),rows_per_image:Some(EXTENT[1]),
+        },coverage.size());
+        let mut data = [0.;32];
+        data[..8].copy_from_slice(&[0.,0.,EXTENT[0] as f32,EXTENT[1] as f32,EXTENT[0] as f32,EXTENT[1] as f32,0.,0.]);
+        data[8] = 6.;
+        data[12..16].copy_from_slice(&[0.25,0.5,0.75,0.5]);
+        let job = Job::Draw {target:view,sources:[coverage_view,r.empty_view.clone(),r.empty_view.clone(),r.empty_paper_view.clone()],data,over:false,clip:None,source_target:None};
+        scene.jobs.push(job.clone());
+        scene.source_jobs.push(0..1);
+        scene.ordered = ordered;
+        let mut encoder = submission::CommandEncoder::new(&r.device,&Default::default());
+        let (entered,entry) = std::sync::mpsc::channel();
+        let (release,held) = std::sync::mpsc::channel();
+        compiler.enqueue(startup::BRUSH,move || {let _=entered.send(());let _=held.recv_timeout(std::time::Duration::from_secs(10));Ok(())});
+        compiler.start();
+        entry.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        let deferred = scene.encode_query_jobs(&mut r,&mut encoder,None);
+        let passes = encoder.pass_count();
+        let records = scene.record_count;
+        let retained = scene.jobs.len();
+        let ready = scene.pipeline[3].ready();
+        if !ordered {
+            assert!(scene.encode_query_jobs(&mut r,&mut encoder,None).is_ok(),"discarded fragment work must not block an empty batch");
+            scene.jobs.push(job.clone());
+            assert!(matches!(scene.encode_query_jobs(&mut r,&mut encoder,None),Err(GpuRasterError::DeferredObjectWork)));
+        }
+        release.send(()).unwrap();
+        assert!(matches!(deferred,Err(GpuRasterError::DeferredObjectWork)),"{deferred:?}");
+        assert_eq!(passes,0);
+        assert_eq!(records,0);
+        assert_eq!(retained,usize::from(ordered));
+        assert!(!ready);
+        pollster::block_on(scene.prepare_capture_work_async(&mut r)).unwrap();
+        assert!(scene.pipeline[3].ready());
+        assert!(scene.pipeline.iter().enumerate().all(|(i,pipeline)| i==3 || !pipeline.ready()));
+        if !ordered {scene.jobs.push(job);}
+        scene.encode_query_jobs(&mut r,&mut encoder,None).unwrap();
+        assert_eq!(scene.pending_pipelines,0);
+        assert!(encoder.pass_count()>0);
+        r.uploads.finish(&encoder);
+        encoder.submit(&r.queue);
+        assert_pixels(&r,&output,[0.0625,0.125,0.1875,0.25]);
+    }
+}
+
+#[cfg(not(target_arch="wasm32"))]
+#[test]
+fn cold_compute_copy_encodes_without_admitting_fragment_pipelines() {
+    let reference = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut r = staged_renderer(&reference,Default::default());
+    let mut scene = Scene::new(&r).unwrap();
+    r.scene_pipelines.constant.2.compile();
+    let (source,source_view) = create_color_target(&r.device,EXTENT,"compute copy source");
+    let (output,view) = create_color_target(&r.device,EXTENT,"compute copy output");
+    let color = [0.125_f32,0.25,0.375,0.5];
+    let pixels:Vec<_> = (0..EXTENT[0]*EXTENT[1]).flat_map(|_| color.into_iter().flat_map(f32::to_ne_bytes)).collect();
+    r.queue.write_texture(source.as_image_copy(),&pixels,wgpu::TexelCopyBufferLayout {
+        offset:0,bytes_per_row:Some(EXTENT[0]*16),rows_per_image:Some(EXTENT[1]),
+    },source.size());
+    let mut data = [0.;32];
+    data[..8].copy_from_slice(&[0.,0.,EXTENT[0] as f32,EXTENT[1] as f32,EXTENT[0] as f32,EXTENT[1] as f32,0.,0.]);
+    data[8] = 1.;data[9] = 1.;
+    scene.jobs.push(Job::Draw {target:view,sources:[source_view,r.empty_view.clone(),r.empty_view.clone(),r.empty_paper_view.clone()],
+        data,over:false,clip:None,source_target:None});
+    scene.source_jobs.push(0..1);
+    let mut encoder = submission::CommandEncoder::new(&r.device,&Default::default());
+    let result = scene.encode_query_jobs(&mut r,&mut encoder,None);
+    assert!(result.is_ok(),"compute-only copy must not wait for a fragment pipeline: {result:?}");
+    assert!(scene.pipeline.iter().all(|pipeline| !pipeline.ready()));
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);
+    assert_pixels(&r,&output,color);
+}
+
 fn fixture(hidden_separator: bool) -> (Document, Vec<OccurrenceHandle>, Vec<OccurrenceHandle>) {
     let mut doc = Document::new(PortableId::random(), EXTENT[0], EXTENT[1],
         DocumentNames {paint: "Ink".into(), paper: "Paper".into()});

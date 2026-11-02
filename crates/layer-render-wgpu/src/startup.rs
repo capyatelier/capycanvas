@@ -538,9 +538,6 @@ impl WgpuRasterizer {
         startup.current = current;
         startup.resized = resized;
         startup.preparation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if startup.brush.is_none() {
-            for pipeline in &self.scene_pipelines.pipeline[3..] { startup.compiler.background(pipeline, OTHER, || true); }
-        }
         startup.brush = Some(ShaderBrushKey::new(document, brush));
         startup.transform = transform;
         startup.compiler.start();
@@ -872,7 +869,7 @@ mod tests {
         renderer.prepare_startup(&document, &brush, false).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         crate::test_support::wait_startup(&mut renderer, deadline, |progress| progress.brush_ready, format_args!("G-Pen"));
-        assert!(renderer.scene_pipelines.pipeline[3..].iter().all(|pipeline| !pipeline.ready()));
+        assert!(renderer.scene_pipelines.pipeline.iter().enumerate().all(|(i,pipeline)| i < 3 || i == 6 || !pipeline.ready()));
         let mut image = SourceBuilder::new([4; 2], SourceInterpretation { channels: SourceChannels::Gray,
             depth: layer_core::color::SampleDepth::U8, profile: Default::default(), profile_assumed: false }, 1 << 20).unwrap();
         for _ in 0..4 { image.push_row(&[128; 4]).unwrap(); }
@@ -1090,7 +1087,7 @@ mod gpu_tests {
         assert!(!renderer.startup_needs_update(&document, &recolored, false));
         assert!(renderer.poll_startup().unwrap().brush_ready);
         assert!(renderer.scene_pipelines.for_scene(document.scene()).all(|p| p.ready()));
-        assert!(renderer.scene_pipelines.pipeline[3..].iter().all(|pipeline| !pipeline.ready()));
+        assert!(renderer.scene_pipelines.pipeline.iter().enumerate().all(|(i,pipeline)| i < 3 || i == 6 || !pipeline.ready()));
         let target = document.drawing_target().unwrap();
         let paper = document.nearest_paper_binding(Some(target)).unwrap();
         for texture in [layer_core::FillTexture { strength: 0., paper: Some(paper) },
@@ -1111,7 +1108,8 @@ mod gpu_tests {
                 std::thread::sleep(Duration::from_millis(1));
             }
             assert!(renderer.scene_pipelines.for_scene(document.scene()).all(|pipeline| pipeline.ready()));
-            assert!(renderer.scene_pipelines.pipeline[3..].iter().all(|pipeline| !pipeline.ready()), "flat fills must not require the paper variant");
+            assert!(renderer.scene_pipelines.pipeline[3].ready(), "flat fills must prepare their operation family before submission");
+            assert!(renderer.scene_pipelines.pipeline.iter().enumerate().all(|(i,pipeline)| i < 4 || i == 6 || !pipeline.ready()), "flat fills must not prepare other operation families");
         }
         crate::layer_tests::placement::paint_mut(&mut document).operations = Arc::default();
         document.revision += 1;
@@ -1144,8 +1142,7 @@ mod gpu_tests {
         renderer.shader_idle(true, false);
         let deadline = std::time::Instant::now() + Duration::from_secs(60);
         crate::test_support::wait_startup(&mut renderer, deadline, |progress| progress.complete, format_args!("Startup compilation timed out"));
-        let paper_pipelines = [3, 4].map(|index| renderer.scene_pipelines.pipeline[index].clone());
-        crate::test_support::wait_startup(&mut renderer, deadline, |_| paper_pipelines.iter().all(|pipeline| pipeline.ready()), format_args!("Background fill pipeline timed out"));
+        assert!(renderer.scene_pipelines.pipeline.iter().enumerate().all(|(i,pipeline)| i < 4 || i == 6 || !pipeline.ready()), "unused operation families must remain cold after idle startup");
         for (preset, required) in &unselected {
             assert!(!required.ready(), "unselected {preset:?} must remain cold after idle startup");
         }
