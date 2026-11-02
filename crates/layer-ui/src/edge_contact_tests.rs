@@ -205,3 +205,34 @@ fn a_pending_contact_cannot_resume_after_a_workspace_transition() {
     assert!(!edge(&mut s, 7, ContactPhase::Move, PointerKind::Touch, [start[0] - 20., start[1]], 10).handled);
     assert!(edge(&mut s, 7, ContactPhase::Down, PointerKind::Touch, start, 20).edge_pending);
 }
+
+#[test]
+fn a_touch_on_a_warp_node_inside_the_work_area_never_holds_for_an_edge() {
+    for scale in [1., 2.] {
+        let mut s = paint();
+        s.set_viewport(VIEW, VIEW.map(|v| (v * scale) as u32)).unwrap();
+        let layout = s.layout(VIEW);
+        let point = (1..80).map(|dy| [layout.work_area.x + layout.work_area.width * 0.5, layout.work_area.y + dy as f32])
+            .find(|point| layout.work_area.contains(point[0], point[1])
+                && layout.edge_grab_at(*point, PointerKind::Touch, EdgeContact::Free).is_some_and(|grab| grab.resizes(Axis::Vertical)))
+            .unwrap();
+        assert!(!s.object_touch_hit(point.map(|v| v * scale)));
+        assert!(edge(&mut s, 1, ContactPhase::Down, PointerKind::Touch, point, 0).edge_pending);
+        edge(&mut s, 1, ContactPhase::Cancel, PointerKind::Touch, point, 1);
+        invoke(&mut s, CommandId::SelectAll);
+        invoke(&mut s, CommandId::FillSelection);
+        s.frame(1, 1).unwrap();
+        invoke(&mut s, CommandId::ScaleRotate);
+        invoke(&mut s, CommandId::TransformWarp);
+        let node = s.transform_handle_points()[1];
+        for axis in 0..2 {
+            s.state.camera.translation[axis] += (point[axis] - node[axis]) * scale;
+        }
+        s.sync_camera();
+        assert!(s.object_touch_hit(point.map(|v| v * scale)));
+        let down = edge(&mut s, 2, ContactPhase::Down, PointerKind::Touch, point, 10);
+        assert!(!down.edge_pending && !down.edge_select_on_release);
+        let moved = edge(&mut s, 2, ContactPhase::Move, PointerKind::Touch, [point[0], point[1] - 24.], 20);
+        assert!(!moved.edge_hold && !moved.handled);
+    }
+}

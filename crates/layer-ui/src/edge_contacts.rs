@@ -85,7 +85,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return Ok(reply);
                 }
                 if self.edge_contacts.active.is_none() {
-                    self.edge_contacts.pending = self.layout(viewport).edge_grab_at(position, kind, contact).map(|grab| PendingEdge { id, kind, grab });
+                    let layout = self.layout(viewport);
+                    let scale = self.logical_viewport.map_or(1., |v| (self.state.camera.viewport[0] as f32 / v[0]).max(f32::EPSILON));
+                    let canvas_owns = kind == PointerKind::Touch
+                        && layout.work_area.contains(position[0], position[1])
+                        && self.object_touch_hit([position[0] * scale, position[1] * scale]);
+                    self.edge_contacts.pending = if canvas_owns { None } else { layout.edge_grab_at(position, kind, contact).map(|grab| PendingEdge { id, kind, grab }) };
                 }
                 reply.edge_pending = self.edge_contacts.pending.is_some_and(|pending| pending.id == id);
                 reply.edge_select_on_release = reply.edge_pending && self.edge_contacts.pending.is_some_and(|pending| pending.grab.resizes(Axis::Vertical));
