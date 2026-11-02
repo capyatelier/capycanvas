@@ -338,7 +338,8 @@ fn complete_editing(english:&Localizer)->EditingState {
         "constraint":"ratio","from_center":true,"mode":"add","antialias":false,
         "feather":2.,"constrain_angles":true,"ratio":[2.,3.],"size":[123.,234.],
     });
-    value["region_values"]=json!({"edge_offset":2.,"grain_depth":0.5,"tolerance":0.4});
+    value["region_values"]=json!({"edge_offset":2.,"grain_depth":0.5,"tolerance":0.4,"unfilled_size":19.});
+    value["fill_areas"]="any_colour".into();
     value["region_sources"]=json!(["visible","reference","editing"]);
     for field in ["region_stop_at_colors","region_close_gaps","region_smooth_edges"] {value[field]=false.into();}
     value["region_edges"]=serde_json::to_value(layer_core::RegionEdges::GrowShrink(2)).unwrap();

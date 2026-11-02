@@ -211,7 +211,7 @@ impl RegionRequests {
         Ok(())
     }
     fn classify_target(&mut self,r:&mut WgpuRasterizer,request:&RegionRequest,encoder:&mut crate::submission::CommandEncoder)->Result<(),GpuRasterError> {
-        let stop=self.raw.encode_sampling(r,request,encoder,region_sources::Sampling::Target)?;
+        let stop=self.raw.encode_sampling(r,request,encoder,request.fill_areas.map_or(region_sources::Sampling::Target,region_sources::Sampling::Areas))?;
         self.stop_mask=Some(Self::copy(&r.device,encoder,&stop,"Stop target eligibility"));
         Ok(())
     }
@@ -234,7 +234,7 @@ impl RegionRequests {
         if target_sampled {self.sample_colour_mode(r,target.as_ref().unwrap(),encoder)?;}
 
         if let Some(count)=request.reference_count && count<request.source.sources().len()
-            && self.raw.processing(&request.source.sources()[count],region_sources::Sampling::Target) {
+            && self.raw.processing(&request.source.sources()[count],request.fill_areas.map_or(region_sources::Sampling::Target,region_sources::Sampling::Areas)) {
             let target=RegionRequest {source:request.source.sources()[count].clone(),reference_count:None,limit:None,..request.clone()};
             self.classify_target(r,&target,encoder)?;
         }
@@ -481,7 +481,7 @@ impl RegionRequests {
                     &classified,
                     request.contiguous,
                     request.enclosure.is_some(),
-                    &paper, self.stop_mask.as_ref(),request.fill.as_ref(),
+                    &paper, self.stop_mask.as_ref().map(|stop|(stop,request.fill_areas.is_none())),request.fill.as_ref(),
                 )?
             }
         };
@@ -766,7 +766,7 @@ impl WgpuRasterizer {
             if regions.cache.as_ref().is_some_and(|cache|!cache.ready) {regions.cache=None;}
         }
         let previous=regions.preparation.take();
-        regions.preparation=preparation.map(|p|Preparation {request:RegionRequest { colour_mode: Default::default(), fill: None,
+        regions.preparation=preparation.map(|p|Preparation {request:RegionRequest { fill_areas: None, colour_mode: Default::default(), fill: None,
             source:p.source.clone(),reference_count:p.reference_count,paper:p.paper.clone(),tolerance:p.tolerance,
             enclosure:None,
             position:[0;2],request_id:0,refinement:p.refinement,contiguous:true,limit:None,selection:None,
@@ -927,7 +927,7 @@ pub(crate) mod tests {
     }
 
     fn reference_query(source: RegionSource) -> RegionRequest {
-        RegionRequest { colour_mode: Default::default(), fill: None, source, reference_count: None, paper: None, enclosure: None,
+        RegionRequest { fill_areas: None, colour_mode: Default::default(), fill: None, source, reference_count: None, paper: None, enclosure: None,
             contiguous: true, selection: None, request_id: 91, position: [32, 32], tolerance: 0.,
             refinement: RegionRefinement { close_gaps: false, edges: layer_render::RegionEdges::Exact, smooth_edges: false }, limit: None }
     }

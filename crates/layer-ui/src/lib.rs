@@ -448,6 +448,8 @@ pub fn ui_catalog_localized(localization: &Localizer) -> UiCatalog {
             .collect(),
     }
 }
+pub use layer_core::FillAreas;
+
 macro_rules! command_ids {
     ($($name:ident),* $(,)?) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -654,6 +656,10 @@ command_ids! {
     EditLayerContent,
     LassoFill,
     EncloseFill,
+    PaintUnfilled,
+    FillAreasTransparent,
+    FillAreasTransparentOrWhite,
+    FillAreasAnyColour,
     FillConnected,
     FillEverywhere,
     SmoothRegionEdges,
@@ -959,6 +965,10 @@ impl CommandId {
             Self::ApplyLayerMask | Self::EditLayerMask => "mask",
             Self::EditLayerContent => "brush",
             Self::LassoFill | Self::EncloseFill => "lasso-fill",
+            Self::PaintUnfilled => "selection-brush",
+            Self::FillAreasTransparent => "transparent",
+            Self::FillAreasTransparentOrWhite => "black_white",
+            Self::FillAreasAnyColour => "colors",
             Self::FillConnected | Self::FillEverywhere => "fill",
             Self::StopAtColors => "alpha-lock",
             Self::CloseGapsAuto => "close-gap",
@@ -1022,7 +1032,7 @@ impl CommandId {
             Self::FrequencySeparation => "frequency-separation",
         })
     }
-    pub const TOOLS: [Self; 35] = [
+    pub const TOOLS: [Self; 36] = [
         Self::SelectionBrush,
         Self::TonalSelect,
         Self::DrawingBrush,
@@ -1040,6 +1050,7 @@ impl CommandId {
         Self::Lasso,
         Self::LassoFill,
         Self::EncloseFill,
+        Self::PaintUnfilled,
         Self::Select,
         Self::RectangleSelect,
         Self::EllipseSelect,
@@ -1269,6 +1280,10 @@ impl CommandId {
             Self::EditLayerContent => MessageId::COMMAND_EDIT_LAYER_CONTENT,
             Self::LassoFill => MessageId::COMMAND_LASSO_FILL,
             Self::EncloseFill => MessageId::COMMAND_ENCLOSE_FILL,
+            Self::PaintUnfilled => MessageId::COMMAND_PAINT_UNFILLED,
+            Self::FillAreasTransparent => MessageId::COMMAND_FILL_AREAS_TRANSPARENT,
+            Self::FillAreasTransparentOrWhite => MessageId::COMMAND_FILL_AREAS_TRANSPARENT_OR_WHITE,
+            Self::FillAreasAnyColour => MessageId::COMMAND_FILL_AREAS_ANY_COLOUR,
             Self::FillConnected => MessageId::COMMAND_FILL_CONNECTED,
             Self::FillEverywhere => MessageId::COMMAND_FILL_EVERYWHERE,
             Self::SmoothRegionEdges => MessageId::COMMAND_SMOOTH_REGION_EDGES,

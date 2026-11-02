@@ -221,3 +221,5 @@ tool-control-liquify-amount = 程度
 tool-family-fill = 填充工具
 tool-control-close-gaps = 闭合间隙
 tool-control-edge-offset = 距离
+
+tool-action-group-fill-areas = 填充区域

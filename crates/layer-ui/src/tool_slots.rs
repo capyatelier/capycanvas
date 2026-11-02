@@ -43,7 +43,7 @@ impl ToolbarControl {
                 CommandId::Ruler => G::Slot(ToolSlotId::Ruler),
                 CommandId::Gradient => G::Slot(ToolSlotId::Gradient),
                 CommandId::Move | CommandId::EditPoints => G::Slot(ToolSlotId::Operation),
-                CommandId::Fill | CommandId::LassoFill | CommandId::EncloseFill => G::Slot(ToolSlotId::Fill),
+                CommandId::Fill | CommandId::LassoFill | CommandId::EncloseFill | CommandId::PaintUnfilled => G::Slot(ToolSlotId::Fill),
                 _ => G::Brush(command.paint_tool()?),
             },
             _ => return None,
@@ -156,10 +156,11 @@ impl ToolSlotId {
                         command(C::Fill),
                         command(C::LassoFill),
                         command(C::EncloseFill),
+                        command(C::PaintUnfilled),
                     ]
                 }
             }
-            Self::Fill => const { &[command(C::Fill), command(C::LassoFill), command(C::EncloseFill)] },
+            Self::Fill => const { &[command(C::Fill), command(C::LassoFill), command(C::EncloseFill), command(C::PaintUnfilled)] },
             Self::Blend => const { &[
                 V::BrushGroup { group: ToolGroup::Blend },
                 V::BrushGroup { group: ToolGroup::WetPaint },
@@ -342,6 +343,7 @@ impl ToolVariant {
                     LayerCanvasTool::Region { fill: true, .. } => CommandId::Fill,
                     LayerCanvasTool::LassoFill => CommandId::LassoFill,
                     LayerCanvasTool::EncloseFill { .. } => CommandId::EncloseFill,
+                    LayerCanvasTool::PaintUnfilled {..} => CommandId::PaintUnfilled,
                     LayerCanvasTool::Crop => CommandId::Crop,
                     LayerCanvasTool::Hand => CommandId::Hand,
                     LayerCanvasTool::Zoom => CommandId::Zoom,
@@ -510,7 +512,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let group = if self.layer_interaction.tool.selection_tool().is_some() {
             ToolControlGroup::Selection
-        } else if matches!(self.layer_interaction.tool, LayerCanvasTool::LassoFill | LayerCanvasTool::EncloseFill { .. }) {
+        } else if matches!(self.layer_interaction.tool, LayerCanvasTool::LassoFill | LayerCanvasTool::EncloseFill { .. } | LayerCanvasTool::PaintUnfilled {..}) {
             ToolControlGroup::Slot(ToolSlotId::Fill)
         } else if self.layer_interaction.tool == LayerCanvasTool::Transform {
             ToolControlGroup::Slot(ToolSlotId::Operation)

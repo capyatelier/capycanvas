@@ -548,6 +548,7 @@ pub(crate) fn tool_command(action: &UiAction) -> Option<CommandId> {
         LayerCanvasTool::Select => CommandId::Lasso,
         LayerCanvasTool::LassoFill => CommandId::LassoFill,
         LayerCanvasTool::EncloseFill { .. } => CommandId::EncloseFill,
+        LayerCanvasTool::PaintUnfilled {..} => CommandId::PaintUnfilled,
         LayerCanvasTool::Move => CommandId::Move,
         LayerCanvasTool::EditPoints => CommandId::EditPoints,
         _ => return None,

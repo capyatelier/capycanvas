@@ -1229,6 +1229,8 @@ pub fn tool_choice_localized(control: ToolbarControl, localization: &Localizer) 
                 CommandId::Liquify => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_LIQUIFY).to_string(),
                 CommandId::Lasso => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_LASSO).to_string(),
                 CommandId::EncloseFill => localization.text(MessageId::COMMANDS_HELP_ENCLOSE_FILL).to_string(),
+                CommandId::PaintUnfilled => localization.text(MessageId::COMMANDS_HELP_PAINT_UNFILLED).to_string(),
+                CommandId::FillAreasTransparent | CommandId::FillAreasTransparentOrWhite | CommandId::FillAreasAnyColour => label.to_string(),
                 CommandId::LassoFill => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_LASSO_FILL).to_string(),
                 CommandId::Select => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SELECT).to_string(),
                 CommandId::QuickMask | CommandId::ReturnToArtwork | CommandId::NewSelectionLayer | CommandId::SaveSelectionLayer | CommandId::Reselect | CommandId::SelectionOutline | CommandId::MaskOverlay | CommandId::MaskOverlayProtected | CommandId::ResetMaskColors | CommandId::SwapMaskColors | CommandId::FillSelectionMask | CommandId::ClearSelectionMask => label.to_string(),

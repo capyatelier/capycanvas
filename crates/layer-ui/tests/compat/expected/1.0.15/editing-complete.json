@@ -253,6 +253,7 @@
     "ellipse",
     "fill"
   ],
+  "fill_areas": "transparent",
   "fill_scope": "connected",
   "gradient": {
     "definition": {

@@ -269,7 +269,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let doc = self.engine.document();
         let Some(name) = doc.scene().occurrence(layer).map(|o| o.name.clone()) else { return; };
         let copy = if doc.scene().vector_layer(layer).is_none() { NoticeCopy::Object { layer, name } } else {
-            let below = matches!(self.layer_interaction.tool, LayerCanvasTool::Gradient { .. } | LayerCanvasTool::EncloseFill { .. } | LayerCanvasTool::LassoFill | LayerCanvasTool::Region { fill: true, .. });
+            let below = matches!(self.layer_interaction.tool, LayerCanvasTool::Gradient { .. } | LayerCanvasTool::EncloseFill { .. } | LayerCanvasTool::PaintUnfilled {..} | LayerCanvasTool::LassoFill | LayerCanvasTool::Region { fill: true, .. });
             NoticeCopy::Vector { layer, name, reason: if brush { self.vector_brush_refusal() } else { VectorRefusal::Tool { below, tool: ToolVariant::active(&self.state).map(ToolVariant::command) } } }
         };
         let actions = self.object_refusal_actions(&copy);

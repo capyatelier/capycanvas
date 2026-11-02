@@ -698,3 +698,9 @@ command-close-gaps-off = Выкл.
 command-edges-line-middle = До середины линии
 command-edges-exact = Точно
 command-edges-grow-shrink = Расширить или сузить
+
+command-paint-unfilled = Закрасить незаполненные области
+command-fill-areas-transparent = Прозрачные
+command-fill-areas-transparent-or-white = Прозрачные или белые
+command-fill-areas-any-colour = Любого цвета
+commands-help-paint-unfilled = Проведите по замкнутым незаполненным областям, чтобы залить их.

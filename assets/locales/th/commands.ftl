@@ -691,3 +691,9 @@ command-close-gaps-off = ปิด
 command-edges-line-middle = ถึงกลางเส้น
 command-edges-exact = ตรงขอบ
 command-edges-grow-shrink = ขยายหรือหด
+
+command-paint-unfilled = ระบายพื้นที่ที่ยังไม่เติมสี
+command-fill-areas-transparent = โปร่งใส
+command-fill-areas-transparent-or-white = โปร่งใสหรือสีขาว
+command-fill-areas-any-colour = ทุกสี
+commands-help-paint-unfilled = ระบายผ่านพื้นที่ปิดที่ยังไม่เติมสีเพื่อเติมสี

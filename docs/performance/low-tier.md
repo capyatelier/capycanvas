@@ -289,6 +289,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Reference Fill completion, 12 MP | Cold and warm response | Prepared stroke 5.5 → 3.6–3.8 s. **First-open cold regression:** 5.6–5.8 → 7.6–7.8 s | [Reference Fill completion](#reference-fill-completion) |
 | Reference Fill opaque-edge warm completion, 12 MP | Within 5% of M5 | **Not met:** 3.695–3.883 → 4.112–4.278 s, **+10.7%** at bracket midpoints | [Reference Fill completion](#reference-fill-completion) |
 | Reference Fill M4b.1 warm completion, 12 MP | Within 5% of M4b | 4.083–4.275 → 4.127–4.300 s, **+0.83%** at bracket midpoints; screenshot upper bound **+5.32%**, qualification uncertified | [Reference Fill completion](#reference-fill-completion) |
+| Reference Fill warm regression check (M6), 12 MP | Scoped reference Fill response check | 4.062–4.291 → 4.113–4.292 s, **+0.63%** at bracket midpoints; screenshot upper bound **+5.673%**, qualification uncertified | [Reference Fill completion](#reference-fill-completion) |
 | Fill reveal while holding the pen, 12 MP | 60 | **Not met.** AB8 → AB9: moving viewport callbacks 46.2 → 57.3/s; largest start gap 38.5 → 37.4 ms. Scanout unobservable; no physical 60 Hz qualification | 2026-11-01; `artifacts/fill-tools/m5-reveal/damage-ab-results.json`; full matrix deferred |
 | Selection Brush or Quick Mask, 1024 px | 60 | | |
 | Grow, Shrink or Feather drag, full canvas | 60, soft | | |
@@ -359,6 +360,14 @@ reference fixture. Warm completion is 4.083–4.275 → 4.127–4.300 s (+0.83%
 at bracket midpoints); screenshot uncertainty permits +5.32%, so the 5% limit
 is uncertified. First contact is 20.024–20.235 → 23.877–24.032 s. Three taps
 and Undo pass on each build. Evidence: `artifacts/fill-tools/m4b1-native/results.json`.
+
+M6's scoped TCL check compares the retained M4b.1 `f80cc689f` control with
+M6's integrated `580ab808f` build before the forced-end review. Warm completion
+is 4.062–4.291 → 4.113–4.292 s (+0.63% at bracket midpoints); the screenshot
+upper bound is +5.673%, so a strict 5% limit is uncertified. First contact is
+23.645–23.847 → 22.949–23.149 s. Three taps and Undo pass; this is static response evidence,
+not a motion qualification or performance matrix. Evidence:
+`artifacts/fill-tools/m6-native/integrated-results.json`.
 
 M4a uses the TCL TAB 11 Gen 2 at 4248 × 2832. The final native eight-reference
 ABBA covers three fresh eight-second G-Pen and pan trials per leg, 24 motions

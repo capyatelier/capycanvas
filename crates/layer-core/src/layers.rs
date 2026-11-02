@@ -361,6 +361,10 @@ pub struct RasterOperation {
 #[serde(rename_all = "snake_case")]
 pub enum RegionEdges { #[default] LineMiddle, Exact, GrowShrink(i32) }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FillAreas { #[default] Transparent, TransparentOrWhite, AnyColour }
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FillTexture {
     pub strength: f32,

@@ -115,6 +115,91 @@ fn native_fill_texture_controls_and_papers() {
 }
 
 #[test]
+#[ignore = "private Wayland display, hardware GPU and --tablet"]
+fn native_fill_areas_and_paint_unfilled() {
+    let app=native_test_app("art.capycanvas.FillAreas");
+    let output=std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap());std::fs::create_dir_all(&output).unwrap();
+    let mut input=RemoteInput::new().timeout_secs(30);input.ready();
+    for theme in [Theme::Light,Theme::Dark] {for unfilled in [false,true] {
+        let w=Workspace::with_project(&app,Some((new_drawing(384,256,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),None)));
+        w.window.maximize();w.window.present();ready(&w);w.dispatch(UiAction::SetTheme {theme:Some(theme)});
+        let boxes=if unfilled {vec![[84,94,96,106],[144,94,156,106],[199,94,211,106]]}else{vec![[40,50,130,170],[150,50,240,170],[270,50,360,170]]};
+        let source=layer_core::color::source::rgba8_source([384,256],|x,y| {
+            if boxes.iter().any(|b|x>=b[0]&&x<b[2]&&y>=b[1]&&y<b[3]&&(x<b[0]+2||x>=b[2]-2||y<b[1]+2||y>=b[3]-2)) {[0,0,0,255]}else{[0;4]}
+        });
+        ui_session_mut(&w).import_layer_source("Area references",std::sync::Arc::unwrap_or_clone(source)).unwrap();w.wake();ready(&w);
+        w.dispatch(UiAction::Layer {action:LayerAction::ReferenceSelection});
+        let target=layer_core::color::source::rgba8_source([384,256],|x,y| {
+            if unfilled {if boxes.iter().any(|b|x>=b[0]+2&&x<b[2]-2&&y>=b[1]+2&&y<b[3]-2) {[0;4]}else{[255;4]}}
+            else if x>=150&&x<240&&(50..170).contains(&y) {[255;4]}
+            else if x>=270&&x<360&&(50..170).contains(&y) {[0,0,255,255]}else{[0;4]}
+        });
+        ui_session_mut(&w).import_layer_source("Area target",std::sync::Arc::unwrap_or_clone(target)).unwrap();w.wake();ready(&w);
+        let original=active_paint(ui_session(&w).engine().document()).clone();
+        let workspace=tool_settings_workspace(&w,&[CommandId::Fill],true,false);w.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(workspace)});
+        invoke(&w,CommandId::FitCanvas);invoke(&w,if unfilled {CommandId::PaintUnfilled}else{CommandId::EncloseFill});
+        invoke(&w,CommandId::SelectionReference);invoke(&w,CommandId::CloseGapsOff);invoke(&w,CommandId::EdgesExact);
+        w.dispatch(UiAction::SetColor {rgba:[1.,0.,0.,1.]});w.dispatch(UiAction::SetToolSetting {id:"grain_depth".into(),value:0.});ready(&w);
+        let at=|p:[f32;2]| {let matrix=state(&w).camera.document_to_surface();let scale=w.area.scale_factor() as f32;
+            let p=w.area.compute_point(&w.window,&gtk::graphene::Point::new((matrix[0]*p[0]+matrix[2]*p[1]+matrix[4])/scale,(matrix[1]*p[0]+matrix[3]*p[1]+matrix[5])/scale)).unwrap();[p.x(),p.y()]};
+        let modes=if unfilled {vec![CommandId::FillAreasTransparent]}else{vec![CommandId::FillAreasTransparent,CommandId::FillAreasTransparentOrWhite,CommandId::FillAreasAnyColour]};
+        for (mode_index,mode) in modes.into_iter().enumerate() {
+            let option=named::<gtk::ToggleButton>(&w.panel_widget(Panel::ToolSettings),&format!("tool-choice-fill-areas-{mode_index}"));
+            histogram::scroll_to(option.upcast_ref());input.click(screen_point(option.upcast_ref(),&w.window,[0.5,0.5]));ready(&w);
+            assert!(ui_session(&w).command(mode).selected);
+            if mode_index==0 {
+                let source=find_named(&w.panel_widget(Panel::ToolSettings),"tool-choice-bar-selection-source").unwrap();histogram::scroll_to(&source);
+                capture_ui(&w,&output,&format!("fill-areas-controls-{theme:?}-{unfilled}.png"));
+            }
+            let before=raster(&w);
+            let original_image=ui_session(&w).engine().backend().document_pixels(10).unwrap();
+            let image_pixel=|image:&layer_render::ReadbackImage,x:u32,y:u32|<[u8;4]>::try_from(&image.bytes[(y*image.stride+x*4) as usize..][..4]).unwrap();
+            if unfilled {
+                let control=named::<crate::number_control::NumberControl>(&w.panel_widget(Panel::ToolSettings),"tool-setting-unfilled_size");edit_number(&control,"64");
+                let display_frame=||ui_session(&w).engine().backend().capture_in(w.view_color()).unwrap();
+                let display_pixel=|image:&layer_render::ReadbackImage| {let camera=state(&w).camera;let m=camera.document_to_surface();
+                    let x=((m[0]*120.+m[2]*100.+m[4])*image.width as f32/camera.viewport[0] as f32) as usize;
+                    let y=((m[1]*120.+m[3]*100.+m[5])*image.height as f32/camera.viewport[1] as f32) as usize;
+                    <[u8;4]>::try_from(&image.bytes[y*image.stride as usize+x*4..][..4]).unwrap()};
+                let clear=display_pixel(&display_frame());assert!(clear[..3].iter().all(|value|*value>=250),"the unpainted footprint starts white: {clear:?}");
+                let tinted=|image:&layer_render::ReadbackImage|display_pixel(image)[..3].iter().zip(clear).any(|(a,b)|u16::from(*a)+3<u16::from(b));
+                input.perform(serde_json::json!([{"point":at([80.,100.]),"down":true},{"point":at([175.,100.])}]));
+                assert_eq!(raster(&w),before,"held footprint does not edit artwork");
+                let mut visible=None;
+                until(|| {let image=display_frame();if tinted(&image) {visible=Some(image);true}else{false}},"the swept footprint shows an accent tint away from the cursor");
+                let image=visible.unwrap();
+                gtk::gdk::MemoryTexture::new(image.width as i32,image.height as i32,gtk::gdk::MemoryFormat::R8g8b8a8,&glib::Bytes::from_owned(image.bytes),image.stride as usize).save_to_png(output.join(format!("unfilled-rendered-{theme:?}.png"))).unwrap();
+                let frame=ui_session(&w).engine().metrics().frames;
+                until(||ui_session(&w).engine().metrics().frames>frame,"the next natural held frame");
+                assert!(tinted(&display_frame()),"the held accent tint persists on the next frame");
+                assert_eq!(raster(&w),before,"the tint stays presentation-only");
+                capture_ui(&w,&output,&format!("unfilled-held-{theme:?}.png"));
+                input.perform(serde_json::json!([{"down":false}]));
+            }else{
+                input.perform(serde_json::json!([{"point":at([20.,30.]),"down":true},{"point":at([375.,30.])},{"point":at([375.,190.])},{"point":at([20.,190.])},{"point":at([20.,30.])},{"down":false}]));
+            }
+            committed(&w,&before);let filled=pixels(&raster(&w));
+            let actual_image=ui_session(&w).engine().backend().document_pixels(11).unwrap();
+            let points=if unfilled {[[90,100],[150,100],[205,100]]}else{[[85,110],[195,110],[315,110]]};
+            for (index,[x,y]) in points.into_iter().enumerate() {
+                let changed=if unfilled {index<2}else{index<=mode_index};
+                if changed {assert_eq!(image_pixel(&actual_image,x,y),[255,0,0,255],"{theme:?} {mode:?} filled {x},{y}");}
+                else {assert_eq!(image_pixel(&actual_image,x,y),image_pixel(&original_image,x,y),"{theme:?} {mode:?} preserved {x},{y}");}
+            }
+            assert_eq!(image_pixel(&actual_image,10,10),image_pixel(&original_image,10,10));
+            invoke(&w,CommandId::Undo);ready(&w);assert_eq!(active_paint(ui_session(&w).engine().document()),&original);
+            invoke(&w,CommandId::Redo);ready(&w);assert_eq!(pixels(&raster(&w)),filled);
+            invoke(&w,CommandId::Undo);ready(&w);
+            input.perform(serde_json::json!([{"point":at([80.,100.]),"down":true},{"point":at([175.,100.])},{"key":0xff1b,"down":true},{"key":0xff1b,"down":false},{"down":false}]));
+            ready(&w);assert_eq!(active_paint(ui_session(&w).engine().document()),&original,"Escape discards the footprint");
+            invoke(&w,CommandId::Redo);ready(&w);assert_eq!(pixels(&raster(&w)),filled,"cancel preserves redo");invoke(&w,CommandId::Undo);ready(&w);
+            eprintln!("PASS {theme:?} {mode:?} unfilled={unfilled}: target eligibility, contained/grazed areas, one Undo/Redo and cancel");
+        }
+        w.window.destroy();pump(100);
+    }}
+}
+
+#[test]
 #[ignore = "private Wayland display and hardware GPU"]
 fn native_enclose_fill_pointer_workflow() {
     let app = native_test_app("art.capycanvas.EncloseFill");

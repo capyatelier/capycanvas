@@ -58,6 +58,7 @@ impl EditingState {
                 .collect(),
             region_sources: region.source,
             region_stop_at_colors: region.stop_at_colors,
+            fill_areas:region.fill_areas,
             region_close_gaps: region.refinement.close_gaps,
             region_gap_reach:None,
             region_edges: region.refinement.edges,
@@ -269,6 +270,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .collect(),
             region_sources: self.region_tools.source,
             region_stop_at_colors: self.region_tools.stop_at_colors,
+            fill_areas:self.region_tools.fill_areas,
             region_close_gaps: self.settled_fill_options().2,
             region_gap_reach:self.settled_fill_options().1,
             region_edges: self.region_tools.refinement.edges,
@@ -293,6 +295,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         for (id, &value) in &state.region_values { region.restore_value(id, value).map_err(|reason| reason.message(self.localization()))?; }
         region.source = state.region_sources;
         region.stop_at_colors = state.region_stop_at_colors;
+        region.fill_areas=state.fill_areas;
         region.refinement.close_gaps = state.region_close_gaps;
         region.gap_reach=state.region_gap_reach;
         region.refinement.edges = state.region_edges;

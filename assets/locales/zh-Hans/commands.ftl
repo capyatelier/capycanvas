@@ -691,3 +691,9 @@ command-close-gaps-off = 关闭
 command-edges-line-middle = 到线条中间
 command-edges-exact = 精确
 command-edges-grow-shrink = 扩张或收缩
+
+command-paint-unfilled = 涂抹未填充区域
+command-fill-areas-transparent = 透明
+command-fill-areas-transparent-or-white = 透明或白色
+command-fill-areas-any-colour = 任意颜色
+commands-help-paint-unfilled = 在封闭的未填充区域上涂抹以填充。

@@ -44,11 +44,12 @@ fn classify_tile(@builtin(global_invocation_id) id: vec3<u32>) {
         // and exclude even the seed itself at zero tolerance.
         let same = all(value == seed);
         let color = comparison_color(value);
-        if select(same || all(abs(color - comparison_color(seed)) <= vec4<f32>(tile.options.x)),
-            value.a <= tile.options.x, tile.options.z > 2.5)
-            {
-            packed |= 1u << i;
+        var selected=select(same || all(abs(color-comparison_color(seed))<=vec4<f32>(tile.options.x)),value.a<=tile.options.x,tile.options.z>2.5);
+        if tile.options.z>=4. {
+            if tile.options.z==5. {selected=selected || (value.a==1. && all(abs(working_unassociate(value)-vec3<f32>(1.))<=vec3<f32>(tile.options.x)));}
+            if tile.options.z==6. {selected=true;}
         }
+        if selected {packed|=1u<<i;}
     }
     let index = (tile.origin.y+p.y)*((tile.extent.x+31u)/32u)+(tile.origin.x+p.x)/32u;
     if tile.options.w > .5 { eligibility[index] &= packed; } else { eligibility[index] = packed; }

@@ -693,3 +693,9 @@ command-close-gaps-off = Tắt
 command-edges-line-middle = Đến giữa nét
 command-edges-exact = Chính xác
 command-edges-grow-shrink = Mở rộng hoặc thu hẹp
+
+command-paint-unfilled = Tô vùng chưa được tô
+command-fill-areas-transparent = Trong suốt
+command-fill-areas-transparent-or-white = Trong suốt hoặc trắng
+command-fill-areas-any-colour = Mọi màu
+commands-help-paint-unfilled = Vẽ qua các vùng kín chưa được tô để tô màu.

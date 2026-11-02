@@ -14,7 +14,7 @@ struct Binding {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Sampling { Pixels, Seeds, Transparent, Enclosed, Retained, Target, TargetSeed }
+pub(super) enum Sampling { Pixels, Seeds, Transparent, Enclosed, Retained, Target, TargetSeed, Areas(layer_core::FillAreas) }
 
 pub(super) struct RawRegions {
     capture: artwork::Capture,
@@ -339,7 +339,7 @@ impl RawRegions {
         }
         self.begin(r, request)?;
         let bytes=request.source.sources().len() as u64*16;
-        if !matches!(sampling,Sampling::Target|Sampling::TargetSeed) && self.seeds.as_ref().is_none_or(|buffer|buffer.size()!=bytes) {
+        if !matches!(sampling,Sampling::Target|Sampling::TargetSeed|Sampling::Areas(_)) && self.seeds.as_ref().is_none_or(|buffer|buffer.size()!=bytes) {
             self.seeds=Some(r.device.create_buffer(&wgpu::BufferDescriptor {label:Some("reference seed keys"),size:bytes,
                 usage:wgpu::BufferUsages::COPY_SRC|wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::STORAGE,mapped_at_creation:false}));
         }
@@ -348,7 +348,7 @@ impl RawRegions {
             let sources = request.source.sources();
             let source = layer_render::RegionRequest { source: sources[index].clone(), ..request.clone() };
             let result = self.encode_source(r, &source, encoder, index > 0,sampling)?;
-            if !matches!(sampling,Sampling::Target|Sampling::TargetSeed) {encoder.copy_buffer_to_buffer(&self.seed,0,self.seeds.as_ref().unwrap(),index as u64*16,16);}
+            if !matches!(sampling,Sampling::Target|Sampling::TargetSeed|Sampling::Areas(_)) {encoder.copy_buffer_to_buffer(&self.seed,0,self.seeds.as_ref().unwrap(),index as u64*16,16);}
             if index + 1 == sources.len() { self.progress = None; self.pages=None; return Ok(result); }
             self.progress = None;
             let next = layer_render::RegionRequest { source: sources[index + 1].clone(), ..request.clone() };
@@ -561,7 +561,7 @@ impl RawRegions {
                     fallback[3].to_bits(),
                     request.tolerance.to_bits(),
                     f32::from(has_tile(*coordinate)).to_bits(),
-                    (if request.enclosure.is_some() || sampling==Sampling::Enclosed { 3.0f32 } else { f32::from(coverage) }).to_bits(),
+                    (match sampling {Sampling::Areas(layer_core::FillAreas::Transparent)=>4.0f32,Sampling::Areas(layer_core::FillAreas::TransparentOrWhite)=>5.,Sampling::Areas(layer_core::FillAreas::AnyColour)=>6.,_=>if request.enclosure.is_some() || sampling==Sampling::Enclosed {3.}else{f32::from(coverage)}}).to_bits(),
                     f32::from(combine).to_bits(),
                 ];
                 for (word, value) in uniforms[batch * stride as usize + i * 64..][..64]
@@ -828,7 +828,7 @@ mod tests {
         for pixel in capture.read_region([0,0,extent[0],extent[1]]).unwrap() {
             for channel in 0..4 { assert!((pixel[channel]-expected[channel]).abs()<0.0005, "{pixel:?}"); }
         }
-        let result = crate::test_support::receive_request(&mut r, RegionRequest { colour_mode: Default::default(), fill: None, reference_count: None, paper: None,
+        let result = crate::test_support::receive_request(&mut r, RegionRequest { fill_areas: None, colour_mode: Default::default(), fill: None, reference_count: None, paper: None,
             enclosure: None, request_id:42,source:RegionSource::Scene {snapshot:normalized,scope},position:[63,63],tolerance:0.,
             contiguous:true,selection:None,refinement:Default::default(),limit:None,
         });

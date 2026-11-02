@@ -1288,7 +1288,7 @@ fn filling_outside_paths_classifies_captured_pages_in_batches() {
     let view = layer_render::ViewState { width_px: 128, height_px: 128, document_to_surface: [1. / 32., 0., 0., 1. / 32., 0., 0.] };
     let mut r = WgpuRasterizer::new_native_headless(editor.document().composition().color).unwrap();
     submit_ready(&mut r, FramePacket { view, ..packet(editor.document().scene(), extent) });
-    let request = layer_render::RegionRequest { colour_mode: Default::default(), fill: None, reference_count: None, paper: None,
+    let request = layer_render::RegionRequest { fill_areas: None, colour_mode: Default::default(), fill: None, reference_count: None, paper: None,
         enclosure: None, contiguous: true, selection: None, request_id: 7,
         source: layer_render::RegionSource::Scene { snapshot: editor.document().snapshot(), scope: layer_core::authored::SceneScope::RawObjects(layer) },
         position: [extent[0] - 2, extent[1] - 2], tolerance: 0.1, refinement: Default::default(), limit: None,
@@ -1469,7 +1469,7 @@ fn crowded_vector_layer_fill_outside_frames() {
         let view = layer_render::ViewState { width_px: 1920, height_px: 1200, document_to_surface: [zoom, 0., 0., zoom, 0., 0.] };
         let mut r = WgpuRasterizer::new_native_headless(editor.document().composition().color).unwrap();
         submit_ready(&mut r, FramePacket { view, ..packet(editor.document().scene(), extent) });
-        let request = layer_render::RegionRequest { colour_mode: Default::default(), fill: None, reference_count: None, paper: None,
+        let request = layer_render::RegionRequest { fill_areas: None, colour_mode: Default::default(), fill: None, reference_count: None, paper: None,
             enclosure: None, contiguous: true, selection: None, request_id: 1,
             source: layer_render::RegionSource::Scene { snapshot: editor.document().snapshot(), scope: layer_core::authored::SceneScope::RawObjects(layer) },
             position: [extent[0] - 2, extent[1] - 2], tolerance: 0.1, refinement: Default::default(), limit: None,

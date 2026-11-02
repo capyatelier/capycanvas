@@ -695,3 +695,9 @@ command-close-gaps-off = Off
 command-edges-line-middle = To line middle
 command-edges-exact = Exact
 command-edges-grow-shrink = Grow or shrink
+
+command-paint-unfilled = Paint unfilled areas
+command-fill-areas-transparent = Transparent
+command-fill-areas-transparent-or-white = Transparent or white
+command-fill-areas-any-colour = Any colour
+commands-help-paint-unfilled = Paint over closed unfilled areas to fill them.

@@ -70,6 +70,7 @@ pub enum LayerCanvasTool {
     SelectColor { source: RegionSource },
     LassoFill,
     EncloseFill { source: RegionSource },
+    PaintUnfilled { source: RegionSource },
     Hand,
     Zoom,
     RotateView,
@@ -98,6 +99,7 @@ pub enum RegionSource {
     Reference,
 }
 impl LayerCanvasTool {
+    pub fn encloses(self)->bool {matches!(self,Self::EncloseFill {..}|Self::PaintUnfilled {..})}
     pub fn navigation(self) -> Option<crate::NavigationMode> {
         match self {
             Self::Hand => Some(crate::NavigationMode::Pan),
@@ -109,7 +111,7 @@ impl LayerCanvasTool {
     pub fn region(self) -> Option<(bool, RegionSource, bool)> {
         match self {
             Self::Region { fill, source } => Some((fill, source, true)),
-            Self::EncloseFill { source } => Some((true, source, true)),
+            Self::EncloseFill { source } | Self::PaintUnfilled {source} => Some((true, source, true)),
             Self::SelectColor { source } => Some((false, source, false)),
             _ => None,
         }
@@ -127,7 +129,7 @@ impl LayerCanvasTool {
         matches!(self, Self::PickVisible | Self::PickLayer)
     }
     pub fn draws(self) -> bool {
-        matches!(self, Self::Paint | Self::LassoFill | Self::EncloseFill { .. } | Self::Region { fill: true, .. }
+        matches!(self, Self::Paint | Self::LassoFill | Self::EncloseFill { .. } | Self::PaintUnfilled {..} | Self::Region { fill: true, .. }
             | Self::Gradient { .. } | Self::Figure { .. })
     }
 }
@@ -1027,8 +1029,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             LayerAction::Tool { tool } => {
                 if (tool.selection_tool().is_some() && tool.selection_tool() != Some(SelectionTool::Tonal))
-                    || matches!(tool, LayerCanvasTool::Transform | LayerCanvasTool::Crop | LayerCanvasTool::Move | LayerCanvasTool::EditPoints | LayerCanvasTool::LassoFill | LayerCanvasTool::EncloseFill { .. } | LayerCanvasTool::Figure { .. }) { self.return_to_artwork()?; }
-                if matches!(tool, LayerCanvasTool::EncloseFill { .. })
+                    || matches!(tool, LayerCanvasTool::Transform | LayerCanvasTool::Crop | LayerCanvasTool::Move | LayerCanvasTool::EditPoints | LayerCanvasTool::LassoFill | LayerCanvasTool::EncloseFill { .. } | LayerCanvasTool::PaintUnfilled {..} | LayerCanvasTool::Figure { .. }) { self.return_to_artwork()?; }
+                if matches!(tool, LayerCanvasTool::EncloseFill { .. } | LayerCanvasTool::PaintUnfilled {..})
                     && matches!(self.engine.document().working.target, Some(SourceTarget::Coverage(_))) {
                     return Err(self.localization().text(MessageId::COMMANDS_RETURN_TO_THE_ARTWORK_FIRST).to_string());
                 }
@@ -1066,7 +1068,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if let Some(kind) = tool.selection_tool() {
                     self.selection_tools.options.tool = kind;
                 }
-                if let LayerCanvasTool::EncloseFill { source } = tool {
+                if let LayerCanvasTool::EncloseFill { source } | LayerCanvasTool::PaintUnfilled {source} = tool {
                     self.region_tools.source[2] = source;
                 } else if let Some((fill, source, _)) = tool.region() {
                     self.region_tools.source[usize::from(fill)] = source;

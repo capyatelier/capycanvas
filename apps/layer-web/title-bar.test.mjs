@@ -74,10 +74,10 @@ export async function checkTitleBar({call,evaluate,settle,reload}) {
         await activate();assert.ok(await evaluate('layerApp.state().commands.find(c=>c.id==="enclose_fill").selected'));
         await activate();assert.deepEqual(await evaluate('layerApp.state().customization.drawer.columns'),[['tools'],['tool_settings']]);
         await wait(`(()=>{const root=document.querySelector('.content-drawer[data-drawer="tool"]');if(!root)return false;const r=root.getBoundingClientRect(),columns=[...root.querySelectorAll(':scope > .drawer-column')];return columns.length===2&&columns.every(c=>{const b=c.getBoundingClientRect();return b.width>100&&b.left>=r.left-.5&&b.right<=r.right+.5})})()`);
-        assert.deepEqual(await evaluate("[...document.querySelectorAll('.content-drawer .tools-control .tool-groups .tool-choice-name')].map(n=>n.textContent)"),['Fill','Lasso fill','Enclose and Fill']);
+        assert.deepEqual(await evaluate("[...document.querySelectorAll('.content-drawer .tools-control .tool-groups .tool-choice-name')].map(n=>n.textContent)"),['Fill','Lasso fill','Enclose and Fill','Paint unfilled areas']);
         assert.ok(await evaluate(`!!document.querySelector('.content-drawer [data-tool-setting="tolerance"]')`));
         await shot(`sketch-fill-${width}-${theme}`);await key('Escape');
-        for(const command of ['fill','lasso_fill','enclose_fill']) {
+        for(const command of ['paint_unfilled','fill','lasso_fill','enclose_fill']) {
           await key('f','KeyF');assert.ok(await evaluate(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)}).selected`));
         }
       }

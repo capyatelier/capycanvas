@@ -405,7 +405,7 @@ impl ToolbarControl {
     pub(crate) fn drawer_columns(self) -> Option<Vec<Vec<Panel>>> {
         match self {
             Self::ToolSlot { slot: ToolSlotId::Fill }
-            | Self::Command { command: CommandId::Fill | CommandId::LassoFill | CommandId::EncloseFill } => Some(vec![vec![Panel::Tools], vec![Panel::ToolSettings]]),
+            | Self::Command { command: CommandId::Fill | CommandId::LassoFill | CommandId::EncloseFill | CommandId::PaintUnfilled } => Some(vec![vec![Panel::Tools], vec![Panel::ToolSettings]]),
             Self::ToolSlot {..} => Some(vec![vec![Panel::Brushes],vec![Panel::ToolSettings]]),
             Self::ColorPicker => Some(vec![vec![Panel::ToolSettings]]),
             Self::Command { command: CommandId::Select | CommandId::SelectionBrush | CommandId::TonalSelect | CommandId::Lasso | CommandId::AutoSelect | CommandId::RectangleSelect | CommandId::EllipseSelect | CommandId::PolygonSelect | CommandId::ColorSelect } => Some(vec![vec![Panel::Tools], vec![Panel::ToolSettings]]),

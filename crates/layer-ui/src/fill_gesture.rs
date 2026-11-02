@@ -140,7 +140,7 @@ impl<R:CanvasRenderer> UiSession<R> {
                     self.region_tools.reveal=Some(Reveal {transaction,center,radius,started:None,duration:(150_000_000.+200_000_000.*(radius/2000.).min(1.)) as u64});
                     self.engine.set_fill_reveal(Some(layer_render::FillReveal {transaction,center,radius:-1.}));
                 }
-                self.request_region_at(point,None,None);
+                self.request_region_at(point,None,None,None);
                 if self.region_tools.queued.is_none(){self.region_tools.cancel();self.clear_fill_preview();}
             },
             PenPhase::Move=> {

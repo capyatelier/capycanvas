@@ -20,7 +20,7 @@ fn request(id: u64, before: Selection, mode: SelectionPaintMode, opacity: f32) -
         restart: false,
     }
 }
-fn receive(r: &mut WgpuRasterizer, mut request: SelectionPaint) -> Selection {
+pub(super) fn receive(r: &mut WgpuRasterizer, mut request: SelectionPaint) -> Selection {
     request.dabs.clear();
     request.enclosed = None;
     request.finish = true;

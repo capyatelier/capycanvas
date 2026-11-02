@@ -168,7 +168,7 @@ impl Flood {
         contiguous: bool,
         enclosed: bool,
         paper: &wgpu::TextureView,
-        stop: Option<&wgpu::Buffer>,
+        stop: Option<(&wgpu::Buffer, bool)>,
         fill: Option<&layer_render::RegionFillQuery>,
     ) -> Result<Region, GpuRasterError> {
         let requested_close=refinement.close_gaps;
@@ -311,7 +311,7 @@ impl Flood {
         encoder.clear_buffer(store,labels.flags*4,Some((labels.marks-labels.flags)*4));
         for attempt in 0..attempts {
             self.lines.barriers(&input,encoder,refinement.close_gaps && (!multiple || attempt>0),16*(attempt+u32::from(!multiple)),[0,0,(labels.seed+8*u64::from(attempt)) as u32,u32::from(enclosed)],store);
-            if let Some(stop)=stop {self.lines.intersect(&input,encoder,stop);}
+            if let Some((stop,_))=stop {self.lines.intersect(&input,encoder,stop);}
             self.lines.snap_seed(&input,encoder,store,(labels.seed+8*u64::from(attempt)) as u32,seed);
             if attempts>1 {self.lines.barrier_plane(&input,encoder,&region.coverage,store,attempt,0);}
         }
@@ -362,7 +362,7 @@ impl Flood {
                 if !captured.is_empty() {anchors=captured;}
             }
             if let layer_render::RegionEdges::GrowShrink(value)=refinement.edges && value!=0 {self.lines.grow(&input,encoder,value);}
-            if let Some(stop)=stop {self.lines.intersect(&input,encoder,stop);}
+            if let Some((stop,clip))=stop && (clip || !band) {self.lines.intersect(&input,encoder,stop);}
             run(encoder,if multiple {4}else{0},output,0,&["pack"]);
         }
         region.anchors=anchors;

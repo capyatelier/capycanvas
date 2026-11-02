@@ -65,7 +65,7 @@ impl ToolFamily {
             Self::Paint => &[CommandId::Brush, CommandId::Airbrush],
             Self::Blend => &[CommandId::Blend, CommandId::Liquify],
             Self::Retouch => &[CommandId::Clone, CommandId::Heal, CommandId::SpotHeal],
-            Self::Fill => &[CommandId::Fill, CommandId::LassoFill, CommandId::EncloseFill],
+            Self::Fill => &[CommandId::Fill, CommandId::LassoFill, CommandId::EncloseFill, CommandId::PaintUnfilled],
         }
     }
     pub fn shortcut_id(self) -> &'static str {

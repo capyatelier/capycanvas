@@ -15,6 +15,8 @@ pub enum FillScope { #[default] Connected, Everywhere }
 pub(super) struct RegionTools {
     pub saved_values: std::collections::BTreeMap<String, f32>,
     pub scope: FillScope,
+    pub fill_areas: layer_core::FillAreas,
+    pub unfilled_size:f32,
     pub stop_at_colors: bool,
     pub tolerance: f32,
     pub texture_strength: f32,
@@ -37,7 +39,15 @@ pub(super) struct RegionTools {
     target: Option<Target>,
     filled_below: Option<OccurrenceHandle>,
 }
+pub(super) struct EnclosurePaint {
+    operation:layer_core::RasterOperationKind,
+    color:Option<layer_core::color::RgbColor>,
+    tolerance:f32,
+    refinement:layer_render::RegionRefinement,
+    areas:FillAreas,
+}
 struct Target {
+    tool:LayerCanvasTool,
     generation: u64,
     revision: u64,
     layer: Option<OccurrenceHandle>,
@@ -60,6 +70,7 @@ impl Default for RegionTools {
         Self {
             saved_values: Default::default(),
             scope: FillScope::Connected,
+            fill_areas:Default::default(),unfilled_size:32.,
             stop_at_colors: true,
             tolerance: 0.1,
             texture_strength: 1.,
@@ -87,9 +98,10 @@ impl Default for RegionTools {
     }
 }
 impl RegionTools {
-    pub(super) fn fields(&self) -> [(&'static str, MessageId, Option<MessageId>, NumericControl, f32); 3] {
+    pub(super) fn fields(&self) -> [(&'static str, MessageId, Option<MessageId>, NumericControl, f32); 4] {
         let distance = layer_render::RegionRefinement::MAX_EDGE_OFFSET as f64;
         [
+            ("unfilled_size",MessageId::TOOL_CONTROL_SELECTION_BRUSH_SIZE,None,NumericControl::brush_size(),self.unfilled_size),
             ("grain_depth", MessageId::TOOL_SETTING_GRAIN_DEPTH, None, tool_settings::texture_strength_control(), self.texture_strength),
             (
                 "tolerance",
@@ -132,14 +144,18 @@ impl RegionTools {
         if id == "edge_offset" && value.fract() != 0. {
             return Err(NumericError::WholePixels { label: label.into() }.into());
         }
-        self.cancel();
+        self.reconfigure();
         match id {
+            "unfilled_size" => self.unfilled_size=value,
             "tolerance" => self.tolerance = value,
             "grain_depth" => self.texture_strength = value,
             "edge_offset" => self.refinement.edges = layer_render::RegionEdges::GrowShrink(value as i32),
             _ => unreachable!(),
         }
         Ok(())
+    }
+    pub(super) fn reconfigure(&mut self) {
+        if self.target.as_ref().is_none_or(|target|!matches!(target.tool,LayerCanvasTool::PaintUnfilled {..})) {self.cancel();}
     }
     pub fn cancel(&mut self) {
         if let Some(gesture)=self.gesture.take() {
@@ -194,7 +210,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             PenPhase::Up => {
                 let checkpoint = self.engine.checkpoint();
-                if let Some(point) = self.region_tools.contact.take() { self.request_region_at(point, None, None); }
+                if let Some(point) = self.region_tools.contact.take() { self.request_region_at(point, None, None, None); }
                 self.finger.admitted_pen |= event.tool.is_pen() && (self.region_tools.target.is_some() || self.engine.checkpoint() != checkpoint);
                 self.layer_interaction.fill_texture = None;
             }
@@ -203,7 +219,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     pub(super) fn enclose_fill(&mut self, enclosure: Selection) {
-        self.request_region_at(Point { x: 0., y: 0. }, Some(enclosure), None);
+        self.request_region_at(Point { x: 0., y: 0. }, Some(enclosure), None, None);
+    }
+    pub(super) fn capture_enclosure_paint(&self)->EnclosurePaint {
+        EnclosurePaint {operation:self.fill_operation(),color:(!self.state.colors.transparent() && self.state.brush.opacity>0.).then(||self.state.colors.definition()),
+            tolerance:self.region_tools.tolerance,refinement:self.region_tools.refinement,areas:self.region_tools.fill_areas}
+    }
+    pub(super) fn enclose_painted_footprint(&mut self,enclosure:Selection,paint:EnclosurePaint) {
+        self.request_region_at(Point{x:0.,y:0.},Some(enclosure),None,Some(paint));
     }
     fn fill_vector_layer(&mut self, layer: OccurrenceHandle, point: Point, source: layer_render::RegionSource, paths: bool) -> Result<(), String> {
         use layer_core::authored::vector::{PaintEntry, Record, Style};
@@ -230,7 +253,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.state.colors.transparent() { return Ok(()); }
         if !self.engine.backend().region_fits(doc.composition().size) { return Err(self.localization().text(MessageId::DOCUMENTS_TOO_LARGE_MEMORY).to_string()); }
         self.new_paint_layer_under()?;
-        self.request_region_at(point, None, Some(source));
+        self.request_region_at(point, None, Some(source), None);
         self.region_tools.filled_below = Some(layer);
         Ok(())
     }
@@ -240,6 +263,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             segmented: true, labeled: true, columns: None, beside: None,
             items: [CommandId::SelectionReference, CommandId::SelectionVisible, CommandId::SelectionEditing].into_iter()
                 .map(|command| { let state = self.command(command); state.choice_item(state.label.clone()) }).collect() }];
+        if self.layer_interaction.tool.encloses() {
+            controls.push(ToolOption::Choice {id:"fill-areas",label:self.localization().text(MessageId::TOOL_ACTION_GROUP_FILL_AREAS),segmented:true,labeled:true,columns:None,beside:None,items:[CommandId::FillAreasTransparent,CommandId::FillAreasTransparentOrWhite,CommandId::FillAreasAnyColour].into_iter().map(|command|{let state=self.command(command);state.choice_item(state.label.clone())}).collect()});
+        }
         for (id, label, commands) in [
             ("close-gaps", MessageId::TOOL_CONTROL_CLOSE_GAPS, &[CommandId::CloseGapsAuto, CommandId::CloseGapsOff][..]),
             ("region-edges", MessageId::TOOL_CONTROL_GROUP_EDGES, &[CommandId::EdgesLineMiddle, CommandId::EdgesExact, CommandId::EdgesGrowShrink][..]),
@@ -299,7 +325,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     doc.scene().reference_leaves().into_iter().filter_map(|leaf| layer_render::RegionSource::reference(snapshot.clone(), leaf)).collect()
                 }
             };
-        if self.region_tools.stop_at_colors && source == RegionSource::Reference {
+        if self.region_tools.stop_at_colors && source == RegionSource::Reference && !self.layer_interaction.tool.encloses() {
             let doc = self.engine.document();
             if let Some(target) = source_target.and_then(|target| doc.target_owner(target))
                 && !doc.scene().reference_leaves().contains(&target)
@@ -311,10 +337,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn prepare_region_tools(&mut self) {
         let tool=self.layer_interaction.tool;
         if tool.region().is_some_and(|(fill,_,_)|fill) {
-            self.region_tools.last_fill=Some(if matches!(tool,LayerCanvasTool::EncloseFill {..}) {CommandId::EncloseFill}else{CommandId::Fill});
+            self.region_tools.last_fill=Some(if tool.encloses() {CommandId::EncloseFill}else{CommandId::Fill});
         }
         let (source,enclosed)=if let Some((_,source,_))=tool.region() {
-            (source,matches!(tool,LayerCanvasTool::EncloseFill {..}))
+            (source,tool.encloses())
         }else if self.region_tools.last_fill.is_some() || !self.engine.document().scene().references().is_empty() {
             let enclosed=self.region_tools.last_fill==Some(CommandId::EncloseFill);
             (self.region_tools.source[if enclosed {2}else{1}],enclosed)
@@ -330,7 +356,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             enclosed,
         }));
     }
-    fn request_region_at(&mut self, point: Point, enclosure: Option<Selection>, from: Option<layer_render::RegionSource>) {
+    fn request_region_at(&mut self, point: Point, enclosure: Option<Selection>, from: Option<layer_render::RegionSource>, paint:Option<EnclosurePaint>) {
+        let tolerance=paint.as_ref().map_or(self.region_tools.tolerance,|p|p.tolerance);
+        let refinement=paint.as_ref().map_or(self.region_tools.refinement,|p|p.refinement);
+        let areas=paint.as_ref().map_or(self.region_tools.fill_areas,|p|p.areas);
         let enclosed = enclosure.is_some();
         let Some((fill, source, contiguous)) = self.layer_interaction.tool.region() else {
             return;
@@ -352,7 +381,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         let source_target=if mask_target.is_some() {
             self.selection_masks.artwork().and_then(|h|doc.scene().source_target(h))
         } else {doc.drawing_target().or(doc.active_target())};
-        let Some(resolved) = self.region_source(source, from.clone(), source_target) else { return };
+        let Some(mut resolved) = self.region_source(source, from.clone(), source_target) else { return };
+        let reference=source==RegionSource::Reference;
+        let mut reference_count=reference.then(||self.engine.document().scene().reference_leaves().len());
+        let fill_areas=(enclosed && fill && areas!=FillAreas::AnyColour).then_some(areas);
+        if fill_areas.is_some() {
+            let Some(target)=source_target else{return;};
+            let mut sources=resolved.sources().to_vec();reference_count=Some(sources.len());
+            sources.push(layer_render::RegionSource::Scene {snapshot:self.engine.document().snapshot(),scope:SceneScope::Raw(target)});
+            resolved=layer_render::RegionSource::Intersection(sources);
+        }
         if fill && from.is_none() && !enclosed && self.selection_masks.target().is_none() && let Some(layer) = self.editing_vector_layer() {
             if let Err(error) = self.fill_vector_layer(layer, point, resolved, source != RegionSource::Reference) { self.notify(error); }
             return;
@@ -373,10 +411,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.notify_drawing_refusal();
             return;
         }
-        let request = RegionRequest { colour_mode, fill: (fill && !enclosed && self.region_tools.gesture.is_some()).then(||layer_render::RegionFillQuery {
+        let request = RegionRequest { fill_areas, colour_mode, fill: (fill && !enclosed && self.region_tools.gesture.is_some()).then(||layer_render::RegionFillQuery {
                 reach:self.region_tools.gap_reach.or_else(||(!self.region_tools.refinement.close_gaps).then_some(0)),excluded_seals:Default::default(),
                 trail:self.fill_query_trail()}),
-            reference_count: (self.lines_from(self.layer_interaction.tool.region().unwrap().1) == RegionSource::Reference).then(|| doc.scene().reference_leaves().len()),
+            reference_count,
             paper: doc.nearest_paper_binding(doc.drawing_content()),
             enclosure: enclosure.map(std::sync::Arc::new), request_id: self.region_tools.generation,
             contiguous,
@@ -389,11 +427,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             } else if fill { None } else { self.selection_refinement(basis) },
             source,
             position: [point.x as u32, point.y as u32],
-            tolerance: self.region_tools.tolerance,
+            tolerance,
             refinement: layer_render::RegionRefinement {
-                close_gaps: contiguous && self.region_tools.refinement.close_gaps,
-                smooth_edges: if fill { self.region_tools.refinement.smooth_edges } else { self.selection_tools.options.antialias },
-                ..self.region_tools.refinement
+                close_gaps: contiguous && refinement.close_gaps,
+                smooth_edges: if fill { refinement.smooth_edges } else { self.selection_tools.options.antialias },
+                ..refinement
             },
             limit: if !enclosed && fill && mask_target.is_none() {
                 doc.working.selection.clone().map(std::sync::Arc::new)
@@ -405,18 +443,18 @@ impl<R: CanvasRenderer> UiSession<R> {
             if let Err(error) = self.queue_mask_region(target, request, basis, true) { self.notify(error); }
             return;
         }
-        let purpose = Purpose::Region {
-            operation: fill.then(|| self.fill_region_operation(&request)),
-            color: (fill
+        let (operation,color)=if let Some(paint)=paint {(Some(self.fill_region_operation(&request,paint.operation,reference)),paint.color)}else{(
+            fill.then(|| self.fill_region_operation(&request,self.fill_operation(),reference)),
+            (fill
                 && !self.state.colors.transparent()
                 && self.state.brush.opacity > 0.)
-                .then(|| self.state.colors.definition()),
+                .then(|| self.state.colors.definition()))};
+        let purpose = Purpose::Region {operation,color,
             basis: if !fill && self.selection_refinement(basis).is_some() { layer_core::Affine::IDENTITY } else { basis },
         };
         self.queue_region(request, purpose);
     }
-    fn fill_region_operation(&self,request:&RegionRequest)->layer_core::RasterOperationKind {
-        let mut operation=self.fill_operation();
+    fn fill_region_operation(&self,request:&RegionRequest,mut operation:layer_core::RasterOperationKind,reference:bool)->layer_core::RasterOperationKind {
         if !matches!(request.refinement.edges,layer_render::RegionEdges::LineMiddle) {return operation;}
         let doc=self.engine.document();let scene=doc.scene();
         let Some(target)=doc.drawing_content().and_then(|target|scene.source_owner(target)) else{return operation;};
@@ -433,7 +471,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let snapshot=doc.snapshot();
         let lines=leaves.into_iter().filter(|leaf|scene.visible(*leaf) && scene.occurrence(*leaf).is_some_and(|layer|matches!(layer.kind(),layer_core::LayerKind::Paint|layer_core::LayerKind::Object))
                 && order.iter().position(|id|id==leaf).is_some_and(|position|position!=index))
-            .filter_map(|leaf|match if request.reference_count.is_some() {layer_render::RegionSource::reference(snapshot.clone(),leaf)}
+            .filter_map(|leaf|match if reference {layer_render::RegionSource::reference(snapshot.clone(),leaf)}
                 else{Some(layer_render::RegionSource::Scene {snapshot:snapshot.clone(),scope:SceneScope::Members(vec![leaf].into())})} {
                 Some(layer_render::RegionSource::Scene {snapshot,scope})=>Some(layer_core::FillLine {snapshot,scope,
                     fill_above:order.iter().position(|id|*id==leaf).unwrap()>index}),_=>None,
@@ -455,6 +493,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         request.request_id = self.region_tools.generation;
         let doc = self.engine.document();
         self.region_tools.target = Some(Target {
+            tool:self.layer_interaction.tool,
             generation: request.request_id,
             revision: doc.revision,
             layer: doc.working.occurrence,
@@ -466,7 +505,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.region_tools.queued = Some(request);
     }
     pub(super) fn queue_selection(&mut self, selection: Selection, options: layer_render::SelectionRefinement) {
-        let request = RegionRequest { colour_mode: Default::default(), fill: None, reference_count: None, paper: None,
+        let request = RegionRequest { fill_areas: None, colour_mode: Default::default(), fill: None, reference_count: None, paper: None,
             enclosure: None, request_id: 0, contiguous: false, selection: Some(options),
             source: layer_render::RegionSource::Selection(std::sync::Arc::new(selection)),
             position: [0, 0], tolerance: 0., refinement: Default::default(), limit: None,

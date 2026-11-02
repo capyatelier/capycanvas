@@ -94,7 +94,7 @@ export async function checkToolVariations({call,evaluate,settle}) {
       const tile=tiles.find(t=>t.control.slot===slot);assert.ok(tile,slot);
       const selector=`.toolbar-controls[data-panel="toolbar"] > [data-tile="${tile.id}"]`,anchor={kind:'tile',panel:'toolbar',tile:tile.id};
       const variants=await model({kind:'tool_variants',anchor}),rows=variants.sections.flat();assert.ok(rows.length>1);
-      if(slot==='fill')assert.deepEqual(rows.map(row=>row.label),['Fill','Lasso fill','Enclose and Fill']);
+      if(slot==='fill')assert.deepEqual(rows.map(row=>row.label),['Fill','Lasso fill','Enclose and Fill','Paint unfilled areas']);
       const categories=rows.map(row=>row.label);
       await markerPoint(anchor,selector);
       assert.ok(rows.every(r=>r.action&&r.icon));
@@ -153,10 +153,10 @@ export async function checkToolVariations({call,evaluate,settle}) {
         const fill=tiles.find(t=>t.control.slot==='photo_fill');assert.ok(fill);
         const fillAnchor={kind:'tile',panel:'toolbar',tile:fill.id},fillSelector=`.toolbar-controls[data-panel="toolbar"] > [data-tile="${fill.id}"]`;
         const leaves=(await model({kind:'tool_variants',anchor:fillAnchor})).sections.flat();
-        assert.deepEqual(leaves.slice(-3).map(row=>row.label),['Fill','Lasso fill','Enclose and Fill']);
+        assert.deepEqual(leaves.slice(-4).map(row=>row.label),['Fill','Lasso fill','Enclose and Fill','Paint unfilled areas']);
         await openChoices(fillAnchor,fillSelector);await choose('Enclose and Fill');
         assert.deepEqual(await evaluate('layerApp.state().tool_set.groups.map(item=>item.label)'),
-          leaves.map(row=>row.label),'Photo Fill lists the same three siblings');
+          leaves.map(row=>row.label),'Photo Fill lists the same four siblings');
         assert.deepEqual(await evaluate('layerApp.state().tool_set.subtools.map(item=>item.label)'),[],'Enclose and Fill has no nested tool category');
       }
       await send({type:'restore_workspace',workspace:fixture});

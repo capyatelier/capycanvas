@@ -695,3 +695,9 @@ command-close-gaps-off = Désactivé
 command-edges-line-middle = Jusqu’au milieu du trait
 command-edges-exact = Exact
 command-edges-grow-shrink = Agrandir ou réduire
+
+command-paint-unfilled = Peindre les zones non remplies
+command-fill-areas-transparent = Transparentes
+command-fill-areas-transparent-or-white = Transparentes ou blanches
+command-fill-areas-any-colour = Toute couleur
+commands-help-paint-unfilled = Passez sur les zones fermées non remplies pour les remplir.

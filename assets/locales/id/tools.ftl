@@ -383,3 +383,5 @@ tool-control-liquify-amount = Jumlah
 tool-family-fill = Alat isi
 tool-control-close-gaps = Tutup celah
 tool-control-edge-offset = Jarak
+
+tool-action-group-fill-areas = Area yang diisi

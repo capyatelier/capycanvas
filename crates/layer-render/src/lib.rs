@@ -654,6 +654,7 @@ pub enum RegionColourMode {
 }
 #[derive(Clone, Debug)]
 pub struct RegionRequest {
+    pub fill_areas: Option<layer_core::FillAreas>,
     pub colour_mode: RegionColourMode,
     pub fill: Option<RegionFillQuery>,
     pub reference_count: Option<usize>,

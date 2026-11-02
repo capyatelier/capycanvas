@@ -221,3 +221,5 @@ tool-control-liquify-amount = Amount
 tool-family-fill = Fill tools
 tool-control-close-gaps = Close gaps
 tool-control-edge-offset = Distance
+
+tool-action-group-fill-areas = Fill areas

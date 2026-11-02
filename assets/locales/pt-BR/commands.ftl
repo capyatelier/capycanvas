@@ -696,3 +696,9 @@ command-close-gaps-off = Desativado
 command-edges-line-middle = Até o meio da linha
 command-edges-exact = Exato
 command-edges-grow-shrink = Expandir ou reduzir
+
+command-paint-unfilled = Pintar áreas não preenchidas
+command-fill-areas-transparent = Transparentes
+command-fill-areas-transparent-or-white = Transparentes ou brancas
+command-fill-areas-any-colour = Qualquer cor
+commands-help-paint-unfilled = Pinte sobre áreas fechadas não preenchidas para preenchê-las.

@@ -221,3 +221,5 @@ tool-control-liquify-amount = 適用量
 tool-family-fill = 塗りつぶしツール
 tool-control-close-gaps = 隙間を閉じる
 tool-control-edge-offset = 距離
+
+tool-action-group-fill-areas = 塗る領域

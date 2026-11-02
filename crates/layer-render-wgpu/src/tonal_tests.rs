@@ -24,7 +24,7 @@ fn receive(
 ) -> RegionResult {
     receive_request(
         r,
-        RegionRequest { colour_mode: Default::default(), fill: None, reference_count: None, paper: None,
+        RegionRequest { fill_areas: None, colour_mode: Default::default(), fill: None, reference_count: None, paper: None,
             enclosure: None, request_id: 73,
             contiguous: false,
             position: [0, 0],
@@ -361,7 +361,7 @@ fn tonal_61mp_performance() {
     let started = std::time::Instant::now();
     let feathered = receive_request(
         &mut r,
-        RegionRequest { colour_mode: Default::default(), fill: None, reference_count: None, paper: None,
+        RegionRequest { fill_areas: None, colour_mode: Default::default(), fill: None, reference_count: None, paper: None,
             enclosure: None, request_id: 74,
             contiguous: false,
             position: [0, 0],

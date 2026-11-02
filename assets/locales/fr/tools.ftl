@@ -220,3 +220,5 @@ tool-control-liquify-amount = Quantité
 tool-family-fill = Outils de remplissage
 tool-control-close-gaps = Fermer les espaces
 tool-control-edge-offset = Distance
+
+tool-action-group-fill-areas = Zones à remplir

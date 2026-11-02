@@ -221,3 +221,5 @@ tool-control-liquify-amount = Степень
 tool-family-fill = Инструменты заливки
 tool-control-close-gaps = Замыкать зазоры
 tool-control-edge-offset = Расстояние
+
+tool-action-group-fill-areas = Области заливки

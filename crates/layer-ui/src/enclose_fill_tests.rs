@@ -61,26 +61,32 @@ mod enclose_fill_checks {
             ] {
                 layer(&mut s,LayerAction::Visibility {id:occurrence_token(group),value:!hide_group});
                 layer(&mut s,LayerAction::Select {id:occurrence_token(working),mask:false});
-                invoke(&mut s,CommandId::Fill);invoke(&mut s,source);invoke(&mut s,CommandId::EdgesLineMiddle);
-                contact(&mut s,PenPhase::Down,[40.,60.]);s.frame(20_000_000,20_000_000).unwrap();
-                let request=s.renderer_mut().region_requests.last().unwrap().clone();reply(&mut s,&request);s.frame(30_000_000,30_000_000).unwrap();
-                let mode=match source {
-                    CommandId::SelectionEditing=>layer_render::RegionColourMode::ColourOnSolid,
-                    CommandId::SelectionVisible=>layer_render::RegionColourMode::Target(s.engine.document().drawing_target().unwrap()),
-                    _=>layer_render::RegionColourMode::AlphaBorder,
-                };
-                assert_eq!(request.colour_mode,mode);
-                let preview=s.renderer_mut().fill_preview.clone().unwrap();let edges=fill_edges(&preview.operation.kind);
-                assert_eq!(edges.position,Point {x:40.,y:60.});assert_eq!(edges.tolerance,request.tolerance);
-                let actual=edges.lines.iter().map(|line| {
-                    let SceneScope::Members(members)=&line.scope else {panic!("reference leaves")};assert_eq!(members.len(),1);
-                    if members[0]==leaf {assert_eq!(line.snapshot.view().occurrence(leaf).unwrap().opacity,if source==CommandId::SelectionReference {1.}else{0.5});}
-                    (members[0],line.fill_above)
-                }).collect::<Vec<_>>();
-                assert_eq!(actual.len(),expected.len(),"{platform:?} {source:?} hidden group {hide_group}: {actual:?}");
-                assert_eq!(actual.into_iter().collect::<std::collections::BTreeSet<_>>(),expected.into_iter().collect());
-                assert_eq!(s.engine.document().scene().occurrence(leaf).unwrap().opacity,0.5);
-                contact(&mut s,PenPhase::Cancel,[40.,60.]);s.frame(40_000_000,40_000_000).unwrap();
+                for tool in [CommandId::Fill,CommandId::EncloseFill] {
+                    invoke(&mut s,tool);invoke(&mut s,source);invoke(&mut s,CommandId::EdgesLineMiddle);
+                    if tool==CommandId::Fill {contact(&mut s,PenPhase::Down,[40.,60.]);}else{enclose(&mut s);}
+                    s.frame(20_000_000,20_000_000).unwrap();
+                    let request=s.renderer_mut().region_requests.last().unwrap().clone();reply(&mut s,&request);s.frame(30_000_000,30_000_000).unwrap();
+                    let mode=match source {
+                        CommandId::SelectionEditing=>layer_render::RegionColourMode::ColourOnSolid,
+                        CommandId::SelectionVisible=>layer_render::RegionColourMode::Target(s.engine.document().drawing_target().unwrap()),
+                        _=>layer_render::RegionColourMode::AlphaBorder,
+                    };
+                    assert_eq!(request.colour_mode,mode);
+                    let operation=if tool==CommandId::Fill {s.renderer_mut().fill_preview.as_ref().unwrap().operation.clone()}
+                        else{s.engine.document().target_operations(s.engine.document().drawing_target().unwrap()).unwrap().last().unwrap().clone()};
+                    let edges=fill_edges(&operation.kind);
+                    assert_eq!(edges.position,Point {x:request.position[0] as f32,y:request.position[1] as f32});assert_eq!(edges.tolerance,request.tolerance);
+                    let actual=edges.lines.iter().map(|line| {
+                        let SceneScope::Members(members)=&line.scope else {panic!("reference leaves")};assert_eq!(members.len(),1);
+                        if members[0]==leaf {assert_eq!(line.snapshot.view().occurrence(leaf).unwrap().opacity,if source==CommandId::SelectionReference {1.}else{0.5},"{platform:?} {tool:?} {source:?}");}
+                        (members[0],line.fill_above)
+                    }).collect::<Vec<_>>();
+                    assert_eq!(actual.len(),expected.len(),"{platform:?} {tool:?} {source:?} hidden group {hide_group}: {actual:?}");
+                    assert_eq!(actual.into_iter().collect::<std::collections::BTreeSet<_>>(),expected.iter().copied().collect());
+                    assert_eq!(s.engine.document().scene().occurrence(leaf).unwrap().opacity,0.5);
+                    if tool==CommandId::Fill {contact(&mut s,PenPhase::Cancel,[40.,60.]);s.frame(40_000_000,40_000_000).unwrap();}
+                    else{s.frame(40_000_000,40_000_000).unwrap();invoke(&mut s,CommandId::Undo);s.frame(50_000_000,50_000_000).unwrap();}
+                }
             }
         }
     }
@@ -306,7 +312,7 @@ mod enclose_fill_checks {
                 let (mut s, panel, ids) = group_fixture(platform, &[control]);
                 let tile = DrawerAnchor::Tile { panel, tile: ids[0] };
                 let header = add_group_header(&mut s, control);
-                let commands = &[CommandId::Fill, CommandId::LassoFill, CommandId::EncloseFill][..];
+                let commands = &[CommandId::Fill, CommandId::LassoFill, CommandId::EncloseFill, CommandId::PaintUnfilled][..];
                 let check = |s: &UiSession<Recorder>, view: &ToolSetView, anchor: DrawerAnchor| {
                     let siblings: Vec<_> = view.groups.iter().chain(&view.subtools).filter_map(|item|
                         if let UiAction::ChooseToolVariant { anchor: origin, variant: ToolVariant::Command { command } } = item.action {
@@ -326,7 +332,7 @@ mod enclose_fill_checks {
                         let drawer = s.state().customization.drawer.as_ref().unwrap();
                         assert_eq!(drawer.anchor, anchor);
                         check(&s, drawer.tool_set.as_ref().unwrap(), anchor);
-                        if command == CommandId::EncloseFill {
+                        if matches!(command,CommandId::EncloseFill|CommandId::PaintUnfilled) {
                             for source in [CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference] {
                                 let options = s.state().tool_options();
                                 let ToolOption::Choice { items, .. } = options.iter().find(|option|
@@ -348,11 +354,11 @@ mod enclose_fill_checks {
                 let mut restored = session(platform);
                 restored.restore_editing(s.editing_state()).unwrap();
                 restored.adopt_workspace(PreparedWorkspace::new(s.capture_workspace().unwrap()).unwrap()).unwrap();
-                let enclose = ToolVariant::Command { command: CommandId::EncloseFill };
+                let enclose = ToolVariant::Command { command: CommandId::PaintUnfilled };
                 assert_eq!(selected_slot_variant(&restored, tile), enclose);
                 assert_eq!(selected_slot_variant(&restored, header), enclose);
                 activate_slot(&mut restored, tile);
-                assert!(restored.command(CommandId::EncloseFill).selected);
+                assert!(restored.command(CommandId::PaintUnfilled).selected);
                 assert!(restored.command(CommandId::SelectionReference).selected);
             }
         }
@@ -469,8 +475,8 @@ mod enclose_fill_checks {
                     invoke(&mut s, source_command);
                     assert!(s.command(command).selected);
                     assert!(s.command(source_command).selected);
-                    assert_eq!(s.state.tool_actions.iter().any(|action| action.command == CommandId::StopAtColors), source_command == CommandId::SelectionReference);
-                    assert_eq!(s.command(CommandId::StopAtColors).enabled, source_command == CommandId::SelectionReference);
+                    assert_eq!(s.state.tool_actions.iter().any(|action| action.command == CommandId::StopAtColors), command==CommandId::Fill && source_command == CommandId::SelectionReference);
+                    assert_eq!(s.command(CommandId::StopAtColors).enabled, command==CommandId::Fill && source_command == CommandId::SelectionReference);
                     if command == CommandId::EncloseFill { enclose(&mut s); }
                     else {
                         contact(&mut s, PenPhase::Down, [40., 60.]);
@@ -484,7 +490,8 @@ mod enclose_fill_checks {
                     assert!(!request.refinement.close_gaps);
                     assert_eq!(request.refinement.edges, layer_render::RegionEdges::GrowShrink(-2));
                     assert!(request.refinement.smooth_edges);
-                    assert_eq!(request.source.sources().len(), if source_command == CommandId::SelectionReference { 2 } else { 1 });
+                    assert_eq!(request.source.sources().len(), if command==CommandId::EncloseFill || source_command == CommandId::SelectionReference { 2 } else { 1 });
+                    assert_eq!(request.fill_areas,(command==CommandId::EncloseFill).then_some(FillAreas::Transparent));
                     let layer_render::RegionSource::Scene { scope: actual, .. } = &request.source.sources()[0] else { panic!("scene source"); };
                     assert_eq!(actual, &scope);
                     assert!(s.cancel_layer_gesture().unwrap());
@@ -839,6 +846,302 @@ mod enclose_fill_checks {
         }
     }
 
+    mod unfilled_area_checks {
+        use super::*;
+        use layer_core::{FillAreas, Point, SelectionPixels};
+        use std::sync::Arc;
+
+        fn footprint(s:&mut UiSession<Recorder>)->Arc<SelectionPixels> {
+            let update=s.renderer_mut().selection_updates.last().unwrap().clone();
+            assert!(s.renderer_mut().selection_updates.iter().any(|update|!update.dabs.is_empty()));
+            let pixels=Arc::new(SelectionPixels::bytes([4,1],[0,0,3,1],vec![0x00ffffff]).unwrap());
+            s.renderer_mut().selection_reply=Some(layer_render::SelectionPaintResult {request_id:update.id,pixels:pixels.clone(),changed:true});
+            pixels
+        }
+        fn unfilled_stroke(s:&mut UiSession<Recorder>) {
+            for (sequence,phase,position) in [(1,PenPhase::Down,[100.,100.]),(2,PenPhase::Move,[180.,100.]),(3,PenPhase::Up,[220.,120.])] {
+                pen_at(s,sequence,phase,position);
+            }
+            s.frame(10,10).unwrap();
+            assert!(s.renderer_mut().selection_updates.last().unwrap().finish);
+        }
+        fn region_reply(s:&mut UiSession<Recorder>,request:&layer_render::RegionRequest) {
+            s.renderer_mut().region_reply=Some(layer_render::RegionResult {request_id:request.request_id,
+                pixels:Arc::new(SelectionPixels::bytes([4,1],[0,0,4,1],vec![0xffffffff]).unwrap()),
+                anchors:None,gaps:None,underfill:None,placement:layer_core::Affine::IDENTITY,tonal_sample:None});
+        }
+
+        #[test]
+        fn fill_areas_options_are_shared_by_enclosure_tools_and_persist() {
+            for platform in Platform::ALL {
+                let mut s=session(platform);
+                assert_eq!(s.editing_state().fill_areas,FillAreas::Transparent);
+                for tool in [CommandId::EncloseFill,CommandId::PaintUnfilled] {
+                    invoke(&mut s,tool);
+                    assert!(!s.state.tool_actions.iter().any(|action|action.command==CommandId::StopAtColors));
+                    for (command,areas) in [(CommandId::FillAreasTransparent,FillAreas::Transparent),
+                        (CommandId::FillAreasTransparentOrWhite,FillAreas::TransparentOrWhite),
+                        (CommandId::FillAreasAnyColour,FillAreas::AnyColour)] {
+                        invoke(&mut s,command);
+                        assert!(s.command(command).selected);
+                        assert_eq!(s.editing_state().fill_areas,areas);
+                        assert!(s.state.tool_extra.iter().any(|option|matches!(option,ToolOption::Choice {segmented:true,items,..}
+                            if items.iter().any(|item|item.action==(UiAction::Invoke {command})))));
+                        let saved=serde_json::to_string(&s.editing_state()).unwrap();
+                        let mut restored=session(platform);
+                        restored.restore_editing(serde_json::from_str(&saved).unwrap()).unwrap();
+                        assert_eq!(restored.editing_state().fill_areas,areas);
+                    }
+                }
+                invoke(&mut s,CommandId::PaintUnfilled);
+                assert!(s.state.tool_settings.iter().any(|setting|setting.id=="unfilled_size" && setting.value==32.));
+                s.dispatch(UiAction::SetToolSetting {id:"unfilled_size".into(),value:48.}).unwrap();
+                invoke(&mut s,CommandId::Brush);invoke(&mut s,CommandId::PaintUnfilled);
+                assert!(s.state.tool_settings.iter().any(|setting|setting.id=="unfilled_size" && setting.value==48.));
+                let mut reopened=session(platform);reopened.restore_editing(s.editing_state()).unwrap();
+                invoke(&mut reopened,CommandId::PaintUnfilled);
+                assert!(reopened.state.tool_settings.iter().any(|setting|setting.id=="unfilled_size" && setting.value==48.));
+                reopened.dispatch(UiAction::SetBrushSize {value:64.}).unwrap();
+                assert!(reopened.state.tool_settings.iter().any(|setting|setting.id=="unfilled_size" && setting.value==64.));
+                invoke(&mut s,CommandId::Fill);invoke(&mut s,CommandId::SelectionEditing);
+                pen_at(&mut s,1,PenPhase::Down,[80.,80.]);s.frame(1,1).unwrap();
+                assert_eq!(s.renderer_mut().region_requests.last().unwrap().fill_areas,None);
+                pen_at(&mut s,2,PenPhase::Cancel,[80.,80.]);
+            }
+        }
+
+        #[test]
+        fn released_editing_without_fill_areas_keeps_authored_settings() {
+            let released=include_str!("../tests/compat/1.0.15/editing-complete.json");
+            assert!(!serde_json::from_str::<serde_json::Value>(released).unwrap().as_object().unwrap().contains_key("fill_areas"));
+            let english=Localizer::shared(crate::UiLanguage::English);
+            let editing=EditingState::restore(released,&english);
+            assert_eq!(editing.fill_areas,FillAreas::Transparent);
+            assert_eq!(editing.preset,42);
+            let mut with_new=serde_json::to_value(&editing).unwrap();
+            with_new["fill_areas"]=serde_json::to_value(FillAreas::AnyColour).unwrap();
+            let changed:EditingState=serde_json::from_value(with_new).unwrap();
+            let mut original=serde_json::to_value(&editing).unwrap();let mut actual=serde_json::to_value(&changed).unwrap();
+            original.as_object_mut().unwrap().remove("fill_areas");actual.as_object_mut().unwrap().remove("fill_areas");
+            assert_eq!(actual,original);
+            let mut s=session(Platform::Gtk);s.restore_editing(changed).unwrap();
+            assert_eq!(s.editing_state().fill_areas,FillAreas::AnyColour);
+        }
+
+        #[test]
+        fn paint_unfilled_waits_for_gpu_footprint_then_commits_one_fill() {
+            for platform in Platform::ALL {
+                for (command,areas) in [(CommandId::FillAreasTransparent,FillAreas::Transparent),
+                    (CommandId::FillAreasTransparentOrWhite,FillAreas::TransparentOrWhite),(CommandId::FillAreasAnyColour,FillAreas::AnyColour)] {
+                    let mut s=session(platform);invoke(&mut s,CommandId::PaintUnfilled);invoke(&mut s,CommandId::SelectionEditing);invoke(&mut s,command);
+                    let checkpoint=s.engine.checkpoint();let selected=s.engine.document().working.selection.clone();
+                    unfilled_stroke(&mut s);
+                    assert!(s.renderer_mut().region_requests.is_empty());assert_eq!(s.engine.checkpoint(),checkpoint);
+                    let pixels=footprint(&mut s);s.frame(20,20).unwrap();
+                    let request=s.renderer_mut().region_requests.last().unwrap().clone();
+                    assert_eq!(request.fill_areas,(areas!=FillAreas::AnyColour).then_some(areas));assert!(request.fill.is_none());
+                    let enclosure=request.enclosure.as_ref().unwrap();
+                    assert!(matches!(&enclosure.shape,layer_core::SelectionShape::Pixels(actual) if Arc::ptr_eq(actual,&pixels)));
+                    assert_eq!(s.engine.document().working.selection,selected);assert!(!s.engine.can_undo());
+                    region_reply(&mut s,&request);s.frame(30,30).unwrap();s.frame(40,40).unwrap();
+                    assert!(s.engine.can_undo());assert_eq!(s.engine.document().working.selection,selected);
+                    invoke(&mut s,CommandId::Undo);s.frame(50,50).unwrap();
+                    assert!(!s.engine.can_undo());assert!(s.engine.can_redo());
+                }
+            }
+        }
+
+        #[test]
+        fn paint_unfilled_explicit_cancel_discards_pending_footprint_and_region_replies() {
+            for after_footprint in [false,true] {
+                let mut s=session(Platform::Gtk);invoke(&mut s,CommandId::PaintUnfilled);invoke(&mut s,CommandId::SelectionEditing);
+                let checkpoint=s.engine.checkpoint();unfilled_stroke(&mut s);
+                footprint(&mut s);
+                let pending=if after_footprint {
+                    s.frame(20,20).unwrap();Some(s.renderer_mut().region_requests.last().unwrap().clone())
+                }else{None};
+                invoke(&mut s,CommandId::Brush);
+                if let Some(request)=pending {region_reply(&mut s,&request);}
+                s.frame(30,30).unwrap();s.frame(40,40).unwrap();
+                assert_eq!(s.engine.checkpoint(),checkpoint);assert!(!s.engine.can_undo());
+                assert!(s.engine.document().working.selection.is_none());
+            }
+            let mut s=session(Platform::Gtk);invoke(&mut s,CommandId::PaintUnfilled);invoke(&mut s,CommandId::SelectionEditing);
+            pen_at(&mut s,1,PenPhase::Down,[100.,100.]);pen_at(&mut s,2,PenPhase::Move,[180.,100.]);
+            s.frame(20_000_000,20_000_000).unwrap();assert!(s.painted_selections.busy());
+            assert!(!s.renderer_mut().selection_updates.last().unwrap().finish);
+            assert!(key(&mut s,"escape",true,false,false).handled);
+            assert!(!s.painted_selections.busy());footprint(&mut s);
+            pen_at(&mut s,4,PenPhase::Up,[180.,100.]);s.frame(40_000_000,40_000_000).unwrap();
+            assert!(!s.painted_selections.busy());
+            assert!(s.renderer_mut().region_requests.is_empty());assert!(!s.engine.can_undo());
+
+        }
+
+        #[test]
+        fn paint_unfilled_withdraws_a_finger_stroke_but_rejects_palms_during_a_pen_stroke() {
+            let mut s=finger_session();invoke(&mut s,CommandId::PaintUnfilled);invoke(&mut s,CommandId::SelectionEditing);
+            let checkpoint=s.engine.checkpoint();
+            assert!(finger_sample(&mut s,41,ContactPhase::Down,[100.,100.],10).paint);
+            finger_sample(&mut s,41,ContactPhase::Move,[180.,100.],30);finger_frames(&mut s,32);
+            assert!(s.painted_selections.has_contact());assert!(!s.renderer_mut().selection_updates.is_empty());
+            let withdrawn=finger_sample(&mut s,42,ContactPhase::Down,[220.,220.],50);
+            assert!(withdrawn.cancel_paint && !withdrawn.paint);assert!(!s.painted_selections.busy());
+            footprint(&mut s);
+            finger_sample(&mut s,41,ContactPhase::Up,[180.,100.],60);
+            finger_sample(&mut s,42,ContactPhase::Up,[220.,220.],70);finger_frames(&mut s,72);
+            assert!(s.renderer_mut().region_requests.is_empty());assert_eq!(s.engine.checkpoint(),checkpoint);
+            assert!(!s.engine.can_undo());assert!(s.engine.document().working.selection.is_none());
+            for platform in Platform::ALL {
+                let mut s=session(platform);invoke(&mut s,CommandId::PaintUnfilled);invoke(&mut s,CommandId::SelectionEditing);
+                assert!(s.input(pointer_input(7,ContactPhase::Down,PointerKind::Pen,PointerButton::Primary,[100.,100.],10_000_000)).unwrap().paint);
+                pen_at(&mut s,1,PenPhase::Down,[100.,100.]);pen_at(&mut s,2,PenPhase::Move,[180.,100.]);
+                s.frame(20_000_000,20_000_000).unwrap();assert!(s.painted_selections.has_contact());
+                for id in [41,42] {
+                    let palm=s.input(pointer_input(id,ContactPhase::Down,PointerKind::Touch,PointerButton::Primary,[220.,220.],25_000_000)).unwrap();
+                    assert!(palm.handled && !palm.paint && !palm.cancel_paint);assert!(s.painted_selections.has_contact());
+                }
+                s.input(pointer_input(7,ContactPhase::Up,PointerKind::Pen,PointerButton::Primary,[180.,100.],30_000_000)).unwrap();
+                pen_at(&mut s,3,PenPhase::Up,[180.,100.]);s.frame(40_000_000,40_000_000).unwrap();
+                assert!(s.renderer_mut().selection_updates.last().unwrap().finish);
+                footprint(&mut s);s.frame(50_000_000,50_000_000).unwrap();
+                let request=s.renderer_mut().region_requests.last().unwrap().clone();
+                region_reply(&mut s,&request);s.frame(60_000_000,60_000_000).unwrap();s.frame(70_000_000,70_000_000).unwrap();
+                assert!(s.engine.can_undo());invoke(&mut s,CommandId::Undo);s.frame(80_000_000,80_000_000).unwrap();assert!(!s.engine.can_undo());
+                for id in [41,42] {s.input(pointer_input(id,ContactPhase::Up,PointerKind::Touch,PointerButton::Primary,[220.,220.],90_000_000)).unwrap();}
+            }
+        }
+
+        #[test]
+        fn paint_unfilled_forced_end_finishes_the_footprint_and_commits_once() {
+            let mut s=session(Platform::Gtk);invoke(&mut s,CommandId::PaintUnfilled);invoke(&mut s,CommandId::SelectionEditing);
+            pen_at(&mut s,1,PenPhase::Down,[100.,100.]);pen_at(&mut s,2,PenPhase::Move,[180.,100.]);
+            s.frame(20_000_000,20_000_000).unwrap();assert!(s.painted_selections.has_contact());
+            pen_at(&mut s,3,PenPhase::Cancel,[180.,100.]);s.frame(40_000_000,40_000_000).unwrap();
+            assert!(!s.painted_selections.has_contact());assert!(s.painted_selections.busy());
+            assert!(s.renderer_mut().selection_updates.last().unwrap().finish);
+            footprint(&mut s);s.frame(50_000_000,50_000_000).unwrap();
+            let request=s.renderer_mut().region_requests.last().unwrap().clone();region_reply(&mut s,&request);
+            s.frame(60_000_000,60_000_000).unwrap();s.frame(70_000_000,70_000_000).unwrap();
+            assert!(s.engine.can_undo());invoke(&mut s,CommandId::Undo);s.frame(80_000_000,80_000_000).unwrap();assert!(!s.engine.can_undo());
+        }
+
+        #[test]
+        fn paint_unfilled_shows_accent_footprint_without_pressure_or_authored_changes() {
+            for platform in Platform::ALL {
+                let mut s=session(platform);invoke(&mut s,CommandId::PaintUnfilled);invoke(&mut s,CommandId::SelectionEditing);
+                s.selection_tools.options.display.overlay=false;
+                let checkpoint=s.engine.checkpoint();let selected=s.engine.document().working.selection.clone();
+                for (sequence,phase,pressure,position) in [(1,PenPhase::Down,0.15,[100.,100.]),(2,PenPhase::Move,0.9,[180.,100.])] {
+                    let mut input=event(&s,sequence,phase,pressure);input.surface_position=Point {x:position[0],y:position[1]};s.pen(input);
+                }
+                s.frame(20_000_000,20_000_000).unwrap();
+                let overlay=s.renderer_mut().overlay.clone().unwrap();assert!(overlay.active);
+                let accent=s.state.palette.accent.0.map(|v|f32::from(v)/255.);
+                assert_eq!(overlay.color,[accent[0],accent[1],accent[2],0.35]);
+                assert!(!s.selection_tools.options.display.overlay);
+                let updates=&s.engine.backend().selection_updates;assert!(!updates.is_empty());
+                let dabs=updates.iter().flat_map(|update|&update.dabs).collect::<Vec<_>>();assert!(dabs.len()>1);
+                for dab in dabs {assert_eq!(dab.radii,[16.,16.]);}
+                assert_eq!(s.engine.checkpoint(),checkpoint);assert_eq!(s.engine.document().working.selection,selected);
+                pen_at(&mut s,3,PenPhase::Cancel,[180.,100.]);s.frame(30_000_000,30_000_000).unwrap();
+                assert!(!s.engine.can_undo());
+            }
+        }
+
+        fn captured_unfilled_settings(after_request:bool) {
+            for platform in Platform::ALL {
+                let mut s=session(platform);invoke(&mut s,CommandId::PaintUnfilled);invoke(&mut s,CommandId::SelectionEditing);
+                s.dispatch(UiAction::SetColor {rgba:[1.,0.,0.,1.]}).unwrap();
+                for (id,value) in [("opacity",0.75),("grain_depth",0.5),("tolerance",0.1)] {
+                    s.dispatch(UiAction::SetToolSetting {id:id.into(),value}).unwrap();
+                }
+                invoke(&mut s,CommandId::EdgesGrowShrink);
+                s.dispatch(UiAction::SetToolSetting {id:"edge_offset".into(),value:2.}).unwrap();
+                invoke(&mut s,CommandId::FillAreasTransparentOrWhite);
+                let target=s.engine.document().active_target().unwrap();
+                let layer_core::RasterOperationKind::Fill {color:expected_color,texture:expected_texture,..}=s.fill_operation() else {panic!("fill paint")};
+                assert_eq!(expected_texture.strength,0.5);
+                let expected_refinement=s.region_tools.refinement;
+                unfilled_stroke(&mut s);assert!(s.renderer_mut().region_requests.is_empty());
+                let queued=if after_request {
+                    footprint(&mut s);s.frame(20,20).unwrap();
+                    Some(s.renderer_mut().region_requests.last().unwrap().clone())
+                }else{None};
+                s.dispatch(UiAction::SetColor {rgba:[0.,0.,1.,1.]}).unwrap();
+                for (id,value) in [("opacity",0.25),("grain_depth",1.5),("tolerance",0.35),("edge_offset",-3.)] {
+                    s.dispatch(UiAction::SetToolSetting {id:id.into(),value}).unwrap();
+                }
+                assert_eq!(s.state.brush.opacity,0.25);assert_eq!(s.region_tools.tolerance,0.35);
+                assert_eq!(s.region_tools.texture_strength,1.5);
+                assert_eq!(s.engine.brush().color_rgba_linear[..3],[0.,0.,1.]);
+                assert_eq!(s.region_tools.refinement.edges,layer_core::RegionEdges::GrowShrink(-3));
+                let request=queued.unwrap_or_else(|| {
+                    footprint(&mut s);s.frame(20,20).unwrap();
+                    s.renderer_mut().region_requests.last().unwrap().clone()
+                });
+                assert_eq!(request.tolerance,0.1);assert_eq!(request.refinement,expected_refinement);
+                assert_eq!(request.fill_areas,Some(FillAreas::TransparentOrWhite));
+                region_reply(&mut s,&request);s.frame(30,30).unwrap();
+                let operations=s.engine.document().target_operations(target).unwrap();assert_eq!(operations.len(),1);
+                let layer_core::RasterOperationKind::Fill {color,texture,..}=&operations[0].kind else {panic!("committed fill")};
+                assert_eq!(*color,expected_color);assert_eq!(expected_color,[1.,0.,0.,0.75]);
+                assert_eq!(*texture,expected_texture);
+                assert_eq!(s.engine.brush().color_rgba_linear[..3],[0.,0.,1.]);
+                assert_eq!(s.state.brush.opacity,0.25);assert_eq!(s.region_tools.tolerance,0.35);
+                assert_eq!(s.region_tools.texture_strength,1.5);
+                assert_eq!(s.region_tools.refinement.edges,layer_core::RegionEdges::GrowShrink(-3));
+                s.frame(40,40).unwrap();assert!(s.engine.can_undo());
+                invoke(&mut s,CommandId::Undo);s.frame(50,50).unwrap();assert!(!s.engine.can_undo());
+            }
+        }
+
+        #[test]
+        fn paint_unfilled_keeps_stroke_start_paint_and_detection_settings() {
+            captured_unfilled_settings(false);
+        }
+
+        #[test]
+        fn paint_unfilled_keeps_queued_request_when_numeric_settings_change() {
+            captured_unfilled_settings(true);
+        }
+
+        #[test]
+        fn paint_unfilled_draws_the_next_footprint_while_the_previous_fill_is_detecting() {
+            let mut s=session(Platform::Gtk);invoke(&mut s,CommandId::PaintUnfilled);invoke(&mut s,CommandId::SelectionEditing);
+            let target=s.engine.document().active_target().unwrap();let original=s.engine.document().target_raster(target).unwrap().identity();
+            s.dispatch(UiAction::SetColor {rgba:[1.,0.,0.,1.]}).unwrap();unfilled_stroke(&mut s);
+            let first_id=s.renderer_mut().selection_updates.last().unwrap().id;
+            footprint(&mut s);s.frame(20,20).unwrap();let first=s.renderer_mut().region_requests.last().unwrap().clone();
+            s.dispatch(UiAction::SetColor {rgba:[0.,0.,1.,1.]}).unwrap();
+            pen_at(&mut s,4,PenPhase::Down,[300.,300.]);pen_at(&mut s,5,PenPhase::Move,[400.,300.]);s.frame(30,30).unwrap();
+            assert_eq!(s.renderer_mut().region_requests.len(),1);
+            let second=s.renderer_mut().selection_updates.last().unwrap().clone();
+            assert_ne!(second.id,first_id);assert!(!second.finish && !second.dabs.is_empty());
+            assert!(s.renderer_mut().overlay.as_ref().is_some_and(|overlay|overlay.active));
+            pen_at(&mut s,6,PenPhase::Up,[420.,320.]);s.frame(40,40).unwrap();
+            assert!(s.renderer_mut().selection_updates.last().unwrap().finish);
+            footprint(&mut s);s.frame(50,50).unwrap();assert_eq!(s.renderer_mut().region_requests.len(),1);
+            region_reply(&mut s,&first);s.frame(60,60).unwrap();
+            let operations=s.engine.document().target_operations(target).unwrap();
+            assert!(matches!(&operations.last().unwrap().kind,layer_core::RasterOperationKind::Fill {color,..} if *color==[1.,0.,0.,1.]));
+            assert!(s.engine.raster_backing_pending());assert_eq!(s.renderer_mut().region_requests.len(),1);
+            s.frame(70,70).unwrap();assert!(!s.engine.raster_backing_pending());
+            assert_eq!(s.renderer_mut().region_requests.len(),1);
+            let first_raster=s.engine.document().target_raster(target).unwrap().identity();assert_ne!(first_raster,original);
+            s.frame(80,80).unwrap();assert_eq!(s.renderer_mut().region_requests.len(),2);
+            let second=s.renderer_mut().region_requests.last().unwrap().clone();assert_ne!(second.request_id,first.request_id);
+            region_reply(&mut s,&second);s.frame(90,90).unwrap();
+            let operations=s.engine.document().target_operations(target).unwrap();
+            assert!(matches!(&operations.last().unwrap().kind,layer_core::RasterOperationKind::Fill {color,..} if *color==[0.,0.,1.,1.]));
+            s.frame(100,100).unwrap();assert!(!s.engine.raster_backing_pending());
+            invoke(&mut s,CommandId::Undo);s.frame(110,110).unwrap();
+            assert_eq!(s.engine.document().target_raster(target).unwrap().identity(),first_raster);assert!(s.engine.can_undo());
+            invoke(&mut s,CommandId::Undo);s.frame(120,120).unwrap();
+            assert_eq!(s.engine.document().target_raster(target).unwrap().identity(),original);assert!(!s.engine.can_undo());
+        }
+    }
+
 }
 
 mod fill_option_checks {
@@ -891,6 +1194,7 @@ mod fill_option_checks {
             assert!(request.contiguous && request.enclosure.is_some());
         }
     }
+
 
 }
 

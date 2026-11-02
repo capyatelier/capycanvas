@@ -221,3 +221,5 @@ tool-control-liquify-amount = Mức độ
 tool-family-fill = Công cụ tô màu
 tool-control-close-gaps = Khép khe hở
 tool-control-edge-offset = Khoảng cách
+
+tool-action-group-fill-areas = Vùng cần tô

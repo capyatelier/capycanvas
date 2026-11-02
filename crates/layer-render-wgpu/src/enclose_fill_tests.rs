@@ -1,6 +1,6 @@
 use super::*;
 use crate::test_support::{depth_source, receive_request, submit_ready};
-use layer_core::{Affine, SelectionMode, SelectionPixels, color::{RgbSpace, SampleDepth}};
+use layer_core::{Affine, FillAreas, SelectionMode, SelectionPixels, color::{RgbSpace, SampleDepth}};
 use layer_render::{RegionRefinement, RegionRequest, RegionResult, RegionSource, SelectionRefinement, RegionEdges};
 use std::sync::Arc;
 #[path = "region_cache_tests.rs"]
@@ -31,7 +31,7 @@ fn frame(r: &mut WgpuRasterizer, document: &Document, extent: [u32; 2]) {
     submit_ready(r, FramePacket { reset_layers: true, ..packet(document.scene(), extent) }).unwrap();
 }
 fn request(source: RegionSource, enclosure: Selection, refinement: RegionRefinement, tolerance: f32) -> RegionRequest {
-    RegionRequest { colour_mode: Default::default(), fill: None, reference_count: None, paper: None,
+    RegionRequest { fill_areas: None, colour_mode: Default::default(), fill: None, reference_count: None, paper: None,
         request_id: 91,
         source,
         contiguous: true,
@@ -861,4 +861,247 @@ fn enclose_fill_line_middle_ignores_a_cross_shaped_thin_pocket() {
     }
     assert_eq!(value(&result.pixels, 64, 23), 0);
     assert_eq!(r.readback_srgb_rgba8().unwrap(), before);
+}
+
+fn area_request(document:&Document,reference:SourceTarget,destination:SourceTarget,enclosure:Selection,areas:Option<FillAreas>)->RegionRequest {
+    let snapshot=document.snapshot();
+    let reference=RegionSource::Scene {snapshot:snapshot.clone(),scope:SceneScope::Raw(reference)};
+    let source=if areas.is_some() {
+        RegionSource::Intersection(vec![reference,RegionSource::Scene {snapshot,scope:SceneScope::Raw(destination)}])
+    }else{reference};
+    let mut query=request(source,enclosure,exact(),0.125);
+    query.reference_count=Some(1);query.fill_areas=areas;query
+}
+
+fn swept_footprint(r:&mut WgpuRasterizer)->Selection {
+    use layer_engine::{PenEvent,PenPhase,PressureCurve,SampleFlags,SelectionStroke,ToolKind,ViewTransform};
+    let brush=layer_core::BrushSnapshot {diameter:64.,hardness:1.,flow:1.,spacing:0.08,
+        color_rgba_linear:[1.;4],mappings:Arc::from([]),..Default::default()};
+    let mut stroke=SelectionStroke::new(71,brush,ViewTransform::IDENTITY,PressureCurve::default(),None);
+    let mut dabs=Vec::new();
+    for (index,(phase,position)) in [(PenPhase::Down,[48.,48.]),(PenPhase::Move,[80.,48.]),(PenPhase::Up,[80.,48.])].into_iter().enumerate() {
+        stroke.push(PenEvent {device_id:1,sequence:index as u64+1,timestamp_ns:(index as u64+1)*16_000_000,
+            view_revision:1,surface_position:Point {x:position[0],y:position[1]},pressure:1.,tilt_radians:[0.;2],
+            twist_radians:0.,distance:0.,phase,tool:ToolKind::Pen,flags:SampleFlags::PRIMARY},&mut dabs);
+    }
+    let paint=layer_render::SelectionPaint {id:71,before:Arc::new(Selection::empty()),mode:layer_render::SelectionPaintMode::Add,
+        opacity:1.,gray:1.,gradient:None,style:stroke.style(),dabs,enclosed:None,finish:false,restart:false};
+    assert!(r.paint_selection(&paint).unwrap());
+    let footprint=super::selection_painting::receive(r,paint);
+    let layer_core::SelectionShape::Pixels(pixels)=&footprint.shape else {panic!("captured footprint")};
+    for [x,y] in [[48,48],[96,48]] {assert_eq!(value(pixels,x,y),255,"swept footprint {x},{y}");}
+    assert_eq!(value(pixels,124,48),0);
+    footprint
+}
+
+#[test]
+fn fill_areas_intersects_independent_targets_with_linear_white_and_alpha_thresholds() {
+    let extent=[160,96];let mut document=paint_document(extent,"Area references");
+    placement::set_source(&mut document,layer_core::color::source::rgba8_source(extent,|x,y|
+        [0,0,0,if barrier([8,8,152,88],x,y) {255}else{0}]));
+    let reference=target(&document);
+    let colors=[[0.;4],[1.,1.,1.,0.125],[1.,1.,1.,0.125+1./1024.],[1.;4],
+        [0.875,0.875,0.875,1.],[0.875-1./1024.,0.875-1./1024.,0.875-1./1024.,1.],
+        [0.1,0.4,0.6,1.],[1.,1.,1.,0.5]];
+    let patches:Vec<_>=(0..8).map(|i|[12+i*17,20,25+i*17,76]).collect();
+    let mut destination=paint_document(extent,"Area target");
+    placement::set_source(&mut destination,depth_source(extent,SampleDepth::F32,RgbSpace::Srgb,
+        extent[0] as usize*extent[1] as usize*16+4096,|x,y|
+            patches.iter().position(|b|(b[0]..b[2]).contains(&x)&&(b[1]..b[3]).contains(&y)).map_or([0.2,0.3,0.4,1.],|i|colors[i])));
+    let (_,destination)=placement::append_paint(&mut document,"Area target",placement::paint(&destination).clone());
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();frame(&mut r,&document,extent);
+    for areas in [Some(FillAreas::Transparent),None,Some(FillAreas::TransparentOrWhite),Some(FillAreas::Transparent)] {
+        let expected=match areas {
+            None=>rectangles(extent,&[[9,9,151,87]]),
+            Some(FillAreas::Transparent)=>rectangles(extent,&patches[..2]),
+            Some(FillAreas::TransparentOrWhite)=>rectangles(extent,&[patches[0],patches[1],patches[3],patches[4]]),
+            Some(FillAreas::AnyColour)=>unreachable!(),
+        };
+        let query=area_request(&document,reference,destination,rectangle([1,1,159,95]),areas);
+        check(&receive_request(&mut r,query),&expected,extent);
+    }
+}
+
+#[test]
+fn paint_unfilled_swept_footprint_keeps_grazed_regions_empty() {
+    let extent=[160,96];let mut document=paint_document(extent,"Footprint references");
+    placement::set_source(&mut document,layer_core::color::source::rgba8_source(extent,|x,y|
+        [0,0,0,if [[35,30,50,65],[95,30,125,65],[132,30,153,65]].into_iter().any(|b|barrier(b,x,y)) {255}else{0}]));
+    let reference=target(&document);let destination=paint_document(extent,"Footprint target");
+    let (_,destination)=placement::append_paint(&mut document,"Footprint target",placement::paint(&destination).clone());
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();frame(&mut r,&document,extent);
+    let footprint=swept_footprint(&mut r);
+    let query=area_request(&document,reference,destination,footprint,Some(FillAreas::Transparent));
+    check(&receive_request(&mut r,query),&rectangles(extent,&[[36,31,49,64]]),extent);
+}
+
+#[test]
+fn paint_unfilled_transparent_specks_between_coloured_flats() {
+    let extent=[160,96];let mut document=paint_document(extent,"Speck references");
+    placement::set_source(&mut document,layer_core::color::source::rgba8_source(extent,|x,y|
+        [0,0,0,if barrier([8,8,152,88],x,y) {255}else{0}]));
+    let reference=target(&document);let mut destination=paint_document(extent,"Coloured flats");
+    let specks=[[52,44,55,47],[78,45,82,49],[130,44,133,47]];
+    placement::set_source(&mut destination,layer_core::color::source::rgba8_source(extent,|x,y|
+        if specks.iter().any(|b|(b[0]..b[2]).contains(&x)&&(b[1]..b[3]).contains(&y)) {[0;4]}
+        else if x<80 {[220,100,40,255]}else{[30,80,210,255]}));
+    let (_,destination)=placement::append_paint(&mut document,"Coloured flats",placement::paint(&destination).clone());
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();frame(&mut r,&document,extent);
+    let footprint=swept_footprint(&mut r);
+    let query=area_request(&document,reference,destination,footprint,Some(FillAreas::Transparent));
+    check(&receive_request(&mut r,query),&rectangles(extent,&specks[..2]),extent);
+}
+
+fn fill_area_ring_alpha(x:u32,y:u32)->f32 {
+    (4.5-((x as f32+0.5-64.).hypot(y as f32+0.5-64.)-40.25).abs()).clamp(0.,1.)
+}
+
+fn painted_area_ring(white:bool,areas:Option<FillAreas>)->(RegionResult,Vec<u8>,Vec<u8>) {
+    let extent=[128;2];let mut document=paint_document(extent,"Editing alpha ring");
+    placement::set_source(&mut document,depth_source(extent,SampleDepth::F32,RgbSpace::Srgb,128*128*16+4096,|x,y| {
+        let alpha=fill_area_ring_alpha(x,y);
+        if white {[1.-alpha,1.-alpha,1.-alpha,1.]}else{[0.,0.,0.,alpha]}
+    }));
+    let target=target(&document);let snapshot=document.snapshot();
+    let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut engine=layer_engine::CanvasEngine::new(r,document,layer_engine::input_queue(8).1,
+        crate::test_support::view(extent),layer_engine::ViewTransform::IDENTITY).unwrap();
+    crate::test_support::flush_engine(&mut engine);
+    let before=engine.backend_mut().readback_srgb_rgba8().unwrap();
+    let mut query=area_request(engine.document(),target,target,rectangle([0,0,128,128]),areas);
+    query.colour_mode=layer_render::RegionColourMode::ColourOnSolid;
+    query.tolerance=0.1;query.refinement=RegionRefinement {smooth_edges:true,..Default::default()};
+    if areas.is_none() {query.reference_count=None;}
+    let result=receive_request(engine.backend_mut(),query);
+    let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.allocate_coverage_handle(),extent,[0;2]);coverage.selection=Some(Selection::pixels(result.pixels.clone()));
+    let operation=RasterOperation {placement:result.placement,coverage,kind:RasterOperationKind::Fill {
+        color:[0.1,0.7,0.2,1.],texture:Default::default(),alpha_locked:false,
+        underfill:result.underfill.clone().map(Selection::pixels),
+        edges:Some(Box::new(layer_core::FillEdges {snapshot,position:Point{x:0.,y:0.},tolerance:0.1,
+            anchors:result.anchors.clone(),lines:Vec::new()})),
+    }};
+    engine.append_raster_operation(target,operation).unwrap();
+    crate::test_support::flush_engine(&mut engine);
+    (result,before,engine.backend_mut().readback_srgb_rgba8().unwrap())
+}
+
+fn compare_fill_area_ring(white:bool,areas:FillAreas) {
+    let (any,before,expected)=painted_area_ring(white,None);
+    let (restricted,restricted_before,actual)=painted_area_ring(white,Some(areas));
+    assert_eq!(before,restricted_before);
+    let (mut failures,mut painted,mut maximum)=(0,0,0);let mut first=None;
+    for y in 0..128 {for x in 0..128 {
+        let alpha=fill_area_ring_alpha(x,y);
+        if alpha<=0. || alpha>=1. || (x as f32+0.5-64.).hypot(y as f32+0.5-64.)>=40.25 {continue;}
+        let i=((y*128+x)*4) as usize;
+        if alpha>0.1 && expected[i..i+4]!=before[i..i+4] {painted+=1;}
+        let difference=actual[i..i+4].iter().zip(&expected[i..i+4]).map(|(a,b)|a.abs_diff(*b)).max().unwrap();
+        maximum=maximum.max(difference);
+        if difference!=0 {
+            failures+=1;
+            if first.is_none() {
+                let mask=|result:&RegionResult|value(&result.pixels,x,y);
+                let band=|result:&RegionResult|result.underfill.as_ref().map_or(0,|p|value(p,x,y));
+                let stage=if mask(&any)!=mask(&restricted) || band(&any)!=band(&restricted) {"intersect_bits before edge stage"}else{"edge stage"};
+                first=Some(format!("{x},{y} alpha={alpha} stage={stage} primary any/restricted={}/{} band any/restricted={}/{} anchor any/restricted={:?}/{:?} expected={:?} actual={:?}",
+                    mask(&any),mask(&restricted),band(&any),band(&restricted),any.anchors.as_ref().and_then(|a|a.get([x,y])),
+                    restricted.anchors.as_ref().and_then(|a|a.get([x,y])),&expected[i..i+4],&actual[i..i+4]));
+            }
+        }
+    }}
+    assert!(painted>0,"Any colour must paint the ramp above the default tolerance");
+    assert_eq!(failures,0,"{areas:?} white={white} maximum={maximum}; {first:?}");
+}
+
+#[test]
+fn fill_areas_line_middle_transparent_editing_keeps_the_alpha_ramp() {
+    compare_fill_area_ring(false,FillAreas::Transparent);
+}
+
+#[test]
+fn fill_areas_line_middle_white_editing_keeps_the_colour_ramp() {
+    compare_fill_area_ring(true,FillAreas::TransparentOrWhite);
+}
+
+fn reference_red_flat(edges:RegionEdges,smooth:bool,stop:bool)->(RegionResult,Vec<[f32;4]>,Vec<[f32;4]>) {
+    let extent=[128;2];let mut document=paint_document(extent,"Reference border");
+    placement::set_source(&mut document,layer_core::color::source::rgba8_source(extent,|x,y| {
+        let line=(24..104).contains(&x)&&(24..104).contains(&y)
+            && (x<30||x>=98||y<30||y>=98);
+        [0,0,0,if line {255}else{0}]
+    }));
+    let reference=placement::occurrence_id(&document);
+    let red=|x,y|(20..30).contains(&x)&&(40..88).contains(&y);
+    let mut destination=paint_document(extent,"Red flat");
+    placement::set_source(&mut destination,layer_core::color::source::rgba8_source(extent,|x,y|
+        if red(x,y) {[255,0,0,255]}else{[0;4]}));
+    let (destination_layer,destination)=placement::append_paint(&mut document,"Red flat",placement::paint(&destination).clone());
+    let snapshot=document.snapshot();
+    let reference_source=RegionSource::reference(snapshot.clone(),reference).unwrap();
+    let source=RegionSource::Intersection(vec![reference_source.clone(),
+        RegionSource::Scene {snapshot:snapshot.clone(),scope:SceneScope::Raw(destination)}]);
+    let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut engine=layer_engine::CanvasEngine::new(r,document,layer_engine::input_queue(8).1,
+        crate::test_support::view(extent),layer_engine::ViewTransform::IDENTITY).unwrap();
+    crate::test_support::flush_engine(&mut engine);
+    let before=engine.backend().snapshot_gpu().capture_scene(engine.document().snapshot(),SceneScope::Raw(destination),Default::default()).unwrap()
+        .read_region([0,0,128,128]).unwrap();
+    let refinement=RegionRefinement {edges,smooth_edges:smooth,..Default::default()};
+    if !stop && matches!(edges,RegionEdges::GrowShrink(_)) {
+        let mut control=request(reference_source.clone(),rectangle([8,8,120,120]),refinement,0.1);
+        control.reference_count=Some(1);
+        let any=receive_request(engine.backend_mut(),control);
+        for [x,y] in [[29,48],[29,60]] {assert!(value(&any.pixels,x,y)>0,"Any colour growth reaches red {x},{y}");}
+    }
+    let mut query=request(source,rectangle([8,8,120,120]),refinement,0.1);
+    query.reference_count=Some(1);query.fill_areas=if stop {None}else{Some(FillAreas::Transparent)};
+    if stop {query.enclosure=None;query.position=[64,64];query.fill=Some(Default::default());}
+    query.colour_mode=layer_render::RegionColourMode::AlphaBorder;
+    let result=receive_request(engine.backend_mut(),query);
+    let metadata=if edges==RegionEdges::LineMiddle {
+        let band=result.underfill.as_ref().unwrap();
+        assert!(value(&result.pixels,28,60)>0);assert!(value(band,28,60)>0,"red pixel has assigned band coverage");
+        let RegionSource::Scene {snapshot:line_snapshot,scope}=reference_source else {unreachable!()};
+        let order=engine.document().scene().order();
+        let fill_above=order.iter().position(|id|*id==reference).unwrap()>order.iter().position(|id|*id==destination_layer).unwrap();
+        assert!(!fill_above,"target is below the reference");
+        Some(Box::new(layer_core::FillEdges {snapshot,position:Point{x:0.,y:0.},tolerance:0.1,
+            anchors:result.anchors.clone(),lines:vec![layer_core::FillLine {snapshot:line_snapshot,scope,fill_above}]}))
+    }else{None};
+    let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.allocate_coverage_handle(),extent,[0;2]);coverage.selection=Some(Selection::pixels(result.pixels.clone()));
+    let operation=RasterOperation {placement:result.placement,coverage,kind:RasterOperationKind::Fill {
+        color:[0.1,0.7,0.2,1.],texture:Default::default(),alpha_locked:false,edges:metadata,
+        underfill:result.underfill.clone().map(Selection::pixels),
+    }};
+    engine.append_raster_operation(destination,operation).unwrap();
+    crate::test_support::flush_engine(&mut engine);
+    let after=engine.backend().snapshot_gpu().capture_scene(engine.document().snapshot(),SceneScope::Raw(destination),Default::default()).unwrap()
+        .read_region([0,0,128,128]).unwrap();
+    let nearby=(60*128+44) as usize;
+    assert!(value(&result.pixels,44,60)>0);
+    assert_eq!(before[nearby],[0.;4]);
+    assert_ne!(after[nearby],before[nearby],"nearby transparent pixel is painted for {edges:?}");
+    (result,before,after)
+}
+
+#[test]
+fn fill_areas_reference_band_and_growth_preserve_opaque_red_flats() {
+    for (edges,smooth) in [(RegionEdges::LineMiddle,true),(RegionEdges::GrowShrink(2),false)] {
+        let (result,before,after)=reference_red_flat(edges,smooth,false);
+        for y in 40..88 {for x in 20..30 {
+            let i=(y*128+x) as usize;
+            assert_eq!(before[i],[1.,0.,0.,1.]);
+            assert_eq!(after[i],before[i],"{edges:?} red flat {x},{y} primary={} underfill={}",
+                value(&result.pixels,x,y),result.underfill.as_ref().map_or(0,|band|value(band,x,y)));
+        }}
+    }
+}
+
+#[test]
+fn fill_stop_at_colours_smoothed_growth_ramps_into_the_protected_boundary() {
+    let (result,before,after)=reference_red_flat(RegionEdges::GrowShrink(2),true,true);
+    let point=[29,40];let i=(point[1]*128+point[0]) as usize;
+    assert_eq!(value(&result.pixels,point[0],point[1]),64);
+    assert_eq!(before[i],[1.,0.,0.,1.]);
+    assert_ne!(after[i],before[i],"regular Fill with Stop at colours has the same one-pixel smoothing tint");
 }

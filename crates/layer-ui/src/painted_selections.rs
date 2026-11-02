@@ -95,6 +95,7 @@ impl SelectionBrushOptions {
     }
 }
 struct Gesture {
+    unfilled:Option<region_tools::EnclosurePaint>,
     id: u64,
     owner: u64,
     target: SelectionTarget,
@@ -135,6 +136,7 @@ impl PaintedSelections {
 }
 impl<R: CanvasRenderer> UiSession<R> {
     fn selection_paint_brush(&self) -> BrushSnapshot {
+        if matches!(self.layer_interaction.tool,LayerCanvasTool::PaintUnfilled {..}) {return SelectionBrushOptions {size:self.region_tools.unfilled_size,..Default::default()}.brush();}
         if self.selection_masks.target().is_some() {
             let mut brush = self.engine.configured_brush().clone();
             brush.color_rgba_linear = [1.; 4];
@@ -159,6 +161,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.painted_selections.next_id = self.painted_selections.next_id.wrapping_add(1);
         let id = self.painted_selections.next_id;
         self.painted_selections.gestures.push_back(Gesture {
+            unfilled:None,
             id,
             owner:self.engine.document().owner,
             target,
@@ -229,6 +232,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .cursor(event)
         }
     }
+    pub(super) fn selection_stroke_active(&self)->bool {self.selection_brush_active() || matches!(self.layer_interaction.tool,LayerCanvasTool::PaintUnfilled {..})}
     pub(super) fn selection_brush_active(&self) -> bool {
         self.layer_interaction.tool.selection_tool() == Some(SelectionTool::Brush)
     }
@@ -245,14 +249,16 @@ impl<R: CanvasRenderer> UiSession<R> {
             Some(SelectionTarget::Current) => self.selection_masks.quick_visible,
             _ => true,
         };
-        let active = visible && (target.is_some() || self.selection_brush_active());
-        let overlay = display.overlay.then_some(SelectionOverlay {
+        let unfilled=matches!(self.layer_interaction.tool,LayerCanvasTool::PaintUnfilled {..});
+        let footprint=unfilled && !self.painted_selections.gestures.is_empty();
+        let active = visible && (target.is_some() || self.selection_brush_active() || footprint);
+        let overlay = (display.overlay || footprint).then_some(SelectionOverlay {
             active,
             editing: match target {
                 Some(SelectionTarget::Saved(id)) => Some(id),
                 _ => None,
             },
-            color: if target.is_some() {
+            color: if footprint {let [r,g,b]=self.state.palette.accent.0.map(|v|f32::from(v)/255.);[r,g,b,0.35]}else if target.is_some() {
                 let mut color = properties.color.encoded_in(layer_core::color::RgbSpace::Srgb).unwrap_or(properties.color.rgba);
                 color[3] *= properties.opacity; color
             } else { display.color },
@@ -283,7 +289,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .painted_selections
             .gestures
             .back()
-            .is_none_or(|g| g.ended)
+            .is_none_or(|g| g.ended && g.unfilled.is_none())
         {
             return false;
         }
@@ -303,16 +309,19 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.cancel_selection_contact();
             return Ok(());
         }
+        let unfilled=matches!(self.layer_interaction.tool,LayerCanvasTool::PaintUnfilled {..});
         if event.phase == PenPhase::Down {
-            self.cancel_selection_contact();
+            if self.painted_selections.has_contact() {self.cancel_selection_contact();}
             if self.painted_selections.gestures.len() >= 32 {
                 return Err("Selection capture is still catching up".into());
             }
-            refused(self.mask_brush_reason())?;
+            if unfilled {
+                if self.engine.document().drawing_content().is_none() {self.notify_drawing_refusal();return Ok(());}
+            }else{refused(self.mask_brush_reason())?;}
             let physical_eraser =
                 event.tool == ToolKind::Eraser || event.flags.contains(SampleFlags::INVERTED);
-            let subtract = physical_eraser
-                || (self.effective_selection_mode() == SelectionMode::Subtract);
+            let subtract = !unfilled && (physical_eraser
+                || (self.effective_selection_mode() == SelectionMode::Subtract));
             let target = self
                 .selection_masks
                 .target()
@@ -332,13 +341,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.selection_paint_brush(),
                 self.state.camera.input_transform(),
                 self.engine.configured_pressure_curve().clone(),
-                (!mask).then_some(
+                (!mask && !unfilled).then_some(
                     6. * self
                         .logical_viewport
                         .map_or(1., |v| self.state.camera.viewport[0] as f32 / v[0]),
                 ),
             );
+            let paint=unfilled.then(||self.capture_enclosure_paint());
             self.painted_selections.gestures.push_back(Gesture {
+                unfilled:paint,
                 id,
                 owner:self.engine.document().owner,
                 target,
@@ -349,7 +360,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 } else {
                     SelectionPaintMode::Add
                 },
-                opacity: if mask {
+                opacity: if mask || unfilled {
                     1.
                 } else {
                     self.selection_tools.options.brush.opacity
@@ -445,7 +456,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .painted_selections
             .gestures
             .front()
-            .is_some_and(|g| g.capturing)
+            .is_some_and(|g| g.capturing && (g.unfilled.is_none() || !(self.region_tools.busy() || self.region_tools.publishing_edit())))
             && !self.engine.raster_backing_pending()
             && let Some(result) = self.engine.backend_mut().take_selection_paint()
         {
@@ -454,7 +465,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             if result.request_id != gesture.id {
                 return Err("Unexpected selection capture".into());
             }
-            if result.changed {
+            if let Some(paint)=gesture.unfilled {
+                self.engine.backend_mut().cancel_selection_paint();
+                if result.changed {self.enclose_painted_footprint(Selection::pixels(result.pixels),paint);}
+            } else if result.changed {
                 let selection = Selection::pixels(result.pixels);
                 let edit = self
                     .engine
@@ -474,7 +488,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .filter(|g| g.before.is_none())
             .map(|g| g.target)
         {
-            let before = Arc::new(self.mask_coverage(target)?);
+            let before = Arc::new(if self.painted_selections.gestures.front().unwrap().unfilled.is_some() {Selection::empty()}else{self.mask_coverage(target)?});
             self.painted_selections.gestures.front_mut().unwrap().before = Some(before);
         }
         if let Some(gesture) = self

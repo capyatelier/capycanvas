@@ -221,3 +221,5 @@ tool-control-liquify-amount = 양
 tool-family-fill = 채우기 도구
 tool-control-close-gaps = 틈 닫기
 tool-control-edge-offset = 거리
+
+tool-action-group-fill-areas = 채울 영역

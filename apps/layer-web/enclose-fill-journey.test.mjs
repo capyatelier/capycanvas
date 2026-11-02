@@ -64,7 +64,7 @@ function scoreScribble(caseData,region,result,reference,outsideCell=0) {
   return fringes;
 }
 
-export async function checkEncloseFill({call,evaluate,settle}) {
+export async function checkEncloseFill({call,evaluate,settle,fillAreasOnly=false}) {
   const scribbles=JSON.parse(await readFile(new URL('../../tools/fixtures/fill-scribble.json',import.meta.url),'utf8'));
   const edges=JSON.parse(await readFile(new URL('../../tools/fixtures/fill-edges.json',import.meta.url),'utf8'));
   const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/enclose-fill/web';
@@ -84,8 +84,7 @@ export async function checkEncloseFill({call,evaluate,settle}) {
     await pointer('mousePressed',p);await pointer('mouseReleased',p);await settle();
   };
   const selected=command=>evaluate(`!!layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.selected`);
-  const path=async(cancel=false)=>{
-    const points=[[20,30],[315,30],[315,190],[20,190],[20,30]];
+  const path=async(cancel=false,points=[[20,30],[315,30],[315,190],[20,190],[20,30]])=>{
     await pointer('mousePressed',await screen(points[0]));
     for(const p of points.slice(1)){await pointer('mouseMoved',await screen(p));await settle();}
     if(cancel)for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
@@ -237,6 +236,69 @@ export async function checkEncloseFill({call,evaluate,settle}) {
     }
     assert.ok(fringes>0,`${paper}/${theme}: fractional source-alpha probes`);
   };
+  const fillAreas=async theme=>{
+    const referencePng=png(384,256,(x,y)=>{const ring=[40,150,270].some(left=>x>=left&&x<left+90&&y>=50&&y<170&&(x<left+6||x>=left+84||y<56||y>=164));return ring?[0,0,0,255]:[0,0,0,0];},4);await writeFile(`${directory}/unfilled-reference-${theme}.png`,referencePng);await openPng(`Fill areas ${theme}.png`,referencePng);await invoke('fit_canvas');
+    const paper=await evaluate('layerApp.state().layers.find(l=>l.content_icon==="layer-paper-symbolic"&&l.visible)?.id?.toString()??null');
+    if(paper)await send({type:'layer',action:{op:'visibility',id:Number(paper),value:false}});
+    await send({type:'layer',action:{op:'reference_selection'}});await send({type:'layer',action:{op:'new',group:false,clipped:false}});
+    await invoke('fill');await chooseToolActionGroup({call,evaluate,settle},'selection-source','selection_reference');
+    await chooseToolActionGroup({call,evaluate,settle},'close-gaps','close_gaps_off');await chooseToolActionGroup({call,evaluate,settle},'region-edges','edges_exact');
+    for(const [id,value]of [['grain_depth',0],['tolerance',.05],['opacity',1]])await send({type:'set_tool_setting',id,value});
+    for(const [point,rgba]of [[[195,110],[1,1,1,1]],[[315,110],[0,0,1,1]]]){
+      await send({type:'set_color',rgba});const p=await screen(point);await pointer('mousePressed',p,'pen');await pointer('mouseReleased',p,'pen');await idle();
+    }
+    const baseline=rasterIdentity(await save()),original=await output();await send({type:'set_color',rgba:[1,0,0,1]});
+    for(const [mode,filled]of [['transparent',1],['transparent_or_white',2],['any_colour',3]]){
+      await invoke('enclose_fill');assert.equal(await evaluate(`document.querySelectorAll('[data-tool-choice-bar="fill-areas"] button').length`),3);assert.equal(await evaluate(`!!document.querySelector('[data-tool-action="stop_at_colors"]')`),false);await chooseToolActionGroup({call,evaluate,settle},'fill-areas',`fill_areas_${mode}`);
+      if(mode==='transparent_or_white'){await evaluate(`document.querySelector('[data-tool-choice-bar="selection-source"]').scrollIntoView({block:'nearest'})`);await settle();await writeFile(`${directory}/fill-areas-controls-${theme}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));}
+      await path(false,[[20,30],[375,30],[375,190],[20,190],[20,30]]);
+      const result=await output();
+      for(const [index,x]of [85,195,315].entries())assert.deepEqual(result.pixels.slice((110*384+x)*4,(110*384+x)*4+4),index<filled?[255,0,0,255]:original.pixels.slice((110*384+x)*4,(110*384+x)*4+4),`${theme}/${mode}: target eligibility`);
+      assert.deepEqual(result.pixels.slice(0,4),original.pixels.slice(0,4),'Exterior unchanged');
+      const committed=rasterIdentity(await save());await invoke('undo');await idle();assert.deepEqual(rasterIdentity(await save()),baseline,'One Undo restores target');
+      await invoke('redo');await idle();assert.deepEqual(rasterIdentity(await save()),committed,'Redo restores fill');await invoke('undo');await idle();
+    }
+    await invoke('clear_layer');await idle();const footprintBaseline=rasterIdentity(await save()),footprintOriginal=await output();
+    await invoke('paint_unfilled');await invoke('fill_areas_transparent');await send({type:'set_tool_setting',id:'unfilled_size',value:180});await idle();
+    const points=await Promise.all([[80,85],[80,135]].map(screen));
+    const revision=await evaluate('String(layerApp.state().layers.find(l=>l.editing).paint_revision)');
+    const tintPixel=async()=>{
+      const shot=await call('Page.captureScreenshot',{format:'png',clip:{x:Math.floor(points[0].x),y:Math.floor(points[0].y),width:1,height:1,scale:1}});
+      return evaluate(`(async()=>{const image=await createImageBitmap(new Blob([Uint8Array.from(atob('${shot.data}'),c=>c.charCodeAt(0))],{type:'image/png'})),canvas=new OffscreenCanvas(1,1),context=canvas.getContext('2d');context.drawImage(image,0,0);image.close();return Array.from(context.getImageData(0,0,1,1).data)})()`);
+    };
+    const beforeTint=await tintPixel(),accent=await evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()`);
+    const rgb=accent.slice(1).match(/../g).map(value=>parseInt(value,16));
+    const accented=pixel=>rgb.reduce((sum,value,index)=>sum+(value-beforeTint[index])*(pixel[index]-beforeTint[index]),0)>256;
+    await pointer('mousePressed',points[0],'pen');await pointer('mouseMoved',points[1],'pen');await settle();
+    await wait('layerApp.app.brush_ready()');await evaluate('layerApp.app.wait_for_canvas()');await settle();
+    await writeFile(`${directory}/unfilled-held-${theme}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    assert.ok(accented(await tintPixel()),'Shared accent footprint is visible while held');
+    await evaluate('layerApp.app.wait_for_canvas()');await settle();assert.ok(accented(await tintPixel()),'Held accent remains on the next completed frame');
+    assert.equal(await evaluate('String(layerApp.state().layers.find(l=>l.editing).paint_revision)'),revision,'Held footprint does not author raster pixels');
+    await pointer('mouseReleased',points[1],'pen');await idle();const painted=await output();await writeFile(`${directory}/unfilled-result-${theme}.png`,Buffer.from(await evaluate('Array.from(placementTest.saved)')));
+    assert.deepEqual(painted.pixels.slice((110*384+85)*4,(110*384+85)*4+4),[255,0,0,255],'Wholly contained area fills');
+    for(const x of [195,315])assert.deepEqual(painted.pixels.slice((110*384+x)*4,(110*384+x)*4+4),footprintOriginal.pixels.slice((110*384+x)*4,(110*384+x)*4+4),'Grazed and untouched areas stay unchanged');
+    const committed=rasterIdentity(await save());await invoke('undo');await idle();assert.deepEqual(rasterIdentity(await save()),footprintBaseline);await invoke('redo');await idle();assert.deepEqual(rasterIdentity(await save()),committed);await invoke('undo');await idle();
+    await invoke('fill');await send({type:'set_color',rgba:[0,1,0,1]});const flat=await screen([85,110]);await pointer('mousePressed',flat,'pen');await pointer('mouseReleased',flat,'pen');await idle();
+    await invoke('rectangle_select');if(await selected('selection_antialias'))await invoke('selection_antialias');await invoke('selection_new');
+    for(const [x,y]of [[65,90],[95,125]]){await scribblePath([[x-3,y-3],[x+3,y+3]]);await invoke('clear_selected');await invoke('deselect');await idle();}
+    const speckBaseline=rasterIdentity(await save()),speckOriginal=await output();for(const [x,y]of [[65,90],[95,125]])assert.equal(speckOriginal.pixels[(y*384+x)*4+3],0,'Authored target speck is transparent');
+    await invoke('paint_unfilled');await invoke('fill_areas_transparent');await send({type:'set_color',rgba:[1,0,0,1]});await scribblePath([[80,85],[80,135]]);
+    const filledSpecks=await output();await writeFile(`${directory}/unfilled-specks-${theme}.png`,Buffer.from(await evaluate('Array.from(placementTest.saved)')));
+    for(const [x,y]of [[65,90],[95,125]])assert.deepEqual(filledSpecks.pixels.slice((y*384+x)*4,(y*384+x)*4+4),[255,0,0,255],`Contained target speck ${x},${y} fills`);
+    assert.deepEqual(filledSpecks.pixels.slice((110*384+85)*4,(110*384+85)*4+4),[0,255,0,255],'Opaque flat stays unchanged');
+    const speckCommit=rasterIdentity(await save());await invoke('undo');await idle();assert.deepEqual(rasterIdentity(await save()),speckBaseline);await invoke('redo');await idle();assert.deepEqual(rasterIdentity(await save()),speckCommit);await invoke('undo');await idle();
+    for(const cancelled of ['escape','contact']){
+      if(cancelled==='contact')await evaluate('layerApp.canvas.addEventListener("pointerdown",e=>{window.unfilledContact=e.pointerId},{once:true})');
+      await pointer('mousePressed',points[0],'pen');await pointer('mouseMoved',points[1],'pen');
+      if(cancelled==='escape'){for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await pointer('mouseReleased',points[1],'pen');}
+      else {await evaluate(`layerApp.canvas.dispatchEvent(new PointerEvent('pointercancel',{bubbles:true,pointerId:window.unfilledContact,pointerType:'pen',buttons:0,pressure:0}));delete window.unfilledContact`);await pointer('mouseReleased',points[1],'pen');}
+      await settle();await idle();
+      if(cancelled==='escape')assert.deepEqual(rasterIdentity(await save()),speckBaseline,'Escape discards the footprint');
+      else {assert.deepEqual(await output(),filledSpecks,'System pointercancel completes the same footprint pixels');await invoke('undo');await idle();assert.deepEqual(rasterIdentity(await save()),speckBaseline,'Forced end commits one Undo step');}
+    }
+    console.log(`PASS ${theme}: Fill areas modes, Paint unfilled containment, held footprint, Undo/Redo, Escape discard and forced-end commit`);
+  };
   const settings=await evaluate('layerApp.state().settings');
   const workspace=await evaluate('layerApp.state().workspace');
   await evaluate(`window.enclosePickers={open:window.showOpenFilePicker,save:window.showSaveFilePicker};window.placementTest={};
@@ -245,6 +307,7 @@ export async function checkEncloseFill({call,evaluate,settle}) {
   try {
     await send({type:'preferences',action:{type:'edit',id:'missing_profile',value:0}});
     await send({type:'customize',action:{type:'set_panel_visible',panel:'tool_settings',visible:true}});
+    if(fillAreasOnly){for(const theme of ['light','dark']){await send({type:'set_theme',theme});await fillAreas(theme);}return;}
     for(const theme of ['light','dark']) {
       await invoke('open_document');
       await wait('!layerApp.documents.busy()&&layerApp.state().tabs.some(t=>t.active&&t.width===384&&t.height===256)&&layerApp.app.brush_ready()');
@@ -255,7 +318,7 @@ export async function checkEncloseFill({call,evaluate,settle}) {
       await send({type:'layer',action:{op:'new',group:false,clipped:false}});
       await invoke('fill');
       const toolset='.dock-group .brushes-control';
-      assert.deepEqual(await evaluate('layerApp.state().tool_set.groups.map(item=>item.label)'),['Fill','Lasso fill','Enclose and Fill']);
+      assert.deepEqual(await evaluate('layerApp.state().tool_set.groups.map(item=>item.label)'),['Fill','Lasso fill','Enclose and Fill','Paint unfilled areas']);
       for(const label of ['Lasso fill','Enclose and Fill','Fill','Enclose and Fill'])
         await contact(`${toolset} .tool-groups [data-tool-choice="${label}"]`);
       assert.ok(await selected('enclose_fill'));

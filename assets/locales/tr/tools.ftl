@@ -220,3 +220,5 @@ tool-control-liquify-amount = Miktar
 tool-family-fill = Dolgu araçları
 tool-control-close-gaps = Boşlukları kapat
 tool-control-edge-offset = Uzaklık
+
+tool-action-group-fill-areas = Doldurulacak alanlar

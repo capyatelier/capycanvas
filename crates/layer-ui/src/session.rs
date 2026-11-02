@@ -1073,7 +1073,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return false;
         };
         let erasing = self.state.brush.tool == Tool::Eraser || self.state.colors.transparent() || self.erasing_event(&event);
-        let painting = self.layer_interaction.tool == LayerCanvasTool::Paint || self.selection_brush_active();
+        let painting = self.layer_interaction.tool == LayerCanvasTool::Paint || self.selection_stroke_active();
         let blocked = if self.selection_masks.target().is_some() { self.mask_brush_reason().is_some() }
             else { self.layer_interaction.tool.draws()
             && if painting { self.engine.document().drawing_target().is_none() && !self.vector_brush_accepts(erasing) }
@@ -1120,7 +1120,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             view.cancel(scale);
             return true;
         }
-        let selection_brush = self.selection_brush_active();
+        let selection_brush = self.selection_stroke_active();
         let icon = if self.layer_interaction.tool == LayerCanvasTool::Paint && erasing { "eraser" }
             else if self.layer_interaction.tool == LayerCanvasTool::Paint { tools::icon(self.state.brush.preset) }
             else { ToolVariant::active(&self.state).map_or("eyedropper", |tool| tool.icon_in(&self.state)) };
@@ -2643,7 +2643,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::ClearLayer | CommandId::FillSelection | CommandId::RepairSourceProfile | CommandId::RasterizeSource
             | CommandId::InvertLayerMask | CommandId::LayerMaskEnabled | CommandId::ApplyLayerMask
                 if self.selection_masks.target().is_some() => false,
-            CommandId::ScaleRotate | CommandId::Figure | CommandId::Move | CommandId::EditPoints | CommandId::LassoFill | CommandId::EncloseFill | CommandId::Crop
+            CommandId::ScaleRotate | CommandId::Figure | CommandId::Move | CommandId::EditPoints | CommandId::LassoFill | CommandId::EncloseFill | CommandId::PaintUnfilled | CommandId::Crop
                 if self.selection_masks.target().is_some() => idle,
             CommandId::InvertLayerMask | CommandId::LayerMaskEnabled | CommandId::ApplyLayerMask => {
                 self.require_action_idle().is_ok()
@@ -2781,7 +2781,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::FillConnected | CommandId::FillEverywhere => idle && matches!(self.layer_interaction.tool, LayerCanvasTool::Region { fill: true, .. }),
             CommandId::CloseGapsAuto | CommandId::CloseGapsOff => idle && self.layer_interaction.tool.region().is_some_and(|(fill, _, contiguous)| contiguous && (!fill || self.region_tools.scope != FillScope::Everywhere)),
             CommandId::EdgesLineMiddle | CommandId::EdgesExact | CommandId::EdgesGrowShrink => idle && self.layer_interaction.tool.region().is_some(),
-            CommandId::StopAtColors => idle && self.layer_interaction.tool.region().is_some_and(|(_, source, _)| self.lines_from(source) == RegionSource::Reference),
+            CommandId::FillAreasTransparent | CommandId::FillAreasTransparentOrWhite | CommandId::FillAreasAnyColour => idle && self.layer_interaction.tool.encloses(),
+            CommandId::StopAtColors => idle && !self.layer_interaction.tool.encloses() && self.layer_interaction.tool.region().is_some_and(|(_, source, _)| self.lines_from(source) == RegionSource::Reference),
             CommandId::SmoothRegionEdges => idle && self.layer_interaction.tool.region().is_some_and(|(fill, _, _)| fill),
             CommandId::SelectionVisible => idle && (self.layer_interaction.tool.selection_tool().is_some() || self.layer_interaction.tool.region().is_some()),
             CommandId::SelectionEditing | CommandId::SelectionReference => {
@@ -2864,7 +2865,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::DeleteLayer => idle && self.can_delete_layer_rows(self.selected_layers()),
             CommandId::RaiseLayer | CommandId::LowerLayer => idle && self.layer_step_edit(id == CommandId::RaiseLayer).is_ok(),
             CommandId::BringToFront | CommandId::BringForward | CommandId::SendBackward | CommandId::SendToBack => idle && self.vector_paths_editable(),
-            CommandId::EncloseFill => idle && !matches!(document.working.target, Some(SourceTarget::Coverage(_))),
+            CommandId::EncloseFill | CommandId::PaintUnfilled => idle && !matches!(document.working.target, Some(SourceTarget::Coverage(_))),
             CommandId::LassoFill
             | CommandId::Hand | CommandId::Zoom | CommandId::RotateView
             | CommandId::Eyedropper
@@ -2907,6 +2908,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 | (CommandId::SelectionSubtract, SelectionMode::Subtract) | (CommandId::SelectionIntersect, SelectionMode::Intersect))
             || (id == CommandId::FillConnected && self.region_tools.scope == FillScope::Connected)
             || (id == CommandId::FillEverywhere && self.region_tools.scope == FillScope::Everywhere)
+            || matches!((id,self.region_tools.fill_areas),(CommandId::FillAreasTransparent,FillAreas::Transparent)|(CommandId::FillAreasTransparentOrWhite,FillAreas::TransparentOrWhite)|(CommandId::FillAreasAnyColour,FillAreas::AnyColour))
             || (id == CommandId::StopAtColors && self.region_tools.stop_at_colors)
             || (id == CommandId::CloseGapsAuto && self.region_tools.refinement.close_gaps)
             || (id == CommandId::CloseGapsOff && !self.region_tools.refinement.close_gaps)
@@ -2939,6 +2941,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (CommandId::Lasso, LayerCanvasTool::Select)
                     | (CommandId::LassoFill, LayerCanvasTool::LassoFill)
                     | (CommandId::EncloseFill, LayerCanvasTool::EncloseFill { .. })
+                    | (CommandId::PaintUnfilled,LayerCanvasTool::PaintUnfilled {..})
                     | (
                         CommandId::Move,
                         LayerCanvasTool::Move | LayerCanvasTool::Transform
@@ -3855,6 +3858,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.select_brush(self.tools.group(group))?;
                 (BRUSH, false)
             }
+            UiAction::SetBrushSize {value} if matches!(self.layer_interaction.tool,LayerCanvasTool::PaintUnfilled {..}) => {
+                self.region_tools.edit("unfilled_size",value,&self.state.localization)?;self.refresh_tools();(BRUSH,true)
+            }
             UiAction::SetBrushSize { value } if self.selection_brush_active() => {
                 self.selection_tools.options.brush.edit("selection_brush_size",value, &self.state.localization)?;
                 self.refresh_tools();
@@ -4399,7 +4405,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 changed |= BRUSH | COMMANDS | CUSTOMIZATION | COLOR_PREVIEW;
             }
             if !self.tonal_active() {
-                self.region_tools.cancel();
+                if revision==self.engine.document().revision && tool_before==(self.state.brush.tool,self.layer_interaction.tool) {self.region_tools.reconfigure();}
+                else{self.region_tools.cancel();}
             } else if tool_before.1 != self.layer_interaction.tool
                 || self.tonal_tools.draft.as_ref().is_some_and(|d| d.revision != self.engine.document().revision
                 || d.target != self.selection_masks.target().unwrap_or(layer_core::SelectionTarget::Current)) {
@@ -4641,7 +4648,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return Ok(());
         }
-        if self.selection_brush_active() || (self.selection_masks.target().is_some() && self.layer_interaction.tool == LayerCanvasTool::Paint) {
+        if self.selection_stroke_active() || (self.selection_masks.target().is_some() && self.layer_interaction.tool == LayerCanvasTool::Paint) {
             if let Err(error) = self.selection_brush_pen(event) { self.notify(error); }
             return Ok(());
         }
@@ -5535,8 +5542,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })?;
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
             }
-            CommandId::EncloseFill => {
-                self.layer_action(LayerAction::Tool { tool: LayerCanvasTool::EncloseFill { source: self.region_tools.source[2] } })?;
+            CommandId::EncloseFill | CommandId::PaintUnfilled => {
+                let source=self.region_tools.source[2];
+                self.layer_action(LayerAction::Tool { tool: if command==CommandId::EncloseFill {LayerCanvasTool::EncloseFill {source}}else{LayerCanvasTool::PaintUnfilled {source}} })?;
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
             }
             CommandId::LassoFill => {
@@ -5657,6 +5665,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 };
                 let tool = match self.layer_interaction.tool {
                     LayerCanvasTool::EncloseFill { .. } => LayerCanvasTool::EncloseFill { source },
+                    LayerCanvasTool::PaintUnfilled {..} => LayerCanvasTool::PaintUnfilled {source},
                     LayerCanvasTool::Region { fill, .. } => LayerCanvasTool::Region { fill, source },
                     tool => tool.selection_tool().ok_or("Choose a region tool first")?.canvas_tool(source),
                 };
@@ -5674,6 +5683,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 self.refresh_tools();
                 Ok((BRUSH | COMMANDS, false))
+            }
+            CommandId::FillAreasTransparent | CommandId::FillAreasTransparentOrWhite | CommandId::FillAreasAnyColour => {
+                self.cancel_layer_gesture()?;
+                self.region_tools.fill_areas=match command {CommandId::FillAreasTransparent=>FillAreas::Transparent,CommandId::FillAreasTransparentOrWhite=>FillAreas::TransparentOrWhite,_=>FillAreas::AnyColour};
+                self.region_tools.cancel();self.refresh_tools();
+                Ok((BRUSH | COMMANDS,false))
             }
             CommandId::StopAtColors => {
                 self.region_tools.stop_at_colors = !self.region_tools.stop_at_colors;
@@ -6256,6 +6271,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             else if kind.geometric() { self.selection_tools.options.controls(&self.state.localization) } else { Vec::new() }
         } else if let Some((fill, _, _)) = self.layer_interaction.tool.region() {
             let mut controls = self.region_tools.controls(&self.state.localization);
+            controls.retain(|c|c.id!="unfilled_size" || matches!(self.layer_interaction.tool,LayerCanvasTool::PaintUnfilled {..}));
             if !fill { controls.retain(|c| c.id != "grain_depth"); }
             if fill {
                 controls.extend(
@@ -6288,7 +6304,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             self.state.tool_settings.extend(edges);
         }
-        if self.layer_interaction.tool.region().is_some_and(|(_, source, _)| self.lines_from(source) == RegionSource::Reference) {
+        if !self.layer_interaction.tool.encloses() && self.layer_interaction.tool.region().is_some_and(|(_, source, _)| self.lines_from(source) == RegionSource::Reference) {
             self.state.tool_actions.push(ToolSettingAction { command: CommandId::StopAtColors, checkable: true });
         }
         self.state.tool_extra = if self.layer_interaction.tool == LayerCanvasTool::Zoom { self.state.settings.zoom_tool.controls(self.localization()) } else if self.operation.transforming() { self.transform_extra() } else { self.tonal_extra() };

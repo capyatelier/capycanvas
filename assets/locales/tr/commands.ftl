@@ -692,3 +692,9 @@ command-close-gaps-off = Kapalı
 command-edges-line-middle = Çizginin ortasına kadar
 command-edges-exact = Tam
 command-edges-grow-shrink = Büyüt veya küçült
+
+command-paint-unfilled = Doldurulmamış alanları boya
+command-fill-areas-transparent = Saydam
+command-fill-areas-transparent-or-white = Saydam veya beyaz
+command-fill-areas-any-colour = Herhangi bir renk
+commands-help-paint-unfilled = Doldurmak için kapalı, doldurulmamış alanların üzerinden boya.

@@ -220,3 +220,5 @@ tool-control-liquify-amount = ปริมาณ
 tool-family-fill = เครื่องมือเติมสี
 tool-control-close-gaps = ปิดช่องว่าง
 tool-control-edge-offset = ระยะ
+
+tool-action-group-fill-areas = พื้นที่ที่จะเติมสี

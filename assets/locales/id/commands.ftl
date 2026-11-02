@@ -1275,3 +1275,9 @@ command-close-gaps-off = Mati
 command-edges-line-middle = Ke tengah garis
 command-edges-exact = Tepat
 command-edges-grow-shrink = Perbesar atau perkecil
+
+command-paint-unfilled = Warnai area yang belum terisi
+command-fill-areas-transparent = Transparan
+command-fill-areas-transparent-or-white = Transparan atau putih
+command-fill-areas-any-colour = Warna apa pun
+commands-help-paint-unfilled = Sapukan pada area tertutup yang belum terisi untuk mewarnainya.

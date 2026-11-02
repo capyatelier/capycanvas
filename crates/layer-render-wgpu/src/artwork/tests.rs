@@ -127,7 +127,7 @@ fn composite_queries_ignore_inspection_and_need_no_display_texture() {
             }
         }
         assert!(
-            r.request_region(RegionRequest { colour_mode: Default::default(), fill: None, reference_count: None, paper: None,
+            r.request_region(RegionRequest { fill_areas: None, colour_mode: Default::default(), fill: None, reference_count: None, paper: None,
                 enclosure: None, contiguous: true,
                 selection: None,
                 request_id: 2,
