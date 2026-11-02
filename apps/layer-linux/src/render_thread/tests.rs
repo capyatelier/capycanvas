@@ -596,11 +596,11 @@ fn workspace_presenter_prepares_chrome_before_first_panel_parameters() {
             presenter.set_backdrop(renderer, &[layer_render_wgpu::BackdropRegion::rounded(
                 [96., 24., 144., 160.], [18.; 4], layer_render_wgpu::BackdropRegion::SQUIRCLE,
             )], Default::default(), false);
-            presenter.set_panel_surfaces(renderer, &[layer_render_wgpu::PanelSurface {
+            presenter.set_panel_surfaces(renderer, &[layer_render_wgpu::PanelSurface { opacity:1.,
                 sidebar: [54., 8., 36., 208.], sidebar_radii: [18.; 4], plane: 96.,
                 bridge_width: 6., direction: 1., scale: 1., color: [0.5, 0.5, 0.5, 1.],
                 anchors: vec![[54., 80., 36., 36.]],
-                groups: vec![layer_render_wgpu::PanelSurfaceGroup {
+                groups: vec![layer_render_wgpu::PanelSurfaceGroup { opacity:1.,
                     bounds: [96., 24., 144., 160.], radii: [18.; 4], tab_bar: [96., 24., 144., 30.],
                     active_tab: [96., 24., 36., 30.], tab_clip: [96., 24., 144., 30.],
                     color: [0.5, 0.5, 0.5, 1.], strip_color: [0.4, 0.4, 0.4, 1.],

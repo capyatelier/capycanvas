@@ -231,6 +231,127 @@ fn zen_bridge_paint_frames(w: &Rc<Workspace>, input: &mut RemoteInput) {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+#[test]
+#[ignore = "private compositor recording; Zen glass crossfade over detailed artwork"]
+fn native_zen_panel_glass_crossfade() {
+    let themes = match std::env::var("CAPY_NATIVE_TEST_THEME").as_deref() {
+        Ok("light") => vec![Theme::Light], Ok("dark") => vec![Theme::Dark],
+        Err(_) => vec![Theme::Light, Theme::Dark],
+        Ok(_) => panic!("CAPY_NATIVE_TEST_THEME must be light or dark"),
+    };
+    let localization = layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
+    let mut document = layer_ui::new_drawing(2048, 2048, &localization).unwrap();
+    let image = layer_core::color::source::rgba8_source([2048, 2048], |x, y|
+        if (x / 6 + y / 6) % 2 == 0 { [12, 12, 12, 255] } else { [244, 244, 244, 255] });
+    let active = document.working.occurrence.unwrap();
+    let layer_core::authored::OccurrenceContent::Paint(paint) = document.scene().occurrence(active).unwrap().content else {
+        panic!("checker artwork paint source");
+    };
+    document.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::PaintBase::new(image.into()));
+    let app = native_test_app("art.capycanvas.ZenPanelGlassCrossfade");
+    let w = Workspace::with_project(&app, Some((document, None)));
+    w.window.maximize(); w.window.present();
+    wait_workspaces(&w); new_photo::ready(&w);
+    let settings = gtk::Settings::default().unwrap();
+    let animations = settings.is_gtk_enable_animations();
+    settings.set_gtk_enable_animations(true);
+    let mut input = RemoteInput::new().settle_ms(0).timeout_secs(30);
+    input.ready();
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    for theme in themes {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        use_transparency(&w, layer_ui::Transparency::Medium);
+        let (mut fixture, panels) = native_bridge_fixture(viewport, 84.5);
+        let panel = fixture.layout.add_toolbar(None, "Glass crossfade", &[ToolbarControl::Command { command: CommandId::Brush }]).unwrap();
+        fixture.layout.add_panel_to_group(panel, 6).unwrap();
+        let receiver = fixture.layout.panel_group(panel).unwrap();
+        let opener = fixture.layout.panel_group(panels[2]).unwrap();
+        let column = fixture.layout.collapsed_column_for_group(opener).unwrap();
+        w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(fixture) });
+        w.dispatch(UiAction::SetZoom { zoom: 1. });
+        let point = gtk::graphene::Point::new(viewport[0] * 0.7, viewport[1] * 0.5);
+        let in_window = w.surface.compute_point(&w.window, &point).unwrap();
+        input.perform(serde_json::json!([{"point":screen_point(w.surface.upcast_ref(), &w.window, [0.7, 0.5])}]));
+        until(|| w.pointer_position.get().is_some_and(|p| (p.x() - in_window.x()).abs() < 2. && (p.y() - in_window.y()).abs() < 2.),
+            "native pointer leaves the fading chrome");
+        w.customize(CustomizationAction::ToggleColumnDrawer { group: opener, panel: panels[2] });
+        until(|| w.groups.borrow().iter().any(|group| group.id == receiver && group.root.is_mapped()),
+            "open bridge column maps its receiver");
+        new_photo::ready(&w);
+        until(|| !w.chrome_fading.get() && w.chrome_released.get() == w.chrome.revision(), "bridge rest reaches the selected paint");
+        let root = w.groups.borrow().iter().find(|group| group.id == receiver).unwrap().root.clone();
+        assert!(root.is_mapped() && root.has_css_class("gpu-panel-surface"), "fixture exposes a GPU panel");
+        assert!(w.columns.connection_geometry.borrow().iter().any(|(id, _, geometry)|
+            *id == column && geometry.receivers.iter().any(|group| group.group == receiver)), "panel has a real column bridge");
+        let bounds = root.compute_bounds(&w.surface).unwrap();
+        let region = gtk::graphene::Rect::new(bounds.x() + 32., bounds.y() + bounds.height() * 0.45,
+            bounds.width() - 64., bounds.height() * 0.35);
+        assert!(region.width() > 24. && region.height() > 24., "clear panel interior for the contrast grid");
+        let camera = state(&w).camera;
+        let matrix = camera.document_to_surface();
+        let inverse = camera.input_transform();
+        let [a, b, c, d, tx, ty] = matrix;
+        let points: [[f32; 2]; 32] = std::array::from_fn(|index| {
+            let pair = index / 2;
+            let x = region.x() + region.width() * ((pair % 4) as f32 + 0.5) / 4.;
+            let y = region.y() + region.height() * ((pair / 4) as f32 + 0.5) / 4.;
+            let layer_core::Point { x: dx, y: dy } = inverse.map(layer_core::Point { x, y });
+            let dx = (dx / 6.).floor() * 6. + 3. + (index % 2) as f32 * 6.;
+            let dy = (dy / 6.).floor() * 6. + 3.;
+            assert!((0.0..2048.0).contains(&dx) && (0.0..2048.0).contains(&dy), "artwork covers the complete panel grid");
+            let point = [a * dx + c * dy + tx, b * dx + d * dy + ty];
+            assert!(region.contains_point(&gtk::graphene::Point::new(point[0], point[1])), "checker pair remains inside the panel");
+            point
+        });
+        for entering in [true, false] {
+            let name = format!("zen-glass-crossfade-{theme:?}-{entering}").to_lowercase();
+            let frames = super::ui_motion::record_pixels(&w, &mut input, &name, points, || {
+                w.dispatch(UiAction::Invoke { command: CommandId::ZenMode });
+            });
+            assert_eq!(root.has_css_class("zen-hidden"), entering, "{name}: real Zen visibility changed");
+            assert_eq!(state(&w).camera.document_to_surface(), matrix, "{name}: checker artwork remains stationary");
+            let contrast: Vec<f64> = frames.iter().map(|pixels| {
+                let squared: f64 = pixels.chunks_exact(2).map(|pair| (0..3).map(|channel| {
+                    let delta = f64::from(pair[0][channel]) - f64::from(pair[1][channel]); delta * delta
+                }).sum::<f64>()).sum();
+                (squared / 48.).sqrt()
+            }).collect();
+            let pixel_distance = |left: &[[u8; 3]; 32], right: &[[u8; 3]; 32]| {
+                (left.iter().zip(right).map(|(left, right)| (0..3).map(|channel| {
+                    let delta = f64::from(left[channel]) - f64::from(right[channel]); delta * delta
+                }).sum::<f64>()).sum::<f64>() / 96.).sqrt()
+            };
+            let endpoint_pixels = pixel_distance(frames.first().unwrap(), frames.last().unwrap());
+            let largest_pixel_step = frames.windows(2).map(|pair| pixel_distance(&pair[0], &pair[1])).fold(0_f64, f64::max);
+            let first = contrast[0];
+            let last = *contrast.last().unwrap();
+            let visible = if entering { first } else { last };
+            let hidden = if entering { last } else { first };
+            let span = hidden - visible;
+            assert!(hidden >= 100. && span >= 80., "{name}: detailed artwork distinguishes glass from clear background: {visible}->{hidden}");
+            let steps: Vec<_> = contrast.windows(2).map(|pair| (pair[1] - pair[0]).abs()).collect();
+            let largest = steps.iter().copied().fold(0_f64, f64::max);
+            let arrival = (1..contrast.len()).find(|&index| (contrast[index] - last).abs() <= 2.
+                && (contrast[index - 1] - last).abs() > 2.).expect("fade reaches its compositor endpoint");
+            let final_step = (contrast[arrival] - contrast[arrival - 1]).abs();
+            let final_pixel_step = pixel_distance(&frames[arrival], &frames[arrival - 1]);
+            let output = std::path::PathBuf::from(std::env::var_os("LAYER_TEST_ARTIFACTS").unwrap());
+            std::fs::write(output.join(format!("{name}-contrast.json")), serde_json::to_vec_pretty(&serde_json::json!({
+                "points":points.to_vec(),"contrast":contrast,"endpoint_span":span,"largest_step":largest,"arrival_step":final_step,
+                "endpoint_pixel_rms":endpoint_pixels,"largest_pixel_step":largest_pixel_step,"arrival_pixel_step":final_pixel_step
+            })).unwrap()).unwrap();
+            assert!(largest_pixel_step <= endpoint_pixels * 0.65 + 2., "{name}: panel-region RGB jumps {largest_pixel_step} of {endpoint_pixels} in one compositor frame");
+            assert!(final_pixel_step <= endpoint_pixels * 0.35 + 2., "{name}: final fade frame RGB jumps {final_pixel_step} of {endpoint_pixels}");
+            assert!(largest <= span * 0.65 + 2., "{name}: panel-region contrast jumps {largest} of {span} in one compositor frame");
+            assert!(final_step <= span * 0.35 + 2., "{name}: final fade frame jumps {final_step} of {span}");
+            new_photo::ready(&w);
+            until(|| !w.chrome_fading.get() && w.chrome_released.get() == w.chrome.revision(), "Zen endpoint reaches the selected paint");
+        }
+    }
+    settings.set_gtk_enable_animations(animations);
+    input.finish(); w.window.destroy();
+}
+
 fn native_bridge_fixture(viewport: [f32; 2], height: f32) -> (layer_ui::WorkspaceState, Vec<Panel>) {
     let mut fixture = layer_ui::WorkspaceState::default();
     let panels: Vec<_> = (0..6).map(|i| fixture.layout.add_toolbar(None, &format!("Bridge {i}"),

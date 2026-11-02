@@ -144,14 +144,14 @@ impl GlassPanel {
     fn surface(&self) -> Option<layer_render_wgpu::PanelSurface> {
         let bridge=self.bridges.first()?;
         let rect=|mut b:[f32;4]|{b[0]+=self.offset[0];b[1]+=self.offset[1];b};
-        Some(layer_render_wgpu::PanelSurface {
+        Some(layer_render_wgpu::PanelSurface { opacity:1.,
             sidebar:rect(self.sidebar),sidebar_radii:self.radii,color:self.color,scale:1.,plane:bridge.plane+self.offset[0],
             bridge_width:bridge.width(),direction:if bridge.direction==layer_ui::Edge::Right {1.} else {-1.},
             anchors:self.bridges.iter().map(|b|rect([b.anchor.x,b.anchor.y,b.anchor.width,b.anchor.height])).collect(),
             groups:bridge.receivers.iter().filter_map(|receiver| {
                 let native=self.groups.iter().find(|g|g.group==receiver.group)?;
                 let b=receiver.bounds;
-                Some(layer_render_wgpu::PanelSurfaceGroup {
+                Some(layer_render_wgpu::PanelSurfaceGroup { opacity:1.,
                     bounds:rect([b.x,b.y,b.width,b.height]),radii:receiver.radii,tab_bar:rect(native.tab_bar),
                     active_tab:rect(native.active_tab),tab_clip:rect(native.tab_clip),color:native.color,strip_color:native.strip_color,
                 })

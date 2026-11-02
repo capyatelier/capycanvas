@@ -30,12 +30,12 @@ fn renderer() -> WgpuRasterizer {
 }
 
 fn group(bounds: [f32; 4]) -> PanelSurfaceGroup {
-    PanelSurfaceGroup { bounds, radii: [18.; 4], tab_bar: [0.; 4], active_tab: [0.; 4],
+    PanelSurfaceGroup { opacity:1., bounds, radii: [18.; 4], tab_bar: [0.; 4], active_tab: [0.; 4],
         tab_clip: [0.; 4], color: WHITE, strip_color: WHITE }
 }
 
 fn surface(gap: f32) -> PanelSurface {
-    PanelSurface { sidebar: [54., 8., 36., 208.], sidebar_radii: [18.; 4],
+    PanelSurface { opacity:1., sidebar: [54., 8., 36., 208.], sidebar_radii: [18.; 4],
         plane: PLANE, bridge_width: 6., direction: 1., scale: 1., color: WHITE,
         groups: vec![group([PLANE, 24., 144., gap - 24.]), group([PLANE, gap + 6., 144., 194. - gap])],
         anchors: vec![[54., 80., 36., 48.]] }
@@ -151,7 +151,7 @@ fn gpu_panel_surface_audit_glass_matches_backdrop_regions_at_odd_extents() {
         let mut receiver = group(bounds);
         receiver.radii = [0.; 4];
         receiver.color = [0.; 4];
-        panel.set_panel_surfaces(&renderer, &[PanelSurface {
+        panel.set_panel_surfaces(&renderer, &[PanelSurface { opacity:1.,
             sidebar: [0.; 4], sidebar_radii: [0.; 4], plane: 16., bridge_width: 6.,
             direction: 1., scale: 1., color: [0.; 4], groups: vec![receiver], anchors: Vec::new(),
         }]);
@@ -542,7 +542,7 @@ fn gpu_panel_surface_scene_replacement_clears_old_sources_and_anchor_attachments
         let mut receiver = group([16., 80., 80., 104.]);
         receiver.color = [0., 0., 1., 1.];
         receiver.strip_color = receiver.color;
-        let b = PanelSurface { sidebar: [0.; 4], sidebar_radii: [0.; 4], plane: 96.,
+        let b = PanelSurface { opacity:1., sidebar: [0.; 4], sidebar_radii: [0.; 4], plane: 96.,
             bridge_width: 6., direction: -1., scale: 1., color: receiver.color,
             groups: vec![receiver], anchors: Vec::new() }.scaled(scale as f32);
         let replaced = render(&mut presenter, std::slice::from_ref(&b), &target);
@@ -757,5 +757,68 @@ fn gpu_panel_surface_linear_targets_reproduce_opaque_palette_colors() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn gpu_panel_glass_crossfade_preserves_rest_and_scales_premultiplied_output() {
+    use layer_core::color::f16;
+    use layer_ui::{GlassColor, Platform, Settings, Theme, Transparency};
+    let mut artwork = Artwork::new(SIZE).unwrap();
+    let (_, target) = crate::test_support::add_paint(&mut artwork, "Detailed glass backdrop", SIZE);
+    let layer_core::authored::SourceTarget::Paint(source) = target else { unreachable!() };
+    let image = layer_core::color::source::rgba8_source(SIZE, |x, y| {
+        if (x / 3 + y / 5) % 2 == 0 { [235, 35, 185, 255] } else { [15, 210, 45, 255] }
+    });
+    artwork.paint.get_mut(source).unwrap().base = Some(layer_core::authored::PaintBase::new(image.into()));
+    let index = Arc::new(SceneIndex::build(&artwork).unwrap());
+    let mut renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    assert_ne!(renderer.adapter.get_info().device_type, wgpu::DeviceType::Cpu);
+    crate::test_support::submit_settled(&mut renderer, FramePacket { view: view(SIZE), reset_layers: true,
+        ..packet(SceneView::new(&artwork, &index), SIZE) });
+    for theme in [Theme::Light, Theme::Dark] {
+      for format in [wgpu::TextureFormat::Rgba8Unorm, wgpu::TextureFormat::Rgba16Float] {
+        let target = crate::create_target(renderer.device(), SIZE, format, "glass crossfade").0;
+        let palette = Settings {transparency:Transparency::Medium,..Default::default()}.palette(theme,Platform::Gtk,None);
+        let color = GlassColor::over(palette.panel.0.map(|v|f32::from(v)/255.),[1.;3],palette.glass.panel.0[3]).0;
+        let strip = GlassColor::over(palette.tabbar.0.map(|v|f32::from(v)/255.),[1.;3],palette.glass.strip.0[3]).0;
+        let mut scene = tabbed_receiver_column();
+        scene.color = color;
+        for group in &mut scene.groups { group.color = color; group.strip_color = strip; }
+        let mut presenter = ViewportPresenter::for_renderer(&renderer, format);
+        let region = crate::BackdropRegion::rounded([0.,0.,SIZE[0] as f32,SIZE[1] as f32],[0.;4],crate::BackdropRegion::SQUIRCLE);
+        presenter.set_backdrop(&renderer,&[region.with_strength(0.)],
+            crate::BackdropBlurStyle {levels:palette.glass.blur.levels,offset:palette.glass.blur.offset},false);
+        let render = |presenter: &mut ViewportPresenter, surfaces: &[PanelSurface]| {
+            presenter.set_panel_surfaces(&renderer, surfaces);
+            presenter.present(&renderer,&target.create_view(&Default::default()),view(SIZE),[0.,0.,0.,1.]).unwrap();
+            crate::layer_tests::page_bytes(&renderer,&target)
+        };
+        let background = render(&mut presenter, &[]);
+        let rest = render(&mut presenter, &[scene.clone()]);
+        assert!(rest.iter().zip(&background).any(|(a,b)|a.abs_diff(*b)>8), "{theme:?}: glass changes the detailed backdrop");
+        if format == wgpu::TextureFormat::Rgba8Unorm {
+          if let Some(directory) = std::env::var_os("CAPY_PANEL_SURFACE_CAPTURE_DIR") {
+            let directory = std::path::PathBuf::from(directory);
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(directory.join(format!("panel-glass-rest-{theme:?}.rgba")), &rest).unwrap();
+          }
+          continue;
+        }
+        scene.opacity = 0.5;
+        for group in &mut scene.groups { group.opacity = 0.5; }
+        let half = render(&mut presenter, &[scene.clone()]);
+        scene.opacity = 0.;
+        for group in &mut scene.groups { group.opacity = 0.; }
+        let transparent = render(&mut presenter, &[scene]);
+        let value = |bytes: &[u8]| f16::from_bits(u16::from_le_bytes(bytes.try_into().unwrap())).to_f32();
+        for (index, ((actual, rest), background)) in half.chunks_exact(2).zip(rest.chunks_exact(2)).zip(background.chunks_exact(2)).enumerate() {
+            let (actual, rest, background) = (value(actual), value(rest), value(background));
+            let tolerance = f16::EPSILON.to_f32() * rest.abs().max(background.abs()).max(1.);
+            assert!((actual - (rest + background) * 0.5).abs() <= tolerance,
+                "{theme:?}: premultiplied crossfade component {index}: half={actual}, rest={rest}, background={background}");
+        }
+        assert_eq!(transparent, background, "{theme:?}: zero panel opacity leaves the scene unchanged");
+      }
     }
 }

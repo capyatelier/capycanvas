@@ -11,7 +11,7 @@ struct PanelVertex {
 
 @vertex fn panel_vertex(@builtin(vertex_index) vertex: u32,@builtin(instance_index) instance: u32) -> PanelVertex {
     let corner=array<vec2<f32>,6>(vec2(0.,0.),vec2(1.,0.),vec2(0.,1.),vec2(0.,1.),vec2(1.,0.),vec2(1.,1.));
-    let index=3u+instance*6u;
+    let index=3u+instance*7u;
     let area=panel_data[index];
     return PanelVertex(surface_clip(area.xy+corner[vertex]*area.zw),index);
 }
@@ -96,7 +96,7 @@ fn pnl_field(point: vec2<f32>,header: u32) -> f32 {
     var panels=1e12;
     var radius=0.;
     for (var i=0u;i<u32(counts.y);i++) {
-        let index=u32(counts.x)+i*7u;
+        let index=u32(counts.x)+i*8u;
         let b=panel_data[index];
         let r=panel_data[index+1u];
         radius=max(radius,max(max(r.x,r.y),max(r.z,r.w)));
@@ -108,7 +108,7 @@ fn pnl_field(point: vec2<f32>,header: u32) -> f32 {
     var outer_bottom=1e12;
     if counts.y>0. {
         let first=u32(counts.x);
-        let last=first+(u32(counts.y)-1u)*7u;
+        let last=first+(u32(counts.y)-1u)*8u;
         let first_bounds=panel_data[first];
         let last_bounds=panel_data[last];
         let first_radii=pnl_radii(first_bounds,panel_data[first+1u]);
@@ -124,7 +124,7 @@ fn pnl_field(point: vec2<f32>,header: u32) -> f32 {
             outer_bottom=min(outer_bottom,bottom);
             var bridge=1e12;
             for (var j=0u;j<u32(counts.y);j++) {
-                let index=first+j*7u;
+                let index=first+j*8u;
                 let bounds=panel_data[index];
                 if anchor.x>=bounds.y+bounds.w+6.*geometry.w || anchor.y<=bounds.y-6.*geometry.w { continue; }
                 let radii=pnl_radii(bounds,panel_data[index+1u]);
@@ -143,8 +143,8 @@ fn pnl_field(point: vec2<f32>,header: u32) -> f32 {
                 bridge=min(bridge,receiver_field);
             }
             for (var j=0u;j+1u<u32(counts.y);j++) {
-                let upper=panel_data[first+j*7u];
-                let lower=panel_data[first+(j+1u)*7u];
+                let upper=panel_data[first+j*8u];
+                let lower=panel_data[first+(j+1u)*8u];
                 if lower.y>upper.y+upper.w {
                     bridge=max(bridge,pnl_gap(p,vec2(upper.y+upper.w,lower.y),anchor,geometry.y,geometry.w));
                 }
@@ -178,12 +178,23 @@ fn pnl_foot(p: vec2<f32>,origin: vec2<f32>,radius: f32,direction: f32) -> f32 {
     let corner=radius-pnl_norm(vec2(radius-q.x,radius-q.y));
     return max(rectangle,corner);
 }
+fn pnl_fade(p: vec2<f32>,header: u32) -> f32 {
+    let counts=panel_data[header+5u];
+    for (var i=0u;i<u32(counts.y);i++) {
+        let index=u32(counts.x)+i*8u;
+        let b=panel_data[index];
+        if p.x>=b.x && p.x<b.x+b.z && p.y>=b.y && p.y<b.y+b.w {
+            return panel_data[index+7u].x;
+        }
+    }
+    return panel_data[header+6u].x;
+}
 fn pnl_tint(p: vec2<f32>,header: u32) -> vec4<f32> {
     let counts=panel_data[header+5u];
     let scale=panel_data[header+3u].w;
     var color=pnl_ui(panel_data[header+4u]);
     for (var i=0u;i<u32(counts.y);i++) {
-        let index=u32(counts.x)+i*7u;
+        let index=u32(counts.x)+i*8u;
         let b=panel_data[index];
         if p.x>=b.x && p.x<b.x+b.z && p.y>=b.y && p.y<b.y+b.w {
             color=pnl_ui(panel_data[index+5u]);
@@ -220,7 +231,7 @@ fn pnl_coverage(point: vec2<f32>,header: u32) -> vec2<f32> {
 
 @vertex fn panel_mask_vertex(@builtin(vertex_index) vertex: u32,@builtin(instance_index) instance: u32) -> PanelVertex {
     let corner=array<vec2<f32>,6>(vec2(0.,0.),vec2(1.,0.),vec2(0.,1.),vec2(0.,1.),vec2(1.,0.),vec2(1.,1.));
-    return PanelVertex(vec4(corner[vertex]*vec2(2.,-2.)+vec2(-1.,1.),0.,1.),3u+instance*6u);
+    return PanelVertex(vec4(corner[vertex]*vec2(2.,-2.)+vec2(-1.,1.),0.,1.),3u+instance*7u);
 }
 
 @fragment fn panel_mask_fragment(in: PanelVertex) -> @location(0) vec2<f32> {
@@ -250,5 +261,5 @@ fn pnl_coverage(point: vec2<f32>,header: u32) -> vec2<f32> {
         }
     }
     let alpha=tint.a*coverage+shadow*(1.-coverage);
-    return vec4(tint.rgb*coverage,alpha)*window_coverage(point);
+    return vec4(tint.rgb*coverage,alpha)*pnl_fade(point,in.header)*window_coverage(point);
 }

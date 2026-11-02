@@ -14,6 +14,7 @@ pub struct PanelSurfaceGroup {
     pub tab_clip: [f32; 4],
     pub color: [f32; 4],
     pub strip_color: [f32; 4],
+    pub opacity: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -25,6 +26,7 @@ pub struct PanelSurface {
     pub direction: f32,
     pub scale: f32,
     pub color: [f32; 4],
+    pub opacity: f32,
     pub groups: Vec<PanelSurfaceGroup>,
     pub anchors: Vec<[f32; 4]>,
 }
@@ -165,18 +167,19 @@ impl PanelSurfaces {
         self.surfaces.clear();
         self.surfaces.extend_from_slice(surfaces);
         self.data.clear();
-        self.data.resize(3+self.surfaces.len()*6,[0.;4]);
+        self.data.resize(3+self.surfaces.len()*7,[0.;4]);
         for (i,surface) in self.surfaces.iter().enumerate() {
             let b=surface.bounds();
             let pad=32.*surface.scale;
             let first=self.data.len();
-            for g in &surface.groups { self.data.extend([g.bounds,g.radii,g.tab_bar,g.active_tab,g.tab_clip,g.color,g.strip_color]); }
+            for g in &surface.groups { self.data.extend([g.bounds,g.radii,g.tab_bar,g.active_tab,g.tab_clip,g.color,g.strip_color,[g.opacity,0.,0.,0.]]); }
             let anchors=self.data.len();
             self.data.extend_from_slice(&surface.anchors);
-            self.data[3+i*6..3+(i+1)*6].copy_from_slice(&[
+            self.data[3+i*7..3+(i+1)*7].copy_from_slice(&[
                 [b[0]-pad,b[1]-pad,b[2]+2.*pad,b[3]+2.*pad],surface.sidebar,surface.sidebar_radii,
                 [surface.plane,surface.bridge_width,surface.direction,surface.scale],surface.color,
                 [first as f32,surface.groups.len() as f32,anchors as f32,surface.anchors.len() as f32],
+                [surface.opacity,0.,0.,0.],
             ]);
         }
         self.uploaded.store(false,Ordering::Release);
@@ -226,7 +229,7 @@ impl PanelSurfaces {
         }
         self.masks.resize_with(self.surfaces.len(),||None);
         for (i,mask) in self.masks.iter_mut().enumerate() {
-            let area=self.data[3+i*6];
+            let area=self.data[3+i*7];
             let size:[u32;2]=std::array::from_fn(|axis| {
                 let low=area[axis].floor().clamp(0.,extent[axis] as f32);
                 let high=(area[axis]+area[axis+2]).ceil().clamp(0.,extent[axis] as f32);

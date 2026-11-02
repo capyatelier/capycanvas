@@ -91,7 +91,7 @@ impl Columns {
             let Some(sidebar)=strip.root.compute_bounds(&w.surface) else { continue; };
             let source_opacity=opacity(Slot::Column(strip.id));
             let tint=strip.tint.color();
-            let color=rgba(tint,source_opacity);
+            let color=rgba(tint,1.);
             let mut panels=Vec::new();
             for receiver in &first.receivers {
                 let bounds=receiver.bounds;
@@ -112,7 +112,7 @@ impl Columns {
                 panels.push(layer_render_wgpu::PanelSurfaceGroup {
                     bounds:[bounds.x,bounds.y,bounds.width,bounds.height],radii:receiver.radii,
                     tab_bar:bar.map_or([0.;4],rect),active_tab:active.map_or([0.;4],rect),tab_clip:clip.map_or([0.;4],rect),
-                    color:rgba(tint,receiver_opacity),strip_color:rgba(if bar.is_some() {colors[0]} else {tint},receiver_opacity),
+                    color:rgba(tint,1.),strip_color:rgba(if bar.is_some() {colors[0]} else {tint},1.),opacity:receiver_opacity,
                 });
             }
             if panels.is_empty() && source_opacity==0. { continue; }
@@ -123,7 +123,7 @@ impl Columns {
                 .map_or([SURFACE_RADIUS;4],|(_,r)|*r);
             surfaces.push(layer_render_wgpu::PanelSurface { sidebar:if source_opacity>0. {rect(sidebar)} else {[0.;4]},sidebar_radii:radii,
                 plane:first.plane,bridge_width:first.width(),direction:if first.direction==Edge::Right {1.} else {-1.},scale:1.,
-                color,groups:panels,anchors,
+                color,opacity:source_opacity,groups:panels,anchors,
             });
         }
         surfaces
