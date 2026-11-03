@@ -663,3 +663,101 @@ fn region_cache_paper_deletion_rebuilds_reference_without_resetting_layers() {
     assert!(!r.regions.as_ref().unwrap().background_pending());
     r.prepare_regions(None);
 }
+
+fn varying_reach_document() -> Document {
+    let extent=[304,136];
+    let mut document=paint_document(extent,"Different gap reaches");
+    placement::set_source(&mut document,layer_core::color::source::rgba8_source(extent,|x,y| {
+        let ink=(barrier([24,20,280,112],x,y) && !(y==20 && ((72..80).contains(&x)||(190..230).contains(&x))))
+            || x==152 && (20..112).contains(&y);
+        if ink {[51,77,102,255]}else{[0;4]}
+    }));
+    document
+}
+
+#[test]
+fn fill_drag_with_different_auto_reaches_commits_and_reopens_the_second_seal_in_one_undo() {
+    use layer_ui::{UiSession,UiAction,CommandId,Platform};
+    use layer_engine::{PenEvent,PenPhase,SampleFlags,ToolKind};
+    let extent=[304,136];let mut document=varying_reach_document();
+    document.working.occurrence=Some(placement::occurrence_id(&document));
+    let reference=target(&document);
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();frame(&mut r,&document,extent);
+    let source=RegionSource::Scene {snapshot:document.snapshot(),scope:SceneScope::Raw(reference)};
+    for (position,active) in [([80,70],1),([220,70],3)] {
+        let mut query=request(source.clone(),rectangle([0,0,1,1]),Default::default(),0.);
+        query.enclosure=None;query.position=position;query.fill=Some(Default::default());
+        assert_eq!(receive_request(&mut r,query).gaps.unwrap().active,active);
+    }
+    let mut s=UiSession::new(r,document,[1200,900],Platform::Gtk).unwrap();
+    s.dispatch(UiAction::Invoke {command:CommandId::Fill}).unwrap();
+    s.dispatch(UiAction::SetColor {rgba:[1.,0.,0.,1.]}).unwrap();
+    let clock=std::time::Instant::now();
+    let settle=|s:&mut UiSession<WgpuRasterizer>| {
+        let deadline=std::time::Instant::now()+crate::READBACK_TIMEOUT;
+        loop {
+            let now=clock.elapsed().as_nanos() as u64;
+            s.frame(now,now).unwrap();
+            crate::test_support::complete(s.renderer_mut());
+            if s.paint_ready() && !s.holding_input() && !s.engine().has_pending_input() && s.require_document_idle().is_ok() && !s.engine().raster_backing_pending() && !s.engine().has_pending_document_edits() && !s.renderer_mut().has_pending_work() {break;}
+            assert!(std::time::Instant::now()<deadline,"fill must settle");
+            std::thread::yield_now();
+        }
+    };
+    let pen=|s:&mut UiSession<WgpuRasterizer>,sequence,phase,point:[f32;2]| {
+        let [a,b,c,d,x,y]=s.camera().document_to_surface();
+        s.pen(PenEvent {device_id:1,sequence,timestamp_ns:clock.elapsed().as_nanos() as u64,view_revision:s.camera().revision,
+            surface_position:Point {x:a*point[0]+c*point[1]+x,y:b*point[0]+d*point[1]+y},
+            pressure:1.,tilt_radians:[0.;2],twist_radians:0.,distance:0.,phase,tool:ToolKind::Pen,flags:SampleFlags::PRIMARY});
+    };
+    settle(&mut s);
+    let before=s.renderer_mut().readback_srgb_rgba8().unwrap();
+    pen(&mut s,1,PenPhase::Down,[80.,70.]);
+    let now=clock.elapsed().as_nanos() as u64;s.frame(now,now).unwrap();
+    pen(&mut s,2,PenPhase::Move,[220.,70.]);pen(&mut s,3,PenPhase::Up,[220.,70.]);settle(&mut s);
+    let filled=s.renderer_mut().readback_srgb_rgba8().unwrap();
+    let pixel=|bytes:&[u8],x,y|bytes[((y*304+x)*4) as usize..][..4].to_vec();
+    for [x,y] in [[80,70],[220,70]] {assert_eq!(pixel(&filled,x,y),[255,0,0,255],"filled {x},{y}");}
+    for [x,y] in [[8,70],[152,70],[24,70],[280,70]] {assert_eq!(pixel(&filled,x,y),pixel(&before,x,y));}
+    pen(&mut s,4,PenPhase::Down,[210.,20.]);pen(&mut s,5,PenPhase::Up,[210.,20.]);settle(&mut s);
+    let reopened=s.renderer_mut().readback_srgb_rgba8().unwrap();
+    assert_eq!(pixel(&filled,210,20),[0;4]);
+    assert_eq!(pixel(&reopened,210,20),[255,0,0,255]);
+    assert_eq!(pixel(&reopened,8,70),pixel(&before,8,70));
+    for (index,ink) in before.chunks_exact(4).enumerate().filter(|(_,pixel)|pixel[3]!=0) {
+        assert_eq!(&filled[index*4..][..4],ink,"committed ink {index}");
+        assert_eq!(&reopened[index*4..][..4],ink,"reopened ink {index}");
+    }
+    s.dispatch(UiAction::Invoke {command:CommandId::Undo}).unwrap();
+    assert!(!s.engine().can_undo());
+    settle(&mut s);
+    assert_eq!(s.renderer_mut().readback_srgb_rgba8().unwrap(),before);
+}
+
+#[test]
+fn fill_drag_keeps_only_the_gpu_chosen_output_at_each_auto_reach() {
+    let extent=[304,136];let document=varying_reach_document();
+    let source=RegionSource::Scene {snapshot:document.snapshot(),scope:SceneScope::Raw(target(&document))};
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();frame(&mut r,&document,extent);
+    let mut query=request(source,rectangle([0,0,1,1]),Default::default(),0.);
+    query.enclosure=None;query.position=[80,70];query.fill=Some(Default::default());
+    receive_request(&mut r,query.clone());
+    let storage=|r:&mut WgpuRasterizer,query:&RegionRequest| {
+        let regions=r.regions.as_mut().unwrap();let classified=regions.raw.mask().unwrap();
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        let region=regions.flood.encode_input(&r.device,&mut encoder,extent,query.position,0.,None,query.refinement,
+            &classified,true,false,&r.empty_paper_view,None,query.fill.as_ref()).unwrap();
+        (region.storage_bytes(),region.gaps.as_ref().unwrap().variants.len())
+    };
+    let (tap_bytes,_)=storage(&mut r,&query);
+    for (position,active) in [([80,70],1),([220,70],3)] {
+        query.position=position;
+        query.fill.as_mut().unwrap().trail=Some(layer_render::RegionFillTrail {transaction:810+active as u64,points:vec![[position[0] as f32,position[1] as f32]].into()});
+        let result=receive_request(&mut r,query.clone());let masks=result.gaps.unwrap();
+        assert_eq!(masks.active,active);
+        let (drag_bytes,variants)=storage(&mut r,&query);
+        assert_eq!(variants,0);
+        assert!(drag_bytes<tap_bytes,"tap {tap_bytes} drag {drag_bytes}");
+        for (slot,region) in masks.regions.iter().enumerate() {assert!((&region.pixels,&region.underfill)==(&result.pixels,&result.underfill),"reach {active} output {slot}");}
+    }
+}

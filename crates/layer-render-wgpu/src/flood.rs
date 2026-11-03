@@ -245,7 +245,9 @@ impl Flood {
         fill: Option<&layer_render::RegionFillQuery>,
     ) -> Result<Region, GpuRasterError> {
         let requested_close=refinement.close_gaps;
+        let trail=fill.and_then(|fill|fill.trail.as_ref()).filter(|trail|!trail.points.is_empty());
         let multiple=fill.is_some() && contiguous && self.lines.has_seals();
+        let single=multiple && trail.is_some();
         let refinement=RegionRefinement {close_gaps:(refinement.close_gaps || multiple) && self.lines.has_seals(),..refinement};
         let [w, h] = extent;
         if w == 0
@@ -261,7 +263,7 @@ impl Flood {
         let limit = device.limits();
         let labels = Labels::new(extent, &limit).ok_or(GpuRasterError::SizeOverflow)?;
         let mask_bytes = u64::from(w.div_ceil(32)) * u64::from(h) * 4;
-        if let Some(trail)=fill.and_then(|fill|fill.trail.as_ref()).filter(|trail|!trail.points.is_empty()) {
+        if let Some(trail)=trail {
             if self.trail.as_ref().is_none_or(|(id,size,_)|*id!=trail.transaction || *size!=extent) {
                 let buffer=device.create_buffer(&wgpu::BufferDescriptor {label:Some("fill crossed regions"),size:32+mask_bytes,
                     usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::COPY_SRC,mapped_at_creation:false});
@@ -292,7 +294,7 @@ impl Flood {
             Region {underfill:band.then(||(coverage.clone(),bounds_offset+64)),coverage,bounds_offset,gaps:None}
         };
         let mut region=allocate(scratch_words);
-        let variants=if multiple {(0..4).map(|_|allocate(words.max(mask_bytes))).collect::<Vec<_>>()}else{Vec::new()};
+        let variants=if multiple && !single {(0..4).map(|_|allocate(words.max(mask_bytes))).collect::<Vec<_>>()}else{Vec::new()};
         let active=fill.and_then(|fill|fill.reach).map_or(u32::from(requested_close),|reach|reach/16);
         let summary: Vec<u8> = [0,0,w,h,0,1,0,0,w,h,0,0,0,active].into_iter().flat_map(u32::to_ne_bytes).collect();
         let summary = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -345,7 +347,7 @@ impl Flood {
         });
         let group=make_group(selection.unwrap_or(&self.empty),&region.coverage);
         let pack_group=enclosed.then(||make_group(&self.empty,&region.coverage));
-        let gap_groups=if multiple {std::iter::once(&region).chain(&variants).map(|region|make_group(selection.unwrap_or(&self.empty),&region.coverage)).collect::<Vec<_>>()}else{Vec::new()};
+        let gap_groups=if multiple && !single {std::iter::once(&region).chain(&variants).map(|region|make_group(selection.unwrap_or(&self.empty),&region.coverage)).collect::<Vec<_>>()}else{Vec::new()};
         let base_group=(attempts>1).then(||make_group(&self.empty,self.lines.window_state()));
         let enabled: Vec<_> = stages(refinement, enclosed, contiguous).collect();
         let dimension = limit.max_compute_workgroups_per_dimension;
@@ -357,7 +359,7 @@ impl Flood {
                 timestamp_writes: None,
             });
             for entry in entries.iter().filter(|entry| enabled.contains(entry)) {
-                let binding=match *entry {"pack" if multiple=>&gap_groups[attempt],"pack"=>pack_group.as_ref().unwrap_or(&group),"save_base"|"restore_base"=>base_group.as_ref().unwrap(),_=>&group};
+                let binding=match *entry {"pack" if multiple && !single=>&gap_groups[attempt],"pack"=>pack_group.as_ref().unwrap_or(&group),"save_base"|"restore_base"=>base_group.as_ref().unwrap(),_=>&group};
                 pass.set_bind_group(0,binding,&[(stride*((mode*attempts as usize+attempt)*windows.len()+at) as u64) as u32]);
                 pass.set_pipeline(&pipelines[entry]);
                 let invocations = match *entry {
@@ -379,6 +381,7 @@ impl Flood {
         let input=Input {device,mask:classified,paper};
         self.lines.exclude(&input,encoder,fill.map_or(&[],|fill|fill.excluded_seals.as_ref()));
         let seal_metadata=if multiple {self.lines.seal_metadata(device)}else{None};
+        if let Some(metadata)=&seal_metadata {encoder.clear_buffer(metadata,0,None);}
         encoder.clear_buffer(store,labels.seed*4,Some(41*4));
         if multiple {encoder.copy_buffer_to_buffer(&summary,52,store,(labels.seed+40)*4,4);}
         encoder.clear_buffer(store,labels.flags*4,Some((labels.marks-labels.flags)*4));
@@ -407,26 +410,29 @@ impl Flood {
             }
         }
         if attempts>1 && !enclosed && !multiple {self.lines.barrier_plane(&input,encoder,&region.coverage,store,(labels.seed+8*u64::from(attempts)) as u32,1);}
-        let outputs=if multiple {(1..5).chain(std::iter::once(0)).collect::<Vec<_>>()}else{vec![0]};
+        let outputs=if multiple && !single {(1..5).chain(std::iter::once(0)).collect::<Vec<_>>()}else{vec![0]};
         for output in outputs {
             if multiple {
                 encoder.clear_buffer(&region.coverage,32+u64::from(attempts)*mask_bytes,Some(mask_bytes));
-                self.lines.barrier_plane(&input,encoder,&region.coverage,store,output as u32,4);
+                self.lines.barrier_plane(&input,encoder,&region.coverage,store,if single {(labels.seed+40) as u32}else{output as u32},if single {1}else{4});
             }
             for attempt in 0..if enclosed {attempts as usize}else{1} {
-                let attempt=if multiple {output}else{attempt};
+                let attempt=if multiple && !single {output}else{attempt};
                 if attempts>1 && enclosed && attempt+1==attempts as usize {encoder.clear_buffer(&region.coverage,32,Some(mask_bytes));}
                 if attempts==1 {run(encoder,0,attempt,last,&["component_mask"]);}
                 for at in (0..if attempts==1 {last}else{windows.len()}).rev() {
                     encoder.clear_buffer(store,labels.marks*4,Some((labels.seed-labels.marks)*4));
-                    run(encoder,if multiple {5}else if attempts>1 {2}else{0},attempt,at,&["initialize","merge","mark_exterior","component_mask"]);
+                    run(encoder,if multiple && !single {5}else if attempts>1 {2}else{0},attempt,at,&["initialize","merge","mark_exterior","component_mask"]);
                 }
             }
             let result=if output==0 {&region}else{&variants[output-1]};
             self.lines.thin(&input,encoder,&region.coverage,if attempts>1 && !enclosed {attempts}else{0});
-            if let Some((_,_,trail))=&self.trail {self.lines.union_trail(&input,encoder,trail,store,output as u32,(labels.seed+40) as u32);}
+            if let Some((_,_,trail))=&self.trail {self.lines.union_trail(&input,encoder,trail,store,output as u32,(labels.seed+40) as u32,!single);}
             if fill.is_some() && contiguous {self.lines.boundary(&input,encoder,&result.coverage);}
-            if output>0 && let Some(metadata)=&seal_metadata {self.lines.capture_seals(&input,encoder,metadata,output as u32*16);}
+            if let Some(metadata)=&seal_metadata {
+                if single {self.lines.capture_seals(&input,encoder,metadata,Some((store,(labels.seed+40) as u32)),0);}
+                else if output>0 {self.lines.capture_seals(&input,encoder,metadata,None,output as u32*16);}
+            }
             if enclosed {run(encoder,if attempts>1 {2}else{0},0,0,&["restore_components"]);}
             if band {
                 self.lines.barrier_plane(&input,encoder,&region.coverage,store,0,2);

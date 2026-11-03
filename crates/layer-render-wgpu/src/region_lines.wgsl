@@ -471,19 +471,24 @@ fn apply_seals(@builtin(global_invocation_id) id:vec3<u32>, @builtin(num_workgro
     let index=id.x+id.y*groups.x*64u+line.job.x;
     let count=min(atomicLoad(&cached[line.offsets.y]),line.offsets.w);if index>=count{return;}
     let base=line.offsets.z+index*END_WORDS;
-    let hit=atomicLoad(&cached[base+4u+line.options.z*4u]);
+    var z=line.options.z;var at=0u;
+    if line.options.w!=0u {
+        at=line.options.w-1u;
+        if line.options.y!=0u {let a=second[line.options.y];if a==0u {return;}z=a-1u;at=z*count*5u;}
+    }
+    let hit=atomicLoad(&cached[base+4u+z*4u]);
     if hit==INVALID || atomicLoad(&cached[base+19u])!=0u{return;}
     let start=vec2<i32>(coord(atomicLoad(&cached[base])));
     if line.core.z!=0u && (any(start<vec2<i32>(line.core.xy)) || any(start>=vec2<i32>(line.core.xy+line.core.zw))){return;}
-    let end=vec2<i32>(coord(hit));let bend=atomicLoad(&cached[base+6u+line.options.z*4u]);
+    let end=vec2<i32>(coord(hit));let bend=atomicLoad(&cached[base+6u+z*4u]);
     let write=line.options.w==0u;
     var touches=false;
     if bend!=INVALID {touches=seal_segment(start,vec2<i32>(coord(bend)),write);touches=seal_segment(vec2<i32>(coord(bend)),end,write)||touches;}
     else{touches=seal_segment(start,end,write);}
     if !write && touches {
-        let at=line.options.w-1u+index*5u;
-        first[at]=atomicLoad(&cached[base+15u]);first[at+1u]=point(vec2<u32>(start));
-        first[at+2u]=hit;first[at+3u]=bend;first[at+4u]=16u*(line.options.z+1u);
+        let record=at+index*5u;
+        first[record]=atomicLoad(&cached[base+15u]);first[record+1u]=point(vec2<u32>(start));
+        first[record+2u]=hit;first[record+3u]=bend;first[record+4u]=16u*(z+1u);
     }
 }
 fn seal_segment(start:vec2<i32>,end:vec2<i32>,write:bool)->bool {
@@ -633,7 +638,7 @@ fn barrier_plane(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgr
     }
     if index>=line.offsets.x{return;}
     if line.options.x==5u {
-        if line.options.y!=second[line.options.z] {return;}
+        if line.options.w!=0u && line.options.y!=second[line.options.z] {return;}
         let bits=first[8u+index]|atomicLoad(&eligible[index]);first[8u+index]=bits;atomicStore(&eligible[index],bits);return;
     }
     if line.options.x==3u {
