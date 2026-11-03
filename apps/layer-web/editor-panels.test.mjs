@@ -5,11 +5,25 @@ import test from 'node:test';
 
 const source=readFileSync(new URL('editor-panels.js',import.meta.url),'utf8');
 
+test('Palette sizing consumes shared rows before measuring and keeps history controls',()=>{
+  const source=readFileSync(new URL('palettes.js',import.meta.url),'utf8');
+  const nodes=Array.from({length:12},()=>({hidden:false,style:{}})),properties={},requests=[];
+  const context={body:{clientWidth:226},root:{style:{setProperty:(name,value)=>properties[name]=String(value)}},history:{children:nodes},expanded:{hidden:true,clientHeight:0},columns:0,pitch:0,gap:0,gridWidth:0,changes:0,
+    contentChanged(){context.changes++;},app:{color_ui(request){requests.push(request);return request.width===226?{columns:6n,pitch:38n,gap:4n}:{columns:8n,pitch:44n,gap:4n};}}};
+  runInNewContext(source.slice(source.indexOf('    function layoutGrids()'),source.indexOf('    const resize =',source.indexOf('    function layoutGrids()')))+'\nglobalThis.arrange=layoutGrids;',context);
+  context.arrange();assert.equal(properties['--palette-tile'],'34px');assert.equal(properties['--palette-columns'],'6');
+  assert.deepEqual(nodes.slice(0,-1).map(node=>node.hidden),[false,false,false,false,false,true,true,true,true,true,true]);
+  context.arrange();assert.equal(requests.length,1);assert.equal(context.changes,1);
+  context.body.clientWidth=380;context.arrange();
+  assert.equal(properties['--palette-tile'],'40px');assert.equal(properties['--palette-columns'],'8');assert.equal(requests.length,2);
+  assert.deepEqual(nodes.slice(0,-1).map(node=>node.hidden),[false,false,false,false,false,false,false,true,true,true,true]);
+});
+
 test('Colour applies the shared fit and only queries changed allocations',()=>{
   const node=()=>({style:{}}),requests=[],frame={...node(),clientWidth:280,clientHeight:184},root=node(),stage=node(),wheel=node(),swap=node(),readout=node(),edit=node();
   const choices=['foreground','background','transparent'].map(slot=>({slot,node:node()})),shapes=[node(),node()];
   const fit={size:159,height:184,natural_height:300,wheel:[2,3,155,155],foreground:[4,5,32,32],background:[20,21,24,24],transparent:[40,50,24,24],shapes:[[8,9,20,20],[10,11,20,20]],swap:[12,13,20,20],readout:[14,15,40,20],edit:[16,17,20,20]};
-  const context={frame,root,stage,wheel,swap,readout,edit,choices,shapes,view:{hdr:true},frameWidth:0,frameHeight:0,layoutWidth:0,layout:undefined,naturalAspect:'',naturalLayout:undefined,contentChanged(){},app:{color_ui(request){requests.push({...request});return request.type==='fit_layout'?{...fit}:{...fit,size:request.size,height:request.size===128?150:300};}}};
+  const context={frame,root,stage,wheel,swap,readout,edit,choices,shapes,fitted:null,view:{hdr:true},frameWidth:0,frameHeight:0,layoutWidth:0,layout:undefined,naturalAspect:'',naturalLayout:undefined,contentChanged(){},app:{color_ui(request){requests.push({...request});return request.type==='fit_layout'?{...fit}:{...fit,size:request.size,height:request.size===128?150:300};}}};
   const begin=source.indexOf('    const place=',source.indexOf('  function colorWheel(')),end=source.indexOf('      const width=layoutWidth;',begin);
   runInNewContext(source.slice(begin,end)+'\n}\nglobalThis.draw=draw;',context);
   context.draw();
@@ -19,6 +33,10 @@ test('Colour applies the shared fit and only queries changed allocations',()=>{
   context.draw();assert.equal(requests.length,3);
   frame.clientHeight=185;context.draw();
   assert.deepEqual(requests.at(-1),{type:'fit_layout',width:280,height:185,hdr:true});assert.equal(requests.length,4);
+  context.fitted={...fit};context.frameWidth=0;context.draw();
+  assert.equal(frame.style.aspectRatio,'auto');assert.equal(stage.style.height,'184px');
+  assert.deepEqual(requests.slice(4),[{type:'layout',size:280,hdr:true}]);
+  context.draw();assert.equal(requests.length,5);
 });
 
 function harness() {

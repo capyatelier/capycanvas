@@ -7,6 +7,8 @@ use serde::Deserialize;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolbarUiRequest {
     Metrics,
+    ToolSetColumns { width: f32, natural: Vec<f32>, rows: bool },
+    ToolPreview { width: f32, caption: f32 },
     NoticeLayout {
         text: f32,
         content: f32,
@@ -108,6 +110,10 @@ pub fn toolbar_ui(request: ToolbarUiRequest, localizer: &Localizer) -> Result<se
     use serde_json::json;
     Ok(match request {
         ToolbarUiRequest::Metrics => toolbar_metrics(),
+        ToolbarUiRequest::ToolSetColumns { width, natural, rows } => json!(tool_set_columns(width, &natural, rows)),
+        ToolbarUiRequest::ToolPreview { width, caption } => json!({
+            "heights": TOOL_PREVIEW_METRICS.heights(caption), "bounds": TOOL_PREVIEW_METRICS.layout(width, TOOL_PREVIEW_METRICS.heights(caption)[1], caption),
+        }),
         ToolbarUiRequest::NoticeLayout { text, content, actions, gap, min_text_width } => {
             json!({"beside": NoticePlacement { min_text_width, ..NoticePlacement::default() }.actions_beside(text, content, actions, gap)})
         }
@@ -264,4 +270,17 @@ fn native_metrics_expose_the_shared_layout_roles() {
     assert_eq!(metrics["divider"], serde_json::json!({
         "size": TOOLBAR_DIVIDER_SIZE, "length": DIVIDER_LENGTH, "inset": TOOLBAR_DIVIDER_INSET,
     }));
+}
+
+#[test]
+fn tool_set_queries_share_aligned_columns_and_natural_preview_geometry() {
+    let localizer = Localizer::shared(UiLanguage::English);
+    let columns = toolbar_ui(ToolbarUiRequest::ToolSetColumns { width: 380., natural: vec![75., 122., 84., 83., 93.], rows: false }, &localizer).unwrap();
+    assert_eq!(columns, serde_json::json!([112., 151., 113.]));
+    let preview = toolbar_ui(ToolbarUiRequest::ToolPreview { width: 368., caption: 26. }, &localizer).unwrap();
+    assert_eq!(preview["heights"], serde_json::json!([54., 66.]));
+    assert_eq!(preview["bounds"], serde_json::json!([
+        {"x":0.,"y":0.,"width":368.,"height":40.},
+        {"x":0.,"y":40.,"width":368.,"height":26.},
+    ]));
 }

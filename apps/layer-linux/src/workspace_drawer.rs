@@ -395,7 +395,7 @@ impl View {
         }
 
         root.set_overflow(gtk::Overflow::Hidden);
-        let color = matches!(drawer.anchor, DrawerAnchor::Phone { .. }) && drawer.columns.iter().flatten().any(|panel| *panel == Panel::Color);
+        let color = drawer.scrolls_together();
         let content: Columns = if color { glib::Object::new() } else { root.clone() };
         let shadow = previous.map(|view| view.shadow.clone()).unwrap_or_else(|| gtk::Box::new(gtk::Orientation::Vertical, 0));
         shadow.add_css_class("drawer-shadow");
@@ -444,21 +444,20 @@ impl View {
                     Panel::Layers => {
                         let v = Rc::new(w.layer_panel.sharing(w.localization().clone()));
                         v.bind(w);
-                        v.root.set_height_request(360);
                         Body::Layers(v)
                     }
                     Panel::FilterTypes | Panel::Adjustments | Panel::Properties | Panel::Stats => {
                         let v = effects
                             .get_or_insert_with(|| Rc::new(EffectPanels::with_filter_types(drawer.columns.iter().flatten().any(|p| *p == Panel::FilterTypes))))
                             .clone();
-                        if *panel == Panel::Adjustments {
-                            v.adjustments.set_height_request(440);
-                        }
-                        if *panel == Panel::FilterTypes { v.filter_types.set_height_request(440); }
                         Body::Effects(*panel, v)
                     }
                 };
                 let widget = body.widget();
+                let minimum = drawer.body_minimum_height(*panel);
+                if minimum > 0. {
+                    widget.set_height_request((minimum - (widget.margin_top() + widget.margin_bottom()) as f32).max(0.).ceil() as i32);
+                }
                 if matches!(&body, Body::Histogram(_)) { margins(&widget, PANEL_CONTENT_INSET as i32); }
                 widget.set_widget_name(&format!("drawer-panel-{panel:?}"));
                 column.append(&widget);

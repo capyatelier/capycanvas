@@ -1,3 +1,4 @@
+import {writeDrawerAudit} from './phone-audit.mjs';
 import assert from 'node:assert/strict';
 import {createDrawing} from './new-drawing-fixture.mjs';
 import {mkdir,writeFile} from 'node:fs/promises';
@@ -10,7 +11,7 @@ export async function checkLayerPropertiesDrawer({call,evaluate,settle}) {
   const root='.content-drawer .layer-inspector';
   const footer=`${root} .layer-properties-disclosure`;
   const height=()=>evaluate(`document.querySelector(${JSON.stringify(root)}).getBoundingClientRect().height`);
-  const capture=async name=>{const directory=process.env.LAYER_TEST_ARTIFACTS||'artifacts/layer-drawer-ports/web';await mkdir(directory,{recursive:true});const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/${name}.png`,Buffer.from(shot.data,'base64'));};
+  const capture=async name=>{const directory=process.env.LAYER_TEST_ARTIFACTS||'artifacts/layer-drawer-ports/web';await mkdir(directory,{recursive:true});const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/${name}.png`,Buffer.from(shot.data,'base64'));await writeDrawerAudit(evaluate,`${directory}/${name}.allocations.json`,name);};
   const auditFooter=async(theme,width,summary=false)=>{
     await call('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:false});await settle();await pause();
     const geometry=await evaluate(`(()=>{const root=document.querySelector('${root}'),footer=root.querySelector('.layer-properties-disclosure'),actions=root.querySelector('.layer-footer'),visible=[...actions.querySelectorAll('button')].filter(n=>n.getBoundingClientRect().width>0),slots=footer.querySelectorAll(':scope > .layer-properties-icon-slot'),label=footer.querySelector('.layer-properties-label'),summary=footer.querySelector('.layer-properties-summary'),text=footer.querySelector('.layer-properties-text'),rect=n=>{const r=n.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,center:r.x+r.width/2,right:r.right,bottom:r.bottom};};return{root:rect(root),footer:rect(footer),actions:rect(actions),first_action:rect(visible[0]),last_action:rect(visible.at(-1)),first_slot:rect(slots[0]),last_slot:rect(slots[1]),first_icon:rect(slots[0].querySelector('svg')),last_icon:rect(slots[1].querySelector('svg')),label:rect(label),summary:rect(summary),summary_hidden:summary.hidden,text:rect(text),text_gap:parseFloat(getComputedStyle(text).gap),action_count:visible.length};})()`);

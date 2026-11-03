@@ -1,3 +1,4 @@
+import {writeDrawerAudit} from './phone-audit.mjs';
 import assert from 'node:assert/strict';
 import {mkdir, writeFile} from 'node:fs/promises';
 
@@ -36,8 +37,8 @@ export async function checkBrushDrawers({call, evaluate, settle}) {
   const set = (panel,label) => `.content-drawer [data-control="${panel}"] [data-tool-choice="${label}"]`;
   const check = async first => {
     assert.deepEqual((await drawer()).columns,[[first],['tools'],['tool_settings']]);
-    assert.equal(await evaluate('document.querySelectorAll(".content-drawer > .drawer-column").length'),3);
-    const widths = await evaluate('[...document.querySelectorAll(".content-drawer > .drawer-column")].map(n=>n.getBoundingClientRect().width)');
+    assert.equal(await evaluate('document.querySelectorAll(".content-drawer > .drawer-contents > .drawer-column").length'),3);
+    const widths = await evaluate('[...document.querySelectorAll(".content-drawer > .drawer-contents > .drawer-column")].map(n=>n.getBoundingClientRect().width)');
     assert.ok(widths[0]<widths[1] && widths[1]===widths[2],`Narrow sets, equal tools and settings: ${widths}`);
     assert.equal(await evaluate('document.querySelectorAll(".content-drawer .tools-control .tool-groups").length'),0);
     assert.ok(await evaluate('document.querySelectorAll(".content-drawer [data-tool-setting]").length')>0);
@@ -46,6 +47,7 @@ export async function checkBrushDrawers({call, evaluate, settle}) {
     await mkdir('artifacts/brush-sculpt-web',{recursive:true});
     const shot = await call('Page.captureScreenshot',{format:'png'});
     await writeFile(`artifacts/brush-sculpt-web/${name}.png`,Buffer.from(shot.data,'base64'));
+    await writeDrawerAudit(evaluate,`artifacts/brush-sculpt-web/${name}.allocations.json`,name);
   };
   try {
     await send({type:'invoke',command:'drawing_brush'});

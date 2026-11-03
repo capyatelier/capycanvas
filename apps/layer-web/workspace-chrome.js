@@ -176,21 +176,26 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
     if(!source)return;
     source.dataset.drawerFacing=direction;
     markedSources.add(source);
-    // Flatten only ancestor corners whose rounding reaches this active tile.
-    const a=source.getBoundingClientRect(),facing={top:[0,1],right:[1,2],bottom:[2,3],left:[0,3]}[direction],vertical=direction==='top'||direction==='bottom';
+    const a=source.getBoundingClientRect(),anchor={x:a.x,y:a.y,width:a.width,height:a.height};
     for(let node=source.parentElement;node&&node!==workspace;node=node.parentElement) {
-      const b=node.getBoundingClientRect(),corners=[[b.left,b.top],[b.right,b.top],[b.right,b.bottom],[b.left,b.bottom]],style=getComputedStyle(node);
-      const radii=[style.borderTopLeftRadius,style.borderTopRightRadius,style.borderBottomRightRadius,style.borderBottomLeftRadius].map(r=>Math.max(.5,parseFloat(r)||0));
-      const square=facing.filter(i=>{const[x,y]=corners[i],[rx,ry]=vertical?[radii[i],.5]:[.5,radii[i]];return x>=a.left-rx&&x<=a.right+rx&&y>=a.top-ry&&y<=a.bottom+ry;});
+      const b=node.getBoundingClientRect();
+      const corners=app.toolbar_ui({type:'drawer_source_corners',anchor,direction,container:{x:b.x,y:b.y,width:b.width,height:b.height}});
+      const square=corners.flatMap((joined,index)=>joined?[index]:[]);
       if(square.length){node.dataset.drawerSourceCorners=[...new Set([...(node.dataset.drawerSourceCorners?.split(' ')||[]),...square])].join(' ');markedSources.add(node);}
     }
   }
+
   function refreshSource(record) {
     const anchor=record.drawer.anchor,key=JSON.stringify(anchor);
     if(record.sourceKey===key&&record.source?.isConnected)return;
     record.sourceKey=key;
-    record.source=anchor.kind==="header"?workspace.querySelector(`[data-header-item="${anchor.id}"]:not([hidden]) .header-tool`):record.column!=null?workspace.querySelector(`.collapsed-column[data-column="${record.column}"] .column-tab[data-panel="${anchor.origin}"]`):
-      [...workspace.querySelectorAll(`.toolbar-controls[data-panel="${anchor.panel}"] > [data-tile="${anchor.tile}"] > button`)].find(node=>node.getBoundingClientRect().width>0);
+    if(anchor.kind==='phone') {
+      const target=anchor.anchor;
+      record.source=workspace.querySelector(target.kind==='capy'?'#zen-capy':target.kind==='tool_settings'?'#phone-tool-settings':`#phone-tool-${target.id}`);
+    } else if(anchor.kind==='header')record.source=workspace.querySelector(`[data-header-item="${anchor.id}"]:not([hidden]) .header-tool`);
+    else if(anchor.kind==='column')record.source=workspace.querySelector(`.collapsed-column[data-column="${anchor.column}"] .column-tab[data-panel="${anchor.origin}"]`);
+    else if(anchor.kind==='tile')record.source=[...workspace.querySelectorAll(`.toolbar-controls[data-panel="${anchor.panel}"] > [data-tile="${anchor.tile}"] > button`)].find(node=>node.getBoundingClientRect().width>0);
+    else record.source=null;
   }
   function bridge(node,c) {
     if(!node){node=document.createElementNS("http://www.w3.org/2000/svg","svg");node.classList.add("drawer-bridge");node.setAttribute('aria-hidden','true');workspace.append(node);}
@@ -216,10 +221,11 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
         // from the old body leaves the new anchor disconnected during the move.
         const switching=record&&JSON.stringify(record.drawer.anchor)!==JSON.stringify(drawer.anchor);
         const from=record?.placement;
-        if(record)for(const body of record.bodies){customization.discardFields(body);for(const child of body.children)child.disposePanel?.();body.remove();}
+        if(record){for(const body of record.bodies){customization.discardFields(body);for(const child of body.children)child.disposePanel?.();}record.contents.remove();}
         const shadow=record?.shadow??element("div","drawer-shadow");shadow.setAttribute("aria-hidden","true");
         const root=record?.root??element("section","content-drawer");
         if(!record){workspace.append(shadow,root);root.dataset.drawer=String(id);root.setAttribute("aria-label","Panel drawer");}
+        const contents=element('div','drawer-contents');root.append(contents);
         root.classList.toggle("picker-drawer",!!drawer.compact);
         const tabs=root.querySelector(":scope > .drawer-tabs");
         if(tabs&&tabKey(record.drawer.tabs)!==tabKey(drawer.tabs)){releaseTabs(tabs);tabs.remove();}
@@ -229,14 +235,14 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
           for(const panel of ids) {
             const view=customization.view(panel),toolbarPanel=state().workspace.layout.panels.find(p=>p.id===panel)?.content.kind==="toolbar";
             let child;
-            if(panel==="layers"&&layer_properties!=null){inspector=createLayerInspector({app,state,workspace,element,button,icon,contentPanel,toggle:()=>send({type:"toggle_layer_drawer_properties"}),invalidate:()=>{if(!animating){animating=true;requestAnimationFrame(animate);}}});child=inspector.root;body.classList.add("layer-inspector-column");}
+            if(panel==="layers"&&layer_properties!=null){inspector=createLayerInspector({app,state,workspace,element,button,icon,contentPanel,column, toggle:()=>send({type:"toggle_layer_drawer_properties"}),invalidate:()=>{if(!animating){animating=true;requestAnimationFrame(animate);}}});child=inspector.root;body.classList.add("layer-inspector-column");}
             else if(toolbarPanel){child=toolbar(panel);child.dataset.drawerToolbar=panel;}
-            else child=contentPanel(panel,drawer.columns.flat().includes("filter_types"),tool_set?()=>state().customization.drawer?.tool_set:null);
+            else child=contentPanel(panel,drawer.columns.flat().includes("filter_types"),()=>app.tool_panel(panel,drawer.anchor));
             body.append(child);
           }
-          root.append(body);return body;
+          contents.append(body);return body;
         });
-        record=Object.assign(record??{},{key,root,shadow,bodies,column,drawer,inspector,from,started:null,switching:!!switching,placement:from});drawers.set(id,record);
+        record=Object.assign(record??{},{key,root,contents,shadow,bodies,column,drawer,inspector,from,started:null,switching:!!switching,placement:from});drawers.set(id,record);
       }
       record.drawer=drawer;refreshSource(record);record.measure=null;
       record.tabStyle=drawer.tabs?app.group_tab_style(drawer.tabs.group):null;
@@ -265,8 +271,17 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
         r.measuredTile=tile;
         r.measure??=app.drawer_measure({viewport:[workspace.clientWidth,workspace.clientHeight],column:r.column,tiles});
         if(!r.measure.measure){dispose(r);drawers.delete(id);continue;}
+        r.contents.classList.toggle('shared-scroll',r.measure.scrolls_together);
         for(const [index,body] of r.bodies.entries()) {
           body.style.width=`${r.measure.measure.placement.columns[index].width}px`;
+          for(const [i,child]of [...body.children].entries()){
+            if(r.styledMeasure!==r.measure){
+              const minimum=r.measure.minimums[index][i],style=getComputedStyle(child);
+              const height=Math.max(0,minimum-parseFloat(style.marginTop)-parseFloat(style.marginBottom));
+              child.style.minHeight=`${height}px`;child.style.height=minimum?`${height}px`:'';
+            }
+            child.arrangePanel?.();
+          }
           for(const strip of body.querySelectorAll("[data-drawer-toolbar]")) {
             const geometry=r.measure.toolbars.find(t=>t.panel===strip.dataset.drawerToolbar).layout;
             strip.style.height=`${geometry.content_height}px`;
@@ -274,11 +289,16 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
           }
         }
       }
+      r.styledMeasure=r.measure;
+      const color=r.root.querySelector('[data-control="color_wheel"]');
+      const colorFacts=color?.measureColor();
+      const colorMeasure=colorFacts?{hdr:colorFacts.hdr,fixed_height:Math.max(0,color.closest('.panel').getBoundingClientRect().height-colorFacts.height)}:null;
       const page=r.inspector?.measure(now);
       const heights=r.bodies.map(body=>page?.height??contentHeight(body)+(r.drawer.tabs?resolved.tab_bar_height:0));
       const progress=matchMedia("(prefers-reduced-motion: reduce)").matches?1:Math.min(1,(now-r.started)/catalog.panel_expansion_ms);
-      const result=app.drawer({viewport:[workspace.clientWidth,workspace.clientHeight],column:r.column,heights,progress,from:r.from??null,closing:!!r.closing});
+      const result=app.drawer({viewport:[workspace.clientWidth,workspace.clientHeight],column:r.column,heights,color:colorMeasure,progress,from:r.from??null,closing:!!r.closing});
       if(!result || (r.closing&&progress===1)){dispose(r);drawers.delete(id);continue;}
+      if(!r.closing)color?.setColorFit(result.color_fit);
       r.placement=result.placement;r.connection=result.connection;place(r.root,r.placement.bounds);
       place(r.shadow,r.placement.bounds);
       const source=r.source;

@@ -1,3 +1,4 @@
+import {writeDrawerAudit} from './phone-audit.mjs';
 import {dropdownChoice} from './dropdown-fixture.mjs';
 import assert from 'node:assert/strict';
 import {createDrawing} from './new-drawing-fixture.mjs';
@@ -18,7 +19,7 @@ export async function checkFilterDrawer({call,evaluate,settle}) {
     const p=await point(selector);await event('down',p,device);await event('up',p,device);await settle();await pause();
   };
   const swipe=async(selector,dx,dy,device)=>{const p=await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});const r=n.parentElement.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);await event('down',p,device);for(let i=1;i<=6;i++)await event('move',{x:p.x+dx*i/6,y:p.y+dy*i/6},device);await event('up',{x:p.x+dx,y:p.y+dy},device);await settle();await pause();};
-  const capture=async name=>{await mkdir('artifacts/filters-web',{recursive:true});const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`artifacts/filters-web/${name}.png`,Buffer.from(shot.data,'base64'));};
+  const capture=async name=>{await mkdir('artifacts/filters-web',{recursive:true});const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`artifacts/filters-web/${name}.png`,Buffer.from(shot.data,'base64'));await writeDrawerAudit(evaluate,`artifacts/filters-web/${name}.allocations.json`,name);};
   console.log("Filter drawer: switching to Sketch");
   await evaluate(`layerApp.app.workspace_input(JSON.stringify({type:'switch',id:'builtin:workspace:painter'}));null`);
   await wait('JSON.parse(layerApp.app.workspace_view()).id==="builtin:workspace:painter"&&!JSON.parse(layerApp.app.workspace_view()).busy');

@@ -11,12 +11,11 @@ use layer_ui::{
     ToolActionGroup, UiState,
 };
 
-const TOOL_ROW_HEIGHT: i32 = 44;
-
 /// A body can be projected in a dock or a tool drawer without reparenting the
 /// other view. Preview textures are shared by the existing immutable cache.
 pub struct ToolSet {
-    pub root: gtk::Box,
+    pub root: crate::dialog_content::DialogContent,
+    group_rows: Rc<Cell<bool>>,
     panel: layer_ui::Panel,
     groups: gtk::FlowBox,
     divider: gtk::Separator,
@@ -31,16 +30,25 @@ impl ToolSet {
         Self::for_panel(layer_ui::Panel::Brushes)
     }
     pub fn for_panel(panel: layer_ui::Panel) -> Self {
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        let root = crate::dialog_content::new(gtk::Orientation::Vertical, layer_ui::PANEL_GROUP_SPACING as i32);
         let groups = gtk::FlowBox::builder()
             .homogeneous(false)
             .min_children_per_line(1)
-            .max_children_per_line(if matches!(panel, layer_ui::Panel::BrushSets | layer_ui::Panel::SculptSets) { 1 } else { 16 })
             .selection_mode(gtk::SelectionMode::None)
             .column_spacing(2)
             .row_spacing(2)
             .build();
         groups.add_css_class("tool-groups");
+        let group_rows = Rc::new(Cell::new(false));
+        crate::dialog_content::on_resize(&root, glib::clone!(#[weak] groups, #[strong] group_rows, move |width| {
+            let natural = std::iter::successors(groups.first_child(), |child| child.next_sibling())
+                .filter(|child| child.is_visible()).map(|child| child.measure(gtk::Orientation::Horizontal, -1).1 as f32).collect::<Vec<_>>();
+            let columns = layer_ui::tool_set_columns(width as f32, &natural, group_rows.get());
+            let count = (columns.len() as u32).max(1);
+            if count > groups.max_children_per_line() { groups.set_max_children_per_line(count); }
+            if groups.min_children_per_line() != count { groups.set_min_children_per_line(count); }
+            if groups.max_children_per_line() != count { groups.set_max_children_per_line(count); }
+        }));
         let divider = gtk::Separator::builder().orientation(gtk::Orientation::Horizontal)
             .margin_start(4).margin_end(4).visible(false).build();
         divider.set_widget_name("tool-set-divider");
@@ -48,9 +56,9 @@ impl ToolSet {
         root.append(&groups);
         root.append(&divider);
         root.append(&list);
-        list.set_visible(!matches!(panel, layer_ui::Panel::BrushSets | layer_ui::Panel::SculptSets));
         Self {
             root,
+            group_rows,
             panel,
             groups,
             divider,
@@ -65,10 +73,10 @@ impl ToolSet {
         self.refresh(workspace, state.tool_panel(self.panel), state.theme, false);
     }
     pub fn refresh(&self, workspace: &Rc<Workspace>, view: &ToolSetView, theme: Theme, sets_column: bool) {
-        let view = ToolSetView {
-            groups: if self.panel == layer_ui::Panel::Tools && sets_column { Vec::new() } else { view.groups.clone() },
-            subtools: if matches!(self.panel, layer_ui::Panel::BrushSets | layer_ui::Panel::SculptSets) { Vec::new() } else { view.subtools.clone() },
-        };
+        let presentation = view.presentation(self.panel, sets_column);
+        self.group_rows.set(presentation.groups_are_rows);
+        self.list.set_visible(presentation.subtools_visible);
+        let view = ToolSetView { groups: presentation.groups.to_vec(), subtools: presentation.subtools.to_vec() };
         let same = |a: &[ToolSetItem], b: &[ToolSetItem]| {
             a.len() == b.len()
                 && a.iter().zip(b).all(|(a, b)| {
@@ -91,11 +99,11 @@ impl ToolSet {
                 let button = workspace.action_button(&item.label, item.action.clone());
                 button.add_css_class("flat");
                 button.add_css_class("tool-group");
-                let media = matches!(self.panel, layer_ui::Panel::BrushSets | layer_ui::Panel::SculptSets);
+                let media = presentation.groups_are_rows;
                 if media { button.set_widget_name(&format!("{}-{}", if self.panel == layer_ui::Panel::SculptSets { "sculpt-set" } else { "brush-set" }, item.icon)); }
                 button.set_size_request(
-                    if media { (layer_ui::BRUSH_SETS_MIN_WIDTH - 2.0 * layer_ui::PANEL_CONTENT_INSET) as i32 } else { -1 },
-                    if media { TOOL_ROW_HEIGHT } else { layer_ui::PANEL_CONTROL_METRICS.control_height as i32 },
+                    presentation.group_min_width as i32,
+                    presentation.group_height as i32,
                 );
                 let content = aligned_icon_label(&item.label, item.icon, 0.0);
                 if let Some(label) = content.last_child().and_downcast::<gtk::Label>() {
@@ -112,10 +120,6 @@ impl ToolSet {
         }
         let rebuild = !same(&previous.subtools, &view.subtools);
         if rebuild {
-            // Short selection command rows must not set a tall minimum for
-            // the adjacent settings panel.
-            let selection = view.subtools.iter().any(|i| matches!(i.action,
-                UiAction::Invoke {command: layer_ui::CommandId::TonalSelect}));
             while let Some(child) = self.list.first_child() {
                 self.list.remove(&child);
             }
@@ -140,7 +144,7 @@ impl ToolSet {
                     preview
                 });
                 if preview.is_none() {
-                    button.set_size_request(-1, if selection {32} else {TOOL_ROW_HEIGHT});
+                    button.set_size_request(-1, presentation.plain_height as i32);
                     if let UiAction::Invoke { command } = item.action {
                         button.set_widget_name(&format!("tool-choice-{command:?}"));
                     }
@@ -184,7 +188,7 @@ fn tool_label(item: &ToolSetItem) -> gtk::Box {
 }
 fn preview_caption(item: &ToolSetItem) -> gtk::Box {
     let height = layer_ui::PANEL_CONTROL_METRICS.control_height as i32;
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, layer_ui::PANEL_GROUP_SPACING as i32);
     row.set_can_target(false);
     let icon = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     icon.add_css_class("tool-caption-surface");
@@ -211,7 +215,7 @@ pub fn icon_label(text: &str, icon: &str) -> gtk::Box {
 }
 
 pub(crate) fn aligned_icon_label(text: &str, icon: &str, xalign: f32) -> gtk::Box {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, layer_ui::PANEL_GROUP_SPACING as i32);
     row.set_valign(gtk::Align::Center);
     row.append(&crate::icons::image(&format!("layer-{}-symbolic", icon)));
     let label = gtk::Label::new(Some(text));

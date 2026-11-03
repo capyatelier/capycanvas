@@ -31,23 +31,51 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
     else return null;
     updates.set(root, refresh); refresh();
     root.refreshEditor = refresh;
-    root.disposeEditor = () => { updates.delete(root); root.navigatorDispose?.(); root.disposeSettings?.(); };
+    root.disposeEditor = () => { updates.delete(root); root.disposeView?.(); root.disposeSettings?.(); };
     return root;
   };
   function toolSet(root, panel, readView) {
-    let key = "", rows = [];
+    let key = "", rows = [], view, dirty=true, layoutWidth=0;
+    root.style.setProperty('--tool-preview-height',`${catalog.tool_preview_metrics.preview_height}px`);
+    root.style.setProperty('--tool-preview-minimum',`${catalog.tool_preview_metrics.minimum_height}px`);
+    root.style.setProperty('--tool-caption-opacity',String(catalog.tool_preview_metrics.caption_opacity));
+    const resize=new ResizeObserver(()=>{dirty=true;arrange();});resize.observe(root);
+    root.disposeView=()=>resize.disconnect();
+    root.arrangeEditor=arrange;
+    function arrange(){
+      const groups=root.querySelector('.tool-groups'),width=root.clientWidth;
+      if(!width||!view||!dirty&&layoutWidth===width)return;
+      dirty=false;layoutWidth=width;
+      if(groups){
+        const buttons=[...groups.children];
+        for(const node of buttons){node.style.width='max-content';node.style.maxWidth='none';}
+        const natural=buttons.map(node=>node.offsetWidth);
+        for(const node of buttons){node.style.width='';node.style.maxWidth='';}
+        const columns=app.toolbar_ui({type:'tool_set_columns',width,natural,rows:view.groups_are_rows});
+        groups.style.gridTemplateColumns=columns.map(width=>`${width}px`).join(' ');
+      }
+      for(const row of rows)if(row.image){
+        const label=row.node.querySelector('.tool-choice-label'),width=row.node.clientWidth-2*view.gap;
+        const geometry=app.toolbar_ui({type:'tool_preview',width,caption:label.getBoundingClientRect().height});
+        row.node.style.height=`${geometry.heights[1]}px`;
+        for(const [node,bounds]of [[row.image,geometry.bounds[0]],[label,geometry.bounds[1]]])
+          Object.assign(node.style,{left:`${view.gap+bounds.x}px`,top:`${bounds.y}px`,width:`${bounds.width}px`});
+        row.image.style.height=`${geometry.bounds[0].height}px`;
+      }
+    }
     return () => {
-      const view = readView?.() || state().tool_panels[panel] || state().tool_set;
-      root.classList.toggle('tonal-tool-list', state().tool_extra.some(o=>o.Choice?.id==='tonal-tones'));
+      view = readView?.() || app.tool_panel(panel,null);
+      root.classList.toggle('tool-set-rows',view.groups_are_rows);
+      for(const [name,value]of [['group-height',view.group_height],['group-min-width',view.group_min_width],['plain-height',view.plain_height],['gap',view.gap],['spacing',view.spacing]])root.style.setProperty(`--tool-${name}`,`${value}px`);
+
       const next = JSON.stringify([view.groups, view.subtools].map(items => items.map(({label,selected,enabled,disabled_reason,...item})=>item)),(_,value)=>typeof value==='bigint'?String(value):value);
       if (next !== key) {
-        key = next; rows = []; root.replaceChildren();
+        key = next; rows = []; dirty=true; resize.disconnect();resize.observe(root);root.replaceChildren();
         for (const [kind, items] of [["groups",view.groups], ["subtools",view.subtools]]) {
           if (!items.length) continue;
-          if (kind === "subtools" && view.groups.length) root.append(element("div", "tile-divider column-divider tool-set-divider"));
+          if (kind === "subtools" && view.groups.length) root.append(element("div", "tool-set-divider"));
           const list = element("div", `tool-${kind}`); root.append(list);
           for (const [index,item] of items.entries()) {
-            const read=()=>(readView?.()||state().tool_panels[panel]||state().tool_set)[kind][index];
             const node = button("", () => dispatch(item.action), "tool-choice-button");
             node.bubbleChoice = item.action;
             if(app.bubble_grab({type:'choice',action:item.action}))node.dataset.bubbleSource='';
@@ -56,20 +84,24 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
             if (item.preview != null) {
               image = element("img", "brush-preview"); image.alt = ""; image.draggable = false;
               node.append(image); node.dataset.brush = item.preview;
-            } else if (kind === "groups") node.append(icon(item.icon));
+            }
             const label = element("span", "tool-choice-label");
-            if (item.preview != null || kind === "subtools") label.append(icon(item.icon));
-            label.append(element("span", "tool-choice-name", ()=>read()?.label??''));
-            node.append(label); list.append(node); rows.push({node,image,kind,index});
+            if(item.preview!=null){const slot=element('span','tool-caption-surface tool-caption-icon');slot.append(icon(item.icon));label.append(slot);}
+            else {const glyph=element('span','tool-choice-icon');glyph.append(icon(item.icon));label.append(glyph);}
+            const name=element("span", "tool-choice-name");
+            if(item.preview!=null){const surface=element('span','tool-caption-surface tool-caption-name');surface.append(name);label.append(surface);}else label.append(name);
+            resize.observe(name);
+            node.append(label); list.append(node); rows.push({node,name,image,kind,index});
           }
         }
         contentChanged(panel);
       }
-      for (const {node,image,kind,index} of rows) {
-        const item=view[kind][index];node.disabled=item.enabled===false;node.classList.toggle('unavailable-tool',item.enabled!==false&&!!item.disabled_reason);node.dataset.toolChoice=item.label;node.setAttribute("aria-label",item.label);node.title=item.disabled_reason??app.action_tooltip(item.label,item.action);
+      for (const {node,name,image,kind,index} of rows) {
+        const item=view[kind][index];if(name.textContent!==item.label){name.textContent=item.label;dirty=true;}node.disabled=item.enabled===false;node.classList.toggle('unavailable-tool',item.enabled!==false&&!!item.disabled_reason);node.dataset.toolChoice=item.label;node.setAttribute("aria-label",item.label);node.title=item.disabled_reason??app.action_tooltip(item.label,item.action);
         if(image){const source=asset(`brush-previews/${item.preview}-${state().theme}.webp`);if(image.getAttribute('src')!==source)image.src=source;}
         const pressed=String(item.selected);if(node.getAttribute("aria-pressed")!==pressed)node.setAttribute("aria-pressed",pressed);
       }
+      arrange();
     };
   }
   function toolSettings(root) {
@@ -246,7 +278,13 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
     track.ondblclick=()=>color({op:'hdr_intensity',stops:0});track.onkeydown=e=>{if(['ArrowLeft','ArrowDown','ArrowRight','ArrowUp','Home'].includes(e.key)){e.preventDefault();color({op:'hdr_intensity',stops:e.key==='Home'?0:Math.max(-2,Math.min(6,view.intensity+(['ArrowLeft','ArrowDown'].includes(e.key)?-.1:.1)))});}};
     const readout=button("",()=>color({op:"toggle_readout"}),"color-readout"),numbers=element("canvas");
     numbers.setAttribute("aria-hidden","true");readout.append(numbers);stage.append(readout);
-    let view,layout,layoutWidth=0,frameWidth=0,frameHeight=0,naturalLayout,naturalAspect="",paintKey="",previewing=false;
+    let view,layout,layoutWidth=0,frameWidth=0,frameHeight=0,naturalLayout,naturalAspect="",paintKey="",previewing=false,fitted;
+    root.measureColor=()=>({height:frame.getBoundingClientRect().height,hdr:view.hdr});
+    root.setColorFit=next=>{
+      if(!fitted&&!next||fitted&&next&&fitted.size===next.size&&fitted.height===next.height&&fitted.hdr===view.hdr)return;
+      fitted=next?{...next,hdr:view.hdr}:null;frameWidth=0;
+      frame.style.height=next?`${next.height}px`:'';frame.style.flex=next?'none':'';draw();
+    };
     const painter=wheelPainter({canvas:wheel,worker:fieldWorker,request:pixels=>app.color_field_request(pixels),hueStops:hueStopCache(app),repaint:()=>{paintKey='';queuePaint();}});
     const place=(node,[x,y,w,h])=>Object.assign(node.style,{left:`${x}px`,top:`${y}px`,width:`${w}px`,height:`${h}px`});
     function draw() {
@@ -254,14 +292,14 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
       const geometry=size=>app.color_ui({type:"layout",size,hdr:view.hdr});
       const resized=availableWidth!==frameWidth||layout?.hdr!==view.hdr;
       if(resized){
-        const minimum=Math.ceil(geometry(128).height);naturalLayout=geometry(availableWidth);
+        const minimum=Math.ceil(fitted?.height??geometry(128).height);naturalLayout=geometry(availableWidth);
         frame.style.minHeight=root.style.minHeight=`${minimum}px`;
-        const aspect=`${availableWidth} / ${naturalLayout.height}`;
+        const aspect=fitted?'auto':`${availableWidth} / ${naturalLayout.height}`;
         if(aspect!==naturalAspect){naturalAspect=aspect;frame.style.aspectRatio=aspect;contentChanged("color");}
       }
       const height=frame.clientHeight;
       if(resized||height!==frameHeight){
-        layout=app.color_ui({type:"fit_layout",width:availableWidth,height,hdr:view.hdr});
+        layout=fitted??app.color_ui({type:"fit_layout",width:availableWidth,height,hdr:view.hdr});
         const width=layout.size;
         frameWidth=availableWidth;frameHeight=height;layoutWidth=width;layout.hdr=view.hdr;
         stage.style.width=`${width}px`;stage.style.height=`${layout.height}px`;
@@ -347,7 +385,7 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
     function flushPaint() { pendingPaints.delete(flushPaint); cancelAnimationFrame(resizeFrame); resizeFrame=null; draw(); }
     function queuePaint() { pendingPaints.add(flushPaint); if(!resizeFrame)resizeFrame=requestAnimationFrame(flushPaint); }
     const resize=new ResizeObserver(queuePaint);resize.observe(frame);
-    root.navigatorDispose=()=>{painter.dispose();touches.dispose();if(pressed!=null){pressed=null;contact('up');}resize.disconnect();cancelAnimationFrame(resizeFrame);pendingPaints.delete(flushPaint)};
+    root.disposeView=()=>{painter.dispose();touches.dispose();if(pressed!=null){pressed=null;contact('up');}resize.disconnect();cancelAnimationFrame(resizeFrame);pendingPaints.delete(flushPaint)};
     return ()=>{
       const preview=app.color_preview();
       const active=preview.picker.preview!=null;
@@ -372,7 +410,7 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
     const record={id:nextNavigator++,root,overview,surface,hole,size:""};navigators.set(overview,record);
     app.navigator_surface(record.id,surface);
     navigatorSizes.observe(overview);
-    root.navigatorDispose=()=>{navigatorSizes.unobserve(overview);navigators.delete(overview);app.remove_navigator_surface(record.id);};
+    root.disposeView=()=>{navigatorSizes.unobserve(overview);navigators.delete(overview);app.remove_navigator_surface(record.id);};
     let contact=null;
     const send=(e,phase)=>{const r=overview.getBoundingClientRect();dispatch({type:"navigator",phase,position:[e.clientX-r.x,e.clientY-r.y],viewport:[r.width,r.height]});};
     overview.addEventListener("pointerdown",e=>{if(e.button!==0)return;contact=e.pointerId;overview.setPointerCapture(contact);e.preventDefault();send(e,"down");});

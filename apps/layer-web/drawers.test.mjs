@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {mkdir,writeFile} from "node:fs/promises";
 
 export async function checkToolbarDrawerSwitching({call,evaluate,settle}) {
-  const saved=await evaluate('(()=>{const s=layerApp.state();return{workspace:s.workspace,brush:s.brush,commands:s.commands}})()'),fixture=structuredClone(saved.workspace);
+  const saved=await evaluate('(()=>{const s=layerApp.state();return{workspace:s.workspace,brush:s.brush,commands:s.commands,theme:s.settings.theme??null,viewport:[innerWidth,innerHeight]}})()'),fixture=structuredClone(saved.workspace);
   const reducedMotion=await evaluate('matchMedia("(prefers-reduced-motion: reduce)").matches');
   const wait=async()=>{await settle();await evaluate('new Promise(r=>setTimeout(r,300))');};
   const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await wait();};
@@ -33,13 +33,13 @@ export async function checkToolbarDrawerSwitching({call,evaluate,settle}) {
       assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector(i))}).getAttribute('aria-pressed')`),'true','New tool activates immediately');
       assert.equal(await evaluate('layerApp.state().brush.tool'),i===0?'brush':'eraser');
     }
-    assert.equal(await evaluate('document.querySelectorAll(\'.content-drawer[data-drawer="tool"] > .drawer-column\').length'),i===0?2:1);
-    if(i===2)assert.ok(await evaluate('(()=>{const column=document.querySelector(\'.content-drawer[data-drawer="tool"] > .drawer-column\').getBoundingClientRect(),footer=document.querySelector(\'.content-drawer[data-drawer="tool"] .palette-footer\').getBoundingClientRect();return footer.top>=column.top&&footer.bottom<=column.bottom+1})()'),'The color drawer must show the complete Palette footer');
+    assert.equal(await evaluate('document.querySelectorAll(\'.content-drawer[data-drawer="tool"] > .drawer-contents > .drawer-column\').length'),i===0?2:1);
+    if(i===2)assert.ok(await evaluate('(()=>{const column=document.querySelector(\'.content-drawer[data-drawer="tool"] > .drawer-contents > .drawer-column\').getBoundingClientRect(),footer=document.querySelector(\'.content-drawer[data-drawer="tool"] .palette-footer\').getBoundingClientRect();return footer.top>=column.top&&footer.bottom<=column.bottom+1})()'),'The color drawer must show the complete Palette footer');
     await measuredWidths(`toolbar opener ${i}`);
   };
   const toolCommands=['pen','pencil','brush','eraser','airbrush','retouch','blend','liquify','lasso','move','hand','eyedropper','gradient','figure','ruler','auto_select','fill'];
   const originalTool=saved.commands.find(c=>c.selected&&toolCommands.includes(c.id))?.id;
-  await evaluate(`window.drawerMeasurements={query:layerApp.app.drawer,plan:layerApp.app.drawer_measure,samples:[],plans:0};layerApp.app.drawer=function(q){const result=drawerMeasurements.query.call(this,q);if(result&&!q.closing){const root=document.querySelector('.content-drawer[data-drawer="'+(q.column??'tool')+'"]');drawerMeasurements.samples.push({widths:[...root.querySelectorAll(':scope > .drawer-column')].map(n=>parseFloat(n.style.width)),target:result.placement.columns.map(c=>c.width)});}return result;};if(drawerMeasurements.plan)layerApp.app.drawer_measure=function(q){drawerMeasurements.plans++;return drawerMeasurements.plan.call(this,q);};`);
+  await evaluate(`window.drawerMeasurements={query:layerApp.app.drawer,plan:layerApp.app.drawer_measure,samples:[],plans:0};layerApp.app.drawer=function(q){const result=drawerMeasurements.query.call(this,q);if(result&&!q.closing){const root=document.querySelector('.content-drawer[data-drawer="'+(q.column??'tool')+'"]');drawerMeasurements.samples.push({widths:[...root.querySelectorAll(':scope > .drawer-contents > .drawer-column')].map(n=>parseFloat(n.style.width)),target:result.placement.columns.map(c=>c.width)});}return result;};if(drawerMeasurements.plan)layerApp.app.drawer_measure=function(q){drawerMeasurements.plans++;return drawerMeasurements.plan.call(this,q);};`);
   const measuredWidths=async label=>{
     const result=await evaluate(`(()=>{const result={samples:drawerMeasurements.samples.splice(0),plans:drawerMeasurements.plans,reduced:matchMedia('(prefers-reduced-motion: reduce)').matches};drawerMeasurements.plans=0;return result;})()`);
     assert.ok(result.samples.length,`${label}: native drawer placement was queried`);
@@ -105,10 +105,28 @@ export async function checkToolbarDrawerSwitching({call,evaluate,settle}) {
       await contact('.collapsed-column .column-tab[data-panel="layers"]',device);await measuredWidths(`${device} switched column opener`);
       await contact('.collapsed-column .column-tab[data-panel="layers"]',device);
     }
+    await send({type:'restore_workspace',workspace:saved.workspace});
+    for(const [width,height]of [[412,891],[891,412]])for(const theme of ['light','dark']){
+      await call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
+      await send({type:'set_theme',theme});
+      assert.equal(await evaluate('!!layerApp.app.layout(innerWidth,innerHeight).phone'),true);
+      for(const device of ['mouse','touch','pen']){
+        const undo=await evaluate('layerApp.state().commands.find(c=>c.id==="undo").enabled');
+        await send({type:'phone',action:{kind:'panel',panel:'layers'}});
+        assert.equal((await model()).anchor.kind,'phone');
+        assert.equal(await evaluate(`(()=>{const c=document.querySelector('#canvas'),r=c.getBoundingClientRect();return document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===c;})()`),true,'The canvas contact is outside the phone drawer');
+        await contact('#canvas',device);
+        assert.equal(await model(),undefined,`${width}x${height}/${theme}/${device}: canvas contact dismisses the phone drawer`);
+        assert.equal(await evaluate('layerApp.state().commands.find(c=>c.id==="undo").enabled'),undo,'Dismissal keeps document history unchanged');
+      }
+    }
+    console.log('PASS: phone drawer canvas dismissal with mouse/touch/pen in both orientations and themes');
     console.log('PASS: first-click drawer switching on all toolbar edges and inside a collapsed drawer; mouse/touch/pen outside dismissal, menu activation and no canvas marks');
   } finally {
     await evaluate('layerApp.app.drawer=drawerMeasurements.query;if(drawerMeasurements.plan)layerApp.app.drawer_measure=drawerMeasurements.plan;delete window.drawerMeasurements');
     await call('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:reducedMotion?'reduce':'no-preference'}]});
+    await call('Emulation.setDeviceMetricsOverride',{width:saved.viewport[0],height:saved.viewport[1],deviceScaleFactor:1,mobile:false});
+    await send({type:'set_theme',theme:saved.theme});
     await send({type:'restore_workspace',workspace:saved.workspace});
     await send({type:'select_brush',id:saved.brush.preset});
     if(originalTool)await send({type:'invoke',command:originalTool});

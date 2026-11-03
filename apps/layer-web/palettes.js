@@ -1,5 +1,5 @@
 import {liveCopy,bindCopy} from './localization.js';
-const GAP = 4, CELL = 44, SLOP = 8;
+const SLOP = 8;
 const plain = (_, value) => typeof value === "bigint" ? Number(value) : value;
 const css = rgba => `rgba(${rgba.slice(0, 3).map(v => Math.round(Math.min(1, Math.max(0, v)) * 255)).join(",")},${rgba[3] ?? 1})`;
 const paint = (node, rgba) => { node.style.background = `linear-gradient(${css(rgba)},${css(rgba)}),repeating-conic-gradient(var(--checker-light) 0 25%,var(--checker-dark) 0 50%) 0 0 / 10px 10px`; };
@@ -118,7 +118,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
     root.replaceChildren(body, divider(), footer, note);
 
     const tiles = new Map();
-    let editing = false, drag = null, columns = 6, pitch = CELL, historyKey, choicesKey, currentKey, swatchCount = -1, rendered = false, layoutFrame = 0;
+    let editing = false, drag = null, columns = 0, pitch = 0, gap = 0, gridWidth = 0, historyKey, choicesKey, currentKey, swatchCount = -1, rendered = false, layoutFrame = 0;
     const current = () => app.color_panel().definition;
     const selectedSwatch = () => view.swatches.find(s => s.current);
     function report(text, notice = false) {
@@ -229,9 +229,14 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
     }
     function layoutGrids() {
       if (!body.clientWidth) return;
-      columns = Math.max(1, getComputedStyle(grid).gridTemplateColumns.split(" ").length);
-      pitch = parseFloat(getComputedStyle(grid).gridAutoRows) + GAP;
-      for (const [target, rows] of [[history, 1], [expanded, Math.min(4, Math.max(1, Math.floor((expanded.clientHeight + GAP) / pitch)))]]) {
+      if(gridWidth!==body.clientWidth){
+        gridWidth=body.clientWidth;
+        const geometry=app.color_ui({type:'palette_grid',width:gridWidth});
+        columns=Number(geometry.columns);pitch=Number(geometry.pitch);gap=Number(geometry.gap);
+        for(const [name,value]of [['columns',columns],['tile',`${pitch-gap}px`],['gap',`${gap}px`]])root.style.setProperty(`--palette-${name}`,value);
+        contentChanged('palettes');
+      }
+      for (const [target, rows] of [[history, 1], [expanded, Math.min(4, Math.max(1, Math.floor((expanded.clientHeight + gap) / pitch)))]]) {
         if (target === expanded && target.hidden) continue;
         const children = [...target.children], capacity = rows * columns;
         children.forEach((node, index) => {
@@ -305,7 +310,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
       if (!chooser.hidden || !expanded.hidden) return null;
       const clip = scroll.getBoundingClientRect(), g = grid.getBoundingClientRect();
       if (x < clip.left || x >= clip.right || y < clip.top || y >= clip.bottom || x < g.left || x >= g.right || y < g.top) return null;
-      const index = Math.floor((y - g.top) / pitch) * columns + Math.floor((x - g.left) * columns / (g.width + GAP));
+      const index = Math.floor((y - g.top) / pitch) * columns + Math.floor((x - g.left) * columns / (g.width + gap));
       return index < grid.children.length ? index : null;
     }
     function update() {
@@ -318,7 +323,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
       const preview = app.palette_reorder_preview(d.palette, d.id, slot ?? original);
       if (!preview) return;
       d.action = slot == null ? null : preview.action;
-      const cells = [...grid.children], cell = (grid.clientWidth + GAP) / columns;
+      const cells = [...grid.children], cell = (grid.clientWidth + gap) / columns;
       const position = index => [Math.round((index % columns) * cell), Math.floor(index / columns) * pitch];
       preview.order.forEach((id, target) => {
         const node = tiles.get(String(id))?.node;
@@ -424,6 +429,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
     root.addEventListener("keyup", e => { if ([" ", "Enter"].includes(e.key)) e.stopPropagation(); });
     const instance = {
       render,
+      arrange:layoutGrids,
       refresh() { render(false); },
       dispose() {
         finish(true); instances.delete(instance); resize.disconnect(); cancelAnimationFrame(layoutFrame);

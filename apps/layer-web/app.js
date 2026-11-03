@@ -882,12 +882,12 @@ function buildPanels() {
 }
 function contentPanel(id, splitPicker=false, readToolSet=null) {
   const panel=element("div",`panel ${id}-panel`);
-  if(readToolSet&&["brushes","tools"].includes(id)) {
-    const control=editor.control(id,readToolSet);panel.append(control);panel.refreshPanel=control.refreshEditor;
+  if(["brushes","brush_sets","sculpt_sets","tools"].includes(id)) {
+    const control=editor.control(id,readToolSet);panel.append(control);panel.refreshPanel=control.refreshEditor;panel.arrangePanel=()=>control.arrangeEditor?.();
   } else if(id==="proof") {
     panel.disposePanel=documents.mountProof(panel);panel.refreshPanel=()=>{};
   } else if(id==="palettes") {
-    const view=palettes.mount(panel);panel.refreshPanel=view.refresh;panel.disposePanel=view.dispose;
+    const view=palettes.mount(panel);panel.refreshPanel=view.refresh;panel.arrangePanel=view.arrange;panel.disposePanel=view.dispose;
   } else if(id==="layers") {
     const view=createLayerPanel({app,catalog,state:()=>state,panel,element,button,icon,dropdown,dispatch,applyChange,message,numberField,wake,dismissContext:()=>customization.dismissContext(),openMenu:node=>customization.openMenu(node)});
     panel.refreshPanel=view.refresh; panel.disposePanel=view.dispose; panel.measureUnit=view.measureUnit;

@@ -330,7 +330,7 @@ test('drawer plans follow exact native tile facts and retire missing sources',()
   const chrome=readFileSync(new URL('workspace-chrome.js',import.meta.url),'utf8');
   const native={column:41,anchor:{panel:'toolbar',tile:2},bounds:{x:12,y:24,width:36,height:36}};
   let plans=0,placements=0,disposed=0;
-  const body={style:{},querySelectorAll:()=>[]},record={column:null,drawer:{anchor:{kind:'tile',panel:'toolbar',tile:2}},bodies:[body],root:{style:{}},shadow:{style:{}},started:0};
+  const body={style:{},children:[],querySelectorAll:()=>[]},record={contents:{classList:{toggle(){}}},column:null,drawer:{anchor:{kind:'tile',panel:'toolbar',tile:2}},bodies:[body],root:{style:{},querySelector:()=>null},shadow:{style:{}},started:0};
   const bounds={x:0,y:0,width:242,height:120},drawers=new Map([['tool',record]]);
   const context={drawers,markedSources:new Set(),tiles:[structuredClone(native)],animating:false,catalog:{panel_expansion_ms:200},previousAnimationFrame:null,frameInterval:()=>16,
     workspace:{clientWidth:1200,clientHeight:900,querySelectorAll:()=>[]},
@@ -350,6 +350,20 @@ test('drawer plans follow exact native tile facts and retire missing sources',()
   const before=placements;step(null);assert.equal(disposed,1);assert.equal(drawers.has('tool'),false,'A missing native source leaves no drawer record');assert.equal(placements,before,'Missing sources are not placed from a stale plan');
 });
 
+test('drawer sources resolve typed phone anchors without a fabricated tile id',()=>{
+  const chrome=readFileSync(new URL('workspace-chrome.js',import.meta.url),'utf8'),queries=[];
+  const node={isConnected:true};
+  const context={workspace:{querySelector(selector){queries.push(selector);return node;},querySelectorAll:assert.fail}};
+  const start=chrome.indexOf('  function refreshSource('),end=chrome.indexOf('  function bridge(',start);
+  runInNewContext(chrome.slice(start,end)+'globalThis.resolveSource=refreshSource;',context);
+  const record={drawer:{anchor:{kind:'phone',anchor:{kind:'capy'}}}};
+  for(const [anchor,selector]of [[{kind:'capy'},'#zen-capy'],[{kind:'tool_settings'},'#phone-tool-settings'],[{kind:'tool',id:104},'#phone-tool-104']]){
+    record.drawer.anchor.anchor=anchor;context.resolveSource(record);assert.equal(record.source,node);assert.equal(queries.at(-1),selector);
+    const count=queries.length;context.resolveSource(record);assert.equal(queries.length,count,'An unchanged source is retained');
+  }
+  record.drawer.anchor={kind:'missing'};context.resolveSource(record);assert.equal(record.source,null);
+});
+
 test('drawer ticks clear owned marks without scanning the workspace',()=>{
   const chrome=readFileSync(new URL('workspace-chrome.js',import.meta.url),'utf8');
   const bounds={x:10,y:10,left:10,top:10,right:30,bottom:30,width:20,height:20};
@@ -359,11 +373,11 @@ test('drawer ticks clear owned marks without scanning the workspace',()=>{
   const source={dataset:{},parentElement:ancestor,isConnected:true,getBoundingClientRect:()=>bounds,closest:()=>null};
   let visible=source;
   const placement={bounds:{x:40,y:10,width:100,height:100},columns:[],direction:'right'};
-  const record={column:null,drawer:{anchor:{kind:'tile',panel:'toolbar',tile:2}},bodies:[],root:{style:{}},shadow:{style:{}},started:null,source};
+  const record={contents:{classList:{toggle(){}}},column:null,drawer:{anchor:{kind:'tile',panel:'toolbar',tile:2}},bodies:[],root:{style:{},querySelector:()=>null},shadow:{style:{}},started:null,source};
   const context={workspace,markedSources:new Set(),drawers:new Map([['tool',record]]),tiles:[{column:1,anchor:{panel:'toolbar',tile:2},bounds}],
     animating:true,previousAnimationFrame:null,frameInterval:()=>16,catalog:{panel_expansion_ms:200},
     getComputedStyle:()=>({borderTopLeftRadius:'8px',borderTopRightRadius:'8px',borderBottomRightRadius:'8px',borderBottomLeftRadius:'8px'}),
-    app:{drawer_measure:()=>({measure:{placement},toolbars:[]}),drawer:()=>({placement,connection:null})},
+    app:{toolbar_ui(request){assert.equal(request.type,'drawer_source_corners');return[false,true,true,false];},drawer_measure:()=>({measure:{placement},toolbars:[]}),drawer:()=>({placement,connection:null})},
     matchMedia:()=>({matches:false}),place(){},dispatch(){},measureColumnDrawers(){},editor:{queuePositions(){}},requestAnimationFrame(){}};
   const start=chrome.indexOf('  function markSource('),end=chrome.indexOf('  workspace.addEventListener("scroll"',start);
   runInNewContext(chrome.slice(start,end)+'\nglobalThis.mark=markSource;globalThis.tick=animate;',context);
@@ -384,8 +398,8 @@ test('drawer ticks clear owned marks without scanning the workspace',()=>{
 test('drawer progress follows frame deltas through delayed callbacks, close and idle restart',()=>{
   const chrome=readFileSync(new URL('workspace-chrome.js',import.meta.url),'utf8');
   const fixture=(closing=false,switching=false)=>{
-    const queries=[],callbacks=[],body={style:{},querySelectorAll:()=>[]},root={style:{},querySelectorAll:()=>[]},bounds={x:48,y:48,width:242,height:120};
-    const record={column:46,drawer:{anchor:{kind:'column',column:46,origin:'brushes'}},bodies:[body],root,shadow:{style:{}},started:null,closing,switching};
+    const queries=[],callbacks=[],body={style:{},children:[],querySelectorAll:()=>[]},root={style:{},querySelector:()=>null,querySelectorAll:()=>[]},bounds={x:48,y:48,width:242,height:120};
+    const record={contents:{classList:{toggle(){}}},column:46,drawer:{anchor:{kind:'column',column:46,origin:'brushes'}},bodies:[body],root,shadow:{style:{}},started:null,closing,switching};
     const context={drawers:new Map([[46,record]]),markedSources:new Set(),tiles:[],animating:true,previousAnimationFrame:null,catalog:{panel_expansion_ms:200},frameInterval:()=>16,entryTime:101.6,
       performance:{now:()=>context.entryTime},workspace:{clientWidth:1200,clientHeight:900,querySelectorAll:()=>[],querySelector:()=>null},
       app:{drawer_measure:()=>({measure:{placement:{columns:[bounds]}},toolbars:[]}),drawer(query){queries.push(query);const width=bounds.width*(query.closing?1-query.progress:Math.max(0,query.progress)),placement={...bounds,width};return{placement:{bounds:placement,columns:[placement],direction:'right'},connection:null};}},

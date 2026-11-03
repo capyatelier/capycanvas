@@ -532,6 +532,16 @@ impl ContentDrawer {
             self.dismissal = DrawerDismissal::Explicit;
         }
     }
+    pub fn scrolls_together(&self) -> bool {
+        matches!(self.anchor, DrawerAnchor::Phone { .. }) && self.panels().any(|panel| panel == Panel::Color)
+    }
+    pub fn body_minimum_height(&self, panel: Panel) -> f32 {
+        match panel {
+            Panel::Layers if self.layer_properties.is_none() => crate::PANEL_CONTROL_METRICS.drawer_layers_min_height + 2. * crate::PANEL_COMPOUND_SPACING,
+            Panel::FilterTypes | Panel::Adjustments => crate::PANEL_CONTROL_METRICS.drawer_filters_min_height,
+            _ => 0.,
+        }
+    }
     pub fn column_widths(&self, viewport_width: f32) -> Vec<f32> {
         if self.compact {
             return self.columns.iter().map(|panels| {

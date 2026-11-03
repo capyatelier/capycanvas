@@ -5,6 +5,7 @@ use super::*;
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ColorUiRequest {
+    PaletteGrid { width: i32 },
     ProfileEntries { entries: Vec<crate::profile_library::ProfileEntry>, #[serde(default)] query: String },
     IntensityArc { size:f32, stops:f32, #[serde(default)] depth:Option<layer_core::color::SampleDepth>, base:RgbColor, document_space:RgbSpace, recipe:layer_core::color::hdr::SdrRendition, headroom:f32 },
     IntensityPoint {size:f32, point:[f32;2], minimum:f32, maximum:f32},
@@ -69,8 +70,20 @@ pub struct GradientPreview {
 #[cfg(test)]
 fn color_ui(request: ColorUiRequest) -> Result<serde_json::Value, String> { color_ui_localized(request, &crate::Localizer::shared(crate::UiLanguage::English)) }
 
+#[test]
+fn palette_grid_transport_keeps_native_integer_rows_at_narrow_widths() {
+    for (width, columns, pitch) in [(226, 6, 38), (380, 8, 44)] {
+        assert_eq!(color_ui(ColorUiRequest::PaletteGrid { width }).unwrap(),
+            serde_json::json!({"columns":columns,"pitch":pitch,"gap":4}));
+    }
+}
+
 pub fn color_ui_localized(request: ColorUiRequest, localizer: &crate::localization::Localizer) -> Result<serde_json::Value, String> {
     let value = match request {
+        ColorUiRequest::PaletteGrid { width } => {
+            let grid = PaletteGridLayout::new(width);
+            return Ok(serde_json::json!({"columns":grid.columns,"pitch":grid.pitch,"gap":PaletteGridLayout::GAP}));
+        }
         ColorUiRequest::ProfileEntries { entries, query } => return Ok(serde_json::Value::Array(entries.iter()
             .filter(|entry| entry.matches(&query, localizer)).map(|entry| entry.localized_view(localizer)).collect())),
         ColorUiRequest::IntensityCaption { size, advances } => {

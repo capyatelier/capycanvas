@@ -451,6 +451,75 @@ pub struct ToolSetView {
     pub subtools: Vec<ToolSetItem>,
 }
 
+pub fn tool_set_columns(width: f32, natural: &[f32], rows: bool) -> Vec<f32> {
+    if !width.is_finite() || width <= 0. || natural.is_empty() || natural.len() > 256
+        || natural.iter().any(|size| !size.is_finite() || *size < 0.) { return Vec::new(); }
+    if rows { return vec![width]; }
+    let limit = natural.len().min(16);
+    let largest = natural.iter().copied().fold(0., f32::max);
+    let mut count = ((width / (largest + TILE_GAP)).floor() as usize).clamp(1, limit);
+    let requested = |count: usize| {
+        let mut columns = vec![0f32; count];
+        for (index, size) in natural.iter().enumerate() { columns[index % count] = columns[index % count].max(*size); }
+        columns
+    };
+    while count < limit {
+        let next = requested(count + 1);
+        if next.iter().sum::<f32>() + TILE_GAP * count as f32 > width { break; }
+        count += 1;
+    }
+    let mut columns = requested(count);
+    if count == 1 { columns[0] = width; return columns; }
+    let extra = (width - TILE_GAP * (count - 1) as f32 - columns.iter().sum::<f32>()).max(0.);
+    let each = (extra / count as f32).floor();
+    let remaining = extra - each * count as f32;
+    for (index, column) in columns.iter_mut().enumerate() { *column += each + (remaining - index as f32).clamp(0., 1.); }
+    columns
+}
+
+#[test]
+fn tool_set_columns_align_wrapped_rows_instead_of_greedily_packing_the_first_row() {
+    let sizes = [75., 122., 84., 83., 93.];
+    assert_eq!(tool_set_columns(380., &sizes, false), [112., 151., 113.]);
+    assert_eq!(tool_set_columns(288., &sizes, false), [129., 157.]);
+    assert_eq!(tool_set_columns(128., &sizes, true), [128.]);
+    assert_eq!(tool_set_columns(60., &sizes, false), [60.]);
+    assert!(tool_set_columns(f32::NAN, &sizes, false).is_empty());
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct ToolSetPresentation<'a> {
+    pub groups: &'a [ToolSetItem],
+    pub subtools: &'a [ToolSetItem],
+    pub groups_are_rows: bool,
+    pub subtools_visible: bool,
+    pub group_height: f32,
+    pub group_min_width: f32,
+    pub plain_height: f32,
+    pub gap: f32,
+    pub spacing: f32,
+}
+impl ToolSetView {
+    pub fn presentation(&self, panel: Panel, sets_column: bool) -> ToolSetPresentation<'_> {
+        let groups_are_rows = matches!(panel, Panel::BrushSets | Panel::SculptSets);
+        let groups = if panel == Panel::Tools && sets_column { &[][..] } else { &self.groups };
+        let subtools = if groups_are_rows { &[][..] } else { &self.subtools };
+        let selection = subtools.iter().any(|item| matches!(item.action, UiAction::Invoke { command: CommandId::TonalSelect }));
+        ToolSetPresentation {
+            groups, subtools, groups_are_rows, subtools_visible: !groups_are_rows,
+            group_height: if groups_are_rows { 44. } else { PANEL_CONTROL_METRICS.control_height },
+            group_min_width: if groups_are_rows { BRUSH_SETS_MIN_WIDTH - 2. * PANEL_CONTENT_INSET } else { -1. },
+            plain_height: if selection { 32. } else { 44. }, gap: PANEL_GROUP_SPACING, spacing: TILE_GAP,
+        }
+    }
+}
+impl crate::UiState {
+    pub fn tool_panel_presentation<'a>(&'a self, panel: Panel, drawer: Option<&'a ContentDrawer>) -> ToolSetPresentation<'a> {
+        drawer.and_then(|drawer| drawer.tool_set.as_ref()).unwrap_or_else(|| self.tool_panel(panel))
+            .presentation(panel, drawer.is_some_and(|drawer| drawer.sets_column))
+    }
+}
+
 /// Hosts render these projections without deciding which tools belong together.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct ToolPanels {

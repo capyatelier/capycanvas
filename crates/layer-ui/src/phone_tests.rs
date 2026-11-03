@@ -6,6 +6,63 @@ fn phone_session(viewport: [u32; 2]) -> UiSession<Recorder> {
 }
 
 #[test]
+fn phone_color_columns_share_one_scroller_in_both_orientations() {
+    for viewport in [[412, 891], [891, 412]] {
+        let mut s = phone_session(viewport);
+        let tile = s.state.workspace.layout.phone.as_ref().unwrap().iter().find(|tile| tile.control == ToolbarControl::Color).unwrap().id;
+        s.dispatch(UiAction::Phone { action: PhoneAction::Tool { tile } }).unwrap();
+        let mut drawer = s.state.customization.drawer.clone().unwrap();
+        assert!(drawer.scrolls_together());
+        drawer.anchor = DrawerAnchor::Header { id: 1 };
+        assert!(!drawer.scrolls_together());
+        s.dispatch(UiAction::Phone { action: PhoneAction::Panel { panel: Panel::Layers } }).unwrap();
+        assert!(!s.state.customization.drawer.as_ref().unwrap().scrolls_together());
+    }
+}
+
+#[test]
+fn drawer_body_minimums_preserve_scroll_bodies_without_overriding_the_layers_inspector() {
+    let mut s = phone_session([412, 891]);
+    s.dispatch(UiAction::Phone { action: PhoneAction::Panel { panel: Panel::Layers } }).unwrap();
+    let mut drawer = s.state.customization.drawer.clone().unwrap();
+    assert_eq!(drawer.body_minimum_height(Panel::Layers), 0.);
+    for panel in [Panel::Adjustments, Panel::FilterTypes] { assert_eq!(drawer.body_minimum_height(panel), 440.); }
+    for panel in [Panel::Color, Panel::Tools, Panel::Palettes] { assert_eq!(drawer.body_minimum_height(panel), 0.); }
+    drawer.layer_properties = None;
+    assert_eq!(drawer.body_minimum_height(Panel::Layers), 364.);
+}
+
+#[test]
+fn tool_panel_presentation_splits_sets_once_and_keeps_selection_rows_short() {
+    for viewport in [[412, 891], [891, 412]] {
+        let mut s = phone_session(viewport);
+        invoke(&mut s, CommandId::DrawingBrush);
+        let tile = s.state.workspace.layout.phone.as_ref().unwrap().iter()
+            .find(|tile| tile.control == (ToolbarControl::Command { command: CommandId::DrawingBrush })).unwrap().id;
+        s.dispatch(UiAction::Phone { action: PhoneAction::Tool { tile } }).unwrap();
+        let drawer = s.state.customization.drawer.as_ref().unwrap();
+        if viewport[0] > viewport[1] {
+            let sets = s.state.tool_panel_presentation(Panel::BrushSets, Some(drawer));
+            assert!(sets.groups_are_rows && !sets.groups.is_empty() && sets.subtools.is_empty());
+            assert_eq!(sets.group_height, 44.); assert_eq!(sets.gap, 6.);
+            let tools = s.state.tool_panel_presentation(Panel::Tools, Some(drawer));
+            assert!(tools.groups.is_empty() && !tools.subtools.is_empty());
+        } else {
+            let tools = s.state.tool_panel_presentation(Panel::Brushes, Some(drawer));
+            assert!(!tools.groups_are_rows && !tools.groups.is_empty() && !tools.subtools.is_empty());
+            assert_eq!(tools.group_height, 26.);
+        }
+        invoke(&mut s, CommandId::Select);
+        let view = s.state.tool_panel_presentation(Panel::Tools, None);
+        assert!(view.subtools.iter().any(|item| matches!(item.action, UiAction::ChooseToolVariant { variant: ToolVariant::Command { command: CommandId::TonalSelect }, .. })));
+        assert_eq!(view.plain_height, 44.);
+        let mut commands = s.state.tool_panel(Panel::Tools).clone();
+        commands.subtools[0].action = UiAction::Invoke { command: CommandId::TonalSelect };
+        assert_eq!(commands.presentation(Panel::Tools, false).plain_height, 32.);
+    }
+}
+
+#[test]
 fn phone_metrics_are_host_reports_while_rendering_is_suspended() {
     for platform in [Platform::Gtk, Platform::Web] {
         let mut s = session(platform);

@@ -191,7 +191,39 @@ pub(super) fn export_allocations(w: &Workspace, state_name: &str, capture_name: 
                     .find(|widget| widget.parent().is_some_and(|parent| Some(parent.type_()) == drawer_type)));
             add(&format!("drawer.column.{index}"),"drawer-column",widget);
         }
-        for panel in drawer.panels() { add(&format!("drawer.panel.{panel:?}"),"drawer-panel",named(&format!("drawer-panel-{panel:?}"))); }
+        for panel in drawer.panels() {
+            let body = named(&format!("drawer-panel-{panel:?}"));
+            add(&format!("drawer.panel.{panel:?}"),"drawer-panel",body.clone());
+            if let Some(body) = body {
+                if panel == Panel::Palettes {
+                    let overlay = body.first_child().and_downcast::<gtk::Overlay>().unwrap();
+                    let normal = overlay.child().unwrap();
+                    let history = normal.first_child().unwrap();
+                    let scroll = history.next_sibling().unwrap().next_sibling().unwrap();
+                    for (id, role, widget) in [("body", "panel-body", overlay.upcast()), ("history", "grid", history), ("scroll", "scroll", scroll)] {
+                        add(&format!("drawer.palettes.{id}"),role,Some(widget));
+                    }
+                    for (id, role, name) in [("footer", "toolbar", "palette-footer"), ("name", "button", "palette-color-name"), ("detail", "label", "palette-color-detail")] {
+                        let widget = if id == "footer" { widgets(&body).find(|widget| widget.has_css_class(name)) } else { named(name) };
+                        add(&format!("drawer.palettes.{id}"),role,widget);
+                    }
+                }
+                let panel_value = serde_json::to_value(panel).unwrap();
+                let Some(panel_id) = panel_value.as_str() else { continue; };
+                for (kind, class) in [("groups", "tool-group"), ("subtools", "brush-choice")] {
+                    for (index, button) in widgets(&body).filter(|widget| widget.has_css_class(class)).enumerate() {
+                        let id = format!("drawer.{panel_id}.{kind}.{index}");
+                        add(&id,"row",Some(button.clone()));
+                        add(&format!("{id}.icon"),"icon",widgets(&button).find(|widget| widget.is::<gtk::Image>()));
+                        add(&format!("{id}.label"),"label",widgets(&button).find(|widget| widget.is::<gtk::Label>()));
+                        if let Some(preview) = widgets(&button).find(|widget| widget.is::<gtk::Picture>()) {
+                            add(&format!("{id}.preview"),"preview",Some(preview));
+                        }
+                    }
+                }
+            }
+        }
+        if drawer.panels().any(|panel| panel == Panel::Color) { add("drawer.color.wheel","color-wheel",named("color-wheel")); }
     }
     if state.phone.menu {
         let bridge = std::iter::successors(w.phone.root.first_child(), |widget| widget.next_sibling())

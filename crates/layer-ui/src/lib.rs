@@ -103,7 +103,7 @@ pub use color::{
 };
 pub use tool_settings::{ToolActionGroup, ToolActionGroupView, ToolActionRow, ToolActionRowView, ToolSetting, ToolSettingAction};
 pub use tools::{
-    Tool, ToolFamily, ToolGroup, ToolPanels, ToolSetItem, ToolSetView, ToolMemory, ToolPreviewMetrics, TOOL_PREVIEW_METRICS, brush_catalog,
+    Tool, ToolFamily, ToolGroup, ToolPanels, ToolSetItem, ToolSetView, ToolSetPresentation, ToolMemory, ToolPreviewMetrics, TOOL_PREVIEW_METRICS, tool_set_columns, brush_catalog,
     brush_categories, brush_categories_localized, brush_catalog_localized, brush_ids, preset,
 };
 mod cursor;

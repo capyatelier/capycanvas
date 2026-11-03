@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {measurePhoneAuditElements,phoneAuditMatrix,phoneAuditFrameSpecifications} from './phone-audit.mjs';
+import {measurePhoneAuditElements,phoneAuditMatrix,phoneAuditFrameSpecifications,phoneAuditDrawerSpecifications} from './phone-audit.mjs';
 
 test('phone frame IDs preserve authored tiles and expose actual slider parts',()=>{
   const specs=phoneAuditFrameSpecifications([{id:88,control:{kind:'color'}},{id:91,control:{kind:'divider'}},{id:204,control:{kind:'command',command:'eraser'}}]);
@@ -43,4 +43,18 @@ test('phone audit measures DOM allocations and keeps missing separate from hidde
     visible.getBoundingClientRect=()=>({x:NaN,y:0,width:48,height:48});
     assert.throws(()=>measurePhoneAuditElements([spec('tile.1','.visible')],root),/Nonfinite/);
   } finally {globalThis.getComputedStyle=original;}
+});
+
+test('drawer allocations distinguish the Color stage from its painted disc',t=>{
+  const css=globalThis.CSS;globalThis.CSS={escape:value=>value};t.after(()=>globalThis.CSS=css);
+  const nodes=Object.fromEntries(['drawer','column','stage','color','disc'].map(id=>[id,{id}]));
+  const drawer=nodes.drawer;drawer.dataset={drawer:'tool'};
+  drawer.querySelectorAll=selector=>selector===':scope > .drawer-contents > .drawer-column'?[nodes.column]:[];
+  drawer.querySelector=selector=>({'.color-wheel-stage':nodes.stage,'.color-wheel-control':nodes.color,'.color-wheel-control canvas':nodes.disc}[selector]??null);
+  const root={querySelectorAll:selector=>selector==='.content-drawer'?[drawer]:selector.startsWith('#')?[nodes[selector.slice(1)]]:[]};
+  const specs=phoneAuditDrawerSpecifications(root);
+  assert.equal(new Set(specs.map(spec=>spec.id)).size,specs.length);
+  assert.deepEqual(specs.filter(spec=>spec.id==='drawer.color.wheel'||spec.id==='drawer.color.disc').map(spec=>[spec.id,spec.role,spec.selector]),[
+    ['drawer.color.wheel','color-wheel','#stage'],['drawer.color.disc','context','#disc'],
+  ]);
 });

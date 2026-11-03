@@ -1,4 +1,4 @@
-export function createLayerInspector({app, state, workspace, element, button, icon, contentPanel, toggle, invalidate}) {
+export function createLayerInspector({app, state, workspace, element, button, icon, contentPanel, column=null, toggle, invalidate}) {
   const root=element("div","layer-inspector"),stage=element("div","layer-properties-pages");
   const layers=contentPanel("layers"),properties=contentPanel("properties"),label=element("span","layer-properties-label"),summary=element("span","layer-properties-summary");
   const text=element("span","layer-properties-text");text.append(label,summary);
@@ -36,11 +36,12 @@ export function createLayerInspector({app, state, workspace, element, button, ic
   },measure(now) {
     const progress=matchMedia("(prefers-reduced-motion: reduce)").matches?1:Math.min(1,(now-started)/200);
     position=from+((open?1:0)-from)*(1-(1-progress)**3);
-    if(measurementDirty||measurement?.viewport!==workspace.clientHeight) {
+    const viewport=[workspace.clientWidth,workspace.clientHeight],identity=JSON.stringify([viewport,column,state().customization.drawer?.anchor,state().phone?.swapped,state().phone?.insets,state().phone?.hidden]);
+    if(measurementDirty||measurement?.identity!==identity) {
       const unit=layers.measureUnit();
       const inset=getComputedStyle(layers),fixed=layers.querySelector(".layer-header").offsetHeight+layerFooter.offsetHeight+parseFloat(inset.paddingTop)+parseFloat(inset.paddingBottom);
-      const contents=properties.firstElementChild,style=getComputedStyle(contents),viewport=workspace.clientHeight;
-      measurement={viewport,...app.layer_drawer_sizing({measurement:{fixed_height:fixed,unit_height:unit},properties_height:contents.scrollHeight+parseFloat(style.marginTop)+parseFloat(style.marginBottom),viewport_height:viewport})};
+      const contents=properties.firstElementChild,style=getComputedStyle(contents);
+      measurement={identity,...app.layer_drawer_sizing({measurement:{fixed_height:fixed,unit_height:unit},properties_height:contents.scrollHeight+parseFloat(style.marginTop)+parseFloat(style.marginBottom),viewport,column})};
       measurementDirty=false;
     }
     const size=measurement;
@@ -50,6 +51,7 @@ export function createLayerInspector({app, state, workspace, element, button, ic
     const height=stage.clientHeight;
     const key=`${height}:${position}`;if(layoutKey===key)return;layoutKey=key;
     layers.style.transform=`translateY(${-position*height}px)`;properties.style.transform=`translateY(${(1-position)*height}px)`;
+    layers.style.visibility=position===1?'hidden':'';properties.style.visibility=position===0?'hidden':'';
     if(position===0&&anchor) {
       const row=rows.querySelector(`.layer-row[data-layer="${anchor.id}"]`)?.parentElement;
       if(row)rows.scrollTop+=row.getBoundingClientRect().top-rows.getBoundingClientRect().top-anchor.offset;

@@ -26,13 +26,18 @@ struct DrawerQuery {
     from: Option<layer_ui::DrawerPlacement>,
     #[serde(default)]
     closing: bool,
+    color: Option<DrawerColorMeasure>,
 }
+#[derive(Deserialize)]
+struct DrawerColorMeasure { fixed_height: f32, hdr: bool }
+
 
 #[derive(Deserialize)]
 struct LayerDrawerQuery {
     measurement: layer_ui::PanelScrollMeasurement,
     properties_height: f32,
-    viewport_height: f32,
+    viewport: [f32; 2],
+    column: Option<u32>,
 }
 
 #[wasm_bindgen]
@@ -193,6 +198,14 @@ impl WebApp {
         }
         Ok(())
     }
+    pub fn tool_panel(&self, panel: JsValue, anchor: JsValue) -> Result<JsValue, JsValue> {
+        let panel = serde_wasm_bindgen::from_value(panel).map_err(js)?;
+        let anchor: Option<layer_ui::DrawerAnchor> = serde_wasm_bindgen::from_value(anchor).map_err(js)?;
+        let state = self.session.state();
+        let drawer = anchor.and_then(|anchor| state.customization.drawer.iter().chain(&state.customization.column_drawers)
+            .find(|drawer| drawer.anchor == anchor));
+        serialize(&state.tool_panel_presentation(panel, drawer))
+    }
     pub fn drawer(&self, query: JsValue) -> Result<JsValue, JsValue> {
         let q: DrawerQuery = serde_wasm_bindgen::from_value(query).map_err(js)?;
         let state = self.session.state();
@@ -201,6 +214,15 @@ impl WebApp {
             Some(id) => state.customization.column_drawers.iter().find(|d|
                 matches!(d.anchor, layer_ui::DrawerAnchor::Column { column, .. } if column == id)),
         };
+        let mut heights = q.heights;
+        let color_fit = drawer.and_then(|drawer| q.color.as_ref().and_then(|color|
+            state.customization.drawer_measure(drawer, &self.session.layout_resolve_input(), q.viewport)
+                .and_then(|measure| measure.color_fit(&heights, color.fixed_height, color.hdr))));
+        if let (Some(drawer), Some(fit), Some(color)) = (drawer, color_fit, &q.color) {
+            if let Some(column) = drawer.columns.iter().position(|panels| panels.contains(&layer_ui::Panel::Color)) {
+                heights[column] = fit.height.ceil() + color.fixed_height;
+            }
+        }
         let end = if q.closing {
             q.from.as_ref().map(|p| p.closed())
         } else {
@@ -209,25 +231,28 @@ impl WebApp {
                     d,
                     &self.session.layout_resolve_input(),
                     q.viewport,
-                    &q.heights,
+                    &heights,
                 )
             })
         };
         #[derive(Serialize)]
-        struct Frame {connection:Option<layer_ui::DrawerConnection>,placement:layer_ui::DrawerPlacement}
+        struct Frame {connection:Option<layer_ui::DrawerConnection>,placement:layer_ui::DrawerPlacement,color_fit:Option<layer_ui::ColorPanelFit>}
         serialize(&end.map(|end| {
             let from = q.from.unwrap_or_else(|| end.closed());
             let placement = end.interpolate_from(&from, q.progress);
-            Frame {connection:placement.connection(),placement}
+            Frame {connection:placement.connection(),placement,color_fit}
         }))
     }
     pub fn layer_drawer_sizing(&self, query: JsValue) -> Result<JsValue, JsValue> {
         let q: LayerDrawerQuery = serde_wasm_bindgen::from_value(query).map_err(js)?;
-        serialize(&json!({
-            "measurement":q.measurement,"properties_height":q.properties_height,
-            "heights": layer_ui::LayerDrawerSizing::pages(q.measurement, self.session.state().layers.len(), q.viewport_height, q.properties_height),
-            "footer_height": layer_ui::LayerDrawerSizing::FOOTER_HEIGHT,
-        }))
+        let state = self.session.state();
+        let drawer = match q.column {
+            None => state.customization.drawer.as_ref(),
+            Some(id) => state.customization.column_drawers.iter().find(|drawer|
+                matches!(drawer.anchor, layer_ui::DrawerAnchor::Column { column, .. } if column == id)),
+        };
+        serialize(&state.customization.layer_drawer_sizing(drawer, &self.session.layout_resolve_input(),
+            q.viewport, q.measurement, state.layer_tools.presented_rows(&state.layers), q.properties_height).map_err(js)?)
     }
     pub fn drawer_measure(&self, query: JsValue) -> Result<JsValue, JsValue> {
         #[derive(Deserialize)]
@@ -248,8 +273,12 @@ impl WebApp {
                 "model":drawer,"column_drawers":state.customization.column_drawers,
                 "tiles":q.tiles,"toolbars":true,
             }).to_string()).map_err(js)?,
-            None => json!({"measure":null,"toolbars":[]}),
+            None => json!({"measure":null,"toolbars":[],"minimums":[]}),
         };
+        let mut value = value;
+        value["scrolls_together"] = json!(drawer.is_some_and(layer_ui::ContentDrawer::scrolls_together));
+        value["minimums"] = drawer.map(|drawer| json!(drawer.columns.iter().map(|panels| panels.iter()
+            .map(|panel| drawer.body_minimum_height(*panel)).collect::<Vec<_>>()).collect::<Vec<_>>())).unwrap_or_else(|| json!([]));
         serialize(&value)
     }
     pub fn application_link(&self, link: JsValue) -> Result<String, JsValue> {
