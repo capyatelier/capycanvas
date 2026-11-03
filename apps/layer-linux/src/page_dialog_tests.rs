@@ -6,7 +6,7 @@ use super::workspace_header::Driver;
 fn native_new_drawing_preview_spacing() {
     let mut d = super::phone_motion::setup("art.capycanvas.NewDrawingPreviewSpacing");
     d.w.dispatch(UiAction::Invoke { command: CommandId::NewDocument });
-    let (_, frame) = page_frame(&d);
+    let (_, frame) = dialog_frame(&d);
     let caption = find_named(&frame, "new-drawing-capacity").unwrap();
     let name = find_named(&frame, "new-drawing-name").unwrap();
     let left = caption.parent().unwrap().parent().unwrap();
@@ -30,7 +30,7 @@ fn native_new_drawing_preview_spacing() {
 fn native_preferences_inline_controls_fit() {
     let mut d = super::phone_motion::setup("art.capycanvas.PreferencesInlineFit");
     d.w.dispatch(UiAction::Invoke { command: CommandId::Settings });
-    let (dialog, frame) = page_frame(&d);
+    let (dialog, frame) = dialog_frame(&d);
     let split = descendants::<adw::NavigationSplitView>(&frame).pop().unwrap();
     let appearance = SettingsPage::Appearance.localized_title(&d.w.localization());
     let point = d.point(&mapped_label(&frame, &appearance).unwrap());
@@ -66,7 +66,7 @@ fn native_preferences_inline_controls_fit() {
 fn native_new_drawing_dimension_controls_fit() {
     let mut d = super::phone_motion::setup("art.capycanvas.NewDrawingDimensionFit");
     d.w.dispatch(UiAction::Invoke { command: CommandId::NewDocument });
-    let (dialog, frame) = page_frame(&d);
+    let (dialog, frame) = dialog_frame(&d);
     super::phone::capture(&mut d, "new-drawing-dimensions-fit");
     for name in ["new-drawing-name", "new-drawing-width", "new-drawing-link", "new-drawing-height", "new-drawing-unit", "new-drawing-orientation",
         "new-drawing-resolution", "new-drawing-size", "new-drawing-space", "new-drawing-depth", "new-drawing-blending", "new-drawing-texture", "new-drawing-paper-color"] {
@@ -151,15 +151,19 @@ fn native_new_drawing_dimension_controls_fit() {
 fn native_export_narrow_bounds() {
     let mut d = super::phone_motion::setup("art.capycanvas.ExportNarrowBounds");
     d.w.dispatch(UiAction::Invoke { command: CommandId::ExportDocument });
-    let (dialog, frame) = page_frame(&d);
+    let (dialog, frame) = dialog_frame(&d);
     until(|| find_named(&frame, "color-preview-after").and_then(|widget| widget.downcast::<gtk::Picture>().ok())
         .is_some_and(|picture| picture.paintable().is_some()), "Export publishes its preview");
+    super::phone::capture(&mut d, "export-narrow-bounds");
+    let headers = descendants::<adw::HeaderBar>(&frame).into_iter().filter(|header| header.is_mapped()).collect::<Vec<_>>();
+    assert_eq!(headers.len(), 1, "Export has one mapped navigation header");
+    let minimum = headers[0].measure(gtk::Orientation::Horizontal, -1).0;
+    assert!(minimum <= d.w.window.width(), "Export header minimum {minimum} fits the window width {}", d.w.window.width());
     for name in ["export-format", "export-open-size", "export-open-color", "color-preview-before", "color-preview-after"] {
         let bounds = find_named(&frame, name).unwrap().compute_bounds(&frame).unwrap();
         assert!(bounds.x() >= 0. && bounds.x() + bounds.width() <= frame.width() as f32 + 1., "Export control fits: {name} {bounds:?}");
     }
-    page(&d);
-    super::phone::capture(&mut d, "export-narrow-bounds");
+    if ui_session(&d.w).phone_layout().is_some() { page(&d); }
     close(&d, &dialog);
     d.finish();
 }
@@ -170,7 +174,7 @@ fn native_phone_editor_close_measurement() {
     let mut d = super::phone_motion::setup("art.capycanvas.EditorCloseMeasurement");
     let warnings = bounds::size_warnings();
     crate::color_editor::show(&d.w, layer_ui::ColorSlot::Foreground);
-    let (dialog, _) = page_frame(&d);
+    let (dialog, _) = dialog_frame(&d);
     capture(&mut d, "edit-color-before-close");
     close(&d, &dialog);
     let warnings = warnings.lock().unwrap().clone();
@@ -183,7 +187,7 @@ fn native_phone_editor_close_measurement() {
 fn native_edit_color_narrow_bounds() {
     let mut d = super::phone_motion::setup("art.capycanvas.EditColorNarrowBounds");
     crate::color_editor::show(&d.w, layer_ui::ColorSlot::Foreground);
-    let (dialog, frame) = page_frame(&d);
+    let (dialog, frame) = dialog_frame(&d);
     let last = find_named(&frame, "edit-color-copy-2").unwrap();
     super::histogram::scroll_to(&last);
     super::phone::capture(&mut d, "edit-color-narrow-values");
@@ -225,7 +229,7 @@ fn native_edit_color_narrow_bounds() {
 fn native_toolbar_manager_narrow_bounds() {
     let mut d = super::phone_motion::setup("art.capycanvas.ToolbarManagerNarrowBounds");
     d.w.workspaces.ui.show(&d.w, layer_workspace::ManagerPage::ThisWorkspace);
-    let (dialog, frame) = page_frame(&d);
+    let (dialog, frame) = dialog_frame(&d);
     super::phone::capture(&mut d, "toolbar-manager-narrow-bounds");
     let header = page_header(&frame).compute_bounds(&d.w.window).unwrap();
     assert!(header.y() >= 0. && header.y() + header.height() <= d.w.window.height() as f32,
@@ -308,19 +312,19 @@ pub(super) fn done_header(d: &Driver, frame: &gtk::Widget, root: bool) -> adw::H
     header
 }
 
-pub(super) fn page_frame(d: &Driver) -> (adw::Dialog, gtk::Widget) {
+pub(super) fn dialog_frame(d: &Driver) -> (adw::Dialog, gtk::Widget) {
     until(|| d.w.visible_dialog().is_some_and(|dialog| {
         let frame = crate::page_dialog::parent(&dialog);
-        frame != dialog.clone().upcast::<gtk::Widget>() && frame.is_mapped() && frame.width() > 0 && frame.height() > 0
+        frame.is_mapped() && frame.width() > 0 && frame.height() > 0
             && !d.w.pages.root.is_transition_running()
-    }), "the editor page is mapped and settled");
+    }), "the editor dialog is mapped and settled");
     let dialog = d.w.visible_dialog().unwrap();
     let frame = crate::page_dialog::parent(&dialog);
     (dialog, frame)
 }
 
 fn page(d: &Driver) -> (adw::Dialog, gtk::Widget) {
-    let (dialog, frame) = page_frame(d);
+    let (dialog, frame) = dialog_frame(d);
     assert!(!dialog.is_mapped(), "the original native dialog is detached");
     let bounds = frame.compute_bounds(&d.w.window).unwrap();
     assert!(bounds.x().abs() <= 1. && bounds.y().abs() <= 1., "{bounds:?}");
@@ -385,7 +389,7 @@ pub(super) fn inventory(d: &mut Driver) {
 
 fn inventory_with(d: &mut Driver, mut visit: impl FnMut(&mut Driver, &str)) {
     d.w.dispatch(UiAction::Invoke { command: CommandId::Settings });
-    let (dialog, frame) = page_frame(d);
+    let (dialog, frame) = dialog_frame(d);
     let split = descendants::<adw::NavigationSplitView>(&frame).pop().unwrap();
     if split.is_collapsed() && split.shows_content() {
         d.click(icon_button(&page_header(&frame), "go-previous-symbolic").unwrap().upcast_ref());
@@ -401,11 +405,11 @@ fn inventory_with(d: &mut Driver, mut visit: impl FnMut(&mut Driver, &str)) {
     close(d, &dialog);
 
     d.w.dispatch(UiAction::Invoke { command: CommandId::NewDocument });
-    let (dialog, _) = page_frame(d);
+    let (dialog, _) = dialog_frame(d);
     visit(d, "new-drawing");
     close(d, &dialog);
     d.w.dispatch(UiAction::Invoke { command: CommandId::ExportDocument });
-    let (dialog, frame) = page_frame(d);
+    let (dialog, frame) = dialog_frame(d);
     until(|| find_named(&frame, "color-preview-after").and_then(|widget| widget.downcast::<gtk::Picture>().ok())
         .is_some_and(|picture| picture.paintable().is_some()), "Export publishes its inventory preview");
     visit(d, "export");
@@ -414,19 +418,19 @@ fn inventory_with(d: &mut Driver, mut visit: impl FnMut(&mut Driver, &str)) {
     close(d, &dialog);
 
     d.w.dispatch(UiAction::Invoke { command: CommandId::CanvasSize });
-    let (dialog, _) = page_frame(d);
+    let (dialog, _) = dialog_frame(d);
     visit(d, "canvas-size");
     close(d, &dialog);
     crate::color_editor::show(&d.w, layer_ui::ColorSlot::Foreground);
-    let (dialog, _) = page_frame(d);
+    let (dialog, _) = dialog_frame(d);
     visit(d, "color");
     close(d, &dialog);
     d.w.workspaces.ui.show(&d.w, layer_workspace::ManagerPage::Workspaces);
-    let (dialog, _) = page_frame(d);
+    let (dialog, _) = dialog_frame(d);
     visit(d, "workspaces");
     close(d, &dialog);
     d.w.workspaces.ui.show(&d.w, layer_workspace::ManagerPage::ThisWorkspace);
-    let (dialog, frame) = page_frame(d);
+    let (dialog, frame) = dialog_frame(d);
     visit(d, "workspace-manager-root");
     let split = descendants::<adw::NavigationSplitView>(&frame).pop().unwrap();
     if split.is_mapped() {

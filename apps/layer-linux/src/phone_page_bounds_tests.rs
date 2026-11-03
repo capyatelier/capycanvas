@@ -30,7 +30,7 @@ fn inside_page(widget: &gtk::Widget, frame: &gtk::Widget, name: &str) {
 
 fn check_page(d: &mut Driver, name: &str) {
     capture(d, name);
-    let (dialog, frame) = page_frame(d);
+    let (dialog, frame) = dialog_frame(d);
     assert!(!dialog.is_mapped(), "{name}: the original native dialog is detached");
     inside_page(&frame, d.w.window.upcast_ref(), name);
     let bounds = frame.compute_bounds(&d.w.window).unwrap();

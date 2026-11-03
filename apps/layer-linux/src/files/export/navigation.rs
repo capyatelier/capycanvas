@@ -17,6 +17,10 @@ pub(super) fn page(nav: &adw::NavigationView, title: &str, tag: &str, body: &gtk
     scroll.set_widget_name(&format!("export-{tag}-scroll"));
     toolbar.set_content(Some(&scroll));
     let page = adw::NavigationPage::builder().title(title).tag(tag).child(&toolbar).build();
+    let caption = gtk::Label::builder().ellipsize(gtk::pango::EllipsizeMode::End).width_chars(1).single_line_mode(true).build();
+    caption.add_css_class("title");
+    page.bind_property("title", &caption, "label").sync_create().build();
+    header.set_title_widget(Some(&caption));
     nav.add(&page);
     (toolbar, header)
 }

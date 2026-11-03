@@ -1359,7 +1359,7 @@ fn native_import_admission_failure_preserves_package_and_current_drawing() {
         for theme in [Theme::Light, Theme::Dark] {
             w.dispatch(UiAction::SetTheme { theme: Some(theme) });
             let completed = begin_preserved_import(&w, imported.clone(), &source);
-            let (dialog, frame) = super::page_dialog::page_frame(&d);
+            let (dialog, frame) = super::page_dialog::dialog_frame(&d);
             let header = super::page_dialog::done_header(&d, &frame, true);
             super::page_dialog::capture(&mut d, "preserved-package-preview");
             let alert = dialog.downcast_ref::<adw::AlertDialog>().unwrap();
