@@ -181,9 +181,9 @@ impl Storage {
     }
     fn discard(&mut self,id:u64,cancel:&AtomicBool)->Result<(),String>{
         let Some(drawing)=self.manifest.drawings.iter().find(|drawing|drawing.id==id).cloned() else {return Ok(())};
-        self.store(id,&drawing.key)?.on_worker(|store|store.prepare_retirement())?;
+        self.stores.prepare_retirement(&drawing.key)?.wait_on_worker()?;
         let manifest=self.manifest.remove(id)?;self.publish(manifest,cancel)?;
-        self.stores.retire(id)?.wait_on_worker()?;self.collect(cancel)
+        self.stores.retire_copy(&drawing.key)?.wait_on_worker()?;self.collect(cancel)
     }
     fn capture(&mut self,manifest:SessionManifest,captures:Vec<(u64,SessionCapture,SessionStamp)>,cancel:&AtomicBool)->Result<(),String>{
         if manifest.generation!=self.manifest.generation {return Err("Stale session checkpoint membership".into());}
@@ -194,10 +194,10 @@ impl Storage {
             if !self.stores.is_current(id,&stamp) {self.stores.checkpoint(id,capture,stamp,true)?.wait_on_worker()?;}
         }
         let retired=self.manifest.drawings.iter().filter(|drawing|!manifest.drawings.iter().any(|live|live.key==drawing.key)).cloned().collect::<Vec<_>>();
-        for drawing in &retired {self.store(drawing.id,&drawing.key)?.on_worker(|store|store.prepare_retirement())?;}
+        for drawing in &retired {self.stores.prepare_retirement(&drawing.key)?.wait_on_worker()?;}
         let mut committed=self.manifest.clone();for drawing in &retired {committed=committed.remove(drawing.id)?;}
         let committed=committed.reconcile(manifest.drawings,manifest.active,manifest.clean_exit)?;self.publish(committed,cancel)?;
-        for drawing in retired {self.stores.retire(drawing.id)?.wait_on_worker()?;}
+        for drawing in retired {self.stores.retire_copy(&drawing.key)?.wait_on_worker()?;}
         self.collect(cancel)?;Ok(())
     }
 

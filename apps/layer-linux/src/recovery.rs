@@ -91,8 +91,7 @@ impl Recovery {
     pub(crate) fn coordinator(&self)->Result<SessionStores,String> {self.stores.borrow().clone().ok_or_else(||"Drawing storage is not registered".into())}
     pub async fn prepare_retirement(&self)->Result<(),String> {
         self.drain().await;
-        let binding=self.binding.clone();
-        gio::spawn_blocking(move ||binding.on_worker(|store|store.prepare_retirement())).await.map_err(|error|format!("Drawing retirement preparation stopped: {error:?}"))?
+        self.coordinator()?.prepare_retirement(self.binding.key())?.await.map(|_|())
     }
     pub async fn drain(&self) {
         while self.running.get() { glib::timeout_future(Duration::from_millis(5)).await; }
@@ -462,11 +461,13 @@ async fn failed_drawings(w:&Rc<Workspace>)->Result<(),String> {
         dialog.set_response_appearance("discard",adw::ResponseAppearance::Destructive);
         let response=crate::alert::choose(dialog,&w.window).await;
         if response=="discard" {
-            let path=directory().join(&drawing.key);
-            gio::spawn_blocking(move ||layer_core::package::session_store::prepare_store_retirement(&path)).await.map_err(|error|format!("Drawing retirement preparation stopped: {error:?}"))??;
+            w.restart.stores.prepare_retirement(&drawing.key)?.await?;
             if let Some(warning)=w.restart.update_checked(|manifest|manifest.remove(drawing.id),true).await? {w.changed(Err(warning));}
             w.restart.retained.borrow_mut().retain(|entry|entry.id!=drawing.id);
-            let result=gio::spawn_blocking(collect_stores).await.map_err(|error|format!("Drawing cleanup stopped: {error:?}")).and_then(|result|result);
+            let result=async {
+                w.restart.stores.retire_copy(&drawing.key)?.await?;
+                gio::spawn_blocking(collect_stores).await.map_err(|error|format!("Drawing cleanup stopped: {error:?}"))?
+            }.await;
             if let Err(error)=result {w.changed(Err(error));}
         } else if response=="retry" {
             let attempt=w.restart.begin_restore(drawing.id,true).await?;

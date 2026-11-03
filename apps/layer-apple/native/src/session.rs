@@ -238,10 +238,10 @@ impl SessionJob {
         let drawings = captures.iter().map(|(id,_,_)|Ok(SessionDrawing {id:*id,key:disk.stores.bind(*id,None)?.key().to_owned()})).collect::<Result<Vec<_>,String>>()?;
         let mut manifest = disk.manifest.clone();
         for id in manifest.restoring.clone() { manifest = manifest.finish_restore(id, true)?; }
-        let retiring: Vec<_> = disk.manifest.drawings.iter().filter(|drawing| !disk.manifest.blocked.contains(&drawing.id)
-            && (self.exclusion == u64::MAX || drawing.id == self.exclusion)).map(|drawing| drawing.id).collect();
-        for id in retiring {
-            disk.stores.bind(id,None)?.on_worker(|store|store.prepare_retirement())?;
+        let retiring: Vec<_> = disk.manifest.drawings.iter().filter(|drawing| drawing.id==self.exclusion
+            || self.exclusion==u64::MAX && !disk.manifest.blocked.contains(&drawing.id)).map(|drawing|drawing.key.clone()).collect();
+        for key in retiring {
+            disk.stores.prepare_retirement(&key)?.wait_on_worker()?;
         }
         manifest = manifest.stage(drawings.clone(), self.active)?;
         manifest.publish(&disk.path.join("window.json"))?;
@@ -270,8 +270,8 @@ impl SessionJob {
         self.committed = true;
         if self.exclusion != 0 && self.exclusion != u64::MAX { return Ok(()); }
         let cleanup = (|| -> Result<(), String> {
-            let removed=disk.stores.bindings().into_iter().filter(|(id,_)|!manifest.drawings.iter().any(|drawing|drawing.id==*id)).map(|(id,_)|id).collect::<Vec<_>>();
-            for id in removed {disk.stores.retire(id)?.wait_on_worker()?;}
+            let removed=disk.stores.bindings().into_iter().filter(|(id,_)|!manifest.drawings.iter().any(|drawing|drawing.id==*id)).map(|(_,binding)|binding.key().to_owned()).collect::<Vec<_>>();
+            for key in removed {disk.stores.retire_copy(&key)?.wait_on_worker()?;}
             collect_unreferenced_stores(&disk.path, &manifest.drawings.iter().map(|drawing| drawing.key.clone()).collect(), &cancel)?;
             Ok(())
         })();

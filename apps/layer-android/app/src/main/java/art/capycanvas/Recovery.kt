@@ -46,10 +46,10 @@ internal class RecoveryController(private val host: CanvasHost) {
         manifest = next
         if(event.getString("type") == "reconcile")withContext(Dispatchers.IO) {Native.sessionCollect(checkNotNull(held).path.absolutePath,keys(manifest))}
     }
-    suspend fun storeCoordinator():Long = withContext(NonCancellable+Dispatchers.Main.immediate) {
-        val path=checkNotNull(held).path.absolutePath
+    suspend fun storeCoordinator(root:File? = null):Long = withContext(NonCancellable+Dispatchers.Main.immediate) {
+        val path=(root ?: checkNotNull(held).path).absolutePath
         val stores=stores[path] ?: Native.sessionStoresOpen(path).also {stores[path]=it}
-        host.withNative {Native.sessionWatchPressure(it,stores)}
+        if(path == held?.path?.absolutePath)host.withNative {Native.sessionWatchPressure(it,stores)}
         stores
     }
     private suspend fun bind(id:Long,key:String? = null):String = Native.sessionBind(storeCoordinator(),id,key)
@@ -305,14 +305,14 @@ internal class RecoveryController(private val host: CanvasHost) {
                     val preserved = retained.firstOrNull {it.path == path}.takeUnless {current}
                     if(!current&&preserved == null)return@withLock
                     val rows = if(current) JSONObject(manifest).array("drawings").objects().filter {row -> owners.values.none {it.key == row.getString("key")}} else emptyList()
+                    val backing=storeCoordinator(path)
+                    val copies=if(current)rows.map {it.getString("key")} else withContext(Dispatchers.IO) {path.listFiles().orEmpty().filter {it.isDirectory}.map {it.name}}
                     withContext(Dispatchers.IO) {
-                        val copies = if(current) rows.map {File(path,it.getString("key"))} else path.listFiles().orEmpty().filter {it.isDirectory}
-                        for(copy in copies) {
-                            Native.sessionPrepareRetirement(copy.absolutePath)
-                        }
+                        for(key in copies)Native.sessionPrepareRetirement(backing,key)
                     }
                     for(row in rows)writeManifest(obj("type" to "remove","id" to row.getLong("id")))
                     withContext(Dispatchers.IO) {
+                        for(key in copies)Native.sessionRetireCopy(backing,key)
                         Native.sessionCollect(path.absolutePath,if(current)keys(manifest) else "[]")
                         if(preserved != null)java.nio.file.Files.deleteIfExists(File(path,"session.json").toPath())
                     }

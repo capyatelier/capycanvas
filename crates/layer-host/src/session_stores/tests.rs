@@ -60,6 +60,140 @@ fn failed_adoption_keeps_the_existing_binding() {
 }
 
 #[test]
+fn failed_restore_copy_retires_through_its_writer_after_membership_is_removed() {
+    for registered in [false,true] {
+        let fixture=Fixture::new();let (saved,stamp,_,_)=capture();
+        let good=fixture.stores.bind(1,Some("good")).unwrap();
+        let reply=fixture.stores.checkpoint(1,saved,stamp,true).unwrap();fixture.run();assert!(reply.try_take().unwrap().is_ok());
+        let good_head=std::fs::read(good.path().join("head.json")).unwrap();
+        let (saved,stamp,_,_)=capture();let bad=fixture.stores.bind(2,Some("failed")).unwrap();
+        let reply=fixture.stores.checkpoint(2,saved,stamp,true).unwrap();fixture.run();assert!(reply.try_take().unwrap().is_ok());
+        for generation in std::fs::read_dir(bad.path().join("generations")).unwrap() {std::fs::write(generation.unwrap().path(),b"broken checkpoint").unwrap();}
+        let restore=fixture.stores.restore(2,ProjectLimits::default()).unwrap();fixture.run();assert!(restore.try_take().unwrap().is_err());
+        if registered {
+            assert!(layer_core::package::session_store::SessionStore::try_open(bad.path()).unwrap().is_none());
+        }else {let mut state=fixture.stores.0.state.lock().unwrap();state.aliases.remove(&2);state.drawings.remove(bad.key());}
+        let (key,path)=(bad.key().to_owned(),bad.path().to_path_buf());drop(bad);
+        let prepare=fixture.stores.prepare_retirement(&key).unwrap();fixture.run();
+        assert!(matches!(prepare.try_take(),Some(Ok(StoreResult::RetirementPrepared))));
+        assert!(path.join("head.json").exists());
+        let manifest=layer_ui::SessionManifest::default().stage(vec![layer_ui::session_recovery::SessionDrawing {id:1,key:good.key().into()},layer_ui::session_recovery::SessionDrawing {id:2,key:key.clone()}],1).unwrap();
+        manifest.remove(2).unwrap().publish(&fixture.root.join("session.json")).unwrap();
+        let retire=fixture.stores.retire_copy(&key).unwrap();fixture.run();
+        assert!(matches!(retire.try_take(),Some(Ok(StoreResult::Retired))));
+        assert!(!path.join("head.json").exists());
+        assert_eq!(std::fs::read(good.path().join("head.json")).unwrap(),good_head);
+        let restored=fixture.stores.restore(1,ProjectLimits::default()).unwrap();fixture.run();assert!(restored.try_take().unwrap().is_ok());
+    }
+}
+
+#[test]
+fn explicit_discard_prepares_a_corrupt_head_without_decoding_or_changing_another_copy() {
+    use layer_core::package::session_store::{SessionStore, collect_unreferenced_stores};
+    let fixture=Fixture::new();let cancel=AtomicBool::new(false);
+    let (saved,stamp,_,_)=capture();let good=fixture.stores.bind(2,Some("good")).unwrap();
+    let reply=fixture.stores.checkpoint(2,saved,stamp,true).unwrap();fixture.run();assert!(reply.try_take().unwrap().is_ok());
+    let good_head=std::fs::read(good.path().join("head.json")).unwrap();
+    let (saved,stamp,_,_)=capture();let bad=fixture.stores.bind(1,Some("corrupt")).unwrap();
+    let reply=fixture.stores.checkpoint(1,saved,stamp,true).unwrap();fixture.run();assert!(reply.try_take().unwrap().is_ok());
+    assert!(SessionStore::try_open(bad.path()).unwrap().is_none());
+    let path=bad.path().to_path_buf();drop(bad);
+    {let mut state=fixture.stores.0.state.lock().unwrap();state.aliases.remove(&1);state.drawings.remove("corrupt");}
+    std::fs::write(path.join("head.json"),b"invalid head").unwrap();
+    assert!(SessionStore::open(&path).is_err());
+    let reply=fixture.stores.prepare_retirement("corrupt").unwrap();fixture.run();
+    assert!(matches!(reply.try_take(),Some(Ok(StoreResult::RetirementPrepared))));
+    collect_unreferenced_stores(&fixture.root,&["corrupt".into()].into(),&cancel).unwrap();
+    assert_eq!(std::fs::read(path.join("head.json")).unwrap(),b"invalid head");
+    assert_eq!(std::fs::read_dir(path.join("generations")).unwrap().count(),1);
+    let manifest=layer_ui::SessionManifest::default().stage(vec![layer_ui::session_recovery::SessionDrawing {id:1,key:"corrupt".into()}],1).unwrap();
+    manifest.remove(1).unwrap().publish(&fixture.root.join("session.json")).unwrap();
+    let reply=fixture.stores.retire_copy("corrupt").unwrap();fixture.run();
+    assert!(matches!(reply.try_take(),Some(Ok(StoreResult::Retired))));
+    assert!(!path.join("head.json").exists());assert!(path.join(".retired").is_file());
+    for directory in ["resources","generations","packs"] {assert!(!path.join(directory).exists());}
+    assert!(SessionStore::open(&path).is_err());
+    assert_eq!(std::fs::read(good.path().join("head.json")).unwrap(),good_head);
+}
+
+#[test]
+fn retirement_preserves_missing_unrecognized_and_locked_paths() {
+    use layer_core::package::session_store::SessionStore;
+    let fixture=Fixture::new();
+    let prepared=fixture.stores.prepare_retirement("missing").unwrap();fixture.run();
+    assert!(matches!(prepared.try_take(),Some(Ok(StoreResult::RetirementPrepared))));
+    let retired=fixture.stores.retire_copy("missing").unwrap();fixture.run();
+    assert!(matches!(retired.try_take(),Some(Ok(StoreResult::Retired))));
+    assert!(!fixture.root.join("missing").exists());
+    let unknown=fixture.root.join("unrecognized");std::fs::create_dir_all(&unknown).unwrap();
+    std::fs::write(unknown.join("keep"),b"unrecognized bytes").unwrap();
+    let prepared=fixture.stores.prepare_retirement("unrecognized").unwrap();fixture.run();
+    assert!(matches!(prepared.try_take(),Some(Err(error)) if error=="Invalid drawing session directory"));
+    let retired=fixture.stores.retire_copy("unrecognized").unwrap();fixture.run();
+    assert!(matches!(retired.try_take(),Some(Err(error)) if error=="Invalid drawing session directory"));
+    assert_eq!(std::fs::read_dir(&unknown).unwrap().count(),1);
+    assert_eq!(std::fs::read(unknown.join("keep")).unwrap(),b"unrecognized bytes");
+    let locked=fixture.root.join("locked");let owner=SessionStore::open(&locked).unwrap();
+    let prepared=fixture.stores.prepare_retirement("locked").unwrap();fixture.run();
+    assert!(matches!(prepared.try_take(),Some(Err(error)) if error=="Recovery drawing is already open"));
+    let retired=fixture.stores.retire_copy("locked").unwrap();fixture.run();
+    assert!(matches!(retired.try_take(),Some(Err(error)) if error=="Recovery drawing is already open"));
+    assert!(!locked.join(".retiring").exists());assert!(!locked.join(".retired").exists());
+    drop(owner);
+    let prepared=fixture.stores.prepare_retirement("locked").unwrap();fixture.run();
+    assert!(matches!(prepared.try_take(),Some(Ok(StoreResult::RetirementPrepared))));
+    let retired=fixture.stores.retire_copy("locked").unwrap();fixture.run();
+    assert!(matches!(retired.try_take(),Some(Ok(StoreResult::Retired))));
+}
+
+#[cfg(unix)]
+#[test]
+fn retirement_never_follows_root_or_nested_storage_symlinks() {
+    use layer_core::package::session_store::SessionStore;
+    use std::os::unix::fs::symlink;
+    let fixture=Fixture::new();let outside=Fixture::new();
+    std::fs::create_dir_all(&outside.root).unwrap();std::fs::write(outside.root.join("keep"),b"outside bytes").unwrap();
+    for (index,name) in ["root","resources","generations","packs",".lock",".retiring",".retired"].into_iter().enumerate() {
+        let key=format!("linked-{index}");let path=fixture.root.join(&key);
+        if name=="root" {std::fs::create_dir_all(&fixture.root).unwrap();symlink(&outside.root,&path).unwrap();}
+        else {
+            drop(SessionStore::open(&path).unwrap());let link=path.join(name);
+            if link.is_dir() {std::fs::remove_dir(&link).unwrap();}else if link.exists() {std::fs::remove_file(&link).unwrap();}
+            let target=if ["resources","generations","packs"].contains(&name) {outside.root.clone()}else {outside.root.join("keep")};
+            symlink(target,link).unwrap();
+        }
+        let prepared=fixture.stores.prepare_retirement(&key).unwrap();fixture.run();assert!(prepared.try_take().unwrap().is_err());
+        let retired=fixture.stores.retire_copy(&key).unwrap();fixture.run();assert!(retired.try_take().unwrap().is_err());
+        assert_eq!(std::fs::read(outside.root.join("keep")).unwrap(),b"outside bytes");
+        assert_eq!(std::fs::read_dir(&outside.root).unwrap().count(),1);
+    }
+}
+
+#[test]
+fn repeated_retirement_preserves_the_empty_terminal_marker() {
+    use layer_core::package::session_store::collect_unreferenced_stores;
+    let fixture=Fixture::new();let (saved,stamp,_,_)=capture();
+    let binding=fixture.stores.bind(1,Some("closed")).unwrap();let path=binding.path().to_path_buf();
+    let reply=fixture.stores.checkpoint(1,saved,stamp,true).unwrap();fixture.run();assert!(reply.try_take().unwrap().is_ok());
+    let prepared=fixture.stores.prepare_retirement("closed").unwrap();fixture.run();assert!(prepared.try_take().unwrap().is_ok());
+    let retired=fixture.stores.retire_copy("closed").unwrap();fixture.run();assert!(matches!(retired.try_take(),Some(Ok(StoreResult::Retired))));
+    drop(binding);
+    let marker=std::fs::metadata(path.join(".retired")).unwrap();let directory=std::fs::metadata(&path).unwrap();
+    assert_eq!(marker.len(),0);assert!(!path.join(".retiring").exists());
+    for _ in 0..8 {
+        let prepared=fixture.stores.prepare_retirement("closed").unwrap();fixture.run();assert!(prepared.try_take().unwrap().is_ok());
+        let retired=fixture.stores.retire_copy("closed").unwrap();fixture.run();assert!(retired.try_take().unwrap().is_ok());
+        collect_unreferenced_stores(&fixture.root,&Default::default(),&AtomicBool::new(false)).unwrap();
+        let unchanged=std::fs::metadata(path.join(".retired")).unwrap();
+        assert_eq!(marker.modified().unwrap(),unchanged.modified().unwrap());
+        assert_eq!(directory.modified().unwrap(),std::fs::metadata(&path).unwrap().modified().unwrap());
+        #[cfg(unix)] {use std::os::unix::fs::MetadataExt;assert_eq!(marker.ino(),unchanged.ino());}
+        assert_eq!(std::fs::read_dir(&path).unwrap().count(),2);
+        for directory in ["resources","generations","packs"] {assert!(!path.join(directory).exists());}
+    }
+}
+
+#[test]
 fn retired_registry_entries_release_the_writer_but_live_tiles_keep_their_pack() {
     let fixture = Fixture::new();
     let (capture, _, retained, tile) = capture();

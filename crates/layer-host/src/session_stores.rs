@@ -2,7 +2,7 @@ use layer_core::{PortableId,ProjectLimits,package::session_store::DrawingStore,r
 use layer_ui::{SessionCapture,SessionStamp};
 use std::{collections::{BTreeMap,VecDeque},path::PathBuf,sync::{Arc,Mutex,atomic::AtomicBool},task::{Poll,Waker}};
 
-pub enum StoreResult {Checkpoint(PortableId),Durable(usize),Restored {session:Option<layer_ui::SessionRestore>,recovered_previous:bool},Retired,Superseded}
+pub enum StoreResult {Checkpoint(PortableId),Durable(usize),Restored {session:Option<layer_ui::SessionRestore>,recovered_previous:bool},RetirementPrepared,Retired,Superseded}
 #[derive(Default)]
 struct ReplyState {result:Option<Result<StoreResult,String>>,waker:Option<Waker>,completion:Option<Box<dyn FnOnce(Result<(),String>)+Send>>}
 #[derive(Clone,Default)]
@@ -32,7 +32,7 @@ impl std::future::Future for StoreReply {
     }
 }
 pub type CapturePreparation=Box<dyn FnOnce(&mut SessionCapture)->Result<(),String>+Send>;
-enum Work {Checkpoint {capture:SessionCapture,stamp:SessionStamp,forced:bool,prepare:Option<CapturePreparation>},Pressure(Vec<RetainedTiles>),Restore(ProjectLimits),Retire}
+enum Work {Checkpoint {capture:SessionCapture,stamp:SessionStamp,forced:bool,prepare:Option<CapturePreparation>},Pressure(Vec<RetainedTiles>),Restore(ProjectLimits),PrepareRetirement,Retire}
 struct Request {work:Work,replies:Vec<StoreReply>}
 impl Request {
     fn finish(self,result:Result<StoreResult,String>) {
@@ -40,16 +40,16 @@ impl Request {
         for (index,reply) in self.replies.into_iter().enumerate() {
             let value=if index+1==count {result.take().unwrap()}else {match result.as_ref().unwrap() {
                 Ok(StoreResult::Checkpoint(id))=>Ok(StoreResult::Checkpoint(*id)),Ok(StoreResult::Durable(bytes))=>Ok(StoreResult::Durable(*bytes)),
-                Ok(StoreResult::Retired)=>Ok(StoreResult::Retired),Ok(StoreResult::Superseded)=>Ok(StoreResult::Superseded),Err(error)=>Err(error.clone()),
+                Ok(StoreResult::RetirementPrepared)=>Ok(StoreResult::RetirementPrepared),Ok(StoreResult::Retired)=>Ok(StoreResult::Retired),Ok(StoreResult::Superseded)=>Ok(StoreResult::Superseded),Err(error)=>Err(error.clone()),
                 Ok(StoreResult::Restored {..})=>unreachable!(),
             }};reply.finish(value);
         }
     }
 }
 #[derive(Default)]
-struct Pending {checkpoint:Option<Request>,pressure:Option<Request>,restores:VecDeque<Request>,retire:Option<Request>}
+struct Pending {checkpoint:Option<Request>,pressure:Option<Request>,restores:VecDeque<Request>,preparations:VecDeque<Request>,retire:Option<Request>}
 impl Pending {
-    fn take(&mut self)->Option<Request> {self.retire.take().or_else(||self.restores.pop_front()).or_else(||self.pressure.take()).or_else(||self.checkpoint.take())}
+    fn take(&mut self)->Option<Request> {self.retire.take().or_else(||self.restores.pop_front()).or_else(||self.pressure.take()).or_else(||self.checkpoint.take()).or_else(||self.preparations.pop_front())}
     fn push(&mut self,mut request:Request)->Vec<Request> {
         if self.retire.is_some() && !matches!(request.work,Work::Retire) {return vec![request];}
         match &mut request.work {
@@ -68,10 +68,11 @@ impl Pending {
                 self.pressure=Some(request);
             },
             Work::Restore(_)=>self.restores.push_back(request),
+            Work::PrepareRetirement=>self.preparations.push_back(request),
             Work::Retire=>{
                 if let Some(previous)=self.retire.take() {request.replies.extend(previous.replies);}
                 self.retire=Some(request);
-                return self.pressure.take().into_iter().chain(self.checkpoint.take()).chain(self.restores.drain(..)).collect();
+                return self.pressure.take().into_iter().chain(self.checkpoint.take()).chain(self.restores.drain(..)).chain(self.preparations.drain(..)).collect();
             },
         }Vec::new()
     }
@@ -100,7 +101,7 @@ impl SessionStores {
         let binding=DrawingStore::new(&self.0.root,key)?;
         let key=binding.key().to_owned();
         if state.drawings.len()>=layer_ui::session_recovery::MAX_SESSION_DRAWINGS && !state.drawings.contains_key(&key) {return Err("Too many session drawings".into());}
-        state.drawings.entry(key.clone()).or_insert_with(||Drawing {binding,observed:None,committed:None,committed_at:None,due:None,sequence:0,running:false,inflight:None,retiring:false,pending:Pending::default()});
+        state.drawings.entry(key.clone()).or_insert_with(||Drawing::new(binding));
         state.aliases.insert(id,key.clone());Ok(state.drawings[&key].binding.clone())
     }
     pub fn remap(&self,mapping:&[(u64,u64)]) {
@@ -152,7 +153,7 @@ impl SessionStores {
         if binding.path().parent()!=Some(self.0.root.as_path()) {return Err("Drawing store belongs to another session root".into());}
         let mut state=self.0.state.lock().unwrap();let key=binding.key().to_owned();
         if state.drawings.len()>=layer_ui::session_recovery::MAX_SESSION_DRAWINGS && !state.drawings.contains_key(&key) {return Err("Too many session drawings".into());}
-        state.drawings.entry(key.clone()).or_insert_with(||Drawing {binding,observed:None,committed:None,committed_at:None,due:None,sequence:0,running:false,inflight:None,retiring:false,pending:Pending::default()});
+        state.drawings.entry(key.clone()).or_insert_with(||Drawing::new(binding));
         state.aliases.retain(|&current,current_key|current==id || current_key!=&key);
         let previous=state.aliases.insert(id,key);
         if let Some(previous)=previous && !state.aliases.values().any(|key|key==&previous) && state.drawings.get(&previous).is_some_and(|drawing|!drawing.running) {state.drawings.remove(&previous);}
@@ -162,6 +163,12 @@ impl SessionStores {
     pub fn pressure(&self,id:u64,tiles:RetainedTiles)->Result<StoreReply,String> {self.request(id,Work::Pressure(vec![tiles]))}
     pub fn restore(&self,id:u64,limits:ProjectLimits)->Result<StoreReply,String> {self.request(id,Work::Restore(limits))}
     pub fn retire(&self,id:u64)->Result<StoreReply,String> {self.request(id,Work::Retire)}
+    pub fn prepare_retirement(&self,key:&str)->Result<StoreReply,String> {self.request_copy(key,Work::PrepareRetirement)}
+    pub fn retire_copy(&self,key:&str)->Result<StoreReply,String> {self.request_copy(key,Work::Retire)}
+    fn request_copy(&self,key:&str,work:Work)->Result<StoreReply,String> {
+        let binding=DrawingStore::new(&self.0.root,Some(key))?;
+        self.request_binding(key,Some(binding),work)
+    }
     pub fn bindings(&self)->Vec<(u64,DrawingStore)> {
         {let state=self.0.state.lock().unwrap();state.aliases.iter().map(|(&id,key)|(id,state.drawings[key].binding.clone())).collect()}
     }
@@ -169,8 +176,16 @@ impl SessionStores {
         let binding=self.bind(id,None)?;self.request_key(binding.key(),work)
     }
     fn request_key(&self,key:&str,work:Work)->Result<StoreReply,String> {
+        self.request_binding(key,None,work)
+    }
+    fn request_binding(&self,key:&str,binding:Option<DrawingStore>,work:Work)->Result<StoreReply,String> {
         let reply=StoreReply::default();let request=Request {work,replies:vec![reply.clone()]};
-        let mut state=self.0.state.lock().unwrap();let drawing=state.drawings.get_mut(key).ok_or("Drawing store is not registered")?;
+        let mut state=self.0.state.lock().unwrap();
+        if let Some(binding)=binding {
+            if state.drawings.len()>=layer_ui::session_recovery::MAX_SESSION_DRAWINGS && !state.drawings.contains_key(key) {return Err("Too many session drawings".into());}
+            state.drawings.entry(key.to_owned()).or_insert_with(||Drawing::new(binding));
+        }
+        let drawing=state.drawings.get_mut(key).ok_or("Drawing store is not registered")?;
         if drawing.retiring {drop(state);request.finish(Ok(StoreResult::Superseded));return Ok(reply);}
         if drawing.running {
             let superseded=drawing.pending.push(request);drop(state);
@@ -234,6 +249,7 @@ fn native_worker(work:StoreWork) {
     if let Ok(worker)=worker {let _=worker.send(work);}
 }
 impl Drawing {
+    fn new(binding:DrawingStore)->Self {Self {binding,observed:None,committed:None,committed_at:None,due:None,sequence:0,running:false,inflight:None,retiring:false,pending:Pending::default()}}
     fn current(&self,stamp:&SessionStamp)->bool {
         self.committed.as_ref()==Some(stamp) && self.inflight.as_ref().is_none_or(|current|current==stamp)
             && self.pending.checkpoint.as_ref().is_none_or(|request|matches!(&request.work,Work::Checkpoint {stamp:current,..} if current==stamp))
@@ -255,7 +271,7 @@ impl DrawingWork {
         let cancelled=AtomicBool::new(false);
         let result=if !current {Ok(StoreResult::Superseded)}else {std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if let Work::Checkpoint {capture,prepare,..}=&mut request.work && let Some(prepare)=prepare.take() {prepare(capture)?;}
-            self.binding.on_worker(|store|match &request.work {
+            let operation=|store:&mut layer_core::package::session_store::SessionStore|match &request.work {
             Work::Checkpoint {capture,..}=>capture.checkpoint(store,&cancelled).map(StoreResult::Checkpoint),
             Work::Pressure(tiles)=>tiles.iter().try_fold(0usize,|bytes,tiles|store.make_durable(tiles,&cancelled).map(|released|bytes.saturating_add(released))).map(StoreResult::Durable),
             Work::Restore(limits)=>{
@@ -267,8 +283,13 @@ impl DrawingWork {
                 }));
                 Ok(StoreResult::Restored {session,recovered_previous:store.recovered_previous()})
             },
+            Work::PrepareRetirement=>store.prepare_retirement().map(|()|StoreResult::RetirementPrepared),
             Work::Retire=>store.retire().map(|()|StoreResult::Retired),
-        })
+            };
+            if matches!(request.work,Work::PrepareRetirement|Work::Retire) {
+                let missing=if matches!(request.work,Work::PrepareRetirement) {StoreResult::RetirementPrepared}else {StoreResult::Retired};
+                Ok(self.binding.on_retirement_worker(operation)?.unwrap_or(missing))
+            }else {self.binding.on_worker(operation)}
         })).unwrap_or_else(|_|Err("Drawing storage worker failed".into()))};
         let committed=match (&request.work,&result) {(Work::Checkpoint {stamp,..},Ok(StoreResult::Checkpoint(_)))=>Some(stamp.clone()),_=>None};
         self.complete(committed,matches!(result,Ok(StoreResult::Retired)));request.finish(result);(self.stores.0.wake)();

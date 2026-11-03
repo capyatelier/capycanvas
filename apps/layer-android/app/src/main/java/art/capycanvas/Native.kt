@@ -107,7 +107,8 @@ internal object Native {
     @JvmStatic external fun sessionStoresFree(store: Long)
     @JvmStatic external fun sessionStoreRetire(store: Long,id:Long)
     @JvmStatic external fun sessionStorePrepareRetirement(store: Long,id:Long)
-    @JvmStatic external fun sessionPrepareRetirement(directory: String)
+    @JvmStatic external fun sessionPrepareRetirement(stores:Long,key:String)
+    @JvmStatic external fun sessionRetireCopy(stores:Long,key:String)
     @JvmStatic external fun sessionCommit(task: Long, store: Long,id:Long)
     @JvmStatic external fun sessionRestoreTask(handle: Long, stamp: String = "null"): Long
     @JvmStatic external fun sessionReserveIdentities(handle: Long, identities: String)

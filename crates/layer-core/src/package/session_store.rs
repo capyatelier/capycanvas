@@ -340,6 +340,21 @@ impl DrawingStore {
         if writer.is_none() {*writer=Some(SessionStore::open(&self.0.path)?);}
         work(writer.as_mut().unwrap())
     }
+    pub fn on_retirement_worker<T>(&self,work:impl FnOnce(&mut SessionStore)->Result<T,String>)->Result<Option<T>,String> {
+        let mut writer=self.0.writer.lock().map_err(|_|"Drawing writer failed")?;
+        if writer.is_none() {
+            let path=&self.0.path;
+            if metadata_optional(path)?.is_none() {return Ok(None);}
+            if retired_store(path)? {
+                return if store_layout_with(path,true)? {Ok(None)}else {Err("Invalid drawing session directory".into())};
+            }
+            if !store_layout(path)? {return Err("Invalid drawing session directory".into());}
+            let path=fs::canonicalize(path).map_err(|error|error.to_string())?;
+            let Some((owner,claim))=claim_store(&path)? else {return Err("Recovery drawing is already open".into())};
+            *writer=Some(SessionStore::for_retirement(path,owner,claim));
+        }
+        work(writer.as_mut().unwrap()).map(Some)
+    }
 }
 
 #[derive(PartialEq)]
@@ -392,6 +407,10 @@ fn claim_store(path: &Path) -> Result<Option<StoreClaim>, String> {
     Ok(Some((owner, writer)))
 }
 impl SessionStore {
+    fn for_retirement(path:PathBuf,owner:Arc<OwnerLock>,writer:Arc<()>)->Self {
+        Self {path,_owner:owner,_writer:writer,head:None,loaded:None,index:BTreeMap::new(),by_owner:BTreeMap::new(),append:None,
+            programs:BTreeMap::new(),reads:ReadCache::process(),generation_roots:BTreeMap::new(),published_capture:None}
+    }
     pub fn open(path: &Path) -> Result<Self, String> {
         Self::try_open(path)?.ok_or_else(|| "Recovery drawing is already open".into())
     }
@@ -766,16 +785,6 @@ impl SessionStore {
     }
 }
 
-pub fn prepare_store_retirement(path: &Path) -> Result<(), String> {
-    if metadata_optional(path)?.is_none() { return Ok(()); }
-    if retired_store(path)? {
-        return if store_layout_with(path, true)? { Ok(()) } else { Err("Invalid drawing session directory".into()) };
-    }
-    if !store_layout(path)? { return Err("Invalid drawing session directory".into()); }
-    let path = fs::canonicalize(path).map_err(|e| e.to_string())?;
-    let Some(_claim) = claim_store(&path)? else { return Err("Recovery drawing is already open".into()) };
-    mark_retirement_intent(&path)
-}
 fn mark_retirement_intent(path: &Path) -> Result<(), String> {
     if retired_store(path)? { return Err("This drawing's session copy was retired".into()); }
     if retiring_store(path)? { return Ok(()); }
@@ -816,8 +825,7 @@ pub fn collect_unreferenced_stores(root: &Path, reachable: &BTreeSet<String>, ca
         let path = fs::canonicalize(&path).map_err(|e| e.to_string())?;
         let Some((owner, writer)) = claim_store(&path)? else { continue };
         if head.is_some() && !terminal && !retiring { continue; }
-        let mut store = SessionStore { path, _owner: owner, _writer: writer,
-            head:None,loaded:None,index:BTreeMap::new(),by_owner:BTreeMap::new(),append:None,programs:BTreeMap::new(),reads:crate::tile_io::ReadCache::process(),generation_roots:BTreeMap::new(),published_capture:None };
+        let mut store = SessionStore::for_retirement(path,owner,writer);
         store.retire()?;
         retired += 1;
     }
@@ -2082,29 +2090,7 @@ mod tests {
         assert!(SessionStore::open(&path).is_err());
     }
 
-    #[test]
-    fn explicit_discard_can_prepare_a_corrupt_store_without_decoding_it() {
-        let root = Directory::new(); let path = root.0.join("corrupt");
-        let cancel = AtomicBool::new(false);
-        let mut store = SessionStore::open(&path).unwrap();
-        checkpoint(&mut store, &capture(8), &cancel).unwrap();
-        assert!(prepare_store_retirement(&path).is_err());
-        drop(store);
-        atomic_replace(&path.join("head.json"), b"invalid head").unwrap();
-        assert!(SessionStore::open(&path).is_err());
-        prepare_store_retirement(&path).unwrap();
-        collect_unreferenced_stores(&root.0, &["corrupt".into()].into(), &cancel).unwrap();
-        assert_eq!(read_bounded(&path.join("head.json"), 1024).unwrap(), b"invalid head");
-        assert_eq!(count(&path.join("generations")), 1);
-        collect_unreferenced_stores(&root.0, &BTreeSet::new(), &cancel).unwrap();
-        assert_eq!(count(&path.join("generations")), 0);
-        assert_eq!(count(&path.join("resources")), 0);
-        assert!(retired_store(&path).unwrap());
-        assert!(prepare_store_retirement(&root.0.join("unrecognized")).is_ok());
-        assert!(!root.0.join("unrecognized").exists());
-        create_directory(&root.0.join("unrecognized")).unwrap();
-        assert!(prepare_store_retirement(&root.0.join("unrecognized")).is_err());
-    }
+
 
     #[test]
     fn malformed_retirement_markers_stop_collection_even_without_a_head() {
@@ -2160,30 +2146,7 @@ mod tests {
         assert_eq!(count(&directory.0.join("generations")), 2);
     }
 
-    #[test]
-    fn repeated_retirement_preserves_the_empty_terminal_marker() {
-        let root = Directory::new(); let path = root.0.join("closed"); let cancel = AtomicBool::new(false);
-        let mut store = SessionStore::open(&path).unwrap();
-        checkpoint(&mut store, &capture(2), &cancel).unwrap();
-        store.prepare_retirement().unwrap();
-        store.retire().unwrap();
-        let marker = fs::metadata(path.join(".retired")).unwrap();
-        let directory = fs::metadata(&path).unwrap();
-        assert_eq!(marker.len(), 0);
-        assert!(!path.join(".retiring").exists());
-        prepare_store_retirement(&path).unwrap();
-        drop(store);
-        for _ in 0..8 {
-            collect_unreferenced_stores(&root.0, &BTreeSet::new(), &cancel).unwrap();
-            let unchanged = fs::metadata(path.join(".retired")).unwrap();
-            assert_eq!(marker.modified().unwrap(), unchanged.modified().unwrap());
-            assert_eq!(directory.modified().unwrap(), fs::metadata(&path).unwrap().modified().unwrap());
-            #[cfg(unix)] { use std::os::unix::fs::MetadataExt; assert_eq!(marker.ino(), unchanged.ino()); }
-            assert_eq!(count(&path.join("resources")), 0);
-            assert_eq!(count(&path.join("generations")), 0);
-            assert_eq!(count(&path), 2);
-        }
-    }
+
 
     #[cfg(unix)]
     #[test]

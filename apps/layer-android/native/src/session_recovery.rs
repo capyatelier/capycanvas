@@ -142,7 +142,8 @@ pub extern "system" fn Java_art_capycanvas_Native_sessionStoreRetire(mut env: JN
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_sessionStorePrepareRetirement(mut env: JNIEnv, _: JClass, store: jlong,id:jlong) {
     crate::jni_entry!(env, {
-    fail(&mut env, crate::inspection::borrow::<SessionStores>(store)?.bind(id as u64,None)?.on_worker(|store|store.prepare_retirement()))
+    let stores=crate::inspection::borrow::<SessionStores>(store)?.clone();let binding=stores.bind(id as u64,None)?;
+    fail(&mut env,stores.prepare_retirement(binding.key())?.wait_on_worker().map(|_|()))
     })
 }
 
@@ -356,10 +357,18 @@ pub extern "system" fn Java_art_capycanvas_Native_sessionManifestWrite(mut env: 
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_sessionPrepareRetirement(mut env: JNIEnv, _: JClass, directory: JString) {
+pub extern "system" fn Java_art_capycanvas_Native_sessionPrepareRetirement(mut env: JNIEnv, _: JClass, stores:jlong,key:JString) {
     crate::jni_entry!(env, {
-    let result = read(&mut env, &directory).and_then(|path| layer_core::package::session_store::prepare_store_retirement(Path::new(&path)));
-    fail(&mut env, result)
+    let key=read(&mut env,&key)?;let stores=crate::inspection::borrow::<SessionStores>(stores)?.clone();
+    fail(&mut env,stores.prepare_retirement(&key)?.wait_on_worker().map(|_|()))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_sessionRetireCopy(mut env:JNIEnv,_:JClass,stores:jlong,key:JString) {
+    crate::jni_entry!(env, {
+    let key=read(&mut env,&key)?;let stores=crate::inspection::borrow::<SessionStores>(stores)?.clone();
+    fail(&mut env,stores.retire_copy(&key)?.wait_on_worker().map(|_|()))
     })
 }
 
