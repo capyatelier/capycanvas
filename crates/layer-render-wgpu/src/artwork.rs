@@ -185,7 +185,7 @@ impl Capture {
         }
         if self.scene.is_none() { self.scene = Some(scene::Scene::new(r)?); }
         let scene = self.scene.as_mut().unwrap();
-        let output = match packet.scene.scope() { Some(SceneScope::RawObjects(handle)) => scene::Output::Objects(*handle), _ => scene::Output::Artwork(None) };
+        let output = packet.scene.scope().and_then(scene::raw_output).unwrap_or(scene::Output::Artwork(None));
         scene.capture_region_prepared(r, packet, destination, region, output, encoder)?;
         self.window = Some(window);
         self.peak_image_bytes = self.peak_image_bytes.max(bytes);

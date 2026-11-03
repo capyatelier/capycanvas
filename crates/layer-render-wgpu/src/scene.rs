@@ -184,6 +184,11 @@ fn composite_color(r: &WgpuRasterizer, packet: FramePacket<'_>, [red, green, blu
 }
 #[derive(Clone, Copy)]
 pub(super) enum Output { Artwork(Option<OccurrenceHandle>), Objects(OccurrenceHandle), EffectInput(OccurrenceHandle), EffectChannels(OccurrenceHandle), EffectComposite(OccurrenceHandle), Source(SourceTarget), MaskImage(SourceTarget), Display }
+pub(super) fn raw_output(scope:&SceneScope)->Option<Output> {Some(match scope {
+    SceneScope::Raw(target) if target.is_coverage()=>Output::MaskImage(*target),
+    SceneScope::Raw(target)=>Output::Source(*target),
+    SceneScope::RawObjects(handle)=>Output::Objects(*handle),_=>return None,
+})}
 
 pub(super) struct Scene {
     valid: Arc<std::sync::atomic::AtomicBool>,

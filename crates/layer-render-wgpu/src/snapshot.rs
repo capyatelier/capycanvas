@@ -527,11 +527,7 @@ impl SnapshotRenderer {
     async fn capture_output_region_gpu<T>(&mut self, [x,y,width,height]: [u32;4], output: scene::Output, reserved_bytes:u64,
         consume: impl FnOnce(&PipelineDevice, &wgpu::Texture, &mut submission::CommandEncoder) -> T,
     ) -> Result<T, GpuRasterError> {
-        let output=match (&self.scope,output) {
-            (SceneScope::Raw(target),scene::Output::Artwork(None)) if target.is_coverage()=>scene::Output::MaskImage(*target),
-            (SceneScope::Raw(target),scene::Output::Artwork(None))=>scene::Output::Source(*target),
-            (SceneScope::RawObjects(handle),scene::Output::Artwork(None))=>scene::Output::Objects(*handle),_=>output,
-        };
+        let output=if matches!(output,scene::Output::Artwork(None)) {scene::raw_output(&self.scope).unwrap_or(output)}else{output};
         self.prepare_scene_pipelines().await?;
         let mut consume=Some(consume);
         self.with_region_gpu([x, y, width, height], reserved_bytes, |r, packet, region, encoder| {
