@@ -825,8 +825,9 @@ try{
  [CapyCanvasTouch]::Down(1,[int]$startX,[int]$startY)
  Walk $startX $startY $x $y
  Wait-Until {@((Model).layout.groups|Where-Object {$_.active -eq 'navigator' -and $_.floating}).Count -eq 1} 'Navigator did not tear off'
- Start-Sleep -Milliseconds 600
  $navigator=(Model).layout.groups|Where-Object {$_.active -eq 'navigator' -and $_.floating}
+ Wait-Until {@((Presentation).groups|Where-Object id -eq $navigator.id).Count -eq 1} 'Native Navigator did not tear off'
+ Wait-OverviewProjection
  $before=Presentation
  $retained=(Control 'navigator-zoom_in').GetRuntimeId() -join ':'
  Capture 'navigator-first' -Composed
