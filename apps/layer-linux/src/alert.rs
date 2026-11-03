@@ -37,6 +37,7 @@ pub async fn choose(dialog: adw::AlertDialog, parent: &impl IsA<gtk::Widget>) ->
 
 pub async fn choose_editor(dialog: adw::AlertDialog, parent: &impl IsA<gtk::Widget>, primary: Option<&str>, secondary: &[&str]) -> glib::GString {
     let metadata = crate::page_dialog::Metadata::responses(primary, &dialog.close_response(), secondary);
+    let metadata = if primary.is_none() { metadata.done() } else { metadata };
     choose_role(dialog, parent, layer_ui::DialogRole::Editor, metadata).await
 }
 

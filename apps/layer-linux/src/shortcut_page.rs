@@ -42,7 +42,7 @@ impl Sheet {
         let view = adw::ToolbarView::new();
         view.add_top_bar(&header);
         dialog.set_child(Some(&view));
-        crate::page_dialog::configure(&dialog, crate::page_dialog::Metadata::new().title(&title, "title").header(&view, &header));
+        crate::page_dialog::configure(&dialog, crate::page_dialog::Metadata::new().title(&title, "title").header(&view, &header).done());
         Self { dialog, title, header, view, shown: Cell::new(false) }
     }
 

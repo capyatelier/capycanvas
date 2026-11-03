@@ -2,7 +2,7 @@ use super::*;
 use gtk::glib;
 use std::sync::{Arc, Mutex};
 
-pub(super) fn size_warnings() -> Arc<Mutex<Vec<String>>> {
+pub(crate) fn size_warnings() -> Arc<Mutex<Vec<String>>> {
     let warnings = Arc::new(Mutex::new(Vec::new()));
     let captured = warnings.clone();
     glib::log_set_writer_func(move |level, fields| {
@@ -12,6 +12,10 @@ pub(super) fn size_warnings() -> Arc<Mutex<Vec<String>>> {
             && ["Trying to measure", "size_allocate", "minimum", "min width", "min height", "natural width", "natural height"]
                 .iter().any(|text| message.contains(text)) {
             captured.lock().unwrap().push(message.to_owned());
+        }
+        if level == glib::LogLevel::Critical && field("GLIB_DOMAIN") == Some("Adwaita")
+            && let Some(message) = field("MESSAGE") {
+            captured.lock().unwrap().push(format!("Adwaita critical: {message}"));
         }
         glib::log_writer_default(level, fields)
     });

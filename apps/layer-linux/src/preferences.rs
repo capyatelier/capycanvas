@@ -450,7 +450,7 @@ impl Preferences {
             .build();
         let resize = crate::dialog_content::new(gtk::Orientation::Vertical, 0);
         resize.append(&split);
-        crate::page_dialog::configure(&dialog, crate::page_dialog::Metadata::new().root_header(&sidebar_header).navigation_header(&header));
+        crate::page_dialog::configure(&dialog, crate::page_dialog::Metadata::new().root_header(&sidebar_header).navigation_header(&header).done());
         sidebar.connect_activated(glib::clone!(
             #[weak]
             split,
@@ -1083,7 +1083,7 @@ impl Preferences {
             // on the model's closed -> open transition, even while rooted.
             if !was_open {
                 crate::page_dialog::present(&self.dialog, &w.window);
-                self.split.set_show_content(true);
+                self.split.set_show_content(view.page_requested);
             }
             if self.reveal.replace(view.reveal) != view.reveal
                 && let Some(id) = view.reveal

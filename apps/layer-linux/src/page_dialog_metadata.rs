@@ -98,6 +98,8 @@ impl Metadata {
         }
         let close = gtk::Button::from_icon_name("window-close-symbolic");
         close.add_css_class("flat");
+        let done = matches!(self.primary.as_ref(), Some(Action::Close));
+        close.set_visible(!done);
         let cancel_label = layer_ui::CommonCopy::new(&w.localization()).cancel;
         close.set_tooltip_text(Some(&cancel_label));
         close.update_property(&[gtk::accessible::Property::Label(&cancel_label)]);
@@ -107,7 +109,7 @@ impl Metadata {
             if let Some(split) = top_navigation.as_ref().filter(|split| split.is_mapped() && split.shows_content()) { split.set_show_content(false); }
             else { cancel.activate(&dialog); }
         }));
-        let bindings = self.top_navigation.as_ref().map_or_else(Vec::new, |(split, page)| bind_navigation(split, page, dialog, &title, &close, w));
+        let bindings = self.top_navigation.as_ref().map_or_else(Vec::new, |(split, page)| bind_navigation(split, page, dialog, &title, &close, done, w));
         header.pack_start(&close);
         if let Some(row) = close.parent().and_downcast::<gtk::Box>() { row.reorder_child_after(&close, gtk::Widget::NONE); }
         projected.push((header.clone(), close.clone().upcast()));
@@ -134,12 +136,13 @@ impl Metadata {
     }
 }
 
-fn bind_navigation(split: &adw::NavigationSplitView, page: &adw::NavigationPage, dialog: &adw::Dialog, title: &gtk::Label, close: &gtk::Button, w: &Workspace) -> Vec<(glib::Object, glib::SignalHandlerId)> {
+fn bind_navigation(split: &adw::NavigationSplitView, page: &adw::NavigationPage, dialog: &adw::Dialog, title: &gtk::Label, close: &gtk::Button, done: bool, w: &Workspace) -> Vec<(glib::Object, glib::SignalHandlerId)> {
     let copy = layer_ui::CommonCopy::new(&w.localization());
     let update = std::rc::Rc::new(glib::clone!(#[weak] split, #[weak] page, #[weak] dialog, #[weak] title, #[weak] close, move |mapped: bool| {
         let subpage = mapped && split.shows_content();
         let caption = if subpage { page.title() } else { dialog.title() };
         title.set_label(&caption);
+        close.set_visible(!done || subpage);
         close.set_icon_name(if subpage { "go-previous-symbolic" } else { "window-close-symbolic" });
         let label = if subpage { &copy.back } else { &copy.cancel };
         close.set_tooltip_text(Some(label));

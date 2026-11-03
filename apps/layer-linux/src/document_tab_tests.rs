@@ -1284,15 +1284,17 @@ fn native_document_tabs_disk_failure_keeps_data() {
 
 fn begin_preserved_import(w: &Rc<Workspace>, imported: layer_ui::ImportedDocument, source: &std::path::Path) -> Rc<RefCell<Option<Result<(),String>>>> {
     let completed = Rc::new(RefCell::new(None));
-    let previous = w.window.visible_dialog();
+    let previous = w.visible_dialog();
     let file = gtk::gio::File::for_path(source);
     let location = layer_ui::DocumentLocation {uri:file.uri().to_string(),name:"Original.capy".into()};
     glib::spawn_future_local(glib::clone!(#[strong] w, #[strong] completed, async move {
         *completed.borrow_mut() = Some(w.documents.open_imported(&w, imported, Some(location)).await);
     }));
-    until(|| w.window.visible_dialog().is_some_and(|dialog|Some(&dialog)!=previous.as_ref()
-        && dialog.widget_name()=="preserved-package-preview" && dialog.is_mapped()
-        && dialog.downcast_ref::<adw::AlertDialog>().and_then(|dialog|dialog.extra_child()).is_some_and(|picture|picture.is_mapped())),"unsupported admission presents the package preview");
+    until(|| w.visible_dialog().is_some_and(|dialog| Some(&dialog) != previous.as_ref()
+        && dialog.widget_name() == "preserved-package-preview" && {
+            let frame = crate::page_dialog::parent(&dialog);
+            frame.is_mapped() && descendants::<gtk::Picture>(&frame).iter().any(|picture| picture.is_mapped() && picture.paintable().is_some())
+        }),"unsupported admission presents the package preview");
     completed
 }
 
@@ -1304,6 +1306,11 @@ fn native_import_admission_failure_preserves_package_and_current_drawing() {
     let app = native_test_app("art.capycanvas.ImportAdmission");
     let localization = layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
     let w = Workspace::with_project(&app, Some((new_drawing(64,48,&localization).unwrap(), None)));
+    let phone_viewport = std::env::var("LAYER_MOTION_VIEWPORT").ok().map(|viewport| {
+        let (width, height) = viewport.split_once('x').unwrap();
+        [width.parse::<i32>().unwrap(), height.parse::<i32>().unwrap()]
+    }).filter(|size| size[0].min(size[1]) < 480);
+    if phone_viewport.is_some() { w.window.maximize(); }
     w.window.present();
     new_photo::ready(&w);
     new_photo::invoke(&w, CommandId::AddLayer);
@@ -1345,6 +1352,35 @@ fn native_import_admission_failure_preserves_package_and_current_drawing() {
         _ => panic!("Expected supported native package"),
     };
     w.documents.model.borrow_mut().budget.metadata = 0;
+    if let Some(expected) = phone_viewport {
+        until(|| [w.surface.width(), w.surface.height()] == expected, "the preserved package journey uses its phone viewport");
+        let mut d = super::workspace_header::Driver::start(w.clone(), app);
+        let diagnostics = super::page_dialog::bounds::size_warnings();
+        for theme in [Theme::Light, Theme::Dark] {
+            w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+            let completed = begin_preserved_import(&w, imported.clone(), &source);
+            let (dialog, frame) = super::page_dialog::page_frame(&d);
+            let header = super::page_dialog::done_header(&d, &frame, true);
+            super::page_dialog::capture(&mut d, "preserved-package-preview");
+            let alert = dialog.downcast_ref::<adw::AlertDialog>().unwrap();
+            let responses = Rc::new(RefCell::new(Vec::new()));
+            let observed = responses.clone();
+            let handler = alert.connect_response(None, move |_, response| observed.borrow_mut().push(response.to_owned()));
+            diagnostics.lock().unwrap().clear();
+            d.click(super::page_dialog::done_button(&d, &header).upcast_ref());
+            until(|| completed.borrow().is_some(), "Preserved Package Done completes its close response");
+            assert_eq!(completed.borrow_mut().take().unwrap(), Ok(()));
+            assert_eq!(*responses.borrow(), [alert.close_response().to_string()], "Preserved Package Done emits its close response exactly once");
+            assert!(!diagnostics.lock().unwrap().iter().any(|message| message.starts_with("Adwaita critical:")), "Preserved Package Done has no Adwaita critical");
+            alert.disconnect(handler);
+            assert_eq!(ui_session(&w).engine().document(), &original);
+            assert_eq!(ui_session(&w).engine().checkpoint(), checkpoint);
+            assert_eq!(w.documents.selected(), selected);
+        }
+        d.finish();
+        std::fs::remove_dir_all(directory).unwrap();
+        return;
+    }
     let refusal = localization.text(layer_ui::MessageId::DOCUMENTS_PACKAGE_CHOOSE_DIFFERENT).to_string();
     for (theme,name) in [(Theme::Light,"light"),(Theme::Dark,"dark")] {
         w.dispatch(UiAction::SetTheme {theme:Some(theme)});

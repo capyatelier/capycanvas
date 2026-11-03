@@ -108,7 +108,7 @@ impl Pages {
         let specification::Header { header, loan, previous_title, projected, hidden, mut responses, page_primary, close, bindings } = meta.project_header(dialog, w, &frame);
         let default = gtk::prelude::GtkWindowExt::default_widget(&w.window).map(|widget| widget.downgrade());
         let page_default = if let Some(alert) = alert {
-            if alert.default_response().as_deref() == Some(alert.close_response().as_str()) { Some(close.clone()) }
+            if alert.default_response().as_deref() == Some(alert.close_response().as_str()) && close.is_visible() { Some(close.clone()) }
             else { page_primary.clone() }
         } else { page_primary.clone() };
         for (native, _, _) in &headers {

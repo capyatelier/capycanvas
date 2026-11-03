@@ -4284,7 +4284,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (SETTINGS | COMMANDS, save_settings)
             }
             UiAction::OpenSettings { page } => {
-                self.open_settings(page);
+                self.open_settings(Some(page));
                 (SETTINGS, false)
             }
             UiAction::Preferences { action: PreferenceAction::ExportKeymap } if self.state.settings_open => {
@@ -5893,9 +5893,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .cancel_header(&mut self.state.workspace.layout);
                 self.state.customization = CustomizationState::default();
                 self.open_settings(match command {
-                    CommandId::KeyboardShortcuts => SettingsPage::Shortcuts,
-                    CommandId::About => SettingsPage::About,
-                    _ => SettingsPage::Appearance,
+                    CommandId::KeyboardShortcuts => Some(SettingsPage::Shortcuts),
+                    CommandId::About => Some(SettingsPage::About),
+                    _ => None,
                 });
                 Ok((
                     SETTINGS | CUSTOMIZATION | if canceled { LAYOUT } else { 0 },
@@ -6043,14 +6043,15 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.queue_host_request(id, kind);
         Ok(())
     }
-    fn open_settings(&mut self, page: SettingsPage) {
+    fn open_settings(&mut self, page: Option<SettingsPage>) {
         self.state.settings_open = true;
         self.state.preferences.edit(
             &mut self.state.settings,
-            PreferenceAction::Page { page },
+            PreferenceAction::Page { page: page.unwrap_or(SettingsPage::Appearance) },
             self.state.platform,
             &self.state.localization,
         );
+        self.state.preferences.page_requested = page.is_some();
     }
     fn apply_settings(&mut self, settings: Settings) -> Result<(), String> {
         self.engine
@@ -17824,6 +17825,66 @@ mod tests {
             assert_eq!(restored, s.state.settings);
             assert_eq!(restored.palette(s.state.theme, platform, None), s.state.palette);
             assert!(serde_json::from_str::<Settings>(&json.replace("#1c2c3c", "bad")).is_err());
+        }
+    }
+    #[test]
+    fn settings_openers_distinguish_the_page_list_from_explicit_destinations() {
+        for platform in Platform::ALL {
+            let mut s = session(platform);
+            let saved = serde_json::to_value(&s.state.settings).unwrap();
+            let openers = [
+                (UiAction::Invoke { command: CommandId::KeyboardShortcuts }, SettingsPage::Shortcuts),
+                (UiAction::Invoke { command: CommandId::About }, SettingsPage::About),
+            ].into_iter().chain(SettingsPage::ALL.map(|page| (UiAction::OpenSettings { page }, page)));
+            invoke(&mut s, CommandId::Settings);
+            assert_eq!(s.preferences().unwrap().page, SettingsPage::Appearance);
+            assert!(!s.preferences().unwrap().page_requested);
+            for (action, page) in openers {
+                s.dispatch(UiAction::CloseSettings).unwrap();
+                s.dispatch(action).unwrap();
+                let view = s.preferences().unwrap();
+                assert_eq!(view.page, page, "{platform:?}");
+                assert!(view.page_requested, "{platform:?}/{page:?}");
+                s.dispatch(UiAction::CloseSettings).unwrap();
+                invoke(&mut s, CommandId::Settings);
+                let view = s.preferences().unwrap();
+                assert_eq!(view.page, SettingsPage::Appearance, "{platform:?}");
+                assert!(!view.page_requested, "{platform:?}");
+            }
+            preference(&mut s, PreferenceAction::Page { page: SettingsPage::Canvas });
+            assert_eq!(s.preferences().unwrap().page, SettingsPage::Canvas);
+            assert!(s.preferences().unwrap().page_requested);
+            invoke(&mut s, CommandId::Settings);
+            preference(&mut s, PreferenceAction::Search { query: "canvas".into() });
+            assert!(!s.preferences().unwrap().page_requested);
+            let action = s.preferences().unwrap().search_results.into_iter().find(|result|
+                result.action == PreferenceAction::Page { page: SettingsPage::Canvas }).unwrap().action;
+            preference(&mut s, action);
+            assert_eq!(s.preferences().unwrap().page, SettingsPage::Canvas);
+            assert!(s.preferences().unwrap().page_requested);
+            invoke(&mut s, CommandId::Settings);
+            preference(&mut s, PreferenceAction::Search { query: "keyboard shortcuts".into() });
+            assert!(!s.preferences().unwrap().page_requested);
+            let id = CommandId::Brush.shortcut_id();
+            let action = s.preferences().unwrap().search_results.into_iter().find(|result|
+                result.action == PreferenceAction::EditShortcut { id: id.clone() }).unwrap().action;
+            preference(&mut s, action);
+            let view = s.preferences().unwrap();
+            assert_eq!(view.page, SettingsPage::Shortcuts);
+            assert!(view.page_requested);
+            assert_eq!(view.shortcut_editor.unwrap().id, id);
+            invoke(&mut s, CommandId::Settings);
+            preference(&mut s, PreferenceAction::EditShortcut { id });
+            assert!(s.preferences().unwrap().page_requested);
+            s.dispatch(UiAction::CloseSettings).unwrap();
+            preference(&mut s, PreferenceAction::Reveal { id: PreferenceId::Theme });
+            let view = s.preferences().unwrap();
+            assert_eq!(view.page, SettingsPage::Appearance);
+            assert!(view.page_requested);
+            assert_eq!(view.reveal, Some(PreferenceId::Theme));
+            assert_eq!(serde_json::to_value(&s.state.settings).unwrap(), saved);
+            assert!(saved.get("page_requested").is_none());
+            assert!(s.state.requests.is_empty());
         }
     }
     #[test]

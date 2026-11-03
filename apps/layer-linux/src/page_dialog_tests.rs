@@ -264,7 +264,29 @@ fn navigation_header(d: &Driver, frame: &gtk::Widget, root: bool) -> adw::Header
     header
 }
 
-fn page_frame(d: &Driver) -> (adw::Dialog, gtk::Widget) {
+pub(super) fn done_button(d: &Driver, header: &adw::HeaderBar) -> gtk::Button {
+    let copy = layer_ui::CommonCopy::new(&d.w.localization());
+    let buttons = descendants::<gtk::Button>(header.upcast_ref()).into_iter()
+        .filter(|button| button.is_mapped() && button.label().as_deref() == Some(copy.done.as_ref())).collect::<Vec<_>>();
+    assert_eq!(buttons.len(), 1, "the header has exactly one Done control");
+    let done = buttons.into_iter().next().unwrap();
+    assert!(done.has_css_class("suggested-action"));
+    assert_eq!(done.accessible_role(), gtk::AccessibleRole::Button);
+    assert_eq!(done.child().and_downcast::<gtk::Label>().unwrap().text(), copy.done.as_ref());
+    let bounds = done.compute_bounds(header).unwrap();
+    assert!(bounds.x() > header.width() as f32 / 2., "Done is at the header end: {bounds:?} in {}x{}", header.width(), header.height());
+    done
+}
+
+pub(super) fn done_header(d: &Driver, frame: &gtk::Widget, root: bool) -> adw::HeaderBar {
+    let header = page_header(frame);
+    assert!(icon_button(&header, "window-close-symbolic").is_none(), "Done pages do not duplicate a start X");
+    assert_eq!(icon_button(&header, "go-previous-symbolic").is_some(), !root, "Done subpages retain Back");
+    done_button(d, &header);
+    header
+}
+
+pub(super) fn page_frame(d: &Driver) -> (adw::Dialog, gtk::Widget) {
     until(|| d.w.visible_dialog().is_some_and(|dialog| {
         let frame = crate::page_dialog::parent(&dialog);
         frame != dialog.clone().upcast::<gtk::Widget>() && frame.is_mapped() && frame.width() > 0 && frame.height() > 0
@@ -298,7 +320,7 @@ fn page(d: &Driver) -> (adw::Dialog, gtk::Widget) {
     (dialog, frame)
 }
 
-fn capture(d: &mut Driver, name: &str) {
+pub(super) fn capture(d: &mut Driver, name: &str) {
     if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
         d.input.perform(serde_json::json!([{ "capture_window": {
             "name": format!("pages-{}x{}-{}-{name}", d.w.surface.width(), d.w.surface.height(), format!("{:?}", state(&d.w).theme).to_lowercase()),
@@ -423,12 +445,14 @@ fn native_phone_navigation_headers() {
     d.click(&d.named("phone-preferences"));
     let (_, frame) = page(&d);
     let split = descendants::<adw::NavigationSplitView>(&frame).pop().unwrap();
-    assert!(split.is_collapsed() && split.shows_content());
-    d.click(icon_button(&navigation_header(&d, &frame, false), "go-previous-symbolic").unwrap().upcast_ref());
-    until(|| !split.shows_content(), "Preferences Back opens its root list");
-    let root = navigation_header(&d, &frame, true);
-    let close_button = icon_button(&root, "window-close-symbolic").unwrap();
+    assert!(split.is_collapsed() && !split.shows_content(), "plain Settings opens its page list");
+    let root = done_header(&d, &frame, true);
+    let close_button = done_button(&d, &root);
     capture(&mut d, "preferences-root");
+    let start = descendants::<gtk::Button>(root.upcast_ref()).into_iter().filter(|button| button.is_mapped()
+        && button.compute_bounds(&root).is_some_and(|bounds| bounds.x() < root.width() as f32 / 2.)).collect::<Vec<_>>();
+    assert_eq!(start.len(), 1, "Preferences root keeps only its search toggle at the start");
+    assert_eq!(start[0].widget_name(), "preferences-search-toggle");
     let mut popup_checks = Vec::new();
     for settings in SettingsPage::ALL {
         let title = settings.localized_title(&d.w.localization());
@@ -515,8 +539,7 @@ fn native_phone_navigation_headers() {
         }
         let captured = warnings.lock().unwrap().clone();
         assert!(captured.is_empty(), "Preferences {}: GTK size warnings: {captured:?}", settings.key());
-        let subpage = navigation_header(&d, &frame, false);
-        assert!(gtk::prelude::GtkWindowExt::default_widget(&d.w.window).is_none(), "Preferences has no synthesized primary");
+        let subpage = done_header(&d, &frame, false);
         if settings == SettingsPage::Shortcuts {
             let one_back = |header: &adw::HeaderBar| {
                 let buttons = descendants::<gtk::Button>(header.upcast_ref()).into_iter().filter(|button| button.is_mapped()
@@ -533,13 +556,13 @@ fn native_phone_navigation_headers() {
             until(|| ui_session(&d.w).preferences().unwrap().shortcut_page.category.is_some()
                 && !categories.is_mapped(), "the first Shortcuts category finishes opening");
             let category = named::<adw::PreferencesPage>(&frame, "shortcut-category-page");
-            let category_header = navigation_header(&d, &frame, false);
+            let category_header = done_header(&d, &frame, false);
             let back = one_back(&category_header);
             capture(&mut d, "preferences-shortcuts-category");
             d.click(back.upcast_ref());
             until(|| ui_session(&d.w).preferences().unwrap().shortcut_page.category.is_none()
                 && categories.is_mapped() && !category.is_mapped(), "category Back returns to the Shortcuts list");
-            one_back(&navigation_header(&d, &frame, false));
+            one_back(&done_header(&d, &frame, false));
             if state(&d.w).theme == Theme::Dark {
                 let nav = named::<adw::NavigationView>(&frame, "shortcut-navigation");
                 let content = nav.visible_page().unwrap().child().unwrap();
@@ -557,7 +580,7 @@ fn native_phone_navigation_headers() {
         }
         d.click(icon_button(&subpage, "go-previous-symbolic").unwrap().upcast_ref());
         until(|| !split.shows_content(), "Preferences Back preserves the dialog");
-        assert_eq!(navigation_header(&d, &frame, true), root);
+        assert_eq!(done_header(&d, &frame, true), root);
     }
     d.click(close_button.upcast_ref());
     until(|| d.w.visible_dialog().is_none() && !d.w.pages.root.is_transition_running(), "root Close closes Preferences");
@@ -565,11 +588,33 @@ fn native_phone_navigation_headers() {
     restored_headers(&original);
     d.w.dispatch(UiAction::Invoke { command: CommandId::Settings });
     let (_, reopened) = page(&d);
-    navigation_header(&d, &reopened, false);
+    done_header(&d, &reopened, true);
     keys(&mut d, 0xff1b);
-    until(|| d.w.visible_dialog().is_none() && !d.w.pages.root.is_transition_running(), "Escape closes Preferences from a subpage");
+    until(|| d.w.visible_dialog().is_none() && !d.w.pages.root.is_transition_running(), "Escape closes Preferences from its root list");
     assert!(!state(&d.w).settings_open);
     restored_headers(&original);
+    d.w.dispatch(UiAction::Invoke { command: CommandId::KeyboardShortcuts });
+    let (_, direct) = page(&d);
+    let split = descendants::<adw::NavigationSplitView>(&direct).pop().unwrap();
+    assert!(split.shows_content(), "direct Keyboard Shortcuts opens its page");
+    capture(&mut d, "preferences-shortcuts-direct");
+    let header = done_header(&d, &direct, false);
+    for (action, name) in [
+        (PreferenceAction::KeymapDetails { open: true }, "keymap-details"),
+        (PreferenceAction::OpenActionPicker { trigger: "touch.tap.2".into() }, "action-picker"),
+        (PreferenceAction::EditShortcut { id: CommandId::Redo.shortcut_id() }, "shortcut-editor"),
+        (PreferenceAction::AddModifierKey, "modifier-key"),
+    ] {
+        d.w.dispatch(UiAction::Preferences { action });
+        let (sheet, frame) = page(&d);
+        assert_eq!(sheet.widget_name(), name);
+        let header = done_header(&d, &frame, true);
+        capture(&mut d, name);
+        d.click(done_button(&d, &header).upcast_ref());
+        until(|| d.w.visible_dialog().is_some_and(|dialog| dialog.widget_name() != name) && !d.w.pages.root.is_transition_running(), "Done closes its shortcut sheet");
+    }
+    d.click(done_button(&d, &header).upcast_ref());
+    until(|| d.w.visible_dialog().is_none() && !d.w.servicing.get(), "Done closes direct Keyboard Shortcuts");
 
     d.w.dispatch(UiAction::Invoke { command: CommandId::ExportDocument });
     let (dialog, frame) = page(&d);
@@ -599,19 +644,19 @@ fn native_phone_navigation_headers() {
     let original = header_state(d.w.workspaces.ui.dialog.upcast_ref());
     d.w.workspaces.ui.show(&d.w, layer_workspace::ManagerPage::ThisWorkspace);
     let (dialog, frame) = page(&d);
-    let root = navigation_header(&d, &frame, true);
+    let root = done_header(&d, &frame, true);
     let root_title = dialog.title();
     assert_eq!(descendants::<gtk::Label>(root.upcast_ref()).into_iter().filter(|label| label.is_mapped() && label.text() == root_title).count(), 1,
         "the manager root header shows the dialog title");
     capture(&mut d, "workspace-manager-root");
-    let close_button = icon_button(&root, "window-close-symbolic").unwrap();
+    let close_button = done_button(&d, &root);
     let split = descendants::<adw::NavigationSplitView>(&frame).pop().unwrap();
     assert!(split.is_mapped() && split.is_collapsed(), "Manage Toolbars root keeps one pane on a phone");
     let list = named::<gtk::ListBox>(&frame, "workspace-manager-items");
     d.click(list.row_at_index(0).unwrap().upcast_ref());
     until(|| split.shows_content(), "the workspace manager opens toolbar details");
     assert!(split.is_mapped() && split.is_collapsed(), "Manage Toolbars detail keeps one pane on a phone");
-    let subpage = navigation_header(&d, &frame, false);
+    let subpage = done_header(&d, &frame, false);
     assert_eq!(subpage, root, "the manager keeps its existing header at the top");
     let title = d.w.workspaces.view().details.as_ref().unwrap().title.clone();
     assert_eq!(descendants::<gtk::Label>(&frame).into_iter().filter(|label| label.is_mapped() && label.text().as_str() == title.as_str()).count(), 1,
@@ -619,7 +664,7 @@ fn native_phone_navigation_headers() {
     capture(&mut d, "workspace-manager-detail");
     d.click(icon_button(&subpage, "go-previous-symbolic").unwrap().upcast_ref());
     until(|| !split.shows_content(), "manager Back returns to its toolbar list");
-    assert_eq!(navigation_header(&d, &frame, true), root);
+    assert_eq!(done_header(&d, &frame, true), root);
     assert_eq!(descendants::<gtk::Label>(root.upcast_ref()).into_iter().filter(|label| label.is_mapped() && label.text() == root_title).count(), 1,
         "manager Back restores the dialog title");
     d.click(close_button.upcast_ref());
@@ -632,11 +677,42 @@ fn native_phone_navigation_headers() {
     let list = named::<gtk::ListBox>(&frame, "workspace-manager-items");
     d.click(list.row_at_index(0).unwrap().upcast_ref());
     until(|| split.shows_content(), "the reopened manager opens its detail page");
-    navigation_header(&d, &frame, false);
+    done_header(&d, &frame, false);
     keys(&mut d, 0xff1b);
     until(|| d.w.visible_dialog().is_none() && !d.w.pages.root.is_transition_running(), "Escape closes the manager from details");
     assert!(d.w.workspaces.view().page.is_none());
     restored_headers(&original);
+    for mode in [layer_workspace::ManagerPage::ThisWorkspace, layer_workspace::ManagerPage::ToolbarLibrary] {
+        for detail in [false, true] {
+            if mode == layer_workspace::ManagerPage::ToolbarLibrary && detail {
+                let toolbar = state(&d.w).workspace.layout.panels.iter()
+                    .find(|panel| panel.id.kind() == PanelKind::Tiles).unwrap().id;
+                glib::MainContext::default().block_on(
+                    d.w.workspaces.manager().unwrap().save_toolbar(toolbar, "Done Test Toolbar", crate::workspace::manager::now_ms()),
+                ).unwrap();
+            }
+            d.w.workspaces.ui.show(&d.w, mode);
+            let (_, frame) = page(&d);
+            if detail {
+                let split = descendants::<adw::NavigationSplitView>(&frame).pop().unwrap();
+                let list = named::<gtk::ListBox>(&frame, "workspace-manager-items");
+                let row = list.row_at_index(0).unwrap();
+                super::histogram::scroll_to(row.upcast_ref());
+                d.click(row.upcast_ref());
+                until(|| split.shows_content(), "the manager detail opens before Done");
+            }
+            let header = done_header(&d, &frame, !detail);
+            capture(&mut d, &format!("manager-{mode:?}-{}", if detail { "detail" } else { "root" }).to_lowercase());
+            d.click(done_button(&d, &header).upcast_ref());
+            until(|| d.w.visible_dialog().is_none() && !d.w.pages.root.is_transition_running(), "Done closes the manager from its current level");
+        }
+    }
+    d.w.dispatch(UiAction::Customize { action: CustomizationAction::ManageToolbars });
+    let (_, frame) = page(&d);
+    let header = done_header(&d, &frame, true);
+    capture(&mut d, "toolbar-manager");
+    d.click(done_button(&d, &header).upcast_ref());
+    until(|| d.w.visible_dialog().is_none() && !d.w.pages.root.is_transition_running(), "Done closes the toolbar manager");
     assert_eq!(ui_session(&d.w).engine().checkpoint(), checkpoint);
     d.finish();
 }
@@ -645,7 +721,8 @@ fn native_phone_navigation_headers() {
 #[ignore = "private compositor: --native-test=native_phone_editor_pages --native-storage; 412x891 light"]
 fn native_phone_editor_pages() {
     let mut d = super::phone_motion::setup("art.capycanvas.EditorPages");
-    assert_eq!([d.w.surface.width(), d.w.surface.height()], [412, 891]);
+    let diagnostics = bounds::size_warnings();
+    assert!(matches!([d.w.surface.width(), d.w.surface.height()], [412, 891] | [891, 412]));
     d.w.dispatch(UiAction::Invoke { command: CommandId::AddLayer });
     until(|| !ui_session(&d.w).engine().has_pending_document_edits(), "the modal history fixture is committed");
     d.w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit {
@@ -663,10 +740,10 @@ fn native_phone_editor_pages() {
         d.click(icon_button(&page_header(&frame), "go-previous-symbolic").unwrap().upcast_ref());
         until(|| !split.shows_content(), "Preferences Back returns to its root list");
     }
-    let header = navigation_header(&d, &frame, true);
-    let close_button = icon_button(&header, "window-close-symbolic").unwrap();
+    let header = done_header(&d, &frame, true);
+    let close_button = done_button(&d, &header);
     assert!(gtk::prelude::GtkWindowExt::focus(&d.w.window).is_none_or(|focus| focus != close_button), "opening does not focus the page's close button");
-    assert!(gtk::prelude::GtkWindowExt::default_widget(&d.w.window).is_none(), "Preferences declares no primary action");
+    assert!(!split.shows_content(), "plain Settings opens the page list");
     close_button.grab_focus();
     for _ in 0..48 {
         keys(&mut d, 0xff09);
@@ -716,7 +793,7 @@ fn native_phone_editor_pages() {
     assert_eq!(state(&d.w).settings.keymap.as_ref().map(|keymap| keymap.id.as_str()), Some("photoshop"));
     settings.set_gtk_enable_animations(animations);
     keys(&mut d, 0xff1b);
-    until(|| d.w.visible_dialog().is_none() && !d.w.pages.root.is_transition_running(), "Escape closes Preferences without a synthesized Done");
+    until(|| d.w.visible_dialog().is_none() && !d.w.pages.root.is_transition_running(), "Escape closes Preferences with its projected Done");
     assert!(!crate::page_dialog::parent(&dialog).is_mapped());
 
     d.w.dispatch(UiAction::Invoke { command: CommandId::NewDocument });
@@ -809,10 +886,25 @@ fn native_phone_editor_pages() {
             let action = gtk::prelude::GtkWindowExt::default_widget(&d.w.window).unwrap();
             assert!(action.is_ancestor(&page_header(&frame)), "Export keeps Choose File in its only main header");
         }
-        if command == CommandId::DocumentProperties { assert!(descendants::<gtk::Button>(page_header(&frame).upcast_ref()).into_iter().all(|button| !button.is_mapped() || !button.has_css_class("suggested-action")), "Document Properties declares no primary action"); }
+        if command == CommandId::DocumentProperties { done_header(&d, &frame, true); }
         capture(&mut d, name);
         let scroll = crate::page_dialog::content(&dialog).and_downcast::<gtk::ScrolledWindow>();
-        close(&d, &dialog);
+        if command == CommandId::DocumentProperties {
+            let header = done_header(&d, &frame, true);
+            let default = gtk::prelude::GtkWindowExt::default_widget(&d.w.window).unwrap();
+            assert!(default.is_mapped(), "Properties keeps its declared default response visible");
+            assert_eq!(default, done_button(&d, &header).upcast::<gtk::Widget>());
+            let alert = dialog.downcast_ref::<adw::AlertDialog>().unwrap();
+            let responses = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let observed = responses.clone();
+            let handler = alert.connect_response(None, move |_, response| observed.borrow_mut().push(response.to_owned()));
+            diagnostics.lock().unwrap().clear();
+            d.click(done_button(&d, &header).upcast_ref());
+            until(|| d.w.visible_dialog().is_none() && !d.w.servicing.get(), "Properties Done completes its close response");
+            assert_eq!(*responses.borrow(), [alert.close_response().to_string()], "Properties Done emits its close response exactly once");
+            assert!(!diagnostics.lock().unwrap().iter().any(|message| message.starts_with("Adwaita critical:")), "Properties Done has no Adwaita critical");
+            alert.disconnect(handler);
+        } else { close(&d, &dialog); }
         if let Some(scroll) = scroll { assert!(scroll.child().is_some(), "closing preserves a scrolled editor body"); }
         assert_eq!(ui_session(&d.w).engine().checkpoint(), checkpoint);
     }
@@ -909,4 +1001,4 @@ fn native_phone_editor_page_dark_surfaces() {
 }
 
 #[path = "phone_page_bounds_tests.rs"]
-mod bounds;
+pub(super) mod bounds;

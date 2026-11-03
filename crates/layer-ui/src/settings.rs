@@ -624,6 +624,7 @@ pub struct PreferencePage {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct PreferencesState {
     pub page: SettingsPage,
+    pub page_requested: bool,
     pub reveal: Option<PreferenceId>,
     pub query: String,
     pub searching: bool,
@@ -704,6 +705,7 @@ pub struct PreferencesView {
     pub text_edit_menu: Vec<crate::shortcuts::TextEditMenuItem>,
     pub pages: Vec<PreferencePage>,
     pub page: SettingsPage,
+    pub page_requested: bool,
     /// Bring this row into view after opening or navigating preferences.
     pub reveal: Option<PreferenceId>,
     pub query: String,
@@ -1751,6 +1753,7 @@ impl PreferencesState {
             empty: !query.is_empty() && search_results.is_empty(),
             pages,
             page: self.page,
+            page_requested: self.page_requested,
             reveal: self.reveal,
             query: self.query.clone(),
             // Android keeps its search field visible; an empty query shows
@@ -1845,6 +1848,7 @@ impl PreferencesState {
             }
             PreferenceAction::Page { page } => {
                 self.page = page;
+                self.page_requested = true;
                 self.shortcut_page.category = None;
                 self.modifier_editor = None;
                 self.pen_editor = None;
@@ -1889,6 +1893,7 @@ impl PreferencesState {
                     return Err(PreferenceEditError::Localized(localizer.text(MessageId::SETTINGS_UNKNOWN_SHORTCUT_ACTION).to_string()));
                 }
                 self.page = SettingsPage::Shortcuts;
+                self.page_requested = true;
                 self.query.clear();
                 self.searching = false;
                 self.editing_shortcut = Some(id);
@@ -2002,6 +2007,7 @@ impl PreferencesState {
                     return Err(PreferenceEditError::Localized(localizer.text(MessageId::SETTINGS_UNKNOWN_MODIFIER_KEY).to_string()));
                 }
                 self.page = SettingsPage::Shortcuts;
+                self.page_requested = true;
                 self.capture = None;
                 self.modifier_editor = Some((key, false));
             }
@@ -2136,6 +2142,7 @@ impl PreferencesState {
                     return Err(PreferenceEditError::Localized(localizer.text(MessageId::SETTINGS_UNKNOWN_PEN_BUTTON).to_string()));
                 }
                 self.page = SettingsPage::Input;
+                self.page_requested = true;
                 self.pen_editor = Some((trigger, false));
             }
             PreferenceAction::ClosePenButton => {

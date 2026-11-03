@@ -357,7 +357,7 @@ iOS defers the edges the bars occupy.
 ## Dialogs
 
 GTK presents editor dialogs as pages whenever the shared phone layout is active,
-using their existing bodies and actions. Close and the primary action stay in
+using their existing bodies and actions. Navigation and page actions stay in
 the header; compact confirmations remain native alerts. Settings, New Drawing,
 Edit Color and the workspace manager adapt their panes during allocation, with
 no tick callback while idle. Manage Workspaces and Layout History defer layout
@@ -369,8 +369,9 @@ always uses a full-screen page.
   full-window page that slides down from the top, inside the safe area.
 - Its actions move into the page's header: close on the left, and an existing
   primary action as a filled button on the right. Pages without a primary action,
-  such as Preferences and Document Properties, have close only. Neither a short
-  landscape window nor the on-screen keyboard can hide them; the body scrolls and
+  such as Preferences and Document Properties, have a filled Done at the end
+  and no start X. Neither a short landscape window nor the on-screen keyboard
+  can hide them; the body scrolls and
   keeps a focused field above the keyboard. Close does what the current subpage's
   cancel or back does today, so leaving New Drawing's preset browser keeps the
   drawing's draft. Secondary actions, such as Save As or Export's Preview, stay in
@@ -380,10 +381,13 @@ always uses a full-screen page.
   dialog's focus when present, without focusing close or selecting label text.
   Short forms keep their fields at natural height at the top of the scrolling body.
   Preferences and Export keep their own navigation headers, without an outer
-  page header. Their root header has close; subpages keep Back only. The declared
-  primary action follows the visible header. The workspace manager keeps its
-  single header above the tabs and binds its title and Back/Close to the current
-  navigation page, hiding its inner header.
+  page header. Preferences has Done at the end on every level, with only search
+  at the start of its root and Back at the start of subpages. A plain Settings
+  request opens the page list; a named page or reveal opens that page directly.
+  Two-pane windows retain Appearance as the initial selected page. Export keeps
+  its root close and subpage Back; its declared primary follows the visible
+  header. The workspace manager keeps one header above the tabs, with Back only
+  on subpages and Done at the end when it has no declared primary action.
 - A page is modal like the dialog it replaces: it owns focus, keyboard shortcuts
   and canvas contacts while open, except during Edit Color's eyedropper, and gives
   focus back to its opener when it closes.
