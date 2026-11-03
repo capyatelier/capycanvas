@@ -151,17 +151,49 @@ pub fn check_store_key(key:&str)->Result<(),String> {
 }
 struct DrawingStoreInner {key:String,path:PathBuf,writer:Mutex<WriterSlot>,opener:Arc<dyn StoreOpener>}
 #[derive(Default)]
-struct WriterSlot {store:Option<SessionStore>,busy:bool}
+struct WriterSlot {store:Option<SessionStore>,busy:bool,waiting:std::collections::VecDeque<(Arc<()>,std::task::Waker)>}
 struct WriterLease<'a> {slot:&'a Mutex<WriterSlot>,store:Option<SessionStore>}
-impl<'a> WriterLease<'a> {
-    fn take(slot:&'a Mutex<WriterSlot>)->Result<Self,String> {
-        let mut state=slot.lock().map_err(|_|"Drawing writer failed")?;
-        if state.busy {return Err("Drawing writer is already active".into());}
-        state.busy=true;Ok(Self {slot,store:state.store.take()})
+struct WriterAcquire<'a> {slot:&'a Mutex<WriterSlot>,token:Option<Arc<()>>}
+impl<'a> std::future::Future for WriterAcquire<'a> {
+    type Output=Result<WriterLease<'a>,String>;
+    fn poll(mut self:std::pin::Pin<&mut Self>,cx:&mut std::task::Context<'_>)->std::task::Poll<Self::Output> {
+        let mut state=match self.slot.lock() {Ok(state)=>state,Err(_)=>return std::task::Poll::Ready(Err("Drawing writer failed".into()))};
+        let ready=!state.busy && match &self.token {
+            Some(token)=>state.waiting.front().is_some_and(|(first,_)|Arc::ptr_eq(first,token)),
+            None=>state.waiting.is_empty(),
+        };
+        if ready {
+            if self.token.take().is_some() {state.waiting.pop_front();}
+            state.busy=true;
+            return std::task::Poll::Ready(Ok(WriterLease {slot:self.slot,store:state.store.take()}));
+        }
+        if let Some(token)=&self.token {
+            let (_,wake)=state.waiting.iter_mut().find(|(current,_)|Arc::ptr_eq(current,token)).unwrap();
+            wake.clone_from(cx.waker());
+        }else {
+            let token=Arc::new(());state.waiting.push_back((token.clone(),cx.waker().clone()));self.token=Some(token);
+        }
+        std::task::Poll::Pending
     }
 }
+impl Drop for WriterAcquire<'_> {
+    fn drop(&mut self) {
+        let Some(token)=self.token.take() else {return};
+        let wake={let mut state=self.slot.lock().unwrap_or_else(|error|error.into_inner());
+            state.waiting.retain(|(current,_)|!Arc::ptr_eq(current,&token));
+            if state.busy {None}else {state.waiting.front().map(|(_,wake)|wake.clone())}};
+        if let Some(wake)=wake {wake.wake();}
+    }
+}
+impl<'a> WriterLease<'a> {
+    async fn take(slot:&'a Mutex<WriterSlot>)->Result<Self,String> {WriterAcquire {slot,token:None}.await}
+}
 impl Drop for WriterLease<'_> {
-    fn drop(&mut self) {let mut slot=self.slot.lock().unwrap_or_else(|error|error.into_inner());slot.store=self.store.take();slot.busy=false;}
+    fn drop(&mut self) {
+        let wake={let mut slot=self.slot.lock().unwrap_or_else(|error|error.into_inner());
+            slot.store=self.store.take();slot.busy=false;slot.waiting.front().map(|(_,wake)|wake.clone())};
+        if let Some(wake)=wake {wake.wake();}
+    }
 }
 impl DrawingStore {
     #[cfg(not(target_arch="wasm32"))]
@@ -174,12 +206,12 @@ impl DrawingStore {
     pub fn key(&self)->&str {&self.0.key}
     pub fn path(&self)->&Path {&self.0.path}
     pub async fn with_store<T>(&self,work:impl AsyncFnOnce(&mut SessionStore)->Result<T,String>)->Result<T,String> {
-        let mut writer=WriterLease::take(&self.0.writer)?;
+        let mut writer=WriterLease::take(&self.0.writer).await?;
         if writer.store.is_none() {writer.store=Some(self.0.opener.open(&self.0.path,false).await?.ok_or("Drawing store is unavailable")?);}
         work(writer.store.as_mut().unwrap()).await
     }
     pub async fn with_retirement_store<T>(&self,work:impl AsyncFnOnce(&mut SessionStore)->Result<T,String>)->Result<Option<T>,String> {
-        let mut writer=WriterLease::take(&self.0.writer)?;
+        let mut writer=WriterLease::take(&self.0.writer).await?;
         if writer.store.is_none() {writer.store=self.0.opener.open(&self.0.path,true).await?;}
         if writer.store.is_none() {return Ok(None);}
         work(writer.store.as_mut().unwrap()).await.map(Some)
@@ -863,3 +895,6 @@ pub(crate) mod tests;
 
 #[cfg(test)]
 mod live_tests;
+
+#[cfg(test)]
+mod writer_tests;
