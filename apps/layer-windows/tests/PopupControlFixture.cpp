@@ -7,6 +7,7 @@
 #include "WorkspaceDialogs.h"
 #include "WorkspaceView.h"
 #include "CanvasActionBar.h"
+#include "EffectControls.h"
 #include "SettingsView.h"
 #include "ShortcutPage.h"
 #include "PalettesView.h"
@@ -132,8 +133,8 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         DWORD pid=0;GetWindowThreadProcessId(GetForegroundWindow(),&pid);
         require(pid==GetCurrentProcessId()&&GetForegroundWindow()==hwnd,L"Fixture does not own foreground input");
     }
-    void nativePress(FrameworkElement const& target,bool right=false){
-        privacy();auto position=target.TransformToVisual(nullptr).TransformPoint({float(target.ActualWidth()/2),float(target.ActualHeight()/2)});
+    void nativePress(FrameworkElement const& target,bool right=false,std::optional<Point> local={}){
+        privacy();auto position=target.TransformToVisual(nullptr).TransformPoint(local.value_or(Point{float(target.ActualWidth()/2),float(target.ActualHeight()/2)}));
         bool hit=false;for(auto const& element:VisualTreeHelper::FindElementsInHostCoordinates(position,root))if(element==target)hit=true;
         require(hit,L"Native point does not hit the intended XAML source");
         auto scale=root.XamlRoot().RasterizationScale();POINT point{LONG(position.X*scale),LONG(position.Y*scale)};check_bool(ClientToScreen(hwnd,&point));
@@ -207,6 +208,27 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
     FrameworkElement workspaceElement(hstring const& id){
         for(auto const& popup:VisualTreeHelper::GetOpenPopupsForXamlRoot(root.XamlRoot()))if(auto node=findElement(popup.Child(),id))return node;
         return findElement(root,id);
+    }
+    winrt::Windows::Foundation::IAsyncAction gradientContacts(J const& model,J const& catalog,J const& control){
+        auto source=std::make_shared<WorkspaceData>();context.apply(source,catalog);source->model=J::Parse(model.Stringify());source->state=object(source->model,L"state");source->refreshPalette();
+        auto edits=std::make_shared<std::vector<J>>();Bindings fields;
+        auto editor=CapyEffects::GradientEditor(source,{[control]{return control;},[edits](J action,hstring gesturePhase){edits->push_back(O({{L"phase",S(gesturePhase)},{L"action",action}}));},[]{return true;},L"fixture-gradient"},fields);
+        editor.Width(300);root.Children().InsertAt(0,editor);for(auto const& bind:fields)bind();
+        auto focus=findElement(editor,L"fixture-gradient-gradient");
+        co_await wait([focus]{return focus&&focus.IsLoaded()&&focus.ActualWidth()>12&&focus.ActualHeight()>=44;},L"Production gradient strip did not arrange");
+        for(bool hostBackground:{true,false}){
+            focus.as<ContentControl>().Background(hostBackground?clear():nullptr);
+            for(int index=0;index<2;++index){
+                auto begin=edits->size();nativePress(focus,false,Point{float(index?focus.ActualWidth()-6:6),39});
+                co_await wait([edits,begin]{return edits->size()>=begin+3&&str(edits->back(),L"phase")==L"up";},L"Gradient endpoint contact did not complete its native gesture");
+                for(size_t i=begin;i<edits->size();++i){
+                    auto event=edits->at(i);auto gesturePhase=str(event,L"phase");
+                    require(num(object(object(event,L"action"),L"edit"),L"index",-1)==index,L"Gradient endpoint contact selected the wrong stop");
+                    require(i==begin?gesturePhase==L"down":i+1==edits->size()?gesturePhase==L"up":gesturePhase==L"move",L"Gradient endpoint contact did not preserve its native down/move/up sequence");
+                }
+            }
+        }
+        anchor.Focus(FocusState::Programmatic);root.Children().RemoveAt(0);fields.clear();
     }
     winrt::Windows::Foundation::IAsyncAction canvasBarLanguage(J const& model,J const& locale){
         auto source=std::make_shared<WorkspaceData>();context.apply(source,object(object(model,L"localization"),L"catalog"));
@@ -320,7 +342,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         settings.reset();window.AppWindow().Resize(previous);++checks;
     }
     winrt::Windows::Foundation::IAsyncAction layerLanguageDraft(){
-        auto theme=root.RequestedTheme();std::string snapshot,catalog,translated,paletteChanged,paletteRemoved,paletteSwitched;NativeLayoutInput layout;
+        auto theme=root.RequestedTheme();std::string snapshot,catalog,translated,paletteChanged,paletteRemoved,paletteSwitched,gradientSpec;NativeLayoutInput layout;
         co_await resume_background();
         {
             struct Apartment{Apartment(){init_apartment(apartment_type::multi_threaded);}~Apartment(){uninit_apartment();}} apartment;
@@ -361,10 +383,15 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             NativeString removed(capy_snapshot(host.get(),&info));require(bool(removed)&&info.full,L"Removed swatch full model missing");paletteRemoved=std::move(removed.bytes);
             paletteQuery(O({{L"type",S(L"palette_action")},{L"action",O({{L"op",S(L"select_palette")},{L"id",N(other)}})}}));
             NativeString switched(capy_snapshot(host.get(),&info));require(bool(switched)&&info.full,L"Changed palette full model missing");paletteSwitched=std::move(switched.bytes);
+            action(R"({"type":"invoke","command":"gradient"})");
+            NativeString gradient(capy_snapshot(host.get(),&info));require(bool(gradient),L"Gradient fixture model missing");
+            for(auto value:array(object(J::Parse(to_hstring(gradient.bytes)),L"state"),L"tool_extra"))if(auto control=object(value.GetObject(),L"Gradient");control.Size())gradientSpec=to_string(control.Stringify());
+            require(!gradientSpec.empty(),L"Shared gradient tool control missing");
             require(capy_finish_services(host.get())>=0,L"Layer fixture service shutdown failed");
         }
         co_await apartment;
         auto model=J::Parse(to_hstring(snapshot)),next=J::Parse(to_hstring(snapshot)),copy=J::Parse(to_hstring(catalog));
+        phase=L"gradient-input";co_await gradientContacts(model,copy,J::Parse(to_hstring(gradientSpec)));phase=L"layer-language-draft";
         auto locale=J::Parse(to_hstring(translated));
         require(str(object(locale,L"bootstrap"),L"active_tag")==L"ja",L"Japanese fixture presentation is not Japanese");
         require(num(locale,L"generation")>num(object(model,L"localization"),L"generation"),L"Japanese fixture publication did not advance localization");next.Insert(L"localization",locale);

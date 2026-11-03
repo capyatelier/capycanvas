@@ -110,11 +110,11 @@ struct EditorView:std::enable_shared_from_this<EditorView> {
         reset=iconButton(L"reset",L"reset",[weak]{if(auto self=weak.lock())self->send(O({{L"kind",S(L"reset")}}));});
         Grid::SetColumn(reverse,1);Grid::SetColumn(reset,2);
         for(FrameworkElement part:{FrameworkElement(interpolation),FrameworkElement(reverse),FrameworkElement(reset)})top.Children().Append(part);
-        strip.Height(44);
+        strip.Height(44);strip.Background(clear());
         auto ramp=GradientRamp(data,[weak]{if(auto self=weak.lock())return self->value();return J{};},32,fields);
         ramp.Margin({6,0,6,0});ramp.VerticalAlignment(VerticalAlignment::Top);strip.Children().Append(ramp);
         dots.IsHitTestVisible(false);strip.Children().Append(dots);
-        edgeTag(focus,L"edge_contact",S(L"input"));focus.Content(strip);focus.IsTabStop(true);focus.UseSystemFocusVisuals(true);focus.Background(clear());focus.ManipulationMode(ManipulationModes::None);
+        edgeTag(focus,L"edge_contact",S(L"input"));focus.Content(strip);focus.IsTabStop(true);focus.UseSystemFocusVisuals(true);focus.ManipulationMode(ManipulationModes::None);
         focus.HorizontalContentAlignment(HorizontalAlignment::Stretch);focus.VerticalContentAlignment(VerticalAlignment::Stretch);
         AutomationProperties::SetAutomationId(focus,source.id+L"-gradient");
         strip.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->drawDots();});
