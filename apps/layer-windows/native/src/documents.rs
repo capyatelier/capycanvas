@@ -745,6 +745,9 @@ impl DocumentService {
             return Ok(());
         }
         if let DocumentAction::Close = action {
+            if host.session.state().customization.header_editing {
+                host.dispatch(layer_ui::HeaderAction::Cancel.action())?;
+            }
             self.close_window = true;
             self.quit_pending=host.session.state().document_file.busy||self.active.is_some()||self.activating||!host.session.can_park_document();
             if self.quit_pending{return Ok(());}
@@ -996,7 +999,7 @@ impl DocumentService {
         };
         Self::complete(host, active.id, result)
     }
-    #[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
+    #[cfg_attr(all(not(target_os = "windows"), not(test)), expect(dead_code, reason = "Used by the Windows host"))]
     pub(crate) fn recovery_status(&self, host: &NativeHost) -> Option<serde_json::Value> {
         self.recovery.as_ref().map(|service|service.status(host.session.localization(),self.window.documents.selected()))
     }

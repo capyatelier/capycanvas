@@ -4,7 +4,6 @@ use super::*;
 #[cfg(target_os = "windows")]
 use layer_core::ProjectLimits;
 use layer_ui::{CommandId, Platform, UiAction};
-#[cfg(target_os = "windows")]
 use std::time::{Duration, Instant};
 fn command(host: &mut NativeHost, command: CommandId) {
     host.dispatch(UiAction::Invoke { command }).unwrap();
@@ -24,7 +23,6 @@ fn request(host: &NativeHost) -> (u32, u64, u64) {
         file.revision,
     )
 }
-#[cfg(target_os = "windows")]
 fn settle(service: &mut DocumentService, host: &mut NativeHost) {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
@@ -92,6 +90,30 @@ fn window_close_waits_for_the_pending_canvas_operation() {
     service.poll(&mut host).unwrap();
     assert!(host.session.state().document_file.close_ready);
     assert!(!service.quit_pending);
+    service.stop_worker().unwrap();
+}
+
+#[test]
+fn window_close_cancels_unfinished_header_editing() {
+    let mut host = NativeHost::new(Platform::Windows).unwrap();
+    let mut service = DocumentService::open(|| {}).unwrap();
+    let header = host.session.state().workspace.layout.header.clone();
+    let canvas_info = host.session.state().workspace.layout.canvas_info.clone();
+    host.dispatch(layer_ui::HeaderAction::Edit { editing: true }.action()).unwrap();
+    host.dispatch(layer_ui::HeaderAction::Remove { id: header.entries().next().unwrap().id }.action()).unwrap();
+    host.dispatch(layer_ui::HeaderAction::CanvasInfo { visible: !canvas_info.visible }.action()).unwrap();
+    assert!(host.session.state().customization.header_editing);
+    assert_ne!(host.session.state().workspace.layout.header, header);
+    assert_ne!(host.session.state().workspace.layout.canvas_info, canvas_info);
+    assert!(!host.session.can_park_document());
+    service.dispatch(&mut host, DocumentAction::Close).unwrap();
+    host.session.suspend_renderer().unwrap();
+    settle(&mut service, &mut host);
+    assert!(host.session.state().document_file.close_ready);
+    assert!(!service.quit_pending);
+    assert!(!host.session.state().customization.header_editing);
+    assert_eq!(host.session.state().workspace.layout.header, header);
+    assert_eq!(host.session.state().workspace.layout.canvas_info, canvas_info);
     service.stop_worker().unwrap();
 }
 
