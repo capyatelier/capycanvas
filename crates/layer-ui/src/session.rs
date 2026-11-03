@@ -10465,6 +10465,8 @@ mod tests {
         assert!(!s.background_readback_idle());
         s.pen(event(&s, 2, PenPhase::Up, 1.0));
         s.frame(1, 1).unwrap();
+        assert!(!s.background_readback_idle());
+        s.frame(2, 2).unwrap();
         assert!(s.background_readback_idle());
         let package = package_json(s.effect_catalog.categories().to_vec(), vec![custom_filter("unsharp_mask")]);
         s.load_effect_package(
@@ -10513,32 +10515,38 @@ mod tests {
         }}).unwrap();
         s.frame(1, 1).unwrap();
         assert!(!s.engine.document().has_animated_effects());
+        assert!(s.engine.wants_continuous_frames());
+        s.frame(2, 2).unwrap();
         assert_eq!(s.engine.backend().shader_idle, (true, true));
         s.dispatch(UiAction::Effect { action: EffectAction::Set {
             layer, key: "animate".into(), value: layer_core::EffectValue::Toggle(true),
         }}).unwrap();
-        s.frame(2, 2).unwrap();
+        s.frame(3, 3).unwrap();
         assert!(s.engine.document().has_animated_effects() && s.engine.wants_continuous_frames());
         assert!(s.filter_previews_idle());
         assert_eq!(s.engine.backend().shader_idle, (true, false));
         s.dispatch(UiAction::SetLayerVisibility { id: layer, visible: false }).unwrap();
-        s.frame(3, 3).unwrap();
+        s.frame(4, 4).unwrap();
         assert!(!s.engine.document().has_animated_effects());
+        assert!(s.engine.wants_continuous_frames());
+        s.frame(5, 5).unwrap();
         assert_eq!(s.engine.backend().shader_idle, (true, true));
         s.dispatch(UiAction::SetLayerVisibility { id: layer, visible: true }).unwrap();
-        s.frame(4, 4).unwrap();
+        s.frame(6, 6).unwrap();
         assert_eq!(s.engine.backend().shader_idle, (true, false));
         s.dispatch(UiAction::Effect { action: EffectAction::Set {
             layer, key: "animate".into(), value: layer_core::EffectValue::Toggle(false),
         }}).unwrap();
-        s.frame(5, 5).unwrap();
+        s.frame(7, 7).unwrap();
+        assert!(s.engine.wants_continuous_frames());
+        s.frame(8, 8).unwrap();
         assert_eq!(s.engine.backend().shader_idle, (true, true));
         s.renderer_mut().refining = true;
-        s.frame(6, 6).unwrap();
+        s.frame(9, 9).unwrap();
         assert!(s.filter_previews_idle() && s.engine.wants_continuous_frames());
         assert_eq!(s.engine.backend().shader_idle, (true, false));
         s.renderer_mut().refining = false;
-        s.frame(7, 7).unwrap();
+        s.frame(10, 10).unwrap();
         assert_eq!(s.engine.backend().shader_idle, (true, true));
     }
 
