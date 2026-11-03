@@ -534,6 +534,30 @@ pub(super) fn assert_group_chip(button: &gtk::Button, context: &str) {
     assert!((width - cell_width).abs() <= 1., "{context}: the whole cell is a chip target: {width} vs {cell_width}");
 }
 
+pub(super) fn assert_leaf_tool_rows(body: &gtk::Widget, view: &layer_ui::ToolSetView, context: &str) {
+    assert!(view.groups.is_empty(), "{context}: leaf tools have no sets");
+    assert!(!view.subtools.is_empty(), "{context}: leaf choices remain available");
+    assert!(descendants::<gtk::Button>(body).iter().all(|button| !button.has_css_class("tool-group")),
+        "{context}: no group chips are rendered");
+    let rows = descendants::<gtk::Button>(body).into_iter()
+        .filter(|button| button.is_mapped() && button.has_css_class("brush-choice")).collect::<Vec<_>>();
+    assert_eq!(rows.len(), view.subtools.len(), "{context}: every choice has one row");
+    let mut bottom = None;
+    for (row, item) in rows.iter().zip(&view.subtools) {
+        assert!(item.preview.is_none() && !row.has_css_class("tool-preview-choice")
+            && descendants::<gtk::Picture>(row.upcast_ref()).is_empty(), "{context}: tool rows have no preview");
+        let label = row.child().unwrap().last_child().unwrap().downcast::<gtk::Label>().unwrap();
+        assert_eq!(label.text().as_str(), item.label.as_ref(), "{context}: rows retain shared choice order");
+        let parent = row.parent().unwrap();
+        let bounds = row.compute_bounds(&parent).unwrap();
+        assert!(bounds.x().abs() <= 1. && (bounds.width() - parent.width() as f32).abs() <= 1.,
+            "{context}: each tool fills its list width: {bounds:?} vs {}", parent.width());
+        let bounds = row.compute_bounds(body).unwrap();
+        if let Some(previous) = bottom { assert!(bounds.y() >= previous, "{context}: rows remain vertically ordered"); }
+        bottom = Some(bounds.y() + bounds.height());
+    }
+}
+
 fn tool_drawer_sets(d: &mut Driver) {
     use ToolbarControl::{Command as C, ToolSlot as S};
     for (preset, name, control) in [
@@ -576,7 +600,10 @@ fn tool_drawer_sets(d: &mut Driver) {
                 assert!(groups > 0 && rows == 0 && descendants::<gtk::Picture>(&body).is_empty(), "{name}: set columns build groups only");
             } else if panel == Panel::Tools && drawer.sets_column {
                 assert!(groups == 0 && rows > 0, "{name}: the Tools column builds its list without chips");
-            } else if adaptive || matches!(control, S { slot: ToolSlotId::Fill | ToolSlotId::Gradient }) {
+            } else if matches!(control, S { slot: ToolSlotId::Fill | ToolSlotId::Gradient | ToolSlotId::Healing }) {
+                assert_eq!(groups, 0, "{name}: leaf tools are rows, not sets");
+                assert_leaf_tool_rows(&body, drawer.tool_set.as_ref().unwrap(), name);
+            } else if adaptive {
                 assert!(groups > 0, "{name}: the set choices remain visible");
             }
             for button in descendants::<gtk::Button>(&body).into_iter().filter(|button| button.is_mapped()) {

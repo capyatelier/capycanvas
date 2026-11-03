@@ -330,7 +330,7 @@ fn paint_slot_variations(d: &mut Driver, theme: Theme) {
         (ToolSlotId::ManualSelection, vec![CommandId::Lasso, CommandId::RectangleSelect,
             CommandId::EllipseSelect, CommandId::PolygonSelect, CommandId::SelectionBrush]),
         (ToolSlotId::AutomaticSelection, vec![CommandId::AutoSelect, CommandId::ColorSelect, CommandId::TonalSelect]),
-        (ToolSlotId::Fill, vec![CommandId::Fill, CommandId::LassoFill, CommandId::EncloseFill]),
+        (ToolSlotId::Fill, vec![CommandId::Fill, CommandId::LassoFill, CommandId::EncloseFill, CommandId::PaintUnfilled]),
         (ToolSlotId::Operation, vec![CommandId::Move, CommandId::ScaleRotate, CommandId::EditPoints, CommandId::Crop]),
     ] {
         let anchor = slot_anchor(d, slot);
@@ -354,8 +354,8 @@ fn paint_slot_variations(d: &mut Driver, theme: Theme) {
         d.click(&mapped_label(&tools, &label).unwrap());
         assert!(ui_session(&d.w).command(*last).selected);
         if slot == ToolSlotId::Fill {
-            assert!(state(&d.w).tool_set.subtools.is_empty());
-            assert_eq!(state(&d.w).tool_set.groups.len(), 3);
+            assert!(state(&d.w).tool_set.groups.is_empty());
+            assert_eq!(state(&d.w).tool_set.subtools.len(), 4);
             for command in &commands {
                 let label = ui_session(&d.w).command(*command).label;
                 let caption = mapped_label(&tools, &label).unwrap();
@@ -726,13 +726,36 @@ fn native_tool_set_category_input() {
                 d.w.dispatch(UiAction::Invoke { command });
                 pump(250);
                 let buttons = d.w.tool_set.group_buttons.borrow().clone();
-                assert!(!buttons.is_empty());
+                if command == CommandId::Fill {
+                    assert!(buttons.is_empty(), "Fill choices are leaf rows");
+                    super::super::phone::assert_leaf_tool_rows(d.w.tool_set.root.upcast_ref(), &state(&d.w).tool_set,
+                        &format!("{command:?}/{theme:?}/{floating}"));
+                    let rows = d.w.tool_set.buttons.borrow().clone();
+                    for (item, button, preview) in rows {
+                        assert!(preview.is_none());
+                        super::histogram::scroll_to(button.upcast_ref());
+                        let scroll = button.ancestor(gtk::ScrolledWindow::static_type()).and_downcast::<gtk::ScrolledWindow>().unwrap();
+                        let viewport = scroll.child().unwrap();
+                        let bounds = button.compute_bounds(&viewport).unwrap();
+                        assert!(bounds.width() > 0. && bounds.height() > 0. && bounds.x() >= -1. && bounds.y() >= -1.
+                            && bounds.x() + bounds.width() <= viewport.width() as f32 + 1.
+                            && bounds.y() + bounds.height() <= viewport.height() as f32 + 1., "Fill row is fully visible before input: {bounds:?}");
+                        let clip = viewport.compute_bounds(&d.w.window).unwrap();
+                        let point = d.point(button.upcast_ref());
+                        assert!(point[0] >= clip.x() && point[0] < clip.x() + clip.width()
+                            && point[1] >= clip.y() && point[1] < clip.y() + clip.height(), "Fill input center is inside its viewport");
+                        d.click(button.upcast_ref());
+                        assert!(state(&d.w).tool_set.subtools.iter().any(|choice| choice.action == item.action && choice.selected),
+                            "Fill/{theme:?}/floating{floating}/{} becomes selected", item.label.as_ref());
+                    }
+                } else { assert!(!buttons.is_empty()); }
                 if command == CommandId::Blend {
                     let group = d.w.resolved().groups.into_iter().find(|group| group.active == Panel::Brushes).unwrap();
                     assert_eq!(group.bounds.width, 280.);
                     assert_blend_category_cells(&buttons, true, &format!("{theme:?}/floating{floating}/width280"));
                 }
                 for button in &buttons {
+                    super::histogram::scroll_to(button.upcast_ref());
                     assert_eq!(button.height(), 26, "{command:?}/{theme:?}/{floating}: category height");
                     let cell = button.parent().unwrap();
                     let bounds = button.compute_bounds(&cell).unwrap();
@@ -812,6 +835,25 @@ fn native_tool_set_category_input() {
             "name": format!("desktop-sketch-brush-{theme:?}").to_lowercase(), "maximized": d.w.window.is_maximized(),
         } }]));
         d.click(&opener);
+        d.w.workspaces.send(&d.w, layer_workspace::WorkspaceInput::Switch { id: "builtin:workspace:illustrator".into() });
+        wait_workspaces(&d.w);
+        restore(&d, WorkspacePreset::Illustrator);
+        for (slot, name) in [(ToolSlotId::Fill, "fill"), (ToolSlotId::Gradient, "gradient")] {
+            let control = ToolbarControl::ToolSlot { slot };
+            let opener = anchor_widget(&d, control_anchor(&d, control));
+            d.click(&opener);
+            new_photo::ready(&d.w);
+            if state(&d.w).customization.drawer.is_none() { d.click(&opener); }
+            until(|| d.w.drawer.placement().is_some() && !d.w.drawer.animation_active(), "the Paint tool drawer opens");
+            let drawer = state(&d.w).customization.drawer.unwrap();
+            let body = d.named(&format!("drawer-panel-{:?}", drawer.columns[0][0]));
+            super::super::phone::assert_leaf_tool_rows(&body, drawer.tool_set.as_ref().unwrap(), name);
+            d.input.perform(serde_json::json!([{ "capture_window": {
+                "name": format!("desktop-paint-{name}-{theme:?}").to_lowercase(), "maximized": d.w.window.is_maximized(),
+            } }]));
+            d.input.key(0xff1b);
+            until(|| state(&d.w).customization.drawer.is_none() && d.w.drawer.is_closed(), "the Paint tool drawer closes");
+        }
     }
     d.finish();
 }

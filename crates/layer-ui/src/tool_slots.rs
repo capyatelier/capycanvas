@@ -250,6 +250,14 @@ impl ToolSlotId {
     }
 }
 impl ToolVariant {
+    pub fn opens_set(self) -> bool {
+        match self {
+            Self::BrushGroup { .. } | Self::Figure { .. } => true,
+            Self::Command { command } => command.paint_tool().is_some_and(|tool|
+                tools::brush_ids().filter(|&id| tools::tool(id) == tool).take(2).count() > 1),
+            _ => false,
+        }
+    }
     pub fn command(self) -> CommandId {
         match self {
             Self::Command { command } => command,
@@ -527,14 +535,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         if view.groups.len() == 1 { view.groups.clear(); }
         if matches!(group, ToolControlGroup::Drawing | ToolControlGroup::Sculpt) { return view; }
         let choices: Vec<_> = self.group_choices(group, anchor).into_iter().map(|(_, item)| item).collect();
-        let leaf_brushes = group.variants().iter().all(|variant| match variant {
-            ToolVariant::BrushPreset { .. } => true,
-            ToolVariant::Command { command } => command.paint_tool().is_some_and(|tool|
-                tools::brush_ids().filter(|&id| tools::tool(id) == tool).take(2).count() == 1),
-            _ => false,
-        });
         match group {
-            ToolControlGroup::Slot(_) if leaf_brushes => { view.groups.clear(); view.subtools = choices; },
+            ToolControlGroup::Slot(_) if !group.variants().iter().any(|variant| variant.opens_set()) => { view.groups.clear(); view.subtools = choices; },
             ToolControlGroup::Slot(slot) => {
                 if self.layer_interaction.tool == LayerCanvasTool::Paint {
                     view.groups.retain(|item| !matches!(item.action, UiAction::SelectToolGroup { group }
@@ -562,10 +564,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             return view;
         };
         let mut view = self.group_tool_set(group, anchor);
-        if matches!(group, ToolControlGroup::Slot(ToolSlotId::Gradient))
-            || self.layer_interaction.tool.selection_tool().is_some() && matches!(group, ToolControlGroup::Slot(_)) {
-            view.subtools = std::mem::take(&mut view.groups);
-        }
         if group == ToolControlGroup::Selection { view.subtools.splice(0..0, self.vector_path_tools()); }
         view.subtools.splice(0..0, self.vector_eraser_modes());
         view

@@ -344,7 +344,7 @@ fn phone_paint_defaults_offer_sculpt_and_preserve_an_authored_blend_tile() {
 }
 
 #[test]
-fn phone_choice_only_and_leaf_drawers_keep_their_existing_presentations() {
+fn phone_choice_only_and_leaf_drawers_publish_choices_as_subtools() {
     for viewport in [[412, 891], [891, 412]] {
         for control in [ToolbarControl::ToolSlot { slot: ToolSlotId::Fill },
             ToolbarControl::ToolSlot { slot: ToolSlotId::Gradient }, ToolbarControl::Command { command: CommandId::Select },
@@ -367,9 +367,8 @@ fn phone_choice_only_and_leaf_drawers_keep_their_existing_presentations() {
             assert!(serde_json::to_value(drawer).unwrap().get("sets_column").is_none());
             if let ToolbarControl::ToolSlot { slot } = control {
                 let view = drawer.tool_set.as_ref().unwrap();
-                let (choices, empty) = if slot == ToolSlotId::Healing { (&view.subtools, &view.groups) } else { (&view.groups, &view.subtools) };
-                assert!(empty.is_empty());
-                assert_eq!(choices.iter().map(|item| item.action.clone()).collect::<Vec<_>>(),
+                assert!(view.groups.is_empty());
+                assert_eq!(view.subtools.iter().map(|item| item.action.clone()).collect::<Vec<_>>(),
                     slot.variants().iter().map(|&variant| UiAction::ChooseToolVariant { anchor, variant }).collect::<Vec<_>>());
             } else {
                 assert!(drawer.tool_set.is_none());

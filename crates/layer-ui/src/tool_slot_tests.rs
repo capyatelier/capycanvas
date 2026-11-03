@@ -193,6 +193,7 @@ fn tool_group_temporary_brushes_preserve_memory_from_a_nonpainting_tool() {
 
 #[test]
 fn blend_offers_its_sets_and_keeps_its_own_icon() {
+    assert!((ToolVariant::Command { command: CommandId::Blend }).opens_set());
     let control = ToolbarControl::Command { command: CommandId::Blend };
     let (mut s, panel, ids) = group_fixture(Platform::Gtk, &[control]);
     let tile = DrawerAnchor::Tile { panel, tile: ids[0] };
@@ -261,6 +262,7 @@ fn paint_groups_keep_all_blenders_at_their_origin() {
 #[test]
 fn tool_group_presets_leave_pinned_brushes_as_leaf_controls() {
     for command in [CommandId::Pen, CommandId::Airbrush, CommandId::Liquify] {
+        assert!((ToolVariant::Command { command }).opens_set());
         let control = ToolbarControl::Command { command };
         assert!(control.has_variants());
         let (mut s, panel, ids) = group_fixture(Platform::Gtk, &[control]);
@@ -271,6 +273,7 @@ fn tool_group_presets_leave_pinned_brushes_as_leaf_controls() {
         for item in menu {
             let Some(UiAction::ChooseToolVariant { variant: ToolVariant::BrushPreset { id }, .. }) = item.action else { panic!("single-medium groups publish brush presets") };
             assert_eq!(tools::tool(id).command(), command);
+            assert!(!(ToolVariant::BrushPreset { id }).opens_set());
             s.dispatch(UiAction::ChooseToolVariant { anchor, variant: ToolVariant::BrushPreset { id } }).unwrap();
             assert_eq!(s.state().brush.preset, id);
             assert_eq!(selected_slot_variant(&s, anchor), ToolVariant::BrushPreset { id });
@@ -289,6 +292,7 @@ fn tool_group_presets_leave_pinned_brushes_as_leaf_controls() {
         assert!(s.context_menu(ContextTarget::ToolVariants { anchor: header }).is_err());
     }
     for command in [CommandId::Hand, CommandId::RotateView] {
+        assert!(!(ToolVariant::Command { command }).opens_set());
         let control = ToolbarControl::Command { command };
         assert!(control.has_variants());
         let (s, panel, ids) = group_fixture(Platform::Gtk, &[control]);
@@ -305,6 +309,7 @@ fn tool_group_presets_leave_pinned_brushes_as_leaf_controls() {
 fn single_leaf_tools_open_settings_without_duplicate_variations() {
     for platform in Platform::ALL {
         for command in [CommandId::Eraser, CommandId::Clone, CommandId::Heal, CommandId::SpotHeal] {
+            assert!(!(ToolVariant::Command { command }).opens_set());
             let control = ToolbarControl::Command { command };
             let (mut s, panel, ids) = group_fixture(platform, &[control]);
             let tile = DrawerAnchor::Tile { panel, tile: ids[0] };
@@ -454,11 +459,13 @@ fn tool_group_selection_scopes_agree_without_overlap() {
         for &command in commands {
             s.dispatch(slot_choice(&s, anchor, ToolVariant::Command { command })).unwrap();
             let docked = s.state().tool_panel(Panel::Tools);
+            assert!(docked.groups.is_empty());
             assert_eq!(selection_group_commands(docked.groups.iter().chain(&docked.subtools)), expected);
             activate_slot(&mut s, anchor);
             let drawer = s.state().customization.drawer.as_ref().unwrap();
             assert_eq!(drawer.anchor, anchor);
             let view = drawer.tool_set.as_ref().unwrap_or_else(|| s.state().tool_panel(Panel::Tools));
+            assert!(view.groups.is_empty());
             assert_eq!(selection_group_commands(view.groups.iter().chain(&view.subtools)), expected);
             assert_eq!(view.groups.iter().chain(&view.subtools).filter(|item| item.selected).count(), 1);
             activate_slot(&mut s, anchor);
@@ -687,6 +694,7 @@ fn choosing_a_variant_selects_once_and_active_slot_clicks_keep_settings_drawers(
 #[test]
 fn grouped_slots_publish_the_same_siblings_in_menus_panels_and_drawers() {
     for slot in ToolSlotId::ALL {
+        let sets = matches!(slot, ToolSlotId::Drawing | ToolSlotId::Blend | ToolSlotId::Figure);
         let (mut s, panel, ids) = slot_fixture(Platform::Gtk, &[slot]);
         let anchor = DrawerAnchor::Tile { panel, tile: ids[0] };
         if slot == ToolSlotId::Operation {
@@ -694,10 +702,12 @@ fn grouped_slots_publish_the_same_siblings_in_menus_panels_and_drawers() {
             s.frame(1, 1).unwrap();
         }
         for &variant in slot.variants() {
+            assert_eq!(variant.opens_set(), sets, "{slot:?}/{variant:?}");
             s.dispatch(slot_choice(&s, anchor, variant)).unwrap();
             crate::session::test_support::finish_fixture_content_bounds(&mut s);
             let menu = slot_menu(&s, anchor);
             let docked = &s.state().tool_set;
+            assert_eq!(docked.groups.is_empty(), !sets, "{slot:?}/{variant:?}");
             let siblings: Vec<_> = docked.groups.iter().chain(&docked.subtools)
                 .filter(|item| matches!(item.action, UiAction::ChooseToolVariant { anchor: origin, .. } if origin == anchor)).collect();
             assert_eq!(siblings.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>(),
@@ -708,6 +718,7 @@ fn grouped_slots_publish_the_same_siblings_in_menus_panels_and_drawers() {
             let drawer = s.state().customization.drawer.as_ref().unwrap();
             assert_eq!(drawer.columns, [vec![if slot == ToolSlotId::Fill { Panel::Tools } else { Panel::Brushes }], vec![Panel::ToolSettings]]);
             let choices = drawer.tool_set.as_ref().unwrap();
+            assert_eq!(choices.groups.is_empty(), !sets, "{slot:?}/{variant:?}");
             let drawer_siblings: Vec<_> = choices.groups.iter().chain(&choices.subtools)
                 .filter(|item| matches!(item.action, UiAction::ChooseToolVariant { anchor: origin, .. } if origin == anchor)).collect();
             assert_eq!(drawer_siblings.iter().map(|item| &item.action).collect::<Vec<_>>(),
@@ -1036,7 +1047,9 @@ fn tool_options_drawers_follow_variants_and_revalidate_moved_or_removed_origins(
     assert_eq!(s.state().customization.drawer.as_ref().unwrap().tool_set.as_ref().unwrap().groups.len(), ToolSlotId::Drawing.variants().len());
     s.dispatch(slot_choice(&s, marquee, ToolSlotId::Marquee.variants()[1])).unwrap();
     assert_eq!(s.state().customization.drawer.as_ref().unwrap().anchor, opener);
-    assert_eq!(s.state().customization.drawer.as_ref().unwrap().tool_set.as_ref().unwrap().groups.len(), ToolSlotId::Marquee.variants().len());
+    let choices = s.state().customization.drawer.as_ref().unwrap().tool_set.as_ref().unwrap();
+    assert!(choices.groups.is_empty());
+    assert_eq!(choices.subtools.len(), ToolSlotId::Marquee.variants().len());
     s.dispatch(slot_choice(&s, drawing, airbrush)).unwrap();
     let stale = slot_choice(&s, drawing, ToolVariant::Command { command: CommandId::Pen });
     s.dispatch(UiAction::MoveTile {

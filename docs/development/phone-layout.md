@@ -99,7 +99,9 @@ bounds without grips; tracks and handles scale from the desktop Brush controls.
   their content needs, up to the space between the bars. Their columns sit side by
   side when their minimum widths fit and stack otherwise. Brush and Sculpt show
   set chips above their tools in portrait and a separate scrolling sets column
-  in landscape. Color stacks in portrait. Drawers close on the next stroke
+  in landscape. A choice is a set only when selecting it opens its own list;
+  Fill and Gradient choices are full-width tool rows. Color stacks in portrait.
+  Drawers close on the next stroke
   as today. Tool drawers with other content omit Tool settings; its fixed tile
   on the Capy bar opens those settings alone. Settings-only drawers keep them.
 - **Every drawer keeps its bridge**, as from Sketch's title bar: the opener tile

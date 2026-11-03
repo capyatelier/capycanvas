@@ -9318,7 +9318,8 @@ mod tests {
         s.sync_camera();
         s.frame(1, 1).unwrap();
         invoke(&mut s, CommandId::Ruler);
-        assert_eq!(s.state.tool_set.groups.len(), 3);
+        assert!(s.state.tool_set.groups.is_empty());
+        assert_eq!(s.state.tool_set.subtools.len(), 3);
         assert_eq!(s.state.tool_actions.len(), 3);
         assert!(s.command(CommandId::ShowRulers).checkable);
         assert!(s.command(CommandId::SnapRulers).checkable);
@@ -9329,7 +9330,7 @@ mod tests {
             assert!(s.state.host_error.is_none(), "{:?}", s.state.host_error);
         };
         for (index, y) in [(0, 100.), (1, 400.), (2, 700.)] {
-            s.dispatch(s.state.tool_set.groups[index].action.clone())
+            s.dispatch(s.state.tool_set.subtools[index].action.clone())
                 .unwrap();
             send(&mut s, PenPhase::Down, [100., y]);
             send(&mut s, PenPhase::Move, [300., y + 50.]);
@@ -9913,7 +9914,8 @@ mod tests {
         invoke(&mut s, CommandId::ScaleRotate);
         assert_eq!(s.state.layer_tools.tool, LayerCanvasTool::Transform);
         assert_eq!(s.state.tool_settings.len(), 6);
-        assert_eq!(s.state.tool_set.groups.len(), 4);
+        assert!(s.state.tool_set.groups.is_empty());
+        assert_eq!(s.state.tool_set.subtools.len(), 4);
         for (id, value) in [
             ("transform_x", 30.),
             ("transform_width", 1.5),
