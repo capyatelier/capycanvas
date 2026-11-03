@@ -101,8 +101,13 @@ impl Pages {
         let frame = gtk::Box::builder().orientation(gtk::Orientation::Vertical).accessible_role(gtk::AccessibleRole::Dialog).build();
         frame.set_limit_events(true);
         frame.set_widget_name(&format!("page-{}", dialog.widget_name()));
-        for class in dialog.css_classes() { frame.add_css_class(class.as_str()); }
         frame.add_css_class("phone-dialog-page");
+        let page_classes = frame.css_classes();
+        dialog.bind_property("css-classes", &frame, "css-classes")
+            .transform_to(move |_, mut classes: Vec<String>| {
+                classes.extend(page_classes.iter().map(ToString::to_string));
+                Some(classes)
+            }).sync_create().build();
         frame.update_property(&[gtk::accessible::Property::Modal(true)]);
         let navigation = meta.navigation_root.is_some();
         let specification::Header { header, loan, previous_title, projected, hidden, mut responses, page_primary, close, bindings } = meta.project_header(dialog, w, &frame);

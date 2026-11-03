@@ -33,8 +33,16 @@ fn native_preferences_inline_controls_fit() {
     let (dialog, frame) = page_frame(&d);
     let split = descendants::<adw::NavigationSplitView>(&frame).pop().unwrap();
     let appearance = SettingsPage::Appearance.localized_title(&d.w.localization());
-    d.click(&mapped_label(&frame, &appearance).unwrap());
+    let point = d.point(&mapped_label(&frame, &appearance).unwrap());
+    d.input.perform(serde_json::json!([{"touch":"down","point":point},{"touch":"up"}]));
     until(|| split.shows_content(), "Preferences opens Appearance");
+    assert!(dialog.has_css_class("touch-input"), "native touch changes the dialog's input styling");
+    assert!(frame.has_css_class("touch-input"), "the presented page mirrors the dialog's touch styling");
+    assert!(frame.has_css_class("phone-dialog-page") && frame.has_css_class("vertical"), "mirroring preserves the page's own classes");
+    super::phone::capture(&mut d, "preferences-touch-style");
+    d.input.perform(serde_json::json!([{"point":[12.,36.]}]));
+    until(|| !dialog.has_css_class("touch-input"), "native mouse motion restores pointer styling");
+    assert!(!frame.has_css_class("touch-input"), "the page removes the dialog's old touch styling");
     if split.is_collapsed() { page_header(&frame); }
     super::phone::capture(&mut d, "preferences-inline-fit");
     for group in descendants::<adw::PreferencesGroup>(&frame).into_iter().filter(|group| group.is_mapped()) {
