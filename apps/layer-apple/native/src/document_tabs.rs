@@ -14,12 +14,7 @@ struct Job {
     activation: Option<Activation>,
     close: Option<PreparedClose>,
     retired: Option<Box<UiSession<Renderer>>>,
-    tiles: Vec<(u64,u64,layer_core::raster_storage::RetainedTiles)>,
-    disk: Option<std::sync::Arc<Mutex<session::WindowDisk>>>,
-    budget: usize,
     error: Option<CString>,
-    storage_error: Option<String>,
-    trim: Option<u64>,
     wait: Option<layer_ui::TrimWait>,
 }
 pub struct CapyDocumentTask(Mutex<Job>);
@@ -59,12 +54,7 @@ impl CapyApple {
             activation,
             close: None,
             retired: None,
-            tiles:self.window.documents.pressure_snapshot().0,
-            disk: self.session_disk.clone(),
-            budget: self.window.documents.inactive_ram_budget(),
             error: None,
-            storage_error: None,
-            trim: None,
             wait: None,
         })))
     }
@@ -147,16 +137,6 @@ pub unsafe extern "C" fn capy_apple_document_close_validate(app: u64, task: u64)
     }).map_or(-1, |_| 0)
 }
 /// # Safety
-/// Serial owner only; schedules inactive backing I/O without changing selection.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_apple_document_storage(app: u64) -> u64 {
-    let Some(mut a) = handles::app(app) else { return 0; };
-    let Some(token) = a.window.documents.request_trim() else { return 0; };
-    let task = a.document_job(None);
-    task.0.lock().unwrap_or_else(|e| e.into_inner()).trim = Some(token);
-    handles::store(*task)
-}
-/// # Safety
 /// Serial owner; the returned job waits only on the independent drawing worker.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_document_trim_wait(app: u64) -> u64 {
@@ -186,13 +166,6 @@ fn prepare_document(task: &CapyDocumentTask) -> i32 {
     let mut job = task.0.lock().unwrap_or_else(|e| e.into_inner());
     let result = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
         if let Some(wait) = &job.wait { return wait.wait_on_worker(); }
-        if job.trim.is_some() {
-            let result=job.disk.as_ref().ok_or_else(||"The editing session is unavailable".to_string())
-                .and_then(|disk|disk.lock().unwrap_or_else(|error|error.into_inner()).trim(job.tiles.clone(),job.budget))
-                .and_then(|reply|reply.wait_on_worker().map(|_|()));
-            if let Err(error)=result {job.storage_error=Some(error);}
-
-        }
         match &mut job.activation {
             Some(activation) => activation.work(),
             None => Ok(()),
@@ -221,17 +194,6 @@ pub unsafe extern "C" fn capy_apple_document_resume(
     a.perform(|a| {
         let mut job = task.0.lock().unwrap_or_else(|e| e.into_inner());
         let job = &mut *job;
-        if let Some(token) = job.trim {
-            let result = job.error.as_ref().map(|error| error.to_string_lossy().into_owned()).or_else(|| job.storage_error.clone()).map_or(Ok(()), Err);
-            if a.window.documents.complete_trim(token, result) {
-                job.tiles = a.window.documents.pressure_snapshot().0;
-                job.disk = a.session_disk.clone();
-                job.budget = a.window.documents.inactive_ram_budget();
-                job.error = None;
-                job.storage_error = None;
-                return Ok(true);
-            }
-        }
         let renderer = match &mut job.activation {
             Some(activation) if job.error.is_none() => a.window.resume(&a.host, activation)?,
             _ => None,

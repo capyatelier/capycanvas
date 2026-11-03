@@ -378,8 +378,6 @@ pub(crate) struct DocumentService {
     pub recovery: Option<crate::recovery::Service>,
     wake: Arc<dyn Fn() + Send + Sync>,
     activating: bool,
-    trim_token: Option<u64>,
-    trim_receive:Option<layer_host::session_stores::StoreReply>,
     deferred_action: Option<DocumentAction>,
     incoming_drop: Option<IncomingDrop>,
     pending_tab: Option<tabs::Action>,
@@ -438,8 +436,6 @@ impl DocumentService {
             profile_copy: serde_json::to_value(layer_ui::color_feature_copy::ProfileCopy::new(localization)).unwrap(),
             recovery: None,
             activating: false,
-            trim_token: None,
-            trim_receive: None,
             deferred_action: None,
             incoming_drop: None,
             pending_tab: None,
@@ -898,16 +894,7 @@ impl DocumentService {
             host.invalidate_snapshot();
         }
         if let Some(recovery)=&self.recovery {recovery.watch_pressure(self.window.documents.pressure_source());}
-        let trimmed=self.trim_receive.as_ref().and_then(|reply|reply.try_take().map(|result|result.map(|_|())));
-        if let Some(result)=trimmed {
-            self.trim_receive=None;
-            let token=self.trim_token.take().ok_or("Storage completion identity is missing")?;
-            if self.window.documents.complete_trim(token, result) {
-                self.trim_next(token)?;
-            }
-            host.invalidate_snapshot();
-            if !self.window.documents.trim_in_flight() && let Some(action) = self.deferred_action.take() { self.dispatch(host, action)?; }
-        }
+        if !self.window.documents.trim_in_flight() && let Some(action)=self.deferred_action.take() {self.dispatch(host,action)?;}
         if let Some(completed) = self.worker.take() { self.completed(host, completed, true)?; }
         let prepared=self.activation_worker.shared.mailbox.lock().unwrap().completed.as_ref().is_some_and(|result|matches!(result,Ok(Completed::Prepared(_)|Completed::PhotoPrepared(_))));
         if prepared && !self.active.as_ref().and_then(|active|active.cancelled.as_ref()).is_some_and(|cancel|cancel.load(Ordering::Acquire)) && !self.window.adoption_ready(host)? {return Ok(());}
@@ -1055,6 +1042,7 @@ mod tests {
     use super::*;
     use crate::test_support::TempDir;
     use layer_ui::{CommandId, Platform, UiAction};
+    use std::collections::VecDeque;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
     #[test]
@@ -1110,6 +1098,22 @@ mod tests {
         done: mpsc::Receiver<()>,
         directory: TempDir,
     }
+    struct HeldPressure {
+        _stores: layer_host::session_stores::SessionStores,
+        queued: Arc<Mutex<VecDeque<layer_host::session_stores::StoreWork>>>,
+    }
+    impl HeldPressure {
+        fn drain(&self) {
+            loop {
+                let work=self.queued.lock().unwrap().pop_front();
+                let Some(work)=work else {break;};
+                work.run();
+            }
+        }
+    }
+    impl Drop for HeldPressure {
+        fn drop(&mut self) {self.drain();}
+    }
     impl Fixture {
         fn new() -> Self {
             let (wake, done) = mpsc::channel();
@@ -1148,6 +1152,25 @@ mod tests {
         fn path(&self, name: &str) -> String {
             self.directory.path.join(name).to_str().unwrap().into()
         }
+        fn hold_pressure(&mut self) -> HeldPressure {
+            let mut document=layer_ui::new_drawing(32,24,self.host.session.localization()).unwrap();
+            let layer_core::SourceTarget::Paint(paint)=document.working.target.unwrap() else {panic!()};
+            let source=layer_core::color::source::rgba8_source([32,24],|_,_|[31,63,127,255]);
+            document.artwork.paint.get_mut(paint).unwrap().base=Some(layer_core::PaintBase::new(source.into()));
+            let session=Box::new(UiSession::from_project(Renderer(None),document,None,[32,24],Platform::Windows).unwrap());
+            let tiles=session.retained_document_tiles();
+            assert!(tiles.resident_bytes()>0);
+            self.service.window.documents.append_parked(tabs::Parked {session},tiles,self.host.session.localization());
+            self.service.window.documents.set_inactive_ram_budget(0);
+            let queued=Arc::new(Mutex::new(VecDeque::new()));let queue=queued.clone();
+            let submitted=Arc::new(std::sync::atomic::AtomicUsize::new(0));let count=submitted.clone();
+            let stores=layer_host::session_stores::SessionStores::new(self.directory.path.join("pressure"),
+                Arc::new(move |work| {count.fetch_add(1,Ordering::Relaxed);queue.lock().unwrap().push_back(work);}),Arc::new(||{}));
+            stores.watch_pressure(self.service.window.documents.pressure_source());
+            assert_eq!(submitted.load(Ordering::Relaxed),1);
+            assert!(self.service.window.documents.trim_in_flight());
+            HeldPressure {_stores:stores,queued}
+        }
     }
     impl Drop for Fixture {
         fn drop(&mut self) {
@@ -1158,7 +1181,7 @@ mod tests {
     #[test]
     fn an_explicit_close_keeps_the_pending_spill_barrier() {
         let mut f = Fixture::new();
-        if f.service.trim_token.is_none() { f.service.trim_token = f.service.window.documents.request_trim(); }
+        let _pressure=f.hold_pressure();
         let id = f.service.window.documents.selected();
         assert!(f.service.tab_action(&mut f.host, tabs::Action::Close { id }).is_err());
         assert!(f.service.pending_tab.is_none());
@@ -1172,7 +1195,7 @@ mod tests {
     fn open_failures_complete_while_storage_trim_is_pending() {
         let mut f = Fixture::new();
         f.invoke(CommandId::OpenDocument);
-        f.service.trim_token = f.service.window.documents.request_trim();
+        let _pressure=f.hold_pressure();
         let file = &f.host.session.state().document_file;
         f.act(DocumentAction::Open { id: f.request(), epoch: file.epoch, revision: file.revision, path: f.path("missing.capy") });
         assert!(f.service.deferred_action.is_none());
@@ -1190,7 +1213,7 @@ mod tests {
     #[test]
     fn a_tab_request_can_park_while_storage_trim_is_pending() {
         let mut f = Fixture::new();
-        if f.service.trim_token.is_none() { f.service.trim_token = f.service.window.documents.request_trim(); }
+        let _pressure=f.hold_pressure();
         f.service.tab_action(&mut f.host, tabs::Action::Adjacent { forward: true }).unwrap();
         assert!(matches!(f.service.pending_tab, Some(tabs::Action::Adjacent { forward: true })));
         assert!(f.service.deferred_action.is_none());
@@ -1202,7 +1225,7 @@ mod tests {
             let mut f = Fixture::new();
             f.service.tab_action(&mut f.host, tabs::Action::Adjacent { forward: true }).unwrap();
             assert!(matches!(f.service.pending_tab, Some(tabs::Action::Adjacent { forward: true })));
-            if spilling && f.service.trim_token.is_none() { f.service.trim_token = f.service.window.documents.request_trim(); }
+            let mut pressure=spilling.then(||f.hold_pressure());
             let file = &f.host.session.state().document_file;
             f.act(DocumentAction::DropImages {
                 epoch: file.epoch, revision: file.revision,
@@ -1213,10 +1236,8 @@ mod tests {
             assert!(matches!(f.service.pending_tab, Some(tabs::Action::Adjacent { forward: true })));
             assert!(f.host.session.file_drop_pending(id));
             assert!(f.service.deferred_action.is_none());
-            if f.service.trim_token.is_none() { f.service.trim_token = f.service.window.documents.request_trim(); }
-            let stores=layer_host::session_stores::SessionStores::new(f.directory.path.join("trim"),
-                std::sync::Arc::new(|work|work.run()),std::sync::Arc::new(||{}));
-            f.service.trim_receive=Some(stores.trim(Vec::new(),0));
+            if pressure.is_none() {pressure=Some(f.hold_pressure());}
+            pressure.as_ref().unwrap().drain();
             f.service.poll(&mut f.host).unwrap();
             assert!(!f.service.window.documents.trim_in_flight());
             assert_eq!(f.service.incoming_drop.as_ref().unwrap().id, id);

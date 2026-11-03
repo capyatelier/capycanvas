@@ -226,7 +226,7 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
     let temporary = layer_core::temp_files::directory().unwrap();
     let _ = std::fs::remove_dir(temporary);
     std::fs::write(temporary, b"fixture blocks temporary storage").unwrap();
-    service.window.documents.budget.inactive_ram = 0;
+    service.window.documents.set_inactive_ram_budget(0);
     settle(&mut service, &mut host);
     assert!(service.window.documents.storage_error().is_some());
     assert!(service.window.documents.resident_bytes() > 0);

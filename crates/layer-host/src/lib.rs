@@ -199,6 +199,7 @@ impl NativeHost {
     pub fn set_wake(&mut self,wake:std::sync::Arc<dyn Fn()+Send+Sync>) {
         self.preparation.set_notify(wake);self.install_preparation_wake();
     }
+    pub fn wake_callback(&self)->std::sync::Arc<dyn Fn()+Send+Sync> {self.preparation.signal()}
     fn install_preparation_wake(&mut self) {
         if let Some(renderer)=self.session.renderer_mut().0.as_mut() {self.preparation.install(renderer);}
         else {self.preparation.retire();}

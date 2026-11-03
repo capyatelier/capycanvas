@@ -201,20 +201,12 @@ impl DocumentService {
         host.invalidate_snapshot();
         Ok(())
     }
-    pub(super) fn trim_next(&mut self, token: u64) -> Result<(), String> {
-        let (candidates,budget)=self.window.documents.pressure_snapshot();
-        let reply=self.recovery.as_ref().ok_or("Session storage is unavailable")?.trim(candidates,budget)?;
-        self.trim_receive=Some(reply);self.trim_token=Some(token);
-
-        Ok(())
-    }
     pub(super) fn activated(
         &mut self,
         host: &mut NativeHost,
         completed: Result<Completed, String>,
     ) -> Result<(), String> {
         self.activating = false;
-        if self.window.documents.trim_in_flight() { self.window.documents.request_trim(); }
         if let Some(recovery) = &mut self.recovery { recovery.checkpoint(); }
         match completed {
             Ok(Completed::Activated(mut activation)) => {
@@ -380,16 +372,6 @@ impl DocumentService {
             let (activation,closed)=self.window.commit_close(host,prepared,|_|{})?;
             self.document_retired(host, true)?;if let Some(closed)=closed{self.worker.retire(closed.session);}self.activate(host,activation)?;
             self.close_next = false;
-        }
-        if self.idle()
-            && !self.window.documents.trim_in_flight()
-            && host.session.can_park_document()
-            && self.window.documents.storage_error().is_none()
-            && self.window.documents.pressure_needed()
-            && let Some(token) = self.window.documents.request_trim()
-        {
-            self.trim_next(token)?;
-            host.invalidate_snapshot();
         }
         Ok(())
     }

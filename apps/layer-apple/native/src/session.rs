@@ -13,7 +13,6 @@ pub(crate) struct WindowDisk {
     published_sequence: u64,
 }
 impl WindowDisk {
-    pub(crate) fn trim(&self,candidates:Vec<(u64,u64,layer_core::raster_storage::RetainedTiles)>,budget:usize)->Result<layer_host::session_stores::StoreReply,String> {Ok(self.stores.trim(candidates,budget))}
     fn finish_restore(&mut self) -> Result<(), String> {
         let Some(previous) = &self.unpublished else { return Ok(()); };
         let path = self.path.join("window.json");
@@ -405,6 +404,7 @@ pub unsafe extern "C" fn capy_apple_session_adopt(app: u64, task: u64) -> i32 {
             disk.stores.remap(&mapping.iter().map(|(&old,&new)|(old,new)).collect::<Vec<_>>());
             disk.unpublished = (manifest != original || !manifest.restoring.is_empty()).then_some(original);
             disk.manifest = manifest;
+            disk.stores.set_wake(a.host.wake_callback());
             disk.stores.watch_pressure(a.window.documents.pressure_source());
         }
         a.session_disk = Some(disk);

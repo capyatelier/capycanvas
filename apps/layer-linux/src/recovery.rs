@@ -293,6 +293,11 @@ impl Restart {
 }
 
 pub(crate) fn install(w:&Rc<Workspace>) {
+    let area:glib::SendWeakRef<gtk::Picture>=w.area.downgrade().into();
+    w.restart.stores.set_wake(Arc::new(move || {
+        let area=area.clone();
+        glib::idle_add_once(move || {if let Some(area)=area.upgrade() {let _=area.activate_action("canvas.storage",None);}});
+    }));
     if !enabled() { return; }
     let weak=Rc::downgrade(w);
     glib::timeout_add_local(Duration::from_millis(SessionStores::checkpoint_interval_ms()),move || {

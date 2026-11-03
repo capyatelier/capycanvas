@@ -150,34 +150,19 @@ pub extern "system" fn Java_art_capycanvas_Native_documentResumeFree(
     })
 }
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_documentTrimRequest(mut env: JNIEnv, _: JClass, handle: jlong) -> jlong {
-    crate::jni_entry!(env, handle, capy_app, {
-    capy_app.window.documents.request_trim().map_or(0, |token| token as jlong)
-    })
-}
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_documentTrimComplete(mut env: JNIEnv, _: JClass, handle: jlong, token: jlong, detail: jni::objects::JString) -> jni::sys::jboolean {
-    crate::jni_entry!(env, handle, capy_app, {
-    let result = if detail.as_raw().is_null() { Ok(()) } else { Err(read(&mut env, &detail)?) };
-    u8::from(capy_app.window.documents.complete_trim(token as u64, result))
-    })
-}
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_documentTrimTask(mut env:JNIEnv,_:JClass,handle:jlong,stores:jlong)->jlong {
+pub extern "system" fn Java_art_capycanvas_Native_documentStorageWait(mut env:JNIEnv,_:JClass,handle:jlong)->jlong {
     crate::jni_entry!(env,handle,capy_app, {
-        let (candidates,budget)=capy_app.window.documents.pressure_snapshot();
-        let reply=crate::inspection::borrow::<layer_host::session_stores::SessionStores>(stores)?.trim(candidates,budget);
-        or_throw(&mut env,crate::inspection::owned(reply),0)
+        match capy_app.window.documents.trim_wait() {Some(wait)=>or_throw(&mut env,crate::inspection::owned(wait),0),None=>0}
     })
 }
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_documentTrimWork(mut env:JNIEnv,_:JClass,task:jlong) {
+pub extern "system" fn Java_art_capycanvas_Native_documentStorageWaitWork(mut env:JNIEnv,_:JClass,task:jlong) {
     crate::jni_entry!(env, {
-        let reply=crate::inspection::borrow::<layer_host::session_stores::StoreReply>(task)?.clone();
-        fail(&mut env,reply.wait_on_worker().map(|_|()))
+        let wait=crate::inspection::borrow::<layer_ui::TrimWait>(task)?.clone();
+        fail(&mut env,wait.wait_on_worker())
     })
 }
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_documentTrimFree(mut env:JNIEnv,_:JClass,task:jlong) {
-    crate::jni_entry!(env, {crate::inspection::release::<layer_host::session_stores::StoreReply>(task)?;})
+pub extern "system" fn Java_art_capycanvas_Native_documentStorageWaitFree(mut env:JNIEnv,_:JClass,task:jlong) {
+    crate::jni_entry!(env, {crate::inspection::release::<layer_ui::TrimWait>(task)?;})
 }

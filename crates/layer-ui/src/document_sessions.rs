@@ -2,8 +2,10 @@
 //! editor stays in the host's existing canvas slot; every parked owner lives
 //! here. Hosts supply completed capture inventories and schedule I/O/GPU work.
 use crate::{DocumentFileState, DocumentTabs, PixelClip, Localizer, MessageId, FluentArgs};
-use layer_core::{Document, MemoryBudget, MemoryOwner, MemoryOwnerKind, MemoryClass, MemoryReport, raster_storage::RetainedTiles};
+use layer_core::{Document, MemoryBudget, MemoryOwner, MemoryOwnerKind, MemoryClass, raster_storage::RetainedTiles};
 use serde::{Serialize, Deserialize};
+#[cfg(test)]
+use layer_core::MemoryReport;
 use std::{collections::BTreeMap, ops::Deref};
 
 #[derive(Clone, Copy, Default)]
@@ -86,8 +88,10 @@ pub struct DocumentSessions<T> {
     language: crate::UiLanguage,
     untitled: String,
     pub budget: DocumentBudget,
+    #[cfg(target_arch="wasm32")]
     storage_error: Option<String>,
     pub clip: RetainedClipboard,
+    #[cfg(target_arch="wasm32")]
     trim: trim::Trim,
     memory: MemoryBudget,
     memory_owner: MemoryOwner,
@@ -123,13 +127,23 @@ impl<T> DocumentSessions<T> {
         Self {
             tabs: Default::default(), parked: Default::default(), clock: 0, language: localization.language(),
             untitled: DocumentTabLabel::untitled(1, localization),
-            budget: Default::default(), storage_error: None, clip: RetainedClipboard, trim: Default::default(),
-            pressure:StoragePressure::new(memory_owner.clone()), memory, memory_owner, reported: std::cell::Cell::new(0),
+            budget: Default::default(), clip: RetainedClipboard,
+            #[cfg(target_arch="wasm32")] storage_error:None,
+            #[cfg(target_arch="wasm32")] trim:Default::default(),
+            pressure:StoragePressure::new(memory_owner.clone(),memory.clone()), memory, memory_owner, reported: std::cell::Cell::new(0),
         }
     }
+    #[cfg(target_arch="wasm32")]
     pub fn request_trim(&mut self) -> Option<u64> { self.trim.request() }
-    pub fn trim_wait(&self) -> Option<TrimWait> { self.trim.wait() }
-    pub fn trim_in_flight(&self) -> bool { self.trim.in_flight() }
+    pub fn trim_wait(&self)->Option<TrimWait> {
+        #[cfg(not(target_arch="wasm32"))] {self.pressure.wait()}
+        #[cfg(target_arch="wasm32")] {self.trim.wait()}
+    }
+    pub fn trim_in_flight(&self)->bool {
+        #[cfg(not(target_arch="wasm32"))] {self.pressure.in_flight()}
+        #[cfg(target_arch="wasm32")] {self.trim.in_flight()}
+    }
+    #[cfg(target_arch="wasm32")]
     pub fn complete_trim(&mut self, token: u64, result: Result<(), String>) -> bool {
         if !self.trim.matches(token) { return false; }
         self.refresh_memory(true);
@@ -233,7 +247,7 @@ impl<T> DocumentSessions<T> {
         let id = next.tabs.add();
         next.untitled = DocumentTabLabel::untitled(id, localization);
         next.budget = self.budget;
-        next.storage_error = self.storage_error.clone();
+        next.storage_completed(self.storage_error().map_or(Ok(()),Err));
         Ok(next)
     }
     pub fn labels<'a>(
@@ -328,8 +342,6 @@ impl<T> DocumentSessions<T> {
         let previous = self.reported.get();
         if force || previous.abs_diff(resident) >= 1024 * 1024 {
             self.reported.set(resident);
-            self.memory_owner.report(MemoryReport { ram_bytes: resident as u64,
-                demand_ram_bytes: resident as u64, ..Default::default() });
             self.pressure.update(self.parked.iter().map(|(&id,parked)|(id,parked.used,parked.tiles.clone())).collect(),resident,self.budget.inactive_ram);
         }
     }
@@ -338,8 +350,8 @@ impl<T> DocumentSessions<T> {
         self.budget.inactive_ram.min(self.memory_owner.grant().ram_bytes.min(usize::MAX as u64) as usize)
     }
     pub fn pressure_source(&self)->StoragePressure {self.pressure.clone()}
-    pub fn pressure_snapshot(&self)->(Vec<(u64,u64,RetainedTiles)>,usize) {
-        (self.parked.iter().map(|(&id,parked)|(id,parked.used,parked.tiles.clone())).collect(),self.inactive_ram_budget())
+    pub fn set_inactive_ram_budget(&mut self,bytes:usize) {
+        if self.budget.inactive_ram!=bytes {self.budget.inactive_ram=bytes;self.refresh_memory(true);}
     }
     pub fn pressure_needed(&self)->bool {self.resident_bytes()>self.inactive_ram_budget()}
     /// Oldest inactive resident payload first. Recount shared handles after each
@@ -355,11 +367,13 @@ impl<T> DocumentSessions<T> {
             })
             .flatten()
     }
-    pub fn storage_error(&self) -> Option<&str> {
-        self.storage_error.as_deref()
+    pub fn storage_error(&self)->Option<String> {
+        #[cfg(not(target_arch="wasm32"))] {self.pressure.error()}
+        #[cfg(target_arch="wasm32")] {self.storage_error.clone()}
     }
     pub fn storage_completed(&mut self, result: Result<(), String>) {
-        self.storage_error = result.err();
+        #[cfg(not(target_arch="wasm32"))] self.pressure.storage_completed(result);
+        #[cfg(target_arch="wasm32")] {self.storage_error=result.err();}
     }
     pub fn admit(&self, active: &RetainedTiles, candidate: &Document) -> Result<(), DocumentSessionError> {
         self.admission(active).admit(candidate)
@@ -372,7 +386,7 @@ impl<T> DocumentSessions<T> {
                 n.saturating_add(p.tiles.metadata_bytes)
             }),
             limit: self.budget.metadata,
-            storage_error: self.storage_error.clone(),
+            storage_error:self.storage_error(),
         }
     }
 }

@@ -2779,6 +2779,14 @@ impl Workspace {
         let wake = gtk::gio::SimpleAction::new("wake", None);
         wake.connect_activate(glib::clone!(#[weak(rename_to = this)] self, move |_, _| this.wake()));
         actions.add_action(&wake);
+        let storage=gtk::gio::SimpleAction::new("storage",None);
+        storage.connect_activate(glib::clone!(#[weak(rename_to=this)] self,move |_,_| {
+            this.documents.refresh(&this);
+            let error=this.documents.model.borrow().storage_error();
+            if let Some(error)=error {this.changed(Err(error));}
+            this.wake();
+        }));
+        actions.add_action(&storage);
         for name in ["chrome", "brush-stamp"] {
             let action = gtk::gio::SimpleAction::new(name, Some(glib::VariantTy::UINT64));
             action.connect_activate(glib::clone!(#[weak(rename_to = this)] self, move |_, parameter| {

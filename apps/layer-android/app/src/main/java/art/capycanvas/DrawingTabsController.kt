@@ -23,7 +23,6 @@ internal class DrawingTabsController(private val host: CanvasHost) {
     }
     var closingWindow = false; private set
     private var refreshing = false
-    private var trimming: Job? = null
     private val inspections = mutableMapOf<Long, Job>()
     val selected get() = view.optLong("selected", 1)
     val rows get() = view.array("tabs").objects()
@@ -50,29 +49,11 @@ internal class DrawingTabsController(private val host: CanvasHost) {
             delay(16)
         }
     }
-    private suspend fun trim():String? = try {
-        val stores=host.recovery.storeCoordinator()
-        val task=host.withNative {Native.documentTrimTask(it,stores)}
-        try {withContext(NonCancellable+Dispatchers.IO) {Native.documentTrimWork(task)}}
-        finally {withContext(NonCancellable+Dispatchers.IO) {Native.documentTrimFree(task)}}
-        null
-    } catch(e:CancellationException) {throw e}
-    catch(e:Exception) {
-        host.reportActionError(host.withNative {Native.sessionFailure(it,e.message.orEmpty(),false)})
-        e.message ?: "Drawing cache failed"
-    }
-    private suspend fun scheduleTrim() {
-        val token = host.withNative { Native.documentTrimRequest(it) }
-        if (token == 0L) return
-        trimming = host.viewModelScope.launch {
-            withContext(NonCancellable) {
-                do {
-                    val failure = trim()
-                    val again = host.withNative { Native.documentTrimComplete(it, token, failure) }
-                    refresh()
-                } while (again)
-            }
-        }
+    private suspend fun awaitStorage() {
+        val task=host.withNative {Native.documentStorageWait(it)}
+        if(task==0L)return
+        try {withContext(NonCancellable+Dispatchers.IO) {Native.documentStorageWaitWork(task)}}
+        finally {withContext(NonCancellable+Dispatchers.IO) {Native.documentStorageWaitFree(task)}}
     }
     /** File candidate is fully prepared before completing its initiating request. */
     suspend fun beforeAdopt(task: Long) = beforeAdopt { host.withNative { Native.projectParkReady(it, task) } }
@@ -90,9 +71,9 @@ internal class DrawingTabsController(private val host: CanvasHost) {
         try { drain(); waitReady(settle=settle) } catch(e:Exception) { afterAdopt(); throw e }
     }
     suspend fun selectRestored(id: Long) {
-        drain(); waitReady(); activate(id); scheduleTrim(); refresh(); resume()
+        drain(); waitReady(); activate(id); refresh(); resume()
     }
-    suspend fun afterAdopt() { try { scheduleTrim() } catch(e:CancellationException){throw e} catch(e:Exception){host.reportActionError(host.withNative {Native.sessionFailure(it,e.message.orEmpty(),true)})} finally {transition(false);host.recovery.capture();if(currentCoroutineContext().isActive)resume()} }
+    suspend fun afterAdopt() {transition(false);host.recovery.capture();if(currentCoroutineContext().isActive)resume()}
     private suspend fun activate(id: Long, close: Boolean = false) {
         var task=0L
         try {
@@ -123,7 +104,7 @@ internal class DrawingTabsController(private val host: CanvasHost) {
                 query(obj("op" to "prepare"))
                 drain(); waitReady()
                 activate(id); selector=false
-                scheduleTrim(); refresh()
+                refresh()
                 if(close) { waitReady(true); host.withNative { Native.dispatch(it,obj("type" to "invoke","command" to "close_document").toString()) }; host.documentChanged() }
             } catch(e:CancellationException) { throw e }
             catch(e:Exception) { host.reportActionError(e.message ?: "Could not switch drawings") }
@@ -137,7 +118,7 @@ internal class DrawingTabsController(private val host: CanvasHost) {
         host.viewModelScope.launch {
             var preserved=false
             try {
-                drain(); waitReady(); trimming?.join()
+                drain(); waitReady(); awaitStorage()
                 host.withNative { Native.sessionClose(it) }
                 preserved=host.recovery.flush()
                 if(preserved)host.closeWorkspaceWindow { cancelWindowClose() }
@@ -169,7 +150,7 @@ internal class DrawingTabsController(private val host: CanvasHost) {
             try {
                 if(!JSONObject(query(obj("op" to "ready"))).optBoolean("approved"))return@launch
                 val closingId=JSONObject(query(obj("op" to "view"))).getLong("selected")
-                drain(); waitReady(); trimming?.join()
+                drain(); waitReady(); awaitStorage()
                 prepared=host.withNative {Native.documentPrepareClose(it)}
                 withContext(NonCancellable) {
                     host.recovery.remove(closingId)
@@ -178,7 +159,7 @@ internal class DrawingTabsController(private val host: CanvasHost) {
                 }
                 withContext(Dispatchers.IO) {Native.documentResumeWork(activation)}
                 host.withNative {Native.documentResume(it,activation)}
-                host.documentCanvasFailure(null);scheduleTrim()
+                host.documentCanvasFailure(null)
                 val next=JSONObject(query(obj("op" to "view"))); view=next
                 if(next.array("tabs").length()==0) host.closeWorkspaceWindow()
             } catch(e:CancellationException) { throw e }

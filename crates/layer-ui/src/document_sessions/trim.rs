@@ -32,6 +32,8 @@ impl Future for TrimWait {
     }
 }
 impl TrimWait {
+    pub(super) fn pending()->Self {Self(Arc::default())}
+    pub(super) fn complete(&self,result:Result<(),String>) {self.0.finish(result);}
     #[cfg(not(target_arch = "wasm32"))]
     pub fn wait_on_worker(&self) -> Result<(), String> {
         let state = self.0.state.lock().unwrap();
@@ -39,11 +41,13 @@ impl TrimWait {
     }
 }
 
+#[cfg(any(target_arch="wasm32",test))]
 #[derive(Default)]
 pub(super) struct Trim {
     active: Option<(u64, Arc<Completion>)>,
     pending: bool,
 }
+#[cfg(any(target_arch="wasm32",test))]
 impl Trim {
     pub fn request(&mut self) -> Option<u64> {
         if self.active.is_some() { self.pending = true; return None; }
@@ -55,6 +59,7 @@ impl Trim {
         Some(token)
     }
     pub fn matches(&self, token: u64) -> bool { self.active.as_ref().is_some_and(|(current, _)| *current == token) }
+    #[cfg(target_arch="wasm32")]
     pub fn in_flight(&self) -> bool { self.active.is_some() }
     pub fn wait(&self) -> Option<TrimWait> { self.active.as_ref().map(|(_, completion)| TrimWait(completion.clone())) }
     pub fn complete(&mut self, token: u64, result: Result<(), String>) -> bool {
@@ -65,6 +70,7 @@ impl Trim {
         false
     }
 }
+#[cfg(any(target_arch="wasm32",test))]
 impl Drop for Trim {
     fn drop(&mut self) {
         if let Some((_, completion)) = self.active.take() { completion.finish(Err("Drawing storage task stopped".into())); }

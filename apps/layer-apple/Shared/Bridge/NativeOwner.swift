@@ -646,7 +646,6 @@ final class NativeOwner: @unchecked Sendable {
                     NativeProjectTask.io.async { try? access.remember(url); if !opening { completion(nil) } }
                     if opening { completion(nil) }
                 } else { completion(nil) }
-                if opening { documentStorage() }
             } catch { completion(error.localizedDescription) }
         }
         queue.async(execute: attempt)
@@ -711,23 +710,17 @@ final class NativeOwner: @unchecked Sendable {
     private func waitForDocumentStorage(_ completion: @escaping @Sendable (String?) -> Void) {
         queue.async { [self] in
             guard let task = nativeHandle(capy_apple_document_trim_wait(nativeValue(handle))) else { completion(nil); return }
-            runDocumentJob(DocumentJob(task), waiting: true, completion: completion)
+            runDocumentJob(DocumentJob(task), completion: completion)
         }
     }
-    private func documentStorage() {
-        guard let task = nativeHandle(capy_apple_document_storage(nativeValue(handle))) else { return }
-        runDocumentJob(DocumentJob(task), storage: true) { [weak self] error in if let error { self?.receive(nil, error) } }
-    }
-    private func runDocumentJob(_ job: DocumentJob, storage: Bool = false, waiting: Bool = false, completion: @escaping @Sendable (String?) -> Void) {
-        (storage ? NativeProjectTask.io : drawingWorker).async { [self, job] in
+    private func runDocumentJob(_ job: DocumentJob, completion: @escaping @Sendable (String?) -> Void) {
+        drawingWorker.async { [self, job] in
             _ = capy_document_prepare(nativeValue(job.handle))
             queue.async { [self, job] in
                 do {
                     let result = capy_apple_document_resume(nativeValue(handle),nativeValue(job.handle))
                     try check(result)
-                    if result == 1 { runDocumentJob(job, storage: storage, waiting: waiting, completion: completion); return }
                     try publish(); completion(nil)
-                    if !storage && !waiting { documentStorage() }
                 }
                 catch { try? publish(); completion(error.localizedDescription) }
             }

@@ -83,15 +83,17 @@ struct Drawing {
 }
 struct State {drawings:BTreeMap<String,Drawing>,aliases:BTreeMap<u64,String>}
 struct Inner {
-    root:PathBuf,state:Mutex<State>,execute:Arc<dyn Fn(StoreWork)+Send+Sync>,wake:Arc<dyn Fn()+Send+Sync>,pressure:Mutex<Option<(layer_ui::StoragePressure,u64)>>,trims:Mutex<TrimRequests>,
+    root:PathBuf,state:Mutex<State>,execute:Arc<dyn Fn(StoreWork)+Send+Sync>,wake:Mutex<Arc<dyn Fn()+Send+Sync>>,pressure:Mutex<Option<(layer_ui::StoragePressure,u64)>>,trims:Mutex<TrimRequests>,
 }
 #[derive(Clone)]
 pub struct SessionStores(Arc<Inner>);
 impl SessionStores {
     pub fn native(root:PathBuf,wake:Arc<dyn Fn()+Send+Sync>)->Self {Self::new(root,Arc::new(native_worker),wake)}
     pub fn new(root:PathBuf,execute:Arc<dyn Fn(StoreWork)+Send+Sync>,wake:Arc<dyn Fn()+Send+Sync>)->Self {
-        Self(Arc::new(Inner {root,state:Mutex::new(State {drawings:BTreeMap::new(),aliases:BTreeMap::new()}),execute,wake,pressure:Mutex::new(None),trims:Mutex::new(TrimRequests::default())}))
+        Self(Arc::new(Inner {root,state:Mutex::new(State {drawings:BTreeMap::new(),aliases:BTreeMap::new()}),execute,wake:Mutex::new(wake),pressure:Mutex::new(None),trims:Mutex::new(TrimRequests::default())}))
     }
+    pub fn set_wake(&self,wake:Arc<dyn Fn()+Send+Sync>) {*self.0.wake.lock().unwrap()=wake;}
+    fn wake(&self) {let wake=self.0.wake.lock().unwrap().clone();wake();}
     pub fn bind(&self,id:u64,key:Option<&str>)->Result<DrawingStore,String> {
         let mut state=self.0.state.lock().unwrap();
         if let Some(current)=state.aliases.get(&id) {
@@ -205,15 +207,15 @@ impl SessionStores {
         let generation=source.subscribe(Arc::new(move || {
             if let Some(inner)=weak.upgrade() {
                 let stores=SessionStores(inner);let watched=stores.0.pressure.lock().unwrap().clone();
-                if let Some((source,generation))=watched && let Some((candidates,budget))=source.snapshot(generation) {
-                    stores.trim(candidates,budget).on_finished(move |_|source.completed(generation));
+                if let Some((source,generation))=watched && let Some((candidates,budget))=source.request(generation) {
+                    stores.trim(candidates,budget).on_finished(move |result|source.completed(generation,result));
                 }
             }
         }));
         *watched=Some((source.clone(),generation));drop(watched);
-        if let Some((candidates,budget))=source.snapshot(generation) {self.trim(candidates,budget).on_finished(move |_|source.completed(generation));}
+        if let Some((candidates,budget))=source.request(generation) {self.trim(candidates,budget).on_finished(move |result|source.completed(generation,result));}
     }
-    pub fn trim(&self,candidates:Vec<(u64,u64,RetainedTiles)>,budget:usize)->StoreReply {
+    fn trim(&self,candidates:Vec<(u64,u64,RetainedTiles)>,budget:usize)->StoreReply {
         let reply=StoreReply::default();let batch=TrimBatch {candidates,budget,replies:vec![reply.clone()]};
         let mut trims=self.0.trims.lock().unwrap();
         if trims.active {
@@ -227,7 +229,7 @@ impl SessionStores {
         reply.on_finished(move |result| {
             let mut trims=stores.0.trims.lock().unwrap();let next=trims.pending.take();trims.active=next.is_some();drop(trims);
             for reply in batch.replies {reply.finish(result.clone().map(|_|StoreResult::Durable(0)));}
-            if let Some(next)=next {stores.start_trim(next);}(stores.0.wake)();
+            if let Some(next)=next {stores.start_trim(next);}stores.wake();
         });
         let trim=PressureTrim {stores:self.clone(),candidates:batch.candidates,budget:batch.budget,next:0,reply};
         (self.0.execute)(StoreWork(Some(StoreTask::Trim(trim))));
@@ -292,7 +294,7 @@ impl DrawingWork {
             }else {self.binding.on_worker(operation)}
         })).unwrap_or_else(|_|Err("Drawing storage worker failed".into()))};
         let committed=match (&request.work,&result) {(Work::Checkpoint {stamp,..},Ok(StoreResult::Checkpoint(_)))=>Some(stamp.clone()),_=>None};
-        self.complete(committed,matches!(result,Ok(StoreResult::Retired)));request.finish(result);(self.stores.0.wake)();
+        self.complete(committed,matches!(result,Ok(StoreResult::Retired)));request.finish(result);self.stores.wake();
     }
     fn complete(&self,committed:Option<SessionStamp>,retired:bool) {
         let mut state=self.stores.0.state.lock().unwrap();
@@ -312,7 +314,7 @@ impl DrawingWork {
 impl Drop for DrawingWork {
     fn drop(&mut self) {
         if let Some(request)=self.request.take() {
-            self.complete(None,false);request.finish(Err("Drawing storage worker stopped".into()));(self.stores.0.wake)();
+            self.complete(None,false);request.finish(Err("Drawing storage worker stopped".into()));self.stores.wake();
         }
     }
 }

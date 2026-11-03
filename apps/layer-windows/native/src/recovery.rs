@@ -422,9 +422,6 @@ impl Service {
         Ok(())
     }
     pub fn watch_pressure(&self,source:layer_ui::StoragePressure) {if let Some(stores)=&self.stores {stores.watch_pressure(source);}}
-    pub fn trim(&self,candidates:Vec<(u64,u64,layer_core::raster_storage::RetainedTiles)>,budget:usize)->Result<layer_host::session_stores::StoreReply,String> {
-        Ok(self.stores.as_ref().ok_or("Session storage is unavailable")?.trim(candidates,budget))
-    }
     pub fn checkpoint(&mut self) { self.next_observation = Instant::now(); }
     pub fn poll<P: Parked>(
         &mut self,
@@ -447,6 +444,7 @@ impl Service {
             match completed {
                 Finished::Opened(result) => match result {
                     Ok((manifest, windows,stores)) => {
+                        stores.set_wake(host.wake_callback());
                         self.stores=Some(stores);
                         self.windows = windows;
                         self.restore_queue = manifest.drawings.iter().map(|d| d.id).collect();

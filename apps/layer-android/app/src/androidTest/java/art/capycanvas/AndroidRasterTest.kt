@@ -5029,8 +5029,9 @@ class AndroidRasterTest {
             val directory=java.nio.file.Files.createTempDirectory(files.toPath(),"tabs-pressure-").toFile()
             val stores=Native.sessionStoresOpen(directory.absolutePath)
             try {
-                val task=native{Native.documentTrimTask(it,stores)}
-                try {Native.documentTrimWork(task)} finally {Native.documentTrimFree(task)}
+                native{Native.sessionWatchPressure(it,stores)}
+                val task=native{Native.documentStorageWait(it)}
+                if(task!=0L)try {Native.documentStorageWaitWork(task)} finally {Native.documentStorageWaitFree(task)}
             } finally {Native.sessionStoresFree(stores)}
         }
         val first=tabs().getLong("selected")

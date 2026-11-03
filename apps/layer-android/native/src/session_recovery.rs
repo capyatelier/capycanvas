@@ -83,7 +83,9 @@ pub extern "system" fn Java_art_capycanvas_Native_sessionBind(mut env:JNIEnv,_:J
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_sessionWatchPressure(mut env:JNIEnv,_:JClass,handle:jlong,stores:jlong) {
     crate::jni_entry!(env,handle,capy_app, {
-        crate::inspection::borrow::<SessionStores>(stores)?.watch_pressure(capy_app.window.documents.pressure_source());
+        let stores=crate::inspection::borrow::<SessionStores>(stores)?;
+        stores.set_wake(capy_app.host.wake_callback());
+        stores.watch_pressure(capy_app.window.documents.pressure_source());
     })
 }
 

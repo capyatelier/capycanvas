@@ -915,7 +915,7 @@ impl Documents {
         w.refresh_document_view();
         w.proof.resume(w);
         w.local_tone.resume();
-        let storage_error = self.model.borrow().storage_error().map(str::to_owned);
+        let storage_error = self.model.borrow().storage_error();
         if let Some(error) = error {
             w.document_canvas_error(&error);
         } else if let Some(error) = storage_error {
@@ -953,7 +953,7 @@ impl Documents {
             .unwrap_or_else(|_| unreachable!("validated drawing target"));
         *w.gpu.borrow_mut() = Some(next.canvas);
         *w.recovery.borrow_mut() = next.recovery;
-        self.trim_in_background(w);
+        self.watch_storage(w);
         self.finish_switch(w, error);
         Ok(())
     }
@@ -1008,7 +1008,7 @@ impl Documents {
         let tiles=candidate.session.retained_document_tiles();
         candidate.session.renderer_mut().stop().await;
         self.model.borrow_mut().append_parked_with_id(id,Parked {canvas:candidate,recovery},tiles,&w.localization()).map_err(|(error,_)|error)?;
-        self.trim_in_background(w);
+        self.watch_storage(w);
         self.refresh(w);
         Ok(())
     }
@@ -1102,7 +1102,7 @@ impl Documents {
         }
         *w.gpu.borrow_mut() = Some(*next);
         *w.recovery.borrow_mut() = recovery;
-        self.trim_in_background(w);
+        self.watch_storage(w);
         self.finish_switch(w, error);
         Ok(())
     }
@@ -1111,34 +1111,19 @@ impl Documents {
         let Some(outcome) = imported.and_then(|imported| imported.preserve_unsupported(reason.clone())) else { return Err(reason); };
         crate::files::open::show_package(w.window.upcast_ref(), layer_ui::PackageView::new(outcome)?, original, &w.localization()).await
     }
-    fn trim_in_background(&self, w: &Rc<Workspace>) {
+    fn watch_storage(&self,w:&Rc<Workspace>) {
+        #[cfg(test)]
+        self.model.borrow_mut().set_inactive_ram_budget(self.ram_budget.get());
         for (id,parked) in self.model.borrow().parked() {
             if let Err(error)=w.restart.stores.adopt_binding(*id,parked.owner.recovery.binding.clone()) {w.changed(Err(error));return;}
         }
         w.restart.stores.watch_pressure(self.model.borrow().pressure_source());
-        let Some(token) = self.model.borrow_mut().request_trim() else { return; };
-        let w = w.clone();
-        glib::spawn_future_local(async move {
-            loop {
-                let result = w.documents.trim_storage(&w).await;
-                if !w.documents.model.borrow_mut().complete_trim(token, result) { break; }
-            }
-        });
     }
-    async fn trim(&self, w: &Rc<Workspace>) {
-        self.trim_in_background(w);
-        let completion = self.model.borrow().trim_wait();
-        if let Some(completion) = completion { let _ = completion.await; }
-    }
-    async fn trim_storage(&self,w:&Rc<Workspace>) -> Result<(), String> {
-        #[cfg(test)]
-        { self.model.borrow_mut().budget.inactive_ram = self.ram_budget.get(); }
+    async fn trim(&self,w:&Rc<Workspace>) {
         self.model.borrow_mut().storage_completed(Ok(()));
-        let (candidates,budget)=self.model.borrow().pressure_snapshot();
-        for (id,parked) in self.model.borrow().parked() {w.restart.stores.adopt_binding(*id,parked.owner.recovery.binding.clone())?;}
-        w.restart.stores.trim(candidates,budget).await?;
-
-        Ok(())
+        self.watch_storage(w);
+        let completion=self.model.borrow().trim_wait();
+        if let Some(completion)=completion {let _=completion.await;}
     }
     /// A completed close always belongs to the active session; service_requests
     /// calls this only after its Save/Discard/Cancel state machine has settled.

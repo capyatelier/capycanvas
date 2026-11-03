@@ -464,6 +464,38 @@ fn parked_budget_source_schedules_storage_without_an_owner_poll() {
 }
 
 #[test]
+fn one_pressure_subscription_coalesces_new_roots_and_finishes_every_trim_waiter() {
+    let fixture=Fixture::new();let localization=layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
+    let mut documents=layer_ui::DocumentSessions::<()>::default();documents.set_inactive_ram_budget(0);
+    fixture.stores.watch_pressure(documents.pressure_source());
+    let (_capture,_,first,first_tile)=capture();documents.append((),first,&localization);
+    let first_wait=documents.trim_wait().unwrap();
+    let (_capture,_,second,second_tile)=capture();documents.append((),second,&localization);
+    let second_wait=documents.trim_wait().unwrap();
+    assert_eq!(fixture.queue.lock().unwrap().len(),1);
+    assert!(documents.trim_in_flight());
+    while !fixture.queue.lock().unwrap().is_empty() {fixture.run();}
+    first_wait.wait_on_worker().unwrap();second_wait.wait_on_worker().unwrap();
+    assert!(!documents.trim_in_flight());assert!(documents.storage_error().is_none());
+    assert_eq!(first_tile.resident_bytes()+second_tile.resident_bytes(),0);
+}
+
+#[test]
+fn failed_subscription_finishes_trim_waiters_and_blocks_work_until_storage_is_cleared() {
+    let fixture=Fixture::new();let localization=layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
+    let mut documents=layer_ui::DocumentSessions::<()>::default();documents.set_inactive_ram_budget(0);
+    fixture.stores.watch_pressure(documents.pressure_source());
+    let (_capture,_,retained,tile)=capture();documents.append((),retained,&localization);
+    let wait=documents.trim_wait().unwrap();drop(fixture.pop());
+    assert_eq!(wait.wait_on_worker().unwrap_err(),"Drawing storage worker stopped");
+    assert!(documents.storage_error().is_some());assert!(!documents.trim_in_flight());
+    assert!(fixture.queue.lock().unwrap().is_empty());assert!(tile.resident_bytes()>0);
+    documents.storage_completed(Ok(()));let retry=documents.trim_wait().unwrap();
+    while !fixture.queue.lock().unwrap().is_empty() {fixture.run();}
+    retry.wait_on_worker().unwrap();assert!(documents.storage_error().is_none());assert_eq!(tile.resident_bytes(),0);
+}
+
+#[test]
 fn stale_optional_work_skips_preparation_and_storage_but_forced_work_runs() {
     let fixture = Fixture::new(); let (capture, stamp, _, _) = capture();
     let binding = fixture.stores.bind(1, None).unwrap();

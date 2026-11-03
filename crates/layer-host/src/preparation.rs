@@ -18,6 +18,14 @@ impl PreparationWake {
     pub fn install(&self,renderer:&mut layer_render_wgpu::WgpuRasterizer) {
         if let Some(wake)=self.callback() {renderer.set_preparation_wake(wake);}
     }
+    pub fn signal(&self)->Arc<dyn Fn()+Send+Sync> {
+        let state=Arc::downgrade(&self.0);
+        Arc::new(move || {
+            let Some(state)=state.upgrade() else {return;};
+            let registration=state.registration.lock().unwrap();
+            if let Some(notify)=&registration.notify {state.pending.store(true,Ordering::Release);notify();}
+        })
+    }
     fn callback(&self)->Option<Arc<dyn Fn()+Send+Sync>> {
         let mut registration=self.0.registration.lock().unwrap();
         registration.notify.as_ref()?;
@@ -62,5 +70,14 @@ mod tests {
         let current=wake.callback().unwrap();old();assert!(!wake.take());
         current();assert!(wake.take());assert_eq!(calls.load(Ordering::Relaxed),2);
         wake.close();old();current();assert!(!wake.take());assert_eq!(calls.load(Ordering::Relaxed),2);
+    }
+    #[test]
+    fn storage_completion_survives_renderer_retirement_and_stops_when_closed() {
+        let calls=Arc::new(AtomicUsize::new(0));let count=calls.clone();
+        let wake=PreparationWake::new(Arc::new(move || {count.fetch_add(1,Ordering::Relaxed);}));
+        let storage=wake.signal();let renderer=wake.callback().unwrap();wake.retire();
+        renderer();assert!(!wake.take());storage();assert!(wake.take());
+        wake.callback();storage();assert!(wake.take());assert_eq!(calls.load(Ordering::Relaxed),2);
+        wake.close();storage();assert!(!wake.take());assert_eq!(calls.load(Ordering::Relaxed),2);
     }
 }

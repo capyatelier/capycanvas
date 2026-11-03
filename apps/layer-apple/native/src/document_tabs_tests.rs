@@ -91,6 +91,14 @@ fn apple_tabs_preserve_history_pixels_and_disk_parking() {
         let app = App::new(platform);
         app.borrow().host.session.renderer_mut().0 = Some(native_renderer());
         app.draw_until_idle();
+        let root=std::env::temp_dir().join(format!("capy-apple-tabs-{}",layer_core::PortableId::random()));
+        let path=CString::new(root.to_str().unwrap()).unwrap();
+        let session=unsafe {capy_apple_session_open(app.0,path.as_ptr(),c"tabs".as_ptr(),false,false)};
+        assert_ne!(session,0);
+        assert_eq!(unsafe {capy_session_work(session,None,std::ptr::null_mut())},0);
+        assert_eq!(unsafe {capy_apple_session_adopt(app.0,session)},0,"{:?}",app.borrow().error);
+        assert_eq!(unsafe {capy_session_restore_finished(session)},0);
+        unsafe {capy_session_free(session)};
         app.stroke();
         app.draw_until_idle();
         let first = app.document().clone();
@@ -104,19 +112,16 @@ fn apple_tabs_preserve_history_pixels_and_disk_parking() {
         app.invoke("deselect");
         app.draw_until_idle();
         let second = app.document().clone();
-        app.borrow().window.documents.budget.inactive_ram = 0;
+        app.borrow().window.documents.set_inactive_ram_budget(0);
         switch(&app, 1, false);
         assert_project_document(&app.document(), &first);
         assert_eq!(app.document().working, first.working);
-        let storage = unsafe { capy_apple_document_storage(app.0) };
-        assert_ne!(storage, 0);
-        loop {
-            assert_eq!(unsafe { capy_document_prepare(storage) }, 0);
-            let again = unsafe { capy_apple_document_resume(app.0, storage) };
-            assert!(matches!(again, 0 | 1), "{:?}", app.borrow().error);
-            if again == 0 { break; }
+        let storage=unsafe {capy_apple_document_trim_wait(app.0)};
+        if storage!=0 {
+            assert_eq!(unsafe {capy_document_prepare(storage)},0);
+            assert_eq!(unsafe {capy_apple_document_resume(app.0,storage)},0,"{:?}",app.borrow().error);
+            unsafe {capy_document_free(storage)};
         }
-        unsafe { capy_document_free(storage) };
         assert_eq!(tabs(&app)["resident_bytes"], 0);
         app.invoke("undo");
         app.draw_until_idle();
@@ -191,6 +196,9 @@ fn apple_tabs_preserve_history_pixels_and_disk_parking() {
         assert_eq!(tabs(&app)["can_undo"], false);
         assert_project_document(&app.document(), &second);
         assert_eq!(app.document().working, second.working);
+        let storage=unsafe {capy_apple_document_trim_wait(app.0)};
+        if storage!=0 {assert_eq!(unsafe {capy_document_prepare(storage)},0);unsafe {capy_document_free(storage)};}
+        drop(app);std::fs::remove_dir_all(root).unwrap();
     }
 }
 
