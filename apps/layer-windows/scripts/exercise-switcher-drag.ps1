@@ -900,7 +900,7 @@ function Drag([switch]$Grip,[switch]$Hold,[switch]$Cancel){
     }else{Press $source -Grip:$Grip}
     if($Hold){
         Wait-Until {(Gesture).phase -eq 'held'} "$Device hold was not recognized" 4
-        if(!(Find 'workspace-manager-move-up')){throw 'Hold did not open a native context menu'}
+        Wait-Until {$null -ne (Find 'workspace-manager-move-up' -Visible)} 'Hold did not open a native context menu'
     }else{Start-Sleep -Milliseconds 45}
     Preview-Intact;Order-Intact $saved $revision
     Move-To $target

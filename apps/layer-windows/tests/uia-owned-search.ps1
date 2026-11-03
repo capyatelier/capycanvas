@@ -688,6 +688,37 @@ namespace CapyFooterTest {
 }
 Write-Output 'Retained footer setup authors its sufficient column width before the modal; locale checks preserve the width bound without background input.'
 
+$switcherHoldAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-switcher-drag.ps1'),[ref]$tokens,[ref]$errors)
+if(@($errors).Count){throw ($errors|Out-String)}
+$switcherDrag=@($switcherHoldAst.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Drag'},$true))
+if($switcherDrag.Count -ne 1){throw 'Missing actual switcher drag journey'}
+$switcherHold=@($switcherDrag[0].Body.FindAll({param($node)$node -is [Management.Automation.Language.IfStatementAst] -and $node.Clauses[0].Item1.Extent.Text -eq '$Hold'},$true))
+if($switcherHold.Count -ne 1){throw 'Missing actual held-menu assertion'}
+$heldMenuCheck=[scriptblock]::Create(($switcherHold[0].Clauses[0].Item2.Statements|ForEach-Object {$_.Extent.Text}) -join "`n")
+& {
+    $Device='touch';$menu=[pscustomobject]@{AutomationId='workspace-manager-move-up'}
+    $publication=@{case='';lookups=0;visibleRequests=0;after=0}
+    function Gesture {[pscustomobject]@{phase='held'}}
+    function Find([string]$Id,[switch]$Visible){
+        if($Id -ne 'workspace-manager-move-up'){throw 'Held menu changed its native target'}
+        $publication.lookups++;if($Visible){$publication.visibleRequests++}
+        if($publication.case -eq 'missing' -or ($publication.case -eq 'hidden' -and $Visible)){return}
+        if($publication.lookups -ge $publication.after){$menu}
+    }
+    function Wait-Until([scriptblock]$Predicate,[string]$Message,[double]$Timeout){
+        foreach($sample in 1..3){if(& $Predicate){return}}
+        throw $Message
+    }
+    foreach($case in 'delayed','ready','hidden','missing'){
+        $publication.case=$case;$publication.lookups=0;$publication.visibleRequests=0;$publication.after=if($case -eq 'delayed'){2}else{1}
+        $rejected=$false
+        try{& $heldMenuCheck}catch{if($_.Exception.Message -ne 'Hold did not open a native context menu'){throw};$rejected=$true}
+        if($rejected -ne ($case -in @('hidden','missing'))){throw "Held menu did not preserve its $case publication assertion"}
+        if($publication.lookups -lt $publication.after -or $publication.visibleRequests -ne $publication.lookups){throw 'Held menu did not observe its actual visible native target'}
+    }
+}
+Write-Output 'Workspace held-menu assertion observes delayed native publication and rejects hidden or missing menus without input.'
+
 $layoutAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-workspace-layout.ps1'),[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw ($errors|Out-String)}
 $idleFps=@($layoutAst.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Idle-Fps'},$true))
