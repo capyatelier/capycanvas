@@ -96,6 +96,7 @@ export async function checkToolVariations({call,evaluate,settle}) {
       const variants=await model({kind:'tool_variants',anchor}),rows=variants.sections.flat();assert.ok(rows.length>1);
       if(slot==='fill')assert.deepEqual(rows.map(row=>row.label),['Fill','Lasso fill','Enclose and Fill','Paint unfilled areas']);
       const categories=rows.map(row=>row.label);
+      const choiceSection=slot==='fill'?'subtools':'groups';
       await markerPoint(anchor,selector);
       assert.ok(rows.every(r=>r.action&&r.icon));
       const target={kind:'tile',panel:'toolbar',tile:tile.id},full=await model(target);
@@ -107,7 +108,7 @@ export async function checkToolVariations({call,evaluate,settle}) {
         assert.equal(await menuOpen(),false);
         const view=await evaluate(`layerApp.app.panel_view('toolbar').tiles.find(t=>t.id===${tile.id})`);
         assert.equal(view.label,alternate.label);assert.equal(view.icon,alternate.icon);
-        assert.deepEqual(await evaluate(`layerApp.state().tool_set.groups.map(item=>item.label)`),categories,'docked projection has tool categories');
+        assert.deepEqual(await evaluate(`layerApp.state().tool_set.${choiceSection}.map(item=>item.label)`),categories,'docked projection has tool categories');
         assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)})===retainedVariationTile`),true,'variant retains pressed tile');
         assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector+' > button:first-child > svg')}).dataset.asset`),alternate.icon);
         await send({type:'customize',action:{type:'close_expanded'}});
@@ -115,12 +116,12 @@ export async function checkToolVariations({call,evaluate,settle}) {
         assert.ok(await evaluate('layerApp.state().customization.drawer!=null'),`${device}: active click opens drawer`);
         const drawer=await evaluate('layerApp.state().customization.drawer');
         assert.deepEqual(drawer.anchor,anchor);assert.deepEqual(drawer.columns,[[slot==='fill'?'tools':'brushes'],['tool_settings']]);
-        assert.deepEqual(await evaluate("[...document.querySelectorAll('.content-drawer :is(.brushes-control,.tools-control) .tool-groups .tool-choice-name')].map(n=>n.textContent)"),categories);
+        assert.deepEqual(await evaluate(`[...document.querySelectorAll('.content-drawer :is(.brushes-control,.tools-control) .tool-${choiceSection} .tool-choice-name')].map(n=>n.textContent)`),categories);
         await evaluate("window.retainedSlotDrawer=document.querySelector('.content-drawer :is(.brushes-control,.tools-control)')");
         for(let choice=0;choice<3;choice++) {
           await settleDrawer();
-          const sibling=await evaluate('layerApp.state().customization.drawer.tool_set.groups.find(r=>!r.selected&&r.enabled)');
-          await click(`.content-drawer :is(.brushes-control,.tools-control) .tool-groups [data-tool-choice="${sibling.label}"]`);
+          const sibling=await evaluate(`layerApp.state().customization.drawer.tool_set.${choiceSection}.find(r=>!r.selected&&r.enabled)`);
+          await click(`.content-drawer :is(.brushes-control,.tools-control) .tool-${choiceSection} [data-tool-choice="${sibling.label}"]`);
           assert.deepEqual(await evaluate('layerApp.state().customization.drawer.anchor'),anchor,'drawer sibling keeps its origin');
           assert.equal(await evaluate("document.querySelector('.content-drawer :is(.brushes-control,.tools-control)')===retainedSlotDrawer"),true,'drawer siblings retain native controls');
           assert.equal(await evaluate(`layerApp.app.panel_view('toolbar').tiles.find(t=>t.id===${tile.id}).icon`),sibling.icon,`${device}: full drawer choice updates tile`);
@@ -155,9 +156,9 @@ export async function checkToolVariations({call,evaluate,settle}) {
         const leaves=(await model({kind:'tool_variants',anchor:fillAnchor})).sections.flat();
         assert.deepEqual(leaves.slice(-4).map(row=>row.label),['Fill','Lasso fill','Enclose and Fill','Paint unfilled areas']);
         await openChoices(fillAnchor,fillSelector);await choose('Enclose and Fill');
-        assert.deepEqual(await evaluate('layerApp.state().tool_set.groups.map(item=>item.label)'),
+        assert.deepEqual(await evaluate('layerApp.state().tool_set.subtools.map(item=>item.label)'),
           leaves.map(row=>row.label),'Photo Fill lists the same four siblings');
-        assert.deepEqual(await evaluate('layerApp.state().tool_set.subtools.map(item=>item.label)'),[],'Enclose and Fill has no nested tool category');
+        assert.deepEqual(await evaluate('layerApp.state().tool_set.groups.map(item=>item.label)'),[],'Enclose and Fill has no nested tool category');
       }
       await send({type:'restore_workspace',workspace:fixture});
     }
@@ -182,7 +183,8 @@ export async function checkToolVariations({call,evaluate,settle}) {
         const rows=(await model({kind:'tool_variants',anchor})).sections.flat();
         assert.ok(rows.some(row=>row.icon===({manual_selection:'lasso',automatic_selection:'auto-select',fill:'fill',blend:'blend'})[slot]));
         await openChoices(anchor,selector);await choose(rows[0].label);await wait(`${view}.selected`);
-        const dock='.dock-group .brushes-control .'+(slot.includes('selection')?'tool-subtools':'tool-groups');
+        const choiceSection=slot.includes('selection')||slot==='fill'?'subtools':'groups';
+        const dock=`.dock-group .brushes-control .tool-${choiceSection}`;
         const dockLabels=await evaluate(`[...document.querySelectorAll('${dock} .tool-choice-name')].map(n=>n.textContent)`);
         const categories=rows.map(row=>row.label);
         assert.deepEqual([...dockLabels].sort(),categories.slice().sort(),'docked Tool Set has the scoped categories');
@@ -193,7 +195,7 @@ export async function checkToolVariations({call,evaluate,settle}) {
         assert.equal(await evaluate(`${view}.icon`),slot==='blend'?'blend':alternate.icon,'docked sibling uses its shared group icon');
         await send({type:'customize',action:{type:'close_expanded'}});await click(groupBody(anchor,selector));await settleDrawer();
         assert.deepEqual(await evaluate('layerApp.state().customization.drawer.anchor'),anchor,'docked sibling retains its slot origin');
-        const drawerLabels=await evaluate("[...document.querySelectorAll('.content-drawer :is(.brushes-control,.tools-control) .tool-groups .tool-choice-name')].map(n=>n.textContent)");
+        const drawerLabels=await evaluate(`[...document.querySelectorAll('.content-drawer :is(.brushes-control,.tools-control) .tool-${choiceSection} .tool-choice-name')].map(n=>n.textContent)`);
         assert.deepEqual(drawerLabels,categories,'full selection drawer keeps the scoped categories');
         selection[slot]={menu:rows.map(row=>row.label),dock:dockLabels,drawer:drawerLabels};
         await shot(`${slot}-${theme}`);await send({type:'customize',action:{type:'close_expanded'}});

@@ -347,9 +347,9 @@ export async function checkEncloseFill({call,evaluate,settle,fillAreasOnly=false
       await send({type:'layer',action:{op:'new',group:false,clipped:false}});
       await invoke('fill');
       const toolset='.dock-group .brushes-control';
-      assert.deepEqual(await evaluate('layerApp.state().tool_set.groups.map(item=>item.label)'),['Fill','Lasso fill','Enclose and Fill','Paint unfilled areas']);
+      assert.deepEqual(await evaluate('layerApp.state().tool_set.subtools.map(item=>item.label)'),['Fill','Lasso fill','Enclose and Fill','Paint unfilled areas']);
       for(const label of ['Lasso fill','Enclose and Fill','Fill','Enclose and Fill'])
-        await contact(`${toolset} .tool-groups [data-tool-choice="${label}"]`);
+        await contact(`${toolset} .tool-subtools [data-tool-choice="${label}"]`);
       assert.ok(await selected('enclose_fill'));
       assert.deepEqual(await evaluate('["selection_reference","selection_visible","selection_editing"].map(id=>layerApp.state().commands.find(c=>c.id===id).label)'),['Reference layers','All visible layers','This layer']);
       for(const source of ['selection_visible','selection_editing','selection_reference']){
@@ -403,7 +403,7 @@ export async function checkEncloseFill({call,evaluate,settle,fillAreasOnly=false
       assert.deepEqual(rasterIdentity(await save()),empty,'Escape cancels the enclosure');
       await invoke('redo');await idle();assert.deepEqual(rasterIdentity(await save()),filled,'cancel preserves redo');
       await invoke('undo');await idle();
-      await contact(`${toolset} .tool-groups [data-tool-choice="Fill"]`);
+      await contact(`${toolset} .tool-subtools [data-tool-choice="Fill"]`);
       await chooseToolActionGroup({call,evaluate,settle},'selection-source','selection_reference');
       for(const [mode,other] of [['fill_connected',false],['fill_everywhere',true]]) {
         await chooseToolActionGroup({call,evaluate,settle},'fill-scope',mode);
