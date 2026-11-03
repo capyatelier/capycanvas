@@ -84,7 +84,7 @@ function Color-Resize([string]$Name='color-resized'){
     $layout=(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress
     [CapyRowPointer]::Down('mouse',$from.x,$from.y)
     for($i=1;$i -le 10;$i++){[CapyRowPointer]::Move($from.x+$outward*$i*3,$from.y);Start-Sleep -Milliseconds 16}
-    Start-Sleep -Milliseconds 120
+    Wait-Until {[Math]::Abs((Center ('divider-'+$divider.id)).x-($from.x+$outward*30)) -le 2} 'Divider did not follow the held contact'
     $held=(Control 'color-wheel').Current.BoundingRectangle
     [CapyRowPointer]::Up()
     Wait-Until {$w=(Control 'color-wheel').Current.BoundingRectangle;[Math]::Abs((Presentation).color_field_pixels-$w.Width) -le 2} 'Released resize did not finish the final wheel raster' 15
