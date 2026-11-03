@@ -1041,7 +1041,7 @@ fn painted_area_ring(white:bool,areas:Option<FillAreas>)->(RegionResult,Vec<u8>,
         color:[0.1,0.7,0.2,1.],texture:Default::default(),alpha_locked:false,
         underfill:result.underfill.clone().map(Selection::pixels),
         edges:Some(Box::new(layer_core::FillEdges {snapshot,position:Point{x:0.,y:0.},tolerance:0.1,
-            anchors:result.anchors.clone(),lines:Vec::new()})),
+            colour_on_solid:result.colour_on_solid,lines:Vec::new()})),
     }};
     engine.append_raster_operation(target,operation).unwrap();
     crate::test_support::flush_engine(&mut engine);
@@ -1066,9 +1066,8 @@ fn compare_fill_area_ring(white:bool,areas:FillAreas) {
                 let mask=|result:&RegionResult|value(&result.pixels,x,y);
                 let band=|result:&RegionResult|result.underfill.as_ref().map_or(0,|p|value(p,x,y));
                 let stage=if mask(&any)!=mask(&restricted) || band(&any)!=band(&restricted) {"intersect_bits before edge stage"}else{"edge stage"};
-                first=Some(format!("{x},{y} alpha={alpha} stage={stage} primary any/restricted={}/{} band any/restricted={}/{} anchor any/restricted={:?}/{:?} expected={:?} actual={:?}",
-                    mask(&any),mask(&restricted),band(&any),band(&restricted),any.anchors.as_ref().and_then(|a|a.get([x,y])),
-                    restricted.anchors.as_ref().and_then(|a|a.get([x,y])),&expected[i..i+4],&actual[i..i+4]));
+                first=Some(format!("{x},{y} alpha={alpha} stage={stage} primary any/restricted={}/{} band any/restricted={}/{} expected={:?} actual={:?}",
+                    mask(&any),mask(&restricted),band(&any),band(&restricted),&expected[i..i+4],&actual[i..i+4]));
             }
         }
     }}
@@ -1129,7 +1128,7 @@ fn reference_red_flat(edges:RegionEdges,smooth:bool,stop:bool)->(RegionResult,Ve
         let fill_above=order.iter().position(|id|*id==reference).unwrap()>order.iter().position(|id|*id==destination_layer).unwrap();
         assert!(!fill_above,"target is below the reference");
         Some(Box::new(layer_core::FillEdges {snapshot,position:Point{x:0.,y:0.},tolerance:0.1,
-            anchors:result.anchors.clone(),lines:vec![layer_core::FillLine {snapshot:line_snapshot,scope,fill_above}]}))
+            colour_on_solid:result.colour_on_solid,lines:vec![layer_core::FillLine {snapshot:line_snapshot,scope,fill_above}]}))
     }else{None};
     let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.allocate_coverage_handle(),extent,[0;2]);coverage.selection=Some(Selection::pixels(result.pixels.clone()));
     let operation=RasterOperation {placement:result.placement,coverage,kind:RasterOperationKind::Fill {

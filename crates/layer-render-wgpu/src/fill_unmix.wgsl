@@ -1,4 +1,4 @@
-struct FillPrecision {source:mat3x3<f32>,codes:vec4<u32>,extent:vec4<i32>}
+struct FillPrecision {source:mat3x3<f32>,codes:vec4<u32>,extent:vec4<i32>,mode:vec4<u32>}
 @group(2) @binding(4) var<uniform> fill_precision:FillPrecision;
 struct FillSample {value:vec4<f32>,low:vec4<f32>,high:vec4<f32>}
 

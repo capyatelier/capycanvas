@@ -14,7 +14,6 @@ pub(super) struct Capture {
     external:Vec<bool>,
     mask:wgpu::Buffer,
     precision:Option<Precision>,
-    anchors:wgpu::Buffer,
     top:wgpu::Texture,
     left:wgpu::Texture,
     row:Option<u32>,
@@ -35,17 +34,18 @@ impl Precision {
             }else{(scene.composition().color.depth,scene.composition().color.space)}
         }).unwrap_or((layer_core::color::SampleDepth::F32,working));
         let transform=working.linear_transform(space);
-        let mut bytes=Vec::with_capacity(64);
+        let mut bytes=Vec::with_capacity(96);
         for column in [0,1,2].map(|column|[transform[0][column] as f32,transform[1][column] as f32,transform[2][column] as f32,0.]) {
             for value in column {bytes.extend(value.to_ne_bytes());}
         }
         let half=r.device.working_format()==wgpu::TextureFormat::Rgba16Float;
         for value in [if depth.is_float(){0}else{depth.maximum()},space.shader_code(),if half{10}else{23},if half{24}else{149}] {bytes.extend(value.to_ne_bytes());}
-        let extent=input.and_then(|(edges,target)|edges.anchors.as_ref().map(|anchors| {
-            let extent=anchors.extent;let offset=edges.snapshot.view().target_offset(target);
-            [extent[0] as i32,extent[1] as i32,offset[0] as i32,offset[1] as i32]
-        })).unwrap_or([0;4]);
+        let extent=input.map(|(edges,target)| {
+            let scene=edges.snapshot.view();let size=scene.composition().size;let offset=scene.target_offset(target);
+            [size[0] as i32,size[1] as i32,offset[0] as i32,offset[1] as i32]
+        }).unwrap_or([0;4]);
         for value in extent {bytes.extend(value.to_ne_bytes());}
+        for value in [u32::from(input.is_some_and(|(edges,_)|edges.colour_on_solid)),0,0,0] {bytes.extend(value.to_ne_bytes());}
         let params=r.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {label:Some("fill source precision"),contents:&bytes,usage:wgpu::BufferUsages::UNIFORM});
         Self {params}
     }
@@ -57,14 +57,13 @@ pub(super) fn layout(device:&PipelineDevice)->wgpu::BindGroupLayout {
         crate::bindings::texture(2,wgpu::ShaderStages::FRAGMENT,false),
         crate::bindings::texture(3,wgpu::ShaderStages::FRAGMENT,false),
         crate::bindings::buffer(4,wgpu::ShaderStages::FRAGMENT,wgpu::BufferBindingType::Uniform,false,None),
-        crate::bindings::buffer(5,wgpu::ShaderStages::FRAGMENT,wgpu::BufferBindingType::Storage {read_only:true},false,None),
     ])
 }
-pub(super) fn binding(r:&WgpuRasterizer,color:&wgpu::TextureView,lines:&wgpu::TextureView,cover:&wgpu::TextureView,mask:&wgpu::Buffer,anchors:&wgpu::Buffer,precision:Option<&Precision>)->wgpu::BindGroup {
+pub(super) fn binding(r:&WgpuRasterizer,color:&wgpu::TextureView,lines:&wgpu::TextureView,cover:&wgpu::TextureView,mask:&wgpu::Buffer,precision:Option<&Precision>)->wgpu::BindGroup {
     let empty=precision.is_none().then(||Precision::new(r,None));let precision=precision.or(empty.as_ref()).unwrap();
     crate::bindings::group(&r.device,"fill edge inputs",&r.scene_pipelines.edges,[
         wgpu::BindingResource::TextureView(color),mask.as_entire_binding(),wgpu::BindingResource::TextureView(lines),wgpu::BindingResource::TextureView(cover),
-        precision.params.as_entire_binding(),anchors.as_entire_binding(),
+        precision.params.as_entire_binding(),
     ])
 }
 pub(super) fn shader()->String {
@@ -80,7 +79,7 @@ impl Capture {
         Self {source:Default::default(),color:create_color_target(&r.device,[SIDE,SIDE+1],"fill source halo"),
             lines:create_color_target(&r.device,[SIDE;2],"fill line alpha"),next:create_color_target(&r.device,[SIDE,SIDE+1],"fill line source"),
             cover:create_color_target(&r.device,[SIDE;2],"fill lower line alpha"),
-            seed:create_color_target(&r.device,[1;2],"fill seed"),mask:r.unclipped.clone(),precision:None,anchors:r.unclipped.clone(),
+            seed:create_color_target(&r.device,[1;2],"fill seed"),mask:r.unclipped.clone(),precision:None,
             line_seeds:create_color_target(&r.device,[1,lines.max(1) as u32],"fill line seeds").0,external:Vec::new(),
             top:create_color_target(&r.device,[extent[0],HALO],"fill original row border").0,
             left:create_color_target(&r.device,[HALO,SIDE],"fill original page border").0,
@@ -220,31 +219,7 @@ impl Scene {
                 LineCapture {source:&mut capture.source,next:&capture.next,seeds:&capture.line_seeds,lines:&capture.lines.1,cover:&capture.cover.1}
                     .capture(self,r,Capture::packet(&line.snapshot,&line.scope,offset,extent,packet),line,index,crop,encoder)?;
             }
-            use wgpu::util::DeviceExt;
-            let core=page_rect(coordinate).intersect(PixelRect::full(extent));
-            let origin=[i64::from(core.min_x())+offset[0],i64::from(core.min_y())+offset[1]];
-            let mode=edges.anchors.as_ref().is_some_and(|anchors|anchors.windows.first().is_some_and(|window|window.words[0]>>31!=0));
-            let mut values=vec![u32::MAX;8+core.width() as usize*core.height() as usize];
-            values[..8].copy_from_slice(&[origin[0] as u32,origin[1] as u32,core.width(),core.height(),u32::from(mode),0,0,0]);
-            if let Some(anchors)=&edges.anchors {
-                for window in anchors.windows.iter().filter(|window| {
-                    let [x,y,w,h]=window.bounds;
-                    i64::from(x)<origin[0]+i64::from(core.width()) && i64::from(y)<origin[1]+i64::from(core.height())
-                        && i64::from(x+w)>origin[0] && i64::from(y+h)>origin[1]
-                }) {
-                    let [x,y,w,h]=window.bounds;
-                    for gy in i64::from(y).max(origin[1])..i64::from(y+h).min(origin[1]+i64::from(core.height())) {
-                        for gx in i64::from(x).max(origin[0])..i64::from(x+w).min(origin[0]+i64::from(core.width())) {
-                            if let Some(q)=window.get([gx as u32,gy as u32]) {
-                                values[8+((gy-origin[1])*i64::from(core.width())+gx-origin[0]) as usize]=q[0]|q[1]<<16;
-                            }
-                        }
-                    }
-                }
-            }
-            let bytes=values.into_iter().flat_map(u32::to_ne_bytes).collect::<Vec<_>>();
-            capture.anchors=r.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {label:Some("fill page anchors"),contents:&bytes,usage:wgpu::BufferUsages::STORAGE});
-            Ok(Some((binding(r,&capture.color.1,&capture.lines.1,&capture.cover.1,&capture.mask,&capture.anchors,capture.precision.as_ref()),[crop.min_x() as f32,crop.min_y() as f32,crop.width() as f32,crop.height() as f32])))
+            Ok(Some((binding(r,&capture.color.1,&capture.lines.1,&capture.cover.1,&capture.mask,capture.precision.as_ref()),[crop.min_x() as f32,crop.min_y() as f32,crop.width() as f32,crop.height() as f32])))
         })();
         self.fill_capture=Some(capture);result
     }

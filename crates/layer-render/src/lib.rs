@@ -738,7 +738,7 @@ impl RegionRefinement {
 }
 #[derive(Clone, Debug)]
 pub struct RegionResult {
-    pub anchors: Option<std::sync::Arc<layer_core::FillAnchors>>,
+    pub colour_on_solid: bool,
     pub gaps: Option<RegionGapMasks>,
     pub request_id: u64,
     pub tonal_sample: Option<TonalSample>,

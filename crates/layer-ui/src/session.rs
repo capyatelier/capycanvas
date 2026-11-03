@@ -9146,7 +9146,7 @@ mod tests {
         assert_eq!(scope,&SceneScope::All);
         assert_eq!(snapshot.artwork,s.engine.document().artwork);
         assert!(request.limit.is_none());
-        s.renderer_mut().region_reply = Some(RegionResult { anchors: None, gaps: None, underfill: None,
+        s.renderer_mut().region_reply = Some(RegionResult { colour_on_solid: false, gaps: None, underfill: None,
             tonal_sample: None,
             placement: layer_core::Affine::IDENTITY,
             request_id: request.request_id,
@@ -9197,7 +9197,7 @@ mod tests {
             request.limit.as_ref().unwrap().affine,
             layer_core::Affine::IDENTITY
         );
-        s.renderer_mut().region_reply = Some(RegionResult { anchors: None, gaps: None, underfill: None,
+        s.renderer_mut().region_reply = Some(RegionResult { colour_on_solid: false, gaps: None, underfill: None,
             tonal_sample: None,
             placement: layer_core::Affine::IDENTITY,
             request_id: request.request_id,
@@ -9230,7 +9230,7 @@ mod tests {
         let request = s.renderer_mut().region_requests.last().unwrap().clone();
         let before = s.engine.document().working.selection.clone();
         invoke(&mut s, CommandId::Hand);
-        s.renderer_mut().region_reply = Some(RegionResult { anchors: None, gaps: None, underfill: None,
+        s.renderer_mut().region_reply = Some(RegionResult { colour_on_solid: false, gaps: None, underfill: None,
             tonal_sample: None,
             placement: layer_core::Affine::IDENTITY,
             request_id: request.request_id,
@@ -9259,7 +9259,7 @@ mod tests {
             snapshot.view().with_scope(&scope).order().iter().copied().filter(|h| snapshot.view().with_scope(&scope).includes(*h) && snapshot.view().occurrence(*h).unwrap().visible).collect::<Vec<_>>(),
             [id]
         );
-        s.renderer_mut().region_reply = Some(RegionResult { anchors: None, gaps: None, underfill: None,
+        s.renderer_mut().region_reply = Some(RegionResult { colour_on_solid: false, gaps: None, underfill: None,
             tonal_sample: None,
             placement: layer_core::Affine::IDENTITY,
             request_id: request.request_id,
@@ -9287,7 +9287,7 @@ mod tests {
             value: 0.75,
         })
         .unwrap();
-        s.renderer_mut().region_reply = Some(RegionResult { anchors: None, gaps: None, underfill: None,
+        s.renderer_mut().region_reply = Some(RegionResult { colour_on_solid: false, gaps: None, underfill: None,
             tonal_sample: None,
             placement: layer_core::Affine::IDENTITY,
             request_id: request.request_id,

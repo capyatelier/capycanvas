@@ -1,8 +1,6 @@
 @group(2) @binding(0) var fill_source:texture_2d<f32>;
 @group(2) @binding(2) var fill_lines:texture_2d<f32>;
 @group(2) @binding(3) var fill_cover:texture_2d<f32>;
-@group(2) @binding(5) var<storage,read> fill_anchors:BrushSelection;
-const RAMP_HALF_PIXELS:u32=3u;
 
 fn fill_source_at(p:vec2<i32>)->vec4<f32> {
     return textureLoad(fill_source,p-fill_precision.extent.zw-vec2<i32>(settings.backdrop.xy),0);
@@ -25,16 +23,19 @@ fn fill_feasible_neighbour(p:vec2<i32>,pixel:vec4<f32>,seed:vec4<f32>)->vec4<f32
     if fill_fraction(pixel,seed,neighbour)<0. {return vec4(-1.);}
     return neighbour;
 }
+fn fill_anchor(p:vec2<i32>,limit:i32)->vec2<i32> {
+    var best=vec2(-1);var nearest=limit+1;
+    for(var k=0;k*k<nearest;k++) {for(var y=-k;y<=k;y++) {let step=select(2*k,1,abs(y)==k);for(var x=-k;x<=k;x+=step) {
+        let c=p+vec2(x,y);let d=x*x+y*y;
+        if d<nearest && all(c>=vec2(0)) && all(c<fill_precision.extent.xy) && fill_selection_at(vec2<f32>(c-fill_precision.extent.zw)+.5)>0. {nearest=d;best=c;}
+    }}}
+    return best;
+}
 fn fill_plateau(at:vec2<i32>,seed:vec4<f32>)->vec4<f32> {
     let p=at+vec2<i32>(settings.backdrop.xy)+fill_precision.extent.zw;
-    let local=p-bitcast<vec2<i32>>(fill_anchors.rect.xy);
-    if any(local<vec2(0)) || any(local>=vec2<i32>(fill_anchors.rect.zw)) {return vec4(-1.);}
-    let packed=fill_anchors.values[u32(local.y)*fill_anchors.rect.z+u32(local.x)];if packed==0xffffffffu {return vec4(-1.);}
-    let q=vec2<i32>(i32(packed&65535u),i32(packed>>16u));
-    if fill_selection_at(vec2<f32>(q-fill_precision.extent.zw)+.5)==0. {return vec4(-1.);}
-    let delta=p-q;let steps=max(abs(delta.x),abs(delta.y));let square=dot(vec2<f32>(delta),vec2<f32>(delta));
     let radius=i32(settings.operation_linear.y);
-    if square>f32(radius*radius) || (fill_anchors.info.x!=0u && 4.*square>f32(RAMP_HALF_PIXELS*RAMP_HALF_PIXELS)) {return vec4(-1.);}
+    let q=fill_anchor(p,select(radius*radius,2,fill_precision.mode.x!=0u));if q.x<0 {return vec4(-1.);}
+    let delta=p-q;let steps=max(abs(delta.x),abs(delta.y));let square=dot(vec2<f32>(delta),vec2<f32>(delta));
     var current=fill_source_at(q);
     if steps==0 {return fill_feasible_neighbour(p,current,seed);}
     for(var i=1;i<=radius;i++) {

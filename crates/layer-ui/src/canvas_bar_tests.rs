@@ -870,7 +870,7 @@ fn resampled_reply(s: &mut UiSession<Recorder>) -> layer_render::RegionResult {
     let doc = s.engine.document();
     let extent = doc.target_extent(doc.working.target.unwrap());
     let words = vec![u32::MAX; extent[0].div_ceil(4) as usize * extent[1] as usize];
-    layer_render::RegionResult { anchors: None, gaps: None, underfill: None,
+    layer_render::RegionResult { colour_on_solid: false, gaps: None, underfill: None,
         tonal_sample: None,
         placement: layer_core::Affine::IDENTITY,
         request_id: request.request_id,
@@ -961,7 +961,7 @@ fn a_failed_apply_leaves_the_transform_ready_to_apply_again() {
     invoke(&mut s, CommandId::ApplyTransform);
     s.frame(7, 7).unwrap();
     let pixels = layer_core::SelectionPixels::bytes([4, 4], [0, 0, 4, 4], vec![u32::MAX; 4]).unwrap();
-    s.renderer_mut().region_reply = Some(layer_render::RegionResult { anchors: None, underfill: None,
+    s.renderer_mut().region_reply = Some(layer_render::RegionResult { colour_on_solid: false, underfill: None,
         request_id: s.renderer_mut().region_requests.last().unwrap().request_id,
         pixels: std::sync::Arc::new(pixels),
         ..reply

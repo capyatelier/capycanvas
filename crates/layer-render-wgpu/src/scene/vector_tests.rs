@@ -1575,7 +1575,7 @@ fn vector_reference_line_middle_tracks_pressure_stroke_centrelines() {
             placement: result.placement, coverage, kind: RasterOperationKind::Fill {
                 color: [0.1, 0.7, 0.2, 1.], texture: Default::default(), alpha_locked: false,
                 edges: Some(Box::new(FillEdges { snapshot, position: Point { x: center[0] as f32, y: center[1] as f32 }, tolerance: 0.1,
-                    anchors: result.anchors, lines: vec![FillLine { snapshot: line_snapshot, scope, fill_above: false }] })),
+                    colour_on_solid: result.colour_on_solid, lines: vec![FillLine { snapshot: line_snapshot, scope, fill_above: false }] })),
                 underfill: result.underfill.map(Selection::pixels),
             },
         }).unwrap();

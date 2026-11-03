@@ -425,7 +425,7 @@ impl RegionRequests {
             selection, map, ..
         } = &request.source
         {
-            flood::Region { anchors:Vec::new(), gaps: None,
+            flood::Region { gaps: None,
                 coverage: self.resample_mapped(r, &mut encoder, extent, selection, map)?,
                 bounds_offset: 0,
                 underfill: None,
@@ -442,7 +442,7 @@ impl RegionRequests {
                 mapped_at_creation: false,
             });
             encoder.copy_buffer_to_buffer(buffer, 0, &copy, 0, buffer.size());
-            flood::Region { anchors:Vec::new(), gaps: None,
+            flood::Region { gaps: None,
                 coverage: copy,
                 bounds_offset: 0,
                 underfill: None,
@@ -467,7 +467,7 @@ impl RegionRequests {
                 },
             };
             if !lines {
-                flood::Region { anchors:Vec::new(), gaps: None,
+                flood::Region { gaps: None,
                     coverage: classified,
                     bounds_offset: 0,
                     underfill: None,
@@ -735,12 +735,9 @@ impl RegionRequests {
             if let Some((buffer,offset))=&region.underfill {encoder.copy_buffer_to_buffer(buffer,offset-32,readback,mask_size,band_size);}
             if index==0 && let Some(metadata)=seal_metadata {encoder.copy_buffer_to_buffer(metadata,0,readback,mask_size+band_size,metadata_bytes);}
             if extra_size>0 {encoder.copy_buffer_to_buffer(&self.raw.tonal_statistics,0,readback,mask_size+band_size+metadata_bytes,extra_size);}
-            captures.push(selection_readback::Capture {anchors:None,buffer:readback.clone(),size,coverage_size:region.bounds_offset,
+            captures.push(selection_readback::Capture {buffer:readback.clone(),size,coverage_size:region.bounds_offset,
                 underfill_offset:(band_size>0).then_some(mask_size+32),seal_records:(metadata_bytes/20) as usize});
             if gaps {encoder.clear_buffer(&region.coverage,24,Some(8));}
-        }
-        for &(bounds,ref buffer) in &region.anchors {
-            captures.push(selection_readback::Capture {anchors:Some(bounds),buffer:buffer.clone(),size:buffer.size(),coverage_size:0,underfill_offset:None,seal_records:0});
         }
         r.uploads.finish(&encoder);
         r.metrics.command_passes += encoder.pass_count();

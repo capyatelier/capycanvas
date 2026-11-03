@@ -29,7 +29,7 @@ impl Build {
             && (count<u32::from(demand)+1 || demand && self.ranked && self.steps.is_empty())
     }
 }
-const STAGES: [&str; 24] = ["grain_bits", "distance_seeds", "jump_distance", "store_distance", "skeleton_seeds", "skeleton_ridges", "skeleton_prune", "line_ends", "refine_ends", "seal_candidates", "open_bits", "apply_seals", "region_seeds", "assign_region", "hold_barriers", "grow_region", "intersect_bits", "remember_thin", "check_seeds", "barrier_plane", "snap_seed", "reset_ends", "capture_anchors", "assign_tokens"];
+const STAGES: [&str; 23] = ["grain_bits", "distance_seeds", "jump_distance", "store_distance", "skeleton_seeds", "skeleton_ridges", "skeleton_prune", "line_ends", "refine_ends", "seal_candidates", "open_bits", "apply_seals", "region_seeds", "assign_region", "hold_barriers", "grow_region", "intersect_bits", "remember_thin", "check_seeds", "barrier_plane", "snap_seed", "reset_ends", "assign_tokens"];
 
 pub(crate) struct Input<'a> {pub device:&'a PipelineDevice,pub mask:&'a wgpu::Buffer,pub paper:&'a wgpu::TextureView}
 pub(super) struct Lines {
@@ -38,7 +38,7 @@ pub(super) struct Lines {
     colour:Deferred<wgpu::ComputePipeline>,
     pipelines: std::collections::HashMap<&'static str, Deferred<wgpu::ComputePipeline>>,
     scratch: Option<[wgpu::Buffer; 2]>,
-    anchors:Option<wgpu::Buffer>,
+    tokens:Option<wgpu::Buffer>,
     data: Option<wgpu::Buffer>,
     extent: [u32; 2],
     offsets: [u32; 4],
@@ -68,10 +68,10 @@ impl Lines {
             label:Some("area colours"),bind_group_layouts:&[Some(&colour_layout)],immediate_size:0,
         });
         let colour=Deferred::compute(device,"area colours",&colour_pipeline_layout,&shader,"colour_tokens");
-        Self {layout,colour_layout,colour,pipelines,scratch:None,anchors:None,data:None,extent:[0;2],offsets:[0;4],windows:Vec::new(),building:None,ends:0,overflow:false}
+        Self {layout,colour_layout,colour,pipelines,scratch:None,tokens:None,data:None,extent:[0;2],offsets:[0;4],windows:Vec::new(),building:None,ends:0,overflow:false}
     }
     pub fn storage_bytes(&self)->u64 {
-        self.anchors.as_ref().map_or(0,wgpu::Buffer::size)+self.data.as_ref().map_or(0,wgpu::Buffer::size)+self.scratch.as_ref().map_or(0,|buffers|buffers.iter().map(wgpu::Buffer::size).sum())
+        self.tokens.as_ref().map_or(0,wgpu::Buffer::size)+self.data.as_ref().map_or(0,wgpu::Buffer::size)+self.scratch.as_ref().map_or(0,|buffers|buffers.iter().map(wgpu::Buffer::size).sum())
     }
     pub fn prepare_cache(&self,compiler:&startup::Compiler,priority:u8)->bool {
         compiler.require(STAGES.iter().filter(|entry|self.building.as_ref().map_or_else(
@@ -82,7 +82,6 @@ impl Lines {
         let prewarm=priority==startup::OTHER;
         self.prepare_cache(compiler,priority) & compiler.require(STAGES[8..].iter().filter(|entry|match **entry {
             "assign_tokens"=>false,
-            "capture_anchors"=>matches!(refinement.edges,layer_render::RegionEdges::LineMiddle),
             "refine_ends"|"seal_candidates"=>prewarm && !self.overflow,
             "grow_region"=>matches!(refinement.edges,layer_render::RegionEdges::GrowShrink(_)),
             "assign_region"=>matches!(refinement.edges,layer_render::RegionEdges::LineMiddle),
@@ -96,7 +95,7 @@ impl Lines {
             & compiler.require(["open_bits","apply_seals","hold_barriers","reset_ends","region_seeds","jump_distance","assign_tokens"].map(|entry|&self.pipelines[entry]),priority)
             & compiler.require([&self.colour],priority)
     }
-    pub fn token_buffer(&self)->&wgpu::Buffer {self.anchors.as_ref().unwrap()}
+    pub fn token_buffer(&self)->&wgpu::Buffer {self.tokens.as_ref().unwrap()}
     pub fn hold_barriers(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder) {
         self.encode(input,encoder,None,None,vec![("hold_barriers",u64::from(self.offsets[0]),self.params([0;4],[0;4],[0;4],[1.,1.,0.,0.]))]);
     }
@@ -135,9 +134,9 @@ impl Lines {
             self.scratch=Some(std::array::from_fn(|index|device.create_buffer(&wgpu::BufferDescriptor {label:Some("region window coordinates"),size:if index==0 {compact_bytes}else{scratch_bytes},
                 usage:wgpu::BufferUsages::STORAGE,mapped_at_creation:false})));
         }
-        let anchor_words=windows.iter().map(|(_,core)|1+2*word_count(*core)+u64::from(core[2])*u64::from(core[3])).max().unwrap_or(1).max(8+scratch_bytes/4);
-        if self.anchors.as_ref().is_none_or(|buffer|buffer.size()<anchor_words*4) {
-            self.anchors=Some(device.create_buffer(&wgpu::BufferDescriptor {label:Some("region window anchors"),size:anchor_words*4,
+        let token_words=8+scratch_bytes/4;
+        if self.tokens.as_ref().is_none_or(|buffer|buffer.size()<token_words*4) {
+            self.tokens=Some(device.create_buffer(&wgpu::BufferDescriptor {label:Some("region window tokens"),size:token_words*4,
                 usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_SRC|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false}));
         }
         self.extent=extent;self.offsets=offsets;
@@ -327,8 +326,7 @@ impl Lines {
         self.encode(input,encoder,Some(parents),None,params(vec![("hold_barriers",u64::from(self.offsets[0]),self.params([0;4],[0;4],[0;4],[1.,1.,0.,0.]))]));
     }
 
-    pub fn assign(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,capture:bool,fill:bool)->Vec<([u32;4],wgpu::Buffer)> {
-        let mut captures=Vec::new();
+    pub fn assign(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,fill:bool) {
         let mut steps=Vec::new();
         for &(core,window) in &self.windows {
             steps.push(("reset_ends",1,self.params(core,window,[2,0,0,0],[1.,1.,0.,0.])));
@@ -337,18 +335,8 @@ impl Lines {
             let nearest=self.jump_steps(&mut steps,core,window,"region_seeds",4,UNDERFILL_HALF_PIXELS.div_ceil(2));
             let mut params=self.params(core,window,[UNDERFILL_HALF_PIXELS,RIM_HALF_PIXELS,THIN_CUTOFF,nearest],[1.,1.,0.,0.]);params[25]=u32::from(fill);
             steps.push(("assign_region",word_count(core),params));
-            if capture {
-                let output=self.anchors.as_ref().unwrap();encoder.clear_buffer(output,0,None);
-                self.encode(input,encoder,None,None,std::mem::take(&mut steps));
-                let source=Input {mask:self.data.as_ref().unwrap(),..*input};
-                self.encode_with_data(&source,encoder,None,None,output,vec![("capture_anchors",word_count(core),self.params(core,window,[UNDERFILL_HALF_PIXELS,0,0,nearest],[1.,1.,0.,0.]))]);
-                let size=(1+2*word_count(core)+u64::from(core[2])*u64::from(core[3]))*4;
-                let buffer=input.device.create_buffer(&wgpu::BufferDescriptor {label:Some("fill anchor capture"),size,
-                    usage:wgpu::BufferUsages::MAP_READ|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false});
-                encoder.copy_buffer_to_buffer(output,0,&buffer,0,size);captures.push((core,buffer));
-            }
         }
-        self.encode(input,encoder,None,None,steps);captures
+        self.encode(input,encoder,None,None,steps);
     }
     pub fn grow(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,value:i32) {
         let kind=if value<0 {3} else {2};
@@ -416,6 +404,9 @@ impl Lines {
     }
     pub fn snap_seed(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,parents:&wgpu::Buffer,seed:u32,position:[u32;2]) {
         self.encode(input,encoder,Some(parents),None,vec![("snap_seed",1,self.params([0;4],[0;4],[position[0],position[1],seed,0],[1.,1.,0.,0.]))]);
+    }
+    pub fn copy_colour(&self,encoder:&mut crate::submission::CommandEncoder,output:&wgpu::Buffer,offset:u64) {
+        encoder.copy_buffer_to_buffer(self.data.as_ref().unwrap(),u64::from(self.offsets[1]+4)*4,output,offset,4);
     }
     pub fn copy_stale(&self,encoder:&mut crate::submission::CommandEncoder,output:&wgpu::Buffer,offset:u64) {
         encoder.copy_buffer_to_buffer(self.data.as_ref().unwrap(),u64::from(self.offsets[1]+2)*4,output,offset,4);

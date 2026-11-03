@@ -650,7 +650,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Some(layer_render::RegionSource::Scene {snapshot,scope})=>Some(layer_core::FillLine {snapshot,scope,
                     fill_above:order.iter().position(|id|*id==leaf).unwrap()>index}),_=>None,
             }).collect();
-        if let layer_core::RasterOperationKind::Fill {edges,..}=&mut operation {*edges=Some(Box::new(layer_core::FillEdges { anchors: None,
+        if let layer_core::RasterOperationKind::Fill {edges,..}=&mut operation {*edges=Some(Box::new(layer_core::FillEdges { colour_on_solid: false,
             snapshot,position:Point{x:request.position[0] as f32,y:request.position[1] as f32},tolerance:request.tolerance,lines,
         }));}
         operation
@@ -758,7 +758,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         let selection = Selection::pixels(result.pixels).transformed(basis).map_err(error)?;
                         if let Some(mut operation) = operation {
                             if let layer_core::RasterOperationKind::Fill { underfill, edges, .. } = &mut operation {
-                                if let Some(edges)=edges {edges.anchors=result.anchors.clone();}
+                                if let Some(edges)=edges {edges.colour_on_solid=result.colour_on_solid;}
                                 *underfill = result.underfill.map(Selection::pixels).map(|selection| selection.transformed(basis)).transpose().map_err(error)?;
                             }
                             self.paint_operation(Some(selection), operation, color.as_slice())?;

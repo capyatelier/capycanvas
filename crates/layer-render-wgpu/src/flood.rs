@@ -34,7 +34,6 @@ pub(super) struct Region {
     pub bounds_offset: u64,
     pub underfill: Option<(wgpu::Buffer, u64)>,
     pub gaps: Option<GapRegions>,
-    pub anchors:Vec<([u32;4],wgpu::Buffer)>,
 }
 pub(super) struct GapRegions {
     pub variants: Vec<Region>,
@@ -290,7 +289,7 @@ impl Flood {
             let coverage=device.create_buffer(&wgpu::BufferDescriptor {label:Some("connected coverage"),
                 size:(bounds_offset+32+if band {32+words*4}else{0}).next_multiple_of(16),
                 usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_SRC|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false});
-            Region {anchors:Vec::new(),underfill:band.then(||(coverage.clone(),bounds_offset+64)),coverage,bounds_offset,gaps:None}
+            Region {underfill:band.then(||(coverage.clone(),bounds_offset+64)),coverage,bounds_offset,gaps:None}
         };
         let mut region=allocate(scratch_words);
         let variants=if multiple {(0..4).map(|_|allocate(words.max(mask_bytes))).collect::<Vec<_>>()}else{Vec::new()};
@@ -409,7 +408,6 @@ impl Flood {
         }
         if attempts>1 && !enclosed && !multiple {self.lines.barrier_plane(&input,encoder,&region.coverage,store,(labels.seed+8*u64::from(attempts)) as u32,1);}
         let outputs=if multiple {(1..5).chain(std::iter::once(0)).collect::<Vec<_>>()}else{vec![0]};
-        let mut anchors=Vec::new();
         for output in outputs {
             if multiple {
                 encoder.clear_buffer(&region.coverage,32+u64::from(attempts)*mask_bytes,Some(mask_bytes));
@@ -432,14 +430,13 @@ impl Flood {
             if enclosed {run(encoder,if attempts>1 {2}else{0},0,0,&["restore_components"]);}
             if band {
                 self.lines.barrier_plane(&input,encoder,&region.coverage,store,0,2);
-                let captured=self.lines.assign(&input,encoder,output==if multiple {1}else{0},fill.is_some());
-                if !captured.is_empty() {anchors=captured;}
+                self.lines.assign(&input,encoder,fill.is_some());
             }
             if let layer_render::RegionEdges::GrowShrink(value)=refinement.edges && value!=0 {self.lines.grow(&input,encoder,value);}
             if let Some((stop,clip))=stop && (clip || !band) {self.lines.intersect(&input,encoder,stop);}
             run(encoder,if multiple {4}else{0},output,0,&["pack"]);
         }
-        region.anchors=anchors;
+        if band && fill.is_some() {self.lines.copy_colour(encoder,&region.coverage,region.bounds_offset+28);}
         if fill.is_some() {
             if multiple {encoder.copy_buffer_to_buffer(store,(labels.seed+40)*4,&region.coverage,24,4);}
             else{encoder.copy_buffer_to_buffer(&summary,52,&region.coverage,24,4);}

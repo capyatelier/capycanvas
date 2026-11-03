@@ -552,29 +552,6 @@ fn assign_region(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgr
 
 
 @compute @workgroup_size(64)
-fn capture_anchors(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>) {
-    let index=id.x+id.y*groups.x*64u;let columns=(line.core.z+31u)/32u;
-    let row=index/columns;if row>=line.core.w{return;}
-    if index==0u {atomicOr(&cached[0],atomicLoad(&eligible[line.offsets.y+4u])<<31u);}
-    if atomicLoad(&eligible[line.offsets.y+3u])==0u {return;}
-    let origin=line.core.xy+vec2(index%columns*32u,row);var bits=0u;
-    for(var bit=0u;bit<32u;bit++) {
-        let p=origin+vec2(bit,0u);if p.x>=line.core.x+line.core.z {break;}
-        let barrier=line.offsets.z+line.offsets.w*END_WORDS;
-        var band=!raw_ink(vec2<i32>(p)) || (atomicLoad(&eligible[barrier+p.y*line.extent.z+p.x/32u])&(1u<<(p.x%32u)))!=0u;
-        for(var n=0u;n<8u;n++){let at=vec2<i32>(p)+AROUND[n];band=band || (valid(at) && !raw_ink(at));}
-        if !band {continue;}
-        let q=input(local_index(p-line.window.xy));
-        if q!=INVALID && square(p,coord(q))*4u<=line.options.x*line.options.x {bits|=1u<<bit;}
-    }
-    let offset=atomicAdd(&cached[0],countOneBits(bits))&0x7fffffffu;atomicStore(&cached[1u+index*2u],bits);atomicStore(&cached[2u+index*2u],offset);
-    let base=1u+2u*columns*line.core.w+offset;var at=0u;
-    loop {if bits==0u {break;}let bit=countTrailingZeros(bits);bits&=bits-1u;
-        atomicStore(&cached[base+at],input(local_index(origin+vec2(bit,0u)-line.window.xy)));at++;
-    }
-}
-
-@compute @workgroup_size(64)
 fn hold_barriers(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>){
     if !active_line_attempt(){return;}
     let index=id.x+id.y*groups.x*64u+line.job.x;

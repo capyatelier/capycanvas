@@ -336,7 +336,7 @@ impl<R:CanvasRenderer> UiSession<R> {
         let selection=Selection::pixels(ready.result.pixels.clone()).transformed(ready.basis).map_err(error)?;
         let mut operation=ready.operation.clone();
         if let layer_core::RasterOperationKind::Fill {underfill,edges,..}=&mut operation {
-            if let Some(edges)=edges {edges.anchors=ready.result.anchors.clone();}
+            if let Some(edges)=edges {edges.colour_on_solid=ready.result.colour_on_solid;}
             *underfill=ready.result.underfill.clone().map(Selection::pixels).map(|selection|selection.transformed(ready.basis)).transpose().map_err(error)?;
         }
         Ok(Some((selection,operation,ready.color)))

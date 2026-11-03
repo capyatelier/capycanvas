@@ -39,7 +39,7 @@ fn stored_fill_prepares_cold_reference_tiles_beside_its_seed() {
     coverage.source.default_coverage=0.;coverage.selection=Some(rectangle([232,16,264,48]));
     engine.append_raster_operation(target,layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,
         kind:layer_core::RasterOperationKind::Fill {color:F,texture:Default::default(),alpha_locked:false,
-            edges:Some(Box::new(layer_core::FillEdges {snapshot:snapshot.clone(),position:Point {x:240.,y:32.},tolerance:0.,anchors:None,
+            edges:Some(Box::new(layer_core::FillEdges {snapshot:snapshot.clone(),position:Point {x:240.,y:32.},tolerance:0.,colour_on_solid:false,
                 lines:references.iter().map(|(reference,_)|layer_core::FillLine {snapshot:snapshot.clone(),scope:layer_core::SceneScope::Raw(*reference),fill_above:false}).collect()})),
             underfill:Some(rectangle([252,16,264,48]))}}).unwrap();
     flush_engine(&mut engine);
@@ -66,7 +66,7 @@ fn reference_fill_pixels(extent:[u32;2],cold:bool,preview:bool)->Vec<u8> {
     coverage.source.default_coverage=0.;coverage.selection=Some(rectangle([0,232,extent[0],264]));
     let operation=layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,kind:layer_core::RasterOperationKind::Fill {
         color:F,texture:Default::default(),alpha_locked:false,
-        edges:Some(Box::new(layer_core::FillEdges {snapshot:snapshot.clone(),position:Point {x:240.,y:240.},tolerance:0.,anchors:None,
+        edges:Some(Box::new(layer_core::FillEdges {snapshot:snapshot.clone(),position:Point {x:240.,y:240.},tolerance:0.,colour_on_solid:false,
             lines:references.iter().enumerate().map(|(index,reference)|layer_core::FillLine {snapshot:snapshot.clone(),scope:layer_core::SceneScope::Raw(*reference),fill_above:index==1}).collect()})),
         underfill:Some(rectangle([0,252,extent[0],264]))}};
     if preview {engine.set_fill_preview(Some(layer_render::FillPreview {transaction:42,revision:0,target,operation}));}
@@ -152,7 +152,7 @@ impl Geometry {
         }}
         pixel.map(|value|value as f32)
     }
-    fn projection(self,tolerance:f32,anchors:&layer_core::FillAnchors,primary:&SelectionPixels,half:bool)->Vec<u8> {
+    fn projection(self,tolerance:f32,colour_on_solid:bool,primary:&SelectionPixels,half:bool)->Vec<u8> {
         let [width,height]=self.extent;
         let original=(0..height).flat_map(|y|(0..width).map(move|x|{let pixel=self.pixel(x,y,false,0);if half {pixel.map(|v|layer_core::color::f16::from_f32(v).to_f32())}else{pixel}})).collect::<Vec<_>>();
         let seed=original[((self.center[1] as u32+30)*width+self.center[0] as u32-32) as usize];
@@ -163,14 +163,25 @@ impl Geometry {
             let d=self.distances(x as f32+0.5,y as f32+0.5);
             if self.selected(d) {
                 let mut neighbour=pixel;let mut owned=false;let mut legacy_neighbour=false;
-                if let Some(q)=anchors.get([x,y])
-                    && q[0]<width && q[1]<height && value(primary,q[0],q[1])>0 {
+                let mut nearest=if colour_on_solid {3}else{24*24+1};let mut q=None;let mut k=0i32;
+                while k*k<nearest {
+                    for dy in -k..=k {let step=if dy.abs()==k {1}else{2*k};let mut dx=-k;
+                        while dx<=k {
+                            let at=[x as i32+dx,y as i32+dy];let d=dx*dx+dy*dy;
+                            if d<nearest && at[0]>=0 && at[1]>=0 && at[0]<width as i32 && at[1]<height as i32 && value(primary,at[0] as u32,at[1] as u32)>0 {
+                                nearest=d;q=Some(at.map(|v|v as u32));
+                            }
+                            dx+=step;
+                        }
+                    }
+                    k+=1;
+                }
+                if let Some(q)=q {
                     owned=true;
                     let delta=[i64::from(x)-i64::from(q[0]),i64::from(y)-i64::from(q[1])];
                     let steps=delta[0].abs().max(delta[1].abs());
                     let length=delta[0]*delta[0]+delta[1]*delta[1];
                     legacy_neighbour=steps==0;
-                    if length*4>9 {owned=false;}
                     if steps!=0 && owned {
                         let mut current=original[(q[1]*width+q[0]) as usize];let mut plateau=false;
                         for i in 1_i64..=24 {
@@ -320,7 +331,7 @@ fn fill_recolours_antialiased_edges_like_direct_geometry() {
         query.enclosure=None;query.position=[center[0] as u32-32,center[1] as u32+30];query.fill=Some(Default::default());
         let snapshot=engine.document().snapshot();let position=Point {x:query.position[0] as f32,y:query.position[1] as f32};let tolerance=query.tolerance;
         let result=receive_request(engine.backend_mut(),query);
-        let anchors=result.anchors.clone();
+        let colour_on_solid=result.colour_on_solid;
         let primary=result.pixels.clone();
         if matches!(case.border,Border::WideAboveWhite) {
             let band=result.underfill.as_ref().unwrap();
@@ -332,13 +343,13 @@ fn fill_recolours_antialiased_edges_like_direct_geometry() {
         }
         let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.document().artwork.coverage.next_handle(),extent,[0;2]);
         coverage.source.default_coverage=0.;coverage.selection=Some(Selection::pixels(result.pixels));
-        let edges=result.underfill.as_ref().map(|_|Box::new(layer_core::FillEdges {snapshot:snapshot.clone(),position,tolerance,anchors:anchors.clone(),
+        let edges=result.underfill.as_ref().map(|_|Box::new(layer_core::FillEdges {snapshot:snapshot.clone(),position,tolerance,colour_on_solid,
             lines:if matches!(case.border,Border::Below|Border::Above|Border::AboveWhite|Border::WideAboveWhite){references.iter().map(|reference|layer_core::FillLine {snapshot:snapshot.clone(),scope:layer_core::SceneScope::Raw(*reference),fill_above:matches!(case.border,Border::Above|Border::AboveWhite|Border::WideAboveWhite)}).collect()}else{Vec::new()}}));
         let operation=layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,kind:layer_core::RasterOperationKind::Fill {
             color:F,texture:layer_core::FillTexture {strength:1.,paper:None},alpha_locked:false,edges,underfill:result.underfill.map(Selection::pixels)}};
         engine.append_raster_operation(target,operation).unwrap();flush_engine(&mut engine);
         let actual=engine.backend_mut().readback_srgb_rgba8().unwrap();
-        let projected=matches!(case.border,Border::Junction|Border::Soft|Border::InsideSoft).then(||geometry.projection(tolerance,anchors.as_deref().expect("colour fill returns assignment anchors"),&primary,engine.backend().device.working_format()==wgpu::TextureFormat::Rgba16Float));
+        let projected=matches!(case.border,Border::Junction|Border::Soft|Border::InsideSoft).then(||geometry.projection(tolerance,colour_on_solid,&primary,engine.backend().device.working_format()==wgpu::TextureFormat::Rgba16Float));
         let mut direct_errors=Vec::new();
         let mut maximum=[0u8;4];let mut first_bad=None;let mut preserved_seed=0;let mut formula_preserved=0;
         for y in 0..extent[1] {for x in 0..extent[0] {
@@ -413,7 +424,7 @@ fn check(@builtin(global_invocation_id) id:vec3<u32>) {
     let input=r.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {label:Some("fill unmix cases"),contents:&bytes,usage:wgpu::BufferUsages::STORAGE});
     let output=r.device.create_buffer(&wgpu::BufferDescriptor {label:Some("fill unmix results"),size:cases.len() as u64*32,usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_SRC,mapped_at_creation:false});
     let mut bytes=[1f32,0.,0.,0.,0.,1.,0.,0.,0.,0.,1.,0.].into_iter().flat_map(f32::to_ne_bytes).collect::<Vec<_>>();
-    bytes.extend(codes.into_iter().flat_map(u32::to_ne_bytes));bytes.extend([0_u8;16]);
+    bytes.extend(codes.into_iter().flat_map(u32::to_ne_bytes));bytes.extend([0_u8;32]);
     let precision=r.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {label:Some("fill unmix source precision"),contents:&bytes,usage:wgpu::BufferUsages::UNIFORM});
     let binding=crate::bindings::group(&r.device,"fill unmix test io",&io,[input.as_entire_binding(),output.as_entire_binding()]);
     let precision_binding=r.device.create_bind_group(&wgpu::BindGroupDescriptor {label:Some("fill unmix test precision"),layout:&precision_layout,entries:&[wgpu::BindGroupEntry {binding:4,resource:precision.as_entire_binding()}]});
@@ -489,12 +500,12 @@ fn fill_imported_u8_edge_keeps_precision_after_an_unrelated_page_edit() {
         query.colour_mode=layer_render::RegionColourMode::ColourOnSolid;
         query.enclosure=None;query.position=[64,70];query.fill=Some(Default::default());
         let result=receive_request(engine.backend_mut(),query);
-        let anchors=result.anchors.clone();
+        let colour_on_solid=result.colour_on_solid;
         let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.allocate_coverage_handle(),extent,[0;2]);
         coverage.source.default_coverage=0.;coverage.selection=Some(Selection::pixels(result.pixels));
         engine.append_raster_operation(target,layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,
             kind:layer_core::RasterOperationKind::Fill {color:F,texture:layer_core::FillTexture {strength:1.,paper:None},alpha_locked:false,
-                edges:Some(Box::new(layer_core::FillEdges {snapshot,position:Point {x:64.,y:70.},tolerance:1./32.,anchors,lines:Vec::new()})),
+                edges:Some(Box::new(layer_core::FillEdges {snapshot,position:Point {x:64.,y:70.},tolerance:1./32.,colour_on_solid,lines:Vec::new()})),
                 underfill:result.underfill.map(Selection::pixels)}}).unwrap();flush_engine(&mut engine);
         let actual=engine.backend_mut().readback_srgb_rgba8().unwrap();
         for y in 0..extent[1] {for x in 0..extent[0] {
@@ -526,7 +537,7 @@ fn fill_support_without_a_valid_line_profile_preserves_the_source() {
     let snapshot=engine.document().snapshot();
     engine.append_raster_operation(target,layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,
         kind:layer_core::RasterOperationKind::Fill {color:F,texture:layer_core::FillTexture {strength:1.,paper:None},alpha_locked:false,
-            edges:Some(Box::new(layer_core::FillEdges {snapshot,position:Point {x:8.,y:8.},tolerance:1./32.,anchors:None,lines:Vec::new()})),
+            edges:Some(Box::new(layer_core::FillEdges {snapshot,position:Point {x:8.,y:8.},tolerance:1./32.,colour_on_solid:false,lines:Vec::new()})),
             underfill:Some(Selection::pixels(Arc::new(SelectionPixels::new(extent,[32,32,33,33],band).unwrap())))}}).unwrap();
     flush_engine(&mut engine);let actual=engine.backend_mut().readback_srgb_rgba8().unwrap();
     let support=(32*64+32)*4;let selected=(32*64+34)*4;
@@ -571,7 +582,7 @@ fn recolouring_a_shape_never_paints_outside_it() {
             let result=receive_request(engine.backend_mut(),query);
             let mut selection=layer_core::CoverageSnapshot::reveal_all(engine.document().artwork.coverage.next_handle(),extent,[0;2]);
             selection.source.default_coverage=0.;selection.selection=Some(Selection::pixels(result.pixels));
-            let edges=result.underfill.as_ref().map(|_|Box::new(layer_core::FillEdges {snapshot:snapshot.clone(),position:Point {x:64.,y:48.},tolerance,anchors:result.anchors.clone(),lines:Vec::new()}));
+            let edges=result.underfill.as_ref().map(|_|Box::new(layer_core::FillEdges {snapshot:snapshot.clone(),position:Point {x:64.,y:48.},tolerance,colour_on_solid:result.colour_on_solid,lines:Vec::new()}));
             let operation=layer_core::RasterOperation {placement:Affine::IDENTITY,coverage:selection,kind:layer_core::RasterOperationKind::Fill {
                 color:F,texture:layer_core::FillTexture {strength:1.,paper:None},alpha_locked:false,edges,underfill:result.underfill.map(Selection::pixels)}};
             engine.append_raster_operation(target,operation).unwrap();flush_engine(&mut engine);
@@ -607,7 +618,7 @@ fn alpha_below_zero_tolerance_keeps_the_transparent_band_pixel() {
     assert_eq!(value(result.underfill.as_ref().unwrap(),43,40),255,"transparent pixel belongs to the under-fill band");
     let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.document().artwork.coverage.next_handle(),extent,[0;2]);
     coverage.source.default_coverage=0.;coverage.selection=Some(Selection::pixels(result.pixels));
-    let edges=Box::new(layer_core::FillEdges {snapshot:snapshot.clone(),position:Point {x:16.,y:70.},tolerance:0.,anchors:result.anchors,
+    let edges=Box::new(layer_core::FillEdges {snapshot:snapshot.clone(),position:Point {x:16.,y:70.},tolerance:0.,colour_on_solid:result.colour_on_solid,
         lines:references.iter().map(|reference|layer_core::FillLine {snapshot:snapshot.clone(),scope:layer_core::SceneScope::Raw(*reference),fill_above:false}).collect()});
     let operation=layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,kind:layer_core::RasterOperationKind::Fill {
         color:F,texture:layer_core::FillTexture {strength:1.,paper:None},alpha_locked:false,edges:Some(edges),underfill:result.underfill.map(Selection::pixels)}};

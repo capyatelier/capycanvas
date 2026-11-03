@@ -346,6 +346,17 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 
 ## Reference Fill completion
 
+The submit-time anchor change compares `e7ace60f5` with the Part 1 build on
+MovinkPad 11, using a warm one-reference 24 MP cell tap and two samples per
+arm in ABBA order. These are static response measurements.
+
+| Measurement | Main → Part 1 | Change |
+| --- | --- | --- |
+| Request to mask | 1553.7 → 1410.6 ms | −9.2% |
+| Native changed-pixel bracket | 1884.4–2038.6 → 1696.3–1866.5 ms | Both bounds improve |
+
+Evidence: `artifacts/fill-tools/final/anchor-submit-part1/mp11/result.json`.
+
 M4b's matched native opaque-edge check on TCL compares M5 `c668c28ba` with
 the packed-support build `d3fbd4a6…`. Warm completion is
 3.695–3.883 → 4.112–4.278 s (**+10.7%** at bracket midpoints); first contact

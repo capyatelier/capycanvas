@@ -22,7 +22,7 @@ mod enclose_fill_checks {
 
     fn reply(s: &mut UiSession<Recorder>, request: &RegionRequest) -> Arc<SelectionPixels> {
         let pixels = Arc::new(SelectionPixels::bytes([8, 1], [0, 0, 8, 1], vec![0xffffffff; 2]).unwrap());
-        s.renderer_mut().region_reply = Some(RegionResult { anchors: None, gaps: None, underfill: None,
+        s.renderer_mut().region_reply = Some(RegionResult { colour_on_solid: false, gaps: None, underfill: None,
             request_id: request.request_id, pixels: pixels.clone(),
             placement: layer_core::Affine::IDENTITY, tonal_sample: None,
         });
@@ -690,7 +690,7 @@ mod enclose_fill_checks {
         enclose(&mut s);
         s.frame(2, 2).unwrap();
         let request = s.renderer_mut().region_requests.last().unwrap().clone();
-        s.renderer_mut().region_reply = Some(RegionResult { anchors: None, gaps: None, underfill: None,
+        s.renderer_mut().region_reply = Some(RegionResult { colour_on_solid: false, gaps: None, underfill: None,
             request_id: request.request_id,
             pixels: Arc::new(SelectionPixels::bytes([8, 1], [0; 4], vec![0; 2]).unwrap()),
             placement: layer_core::Affine::IDENTITY, tonal_sample: None,
@@ -868,7 +868,7 @@ mod enclose_fill_checks {
         fn region_reply(s:&mut UiSession<Recorder>,request:&layer_render::RegionRequest) {
             s.renderer_mut().region_reply=Some(layer_render::RegionResult {request_id:request.request_id,
                 pixels:Arc::new(SelectionPixels::bytes([4,1],[0,0,4,1],vec![0xffffffff]).unwrap()),
-                anchors:None,gaps:None,underfill:None,placement:layer_core::Affine::IDENTITY,tonal_sample:None});
+                colour_on_solid:false,gaps:None,underfill:None,placement:layer_core::Affine::IDENTITY,tonal_sample:None});
         }
 
         #[test]
