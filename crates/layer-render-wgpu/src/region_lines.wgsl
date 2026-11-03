@@ -534,8 +534,9 @@ fn assign_point(q:vec2<u32>) {
     let nearest=assign_nearest(q);if nearest==INVALID{return;}
     let at=coord(nearest);if (atomicLoad(&eligible[at.y*line.extent.z+at.x/32u])&(1u<<(at.x%32u)))==0u {return;}
     let p=vec2<i32>(q);let depth=distance(p);
-    let trimmed=line.job.y!=0u && atomicLoad(&cached[line.offsets.y+4u])!=0u;
-    if ink(p) && !trimmed && depth>line.options.y && (depth>line.options.z || deep_beyond(p,at,depth) || distance(middle(p))>line.options.z) {return;}
+    let flags=atomicLoad(&cached[line.offsets.y+4u]);
+    let kept=(line.job.y!=0u && (flags&1u)!=0u) || (flags&2u)!=0u;
+    if ink(p) && !kept && depth>line.options.y && (depth>line.options.z || deep_beyond(p,at,depth) || distance(middle(p))>line.options.z) {return;}
     atomicOr(&eligible[q.y*line.extent.z+q.x/32u],1u<<(q.x%32u));
 }
 @compute @workgroup_size(64)
@@ -606,7 +607,12 @@ fn remember_thin(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgr
 fn check_seeds(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>){
     let index=id.x+id.y*groups.x*64u+line.job.x;
     if line.options.w!=0u {
-        if index==0u {atomicStore(&cached[line.offsets.y+4u],u32(line.options.x!=0u || (line.options.y!=0u && first[3u]==bitcast<u32>(1.))));}return;
+        if index==0u {atomicAnd(&cached[line.offsets.y+4u],2u);atomicOr(&cached[line.offsets.y+4u],u32(line.options.x!=0u || (line.options.y!=0u && first[3u]==bitcast<u32>(1.))));}return;
+    }
+    if index==0u {
+        var empty=2u;
+        for(var alpha=3u;alpha<arrayLength(&second);alpha+=4u){if bitcast<f32>(second[alpha])>bitcast<f32>(line.job.z){empty=0u;}}
+        atomicAnd(&cached[line.offsets.y+4u],1u);atomicOr(&cached[line.offsets.y+4u],empty);
     }
     if index>=arrayLength(&first){return;}
     let p=vec2<i32>(line.options.xy);

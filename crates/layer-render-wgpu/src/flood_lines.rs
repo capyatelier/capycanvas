@@ -405,9 +405,10 @@ impl Lines {
         ]);
     }
 
-    pub fn check_seeds(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,old:&wgpu::Buffer,new:&wgpu::Buffer,position:[u32;2]) {
+    pub fn check_seeds(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,old:&wgpu::Buffer,new:&wgpu::Buffer,position:[u32;2],tolerance:f32) {
         encoder.clear_buffer(self.data.as_ref().unwrap(),u64::from(self.offsets[1]+2)*4,Some(4));
-        self.encode(input,encoder,Some(old),Some(new),vec![("check_seeds",old.size()/4,self.params([0;4],[0;4],[position[0],position[1],THIN_CUTOFF,0],[1.,1.,0.,0.]))]);
+        let mut params=self.params([0;4],[0;4],[position[0],position[1],THIN_CUTOFF,0],[1.,1.,0.,0.]);params[26]=tolerance.to_bits();
+        self.encode(input,encoder,Some(old),Some(new),vec![("check_seeds",old.size()/4,params)]);
     }
     pub fn colour_mode(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,mode:layer_render::RegionColourMode,seed:Option<&wgpu::Buffer>) {
         self.encode(input,encoder,seed,None,vec![("check_seeds",1,self.params([0;4],[0;4],

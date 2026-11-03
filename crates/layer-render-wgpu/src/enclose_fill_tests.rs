@@ -99,24 +99,37 @@ fn line_middle_thick_shapes_keep_primary_and_underfill_inside_their_soft_rim() {
 }
 
 #[test]
-fn line_middle_beside_a_wide_colour_block_covers_only_its_soft_rim() {
+fn line_middle_from_a_painted_seed_beside_a_wide_colour_block_covers_only_its_soft_rim() {
     let extent=[160,96];
-    for opaque in [false,true] {
-        let mut document=paint_document(extent,"Wide neighbouring block");
-        placement::set_source(&mut document,depth_source(extent,SampleDepth::F32,RgbSpace::Srgb,160*96*16+4096,|x,_| {
-            let alpha=if x<63 {0.}else if x==63 {0.25}else{1.};
-            if opaque {[1.-alpha,0.,alpha,1.]}else{[0.,0.,1.,alpha]}
-        }));
-        let target=target(&document);let mut renderer=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-        frame(&mut renderer,&document,extent);
+    let mut document=paint_document(extent,"Wide neighbouring block");
+    placement::set_source(&mut document,depth_source(extent,SampleDepth::F32,RgbSpace::Srgb,160*96*16+4096,|x,_| {
+        let alpha=if x<63 {0.}else if x==63 {0.25}else{1.};
+        [1.-alpha,0.,alpha,1.]
+    }));
+    let target=target(&document);let mut renderer=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    frame(&mut renderer,&document,extent);
+    let mut query=request(RegionSource::Source(target),rectangle([0,0,160,96]),RegionRefinement {edges:RegionEdges::LineMiddle,..exact()},0.);
+    query.enclosure=None;query.position=[32,48];
+    let result=receive_request(&mut renderer,query);let band=result.underfill.as_ref().unwrap();
+    assert_eq!(value(band,63,48),255,"rim");
+    for y in 0..96 {for x in 64..160 {
+        assert_eq!(value(&result.pixels,x,y),0,"primary plateau {x},{y}");
+        assert_eq!(value(band,x,y),0,"band plateau {x},{y}");
+    }}
+}
+
+#[test]
+fn line_middle_from_an_empty_seed_reaches_under_a_wide_soft_wash() {
+    let extent=[160,96];
+    let mut document=paint_document(extent,"Wide soft wash");
+    placement::set_source(&mut document,depth_source(extent,SampleDepth::F32,RgbSpace::Srgb,160*96*16+4096,|x,_|[0.,0.,1.,((x as f32-62.)/40.).clamp(0.,1.)]));
+    let target=target(&document);let mut renderer=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    frame(&mut renderer,&document,extent);
+    for fill in [false,true] {
         let mut query=request(RegionSource::Source(target),rectangle([0,0,160,96]),RegionRefinement {edges:RegionEdges::LineMiddle,..exact()},0.);
-        query.enclosure=None;query.position=[32,48];
+        query.enclosure=None;query.position=[32,48];query.fill=fill.then(Default::default);
         let result=receive_request(&mut renderer,query);let band=result.underfill.as_ref().unwrap();
-        assert_eq!(value(band,63,48),255,"rim opaque={opaque}");
-        for y in 0..96 {for x in 64..160 {
-            assert_eq!(value(&result.pixels,x,y),0,"primary plateau opaque={opaque} {x},{y}");
-            assert_eq!(value(band,x,y),0,"band plateau opaque={opaque} {x},{y}");
-        }}
+        for x in 68..84 {assert_eq!(value(band,x,48),255,"fill={fill} wash {x}");}
     }
 }
 

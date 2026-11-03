@@ -221,8 +221,8 @@ impl Flood {
     pub fn lines_submitted(&self)->bool {self.lines.submitted()}
     pub fn lines_discarded(&self)->bool {self.lines.discarded()}
     pub fn cancel_lines(&mut self) {self.lines.cancel();}
-    pub fn check_seeds(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,old:&wgpu::Buffer,new:&wgpu::Buffer,position:[u32;2]) {
-        self.lines.check_seeds(input,encoder,old,new,position);
+    pub fn check_seeds(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,old:&wgpu::Buffer,new:&wgpu::Buffer,position:[u32;2],tolerance:f32) {
+        self.lines.check_seeds(input,encoder,old,new,position,tolerance);
     }
     pub fn colour_mode(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,mode:layer_render::RegionColourMode,seed:Option<&wgpu::Buffer>) {
         self.lines.colour_mode(input,encoder,mode,seed);

@@ -254,7 +254,7 @@ impl RegionRequests {
             self.raw.encode_sampling(r,&base,encoder,region_sources::Sampling::Seeds)?;
             let mask=self.raw.mask().ok_or(GpuRasterError::InvalidExtent)?;
             let (paper,_,_)=Self::paper(r,request)?;
-            self.flood.check_seeds(&flood::Input {device:&r.device,mask:&mask,paper:&paper},encoder,&self.cache.as_ref().unwrap().seeds,self.raw.seeds(),request.position);
+            self.flood.check_seeds(&flood::Input {device:&r.device,mask:&mask,paper:&paper},encoder,&self.cache.as_ref().unwrap().seeds,self.raw.seeds(),request.position,request.tolerance);
             mask
         };
         if let Some(count)=request.reference_count && count<request.source.sources().len() && self.stop_mask.is_none() {
