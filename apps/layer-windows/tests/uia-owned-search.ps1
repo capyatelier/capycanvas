@@ -526,27 +526,29 @@ if(@($errors).Count){throw ($errors|Out-String)}
 $headerCheck=@($tiltAst.FindAll({param($node)$node -is [Management.Automation.Language.IfStatementAst] -and $node.Extent.Text.Contains('title and Close do not share a centerline')},$true))
 if($headerCheck.Count -ne 1){throw 'Missing actual response header centerline assertion'}
 $statements=@($headerCheck[0].Parent.Statements);$last=[array]::IndexOf($statements,$headerCheck[0])
-$start=@(for($i=0;$i -lt $last;$i++){if($statements[$i] -is [Management.Automation.Language.AssignmentStatementAst] -and $statements[$i].Left.Extent.Text -eq '$title'){$i}})[-1]
+$start=@(for($i=0;$i -lt $last;$i++){if($statements[$i] -is [Management.Automation.Language.AssignmentStatementAst] -and $statements[$i].Left.Extent.Text -in @('$headerBoxes','$title')){$i}})[0]
 if($null -eq $start){throw 'Missing actual response header measurements'}
 $headerGeometry=[scriptblock]::Create(($statements[$start..$last].Extent.Text -join "`n"))
 & {
     $review=[pscustomobject]@{Id=7};$drawingWindow=[IntPtr]1
     $geometry=@{}
     function Control([string]$Id,[switch]$Arranged){[pscustomobject]@{Current=[pscustomobject]@{BoundingRectangle=[pscustomobject]@{Top=$(if($Id.EndsWith('-title')){if($scale -eq 1.5){175}else{$geometry.titleTop}}else{$geometry.closeTop});Height=24*$scale}}}}
-    function Native-Bounds([string]$Id,[double]$Scale){if($Scale -notin @(1,1.5,2) -or $Id -notin @("pen-$kind-title","pen-$kind-close")){throw 'Unexpected response header geometry request'};[pscustomobject]@{Top=$(if($Id.EndsWith('-title')){$geometry.titleTop}else{$geometry.closeTop});Height=24*$Scale}}
+    function Native-Bounds([string]$Id,[double]$Scale){if($Scale -notin @(1,1.5,2) -or $Id -notin @("pen-$kind-title","pen-$kind-close")){throw 'Unexpected response header geometry request'};[pscustomobject]@{Top=$(if($Id.EndsWith('-title')){$geometry.titleTop}else{$geometry.closeTop});Height=$(if($Id.EndsWith('-title')){19.5078125*$Scale}else{24*$Scale})}}
+    function Workspace-Root{[pscustomobject]@{Current=[pscustomobject]@{ItemStatus=(@{elements=@(foreach($part in 'title','close'){@{id="pen-$kind-$part";bounds=@{x=0;y=$geometry[($part+'Top')]/$scale;width=$(if($part -eq 'title'){320}else{24});height=24};actual_bounds=@{x=0;y=$geometry[($part+'Top')]/$scale;width=$(if($part -eq 'title'){87.7279}else{24});height=$(if($part -eq 'title'){19.5078125}else{24})}}})}|ConvertTo-Json -Depth 6 -Compress)}}}
+    function Screen-Bounds($Bounds){[pscustomobject]@{Top=$Bounds.y*$scale;Height=$Bounds.height*$scale}}
     function Evidence([string]$Name,$Value){if($Name -ne 'response-header-failure'){throw 'Unexpected response header evidence'}}
     foreach($scale in @(1,1.5,2)){
         $geometry.closeTop=118*$scale;$geometry.titleTop=(118-11*96/72*262/4096)*$scale
         foreach($kind in @('pressure','tilt')){
             . $headerGeometry
             $top=$geometry.titleTop;$geometry.titleTop=$geometry.closeTop-1.25*$scale;$rejected=$false
-            try{. $headerGeometry}catch{if($_.Exception.Message -ne "$kind title and Close do not share a centerline"){throw};$rejected=$true}
+            try{. $headerGeometry}catch{if(!$_.Exception.Message.StartsWith("$kind title and Close do not share a centerline")){throw};$rejected=$true}
             if(!$rejected){throw 'Response header accepted a native centerline gap greater than one DIP'}
             $geometry.titleTop=$top
         }
     }
 }
-Write-Output 'Response headers use fractional native geometry at 100, 150 and 200 percent and retain their one-DIP centerline bound.'
+Write-Output 'Response headers use allocated native rows at 100, 150 and 200 percent and retain their one-DIP centerline bound.'
 
 $paperAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/layer-paper.ps1'),[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw ($errors|Out-String)}

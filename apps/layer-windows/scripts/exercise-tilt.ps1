@@ -352,8 +352,16 @@ function Response-Switching{
             if((Curve) -ne $neutral -or (Tilt).axes.reverse_horizontal -or (Tilt).axes.reverse_vertical -or (Tilt).axes.swap -or (Json (Control 'pen-tilt-curve').GetRuntimeId()) -eq $oldOwner){throw 'Switching response kinds retained a retired curve owner or unapplied draft'}
         }
         $null=Control "pen-$kind-title" -Arranged;$null=Control "pen-$kind-close" -Arranged
-        $title=Native-Bounds "pen-$kind-title" $scale;$close=Native-Bounds "pen-$kind-close" $scale
-        if([Math]::Abs(($title.Top+$title.Height/2)-($close.Top+$close.Height/2)) -gt $scale){throw "$kind title and Close do not share a centerline"}
+        $headerBoxes=@{}
+        Wait-Until {
+            $workspace=Workspace-Root;if(!$workspace){return $false}
+            $headerLayout=$workspace.Current.ItemStatus|ConvertFrom-Json
+            $headerBoxes.title=@($headerLayout.elements|Where-Object id -eq "pen-$kind-title")[0].bounds;$headerBoxes.close=@($headerLayout.elements|Where-Object id -eq "pen-$kind-close")[0].bounds
+            $headerBoxes.title -and $headerBoxes.close -and $headerBoxes.title.width -gt 0 -and $headerBoxes.title.height -gt 0 -and $headerBoxes.close.width -gt 0 -and $headerBoxes.close.height -gt 0
+        } "$kind header did not publish allocated bounds"
+        $title=Screen-Bounds $headerBoxes.title;$close=Screen-Bounds $headerBoxes.close
+        $gap=[Math]::Abs(($title.Top+$title.Height/2)-($close.Top+$close.Height/2))
+        if($gap -gt $scale){throw "$kind title and Close do not share a centerline: title=$title close=$close gap=$gap scale=$scale"}
     }
     if((Saved) -ne $saved -or (Json (Model).state.settings.pressure_curve) -ne $pressureSaved){throw 'Switching response kinds committed a retired draft'}
     Evidence 'response-switching' @{tilt_plot=$tiltPlot.ToString();pressure_plot=$pressurePlot.ToString();retired_tilt_owner=$oldOwner;new_tilt_owner=(Control 'pen-tilt-curve').GetRuntimeId();saved=$saved}
