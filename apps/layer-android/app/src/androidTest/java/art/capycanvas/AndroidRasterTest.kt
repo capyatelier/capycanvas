@@ -5180,8 +5180,8 @@ class AndroidRasterTest {
         compose.onNodeWithTag("discard-recovery").performClick()
         compose.waitUntil(120_000) {!host.recovery.working&&host.recovery.candidate == null}
         assertNull(host.actionError)
-        assertFalse(File(copies.getValue(failed),"head.json").exists())
-        assertTrue(File(copies.getValue(first),"head.json").isFile)
+        assertTrue(sessionHeads(copies.getValue(failed)).none {it.exists()})
+        assertTrue(sessionHeads(copies.getValue(first)).any {it.isFile})
         assertEquals(listOf(copies.getValue(first).name),JSONObject(Native.sessionManifestRead(session.absolutePath)).array("drawings").objects().map {it.getString("key")})
         assertTrue(runBlocking {kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {host.recovery.flush()}})
         scenario.close();launch();compose.waitUntil(120_000) {host.recovery.ready&&!host.recovery.working}
@@ -5196,7 +5196,7 @@ class AndroidRasterTest {
         val session = device.recovery.walkTopDown().first {it.name == "session.json"}
         awaitSessionRelease(session)
         val copies = session.parentFile!!.listFiles().orEmpty().filter {it.isDirectory}
-        assertTrue(copies.all {File(it,"head.json").isFile}&&copies.isNotEmpty())
+        assertTrue(copies.all {sessionHeads(it).any {head -> head.isFile}}&&copies.isNotEmpty())
         session.writeText("broken window metadata")
         launch();compose.waitUntil(120_000) {host.recovery.ready&&!host.recovery.working}
         assertNotNull(host.recovery.candidate);assertNotNull(host.actionError)
@@ -5204,11 +5204,13 @@ class AndroidRasterTest {
         compose.onNodeWithTag("discard-recovery").performClick()
         compose.waitUntil(120_000) {!host.recovery.working&&host.recovery.candidate == null}
         assertNull(host.actionError);assertFalse(session.exists())
-        assertTrue(copies.none {File(it,"head.json").exists()})
+        assertTrue(copies.all {sessionHeads(it).none {head -> head.exists()}})
         assertTrue(runBlocking {kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {host.recovery.flush()}})
         scenario.close();launch();compose.waitUntil(120_000) {host.recovery.ready&&!host.recovery.working}
         assertNull(host.recovery.candidate);assertNull(host.actionError)
     }
+
+    private fun sessionHeads(copy:File) = listOf("head.0","head.1","head.json").map {File(copy,it)}
 
     private fun awaitSessionRelease(session:File) {
         compose.waitUntil(30_000) {
