@@ -64,6 +64,8 @@ Where to look in [`apps/layer-web`](../../apps/layer-web):
 
 ### Changing the host
 
+- **Preserve shared paint values.** Send straight RGBA glass channels directly
+  to CSS; the browser handles premultiplication.
 - **Keep the page thread free.** The session runs on the browser event loop
   without shared memory. Decoding, encoding and color work run in raster workers
   through the shared `package::transfer` descriptor and bounded transferable

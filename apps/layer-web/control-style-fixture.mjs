@@ -39,8 +39,7 @@ export async function captureCheckboxes({call,evaluate,settle},directory,name) {
 }
 
 export function glassCss(color) {
-  const alpha=Math.round(color[3]*255);
-  return `rgb(${color.slice(0,3).map(v=>alpha?Math.round(v*alpha)*255/alpha:0).join(' ')} / ${alpha/255})`;
+  return `rgb(${color.slice(0,3).map(value=>value*255).join(' ')} / ${color[3]})`;
 }
 
 export async function checkTextEntry(evaluate,selector,{height=34,padding=9,reference='.panel .dropdown:not(.layer-blend):not(#properties-add-filter)',capture}={}) {

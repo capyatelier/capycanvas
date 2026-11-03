@@ -7,6 +7,22 @@ import {colorDialogDom} from './color-dialog-fixture.mjs';
 import {latinKey} from './text-input.js';
 
 const source = readFileSync(new URL("app.js", import.meta.url), "utf8");
+test('glass CSS preserves the shared straight RGBA channels',()=>{
+  const styles=new Map(),context={appliedTheme:null,glass:null,document:{
+    body:{dataset:{},style:{setProperty:(key,value)=>styles.set(key,value)}},
+    documentElement:{style:{}},querySelector:()=>({})}};
+  runInNewContext(source.slice(source.indexOf('function applyTheme('),source.indexOf('function element(')),context);
+  const zero=[0,0,0,0],settings={card_shade:zero,card_ring:zero,card_shadow:zero,card_far_shadow:zero};
+  for(const color of [[0.9426783323287964,0.9426783323287964,0.9426783323287964,0.9399999976158142],
+    [0.2571895718574524,0.2571895718574524,0.2571895718574524,0.9599999785423279],
+    [0.2,0.4,0.6,0.001]]){
+    context.applyTheme('light',{glass:{panel:color},control_fill:zero,lines:{settings,panel:{border:zero},sidebar_border:zero}});
+    const values=styles.get('--glass-panel').match(/[-+]?(?:\d*\.)?\d+(?:e[-+]?\d+)?/gi).map(Number);
+    const actual=[...values.slice(0,3).map(value=>value/255),values[3]];
+    actual.forEach((value,index)=>assert.ok(Math.abs(value-color[index])<1e-7,`${index}: ${value} retains ${color[index]}`));
+  }
+});
+
 test('document transitions retain canvas bar measurement and reveal reports',()=>{
   const actions=[],context={documents:{interactionBusy:()=>true},workspaceGesture:null,
     app:{allowed_during_document_interaction:action=>action.type!=='invoke',dispatch(action){actions.push(action);return{};}},applyChange(){},message:assert.fail};
