@@ -41,7 +41,7 @@ export async function checkContactBrushes({call, evaluate, settle, penTilt=true}
     await call('Input.dispatchMouseEvent',{type:'mouseMoved',pointerType:'pen',x:1,y:1,buttons:0});
     console.log(`Contact fixture: ${theme}, ${penTilt?'pen pressure and tilt':'mouse input'}`);
     const shot = async () => {
-      await wait('!layerApp.app.canvas_work_pending()');
+      await wait('layerApp.app.drawing_presented() && !layerApp.app.canvas_work_pending()');
       await settle();
       await evaluate('layerApp.canvas.getContext("webgpu").getConfiguration().device.queue.onSubmittedWorkDone()');
       await settle();

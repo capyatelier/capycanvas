@@ -385,6 +385,9 @@ impl WebApp {
     pub fn canvas_presented(&self) -> bool {
         self.gpu_ready() && self.surface.as_ref().is_some_and(|s| s.blank_presented)
     }
+    pub fn drawing_presented(&self) -> bool {
+        self.gpu_ready() && self.session.engine().backend().showing_drawing()
+    }
     pub fn shader_work_pending(&self, allow_optional: bool) -> bool {
         self.session
             .engine()
