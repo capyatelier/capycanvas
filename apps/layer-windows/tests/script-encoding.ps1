@@ -266,3 +266,25 @@ Write-Output 'Localized notice readiness waits for its exact action fills within
     }finally{$writer.Dispose();[IO.File]::Delete($stderr);[IO.Directory]::Delete($logDirectory)}
 }
 Write-Output 'Document stderr reads share the retained live writer and preserve permitted and unexpected diagnostic assertions.'
+
+& {
+    $variations=Fixture-Ast 'exercise-tool-variations.ps1'
+    $guard=$variations.Find({param($n)$n -is [Management.Automation.Language.IfStatementAst] -and $n.Extent.Text.Contains('Sketch did not retain every default header tool')},$true)
+    if(!$guard){throw 'Missing actual Sketch header contract'}
+    $keys=@($guard.Parent.Statements|Where-Object {$_ -is [Management.Automation.Language.AssignmentStatementAst] -and $_.Left.Extent.Text -eq '$keys'})
+    if($keys.Count -ne 1){throw 'Missing actual Sketch header identities'}
+    $check=[scriptblock]::Create("param(`$entries)`n"+$keys[0].Extent.Text+"`n"+$guard.Extent.Text)
+    $entries=@(foreach($key in @('panel:adjustments','command:select','command:scale_rotate','command:drawing_brush','command:sculpt','command:eraser','tool_slot:fill','panel:layers','color:')){
+        $parts=$key.Split(':');$control=@{kind=$parts[0]}
+        switch($parts[0]){'panel'{$control.panel=$parts[1]};'command'{$control.command=$parts[1]};'tool_slot'{$control.slot=$parts[1]}}
+        [pscustomobject]@{item=[pscustomobject]@{control=[pscustomobject]$control}}
+    })
+    & $check $entries
+    $entries[6].item.control.slot='photo_fill';$rejected=$false
+    try{& $check $entries}catch{if($_.Exception.Message -ne 'Sketch did not retain every default header tool'){throw};$rejected=$true}
+    if(!$rejected){throw 'Sketch header contract accepted the wrong remembered Fill slot'}
+    $entries[6].item.control.slot='fill';$rejected=$false
+    try{& $check @($entries|Where-Object {$_.item.control.kind -ne 'tool_slot'})}catch{if($_.Exception.Message -ne 'Sketch did not retain every default header tool'){throw};$rejected=$true}
+    if(!$rejected){throw 'Sketch header contract accepted a missing remembered Fill slot'}
+}
+Write-Output 'Actual Sketch header contract retains all authored tools and distinguishes the remembered Fill slot from another or missing slot.'

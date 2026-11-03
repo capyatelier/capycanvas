@@ -165,8 +165,8 @@ function Sketch-Drawers {
     $painted=Wait-StablePixels {Screen-Pixels $paperPoint[0] $paperPoint[1]}
     $file=(Model).state.document_file|ConvertTo-Json -Depth 8 -Compress
     $entries=@((Model).header.model.zones|ForEach-Object {$_}|Where-Object {$_.item.kind -eq 'tool'})
-    $keys=@($entries|ForEach-Object {$c=$_.item.control;$c.kind+':'+$c.command+$c.panel})
-    if((($keys|Sort-Object) -join ',') -ne ((@('panel:adjustments','command:select','command:scale_rotate','command:drawing_brush','command:sculpt','command:eraser','panel:layers','color:')|Sort-Object) -join ',')){throw 'Sketch did not retain every default header tool'}
+    $keys=@($entries|ForEach-Object {$c=$_.item.control;$c.kind+':'+$c.command+$c.panel+$c.slot})
+    if((($keys|Sort-Object) -join ',') -ne ((@('panel:adjustments','command:select','command:scale_rotate','command:drawing_brush','command:sculpt','command:eraser','tool_slot:fill','panel:layers','color:')|Sort-Object) -join ',')){throw 'Sketch did not retain every default header tool'}
     $records=@()
     foreach($entry in $entries){
         $id=$entry.id;$spec=@((Model).header.items|Where-Object id -eq $id)[0]
