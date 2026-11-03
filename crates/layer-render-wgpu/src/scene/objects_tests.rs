@@ -380,20 +380,9 @@ fn nearest_reduced_object_display_keeps_level_zero_aliases_after_idle() {
 
 #[test]
 fn exact_interactive_objects_read_parked_samples_on_decode_workers() {
-    use layer_core::raster_storage::{TileChunk,prepare_external_spill};
-    struct Chunk {bytes:Arc<[u8]>,readers:Arc<std::sync::Mutex<Vec<std::thread::ThreadId>>>}
-    impl TileChunk for Chunk {
-        fn len(&self)->usize {self.bytes.len()}
-        fn poll(&self)->Result<Option<Arc<[u8]>>,String> {
-            self.readers.lock().unwrap().push(std::thread::current().id());Ok(Some(self.bytes.clone()))
-        }
-        fn resident_bytes(&self)->usize {self.bytes.len()}
-        fn evict(&self) {}
-    }
     let (doc,owner,_)=document([32;2],vec![ImageObject::new(image([32;2],[255,0,0,255]))]);
-    let readers=Arc::new(std::sync::Mutex::new(Vec::new()));
-    let spill=prepare_external_spill(&layer_core::Editor::new(doc.clone()).retained_tiles()).unwrap().unwrap();
-    let bytes=Arc::from(spill.bytes.to_vec());spill.commit(Arc::new(Chunk {bytes,readers:readers.clone()})).unwrap();
+    let store=crate::test_support::GatedStore::new(&layer_core::Editor::new(doc.clone()).retained_tiles(),false);
+    store.gate.release();
     let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut compositor=Scene::new(&r).unwrap();compositor.object_spatial.prepare(doc.scene());
     let request=canonical_request(&r,&mut compositor,&doc,owner,ObjectWindow {origin:[0.;2],side:1.,size:[32;2]});
@@ -409,9 +398,48 @@ fn exact_interactive_objects_read_parked_samples_on_decode_workers() {
         assert!(std::time::Instant::now()<deadline,"exact samples must finish through the decode queue");
         std::thread::sleep(std::time::Duration::from_millis(1));
     };
-    let readers=readers.lock().unwrap();assert!(!readers.is_empty());
+    let readers=store.gate.readers.lock().unwrap();assert!(!readers.is_empty());
     assert!(readers.iter().all(|thread|*thread!=std::thread::current().id()),"the renderer owner must not read/decode parked source samples");
     assert!(float_pixels(&r,result.texture()).iter().all(|pixel|*pixel==[1.,0.,0.,1.]));
+}
+
+#[test]
+fn pending_native_store_reads_keep_the_display_and_wake_exact_preparation() {
+    let extent=[32;2];
+    let (mut doc,_,objects)=document(extent,vec![ImageObject::new(image(extent,[255,0,0,255]))]);
+    let mut r=crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
+    crate::test_support::submit_settled(&mut r,packet(doc.scene(),extent));
+    let previous=float_pixels(&r,r.presentation_views().unwrap()[0].texture());
+    assert!(previous.iter().all(|pixel|*pixel==[1.,0.,0.,1.]));
+    let mut object=doc.artwork.objects.get(objects[0]).unwrap().clone();
+    object.image=image(extent,[0,0,255,255]);
+    doc.apply(layer_core::Edit::ImageObject(RecordChange::replace(&doc.artwork.objects,objects[0],Some(object)).unwrap())).unwrap();
+    let store=crate::test_support::GatedStore::new(&layer_core::Editor::new(doc.clone()).retained_tiles(),false);
+    let (wake,woken)=std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move || {let _=wake.send(());}));
+    let frame=packet(doc.scene(),extent);
+    crate::test_support::submit_ready(&mut r,frame).unwrap();
+    crate::test_support::submit_ready(&mut r,frame).unwrap();
+    store.gate.entered();
+    r.wait_idle().unwrap();
+    crate::test_support::submit_ready(&mut r,FramePacket {composite_all:false,..frame}).unwrap();
+    assert!(r.image_decode_waiting());
+    assert!(!r.moving_images_waiting,"completed mip retirements must admit the incoming image");
+    assert!(r.has_pending_work(),"native hosts must keep requesting frames until stored bytes are ready");
+    r.analysis_dirty=true;
+    assert!(r.has_pending_work(),"independent ready work must remain runnable");
+    r.analysis_dirty=false;
+    assert!(woken.try_recv().is_err());
+    for _ in 0..2 {
+        if r.raster_dependencies_ready(frame,None) {r.submit(frame).unwrap();}
+        assert_eq!(float_pixels(&r,r.presentation_views().unwrap()[0].texture()),previous);
+    }
+    store.gate.release();
+    woken.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+    assert!(!r.image_decode_waiting());
+    crate::test_support::submit_settled(&mut r,frame);
+    assert!(float_pixels(&r,r.presentation_views().unwrap()[0].texture()).iter().all(|pixel|*pixel==[0.,0.,1.,1.]));
+    assert!(!r.has_pending_work());
 }
 
 #[test]

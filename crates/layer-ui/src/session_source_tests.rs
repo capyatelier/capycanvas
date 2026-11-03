@@ -491,7 +491,7 @@ fn source_profile_repair_preserves_samples_and_baked_edits() {
     let new_paint = reopened.artwork.paint.resolve(new_identity).unwrap();
     assert_eq!(reopened.artwork.paint.get(old_paint).unwrap().base.as_ref().map(|base|base.image.as_ref()), Some(original.as_ref()));
     assert_eq!(reopened.artwork.paint.get(new_paint).unwrap().base.as_ref().map(|base|base.image.as_ref()), Some(&corrected));
-    assert_eq!(reopened.artwork.paint.get(old_paint).unwrap().raster.wait_data().unwrap().tiles[&key].wait_backing().unwrap().decode().unwrap(), bytes);
+    assert_eq!(reopened.artwork.paint.get(old_paint).unwrap().raster.wait_data().unwrap().tiles[&key].wait_backing().unwrap().decode_on_worker().unwrap(), bytes);
     invoke(&mut session, CommandId::Undo);
     assert!(session.engine.document().scene().occurrence(next_id).is_none());
     assert_eq!(session.engine.document().scene().occurrence(id).unwrap(), &occurrence);
@@ -751,7 +751,7 @@ fn source_workflow_interns_verified_worker_tiles_shared_with_objects() {
     assert!(!Arc::ptr_eq(&converted.tiles[&[0,0]],&source.tiles[&[0,0]]));
     let mut conflict=(*converted).clone();
     let bad=TileBlob::encode(converted.interpretation.descriptor(),&[255;4].repeat((TILE_SIZE*TILE_SIZE) as usize)).unwrap();
-    conflict.tiles.insert([0,0],Arc::new(TileBlob::from_package(source.tiles[&[0,0]].resource_id(),bad.descriptor,bad.compressed().unwrap()).unwrap()));
+    conflict.tiles.insert([0,0],Arc::new(TileBlob::from_package(source.tiles[&[0,0]].resource_id(),bad.descriptor,Arc::<[u8]>::from(&*bad.compressed_on_worker().unwrap())).unwrap()));
     let before=session.engine.document().clone();let checkpoint=session.engine.checkpoint();
     assert!(workflow.preview(&session,Arc::new(conflict),false,true).is_err());
     assert_eq!(session.engine.document(),&before);assert_eq!(session.engine.checkpoint(),checkpoint);

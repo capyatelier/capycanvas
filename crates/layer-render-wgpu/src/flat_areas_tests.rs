@@ -37,7 +37,7 @@ fn pixels(raster:&RasterRevision,extent:[u32;2])->Vec<[u8;4]> {
     for (key,tile) in &raster.wait_data().unwrap().tiles {
         assert_eq!(key.plane,RasterPlane::Color);
         let blob=tile.wait_backing().unwrap();assert_eq!(blob.descriptor.depth(),SampleDepth::U8);assert_eq!(blob.descriptor.channels,4);
-        let bytes=blob.decode().unwrap();
+        let bytes=blob.decode_on_worker().unwrap();
         for y in 0..TILE_SIZE {for x in 0..TILE_SIZE {
             let [px,py]=[key.coordinate[0]*TILE_SIZE+x,key.coordinate[1]*TILE_SIZE+y];
             if px<extent[0] && py<extent[1] {pixels[(py*extent[0]+px)as usize]=bytes[((y*TILE_SIZE+x)*4)as usize..((y*TILE_SIZE+x)*4+4)as usize].try_into().unwrap();}

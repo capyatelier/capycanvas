@@ -419,7 +419,7 @@ fn native_document_tabs_history_storage_and_close() {
             .unwrap()
             .wait_backing()
             .unwrap()
-            .decode()
+            .decode_on_worker()
             .unwrap(),
         vec![128; 256 * 256 * 4]
     );
@@ -1202,7 +1202,7 @@ fn native_document_tabs_immediate_stroke_and_undo() {
         assert!(data.tiles.values().any(|t| {
             t.wait_backing()
                 .unwrap()
-                .decode()
+                .decode_on_worker()
                 .unwrap()
                 .as_chunks::<4>().0.iter()
                 .any(|pixel| pixel[3] > 0)
@@ -1256,7 +1256,7 @@ fn native_document_tabs_disk_failure_keeps_data() {
         w.documents.parked_memory().1,
         "failure still releases inactive GPU"
     );
-    assert_eq!(blob.decode().unwrap(), vec![128; 256 * 256 * 4]);
+    assert_eq!(blob.decode_on_worker().unwrap(), vec![128; 256 * 256 * 4]);
     let error = glib::MainContext::default()
         .block_on(
             w.documents
@@ -1572,4 +1572,147 @@ fn native_document_tabs_canvas_transition() {
         switch(&w,1);
     }
     input.finish(); w.window.destroy(); pump(100);
+}
+
+#[test]
+#[ignore = "private hardware compositor, M3 own-store cold motion"]
+fn native_document_tabs_cold_store_motion() {
+    use layer_core::authored::{Occurrence, OccurrenceContent, PaintSource, PortableId};
+    use layer_core::color::{RgbSpace, SampleDepth};
+    use std::{collections::BTreeMap, os::fd::AsRawFd, sync::Arc};
+    use serde_json::json;
+    let output=std::path::PathBuf::from(std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").unwrap());
+    let (project,held,decoded_bytes,encoded_bytes,first_tile)=glib::MainContext::default().block_on(gtk::gio::spawn_blocking(|| {
+        let localization=layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
+        let mut project=new_drawing(4216,3016,&localization).unwrap();
+        composition_mut(&mut project).color.space=RgbSpace::Srgb;
+        composition_mut(&mut project).color.depth=SampleDepth::U16;
+        let descriptor=project.composition().color.paint_descriptor();
+        let first=project.working.occurrence.unwrap();
+        let mut decoded_bytes=0usize;let mut encoded_bytes=0usize;let mut first_tile=None;
+        for layer in 0..6u32 {
+            let occurrence=if layer==0 {first}else {
+                let paint=project.artwork.paint.insert(PortableId::random(),PaintSource {color_mode:Default::default(),domain:[4216,3016],base:None,raster:Default::default(),operations:Default::default()}).unwrap();
+                let mut occurrence=Occurrence::new(OccurrenceContent::Paint(paint),format!("Cold raster {layer}"));
+                occurrence.opacity=0.12;
+                let occurrence=project.artwork.occurrences.insert(PortableId::random(),occurrence).unwrap();
+                let stack=project.composition().result;
+                project.artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
+                occurrence
+            };
+            let mut tiles=BTreeMap::new();
+            for y in 0..12u32 {for x in 0..17u32 {
+                let mut bytes=Vec::with_capacity(256*256*8);
+                let mut random=0x1357abcdu32^(layer*7919)^((x+y*17)*101);
+                for py in 0..256u32 {for px in 0..256u32 {
+                    for _ in 0..3 {
+                        random^=random<<13;random^=random>>17;random^=random<<5;
+                        let value=(10000+(px+py*3+x*19+y*37+layer*271)%40000+(random&8191))as u16;
+                        bytes.extend_from_slice(&value.to_le_bytes());
+                    }
+                    bytes.extend_from_slice(&65535u16.to_le_bytes());
+                }}
+                decoded_bytes+=bytes.len();
+                let blob=Arc::new(TileBlob::encode(descriptor,&bytes).unwrap());encoded_bytes+=blob.compressed_len();
+                if layer==0 && x==1 && y==0 {first_tile=Some(blob.clone());}
+                tiles.insert(TileKey {plane:RasterPlane::Color,coordinate:[x,y]},RasterTile::backed_shared(blob));
+            }}
+            let OccurrenceContent::Paint(paint)=project.artwork.occurrences.get(occurrence).unwrap().content else {unreachable!()};
+            project.artwork.paint.get_mut(paint).unwrap().raster=RasterRevision::backed(RasterData {tiles,..Default::default()});
+        }
+        project.working.occurrence=Some(first);
+        let working=project.working.clone();project=layer_core::Document::from_artwork(project.artwork.clone()).unwrap();project.working=working;
+        let mut held=new_drawing(256,256,&localization).unwrap();
+        let held_descriptor=held.composition().color.paint_descriptor();
+        active_paint_mut(&mut held).raster=RasterRevision::backed(RasterData {tiles:[(TileKey {plane:RasterPlane::Color,coordinate:[0,0]},RasterTile::backed(TileBlob::encode(held_descriptor,&[24,160,32,255].repeat(256*256)).unwrap()))].into(),..Default::default()});
+        let working=held.working.clone();held=layer_core::Document::from_artwork(held.artwork.clone()).unwrap();held.working=working;
+        (project,held,decoded_bytes,encoded_bytes,first_tile.unwrap())
+    })).unwrap();
+    assert!(decoded_bytes>512*1024*1024,"first-created raster exceeds the shared sample cache with later distinct rasters");
+    assert!(encoded_bytes>256*1024*1024 && encoded_bytes<512*1024*1024,"encoded fixture exceeds the compressed hot set without exceeding parent asset admission");
+    let app=native_test_app("art.capycanvas.ColdStoreMotion");
+    let w=Workspace::with_project(&app,Some((project,None)));
+    w.window.maximize();w.window.present();new_photo::ready(&w);
+    w.dispatch(UiAction::Invoke {command:CommandId::FitCanvas});
+    w.dispatch(UiAction::SelectBrush {id:layer_core::DefaultBrushPreset::GPen as u32});
+    w.dispatch(UiAction::SetBrushSize {value:384.});
+    w.dispatch(UiAction::SetColor {rgba:[1.,0.,1.,1.]});
+    new_photo::ready(&w);
+    until(||!ui_session(&w).wants_continuous_frames(),"warm raster presentation settled");
+    let baseline=glib::MainContext::default().block_on(read_canvas_pixels(&w,8300)).unwrap().bytes;
+    let [x,y]=super::canvas_bar_tests::canvas_point(&w,[384.,128.]);
+    let point=w.window.compute_point(&w.surface,&gtk::graphene::Point::new(x,y)).unwrap();
+    let first=w.documents.selected();let recovery=w.recovery();
+    let mut input=RemoteInput::new().settle_ms(0).timeout_secs(60);input.ready();
+    w.documents.ram_budget.set(0);
+    glib::MainContext::default().block_on(w.documents.open(&w,(held,None))).unwrap();new_photo::ready(&w);
+    w.dispatch(UiAction::Invoke {command:CommandId::FitCanvas});new_photo::ready(&w);
+    let [hx,hy]=super::canvas_bar_tests::canvas_point(&w,[128.,128.]);
+    let held_point=w.window.compute_point(&w.surface,&gtk::graphene::Point::new(hx,hy)).unwrap();
+    let other=w.documents.selected();
+    for (phase,nonce) in [("pan",8310),("stroke",8320)] {
+        until(||w.documents.parked_memory()==(0,true),"cold drawing pressure writes and renderer retirement completed");
+        glib::MainContext::default().block_on(recovery.flush()).unwrap();
+        assert_eq!(first_tile.resident_bytes(),0,"selected old raster range is store-backed, not a resident compressed copy");
+        let store=recovery.published_path();
+        let advised=glib::MainContext::default().block_on(gtk::gio::spawn_blocking(move || {
+            fn collect(path:&std::path::Path,files:&mut Vec<std::path::PathBuf>) {
+                if path.is_file() {files.push(path.to_owned());}
+                else if path.is_dir() {for entry in std::fs::read_dir(path).unwrap() {collect(&entry.unwrap().path(),files);}}
+            }
+            let mut files=Vec::new();collect(&store,&mut files);
+            let prefix=format!("tiles-{}-",std::process::id());
+            for entry in std::fs::read_dir("/proc/self/fd").unwrap().filter_map(Result::ok) {
+                if std::fs::read_link(entry.path()).ok().and_then(|p|p.file_name().map(|n|n.to_string_lossy().into_owned())).is_some_and(|name|name.starts_with(&prefix)) {files.push(entry.path());}
+            }
+            let mut advised=Vec::new();
+            for path in files {
+                let file=std::fs::File::open(&path).unwrap();let bytes=file.metadata().unwrap().len();
+                if bytes==0 {continue;}
+                assert_eq!(unsafe {libc::posix_fadvise(file.as_raw_fd(),0,0,libc::POSIX_FADV_DONTNEED)},0);
+                advised.push((path.to_string_lossy().into_owned(),bytes));
+            }
+            advised
+        })).unwrap();
+        assert!(!advised.is_empty(),"cold fixture advises only its durable store or own spill descriptors");
+        let stats=std::cell::RefCell::new(None);
+        let mut started=0u64;let mut contact=0u64;let mut contact_end=0u64;let mut before=0u64;
+        let frames=super::ui_motion::record_pixels(&w,&mut input,&format!("cold-store-{phase}"),[[point.x(),point.y()],[held_point.x(),held_point.y()]],|| {
+            started=glib::monotonic_time()as u64*1000;
+            glib::MainContext::default().block_on(w.documents.activate(&w,first)).unwrap();
+            let incoming=ui_session(&w).engine().backend().stats.clone();*incoming.lock().unwrap()=Default::default();stats.replace(Some(incoming));
+            before=ui_session(&w).engine().metrics().committed_strokes;
+            contact=glib::monotonic_time()as u64*1000;
+            if phase=="stroke" {
+                until(||{let gpu=w.gpu.borrow();let session=&gpu.as_ref().unwrap().session;session.engine().backend().paint_ready(session.engine().document(),session.engine().brush(),session.engine().transform_preview().is_some())},"cold contact brush shaders ready without exact drawing drain");
+                let camera=state(&w).camera;contact=glib::monotonic_time()as u64*1000;
+                for (index,x) in [256.,384.,512.,640.].into_iter().enumerate() {
+                    let event=PenEvent {device_id:903,timestamp_ns:contact+index as u64*20_000_000,pressure:0.7,..pen_event(&camera,[x,128.],if index==0 {PenPhase::Down}else if index==3 {PenPhase::Up}else {PenPhase::Move},contact+index as u64)};
+                    w.input.send(&w,event);pump(20);
+                }
+            }else {
+                for index in 0..48 {w.dispatch(UiAction::SetZoom {zoom:0.65+index as f32*0.002});pump(8);}
+            }
+            contact_end=glib::monotonic_time()as u64*1000;
+            new_photo::ready(&w);
+            until(||!ui_session(&w).wants_continuous_frames(),"cold motion presentation settled");
+        });
+        let stats=stats.into_inner().unwrap();let rows=stats.lock().unwrap();
+        let publication=rows.raster_commits.first().and_then(|[id,_]|rows.presented.iter().find(|p|p[0]==*id&&p[3]==1).map(|p|p[1]));
+        let committed=ui_session(&w).engine().metrics().committed_strokes;
+        std::fs::write(output.join(format!("cold-store-{phase}.json")),serde_json::to_vec_pretty(&json!({"phase":phase,"decoded_document_bytes":decoded_bytes,"encoded_document_bytes":encoded_bytes,"decoded_cache_ceiling":512*1024*1024,"target":"first-created raster, first row","advised_owned_files":advised,"restore_start_ns":started,"contact_start_ns":contact,"contact_end_ns":contact_end,"old_fallback_pixel":frames[0][1],"first_changed_fallback_sample":frames.iter().position(|p|p[1].iter().zip(frames[0][1]).any(|(a,b)|a.abs_diff(b)>8)),"first_raster_present_ns":publication,"first_pink_sample":frames.iter().position(|p|p[0][0]>p[0][1].saturating_add(50)&&p[0][2]>p[0][1].saturating_add(50)),"committed_strokes_before":before,"committed_strokes_after":committed,"presented":rows.presented,"worker_thread_cpu":rows.thread_cpu,"camera_work":rows.camera_work,"raster_commits":rows.raster_commits,"read_wait":"unavailable in existing telemetry","memory_budget_snapshot":format!("{:?}",layer_core::MemoryBudget::process().snapshot())})).unwrap()).unwrap();drop(rows);
+        w.dispatch(UiAction::Invoke {command:CommandId::FitCanvas});new_photo::ready(&w);
+        let pixels=glib::MainContext::default().block_on(read_canvas_pixels(&w,nonce)).unwrap().bytes;
+        std::fs::write(output.join(format!("cold-store-{phase}-pixels.bin")),&pixels).unwrap();
+        if phase=="pan" {assert_eq!(pixels,baseline,"cold pan restores the same authored pixels");}
+        else {
+            assert_eq!(committed,before+1,"one ordered cold stroke committed");assert_ne!(pixels,baseline,"cold stroke is visible");
+            new_photo::invoke(&w,CommandId::Undo);new_photo::ready(&w);
+            assert_eq!(glib::MainContext::default().block_on(read_canvas_pixels(&w,nonce+1)).unwrap().bytes,baseline,"cold stroke undo is lossless");
+            new_photo::invoke(&w,CommandId::Redo);new_photo::ready(&w);
+            assert_eq!(glib::MainContext::default().block_on(read_canvas_pixels(&w,nonce+2)).unwrap().bytes,pixels,"cold stroke redo preserves final pixels");
+        }
+        switch(&w,other);
+    }
+    input.finish();w.window.destroy();pump(100);
 }

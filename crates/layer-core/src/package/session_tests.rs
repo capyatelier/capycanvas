@@ -114,7 +114,7 @@ fn assert_raster(a:&RasterRevision,b:&RasterRevision) {
     assert_eq!(a.watercolor,b.watercolor);assert_eq!(a.tiles.len(),b.tiles.len());
     for (key,tile) in &a.tiles {
         let a=tile.wait_backing().unwrap();let b=b.tiles[key].wait_backing().unwrap();
-        assert_eq!(a.descriptor,b.descriptor);assert_eq!(a.resource_id(),b.resource_id());assert_eq!(a.decode().unwrap(),b.decode().unwrap());
+        assert_eq!(a.descriptor,b.descriptor);assert_eq!(a.resource_id(),b.resource_id());assert_eq!(a.decode_on_worker().unwrap(),b.decode_on_worker().unwrap());
     }
 }
 fn assert_shader(a:&crate::EffectShader,b:&crate::EffectShader) {
@@ -135,7 +135,7 @@ fn assert_editor(expected:&Editor,actual:&Editor) {
         let other=actual.document().artwork.paint.get(handle).unwrap();assert_eq!(actual.document().artwork.paint.id(handle),Some(id));
         assert_raster(&source.raster,&other.raster);
         if let Some(original)=&source.base {let original=&original.image;let restored=&other.base.as_ref().unwrap().image;
-            for (coordinate,tile) in &original.tiles {let other=&restored.tiles[coordinate];assert_eq!(tile.resource_id(),other.resource_id());assert_eq!(tile.decode().unwrap(),other.decode().unwrap());}}
+            for (coordinate,tile) in &original.tiles {let other=&restored.tiles[coordinate];assert_eq!(tile.resource_id(),other.resource_id());assert_eq!(tile.decode_on_worker().unwrap(),other.decode_on_worker().unwrap());}}
         b.paint.get_mut(handle).unwrap().raster=source.raster.clone();
     }
     for (handle,_,source) in expected.document().artwork.coverage.iter() {

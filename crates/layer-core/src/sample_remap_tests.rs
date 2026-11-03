@@ -60,7 +60,7 @@ fn a_crop_shares_whole_tiles_and_rebuilds_edges_without_excluded_samples() {
     let result = remap_image(&source, [400, 300], GridMap::translation([256, 256]), 1 << 28, &never()).unwrap();
     assert!(Arc::ptr_eq(&result.tiles[&[0, 0]], &source.tiles[&[1, 1]]), "an interior tile is shared");
     assert!(!Arc::ptr_eq(&result.tiles[&[1, 0]], &source.tiles[&[2, 1]]), "a narrower edge tile is rebuilt");
-    let edge = result.tiles[&[1, 0]].decode().unwrap();
+    let edge = result.tiles[&[1, 0]].decode_on_worker().unwrap();
     let column = 400 - 256;
     assert!(edge[column * 8..256 * 8].iter().all(|v| *v == 0), "excluded samples are removed from the edge tile");
     assert_eq!(sample(&result, [399, 299]), [655, 555, (655 * 7 + 555) as u16, 65535]);
@@ -91,7 +91,7 @@ fn raster(tiles: &[([u32; 2], u8)]) -> RasterData {
 
 fn pixel(data: &RasterData, plane: RasterPlane, [x, y]: [u32; 2]) -> Option<[u8; 4]> {
     let tile = data.tiles.get(&TileKey { plane, coordinate: [x / TILE_SIZE, y / TILE_SIZE] })?;
-    let bytes = tile.wait_backing().unwrap().decode().unwrap();
+    let bytes = tile.wait_backing().unwrap().decode_on_worker().unwrap();
     let at = ((y % TILE_SIZE) * TILE_SIZE + x % TILE_SIZE) as usize * 4;
     Some(std::array::from_fn(|i| bytes[at + i]))
 }

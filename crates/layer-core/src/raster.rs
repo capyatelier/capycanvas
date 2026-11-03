@@ -237,9 +237,8 @@ impl TileBlob {
         hash.finalize().into()
     }
     pub fn compressed_len(&self) -> usize { self.compressed.len() }
-    pub fn compressed(&self) -> Result<Arc<[u8]>, String> { self.compressed.read() }
-    /// Poll asynchronous backing without synchronously reading native files.
-    pub fn compressed_ready(&self) -> Result<bool, String> { self.compressed.ready() }
+    pub fn compressed_on_worker(&self)->Result<crate::package::ByteRange,String> {self.compressed.read_on_worker()}
+    pub fn poll_compressed(&self)->Result<crate::package::RangeState,String> {self.compressed.poll()}
     pub fn resident_bytes(&self) -> usize { self.compressed.resident_bytes() }
     fn decode_samples(descriptor: PixelDescriptor, compressed: &[u8]) -> Result<Vec<u8>, String> {
         let size = descriptor.byte_len([TILE_SIZE; 2]).ok_or("Unsupported raster pixels")?;
@@ -248,8 +247,12 @@ impl TileBlob {
         descriptor.validate_samples(&bytes)?;
         Ok(bytes)
     }
-    pub fn decode(&self) -> Result<Vec<u8>, String> {
-        let bytes = Self::decode_samples(self.descriptor, &self.compressed()?)?;
+    pub fn decode_on_worker(&self)->Result<Vec<u8>,String> {
+        let compressed=self.compressed_on_worker()?;
+        self.decode_bytes_on_worker(&compressed)
+    }
+    pub(crate) fn decode_bytes_on_worker(&self,compressed:&[u8])->Result<Vec<u8>,String> {
+        let bytes=Self::decode_samples(self.descriptor,compressed)?;
         if let Some(expected) = self.expected_digest {
             let actual = Self::descriptor_digest(self.descriptor, &bytes);
             if actual != expected { return Err("Raster tile integrity check failed".into()); }
@@ -260,7 +263,7 @@ impl TileBlob {
     /// Decodes and hashes exact samples on a worker; ordinary identity needs neither.
     pub fn content_digest(&self) -> Result<[u8; 32], String> {
         if let Some(digest) = self.digest.get() { return Ok(*digest); }
-        let bytes = self.decode()?;
+        let bytes = self.decode_on_worker()?;
         if let Some(digest) = self.digest.get() { return Ok(*digest); }
         let digest = Self::descriptor_digest(self.descriptor, &bytes);
         let _ = self.digest.set(digest);
@@ -302,7 +305,7 @@ impl TileBlob {
             expected_digest: Some(digest),
             compressed: Arc::new(bytes.into()),
         };
-        result.decode()?;
+        result.decode_on_worker()?;
         Ok(result)
     }
 
@@ -589,14 +592,14 @@ mod tests {
         let alias = original.alias(crate::authored::PortableId::random());
         assert_eq!(alias.owner_identity(), original.owner_identity());
         assert_eq!(alias.encoded_fingerprint(), original.encoded_fingerprint());
-        assert_eq!(original.decode().unwrap(), samples);
+        assert_eq!(original.decode_on_worker().unwrap(), samples);
         assert!(original.digest.get().is_none(), "ordinary decode does not compute a content hash");
-        let encoded = original.compressed().unwrap();
+        let encoded = original.compressed_on_worker().map(|range| range.into_arc()).unwrap();
         let restored = super::TileBlob::from_compressed_with_id(original.resource_id(), descriptor, original.content_digest().unwrap(), encoded.clone()).unwrap();
         assert_eq!(restored.resource_id(), original.resource_id());
         assert!(restored.encoded_fingerprint().is_none());
-        assert!(std::sync::Arc::ptr_eq(&restored.compressed().unwrap(), &encoded));
-        assert_eq!(restored.decode().unwrap(), samples);
+        assert!(std::sync::Arc::ptr_eq(&restored.compressed_on_worker().map(|range| range.into_arc()).unwrap(), &encoded));
+        assert_eq!(restored.decode_on_worker().unwrap(), samples);
         let package = super::TileBlob::from_package(original.resource_id(), descriptor, encoded.clone()).unwrap();
         assert!(package.digest.get().is_none(), "package validation does not compute a content hash");
         assert_eq!(package.encoded_fingerprint(),original.encoded_fingerprint());
@@ -607,9 +610,9 @@ mod tests {
         assert_ne!(restored.owner_identity(), original.owner_identity());
         assert_eq!(package.content_digest().unwrap(), original.content_digest().unwrap());
         assert!(package.digest.get().is_some());
-        assert_eq!(package.decode().unwrap(), samples);
+        assert_eq!(package.decode_on_worker().unwrap(), samples);
         assert_eq!(package.resource_id(), original.resource_id());
-        assert!(std::sync::Arc::ptr_eq(&package.compressed().unwrap(), &encoded));
+        assert!(std::sync::Arc::ptr_eq(&package.compressed_on_worker().map(|range| range.into_arc()).unwrap(), &encoded));
         let independent = super::TileBlob::encode(descriptor, &samples).unwrap();
         assert_ne!(independent.resource_id(), original.resource_id());
         assert_ne!(independent.owner_identity(), original.owner_identity());
@@ -633,7 +636,7 @@ mod tests {
         ] {
             let first = TileBlob::encode(first, &vec![0; first.byte_len([TILE_SIZE; 2]).unwrap()]).unwrap();
             let second = TileBlob::encode(second, &vec![0; second.byte_len([TILE_SIZE; 2]).unwrap()]).unwrap();
-            assert_eq!(first.compressed().unwrap(), second.compressed().unwrap());
+            assert_eq!(first.compressed_on_worker().map(|range| range.into_arc()).unwrap(), second.compressed_on_worker().map(|range| range.into_arc()).unwrap());
             assert_ne!(first.encoded_fingerprint(), second.encoded_fingerprint());
             assert!(first.digest.get().is_none());
             assert!(second.digest.get().is_none());
@@ -658,10 +661,10 @@ mod tests {
                 else { (if sample == SampleType::Float { code % 0x3c00 } else { code }).to_le_bytes().to_vec() }
             }).collect();
             let blob = TileBlob::encode(descriptor, &bytes).unwrap();
-            assert_eq!(blob.decode().unwrap(), bytes, "{descriptor:?}");
+            assert_eq!(blob.decode_on_worker().unwrap(), bytes, "{descriptor:?}");
             let mut digest = blob.content_digest().unwrap();
             digest[7] ^= 1;
-            assert!(TileBlob::from_compressed(descriptor, digest, blob.compressed().unwrap()).is_err());
+            assert!(TileBlob::from_compressed(descriptor, digest, blob.compressed_on_worker().map(|range| range.into_arc()).unwrap()).is_err());
         }
     }
     #[test]
@@ -864,7 +867,7 @@ mod tests {
         assert!(next.tiles[&key].same_capture(&revision.wait_data().unwrap().tiles[&key]));
         assert!(!next.host_backed());
         assert!(revision.host_backed());
-        assert_eq!(tile.wait_backing().unwrap().decode().unwrap(), bytes);
+        assert_eq!(tile.wait_backing().unwrap().decode_on_worker().unwrap(), bytes);
         assert_eq!(revision.wait_data().unwrap().tiles.len(), 1);
     }
     #[test]
@@ -888,8 +891,8 @@ mod tests {
     #[test]
     fn independently_compressed_tiles_reject_corruption_and_expansion() {
         let blob = TileBlob::encode(PixelDescriptor::COVERAGE8, &vec![17; 65536]).unwrap();
-        assert_eq!(blob.decode().unwrap(), vec![17; 65536]);
-        let mut compressed = blob.compressed().unwrap().to_vec();
+        assert_eq!(blob.decode_on_worker().unwrap(), vec![17; 65536]);
+        let mut compressed = blob.compressed_on_worker().map(|range| range.into_arc()).unwrap().to_vec();
         compressed[4] ^= 1;
         assert!(
             TileBlob::from_compressed(blob.descriptor, blob.content_digest().unwrap(), compressed.into()).is_err()
@@ -898,11 +901,11 @@ mod tests {
             TileBlob::from_compressed(
                 crate::color::SRGB8_PAINT,
                 blob.content_digest().unwrap(),
-                blob.compressed().unwrap()
+                blob.compressed_on_worker().map(|range| range.into_arc()).unwrap()
             )
             .is_err()
         );
-        let mut tail = blob.compressed().unwrap().to_vec();
+        let mut tail = blob.compressed_on_worker().map(|range| range.into_arc()).unwrap().to_vec();
         tail.push(0);
         assert!(TileBlob::from_compressed(blob.descriptor, blob.content_digest().unwrap(), tail.into()).is_err());
     }

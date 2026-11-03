@@ -14,7 +14,7 @@ fn read(bytes: &[u8]) -> DecodeResult<Directory> { Directory::read(&mut Cursor::
 #[test]
 fn nonseekable_output_has_complete_local_headers_and_preserves_compressed_bytes() {
     let blob = crate::raster::TileBlob::encode(crate::color::DocumentColor::default().paint_descriptor(), &vec![93; 256*256*4]).unwrap();
-    let compressed = blob.compressed().unwrap();
+    let compressed = blob.compressed_on_worker().map(|range| range.into_arc()).unwrap();
     let bytes = package(&[("data/tiles-1.bin", &compressed)]);
     let dir = read(&bytes).unwrap();
     assert_eq!(dir.members.len(), 3);

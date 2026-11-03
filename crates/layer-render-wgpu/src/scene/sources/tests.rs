@@ -19,13 +19,13 @@ fn raster_cache_keys_share_generated_contents_and_keep_loaded_owner_identity() {
     assert!(key.matches(&Key::raster(&replacement, RgbSpace::Srgb, RgbSpace::Srgb)));
     let reinterpreted = TileBlob::encode(PixelDescriptor {
         alpha: AlphaAssociation::PremultipliedLinear, ..blob.descriptor
-    }, &blob.decode().unwrap()).unwrap();
-    assert_eq!(reinterpreted.compressed().unwrap(), blob.compressed().unwrap());
+    }, &blob.decode_on_worker().unwrap()).unwrap();
+    assert_eq!(&*reinterpreted.compressed_on_worker().unwrap(), &*blob.compressed_on_worker().unwrap());
     assert!(!key.matches(&Key::raster(&reinterpreted, RgbSpace::Srgb, RgbSpace::Srgb)));
     assert!(!key.matches(&Key::raster(&blob, RgbSpace::DisplayP3, RgbSpace::Srgb)));
     assert!(!key.matches(&Key::raster(&blob, RgbSpace::Srgb, RgbSpace::DisplayP3)));
     let loaded = |id| Arc::new(TileBlob::from_verified_resource(
-        id, blob.descriptor, blob.compressed().unwrap(),
+        id, blob.descriptor, Arc::from(&*blob.compressed_on_worker().unwrap()),
     ).unwrap());
     let first = loaded(blob.resource_id());
     let second = loaded(blob.resource_id());

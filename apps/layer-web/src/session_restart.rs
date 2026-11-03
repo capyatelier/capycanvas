@@ -12,7 +12,7 @@ async fn wait_capture(capture:&EditorCapture)->Result<(),JsValue> {
     loop {
         if let Some(blobs)=capture.retained_tiles().try_blobs().map_err(js)? {
             let mut ready=true;
-            for blob in blobs {ready &=blob.compressed_ready().map_err(js)?;}
+            for blob in blobs {ready &=matches!(blob.poll_compressed().map_err(js)?, layer_core::package::RangeState::Ready(_));}
             if ready {return Ok(());}
         }
         if js_sys::Date::now()-start>30_000. {return Err(js("Drawing checkpoint backing timed out"));}

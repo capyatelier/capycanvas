@@ -88,7 +88,7 @@ fn mixed_native_capture_is_exact_across_chunks_and_later_writes() {
             &mask
         };
         assert!(
-            blob.decode().unwrap() == *expected,
+            blob.decode_on_worker().unwrap() == *expected,
             "capture changed native samples"
         );
     }

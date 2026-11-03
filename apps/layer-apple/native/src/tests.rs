@@ -221,7 +221,7 @@ fn raster_samples(revision: &layer_core::raster::RasterRevision) -> RasterSample
         .iter()
         .map(|(key, tile)| {
             let blob = tile.wait_backing().unwrap();
-            (*key, (blob.descriptor, blob.decode().unwrap()))
+            (*key, (blob.descriptor, blob.decode_on_worker().unwrap()))
         })
         .collect();
     (tiles, data.watercolor)
@@ -260,7 +260,7 @@ fn active_raster(document: &layer_core::Document) -> &layer_core::raster::Raster
     document.target_raster(document.working.target.unwrap()).unwrap()
 }
 fn source_samples(source: &layer_core::color::source::SourceImage) -> Vec<Vec<u8>> {
-    source.tiles.values().map(|tile| tile.decode().unwrap()).collect()
+    source.tiles.values().map(|tile| tile.decode_on_worker().unwrap()).collect()
 }
 fn assert_source_samples(actual: &layer_core::color::source::SourceImage, expected: &layer_core::color::source::SourceImage) {
     assert_eq!((actual.extent, actual.resolution, actual.interpretation.channels, actual.interpretation.depth, actual.interpretation.profile_assumed),

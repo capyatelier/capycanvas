@@ -229,7 +229,7 @@ impl WorkingDecoder {
         if tile.descriptor != self.source.descriptor() {
             return Err("Source tile has the wrong sample representation".into());
         }
-        self.decode_pixels(&cache.decode(tile)?, output)?;
+        self.decode_pixels(&cache.decode_on_worker(tile)?, output)?;
         let origin =
             coordinate.map(|v| v.checked_mul(TILE_SIZE).ok_or("Invalid source coordinate"));
         let [x, y] = [origin[0]?, origin[1]?];

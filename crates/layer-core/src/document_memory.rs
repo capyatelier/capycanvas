@@ -123,7 +123,7 @@ impl Owner {
         for (bytes,authored) in resident.values() {let index=if *authored {0}else{1};parts[index]=parts[index].saturating_add(*bytes as u64);}
         (parts,captures)
     }
-    fn refresh(&self) {
+    pub(crate) fn refresh(&self) {
         let (parts,_captures)=self.parts(false);
         for (field,value) in [&self.resident,&self.history_resident,&self.metadata,&self.history_metadata].into_iter().zip(parts) {field.store(value,Ordering::Relaxed);}
         let [authored,history]=self.reports();self.memory.publish(authored);self.history.publish(history);

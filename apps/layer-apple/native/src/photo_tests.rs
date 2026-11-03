@@ -198,7 +198,7 @@ fn large_jpeg_gpen_preserves_photo_through_save_and_gpu_recovery() {
             assert_eq!(key.plane, RasterPlane::Color);
             assert_eq!(descriptor.bits_per_channel, 8);
             let coordinate = key.coordinate;
-            let source = decoded.tiles[&coordinate].decode().unwrap();
+            let source = decoded.tiles[&coordinate].decode_on_worker().unwrap();
             let mut untouched = 0;
             for (paint, source) in pixels.as_chunks::<4>().0.iter().zip(source.as_chunks::<3>().0.iter()) {
                 assert_eq!(paint[3], 255, "Painting must retain photo opacity in every touched tile");

@@ -184,13 +184,13 @@ fn saved_reduced_color_layers_keep_modes_channel_counts_and_samples() {
         let data = source.raster.wait_data().unwrap();
         let tile = data.tiles.iter().find(|(k, _)| k.plane == RasterPlane::Color).unwrap().1;
         assert_eq!(tile.descriptor().channels, 2);
-        assert_eq!(&tile.wait_backing().unwrap().decode().unwrap()[..4], if source.color_mode == crate::color::LayerColorMode::Grayscale { &[0, 64, 0, 128] } else { &[255; 4] });
+        assert_eq!(&tile.wait_backing().unwrap().decode_on_worker().unwrap()[..4], if source.color_mode == crate::color::LayerColorMode::Grayscale { &[0, 64, 0, 128] } else { &[255; 4] });
     }
     let loaded = editable(serialize(&prepare(&artwork, false)));
     assert_eq!(loaded.paint.iter().map(|(_, _, p)| p.color_mode).collect::<Vec<_>>(), modes);
     for ((_, _, a), (_, _, b)) in artwork.paint.iter().zip(loaded.paint.iter()) {
         assert_eq!(a.raster.wait_data().unwrap().tiles.keys().collect::<Vec<_>>(), b.raster.wait_data().unwrap().tiles.keys().collect::<Vec<_>>());
-        for (key, tile) in &a.raster.wait_data().unwrap().tiles { assert_eq!(tile.wait_backing().unwrap().decode().unwrap(), b.raster.wait_data().unwrap().tiles[key].wait_backing().unwrap().decode().unwrap()); }
+        for (key, tile) in &a.raster.wait_data().unwrap().tiles { assert_eq!(tile.wait_backing().unwrap().decode_on_worker().unwrap(), b.raster.wait_data().unwrap().tiles[key].wait_backing().unwrap().decode_on_worker().unwrap()); }
     }
 }
 

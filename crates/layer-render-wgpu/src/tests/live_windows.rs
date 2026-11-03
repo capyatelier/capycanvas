@@ -335,7 +335,7 @@ fn bakes_run_their_filters_in_bounded_windows_with_the_same_pixels() {
                     .iter()
                     .flat_map(|id| {
                         let data = engine.document().scene().raster(*id).unwrap().wait_data().unwrap();
-                        data.tiles.values().map(|t| t.wait_backing().unwrap().decode().unwrap()).collect::<Vec<_>>()
+                        data.tiles.values().map(|t| t.wait_backing().unwrap().decode_on_worker().unwrap()).collect::<Vec<_>>()
                     })
                     .collect();
                 (pixels, after.image_window_submissions - before.image_window_submissions, after.image_window_peak_bytes)
@@ -404,7 +404,7 @@ fn frequency_separation_at_sigma_85_bakes_discrete_gaussian_and_survives_history
     }).unwrap();
     engine.insert_with_operations(plan.edits,plan.operations,None).unwrap();finish(&mut engine);
     let low=engine.document().artwork.paint.get(low_target).unwrap().raster.wait_data().unwrap();
-    let tile=low.tiles.values().next().unwrap().wait_backing().unwrap().decode().unwrap();
+    let tile=low.tiles.values().next().unwrap().wait_backing().unwrap().decode_on_worker().unwrap();
     let weights=(-255..=255).map(|k|(-0.5*(f64::from(k)/85.).powi(2)).exp()).collect::<Vec<_>>();
     let sum=weights.iter().sum::<f64>();
     for x in [0,1,31,32,63,64] {

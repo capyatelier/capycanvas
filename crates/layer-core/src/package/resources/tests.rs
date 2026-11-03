@@ -142,8 +142,8 @@ fn equal_tile_payloads_keep_ids_but_read_validate_and_charge_one_physical_range(
     assert_ne!(first.resource_id(),second.resource_id());assert!(!Arc::ptr_eq(&first,&second));
     assert_eq!(first.owner_identity(),second.owner_identity());
     assert!(Arc::ptr_eq(&first.compressed,&second.compressed));
-    assert!(Arc::ptr_eq(&first.compressed().unwrap(),&second.compressed().unwrap()));
-    assert_eq!(first.decode().unwrap(),vec![42;decoded as usize]);
+    assert!(Arc::ptr_eq(&first.compressed_on_worker().map(|range| range.into_arc()).unwrap(),&second.compressed_on_worker().map(|range| range.into_arc()).unwrap()));
+    assert_eq!(first.decode_on_worker().unwrap(),vec![42;decoded as usize]);
     let mut independently_opened=ResourceReader::new(&manifest,&backing,&cancelled,limits);
     let independent=independently_opened.tile(&references[0]).unwrap();
     assert_eq!(first.resource_id(),independent.resource_id());
@@ -153,15 +153,8 @@ fn equal_tile_payloads_keep_ids_but_read_validate_and_charge_one_physical_range(
     assert_eq!(again.entries.iter().map(|entry|&entry.record).collect::<Vec<_>>(),prepared.entries.iter().map(|entry|&entry.record).collect::<Vec<_>>());
 }
 #[test]
-fn aliased_tiles_share_spill_state_and_release_the_last_owner() {
-    use crate::raster_storage::{RetainedTiles,TileChunk,prepare_external_spill};
-    struct Chunk {bytes:Arc<[u8]>,ready:AtomicBool}
-    impl TileChunk for Chunk {
-        fn len(&self)->usize {self.bytes.len()}
-        fn poll(&self)->Result<Option<Arc<[u8]>>,String> {Ok(self.ready.load(Ordering::Relaxed).then(||self.bytes.clone()))}
-        fn resident_bytes(&self)->usize {if self.ready.load(Ordering::Relaxed){self.bytes.len()}else{0}}
-        fn evict(&self) {self.ready.store(false,Ordering::Relaxed);}
-    }
+fn aliased_tiles_share_store_location_and_release_the_last_owner() {
+    use crate::raster_storage::{RetainedTiles, tests::Store};
     let cancelled=AtomicBool::new(false);let (inventory,references)=tile_inventory();
     let prepared=inventory.prepare(&cancelled).unwrap();
     let mut packed=Vec::new();prepared.reader(&cancelled).read_to_end(&mut packed).unwrap();
@@ -170,24 +163,20 @@ fn aliased_tiles_share_spill_state_and_release_the_last_owner() {
     let first=reader.tile(&references[0]).unwrap();let second=reader.tile(&references[1]).unwrap();drop(reader);
     let retained=RetainedTiles {sources:vec![first.clone(),second.clone()],..Default::default()};
     assert_eq!(retained.resident_bytes(),first.compressed_len());
-    let spill=prepare_external_spill(&retained).unwrap().unwrap();
-    assert_eq!(spill.bytes.len(),first.compressed_len(),"one shared owner writes one spill payload");
-    let chunk=Arc::new(Chunk {bytes:spill.bytes.clone().into(),ready:AtomicBool::new(false)});
-    let weak_chunk=Arc::downgrade(&chunk);let weak_storage=Arc::downgrade(&first.compressed);
-    spill.commit(chunk.clone()).unwrap();
+    let mut store=Store::new(&retained);
+    let weak_storage=Arc::downgrade(&first.compressed);
+    let weak_location=Store::location(&first);
+    assert!(weak_location.ptr_eq(&Store::location(&second)));
     assert_eq!(retained.resident_bytes(),0);
-    assert!(!first.compressed_ready().unwrap());assert!(!second.compressed_ready().unwrap());
-    assert!(second.compressed().is_err());
-    chunk.ready.store(true,Ordering::Relaxed);
-    assert_eq!(first.decode().unwrap(),second.decode().unwrap());
-    assert_eq!(retained.resident_bytes(),first.compressed_len());
-    assert!(prepare_external_spill(&retained).unwrap().is_none());
-    assert!(!first.compressed_ready().unwrap());assert!(!second.compressed_ready().unwrap());
-    chunk.ready.store(true,Ordering::Relaxed);
-    drop(retained);drop(chunk);drop(first);
-    assert!(weak_storage.upgrade().is_some());assert!(weak_chunk.upgrade().is_some());
-    assert_eq!(second.decode().unwrap(),vec![42;second.descriptor.byte_len([TILE_SIZE;2]).unwrap()]);
-    drop(second);assert!(weak_storage.upgrade().is_none());assert!(weak_chunk.upgrade().is_none());
+    assert_eq!(first.decode_on_worker().unwrap(),second.decode_on_worker().unwrap());
+    assert_eq!(retained.resident_bytes(),0);
+    assert_eq!(store.store.make_durable(&retained,&cancelled).unwrap(),0);
+    let input=Store::range(&second);
+    drop(retained);drop(first);
+    assert!(weak_storage.upgrade().is_some());assert!(weak_location.upgrade().is_some());
+    assert_eq!(second.decode_on_worker().unwrap(),vec![42;second.descriptor.byte_len([TILE_SIZE;2]).unwrap()]);
+    drop(second);assert!(weak_storage.upgrade().is_none());assert!(weak_location.upgrade().is_none());
+    assert!(!input.is_empty());
 }
 #[test]
 fn nonimage_aliases_share_decoded_storage_and_keep_descriptors_and_titles() {
@@ -288,7 +277,7 @@ fn aliased_archive_sources_remain_independently_editable_and_resave_exactly() {
     assert_eq!(blobs[0].owner_identity(),blobs[1].owner_identity());
     let mut editor=Editor::new(Document::from_artwork(loaded).unwrap());
     editor.perform(Edit::SetRaster {target:SourceTarget::Paint(handles[0]),revision:revision(tile(77))}).unwrap();
-    let samples=|editor:&Editor,handle|editor.document().artwork.paint.get(handle).unwrap().raster.wait_data().unwrap().tiles.values().next().unwrap().wait_backing().unwrap().decode().unwrap();
+    let samples=|editor:&Editor,handle|editor.document().artwork.paint.get(handle).unwrap().raster.wait_data().unwrap().tiles.values().next().unwrap().wait_backing().unwrap().decode_on_worker().unwrap();
     assert!(samples(&editor,handles[0]).iter().all(|sample|*sample==77));
     assert!(samples(&editor,handles[1]).iter().all(|sample|*sample==42));
     editor.undo().unwrap();assert_eq!(archive(&editor.document().artwork),bytes);
@@ -322,27 +311,16 @@ fn unique_crc_buckets_skip_sha_and_collisions_keep_distinct_exact_payloads() {
 }
 #[test]
 fn cached_alias_preparation_does_not_read_cold_tiles_but_writing_still_checks_backing() {
-    use crate::raster_storage::{RetainedTiles,TileChunk,prepare_external_spill};
-    use std::sync::atomic::AtomicUsize;
-    struct Chunk {bytes:Arc<[u8]>,ready:AtomicBool,reads:AtomicUsize}
-    impl TileChunk for Chunk {
-        fn len(&self)->usize {self.bytes.len()}
-        fn poll(&self)->Result<Option<Arc<[u8]>>,String> {
-            self.reads.fetch_add(1,Ordering::Relaxed);Ok(self.ready.load(Ordering::Relaxed).then(||self.bytes.clone()))
-        }
-        fn resident_bytes(&self)->usize {if self.ready.load(Ordering::Relaxed){self.bytes.len()}else{0}}
-        fn evict(&self) {self.ready.store(false,Ordering::Relaxed);}
-    }
+    use crate::raster_storage::{RetainedTiles, tests::Store};
     let cancelled=AtomicBool::new(false);let first=tile(42);let second=Arc::new(first.alias(PortableId::random()));
     let mut inventory=ResourceInventory::default();inventory.tile(first.clone()).unwrap();inventory.tile(second.clone()).unwrap();
     let prepared=inventory.prepare(&cancelled).unwrap();let expected_crc=prepared.crc;
-    let retained=RetainedTiles {sources:vec![first,second],..Default::default()};let spill=prepare_external_spill(&retained).unwrap().unwrap();
-    let chunk=Arc::new(Chunk {bytes:spill.bytes.clone().into(),ready:AtomicBool::new(false),reads:AtomicUsize::new(0)});spill.commit(chunk.clone()).unwrap();
-    let again=inventory.prepare(&cancelled).unwrap();assert_eq!(again.length,prepared.length);assert_eq!(again.crc,expected_crc);
-    assert_eq!(chunk.reads.load(Ordering::Relaxed),0,"cached CRC and SHA plus shared owner equality need no backing read");
-    assert!(again.reader(&cancelled).read(&mut [0;1]).is_err());assert_eq!(chunk.reads.load(Ordering::Relaxed),1);
-    chunk.ready.store(true,Ordering::Relaxed);let mut packed=Vec::new();again.reader(&cancelled).read_to_end(&mut packed).unwrap();
-    assert_eq!(crc32fast::hash(&packed),expected_crc);assert_eq!(packed.as_slice(),&*chunk.bytes);
+    let retained=RetainedTiles {sources:vec![first,second],..Default::default()};
+    let store=Store::new(&retained);
+    std::fs::OpenOptions::new().write(true).open(store.pack()).unwrap().set_len(0).unwrap();
+    let again=inventory.prepare(&cancelled).unwrap();
+    assert_eq!(again.length,prepared.length);assert_eq!(again.crc,expected_crc);
+    assert!(again.reader(&cancelled).read(&mut [0;1]).is_err());
 }
 
 #[test]
@@ -409,6 +387,6 @@ fn shader_reconciliation_preserves_stored_encoding_and_rejects_conflicting_descr
     let unrelated=Resource::<[u8]>::with_id(first.id(),first.storage().clone());
     let mut inventory=ResourceInventory::default();inventory.bytes("capy.icc/1",&first,json!({})).unwrap();
     assert!(inventory.bytes("capy.icc/1",&unrelated,json!({})).unwrap_err().contains("owner differs"));
-    let first=tile(42);let unrelated=Arc::new(TileBlob::from_package(first.resource_id(),first.descriptor,first.compressed().unwrap()).unwrap());
+    let first=tile(42);let unrelated=Arc::new(TileBlob::from_package(first.resource_id(),first.descriptor,first.compressed_on_worker().map(|range| range.into_arc()).unwrap()).unwrap());
     inventory.tile(first).unwrap();assert!(inventory.tile(unrelated).unwrap_err().contains("owner differs"));
 }

@@ -154,7 +154,7 @@ fn deflate_resources_decode_exact_samples_and_save_back_as_lz4() {
     let check=|artwork:&Artwork| {
         let paint=artwork.paint.iter().next().unwrap().2.raster.wait_data().unwrap();
         let samples:Vec<u8>=(0..256u32*256).flat_map(|i| {let (x,y)=(i%256,i/256);[x*257+y,y*131+x*7,(x^y)*251,40000+x*99].into_iter().flat_map(|v|(v as u16).to_le_bytes())}).collect();
-        assert!(paint.tiles.values().next().unwrap().wait_backing().unwrap().decode().unwrap()==samples);
+        assert!(paint.tiles.values().next().unwrap().wait_backing().unwrap().decode_on_worker().unwrap()==samples);
         let image=&artwork.objects.iter().next().unwrap().2.image;
         let mut row=vec![0;image.row_bytes()];
         for y in [0,137,199] {image.rows().read(y,&mut row).unwrap();assert!(row.as_chunks::<3>().0.iter().enumerate().all(|(x,p)|*p==[x as u8,y as u8,(x as u32^y) as u8]));}
@@ -214,8 +214,8 @@ fn full_archives_preserve_authored_graph_exact_samples_material_and_resource_byt
             for (key,tile) in &original.tiles {
                 let (original,loaded)=(tile.wait_backing().unwrap(),loaded.tiles[key].wait_backing().unwrap());
                 assert_eq!(loaded.resource_id(),original.resource_id()); assert_eq!(loaded.descriptor,original.descriptor);
-                assert_eq!(loaded.decode().unwrap(),original.decode().unwrap()); assert_eq!(loaded.compressed().unwrap(),original.compressed().unwrap());
-                if key.plane==RasterPlane::Color {assert_eq!(loaded.decode().unwrap(),paint_samples(depth));}
+                assert_eq!(loaded.decode_on_worker().unwrap(),original.decode_on_worker().unwrap()); assert_eq!(loaded.compressed_on_worker().map(|range| range.into_arc()).unwrap(),original.compressed_on_worker().map(|range| range.into_arc()).unwrap());
+                if key.plane==RasterPlane::Color {assert_eq!(loaded.decode_on_worker().unwrap(),paint_samples(depth));}
             }
         }
         for (_,id,expected) in artwork.selections.iter() {

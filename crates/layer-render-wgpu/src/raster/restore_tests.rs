@@ -205,7 +205,7 @@ fn native_mask_restoration_keeps_existing_scalar_path() {
     assert_eq!(decoded(&r), slots, "restored mask tiles occupied decoded source slots");
     assert_eq!(r.layer_masks.pages.len(), 33);
     for (key, tile) in &first.tiles {
-        let expected = tile.wait_backing().unwrap().decode().unwrap();
+        let expected = tile.wait_backing().unwrap().decode_on_worker().unwrap();
         let actual = crate::layer_tests::page_bytes(&r, &r.layer_masks.pages[&(source, key.coordinate)].texture);
         for (actual, expected) in actual.as_chunks::<4>().0.iter().zip(expected.as_chunks::<2>().0.iter()) {
             assert_eq!(f32::from_le_bytes(*actual),

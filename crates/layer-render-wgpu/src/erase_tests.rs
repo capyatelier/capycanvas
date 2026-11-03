@@ -222,7 +222,7 @@ fn mask_coverage_operations_store_selection_pages_and_keep_the_default_elsewhere
         crate::test_support::materialize_mask(&mut source, selection, Default::default());
         let data = source.raster.wait_data().unwrap();
         assert_eq!(data.tiles.keys().map(|key| key.coordinate).collect::<Vec<_>>(), [[0, 0], [1, 0]], "only pages the selection reaches");
-        let bytes = data.tiles[&TileKey { plane: RasterPlane::Mask, coordinate: [0, 0] }].wait_backing().unwrap().decode().unwrap();
+        let bytes = data.tiles[&TileKey { plane: RasterPlane::Mask, coordinate: [0, 0] }].wait_backing().unwrap().decode_on_worker().unwrap();
         let at = |x: usize, y: usize| bytes[y * PAGE_SIZE as usize + x];
         assert_eq!(at(160, 100), if inverted { 0 } else { 255 });
         assert_eq!(at(20, 190), if inverted { 255 } else { 0 });

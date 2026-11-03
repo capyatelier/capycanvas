@@ -12,7 +12,7 @@ pub(super) fn raster(w: &Workspace) -> RasterRevision {
 }
 pub(super) fn pixels(root: &RasterRevision) -> BTreeMap<TileKey, Vec<u8>> {
     root.wait_data().unwrap().tiles.iter().map(|(key, tile)| {
-        (*key, tile.wait_backing().unwrap().decode().unwrap())
+        (*key, tile.wait_backing().unwrap().decode_on_worker().unwrap())
     }).collect()
 }
 fn sample(paint: &BTreeMap<TileKey, Vec<u8>>, x: u32, y: u32) -> [u8; 4] {

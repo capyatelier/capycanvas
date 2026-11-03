@@ -583,7 +583,7 @@ fn wetness_at(document: &Document, layer: OccurrenceHandle, p: [u32; 2]) -> Opti
     if x < 0 || y < 0 { return None; }
     let data = document.target_raster(target).unwrap().wait_data().unwrap();
     let key = raster::TileKey { plane: raster::RasterPlane::WatercolorWetness, coordinate: [(x / 256) as u32, (y / 256) as u32] };
-    let bytes = data.tiles.get(&key)?.wait_backing().unwrap().decode().unwrap();
+    let bytes = data.tiles.get(&key)?.wait_backing().unwrap().decode_on_worker().unwrap();
     Some(bytes[((y % 256) * 256 + x % 256) as usize])
 }
 

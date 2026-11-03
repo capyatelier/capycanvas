@@ -691,7 +691,7 @@ impl Scene {
             if r.source_tiles.borrow().uploads_full() {
                 Self::submit_source_uploads(r, encoder)?;
             }
-            let samples = request.blob.decode().map_err(GpuRasterError::Color)?;
+            let samples = request.blob.decode_on_worker().map_err(GpuRasterError::Color)?;
             crate::native_tiles::scalar::upload_coverage(r, encoder, request.working, request.blob.descriptor.depth(), &samples, 1)?;
         }
         Ok(())

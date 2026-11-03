@@ -41,6 +41,7 @@ struct Storage {
     _lease: OwnerLock,
     manifest: SessionManifest,
     stores: BTreeMap<String, SessionStore>,
+    pressure_stores: std::collections::BTreeSet<String>,
     warnings: Vec<String>,
 }
 impl Storage {
@@ -62,6 +63,7 @@ impl Storage {
                 blocked: vec![],
             },
             stores: BTreeMap::new(),
+            pressure_stores: Default::default(),
             warnings: Vec::new(),
         })
     }
@@ -114,6 +116,7 @@ impl Storage {
                 _lease: lease,
                 manifest,
                 stores: BTreeMap::new(),
+            pressure_stores: Default::default(),
             warnings: Vec::new(),
             };
             if !storage.manifest.restoring.is_empty() {
@@ -144,9 +147,13 @@ impl Storage {
         if !self.stores.contains_key(store_key){self.stores.insert(store_key.into(),SessionStore::open(&self.directory.join(store_key))?);}
         Ok(self.stores.get_mut(store_key).unwrap())
     }
+    fn make_durable(&mut self,id:u64,store_key:&str,tiles:&layer_core::raster_storage::RetainedTiles,cancel:&AtomicBool)->Result<(),String>{
+        self.pressure_stores.insert(store_key.into());
+        self.store(id,store_key)?.make_durable(tiles,cancel).map(|_|())
+    }
     fn collect(&mut self,cancel:&AtomicBool)->Result<(),String>{
         let result=(||{
-            let reachable=self.manifest.drawings.iter().map(|drawing|drawing.key.clone()).collect::<std::collections::BTreeSet<_>>();
+            let reachable=self.manifest.drawings.iter().map(|drawing|drawing.key.clone()).chain(self.pressure_stores.iter().cloned()).collect::<std::collections::BTreeSet<_>>();
             for key in self.stores.keys().filter(|key|!reachable.contains(*key)).cloned().collect::<Vec<_>>() {self.stores.get_mut(&key).unwrap().retire()?;self.stores.remove(&key);}
             collect_unreferenced_stores(&self.directory,&reachable,cancel)?;Ok(())
         })();
@@ -194,6 +201,7 @@ impl Storage {
         for drawing in &retired{self.store(drawing.id,&drawing.key)?.prepare_retirement()?;}
         let mut committed=self.manifest.clone();for drawing in &retired{committed=committed.remove(drawing.id)?;}
         let committed=committed.reconcile(manifest.drawings,manifest.active,manifest.clean_exit)?;self.publish(committed,cancel)?;
+        self.pressure_stores.clear();
         self.collect(cancel)?;
         Ok(())
     }
@@ -250,6 +258,7 @@ enum Job {
         manifest: SessionManifest,
         captures: Vec<(u64, SessionCapture)>,
     },
+    MakeDurable { id:u64, key:String, tiles:layer_core::raster_storage::RetainedTiles, reply:mpsc::Sender<Result<(),String>> },
     Fresh,
     Retry,
     RetireSession(Box<UiSession<Renderer>>),
@@ -292,6 +301,7 @@ pub(crate) struct Service {
     startup_stamp: Option<SessionStamp>,
     stamps: BTreeMap<u64, SessionStamp>,
     pending_stamps: BTreeMap<u64, SessionStamp>,
+    pressure_keys: BTreeMap<u64, String>,
     restored: Option<Restored>,
     restore_queue: VecDeque<u64>,
     restore_mapping:Vec<(u64,u64)>,
@@ -323,6 +333,7 @@ impl Service {
             while let Ok(job)=jobs.recv(){
                 let completed=match job {
                     Job::Stop=>break,Job::RetireSession(session)=>{drop(session);continue},Job::RetireRenderer(renderer)=>{drop(renderer);continue},
+                    Job::MakeDurable{id,key,tiles,reply}=>{let result=storage.as_mut().ok_or_else(||"Session storage is unavailable".to_string()).and_then(|storage|storage.make_durable(id,&key,&tiles,&stopping));let _=reply.send(result);wake();continue},
                     Job::Retry=>if let Some(storage)=&mut storage {let result=(||{let mut manifest=storage.manifest.clone();manifest.restoring.clear();manifest.blocked.clear();manifest.generation=manifest.generation.checked_add(1).ok_or("Session generation exhausted")?;storage.publish(manifest,&stopping)?;storage.collect(&stopping)?;Ok(())})();Finished::Updated{result,manifest:Some(storage.manifest.clone())}}else{let result=Storage::open(&root).map(|(next,_)|{let manifest=next.manifest.clone();storage=Some(next);(manifest,0)});Finished::Opened(result)},
                     Job::Fresh=>{let result=Storage::create(&root).map(|next|{let manifest=next.manifest.clone();storage=Some(next);(manifest,0)});Finished::Opened(result)},
                     Job::Adopt{mapping,attempts}=>{let result=storage.as_mut().ok_or_else(||"Session storage is unavailable".to_string()).and_then(|storage|storage.complete_restores(&attempts,&mapping,&stopping));Finished::Updated{result,manifest:storage.as_ref().map(|storage|storage.manifest.clone())}},
@@ -377,6 +388,7 @@ impl Service {
             startup_stamp: None,
             stamps: BTreeMap::new(),
             pending_stamps: BTreeMap::new(),
+            pressure_keys: BTreeMap::new(),
             restored: None,
             restore_queue: VecDeque::new(),
             restore_mapping:vec![],
@@ -412,6 +424,12 @@ impl Service {
             }
         }
         Ok(())
+    }
+    pub fn make_durable(&mut self,id:u64,tiles:layer_core::raster_storage::RetainedTiles)->Result<Receiver<Result<(),String>>,String>{
+        let key=self.manifest.drawings.iter().find(|drawing|drawing.id==id).map(|drawing|drawing.key.clone())
+            .unwrap_or_else(||self.pressure_keys.entry(id).or_insert_with(key).clone());
+        let (reply,receive)=mpsc::channel();
+        self.queue(Job::MakeDurable{id,key,tiles,reply});self.drain()?;Ok(receive)
     }
     pub fn checkpoint(&mut self) { self.next_observation = Instant::now(); }
     pub fn poll<P: Parked>(
@@ -541,6 +559,7 @@ impl Service {
                         .iter()
                         .find(|d| d.id == id)
                         .map(|d| d.key.clone())
+                        .or_else(||self.pressure_keys.get(&id).cloned())
                         .unwrap_or_else(key);
                     manifest.drawings.push(SessionDrawing { id, key });
                     if self.stamps.get(&id) != Some(&stamp) {
@@ -723,6 +742,23 @@ mod tests {
     use super::*;
     use crate::test_support::TempDir;
     use layer_ui::{Platform, UiAction};
+    #[test]
+    fn pressure_storage_keeps_one_writer_through_the_first_checkpoint() {
+        let root=TempDir::new();let cancel=AtomicBool::new(false);
+        let mut storage=Storage::create(&root.path).unwrap();
+        let session=UiSession::from_project(Renderer(None),layer_ui::new_drawing(32,24,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),None,[32,24],Platform::Windows).unwrap();
+        storage.make_durable(1,"drawing",&session.retained_document_tiles(),&cancel).unwrap();
+        storage.collect(&cancel).unwrap();
+        assert_eq!(storage.stores.len(),1);
+        assert!(!storage.directory.join("drawing/.retired").exists());
+        assert!(SessionStore::open(&storage.directory.join("drawing")).is_err());
+        let manifest=SessionManifest {drawings:vec![SessionDrawing{id:1,key:"drawing".into()}],active:1,..storage.manifest.clone()};
+        storage.capture(manifest,vec![(1,session.capture_session().unwrap())],&cancel).unwrap();
+        assert_eq!(storage.stores.len(),1);
+        assert!(storage.pressure_stores.is_empty());
+        assert!(SessionStore::open(&storage.directory.join("drawing")).is_err());
+    }
+
     #[test]
     fn queued_restore_blocks_document_changes_before_parking() {
         for succeeds in [true, false] {

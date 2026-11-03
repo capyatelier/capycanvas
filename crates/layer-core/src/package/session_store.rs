@@ -1,6 +1,7 @@
 use super::{ByteRange, ByteSource, ImmutableBacking, RangeState, MAX_RANGE_BYTES,
     resources::Payload, session::{OpenSession, PreparedSession}};
 use crate::{PortableId, ProjectLimits};
+use crate::tile_io::{ReadCache, ReadSource, RangeReader, ReadCompletion, read_buffer, read_exact_at};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::{BTreeMap, BTreeSet}, fs::{self, File, OpenOptions},
@@ -16,7 +17,7 @@ impl From<&str> for AtomicReplaceError {
     fn from(error: &str) -> Self { error.to_string().into() }
 }
 
-pub struct OwnerLock { _file: File, readers: Mutex<Vec<Weak<ResourceFile>>> }
+pub struct OwnerLock { _file: File, readers: Mutex<Vec<Weak<ResourceFile>>>, packs:Mutex<BTreeMap<PortableId,Weak<PackFile>>> }
 impl OwnerLock {
     pub fn claim(path: &Path) -> Result<Option<Self>, String> {
         let mut options = OpenOptions::new();
@@ -44,7 +45,7 @@ impl OwnerLock {
             Err(fs::TryLockError::Error(error)) => return Err(error.to_string()),
         };
         if !owned {return Ok(None);}
-        Ok(Some(Self { _file: file, readers: Mutex::new(Vec::new()) }))
+        Ok(Some(Self { _file: file, readers: Mutex::new(Vec::new()), packs:Default::default() }))
     }
 }
 impl Drop for OwnerLock {
@@ -296,6 +297,9 @@ pub struct SessionStore {
     loaded: Option<Generation>,
     verified: BTreeMap<PortableId, (u64, u32, [u8; 32])>,
     programs: BTreeMap<PortableId, super::TrustedPrograms>,
+    live: BTreeMap<PortableId, Weak<StoreLocation>>,
+    reads: crate::tile_io::ReadCache,
+    packs:BTreeMap<PortableId,Arc<StorePack>>,
 }
 struct StoreRoots {
     generations: BTreeSet<PortableId>,
@@ -324,7 +328,13 @@ impl SessionStore {
     pub fn open(path: &Path) -> Result<Self, String> {
         Self::try_open(path)?.ok_or_else(|| "Recovery drawing is already open".into())
     }
+    pub fn open_with_cache(path: &Path, reads:crate::tile_io::ReadCache) -> Result<Self,String> {
+        Self::try_open_with_cache(path,reads)?.ok_or_else(||"Recovery drawing is already open".into())
+    }
     pub fn try_open(path: &Path) -> Result<Option<Self>, String> {
+        Self::try_open_with_cache(path,crate::tile_io::ReadCache::process())
+    }
+    fn try_open_with_cache(path:&Path,reads:crate::tile_io::ReadCache)->Result<Option<Self>,String> {
         create_directory(path)?;
         let path = &fs::canonicalize(path).map_err(|e| e.to_string())?;
         let Some((owner, writer)) = claim_store(path)? else { return Ok(None) };
@@ -336,7 +346,7 @@ impl SessionStore {
         create_directory(&path.join("packs"))?;
         let head = read_optional(&path.join("head.json"), 1024)?.map(|bytes| parse_head(&bytes)).transpose()?;
         let mut store = Self { path: path.into(), _owner: owner, _writer: writer, head, loaded: None,
-            verified: BTreeMap::new(), programs: BTreeMap::new() };
+            verified: BTreeMap::new(), programs: BTreeMap::new(), live: BTreeMap::new(), reads, packs:BTreeMap::new() };
         match store.resource_roots() {
             Ok(roots) => store.collect_roots(roots)?,
             Err(_) => {
@@ -360,13 +370,22 @@ impl SessionStore {
         self.validate_layout()?;
         if retired_store(&self.path)? { return Err("This drawing's session copy was retired".into()); }
         self.refresh_head()?;
+        for entry in &prepared.resources().entries {
+            if let Payload::Tile(tile)=&entry.payload
+                && let Some(location)=tile.compressed.location()?
+                && Arc::ptr_eq(&location.pack.root._owner,&self._owner) {
+                let integrity=(location.length,location.crc,location.descriptor);
+                if self.verified.get(&tile.resource_id()).is_some_and(|previous|*previous!=integrity) {return Err("Conflicting immutable recovery resource descriptor".into());}
+                self.packs.entry(location.pack.root.id).or_insert_with(||location.pack.clone());
+                self.live.insert(tile.resource_id(),Arc::downgrade(&location));
+                self.verified.insert(tile.resource_id(),integrity);
+            }
+        }
         if let Ok(roots) = self.resource_roots() { self.collect_roots(roots)?; }
         let index = resource_index(prepared.metadata(), ProjectLimits::default())?;
         let entries: BTreeMap<_, _> = prepared.resources().entries.iter().map(|entry| (entry.payload.id(), entry)).collect();
         if entries.len() != index.records.len() { return Err("Recovery resource inventory disagrees with metadata".into()); }
-        let mut locations = BTreeMap::new();
-        let mut extents = BTreeMap::new();
-        let mut known = BTreeMap::new();
+        let (mut locations, mut extents, mut known) = self.live_locations();
         if let Some(head) = &self.head {
             let retained = self.loaded.as_ref().unwrap_or(&head.current);
             for generation in std::iter::once(retained).chain(head.previous.as_ref().filter(|previous| retained.id == head.current.id && previous.id != retained.id)) {
@@ -380,7 +399,7 @@ impl SessionStore {
                 }
                 if let Some(previous) = stored.locations {
                     for (id, location) in previous { locations.entry(id).or_insert(location); }
-                    for (id, extent) in stored.extents { extents.entry(id).or_insert(extent); }
+                    for (id, extent) in stored.extents { extents.entry(id).and_modify(|current|*current=(*current).max(extent)).or_insert(extent); }
                 }
             }
         }
@@ -407,45 +426,7 @@ impl SessionStore {
             } else if record.length == 0 || pending_offsets.insert(record.offset) { pending.push(record); }
         }
         pending.sort_by_key(|record| index.spatial.get(&record.id).map_or((1, 0, 0, record.id), |coordinate| (0, coordinate[1], coordinate[0], record.id)));
-        let mut first = 0;
-        while first < pending.len() {
-            let mut target = None;
-            for (&pack, &extent) in &extents {
-                let length = fs::metadata(self.pack_path(pack)).map_err(|e| e.to_string())?.len();
-                if length < extent { return Err("Recovery pack is shorter than its committed extent".into()); }
-                if target.is_none() && length.checked_add(pending[first].length.max(1)).is_some_and(|end| end <= PACK_BYTES) {
-                    target = Some((pack, length));
-                }
-            }
-            let (pack, start) = target.unwrap_or_else(|| (PortableId::random(), 0));
-            let mut length = 0u64;
-            let mut last = first;
-            while last < pending.len() {
-                let next = length.checked_add(pending[last].length).ok_or("Recovery pack length overflow")?;
-                if last > first && start.checked_add(next).is_none_or(|end| end > PACK_BYTES) { break; }
-                length = next; last += 1;
-            }
-            let write = |file: &mut BufWriter<File>| {
-                for record in &pending[first..last] {
-                    write_payload(file, &entries[&record.id].payload, record, cancelled)?;
-                }
-                if length == 0 { file.write_all(&[0]).map_err(|e| e.to_string())?; }
-                Ok(())
-            };
-            if target.is_some() {
-                publication.append(&self.pack_path(pack), write, || check_cancelled(cancelled))?;
-            } else {
-                publication.publish(&self.pack_path(pack), write, || check_cancelled(cancelled)).map_err(|error| error.error)?;
-            }
-            let mut offset = start;
-            for record in &pending[first..last] {
-                locations.insert(record.id, PackRange { pack, offset });
-                self.verified.insert(record.id, (record.length, record.crc, record.descriptor));
-                offset += record.length;
-            }
-            extents.insert(pack, start.checked_add(length.max(1)).ok_or("Recovery pack length overflow")?);
-            first = last;
-        }
+        self.append_resources(&pending, &entries, &mut locations, &mut extents, cancelled, &mut publication)?;
         locations.retain(|id, _| entries.contains_key(id));
         let mut aliases = BTreeMap::new();
         for record in &index.records {
@@ -485,6 +466,149 @@ impl SessionStore {
         Ok(generation)
     }
 
+    fn append_resources(&mut self, pending: &[&ResourceRecord], entries: &BTreeMap<PortableId, &super::resources::PreparedResource>,
+        locations: &mut BTreeMap<PortableId, PackRange>, extents: &mut BTreeMap<PortableId, u64>,
+        cancelled: &AtomicBool, publication: &mut impl Publication) -> Result<(), String> {
+        let mut first = 0;
+        while first < pending.len() {
+            let mut target = None;
+            for (&pack, &extent) in extents.iter() {
+                let length = fs::metadata(self.pack_path(pack)).map_err(|e| e.to_string())?.len();
+                if length < extent { return Err("Recovery pack is shorter than its committed extent".into()); }
+                if target.is_none() && length.checked_add(pending[first].length.max(1)).is_some_and(|end| end <= PACK_BYTES) {
+                    target = Some((pack, length));
+                }
+            }
+            let (pack, start) = target.unwrap_or_else(|| (PortableId::random(), 0));
+            let mut length = 0u64;
+            let mut last = first;
+            while last < pending.len() {
+                let next = length.checked_add(pending[last].length).ok_or("Recovery pack length overflow")?;
+                if last > first && start.checked_add(next).is_none_or(|end| end > PACK_BYTES) { break; }
+                length = next; last += 1;
+            }
+            let write = |file: &mut BufWriter<File>| {
+                for record in &pending[first..last] {
+                    write_payload(file, &entries[&record.id].payload, record, cancelled)?;
+                }
+                if length == 0 { file.write_all(&[0]).map_err(|e| e.to_string())?; }
+                Ok(())
+            };
+            if target.is_some() {
+                publication.append(&self.pack_path(pack), write, || check_cancelled(cancelled))?;
+            } else {
+                publication.publish(&self.pack_path(pack), write, || check_cancelled(cancelled)).map_err(|error| error.error)?;
+            }
+            let mut offset = start;
+            for record in &pending[first..last] {
+                locations.insert(record.id, PackRange { pack, offset });
+                self.verified.insert(record.id, (record.length, record.crc, record.descriptor));
+                offset += record.length;
+            }
+            extents.insert(pack, start.checked_add(length.max(1)).ok_or("Recovery pack length overflow")?);
+            first = last;
+        }
+        Ok(())
+    }
+    pub fn make_durable(&mut self, tiles: &crate::raster_storage::RetainedTiles, cancelled: &AtomicBool) -> Result<usize,String> {
+        self.make_durable_using(tiles, cancelled, AtomicPublication)
+    }
+    fn make_durable_using(&mut self, tiles: &crate::raster_storage::RetainedTiles, cancelled: &AtomicBool,
+        mut publication: impl Publication) -> Result<usize,String> {
+        self.validate_layout()?;
+        if retired_store(&self.path)? {return Err("This drawing's session copy was retired".into());}
+        let mut blobs=tiles.blobs()?;
+        blobs.retain(|blob|blob.resident_bytes()>0);
+        let mut released=0;
+        let result=(|| {
+        while !blobs.is_empty() {
+            check_cancelled(cancelled)?;
+            let mut inventory=super::resources::ResourceInventory::default();
+            let mut batch=Vec::new();let mut bytes=0;
+            while let Some(blob)=blobs.last() {
+                if bytes>0 && bytes+blob.compressed_len()>MAX_RANGE_BYTES {break;}
+                let blob=blobs.pop().unwrap();
+                let Some(memory)=blob.compressed.memory()? else {continue;};
+                bytes+=memory.len();inventory.tile(blob.clone())?;batch.push((blob,memory));
+            }
+            let prepared=inventory.prepare(cancelled)?;
+            let entries=prepared.entries.iter().map(|entry|(entry.payload.id(),entry)).collect::<BTreeMap<_,_>>();
+            let records=prepared.entries.iter().map(|entry|Ok(ResourceRecord {id:entry.payload.id(),offset:entry.record["location"]["offset"].as_str().ok_or("Missing tile offset")?.parse::<u64>().map_err(|e|e.to_string())?,
+                length:entry.bytes,crc:entry.crc,descriptor:resource_descriptor(&entry.record)?})).collect::<Result<Vec<_>,String>>()?;
+            let (mut locations,mut extents,known)=self.live_locations();
+            for record in &records {
+                if known.get(&record.id).is_some_and(|integrity|*integrity!=(record.length,record.crc,record.descriptor)) {return Err("Conflicting immutable recovery resource descriptor".into());}
+            }
+            let mut offsets=BTreeSet::new();
+            let pending=records.iter().filter(|record|!locations.contains_key(&record.id) && offsets.insert(record.offset)).collect::<Vec<_>>();
+            self.append_resources(&pending,&entries,&mut locations,&mut extents,cancelled,&mut publication)?;
+            let mut aliases=BTreeMap::new();
+            for record in &records {
+                if let Some(location)=locations.get(&record.id) {aliases.insert(record.offset,location.clone());}
+            }
+            for record in &records {
+                let location=locations.get(&record.id).or_else(||aliases.get(&record.offset)).ok_or("Missing durable tile location")?.clone();
+                let existing=self.live.get(&record.id).and_then(Weak::upgrade);
+                let durable=match existing {
+                    Some(existing)=>existing,
+                    None=>{
+                        let pack=self.pack(location.pack,extents[&location.pack])?;
+                        Arc::new(StoreLocation {pack,offset:location.offset,length:record.length,crc:record.crc,descriptor:record.descriptor})
+                    },
+                };
+                for (blob,memory) in batch.iter().filter(|(blob,_)|blob.resource_id()==record.id) {
+                    if blob.compressed.bind(memory,durable.clone())? {released+=memory.len();}
+                    if let Some(location)=blob.compressed.location()? {
+                        self.live.insert(record.id,Arc::downgrade(&location));
+                        self.verified.insert(record.id,(record.length,record.crc,record.descriptor));
+                    }
+                }
+            }
+        }
+        Ok(released)
+        })();
+        if released>0 && let Some(owner)=tiles.owner.as_ref().and_then(Weak::upgrade) {owner.refresh();}
+        result
+    }
+    fn live_locations(&mut self) -> (BTreeMap<PortableId,PackRange>, BTreeMap<PortableId,u64>, BTreeMap<PortableId,(u64,u32,[u8;32])>) {
+        let mut locations=BTreeMap::new();let mut extents=BTreeMap::new();let mut known=BTreeMap::new();
+        self.live.retain(|&id,weak|{
+            let Some(live)=weak.upgrade() else {return false;};
+            locations.insert(id,PackRange {pack:live.pack.root.id,offset:live.offset});
+            let extent=live.pack.source.byte_len();
+            extents.entry(live.pack.root.id).and_modify(|current:&mut u64|*current=(*current).max(extent)).or_insert(extent);
+            known.insert(id,(live.length,live.crc,live.descriptor));true
+        });
+        (locations,extents,known)
+    }
+
+    fn pack(&mut self,id:PortableId,extent:u64)->Result<Arc<StorePack>,String> {
+        if let Some(pack)=self.packs.get(&id) {pack.source.extend_to(extent);return Ok(pack.clone());}
+        let existing=self._owner.packs.lock().map_err(|_|"Recovery pack lock failed")?.get(&id).and_then(Weak::upgrade);
+        let file=match existing {
+            Some(file)=>file,
+            None=>{
+                let path=self.pack_path(id);let file=Arc::new(File::open(&path).map_err(|error|error.to_string())?);
+                let root=Arc::new(ResourceFile {id,path,offset:0,length:0,file,_owner:self._owner.clone()});
+                self._owner.readers.lock().map_err(|_|"Recovery reader lock failed")?.push(Arc::downgrade(&root));
+                let file=Arc::new(PackFile {root,cached:Default::default()});
+                self._owner.packs.lock().map_err(|_|"Recovery pack lock failed")?.insert(id,Arc::downgrade(&file));
+                file
+            },
+        };
+        let mut cached=file.cached.lock().map_err(|_|"Recovery pack source lock failed")?;
+        let pack=match cached.1.upgrade() {
+            Some(pack)=>pack,
+            None=>{
+                let source=cached.0.upgrade().unwrap_or_else(||self.reads.source(extent,Arc::new(PackReader(file.clone()))));
+                cached.0=source.downgrade();
+                let pack=Arc::new(StorePack {root:file.root.clone(),source});cached.1=Arc::downgrade(&pack);pack
+            },
+        };
+        pack.source.extend_to(extent);
+        self.packs.insert(id,pack.clone());Ok(pack)
+    }
+
     pub fn load(&mut self, limits: ProjectLimits, cancelled: &AtomicBool) -> Result<Option<OpenSession>, String> {
         check_cancelled(cancelled)?;
         self.validate_layout()?;
@@ -517,7 +641,7 @@ impl SessionStore {
         let mut verified = BTreeMap::new();
         let mut packs = BTreeMap::<PortableId, Arc<File>>::new();
         for (&pack, &extent) in &stored.extents {
-            let file = Arc::new(File::open(self.pack_path(pack)).map_err(|e| e.to_string())?);
+            let file = self.pack(pack,extent)?.root.file.clone();
             if file.metadata().map_err(|e| e.to_string())?.len() < extent { return Err("Recovery pack is shorter than its committed extent".into()); }
             packs.insert(pack, file);
         }
@@ -540,7 +664,7 @@ impl SessionStore {
             self._owner.readers.lock().map_err(|_| "Recovery reader lock failed")?.push(Arc::downgrade(&owner));
             files.push((record.offset, owner));
         }
-        let backing = ImmutableBacking::new(Arc::new(ResourcePack { length: index.length, files })).map_err(String::from)?;
+        let backing = ImmutableBacking::new(Arc::new(ResourcePack::new(index.length,files))).map_err(String::from)?;
         let programs=self.programs.get(&generation.id).cloned().unwrap_or_default();
         let session = super::session::open_parts_checked(&stored.metadata, backing, limits, cancelled, &programs)?;
         if verified.iter().any(|(id, value)| self.verified.get(id).is_some_and(|previous| previous != value)) {
@@ -594,6 +718,8 @@ impl SessionStore {
     }
     fn collect_roots(&mut self, roots: StoreRoots) -> Result<(), String> {
         let StoreRoots { generations, mut resources, mut packs, mut identities } = roots;
+        self.packs.retain(|id,pack|packs.contains(id) || Arc::strong_count(pack)>1 || pack.source.in_use());
+        self._owner.packs.lock().map_err(|_|"Recovery pack lock failed")?.retain(|_,pack|pack.strong_count()!=0);
         self._owner.readers.lock().map_err(|_| "Recovery reader lock failed")?.retain(|reader| {
             if let Some(owner) = reader.upgrade() {
                 identities.insert(owner.id);
@@ -612,6 +738,8 @@ impl SessionStore {
             } else if !terminal && name != "packs" { return Err("Missing drawing session directory".into()); }
         }
         clean_temporaries(&self.path)?;
+        self.live.retain(|_,location|location.strong_count()!=0);
+        identities.extend(self.live.keys());
         self.verified.retain(|id, _| identities.contains(id));
         Ok(())
     }
@@ -680,7 +808,7 @@ pub fn collect_unreferenced_stores(root: &Path, reachable: &BTreeSet<String>, ca
         let Some((owner, writer)) = claim_store(&path)? else { continue };
         if head.is_some() && !terminal && !retiring { continue; }
         let mut store = SessionStore { path, _owner: owner, _writer: writer,
-            head: None, loaded: None, verified: BTreeMap::new(), programs: BTreeMap::new() };
+            head: None, loaded: None, verified: BTreeMap::new(), programs: BTreeMap::new(), live: BTreeMap::new(), reads:crate::tile_io::ReadCache::process(), packs:BTreeMap::new() };
         store.retire()?;
         retired += 1;
     }
@@ -736,6 +864,7 @@ impl Publication for AtomicPublication {
     }
 }
 
+#[derive(Clone)]
 struct ResourceRecord { id: PortableId, offset: u64, length: u64, crc: u32, descriptor: [u8; 32] }
 struct ResourceIndex { records: Vec<ResourceRecord>, ranges: Vec<ResourceRecord>, length: u64, spatial: BTreeMap<PortableId, [u32; 2]> }
 fn resource_index(metadata: &[u8], limits: ProjectLimits) -> Result<ResourceIndex, super::session::OpenFailure> {
@@ -796,47 +925,68 @@ fn resource_descriptor(record: &serde_json::Value) -> Result<[u8; 32], String> {
     Ok(Sha256::digest(serde_json::to_vec(&descriptor).map_err(|e| e.to_string())?).into())
 }
 
-struct ResourceFile { id: PortableId, path: PathBuf, offset: u64, file: Arc<File>, _owner: Arc<OwnerLock>, length: u64 }
-struct ResourcePack { length: u64, files: Vec<(u64, Arc<ResourceFile>)> }
-impl ByteSource for ResourcePack {
-    fn byte_len(&self) -> u64 { self.length }
-    fn resident_bytes(&self) -> usize { 0 }
-    fn poll(&self, offset: u64, length: usize) -> Result<RangeState, String> {
-        if length > MAX_RANGE_BYTES || offset.checked_add(length as u64).is_none_or(|end| end > self.length) { return Err("Recovery read exceeds backing".into()); }
-        let mut bytes = vec![0; length];
-        let mut position = offset;
-        let mut written = 0;
-        let mut index = self.files.partition_point(|(start, _)| *start <= offset).saturating_sub(1);
-        while written < length {
-            let (start, owner) = self.files.get(index).ok_or("Incomplete recovery backing")?;
-            let local = position.checked_sub(*start).ok_or("Recovery backing range overflow")?;
-            let count = (owner.length.saturating_sub(local)).min((length - written) as u64) as usize;
-            if count > 0 {
-                read_exact_at(&owner.file, owner.offset.checked_add(local).ok_or("Recovery read overflow")?, &mut bytes[written..written + count])?;
-                written += count; position += count as u64;
-            }
-            index += 1;
-        }
-        Ok(RangeState::Ready(ByteRange::new(bytes.into(), 0..length)?))
+struct PackFile {
+    root:Arc<ResourceFile>,
+    cached:Mutex<(crate::tile_io::WeakReadSource,Weak<StorePack>)>,
+}
+struct StorePack {root:Arc<ResourceFile>,source:ReadSource}
+pub(crate) struct StoreLocation {
+    pack:Arc<StorePack>,
+    offset:u64,
+    length:u64,
+    crc:u32,
+    descriptor:[u8;32],
+}
+impl StoreLocation {
+    pub(crate) fn poll(&self)->Result<RangeState,String> {self.pack.source.poll_checked(self.offset,self.length as usize,self.crc)}
+    pub(crate) fn read_on_worker(&self)->Result<ByteRange,String> {self.pack.source.read_checked_on_worker(self.offset,self.length as usize,self.crc)}
+}
+struct PackReader(Arc<PackFile>);
+impl RangeReader for PackReader {
+    fn read(&self,offset:u64,length:usize,crc:Option<u32>,completion:ReadCompletion) {
+        let mut bytes=read_buffer(length);
+        let result=read_exact_at(&self.0.root.file,offset,Arc::get_mut(&mut bytes).unwrap())
+            .and_then(|_|crate::tile_io::verify_crc(&bytes,crc)).map(|_|bytes);
+        completion.complete(result);
     }
 }
 
-fn read_exact_at(file: &File, mut offset: u64, mut bytes: &mut [u8]) -> Result<(), String> {
-    while !bytes.is_empty() {
-        #[cfg(unix)]
-        let count = { use std::os::unix::fs::FileExt; file.read_at(bytes, offset) };
-        #[cfg(windows)]
-        let count = { use std::os::windows::fs::FileExt; file.seek_read(bytes, offset) };
-        let count = match count {
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            other => other.map_err(|e| e.to_string())?,
-        };
-        if count == 0 { return Err("Incomplete recovery pack range".into()); }
-        offset = offset.checked_add(count as u64).ok_or("Recovery read overflow")?;
-        bytes = &mut bytes[count..];
-    }
-    Ok(())
+struct ResourceFile { id: PortableId, path: PathBuf, offset: u64, file: Arc<File>, _owner: Arc<OwnerLock>, length: u64 }
+struct ResourceFiles {files:Vec<(u64,Arc<ResourceFile>)>}
+struct ResourcePack {length:u64,source:ReadSource}
+impl ResourcePack {
+    fn new(length:u64,files:Vec<(u64,Arc<ResourceFile>)>)->Self {Self {length,source:ReadCache::process().source(length,Arc::new(ResourceFiles {files}))}}
 }
+impl ByteSource for ResourcePack {
+    fn byte_len(&self)->u64 {self.length}
+    fn resident_bytes(&self)->usize {0}
+    fn poll(&self,offset:u64,length:usize)->Result<RangeState,String> {self.source.poll(offset,length)}
+    fn poll_on_worker(&self,offset:u64,length:usize)->Result<RangeState,String> {self.source.wait_on_worker(offset,length).map(RangeState::Ready)}
+}
+impl RangeReader for ResourceFiles {
+    fn read(&self,offset:u64,length:usize,crc:Option<u32>,completion:ReadCompletion) {
+        let mut bytes=read_buffer(length);
+        let result=(|| {
+            let output=Arc::get_mut(&mut bytes).unwrap();
+            let mut position=offset;let mut written=0;
+            let mut index=self.files.partition_point(|(start,_)|*start<=offset).saturating_sub(1);
+            while written<length {
+                let (start,owner)=self.files.get(index).ok_or("Incomplete recovery backing")?;
+                let local=position.checked_sub(*start).ok_or("Recovery backing range overflow")?;
+                let count=(owner.length.saturating_sub(local)).min((length-written) as u64) as usize;
+                if count>0 {
+                    read_exact_at(&owner.file,owner.offset.checked_add(local).ok_or("Recovery read overflow")?,&mut output[written..written+count])?;
+                    written+=count;position+=count as u64;
+                }
+                index+=1;
+            }
+            crate::tile_io::verify_crc(&bytes,crc)?;
+            Ok(bytes)
+        })();
+        completion.complete(result);
+    }
+}
+
 fn verify_range(file: &File, offset: u64, record: &ResourceRecord, cancelled: &AtomicBool) -> Result<(), String> {
     let mut buffer = [0; 64 * 1024];
     let mut remaining = record.length;
@@ -868,6 +1018,16 @@ fn verify_payload(file: File, start: u64, payload: &Payload, length: u64, cancel
     Ok(())
 }
 fn write_payload(file: &mut impl Write, payload: &Payload, record: &ResourceRecord, cancelled: &AtomicBool) -> Result<(), String> {
+    if let Payload::Tile(tile)=payload {
+        let integrity=tile.compressed.integrity(cancelled)?;
+        if integrity.bytes!=record.length || integrity.crc32!=record.crc {return Err("Recovery tile integrity changed".into());}
+        let bytes=tile.compressed_on_worker()?;
+        for chunk in bytes.chunks(MAX_RANGE_BYTES) {
+            check_cancelled(cancelled)?;
+            file.write_all(chunk).map_err(|error|error.to_string())?;
+        }
+        return Ok(());
+    }
     let mut hasher = crc32fast::Hasher::new();
     match payload {
         Payload::Opaque(resource) => {
@@ -1261,8 +1421,9 @@ mod tests {
         store.commit(&second, &cancel).unwrap();
         let next = resource_owner(&store, tile_resource(&second).payload.id(), tile_resource(&second).bytes);
         assert_ne!(owner.path, next.path); assert_eq!(count(&directory.0.join("packs")), 2);
-        let pack = ResourcePack { length: owner.length, files: vec![(0, owner.clone())] };
-        assert!(matches!(pack.poll(0, owner.length as usize).unwrap(), RangeState::Ready(_)));
+        let pack = ResourcePack::new(owner.length,vec![(0,owner.clone())]);
+        let RangeState::Ready(bytes)=pack.poll_on_worker(0,owner.length as usize).unwrap() else {panic!("worker read must complete")};
+        assert_eq!(bytes.len(),owner.length as usize);
         store.retire().unwrap(); assert!(owner.path.is_file()); assert!(!next.path.exists());
     }
     #[test]
@@ -1393,7 +1554,7 @@ mod tests {
             assert_eq!(actual.watercolor, expected.watercolor); assert_eq!(actual.tiles.len(), expected.tiles.len());
             for (key, tile) in &expected.tiles {
                 let a = actual.tiles[key].wait_backing().unwrap(); let b = tile.wait_backing().unwrap();
-                assert_eq!(a.descriptor, b.descriptor); assert_eq!(a.resource_id(), b.resource_id()); assert_eq!(a.decode().unwrap(), b.decode().unwrap());
+                assert_eq!(a.descriptor, b.descriptor); assert_eq!(a.resource_id(), b.resource_id()); assert_eq!(a.decode_on_worker().unwrap(), b.decode_on_worker().unwrap());
             }
         }
     }
@@ -1668,8 +1829,9 @@ mod tests {
             assert!(count(&directory.0.join("generations")) <= 2);
             assert!(count(&directory.0.join("packs")) <= 3);
         }
-        let pack = ResourcePack { length: live.length, files: vec![(0, live.clone())] };
-        assert!(matches!(pack.poll(0, live.length as usize).unwrap(), RangeState::Ready(_)));
+        let pack = ResourcePack::new(live.length,vec![(0,live.clone())]);
+        let RangeState::Ready(bytes)=pack.poll_on_worker(0,live.length as usize).unwrap() else {panic!("worker read must complete")};
+        assert_eq!(bytes.len(),live.length as usize);
         store.retire().unwrap();
         assert_eq!(count(&directory.0.join("packs")), 1);
         drop(store);
@@ -1677,7 +1839,7 @@ mod tests {
         assert!(SessionStore::open(&directory.0).is_err());
         collect_unreferenced_stores(&root.0, &BTreeSet::new(), &AtomicBool::new(false)).unwrap();
         assert_eq!(count(&directory.0.join("packs")), 1);
-        drop(pack); drop(live);
+        drop(bytes); drop(pack); drop(live);
         collect_unreferenced_stores(&root.0, &BTreeSet::new(), &AtomicBool::new(false)).unwrap();
         assert_eq!(count(&directory.0.join("packs")), 0);
         assert_eq!(count(&directory.0.join("generations")), 0);
@@ -2070,3 +2232,6 @@ mod tests {
         assert_eq!(marker(&mut store), 7);
     }
 }
+
+#[cfg(test)]
+mod live_tests;

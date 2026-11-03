@@ -522,7 +522,7 @@ impl WgpuRasterizer {
                     });
                 retained || match tile.try_backing() {
                     None => false,
-                    Some(Ok(blob)) => blob.compressed_ready().unwrap_or(true),
+                    Some(Ok(blob)) => !cfg!(target_arch="wasm32") || !matches!(blob.poll_compressed(),Ok(layer_core::package::RangeState::Pending)),
                     // Submit reports concrete capture/storage errors.
                     Some(Err(_)) => true,
                 }
@@ -537,7 +537,7 @@ impl WgpuRasterizer {
             }
         }
         for target in source_access::placed_targets(packet.scene).filter(|t| packet.scene.raster(*t).is_some()) {
-            if packet.scene.original(target).is_some_and(|source| source.tiles.values().any(|tile| !tile.compressed_ready().unwrap_or(true))) {
+            if cfg!(target_arch="wasm32") && packet.scene.original(target).is_some_and(|source| source.tiles.values().any(|tile| matches!(tile.poll_compressed(),Ok(layer_core::package::RangeState::Pending)))) {
                 return false;
             }
             for (id, root) in std::iter::once((target, packet.scene.raster(target).unwrap()))

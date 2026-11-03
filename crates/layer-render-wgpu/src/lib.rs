@@ -3890,9 +3890,10 @@ impl CanvasRenderer for WgpuRasterizer {
         self.moving_pixels = pixels;
     }
     fn has_pending_work(&self) -> bool {
+        let waiting_objects = cfg!(target_arch="wasm32") && self.object_deferred && self.image_decode_waiting();
         self.fill_preview.is_some() && self.fill_preview_ready().is_none()
-            || self.held_result_ready() || self.fill_edges_preflight.as_ref().is_some_and(|state|state.pending() && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting())) || self.bake_preflight.as_ref().is_some_and(|state|state.pending() && (!cfg!(target_arch="wasm32") || !state.waiting())) || self.restore_preparation_pending() || self.analysis_dirty || !self.transform_damage.is_empty() || !self.document_damage.is_empty() || self.settling.is_some() || self.retouch.as_ref().is_some_and(|retouch| retouch.pending() && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting()))
-            || self.navigator.pending()
+            || self.held_result_ready() || self.fill_edges_preflight.as_ref().is_some_and(|state|state.pending() && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting())) || self.bake_preflight.as_ref().is_some_and(|state|state.pending() && (!cfg!(target_arch="wasm32") || !state.waiting())) || self.restore_preparation_pending() && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting()) || self.analysis_dirty || !self.transform_damage.is_empty() || !self.document_damage.is_empty() && !waiting_objects || self.settling.is_some() || self.retouch.as_ref().is_some_and(|retouch| retouch.pending() && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting()))
+            || self.navigator.pending() && !waiting_objects
             || self.transform_sources_pending && self.transform_preview.is_some() && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting())
             || self.moving_images_pending()
             || self.moving_decode.as_ref().is_some_and(|(_,queue)|queue.pending())

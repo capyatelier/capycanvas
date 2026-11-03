@@ -59,11 +59,11 @@ mod tests {
                 })
                 .collect();
             let tile = TileBlob::encode(descriptor, &pixels).unwrap();
-            assert_eq!(tile.decode().unwrap(), pixels);
+            assert_eq!(tile.decode_on_worker().unwrap(), pixels);
             let restored =
-                TileBlob::from_compressed(descriptor, tile.content_digest().unwrap(), tile.compressed().unwrap())
+                TileBlob::from_compressed(descriptor, tile.content_digest().unwrap(), tile.compressed_on_worker().map(|range| range.into_arc()).unwrap())
                     .unwrap();
-            assert_eq!(restored.decode().unwrap(), pixels);
+            assert_eq!(restored.decode_on_worker().unwrap(), pixels);
             assert!(
                 tile.compressed_len() < pixels.len() / 2,
                 "Periodic planes must compress: {depth:?}"

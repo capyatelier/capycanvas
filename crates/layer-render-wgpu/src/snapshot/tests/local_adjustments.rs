@@ -22,7 +22,7 @@ fn finish(engine:&mut CanvasEngine<WgpuRasterizer>)->Result<(),String> {
 fn baked_pixel(engine:&CanvasEngine<WgpuRasterizer>,target:SourceTarget,x:u32,y:u32)->[f32;4] {
     let data=engine.document().target_raster(target).unwrap().wait_data().unwrap();
     let tile=data.tiles.get(&TileKey{plane:layer_core::raster::RasterPlane::Color,coordinate:[0,0]}).unwrap();
-    let bytes=tile.wait_backing().unwrap().decode().unwrap();
+    let bytes=tile.wait_backing().unwrap().decode_on_worker().unwrap();
     let offset=((y*256+x)*16) as usize;
     std::array::from_fn(|channel|f32::from_le_bytes(bytes[offset+channel*4..offset+channel*4+4].try_into().unwrap()))
 }
@@ -254,7 +254,7 @@ fn corrupt_retained_bake_input_reports_terminal_error_instead_of_waiting_forever
     paint_mut(&mut document).raster=RasterRevision::backed(data);
     let mut engine=engine(document);merge(&mut engine);
     let error=finish(&mut engine).unwrap_err();
-    assert!(error.contains("digest")||error.contains("integrity"),"unexpected terminal bake error: {error}");
+    assert!(error.contains("digest")||error.contains("integrity")||error.contains("checksum"),"unexpected terminal bake error: {error}");
 }
 
 #[test]

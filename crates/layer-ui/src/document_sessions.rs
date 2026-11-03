@@ -335,14 +335,14 @@ impl<T> DocumentSessions<T> {
     }
     /// Oldest inactive resident payload first. Recount shared handles after each
     /// completion because spilling updates current/undo/redo owners together.
-    pub fn spill_candidate(&self) -> Option<RetainedTiles> {
+    pub fn spill_candidate(&self) -> Option<(u64, RetainedTiles)> {
         (self.resident_bytes() > self.inactive_ram_budget())
             .then(|| {
                 self.parked
-                    .values()
-                    .filter(|p| p.tiles.resident_bytes() > 0)
-                    .min_by_key(|p| p.used)
-                    .map(|p| p.tiles.clone())
+                    .iter()
+                    .filter(|(_,p)| p.tiles.resident_bytes() > 0)
+                    .min_by_key(|(_,p)| p.used)
+                    .map(|(&id,p)| (id,p.tiles.clone()))
             })
             .flatten()
     }

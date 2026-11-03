@@ -104,7 +104,7 @@ mod tests {
         let confined = decode(std::io::Cursor::new(&png), limits, &cancelled, |job| {
             serve(job.input.try_clone().unwrap(), &mut job.output.try_clone().unwrap(), job.limits).map(|()| true)
         }).unwrap();
-        let pixels = |photo: &DecodedPhoto| photo.source.tiles.iter().map(|(at, tile)| (*at, tile.descriptor, tile.decode().unwrap())).collect::<Vec<_>>();
+        let pixels = |photo: &DecodedPhoto| photo.source.tiles.iter().map(|(at, tile)| (*at, tile.descriptor, tile.decode_on_worker().unwrap())).collect::<Vec<_>>();
         assert_eq!(pixels(&local), pixels(&confined));
         assert_eq!((local.source.extent, local.source.resolution, &local.source.interpretation, &local.metadata, local.first_frame, local.primary_image),
             (confined.source.extent, confined.source.resolution, &confined.source.interpretation, &confined.metadata, confined.first_frame, confined.primary_image));

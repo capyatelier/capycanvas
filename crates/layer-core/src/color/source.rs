@@ -193,7 +193,7 @@ impl SourceRows<'_> {
                 if tile.descriptor != self.source.interpretation.descriptor() {
                     return Err("Invalid source tile format".into());
                 }
-                self.tiles.push(tile.decode()?);
+                self.tiles.push(tile.decode_on_worker()?);
             }
             self.band = band;
         }
@@ -333,12 +333,12 @@ mod tests {
         let mut separate = (*source).clone();
         for tile in separate.tiles.values_mut() {
             *tile = Arc::new(
-                TileBlob::encode(tile.descriptor, &tile.decode().unwrap()).unwrap(),
+                TileBlob::encode(tile.descriptor, &tile.decode_on_worker().unwrap()).unwrap(),
             );
         }
         assert_ne!(separate, *source, "independent resources have distinct identity");
         for (coordinate, original) in &source.tiles {
-            assert_eq!(separate.tiles[coordinate].decode().unwrap(), original.decode().unwrap());
+            assert_eq!(separate.tiles[coordinate].decode_on_worker().unwrap(), original.decode_on_worker().unwrap());
         }
         assert_eq!(
             accounting.charge(&Arc::new(separate)),
@@ -347,29 +347,19 @@ mod tests {
     }
     #[test]
     fn source_identity_equality_does_not_read_parked_samples() {
-        use crate::raster_storage::{RetainedTiles, TileChunk, prepare_external_spill};
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        struct MissingChunk { len: usize, reads: AtomicUsize }
-        impl TileChunk for MissingChunk {
-            fn len(&self) -> usize { self.len }
-            fn poll(&self) -> Result<Option<Arc<[u8]>>, String> { self.reads.fetch_add(1, Ordering::Relaxed); Err("Unavailable parked tile".into()) }
-            fn resident_bytes(&self) -> usize { 0 }
-            fn evict(&self) {}
-        }
+        use crate::raster_storage::{RetainedTiles, tests::Store};
         let source = rgba8_source([1, 1], |_, _| [13, 29, 71, 255]);
         let mut restored = (*source).clone();
         for blob in restored.tiles.values_mut() {
-            *blob = Arc::new(TileBlob::from_package(blob.resource_id(), blob.descriptor, blob.compressed().unwrap()).unwrap());
+            *blob = Arc::new(TileBlob::from_package(blob.resource_id(), blob.descriptor, blob.compressed_on_worker().map(|range| range.into_arc()).unwrap()).unwrap());
         }
         let retained = RetainedTiles { sources: source.tiles.values().cloned().collect(), ..Default::default() };
-        let spill = prepare_external_spill(&retained).unwrap().unwrap();
-        let missing = Arc::new(MissingChunk { len: spill.bytes.len(), reads: AtomicUsize::new(0) });
-        spill.commit(missing.clone()).unwrap();
+        let store = Store::new(&retained);
+        std::fs::OpenOptions::new().write(true).open(store.pack()).unwrap().set_len(0).unwrap();
         assert_eq!(*source, restored);
         source.validate().unwrap();
-        assert_eq!(missing.reads.load(Ordering::Relaxed), 0);
-        assert_eq!(source.tiles.values().next().unwrap().content_digest().unwrap_err(), "Unavailable parked tile");
-        assert_eq!(missing.reads.load(Ordering::Relaxed), 1);
+        assert_eq!(source.resident_bytes(), 0);
+        assert!(source.tiles.values().next().unwrap().decode_on_worker().is_err());
     }
 
     #[test]

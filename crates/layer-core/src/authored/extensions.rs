@@ -1,5 +1,7 @@
 use super::PortableId;
-use crate::package::{ByteRange, ImmutableBacking, RangeState, MAX_RANGE_BYTES, manifest::Manifest, references, values::{DecodeError,DecodeResult}};
+#[cfg(test)]
+use crate::package::RangeState;
+use crate::package::{ByteRange, ImmutableBacking, MAX_RANGE_BYTES, manifest::Manifest, references, values::{DecodeError,DecodeResult}};
 use serde_json::{Map, Value, json};
 use std::{collections::{BTreeMap, BTreeSet}, fmt, sync::{Arc, atomic::{AtomicBool, Ordering}}};
 
@@ -60,10 +62,7 @@ impl OpaqueResource {
         check(cancelled)?;
         if offset.checked_add(length as u64).is_none_or(|end| end > self.length) { return Err("Opaque resource read exceeds range".into()); }
         let absolute = self.offset.checked_add(offset).ok_or("Opaque resource offset overflow")?;
-        let bytes = match self.backing.poll(absolute, length).map_err(DecodeError::Io)? {
-            RangeState::Pending => return Err(DecodeError::Io("Package bytes are pending".into())),
-            RangeState::Ready(bytes) => bytes,
-        };
+        let bytes=self.backing.read_on_worker(absolute,length).map_err(DecodeError::Io)?;
         check(cancelled)?;
         Ok(bytes)
     }

@@ -109,6 +109,8 @@ host guide describes.
 | Pen tilt | Engine `projected_tilt` and `dry_pose_keys_use_physical_inclination_independent_of_azimuth`; Android `AndroidStylusTest` and `AndroidHostTest#physicalTiltControlsDryBrushCursorAndPigment`; GTK `native_contact_brushes`; Web `--contact-brushes`. |
 | Panels, bridges and squircles | Shared `panel_bridges::tests` and `divider_geometry_`; renderer `panel_surface::tests` and `panel_geometry::tests`; GTK `panel_tabs::tests`, `workspace::allocation_tests`, `squircle::tests`, `render_thread::tests::chrome_`, ignored `render_thread::tests::workspace_presenter_prepares_chrome_before_first_panel_parameters`, `native_squircle_corners`, `native_panel_tab_alpha_pixels`, `native_compact_shadow_pixels` and `native_window_scene_pixels`; Android `columnBridgeGapFrameTiming` and `AndroidWorkspacePresentationTest`. |
 
+GTK `native_document_tabs_cold_store_motion` checks cold pan and ordered paint/undo after real pressure parking.
+
 Tab sizing: `cargo test --locked -p layer-ui tab_measurement_tests`; Android `AndroidHostTest#crowdedTabReordersKeepPanelWidthsAndBodies` covers English/Russian reorder after resize in both themes.
 
 Pending transform cancellation: GTK `native_transform_escape` at 412×891 and 1600×1000 in light and dark checks one physical Escape, drawer closure and unchanged artwork history.

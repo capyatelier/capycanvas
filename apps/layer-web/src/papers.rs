@@ -21,7 +21,7 @@ struct Transfer {
 }
 impl Transfer {
     fn send(source: &SourceImage, buffers: &js_sys::Array) -> Result<Self, String> {
-        for tile in source.tiles.values() { buffers.push(&js_sys::Uint8Array::from(tile.compressed()?.as_ref())); }
+        for tile in source.tiles.values() { buffers.push(&js_sys::Uint8Array::from(tile.compressed_on_worker()?.as_ref())); }
         Ok(Self { extent: source.extent, resolution: source.resolution, interpretation: source.interpretation.clone(), tiles: source.tiles.keys().copied().collect() })
     }
     fn receive(self, buffers: &js_sys::Array, first: u32) -> Result<SourceImage, String> {

@@ -221,7 +221,7 @@ fn depth_changes_rescale_all_codes_in_color_alpha_mask_and_both_wetness_planes()
                     &paint(document,0).raster
                 };
                 let blob = backing(root, plane);
-                let bytes = blob.decode().unwrap();
+                let bytes = blob.decode_on_worker().unwrap();
                 let original = samples(depth, if plane == RasterPlane::Color { 4 } else { 1 });
                 for (a, b) in original
                     .chunks_exact(depth.bytes())
@@ -279,7 +279,7 @@ fn conversion_matches_f64_coordinates_within_one_code_and_keeps_exact_alpha() {
                     &paint(&prepared.document,0).raster,
                     RasterPlane::Color,
                 )
-                .decode()
+                .decode_on_worker()
                 .unwrap();
                 let read = |bytes: &[u8]| {
                     if depth == SampleDepth::U8 {
@@ -340,7 +340,7 @@ fn dither_is_repeatable_coordinate_dependent_and_never_changes_coverage() {
         let b=&source_b.tiles[coordinate];
         assert_ne!(a.resource_id(),b.resource_id());
         assert_eq!(a.descriptor,b.descriptor);
-        assert_eq!(a.decode().unwrap(),b.decode().unwrap());
+        assert_eq!(a.decode_on_worker().unwrap(),b.decode_on_worker().unwrap());
     }
     assert_ne!(
         source_a.tiles[&[0, 0]].content_digest().unwrap(),
@@ -365,10 +365,10 @@ fn dither_is_repeatable_coordinate_dependent_and_never_changes_coverage() {
         backing(&paint(&plain.document,0).raster, RasterPlane::WatercolorWetness).content_digest().unwrap()
     );
     let bytes = backing(&paint(&plain.document,0).raster, RasterPlane::Color)
-        .decode()
+        .decode_on_worker()
         .unwrap();
     for tile in source_a.tiles.values() {
-        let dithered = tile.decode().unwrap();
+        let dithered = tile.decode_on_worker().unwrap();
         for (a, b) in bytes.as_chunks::<4>().0.iter().zip(dithered.as_chunks::<4>().0.iter()) {
             assert_eq!(a[3], b[3]);
             assert!(a[..3].iter().zip(&b[..3]).all(|(a, b)| a.abs_diff(*b) <= 1));
@@ -403,13 +403,13 @@ fn absolute_intent_keeps_the_white_point_difference_and_preserves_alpha() {
         &paint(&relative.document,0).raster,
         RasterPlane::Color,
     )
-    .decode()
+    .decode_on_worker()
     .unwrap();
     let absolute = backing(
         &paint(&absolute.document,0).raster,
         RasterPlane::Color,
     )
-    .decode()
+    .decode_on_worker()
     .unwrap();
     assert_ne!(relative, absolute);
     for (a, b) in relative.as_chunks::<8>().0.iter().zip(absolute.as_chunks::<8>().0.iter()) {
@@ -572,7 +572,7 @@ fn float32_depth_promotion_is_exact_demotion_and_cancel_are_atomic() {
     let promote = DocumentColorChange::Depth { depth: SampleDepth::F32, dither: OutputDither::None };
     let result = prepare_document_color(&project, promote, LIMIT, || false).unwrap();
     let root = paint(&result.document,0).raster.wait_data().unwrap();
-    let output = root.tiles[&key(RasterPlane::Color)].wait_backing().unwrap().decode().unwrap();
+    let output = root.tiles[&key(RasterPlane::Color)].wait_backing().unwrap().decode_on_worker().unwrap();
     for (input, output) in half.as_chunks::<2>().0.iter().zip(output.as_chunks::<4>().0.iter()) {
         assert_eq!(layer_core::color::f16::from_bits(u16::from_le_bytes(*input)).to_f32().to_bits(), u32::from_le_bytes(*output));
     }
@@ -583,7 +583,7 @@ fn float32_depth_promotion_is_exact_demotion_and_cancel_are_atomic() {
     assert_eq!(editor.document().composition().color.depth, SampleDepth::F32);
     let demote = DocumentColorChange::Depth { depth: SampleDepth::F16, dither: OutputDither::None };
     let narrowed = prepare_document_color(&result.document, demote, LIMIT, || false).unwrap();
-    assert_eq!(paint(&narrowed.document,0).raster.wait_data().unwrap().tiles[&key(RasterPlane::Color)].wait_backing().unwrap().decode().unwrap(), half);
+    assert_eq!(paint(&narrowed.document,0).raster.wait_data().unwrap().tiles[&key(RasterPlane::Color)].wait_backing().unwrap().decode_on_worker().unwrap(), half);
     assert!(prepare_document_color(&project, promote, LIMIT, || true).is_err());
     let mut wide = result.document.clone();
     let bytes: Vec<_> = (0..65536).flat_map(|_| [100000.,-100000.,1.,1.]).flat_map(f32::to_le_bytes).collect();
@@ -644,7 +644,7 @@ fn conversion_uses_unplaced_source_domain_outside_the_composition() {
     let data=converted.raster.wait_data().unwrap();
     let tile=data.tiles[&TileKey {plane:RasterPlane::Color,coordinate}].wait_backing().unwrap();
     assert_eq!(tile.descriptor,result.document.composition().color.paint_descriptor());
-    let output=tile.decode().unwrap();
+    let output=tile.decode_on_worker().unwrap();
     for (input,output) in samples(SampleDepth::U8,4).iter().zip(output.as_chunks::<2>().0.iter()) {
         assert_eq!(u16::from_le_bytes(*output),u16::from(*input)*257);
     }
@@ -663,7 +663,7 @@ fn fixed_reduced_color_layers_preserve_modes_and_alpha_through_document_depth_ch
             assert_eq!(before.color_mode, after.color_mode);
             let tile = after.raster.wait_data().unwrap().tiles[&key(RasterPlane::Color)].wait_backing().unwrap();
             assert_eq!(tile.descriptor.channels, 2); assert_eq!(tile.descriptor.depth(), depth);
-            let data = tile.decode().unwrap();
+            let data = tile.decode_on_worker().unwrap();
             if depth == SampleDepth::U8 { assert_eq!(&data[..2], if after.color_mode == LayerColorMode::TwoTone { &[255,255] } else { &[64,128] }); }
             else { let values = hdr::decode_samples(depth, &data[..2 * depth.bytes()]).unwrap(); assert_eq!(values[0], values[1]); assert!((values[3] - if after.color_mode == LayerColorMode::TwoTone { 1. } else { 32768. / 65535. }).abs() < 0.001); }
         }
@@ -699,8 +699,8 @@ fn working_base_conversion_preserves_shared_object_image_and_base_dither_phase()
         assert_ne!(base.image.id(),shared.id());
         if matches!(change,DocumentColorChange::Depth {dither:OutputDither::Stochastic8,..}) {
             assert_ne!(base.image.id(),shifted.image.id());
-            assert_ne!(base.image.tiles[&[0,0]].decode().unwrap(),shifted.image.tiles[&[0,0]].decode().unwrap());
-            let old=shared.tiles[&[0,0]].decode().unwrap();
+            assert_ne!(base.image.tiles[&[0,0]].decode_on_worker().unwrap(),shifted.image.tiles[&[0,0]].decode_on_worker().unwrap());
+            let old=shared.tiles[&[0,0]].decode_on_worker().unwrap();
             let mut expected=vec![0;prepared.document.composition().color.paint_descriptor().byte_len([TILE_SIZE;2]).unwrap()];
             let decoder=WorkingDecoder::new(&shared.interpretation,document.composition().color.space,Default::default()).unwrap();
             let destination=&shifted.image.interpretation;
@@ -711,7 +711,7 @@ fn working_base_conversion_preserves_shared_object_image_and_base_dither_phase()
                 decoder.decode_pixels(&old[y*old_stride..(y+1)*old_stride],&mut linear).unwrap();
                 encoder.encode_straight(&linear,&mut expected[y*TILE_SIZE as usize*4..(y+1)*TILE_SIZE as usize*4],None,[17,9+y as u32]).unwrap();
             }
-            assert_eq!(shifted.image.tiles[&[0,0]].decode().unwrap(),expected);
+            assert_eq!(shifted.image.tiles[&[0,0]].decode_on_worker().unwrap(),expected);
         } else {
             assert_eq!(base.image.id(),shifted.image.id());
             assert!(base.image.same_owner(&shifted.image));

@@ -1,44 +1,19 @@
 use super::*;
-use layer_core::{Document, authored::{Artwork, PaintBase, SourceTarget},
-    raster_storage::{TileChunk,prepare_external_spill}};
-use std::sync::{Condvar,Mutex};
+use layer_core::{Document, authored::{Artwork, PaintBase, SourceTarget}};
+use crate::test_support::{GatedStore,ReadGate};
+use std::sync::Mutex;
 use std::time::{Duration,Instant};
 
 const DEADLINE:Duration=Duration::from_secs(10);
 
-#[derive(Default)]
-struct Gate {open:Mutex<bool>,wake:Condvar,reads:std::sync::atomic::AtomicUsize}
-impl Gate {
-    fn release(&self) {*self.open.lock().unwrap()=true;self.wake.notify_all();}
-    fn entered(&self) {
-        let deadline=Instant::now()+DEADLINE;
-        while self.reads.load(Ordering::Acquire)==0 {assert!(Instant::now()<deadline,"decode worker did not read its gated source");std::thread::sleep(Duration::from_millis(1));}
-    }
-}
-struct Release(Arc<Gate>);
-impl Drop for Release {fn drop(&mut self) {self.0.release();}}
-struct Chunk {bytes:Arc<[u8]>,gate:Arc<Gate>,fail:bool}
-impl TileChunk for Chunk {
-    fn len(&self)->usize {self.bytes.len()}
-    fn poll(&self)->Result<Option<Arc<[u8]>>,String> {
-        self.gate.reads.fetch_add(1,Ordering::Release);
-        let mut open=self.gate.open.lock().unwrap();
-        while !*open {open=self.gate.wake.wait(open).unwrap();}
-        if self.fail {Err("Parked tile read failed".into())}else {Ok(Some(self.bytes.clone()))}
-    }
-    fn resident_bytes(&self)->usize {self.bytes.len()}
-    fn evict(&self) {}
-}
-fn parked(fail:bool)->(Arc<SourceImage>,Arc<Gate>,Release) {
+fn parked(fail:bool)->(Arc<SourceImage>,Arc<ReadGate>,GatedStore) {
     let source=layer_core::color::source::rgba8_source([PAGE_SIZE;2],|_,_|[255,128,0,255]);
     let mut artwork=Artwork::new([PAGE_SIZE;2]).unwrap();
     let (_,SourceTarget::Paint(target))=crate::test_support::add_paint(&mut artwork,"Gated source",[PAGE_SIZE;2]) else {unreachable!()};
     artwork.paint.get_mut(target).unwrap().base=Some(PaintBase::new(source.clone().into()));
     let retained=layer_core::Editor::new(Document::from_artwork(artwork).unwrap()).retained_tiles();
-    let spill=prepare_external_spill(&retained).unwrap().unwrap();
-    let gate=Arc::new(Gate::default());let release=Release(gate.clone());
-    let bytes=Arc::from(spill.bytes.to_vec());spill.commit(Arc::new(Chunk {bytes,gate:gate.clone(),fail})).unwrap();
-    (source,gate,release)
+    let store=GatedStore::new(&retained,fail);let gate=store.gate.clone();
+    (source,gate,store)
 }
 fn queue(pool:&Arc<DecodePool>,destination:RgbSpace)->MipDecodeQueue {
     let mut queue=MipDecodeQueue::native(Arc::new(layer_core::raster::DecodedTileCache::new(0)),destination).unwrap();

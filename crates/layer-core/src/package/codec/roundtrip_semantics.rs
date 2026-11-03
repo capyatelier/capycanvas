@@ -90,7 +90,7 @@ fn exact_tiles(expected: &RasterRevision, actual: &RasterRevision) {
         let actual = actual.tiles[key].wait_backing().unwrap();
         assert_eq!(actual.descriptor, expected.descriptor);
         assert_eq!(actual.content_digest().unwrap(), expected.content_digest().unwrap());
-        assert_eq!(actual.decode().unwrap(), expected.decode().unwrap());
+        assert_eq!(actual.decode_on_worker().unwrap(), expected.decode_on_worker().unwrap());
     }
 }
 #[test]
@@ -384,7 +384,7 @@ fn native_sources_preserve_u16_profiles_hidden_rgb_and_shared_ownership() {
     assert!(a.same_owner(b));
     assert_eq!(a, original);
     for (key, tile) in &a.tiles {
-        assert_eq!(tile.decode().unwrap(), original.tiles[key].decode().unwrap());
+        assert_eq!(tile.decode_on_worker().unwrap(), original.tiles[key].decode_on_worker().unwrap());
     }
     assert_eq!(serialize(&prepare(&loaded, false)), bytes);
     let weak = Arc::downgrade(a.storage());

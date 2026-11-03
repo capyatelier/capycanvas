@@ -259,7 +259,7 @@ fn gray_alpha_packed_writes_preserve_unedited_half_words() {
                 submit(&r, &encoder, &[batch]);
                 let tile = RasterTile::pending(descriptor);
                 r.capture_tiles(&[TileCapture { source: CaptureSource::Packed(&output), tile: tile.clone() }]).unwrap().finish().unwrap();
-                let bytes = tile.wait_backing().unwrap().decode().unwrap();
+                let bytes = tile.wait_backing().unwrap().decode_on_worker().unwrap();
                 for (i, code) in bytes.as_chunks::<2>().0.iter().enumerate() {
                     let x = i as u32 % 256; let y = i as u32 / 256;
                     if x >= region[0] && x < region[0] + region[2] && y >= region[1] && y < region[1] + region[3] {
@@ -586,7 +586,7 @@ fn native_restore_writeback_capture_round_trip_preserves_committed_codes() {
                         .unwrap();
                     capture.finish().unwrap();
                     let backing = ticket.wait_backing().unwrap();
-                    let bytes = backing.decode().unwrap();
+                    let bytes = backing.decode_on_worker().unwrap();
                     if let Some(first) = &first {
                         assert!(
                             first == &bytes,
@@ -645,7 +645,7 @@ fn half_gray_alpha_publication_saturates_and_matches_canonical_pixels() {
         let batch=encoder.prepare(&r.device,&[request], &mut Default::default()).unwrap();
         submit(&r, &encoder, &[batch]);
         r.capture_tiles(&[TileCapture {source:CaptureSource::Packed(&output),tile:tile.clone()}]).unwrap().finish().unwrap();
-        let bytes=tile.wait_backing().unwrap().decode().unwrap();
+        let bytes=tile.wait_backing().unwrap().decode_on_worker().unwrap();
         let cache=page_bytes(&r,canonical);
         for (i,((encoded,linear),pixel)) in bytes.as_chunks::<4>().0.iter().zip(cache.as_chunks::<16>().0.iter()).zip(&pixels).enumerate() {
             let alpha=f16::from_f32(pixel[3]);

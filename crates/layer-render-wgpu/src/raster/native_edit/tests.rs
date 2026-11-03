@@ -69,7 +69,7 @@ fn backing(root: &RasterRevision) -> BTreeMap<TileKey, Vec<u8>> {
         .unwrap()
         .tiles
         .iter()
-        .map(|(key, tile)| (*key, tile.wait_backing().unwrap().decode().unwrap()))
+        .map(|(key, tile)| (*key, tile.wait_backing().unwrap().decode_on_worker().unwrap()))
         .collect()
 }
 fn engine(document: layer_core::Document) -> (InputProducer<PenEvent>, CanvasEngine<WgpuRasterizer>) {
@@ -338,11 +338,11 @@ fn partial_bakes_back_tiles_without_publishing_the_layer() {
     let data = &r.native_edit.as_ref().unwrap().backing[&low];
     assert!(!data.tiles.is_empty() && data.tiles.len() < 15, "the first region has backing while the layer is incomplete");
     let (&key, tile) = data.tiles.iter().next().unwrap();
-    let first = tile.wait_backing().unwrap().decode().unwrap();
+    let first = tile.wait_backing().unwrap().decode_on_worker().unwrap();
     flush(&mut engine);
     let data = root.wait_data().unwrap();
     assert_eq!(data.tiles.len(), 15);
-    assert_eq!(data.tiles[&key].wait_backing().unwrap().decode().unwrap(), first);
+    assert_eq!(data.tiles[&key].wait_backing().unwrap().decode_on_worker().unwrap(), first);
     let actual = pixels(&mut engine);
     assert!(actual.iter().zip(&original).all(|(a, b)| a.abs_diff(*b) <= 1), "High must use Low after its working pages are evicted");
     assert!(engine.undo().unwrap());
@@ -781,7 +781,7 @@ fn publication_matches_independent_native_encoding_at_every_depth() {
                 commands.submit(&r.queue);
                 capture.finish().unwrap();
                 let context=format!("{depth:?} {space:?} in_place={in_place}");
-                assert_native_bytes(&tile.wait_backing().unwrap().decode().unwrap(),&expected,&context);
+                assert_native_bytes(&tile.wait_backing().unwrap().decode_on_worker().unwrap(),&expected,&context);
                 assert_native_bytes(&crate::layer_tests::page_bytes(&r,&image),&expected_working,&context);
             }
         }
@@ -842,7 +842,7 @@ fn late_invalid_color_or_scalar_publishes_defined_values_with_its_siblings() {
             let context=format!("{depth:?} in_place={in_place} scalar_failure={scalar_failure}");
             capture.finish().unwrap();
             assert!(tickets.iter().all(|tile|tile.wait_backing().is_ok()),"{context}: every sibling publishes");
-            let stored=tickets.last().unwrap().wait_backing().unwrap().decode().unwrap().to_vec();
+            let stored=tickets.last().unwrap().wait_backing().unwrap().decode_on_worker().unwrap().to_vec();
             assert!(stored[..if scalar_failure {2} else {depth.bytes()*3}].iter().all(|byte|*byte==0),"{context}: invalid sample stores as zero");
             assert!(crate::layer_tests::page_bytes(&r,&bad).as_chunks::<4>().0.iter().all(|v|f32::from_le_bytes(*v).is_finite()),"{context}: invalid working page");
         }}

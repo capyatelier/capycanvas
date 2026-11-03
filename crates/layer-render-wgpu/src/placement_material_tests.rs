@@ -255,7 +255,7 @@ fn assert_baked_codes(layer: &Document, nonzero_planes: &[RasterPlane], expected
         if key.plane == RasterPlane::Mask { continue; }
         planes.insert(key.plane);
         let blob = tile.wait_backing().unwrap();
-        let bytes = blob.decode().unwrap();
+        let bytes = blob.decode_on_worker().unwrap();
         assert!(bytes.iter().any(|value| *value != 0), "empty native {key:?} must stay sparse");
         let size = blob.descriptor.bytes_per_pixel().unwrap();
         for (i, actual) in bytes.chunks_exact(size).enumerate() {
@@ -498,7 +498,7 @@ fn snapshot_transform_enlargement_preserves_mask_defaults_and_finite_native_over
     let mut zero_overrides = 0;
     for (key, tile) in &mask.source.raster.wait_data().unwrap().tiles {
         assert_eq!(key.plane, RasterPlane::Mask);
-        let bytes = tile.wait_backing().unwrap().decode().unwrap();
+        let bytes = tile.wait_backing().unwrap().decode_on_worker().unwrap();
         zero_overrides += usize::from(bytes.iter().all(|value| *value == 0));
         for (i, value) in bytes.into_iter().enumerate() {
             let world = Point {
@@ -634,7 +634,7 @@ fn accepted_photo_keeps_raw_lod_for_sparse_watercolor_and_transform_reopen() {
     for (key, tile) in &mut dry.tiles {
         if key.plane != RasterPlane::WatercolorWetness { continue; }
         let blob = tile.wait_backing().unwrap();
-        let mut bytes = blob.decode().unwrap();
+        let mut bytes = blob.decode_on_worker().unwrap();
         bytes.fill(0);
         *tile = RasterTile::backed(TileBlob::encode(blob.descriptor, &bytes).unwrap());
     }
@@ -653,7 +653,7 @@ fn accepted_photo_keeps_raw_lod_for_sparse_watercolor_and_transform_reopen() {
     parity(&cached, &photo, true);
     let key = TileKey { plane: RasterPlane::Color, coordinate: [0, 0] };
     let blob = changed_style.tiles[&key].wait_backing().unwrap();
-    let mut bytes = blob.decode().unwrap();
+    let mut bytes = blob.decode_on_worker().unwrap();
     for pixel in bytes.as_chunks_mut::<4>().0.iter_mut().filter(|pixel| pixel[3] != 0) { pixel[..3].copy_from_slice(&[20, 60, 100]); }
     changed_style.tiles.insert(key, RasterTile::backed(TileBlob::encode(blob.descriptor, &bytes).unwrap()));
     paint_mut(&mut photo).raster = RasterRevision::backed(changed_style);
@@ -986,7 +986,7 @@ fn independent_projective_group_mask_transform_preserves_owner_and_default_domai
     let mut defaults = 0;
     for (key,tile) in &mask.source.raster.wait_data().unwrap().tiles {
         assert_eq!(key.plane,RasterPlane::Mask);
-        let bytes = tile.wait_backing().unwrap().decode().unwrap();
+        let bytes = tile.wait_backing().unwrap().decode_on_worker().unwrap();
         for (i,actual) in bytes.into_iter().enumerate() {
             let world = [origin.x as f64+(key.coordinate[0]*PAGE_SIZE+i as u32%PAGE_SIZE) as f64+0.5,
                 origin.y as f64+(key.coordinate[1]*PAGE_SIZE+i as u32/PAGE_SIZE) as f64+0.5];
@@ -1023,19 +1023,19 @@ fn linked_outer_mesh_mask_transform_uses_winning_owner_uv_and_preserves_no_hit_d
         let preview = render(&mut renderer,&owner,&[],false);
         renderer.set_transform_preview(None).unwrap();
         let source: Planes = paint(&owner).raster.wait_data().unwrap().tiles.iter().map(|(key,tile)|
-            (*key,tile.wait_backing().unwrap().decode().unwrap())).collect();
+            (*key,tile.wait_backing().unwrap().decode_on_worker().unwrap())).collect();
         let plan = document.layer_transform_plan(target(&owner),&placement, None,Default::default()).unwrap();
         assert_eq!(plan.target,target(&owner));
         assert_eq!(plan.scope,layer_core::TransformPixelsScope::Paint {linked_mask:true});
         let edit = pollster::block_on(renderer.snapshot_gpu().transform_pixels(plan,Default::default())).unwrap();
     let mut baked = document.clone(); baked.apply(edit).unwrap();
         let actual: Planes = paint(&baked).raster.wait_data().unwrap().tiles.iter().map(|(key,tile)|
-            (*key,tile.wait_backing().unwrap().decode().unwrap())).collect();
+            (*key,tile.wait_backing().unwrap().decode_on_worker().unwrap())).collect();
         check_raw_mapping(&source,&actual,&positions,"linked outer mesh bake");
         let baked_mask = mask_snapshot(&baked);
         assert_eq!(baked_mask.use_.inverted,inverted);
         let masks: Planes = baked_mask.source.raster.wait_data().unwrap().tiles.iter().map(|(key,tile)|
-            (*key,tile.wait_backing().unwrap().decode().unwrap())).collect();
+            (*key,tile.wait_backing().unwrap().decode_on_worker().unwrap())).collect();
         let mut no_hit = 0;
         for (i,sources) in positions.iter().enumerate() {
             let codes: Vec<u8> = sources.iter().map(|source| source.map(|[x,y]|

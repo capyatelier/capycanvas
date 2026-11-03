@@ -40,15 +40,91 @@ pub(crate) fn above_bottom_paper(artwork: &layer_core::authored::Artwork) -> usi
     entries.len() - usize::from(paper)
 }
 
-pub(crate) fn corrupt_tile(blob: layer_core::raster::TileBlob) -> layer_core::raster::RasterTile {
-    use layer_core::{authored::*, raster::*, raster_storage::*};
-    struct Chunk(Arc<[u8]>);
-    impl TileChunk for Chunk {
-        fn len(&self) -> usize { self.0.len() }
-        fn poll(&self) -> Result<Option<Arc<[u8]>>, String> { Ok(Some(self.0.clone())) }
-        fn resident_bytes(&self) -> usize { self.0.len() }
-        fn evict(&self) {}
+pub(crate) fn tile_read_cache() -> layer_core::tile_io::ReadCache {
+    layer_core::tile_io::ReadCache::new(layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {
+        host_default_bytes:Some(1<<30),override_bytes:Some(1<<30),..Default::default()
+    }))
+}
+pub(crate) struct StoredTiles {
+    store: Option<layer_core::package::session_store::SessionStore>,
+    pub path: std::path::PathBuf,
+}
+impl StoredTiles {
+    pub fn new(tiles:&layer_core::raster_storage::RetainedTiles,cache:layer_core::tile_io::ReadCache)->Self {
+        use std::sync::atomic::{AtomicU64,Ordering};
+        static NEXT:AtomicU64=AtomicU64::new(0);
+        let path=std::env::temp_dir().join(format!("capy-render-store-{}-{}",std::process::id(),NEXT.fetch_add(1,Ordering::Relaxed)));
+        let mut store=layer_core::package::session_store::SessionStore::open_with_cache(&path,cache).unwrap();
+        assert!(store.make_durable(tiles,&std::sync::atomic::AtomicBool::new(false)).unwrap()>0);
+        Self {store:Some(store),path}
     }
+    pub fn corrupt(&self) {
+        use std::io::{Read,Seek,SeekFrom,Write};
+        let path=std::fs::read_dir(self.path.join("packs")).unwrap().map(Result::unwrap)
+            .find(|entry|entry.file_type().unwrap().is_file()).unwrap().path();
+        let mut file=std::fs::OpenOptions::new().read(true).write(true).open(path).unwrap();
+        let mut byte=[0];file.read_exact(&mut byte).unwrap();byte[0]^=1;
+        file.seek(SeekFrom::Start(0)).unwrap();file.write_all(&byte).unwrap();file.sync_data().unwrap();
+    }
+}
+impl Drop for StoredTiles {
+    fn drop(&mut self) {drop(self.store.take());let _=std::fs::remove_dir_all(&self.path);}
+}
+#[derive(Default)]
+pub(crate) struct ReadGate {
+    open:std::sync::Mutex<bool>,wake:std::sync::Condvar,
+    pub reads:std::sync::atomic::AtomicUsize,
+    pub readers:std::sync::Mutex<Vec<std::thread::ThreadId>>,
+}
+impl ReadGate {
+    pub fn release(&self) {*self.open.lock().unwrap()=true;self.wake.notify_all();}
+    pub fn entered(&self) {
+        use std::sync::atomic::Ordering;
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);
+        while self.reads.load(Ordering::Acquire)==0 {
+            assert!(std::time::Instant::now()<deadline,"decode worker did not request stored source bytes");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+}
+pub(crate) struct GatedStore {
+    _store:StoredTiles,
+    pub gate:Arc<ReadGate>,
+    stop:std::sync::mpsc::Sender<Option<layer_core::tile_io::ReadCache>>,
+    worker:Option<std::thread::JoinHandle<()>>,
+}
+impl GatedStore {
+    pub fn new(tiles:&layer_core::raster_storage::RetainedTiles,corrupt:bool)->Self {
+        use std::sync::atomic::Ordering;
+        let cache=tile_read_cache();
+        let gate=Arc::new(ReadGate::default());
+        let (send,receive)=std::sync::mpsc::channel::<Option<layer_core::tile_io::ReadCache>>();
+        let waiting=gate.clone();
+        let worker=std::thread::spawn(move ||while let Ok(Some(cache))=receive.recv() {
+            if cache.has_pending_reads() {
+                if waiting.reads.compare_exchange(0,1,Ordering::AcqRel,Ordering::Acquire).is_ok() {
+                    waiting.readers.lock().unwrap().push(std::thread::current().id());
+                }
+                let mut open=waiting.open.lock().unwrap();
+                while !*open {open=waiting.wake.wait(open).unwrap();}
+            }
+            cache.drive();
+        });
+        let schedule=send.clone();
+        cache.set_scheduler(Arc::new(move |cache| {
+            let _=schedule.send(Some(cache));
+        }));
+        let store=StoredTiles::new(tiles,cache);
+        if corrupt {store.corrupt();}
+        Self {_store:store,gate,stop:send,worker:Some(worker)}
+    }
+}
+impl Drop for GatedStore {
+    fn drop(&mut self) {self.gate.release();let _=self.stop.send(None);if let Some(worker)=self.worker.take() {let _=worker.join();}}
+}
+
+pub(crate) fn corrupt_tile(blob: layer_core::raster::TileBlob) -> layer_core::raster::RasterTile {
+    use layer_core::{authored::*, raster::*};
     let tile=RasterTile::backed(blob);let mut artwork=Artwork::new([256;2]).unwrap();
     let (_, SourceTarget::Paint(source))=add_paint(&mut artwork,"Corrupt backing",[256;2]) else {unreachable!()};
     let scalar=tile.descriptor().channels==1;
@@ -64,8 +140,7 @@ pub(crate) fn corrupt_tile(blob: layer_core::raster::TileBlob) -> layer_core::ra
     } else {artwork.paint.get_mut(source).unwrap().raster=raster;}
 
     let editor=layer_core::Editor::new(layer_core::Document::from_artwork(artwork).unwrap());
-    let mut spill=prepare_external_spill(&editor.retained_tiles()).unwrap().unwrap();spill.bytes[0]^=1;
-    let bytes=Arc::from(spill.bytes.clone());spill.commit(Arc::new(Chunk(bytes))).unwrap();tile
+    let store=StoredTiles::new(&editor.retained_tiles(),tile_read_cache());store.corrupt();tile
 }
 
 /// Stores `selection` in a mask through the renderer's mask Coverage

@@ -1431,7 +1431,7 @@ mod clipboard_checks {
             let (_, _, source) = document.artwork.coverage.iter().next().unwrap();
             assert!(source.operations.is_empty());
             let pixels = source.raster.wait_data().unwrap().tiles.iter().map(|(key, tile)|
-                (*key, tile.wait_backing().unwrap().decode().unwrap())).collect::<Vec<_>>();
+                (*key, tile.wait_backing().unwrap().decode_on_worker().unwrap())).collect::<Vec<_>>();
             (source.domain, source.default_coverage, pixels)
         };
         let mut s = clip_session();

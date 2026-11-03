@@ -98,7 +98,7 @@ impl WebApp {
         let candidate = self.documents.spill_candidate();
         let prepared = candidate
             .as_ref()
-            .map(prepare_external_spill)
+            .map(|(_,tiles)|prepare_external_spill(tiles))
             .transpose()
             .map_err(js)?
             .flatten();

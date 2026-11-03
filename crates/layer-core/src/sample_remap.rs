@@ -166,7 +166,7 @@ pub fn remap_image(source: &SourceImage, extent: [u32; 2], map: GridMap, max_byt
             output.fill(0);
             let mut decoded = Decoded {
                 tiles: Vec::with_capacity(4),
-                read: Box::new(|coordinate| source.tiles.get(&coordinate).map(|tile| tile.decode()).transpose()),
+                read: Box::new(|coordinate| source.tiles.get(&coordinate).map(|tile| tile.decode_on_worker()).transpose()),
             };
             let keep = [[0; 2], extent.map(i64::from)];
             fill_tile(&mut output, bpp, [tx, ty], keep, source_extent, map, &mut decoded)?;
@@ -214,7 +214,7 @@ pub fn remap_raster(data: &RasterData, map: GridMap, extent: [u32; 2], keep: [[i
         let descriptor = tile.descriptor();
         let bpp = descriptor.bytes_per_pixel().ok_or("Unsupported raster pixels")?;
         let blob = tile.wait_backing_cancellable(cancelled)?;
-        let bytes = blob.decode()?;
+        let bytes = blob.decode_on_worker()?;
         let mut output = vec![0; TILE_SIZE as usize * TILE_SIZE as usize * bpp];
         let mut decoded = Decoded { tiles: vec![(key.coordinate, Arc::new(bytes))], read: Box::new(|_| Ok(None)) };
         fill_tile(&mut output, bpp, coordinate, keep, [i64::MAX; 2], map, &mut decoded)?;

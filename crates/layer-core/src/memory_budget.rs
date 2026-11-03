@@ -80,7 +80,7 @@ pub struct MemoryBudgetSnapshot {
     pub devices: Vec<MemoryDeviceSnapshot>,
 }
 #[derive(Default)]
-struct Grants { ram: AtomicU64, gpu: AtomicU64 }
+struct Grants { ram: AtomicU64, gpu: AtomicU64, wake: OnceLock<Arc<dyn Fn() + Send + Sync>> }
 #[derive(Default)]
 struct PendingReport { version: AtomicU64, values: [AtomicU64; 6] }
 impl PendingReport {
@@ -144,6 +144,7 @@ impl std::fmt::Debug for MemoryOwner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.debug_tuple("MemoryOwner").field(&self.grant()).finish() }
 }
 impl MemoryOwner {
+    pub(crate) fn set_wake(&self, wake:Arc<dyn Fn() + Send + Sync>) {let _=self.0.grants.wake.set(wake);}
     pub fn publish(&self, report: MemoryReport) -> bool { self.0.pending.publish(report) }
     pub fn report(&self, mut report: MemoryReport) {
         report.ram_bytes = report.ram_bytes.max(report.pinned_ram_bytes);
@@ -383,7 +384,8 @@ impl State {
     }
     fn rebalance(&self, cache: &BudgetCache) {
         cache.limit.store(self.ram_limit, Ordering::Release);
-        cache.headroom.store(self.import_headroom(), Ordering::Release);
+        let headroom=self.import_headroom();
+        let headroom_changed=cache.headroom.swap(headroom, Ordering::AcqRel)!=headroom;
         let owners: Vec<_> = self.owners.values().collect();
         let mut gpu: Vec<_> = owners.iter().map(|owner| owner.report.pinned_gpu_bytes).collect();
         for (&device, facts) in &self.devices {
@@ -409,7 +411,11 @@ impl State {
                 remaining-=grant;
             }
         }
-        for (i,owner) in owners.iter().enumerate() { owner.grants.ram.store(ram[i],Ordering::Release); owner.grants.gpu.store(unified[i],Ordering::Release); }
+        for (i,owner) in owners.iter().enumerate() {
+            let changed=owner.grants.ram.swap(ram[i],Ordering::AcqRel)!=ram[i];
+            let gpu_changed=owner.grants.gpu.swap(unified[i],Ordering::AcqRel)!=unified[i];
+            if (changed || gpu_changed || headroom_changed) && let Some(wake)=owner.grants.wake.get() {wake();}
+        }
     }
 }
 

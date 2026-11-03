@@ -1,4 +1,6 @@
-use super::{ImmutableBacking, RangeState, MAX_RANGE_BYTES, manifest::{Manifest, decimal_u64}, values::{self, DecodeError, DecodeResult}};
+#[cfg(test)]
+use super::RangeState;
+use super::{ImmutableBacking, MAX_RANGE_BYTES, manifest::{Manifest, decimal_u64}, values::{self, DecodeError, DecodeResult}};
 use super::RASTER_TILE_SIZE as TILE_SIZE;
 use crate::{authored::{OpaqueResource, PortableId, Resource, ResourceEncoding, EncodedBytes, EncodedIntegrity, vector::{Slot, VectorChunk, VectorObject}}, color::{PixelDescriptor, SampleType, TransferEncoding, AlphaAssociation, ColorProfile}, raster::{TileBlob}, Lut3d};
 use serde_json::{Value, json};
@@ -56,7 +58,7 @@ impl Payload {
     }
     pub fn encoded(&self) -> Result<EncodedBytes, String> { Ok(match self {
         Self::Opaque(_) => return Err("Range resources use bounded reads".into()),
-        Self::Tile(tile) => EncodedBytes { encoding:ResourceEncoding::Raw, bytes:tile.compressed()? },
+        Self::Tile(tile) => EncodedBytes { encoding:ResourceEncoding::Raw, bytes:tile.compressed_on_worker()?.into_arc() },
         Self::Encoded(bytes) => EncodedBytes { encoding:ResourceEncoding::Raw, bytes:bytes.storage().clone() },
         Self::Bytes(bytes) => bytes.encoded(|data| compress(data, || bytes.storage().clone())).clone(),
         Self::Code(code) => code.encoded(|data| compress(data.as_bytes(), || Arc::from(data.as_bytes()))).clone(),
@@ -359,10 +361,8 @@ impl<'a> ResourceReader<'a> {
         while bytes.len() < record.bytes as usize {
             if self.cancelled.load(Ordering::Relaxed) { return Err("Package operation cancelled".into()); }
             let length = (record.bytes as usize - bytes.len()).min(MAX_RANGE_BYTES);
-            match self.backing.poll(range.offset.checked_add(bytes.len() as u64).ok_or("Resource offset overflow")?, length).map_err(DecodeError::Io)? {
-                RangeState::Pending => return Err("Package bytes are pending".into()),
-                RangeState::Ready(chunk) => bytes.extend_from_slice(&chunk),
-            }
+            let chunk=self.backing.read_on_worker(range.offset.checked_add(bytes.len() as u64).ok_or("Resource offset overflow")?,length).map_err(DecodeError::Io)?;
+            bytes.extend_from_slice(&chunk);
         }
         let integrity=EncodedIntegrity::calculate(&bytes,self.cancelled)?;
         if integrity.crc32 != record.crc32 { return Err(self.backing.fail("Resource checksum failed".into()).into()); }

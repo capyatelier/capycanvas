@@ -80,6 +80,14 @@ impl Recovery {
         self.current.set(update.current);
         self.execute(update.work);
     }
+    pub async fn make_durable(&self, tiles:layer_core::raster_storage::RetainedTiles)->Result<(),String> {
+        let store=self.store.clone();let path=self.path.clone();
+        gio::spawn_blocking(move || {
+            let mut store=store.lock().map_err(|error|error.to_string())?;
+            if store.is_none() {*store=Some(SessionStore::open(&path)?);}
+            store.as_mut().unwrap().make_durable(&tiles,&AtomicBool::new(false)).map(|_|())
+        }).await.map_err(|error|format!("Drawing storage worker stopped: {error:?}"))?
+    }
     pub async fn prepare_retirement(&self)->Result<(),String> {
         self.drain().await;
         let store=self.store.clone();

@@ -920,7 +920,7 @@ fn deleting_cropped_pixels_recuts_a_photo_base_exactly() {
     assert!(images.contains_key(&base.image.id()) && !images.contains_key(&original.image.id()), "a save omits the excluded samples");
     let data = paint_source(result, photo).raster.wait_data().unwrap();
     for (key, tile) in &data.tiles {
-        let bytes = tile.wait_backing().unwrap().decode().unwrap();
+        let bytes = tile.wait_backing().unwrap().decode_on_worker().unwrap();
         let bpp = tile.descriptor().bytes_per_pixel().unwrap();
         for y in 0..TILE_SIZE {
             for x in 0..TILE_SIZE {

@@ -7259,3 +7259,32 @@ These trials precede the final inventory and colour-accounting corrections.
 
 Raw runs: `/mnt/localssd/capycanvas7-issue24-impl/m21-gtk/paired-confirm/`,
 `fifo-final-motion/` and `idle-restored-switches/`.
+
+## GTK session-store pressure reads
+
+Measured 2026-11-03 on NVIDIA RTX PRO 6000 Blackwell Max-Q, release,
+private Mutter at 2560 × 1600 / 120 Hz. One matched pair compares frozen
+`da961b67e` with M3.1a on `f3594c86a`; GPen uses a 6000 × 4000 drawing
+and a 384 px brush. These canvas-publication diagnostics do not qualify
+fresh ink or reference-tablet motion.
+
+| Warm workload | Canvas cadence, Hz | Gap p99, ms | Worker CPU p50/p95, ms |
+| --- | --- | --- | --- |
+| GPen | 119.539 → 119.699 | 8.867 → 8.644 | 1.076/1.363 → 1.103/1.398 |
+| Pan/pinch | 119.204 → 119.076 | 9.192 → 10.164 | 0.561/0.848 → 0.642/0.939 |
+
+The cold fixture pressure-parks six distinct 4216 × 3016 rasters, with
+641,728,512 decoded bytes and 484,017,660 encoded bytes, and advises the
+backing files out of the OS cache. Restore to first changed compositor sample
+is 336.626 → 319.980 ms for pan and 331.592 → 332.199 ms for paint.
+Contact to the first observed pink paint sample is 247.824 → 264.466 ms;
+the candidate contact starts earlier after restore (83.768 → 67.733 ms).
+The whole 80 ms stroke precedes observed ink in both builds, so it supplies
+no moving-stroke cadence. The 460 ms cold-pan request yields 54.728 →
+55.052 publications/s and a 100.043 → 84.726 ms p99 gap; it is not a
+sustained-motion qualification. Final pan pixels and one ordered stroke with
+Undo/Redo pass on both builds. The sampled candidate compressed hot set is
+255.69 MiB against its 256 MiB grant, with no debt or refusals; read-wait
+telemetry is unavailable.
+Raw runs and counts: `/mnt/localssd/capycanvas7-issue24-impl/m31/results.json`
+and its sibling `runs/` directory.

@@ -38,6 +38,7 @@ mod lut3d_tests;
 pub mod raster;
 pub mod liquify;
 pub mod raster_storage;
+pub mod tile_io;
 pub use effect_catalog::*;
 mod layers;
 mod retouch;

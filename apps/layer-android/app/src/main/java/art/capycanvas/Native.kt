@@ -66,8 +66,9 @@ internal object Native {
     @JvmStatic external fun documentResumeFree(task: Long)
     @JvmStatic external fun documentTrimRequest(handle: Long): Long
     @JvmStatic external fun documentTrimComplete(handle: Long, token: Long, error: String?): Boolean
-    @JvmStatic external fun documentSpillTask(handle: Long): Long
-    @JvmStatic external fun documentSpillWork(task: Long)
+    @JvmStatic external fun documentSpillTask(handle: Long): LongArray?
+    @JvmStatic external fun documentSpillWork(task: Long, store: Long)
+    @JvmStatic external fun documentSpillFree(task: Long)
     @JvmStatic external fun projectParkReady(handle: Long, task: Long): Boolean
     /** File worker only: atomic publication of a captured recovery snapshot. */
     @JvmStatic external fun projectTask(handle: Long, request: Int, location: String, epoch: Long, revision: Long): Long

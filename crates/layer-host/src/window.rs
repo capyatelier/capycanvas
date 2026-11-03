@@ -1019,8 +1019,9 @@ mod tests {
         assert_eq!(window.documents.order(), [1, 2]);
         window.documents.budget.inactive_ram = 0;
         let directory = std::env::temp_dir().join(format!("capy-window-{}", std::process::id()));
-        while let Some(tiles) = window.documents.spill_candidate() {
-            layer_core::raster_storage::spill_to_directory(&tiles, &directory).unwrap();
+        while let Some((id,tiles)) = window.documents.spill_candidate() {
+            let mut store=layer_core::package::session_store::SessionStore::open(&directory.join(id.to_string())).unwrap();
+            store.make_durable(&tiles,&std::sync::atomic::AtomicBool::new(false)).unwrap();
         }
         assert_eq!(window.documents.resident_bytes(), 0);
         let mut activation = switch(&mut window, &mut host, 1);

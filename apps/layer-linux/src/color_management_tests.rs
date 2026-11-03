@@ -434,11 +434,11 @@ fn native_sdr_document_modes() {
             let restored = paint_at(&reopened, 0).raster.wait_data().unwrap();
             for (key, tile) in &backing.tiles {
                 assert_eq!(
-                    tile.wait_backing().unwrap().decode().unwrap(),
+                    tile.wait_backing().unwrap().decode_on_worker().unwrap(),
                     restored.tiles[key]
                         .wait_backing()
                         .unwrap()
-                        .decode()
+                        .decode_on_worker()
                         .unwrap()
                 );
             }

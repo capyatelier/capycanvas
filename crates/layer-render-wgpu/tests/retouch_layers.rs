@@ -131,7 +131,7 @@ fn a_dodge_and_burn_layer_stores_the_middle_code_and_leaves_the_image_unchanged(
                 BlendSpace::Linear => (RgbSpace::Srgb.encode(0.5) * maximum).round(),
             };
             for (key, tile) in &data.tiles {
-                let bytes = tile.wait_backing().unwrap().decode().unwrap();
+                let bytes = tile.wait_backing().unwrap().decode_on_worker().unwrap();
                 let samples: Vec<f64> = match depth {
                     SampleDepth::U16 => bytes.as_chunks::<2>().0.iter().map(|b| f64::from(u16::from_le_bytes([b[0], b[1]]))).collect(),
                     _ => bytes.iter().map(|b| f64::from(*b)).collect(),

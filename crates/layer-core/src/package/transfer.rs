@@ -58,7 +58,7 @@ impl TransferPayload {
         if length>MAX_RANGE_BYTES||offset.checked_add(length as u64).is_none_or(|end|end>self.len()){return Err("Transfer chunk exceeds payload".into());}
         let start=usize::try_from(offset).map_err(|_|"Transfer offset overflow")?;
         Ok(match self {
-            Self::Bytes(v)|Self::Vector(_,v)=>v[start..start+length].to_vec(),Self::Tile(v)=>v.compressed()?[start..start+length].to_vec(),Self::Code(v)=>v.as_bytes()[start..start+length].to_vec(),
+            Self::Bytes(v)|Self::Vector(_,v)=>v[start..start+length].to_vec(),Self::Tile(v)=>v.compressed.read_on_worker()?[start..start+length].to_vec(),Self::Code(v)=>v.as_bytes()[start..start+length].to_vec(),
             Self::Words(v)=>(start..start+length).map(|i|v[i/4].to_le_bytes()[i%4]).collect(),
             Self::Opaque(v)=>v.read_chunk(offset,length,&AtomicBool::new(false))?.to_vec(),
         })
@@ -203,7 +203,7 @@ impl PreparedTransfer {
         for (index,chunks) in chunks.into_iter().enumerate(){for chunk in chunks{receiver.push_chunk(index,&chunk)?;}}
         receiver.finish()
     }
-    fn bytes(&self,index:usize)->Result<Arc<[u8]>,String>{match self.payloads.get(index){Some(TransferPayload::Bytes(v)|TransferPayload::Vector(_,v))=>Ok(v.clone()),Some(TransferPayload::Tile(v))=>v.compressed(),Some(TransferPayload::Code(v))=>Ok(v.as_bytes().into()),_=>Err("Wrong transfer byte payload".into())}}
+    fn bytes(&self,index:usize)->Result<Arc<[u8]>,String>{match self.payloads.get(index){Some(TransferPayload::Bytes(v)|TransferPayload::Vector(_,v))=>Ok(v.clone()),Some(TransferPayload::Tile(v))=>v.compressed_on_worker().map(|range| range.into_arc()),Some(TransferPayload::Code(v))=>Ok(v.as_bytes().into()),_=>Err("Wrong transfer byte payload".into())}}
     fn encoded(&self,payload:&Option<EncodedPayload>)->Result<Option<EncodedBytes>,String>{payload.as_ref().map(|v|Ok(EncodedBytes{encoding:v.encoding,bytes:self.bytes(v.payload)?})).transpose()}
     pub fn adopt_verified(&self,limits:ProjectLimits,cancel:&AtomicBool)->Result<ArtworkCapture,String>{
         self.adopt_verified_with_selection(limits,cancel).map(|(capture,_)|capture)
@@ -420,7 +420,7 @@ mod tests {
             for (coordinate,tile) in &paint.base.as_ref().unwrap().image.tiles {
                 let restored=&loaded.base.as_ref().unwrap().image.tiles[coordinate];
                 assert_eq!(tile.resource_id(),restored.resource_id());
-                assert_eq!(tile.compressed().unwrap(),restored.compressed().unwrap());
+                assert_eq!(tile.compressed_on_worker().map(|range| range.into_arc()).unwrap(),restored.compressed_on_worker().map(|range| range.into_arc()).unwrap());
             }
         }
         assert_eq!(original.artwork.metadata,reopened.artwork.metadata);
@@ -429,47 +429,25 @@ mod tests {
         assert!(prepared.read_chunk(0,0,MAX_RANGE_BYTES+1).is_err());
     }
     #[test]
-    fn captured_transfer_defers_cold_tile_reads_and_retains_spilled_backing() {
-        use crate::raster_storage::{TileChunk, prepare_external_spill};
-        use std::sync::atomic::AtomicUsize;
-        struct Chunk { bytes:Arc<[u8]>, ready:Arc<AtomicBool>, reads:Arc<AtomicUsize> }
-        impl TileChunk for Chunk {
-            fn len(&self)->usize {self.bytes.len()}
-            fn poll(&self)->Result<Option<Arc<[u8]>>,String> {
-                self.reads.fetch_add(1,Ordering::Relaxed);
-                Ok(self.ready.load(Ordering::Relaxed).then(||self.bytes.clone()))
-            }
-            fn resident_bytes(&self)->usize {if self.ready.load(Ordering::Relaxed){self.bytes.len()}else{0}}
-            fn evict(&self) {self.ready.store(false,Ordering::Relaxed);}
-        }
+    fn captured_transfer_defers_store_reads_and_retains_exact_input() {
+        use crate::raster_storage::tests::Store;
         let cancel=AtomicBool::new(false);
         let original=capture();
         let editor=Editor::new(Document::from_artwork((*original.artwork).clone()).unwrap());
         let retained=editor.retained_tiles();
         let blobs=retained.try_blobs().unwrap().unwrap();
-        let tile=blobs[0].clone();
-        let id=tile.resource_id();
-        let expected=tile.compressed().unwrap();
+        let tile=blobs[0].clone();let id=tile.resource_id();let expected=tile.compressed_on_worker().map(|range| range.into_arc()).unwrap();let samples=tile.decode_on_worker().unwrap();
         let weak_tile=Arc::downgrade(&tile);
-        drop(tile);drop(blobs);
-        let spill=prepare_external_spill(&retained).unwrap().unwrap();
-        let ready=Arc::new(AtomicBool::new(false));
-        let reads=Arc::new(AtomicUsize::new(0));
-        let chunk=Arc::new(Chunk {bytes:spill.bytes.clone().into(),ready:ready.clone(),reads:reads.clone()});
-        let weak_chunk=Arc::downgrade(&chunk);
-        spill.commit(chunk.clone()).unwrap();
+        let store=Store::new(&retained);let location=Store::location(&tile);
         let prepared=PreparedTransfer::capture(&original,&cancel).unwrap();
-        let VerifiedResource::Tile {payload,..} = prepared.descriptor.resources[&id] else {panic!("tile payload")};
+        let VerifiedResource::Tile {payload,..}=prepared.descriptor.resources[&id] else {panic!("tile payload")};
         assert_eq!(prepared.payload_len(payload).unwrap(),expected.len() as u64);
-        assert_eq!(reads.load(Ordering::Relaxed),0,"capture and length enumeration must not poll cold backing");
-        drop(original);drop(editor);drop(retained);drop(chunk);
-        assert!(weak_tile.upgrade().is_some());assert!(weak_chunk.upgrade().is_some());
+        assert_eq!(retained.resident_bytes(),0);
         assert!(prepared.read_chunk(payload,u64::MAX,1).is_err());
         assert!(prepared.read_chunk(payload,0,MAX_RANGE_BYTES+1).is_err());
-        assert_eq!(reads.load(Ordering::Relaxed),0,"invalid ranges must fail before reading");
-        assert!(prepared.read_chunk(payload,0,expected.len().min(37)).is_err());
-        assert_eq!(reads.load(Ordering::Relaxed),1,"only a requested chunk polls backing");
-        ready.store(true,Ordering::Relaxed);
+        let input=Store::range(&tile);
+        drop(tile);drop(blobs);drop(original);drop(editor);drop(retained);
+        assert!(weak_tile.upgrade().is_some());assert!(location.upgrade().is_some());
         let mut copied=Vec::new();
         for offset in (0..expected.len()).step_by(37) {
             copied.extend(prepared.read_chunk(payload,offset as u64,(expected.len()-offset).min(37)).unwrap());
@@ -479,10 +457,11 @@ mod tests {
             let loaded=transfer.adopt_verified(ProjectLimits::default(),&cancel).unwrap();
             let restored=loaded.artwork.paint.iter().next().unwrap().2.base.as_ref().unwrap().image.tiles.values().next().unwrap();
             assert_eq!(restored.resource_id(),id);
-            assert_eq!(restored.compressed().unwrap(),expected);
+            assert_eq!(restored.decode_on_worker().unwrap(),samples);
         }
-        drop(prepared);
-        assert!(weak_tile.upgrade().is_none());assert!(weak_chunk.upgrade().is_none());
+        drop(prepared);assert!(weak_tile.upgrade().is_none());assert!(location.upgrade().is_none());
+        assert_eq!(&*input,expected.as_ref());
+        drop(input);drop(store);
     }
     #[test]
     fn decoded_selection_transfer_is_transient_compression_free_and_package_compatible(){

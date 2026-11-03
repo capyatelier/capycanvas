@@ -81,28 +81,25 @@ impl DecodedTileCache {
         }
     }
 
-    pub fn decode(&self, tile: &Arc<TileBlob>) -> Result<Arc<Vec<u8>>, String> {
-        let key = tile.owner_identity();
-        {
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| "Source sample cache failed")?;
-            state.clock = state.clock.saturating_add(1);
-            let used = state.clock;
-            if let Some(entry) = state.entries.get_mut(&key) {
-                entry.used = used;
-                let samples = entry.samples.clone();
-                state.stats.hits += 1;
-                return Ok(samples);
-            }
-            state.stats.misses += 1;
+    pub fn decode_on_worker(&self,tile:&Arc<TileBlob>)->Result<Arc<Vec<u8>>,String> {
+        if let Some(samples)=self.cached(tile)? {return Ok(samples);}
+        self.retain(tile,Arc::new(tile.decode_on_worker()?))
+    }
+    pub fn poll_decode_on_worker(&self,tile:&Arc<TileBlob>)->Result<Option<Arc<Vec<u8>>>,String> {
+        if let Some(samples)=self.cached(tile)? {return Ok(Some(samples));}
+        let crate::package::RangeState::Ready(bytes)=tile.compressed.poll_on_worker()? else {return Ok(None);};
+        self.retain(tile,Arc::new(tile.decode_bytes_on_worker(&bytes)?)).map(Some)
+    }
+    fn cached(&self,tile:&Arc<TileBlob>)->Result<Option<Arc<Vec<u8>>>,String> {
+        let mut state=self.state.lock().map_err(|_|"Source sample cache failed")?;
+        state.clock=state.clock.saturating_add(1);let used=state.clock;
+        if let Some(entry)=state.entries.get_mut(&tile.owner_identity()) {
+            entry.used=used;let samples=entry.samples.clone();state.stats.hits+=1;return Ok(Some(samples));
         }
-
-        // Never hold the cache lock across decompression or integrity checking.
-        // Concurrent misses may do one tile of duplicate work, rather than
-        // making a canvas wait on a file worker's decode.
-        let samples = Arc::new(tile.decode()?);
+        state.stats.misses+=1;Ok(None)
+    }
+    fn retain(&self,tile:&Arc<TileBlob>,samples:Arc<Vec<u8>>)->Result<Arc<Vec<u8>>,String> {
+        let key=tile.owner_identity();
         let bytes = samples.capacity();
         let mut state = self
             .state
@@ -175,17 +172,17 @@ mod tests {
         let a = tile(13);
         let b = tile(71);
         let c = tile(191);
-        let first = cache.decode(&a).unwrap();
-        cache.decode(&b).unwrap();
-        assert!(Arc::ptr_eq(&cache.decode(&a).unwrap(), &first));
-        cache.decode(&c).unwrap(); // B is least recently used.
+        let first = cache.decode_on_worker(&a).unwrap();
+        cache.decode_on_worker(&b).unwrap();
+        assert!(Arc::ptr_eq(&cache.decode_on_worker(&a).unwrap(), &first));
+        cache.decode_on_worker(&c).unwrap(); // B is least recently used.
         assert_eq!(cache.stats().evictions, 1);
-        assert!(Arc::ptr_eq(&cache.decode(&a).unwrap(), &first));
+        assert!(Arc::ptr_eq(&cache.decode_on_worker(&a).unwrap(), &first));
         let weak = Arc::downgrade(&a);
         assert_eq!(Arc::strong_count(&a), 1);
         drop(a);
         assert!(weak.upgrade().is_none());
-        cache.decode(&b).unwrap(); // Expired A retires before still-live C.
+        cache.decode_on_worker(&b).unwrap(); // Expired A retires before still-live C.
         assert_eq!(cache.stats().evictions, 2);
         assert!(first.iter().all(|&v| v == 13));
         assert_eq!(cache.stats().resident_bytes, 2 * 65536);
@@ -197,7 +194,7 @@ mod tests {
     fn shrinking_grants_trims_unused_lru_in_bounded_steps_and_preserves_readers() {
         let cache=DecodedTileCache::new(3*65536);
         let a=tile(11);let b=tile(22);let c=tile(33);
-        let held=cache.decode(&a).unwrap();cache.decode(&b).unwrap();cache.decode(&c).unwrap();
+        let held=cache.decode_on_worker(&a).unwrap();cache.decode_on_worker(&b).unwrap();cache.decode_on_worker(&c).unwrap();
         cache.set_limit(65536);
         assert_eq!(cache.stats().resident_bytes,3*65536);
         assert_eq!(cache.trim_unused(0),0);
@@ -209,19 +206,19 @@ mod tests {
         assert!(held.iter().all(|&byte|byte==11));
         cache.set_limit(0);assert_eq!(cache.trim_unused(8),0);
         drop(held);assert_eq!(cache.trim_unused(1),65536);assert_eq!(cache.stats().physical_bytes,0);
-        cache.set_limit(65536);assert!(cache.decode(&a).unwrap().iter().all(|&byte|byte==11));
+        cache.set_limit(65536);assert!(cache.decode_on_worker(&a).unwrap().iter().all(|&byte|byte==11));
         assert_eq!(cache.stats().resident_bytes,65536);
     }
     #[test]
     fn removed_and_uncached_samples_remain_physically_charged_until_readers_drop() {
         let cache=DecodedTileCache::new(65536);
-        let a=tile(41);let b=tile(42);let held=cache.decode(&a).unwrap();cache.decode(&b).unwrap();
+        let a=tile(41);let b=tile(42);let held=cache.decode_on_worker(&a).unwrap();cache.decode_on_worker(&b).unwrap();
         assert_eq!(cache.stats().resident_bytes,65536);assert_eq!(cache.stats().physical_bytes,2*65536);
         assert_eq!(cache.stats().pinned_bytes,65536);
         assert_eq!(cache.trim_unused(1),65536);assert!(held.iter().all(|&byte|byte==41));
         assert_eq!(cache.stats().physical_bytes,65536);
         drop(held);assert_eq!(cache.stats().physical_bytes,0);
-        cache.set_limit(0);let held=cache.decode(&b).unwrap();let clone=held.clone();
+        cache.set_limit(0);let held=cache.decode_on_worker(&b).unwrap();let clone=held.clone();
         assert_eq!(cache.stats().resident_bytes,0);assert_eq!(cache.stats().physical_bytes,65536);
         assert_eq!(cache.stats().pinned_bytes,65536);drop(held);assert_eq!(cache.stats().physical_bytes,65536);
         drop(clone);assert_eq!(cache.stats().physical_bytes,0);assert_eq!(cache.stats().pinned_bytes,0);
@@ -230,7 +227,7 @@ mod tests {
     #[test]
     fn retired_weak_records_are_reaped_in_bounded_steps() {
         let cache=DecodedTileCache::new(0);let source=tile(81);
-        let readers:Vec<_>=(0..8).map(|_|cache.decode(&source).unwrap()).collect();
+        let readers:Vec<_>=(0..8).map(|_|cache.decode_on_worker(&source).unwrap()).collect();
         assert_eq!(cache.state.lock().unwrap().retired.len(),8);drop(readers);
         assert_eq!(cache.trim_unused(0),0);assert_eq!(cache.state.lock().unwrap().retired.len(),8);
         cache.trim_unused(2);assert_eq!(cache.state.lock().unwrap().retired.len(),6);
@@ -256,27 +253,27 @@ mod tests {
         let mut bad = TileBlob::encode(color.paint_descriptor(), &bytes).unwrap();
         bad.compressed = Arc::new(Arc::<[u8]>::from([0u8]).into());
         let cache = DecodedTileCache::new(bytes.len());
-        assert_eq!(cache.decode(&good).unwrap().as_slice(), bytes);
-        assert!(cache.decode(&Arc::new(bad)).is_err());
-        assert_eq!(cache.decode(&good).unwrap().as_slice(), bytes);
+        assert_eq!(cache.decode_on_worker(&good).unwrap().as_slice(), bytes);
+        assert!(cache.decode_on_worker(&Arc::new(bad)).is_err());
+        assert_eq!(cache.decode_on_worker(&good).unwrap().as_slice(), bytes);
         let disabled = DecodedTileCache::new(0);
-        assert_eq!(disabled.decode(&good).unwrap().as_slice(), bytes);
+        assert_eq!(disabled.decode_on_worker(&good).unwrap().as_slice(), bytes);
         assert_eq!(disabled.stats().resident_bytes, 0);
     }
 
     #[test]
     fn distinct_owners_with_the_same_resource_id_have_independent_cache_entries() {
         let first = tile(23);
-        let restored = Arc::new(TileBlob::from_package(first.resource_id(), first.descriptor, first.compressed().unwrap()).unwrap());
+        let restored = Arc::new(TileBlob::from_package(first.resource_id(), first.descriptor, first.compressed_on_worker().unwrap().into_arc()).unwrap());
         assert_ne!(first.owner_identity(), restored.owner_identity());
         assert_eq!(first.owner_identity(), first.clone().owner_identity());
         let cache = DecodedTileCache::new(2 * 65536);
-        let a = cache.decode(&first).unwrap();
-        let b = cache.decode(&restored).unwrap();
+        let a = cache.decode_on_worker(&first).unwrap();
+        let b = cache.decode_on_worker(&restored).unwrap();
         assert_eq!(a, b);
         assert!(!Arc::ptr_eq(&a, &b));
         assert_eq!(cache.stats().misses, 2);
-        assert!(Arc::ptr_eq(&a, &cache.decode(&first).unwrap()));
+        assert!(Arc::ptr_eq(&a, &cache.decode_on_worker(&first).unwrap()));
         let owner = Arc::downgrade(&first);
         drop(first);
         assert!(owner.upgrade().is_none());
@@ -296,15 +293,15 @@ mod tests {
                     barrier.wait();
                     for i in 0..32 {
                         let index = (i + offset) % tiles.len();
-                        let samples = cache.decode(&tiles[index]).unwrap();
+                        let samples = cache.decode_on_worker(&tiles[index]).unwrap();
                         assert!(samples.iter().all(|&v| v == index as u8));
                         assert!(cache.stats().resident_bytes <= 2 * 65536);
                     }
                 });
             }
         });
-        let sample = cache.decode(&tiles[0]).unwrap();
-        assert!(Arc::ptr_eq(&sample, &cache.decode(&tiles[0]).unwrap()));
+        let sample = cache.decode_on_worker(&tiles[0]).unwrap();
+        assert!(Arc::ptr_eq(&sample, &cache.decode_on_worker(&tiles[0]).unwrap()));
         assert!(cache.stats().evictions > 0);
         assert!(cache.stats().peak_bytes <= 2 * 65536);
     }

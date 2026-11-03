@@ -6,7 +6,7 @@ use crate::{
 };
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
-use layer_core::{Document, raster_storage::RetainedTiles};
+use layer_core::Document;
 use layer_ui::{DocumentLocation, DocumentTabs, DocumentSessions, DocumentTabLabel as Label};
 use std::{
     cell::{Cell, RefCell},
@@ -1131,13 +1131,12 @@ impl Documents {
         self.model.borrow_mut().storage_completed(Ok(()));
         loop {
             let candidate = self.model.borrow().spill_candidate();
-            let Some(tiles) = candidate else {
+            let Some((id,tiles)) = candidate else {
                 break;
             };
-            let result = gio::spawn_blocking(move || spill(tiles))
-                .await
-                .map_err(|_| "Drawing storage worker stopped".to_string())
-                .and_then(|r| r);
+            let recovery=self.model.borrow().parked().find(|(key,_)|**key==id)
+                .map(|(_,parked)|parked.owner.recovery.clone()).ok_or("Inactive drawing is unavailable")?;
+            let result=recovery.make_durable(tiles).await;
             if let Err(error) = result {
                 return Err(error);
             }
@@ -1263,8 +1262,4 @@ impl Documents {
     ) -> Result<(), String> {
         self.open_prepared(w, prepared, None, false, None, None).await
     }
-}
-
-fn spill(tiles: RetainedTiles) -> Result<(), String> {
-    layer_core::raster_storage::spill_to_directory(&tiles, layer_core::temp_files::directory()?)
 }

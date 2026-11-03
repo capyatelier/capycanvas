@@ -14,6 +14,21 @@ pub(crate) struct WindowDisk {
     published_sequence: u64,
 }
 impl WindowDisk {
+    fn drawing_key(&self, id: u64) -> String {
+        self.manifest.drawings.iter().find(|drawing| drawing.id == id).map(|drawing| drawing.key.clone())
+            .or_else(|| self.stores.get(&id).and_then(|store| store.path().file_name()).map(|name| name.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| layer_core::PortableId::random().to_string())
+    }
+    fn store(&mut self, id: u64) -> Result<&mut SessionStore, String> {
+        if !self.stores.contains_key(&id) {
+            let store = SessionStore::open(&self.path.join(self.drawing_key(id)))?;
+            self.stores.insert(id, store);
+        }
+        Ok(self.stores.get_mut(&id).unwrap())
+    }
+    pub(crate) fn make_durable(&mut self, id: u64, tiles: &layer_core::raster_storage::RetainedTiles) -> Result<usize, String> {
+        self.store(id)?.make_durable(tiles, &AtomicBool::new(false))
+    }
     fn finish_restore(&mut self) -> Result<(), String> {
         let Some(previous) = &self.unpublished else { return Ok(()); };
         let path = self.path.join("window.json");
@@ -240,20 +255,13 @@ impl SessionJob {
             None => {},
         }
         let cancel = AtomicBool::new(false);
-        let drawings: Vec<_> = captures.iter().map(|(id, _)| SessionDrawing { id: *id,
-            key: disk.manifest.drawings.iter().find(|drawing| drawing.id == *id).map(|drawing| drawing.key.clone())
-                .unwrap_or_else(|| layer_core::PortableId::random().to_string()) }).collect();
+        let drawings: Vec<_> = captures.iter().map(|(id, _)| SessionDrawing { id: *id, key: disk.drawing_key(*id) }).collect();
         let mut manifest = disk.manifest.clone();
         for id in manifest.restoring.clone() { manifest = manifest.finish_restore(id, true)?; }
         let retiring: Vec<_> = disk.manifest.drawings.iter().filter(|drawing| !disk.manifest.blocked.contains(&drawing.id)
             && (self.exclusion == u64::MAX || drawing.id == self.exclusion)).map(|drawing| drawing.id).collect();
         for id in retiring {
-            if !disk.stores.contains_key(&id) {
-                let key = disk.manifest.drawings.iter().find(|drawing| drawing.id == id).unwrap().key.clone();
-                let store = SessionStore::open(&disk.path.join(key))?;
-                disk.stores.insert(id, store);
-            }
-            disk.stores.get_mut(&id).unwrap().prepare_retirement()?;
+            disk.store(id)?.prepare_retirement()?;
         }
         manifest = manifest.stage(drawings.clone(), self.active)?;
         manifest.publish(&disk.path.join("window.json"))?;
@@ -263,12 +271,7 @@ impl SessionJob {
             let prepared = capture.prepare(&cancel)?;
             let metadata = prepared.metadata().to_vec();
             if disk.metadata.get(&id) != Some(&metadata) {
-                if !disk.stores.contains_key(&id) {
-                    let key = disk.manifest.drawings.iter().find(|drawing| drawing.id == id).ok_or("The drawing has no editing session")?.key.clone();
-                    let store = SessionStore::open(&disk.path.join(key))?;
-                    disk.stores.insert(id, store);
-                }
-                disk.stores.get_mut(&id).unwrap().commit(&prepared, &cancel)?;
+                disk.store(id)?.commit(&prepared, &cancel)?;
                 disk.metadata.insert(id, metadata);
             }
         }

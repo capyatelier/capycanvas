@@ -534,7 +534,14 @@ impl DecodedTiles {
             let decoded = match &prepared_pixels {
                 Some(PreparedSourcePixels::NativeSamples(samples)) => samples.clone(),
                 Some(PreparedSourcePixels::PremultipliedWorkingPixels(_)) => return Err(GpuRasterError::Color("Working source pixels have native decode settings".into())),
-                None => device.source_samples.decode(samples.tile).map_err(GpuRasterError::Color)?,
+                None => {
+                    #[cfg(not(target_arch="wasm32"))]
+                    {device.source_samples.decode_on_worker(samples.tile).map_err(GpuRasterError::Color)?}
+                    #[cfg(target_arch="wasm32")]
+                    {
+                    device.source_samples.poll_decode_on_worker(samples.tile).map_err(GpuRasterError::Color)?.ok_or(GpuRasterError::DeferredObjectWork)?
+                    }
+                },
             };
             let step = samples.depth.bytes();
             let prepared = prepared_pixels.is_some();

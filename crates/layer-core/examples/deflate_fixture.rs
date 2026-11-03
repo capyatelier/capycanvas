@@ -70,7 +70,7 @@ fn main() -> Result<()> {
         let encoded = match (resource["type"].as_str(), resource["encoding"].as_str()) {
             (Some("capy.raster-tile/1"), _) => {
                 let descriptor = parse_descriptor(&resource["data"]).map_err(|e| format!("{e:?}"))?;
-                let samples = TileBlob::from_package(PortableId::random(), descriptor, stored.into())?.decode()?;
+                let samples = TileBlob::from_package(PortableId::random(), descriptor, stored.into())?.decode_on_worker()?;
                 resource["encoding"] = "capy.deflate-tile/1".into();
                 zlib(&filtered_planes(&samples, descriptor.bytes_per_pixel().ok_or("pixel size")?))?
             }

@@ -53,9 +53,9 @@ internal class DrawingTabsController(private val host: CanvasHost) {
     private suspend fun spill(): String? {
         return try {
             while (true) {
-                val task=host.withNative { Native.documentSpillTask(it) }
-                if (task==0L) break
-                withContext(NonCancellable + Dispatchers.IO) { Native.documentSpillWork(task) }
+                val task=host.withNative { Native.documentSpillTask(it) } ?: break
+                try { host.recovery.makeDurable(task[0], task[1]) }
+                finally { withContext(NonCancellable + Dispatchers.IO) { Native.documentSpillFree(task[1]) } }
             }
             null
         } catch(e:CancellationException) { throw e }

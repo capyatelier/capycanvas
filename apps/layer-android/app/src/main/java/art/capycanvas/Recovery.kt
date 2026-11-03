@@ -50,6 +50,14 @@ internal class RecoveryController(private val host: CanvasHost) {
         stores[path.absolutePath] ?: withContext(Dispatchers.IO) {Native.sessionStoreOpen(path.absolutePath)}
             .also {stores[path.absolutePath] = it}
     }
+    suspend fun makeDurable(id: Long, task: Long) {
+        if (!owners.containsKey(id)) ensureOwners()
+        storage.withLock {
+            val owner = checkNotNull(owners[id]) { "The drawing has no editing session" }
+            val backing = store(File(checkNotNull(held).path, owner.key))
+            withContext(NonCancellable + Dispatchers.IO) { Native.documentSpillWork(task, backing) }
+        }
+    }
     suspend fun ensureOwners() {
         if (!started || restoring) return
         val view = JSONObject(host.drawingTabs.query(obj("op" to "view")))

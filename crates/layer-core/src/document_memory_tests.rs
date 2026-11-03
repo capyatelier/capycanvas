@@ -2,21 +2,15 @@ use super::*;
 use crate::{Document, DocumentNames, Editor, ProjectLimits, SourceTarget, Edit, RecordChange,
     color::source::{SourceImage, SourceInterpretation, SourceChannels},
     package::{self, ByteSource, ByteRange, RangeState, ImmutableBacking}, raster::{TileBlob, TILE_SIZE}};
-use std::{collections::BTreeMap, fs::File, io::{Read, Seek, SeekFrom}, sync::{Arc, Mutex, atomic::{AtomicBool, AtomicUsize, Ordering}}};
+use std::{collections::BTreeMap, fs::File, io::{Read, Seek, SeekFrom}, sync::{Arc, Mutex, atomic::AtomicBool}};
 
-struct CountingChunk { bytes: Arc<[u8]>, accesses: Arc<AtomicUsize> }
-impl crate::raster_storage::TileChunk for CountingChunk {
-    fn len(&self) -> usize { self.bytes.len() }
-    fn poll(&self) -> Result<Option<Arc<[u8]>>, String> { self.accesses.fetch_add(1, Ordering::Relaxed); Ok(Some(self.bytes.clone())) }
-    fn resident_bytes(&self) -> usize { self.accesses.fetch_add(1, Ordering::Relaxed); self.bytes.len() }
-    fn evict(&self) {}
+fn stored_inventory(editor: &Editor) -> (crate::raster_storage::tests::Store, Arc<crate::raster_storage::RetainedTiles>) {
+    let store = crate::raster_storage::tests::Store::new(&editor.retained_tiles());
+    let inventory = editor.document().memory.owner.inventories.lock().unwrap().current.clone();
+    (store, inventory)
 }
-fn count_storage_accesses(editor: &Editor) -> Arc<AtomicUsize> {
-    let accesses=Arc::new(AtomicUsize::new(0));
-    let spill=crate::raster_storage::prepare_external_spill(&editor.retained_tiles()).unwrap().unwrap();
-    let bytes=spill.bytes.clone().into();
-    spill.commit(Arc::new(CountingChunk {bytes,accesses:accesses.clone()})).unwrap();
-    accesses
+fn current_inventory(editor: &Editor) -> Arc<crate::raster_storage::RetainedTiles> {
+    editor.document().memory.owner.inventories.lock().unwrap().current.clone()
 }
 
 fn budget() -> MemoryBudget {
@@ -148,12 +142,12 @@ fn colour_previews_with_owned_programs_do_not_inventory_retained_storage() {
     let effect=document.artwork.effects.iter().next().unwrap().0;
     Arc::make_mut(&mut document.artwork.effects.get_mut(effect).unwrap().program).id="owned_colour_preview".into();
     let mut editor=Editor::new(document.with_memory(DocumentMemory::new(memory.clone(),None)));
-    let access=count_storage_accesses(&editor);
+    let (_store, _)=stored_inventory(&editor);
     for offset in [1,0] {
         let mut paint=editor.document().artwork.paint.get(target).unwrap().clone();paint.base.as_mut().unwrap().offset=[offset,0];
         editor.perform(Edit::Paint(RecordChange::replace(&editor.document().artwork.paint,target,Some(paint)).unwrap())).unwrap();
     }
-    access.store(0,Ordering::Relaxed);
+    let inventory=current_inventory(&editor);
     for step in 0..10 {
         let mut application=editor.document().artwork.effects.get(effect).unwrap().clone();
         application.program=Arc::new((*application.program).clone());
@@ -163,7 +157,7 @@ fn colour_previews_with_owned_programs_do_not_inventory_retained_storage() {
         assert!(!edit.requires_history_admission(editor.document()));
         editor.preview(edit).unwrap();
     }
-    assert_eq!(access.load(Ordering::Relaxed),0);
+    assert!(Arc::ptr_eq(&inventory,&current_inventory(&editor)));
     assert_eq!(memory.snapshot().reserved_bytes,0);
     let mut application=editor.document().artwork.effects.get(effect).unwrap().clone();
     let copied=|source:&crate::authored::Resource<str>|crate::authored::Resource::with_id(source.id(),source.storage().clone());
@@ -178,9 +172,9 @@ fn colour_previews_with_owned_programs_do_not_inventory_retained_storage() {
     let edit=Edit::Effect(RecordChange::replace(&editor.document().artwork.effects,effect,Some(application)).unwrap());
     assert!(edit.requires_history_admission(editor.document()),"equal source text with a different owner still needs admission");
     editor.undo().unwrap();
-    assert_eq!(access.load(Ordering::Relaxed),0);
+    assert!(Arc::ptr_eq(&inventory,&current_inventory(&editor)));
     editor.flush_memory();
-    assert!(access.load(Ordering::Relaxed)>0);
+    assert!(!Arc::ptr_eq(&inventory,&current_inventory(&editor)));
 }
 fn assert_roundtrip(editor: &Editor, manifest: &[u8], identities: &[crate::PortableId], digests: &[[u8; 32]]) {
     let cancelled = AtomicBool::new(false);
@@ -312,8 +306,7 @@ fn unchanged_frame_captures_share_the_current_inventory() {
     let SourceTarget::Paint(target)=document.working.target.unwrap() else {panic!()};
     document.artwork.paint.get_mut(target).unwrap().base=Some(crate::PaintBase::new(source_grid(1,1).into()));
     let editor=Editor::new(document.with_memory(DocumentMemory::new(memory.clone(),None)));
-    let accesses=count_storage_accesses(&editor);
-    accesses.store(0,Ordering::Relaxed);
+    let (_store, inventory)=stored_inventory(&editor);
     let document_memory=&editor.document().memory;
     let current=document_memory.owner.inventories.lock().unwrap().current.clone();
     for _ in 0..10 {
@@ -321,7 +314,7 @@ fn unchanged_frame_captures_share_the_current_inventory() {
         assert!(Arc::ptr_eq(&current,&capture._capture.as_ref().unwrap().inventory));
         drop(capture);
     }
-    assert_eq!(accesses.load(Ordering::Relaxed),0);
+    assert!(Arc::ptr_eq(&inventory,&current_inventory(&editor)));
     let capture=document_memory.capture_current();
     document_memory.owner.parked(true);
     let pinned=memory.snapshot().ram_pinned_bytes;
@@ -338,7 +331,7 @@ fn ordinary_edits_share_capture_inventory_until_one_idle_flush() {
     let SourceTarget::Paint(target)=document.working.target.unwrap() else {panic!()};
     document.artwork.paint.get_mut(target).unwrap().base=Some(crate::PaintBase::new(source_grid(1,1).into()));
     let mut editor=Editor::new(document.with_memory(DocumentMemory::new(memory,None)));
-    let accesses=count_storage_accesses(&editor);
+    let (_store, inventory)=stored_inventory(&editor);
     let current=editor.document().memory.owner.inventories.lock().unwrap().current.clone();
     let occurrence=editor.document().artwork.occurrences.iter().next().unwrap().0;
     let rename=|editor:&Editor,name:&str| {
@@ -357,13 +350,13 @@ fn ordinary_edits_share_capture_inventory_until_one_idle_flush() {
     assert!(Arc::ptr_eq(&current,&capture._capture.as_ref().unwrap().inventory));
     drop(editor.document().scene().snapshot());
     drop(capture);
-    assert_eq!(accesses.load(Ordering::Relaxed),0);
+    assert!(Arc::ptr_eq(&inventory,&current_inventory(&editor)));
     editor.flush_memory();
     assert!(!editor.memory_report_pending());
-    assert!(accesses.load(Ordering::Relaxed)>0);
-    accesses.store(0,Ordering::Relaxed);
+    assert!(!Arc::ptr_eq(&inventory,&current_inventory(&editor)));
+    let inventory=current_inventory(&editor);
     editor.flush_memory();
-    assert_eq!(accesses.load(Ordering::Relaxed),0);
+    assert!(Arc::ptr_eq(&inventory,&current_inventory(&editor)));
 }
 
 #[test]
@@ -375,7 +368,7 @@ fn new_and_pending_raster_publications_defer_inventory_until_idle() {
         let SourceTarget::Paint(target)=document.working.target.unwrap() else {panic!()};
         document.artwork.paint.get_mut(target).unwrap().base=Some(crate::PaintBase::new(source_grid(1,1).into()));
         let mut editor=Editor::new(document.with_memory(DocumentMemory::new(memory.clone(),None)));
-        let accesses=count_storage_accesses(&editor);
+        let (_store, inventory)=stored_inventory(&editor);
         let current=editor.document().memory.owner.inventories.lock().unwrap().current.clone();
         let before=memory.snapshot().ram_physical_bytes;
         let revision=if pending {RasterRevision::pending_within(4*1024*1024)} else {
@@ -385,13 +378,13 @@ fn new_and_pending_raster_publications_defer_inventory_until_idle() {
         };
         editor.perform(Edit::SetRaster {target:SourceTarget::Paint(target),revision:revision.clone()}).unwrap();
         assert!(editor.memory_report_pending());
-        assert_eq!(accesses.load(Ordering::Relaxed),0);
+        assert!(Arc::ptr_eq(&inventory,&current_inventory(&editor)));
         assert_eq!(memory.snapshot().reserved_bytes,0);
         assert_eq!(memory.snapshot().ram_physical_bytes,before);
         assert!(Arc::ptr_eq(&current,&editor.document().memory.owner.inventories.lock().unwrap().current));
         editor.flush_memory();
         assert!(!editor.memory_report_pending());
-        assert!(accesses.load(Ordering::Relaxed)>0);
+        assert!(!Arc::ptr_eq(&inventory,&current_inventory(&editor)));
         let capture=editor.document().memory.capture_current();
         let inventory=&capture._capture.as_ref().unwrap().inventory;
         assert!(!Arc::ptr_eq(&current,inventory));
@@ -421,15 +414,50 @@ fn undo_and_redo_reuse_the_retained_history_inventory_until_idle() {
     let (_,mut editor,insert,inverse,reservation,_)=reserved_preview();
     editor.preview(inverse).unwrap();
     editor.perform_reserved(insert,reservation).unwrap();
-    let accesses=count_storage_accesses(&editor);
+    let (_store, inventory)=stored_inventory(&editor);
     let current=editor.document().memory.owner.inventories.lock().unwrap().current.clone();
     assert!(editor.undo().unwrap());
     assert!(editor.memory_report_pending());
     assert!(editor.redo().unwrap());
     let capture=editor.document().memory.capture_current();
     assert!(Arc::ptr_eq(&current,&capture._capture.as_ref().unwrap().inventory));
-    assert_eq!(accesses.load(Ordering::Relaxed),0);
+    assert!(Arc::ptr_eq(&inventory,&current_inventory(&editor)));
     editor.flush_memory();
     assert!(!editor.memory_report_pending());
-    assert!(accesses.load(Ordering::Relaxed)>0);
+    assert!(!Arc::ptr_eq(&inventory,&current_inventory(&editor)));
+}
+
+#[test]
+fn pressure_durability_releases_captured_tile_pins_before_a_store_read() {
+    let memory = budget();
+    let mut document = Document::new(crate::PortableId::random(), 512, 512,
+        DocumentNames {paint: "Ink".into(), paper: "Paper".into()});
+    let SourceTarget::Paint(target) = document.working.target.unwrap() else {panic!()};
+    document.artwork.paint.get_mut(target).unwrap().base = Some(crate::PaintBase::new(source_grid(2, 2).into()));
+    let mut editor = Editor::new(document.with_memory(DocumentMemory::new(memory.clone(), None)));
+    let capture = editor.capture_session(editor.capture(1, Default::default()).unwrap()).unwrap();
+    let mut paint = editor.document().artwork.paint.get(target).unwrap().clone();
+    paint.base = Some(crate::PaintBase::new(source_grid(1, 1).into()));
+    editor.perform(Edit::Paint(RecordChange::replace(&editor.document().artwork.paint, target, Some(paint)).unwrap())).unwrap();
+    let retained = editor.retained_tiles();
+    let tile = retained.blobs().unwrap().into_iter().next().unwrap();
+    let expected = tile.decode_on_worker().unwrap();
+    let path = Files(std::env::temp_dir().join(format!("capy-durable-accounting-{}", crate::PortableId::random())));
+    let reads = crate::tile_io::ReadCache::new(memory.clone());
+    let mut store = package::session_store::SessionStore::open_with_cache(&path.0, reads).unwrap();
+    memory.flush_reports();
+    let pressure = memory.admit_import(memory.import_headroom_bytes()).unwrap();
+    assert_eq!(memory.import_headroom_bytes(), 0);
+    let before = memory.snapshot().ram_pinned_bytes;
+    let released = store.make_durable(&retained, &AtomicBool::new(false)).unwrap() as u64;
+    assert!(released > 0);
+    assert_eq!(retained.resident_bytes(), 0);
+    memory.flush_reports();
+    assert_eq!(memory.snapshot().ram_pinned_bytes, before - released,
+        "durability must release cached owner pins while editor, history and capture remain alive");
+    assert!(memory.import_headroom_bytes() >= released);
+    assert_eq!(tile.decode_on_worker().unwrap(), expected);
+    assert!(editor.can_undo());
+    assert_eq!(capture.artwork().checkpoint.document, editor.document().artwork.id);
+    assert!(pressure.active());
 }

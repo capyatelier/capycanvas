@@ -521,7 +521,7 @@ mod tests {
         let paint=reference.paint.insert(PortableId::random(),PaintSource {color_mode:Default::default(),domain:[16,16],raster:RasterRevision::backed(RasterData {tiles:[(key,RasterTile::backed_shared(tile.clone()))].into(),watercolor:None}),base:None,operations:Default::default()}).unwrap();
         let profile=crate::authored::Resource::<[u8]>::new(Arc::from([1,2,3]));
         reference.outputs.get_mut(reference.default_output).unwrap().proof=Some(crate::color::ProofRecipe::new("Proof".into(),ColorProfile::Icc(profile.clone())));
-        let decoded=Arc::new(crate::raster::TileBlob::from_package(tile.resource_id(),tile.descriptor,tile.compressed().unwrap()).unwrap());
+        let decoded=Arc::new(crate::raster::TileBlob::from_package(tile.resource_id(),tile.descriptor,tile.compressed_on_worker().map(|range| range.into_arc()).unwrap()).unwrap());
         let mut incoming_source=(*source).clone();incoming_source.tiles.insert([0,0],decoded.clone());
         incoming_source.interpretation.profile=ColorProfile::Icc(crate::authored::Resource::with_id(profile.id(),Arc::from([1,2,3])));
         let canonical=reference.intern_source_image(Arc::new(incoming_source.clone())).unwrap();
@@ -586,7 +586,7 @@ mod tests {
         let mut cross_kind=(*first).clone();cross_kind.interpretation.profile=ColorProfile::Icc(crate::authored::Resource::with_id(tile.resource_id(),Arc::from([1,2,3])));
         let mut payload=(*rgba8_source(first.extent,|_,_|[71,29,13,255])).clone();
         payload.tiles.insert([0,0],Arc::new(payload.tiles[&[0,0]].alias(tile.resource_id())));
-        let mut owner=(*first).clone();owner.tiles.insert([0,0],Arc::new(crate::raster::TileBlob::from_package(tile.resource_id(),tile.descriptor,tile.compressed().unwrap()).unwrap()));
+        let mut owner=(*first).clone();owner.tiles.insert([0,0],Arc::new(crate::raster::TileBlob::from_package(tile.resource_id(),tile.descriptor,tile.compressed_on_worker().map(|range| range.into_arc()).unwrap()).unwrap()));
         for source in [cross_kind,payload,owner] {
             let image=Image::new(Arc::new(source));let before=doc.clone();
             assert!(doc.create_object_layer_edit("Imported",ImageObject::new(image.clone()),None,0).is_err());assert_eq!(doc,before);
@@ -642,7 +642,7 @@ mod tests {
         let first=&doc.scene().object_layer(handles[0]).unwrap().image;let second=&doc.scene().object_layer(handles[1]).unwrap().image;
         assert_ne!(first.id(),foreign.id());assert!(first.same_owner(second));assert_ne!(first,&current);
         let imported_tile=first.tiles.values().next().unwrap();assert_ne!(imported_tile.resource_id(),foreign_tile_id);assert_eq!(imported_tile.owner_identity(),foreign_tile_owner);
-        assert_eq!(imported_tile.decode().unwrap(),tile.decode().unwrap());
+        assert_eq!(imported_tile.decode_on_worker().unwrap(),tile.decode_on_worker().unwrap());
         doc.apply(undo).unwrap();assert!(doc.artwork.images().unwrap().values().any(|image|image.same_owner(&current)));
         let conflict=Image::with_id(foreign.id(),rgba8_source([1,1],|_,_|[0;4]));assert!(Image::import_foreign(&[foreign,conflict]).is_err());
     }

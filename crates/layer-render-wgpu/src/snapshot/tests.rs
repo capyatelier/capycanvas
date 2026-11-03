@@ -1352,7 +1352,7 @@ fn a_perspective_folding_beyond_the_stroke_resamples_only_the_stroke() {
     document.apply(output).unwrap();
     let data = document.target_raster(SourceTarget::Paint(paint)).unwrap().wait_data().unwrap();
     let [x, y] = [110 - origin[0], 120 - origin[1]].map(|v| v as usize);
-    let tile = data.tiles[&TileKey { plane: RasterPlane::Color, coordinate: [(x / 256) as u32, (y / 256) as u32] }].wait_backing().unwrap().decode().unwrap();
+    let tile = data.tiles[&TileKey { plane: RasterPlane::Color, coordinate: [(x / 256) as u32, (y / 256) as u32] }].wait_backing().unwrap().decode_on_worker().unwrap();
     let start = ((y % 256) * 256 + x % 256) * 16;
     let pixel: [f32; 4] = std::array::from_fn(|channel| f32::from_le_bytes(tile[start + channel * 4..start + channel * 4 + 4].try_into().unwrap()));
     assert_eq!(pixel, rgba, "the stroke lands where the perspective puts it");
@@ -1396,7 +1396,7 @@ fn projective_layer_transforms_keep_linked_coverage_paired_with_paint_and_source
     document.apply(output).unwrap();
     let bytes = |target, plane| {
         let data = document.target_raster(target).unwrap().wait_data().unwrap();
-        data.tiles[&TileKey { plane, coordinate: [0; 2] }].wait_backing().unwrap().decode().unwrap()
+        data.tiles[&TileKey { plane, coordinate: [0; 2] }].wait_backing().unwrap().decode_on_worker().unwrap()
     };
     let offset = (8 * 256 + 10) as usize;
     let paint_bytes = bytes(SourceTarget::Paint(paint), RasterPlane::Color);
@@ -1450,8 +1450,8 @@ fn sparse_transform_capture_keeps_filter_edges_and_watercolor_metadata_without_e
                     r.scene = Some(scene); result
                 })).unwrap();
             capture.finish().unwrap();
-            let expected = tiles[0].1.wait_backing().unwrap().decode().unwrap();
-            let actual = output.tiles.get(&TileKey { plane: RasterPlane::Color, coordinate }).map(|tile| tile.wait_backing().unwrap().decode().unwrap())
+            let expected = tiles[0].1.wait_backing().unwrap().decode_on_worker().unwrap();
+            let actual = output.tiles.get(&TileKey { plane: RasterPlane::Color, coordinate }).map(|tile| tile.wait_backing().unwrap().decode_on_worker().unwrap())
                 .unwrap_or_else(|| vec![0; expected.len()]);
             assert!(actual == expected, "{interpolation:?}: {coordinate:?}, first difference {:?}", actual.iter().zip(&expected).position(|(a,b)| a != b));
         }
@@ -1491,13 +1491,13 @@ fn default_one_masks_keep_zero_tiles_and_skip_no_authored_coverage() {
                 r.scene = Some(scene); result
             })).unwrap();
         capture.finish().unwrap();
-        let bytes = tiles[0].1.wait_backing().unwrap().decode().unwrap();
+        let bytes = tiles[0].1.wait_backing().unwrap().decode_on_worker().unwrap();
         assert!(bytes.iter().all(|&byte| byte == if coordinate == [0, 0] { 255 } else { 0 }), "default coverage and authored zeros stay distinct");
         assert!(snapshot.renderer.scene_pipelines.pipeline.iter().all(|p| !p.ready()), "raw mask sampling never uses composition pipelines");
     }
     document.apply(pollster::block_on(gpu.transform_pixels(plan, Default::default())).unwrap()).unwrap();
     let output = document.target_raster(SourceTarget::Coverage(handle)).unwrap().wait_data().unwrap();
-    assert!(output.tiles.values().any(|tile| tile.wait_backing().unwrap().decode().unwrap().iter().all(|&byte| byte == 0)));
+    assert!(output.tiles.values().any(|tile| tile.wait_backing().unwrap().decode_on_worker().unwrap().iter().all(|&byte| byte == 0)));
 }
 
 #[test]

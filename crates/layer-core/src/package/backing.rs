@@ -3,16 +3,18 @@ use std::{ops::{Deref, Range}, sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}}
 pub const MAX_RANGE_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
-pub struct ByteRange { owner: Arc<[u8]>, range: Range<usize> }
+pub struct ByteRange { owner: Arc<[u8]>, range: Range<usize>, lease: Option<Arc<crate::tile_io::Lease>> }
 impl ByteRange {
     pub fn new(owner: Arc<[u8]>, range: Range<usize>) -> Result<Self, &'static str> {
         if range.start > range.end || range.end > owner.len() { return Err("Invalid owned byte range"); }
-        Ok(Self { owner, range })
+        Ok(Self { owner, range, lease: None })
     }
     pub fn slice(&self, range: Range<usize>) -> Result<Self, &'static str> {
         if range.start > range.end || range.end > self.len() { return Err("Invalid owned byte range"); }
-        Self::new(self.owner.clone(), self.range.start + range.start..self.range.start + range.end)
+        Ok(Self {owner:self.owner.clone(),range:self.range.start+range.start..self.range.start+range.end,lease:self.lease.clone()})
     }
+    pub(crate) fn leased(owner:Arc<[u8]>,lease:Arc<crate::tile_io::Lease>)->Self {let end=owner.len();Self {owner,range:0..end,lease:Some(lease)}}
+    pub(crate) fn into_arc(self)->Arc<[u8]> {if self.lease.is_none() && self.range==(0..self.owner.len()) {self.owner.clone()}else{Arc::from(&*self)}}
     pub fn retained_bytes(&self) -> usize { self.owner.len() }
 }
 impl Deref for ByteRange {
@@ -27,6 +29,7 @@ pub trait ByteSource: Send + Sync {
     fn byte_len(&self) -> u64;
     fn resident_bytes(&self) -> usize { self.byte_len().min(usize::MAX as u64) as usize }
     fn poll(&self, offset: u64, len: usize) -> Result<RangeState, String>;
+    fn poll_on_worker(&self, offset:u64, len:usize)->Result<RangeState,String> {self.poll(offset,len)}
 }
 impl ByteSource for Arc<[u8]> {
     fn byte_len(&self) -> u64 { self.as_ref().len() as u64 }
@@ -66,24 +69,29 @@ impl ImmutableBacking {
     pub fn identity(&self) -> u64 { self.owner.identity }
     pub fn byte_len(&self) -> u64 { self.owner.length }
     pub fn resident_bytes(&self) -> usize { self.owner.source.resident_bytes() }
-    pub fn poll(&self, offset: u64, len: usize) -> Result<RangeState, String> {
+    pub(crate) fn read_on_worker(&self, offset:u64, len:usize)->Result<ByteRange,String> {
+        match self.checked(offset,len,true)? {RangeState::Ready(bytes)=>Ok(bytes),RangeState::Pending=>Err("Package bytes are pending".into())}
+    }
+    pub fn poll(&self, offset:u64, len:usize)->Result<RangeState,String> {self.checked(offset,len,false)}
+    fn checked(&self,offset:u64,len:usize,worker:bool)->Result<RangeState,String> {
         if let Some(failure) = self.owner.integrity_failure.lock().map_err(|_| "Package failure lock")?.as_ref() {
             return Err(failure.clone());
         }
-        let result = self.poll_original(offset, len);
+        let result = self.access(offset,len,worker);
         if let Some(failure) = self.owner.integrity_failure.lock().map_err(|_| "Package failure lock")?.as_ref() {
             return Err(failure.clone());
         }
         result
     }
-    pub(super) fn poll_original(&self, offset: u64, len: usize) -> Result<RangeState, String> {
+    pub(super) fn poll_original(&self,offset:u64,len:usize)->Result<RangeState,String> {self.access(offset,len,false)}
+    fn access(&self,offset:u64,len:usize,worker:bool)->Result<RangeState,String> {
         if len > MAX_RANGE_BYTES { return Err("Package read exceeds bounded range".into()); }
         let end = offset.checked_add(len as u64).ok_or("Package range overflow")?;
         if end > self.byte_len() { return Err("Package range exceeds immutable backing".into()); }
         if let Some(failure) = self.owner.failure.lock().map_err(|_| "Package failure lock")?.as_ref() {
             return Err(failure.clone());
         }
-        let result = self.owner.source.poll(offset, len).and_then(|state| {
+        let result = (if worker {self.owner.source.poll_on_worker(offset,len)}else{self.owner.source.poll(offset,len)}).and_then(|state| {
             if let RangeState::Ready(bytes) = &state {
                 if bytes.len() != len { return Err("Incomplete package range".into()); }
                 if bytes.retained_bytes() > MAX_RANGE_BYTES { return Err("Package range retains an oversized buffer".into()); }
@@ -94,5 +102,28 @@ impl ImmutableBacking {
         if failure.is_none() && let Err(error) = &result { *failure = Some(error.clone()); }
         if let Some(failure) = failure.as_ref() { return Err(failure.clone()); }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+    struct Deferred(AtomicBool);
+    impl ByteSource for Deferred {
+        fn byte_len(&self)->u64 {4}
+        fn poll(&self,offset:u64,len:usize)->Result<RangeState,String> {
+            if !self.0.load(Ordering::Acquire) {return Ok(RangeState::Pending);}
+            Ok(RangeState::Ready(ByteRange::new(Arc::from([17,23,31,41]),offset as usize..offset as usize+len)?))
+        }
+    }
+    #[test]
+    fn a_worker_pending_range_does_not_poison_the_backing() {
+        let source=Arc::new(Deferred(AtomicBool::new(false)));
+        let backing=ImmutableBacking::new(source.clone()).unwrap();
+        assert!(matches!(backing.poll(0,4).unwrap(),RangeState::Pending));
+        assert!(backing.read_on_worker(0,4).is_err());
+        source.0.store(true,Ordering::Release);
+        assert_eq!(&*backing.read_on_worker(0,4).unwrap(),&[17,23,31,41]);
     }
 }

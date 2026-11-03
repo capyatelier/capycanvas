@@ -466,7 +466,7 @@ fn native_stroke_undo_redo_and_replaced_device_rebuild_visible_tiles_from_exact_
     let exact: Vec<_> = backed
         .tiles
         .iter()
-        .map(|(key, tile)| (*key, tile.wait_backing().unwrap().decode().unwrap()))
+        .map(|(key, tile)| (*key, tile.wait_backing().unwrap().decode_on_worker().unwrap()))
         .collect();
     assert!(engine.undo().unwrap());
     flush(&mut engine);
@@ -489,7 +489,7 @@ fn native_stroke_undo_redo_and_replaced_device_rebuild_visible_tiles_from_exact_
             restored.tiles[&key]
                 .wait_backing()
                 .unwrap()
-                .decode()
+                .decode_on_worker()
                 .unwrap()
         );
     }

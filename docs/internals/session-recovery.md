@@ -217,6 +217,14 @@ private session plus resource locations and each pack's committed extent. Reader
 validate ranges and checksums and share immutable file handles; later appends never
 overwrite earlier ranges. Failed appends can leave unused tails. Legacy resource
 files remain readable, and portable `.capy` files keep their existing layout.
+
+Native pressure storage uses this same writer through `SessionStore::make_durable`.
+Tiles retain leased locations after synchronization; live, history and capture
+leases protect packs even before a head names them. Checkpoints reuse these
+locations, including aliased tile identities. Unreachable unheaded packs are
+collected when the store opens after a crash. Native range reads use the bounded
+`tile_io` queue and its 256 MiB Warm hot-set ceiling; Pending reads wake existing
+preparation workers, and input ranges remain leased through decode.
 The head retains current and previous generation identities and SHA-256 checksums
 of their exact metadata bytes. Decode and cleanup verify these checksums before
 using metadata references. Interrupted publication leaves

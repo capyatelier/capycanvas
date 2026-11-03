@@ -14,7 +14,8 @@ struct Job {
     activation: Option<Activation>,
     close: Option<PreparedClose>,
     retired: Option<Box<UiSession<Renderer>>>,
-    tiles: Vec<layer_core::raster_storage::RetainedTiles>,
+    tiles: Vec<(u64, layer_core::raster_storage::RetainedTiles)>,
+    disk: Option<std::sync::Arc<Mutex<session::WindowDisk>>>,
     budget: usize,
     error: Option<CString>,
     storage_error: Option<String>,
@@ -62,8 +63,9 @@ impl CapyApple {
                 .window
                 .documents
                 .parked()
-                .map(|(_, p)| p.tiles.clone())
+                .map(|(&id, p)| (id, p.tiles.clone()))
                 .collect(),
+            disk: self.session_disk.clone(),
             budget: self.window.documents.inactive_ram_budget(),
             error: None,
             storage_error: None,
@@ -190,12 +192,13 @@ fn prepare_document(task: &CapyDocumentTask) -> i32 {
     let result = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
         if let Some(wait) = &job.wait { return wait.wait_on_worker(); }
         if job.trim.is_some() {
-            for tiles in &job.tiles {
-                if layer_core::raster_storage::resident_tile_bytes(job.tiles.iter()) <= job.budget {
+            for (id, tiles) in &job.tiles {
+                if layer_core::raster_storage::resident_tile_bytes(job.tiles.iter().map(|(_, tiles)| tiles)) <= job.budget {
                     break;
                 }
-                if let Err(e) = layer_core::temp_files::directory()
-                    .and_then(|directory| layer_core::raster_storage::spill_to_directory(tiles, directory))
+                let result = job.disk.as_ref().ok_or_else(|| "The editing session is unavailable".to_string())
+                    .and_then(|disk| disk.lock().unwrap_or_else(|e| e.into_inner()).make_durable(*id, tiles));
+                if let Err(e) = result
                 {
                     job.storage_error = Some(e);
                     break;
@@ -233,7 +236,8 @@ pub unsafe extern "C" fn capy_apple_document_resume(
         if let Some(token) = job.trim {
             let result = job.error.as_ref().map(|error| error.to_string_lossy().into_owned()).or_else(|| job.storage_error.clone()).map_or(Ok(()), Err);
             if a.window.documents.complete_trim(token, result) {
-                job.tiles = a.window.documents.parked().map(|(_, parked)| parked.tiles.clone()).collect();
+                job.tiles = a.window.documents.parked().map(|(&id, parked)| (id, parked.tiles.clone())).collect();
+                job.disk = a.session_disk.clone();
                 job.budget = a.window.documents.inactive_ram_budget();
                 job.error = None;
                 job.storage_error = None;

@@ -317,7 +317,7 @@ mod tests {
             for (coordinate,tile) in &image.tiles {
                 let found=&actual.tiles[coordinate];
                 assert_eq!(found.descriptor,tile.descriptor);
-                assert_eq!(found.decode().unwrap(),tile.decode().unwrap());
+                assert_eq!(found.decode_on_worker().unwrap(),tile.decode_on_worker().unwrap());
             }
             assert_eq!(document.composition().size,[1440,1080]);
             assert_eq!(document.composition().resolution,Some(layer_core::ImageResolution::ppi(144)));

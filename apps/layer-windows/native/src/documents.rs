@@ -88,7 +88,6 @@ enum Source {
 enum Job {
     WritePackage {view:layer_ui::PackageView,action:layer_ui::PackageAction,original:Option<PathBuf>,path:PathBuf,refusal:Arc<str>,cancelled:Arc<AtomicBool>},
     Activate(Box<layer_host::window::Activation>),
-    Spill { tiles: layer_core::raster_storage::RetainedTiles },
     Workflow { task: Box<crate::document_workflows::Task>, action: crate::document_workflows::Action },
     DiscardOpening(Box<Opening>),
     Save {
@@ -109,7 +108,6 @@ enum Completed {
     Package(layer_ui::PackageView),
     PackageWritten,
     Activated(Box<layer_host::window::Activation>),
-    Spilled,
     Workflow(Box<crate::document_workflows::Task>),
     Cancelled,
     Interpretation(Box<Opening>),
@@ -262,7 +260,6 @@ fn execute(job: Job, cancel: &AtomicBool) -> Result<Completed, String> {
             Ok(Completed::PackageWritten)
         },
         Job::Activate(mut activation) => activation.work().map(|()| Completed::Activated(activation)),
-        Job::Spill { tiles } => layer_core::raster_storage::spill_to_directory(&tiles, layer_core::temp_files::directory()?).map(|_| Completed::Spilled),
         Job::Workflow { mut task, action } => { task.work(action); Ok(Completed::Workflow(task)) }
         Job::DiscardOpening(opening) => { drop(opening); Ok(Completed::Cancelled) }
         Job::Save { project, gpu, path,expected,changed_message } => {
@@ -382,6 +379,7 @@ pub(crate) struct DocumentService {
     wake: Arc<dyn Fn() + Send + Sync>,
     activating: bool,
     trim_token: Option<u64>,
+    trim_receive: Option<std::sync::mpsc::Receiver<Result<(),String>>>,
     deferred_action: Option<DocumentAction>,
     incoming_drop: Option<IncomingDrop>,
     pending_tab: Option<tabs::Action>,
@@ -441,6 +439,7 @@ impl DocumentService {
             recovery: None,
             activating: false,
             trim_token: None,
+            trim_receive: None,
             deferred_action: None,
             incoming_drop: None,
             pending_tab: None,
@@ -898,6 +897,19 @@ impl DocumentService {
             }
             host.invalidate_snapshot();
         }
+        let trimmed=self.trim_receive.as_ref().and_then(|receive|match receive.try_recv(){
+            Ok(result)=>Some(result),Err(std::sync::mpsc::TryRecvError::Empty)=>None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected)=>Some(Err("Session worker stopped unexpectedly".into())),
+        });
+        if let Some(result)=trimmed {
+            self.trim_receive=None;
+            let token=self.trim_token.take().ok_or("Storage completion identity is missing")?;
+            if self.window.documents.complete_trim(token, result) {
+                self.trim_next(token)?;
+            }
+            host.invalidate_snapshot();
+            if !self.window.documents.trim_in_flight() && let Some(action) = self.deferred_action.take() { self.dispatch(host, action)?; }
+        }
         if let Some(completed) = self.worker.take() { self.completed(host, completed, true)?; }
         let prepared=self.activation_worker.shared.mailbox.lock().unwrap().completed.as_ref().is_some_and(|result|matches!(result,Ok(Completed::Prepared(_)|Completed::PhotoPrepared(_))));
         if prepared && !self.active.as_ref().and_then(|active|active.cancelled.as_ref()).is_some_and(|cancel|cancel.load(Ordering::Acquire)) && !self.window.adoption_ready(host)? {return Ok(());}
@@ -910,15 +922,6 @@ impl DocumentService {
             if !package.close_requested {match completed {Ok(Completed::PackageWritten)=>{},Err(error)=>host.error=Some(error),_=>return Err("Unexpected package write completion".into())}}
             if package.close_requested {self.package=None;}
             host.invalidate_snapshot();return Ok(());
-        }
-        if file && let Some(token) = self.trim_token.take() {
-            let result = completed.and_then(|result| if matches!(result, Completed::Spilled) { Ok(()) } else { Err("Unexpected storage completion".into()) });
-            if self.window.documents.complete_trim(token, result) {
-                self.trim_next(token)?;
-            }
-            host.invalidate_snapshot();
-            if !self.window.documents.trim_in_flight() && let Some(action) = self.deferred_action.take() { self.dispatch(host, action)?; }
-            return Ok(());
         }
         if self.workflow_running {
             self.workflow_running = false;
@@ -985,7 +988,7 @@ impl DocumentService {
         let active = self.active.take().ok_or("Unexpected document completion")?;
         let result = match completed {
             Ok(Completed::Cancelled) => Ok(false),
-            Ok(Completed::Interpretation(_) | Completed::PhotoPrepared(_) | Completed::Workflow(_) | Completed::Activated(_) | Completed::Spilled) => unreachable!(),
+            Ok(Completed::Interpretation(_) | Completed::PhotoPrepared(_) | Completed::Workflow(_) | Completed::Activated(_)) => unreachable!(),
             Ok(Completed::Saved(fingerprint)) => {
                 if active.epoch == host.session.state().document_file.epoch {
                     let location=active.location.clone().ok_or("Saved drawing destination is missing")?;
@@ -1168,11 +1171,10 @@ mod tests {
         f.service.stop_worker().unwrap();
     }
     #[test]
-    fn open_failures_complete_while_the_spill_worker_is_occupied() {
+    fn open_failures_complete_while_storage_trim_is_pending() {
         let mut f = Fixture::new();
         f.invoke(CommandId::OpenDocument);
         f.service.trim_token = f.service.window.documents.request_trim();
-        f.service.worker.shared.mailbox.lock().unwrap().running = true;
         let file = &f.host.session.state().document_file;
         f.act(DocumentAction::Open { id: f.request(), epoch: file.epoch, revision: file.revision, path: f.path("missing.capy") });
         assert!(f.service.deferred_action.is_none());
@@ -1188,10 +1190,9 @@ mod tests {
         assert_eq!(f.host.session.state().host_error.as_deref(), Some("Invalid incoming fixture"));
     }
     #[test]
-    fn a_tab_request_can_park_while_the_file_worker_is_spilling() {
+    fn a_tab_request_can_park_while_storage_trim_is_pending() {
         let mut f = Fixture::new();
         if f.service.trim_token.is_none() { f.service.trim_token = f.service.window.documents.request_trim(); }
-        f.service.worker.shared.mailbox.lock().unwrap().running = true;
         f.service.tab_action(&mut f.host, tabs::Action::Adjacent { forward: true }).unwrap();
         assert!(matches!(f.service.pending_tab, Some(tabs::Action::Adjacent { forward: true })));
         assert!(f.service.deferred_action.is_none());
@@ -1215,7 +1216,7 @@ mod tests {
             assert!(f.host.session.file_drop_pending(id));
             assert!(f.service.deferred_action.is_none());
             if f.service.trim_token.is_none() { f.service.trim_token = f.service.window.documents.request_trim(); }
-            f.service.worker.shared.mailbox.lock().unwrap().completed = Some(Ok(Completed::Spilled));
+            let (send,receive)=std::sync::mpsc::channel();send.send(Ok(())).unwrap();f.service.trim_receive=Some(receive);
             f.service.poll(&mut f.host).unwrap();
             assert!(!f.service.window.documents.trim_in_flight());
             assert_eq!(f.service.incoming_drop.as_ref().unwrap().id, id);
@@ -1434,7 +1435,7 @@ mod tests {
                 .unwrap()
                 .wait_backing()
                 .unwrap()
-                .decode()
+                .decode_on_worker()
                 .unwrap(),
             bytes
         );

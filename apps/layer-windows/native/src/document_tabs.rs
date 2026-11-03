@@ -202,12 +202,12 @@ impl DocumentService {
         Ok(())
     }
     pub(super) fn trim_next(&mut self, token: u64) -> Result<(), String> {
-        if let Some(tiles) = self.window.documents.spill_candidate() {
-            if let Err(error) = self.worker.submit(Job::Spill { tiles }) {
-                self.window.documents.complete_trim(token, Err(error.clone()));
-                return Err(error);
+        if let Some((id,tiles)) = self.window.documents.spill_candidate() {
+            let result=self.recovery.as_mut().ok_or_else(||"Session storage is unavailable".to_string()).and_then(|recovery|recovery.make_durable(id,tiles));
+            match result {
+                Ok(receive)=>{self.trim_receive=Some(receive);self.trim_token=Some(token);}
+                Err(error)=>{self.window.documents.complete_trim(token,Err(error.clone()));return Err(error);}
             }
-            self.trim_token = Some(token);
         } else if self.window.documents.complete_trim(token, Ok(())) {
             self.trim_next(token)?;
         }

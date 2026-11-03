@@ -154,7 +154,7 @@ impl Converter<'_> {
         if let Some(blob) = self.blobs.get(&key) {
             return Ok(blob.clone());
         }
-        let decoded = original.decode()?;
+        let decoded = original.decode_on_worker()?;
         let descriptor = if scalar {
             self.target.coverage_descriptor()
         } else {

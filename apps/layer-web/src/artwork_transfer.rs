@@ -17,10 +17,10 @@ pub(super) async fn wait_backing_cancellable(artwork:&Artwork,control:Option<&la
         let mut ready=true;
         for raster in artwork.paint.iter().map(|(_,_,p)|&p.raster).chain(artwork.coverage.iter().map(|(_,_,p)|&p.raster)) {
             match raster.try_data(){None=>ready=false,Some(Err(e))=>return Err(js(e)),Some(Ok(data))=>{
-                for tile in data.tiles.values(){match tile.try_backing(){None=>ready=false,Some(Err(e))=>return Err(js(e)),Some(Ok(blob))=>ready &=blob.compressed_ready().map_err(js)?,}}
+                for tile in data.tiles.values(){match tile.try_backing(){None=>ready=false,Some(Err(e))=>return Err(js(e)),Some(Ok(blob))=>ready &=matches!(blob.poll_compressed().map_err(js)?, layer_core::package::RangeState::Ready(_)),}}
             }}
         }
-        for image in artwork.images().map_err(js)?.values(){for tile in image.tiles.values(){ready &=tile.compressed_ready().map_err(js)?;}}
+        for image in artwork.images().map_err(js)?.values(){for tile in image.tiles.values(){ready &=matches!(tile.poll_compressed().map_err(js)?, layer_core::package::RangeState::Ready(_));}}
         if ready{return Ok(());}
         if js_sys::Date::now()-start>30_000.{return Err(js("Raster backing timed out"));}
         documents::yield_browser().await?;
