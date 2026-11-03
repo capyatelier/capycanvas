@@ -593,7 +593,6 @@ const KNOWN_MISSES: &[&str] = &[
     "Charcoal pressure=0.25 angle=60 gap=48 width=3",
     "Charcoal pressure=0.25 angle=90 gap=2 width=3",
     "Charcoal pressure=0.25 corner=10",
-    "Charcoal pressure=0.25 corner=20",
     "Charcoal pressure=0.25 corner=5",
     "Charcoal pressure=0.25 corner=85",
     "Charcoal pressure=0.25 width sweep angle=30 gap=8 width=10",
