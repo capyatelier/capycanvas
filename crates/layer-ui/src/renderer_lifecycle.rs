@@ -79,12 +79,12 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// The host has no modal work and must wait for this boundary before normal
     /// parking. Failed renderers remain navigable/saveable/closeable.
     pub(super) fn document_switch_interaction_idle(&self, suspended: bool)->bool {
-        (suspended || self.require_workspace_idle().is_ok()) && !self.workspace_transition && !self.state.customization.header_editing
+        (suspended || self.workspace_gestures_idle() && !self.painted_selections.busy() && self.document_interaction_idle_reason_for_switch(false,true).is_none()) && !self.workspace_transition && !self.state.customization.header_editing
             && self.state.requests.is_empty() && !self.state.document_file.busy
     }
     pub fn can_switch_document(&self) -> bool {
         self.document_switch_interaction_idle(self.rendering_suspended)
-            && (self.rendering_suspended || self.require_action_idle().is_ok())
+            && (self.rendering_suspended || self.pending_filters.is_none() && self.document_interaction_idle_reason_for_switch(true,true).is_none())
     }
     pub fn prepare_document_switch(&mut self) -> Result<(), String> {
         self.prepare_document_action()?;
@@ -420,6 +420,23 @@ mod tests {
         std::sync::Arc::unwrap_or_clone(layer_core::color::source::rgba8_source([1, 1], |_, _| pixel))
     }
 
+    #[test]
+    fn a_released_queued_stroke_allows_switch_preparation_but_not_parking() {
+        for settling in [false,true] {
+            let mut drawing=session(Platform::Gtk);drawing.frame(0,0).unwrap();
+            drawing.engine.backend_mut().settling=settling;
+            pen_at(&mut drawing,1,PenPhase::Down,[40.,40.]);
+            assert!(drawing.prepare_document_switch().is_err());
+            pen_at(&mut drawing,2,PenPhase::Up,[80.,40.]);
+            assert!(drawing.prepare_document_switch().is_ok(),"released input must not depend on an unrelated submission: {settling}");
+            assert!(!drawing.can_park_document());assert_eq!(drawing.engine.metrics().committed_strokes,0);
+            drawing.engine.backend_mut().settling=false;
+            for frame in 1..=8 {drawing.frame(frame*8_000_000,frame*8_000_000).unwrap();}
+            assert_eq!(drawing.engine.metrics().committed_strokes,1);
+            drawing.state.requests.clear();
+            assert!(drawing.can_park_document());
+        }
+    }
     #[test]
     fn parking_waits_for_an_open_crop_to_finish() {
         let mut drawing = session(Platform::Gtk);

@@ -222,22 +222,16 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn end_workspace_transition(&mut self) {
         self.workspace_transition = false;
     }
-    pub fn require_workspace_idle(&self) -> Result<(), String> {
-        self.require_document_snapshot_idle()?;
-        if self.workspace_history.gesture_start().is_some()
-            || self.bubble_state.moving()
-            || self.workspace_drag.is_some()
-            || self.divider_drag.is_some()
-            || self.floating_resize.is_some()
-            || self.interaction.pointer.is_some()
-            || self.navigator_drag.is_some()
-            || self.state.document_file.busy
-        {
-            return Err(self.localization().text(MessageId::WORKSPACE_REFUSAL_SESSION_FINISH_THE_CURRENT_INTERACTION_BEFORE_SWITCHING_WORKSPACES).to_string());
-        }
-        Ok(())
+    pub(super) fn workspace_gestures_idle(&self)->bool {
+        self.workspace_history.gesture_start().is_none() && !self.bubble_state.moving()
+            && self.workspace_drag.is_none() && self.divider_drag.is_none() && self.floating_resize.is_none()
+            && self.interaction.pointer.is_none() && self.navigator_drag.is_none() && !self.state.document_file.busy
     }
-
+    pub fn require_workspace_idle(&self)->Result<(),String> {
+        self.require_document_snapshot_idle()?;
+        if self.workspace_gestures_idle() {Ok(())}
+        else {Err(self.localization().text(MessageId::WORKSPACE_REFUSAL_SESSION_FINISH_THE_CURRENT_INTERACTION_BEFORE_SWITCHING_WORKSPACES).to_string())}
+    }
     pub fn editing_state(&self) -> EditingState {
         let restore_tool = |restore: crate::interaction::Restore| match restore {
             crate::interaction::Restore::Tool(tool, preset) => Some((tool, preset)),

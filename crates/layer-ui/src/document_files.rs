@@ -822,8 +822,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
 
-    fn document_interaction_idle_reason(&self, allow_mode: bool) -> Option<DocumentIdleReason> {
-        if !self.canvas_idle() { Some(DocumentIdleReason::CanvasInteraction) }
+    fn document_interaction_idle_reason(&self,allow_mode:bool)->Option<DocumentIdleReason> {self.document_interaction_idle_reason_for_switch(allow_mode,false)}
+    pub(super) fn document_interaction_idle_reason_for_switch(&self,allow_mode:bool,released_input:bool)->Option<DocumentIdleReason> {
+        let canvas_idle=if released_input {!self.pen_contact && self.canvas_contact_idle()}else {self.canvas_idle()};
+        if !canvas_idle { Some(DocumentIdleReason::CanvasInteraction) }
         else if self.content_bounds.baking() && !allow_mode { Some(DocumentIdleReason::WaitTransform) }
         else if self.conversion_busy() { Some(DocumentIdleReason::CanvasOperation) }
         else if !allow_mode && (self.operation.active() || self.objects.placing()) {
