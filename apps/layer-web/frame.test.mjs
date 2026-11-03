@@ -66,6 +66,9 @@ test('phone inset reports apply while busy and deduplicate against shared state'
   state.phone.insets=[0,0,0,0];presenter.refresh();
   assert.deepEqual([...state.phone.insets],[20,7,13,5],'A stale shared publication heals without a new native measurement');
   presenter.refresh();assert.equal(attempts.length,4);
+  const physical={left:3,top:17,right:11,bottom:29};
+  observer.callback(observer.targets.map(target=>({target,contentRect:{width:physical[target.style.width.match(/inset-(\w+)/)[1]]}})));
+  assert.deepEqual([...state.phone.insets],[3,17,11,29],'CSS side facts use the shared left/top/right/bottom order');
 });
 
 test('retained workspace placement keeps bubble presentation without scheduling GPU work',()=>{

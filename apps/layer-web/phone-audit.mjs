@@ -578,10 +578,10 @@ export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,draw
       await check('frame-empty');
       await evaluate('layerApp.dispatch({type:"restore_workspace",workspace:phoneFrameWorkspace});delete window.phoneFrameWorkspace;null');await settle();
       await call('Emulation.setSafeAreaInsetsOverride',{insets:{top:19,right:7,bottom:13,left:5}});
-      await wait('JSON.stringify(layerApp.state().phone.insets)===JSON.stringify([19,7,13,5])');
+      await wait('JSON.stringify(layerApp.state().phone.insets)===JSON.stringify([5,19,7,13])');
       await check('frame-safe-insets');
       await call('Emulation.setSafeAreaInsetsOverride',{insets:{top:13,right:5,bottom:19,left:7}});
-      await wait('JSON.stringify(layerApp.state().phone.insets)===JSON.stringify([13,5,19,7])');
+      await wait('JSON.stringify(layerApp.state().phone.insets)===JSON.stringify([7,13,5,19])');
       await check('frame-safe-redistributed');
       await call('Emulation.setSafeAreaInsetsOverride',{insets:{top:0,right:0,bottom:0,left:0}});
       await wait('layerApp.state().phone.insets.every(v=>v===0)');

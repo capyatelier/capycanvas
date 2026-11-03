@@ -66,6 +66,9 @@ plan.
   The Capy bar uses the same size. Bars never wrap; the toolbar holds up to ten
   tools.
 
+Hosts report safe insets as `[left, top, right, bottom]`, mapping each named
+platform side to its shared position.
+
 Examples without safe insets or native controls; slider lengths include their
 end insets:
 

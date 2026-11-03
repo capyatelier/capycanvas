@@ -92,7 +92,7 @@ export function createPhone({app,state,workspace,capy,header,element,button,icon
     for(const entry of entries)insets[indices.get(entry.target)]=entry.contentRect.width;
     report();
   });
-  for(const [index,side]of ['top','right','bottom','left'].entries()){
+  for(const [index,side]of ['left','top','right','bottom'].entries()){
     const measure=element('div');measure.style.width=`env(safe-area-inset-${side})`;
     indices.set(measure,index);probe.append(measure);observer.observe(measure);
   }
