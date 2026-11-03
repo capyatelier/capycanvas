@@ -167,7 +167,7 @@ fn stamp(host: &mut NativeHost, context: layer_ui::ToolbarContext, known_request
                 json!({"result":{"size":stamp.size,"extent":stamp.extent,"request_id":stamp.request_id,"pending":stamp.pending},"error":null}),
                 stamp.alpha,
             ),
-            Ok(None) => CapyPreview::packet(json!({"result":null,"error":null}), Vec::new()),
+            Ok(None) => CapyPreview::packet(json!({"result":{"pending":true},"error":null}), Vec::new()),
             Err(error) => CapyPreview::packet(json!({"result":null,"error":error}), Vec::new()),
     }
 }
@@ -472,13 +472,21 @@ mod tests {
             host.session.engine().document().composition().color).unwrap();
         host.session.replace_renderer(layer_host::Renderer(Some(gpu.into()))).unwrap();
         let context = host.session.state().toolbar_context();
+        let first=crate::previews::store(query(&mut host,&json!({"type":"toolbar_stamp","context":context}).to_string()).unwrap()).unwrap();
+        let initial=crate::previews::copied_metadata(first);
+        let initial_bytes=crate::previews::copied_bytes(first);
+        crate::previews::capy_preview_free(first);
+        assert!(initial["error"].is_null(),"{initial}");
+        assert_eq!(initial["result"],json!({"pending":true}));
+        assert!(initial_bytes.is_empty());
         let deadline=std::time::Instant::now()+std::time::Duration::from_secs(15);
         let owned=loop {
             let packet=query(&mut host,&json!({"type":"toolbar_stamp","context":context}).to_string()).unwrap();
             let owned=crate::previews::store(packet).unwrap();
             let reply=crate::previews::copied_metadata(owned);
             assert!(reply["error"].is_null(),"{reply}");
-            if !reply["result"].is_null() && reply["result"]["pending"]==false {break owned;}
+            assert!(reply["result"].is_object(),"{reply}");
+            if reply["result"]["pending"]==false {break owned;}
             crate::previews::capy_preview_free(owned);
             assert!(std::time::Instant::now()<deadline,"GPU toolbar stamp did not complete: {reply}");
             std::thread::sleep(std::time::Duration::from_millis(1));
@@ -486,6 +494,7 @@ mod tests {
         {
             let reply=crate::previews::copied_metadata(owned);
             assert!(reply["error"].is_null(), "{reply}");
+            assert!(reply["result"].is_object(), "{reply}");
             let size = reply["result"]["size"].as_u64().unwrap() as usize;
             assert!(reply["result"]["extent"].as_f64().unwrap() > 0.);
             let bytes=crate::previews::copied_bytes(owned);let count=bytes.len();
@@ -496,6 +505,7 @@ mod tests {
                 let bubble = crate::previews::store(query(&mut host, r#"{"type":"bubble_stamp"}"#).unwrap()).unwrap();
                 let bubble_metadata=crate::previews::copied_metadata(bubble);
                 assert!(bubble_metadata["error"].is_null(), "{bubble_metadata}");
+                assert!(bubble_metadata["result"].is_object(), "{bubble_metadata}");
                 if bubble_metadata["result"]["pending"] == false { break (bubble, bubble_metadata); }
                 crate::previews::capy_preview_free(bubble);
                 assert!(std::time::Instant::now() < deadline, "GPU bubble stamp did not complete: {bubble_metadata}");
@@ -511,6 +521,7 @@ mod tests {
             crate::previews::capy_preview_free(bubble);
             let cached = metadata(query(&mut host, &json!({"type":"bubble_stamp","known_request":bubble_metadata["result"]["request_id"]}).to_string()).unwrap());
             assert!(cached["error"].is_null());
+            assert!(cached["result"].is_object());
             assert_eq!(cached["result"]["request_id"], bubble_metadata["result"]["request_id"]);
             crate::previews::capy_preview_free(owned);
         }
