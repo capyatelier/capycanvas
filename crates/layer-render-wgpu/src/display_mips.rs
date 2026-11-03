@@ -343,7 +343,7 @@ impl Image {
     }
     pub fn storage_from(&self, level: u32) -> u64 {
         if level == self.plan.level { return self.storage_bytes(); }
-        Plan::at(self.plan.extent, level).level_bytes(level) + texture_bytes(&self.scratch)
+        Plan::at(self.plan.extent, level).pixel_bytes_through(level)
     }
     pub fn storage_bytes(&self) -> u64 {
         texture_bytes(&self.texture) + texture_bytes(&self.scratch)

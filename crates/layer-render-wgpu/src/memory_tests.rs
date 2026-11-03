@@ -3,6 +3,30 @@ use crate::test_support::{complete, dab_batch, packet, submit_published, submit_
 use layer_core::{MemoryBudget, MemoryClass, MemoryFacts};
 use std::sync::atomic::Ordering;
 
+#[test]
+fn texture_storage_counts_every_mip_and_depth() {
+    let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    for (dimension, layers, expected) in [
+        (wgpu::TextureDimension::D2, 1, 176),
+        (wgpu::TextureDimension::D2, 2, 352),
+        (wgpu::TextureDimension::D3, 4, 592),
+    ] {
+        let texture = r.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("mip storage test"),
+            size: wgpu::Extent3d { width: 4, height: 2, depth_or_array_layers: layers },
+            mip_level_count: 3,
+            sample_count: 1,
+            dimension,
+            format: wgpu::TextureFormat::Rgba32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        assert_eq!(texture_bytes(&texture), expected);
+    }
+    let image = display_mips::Image::with_mips(&r, display_mips::Plan::at([8, 4], 0), 3);
+    assert_eq!(image.storage_bytes(), 1_049_264);
+}
+
 pub(crate) fn renderer(color: layer_core::color::DocumentColor, facts: layer_core::DeviceMemoryFacts) -> Result<WgpuRasterizer, GpuRasterError> {
     let budget = MemoryBudget::with_facts(MemoryFacts { host_default_bytes: Some(2 << 30),
         override_bytes: Some(2 << 30), ..Default::default() });

@@ -849,10 +849,16 @@ impl RetainedTextures {
 }
 
 fn texture_bytes(texture: &wgpu::Texture) -> u64 {
-    u64::from(texture.width())
-        * u64::from(texture.height())
-        * u64::from(texture.depth_or_array_layers())
-        * u64::from(texture.format().block_copy_size(None).unwrap())
+    let format = texture.format();
+    let (block_width, block_height) = format.block_dimensions();
+    let block_bytes = u64::from(format.block_copy_size(None).unwrap());
+    (0..texture.mip_level_count()).map(|level| {
+        let size = texture.size().mip_level_size(level, texture.dimension()).physical_size(format);
+        u64::from(size.width / block_width)
+            * u64::from(size.height / block_height)
+            * u64::from(size.depth_or_array_layers)
+            * block_bytes
+    }).sum()
 }
 impl PageSurface {
     fn scene_output(&self, r: &WgpuRasterizer, layout: &wgpu::BindGroupLayout) -> &wgpu::BindGroup {
