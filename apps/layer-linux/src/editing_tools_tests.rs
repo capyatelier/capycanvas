@@ -115,6 +115,55 @@ fn native_fill_texture_controls_and_papers() {
 }
 
 #[test]
+#[ignore = "private Wayland display and hardware GPU"]
+fn native_fill_hold_preview_with_three_reference_layers() {
+    let app=native_test_app("art.capycanvas.ColdReferenceHold");
+    let output=std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap());std::fs::create_dir_all(&output).unwrap();
+    let mut input=RemoteInput::new().timeout_secs(30);input.ready();
+    let project=new_drawing(2048,512,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap().without_paper().unwrap();
+    let w=Workspace::with_project(&app,Some((project,None)));w.window.maximize();w.window.present();ready(&w);
+    w.dispatch(UiAction::SetTheme {theme:Some(Theme::Light)});
+    let target=ui_session(&w).engine().document().working.occurrence.unwrap();
+    for index in 0..3 {
+        let source=layer_core::color::source::rgba8_source([2048,512],|_,y|if (252..260).contains(&y) {[16+index*32,24,40,192]}else{[0;4]});
+        ui_session_mut(&w).import_layer_source("Reference",std::sync::Arc::unwrap_or_clone(source)).unwrap();w.wake();ready(&w);
+        w.dispatch(UiAction::Layer {action:LayerAction::ReferenceSelection});
+    }
+    assert_eq!(ui_session(&w).engine().document().scene().reference_leaves().len(),3);
+    w.dispatch(UiAction::Layer {action:LayerAction::Select {id:layer_ui::occurrence_token(target),mask:false}});
+    let workspace=tool_settings_workspace(&w,&[CommandId::Fill],true,false);w.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(workspace)});
+    invoke(&w,CommandId::FitCanvas);invoke(&w,CommandId::Fill);invoke(&w,CommandId::SelectionReference);
+    invoke(&w,CommandId::EdgesLineMiddle);invoke(&w,CommandId::CloseGapsOff);
+    w.dispatch(UiAction::SetToolSetting {id:"grain_depth".into(),value:0.});w.dispatch(UiAction::SetColor {rgba:[0.08,0.55,0.22,1.]});ready(&w);
+    let point=[240.,240.];let m=state(&w).camera.document_to_surface();let scale=w.area.scale_factor() as f32;
+    let local=gtk::graphene::Point::new((m[0]*point[0]+m[2]*point[1]+m[4])/scale,(m[1]*point[0]+m[3]*point[1]+m[5])/scale);
+    let at=w.area.compute_point(&w.window,&local).unwrap();
+    let displayed=|| {
+        let image=ui_session(&w).engine().backend().capture_in(w.view_color()).unwrap();
+        let camera=state(&w).camera;let m=camera.document_to_surface();
+        let x=((m[0]*512.+m[2]*200.+m[4])*image.width as f32/camera.viewport[0] as f32) as usize;
+        let y=((m[1]*512.+m[3]*200.+m[5])*image.height as f32/camera.viewport[1] as f32) as usize;
+        <[u8;4]>::try_from(&image.bytes[y*image.stride as usize+x*4..][..4]).unwrap()
+    };
+    let before=raster(&w);let checkpoint=ui_session(&w).engine().checkpoint();
+    input.perform(serde_json::json!([{"point":[at.x(),at.y()],"down":true}]));
+    until(|| {pump(10);healthy(&w);state(&w).fill_gesture.is_some_and(|gesture|gesture.pill.is_some())
+        && ui_session(&w).engine().backend().fill_preview_ready().is_some()},"three-reference held Fill preview");
+    assert_eq!(raster(&w),before);assert_eq!(ui_session(&w).engine().checkpoint(),checkpoint);
+    until(|| {pump(10);healthy(&w);let shown=displayed();
+        i16::from(shown[1])-i16::from(shown[0]).max(i16::from(shown[2]))>40},"the held Fill preview is green away from the cursor");
+    capture_ui(&w,&output,"three-reference-fill-held-Light.png");
+    let shown=displayed();assert!(i16::from(shown[1])-i16::from(shown[0]).max(i16::from(shown[2]))>40,"held preview is green: {shown:?}");
+    let frame=ui_session(&w).engine().metrics().frames;w.wake();
+    until(|| {pump(10);healthy(&w);ui_session(&w).engine().metrics().frames>frame},"the next held-preview frame");
+    assert_eq!(displayed(),shown);assert_eq!(raster(&w),before);
+    input.perform(serde_json::json!([{"down":false}]));committed(&w,&before);
+    invoke(&w,CommandId::Undo);ready(&w);assert_eq!(raster(&w),before);
+    eprintln!("PASS Light: three-reference held Fill preview, unchanged history, stable next frame, lift and Undo");
+    w.window.destroy();pump(100);input.finish();
+}
+
+#[test]
 #[ignore = "private Wayland display, hardware GPU and --tablet"]
 fn native_fill_areas_and_paint_unfilled() {
     let app=native_test_app("art.capycanvas.FillAreas");

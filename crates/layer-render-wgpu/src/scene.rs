@@ -1,7 +1,7 @@
 //! Tiled layer composition with explicit cached image boundaries. Pointwise
 //! scratch follows nesting depth. Masks never download or rewrite paint.
 use super::*;
-mod fill_edges;
+pub(crate) mod fill_edges;
 pub(crate) use fill_edges::read_bounds as operation_read_bounds;
 use layer_core::{SceneView, SourceTarget, LayerKind, RasterOperationKind};
 use layer_core::authored::{OccurrenceHandle, MaskUse, CoverageSource};
@@ -1449,7 +1449,7 @@ impl Scene {
             Ok::<_, GpuRasterError>((view, tile.grain(binding), strength * r.papers.relief(&id).unwrap()))
         }).transpose()?;
         let edge_settings=match &op.kind {RasterOperationKind::Fill {edges:Some(edges),underfill:Some(_),..}=>Some(edges.as_ref()),_=>None};
-        if let Some(edges)=edge_settings {self.prepare_fill_edges(r,packet,target,edges,op,encoder)?;}
+        if let Some(edges)=edge_settings {self.prepare_fill_edges(r,packet,target,operation_index as u32,edges,op,encoder)?;}
         let Some(stored_index) = r.paint_layers.iter().position(|l| l.id == target) else {
             return Ok(());
         };
@@ -1476,7 +1476,7 @@ impl Scene {
         let gradient = if let RasterOperationKind::Gradient {gradient,..}=&op.kind {Some(crate::gradient::texture(r,gradient)?)} else {None};
         let underfill_coverage = layer_masks::underfill_coverage(op);
         for (c, source, destination) in pages {
-            let edge_input=edge_settings.map(|_|self.fill_edge_page(r,packet,target,op,c,encoder)).transpose()?.flatten();
+            let edge_input=edge_settings.map(|_|self.fill_edge_page(r,packet,target,operation_index as u32,op,c,encoder)).transpose()?.flatten();
             let mask = self.command_mask_at(r, &op.coverage, c, (target, operation_index as u32, false))?;
             let underfill = underfill_coverage.as_ref().map(|coverage| self.command_mask_at(r, coverage, c, (target, operation_index as u32, true))).transpose()?;
             let out = self.alloc(r, wgpu::Color::TRANSPARENT)?;

@@ -2425,7 +2425,10 @@ impl Worker {
         Ok(())
     }
     fn dependencies_ready(&mut self,frame:&Frame)->bool {
-        if self.backdrop_submitted {self.renderer.raster_dependencies_ready(frame.packet(),frame.transform_preview.as_ref())}else {
+        if self.backdrop_submitted {
+            self.renderer.set_fill_preview(frame.fill_preview.clone());
+            self.renderer.raster_dependencies_ready(frame.packet(),frame.transform_preview.as_ref())
+        }else {
             let scope=SceneScope::Members(Arc::from(frame.scene.view().constant_backdrop()));
             self.renderer.raster_dependencies_ready(frame.backdrop_packet(&scope),None)
         }
@@ -2481,7 +2484,6 @@ impl Worker {
             self.backdrop_submitted = true;
         } else {
             self.renderer.set_transform_preview(frame.transform_preview.as_ref()).map_err(error)?;
-            self.renderer.set_fill_preview(frame.fill_preview.clone());
             self.renderer.set_fill_reveal(frame.fill_reveal);
             self.renderer.submit(frame.packet()).map_err(error)?;
             if self.renderer.has_pending_submission() { frame.pending_rasters.clear(); }

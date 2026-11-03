@@ -2,6 +2,92 @@ use super::*;
 use crate::test_support::flush_engine;
 use layer_core::authored::{PaintBase, PaintSource};
 
+#[test]
+fn stored_fill_prepares_cold_reference_tiles_beside_its_seed() {
+    let extent=[384,64];
+    let mut document=paint_document(extent,"Fill target");
+    let target=target(&document);
+    let references:Vec<_>=(0..3).map(|index| {
+        let image=layer_core::color::source::rgba8_source(extent,|x,_| {
+            if (252..260).contains(&x) {[16+index*32,24,40,255]}else{[0;4]}
+        });
+        let (_,reference)=placement::append_paint(&mut document,"Reference",PaintSource {domain:extent,color_mode:Default::default(),
+            raster:Default::default(),base:Some(PaintBase::new(image.clone().into())),operations:Default::default()});
+        (reference,image)
+    }).collect();
+    let reference=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+    let renderer=crate::test_support::staged_renderer(&reference,document.composition().color);
+    let mut engine=layer_engine::CanvasEngine::new(renderer,document,layer_engine::input_queue(8).1,
+        crate::test_support::view(extent),layer_engine::ViewTransform::IDENTITY).unwrap();
+    flush_engine(&mut engine);
+    let snapshot=engine.document().snapshot();
+    let r=engine.backend_mut();
+    crate::test_support::settle_decodes(r);
+    r.source_tiles.borrow_mut().invalidate();
+    let (seed,_)=crate::create_color_target(&r.device,[1;2],"fill reference seed");
+    for (reference,image) in &references {
+        let scope=layer_core::SceneScope::Raw(*reference);
+        let mut capture=crate::artwork::Capture::default();
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        crate::test_support::query_ready(r,&mut encoder,|r,encoder|capture.region_into(r,
+            packet(snapshot.view().with_scope(&scope),extent),PixelRect::new(240,32,241,33),&seed,encoder));
+        r.uploads.finish(&encoder);encoder.submit(&r.queue);
+        assert!(r.source_tiles.borrow().prepared_view(image,[0,0]).is_some());
+        assert!(r.source_tiles.borrow().prepared_view(image,[1,0]).is_none(),"the fill halo must reach a cold tile");
+    }
+    let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.allocate_coverage_handle(),extent,[0;2]);
+    coverage.source.default_coverage=0.;coverage.selection=Some(rectangle([232,16,264,48]));
+    engine.append_raster_operation(target,layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,
+        kind:layer_core::RasterOperationKind::Fill {color:F,texture:Default::default(),alpha_locked:false,
+            edges:Some(Box::new(layer_core::FillEdges {snapshot:snapshot.clone(),position:Point {x:240.,y:32.},tolerance:0.,anchors:None,
+                lines:references.iter().map(|(reference,_)|layer_core::FillLine {snapshot:snapshot.clone(),scope:layer_core::SceneScope::Raw(*reference),fill_above:false}).collect()})),
+            underfill:Some(rectangle([252,16,264,48]))}}).unwrap();
+    flush_engine(&mut engine);
+    let pixels=engine.backend_mut().readback_srgb_rgba8().unwrap();
+    assert!(pixels[((32*extent[0]+240)*4+3) as usize]>0,"the stored fill must commit after its source preparation");
+    assert!(!engine.raster_backing_pending());
+}
+
+fn reference_fill_pixels(extent:[u32;2],cold:bool,preview:bool)->Vec<u8> {
+    let mut document=paint_document(extent,"Cold reference fill");let target=target(&document);
+    let references:Vec<_>=(0..3).map(|index| {
+        let image=layer_core::color::source::rgba8_source(extent,|_,y|if (252..260).contains(&y) {[16+index*32,24,40,192]}else{[0;4]});
+        placement::append_paint(&mut document,"Reference",PaintSource {domain:extent,color_mode:Default::default(),raster:Default::default(),
+            base:Some(PaintBase::new(image.into())),operations:Default::default()}).1
+    }).collect();
+    let reference=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+    let renderer=crate::test_support::staged_renderer(&reference,document.composition().color);
+    let mut engine=layer_engine::CanvasEngine::new(renderer,document,layer_engine::input_queue(8).1,
+        crate::test_support::view(extent),layer_engine::ViewTransform::IDENTITY).unwrap();
+    flush_engine(&mut engine);crate::test_support::settle_decodes(engine.backend_mut());
+    if cold {engine.backend_mut().source_tiles.borrow_mut().invalidate();}
+    let snapshot=engine.document().snapshot();
+    let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.allocate_coverage_handle(),extent,[0;2]);
+    coverage.source.default_coverage=0.;coverage.selection=Some(rectangle([0,232,extent[0],264]));
+    let operation=layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,kind:layer_core::RasterOperationKind::Fill {
+        color:F,texture:Default::default(),alpha_locked:false,
+        edges:Some(Box::new(layer_core::FillEdges {snapshot:snapshot.clone(),position:Point {x:240.,y:240.},tolerance:0.,anchors:None,
+            lines:references.iter().enumerate().map(|(index,reference)|layer_core::FillLine {snapshot:snapshot.clone(),scope:layer_core::SceneScope::Raw(*reference),fill_above:index==1}).collect()})),
+        underfill:Some(rectangle([0,252,extent[0],264]))}};
+    if preview {engine.set_fill_preview(Some(layer_render::FillPreview {transaction:42,revision:0,target,operation}));}
+    else {engine.append_raster_operation(target,operation).unwrap();}
+    flush_engine(&mut engine);
+    let pixels=engine.backend_mut().readback_srgb_rgba8().unwrap();
+    assert!(pixels[((240*extent[0]+240)*4+3) as usize]>0,"the fill must present after external reference preparation");
+    assert_eq!(engine.can_undo(),!preview);assert!(!engine.raster_backing_pending());
+    pixels
+}
+
+#[test]
+fn stored_fill_retains_cold_reference_crops_across_all_page_columns() {
+    assert_eq!(reference_fill_pixels([2048,512],true,false),reference_fill_pixels([2048,512],false,false));
+}
+
+#[test]
+fn held_fill_prepares_cold_reference_edges_before_presenting() {
+    assert_eq!(reference_fill_pixels([384,512],true,true),reference_fill_pixels([384,512],false,true));
+}
+
 #[derive(Clone, Copy)]
 enum Border { Below, Same, Above, AboveWhite, Solid, Flat, Junction, Soft, WideFlat, InsideSoft, WideAboveWhite }
 #[derive(Clone, Copy)]

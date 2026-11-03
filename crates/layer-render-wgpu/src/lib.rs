@@ -960,6 +960,7 @@ pub struct WgpuRasterizer {
     source_receipt:Option<std::sync::Weak<scene::sources::PendingTile>>,
     source_results:std::collections::VecDeque<(layer_core::color::RgbSpace,object_image_mips::PreparedImageWork)>,
     bake_preflight:Option<scene::bake_preflight::BakePreflight>,
+    fill_edges_preflight:Option<scene::fill_edges::FillEdgesPreflight>,
     raster_buffers: std::sync::Arc<raster::BufferPool>,
     layer_masks: layer_masks::MaskRenderer,
     selection_clip: selection_clip::SelectionClip,
@@ -1461,7 +1462,7 @@ impl WgpuRasterizer {
             raster: None,
             document_color: Default::default(),
             native_edit: None,
-            restore_preflight:None,source_receipt:None,source_results:Default::default(),bake_preflight:None,
+            restore_preflight:None,source_receipt:None,source_results:Default::default(),bake_preflight:None,fill_edges_preflight:None,
             raster_buffers: std::sync::Arc::new(raster::BufferPool::default()),
             blend_space: layer_core::BlendSpace::Linear,
             preview_pages: Vec::with_capacity(16),
@@ -3746,6 +3747,7 @@ impl CanvasRenderer for WgpuRasterizer {
         self.activate_presentation(packet.scene);
         if self.retained_transition_frame(packet, preview) { return true; }
         if self.bake_preflight.as_ref().is_some_and(|state|!state.matches(packet,self.document_color())) {self.bake_preflight=None;}
+        if self.fill_edges_preflight.as_ref().is_some_and(|state|!state.matches(packet,self.document_color())) {self.fill_edges_preflight=None;}
         let mut required = startup::Requirements::default();
         self.transforms.as_ref().unwrap().require_frame(self, packet, preview, &mut required);
         let transforms_ready = required.render.is_empty() || self.startup.as_ref().is_none_or(|startup| {
@@ -3764,7 +3766,7 @@ impl CanvasRenderer for WgpuRasterizer {
         fill_ready && transforms_ready && self.scene_scale_ready() && self.startup.as_ref().is_none_or(|s| s.document.ready() && s.current.ready())
             && self.brush_batches_ready(packet)
             && self.prepare_raster_restores(packet) && self.bake_analyses_ready(packet) && self.retouch_analyses_ready(packet)
-            && self.bake_vectors_ready(packet) && self.prepare_bakes(packet) && self.prepare_transform_preview(packet,preview)
+            && self.bake_vectors_ready(packet) && self.prepare_bakes(packet) && self.prepare_fill_edges(packet) && self.prepare_transform_preview(packet,preview)
     }
     fn has_pending_submission(&self) -> bool { self.settling.is_some() }
     fn poll_pending(&mut self, view: layer_render::ViewState) -> Result<(), Self::Error> {
@@ -3840,7 +3842,7 @@ impl CanvasRenderer for WgpuRasterizer {
     }
     fn has_pending_work(&self) -> bool {
         self.fill_preview.is_some() && self.fill_preview_ready().is_none()
-            || self.held_result_ready() || self.bake_preflight.as_ref().is_some_and(|state|state.pending() && (!cfg!(target_arch="wasm32") || !state.waiting())) || self.restore_preparation_pending() || self.analysis_dirty || !self.transform_damage.is_empty() || !self.document_damage.is_empty() || self.settling.is_some() || self.retouch.as_ref().is_some_and(|retouch| retouch.pending() && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting()))
+            || self.held_result_ready() || self.fill_edges_preflight.as_ref().is_some_and(|state|state.pending() && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting())) || self.bake_preflight.as_ref().is_some_and(|state|state.pending() && (!cfg!(target_arch="wasm32") || !state.waiting())) || self.restore_preparation_pending() || self.analysis_dirty || !self.transform_damage.is_empty() || !self.document_damage.is_empty() || self.settling.is_some() || self.retouch.as_ref().is_some_and(|retouch| retouch.pending() && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting()))
             || self.navigator.pending()
             || self.transform_sources_pending && self.transform_preview.is_some() && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting())
             || self.moving_images_pending()
@@ -4213,7 +4215,7 @@ impl WgpuRasterizer {
     }
 
     fn submit_frame_inner(&mut self, packet: FramePacket<'_>, settled_commit: Option<raster::native_edit::NativeFrame>) -> Result<(), GpuRasterError> {
-        if let Some(error)=self.take_bake_failure().or_else(||self.take_restore_failure()) {return Err(error);}
+        if let Some(error)=self.take_bake_failure().or_else(||self.take_fill_edges_failure()).or_else(||self.take_restore_failure()) {return Err(error);}
         let retained_transition = self.retained_transition_frame(packet, self.transform_preview.as_ref());
         let analysis_dirty = std::mem::take(&mut self.analysis_dirty);
         let packet = FramePacket {composite_all: packet.composite_all || analysis_dirty, ..packet};
