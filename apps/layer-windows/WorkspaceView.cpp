@@ -473,6 +473,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         auto update=object(model,L"workspace_update");
         if(!publication.Accept(true,revision(update,L"revision"),revision(update,L"model_revision"),revision(update,L"content_revision")))return false;
         workspaceUpdate=update;
+        if(update.Size()){applyMotion(object(update,L"drag"));canvasBar->Published(object(update,L"canvas_bar"));}
         model.Insert(L"layout",data->model.GetNamedValue(L"layout"));
         data->model=model;data->state=object(model,L"state");
         commandSearch->Apply(data->state);
