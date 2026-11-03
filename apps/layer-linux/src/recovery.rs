@@ -90,6 +90,7 @@ impl Recovery {
     }
     pub(crate) fn coordinator(&self)->Result<SessionStores,String> {self.stores.borrow().clone().ok_or_else(||"Drawing storage is not registered".into())}
     pub async fn prepare_retirement(&self)->Result<(),String> {
+        if !enabled() {return Ok(());}
         self.drain().await;
         self.coordinator()?.prepare_retirement(self.binding.key())?.await.map(|_|())
     }
@@ -500,6 +501,13 @@ async fn failed_drawings(w:&Rc<Workspace>)->Result<(),String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn disabled_session_storage_allows_drawing_retirement_without_a_coordinator() {
+        assert!(!enabled());
+        let recovery = Recovery::default();
+        assert!(recovery.coordinator().is_err());
+        glib::MainContext::new().block_on(recovery.prepare_retirement()).unwrap();
+    }
     #[test]
     fn refused_legacy_namespace_cannot_be_reopened_for_fresh_publication_or_cleanup() {
         struct Fixture(PathBuf);
