@@ -27,6 +27,22 @@ function Write-FixturePlan([string]$Path,[string[]]$Runs){
     [IO.File]::WriteAllText($temporary,($plan|ConvertTo-Json),[Text.UTF8Encoding]::new($false))
     if([IO.File]::Exists($Path)){[IO.File]::Replace($temporary,$Path,[NullString]::Value)}else{[IO.File]::Move($temporary,$Path)}
 }
+function Get-FixtureTextScale{
+    $path='HKCU:\Software\Microsoft\Accessibility'
+    $key=if(Test-Path -LiteralPath $path){Get-Item -LiteralPath $path}
+    $exists=$key -and 'TextScaleFactor' -in $key.GetValueNames()
+    [pscustomobject]@{exists=[bool]$exists;kind=$(if($exists){$key.GetValueKind('TextScaleFactor').ToString()});value=$(if($exists){$key.GetValue('TextScaleFactor',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)})}
+}
+function Restore-FixtureTextScale($Saved){
+    if(((Get-FixtureTextScale)|ConvertTo-Json -Compress) -ceq ($Saved|ConvertTo-Json -Compress)){return}
+    $path='HKCU:\Software\Microsoft\Accessibility'
+    if($Saved.exists){
+        if(!(Test-Path -LiteralPath $path)){New-Item -Path $path|Out-Null}
+        Set-ItemProperty -LiteralPath $path -Name TextScaleFactor -Type $Saved.kind -Value $Saved.value
+    }else{Remove-ItemProperty -LiteralPath $path -Name TextScaleFactor}
+    if(((Get-FixtureTextScale)|ConvertTo-Json -Compress) -cne ($Saved|ConvertTo-Json -Compress)){throw 'Windows text scale did not restore its original registry value'}
+    [CapyVm.Native]::NotifyTextSize()
+}
 $runnerStarted = Get-Date
 $Executable = if($List){[IO.Path]::GetFullPath($Executable)}else{(Resolve-Path -LiteralPath $Executable).Path}
 $editorExecutable=$Executable
@@ -129,6 +145,8 @@ Add-Type -Namespace CapyVm -Name Native -MemberDefinition @'
 [DllImport("user32.dll")] public static extern IntPtr GetSystemMenu(IntPtr window, bool revert);
 [DllImport("user32.dll")] public static extern bool DeleteMenu(IntPtr menu, uint position, uint flags);
 [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
+[DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr SendMessageTimeout(IntPtr window,uint message,UIntPtr w,string l,uint flags,uint timeout,out UIntPtr result);
+public static void NotifyTextSize(){UIntPtr result;SendMessageTimeout(new IntPtr(0xffff),0x1a,UIntPtr.Zero,"Accessibility",2,2000,out result);}
 '@
 [CapyVm.Native]::SetProcessDpiAwarenessContext([IntPtr]-4) | Out-Null
 [CapyVm.Native]::SetConsoleCtrlHandler([IntPtr]::Zero, $true) | Out-Null
@@ -261,7 +279,10 @@ while($null -ne ($name=Get-NextFixture $planned $queue $claimed)){
     $log = Join-Path $Output ($run.Key -replace ':', '-')
     $env:CAPY_FIXTURE_CONTEXT = "$log-context.json"
     $started = Get-Date
+    $textScale=$null;$cleanupError=$null
     try {
+      try {
+        $textScale=Get-FixtureTextScale
         $controlFixture=Control-Fixture $fixture $run.Value
         $Executable=$editorExecutable
         if($controlFixture){
@@ -277,24 +298,30 @@ while($null -ne ($name=Get-NextFixture $planned $queue $claimed)){
         $process.PriorityClass='High'
         $finished = $process.WaitForExit($TimeoutMinutes * 60000)
         if (!$finished) {
-            Save-Screen "$log.png"
-            & taskkill.exe /T /F /PID $process.Id | Out-Null
+            try{Save-Screen "$log.png"}finally{& taskkill.exe /T /F /PID $process.Id | Out-Null}
         }
         $exit = if ($finished) { $process.ExitCode } else { 'timeout' }
         $errors = @(Get-Content "$log.err")
         $marker = [array]::FindLastIndex([string[]]$errors, [Predicate[string]]{ param($line) $line -match '^\s*\|\s*~' })
         $message = (@($errors | Select-Object -Skip ($marker + 1)) -match '\S' -replace '^\s*\|\s*', '') -join ' '
-    } catch {
+      } catch {
         $exit = 'runner'
         $message = $_.Exception.Message
-    }
-    try {
+      }
+      try {
         if ($exit -ne 0 -and !(Test-Path "$log.png")) { Save-Screen "$log.png" }
         Save-Evidence $log
-    } catch { $exit = 'evidence'; $message += " $($_.Exception.Message)" }
-    $resultJson = [ordered]@{ name = $run.Key; exit = $exit; seconds = [math]::Round(((Get-Date) - $started).TotalSeconds); message = $message } |
-        ConvertTo-Json -Compress
-    Write-FixtureResult $results $resultJson
+      } catch { $exit = 'evidence'; $message += " $($_.Exception.Message)" }
+    } finally {
+        if($textScale){try{Restore-FixtureTextScale $textScale}catch{$cleanupError=$_.Exception.Message}}
+    }
+    if($cleanupError){
+        $message=(@($message,"Text-scale cleanup failed (fixture exit ${exit}): $cleanupError")|Where-Object {$_}) -join ' '
+        $exit='cleanup'
+    }
+    $result = [ordered]@{ name = $run.Key; exit = $exit; seconds = [math]::Round(((Get-Date) - $started).TotalSeconds); message = $message }
+    Write-FixtureResult $results ($result|ConvertTo-Json -Compress)
+    if($cleanupError){throw "Fixture text-scale cleanup failed: $cleanupError"}
 }
 Stop-Review
 Set-Content (Join-Path $Output 'complete') ''

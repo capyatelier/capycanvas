@@ -235,4 +235,87 @@ try{
         foreach($assignment in $priorityAssignments){. ([scriptblock]::Create($assignment.Extent.Text));$process.Refresh();if($process.PriorityClass -ne 'High'){throw 'A fixture input driver did not receive High priority'}}
     }finally{$process.PriorityClass=$previous}
 }finally{Remove-Item -LiteralPath $cacheRun -Recurse -Force}
+& {
+    foreach($name in 'Get-FixtureTextScale','Restore-FixtureTextScale'){
+        $definition=$ast.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$false)
+        if($definition){. ([scriptblock]::Create($definition.Extent.Text))}
+    }
+    Add-Type -TypeDefinition 'namespace CapyVm { public static class Native { public static int Notifications; public static void NotifyTextSize(){Notifications++;} } }'
+    $loop=$ast.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.WhileStatementAst] -and $_.Extent.Text.Contains('Get-NextFixture')}
+    $execute=[scriptblock]::Create($loop.Extent.Text)
+    $registry=[pscustomobject]@{}
+    $registry|Add-Member ScriptMethod GetValueNames {if($script:scale.exists){'TextScaleFactor'}}
+    $registry|Add-Member ScriptMethod GetValueKind {param($name)$script:scale.kind}
+    $registry|Add-Member ScriptMethod GetValue {param($name,$default,$options)$script:scale.value}
+    function Test-Path($LiteralPath,$Path){$true}
+    function Get-Item($LiteralPath){$registry}
+    function New-Item($Path,$Force){}
+    function Set-ItemProperty($LiteralPath,$Name,$Type,$Value){
+        $script:events.Add('restore')
+        if($script:restoreFails){throw 'Registry restore refused'}
+        $script:scale=[pscustomobject]@{exists=$true;kind=[string]$Type;value=$Value}
+    }
+    function Remove-ItemProperty($LiteralPath,$Name){
+        $script:events.Add('restore')
+        if($script:restoreFails){throw 'Registry restore refused'}
+        $script:scale=[pscustomobject]@{exists=$false;kind=$null;value=$null}
+    }
+    function Get-NextFixture($Planned,$Queue,$Claimed){
+        $script:events.Add('claim');$script:claims++
+        if($script:claims -eq 1){'fixture'}
+    }
+    function Stop-Review{}
+    function Control-Fixture{}
+    function Get-FixtureCompanionArguments{}
+    function Get-Process{[pscustomobject]@{Path='powershell.exe'}}
+    function Start-Process{
+        $script:events.Add('child')
+        if($script:mode -ne 'unchanged'){$script:scale=[pscustomobject]@{exists=$true;kind='DWord';value=150}}
+        if($script:mode -eq 'error'){throw 'Child launch failed'}
+        $child=[pscustomobject]@{Id=123;Handle=1;PriorityClass='Normal';ExitCode=$(if($script:mode -eq 'failure'){7}else{0})}
+        $child|Add-Member ScriptMethod WaitForExit {param($timeout)$script:mode -notin @('timeout','screen-error')}
+        $child
+    }
+    function taskkill.exe{$script:events.Add('kill')}
+    function Save-Screen{if($script:mode -eq 'screen-error'){throw 'Capture failed'}}
+    function Save-Evidence{$script:events.Add('evidence')}
+    function Get-Content{if($script:mode -eq 'failure'){'Fixture failed'}}
+    function Write-FixtureResult($Path,$Json){$script:events.Add('result');$script:result=$Json|ConvertFrom-Json}
+    $Output='C:\owned';$scripts='C:\owned';$editorExecutable='C:\owned\CapyCanvas.exe'
+    $runs=@{fixture=@()};$queue=$null;$DebuggerPath=$null;$TimeoutMinutes=20
+    foreach($original in @(
+        [pscustomobject]@{exists=$false;kind=$null;value=$null},
+        [pscustomobject]@{exists=$true;kind='DWord';value=130},
+        [pscustomobject]@{exists=$true;kind='QWord';value=[long]150}
+    )){
+        foreach($mode in 'timeout','screen-error','failure','error','success','unchanged'){
+            foreach($restoreFails in @($false,$true)){
+                if($restoreFails -and $mode -notin @('timeout','success','failure')){continue}
+                $script:scale=$original;$script:mode=$mode;$script:restoreFails=$restoreFails
+                $script:events=[Collections.Generic.List[string]]::new();$script:claims=0;$script:result=$null
+                $notifications=[CapyVm.Native]::Notifications;$failure=$null
+                try{& $execute}catch{$failure=$_.Exception.Message}
+                $childExit=switch($mode){'timeout'{'timeout'} 'failure'{7} {$_ -in @('error','screen-error')}{'runner'} default{0}}
+                $expectedExit=if($restoreFails){'cleanup'}else{$childExit}
+                if(!$script:result -or $script:result.exit -cne $expectedExit){throw 'Text-scale cleanup replaced the original fixture exit'}
+                $expectedMessage=switch($mode){'failure'{'Fixture failed'} 'error'{'Child launch failed'} 'screen-error'{'Capture failed'} default{''}}
+                if($restoreFails){$expectedMessage=(@($expectedMessage,"Text-scale cleanup failed (fixture exit ${childExit}): Registry restore refused")|Where-Object {$_}) -join ' '}
+                if($script:result.message -cne $expectedMessage){throw 'Text-scale cleanup replaced the original fixture message'}
+                if($restoreFails){
+                    if(!$failure -or $script:claims -ne 1){throw 'Failed text-scale cleanup claimed another fixture or lost its result'}
+                    if($script:events[-1] -ne 'result'){throw 'Failed text-scale cleanup did not write its fixture result before stopping'}
+                    continue
+                }
+                if($failure){throw $failure}
+                if(($script:scale|ConvertTo-Json -Compress) -cne ($original|ConvertTo-Json -Compress)){throw 'Forced fixture termination leaked Windows text scale into the next fixture'}
+                $changed=$mode -ne 'unchanged' -and !($original.exists -and $original.kind -eq 'DWord' -and $original.value -eq 150)
+                if([CapyVm.Native]::Notifications -ne $notifications+[int]$changed){throw 'Text-scale notification did not match an actual restoration'}
+                $restore=$script:events.IndexOf('restore');$result=$script:events.IndexOf('result')
+                if($changed -and ($restore -le $script:events.IndexOf('evidence') -or $restore -ge $result)){throw 'Text scale must restore after evidence and before the fixture result'}
+                if($mode -in @('timeout','screen-error') -and ($script:events.IndexOf('kill') -lt 0 -or $script:events.IndexOf('kill') -ge $restore)){throw 'Text scale restored before forced child termination'}
+                if($script:claims -ne 2 -or $script:events[-1] -ne 'claim'){throw 'The next fixture was claimed before its predecessor completed cleanup'}
+            }
+        }
+    }
+}
 'Fixture selection and control entry-point routing passed'
