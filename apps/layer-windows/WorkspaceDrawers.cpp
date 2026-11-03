@@ -140,11 +140,13 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         rebuild();
         if(inspector&&model.HasKey(L"layer_properties")){
             auto request=inspectorSizingRequest();
-            auto layer=O({{L"measurement",object(request,L"measurement")},
-                {L"rows",N(array(data->state,L"layers").Size())},{L"properties_height",N(num(request,L"properties_height"))}});
-            result=resolve(false,layer);inspector->sizes=object(result,L"sizes");inspector->sizingKey=inspectorSizingKey(request);
-            auto placements=array(inspector->sizes,L"placements");
-            if(placements.Size()==2){auto value=placements.GetAt(flag(model,L"layer_properties")?1:0);endpoint=value.ValueType()==JsonValueType::Object?value.GetObject():J{};}
+            if(num(request,L"properties_height")>0){
+                auto layer=O({{L"measurement",object(request,L"measurement")},
+                    {L"rows",N(array(data->state,L"layers").Size())},{L"properties_height",N(num(request,L"properties_height"))}});
+                result=resolve(false,layer);inspector->sizes=object(result,L"sizes");inspector->sizingKey=inspectorSizingKey(request);
+                auto placements=array(inspector->sizes,L"placements");
+                if(placements.Size()==2){auto value=placements.GetAt(flag(model,L"layer_properties")?1:0);endpoint=value.ValueType()==JsonValueType::Object?value.GetObject():J{};}
+            }
         }else if(measureHeights())endpoint=object(resolve(false),L"placement");
         auto oldBounds=rectangle(object(previous,L"bounds")),nextBounds=rectangle(object(endpoint,L"bounds"));
         if(!snapTarget&&!animating&&previous.Size()&&pixelBounds(oldBounds,workspace)!=pixelBounds(nextBounds,workspace)){

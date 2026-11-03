@@ -12,6 +12,8 @@
 #include "ShortcutPage.h"
 #include "PalettesView.h"
 #include "TextureDialog.h"
+#include "HeaderView.h"
+#include <future>
 #include <msctf.h>
 #pragma comment(lib,"uuid.lib")
 #include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
@@ -341,8 +343,20 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         settings->Hide();co_await wait([&]{return !settings->IsOpen()&&!workspaceElement(L"preference-choice-language");},L"Preferences Hide did not finish native dialog close");
         settings.reset();window.AppWindow().Resize(previous);++checks;
     }
+    winrt::fire_and_forget measureFixtureHeader(std::string snapshot,std::string catalog,double id,std::shared_ptr<std::promise<std::string>> result){
+        auto self=shared_from_this();std::shared_ptr<HeaderView> header;bool attached=false;auto previousSize=window.AppWindow().Size();auto previousWidth=root.Width();
+        try{
+            auto measured=std::make_shared<std::string>();auto model=J::Parse(to_hstring(snapshot)),copy=J::Parse(to_hstring(catalog));copy.Insert(L"bootstrap",object(object(model,L"localization"),L"bootstrap"));
+            auto send=[measured,id](std::string value){auto action=J::Parse(to_hstring(value));if(str(action,L"type")==L"measure_header")for(auto item:array(action,L"items"))if(num(item.GetObject(),L"id")==id&&num(object(item.GetObject(),L"bounds"),L"width")>0)*measured=value;};
+            header=std::make_shared<HeaderView>(send,copy,context.localization,[](bool){},[]{},[]{},[]{},[](CanvasQueryKind,std::string,PreviewReply){return false;},[](std::string){},[](std::string){});
+            auto surface=header->Root();surface.Width(1000);root.Width(1000);root.Children().InsertAt(0,surface);attached=true;window.AppWindow().Resize({1100,900});header->Apply(model);
+            co_await wait([measured]{return !measured->empty();},L"Inspector origin did not publish native header bounds");
+            root.Children().RemoveAt(0);attached=false;header.reset();root.Width(previousWidth);window.AppWindow().Resize(previousSize);result->set_value(*measured);
+        }catch(...){if(attached)root.Children().RemoveAt(0);header.reset();root.Width(previousWidth);window.AppWindow().Resize(previousSize);result->set_exception(std::current_exception());}
+    }
     winrt::Windows::Foundation::IAsyncAction layerLanguageDraft(){
-        auto theme=root.RequestedTheme();std::string snapshot,catalog,translated,paletteChanged,paletteRemoved,paletteSwitched,gradientSpec;NativeLayoutInput layout;
+        auto theme=root.RequestedTheme();std::string snapshot,catalog,translated,paletteChanged,paletteRemoved,paletteSwitched,gradientSpec,inspectorSnapshot;NativeLayoutInput layout,inspectorLayout;
+        auto queue=root.DispatcherQueue();auto weak=weak_from_this();
         co_await resume_background();
         {
             struct Apartment{Apartment(){init_apartment(apartment_type::multi_threaded);}~Apartment(){uninit_apartment();}} apartment;
@@ -358,7 +372,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             };
             require(capy_start_services(host.get(),nullptr,nullptr)>=0,L"Layer fixture services failed");
             waitModel([](J const& model){auto workspace=object(model,L"windows_workspace");return flag(workspace,L"ready")&&!flag(workspace,L"busy");},L"Layer fixture workspace did not become ready");
-            auto action=[&](std::string const& value){require(capy_action(host.get(),value.c_str())==0,L"Layer language fixture action failed");};
+            auto action=[&](std::string const& value){if(capy_action(host.get(),value.c_str())!=0)throw hresult_error(E_FAIL,L"Layer language fixture action failed: "+to_hstring(value)+L": "+to_hstring(NativeString(capy_error()).get()));};
             action(theme==ElementTheme::Light?R"({"type":"set_theme","theme":"light"})":R"({"type":"set_theme","theme":"dark"})");
             action(R"({"type":"customize","action":{"type":"set_panel_visible","panel":"layers","visible":true}})");
             action(R"({"type":"move_panel","panel":"layers","target":{"kind":"float","position":[20,20]},"viewport":[1000,700]})");
@@ -387,10 +401,41 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             NativeString gradient(capy_snapshot(host.get(),&info));require(bool(gradient),L"Gradient fixture model missing");
             for(auto value:array(object(J::Parse(to_hstring(gradient.bytes)),L"state"),L"tool_extra"))if(auto control=object(value.GetObject(),L"Gradient");control.Size())gradientSpec=to_string(control.Stringify());
             require(!gradientSpec.empty(),L"Shared gradient tool control missing");
+            action(R"({"type":"customize","action":{"type":"header","action":{"type":"edit","editing":true}}})");
+            action(R"({"type":"customize","action":{"type":"header","action":{"type":"add","zone":"right","before":null,"item":{"kind":"tool","control":{"kind":"panel","panel":"layers"}}}}})");
+            action(R"({"type":"customize","action":{"type":"header","action":{"type":"edit","editing":false}}})");
+            NativeString header(capy_snapshot(host.get(),&info));require(bool(header),L"Inspector fixture header missing");
+            double layersEntry=0;for(auto zone:array(object(object(J::Parse(to_hstring(header.bytes)),L"header"),L"model"),L"zones"))for(auto entry:zone.GetArray()){
+                auto item=entry.GetObject();if(str(object(object(item,L"item"),L"control"),L"panel")==L"layers")layersEntry=num(item,L"id");
+            }
+            require(layersEntry>0,L"Inspector fixture Layers header missing");
+            auto measurement=std::make_shared<std::promise<std::string>>();auto measured=measurement->get_future();auto headerSnapshot=J::Parse(to_hstring(header.bytes));headerSnapshot.Insert(L"localization",presentation);auto bytes=to_string(headerSnapshot.Stringify());
+            require(queue.TryEnqueue([weak,bytes,catalog,layersEntry,measurement]{if(auto self=weak.lock())self->measureFixtureHeader(bytes,catalog,layersEntry,measurement);}),L"Inspector header measurement dispatch failed");
+            require(measured.wait_for(std::chrono::seconds(6))==std::future_status::ready,L"Inspector header measurement did not return");action(measured.get());
+            action(to_string(O({{L"type",S(L"customize")},{L"action",O({{L"type",S(L"toggle_header_drawer")},{L"id",N(layersEntry)}})}}).Stringify()));
+            NativeString inspector(capy_snapshot(host.get(),&info));require(bool(inspector),L"Inspector fixture snapshot missing");auto inspectorModel=J::Parse(to_hstring(inspector.bytes));inspectorModel.Insert(L"localization",presentation);inspectorSnapshot=to_string(inspectorModel.Stringify());
+            inspectorLayout=NativeLayoutInput(capy_layout_input_prepare(to_string(object(inspectorModel,L"layout_input").Stringify()).c_str()));require(bool(inspectorLayout),L"Inspector fixture layout missing");
             require(capy_finish_services(host.get())>=0,L"Layer fixture service shutdown failed");
         }
         co_await apartment;
         auto model=J::Parse(to_hstring(snapshot)),next=J::Parse(to_hstring(snapshot)),copy=J::Parse(to_hstring(catalog));
+        phase=L"cold-layer-inspector";
+        {
+            auto inspectorModel=J::Parse(to_hstring(inspectorSnapshot));auto inspectorCopy=J::Parse(to_hstring(catalog));inspectorCopy.Insert(L"bootstrap",object(object(inspectorModel,L"localization"),L"bootstrap"));
+            auto send=[](std::string){};
+            auto view=std::make_unique<WorkspaceView>(send,inspectorCopy,context.localization,[](CanvasQueryKind,std::string,PreviewReply){return false;},[](bool){},send,send,[](std::string,std::function<void(int32_t)>){ });
+            auto previousSize=window.AppWindow().Size();auto previousWidth=root.Width();bool attached=false;
+            try{
+                auto surface=view->Root();surface.Width(1000);surface.Height(700);root.Width(1000);window.AppWindow().Resize({1100,900});
+                require(!surface.IsLoaded(),L"Cold inspector fixture was already loaded");
+                require(view->Apply(inspectorModel,inspectorLayout),L"Cold inspector model was rejected");view->Resize(1000,700);
+                auto inspector=findElement(surface,L"layer-inspector");require(bool(inspector),L"Cold inspector root was not attached");auto pendingHeight=inspector.Height();
+                root.Children().InsertAt(0,surface);attached=true;
+                co_await wait([&]{return inspector.IsLoaded()&&inspector.ActualWidth()>0&&inspector.Height()>pendingHeight;},L"Cold inspector did not resolve after native measurement");
+                require(view->Apply(inspectorModel,inspectorLayout),L"Measured inspector model was rejected");
+                root.Children().RemoveAt(0);attached=false;view.reset();root.Width(previousWidth);window.AppWindow().Resize(previousSize);
+            }catch(...){if(attached)root.Children().RemoveAt(0);view.reset();root.Width(previousWidth);window.AppWindow().Resize(previousSize);throw;}
+        }
         phase=L"gradient-input";co_await gradientContacts(model,copy,J::Parse(to_hstring(gradientSpec)));phase=L"layer-language-draft";
         auto locale=J::Parse(to_hstring(translated));
         require(str(object(locale,L"bootstrap"),L"active_tag")==L"ja",L"Japanese fixture presentation is not Japanese");
