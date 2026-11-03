@@ -21,6 +21,7 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
     std::function<void()> changed;
     weak_ref<Control> previousFocus;
     std::vector<Button> rows;
+    std::optional<winrt::Windows::Foundation::Point> pointer;
     UIElement::GettingFocus_revoker focusChanged;
 
     J style()const{return object(data->catalog,L"command_search_style");}
@@ -139,8 +140,11 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
             AutomationProperties::SetAutomationId(row,L"command-result-"+to_hstring(i));AutomationProperties::SetName(row,str(command,L"label"));
             AutomationProperties::SetHelpText(row,str(command,L"disabled_reason").empty()?str(command,L"description"):str(command,L"disabled_reason"));
             row.Click([weak,id](auto&&,auto&&){if(auto self=weak.lock())self->execute(id);});
-            row.PointerMoved([weak,id](auto&&,auto&&){if(auto self=weak.lock();self&&str(self->selected(),L"id")!=id)
-                self->send(O({{L"type",S(L"select")},{L"id",S(id)}}));});
+            row.PointerMoved([weak,id](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
+                auto at=e.GetCurrentPoint(nullptr).Position();bool moved=self->pointer&&(self->pointer->X!=at.X||self->pointer->Y!=at.Y);
+                self->pointer=at;
+                if(moved&&str(self->selected(),L"id")!=id)self->send(O({{L"type",S(L"select")},{L"id",S(id)}}));
+            }});
             results.Children().Append(row);rows.push_back(row);
         }
     }
@@ -183,6 +187,7 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
             popup.HorizontalOffset(std::max(0.,(host.ActualWidth()-width)/2));
             double top=host.ActualWidth()<=600?16.:std::clamp(host.ActualHeight()/5,num(style(),L"top_min",48),num(style(),L"top_max",192));
             popup.VerticalOffset(top);frame.MaxHeight(std::max(0.,host.ActualHeight()-top-16));
+            pointer.reset();
             open=true;data->popup(true);popup.IsOpen(true);entry.Focus(FocusState::Programmatic);if(changed)changed();
         }
         updating=false;
