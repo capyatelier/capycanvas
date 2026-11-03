@@ -681,11 +681,6 @@ pub struct RegionFillQuery {
 }
 #[derive(Clone,Debug)]
 pub struct RegionFillTrail {pub transaction:u64,pub points:std::sync::Arc<[[f32;2]]>}
-#[derive(Clone, Debug)]
-pub struct RegionCoverage {
-    pub pixels: std::sync::Arc<layer_core::SelectionPixels>,
-    pub underfill: Option<std::sync::Arc<layer_core::SelectionPixels>>,
-}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegionSeal {
     pub id: u32,
@@ -697,7 +692,6 @@ pub struct RegionSeal {
 #[derive(Clone, Debug)]
 pub struct RegionGapMasks {
     pub next:Option<[u32;2]>,
-    pub regions: [RegionCoverage; 5],
     pub active: usize,
     pub line_bounded: bool,
     pub seals: std::sync::Arc<[RegionSeal]>,

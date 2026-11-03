@@ -504,28 +504,6 @@ fn fill_drag_accumulates_each_crossed_region_without_filling_the_dividing_ink() 
 }
 
 #[test]
-fn fill_retained_gap_masks_render_the_selected_coverage() {
-    let extent=[160,120];let mut document=paint_document(extent,"Retained fill masks");
-    placement::set_source(&mut document,layer_core::color::source::rgba8_source(extent,|x,y|
-        if barrier([24,20,136,100],x,y) && !(y==20 && (76..84).contains(&x)){[51,77,102,255]}else{[0;4]}));
-    let target=target(&document);let source=RegionSource::Scene {snapshot:document.snapshot(),scope:layer_core::SceneScope::Raw(target)};
-    let r=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
-    let mut engine=layer_engine::CanvasEngine::new(r,document,layer_engine::input_queue(8).1,crate::test_support::view(extent),layer_engine::ViewTransform::IDENTITY).unwrap();flush_engine(&mut engine);
-    let mut query=request(source,rectangle([0,0,1,1]),RegionRefinement {close_gaps:true,edges:RegionEdges::Exact,..exact()},0.);
-    query.enclosure=None;query.position=[80,60];query.fill=Some(Default::default());
-    let selected=receive_request(engine.backend_mut(),query);let masks=selected.gaps.as_ref().unwrap();assert_eq!(masks.active,1);
-    let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.document().artwork.coverage.next_handle(),extent,[0;2]);coverage.source.default_coverage=0.;
-    let mut operation=layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,kind:layer_core::RasterOperationKind::Fill {
-        color:[1.,0.,0.,1.],texture:Default::default(),alpha_locked:false,edges: None, underfill:None}};
-    for (revision,slot) in [1,0,4].into_iter().enumerate() {
-        operation.coverage.selection=Some(Selection::pixels(masks.regions[slot].pixels.clone()));
-        engine.set_fill_preview(Some(layer_render::FillPreview {transaction:77,revision:revision as u64,target,operation:operation.clone()}));flush_engine(&mut engine);
-        let shown=engine.backend_mut().readback_srgb_rgba8().unwrap();assert_eq!(&shown[(60*160+80)*4..][..4],&[255,0,0,255]);
-        assert_eq!(&shown[..4],if slot==0 {&[255,0,0,255]}else{&[0;4]},"retained mask {slot}");
-    }
-}
-
-#[test]
 fn fill_gap_64_stop_closes_a_gap_that_auto_leaves_open() {
     let extent=[160,120];
     let alpha=(0..extent[0]*extent[1]).map(|i| {let (x,y)=(i%extent[0],i/extent[0]);
@@ -535,14 +513,16 @@ fn fill_gap_64_stop_closes_a_gap_that_auto_leaves_open() {
     let mut query=request(source,rectangle([0,0,1,1]),RegionRefinement {close_gaps:true,edges:RegionEdges::Exact,..exact()},0.);
     query.enclosure=None;query.position=[80,60];let auto=receive_request(&mut r,query.clone());
     assert_eq!(auto.pixels.bounds(),[0,0,160,120]);
-    query.fill=Some(layer_render::RegionFillQuery {reach:Some(64),..Default::default()});
+    query.fill=Some(layer_render::RegionFillQuery {reach:Some(48),..Default::default()});
+    let previous=receive_request(&mut r,query.clone());
+    assert_eq!((&previous.pixels,&previous.underfill),(&auto.pixels,&auto.underfill));
+    query.fill.as_mut().unwrap().reach=Some(64);
     let selected=receive_request(&mut r,query);let masks=selected.gaps.as_ref().unwrap();assert_eq!(masks.active,4);
-    assert_eq!((&masks.regions[3].pixels,&masks.regions[3].underfill),(&auto.pixels,&auto.underfill));
     score_geometry(&selected.pixels,&[vec![[25.,21.],[135.,21.],[135.,99.],[25.,99.]]],[0,0],&[],"64 px gap stop").unwrap();
 }
 
 #[test]
-fn fill_gap_masks_share_one_request_and_match_off_and_auto() {
+fn fill_gap_requests_match_off_and_auto() {
     let extent=[160,120];
     let expected=[vec![[25.,21.],[135.,21.],[135.,99.],[25.,99.]]];
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
@@ -566,13 +546,13 @@ fn fill_gap_masks_share_one_request_and_match_off_and_auto() {
             assert_eq!((&result.pixels,&result.underfill),(&auto.pixels,&auto.underfill));
             let masks=result.gaps.unwrap();
             assert_eq!((masks.active,masks.line_bounded),(1,thin));
-            assert_eq!((&masks.regions[0].pixels,&masks.regions[0].underfill),(&off.pixels,&off.underfill));
-            if thin {for mask in &masks.regions[1..] {score_geometry(&mask.pixels,&expected,[0,0],&[],"retained gap stop").unwrap();}}
-            for reach in [0,64] {
+            for reach in [0,16,64] {
                 query.fill.as_mut().unwrap().reach=Some(reach);
                 let selected=receive_request(&mut r,query.clone());
                 let slot=(reach/16) as usize;
-                assert_eq!((&selected.pixels,&selected.underfill),(&masks.regions[slot].pixels,&masks.regions[slot].underfill));
+                if reach==0 {assert_eq!((&selected.pixels,&selected.underfill),(&off.pixels,&off.underfill));}
+                else if reach==16 {assert_eq!((&selected.pixels,&selected.underfill),(&auto.pixels,&auto.underfill));}
+                if thin && reach>0 {score_geometry(&selected.pixels,&expected,[0,0],&[],"requested gap stop").unwrap();}
                 assert_eq!(selected.gaps.unwrap().active,slot);
             }
             if thin {
@@ -732,32 +712,4 @@ fn fill_drag_with_different_auto_reaches_commits_and_reopens_the_second_seal_in_
     assert!(!s.engine().can_undo());
     settle(&mut s);
     assert_eq!(s.renderer_mut().readback_srgb_rgba8().unwrap(),before);
-}
-
-#[test]
-fn fill_drag_keeps_only_the_gpu_chosen_output_at_each_auto_reach() {
-    let extent=[304,136];let document=varying_reach_document();
-    let source=RegionSource::Scene {snapshot:document.snapshot(),scope:SceneScope::Raw(target(&document))};
-    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();frame(&mut r,&document,extent);
-    let mut query=request(source,rectangle([0,0,1,1]),Default::default(),0.);
-    query.enclosure=None;query.position=[80,70];query.fill=Some(Default::default());
-    receive_request(&mut r,query.clone());
-    let storage=|r:&mut WgpuRasterizer,query:&RegionRequest| {
-        let regions=r.regions.as_mut().unwrap();let classified=regions.raw.mask().unwrap();
-        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        let region=regions.flood.encode_input(&r.device,&mut encoder,extent,query.position,0.,None,query.refinement,
-            &classified,true,false,&r.empty_paper_view,None,query.fill.as_ref()).unwrap();
-        (region.storage_bytes(),region.gaps.as_ref().unwrap().variants.len())
-    };
-    let (tap_bytes,_)=storage(&mut r,&query);
-    for (position,active) in [([80,70],1),([220,70],3)] {
-        query.position=position;
-        query.fill.as_mut().unwrap().trail=Some(layer_render::RegionFillTrail {transaction:810+active as u64,points:vec![[position[0] as f32,position[1] as f32]].into()});
-        let result=receive_request(&mut r,query.clone());let masks=result.gaps.unwrap();
-        assert_eq!(masks.active,active);
-        let (drag_bytes,variants)=storage(&mut r,&query);
-        assert_eq!(variants,0);
-        assert!(drag_bytes<tap_bytes,"tap {tap_bytes} drag {drag_bytes}");
-        for (slot,region) in masks.regions.iter().enumerate() {assert!((&region.pixels,&region.underfill)==(&result.pixels,&result.underfill),"reach {active} output {slot}");}
-    }
 }

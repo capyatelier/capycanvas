@@ -471,11 +471,8 @@ fn apply_seals(@builtin(global_invocation_id) id:vec3<u32>, @builtin(num_workgro
     let index=id.x+id.y*groups.x*64u+line.job.x;
     let count=min(atomicLoad(&cached[line.offsets.y]),line.offsets.w);if index>=count{return;}
     let base=line.offsets.z+index*END_WORDS;
-    var z=line.options.z;var at=0u;
-    if line.options.w!=0u {
-        at=line.options.w-1u;
-        if line.options.y!=0u {let a=second[line.options.y];if a==0u {return;}z=a-1u;at=z*count*5u;}
-    }
+    var z=line.options.z;
+    if line.options.w!=0u {let a=second[line.options.y];if a==0u {return;}z=a-1u;}
     let hit=atomicLoad(&cached[base+4u+z*4u]);
     if hit==INVALID || atomicLoad(&cached[base+19u])!=0u{return;}
     let start=vec2<i32>(coord(atomicLoad(&cached[base])));
@@ -486,7 +483,7 @@ fn apply_seals(@builtin(global_invocation_id) id:vec3<u32>, @builtin(num_workgro
     if bend!=INVALID {touches=seal_segment(start,vec2<i32>(coord(bend)),write);touches=seal_segment(vec2<i32>(coord(bend)),end,write)||touches;}
     else{touches=seal_segment(start,end,write);}
     if !write && touches {
-        let record=at+index*5u;
+        let record=index*5u;
         first[record]=atomicLoad(&cached[base+15u]);first[record+1u]=point(vec2<u32>(start));
         first[record+2u]=hit;first[record+3u]=bend;first[record+4u]=16u*(z+1u);
     }
@@ -638,7 +635,6 @@ fn barrier_plane(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgr
     }
     if index>=line.offsets.x{return;}
     if line.options.x==5u {
-        if line.options.w!=0u && line.options.y!=second[line.options.z] {return;}
         let bits=first[8u+index]|atomicLoad(&eligible[index]);first[8u+index]=bits;atomicStore(&eligible[index],bits);return;
     }
     if line.options.x==3u {
@@ -657,7 +653,7 @@ fn barrier_plane(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgr
     if line.options.x==0u {first[8u+line.options.y*line.offsets.x+index]=atomicLoad(&eligible[index]);}
     else if line.options.x==2u {second[index]=atomicLoad(&eligible[index]);}
     else {
-        let plane=select(second[line.options.y],line.options.y,line.options.x==4u);
+        let plane=second[line.options.y];
         let bits=first[8u+plane*line.offsets.x+index];
         atomicStore(&eligible[index],bits);atomicStore(&cached[line.offsets.z+line.offsets.w*END_WORDS+index],~bits);
     }

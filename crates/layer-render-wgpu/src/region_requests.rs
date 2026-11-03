@@ -715,30 +715,25 @@ impl RegionRequests {
         self.stop_mask=None;
         let band_bytes=u64::from(extent[0].div_ceil(8))*u64::from(extent[1])*4;
         let seal_metadata=region.gaps.as_ref().and_then(|gaps|gaps.seal_metadata.as_ref());
-        let variants=region.gaps.as_ref().map_or(&[][..],|gaps|gaps.variants.as_slice());
         let gaps=region.gaps.is_some();
-        let regions=std::iter::once(&region).chain(variants).collect::<Vec<_>>();
         self.readback.clear();
-        let mut captures=Vec::with_capacity(regions.len());
         let stale=self.cache_request.is_some();
         if stale {self.flood.copy_stale(&mut encoder,&region.coverage,region.bounds_offset+20);}
-        for (index,region) in regions.into_iter().enumerate() {
-            let mask_size=region.bounds_offset+32;
-            let band_size=if region.underfill.is_some() {band_bytes+32}else{0};
-            let extra_size=if index==0 && probe.is_some() {self.raw.tonal_statistics.size()}else{0};
-            let metadata_bytes=if index==0 {seal_metadata.map_or(0,wgpu::Buffer::size)}else{0};
-            let size=mask_size+band_size+metadata_bytes+extra_size;
-            let readback=r.device.create_buffer(&wgpu::BufferDescriptor {label:Some("region history snapshot"),size,
-                usage:wgpu::BufferUsages::MAP_READ|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false});
-            encoder.copy_buffer_to_buffer(&region.coverage,0,&readback,0,mask_size);
-            if let Some((buffer,offset))=&region.underfill {encoder.copy_buffer_to_buffer(buffer,offset-32,&readback,mask_size,band_size);}
-            if index==0 && let Some(metadata)=seal_metadata {encoder.copy_buffer_to_buffer(metadata,0,&readback,mask_size+band_size,metadata_bytes);}
-            if extra_size>0 {encoder.copy_buffer_to_buffer(&self.raw.tonal_statistics,0,&readback,mask_size+band_size+metadata_bytes,extra_size);}
-            captures.push(selection_readback::Capture {buffer:readback.clone(),size,coverage_size:region.bounds_offset,
-                underfill_offset:(band_size>0).then_some(mask_size+32),seal_records:(metadata_bytes/20) as usize});
-            self.readback.push(readback);
-            if gaps {encoder.clear_buffer(&region.coverage,24,Some(8));}
-        }
+        let mask_size=region.bounds_offset+32;
+        let band_size=if region.underfill.is_some() {band_bytes+32}else{0};
+        let extra_size=if probe.is_some() {self.raw.tonal_statistics.size()}else{0};
+        let metadata_bytes=seal_metadata.map_or(0,wgpu::Buffer::size);
+        let size=mask_size+band_size+metadata_bytes+extra_size;
+        let readback=r.device.create_buffer(&wgpu::BufferDescriptor {label:Some("region history snapshot"),size,
+            usage:wgpu::BufferUsages::MAP_READ|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false});
+        encoder.copy_buffer_to_buffer(&region.coverage,0,&readback,0,mask_size);
+        if let Some((buffer,offset))=&region.underfill {encoder.copy_buffer_to_buffer(buffer,offset-32,&readback,mask_size,band_size);}
+        if let Some(metadata)=seal_metadata {encoder.copy_buffer_to_buffer(metadata,0,&readback,mask_size+band_size,metadata_bytes);}
+        if extra_size>0 {encoder.copy_buffer_to_buffer(&self.raw.tonal_statistics,0,&readback,mask_size+band_size+metadata_bytes,extra_size);}
+        let capture=selection_readback::Capture {buffer:readback.clone(),size,coverage_size:region.bounds_offset,
+            underfill_offset:(band_size>0).then_some(mask_size+32),seal_records:(metadata_bytes/20) as usize};
+        self.readback.push(readback);
+        if gaps {encoder.clear_buffer(&region.coverage,24,Some(8));}
         r.uploads.finish(&encoder);
         r.metrics.command_passes += encoder.pass_count();
         encoder.submit(&r.queue);
@@ -747,7 +742,7 @@ impl RegionRequests {
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         selection_readback::capture_selection(
-            captures,extent,byte_coverage,request_id,gaps,tx,
+            capture,extent,byte_coverage,request_id,gaps,tx,
             move |mut result, source_stale, extra| {
                 result.tonal_sample = probe.and_then(|p| tonal::sample(extra, p));
                 result.placement = placement;
@@ -895,17 +890,7 @@ impl WgpuRasterizer {
             Ok((result,false))=>{requests.cache_request=None;Ok(result)},
             Err(error)=>{if let Some(cache)=&mut requests.cache {cache.ready=false;}requests.cache_request=None;Err(error)},
         };
-        if let Ok(result)=&result {
-            if let Some(masks)=&result.gaps && let Some(gaps)=&region.gaps {
-                for (slot,mask) in masks.regions.iter().enumerate().filter(|(slot,_)|*slot!=masks.active) {
-                    let buffer=if slot==0 {&region.coverage}else{gaps.variants.get(slot-1).map_or(&region.coverage,|variant|&variant.coverage)};
-                    self.selection_clip.remember_pixels(&mask.pixels,buffer.clone());
-                }
-            }
-            let active=result.gaps.as_ref().map_or(0,|masks|masks.active);
-            let buffer=region.gaps.as_ref().filter(|_|active>0).and_then(|gaps|gaps.variants.get(active-1)).map_or(&region.coverage,|variant|&variant.coverage);
-            self.selection_clip.remember_pixels(&result.pixels,buffer.clone());
-        }
+        if let Ok(result)=&result {self.selection_clip.remember_pixels(&result.pixels,region.coverage.clone());}
         self.refresh_storage_metrics();
         Some(result.map(RegionOutput::Mask))
     }

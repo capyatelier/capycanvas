@@ -1,5 +1,5 @@
 use super::*;
-use layer_render::{RegionCoverage,RegionResult};
+use layer_render::RegionResult;
 
 pub(super) struct Capture {
     pub buffer: wgpu::Buffer,
@@ -10,7 +10,8 @@ pub(super) struct Capture {
 }
 struct Captured {
     colour_on_solid: bool,
-    coverage: RegionCoverage,
+    pixels: std::sync::Arc<layer_core::SelectionPixels>,
+    underfill: Option<std::sync::Arc<layer_core::SelectionPixels>>,
     active: usize,
     line_bounded: bool,
     stale: bool,
@@ -49,13 +50,12 @@ fn read_coverage(bytes:&[u8],extent:[u32;2],byte_coverage:bool,coverage_size:u64
             bend:(read(at+12)!=u32::MAX).then(||coord(read(at+12))),reach})
     }).collect();
     let next=read(coverage_size as usize+24);
-    Ok(Captured {colour_on_solid:read(coverage_size as usize+28)&1!=0,next:(next!=u32::MAX).then(||coord(next)),coverage:RegionCoverage {pixels:std::sync::Arc::new(pixels),underfill},active:read(24) as usize,line_bounded:read(28)!=0,
+    Ok(Captured {colour_on_solid:read(coverage_size as usize+28)&1!=0,next:(next!=u32::MAX).then(||coord(next)),pixels:std::sync::Arc::new(pixels),underfill,active:read(24) as usize,line_bounded:read(28)!=0,
         stale:read(coverage_size as usize+20)!=0,extra:bytes[extra_start+seal_records*20..].to_vec(),seals})
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn capture_selection<T:Send+'static>(
-    captures:Vec<Capture>,
+    capture:Capture,
     extent:[u32;2],
     byte_coverage:bool,
     request_id:u64,
@@ -63,38 +63,14 @@ pub(super) fn capture_selection<T:Send+'static>(
     tx:mpsc::Sender<Result<T,GpuRasterError>>,
     convert:impl FnOnce(RegionResult,bool,&[u8])->T+Send+'static,
 ) {
-    let parts=(0..captures.len()).map(|_|None).collect::<Vec<Option<Captured>>>();
-    let state=std::sync::Arc::new(std::sync::Mutex::new((parts,Some(convert))));
-    for (index,capture) in captures.into_iter().enumerate() {
-        let Capture {buffer,size,coverage_size,underfill_offset,seal_records}=capture;
-        let state=state.clone();let tx=tx.clone();
-        crate::raster::map_then(None,&buffer,size,move|bytes|read_coverage(bytes,extent,byte_coverage,coverage_size,underfill_offset,seal_records),move|part| {
-            let mut state=state.lock().unwrap();
-            if state.1.is_none(){return;}
-            match part {
-                Err(error)=>{state.1=None;let _=tx.send(Err(error));return;},
-                Ok(part)=>state.0[index]=Some(part),
-            }
-            if state.0.iter().any(Option::is_none){return;}
-            let mut parts=std::mem::take(&mut state.0).into_iter().map(Option::unwrap).collect::<Vec<_>>();
-            let convert=state.1.take().unwrap();drop(state);
-            let seals=std::mem::take(&mut parts[0].seals).into();
-            let primary=&parts[0];
-            let result=(|| {
-                let masks=if gaps {
-                    let mut regions=parts.iter().map(|part|part.coverage.clone()).collect::<Vec<_>>();
-                    if regions.len()==1 {regions.resize(5,primary.coverage.clone());}
-                    let active=primary.active;
-                    let selected=parts.get(active).unwrap_or(primary);
-                    if active>=5 {return Err(GpuRasterError::MapFailed("Invalid fill reach".into()));}
-                    Some(layer_render::RegionGapMasks {next:primary.next,regions:regions.try_into().map_err(|_|GpuRasterError::MapFailed("Invalid fill masks".into()))?,
-                        active,line_bounded:selected.line_bounded,seals})
-                }else{None};
-                let selected=masks.as_ref().map_or(&primary.coverage,|masks|&masks.regions[masks.active]);
-                Ok(convert(RegionResult { colour_on_solid:primary.colour_on_solid,request_id,tonal_sample:None,pixels:selected.pixels.clone(),underfill:selected.underfill.clone(),
-                    placement:layer_core::Affine::IDENTITY,gaps:masks},primary.stale,&primary.extra))
-            })();
-            let _=tx.send(result);
+    let Capture {buffer,size,coverage_size,underfill_offset,seal_records}=capture;
+    crate::raster::map_then(None,&buffer,size,move|bytes|read_coverage(bytes,extent,byte_coverage,coverage_size,underfill_offset,seal_records),move|part| {
+        let result=part.and_then(|primary| {
+            if gaps && primary.active>=5 {return Err(GpuRasterError::MapFailed("Invalid fill reach".into()));}
+            let masks=gaps.then(||layer_render::RegionGapMasks {next:primary.next,active:primary.active,line_bounded:primary.line_bounded,seals:primary.seals.into()});
+            Ok(convert(RegionResult {colour_on_solid:primary.colour_on_solid,request_id,tonal_sample:None,pixels:primary.pixels,underfill:primary.underfill,
+                placement:layer_core::Affine::IDENTITY,gaps:masks},primary.stale,&primary.extra))
         });
-    }
+        let _=tx.send(result);
+    });
 }

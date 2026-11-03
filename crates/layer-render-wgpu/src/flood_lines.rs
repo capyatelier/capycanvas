@@ -307,12 +307,11 @@ impl Lines {
     }
     pub fn seal_metadata(&self,device:&PipelineDevice)->Option<wgpu::Buffer> {
         self.has_seals().then(||device.create_buffer(&wgpu::BufferDescriptor {label:Some("fill seal metadata"),
-            size:u64::from(self.ends)*4*20,usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_SRC|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false}))
+            size:u64::from(self.ends)*20,usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_SRC,mapped_at_creation:false}))
     }
-    pub fn capture_seals(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,output:&wgpu::Buffer,chosen:Option<(&wgpu::Buffer,u32)>,reach:u32) {
-        let options=chosen.map_or_else(||[0,0,reach/16-1,1+(reach/16-1)*self.ends*5],|(_,slot)|[0,slot,0,1]);
-        self.encode(input,encoder,Some(output),chosen.map(|(parents,_)|parents),vec![("apply_seals",u64::from(self.ends),
-            self.params([0;4],[0;4],options,[1.,1.,0.,0.]))]);
+    pub fn capture_seals(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,output:&wgpu::Buffer,parents:&wgpu::Buffer,slot:u32) {
+        self.encode(input,encoder,Some(output),Some(parents),vec![("apply_seals",u64::from(self.ends),
+            self.params([0;4],[0;4],[0,slot,0,1],[1.,1.,0.,0.]))]);
     }
 
     pub fn barriers(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,close:bool,reach:u32,job:[u32;4],parents:&wgpu::Buffer) {
@@ -370,9 +369,8 @@ impl Lines {
         ]);
         encoder.copy_buffer_to_buffer(self.data.as_ref().unwrap(),u64::from(self.offsets[1]+3)*4,coverage,28,4);
     }
-    #[allow(clippy::too_many_arguments)]
-    pub fn union_trail(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,trail:&wgpu::Buffer,parents:&wgpu::Buffer,output:u32,active:u32,compare:bool) {
-        self.encode(input,encoder,Some(trail),Some(parents),vec![("barrier_plane",u64::from(self.offsets[0]),self.params([0;4],[0;4],[5,output,active,u32::from(compare)],[1.,1.,0.,0.]))]);
+    pub fn union_trail(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,trail:&wgpu::Buffer) {
+        self.encode(input,encoder,Some(trail),None,vec![("barrier_plane",u64::from(self.offsets[0]),self.params([0;4],[0;4],[5,0,0,0],[1.,1.,0.,0.]))]);
     }
     pub fn next_trail(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,trail:&wgpu::Buffer,points:&[[f32;2]],limit:Option<&wgpu::Buffer>) {
         let mut count=0u32;let mut data=Vec::new();

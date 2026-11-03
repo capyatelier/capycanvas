@@ -22,6 +22,7 @@ pub struct FillGestureView {
 }
 struct Hold {
     line:bool,
+    slot:usize,
     anchor:f32,
     fraction:f32,
     left:f32,
@@ -36,8 +37,7 @@ impl Gesture {
         if let Some(vector)=&self.vector {return Some((true,vector.active,vector.slots[vector.active].as_ref().and_then(|face|face.as_ref())
             .into_iter().flat_map(|face|face.seals.iter()).map(|(a,b,_)|[a.map(|v|v as f32),b.map(|v|v as f32)]).collect()));}
         self.ready.as_ref().map(|ready|ready.result.gaps.as_ref().map_or((false,0,Vec::new()),|masks| {
-            let reach=layer_render::RegionGapMasks::STOPS[masks.active];
-            let seals=masks.seals.iter().filter(|seal|seal.reach==reach).flat_map(seal_segments).collect();
+            let seals=masks.seals.iter().flat_map(seal_segments).collect();
             (masks.line_bounded,masks.active,seals)
         }))
     }
@@ -148,7 +148,7 @@ impl<R:CanvasRenderer> UiSession<R> {
                     && self.engine.document().drawing_content()==Some(layer_core::SourceTarget::Paint(completed.before.0)));
                 let hit=previous.as_ref().and_then(|completed| {
                     let masks=completed.ready.result.gaps.as_ref()?;let limit=6.*scale/self.state.camera.zoom;
-                    if !masks.seals.iter().any(|seal|seal.reach==layer_render::RegionGapMasks::STOPS[masks.active] && seal_distance([point.x,point.y],seal)<=limit){return None;}
+                    if !masks.seals.iter().any(|seal|seal_distance([point.x,point.y],seal)<=limit){return None;}
                     let ids=masks.seals.iter().filter(|seal|seal_distance([point.x,point.y],seal)<=limit).map(|seal|seal.id).collect::<Vec<_>>();
                     (!ids.is_empty()).then_some(ids)
                 });
@@ -380,8 +380,7 @@ impl<R:CanvasRenderer> UiSession<R> {
                 self.engine.amend_raster_operation(target,operation,*checkpoint).map_err(error).map(|()|{self.layer_interaction.changed=true;})
             }else{self.paint_operation(Some(selection),operation,color.as_slice())})();
             if let Err(cause)=committed {self.region_tools.gesture=Some(gesture);self.region_tools.cancel();self.clear_fill_preview();return Err(cause);}
-            if let (Some(before),Some(request),Some(mut ready))=(gesture.before,gesture.request,gesture.ready) {
-                if let Some(gaps)=&mut ready.result.gaps {let selected=gaps.regions[gaps.active].clone();gaps.regions=std::array::from_fn(|_|selected.clone());}
+            if let (Some(before),Some(request),Some(ready))=(gesture.before,gesture.request,gesture.ready) {
                 self.region_tools.completed=Some(Completed {checkpoint:self.engine.checkpoint(),owner:self.engine.document().owner,before,request,ready});
             }
         }
@@ -453,7 +452,7 @@ impl<R:CanvasRenderer> UiSession<R> {
                 let reach=layer_render::RegionGapMasks::STOPS[active];
                 if reach==0 {localizer.text(MessageId::COMMAND_CLOSE_GAPS_OFF)}else{NumericControl::whole_pixels(0.,64.).compact_text(f64::from(reach)).into()}
             }else{NumericControl::percent().compact_text(f64::from(self.region_tools.tolerance)).into()};
-            gesture.hold=Some(Hold {line,anchor,fraction,left,right,caption,
+            gesture.hold=Some(Hold {line,slot:active,anchor,fraction,left,right,caption,
                 label:localizer.text(if line {MessageId::TOOL_CONTROL_CLOSE_GAPS}else{MessageId::TOOL_CONTROL_TOLERANCE})});
             gesture.tick=gesture.tick.wrapping_add(1);
         }
@@ -461,31 +460,31 @@ impl<R:CanvasRenderer> UiSession<R> {
     fn slide_fill_gesture(&mut self)->Result<(),String> {
         let scale=self.logical_viewport.map_or(1.,|logical|self.state.camera.viewport[0] as f32/logical[0]);
         let mut query=None;let mut show=false;let mut vector_slot=None;
-        if let Some(gesture)=&mut self.region_tools.gesture {
-            let gap=gesture.hold.as_ref().and_then(|_|gesture.gap_view());
-            if let Some(hold)=&mut gesture.hold {
-                let x=gesture.point.x/scale;
-                let fraction=if x<hold.anchor {hold.fraction+(x-hold.anchor)/(hold.anchor-hold.left).max(f32::EPSILON)*hold.fraction}
-                    else{hold.fraction+(x-hold.anchor)/(hold.right-hold.anchor).max(f32::EPSILON)*(1.-hold.fraction)}.clamp(0.,1.);
-                if hold.line {
-                    let slot=(fraction*4.).round() as usize;
-                    if gap.unwrap().1!=slot {
-                        if let Some(vector)=&mut gesture.vector {vector.active=slot;vector_slot=Some(slot);}else {
-                            let ready=gesture.ready.as_mut().unwrap();let masks=ready.result.gaps.as_mut().unwrap();
-                            masks.active=slot;ready.result.pixels=masks.regions[slot].pixels.clone();ready.result.underfill=masks.regions[slot].underfill.clone();
-                        }
-                        let reach=layer_render::RegionGapMasks::STOPS[slot];
-                        self.region_tools.refinement.close_gaps=reach>0;self.region_tools.gap_reach=(reach>0).then_some(reach);
-                        hold.caption=if reach==0 {self.state.localization.text(MessageId::COMMAND_CLOSE_GAPS_OFF)}else{NumericControl::whole_pixels(0.,64.).compact_text(f64::from(reach)).into()};
-                        gesture.tick=gesture.tick.wrapping_add(1);gesture.revision=gesture.revision.wrapping_add(1);show=true;
-                    }
-                }else {
-                    let value=(fraction*100.).round()/100.;
-                    if (self.region_tools.tolerance-value).abs()>0.00001 {
-                        self.region_tools.tolerance=value;hold.caption=NumericControl::percent().compact_text(f64::from(value)).into();
-                        let mut request=gesture.request.clone().unwrap();request.tolerance=value;
+        if let Some(gesture)=&mut self.region_tools.gesture && let Some(hold)=&mut gesture.hold {
+            let x=gesture.point.x/scale;
+            let fraction=if x<hold.anchor {hold.fraction+(x-hold.anchor)/(hold.anchor-hold.left).max(f32::EPSILON)*hold.fraction}
+                else{hold.fraction+(x-hold.anchor)/(hold.right-hold.anchor).max(f32::EPSILON)*(1.-hold.fraction)}.clamp(0.,1.);
+            if hold.line {
+                let slot=(fraction*4.).round() as usize;
+                if hold.slot!=slot {
+                    hold.slot=slot;
+                    let reach=layer_render::RegionGapMasks::STOPS[slot];
+                    if let Some(vector)=&mut gesture.vector {
+                        vector.active=slot;vector_slot=Some(slot);gesture.revision=gesture.revision.wrapping_add(1);show=true;
+                    }else {
+                        let mut request=gesture.request.clone().unwrap();request.fill.as_mut().unwrap().reach=Some(reach);
                         let ready=gesture.ready.as_ref().unwrap();query=Some((request,ready.operation.clone(),ready.color,ready.basis));gesture.waiting=true;
                     }
+                    self.region_tools.refinement.close_gaps=reach>0;self.region_tools.gap_reach=(reach>0).then_some(reach);
+                    hold.caption=if reach==0 {self.state.localization.text(MessageId::COMMAND_CLOSE_GAPS_OFF)}else{NumericControl::whole_pixels(0.,64.).compact_text(f64::from(reach)).into()};
+                    gesture.tick=gesture.tick.wrapping_add(1);
+                }
+            }else {
+                let value=(fraction*100.).round()/100.;
+                if (self.region_tools.tolerance-value).abs()>0.00001 {
+                    self.region_tools.tolerance=value;hold.caption=NumericControl::percent().compact_text(f64::from(value)).into();
+                    let mut request=gesture.request.clone().unwrap();request.tolerance=value;
+                    let ready=gesture.ready.as_ref().unwrap();query=Some((request,ready.operation.clone(),ready.color,ready.basis));gesture.waiting=true;
                 }
             }
         }
@@ -521,8 +520,7 @@ impl<R:CanvasRenderer> UiSession<R> {
                 FillGestureView {transaction:0,tip:[0.;2],ring:None,pill:None,seals:seals.into(),tick:0,resize_cursor:false}
             })).or_else(||self.region_tools.completed.as_ref().filter(|completed|completed.checkpoint==self.engine.checkpoint() && completed.owner==self.engine.document().owner)
             .and_then(|completed|completed.ready.result.gaps.as_ref()).map(|masks| {
-                let reach=layer_render::RegionGapMasks::STOPS[masks.active];
-                let seals=masks.seals.iter().filter(|seal|seal.reach==reach).flat_map(seal_segments)
+                let seals=masks.seals.iter().flat_map(seal_segments)
                     .map(|segment|segment.map(|[x,y]|transform(Point {x,y}))).collect::<Vec<_>>();
                 FillGestureView {transaction:0,tip:[0.;2],ring:None,pill:None,seals:seals.into(),tick:0,resize_cursor:false}
             }));

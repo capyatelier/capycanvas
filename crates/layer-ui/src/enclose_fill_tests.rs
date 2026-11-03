@@ -130,20 +130,27 @@ mod enclose_fill_checks {
     }
 
     #[test]
-    fn fill_hold_swaps_gap_masks_without_queries_and_cancel_restores_the_option() {
+    fn fill_hold_requests_the_gap_stop_and_cancel_restores_the_option() {
         for platform in Platform::ALL {
             let mut s=session(platform);invoke(&mut s,CommandId::Fill);
             contact(&mut s,PenPhase::Down,[100.,160.]);s.frame(20_000_000,20_000_000).unwrap();
-            let request=s.renderer_mut().region_requests.last().unwrap().clone();let pixels=reply(&mut s,&request);
-            s.renderer_mut().region_reply.as_mut().unwrap().gaps=Some(layer_render::RegionGapMasks {next:None,active:2,line_bounded:true,seals:Default::default(),
-                regions:std::array::from_fn(|_|layer_render::RegionCoverage {pixels:pixels.clone(),underfill:None})});
+            let request=s.renderer_mut().region_requests.last().unwrap().clone();reply(&mut s,&request);
+            s.renderer_mut().region_reply.as_mut().unwrap().gaps=Some(layer_render::RegionGapMasks {next:None,active:2,line_bounded:true,seals:Default::default()});
             s.frame(520_000_000,520_000_000).unwrap();
             let pill=s.state.fill_gesture.as_ref().unwrap().pill.as_ref().unwrap();
             assert!(pill.bounds.y+pill.bounds.height<s.state.fill_gesture.as_ref().unwrap().tip[1]);
             assert_eq!(pill.fill_end,s.state.fill_gesture.as_ref().unwrap().tip[0]);
             let end=Point {x:pill.track[1],y:s.state.fill_gesture.as_ref().unwrap().tip[1]};
             let saved=s.editing_state();let mut movement=event(&s,2,PenPhase::Move,1.);movement.surface_position=end;s.pen(movement);s.frame(530_000_000,530_000_000).unwrap();
-            assert_eq!(s.renderer_mut().region_requests.len(),1);assert_eq!(s.region_tools.gap_reach,Some(64));
+            assert_eq!(s.renderer_mut().region_requests.len(),2);assert_eq!(s.region_tools.gap_reach,Some(64));
+            assert_eq!(s.renderer_mut().region_requests.last().unwrap().fill.as_ref().unwrap().reach,Some(64));
+            let mut same=event(&s,3,PenPhase::Move,1.);same.surface_position=end;s.pen(same);s.frame(535_000_000,535_000_000).unwrap();
+            assert_eq!(s.renderer_mut().region_requests.len(),2);
+            let latest=s.renderer_mut().region_requests.last().unwrap().clone();reply(&mut s,&latest);
+            s.renderer_mut().region_reply.as_mut().unwrap().gaps=Some(layer_render::RegionGapMasks {next:None,active:4,line_bounded:true,seals:Default::default()});
+            s.frame(536_000_000,536_000_000).unwrap();assert!(s.state.fill_gesture.as_ref().unwrap().pill.is_some());
+            let mut same=event(&s,4,PenPhase::Move,1.);same.surface_position=end;s.pen(same);s.frame(537_000_000,537_000_000).unwrap();
+            assert_eq!(s.renderer_mut().region_requests.len(),2);
             assert_eq!(s.editing_state(),saved);
             contact(&mut s,PenPhase::Cancel,[160.,160.]);s.frame(540_000_000,540_000_000).unwrap();
             assert_eq!(s.region_tools.gap_reach,None);assert!(s.region_tools.refinement.close_gaps);assert!(!s.engine.can_undo());
@@ -170,10 +177,9 @@ mod enclose_fill_checks {
         for platform in Platform::ALL {for hit in [true,false] {
             let mut s=session(platform);invoke(&mut s,CommandId::Fill);
             contact(&mut s,PenPhase::Down,[40.,60.]);s.frame(20_000_000,20_000_000).unwrap();
-            let request=s.renderer_mut().region_requests.last().unwrap().clone();let pixels=reply(&mut s,&request);
+            let request=s.renderer_mut().region_requests.last().unwrap().clone();reply(&mut s,&request);
             s.renderer_mut().region_reply.as_mut().unwrap().gaps=Some(layer_render::RegionGapMasks {next:None,active:2,line_bounded:true,
-                seals:vec![layer_render::RegionSeal {id:7,start:[100,80],bend:None,end:[104,80],reach:32}].into(),
-                regions:std::array::from_fn(|_|layer_render::RegionCoverage {pixels:pixels.clone(),underfill:None})});
+                seals:vec![layer_render::RegionSeal {id:7,start:[100,80],bend:None,end:[104,80],reach:32}].into()});
             s.frame(30_000_000,30_000_000).unwrap();contact(&mut s,PenPhase::Up,[40.,60.]);s.frame(40_000_000,40_000_000).unwrap();s.frame(50_000_000,50_000_000).unwrap();
             let first=s.engine.checkpoint();assert!(s.engine.can_undo());
             let point=if hit {[102.,80.]}else{[150.,90.]};
@@ -190,24 +196,32 @@ mod enclose_fill_checks {
     }
 
     #[test]
-    fn fill_tolerance_slide_keeps_only_the_newest_request_before_release() {
-        for platform in Platform::ALL {
+    fn fill_slides_keep_only_the_newest_request_before_release() {
+        for platform in Platform::ALL {for line in [false,true] {
             let mut s=session(platform);invoke(&mut s,CommandId::Fill);
             contact(&mut s,PenPhase::Down,[100.,160.]);s.frame(20_000_000,20_000_000).unwrap();
-            let request=s.renderer_mut().region_requests.last().unwrap().clone();reply(&mut s,&request);s.frame(520_000_000,520_000_000).unwrap();
+            let request=s.renderer_mut().region_requests.last().unwrap().clone();reply(&mut s,&request);
+            if line {s.renderer_mut().region_reply.as_mut().unwrap().gaps=Some(layer_render::RegionGapMasks {next:None,active:2,line_bounded:true,seals:Default::default()});}
+            s.frame(520_000_000,520_000_000).unwrap();
             assert!(s.state.fill_gesture.as_ref().unwrap().pill.is_some());
-            contact(&mut s,PenPhase::Move,[120.,160.]);s.frame(530_000_000,530_000_000).unwrap();
+            let view=s.state.fill_gesture.as_ref().unwrap();let track=view.pill.as_ref().unwrap().track;
+            let first=if line {Point{x:track[0]+0.75*(track[1]-track[0]),y:view.tip[1]}}else{on_surface(&s,Point{x:120.,y:160.})};
+            let end=if line {Point{x:track[1],y:view.tip[1]}}else{on_surface(&s,Point{x:150.,y:160.})};
+            let mut movement=event(&s,2,PenPhase::Move,1.);movement.surface_position=first;s.pen(movement);s.frame(530_000_000,530_000_000).unwrap();
             let older=s.renderer_mut().region_requests.last().unwrap().clone();
-            contact(&mut s,PenPhase::Move,[150.,160.]);contact(&mut s,PenPhase::Up,[150.,160.]);
+            for (sequence,phase) in [(3,PenPhase::Move),(4,PenPhase::Up)] {let mut event=event(&s,sequence,phase,1.);event.surface_position=end;s.pen(event);}
             assert!(!s.engine.can_undo());reply(&mut s,&older);s.frame(540_000_000,540_000_000).unwrap();
             assert!(!s.engine.can_undo());let newest=s.renderer_mut().region_requests.last().unwrap().clone();
-            assert_ne!(older.request_id,newest.request_id);assert!(newest.tolerance>older.tolerance);
+            assert_ne!(older.request_id,newest.request_id);
+            if line {assert_eq!(older.fill.as_ref().unwrap().reach,Some(48));assert_eq!(newest.fill.as_ref().unwrap().reach,Some(64));}
+            else{assert!(newest.tolerance>older.tolerance);}
             reply(&mut s,&newest);s.frame(550_000_000,550_000_000).unwrap();s.frame(560_000_000,560_000_000).unwrap();
             assert!(s.engine.can_undo());assert_eq!(s.region_tools.tolerance,newest.tolerance);
+            if line {assert_eq!(s.region_tools.gap_reach,Some(64));}
             let edges=fill_edges(&s.engine.backend().pending_operations.last().unwrap().1.kind);
             assert_eq!(edges.tolerance,newest.tolerance);assert_eq!(edges.position,Point {x:newest.position[0] as f32,y:newest.position[1] as f32});
             invoke(&mut s,CommandId::Undo);assert!(!s.engine.can_undo());
-        }
+        }}
     }
 
     #[test]
@@ -220,14 +234,12 @@ mod enclose_fill_checks {
             reply(&mut s,&first);s.frame(30_000_000,30_000_000).unwrap();s.frame(40_000_000,40_000_000).unwrap();
             let second=s.renderer_mut().region_requests.last().unwrap().clone();
             assert_ne!(first.request_id,second.request_id);assert_eq!(second.fill.as_ref().unwrap().trail.as_ref().unwrap().points.len(),4);
-            assert!(!s.engine.can_undo());let pixels=reply(&mut s,&second);
-            s.renderer_mut().region_reply.as_mut().unwrap().gaps=Some(layer_render::RegionGapMasks {next:Some([121,60]),active:0,line_bounded:true,seals:Default::default(),
-                regions:std::array::from_fn(|_|layer_render::RegionCoverage {pixels:pixels.clone(),underfill:None})});
+            assert!(!s.engine.can_undo());reply(&mut s,&second);
+            s.renderer_mut().region_reply.as_mut().unwrap().gaps=Some(layer_render::RegionGapMasks {next:Some([121,60]),active:0,line_bounded:true,seals:Default::default()});
             s.frame(50_000_000,50_000_000).unwrap();s.frame(60_000_000,60_000_000).unwrap();
             let last=s.renderer_mut().region_requests.last().unwrap().clone();assert_eq!(last.position,[121,60]);assert!(!s.engine.can_undo());
-            let pixels=reply(&mut s,&last);
-            s.renderer_mut().region_reply.as_mut().unwrap().gaps=Some(layer_render::RegionGapMasks {next:None,active:0,line_bounded:true,seals:Default::default(),
-                regions:std::array::from_fn(|_|layer_render::RegionCoverage {pixels:pixels.clone(),underfill:None})});
+            reply(&mut s,&last);
+            s.renderer_mut().region_reply.as_mut().unwrap().gaps=Some(layer_render::RegionGapMasks {next:None,active:0,line_bounded:true,seals:Default::default()});
             s.frame(70_000_000,70_000_000).unwrap();s.frame(80_000_000,80_000_000).unwrap();
             let edges=fill_edges(&s.engine.backend().pending_operations.last().unwrap().1.kind);
             assert_eq!(edges.position,Point {x:121.,y:60.});assert_eq!(edges.tolerance,last.tolerance);
