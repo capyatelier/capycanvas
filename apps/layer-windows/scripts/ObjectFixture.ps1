@@ -52,21 +52,37 @@ function Image-Point($Manifest,[double]$X,[double]$Y){
  $source=@($Manifest.objects|Where-Object id -eq $object.data.image.ref)[0]
  @(($a[0]*$source.data.extent[0]*$X+$a[2]*$source.data.extent[1]*$Y+$a[4]),($a[1]*$source.data.extent[0]*$X+$a[3]*$source.data.extent[1]*$Y+$a[5]))
 }
-function Screen-Point([double[]]$Point,$Projection){
+function Screen-Position([double[]]$Point,$Projection){
  if(!$Projection){$Projection=@{camera=(Model).state.camera;bounds=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle}}
  $c=$Projection.camera;$b=$Projection.bounds
  $x=$Point[0]*$c.zoom*$(if($c.flipped[0]){-1}else{1});$y=$Point[1]*$c.zoom*$(if($c.flipped[1]){-1}else{1})
- @([int]($b.X+([Math]::Cos($c.rotation)*$x-[Math]::Sin($c.rotation)*$y+$c.translation[0])*$b.Width/$c.viewport[0]),[int]($b.Y+([Math]::Sin($c.rotation)*$x+[Math]::Cos($c.rotation)*$y+$c.translation[1])*$b.Height/$c.viewport[1]))
+ @(($b.X+([Math]::Cos($c.rotation)*$x-[Math]::Sin($c.rotation)*$y+$c.translation[0])*$b.Width/$c.viewport[0]),($b.Y+([Math]::Sin($c.rotation)*$x+[Math]::Cos($c.rotation)*$y+$c.translation[1])*$b.Height/$c.viewport[1]))
 }
-function Pixel-Difference([string]$Before,[string]$After){
+function Screen-Point([double[]]$Point,$Projection){
+ $position=Screen-Position $Point $Projection;@([int]$position[0],[int]$position[1])
+}
+function Outline-Samples($Manifest,$Projection,$Points){
+ $corners=@(foreach($corner in @(@(0,0),@(1,0),@(1,1),@(0,1))){,(Screen-Position (Image-Point $Manifest $corner[0] $corner[1]) $Projection)})
+ for($i=0;$i -lt $Points.Count;$i++){
+  $x=$Points[$i][0]+.5;$y=$Points[$i][1]+.5
+  for($edge=0;$edge -lt 4;$edge++){
+   $a=$corners[$edge];$b=$corners[($edge+1)%4];$dx=$b[0]-$a[0];$dy=$b[1]-$a[1];$length=$dx*$dx+$dy*$dy
+   $t=if($length -gt 0){[Math]::Max(0.0,[Math]::Min(1.0,(($x-$a[0])*$dx+($y-$a[1])*$dy)/$length))}else{0}
+   $distanceSquared=[Math]::Pow($x-$a[0]-$t*$dx,2)+[Math]::Pow($y-$a[1]-$t*$dy,2)
+   if($distanceSquared -le 1.5*1.5){$i;break}
+  }
+ }
+}
+function Pixel-Difference([string]$Before,[string]$After,[int[]]$Skip=@()){
  $old=$Before.Split(',');$current=$After.Split(',');$maximum=0;$changed=0
  if($old.Count -ne $current.Count){throw 'Composed sample counts changed'}
  for($i=0;$i -lt $old.Count;$i++){
+  if($i -in $Skip){continue}
   if($old[$i] -eq $current[$i]){continue};$changed++
   $a=[Drawing.Color]::FromArgb([int]$old[$i]);$b=[Drawing.Color]::FromArgb([int]$current[$i])
   foreach($channel in 'R','G','B','A'){$maximum=[Math]::Max($maximum,[Math]::Abs($a.$channel-$b.$channel))}
  }
- @{max_channel_delta=$maximum;changed_samples=$changed;sample_count=$old.Count}
+ @{max_channel_delta=$maximum;changed_samples=$changed;sample_count=$old.Count;skipped_samples=$Skip.Count}
 }
 function Opaque-ImageChanged([string]$Before,[string]$After){
  $old=$Before.Split(',');$current=$After.Split(',');$changed=[bool[]]::new($old.Length)

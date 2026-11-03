@@ -24,6 +24,7 @@ foreach($shell in @((Get-Process -Id $PID).Path,(Join-Path $env:SystemRoot 'Syst
 }
 & (Join-Path $PSScriptRoot '../tests/uia-projection-snapshot.ps1')
 & (Join-Path $PSScriptRoot '../tests/canvas-editing-pixels.ps1')
+& (Join-Path $PSScriptRoot '../tests/object-fixture-pixels.ps1')
 & (Join-Path $PSScriptRoot '../tests/layers-menu-targeting.ps1')
 & (Join-Path $PSScriptRoot '../tests/presented-frame-wait.ps1')
 & (Join-Path $PSScriptRoot '../tests/software-test-runtime.ps1')

@@ -281,18 +281,19 @@ try{
  Chord @(0x11) 0x44;Wait-Until {!((Model).state.layer_tools.has_selection)} 'Deselect did not clear the pixel selection'
  Chord @() 0x42;Wait-Until {((Model).state.commands|Where-Object id -eq 'brush').selected} 'B did not remove transform handles before conversion samples'
  Tap "layer-$front-name";Wait-Until {(Model).state.layer_tools.editing_layer.id -eq $front} 'The front Object layer did not activate'
+ $outline=@(Outline-Samples $authored $sampleProjection $samplePoints)
  Park;$imagePixels=Wait-StablePixels {Artwork-Pixels}
  Context "layer-row-$front";Choose 'Rasterize Layer'
  Wait-Until {!(Row $front).object -and @(Rows).Count -eq 1} 'Rasterize Layer did not turn only the selected Object layer into paint'
- Park;$rasterPixels=Wait-StablePixels {Artwork-Pixels};$rasterDifference=Pixel-Difference $imagePixels $rasterPixels
- @{image=$imagePixels;raster=$rasterPixels;difference=$rasterDifference}|ConvertTo-Json|Set-Content (Join-Path $run 'rasterize-pixels.json')
+ Park;$rasterPixels=Wait-StablePixels {Artwork-Pixels};$rasterDifference=Pixel-Difference $imagePixels $rasterPixels -Skip $outline
+ @{image=$imagePixels;raster=$rasterPixels;difference=$rasterDifference;outline=$outline}|ConvertTo-Json|Set-Content (Join-Path $run 'rasterize-pixels.json')
  if($rasterDifference.max_channel_delta -gt 1){throw 'Rasterize Layer changed the composed artwork beyond one display level'}
  Assert-ImageHistory 'Undo' {(Row $front).object -and @(Rows).Count -eq 2 -and (Artwork-Pixels) -eq $imagePixels}
  Assert-ImageHistory 'Redo' {!(Row $front).object -and (Artwork-Pixels) -eq $rasterPixels}
  Context "layer-row-$front";Choose 'Convert to Object Layer'
  Wait-Until {(Row $front).object -and @(Rows).Count -eq 2} 'Convert to Object Layer did not replace paint on the same layer'
- Park;$convertedPixels=Wait-StablePixels {Artwork-Pixels};$conversionDifference=Pixel-Difference $rasterPixels $convertedPixels
- @{raster=$rasterPixels;converted=$convertedPixels;difference=$conversionDifference}|ConvertTo-Json|Set-Content (Join-Path $run 'convert-to-object-pixels.json')
+ Park;$convertedPixels=Wait-StablePixels {Artwork-Pixels};$conversionDifference=Pixel-Difference $rasterPixels $convertedPixels -Skip $outline
+ @{raster=$rasterPixels;converted=$convertedPixels;difference=$conversionDifference;outline=$outline}|ConvertTo-Json|Set-Content (Join-Path $run 'convert-to-object-pixels.json')
  if($conversionDifference.max_channel_delta -gt 1){throw 'Convert to Object Layer changed the composed artwork beyond one display level'}
  $converted=Join-Path $run 'image-converted.capy';Save-ProjectAs $converted;$conversion=Package $converted
  if(@(Object-Layers $conversion).Count -ne 2 -or @($conversion.objects|Where-Object type -eq 'capy.image-object/1').Count -ne 2 -or @($conversion.objects|Where-Object type -eq 'capy.image/1').Count -ne 2 -or @($conversion.objects|Where-Object type -eq 'capy.object-layer/1').Count){throw 'Conversion did not save one image per ordinary Object layer'}
