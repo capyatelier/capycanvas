@@ -326,7 +326,7 @@ try{
  }
  if((Model).state.document_file.modified){throw 'Editing journey did not restore a clean drawing'}
  [CapyRowPointer]::Dispose();$root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close()
- if(!$review.WaitForExit(5000) -or $review.ExitCode -ne 0){throw 'Editing review did not close within five seconds'}
+ if(!$review.WaitForExit([int](5000*(Wait-Scale))) -or $review.ExitCode -ne 0){throw 'Editing review did not close within five seconds'}
  if((Get-Item -LiteralPath (Join-Path $run 'stderr.log')).Length){throw 'Native editing stderr needs inspection'}
  $pixelScope=switch($Journey){
   smoke {'mouse selection translation preview: unchanged authored signature and restored source/destination/unselected samples after cancel; full captures retained'}

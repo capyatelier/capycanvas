@@ -96,7 +96,7 @@ if($Action -eq 'Close') {
             if($discard -and $discard.Current.IsEnabled -and $lastDecision -ne $epoch){
                 $discard.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke();$lastDecision=$epoch;$watch.Restart()
             }
-            if($watch.Elapsed.TotalSeconds -gt 5){throw 'A drawing close exceeded five seconds after authorization'}
+            if($watch.Elapsed.TotalSeconds -gt 5*(Wait-Scale)){throw 'A drawing close exceeded five seconds after authorization'}
           }catch{$p.Refresh();if($p.HasExited -or ($windowOnly -and ![CapyWindowExercise]::IsWindow($handle))){break};throw}
             Start-Sleep -Milliseconds 75;$p.Refresh()
         }
@@ -106,7 +106,7 @@ if($Action -eq 'Close') {
         Record-CapyFixtureClose $ProcessId $handle.ToInt64() $true
         'Completed Close';return
     }
-    if(!$p.WaitForExit(5000)){throw 'Close exceeded five seconds after authorization.'}
+    if(!$p.WaitForExit([int](5000*(Wait-Scale)))){throw 'Close exceeded five seconds after authorization.'}
     $code=$p.ExitCode
     if($null -eq $code){throw "Native review exit status is unavailable"}
     if($code -ne 0){throw ("Native review exit code: 0x{0:X8}" -f [uint32]($code -band 0xffffffffL))}

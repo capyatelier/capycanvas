@@ -171,7 +171,7 @@ try{
     $revision=(Model).state.document_file.revision;Invoke 'Undo' -Name
     Wait-Until {(Model).state.document_file.revision -gt $revision -and !(Model).state.document_file.modified} 'One final Undo did not remove the preserved seed drawing'
     (Close-OwnedDrawing $review)|Out-Null
-    if(!$review.WaitForExit(5000) -or $review.ExitCode -ne 0){throw 'Clean Snap review did not close with zero exit within five seconds'}
+    if(!$review.WaitForExit([int](5000*(Wait-Scale))) -or $review.ExitCode -ne 0){throw 'Clean Snap review did not close with zero exit within five seconds'}
     if((Get-Item -LiteralPath $stderr).Length){throw 'Snap runtime stderr requires inspection'}
     @{states=$states;monitor_work_area=$work;native_snap='Windows+Left/Right';preservation='seeded drawing/layers/brush/workspace unchanged by transitions; one final Undo returns to clean';painting='OS-injected mouse and pen, visible stroke interiors, exact sampled-pixel one-step Undo/Redo';close='zero exit within five seconds';scope='single available display; no physical pen, mixed-DPI or 120 Hz acceptance'}|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $run 'result.json')
     Write-Output "Snap acceptance passed: $run"

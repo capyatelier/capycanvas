@@ -264,7 +264,7 @@ try {
     [CapyWindowTest]::Close([uint32]$review.Id,[IntPtr]$second.hwnd)
     Wait-Until {![CapyWindowTest]::IsWindow([IntPtr]$second.hwnd)} 'Second window did not close'
     [CapyWindowTest]::Close([uint32]$review.Id,[IntPtr]$third.hwnd)
-    if(!$review.WaitForExit(5000)){throw 'Final window process exit exceeded five seconds'}
+    if(!$review.WaitForExit([int](5000*(Wait-Scale)))){throw 'Final window process exit exceeded five seconds'}
     if($review.ExitCode -ne 0){throw "Native process exited $($review.ExitCode)"}
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr

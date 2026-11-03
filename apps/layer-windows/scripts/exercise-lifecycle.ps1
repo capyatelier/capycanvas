@@ -71,7 +71,7 @@ function Request-WindowClose {
     if(![CapyWindowApi]::PostMessage($handle,0x10,[UIntPtr]::Zero,[IntPtr]::Zero)){throw 'Owned drawing window rejected Close'}
 }
 function Check-Closed {
-    if(!$review.WaitForExit(5000)){throw 'Lifecycle close exceeded five seconds after authorization'}
+    if(!$review.WaitForExit([int](5000*(Wait-Scale)))){throw 'Lifecycle close exceeded five seconds after authorization'}
     if($review.ExitCode -ne 0){throw ("Native exit code: 0x{0:X8}" -f [uint32]($review.ExitCode -band 0xffffffffL))}
     if((Get-Item -LiteralPath $stderr).Length){throw 'Lifecycle runtime stderr requires inspection'}
 }

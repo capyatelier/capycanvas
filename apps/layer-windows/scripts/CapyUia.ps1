@@ -24,6 +24,7 @@ $CapyCaptureDelay=0
 $CapyTrace=$null
 $CapyEnvironment=$null
 
+function Wait-Scale{if($env:CAPY_WAIT_SCALE){[double]$env:CAPY_WAIT_SCALE}else{1}}
 function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=$script:CapyWaitSeconds,[switch]$Closing){
     $watch=[Diagnostics.Stopwatch]::StartNew()
     do{
@@ -31,7 +32,7 @@ function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=$scri
         try{if(& $Condition){return}}catch [System.Windows.Automation.ElementNotAvailableException]{}
         if($review){$review.Refresh();if($review.HasExited){if($Closing){return};throw "Owned review exited with code $($review.ExitCode): $Message"}}
         Start-Sleep -Milliseconds 50
-    }while($watch.Elapsed.TotalSeconds -lt $Seconds*$(if($env:CAPY_WAIT_SCALE){[double]$env:CAPY_WAIT_SCALE}else{1}))
+    }while($watch.Elapsed.TotalSeconds -lt $Seconds*(Wait-Scale))
     throw $Message
 }
 function Start-CapyDebugger([Diagnostics.Process]$Process,[string]$DebuggerPath,[string]$Run,$Drawing){
