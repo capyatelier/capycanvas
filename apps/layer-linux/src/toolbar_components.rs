@@ -469,7 +469,6 @@ struct BrushPreview {
     request: Cell<Option<u64>>,
     extent: Cell<f32>,
     image: RefCell<Option<gtk::cairo::ImageSurface>>,
-    poll: RefCell<Option<glib::SourceId>>,
 }
 
 struct SliderReadout {
@@ -931,7 +930,6 @@ impl Component {
     fn close_preview(&self) {
         self.root.imp().preview.set(None);
         if let Some(preview) = self.preview.take() {
-            if let Some(poll)=preview.poll.take() { poll.remove(); }
             preview.popover.popdown();
             preview.popover.unparent();
         }
@@ -1047,23 +1045,8 @@ impl Component {
                 request: Cell::new(None),
                 extent: Cell::new(1.),
                 image: RefCell::new(None),
-                poll: RefCell::new(None),
             })));
         }
-        if let Some(preview)=self.preview.borrow().clone()
-            && preview.poll.borrow().is_none() {
-                let source=glib::timeout_add_local(std::time::Duration::from_millis(16), glib::clone!(
-                    #[weak(rename_to=component)] self,
-                    #[weak] w,
-                    #[upgrade_or] glib::ControlFlow::Break,
-                    move || {
-                        if component.preview.borrow().is_none() { return glib::ControlFlow::Break; }
-                        if component.refresh_stamp(&w) { component.update_preview(&w.localization()); }
-                        glib::ControlFlow::Continue
-                    }
-                ));
-                preview.poll.replace(Some(source));
-            }
         self.refresh_stamp(w);
         self.update_preview(&w.localization());
         let preview = self.preview.borrow().clone();
@@ -1073,20 +1056,19 @@ impl Component {
             preview.popover.present();
         }
     }
-    fn refresh_stamp(&self, w: &Rc<Workspace>) -> bool {
-        let Some(preview) = self.preview.borrow().clone() else { return false; };
+    fn refresh_stamp(&self, w: &Rc<Workspace>) {
+        let Some(preview) = self.preview.borrow().clone() else { return; };
         let result = self.context.get().and_then(|context| w.gpu.borrow_mut().as_mut().and_then(|gpu|
             gpu.session.toolbar_stamp(context, preview.request.get()).ok()).flatten());
-        let Some(stamp) = result else { return false; };
-        if stamp.alpha.is_empty() { return false; }
+        let Some(stamp) = result else { return; };
+        if stamp.alpha.is_empty() { return; }
         let Ok(image) = gtk::cairo::ImageSurface::create_for_data(stamp.alpha,
             gtk::cairo::Format::A8, stamp.size as i32, stamp.size as i32, stamp.size as i32) else {
-            return false;
+            return;
         };
         preview.request.set(Some(stamp.request_id));
         preview.extent.set(stamp.extent);
         preview.image.replace(Some(image));
-        true
     }
     fn preview_layout(&self, extent: f32, localization: &layer_ui::Localizer) -> Result<SliderPreviewLayout, String> {
         slider_preview_layout(

@@ -77,6 +77,7 @@ soft edge filled at the selected Strength. They do not need a destination image.
 
 The shared session owns one asynchronous preview request and coalesces value
 changes. Clients retain the latest completed image while the next is pending.
+GTK updates previews when the renderer publishes a completion, without polling.
 Each 192-square alpha mask is delivered once; subsequent queries carry its
 request ID and return metadata. A reopened or missing client image requests a
 new mask. Context and renderer changes reject old results. Preview rendering

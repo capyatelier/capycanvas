@@ -7,14 +7,17 @@ impl Workspace {
     }
 }
 
+#[derive(Clone, Copy)]
+enum Child { Chip(usize), Title, NativeGroup(usize), NativeButton(usize), Bridge, Menu, Tool(usize, bool), Slider(usize), Settings }
+
 pub(super) struct Phone {
     pub root: drawers::Columns,
     contact: Rc<RefCell<Option<(PhoneBarContact, gdk::Event)>>>,
     tools: RefCell<Vec<(ToolbarTile, toolbar_components::TileWidget, ToolbarControl)>>,
     sliders: RefCell<Vec<Rc<toolbar_components::Component>>>,
     settings: RefCell<Option<toolbar_components::TileWidget>>,
-    chips: RefCell<Vec<gtk::WindowHandle>>,
     title: gtk::WindowHandle,
+    children: RefCell<Vec<Child>>,
     native: [gtk::WindowControls; 2],
     buttons: RefCell<Vec<(usize, gtk::WindowControls)>>,
     decoration: RefCell<String>,
@@ -41,7 +44,8 @@ impl Phone {
         bridge.set_can_target(false);
         let connection = Rc::new(Cell::new(None));
         drawers::paint_connection(&bridge, connection.clone());
-        Self { root, contact: Rc::default(), tools: RefCell::default(), sliders: RefCell::default(), settings: RefCell::default(), chips: RefCell::default(), title,
+        Self { root, contact: Rc::default(), tools: RefCell::default(), sliders: RefCell::default(), settings: RefCell::default(), title,
+            children: RefCell::default(),
             native: [gtk::WindowControls::new(gtk::PackType::Start), gtk::WindowControls::new(gtk::PackType::End)],
             buttons: RefCell::default(), decoration: RefCell::default(), reported: Cell::new(None), menu, menu_key: Cell::new(None),
             loans: RefCell::default(), bridge, connection, placement: RefCell::default() }
@@ -101,7 +105,6 @@ impl Phone {
                 let layout = gpu.session.phone_layout()?;
                 let title = layout.title.width > 0. && layout.title.contains(p.x(), p.y());
                 if title && picked != w.phone.title && !picked.is_ancestor(&w.phone.title) { return None; }
-                if gpu.session.state().phone.hidden && !title { return None; }
                 let native = std::iter::successors(Some(picked), |widget| widget.parent()).any(|widget|
                     widget.is::<gtk::Button>() && widget.ancestor(gtk::WindowControls::static_type()).is_some());
                 PhoneBarContact::begin(&layout, [p.x(), p.y()], native).map(|mut contact| { contact.set_tools(gpu.session.state().workspace.layout.phone.as_deref().unwrap_or(&[])); contact })
@@ -172,10 +175,18 @@ impl Phone {
         w.window.add_controller(key);
     }
 
-    fn add(&self, child: &impl IsA<gtk::Widget>) {
+    fn add(&self, child: &impl IsA<gtk::Widget>, role: Child) {
         child.set_parent(&self.root);
         self.root.imp().children.borrow_mut().push(child.clone().upcast());
         self.root.imp().geometry.borrow_mut().push(Bounds::default());
+        self.children.borrow_mut().push(role);
+    }
+    fn remove(&self, child: &gtk::Widget) {
+        let index = self.root.imp().children.borrow().iter().position(|widget| widget == child).unwrap();
+        self.root.imp().children.borrow_mut().remove(index);
+        self.root.imp().geometry.borrow_mut().remove(index);
+        self.children.borrow_mut().remove(index);
+        child.unparent();
     }
     fn detach(widget: &gtk::Widget) {
         if let Some(parent) = widget.parent().and_downcast::<gtk::Box>() { parent.remove(widget); }
@@ -219,7 +230,7 @@ impl Phone {
             popup.add_child(&body, "capy-extra");
         }
     }
-    pub fn refresh(&self, w: &Rc<Workspace>, state: &UiState, regions: u32) {
+    pub fn refresh(&self, w: &Rc<Workspace>, state: &UiState, structural: bool) {
         let viewport = [w.surface.width() as f32, w.surface.height() as f32];
         let Some(_) = state.phone_presentation(viewport) else {
             self.contact.take();
@@ -232,39 +243,32 @@ impl Phone {
             }
             return;
         };
-        let structural = regions & !(regions::BRUSH | regions::CAMERA) != 0
-            || self.root.imp().children.borrow().is_empty();
+        let structural = structural || self.root.imp().children.borrow().is_empty();
         w.zen_capy.add_css_class("phone-capy");
         if self.root.imp().children.borrow().is_empty() {
             for i in 0..4 {
                 let chip = gtk::WindowHandle::new();
                 chip.set_widget_name(["phone-tools-chip", "phone-sliders-chip", "phone-bar-tools", "phone-bar-capy"][i]);
                 if i < 2 { chip.add_css_class("header-bar"); }
-                self.add(&chip);
-                self.chips.borrow_mut().push(chip);
+                self.add(&chip, Child::Chip(i));
             }
-            self.add(&self.title);
+            self.add(&self.title, Child::Title);
             for (side, group) in self.native.iter().enumerate() {
                 group.set_widget_name(&format!("native-group-{side}"));
                 group.add_css_class("phone-controls");
                 group.connect_empty_notify(glib::clone!(#[weak] w, move |_| {
                     glib::idle_add_local_once(glib::clone!(#[weak] w, move || w.refresh(regions::LAYOUT)));
                 }));
-                self.add(group);
+                self.add(group, Child::NativeGroup(side));
             }
-            self.add(&self.bridge);
-            self.add(&self.menu.root);
+            self.add(&self.bridge, Child::Bridge);
+            self.add(&self.menu.root, Child::Menu);
         }
         if structural {
             let decoration = gtk::Settings::for_display(&gtk::prelude::WidgetExt::display(&w.window)).property::<String>("gtk-decoration-layout");
             if *self.decoration.borrow() != decoration {
                 for (_, button) in self.buttons.take() {
-                    let index = self.root.imp().children.borrow().iter().position(|child| child == &button);
-                    if let Some(i) = index {
-                        self.root.imp().children.borrow_mut().remove(i);
-                        self.root.imp().geometry.borrow_mut().remove(i);
-                    }
-                    button.unparent();
+                    self.remove(button.upcast_ref());
                 }
                 for (side, names) in decoration.split(':').take(2).enumerate() {
                     for (index, name) in names.split(',').filter(|s| !s.is_empty()).enumerate() {
@@ -272,7 +276,7 @@ impl Phone {
                         button.set_decoration_layout(Some(&if side == 0 { format!("{name}:") } else { format!(":{name}") }));
                         button.set_widget_name(&format!("native-control-{side}-{index}"));
                         button.add_css_class("phone-controls");
-                        self.add(&button);
+                        self.add(&button, Child::NativeButton(side));
                         self.buttons.borrow_mut().push((side, button));
                     }
                 }
@@ -298,20 +302,16 @@ impl Phone {
         let changed = self.tools.borrow().iter().map(|(tile, _, _)| tile).ne(tiles.iter());
         if changed {
             for (_, item, _) in self.tools.take() {
-                let child = item.root();
-                let index = self.root.imp().children.borrow().iter().position(|w| w == &child).unwrap();
-                self.root.imp().children.borrow_mut().remove(index);
-                self.root.imp().geometry.borrow_mut().remove(index);
-                child.unparent();
+                self.remove(&item.root());
             }
-            for tile in tiles {
+            for (index, tile) in tiles.iter().enumerate() {
                 let choice = tool_choice_localized(tile.control, &w.localization());
                 let item = toolbar_components::TileWidget::new(w, None, tile, TileStyle::Medium, &choice);
                 w.install_menu(&item.root(), ContextTarget::PhoneTile { tile: tile.id });
                 item.button().set_widget_name(&format!("phone-tool-{}", tile.id));
                 item.button().add_css_class("header-tool");
                 item.button().add_css_class("in-bar");
-                self.add(&item.root());
+                self.add(&item.root(), Child::Tool(index, tile.control == ToolbarControl::Divider));
                 self.tools.borrow_mut().push((tile.clone(), item, tile.control));
             }
         }
@@ -326,10 +326,10 @@ impl Phone {
             }
         }
         if self.sliders.borrow().is_empty() {
-            for control in PhoneLayout::SLIDERS {
+            for (index, control) in PhoneLayout::SLIDERS.into_iter().enumerate() {
                 let choice = tool_choice_localized(control, &w.localization());
                 let slider = toolbar_components::Component::slider(w, control, TileStyle::Medium, &choice);
-                self.add(&slider.root);
+                self.add(&slider.root, Child::Slider(index));
                 self.sliders.borrow_mut().push(slider);
             }
         }
@@ -342,7 +342,7 @@ impl Phone {
             item.root().add_css_class("customizable-target");
             item.button().set_widget_name("phone-tool-settings");
             item.button().add_css_class("header-tool");
-            self.add(&item.root());
+            self.add(&item.root(), Child::Settings);
             self.settings.replace(Some(item));
         }
         self.settings.borrow().as_ref().unwrap().refresh(w, &settings, None);
@@ -414,7 +414,7 @@ impl Phone {
             if let Some(image) = customization::tool_button_content(&item.button()).and_downcast::<gtk::Image>() { image.set_pixel_size(p.icon.round().max(1.) as i32); }
         }
         w.zen_capy.set_size_request(tile, tile);
-        Self::button_in_hit(&w.zen_capy, p.capy, p.capy_hit);
+        Self::button_in_hit(&w.zen_capy, p.capy, p.capy_target);
         if let Some(image) = w.zen_capy.child().and_downcast::<gtk::Image>() {
             let size = p.capy_icon.round().max(1.) as i32;
             if image.pixel_size() != size { image.set_pixel_size(size); }
@@ -445,25 +445,26 @@ impl Phone {
         customization::drawer_origin(&w.zen_capy, menu.as_ref().map(|p| p.direction));
         let mut changed = false;
         let mut geometry = self.root.imp().geometry.borrow_mut();
-        for (child, bounds) in self.root.imp().children.borrow().iter().zip(geometry.iter_mut()) {
-            let b = if let Some(index) = self.chips.borrow().iter().position(|c| child == c) {
-                    Some(if index < 2 { p.chips[index] } else { p.bars[index - 2] })
-                } else if child == &self.title { Some(p.title) }
-                else if child == &self.menu.root { menu.as_ref().map(|p| p.bounds) }
-                else if child == &self.bridge { self.connection.get().map(|p| p.bounds) }
-                else if self.settings.borrow().as_ref().is_some_and(|item| child == &item.root()) { Some(p.settings_hit) }
-                else if let Some(side) = self.native.iter().position(|n| child == n) { (!vertical).then_some(p.controls[side]) }
-                else if let Some((side, _)) = self.buttons.borrow().iter().find(|(_, b)| child == b) {
-                    if vertical {
-                        self.buttons.borrow().iter().filter(|(s, b)| s == side && !b.is_empty()).position(|(_, b)| child == b)
-                            .and_then(|index| p.native_control(*side, index as u32))
-                    } else { None }
+        let mut native_indices = [0; 2];
+        for ((child, bounds), role) in self.root.imp().children.borrow().iter().zip(geometry.iter_mut()).zip(self.children.borrow().iter()) {
+            let b = match *role {
+                Child::Chip(index) => Some(if index < 2 { p.chips[index] } else { p.bars[index - 2] }),
+                Child::Title => Some(p.title),
+                Child::Menu => menu.as_ref().map(|p| p.bounds),
+                Child::Bridge => self.connection.get().map(|p| p.bounds),
+                Child::Settings => Some(p.settings_hit),
+                Child::NativeGroup(side) => (!vertical).then_some(p.controls[side]),
+                Child::NativeButton(side) => {
+                    if !vertical || child.downcast_ref::<gtk::WindowControls>().unwrap().is_empty() { None }
+                    else {
+                        let index = native_indices[side];
+                        native_indices[side] += 1;
+                        p.native_control(side, index)
+                    }
                 }
-                else if let Some(index) = self.tools.borrow().iter().position(|(_, item, _)| child == &item.root()) {
-                    Some(if self.root.imp().lifted.borrow().is_some() || self.tools.borrow()[index].0.control == ToolbarControl::Divider { tool_bounds[index] } else { p.tool_hits[index] })
-                }
-                else if let Some(index) = self.sliders.borrow().iter().position(|s| child == &s.root) { Some([p.size, p.strength][index]) }
-                else { None };
+                Child::Tool(index, divider) => Some(if self.root.imp().lifted.borrow().is_some() || divider { tool_bounds[index] } else { p.tool_hits[index] }),
+                Child::Slider(index) => Some([p.size, p.strength][index]),
+            };
             let b = b.filter(|b| b.width > 0. && b.height > 0.);
             changed |= child.is_child_visible() != b.is_some();
             child.set_child_visible(b.is_some());

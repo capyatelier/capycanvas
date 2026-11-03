@@ -27,13 +27,13 @@ fn hold(d: &mut Driver, tile: Option<u32>) {
     }, "phone tiles are allocated at their shared positions");
     let point = tile.map_or_else(|| {
         let view = presentation(d);
-        let bar = view.bars[0];
-        (bar.y.ceil() as i32..(bar.y + bar.height).floor() as i32).flat_map(|y|
-            (bar.x.ceil() as i32..(bar.x + bar.width).floor() as i32).map(move |x| [x as f32 + 0.5, y as f32 + 0.5]))
+        view.bars.into_iter().flat_map(|bar|
+            (bar.y.ceil() as i32..(bar.y + bar.height).floor() as i32).flat_map(move |y|
+                (bar.x.ceil() as i32..(bar.x + bar.width).floor() as i32).map(move |x| [x as f32 + 0.5, y as f32 + 0.5])))
             .find(|point| !view.tool_hits.iter().chain(&view.tools).chain(&view.controls)
                 .chain([&view.capy_hit, &view.settings_hit, &view.size, &view.strength])
                 .any(|bounds| bounds.width > 0. && bounds.height > 0. && bounds.contains(point[0], point[1])))
-            .expect("the toolbar has native empty space outside every control")
+            .expect("the phone bars have native empty space outside every control")
     }, |id| d.point(&d.named(&format!("phone-tool-{id}"))));
     d.input.perform(serde_json::json!([contact("touch", "down", point), { "wait_ms": 900 }]));
     assert!(popup(d).is_none(), "holding lifts the tile without opening its release menu");

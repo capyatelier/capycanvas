@@ -335,7 +335,7 @@ mod allocation {
                             .and_then(|p| p.connection().map(|c| c.bounds)),
                         Slot::CanvasBar => owner.canvas_bar.bounds(),
                         Slot::PressureCalibration => owner.pressure_calibration.bounds(),
-                        Slot::ZenCapy => Some(resolved.phone.as_ref().map_or_else(|| owner.header.zen_button_bounds(), |p| p.capy_hit)),
+                        Slot::ZenCapy => Some(resolved.phone.as_ref().map_or_else(|| owner.header.zen_button_bounds(), |p| p.capy_target)),
                         _ => continue,
                     };
                     child.set_child_visible(bounds.is_some());
@@ -2779,20 +2779,25 @@ impl Workspace {
         let wake = gtk::gio::SimpleAction::new("wake", None);
         wake.connect_activate(glib::clone!(#[weak(rename_to = this)] self, move |_, _| this.wake()));
         actions.add_action(&wake);
-        let chrome = gtk::gio::SimpleAction::new("chrome", Some(glib::VariantTy::UINT64));
-        chrome.connect_activate(glib::clone!(#[weak(rename_to = this)] self, move |_, parameter| {
-            let owner = parameter.and_then(|parameter| parameter.get::<u64>());
-            let current = this.gpu.borrow().as_ref().and_then(|g| {
-                let renderer = g.session.engine().backend();
-                (owner == Some(renderer.proof_owner)).then(|| renderer.chrome_status().clone())
-            });
-            if let Some(status) = current {
-                this.chrome.attach(&status);
-                this.chrome_presented.set(true);
-                this.surface.queue_draw();
-            }
-        }));
-        actions.add_action(&chrome);
+        for name in ["chrome", "brush-stamp"] {
+            let action = gtk::gio::SimpleAction::new(name, Some(glib::VariantTy::UINT64));
+            action.connect_activate(glib::clone!(#[weak(rename_to = this)] self, move |_, parameter| {
+                let owner = parameter.and_then(|parameter| parameter.get::<u64>());
+                let current = this.gpu.borrow().as_ref().and_then(|g| {
+                    let renderer = g.session.engine().backend();
+                    (owner == Some(renderer.proof_owner)).then(|| renderer.chrome_status().clone())
+                });
+                if let Some(status) = current {
+                    if name == "brush-stamp" { this.refresh(regions::BRUSH); }
+                    else {
+                        this.chrome.attach(&status);
+                        this.chrome_presented.set(true);
+                        this.surface.queue_draw();
+                    }
+                }
+            }));
+            actions.add_action(&action);
+        }
         self.area.insert_action_group("canvas", Some(&actions));
         self.area.connect_realize(glib::clone!(
             #[weak(rename_to = this)]
@@ -3032,7 +3037,7 @@ impl Workspace {
                 self.zen_capy.set_tooltip_text(Some(&caption));
                 self.zen_capy.update_property(&[gtk::accessible::Property::Label(&caption)]);
             }
-            self.phone.refresh(self, &state, regions);
+            self.phone.refresh(self, &state, structural);
         }
         self.view_info
             .root

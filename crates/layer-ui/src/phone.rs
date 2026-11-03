@@ -56,6 +56,7 @@ impl PhoneState {
         layout.phone.as_ref()?;
         let mut phone = PhoneLayout::resolve(layout, viewport, self.insets, self.native, self.native_counts, self.swapped, self.movable)?;
         if self.hidden {
+            phone.capy_hit = Bounds::default();
             phone.size = Bounds::default();
             phone.strength = Bounds::default();
             phone.settings = Bounds::default();
@@ -82,6 +83,7 @@ pub struct PhoneLayout {
     pub edge: Edge,
     pub capy: Bounds,
     pub capy_hit: Bounds,
+    pub capy_target: Bounds,
     pub size: Bounds,
     pub strength: Bounds,
     pub settings: Bounds,
@@ -308,7 +310,7 @@ impl PhoneLayout {
         if scale < 1. {
             let mut p = Self::resolve(layout, viewport.map(|v| (v / scale).max(320.)), insets.map(|v| v / scale), native, native_counts, swapped, movable)?;
             let scaled = |b: &mut Bounds| { b.x *= scale; b.y *= scale; b.width *= scale; b.height *= scale; };
-            for b in [&mut p.capy, &mut p.capy_hit, &mut p.size, &mut p.strength, &mut p.settings, &mut p.settings_hit, &mut p.work_area, &mut p.title]
+            for b in [&mut p.capy, &mut p.capy_hit, &mut p.capy_target, &mut p.size, &mut p.strength, &mut p.settings, &mut p.settings_hit, &mut p.work_area, &mut p.title]
                 .into_iter().chain(&mut p.tools).chain(&mut p.tool_hits).chain(&mut p.chips).chain(&mut p.controls).chain(&mut p.bars) { scaled(b); }
             p.tile *= scale;
             p.icon *= scale;
@@ -398,7 +400,7 @@ impl PhoneLayout {
             }
         };
         Some(Self { tile, icon: tile * crate::HeaderSize::Medium.icon() as f32 / 48., capy_icon: tile * 440. / 512.,
-            edge, capy, capy_hit: hit(capy, other), size, strength, settings, settings_hit: hit(settings, other), tools,
+            edge, capy, capy_hit: hit(capy, other), capy_target: hit(capy, other), size, strength, settings, settings_hit: hit(settings, other), tools,
             tool_hits: std::array::from_fn(|i| if tiles.get(i).is_some_and(|t| t.control != ToolbarControl::Divider) { hit(tools[i], edge) } else { Bounds::default() }),
             chips, controls, bars, title: if movable && vertical { Bounds { x: work_area.x, y: 0., width: work_area.width, height: 24. } } else { Bounds::default() }, work_area })
     }
@@ -444,7 +446,12 @@ mod tests {
                 let hidden = PhoneState { hidden: true, ..state }.resolve(&layout, viewport).unwrap();
                 assert_eq!(hidden.title, visible.title);
                 assert_eq!(hidden.capy, visible.capy);
-                assert_eq!(hidden.capy_hit, visible.capy_hit);
+                assert_eq!(hidden.capy_target, visible.capy_target);
+                assert_eq!(hidden.capy_hit, Bounds::default());
+                for bounds in visible.tool_hits.iter().chain(&visible.bars).chain([&visible.capy_hit, &visible.settings_hit]) {
+                    let point = [bounds.x + bounds.width / 2., bounds.y + bounds.height / 2.];
+                    assert!(PhoneBarContact::begin(&hidden, point, false).is_none());
+                }
                 assert_eq!(hidden.chips[1], visible.capy);
                 assert!(hidden.tools.iter().chain(&hidden.tool_hits).chain(&hidden.controls).chain(&hidden.bars)
                     .chain([&hidden.chips[0], &hidden.size, &hidden.strength, &hidden.settings, &hidden.settings_hit])
@@ -638,9 +645,6 @@ impl PhoneMenuPage {
     pub fn name(&self) -> String {
         PhoneMenuNavigation::page_name(&self.path)
     }
-    pub fn parent_name(&self) -> Option<String> {
-        (!self.path.is_empty()).then(|| PhoneMenuNavigation::page_name(&self.path[..self.path.len() - 1]))
-    }
 }
 impl PhoneMenuNavigation {
     pub fn page_name(path: &[[usize; 2]]) -> String {
@@ -759,7 +763,7 @@ mod menu_tests {
             ["main", "page-0-0", "page-0-0-0-0", "page-0-1", "page-0-1-0-0"]);
         let mut navigation = PhoneMenuNavigation::default();
         assert!(navigation.select(&menu, "page-0-0-0-0"));
-        assert_eq!(pages[2].parent_name().as_deref(), Some("page-0-0"));
+        assert_eq!(PhoneMenuNavigation::page_name(pages[2].path.split_last().unwrap().1), "page-0-0");
         assert!(!navigation.select(&menu, "page-0-8"));
         assert_eq!(navigation.name(), "page-0-0-0-0");
         assert!(navigation.back());

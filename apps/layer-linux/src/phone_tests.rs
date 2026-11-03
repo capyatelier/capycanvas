@@ -272,7 +272,8 @@ fn native_phone_frame() {
     until(|| d.w.window.is_fullscreen() && !state(&d.w).phone.movable
         && presentation(&d).title.width == 0. && !d.named("phone-title-band").is_mapped(), "fullscreen removes the movable title band");
     d.w.window.unfullscreen();
-    until(|| !d.w.window.is_fullscreen() && state(&d.w).phone.movable,
+    until(|| !d.w.window.is_fullscreen() && state(&d.w).phone.movable
+        && d.named("phone-title-band").is_mapped() == (presentation(&d).title.width > 0.),
         "leaving fullscreen restores movable phone geometry");
     frame(&d);
     mouse_paint(&mut d, "normal");
@@ -1149,7 +1150,8 @@ fn menu_semantics(d: &Driver, stack: &gtk::Stack) {
     let child = stack.visible_child().unwrap();
     assert_eq!(stack.page(&child).title().as_deref(), Some(expected.menu.title.as_str()));
     let mut rows = widgets(&child).filter(|widget| widget.is_mapped() && widget.type_().name()=="GtkModelButton");
-    if let Some(parent) = expected.parent_name() {
+    if let Some((_, path)) = expected.path.split_last() {
+        let parent = PhoneMenuNavigation::page_name(path);
         let back = rows.next().unwrap();
         assert_eq!(back.widget_name(), "phone-menu-back");
         assert_eq!(back.property::<String>("text"), expected.menu.title);

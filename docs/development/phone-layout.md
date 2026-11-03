@@ -81,8 +81,10 @@ These use Sketch's eight tools. Native controls and additional tools participate
 in the same fit calculation. Size and Strength have a 2-unit internal gap; their
 chip includes Capy with a 2-unit gap. Hiding the bars keeps that same chip
 allocated to Capy alone in the same pass, without moving or restyling Capy.
-The chip gains its own rounded corners when hidden. Slider tracks fill their
-bounds without grips; tracks and handles scale from the desktop Brush controls.
+The shared bar contact areas disappear when hidden; Capy's own control keeps
+reveal and hold input. The chip gains its own rounded corners when hidden. Slider
+tracks fill their bounds without grips; tracks and handles scale from the desktop
+Brush controls.
 
 - **Native controls:** GTK keeps its normal circular close button and other
   configured window buttons outside the chips. They align to the bar's

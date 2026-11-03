@@ -1156,7 +1156,6 @@ impl NewDrawing {
         self.colors.palette_colors.borrow_mut().clear();
         self.colors.form.replace(Some(form.clone()));
         form.bind(false);
-        form.arrange(self.dialog.width() > 0 && self.dialog.width() < 700);
     }
 
     fn render_colors(&self, w: &Workspace, view: &PaperColorDrawerView) {

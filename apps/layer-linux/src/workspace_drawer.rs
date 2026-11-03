@@ -1164,12 +1164,10 @@ impl Drawer {
             // throughout a switch, including a nested toolbar in a column drawer.
             self.finish_animation();
         }
-        if changed {
-            self.mark_origin(w, self.target(w).as_ref());
-        }
+        let target = (changed || self.progress.get() >= 1.0).then(|| self.target(w)).flatten();
+        if changed { self.mark_origin(w, target.as_ref()); }
         let resized = self.progress.get() >= 1.0
-            && self
-                .target(w)
+            && target
                 .zip(self.placement())
                 .is_some_and(|(to, from)| to.bounds != from.bounds);
         if !switching && (changed || resized || rows_changed) {

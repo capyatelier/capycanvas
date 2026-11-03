@@ -34,7 +34,7 @@ fn canvas_action(area: &gtk::glib::SendWeakRef<gtk::Picture>, action: &'static s
     gtk::glib::idle_add_full(gtk::glib::Priority::HIGH_IDLE, move || {
         if !status.accepting.load(Ordering::Acquire) { return gtk::glib::ControlFlow::Break; }
         if let Some(area) = area.upgrade() {
-            let parameter = (action == "canvas.chrome").then(|| gtk::glib::variant::ToVariant::to_variant(&status.owner));
+            let parameter = (action != "canvas.wake").then(|| gtk::glib::variant::ToVariant::to_variant(&status.owner));
             let _ = area.activate_action(action, parameter.as_ref());
         }
         gtk::glib::ControlFlow::Break
@@ -1809,6 +1809,7 @@ impl Worker {
                 if let Some(image) = self.renderer.take_brush_stamp() {
                     stamp_flight = false;
                     reply.send(Reply::BrushStamp(image.map_err(error))).map_err(error)?;
+                    canvas_action(&self.area, "canvas.brush-stamp", &self.presented_chrome);
                 }
                 if !stamp_flight && pending_frames.is_empty()
                     && let Some((id,request)) = pending_stamp.as_ref()
@@ -1816,7 +1817,11 @@ impl Worker {
                     match self.renderer.request_brush_stamp(*id,request) {
                         Ok(true) => { pending_stamp=None; stamp_flight=true; },
                         Ok(false) => (),
-                        Err(failure) => { pending_stamp=None; reply.send(Reply::BrushStamp(Err(error(failure)))).map_err(error)?; },
+                        Err(failure) => {
+                            pending_stamp=None;
+                            reply.send(Reply::BrushStamp(Err(error(failure)))).map_err(error)?;
+                            canvas_action(&self.area, "canvas.brush-stamp", &self.presented_chrome);
+                        },
                     }
                 }
                 if let Some(color) = self.renderer.take_color_sample() {

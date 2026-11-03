@@ -660,7 +660,6 @@ window.capy-workspace.glass .zen-capy.phone-capy.drawer-open { background: var(-
 
 .phone-menu-native { padding: 0; margin: 0; }
 .phone-menu-native > contents { background: transparent; border: 0; border-radius: 0; box-shadow: none; }
-#phone-menu > scrolledwindow + scrolledwindow { border-left: 0; }
 #phone-menu-separator { color: var(--popover-fg-color); --border-opacity: var(--line-panel-border-opacity); }
 
 .phone-dialog-page { background-color: var(--dialog-bg-color); color: var(--dialog-fg-color); }

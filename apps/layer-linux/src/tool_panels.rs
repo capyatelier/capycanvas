@@ -48,7 +48,6 @@ impl ToolSet {
         root.append(&groups);
         root.append(&divider);
         root.append(&list);
-        groups.set_visible(panel != layer_ui::Panel::Tools);
         list.set_visible(!matches!(panel, layer_ui::Panel::BrushSets | layer_ui::Panel::SculptSets));
         Self {
             root,
