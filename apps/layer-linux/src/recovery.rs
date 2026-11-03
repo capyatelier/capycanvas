@@ -1,7 +1,8 @@
 use crate::workspace::Workspace;
 use adw::prelude::*;
 use gtk::{gio, glib};
-use layer_core::{package::session_store::{SessionStore, OwnerLock}, ProjectLimits};
+use layer_core::{package::session_store::{DrawingStore, OwnerLock}, ProjectLimits};
+use layer_host::session_stores::{SessionStores,StoreResult};
 use layer_ui::{recovery::{RecoveryState, RecoveryEvent, RecoveryWork, RecoveryWorkKind}, session_recovery::{SessionCapture, SessionRestore, SessionManifest, SessionDrawing}};
 use std::{cell::{Cell, RefCell}, path::PathBuf, rc::Rc, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, time::Duration};
 
@@ -34,15 +35,14 @@ fn collect_stores()->Result<(),String> {
 
 pub(crate) struct Recovery {
     pub recovered: Cell<bool>,
-    path: PathBuf,
-    store: Arc<Mutex<Option<SessionStore>>>,
+    pub(crate) binding: DrawingStore,
+    stores: RefCell<Option<SessionStores>>,
     policy: RefCell<RecoveryState>,
     discarded: Arc<AtomicBool>,
-    snapshot: RefCell<Option<(SessionCapture, crate::render_thread::ContextCapture)>>,
+    snapshot: RefCell<Option<(SessionCapture, crate::render_thread::ContextCapture,layer_ui::SessionStamp)>>,
     running: Cell<bool>,
     current: Cell<bool>,
     error: RefCell<Option<String>>,
-    stamp: RefCell<Option<layer_ui::session_recovery::SessionStamp>>,
     window: RefCell<std::rc::Weak<Workspace>>,
     registered: Cell<bool>,
 }
@@ -50,7 +50,7 @@ impl Default for Recovery {
     fn default() -> Self {
         let mut policy = RecoveryState::default();
         policy.event(RecoveryEvent::Ownership { owned: true }).unwrap();
-        Self { recovered: Cell::new(false), path: directory().join(key()), store: Default::default(), policy: RefCell::new(policy), discarded: Arc::new(AtomicBool::new(false)), snapshot: Default::default(), running: Cell::new(false), current: Cell::new(false), error: Default::default(), stamp: Default::default(), window: Default::default(), registered: Cell::new(false) }
+        Self { recovered: Cell::new(false), binding: DrawingStore::new(&directory(),None).unwrap(), stores:Default::default(), policy: RefCell::new(policy), discarded: Arc::new(AtomicBool::new(false)), snapshot: Default::default(), running: Cell::new(false), current: Cell::new(false), error: Default::default(), window: Default::default(), registered: Cell::new(false) }
     }
 }
 impl Recovery {
@@ -61,18 +61,26 @@ impl Recovery {
         self.policy.borrow_mut().event(RecoveryEvent::Close).unwrap();
         self.execute(work);
     }
+    #[cfg(test)]
     pub fn capture(self: &Rc<Self>, w: &Rc<Workspace>) {
-        if let Some(gpu) = w.gpu.borrow().as_ref() { self.capture_session(w, &gpu.session); }
+        if let Some(gpu) = w.gpu.borrow().as_ref() { self.capture_session(w, w.documents.selected(), &gpu.session); }
     }
-    pub fn capture_session(self: &Rc<Self>, w: &Rc<Workspace>, session: &layer_ui::UiSession<crate::render_thread::RenderWorker>) {
+    pub fn capture_session(self: &Rc<Self>, w: &Rc<Workspace>, id:u64, session: &layer_ui::UiSession<crate::render_thread::RenderWorker>) {
+        self.capture_at(w,id,session,true);
+    }
+    fn capture_at(self:&Rc<Self>,w:&Rc<Workspace>,id:u64,session:&layer_ui::UiSession<crate::render_thread::RenderWorker>,force:bool) {
         self.window.replace(Rc::downgrade(w));
         if !enabled() || self.discarded.load(Ordering::Acquire) { return; }
+        if let Err(error)=w.restart.stores.adopt_binding(id,self.binding.clone()) {self.error.replace(Some(error));return;}
+        self.stores.replace(Some(w.restart.stores.clone()));
         let stamp=session.session_stamp();
-        if self.current.get() && self.stamp.borrow().as_ref()==Some(&stamp) {return;}
+        match w.restart.stores.checkpoint_due(id,stamp.clone(),force) {
+            Ok(false)=>{if w.restart.stores.is_current(id,&stamp) {self.current.set(true);}return;},Ok(true)=>{},Err(error)=>{self.error.replace(Some(error));return;},
+        }
         let document = session.recovery_document();
         if !document.busy {
             match session.capture_session().and_then(|capture| session.engine().backend().capture_context().map(|context| (capture, context))) {
-                Ok(snapshot) => { *self.snapshot.borrow_mut() = Some(snapshot); self.stamp.replace(Some(stamp)); }
+                Ok(snapshot) => { *self.snapshot.borrow_mut() = Some((snapshot.0,snapshot.1,stamp.clone())); }
                 Err(error) => { self.error.replace(Some(error)); return; }
             }
         }
@@ -80,22 +88,11 @@ impl Recovery {
         self.current.set(update.current);
         self.execute(update.work);
     }
-    pub async fn make_durable(&self, tiles:layer_core::raster_storage::RetainedTiles)->Result<(),String> {
-        let store=self.store.clone();let path=self.path.clone();
-        gio::spawn_blocking(move || {
-            let mut store=store.lock().map_err(|error|error.to_string())?;
-            if store.is_none() {*store=Some(SessionStore::open(&path)?);}
-            store.as_mut().unwrap().make_durable(&tiles,&AtomicBool::new(false)).map(|_|())
-        }).await.map_err(|error|format!("Drawing storage worker stopped: {error:?}"))?
-    }
+    pub(crate) fn coordinator(&self)->Result<SessionStores,String> {self.stores.borrow().clone().ok_or_else(||"Drawing storage is not registered".into())}
     pub async fn prepare_retirement(&self)->Result<(),String> {
         self.drain().await;
-        let store=self.store.clone();
-        gio::spawn_blocking(move || {
-            let mut store=store.lock().map_err(|error|error.to_string())?;
-            if let Some(store)=store.as_mut() {store.prepare_retirement()?;}
-            Ok(())
-        }).await.map_err(|error|format!("Drawing retirement preparation stopped: {error:?}"))?
+        let binding=self.binding.clone();
+        gio::spawn_blocking(move ||binding.on_worker(|store|store.prepare_retirement())).await.map_err(|error|format!("Drawing retirement preparation stopped: {error:?}"))?
     }
     pub async fn drain(&self) {
         while self.running.get() { glib::timeout_future(Duration::from_millis(5)).await; }
@@ -108,17 +105,13 @@ impl Recovery {
     }
     #[cfg(test)]
     pub async fn read_snapshot(&self)->Result<SessionRestore,String> {
-        let store=self.store.clone();
-        gio::spawn_blocking(move || {
-            let mut store=store.lock().map_err(|e|e.to_string())?;
-            let open=store.as_mut().ok_or("Drawing has not been checkpointed")?.load(ProjectLimits::for_import(),&AtomicBool::new(false))?.ok_or("No saved checkpoint")?;
-            SessionRestore::from_core(open)
-        }).await.map_err(|e|format!("Snapshot reader stopped: {e:?}"))?
+        let StoreResult::Restored {session,..}=self.coordinator()?.restore_bound(&self.binding,ProjectLimits::for_import())?.await? else {return Err("Unexpected drawing storage reply".into());};
+        Ok(session.ok_or("No saved checkpoint")?)
     }
     #[cfg(test)]
-    pub fn writer_store(&self) -> Arc<Mutex<Option<SessionStore>>> { self.store.clone() }
+    pub fn writer_store(&self) -> DrawingStore { self.binding.clone() }
     #[cfg(test)]
-    pub fn published_path(&self)->PathBuf {self.path.clone()}
+    pub fn published_path(&self)->PathBuf {self.binding.path().to_path_buf()}
     fn execute(self: &Rc<Self>, first: Option<RecoveryWork>) {
         let Some(first) = first else { return; };
         self.running.set(true);
@@ -139,29 +132,18 @@ impl Recovery {
                         if staged.is_ok() {recovery.registered.set(true);}
                         let snapshot = staged.and_then(|_|captured.take().ok_or_else(|| "Drawing snapshot unavailable".to_string()));
                         match snapshot {
-                            Ok((mut snapshot, context)) => {
-                                let path = recovery.path.clone();
-                                let store = recovery.store.clone();
-                                let discarded = recovery.discarded.clone();
-                                gio::spawn_blocking(move || {
-                                    context.install(snapshot.artwork_mut())?;
-                                    let prepared = snapshot.prepare(&discarded)?;
-                                    let mut store = store.lock().map_err(|e| e.to_string())?;
-                                    if store.is_none() { *store = Some(SessionStore::open(&path)?); }
-                                    if discarded.load(Ordering::Acquire) { return Ok(()); }
-                                    store.as_mut().unwrap().commit(&prepared, &discarded).map(|_| ())
-                                }).await.map_err(|e| format!("Session writer stopped: {e:?}")).and_then(|r| r)
+                            Ok((snapshot, context,stamp)) => {
+                                match recovery.coordinator().and_then(|stores|stores.checkpoint_bound(&recovery.binding,snapshot,stamp,true,Some(Box::new(move |snapshot|context.install(snapshot.artwork_mut()))))) {
+                                    Ok(reply)=>reply.await.map(|_|()),Err(error)=>Err(error),
+                                }
                             }
                             Err(error) => Err(error),
                         }
                     }
                     RecoveryWorkKind::Retire => {
-                        let store = recovery.store.clone();
-                        gio::spawn_blocking(move || {
-                            let mut store = store.lock().map_err(|e| e.to_string())?;
-                            if let Some(store) = store.as_mut() { store.retire()?; }
-                            Ok(())
-                        }).await.map_err(|e| format!("Session cleanup stopped: {e:?}")).and_then(|r| r)
+                        match recovery.coordinator().and_then(|stores|stores.retire_bound(&recovery.binding)) {
+                            Ok(reply)=>reply.await.map(|_|()),Err(error)=>Err(error),
+                        }
                     }
                 };
                 recovery.error.replace(result.as_ref().err().cloned());
@@ -186,9 +168,10 @@ pub(crate) struct Restart {
     collect_due: Cell<bool>,
     publishing: Cell<bool>,
     durable: Cell<bool>,
+    pub(crate) stores:SessionStores,
 }
 impl Default for Restart {
-    fn default() -> Self { Self { path: RefCell::new(directory().join(format!("{}.json",key()))), lease: Default::default(), last: Default::default(), running: Cell::new(false), restoring: Cell::new(false), retained: Default::default(), collect_due: Cell::new(true), publishing: Cell::new(false), durable:Cell::new(true) } }
+    fn default() -> Self { Self { path: RefCell::new(directory().join(format!("{}.json",key()))), lease: Default::default(), last: Default::default(), running: Cell::new(false), restoring: Cell::new(false), retained: Default::default(), collect_due: Cell::new(true), publishing: Cell::new(false), durable:Cell::new(true), stores:SessionStores::native(directory(),Arc::new(||{})) } }
 }
 impl Restart {
     pub fn is_restoring(&self)->bool {self.restoring.get()}
@@ -197,7 +180,7 @@ impl Restart {
         let model = w.documents.model.borrow();
         let mut drawings: Vec<SessionDrawing> = model.order().iter().filter_map(|&id| {
             let recovery = if id == selected { w.recovery() } else { model.parked().find(|(key,_)| **key == id)?.1.owner.recovery.clone() };
-            Some(SessionDrawing { id, key: recovery.path.file_name()?.to_string_lossy().into_owned() })
+            Some(SessionDrawing { id, key: recovery.binding.path().file_name()?.to_string_lossy().into_owned() })
         }).collect();
         drawings.extend(self.retained.borrow().iter().cloned());
         SessionManifest { blocked: self.last.borrow().as_ref().map_or_else(Vec::new,|manifest|manifest.blocked.clone()), generation: 0, drawings, active: selected, clean_exit, restoring: Vec::new() }
@@ -254,23 +237,23 @@ impl Restart {
     pub async fn checkpoint(&self, w: &Rc<Workspace>, clean_exit: bool) -> Result<(),String> {
         if !enabled() { return Ok(()); }
         if self.running.replace(true) { return Err("Session checkpoint is still being written".into()); }
-        let result = self.checkpoint_inner(w,clean_exit).await;
+        let result = self.checkpoint_inner(w,clean_exit,true).await;
         self.running.set(false);
         result
     }
-    async fn checkpoint_inner(&self,w:&Rc<Workspace>,clean_exit:bool)->Result<(),String> {
+    async fn checkpoint_inner(&self,w:&Rc<Workspace>,clean_exit:bool,force:bool)->Result<(),String> {
         if self.restoring.get() { return Err("Drawings are still being restored".into()); }
         let mut owners = Vec::new();
         {
             let model = w.documents.model.borrow();
-            for (_, parked) in model.parked() {
+            for (id, parked) in model.parked() {
                 let owner = parked.owner.recovery.clone();
-                owner.capture_session(w, &parked.owner.canvas.session);
+                owner.capture_at(w, *id, &parked.owner.canvas.session,force);
                 owners.push(owner);
             }
         }
         let active = w.recovery();
-        active.capture(w);
+        if let Some(gpu)=w.gpu.borrow().as_ref() {active.capture_at(w,w.documents.selected(),&gpu.session,force);}
         owners.push(active);
         for owner in owners { owner.flush().await?; }
         self.update(|previous| {
@@ -283,6 +266,10 @@ impl Restart {
             }
         }
         Ok(())
+    }
+    async fn periodic(&self,w:&Rc<Workspace>)->Result<(),String> {
+        if !enabled() || self.running.replace(true) {return Ok(());}
+        let result=self.checkpoint_inner(w,false,false).await;self.running.set(false);result
     }
     pub fn request(&self, w: &Rc<Workspace>) {
         if !enabled() || self.busy() { return; }
@@ -309,11 +296,11 @@ impl Restart {
 pub(crate) fn install(w:&Rc<Workspace>) {
     if !enabled() { return; }
     let weak=Rc::downgrade(w);
-    glib::timeout_add_local(Duration::from_secs(2),move || {
+    glib::timeout_add_local(Duration::from_millis(SessionStores::checkpoint_interval_ms()),move || {
         let Some(w)=weak.upgrade() else {return glib::ControlFlow::Break;};
         if !w.restart.running.get() && !w.documents.closing_window.get() && !w.documents.changing.get() && !w.restart.is_restoring() && !w.restart_busy() {
             glib::spawn_future_local(async move {
-                if let Err(error)=w.restart.checkpoint(&w,false).await { w.changed(Err(error)); }
+                if let Err(error)=w.restart.periodic(&w).await { w.changed(Err(error)); }
             });
         }
         glib::ControlFlow::Continue
@@ -395,20 +382,19 @@ async fn restore_window(w:&Rc<Workspace>,claim:ClaimedWindow,startup:Option<laye
         }
         if launch_stamp.is_none() {launch_stamp=w.gpu.borrow().as_ref().map(|gpu|gpu.session.session_stamp());}
         let attempt=w.restart.begin_restore(drawing.id,false).await?;
-        let path=directory().join(&drawing.key);
-        let result=gio::spawn_blocking(move || {
-            let mut store=SessionStore::open(&path)?;
-            let opened=store.load(ProjectLimits::for_import(),&AtomicBool::new(false))?.ok_or("Saved drawing has no complete checkpoint")?;
-            let restored=SessionRestore::from_core(opened)?;
-            let observed=observed_destination(&restored);
-            Ok::<_,String>((store,restored,observed))
-        }).await.map_err(|e|format!("Drawing reader stopped: {e:?}")).and_then(|r|r);
-        let (store,restored,observed)=match result {Ok(result)=>result,Err(error)=>{
+        let binding=w.restart.stores.adopt(drawing.id,&drawing.key)?;
+        let result=async {
+            let StoreResult::Restored {session,recovered_previous}=w.restart.stores.restore_bound(&binding,ProjectLimits::for_import())?.await? else {return Err("Unexpected drawing storage reply".into());};
+            let restored=session.ok_or("Saved drawing has no complete checkpoint")?;
+            let (restored,observed)=gio::spawn_blocking(move || {let observed=observed_destination(&restored);(restored,observed)}).await.map_err(|error|format!("Destination reader stopped: {error:?}"))?;
+            Ok::<_,String>((restored,observed,recovered_previous))
+        }.await;
+        let (restored,observed,recovered_previous)=match result {Ok(result)=>result,Err(error)=>{
             w.restart.update(|manifest|manifest.finish_restore(attempt,false)).await?;
             w.changed(Err(error));continue;
         }};
-        let recovered=abnormal||store.recovered_previous();
-        let recovery=Rc::new(Recovery {path:store.path().to_path_buf(),store:Arc::new(Mutex::new(Some(store))),registered:Cell::new(true),..Default::default()});
+        let recovered=abnormal||recovered_previous;
+        let recovery=Rc::new(Recovery {binding,stores:RefCell::new(Some(w.restart.stores.clone())),registered:Cell::new(true),..Default::default()});
         recovery.recovered.set(recovered);
         let pristine=w.gpu.borrow().as_ref().is_some_and(|gpu|launch_stamp.as_ref().is_some_and(|stamp|gpu.session.can_replace_startup_session(stamp)));
         if replace_initial&&!pristine {protected_placeholder=true;}
@@ -484,17 +470,15 @@ async fn failed_drawings(w:&Rc<Workspace>)->Result<(),String> {
             if let Err(error)=result {w.changed(Err(error));}
         } else if response=="retry" {
             let attempt=w.restart.begin_restore(drawing.id,true).await?;
-            let path=directory().join(&drawing.key);
-            let result=gio::spawn_blocking(move || {
-                let mut store=SessionStore::open(&path)?;
-                let opened=store.load(ProjectLimits::for_import(),&AtomicBool::new(false))?.ok_or("No complete drawing checkpoint")?;
-                let restored=SessionRestore::from_core(opened)?;
-                let observed=observed_destination(&restored);
-                Ok::<_,String>((restored,store,observed))
-            }).await.map_err(|error|format!("Drawing reader stopped: {error:?}")).and_then(|result|result);
+            let binding=w.restart.stores.adopt(drawing.id,&drawing.key)?;
+            let result=async {
+                let StoreResult::Restored {session,..}=w.restart.stores.restore_bound(&binding,ProjectLimits::for_import())?.await? else {return Err("Unexpected drawing storage reply".into());};
+                let restored=session.ok_or("No complete drawing checkpoint")?;
+                gio::spawn_blocking(move || {let observed=observed_destination(&restored);(restored,observed)}).await.map_err(|error|format!("Destination reader stopped: {error:?}"))
+            }.await;
             let result=match result {
-                Ok((restore,store,observed))=>{
-                    let recovery=Rc::new(Recovery {path:store.path().to_path_buf(),store:Arc::new(Mutex::new(Some(store))),registered:Cell::new(true),..Default::default()});
+                Ok((restore,observed))=>{
+                    let recovery=Rc::new(Recovery {binding,stores:RefCell::new(Some(w.restart.stores.clone())),registered:Cell::new(true),..Default::default()});
                     recovery.recovered.set(true);
                     w.documents.restore_inactive(w,restore,recovery,observed,drawing.id).await
                 },

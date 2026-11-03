@@ -708,6 +708,8 @@ pub unsafe extern "C" fn capy_start_services(
     wake: Option<extern "C" fn(*mut c_void)>,
 ) -> i32 {
     guard(host, |host| {
+        let callback_context=context as usize;
+        host.native.set_wake(std::sync::Arc::new(move ||if let Some(wake)=wake {wake(callback_context as *mut c_void)}));
         if host.documents.is_none() {
             let context = context as usize;
             host.documents = Some(crate::documents::DocumentService::open_localized(host.native.session.localization(), move || {
@@ -754,7 +756,7 @@ pub unsafe extern "C" fn capy_start_services(
 /// Exclusive render-owner access to a live host.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_needs_frame(host: u64) -> i32 {
-    guard(host, |host| Ok(i32::from(host.native.dirty)))
+    guard(host, |host| Ok(i32::from(host.native.poll_preparation())))
 }
 
 /// # Safety
@@ -762,7 +764,7 @@ pub unsafe extern "C" fn capy_needs_frame(host: u64) -> i32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_poll_services(host: u64) -> i32 {
     guard(host, |host| {
-        host.poll_services()?;
+        host.native.poll_preparation();host.poll_services()?;
         if let Some(presenter)=host.presenter.as_mut() {
             host.native.poll_canvas_presentation(presenter)?;
         }
@@ -780,6 +782,7 @@ pub unsafe extern "C" fn capy_poll_services(host: u64) -> i32 {
 pub unsafe extern "C" fn capy_finish_services(host: u64) -> i32 {
     let mut owned=match borrow::<CapyHost>(host) {Ok(host)=>host,Err(error)=> {fail(error);return -1;}};
     let host=&mut *owned;
+    host.native.close_wake();
     let filters = catch_unwind(AssertUnwindSafe(|| {
         if let Some(mut service) = host.filters.take() {
             service.stop();

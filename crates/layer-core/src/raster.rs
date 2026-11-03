@@ -269,6 +269,12 @@ impl TileBlob {
         let _ = self.digest.set(digest);
         Ok(digest)
     }
+    #[cfg(not(target_arch="wasm32"))]
+    pub(crate) fn from_store(resource_id:crate::PortableId,descriptor:PixelDescriptor,location:Arc<crate::package::session_store::StoreLocation>)->Result<Self,String> {
+        if location.length==0 || location.length>MAX_COMPRESSED_TILE_BYTES as u64 || descriptor.byte_len([TILE_SIZE;2]).is_none() {return Err("Invalid stored raster tile".into());}
+        Ok(Self {resource_id,owner_identity:next_tile_owner(),descriptor,encoded_fingerprint:None,digest:OnceLock::new(),expected_digest:None,
+            compressed:Arc::new(crate::raster_storage::Bytes::stored(location))})
+    }
     pub fn from_package(
         resource_id: crate::authored::PortableId,
         descriptor: PixelDescriptor,

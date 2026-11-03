@@ -279,6 +279,7 @@ impl MetalHost {
         now: u64,
         presentation: u64,
     ) -> Result<(bool, [u64; 5]), String> {
+        host.poll_preparation();
         self.observe_failure(host, true);
         self.poll_color(host)?;
         if !host.dirty && host.startup.complete { self.poll_presentation(host)?; }

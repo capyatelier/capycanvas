@@ -830,6 +830,7 @@ impl Documents {
         ));
     }
     async fn prepare_switch(&self, w: &Rc<Workspace>) -> Result<crate::render_thread::CanvasTransition, String> {
+        w.restart.stores.adopt_binding(self.selected(),w.recovery().binding.clone())?;
         if w.gpu.borrow().is_none() {
             return Err("Wait for the drawing canvas to finish opening".into());
         }
@@ -1001,7 +1002,7 @@ impl Documents {
             candidate.session.frame(now,now)?;
             glib::timeout_future(Duration::from_millis(2)).await;
         }
-        recovery.capture_session(w, &candidate.session);
+        recovery.capture_session(w, id, &candidate.session);
         recovery.flush().await?;
         candidate.session.park_document()?;
         let tiles=candidate.session.retained_document_tiles();
@@ -1111,11 +1112,15 @@ impl Documents {
         crate::files::open::show_package(w.window.upcast_ref(), layer_ui::PackageView::new(outcome)?, original, &w.localization()).await
     }
     fn trim_in_background(&self, w: &Rc<Workspace>) {
+        for (id,parked) in self.model.borrow().parked() {
+            if let Err(error)=w.restart.stores.adopt_binding(*id,parked.owner.recovery.binding.clone()) {w.changed(Err(error));return;}
+        }
+        w.restart.stores.watch_pressure(self.model.borrow().pressure_source());
         let Some(token) = self.model.borrow_mut().request_trim() else { return; };
         let w = w.clone();
         glib::spawn_future_local(async move {
             loop {
-                let result = w.documents.trim_storage().await;
+                let result = w.documents.trim_storage(&w).await;
                 if !w.documents.model.borrow_mut().complete_trim(token, result) { break; }
             }
         });
@@ -1125,22 +1130,14 @@ impl Documents {
         let completion = self.model.borrow().trim_wait();
         if let Some(completion) = completion { let _ = completion.await; }
     }
-    async fn trim_storage(&self) -> Result<(), String> {
+    async fn trim_storage(&self,w:&Rc<Workspace>) -> Result<(), String> {
         #[cfg(test)]
         { self.model.borrow_mut().budget.inactive_ram = self.ram_budget.get(); }
         self.model.borrow_mut().storage_completed(Ok(()));
-        loop {
-            let candidate = self.model.borrow().spill_candidate();
-            let Some((id,tiles)) = candidate else {
-                break;
-            };
-            let recovery=self.model.borrow().parked().find(|(key,_)|**key==id)
-                .map(|(_,parked)|parked.owner.recovery.clone()).ok_or("Inactive drawing is unavailable")?;
-            let result=recovery.make_durable(tiles).await;
-            if let Err(error) = result {
-                return Err(error);
-            }
-        }
+        let (candidates,budget)=self.model.borrow().pressure_snapshot();
+        for (id,parked) in self.model.borrow().parked() {w.restart.stores.adopt_binding(*id,parked.owner.recovery.binding.clone())?;}
+        w.restart.stores.trim(candidates,budget).await?;
+
         Ok(())
     }
     /// A completed close always belongs to the active session; service_requests

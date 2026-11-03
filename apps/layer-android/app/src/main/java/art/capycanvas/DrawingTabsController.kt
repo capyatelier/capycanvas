@@ -50,19 +50,16 @@ internal class DrawingTabsController(private val host: CanvasHost) {
             delay(16)
         }
     }
-    private suspend fun spill(): String? {
-        return try {
-            while (true) {
-                val task=host.withNative { Native.documentSpillTask(it) } ?: break
-                try { host.recovery.makeDurable(task[0], task[1]) }
-                finally { withContext(NonCancellable + Dispatchers.IO) { Native.documentSpillFree(task[1]) } }
-            }
-            null
-        } catch(e:CancellationException) { throw e }
-        catch(e:Exception) {
-            host.reportActionError(host.withNative {Native.sessionFailure(it,e.message.orEmpty(),false)})
-            e.message ?: "Drawing cache failed"
-        }
+    private suspend fun trim():String? = try {
+        val stores=host.recovery.storeCoordinator()
+        val task=host.withNative {Native.documentTrimTask(it,stores)}
+        try {withContext(NonCancellable+Dispatchers.IO) {Native.documentTrimWork(task)}}
+        finally {withContext(NonCancellable+Dispatchers.IO) {Native.documentTrimFree(task)}}
+        null
+    } catch(e:CancellationException) {throw e}
+    catch(e:Exception) {
+        host.reportActionError(host.withNative {Native.sessionFailure(it,e.message.orEmpty(),false)})
+        e.message ?: "Drawing cache failed"
     }
     private suspend fun scheduleTrim() {
         val token = host.withNative { Native.documentTrimRequest(it) }
@@ -70,7 +67,7 @@ internal class DrawingTabsController(private val host: CanvasHost) {
         trimming = host.viewModelScope.launch {
             withContext(NonCancellable) {
                 do {
-                    val failure = spill()
+                    val failure = trim()
                     val again = host.withNative { Native.documentTrimComplete(it, token, failure) }
                     refresh()
                 } while (again)
@@ -95,7 +92,7 @@ internal class DrawingTabsController(private val host: CanvasHost) {
     suspend fun selectRestored(id: Long) {
         drain(); waitReady(); activate(id); scheduleTrim(); refresh(); resume()
     }
-    suspend fun afterAdopt() { try { scheduleTrim(); host.recovery.ensureOwners() } catch(e:CancellationException){throw e} catch(e:Exception){host.reportActionError(host.withNative {Native.sessionFailure(it,e.message.orEmpty(),true)})} finally {transition(false);host.recovery.capture();if(currentCoroutineContext().isActive)resume()} }
+    suspend fun afterAdopt() { try { scheduleTrim() } catch(e:CancellationException){throw e} catch(e:Exception){host.reportActionError(host.withNative {Native.sessionFailure(it,e.message.orEmpty(),true)})} finally {transition(false);host.recovery.capture();if(currentCoroutineContext().isActive)resume()} }
     private suspend fun activate(id: Long, close: Boolean = false) {
         var task=0L
         try {

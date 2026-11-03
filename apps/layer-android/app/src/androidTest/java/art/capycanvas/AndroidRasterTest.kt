@@ -289,19 +289,26 @@ class AndroidRasterTest {
         point(3,90.0,dy,observe);tick()
     }
     private fun captureSession(directory: File) {
-        val capture = selectedSessionCapture()
+        val id = tabs().getLong("selected")
+        val capture = native {Native.sessionCapture(it,id)}
         assertNotEquals("Session capture ready",0L,capture)
-        val store = Native.sessionStoreOpen(directory.absolutePath)
-        try {Native.sessionCommit(capture,store)} finally {Native.sessionFree(capture);Native.sessionStoreFree(store)}
+        try {
+            val stores = Native.sessionStoresOpen(checkNotNull(directory.parentFile).absolutePath)
+            try {Native.sessionBind(stores,id,directory.name);Native.sessionCommit(capture,stores,id)}
+            finally {Native.sessionStoresFree(stores)}
+        } finally {Native.sessionFree(capture)}
     }
     private fun restoreSessionTask(directory: File, id: Long = 1): Long {
         val task = native {Native.sessionRestoreTask(it)}
-        val store = Native.sessionStoreOpen(directory.absolutePath)
         try {
-            val location=Native.sessionRead(task,store,true)
-            val observed=host.documents.observeDestination(location.takeUnless {it=="null"}?.let {JSONObject(it).getString("uri")},task)
-            Native.sessionPrepare(task,id,observed)
-        } catch(e:Exception) {Native.sessionFree(task);throw e} finally {Native.sessionStoreFree(store)}
+            val stores = Native.sessionStoresOpen(checkNotNull(directory.parentFile).absolutePath)
+            try {
+                val key=Native.sessionBind(stores,id,directory.name)
+                val location=Native.sessionRead(task,stores,id,key,true)
+                val observed=host.documents.observeDestination(location.takeUnless {it=="null"}?.let {JSONObject(it).getString("uri")},task)
+                Native.sessionPrepare(task,id,observed)
+            } finally {Native.sessionStoresFree(stores)}
+        } catch(e:Exception) {Native.sessionFree(task);throw e}
         return task
     }
     private fun adoptSession(task: Long, id: Long = 1) {
@@ -934,7 +941,7 @@ class AndroidRasterTest {
         assertTrue("61 MP selection was published",native {state(it).getJSONObject("layer_tools").getBoolean("has_selection")})
         // Exercise the real recovery worker/atomic publication that reported the
         // metadata-limit error, and parse its candidate before any adoption.
-        val recovery=File(files,"tonal-61mp-recovery.capy")
+        val recovery=File(files,"tonal-61mp-recovery-session")
         val saveStart=SystemClock.elapsedRealtimeNanos()
         captureSession(recovery)
         val saveMs=(SystemClock.elapsedRealtimeNanos()-saveStart)/1_000_000
@@ -4947,7 +4954,7 @@ class AndroidRasterTest {
         assertEquals(eyeCheckpoint,native {JSONObject(Native.sessionStamp(it,tabs(it).getLong("selected"))).getLong("checkpoint")})
         assertFalse(native {state(it).getJSONObject("document_file").getBoolean("modified")})
         assertEquals(beforeEye.artworkRecords().toString(),manifest(save("selection-eye-after.capy")).artworkRecords().toString())
-        val recovery=File(files,"atomic-recovery.capy")
+        val recovery=File(files,"atomic-recovery-session")
         val capturedFile=native {state(it).getJSONObject("document_file")}
         captureSession(recovery)
         val stale=restoreSessionTask(recovery)
@@ -5018,7 +5025,14 @@ class AndroidRasterTest {
             tick();if(ids().isNotEmpty())ready()
         }
         fun order(value:JSONObject){native{Native.documentTabs(it,value.toString())}}
-        fun trim(){while(true){val task=native{Native.documentSpillTask(it)};if(task==0L)break;Native.documentSpillWork(task)}}
+        fun trim() {
+            val directory=java.nio.file.Files.createTempDirectory(files.toPath(),"tabs-pressure-").toFile()
+            val stores=Native.sessionStoresOpen(directory.absolutePath)
+            try {
+                val task=native{Native.documentTrimTask(it,stores)}
+                try {Native.documentTrimWork(task)} finally {Native.documentTrimFree(task)}
+            } finally {Native.sessionStoresFree(stores)}
+        }
         val first=tabs().getLong("selected")
         stroke(0.0);val exact=manifest(save("tabs-exact.capy")).rasterResources().toString()
         action("undo") // Its only ink is now retained exclusively by redo history.

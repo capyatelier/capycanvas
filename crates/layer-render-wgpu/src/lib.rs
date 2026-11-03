@@ -3688,9 +3688,13 @@ impl WgpuRasterizer {
         }
         Ok(())
     }
+    fn preparation_can_wake(&self)->bool {
+        #[cfg(not(target_arch="wasm32"))] {self.preparation_wake.is_some()}
+        #[cfg(target_arch="wasm32")] {true}
+    }
+    fn decode_wait_blocks_frame(&self)->bool {self.preparation_can_wake() && self.image_decode_waiting()}
     fn moving_images_pending(&self) -> bool {
-        #[cfg(target_arch = "wasm32")]
-        if self.image_decode_waiting() {
+        if self.decode_wait_blocks_frame() {
             return self.moving_images_waiting;
         }
         self.moving_images_waiting || self.moving_images.pending()
@@ -3890,16 +3894,16 @@ impl CanvasRenderer for WgpuRasterizer {
         self.moving_pixels = pixels;
     }
     fn has_pending_work(&self) -> bool {
-        let waiting_objects = cfg!(target_arch="wasm32") && self.object_deferred && self.image_decode_waiting();
+        let waiting_objects=self.object_deferred && self.decode_wait_blocks_frame();
         self.fill_preview.is_some() && self.fill_preview_ready().is_none()
-            || self.held_result_ready() || self.fill_edges_preflight.as_ref().is_some_and(|state|state.pending() && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting())) || self.bake_preflight.as_ref().is_some_and(|state|state.pending() && (!cfg!(target_arch="wasm32") || !state.waiting())) || self.restore_preparation_pending() && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting()) || self.analysis_dirty || !self.transform_damage.is_empty() || !self.document_damage.is_empty() && !waiting_objects || self.settling.is_some() || self.retouch.as_ref().is_some_and(|retouch| retouch.pending() && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting()))
+            || self.held_result_ready() || self.fill_edges_preflight.as_ref().is_some_and(|state|state.pending() && !self.decode_wait_blocks_frame()) || self.bake_preflight.as_ref().is_some_and(|state|state.pending() && (!self.preparation_can_wake() || !state.waiting())) || self.restore_preparation_pending() && !self.decode_wait_blocks_frame() || self.analysis_dirty || !self.transform_damage.is_empty() || !self.document_damage.is_empty() && !waiting_objects || self.settling.is_some() || self.retouch.as_ref().is_some_and(|retouch| retouch.pending() && !self.decode_wait_blocks_frame())
             || self.navigator.pending() && !waiting_objects
-            || self.transform_sources_pending && self.transform_preview.is_some() && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting())
+            || self.transform_sources_pending && self.transform_preview.is_some() && !self.decode_wait_blocks_frame()
             || self.moving_images_pending()
             || self.moving_decode.as_ref().is_some_and(|(_,queue)|queue.pending())
-                && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting())
+                && !self.decode_wait_blocks_frame()
             || (self.object_deferred || self.moving_layer.is_none() && self.scene.as_ref().is_some_and(|scene| scene.objects_pending()))
-                && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting())
+                && !self.decode_wait_blocks_frame()
             || self.scale_display.as_ref().is_some_and(|cache| cache.has_pending_work(self))
             || self.paper_shade_work_pending()
             || self.regions.as_ref().is_some_and(|regions|regions.background_pending()) && flood::fits(self.document_extent,&self.device.limits()) && self.startup.as_ref().is_none_or(|startup|startup.compiler.is_idle())

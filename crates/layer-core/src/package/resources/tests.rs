@@ -175,7 +175,9 @@ fn aliased_tiles_share_store_location_and_release_the_last_owner() {
     drop(retained);drop(first);
     assert!(weak_storage.upgrade().is_some());assert!(weak_location.upgrade().is_some());
     assert_eq!(second.decode_on_worker().unwrap(),vec![42;second.descriptor.byte_len([TILE_SIZE;2]).unwrap()]);
-    drop(second);assert!(weak_storage.upgrade().is_none());assert!(weak_location.upgrade().is_none());
+    drop(second);assert!(weak_storage.upgrade().is_none());
+    store.store.collect_garbage().unwrap();
+    assert!(weak_location.upgrade().is_none());
     assert!(!input.is_empty());
 }
 #[test]

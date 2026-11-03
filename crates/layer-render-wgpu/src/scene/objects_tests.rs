@@ -425,7 +425,7 @@ fn pending_native_store_reads_keep_the_display_and_wake_exact_preparation() {
     crate::test_support::submit_ready(&mut r,FramePacket {composite_all:false,..frame}).unwrap();
     assert!(r.image_decode_waiting());
     assert!(!r.moving_images_waiting,"completed mip retirements must admit the incoming image");
-    assert!(r.has_pending_work(),"native hosts must keep requesting frames until stored bytes are ready");
+    assert!(!r.has_pending_work(),"a registered completion wake releases native frame demand during stored reads");
     r.analysis_dirty=true;
     assert!(r.has_pending_work(),"independent ready work must remain runnable");
     r.analysis_dirty=false;

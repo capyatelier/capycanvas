@@ -487,6 +487,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
                 bootstrapForOwner = launch
                 main.post { bootstrap = launch }
                 handle = Native.create(savedSettings, locales, screen?.toString().orEmpty(), BuildConfig.DEBUG || BuildConfig.WORKSPACE_BENCHMARK)
+                Native.setWake(handle, this@CanvasHost)
                 choreographer = Choreographer.getInstance()
                 attempt(canvas = false) {
                     updateWorkspaceManager(obj("type" to "start", "directory" to workspaces))
@@ -877,6 +878,8 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
             draw(now, now + frameInterval)
         }
     }
+    @androidx.annotation.Keep
+    private fun onNativeWake() { post { wake() } }
     private fun wake(retryDelay: Long = 0L) {
         if (!attached) return
         if (renderQueued) {
@@ -1202,7 +1205,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
                     }
                     if (busy) { worker.postDelayed(this, 20); return }
                     disposed = true
-                    if (handle != 0L) { Native.destroy(handle); handle = 0 }
+                    if (handle != 0L) { Native.setWake(handle, null); Native.destroy(handle); handle = 0 }
                     thread.quitSafely()
                 }
             }

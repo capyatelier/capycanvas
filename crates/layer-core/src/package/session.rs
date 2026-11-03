@@ -151,10 +151,17 @@ impl ObjectVersion {
 struct StateRecord {objects:Vec<usize>,outputs:Vec<Value>,working:WorkingRecord,checkpoint:u64}
 #[derive(Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SessionRecord {
+struct SessionRecord<R=Vec<Value>> {
     format:String,version:u32,checkpoint:CaptureCheckpoint,next_checkpoint:u64,next_stroke_id:u64,
     layout:TransferLayout,root:Value,default_output:Value,artwork_metadata:Option<Value>,
-    metadata:Value,metadata_profiles:Vec<Value>,objects:Vec<ObjectVersion>,#[serde(alias="tile_chunks")] index_chunks:Vec<Vec<Value>>,resources:Vec<Value>,extension_records:BTreeMap<PortableId,Value>,extension_resources:Vec<PortableId>,current:StateRecord,undo:Vec<StateRecord>,redo:Vec<StateRecord>,
+    metadata:Value,metadata_profiles:Vec<Value>,objects:Vec<ObjectVersion>,#[serde(alias="tile_chunks")] index_chunks:Vec<Vec<Value>>,resources:R,extension_records:BTreeMap<PortableId,Value>,extension_resources:Vec<PortableId>,current:StateRecord,undo:Vec<StateRecord>,redo:Vec<StateRecord>,
+}
+impl<R> SessionRecord<R> {
+    #[cfg(not(target_arch="wasm32"))]
+    fn with_resources<T>(self,resources:T)->SessionRecord<T> {
+        let Self {format,version,checkpoint,next_checkpoint,next_stroke_id,layout,root,default_output,artwork_metadata,metadata,metadata_profiles,objects,index_chunks,resources:_,extension_records,extension_resources,current,undo,redo}=self;
+        SessionRecord {format,version,checkpoint,next_checkpoint,next_stroke_id,layout,root,default_output,artwork_metadata,metadata,metadata_profiles,objects,index_chunks,resources,extension_records,extension_resources,current,undo,redo}
+    }
 }
 impl SessionRecord {
     fn manifest(&self,state:&StateRecord,directory:&Directory,limits:ProjectLimits)->Result<Manifest,OpenFailure> {
@@ -219,9 +226,14 @@ pub(crate) fn decode_profiles(profiles:&[Value],reader:&mut ResourceReader<'_>)-
     if profiles.len()>ManifestLimits::default().resources {return Err("Too many session profiles".into());}
     profiles.iter().map(|profile|reader.profile(profile).map_err(|error|error.to_string())).collect()
 }
-pub struct PreparedSession {metadata:Arc<[u8]>,resources:PreparedResources,trusted_programs:super::TrustedPrograms}
-impl PreparedSession {
-    pub fn prepare(capture:&EditorCapture,metadata:impl Into<SessionMetadata>,cancel:&AtomicBool)->Result<Self,String> {
+pub(crate) struct SessionDraft {
+    record:SessionRecord,
+    pub(crate) inventory:ResourceInventory,
+    pub(crate) opaque:Vec<Arc<crate::authored::OpaqueResource>>,
+    pub(crate) trusted_programs:super::TrustedPrograms,
+}
+impl SessionDraft {
+    pub(crate) fn capture(capture:&EditorCapture,metadata:SessionMetadata,cancel:&AtomicBool)->Result<Self,String> {
         let (current,undo,redo)=capture.documents(cancel)?;let mut encoder=StateEncoder::default();encoder.inventory.private=true;
         let opaque=current.artwork.extensions.resources.clone();
         let current_state=encoder.capture(&current,capture.artwork.checkpoint.edit_checkpoint,cancel)?;
@@ -230,23 +242,52 @@ impl PreparedSession {
             for (document,checkpoint) in history {target.push(encoder.capture(document,*checkpoint,cancel)?);}
         }
         let StateEncoder {mut inventory,records,versions:_,index_chunks,index_versions:_}=encoder;
-        let metadata=metadata.into();let metadata_profiles=metadata.encode_profiles(&mut inventory)?;
+        let metadata_profiles=metadata.encode_profiles(&mut inventory)?;
         current.artwork.metadata.validate()?;
         let mut artwork_metadata=serde_json::Map::new();
         for (kind,bytes) in ["exif","xmp","iptc"].into_iter().zip(current.artwork.metadata.blocks()) {
             if let Some(bytes)=bytes {artwork_metadata.insert(kind.into(),inventory.bytes("capy.photo-metadata/1",bytes,json!({"kind":kind}))?);}
         }
         let opaque=inventory.with_opaque(opaque.into_values())?;
-        let mut resources=inventory.prepare(cancel)?;resources.append_opaque(opaque,cancel)?;
         let art=&current.artwork;
         let record=SessionRecord {format:"capy.session".into(),version:1,checkpoint:capture.artwork.checkpoint,next_checkpoint:capture.next_checkpoint,next_stroke_id:current.next_stroke_id,
             layout:TransferLayout::capture(art),root:resources::reference(art.compositions.id(art.root).ok_or("Missing session root")?),
             default_output:resources::reference(art.outputs.id(art.default_output).ok_or("Missing session output")?),
-            artwork_metadata:(!artwork_metadata.is_empty()).then_some(Value::Object(artwork_metadata)),metadata:metadata.value,metadata_profiles,objects:records,index_chunks,resources:resources.entries.iter().map(|r|r.record.clone()).collect(),
+            artwork_metadata:(!artwork_metadata.is_empty()).then_some(Value::Object(artwork_metadata)),metadata:metadata.value,metadata_profiles,objects:records,index_chunks,resources:Vec::new(),
             extension_records:art.extensions.records.clone(),extension_resources:art.extensions.resources.keys().copied().collect(),current:current_state,undo:undo_states,redo:redo_states};
-        let metadata=serde_json::to_vec(&record).map_err(|e|e.to_string())?;
-        if metadata.len()>ProjectLimits::default().metadata_bytes as usize {return Err("Session metadata exceeds admission".into());}
-        Ok(Self {metadata:metadata.into(),resources,trusted_programs:capture.trusted_programs()?})
+        Ok(Self {record,inventory,opaque,trusted_programs:capture.trusted_programs()?})
+    }
+    #[cfg(not(target_arch="wasm32"))]
+    pub(crate) fn spatial_order(&self)->BTreeMap<PortableId,(usize,u32,u32)> {
+        let mut order=BTreeMap::new();
+        for (layer,object) in self.record.objects.iter().enumerate() {
+            for &chunk in object.index.iter().flatten() {
+                for tile in &self.record.index_chunks[chunk] {
+                    if let (Some(id),Ok([x,y]))=(tile["resource"]["ref"].as_str().and_then(|id|id.parse().ok()),serde_json::from_value::<[u32;2]>(tile["coordinate"].clone())) {order.entry(id).or_insert((layer,y,x));}
+                }
+            }
+        }order
+    }
+    #[cfg(not(target_arch="wasm32"))]
+    pub(crate) fn packed_metadata<T:Serialize>(self,resources:T,extents:&BTreeMap<PortableId,u64>)->Result<Vec<u8>,String> {
+        #[derive(Serialize)]
+        struct Packed<'a,R> {format:&'static str,version:u32,session:SessionRecord<R>,extents:&'a BTreeMap<PortableId,u64>}
+        serde_json::to_vec(&Packed {format:"capy.session.packed",version:2,session:self.record.with_resources(resources),extents}).map_err(|error|error.to_string())
+    }
+    pub(crate) fn metadata(&mut self,resources:Vec<Value>)->Result<Arc<[u8]>,String> {
+        self.record.resources=resources;
+        let bytes=serde_json::to_vec(&self.record).map_err(|error|error.to_string())?;
+        if bytes.len() as u64>ProjectLimits::default().metadata_bytes {return Err("Session metadata exceeds admission".into());}
+        Ok(bytes.into())
+    }
+}
+pub struct PreparedSession {metadata:Arc<[u8]>,resources:PreparedResources,trusted_programs:super::TrustedPrograms}
+impl PreparedSession {
+    pub fn prepare(capture:&EditorCapture,metadata:impl Into<SessionMetadata>,cancel:&AtomicBool)->Result<Self,String> {
+        let mut draft=SessionDraft::capture(capture,metadata.into(),cancel)?;
+        let mut resources=draft.inventory.prepare(cancel)?;resources.append_opaque(draft.opaque.clone(),cancel)?;
+        let metadata=draft.metadata(resources.entries.iter().map(|entry|entry.record.clone()).collect())?;
+        Ok(Self {metadata,resources,trusted_programs:draft.trusted_programs})
     }
     pub fn metadata(&self)->&[u8] {&self.metadata}
     pub fn trusted_programs(&self)->&super::TrustedPrograms {&self.trusted_programs}
@@ -345,13 +386,24 @@ pub fn open_parts_with_programs(metadata:&[u8],resource_pack:ImmutableBacking,li
     open_parts_checked(metadata,resource_pack,limits,cancel,programs).map_err(OpenFailure::message)
 }
 pub(crate) fn open_parts_checked(metadata:&[u8],resource_pack:ImmutableBacking,limits:ProjectLimits,cancel:&AtomicBool,programs:&super::TrustedPrograms)->Result<OpenSession,OpenFailure> {
-    open_parts_checked_with_budget(metadata, resource_pack, limits, cancel, programs, crate::MemoryBudget::process())
+    open_parts_checked_with_budget(metadata, resource_pack, limits, cancel, programs, crate::MemoryBudget::process(),
+        #[cfg(not(target_arch="wasm32"))] None)
 }
-fn open_parts_checked_with_budget(metadata:&[u8],resource_pack:ImmutableBacking,limits:ProjectLimits,cancel:&AtomicBool,programs:&super::TrustedPrograms,budget:crate::MemoryBudget)->Result<OpenSession,OpenFailure> {
+#[cfg(not(target_arch="wasm32"))]
+pub(crate) fn open_stored_parts(metadata:&[u8],store:&super::session_store::StoreResources,limits:ProjectLimits,cancel:&AtomicBool,programs:&super::TrustedPrograms)->Result<OpenSession,OpenFailure> {
+    let empty=ImmutableBacking::new(Arc::new(Arc::<[u8]>::from([])))?;
+    open_parts_checked_with_budget(metadata,empty,limits,cancel,programs,crate::MemoryBudget::process(),Some(store))
+}
+fn open_parts_checked_with_budget(metadata:&[u8],resource_pack:ImmutableBacking,limits:ProjectLimits,cancel:&AtomicBool,programs:&super::TrustedPrograms,budget:crate::MemoryBudget,
+    #[cfg(not(target_arch="wasm32"))] store:Option<&super::session_store::StoreResources>)->Result<OpenSession,OpenFailure> {
     active(cancel)?;
     let value=super::parse_json(metadata,limits.metadata_bytes.min(usize::MAX as u64) as usize)?;
     validate_format(&value)?;
     let record:SessionRecord=serde_json::from_value(value).map_err(|e|e.to_string())?;
+    #[cfg(not(target_arch="wasm32"))]
+    let mut record=record;
+    #[cfg(not(target_arch="wasm32"))]
+    if let Some(store)=store {store.manifest_records(&mut record.resources)?;}
     if record.undo.len()>crate::history_budget::ENTRY_BUDGET || record.redo.len()>crate::history_budget::ENTRY_BUDGET
         || record.next_checkpoint==0 || record.next_stroke_id==0 || record.current.checkpoint!=record.checkpoint.edit_checkpoint
         || std::iter::once(&record.current).chain(&record.undo).chain(&record.redo).any(|s|s.checkpoint>=record.next_checkpoint)
@@ -361,6 +413,8 @@ fn open_parts_checked_with_budget(metadata:&[u8],resource_pack:ImmutableBacking,
     let used=states.clone().flat_map(|state|state.objects.iter().copied()).collect::<std::collections::BTreeSet<_>>();
     if used.len()!=record.objects.len() || used.iter().any(|index|*index>=record.objects.len()) {return Err("Unindexed session object versions".into());}
     let directory=Directory {members:vec![Member{name:"data/tiles-1.bin".into(),offset:0,length:resource_pack.byte_len(),compressed_length:None,crc32:0}],length:resource_pack.byte_len()};
+    #[cfg(not(target_arch="wasm32"))]
+    let directory=match store {Some(store)=>store.directory(),None=>directory};
     let members=directory.members.iter().enumerate().map(|(i,m)|(m.name.as_str(),(i,m))).collect();
     let mut resource_records=BTreeMap::new();
     for value in &record.resources {
@@ -403,6 +457,11 @@ fn open_parts_checked_with_budget(metadata:&[u8],resource_pack:ImmutableBacking,
     for id in resource_records.keys().chain(record.extension_records.keys()) {
         if !identities.insert(*id) {return Err("Conflicting session resource identity".into());}
     }
+    #[cfg(not(target_arch="wasm32"))]
+    let physical_store=store.is_some();
+    #[cfg(target_arch="wasm32")]
+    let physical_store=false;
+    if !physical_store {
     let mut ranges=resource_records.values().filter_map(|resource|resource.range).map(|range|(range.offset,range.length)).collect::<Vec<_>>();ranges.sort();ranges.dedup();
     let mut end=0u64;
     for (offset,length) in ranges {
@@ -410,6 +469,7 @@ fn open_parts_checked_with_budget(metadata:&[u8],resource_pack:ImmutableBacking,
         if length!=0 {end=end.checked_add(length).ok_or("Session resource length overflow")?;}
     }
     if end!=resource_pack.byte_len() {return Err("Unindexed session resource bytes".into());}
+    }
     let mut extensions=crate::authored::Extensions {records:record.extension_records.clone(),resources:BTreeMap::new()};
     for (id,value) in &extensions.records {
         if value["id"]!=json!(id) || value["ancillary"]!=true || value["type"].as_str().is_none_or(str::is_empty) {return Err("Invalid preserved session record".into());}
@@ -418,7 +478,11 @@ fn open_parts_checked_with_budget(metadata:&[u8],resource_pack:ImmutableBacking,
         active(cancel)?;
         let resource=resource_records.get(id).ok_or("Missing preserved session resource")?;
         let range=resource.range.ok_or("Missing preserved session resource range")?;
-        let opaque=Arc::new(crate::authored::OpaqueResource::from_record(*id,&resource.value,resource_pack.clone(),range.offset,range.length,resource.crc32)?);
+        #[cfg(not(target_arch="wasm32"))]
+        let (backing,offset)=match store {Some(store)=>(store.locations.get(id).ok_or("Missing preserved store resource")?.backing()?,0),None=>(resource_pack.clone(),range.offset)};
+        #[cfg(target_arch="wasm32")]
+        let (backing,offset)=(resource_pack.clone(),range.offset);
+        let opaque=Arc::new(crate::authored::OpaqueResource::from_record(*id,&resource.value,backing,offset,range.length,resource.crc32)?);
         opaque.verify(cancel)?;
         if extensions.resources.insert(*id,opaque).is_some() {return Err("Duplicate preserved session resource".into());}
     }
@@ -427,7 +491,9 @@ fn open_parts_checked_with_budget(metadata:&[u8],resource_pack:ImmutableBacking,
     let mut resource_limits=limits;resource_limits.raster_bytes=resource_limits.raster_bytes.saturating_add(limits.asset_bytes).saturating_add(crate::history_budget::BYTE_BUDGET as u64);
     for state in std::iter::once(&record.current).chain(&record.undo).chain(&record.redo) {
         active(cancel)?;let manifest=record.manifest(state,&directory,limits)?;
-        let mut reader=ResourceReader::with_budget(&manifest,&resource_pack,cancel,resource_limits,budget.clone());reader.private=true;reader.trusted_programs=programs.clone();reader.install_cache(cache);
+        let mut reader=ResourceReader::with_budget(&manifest,&resource_pack,cancel,resource_limits,budget.clone());
+        #[cfg(not(target_arch="wasm32"))] {reader.store=store;}
+        reader.private=true;reader.trusted_programs=programs.clone();reader.install_cache(cache);
         if documents.is_empty() {profiles=decode_profiles(&record.metadata_profiles,&mut reader)?;}
         let mut artwork=artwork_records::decode_with_layout(&manifest,&mut reader,Some(&record.layout))?;
         artwork.extensions=extensions.clone();
@@ -486,7 +552,8 @@ pub fn open_with_budget(source:ImmutableBacking,limits:ProjectLimits,cancel:&Ato
         }
     }
     let backing=ImmutableBacking::new(Arc::new(Pack {source:source.clone(),offset:pack.offset,length:pack.length})).map_err(str::to_string)?;
-    open_parts_checked_with_budget(&metadata,backing,limits,cancel,programs,budget).map_err(OpenFailure::message)
+    open_parts_checked_with_budget(&metadata,backing,limits,cancel,programs,budget,
+        #[cfg(not(target_arch="wasm32"))] None).map_err(OpenFailure::message)
 }
 
 #[cfg(test)]
@@ -744,10 +811,10 @@ mod tests {
         let editor=editor();let capture=editor.capture_session(editor.capture(1,Default::default()).unwrap()).unwrap();
         let bytes=crate::authored::Resource::from(vec![37;crate::color::source::MAX_PROFILE_BYTES]);let id=bytes.id();let profile=crate::color::ColorProfile::Icc(bytes);
         let mut store=SessionStore::open(&path).unwrap();let metadata=|camera|SessionMetadata {value:json!({"camera":camera,"profile":id}),profiles:vec![profile.clone()]};
-        store.commit(&PreparedSession::prepare(&capture,metadata(0),&cancel).unwrap(),&cancel).unwrap();
+        store.checkpoint(&capture,metadata(0),&cancel).unwrap();
         let resource_path=std::fs::read_dir(path.join("packs")).unwrap().next().unwrap().unwrap().path();let timestamp=std::time::SystemTime::UNIX_EPOCH+std::time::Duration::from_secs(10);
         std::fs::OpenOptions::new().write(true).open(&resource_path).unwrap().set_times(std::fs::FileTimes::new().set_modified(timestamp)).unwrap();
-        for camera in 1..21 {let prepared=PreparedSession::prepare(&capture,metadata(camera),&cancel).unwrap();assert!(prepared.metadata().len()<16*1024);store.commit(&prepared,&cancel).unwrap();}
+        for camera in 1..21 {let prepared=PreparedSession::prepare(&capture,metadata(camera),&cancel).unwrap();assert!(prepared.metadata().len()<16*1024);store.checkpoint(&capture,metadata(camera),&cancel).unwrap();}
         assert_eq!(std::fs::metadata(&resource_path).unwrap().modified().unwrap(),timestamp);
         assert_eq!(std::fs::read_dir(path.join("packs")).unwrap().count(),1);
         let opened=store.load(ProjectLimits::default(),&cancel).unwrap().unwrap();assert_eq!(opened.metadata.value["camera"],20);

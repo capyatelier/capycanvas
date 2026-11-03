@@ -1,6 +1,6 @@
 use crate::android::{error, fail, or_throw, read};
 use jni::{JNIEnv, JavaVM, objects::{GlobalRef, JClass, JString, JValue}, sys::{jboolean, jlong}};
-use layer_host::{Renderer, open::OpenEnvironment};
+use layer_host::{Renderer, open::OpenEnvironment,session_stores::{SessionStores,StoreResult}};
 use layer_ui::{UiSession, session_recovery::{SessionCapture, SessionManifest, SessionRestore}};
 use std::{path::Path, sync::atomic::AtomicBool};
 use std::time::{Duration, Instant};
@@ -21,7 +21,7 @@ impl Drop for SessionOwner {
 }
 
 enum Work {
-    Capture(Option<Box<SessionCapture>>),
+    Capture {capture:Option<Box<SessionCapture>>,stamp:layer_ui::SessionStamp},
     Restore { environment: Box<OpenEnvironment>, candidates: Vec<(u64, Box<UiSession<Renderer>>)>, stamp: Box<layer_ui::SessionStamp>, pending: Option<Box<(SessionRestore,bool)>> },
     Retired { _renderers: Vec<Box<layer_render_wgpu::WgpuRasterizer>> },
 }
@@ -55,7 +55,7 @@ pub extern "system" fn Java_art_capycanvas_Native_sessionCapture(mut env: JNIEnv
         if session.recovery_document().busy { return Ok(0); }
         crate::inspection::owned(Task {
             generation: a.gpu_generation,
-            work: Work::Capture(Some(Box::new(session.capture_session()?))),
+            work: Work::Capture {capture:Some(Box::new(session.capture_session()?)),stamp:session.session_stamp()},
         })
     })();
     or_throw(&mut env, result, 0)
@@ -63,11 +63,39 @@ pub extern "system" fn Java_art_capycanvas_Native_sessionCapture(mut env: JNIEnv
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_sessionStoreOpen(mut env: JNIEnv, _: JClass, directory: JString) -> jlong {
+pub extern "system" fn Java_art_capycanvas_Native_sessionStoresOpen(mut env:JNIEnv,_:JClass,directory:JString)->jlong {
     crate::jni_entry!(env, {
-    let result = read(&mut env, &directory).and_then(|path| layer_core::package::session_store::SessionStore::open(Path::new(&path)))
-        .and_then(crate::inspection::owned);
-    or_throw(&mut env, result, 0)
+        let result=read(&mut env,&directory).and_then(|path|crate::inspection::owned(SessionStores::native(path.into(),Arc::new(||{}))));
+        or_throw(&mut env,result,0)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_sessionBind(mut env:JNIEnv,_:JClass,stores:jlong,id:jlong,key:JString)->jni::sys::jstring {
+    crate::jni_entry!(env, {
+        let key=if key.is_null() {None}else {Some(read(&mut env,&key)?)};
+        let stores=crate::inspection::borrow::<SessionStores>(stores)?;
+        let result=match key {Some(key)=>stores.adopt(id as u64,&key),None=>stores.bind(id as u64,None)}.map(|binding|binding.key().to_owned());
+        crate::android::string(&mut env,result)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_sessionWatchPressure(mut env:JNIEnv,_:JClass,handle:jlong,stores:jlong) {
+    crate::jni_entry!(env,handle,capy_app, {
+        crate::inspection::borrow::<SessionStores>(stores)?.watch_pressure(capy_app.window.documents.pressure_source());
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_sessionCheckpointInterval(_:JNIEnv,_:JClass)->jlong {SessionStores::checkpoint_interval_ms() as jlong}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_sessionCheckpointNeeded(mut env:JNIEnv,_:JClass,stores:jlong,id:jlong,stamp:JString,force:jboolean)->jboolean {
+    crate::jni_entry!(env, {
+        let stamp=serde_json::from_str(&read(&mut env,&stamp)?).map_err(error)?;
+        let result=crate::inspection::borrow::<SessionStores>(stores)?.checkpoint_due(id as u64,stamp,force!=0).map(u8::from);
+        or_throw(&mut env,result,0)
     })
 }
 
@@ -98,36 +126,35 @@ pub extern "system" fn Java_art_capycanvas_Native_sessionImport(mut env: JNIEnv,
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_sessionStoreFree(mut env: JNIEnv, _: JClass, store: jlong) {
+pub extern "system" fn Java_art_capycanvas_Native_sessionStoresFree(mut env: JNIEnv, _: JClass, store: jlong) {
     crate::jni_entry!(env, {
-    if store != 0 { crate::inspection::release::<layer_core::package::session_store::SessionStore>(store)?; }
+    if store != 0 { crate::inspection::release::<SessionStores>(store)?; }
     })
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_sessionStoreRetire(mut env: JNIEnv, _: JClass, store: jlong) {
+pub extern "system" fn Java_art_capycanvas_Native_sessionStoreRetire(mut env: JNIEnv, _: JClass, store: jlong,id:jlong) {
     crate::jni_entry!(env, {
-    fail(&mut env, crate::inspection::borrow::<layer_core::package::session_store::SessionStore>(store)?.retire())
+    fail(&mut env, crate::inspection::borrow::<SessionStores>(store)?.retire(id as u64)?.wait_on_worker().map(|_|()))
     })
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_sessionStorePrepareRetirement(mut env: JNIEnv, _: JClass, store: jlong) {
+pub extern "system" fn Java_art_capycanvas_Native_sessionStorePrepareRetirement(mut env: JNIEnv, _: JClass, store: jlong,id:jlong) {
     crate::jni_entry!(env, {
-    fail(&mut env, crate::inspection::borrow::<layer_core::package::session_store::SessionStore>(store)?.prepare_retirement())
+    fail(&mut env, crate::inspection::borrow::<SessionStores>(store)?.bind(id as u64,None)?.on_worker(|store|store.prepare_retirement()))
     })
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_sessionCommit(mut env: JNIEnv, _: JClass, task: jlong, store: jlong) {
+pub extern "system" fn Java_art_capycanvas_Native_sessionCommit(mut env: JNIEnv, _: JClass, task: jlong, store: jlong,id:jlong) {
     crate::jni_entry!(env, {
     let mut task_owner = crate::inspection::borrow::<Task>(task)?;let task=&mut *task_owner;
-    let mut store_owner = crate::inspection::borrow::<layer_core::package::session_store::SessionStore>(store)?;let store=&mut *store_owner;
+    let stores=crate::inspection::borrow::<SessionStores>(store)?.clone();
     let result = crate::inspection::on_worker("capy-session-save", "Session worker failed", move || {
-        let Work::Capture(capture) = &mut task.work else { return Err("Not a session capture".into()); };
-        let cancel = AtomicBool::new(false);
-        let prepared = capture.take().ok_or("Session capture already written")?.prepare(&cancel)?;
-        store.commit(&prepared, &cancel)?;
+        let Work::Capture {capture,stamp} = &mut task.work else { return Err("Not a session capture".into()); };
+        let capture=*capture.take().ok_or("Session capture already written")?;
+        if !stores.is_current(id as u64,stamp) {stores.checkpoint(id as u64,capture,stamp.clone(),true)?.wait_on_worker()?;}
         Ok(())
     });
     fail(&mut env, result)
@@ -190,17 +217,18 @@ pub extern "system" fn Java_art_capycanvas_Native_sessionRestoreTask(mut env: JN
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_sessionRead(mut env: JNIEnv, _: JClass, task: jlong, store: jlong, recovered: jboolean) -> jni::sys::jstring {
+pub extern "system" fn Java_art_capycanvas_Native_sessionRead(mut env: JNIEnv, _: JClass, task: jlong, store: jlong,id:jlong,key:JString,recovered: jboolean) -> jni::sys::jstring {
     crate::jni_entry!(env, {
     let mut task_owner = crate::inspection::borrow::<Task>(task)?;let task=&mut *task_owner;
-    let mut store_owner = crate::inspection::borrow::<layer_core::package::session_store::SessionStore>(store)?;let store=&mut *store_owner;
+    let stores=crate::inspection::borrow::<SessionStores>(store)?.clone();let key=read(&mut env,&key)?;
     let result = crate::inspection::on_worker("capy-session-read", "Session worker failed", move || {
         let Work::Restore { environment, pending, .. } = &mut task.work else { return Err("Not a session restore".into()); };
         if pending.is_some() {return Err("Session restore already read".into());}
-        let opened = store.load(environment.limits(), &AtomicBool::new(false))?.ok_or("The drawing has no complete session copy")?;
-        let restored = SessionRestore::from_core(opened)?;
+        stores.adopt(id as u64,&key)?;
+        let StoreResult::Restored {session,recovered_previous}=stores.restore(id as u64,environment.limits())?.wait_on_worker()? else {return Err("Unexpected drawing storage reply".into());};
+        let restored = session.ok_or("The drawing has no complete session copy")?;
         let location = serde_json::to_string(&restored.state.location.as_ref().filter(|_|restored.state.destination.is_some())).map_err(error)?;
-        *pending = Some(Box::new((restored,recovered != 0 || store.recovered_previous())));
+        *pending = Some(Box::new((restored,recovered != 0 || recovered_previous)));
         Ok(location)
     });
     crate::android::string(&mut env,result)

@@ -1,34 +1,19 @@
 use super::*;
-use layer_core::package::session_store::{SessionLease, SessionStore, collect_unreferenced_stores, preserve_directory, restore_error, set_restore_error, sync_directory};
-use layer_host::open::OpenEnvironment;
+use layer_core::package::session_store::{SessionLease, collect_unreferenced_stores, preserve_directory, restore_error, set_restore_error, sync_directory};
+use layer_host::{open::OpenEnvironment,session_stores::{SessionStores,StoreResult}};
 use layer_ui::session_recovery::{SessionCapture, SessionDrawing, SessionManifest, SessionReadError, SessionRestore};
 use std::{collections::BTreeMap, path::{Component, Path, PathBuf}, sync::{Arc, Mutex, atomic::AtomicBool}};
 
 pub(crate) struct WindowDisk {
     path: PathBuf,
     _owner: SessionLease,
-    stores: BTreeMap<u64, SessionStore>,
-    metadata: BTreeMap<u64, Vec<u8>>,
+    stores: SessionStores,
     manifest: SessionManifest,
     unpublished: Option<SessionManifest>,
     published_sequence: u64,
 }
 impl WindowDisk {
-    fn drawing_key(&self, id: u64) -> String {
-        self.manifest.drawings.iter().find(|drawing| drawing.id == id).map(|drawing| drawing.key.clone())
-            .or_else(|| self.stores.get(&id).and_then(|store| store.path().file_name()).map(|name| name.to_string_lossy().into_owned()))
-            .unwrap_or_else(|| layer_core::PortableId::random().to_string())
-    }
-    fn store(&mut self, id: u64) -> Result<&mut SessionStore, String> {
-        if !self.stores.contains_key(&id) {
-            let store = SessionStore::open(&self.path.join(self.drawing_key(id)))?;
-            self.stores.insert(id, store);
-        }
-        Ok(self.stores.get_mut(&id).unwrap())
-    }
-    pub(crate) fn make_durable(&mut self, id: u64, tiles: &layer_core::raster_storage::RetainedTiles) -> Result<usize, String> {
-        self.store(id)?.make_durable(tiles, &AtomicBool::new(false))
-    }
+    pub(crate) fn trim(&self,candidates:Vec<(u64,u64,layer_core::raster_storage::RetainedTiles)>,budget:usize)->Result<layer_host::session_stores::StoreReply,String> {Ok(self.stores.trim(candidates,budget))}
     fn finish_restore(&mut self) -> Result<(), String> {
         let Some(previous) = &self.unpublished else { return Ok(()); };
         let path = self.path.join("window.json");
@@ -110,7 +95,7 @@ struct SessionJob {
     open: Option<SessionOpen>,
     disk: Option<Arc<Mutex<WindowDisk>>>,
     environment: Option<OpenEnvironment>,
-    captures: Option<Vec<(u64, SessionCapture)>>,
+    captures: Option<Vec<(u64, SessionCapture,layer_ui::SessionStamp)>>,
     candidates: Vec<(u64, Box<layer_ui::UiSession<layer_host::Renderer>>)>,
     active: u64,
     clean_exit: bool,
@@ -137,7 +122,7 @@ impl SessionJob {
         if self.disk.is_none() {
             let (path, owner, warning) = claim(open)?;
             self.warning = warning.and_then(|text| CString::new(text.replace('\0', " ")).ok());
-            self.disk = Some(Arc::new(Mutex::new(WindowDisk { path, _owner: owner, stores: BTreeMap::new(), metadata: BTreeMap::new(), manifest: SessionManifest::default(), unpublished: None, published_sequence: 0 })));
+            self.disk = Some(Arc::new(Mutex::new(WindowDisk { stores:SessionStores::native(path.clone(),Arc::new(||{})), path, _owner: owner, manifest: SessionManifest::default(), unpublished: None, published_sequence: 0 })));
         }
         self.disk.as_ref().unwrap().lock().unwrap_or_else(|e| e.into_inner()).finish_restore()?;
         let manifest_path = self.manifest_path()?;
@@ -153,7 +138,6 @@ impl SessionJob {
         let disk = self.disk.as_ref().unwrap();
         let mut disk = disk.lock().unwrap_or_else(|e| e.into_inner());
         disk.manifest = manifest.clone();
-        let cancel = AtomicBool::new(false);
         let mut drawings = manifest.drawings.clone();
         if self.append { drawings.retain(|drawing| manifest.blocked.contains(&drawing.id)); }
         drawings.sort_by_key(|drawing| drawing.id != manifest.active);
@@ -173,15 +157,11 @@ impl SessionJob {
             manifest = if self.retry { manifest.retry_restore(drawing.id)? } else { manifest.begin_restore(drawing.id)? };
             manifest.publish(&manifest_path)?;
             let result = (|| -> Result<_, String> {
-                let mut store = match disk.stores.remove(&drawing.id) {
-                    Some(store) => store,
-                    None => SessionStore::open(&disk.path.join(&drawing.key))?,
-                };
-                let core = store.load(environment.limits(), &cancel)?.ok_or("A saved drawing is missing; its editing session has been preserved")?;
-                let restore = SessionRestore::from_core(core)?;
+                disk.stores.adopt(drawing.id,&drawing.key)?;
+                let StoreResult::Restored {session,recovered_previous}=disk.stores.restore(drawing.id,environment.limits())?.wait_on_worker()? else {return Err("Unexpected drawing storage reply".into());};
+                let restore = session.ok_or("A saved drawing is missing; its editing session has been preserved")?;
                 environment.admit_sessions(restored.iter().map(|(_, restore, _): &(_, SessionRestore, _)| &restore.editor).chain(std::iter::once(&restore.editor)))?;
-                let recovered = recovered || store.recovered_previous();
-                disk.stores.insert(drawing.id, store);
+                let recovered = recovered || recovered_previous;
                 Ok((drawing.id, restore, recovered))
             })();
             match result {
@@ -255,25 +235,20 @@ impl SessionJob {
             None => {},
         }
         let cancel = AtomicBool::new(false);
-        let drawings: Vec<_> = captures.iter().map(|(id, _)| SessionDrawing { id: *id, key: disk.drawing_key(*id) }).collect();
+        let drawings = captures.iter().map(|(id,_,_)|Ok(SessionDrawing {id:*id,key:disk.stores.bind(*id,None)?.key().to_owned()})).collect::<Result<Vec<_>,String>>()?;
         let mut manifest = disk.manifest.clone();
         for id in manifest.restoring.clone() { manifest = manifest.finish_restore(id, true)?; }
         let retiring: Vec<_> = disk.manifest.drawings.iter().filter(|drawing| !disk.manifest.blocked.contains(&drawing.id)
             && (self.exclusion == u64::MAX || drawing.id == self.exclusion)).map(|drawing| drawing.id).collect();
         for id in retiring {
-            disk.store(id)?.prepare_retirement()?;
+            disk.stores.bind(id,None)?.on_worker(|store|store.prepare_retirement())?;
         }
         manifest = manifest.stage(drawings.clone(), self.active)?;
         manifest.publish(&disk.path.join("window.json"))?;
         disk.manifest = manifest;
         disk.published_sequence = self.sequence;
-        for (id, capture) in captures {
-            let prepared = capture.prepare(&cancel)?;
-            let metadata = prepared.metadata().to_vec();
-            if disk.metadata.get(&id) != Some(&metadata) {
-                disk.store(id)?.commit(&prepared, &cancel)?;
-                disk.metadata.insert(id, metadata);
-            }
+        for (id, capture,stamp) in captures {
+            if disk.stores.checkpoint_due(id,stamp.clone(),true)? {disk.stores.checkpoint(id,capture,stamp,true)?.wait_on_worker()?;}
         }
         let mut manifest = disk.manifest.clone();
         if self.exclusion == u64::MAX {
@@ -295,12 +270,8 @@ impl SessionJob {
         self.committed = true;
         if self.exclusion != 0 && self.exclusion != u64::MAX { return Ok(()); }
         let cleanup = (|| -> Result<(), String> {
-            let removed: Vec<_> = disk.stores.keys().copied().filter(|id| !manifest.drawings.iter().any(|d| d.id == *id)).collect();
-            for id in removed {
-                disk.stores.get_mut(&id).unwrap().retire()?;
-                disk.stores.remove(&id);
-                disk.metadata.remove(&id);
-            }
+            let removed=disk.stores.bindings().into_iter().filter(|(id,_)|!manifest.drawings.iter().any(|drawing|drawing.id==*id)).map(|(id,_)|id).collect::<Vec<_>>();
+            for id in removed {disk.stores.retire(id)?.wait_on_worker()?;}
             collect_unreferenced_stores(&disk.path, &manifest.drawings.iter().map(|drawing| drawing.key.clone()).collect(), &cancel)?;
             Ok(())
         })();
@@ -344,7 +315,7 @@ pub unsafe extern "C" fn capy_apple_session_capture(app: u64, exclusion: u64, cl
         a.session_capture_sequence = a.session_capture_sequence.checked_add(1).ok_or("Editing session capture sequence exhausted")?;
         let order: Vec<_> = a.window.documents.order().iter().copied().filter(|id| exclusion != u64::MAX && *id != exclusion).collect();
         let active = if order.contains(&a.window.documents.selected()) { a.window.documents.selected() } else { order.first().copied().unwrap_or(0) };
-        let captures = order.into_iter().map(|id| Ok((id, a.window.session(&a.host, id)?.capture_session()?))).collect::<Result<Vec<_>,String>>()?;
+        let captures = order.into_iter().map(|id| {let session=a.window.session(&a.host,id)?;Ok((id,session.capture_session()?,session.session_stamp()))}).collect::<Result<Vec<_>,String>>()?;
         Ok(handles::store(CapySessionTask(Mutex::new(SessionJob {
             open: None, disk: Some(disk), environment: None, captures: Some(captures), candidates: Vec::new(), active, clean_exit, retry: false,
             stamp: a.host.session.session_stamp(), retired: Vec::new(), error: None, restored: false, adopted: false, sequence: a.session_capture_sequence, exclusion, committed: false,
@@ -431,10 +402,10 @@ pub unsafe extern "C" fn capy_apple_session_adopt(app: u64, task: u64) -> i32 {
         a.window.documents.reserve_identities(&reserved)?;
         {
             let mut disk = disk.lock().unwrap_or_else(|e| e.into_inner());
-            disk.stores = std::mem::take(&mut disk.stores).into_iter().map(|(id, store)| (mapping.get(&id).copied().unwrap_or(id), store)).collect();
-            disk.metadata = std::mem::take(&mut disk.metadata).into_iter().map(|(id, value)| (mapping.get(&id).copied().unwrap_or(id), value)).collect();
+            disk.stores.remap(&mapping.iter().map(|(&old,&new)|(old,new)).collect::<Vec<_>>());
             disk.unpublished = (manifest != original || !manifest.restoring.is_empty()).then_some(original);
             disk.manifest = manifest;
+            disk.stores.watch_pressure(a.window.documents.pressure_source());
         }
         a.session_disk = Some(disk);
         job.adopted = true;
@@ -491,3 +462,6 @@ pub unsafe extern "C" fn capy_session_committed(task: u64) -> bool {
 pub unsafe extern "C" fn capy_session_free(task: u64) {
     handles::free::<CapySessionTask>(task);
 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn capy_session_checkpoint_interval_ms()->u64 {SessionStores::checkpoint_interval_ms()}

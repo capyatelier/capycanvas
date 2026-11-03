@@ -438,7 +438,7 @@ mod tests {
         let blobs=retained.try_blobs().unwrap().unwrap();
         let tile=blobs[0].clone();let id=tile.resource_id();let expected=tile.compressed_on_worker().map(|range| range.into_arc()).unwrap();let samples=tile.decode_on_worker().unwrap();
         let weak_tile=Arc::downgrade(&tile);
-        let store=Store::new(&retained);let location=Store::location(&tile);
+        let mut store=Store::new(&retained);let location=Store::location(&tile);
         let prepared=PreparedTransfer::capture(&original,&cancel).unwrap();
         let VerifiedResource::Tile {payload,..}=prepared.descriptor.resources[&id] else {panic!("tile payload")};
         assert_eq!(prepared.payload_len(payload).unwrap(),expected.len() as u64);
@@ -459,7 +459,9 @@ mod tests {
             assert_eq!(restored.resource_id(),id);
             assert_eq!(restored.decode_on_worker().unwrap(),samples);
         }
-        drop(prepared);assert!(weak_tile.upgrade().is_none());assert!(location.upgrade().is_none());
+        drop(prepared);assert!(weak_tile.upgrade().is_none());
+        store.store.collect_garbage().unwrap();
+        assert!(location.upgrade().is_none());
         assert_eq!(&*input,expected.as_ref());
         drop(input);drop(store);
     }

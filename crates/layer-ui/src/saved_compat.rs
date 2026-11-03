@@ -46,7 +46,7 @@ fn generate(directory:&Path)->SessionDocumentState {
         capture.state.camera.zoom_locked=true;capture.state.camera.rotation_locked=true;
         capture.state.unsaved_name=Some("Coverage drawing".into());capture.state.unpublished=true;capture.state.recovered=true;
         let mut store=layer_core::package::session_store::SessionStore::open(&directory.join(key)).unwrap();
-        store.commit(&capture.prepare(&AtomicBool::new(false)).unwrap(),&AtomicBool::new(false)).unwrap();
+        capture.checkpoint(&mut store,&AtomicBool::new(false)).unwrap();
         drop(store);std::fs::remove_file(directory.join(key).join(".lock")).unwrap();
         capture.state
     };

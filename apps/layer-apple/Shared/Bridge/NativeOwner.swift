@@ -9,9 +9,15 @@ private final class MetalLayerLease: @unchecked Sendable {
     init(_ value: CAMetalLayer) { self.value = value }
 }
 
+private final class NativePreparationWake: @unchecked Sendable {
+    let notify: @Sendable () -> Void
+    init(_ notify: @escaping @Sendable () -> Void) { self.notify = notify }
+}
+
 private struct NativeOwnerCleanup: @unchecked Sendable {
     let handle: UInt64?
     let layer: CAMetalLayer?
+    let wake: NativePreparationWake?
 }
 
 private final class LanguageJob: @unchecked Sendable {
@@ -97,6 +103,7 @@ final class NativeOwner: @unchecked Sendable {
     private var scopesReceived: (@Sendable (ScopeUpdate) -> Void)?
     private var scopesBusy = false
     private var handle: UInt64?
+    private var preparationWake: NativePreparationWake?
     private let platform: UInt32
     private var launchConfiguration: NativeLaunch?
     private var launchFailure: String?
@@ -239,6 +246,12 @@ final class NativeOwner: @unchecked Sendable {
             launchFailure = launchError ?? "Native session initialization failed"
             throw HostFailure(message: launchFailure!)
         }
+        let wake = NativePreparationWake { [receive] in receive(nil, nil) }
+        preparationWake = wake
+        try check(capy_apple_set_wake(nativeValue(handle), Unmanaged.passUnretained(wake).toOpaque(), { context in
+            guard let context else { return }
+            Unmanaged<NativePreparationWake>.fromOpaque(context).takeUnretainedValue().notify()
+        }))
         launchFailure = nil
         launchConfiguration = nil
         if let workspaceStart { _ = try request(6, workspaceStart) }
@@ -247,12 +260,13 @@ final class NativeOwner: @unchecked Sendable {
         gpuHealth?.cancel()
         persistence.unsubscribe(observerID)
         trace?.finish()
-        let cleanup = NativeOwnerCleanup(handle: handle, layer: layer)
+        let cleanup = NativeOwnerCleanup(handle: handle, layer: layer, wake: preparationWake)
         queue.finish {
             (cleanup.layer as? ObservedMetalLayer)?.frameRate = nil
+            _ = capy_apple_set_wake(nativeValue(cleanup.handle), nil, nil)
             capy_apple_detach(nativeValue(cleanup.handle))
             capy_apple_destroy(nativeValue(cleanup.handle))
-            withExtendedLifetime(cleanup.layer) {}
+            withExtendedLifetime((cleanup.layer, cleanup.wake)) {}
         }
     }
     private func check(_ result: Int32) throws {

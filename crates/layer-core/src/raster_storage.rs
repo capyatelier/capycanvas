@@ -46,6 +46,12 @@ impl From<Arc<[u8]>> for Bytes {
     }
 }
 impl Bytes {
+    #[cfg(not(target_arch="wasm32"))]
+    pub(crate) fn stored(location:Arc<crate::package::session_store::StoreLocation>)->Self {
+        let integrity=crate::authored::IntegrityCache::default();
+        integrity.seed(crate::authored::EncodedIntegrity {bytes:location.length,crc32:location.crc}).unwrap();
+        Self {len:location.length as usize,value:Mutex::new(Value::Store(location)),integrity}
+    }
     pub(crate) fn integrity(&self, cancelled:&std::sync::atomic::AtomicBool) -> Result<crate::authored::EncodedIntegrity,String> {
         self.integrity.get_or_compute(cancelled,||self.read_on_worker().map(crate::package::ByteRange::into_arc))
     }
@@ -449,7 +455,7 @@ pub(crate) mod tests {
         let identity = first.owner_identity();
         let retained = RetainedTiles { sources: vec![first.clone()], ..Default::default() };
         assert_eq!(resident_tile_bytes([&retained, &retained]), original.len());
-        let _store = Store::new(&retained);
+        let mut store = Store::new(&retained);
         assert_eq!(first.owner_identity(), identity);
         assert_eq!(retained.resident_bytes(), 0);
         let location = Store::location(&first);
@@ -458,6 +464,7 @@ pub(crate) mod tests {
         assert_eq!(first.decode_on_worker().unwrap(), vec![42; 256 * 256 * 4]);
         assert_eq!(retained.resident_bytes(), 0);
         drop(retained); drop(first);
+        store.store.collect_garbage().unwrap();
         assert!(location.upgrade().is_none());
         assert_eq!(&range[..], original.as_ref());
     }
@@ -593,6 +600,7 @@ pub(crate) mod tests {
         assert!(weak.upgrade().is_some());
         assert_eq!(second.decode_on_worker().unwrap(), vec![12; 256 * 256 * 4]);
         drop(second);
+        store.store.collect_garbage().unwrap();
         assert!(weak.upgrade().is_none());
         drop(store);
     }

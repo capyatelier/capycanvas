@@ -74,6 +74,10 @@ impl<T: ?Sized> Resource<T> {
     pub(crate) fn encoded_digest(&self,cancelled:&AtomicBool,bytes:impl FnOnce()->Result<Arc<[u8]>,String>)->Result<[u8;32],String> {
         self.owner.integrity.digest(cancelled,bytes)
     }
+    #[cfg(not(target_arch="wasm32"))]
+    pub(crate) fn weak_owner(&self)->std::sync::Weak<dyn Send+Sync> where T:Send+Sync+'static {
+        let owner:Arc<dyn Send+Sync>=self.owner.clone();Arc::downgrade(&owner)
+    }
     pub fn storage(&self) -> &Arc<T> { &self.owner.value }
     pub fn same_owner(&self, other: &Self) -> bool { Arc::ptr_eq(&self.owner, &other.owner) }
     pub fn owner_identity(&self)->usize {Arc::as_ptr(&self.owner) as usize}

@@ -62,7 +62,7 @@ import UIKit
     private func schedule() {
         guard !closed, !restoring, !restoreFailed, scheduled == nil, !saving, store?.native?.sessions != nil else { return }
         scheduled = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            do { try await Task.sleep(for: .milliseconds(capy_session_checkpoint_interval_ms())) } catch { return }
             guard let self else { return }
             self.scheduled = nil
             self.write()

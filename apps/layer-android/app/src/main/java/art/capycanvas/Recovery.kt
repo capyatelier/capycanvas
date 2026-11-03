@@ -13,7 +13,7 @@ internal class RecoveryController(private val host: CanvasHost) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val storage = Mutex()
     private val publication = Mutex()
-    private class Owner(val key: String) { var stamp = "" }
+    private class Owner(val key: String)
     private val owners = mutableMapOf<Long, Owner>()
     private var held: SessionOwners.Held? = null
     private val retained = mutableListOf<SessionOwners.Held>()
@@ -46,23 +46,13 @@ internal class RecoveryController(private val host: CanvasHost) {
         manifest = next
         if(event.getString("type") == "reconcile")withContext(Dispatchers.IO) {Native.sessionCollect(checkNotNull(held).path.absolutePath,keys(manifest))}
     }
-    private suspend fun store(path: File): Long = withContext(NonCancellable) {
-        stores[path.absolutePath] ?: withContext(Dispatchers.IO) {Native.sessionStoreOpen(path.absolutePath)}
-            .also {stores[path.absolutePath] = it}
+    suspend fun storeCoordinator():Long = withContext(NonCancellable+Dispatchers.Main.immediate) {
+        val path=checkNotNull(held).path.absolutePath
+        val stores=stores[path] ?: Native.sessionStoresOpen(path).also {stores[path]=it}
+        host.withNative {Native.sessionWatchPressure(it,stores)}
+        stores
     }
-    suspend fun makeDurable(id: Long, task: Long) {
-        if (!owners.containsKey(id)) ensureOwners()
-        storage.withLock {
-            val owner = checkNotNull(owners[id]) { "The drawing has no editing session" }
-            val backing = store(File(checkNotNull(held).path, owner.key))
-            withContext(NonCancellable + Dispatchers.IO) { Native.documentSpillWork(task, backing) }
-        }
-    }
-    suspend fun ensureOwners() {
-        if (!started || restoring) return
-        val view = JSONObject(host.drawingTabs.query(obj("op" to "view")))
-        for (tab in view.array("tabs").objects()) owners.getOrPut(tab.getLong("id")) { Owner(UUID.randomUUID().toString()) }
-    }
+    private suspend fun bind(id:Long,key:String? = null):String = Native.sessionBind(storeCoordinator(),id,key)
     fun start() {
         if (started || closed) return
         started = true
@@ -94,10 +84,9 @@ internal class RecoveryController(private val host: CanvasHost) {
                     catch(e:Exception) { preserveFailed(abandoned);reportFailure(e,true) }
                 }
                 restoring = false
-                ensureOwners()
                 capture()?.join()
                 ready = true
-                if(!closed)polling = scope.launch {while (!closed) { delay(2_000); capture()?.join() }}
+                if(!closed)polling = scope.launch {while (!closed) { delay(Native.sessionCheckpointInterval()); capture(false)?.join() }}
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { restoring = false; ready = true; reportFailure(e) }
             finally {restoring=false}
@@ -109,20 +98,20 @@ internal class RecoveryController(private val host: CanvasHost) {
         held = withContext(Dispatchers.IO) { checkNotNull(claim(File(directory, UUID.randomUUID().toString()))) }
         manifest = ""; owners.clear()
     }
-    private suspend fun save(cleanExit: Boolean): Boolean = storage.withLock {
+    private suspend fun save(cleanExit: Boolean,force:Boolean = true): Boolean = storage.withLock {
         val view = JSONObject(host.drawingTabs.query(obj("op" to "view")))
         val drawings = org.json.JSONArray(view.array("tabs").objects().map {
             val id = it.getLong("id")
-            obj("id" to id, "key" to owners.getOrPut(id) { Owner(UUID.randomUUID().toString()) }.key)
+            obj("id" to id, "key" to bind(id).also {key ->owners.getOrPut(id) {Owner(key)}})
         })
         writeManifest(obj("type" to "stage", "drawings" to drawings, "active" to view.getLong("selected")))
         for (tab in view.array("tabs").objects()) {
-            val id = tab.getLong("id"); val owner = owners.getValue(id)
+            val id = tab.getLong("id")
             val stamp = host.withNative { Native.sessionStamp(it, id) }
-            if (owner.stamp == stamp) continue
+            if(!Native.sessionCheckpointNeeded(storeCoordinator(),id,stamp,force))continue
             val task = host.withNative { Native.sessionCapture(it, id) }
             if(task == 0L)return@withLock false
-            try { val backing = store(File(checkNotNull(held).path, owner.key)); withContext(Dispatchers.IO) { Native.sessionCommit(task, backing) }; owner.stamp = stamp }
+            try { val backing = storeCoordinator(); withContext(Dispatchers.IO) { Native.sessionCommit(task, backing,id) } }
             finally { withContext(NonCancellable + Dispatchers.IO) { Native.sessionFree(task) } }
         }
         val members = JSONObject(manifest).array("drawings")
@@ -131,11 +120,11 @@ internal class RecoveryController(private val host: CanvasHost) {
             "active" to view.getLong("selected"), "clean_exit" to cleanExit))
         true
     }
-    fun capture(): Job? {
+    fun capture(force:Boolean = true): Job? {
         checkpoint?.takeIf { it.isActive }?.let { return it }
         if (!started || closed || backgrounded || restoring || held == null || host.drawingTabs.switching) return null
         return scope.launch {
-            try { save(false) }
+            try { save(false,force) }
             catch (e: CancellationException) { throw e }
             catch (e: Exception) {reportFailure(e)}
         }.also { checkpoint = it }
@@ -159,9 +148,7 @@ internal class RecoveryController(private val host: CanvasHost) {
         catch (e: Exception) {reportFailure(e);false}
     }
     suspend fun remove(id: Long): Unit = storage.withLock {
-        owners[id]?.let {owner -> stores[File(checkNotNull(held).path,owner.key).absolutePath] }?.let {backing ->
-            withContext(Dispatchers.IO) {Native.sessionStorePrepareRetirement(backing)}
-        }
+        if(owners.containsKey(id))withContext(Dispatchers.IO) {Native.sessionStorePrepareRetirement(storeCoordinator(),id)}
         try {writeManifest(obj("type" to "remove", "id" to id))}
         catch(e:PublicationFailure) {
             if(!e.published)throw e
@@ -170,13 +157,8 @@ internal class RecoveryController(private val host: CanvasHost) {
         Unit
     }
     suspend fun closed(id: Long): Unit = storage.withLock {
-        owners.remove(id)?.let {owner ->
-            stores.remove(File(checkNotNull(held).path,owner.key).absolutePath)?.let {backing ->
-                try {withContext(Dispatchers.IO) {Native.sessionStoreRetire(backing)}}
-                catch(e:Exception) {reportFailure(e)}
-                finally {withContext(NonCancellable+Dispatchers.IO) {Native.sessionStoreFree(backing)}}
-            }
-        }
+        if(owners.remove(id)!=null)try {withContext(Dispatchers.IO) {Native.sessionStoreRetire(storeCoordinator(),id)}}
+        catch(e:Exception) {reportFailure(e)}
         Unit
     }
     private suspend fun restoreAll(retry: Boolean = false): Boolean {
@@ -199,7 +181,7 @@ internal class RecoveryController(private val host: CanvasHost) {
         var appended = false
         val ids = mutableMapOf<Long,Long>()
         val pendingPoll = scope.launch {
-            while(!closed) { delay(2_000); capture()?.join() }
+            while(!closed) { delay(Native.sessionCheckpointInterval()); capture(false)?.join() }
         }
         working = true
         try {
@@ -214,9 +196,9 @@ internal class RecoveryController(private val host: CanvasHost) {
                     attempt = JSONObject(manifest).array("restoring").objects().first {it.getLong("id") == id}.copy()
                     if(!adopted)host.drawingTabs.waitReady(settle={closed})
                     task = withContext(NonCancellable) {host.withNative {Native.sessionRestoreTask(it,if(retry)"null" else startupStamp)}}
-                    val backing = store(File(source.path,row.getString("key")))
+                    val backing = storeCoordinator()
                     withContext(Dispatchers.IO) {
-                        val location = Native.sessionRead(task,backing,!original.getBoolean("clean_exit"))
+                        val location = Native.sessionRead(task,backing,id,row.getString("key"),!original.getBoolean("clean_exit"))
                         val observed = host.documents.observeDestination(location.takeUnless {it == "null"}?.let {JSONObject(it).getString("uri")},task)
                         Native.sessionPrepare(task,id,observed)
                     }
@@ -227,6 +209,7 @@ internal class RecoveryController(private val host: CanvasHost) {
                         ids[id] = result.getJSONObject("ids").getLong(id.toString())
                         adopted = true
                     } else ids[id] = host.withNative {Native.sessionHydrate(it,task,id)}
+                    bind(ids.getValue(id),row.getString("key"))
                     owners[ids.getValue(id)] = Owner(row.getString("key"))
                     writeManifest(obj("type" to "finish_restore","attempt" to attempt,"success" to true))
                     if(!appended) {restoring = false;ready = true}
@@ -280,9 +263,7 @@ internal class RecoveryController(private val host: CanvasHost) {
                         host.drawingTabs.waitReady()
                         host.withNative {Native.sessionRequireEmptyRetry(it)}
                         for(id in JSONObject(manifest).array("drawings").objects().map {it.getLong("id")}) {
-                            owners[id]?.let {owner ->store(File(current.path,owner.key))}?.let {backing ->
-                                withContext(Dispatchers.IO) {Native.sessionStorePrepareRetirement(backing)}
-                            }
+                            if(owners.containsKey(id))withContext(Dispatchers.IO) {Native.sessionStorePrepareRetirement(storeCoordinator(),id)}
                             writeManifest(obj("type" to "remove","id" to id))
                         }
                         previous = manifest
@@ -294,7 +275,6 @@ internal class RecoveryController(private val host: CanvasHost) {
                     if(current !== preserved) {
                         retained.remove(preserved)
                         if(current !in retained)retained.add(current)
-                        owners.values.forEach {it.stamp = ""}
                     }
                     if(restoreAll(true)) {
                         if(held === preserved)retained.remove(preserved)
@@ -328,7 +308,6 @@ internal class RecoveryController(private val host: CanvasHost) {
                     withContext(Dispatchers.IO) {
                         val copies = if(current) rows.map {File(path,it.getString("key"))} else path.listFiles().orEmpty().filter {it.isDirectory}
                         for(copy in copies) {
-                            stores.remove(copy.absolutePath)?.let(Native::sessionStoreFree)
                             Native.sessionPrepareRetirement(copy.absolutePath)
                         }
                     }
@@ -357,7 +336,7 @@ internal class RecoveryController(private val host: CanvasHost) {
                 } catch(e:Exception) {reportFailure(e)}
             } finally {
                 try {withContext(NonCancellable) {storage.withLock {withContext(Dispatchers.IO) {
-                    try {stores.values.forEach(Native::sessionStoreFree)}
+                    try {stores.values.forEach(Native::sessionStoresFree)}
                     finally {try {held?.close()}finally {retained.forEach {it.close()}}}
                 }}}} finally {try {after()}finally {scope.cancel()}}
             }

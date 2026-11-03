@@ -1,12 +1,12 @@
 use super::{ByteRange, ByteSource, ImmutableBacking, RangeState, MAX_RANGE_BYTES,
-    resources::Payload, session::{OpenSession, PreparedSession}};
+    resources::Payload, session::OpenSession};
 use crate::{PortableId, ProjectLimits};
 use crate::tile_io::{ReadCache, ReadSource, RangeReader, ReadCompletion, read_buffer, read_exact_at};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::{BTreeMap, BTreeSet}, fs::{self, File, OpenOptions},
     io::{BufWriter, Read, Write}, path::{Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock, Weak, atomic::{AtomicBool, Ordering}}};
+    sync::{Arc, Mutex, OnceLock, Weak, atomic::{AtomicBool, AtomicU64, Ordering}}};
 
 #[derive(Debug)]
 pub struct AtomicReplaceError { pub published: bool, pub error: String }
@@ -17,7 +17,7 @@ impl From<&str> for AtomicReplaceError {
     fn from(error: &str) -> Self { error.to_string().into() }
 }
 
-pub struct OwnerLock { _file: File, readers: Mutex<Vec<Weak<ResourceFile>>>, packs:Mutex<BTreeMap<PortableId,Weak<PackFile>>> }
+pub struct OwnerLock { _file:File, packs:Mutex<BTreeMap<PortableId,Weak<Pack>>> }
 impl OwnerLock {
     pub fn claim(path: &Path) -> Result<Option<Self>, String> {
         let mut options = OpenOptions::new();
@@ -45,7 +45,7 @@ impl OwnerLock {
             Err(fs::TryLockError::Error(error)) => return Err(error.to_string()),
         };
         if !owned {return Ok(None);}
-        Ok(Some(Self { _file: file, readers: Mutex::new(Vec::new()), packs:Default::default() }))
+        Ok(Some(Self { _file:file,packs:Default::default() }))
     }
 }
 impl Drop for OwnerLock {
@@ -234,7 +234,6 @@ struct PackedGeneration {
     format: String,
     version: u32,
     session: serde_json::Value,
-    locations: BTreeMap<PortableId, PackRange>,
     extents: BTreeMap<PortableId, u64>,
 }
 struct StoredGeneration {
@@ -248,35 +247,21 @@ impl StoredGeneration {
         if value["format"] != "capy.session.packed" {
             return Ok(Self { metadata: bytes.into(), locations: None, extents: BTreeMap::new() });
         }
-        if value["version"] != 1 { return Err(super::session::OpenFailure::Unsupported("Unsupported packed recovery format".into())); }
-        let packed: PackedGeneration = serde_json::from_value(value).map_err(|e| e.to_string())?;
-        let metadata = serde_json::to_vec(&packed.session).map_err(|e| e.to_string())?;
-        let index = resource_index(&metadata, limits)?;
-        if packed.locations.len() != index.records.len() { return Err("Recovery pack inventory disagrees with metadata".into()); }
-        let mut ranges = BTreeMap::<PortableId, BTreeMap<u64, (u64, u32, [u8; 32])>>::new();
-        let mut aliases = BTreeMap::new();
-        let mut referenced = BTreeSet::new();
-        for record in index.records {
-            let location = packed.locations.get(&record.id).ok_or("Missing recovery pack location")?;
-            let extent = *packed.extents.get(&location.pack).ok_or("Missing recovery pack extent")?;
-            if extent == 0 || location.offset.checked_add(record.length).is_none_or(|end| end > extent) { return Err("Recovery range exceeds committed pack extent".into()); }
-            referenced.insert(location.pack);
-            if record.length == 0 { continue; }
-            if let Some((pack, offset)) = aliases.insert(record.offset, (location.pack, location.offset))
-                && (pack, offset) != (location.pack, location.offset) { return Err("Conflicting recovery pack alias locations".into()); }
-            let ranges = ranges.entry(location.pack).or_default();
-            if let Some(previous) = ranges.insert(location.offset, (record.length, record.crc, record.descriptor))
-                && previous != (record.length, record.crc, record.descriptor) { return Err("Conflicting recovery pack aliases".into()); }
+        if value["version"] != 2 {return Err(super::session::OpenFailure::Unsupported("Unsupported packed recovery format".into()));}
+        let packed:PackedGeneration=serde_json::from_value(value).map_err(|error|error.to_string())?;
+        let metadata=serde_json::to_vec(&packed.session).map_err(|error|error.to_string())?;
+        let index=resource_index(&metadata,limits)?;
+        let mut locations=BTreeMap::new();let mut referenced=BTreeSet::new();
+        for (record,value) in index.records.iter().zip(packed.session["resources"].as_array().unwrap()) {
+            let name=value["location"]["pack"].as_str().ok_or("Missing recovery pack identity")?;
+            let pack=parse_pack(name)?;
+            let extent=*packed.extents.get(&pack).ok_or("Missing recovery pack extent")?;
+            if extent==0 || record.offset.checked_add(record.length).is_none_or(|end|end>extent) {return Err("Recovery range exceeds committed pack extent".into());}
+            locations.insert(record.id,PackRange {pack,offset:record.offset});referenced.insert(pack);
         }
-        if referenced.len() != packed.extents.len() { return Err("Unreferenced recovery pack extent".into()); }
-        for ranges in ranges.values() {
-            let mut end = 0;
-            for (&offset, &(length, _, _)) in ranges {
-                if offset < end { return Err("Overlapping recovery pack ranges".into()); }
-                end = offset.checked_add(length).ok_or("Recovery pack range overflow")?;
-            }
-        }
-        Ok(Self { metadata, locations: Some(packed.locations), extents: packed.extents })
+        if referenced.len()!=packed.extents.len() {return Err("Unreferenced recovery pack extent".into());}
+
+        Ok(Self {metadata,locations:Some(locations),extents:packed.extents})
     }
 }
 fn parse_head(bytes: &[u8]) -> Result<Head, String> {
@@ -289,18 +274,100 @@ fn parse_head(bytes: &[u8]) -> Result<Head, String> {
     Ok(head)
 }
 
+fn parse_pack(name:&str)->Result<PortableId,String> {
+    name.strip_prefix("packs/").and_then(|name|name.strip_suffix(".bin")).ok_or("Invalid recovery pack identity")?.parse().map_err(str::to_string)
+}
+fn same_profiles(a:&[crate::color::ColorProfile],b:&[crate::color::ColorProfile])->bool {
+    a.len()==b.len() && a.iter().zip(b).all(|(a,b)|match (a,b) {
+        (crate::color::ColorProfile::Builtin(a),crate::color::ColorProfile::Builtin(b))=>a==b,
+        (crate::color::ColorProfile::Icc(a),crate::color::ColorProfile::Icc(b))=>a.same_owner(b),_=>false,
+    })
+}
+fn update_session_metadata(bytes:&[u8],metadata:&serde_json::Value)->Result<Vec<u8>,String> {
+    use serde_json::value::RawValue;
+    #[derive(Deserialize)]
+    struct Packed<'a> {#[serde(borrow)]format:&'a str,version:u32,#[serde(borrow)]session:&'a RawValue,#[serde(borrow)]extents:&'a RawValue}
+    #[derive(Serialize)]
+    struct Updated<'a> {format:&'a str,version:u32,session:BTreeMap<&'a str,&'a RawValue>,extents:&'a RawValue}
+    let packed:Packed<'_>=serde_json::from_slice(bytes).map_err(|error|error.to_string())?;
+    let mut session:BTreeMap<&str,&RawValue>=serde_json::from_str(packed.session.get()).map_err(|error|error.to_string())?;
+    let metadata=serde_json::value::to_raw_value(metadata).map_err(|error|error.to_string())?;
+    session.insert("metadata",&metadata);
+    serde_json::to_vec(&Updated {format:packed.format,version:packed.version,session,extents:packed.extents}).map_err(|error|error.to_string())
+}
+mod record;
+use record::StoredRecord;
+struct IndexedResource {record:StoredRecord,location:Arc<StoreLocation>,owner:Option<Weak<dyn Send+Sync>>}
+#[derive(Clone)]
+struct StoreInput {
+    id:PortableId,record:StoredRecord,payload:Payload,length:u64,crc:u32,descriptor:[u8;32],owner:Weak<dyn Send+Sync>,
+}
+impl StoreInput {
+    fn entry(entry:&super::resources::ResourceEntry,cancelled:&AtomicBool)->Result<Self,String> {
+        if let Payload::Tile(tile)=&entry.payload {
+            let integrity=tile.compressed.integrity(cancelled)?;
+            let record=StoredRecord::tile(tile.resource_id(),tile.descriptor)?;
+            let descriptor=match tile.compressed.location()? {Some(location)=>location.descriptor,None=>record.fingerprint(integrity.bytes,integrity.crc32)?};
+            return Ok(Self {id:tile.resource_id(),record,payload:entry.payload.clone(),length:integrity.bytes,crc:integrity.crc32,descriptor,owner:entry.payload.weak_owner()});
+        }
+        let (record,integrity)=entry.store_record(cancelled)?;Self::new(record,entry.payload.clone(),integrity.bytes,integrity.crc32)
+    }
+    fn opaque(resource:Arc<crate::authored::OpaqueResource>)->Result<Self,String> {
+        Self::new(resource.record(serde_json::Value::Null),Payload::Opaque(resource.clone()),resource.length,resource.crc32)
+    }
+    fn new(record:serde_json::Value,payload:Payload,length:u64,crc:u32)->Result<Self,String> {
+        let descriptor=resource_descriptor(&record)?;let record=StoredRecord::parse(record)?;let owner=payload.weak_owner();
+        Ok(Self {id:payload.id(),record,payload,length,crc,descriptor,owner})
+    }
+    fn owner_key(&self)->(u8,usize) {
+        let kind=match self.payload {Payload::Tile(_)=>0,Payload::Bytes(_)=>1,Payload::Code(_)=>2,Payload::Encoded(_)=>3,Payload::Vector(_)=>4,Payload::Opaque(_)=>5};
+        (kind,self.owner.as_ptr() as *const () as usize)
+    }
+}
+#[derive(Clone)]
+pub struct DrawingStore(Arc<DrawingStoreInner>);
+struct DrawingStoreInner {key:String,path:PathBuf,writer:Mutex<Option<SessionStore>>}
+impl DrawingStore {
+    pub fn new(root:&Path,key:Option<&str>)->Result<Self,String> {
+        let key=key.map(str::to_owned).unwrap_or_else(||PortableId::random().to_string());
+        if key.is_empty() || key.len()>128 || !key.bytes().all(|byte|byte.is_ascii_alphanumeric() || byte==b'-' || byte==b'_') {return Err("Invalid session drawing key".into());}
+        Ok(Self(Arc::new(DrawingStoreInner {path:root.join(&key),key,writer:Mutex::new(None)})))
+    }
+    pub fn key(&self)->&str {&self.0.key}
+    pub fn path(&self)->&Path {&self.0.path}
+    pub fn on_worker<T>(&self,work:impl FnOnce(&mut SessionStore)->Result<T,String>)->Result<T,String> {
+        let mut writer=self.0.writer.lock().map_err(|_|"Drawing writer failed")?;
+        if writer.is_none() {*writer=Some(SessionStore::open(&self.0.path)?);}
+        work(writer.as_mut().unwrap())
+    }
+}
+
+#[derive(PartialEq)]
+struct CheckpointKey {checkpoint:crate::authored::CaptureCheckpoint,context:Option<crate::authored::EvaluationContext>,next:u64,stroke:u64,undo:Vec<u64>,redo:Vec<u64>}
+impl CheckpointKey {
+    fn of(capture:&super::session::EditorCapture)->Self {
+        let artwork=&capture.artwork.artwork;
+        let context=artwork.outputs.get(artwork.default_output).map(|output| {let mut context=output.context.clone();context.elapsed=0.;context});
+        Self {checkpoint:capture.captured_checkpoint,context,next:capture.next_checkpoint,stroke:capture.document.next_stroke_id,undo:capture.undo.iter().map(|(_,id)|*id).collect(),redo:capture.redo.iter().map(|(_,id)|*id).collect()}
+    }
+}
+struct PublishedCapture {key:CheckpointKey,profiles:Vec<crate::color::ColorProfile>,generation:PortableId}
 pub struct SessionStore {
     path: PathBuf,
     _owner: Arc<OwnerLock>,
     _writer: Arc<()>,
     head: Option<Head>,
     loaded: Option<Generation>,
-    verified: BTreeMap<PortableId, (u64, u32, [u8; 32])>,
+    index:BTreeMap<PortableId,IndexedResource>,
+    by_owner:BTreeMap<(u8,usize),PortableId>,
+    append:Option<(PortableId,u64)>,
     programs: BTreeMap<PortableId, super::TrustedPrograms>,
-    live: BTreeMap<PortableId, Weak<StoreLocation>>,
     reads: crate::tile_io::ReadCache,
-    packs:BTreeMap<PortableId,Arc<StorePack>>,
+    generation_roots:BTreeMap<PortableId,(Generation,GenerationRoots)>,
+    published_capture:Option<PublishedCapture>,
 }
+#[derive(Clone,Default)]
+struct GenerationRoots {resources:BTreeSet<PortableId>,packs:BTreeSet<PortableId>,identities:BTreeSet<PortableId>}
 struct StoreRoots {
     generations: BTreeSet<PortableId>,
     resources: BTreeSet<PortableId>,
@@ -346,7 +413,15 @@ impl SessionStore {
         create_directory(&path.join("packs"))?;
         let head = read_optional(&path.join("head.json"), 1024)?.map(|bytes| parse_head(&bytes)).transpose()?;
         let mut store = Self { path: path.into(), _owner: owner, _writer: writer, head, loaded: None,
-            verified: BTreeMap::new(), programs: BTreeMap::new(), live: BTreeMap::new(), reads, packs:BTreeMap::new() };
+            index:BTreeMap::new(),by_owner:BTreeMap::new(),append:None,programs:BTreeMap::new(),reads,generation_roots:BTreeMap::new(),published_capture:None };
+        if let Some(head)=store.head.clone() {
+            for generation in std::iter::once(&head.current).chain(head.previous.as_ref()) {
+                if let Ok(bytes)=store.generation_metadata(generation,ProjectLimits::default().metadata_bytes)
+                    && let Ok(stored)=StoredGeneration::parse(&bytes,ProjectLimits::default()) {
+                    store.recover_append(&stored.extents);break;
+                }
+            }
+        }
         match store.resource_roots() {
             Ok(roots) => store.collect_roots(roots)?,
             Err(_) => {
@@ -362,251 +437,186 @@ impl SessionStore {
     pub fn generation(&self) -> Option<PortableId> { self.head.as_ref().map(|head| head.current.id) }
     pub fn loaded_generation(&self) -> Option<PortableId> { self.loaded.as_ref().map(|loaded| loaded.id) }
     pub fn recovered_previous(&self) -> bool { self.loaded_generation().is_some_and(|loaded| Some(loaded) != self.generation()) }
-    pub fn commit(&mut self, prepared: &PreparedSession, cancelled: &AtomicBool) -> Result<PortableId, String> {
-        self.commit_using(prepared, cancelled, AtomicPublication)
+    pub fn checkpoint(&mut self,capture:&super::session::EditorCapture,metadata:super::session::SessionMetadata,cancelled:&AtomicBool)->Result<PortableId,String> {
+        self.checkpoint_using(capture,metadata,cancelled,AtomicPublication)
     }
-    fn commit_using(&mut self, prepared: &PreparedSession, cancelled: &AtomicBool, mut publication: impl Publication) -> Result<PortableId, String> {
-        check_cancelled(cancelled)?;
-        self.validate_layout()?;
-        if retired_store(&self.path)? { return Err("This drawing's session copy was retired".into()); }
-        self.refresh_head()?;
-        for entry in &prepared.resources().entries {
-            if let Payload::Tile(tile)=&entry.payload
-                && let Some(location)=tile.compressed.location()?
-                && Arc::ptr_eq(&location.pack.root._owner,&self._owner) {
-                let integrity=(location.length,location.crc,location.descriptor);
-                if self.verified.get(&tile.resource_id()).is_some_and(|previous|*previous!=integrity) {return Err("Conflicting immutable recovery resource descriptor".into());}
-                self.packs.entry(location.pack.root.id).or_insert_with(||location.pack.clone());
-                self.live.insert(tile.resource_id(),Arc::downgrade(&location));
-                self.verified.insert(tile.resource_id(),integrity);
-            }
-        }
-        if let Ok(roots) = self.resource_roots() { self.collect_roots(roots)?; }
-        let index = resource_index(prepared.metadata(), ProjectLimits::default())?;
-        let entries: BTreeMap<_, _> = prepared.resources().entries.iter().map(|entry| (entry.payload.id(), entry)).collect();
-        if entries.len() != index.records.len() { return Err("Recovery resource inventory disagrees with metadata".into()); }
-        let (mut locations, mut extents, mut known) = self.live_locations();
-        if let Some(head) = &self.head {
-            let retained = self.loaded.as_ref().unwrap_or(&head.current);
-            for generation in std::iter::once(retained).chain(head.previous.as_ref().filter(|previous| retained.id == head.current.id && previous.id != retained.id)) {
-                let stored = self.generation_metadata(generation, ProjectLimits::default().metadata_bytes)
-                    .and_then(|bytes| StoredGeneration::parse(&bytes, ProjectLimits::default()).map_err(|e| e.message()));
-                let stored = match stored { Ok(stored) => stored, Err(_) if generation.id != retained.id => continue, Err(error) => return Err(error) };
-                for record in resource_index(&stored.metadata, ProjectLimits::default())?.records {
-                    let integrity = (record.length, record.crc, record.descriptor);
-                    if self.verified.get(&record.id).is_some_and(|previous| *previous != integrity) { return Err("Conflicting immutable recovery resource descriptor".into()); }
-                    if known.insert(record.id, integrity).is_some_and(|previous| previous != integrity) { return Err("Conflicting immutable recovery resource descriptor".into()); }
-                }
-                if let Some(previous) = stored.locations {
-                    for (id, location) in previous { locations.entry(id).or_insert(location); }
-                    for (id, extent) in stored.extents { extents.entry(id).and_modify(|current|*current=(*current).max(extent)).or_insert(extent); }
-                }
-            }
-        }
-        let mut pending = Vec::new();
-        let aliases = index.records.iter().filter(|record| record.length != 0).filter_map(|record| locations.get(&record.id).map(|location| (record.offset, location.clone()))).collect::<BTreeMap<_, _>>();
-        let mut pending_offsets = BTreeSet::new();
-        for record in &index.records {
-            check_cancelled(cancelled)?;
-            let entry = entries.get(&record.id).ok_or("Missing recovery resource payload")?;
-            if entry.bytes != record.length || entry.crc != record.crc || resource_descriptor(&entry.record)? != record.descriptor {
-                return Err("Recovery resource integrity disagrees with metadata".into());
-            }
-            if let Some(verified) = self.verified.get(&record.id)
-                && *verified != (record.length, record.crc, record.descriptor) { return Err("Conflicting immutable recovery resource descriptor".into()); }
-            if known.get(&record.id).is_some_and(|previous| *previous != (record.length, record.crc, record.descriptor)) { return Err("Conflicting immutable recovery resource descriptor".into()); }
-            if let Some(location) = locations.get(&record.id).or_else(|| aliases.get(&record.offset)).cloned() {
-                if !self.verified.contains_key(&record.id) {
-                    let file = File::open(self.pack_path(location.pack)).map_err(|e| e.to_string())?;
-                    verify_range(&file, location.offset, record, cancelled)?;
-                    verify_payload(file, location.offset, &entry.payload, record.length, cancelled)?;
-                    self.verified.insert(record.id, (record.length, record.crc, record.descriptor));
-                }
-                locations.insert(record.id, location);
-            } else if record.length == 0 || pending_offsets.insert(record.offset) { pending.push(record); }
-        }
-        pending.sort_by_key(|record| index.spatial.get(&record.id).map_or((1, 0, 0, record.id), |coordinate| (0, coordinate[1], coordinate[0], record.id)));
-        self.append_resources(&pending, &entries, &mut locations, &mut extents, cancelled, &mut publication)?;
-        locations.retain(|id, _| entries.contains_key(id));
-        let mut aliases = BTreeMap::new();
-        for record in &index.records {
-            if record.length == 0 { continue; }
-            if let Some(location) = aliases.get(&record.offset) {
-                let location: &PackRange = location;
-                if !self.verified.contains_key(&record.id) {
-                    verify_payload(File::open(self.pack_path(location.pack)).map_err(|e| e.to_string())?, location.offset,
-                        &entries[&record.id].payload, record.length, cancelled)?;
-                    self.verified.insert(record.id, (record.length, record.crc, record.descriptor));
-                }
-                locations.insert(record.id, location.clone());
-            } else { aliases.insert(record.offset, locations[&record.id].clone()); }
-        }
-        extents.retain(|id, _| locations.values().any(|location| location.pack == *id));
-        let metadata = serde_json::to_vec(&PackedGeneration { format: "capy.session.packed".into(), version: 1,
-            session: serde_json::from_slice(prepared.metadata()).map_err(|e| e.to_string())?, locations, extents }).map_err(|e| e.to_string())?;
-        if metadata.len() as u64 > ProjectLimits::default().metadata_bytes { return Err("Packed recovery metadata exceeds admission limit".into()); }
-        let generation = PortableId::random();
-        publication.publish(&self.generation_path(generation), |file| {
-            file.write_all(&metadata).map_err(|e| e.to_string())
-        }, || check_cancelled(cancelled)).map_err(|error| error.error)?;
-        let reference = Generation::new(generation, &metadata);
-        let head = Head { current: reference.clone(),
-            previous: self.loaded.clone().or_else(|| self.head.as_ref().map(|head| head.current.clone())) };
-        let bytes = serde_json::to_vec(&head).map_err(|e| e.to_string())?;
-        let published = publication.publish(&self.path.join("head.json"), |file| file.write_all(&bytes).map_err(|e| e.to_string()),
-            || check_cancelled(cancelled));
-        if published.as_ref().is_err_and(|error| !error.published) { return Err(published.unwrap_err().error); }
-        self.head = Some(head);
-        self.loaded = Some(reference);
-        self.programs.insert(generation, prepared.trusted_programs().clone());
-        let previous=self.head.as_ref().and_then(|head|head.previous.as_ref()).map(|previous|previous.id);
-        self.programs.retain(|id,_|*id==generation || Some(*id)==previous);
-        published.map_err(|error| error.error)?;
-        self.collect_garbage()?;
-        Ok(generation)
-    }
-
-    fn append_resources(&mut self, pending: &[&ResourceRecord], entries: &BTreeMap<PortableId, &super::resources::PreparedResource>,
-        locations: &mut BTreeMap<PortableId, PackRange>, extents: &mut BTreeMap<PortableId, u64>,
-        cancelled: &AtomicBool, publication: &mut impl Publication) -> Result<(), String> {
-        let mut first = 0;
-        while first < pending.len() {
-            let mut target = None;
-            for (&pack, &extent) in extents.iter() {
-                let length = fs::metadata(self.pack_path(pack)).map_err(|e| e.to_string())?.len();
-                if length < extent { return Err("Recovery pack is shorter than its committed extent".into()); }
-                if target.is_none() && length.checked_add(pending[first].length.max(1)).is_some_and(|end| end <= PACK_BYTES) {
-                    target = Some((pack, length));
-                }
-            }
-            let (pack, start) = target.unwrap_or_else(|| (PortableId::random(), 0));
-            let mut length = 0u64;
-            let mut last = first;
-            while last < pending.len() {
-                let next = length.checked_add(pending[last].length).ok_or("Recovery pack length overflow")?;
-                if last > first && start.checked_add(next).is_none_or(|end| end > PACK_BYTES) { break; }
-                length = next; last += 1;
-            }
-            let write = |file: &mut BufWriter<File>| {
-                for record in &pending[first..last] {
-                    write_payload(file, &entries[&record.id].payload, record, cancelled)?;
-                }
-                if length == 0 { file.write_all(&[0]).map_err(|e| e.to_string())?; }
-                Ok(())
-            };
-            if target.is_some() {
-                publication.append(&self.pack_path(pack), write, || check_cancelled(cancelled))?;
-            } else {
-                publication.publish(&self.pack_path(pack), write, || check_cancelled(cancelled)).map_err(|error| error.error)?;
-            }
-            let mut offset = start;
-            for record in &pending[first..last] {
-                locations.insert(record.id, PackRange { pack, offset });
-                self.verified.insert(record.id, (record.length, record.crc, record.descriptor));
-                offset += record.length;
-            }
-            extents.insert(pack, start.checked_add(length.max(1)).ok_or("Recovery pack length overflow")?);
-            first = last;
-        }
-        Ok(())
-    }
-    pub fn make_durable(&mut self, tiles: &crate::raster_storage::RetainedTiles, cancelled: &AtomicBool) -> Result<usize,String> {
-        self.make_durable_using(tiles, cancelled, AtomicPublication)
-    }
-    fn make_durable_using(&mut self, tiles: &crate::raster_storage::RetainedTiles, cancelled: &AtomicBool,
-        mut publication: impl Publication) -> Result<usize,String> {
-        self.validate_layout()?;
-        if retired_store(&self.path)? {return Err("This drawing's session copy was retired".into());}
-        let mut blobs=tiles.blobs()?;
-        blobs.retain(|blob|blob.resident_bytes()>0);
-        let mut released=0;
+    fn checkpoint_using(&mut self,capture:&super::session::EditorCapture,metadata:super::session::SessionMetadata,cancelled:&AtomicBool,mut publication:impl Publication)->Result<PortableId,String> {
+        let memory=capture.artwork().memory.as_ref().map(|memory|memory.weak());
+        let key=CheckpointKey::of(capture);let profiles=metadata.profiles.clone();
         let result=(|| {
-        while !blobs.is_empty() {
-            check_cancelled(cancelled)?;
-            let mut inventory=super::resources::ResourceInventory::default();
-            let mut batch=Vec::new();let mut bytes=0;
-            while let Some(blob)=blobs.last() {
-                if bytes>0 && bytes+blob.compressed_len()>MAX_RANGE_BYTES {break;}
-                let blob=blobs.pop().unwrap();
-                let Some(memory)=blob.compressed.memory()? else {continue;};
-                bytes+=memory.len();inventory.tile(blob.clone())?;batch.push((blob,memory));
-            }
-            let prepared=inventory.prepare(cancelled)?;
-            let entries=prepared.entries.iter().map(|entry|(entry.payload.id(),entry)).collect::<BTreeMap<_,_>>();
-            let records=prepared.entries.iter().map(|entry|Ok(ResourceRecord {id:entry.payload.id(),offset:entry.record["location"]["offset"].as_str().ok_or("Missing tile offset")?.parse::<u64>().map_err(|e|e.to_string())?,
-                length:entry.bytes,crc:entry.crc,descriptor:resource_descriptor(&entry.record)?})).collect::<Result<Vec<_>,String>>()?;
-            let (mut locations,mut extents,known)=self.live_locations();
-            for record in &records {
-                if known.get(&record.id).is_some_and(|integrity|*integrity!=(record.length,record.crc,record.descriptor)) {return Err("Conflicting immutable recovery resource descriptor".into());}
-            }
-            let mut offsets=BTreeSet::new();
-            let pending=records.iter().filter(|record|!locations.contains_key(&record.id) && offsets.insert(record.offset)).collect::<Vec<_>>();
-            self.append_resources(&pending,&entries,&mut locations,&mut extents,cancelled,&mut publication)?;
-            let mut aliases=BTreeMap::new();
-            for record in &records {
-                if let Some(location)=locations.get(&record.id) {aliases.insert(record.offset,location.clone());}
-            }
-            for record in &records {
-                let location=locations.get(&record.id).or_else(||aliases.get(&record.offset)).ok_or("Missing durable tile location")?.clone();
-                let existing=self.live.get(&record.id).and_then(Weak::upgrade);
-                let durable=match existing {
-                    Some(existing)=>existing,
-                    None=>{
-                        let pack=self.pack(location.pack,extents[&location.pack])?;
-                        Arc::new(StoreLocation {pack,offset:location.offset,length:record.length,crc:record.crc,descriptor:record.descriptor})
-                    },
-                };
-                for (blob,memory) in batch.iter().filter(|(blob,_)|blob.resource_id()==record.id) {
-                    if blob.compressed.bind(memory,durable.clone())? {released+=memory.len();}
-                    if let Some(location)=blob.compressed.location()? {
-                        self.live.insert(record.id,Arc::downgrade(&location));
-                        self.verified.insert(record.id,(record.length,record.crc,record.descriptor));
-                    }
-                }
-            }
+        capture.validate_identity()?;self.refresh_head()?;
+        if let Some(published)=&self.published_capture && published.key==key && self.loaded_generation()==Some(published.generation) && self.generation()==Some(published.generation)
+            && same_profiles(&published.profiles,&metadata.profiles) {
+            let generation=self.head.as_ref().unwrap().current.clone();
+            let bytes=self.generation_metadata(&generation,ProjectLimits::default().metadata_bytes)?;
+            let metadata=update_session_metadata(&bytes,&metadata.value)?;
+            let roots=self.generation_roots.get(&generation.id).ok_or("Missing published generation roots")?.1.clone();
+            let programs=self.programs.get(&generation.id).cloned().unwrap_or_default();
+            return self.publish_packed(metadata,roots,&programs,cancelled,&mut publication);
         }
-        Ok(released)
+        let draft=super::session::SessionDraft::capture(capture,metadata,cancelled)?;
+        let mut inputs=draft.inventory.entries.values().map(|entry|StoreInput::entry(entry,cancelled)).collect::<Result<Vec<_>,_>>()?;
+        for opaque in &draft.opaque {inputs.push(StoreInput::opaque(opaque.clone())?);}
+        let order=draft.spatial_order();
+        inputs.sort_by_key(|input|order.get(&input.id).copied().unwrap_or((usize::MAX,0,0)));
+        let ids=self.store_inputs(inputs,cancelled,&mut publication)?;
+        let extents=self.pack_extents(&ids)?;
+        let records=ids.iter().map(|id|&self.index[id]).collect::<Vec<_>>();
+        let programs=draft.trusted_programs.clone();
+        let metadata=draft.packed_metadata(&records,&extents)?;
+        let roots=GenerationRoots {identities:ids.into_iter().collect(),packs:extents.into_keys().collect(),..Default::default()};
+        self.publish_packed(metadata,roots,&programs,cancelled,&mut publication)
         })();
-        if released>0 && let Some(owner)=tiles.owner.as_ref().and_then(Weak::upgrade) {owner.refresh();}
+        if let Ok(generation)=result {self.published_capture=Some(PublishedCapture {key,profiles,generation});}
+        if let Some(owner)=memory.and_then(|owner|owner.upgrade()) {owner.refresh();}
         result
     }
-    fn live_locations(&mut self) -> (BTreeMap<PortableId,PackRange>, BTreeMap<PortableId,u64>, BTreeMap<PortableId,(u64,u32,[u8;32])>) {
-        let mut locations=BTreeMap::new();let mut extents=BTreeMap::new();let mut known=BTreeMap::new();
-        self.live.retain(|&id,weak|{
-            let Some(live)=weak.upgrade() else {return false;};
-            locations.insert(id,PackRange {pack:live.pack.root.id,offset:live.offset});
-            let extent=live.pack.source.byte_len();
-            extents.entry(live.pack.root.id).and_modify(|current:&mut u64|*current=(*current).max(extent)).or_insert(extent);
-            known.insert(id,(live.length,live.crc,live.descriptor));true
-        });
-        (locations,extents,known)
-    }
 
-    fn pack(&mut self,id:PortableId,extent:u64)->Result<Arc<StorePack>,String> {
-        if let Some(pack)=self.packs.get(&id) {pack.source.extend_to(extent);return Ok(pack.clone());}
-        let existing=self._owner.packs.lock().map_err(|_|"Recovery pack lock failed")?.get(&id).and_then(Weak::upgrade);
-        let file=match existing {
-            Some(file)=>file,
-            None=>{
-                let path=self.pack_path(id);let file=Arc::new(File::open(&path).map_err(|error|error.to_string())?);
-                let root=Arc::new(ResourceFile {id,path,offset:0,length:0,file,_owner:self._owner.clone()});
-                self._owner.readers.lock().map_err(|_|"Recovery reader lock failed")?.push(Arc::downgrade(&root));
-                let file=Arc::new(PackFile {root,cached:Default::default()});
-                self._owner.packs.lock().map_err(|_|"Recovery pack lock failed")?.insert(id,Arc::downgrade(&file));
-                file
-            },
-        };
-        let mut cached=file.cached.lock().map_err(|_|"Recovery pack source lock failed")?;
-        let pack=match cached.1.upgrade() {
+    fn resource_values(&self,ids:&[PortableId])->Result<Vec<serde_json::Value>,String> {
+        ids.iter().map(|id|serde_json::to_value(&self.index[id]).map_err(|error|error.to_string())).collect()
+    }
+    fn pack_extents(&self,ids:&[PortableId])->Result<BTreeMap<PortableId,u64>,String> {
+        let mut extents=BTreeMap::new();
+        for id in ids {
+            let location=&self.index.get(id).ok_or("Missing durable resource index")?.location;let pack=location.pack.id;
+            let extent=location.pack.extent.load(Ordering::Acquire);
+            if !extents.contains_key(&pack) {
+                if location.pack.file.metadata().map_err(|error|error.to_string())?.len()<extent {return Err("Recovery pack is shorter than its committed extent".into());}
+                extents.insert(pack,extent);
+            }
+        }Ok(extents)
+    }
+    fn publish_packed(&mut self,metadata:Vec<u8>,roots:GenerationRoots,programs:&super::TrustedPrograms,cancelled:&AtomicBool,publication:&mut impl Publication)->Result<PortableId,String> {
+        check_cancelled(cancelled)?;self.validate_layout()?;self.refresh_head()?;
+        if retired_store(&self.path)? {return Err("This drawing's session copy was retired".into());}
+        if metadata.len() as u64>ProjectLimits::default().metadata_bytes {return Err("Packed recovery metadata exceeds admission limit".into());}
+        let generation=PortableId::random();
+        publication.publish(&self.generation_path(generation),|file|file.write_all(&metadata).map_err(|error|error.to_string()),||check_cancelled(cancelled)).map_err(|error|error.error)?;
+        let reference=Generation::new(generation,&metadata);
+        let head=Head {current:reference.clone(),previous:self.loaded.clone().or_else(||self.head.as_ref().map(|head|head.current.clone()))};
+        let bytes=serde_json::to_vec(&head).map_err(|error|error.to_string())?;
+        let published=publication.publish(&self.path.join("head.json"),|file|file.write_all(&bytes).map_err(|error|error.to_string()),||check_cancelled(cancelled));
+        if published.as_ref().is_err_and(|error|!error.published) {return Err(published.unwrap_err().error);}
+        self.generation_roots.insert(generation,(reference.clone(),roots));
+        self.head=Some(head);self.loaded=Some(reference);self.programs.insert(generation,programs.clone());
+        let previous=self.head.as_ref().and_then(|head|head.previous.as_ref()).map(|previous|previous.id);
+        self.programs.retain(|id,_|*id==generation || Some(*id)==previous);
+        published.map_err(|error|error.error)?;self.collect_garbage()?;Ok(generation)
+    }
+    fn store_inputs(&mut self,inputs:Vec<StoreInput>,cancelled:&AtomicBool,publication:&mut impl Publication)->Result<Vec<PortableId>,String> {
+        self.validate_layout()?;
+        if retired_store(&self.path)? {return Err("This drawing's session copy was retired".into());}
+        let mut records=Vec::with_capacity(inputs.len());
+        let mut pending=Vec::new();let mut bytes=0u64;
+        for input in inputs {
+            check_cancelled(cancelled)?;
+            if bytes>0 && bytes+input.length>PACK_BYTES {self.append_inputs(std::mem::take(&mut pending),cancelled,publication)?;bytes=0;}
+            let id=input.id;
+            if let Some(location)=self.existing(&input)? {self.remember(input,location)?;}
+            else {bytes=bytes.saturating_add(input.length);pending.push(input);}
+            records.push(id);
+        }
+        if !pending.is_empty() {self.append_inputs(pending,cancelled,publication)?;}
+        Ok(records)
+    }
+    fn existing(&self,input:&StoreInput)->Result<Option<Arc<StoreLocation>>,String> {
+        if let Payload::Tile(tile)=&input.payload && let Some(location)=tile.compressed.location()? && Arc::ptr_eq(&location.pack.owner,&self._owner) {
+            if location.length!=input.length || location.crc!=input.crc || location.descriptor!=input.descriptor {return Err("Conflicting immutable recovery resource descriptor".into());}
+            return Ok(Some(location));
+        }
+        if let Some(entry)=self.index.get(&input.id) {
+            if entry.location.descriptor!=input.descriptor {return Err("Conflicting immutable recovery resource descriptor".into());}
+            if entry.owner.as_ref().is_none_or(|owner|std::sync::Weak::ptr_eq(owner,&input.owner)) {return Ok(Some(entry.location.clone()));}
+            if entry.owner.as_ref().is_some_and(|owner|owner.strong_count()!=0) {return Err("Conflicting immutable recovery resource owner".into());}
+        }
+        let key=input.owner_key();
+        if let Some(entry)=self.by_owner.get(&key).and_then(|id|self.index.get(id))
+            && entry.owner.as_ref().is_some_and(|owner|owner.strong_count()!=0 && std::sync::Weak::ptr_eq(owner,&input.owner)) {
+            if entry.location.descriptor!=input.descriptor {return Err("Conflicting aliased resource descriptors".into());}
+            return Ok(Some(entry.location.clone()));
+        }
+        Ok(None)
+    }
+    fn append_inputs(&mut self,inputs:Vec<StoreInput>,cancelled:&AtomicBool,publication:&mut impl Publication)->Result<(),String> {
+        let mut first=0;
+        while first<inputs.len() {
+            let target=if let Some((id,extent))=self.append {
+                match fs::metadata(self.pack_path(id)) {
+                    Ok(metadata)=>{
+                        if metadata.len()<extent {return Err("Recovery pack is shorter than its committed extent".into());}
+                        metadata.len().checked_add(inputs[first].length.max(1)).filter(|end|*end<=PACK_BYTES).map(|_|(id,metadata.len()))
+                    },
+                    Err(error) if error.kind()==std::io::ErrorKind::NotFound=>{
+                        if self.resource_roots()?.packs.contains(&id) {return Err("Committed recovery pack is missing".into());}None
+                    },
+                    Err(error)=>return Err(error.to_string()),
+                }
+            }else {None};
+            let (pack,start)=target.unwrap_or_else(||(PortableId::random(),0));
+            let mut length=0u64;let mut last=first;
+            let mut aliases=BTreeMap::<(u8,usize),(u64,[u8;32])>::new();let mut offsets=Vec::new();
+            while last<inputs.len() {
+                let input=&inputs[last];let key=input.owner_key();
+                let alias=aliases.get(&key).copied();
+                let offset=if let Some((offset,descriptor))=alias {
+                    if descriptor!=input.descriptor {return Err("Conflicting aliased resource descriptors".into());}offset
+                }else {
+                    if last>first && start.saturating_add(length).saturating_add(input.length)>PACK_BYTES {break;}
+                    let offset=start+length;length=length.checked_add(input.length.max(1)).ok_or("Recovery pack length overflow")?;
+                    aliases.insert(key,(offset,input.descriptor));offset
+                };
+                offsets.push((offset,alias.is_none()));last+=1;
+            }
+            let write=|file:&mut BufWriter<File>| {
+                for (input,&(_,physical)) in inputs[first..last].iter().zip(&offsets) {
+                    if !physical {continue;}
+                    let record=ResourceRecord {id:input.id,offset:0,length:input.length,crc:input.crc,descriptor:input.descriptor};
+                    write_payload(file,&input.payload,&record,cancelled)?;
+                    if input.length==0 {file.write_all(&[0]).map_err(|error|error.to_string())?;}
+                }Ok(())
+            };
+            if target.is_some() {publication.append(&self.pack_path(pack),write,||check_cancelled(cancelled))?;}
+            else {publication.publish(&self.pack_path(pack),write,||check_cancelled(cancelled)).map_err(|error|error.error)?;}
+            let extent=start.checked_add(length).ok_or("Recovery pack extent overflow")?;
+            let owner=self.pack(pack,extent)?;let source=owner.source(&self.reads);
+            let mut shared=BTreeMap::new();
+            for (input,&(offset,_)) in inputs[first..last].iter().zip(&offsets) {
+                let location=shared.entry(offset).or_insert_with(||Arc::new(StoreLocation {pack:owner.clone(),source:source.clone(),offset,length:input.length,crc:input.crc,descriptor:input.descriptor})).clone();
+                self.remember(input.clone(),location)?;
+            }
+            self.append=Some((pack,extent));first=last;
+        }Ok(())
+    }
+    fn remember(&mut self,input:StoreInput,location:Arc<StoreLocation>)->Result<(),String> {
+        if let Payload::Tile(tile)=&input.payload && let Some(memory)=tile.compressed.memory()? {tile.compressed.bind(&memory,location.clone())?;}
+        self.by_owner.insert(input.owner_key(),input.id);
+        self.index.insert(input.id,IndexedResource {record:input.record,location,owner:Some(input.owner)});Ok(())
+    }
+    pub fn make_durable(&mut self,tiles:&crate::raster_storage::RetainedTiles,cancelled:&AtomicBool)->Result<usize,String> {
+        self.make_durable_using(tiles,cancelled,AtomicPublication)
+    }
+    fn make_durable_using(&mut self,tiles:&crate::raster_storage::RetainedTiles,cancelled:&AtomicBool,mut publication:impl Publication)->Result<usize,String> {
+        let before=tiles.resident_bytes();
+        let inputs=tiles.blobs()?.into_iter().filter(|blob|blob.resident_bytes()>0).map(|blob| {
+            let entry=super::resources::ResourceEntry {kind:"capy.raster-tile/1",data:super::resources::encode_descriptor(blob.descriptor)?,raw_encoding:"capy.lz4-tile/1",payload:Payload::Tile(blob)};
+            StoreInput::entry(&entry,cancelled)
+        }).collect::<Result<Vec<_>,String>>()?;
+        let result=self.store_inputs(inputs,cancelled,&mut publication);
+        let released=before.saturating_sub(tiles.resident_bytes());
+        if released>0 && let Some(owner)=tiles.owner.as_ref().and_then(Weak::upgrade) {owner.refresh();}
+        result.map(|_|released)
+    }
+    fn recover_append(&mut self,extents:&BTreeMap<PortableId,u64>) {
+        self.append=extents.iter().find(|(_,extent)|**extent<PACK_BYTES).map(|(&id,&extent)|(id,extent));
+    }
+    fn pack(&mut self,id:PortableId,extent:u64)->Result<Arc<Pack>,String> {
+        let mut packs=self._owner.packs.lock().map_err(|_|"Recovery pack lock failed")?;
+        let pack=match packs.get(&id).and_then(Weak::upgrade) {
             Some(pack)=>pack,
-            None=>{
-                let source=cached.0.upgrade().unwrap_or_else(||self.reads.source(extent,Arc::new(PackReader(file.clone()))));
-                cached.0=source.downgrade();
-                let pack=Arc::new(StorePack {root:file.root.clone(),source});cached.1=Arc::downgrade(&pack);pack
-            },
+            None=>{let pack=Arc::new(Pack {id,file:Arc::new(File::open(self.pack_path(id)).map_err(|error|error.to_string())?),owner:self._owner.clone(),source:Default::default(),extent:AtomicU64::new(extent)});packs.insert(id,Arc::downgrade(&pack));pack},
         };
-        pack.source.extend_to(extent);
-        self.packs.insert(id,pack.clone());Ok(pack)
+        if pack.file.metadata().map_err(|error|error.to_string())?.len()<extent {return Err("Recovery pack is shorter than its committed extent".into());}
+        pack.extent.fetch_max(extent,Ordering::Release);Ok(pack)
     }
 
     pub fn load(&mut self, limits: ProjectLimits, cancelled: &AtomicBool) -> Result<Option<OpenSession>, String> {
@@ -633,45 +643,53 @@ impl SessionStore {
         if Generation::new(generation.id, &metadata) != *generation { return Err("Recovery metadata checksum failed".into()); }
         Ok(metadata)
     }
-    fn load_generation(&mut self, generation: &Generation, limits: ProjectLimits, cancelled: &AtomicBool) -> Result<OpenSession, super::session::OpenFailure> {
-        let metadata = self.generation_metadata(generation, limits.metadata_bytes)?;
-        let stored = StoredGeneration::parse(&metadata, limits)?;
-        let index = resource_index(&stored.metadata, limits)?;
-        let mut files = Vec::with_capacity(index.ranges.len());
-        let mut verified = BTreeMap::new();
-        let mut packs = BTreeMap::<PortableId, Arc<File>>::new();
-        for (&pack, &extent) in &stored.extents {
-            let file = self.pack(pack,extent)?.root.file.clone();
-            if file.metadata().map_err(|e| e.to_string())?.len() < extent { return Err("Recovery pack is shorter than its committed extent".into()); }
-            packs.insert(pack, file);
+    fn load_generation(&mut self,generation:&Generation,limits:ProjectLimits,cancelled:&AtomicBool)->Result<OpenSession,super::session::OpenFailure> {
+        let metadata=self.generation_metadata(generation,limits.metadata_bytes)?;
+        let mut stored=StoredGeneration::parse(&metadata,limits)?;
+        let index=resource_index(&stored.metadata,limits)?;
+        if stored.locations.is_none() {
+            let value:serde_json::Value=serde_json::from_slice(&stored.metadata).map_err(|error|error.to_string())?;
+            let values=value["resources"].as_array().ok_or("Missing legacy resource records")?;
+            let mut inputs=Vec::new();
+            for (record,value) in index.records.iter().zip(values) {
+                check_cancelled(cancelled)?;
+                let file=Arc::new(File::open(self.resource_path(record.id)).map_err(|error|error.to_string())?);
+                if file.metadata().map_err(|error|error.to_string())?.len()!=record.length {return Err("Recovery resource length changed".into());}
+                let source=ReadSource::file(file,record.length);
+                let backing=ImmutableBacking::new(Arc::new(source))?;
+                let resource=Arc::new(crate::authored::OpaqueResource::from_record(record.id,value,backing,0,record.length,record.crc)?);
+                inputs.push(StoreInput::opaque(resource)?);
+            }
+            let records=self.store_inputs(inputs,cancelled,&mut AtomicPublication)?;
+            let mut value=value;value["resources"]=self.resource_values(&records)?.into();
+            stored.metadata=serde_json::to_vec(&value).map_err(|error|error.to_string())?;
+            let mut locations=BTreeMap::new();
+            for record in value["resources"].as_array().unwrap() {
+                let id:PortableId=record["id"].as_str().unwrap().parse().map_err(str::to_string)?;
+                let location=&self.index[&id].location;
+                stored.extents.insert(location.pack.id,location.pack.extent.load(Ordering::Acquire));
+                locations.insert(id,PackRange {pack:location.pack.id,offset:location.offset});
+            }
+            stored.locations=Some(locations);
         }
-        for record in &index.ranges {
+        let mut locations=BTreeMap::new();
+        let mut packs=BTreeMap::new();
+        for (&id,&extent) in &stored.extents {packs.insert(id,self.pack(id,extent)?);}
+        let value:serde_json::Value=serde_json::from_slice(&stored.metadata).map_err(|error|error.to_string())?;
+        let records=resource_index(&stored.metadata,limits)?.records;
+        for (record,value) in records.iter().zip(value["resources"].as_array().unwrap()) {
             check_cancelled(cancelled)?;
-            let (path, offset, file) = if let Some(location) = stored.locations.as_ref().and_then(|locations| locations.get(&record.id)) {
-                let path = self.pack_path(location.pack);
-                let file = packs.get(&location.pack).ok_or("Missing recovery pack handle")?.clone();
-                (path, location.offset, file)
-            } else {
-                let path = self.resource_path(record.id);
-                let file = Arc::new(File::open(&path).map_err(|e| e.to_string())?);
-                if file.metadata().map_err(|e| e.to_string())?.len() != record.length { return Err("Recovery resource length changed".into()); }
-                (path, 0, file)
-            };
-            verify_range(&file, offset, record, cancelled)?;
-            verified.insert(record.id, (record.length, record.crc, record.descriptor));
-            let owner = Arc::new(ResourceFile { id: record.id, path, offset, file,
-                _owner: self._owner.clone(), length: record.length });
-            self._owner.readers.lock().map_err(|_| "Recovery reader lock failed")?.push(Arc::downgrade(&owner));
-            files.push((record.offset, owner));
+            let range=stored.locations.as_ref().unwrap().get(&record.id).ok_or("Missing recovery pack location")?;
+            let pack=packs[&range.pack].clone();
+            let location=Arc::new(StoreLocation {source:pack.source(&self.reads),pack,offset:range.offset,length:record.length,crc:record.crc,descriptor:record.descriptor});
+            let stored_record=StoredRecord::parse(value.clone())?;
+            self.index.entry(record.id).or_insert_with(||IndexedResource {record:stored_record,location:location.clone(),owner:None});
+            locations.insert(record.id,location);
         }
-        let backing = ImmutableBacking::new(Arc::new(ResourcePack::new(index.length,files))).map_err(String::from)?;
+        self.recover_append(&stored.extents);
+        let resources=StoreResources {locations,extents:stored.extents};
         let programs=self.programs.get(&generation.id).cloned().unwrap_or_default();
-        let session = super::session::open_parts_checked(&stored.metadata, backing, limits, cancelled, &programs)?;
-        if verified.iter().any(|(id, value)| self.verified.get(id).is_some_and(|previous| previous != value)) {
-            return Err("Conflicting immutable recovery resource descriptor".into());
-        }
-        self.verified.extend(verified);
-        Ok(session)
+        super::session::open_stored_parts(&stored.metadata,&resources,limits,cancelled,&programs)
     }
 
     pub fn retire(&mut self) -> Result<(), String> {
@@ -695,39 +713,33 @@ impl SessionStore {
         self.validate_layout()?;
         self.refresh_head()?;
         sync_directory(&self.path)?;
-        self.collect_roots(self.resource_roots()?)
+        {let roots=self.resource_roots()?;self.collect_roots(roots)}
     }
-    fn resource_roots(&self) -> Result<StoreRoots, String> {
-        let mut generations = BTreeSet::new();
-        let mut resources = BTreeSet::new();
-        let mut packs = BTreeSet::new();
-        let mut identities = BTreeSet::new();
-        if let Some(head) = &self.head {
-            for generation in std::iter::once(&head.current).chain(head.previous.as_ref()) {
-                generations.insert(generation.id);
-                let metadata = self.generation_metadata(generation, ProjectLimits::default().metadata_bytes)?;
-                let stored = StoredGeneration::parse(&metadata, ProjectLimits::default()).map_err(|e| e.message())?;
-                if let Some(locations) = stored.locations {
-                    identities.extend(locations.keys().copied()); packs.extend(stored.extents.keys().copied());
+    fn resource_roots(&mut self)->Result<StoreRoots,String> {
+        let mut roots=StoreRoots {generations:BTreeSet::new(),resources:BTreeSet::new(),packs:BTreeSet::new(),identities:BTreeSet::new()};
+        if let Some(head)=self.head.clone() {
+            for generation in std::iter::once(head.current).chain(head.previous) {
+                roots.generations.insert(generation.id);
+                let metadata=self.generation_metadata(&generation,ProjectLimits::default().metadata_bytes)?;
+                if self.generation_roots.get(&generation.id).is_none_or(|(known,_)|*known!=generation) {
+                    let stored=StoredGeneration::parse(&metadata,ProjectLimits::default()).map_err(|error|error.message())?;
+                    let mut current=GenerationRoots::default();
+                    if let Some(locations)=stored.locations {current.identities.extend(locations.into_keys());current.packs.extend(stored.extents.into_keys());}
+                    else {current.resources.extend(resource_index(&stored.metadata,ProjectLimits::default())?.records.into_iter().map(|record|record.id));current.identities.extend(&current.resources);}
+                    self.generation_roots.insert(generation.id,(generation.clone(),current));
                 }
-                else { resources.extend(resource_index(&stored.metadata, ProjectLimits::default())?.records.into_iter().map(|record| record.id)); }
+                let current=&self.generation_roots[&generation.id].1;
+                roots.resources.extend(&current.resources);roots.packs.extend(&current.packs);roots.identities.extend(&current.identities);
             }
         }
-        identities.extend(resources.iter().copied());
-        Ok(StoreRoots { generations, resources, packs, identities })
+        self.generation_roots.retain(|id,_|roots.generations.contains(id));Ok(roots)
     }
     fn collect_roots(&mut self, roots: StoreRoots) -> Result<(), String> {
-        let StoreRoots { generations, mut resources, mut packs, mut identities } = roots;
-        self.packs.retain(|id,pack|packs.contains(id) || Arc::strong_count(pack)>1 || pack.source.in_use());
-        self._owner.packs.lock().map_err(|_|"Recovery pack lock failed")?.retain(|_,pack|pack.strong_count()!=0);
-        self._owner.readers.lock().map_err(|_| "Recovery reader lock failed")?.retain(|reader| {
-            if let Some(owner) = reader.upgrade() {
-                identities.insert(owner.id);
-                if owner.path.parent().is_some_and(|path| path == self.path.join("packs")) {
-                    if let Some(id) = owner.path.file_stem().and_then(|id| id.to_str()).and_then(|id| id.parse().ok()) { packs.insert(id); }
-                } else { resources.insert(owner.id); }
-                true
-            } else { false }
+        let StoreRoots {generations,resources,mut packs,identities}=roots;
+        self.index.retain(|id,entry|identities.contains(id) || entry.owner.as_ref().is_some_and(|owner|owner.strong_count()!=0));
+        self.by_owner.retain(|_,id|self.index.contains_key(id));
+        self._owner.packs.lock().map_err(|_|"Recovery pack lock failed")?.retain(|id,weak| {
+            if weak.strong_count()==0 {false}else {packs.insert(*id);true}
         });
         let terminal = retired_store(&self.path)?;
         for (name, retained, suffix) in [("generations", &generations, ".json"), ("resources", &resources, ".bin"), ("packs", &packs, ".bin")] {
@@ -738,9 +750,6 @@ impl SessionStore {
             } else if !terminal && name != "packs" { return Err("Missing drawing session directory".into()); }
         }
         clean_temporaries(&self.path)?;
-        self.live.retain(|_,location|location.strong_count()!=0);
-        identities.extend(self.live.keys());
-        self.verified.retain(|id, _| identities.contains(id));
         Ok(())
     }
     fn resource_path(&self, id: PortableId) -> PathBuf { self.path.join("resources").join(format!("{id}.bin")) }
@@ -808,7 +817,7 @@ pub fn collect_unreferenced_stores(root: &Path, reachable: &BTreeSet<String>, ca
         let Some((owner, writer)) = claim_store(&path)? else { continue };
         if head.is_some() && !terminal && !retiring { continue; }
         let mut store = SessionStore { path, _owner: owner, _writer: writer,
-            head: None, loaded: None, verified: BTreeMap::new(), programs: BTreeMap::new(), live: BTreeMap::new(), reads:crate::tile_io::ReadCache::process(), packs:BTreeMap::new() };
+            head:None,loaded:None,index:BTreeMap::new(),by_owner:BTreeMap::new(),append:None,programs:BTreeMap::new(),reads:crate::tile_io::ReadCache::process(),generation_roots:BTreeMap::new(),published_capture:None };
         store.retire()?;
         retired += 1;
     }
@@ -866,7 +875,7 @@ impl Publication for AtomicPublication {
 
 #[derive(Clone)]
 struct ResourceRecord { id: PortableId, offset: u64, length: u64, crc: u32, descriptor: [u8; 32] }
-struct ResourceIndex { records: Vec<ResourceRecord>, ranges: Vec<ResourceRecord>, length: u64, spatial: BTreeMap<PortableId, [u32; 2]> }
+struct ResourceIndex {records:Vec<ResourceRecord>}
 fn resource_index(metadata: &[u8], limits: ProjectLimits) -> Result<ResourceIndex, super::session::OpenFailure> {
     if metadata.len() as u64 > limits.metadata_bytes { return Err("Recovery metadata exceeds admission limit".into()); }
     let value = super::parse_json(metadata, limits.metadata_bytes.min(usize::MAX as u64) as usize)?;
@@ -874,12 +883,14 @@ fn resource_index(metadata: &[u8], limits: ProjectLimits) -> Result<ResourceInde
     let records = value["resources"].as_array().ok_or("Missing recovery resource inventory")?;
     if records.len() > 262_144 { return Err("Recovery resource count exceeds admission limit".into()); }
     let mut ids = BTreeSet::new();
-    let mut ranges = BTreeMap::<u64, (u64, u32, PortableId, [u8; 32])>::new();
+    let mut ranges = BTreeMap::<(String,u64), (u64, u32, PortableId, [u8; 32])>::new();
+    let mut legacy=true;
     let mut output = Vec::with_capacity(records.len());
     for record in records {
         let id: PortableId = record["id"].as_str().ok_or("Invalid recovery resource identity")?.parse().map_err(str::to_string)?;
         if !ids.insert(id) { return Err("Duplicate recovery resource identity".into()); }
-        if record["location"]["pack"] != "data/tiles-1.bin" { return Err("Invalid recovery resource pack".into()); }
+        let pack=record["location"]["pack"].as_str().ok_or("Invalid recovery resource pack")?;
+        if pack!="data/tiles-1.bin" {parse_pack(pack)?;legacy=false;}
         let offset = super::manifest::decimal_u64(&record["location"]["offset"])?;
         let length = super::manifest::decimal_u64(&record["bytes"])?;
         let checksum = record["crc32"].as_str().ok_or("Invalid recovery checksum")?;
@@ -891,33 +902,27 @@ fn resource_index(metadata: &[u8], limits: ProjectLimits) -> Result<ResourceInde
             output.push(ResourceRecord { id, offset, length, crc, descriptor });
             continue;
         }
-        if let Some((previous_length, previous_crc, _, previous_descriptor)) = ranges.get(&offset) {
+        if let Some((previous_length, previous_crc, _, previous_descriptor)) = ranges.get(&(pack.to_owned(),offset)) {
             if *previous_length != length || *previous_crc != crc || previous_descriptor != &descriptor { return Err("Conflicting recovery resource aliases".into()); }
-        } else { ranges.insert(offset, (length, crc, id, descriptor)); }
+        } else { ranges.insert((pack.to_owned(),offset), (length, crc, id, descriptor)); }
         output.push(ResourceRecord { id, offset, length, crc, descriptor });
     }
     let mut length = 0u64;
-    let mut physical = Vec::with_capacity(ranges.len());
-    for (offset, (count, crc, id, descriptor)) in ranges {
-        if offset != length { return Err("Recovery resource pack has overlapping or missing ranges".into()); }
+    let mut ends=BTreeMap::new();
+    for ((pack,offset),(count,_,_,_)) in ranges {
+        let end=ends.entry(pack).or_insert(0u64);
+        if offset<*end || (legacy && offset!=*end) {return Err("Recovery resource pack has overlapping or missing ranges".into());}
+        *end=offset.checked_add(count).ok_or("Recovery resource range overflow")?;
         length = length.checked_add(count).ok_or("Recovery resource pack overflow")?;
         let budget = limits.raster_bytes.saturating_add(limits.asset_bytes).saturating_add(512 * 1024 * 1024).saturating_mul(2);
         if length > budget { return Err("Recovery resource pack exceeds admission limit".into()); }
-        physical.push(ResourceRecord { id, offset, length: count, crc, descriptor });
     }
-    if output.iter().any(|record| record.offset.checked_add(record.length).is_none_or(|end| end > length)) {
+    if legacy && output.iter().any(|record| record.offset.checked_add(record.length).is_none_or(|end| end > length)) {
         return Err("Recovery resource range exceeds pack".into());
     }
-    let mut spatial = BTreeMap::new();
-    for group in value["index_chunks"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_array) {
-        for tile in group {
-            let coordinate = serde_json::from_value::<[u32; 2]>(tile["coordinate"].clone());
-            if let (Ok(coordinate), Some(id)) = (coordinate, tile["resource"]["ref"].as_str().and_then(|id| id.parse().ok()))
-                && ids.contains(&id) { spatial.entry(id).or_insert(coordinate); }
-        }
-    }
-    Ok(ResourceIndex { records: output, ranges: physical, length, spatial })
+    Ok(ResourceIndex {records:output})
 }
+
 fn resource_descriptor(record: &serde_json::Value) -> Result<[u8; 32], String> {
     let mut descriptor = record.clone();
     let fields = descriptor.as_object_mut().ok_or("Invalid recovery resource descriptor")?;
@@ -925,97 +930,83 @@ fn resource_descriptor(record: &serde_json::Value) -> Result<[u8; 32], String> {
     Ok(Sha256::digest(serde_json::to_vec(&descriptor).map_err(|e| e.to_string())?).into())
 }
 
-struct PackFile {
-    root:Arc<ResourceFile>,
-    cached:Mutex<(crate::tile_io::WeakReadSource,Weak<StorePack>)>,
+struct Pack {
+    id:PortableId,
+    file:Arc<File>,
+    owner:Arc<OwnerLock>,
+    source:Mutex<crate::tile_io::WeakReadSource>,
+    extent:AtomicU64,
 }
-struct StorePack {root:Arc<ResourceFile>,source:ReadSource}
-pub(crate) struct StoreLocation {
-    pack:Arc<StorePack>,
-    offset:u64,
-    length:u64,
-    crc:u32,
-    descriptor:[u8;32],
+impl Pack {
+    fn source(self:&Arc<Self>,cache:&ReadCache)->ReadSource {
+        let mut current=self.source.lock().unwrap();
+        let source=current.upgrade().unwrap_or_else(||cache.source(self.extent.load(Ordering::Acquire),self.clone()));
+        source.extend_to(self.extent.load(Ordering::Acquire));*current=source.downgrade();source
+    }
 }
-impl StoreLocation {
-    pub(crate) fn poll(&self)->Result<RangeState,String> {self.pack.source.poll_checked(self.offset,self.length as usize,self.crc)}
-    pub(crate) fn read_on_worker(&self)->Result<ByteRange,String> {self.pack.source.read_checked_on_worker(self.offset,self.length as usize,self.crc)}
-}
-struct PackReader(Arc<PackFile>);
-impl RangeReader for PackReader {
+impl RangeReader for Pack {
     fn read(&self,offset:u64,length:usize,crc:Option<u32>,completion:ReadCompletion) {
         let mut bytes=read_buffer(length);
-        let result=read_exact_at(&self.0.root.file,offset,Arc::get_mut(&mut bytes).unwrap())
+        let result=read_exact_at(&self.file,offset,Arc::get_mut(&mut bytes).unwrap())
             .and_then(|_|crate::tile_io::verify_crc(&bytes,crc)).map(|_|bytes);
         completion.complete(result);
     }
 }
-
-struct ResourceFile { id: PortableId, path: PathBuf, offset: u64, file: Arc<File>, _owner: Arc<OwnerLock>, length: u64 }
-struct ResourceFiles {files:Vec<(u64,Arc<ResourceFile>)>}
-struct ResourcePack {length:u64,source:ReadSource}
-impl ResourcePack {
-    fn new(length:u64,files:Vec<(u64,Arc<ResourceFile>)>)->Self {Self {length,source:ReadCache::process().source(length,Arc::new(ResourceFiles {files}))}}
+pub(crate) struct StoreLocation {
+    pack:Arc<Pack>,
+    source:ReadSource,
+    offset:u64,
+    pub(crate) length:u64,
+    pub(crate) crc:u32,
+    descriptor:[u8;32],
 }
-impl ByteSource for ResourcePack {
+impl StoreLocation {
+    pub(crate) fn poll(&self)->Result<RangeState,String> {self.source.poll_checked(self.offset,self.length as usize,self.crc)}
+    pub(crate) fn read_on_worker(&self)->Result<ByteRange,String> {self.source.read_checked_on_worker(self.offset,self.length as usize,self.crc)}
+    pub(crate) fn backing(self:&Arc<Self>)->Result<ImmutableBacking,String> {ImmutableBacking::new(self.clone()).map_err(str::to_string)}
+    pub(crate) fn read_all_on_worker(&self)->Result<Arc<[u8]>,String> {
+        let length=usize::try_from(self.length).map_err(|_|"Stored resource exceeds address space")?;
+        let mut bytes=Vec::new();bytes.try_reserve_exact(length).map_err(|_|"Stored resource allocation failed")?;
+        let mut checksum=crc32fast::Hasher::new();
+        while bytes.len()<length {
+            let count=(length-bytes.len()).min(MAX_RANGE_BYTES);
+            let chunk=self.source.wait_on_worker(self.offset+bytes.len() as u64,count)?;
+            checksum.update(&chunk);bytes.extend_from_slice(&chunk);
+        }
+        if checksum.finalize()!=self.crc {return Err("Recovery resource checksum failed".into());}
+        Ok(bytes.into())
+    }
+}
+impl ByteSource for StoreLocation {
     fn byte_len(&self)->u64 {self.length}
     fn resident_bytes(&self)->usize {0}
-    fn poll(&self,offset:u64,length:usize)->Result<RangeState,String> {self.source.poll(offset,length)}
-    fn poll_on_worker(&self,offset:u64,length:usize)->Result<RangeState,String> {self.source.wait_on_worker(offset,length).map(RangeState::Ready)}
-}
-impl RangeReader for ResourceFiles {
-    fn read(&self,offset:u64,length:usize,crc:Option<u32>,completion:ReadCompletion) {
-        let mut bytes=read_buffer(length);
-        let result=(|| {
-            let output=Arc::get_mut(&mut bytes).unwrap();
-            let mut position=offset;let mut written=0;
-            let mut index=self.files.partition_point(|(start,_)|*start<=offset).saturating_sub(1);
-            while written<length {
-                let (start,owner)=self.files.get(index).ok_or("Incomplete recovery backing")?;
-                let local=position.checked_sub(*start).ok_or("Recovery backing range overflow")?;
-                let count=(owner.length.saturating_sub(local)).min((length-written) as u64) as usize;
-                if count>0 {
-                    read_exact_at(&owner.file,owner.offset.checked_add(local).ok_or("Recovery read overflow")?,&mut output[written..written+count])?;
-                    written+=count;position+=count as u64;
-                }
-                index+=1;
-            }
-            crate::tile_io::verify_crc(&bytes,crc)?;
-            Ok(bytes)
-        })();
-        completion.complete(result);
+    fn poll(&self,offset:u64,length:usize)->Result<RangeState,String> {
+        if offset.checked_add(length as u64).is_none_or(|end|end>self.length) {return Err("Stored resource range exceeds extent".into());}
+        self.source.poll(self.offset+offset,length)
+    }
+    fn poll_on_worker(&self,offset:u64,length:usize)->Result<RangeState,String> {
+        if offset.checked_add(length as u64).is_none_or(|end|end>self.length) {return Err("Stored resource range exceeds extent".into());}
+        self.source.wait_on_worker(self.offset+offset,length).map(RangeState::Ready)
     }
 }
-
-fn verify_range(file: &File, offset: u64, record: &ResourceRecord, cancelled: &AtomicBool) -> Result<(), String> {
-    let mut buffer = [0; 64 * 1024];
-    let mut remaining = record.length;
-    let mut checksum = crc32fast::Hasher::new();
-    while remaining != 0 {
-        check_cancelled(cancelled)?;
-        let count = remaining.min(buffer.len() as u64) as usize;
-        read_exact_at(file, offset.checked_add(record.length - remaining).ok_or("Recovery range overflow")?, &mut buffer[..count])?;
-        checksum.update(&buffer[..count]); remaining -= count as u64;
-    }
-    if checksum.finalize() != record.crc { return Err("Recovery resource checksum failed".into()); }
-    Ok(())
+pub(crate) struct StoreResources {
+    pub(crate) locations:BTreeMap<PortableId,Arc<StoreLocation>>,
+    extents:BTreeMap<PortableId,u64>,
 }
-fn verify_payload(file: File, start: u64, payload: &Payload, length: u64, cancelled: &AtomicBool) -> Result<(), String> {
-    let encoded = match payload { Payload::Opaque(_) => None, payload => Some(payload.encoded()?.bytes) };
-    let mut buffer = [0; 64 * 1024];
-    let mut offset = 0;
-    while offset < length {
-        check_cancelled(cancelled)?;
-        let count = (length - offset).min(buffer.len() as u64) as usize;
-        read_exact_at(&file, start.checked_add(offset).ok_or("Recovery range overflow")?, &mut buffer[..count])?;
-        let same = match payload {
-            Payload::Opaque(resource) => *resource.read_chunk(offset, count, cancelled)? == buffer[..count],
-            _ => encoded.as_ref().and_then(|bytes| bytes.get(offset as usize..offset as usize + count)) == Some(&buffer[..count]),
-        };
-        if !same { return Err("Conflicting immutable recovery resource bytes".into()); }
-        offset += count as u64;
+impl StoreResources {
+    pub(crate) fn manifest_records(&self,records:&mut [serde_json::Value])->Result<(),String> {
+        let packs=self.extents.keys().enumerate().map(|(index,&pack)|(pack,format!("data/tiles-{}.bin",index+1))).collect::<BTreeMap<_,_>>();
+        for record in records {
+            let id:PortableId=record["id"].as_str().ok_or("Missing stored resource identity")?.parse().map_err(str::to_string)?;
+            let location=self.locations.get(&id).ok_or("Missing stored resource location")?;
+            record["location"]["pack"]=packs[&location.pack.id].clone().into();
+        }Ok(())
     }
-    Ok(())
+    pub(crate) fn directory(&self)->super::archive::Directory {
+        super::archive::Directory {members:self.extents.values().enumerate().map(|(index,&length)|super::archive::Member {
+            name:format!("data/tiles-{}.bin",index+1),offset:0,length,compressed_length:None,crc32:0,
+        }).collect(),length:self.extents.values().copied().sum()}
+    }
 }
 fn write_payload(file: &mut impl Write, payload: &Payload, record: &ResourceRecord, cancelled: &AtomicBool) -> Result<(), String> {
     if let Payload::Tile(tile)=payload {
@@ -1028,30 +1019,21 @@ fn write_payload(file: &mut impl Write, payload: &Payload, record: &ResourceReco
         }
         return Ok(());
     }
-    let mut hasher = crc32fast::Hasher::new();
-    match payload {
-        Payload::Opaque(resource) => {
-            let mut offset = 0;
-            while offset < record.length {
-                check_cancelled(cancelled)?;
-                let count = (record.length - offset).min(MAX_RANGE_BYTES as u64) as usize;
-                let bytes = resource.read_chunk(offset, count, cancelled)?;
-                hasher.update(&bytes);
-                file.write_all(&bytes).map_err(|e| e.to_string())?;
-                offset += count as u64;
-            }
+    if let Payload::Opaque(resource)=payload {
+        let mut checksum=crc32fast::Hasher::new();let mut offset=0;
+        while offset<record.length {
+            check_cancelled(cancelled)?;let count=(record.length-offset).min(MAX_RANGE_BYTES as u64) as usize;
+            let bytes=resource.read_chunk(offset,count,cancelled)?;checksum.update(&bytes);
+            file.write_all(&bytes).map_err(|error|error.to_string())?;offset+=count as u64;
         }
-        payload => {
-            let bytes = payload.encoded()?.bytes;
-            if bytes.len() as u64 != record.length { return Err("Recovery payload length changed".into()); }
-            for chunk in bytes.chunks(MAX_RANGE_BYTES) {
-                check_cancelled(cancelled)?;
-                hasher.update(chunk);
-                file.write_all(chunk).map_err(|e| e.to_string())?;
-            }
-        }
+        if checksum.finalize()!=record.crc {return Err("Recovery resource checksum failed".into());}
+    }else {
+        let (_,integrity)=payload.prepared(cancelled)?;
+        if integrity.bytes!=record.length || integrity.crc32!=record.crc {return Err("Recovery resource integrity changed".into());}
+        let bytes=payload.encoded()?.bytes;
+        for chunk in bytes.chunks(MAX_RANGE_BYTES) {check_cancelled(cancelled)?;file.write_all(chunk).map_err(|error|error.to_string())?;}
     }
-    if hasher.finalize() != record.crc { return Err("Recovery resource checksum failed".into()); }
+
     Ok(())
 }
 pub fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
@@ -1164,6 +1146,19 @@ mod tests {
     use super::*;
     use crate::{Document, DocumentNames, Editor, raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey}};
     use serde_json::json;
+    use super::super::session::{EditorCapture, PreparedSession, SessionMetadata};
+    struct Captured {editor:EditorCapture,metadata:SessionMetadata,archive:PreparedSession}
+    impl std::ops::Deref for Captured {type Target=PreparedSession;fn deref(&self)->&PreparedSession {&self.archive}}
+    fn captured(editor:&EditorCapture,metadata:impl Into<SessionMetadata>)->Captured {
+        let metadata=metadata.into();let archive=PreparedSession::prepare(editor,metadata.clone(),&AtomicBool::new(false)).unwrap();
+        Captured {editor:editor.clone(),metadata,archive}
+    }
+    fn checkpoint(store:&mut SessionStore,capture:&Captured,cancel:&AtomicBool)->Result<PortableId,String> {
+        store.checkpoint(&capture.editor,capture.metadata.clone(),cancel)
+    }
+    fn checkpoint_using(store:&mut SessionStore,capture:&Captured,cancel:&AtomicBool,publication:impl Publication)->Result<PortableId,String> {
+        store.checkpoint_using(&capture.editor,capture.metadata.clone(),cancel,publication)
+    }
 
     struct Directory(PathBuf);
     impl Directory {
@@ -1195,7 +1190,7 @@ mod tests {
         assert_eq!(restore_error(&root).unwrap(), None);
         assert_eq!(count(&root), 0);
     }
-    fn capture(marker: u8) -> PreparedSession {
+    fn capture(marker: u8) -> Captured {
         let mut document = Document::new(PortableId::random(), 256, 256, DocumentNames { paint: "ink".into(), paper: "paper".into() });
         let descriptor = RasterPlane::Color.descriptor(Default::default());
         let tile = RasterTile::backed(TileBlob::encode(descriptor, &vec![marker; 256 * 256 * 4]).unwrap());
@@ -1204,7 +1199,7 @@ mod tests {
         });
         let editor = Editor::new(document);
         let capture = editor.capture_session(editor.capture(1, Default::default()).unwrap()).unwrap();
-        PreparedSession::prepare(&capture, json!({"marker": marker}), &AtomicBool::new(false)).unwrap()
+        captured(&capture, json!({"marker": marker}))
     }
     fn copy_fixture(source: &Path, destination: &Path) {
         fs::create_dir_all(destination).unwrap(); fs::copy(source.join("head.json"), destination.join("head.json")).unwrap();
@@ -1258,7 +1253,7 @@ mod tests {
             assert!(!packed.join(".lock").exists()); assert!(packed.join("drawing-a/head.json").is_file()); assert!(packed.join("drawing-b/head.json").is_file());
         }
     }
-    fn many_tiles(count: u32) -> PreparedSession {
+    fn many_tiles(count: u32) -> Captured {
         let mut document = Document::new(PortableId::random(), 50 * 256, count.div_ceil(50) * 256,
             DocumentNames { paint: "ink".into(), paper: "paper".into() });
         let descriptor = RasterPlane::Color.descriptor(Default::default());
@@ -1271,7 +1266,7 @@ mod tests {
         *document.target_raster_mut(document.working.target.unwrap()).unwrap() = RasterRevision::backed(RasterData { tiles, ..Default::default() });
         let editor = Editor::new(document);
         let capture = editor.capture_session(editor.capture(1, Default::default()).unwrap()).unwrap();
-        PreparedSession::prepare(&capture, json!({"marker": 37}), &AtomicBool::new(false)).unwrap()
+        captured(&capture, json!({"marker": 37}))
     }
     struct Operations<'a>(&'a mut Vec<String>);
     impl Publication for Operations<'_> {
@@ -1289,25 +1284,24 @@ mod tests {
         let prepared = many_tiles(2_000);
         let mut store = SessionStore::open(&directory.0).unwrap();
         let mut operations = Vec::new();
-        store.commit_using(&prepared, &cancel, Operations(&mut operations)).unwrap();
+        checkpoint_using(&mut store, &prepared, &cancel, Operations(&mut operations)).unwrap();
         assert_eq!(operations.len(), 3);
         assert_eq!(&operations[..2], &["packs", "generations"]);
         assert_eq!(count(&directory.0.join("resources")), 0);
-        let index = resource_index(prepared.metadata(), ProjectLimits::default()).unwrap_or_else(|e| panic!("{}", e.message()));
         let bytes = store.generation_metadata(&store.head.as_ref().unwrap().current, ProjectLimits::default().metadata_bytes).unwrap();
         let stored = StoredGeneration::parse(&bytes, ProjectLimits::default()).unwrap_or_else(|e| panic!("{}", e.message()));
         let locations = stored.locations.unwrap();
-        let mut spatial = index.spatial.into_iter().collect::<Vec<_>>(); spatial.sort_by_key(|(_, coordinate)| [coordinate[1], coordinate[0]]);
+        let mut spatial=super::super::session::SessionDraft::capture(&prepared.editor,prepared.metadata.clone(),&cancel).unwrap().spatial_order().into_iter().map(|(id,(_,y,x))|(id,[x,y])).collect::<Vec<_>>();spatial.sort_by_key(|(_,coordinate)|[coordinate[1],coordinate[0]]);
         assert_eq!(spatial.len(), 2_000);
         assert!(spatial.windows(2).all(|pair| locations[&pair[0].0].offset < locations[&pair[1].0].offset));
         let pack = resource_owner(&store, tile_resource(&prepared).payload.id(), tile_resource(&prepared).bytes);
         let bytes = fs::read(&pack.path).unwrap();
         operations.clear();
-        store.commit_using(&prepared, &cancel, Operations(&mut operations)).unwrap();
+        checkpoint_using(&mut store, &prepared, &cancel, Operations(&mut operations)).unwrap();
         assert_eq!(operations.len(), 2);
         assert_eq!(fs::read(&pack.path).unwrap(), bytes);
         operations.clear();
-        store.commit_using(&capture(42), &cancel, Operations(&mut operations)).unwrap();
+        checkpoint_using(&mut store, &capture(42), &cancel, Operations(&mut operations)).unwrap();
         assert_eq!(&operations[..2], &["append", "generations"]);
         assert_eq!(count(&directory.0.join("packs")), 1);
         assert_eq!(marker(&mut store), 42);
@@ -1316,11 +1310,11 @@ mod tests {
     fn a_truncated_committed_pack_is_never_reused_for_append() {
         let directory = Directory::new(); let cancel = AtomicBool::new(false);
         let mut store = SessionStore::open(&directory.0).unwrap();
-        let first = capture(1); store.commit(&first, &cancel).unwrap();
+        let first = capture(1); checkpoint(&mut store, &first, &cancel).unwrap();
         let pack = resource_owner(&store, tile_resource(&first).payload.id(), tile_resource(&first).bytes);
         let head = fs::read(directory.0.join("head.json")).unwrap();
         OpenOptions::new().write(true).open(&pack.path).unwrap().set_len(0).unwrap();
-        assert_eq!(store.commit(&capture(2), &cancel).unwrap_err(), "Recovery pack is shorter than its committed extent");
+        assert_eq!(checkpoint(&mut store, &capture(2), &cancel).unwrap_err(), "Recovery pack is shorter than its committed extent");
         assert_eq!(fs::metadata(&pack.path).unwrap().len(), 0);
         assert_eq!(fs::read(directory.0.join("head.json")).unwrap(), head);
     }
@@ -1339,18 +1333,18 @@ mod tests {
         }
         let directory = Directory::new(); let cancel = AtomicBool::new(false);
         let original = capture(1); let second = capture(2);
-        let mut store = SessionStore::open(&directory.0).unwrap(); store.commit(&original, &cancel).unwrap();
+        let mut store = SessionStore::open(&directory.0).unwrap(); checkpoint(&mut store, &original, &cancel).unwrap();
         let owner = resource_owner(&store, tile_resource(&original).payload.id(), tile_resource(&original).bytes);
         let committed = fs::metadata(&owner.path).unwrap().len();
         let head = fs::read(directory.0.join("head.json")).unwrap();
-        assert!(store.commit_using(&second, &cancel, FullDisk).is_err());
+        assert!(checkpoint_using(&mut store, &second, &cancel, FullDisk).is_err());
         let tail = fs::metadata(&owner.path).unwrap().len(); assert!(tail > committed);
         assert_eq!(fs::read(directory.0.join("head.json")).unwrap(), head);
         assert_eq!(marker(&mut store), 1);
         drop(store);
         let mut store = SessionStore::open(&directory.0).unwrap();
         assert_eq!(fs::metadata(&owner.path).unwrap().len(), tail);
-        store.commit(&second, &cancel).unwrap();
+        checkpoint(&mut store, &second, &cancel).unwrap();
         let next = resource_owner(&store, tile_resource(&second).payload.id(), tile_resource(&second).bytes);
         assert_eq!(owner.path, next.path); assert!(next.offset >= tail);
         assert_eq!(marker(&mut store), 2);
@@ -1368,32 +1362,32 @@ mod tests {
             }
         }
         let directory = Directory::new(); let cancel = AtomicBool::new(false);
-        let mut store = SessionStore::open(&directory.0).unwrap(); store.commit(&capture(1), &cancel).unwrap();
+        let mut store = SessionStore::open(&directory.0).unwrap(); checkpoint(&mut store, &capture(1), &cancel).unwrap();
         let head = fs::read(directory.0.join("head.json")).unwrap();
-        assert_eq!(store.commit_using(&capture(2), &cancel, FailedSync).unwrap_err(), "Pack data sync failed");
+        assert_eq!(checkpoint_using(&mut store, &capture(2), &cancel, FailedSync).unwrap_err(), "Pack data sync failed");
         assert_eq!(fs::read(directory.0.join("head.json")).unwrap(), head); drop(store);
         let mut store = SessionStore::open(&directory.0).unwrap(); assert_eq!(marker(&mut store), 1);
-        store.commit(&capture(3), &cancel).unwrap(); assert_eq!(marker(&mut store), 3);
+        checkpoint(&mut store, &capture(3), &cancel).unwrap(); assert_eq!(marker(&mut store), 3);
     }
     #[test]
     fn repeated_failed_rollovers_collect_only_unpublished_whole_packs() {
         let directory = Directory::new(); let cancel = AtomicBool::new(false); let first = capture(1); let second = capture(2);
-        let mut store = SessionStore::open(&directory.0).unwrap(); store.commit(&first, &cancel).unwrap();
+        let mut store = SessionStore::open(&directory.0).unwrap(); checkpoint(&mut store, &first, &cancel).unwrap();
         let owner = resource_owner(&store, tile_resource(&first).payload.id(), tile_resource(&first).bytes);
         OpenOptions::new().write(true).open(&owner.path).unwrap().set_len(PACK_BYTES).unwrap();
         for _ in 0..10 {
-            assert!(store.commit_using(&second, &cancel, Interrupted { operation: 2, after: false, count: 0 }).is_err());
+            assert!(checkpoint_using(&mut store, &second, &cancel, Interrupted { operation: 2, after: false, count: 0 }).is_err());
             assert_eq!(count(&directory.0.join("packs")), 2); assert_eq!(marker(&mut store), 1);
         }
-        store.commit(&second, &cancel).unwrap(); assert_eq!(count(&directory.0.join("packs")), 2); assert_eq!(marker(&mut store), 2);
+        checkpoint(&mut store, &second, &cancel).unwrap(); assert_eq!(count(&directory.0.join("packs")), 2); assert_eq!(marker(&mut store), 2);
     }
     #[test]
     fn a_resource_retained_only_by_previous_is_reused_without_append() {
         let directory = Directory::new(); let cancel = AtomicBool::new(false); let first = capture(1);
-        let mut store = SessionStore::open(&directory.0).unwrap(); store.commit(&first, &cancel).unwrap();
+        let mut store = SessionStore::open(&directory.0).unwrap(); checkpoint(&mut store, &first, &cancel).unwrap();
         let owner = resource_owner(&store, tile_resource(&first).payload.id(), tile_resource(&first).bytes);
-        store.commit(&capture(2), &cancel).unwrap(); let length = fs::metadata(&owner.path).unwrap().len();
-        let mut operations = Vec::new(); store.commit_using(&first, &cancel, Operations(&mut operations)).unwrap();
+        checkpoint(&mut store, &capture(2), &cancel).unwrap(); let length = fs::metadata(&owner.path).unwrap().len();
+        let mut operations = Vec::new(); checkpoint_using(&mut store, &first, &cancel, Operations(&mut operations)).unwrap();
         assert_eq!(operations.len(), 2); assert_eq!(fs::metadata(&owner.path).unwrap().len(), length); assert_eq!(marker(&mut store), 1);
     }
     #[cfg(unix)]
@@ -1401,12 +1395,12 @@ mod tests {
     fn verified_camera_checkpoint_does_not_open_or_read_payload_packs() {
         use std::os::unix::fs::PermissionsExt;
         let directory = Directory::new(); let cancel = AtomicBool::new(false); let prepared = capture(1);
-        let mut store = SessionStore::open(&directory.0).unwrap(); store.commit(&prepared, &cancel).unwrap();
+        let mut store = SessionStore::open(&directory.0).unwrap(); checkpoint(&mut store, &prepared, &cancel).unwrap();
         let owner = resource_owner(&store, tile_resource(&prepared).payload.id(), tile_resource(&prepared).bytes);
         let permissions = fs::metadata(&owner.path).unwrap().permissions();
         fs::set_permissions(&owner.path, fs::Permissions::from_mode(0)).unwrap();
         assert!(File::open(&owner.path).is_err());
-        let mut operations = Vec::new(); let result = store.commit_using(&prepared, &cancel, Operations(&mut operations));
+        let mut operations = Vec::new(); let result = checkpoint_using(&mut store, &prepared, &cancel, Operations(&mut operations));
         fs::set_permissions(&owner.path, permissions).unwrap();
         result.unwrap(); assert_eq!(operations.len(), 2); assert_eq!(marker(&mut store), 1);
     }
@@ -1414,34 +1408,34 @@ mod tests {
     fn rollover_keeps_previous_pack_and_live_ranges() {
         let directory = Directory::new(); let cancel = AtomicBool::new(false);
         let original = capture(1); let second = capture(2);
-        let mut store = SessionStore::open(&directory.0).unwrap(); store.commit(&original, &cancel).unwrap();
+        let mut store = SessionStore::open(&directory.0).unwrap(); checkpoint(&mut store, &original, &cancel).unwrap();
         let owner = resource_owner(&store, tile_resource(&original).payload.id(), tile_resource(&original).bytes);
-        store._owner.readers.lock().unwrap().push(Arc::downgrade(&owner));
         OpenOptions::new().write(true).open(&owner.path).unwrap().set_len(PACK_BYTES).unwrap();
-        store.commit(&second, &cancel).unwrap();
+        checkpoint(&mut store, &second, &cancel).unwrap();
         let next = resource_owner(&store, tile_resource(&second).payload.id(), tile_resource(&second).bytes);
         assert_ne!(owner.path, next.path); assert_eq!(count(&directory.0.join("packs")), 2);
-        let pack = ResourcePack::new(owner.length,vec![(0,owner.clone())]);
-        let RangeState::Ready(bytes)=pack.poll_on_worker(0,owner.length as usize).unwrap() else {panic!("worker read must complete")};
+        let pack=owner.location.backing().unwrap();
+        let RangeState::Ready(bytes)=pack.read_on_worker(0,owner.length as usize).map(RangeState::Ready).unwrap() else {panic!("worker read must complete")};
         assert_eq!(bytes.len(),owner.length as usize);
-        store.retire().unwrap(); assert!(owner.path.is_file()); assert!(!next.path.exists());
+        let next_path = next.path.clone();
+        drop(next); drop(second);
+        store.retire().unwrap(); assert!(owner.path.is_file()); assert!(!next_path.exists());
     }
     #[test]
     fn corrupt_pack_extents_ranges_and_aliases_are_rejected() {
         let directory = Directory::new(); let cancel = AtomicBool::new(false);
         let mut store = SessionStore::open(&directory.0).unwrap();
-        let generation = store.commit(&capture(1), &cancel).unwrap();
+        let generation = checkpoint(&mut store, &capture(1), &cancel).unwrap();
         let bytes = fs::read(store.generation_path(generation)).unwrap();
         let base: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         for corruption in 0..5 {
             let mut value = base.clone();
-            let id = value["locations"].as_object().unwrap().keys().next().unwrap().clone();
-            let pack = value["locations"][&id]["pack"].as_str().unwrap().to_owned();
+            let pack = parse_pack(value["session"]["resources"][0]["location"]["pack"].as_str().unwrap()).unwrap().to_string();
             match corruption {
-                0 => value["locations"][&id]["offset"] = u64::MAX.into(),
+                0 => value["session"]["resources"][0]["location"]["offset"] = u64::MAX.to_string().into(),
                 1 => value["extents"][&pack] = 0.into(),
                 2 => { value["extents"].as_object_mut().unwrap().remove(&pack); },
-                3 => { value["locations"].as_object_mut().unwrap().remove(&id); },
+                3 => { value["session"]["resources"][0]["location"].as_object_mut().unwrap().remove("pack"); },
                 _ => { value["extents"][PortableId::random().to_string()] = 1.into(); },
             }
             assert!(StoredGeneration::parse(&serde_json::to_vec(&value).unwrap(), ProjectLimits::default()).is_err());
@@ -1460,7 +1454,7 @@ mod tests {
         let root = Directory::new(); let source = root.0.join("scene"); create_directory(&source).unwrap();
         fs::write(source.join("window.json"), b"original membership").unwrap();
         let mut store = SessionStore::open(&source.join("drawing")).unwrap();
-        store.commit(&capture(1), &AtomicBool::new(false)).unwrap(); drop(store);
+        checkpoint(&mut store, &capture(1), &AtomicBool::new(false)).unwrap(); drop(store);
         let head = fs::read(source.join("drawing/head.json")).unwrap();
         let competing = Arc::new(Mutex::new(None));
         assert!(import_session_directories_with_owner(&root.0, "window.json", ".lock", |path| {
@@ -1478,7 +1472,7 @@ mod tests {
         let old = root.0.join("scene"); create_directory(&old).unwrap();
         fs::write(old.join("window.json"), b"original membership").unwrap();
         let first = capture(1);
-        let mut store = SessionStore::open(&old.join("drawing")).unwrap(); store.commit(&first, &AtomicBool::new(false)).unwrap();
+        let mut store = SessionStore::open(&old.join("drawing")).unwrap(); checkpoint(&mut store, &first, &AtomicBool::new(false)).unwrap();
         let live = OwnerLock::claim(&old.join(".lock")).unwrap().unwrap();
         let mut callbacks = 0;
         import_session_directories_with_owner(&root.0, "window.json", ".lock", |path| {
@@ -1488,7 +1482,7 @@ mod tests {
         let packed = import_session_directories(&root.0, "window.json", ".lock").unwrap();
         assert!(old.is_dir()); assert!(!packed.join("scene").exists()); drop(live);
         assert_eq!(import_session_directories(&root.0, "window.json", ".lock").unwrap_err(), "Recovery drawing is already open");
-        let reader = resource_owner(&store, tile_resource(&first).payload.id(), tile_resource(&first).bytes); drop(store);
+        let reader = resource_owner(&store, tile_resource(&first).payload.id(), tile_resource(&first).bytes); drop(store); drop(first);
         assert_eq!(import_session_directories(&root.0, "window.json", ".lock").unwrap_err(), "Recovery drawing is already open"); drop(reader);
         import_session_directories(&root.0, "window.json", ".lock").unwrap();
         assert_eq!(fs::read(packed.join("scene/window.json")).unwrap(), b"original membership");
@@ -1508,7 +1502,7 @@ mod tests {
             tiles: [(TileKey { plane: RasterPlane::Color, coordinate: [0, 0] }, tile)].into(), ..Default::default()
         }) }).unwrap();
         let capture = opened.editor.capture_session(opened.editor.capture(11, Default::default()).unwrap()).unwrap();
-        upgraded_store.commit(&PreparedSession::prepare(&capture, json!({"marker":42}), &AtomicBool::new(false)).unwrap(), &AtomicBool::new(false)).unwrap();
+        checkpoint(&mut upgraded_store, &captured(&capture, json!({"marker":42})), &AtomicBool::new(false)).unwrap();
         drop(opened); drop(upgraded_store);
         let newest = session_history(&upgraded);
         collect_unreferenced_stores(&root.0, &BTreeSet::new(), &AtomicBool::new(false)).unwrap();
@@ -1545,8 +1539,8 @@ mod tests {
             let editor = Editor::new(document);
             let expected = editor.document().target_raster(editor.document().working.target.unwrap()).unwrap().wait_data().unwrap();
             let capture = editor.capture_session(editor.capture(1, Default::default()).unwrap()).unwrap();
-            let prepared = PreparedSession::prepare(&capture, json!({}), &cancel).unwrap();
-            let mut store = SessionStore::open(&directory.0).unwrap(); store.commit(&prepared, &cancel).unwrap(); drop(store);
+            let prepared = captured(&capture, json!({}));
+            let mut store = SessionStore::open(&directory.0).unwrap(); checkpoint(&mut store, &prepared, &cancel).unwrap(); drop(store);
             let mut store = SessionStore::open(&directory.0).unwrap();
             let restored = store.load(ProjectLimits::default(), &cancel).unwrap().unwrap();
             let document = restored.editor.document(); assert_eq!(document.composition().color.depth, depth);
@@ -1580,17 +1574,25 @@ mod tests {
             document.artwork.extensions = Arc::new(crate::authored::Extensions { resources: [(id, opaque)].into(), ..Default::default() });
             let editor = Editor::new(document);
             let capture = editor.capture_session(editor.capture(1, Default::default()).unwrap()).unwrap();
-            let prepared = PreparedSession::prepare(&capture, json!({}), &cancel).unwrap();
-            let mut store = SessionStore::open(&directory.0).unwrap(); store.commit(&prepared, &cancel).unwrap();
+            let prepared = captured(&capture, json!({}));
+            let mut store = SessionStore::open(&directory.0).unwrap(); checkpoint(&mut store, &prepared, &cancel).unwrap();
             let owner = resource_owner(&store, id, length); assert_eq!(owner.offset, 0); assert_eq!(fs::metadata(&owner.path).unwrap().len(), length.max(1));
             if length == 0 {
-                let missing = owner.path.with_extension("held"); fs::rename(&owner.path, &missing).unwrap();
-                let failed = store.load(ProjectLimits::default(), &cancel).is_err(); fs::rename(missing, &owner.path).unwrap(); assert!(failed);
+                let path = owner.path.clone();
+                drop((owner, prepared, capture, editor, store));
+                let missing = path.with_extension("held"); fs::rename(&path, &missing).unwrap();
+                let mut store = SessionStore::open(&directory.0).unwrap();
+                let failed = store.load(ProjectLimits::default(), &cancel).is_err();
+                fs::rename(missing, &path).unwrap(); assert!(failed);
+                let restored = store.load(ProjectLimits::default(), &cancel).unwrap().unwrap();
+                assert_eq!(restored.editor.document().artwork.extensions.resources[&id].length, 0);
+                checkpoint(&mut store, &self::capture(2), &cancel).unwrap();
+                continue;
             }
             let restored = store.load(ProjectLimits::default(), &cancel).unwrap().unwrap();
             let resource = &restored.editor.document().artwork.extensions.resources[&id];
             if length != 0 { assert_eq!(&*resource.read_chunk(length - 1024, 1024, &cancel).unwrap(), chunk.as_slice()); }
-            store.commit(&self::capture(2), &cancel).unwrap();
+            checkpoint(&mut store, &self::capture(2), &cancel).unwrap();
             if length > PACK_BYTES { assert_eq!(fs::metadata(&owner.path).unwrap().len(), length); }
         }
     }
@@ -1633,9 +1635,9 @@ mod tests {
         assert_eq!(restored.metadata.value["location"]["uri"],"fixtures/v1.0.14/Upgrade drawing.capy");
         let metadata=restored.metadata.value.clone();
         let capture=restored.editor.capture_session(restored.editor.capture(2,Default::default()).unwrap()).unwrap();
-        let prepared=PreparedSession::prepare(&capture,restored.metadata,&cancel).unwrap();
+        let prepared=captured(&capture, restored.metadata);
         let current:serde_json::Value=serde_json::from_slice(prepared.metadata()).unwrap();assert_eq!(current["layout"]["vectors"],json!([]));
-        let generation=store.commit(&prepared,&cancel).unwrap();assert_ne!(generation,head.current.id);drop(store);
+        let generation=checkpoint(&mut store, &prepared,&cancel).unwrap();assert_ne!(generation,head.current.id);drop(store);
         let mut reopened=SessionStore::open(&directory.0).unwrap();
         let mut restored=reopened.load(ProjectLimits::default(),&cancel).unwrap().unwrap();
         assert_eq!(reopened.loaded_generation(),Some(generation));assert_eq!(restored.metadata.value,metadata);
@@ -1654,14 +1656,14 @@ mod tests {
         let application=crate::EffectApplication::new(program,values,editor.document().composition().size);
         editor.perform(crate::Edit::Effect(crate::RecordChange::replace(&editor.document().artwork.effects,handle,Some(application)).unwrap())).unwrap();
         let capture=editor.capture_session(editor.capture(1,Default::default()).unwrap()).unwrap();
-        let prepared=PreparedSession::prepare(&capture,json!({"marker":42}),&cancel).unwrap();
+        let prepared=captured(&capture, json!({"marker":42}));
         let mut store=SessionStore::open(&root.0).unwrap();
-        let first=store.commit(&prepared,&cancel).unwrap();
+        let first=checkpoint(&mut store, &prepared,&cancel).unwrap();
         assert!(store.load(ProjectLimits::default(),&cancel).unwrap().is_some());
         let authority=store.programs.keys().copied().collect::<Vec<_>>();
-        assert!(store.commit_using(&prepared,&cancel,Interrupted {operation:1,after:false,count:0}).is_err());
+        assert!(checkpoint_using(&mut store, &prepared,&cancel,Interrupted {operation:1,after:false,count:0}).is_err());
         assert_eq!(store.programs.keys().copied().collect::<Vec<_>>(),authority);
-        let second=store.commit(&prepared,&cancel).unwrap();
+        let second=checkpoint(&mut store, &prepared,&cancel).unwrap();
         let first_bytes=fs::read(store.generation_path(first)).unwrap();
         let second_bytes=fs::read(store.generation_path(second)).unwrap();
         fs::write(store.generation_path(second),b"corrupt metadata").unwrap();
@@ -1679,15 +1681,15 @@ mod tests {
         let root=Directory::new();let cancel=AtomicBool::new(false);
         let mut editor=Editor::new(Document::new(PortableId::random(),19,11,DocumentNames {paint:"ink".into(),paper:"paper".into()}));
         let capture=editor.capture_session(editor.capture(1,Default::default()).unwrap()).unwrap();
-        let builtin=PreparedSession::prepare(&capture,json!({"marker":1}),&cancel).unwrap();
-        let mut store=SessionStore::open(&root.0).unwrap();store.commit(&builtin,&cancel).unwrap();
+        let builtin=captured(&capture, json!({"marker":1}));
+        let mut store=SessionStore::open(&root.0).unwrap();checkpoint(&mut store, &builtin,&cancel).unwrap();
         let handle=editor.document().artwork.effects.iter().next().unwrap().0;
         let program=crate::effect_catalog::custom_program("solid_color");let values=crate::EffectInstance::new(program.clone()).values;
         let application=crate::EffectApplication::new(program,values,editor.document().composition().size);
         editor.perform(crate::Edit::Effect(crate::RecordChange::replace(&editor.document().artwork.effects,handle,Some(application)).unwrap())).unwrap();
         let capture=editor.capture_session(editor.capture(1,Default::default()).unwrap()).unwrap();
-        let custom=PreparedSession::prepare(&capture,json!({"marker":2}),&cancel).unwrap();
-        let generation=store.commit(&custom,&cancel).unwrap();
+        let custom=captured(&capture, json!({"marker":2}));
+        let generation=checkpoint(&mut store, &custom,&cancel).unwrap();
         let metadata=fs::read(store.generation_path(generation)).unwrap();
         let head=fs::read(root.0.join("head.json")).unwrap();drop(store);
         let mut store=SessionStore::open(&root.0).unwrap();
@@ -1697,13 +1699,11 @@ mod tests {
         assert_eq!(fs::read(root.0.join("head.json")).unwrap(),head);
     }
     fn count(path: &Path) -> usize { match fs::read_dir(path) { Ok(entries) => entries.count(), Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0, Err(error) => panic!("{error}") } }
-    fn resource_owner(store: &SessionStore, id: PortableId, length: u64) -> Arc<ResourceFile> {
-        let generation = store.head.as_ref().unwrap().current.clone();
-        let bytes = store.generation_metadata(&generation, ProjectLimits::default().metadata_bytes).unwrap();
-        let stored = StoredGeneration::parse(&bytes, ProjectLimits::default()).unwrap_or_else(|e| panic!("{}", e.message()));
-        let location = &stored.locations.unwrap()[&id];
-        let path = store.pack_path(location.pack);
-        Arc::new(ResourceFile { id, offset: location.offset, file: Arc::new(File::open(&path).unwrap()), path, length, _owner: store._owner.clone() })
+    struct ReaderLease {location:Arc<StoreLocation>,path:PathBuf}
+    impl std::ops::Deref for ReaderLease {type Target=StoreLocation;fn deref(&self)->&Self::Target {&self.location}}
+    fn resource_owner(store:&SessionStore,id:PortableId,length:u64)->ReaderLease {
+        let location=store.index[&id].location.clone();assert_eq!(location.length,length);
+        ReaderLease {path:store.pack_path(location.pack.id),location}
     }
     fn tile_resource(prepared: &PreparedSession) -> &super::super::resources::PreparedResource {
         prepared.resources().entries.iter().find(|entry| matches!(entry.payload, Payload::Tile(_))).unwrap()
@@ -1746,8 +1746,8 @@ mod tests {
             for operation in 1..=operations {
                 let directory = Directory::new();
                 let mut store = SessionStore::open(&directory.0).unwrap();
-                store.commit(&old, &AtomicBool::new(false)).unwrap();
-                let failure = store.commit_using(&new, &AtomicBool::new(false), Interrupted { operation, after, count: 0 });
+                checkpoint(&mut store, &old, &AtomicBool::new(false)).unwrap();
+                let failure = checkpoint_using(&mut store, &new, &AtomicBool::new(false), Interrupted { operation, after, count: 0 });
                 assert!(failure.is_err());
                 drop(store);
                 let mut restored = SessionStore::open(&directory.0).unwrap();
@@ -1780,8 +1780,8 @@ mod tests {
             let directory = Directory::new();
             let mut store = SessionStore::open(&directory.0).unwrap();
             let original = capture(7);
-            store.commit(&original, &AtomicBool::new(false)).unwrap();
-            drop(store);
+            checkpoint(&mut store, &original, &AtomicBool::new(false)).unwrap();
+            drop(store); drop(original);
             let status = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", "package::session_store::tests::process_death_mid_write_keeps_the_original_and_cleans_temporary_files", "--test-threads=1"])
                 .env("CAPY_SESSION_CRASH_DIRECTORY", &directory.0)
@@ -1801,15 +1801,15 @@ mod tests {
         let directory = Directory::new();
         let mut store = SessionStore::open(&directory.0).unwrap();
         let old = capture(1);
-        let previous = store.commit(&old, &AtomicBool::new(false)).unwrap();
+        let previous = checkpoint(&mut store, &old, &AtomicBool::new(false)).unwrap();
         let new = capture(2);
-        assert!(store.commit_using(&new, &AtomicBool::new(false), Interrupted { operation: 3, after: true, count: 0 }).is_err());
+        assert!(checkpoint_using(&mut store, &new, &AtomicBool::new(false), Interrupted { operation: 3, after: true, count: 0 }).is_err());
         assert_ne!(store.generation(), Some(previous)); assert_eq!(store.loaded_generation(), store.generation());
         assert!(store.programs.contains_key(&store.generation().unwrap()));
         store.collect_garbage().unwrap();
         assert_eq!(marker(&mut store), 2);
         let third = capture(3);
-        store.commit(&third, &AtomicBool::new(false)).unwrap();
+        checkpoint(&mut store, &third, &AtomicBool::new(false)).unwrap();
         assert_eq!(marker(&mut store), 3);
         assert_eq!(count(&directory.0.join("generations")), 2);
         assert_eq!(count(&directory.0.join("packs")), 1);
@@ -1820,17 +1820,16 @@ mod tests {
         let root = Directory::new(); let directory = Directory(root.0.join("drawing"));
         let mut store = SessionStore::open(&directory.0).unwrap();
         let original = capture(1);
-        store.commit(&original, &AtomicBool::new(false)).unwrap();
+        checkpoint(&mut store, &original, &AtomicBool::new(false)).unwrap();
         let resource = tile_resource(&original);
         let live = resource_owner(&store, resource.payload.id(), resource.bytes);
-        store._owner.readers.lock().unwrap().push(Arc::downgrade(&live));
         for value in 2..20 {
-            store.commit(&capture(value), &AtomicBool::new(false)).unwrap();
+            checkpoint(&mut store, &capture(value), &AtomicBool::new(false)).unwrap();
             assert!(count(&directory.0.join("generations")) <= 2);
             assert!(count(&directory.0.join("packs")) <= 3);
         }
-        let pack = ResourcePack::new(live.length,vec![(0,live.clone())]);
-        let RangeState::Ready(bytes)=pack.poll_on_worker(0,live.length as usize).unwrap() else {panic!("worker read must complete")};
+        let pack=live.location.backing().unwrap();
+        let RangeState::Ready(bytes)=pack.read_on_worker(0,live.length as usize).map(RangeState::Ready).unwrap() else {panic!("worker read must complete")};
         assert_eq!(bytes.len(),live.length as usize);
         store.retire().unwrap();
         assert_eq!(count(&directory.0.join("packs")), 1);
@@ -1839,7 +1838,7 @@ mod tests {
         assert!(SessionStore::open(&directory.0).is_err());
         collect_unreferenced_stores(&root.0, &BTreeSet::new(), &AtomicBool::new(false)).unwrap();
         assert_eq!(count(&directory.0.join("packs")), 1);
-        drop(bytes); drop(pack); drop(live);
+        drop(bytes); drop(pack); drop(live); drop(original);
         collect_unreferenced_stores(&root.0, &BTreeSet::new(), &AtomicBool::new(false)).unwrap();
         assert_eq!(count(&directory.0.join("packs")), 0);
         assert_eq!(count(&directory.0.join("generations")), 0);
@@ -1851,9 +1850,9 @@ mod tests {
         for corruption in 0..4 {
             let directory = Directory::new();
             let mut store = SessionStore::open(&directory.0).unwrap();
-            let previous = store.commit(&capture(1), &AtomicBool::new(false)).unwrap();
+            let previous = checkpoint(&mut store, &capture(1), &AtomicBool::new(false)).unwrap();
             let second = capture(2);
-            let generation = store.commit(&second, &AtomicBool::new(false)).unwrap();
+            let generation = checkpoint(&mut store, &second, &AtomicBool::new(false)).unwrap();
             match corruption {
                 0 => {
                     let owner = resource_owner(&store, tile_resource(&second).payload.id(), tile_resource(&second).bytes);
@@ -1881,6 +1880,17 @@ mod tests {
             let head = fs::read(store.path.join("head.json")).unwrap();
             drop(store);
             let mut store = SessionStore::open(&directory.0).unwrap();
+            if corruption==0 {
+                let opened = store.load(ProjectLimits::default(), &AtomicBool::new(false)).unwrap().unwrap();
+                assert_eq!(store.loaded_generation(), Some(generation));
+                assert_eq!(store.generation(), Some(generation));
+                let blobs = opened.editor.retained_tiles().blobs().unwrap();
+                assert_eq!(blobs.len(), 1);
+                assert_eq!(blobs[0].decode_on_worker().unwrap_err(), "Recovery resource checksum failed");
+                assert_eq!(fs::read(store.generation_path(generation)).unwrap(), metadata);
+                assert_eq!(fs::read(store.path.join("head.json")).unwrap(), head);
+                continue;
+            }
             if corruption==2 {
                 assert_eq!(store.load(ProjectLimits::default(),&AtomicBool::new(false)).err().unwrap(),"Unsupported session artwork");
                 assert_eq!(store.loaded_generation(),None);assert_eq!(store.generation(),Some(generation));
@@ -1892,7 +1902,7 @@ mod tests {
             assert_eq!(store.loaded_generation(),Some(previous));
             assert_eq!(fs::read(store.generation_path(generation)).unwrap(),metadata);
             assert_eq!(fs::read(store.path.join("head.json")).unwrap(),head);
-            store.commit(&capture(3), &AtomicBool::new(false)).unwrap();
+            checkpoint(&mut store, &capture(3), &AtomicBool::new(false)).unwrap();
             assert_eq!(marker(&mut store), 3);
             assert_eq!(count(&directory.0.join("generations")), 2);
             assert_eq!(count(&directory.0.join("packs")), 1);
@@ -1902,8 +1912,8 @@ mod tests {
     #[test]
     fn future_session_schema_is_terminal_before_reading_its_resource_inventory() {
         let directory=Directory::new();let cancel=AtomicBool::new(false);
-        let mut store=SessionStore::open(&directory.0).unwrap();store.commit(&capture(1),&cancel).unwrap();
-        let generation=store.commit(&capture(2),&cancel).unwrap();
+        let mut store=SessionStore::open(&directory.0).unwrap();checkpoint(&mut store, &capture(1),&cancel).unwrap();
+        let generation=checkpoint(&mut store, &capture(2),&cancel).unwrap();
         let metadata=serde_json::to_vec(&json!({"format":"capy.session","version":2,"future_field":[]})).unwrap();
         fs::write(store.generation_path(generation),&metadata).unwrap();
         let mut head=store.head.clone().unwrap();head.current=Generation::new(generation,&metadata);
@@ -1915,22 +1925,28 @@ mod tests {
         assert_eq!(fs::read(store.path.join("head.json")).unwrap(),head);
     }
     #[test]
-    fn reuse_verifies_existing_immutable_bytes_and_does_not_rewrite() {
+    fn verified_reuse_does_not_reread_and_corruption_fails_on_first_read() {
         let directory = Directory::new();
         let capture = capture(9);
         let mut store = SessionStore::open(&directory.0).unwrap();
-        store.commit(&capture, &AtomicBool::new(false)).unwrap();
+        checkpoint(&mut store, &capture, &AtomicBool::new(false)).unwrap();
         let path = resource_owner(&store, tile_resource(&capture).payload.id(), tile_resource(&capture).bytes).path.clone();
         let modified = fs::metadata(&path).unwrap().modified().unwrap();
-        store.commit(&capture, &AtomicBool::new(false)).unwrap();
+        checkpoint(&mut store, &capture, &AtomicBool::new(false)).unwrap();
         assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
         drop(store);
         let mut store = SessionStore::open(&directory.0).unwrap();
-        fs::write(&path, b"corrupt").unwrap();
+        let mut bytes = fs::read(&path).unwrap(); bytes[0] ^= 1; fs::write(&path, &bytes).unwrap();
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        checkpoint(&mut store, &capture, &AtomicBool::new(false)).unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
         let head = fs::read(directory.0.join("head.json")).unwrap();
-        assert!(store.commit(&capture, &AtomicBool::new(false)).is_err());
+        let opened = store.load(ProjectLimits::default(), &AtomicBool::new(false)).unwrap().unwrap();
+        let blobs = opened.editor.retained_tiles().blobs().unwrap();
+        assert_eq!(blobs.len(), 1);
+        assert_eq!(blobs[0].decode_on_worker().unwrap_err(), "Recovery resource checksum failed");
         assert_eq!(fs::read(directory.0.join("head.json")).unwrap(), head);
-        assert!(store.load(ProjectLimits::default(), &AtomicBool::new(false)).is_err());
     }
 
     #[test]
@@ -1939,8 +1955,8 @@ mod tests {
         let mut store = SessionStore::open(&directory.0).unwrap();
         assert!(SessionStore::open(&directory.0).is_err());
         let saved = capture(5);
-        store.commit(&saved, &AtomicBool::new(false)).unwrap();
-        assert!(store.commit(&capture(6), &AtomicBool::new(true)).is_err());
+        checkpoint(&mut store, &saved, &AtomicBool::new(false)).unwrap();
+        assert!(checkpoint(&mut store, &capture(6), &AtomicBool::new(true)).is_err());
         assert_eq!(marker(&mut store), 5);
         let file = directory.0.join("generations/.capy-save-interrupted");
         fs::write(&file, b"partial").unwrap();
@@ -1982,7 +1998,7 @@ mod tests {
                 _ => value["resources"][0]["crc32"] = "FFFFFFFF".into(),
             }
             let error=resource_index(&serde_json::to_vec(&value).unwrap(), ProjectLimits::default()).err().expect("Malformed recovery range").message();
-            if corruption==1 {assert_eq!(error,"Recovery resource pack overflow");}
+            if corruption==1 {assert_eq!(error,"Recovery resource range overflow");}
         }
     }
 
@@ -1991,18 +2007,17 @@ mod tests {
         let root = Directory::new();
         let cancel = AtomicBool::new(false);
         let mut kept = SessionStore::open(&root.0.join("kept")).unwrap();
-        kept.commit(&capture(1), &cancel).unwrap();
+        checkpoint(&mut kept, &capture(1), &cancel).unwrap();
         let mut live = SessionStore::open(&root.0.join("writer")).unwrap();
-        live.commit(&capture(2), &cancel).unwrap();
+        checkpoint(&mut live, &capture(2), &cancel).unwrap();
         let mut orphan = SessionStore::open(&root.0.join("orphan")).unwrap();
         let prepared = capture(3);
-        orphan.commit(&prepared, &cancel).unwrap();
+        checkpoint(&mut orphan, &prepared, &cancel).unwrap();
         let tile = tile_resource(&prepared);
         let reader = resource_owner(&orphan, tile.payload.id(), tile.bytes);
-        orphan._owner.readers.lock().unwrap().push(Arc::downgrade(&reader));
         orphan.retire().unwrap();
         let mut unpublished = SessionStore::open(&root.0.join("unpublished")).unwrap();
-        unpublished.commit(&capture(4), &cancel).unwrap();
+        checkpoint(&mut unpublished, &capture(4), &cancel).unwrap();
         drop(unpublished);
         let unrecognized = root.0.join("unrecognized");
         fs::create_dir(&unrecognized).unwrap(); fs::write(unrecognized.join("keep"), b"user bytes").unwrap();
@@ -2018,7 +2033,7 @@ mod tests {
         assert!(reader.path.is_file());
         assert_eq!(fs::read(unrecognized.join("keep")).unwrap(), b"user bytes");
         assert!(root.0.join("unpublished/head.json").is_file());
-        drop(reader); drop(live);
+        drop(reader); drop(live); drop(prepared);
         collect_unreferenced_stores(&root.0, &reachable, &cancel).unwrap();
         assert_eq!(count(&root.0.join("orphan/packs")), 0);
         assert!(root.0.join("writer/head.json").is_file());
@@ -2030,10 +2045,10 @@ mod tests {
         let root = Directory::new();
         let path = root.0.join("closed");
         let mut store = SessionStore::open(&path).unwrap();
-        store.commit(&capture(1), &AtomicBool::new(false)).unwrap();
+        checkpoint(&mut store, &capture(1), &AtomicBool::new(false)).unwrap();
         atomic_replace(&path.join(".retired"), b"").unwrap();
         assert!(path.join("head.json").is_file());
-        assert!(store.commit(&capture(2), &AtomicBool::new(false)).is_err());
+        assert!(checkpoint(&mut store, &capture(2), &AtomicBool::new(false)).is_err());
         assert_eq!(count(&path.join("generations")), 1);
         drop(store);
         assert!(SessionStore::open(&path).is_err());
@@ -2051,13 +2066,13 @@ mod tests {
         let root = Directory::new(); let path = root.0.join("closing");
         let cancel = AtomicBool::new(false);
         let mut store = SessionStore::open(&path).unwrap();
-        store.commit(&capture(1), &cancel).unwrap();
+        checkpoint(&mut store, &capture(1), &cancel).unwrap();
         store.prepare_retirement().unwrap();
         drop(store);
         collect_unreferenced_stores(&root.0, &["closing".into()].into(), &cancel).unwrap();
         let mut store = SessionStore::open(&path).unwrap();
         assert_eq!(marker(&mut store), 1);
-        store.commit(&capture(2), &cancel).unwrap();
+        checkpoint(&mut store, &capture(2), &cancel).unwrap();
         assert_eq!(marker(&mut store), 2);
         assert!(!path.join(".retired").exists());
         drop(store);
@@ -2072,7 +2087,7 @@ mod tests {
         let root = Directory::new(); let path = root.0.join("corrupt");
         let cancel = AtomicBool::new(false);
         let mut store = SessionStore::open(&path).unwrap();
-        store.commit(&capture(8), &cancel).unwrap();
+        checkpoint(&mut store, &capture(8), &cancel).unwrap();
         assert!(prepare_store_retirement(&path).is_err());
         drop(store);
         atomic_replace(&path.join("head.json"), b"invalid head").unwrap();
@@ -2097,7 +2112,7 @@ mod tests {
         for marker in [".retired", ".retiring"] {
             let path = root.0.join(marker.trim_start_matches('.'));
             let mut store = SessionStore::open(&path).unwrap();
-            store.commit(&capture(2), &cancel).unwrap();
+            checkpoint(&mut store, &capture(2), &cancel).unwrap();
             drop(store);
             remove_file(&path.join("head.json")).unwrap();
             atomic_replace(&path.join(marker), b"malformed").unwrap();
@@ -2114,9 +2129,9 @@ mod tests {
     fn valid_same_length_metadata_corruption_falls_back_before_decode_or_collection() {
         let directory = Directory::new(); let cancel = AtomicBool::new(false);
         let mut store = SessionStore::open(&directory.0).unwrap();
-        let previous = store.commit(&capture(1), &cancel).unwrap();
+        let previous = checkpoint(&mut store, &capture(1), &cancel).unwrap();
         let prepared = capture(2);
-        let current = store.commit(&prepared, &cancel).unwrap();
+        let current = checkpoint(&mut store, &prepared, &cancel).unwrap();
         let original = fs::read(store.generation_path(current)).unwrap();
         let mut metadata: serde_json::Value = serde_json::from_slice(&original).unwrap();
         metadata["session"]["metadata"]["marker"] = 3.into();
@@ -2131,7 +2146,7 @@ mod tests {
         assert_eq!(marker(&mut store), 1);
         assert_eq!(store.loaded_generation(), Some(previous));
         assert!(store.recovered_previous());
-        store.commit(&capture(4), &cancel).unwrap();
+        checkpoint(&mut store, &capture(4), &cancel).unwrap();
         assert_eq!(store.head.as_ref().unwrap().previous.as_ref().unwrap().id, previous);
         assert_eq!(marker(&mut store), 4);
         assert_eq!(count(&directory.0.join("generations")), 2);
@@ -2149,7 +2164,7 @@ mod tests {
     fn repeated_retirement_preserves_the_empty_terminal_marker() {
         let root = Directory::new(); let path = root.0.join("closed"); let cancel = AtomicBool::new(false);
         let mut store = SessionStore::open(&path).unwrap();
-        store.commit(&capture(2), &cancel).unwrap();
+        checkpoint(&mut store, &capture(2), &cancel).unwrap();
         store.prepare_retirement().unwrap();
         store.retire().unwrap();
         let marker = fs::metadata(path.join(".retired")).unwrap();
@@ -2178,14 +2193,14 @@ mod tests {
         let cancel = AtomicBool::new(false);
         for name in ["resources", "generations"] {
             let path = root.0.join(name); let mut store = SessionStore::open(&path).unwrap();
-            store.commit(&capture(1), &cancel).unwrap();
+            checkpoint(&mut store, &capture(1), &cancel).unwrap();
             store.prepare_retirement().unwrap();
             let target = outside.0.join(format!("{}.{}", PortableId::random(), if name == "resources" { "bin" } else { "json" }));
             fs::write(&target, b"outside user bytes").unwrap();
             let retained = path.join(format!("original-{name}"));
             fs::rename(path.join(name), &retained).unwrap();
             symlink(&outside.0, path.join(name)).unwrap();
-            assert!(store.commit(&capture(2), &cancel).is_err());
+            assert!(checkpoint(&mut store, &capture(2), &cancel).is_err());
             assert!(store.load(ProjectLimits::default(), &cancel).is_err());
             assert!(store.collect_garbage().is_err());
             assert!(store.retire().is_err());
@@ -2213,7 +2228,7 @@ mod tests {
         let root = Directory::new(); let path = root.0.join("drawing");
         let mut store = SessionStore::open(&path).unwrap();
         let prepared = capture(7);
-        let generation = store.commit(&prepared, &AtomicBool::new(false)).unwrap();
+        let generation = checkpoint(&mut store, &prepared, &AtomicBool::new(false)).unwrap();
         let permissions = fs::metadata(&path).unwrap().permissions();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o0)).unwrap();
         let failed = store.collect_garbage();

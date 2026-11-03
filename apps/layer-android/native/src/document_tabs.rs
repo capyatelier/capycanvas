@@ -163,44 +163,21 @@ pub extern "system" fn Java_art_capycanvas_Native_documentTrimComplete(mut env: 
     })
 }
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_documentSpillTask(
-    mut env: JNIEnv,
-    _: JClass,
-    handle: jlong,
-) -> jni::sys::jlongArray {
-    crate::jni_entry!(env, handle, capy_app, {
-    let a = &mut *capy_app;
-    let Some((id, tiles)) = a.window.documents.spill_candidate() else { return Ok(std::ptr::null_mut()); };
-    let array = env.new_long_array(2).map_err(error)?;
-    let task = crate::inspection::owned(tiles)?;
-    if let Err(error) = env.set_long_array_region(&array, 0, &[id as jlong, task]).map_err(error) {
-        crate::inspection::release::<layer_core::raster_storage::RetainedTiles>(task)?;
-        return Err(error);
-    }
-    array.into_raw()
+pub extern "system" fn Java_art_capycanvas_Native_documentTrimTask(mut env:JNIEnv,_:JClass,handle:jlong,stores:jlong)->jlong {
+    crate::jni_entry!(env,handle,capy_app, {
+        let (candidates,budget)=capy_app.window.documents.pressure_snapshot();
+        let reply=crate::inspection::borrow::<layer_host::session_stores::SessionStores>(stores)?.trim(candidates,budget);
+        or_throw(&mut env,crate::inspection::owned(reply),0)
     })
 }
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_documentSpillWork(
-    mut env: JNIEnv,
-    _: JClass,
-    handle: jlong,
-    store: jlong,
-) {
+pub extern "system" fn Java_art_capycanvas_Native_documentTrimWork(mut env:JNIEnv,_:JClass,task:jlong) {
     crate::jni_entry!(env, {
-    let tiles_owner = crate::inspection::borrow::<layer_core::raster_storage::RetainedTiles>(handle)?;
-    let tiles = &*tiles_owner;
-    let mut store_owner = crate::inspection::borrow::<layer_core::package::session_store::SessionStore>(store)?;
-    let store = &mut *store_owner;
-    let result = crate::inspection::on_worker("capy-session-spill", "Session worker failed", move || {
-        store.make_durable(tiles, &std::sync::atomic::AtomicBool::new(false)).map(|_| ())
-    });
-    fail(&mut env, result);
+        let reply=crate::inspection::borrow::<layer_host::session_stores::StoreReply>(task)?.clone();
+        fail(&mut env,reply.wait_on_worker().map(|_|()))
     })
 }
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_documentSpillFree(mut env: JNIEnv, _: JClass, handle: jlong) {
-    crate::jni_entry!(env, {
-    crate::inspection::release::<layer_core::raster_storage::RetainedTiles>(handle)?;
-    })
+pub extern "system" fn Java_art_capycanvas_Native_documentTrimFree(mut env:JNIEnv,_:JClass,task:jlong) {
+    crate::jni_entry!(env, {crate::inspection::release::<layer_host::session_stores::StoreReply>(task)?;})
 }

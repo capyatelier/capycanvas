@@ -144,7 +144,9 @@ impl std::fmt::Debug for MemoryOwner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.debug_tuple("MemoryOwner").field(&self.grant()).finish() }
 }
 impl MemoryOwner {
-    pub(crate) fn set_wake(&self, wake:Arc<dyn Fn() + Send + Sync>) {let _=self.0.grants.wake.set(wake);}
+    pub fn set_wake(&self, wake:Arc<dyn Fn() + Send + Sync>) {
+        let result=self.0.grants.wake.set(wake);debug_assert!(result.is_ok(),"Memory owner wake is already registered");
+    }
     pub fn publish(&self, report: MemoryReport) -> bool { self.0.pending.publish(report) }
     pub fn report(&self, mut report: MemoryReport) {
         report.ram_bytes = report.ram_bytes.max(report.pinned_ram_bytes);

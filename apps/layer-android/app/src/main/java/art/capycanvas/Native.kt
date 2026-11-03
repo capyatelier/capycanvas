@@ -18,6 +18,7 @@ internal object Native {
     @JvmStatic external fun publishLanguage(handle: Long, generation: Long, context: Long, busy: Boolean)
     @JvmStatic external fun freeLanguage(context: Long)
     @JvmStatic external fun create(saved: String, locales: Array<String>, screen: String, profiling: Boolean): Long
+    @JvmStatic external fun setWake(handle: Long, owner: CanvasHost?)
     @JvmStatic external fun destroy(handle: Long)
     @JvmStatic external fun attach(handle: Long, surface: Surface)
     @JvmStatic external fun displayStatus(handle: Long): String
@@ -66,9 +67,9 @@ internal object Native {
     @JvmStatic external fun documentResumeFree(task: Long)
     @JvmStatic external fun documentTrimRequest(handle: Long): Long
     @JvmStatic external fun documentTrimComplete(handle: Long, token: Long, error: String?): Boolean
-    @JvmStatic external fun documentSpillTask(handle: Long): LongArray?
-    @JvmStatic external fun documentSpillWork(task: Long, store: Long)
-    @JvmStatic external fun documentSpillFree(task: Long)
+    @JvmStatic external fun documentTrimTask(handle:Long,stores:Long):Long
+    @JvmStatic external fun documentTrimWork(task:Long)
+    @JvmStatic external fun documentTrimFree(task:Long)
     @JvmStatic external fun projectParkReady(handle: Long, task: Long): Boolean
     /** File worker only: atomic publication of a captured recovery snapshot. */
     @JvmStatic external fun projectTask(handle: Long, request: Int, location: String, epoch: Long, revision: Long): Long
@@ -97,18 +98,22 @@ internal object Native {
     @JvmStatic external fun sessionStamp(handle: Long, id: Long): String
     @JvmStatic external fun sessionCapture(handle: Long, id: Long): Long
     @JvmStatic external fun sessionSettle(handle: Long, now: Long)
-    @JvmStatic external fun sessionStoreOpen(directory: String): Long
+    @JvmStatic external fun sessionStoresOpen(directory: String): Long
+    @JvmStatic external fun sessionWatchPressure(handle:Long,stores:Long)
+    @JvmStatic external fun sessionCheckpointInterval():Long
+    @JvmStatic external fun sessionCheckpointNeeded(stores:Long,id:Long,stamp:String,force:Boolean):Boolean
+    @JvmStatic external fun sessionBind(stores:Long,id:Long,key:String? = null):String
     @JvmStatic external fun sessionImport(directory: String): String
-    @JvmStatic external fun sessionStoreFree(store: Long)
-    @JvmStatic external fun sessionStoreRetire(store: Long)
-    @JvmStatic external fun sessionStorePrepareRetirement(store: Long)
+    @JvmStatic external fun sessionStoresFree(store: Long)
+    @JvmStatic external fun sessionStoreRetire(store: Long,id:Long)
+    @JvmStatic external fun sessionStorePrepareRetirement(store: Long,id:Long)
     @JvmStatic external fun sessionPrepareRetirement(directory: String)
-    @JvmStatic external fun sessionCommit(task: Long, store: Long)
+    @JvmStatic external fun sessionCommit(task: Long, store: Long,id:Long)
     @JvmStatic external fun sessionRestoreTask(handle: Long, stamp: String = "null"): Long
     @JvmStatic external fun sessionReserveIdentities(handle: Long, identities: String)
     @JvmStatic external fun sessionRequireEmptyRetry(handle: Long)
     @JvmStatic external fun sessionFailure(handle: Long, detail: String, recovery: Boolean): String
-    @JvmStatic external fun sessionRead(task: Long, store: Long, recovered: Boolean): String
+    @JvmStatic external fun sessionRead(task: Long, store: Long,id:Long,key:String,recovered: Boolean): String
     @JvmStatic external fun sessionObserve(task: Long, fd: Int): String
     @JvmStatic external fun sessionPrepare(task: Long, id: Long, observed: String)
     @JvmStatic external fun sessionAdopt(handle: Long, task: Long, active: Long, reserved: String): String

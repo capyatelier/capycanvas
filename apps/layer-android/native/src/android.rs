@@ -17,6 +17,29 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_setWake(mut env:JNIEnv,_:JClass,handle:jlong,owner:JObject) {
+    crate::jni_entry!(env,handle,capy_app, {
+        if owner.is_null() {capy_app.host.close_wake();return Ok(());}
+        let result=(|| {
+            let vm=Arc::new(env.get_java_vm().map_err(error)?);
+            let reference=env.new_object("java/lang/ref/WeakReference","(Ljava/lang/Object;)V",&[jni::objects::JValue::Object(&owner)]).map_err(error)?;
+            let reference=env.new_global_ref(reference).map_err(error)?;
+            capy_app.host.set_wake(Arc::new(move || {
+                let Ok(mut env)=vm.attach_current_thread() else {return;};
+                let result=env.with_local_frame(4,|env| {
+                    let owner=env.call_method(reference.as_obj(),"get","()Ljava/lang/Object;",&[])?.l()?;
+                    if !owner.is_null() {env.call_method(owner,"onNativeWake","()V",&[])?;}
+                    Ok::<(),jni::errors::Error>(())
+                });
+                if result.is_err() {let _=env.exception_clear();}
+            }));
+            Ok(())
+        })();
+        fail(&mut env,result)
+    })
+}
+
 const SCREEN_CHECK_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
 
 mod surface_capture;
@@ -541,6 +564,7 @@ impl App {
         self.gpu_watch.failure().map_or(Ok(()), Err)
     }
     fn render(&mut self, now: u64, presentation: u64) -> Result<bool, String> {
+        self.host.poll_preparation();
         // A lost device may already have been retired by observe_gpu_failure.
         // Still propagate its error so the host offers renderer recovery.
         self.check_gpu()?;

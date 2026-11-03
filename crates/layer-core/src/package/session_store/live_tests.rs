@@ -25,9 +25,8 @@ fn document_editor(blob: Arc<TileBlob>) -> Editor {
     *document.target_raster_mut(document.working.target.unwrap()).unwrap() = revision(blob);
     Editor::new(document)
 }
-fn prepared(editor: &Editor) -> PreparedSession {
-    let capture = editor.capture_session(editor.capture(1, Default::default()).unwrap()).unwrap();
-    PreparedSession::prepare(&capture, serde_json::json!({}), &AtomicBool::new(false)).unwrap()
+fn captured_editor(editor: &Editor) -> super::super::session::EditorCapture {
+    editor.capture_session(editor.capture(1, Default::default()).unwrap()).unwrap()
 }
 fn tiles(blob: Arc<TileBlob>) -> RetainedTiles { RetainedTiles {sources: vec![blob], ..Default::default()} }
 fn pack_lengths(store: &SessionStore) -> BTreeMap<PathBuf, u64> {
@@ -50,7 +49,7 @@ fn unheaded_pressure_tiles_follow_history_and_capture_lifetimes() {
     let pressure_packs = pack_lengths(&store);
     assert!(!pressure_packs.is_empty());
     for path in pressure_packs.keys() { OpenOptions::new().write(true).open(path).unwrap().set_len(PACK_BYTES).unwrap(); }
-    store.commit(&prepared(&document_editor(blob(141))), &cancel).unwrap();
+    store.checkpoint(&captured_editor(&document_editor(blob(141))), serde_json::json!({}).into(), &cancel).unwrap();
     store.collect_garbage().unwrap();
     for path in pressure_packs.keys() { assert!(path.exists()); }
     assert_eq!(first.decode_on_worker().unwrap(), expected);
@@ -83,7 +82,7 @@ fn pressure_then_checkpoint_keeps_one_physical_tile_copy() {
     let mut store = SessionStore::open(&directory.0).unwrap();
     assert_eq!(store.make_durable(&retained, &cancel).unwrap(), tile.compressed_len());
     let before = pack_lengths(&store);
-    store.commit(&prepared(&editor), &cancel).unwrap();
+    store.checkpoint(&captured_editor(&editor), serde_json::json!({}).into(), &cancel).unwrap();
     assert_eq!(pack_lengths(&store), before);
     assert_eq!(store.make_durable(&retained, &cancel).unwrap(), 0);
 }
@@ -99,13 +98,14 @@ fn pressure_alias_only_checkpoint_reuses_the_shared_durable_location() {
     assert_eq!(store.make_durable(&retained, &cancel).unwrap(), original.compressed_len());
     let before = pack_lengths(&store);
     let editor = document_editor(alias.clone());
-    let checkpoint = prepared(&editor);
-    let index = resource_index(checkpoint.metadata(), ProjectLimits::default()).unwrap_or_else(|error| panic!("{}", error.message()));
+    let checkpoint = captured_editor(&editor);
+    let archive = super::super::session::PreparedSession::prepare(&checkpoint, serde_json::json!({}), &cancel).unwrap();
+    let index = resource_index(archive.metadata(), ProjectLimits::default()).unwrap_or_else(|error| panic!("{}", error.message()));
     assert!(index.records.iter().any(|record| record.id == alias.resource_id()));
     assert!(index.records.iter().all(|record| record.id != original.resource_id()));
-    store.commit(&checkpoint, &cancel).unwrap();
+    store.checkpoint(&checkpoint, serde_json::json!({}).into(), &cancel).unwrap();
     assert_eq!(pack_lengths(&store), before);
-    drop((checkpoint, editor, retained, alias, original, store));
+    drop((archive, checkpoint, editor, retained, alias, original, store));
     let mut store = SessionStore::open(&directory.0).unwrap();
     let opened = store.load(ProjectLimits::default(), &cancel).unwrap().unwrap();
     let blobs = opened.editor.retained_tiles().blobs().unwrap();
@@ -134,7 +134,7 @@ fn failed_pressure_write_or_sync_keeps_original_ram_and_last_good_head() {
         let seed = document_editor(blob(63)); let retained = seed.retained_tiles();
         let mut store = SessionStore::open(&directory.0).unwrap();
         store.make_durable(&retained, &cancel).unwrap();
-        store.commit(&prepared(&seed), &cancel).unwrap();
+        store.checkpoint(&captured_editor(&seed), serde_json::json!({}).into(), &cancel).unwrap();
         let head = fs::read(directory.0.join("head.json")).unwrap();
         let tile = blob(91); let bytes = tile.compressed_on_worker().unwrap().into_arc(); let expected = tile.decode_on_worker().unwrap();
         assert!(store.make_durable_using(&tiles(tile.clone()), &cancel, FailedAppend {sync}).is_err());
@@ -197,13 +197,13 @@ fn thousands_of_durable_tiles_share_one_file_and_read_source_per_pack() {
     assert_eq!(store.make_durable(&retained, &cancel).unwrap(), expected);
     let physical = pack_lengths(&store);
     assert!(!physical.is_empty());
-    assert_eq!(store.packs.len(), physical.len());
-    let file_owners = store.packs.values().map(|pack| Arc::as_ptr(&pack.root.file))
-        .collect::<std::collections::HashSet<_>>();
-    assert_eq!(file_owners.len(), physical.len());
+    let packs=store._owner.packs.lock().unwrap().values().filter_map(Weak::upgrade).collect::<Vec<_>>();
+    assert_eq!(packs.len(),physical.len());
+    let file_owners=packs.iter().map(|pack|Arc::as_ptr(&pack.file)).collect::<std::collections::HashSet<_>>();
+    assert_eq!(file_owners.len(),physical.len());
     for blob in &blobs {
-        let location = blob.compressed.location().unwrap().unwrap();
-        assert!(store.packs.values().any(|pack| Arc::ptr_eq(pack, &location.pack)));
+        let location=blob.compressed.location().unwrap().unwrap();
+        assert!(packs.iter().any(|pack|Arc::ptr_eq(pack,&location.pack)));
     }
     let original = blobs[0].compressed.location().unwrap().unwrap();
     let aliased = alias.compressed.location().unwrap().unwrap();
@@ -252,4 +252,117 @@ fn blocking_store_reads_complete_without_import_headroom() {
     assert_eq!(budget.import_headroom_bytes(),0);
     assert!(budget.snapshot().ram_pinned_bytes>=bytes.len() as u64);
     assert!(pressure.as_ref().unwrap().active());
+}
+
+struct CountedReads {
+    cache:crate::tile_io::ReadCache,
+    calls:Arc<std::sync::atomic::AtomicUsize>,
+    stop:mpsc::Sender<Option<crate::tile_io::ReadCache>>,
+    worker:Option<std::thread::JoinHandle<()>>,
+}
+impl CountedReads {
+    fn new()->Self {
+        let budget=crate::MemoryBudget::with_facts(crate::MemoryFacts {override_bytes:Some(1<<30),..Default::default()});
+        let cache=crate::tile_io::ReadCache::new(budget);
+        let calls=Arc::new(std::sync::atomic::AtomicUsize::new(0));let count=calls.clone();
+        let (stop,receive)=mpsc::channel::<Option<crate::tile_io::ReadCache>>();
+        let worker=std::thread::spawn(move ||while let Ok(Some(cache))=receive.recv() {
+            if cache.has_pending_reads() {count.fetch_add(1,Ordering::Relaxed);}
+            cache.drive();
+        });
+        let schedule=stop.clone();cache.set_scheduler(Arc::new(move |cache|{let _=schedule.send(Some(cache));}));
+        Self {cache,calls,stop,worker:Some(worker)}
+    }
+    fn calls(&self)->usize {self.calls.load(Ordering::Acquire)}
+}
+impl Drop for CountedReads {
+    fn drop(&mut self) {let _=self.stop.send(None);if let Some(worker)=self.worker.take() {worker.join().unwrap();}}
+}
+#[test]
+fn clean_checkpoints_reuse_the_index_without_reading_cold_tiles_or_recomputing_their_crc() {
+    let directory=Directory::new();let reads=CountedReads::new();let cancel=AtomicBool::new(false);
+    let tile=blob(97);let editor=document_editor(tile.clone());
+    let capture=editor.capture_session(editor.capture(1,Default::default()).unwrap()).unwrap();
+    let mut store=SessionStore::open_with_cache(&directory.0,reads.cache.clone()).unwrap();
+    store.checkpoint(&capture,serde_json::json!({"camera":0}).into(),&cancel).unwrap();
+    let physical=pack_lengths(&store);let location=tile.compressed.location().unwrap().unwrap();
+    assert_eq!(tile.resident_bytes(),0);assert_eq!(reads.calls(),0);
+    for camera in 1..4 {
+        store.checkpoint(&capture,serde_json::json!({"camera":camera}).into(),&cancel).unwrap();
+        assert_eq!(pack_lengths(&store),physical);
+        assert!(Arc::ptr_eq(&tile.compressed.location().unwrap().unwrap(),&location));
+        assert_eq!(reads.calls(),0,"a cold tile CRC requires a payload read");
+    }
+    assert_eq!(tile.decode_on_worker().unwrap(),vec![97;256*256*4]);
+    assert!(reads.calls()>0,"the counting reader must observe actual tile use");
+}
+
+#[test]
+fn checkpoint_reuse_preserves_captured_effect_phases_and_ignores_runtime_elapsed() {
+    use crate::{EffectInstance, authored::{EffectApplication, EvaluationContext, Occurrence, OccurrenceContent}};
+    let directory=Directory::new();let cancel=AtomicBool::new(false);
+    let mut document=Document::new(PortableId::random(),256,256,DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+    let program=crate::bundled_effect_catalog().get("motion_blur").unwrap().program();
+    let values=EffectInstance::new(program.clone()).values;
+    let effect=document.artwork.effects.insert(PortableId::random(),EffectApplication::new(program,values,[256;2])).unwrap();
+    let occurrence=document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(effect),"Frozen motion")).unwrap();
+    let stack=document.composition().result;document.artwork.stacks.get_mut(stack).unwrap().entries.insert(0,occurrence);
+    let editor=Editor::new(Document::from_artwork(document.artwork).unwrap());
+    let base=editor.capture_session(editor.capture(1,Default::default()).unwrap()).unwrap();
+    let mut store=SessionStore::open(&directory.0).unwrap();
+    let mut previous=None;
+    for (index,(elapsed,phase)) in [(1.25,2.5),(3.75,2.5),(3.75,7.5),(3.75,7.5)].into_iter().enumerate() {
+        let context=EvaluationContext {elapsed,phases:vec![(effect,phase)].into()};
+        let mut capture=base.clone();
+        let artwork=Arc::make_mut(&mut capture.artwork_mut().artwork);
+        artwork.outputs.get_mut(artwork.default_output).unwrap().context=context.clone();
+        let key=CheckpointKey::of(&capture);
+        assert_eq!(key.checkpoint,CheckpointKey::of(&base).checkpoint);
+        assert_eq!(key.context,Some(EvaluationContext {elapsed:0.,phases:context.phases.clone()}));
+        if let Some(previous)=&previous {assert_eq!(key==*previous,index!=2);}
+        previous=Some(key);
+        store.checkpoint(&capture,serde_json::json!({"camera":index}).into(),&cancel).unwrap();
+        let restored=store.load(ProjectLimits::default(),&cancel).unwrap().unwrap();
+        assert_eq!(restored.editor.document().output().context,EvaluationContext {elapsed:0.,phases:context.phases});
+        assert_eq!(restored.metadata.value["camera"],serde_json::json!(index));
+    }
+}
+
+#[test]
+fn checkpoint_reuse_invalidates_changed_metadata_profiles_and_rejects_missing_output() {
+    use crate::color::{ColorProfile, RgbSpace};
+    let directory=Directory::new();let cancel=AtomicBool::new(false);
+    let editor=document_editor(blob(41));
+    let capture=editor.capture_session(editor.capture(1,Default::default()).unwrap()).unwrap();
+    let mut store=SessionStore::open(&directory.0).unwrap();
+    for (index,space) in [RgbSpace::Srgb,RgbSpace::DisplayP3,RgbSpace::DisplayP3].into_iter().enumerate() {
+        let profiles=vec![ColorProfile::Builtin(space)];
+        store.checkpoint(&capture,super::super::session::SessionMetadata {value:serde_json::json!({"camera":index}),profiles:profiles.clone()},&cancel).unwrap();
+        let restored=store.load(ProjectLimits::default(),&cancel).unwrap().unwrap();
+        assert_eq!(restored.metadata.profiles,profiles);
+        assert_eq!(restored.metadata.value["camera"],serde_json::json!(index));
+    }
+    let head=fs::read(directory.0.join("head.json")).unwrap();
+    let mut invalid=capture.clone();
+    Arc::make_mut(&mut invalid.artwork_mut().artwork).default_output=crate::authored::OutputHandle::from_index(u32::MAX);
+    assert!(CheckpointKey::of(&invalid).context.is_none());
+    assert!(store.checkpoint(&invalid,serde_json::json!({}).into(),&cancel).is_err());
+    assert_eq!(fs::read(directory.0.join("head.json")).unwrap(),head);
+}
+#[test]
+fn restore_binds_cold_tiles_and_defers_checksum_verification_until_the_first_read() {
+    let directory=Directory::new();let reads=CountedReads::new();let cancel=AtomicBool::new(false);
+    let editor=document_editor(blob(113));
+    let capture=editor.capture_session(editor.capture(1,Default::default()).unwrap()).unwrap();
+    let mut store=SessionStore::open_with_cache(&directory.0,reads.cache.clone()).unwrap();
+    store.checkpoint(&capture,serde_json::json!({}).into(),&cancel).unwrap();
+    let tile=store.load(ProjectLimits::default(),&cancel).unwrap().unwrap().editor.retained_tiles().blobs().unwrap().pop().unwrap();
+    assert_eq!(tile.resident_bytes(),0);assert_eq!(reads.calls(),0);
+    let location=tile.compressed.location().unwrap().unwrap();
+    let mut file=OpenOptions::new().write(true).open(store.pack_path(location.pack.id)).unwrap();
+    use std::io::{Seek,SeekFrom};let mut byte=[0];read_exact_at(&location.pack.file,location.offset,&mut byte).unwrap();
+    file.seek(SeekFrom::Start(location.offset)).unwrap();file.write_all(&[byte[0]^0xff]).unwrap();file.sync_all().unwrap();
+    assert!(tile.decode_on_worker().unwrap_err().contains("checksum"));
+    assert!(reads.calls()>0);
+    assert_eq!(store.load(ProjectLimits::default(),&cancel).unwrap().unwrap().editor.document().composition().size,[256;2]);
 }

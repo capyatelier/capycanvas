@@ -171,10 +171,10 @@ fn preparation_command<T>(receiver: &mpsc::Receiver<T>, ready: bool) -> Preparat
         Err(mpsc::TryRecvError::Disconnected) => PreparationCommand::Closed,
     }
 }
-struct PreparationSignal { commands: mpsc::Sender<Command>, enabled: AtomicBool, queued: AtomicBool }
+struct PreparationSignal { commands:mpsc::Sender<Command>,queued:AtomicBool }
 impl PreparationSignal {
     fn notify(&self) {
-        if self.enabled.load(Ordering::Acquire) && !self.queued.swap(true,Ordering::AcqRel)
+        if !self.queued.swap(true,Ordering::AcqRel)
             && self.commands.send(Command::PreparationReady).is_err() {self.queued.store(false,Ordering::Release);}
     }
 }
@@ -779,7 +779,7 @@ impl RenderWorker {
         let worker_chrome = renderer.presented_chrome.clone();
         let finished_chrome = renderer.presented_chrome.clone();
         if let Some(transition) = &transition { transition.listen(renderer.commands.clone()); }
-        let preparation = Arc::new(PreparationSignal { commands: renderer.commands.clone(), enabled: AtomicBool::new(true), queued: AtomicBool::new(false) });
+        let preparation = Arc::new(PreparationSignal { commands:renderer.commands.clone(),queued:AtomicBool::new(false) });
         #[cfg(test)]
         let worker_stats = renderer.stats.clone();
         renderer.thread = Some(std::thread::Builder::new()
@@ -798,8 +798,9 @@ impl RenderWorker {
                     let mut worker = Worker::new(parent, area, worker_clock, worker_chrome, color, &localization)?;
                     worker.transition = transition;
                     let signal = preparation.clone();
-                    worker.renderer.set_preparation_wake(Arc::new(move || signal.notify()));
-                    worker.preparation = Some(preparation);
+                    let wake=layer_host::PreparationWake::new(Arc::new(move ||signal.notify()));
+                    wake.install(&mut worker.renderer);worker.preparation_wake=Some(wake);
+                    worker.preparation=Some(preparation);
                     worker.run(
                         &receiver,
                         &chrome_requests,
@@ -1553,6 +1554,7 @@ struct Worker {
     clock: Arc<crate::wayland::FrameClock>,
     transition: Option<CanvasTransition>,
     preparation: Option<Arc<PreparationSignal>>,
+    preparation_wake:Option<layer_host::PreparationWake>,
     watch: layer_host::DeviceWatch,
     backdrop_submitted: bool,
     paper_ready: Arc<AtomicBool>,
@@ -1671,7 +1673,6 @@ impl Worker {
         let mut fail_next_frame = false;
         loop {
             let preparation_progress = self.renderer.preparation_progress();
-            if document_drawn && let Some(preparation)=&self.preparation {preparation.enabled.store(false,Ordering::Release);}
             if !matches!(self.chrome.first, FirstChrome::Granted | FirstChrome::Submitted) {
                 for request in chrome_requests.try_iter() {
                     match request {
@@ -1767,7 +1768,6 @@ impl Worker {
             let admitted = admit_frame(None, &mut pending_frames,
                 |frame| self.draw_ready_frame(frame, &startup_progress, report, #[cfg(test)] &mut timing))?;
             if admitted != 0 {
-                if let Some(preparation)=&self.preparation {preparation.enabled.store(false,Ordering::Release);}
                 last_canvas_frame = std::time::Instant::now();
                 document_drawn = true;
                 count.fetch_sub(admitted, Ordering::Release);
@@ -2119,7 +2119,7 @@ impl Worker {
                     }
                 }
                 Command::Wake => (),
-                Command::PreparationReady => if let Some(preparation)=&self.preparation {preparation.queued.store(false,Ordering::Release);},
+                Command::PreparationReady => {if let Some(wake)=&self.preparation_wake {wake.take();}if let Some(preparation)=&self.preparation {preparation.queued.store(false,Ordering::Release);}},
                 Command::ReleaseChrome(revision) => {
                     if self.chrome.release(revision) {
                         self.child.synchronize(false)?;
@@ -2248,7 +2248,7 @@ impl Worker {
             clock,
             transition: None,
             watch: gpu.watch,
-            preparation: None,
+            preparation:None,preparation_wake:None,
             view_color,
             backdrop_submitted: false,
             paper_ready: Arc::new(AtomicBool::new(false)),

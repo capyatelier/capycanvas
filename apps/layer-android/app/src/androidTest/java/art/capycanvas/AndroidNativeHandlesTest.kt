@@ -30,7 +30,7 @@ class AndroidNativeHandlesTest {
         refused { Native.imageImportFree(first) }
         refused { Native.proofRelease(first) }
         refused { Native.sessionFree(first) }
-        refused { Native.sessionStoreFree(first) }
+        refused { Native.sessionStoresFree(first) }
         refused { Native.documentResumeFree(first) }
         refused { Native.clipFree(first) }
         refused { Native.clipTaskFree(first) }

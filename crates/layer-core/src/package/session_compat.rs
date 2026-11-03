@@ -4,8 +4,10 @@ use std::path::{Path,PathBuf};
 use sha2::{Digest,Sha256};
 
 fn prepared(editor:&Editor,metadata:impl Into<crate::package::session::SessionMetadata>)->PreparedSession {
-    let capture=editor.capture_session(editor.capture(11,editor.document().output().context.clone()).unwrap()).unwrap();
-    PreparedSession::prepare(&capture,metadata,&AtomicBool::new(false)).unwrap()
+    PreparedSession::prepare(&capture(editor),metadata,&AtomicBool::new(false)).unwrap()
+}
+fn capture(editor:&Editor)->crate::package::session::EditorCapture {
+    editor.capture_session(editor.capture(11,editor.document().output().context.clone()).unwrap()).unwrap()
 }
 
 #[test]
@@ -18,7 +20,7 @@ fn write_compat_fixtures() {
 pub(crate) fn generate(directory:&Path) {
     let mut unsupported=fixture();perform_all(&mut unsupported);unsupported.undo().unwrap();unsupported.undo().unwrap();
     SessionStore::open(&directory.join("unsupported-session")).unwrap()
-        .commit(&prepared(&unsupported,json!({"tab":"Release 色"})),&AtomicBool::new(false)).unwrap();
+        .checkpoint(&capture(&unsupported),json!({"tab":"Release 色"}).into(),&AtomicBool::new(false)).unwrap();
     std::fs::remove_file(directory.join("unsupported-session/.lock")).unwrap();
     let root=directory.join("session");
     let mut editor=fixture();
@@ -28,7 +30,7 @@ pub(crate) fn generate(directory:&Path) {
     }
     editor.undo().unwrap();
     let mut store=SessionStore::open(&root).unwrap();
-    store.commit(&prepared(&editor,json!({"tab":"Release 色"})),&AtomicBool::new(false)).unwrap();
+    store.checkpoint(&capture(&editor),json!({"tab":"Release 色"}).into(),&AtomicBool::new(false)).unwrap();
     drop(store);std::fs::remove_file(root.join(".lock")).unwrap();
 }
 
@@ -87,7 +89,7 @@ pub(crate) fn check_inputs(directory:&Path,check:impl Fn(&str,serde_json::Value)
     let actual=history_snapshot(&mut editor,&metadata);
     check("session.json",actual.clone());
     let loaded=store.load(ProjectLimits::default(),&cancel).unwrap().unwrap();
-    store.commit(&prepared(&loaded.editor,loaded.metadata),&cancel).unwrap();
+    store.checkpoint(&capture(&loaded.editor),loaded.metadata,&cancel).unwrap();
     drop(loaded.editor);drop(editor);drop(store);
     let mut upgraded=SessionStore::open(&temporary).unwrap();
     let mut loaded=upgraded.load(ProjectLimits::default(),&cancel).unwrap().unwrap();

@@ -246,8 +246,6 @@ impl ReadSource {
     #[cfg(not(target_arch="wasm32"))]
     pub(crate) fn byte_len(&self)->u64 {self.0.length.load(Ordering::Acquire)}
     #[cfg(not(target_arch="wasm32"))]
-    pub(crate) fn in_use(&self)->bool {Arc::strong_count(&self.0)>1}
-    #[cfg(not(target_arch="wasm32"))]
     pub(crate) fn downgrade(&self)->WeakReadSource {WeakReadSource(Arc::downgrade(&self.0))}
     pub fn poll(&self,offset:u64,length:usize)->Result<RangeState,String> {self.poll_range(offset,length,None)}
     pub fn poll_checked(&self,offset:u64,length:usize,crc:u32)->Result<RangeState,String> {self.poll_range(offset,length,Some(crc))}
@@ -298,6 +296,14 @@ impl ReadSource {
             }
         }
     }
+}
+
+#[cfg(not(target_arch="wasm32"))]
+impl crate::package::ByteSource for ReadSource {
+    fn byte_len(&self)->u64 {self.byte_len()}
+    fn resident_bytes(&self)->usize {0}
+    fn poll(&self,offset:u64,length:usize)->Result<RangeState,String> {self.poll(offset,length)}
+    fn poll_on_worker(&self,offset:u64,length:usize)->Result<RangeState,String> {self.wait_on_worker(offset,length).map(RangeState::Ready)}
 }
 
 pub struct ReadWait { source: ReadSource, key: Key, id:u64, crc:Option<u32> }

@@ -1089,9 +1089,10 @@ fn native_document_tabs_blocked_writer_keeps_canvas_live() {
     let (locked_tx, locked_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let lock = std::thread::spawn(move || {
-        let _writer = store.lock().unwrap();
-        locked_tx.send(()).unwrap();
-        release_rx.recv_timeout(std::time::Duration::from_secs(30)).is_ok()
+        store.on_worker(|_| {
+            locked_tx.send(()).unwrap();
+            Ok(release_rx.recv_timeout(std::time::Duration::from_secs(30)).is_ok())
+        }).unwrap()
     });
     locked_rx.recv().unwrap();
     new_photo::invoke(&w, CommandId::AddLayer);

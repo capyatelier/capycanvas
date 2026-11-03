@@ -14,7 +14,11 @@ pub use model_update::ModelUpdates;
 pub mod open;
 pub mod papers;
 pub mod photo_reader;
+pub mod preparation;
+pub use preparation::PreparationWake;
 pub mod scene;
+#[cfg(not(target_arch="wasm32"))]
+pub mod session_stores;
 pub mod storage;
 pub mod tasks;
 pub mod tone;
@@ -122,6 +126,7 @@ pub struct NativeHost {
     pub ui_color: UiColor,
     pub logical: [f32; 2],
     pub dirty: bool,
+    preparation:PreparationWake,
     pub chrome_hidden: bool,
     keep_zen_button: bool,
     pub error: Option<String>,
@@ -166,7 +171,6 @@ pub fn panic_diagnostic(payload: &(dyn std::any::Any + Send)) -> String {
 impl AsMut<NativeHost> for NativeHost {
     fn as_mut(&mut self) -> &mut NativeHost { self }
 }
-
 impl NativeHost {
     pub fn reset_canvas_frame_rate(&mut self) {
         self.canvas_frame_rate = std::sync::Arc::new(CanvasFrameRate::default());
@@ -186,9 +190,24 @@ impl NativeHost {
         self.require_document_owner()?;
         let previous = self.session.state().revision;
         let (retired, change) = self.session.replace_renderer(renderer)?;
+        self.preparation.retire();
+        self.install_preparation_wake();
         self.apply_change(previous, change);
         Ok(retired)
     }
+
+    pub fn set_wake(&mut self,wake:std::sync::Arc<dyn Fn()+Send+Sync>) {
+        self.preparation.set_notify(wake);self.install_preparation_wake();
+    }
+    fn install_preparation_wake(&mut self) {
+        if let Some(renderer)=self.session.renderer_mut().0.as_mut() {self.preparation.install(renderer);}
+        else {self.preparation.retire();}
+    }
+    pub fn poll_preparation(&mut self)->bool {
+        if self.preparation.take() {self.dirty=true;}
+        self.dirty
+    }
+    pub fn close_wake(&mut self) {self.preparation.close();}
 
     fn prepare_ui_previews(&mut self) -> Result<(), String> {
         let rendition = self.session.engine().document().composition().color.depth.is_float()
@@ -268,7 +287,8 @@ impl NativeHost {
             session,
             ui_color: UiColor::Mapped,
             logical: [1.0, 1.0],
-            dirty: true,
+            dirty:true,
+            preparation:PreparationWake::default(),
             chrome_hidden: false,
             keep_zen_button: false,
             error: None,
@@ -317,6 +337,7 @@ impl NativeHost {
     }
     /// Invalidate host input and snapshot caches after shared document adoption.
     pub fn document_adopted(&mut self) {
+        self.install_preparation_wake();
         self.header_drag = None;
         self.last_pen = None;
         self.last_snapshot = None;
@@ -1911,6 +1932,47 @@ mod tests {
         }
         assert!(woke, "the thumbnail leaves decoding for canvas frames");
         assert!(prompt, "Idle preview batches resume promptly instead of waiting for a UI refresh");
+    }
+    #[test]
+    fn pending_store_decode_releases_frame_demand_and_completion_wakes_the_host() {
+        use std::sync::{Arc,Mutex,Condvar,mpsc,atomic::AtomicBool};
+        struct HeldReads {
+            open:Arc<(Mutex<bool>,Condvar)>,send:mpsc::Sender<Option<layer_core::tile_io::ReadCache>>,worker:Option<std::thread::JoinHandle<()>>,
+        }
+        impl Drop for HeldReads {
+            fn drop(&mut self) {
+                *self.open.0.lock().unwrap()=true;self.open.1.notify_all();let _=self.send.send(None);
+                if let Some(worker)=self.worker.take() {worker.join().unwrap();}
+            }
+        }
+        let cache=layer_core::tile_io::ReadCache::new(layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {host_default_bytes:Some(1<<30),override_bytes:Some(1<<30),..Default::default()}));
+        let (send,receive)=mpsc::channel::<Option<layer_core::tile_io::ReadCache>>();
+        let (entered,waiting)=mpsc::channel();
+        let open=Arc::new((Mutex::new(false),Condvar::new()));let gate=open.clone();
+        let worker=std::thread::spawn(move ||while let Ok(Some(cache))=receive.recv() {
+            let _=entered.send(());
+            let mut released=gate.0.lock().unwrap();while !*released {released=gate.1.wait(released).unwrap();}drop(released);
+            cache.drive();
+        });
+        let held=HeldReads {open,send:send.clone(),worker:Some(worker)};
+        cache.set_scheduler(Arc::new(move |cache|{let _=send.send(Some(cache));}));
+        let mut document=layer_ui::new_drawing(32,32,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+        let image=layer_core::color::source::rgba8_source([32;2],|_,_|[0,0,255,255]);
+        let (layer,edit)=document.create_object_layer_edit("Stored photo",layer_core::ImageObject::new(image.into()),None,0).unwrap();document.apply(edit).unwrap();
+        let path=std::env::temp_dir().join(format!("capy-host-wake-{}",layer_core::PortableId::random()));
+        let mut store=layer_core::package::session_store::SessionStore::open_with_cache(&path,cache).unwrap();
+        store.make_durable(&layer_core::Editor::new(document.clone()).retained_tiles(),&AtomicBool::new(false)).unwrap();
+        let (_reference,mut host)=gpu_document_host(layer_ui::Platform::Android,document);
+        let (notify,woken)=mpsc::channel();host.set_wake(Arc::new(move ||{let _=notify.send(());}));
+        let clock=std::cell::Cell::new(0);let deadline=std::time::Instant::now()+std::time::Duration::from_secs(60);
+        while !host.startup.brush_ready || host.session.engine().wants_continuous_frames() {frame_step(&mut host,&clock,deadline);}
+        waiting.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        host.dirty=false;assert!(!host.poll_preparation());assert!(woken.try_recv().is_err());
+        *held.open.0.lock().unwrap()=true;held.open.1.notify_all();
+        woken.recv_timeout(std::time::Duration::from_secs(10)).unwrap();assert!(host.poll_preparation());
+        let pixels=thumbnail(&mut host,&clock,1,layer_ui::occurrence_token(layer));
+        assert_eq!(&pixels[(16*32+16)*4..(16*32+16)*4+4],&[0,0,255,255]);
+        host.close_wake();drop(host);drop(store);drop(held);let _=std::fs::remove_dir_all(path);
     }
     fn thumbnail(host: &mut NativeHost, clock: &std::cell::Cell<u64>, request: u64, target: u64) -> Vec<u8> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);

@@ -28,7 +28,15 @@ impl Payload {
         (Self::Tile(a),Self::Tile(b)) => Arc::ptr_eq(&a.compressed,&b.compressed), (Self::Bytes(a),Self::Bytes(b)) | (Self::Encoded(a),Self::Encoded(b)) => a.same_owner(b),
         (Self::Code(a),Self::Code(b)) => a.same_owner(b), (Self::Vector(a),Self::Vector(b)) => a.same_owner(b), (Self::Opaque(a),Self::Opaque(b)) => Arc::ptr_eq(a,b), _ => false,
     } }
-    fn prepared(&self, cancelled:&AtomicBool) -> Result<(ResourceEncoding,EncodedIntegrity),String> {
+    #[cfg(not(target_arch="wasm32"))]
+    pub(crate) fn weak_owner(&self)->std::sync::Weak<dyn Send+Sync> {
+        match self {
+            Self::Tile(tile)=>{let owner:Arc<dyn Send+Sync>=tile.compressed.clone();Arc::downgrade(&owner)},
+            Self::Bytes(value)|Self::Encoded(value)=>value.weak_owner(),Self::Code(value)=>value.weak_owner(),Self::Vector(value)=>value.weak_owner(),
+            Self::Opaque(value)=>{let owner:Arc<dyn Send+Sync>=value.clone();Arc::downgrade(&owner)},
+        }
+    }
+    pub(crate) fn prepared(&self, cancelled:&AtomicBool) -> Result<(ResourceEncoding,EncodedIntegrity),String> {
         match self {
             Self::Opaque(_)=>Err("Range resources use bounded reads".into()),
             Self::Tile(tile)=>Ok((ResourceEncoding::Raw,tile.compressed.integrity(cancelled)?)),
@@ -67,6 +75,24 @@ impl Payload {
 }
 #[derive(Clone, Debug)]
 pub struct ResourceEntry { pub kind: &'static str, pub data: Value, pub raw_encoding: &'static str, pub payload: Payload }
+impl ResourceEntry {
+    #[cfg(not(target_arch="wasm32"))]
+    pub(crate) fn store_record(&self,cancelled:&AtomicBool)->Result<(Value,EncodedIntegrity),String> {
+        let (encoded,integrity)=self.payload.prepared(cancelled)?;
+        let mut data=self.data.clone();
+        let encoding=if encoded==ResourceEncoding::Lz4 {
+            let length=match &self.payload {
+                Payload::Bytes(bytes)=>bytes.len(),Payload::Code(code)=>code.len(),
+                Payload::Vector(chunk)=>chunk.encoded_len().ok_or("Missing vector chunk length")?,
+                _=>return Err("Invalid resource compression owner".into()),
+            };
+            data.as_object_mut().ok_or("Invalid resource descriptor")?.insert("decoded_bytes".into(),length.to_string().into());
+            "capy.lz4-bytes/1"
+        }else {self.raw_encoding};
+        Ok((json!({"id":self.payload.id(),"type":self.kind,"data":data,"encoding":encoding,
+            "bytes":integrity.bytes.to_string(),"crc32":format!("{:08x}",integrity.crc32)}),integrity))
+    }
+}
 #[derive(Clone, Debug, Default)]
 pub struct ResourceInventory {
     pub entries: BTreeMap<PortableId, ResourceEntry>,
@@ -240,7 +266,9 @@ impl std::io::Read for PackReader<'_> {
     }
 }
 
-pub fn encode_descriptor(descriptor: PixelDescriptor) -> Result<Value, String> {
+#[derive(serde::Serialize)]
+pub(crate) struct DescriptorFields {alpha:&'static str,channels:&'static str,depth:&'static str,transfer:&'static str}
+pub(crate) fn descriptor_fields(descriptor:PixelDescriptor)->Result<DescriptorFields,String> {
     if descriptor.byte_len([TILE_SIZE;2]).is_none() { return Err("Invalid tile descriptor".into()); }
     let channels = match (descriptor.channels,descriptor.alpha,descriptor.encoding) {
         (1,_,TransferEncoding::Linear) => "coverage", (1,_,_) => "gray", (2,_,_) => "gray_alpha", (3,_,_) => "rgb", (4,AlphaAssociation::None,_) => "cmyk", (4,_,_) => "rgba", _ => return Err("Unknown raster channels".into()),
@@ -248,7 +276,10 @@ pub fn encode_descriptor(descriptor: PixelDescriptor) -> Result<Value, String> {
     let depth = match (descriptor.sample,descriptor.bits_per_channel) { (SampleType::Unsigned,8)=>"u8",(SampleType::Unsigned,16)=>"u16",(SampleType::Float,16)=>"f16",(SampleType::Float,32)=>"f32",_=>return Err("Invalid raster sample depth".into()) };
     let transfer = match descriptor.encoding { TransferEncoding::Linear=>"linear", TransferEncoding::Profile=>"profile", TransferEncoding::Srgb=>return Err("Unsupported raster transfer".into()) };
     let alpha = match descriptor.alpha { AlphaAssociation::None=>"none", AlphaAssociation::Straight=>"straight", AlphaAssociation::PremultipliedLinear=>return Err("Unsupported raster alpha".into()) };
-    Ok(json!({"channels":channels,"depth":depth,"transfer":transfer,"alpha":alpha}))
+    Ok(DescriptorFields {alpha,channels,depth,transfer})
+}
+pub fn encode_descriptor(descriptor:PixelDescriptor)->Result<Value,String> {
+    serde_json::to_value(descriptor_fields(descriptor)?).map_err(|error|error.to_string())
 }
 pub fn parse_descriptor(value: &Value) -> DecodeResult<PixelDescriptor> {
     let data = values::object(value,&["channels","depth","transfer","alpha"])?;
@@ -272,6 +303,8 @@ pub struct ResourceReader<'a> {
     pub manifest: &'a Manifest, pub backing: &'a ImmutableBacking, pub cancelled: &'a AtomicBool,
     pub limits: crate::ProjectLimits,
     pub(crate) private: bool,
+    #[cfg(not(target_arch="wasm32"))]
+    pub(crate) store:Option<&'a super::session_store::StoreResources>,
     pub(crate) trusted_programs: super::TrustedPrograms,
     pub(crate) bytes: BTreeMap<PortableId, Resource<[u8]>>, pub(crate) texts: BTreeMap<PortableId, Resource<str>>,
     pub(crate) tiles: BTreeMap<PortableId, Arc<TileBlob>>, pub(crate) luts: BTreeMap<PortableId, Arc<Lut3d>>, decoded: u64,
@@ -300,7 +333,8 @@ impl<'a> ResourceReader<'a> {
         Self::with_budget(manifest, backing, cancelled, limits, crate::MemoryBudget::process())
     }
     pub(crate) fn with_budget(manifest: &'a Manifest, backing: &'a ImmutableBacking, cancelled: &'a AtomicBool, limits: crate::ProjectLimits, budget: crate::MemoryBudget) -> Self {
-        Self {admission:budget.admit_import(0),manifest,backing,cancelled,limits,private:false,trusted_programs:Default::default(),bytes:BTreeMap::new(),texts:BTreeMap::new(),tiles:BTreeMap::new(),luts:BTreeMap::new(),decoded:0,verified:false,aliases:BTreeMap::new(),rasters:BTreeMap::new(),selections:BTreeMap::new(),images:BTreeMap::new(),programs:BTreeMap::new(),vectors:BTreeMap::new(),opaque:BTreeMap::new()}
+        Self {admission:budget.admit_import(0),manifest,backing,cancelled,limits,private:false,
+            #[cfg(not(target_arch="wasm32"))] store:None,trusted_programs:Default::default(),bytes:BTreeMap::new(),texts:BTreeMap::new(),tiles:BTreeMap::new(),luts:BTreeMap::new(),decoded:0,verified:false,aliases:BTreeMap::new(),rasters:BTreeMap::new(),selections:BTreeMap::new(),images:BTreeMap::new(),programs:BTreeMap::new(),vectors:BTreeMap::new(),opaque:BTreeMap::new()}
     }
     pub(crate) fn install_cache(&mut self, cache: ResourceCache) {
         self.admission=cache.admission.or_else(||self.admission.take());
@@ -357,6 +391,12 @@ impl<'a> ResourceReader<'a> {
         let range = record.range.ok_or_else(|| DecodeError::Unsupported("Unknown resource location".into()))?;
         if record.bytes > limit as u64 { return Err(DecodeError::Unsupported("Resource exceeds encoded size bound".into())); }
         if range.length != record.bytes {return Err("Resource range length disagrees with descriptor".into());}
+        #[cfg(not(target_arch="wasm32"))]
+        if let Some(store)=self.store {
+            let location=store.locations.get(&id).ok_or("Missing stored resource location")?;
+            let bytes=location.read_all_on_worker()?;
+            return Ok((bytes,EncodedIntegrity {bytes:record.bytes,crc32:record.crc32}));
+        }
         let mut bytes = Vec::new(); bytes.try_reserve_exact(record.bytes as usize).map_err(|_| DecodeError::Unsupported("Resource allocation failed".into()))?;
         while bytes.len() < record.bytes as usize {
             if self.cancelled.load(Ordering::Relaxed) { return Err("Package operation cancelled".into()); }
@@ -409,6 +449,11 @@ impl<'a> ResourceReader<'a> {
             }
         }).collect()
     }
+    pub(crate) fn resource_backing(&self,_id:PortableId,offset:u64)->DecodeResult<(ImmutableBacking,u64)> {
+        #[cfg(not(target_arch="wasm32"))]
+        if let Some(store)=self.store {return Ok((store.locations.get(&_id).ok_or("Missing stored resource location")?.backing()?,0));}
+        Ok((self.backing.clone(),offset))
+    }
     fn opaque_resource(&mut self, id: PortableId) -> DecodeResult<Arc<OpaqueResource>> {
         if let Some(resource) = self.opaque.get(&id) { return Ok(resource.clone()); }
         let record = &self.manifest.resources[&id];
@@ -416,7 +461,8 @@ impl<'a> ResourceReader<'a> {
             return Err(DecodeError::Unsupported("A slot resource references other records".into()));
         }
         let range = record.range.ok_or("Missing slot resource range")?;
-        let resource = Arc::new(OpaqueResource::from_record(id, &record.value, self.backing.clone(), range.offset, record.bytes, record.crc32).map_err(DecodeError::from)?);
+        let (backing,offset)=self.resource_backing(id,range.offset)?;
+        let resource = Arc::new(OpaqueResource::from_record(id, &record.value, backing, offset, record.bytes, record.crc32).map_err(DecodeError::from)?);
         self.charge(record.bytes)?;
         resource.verify(self.cancelled)?;
         self.decoded += record.bytes;
@@ -480,6 +526,12 @@ impl<'a> ResourceReader<'a> {
         }
         let descriptor=parse_descriptor(&record["data"])?;
         let size=descriptor.byte_len([TILE_SIZE;2]).ok_or("Invalid tile descriptor")?;
+        #[cfg(not(target_arch="wasm32"))]
+        if let Some(store)=self.store && !filtered {
+            let location=store.locations.get(&id).ok_or("Missing stored tile location")?.clone();
+            let tile=Arc::new(TileBlob::from_store(id,descriptor,location)?);
+            self.remember_alias(id);self.tiles.insert(id,tile.clone());return Ok(tile);
+        }
         let retained=self.manifest.resources[&id].bytes;
         self.charge(retained)?;
         let (bytes,integrity)=self.stored(id,lz4_flex::block::get_maximum_output_size(size))?;

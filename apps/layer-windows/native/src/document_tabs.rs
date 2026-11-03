@@ -202,15 +202,10 @@ impl DocumentService {
         Ok(())
     }
     pub(super) fn trim_next(&mut self, token: u64) -> Result<(), String> {
-        if let Some((id,tiles)) = self.window.documents.spill_candidate() {
-            let result=self.recovery.as_mut().ok_or_else(||"Session storage is unavailable".to_string()).and_then(|recovery|recovery.make_durable(id,tiles));
-            match result {
-                Ok(receive)=>{self.trim_receive=Some(receive);self.trim_token=Some(token);}
-                Err(error)=>{self.window.documents.complete_trim(token,Err(error.clone()));return Err(error);}
-            }
-        } else if self.window.documents.complete_trim(token, Ok(())) {
-            self.trim_next(token)?;
-        }
+        let (candidates,budget)=self.window.documents.pressure_snapshot();
+        let reply=self.recovery.as_ref().ok_or("Session storage is unavailable")?.trim(candidates,budget)?;
+        self.trim_receive=Some(reply);self.trim_token=Some(token);
+
         Ok(())
     }
     pub(super) fn activated(
@@ -390,7 +385,7 @@ impl DocumentService {
             && !self.window.documents.trim_in_flight()
             && host.session.can_park_document()
             && self.window.documents.storage_error().is_none()
-            && self.window.documents.spill_candidate().is_some()
+            && self.window.documents.pressure_needed()
             && let Some(token) = self.window.documents.request_trim()
         {
             self.trim_next(token)?;

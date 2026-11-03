@@ -76,6 +76,8 @@ pub struct ParkedDocument<T> {
 #[path = "document_sessions/trim.rs"]
 mod trim;
 pub use trim::TrimWait;
+mod pressure;
+pub use pressure::StoragePressure;
 
 pub struct DocumentSessions<T> {
     tabs: DocumentTabs,
@@ -90,6 +92,7 @@ pub struct DocumentSessions<T> {
     memory: MemoryBudget,
     memory_owner: MemoryOwner,
     reported: std::cell::Cell<usize>,
+    pressure:StoragePressure,
 }
 impl<T> Default for DocumentSessions<T> {
     fn default() -> Self { Self::localized(&Localizer::shared(crate::UiLanguage::English)) }
@@ -121,7 +124,7 @@ impl<T> DocumentSessions<T> {
             tabs: Default::default(), parked: Default::default(), clock: 0, language: localization.language(),
             untitled: DocumentTabLabel::untitled(1, localization),
             budget: Default::default(), storage_error: None, clip: RetainedClipboard, trim: Default::default(),
-            memory, memory_owner, reported: std::cell::Cell::new(0),
+            pressure:StoragePressure::new(memory_owner.clone()), memory, memory_owner, reported: std::cell::Cell::new(0),
         }
     }
     pub fn request_trim(&mut self) -> Option<u64> { self.trim.request() }
@@ -323,20 +326,26 @@ impl<T> DocumentSessions<T> {
     fn refresh_memory(&self, force: bool) {
         let resident = self.resident_bytes();
         let previous = self.reported.get();
-        if previous != resident && (force || previous.abs_diff(resident) >= 1024 * 1024) {
+        if force || previous.abs_diff(resident) >= 1024 * 1024 {
             self.reported.set(resident);
             self.memory_owner.report(MemoryReport { ram_bytes: resident as u64,
                 demand_ram_bytes: resident as u64, ..Default::default() });
+            self.pressure.update(self.parked.iter().map(|(&id,parked)|(id,parked.used,parked.tiles.clone())).collect(),resident,self.budget.inactive_ram);
         }
     }
     pub fn inactive_ram_budget(&self) -> usize {
         self.refresh_memory(false);
         self.budget.inactive_ram.min(self.memory_owner.grant().ram_bytes.min(usize::MAX as u64) as usize)
     }
+    pub fn pressure_source(&self)->StoragePressure {self.pressure.clone()}
+    pub fn pressure_snapshot(&self)->(Vec<(u64,u64,RetainedTiles)>,usize) {
+        (self.parked.iter().map(|(&id,parked)|(id,parked.used,parked.tiles.clone())).collect(),self.inactive_ram_budget())
+    }
+    pub fn pressure_needed(&self)->bool {self.resident_bytes()>self.inactive_ram_budget()}
     /// Oldest inactive resident payload first. Recount shared handles after each
     /// completion because spilling updates current/undo/redo owners together.
     pub fn spill_candidate(&self) -> Option<(u64, RetainedTiles)> {
-        (self.resident_bytes() > self.inactive_ram_budget())
+        self.pressure_needed()
             .then(|| {
                 self.parked
                     .iter()

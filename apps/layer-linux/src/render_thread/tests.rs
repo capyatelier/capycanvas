@@ -108,11 +108,10 @@ fn preparation_waits_without_ready_work_and_prioritizes_queued_commands() {
 }
 
 #[test]
-fn preparation_notifications_coalesce_and_stop_when_disabled() {
+fn preparation_notifications_coalesce_until_the_next_completion() {
     let (commands, receiver) = mpsc::channel();
     let signal = PreparationSignal {
         commands,
-        enabled: AtomicBool::new(true),
         queued: AtomicBool::new(false),
     };
     for _ in 0..128 { signal.notify(); }
@@ -122,10 +121,9 @@ fn preparation_notifications_coalesce_and_stop_when_disabled() {
     signal.notify();
     assert!(matches!(receiver.try_recv(), Ok(Command::PreparationReady)));
     signal.queued.store(false, Ordering::Release);
-    signal.enabled.store(false, Ordering::Release);
-    for _ in 0..128 { signal.notify(); }
-    assert!(!signal.queued.load(Ordering::Acquire));
-    assert!(matches!(receiver.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    signal.notify();
+    assert!(matches!(receiver.try_recv(), Ok(Command::PreparationReady)));
+
 }
 
 #[test]

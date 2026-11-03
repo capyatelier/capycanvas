@@ -123,18 +123,33 @@ impl SessionCapture {
     pub fn artwork_mut(&mut self)->&mut ArtworkCapture {self.editor.artwork_mut()}
     pub fn metadata(&self)->Result<SessionMetadata,String> {
         self.state.validate()?;
-        if let Some(last)=&self.state.last_export {resolve_export(last,&self.profiles)?;} else if !self.profiles.is_empty() {return Err("Unused session export profile".into());}
+        if let Some(last)=&self.state.last_export {resolve_export(last,&self.profiles)?.recipe.validate().map_err(|_|"Invalid session export recipe")?;} else if !self.profiles.is_empty() {return Err("Unused session export profile".into());}
         Ok(SessionMetadata {value:serde_json::to_value(&self.state).map_err(|e|e.to_string())?,profiles:self.profiles.clone()})
+    }
+    #[cfg(not(target_arch="wasm32"))]
+    pub fn checkpoint(&self,store:&mut layer_core::package::session_store::SessionStore,cancel:&AtomicBool)->Result<PortableId,String> {
+        store.checkpoint(&self.editor,self.metadata()?,cancel)
     }
     pub fn prepare(&self,cancel:&AtomicBool)->Result<PreparedSession,String> {
         let metadata=self.metadata()?;
-        if let Some(last)=&self.state.last_export {resolve_export(last,&self.profiles)?.recipe.validate().map_err(|_|"Invalid session export recipe")?;}
         PreparedSession::prepare(&self.editor,metadata,cancel)
     }
 }
 
-pub struct SessionRestore {pub editor:layer_core::Editor,pub state:SessionDocumentState,last_export:Option<ExportRepeat>}
+pub struct SessionRestore {pub editor:layer_core::Editor,pub state:SessionDocumentState,last_export:Option<ExportRepeat>,adoption:Option<StoreAdoption>}
+struct StoreAdoption {
+    artwork:PortableId,revision:u64,working:u64,checkpoint:u64,notify:Box<dyn FnOnce(SessionStamp)+Send>,
+}
+impl StoreAdoption {
+    fn apply(self,stamp:&SessionStamp) {
+        if (self.artwork,self.revision,self.working,self.checkpoint)==(stamp.artwork,stamp.revision,stamp.working_generation,stamp.checkpoint) {(self.notify)(stamp.clone());}
+    }
+}
 impl SessionRestore {
+    pub fn on_adopted(mut self,notify:impl FnOnce(SessionStamp)+Send+'static)->Self {
+        let document=self.editor.document();
+        self.adoption=Some(StoreAdoption {artwork:document.artwork.id,revision:document.revision,working:document.working.generation,checkpoint:self.editor.checkpoint(),notify:Box::new(notify)});self
+    }
     fn decode_metadata(metadata:SessionMetadata)->Result<(SessionDocumentState,Option<ExportRepeat>),String> {
         let SessionMetadata {value,profiles}=metadata;
         let state:SessionDocumentState=serde_json::from_value(value).map_err(|e|e.to_string())?;
@@ -153,7 +168,7 @@ impl SessionRestore {
         let OpenSession {editor,metadata}=open;
         let (state,last_export)=Self::decode_metadata(metadata)?;
         editor.validate_checkpoint(state.saved_checkpoint).map_err(error)?;
-        Ok(Self {editor,state,last_export})
+        Ok(Self {editor,state,last_export,adoption:None})
     }
     pub fn open(backing:ImmutableBacking,limits:ProjectLimits,cancel:&AtomicBool)->Result<Self,String> {
         Self::from_core(layer_core::package::session::open(backing,limits,cancel)?)
@@ -211,7 +226,9 @@ impl<R:CanvasRenderer> UiSession<R> {
         self.state.document_file.unsaved_name=restore.state.unsaved_name;
         self.state.document_file.recovered=restore.state.recovered || recovered;
         self.sync_camera();self.refresh_document();self.refresh_commands();
-        Ok(self.changed(regions::DOCUMENT|regions::COMMANDS|regions::HOST|regions::CAMERA,true))
+        let change=self.changed(regions::DOCUMENT|regions::COMMANDS|regions::HOST|regions::CAMERA,true);
+        if let Some(adoption)=restore.adoption {adoption.apply(&self.session_stamp());}
+        Ok(change)
     }
     pub fn can_replace_startup_session(&self,stamp:&SessionStamp)->bool {
         let mut current=self.session_stamp();
@@ -504,7 +521,16 @@ mod tests {
         }
         let capture=source.capture_session().unwrap();let original=capture.metadata().unwrap().value;
         let mut malformed=capture.clone();malformed.state.last_export.as_mut().unwrap().recipe.jpeg_quality=0;
-        let metadata=malformed.metadata().unwrap();
+        assert!(malformed.metadata().is_err());
+        #[cfg(not(target_arch="wasm32"))]
+        {
+            let path=std::env::temp_dir().join(format!("capy-invalid-export-{}",PortableId::random()));
+            let mut store=layer_core::package::session_store::SessionStore::open(&path).unwrap();
+            assert!(malformed.checkpoint(&mut store,&AtomicBool::new(false)).is_err());
+            assert!(store.generation().is_none());
+            drop(store);std::fs::remove_dir_all(path).unwrap();
+        }
+        let mut metadata=capture.metadata().unwrap();metadata.value=serde_json::to_value(&malformed.state).unwrap();
         let opened=OpenSession {editor:layer_core::Editor::new(source.engine.document().clone()),metadata};
         assert_eq!(SessionRestore::validate_core(&opened),Err("Invalid session export recipe".into()));assert!(malformed.prepare(&AtomicBool::new(false)).is_err());
         for kind in 0..4 {
@@ -530,8 +556,8 @@ mod tests {
         assert!(serde_json::to_vec(&capture.metadata().unwrap().value).unwrap().len()<4096);
         let prepared=capture.prepare(&cancel).unwrap();assert!(prepared.metadata().len()<8192);
         let root=std::env::temp_dir().join(format!("capy-export-profile-{id}"));let mut store=layer_core::package::session_store::SessionStore::open(&root).unwrap();
-        store.commit(&prepared,&cancel).unwrap();let count=std::fs::read_dir(root.join("packs")).unwrap().count();assert_eq!(count,1);
-        source.state.camera.zoom_to(1.25).unwrap();store.commit(&source.capture_session().unwrap().prepare(&cancel).unwrap(),&cancel).unwrap();
+        capture.checkpoint(&mut store,&cancel).unwrap();let count=std::fs::read_dir(root.join("packs")).unwrap().count();assert_eq!(count,1);
+        source.state.camera.zoom_to(1.25).unwrap();source.capture_session().unwrap().checkpoint(&mut store,&cancel).unwrap();
         assert_eq!(std::fs::read_dir(root.join("packs")).unwrap().count(),count);
         let restored=SessionRestore::from_core(store.load(ProjectLimits::default(),&cancel).unwrap().unwrap()).unwrap();
         let ColorProfile::Icc(bytes)=&restored.last_export.as_ref().unwrap().recipe.profile.profile else {panic!("missing ICC")};assert_eq!(bytes.id(),id);assert_eq!(bytes.len(),layer_core::color::source::MAX_PROFILE_BYTES);
@@ -806,7 +832,7 @@ mod tests {
         let mut original=session(Platform::Gtk);original.frame(0,0).unwrap();
         let before=original.session_stamp();
         let mut state=original.session_document_state();state.saved_checkpoint=u64::MAX;
-        let candidate=SessionRestore{editor:layer_core::Editor::new(original.engine.document().clone()),state,last_export:None};
+        let candidate=SessionRestore{editor:layer_core::Editor::new(original.engine.document().clone()),state,last_export:None,adoption:None};
         assert!(original.restore_session(candidate,true,None).is_err());assert_eq!(original.session_stamp(),before);
     }
     #[cfg(not(target_arch="wasm32"))]
@@ -819,7 +845,7 @@ mod tests {
         assert_eq!(SessionManifest::read(&path).unwrap().unwrap(),staged);
         let mut store=SessionStore::open(&root.join("drawing-a")).unwrap();assert!(store.load(ProjectLimits::default(),&cancel).unwrap().is_none());
         let mut source=session(Platform::Gtk);source.frame(0,0).unwrap();layer(&mut source,LayerAction::New{group:false,clipped:false});source.frame(1,1).unwrap();
-        store.commit(&source.capture_session().unwrap().prepare(&cancel).unwrap(),&cancel).unwrap();drop(store);
+        source.capture_session().unwrap().checkpoint(&mut store,&cancel).unwrap();drop(store);
         let surviving=SessionManifest::read(&path).unwrap().unwrap();let reachable=surviving.drawings.iter().map(|drawing|drawing.key.clone()).collect();
         collect_unreferenced_stores(&root,&reachable,&cancel).unwrap();
         let mut reopened=SessionStore::open(&root.join(&surviving.drawings[0].key)).unwrap();let copy=SessionRestore::from_core(reopened.load(ProjectLimits::default(),&cancel).unwrap().unwrap()).unwrap();

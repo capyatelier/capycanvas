@@ -14,7 +14,7 @@ struct Job {
     activation: Option<Activation>,
     close: Option<PreparedClose>,
     retired: Option<Box<UiSession<Renderer>>>,
-    tiles: Vec<(u64, layer_core::raster_storage::RetainedTiles)>,
+    tiles: Vec<(u64,u64,layer_core::raster_storage::RetainedTiles)>,
     disk: Option<std::sync::Arc<Mutex<session::WindowDisk>>>,
     budget: usize,
     error: Option<CString>,
@@ -59,12 +59,7 @@ impl CapyApple {
             activation,
             close: None,
             retired: None,
-            tiles: self
-                .window
-                .documents
-                .parked()
-                .map(|(&id, p)| (id, p.tiles.clone()))
-                .collect(),
+            tiles:self.window.documents.pressure_snapshot().0,
             disk: self.session_disk.clone(),
             budget: self.window.documents.inactive_ram_budget(),
             error: None,
@@ -192,18 +187,11 @@ fn prepare_document(task: &CapyDocumentTask) -> i32 {
     let result = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
         if let Some(wait) = &job.wait { return wait.wait_on_worker(); }
         if job.trim.is_some() {
-            for (id, tiles) in &job.tiles {
-                if layer_core::raster_storage::resident_tile_bytes(job.tiles.iter().map(|(_, tiles)| tiles)) <= job.budget {
-                    break;
-                }
-                let result = job.disk.as_ref().ok_or_else(|| "The editing session is unavailable".to_string())
-                    .and_then(|disk| disk.lock().unwrap_or_else(|e| e.into_inner()).make_durable(*id, tiles));
-                if let Err(e) = result
-                {
-                    job.storage_error = Some(e);
-                    break;
-                }
-            }
+            let result=job.disk.as_ref().ok_or_else(||"The editing session is unavailable".to_string())
+                .and_then(|disk|disk.lock().unwrap_or_else(|error|error.into_inner()).trim(job.tiles.clone(),job.budget))
+                .and_then(|reply|reply.wait_on_worker().map(|_|()));
+            if let Err(error)=result {job.storage_error=Some(error);}
+
         }
         match &mut job.activation {
             Some(activation) => activation.work(),
@@ -236,7 +224,7 @@ pub unsafe extern "C" fn capy_apple_document_resume(
         if let Some(token) = job.trim {
             let result = job.error.as_ref().map(|error| error.to_string_lossy().into_owned()).or_else(|| job.storage_error.clone()).map_or(Ok(()), Err);
             if a.window.documents.complete_trim(token, result) {
-                job.tiles = a.window.documents.parked().map(|(&id, parked)| (id, parked.tiles.clone())).collect();
+                job.tiles = a.window.documents.pressure_snapshot().0;
                 job.disk = a.session_disk.clone();
                 job.budget = a.window.documents.inactive_ram_budget();
                 job.error = None;

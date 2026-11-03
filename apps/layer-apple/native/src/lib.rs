@@ -1,5 +1,5 @@
 //! Apple host ABI. The same library serves UIKit and AppKit. Rust owns the
-//! shared session; Swift owns UI and serial execution. No callbacks into Swift.
+//! shared session; Swift owns UI, frame scheduling and serial execution.
 mod handles;
 pub use handles::{capy_apple_string_copy,capy_apple_string_free,capy_apple_string_length};
 mod metal;
@@ -264,9 +264,22 @@ pub unsafe extern "C" fn capy_language_free(task: u64) {
     handles::free::<CapyLanguageTask>(task);
 }
 /// # Safety
+/// Call on the serial owner. The concurrent callback only queues work; its context
+/// remains valid until this registration is cleared on that owner.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_set_wake(app:u64,context:*mut std::ffi::c_void,wake:Option<extern "C" fn(*mut std::ffi::c_void)>)->i32 {
+    let Some(mut owner)=handles::app(app) else {return -1;};
+    if let Some(wake)=wake {
+        let context=context as usize;
+        owner.host.set_wake(std::sync::Arc::new(move ||wake(context as *mut std::ffi::c_void)));
+    }else {owner.host.close_wake();}
+    0
+}
+/// # Safety
 /// Call on the serial owner after detaching the native surface.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_destroy(app: u64) {
+    if let Some(mut owner)=handles::app(app) {owner.host.close_wake();}
     handles::free_app(app);
 }
 /// # Safety

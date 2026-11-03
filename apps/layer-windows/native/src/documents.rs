@@ -379,7 +379,7 @@ pub(crate) struct DocumentService {
     wake: Arc<dyn Fn() + Send + Sync>,
     activating: bool,
     trim_token: Option<u64>,
-    trim_receive: Option<std::sync::mpsc::Receiver<Result<(),String>>>,
+    trim_receive:Option<layer_host::session_stores::StoreReply>,
     deferred_action: Option<DocumentAction>,
     incoming_drop: Option<IncomingDrop>,
     pending_tab: Option<tabs::Action>,
@@ -897,10 +897,8 @@ impl DocumentService {
             }
             host.invalidate_snapshot();
         }
-        let trimmed=self.trim_receive.as_ref().and_then(|receive|match receive.try_recv(){
-            Ok(result)=>Some(result),Err(std::sync::mpsc::TryRecvError::Empty)=>None,
-            Err(std::sync::mpsc::TryRecvError::Disconnected)=>Some(Err("Session worker stopped unexpectedly".into())),
-        });
+        if let Some(recovery)=&self.recovery {recovery.watch_pressure(self.window.documents.pressure_source());}
+        let trimmed=self.trim_receive.as_ref().and_then(|reply|reply.try_take().map(|result|result.map(|_|())));
         if let Some(result)=trimmed {
             self.trim_receive=None;
             let token=self.trim_token.take().ok_or("Storage completion identity is missing")?;
@@ -1216,7 +1214,9 @@ mod tests {
             assert!(f.host.session.file_drop_pending(id));
             assert!(f.service.deferred_action.is_none());
             if f.service.trim_token.is_none() { f.service.trim_token = f.service.window.documents.request_trim(); }
-            let (send,receive)=std::sync::mpsc::channel();send.send(Ok(())).unwrap();f.service.trim_receive=Some(receive);
+            let stores=layer_host::session_stores::SessionStores::new(f.directory.path.join("trim"),
+                std::sync::Arc::new(|work|work.run()),std::sync::Arc::new(||{}));
+            f.service.trim_receive=Some(stores.trim(Vec::new(),0));
             f.service.poll(&mut f.host).unwrap();
             assert!(!f.service.window.documents.trim_in_flight());
             assert_eq!(f.service.incoming_drop.as_ref().unwrap().id, id);

@@ -15,7 +15,7 @@ software-adapter-tests = []
 
 [dependencies]
 serde = { version = "1", features = ["derive", "rc"] }
-serde_json = { version = "1", features = ["float_roundtrip"] }
+serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
 # Bounded tile blocks; safe Rust with no frame or native dependencies.
 lz4_flex = { version = "=0.14.0", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }
 sha2 = "=0.11.0"
