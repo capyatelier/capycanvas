@@ -39,6 +39,7 @@ impl WorkspaceView {
             sections: vec![choices.clone(), vec![manage.clone()]],
         };
         let submenu = ContextMenuItem {
+            page: None,
             label: visibility_label, icon: None, selected: None, action: None, enabled: true,
             hint: String::new(), bindings: Vec::new(), sections: vec![choices],
         };

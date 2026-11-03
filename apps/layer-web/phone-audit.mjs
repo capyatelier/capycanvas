@@ -131,7 +131,7 @@ const pages = [
   {id:'properties',action:{type:'invoke',command:'document_properties'},selector:'dialog.document-dialog[open]',header:'header'},
 ];
 
-export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,drawersOnly=false}) {
+export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,drawersOnly=false,menusOnly=false}) {
   const {createDrawing}=await import('./new-drawing-fixture.mjs');
   const directory=process.env.LAYER_TEST_ARTIFACTS||'/mnt/localssd/capy9-phone-impl/web-phone-audit';
   await mkdir(directory,{recursive:true});
@@ -145,6 +145,11 @@ export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,draw
     wasm:servedWasm,
     audit_sha256:createHash('sha256').update(await readFile(new URL(import.meta.url))).digest('hex'),
     runtime_source_attestation:'not recorded by the current Wasm build'};
+  const runtimeFiles=[...new Set(execFileSync('git',['ls-files','--cached','--others','--exclude-standard','--','apps/layer-web'],{cwd:root,encoding:'utf8'}).trim().split('\n'))]
+    .filter(path=>/\.(js|css|html)$/.test(path));
+  source.runtime_sources=Object.fromEntries(await Promise.all(runtimeFiles.map(async path=>[path,hash(await readFile(`${root}/${path}`))])));
+  source.bindings_sha256=hash(await readFile(new URL('./pkg/layer_web.js',import.meta.url)));
+  source.icons_sha256=hash(await readFile(new URL('./icons.svg',import.meta.url)));
   const report={schema_version:1,host:'web',source,cases:[],unreachable:[]};
   const original=await evaluate(`({settings:layerApp.state().settings,text:document.documentElement.style.getPropertyValue('--ui-text-size'),workspace:JSON.parse(layerApp.app.workspace_view()).id,documents:layerApp.app.document_tabs(0).tabs.map(tab=>({id:String(tab.id),modified:tab.modified}))})`);
   assert.equal(original.documents.length,1,'Audit starts with one isolated startup drawing');
@@ -152,6 +157,7 @@ export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,draw
   const wait=expression=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+10000;function check(){if(${expression})resolve(true);else if(performance.now()>end)reject(Error(${JSON.stringify(expression)}));else requestAnimationFrame(check);}check();})`);
   const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)});null`);await settle();};
   const close=async()=>{
+    if(await evaluate('layerApp.state().phone.menu'))await send({type:'phone',action:{kind:'capy'}});
     if(await evaluate('!!document.querySelector("dialog[open]")')){
       await evaluate('document.querySelector("dialog[open]").requestClose()');
       await settle();
@@ -160,7 +166,7 @@ export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,draw
     await wait('!layerApp.state().requests.length');
   };
   const collect=specifications=>evaluate(`(${measurePhoneAuditElements.toString()})(${JSON.stringify(specifications)})`);
-  const capture=async (test,state,specifications,availability,requested_page=null)=>{
+  const capture=async (test,state,specifications,availability,requested_page=null,expected_documents=1)=>{
     const actual=await collect(specifications);
     const context=actual.elements.filter(element=>element.role==='context');
     actual.elements=actual.elements.filter(element=>element.role!=='context');
@@ -170,7 +176,7 @@ export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,draw
     metadata.phone_tiles=await evaluate('layerApp.state().workspace.layout.phone??[]');
     if(frameOnly)metadata.presented_tools=await evaluate('layerApp.app.phone_tools()');
     const document=await evaluate(`(()=>{const s=layerApp.state(),tab=s.tabs.find(t=>t.active);return {extent:tab?[tab.width,tab.height]:null,color:layerApp.app.document_color(),count:layerApp.app.document_tabs(0).tabs.length,busy:s.document_file.busy,host_busy:layerApp.documents.busy()};})()`);
-    assert.equal(document.count,1,'Captured drawing count');
+    assert.equal(document.count,expected_documents,'Captured drawing count');
     assert.deepEqual(document.extent,[1200,1600],'Captured active drawing extent');
     assert.deepEqual(document.color,{space:'Srgb',depth:'U8'},'Captured active drawing color');
     metadata.document=document;
@@ -199,7 +205,7 @@ export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,draw
     return record;
   };
   await send({type:'invoke',command:'new_document'});
-  const setup=await evaluate(createDrawing({width:1200,height:1600,resolution:300,space:'Srgb',depth:'U8',paper:'white',relief:0}));
+  const setup=await evaluate(createDrawing({width:1200,height:1600,resolution:300,space:'Srgb',depth:'U8',paper:'white',relief:0,name:menusOnly?'Untitled 1':null}));
   assert.equal(setup.resolution,300,'New drawing recipe resolution');
   assert.deepEqual(setup.color,{space:'Srgb',depth:'U8'},'New drawing recipe color');
   assert.deepEqual(setup.paper.color.rgba,[1,1,1,1],'New drawing recipe white paper');
@@ -222,6 +228,8 @@ export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,draw
   await send({type:'workspace_manager',command:{type:'switch',id:'builtin:workspace:painter'}});
   await wait(`JSON.parse(layerApp.app.workspace_view()).id==='builtin:workspace:painter'&&!JSON.parse(layerApp.app.workspace_view()).busy`);
   const click=async selector=>{
+    await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});if(!n||n.disabled)throw Error('Unavailable '+${JSON.stringify(selector)});n.scrollIntoView({block:'nearest',inline:'nearest'});})()`);
+    await settle();
     const point=await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});if(!n||n.disabled)throw Error('Unavailable '+${JSON.stringify(selector)});const b=n.getBoundingClientRect();return{x:b.x+b.width/2,y:b.y+b.height/2}})()`);
     for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...point,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});
     await settle();
@@ -240,7 +248,11 @@ export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,draw
     await call('Input.dispatchMouseEvent',{type:'mouseReleased',x:center.x+20,y:center.y,button:'left',buttons:0,clickCount:1});
     await wait('layerApp.app.document_park_ready()');
   }
-  for(const test of phoneAuditMatrix){
+  const requestedCases=process.env.LAYER_PHONE_AUDIT_CASES?.split(',').map(value=>value.trim());
+  for(const key of requestedCases??[])assert.ok(phoneAuditMatrix.some(test=>`${test.viewport.join('x')}-${test.theme}`===key),`Unknown phone audit case: ${key}`);
+  const matrix=phoneAuditMatrix.filter(test=>!requestedCases||requestedCases.includes(`${test.viewport.join('x')}-${test.theme}`));
+  assert.ok(matrix.length,'The requested audit cases exist');
+  for(const test of matrix){
     await close();
     await wait('layerApp.state().workspace_ready&&!JSON.parse(layerApp.app.workspace_view()).busy');
     await call('Emulation.setDeviceMetricsOverride',{width:test.viewport[0],height:test.viewport[1],deviceScaleFactor:1,mobile:false});
@@ -254,6 +266,156 @@ export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,draw
       {id:'current.header',role:'context',selector:'#header'},
       {id:'current.canvas',role:'context',selector:'#canvas'},
       {id:'current.capy',role:'context',selector:'#zen-capy'}],active?'phone':'desktop fallback: Web phone presentation is not enabled');
+    if(menusOnly){
+      await send({type:'preferences',action:{type:'edit',id:'finger_drawing',value:2}});
+      const route=()=>evaluate('JSON.stringify(layerApp.state().phone.menu_route)');
+      const rootRoute=await route();
+      const open=async()=>{if(!await evaluate('layerApp.state().phone.menu'))await click('#zen-capy');await wait('layerApp.state().phone.menu&&document.querySelector("#phone-menu-scroll")?.clientHeight>0');};
+      await open();
+      const bounds=()=>evaluate('document.querySelector(".menu-drawer").getBoundingClientRect().toJSON()');
+      let initial=await bounds();
+      const captureMenu=async (name,expectedDocuments=1)=>{
+        const point=await evaluate(`(()=>{const p=layerApp.app.layout(innerWidth,innerHeight).phone;return p.edge==='top'?{x:layerApp.state().phone.swapped?p.capy.x-4:p.capy.x+p.tile+4,y:p.capy.y+p.tile*.5}:{x:p.capy.x+p.tile*.5,y:p.capy.y+p.tile+4};})()`);
+        await call('Input.dispatchMouseEvent',{type:'mouseMoved',...point,button:'none',buttons:0});await settle();
+        const specs=[...frame,{id:'menu',role:'menu',selector:'#phone-menu'},
+          {id:'menu.list',role:'menu-list',selector:'#phone-menu-scroll'},
+          {id:'menu.separator',role:'separator',selector:'.menu-separator'},
+          {id:'menu.page',role:'menu-page',selector:'.menu-page:not([hidden]):not([inert])'},
+          {id:'menu.back',role:'back',selector:'.menu-page:not([hidden]):not([inert]) .submenu-back',optional:true},
+          {id:'menu.bridge',role:'bridge',selector:'.drawer-bridge'},
+          ...['preferences','search','finger','zen','swap'].map(name=>({id:`menu.tile.${name}`,role:'menu-tile',selector:`#phone-${name}`}))];
+        const rows=await evaluate(`(()=>{const rows=[...document.querySelectorAll('.menu-page:not([hidden]):not([inert]) .menu-row')];return rows.map((row,i)=>{row.dataset.auditRow=i;return{index:i,parts:[['label','.menu-label'],['check','.menu-check'],['icon','.menu-icon:not([hidden])'],['arrow','.submenu-arrow,.menu-back-arrow'],['detail','.shortcut-hint:not([hidden])']].filter(([,selector])=>row.querySelector(selector)).map(([part])=>part),close:row.parentElement.classList.contains('menu-drawing-row')};});})()`);
+        for(const {index,parts,close} of rows){
+          const selector=`.menu-page:not([hidden]):not([inert]) .menu-row[data-audit-row="${index}"]`;
+          specs.push({id:`menu.row.${index}`,role:'menu-row',selector});
+          const selectors={label:'.menu-label',check:'.menu-check',icon:'.menu-icon:not([hidden])',arrow:'.submenu-arrow,.menu-back-arrow',detail:'.shortcut-hint:not([hidden])'};
+          for(const part of parts){
+            const suffix=part==='arrow'?` > :is(.submenu-arrow,.menu-back-arrow)`: ` ${selectors[part]}`;
+            specs.push({id:`menu.row.${index}.${part}`,role:`menu-${part}`,selector:selector+suffix});
+          }
+          if(close)specs.push({id:`menu.row.${index}.close`,role:'menu-close',selector:selector+' + .menu-close'});
+        }
+        const record=await capture(test,name,specs,'typed shared Capy menu through the common drawer owner',null,expectedDocuments);
+        assert.deepEqual(record.missing,[]);assert.ok(record.elements.find(e=>e.id==='menu.bridge').visible);
+        const row=record.elements.find(e=>e.id==='menu.row.0'),tiles=record.elements.filter(e=>e.role==='menu-tile');
+        for(const tile of tiles)assert.ok(Math.abs(tile.bounds[2]-row.bounds[3])<=1&&Math.abs(tile.bounds[3]-row.bounds[3])<=1,'The strip tiles match the native menu row height');
+        const actual=await bounds();for(const axis of ['x','y','width','height'])assert.ok(Math.abs(actual[axis]-initial[axis])<=1,`${name}: root outer ${axis} remains fixed`);
+        return record;
+      };
+      const projections=await evaluate(`layerApp.app.phone_menu().pages.map(p=>({id:p.id,parent:p.parent,title:p.title,sections:p.sections.map(s=>s.map(r=>({label:r.label,target:r.target,enabled:r.enabled,selected:r.selected})))}))`);
+      async function visit(page){
+        assert.equal(await route(),JSON.stringify(page.id));
+        const name=page.id.page?.kind==='application'?`application-${page.id.page.menu}`:page.id.page?.kind??'main';
+        await captureMenu(`menu-${name}${page.id.path.length?'-'+page.id.path.flat().join('-'):''}`);
+        for(const [s,section]of page.sections.entries())for(const [i,row]of section.entries())if(row.target){
+          await click(`.menu-page:not([hidden]):not([inert]) [data-position="[${s},${i}]"]`);
+          await wait(`JSON.stringify(layerApp.state().phone.menu_route)===${JSON.stringify(JSON.stringify(row.target))}`);
+          await visit(projections.find(p=>JSON.stringify(p.id)===JSON.stringify(row.target)));
+          await click('.menu-page:not([hidden]):not([inert]) .submenu-back');
+          await wait(`JSON.stringify(layerApp.state().phone.menu_route)===${JSON.stringify(JSON.stringify(page.id))}`);
+        }
+      }
+      await visit(projections.find(p=>!p.parent));
+      assert.equal(await route(),rootRoute);
+      const transparency=['off','low','medium','high'].indexOf(await evaluate('layerApp.state().settings.transparency'));
+      for(const swapped of [false,true]){
+        if(swapped)await click('#phone-swap');
+        for(const material of [0,2]){
+          await send({type:'preferences',action:{type:'edit',id:'transparency',value:material}});
+          initial=await bounds();await captureMenu(`menu-root-${swapped?'swapped':'normal'}-${material?'glass':'opaque'}`);
+        }
+      }
+      await click('#phone-swap');
+      await send({type:'preferences',action:{type:'edit',id:'transparency',value:transparency}});initial=await bounds();
+      const fileRoute=projections.find(p=>p.id.page?.menu==='file'&&!p.id.path.length).id;
+      const filePosition=projections.find(p=>!p.parent).sections.flatMap((section,s)=>section.map((row,i)=>row.target?.page?.menu==='file'?[s,i]:null)).find(Boolean);
+      const fileSelector=`.menu-page:not([hidden]):not([inert]) [data-position="${JSON.stringify(filePosition)}"]`;
+      const key=async(name,code)=>{for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:name,code:name,windowsVirtualKeyCode:code});await settle();};
+      const gesture=async(delta,complete)=>{
+        await click(fileSelector);
+        await wait(`JSON.stringify(layerApp.state().phone.menu_route)===${JSON.stringify(JSON.stringify(fileRoute))}`);
+        const point=await evaluate(`(()=>{const n=document.querySelector('.menu-page:not([hidden]):not([inert]) .submenu-back'),r=n.getBoundingClientRect();return{x:r.x+24,y:r.y+r.height/2,width:document.querySelector('#phone-menu-scroll').clientWidth};})()`);
+        const target={x:point.x+point.width*delta[0],y:point.y+delta[1]};
+        await call('Input.dispatchMouseEvent',{type:'mousePressed',x:point.x,y:point.y,button:'left',buttons:1,clickCount:1});
+        await call('Input.dispatchMouseEvent',{type:'mouseMoved',...target,button:'left',buttons:1});
+        assert.equal(await evaluate('!!document.querySelector("#phone-menu [data-pressed]")'),false,'A claimed drag cancels the row highlight');
+        if(delta[0]>0)assert.ok(await evaluate(`document.querySelector('.menu-page:not([hidden]):not([inert])').style.transform!==''`),'Back follows the contact before release');
+        await call('Input.dispatchMouseEvent',{type:'mouseMoved',...target,button:'left',buttons:1});
+        await call('Input.dispatchMouseEvent',{type:'mouseReleased',...target,button:'left',buttons:0,clickCount:1});
+        await wait('!document.querySelector("#phone-menu-pages").inert');
+        assert.equal(await route(),complete?rootRoute:JSON.stringify(fileRoute),'A drag neither activates its starting row nor takes an unintended Back');
+        if(!complete)await key('Escape',27);
+        assert.equal(await route(),rootRoute);
+      };
+      await gesture([.12,0],false);
+      await gesture([.45,0],true);
+      await gesture([0,24],false);
+      await evaluate(`document.querySelector(${JSON.stringify(fileSelector)}).focus()`);
+      await key('ArrowRight',39);await wait(`JSON.stringify(layerApp.state().phone.menu_route)===${JSON.stringify(JSON.stringify(fileRoute))}`);
+      await key('ArrowLeft',37);assert.equal(await route(),rootRoute);
+      const longest=projections.filter(page=>JSON.stringify(page.parent)===rootRoute).sort((a,b)=>b.sections.flat().length-a.sections.flat().length)[0];
+      const longestPosition=projections.find(p=>!p.parent).sections.flatMap((section,s)=>section.map((row,i)=>JSON.stringify(row.target)===JSON.stringify(longest.id)?[s,i]:null)).find(Boolean);
+      await click(`.menu-page:not([hidden]):not([inert]) [data-position="${JSON.stringify(longestPosition)}"]`);
+      const scroll=await evaluate(`(()=>{const n=document.querySelector('#phone-menu-scroll'),r=n.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height*.75,height:r.height,overflow:n.scrollHeight-n.clientHeight,value:n.scrollTop};})()`);
+      assert.ok(scroll.overflow-scroll.value>1,'The longest submenu provides a real scrolling workload from its initial offset');
+      const touch=(type,touchPoints=[])=>call('Input.dispatchTouchEvent',{type,touchPoints});
+      await touch('touchStart',[{id:100,x:scroll.x,y:scroll.y}]);
+      for(let i=1;i<=4;i++)await touch('touchMove',[{id:100,x:scroll.x,y:scroll.y-Math.min(100,scroll.height*.4)*i/4}]);
+      await wait(`document.querySelector("#phone-menu-scroll").scrollTop>${scroll.value+1}`);
+      assert.equal(await evaluate('!!document.querySelector("#phone-menu [data-pressed]")'),false,'Native touch scrolling cancels the pressed row');
+      await touch('touchEnd');await settle();
+      assert.equal(await route(),JSON.stringify(longest.id),'Touch scrolling never activates a row');
+      assert.equal(await evaluate('!!document.querySelector("dialog[open]")'),false);
+      await key('Escape',27);assert.equal(await route(),rootRoute);
+      for(const name of ['finger','swap']){
+        const before=await evaluate(`document.querySelector('#phone-${name}').getAttribute('aria-pressed')`);
+        await click(`#phone-${name}`);assert.equal(await evaluate('layerApp.state().phone.menu'),true);
+        assert.notEqual(await evaluate(`document.querySelector('#phone-${name}').getAttribute('aria-pressed')`),before);
+        initial=await bounds();await captureMenu(`menu-${name}-checked`);
+        await click(`#phone-${name}`);initial=await bounds();
+      }
+      await click('#phone-search');await wait('!layerApp.state().phone.menu&&document.querySelector("#command-bar").open');
+      await evaluate(`(()=>{const input=document.querySelector('#command-search');input.value='pencil';input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+      await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await settle();
+      assert.equal(await evaluate('document.querySelector("#command-bar").open&&document.querySelector("#command-search").value===""'),true,'First Escape clears focused search');
+      await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+      await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await settle();
+      await wait('!document.querySelector("#command-bar").open');
+      await open();await click('#phone-preferences');
+      await wait('!layerApp.state().phone.menu&&!!layerApp.app.preferences()&&!!document.querySelector("dialog[open]")');
+      await close();
+      await open();await click('#phone-zen');
+      await wait('!layerApp.state().phone.menu&&layerApp.state().phone.hidden');
+      await key('Escape',27);await wait('!layerApp.state().phone.hidden');
+      await open();await click('#phone-tool-settings');
+      await wait('!layerApp.state().phone.menu&&!!layerApp.state().customization.drawer');
+      await closeDrawer();
+      await send({type:'invoke',command:'drawings'});await wait('layerApp.state().phone.menu&&layerApp.state().phone.menu_route.page?.kind==="drawings"');
+      assert.equal(await evaluate('!!document.querySelector(".drawing-list[open]")'),false,'Drawings uses the same phone menu page');
+      await close();
+      const first=await evaluate('Number(layerApp.app.document_tabs(0).selected)');
+      await send({type:'invoke',command:'add_layer'});await wait('layerApp.app.document_tabs(0).tabs[0].modified&&layerApp.app.document_park_ready()');
+      await open();await click('#phone-drawing');
+      await click('.menu-page:not([hidden]):not([inert]) [data-position="[1,0]"]');
+      await wait('!layerApp.state().phone.menu&&!!document.querySelector("dialog[open]")');
+      await evaluate(createDrawing({width:1200,height:1600,resolution:300,space:'Srgb',depth:'U8',paper:'white',relief:0,name:'Untitled 1'}));
+      await wait('layerApp.app.document_tabs(0).tabs.length===2&&!layerApp.documents.busy()&&!layerApp.state().document_file.busy&&layerApp.app.brush_ready()');
+      const second=await evaluate('Number(layerApp.app.document_tabs(0).selected)');assert.notEqual(first,second);
+      await open();initial=await bounds();await captureMenu('menu-root-two',2);
+      await click('#phone-drawing');await captureMenu('menu-drawings-two',2);
+      await click(`#phone-drawing-${first}`);
+      await wait(`!layerApp.state().phone.menu&&Number(layerApp.app.document_tabs(0).selected)===${first}&&!layerApp.documents.busy()`);
+      await send({type:'invoke',command:'drawings'});initial=await bounds();await captureMenu('menu-drawings-current',2);
+      await click(`#phone-drawing-${first} + .menu-close`);
+      await wait('!layerApp.state().phone.menu&&!!document.querySelector("dialog[open]")');
+      const discard=await evaluate('layerApp.app.editor_models(innerWidth,innerHeight).document_options.discard_label');
+      const discardSelector=await evaluate(`(()=>{const buttons=[...document.querySelectorAll('dialog[open] footer button')],button=buttons.find(n=>n.textContent===${JSON.stringify(discard)});if(!button)throw Error('Missing discard response');button.dataset.auditDiscard='true';return '[data-audit-discard]';})()`);
+      await click(discardSelector);
+      await wait(`layerApp.app.document_tabs(0).tabs.length===1&&Number(layerApp.app.document_tabs(0).selected)===${second}&&!layerApp.documents.busy()&&!layerApp.state().document_file.busy`);
+      await send({type:'restore_saved_settings',saved:JSON.stringify(original.settings)});
+      await close();continue;
+    }
     if(drawersOnly){
       const captureDrawer=async name=>{
         try {await drawerReady();}
@@ -468,6 +630,29 @@ export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,draw
         reason:active?'The existing phone audit has no interaction visitor for this state yet':'Web phone presentation is GTK-gated; target view is not reachable',png:null});
     }
     await writeFile(`${directory}/index.json`,JSON.stringify(report,null,2)+'\n');
+  }
+  if(menusOnly){
+    await close();
+    await call('Emulation.setDeviceMetricsOverride',{width:1600,height:1000,deviceScaleFactor:1,mobile:false});
+    await evaluate("document.documentElement.style.setProperty('--ui-text-size','11pt');null");
+    await settle();
+    for(const theme of ['light','dark'])for(const menu of ['primary','file','edit','layer','select','view','window']){
+      await send({type:'set_theme',theme});
+      const selector='#header [data-kind="menu"] details';
+      await click(`${selector} > summary`);
+      await wait(`document.querySelector(${JSON.stringify(selector)})?.open`);
+      if(menu!=='primary'){
+        const index=await evaluate(`[...document.querySelectorAll('${selector} .popover > button')].findIndex(node=>node.menuItem?.page?.kind==='application'&&node.menuItem.page.menu===${JSON.stringify(menu)})`);
+        assert.ok(index>=0,`Desktop menu route ${menu} exists`);
+        await click(`${selector} .popover > button:nth-of-type(${index+1})`);
+        await wait(`!!document.querySelector('${selector} .submenu-back')`);
+      }
+      const rows=await evaluate(`(()=>{const root=document.querySelector(${JSON.stringify(selector)}).querySelector('.popover'),box=n=>{const r=n.getBoundingClientRect();return[r.x,r.y,r.width,r.height];};return{menu:box(root),rows:[...root.querySelectorAll(':scope > button')].map(n=>({label:n.querySelector('.menu-label')?.textContent,hint:n.querySelector('.shortcut-hint')?.textContent,bounds:box(n)}))};})()`);
+      const name=`desktop-reference-${menu}-${theme}`;
+      await writeFile(`${directory}/${name}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+      await writeFile(`${directory}/${name}.json`,JSON.stringify({host:'web',theme,viewport:[1600,1000],text_pt:11,...rows},null,2)+'\n');
+      await click(`${selector} > summary`);
+    }
   }
   if(frameOnly){
     const settings=await evaluate('layerApp.state().settings');

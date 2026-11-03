@@ -1138,7 +1138,7 @@ impl<'a> LayoutResolveInput<'a> {
         self.phone_state = state;
         self
     }
-    pub fn phone_state(&self) -> crate::PhoneState { self.phone_state }
+    pub fn phone_state(&self) -> crate::PhoneState { self.phone_state.clone() }
     pub fn phone_presentation(&self, viewport: [f32; 2]) -> Option<crate::PhoneLayout> {
         self.phone_state.resolve(&self.layout, viewport)
     }
@@ -1212,7 +1212,7 @@ impl Serialize for LayoutResolveInput<'_> {
     fn serialize<S:serde::Serializer>(&self,serializer:S)->Result<S::Ok,S::Error> {
         let layout=self.layout.as_ref();
         LayoutResolveWire {
-            phone_state: self.phone_state,
+            phone_state: self.phone_state.clone(),
             layout:std::borrow::Cow::Borrowed(layout),
             header_presentation:std::borrow::Cow::Borrowed(&layout.header_presentation),
             column_scroll:std::borrow::Cow::Borrowed(&layout.column_scroll),

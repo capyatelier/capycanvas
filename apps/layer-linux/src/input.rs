@@ -16,6 +16,15 @@ use std::{
 #[path = "tablet_input.rs"]
 mod tablet;
 
+pub(crate) fn reset_controllers(widget: &gtk::Widget) {
+    let controllers = widget.observe_controllers();
+    for i in 0..controllers.n_items() {
+        if let Some(controller) = controllers.item(i).and_downcast::<gtk::EventController>() { controller.reset(); }
+    }
+    let mut child = widget.first_child();
+    while let Some(widget) = child { child = widget.next_sibling(); reset_controllers(&widget); }
+}
+
 #[derive(Default)]
 pub(crate) struct CompositionKeys {
     owned: RefCell<BTreeSet<u32>>,

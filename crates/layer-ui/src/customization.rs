@@ -661,6 +661,7 @@ pub enum CustomizationAction {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ContextMenuItem {
+    pub page: Option<crate::MenuPageId>,
     pub icon: Option<std::sync::Arc<str>>,
     pub label: String,
     /// None is an ordinary command; a value is a checked menu item.
@@ -674,7 +675,8 @@ pub struct ContextMenuItem {
 impl Serialize for ContextMenuItem {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut fields = serializer.serialize_struct("ContextMenuItem", 9 + usize::from(self.icon.is_some()))?;
+        let mut fields = serializer.serialize_struct("ContextMenuItem", 9 + usize::from(self.icon.is_some()) + usize::from(self.page.is_some()))?;
+        if let Some(page) = &self.page { fields.serialize_field("page", page)?; }
         if let Some(icon) = &self.icon { fields.serialize_field("icon", icon)?; }
         fields.serialize_field("label", &self.label)?;
         fields.serialize_field("selected", &self.selected)?;
@@ -688,15 +690,19 @@ impl Serialize for ContextMenuItem {
         fields.end()
     }
 }
+pub(crate) fn menu_keeps_open(action: &UiAction) -> bool {
+    matches!(action, UiAction::Bubble { action: BubbleAction::Option { .. } | BubbleAction::ToggleSliders { .. } | BubbleAction::ToggleRingSetting { .. } }
+        | UiAction::WorkspaceManager { command: crate::WorkspaceCommand::ShowInSwitcher { .. } }
+        | UiAction::Phone { action: crate::PhoneAction::SwapSides }
+        | UiAction::Preferences { action: crate::PreferenceAction::Edit { id: crate::PreferenceId::FingerDrawing, .. } })
+}
 impl ContextMenuItem {
     pub fn keep_open(&self) -> bool {
-        matches!(self.action, Some(UiAction::Bubble { action: BubbleAction::Option { .. } | BubbleAction::ToggleSliders { .. } | BubbleAction::ToggleRingSetting { .. } }
-            | UiAction::WorkspaceManager { command: crate::WorkspaceCommand::ShowInSwitcher { .. } }
-            | UiAction::Phone { action: crate::PhoneAction::SwapSides }
-            | UiAction::Preferences { action: crate::PreferenceAction::Edit { id: crate::PreferenceId::FingerDrawing, .. } }))
+        self.action.as_ref().is_some_and(menu_keeps_open)
     }
     pub fn command(label: impl Into<String>, action: UiAction) -> Self {
         Self {
+            page: None,
             label: label.into(),
             icon: None,
             selected: None,
@@ -719,6 +725,7 @@ impl ContextMenuItem {
     pub(crate) fn submenu(label: &str, sections: Vec<Vec<Self>>) -> Self {
         let sections: Vec<_> = sections.into_iter().filter(|s| !s.is_empty()).collect();
         Self {
+            page: None,
             label: label.into(),
             icon: None,
             selected: None,

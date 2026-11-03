@@ -30,7 +30,8 @@ export function addScrollbar(panel, frame, content = panel) {
   const resize = new ResizeObserver(update);
   resize.observe(panel);
   if (content !== panel) resize.observe(content);
-  new MutationObserver(update).observe(panel, {
+  const mutation = new MutationObserver(update);
+  mutation.observe(panel, {
     childList: true,
     subtree: true,
   });
@@ -56,5 +57,6 @@ export function addScrollbar(panel, frame, content = panel) {
         ((e.clientY - origin[0]) * (panel.scrollHeight - panel.clientHeight)) /
           (panel.clientHeight - thumb.offsetHeight);
   });
+  thumb.disposeScrollbar=()=>{resize.disconnect();mutation.disconnect();panel.removeEventListener('scroll',update);dirtyScrollbars.delete(read);};
   return thumb;
 }

@@ -1,6 +1,14 @@
 use crate::{Bounds, UiState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DialogEscape { Back, ClearSearch, Cancel }
+pub fn dialog_escape(subpage: bool, search_focused: bool, search_has_text: bool) -> DialogEscape {
+    if subpage { DialogEscape::Back }
+    else if search_focused && search_has_text { DialogEscape::ClearSearch }
+    else { DialogEscape::Cancel }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DialogRole { Editor, Alert, CanvasPanel }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -47,6 +55,13 @@ impl UiState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn escape_leaves_subpages_before_clearing_focused_search() {
+        for focused in [false, true] { for text in [false, true] {
+            assert_eq!(dialog_escape(true, focused, text), DialogEscape::Back);
+            assert_eq!(dialog_escape(false, focused, text), if focused && text { DialogEscape::ClearSearch } else { DialogEscape::Cancel });
+        } }
+    }
     #[test]
     fn only_canvas_panels_measure_their_content() {
         let area = Bounds { x: 8., y: 12., width: 400., height: 600. };

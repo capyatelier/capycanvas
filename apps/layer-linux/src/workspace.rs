@@ -206,7 +206,7 @@ mod allocation {
             if let Some(owner) = self.owner.borrow().upgrade() { owner.command_bar.allocate(width, height, resolved.work_area, resolved.phone.is_some()); }
             if let Some(owner)=self.owner.borrow().upgrade() {
                 if let Some(phone) = &resolved.phone {
-                    owner.phone.allocate(&owner, phone, self.layout.borrow().phone_state());
+                    owner.phone.allocate(&owner, phone);
                 }
                 owner.present_tab_presentations(&resolved);
             }
@@ -2076,12 +2076,11 @@ impl Workspace {
         let facts = ChromeFacts {
             contact_tab,
             expanded_panel: self.customization.placement(),
-            content_drawer: self.drawer.placement().map(|p| p.bounds).or_else(|| self.phone.placement.borrow().as_ref().map(|p| p.bounds)),
+            content_drawer: self.drawer.placement().map(|p| p.bounds),
             drawer_connection: self
                 .drawer
                 .placement()
-                .and_then(|p| p.connection().map(|c| c.bounds))
-                .or_else(|| self.phone.placement.borrow().as_ref().and_then(|p| p.connection().map(|c| c.bounds))),
+                .and_then(|p| p.connection().map(|c| c.bounds)),
             held: !self.chrome_contacts.borrow().is_empty(),
             dragging: self.dragging.get(),
             popup_open: self.command_bar.owns_input() || self
@@ -3153,7 +3152,7 @@ impl Workspace {
             self.columns.refresh_drawers(self, &state, regions);
             self.drawer
                 .refresh(self, &state, regions, state.customization.drawer.as_ref());
-            if state.customization.drawer.is_some() {
+            if state.customization.drawer.is_some() || state.phone.menu {
                 self.surface.raise_drawer(0);
             }
         }

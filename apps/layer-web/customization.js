@@ -3,6 +3,7 @@ import { composingKey } from "./text-input.js";
 import { createToolbarComponent } from "./toolbar-components.js";
 import { colorButton, pickerButtonAction, updatePaintPairIcon } from './color-controls.js';
 import {liveCopy} from './localization.js';
+import {middleEllipsis} from './text-layout.js';
 // DOM presentation of the shared Rust customization models. This module owns
 // widgets and animation, not catalogs, validation, selection or docking policy.
 export function createCustomization({ app, catalog, state, paintPair, workspace, panels, groups,
@@ -11,6 +12,14 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
   const send = (action) => dispatch({ type: "customize", action });
   const common = liveCopy(app, 'bootstrap_view').common;
   const views = new Map(), fields = new Map(), panelViewKeys = new WeakMap();
+  let textContext;
+  function fitMenuLabel(label) {
+    if(!label.isConnected||!label.clientWidth)return;
+    textContext??=document.createElement('canvas').getContext('2d');
+    textContext.font=getComputedStyle(label).font;
+    label.firstElementChild.textContent=middleEllipsis(label.menuText,label.clientWidth,text=>textContext.measureText(text).width);
+  }
+  const menuLabels=new ResizeObserver(entries=>{for(const {target} of entries)fitMenuLabel(target);});
   const tileResize = new ResizeObserver(entries => {
     for (const { target: strip } of entries) {
       if (!strip.isConnected || !strip.dataset.axis) continue;
@@ -54,6 +63,27 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
   // The same recursive Rust menu drives both the header and contextual menus.
   // Submenus replace their parent page, as in GTK's sliding popover menus.
   const menuStructure = (model, depth) => JSON.stringify([depth,model], (key,value) => ["enabled","selected","action","command"].includes(key) ? undefined : value);
+  function menuRow(item, activate, {checks=true, submenu=false, detail=item.hint??''}={}) {
+    const row=button('',()=>activate(row.menuItem));
+    const mark=checks?element('span','menu-check'):null,label=element('span','menu-label'),caption=element('span','menu-caption'),hint=element('span','shortcut-hint');
+    label.append(caption);
+    if(mark)row.append(mark);
+    const image=element('span','menu-icon');row.append(image,label,hint);
+    if(submenu){const arrow=icon('go-next');arrow.classList.add('submenu-arrow');row.append(arrow);}
+    row.updateMenuRow=(item,detail=item.hint??'')=>{
+      row.menuItem=item;row.disabled=!item.enabled;caption.textContent=item.label;
+      if(item.ellipsis==='middle') {
+        label.menuText=item.label;row.setAttribute('aria-label',item.label);menuLabels.observe(label);fitMenuLabel(label);
+      }
+      row.setAttribute('role',item.selected==null?'menuitem':'menuitemcheckbox');
+      if(item.selected==null)row.removeAttribute('aria-checked');else row.setAttribute('aria-checked',item.selected);
+      if(mark){const checked=String(!!item.selected);if(mark.dataset.checked!==checked){mark.dataset.checked=checked;mark.replaceChildren();if(item.selected)mark.append(icon('check'));}}
+      if(image.dataset.icon!==(item.icon??'')){image.dataset.icon=item.icon??'';image.replaceChildren();if(item.icon)image.append(icon(item.icon));}
+      image.hidden=!item.icon;hint.textContent=detail;hint.hidden=!detail;
+    };
+    row.disposeMenuRow=()=>menuLabels.unobserve(label);
+    row.updateMenuRow(item,detail);return row;
+  }
   function renderMenu(container, model, close, parents = [], path = []) {
     container.menuView={model,close,parents,path};
     container.menuStructureKey=menuStructure(model,parents.length);
@@ -67,7 +97,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
         const {close,parents,path}=container.menuView, previous=parents.at(-1);
         renderMenu(container, previous, close, parents.slice(0, -1), path.slice(0,-1));
       }, "submenu-back");
-      back.prepend(icon("down")); container.append(back, element("hr"));
+      back.prepend(icon("go-previous")); container.append(back, element("hr"));
     }
     let separated = false;
     model.sections.forEach((section, index) => {
@@ -77,26 +107,15 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
       for (const [itemIndex,item] of section.entries()) {
         if (item.is_heading) { container.append(element("div", "menu-heading", item.label)); continue; }
         const submenu = item.sections?.some(section => section.length);
-        const row = button("", () => {
-          const item=row.menuItem, {model,close,parents,path}=container.menuView;
+        const row = menuRow(item, item => {
+          const {model,close,parents,path}=container.menuView;
           if (item.sections?.some(section => section.length)) renderMenu(container, { title: item.label, sections: item.sections }, close, [...parents, model], [...path,[index,itemIndex]]);
           else {
             if (!item.keep_open) close();
             if (item.action) dispatch(item.action); else if (item.command != null) menuCommand?.(item.command, item);
             if (item.keep_open) refreshContextMenu();
           }
-        });
-        row.menuItem=item;
-        row.disabled = !item.enabled;
-        row.setAttribute("role", item.selected == null ? "menuitem" : "menuitemcheckbox");
-        if (item.selected != null) row.setAttribute("aria-checked", item.selected);
-        const mark = element("span", "menu-check");
-        if (item.selected) mark.append(icon("check"));
-        row.append(mark);
-        if (item.icon) row.append(icon(item.icon));
-        row.append(element("span", "menu-label", item.label));
-        if (item.hint) row.append(element("span", "shortcut-hint", item.hint));
-        if (submenu) { const arrow = icon("down"); arrow.classList.add("submenu-arrow"); row.append(arrow); }
+        }, {submenu});
         container.append(row);
       }
     });
@@ -116,13 +135,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     if(container.menuStructureKey===menuStructure(model,parents.length) && rows.length===items.length) {
       container.menuView={model,close,parents,path};container.menuModelKey=rootKey;container.menuPath=path;
       for(const [index,item] of items.entries()) {
-        const row=rows[index];row.menuItem=item;row.disabled=!item.enabled;
-        row.setAttribute('role',item.selected==null?'menuitem':'menuitemcheckbox');
-        const checked=item.selected==null?null:String(item.selected);
-        if(row.getAttribute('aria-checked')!==checked) {
-          if(checked==null)row.removeAttribute('aria-checked');else row.setAttribute('aria-checked',checked);
-          const mark=row.querySelector('.menu-check');mark.replaceChildren();if(item.selected)mark.append(icon('check'));
-        }
+        rows[index].updateMenuRow(item);
       }
     } else {
       const focused=[...container.querySelectorAll(':scope > button')].indexOf(document.activeElement);
@@ -643,6 +656,6 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
       return list;
     }));
   }
-  return { refresh, arrange, target, renderMenu, refreshMenu, refreshContextMenu, dismissContext, openMenu, showContext, variationMarker, field, discardFields, tileWidget, refreshTile, layoutTile, present, view: (id) => views.get(id), layoutTiles,
+  return { refresh, arrange, target, menuRow, renderMenu, refreshMenu, refreshContextMenu, dismissContext, openMenu, showContext, variationMarker, field, discardFields, tileWidget, refreshTile, layoutTile, present, view: (id) => views.get(id), layoutTiles,
     placement: () => expanded?.placement ?? null };
 }

@@ -61,7 +61,7 @@ impl ManagedWorkspace {
                 item
             })
             .collect();
-        ContextMenuItem::submenu(
+        let mut menu = ContextMenuItem::submenu(
             &localizer.text(MessageId::WORKSPACE_WORKSPACES),
             vec![
                 choices,
@@ -83,7 +83,9 @@ impl ManagedWorkspace {
                     idle,
                 )],
             ],
-        )
+        );
+        menu.page = Some(crate::MenuPageId::Workspaces);
+        menu
     }
 }
 

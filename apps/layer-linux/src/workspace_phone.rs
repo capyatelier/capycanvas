@@ -8,7 +8,7 @@ impl Workspace {
 }
 
 #[derive(Clone, Copy)]
-enum Child { Chip(usize), Title, NativeGroup(usize), NativeButton(usize), Bridge, Menu, Tool(usize, bool), Slider(usize), Settings }
+enum Child { Chip(usize), Title, NativeGroup(usize), NativeButton(usize), Tool(usize, bool), Slider(usize), Settings }
 
 pub(super) struct Phone {
     pub root: drawers::Columns,
@@ -22,12 +22,7 @@ pub(super) struct Phone {
     buttons: RefCell<Vec<(usize, gtk::WindowControls)>>,
     decoration: RefCell<String>,
     reported: Cell<Option<([f32; 2], [u32; 2], bool)>>,
-    menu: phone_menu::Menu,
-    menu_key: Cell<Option<([f32; 2], Bounds, Bounds, Bounds, f32)>>,
     loans: RefCell<Vec<(gtk::Widget, gtk::Widget, gtk::Box)>>,
-    bridge: gtk::DrawingArea,
-    connection: Rc<Cell<Option<DrawerConnection>>>,
-    pub placement: RefCell<Option<DrawerPlacement>>,
 }
 impl Phone {
     pub fn new() -> Self {
@@ -36,22 +31,15 @@ impl Phone {
         root.add_css_class("window-bar");
         root.add_css_class("phone-frame");
         root.add_css_class("header-medium");
-        let menu = phone_menu::Menu::new();
         let title = gtk::WindowHandle::new();
         title.set_widget_name("phone-title-band");
-        let bridge = gtk::DrawingArea::new();
-        bridge.add_css_class("drawer-connection");
-        bridge.set_can_target(false);
-        let connection = Rc::new(Cell::new(None));
-        drawers::paint_connection(&bridge, connection.clone());
         Self { root, contact: Rc::default(), tools: RefCell::default(), sliders: RefCell::default(), settings: RefCell::default(), title,
             children: RefCell::default(),
             native: [gtk::WindowControls::new(gtk::PackType::Start), gtk::WindowControls::new(gtk::PackType::End)],
-            buttons: RefCell::default(), decoration: RefCell::default(), reported: Cell::new(None), menu, menu_key: Cell::new(None),
-            loans: RefCell::default(), bridge, connection, placement: RefCell::default() }
+            buttons: RefCell::default(), decoration: RefCell::default(), reported: Cell::new(None),
+            loans: RefCell::default() }
     }
     pub fn bind(&self, w: &Rc<Workspace>) {
-        self.menu.bind(w);
         self.bind_window_move(w);
         let held = Rc::new(Cell::new(false));
         let root = w.zen_capy.parent().unwrap();
@@ -261,8 +249,6 @@ impl Phone {
                 }));
                 self.add(group, Child::NativeGroup(side));
             }
-            self.add(&self.bridge, Child::Bridge);
-            self.add(&self.menu.root, Child::Menu);
         }
         if structural {
             let decoration = gtk::Settings::for_display(&gtk::prelude::WidgetExt::display(&w.window)).property::<String>("gtk-decoration-layout");
@@ -346,19 +332,10 @@ impl Phone {
             self.settings.replace(Some(item));
         }
         self.settings.borrow().as_ref().unwrap().refresh(w, &settings, None);
-        if state.phone.menu {
-            if structural { self.menu.refresh(w, state); self.menu_key.set(None); }
-        } else {
-            self.menu.clear();
-            self.menu_key.set(None);
-        }
         if changed || structural { w.surface.queue_allocate(); }
     }
-    pub fn workspaces(&self, w: &Rc<Workspace>) { self.menu.workspaces(w); }
-    pub fn drawings(&self, w: &Rc<Workspace>) {
-        if !w.gpu.borrow().as_ref().is_some_and(|g| g.session.state().phone.menu) { w.dispatch(UiAction::Phone { action: PhoneAction::Capy }); }
-        self.menu.drawings(w);
-    }
+    pub fn workspaces(&self, w: &Rc<Workspace>) { w.dispatch(UiAction::Phone { action: PhoneAction::MenuOpen { page: MenuPageId::Workspaces } }); }
+    pub fn drawings(&self, w: &Rc<Workspace>) { w.dispatch(UiAction::Phone { action: PhoneAction::MenuOpen { page: MenuPageId::Drawings } }); }
     pub fn button(&self, w: &Workspace, anchor: PhoneDrawerAnchor) -> Option<gtk::Button> {
         match anchor {
             PhoneDrawerAnchor::Capy => Some(w.zen_capy.clone()),
@@ -381,7 +358,7 @@ impl Phone {
         button.set_margin_top((visual.y.round() - hit.y.round()) as i32);
         button.set_margin_bottom(((hit.y + hit.height).round() - (visual.y + visual.height).round()) as i32);
     }
-    pub fn allocate(&self, w: &Workspace, p: &PhoneLayout, state: PhoneState) {
+    pub fn allocate(&self, w: &Workspace, p: &PhoneLayout) {
         let tool_bounds = {
             let mut active = self.contact.borrow_mut();
             if active.as_ref().is_some_and(|(contact, _)| !contact.valid(p, self.tools.borrow().iter().map(|(tile, _, _)| tile))) { active.take(); }
@@ -421,28 +398,6 @@ impl Phone {
         }
         let axis = if vertical { Axis::Vertical } else { Axis::Horizontal };
         for slider in self.sliders.borrow().iter() { slider.root.set_presentation(axis, TileStyle::Medium); }
-        let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-        let row_height = if state.menu { self.menu.row_height() } else { 0. };
-        if state.menu {
-            let key = (viewport, p.capy, p.bars[0], p.work_area, row_height);
-            if self.menu_key.get() != Some(key) {
-                self.menu_key.set(Some(key));
-                let (width, height) = self.menu.measure(p, row_height);
-                let placement = p.menu(viewport, width, height, row_height).map(|p| p.snapped(1.));
-                *self.placement.borrow_mut() = placement;
-            }
-        } else {
-            self.menu_key.set(None);
-            self.placement.borrow_mut().take();
-        }
-        let menu = self.placement.borrow();
-        if let Some(placement) = menu.as_ref() {
-            self.menu.allocate(p, placement, row_height);
-        }
-        self.connection.set(menu.as_ref().and_then(|p| p.connection()));
-        self.bridge.queue_draw();
-        customization::square_corners(&self.menu.root, self.connection.get().map_or([false; 4], |c| c.square_corners));
-        customization::drawer_origin(&w.zen_capy, menu.as_ref().map(|p| p.direction));
         let mut changed = false;
         let mut geometry = self.root.imp().geometry.borrow_mut();
         let mut native_indices = [0; 2];
@@ -450,8 +405,6 @@ impl Phone {
             let b = match *role {
                 Child::Chip(index) => Some(if index < 2 { p.chips[index] } else { p.bars[index - 2] }),
                 Child::Title => Some(p.title),
-                Child::Menu => menu.as_ref().map(|p| p.bounds),
-                Child::Bridge => self.connection.get().map(|p| p.bounds),
                 Child::Settings => Some(p.settings_hit),
                 Child::NativeGroup(side) => (!vertical).then_some(p.controls[side]),
                 Child::NativeButton(side) => {

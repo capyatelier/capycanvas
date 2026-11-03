@@ -19,7 +19,7 @@ import {createImageImport} from './image-import.js';
 import {createNewDrawing, screenInfo} from './new-drawing.js';
 // Browser file transport; document checkpoints, stale-edit guards and unsaved
 // decisions stay in UiSession. File handles never enter a project or localStorage.
-export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady,dispatch,applyChange,wake,element,button,icon,dropdown,numberField,message,gpuOperation,rasterWorker,resumeCanvas,contentChanged,refreshInputContext}) {
+export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady,dispatch,applyChange,wake,element,button,icon,dropdown,numberField,message,gpuOperation,rasterWorker,resumeCanvas,contentChanged,refreshInputContext,showMenu}) {
   const common=bootstrap.common,exportCopy=liveCopy(app,"export_copy");
   const formatLabels=()=>({Exr:exportCopy.format_exr,PngHdr:exportCopy.format_pq,PngHdrMapped:exportCopy.format_pq_clipped,
     JpegHdr:exportCopy.format_jpeg_hdr,JpegHdrMapped:exportCopy.format_jpeg_hdr,AvifHdr:exportCopy.format_avif_hdr,AvifHdrMapped:exportCopy.format_avif_hdr,
@@ -218,7 +218,12 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     if(active.has(request.id))return;active.add(request.id);
     let candidate;
     try {
-      if(request.kind.type==='adjacent_drawing'){dispatch({type:'complete_request',id:request.id});active.delete(request.id);await select(app.adjacent_document(request.kind.forward));return;}
+      if(request.kind.type==='adjacent_drawing'||request.kind.type==='select_drawing'){
+        dispatch({type:'complete_request',id:request.id});active.delete(request.id);
+        if(request.kind.type==='select_drawing'&&request.kind.close)await close(request.kind.id);
+        else await select(request.kind.type==='select_drawing'?request.kind.id:app.adjacent_document(request.kind.forward));
+        return;
+      }
       if(request.kind.type==='drawings'){dispatch({type:'complete_request',id:request.id});tabs.showSelector();return;}
       if(["soft_proof_setup","sdr_rendition"].includes(request.kind.type)){await proof.run(request.id,request.kind.type==="sdr_rendition");if(app.state().requests.some(r=>r.id===request.id))dispatch({type:"complete_request",id:request.id});return;}
       if(request.kind.type==="paper"){await runPaper(request.id);return;}
@@ -501,7 +506,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     reserve:ids=>app.reserve_session_ids(ids.map(BigInt)),failed:detail=>dialog(()=>bootstrap.recovery.attention,(form,finish)=>{form.append(element('p','',()=>bootstrap.recovery.explanation));if(detail)form.append(element('p','diagnostic-detail',detail));const footer=element('footer');footer.append(button(()=>bootstrap.recovery.later,()=>finish('later')),button(()=>bootstrap.recovery.discard,()=>finish('discard')),button(()=>bootstrap.recovery.retry,()=>finish('retry'),'suggested-action'));form.append(footer);}),
     handles:id=>{const state=app.session_stamp_for(BigInt(id)).state;return [...new Set([state.location?.uri,state.last_export?.location.uri])].flatMap(uri=>{const handle=handles.get(uri);return typeof FileSystemFileHandle!=='undefined'&&handle instanceof FileSystemFileHandle?[{uri,handle}]:[];});},order:order=>applyChange(app.restore_session_order(order)),
     canOffer:()=>canvasReady()&&!document.hidden&&!active.size&&!batching&&!changing&&!closing&&!document.querySelector('dialog[open]')&&app.document_park_ready()});
-  const tabs=createDrawingTabs({app,element,button,icon,applyChange,select,close,openFiles,message,busy:()=>changing||batching||closing});
+  const tabs=createDrawingTabs({app,element,button,icon,applyChange,select,close,openFiles,message,busy:()=>changing||batching||closing,showMenu});
   return {title:tabs.root,key(event,send){
     if(!event.altKey&&((event.ctrlKey||event.metaKey)&&app.shortcut_key_is(event.key,latinKey(event),'v')
       ||event.shiftKey&&!event.ctrlKey&&!event.metaKey&&event.key==='Insert')){

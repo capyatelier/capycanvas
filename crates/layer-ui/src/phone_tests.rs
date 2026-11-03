@@ -6,6 +6,142 @@ fn phone_session(viewport: [u32; 2]) -> UiSession<Recorder> {
 }
 
 #[test]
+fn phone_menu_search_escape_clears_then_closes_and_backs_out_of_parameters() {
+    let mut s = phone_session([412, 891]);
+    s.dispatch(UiAction::Invoke { command: CommandId::SearchCommands }).unwrap();
+    s.dispatch(UiAction::CommandSearch { action: CommandSearchAction::Query { text: "pencil".into() } }).unwrap();
+    s.dispatch(UiAction::CommandSearch { action: CommandSearchAction::Dismiss { search_focused: true, text: "pencil".into() } }).unwrap();
+    assert_eq!(s.state.command_search.as_ref().unwrap().query, "");
+    s.dispatch(UiAction::CommandSearch { action: CommandSearchAction::Dismiss { search_focused: true, text: String::new() } }).unwrap();
+    assert!(s.state.command_search.is_none());
+    s.dispatch(UiAction::Invoke { command: CommandId::SearchCommands }).unwrap();
+    s.dispatch(UiAction::CommandSearch { action: CommandSearchAction::Query { text: "brush size".into() } }).unwrap();
+    s.dispatch(UiAction::CommandSearch { action: CommandSearchAction::Execute { id: "tool_setting.size".into(), value: None } }).unwrap();
+    assert!(s.state.command_search.as_ref().unwrap().parameter.is_some());
+    s.dispatch(UiAction::CommandSearch { action: CommandSearchAction::Dismiss { search_focused: true, text: "24".into() } }).unwrap();
+    assert!(s.state.command_search.as_ref().unwrap().parameter.is_none());
+    assert_eq!(s.state.command_search.as_ref().unwrap().query, "brush size");
+}
+
+#[test]
+fn phone_menu_shows_one_available_shortcut_per_row() {
+    for platform in [Platform::Gtk, Platform::Web] {
+        let mut s = session(platform);
+        s.state.workspace.layout = WorkspacePreset::Painter.layout(platform);
+        s.set_viewport([891., 412.], [891, 412]).unwrap();
+        let labels = [DocumentTabLabel { id: 1, title: "Study".into(), location: String::new(), uri: None, export_uri: None, modified: false }];
+        let selector = DrawingSelector::new(&labels, 1, &s.command(CommandId::NewDocument), s.localization());
+        let mut menu = s.phone_menu().unwrap();
+        let mut item = ContextMenuItem::command("Two shortcuts", UiAction::Invoke { command: CommandId::SoftProof });
+        item.bindings = ["x", "y"].map(|key| KeyChord::new(key, Modifiers { command: true, ..Default::default() }).native_binding(platform)).to_vec();
+        item.hint = "Ctrl+X / Ctrl+Y".into();
+        menu.list.sections.push(vec![item]);
+        let view = menu.view(&selector, platform, s.localization());
+        for row in view.pages.iter().flat_map(|page| page.sections.iter().flatten()) {
+            assert!(row.bindings.len() <= 1, "{platform:?}: {}", row.label);
+            assert_eq!(row.hint, row.bindings.first().map(|binding| binding.chord.localized_label(platform, s.localization())).unwrap_or_default(), "{platform:?}: {}", row.label);
+        }
+        let row = view.pages.iter().flat_map(|page| page.sections.iter().flatten()).find(|row| row.label == "Two shortcuts").unwrap();
+        assert_eq!(row.bindings.len(), 1);
+        assert_eq!(row.hint, "Ctrl+X");
+        let create = view.pages.iter().find(|page| page.id.page == Some(MenuPageId::Drawings)).unwrap().sections.last().unwrap().last().unwrap();
+        assert_eq!(create.bindings, s.command(CommandId::NewDocument).bindings.into_iter().filter(|binding| binding.chord.available(platform)).take(1).collect::<Vec<_>>());
+        if platform == Platform::Web { assert!(create.hint.is_empty()); }
+    }
+}
+
+#[test]
+fn phone_menu_projected_activation_closes_for_effects_and_rejects_stale_pages() {
+    let mut s = phone_session([412, 891]);
+    let labels = [DocumentTabLabel { id: 1, title: "Study".into(), location: String::new(), uri: None, export_uri: None, modified: false }];
+    let selector = DrawingSelector::new(&labels, 1, &s.command(CommandId::NewDocument), s.localization());
+    let view = s.phone_menu().unwrap().view(&selector, s.state.platform, s.localization());
+    let (route, action) = view.pages.iter().find_map(|page| page.sections.iter().flatten().find_map(|row| {
+        match &row.action {
+            Some(action @ UiAction::Phone { action: PhoneAction::MenuActivate { action: inner, .. } })
+                if row.enabled && matches!(&**inner, UiAction::Effect { action: EffectAction::Insert { .. } }) => Some((page.id.clone(), action.clone())),
+            _ => None,
+        }
+    })).expect("an enabled filter menu command");
+    s.dispatch(UiAction::Phone { action: PhoneAction::Capy }).unwrap();
+    let revision = s.engine.document().revision;
+    s.dispatch(action.clone()).unwrap();
+    assert_eq!(s.engine.document().revision, revision, "a retired page cannot activate a row");
+    assert!(s.state.phone.menu);
+    s.dispatch(UiAction::Phone { action: PhoneAction::MenuActivate { route: PhoneMenuRoute::default(), action: Box::new(UiAction::Phone { action: PhoneAction::SwapSides }) } }).unwrap();
+    assert!(s.state.phone.menu); assert!(s.state.phone.swapped);
+    s.dispatch(UiAction::Phone { action: PhoneAction::MenuSelect { route } }).unwrap();
+    s.dispatch(action).unwrap();
+    assert!(s.engine.document().revision > revision);
+    assert!(!s.state.phone.menu); assert!(s.state.phone.menu_navigation.is_root());
+}
+
+#[test]
+fn phone_menu_route_stack_is_session_owned_validated_and_cleared() {
+    let mut s = phone_session([412, 891]);
+    s.configure_workspace_manager(ManagedWorkspace { id: "paint".into(), name: "Paint".into(),
+        baseline: s.state.workspace.layout.clone(), choices: Vec::new() }).unwrap();
+    let route = |page| PhoneMenuRoute { page: Some(page), path: Vec::new() };
+    let workspaces = route(MenuPageId::Workspaces);
+    s.dispatch(UiAction::Phone { action: PhoneAction::MenuOpen { page: MenuPageId::Workspaces } }).unwrap();
+    assert!(s.state.phone.menu); assert_eq!(s.state.phone.menu_navigation.current(), workspaces);
+    assert_eq!(s.state.phone.menu_navigation.parent(), Some(route(MenuPageId::Application(ApplicationMenu::Window))));
+    s.dispatch(UiAction::Phone { action: PhoneAction::MenuBack { route: workspaces.clone() } }).unwrap();
+    assert_eq!(s.state.phone.menu_navigation.current(), route(MenuPageId::Application(ApplicationMenu::Window)));
+    s.dispatch(UiAction::Phone { action: PhoneAction::MenuBack { route: workspaces } }).unwrap();
+    assert_eq!(s.state.phone.menu_navigation.current(), route(MenuPageId::Application(ApplicationMenu::Window)), "a stale swipe cannot back out of another page");
+    let invalid = PhoneMenuRoute { page: Some(MenuPageId::Application(ApplicationMenu::File)), path: vec![[99, 99]] };
+    assert!(s.dispatch(UiAction::Phone { action: PhoneAction::MenuSelect { route: invalid } }).is_err());
+    s.dispatch(UiAction::Phone { action: PhoneAction::Capy }).unwrap();
+    assert!(!s.state.phone.menu); assert!(s.state.phone.menu_navigation.is_root());
+    s.dispatch(UiAction::Invoke { command: CommandId::Drawings }).unwrap();
+    assert!(s.state.phone.menu); assert_eq!(s.state.phone.menu_navigation.current(), route(MenuPageId::Drawings));
+    assert!(!s.state.requests.iter().any(|request| matches!(request.kind, HostRequestKind::Drawings)));
+    s.dispatch(UiAction::Phone { action: PhoneAction::MenuSelect { route: route(MenuPageId::Application(ApplicationMenu::Window)) } }).unwrap();
+    s.dispatch(UiAction::Phone { action: PhoneAction::MenuSelect { route: route(MenuPageId::Workspaces) } }).unwrap();
+    s.managed_workspace = None;
+    s.dispatch(UiAction::Phone { action: PhoneAction::SwapSides }).unwrap();
+    assert_eq!(s.state.phone.menu_navigation.current(), route(MenuPageId::Application(ApplicationMenu::Window)), "removed menu content returns to its surviving ancestor");
+    let serialized = serde_json::to_value(&s.state.phone).unwrap();
+    assert_eq!(serialized["menu_route"], serde_json::to_value(s.state.phone.menu_navigation.current()).unwrap());
+    assert!(serialized.get("stack").is_none());
+    s.dispatch(UiAction::Phone { action: PhoneAction::Panel { panel: Panel::Layers } }).unwrap();
+    assert!(!s.state.phone.menu); assert!(s.state.phone.menu_navigation.is_root());
+}
+
+#[test]
+fn phone_menu_projects_typed_pages_and_close_slots_without_reading_titles() {
+    let mut s = phone_session([412, 891]);
+    s.configure_workspace_manager(ManagedWorkspace {
+        id: "paint".into(), name: "Same".into(), baseline: s.state.workspace.layout.clone(), choices: Vec::new(),
+    }).unwrap();
+    let labels = [1, 2].map(|id| DocumentTabLabel { id, title: format!("Study {{雪}} {id}"), location: String::new(), uri: None, export_uri: None, modified: id == 2 });
+    let selector = DrawingSelector::new(&labels, 2, &s.command(CommandId::NewDocument), s.localization());
+    let mut menu = s.phone_menu().unwrap();
+    fn duplicate_titles(sections: &mut [Vec<ContextMenuItem>]) {
+        for item in sections.iter_mut().flatten() { item.label = "Same".into(); duplicate_titles(&mut item.sections); }
+    }
+    duplicate_titles(&mut menu.list.sections);
+    let view = menu.view(&selector, s.state.platform, s.localization());
+    let named = |id| view.pages.iter().find(|page| page.id.page == Some(id) && page.id.path.is_empty()).unwrap();
+    let root = &view.pages[0];
+    assert_eq!(root.id, PhoneMenuRoute::default()); assert!(!root.checks);
+    assert_eq!(root.sections[0][0].label, "• Study {雪} 2");
+    assert_eq!(root.sections[0][0].count, "2");
+    assert_eq!(root.sections[0][0].target.as_ref().unwrap().page, Some(MenuPageId::Drawings));
+    let drawings = named(MenuPageId::Drawings);
+    assert_eq!(drawings.parent.as_ref(), Some(&root.id)); assert!(drawings.checks);
+    for (row, id) in drawings.sections[0].iter().zip([1, 2]) {
+        let close = row.close.as_ref().unwrap();
+        assert_eq!(close.action, UiAction::Phone { action: PhoneAction::Drawing { id, close: true } });
+        assert!(close.label.contains(&format!("Study {{雪}} {id}")));
+        assert!(row.hint.is_empty());
+    }
+    assert_eq!(named(MenuPageId::Workspaces).parent.as_ref(), Some(&named(MenuPageId::Application(ApplicationMenu::Window)).id));
+    assert!(root.sections.iter().flatten().filter(|row| row.target.is_some()).all(|row| !row.is_heading));
+}
+
+#[test]
 fn phone_color_columns_share_one_scroller_in_both_orientations() {
     for viewport in [[412, 891], [891, 412]] {
         let mut s = phone_session(viewport);
@@ -184,11 +320,13 @@ fn drawing_selector_preserves_order_current_dirty_text_and_new_action() {
     let create = &selector.page.sections.last().unwrap()[0];
     assert!(matches!(create.action, Some(UiAction::Invoke { command: CommandId::NewDocument })));
     assert_eq!(create.bindings, s.command(CommandId::NewDocument).bindings);
+    assert_eq!(create.hint, s.command(CommandId::NewDocument).shortcut);
     assert!(DrawingSelector::new(&labels[..1], 1, &s.command(CommandId::NewDocument), s.localization()).count.is_empty());
-    let mut menu = s.phone_menu().unwrap().list; menu.sections[0].insert(0, selector.page);
-    let mut navigation = PhoneMenuNavigation::default();
-    assert!(navigation.drawings(&menu, s.localization()));
-    assert_eq!(navigation.name(), "page-0-0"); assert!(navigation.back() && navigation.is_root());
+    s.dispatch(UiAction::Phone { action: PhoneAction::MenuOpen { page: MenuPageId::Drawings } }).unwrap();
+    assert_eq!(s.state.phone.menu_navigation.current().page, Some(MenuPageId::Drawings));
+    let route = s.state.phone.menu_navigation.current();
+    s.dispatch(UiAction::Phone { action: PhoneAction::MenuBack { route } }).unwrap();
+    assert!(s.state.phone.menu_navigation.is_root());
     s.dispatch(UiAction::Phone { action: PhoneAction::Drawing { id: 1, close: true } }).unwrap();
     assert!(s.state.requests.iter().any(|r| matches!(r.kind, HostRequestKind::SelectDrawing { id: 1, close: true })));
 }
@@ -786,17 +924,21 @@ fn phone_workspace_options_enter_window_workspaces_and_keep_both_back_destinatio
         id: "paint".into(), name: "Paint".into(), baseline: s.state.workspace.layout.clone(),
         choices: vec![WorkspaceChoice { id: "sketch".into(), name: "Sketch".into() }],
     }).unwrap();
-    let menu = s.phone_menu().unwrap().list;
-    let mut navigation = PhoneMenuNavigation::default();
-    assert!(navigation.workspaces(&menu, s.localization()));
-    assert_eq!(navigation.name(), "page-0-7-1-0");
-    let page = PhoneMenuNavigation::pages(&menu).into_iter().find(|page| page.name() == navigation.name()).unwrap();
-    assert!(page.menu.sections.iter().flatten().any(|item| matches!(item.action,
-        Some(UiAction::WorkspaceManager { command: WorkspaceCommand::Manage }))));
-    assert!(navigation.back());
-    assert_eq!(navigation.name(), "page-0-7");
-    assert!(navigation.back());
-    assert!(navigation.is_root());
+    s.dispatch(UiAction::Phone { action: PhoneAction::MenuOpen { page: MenuPageId::Workspaces } }).unwrap();
+    let route = s.state.phone.menu_navigation.current();
+    let labels = [DocumentTabLabel { id: 1, title: "Study".into(), location: String::new(), uri: None, export_uri: None, modified: false }];
+    let selector = DrawingSelector::new(&labels, 1, &s.command(CommandId::NewDocument), s.localization());
+    let menu = s.phone_menu().unwrap().view(&selector, s.state.platform, s.localization());
+    let page = menu.pages.iter().find(|page| page.id == route).unwrap();
+    assert!(page.sections.iter().flatten().any(|item| matches!(&item.action,
+        Some(UiAction::Phone { action: PhoneAction::MenuActivate { route: source, action } })
+            if *source == route && matches!(&**action, UiAction::WorkspaceManager { command: WorkspaceCommand::Manage }))));
+    s.dispatch(UiAction::Phone { action: PhoneAction::MenuBack { route } }).unwrap();
+    assert_eq!(s.state.phone.menu_navigation.current().page, Some(MenuPageId::Application(ApplicationMenu::Window)));
+    let route = s.state.phone.menu_navigation.current();
+    s.dispatch(UiAction::Phone { action: PhoneAction::MenuBack { route } }).unwrap();
+    assert!(s.state.phone.menu && s.state.phone.menu_navigation.is_root());
+
 }
 
 #[test]

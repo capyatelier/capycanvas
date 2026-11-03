@@ -2,7 +2,7 @@ import {createToolbarComponent} from './toolbar-components.js';
 import {updatePaintPairIcon} from './color-controls.js';
 
 export function createPhone({app,state,workspace,capy,header,element,button,icon,dropdown,place,dispatch,rasterWorker,customization,changed}) {
-  const root=element('div');root.id='phone-frame';root.hidden=true;workspace.append(root);
+  const root=element('div','window-bar');root.id='phone-frame';root.hidden=true;workspace.append(root);
   const parts={};
   for(const id of ['bar-tools','bar-capy','tools-chip','sliders-chip']) {
     const node=element('div',id.endsWith('chip')?'phone-chip':'phone-bar');node.id=`phone-${id}`;root.append(node);parts[id]=node;

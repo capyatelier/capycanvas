@@ -27,7 +27,10 @@ struct DrawerQuery {
     #[serde(default)]
     closing: bool,
     color: Option<DrawerColorMeasure>,
+    menu: Option<MenuMeasurement>,
 }
+#[derive(Deserialize)]
+struct MenuMeasurement { width: f32, height: f32, row_height: f32 }
 #[derive(Deserialize)]
 struct DrawerColorMeasure { fixed_height: f32, hdr: bool }
 
@@ -41,7 +44,31 @@ struct LayerDrawerQuery {
 }
 
 #[wasm_bindgen]
+pub struct WebMenuContact { contact: layer_ui::PhoneMenuContact }
+
+#[wasm_bindgen]
 impl WebApp {
+    pub fn command_search_placement(&self, width: f32, height: f32) -> Result<JsValue, JsValue> {
+        let viewport = [width, height];
+        let visible = layer_ui::Bounds { x: 0., y: 0., width, height };
+        let phone = self.session.phone_layout();
+        let area = phone.as_ref().and_then(|phone| phone.work_area.intersection(visible)).unwrap_or(visible);
+        serialize(&layer_ui::COMMAND_SEARCH_STYLE.placement(viewport, area, phone.is_some()))
+    }
+    pub fn phone_menu(&self) -> Result<JsValue, JsValue> { serialize(&self.phone_menu_view()) }
+    pub fn phone_menu_contact(&self) -> WebMenuContact { WebMenuContact { contact: Default::default() } }
+    pub fn phone_menu_input(&self, contact: &mut WebMenuContact, input: JsValue) -> Result<JsValue, JsValue> {
+        let navigation = &self.session.state().phone.menu_navigation;
+        let input = serde_wasm_bindgen::from_value(input).map_err(js)?;
+        serialize(&contact.contact.input(&navigation.current(), !navigation.is_root(), input))
+    }
+    pub fn phone_menu_width(&self, minimum: f32, natural: f32, row_height: f32) -> Option<f32> {
+        self.session.phone_layout().map(|phone| phone.menu_width(minimum, natural, row_height))
+    }
+    pub fn phone_menu_geometry(&self, placement: JsValue, row_height: f32) -> Result<JsValue, JsValue> {
+        let placement = serde_wasm_bindgen::from_value(placement).map_err(js)?;
+        serialize(&self.session.phone_layout().map(|phone| phone.menu_geometry(&placement, row_height)))
+    }
     pub fn application_menus(&self) -> Result<JsValue, JsValue> {
         js_sys::JSON::parse(&serde_json::to_string(&self.application_menu_models()).map_err(js)?)
     }
@@ -225,6 +252,8 @@ impl WebApp {
         }
         let end = if q.closing {
             q.from.as_ref().map(|p| p.closed())
+        } else if q.column.is_none() && state.phone.menu {
+            q.menu.as_ref().and_then(|menu| self.session.phone_layout()?.menu(q.viewport, menu.width, menu.height, menu.row_height))
         } else {
             drawer.and_then(|d| {
                 state.customization.drawer_placement(
@@ -419,4 +448,13 @@ pub fn raster_worker_color_field(metadata: &str) -> Result<Vec<u8>, JsValue> {
     struct Request { colors: layer_ui::ColorState, side: u32, rendition: Option<layer_core::color::hdr::SdrRendition> }
     let request: Request = serde_json::from_str(metadata).map_err(js)?;
     color_field(&request.colors, request.side, request.rendition)
+}
+
+impl WebApp {
+    fn phone_menu_view(&self) -> Option<layer_ui::PhoneMenuView> {
+        if !self.session.state().phone.menu { return None; }
+        let labels = self.documents.labels(&self.session.state().document_file, |session| &session.state().document_file, self.session.localization());
+        let selector = layer_ui::DrawingSelector::new(&labels, self.documents.selected(), &self.session.command(layer_ui::CommandId::NewDocument), self.session.localization());
+        Some(self.session.phone_menu()?.view(&selector, layer_ui::Platform::Web, self.session.localization()))
+    }
 }

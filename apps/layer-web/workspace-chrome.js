@@ -1,3 +1,4 @@
+import {createMenu} from './menu.js';
 import {liveCopy} from "./localization.js";
 import {createLayerInspector} from "./layer-inspector.js";
 import {orderTabChildren} from './tab-order.js';
@@ -95,14 +96,14 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
   }
   function measureColumnDrawers() {
     const measurements=[];
-    for(const r of drawers.values())if(!r.closing&&r.drawer.tabs&&r.placement) {
+    for(const r of drawers.values())if(!r.closing&&r.drawer?.tabs&&r.placement) {
       const b=r.root.getBoundingClientRect();
       if(b.width>0&&b.height>0)measurements.push({group:r.drawer.tabs.group,bounds:{x:b.x,y:b.y,width:b.width,height:b.height}});
     }
     dispatch({type:"measure_column_drawers",measurements});
   }
   function tabHits() {
-    return [...drawers.values()].filter(r=>!r.closing&&r.drawer.tabs&&r.placement).flatMap(r=>{
+    return [...drawers.values()].filter(r=>!r.closing&&r.drawer?.tabs&&r.placement).flatMap(r=>{
       const strip=r.root.querySelector('.drawer-tab-strip');if(!strip)return[];
       const clip=intersect(strip.getBoundingClientRect(),r.root.getBoundingClientRect());if(!clip)return[];
       const rect={...clip,right:clip.x+clip.width,bottom:clip.y+clip.height};
@@ -186,7 +187,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
   }
 
   function refreshSource(record) {
-    const anchor=record.drawer.anchor,key=JSON.stringify(anchor);
+    const anchor=record.menu?.anchor()??record.drawer.anchor,key=JSON.stringify(anchor);
     if(record.sourceKey===key&&record.source?.isConnected)return;
     record.sourceKey=key;
     if(anchor.kind==='phone') {
@@ -205,17 +206,28 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
     path.setAttribute("transform",`matrix(${c.transform.join(" ")})`);if(!path.parentNode)node.append(path);
     return node;
   }
-  function dispose(record) {releaseTabs(record.root);customization.discardFields(record.root);for(const body of record.bodies)for(const child of body.children)child.disposePanel?.();record.bridge?.remove();record.shadow.remove();record.root.remove();}
+  function dispose(record) {record.menu?.dispose();releaseTabs(record.root);customization.discardFields(record.root);for(const body of record.bodies)for(const child of body.children)child.disposePanel?.();record.bridge?.remove();record.shadow.remove();record.root.remove();}
   function refresh() {
     if(!resolved)return;
     const live=new Set();
+    if(state().phone.menu&&resolved.phone) {
+      live.add('tool');let record=drawers.get('tool');
+      if(record&&!record.menu){dispose(record);drawers.delete('tool');record=null;}
+      if(!record) {
+        const shadow=element('div','drawer-shadow'),root=element('section','content-drawer menu-drawer');shadow.hidden=true;root.dataset.drawer='tool';workspace.append(shadow,root);
+        const menu=createMenu({app,state,element,button,icon,dispatch,customization,place});
+        root.append(menu.root);record={root,contents:menu.root,shadow,menu,bodies:[],drawer:null,column:null};drawers.set('tool',record);
+      } else record.menu.refresh();
+      record.menu.setEdge(resolved.phone.edge);record.measure=null;record.closing=false;
+      refreshSource(record);
+    }
     for(const drawer of [...state().customization.column_drawers,...(state().customization.drawer?[state().customization.drawer]:[])]) {
       const column=drawer.anchor.kind==="column"?drawer.anchor.column:null,id=column??"tool";
       live.add(id);
       const {tool_set,layer_properties,...structure}=drawer;
       const tabKey=t=>JSON.stringify(t&&[t.group,[...t.panels].sort()]);
       if(drawer.tabs)structure.tabs=tabKey(drawer.tabs);
-      let record=drawers.get(id);const key=JSON.stringify([structure,layer_properties!=null,!!tool_set,drawer.columns.flat().map(id=>state().workspace.layout.panels.find(p=>p.id===id))]);
+      let record=drawers.get(id);if(record?.menu){dispose(record);drawers.delete(id);record=null;}const key=JSON.stringify([structure,layer_properties!=null,!!tool_set,drawer.columns.flat().map(id=>state().workspace.layout.panels.find(p=>p.id===id))]);
       if(record?.key!==key) {
         // A new opener must move the body and connector together. Interpolating
         // from the old body leaves the new anchor disconnected during the move.
@@ -254,7 +266,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       record.inspector?.refresh(layer_properties);
       for(const body of record.bodies)for(const child of body.children)child.refreshPanel?.();
     }
-    for(const[id,r]of drawers)if(!live.has(id)&&!r.closing){r.closing=true;r.root.inert=true;r.from=r.placement;r.started=null;}
+    for(const[id,r]of drawers)if(!live.has(id)&&!r.closing){if(r.menu){dispose(r);drawers.delete(id);continue;}r.closing=true;r.root.inert=true;r.from=r.placement;r.started=null;}
     measureColumnDrawers();
     if(!animating){animating=true;requestAnimationFrame(animate);}
   }
@@ -265,7 +277,8 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
     markedSources.clear();
     for(const[id,r]of drawers) {
       r.started??=now-interval-(!r.closing&&r.switching?catalog.panel_expansion_ms:0);
-      if(!r.closing) {
+      if(r.menu){r.menu.setEdge(resolved.phone.edge);r.measure??=r.menu.measure();}
+      else if(!r.closing) {
         const anchor=r.drawer.anchor,tile=anchor.kind==='tile'?tiles.find(m=>m.anchor.panel===anchor.panel&&m.anchor.tile===anchor.tile):undefined,previous=r.measuredTile;
         if(tile?.column!==previous?.column||tile&&(!previous||tile.bounds.x!==previous.bounds.x||tile.bounds.y!==previous.bounds.y||tile.bounds.width!==previous.bounds.width||tile.bounds.height!==previous.bounds.height))r.measure=null;
         r.measuredTile=tile;
@@ -294,9 +307,9 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       const colorFacts=color?.measureColor();
       const colorMeasure=colorFacts?{hdr:colorFacts.hdr,fixed_height:Math.max(0,color.closest('.panel').getBoundingClientRect().height-colorFacts.height)}:null;
       const page=r.inspector?.measure(now);
-      const heights=r.bodies.map(body=>page?.height??contentHeight(body)+(r.drawer.tabs?resolved.tab_bar_height:0));
-      const progress=matchMedia("(prefers-reduced-motion: reduce)").matches?1:Math.min(1,(now-r.started)/catalog.panel_expansion_ms);
-      const result=app.drawer({viewport:[workspace.clientWidth,workspace.clientHeight],column:r.column,heights,color:colorMeasure,progress,from:r.from??null,closing:!!r.closing});
+      const heights=r.bodies.map(body=>page?.height??contentHeight(body)+(r.drawer?.tabs?resolved.tab_bar_height:0));
+      const progress=r.menu||matchMedia("(prefers-reduced-motion: reduce)").matches?1:Math.min(1,(now-r.started)/catalog.panel_expansion_ms);
+      const result=app.drawer({viewport:[workspace.clientWidth,workspace.clientHeight],column:r.column,heights,color:colorMeasure,menu:r.menu?r.measure:null,progress,from:r.from??null,closing:!!r.closing});
       if(!result || (r.closing&&progress===1)){dispose(r);drawers.delete(id);continue;}
       if(!r.closing)color?.setColorFit(result.color_fit);
       r.placement=result.placement;r.connection=result.connection;place(r.root,r.placement.bounds);
@@ -314,11 +327,10 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       r.shadow.style.borderRadius=r.root.style.borderRadius;
 
       r.root.style.zIndex=r.column==null?"1900":"1800";
-      r.placement.columns.forEach((bounds,i)=>{
-        place(r.bodies[i],bounds);
-      });
+      if(r.menu)r.menu.layout(r.placement,resolved.phone.edge);
+      else r.placement.columns.forEach((bounds,i)=>{place(r.bodies[i],bounds);});
       r.inspector?.layout();
-      if(r.drawer.tabs) {
+      if(r.drawer?.tabs) {
         let tabs=r.root.querySelector(":scope > .drawer-tabs");
         if(!tabs&&!r.closing){
           const item={kind:"group",group:r.drawer.tabs.group};
@@ -361,5 +373,5 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
   }
   workspace.addEventListener("scroll",()=>{if(drawers.size&&!animating){animating=true;requestAnimationFrame(animate);}},true);
   function connectionList(){return [...drawers.values()].map(r=>r.connection).filter(Boolean);}
-  return {arrange,refresh,tabHits,measureColumnDrawers,connections:connectionList,facts(){const r=drawers.get("tool");return{content_drawer:r?.placement?.bounds??null,drawer_connection:r?.connection?.bounds??null};}};
+  return {arrange,refresh,openMenu(page){if(!resolved?.phone)return false;dispatch({type:'phone',action:{kind:'menu_open',page}});return true;},tabHits,measureColumnDrawers,connections:connectionList,facts(){const r=drawers.get("tool");return{content_drawer:r?.placement?.bounds??null,drawer_connection:r?.connection?.bounds??null};}};
 }

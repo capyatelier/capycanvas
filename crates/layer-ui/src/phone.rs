@@ -5,7 +5,7 @@ pub(crate) fn tool_allowed(control: ToolbarControl) -> bool {
     !control.is_component() && control != PhoneLayout::SETTINGS
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PhoneState {
     pub(crate) platform: Option<crate::Platform>,
@@ -15,6 +15,8 @@ pub struct PhoneState {
     pub movable: bool,
     pub hidden: bool,
     pub menu: bool,
+    #[serde(flatten, skip_deserializing)]
+    pub menu_navigation: PhoneMenuNavigation,
     pub capy_drag: bool,
     pub swapped: bool,
     pub slider: Option<(ToolbarControl, f32, crate::ToolbarContext)>,
@@ -23,6 +25,10 @@ pub struct PhoneState {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PhoneAction {
     Capy,
+    MenuSelect { route: PhoneMenuRoute },
+    MenuBack { route: PhoneMenuRoute },
+    MenuOpen { page: crate::MenuPageId },
+    MenuActivate { route: PhoneMenuRoute, action: Box<crate::UiAction> },
     CapyHold,
     CapyDrop { position: [f32; 2] },
     Tool { tile: u32 },
@@ -51,7 +57,7 @@ impl crate::UiState {
     }
 }
 impl PhoneState {
-    pub fn resolve(self, layout: &DockLayout, viewport: [f32; 2]) -> Option<PhoneLayout> {
+    pub fn resolve(&self, layout: &DockLayout, viewport: [f32; 2]) -> Option<PhoneLayout> {
         if !self.platform.is_some_and(crate::Platform::presents_phone_layout) { return None; }
         layout.phone.as_ref()?;
         let mut phone = PhoneLayout::resolve(layout, viewport, self.insets, self.native, self.native_counts, self.swapped, self.movable)?;
@@ -472,7 +478,7 @@ mod tests {
                 assert_eq!(phone.title, title, "{viewport:?}/{swapped}");
                 assert_eq!(phone.title.x, phone.work_area.x);
                 assert_eq!(phone.title.width, phone.work_area.width);
-                assert_eq!(PhoneState { movable: false, ..state }.resolve(&layout, viewport).unwrap().title, Bounds::default());
+                assert_eq!(PhoneState { movable: false, ..state.clone() }.resolve(&layout, viewport).unwrap().title, Bounds::default());
             }
             for viewport in [[412., 891.], [280., 560.], [280., 280.]] {
                 assert_eq!(state.resolve(&layout, viewport).unwrap().title, Bounds::default());
@@ -623,12 +629,45 @@ mod tests {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct PhoneMenuNavigation {
-    path: Vec<[usize; 2]>,
+pub struct PhoneMenuNavigation { stack: Vec<PhoneMenuRoute> }
+impl serde::Serialize for PhoneMenuNavigation {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("PhoneMenuNavigation", 2)?;
+        state.serialize_field("menu_route", &self.current())?;
+        state.serialize_field("menu_parent", &self.parent())?;
+        state.end()
+    }
+}
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PhoneMenuContact {
     swipe_axis: Option<crate::Axis>,
     swipe_progress: f32,
+    can_back: bool,
+    swipe_route: Option<PhoneMenuRoute>,
+    contact: Option<(PhoneMenuRoute, PhoneMenuHit)>,
+    velocity: Option<(f32, u32, f32)>,
 }
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", content = "position", rename_all = "snake_case")]
+pub enum PhoneMenuHit { Back, Row([u32; 2]), Close([u32; 2]), Strip(u32) }
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct PhoneMenuSettle { pub action: Option<PhoneAction>, pub duration_ms: u32 }
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PhoneMenuInput {
+    Press { hit: PhoneMenuHit }, CancelPress, Release { hit: PhoneMenuHit, inside: bool },
+    BeginSwipe { time_ms: u32 },
+    Swipe { delta: [f32; 2], width: f32, past_slop: bool, rtl: bool, time_ms: u32 },
+    EndSwipe { width: f32, rtl: bool, time_ms: u32 },
+}
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct PhoneMenuReply {
+    pub accepted: bool,
+    pub swipe: Option<PhoneMenuSwipe>,
+    pub settle: Option<PhoneMenuSettle>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct PhoneMenuGeometry {
     pub list: Bounds,
     pub strip: Bounds,
@@ -637,63 +676,118 @@ pub struct PhoneMenuGeometry {
     pub icon: f32,
 }
 #[derive(Clone, Debug, PartialEq)]
-pub struct PhoneMenuPage {
-    pub path: Vec<[usize; 2]>,
+struct PhoneMenuPage {
+    pub route: PhoneMenuRoute,
+    pub parent: Option<PhoneMenuRoute>,
     pub menu: crate::ContextMenu,
 }
-impl PhoneMenuPage {
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PhoneMenuRoute {
+    pub page: Option<crate::MenuPageId>,
+    pub path: Vec<[u32; 2]>,
+}
+impl PhoneMenuRoute {
     pub fn name(&self) -> String {
-        PhoneMenuNavigation::page_name(&self.path)
+        let root = match self.page {
+            None => "main".into(),
+            Some(crate::MenuPageId::Drawings) => "drawings".into(),
+            Some(crate::MenuPageId::Workspaces) => "workspaces".into(),
+            Some(crate::MenuPageId::Application(menu)) => format!("application-{menu:?}").to_ascii_lowercase(),
+        };
+        self.path.iter().flatten().fold(root, |name, index| format!("{name}-{index}"))
+    }
+    fn child(&self, position: [usize; 2], item: &crate::ContextMenuItem) -> Self {
+        if let Some(page) = item.page { return Self { page: Some(page), path: Vec::new() }; }
+        let mut next = self.clone(); next.path.push(position.map(|index| index as u32)); next
     }
 }
 impl PhoneMenuNavigation {
-    pub fn page_name(path: &[[usize; 2]]) -> String {
-        if path.is_empty() { return "main".into(); }
-        path.iter().flatten().fold("page".to_string(), |name, index| format!("{name}-{index}"))
-    }
-    pub fn name(&self) -> String { Self::page_name(&self.path) }
-    pub fn is_root(&self) -> bool { self.path.is_empty() }
-    pub fn pages(menu: &crate::ContextMenu) -> Vec<PhoneMenuPage> {
-        fn visit(menu: crate::ContextMenu, path: Vec<[usize; 2]>, out: &mut Vec<PhoneMenuPage>) {
-            out.push(PhoneMenuPage { path: path.clone(), menu: menu.clone() });
+    pub fn current(&self) -> PhoneMenuRoute { self.stack.last().cloned().unwrap_or_default() }
+    pub fn parent(&self) -> Option<PhoneMenuRoute> { (!self.stack.is_empty()).then(|| self.stack.iter().rev().nth(1).cloned().unwrap_or_default()) }
+    pub(crate) fn clear(&mut self) { self.stack.clear(); }
+    pub fn is_root(&self) -> bool { self.stack.is_empty() }
+    fn pages(menu: &crate::ContextMenu) -> Vec<PhoneMenuPage> {
+        fn visit(menu: crate::ContextMenu, route: PhoneMenuRoute, parent: Option<PhoneMenuRoute>, out: &mut Vec<PhoneMenuPage>) {
+            out.push(PhoneMenuPage { route: route.clone(), parent, menu: menu.clone() });
             for (s, section) in menu.sections.into_iter().enumerate() {
                 for (i, item) in section.into_iter().enumerate() {
                     if item.action.is_none() && item.enabled && !item.sections.is_empty() {
-                        let mut path = path.clone();
-                        path.push([s, i]);
-                        visit(crate::ContextMenu { title: item.label, sections: item.sections }, path, out);
+                        let next = route.child([s, i], &item);
+                        visit(crate::ContextMenu { title: item.label, sections: item.sections }, next, Some(route.clone()), out);
                     }
                 }
             }
         }
         let mut pages = Vec::new();
-        visit(menu.clone(), Vec::new(), &mut pages);
+        visit(menu.clone(), PhoneMenuRoute::default(), None, &mut pages);
         pages
     }
-    pub fn select(&mut self, menu: &crate::ContextMenu, name: &str) -> bool {
-        let Some(page) = Self::pages(menu).into_iter().find(|page| page.name() == name) else { return false; };
-        self.path = page.path;
+    fn select_routes<'a>(&mut self, pages: impl Iterator<Item = (&'a PhoneMenuRoute, Option<&'a PhoneMenuRoute>)>, route: &PhoneMenuRoute) -> bool {
+        let pages = pages.collect::<Vec<_>>();
+        if !pages.iter().any(|(id, _)| *id == route) { return false; }
+        let mut current = route;
+        let mut stack = Vec::new();
+        while *current != PhoneMenuRoute::default() {
+            let Some(parent) = pages.iter().find(|(id, _)| *id == current).and_then(|(_, parent)| *parent) else { return false; };
+            stack.push(current.clone()); current = parent;
+            if stack.len() > pages.len() { return false; }
+        }
+        self.stack = stack.into_iter().rev().collect();
         true
     }
-    pub fn back(&mut self) -> bool { self.path.pop().is_some() }
-    pub fn workspaces(&mut self, menu: &crate::ContextMenu, localization: &crate::Localizer) -> bool {
-        let window = crate::ApplicationMenu::Window.localized_label(localization);
-        let workspaces = localization.text(crate::MessageId::WORKSPACE_WORKSPACES);
-        let Some(page) = Self::pages(menu).into_iter().find(|page| page.path.len() == 2
-            && page.menu.title == workspaces.as_ref()
-            && menu.sections[page.path[0][0]][page.path[0][1]].label == window.as_ref()) else { return false; };
-        self.path = page.path;
-        true
+    pub(crate) fn back(&mut self) -> bool { self.stack.pop().is_some() }
+    pub(crate) fn select_menu(&mut self, menu: &PhoneMenu, route: &PhoneMenuRoute) -> bool {
+        let mut pages = Self::pages(&menu.list).into_iter().map(|page| (page.route, page.parent)).collect::<Vec<_>>();
+        pages.push((PhoneMenuRoute { page: Some(crate::MenuPageId::Drawings), path: Vec::new() }, Some(PhoneMenuRoute::default())));
+        self.select_routes(pages.iter().map(|(route, parent)| (route, parent.as_ref())), route)
     }
-    pub fn drawings(&mut self, menu: &crate::ContextMenu, localization: &crate::Localizer) -> bool {
-        let title = localization.text(crate::MessageId::NATIVE_HEADER_DRAWINGS);
-        let Some(page) = Self::pages(menu).into_iter().find(|page| page.path.len() == 1 && page.menu.title == title.as_ref()) else { return false; };
-        self.path = page.path;
-        true
+    pub(crate) fn retain(&mut self, menu: Option<&PhoneMenu>) -> bool {
+        let before = self.stack.clone();
+        if let Some(menu) = menu {
+            while !self.select_menu(menu, &self.current()) { if !self.back() { break; } }
+        } else { self.clear(); }
+        self.stack != before
     }
-    pub fn begin_swipe(&mut self) { self.swipe_axis = None; self.swipe_progress = 0.; }
+}
+impl PhoneMenuContact {
+    pub fn input(&mut self, route: &PhoneMenuRoute, can_back: bool, input: PhoneMenuInput) -> PhoneMenuReply {
+        let mut reply = PhoneMenuReply { accepted: false, swipe: None, settle: None };
+        match input {
+            PhoneMenuInput::Press { hit } => self.press(route, hit),
+            PhoneMenuInput::CancelPress => self.cancel_press(),
+            PhoneMenuInput::Release { hit, inside } => reply.accepted = self.release(route, &hit, inside),
+            PhoneMenuInput::BeginSwipe { time_ms } => self.begin_swipe_at(route, time_ms, can_back),
+            PhoneMenuInput::Swipe { delta, width, past_slop, rtl, time_ms } => reply.swipe = Some(self.sample_swipe(delta, width, past_slop, rtl, time_ms)),
+            PhoneMenuInput::EndSwipe { width, rtl, time_ms } => reply.settle = Some(self.release_swipe(route, time_ms, width, rtl)),
+        }
+        reply
+    }
+    pub fn press(&mut self, route: &PhoneMenuRoute, hit: PhoneMenuHit) { self.contact = Some((route.clone(), hit)); }
+    pub fn cancel_press(&mut self) { self.contact = None; }
+    pub fn release(&mut self, route: &PhoneMenuRoute, hit: &PhoneMenuHit, inside: bool) -> bool {
+        self.contact.take().is_some_and(|(page, pressed)| inside && page == *route && pressed == *hit)
+    }
+    pub fn begin_swipe(&mut self) { self.can_back = false; self.swipe_axis = None; self.swipe_progress = 0.; self.velocity = None; self.swipe_route = None; }
+    pub fn begin_swipe_at(&mut self, route: &PhoneMenuRoute, time_ms: u32, can_back: bool) { self.begin_swipe(); self.can_back = can_back; self.swipe_route = Some(route.clone()); self.velocity = Some((0., time_ms, 0.)); }
+    pub fn sample_swipe(&mut self, delta: [f32; 2], width: f32, past_slop: bool, rtl: bool, time_ms: u32) -> PhoneMenuSwipe {
+        let result = self.swipe(delta, width, past_slop, rtl);
+        if matches!(result, PhoneMenuSwipe::Back(_)) {
+            let (last, previous, speed) = self.velocity.unwrap_or((delta[0], time_ms, 0.));
+            let elapsed = time_ms.wrapping_sub(previous);
+            self.velocity = Some((delta[0], time_ms, if elapsed > 0 { (delta[0] - last) * 1000. / elapsed as f32 } else { speed }));
+        }
+        result
+    }
+    pub fn release_swipe(&mut self, route: &PhoneMenuRoute, time_ms: u32, width: f32, rtl: bool) -> PhoneMenuSettle {
+        let velocity = self.velocity.filter(|(_, time, _)| time_ms.wrapping_sub(*time) <= 150)
+            .map_or(0., |(_, _, speed)| speed * if rtl { -1. } else { 1. } / width.max(1.));
+        let current = self.swipe_route.as_ref() == Some(route);
+        let complete = self.end_swipe(velocity) && current;
+        PhoneMenuSettle { action: complete.then(|| PhoneAction::MenuBack { route: route.clone() }), duration_ms: 150 }
+    }
     pub fn swipe(&mut self, delta: [f32; 2], width: f32, past_slop: bool, rtl: bool) -> PhoneMenuSwipe {
-        if self.is_root() { return PhoneMenuSwipe::Scroll; }
+        if past_slop { self.cancel_press(); }
+        if !self.can_back { return PhoneMenuSwipe::Scroll; }
         let along = delta[0] * if rtl { -1. } else { 1. };
         if self.swipe_axis.is_none() && past_slop {
             self.swipe_axis = Some(if along > delta[1].abs() { crate::Axis::Horizontal } else { crate::Axis::Vertical });
@@ -709,17 +803,87 @@ impl PhoneMenuNavigation {
     }
     pub fn end_swipe(&mut self, velocity: f32) -> bool {
         let complete = self.swipe_axis == Some(crate::Axis::Horizontal)
-            && (self.swipe_progress >= 0.3 || velocity > 0.5) && self.back();
+            && (self.swipe_progress >= 0.3 || velocity > 0.5);
         self.begin_swipe();
         complete
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+#[serde(tag = "kind", content = "progress", rename_all = "snake_case")]
 pub enum PhoneMenuSwipe { Pending, Scroll, Back(f32) }
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct PhoneMenu {
     pub strip: Vec<crate::ContextMenuItem>,
     pub list: crate::ContextMenu,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct PhoneMenuRow {
+    pub label: String,
+    pub icon: Option<std::sync::Arc<str>>,
+    pub selected: Option<bool>,
+    pub action: Option<crate::UiAction>,
+    pub enabled: bool,
+    pub hint: String,
+    pub bindings: Vec<crate::NativeKeyBinding>,
+    pub is_heading: bool,
+    pub target: Option<PhoneMenuRoute>,
+    pub close: Option<PhoneMenuClose>,
+    pub count: String,
+    pub ellipsis: PhoneMenuEllipsis,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PhoneMenuEllipsis { End, Middle }
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct PhoneMenuClose { pub action: crate::UiAction, pub label: String }
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct PhoneMenuPageView {
+    pub id: PhoneMenuRoute,
+    pub parent: Option<PhoneMenuRoute>,
+    pub title: String,
+    pub checks: bool,
+    pub sections: Vec<Vec<PhoneMenuRow>>,
+}
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct PhoneMenuView {
+    pub strip: Vec<crate::ContextMenuItem>,
+    pub pages: Vec<PhoneMenuPageView>,
+    pub close_width: f32,
+}
+impl PhoneMenu {
+    pub fn view(&self, drawings: &crate::DrawingSelector, platform: crate::Platform, localization: &crate::Localizer) -> PhoneMenuView {
+        let mut menu = self.list.clone();
+        menu.sections.insert(0, vec![drawings.page.clone()]);
+        let pages = PhoneMenuNavigation::pages(&menu).into_iter().map(|page| {
+            let sections = page.menu.sections.into_iter().enumerate().map(|(s, section)| section.into_iter().enumerate().map(|(i, mut item)| {
+                let target = (item.action.is_none() && item.enabled && !item.sections.is_empty()).then(|| page.route.child([s, i], &item));
+                let close = match item.action {
+                    Some(crate::UiAction::Phone { action: PhoneAction::Drawing { id, close: false } }) => Some(PhoneMenuClose { action: crate::UiAction::Phone { action: PhoneAction::Drawing { id, close: true } }, label: item.hint.clone() }),
+                    _ => None,
+                };
+                let count = if item.page == Some(crate::MenuPageId::Drawings) {
+                    item.label = drawings.label.clone(); drawings.count.clone()
+                } else { String::new() };
+                item.bindings.retain(|binding| binding.chord.available(platform));
+                item.bindings.truncate(1);
+                let hint = item.bindings.first().map(|binding| {
+                    let mut chord = binding.chord.clone(); chord.command |= binding.control;
+                    chord.localized_label(platform, localization)
+                }).unwrap_or_default();
+                let is_heading = item.is_heading();
+                let action = item.action.map(|action| if page.route.page == Some(crate::MenuPageId::Drawings) { action }
+                    else { crate::UiAction::Phone { action: PhoneAction::MenuActivate { route: page.route.clone(), action: Box::new(action) } } });
+                PhoneMenuRow { is_heading, label: item.label,
+                    icon: item.icon, selected: item.selected, action, enabled: item.enabled,
+                    hint: if close.is_some() { String::new() } else { hint }, bindings: item.bindings, target,
+                    ellipsis: if close.is_some() { PhoneMenuEllipsis::Middle } else { PhoneMenuEllipsis::End }, close, count }
+            }).collect::<Vec<_>>()).collect::<Vec<_>>();
+            PhoneMenuPageView { id: page.route, parent: page.parent, title: page.menu.title,
+                checks: sections.iter().flatten().any(|row| row.selected.is_some()), sections }
+        }).collect();
+        PhoneMenuView { strip: self.strip.clone(), pages, close_width: 34. }
+    }
 }
 
 impl<R: layer_render::CanvasRenderer> crate::UiSession<R> {
@@ -746,48 +910,45 @@ mod menu_tests {
     use crate::{ApplicationMenu, ContextMenu, ContextMenuItem, Localizer, UiLanguage};
 
     fn menu() -> ContextMenu {
-        ContextMenu { title: "Main Menu".into(), sections: vec![vec![
+        let mut menu = ContextMenu { title: "Main Menu".into(), sections: vec![vec![
             ContextMenuItem::submenu("File", vec![vec![ContextMenuItem::submenu("Nested", vec![vec![
                 ContextMenuItem::command("Save", crate::UiAction::Invoke { command: crate::CommandId::SaveDocument }),
             ]])]]),
             ContextMenuItem::submenu("Window", vec![vec![ContextMenuItem::submenu("Workspaces", vec![vec![
                 ContextMenuItem::command("Manage Workspaces…", crate::UiAction::Invoke { command: crate::CommandId::Settings }),
             ]])]]),
-        ]] }
+        ]] };
+        for (item, id) in menu.sections[0].iter_mut().zip([ApplicationMenu::File, ApplicationMenu::Window]) { item.page = Some(crate::MenuPageId::Application(id)); }
+        menu.sections[0][1].sections[0][0].page = Some(crate::MenuPageId::Workspaces);
+        menu
     }
     #[test]
     fn menu_navigation_preserves_ancestors_and_rejects_missing_pages() {
-        let menu = menu();
-        let pages = PhoneMenuNavigation::pages(&menu);
-        assert_eq!(pages.iter().map(PhoneMenuPage::name).collect::<Vec<_>>(),
-            ["main", "page-0-0", "page-0-0-0-0", "page-0-1", "page-0-1-0-0"]);
+        let menu = PhoneMenu { strip: Vec::new(), list: menu() };
+        let pages = PhoneMenuNavigation::pages(&menu.list);
+        assert_eq!(pages.iter().map(|page| page.route.name()).collect::<Vec<_>>(),
+            ["main", "application-file", "application-file-0-0", "application-window", "workspaces"]);
         let mut navigation = PhoneMenuNavigation::default();
-        assert!(navigation.select(&menu, "page-0-0-0-0"));
-        assert_eq!(PhoneMenuNavigation::page_name(pages[2].path.split_last().unwrap().1), "page-0-0");
-        assert!(!navigation.select(&menu, "page-0-8"));
-        assert_eq!(navigation.name(), "page-0-0-0-0");
-        assert!(navigation.back());
-        assert_eq!(navigation.name(), "page-0-0");
-        assert!(navigation.back());
-        assert!(!navigation.back());
-        assert!(navigation.is_root());
-        let mut disabled = menu.clone();
-        disabled.sections[0][0].enabled = false;
-        assert!(!navigation.select(&disabled, "page-0-0-0-0"));
-        assert!(navigation.is_root());
+        assert!(navigation.select_menu(&menu, &pages[2].route));
+        assert_eq!(navigation.parent(), Some(pages[1].route.clone()));
+        let invalid = PhoneMenuRoute { page: None, path: vec![[99, 99]] };
+        assert!(!navigation.select_menu(&menu, &invalid)); assert_eq!(navigation.current(), pages[2].route);
+        assert!(navigation.back()); assert_eq!(navigation.current(), pages[1].route);
+        assert!(navigation.back()); assert!(!navigation.back()); assert!(navigation.is_root());
+        let mut disabled = menu.clone(); disabled.list.sections[0][0].enabled = false;
+        assert!(!navigation.select_menu(&disabled, &pages[2].route)); assert!(navigation.is_root());
     }
     #[test]
     fn workspace_route_keeps_window_as_back_destination_in_each_language() {
         for language in UiLanguage::ALL {
             let localization = Localizer::shared(language);
-            let mut menu = menu();
-            menu.sections[0][1].label = ApplicationMenu::Window.localized_label(&localization).to_string();
-            menu.sections[0][1].sections[0][0].label = localization.text(crate::MessageId::WORKSPACE_WORKSPACES).to_string();
+            let mut menu = PhoneMenu { strip: Vec::new(), list: menu() };
+            menu.list.sections[0][1].label = ApplicationMenu::Window.localized_label(&localization).to_string();
+            menu.list.sections[0][1].sections[0][0].label = localization.text(crate::MessageId::WORKSPACE_WORKSPACES).to_string();
             let mut navigation = PhoneMenuNavigation::default();
-            assert!(navigation.workspaces(&menu, &localization));
-            assert_eq!(navigation.name(), "page-0-1-0-0");
-            assert!(navigation.back());
-            assert_eq!(navigation.name(), "page-0-1");
+            assert!(navigation.select_menu(&menu, &PhoneMenuRoute { page: Some(crate::MenuPageId::Workspaces), path: Vec::new() }));
+            assert_eq!(navigation.current().page, Some(crate::MenuPageId::Workspaces));
+            assert!(navigation.back()); assert_eq!(navigation.current().page, Some(crate::MenuPageId::Application(ApplicationMenu::Window)));
         }
     }
     #[test]
@@ -828,26 +989,58 @@ mod menu_tests {
         }
     }
     #[test]
+    fn menu_release_rejects_scroll_swipe_cancel_and_page_changes() {
+        let hit = PhoneMenuHit::Row([0, 0]); let route = PhoneMenuRoute::default();
+        let mut contact = PhoneMenuContact::default();
+        contact.press(&route, hit.clone()); assert!(contact.release(&route, &hit, true));
+        assert!(!contact.release(&route, &hit, true));
+        for delta in [[0., 20.], [20., 0.]] {
+            contact.press(&route, hit.clone()); contact.begin_swipe_at(&route, 1, true);
+            contact.sample_swipe(delta, 100., true, false, 20);
+            assert!(!contact.release(&route, &hit, true));
+        }
+        contact.press(&route, hit.clone()); contact.cancel_press(); assert!(!contact.release(&route, &hit, true));
+        contact.press(&route, hit.clone()); assert!(!contact.release(&route, &hit, false));
+        contact.press(&route, hit.clone());
+        assert!(!contact.release(&PhoneMenuRoute { page: Some(crate::MenuPageId::Drawings), path: Vec::new() }, &hit, true));
+    }
+    #[test]
+    fn menu_swipe_velocity_expires_and_settle_timing_is_shared() {
+        let route = PhoneMenuRoute { page: Some(crate::MenuPageId::Drawings), path: Vec::new() };
+        for rtl in [false, true] {
+            for (age, complete) in [(150, true), (151, false)] {
+                let mut contact = PhoneMenuContact::default(); contact.begin_swipe_at(&route, u32::MAX - 20, true);
+                let sign = if rtl { -1. } else { 1. };
+                assert_eq!(contact.sample_swipe([sign * 10., 0.], 100., true, rtl, 0), PhoneMenuSwipe::Back(0.1));
+                assert_eq!(contact.release_swipe(&route, age, 100., rtl), PhoneMenuSettle {
+                    action: complete.then(|| PhoneAction::MenuBack { route: route.clone() }), duration_ms: 150 });
+            }
+        }
+        let mut contact = PhoneMenuContact::default(); contact.begin_swipe_at(&route, 0, true);
+        contact.sample_swipe([100., 0.], 100., true, false, 10);
+        assert!(contact.release_swipe(&PhoneMenuRoute::default(), 11, 100., false).action.is_none());
+    }
+    #[test]
     fn back_swipes_lock_axes_and_use_distance_or_release_velocity() {
+        let route = PhoneMenuRoute::default();
         for rtl in [false, true] {
             let sign = if rtl { -1. } else { 1. };
             for (distance, velocity, back) in [(29., 0., false), (30., 0., true), (10., 0.5, false), (10., 0.501, true)] {
-                let mut nav = PhoneMenuNavigation::default();
-                assert!(nav.select(&menu(), "page-0-0"));
-                nav.begin_swipe();
-                assert_eq!(nav.swipe([sign * distance, 0.], 100., false, rtl), PhoneMenuSwipe::Pending);
-                assert_eq!(nav.swipe([sign * distance, 0.], 100., true, rtl), PhoneMenuSwipe::Back(distance / 100.));
-                assert!(matches!(nav.swipe([sign * distance, 200.], 100., true, rtl), PhoneMenuSwipe::Back(_)));
-                assert_eq!(nav.end_swipe(velocity), back);
-                assert_eq!(nav.is_root(), back);
+                let mut contact = PhoneMenuContact::default(); contact.begin_swipe_at(&route, 0, true);
+                assert_eq!(contact.swipe([sign * distance, 0.], 100., false, rtl), PhoneMenuSwipe::Pending);
+                assert_eq!(contact.swipe([sign * distance, 0.], 100., true, rtl), PhoneMenuSwipe::Back(distance / 100.));
+                assert!(matches!(contact.swipe([sign * distance, 200.], 100., true, rtl), PhoneMenuSwipe::Back(_)));
+                assert_eq!(contact.end_swipe(velocity), back);
             }
-            let mut nav = PhoneMenuNavigation::default();
-            nav.select(&menu(), "page-0-0");
-            assert_eq!(nav.swipe([0., 20.], 100., true, rtl), PhoneMenuSwipe::Scroll);
-            assert_eq!(nav.swipe([sign * 80., 20.], 100., true, rtl), PhoneMenuSwipe::Scroll);
-            assert!(!nav.end_swipe(2.));
+            let mut contact = PhoneMenuContact::default(); contact.begin_swipe_at(&route, 0, true);
+            assert_eq!(contact.swipe([0., 20.], 100., true, rtl), PhoneMenuSwipe::Scroll);
+            assert_eq!(contact.swipe([sign * 80., 20.], 100., true, rtl), PhoneMenuSwipe::Scroll);
+            assert!(!contact.end_swipe(2.));
+            contact.begin_swipe_at(&route, 0, false);
+            assert_eq!(contact.swipe([100., 0.], 100., true, rtl), PhoneMenuSwipe::Scroll);
         }
     }
+
 }
 
 #[cfg(test)]

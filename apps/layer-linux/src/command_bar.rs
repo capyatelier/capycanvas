@@ -329,9 +329,9 @@ impl CommandBar {
     }
 
     fn cancel(&self, w: &Rc<Workspace>) {
-        if self.view.borrow().as_ref().is_some_and(|view| view.parameter.is_some()) {
-            w.dispatch(UiAction::CommandSearch { action: CommandSearchAction::Back });
-        } else { w.close_command_search(); }
+        w.dispatch(UiAction::CommandSearch { action: CommandSearchAction::Dismiss {
+            search_focused: self.entry.state_flags().contains(gtk::StateFlags::FOCUS_WITHIN), text: self.entry.text().to_string(),
+        } });
     }
 
     fn execute(&self, w: &Rc<Workspace>, index: Option<usize>) {
@@ -409,6 +409,7 @@ impl CommandBar {
                 self.entry.select_region(0, -1);
             }
         }
+        if parameter.is_none() && self.entry.text().as_str() != view.query { self.entry.set_text(&view.query); }
         let signature = serde_json::to_string(&view.results).unwrap();
         if *self.signature.borrow() != signature {
             *self.signature.borrow_mut() = signature;

@@ -1,6 +1,6 @@
 import { bindCopy } from "./localization.js";
 // DOM focus/IME and modal capture; Rust owns search, selection and execution.
-export function createCommandBar({element, button, icon, dispatch, style, canvas, layoutChanged, nativeCopy}) {
+export function createCommandBar({app,element, button, icon, dispatch, style, canvas, layoutChanged, nativeCopy}) {
   const copy = nativeCopy.search;
   let view = null, signature = "", previousFocus, focus = "canvas", outside = false;
   const dialog = element("dialog", "command-bar");
@@ -33,9 +33,9 @@ export function createCommandBar({element, button, icon, dispatch, style, canvas
   function fitViewport() {
     if (!view) return;
     const viewport = window.visualViewport, height = viewport?.height ?? innerHeight;
-    const top = innerWidth <= 600 ? 16 : Math.min(style.top_max, Math.max(style.top_min, height / 5));
-    dialog.style.top = `${top + (viewport?.offsetTop ?? 0)}px`;
-    dialog.style.maxHeight = `${height - top - 16}px`;
+    const bounds=app.command_search_placement(viewport?.width??innerWidth,height);
+    dialog.style.left=`${bounds.x+(viewport?.offsetLeft??0)}px`;dialog.style.top=`${bounds.y+(viewport?.offsetTop??0)}px`;
+    dialog.style.width=`${bounds.width}px`;dialog.style.maxHeight=`${bounds.height}px`;
     layoutChanged();
   }
   window.visualViewport?.addEventListener("resize", fitViewport);
@@ -48,7 +48,7 @@ export function createCommandBar({element, button, icon, dispatch, style, canvas
   document.addEventListener("focusin", e => rememberFocus(e.target));
   document.addEventListener("pointerdown", e => rememberFocus(e.target), {capture:true});
   input.addEventListener("input", () => { if (view && !view.parameter) send({type:"query", text:input.value}); });
-  function back() { send({type:view?.parameter ? "back" : "close"}); }
+  function back() { send({type:'dismiss',search_focused:document.activeElement===input,text:input.value}); }
   dialog.addEventListener("cancel", e => { e.preventDefault(); back(); });
   dialog.addEventListener("keydown", e => {
     if (!view) return;
@@ -85,6 +85,7 @@ export function createCommandBar({element, button, icon, dispatch, style, canvas
         input.value = parameter?.parameter.text ?? view.query;
         if (parameter) input.select();
       }
+      if(!parameter&&input.value!==view.query)input.value=view.query;
       input.placeholder = parameter ? copy.enter_value : copy.search_commands;
       input.setAttribute("aria-label", parameter?.label ?? copy.search_commands);
       input.setAttribute("aria-expanded", String(!parameter));

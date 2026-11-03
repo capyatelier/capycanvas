@@ -25,6 +25,10 @@ fn presentation(d: &Driver) -> layer_ui::PhoneLayout {
 fn click(d: &mut Driver, name: &str) {
     let widget = widgets(d.w.window.upcast_ref()).find(|widget| widget.is_mapped() && widget.widget_name() == name)
         .unwrap_or_else(|| panic!("missing mapped {name}"));
+    click_widget(d, &widget);
+}
+
+fn click_widget(d: &mut Driver, widget: &gtk::Widget) {
     if let Some(scroll) = std::iter::successors(widget.parent(), |parent| parent.parent())
         .find_map(|parent| parent.downcast::<gtk::ScrolledWindow>().ok()) {
         if widget.is_focusable() {
@@ -34,7 +38,7 @@ fn click(d: &mut Driver, name: &str) {
                 "scroll the actual menu action into view before clicking");
         }
     }
-    d.click(&widget);
+    d.click(widget);
 }
 
 fn capture_current(d: &mut Driver, name: &str) {
@@ -175,20 +179,20 @@ fn frame(d: &Driver) {
 fn menu_row_height(d: &Driver) -> f32 {
     let stack = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
     widgets(&stack.child_by_name("main").unwrap()).find(|row|
-        row.type_().name() == "GtkModelButton" && row.widget_name() != "phone-drawing").unwrap()
+        row.css_name() == "modelbutton" && row.widget_name() != "phone-drawing").unwrap()
         .measure(gtk::Orientation::Vertical, -1).1 as f32
 }
 
 fn menu(d: &mut Driver) {
     if !state(&d.w).phone.menu { click(d, "zen-capy"); }
-    until(|| state(&d.w).phone.menu && d.w.phone.placement.borrow().is_some()
+    until(|| state(&d.w).phone.menu && d.w.drawer.placement().is_some()
         && find_named(d.w.window.upcast_ref(), "phone-menu-scroll").is_some_and(|w| w.is_mapped() && w.width() > 0),
         "Capy's list and fixed strip are allocated");
     let swapped = state(&d.w).phone.swapped;
     capture(d, &format!("menu-open-{swapped}"));
     let root = d.named("phone-menu");
     inside(d, &root);
-    let placement = d.w.phone.placement.borrow().as_ref().unwrap().clone();
+    let placement = d.w.drawer.placement().as_ref().unwrap().clone();
     assert_eq!(placement.columns.len(), 1);
     let geometry = presentation(d).menu_geometry(&placement, menu_row_height(d));
     for (name, expected) in [("phone-menu-scroll", geometry.list), ("phone-menu-separator", geometry.separator)] {
@@ -226,7 +230,7 @@ fn menu(d: &mut Driver) {
 }
 
 fn menu_page_name(d: &Driver, title: &str) -> String {
-    PhoneMenuNavigation::pages(&navigation_model(d)).into_iter().find(|page| page.menu.title == title).unwrap().name()
+    ui_session(&d.w).phone_menu().unwrap().view(&drawing_selector(d), Platform::Gtk, &d.w.localization()).pages.into_iter().find(|page| page.title == title).unwrap().id.name()
 }
 
 #[test]
@@ -301,7 +305,7 @@ fn native_phone_frame() {
             || (child.widget_name() == "phone-title-band" && presentation(&d).title.width > 0.),
             "only retained phone input stays mapped: {}", child.widget_name());
     }
-    assert!(d.w.phone.placement.borrow().is_none());
+    assert!(d.w.drawer.placement().is_none());
     inside(&d, &d.named("zen-capy"));
     capture(&mut d, "hidden");
     mouse_paint(&mut d, "hidden");
@@ -957,7 +961,7 @@ fn native_phone_window_move() {
         }
         if presentation(&d).edge != Edge::Top {
             d.w.dispatch(UiAction::Phone { action: PhoneAction::Capy });
-            until(|| state(&d.w).phone.menu && d.w.phone.placement.borrow().is_some(), "the landscape menu opens for overlap input");
+            until(|| state(&d.w).phone.menu && d.w.drawer.placement().is_some(), "the landscape menu opens for overlap input");
             let menu = d.named("phone-menu");
             let bounds = menu.compute_bounds(&d.w.surface).unwrap();
             assert!(bounds.y() <= 12. && bounds.y()+bounds.height() > 12., "the menu overlaps the title band");
@@ -988,7 +992,7 @@ fn menu_pages(d: &mut Driver) {
     let swapped = state(&d.w).phone.swapped;
     let stack = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
     let main = stack.visible_child_name().unwrap();
-    let initial = d.w.phone.placement.borrow().as_ref().unwrap().bounds;
+    let initial = d.w.drawer.placement().as_ref().unwrap().bounds;
     assert_eq!(main.as_str(), "main");
     menu_bounds(d, initial);
     menu_semantics(d, &stack);
@@ -1004,8 +1008,8 @@ fn menu_pages(d: &mut Driver) {
     assert_eq!(submenus.len(), 2);
     for (index, label) in submenus.into_iter().enumerate() {
         let row = widgets(&d.named("phone-menu-list")).find(|widget|
-            widget.is_mapped() && widget.type_().name() == "GtkModelButton"
-                && widget.property::<String>("text") == label).unwrap();
+            widget.is_mapped() && widget.css_name() == "modelbutton"
+                && menu_text(&widget) == label).unwrap();
         d.click(&row);
         until(|| stack.visible_child_name().as_deref() == Some(menu_page_name(d, &label).as_str())
             && !stack.is_transition_running(), "phone submenu slides in place");
@@ -1054,11 +1058,11 @@ fn menu_pages(d: &mut Driver) {
     if !state(&d.w).phone.menu { menu(d); }
     let retired = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
     d.input.key(0xff1b);
-    until(|| !state(&d.w).phone.menu && d.w.phone.placement.borrow().is_none(), "Escape closes the menu before replacement");
+    until(|| !state(&d.w).phone.menu && d.w.drawer.placement().is_none(), "Escape closes the menu before replacement");
     menu(d);
     let current = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
     assert_ne!(retired, current);
-    retired.set_visible_child_name("page-0-0");
+    retired.set_visible_child_name("drawings");
     d.w.surface.queue_allocate();
     capture(d, &format!("retired-menu-stack-{swapped}"));
     assert_eq!(current.visible_child_name().as_deref(), Some("main"));
@@ -1075,14 +1079,14 @@ fn menu_pages(d: &mut Driver) {
     let camera_stack = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
     let label = ApplicationMenu::File.localized_label(&d.w.localization());
     let row = widgets(&camera_stack.visible_child().unwrap()).find(|widget| widget.is_mapped()
-        && widget.type_().name()=="GtkModelButton" && widget.property::<String>("text")==label.as_ref()).unwrap();
+        && widget.css_name()=="modelbutton" && menu_text(&widget)==label.as_ref()).unwrap();
     d.click(&row);
     until(|| camera_stack.visible_child_name().as_deref()==Some(menu_page_name(d, &label).as_str()) && !camera_stack.is_transition_running(),
         "File opens at free zoom");
-    let bounds = d.w.phone.placement.borrow().as_ref().unwrap().bounds;
+    let bounds = d.w.drawer.placement().as_ref().unwrap().bounds;
     submenu(d,&camera_stack,&format!("camera-close-file-{swapped}"),bounds);
     d.w.dispatch(UiAction::Invoke { command: CommandId::ZoomIn });
-    until(|| !state(&d.w).phone.menu && d.w.phone.placement.borrow().is_none(), "camera-only command closes the menu");
+    until(|| !state(&d.w).phone.menu && d.w.drawer.placement().is_none(), "camera-only command closes the menu");
     assert!(state(&d.w).camera.zoom > zoom);
     assert_eq!([CommandId::FitCanvas,CommandId::ActualPixels].map(|command| ui_session(&d.w).command(command).selected), selected);
     menu(d);
@@ -1091,7 +1095,7 @@ fn menu_pages(d: &mut Driver) {
     assert_eq!(reopened.visible_child_name().as_deref(),Some("main"));
     menu_semantics(d,&reopened);
     assert!(d.named("phone-search").is_mapped(), "the icon strip survives navigation");
-    menu_bounds(d,d.w.phone.placement.borrow().as_ref().unwrap().bounds);
+    menu_bounds(d,d.w.drawer.placement().as_ref().unwrap().bounds);
     d.w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
     new_photo::ready(&d.w);
     menu(d);
@@ -1134,56 +1138,43 @@ fn drawing_selector(d: &Driver) -> DrawingSelector {
     DrawingSelector::new(&labels, d.w.documents.selected(), &session.command(CommandId::NewDocument), &d.w.localization())
 }
 
-fn navigation_model(d: &Driver) -> ContextMenu {
-    let selector = drawing_selector(d);
-    let mut model = ui_session(&d.w).phone_menu().unwrap().list;
-    model.sections.insert(0, vec![selector.page]);
-    model
-}
-
 fn drawings_ready(d: &Driver) -> bool {
     if !state(&d.w).phone.menu || d.w.pages.root.is_visible() { return false; }
     let stack = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
-    stack.is_mapped() && stack.visible_child_name().as_deref() == Some("page-0-0") && !stack.is_transition_running()
+    stack.is_mapped() && stack.visible_child_name().as_deref() == Some("drawings") && !stack.is_transition_running()
         && stack.visible_child().and_then(|page| find_named(&page, "phone-menu-back"))
             .is_some_and(|back| back.is_mapped() && back.width() > 0 && back.height() > 0)
 }
 
+fn menu_text(widget: &gtk::Widget) -> String {
+    widgets(widget).find_map(|widget| widget.downcast::<gtk::Label>().ok()).unwrap().text().to_string()
+}
 fn menu_semantics(d: &Driver, stack: &gtk::Stack) {
-    let model = navigation_model(d);
-    let pages = PhoneMenuNavigation::pages(&model);
+    let model = ui_session(&d.w).phone_menu().unwrap().view(&drawing_selector(d), Platform::Gtk, &d.w.localization());
     let name = stack.visible_child_name().unwrap();
-    let expected = pages.iter().find(|page| page.name()==name.as_str()).unwrap();
+    let expected = model.pages.iter().find(|page| page.id.name() == name).unwrap();
     let child = stack.visible_child().unwrap();
-    assert_eq!(stack.page(&child).title().as_deref(), Some(expected.menu.title.as_str()));
-    let mut rows = widgets(&child).filter(|widget| widget.is_mapped() && widget.type_().name()=="GtkModelButton");
-    if let Some((_, path)) = expected.path.split_last() {
-        let parent = PhoneMenuNavigation::page_name(path);
+    assert_eq!(stack.page(&child).title().as_deref(), Some(expected.title.as_str()));
+    let mut rows = widgets(&child).filter(|widget| widget.is_mapped() && widget.css_name() == "modelbutton");
+    if expected.parent.is_some() {
         let back = rows.next().unwrap();
         assert_eq!(back.widget_name(), "phone-menu-back");
-        assert_eq!(back.property::<String>("text"), expected.menu.title);
-        assert_eq!(back.property::<Option<String>>("menu-name").as_deref(), Some(parent.as_str()));
+        assert_eq!(menu_text(&back), expected.title);
     }
     let rows = rows.collect::<Vec<_>>();
-    let items = expected.menu.sections.iter().enumerate().flat_map(|(s, section)| section.iter().enumerate()
-        .filter(move |(_,item)| !item.is_heading()).map(move |(i,item)| (s,i,item))).collect::<Vec<_>>();
+    let items = expected.sections.iter().flatten().filter(|item| !item.is_heading).collect::<Vec<_>>();
     assert_eq!(rows.len(), items.len(), "{name}: the whole native page matches the shared menu");
-    let caption = drawing_selector(d).label;
-    for (row,(section,index,item)) in rows.iter().zip(items) {
-        let label = if row.widget_name() == "phone-drawing" { caption.as_str() } else { item.label.as_str() };
-        assert_eq!(row.property::<String>("text"), label, "{name}: actual menu contents");
-        if item.action.is_none() && item.enabled && !item.sections.is_empty() {
-            let mut path = expected.path.clone();
-            path.push([section,index]);
-            assert_eq!(row.property::<Option<String>>("menu-name"), Some(PhoneMenuNavigation::page_name(&path)),
-                "{name}: native forward destination");
-        }
+    for (row, item) in rows.iter().zip(items) {
+        assert_eq!(menu_text(row), item.label, "{name}: actual menu contents");
+        assert_eq!(row.is_sensitive(), item.enabled);
+        assert_eq!(row.accessible_role(), if item.selected.is_some() { gtk::AccessibleRole::MenuItemCheckbox } else { gtk::AccessibleRole::MenuItem });
+        assert!(gtk::test_accessible_has_property(row, gtk::AccessibleProperty::HasPopup));
     }
     menu_separator(d);
 }
 
 fn menu_bounds(d: &Driver, initial: Bounds) {
-    assert_eq!(d.w.phone.placement.borrow().as_ref().unwrap().bounds, initial,
+    assert_eq!(d.w.drawer.placement().as_ref().unwrap().bounds, initial,
         "navigation preserves the original menu shell");
     for name in ["phone-menu", "phone-menu-scroll", "phone-preferences", "phone-search", "phone-finger", "phone-zen", "phone-swap"] {
         let widget = d.named(name);
@@ -1196,7 +1187,7 @@ fn menu_bounds(d: &Driver, initial: Bounds) {
 }
 
 fn menu_separator(d: &Driver) {
-    let placement = d.w.phone.placement.borrow().as_ref().unwrap().clone();
+    let placement = d.w.drawer.placement().as_ref().unwrap().clone();
     let expected = presentation(d).menu_geometry(&placement, menu_row_height(d)).separator;
     let separator = d.named("phone-menu-separator").downcast::<gtk::Separator>().unwrap();
     inside(d, separator.upcast_ref());
@@ -1214,14 +1205,36 @@ fn native_phone_menu_strip() {
         if state(&d.w).phone.swapped != swapped { d.w.dispatch(UiAction::Phone { action: PhoneAction::SwapSides }); }
         menu(&mut d);
         if let Some(directory) = std::env::var_os("LAYER_NATIVE_CAPTURE_DIR") {
-            let placement = d.w.phone.placement.borrow().as_ref().unwrap().clone();
+            let placement = d.w.drawer.placement().as_ref().unwrap().clone();
             let view = presentation(&d).menu_geometry(&placement, menu_row_height(&d));
             std::fs::write(std::path::PathBuf::from(directory).join(format!("menu-strip-{swapped}.json")),
                 serde_json::to_vec(&serde_json::json!({"menu": placement.bounds, "strip": view.strip, "separator": view.separator,
                     "row_height": menu_row_height(&d), "icon": view.icon})).unwrap()).unwrap();
         }
+        let pages = ui_session(&d.w).phone_menu().unwrap().view(&drawing_selector(&d), Platform::Gtk, &d.w.localization()).pages;
+        let bounds = d.w.drawer.placement().as_ref().unwrap().bounds;
+        capture_menu_pages(&mut d, &pages, &PhoneMenuRoute::default(), bounds, swapped);
     }
     d.finish();
+}
+
+fn capture_menu_pages(d: &mut Driver, pages: &[PhoneMenuPageView], route: &PhoneMenuRoute, bounds: Bounds, swapped: bool) {
+    let stack = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
+    let page = pages.iter().find(|page| page.id == *route).unwrap();
+    until(|| state(&d.w).phone.menu_navigation.current() == *route && !stack.is_transition_running(), "the typed menu page is ready");
+    menu_bounds(d, bounds);
+    capture(d, &format!("menu-{}{}", route.name(), if swapped { "-swapped" } else { "" }));
+    for row in page.sections.iter().flatten().filter(|row| row.target.is_some()) {
+        let target = row.target.as_ref().unwrap();
+        let widget = widgets(&stack.visible_child().unwrap()).find(|widget|
+            widget.has_css_class("submenu-row") && menu_text(widget) == row.label).unwrap();
+        click_widget(d, &widget);
+        until(|| state(&d.w).phone.menu_navigation.current() == *target && !stack.is_transition_running(), "the typed submenu opens by native input");
+        capture_menu_pages(d, pages, target, bounds, swapped);
+        click(d, "phone-menu-back");
+        until(|| state(&d.w).phone.menu_navigation.current() == *route && !stack.is_transition_running(), "Back retains the typed parent and root bounds");
+        menu_bounds(d, bounds);
+    }
 }
 
 #[test]
@@ -1235,15 +1248,15 @@ fn native_phone_menu_live_measurement() {
     for (tag, title) in [("long", "A drawing with a long name that needs more room in the open menu"), ("short", "Small")] {
         ui_session_mut(&d.w).name_new_drawing(title);
         d.w.refresh(regions::DOCUMENT);
-        until(|| d.named("phone-drawing").property::<String>("text") == drawing_selector(&d).label,
+        until(|| menu_text(&d.named("phone-drawing")) == drawing_selector(&d).label,
             "the open menu publishes the new drawing label");
         drop(idle_paint(&d.w.window));
-        let live = d.w.phone.placement.borrow().as_ref().unwrap().bounds;
+        let live = d.w.drawer.placement().as_ref().unwrap().bounds;
         capture(&mut d, &format!("menu-live-{tag}"));
         d.input.key(0xff1b);
         until(|| !state(&d.w).phone.menu, "the menu closes before measuring a fresh opening");
         menu(&mut d);
-        let fresh = d.w.phone.placement.borrow().as_ref().unwrap().bounds;
+        let fresh = d.w.drawer.placement().as_ref().unwrap().bounds;
         capture(&mut d, &format!("menu-fresh-{tag}"));
         assert!((live.width - fresh.width).abs() <= 1. && (live.height - fresh.height).abs() <= 1.,
             "{tag}: an open menu remeasures its content like a fresh menu: {live:?} vs {fresh:?}");
@@ -1252,10 +1265,9 @@ fn native_phone_menu_live_measurement() {
 }
 
 #[test]
-#[ignore = "private compositor: --native-test=native_phone_menu_feedback --native-storage; 412x891 or891x412 light"]
+#[ignore = "private compositor: --native-test=native_phone_menu_feedback --native-storage; viewport/theme external"]
 fn native_phone_menu_feedback() {
     let mut d = setup("art.capycanvas.PhoneMenuFeedback");
-    assert_eq!(state(&d.w).theme, Theme::Light);
     let first = d.w.documents.selected();
     d.w.dispatch(UiAction::Invoke { command: CommandId::AddLayer });
     until(|| !ui_session(&d.w).engine().has_pending_document_edits(), "the first drawing is modified");
@@ -1265,13 +1277,13 @@ fn native_phone_menu_feedback() {
     let second = d.w.documents.selected();
     menu(&mut d);
     let caption = d.named("phone-drawing");
-    let root_bounds = d.w.phone.placement.borrow().as_ref().unwrap().bounds;
-    assert_eq!(caption.type_().name(), "GtkModelButton");
+    let root_bounds = d.w.drawer.placement().as_ref().unwrap().bounds;
+    assert_eq!(caption.css_name(), "modelbutton");
     assert!(caption.is_sensitive());
     assert!(!gtk::test_accessible_has_property(&caption, gtk::AccessibleProperty::KeyShortcuts), "the count is no keyboard shortcut");
-    assert!(widgets(&caption).filter_map(|w| w.downcast::<gtk::Label>().ok()).any(|label| label.css_name() == "accelerator" && label.text() == "2"));
+    assert!(widgets(&caption).filter_map(|w| w.downcast::<gtk::Label>().ok()).any(|label| label.widget_name() == "menu-detail" && label.text() == "2"));
     assert!(!d.w.system_status.clock.is_ancestor(&d.named("phone-menu")) && !d.w.system_status.battery.is_ancestor(&d.named("phone-menu")));
-    let file = widgets(&d.named("phone-menu-list")).find(|row| row.type_().name() == "GtkModelButton" && row.property::<String>("text") == ApplicationMenu::File.localized_label(&d.w.localization()).as_ref()).unwrap();
+    let file = widgets(&d.named("phone-menu-list")).find(|row| row.css_name() == "modelbutton" && menu_text(&row) == ApplicationMenu::File.localized_label(&d.w.localization()).as_ref()).unwrap();
     assert_eq!(caption.height(), file.height(), "the drawing opener has native menu-row height");
     let row_height = file.height();
     let text_start = |row: &gtk::Widget| {
@@ -1296,9 +1308,9 @@ fn native_phone_menu_feedback() {
     assert!(!d.w.popovers.borrow().iter().filter_map(|p| p.upgrade()).any(|p| p.is_mapped()), "Drawings has no floating selector");
     for id in [first, second] {
         let row = d.named(&format!("phone-drawing-{id}"));
-        assert_eq!(row.type_().name(), "GtkModelButton");
+        assert_eq!(row.css_name(), "modelbutton");
         assert_eq!(row.height(), row_height, "drawing rows retain native menu height beside their close controls");
-        assert_eq!(row.property::<bool>("active"), id == second);
+        assert_eq!(row.state_flags().contains(gtk::StateFlags::CHECKED), id == second);
         inside(&d, &row); inside(&d, &d.named(&format!("phone-drawing-close-{id}")));
     }
     assert!(d.named("phone-search").is_mapped(), "the icon strip stays visible on Drawings");
@@ -1311,10 +1323,10 @@ fn native_phone_menu_feedback() {
     menu_bounds(&d, root_bounds);
     let current = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
     assert_ne!(stack, current);
-    let old_back = widgets(&stack.visible_child().unwrap()).find(|row| row.type_().name() == "GtkModelButton").unwrap();
+    let old_back = widgets(&stack.visible_child().unwrap()).find(|row| row.css_name() == "modelbutton").unwrap();
     old_back.emit_by_name::<()>("clicked", &[]);
-    assert_eq!(current.visible_child_name().as_deref(), Some("page-0-0"), "a retained page owns its external opener and cannot change current navigation");
-    assert!(d.named(&format!("phone-drawing-{first}")).property::<bool>("active"));
+    assert_eq!(current.visible_child_name().as_deref(), Some("drawings"), "a retained page owns its external opener and cannot change current navigation");
+    assert!(d.named(&format!("phone-drawing-{first}")).state_flags().contains(gtk::StateFlags::CHECKED));
     capture(&mut d, "feedback-drawings-current");
     d.w.dispatch(UiAction::Phone { action: PhoneAction::Drawing { id: second, close: false } });
     let choice = if ui_session(&d.w).finger_drawing() { 2 } else { 1 };
@@ -1343,7 +1355,7 @@ fn native_phone_menu_feedback() {
     new_photo::response(&d.w, "discard");
     until(|| d.w.documents.len() == 1 && !d.w.documents.changing.get(), "discard closes only that drawing");
     new_photo::ready(&d.w); menu(&mut d);
-    assert!(!widgets(&d.named("phone-drawing")).filter_map(|w| w.downcast::<gtk::Label>().ok()).any(|label| label.css_name() == "accelerator" && label.is_mapped()));
+    assert!(!widgets(&d.named("phone-drawing")).filter_map(|w| w.downcast::<gtk::Label>().ok()).any(|label| label.widget_name() == "menu-detail" && label.is_mapped()));
     click(&mut d, "phone-zen");
     until(|| state(&d.w).phone.hidden && !state(&d.w).phone.menu, "Zen closes the menu and hides bars");
     d.finish();
@@ -1454,8 +1466,8 @@ fn menu_layers(d: &mut Driver) {
     let path = layers_path(&ui_session(&d.w).phone_menu().unwrap().list.sections).unwrap();
     for label in path {
         let stack = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
-        until(|| !stack.is_transition_running() && widgets(stack.upcast_ref()).any(|row| row.is_mapped() && row.type_().name() == "GtkModelButton" && row.property::<String>("text") == label), "Window panel action is mapped after its page slide");
-        let row = widgets(stack.upcast_ref()).find(|row| row.is_mapped() && row.type_().name() == "GtkModelButton" && row.property::<String>("text") == label).unwrap();
+        until(|| !stack.is_transition_running() && widgets(stack.upcast_ref()).any(|row| row.is_mapped() && row.css_name() == "modelbutton" && menu_text(&row) == label), "Window panel action is mapped after its page slide");
+        let row = widgets(stack.upcast_ref()).find(|row| row.is_mapped() && row.css_name() == "modelbutton" && menu_text(&row) == label).unwrap();
         assert!(row.grab_focus());
         let scroll = row.ancestor(gtk::ScrolledWindow::static_type()).and_downcast::<gtk::ScrolledWindow>().unwrap();
         until(|| row.compute_bounds(&scroll).is_some_and(|b| b.y() >= -1. && b.y() + b.height() <= scroll.height() as f32 + 1.), "the Window action scrolls into view");
@@ -1745,8 +1757,8 @@ fn open_menu_page(d: &mut Driver, label: &str) -> gtk::Stack {
 
 fn menu_rows_released(stack: &gtk::Stack) {
     let active = widgets(stack.upcast_ref()).filter(|widget| widget.is_mapped()
-        && widget.type_().name() == "GtkModelButton" && widget.state_flags().contains(gtk::StateFlags::ACTIVE))
-        .map(|widget| widget.property::<String>("text")).collect::<Vec<_>>();
+        && widget.css_name() == "modelbutton" && widget.state_flags().contains(gtk::StateFlags::ACTIVE))
+        .map(|widget| menu_text(&widget)).collect::<Vec<_>>();
     assert!(active.is_empty(), "a claimed scroll or swipe releases every native row: {active:?}");
 }
 
@@ -1803,11 +1815,11 @@ fn menu_back_swipe(d: &mut Driver, stack: &gtk::Stack, initial: Bounds) {
 fn native_phone_menu_gestures() {
     let mut d = setup("art.capycanvas.PhoneMenuGestures");
     menu(&mut d);
-    let initial = d.w.phone.placement.borrow().as_ref().unwrap().bounds;
+    let initial = d.w.drawer.placement().as_ref().unwrap().bounds;
     let root = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
-    let longest = PhoneMenuNavigation::pages(&navigation_model(&d)).into_iter().filter(|page| page.path.len() == 1)
-        .max_by_key(|page| root.child_by_name(&page.name()).unwrap().measure(gtk::Orientation::Vertical, root.width()).1)
-        .unwrap().menu.title;
+    let longest = ui_session(&d.w).phone_menu().unwrap().view(&drawing_selector(&d), Platform::Gtk, &d.w.localization()).pages.into_iter().filter(|page| page.parent.as_ref().is_some_and(|parent| *parent == PhoneMenuRoute::default()))
+        .max_by_key(|page| root.child_by_name(&page.id.name()).unwrap().measure(gtk::Orientation::Vertical, root.width()).1)
+        .unwrap().title;
     let stack = open_menu_page(&mut d, &longest);
     let name = stack.visible_child_name().unwrap();
     let checkpoint = ui_session(&d.w).engine().checkpoint();
@@ -1815,13 +1827,15 @@ fn native_phone_menu_gestures() {
     let scroll = d.named("phone-menu-scroll").downcast::<gtk::ScrolledWindow>().unwrap();
     let adjustment = scroll.vadjustment();
     assert!(adjustment.upper() > adjustment.page_size() + 1., "the longest native submenu provides a real scrolling workload");
+    let before_scroll = adjustment.value();
     let from = screen_point(scroll.upcast_ref(), &d.w.window, [0.5, 0.75]);
     let delta = (scroll.height() as f32 * 0.4).min(100.);
     d.input.perform(serde_json::json!([
         contact("touch", "down", from), contact("touch", "move", [from[0], from[1] - delta * 0.4]),
         contact("touch", "move", [from[0], from[1] - delta])
     ]));
-    until(|| adjustment.value() > 1., "touch scrolling moves the native list");
+    until(|| adjustment.value() > before_scroll + 1., "touch scrolling moves the native list from its initial offset");
+    eprintln!("menu scroll adjustment: before={before_scroll}, after={}, upper={}, page={}", adjustment.value(), adjustment.upper(), adjustment.page_size());
     menu_rows_released(&stack);
     capture_current(&mut d, "menu-touch-scrolling");
     d.input.perform(serde_json::json!([contact("touch", "up", [from[0], from[1] - delta])]));
@@ -1971,7 +1985,7 @@ fn native_phone_inventory() {
     click(&mut d, "phone-menu-back");
     until(|| d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap().visible_child_name().as_deref() == Some("main"), "Drawings returns to the inventory root");
     if d.w.surface.height() > 280 {
-        let initial = d.w.phone.placement.borrow().as_ref().unwrap().bounds;
+        let initial = d.w.drawer.placement().as_ref().unwrap().bounds;
         let label = ApplicationMenu::File.localized_label(&d.w.localization());
         let stack = open_menu_page(&mut d, &label);
         capture(&mut d, "inventory-menu-file");

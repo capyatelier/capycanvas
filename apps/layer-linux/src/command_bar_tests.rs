@@ -1,5 +1,15 @@
 use super::*;
 
+fn clear_command_query(d: &mut Driver) {
+    let entry = d.named("command-search").downcast::<gtk::SearchEntry>().unwrap();
+    assert!(!entry.text().is_empty());
+    assert!(entry.state_flags().contains(gtk::StateFlags::FOCUS_WITHIN));
+    d.input.key(0xff1b);
+    assert!(state(&d.w).command_search.is_some());
+    assert!(state(&d.w).command_search.as_ref().unwrap().query.is_empty());
+    assert!(entry.text().is_empty(), "first Escape clears the focused query");
+}
+
 #[test]
 #[ignore = "isolated native-input.js --native-test=native_command_bar_input --native-storage"]
 fn native_command_bar_input() {
@@ -86,6 +96,7 @@ fn native_command_bar_input() {
     }
     d.input.key(0xff54); // Down
     assert_eq!(state(&d.w).command_search.as_ref().unwrap().selected, 1);
+    clear_command_query(&mut d);
     d.input.key(0xff1b); // Escape
     assert!(state(&d.w).command_search.is_none());
     d.input.perform(open.clone());
@@ -189,6 +200,7 @@ fn command_search_compact_keyboard(d: &mut Driver) {
         d.input.key(0xff54);
         visible(selected);
     }
+    clear_command_query(d);
     d.input.key(0xff1b);
     wait_for_command_close(d);
     d.w.dispatch(UiAction::Invoke { command: CommandId::SearchCommands });
@@ -203,6 +215,7 @@ fn command_search_compact_keyboard(d: &mut Driver) {
         d.input.key(0xff52);
         visible(selected);
     }
+    clear_command_query(d);
     d.input.key(0xff1b);
     wait_for_command_close(d);
     d.w.window.set_default_size(size[0], size[1]);
@@ -469,6 +482,7 @@ fn native_command_bar_glass() {
         assert!(close(mean(&row), expected, 0.04), "{name} resized: {:?} vs {expected:?}", mean(&row));
         let vacated = fewer(body[1] + body[3] - 6., span);
         assert!(sharpness(&vacated) > 0.05, "{name}: no stale blur below the resized bar");
+        clear_command_query(&mut d);
         d.input.key(0xff1b);
         assert!(state(&d.w).command_search.is_none());
         let closed = capture(&mut d, &format!("{name}-closed"));

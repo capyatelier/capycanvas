@@ -175,6 +175,7 @@ pub enum CommandSearchAction {
         value: Option<String>,
     },
     Back,
+    Dismiss { search_focused: bool, text: String },
     Close,
 }
 
@@ -1502,6 +1503,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.command_search.epoch != self.state.document_file.epoch {
             return Err(l.text(MessageId::COMMANDS_THIS_COMMAND_SEARCH_BELONGS_TO_A_PREVIOUS_DRAWING).to_string());
         }
+        if let A::Dismiss { search_focused, text } = action {
+            return self.command_search_action(match crate::dialog_escape(self.state.command_search.as_ref().unwrap().parameter.is_some(), search_focused, !text.is_empty()) {
+                crate::DialogEscape::Back => A::Back,
+                crate::DialogEscape::ClearSearch => A::Query { text: String::new() },
+                crate::DialogEscape::Cancel => A::Close,
+            });
+        }
         match action {
             A::Commit { text } => {
                 let view = self.state.command_search.as_ref().unwrap();
@@ -1590,7 +1598,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                 }
             }
-            A::Close | A::Focus { .. } => unreachable!(),
+            A::Close | A::Focus { .. } | A::Dismiss { .. } => unreachable!(),
         }
         if let Some(view) = &mut self.state.command_search {
             view.refresh_detail();

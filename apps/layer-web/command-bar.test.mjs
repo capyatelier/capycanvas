@@ -83,6 +83,9 @@ export async function checkCommandBar({call, evaluate, settle}) {
   assert.equal(await evaluate('document.querySelector("#command-search").getAttribute("aria-activedescendant")'),'command-result-1');
   await capture('command-bar-web-dark');
   await key('Escape','Escape',27);
+  assert.equal(await evaluate('document.querySelector("#command-bar").open&&document.querySelector("#command-search").value===""'),true,'First Escape clears the focused query');
+  await key('Escape','Escape',27);
+  assert.equal(await evaluate('document.querySelector("#command-bar").open'),false);
   await open();
   const before = await evaluate('String(layerApp.state().document_file.revision)');
   await call('Input.dispatchMouseEvent',{type:'mousePressed',x:720,y:800,button:'left',clickCount:1});
@@ -103,10 +106,12 @@ export async function checkCommandBar({call, evaluate, settle}) {
   })()`);
   console.log('Web query to two animation frames p95 (ms):',timings[18]);
   await key('Escape','Escape',27);
+  assert.equal(await evaluate('document.querySelector("#command-bar").open&&document.querySelector("#command-search").value===""'),true);
+  await key('Escape','Escape',27);
   await call('Emulation.setDeviceMetricsOverride',{width:420,height:820,deviceScaleFactor:1,mobile:true});
   await call('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:5});
-  await open(); await query('eraser');
-  assert.equal(await evaluate('getComputedStyle(document.querySelector("#command-bar")).top'),'16px');
+  await open(); await query('eraser'); await settled();
+  assert.equal((await bounds()).y,await evaluate('layerApp.app.command_search_placement(innerWidth,innerHeight).y'),'Phone Search uses the shared between-bars placement');
   await capture('command-bar-web-touch');
   const point = await evaluate('(()=>{const r=document.querySelector("#command-result-0").getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()');
   await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:1,...point}]});
@@ -133,6 +138,9 @@ async function checkGlass({call, evaluate, settle, key, open, query, wait, settl
   await open(); await query('select'); await settled();
   const full = await bounds();
   await key('Escape','Escape',27);
+  assert.equal(await evaluate('document.querySelector("#command-bar").open&&document.querySelector("#command-search").value===""'),true);
+  await key('Escape','Escape',27);
+  await wait('!document.querySelector("#command-bar").open');
   await send({type:'select_brush',id:1});
   await send({type:'set_color',rgba:[0,0,0,1]});
   await send({type:'set_brush_size',value:6 / await evaluate('layerApp.state().camera.zoom')});
@@ -193,6 +201,8 @@ async function checkGlass({call, evaluate, settle, key, open, query, wait, settl
     const [resized, vacated] = await rows(await capture(`${name}-empty`), [shrunk.y + shrunk.height - 6, body.y + body.height - 6], span);
     assert.ok(close(mean(resized), expected, .04), `${name}: resized bar keeps its glass`);
     assert.ok(sharpness(vacated) > .05, `${name}: no stale blur below the resized bar`);
+    await key('Escape','Escape',27);
+    assert.equal(await evaluate('document.querySelector("#command-bar").open&&document.querySelector("#command-search").value===""'),true);
     await key('Escape','Escape',27);
     await wait('!document.querySelector("#command-bar").open');
     const closed = await rows(await capture(`${name}-closed`), [body.y + 6, shrunk.y + shrunk.height - 6], span);

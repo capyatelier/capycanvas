@@ -18,7 +18,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .with_cache(self.panel_measurement_cache().for_publication())
     }
     pub fn layout_presentation_input(&self)->crate::LayoutResolveInput<'_> {
-        crate::LayoutResolveInput::new(&self.state.workspace.layout,self.zen_peek.edge).with_phone(self.state.phone)
+        crate::LayoutResolveInput::new(&self.state.workspace.layout,self.zen_peek.edge).with_phone(self.state.phone.clone())
     }
     pub fn zen_keeps(&self, group: u32) -> bool {
         self.layout_presentation_input().keeps(group)

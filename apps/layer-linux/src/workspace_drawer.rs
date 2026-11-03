@@ -343,6 +343,7 @@ impl Body {
     }
 }
 struct View {
+    menu: Option<phone_menu::Menu>,
     root: Columns,
     content: Columns,
     shadow: gtk::Box,
@@ -376,6 +377,15 @@ pub(super) fn paint_connection(connection: &gtk::DrawingArea, geometry: Rc<Cell<
         });
 }
 impl View {
+    fn menu(w: &Rc<Workspace>) -> Self {
+        let menu = phone_menu::Menu::new(); menu.bind(w); menu.refresh(w);
+        let root = menu.root.clone();
+        let connection = gtk::DrawingArea::new(); connection.set_widget_name("drawer-connection"); connection.add_css_class("drawer-connection"); connection.set_can_target(false);
+        let connection_geometry = Rc::new(Cell::new(None)); paint_connection(&connection, connection_geometry.clone());
+        let shadow = gtk::Box::new(gtk::Orientation::Vertical, 0); shadow.set_visible(false); shadow.set_can_target(false);
+        Self { menu: Some(menu), content: root.clone(), root, shadow, connection, connection_geometry,
+            columns: Vec::new(), clips: Vec::new(), bodies: Vec::new(), tabs: RefCell::new(Vec::new()), tab_clip: None, tab_strip: None }
+    }
     fn new(w: &Rc<Workspace>, drawer: &ContentDrawer, previous: Option<&Self>) -> Self {
         let connection = previous.map(|view| view.connection.clone()).unwrap_or_default();
         connection.set_widget_name("drawer-connection");
@@ -568,6 +578,7 @@ impl View {
         }
 
         Self {
+            menu: None,
             root,
             content,
             shadow,
@@ -809,10 +820,13 @@ impl Drawer {
         }
     }
     pub fn is_closed(&self) -> bool {
-        self.state.borrow().is_none()
+        self.view.borrow().is_none()
+    }
+    fn anchor(&self) -> Option<DrawerAnchor> {
+        self.state.borrow().as_ref().map(|state| state.anchor).or_else(|| self.view.borrow().as_ref()?.menu.as_ref().map(|_| DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Capy }))
     }
     fn source_button(&self, w: &Workspace) -> Option<gtk::Button> {
-        let anchor = self.state.borrow().as_ref()?.anchor;
+        let anchor = self.anchor()?;
         match anchor {
             DrawerAnchor::Phone { anchor } => w.phone.button(w, anchor),
             DrawerAnchor::Header { id } => w.header.drawer_button(id),
@@ -838,6 +852,12 @@ impl Drawer {
         None
     }
     fn target(&self, w: &Workspace) -> Option<DrawerPlacement> {
+        if let Some(menu) = self.view.borrow().as_ref().and_then(|view| view.menu.as_ref()) {
+            let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+            let phone = w.surface.imp().layout.borrow().phone_presentation(viewport)?;
+            let row = menu.row_height(); let (width, height) = menu.measure(&phone, row);
+            return phone.menu(viewport, width, height, row);
+        }
         let state = self.state.borrow();
         let state = state.as_ref()?;
         let view = self.view.borrow();
@@ -910,6 +930,10 @@ impl Drawer {
         ).snapped(1.);
         if let Some(view) = self.view.borrow().as_ref() {
             if let Some(strip)=&view.tab_strip {strip.set_presentations(&result.tab_presentations);}
+            if let Some(menu) = &view.menu {
+                let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+                if let Some(phone) = w.surface.imp().layout.borrow().phone_presentation(viewport) { menu.allocate(&phone, &result, menu.row_height()); }
+            } else {
             let geometry = result.columns.clone();
             if view.content != view.root {
                 let height = geometry.iter().map(|b| b.y + b.height).fold(0., f32::max).ceil() as i32;
@@ -920,6 +944,7 @@ impl Drawer {
                 *view.content.imp().geometry.borrow_mut() = geometry;
                 view.content.queue_allocate();
                 view.root.queue_allocate();
+            }
             }
             let connection = result.connection();
             view.connection_geometry.set(connection);
@@ -935,7 +960,7 @@ impl Drawer {
     fn mark_origin(&self, w: &Workspace, placement: Option<&DrawerPlacement>) {
         let placement = placement.filter(|p| p.connection().is_some());
         self.mark_source_corners(w, placement);
-        let anchor = self.state.borrow().as_ref().map(|s| s.anchor);
+        let anchor = self.anchor();
         let direction = placement.map(|p| p.direction);
         if self.id != 0 {
             let origin = anchor
@@ -1076,6 +1101,21 @@ impl Drawer {
         regions: u32,
         next: Option<&ContentDrawer>,
     ) {
+        let menu = self.view.borrow().as_ref().is_some_and(|view| view.menu.is_some());
+        if self.id == 0 && state.phone.menu {
+            if !menu {
+                self.retire(w);
+                let view = Rc::new(View::menu(w));
+                w.surface.add(Slot::Drawer(self.id), &view.root);
+                w.surface.add(Slot::DrawerConnection(self.id), &view.connection);
+                *self.view.borrow_mut() = Some(view);
+            } else if let Some(view) = self.view.borrow().as_ref() { view.menu.as_ref().unwrap().refresh(w); }
+            self.finish_animation();
+            self.mark_origin(w, self.target(w).as_ref());
+            w.surface.queue_allocate();
+            return;
+        }
+        if menu { self.retire(w); }
         let replaced = self.generation.replace(state.toolbar_context_generation) != state.toolbar_context_generation;
         let Some(next) = next else {
             if replaced && self.state.borrow().is_some() {

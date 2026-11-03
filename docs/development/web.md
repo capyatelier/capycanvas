@@ -112,7 +112,7 @@ events request final writes, but browsers may stop async work during exit.
 Pure unit tests need no browser or GPU:
 
 ```bash
-node --test apps/layer-web/{run,package,frame,bubbles,glass,pointer,color-touch,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog,text-input,localization,dropdown}.test.mjs
+node --test apps/layer-web/{run,package,frame,bubbles,glass,pointer,color-touch,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog,text-input,text-layout,menu,localization,dropdown}.test.mjs
 node --test apps/layer-web/{numeric,histogram,gpu-diagnostics,raster-worker-client,store-worker-client,pipeline-wait,panel-vector-paths,panel-vector-queue,editor-panels,workspace-manager-copy,toolbar-components-copy,color-controls-copy,document-color-copy,document-recovery,image-import,workflow-stack,color-button-lifecycle}.test.mjs
 ```
 
@@ -164,6 +164,7 @@ their native GPU backend.
 | `LAYER_TEST_THEME` | Initial theme, `light` or `dark`. |
 | `LAYER_TEST_VERBOSE=1` | Prints browser diagnostics. |
 | `LAYER_TEST_ARTIFACTS` | Where journeys that save captures write them. |
+| `LAYER_PHONE_AUDIT_CASES` | Comma-separated phone audit cases such as `412x891-light,891x412-dark`; omitted means the full matrix. |
 
 The `runJourney` table in `test.mjs` maps each flag to its check and error check
 and runs the first matching row. A flag that matches no row runs the default
@@ -213,6 +214,7 @@ Chrome tests can miss; it doesn't exercise pen pressure.
 | `--workspace-store` | Write the fixture from current Rust first: `CAPY_STORE_CONTRACT_FIXTURE="$PWD/artifacts/store-contract.json" cargo test --locked -p layer-workspace --features native browser_transactions_match_sqlite_contract`, then run the journey with the same `CAPY_STORE_CONTRACT_FIXTURE`. |
 | `--settings-audit` | Compares with GTK allocations. First run `bash tools/performance/workspace-motion.sh gtk --native-test=native_settings_typography --native-storage` from the same worktree; it writes reference JSON and captures for every settings page under `artifacts/ui/settings-audit`, and the Web audit writes its captures beside them. Regenerate them for the current GTK code. |
 | `--phone-drawers` | Checks all presets, tool-cell input, both-side opaque/glass drawers, Color fit and whole-drawer scroll, live Layers growth, and Window drawers across the phone audit matrix; writes measured allocations beside the captures. |
+| `--phone-menus` | Visits the typed Capy menu pages and nested pages, checks fixed outer bounds, strip row sizing, keep-open checks, Search Escape and the Drawings opener; uses the same phone audit schema and matrix. |
 | `--phone-frame` | Checks the shared frame allocations across the phone audit matrix, swapping and hidden/revealed bars, then decodes real Finger paint and withdrawal recordings through the existing `stroke-recording` example. Run headed with the Cargo target on scratch storage. |
 | `--phone-audit` | Collects phone-reference PNGs and actual DOM allocation JSON at five sizes in both themes, DPR1; 320×320 uses 16 pt text. Gated or unavailable views remain explicit failures of parity. Use `LAYER_TEST_ARTIFACTS` for output. Run headed through `workspace-motion.sh web` for canvas pixels; pair with the existing GTK `native_phone_navigation_headers` captures and the [phone comparator](../../tools/visual/README.md#comparing-images). |
 | `--palettes` | Imports its own exports unless `LAYER_PALETTE_SAMPLES` names a directory with `gpl`, `aco`, `ase`, `swatches` and `kpl` subdirectories of files from other applications. |

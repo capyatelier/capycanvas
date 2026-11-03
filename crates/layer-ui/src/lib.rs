@@ -35,8 +35,8 @@ pub use zoom_tool::{ZoomDirection, ZoomDrag, ZoomToolAction, ZoomToolSettings};
 mod document_tabs;
 mod phone;
 mod dialog_presentation;
-pub use dialog_presentation::{DialogRole, DialogPresentation, dialog_panes_fit};
-pub use phone::{PhoneAction, PhoneBarContact, PhoneBarOutcome, PhoneLayout, PhoneMenu, PhoneMenuGeometry, PhoneMenuNavigation, PhoneMenuSwipe, PhoneMenuPage, PhoneState};
+pub use dialog_presentation::{DialogRole, DialogPresentation, DialogEscape, dialog_escape, dialog_panes_fit};
+pub use phone::{PhoneAction, PhoneBarContact, PhoneBarOutcome, PhoneLayout, PhoneMenu, PhoneMenuGeometry, PhoneMenuNavigation, PhoneMenuContact, PhoneMenuSwipe, PhoneMenuHit, PhoneMenuSettle, PhoneMenuInput, PhoneMenuReply, PhoneMenuRoute, PhoneMenuRow, PhoneMenuEllipsis, PhoneMenuClose, PhoneMenuPageView, PhoneMenuView, PhoneState};
 pub use document_tabs::{DocumentTabDrag, DocumentTabHit, DocumentTabSlide, DocumentTabs};
 mod document_sessions;
 pub use document_sessions::{DocumentSessionError, DocumentTransportRefusal, document_storage_retained, document_recovery_unavailable, DocumentAdmission, DocumentBudget, DocumentSessions, DocumentTabLabel, DrawingSelector, ParkedDocument, RetainedClipboard, TrimWait, StoragePressure};
@@ -152,7 +152,7 @@ pub use workspace_manager_ui::{ManagedWorkspace, WorkspaceChoice, WorkspaceComma
 mod stats;
 pub use session::{HistogramAction, HistogramView};
 pub use session::{
-    AdjustmentChoice, ApplicationLink, ApplicationMenu, ZoomMenu, NAVIGATOR_COMMANDS, clipboard_document, ClipboardCapture, CloseDecision,
+    AdjustmentChoice, ApplicationLink, ApplicationMenu, MenuPageId, ZoomMenu, NAVIGATOR_COMMANDS, clipboard_document, ClipboardCapture, CloseDecision,
     LARGE_CLIP_PIXELS, PasteMode, PixelClip, clipboard_color_changes,
     DEFAULT_DOCUMENT_EXTENT,
     DocumentColorOperation, DocumentIdleReason, ExportRepeat, DocumentHostError, DocumentHostErrorCopy, HostRequestFailure, DocumentExport, DocumentFileState, DocumentLocation, DocumentRequest, EffectAction, FilterCategoryChoice,

@@ -1,14 +1,6 @@
 use super::*;
 use layer_ui::{ContactPhase, UiInput};
-
-fn reset(widget: &gtk::Widget) {
-    let controllers = widget.observe_controllers();
-    for i in 0..controllers.n_items() {
-        if let Some(controller) = controllers.item(i).and_downcast::<gtk::EventController>() { controller.reset(); }
-    }
-    let mut child = widget.first_child();
-    while let Some(widget) = child { child = widget.next_sibling(); reset(&widget); }
-}
+use crate::input::reset_controllers;
 
 pub(super) fn install(list: &gtk::ScrolledWindow, owner: Rc<RefCell<Weak<Workspace>>>, rows: Rc<RefCell<HashMap<usize, Row>>>) {
     let contacts = Rc::new(RefCell::new(HashMap::<gdk::EventSequence, (u64, [f32; 2], Option<u64>)>::new()));
@@ -45,7 +37,7 @@ pub(super) fn install(list: &gtk::ScrolledWindow, owner: Rc<RefCell<Weak<Workspa
                 position: position.map(|v| v * scale), row, time_ns: last_ns.get() });
             if reply.handled && !claimed.replace(true) {
                 let swipes: Vec<_> = rows.borrow().values().map(|row| row.swipe.clone()).collect();
-                for swipe in swipes { swipe.reset(); reset(swipe.upcast_ref()); }
+                for swipe in swipes { swipe.reset(); reset_controllers(swipe.upcast_ref()); }
             }
             let handled = claimed.get();
             if matches!(phase, ContactPhase::Up | ContactPhase::Cancel) {

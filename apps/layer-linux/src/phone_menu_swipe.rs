@@ -1,43 +1,45 @@
 use super::*;
+use crate::input::reset_controllers;
 
 #[derive(Default)]
 pub(super) struct State {
     pub progress: Cell<f64>,
-    pages: RefCell<Option<(gtk::Widget, gtk::Widget, gtk::Widget)>>,
+    pages: RefCell<Option<(gtk::Widget, gtk::Widget)>>,
     animation: RefCell<Option<adw::TimedAnimation>>,
     rtl: Cell<bool>,
+    drag: glib::WeakRef<gtk::GestureDrag>,
 }
 
-pub(super) fn release_activation(row: &gtk::Widget) {
-    let controllers = row.observe_controllers().iter::<glib::Object>().filter_map(|object| object.ok()?.downcast::<gtk::GestureClick>().ok()).collect::<Vec<_>>();
-    for controller in controllers { row.remove_controller(&controller); }
-    let click = gtk::GestureClick::new();
-    click.set_button(1);
-    let armed = Rc::new(Cell::new(false));
-    click.connect_pressed(glib::clone!(#[strong] armed, move |_, _, _, _| armed.set(true)));
-    let cancel = Rc::new(glib::clone!(#[weak] row, #[strong] armed, move || {
-        armed.set(false);
-        row.unset_state_flags(gtk::StateFlags::ACTIVE | gtk::StateFlags::PRELIGHT);
-    }));
-    click.connect_stopped(glib::clone!(#[strong] cancel, move |_| cancel()));
-    click.connect_cancel(move |_, _| cancel());
-    click.connect_released(glib::clone!(#[weak] row, move |_, _, x, y| {
-        row.unset_state_flags(gtk::StateFlags::ACTIVE);
-        if armed.replace(false) && row.contains(x, y) { row.grab_focus(); row.activate(); }
-    }));
-    row.add_controller(click);
+pub(super) fn cancel_pressed(widget: &gtk::Widget) {
+    if let Some(stack) = widget.downcast_ref::<gtk::Stack>() {
+        if let Some(page) = stack.visible_child() { cancel_pressed(&page); }
+        return;
+    }
+    if widget.is::<gtk::Button>() {
+        let flags = gtk::StateFlags::ACTIVE | gtk::StateFlags::PRELIGHT;
+        if widget.state_flags().intersects(flags) { reset_controllers(widget); widget.unset_state_flags(flags); }
+        return;
+    }
+    let mut child = widget.first_child();
+    while let Some(widget) = child { child = widget.next_sibling(); cancel_pressed(&widget); }
 }
 
 fn reset(contents: &MenuContents) {
     let state = &contents.imp().swipe;
-    if let Some((_, parent, _)) = state.pages.take() { parent.set_child_visible(false); }
+    if let Some((_, parent)) = state.pages.take() { parent.set_child_visible(false); }
     if let Some(stack) = contents.first_child() { stack.set_can_target(true); }
     state.progress.set(0.);
     contents.queue_allocate();
 }
 
+pub(super) fn cancel(contents: &MenuContents, contact: &RefCell<PhoneMenuContact>) {
+    if let Some(animation) = contents.imp().swipe.animation.take() { animation.pause(); }
+    if let Some(drag) = contents.imp().swipe.drag.upgrade() { drag.reset(); }
+    contact.borrow_mut().cancel_press(); contact.borrow_mut().begin_swipe(); reset(contents);
+}
+
 pub(super) fn allocate(contents: &native::Contents, width: i32, height: i32, baseline: i32) {
-    if let Some((_, parent, _)) = contents.swipe.pages.borrow().as_ref() {
+    if let Some((_, parent)) = contents.swipe.pages.borrow().as_ref() {
         parent.set_child_visible(true);
         parent.allocate(width, height, baseline, None);
     }
@@ -47,7 +49,7 @@ pub(super) fn snapshot(contents: &native::Contents, snapshot: &gtk::Snapshot) {
     let obj = contents.obj();
     let Some(stack) = obj.first_child() else { return; };
     let pages = contents.swipe.pages.borrow();
-    let Some((current, parent, _)) = pages.as_ref() else { obj.snapshot_child(&stack, snapshot); return; };
+    let Some((current, parent)) = pages.as_ref() else { obj.snapshot_child(&stack, snapshot); return; };
     snapshot.push_clip(&gtk::graphene::Rect::new(0., 0., obj.width() as f32, obj.height() as f32));
     let distance = obj.width() as f32 * contents.swipe.progress.get() as f32;
     let rtl = contents.swipe.rtl.get();
@@ -66,77 +68,68 @@ pub(super) fn snapshot(contents: &native::Contents, snapshot: &gtk::Snapshot) {
     snapshot.pop();
 }
 
-pub(super) fn bind(contents: &MenuContents, stack: &gtk::Stack, navigation: Rc<RefCell<PhoneMenuNavigation>>) {
+pub(super) fn bind(w: &Rc<Workspace>, contents: &MenuContents, stack: &gtk::Stack, contact: Rc<RefCell<PhoneMenuContact>>) {
     let drag = gtk::GestureDrag::new();
+    contents.imp().swipe.drag.set(Some(&drag));
     drag.set_propagation_phase(gtk::PropagationPhase::Capture);
-    let velocity = Rc::new(Cell::new((0., 0u32, 0.)));
-    drag.connect_drag_begin(glib::clone!(#[weak] contents, #[weak] stack, #[strong] navigation, #[strong] velocity, move |gesture, _, _| {
-        if navigation.borrow().is_root() || stack.is_transition_running() || contents.imp().swipe.pages.borrow().is_some() {
+    drag.connect_drag_begin(glib::clone!(#[weak] w, #[weak] contents, #[weak] stack, #[strong] contact, move |gesture, _, _| {
+        if stack.is_transition_running() || contents.imp().swipe.pages.borrow().is_some() {
             gesture.set_state(gtk::EventSequenceState::Denied); return;
         }
-        navigation.borrow_mut().begin_swipe();
+        let phone = w.gpu.borrow().as_ref().unwrap().session.state().phone.clone();
+        contact.borrow_mut().begin_swipe_at(&phone.menu_navigation.current(), gesture.current_event().map_or(0, |event| event.time()), !phone.menu_navigation.is_root());
         contents.imp().swipe.rtl.set(contents.direction() == gtk::TextDirection::Rtl);
-        velocity.set((0., gesture.current_event().map_or(0, |event| event.time()), 0.));
     }));
-    drag.connect_drag_update(glib::clone!(#[weak] contents, #[weak] stack, #[strong] navigation, #[strong] velocity, move |gesture, dx, dy| {
+    drag.connect_drag_update(glib::clone!(#[weak] w, #[weak] contents, #[weak] stack, #[strong] contact, move |gesture, dx, dy| {
         let rtl = contents.imp().swipe.rtl.get();
         let past_slop = contents.drag_check_threshold(0, 0, dx as i32, dy as i32);
-        let result = navigation.borrow_mut().swipe([dx as f32, dy as f32], contents.width() as f32, past_slop, rtl);
+        let result = contact.borrow_mut().sample_swipe([dx as f32, dy as f32], contents.width() as f32, past_slop, rtl, gesture.current_event().map_or(0, |event| event.time()));
         match result {
             PhoneMenuSwipe::Pending => (),
-            PhoneMenuSwipe::Scroll => { gesture.set_state(gtk::EventSequenceState::Denied); }
+            PhoneMenuSwipe::Scroll => { cancel_pressed(stack.upcast_ref()); gesture.set_state(gtk::EventSequenceState::Denied); }
             PhoneMenuSwipe::Back(progress) => {
+                if contents.imp().swipe.pages.borrow().is_none() { cancel_pressed(stack.upcast_ref()); }
                 if contents.imp().swipe.pages.borrow().is_none() {
                     let current = stack.visible_child().unwrap();
                     let name = stack.visible_child_name().unwrap();
-                    let menu = navigation.borrow().name();
+                    let menu = route(&w).name();
                     if menu != name { gesture.set_state(gtk::EventSequenceState::Denied); return; }
-                    let mut parent = navigation.borrow().clone(); parent.back();
+                    let parent = w.gpu.borrow().as_ref().unwrap().session.state().phone.menu_navigation.parent().unwrap();
                     let parent = stack.child_by_name(&parent.name()).unwrap();
-                    let mut rows = Vec::new(); descendants(&current, &mut rows);
-                    let back = rows.into_iter().find(|row| row.widget_name() == "phone-menu-back").unwrap();
-                    *contents.imp().swipe.pages.borrow_mut() = Some((current, parent, back));
+                    *contents.imp().swipe.pages.borrow_mut() = Some((current, parent));
                     stack.set_can_target(false);
                     gesture.set_state(gtk::EventSequenceState::Claimed);
                     contents.queue_allocate();
                 }
-                let time = gesture.current_event().map_or(0, |event| event.time());
-                let (last, previous, speed) = velocity.get();
-                let elapsed = time.wrapping_sub(previous);
-                velocity.set((dx, time, if elapsed > 0 { (dx - last) * 1000. / elapsed as f64 } else { speed }));
                 contents.imp().swipe.progress.set(progress as f64);
                 contents.queue_draw();
             }
         }
     }));
-    drag.connect_drag_end(glib::clone!(#[weak] contents, #[weak] stack, #[strong] navigation, move |gesture, _, _| {
-        if contents.imp().swipe.pages.borrow().is_none() { navigation.borrow_mut().begin_swipe(); return; }
-        let (_, time, speed) = velocity.get();
-        let elapsed = gesture.current_event().map_or(time, |event| event.time()).wrapping_sub(time);
-        let speed = if elapsed > 150 { 0. } else { speed };
+    drag.connect_drag_end(glib::clone!(#[weak] w, #[weak] contents, #[weak] stack, #[strong] contact, move |gesture, _, _| {
+        if contents.imp().swipe.pages.borrow().is_none() { contact.borrow_mut().begin_swipe(); return; }
         let rtl = contents.imp().swipe.rtl.get();
-        let complete = navigation.borrow_mut().end_swipe((speed * if rtl { -1. } else { 1. } / contents.width().max(1) as f64) as f32);
+        let settle = contact.borrow_mut().release_swipe(&route(&w), gesture.current_event().map_or(0, |event| event.time()), contents.width() as f32, rtl);
+        let complete = settle.action.is_some();
         let from = contents.imp().swipe.progress.get();
         let target = adw::CallbackAnimationTarget::new(glib::clone!(#[weak] contents, move |progress| {
             contents.imp().swipe.progress.set(progress); contents.queue_draw();
         }));
-        let animation = adw::TimedAnimation::new(&contents, from, if complete { 1. } else { 0. }, 150, target);
-        animation.connect_done(glib::clone!(#[weak] contents, #[weak] stack, move |_| {
-            let back = contents.imp().swipe.pages.borrow().as_ref().map(|(_, _, back)| back.clone());
+        let animation = adw::TimedAnimation::new(&contents, from, if complete { 1. } else { 0. }, settle.duration_ms, target);
+        animation.connect_done(glib::clone!(#[weak] w, #[weak] contents, #[weak] stack, move |_| {
             reset(&contents);
-            if complete && let Some(back) = back {
+            if complete {
                 let transition = stack.transition_type(); stack.set_transition_type(gtk::StackTransitionType::None);
-                back.activate(); stack.set_transition_type(transition);
-                if let Some(scroll) = contents.ancestor(gtk::ScrolledWindow::static_type()).and_downcast::<gtk::ScrolledWindow>() { scroll.vadjustment().set_value(0.); }
+                if let Some(action) = &settle.action { w.dispatch(UiAction::Phone { action: action.clone() }); }
+                stack.set_transition_type(transition);
             }
         }));
         animation.play();
         *contents.imp().swipe.animation.borrow_mut() = Some(animation);
     }));
-    drag.connect_cancel(glib::clone!(#[weak] contents, #[strong] navigation, move |_, _| { navigation.borrow_mut().begin_swipe(); reset(&contents); }));
+    drag.connect_cancel(glib::clone!(#[weak] contents, #[weak] stack, #[strong] contact, move |_, _| {
+        contact.borrow_mut().cancel_press(); contact.borrow_mut().begin_swipe(); cancel_pressed(stack.upcast_ref()); reset(&contents);
+    }));
     contents.add_controller(drag);
-    contents.connect_unmap(|contents| {
-        if let Some(animation) = contents.imp().swipe.animation.take() { animation.pause(); }
-        reset(contents);
-    });
+    contents.connect_unmap(glib::clone!(#[strong] contact, move |contents| cancel(contents, &contact)));
 }

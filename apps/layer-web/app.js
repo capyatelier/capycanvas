@@ -229,6 +229,7 @@ async function loadIcons() {
   }
 }
 function icon(name, live = false) {
+  name=name.replace(/^layer-(.*)-symbolic$/,'$1');
   const svg = icons.get(name).cloneNode(true);
   return live && name === 'colors' ? createPaintPairIcon(svg, paintPairView) : svg;
 }
@@ -1965,7 +1966,7 @@ try {
   penResponse=createPenResponse({state:()=>state,workspace,element,button,icon,numberField,dispatch});
   observePenInput({workspace,canvas,dispatch,position,owner:()=>state.document_file.epoch});
   refreshPreferences = createPreferences({ app, element, button, icon, numberField, panelFrame, dispatch, nativeCopy: catalog.native_copy, view: () => app.preferences_cached() });
-  commandBar = createCommandBar({element, button, icon, dispatch, style:catalog.command_search_style, nativeCopy:catalog.native_copy, canvas, layoutChanged:() => glass?.queue()});
+  commandBar = createCommandBar({app,element, button, icon, dispatch, style:catalog.command_search_style, nativeCopy:catalog.native_copy, canvas, layoutChanged:() => glass?.queue()});
   panelNames = Object.fromEntries(catalog.panels.map((p) => [p.id, p.label]));
   // Issue the first storage request before constructing panel controls. Replies
   // run in later tasks, after this synchronous UI construction is complete.
@@ -1993,7 +1994,7 @@ try {
     project:metadata=>rasterWorker({operation:'panel-vectors',metadata,buffers:[]}),
     changed:()=>glass?.queue(),failed:error=>{workspaceLayoutFinished=workspaceLayoutRequested;clearWorkspaceTabDrop();message(error.message);}});
   glass = createGlass({app,canvas,workspace,connections:()=>workspaceChrome.connections(),vectors:()=>panelVectors.glass(),bubbles:()=>bubbles.glass(),enabled:()=>state.palette?.glass.transparency!=="off",wake});
-  documents = createDocuments({app,bootstrap,delivery,state:()=>state,canvas,canvasReady:()=>gpuReady,dispatch,applyChange,wake,element,button,icon,dropdown,numberField,message,gpuOperation,rasterWorker,resumeCanvas:resumeDocumentCanvas,contentChanged:panelContentChanged,refreshInputContext:()=>chromeInput({kind:"refresh"})});
+  documents = createDocuments({app,bootstrap,delivery,state:()=>state,canvas,canvasReady:()=>gpuReady,dispatch,applyChange,wake,element,button,icon,dropdown,numberField,message,gpuOperation,rasterWorker,resumeCanvas:resumeDocumentCanvas,contentChanged:panelContentChanged,refreshInputContext:()=>chromeInput({kind:"refresh"}),showMenu:page=>workspaceChrome.openMenu(page)});
   documents.mountProof(panels.get("proof"));
   const capy = button("",()=>dispatch(app.capy_action()),"tile-button");
   capy.id = "zen-capy"; capy.hidden = true;

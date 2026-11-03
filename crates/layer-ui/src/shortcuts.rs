@@ -1378,6 +1378,7 @@ mod tests {
             .shortcuts
             .insert("size.1.5".into(), vec![key("i", true, true)]);
         let item = ContextMenuItem {
+            page: None,
             label: "Translated size".into(),
             icon: None,
             hint: "Default icon".into(),
@@ -1390,6 +1391,7 @@ mod tests {
         let menu = ContextMenu {
             title: "Context".into(),
             sections: vec![vec![ContextMenuItem {
+                page: None,
                 label: "Submenu".into(),
                 icon: None,
                 bindings: Vec::new(),

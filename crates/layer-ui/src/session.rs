@@ -166,7 +166,7 @@ pub mod session_recovery;
 pub mod session_destination;
 #[path = "workspace_session.rs"]
 mod workspace_session;
-pub use application_menu::{ApplicationLink, ApplicationMenu, ZoomMenu, NAVIGATOR_COMMANDS};
+pub use application_menu::{ApplicationLink, ApplicationMenu, MenuPageId, ZoomMenu, NAVIGATOR_COMMANDS};
 pub use workspace_session::PreparedWorkspace;
 #[path = "effects.rs"]
 pub(crate) mod effects;
@@ -2543,7 +2543,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// then open columns.
     fn escape_one(&mut self, modifiers: Modifiers) -> Result<Option<UiChange>, String> {
         if self.phone_layout().is_some() && (self.state.phone.menu || self.state.phone.hidden) {
-            self.state.phone.menu = false;
+            if self.state.phone.menu {
+                return self.dispatch(UiAction::Phone { action: PhoneAction::MenuBack { route: self.state.phone.menu_navigation.current() } }).map(Some);
+            }
             self.state.phone.hidden = false;
             self.refresh_chrome();
             return Ok(Some(self.changed(regions::LAYOUT | regions::CUSTOMIZATION | regions::COMMANDS, false)));
@@ -3011,7 +3013,21 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn dispatch_inner(&mut self, action: UiAction) -> Result<UiChange, String> {
+        if let UiAction::Phone { action: PhoneAction::MenuActivate { route, action } } = action {
+            if !self.state.phone.menu || self.state.phone.menu_navigation.current() != route { return Ok(UiChange::default()); }
+            let keep_open = crate::customization::menu_keeps_open(&action);
+            let change = self.dispatch(*action)?;
+            if keep_open || !self.state.phone.menu { return Ok(change); }
+            self.state.phone.menu = false;
+            self.refresh_chrome();
+            let mut closed = self.changed(change.regions | regions::LAYOUT | regions::CUSTOMIZATION, change.canvas_wake);
+            closed.presentation_wake |= change.presentation_wake;
+            return Ok(closed);
+        }
         if self.phone_layout().is_some() {
+            if matches!(action, UiAction::Invoke { command: CommandId::Drawings }) {
+                return self.dispatch(UiAction::Phone { action: PhoneAction::MenuOpen { page: MenuPageId::Drawings } });
+            }
             if matches!(action, UiAction::Invoke { command: CommandId::CustomizeWorkspaceUi }
                 | UiAction::Customize { action: CustomizationAction::Header { action: HeaderAction::Edit { editing: true } } }) {
                 return Err(self.localization().text(MessageId::WORKSPACE_PHONE_TITLE_BAR_UNAVAILABLE).to_string());
@@ -3241,6 +3257,25 @@ impl<R: CanvasRenderer> UiSession<R> {
         let (mut changed, wake) = match action {
             UiAction::Phone { action } => {
                 match action {
+                    PhoneAction::MenuActivate { .. } => unreachable!(),
+                    PhoneAction::MenuSelect { route } => {
+                        let menu = self.phone_menu().filter(|_| self.state.phone.menu).ok_or("The phone menu is closed")?;
+                        if !self.state.phone.menu_navigation.select_menu(&menu, &route) { return Err("The menu page no longer exists".into()); }
+                    }
+                    PhoneAction::MenuBack { route } => {
+                        if self.state.phone.menu_navigation.current() != route { return Ok(UiChange::default()); }
+                        if !self.state.phone.menu { return Ok(UiChange::default()); }
+                        if !self.state.phone.menu_navigation.back() { self.state.phone.menu = false; }
+                    }
+                    PhoneAction::MenuOpen { page } => {
+                        let menu = self.phone_menu().ok_or("The phone menu is unavailable")?;
+                        if !self.state.phone.menu_navigation.select_menu(&menu, &PhoneMenuRoute { page: Some(page), path: Vec::new() }) {
+                            return Err("The menu page no longer exists".into());
+                        }
+                        self.state.phone.menu = true;
+                        self.state.phone.hidden = false;
+                        self.state.customization.drawer = None;
+                    }
                     PhoneAction::Drawing { id, close } => {
                         if id == 0 { return Err("Invalid drawing identity".into()); }
                         self.request(HostRequestKind::SelectDrawing { id, close })?;
@@ -6445,6 +6480,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         let geometry_requested = regions & regions::CANVAS_BAR_GEOMETRY != 0;
         self.state.phone.swapped = self.state.settings.phone_swap_sides;
         let mut regions = regions & !regions::CANVAS_BAR_GEOMETRY;
+        let menu = if self.state.phone.menu { self.phone_menu() } else { None };
+        if self.state.phone.menu_navigation.retain(menu.as_ref()) { regions |= regions::LAYOUT | regions::CUSTOMIZATION; }
         regions |= if std::mem::take(&mut self.host_requests_changed) { regions::HOST } else { 0 };
         if regions & (regions::COMMANDS | regions::LAYOUT) != 0 && self.refresh_tool_set() {
             regions |= regions::BRUSH;

@@ -1,3 +1,4 @@
+export const browserDragThreshold=8;
 // Chromium pans lists with touch but treats pen drags as mouse movement.
 // Preserve native controls and drag surfaces; take only unclaimed vertical pans.
 export function installPenScrolling() {
@@ -21,7 +22,7 @@ export function installPenScrolling() {
     if (!current || current.id !== e.pointerId) return;
     const dx = e.clientX - current.x, dy = e.clientY - current.y;
     if (!current.panning) {
-      if (Math.hypot(dx, dy) <= 8) return;
+      if (Math.hypot(dx, dy) <= browserDragThreshold) return;
       if (e.defaultPrevented || Math.abs(dx) >= Math.abs(dy)) { contact = null; return; }
       // Retire pending row/menu holds just as native touch scrolling does.
       contact = null;

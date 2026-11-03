@@ -1,6 +1,6 @@
 import {liveCopy,bindCopy} from './localization.js';
 import {orderTabChildren} from './tab-order.js';
-export function createDrawingTabs({app,element,button,icon,applyChange,select,close,openFiles,message,busy}) {
+export function createDrawingTabs({app,element,button,icon,applyChange,select,close,openFiles,message,busy,showMenu}) {
   const copy=liveCopy(app,'catalog').native_copy.header,common=liveCopy(app,'bootstrap_view').common;
   const root=element('div','drawing-title'),plain=document.querySelector('#document-title');
   root.id='drawing-title';plain.replaceWith(root);root.append(plain);
@@ -122,7 +122,9 @@ export function createDrawingTabs({app,element,button,icon,applyChange,select,cl
   }
   function dismiss(){cancelDrag();dismissRowMenu();if(popup){popup.close();popup=null;}}
   function showSelector(focusId){
-    if(editing()||busy())return;dismiss();refresh();
+    if(editing()||busy())return;
+    if(showMenu?.({kind:'drawings'}))return;
+    dismiss();refresh();
     const dialog=element('dialog','drawing-list document-dialog');bindCopy(dialog,()=>copy.drawings,"ariaLabel");popup=dialog;
     const heading=element('header');heading.append(element('h2','',()=>copy.drawings),button(()=>common.done,dismiss));dialog.append(heading);
     const list=element('div','drawing-list-rows');list.setAttribute('role','list');dialog.append(list);

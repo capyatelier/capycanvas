@@ -528,10 +528,13 @@ impl DrawingSelector {
         }).collect();
         let mut create = crate::ContextMenuItem::command(format!("{}…", localization.text(MessageId::DOCUMENTS_NEW)), crate::UiAction::Invoke { command: crate::CommandId::NewDocument });
         create.enabled = new.enabled;
+        create.hint = new.shortcut.clone();
         create.bindings = new.bindings.clone();
+        let mut page = crate::ContextMenuItem::submenu(&localization.text(MessageId::NATIVE_HEADER_DRAWINGS), vec![rows, vec![create]]);
+        page.page = Some(crate::MenuPageId::Drawings);
         Self { label: labels.iter().find(|label| label.id == current).map(caption).unwrap_or_default(),
             count: if labels.len() > 1 { labels.len().to_string() } else { String::new() },
-            page: crate::ContextMenuItem::submenu(&localization.text(MessageId::NATIVE_HEADER_DRAWINGS), vec![rows, vec![create]]) }
+            page }
     }
 }
 

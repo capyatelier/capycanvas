@@ -23,6 +23,12 @@ test('glass CSS preserves the shared straight RGBA channels',()=>{
   }
 });
 
+test('shared symbolic icon names resolve to the existing Web asset bank',()=>{
+  const glyph={cloneNode:()=>glyph},context={icons:new Map([['settings',glyph]])};
+  runInNewContext(source.slice(source.indexOf('function icon(name,'),source.indexOf('function iconButton(')),context);
+  assert.equal(context.icon('layer-settings-symbolic'),glyph);
+  assert.equal(context.icon('settings'),glyph);
+});
 test('document transitions retain canvas bar measurement and reveal reports',()=>{
   const actions=[],context={documents:{interactionBusy:()=>true},workspaceGesture:null,
     app:{allowed_during_document_interaction:action=>action.type!=='invoke',dispatch(action){actions.push(action);return{};}},applyChange(){},message:assert.fail};

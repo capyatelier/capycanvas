@@ -55,6 +55,9 @@ pub enum ApplicationMenu {
     Window,
     Primary,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", content = "menu", rename_all = "snake_case")]
+pub enum MenuPageId { Application(ApplicationMenu), Drawings, Workspaces }
 impl ApplicationMenu {
     pub const ALL: [Self; 8] = [
         Self::File,
@@ -169,9 +172,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                     M::ALL
                         .into_iter()
                         .map(|id| {
-                            ContextMenuItem::submenu(&id.localized_label(self.localization()), if id == M::Layer && self.selection_masks.quick() { self.quick_mask_menu().sections } else if id == M::Layer {
+                            let mut item = ContextMenuItem::submenu(&id.localized_label(self.localization()), if id == M::Layer && self.selection_masks.quick() { self.quick_mask_menu().sections } else if id == M::Layer {
                                 self.application_layer_sections()
-                            } else { self.application_menu(id).sections })
+                            } else { self.application_menu(id).sections });
+                            item.page = Some(MenuPageId::Application(id));
+                            item
                         })
                         .collect(),
                     vec![command(CommandId::Settings)],

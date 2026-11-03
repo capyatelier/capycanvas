@@ -251,6 +251,31 @@ and keyboard navigation remain.
 Menu rows, check marks, separators, text and carets use the desktop GTK menu
 presentation, with one text edge.
 
+`PhoneMenuView` supplies typed page identities, the drawing-first row list,
+check gutters, close slots and ellipsis intent. The session owns the route stack
+in `PhoneState`; `PhoneAction::MenuSelect`, `MenuBack` and `MenuOpen` change it.
+Closing clears it, and changing menu content returns to a surviving ancestor.
+`MenuActivate` rejects actions from a retired page and applies the shared
+close-or-keep-open rule after a successful command.
+Hosts read the published route and parent and present the menu through their
+common drawer owner, including its bridge and opener treatment.
+
+Hosts retain only `PhoneMenuContact` and native widget/animation state. The
+contact value decides release eligibility, swipe axis, velocity freshness and
+settle timing. Pointer moves update the local presentation; completed outcomes
+dispatch actions. Back names its starting route, so an old completion cannot
+change another page. Rebuilding a page or changing routes cancels its contact.
+GTK constructs public command/check rows with their accessible roles fixed at
+creation; Web uses the same row builder as its desktop menus. Each phone row
+shows its first available shortcut. Back titles fill the centered space between
+matching arrow slots, keeping the title centered independently of text width.
+Native scrolling cancels the shared press and resets descendant input
+controllers, releasing GTK's button state when the scroller takes the contact.
+
+Search uses `CommandSearchStyle::placement` on both hosts. Escape leaves a
+parameter page first, clears a focused nonempty search next, and otherwise
+closes it; `dialog_escape` owns that ordering.
+
 Undo and Redo (finger taps and Edit), Save and Open (File) and toolbar editing
 (on the toolbar) are not repeated there.
 

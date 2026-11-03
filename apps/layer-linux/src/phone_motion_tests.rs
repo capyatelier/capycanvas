@@ -226,8 +226,7 @@ pub(super) fn export_allocations(w: &Workspace, state_name: &str, capture_name: 
         if drawer.panels().any(|panel| panel == Panel::Color) { add("drawer.color.wheel","color-wheel",named("color-wheel")); }
     }
     if state.phone.menu {
-        let bridge = std::iter::successors(w.phone.root.first_child(), |widget| widget.next_sibling())
-            .find(|widget| widget.has_css_class("drawer-connection"));
+        let bridge = all.iter().find(|widget| widget.is_mapped() && widget.widget_name() == "drawer-connection").cloned();
         add("menu.bridge","bridge",bridge);
         for (id,role,name) in [("menu","menu","phone-menu"),("menu.list","menu-list","phone-menu-scroll"),
             ("menu.separator","separator","phone-menu-separator")] {
@@ -240,8 +239,18 @@ pub(super) fn export_allocations(w: &Workspace, state_name: &str, capture_name: 
         }
         if let Some(back) = named("phone-menu-back").filter(|widget| widget.is_mapped()) { add("menu.back","back",Some(back)); }
         if let Some(list) = named("phone-menu-list") {
-            for (index,row) in widgets(&list).filter(|widget| widget.is_mapped() && widget.type_().name() == "GtkModelButton").enumerate() {
-                add(&format!("menu.row.{index}"),"menu-row",Some(row));
+            for (index,row) in widgets(&list).filter(|widget| widget.is_mapped() && widget.css_name() == "modelbutton").enumerate() {
+                let children = widgets(&row).collect::<Vec<_>>();
+                add(&format!("menu.row.{index}"),"menu-row",Some(row.clone()));
+                add(&format!("menu.row.{index}.label"),"menu-label",children.iter().find(|widget| widget.is::<gtk::Label>() && widget.widget_name() != "menu-detail").cloned());
+                for (part,role,child) in [
+                    ("icon", "menu-icon", children.iter().find(|widget| widget.is::<gtk::Image>() && widget.is_visible() && !widget.has_css_class("menu-check") && !widget.has_css_class("menu-arrow")).cloned()),
+                    ("check", "menu-check", children.iter().find(|widget| widget.has_css_class("menu-check")).cloned()),
+                    ("arrow", "menu-arrow", children.iter().find(|widget| widget.has_css_class("menu-arrow")).cloned()),
+                    ("detail", "menu-detail", children.iter().find(|widget| widget.widget_name() == "menu-detail" && widget.is_visible()).cloned()),
+                    ("close", "menu-close", row.next_sibling().filter(|widget| widget.has_css_class("header-tool"))),
+                ] { if let Some(child) = child { add(&format!("menu.row.{index}.{part}"),role,Some(child)); } }
+
             }
         }
     }
