@@ -3,6 +3,13 @@ use super::*;
 
 pub(super) const PAINTING_UNAVAILABLE: &str = "Painting is unavailable. Save the drawing and reopen it.";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CanvasNotice {
+    Canvas,
+    Brush,
+}
+
 /// Accepted layer-preview requests of one drawing. After a renderer
 /// replacement, unfinished requests are submitted again under their original
 /// ids before new ones.
@@ -45,6 +52,13 @@ impl ThumbnailRequests {
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
+    pub fn canvas_notice(&self, canvas_ready: bool, brush_ready: bool) -> Option<CanvasNotice> {
+        if self.drawing_switch_pending { None }
+        else if !canvas_ready { Some(CanvasNotice::Canvas) }
+        else if !brush_ready { Some(CanvasNotice::Brush) }
+        else { None }
+    }
+
     pub fn rendering_diagnostics(&self) -> serde_json::Value {
         let telemetry = self.engine.backend().telemetry();
         serde_json::json!({"canvas": self.engine.document().composition().size,
@@ -121,6 +135,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.release_idle_document_buffers();
         self.cancel_auto_levels();self.cancel_histogram();self.cancel_effect_analyses();
         self.rendering_suspended = true;
+        self.drawing_switch_pending = true;
         self.refresh_commands();
         Ok(tiles)
     }
@@ -214,6 +229,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.sync_camera();
         self.refresh_layer_presentation();
         self.refresh_commands();
+        self.drawing_switch_pending = true;
         self.begin_canvas_transition();
         Ok(self.changed(regions::ALL, true))
     }
@@ -273,6 +289,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("The drawing is not parked".into());
         }
         self.rendering_suspended = false;
+        self.drawing_switch_pending = false;
         self.refresh_commands();
         Ok(self.changed(regions::DOCUMENT | regions::COMMANDS, true))
     }

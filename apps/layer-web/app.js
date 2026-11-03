@@ -461,6 +461,7 @@ function frame(frameTime) {
 function refreshStartup() {
   if (!gpuReady || compilerFailed) return;
   const [documentReady, brushReady, complete] = app.startup_progress();
+  const notice = app.canvas_notice();
   const stages = { canvas: app.canvas_presented(), document: documentReady, brush: brushReady, complete };
   for (const [name, ready] of Object.entries(stages)) {
     if (ready && startupTimes[name] === null) {
@@ -473,8 +474,8 @@ function refreshStartup() {
     startupNotice.setAttribute("role", "status");
     workspace.append(startupNotice);
   }
-  const hidden = !stages.canvas || app.brush_ready();
-  const text = documentReady ? bootstrap.preparing_brush : bootstrap.preparing_canvas;
+  const hidden = !stages.canvas || notice === null;
+  const text = notice === null ? "" : bootstrap[`preparing_${notice}`];
   if (startupNotice.hidden !== hidden) startupNotice.hidden = hidden;
   if (startupNotice.textContent !== text) startupNotice.textContent = text;
 }

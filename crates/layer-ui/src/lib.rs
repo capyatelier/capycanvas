@@ -77,7 +77,7 @@ pub use layer_core::{FigurePaint, FigureShape, RulerKind};
 mod navigator;
 pub use navigator::NavigatorGeometry;
 pub use session::tonal_selection::{TonalAction, TonalOptions};
-pub use session::{ThumbnailRequests, occurrence_token, occurrence_handle, object_token, object_handle, SourceUse, FilterPreviewCache, FilterPreviewStatus, FilterPreviewUpdate};
+pub use session::{CanvasNotice, ThumbnailRequests, occurrence_token, occurrence_handle, object_token, object_handle, SourceUse, FilterPreviewCache, FilterPreviewStatus, FilterPreviewUpdate};
 mod curve_editor;
 pub use curve_editor::{CurveEditorView, CurveEditorTarget, CurveEditorAction};
 pub use session::pressure_calibration::{PressureCalibrationAction, PressureCalibrationView};

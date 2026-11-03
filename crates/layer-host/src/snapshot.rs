@@ -118,6 +118,12 @@ impl NativeHost {
         }
     }
 
+    fn canvas_notice(&self) -> Option<layer_ui::CanvasNotice> {
+        let gpu_ready = self.session.engine().backend().0.is_some();
+        let progress = self.shader_progress();
+        self.session.canvas_notice(gpu_ready && progress.canvas_ready, progress.brush_ready)
+    }
+
     pub(super) fn take_snapshot_with<S: Serializer>(
         &mut self,
         serializer: S,
@@ -135,6 +141,7 @@ impl NativeHost {
             navigation_cursor: self.session.navigation_mode(),
             gpu_ready: self.session.engine().backend().0.is_some(),
             startup: self.shader_progress(),
+            canvas_notice: self.canvas_notice(),
             error: self.error.clone(),
         };
         let camera = &self.session.state().camera;
@@ -402,6 +409,7 @@ impl NativeHost {
         let progress = self.shader_progress();
         map.serialize_entry("canvas_ready", &(gpu_ready && progress.canvas_ready))?;
         map.serialize_entry("brush_ready", &(gpu_ready && progress.brush_ready))?;
+        map.serialize_entry("canvas_notice", &self.canvas_notice())?;
         map.serialize_entry("shaders_ready", &(gpu_ready && progress.complete))?;
         map.serialize_entry("error", &self.error)?;
         map.end()
@@ -471,6 +479,56 @@ mod tests {
         host.resize(2410, 1810, 2.).unwrap();
         host
     }
+
+    #[test]
+    fn canvas_notices_distinguish_cold_start_from_drawing_switches() {
+        let mut outgoing=host(Platform::Windows);
+        let cold=decoded(outgoing.take_update_bytes().unwrap()).unwrap();
+        assert_eq!(cold["canvas_notice"],"canvas");
+        assert_eq!(cold["brush_ready"],false);
+        let reference=layer_render_wgpu::WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let context=crate::GpuContext::of(&reference);
+        let renderer=context.rasterizer(Default::default(),&crate::RendererOptions::default(),false).unwrap();
+        outgoing.replace_renderer(crate::Renderer(Some(renderer))).unwrap();
+        outgoing.startup.canvas_ready=true;
+        let warming=decoded(outgoing.take_update_bytes().unwrap()).unwrap();
+        assert_eq!(warming["canvas_notice"],"brush");
+        assert_eq!(warming["brush_ready"],false);
+        let warming_renderer=outgoing.replace_renderer(crate::Renderer(Some(Box::new(reference)))).unwrap();
+        outgoing.session.frame(0,0).unwrap();
+        let settings=outgoing.session.state().requests.iter().filter(|request|
+            matches!(request.kind,layer_ui::HostRequestKind::SaveSettings {..})).map(|request|request.id).collect::<Vec<_>>();
+        for id in settings {outgoing.dispatch(UiAction::CompleteRequest {id,error:None}).unwrap();}
+        assert!(outgoing.session.can_park_document(),"{:?}",outgoing.session.state().requests);
+        outgoing.session.park_document().unwrap();
+        let ready_renderer=crate::Renderer(outgoing.session.renderer_mut().0.take());
+        let parked=decoded(outgoing.take_update_bytes().unwrap()).unwrap();
+        assert!(parked.get("canvas_notice").unwrap().is_null());
+        assert_eq!(parked["brush_ready"],false);
+        let mut incoming=host(Platform::Windows);
+        incoming.session.inherit_window_state(&outgoing.session).unwrap();
+        let activating=decoded(incoming.take_update_bytes().unwrap()).unwrap();
+        assert!(activating.get("canvas_notice").unwrap().is_null());
+        assert_eq!(activating["gpu_ready"],false);
+        assert_eq!(activating["brush_ready"],false);
+        outgoing.session.cancel_document_park().unwrap();
+        outgoing.replace_renderer(warming_renderer).unwrap();
+        let cancelled=decoded(outgoing.take_update_bytes().unwrap()).unwrap();
+        assert_eq!(cancelled["canvas_notice"],"brush");
+        assert_eq!(cancelled["brush_ready"],false);
+        incoming.replace_renderer(ready_renderer).unwrap();
+        incoming.startup.canvas_ready=true;
+        incoming.session.frame(0,0).unwrap();
+        assert!(incoming.session.paint_ready());
+        let warming_renderer=outgoing.replace_renderer(crate::Renderer::default()).unwrap();
+        incoming.replace_renderer(warming_renderer).unwrap();
+        let resumed=decoded(incoming.take_update_bytes().unwrap()).unwrap();
+        assert_eq!(resumed["canvas_notice"],"brush");
+        assert_eq!(resumed["brush_ready"],false);
+        drop(incoming);drop(outgoing);drop(context);
+        layer_render_wgpu::finish_shader_compiler_shutdown();
+    }
+
     #[test]
     fn workspace_replacement_serializes_metadata_for_every_presented_panel() {
         use layer_ui::{HostRequestKind, ManagedWorkspace, PreparedWorkspace, WorkspaceCapture, WorkspaceCommand, WorkspacePreset};

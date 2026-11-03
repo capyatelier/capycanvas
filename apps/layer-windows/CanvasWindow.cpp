@@ -1832,6 +1832,10 @@ bool CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model,Nativ
         if(message.empty())message=str(object(model,L"windows_filter_load"),L"error");
         if(message.empty()&&flag(object(model,L"windows_filter_load"),L"pending"))message=str(bootstrap,L"loading_filters");
         if(message.empty())message=str(object(model,L"windows_proof"),L"text");
+        if(message.empty()){
+            auto notice=str(model,L"canvas_notice");
+            if(!notice.empty())message=str(bootstrap,(L"preparing_"+notice).c_str());
+        }
         status.Text(message);status.Visibility(message.empty()?Visibility::Collapsed:Visibility::Visible);
     }
     if(sections&CanvasWindowState){

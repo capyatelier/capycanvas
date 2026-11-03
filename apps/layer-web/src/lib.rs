@@ -414,6 +414,12 @@ impl WebApp {
             self.startup.complete,
         ])
     }
+    pub fn canvas_notice(&self) -> Result<JsValue, JsValue> {
+        match self.session.canvas_notice(self.gpu_ready() && self.startup.canvas_ready, self.brush_ready()) {
+            Some(notice) => serialize(&notice),
+            None => Ok(JsValue::NULL),
+        }
+    }
     /// Return an owned promise: UI/input may borrow the session while the
     /// browser validates this one job. No WebApp borrow survives an await.
     pub fn compile_startup_step(&mut self, allow_optional: bool) -> Result<js_sys::Promise, JsValue> {

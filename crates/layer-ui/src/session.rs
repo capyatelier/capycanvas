@@ -44,6 +44,7 @@ use held_actions::{ERASER_END, merge_change};
 #[path = "canvas_transition.rs"]
 mod canvas_transition;
 use canvas_transition::CanvasTransition;
+pub use renderer_lifecycle::CanvasNotice;
 #[path = "session_bubbles.rs"]
 mod session_bubbles;
 #[path = "zen_peek.rs"]
@@ -290,6 +291,7 @@ pub struct UiSession<R: CanvasRenderer> {
     pen_contact: bool,
     discarded_contacts: Vec<u64>,
     rendering_suspended: bool,
+    drawing_switch_pending: bool,
     touch: TouchGesture,
     navigation: navigation::Navigation,
     navigator_drag: Option<[f32; 2]>,
@@ -552,6 +554,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             finger: finger_input::FingerInput::new(platform),
             discarded_contacts: Vec::new(),
             rendering_suspended: false,
+            drawing_switch_pending: false,
             touch: TouchGesture::default(),
             navigation: Default::default(),
             navigator_drag: None,
@@ -5092,6 +5095,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.engine
             .render_frame_for(now_ns, presentation_ns)
             .map_err(error)?;
+        if self.drawing_switch_pending && !self.rendering_suspended && self.paint_ready() {
+            self.drawing_switch_pending = false;
+        }
         changed |= self.save_admitted_pen()?;
         let transition_changed = self.advance_canvas_transition(now_ns);
         if self.engine.metrics().input_budget_completions!=budget_completions {

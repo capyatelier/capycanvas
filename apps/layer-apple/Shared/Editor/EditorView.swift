@@ -24,9 +24,9 @@ struct EditorView<Canvas: View>: View {
             if !store.canvasSubmitted {
                 palette["bg"].ignoresSafeArea().allowsHitTesting(false)
             }
-            if !store.canvasSubmitted && store.failure == nil && store.snapshot["error"].isNull && !store.bootstrap.isNull {
+            if !store.canvasSubmitted && !store.snapshot["canvas_notice"].isNull && store.failure == nil && store.snapshot["error"].isNull && !store.bootstrap.isNull {
                 ProgressView(store.bootstrap[store.restartingCanvas ? "restarting_canvas" :
-                    store.snapshot["brush_ready"].bool ? "preparing_canvas" : "preparing_brush"].string)
+                    "preparing_\(store.snapshot["canvas_notice"].string)"].string)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityIdentifier("canvas-startup")
             }

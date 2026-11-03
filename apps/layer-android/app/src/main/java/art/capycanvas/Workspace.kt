@@ -352,9 +352,9 @@ private val HiddenChromeShape=object:Shape {
         if (!host.surfaceReady) {
             Box(Modifier.fillMaxSize().background(colors.surround).testTag("canvas-placeholder"))
         }
-        if (snapshot != null && !snapshot.optBoolean("brush_ready") && host.failure == null) {
+        if (snapshot != null && !snapshot.isNull("canvas_notice") && host.failure == null) {
             Surface(Modifier.align(Alignment.BottomCenter).padding(bottom = 48.dp), shape = SurfaceShape, tonalElevation = 3.dp) {
-                Text(host.bootstrap!!.getString(if (snapshot.optBoolean("canvas_ready")) "preparing_brush" else "preparing_canvas"), Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                Text(host.bootstrap!!.getString("preparing_${snapshot.getString("canvas_notice")}"), Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }
         }
         host.failure?.let { message ->

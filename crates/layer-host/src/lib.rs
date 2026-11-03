@@ -44,6 +44,7 @@ struct SnapshotKey {
     navigation_cursor: Option<layer_ui::NavigationMode>,
     gpu_ready: bool,
     startup: layer_render_wgpu::StartupProgress,
+    canvas_notice: Option<layer_ui::CanvasNotice>,
     error: Option<String>,
 }
 
