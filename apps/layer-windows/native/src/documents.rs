@@ -80,7 +80,7 @@ struct Opening { environment: OpenEnvironment, imported: layer_ui::ImportedDocum
 enum Source {
     Converted(Box<layer_core::Document>),
     Clip(Box<layer_ui::PixelClip>),
-    Images(Vec<(String, layer_core::color::source::SourceImage)>),
+    Images(layer_ui::PreparedImages),
     Create,
     Interpret(Box<layer_ui::ImportedDocument>, crate::color_storage::ProfileChoice),
     Open(PathBuf),

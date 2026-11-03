@@ -79,7 +79,7 @@ impl Drop for BrowserChunk {
 
 #[wasm_bindgen]
 impl WebApp {
-    /// A diagnostic override can lower the fixed default budget, never raise it.
+    /// A diagnostic override can lower the collection's memory grant.
     pub fn set_document_cache_budget(&mut self, bytes: u32) {
         self.documents.budget.inactive_ram =
             (bytes as usize).min(layer_ui::DocumentBudget::default().inactive_ram);

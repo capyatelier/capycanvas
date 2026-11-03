@@ -100,13 +100,13 @@ pub extern "C" fn portable_avif_export() -> u32 {
             &mut bytes,
             layer_color::photo::GainMapRender { extent, space: RgbSpace::Srgb, rendition: Default::default(), guide: &guide, matte: None, clip: false },
             GainMapFormat::Avif,
-            quality,
+            layer_color::photo::GainMapEncodeOptions::from_memory_budget(quality, layer_color::photo::PhotoMemoryBudget::from_limit(1 << 30)),
             &Default::default(),
             &cancel,
             pixels,
         )
         .unwrap();
-        let source = read_photo(Cursor::new(&bytes), Default::default()).unwrap();
+        let source = read_photo(Cursor::new(&bytes), layer_color::photo::DecodeLimits::from_memory_budget(layer_color::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
         assert_eq!(source.extent, extent);
         assert_eq!(source.interpretation.depth, SampleDepth::F16);
         let mut row = vec![0; source.row_bytes()];
@@ -158,9 +158,9 @@ pub extern "C" fn portable_smoke() -> u32 {
     }
     let source = builder.finish().unwrap();
     let mut jpeg = Vec::new();
-    layer_color::photo::write_jpeg(&mut jpeg, &source, 100).unwrap();
+    layer_color::photo::write_jpeg(&mut jpeg, &source, layer_color::photo::JpegEncodeOptions::from_memory_budget(100, layer_color::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
     let restored =
-        layer_color::photo::read_photo(std::io::Cursor::new(jpeg), Default::default()).unwrap();
+        layer_color::photo::read_photo(std::io::Cursor::new(jpeg), layer_color::photo::DecodeLimits::from_memory_budget(layer_color::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
     assert_eq!(restored.extent, source.extent);
     assert_eq!(restored.interpretation.profile, embedded);
     let mut row = [0; 48];

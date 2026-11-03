@@ -199,6 +199,10 @@ impl CollectionJob {
 }
 
 impl Scene {
+    pub(super) fn object_workspace(&self, r: &WgpuRasterizer, display: bool) -> u64 {
+        let other = if display { &self.exact_object_results } else { &self.object_results };
+        r.memory.scene_limit().saturating_sub(other.required_bytes())
+    }
     pub(crate) fn live_objects_cold(&mut self, r: &WgpuRasterizer, scene: SceneView<'_>, bounds: DocRect, side: f64) -> Result<bool, GpuRasterError> {
         self.object_spatial.prepare(scene);
         let mapping = Affine64([side, 0., 0., side, bounds.min[0] as f64, bounds.min[1] as f64]);
@@ -249,12 +253,11 @@ impl Scene {
                 let window = ObjectWindow { origin: coordinate.map(|v| f64::from(v * PAGE_SIZE)), side: 1., size: [PAGE_SIZE; 2] };
                 let request = self.collection_job(r, packet, owner, content.clone(), window);
                 if request.keys.is_empty() { continue; }
-                let cache = if self.object_display || self.object_query { &mut self.object_results } else { &mut self.exact_object_results };
-                match cache.prepare_collection(r, packet.scene, &request) {
-                    Ok(complete) => ready &= complete,
-                    Err(GpuRasterError::SourceWorkingSetExceeded) => return Ok(false),
-                    Err(error) => return Err(error),
-                }
+                let display = self.object_display || self.object_query;
+                let workspace = self.object_workspace(r, display);
+                let cache = if display { &mut self.object_results } else { &mut self.exact_object_results };
+                cache.set_workspace(workspace);
+                ready &= cache.prepare_collection(r, packet.scene, &request)?;
             }
         }
         Ok(ready)
@@ -270,6 +273,7 @@ impl Scene {
             let mut part = self.collection_job(r, packet, content.owner(), content.clone(), window);
             part.live = request.live; part.display = request.display;
             if part.keys.is_empty() { continue; }
+            self.object_results.set_workspace(self.object_workspace(r, true));
             self.object_results.resolve_collection(r, packet.scene, &part)?;
             ready = false;
         }
@@ -325,6 +329,7 @@ impl Scene {
         let mut results = std::mem::take(&mut self.object_results);
         let advanced = results.advance(r, self, encoder, false);
         self.object_results = results;
+        self.object_results.set_workspace(self.object_workspace(r, true));
         let canonical = advanced.and_then(|_| self.object_results.resolve_collection(r, packet.scene, &request));
         self.object_query = false;
         let Some(view) = canonical? else { return Ok(None); };
@@ -341,8 +346,11 @@ impl Scene {
         let request=self.collection_job(r,packet,owner,content,window);
         if request.keys.is_empty() {return self.alloc(r,wgpu::Color::TRANSPARENT);}
         if inline_sampling(r) && !self.object_display && !self.object_query {return self.inline_object_tile(r,&request);}
-        let canonical=if self.object_display||self.object_query {self.object_results.resolve_collection(r,packet.scene,&request)?}
-            else {self.exact_object_results.resolve_collection(r,packet.scene,&request)?};
+        let display = self.object_display || self.object_query;
+        let workspace = self.object_workspace(r, display);
+        let cache = if display { &mut self.object_results } else { &mut self.exact_object_results };
+        cache.set_workspace(workspace);
+        let canonical=cache.resolve_collection(r,packet.scene,&request)?;
         if let Some(view)=canonical {
             let output=self.reserve(r)?;
             self.jobs.push(Job::Copy {source:view.texture().clone(),source_origin:[0;2],destination:self.pool[output].texture.clone(),origin:[0;2],width:PAGE_SIZE,height:PAGE_SIZE});

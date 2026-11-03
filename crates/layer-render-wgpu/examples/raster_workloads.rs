@@ -1,7 +1,6 @@
 //! Dense raster, concurrent-save and multiple-document qualification.
 //! Run in release on a physical GPU. Synthetic images are reproducible workloads,
 //! not claims of photographic color accuracy. Export/undo timings are cold paths.
-//! Use --bounded-display to compare the atlas fallback with host memory admission.
 use layer_core::*;
 use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, source::*};
 use layer_engine::{
@@ -112,9 +111,6 @@ impl Canvas {
         let mut document = Document::from_artwork(document.artwork)?;
         document.working = working;
         let mut gpu = WgpuRasterizer::new_native_headless(color)?;
-        if std::env::args().any(|arg| arg == "--bounded-display") {
-            gpu.set_complete_display_allowance(0);
-        }
         gpu.set_telemetry_enabled(true);
         let (input, consumer) = input_queue(64);
         let scale = (1024. / extent[0] as f32).min(768. / extent[1] as f32);
@@ -384,7 +380,7 @@ fn write_capture(capture: &ArtworkCapture, out: &mut impl Write) -> std::result:
 }
 fn open_package(path: &Path) -> Result<Document> {
     let cancel = AtomicBool::new(false);
-    let limits = ProjectLimits::default();
+    let limits = ProjectLimits::for_import();
     let backing = package::transport::spool(&mut BufReader::new(std::fs::File::open(path)?),
         &std::env::temp_dir(), limits.metadata_bytes + limits.asset_bytes + limits.raster_bytes, &cancel)?;
     let package::codec::OpenOutcome::Candidate { artwork, .. } = package::codec::open(backing, limits, &cancel)?
@@ -444,7 +440,6 @@ fn main() -> Result<()> {
             "--photo-capture" => { photo = true; capture_only = true; },
             "--photo-navigation" => navigation_only = true,
             "--calibrate" => calibrate = true,
-            "--bounded-display" => {},
             "--output-dir" => output = PathBuf::from(arguments.next().ok_or("--output-dir needs a path")?),
             "all" | "24mp" | "45mp" | "60mp" | "multiple" => selected = argument,
             "--space" => color.space = match arguments.next().map(String::as_str) {
@@ -459,7 +454,7 @@ fn main() -> Result<()> {
                 Some("16") => SampleDepth::U16,
                 _ => return Err("--depth needs 8 or 16".into()),
             },
-            _ => return Err("raster_workloads [all|24mp|45mp|60mp|multiple] [--photo|--photo-capture|--photo-navigation] [--bounded-display] [--output-dir PATH] [--space srgb|p3|adobe-rgb|prophoto] [--depth 8|16]".into()),
+            _ => return Err("raster_workloads [all|24mp|45mp|60mp|multiple] [--photo|--photo-capture|--photo-navigation] [--output-dir PATH] [--space srgb|p3|adobe-rgb|prophoto] [--depth 8|16]".into()),
         }
     }
     println!("Source ownership: tiled copy-on-write; native {color:?}, Float32 working tiles");

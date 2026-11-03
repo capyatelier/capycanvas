@@ -102,7 +102,7 @@ fn native_header_overflow_opens_while_a_photo_import_prepares() {
     encoder.write_header().unwrap().write_image_data(&vec![180; 640 * 480 * 4]).unwrap();
     let layer_ui::ImportOutcome::Editable(imported) = layer_ui::read_import(
         std::io::Cursor::new(bytes), layer_ui::ImportIntent::Open, Default::default(),
-        layer_ui::photo_document_names("Overflow.png", &d.w.localization()), Default::default(), Default::default(),
+        layer_ui::photo_document_names("Overflow.png", &d.w.localization()), Default::default(), layer_ui::photo_decode_limits(),
         &std::sync::atomic::AtomicBool::new(false),
     ).unwrap() else { panic!("editable photo") };
     let completed = Rc::new(RefCell::new(None));

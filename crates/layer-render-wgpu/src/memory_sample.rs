@@ -1,15 +1,33 @@
-use layer_render::{MemoryPeak, MemorySnapshot, ProcessMemory, ProcessMemoryKind};
+use layer_render::{MemoryBudgetSummary, MemoryPeak, MemorySnapshot, ProcessMemory, ProcessMemoryKind};
+use layer_core::{MemoryBudget, MemoryDevice, MemoryFacts, DeviceMemoryFacts};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 pub(super) struct MemorySampler {
-    snapshot: Arc<Mutex<Option<MemorySnapshot>>>,
-    _lifetime: mpsc::Sender<()>,
+    snapshot: Arc<Mutex<Option<Sample>>>,
+    updates: mpsc::SyncSender<()>,
+}
+#[derive(Clone)]
+struct Sample { memory: MemorySnapshot, budget: Arc<MemoryBudgetSummary> }
+#[cfg(test)]
+pub(super) fn fixture_sampler(budget: MemoryBudget) -> MemorySampler {
+    let refresh = budget.clone();
+    MemorySampler::with_updates(move || {
+        budget.flush_reports();
+        let snapshot = budget.snapshot();
+        Sample { memory: MemorySnapshot { sampled_at: Instant::now(), process: None, gpu: None },
+            budget: Arc::new(MemoryBudgetSummary::new(&snapshot)) }
+    }, |sample| sample, move |sample| {
+        refresh.flush_reports();
+        let snapshot = refresh.snapshot();
+        sample.budget = Arc::new(MemoryBudgetSummary::new(&snapshot));
+    })
 }
 impl MemorySampler {
-    pub fn new(device: wgpu::Device) -> Self {
+    pub fn new(device: wgpu::Device, budget: MemoryBudget, id: MemoryDevice) -> Self {
         let mut peak = 0;
-        Self::with_query(move || {
+        let refresh = budget.clone();
+        Self::with_updates(move || {
             let mut process = process_memory();
             if let Some(memory) = &mut process {
                 peak = peak.max(memory.bytes);
@@ -19,26 +37,54 @@ impl MemorySampler {
             let gpu = crate::display_memory::usage(&device);
             #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows", target_vendor = "apple")))]
             let gpu = { let _ = &device; None };
-            MemorySnapshot { sampled_at: Instant::now(), process, gpu }
+            #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows", target_vendor = "apple"))]
+            let facts = crate::display_memory::facts(&device, gpu);
+            #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows", target_vendor = "apple")))]
+            let facts = DeviceMemoryFacts::default();
+            (MemorySnapshot { sampled_at: Instant::now(), process, gpu },
+                layer_core::memory_budget::system_facts(), facts)
+        }, move |reading| publish(&budget, id, reading), move |sample| {
+            refresh.flush_reports();
+            let snapshot=refresh.snapshot();
+            sample.budget=Arc::new(MemoryBudgetSummary::new(&snapshot));
         })
     }
-    fn with_query(mut query: impl FnMut() -> MemorySnapshot + Send + 'static) -> Self {
+    fn with_updates<T: Send + 'static>(mut query: impl FnMut() -> T + Send + 'static,
+        mut finish: impl FnMut(T) -> Sample + Send + 'static, mut refresh: impl FnMut(&mut Sample) + Send + 'static) -> Self {
         let snapshot = Arc::new(Mutex::new(None));
         let publish = Arc::downgrade(&snapshot);
-        let (lifetime, stopped) = mpsc::channel();
-        let _ = std::thread::Builder::new().name("memory samples".into()).spawn(move || loop {
-            let sample = query();
-            let Some(snapshot) = publish.upgrade() else { break; };
-            *snapshot.lock().unwrap() = Some(sample);
-            drop(snapshot);
-            match stopped.recv_timeout(Duration::from_secs(2)) {
-                Err(mpsc::RecvTimeoutError::Timeout) => {},
-                _ => break,
+        let (updates, received) = mpsc::sync_channel(1);
+        let _ = std::thread::Builder::new().name("memory samples".into()).spawn(move || {
+            let mut sample=None;
+            let mut next=Instant::now();
+            loop {
+                if publish.strong_count()==0 {break;}
+                let reading=(sample.is_none() || Instant::now()>=next).then(&mut query);
+                let Some(snapshot)=publish.upgrade() else {break;};
+                if let Some(reading)=reading {sample=Some(finish(reading));next=Instant::now()+Duration::from_secs(1);}
+                else {refresh(sample.as_mut().unwrap());}
+                *snapshot.lock().unwrap()=sample.clone();drop(snapshot);
+                match received.recv_timeout(next.saturating_duration_since(Instant::now())) {
+                    Ok(())|Err(mpsc::RecvTimeoutError::Timeout)=>{},
+                    Err(mpsc::RecvTimeoutError::Disconnected)=>break,
+                }
             }
         });
-        Self { snapshot, _lifetime: lifetime }
+        Self { snapshot, updates }
     }
-    pub fn snapshot(&self) -> Option<MemorySnapshot> { self.snapshot.try_lock().ok().and_then(|snapshot| *snapshot) }
+    pub fn request_update(&self) { let _=self.updates.try_send(()); }
+    pub fn snapshot(&self) -> Option<MemorySnapshot> { self.snapshot.try_lock().ok().and_then(|snapshot| snapshot.as_ref().map(|sample| sample.memory)) }
+    pub fn budget_snapshot(&self) -> Option<Arc<MemoryBudgetSummary>> {
+        self.snapshot.try_lock().ok().and_then(|snapshot| snapshot.as_ref().map(|sample| sample.budget.clone()))
+    }
+}
+
+fn publish(budget: &MemoryBudget, id: MemoryDevice, (memory, ram, gpu): (MemorySnapshot, MemoryFacts, DeviceMemoryFacts)) -> Sample {
+    budget.flush_reports();
+    budget.update_ram(ram, MemoryBudget::now_ms());
+    budget.update_device(id, gpu);
+    let snapshot = budget.snapshot();
+    Sample { memory, budget: Arc::new(MemoryBudgetSummary::new(&snapshot)) }
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -91,6 +137,10 @@ fn process_memory() -> Option<ProcessMemory> { None }
 mod tests {
     use super::*;
 
+    fn sample(memory: MemorySnapshot) -> Sample {
+        Sample { memory, budget: Arc::new(MemoryBudgetSummary::new(&MemoryBudget::new().snapshot())) }
+    }
+
     #[test]
     #[cfg(any(target_os = "linux", target_os = "android"))]
     fn resident_memory_keeps_rss_and_os_peak_separate_from_virtual_bytes() {
@@ -107,15 +157,16 @@ mod tests {
     fn memory_readers_never_wait_for_a_blocked_query_or_publisher() {
         let (started, running) = mpsc::channel();
         let (release, held) = mpsc::channel();
-        let sampler = MemorySampler::with_query(move || {
+        let sampler = MemorySampler::with_updates(move || {
             started.send(()).unwrap();
             held.recv().unwrap();
             MemorySnapshot { sampled_at: Instant::now(), process: None, gpu: None }
-        });
+        }, sample, |_| {});
         running.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(sampler.snapshot().is_none());
         let guard = sampler.snapshot.lock().unwrap();
         assert!(sampler.snapshot().is_none());
+        assert!(sampler.budget_snapshot().is_none());
         drop(guard);
         release.send(()).unwrap();
     }
@@ -128,20 +179,69 @@ mod tests {
         let (started, running) = mpsc::channel();
         let (release, held) = mpsc::channel();
         let completed = Completed(finished);
-        let retired = MemorySampler::with_query(move || {
+        let retired = MemorySampler::with_updates(move || {
             let _ = &completed;
             started.send(()).unwrap();
             held.recv().unwrap();
             MemorySnapshot { sampled_at: Instant::now(), process: Some(ProcessMemory {
                 kind: ProcessMemoryKind::Resident, bytes: 999, peak: MemoryPeak::Lifetime(999) }), gpu: None }
-        });
+        }, sample, |_| {});
         running.recv_timeout(Duration::from_secs(5)).unwrap();
         let old_state = Arc::downgrade(&retired.snapshot);
         drop(retired);
-        let replacement = MemorySampler { snapshot: Arc::new(Mutex::new(None)), _lifetime: mpsc::channel().0 };
+        let replacement = MemorySampler { snapshot: Arc::new(Mutex::new(None)), updates: mpsc::sync_channel(1).0 };
         release.send(()).unwrap();
         done.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(old_state.upgrade().is_none());
         assert!(replacement.snapshot().is_none());
+    }
+
+    #[test]
+    fn queued_budget_updates_coalesce_without_polling_os_facts_again() {
+        use std::sync::atomic::{AtomicUsize,Ordering};
+        let queries=Arc::new(AtomicUsize::new(0));let count=queries.clone();
+        let budget=MemoryBudget::new();let owner=budget.register_owner(layer_core::MemoryOwnerKind::Scene,layer_core::MemoryClass::Visible,None);
+        let (started,running)=mpsc::channel();let (release,held)=mpsc::channel();let (updated,done)=mpsc::channel();
+        let refresh=budget.clone();
+        let sampler=MemorySampler::with_updates(move||{
+            let number=count.fetch_add(1,Ordering::Relaxed);if number==0 {started.send(()).unwrap();held.recv().unwrap();}
+            MemorySnapshot {sampled_at:Instant::now(),process:None,gpu:None}
+        },sample,move|sample|{
+            refresh.flush_reports();let snapshot=refresh.snapshot();
+            sample.budget=Arc::new(MemoryBudgetSummary::new(&snapshot));
+            updated.send((snapshot.ram_physical_bytes,sample.memory.sampled_at)).unwrap();
+        });
+        running.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(owner.publish(layer_core::MemoryReport {ram_bytes:1234,demand_ram_bytes:1234,..Default::default()}));
+        for _ in 0..1024 {sampler.request_update();}
+        assert!(sampler.snapshot().is_none());release.send(()).unwrap();
+        let (bytes,sampled_at)=done.recv_timeout(Duration::from_secs(5)).unwrap();assert_eq!(bytes,1234);
+        assert_eq!(queries.load(Ordering::Relaxed),1);
+        assert!(done.try_recv().is_err());
+        sampler.request_update();let (_,second_sampled_at)=done.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(second_sampled_at,sampled_at);assert_eq!(queries.load(Ordering::Relaxed),1);
+        drop(sampler);
+    }
+
+    #[test]
+    fn budget_facts_update_without_a_stats_reader() {
+        let budget = MemoryBudget::new();
+        let id = budget.register_device(Default::default());
+        let observed = budget.clone();
+        let (published, done) = mpsc::channel();
+        let sampler = MemorySampler::with_updates(|| (
+            MemorySnapshot { sampled_at: Instant::now(), process: None, gpu: None },
+            MemoryFacts { total_bytes: Some(8 << 30), available_bytes: Some(6 << 30), ..Default::default() },
+            DeviceMemoryFacts { budget_bytes: Some(1 << 30), ..Default::default() },
+        ), move |reading| {
+            let result = publish(&budget, id, reading);
+            published.send(()).unwrap();
+            result
+        }, |_| {});
+        done.recv_timeout(Duration::from_secs(5)).unwrap();
+        let snapshot = observed.snapshot();
+        assert!(snapshot.ram_limit_bytes > 0);
+        assert!(snapshot.devices.iter().any(|device| device.device == id && device.limit_bytes > 0));
+        drop(sampler);
     }
 }

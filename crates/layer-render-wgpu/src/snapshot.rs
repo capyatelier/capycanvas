@@ -122,6 +122,7 @@ impl WgpuRasterizer {
 impl SnapshotGpu {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn memory_snapshot(&self) -> Option<layer_render::MemorySnapshot> { self.factory.memory_snapshot() }
+    pub fn budget_snapshot(&self) -> Option<std::sync::Arc<layer_render::MemoryBudgetSummary>> { self.factory.budget_snapshot() }
     /// A host observation for stale asynchronous candidates; policy lives in
     /// the shared workflow, while surface/device lifetime remains host-owned.
     pub fn same_device(&self, other: &Self) -> bool {
@@ -132,9 +133,8 @@ impl SnapshotGpu {
     pub fn max_document_dimension(&self) -> u32 {
         self.device.limits().max_texture_dimension_2d
     }
-    #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows", target_vendor = "apple"))]
     pub fn memory_headroom(&self) -> Option<u64> {
-        crate::display_memory::device_headroom(&self.device)
+        Some(self.factory.memory_budget().import_headroom_bytes())
     }
     pub fn preflight_image_object_affine(&self,scene:SceneView<'_>,object:layer_core::ImageObjectHandle,
         affine:layer_core::Affine64,view:layer_render::ViewState,
@@ -147,8 +147,10 @@ impl SnapshotGpu {
     pub fn capture(&self, capture: ArtworkCapture, control: CaptureControl) -> Result<SnapshotRenderer, GpuRasterError> {
         let index = Arc::new(SceneIndex::build(&capture.artwork).map_err(GpuRasterError::Color)?);
         let context = capture.artwork.outputs.get(capture.artwork.default_output).ok_or(GpuRasterError::InvalidExtent)?.context.clone();
-        let scene = Arc::new(SceneSnapshot::new((*capture.artwork).clone(), index, capture.checkpoint.owner,
-            capture.checkpoint.artwork_generation, context));
+        let mut scene = SceneSnapshot::new((*capture.artwork).clone(), index, capture.checkpoint.owner,
+            capture.checkpoint.artwork_generation, context);
+        scene.memory = capture.memory().cloned();
+        let scene = Arc::new(scene);
         SnapshotRenderer::construct(scene, SceneScope::All, control, self)
     }
     pub fn scoped_transfer_artwork(scene:&SceneSnapshot,additional:&[SourceTarget])->layer_core::Artwork {
@@ -323,6 +325,7 @@ impl SnapshotRenderer {
         }
         control.check()?;
         let mut renderer = WgpuRasterizer::native_capture_on_factory(gpu.factory.clone(), gpu.device.clone(), color)?;
+        renderer.prepare_capture_memory(view, extent);
         if let Some(native) = renderer.native_edit.as_mut() { native.color_cache_bytes = 0; }
         #[cfg(target_arch = "wasm32")]
         if let Some(encoder) = gpu.encoder.clone() { renderer.set_browser_raster_encoder(encoder); }

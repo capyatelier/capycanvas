@@ -1,5 +1,5 @@
 use super::*;
-use layer_core::{package::{session_transfer::{PreparedSessionTransfer,SessionTransferDescriptor,SessionTransferReceiver},session::{EditorCapture,SessionMetadata},ByteRange,ByteSource,ImmutableBacking,RangeState,MAX_RANGE_BYTES},ProjectLimits};
+use layer_core::{package::{session_transfer::{PreparedSessionTransfer,SessionTransferDescriptor,SessionTransferReceiver,SessionTransferCache},session::{EditorCapture,SessionMetadata},ByteRange,ByteSource,ImmutableBacking,RangeState,MAX_RANGE_BYTES},ProjectLimits};
 use std::{collections::{BTreeMap,BTreeSet},sync::{Arc,atomic::AtomicBool}};
 use wasm_bindgen_futures::{future_to_promise,JsFuture};
 
@@ -152,22 +152,9 @@ impl WebApp {
     }
 }
 
-struct CachedTransfer {prepared:PreparedSessionTransfer,bytes:u64}
 thread_local! {
-    static TRANSFERS:std::cell::RefCell<BTreeMap<String,CachedTransfer>>=const {std::cell::RefCell::new(BTreeMap::new())};
+    static TRANSFERS:std::cell::RefCell<SessionTransferCache>=std::cell::RefCell::new(SessionTransferCache::new(layer_core::MemoryBudget::process()));
     static PENDING_TRANSFER:std::cell::RefCell<BTreeMap<String,SessionTransferReceiver>>=const {std::cell::RefCell::new(BTreeMap::new())};
-}
-fn trim_transfer_cache(current:&str) {
-    TRANSFERS.with(|slot|{
-        let mut cache=slot.borrow_mut();
-        let budget=layer_ui::DocumentBudget::default().inactive_ram as u64;
-        loop {
-            let bytes=cache.values().map(|transfer|transfer.bytes).fold(0u64,u64::saturating_add);
-            if bytes<=budget {break;}
-            let key=cache.keys().find(|key|key.as_str()!=current).cloned().or_else(||cache.keys().next().cloned());
-            let Some(key)=key else {break;};cache.remove(&key);
-        }
-    });
 }
 #[wasm_bindgen]
 pub fn raster_worker_restart_begin(metadata:&str)->Result<JsValue,JsValue> {
@@ -177,7 +164,7 @@ pub fn raster_worker_restart_begin(metadata:&str)->Result<JsValue,JsValue> {
     let receiver=TRANSFERS.with(|cache|{
         let cache=cache.borrow();
         match cache.get(&begin.key) {
-            Some(previous)=>SessionTransferReceiver::new_reusing(envelope.descriptor,ProjectLimits::default(),&previous.prepared),
+            Some(previous)=>SessionTransferReceiver::new_reusing(envelope.descriptor,ProjectLimits::default(),previous),
             None=>SessionTransferReceiver::new(envelope.descriptor,ProjectLimits::default()),
         }
     }).map_err(js)?;
@@ -188,7 +175,7 @@ pub fn raster_worker_restart_begin(metadata:&str)->Result<JsValue,JsValue> {
 #[wasm_bindgen]
 pub fn raster_worker_restart_retain(metadata:&str)->Result<(),JsValue> {
     let retained:BTreeSet<String>=serde_json::from_str(metadata).map_err(js)?;
-    TRANSFERS.with(|cache|cache.borrow_mut().retain(|key,_|retained.contains(key)));Ok(())
+    TRANSFERS.with(|cache|cache.borrow_mut().retain(|key|retained.contains(key)));Ok(())
 }
 
 #[derive(Deserialize)]
@@ -211,10 +198,7 @@ pub async fn raster_worker_restart_write(metadata:&str,buffers:js_sys::Array)->R
     let transfer=receiver.finish().map_err(js)?;
     let opened=transfer.adopt_verified(ProjectLimits::default(),&AtomicBool::new(false)).map_err(js)?;
     layer_ui::SessionRestore::validate_core(&opened).map_err(js)?;
-    let metadata_bytes=(options.project.len() as u64).saturating_mul(2);
-    let bytes=(0..transfer.payload_count()).map(|index|transfer.payload_len(index).unwrap_or(u64::MAX)).fold(metadata_bytes,u64::saturating_add);
-    TRANSFERS.with(|cache|{cache.borrow_mut().insert(options.key.clone(),CachedTransfer{prepared:transfer,bytes});});
-    trim_transfer_cache(&options.key);
+    TRANSFERS.with(|cache|cache.borrow_mut().insert(options.key.clone(),transfer));
     let capture=opened.editor.capture_session(opened.editor.capture(1,Default::default()).map_err(js)?).map_err(js)?;
     let prepared=layer_core::package::session::PreparedSession::prepare(&capture,opened.metadata,&AtomicBool::new(false)).map_err(js)?;
     let mut ids=Vec::new();let mut resources=Vec::new();let result_buffers=js_sys::Array::new();
@@ -288,7 +272,7 @@ pub async fn raster_worker_restart_open(checkpoint:&str,buffers:js_sys::Array)->
         segments.insert(offset,resource_blocks);
     }
     let backing=ImmutableBacking::new(Arc::new(Pack{segments,length})).map_err(js)?;
-    let opened=layer_core::package::session::open_parts(checkpoint.metadata.as_bytes(),backing,ProjectLimits::default(),&AtomicBool::new(false)).map_err(js)?;
+    let opened=layer_core::package::session::open_parts(checkpoint.metadata.as_bytes(),backing,ProjectLimits::for_import(),&AtomicBool::new(false)).map_err(js)?;
     layer_ui::SessionRestore::validate_core(&opened).map_err(js)?;
     let capture=opened.editor.capture_session(opened.editor.capture(1,Default::default()).map_err(js)?).map_err(js)?;
     pack(capture,opened.metadata).await

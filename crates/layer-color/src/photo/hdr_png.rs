@@ -237,7 +237,7 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        let decoded = read_photo(std::io::Cursor::new(&file), DecodeLimits::default()).unwrap();
+        let decoded = read_photo(std::io::Cursor::new(&file), DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
         assert_eq!(decoded.interpretation.depth, SampleDepth::F16);
         let mut raw = vec![0; decoded.row_bytes()];
         decoded.rows().read(0, &mut raw).unwrap();
@@ -286,7 +286,7 @@ mod tests {
         assert!(
             read_photo_detailed_with_cancel(
                 std::io::Cursor::new(file),
-                DecodeLimits::default(),
+                DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30)),
                 &flag
             )
             .is_err()

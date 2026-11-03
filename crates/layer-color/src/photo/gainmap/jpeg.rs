@@ -319,7 +319,7 @@ mod tests {
                 ..Default::default()
             }, guide: &test_guide(EXTENT, rows), matte: None, clip: false },
             GainMapFormat::Jpeg,
-            quality,
+            crate::photo::GainMapEncodeOptions::from_memory_budget(quality, crate::photo::PhotoMemoryBudget::from_limit(1 << 30)),
             &crate::photo::DeliveryMetadata::resolution(Some(layer_core::ImageResolution::ppi(300))),
             &AtomicBool::new(false),
             rows,
@@ -355,7 +355,7 @@ mod tests {
         for quality in [35, 90, 100] {
             for exposure in [0., -2.] {
                 let bytes = encoded(quality, exposure);
-                let source = read_photo(std::io::Cursor::new(&bytes), Default::default()).unwrap();
+                let source = read_photo(std::io::Cursor::new(&bytes), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
                 assert!(source.resolution.is_some());
                 assert_hdr(source);
                 for namespace in [
@@ -365,7 +365,7 @@ mod tests {
                     let mut legacy = bytes.clone();
                     hide_namespace(&mut legacy, namespace);
                     assert_hdr(
-                        read_photo(std::io::Cursor::new(legacy), Default::default()).unwrap(),
+                        read_photo(std::io::Cursor::new(legacy), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap(),
                     );
                 }
             }
@@ -375,7 +375,7 @@ mod tests {
         let (_, h0, s0, _) = preview(
             GainMapRender { extent: EXTENT, space: RgbSpace::Srgb, rendition: Default::default(), guide: &guide, matte: None, clip: true },
             EXTENT,
-            90,
+            crate::photo::GainMapEncodeOptions::from_memory_budget(90, crate::photo::PhotoMemoryBudget::from_limit(1 << 30)),
             &c,
             rows,
         )
@@ -386,7 +386,7 @@ mod tests {
                 ..Default::default()
             }, guide: &guide, matte: None, clip: true },
             EXTENT,
-            90,
+            crate::photo::GainMapEncodeOptions::from_memory_budget(90, crate::photo::PhotoMemoryBudget::from_limit(1 << 30)),
             &c,
             rows,
         )
@@ -407,7 +407,7 @@ mod tests {
                 std::io::sink(),
                 GainMapRender { extent: [16, 16], space: RgbSpace::Srgb, rendition: Default::default(), guide: &guide, matte, clip: false },
                 GainMapFormat::Jpeg,
-                90,
+                crate::photo::GainMapEncodeOptions::from_memory_budget(90, crate::photo::PhotoMemoryBudget::from_limit(1 << 30)),
                 &Default::default(),
                 c,
                 transparent,
@@ -424,15 +424,15 @@ mod tests {
         let bytes = encoded(90, 0.);
         let limits = DecodeLimits {
             codec_bytes: 1024,
-            ..Default::default()
+            ..crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))
         };
         assert!(read(&bytes, bytes.len(), limits, &c).is_err());
         for len in [0, 2, 90, bytes.len() / 2, bytes.len() - 1] {
-            assert!(read(&bytes[..len], len, Default::default(), &c).is_err());
+            assert!(read(&bytes[..len], len, crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30)), &c).is_err());
         }
         let mut invalid_offset = bytes;
         invalid_offset[82..86].copy_from_slice(&u32::MAX.to_be_bytes());
-        assert!(read(&invalid_offset, invalid_offset.len(), Default::default(), &c).is_err());
+        assert!(read(&invalid_offset, invalid_offset.len(), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30)), &c).is_err());
     }
     #[test]
     fn jpeg_grayscale_reduced_gain_maps_and_orientation() {
@@ -454,7 +454,7 @@ mod tests {
         };
         let bytes = super::super::jpeg_container::assemble(&base, &gain, meta, None).unwrap();
         assert_eq!(
-            read_photo(std::io::Cursor::new(&bytes), Default::default())
+            read_photo(std::io::Cursor::new(&bytes), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30)))
                 .unwrap()
                 .extent,
             [8, 12]
@@ -462,7 +462,7 @@ mod tests {
         let pair = Pair::new(
             &bytes,
             bytes.capacity(),
-            Default::default(),
+            crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30)),
             &AtomicBool::new(false),
         )
         .unwrap();

@@ -248,13 +248,13 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
         ((x / 5 + y / 3) % 256) as u8, 255,
     ])).into()));
     let effect = effect_occurrence(&mut doc, EffectInstance::new(crate::tests::fixture("threshold").program()), "Resident native Threshold");
-    let mut cached = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut cached = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
     cached.test.exact_display = true;
     let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap(); exact.test.reference = true;
-    cached.native_edit.as_mut().unwrap().display_complete_bytes = if admitted { u64::MAX } else { 0 };
     if preload {
         let mut loaded = packet(doc.scene(), extent);
         loaded.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+        cached.begin_frame_memory(loaded);
         submit_published(&mut cached, loaded);
         for _ in 0..32 {
             if !cached.has_pending_work() { break; }
@@ -283,6 +283,8 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
             frame.view.document_to_surface = [0.25, 0., 0., 0.25, -(extent[0] as f32-305.) * 0.25, -410. * 0.25];
         }
         let command_passes = cached.metrics.command_passes;
+        if admitted { cached.begin_frame_memory(frame); }
+        else { crate::memory::memory_tests::scene_frame_with_budget(&mut cached, frame, 64 << 20); }
         submit_published(&mut cached, frame);
         let command_passes = cached.metrics.command_passes - command_passes;
         submit_published(&mut exact, packet(doc.scene(), extent));
@@ -335,6 +337,7 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
     if !admitted {
         let mut frame=packet(doc.scene(),extent);frame.composite_all=false;
         frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
+        crate::memory::memory_tests::scene_frame_with_budget(&mut cached, frame, 64 << 20);
         submit_published(&mut cached, frame);submit_published(&mut exact, frame);
         let strip=cached.scale_display.as_ref().unwrap().exact_tile.as_ref().unwrap().texture.clone();
         for positions in [[[73.,67.],[4117.,613.]],[[4117.,613.],[73.,67.]]] {

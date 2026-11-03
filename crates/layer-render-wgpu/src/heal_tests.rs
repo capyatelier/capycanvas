@@ -100,7 +100,10 @@ fn spot_healing_batches_resident_candidates_across_pages() {
             [600. + step as f32 * 40., 450. + step as f32 * 8.], SampleFlags::PRIMARY));
     }
     for page in &mut engine.backend_mut().paint_layers.iter_mut().find(|l| l.id == TARGET).unwrap().pages {
-        page.discard_inactive();
+        if let Some(secondary) = page.secondary.take() {
+            if page.active_secondary { page.primary = secondary; page.primary_needs_clear = false; }
+            page.active_secondary = false;
+        }
     }
     let before = engine.backend().metrics.command_passes;
     draw(&mut engine, &mut input, pen(21, PenPhase::Up, [1360., 602.], SampleFlags::PRIMARY));

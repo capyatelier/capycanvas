@@ -173,12 +173,12 @@ fn native_application_file_launch() {
     layer_color::photo::write_jpeg(
         std::fs::File::create(&photo).unwrap(),
         &source.finish().unwrap(),
-        95,
+        layer_color::photo::JpegEncodeOptions::from_memory_budget(95, layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes())),
     )
     .unwrap();
     let expected = layer_color::photo::read_photo(
         std::io::BufReader::new(std::fs::File::open(&photo).unwrap()),
-        Default::default(),
+        layer_ui::photo_decode_limits(),
     )
     .unwrap();
     let master = directory.join("Master drawing.capy");

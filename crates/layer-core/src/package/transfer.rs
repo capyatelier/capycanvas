@@ -64,7 +64,7 @@ impl TransferPayload {
         })
     }
 }
-pub struct PreparedTransfer {descriptor:TransferDescriptor,payloads:Vec<TransferPayload>,pub(crate) trusted_programs:super::TrustedPrograms}
+pub struct PreparedTransfer {memory:std::sync::OnceLock<crate::DocumentMemory>,admission:Option<crate::MemoryReservation>,descriptor:TransferDescriptor,payloads:Vec<TransferPayload>,pub(crate) trusted_programs:super::TrustedPrograms}
 fn active(cancel:&AtomicBool)->Result<(),String>{if cancel.load(Ordering::Relaxed){Err("Transfer cancelled".into())}else{Ok(())}}
 fn manifest(descriptor:&TransferDescriptor,limits:ProjectLimits)->Result<Manifest,String>{
     if crate::json_len(descriptor)>limits.metadata_bytes as usize {return Err("Transfer metadata exceeds admission".into());}
@@ -74,6 +74,10 @@ fn manifest(descriptor:&TransferDescriptor,limits:ProjectLimits)->Result<Manifes
     }
 }
 impl PreparedTransfer {
+    pub(crate) fn cache_inventory(&self)->crate::raster_storage::RetainedTiles {
+        self.memory.get().map(crate::DocumentMemory::cache_inventory).unwrap_or_default()
+    }
+
     pub fn capture(capture:&ArtworkCapture,cancel:&AtomicBool)->Result<Self,String>{
         Self::capture_with_selection(capture,&None,cancel)
     }
@@ -140,7 +144,7 @@ impl PreparedTransfer {
         if !metadata.is_empty(){value["metadata"]=Value::Object(metadata);}
         let descriptor=TransferDescriptor {manifest:value,layout:TransferLayout::capture(art),checkpoint:capture.checkpoint,working_selection,lengths:payloads.iter().map(TransferPayload::len).collect(),resources:verification,selections,retained_resources,private_resources:BTreeMap::new()};
         manifest(&descriptor,ProjectLimits::default())?;
-        Ok(Self {descriptor,payloads,trusted_programs})
+        Ok(Self {memory:capture.memory.clone().map(std::sync::OnceLock::from).unwrap_or_default(),admission:None,descriptor,payloads,trusted_programs})
     }
     pub(crate) fn append_private_resource(&mut self,resource:Arc<OpaqueResource>)->Result<(),String>{
         if self.descriptor.private_resources.contains_key(&resource.id){return Err("Duplicate private transfer resource".into());}
@@ -216,7 +220,7 @@ impl PreparedTransfer {
     fn adopt_verified_with_retention<T>(&self,limits:ProjectLimits,cancel:&AtomicBool,retained:bool,programs:&super::TrustedPrograms,additional:impl FnOnce(&Artwork,&mut ResourceReader<'_>)->Result<T,String>)->Result<(ArtworkCapture,Option<crate::Selection>,T),String>{
         active(cancel)?;let manifest=manifest(&self.descriptor,limits)?;
         let empty:Arc<[u8]>=Arc::from([]);let backing=ImmutableBacking::new(Arc::new(empty)).map_err(str::to_string)?;
-        let mut reader=ResourceReader::new(&manifest,&backing,cancel,limits);reader.private=true;reader.trusted_programs=programs.clone();reader.require_verified();
+        let mut reader=ResourceReader::new(&manifest,&backing,cancel,limits);reader.admission=self.admission.clone().or(reader.admission);reader.private=true;reader.trusted_programs=programs.clone();reader.require_verified();
         if manifest.resources.len()!=self.descriptor.resources.len()||self.descriptor.checkpoint.document!=manifest.document{return Err("Transfer identity inventory mismatch".into());}
         let mut decoded=0u64;
         let slot_counts:BTreeMap<PortableId,usize>=manifest.objects.values().filter(|record|record["type"]=="capy.vector-object/1").flat_map(|record|{
@@ -255,7 +259,7 @@ impl PreparedTransfer {
             let pixels=Arc::new(SelectionPixels::from_verified_words(selection.extent,selection.bounds,selection.bytes,words,selection.chunks.clone(),cached)?);
             reader.selections.insert((selection.extent,selection.bounds,selection.bytes,selection.chunks.clone()),pixels);
         }
-        if decoded>limits.raster_bytes.saturating_add(if retained {crate::history_budget::BYTE_BUDGET as u64}else{0}){return Err("Transfer resources exceed decoded memory admission".into());}
+        if decoded>limits.raster_bytes.saturating_add(if retained {crate::history_budget::BYTE_BUDGET as u64}else{0}){return Err(crate::MEMORY_BUDGET_EXCEEDED.into());}
         let opaque=self.descriptor.resources.iter().filter_map(|(id,state)|if let VerifiedResource::Opaque{payload}=state{Some((*id,*payload))}else{None})
             .chain(self.descriptor.retained_resources.iter().map(|(id,payload)|(*id,*payload)));
         for (id,payload) in opaque {
@@ -276,11 +280,11 @@ impl PreparedTransfer {
         active(cancel)?;
         #[cfg_attr(target_arch="wasm32",expect(clippy::arc_with_non_send_sync,reason="Shared artwork ownership includes single-threaded Wasm Liquify fields"))]
         let artwork=Arc::new(artwork);
-        Ok((ArtworkCapture{artwork,checkpoint:self.descriptor.checkpoint},working_selection,extra))
+        Ok((ArtworkCapture{artwork,checkpoint:self.descriptor.checkpoint,memory:Some(self.memory.get_or_init(||crate::DocumentMemory::new(crate::MemoryBudget::process(),reader.admission.clone())).clone())},working_selection,extra))
     }
 }
 enum PayloadBuffer {Bytes(Arc<[MaybeUninit<u8>]>),Words(Arc<[MaybeUninit<u32>]>),Ready(TransferPayload) }
-pub struct TransferReceiver {descriptor:TransferDescriptor,buffers:Vec<PayloadBuffer>,positions:Vec<u64>}
+pub struct TransferReceiver {admission:crate::MemoryReservation,descriptor:TransferDescriptor,buffers:Vec<PayloadBuffer>,positions:Vec<u64>}
 impl TransferReceiver {
     pub fn new(descriptor:TransferDescriptor,limits:ProjectLimits)->Result<Self,String>{
         Self::new_with_reuse(descriptor,limits,None)
@@ -303,7 +307,7 @@ impl TransferReceiver {
             ||bytes.union(&words).any(|index|*index>=descriptor.lengths.len()) {return Err("Unindexed or conflicting transfer payloads".into());}
         let mut reuse=BTreeMap::new();
         if let Some(previous)=previous {
-            let candidate=PreparedTransfer {descriptor:descriptor.clone(),payloads:Vec::new(),trusted_programs:Default::default()};
+            let candidate=PreparedTransfer {memory:std::sync::OnceLock::new(),admission:None,descriptor:descriptor.clone(),payloads:Vec::new(),trusted_programs:Default::default()};
             let keys=candidate.payload_keys()?;let old=previous.payload_keys()?;
             for (key,index) in keys {if let Some(before)=old.get(&key) {reuse.insert(index,previous.payloads[*before].clone());}}
         }
@@ -312,14 +316,16 @@ impl TransferReceiver {
         }
         if descriptor.retained_resources.keys().any(|id|!descriptor.resources.contains_key(id)){return Err("Unknown retained transfer resource".into());}
         let total=descriptor.lengths.iter().try_fold(0u64,|a,b|a.checked_add(*b).ok_or("Transfer length overflow"))?;
-        if total>limits.raster_bytes.saturating_add(limits.asset_bytes).saturating_mul(2){return Err("Transfer exceeds memory admission".into());}
+        if total>limits.raster_bytes.saturating_add(limits.asset_bytes).saturating_mul(2){return Err(crate::MEMORY_BUDGET_EXCEEDED.into());}
+        let allocated=descriptor.lengths.iter().enumerate().filter(|(i,_)|!reuse.contains_key(i)).fold(0u64,|n,(_,bytes)|n.saturating_add(*bytes));
+        let admission=crate::MemoryBudget::process().admit_import(allocated).ok_or(crate::MEMORY_BUDGET_EXCEEDED)?;
         let buffers=descriptor.lengths.iter().enumerate().map(|(i,length)|{
             if let Some(payload)=reuse.remove(&i) {return Ok(PayloadBuffer::Ready(payload));}
             let length=usize::try_from(*length).map_err(|_|"Transfer allocation overflow")?;
             if words.contains(&i){if length%4!=0{return Err("Misaligned selection words".into());}Ok(PayloadBuffer::Words(Arc::<[u32]>::new_uninit_slice(length/4)))}
             else{Ok(PayloadBuffer::Bytes(Arc::<[u8]>::new_uninit_slice(length)))}
         }).collect::<Result<Vec<_>,String>>()?;
-        let positions=buffers.iter().enumerate().map(|(i,buffer)|if matches!(buffer,PayloadBuffer::Ready(_)){descriptor.lengths[i]}else{0}).collect();Ok(Self{descriptor,buffers,positions})
+        let positions=buffers.iter().enumerate().map(|(i,buffer)|if matches!(buffer,PayloadBuffer::Ready(_)){descriptor.lengths[i]}else{0}).collect();Ok(Self{admission,descriptor,buffers,positions})
     }
     pub fn missing_payloads(&self)->Vec<usize>{self.positions.iter().zip(&self.descriptor.lengths).enumerate().filter_map(|(i,(position,length))|(position!=length).then_some(i)).collect()}
     pub fn push_chunk(&mut self,index:usize,bytes:&[u8])->Result<(),String>{
@@ -339,7 +345,7 @@ impl TransferReceiver {
             PayloadBuffer::Bytes(bytes)=>TransferPayload::Bytes(unsafe{bytes.assume_init()}),
             PayloadBuffer::Words(words)=>TransferPayload::Words(unsafe{words.assume_init()}),
         }).collect();
-        Ok(PreparedTransfer{descriptor:self.descriptor,payloads,trusted_programs:Default::default()})
+        Ok(PreparedTransfer{memory:std::sync::OnceLock::new(),admission:Some(self.admission),descriptor:self.descriptor,payloads,trusted_programs:Default::default()})
     }
 }
 
@@ -367,6 +373,30 @@ mod tests {
             let count=(length-offset).min(MAX_RANGE_BYTES as u64) as usize;
             receiver.push_chunk(index,&prepared.read_chunk(index,offset,count).unwrap()).unwrap();offset+=count as u64;
         }}receiver.finish().unwrap()
+    }
+    #[test]
+    fn received_transfer_cache_keeps_its_adopted_owner_through_replacement() {
+        let cancel=AtomicBool::new(false);
+        let outgoing=PreparedTransfer::capture(&capture(),&cancel).unwrap();
+        let previous=receive(&outgoing);
+        let editor=Editor::new(previous.adopt_verified(ProjectLimits::default(),&cancel).unwrap().into_document().unwrap());
+        let old=Arc::downgrade(&editor.document().memory.owner);
+        assert!(editor.document().memory.initialized());
+        assert!(editor.retained_tiles().resident_bytes()>0);
+        drop(editor);
+        assert!(old.upgrade().is_some(),"cached transfer must retain its adopted physical owner");
+        let receiver=TransferReceiver::new_reusing(previous.descriptor().clone(),ProjectLimits::default(),&previous).unwrap();
+        assert!(receiver.missing_payloads().is_empty());
+        let replacement=receiver.finish().unwrap();
+        let editor=Editor::new(replacement.adopt_verified(ProjectLimits::default(),&cancel).unwrap().into_document().unwrap());
+        let current=Arc::downgrade(&editor.document().memory.owner);
+        assert!(editor.document().memory.initialized());
+        assert!(editor.retained_tiles().resident_bytes()>0);
+        drop(editor);drop(previous);
+        assert!(old.upgrade().is_none());
+        assert!(current.upgrade().is_some(),"replacement retains reused payload charge after old cache drops");
+        drop(replacement);
+        assert!(current.upgrade().is_none());
     }
     #[test]
     fn capture_rejects_image_resource_identity_collisions_before_publication() {

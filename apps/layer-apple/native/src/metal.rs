@@ -393,6 +393,7 @@ impl MetalHost {
         costs[3] = clock.elapsed().as_nanos() as u64 - costs[..3].iter().sum::<u64>();
         gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
         costs[4] = clock.elapsed().as_nanos() as u64 - costs[..4].iter().sum::<u64>();
+        host.session.renderer_mut().0.as_mut().unwrap().after_present();
         let revision = Some(self.glass.panel_revision());
         if self.presented_panel_revision != revision {
             self.presented_panel_revision = revision;

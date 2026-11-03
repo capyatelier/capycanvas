@@ -109,6 +109,7 @@ pub fn format_names() -> String {
 /// preparation must disclose that choice in the resulting image/layer name.
 pub struct DecodedPhoto {
     pub source: SourceImage,
+    pub reservation: Option<layer_core::MemoryReservation>,
     pub metadata: layer_core::PhotoMetadata,
     pub first_frame: bool,
     pub primary_image: bool,
@@ -129,11 +130,6 @@ pub struct DecodeLimits {
     pub source_bytes: usize,
     pub codec_bytes: usize,
     pub dimension: u32,
-}
-impl Default for DecodeLimits {
-    fn default() -> Self {
-        Self::from_memory_budget(PhotoMemoryBudget::current())
-    }
 }
 impl DecodeLimits {
     pub fn from_memory_budget(budget: PhotoMemoryBudget) -> Self {
@@ -212,6 +208,7 @@ fn read_photo_impl(
         Err(format!("Supported photo formats: {}", format_names()))
     }?;
     Ok(DecodedPhoto {
+        reservation: None,
         source,
         metadata,
         first_frame: false,

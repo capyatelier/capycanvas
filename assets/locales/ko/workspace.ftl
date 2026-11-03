@@ -708,3 +708,13 @@ workspace-launch-window-size = 시작 창 크기
 workspace-phone-tool-limit = 휴대폰 도구 모음에는 도구를 최대 10개까지 넣을 수 있습니다.
 
 workspace-reset-phone-confirm = 이 작업 영역의 초기 휴대폰 도구 모음을 복원합니다. { $menu } → { $undo }로 복원을 되돌릴 수 있습니다.
+
+diagnostics-budget-limit = 메모리 한도
+diagnostics-budget-physical = 추적 메모리
+diagnostics-budget-pinned = 고정 메모리
+diagnostics-budget-debt = 메모리 초과
+diagnostics-budget-pair = RAM { $ram } MiB · GPU { $gpu } MiB
+diagnostics-budget-limit-description = 프로세스 RAM 할당량과 장치 할당량의 합계입니다. 공유 GPU 메모리는 RAM과 겹칠 수 있으므로 더하지 마세요.
+diagnostics-budget-physical-description = 큰 소유 단위가 보고한 물리 바이트이며 운영 체제나 드라이버의 전체 사용량이 아닙니다. 공유 GPU 메모리는 RAM과 겹칠 수 있습니다.
+diagnostics-budget-pinned-description = 진행 중인 작업과 가져오기 예약 등 해제할 수 없는 바이트입니다. 공유 GPU 메모리는 RAM과 겹칠 수 있습니다.
+diagnostics-budget-debt-description = RAM 할당량을 초과한 고정 바이트와 각 장치 할당량 초과분의 합계입니다. 기존 그림은 유지됩니다.

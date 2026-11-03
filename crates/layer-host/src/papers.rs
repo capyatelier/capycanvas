@@ -165,10 +165,11 @@ impl PaperTask {
             Some(PaperRequest::Load { id }) => PaperResult::Loaded(id.clone(), canonical_source(id, load(&self.directory, id)?, retained)?),
             Some(PaperRequest::Import { layer }) => {
                 let (file, name) = file.ok_or_else(|| failed(PaperLibraryError::Unsupported))?;
-                let mut images = layer_ui::ImageImportBatch::new(Default::default(), layer_core::color::RgbSpace::ProPhoto, Default::default());
+                let mut images = layer_ui::ImageImportBatch::new(Default::default(), layer_core::color::RgbSpace::ProPhoto, layer_ui::photo_decode_limits());
                 images.read_with_decoder(layer_core::Cancellable { inner: file, cancelled: stopped }, name, cancelled, |mut input, limits, cancelled| decode(&mut input, limits, cancelled)).map_err(|e| e.to_string())?;
-                let (_, source) = images.take_sources(false)?.into_iter().next().ok_or_else(|| failed(PaperLibraryError::Unsupported))?;
-                let (id, image, entries) = import(&self.directory, &source, name, &stopped).map_err(failed)?;
+                let prepared = images.take_sources(false)?;
+                let (_, source) = prepared.first().ok_or_else(|| failed(PaperLibraryError::Unsupported))?;
+                let (id, image, entries) = import(&self.directory, source, name, &stopped).map_err(failed)?;
                 PaperResult::Imported(*layer, id.clone(), canonical_source(&id, image, retained)?, entries)
             }
             Some(PaperRequest::Add { name, .. }) => {

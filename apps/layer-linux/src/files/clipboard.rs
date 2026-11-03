@@ -112,7 +112,7 @@ pub(super) async fn paste(w: &Rc<Workspace>, mode: PasteMode) -> Result<bool, St
             let progress = progress(w, &layer_ui::DocumentRequest::Paste { mode }, large, &control);
             let worker = control.clone();
             let result = gio::spawn_blocking(move || {
-                clip.convert_layers(color, layer_color::photo::PhotoMemoryBudget::current().encode_bytes, || worker.is_cancelled())?;
+                clip.convert_layers(color, layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes()).encode_bytes, || worker.is_cancelled())?;
                 Ok::<_, String>(clip)
             }).await.map_err(|_| "The paste failed");
             close_progress(progress, &control);

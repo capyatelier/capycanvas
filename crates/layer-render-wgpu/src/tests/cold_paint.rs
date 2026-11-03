@@ -53,12 +53,81 @@ fn packet(document: &Document, all: bool) -> FramePacket<'_> {
         ..crate::test_support::packet(document.scene(), EXTENT)
     }
 }
-fn renderer(document: &Document, limit: u64) -> WgpuRasterizer { renderer_with(document, limit, packet(document, true)) }
-fn renderer_with(document: &Document, limit: u64, frame: FramePacket<'_>) -> WgpuRasterizer {
-    let mut r = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
-    r.native_edit.as_mut().unwrap().color_cache_bytes = limit;
-    crate::test_support::submit_settled(&mut r, frame);
+struct ColdRenderer {
+    pressure: bool,
+    renderer: WgpuRasterizer,
+}
+impl std::ops::Deref for ColdRenderer {
+    type Target = WgpuRasterizer;
+    fn deref(&self) -> &Self::Target { &self.renderer }
+}
+impl std::ops::DerefMut for ColdRenderer {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.renderer }
+}
+impl ColdRenderer {
+    fn new(color: DocumentColor) -> Self {
+        let renderer = crate::memory::memory_tests::renderer(color, layer_core::DeviceMemoryFacts {
+            budget_bytes: Some(4 << 30), unified: true, ..Default::default()
+        }).unwrap();
+        Self { pressure: false, renderer }
+    }
+    fn begin_pressure(&mut self) {
+        complete(&self.renderer);
+        crate::memory::memory_tests::cold_color_pressure(&mut self.renderer);
+        self.pressure = true;
+        self.idle();
+    }
+    fn idle(&mut self) {
+        if !self.pressure { return; }
+        complete(&self.renderer);
+        self.renderer.publish_memory(true);
+        self.factory.memory_budget().flush_reports();
+        self.renderer.refresh_memory_limits();
+        self.renderer.shader_idle(true, true);
+        self.renderer.after_present();
+        complete(&self.renderer);
+        trim_cache(&mut self.renderer, &[], &[]);
+    }
+    fn assert_cold_capacity(&self) {
+        assert_eq!(self.native_edit.as_ref().unwrap().color_cache_bytes, 0,
+            "headroom={}, pinned paint={}", self.factory.memory_budget().import_headroom_bytes(), self.pinned_paint_bytes());
+    }
+    fn set_total_color_cache(&mut self, bytes: u64) {
+        let native = self.native_edit.as_mut().unwrap();
+        native.color_cache_bytes = bytes.saturating_sub(native.color_cache_pinned_bytes);
+    }
+    fn submit(&mut self, frame: FramePacket<'_>) -> Result<(), GpuRasterError> {
+        crate::test_support::submit_published(&mut self.renderer, frame);
+        if frame.dabs.is_empty() && frame.dab_batches.is_empty() && self.transform_preview.is_none() { self.idle(); }
+        Ok(())
+    }
+}
+fn renderer(document: &Document, limit: u64) -> ColdRenderer { renderer_with(document, limit, packet(document, true)) }
+fn renderer_with(document: &Document, limit: u64, frame: FramePacket<'_>) -> ColdRenderer {
+    let mut r = ColdRenderer::new(document.composition().color);
+    crate::memory::memory_tests::declare_source_budget(&mut r.renderer, frame, 64, 16 << 20, 44 << 20);
+    crate::test_support::submit_settled(&mut r.renderer, frame);
+    if limit == 0 {
+        r.begin_pressure();
+        settle(&mut r, FramePacket { composite_all: true, ..frame });
+        r.assert_cold_capacity();
+    }
     r
+}
+fn settle(r: &mut ColdRenderer, frame: FramePacket<'_>) {
+    crate::test_support::submit_settled(&mut r.renderer, frame);
+    if frame.dabs.is_empty() && frame.dab_batches.is_empty() && r.transform_preview.is_none() { r.idle(); }
+}
+fn trim_cache(r: &mut WgpuRasterizer, batches: &[DabBatch], tiles: &[Vec<BrushTile>]) {
+    complete(r);
+    let surfaces = r.paint_layers.iter().flat_map(|layer| &layer.pages).map(|page| 1 + usize::from(page.secondary.is_some())).sum::<usize>();
+    for _ in 0..surfaces.div_ceil(SOURCE_SLOTS) + 1 {
+        let retired = r.trim_native_color_cache(batches, tiles);
+        assert!(retired.len() <= SOURCE_SLOTS);
+        if retired.is_empty() { break; }
+        drop(retired);
+    }
+    r.refresh_storage_metrics();
 }
 fn image(r: &WgpuRasterizer) -> Vec<u8> {
     crate::layer_tests::page_bytes(r, crate::test_support::document_texture(r))
@@ -72,9 +141,7 @@ fn close(a: &[u8], b: &[u8]) {
     }
 }
 fn thumbnail(r: &mut WgpuRasterizer, id: SourceTarget) -> Vec<u8> {
-    r.request_thumbnail(7, ThumbnailTarget::Source(id)).unwrap();
-    complete(r);
-    r.take_thumbnail().unwrap().unwrap().bytes
+    crate::test_support::thumbnail(r, 7, ThumbnailTarget::Source(id))
 }
 fn sample(
     r: &mut WgpuRasterizer,
@@ -82,17 +149,9 @@ fn sample(
     position: [u32; 2],
     area: ColorSampleArea,
 ) -> [f32; 4] {
-    assert!(
-        r.request_color_sample(ColorSampleRequest {
-            request_id: 8,
-            source: ColorSampleSource::Source(id),
-            position,
-            area
-        })
-        .unwrap()
-    );
-    complete(r);
-    r.take_color_sample().unwrap().unwrap().rgba
+    crate::test_support::color_sample(r, ColorSampleRequest {
+        request_id: 8, source: ColorSampleSource::Source(id), position, area,
+    }).rgba
 }
 fn backing(root: &RasterRevision) -> std::collections::BTreeMap<TileKey, Vec<u8>> {
     root.wait_data()
@@ -153,13 +212,37 @@ fn stale_thumbnail_batches_cancel_without_publishing_and_leave_live_artwork_avai
 }
 
 #[test]
+fn drained_headroom_keeps_a_decoded_batch_for_native_thumbnails() {
+    let document = document(DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 });
+    let id = target(&document);
+    let mut resident = renderer(&document, RESIDENT);
+    let expected = thumbnail(&mut resident, id);
+    let mut cold = renderer(&document, 0);
+    let budget = cold.factory.memory_budget().clone();
+    let _import = budget.admit_import(budget.import_headroom_bytes()).unwrap();
+    cold.renderer.refresh_memory_limits();
+    cold.idle();
+    cold.publish_memory(true);
+    budget.flush_reports();
+    cold.renderer.refresh_memory_limits();
+    assert_eq!(cold.source_tiles.borrow().admitted_bytes()[0], (SOURCE_SLOTS as u64 + 4) * scene::sources::FLOAT_TILE_BYTES);
+    assert!(cold.source_tiles.borrow().free_slots() >= SOURCE_SLOTS + 4);
+    assert_eq!(thumbnail(&mut cold, id), expected);
+    assert_eq!(cold.metrics.thumbnail_pages, 33);
+    assert!(cold.paint_layers[0].pages.is_empty());
+}
+
+#[test]
 fn native_thumbnail_preparation_reduces_pages_in_bounded_batches() {
     let p = document(DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 });
     let id = target(&p);
     let mut cold = renderer(&p, 0);
     let (polls, reduced) = polls_until_ready(&mut cold, id);
-    assert_eq!((polls, reduced), (33usize.div_ceil(crate::thumbnails::BATCH_PAGES), 33), "each backed page is reduced once, a batch per poll");
+    assert_eq!((polls, reduced), (33usize.div_ceil(crate::thumbnails::BATCH_PAGES), 33),
+        "each backed page is reduced once, a batch per poll");
     let mut resident = renderer(&p, RESIDENT);
+    assert_eq!(polls_until_ready(&mut resident, id), (33usize.div_ceil(crate::thumbnails::BATCH_PAGES), 33),
+        "resident pages reduce one bounded batch per poll");
     assert_eq!(thumbnail(&mut cold, id), thumbnail(&mut resident, id));
 }
 
@@ -191,8 +274,7 @@ fn cold_native_color_composition_sampling_and_thumbnails_match_resident_tiles() 
                 }
             }
             let region = |r: &mut WgpuRasterizer| {
-                assert!(
-                    r.request_region(layer_render::RegionRequest { fill_areas: None, colour_mode: Default::default(), fill: None, reference_count: None, paper: None,
+                crate::test_support::receive_request(r, layer_render::RegionRequest { fill_areas: None, colour_mode: Default::default(), fill: None, reference_count: None, paper: None,
                         enclosure: None, contiguous: true,
                         selection: None,
                         request_id: 9,
@@ -201,11 +283,7 @@ fn cold_native_color_composition_sampling_and_thumbnails_match_resident_tiles() 
                         tolerance: 0.,
                         refinement: Default::default(),
                         limit: None,
-                    }.into())
-                    .unwrap()
-                );
-                complete(r);
-                crate::test_support::mask_result(r.take_region().unwrap().unwrap()).pixels
+                    }).pixels
             };
             assert_eq!(
                 region(&mut cold),
@@ -274,7 +352,7 @@ fn cold_native_paint_rehydrates_only_damage_and_keeps_other_tiles_in_saved_revis
     assert_eq!(r.paint_layers[0].pages.len(), 1);
     let changed = image(&r);
     assert_ne!(changed, before);
-    crate::test_support::submit_settled(&mut r, packet(&p, true));
+    settle(&mut r, packet(&p, true));
     assert!(
         r.paint_layers[0].pages.is_empty(),
         "completed color may leave the mutable cache"
@@ -285,11 +363,11 @@ fn cold_native_paint_rehydrates_only_damage_and_keeps_other_tiles_in_saved_revis
     let replacement = renderer(&reopened, 0);
     close(&image(&replacement), &changed);
     paint_mut(&mut p).raster = original;
-    crate::test_support::submit_settled(&mut r, packet(&p, false));
+    settle(&mut r, packet(&p, false));
     assert_eq!(backing(&paint(&p).raster), original_bytes);
     close(&image(&r), &before);
     paint_mut(&mut p).raster = edited;
-    crate::test_support::submit_settled(&mut r, packet(&p, false));
+    settle(&mut r, packet(&p, false));
     close(&image(&r), &changed);
 }
 
@@ -313,13 +391,13 @@ fn cold_native_transform_snapshots_keep_original_tiles_through_preview_and_cance
         };
         for r in [&mut resident, &mut cold] {
             r.set_transform_preview(Some(&preview)).unwrap();
-            r.submit(packet(&p, false)).unwrap();
+            settle(r, packet(&p, false));
         }
         close(&image(&cold), &image(&resident));
     }
     for r in [&mut resident, &mut cold] {
         r.set_transform_preview(None).unwrap();
-        r.submit(packet(&p, false)).unwrap();
+        settle(r, packet(&p, false));
     }
     close(&image(&cold), &original);
     close(&image(&cold), &image(&resident));
@@ -412,7 +490,6 @@ fn cold_native_neighborhood_brushes_keep_prediction_and_terminal_backing() {
             )
         };
         for phase in 0..4 {
-            eprintln!("cold neighborhood {execution:?} phase={phase}");
             if phase == 1 {
                 batch.kind = DabBatchKind::Preview;
                 batch.stroke_start = false;
@@ -446,7 +523,6 @@ fn cold_native_neighborhood_brushes_keep_prediction_and_terminal_backing() {
         );
         cold.submit(packet(&b, true)).unwrap();
         resident.submit(packet(&a, true)).unwrap();
-        eprintln!("cold neighborhood {execution:?} after eviction");
         assert!(cold.paint_layers[0].pages.is_empty());
         close(&image(&cold), &image(&resident));
     }
@@ -474,9 +550,9 @@ fn native_cache_keeps_prepared_brush_pages() {
         assert!(bounded.raster_dependencies_ready(frame, None));
         let required = bounded.restore_preflight.as_ref().unwrap().dependencies().to_vec();
         assert!(!required.is_empty());
-        bounded.native_edit.as_mut().unwrap().color_cache_bytes = 0;
+        bounded.begin_pressure();
         let tiles = brush_tiles::plan_packet(frame, |target| b.scene().target_extent(target)).unwrap();
-        bounded.trim_native_color_cache(frame.dab_batches, &tiles);
+        trim_cache(&mut bounded, frame.dab_batches, &tiles);
         for (target, coordinates) in &required {
             let layer = bounded.paint_layers.iter().find(|layer| layer.id == *target).unwrap();
             for coordinate in coordinates {
@@ -486,13 +562,14 @@ fn native_cache_keeps_prepared_brush_pages() {
             }
         }
         assert!(bounded.paint_layers[0].pages.len() < resident.paint_layers[0].pages.len());
-        crate::test_support::submit_ready(&mut bounded, frame).unwrap();
-        crate::test_support::submit_ready(&mut resident, FramePacket {scene: a.scene(), ..frame}).unwrap();
+        crate::test_support::submit_published(&mut bounded, frame);
+        crate::test_support::submit_published(&mut resident, FramePacket {scene: a.scene(), ..frame});
         complete(&bounded);
         complete(&resident);
         close(&image(&bounded), &image(&resident));
         bounded.retire_stroke_sources();
-        bounded.trim_native_color_cache(&[], &[]);
+        bounded.idle();
+        trim_cache(&mut bounded, &[], &[]);
         assert!(bounded.paint_layers[0].pages.is_empty());
     }
 }
@@ -519,7 +596,7 @@ fn native_cache_keeps_dither_originals_after_publication_and_revisits() {
             r.submit(FramePacket { dabs: &[dab], dab_batches: std::slice::from_ref(&batch), ..packet(p, false) }).unwrap();
             complete(r);
             paint(p).raster.wait_data().unwrap();
-            r.trim_native_color_cache(&[], &[]);
+            trim_cache(r, &[], &[]);
             assert!(r.paint_layers.iter().flat_map(|l| &l.pages).any(|p| p.stroke_start.is_some()),
                 "published originals survive cache pressure during the same stroke");
         }
@@ -530,7 +607,8 @@ fn native_cache_keeps_dither_originals_after_publication_and_revisits() {
     assert!(bounded.paint_layers.iter().flat_map(|l| &l.pages).all(|p| p.stroke_start.is_none()));
     assert!(bounded.paint_layers.iter().all(|l| l.coverage_pages.is_empty()), "completed Dither exposure no longer occupies stroke scratch");
     assert!(bounded.metrics.paint_state_storage_bytes < state_bytes, "retirement updates scratch accounting");
-    bounded.trim_native_color_cache(&[], &[]);
+    bounded.idle();
+    trim_cache(&mut bounded, &[], &[]);
     assert!(bounded.paint_layers.iter().all(|l| l.pages.is_empty()), "completed originals no longer pin the native cache");
 }
 
@@ -545,10 +623,6 @@ fn native_cache_retires_blend_scratch_before_artwork_and_recreates_stroke_edges(
         let mut resident = renderer(&a, RESIDENT);
         let mut bounded = renderer(&b, RESIDENT);
         let page_count = bounded.paint_layers[0].pages.len();
-        // Enough for the canonical pages and this frame's four blend targets,
-        // but not for scratch retained at the distant previous mark.
-        bounded.native_edit.as_mut().unwrap().color_cache_bytes =
-            (page_count as u64 + 4) * 256 * 256 * 16;
         let mut style = test_style(execution);
         style.wet_mix.wetness = 0.8;
         style.rendering.accumulation = BrushAccumulation::Uniform;
@@ -573,13 +647,17 @@ fn native_cache_retires_blend_scratch_before_artwork_and_recreates_stroke_edges(
                 min: Point { x: x - 32., y: 223. },
                 max: Point { x: x + 32., y: 287. },
             };
+            let frame = FramePacket {
+                dabs: std::slice::from_ref(&dab),
+                dab_batches: std::slice::from_ref(&batch),
+                ..packet(&b, false)
+            };
             for (r, p) in [(&mut resident, &a), (&mut bounded, &b)] {
-                crate::test_support::submit_ready(r, FramePacket {
-                    dabs: &[dab],
-                    dab_batches: std::slice::from_ref(&batch),
-                    ..packet(p, false)
-                }).unwrap();
+                r.submit(FramePacket { scene: p.scene(), ..frame }).unwrap();
             }
+            bounded.set_total_color_cache((page_count as u64 + 4) * 256 * 256 * 16);
+            let tiles = brush_tiles::plan_packet(frame, |target| b.scene().target_extent(target)).unwrap();
+            trim_cache(&mut bounded, frame.dab_batches, &tiles);
             close(&image(&bounded), &image(&resident));
             assert_eq!(bounded.paint_layers[0].pages.len(), page_count,
                 "artwork should survive pressure from disposable blend scratch");
@@ -588,9 +666,9 @@ fn native_cache_retires_blend_scratch_before_artwork_and_recreates_stroke_edges(
         }
         // An idle redraw can retire every companion while the stroke is still
         // active. Pen-up must recreate both distant sets of edge destinations.
-        bounded.native_edit.as_mut().unwrap().color_cache_bytes =
-            page_count as u64 * 256 * 256 * 16;
-        crate::test_support::submit_ready(&mut bounded, packet(&b, false)).unwrap();
+        bounded.submit(packet(&b, false)).unwrap();
+        bounded.set_total_color_cache(page_count as u64 * 256 * 256 * 16);
+        trim_cache(&mut bounded, &[], &[]);
         assert_eq!(bounded.paint_layers[0].pages.len(), page_count);
         assert!(bounded.paint_layers[0].pages.iter().all(|p| p.secondary.is_none()));
         close(&image(&bounded), &image(&resident));
@@ -601,21 +679,25 @@ fn native_cache_retires_blend_scratch_before_artwork_and_recreates_stroke_edges(
         paint_mut(&mut a).raster = RasterRevision::pending();
         paint_mut(&mut b).raster = RasterRevision::pending();
         for (r, p) in [(&mut resident, &a), (&mut bounded, &b)] {
-            crate::test_support::submit_ready(r, FramePacket {
+            r.submit(FramePacket {
                 dab_batches: std::slice::from_ref(&batch),
                 ..packet(p, false)
             }).unwrap();
         }
+        bounded.set_total_color_cache(page_count as u64 * 256 * 256 * 16);
+        trim_cache(&mut bounded, &[], &[]);
         close(&image(&bounded), &image(&resident));
         assert_eq!(backing(&paint(&a).raster), backing(&paint(&b).raster));
-        crate::test_support::submit_ready(&mut bounded, packet(&b, false)).unwrap();
+        bounded.submit(packet(&b, false)).unwrap();
+        bounded.set_total_color_cache(page_count as u64 * 256 * 256 * 16);
+        trim_cache(&mut bounded, &[], &[]);
         assert_eq!(bounded.paint_layers[0].pages.len(), page_count);
         assert!(bounded.paint_layers[0].pages.iter().all(|p| p.secondary.is_none()));
         let edited = paint(&b).raster.clone();
         paint_mut(&mut b).raster = original;
-        crate::test_support::submit_settled(&mut bounded, packet(&b, true));
+        settle(&mut bounded, packet(&b, true));
         paint_mut(&mut b).raster = edited;
-        crate::test_support::submit_settled(&mut bounded, packet(&b, true));
+        settle(&mut bounded, packet(&b, true));
         close(&image(&bounded), &image(&resident));
     }
 }
@@ -628,10 +710,14 @@ fn cold_native_color_feeds_bounded_live_filter_windows() {
     });
     for _ in 0..2 { super::image_windows::insert_effect(&mut p, super::image_windows::program(false,false)); }
     let resident = renderer(&p, RESIDENT);
-    let mut cold = WgpuRasterizer::new_native_headless(p.composition().color).unwrap();
-    cold.native_edit.as_mut().unwrap().color_cache_bytes = 0;
+    let mut cold = ColdRenderer::new(p.composition().color);
     cold.native_edit.as_mut().unwrap().image_pixel_bytes = Some(8 * 1024 * 1024);
-    crate::test_support::submit_settled(&mut cold, packet(&p, true));
+    let frame = packet(&p, true);
+    crate::memory::memory_tests::declare_source_budget(&mut cold.renderer, frame, 64, 16 << 20, 44 << 20);
+    crate::test_support::submit_settled(&mut cold.renderer, frame);
+    cold.begin_pressure();
+    settle(&mut cold, FramePacket { composite_all: true, ..frame });
+    cold.assert_cold_capacity();
     close(&image(&cold), &image(&resident));
     assert!(cold.paint_layers[0].pages.is_empty());
     assert!(cold.metrics().image_window_submissions > 1);
@@ -690,7 +776,7 @@ fn cold_native_operations_publish_complete_color_and_restore_exact_history() {
             }
             Arc::make_mut(&mut paint_mut(p).operations).push(operation.clone());
             paint_mut(p).raster = RasterRevision::pending();
-            crate::test_support::submit_settled(r, FramePacket {
+            settle(r, FramePacket {
                 dab_batches: std::slice::from_ref(&batch),
                 ..packet(p, false)
             });
@@ -706,16 +792,16 @@ fn cold_native_operations_publish_complete_color_and_restore_exact_history() {
         let after = paint(&b).raster.clone();
         let changed = image(&cold);
         assert_ne!(changed, before);
-        crate::test_support::submit_settled(&mut cold, packet(&b, true));
+        settle(&mut cold, packet(&b, true));
         assert!(cold.paint_layers[0].pages.is_empty());
         close(&image(&cold), &changed);
         let replacement = renderer(&b, 0);
         close(&image(&replacement), &changed);
         paint_mut(&mut b).raster = original;
-        crate::test_support::submit_settled(&mut cold, packet(&b, false));
+        settle(&mut cold, packet(&b, false));
         close(&image(&cold), &before);
         paint_mut(&mut b).raster = after;
-        crate::test_support::submit_settled(&mut cold, packet(&b, false));
+        settle(&mut cold, packet(&b, false));
         close(&image(&cold), &changed);
     }
 }
@@ -751,6 +837,8 @@ fn polls_until_ready(r: &mut WgpuRasterizer, id: SourceTarget) -> (usize, u64) {
         assert!(r.metrics.thumbnail_pages - pages <= crate::thumbnails::BATCH_PAGES as u64, "one poll reduces at most a batch of pages");
         if ready { return (polls, r.metrics.thumbnail_pages - before); }
         assert!(polls < 1000);
+        complete(r);
+        pollster::block_on(r.await_image_decode()).unwrap();
     }
 }
 
@@ -768,7 +856,7 @@ fn edited_layer_thumbnails_reduce_only_their_changed_pages_in_bounded_batches() 
         let filled_thumbnail = thumbnail(&mut r, id);
         assert!(filled_thumbnail[5 * 128..27 * 128].as_chunks::<4>().0.iter().all(|pixel| *pixel == blue), "the framed 3:2 layer shows the fill");
         let edited = retiled(&document, [0, 0], [250, 20, 20, 255]);
-        crate::test_support::submit_settled(&mut r, tier_frame(&edited, false));
+        settle(&mut r, tier_frame(&edited, false));
         assert_eq!(polls_until_ready(&mut r, id), (1, 1), "a one-page edit reduces one page");
         let edited_thumbnail = thumbnail(&mut r, id);
         let corner = &edited_thumbnail[5 * 128..5 * 128 + 4];

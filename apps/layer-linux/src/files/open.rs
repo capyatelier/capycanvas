@@ -195,7 +195,7 @@ pub(crate) fn read(
     let file = super::reader::cancellable_file(path, cancelled.clone())
         .map_err(|e| e.to_string())?;
     let imported = layer_ui::read_import_with_decoder(file, layer_ui::ImportIntent::Open, policy,
-        names, Default::default(), Default::default(), &cancelled,crate::photo_reader::read)?;
+        names, Default::default(), layer_ui::photo_decode_limits(), &cancelled,crate::photo_reader::read)?;
     let location = match &imported {
         layer_ui::ImportOutcome::Editable(imported) => imported.source.adoption_location(Some(location)),
         layer_ui::ImportOutcome::Package(_) => None,
@@ -320,7 +320,7 @@ mod tests {
             .push_row(&[230, 75, 100, 245, 180, 100, 25, 190, 110])
             .unwrap();
         let mut jpeg = Vec::new();
-        layer_color::photo::write_jpeg(&mut jpeg, &builder.finish().unwrap(), 95).unwrap();
+        layer_color::photo::write_jpeg(&mut jpeg, &builder.finish().unwrap(), layer_color::photo::JpegEncodeOptions::from_memory_budget(95, layer_color::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
         let mut untagged = jpeg[..2].to_vec();
         let mut at = 2;
         while jpeg[at + 1] != 0xda {

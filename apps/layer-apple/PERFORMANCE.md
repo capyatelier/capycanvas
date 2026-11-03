@@ -322,10 +322,10 @@ second without input delivery or presentation. On the Mac:
 cargo build --release -p layer-render-wgpu --example photo_fixture --example photo_interaction
 target/release/examples/photo_fixture artifacts/photo.capy
 target/release/examples/photo_interaction artifacts/photo.capy OUTPUT.csv \
-  8 18446744073709551615 180 1000 circles PRESET_ID
+  8 180 1000 circles PRESET_ID
 ```
 
-The arguments are samples per update, cache allowance in MiB, updates, brush
+The arguments are samples per update, updates, brush
 diameter, path and preset. On the iPad the same public `replay` function must be
 called from a small wrapper app through a C ABI; no wrapper is checked in.
 

@@ -67,7 +67,7 @@ fn lossless_webp_round_trips_pixels_alpha_profile_and_resolution() {
             .map(|i| (i * 37 % 251 + i / row_bytes * 3) as u8)
             .collect();
         let mut output = Vec::new();
-        write_webp_rows(&mut output, extent, &interpretation, &crate::photo::DeliveryMetadata::resolution(Some(resolution)), PhotoMemoryBudget::from_available_memory(1 << 30).encode_bytes, |y, row| {
+        write_webp_rows(&mut output, extent, &interpretation, &crate::photo::DeliveryMetadata::resolution(Some(resolution)), PhotoMemoryBudget::from_limit(1 << 30).encode_bytes, |y, row| {
             row.copy_from_slice(&expected[y as usize * row_bytes..][..row_bytes]);
             Ok(())
         })
@@ -79,7 +79,7 @@ fn lossless_webp_round_trips_pixels_alpha_profile_and_resolution() {
             riff_chunk(&output, b"ICCP").unwrap(),
             profile_bytes(&interpretation.profile).unwrap().as_slice()
         );
-        let photo = read_photo_detailed(Cursor::new(&output), DecodeLimits::default()).unwrap();
+        let photo = read_photo_detailed(Cursor::new(&output), DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
         assert!(!photo.first_frame);
         assert_eq!(photo.source.extent, extent);
         assert_eq!(photo.source.interpretation.channels, channels, "opaque rows stay opaque");
@@ -91,13 +91,13 @@ fn lossless_webp_round_trips_pixels_alpha_profile_and_resolution() {
         assert_eq!(photo.source.resolution, Some(resolution));
         assert_eq!(super::test_support::rows(&photo.source).concat(), expected);
         let mut bare = Vec::new();
-        write_webp_rows(&mut bare, [1, 1], &interpretation, &Default::default(), PhotoMemoryBudget::from_available_memory(1 << 30).encode_bytes, |_, row| {
+        write_webp_rows(&mut bare, [1, 1], &interpretation, &Default::default(), PhotoMemoryBudget::from_limit(1 << 30).encode_bytes, |_, row| {
             row.fill(200);
             Ok(())
         })
         .unwrap();
         assert!(riff_chunk(&bare, b"EXIF").is_none());
-        assert_eq!(read_photo(Cursor::new(bare), DecodeLimits::default()).unwrap().resolution, None);
+        assert_eq!(read_photo(Cursor::new(bare), DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30))).unwrap().resolution, None);
     }
 }
 
@@ -112,7 +112,7 @@ fn webp_refuses_oversize_unsupported_over_budget_and_cancelled_output() {
         ([64, 64], rgba.clone(), 1024, "memory budget"),
     ] {
         let mut output = Vec::new();
-        let error = write_webp_rows(&mut output, extent, &interpretation, &Default::default(), PhotoMemoryBudget::from_available_memory(available).encode_bytes, |_, _| {
+        let error = write_webp_rows(&mut output, extent, &interpretation, &Default::default(), PhotoMemoryBudget::from_limit(available).encode_bytes, |_, _| {
             panic!("a refused export requested pixels")
         })
         .unwrap_err();
@@ -130,7 +130,7 @@ fn webp_refuses_oversize_unsupported_over_budget_and_cancelled_output() {
     assert!(fits(admitted - 1).unwrap_err().contains("memory budget"));
     let mut output = Vec::new();
     super::test_support::assert_provider_failure("Export cancelled", |provider| {
-        write_webp_rows(&mut output, [513, 257], &rgba, &Default::default(), PhotoMemoryBudget::from_available_memory(1 << 30).encode_bytes, provider)
+        write_webp_rows(&mut output, [513, 257], &rgba, &Default::default(), PhotoMemoryBudget::from_limit(1 << 30).encode_bytes, provider)
     });
     assert!(output.is_empty(), "nothing is encoded after a cancellation");
 }

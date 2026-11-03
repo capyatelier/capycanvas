@@ -47,7 +47,7 @@ fn export_menu_click(w: &Rc<Workspace>, input: &mut RemoteInput, command: Comman
 
 fn repeat_png(path: &std::path::Path) -> [f32; 4] {
     let image = layer_color::photo::read_photo(
-        std::io::BufReader::new(std::fs::File::open(path).unwrap()), Default::default()).unwrap();
+        std::io::BufReader::new(std::fs::File::open(path).unwrap()), layer_ui::photo_decode_limits()).unwrap();
     assert_eq!(image.extent, [32, 24]);
     assert_eq!(image.interpretation.depth, SampleDepth::U16);
     assert!(image.resolution.unwrap().pixels_per_inch().into_iter().all(|ppi| (ppi - 240.).abs() < 0.013));
@@ -373,7 +373,7 @@ fn native_export_sizes_preserve_master_and_release_cancelled_dialogs() {
             std::io::BufReader::new(
                 std::fs::File::open(output.join(format!("copy.{extension}"))).unwrap(),
             ),
-            Default::default(),
+            layer_ui::photo_decode_limits(),
         )
         .unwrap();
         assert_eq!(result.extent, expected);
@@ -677,7 +677,7 @@ fn native_export_presets_save_update_remove_reset_and_remember_after_delivery() 
     );
     let image = layer_color::photo::read_photo(
         std::io::BufReader::new(std::fs::File::open(directory.join("remembered.png")).unwrap()),
-        Default::default(),
+        layer_ui::photo_decode_limits(),
     )
     .unwrap();
     assert_eq!(image.extent, [31, 23]);
@@ -774,7 +774,7 @@ fn native_export_webp_to_a_prechosen_file() {
     finish(&w);
     let bytes = std::fs::read(&file).unwrap();
     assert_eq!((&bytes[..4], &bytes[8..12]), (&b"RIFF"[..], &b"WEBP"[..]));
-    let result = layer_color::photo::read_photo(std::io::Cursor::new(bytes), Default::default()).unwrap();
+    let result = layer_color::photo::read_photo(std::io::Cursor::new(bytes), layer_ui::photo_decode_limits()).unwrap();
     assert_eq!(result.extent, [192, 128]);
     assert_eq!(result.interpretation.channels, SourceChannels::Rgba);
     assert_eq!(result.interpretation.depth, SampleDepth::U8);
@@ -880,7 +880,7 @@ fn native_export_keeps_camera_lens_and_copyright_without_location() {
     };
     layer_color::photo::write_jpeg_rows(
         std::fs::File::create(&camera).unwrap(), [160, 120], &rgb, &taken,
-        layer_color::photo::JpegEncodeOptions::from_memory_budget(92, layer_color::photo::PhotoMemoryBudget::current()),
+        layer_color::photo::JpegEncodeOptions::from_memory_budget(92, layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes())),
         |y, row| { for (x, p) in row.as_chunks_mut::<3>().0.iter_mut().enumerate() { p.copy_from_slice(&[x as u8, y as u8 * 2, 90]); } Ok(()) },
     )
     .unwrap();
@@ -939,7 +939,7 @@ fn native_export_keeps_camera_lens_and_copyright_without_location() {
         let bytes = exported(format, name);
         assert!(!bytes.windows(6).any(|w| w == b"WGS-84"), "{name}: no GPS");
         assert!(!bytes.windows(6).any(|w| w == b"Lisbon"), "{name}: no place name");
-        let photo = layer_color::photo::read_photo_detailed(std::io::Cursor::new(&bytes), Default::default()).unwrap();
+        let photo = layer_color::photo::read_photo_detailed(std::io::Cursor::new(&bytes), layer_ui::photo_decode_limits()).unwrap();
         assert_eq!(photo.source.extent, [160, 120]);
         let exif = photo.metadata.exif.expect(name);
         for kept in [b"Capycam".as_slice(), b"C-1", b"Capy 35mm F1.8", b"Ada Painter", b"(c) 2026 Ada Painter", b"2026:09:01 10:00:00"] {

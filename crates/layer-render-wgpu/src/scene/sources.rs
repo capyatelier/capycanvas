@@ -17,34 +17,17 @@ use std::{
 };
 pub(crate) type RequiredSource = (Arc<SourceImage>, [u32; 2]);
 pub(crate) const FLOAT_TILE_BYTES: u64 = PAGE_SIZE as u64 * PAGE_SIZE as u64 * 16;
-// Resident decoded pixels and in-flight uploads have different lifetimes.
-// Retain neighboring source tiles independently of staging memory. Immutable
-// owners and equal generated tile contents share decoded pixels across revisions.
-const DECODED_SLOTS: usize = 64;
-const MIN_DECODED_SLOTS: usize = SOURCE_SLOTS + 4;
 const DECODERS: usize = 4;
 use crate::native_tiles::transfer;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct SourceLimits {
     slots: usize,
     upload_bytes: u64,
 }
-impl Default for SourceLimits {
-    fn default() -> Self { Self { slots: DECODED_SLOTS, upload_bytes: 16 * 1024 * 1024 } }
-}
 impl SourceLimits {
-    fn admitted(display_allowance: u64) -> Self {
-        // Reuse the native renderer's measured headroom admission snapshot.
-        // Unknown/small budgets retain the original 64+16 MiB ceilings. Larger
-        // devices admit at most 1 GiB of source pixels and 64 MiB in flight;
-        // their source pixels use no more than one quarter of that allowance.
-        // Admit whole tiles instead of rounding down to power-of-two tiers.
-        // The resident cache may outlive an upload window: unchanged source
-        // pixels should not be decoded repeatedly during a broad stroke.
-        let slots = (display_allowance / (4 * FLOAT_TILE_BYTES))
-            .clamp(DECODED_SLOTS as u64, 1024) as usize;
-        Self { slots, upload_bytes: (slots as u64 * FLOAT_TILE_BYTES / 4).min(64 * 1024 * 1024) }
+    fn admitted(decoded_bytes: u64, upload_bytes: u64) -> Self {
+        Self { slots: (decoded_bytes / FLOAT_TILE_BYTES).min(usize::MAX as u64) as usize, upload_bytes }
     }
 }
 
@@ -201,7 +184,7 @@ pub(crate) struct DecodedTiles {
     pub hits: u64,
     pub misses: u64,
     pub evictions: u64,
-    mip_reservation: u64,
+    mip_allowance: u64,
     required: Vec<Key>,
     retired_bytes: Arc<AtomicU64>,
     retired_slots: std::cell::RefCell<Vec<RetiredSlot>>,
@@ -215,20 +198,15 @@ impl DecodedTiles {
             ..Self::default()
         }
     }
-    pub fn admit(&mut self, allowance: u64) {
-        self.limits = SourceLimits::admitted(allowance);
-        self.mip_reservation = self.mip_reservation.min(self.mip_limit());
+    pub fn admit_limits(&mut self, decoded_bytes: u64, upload_bytes: u64, mip_bytes: u64) {
+        self.reap_retired();
+        self.limits = SourceLimits::admitted(decoded_bytes.saturating_sub(self.non_slot_bytes()), upload_bytes);
+        self.mip_allowance = mip_bytes;
     }
     pub fn admitted_bytes(&self) -> [u64; 2] {
         [self.limits.slots as u64 * self.tile_bytes(), self.limits.upload_bytes]
     }
-    pub fn mip_budget(&self) -> u64 {
-        let sources = MIN_DECODED_SLOTS.max(self.required.len().saturating_add(self.leased_outside_requirements()).saturating_add(1));
-        self.limits.slots.saturating_sub(sources) as u64 * self.tile_bytes()
-    }
-    fn mip_limit(&self) -> u64 {
-        (self.limits.slots.saturating_sub(MIN_DECODED_SLOTS) as u64) * self.tile_bytes()
-    }
+    pub fn mip_budget(&self) -> u64 { self.mip_allowance }
     pub(crate) fn require_images(&mut self, tiles: impl IntoIterator<Item = RequiredSource>) {
         self.required.clear();
         for (source, coordinate) in tiles {
@@ -249,29 +227,30 @@ impl DecodedTiles {
     pub fn can_upload_bytes(&self, bytes: u64) -> bool {
         self.in_flight.bytes.load(Ordering::Acquire).checked_add(bytes).is_some_and(|n| n <= self.limits.upload_bytes)
     }
-    fn slot_limit(&self) -> usize {
-        self.limits.slots - self.mip_reservation.div_ceil(self.tile_bytes()) as usize
+    fn slot_limit(&self) -> usize { self.limits.slots }
+    pub fn reserve_mips(&mut self, bytes: u64, _encoder: &crate::submission::CommandEncoder) -> Result<bool, GpuRasterError> {
+        Ok(bytes <= self.mip_allowance)
     }
-    pub fn reserve_mips(&mut self, bytes: u64, encoder: &crate::submission::CommandEncoder) -> Result<bool, GpuRasterError> {
+    pub fn trim_unused(&mut self, encoder: &crate::submission::CommandEncoder) -> u64 {
         self.reap_retired();
-        if bytes > self.mip_limit() { return Err(GpuRasterError::SourceWorkingSetExceeded); }
-        self.mip_reservation = bytes;
         let protected = self.protected_sources();
-        while self.slots.len() > self.slot_limit() {
+        let mut released = 0;
+        for _ in 0..SOURCE_SLOTS {
+            if self.slots.len() <= self.slot_limit() { break; }
             let Some(index) = self.slots.iter().enumerate().filter(|(_,slot)| Arc::strong_count(&slot.lease)==1 && !self.required(slot, protected))
-                .min_by_key(|(_,slot)|slot.used).map(|(index,_)|index) else { return Ok(false); };
+                .min_by_key(|(_,slot)|slot.used).map(|(index,_)|index) else { break; };
             let slot = self.slots.swap_remove(index);
             if slot.valid.load(Ordering::Acquire) { self.evictions += 1; }
             let retired = self.retired_bytes.clone();
-            let tile_bytes = self.tile_bytes();
-            retired.fetch_add(tile_bytes, Ordering::Relaxed);
+            let bytes = self.tile_bytes();
+            retired.fetch_add(bytes, Ordering::Relaxed);
             let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            self.retired_slots.get_mut().push(RetiredSlot { _slot:slot, retired, bytes:tile_bytes, completed:completed.clone() });
+            self.retired_slots.get_mut().push(RetiredSlot { _slot:slot, retired, bytes, completed:completed.clone() });
             let completion = RetirementCompletion(completed);
             encoder.on_submitted_work_done(move || drop(completion));
+            released += bytes;
         }
-        Ok(self.slots.len() as u64 * self.tile_bytes() + self.retired_bytes.load(Ordering::Acquire) + bytes
-            <= self.limits.slots as u64 * self.tile_bytes())
+        released
     }
     fn tile_bytes(&self) -> u64 {
         FLOAT_TILE_BYTES
@@ -319,8 +298,7 @@ impl DecodedTiles {
     pub fn uploads_full(&self) -> bool {
         // Reserve room for one Float32 tile within the bounded staging window.
         // U8/U16 inputs consume less; charge their actual encoded byte size.
-        self.in_flight.bytes.load(Ordering::Acquire)
-            > self.limits.upload_bytes - FLOAT_TILE_BYTES
+        !self.can_upload_bytes(FLOAT_TILE_BYTES)
     }
     pub fn prepared_raster_view(&self, blob: &Arc<TileBlob>, space: RgbSpace,destination:RgbSpace) -> Option<&wgpu::TextureView> {
         let key = Key::raster(blob, space, destination);
@@ -334,11 +312,8 @@ impl DecodedTiles {
         encoder.on_submitted_work_done(move || drop(charge));
         total
     }
-    pub fn gpu_bytes(&self) -> u64 {
-        self.reap_retired();
-        self.slots.len() as u64 * self.tile_bytes()
-            + self.retired_bytes.load(Ordering::Acquire)
-            + self.transfer.gpu_bytes()
+    pub(crate) fn non_slot_bytes(&self) -> u64 {
+        self.transfer.gpu_bytes()
             + self
                 .inputs
                 .iter()
@@ -349,6 +324,24 @@ impl DecodedTiles {
                         * input.texture.format().block_copy_size(None).unwrap() as u64
                 })
                 .sum::<u64>()
+    }
+    pub fn gpu_bytes(&self) -> u64 {
+        self.reap_retired();
+        self.slots.len() as u64 * self.tile_bytes()
+            + self.retired_bytes.load(Ordering::Acquire)
+            + self.non_slot_bytes()
+    }
+    pub fn cpu_bytes(&self) -> u64 {
+        self.pixels.capacity() as u64 * std::mem::size_of::<[f32; 4]>() as u64
+            + self.slots.capacity() as u64 * std::mem::size_of::<Slot>() as u64
+            + self.required.capacity() as u64 * std::mem::size_of::<Key>() as u64
+            + self.decoders.capacity() as u64 * std::mem::size_of::<(Weak<SourceImage>, layer_color::WorkingDecoder)>() as u64
+            + self.retired_slots.borrow().capacity() as u64 * std::mem::size_of::<RetiredSlot>() as u64
+    }
+    pub fn pinned_bytes(&self) -> u64 {
+        let protected = self.protected_sources();
+        self.slots.iter().filter(|slot| Arc::strong_count(&slot.lease) > 1 || self.required(slot, protected)).count() as u64 * self.tile_bytes()
+            + self.retired_bytes.load(Ordering::Acquire)
     }
 
     pub(crate) fn plan(
@@ -828,3 +821,37 @@ impl Pipelines {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod grant_tests {
+    use super::*;
+    #[test]
+    fn decoded_slots_round_down_without_manufacturing_a_working_grant() {
+        for (bytes, slots) in [(0, 0), (FLOAT_TILE_BYTES - 1, 0), (FLOAT_TILE_BYTES, 1), (3 * FLOAT_TILE_BYTES + 1, 3)] {
+            let limits = SourceLimits::admitted(bytes, 0);
+            assert_eq!(limits.slots, slots);
+            assert!(limits.slots as u64 * FLOAT_TILE_BYTES <= bytes);
+            assert_eq!(limits.upload_bytes, 0);
+        }
+    }
+    #[test]
+    fn tiny_upload_grants_defer_a_float_tile_without_underflow() {
+        let mut cache = DecodedTiles::default();
+        cache.admit_limits(2 * FLOAT_TILE_BYTES, FLOAT_TILE_BYTES - 1, 0);
+        assert!(cache.uploads_full());
+        assert!(cache.can_upload_bytes(FLOAT_TILE_BYTES / 4));
+        assert!(!cache.can_upload_bytes(FLOAT_TILE_BYTES));
+        cache.admit_limits(2 * FLOAT_TILE_BYTES, FLOAT_TILE_BYTES, 0);
+        assert!(!cache.uploads_full());
+    }
+    #[test]
+    fn mip_grants_do_not_consume_decoded_tile_slots() {
+        let mut cache = DecodedTiles::default();
+        cache.admit_limits(3 * FLOAT_TILE_BYTES, FLOAT_TILE_BYTES, 100 * FLOAT_TILE_BYTES);
+        assert_eq!(cache.slot_limit(), 3);
+        assert_eq!(cache.mip_budget(), 100 * FLOAT_TILE_BYTES);
+        cache.admit_limits(FLOAT_TILE_BYTES, FLOAT_TILE_BYTES, 2 * FLOAT_TILE_BYTES);
+        assert_eq!(cache.slot_limit(), 1);
+        assert_eq!(cache.mip_budget(), 2 * FLOAT_TILE_BYTES);
+    }
+}

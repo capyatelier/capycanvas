@@ -9,11 +9,16 @@ fn a_bake_within_its_image_budget_filters_each_step_once() {
     let gpu = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut engine = CanvasEngine::new(gpu, doc, input_queue(8).1, crate::test_support::view([128; 2]), ViewTransform::IDENTITY).unwrap();
     engine.render_frame_at(0).unwrap();
-    while engine.has_pending_document_edits() { engine.render_frame_at(0).unwrap(); }
+    let initial_deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+    while engine.has_pending_document_edits() {
+        assert!(std::time::Instant::now() < initial_deadline, "initial document edits must finish");
+        engine.render_frame_at(0).unwrap();
+    }
     engine.backend_mut().native_edit.as_mut().unwrap().image_pixel_bytes = Some(u64::MAX);
     let plan = engine.document().merge_plan(layer_core::MergeKind::Down).unwrap();
     engine.insert_with_operations(plan.edits, vec![(plan.target, plan.operation)], None).unwrap();
     let mut shared = 0;
+    let bake_deadline = std::time::Instant::now() + READBACK_TIMEOUT;
     loop {
         engine.render_frame_at(0).unwrap();
         if let Some(state) = &engine.backend().bake_preflight && let Some(scene) = &state.scene {
@@ -24,6 +29,7 @@ fn a_bake_within_its_image_budget_filters_each_step_once() {
             if evaluated == passes { shared = shared.max(pages); }
         }
         if !engine.has_pending_document_edits() { break; }
+        assert!(std::time::Instant::now() < bake_deadline, "baked document edits must finish");
     }
     assert!(shared > 1, "a step's filter evaluation served at most {shared} page");
 }

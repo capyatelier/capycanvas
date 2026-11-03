@@ -22,7 +22,7 @@ impl SnapshotRenderer {
                 output,
                 layer_color::photo::GainMapRender { extent, space, rendition, guide: &guide, matte, clip },
                 format,
-                quality,
+                layer_color::photo::GainMapEncodeOptions::from_memory_budget(quality, layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes())),
                 &metadata,
                 control.cancellation_flag(),
                 read,
@@ -142,7 +142,7 @@ impl SnapshotRenderer {
                 &metadata,
                 layer_color::photo::JpegEncodeOptions::from_memory_budget(
                     quality,
-                    layer_color::photo::PhotoMemoryBudget::current(),
+                    layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes()),
                 ),
                 row,
             )
@@ -162,7 +162,7 @@ impl SnapshotRenderer {
                 extent,
                 target,
                 &metadata,
-                layer_color::photo::PhotoMemoryBudget::current().encode_bytes,
+                layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes()).encode_bytes,
                 row,
             )
         })

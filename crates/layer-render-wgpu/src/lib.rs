@@ -89,6 +89,7 @@ use builtin_masks::builtin_masks;
 use deferred::{Compilation, CompileMode, Deferred};
 mod pipeline_device;
 mod renderer_factory;
+mod memory;
 pub use renderer_factory::RendererFactory;
 use pipeline_device::PipelineDevice;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -185,18 +186,53 @@ pub(crate) fn initialized_buffer(device: &wgpu::Device, descriptor: &wgpu::util:
 /// source decoding, brush neighborhoods and publication reuse uniform offsets.
 struct Uploads {
     belt: wgpu::util::StagingBelt,
+    device: wgpu::Device,
+    chunk_size: u64,
+    retained: u64,
+    chunks: std::collections::HashSet<wgpu::Buffer>,
+    written: u64,
+    outstanding: Arc<std::sync::atomic::AtomicU64>,
+}
+struct UploadFlight {
+    bytes: u64,
+    outstanding: Arc<std::sync::atomic::AtomicU64>,
+}
+impl Drop for UploadFlight {
+    fn drop(&mut self) { self.outstanding.fetch_sub(self.bytes, std::sync::atomic::Ordering::AcqRel); }
 }
 impl Uploads {
+    fn memory_bytes(&self) -> [u64; 2] {
+        let inflight = self.outstanding.load(std::sync::atomic::Ordering::Acquire)
+            .saturating_add(self.written);
+        [self.retained, inflight]
+    }
+    fn trim_unused(&mut self, limit: u64) -> u64 {
+        if self.retained <= limit || self.memory_bytes()[1] != 0 { return 0; }
+        self.belt = wgpu::util::StagingBelt::new(self.device.clone(), self.chunk_size);
+        self.chunks.clear();
+        std::mem::take(&mut self.retained)
+    }
     fn new(device: &wgpu::Device, chunk_size: u64) -> Self {
+        let chunk_size = if cfg!(target_arch = "wasm32") { 0 } else { chunk_size };
         Self {
-            belt: wgpu::util::StagingBelt::new(device.clone(),
-                if cfg!(target_arch = "wasm32") { 0 } else { chunk_size }),
+            belt: wgpu::util::StagingBelt::new(device.clone(), chunk_size),
+            device: device.clone(), chunk_size, retained: 0, chunks: Default::default(), written: 0,
+            outstanding: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
     fn allocate(&mut self, size: wgpu::BufferSize, alignment: u64) -> wgpu::BufferSlice<'_> {
         #[cfg(target_arch = "wasm32")]
         self.belt.finish();
-        self.belt.allocate(size, wgpu::BufferSize::new(alignment).unwrap())
+        let slice = self.belt.allocate(size, wgpu::BufferSize::new(alignment).unwrap());
+        if slice.offset() == 0 {
+            let bytes = slice.buffer().size();
+            self.written = self.written.saturating_add(bytes);
+            if !self.chunks.contains(slice.buffer()) {
+                self.chunks.insert(slice.buffer().clone());
+                self.retained = self.retained.saturating_add(bytes);
+            }
+        }
+        slice
     }
     fn write(
         &mut self,
@@ -273,6 +309,12 @@ impl Uploads {
     }
     fn finish(&mut self, encoder: &wgpu::CommandEncoder) {
         self.belt.finish_and_recall_on_submit(encoder);
+        let bytes = std::mem::take(&mut self.written);
+        if bytes != 0 {
+            self.outstanding.fetch_add(bytes, std::sync::atomic::Ordering::AcqRel);
+            let flight = UploadFlight { bytes, outstanding: self.outstanding.clone() };
+            encoder.on_submitted_work_done(move || drop(flight));
+        }
     }
 }
 
@@ -865,23 +907,7 @@ impl LayerPage {
         self.surface(self.active_secondary)
     }
 
-    /// Keep the current pixels and view identity, regardless of which ping-pong
-    /// surface owns them. The other surface contains no persistent state.
-    fn discard_inactive(&mut self) -> u64 {
-        let Some(secondary) = self.secondary.take() else {
-            return 0;
-        };
-        let bytes = if self.active_secondary {
-            let bytes = self.primary.storage_bytes();
-            self.primary = secondary;
-            self.primary_needs_clear = false;
-            bytes
-        } else {
-            secondary.storage_bytes()
-        };
-        self.active_secondary = false;
-        bytes
-    }
+
 }
 
 struct MaskAsset {
@@ -1137,6 +1163,7 @@ pub struct WgpuRasterizer {
     dab_capacity_bytes: u64,
     pipelines: Arc<Pipelines>,
     factory: RendererFactory,
+    memory: memory::Memory,
     recipes: Arc<renderer_factory::Recipes>,
     scene_pipelines: scene::Pipelines,
     portable_blend: portable_blend::Renderer,
@@ -1244,7 +1271,12 @@ impl WgpuRasterizer {
         if adapter.get_info().device_type == wgpu::DeviceType::Cpu && !software_adapter_tests() {
             return Err(GpuRasterError::HardwareAdapterRequired);
         }
-        let (device, recipes) = factory.resources(&device);
+        let (mut device, recipes) = factory.resources(&device);
+        let memory = memory::Memory::new(&factory, device.sample_memory.clone());
+        device.memory = Some(memory.display_owner());
+        device.sample_memory = Some(memory.sample_owner());
+        device.resource_limit = memory.resource_limit();
+        device.source_samples.set_limit(memory.limit(layer_core::MemoryOwnerKind::DecodedSamples, true).min(usize::MAX as u64) as usize);
         let sampler = recipes.sampler.clone();
         let brush_sampler = recipes.brush_sampler.clone();
         let style_layout = recipes.style_layout.clone();
@@ -1341,6 +1373,7 @@ impl WgpuRasterizer {
         let transforms = Some(paint_transform::PaintTransforms::from_recipes(&recipes.transforms));
         let mut renderer = Box::new(Self {
             factory,
+            memory,
             recipes: recipes.clone(),
             snapshot_worker: initialization == Initialization::Snapshot,
             snapshot_cancelled: None,
@@ -1538,6 +1571,7 @@ impl WgpuRasterizer {
             renderer.validated_effects = Some(renderer.scene_pipelines.effects(&renderer));
             renderer.startup = Some(startup::Startup::new(&renderer.device)?);
         }
+        renderer.refresh_memory_limits();
         Ok(renderer)
     }
 
@@ -3663,8 +3697,16 @@ impl WgpuRasterizer {
         let available = !self.snapshot_worker;
         #[cfg(target_arch = "wasm32")]
         let available = available && self.browser_image_decoder.is_some();
-        MovingProjection::update(&mut self.moving_projection, packet.scene, packet.view.document_to_surface,
-            self.device.working_space(), available, &mut self.failed_image_tiles)
+        if MovingProjection::update(&mut self.moving_projection, packet.scene, packet.view.document_to_surface,
+            self.device.working_space(), available, &mut self.failed_image_tiles)? {
+            let bytes = object_image_mips::MovingImages::demand(&self.device, &self.moving_projection.as_ref().unwrap().requests)?;
+            if self.memory.mip_demand(bytes) {
+                self.publish_memory(true);
+                self.factory.memory_budget().flush_reports();
+                self.refresh_memory_limits();
+            }
+        }
+        Ok(())
     }
     fn prepare_moving_images(&mut self, packet: FramePacket<'_>, encoder: &mut submission::CommandEncoder) -> Result<bool, GpuRasterError> {
         self.prepare_moving_projection(packet)?;
@@ -3736,9 +3778,8 @@ impl CanvasRenderer for WgpuRasterizer {
     fn region_fits(&self, extent: [u32; 2]) -> bool {
         flood::fits(extent, &self.device.limits())
     }
-    #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows", target_vendor = "apple"))]
     fn memory_headroom(&self) -> Option<u64> {
-        crate::display_memory::device_headroom(&self.device)
+        Some(self.factory.memory_budget().import_headroom_bytes())
     }
     fn paint_ready(&self, document: &layer_core::Document, brush: &layer_core::BrushSnapshot, transform: bool) -> bool {
         self.startup.as_ref().is_none_or(|startup| startup.brush_ready) && !self.startup_needs_update(document, brush, transform)
@@ -3746,6 +3787,12 @@ impl CanvasRenderer for WgpuRasterizer {
     fn raster_dependencies_ready(&mut self, packet: FramePacket<'_>, preview: Option<&layer_render::TransformPreview>) -> bool {
         self.activate_presentation(packet.scene);
         if self.retained_transition_frame(packet, preview) { return true; }
+        if let Some(preview) = preview {
+            if preview.transform.validate().is_err() { return true; }
+            let installed = self.transform_preview.replace(preview.clone());
+            self.begin_frame_memory(packet);
+            self.transform_preview = installed;
+        } else { self.begin_frame_memory(packet); }
         if self.bake_preflight.as_ref().is_some_and(|state|!state.matches(packet,self.document_color())) {self.bake_preflight=None;}
         if self.fill_edges_preflight.as_ref().is_some_and(|state|!state.matches(packet,self.document_color())) {self.fill_edges_preflight=None;}
         let mut required = startup::Requirements::default();
@@ -3969,6 +4016,7 @@ impl CanvasRenderer for WgpuRasterizer {
         let mut t = self.telemetry.snapshot(&self.device, &self.queue);
         #[cfg(not(target_arch = "wasm32"))]
         { t.memory = self.factory.memory_snapshot(); }
+        t.memory_budget = self.factory.budget_snapshot();
         let m = &self.metrics;
         t.submissions = m.submissions;
         t.dabs = m.dabs;
@@ -3986,7 +4034,6 @@ impl CanvasRenderer for WgpuRasterizer {
             + self.material_records.storage_bytes() + self.transport_records.storage_bytes()
             + self.dry_display_inputs.len() as u64 * dry_material::DisplayInputs::storage_bytes()
             + self.material_gather.as_ref().map_or(0, material_sources::Gather::storage_bytes)
-            + self.device.effect_resources.lock().unwrap().bytes()
             + *self.device.analysis_memory.lock().unwrap()
             + m.retouch_storage_bytes
             + self
@@ -4164,8 +4211,11 @@ impl WgpuRasterizer {
     fn submit_frame(&mut self, packet: FramePacket<'_>, native_commit: Option<raster::native_edit::NativeFrame>) -> Result<(), GpuRasterError> {
         self.activate_presentation(packet.scene);
         let revision = self.composite_revision;
+        self.begin_frame_memory(packet);
         let submitted = self.metrics.submissions;
-        if let Err(error)=self.submit_frame_inner(packet, native_commit) {
+        let result = self.submit_frame_inner(packet, native_commit);
+        self.publish_motion_memory();
+        if let Err(error)=result {
             self.clear_preview_stamps();
             return Err(error);
         }
@@ -4394,7 +4444,6 @@ impl WgpuRasterizer {
         let packet = FramePacket { composite_all: packet.composite_all || blending_changed, ..packet };
         self.prepare_selection_previews(packet)?;
         let mut batch_tiles=brush_tiles::plan_packet(FramePacket {dab_batches:original_batches,..packet},|target|self.target_extent(target))?;
-        self.trim_native_color_cache(packet.dab_batches, &batch_tiles);
         let reset = packet.reset_layers || resized;
         self.note_retouch_batches(packet.dab_batches, reset);
         if reset {

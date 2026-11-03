@@ -700,7 +700,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub fn place_layer_sources(
         &mut self,
-        sources: Vec<(String, layer_core::color::source::SourceImage)>,
+        sources: impl Into<crate::PreparedImages>,
         center: Option<Point>,
         destination: Option<ImageLayerDestination>,
     ) -> Result<(), String> {
@@ -762,11 +762,20 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     /// Apply `edit` and run `operations` on its result as one undo step.
     pub(super) fn layer_edit_with(&mut self, edit: Edit, operations: Vec<(SourceTarget, layer_core::RasterOperation)>) -> Result<(), String> {
+        self.layer_edit_reserved(edit, operations, None)
+    }
+    pub(super) fn layer_edit_reserved(&mut self, edit: Edit, operations: Vec<(SourceTarget, layer_core::RasterOperation)>,
+        reservation: Option<layer_core::MemoryReservation>) -> Result<(), String> {
         if self.operation.placing() || self.objects.placing() {
             return Err(self.localization().text(MessageId::COMMANDS_APPLY_OR_CANCEL_THE_TRANSFORM_FIRST).to_string());
         }
         let previous = self.engine.document().working.selection.clone();
-        if operations.is_empty() { self.engine.apply_edit(edit) } else { self.engine.insert_with_operations(vec![edit], operations, None) }.map_err(error)?;
+        match (operations.is_empty(), reservation) {
+            (true, Some(reservation)) => self.engine.apply_reserved_edit(edit, reservation),
+            (true, None) => self.engine.apply_edit(edit),
+            (false, Some(reservation)) => self.engine.insert_with_operations_reserved(vec![edit], operations, None, reservation),
+            (false, None) => self.engine.insert_with_operations(vec![edit], operations, None),
+        }.map_err(error)?;
         if previous.is_some() && self.engine.document().working.selection.is_none() { self.selection_masks.reselect = previous; }
         Ok(())
     }

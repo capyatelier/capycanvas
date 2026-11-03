@@ -59,7 +59,7 @@ impl SnapshotGpu {
         }
         snapshot.analysis_ready.insert(target);
         control.check().map_err(|e| e.to_string())?;
-        Ok(crate::effect_analysis::Candidate { masks: None, entries: snapshot.renderer.effect_analyses.into_iter()
+        Ok(crate::effect_analysis::Candidate { masks: None, entries: std::mem::take(&mut snapshot.renderer.effect_analyses).into_iter()
             .filter(|entry| snapshot.analysis_ready.contains(&entry.layer())).collect() })
     }
 }
@@ -120,7 +120,7 @@ impl SnapshotGpu {
             masks.pages = std::mem::take(&mut r.layer_masks.pages);
         }
         control.check().map_err(|e| e.to_string())?;
-        Ok(crate::effect_analysis::Candidate {masks: (!regions.is_empty()).then(|| Arc::new(masks)), entries: snapshot.renderer.effect_analyses.into_iter()
+        Ok(crate::effect_analysis::Candidate {masks: (!regions.is_empty()).then(|| Arc::new(masks)), entries: std::mem::take(&mut snapshot.renderer.effect_analyses).into_iter()
             .filter(|entry| snapshot.analysis_ready.contains(&entry.layer())).collect()})
     }
 }

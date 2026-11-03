@@ -185,12 +185,13 @@ pub async fn raster_worker_source_rasterize(
     metadata: &str,
     buffers: js_sys::Array,
 ) -> Result<JsValue, JsValue> {
+    artwork_transfer::seed_memory_budget();
     let mut artwork = artwork_transfer::unpack(metadata, buffers).await?;
     let paint=artwork.paint.iter().find_map(|(h,_,p)|p.base.is_some().then_some(h)).ok_or_else(||js("No source"))?;
     let source=artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.storage();
     let name=layer_color::profile_description_optional(&source.interpretation.profile).map_err(js)?;
     let color=artwork.compositions.get(artwork.root).unwrap().color;
-    let (converted,statistics)=layer_color::rasterize_source(source,color,artwork_transfer::photo_memory_budget().encode_bytes,||false).map_err(js)?;
+    let (converted,statistics)=layer_color::rasterize_source(source,color,layer_color::photo::PhotoMemoryBudget::conversion_encode_limit(),||false).map_err(js)?;
     artwork.paint.get_mut(paint).unwrap().base.as_mut().unwrap().image=Arc::new(converted).into();
     let wire=artwork_transfer::pack(artwork).await?;
     js_sys::Reflect::set(

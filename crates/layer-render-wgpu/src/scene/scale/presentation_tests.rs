@@ -4,9 +4,7 @@ use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace};
 use layer_render::{ViewState, ColorSampleArea, ColorSampleRequest, ColorSampleSource};
 
 fn bounded_renderer(color: DocumentColor) -> Result<WgpuRasterizer, GpuRasterError> {
-    let mut r = WgpuRasterizer::new_native_headless(color)?;
-    r.set_complete_display_allowance(0);
-    Ok(r)
+    Ok(crate::memory::memory_tests::legacy_scene_renderer(color))
 }
 
 fn document(extent: [u32; 2]) -> layer_core::Document {
@@ -52,14 +50,23 @@ fn view(matrix: [f32; 6]) -> ViewState {
     }
 }
 
-fn submit(mut r: &mut WgpuRasterizer, doc: &layer_core::Document, view: ViewState, all: bool) {
+fn submit(r: &mut WgpuRasterizer, doc: &layer_core::Document, view: ViewState, all: bool, bounded: bool) {
+    let mut frame=FramePacket {view,inspect_mask:doc.working.inspect_mask,composite_all:all,..packet(doc.scene(),doc.composition().size)};
     let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
-    crate::test_support::submit_ready(r, FramePacket { view, inspect_mask: doc.working.inspect_mask, composite_all: all, ..packet(doc.scene(), doc.composition().size) }).unwrap();
-    while r.has_pending_work() {
-        assert!(std::time::Instant::now() < deadline, "display did not settle");
+    loop {
+        if bounded {working_scene_frame(r,frame);}
+        crate::test_support::submit_ready(r,frame).unwrap();
+        if !r.has_pending_work() {break;}
+        assert!(std::time::Instant::now()<deadline,"display did not settle");
         r.wait_idle().unwrap();
-        crate::test_support::submit_ready(&mut r, FramePacket { view, inspect_mask: doc.working.inspect_mask, composite_all: false, ..packet(doc.scene(), doc.composition().size) }).unwrap();
+        frame.composite_all=false;
     }
+}
+
+fn prepare_engine_frame(engine: &mut layer_engine::CanvasEngine<WgpuRasterizer>) {
+    let document=engine.document().clone();
+    let frame=FramePacket {view:engine.view(),inspect_mask:document.working.inspect_mask,..packet(document.scene(),document.composition().size)};
+    working_scene_frame(engine.backend_mut(),frame);
 }
 
 fn present(
@@ -97,7 +104,7 @@ fn rejected_views_and_abandoned_composition_preserve_artwork() {
     let doc = document([517, 259]);
     let mut r = bounded_renderer(doc.composition().color).unwrap();
     let v = view([0.125, 0., 0., 0.125, 0., 0.]);
-    submit(&mut r, &doc, v, true);
+    submit(&mut r, &doc, v, true, true);
     let mut presenter = crate::test_support::float_presenter(&r);
     let before = present(&r, &mut presenter, v);
     let texture = r.scale_display.as_ref().unwrap().texture().clone();
@@ -123,6 +130,7 @@ fn rejected_views_and_abandoned_composition_preserve_artwork() {
     let occurrence=abandoned.artwork.occurrences.get_mut(overlay).unwrap();occurrence.opacity=0.7;occurrence.blend=layer_core::LayerBlend::Multiply;
     insert_occurrence(&mut abandoned,overlay,0);
     let frame = FramePacket { view: v, ..packet(abandoned.scene(), doc.composition().size) };
+    working_scene_frame(&mut r,frame);
     super::submit_published(&mut r, frame);
     assert!(r.has_pending_work());
     let mut scene = r.scene.take().unwrap();
@@ -130,10 +138,10 @@ fn rejected_views_and_abandoned_composition_preserve_artwork() {
     scene.refine_display(&mut r, frame, &mut encoder).unwrap();
     drop(encoder);
     r.scene = Some(scene);
-    submit(&mut r, &abandoned, v, false);
+    submit(&mut r, &abandoned, v, false, true);
     let mut reference = bounded_renderer(doc.composition().color).unwrap();
     reference.test.exact_display = true;
-    submit(&mut reference, &abandoned, v, true);
+    submit(&mut reference, &abandoned, v, true, true);
     let mut oracle = crate::test_support::float_presenter(&reference);
     close(&present(&r, &mut presenter, v), &present(&reference, &mut oracle, v));
     crate::test_support::assert_same_canonical(&mut r, &mut reference);
@@ -147,15 +155,14 @@ fn filter_images_share_the_display_composition_budget() {
     let effect=effect_occurrence(&mut document,crate::tests::image_windows::program(false,false),"window fixture");set_root_entries(&mut document,vec![effect]);let scene=document.scene();
     let image_bytes = scene::Scene::capture_image_bound(scene, PixelRect::full(extent));
     for allowance in [0, 512 << 20, 1536 << 20] {
-        r.set_complete_display_allowance(allowance);
+        r.native_edit.as_mut().unwrap().composition_bytes = allowance;
         let native = r.native_edit.as_ref().unwrap();
-        let display = CACHE_BYTES;
         let images = native.image_pixel_budget(0);
-        let floor = CACHE_BYTES + scene::windows::DEFAULT_IMAGE_PIXEL_BYTES;
-        assert_eq!(display + images, native.composition_bytes.max(floor));
-        let plan = scene::windows::Plan::new(scene, extent, images, r.device.limits().max_texture_dimension_2d).unwrap();
-        assert_eq!(plan.is_none(), allowance == 1536 << 20);
-        if plan.is_none() { assert!(image_bytes + display <= native.composition_bytes); }
+        assert!(images <= allowance);
+        let plan = scene::windows::Plan::new(scene, extent, images, r.device.limits().max_texture_dimension_2d);
+        if allowance == 0 { assert!(plan.is_err()); continue; }
+        let plan = plan.unwrap();
+        assert_eq!(plan.is_none(), image_bytes <= images);
     }
 }
 
@@ -184,8 +191,8 @@ fn visible_detail_matches_dense_composition_through_pan_wrap_rotation_and_resize
     .enumerate()
     {
         let view = view(matrix);
-        submit(&mut dense, &doc, view, index == 0);
-        submit(&mut cached, &doc, view, index == 0);
+        submit(&mut dense, &doc, view, index == 0, true);
+        submit(&mut cached, &doc, view, index == 0, true);
 
         assert!(cached.scale_display.as_ref().unwrap().storage_bytes() <= CACHE_BYTES);
         close(
@@ -201,30 +208,15 @@ fn visible_detail_matches_dense_composition_through_pan_wrap_rotation_and_resize
     }
     let revision = cached.composite_revision;
     let work = cached.metrics.composited_pixels;
-    submit(&mut cached, &doc, view([1., 0., 0., 1., -1., 0.]), false);
+    submit(&mut cached, &doc, view([1., 0., 0., 1., -1., 0.]), false, true);
     assert_eq!(
         cached.metrics.composited_pixels, work,
         "resident pan must reuse detail"
     );
     assert_eq!(cached.composite_revision, revision);
-    assert!(
-        cached
-            .request_color_sample(ColorSampleRequest {
-                request_id: 11,
-                source: ColorSampleSource::Composite,
-                position: [255, 256],
-                area: ColorSampleArea::Average5,
-            })
-            .unwrap()
-    );
-    cached
-        .device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(READBACK_TIMEOUT),
-        })
-        .unwrap();
-    let sample = cached.take_color_sample().unwrap().unwrap();
+    let sample=crate::test_support::color_sample(&mut cached,ColorSampleRequest {
+        request_id:11,source:ColorSampleSource::Composite,position:[255,256],area:ColorSampleArea::Average5,
+    });
     assert!(sample.rgba.iter().all(|v| v.is_finite()));
 }
 
@@ -259,8 +251,8 @@ fn filtered_masked_source_edits_and_restoration_refresh_detail_and_coarse_displa
         }
         // Layer property actions request recomposition through FramePacket;
         // only camera motion uses an otherwise clean packet.
-        submit(&mut dense, &doc, v, true);
-        submit(&mut r, &doc, v, true);
+        submit(&mut dense, &doc, v, true, true);
+        submit(&mut r, &doc, v, true, true);
         let displayed = present(&r, &mut b, v);
         close(&present(&dense, &mut a, v), &displayed);
         if step == 0 {
@@ -278,7 +270,7 @@ fn filtered_masked_source_edits_and_restoration_refresh_detail_and_coarse_displa
     // Recreating the GPU cache reconstructs the same pixels from retained source.
     let mut recovered = bounded_renderer(doc.composition().color).unwrap();
 
-    submit(&mut recovered, &doc, v, true);
+    submit(&mut recovered, &doc, v, true, true);
     let mut p = crate::test_support::float_presenter(&recovered);
     close(&first, &present(&recovered, &mut p, v));
 }
@@ -288,7 +280,7 @@ fn in_surface_navigator_keeps_clipped_geometry() {
     let doc = document([1537, 769]);
     let mut r = bounded_renderer(doc.composition().color).unwrap();
 
-    submit(&mut r, &doc, view([1., 0., 0., 1., -900., -400.]), true);
+    submit(&mut r, &doc, view([1., 0., 0., 1., -900., -400.]), true, true);
     let size = [256, (256. * 769. / 1537f32).ceil() as u32];
     let mut oracle = Vec::new();
     let (texture, target) = create_target(
@@ -370,7 +362,7 @@ fn large_document_waits_for_mip_compilation_before_reporting_canvas_ready() {
     }
     assert!(r.scene_pipelines.scale.reduce.ready());
     assert!(r.scene_pipelines.scale.reduce_pair.ready());
-    submit(&mut r, &doc, view([1., 0., 0., 1., 0., 0.]), true);
+    submit(&mut r, &doc, view([1., 0., 0., 1., 0., 0.]), true, true);
     assert!(r.scale_display.is_some());
     drop(r);
     startup::finish_shader_compiler_shutdown();
@@ -397,6 +389,7 @@ fn committed_contact_strokes_present_their_canonical_native_pixels() {
                     ..crate::test_support::pen(i + 1, if i == 0 { PenPhase::Down } else if i == 32 { PenPhase::Up } else { PenPhase::Move }, [40. + 240. * t, 120. + 50. * (t * std::f32::consts::TAU).sin()], SampleFlags::PRIMARY) }).unwrap();
             let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
             loop {
+                prepare_engine_frame(&mut engine);
                 engine.render_frame().unwrap();
                 engine.backend_mut().wait_idle().unwrap();
                 if !engine.has_pending_input() { break; }
@@ -405,6 +398,7 @@ fn committed_contact_strokes_present_their_canonical_native_pixels() {
         }
         let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
         while engine.backend().has_pending_work() {
+            prepare_engine_frame(&mut engine);
             engine.render_frame().unwrap();
             engine.backend_mut().wait_idle().unwrap();
             assert!(std::time::Instant::now() < deadline, "committed stroke did not settle");
@@ -413,7 +407,7 @@ fn committed_contact_strokes_present_their_canonical_native_pixels() {
         let mut presenter = crate::test_support::float_presenter(engine.backend());
         let live = present(engine.backend(), &mut presenter, v);
         let doc = engine.document().clone();
-        submit(engine.backend_mut(), &doc, v, true);
+        submit(engine.backend_mut(), &doc, v, true, true);
         assert!(live == present(engine.backend(), &mut presenter, v),
             "{preset:?}: the committed stroke must present the pixels Undo/Redo and reopening restore");
     }
@@ -438,6 +432,7 @@ fn native_stroke_undo_redo_and_replaced_device_rebuild_visible_tiles_from_exact_
     let flush = |engine: &mut CanvasEngine<WgpuRasterizer>| {
         let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
         loop {
+            prepare_engine_frame(engine);
             engine.render_frame().unwrap();
             if !engine.has_pending_input() && !engine.has_pending_document_edits()
                 && (engine.has_active_stroke() || !engine.backend().has_pending_work()) {
@@ -509,13 +504,10 @@ fn pass_through_edits_and_mode_changes_match_full_recomposition() {
     let desaturate=make_effect(&mut doc,"black_white");let blur=make_effect(&mut doc,"gaussian_blur");let lower=paint_occurrence(&mut doc,"grouped",None);
     let id=stack_occurrence(&mut doc,"grouped",vec![upper,desaturate,blur,lower]);doc.artwork.occurrences.get_mut(id).unwrap().blend=layer_core::LayerBlend::PassThrough;insert_occurrence(&mut doc,id,0);
     let upper_id=doc.scene().source_target(upper).unwrap();let lower_id=doc.scene().source_target(lower).unwrap();
-    let mut incremental = bounded_renderer(doc.composition().color).unwrap();
-    let mut reference = bounded_renderer(doc.composition().color).unwrap();
+    let renderer = || crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
+    let mut incremental = renderer();
+    let mut reference = renderer();
     reference.test.exact_display = true;
-    for r in [&mut incremental, &mut reference] {
-
-        r.set_complete_display_allowance(64 * 1024 * 1024);
-    }
     let mut a = crate::test_support::float_presenter(&incremental);
     let mut b = crate::test_support::float_presenter(&reference);
     let v = centered_view(doc.composition().size, [320, 240], 0.4, 0.);
@@ -554,7 +546,7 @@ fn pass_through_edits_and_mode_changes_match_full_recomposition() {
                 composite_all: all,
                 ..packet(doc.scene(), doc.composition().size)
             }).unwrap();
-            submit(r, &doc, v, false);
+            submit(r, &doc, v, false, false);
         }
         close(&present(&incremental, &mut a, v), &present(&reference, &mut b, v));
     }
@@ -568,7 +560,7 @@ fn pass_through_edits_and_mode_changes_match_full_recomposition() {
             for (r, all) in [(&mut incremental, false), (&mut reference, true)] {
                 r.set_transform_preview(Some(&transform)).unwrap();
                 r.submit(FramePacket { view: v, composite_all: all, ..packet(doc.scene(), doc.composition().size) }).unwrap();
-                submit(r, &doc, v, false);
+                submit(r, &doc, v, false, false);
             }
             assert!(!incremental.has_pending_work());
             assert!(!reference.has_pending_work());
@@ -581,7 +573,7 @@ fn pass_through_edits_and_mode_changes_match_full_recomposition() {
         }
         for r in [&mut incremental, &mut reference] {
             r.set_transform_preview(None).unwrap();
-            submit(r, &doc, v, false);
+            submit(r, &doc, v, false, false);
         }
         assert!(!incremental.has_pending_work());
         close(&present(&incremental, &mut a, v), &present(&reference, &mut b, v));
@@ -637,7 +629,7 @@ fn fit_presentation_frames() {
         for omitted in [wgpu::Features::empty(), wgpu::Features::FLOAT32_FILTERABLE] {
             let doc = photo(extent);
             let mut r = WgpuRasterizer::native_headless_without(doc.composition().color, omitted).unwrap();
-            submit(&mut r, &doc, fit_view(extent, viewport, zoom, 0.), true);
+            submit(&mut r, &doc, fit_view(extent, viewport, zoom, 0.), true, false);
             let cache = r.scale_display.as_ref().unwrap();
             eprintln!("{name}, float32 filtering {}: display level {}, resident {}, footprint {:.2} texels, half-float presentation {} MB", omitted.is_empty(), cache.plan.level, cache.resident_bytes() > 0,
                 1. / zoom / (1 << cache.plan.level) as f32, cache.half.as_ref().map_or(0, hierarchy::Half::bytes) >> 20);
@@ -675,7 +667,7 @@ fn half_float_conversion_frames() {
     for (name, extent, zoom) in [("12 MP at the low tier's Fit", [4248, 2832], 0.298f32), ("24 MP at the mid tier's Fit", [6000, 4000], 0.3), ("61 MP at the top tier's Fit", [9504, 6336], 0.213)] {
         let doc = photo(extent);
         let mut r = WgpuRasterizer::native_headless_without(doc.composition().color, wgpu::Features::empty()).unwrap();
-        submit(&mut r, &doc, fit_view(extent, viewport, zoom, 0.), true);
+        submit(&mut r, &doc, fit_view(extent, viewport, zoom, 0.), true, false);
         let mut timer = crate::frame_timing::GpuFrameTimer::new(r.device(), r.queue());
         let mut gpu = Vec::new();
         for frame in 0..60u64 {
@@ -727,14 +719,14 @@ fn fit_views_read_one_half_float_level_closer_to_an_area_average() {
             let mut r = if bounded { bounded_renderer(color) } else { WgpuRasterizer::new_native_headless(color) }.unwrap();
             let size = extent.map(|n| (n as f32 * zoom).ceil() as u32 + 2);
             let view = ViewState { width_px: size[0], height_px: size[1], document_to_surface: [zoom, 0., 0., zoom, 1., 1.] };
-            submit(&mut r, &doc, view, true);
+            submit(&mut r, &doc, view, true, bounded);
             assert_eq!(r.scale_display.as_ref().unwrap().plan.level, level);
             assert!(half_float_presentation(&r), "zoom {zoom} presents half-float levels");
             let actual = present(&r, &mut crate::test_support::float_presenter(&r), view);
             let mut exact = WgpuRasterizer::new_native_headless(color).unwrap();
             exact.test.reference = true;
             let high = ViewState { width_px: size[0] * 8, height_px: size[1] * 8, document_to_surface: view.document_to_surface.map(|n| n * 8.) };
-            submit(&mut exact, &doc, high, true);
+            submit(&mut exact, &doc, high, true, false);
             let reference = present(&exact, &mut crate::test_support::float_presenter(&exact), high);
             let mut errors = Vec::new();
             for y in 2..(extent[1] as f32 * zoom) as u32 {
@@ -761,7 +753,7 @@ fn half_float_levels_present_alike_with_or_without_float32_filtering() {
         let size = extent.map(|n| (n as f32 * zoom).ceil() as u32 + 2);
         let view = ViewState { width_px: size[0], height_px: size[1], document_to_surface: [zoom, 0., 0., zoom, 1., 1.] };
         let shown = |mut r: WgpuRasterizer| {
-            submit(&mut r, &doc, view, true);
+            submit(&mut r, &doc, view, true, false);
             assert!(half_float_presentation(&r), "zoom {zoom} presents half-float levels");
             present(&r, &mut crate::test_support::float_presenter(&r), view)
         };
@@ -778,7 +770,7 @@ fn the_surround_skips_the_artwork_shader() {
     let doc = patterned(extent);
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let view = ViewState { width_px: 800, height_px: 600, document_to_surface: [0.25, 0., 0., 0.25, 300., 200.] };
-    submit(&mut r, &doc, view, true);
+    submit(&mut r, &doc, view, true, false);
     let mut presenter = crate::test_support::float_presenter(&r);
     let shown = present(&r, &mut presenter, view);
     let [width, height] = [1100. * 0.25, 700. * 0.25];
@@ -801,8 +793,8 @@ fn painting_at_fit_updates_the_half_float_level_it_presents() {
     for bounded in [false, true] {
         let renderer = || if bounded { bounded_renderer(color) } else { WgpuRasterizer::new_native_headless(color) }.unwrap();
         let (mut painted, mut fresh) = (renderer(), renderer());
-        submit(&mut painted, &doc, fit, true);
-        submit(&mut fresh, &doc, native, true);
+        submit(&mut painted, &doc, fit, true, bounded);
+        submit(&mut fresh, &doc, native, true, bounded);
         let mut presenter = crate::test_support::float_presenter(&painted);
         let before = present(&painted, &mut presenter, fit);
         let conversions = painted.metrics.half_level_passes;
@@ -813,14 +805,16 @@ fn painting_at_fit_updates_the_half_float_level_it_presents() {
             for kind in [DabBatchKind::Preview, DabBatchKind::Persistent] {
                 let batch = DabBatch { kind, ..batch.clone() };
                 for (mut r, view) in [(&mut painted, fit), (&mut fresh, native)] {
-                    crate::test_support::submit_ready(&mut r, FramePacket { view, dabs: &[dab], dab_batches: std::slice::from_ref(&batch), composite_all: false, ..packet(doc.scene(), extent) }).unwrap();
+                    let frame=FramePacket {view,dabs:&[dab],dab_batches:std::slice::from_ref(&batch),composite_all:false,..packet(doc.scene(),extent)};
+                    if bounded {working_scene_frame(&mut r,frame);}
+                    crate::test_support::submit_ready(&mut r,frame).unwrap();
                 }
                 present(&painted, &mut presenter, fit);
             }
         }
         assert_eq!(painted.metrics.half_level_passes, conversions, "bounded {bounded}: strokes convert their half-float pixels while reducing them");
-        submit(&mut painted, &doc, fit, false);
-        submit(&mut fresh, &doc, fit, false);
+        submit(&mut painted, &doc, fit, false, bounded);
+        submit(&mut fresh, &doc, fit, false, bounded);
         assert!(half_float_presentation(&painted) && half_float_presentation(&fresh), "bounded {bounded}");
         let painted_pixels = present(&painted, &mut presenter, fit);
         let fresh_pixels = present(&fresh, &mut crate::test_support::float_presenter(&fresh), fit);

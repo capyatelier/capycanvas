@@ -2,6 +2,10 @@
 use super::*;
 use serde_json::{Value, json};
 
+fn photo_limits() -> layer_color::photo::DecodeLimits {
+    layer_color::photo::DecodeLimits::from_memory_budget(layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes()))
+}
+
 fn stateless(call: unsafe extern "C" fn(*const c_char) -> u64, request: impl Into<Vec<u8>>) -> Value {
     let source = CString::new(request).unwrap();
     let output = unsafe { call(source.as_ptr()) };
@@ -233,7 +237,7 @@ fn write_document(document: &layer_core::Document, output: &mut impl std::io::Wr
 }
 fn read_document(input: impl std::io::Read + std::io::Seek) -> layer_core::Document {
     layer_core::temp_files::set_directory(std::env::temp_dir()).unwrap();
-    let outcome = layer_ui::read_import(input, layer_ui::ImportIntent::Open, Default::default(), layer_core::DocumentNames { paint: "Paint".into(), paper: "Paper".into() }, Default::default(), Default::default(), &std::sync::atomic::AtomicBool::new(false)).unwrap();
+    let outcome = layer_ui::read_import(input, layer_ui::ImportIntent::Open, Default::default(), layer_core::DocumentNames { paint: "Paint".into(), paper: "Paper".into() }, Default::default(), photo_limits(), &std::sync::atomic::AtomicBool::new(false)).unwrap();
     let layer_ui::ImportOutcome::Editable(imported) = outcome else { panic!("Expected editable artwork") };
     imported.project
 }

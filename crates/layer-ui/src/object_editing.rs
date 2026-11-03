@@ -504,9 +504,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn require_document_idle_except_placement(&self) -> Result<(), String> {
         if self.objects.placing() { self.require_idle() } else { self.require_document_idle() }
     }
-    pub(super) fn begin_object_placement(&mut self, insert: Edit, objects: Vec<ImageObjectHandle>) -> Result<(), String> {
+    fn begin_reserved_object_placement(&mut self, insert: Edit, objects: Vec<ImageObjectHandle>,
+        reservation: Option<layer_core::MemoryReservation>) -> Result<(), String> {
         let inverse = self.engine.document().clone().apply(insert.clone()).map_err(error)?;
-        self.engine.preview_edit(insert.clone()).map_err(error)?;
+        if let Some(reservation) = reservation { self.engine.preview_reserved_edit(insert.clone(), reservation) }
+        else { self.engine.preview_edit(insert.clone()) }.map_err(error)?;
         let layer = objects.first().and_then(|object| self.engine.document().scene().object_owner(*object));
         self.objects.placement = Some(Placement { insert, inverse, objects, previous: self.layer_interaction.tool });
         self.objects.layer_move = false;
@@ -524,7 +526,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         let doc = self.engine.document();
         let affines: Vec<_> = placement.objects.iter().filter_map(|h| Some((*h, doc.scene().object(*h)?.affine))).collect();
         let finish = (apply && affines.len() == placement.objects.len()).then(|| doc.set_image_object_affines_edit(&affines)).transpose().map_err(error)?;
-        self.engine.preview_edit(placement.inverse).map_err(error)?;
+        if apply {self.engine.preview_edit(placement.inverse)}
+        else {self.engine.cancel_preview_edit(placement.inverse)}.map_err(error)?;
         self.engine.backend_mut().prepare_moving_layer(None);
         self.objects.changed = true;
         if let Some(finish) = finish { self.layer_edit(Edit::Batch(vec![placement.insert, finish]))?; }
@@ -578,8 +581,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let camera = &self.state.camera;
         self.pointer64(camera.work_area_center())
     }
-    pub(super) fn place_image_objects(&mut self, sources: Vec<(String, layer_core::color::source::SourceImage)>, centre: Option<Point>,
+    pub(super) fn place_image_objects(&mut self, sources: impl Into<crate::PreparedImages>, centre: Option<Point>,
         destination: Option<ImageLayerDestination>, interactive: bool, fit: bool) -> Result<(), String> {
+        let (sources, reservation, _) = sources.into().into_parts();
         self.require_document_idle()?;
         if !self.engine.backend().supports_tiled_sources() { return Err("This renderer does not support tiled photo layers".into()); }
         if sources.is_empty() { return Err("Choose at least one image".into()); }
@@ -595,9 +599,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         }).collect::<Result<Vec<_>, String>>()?;
         let (edit, handles, _) = self.insert_objects_edit(objects, destination, false)?;
         self.source_edit_candidates(&edit, Default::default())?;
-        if interactive { self.begin_object_placement(edit, handles) }
+        if interactive { self.begin_reserved_object_placement(edit, handles, reservation) }
         else {
-            self.layer_edit(edit)?;
+            self.layer_edit_reserved(edit, Vec::new(), reservation)?;
             self.object_tool(LayerCanvasTool::Move)?;
             self.refresh_document();
             self.refresh_commands();

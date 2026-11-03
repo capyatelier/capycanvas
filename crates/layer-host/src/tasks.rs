@@ -26,14 +26,8 @@ pub fn capture_document(document: &Document) -> layer_core::authored::ArtworkCap
     capture_document_at(document, document.output().context.clone())
 }
 
-pub fn capture_document_at(document: &Document, mut context: layer_core::authored::EvaluationContext) -> layer_core::authored::ArtworkCapture {
-    context.retain_effects(&document.artwork);
-    let mut artwork = document.artwork.clone();
-    artwork.outputs.get_mut(artwork.default_output).expect("Admitted output").context = context;
-    layer_core::authored::ArtworkCapture {artwork: Arc::new(artwork), checkpoint: layer_core::authored::CaptureCheckpoint {
-        owner: document.owner, document: document.artwork.id, session_generation: 0,
-        artwork_generation: document.revision, working_generation: document.working.generation, edit_checkpoint: 0,
-    }}
+pub fn capture_document_at(document: &Document, context: layer_core::authored::EvaluationContext) -> layer_core::authored::ArtworkCapture {
+    document.capture_artwork(context)
 }
 
 pub fn compare(
@@ -88,10 +82,6 @@ pub(crate) fn gpu(session: &UiSession<Renderer>) -> Result<&WgpuRasterizer, Stri
 
 fn device_current(session: &UiSession<Renderer>, device: &wgpu::Device) -> bool {
     session.engine().backend().0.as_ref().map(|r| r.device()) == Some(device)
-}
-
-fn encode_budget() -> usize {
-    layer_color::photo::PhotoMemoryBudget::current().encode_bytes
 }
 
 pub struct ColorTask {
@@ -157,12 +147,12 @@ impl ColorTask {
                         control.clone(),
                     )
                     .map_err(|e| e.to_string())?
-                    .flattened_document(color, options, encode_budget())?,
+                    .flattened_document(color, options, layer_color::photo::PhotoMemoryBudget::conversion_encode_limit())?,
             ),
             ColorPreparation::Edit(change) => Some(layer_color::prepare_document_color(
                 &self.workflow.original,
                 change,
-                encode_budget(),
+                layer_color::photo::PhotoMemoryBudget::conversion_encode_limit(),
                 || control.is_cancelled(),
             )?),
         };
@@ -327,7 +317,7 @@ impl SourceTask {
             return Err("Source result was already prepared".into());
         }
         self.prepare_metadata()?;
-        let (source, clipped) = self.workflow.prepare(profile, encode_budget(), cancelled)?;
+        let (source, clipped) = self.workflow.prepare(profile, layer_color::photo::PhotoMemoryBudget::conversion_encode_limit(), cancelled)?;
         self.clipped = clipped;
         self.converted = Some(source);
         Ok(())

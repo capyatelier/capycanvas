@@ -7226,3 +7226,36 @@ retires independently at 69.3 ms. One cold process per diagnostic arm measures
 Showing → renderer idle at 202.4 → 368.5 ms without → with the refinement
 pause. The pause also applies to the first drawing, where no held image exists.
 Raw runs: `/mnt/localssd/capycanvas7-issue24-impl/switch-transition/`.
+
+## GTK shared memory budget
+
+Measured 2026-11-02 on NVIDIA RTX PRO 6000 Blackwell Max-Q, release,
+private Mutter at 2560 × 1600 / 120 Hz, against the frozen `cf8e5c4dc`
+control. GPen uses a 6000 × 4000 document, a 384 px brush and a six-second
+request plus input drain. That pair includes the inventory,
+publication and colour-accounting corrections.
+
+| Workload | Paired trials | Canvas cadence, Hz | Gap p99, ms | Worker thread CPU p50/p95, ms |
+| --- | --- | --- | --- | --- |
+| GPen | 1 | 119.476 → 119.659 | 8.934 → 8.568 | 1.236/1.461 → 1.022/1.393 |
+| Pan/pinch | 1 | 119.390 → 119.406 | 9.022 → 8.876 | 0.534/0.794 → 0.576/0.848 |
+
+GPen composition CPU p50/p95 is 0.957/1.179 → 0.767/1.116 ms; maximum
+canvas gap is 28.144 → 19.044 ms. The GPen pair precedes retention parity;
+the pan/pinch pair includes the final cache ceilings and frame work grant split.
+Both builds retain
+the 8.333 ms p99 diagnostic miss. These publication counts do not qualify
+fresh ink or reference-tablet motion.
+
+The ten-layer switch comparison uses three processes per build and ten
+switches per process. Every candidate switch reached idle, with zero censored
+observations, after adapting idle source batches to the available decoded slots.
+These trials precede the final inventory and colour-accounting corrections.
+
+| Switch observation | First switch, ms | Later switches, ms |
+| --- | --- | --- |
+| Meaningful artwork | 2186.637 → 249.555 | 2289.708 → 257.905 |
+| Renderer idle | 2399.779 → 1430.847 | 2484.829 → 1436.092 |
+
+Raw runs: `/mnt/localssd/capycanvas7-issue24-impl/m21-gtk/paired-confirm/`,
+`fifo-final-motion/` and `idle-restored-switches/`.

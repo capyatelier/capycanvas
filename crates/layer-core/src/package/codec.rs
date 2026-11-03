@@ -18,7 +18,7 @@ pub struct PreparedPackage {
 pub struct OutputInfo { pub id: PortableId, pub name: Arc<str> }
 #[derive(Debug)]
 pub enum OpenOutcome {
-    Candidate { artwork: Artwork, source: ImmutableBacking, preview: Option<Preview> },
+    Candidate { artwork: Artwork, source: ImmutableBacking, preview: Option<Preview>, memory: crate::DocumentMemory },
     Preserved { source: ImmutableBacking, outputs: Vec<OutputInfo>, preview: Option<Preview>, reason: String },
     RecoveredView { source: ImmutableBacking, preview: Preview, reason: String, cause: Option<PackageCause> },
     Failure { source: ImmutableBacking, reason: String, cause: Option<PackageCause> },
@@ -155,7 +155,7 @@ fn failed(source:ImmutableBacking,preview:Option<Preview>,error:super::values::D
     let cause = match &error {
         super::values::DecodeError::Unsupported(_) => Some(PackageCause::Unsupported),
         super::values::DecodeError::Invalid(_) => Some(PackageCause::Damaged),
-        super::values::DecodeError::Io(_) => None,
+        super::values::DecodeError::Io(_) | super::values::DecodeError::MemoryBudgetExceeded => None,
     };
     let reason = error.to_string();
     match preview {Some(preview)=>OpenOutcome::RecoveredView {source,preview,reason,cause},None=>OpenOutcome::Failure {source,reason,cause}}
@@ -186,6 +186,9 @@ fn limited(source:ImmutableBacking,value:Value,preview:Option<Preview>,reason:St
     OpenOutcome::Preserved {source,outputs,preview:matched,reason}
 }
 pub fn open(source:ImmutableBacking,limits:crate::ProjectLimits,cancelled:&AtomicBool) -> Result<OpenOutcome,String> {
+    open_with_budget(source, limits, cancelled, crate::MemoryBudget::process())
+}
+pub fn open_with_budget(source:ImmutableBacking,limits:crate::ProjectLimits,cancelled:&AtomicBool,budget:crate::MemoryBudget) -> Result<OpenOutcome,String> {
     active(cancelled)?;
     let mut reader=BackingReader::new(&source,cancelled);
     let directory=match Directory::read(&mut reader,262_144,limits.metadata_bytes) {
@@ -208,7 +211,7 @@ pub fn open(source:ImmutableBacking,limits:crate::ProjectLimits,cancelled:&Atomi
     if directory.members.iter().enumerate().any(|(index,member)|member.name.starts_with("data/") && !indexed.contains(&index)) {
         return Ok(failed(source,preview,"Unindexed data member".into()));
     }
-    let mut resources=resources::ResourceReader::new(&manifest,&source,cancelled,limits);
+    let mut resources=resources::ResourceReader::with_budget(&manifest,&source,cancelled,limits,budget.clone());
     let decoded=super::artwork_records::decode(&manifest,&mut resources);
     active(cancelled)?;
     match decoded {
@@ -217,11 +220,13 @@ pub fn open(source:ImmutableBacking,limits:crate::ProjectLimits,cancelled:&Atomi
             let document=crate::Document::from_artwork(artwork.clone());
             match document {
                 Err(reason)=>return Ok(failed(source,preview,reason.to_string().into())),
-                Ok(document)=>if let Err(reason)=document.admit(limits) {return Ok(OpenOutcome::Preserved {source,outputs:output_inventory(&manifest),preview:matching_preview(&manifest,preview),reason});},
+                Ok(document)=>if let Err(reason)=document.admit(limits) {if reason==crate::MEMORY_BUDGET_EXCEEDED{return Err(reason);}return Ok(OpenOutcome::Preserved {source,outputs:output_inventory(&manifest),preview:matching_preview(&manifest,preview),reason});},
             }
             artwork.extensions=match crate::authored::Extensions::load(&manifest,&source,cancelled) {Ok(extensions)=>Arc::new(extensions),Err(reason)=>{active(cancelled)?;return Ok(failed(source,preview,reason));}};
-            Ok(OpenOutcome::Candidate {artwork,source,preview:matching_preview(&manifest,preview)})
+            let memory=crate::DocumentMemory::new(budget,resources.admission.clone());
+            Ok(OpenOutcome::Candidate {artwork,source,preview:matching_preview(&manifest,preview),memory})
         }
+        Err(super::values::DecodeError::MemoryBudgetExceeded)=>Err(crate::MEMORY_BUDGET_EXCEEDED.into()),
         Err(super::values::DecodeError::Unsupported(reason))=>Ok(OpenOutcome::Preserved {source,outputs:output_inventory(&manifest),preview:matching_preview(&manifest,preview),reason}),
         Err(error)=>Ok(failed(source,preview,error)),
     }

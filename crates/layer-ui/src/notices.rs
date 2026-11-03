@@ -199,7 +199,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn notify(&mut self, text: impl Into<String>) {
-        self.raise_notice(text.into(), Vec::new());
+        let text=text.into();
+        if text==layer_core::MEMORY_BUDGET_EXCEEDED {
+            self.raise_message_notice(MessageId::DOCUMENTS_REFUSAL_ADMISSION_BUDGET);
+        } else { self.raise_notice(text, Vec::new()); }
     }
     pub fn notify_window(&mut self, text: impl Into<String>) {
         self.notify(text);

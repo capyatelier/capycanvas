@@ -4,6 +4,27 @@
 use super::*;
 
 impl WgpuRasterizer {
+    pub(crate) fn color_memory_bytes(&self) -> u64 {
+        self.paint_layers.iter().flat_map(|layer| &layer.pages).map(color_page_bytes).sum()
+    }
+    pub(crate) fn pinned_paint_bytes(&self) -> u64 {
+        self.paint_memory_bytes().saturating_sub(self.evictable_native_color_bytes())
+    }
+    fn evictable_native_color_bytes(&self) -> u64 {
+        let Some(native) = &self.native_edit else { return 0; };
+        if self.transform_preview.is_some() || self.transforms.as_ref().is_some_and(|transform| transform.has_preview()) { return 0; }
+        let required = self.restore_preflight.as_ref().map_or(&[][..], |restore| restore.dependencies());
+        self.paint_layers.iter().map(|layer| {
+            let changed = self.raster.as_ref().and_then(|raster| raster.targets.get(&layer.id)).map(|target| &target.changed);
+            layer.pages.iter().filter(|page| {
+                page.stroke_start.is_none()
+                    && !changed.is_some_and(|coordinates| coordinates.contains(&page.coordinate))
+                    && !required.iter().any(|(target, coordinates)| *target == layer.id && coordinates.binary_search(&page.coordinate).is_ok())
+                    && native.backing.get(&layer.id).and_then(|data| data.tiles.get(&TileKey { plane: RasterPlane::Color, coordinate: page.coordinate }))
+                        .is_some_and(|tile| matches!(tile.try_backing(), Some(Ok(_))))
+            }).map(|page| page.primary.storage_bytes() + page.secondary.as_ref().map_or(0, PageSurface::storage_bytes)).sum::<u64>()
+        }).sum::<u64>()
+    }
     pub(crate) fn native_backing(&self, id: SourceTarget) -> Option<&Arc<RasterData>> {
         self.native_edit.as_ref()?.backing.get(&id)
     }
@@ -152,80 +173,52 @@ impl WgpuRasterizer {
     /// This cache target is not a hard active-stroke/transform allocation limit;
     /// those workloads need separate scheduling. No backing wait or readback
     /// happens here.
-    pub(crate) fn trim_native_color_cache(&mut self, batches: &[DabBatch], tiles: &[Vec<BrushTile>]) {
-        if let Some(native) = &self.native_edit {
-            if self.transform_preview.is_some()
-                || self.transforms.as_ref().is_some_and(|t| t.has_preview())
-            {
-                return;
-            }
-            let mut bytes: u64 = self
-                .paint_layers
-                .iter()
-                .flat_map(|l| &l.pages)
-                .map(color_page_bytes)
-                .sum();
-            if bytes <= native.color_cache_bytes {
-                return;
-            }
-            let destinations = self.destination_pages(batches, tiles);
-            // An inactive blend surface is cheaper to recreate than a canonical
-            // page is to decompress. Retire scratch first, even on changed pages:
-            // their active surface stays pinned until capture completes. Keep
-            // this frame's destinations to avoid immediate drop/reallocation.
-            for layer in &mut self.paint_layers {
-                for page in &mut layer.pages {
-                    if bytes <= native.color_cache_bytes {
-                        return;
-                    }
-                    if page.stroke_start.is_none() && !destinations.contains(&(layer.id, page.coordinate)) {
-                        let released = page.discard_inactive();
-                        bytes -= released;
-                        if released != 0 {
-                            for coverage in layer.coverage_pages.iter().filter(|p| p.coordinate == page.coordinate) { coverage.release_color_bindings(); }
-                        }
-                    }
+    pub(crate) fn trim_native_color_cache(&mut self, batches: &[DabBatch], tiles: &[Vec<BrushTile>]) -> Vec<PageSurface> {
+        let mut retired = Vec::new();
+        let Some(native) = &self.native_edit else { return retired; };
+        if self.transform_preview.is_some() || self.transforms.as_ref().is_some_and(|t| t.has_preview()) { return retired; }
+        let mut bytes = self.color_memory_bytes();
+        let limit = native.color_cache_bytes.saturating_add(native.color_cache_pinned_bytes);
+        if bytes <= limit { return retired; }
+        let destinations = self.destination_pages(batches, tiles);
+        for layer in &mut self.paint_layers {
+            for page in &mut layer.pages {
+                if bytes <= limit || retired.len() == SOURCE_SLOTS { return retired; }
+                if page.stroke_start.is_some() || destinations.contains(&(layer.id, page.coordinate)) { continue; }
+                let Some(mut spare) = page.secondary.take() else { continue; };
+                if page.active_secondary {
+                    std::mem::swap(&mut page.primary, &mut spare);
+                    page.primary_needs_clear = false;
                 }
-            }
-            let required = self.restore_preflight.as_ref().map_or(&[][..], |restore| restore.dependencies());
-            for layer in &mut self.paint_layers {
-                let Some(data) = native.backing.get(&layer.id) else {
-                    continue;
-                };
-                let changed = self
-                    .raster
-                    .as_ref()
-                    .and_then(|r| r.targets.get(&layer.id))
-                    .map(|t| &t.changed);
-                layer.pages.retain(|page| {
-                    if bytes <= native.color_cache_bytes
-                        || changed.is_some_and(|c| c.contains(&page.coordinate))
-                        || page.stroke_start.is_some()
-                        || required.iter().any(|(target, coordinates)| *target == layer.id
-                            && coordinates.binary_search(&page.coordinate).is_ok())
-                    {
-                        return true;
-                    }
-                    let ready = data
-                        .tiles
-                        .get(&TileKey {
-                            plane: RasterPlane::Color,
-                            coordinate: page.coordinate,
-                        })
-                        .is_some_and(|tile| matches!(tile.try_backing(), Some(Ok(_))));
-                    if ready {
-                        // Stroke coverage outlives disposable color residency;
-                        // its reusable bindings must not pin retired textures.
-                        for coverage in layer.coverage_pages.iter().filter(|p| p.coordinate == page.coordinate) {
-                            coverage.release_color_bindings();
-                        }
-                        bytes -= color_page_bytes(page);
-                    }
-                    !ready
-                });
+                page.active_secondary = false;
+                bytes -= spare.storage_bytes();retired.push(spare);
+                for coverage in layer.coverage_pages.iter().filter(|p| p.coordinate == page.coordinate) { coverage.release_color_bindings(); }
             }
         }
+        let required = self.restore_preflight.as_ref().map_or(&[][..], |restore| restore.dependencies());
+        for layer in &mut self.paint_layers {
+            let Some(data) = native.backing.get(&layer.id) else { continue; };
+            let changed = self.raster.as_ref().and_then(|r| r.targets.get(&layer.id)).map(|target| &target.changed);
+            let mut index = 0;
+            while index < layer.pages.len() {
+                if bytes <= limit || retired.len() == SOURCE_SLOTS { return retired; }
+                let page = &layer.pages[index];
+                let keep = changed.is_some_and(|coordinates| coordinates.contains(&page.coordinate))
+                    || page.stroke_start.is_some() || destinations.contains(&(layer.id, page.coordinate))
+                    || required.iter().any(|(target, coordinates)| *target == layer.id && coordinates.binary_search(&page.coordinate).is_ok());
+                let ready = data.tiles.get(&TileKey { plane: RasterPlane::Color, coordinate: page.coordinate })
+                    .is_some_and(|tile| matches!(tile.try_backing(), Some(Ok(_))));
+                let count = 1 + usize::from(page.secondary.is_some());
+                if keep || !ready || retired.len() + count > SOURCE_SLOTS { index += 1;continue; }
+                for coverage in layer.coverage_pages.iter().filter(|p| p.coordinate == page.coordinate) { coverage.release_color_bindings(); }
+                let page = layer.pages.swap_remove(index);
+                bytes -= color_page_bytes(&page);
+                retired.push(page.primary);retired.extend(page.secondary);
+            }
+        }
+        retired
     }
+
 }
 
 fn color_page_bytes(page: &LayerPage) -> u64 {

@@ -273,7 +273,7 @@ pub(crate) fn new_drawing_at(width: u32, height: u32, depth: layer_core::color::
 
 fn open_native_document(input: impl std::io::Read + std::io::Seek) -> layer_core::Document {
     crate::storage::roots();
-    let outcome = layer_ui::read_import(input, layer_ui::ImportIntent::Open, Default::default(), layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }, Default::default(), Default::default(), &std::sync::atomic::AtomicBool::new(false)).unwrap();
+    let outcome = layer_ui::read_import(input, layer_ui::ImportIntent::Open, Default::default(), layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }, Default::default(), layer_ui::photo_decode_limits(), &std::sync::atomic::AtomicBool::new(false)).unwrap();
     let layer_ui::ImportOutcome::Editable(imported) = outcome else { panic!("Expected editable drawing") };
     imported.project
 }
@@ -1216,18 +1216,18 @@ fn native_document_files() {
         assert!(path.is_file());
     }
     for (path, _, profile, channels) in &custom_exports {
-        let decoded = layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(path).unwrap()), Default::default()).unwrap();
+        let decoded = layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(path).unwrap()), layer_ui::photo_decode_limits()).unwrap();
         assert_eq!(decoded.extent, [384, 256]);
         assert_eq!(decoded.interpretation.channels, *channels);
         assert_eq!(decoded.interpretation.depth, layer_core::color::SampleDepth::U16);
         assert_eq!(layer_color::profile_bytes(&decoded.interpretation.profile).unwrap(), *profile);
     }
-    let tiff = layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(&tiff_path).unwrap()), Default::default()).unwrap();
+    let tiff = layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(&tiff_path).unwrap()), layer_ui::photo_decode_limits()).unwrap();
     assert_eq!(tiff.extent, [384, 256]);
     assert_eq!(tiff.interpretation.depth, layer_core::color::SampleDepth::U16);
     assert_eq!(layer_color::profile_bytes(&tiff.interpretation.profile).unwrap(),
         layer_color::profile_bytes(&layer_core::color::ColorProfile::Builtin(layer_core::color::RgbSpace::ProPhoto)).unwrap());
-    let jpeg = layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(&jpeg_path).unwrap()), Default::default()).unwrap();
+    let jpeg = layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(&jpeg_path).unwrap()), layer_ui::photo_decode_limits()).unwrap();
     assert_eq!(jpeg.extent, [384, 256]);
     assert_eq!(jpeg.interpretation.depth, layer_core::color::SampleDepth::U8);
     assert_eq!(jpeg.interpretation.channels, layer_core::color::source::SourceChannels::Rgb);
@@ -15007,7 +15007,7 @@ fn live_language_documents(theme: Theme) {
             pump(100);
             save.response(gtk::ResponseType::Accept);
             new_photo::finish(&w);
-            let image = layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(output.join(export_name)).unwrap()), Default::default()).unwrap();
+            let image = layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(output.join(export_name)).unwrap()), layer_ui::photo_decode_limits()).unwrap();
             assert_eq!(image.extent, [ui_session(&w).engine().document().composition().size[0], ui_session(&w).engine().document().composition().size[1]]);
             w.documents.select(&w, reopened, true);
             until(|| w.documents.len() == count && w.documents.selected() == original, "return to existing drawing tab");

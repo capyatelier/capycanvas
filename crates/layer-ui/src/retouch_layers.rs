@@ -112,7 +112,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let stack = artwork.stacks.get_mut(containing).ok_or("The preview group was removed")?;
             let index = stack.entries.iter().position(|h| *h == draft.target).ok_or("The preview layer was removed")?;
             stack.entries.insert(index, handle);
-            let mut preview = Document::from_artwork(artwork).map_err(error)?;
+            let mut preview = Document::from_artwork(artwork).map_err(error)?.with_memory(doc.memory().clone());
             preview.owner = doc.owner;
             preview.revision = doc.revision;
             self.engine.set_scene_preview(Some(ScenePreview { above: draft.target, scene: std::sync::Arc::new(preview.scene().snapshot()) }));

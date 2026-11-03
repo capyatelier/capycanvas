@@ -206,7 +206,7 @@ fn focused_mask_copy_is_opaque_raw_gray_and_internal_paste_preserves_it() {
         let clip = copy(&mut source, CommandId::Copy);
         let expected = (gray * 255.).round() as u8;
         close(pixel(&clip.source, 20, 20), [expected, expected, expected, 255]);
-        let png = layer_color::photo::read_photo(std::io::Cursor::new(clip.png.to_vec()), Default::default()).unwrap();
+        let png = layer_color::photo::read_photo(std::io::Cursor::new(clip.png.to_vec()), layer_ui::photo_decode_limits()).unwrap();
         close(pixel(&png, 20, 20), [expected, expected, expected, 255]);
         let mut destination = masked(0.8, None, false, false, false);
         let original = destination.session.engine().document().artwork.clone();

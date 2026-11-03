@@ -12,11 +12,8 @@ Capy Canvas allocates painted regions in tiles, retains their GPU textures, and
 tracks which composition results an edit invalidates. Shaders draw the marks,
 apply effects and combine layers into the visible image.
 
-On Windows, memory admission queries the active adapter: DXGI local budget and
-usage for DX12, or Vulkan device-local heap budget and usage through
-`VK_EXT_memory_budget`. Both are bounded by available system memory. Missing
-budget information refuses admission rather than treating installed memory as
-available capacity.
+The shared [memory budget](#gpu-resources-and-unified-memory) admits new document
+bytes and assigns renderer grants from process and device facts.
 
 ## Stored pixels and the viewport
 
@@ -39,10 +36,10 @@ Float32 scalar pages, so coverage never occupies decoded source slots. A failed
 decode or upload leaves every live page intact. Cache trimming preserves the
 prepared frame’s required source and destination pages until that frame
 consumes them.
-The native paint cache uses the existing allowance for completed display pixels,
-which is bounded by reported device and process headroom, with a 256 MiB minimum
-for small or unknown budgets. It allocates pages on demand. Private preparation
-and snapshot workers retain no canonical paint cache.
+The native paint cache shares the Raster grant with readback and restore buffers.
+Pinned and reusable buffers count before completed paint pages. It allocates
+pages on demand. Private preparation and snapshot workers retain no canonical
+paint cache.
 
 ### Layer extents and the canvas window
 
@@ -274,8 +271,8 @@ staging changes. CPU staging reserves bounded geometric capacity before GPU
 replacement; a limit or CPU allocation refusal preserves existing GPU buffers
 and the style cache. GPU allocation failure follows renderer recovery.
 
-When a view's level would need a native window larger than the 608 MiB display
-budget or a texture, for example a large photo with a blur at about half zoom
+When a view's level would need a native window larger than its Scene grant
+or a texture, for example a large photo with a blur at about half zoom
 on a 4K screen, the display presents the next coarser level that fits.
 
 When the view is reduced, each screen pixel spans one to two texels of the
@@ -916,9 +913,9 @@ whole region at once.
 Native spare pages and superseded outputs remain charged until their submitted
 GPU work completes. Bounded fine inputs wait for retiring spare pages before they
 are allocated; a preview that leaves native pages for an ordinary display level
-draws in the same frame. The 608 MiB composition budget includes live and retiring
-fine resources; the optional complete display pyramid keeps its separate
-admission budget.
+draws in the same frame. The Scene grant includes live and retiring fine
+resources, frame workspace and the optional complete display pyramid. Presented
+views stay pinned; pressure can discard the other pyramid levels.
 
 Display reconstruction selects prefiltered source detail from the local
 transform footprint. Split selections and footprint boundaries use four samples;
@@ -1234,11 +1231,9 @@ are rejected before a frame changes the document. See
 [display composition](../rendering/display-composition.md) for admission, moving
 previews and exact idle refinement.
 
-Analysis reservations use measured GPU and process headroom, taking the smaller
-when both are available. An unreported GPU allowance uses measured process or
-system headroom. Retained guides count toward the quarter-share allowance and
-512 MiB ceiling; reported zero headroom refuses new allocations. Display caches
-use their own device-residency admission.
+Analysis reservations and retained guides use the renderer's Other grant.
+Admission counts retained and incoming resources together; work above the grant
+is refused before allocation.
 
 Native filter windows admit output sections up to 2048 pixels per side against
 the complete halo and image-storage bound, falling back to smaller page-aligned
@@ -1355,23 +1350,30 @@ snapshot API streams bounded strips. Thumbnails and color sampling use separate
 bounded requests. Source bytes and immutable compressed
 tile backing are shared with save snapshots. See the [artwork capture and package contract](../reference/project-format.md).
 
-Exact filter dependencies, such as Kaleidoscope's whole-image input, are
-admitted against the driver's reported memory budget. Where a Linux driver
-reports none (wgpu disables RADV's budget extension), they use a quarter of
-available memory on integrated GPUs and a quarter of the largest device-local
-heap on discrete GPUs, instead of the 256 MiB minimum. Optional display caches
-never use this allowance.
+[`MemoryBudget`](../../crates/layer-core/src/memory_budget.rs) shares RAM and
+device allowances across owners. Owners report physical bytes, pins and demand;
+class order and max-min distribution assign grants. Unified GPU allocations
+count in RAM once. New-byte admission reserves headroom after pins and pending
+imports; saving and validating already-owned artwork uses structural limits.
+The renderer partitions its display owner among Scene, Objects, Mips, decoded
+GPU tiles and Other. Retention demand is capped at 608 MiB for Scene, plus the
+complete pyramid when hierarchy-eligible; Objects gets 128 MiB, Mips and decoded
+GPU tiles share 1 GiB, and decoded RAM samples get 512 MiB. Image-window work adds
+Scene planning demand without raising retention ceilings. Pins and working floors
+remain protected under pressure. Requested mips pin their roots and in-flight work.
+Idle after-present trims release unused storage against the grants.
+`memory::memory_tests` checks pressure, working floors and retention ceilings.
 
-Stats copies timestamped OS and driver readings from a worker owned by the factory,
-started when diagnostics first become visible and sampled every two seconds
-until that factory retires. Linux and Android report process RSS and its OS peak;
+Stats copies timestamped OS and driver readings from the factory's memory worker,
+which samples every second even while Stats is closed. Linux and Android report process RSS and its OS peak;
 Windows reports private commit and its lifetime peak; Apple reports physical
 footprint and the highest sampled footprint. GPU readings cover the selected
 Vulkan device-local heap, DXGI process usage in local memory and its budget, or Metal allocations
 and its working-set recommendation. These are raw readings, separate from cache
-admission allowances. Missing queries, including browser process memory, remain
-unavailable. Process and GPU readings can overlap and are not additive. Canvas
-storage remains tracked renderer allocation, excluding driver overhead.
+admission allowances. Limit, tracked, pinned and debt rows come from the shared
+ledger. Missing queries, including browser process memory, remain unavailable.
+Process and GPU readings can overlap and are not additive. Canvas storage
+remains tracked renderer allocation, excluding driver overhead.
 
 Live composite color samples and region classification retain their frame while
 cold image-object captures prepare on workers. Polling advances prepared GPU

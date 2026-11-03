@@ -670,3 +670,13 @@ workspace-launch-window-size = ขนาดหน้าต่างเริ่�
 workspace-phone-tool-limit = แถบเครื่องมือบนโทรศัพท์มีเครื่องมือได้สูงสุดสิบรายการ
 
 workspace-reset-phone-confirm = คืนค่าแถบเครื่องมือบนโทรศัพท์เริ่มต้นของพื้นที่ทำงานนี้ เลิกทำการคืนค่าได้ด้วย { $menu } → { $undo }
+
+diagnostics-budget-limit = ขีดจำกัดหน่วยความจำ
+diagnostics-budget-physical = หน่วยความจำที่ติดตาม
+diagnostics-budget-pinned = หน่วยความจำที่ตรึง
+diagnostics-budget-debt = หน่วยความจำเกินขีดจำกัด
+diagnostics-budget-pair = RAM { $ram } MiB · GPU { $gpu } MiB
+diagnostics-budget-limit-description = ส่วนแบ่ง RAM ของกระบวนการและส่วนแบ่งรวมของอุปกรณ์ หน่วยความจำ GPU ที่ใช้ร่วมกันอาจซ้อนกับ RAM อย่านำมาบวกกัน
+diagnostics-budget-physical-description = จำนวนไบต์จริงที่เจ้าของขนาดใหญ่รายงาน ไม่ใช่การใช้ทั้งหมดของระบบหรือไดรเวอร์ หน่วยความจำ GPU ที่ใช้ร่วมกันอาจซ้อนกับ RAM
+diagnostics-budget-pinned-description = ไบต์ที่ยังปล่อยไม่ได้ รวมงานที่กำลังทำและการจองสำหรับนำเข้า หน่วยความจำ GPU ที่ใช้ร่วมกันอาจซ้อนกับ RAM
+diagnostics-budget-debt-description = ไบต์ที่ตรึงเกินส่วนแบ่ง RAM และผลรวมส่วนที่เกินของแต่ละอุปกรณ์ ภาพวาดเดิมจะยังคงอยู่

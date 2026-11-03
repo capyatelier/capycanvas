@@ -44,8 +44,8 @@ fn ready_restore_requires_consumed_preparation_progress_between_iterations() {
     use std::time::Duration;
 
     let color = DocumentColor::default();
-    let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
     let document = restore_document(color);
+    let mut r = crate::memory::memory_tests::renderer_for_restore(&document);
     let source = target(&document);
     r.ensure_document_metadata([9504, 6336], document.scene()).unwrap();
     let first = data(color, 1, &[RasterPlane::Color], 1);
@@ -96,9 +96,8 @@ fn ready_restore_requires_consumed_preparation_progress_between_iterations() {
 #[test]
 fn native_raster_restore_batches_keep_pixels_reuse_and_late_failure_atomicity() {
     for color in [DocumentColor::default(), DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U16 }] {
-        let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
-        r.source_tiles.get_mut().admit(0);
         let document = restore_document(color);
+        let mut r = crate::memory::memory_tests::renderer_for_restore(&document);
         let source = target(&document);
         r.ensure_document_metadata([9504, 6336], document.scene()).unwrap();
         let first = data(color, 33, &[RasterPlane::Color, RasterPlane::WatercolorWetness], 1);
@@ -152,9 +151,8 @@ fn native_raster_restore_batches_keep_pixels_reuse_and_late_failure_atomicity() 
 #[test]
 fn cached_restore_prefix_is_copied_before_cold_decodes_reuse_slots() {
     let color = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::U16 };
-    let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
-    r.source_tiles.get_mut().admit(0);
     let document = restore_document(color);
+    let mut r = crate::memory::memory_tests::renderer_for_restore(&document);
     let source = target(&document);
     r.ensure_document_metadata([9504, 6336],document.scene()).unwrap();
     let target = create_color_target(&r.device, [PAGE_SIZE; 2], "cache warmup").0;
@@ -220,7 +218,7 @@ fn native_mask_restoration_keeps_existing_scalar_path() {
 fn a_native_restore_inside_a_frame_leaves_the_frame_uploads_submittable() {
     let color = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::U16 };
     let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
-    r.source_tiles.get_mut().admit(0);
+    r.source_tiles.get_mut().admit_limits(64 << 20, 16 << 20, 44 << 20);
     let document = restore_document(color);
     r.ensure_document_metadata([9504, 6336], document.scene()).unwrap();
     let working = create_color_target(&r.device, [PAGE_SIZE; 2], "restore candidate").0;
@@ -332,13 +330,14 @@ fn a_late_bake_source_failure_is_admitted_before_any_authored_frame_work() {
 #[test]
 fn replacement_overlap_is_rejected_before_any_private_page_upload() {
     let color=DocumentColor::default();let document=paint_document([16000;2],"overlap");let source=target(&document);
-    let mut r=WgpuRasterizer::new_native_headless(color).unwrap();
+    let mut r=crate::memory::memory_tests::renderer(color, layer_core::DeviceMemoryFacts {unified:true,..Default::default()}).unwrap();
+    let budget=r.factory.memory_budget().clone();budget.set_ram_override(Some(384<<20));
+    r.prepare_capture_memory(document.scene(), document.composition().size);
     r.ensure_document_metadata(document.composition().size,document.scene()).unwrap();
     let first=data(color,1,&[RasterPlane::Color],1);
     prepare(&mut r,|r|r.restore_raster(source,&RasterData::default(),&first)).unwrap();
     let original=live_pixels(&r);let texture=r.paint_layers[0].pages[0].active().texture.clone();
-    let native=r.native_edit.as_mut().unwrap();native.composition_bytes=0;native.color_cache_bytes=0;
-    let limit=native.image_pixel_allowance();
+    let limit=budget.ram_limit_bytes();
     let bytes=u64::from(PAGE_SIZE).pow(2)*2*u64::from(r.device.scalar_format().block_copy_size(None).unwrap());
     assert_eq!(limit%bytes,0);
     let tile=RasterTile::backed(blob(color,RasterPlane::WatercolorWetness,2));

@@ -64,7 +64,7 @@ impl CapyApple {
                 .parked()
                 .map(|(_, p)| p.tiles.clone())
                 .collect(),
-            budget: self.window.documents.budget.inactive_ram,
+            budget: self.window.documents.inactive_ram_budget(),
             error: None,
             storage_error: None,
             trim: None,
@@ -234,7 +234,7 @@ pub unsafe extern "C" fn capy_apple_document_resume(
             let result = job.error.as_ref().map(|error| error.to_string_lossy().into_owned()).or_else(|| job.storage_error.clone()).map_or(Ok(()), Err);
             if a.window.documents.complete_trim(token, result) {
                 job.tiles = a.window.documents.parked().map(|(_, parked)| parked.tiles.clone()).collect();
-                job.budget = a.window.documents.budget.inactive_ram;
+                job.budget = a.window.documents.inactive_ram_budget();
                 job.error = None;
                 job.storage_error = None;
                 return Ok(true);

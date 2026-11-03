@@ -15,6 +15,6 @@ pub(super) fn prepare(
         .flattened_document(
             color,
             options,
-            layer_color::photo::PhotoMemoryBudget::current().encode_bytes,
+            layer_color::photo::PhotoMemoryBudget::conversion_encode_limit(),
         )
 }

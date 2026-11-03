@@ -1259,3 +1259,13 @@ workspace-launch-window-size = Ukuran awal jendela
 workspace-phone-tool-limit = Bilah alat ponsel dapat memuat hingga sepuluh alat.
 
 workspace-reset-phone-confirm = Pulihkan bilah alat ponsel awal ruang kerja ini. Anda dapat mengurungkan pemulihan dengan { $menu } → { $undo }.
+
+diagnostics-budget-limit = Batas memori
+diagnostics-budget-physical = Memori tercatat
+diagnostics-budget-pinned = Memori tertahan
+diagnostics-budget-debt = Kelebihan memori
+diagnostics-budget-pair = RAM { $ram } MiB · GPU { $gpu } MiB
+diagnostics-budget-limit-description = Alokasi RAM proses dan gabungan alokasi perangkat. Memori GPU bersama dapat tumpang tindih dengan RAM; jangan dijumlahkan.
+diagnostics-budget-physical-description = Byte fisik yang dilaporkan pemilik besar, bukan total penggunaan sistem operasi atau driver. Memori GPU bersama dapat tumpang tindih dengan RAM.
+diagnostics-budget-pinned-description = Byte yang tidak dapat dibebaskan, termasuk pekerjaan aktif dan reservasi impor. Memori GPU bersama dapat tumpang tindih dengan RAM.
+diagnostics-budget-debt-description = Byte tertahan di atas alokasi RAM dan jumlah kelebihan setiap perangkat. Gambar yang ada tetap disimpan.

@@ -211,7 +211,7 @@ impl Task {
                         images: layer_ui::ImageImportBatch::new(
                             session.state().settings.photo_open,
                             session.engine().document().composition().color.space,
-                            Default::default(),
+                            layer_color::photo::DecodeLimits::from_memory_budget(layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes())),
                         ),
                         context: session.image_placement_context(None, None)?,
                         device: session
@@ -567,7 +567,7 @@ impl Task {
                     let Payload::Import(task) = &mut self.payload else { return Err("No paste is pending".into()); };
                     let mut clip = layer_ui::RetainedClipboard.capture(&nonce, &self.localization)?;
                     if task.mode != Some(layer_ui::PasteMode::Into) {
-                        clip.convert_layers(task.color, layer_color::photo::PhotoMemoryBudget::current().encode_bytes, || self.control.is_cancelled())?;
+                        clip.convert_layers(task.color, layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes()).encode_bytes, || self.control.is_cancelled())?;
                     }
                     task.clip = Some(clip); self.stage = "commit"; self.describe()
                 }
@@ -758,7 +758,7 @@ impl Task {
         }
         Ok(())
     }
-    pub fn import_sources(&mut self, host: &NativeHost) -> Result<(Vec<(String, layer_core::color::source::SourceImage)>, layer_ui::ImagePlacementContext), String> {
+    pub fn import_sources(&mut self, host: &NativeHost) -> Result<(layer_ui::PreparedImages, layer_ui::ImagePlacementContext), String> {
         self.validate_import(host)?;
         let Payload::Import(task) = &mut self.payload else { unreachable!() };
         Ok((task.images.take_sources(self.control.is_cancelled())?, task.context))
@@ -1224,7 +1224,7 @@ mod tests {
                 Default::default(),
                 layer_ui::photo_document_names("Delivery", &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)),
                 Default::default(),
-                Default::default(),
+                layer_color::photo::DecodeLimits::from_memory_budget(layer_color::photo::PhotoMemoryBudget::from_limit(1 << 30)),
                 &Default::default(),
             )
             .unwrap());

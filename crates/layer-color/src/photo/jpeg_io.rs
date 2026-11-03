@@ -53,8 +53,7 @@ pub(super) fn read_jpeg_with_cancel(
     Ok((source, photo))
 }
 
-/// JPEG output admission settings. Hosts can pass their current process memory
-/// allowance instead of relying on a native query or the browser fallback.
+/// JPEG output quality and concrete codec working-set limit.
 #[derive(Clone, Copy, Debug)]
 pub struct JpegEncodeOptions {
     pub quality: u8,
@@ -69,7 +68,7 @@ impl JpegEncodeOptions {
     }
 }
 
-pub fn write_jpeg(output: impl Write, source: &SourceImage, quality: u8) -> Result<(), String> {
+pub fn write_jpeg(output: impl Write, source: &SourceImage, options: JpegEncodeOptions) -> Result<(), String> {
     source.validate()?;
     let mut rows = source.rows();
     write_jpeg_rows(
@@ -77,7 +76,7 @@ pub fn write_jpeg(output: impl Write, source: &SourceImage, quality: u8) -> Resu
         source.extent,
         &source.interpretation,
         &DeliveryMetadata::resolution(source.resolution),
-        JpegEncodeOptions::from_memory_budget(quality, PhotoMemoryBudget::current()),
+        options,
         |y, row| rows.read(y, row),
     )
 }

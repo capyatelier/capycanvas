@@ -201,7 +201,8 @@ pub struct CaptureCheckpoint {
     pub edit_checkpoint: u64,
 }
 #[derive(Clone, Debug)]
-pub struct ArtworkCapture { pub artwork: Arc<Artwork>, pub checkpoint: CaptureCheckpoint }
+pub struct ArtworkCapture { pub artwork: Arc<Artwork>, pub checkpoint: CaptureCheckpoint, pub(crate) memory: Option<crate::DocumentMemory> }
+impl ArtworkCapture { pub fn memory(&self) -> Option<&crate::DocumentMemory> { self.memory.as_ref() } }
 
 impl Artwork {
     pub fn new(size: [u32; 2]) -> Result<Self, &'static str> {
@@ -222,7 +223,7 @@ impl Artwork {
         if checkpoint.document != self.id { return Err("Capture belongs to a different drawing"); }
         #[cfg_attr(target_arch="wasm32",expect(clippy::arc_with_non_send_sync,reason="Shared artwork ownership includes single-threaded Wasm Liquify fields"))]
         let artwork = Arc::new(self.clone());
-        Ok(ArtworkCapture { artwork, checkpoint })
+        Ok(ArtworkCapture { artwork, checkpoint, memory: None })
     }
 }
 
@@ -280,6 +281,12 @@ impl Artwork {
 }
 
 impl ArtworkCapture {
+    pub fn new(artwork: Arc<Artwork>, checkpoint: CaptureCheckpoint) -> Self { Self { artwork, checkpoint, memory: None } }
+    pub fn into_document(self) -> Result<crate::Document, crate::DocumentError> {
+        let document = crate::Document::from_artwork((*self.artwork).clone())?;
+        Ok(match self.memory { Some(memory) => document.with_memory(memory), None => document })
+    }
+
     pub fn composition(&self)->&Composition{self.artwork.compositions.get(self.artwork.root).expect("Captured composition")}
     pub fn output(&self)->&Output{self.artwork.outputs.get(self.artwork.default_output).expect("Captured output")}
     pub fn metadata(&self)->&PhotoMetadata{&self.artwork.metadata}

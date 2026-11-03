@@ -5,7 +5,7 @@ fn cold_reduced_preview_retains_its_cursor_across_more_than_sixty_four_sources()
     let extent=[5120,1024];
     let source=layer_core::color::source::rgba8_source(extent,|_,_|[255,0,0,255]);
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    r.source_tiles.borrow_mut().admit(0);
+    r.source_tiles.borrow_mut().admit_limits(64 << 20, 16 << 20, 44 << 20);
     let mut state=ImageTransformState::new(&r.device);
     state.sources[0]=Some(TileSnapshot {pages:Default::default(),base:Some(layer_core::authored::PaintBase::new(source.clone().into())),
         backing:None,bounds:PixelRect::full(extent),decode_id:layer_core::authored::PortableId::random()});

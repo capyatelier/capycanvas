@@ -25,9 +25,6 @@ image-webp = "=0.2.4"
 # Sequential block IO keeps HDR interchange bounded on native and wasm.
 exr = { version = "=1.74.0", default-features = false }
 
-[target.'cfg(all(not(target_arch = "wasm32"), any(not(target_os = "ios"), target_env = "sim")))'.dependencies]
-sysinfo = { version = "=0.37.2", default-features = false, features = ["system", "apple-sandbox"] }
-
 [[example]]
 name = "portable_smoke"
 crate-type = ["cdylib"]

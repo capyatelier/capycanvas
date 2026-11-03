@@ -115,8 +115,8 @@ fn flush(engine: &mut CanvasEngine<WgpuRasterizer>) {
 }
 
 fn engine(doc: Document, feedback: bool) -> (InputProducer<PenEvent>, CanvasEngine<WgpuRasterizer>) {
-    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    r.source_tiles.get_mut().admit(0);
+    let r = crate::memory::memory_tests::renderer(doc.composition().color,
+        layer_core::DeviceMemoryFacts {budget_bytes: Some(2 << 30), ..Default::default()}).unwrap();
     let (input, consumer) = input_queue(256);
     let extent = doc.composition().size;
     let mut engine = CanvasEngine::new(r, doc, consumer, view(extent), ViewTransform::IDENTITY).unwrap();
@@ -452,6 +452,25 @@ fn contacts_neither_upload_nor_wait_and_a_miss_replays_after_pen_up() {
         engine.set_retouch(Some(RetouchSource::References));
         engine.set_retouch_points(&[Point { x: 100., y: 100. }]);
         flush(&mut engine);
+        {
+            let r = engine.backend_mut();
+            let color = r.document_color();
+            let slots = r.source_tiles.borrow().admitted_bytes()[0] / scene::sources::FLOAT_TILE_BYTES;
+            let pressure: Vec<_> = (0..slots.saturating_sub(SOURCE_SLOTS as u64)).map(|seed| {
+                let pixel = [seed as u8, (seed >> 8) as u8, (seed >> 16) as u8, 255];
+                Arc::new(layer_core::raster::TileBlob::encode(color.paint_descriptor(), &pixel.repeat((PAGE_SIZE * PAGE_SIZE) as usize)).unwrap())
+            }).collect();
+            let scratch = create_color_target(&r.device, [PAGE_SIZE; 2], "unrelated restored tile").0;
+            for blob in &pressure {
+                crate::test_support::prepare_raster(r, |r| r.restore_native_tiles(&[crate::native_tiles::NativeTileRestore {
+                    blob, working: &scratch, space: color.space, destination: color.space,
+                }])).unwrap();
+            }
+            crate::test_support::complete(r);
+            let references = r.retouch.as_ref().unwrap();
+            let frame = references.cache.frame.as_ref().unwrap();
+            assert!(references.capture.would_block(r, frame.packet(r.document_extent), page_rect([3, 0])), "unrelated restoration evicts the far reference source");
+        }
         let metrics = engine.backend().metrics();
         let before = counts(&engine);
         scribble(&mut engine, &mut input, &mut |engine| {

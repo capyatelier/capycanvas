@@ -1,9 +1,17 @@
 use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 use crate::{PipelineDevice, SdrSurfaceColor, Uploads, GpuRasterError, Deferred};
 
-pub(crate) struct Charge { bytes: u64, total: Arc<AtomicU64> }
+pub(crate) struct Charge { bytes: u64, total: Arc<AtomicU64>, memory: Option<layer_core::MemoryOwner> }
+impl Charge {
+    fn publish(&self) {
+        if let Some(memory) = &self.memory {
+            let bytes = self.total.load(Ordering::Acquire);
+            memory.publish(layer_core::MemoryReport {gpu_bytes: bytes, pinned_gpu_bytes: bytes, ..Default::default()});
+        }
+    }
+}
 impl Drop for Charge {
-    fn drop(&mut self) { self.total.fetch_sub(self.bytes, Ordering::AcqRel); }
+    fn drop(&mut self) { self.total.fetch_sub(self.bytes, Ordering::AcqRel); self.publish(); }
 }
 #[derive(Clone)]
 pub struct HeldCanvas {
@@ -28,7 +36,8 @@ impl HeldCanvas {
         let bytes = crate::texture_bytes(&texture);
         device.transient_display.fetch_add(bytes, Ordering::AcqRel);
         let held = Self {_texture:texture,view,size,format,encoding,device:(**device).clone(),
-            _charge:Arc::new(Charge {bytes,total:device.transient_display.clone()})};
+            _charge:Arc::new(Charge {bytes,total:device.transient_display.clone(),memory:device.transient_memory.clone()})};
+        held._charge.publish();
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label:Some("capture held canvas"),color_attachments:&[Some(wgpu::RenderPassColorAttachment {

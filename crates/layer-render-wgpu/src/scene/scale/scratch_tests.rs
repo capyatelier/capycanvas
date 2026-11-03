@@ -115,9 +115,10 @@ fn raster_only_native_stack_resumes_after_scratch_cap_deferral() {
 
 #[test]
 fn exhausted_overview_scratch_retires_incompatible_capacity_before_resuming() {
-    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut r = crate::memory::memory_tests::legacy_scene_renderer(Default::default());
     let doc = document_at([512;2]);
     let frame = packet(doc.scene(), [512;2]);
+    crate::memory::memory_tests::legacy_scene_frame(&mut r, frame);
     let plan = display_mips::Plan::at([512;2], 0);
     let (mut cache,_) = Cache::select(None, &r, frame, Request {plan,evaluation:Evaluation::Native}, false);
     let page_bytes = u64::from(PAGE_SIZE).pow(2) * 16;

@@ -60,10 +60,11 @@ pub fn raster_worker_paper(metadata: &str, buffers: js_sys::Array,file:Option<we
             if input.source.byte_len()>MAX_IMAGE_BYTES as u64 {return Err(js(UNSUPPORTED));}
             let cancelled=Default::default();
             let reader=layer_core::package::transport::BackingReader::new(&input.source,&cancelled);
-            let mut images = layer_ui::ImageImportBatch::new(Default::default(), layer_core::color::RgbSpace::ProPhoto, Default::default());
+            let mut images = layer_ui::ImageImportBatch::new(Default::default(), layer_core::color::RgbSpace::ProPhoto, layer_color::photo::DecodeLimits::from_memory_budget(artwork_transfer::photo_memory_budget()));
             images.read(reader, &name, &cancelled).map_err(js)?;
-            let (_, source) = images.take_sources(false).map_err(js)?.into_iter().next().ok_or_else(|| js(UNSUPPORTED))?;
-            let paper = layer_ui::paper_library::library_paper(&source, &|| false).map_err(library_error)?;
+            let sources = images.take_sources(false).map_err(js)?;
+            let (_, source) = sources.first().ok_or_else(|| js(UNSUPPORTED))?;
+            let paper = layer_ui::paper_library::library_paper(source, &|| false).map_err(library_error)?;
             prepared(&paper, &name, &stored)?
         }
         WorkerPaper::Store { name, stored, paper } => prepared(&paper.receive(&buffers, 0).map_err(js)?, &name, &stored)?,

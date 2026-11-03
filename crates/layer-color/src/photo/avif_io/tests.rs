@@ -31,8 +31,8 @@ fn rust_avif_embedded_icc_preserves_primary_samples() {
     use crate::photo::test_support::rows;
     let bytes = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/avif/p3-12bit-icc.avif")).unwrap();
     assert_eq!(bytes, icc_fixture());
-    let original = read_photo_detailed(Cursor::new(SDR), Default::default()).unwrap().source;
-    let actual = read_photo_detailed(Cursor::new(bytes), Default::default()).unwrap().source;
+    let original = read_photo_detailed(Cursor::new(SDR), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap().source;
+    let actual = read_photo_detailed(Cursor::new(bytes), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap().source;
     assert_eq!(actual.extent, original.extent);
     assert_eq!(actual.interpretation.depth, SampleDepth::U16);
     assert_eq!(actual.interpretation.profile, ColorProfile::Icc(crate::profile_bytes(&ColorProfile::Builtin(RgbSpace::DisplayP3)).unwrap().into()));
@@ -93,7 +93,7 @@ fn rust_avif_rejects_truncation_record_counts_and_unadmitted_av1() {
             assert!(
                 read(
                     Cursor::new(&bytes[..length]),
-                    DecodeLimits::default(),
+                    DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30)),
                     &cancel
                 )
                 .is_err(),
@@ -106,7 +106,7 @@ fn rust_avif_rejects_truncation_record_counts_and_unadmitted_av1() {
         let at = bytes.windows(4).position(|w| w == kind).unwrap() + offset;
         bytes[at..at + count].fill(0xff);
         assert!(
-            read(Cursor::new(bytes), DecodeLimits::default(), &cancel).is_err(),
+            read(Cursor::new(bytes), DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30)), &cancel).is_err(),
             "inflated {kind:?} count"
         );
     }
@@ -121,7 +121,7 @@ fn rust_avif_rejects_truncation_record_counts_and_unadmitted_av1() {
         let mut bytes = SDR.to_vec();
         bytes[at..at + 4].copy_from_slice(&width.to_be_bytes());
         assert!(
-            read(Cursor::new(bytes), DecodeLimits::default(), &cancel).is_err(),
+            read(Cursor::new(bytes), DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30)), &cancel).is_err(),
             "unadmitted dimension {width}"
         );
     }
@@ -129,7 +129,7 @@ fn rust_avif_rejects_truncation_record_counts_and_unadmitted_av1() {
     let at = payload.as_ptr() as usize - SDR.as_ptr() as usize;
     let mut bytes = SDR.to_vec();
     bytes[at] = 0xff;
-    assert!(read(Cursor::new(bytes), DecodeLimits::default(), &cancel).is_err());
+    assert!(read(Cursor::new(bytes), DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30)), &cancel).is_err());
 }
 
 #[test]
@@ -143,7 +143,7 @@ fn rust_avif_validates_gain_metadata_and_honors_sdr_alternatives() {
         // alternate headroom denominator, first gamma numerator
         let mut bytes = HDR.to_vec();
         bytes[at + range.start..at + range.end].fill(0);
-        let error = read(Cursor::new(bytes), DecodeLimits::default(), &cancel)
+        let error = read(Cursor::new(bytes), DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30)), &cancel)
             .err()
             .unwrap();
         assert!(error.contains("gain-map"), "{error}");
@@ -152,7 +152,7 @@ fn rust_avif_validates_gain_metadata_and_honors_sdr_alternatives() {
         // unsupported item version / minimum metadata version
         let mut bytes = HDR.to_vec();
         bytes[at + version_offset] = 1;
-        let photo = read(Cursor::new(bytes), DecodeLimits::default(), &cancel).unwrap();
+        let photo = read(Cursor::new(bytes), DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30)), &cancel).unwrap();
         assert_eq!(photo.source.interpretation.depth, SampleDepth::U16);
     }
     let group = container::boxes(parsed.groups.unwrap())
@@ -169,7 +169,7 @@ fn rust_avif_validates_gain_metadata_and_honors_sdr_alternatives() {
     for i in 0..4 {
         bytes.swap(at + i, at + 4 + i);
     }
-    let photo = read(Cursor::new(bytes), DecodeLimits::default(), &cancel).unwrap();
+    let photo = read(Cursor::new(bytes), DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30)), &cancel).unwrap();
     assert_eq!(photo.source.interpretation.depth, SampleDepth::U16);
 }
 
@@ -191,7 +191,7 @@ fn rust_avif_synthetic_precision_and_geometry() {
     ] {
         let photo = read(
             Cursor::new(encoded),
-            DecodeLimits::default(),
+            DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30)),
             &AtomicBool::new(false),
         )
         .unwrap();
@@ -228,7 +228,7 @@ fn rust_avif_synthetic_hdr_matches_libavif() {
     ] {
         let photo = read(
             Cursor::new(encoded),
-            DecodeLimits::default(),
+            DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30)),
             &AtomicBool::new(false),
         )
         .unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -271,7 +271,7 @@ fn rust_avif_lossless_stills_preserve_alpha_color_geometry_and_density() {
             let bytes = std::fs::read(root.join(format!("{name}.avif"))).unwrap();
             let photo = read(
                 Cursor::new(&bytes),
-                DecodeLimits::default(),
+                DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30)),
                 &AtomicBool::new(false),
             )
             .unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -321,7 +321,7 @@ fn rust_avif_grids_and_sequences_match_native_reference() {
         let bytes = std::fs::read(root.join(format!("{name}.avif"))).unwrap();
         let photo = read(
             Cursor::new(bytes),
-            DecodeLimits::default(),
+            DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30)),
             &AtomicBool::new(false),
         )
         .unwrap_or_else(|e| panic!("{name}: {e}"));

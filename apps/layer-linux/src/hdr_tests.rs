@@ -343,13 +343,13 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     deliver(&restored, &directory, "SDR rendition.png", 0);
     let hdr = layer_color::photo::read_photo(
         std::io::BufReader::new(std::fs::File::open(directory.join("Edited HDR.png")).unwrap()),
-        Default::default(),
+        layer_ui::photo_decode_limits(),
     )
     .unwrap();
     assert_eq!(hdr.interpretation.depth, SampleDepth::F16);
     let sdr = layer_color::photo::read_photo(
         std::io::BufReader::new(std::fs::File::open(directory.join("SDR rendition.png")).unwrap()),
-        Default::default(),
+        layer_ui::photo_decode_limits(),
     )
     .unwrap();
     assert_eq!(sdr.interpretation.depth, SampleDepth::U8);
@@ -616,7 +616,7 @@ fn native_gainmap_export() {
         capture_ui(&w,&output,if transparent{"avif-main.png"}else{"jpeg-main.png"});
         let name=if transparent{"Transparent edited HDR.avif"}else{"Opaque edited HDR.jpg"};
         response(&w,"export");let file=chooser();file.set_current_folder(Some(&gtk::gio::File::for_path(&output))).unwrap();file.set_current_name(name);pump(150);file.response(gtk::ResponseType::Accept);finish(&w);
-        let source=layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(output.join(name)).unwrap()),Default::default()).unwrap();assert_eq!(source.interpretation.depth,SampleDepth::F16);
+        let source=layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(output.join(name)).unwrap()),layer_ui::photo_decode_limits()).unwrap();assert_eq!(source.interpretation.depth,SampleDepth::F16);
         let mut bytes=vec![0;source.row_bytes()];source.rows().read(0,&mut bytes).unwrap();let i=32*8;let p=layer_core::color::hdr::decode_pixel(std::array::from_fn(|c|u16::from_le_bytes([bytes[i+c*2],bytes[i+c*2+1]]))).unwrap();assert!(p[0]>3.7&&p[0]<4.3,"{p:?}");assert!((p[3]-if transparent{32./63.}else{1.}).abs()<0.001);
         if transparent {
             invoke(&w,CommandId::ExportDocument);combo(&w,"export-output").set_selected(2);
@@ -858,7 +858,7 @@ fn native_float32_new_open_edit_save_and_exr_export() {
     while !super::new_photo::export_enabled(&photo) {pump(20);assert!(Instant::now()<deadline,"EXR preview: {}",photo.status.text());}
     response(&photo,"export");let file=chooser();
     file.set_current_folder(Some(&gtk::gio::File::for_path(&directory))).unwrap();file.set_current_name("edited.exr");pump(150);file.response(gtk::ResponseType::Accept);finish(&photo);
-    let result=layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(directory.join("edited.exr")).unwrap()),Default::default()).unwrap();
+    let result=layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(directory.join("edited.exr")).unwrap()),layer_ui::photo_decode_limits()).unwrap();
     assert_eq!(result.interpretation.depth,SampleDepth::F32);
     assert_eq!(result.interpretation.profile,layer_core::color::ColorProfile::Builtin(RgbSpace::DisplayP3));
     let mut row=vec![0;result.row_bytes()];result.rows().read(0,&mut row).unwrap();

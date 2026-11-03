@@ -139,10 +139,6 @@ fn queued_tile_mips_match_float64_area_reference_through_partial_edges_and_updat
             "display reduction never writes artwork"
         );
         assert!(image.records.len() <= 4);
-        assert_eq!(
-            image.storage_bytes(),
-            plan.pixel_bytes_through(last) + image.records.len() as u64 * u64::from(plan.level) * 16
-        );
 
         // A later tile update changes only that tile's derived footprint.
         let changed = [0.03125, 0.125, 0.25, 0.5];

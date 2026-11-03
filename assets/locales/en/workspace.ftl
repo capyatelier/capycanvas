@@ -685,3 +685,13 @@ workspace-launch-window-size = Initial window size
 workspace-phone-tool-limit = The phone toolbar holds up to ten tools.
 
 workspace-reset-phone-confirm = Restore this workspace’s starting phone toolbar. You can undo restoring it with { $menu } → { $undo }.
+
+diagnostics-budget-limit = Memory limit
+diagnostics-budget-physical = Tracked memory
+diagnostics-budget-pinned = Pinned memory
+diagnostics-budget-debt = Memory debt
+diagnostics-budget-pair = RAM { $ram } MiB · GPU { $gpu } MiB
+diagnostics-budget-limit-description = Process RAM allowance and combined device allowances. Shared GPU memory can overlap RAM; do not add them.
+diagnostics-budget-physical-description = Physical bytes reported by large owners, not total operating-system or driver usage. Shared GPU memory can overlap RAM.
+diagnostics-budget-pinned-description = Bytes that cannot be evicted, including active work and import reservations. Shared GPU memory can overlap RAM.
+diagnostics-budget-debt-description = Pinned bytes above the RAM allowance and the sum above each device allowance. Existing artwork is retained.

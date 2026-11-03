@@ -5,10 +5,10 @@ use serde_json::{Map, Value};
 use std::fmt;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum DecodeError { Invalid(String), Unsupported(String), Io(String) }
+pub enum DecodeError { Invalid(String), Unsupported(String), Io(String), MemoryBudgetExceeded }
 impl fmt::Display for DecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self { Self::Invalid(message) | Self::Unsupported(message) | Self::Io(message) => f.write_str(message) }
+        match self { Self::MemoryBudgetExceeded => f.write_str(crate::MEMORY_BUDGET_EXCEEDED), Self::Invalid(message) | Self::Unsupported(message) | Self::Io(message) => f.write_str(message) }
     }
 }
 impl std::error::Error for DecodeError {}

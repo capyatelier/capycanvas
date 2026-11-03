@@ -12,8 +12,7 @@ pub enum GainMapFormat {
     Avif,
 }
 
-/// Per-operation codec allowance. Hosts may supply a smaller process/device
-/// policy; the default snapshots the same memory budget as ordinary photo IO.
+/// Delivery quality and concrete per-operation codec allowance.
 #[derive(Clone, Copy, Debug)]
 pub struct GainMapEncodeOptions {
     /// Delivery quality in 1..=100. AVIF derives gain-map compression from
@@ -24,11 +23,6 @@ pub struct GainMapEncodeOptions {
 impl GainMapEncodeOptions {
     pub fn from_memory_budget(quality: u8, memory: PhotoMemoryBudget) -> Self {
         Self { quality, memory }
-    }
-}
-impl From<u8> for GainMapEncodeOptions {
-    fn from(quality: u8) -> Self {
-        Self::from_memory_budget(quality, PhotoMemoryBudget::current())
     }
 }
 #[derive(Clone, Copy)]
@@ -198,12 +192,11 @@ pub fn write_gainmap_rows(
     mut output: impl Write,
     render: GainMapRender<'_>,
     format: GainMapFormat,
-    options: impl Into<GainMapEncodeOptions>,
+    options: GainMapEncodeOptions,
     metadata: &super::DeliveryMetadata,
     cancelled: &AtomicBool,
     read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
 ) -> Result<crate::OutputStatistics, String> {
-    let options = options.into();
     let (bytes, stats) = if format == GainMapFormat::Jpeg {
         jpeg::encode(render, options, metadata, cancelled, read)
     } else {
@@ -224,14 +217,13 @@ pub fn preview_gainmap_rows(
     render: GainMapRender<'_>,
     bounds: [u32; 2],
     format: GainMapFormat,
-    options: impl Into<GainMapEncodeOptions>,
+    options: GainMapEncodeOptions,
     cancelled: &AtomicBool,
     read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
 ) -> Result<GainMapPreview, String> {
     if bounds.into_iter().any(|n| !(1..=1024).contains(&n)) {
         return Err("Invalid preview dimensions".into());
     }
-    let options = options.into();
     if format == GainMapFormat::Jpeg {
         return jpeg::preview(render, bounds, options, cancelled, read);
     }
@@ -288,7 +280,7 @@ mod tests {
             assert!(result.unwrap_err().contains("memory budget"),
                 "Preview decoding must not replace the host's zero allowance with a default");
             let options = GainMapEncodeOptions::from_memory_budget(90,
-                PhotoMemoryBudget::from_available_memory(512 * 1024 * 1024));
+                PhotoMemoryBudget::from_limit(512 * 1024 * 1024));
             let (_, hdr, _, _) = preview_gainmap_rows(
                 GainMapRender { extent, space: RgbSpace::Srgb, rendition: Default::default(), guide: &guide, matte: None, clip: true },
                 [8, 8],
@@ -321,7 +313,7 @@ mod tests {
             &mut encoded,
             GainMapRender { extent, space: RgbSpace::Srgb, rendition: SdrRendition::default(), guide: &test_guide(extent, read), matte: None, clip: false },
             GainMapFormat::Avif,
-            quality,
+            crate::photo::GainMapEncodeOptions::from_memory_budget(quality, crate::photo::PhotoMemoryBudget::from_limit(1 << 30)),
             &super::DeliveryMetadata::resolution(Some(layer_core::ImageResolution::ppi(300))),
             &cancel,
             read,
@@ -334,7 +326,7 @@ mod tests {
             std::fs::write(directory.join(format!("{}x{}-q{quality}.avif", extent[0], extent[1])), &encoded).unwrap();
         }
         let started = std::time::Instant::now();
-        let source = read_photo(std::io::Cursor::new(encoded), Default::default()).unwrap();
+        let source = read_photo(std::io::Cursor::new(encoded), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
         let decode_time = started.elapsed();
         assert_eq!(source.extent, extent);
         assert_eq!(source.interpretation.depth, SampleDepth::F16);
@@ -389,7 +381,7 @@ mod tests {
                     GainMapRender { extent: [32, 32], space: RgbSpace::Srgb, rendition: recipe, guide: &guide, matte: None, clip: true },
                     [32, 32],
                     format,
-                    100,
+                    crate::photo::GainMapEncodeOptions::from_memory_budget(100, crate::photo::PhotoMemoryBudget::from_limit(1 << 30)),
                     &cancel,
                     read,
                 )
@@ -439,7 +431,7 @@ mod tests {
                     GainMapRender { extent, space: RgbSpace::Srgb, rendition, guide: &guide, matte: None, clip: true },
                     extent,
                     format,
-                    90,
+                    crate::photo::GainMapEncodeOptions::from_memory_budget(90, crate::photo::PhotoMemoryBudget::from_limit(1 << 30)),
                     &cancel,
                     read,
                 )
@@ -467,7 +459,7 @@ mod tests {
                         &mut file,
                         GainMapRender { extent, space: RgbSpace::Srgb, rendition, guide: &guide, matte: None, clip: false },
                         format,
-                        90,
+                        crate::photo::GainMapEncodeOptions::from_memory_budget(90, crate::photo::PhotoMemoryBudget::from_limit(1 << 30)),
                         &Default::default(),
                         &cancel,
                         read,
@@ -477,7 +469,7 @@ mod tests {
                         &read_gainmap(
                             std::io::Cursor::new(&file),
                             format,
-                            DecodeLimits::default(),
+                            DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30)),
                             &cancel,
                         )
                         .unwrap(),
@@ -502,7 +494,7 @@ mod tests {
                             &read_gainmap(
                                 std::io::Cursor::new(isolated),
                                 format,
-                                DecodeLimits::default(),
+                                DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30)),
                                 &cancel,
                             )
                             .unwrap(),
@@ -538,7 +530,7 @@ mod tests {
                 &mut encoded,
                 GainMapRender { extent, space: RgbSpace::Srgb, rendition: SdrRendition::default(), guide: &test_guide(extent, |y, r| row(y, r, transparent)), matte: None, clip: false },
                 format,
-                100,
+                crate::photo::GainMapEncodeOptions::from_memory_budget(100, crate::photo::PhotoMemoryBudget::from_limit(1 << 30)),
                 &crate::photo::DeliveryMetadata::resolution(Some(layer_core::ImageResolution::ppi(300))),
                 &AtomicBool::new(false),
                 |y, r| row(y, r, transparent),
@@ -555,7 +547,7 @@ mod tests {
                     );
                 }
             }
-            let source = read_photo(Cursor::new(&encoded), DecodeLimits::default()).unwrap();
+            let source = read_photo(Cursor::new(&encoded), DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
             assert_eq!(source.extent, extent);
             assert_eq!(
                 source.resolution,
@@ -587,7 +579,7 @@ mod tests {
             let mut bases=Vec::new();
             for (contrast,balance) in [(0.5,-1.),(2.,1.)] {
                 let recipe=SdrRendition{contrast,balance,headroom:guide.peak.log2(),..Default::default()};
-                let (_,hdr,base,stats)=preview_gainmap_rows(GainMapRender { extent, space: RgbSpace::Srgb, rendition: recipe, guide: &guide, matte: None, clip: true }, extent, format, 100, &cancel, read).unwrap();assert_eq!(stats.clipped_channels,0);
+                let (_,hdr,base,stats)=preview_gainmap_rows(GainMapRender { extent, space: RgbSpace::Srgb, rendition: recipe, guide: &guide, matte: None, clip: true }, extent, format, crate::photo::GainMapEncodeOptions::from_memory_budget(100, crate::photo::PhotoMemoryBudget::from_limit(1 << 30)), &cancel, read).unwrap();assert_eq!(stats.clipped_channels,0);
                 for (x,y) in [(12,12),(20,20),(44,12),(52,20)] {
                     let mut row=vec![[0.;4];64];read(y,&mut row).unwrap();let p=row[x];let i=y as usize*64+x;
                     let expected=recipe.mapper(RgbSpace::Srgb,RgbSpace::Srgb).map_local_premultiplied(p,[x as f32+0.5,y as f32+0.5],&guide);

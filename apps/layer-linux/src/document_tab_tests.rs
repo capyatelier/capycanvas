@@ -1340,7 +1340,7 @@ fn native_import_admission_failure_preserves_package_and_current_drawing() {
     std::fs::hard_link(&source,&linked).unwrap();
     let bytes = std::fs::read(&source).unwrap();
     crate::storage::roots();
-    let imported = match layer_ui::read_import(std::io::Cursor::new(bytes.clone()),layer_ui::ImportIntent::Open,Default::default(),layer_ui::photo_document_names("Original.capy",&localization),Default::default(),Default::default(),&std::sync::atomic::AtomicBool::new(false)).unwrap() {
+    let imported = match layer_ui::read_import(std::io::Cursor::new(bytes.clone()),layer_ui::ImportIntent::Open,Default::default(),layer_ui::photo_document_names("Original.capy",&localization),Default::default(),layer_ui::photo_decode_limits(),&std::sync::atomic::AtomicBool::new(false)).unwrap() {
         layer_ui::ImportOutcome::Editable(imported) => imported,
         _ => panic!("Expected supported native package"),
     };
@@ -1465,7 +1465,7 @@ fn native_document_tabs_canvas_transition() {
         let mut prepared=if operation=="open" {
             let path=file.clone(); let names=layer_ui::photo_document_names("transition-blue.capy",&localization);
             Some(glib::MainContext::default().block_on(gtk::gio::spawn_blocking(move || {
-                match layer_ui::read_import(std::io::BufReader::new(std::fs::File::open(path).unwrap()),layer_ui::ImportIntent::Open,Default::default(),names,Default::default(),Default::default(),&std::sync::atomic::AtomicBool::new(false)).unwrap() {
+                match layer_ui::read_import(std::io::BufReader::new(std::fs::File::open(path).unwrap()),layer_ui::ImportIntent::Open,Default::default(),names,Default::default(),layer_ui::photo_decode_limits(),&std::sync::atomic::AtomicBool::new(false)).unwrap() {
                     layer_ui::ImportOutcome::Editable(imported)=>imported,_=>panic!("transition package must be editable"),
                 }
             })).unwrap())

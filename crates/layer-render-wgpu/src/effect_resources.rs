@@ -10,7 +10,6 @@ pub(crate) struct Cache {
     pub uploads: u64,
 }
 impl Cache {
-    pub fn bytes(&self) -> u64 { self.empty.as_ref().map_or(0, |r| r.buffer.size()) + self.entries.values().filter_map(Weak::upgrade).map(|r| r.buffer.size()).sum::<u64>() }
     pub fn get(&mut self, device: &PipelineDevice, queue: &wgpu::Queue, resource: Option<&layer_core::Lut3d>) -> Result<Arc<Resource>, GpuRasterError> {
         self.entries.retain(|_, value| value.strong_count() != 0);
         if let Some(resource) = resource {
@@ -18,28 +17,27 @@ impl Cache {
             if let Some(value) = self.entries.get(&key).and_then(Weak::upgrade) { return Ok(value); }
             let bytes = resource.payload().ok_or_else(|| GpuRasterError::Effect("Unresolved color lookup".into()))?;
             let size = (96 + bytes.len() as u64).next_multiple_of(16);
-            #[cfg(target_arch = "wasm32")]
-            let budget = 64 * 1024 * 1024;
-            #[cfg(not(target_arch = "wasm32"))]
-            let budget = crate::display_memory::resource_budget(device, self.bytes());
-            let retained = self.bytes();
-            if size > device.limits().max_storage_buffer_binding_size || size > device.limits().max_buffer_size
-                || retained.saturating_add(size) > budget {
+            if size > device.limits().max_storage_buffer_binding_size || size > device.limits().max_buffer_size {
                 return Err(GpuRasterError::Effect("Color lookup exceeds available GPU memory".into()));
             }
+            let lease = Arc::new(crate::effect_analysis::Lease::reserve(device, size).map_err(GpuRasterError::Effect)?);
             let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some("immutable color lookup"), size,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
             let headers=headers(resource);
             let header:[u8;96]=std::array::from_fn(|i|headers[i/16][i/4%4].to_le_bytes()[i%4]);
             queue.write_buffer(&buffer, 0, &header);
             queue.write_buffer(&buffer, 96, bytes);
-            let value = Arc::new(Resource {buffer, _analysis: None});
+            let value = Arc::new(Resource {buffer, _analysis: Some(lease)});
             self.entries.insert(key, Arc::downgrade(&value)); self.uploads += 1;
             Ok(value)
         } else {
-            Ok(self.empty.get_or_insert_with(|| Arc::new(Resource {_analysis: None, buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("empty effect resource"), size: 16, usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
-            })})).clone())
+            if self.empty.is_none() {
+                let lease = Arc::new(crate::effect_analysis::Lease::reserve(device, 16).map_err(GpuRasterError::Effect)?);
+                self.empty = Some(Arc::new(Resource {_analysis: Some(lease), buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("empty effect resource"), size: 16, usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+                })}));
+            }
+            Ok(self.empty.as_ref().unwrap().clone())
         }
     }
 }

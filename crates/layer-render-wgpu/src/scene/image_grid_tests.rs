@@ -32,8 +32,9 @@ fn cold_correction_gather_finishes_resident_pages_and_requests_the_next() {
     let root = doc.composition().result;
     doc.artwork.stacks.get_mut(root).unwrap().entries.swap(0, 1);
     refresh(&mut doc);
-    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    r.source_tiles.get_mut().admit(1 << 32);
+    let mut r = crate::memory::memory_tests::renderer_for_restore(&doc);
+    let frame = layer_render::FramePacket { blend_space: layer_core::BlendSpace::Linear, ..crate::test_support::packet(doc.scene(), EXTENT) };
+    crate::memory::memory_tests::declare_source_budget(&mut r, frame, 1024, 64 << 20, 1004 << 20);
     let mut scene = Scene::new(&r).unwrap();
     let full = PixelRect::full(EXTENT);
     let window = DocRect { min: [0; 2], max: EXTENT.map(i64::from) };
@@ -73,9 +74,10 @@ fn correction_progress(change: CorrectionChange) {
     doc.artwork.stacks.get_mut(root).unwrap().entries.swap(0, 1);
     refresh(&mut doc);
     assert!(doc.scene().order().iter().all(|handle| doc.scene().object_layer(*handle).is_none()));
-    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut r = crate::memory::memory_tests::renderer_for_restore(&doc);
     assert_ne!(r.adapter.get_info().device_type, wgpu::DeviceType::Cpu);
-    r.source_tiles.get_mut().admit(0);
+    let frame = layer_render::FramePacket { blend_space: layer_core::BlendSpace::Linear, ..crate::test_support::packet(doc.scene(), EXTENT) };
+    crate::memory::memory_tests::declare_source_budget(&mut r, frame, 64, 16 << 20, 44 << 20);
     assert_eq!(r.source_tiles.borrow().admitted_bytes()[0], 64 * u64::from(PAGE_SIZE).pow(2) * 16);
     let mut scene = Scene::new(&r).unwrap();
     let full = PixelRect::full(EXTENT);

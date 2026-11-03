@@ -52,7 +52,7 @@ impl Editor {
     }
     pub fn capture_session(&self,capture:ArtworkCapture)->Result<EditorCapture,crate::DocumentError> {
         let Editor {document,undo,redo,checkpoint:edit_checkpoint,next_checkpoint,..}=self;
-        let Document {artwork,working,revision,owner,scene_index:_,next_stroke_id:_}=document;
+        let Document {artwork,working,revision,owner,scene_index:_,next_stroke_id:_,..}=document;
         let checkpoint=capture.checkpoint;
         if checkpoint.document!=artwork.id || checkpoint.owner!=*owner
             || checkpoint.artwork_generation!=*revision || checkpoint.working_generation!=working.generation
@@ -321,9 +321,9 @@ fn intern_artwork(art:&mut Artwork,state:&StateRecord,objects:&[ObjectVersion],d
 pub fn open_parts(metadata:&[u8],resource_pack:ImmutableBacking,limits:ProjectLimits,cancel:&AtomicBool)->Result<OpenSession,String> {
     open_parts_with_programs(metadata,resource_pack,limits,cancel,&super::TrustedPrograms::default())
 }
-pub(crate) enum OpenFailure { Invalid(String), Unsupported(String) }
+pub(crate) enum OpenFailure { Invalid(String), Unsupported(String), MemoryBudgetExceeded }
 impl OpenFailure {
-    pub(crate) fn message(self)->String {match self {Self::Invalid(message)|Self::Unsupported(message)=>message}}
+    pub(crate) fn message(self)->String {match self {Self::Invalid(message)|Self::Unsupported(message)=>message,Self::MemoryBudgetExceeded=>crate::MEMORY_BUDGET_EXCEEDED.into()}}
 }
 impl From<OpenFailure> for String {fn from(error:OpenFailure)->Self {error.message()}}
 pub(crate) fn validate_format(value:&Value)->Result<(),OpenFailure> {
@@ -332,18 +332,22 @@ pub(crate) fn validate_format(value:&Value)->Result<(),OpenFailure> {
     if format!="capy.session" || version!=1 {return Err(OpenFailure::Unsupported("Unsupported session format".into()));}
     Ok(())
 }
-impl From<String> for OpenFailure {fn from(message:String)->Self {Self::Invalid(message)}}
+impl From<String> for OpenFailure {fn from(message:String)->Self {if message==crate::MEMORY_BUDGET_EXCEEDED {Self::MemoryBudgetExceeded}else{Self::Invalid(message)}}}
 impl From<&str> for OpenFailure {fn from(message:&str)->Self {Self::Invalid(message.into())}}
 impl From<super::values::DecodeError> for OpenFailure {
     fn from(error:super::values::DecodeError)->Self {match error {
         super::values::DecodeError::Invalid(message) | super::values::DecodeError::Io(message)=>Self::Invalid(message),
         super::values::DecodeError::Unsupported(message)=>Self::Unsupported(message),
+        super::values::DecodeError::MemoryBudgetExceeded=>Self::MemoryBudgetExceeded,
     }}
 }
 pub fn open_parts_with_programs(metadata:&[u8],resource_pack:ImmutableBacking,limits:ProjectLimits,cancel:&AtomicBool,programs:&super::TrustedPrograms)->Result<OpenSession,String> {
     open_parts_checked(metadata,resource_pack,limits,cancel,programs).map_err(OpenFailure::message)
 }
 pub(crate) fn open_parts_checked(metadata:&[u8],resource_pack:ImmutableBacking,limits:ProjectLimits,cancel:&AtomicBool,programs:&super::TrustedPrograms)->Result<OpenSession,OpenFailure> {
+    open_parts_checked_with_budget(metadata, resource_pack, limits, cancel, programs, crate::MemoryBudget::process())
+}
+fn open_parts_checked_with_budget(metadata:&[u8],resource_pack:ImmutableBacking,limits:ProjectLimits,cancel:&AtomicBool,programs:&super::TrustedPrograms,budget:crate::MemoryBudget)->Result<OpenSession,OpenFailure> {
     active(cancel)?;
     let value=super::parse_json(metadata,limits.metadata_bytes.min(usize::MAX as u64) as usize)?;
     validate_format(&value)?;
@@ -423,7 +427,7 @@ pub(crate) fn open_parts_checked(metadata:&[u8],resource_pack:ImmutableBacking,l
     let mut resource_limits=limits;resource_limits.raster_bytes=resource_limits.raster_bytes.saturating_add(limits.asset_bytes).saturating_add(crate::history_budget::BYTE_BUDGET as u64);
     for state in std::iter::once(&record.current).chain(&record.undo).chain(&record.redo) {
         active(cancel)?;let manifest=record.manifest(state,&directory,limits)?;
-        let mut reader=ResourceReader::new(&manifest,&resource_pack,cancel,resource_limits);reader.private=true;reader.trusted_programs=programs.clone();reader.install_cache(cache);
+        let mut reader=ResourceReader::with_budget(&manifest,&resource_pack,cancel,resource_limits,budget.clone());reader.private=true;reader.trusted_programs=programs.clone();reader.install_cache(cache);
         if documents.is_empty() {profiles=decode_profiles(&record.metadata_profiles,&mut reader)?;}
         let mut artwork=artwork_records::decode_with_layout(&manifest,&mut reader,Some(&record.layout))?;
         artwork.extensions=extensions.clone();
@@ -450,12 +454,14 @@ pub(crate) fn open_parts_checked(metadata:&[u8],resource_pack:ImmutableBacking,l
     }
     undo.extend(entries(&record.undo,&documents,1,record.current.checkpoint)?);redo.extend(entries(&record.redo,&documents,1+record.undo.len(),record.current.checkpoint)?);
     let mut document=documents.remove(0);document.revision=record.checkpoint.artwork_generation;document.next_stroke_id=record.next_stroke_id;
-    let editor=Editor {document,undo,redo,checkpoint:record.checkpoint.edit_checkpoint,next_checkpoint:record.next_checkpoint,ledger:Default::default()};
+    let mut editor=Editor {document,undo,redo,checkpoint:record.checkpoint.edit_checkpoint,next_checkpoint:record.next_checkpoint,ledger:Default::default(),memory_dirty:false};
     let mut accounting=crate::history_budget::Accounting::new(editor.document());let mut retained=0usize;
     for entry in editor.undo.iter().rev().chain(editor.redo.iter().rev()) {
         retained=retained.saturating_add(accounting.charge(entry));
         if retained>crate::history_budget::BYTE_BUDGET {return Err("Session history exceeds the Undo/Redo memory limit".into());}
     }
+    editor.document.memory=crate::DocumentMemory::new(budget,cache.admission.clone());
+    editor.report_memory(true);
     Ok(OpenSession {editor,metadata:SessionMetadata {value:record.metadata,profiles}})
 }
 
@@ -463,6 +469,9 @@ pub fn open(source:ImmutableBacking,limits:ProjectLimits,cancel:&AtomicBool)->Re
     open_with_programs(source,limits,cancel,&super::TrustedPrograms::default())
 }
 pub fn open_with_programs(source:ImmutableBacking,limits:ProjectLimits,cancel:&AtomicBool,programs:&super::TrustedPrograms)->Result<OpenSession,String> {
+    open_with_budget(source, limits, cancel, programs, crate::MemoryBudget::process())
+}
+pub fn open_with_budget(source:ImmutableBacking,limits:ProjectLimits,cancel:&AtomicBool,programs:&super::TrustedPrograms,budget:crate::MemoryBudget)->Result<OpenSession,String> {
     active(cancel)?;let mut reader=BackingReader::new(&source,cancel);let directory=Directory::read(&mut reader,262_144,limits.metadata_bytes)?;
     if directory.members.iter().any(|m|!matches!(m.name.as_str(),"mimetype"|"manifest.json"|"data/tiles-1.bin")) {return Err("Invalid session archive members".into());}
     let metadata=directory.read_member(&mut reader,directory.member("manifest.json").ok_or("Missing session metadata")?,limits.metadata_bytes.min(usize::MAX as u64) as usize)?;
@@ -477,7 +486,7 @@ pub fn open_with_programs(source:ImmutableBacking,limits:ProjectLimits,cancel:&A
         }
     }
     let backing=ImmutableBacking::new(Arc::new(Pack {source:source.clone(),offset:pack.offset,length:pack.length})).map_err(str::to_string)?;
-    open_parts_with_programs(&metadata,backing,limits,cancel,programs)
+    open_parts_checked_with_budget(&metadata,backing,limits,cancel,programs,budget).map_err(OpenFailure::message)
 }
 
 #[cfg(test)]

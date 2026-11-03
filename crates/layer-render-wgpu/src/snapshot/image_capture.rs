@@ -28,7 +28,7 @@ impl SnapshotGpu {
         let mut rows = layer_color::SourceRows::new(layer_color::ClipRows {
             extent: [region[2], region[3]], origin: [region[0], region[1]], color: snapshot.color(),
             resolution: capture.scene.view().composition().resolution, rendition: None, source: true,
-            limit: layer_color::photo::PhotoMemoryBudget::current().encode_bytes,
+            limit: layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes()).encode_bytes,
         })?;
         let mut row = region[1];
         while row < window[3] {

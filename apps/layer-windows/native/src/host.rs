@@ -587,6 +587,7 @@ impl CapyHost {
         self.surface_ready.submitted(gpu.queue(), &self.chrome, (chrome_staged&&presenter.chrome_ready()).then_some(document));
         self.blank_presented = true;
         gpu.device().poll(wgpu::PollType::Poll).map_err(err)?;
+        self.native.session.renderer_mut().0.as_mut().unwrap().after_present();
         self.gpu.check()?;
         self.poll_services()?;
         Ok(i32::from(self.native.dirty))

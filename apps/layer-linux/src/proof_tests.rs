@@ -798,7 +798,7 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     finish(&restored);
     let delivered = layer_color::photo::read_photo(
         std::io::BufReader::new(std::fs::File::open(&delivery).unwrap()),
-        Default::default(),
+        layer_ui::photo_decode_limits(),
     )
     .unwrap();
     assert_eq!(delivered.interpretation.depth, SampleDepth::U16);

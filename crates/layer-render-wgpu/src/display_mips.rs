@@ -171,6 +171,11 @@ pub(super) struct CompleteUpdates {
 }
 impl CompleteUpdates {
     pub(super) const BATCH: usize = 128;
+    pub(crate) fn cpu_bytes(&self) -> u64 {
+        (self.bindings.capacity() + self.fused_bindings.capacity()) as u64 * std::mem::size_of::<wgpu::BindGroup>() as u64
+            + self.pending.capacity() as u64 * std::mem::size_of::<[u32; 2]>() as u64
+    }
+
 
     pub(crate) fn from_level(device: &PipelineDevice, pipelines: &Pipelines, plan: Plan, first: u32,
         views: &[&wgpu::TextureView]) -> Self {
@@ -280,11 +285,12 @@ pub(super) struct Image {
 impl Image {
 
     /// Allocate a sampled pyramid; generate_mips derives its coarser levels.
-    pub fn with_mips(r: &WgpuRasterizer, plan: Plan, last: u32) -> Self {
+    pub fn with_mips(r: &WgpuRasterizer, plan: Plan, last: u32) -> Self { Self::with_device(&r.device, plan, last) }
+    pub(crate) fn with_device(device: &PipelineDevice, plan: Plan, last: u32) -> Self {
         assert!(last >= plan.level && last < MIP_COUNT);
         let last = last.min(plan.level + plan.size.into_iter().max().unwrap().next_power_of_two().ilog2());
         let size = plan.pyramid_size(last);
-        let texture = r.device.create_texture(&wgpu::TextureDescriptor {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("derived image pyramid"), size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
             mip_level_count: last-plan.level+1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba32Float,
@@ -296,7 +302,7 @@ impl Image {
             base_mip_level: level, mip_level_count: Some(1), ..Default::default()
         });
         let view = single(0);
-        let scratch = r.device.create_texture(&wgpu::TextureDescriptor {
+        let scratch = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("reusable display mip tile"),
             size: wgpu::Extent3d {
                 width: PAGE_SIZE,
@@ -335,14 +341,23 @@ impl Image {
             records: BTreeMap::new(),
         }
     }
+    pub fn storage_from(&self, level: u32) -> u64 {
+        if level == self.plan.level { return self.storage_bytes(); }
+        Plan::at(self.plan.extent, level).level_bytes(level) + texture_bytes(&self.scratch)
+    }
     pub fn storage_bytes(&self) -> u64 {
-        self.plan.pixel_bytes_through(self.last_level())
+        texture_bytes(&self.texture) + texture_bytes(&self.scratch)
             + self
                 .records
                 .values()
                 .flatten()
                 .map(|r| r.uniform.size())
                 .sum::<u64>()
+    }
+    pub fn cpu_bytes(&self) -> u64 {
+        (self.views.capacity() + self.reduced.capacity()) as u64 * std::mem::size_of::<wgpu::TextureView>() as u64
+            + self.records.values().map(|records| records.capacity() as u64 * std::mem::size_of::<Record>() as u64).sum::<u64>()
+            + self.records.len() as u64 * std::mem::size_of::<([u32; 2], Vec<Record>)>() as u64
     }
     pub fn last_level(&self) -> u32 { self.plan.level + self.texture.mip_level_count() - 1 }
     pub fn sampling_view(&self) -> wgpu::TextureView { self.texture.create_view(&Default::default()) }

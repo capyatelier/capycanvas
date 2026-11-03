@@ -19,7 +19,7 @@ impl Cache {
         let reverse = scene.native_reverse;
         let changed = missing.iter().fold(PixelRect::EMPTY, |a, c| a.union(page_rect(*c))).intersect(PixelRect::full(packet.document_extent));
         self.deferred_changed = self.deferred_changed.union(changed);
-        let budget = r.native_edit.as_ref().map_or(windows::DEFAULT_IMAGE_PIXEL_BYTES, |n| n.image_pixel_budget(self.resident_bytes()));
+        let budget = r.native_edit.as_ref().map_or(r.memory_limit(layer_core::MemoryOwnerKind::Scene), |n| n.image_pixel_budget(self.resident_bytes()));
         let plan = windows::Plan::new_cached(packet.scene, packet.document_extent, budget, r.device.limits().max_texture_dimension_2d,Some(&scene.object_spatial))?;
         let mut regions: Vec<_> = plan.map_or_else(|| vec![(changed, scene.cached_capture_window(packet.scene, changed))], |p| p.regions_cached(packet.scene, changed,Some(&scene.object_spatial))
             .filter(|(output, _)| page_coordinates(*output).any(|c| missing.contains(&c))).collect());
@@ -51,11 +51,7 @@ impl Cache {
                     coordinates.next();bounds = combined;batch.push(region);
                 }
                 if batch.is_empty() {break;}
-                r.source_tiles.borrow_mut().begin_unit();
-                let captured = self.capture_exact(scene, r, packet, &mut image, &batch, encoder, commands);
-                let overflowed = r.source_tiles.borrow_mut().end_unit();
-                if (overflowed || scene.scratch_exhausted) && captured.is_err() { self.native_batch = (batch.len() / 2).max(1); }
-                captured?;
+                self.capture_exact(scene, r, packet, &mut image, &batch, encoder, commands)?;
             }
             if let Some(hierarchy) = &mut self.hierarchy { hierarchy.flush(encoder); }
             if plan.is_some() {
@@ -122,13 +118,13 @@ impl Cache {
         let mut image = self.exact_tile.get_or_insert_with(|| Image::new(r,
             display_mips::Plan::at(exact_strip(packet.document_extent), 0), "exact composition working strip")).clone();
         let mut seen = BTreeSet::new();
-        let budget = r.native_edit.as_ref().map_or(windows::DEFAULT_IMAGE_PIXEL_BYTES, |n| n.image_pixel_budget(self.resident_bytes()));
+        let budget = r.native_edit.as_ref().map_or(r.memory_limit(layer_core::MemoryOwnerKind::Scene), |n| n.image_pixel_budget(self.resident_bytes()));
         let passes = packet.scene.order().iter().filter_map(|h|packet.scene.effect(*h).filter(|effect|
             effect.program.image_boundary()&&packet.scene.visible(*h)))
             .map(|effect|effect.program.passes.len().max(1) as u64).sum::<u64>();
         let mut bounds = PixelRect::EMPTY;
         let mut work_limit=4*u64::from(PAGE_SIZE).pow(2);
-        let page_limit = if passes > 0 { 4 } else { SOURCE_SLOTS };
+        let page_limit = if passes > 0 { self.native_batch.min(4) } else { self.native_batch };
         let pages: Vec<_> = self.missing_pages().filter(|c| seen.insert(*c)).take(page_limit).take_while(|c| {
             let region = page_rect(*c).intersect(PixelRect::full(self.plan.extent));
             let combined = bounds.union(region);
@@ -165,7 +161,13 @@ impl Cache {
     ) -> Result<PixelRect, GpuRasterError> {
         let bounds = regions.iter().fold(PixelRect::EMPTY, |bounds, region| bounds.union(*region));
         image.plan = display_mips::Plan::window(packet.document_extent, 0, bounds);
-        scene.capture_prepared_regions(r, packet, image, regions, scene::Output::Display, false, None, encoder)?;
+        r.source_tiles.borrow_mut().begin_unit();
+        let captured = scene.capture_prepared_regions(r, packet, image, regions, scene::Output::Display, false, None, encoder);
+        let overflowed = r.source_tiles.borrow_mut().end_unit();
+        if (overflowed || scene.scratch_exhausted) && matches!(captured, Err(GpuRasterError::DeferredObjectWork)) {
+            self.native_batch = (regions.len() / 2).max(1);
+        }
+        captured?;
         for &region in regions {
             let coordinate = [region.min_x() / PAGE_SIZE, region.min_y() / PAGE_SIZE];
             if let Some(hierarchy) = &mut self.hierarchy { hierarchy.write(encoder, image, coordinate, region); }

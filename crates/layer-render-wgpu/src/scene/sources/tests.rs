@@ -1,6 +1,13 @@
 use super::*;
 use layer_core::color::source::{SourceBuilder, SourceInterpretation};
 
+fn cache_with_slots(slots: usize) -> DecodedTiles {
+    let mut cache = DecodedTiles::default();
+    cache.admit_limits(slots as u64 * FLOAT_TILE_BYTES, 16 * FLOAT_TILE_BYTES, 44 * FLOAT_TILE_BYTES);
+    cache
+}
+
+
 #[test]
 fn raster_cache_keys_share_generated_contents_and_keep_loaded_owner_identity() {
     let source = scan_source(1, 0);
@@ -95,6 +102,51 @@ fn scan_source(tiles: usize, offset: u8) -> Arc<SourceImage> {
     })
 }
 
+fn lease_foreign_sources(r: &mut WgpuRasterizer, count: usize) -> (Option<Arc<SourceImage>>, Vec<Arc<()>>) {
+    if count == 0 { return (None, Vec::new()); }
+    let source = scan_source(count, 173);
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    let mut leases = Vec::with_capacity(count);
+    for x in 0..count as u32 {
+        let prepared = crate::prepare_image_tile(&source, [x, 0], r.document_color().space, &r.device.source_samples, None).unwrap();
+        let tile = Scene::decode_prepared(r, &mut encoder, &source, [x, 0], prepared).unwrap();
+        leases.push(r.source_tiles.borrow().lease(&tile.view).unwrap());
+    }
+    r.uploads.finish(&encoder);
+    encoder.submit(&r.queue);
+    crate::test_support::complete(r);
+    (Some(source), leases)
+}
+
+fn drained_source_renderer() -> (WgpuRasterizer, layer_core::MemoryReservation, Option<Arc<SourceImage>>, Vec<Arc<()>>, usize) {
+    let (doc, ..) = threshold_document(threshold_source(1, 0));
+    let mut r = crate::memory::memory_tests::renderer(doc.composition().color,
+        layer_core::DeviceMemoryFacts {unified: true, ..Default::default()}).unwrap();
+    let budget = r.factory.memory_budget().clone();
+    budget.set_ram_override(Some(384 << 20));
+    let frame = crate::test_support::packet(doc.scene(), doc.composition().size);
+    r.begin_frame_memory(frame);
+    let (source, foreign) = lease_foreign_sources(&mut r, SOURCE_SLOTS / 2);
+    r.publish_memory(true);
+    budget.flush_reports();
+    let pressure = budget.admit_import(budget.import_headroom_bytes()).unwrap();
+    assert_eq!(budget.import_headroom_bytes(), 0);
+    r.begin_frame_memory(frame);
+    let capacity = r.source_tiles.borrow().free_slots();
+    assert!(capacity >= SOURCE_SLOTS + 4);
+    (r, pressure, source, foreign, capacity)
+}
+
+fn assert_working_source_slots(r: &WgpuRasterizer, capacity: usize, foreign: &[Arc<()>]) {
+    let sources = r.source_tiles.borrow();
+    let retained = sources.slots.iter().filter(|slot| foreign.iter().any(|lease| Arc::ptr_eq(lease, &slot.lease))).count();
+    assert_eq!(retained, foreign.len(), "unrelated source leases survive the traversal");
+    assert!(sources.slots.iter().filter(|slot| foreign.iter().any(|lease| Arc::ptr_eq(lease, &slot.lease)))
+        .all(|slot| slot.valid.load(Ordering::Acquire)));
+    assert_eq!(sources.slots.len() - retained, capacity);
+    assert_eq!(sources.slot_limit() - retained, capacity);
+}
+
 fn assert_threshold_pixels(r: &WgpuRasterizer, threshold: f32, offset: u8) {
     let cache = r.scale_display.as_ref().unwrap();
     assert!(matches!(cache.plan.level, 0 | 2));
@@ -141,51 +193,52 @@ fn threshold_source(tiles: usize, offset: u8) -> Arc<SourceImage> {
 #[test]
 fn repeated_native_threshold_updates_reuse_an_oversized_decoded_working_set() {
     use layer_core::EffectValue;
-    for capacity in [8, 16] {
-        for tiles in [capacity + 1, capacity * 13 / 10 + 1] {
-            let extent = [tiles as u32 * PAGE_SIZE, PAGE_SIZE];
-            let (mut doc, paint, effect, parameter) = threshold_document(threshold_source(tiles, 0));
-            let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-            r.source_tiles.get_mut().limits.slots = capacity;
-            let mut allocated = None;
-            for (round, threshold) in [0.2, 0.35, 0.5, 0.65, 0.8, 0.45].into_iter().enumerate() {
-                doc.artwork.effects.get_mut(effect).unwrap().values[parameter] = EffectValue::Number(threshold);
-                let mut frame = crate::test_support::packet(doc.scene(), extent);
-                frame.view.width_px = extent[0] / 4; frame.view.height_px = extent[1] / 4;
-                frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-                let before = r.source_cache_work();
-                crate::test_support::submit_published(&mut r, frame);
-                let after = r.source_cache_work();
-                let work = [after[0] - before[0], after[1] - before[1]];
-                eprintln!("native source scan tiles={tiles} round={round} work={work:?}");
-                if round > 0 { assert!(work[0] >= capacity as u64, "warm traversal must reuse resident tiles: {work:?}"); }
-                let sources = r.source_tiles.borrow();
-                if let Some(bytes) = allocated { assert_eq!(sources.gpu_bytes(), bytes); }
-                else { allocated = Some(sources.gpu_bytes()); }
-                assert_eq!(sources.slots.len(), capacity);
-                drop(sources);
-                let cache = r.scale_display.as_ref().unwrap();
-                assert_eq!(cache.plan.level, 2);
-                assert_eq!(cache.plan.bounds, PixelRect::full(extent));
-                assert_threshold_pixels(&r, threshold, 0);
-            }
-            let replacement = threshold_source(capacity, 64);
-            doc.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::authored::PaintBase::new((replacement).into()));
-            doc.artwork.paint.get_mut(paint).unwrap().domain[0] = capacity as u32 * PAGE_SIZE;
-            let composition = doc.artwork.root;
-            doc.artwork.compositions.get_mut(composition).unwrap().size[0] = capacity as u32 * PAGE_SIZE;
-            let frame = crate::test_support::packet(doc.scene(), doc.composition().size);
-            crate::test_support::submit_published(&mut r, frame);
-            assert_threshold_pixels(&r, 0.45, 64);
-            doc.artwork.effects.get_mut(effect).unwrap().values[parameter] = EffectValue::Number(0.6);
-            let frame = crate::test_support::packet(doc.scene(), doc.composition().size);
+    for numerator in [10, 13] {
+        let (mut r, _pressure, _foreign_source, foreign, capacity) = drained_source_renderer();
+        let tiles = capacity * numerator / 10 + 1;
+        let extent = [tiles as u32 * PAGE_SIZE, PAGE_SIZE];
+        let (mut doc, paint, effect, parameter) = threshold_document(threshold_source(tiles, 0));
+        let mut view = crate::test_support::view([extent[0] / 4, extent[1] / 4]);
+        view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+        let mut allocated = None;
+        for (round, threshold) in [0.2, 0.35, 0.5, 0.65, 0.8, 0.45].into_iter().enumerate() {
+            doc.artwork.effects.get_mut(effect).unwrap().values[parameter] = EffectValue::Number(threshold);
+            let frame = FramePacket {view, ..crate::test_support::packet(doc.scene(), extent)};
+            r.begin_frame_memory(frame);
             let before = r.source_cache_work();
             crate::test_support::submit_published(&mut r, frame);
             let after = r.source_cache_work();
-            assert_eq!(after[1], before[1], "a replacement set within capacity must be warm on its next update");
-            assert_eq!(r.source_tiles.borrow().gpu_bytes(), allocated.unwrap());
-            assert_threshold_pixels(&r, 0.6, 64);
+            let work = [after[0] - before[0], after[1] - before[1]];
+            if round > 0 { assert!(work[0] >= capacity as u64, "warm traversal must reuse resident tiles: {work:?}"); }
+            let sources = r.source_tiles.borrow();
+            if let Some(bytes) = allocated { assert_eq!(sources.gpu_bytes(), bytes); }
+            else { allocated = Some(sources.gpu_bytes()); }
+            drop(sources);
+            assert_working_source_slots(&r, capacity, &foreign);
+            let cache = r.scale_display.as_ref().unwrap();
+            assert_eq!(cache.plan.level, 2);
+            assert_eq!(cache.plan.bounds, PixelRect::full(extent));
+            assert_threshold_pixels(&r, threshold, 0);
         }
+        let replacement = threshold_source(capacity, 64);
+        doc.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::authored::PaintBase::new((replacement).into()));
+        doc.artwork.paint.get_mut(paint).unwrap().domain[0] = capacity as u32 * PAGE_SIZE;
+        let composition = doc.artwork.root;
+        doc.artwork.compositions.get_mut(composition).unwrap().size[0] = capacity as u32 * PAGE_SIZE;
+        let frame = FramePacket {view, ..crate::test_support::packet(doc.scene(), doc.composition().size)};
+        r.begin_frame_memory(frame);
+        crate::test_support::submit_published(&mut r, frame);
+        assert_threshold_pixels(&r, 0.45, 64);
+        doc.artwork.effects.get_mut(effect).unwrap().values[parameter] = EffectValue::Number(0.6);
+        let frame = FramePacket {view, ..crate::test_support::packet(doc.scene(), doc.composition().size)};
+        r.begin_frame_memory(frame);
+        let before = r.source_cache_work();
+        crate::test_support::submit_published(&mut r, frame);
+        let after = r.source_cache_work();
+        assert_eq!(after[1], before[1], "a replacement set within capacity must be warm on its next update");
+        assert_eq!(r.source_tiles.borrow().gpu_bytes(), allocated.unwrap());
+        assert_working_source_slots(&r, capacity, &foreign);
+        assert_threshold_pixels(&r, 0.6, 64);
     }
 }
 
@@ -289,28 +342,24 @@ fn effect_mask_bindings_reuse_retire_and_bound_real_texture_views() {
 }
 
 #[test]
-fn source_residency_and_upload_window_follow_admitted_headroom() {
-    let gib = 1024 * 1024 * 1024;
-    for (allowance, slots) in [(0, 64), (gib / 4, 64), (gib / 2 - 1, 127), (gib / 2, 128),
-        (gib - 1, 255), (gib, 256), (3 * gib / 2, 384), (2 * gib, 512), (3 * gib, 768),
-        (4 * gib, 1024), (u64::MAX, 1024)] {
-        let limits = SourceLimits::admitted(allowance);
-        assert_eq!(limits.slots, slots);
-        assert_eq!(limits.upload_bytes, (slots as u64 * FLOAT_TILE_BYTES / 4).min(64 * 1024 * 1024));
+fn source_residency_and_upload_window_follow_explicit_grants() {
+    for (decoded, uploads) in [(0, 0), (FLOAT_TILE_BYTES - 1, FLOAT_TILE_BYTES - 1),
+        (FLOAT_TILE_BYTES, FLOAT_TILE_BYTES), (3 * FLOAT_TILE_BYTES + 1, 5 * FLOAT_TILE_BYTES), (2048 * FLOAT_TILE_BYTES, 8 * FLOAT_TILE_BYTES)] {
+        let limits = SourceLimits::admitted(decoded, uploads);
+        assert_eq!(limits.slots as u64, decoded / FLOAT_TILE_BYTES);
+        assert_eq!(limits.upload_bytes, uploads);
         let cache = DecodedTiles { limits, ..Default::default() };
-        // Simulate already-admitted mixed uploads without a GPU allocation.
-        // The next worst-case tile always fits; completion releases the charge.
         let mut charges = Vec::new();
         while !cache.uploads_full() {
             let bytes = if charges.len() % 2 == 0 { FLOAT_TILE_BYTES / 4 } else { FLOAT_TILE_BYTES };
             let total = cache.in_flight.bytes.fetch_add(bytes, Ordering::Relaxed) + bytes;
             charges.push(UploadCharge(cache.in_flight.clone(), bytes));
-            assert!(total <= limits.upload_bytes);
+            assert!(total <= uploads);
         }
         drop(charges);
         assert_eq!(cache.in_flight.bytes.load(Ordering::Acquire), 0);
-        assert!(!cache.uploads_full());
-        assert_eq!(cache.admitted_bytes(), [limits.slots as u64 * FLOAT_TILE_BYTES, limits.upload_bytes]);
+        assert_eq!(cache.uploads_full(), uploads < FLOAT_TILE_BYTES);
+        assert_eq!(cache.admitted_bytes(), [limits.slots as u64 * FLOAT_TILE_BYTES, uploads]);
     }
 }
 
@@ -320,8 +369,8 @@ fn decoded_sources_preserve_srgb_codes_and_padding() {
     let mut r = WgpuRasterizer::native_capture_on_factory(gpu.factory.clone(), gpu.device.clone(), Default::default()).unwrap();
     drop(gpu);
     let mut scene = Scene::new(&r).unwrap();
-    let mut exact = DecodedTiles::new(RgbSpace::Srgb);
-    exact.admit(2 * 1024 * 1024 * 1024);
+    let mut exact = cache_with_slots(64);
+    exact.admit_limits(512 << 20, 64 << 20, 492 << 20);
     let mut builder = SourceBuilder::new([255, 19], SourceInterpretation {
         channels: SourceChannels::Rgb, depth: SampleDepth::U8,
         profile: ColorProfile::Builtin(RgbSpace::Srgb), profile_assumed: false,
@@ -386,38 +435,39 @@ fn decoded_sources_preserve_srgb_codes_and_padding() {
 }
 
 #[test]
-fn source_mip_reservations_wait_for_retired_slots_and_release_discarded_charges() {
+fn decoded_grant_shrink_waits_for_retired_slots_and_releases_discarded_charges() {
     let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut cache=DecodedTiles::default();let source=scan_source(25,0);
+    let mut cache=cache_with_slots(24);let source=scan_source(25,0);
     let first:Vec<_>=(0..24).map(|x|cache.plan(&r,&source,[x,0]).unwrap()).collect();
     assert_eq!(cache.gpu_bytes(),24*FLOAT_TILE_BYTES);
-    let bytes=cache.mip_budget();assert_eq!(bytes,44*FLOAT_TILE_BYTES);
+    let mip_bytes=cache.mip_budget();
+    cache.admit_limits(20*FLOAT_TILE_BYTES,16*FLOAT_TILE_BYTES,mip_bytes);
     let encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    assert!(!cache.reserve_mips(bytes,&encoder).unwrap());
-    assert_eq!(cache.slots.len(),MIN_DECODED_SLOTS);
+    assert_eq!(cache.trim_unused(&encoder),4*FLOAT_TILE_BYTES);
+    assert_eq!(cache.slots.len(),20);
     assert_eq!(cache.gpu_bytes(),24*FLOAT_TILE_BYTES);
-    encoder.submit(&r.queue);crate::test_support::complete(&r);
-    assert_eq!(cache.gpu_bytes(),MIN_DECODED_SLOTS as u64*FLOAT_TILE_BYTES);
-    let encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    assert!(cache.reserve_mips(bytes,&encoder).unwrap());
-    assert!(cache.reserve_mips(bytes+1,&encoder).is_err());
-    cache.reserve_mips(0,&encoder).unwrap();
+    assert!(cache.reserve_mips(mip_bytes,&encoder).unwrap());
+    assert!(!cache.reserve_mips(mip_bytes+1,&encoder).unwrap());
+    drop(first);encoder.submit(&r.queue);crate::test_support::complete(&r);
+    assert_eq!(cache.gpu_bytes(),20*FLOAT_TILE_BYTES);
+    cache.admit_limits(24*FLOAT_TILE_BYTES,16*FLOAT_TILE_BYTES,mip_bytes);
     let second:Vec<_>=(0..24).map(|x|cache.plan(&r,&source,[x,0]).unwrap()).collect();
-    assert!(!cache.reserve_mips(bytes,&encoder).unwrap());
-    drop((encoder,first,second));
-    cache.reap_retired();
+    cache.admit_limits(20*FLOAT_TILE_BYTES,16*FLOAT_TILE_BYTES,mip_bytes);
+    let encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    assert_eq!(cache.trim_unused(&encoder),4*FLOAT_TILE_BYTES);
+    drop((encoder,second));cache.reap_retired();
     assert_eq!(cache.retired_bytes.load(Ordering::Acquire),0);
-    assert_eq!(cache.gpu_bytes(),MIN_DECODED_SLOTS as u64*FLOAT_TILE_BYTES);
+    assert_eq!(cache.gpu_bytes(),20*FLOAT_TILE_BYTES);
 }
 
 #[test]
-fn canonical_source_requirements_survive_optional_uploads_within_the_shared_allowance() {
+fn canonical_source_requirements_survive_optional_uploads_with_separate_mip_grants() {
     let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut cache = DecodedTiles::default();
+    let mut cache = cache_with_slots(64);
     let source = scan_source(80, 0);
     cache.require_images((0..36).chain(0..36).map(|x| (source.clone(), [x, 0])));
     assert_eq!(cache.required.len(), 36);
-    assert_eq!(cache.mip_budget(), 27 * FLOAT_TILE_BYTES);
+    assert_eq!(cache.mip_budget(), 44 * FLOAT_TILE_BYTES);
     let encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     for x in 0..36 {
         let (_, pending) = cache.plan(&r, &source, [x, 0]).unwrap();
@@ -428,10 +478,10 @@ fn canonical_source_requirements_survive_optional_uploads_within_the_shared_allo
         let (_, pending) = cache.plan(&r, &source, [x, 0]).unwrap();
         pending.unwrap().write.track(&encoder);
         assert!((0..36).all(|x| cache.prepared_view(&source, [x, 0]).is_some()));
-        assert!(cache.gpu_bytes() + cache.mip_reservation <= cache.admitted_bytes()[0]);
+        assert!(cache.gpu_bytes() <= cache.admitted_bytes()[0]);
     }
     cache.require_images(std::iter::empty());
-    assert_eq!(cache.mip_budget(), cache.mip_limit());
+    assert_eq!(cache.mip_budget(), 44 * FLOAT_TILE_BYTES);
     for x in 36..80 {
         let (_, pending) = cache.plan(&r, &source, [x, 0]).unwrap();
         if let Some(pending) = pending { pending.write.track(&encoder); }
@@ -444,7 +494,7 @@ fn canonical_source_requirements_survive_optional_uploads_within_the_shared_allo
 #[test]
 fn discarded_required_source_writes_reuse_their_own_slots() {
     let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut cache = DecodedTiles::default();
+    let mut cache = cache_with_slots(64);
     let source = scan_source(1, 0);
     cache.require_images([(source.clone(), [0, 0])]);
     let (first, pending) = cache.plan(&r, &source, [0, 0]).unwrap();
@@ -455,20 +505,20 @@ fn discarded_required_source_writes_reuse_their_own_slots() {
 }
 
 #[test]
-fn canonical_source_demand_keeps_uploading_until_mip_retirement_releases_capacity() {
+fn canonical_source_demand_does_not_reduce_an_independent_mip_grant() {
     let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut cache = DecodedTiles::default();
+    let mut cache = cache_with_slots(64);
     let source = scan_source(36, 0);
     let encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     let previous = cache.mip_budget();
     assert!(cache.reserve_mips(previous, &encoder).unwrap());
     cache.require_images((0..36).map(|x| (source.clone(), [x, 0])));
-    assert!(cache.mip_budget() < previous);
+    assert_eq!(cache.mip_budget(), previous);
     assert!(cache.reserve_mips(previous, &encoder).unwrap());
     for x in 0..36 {
         let (_, pending) = cache.plan(&r, &source, [x, 0]).unwrap();
         pending.unwrap().write.track(&encoder);
-        assert!(cache.gpu_bytes() + cache.mip_reservation <= cache.admitted_bytes()[0]);
+        assert!(cache.gpu_bytes() <= cache.admitted_bytes()[0]);
     }
     assert!(cache.reserve_mips(cache.mip_budget(), &encoder).unwrap());
     for x in 0..36 {
@@ -476,13 +526,13 @@ fn canonical_source_demand_keeps_uploading_until_mip_retirement_releases_capacit
         if let Some(pending) = pending { pending.write.track(&encoder); }
     }
     assert!((0..36).all(|x| cache.prepared_view(&source, [x, 0]).is_some()));
-    assert!(cache.gpu_bytes() + cache.mip_reservation <= cache.admitted_bytes()[0]);
+    assert!(cache.gpu_bytes() <= cache.admitted_bytes()[0]);
 }
 
 #[test]
 fn canonical_requirements_leave_streaming_capacity_beside_other_composition_leases() {
     let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut cache = DecodedTiles::default();
+    let mut cache = cache_with_slots(20);
     let source = scan_source(40, 0);
     let encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     let previous = cache.mip_budget();
@@ -491,13 +541,13 @@ fn canonical_requirements_leave_streaming_capacity_beside_other_composition_leas
     pending.unwrap().write.track(&encoder);
     let lease = cache.lease(&outside.view).unwrap();
     cache.require_images((0..19).map(|x| (source.clone(), [x, 0])));
-    assert_eq!(cache.mip_budget(), previous - FLOAT_TILE_BYTES);
+    assert_eq!(cache.mip_budget(), previous);
     for x in (0..19).chain(20..40) {
         let (_, pending) = cache.plan(&r, &source, [x, 0]).unwrap();
         pending.unwrap().write.track(&encoder);
         assert_eq!(cache.prepared_view(&source, [19, 0]), Some(&outside.view));
         assert!((0..18.min(x + 1)).all(|x| cache.prepared_view(&source, [x, 0]).is_some()));
-        assert!(cache.gpu_bytes() + cache.mip_reservation <= cache.admitted_bytes()[0]);
+        assert!(cache.gpu_bytes() <= cache.admitted_bytes()[0]);
     }
     assert!(cache.reserve_mips(cache.mip_budget(), &encoder).unwrap());
     for x in 0..19 {
@@ -568,7 +618,7 @@ fn prepared_gray_alpha_samples_are_expanded_by_shared_worker_before_upload() {
 #[test]
 fn abandoned_source_writes_are_reused_before_resident_tiles_are_evicted() {
     let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut cache = DecodedTiles { limits: SourceLimits { slots: 2, ..Default::default() }, ..Default::default() };
+    let mut cache = DecodedTiles { limits: SourceLimits { slots: 2, ..SourceLimits::admitted(64 * FLOAT_TILE_BYTES, 16 * FLOAT_TILE_BYTES) }, ..cache_with_slots(64) };
     let source = scan_source(3, 0);
     let key = |x: u32| Key::raster(&source.tiles[&[x, 0]], RgbSpace::Srgb, RgbSpace::Srgb);
     let (resident, write) = cache.plan_key(&r, key(0)).unwrap();
@@ -581,30 +631,37 @@ fn abandoned_source_writes_are_reused_before_resident_tiles_are_evicted() {
 }
 
 #[test]
-fn a_later_display_allowance_admits_matching_source_residency() {
-    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    for (allowance, slots) in [(3 << 29, 384), (0, 64)] {
-        r.set_complete_display_allowance(allowance);
-        assert_eq!(r.native_edit.as_ref().unwrap().color_cache_bytes, allowance.max(256<<20));
-        assert_eq!(r.source_tiles.borrow().admitted_bytes()[0], slots * FLOAT_TILE_BYTES);
+fn later_source_grants_change_residency_independently_of_display_allowance() {
+    let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut cache = cache_with_slots(64);
+    for slots in [384, 64, 3] {
+        cache.admit_limits(slots * FLOAT_TILE_BYTES, 16 * FLOAT_TILE_BYTES, 44 * FLOAT_TILE_BYTES);
+        assert_eq!(cache.admitted_bytes()[0], slots * FLOAT_TILE_BYTES);
         let encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        let budget = r.source_tiles.borrow().mip_budget();
-        assert!(r.source_tiles.get_mut().reserve_mips(budget, &encoder).unwrap());
+        assert!(cache.reserve_mips(cache.mip_budget(), &encoder).unwrap());
+        assert_eq!(cache.slot_limit() as u64, slots);
     }
-    assert_eq!(r.source_tiles.borrow().slot_limit(), MIN_DECODED_SLOTS);
 }
 
 #[test]
 fn exact_native_batches_reading_more_tiles_than_are_free_shrink_until_they_fit() {
-    let capacity = 8;
-    let tiles = 2 * capacity + 3;
-    let (doc, ..) = threshold_document(threshold_source(tiles, 0));
-    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    use layer_core::authored::{PaintBase, SourceTarget};
+    let (mut r, _pressure, _foreign_source, foreign, capacity) = drained_source_renderer();
+    let tiles = capacity + 1;
+    let (mut doc, ..) = threshold_document(threshold_source(tiles, 0));
+    let extent = doc.composition().size;
+    let (_, SourceTarget::Paint(paint)) = crate::test_support::add_paint(&mut doc.artwork, "Second base", extent) else { unreachable!() };
+    doc.artwork.paint.get_mut(paint).unwrap().base = Some(PaintBase::new(threshold_source(tiles, 64).into()));
+    let doc = layer_core::Document::from_artwork(doc.artwork).unwrap();
     r.test.reference = true;
-    r.source_tiles.get_mut().limits.slots = capacity;
-    crate::test_support::submit_published(&mut r, crate::test_support::packet(doc.scene(), doc.composition().size));
+    let frame = crate::test_support::packet(doc.scene(), extent);
+    r.begin_frame_memory(frame);
+    assert_eq!(r.source_tiles.borrow().free_slots(), capacity);
+    assert!(2 * SOURCE_SLOTS > capacity);
+    assert!(tiles > capacity);
+    crate::test_support::submit_published(&mut r, frame);
     assert!(r.scale_display.as_ref().unwrap().evaluation == crate::scene::scale::Evaluation::Native);
-    assert_eq!(r.source_tiles.borrow().slots.len(), capacity);
+    assert_working_source_slots(&r, capacity, &foreign);
     assert_threshold_pixels(&r, 0.5, 0);
 }
 
@@ -613,17 +670,17 @@ fn native_threshold_larger_than_the_decoded_floor_publishes_every_page_once() {
     let extent = [2560, 1792];
     let (doc, ..) = threshold_document(layer_core::color::source::rgba8_source(extent, |x, y|
         [(x / 7) as u8, (y / 5) as u8, ((x + y) / 3) as u8, 255]));
-    let render = |allowance| {
-        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-        r.source_tiles.get_mut().admit(allowance);
+    let render = |slots| {
+        let mut r = crate::memory::memory_tests::renderer_for_restore(&doc);
         let mut frame = crate::test_support::packet(doc.scene(), extent);
         frame.view.width_px = extent[0] / 4; frame.view.height_px = extent[1] / 4;
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+        crate::memory::memory_tests::declare_source_budget(&mut r, frame, slots, 16 << 20, 44 << 20);
         crate::test_support::submit_published(&mut r, frame);
         r
     };
-    let floor = render(0);
-    let reference = render(1 << 32);
+    let floor = render(64);
+    let reference = render(1024);
     let pages = page_coordinates(PixelRect::full(extent)).count() as u64;
     assert!(floor.source_tiles.borrow().admitted_bytes()[0] < pages * FLOAT_TILE_BYTES);
     assert!(reference.source_tiles.borrow().admitted_bytes()[0] > pages * FLOAT_TILE_BYTES);
@@ -640,10 +697,10 @@ fn cold_native_threshold_frames_replan_only_unfinished_pages() {
     let extent = [2560, 2048];
     let (doc, ..) = threshold_document(layer_core::color::source::rgba8_source(extent, |x, y|
         [(x / 7) as u8, (y / 5) as u8, ((x + y) / 3) as u8, 255]));
-    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    r.source_tiles.get_mut().admit(1 << 32);
+    let mut r = crate::memory::memory_tests::renderer_for_restore(&doc);
     let pages = page_coordinates(PixelRect::full(extent)).count() as u64;
     let frame = crate::test_support::packet(doc.scene(), extent);
+    crate::memory::memory_tests::declare_source_budget(&mut r, frame, 1024, 64 << 20, 1004 << 20);
     let idle = FramePacket { composite_all: false, ..frame };
     let mut next = frame;
     let mut deferred = 0;

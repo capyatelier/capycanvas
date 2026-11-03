@@ -64,9 +64,9 @@ pub fn decode(mut input: impl Read, limits: DecodeLimits, cancelled: &AtomicBool
     output.read_exact(&mut flags).map_err(|e| e.to_string())?;
     if flags[0] > 3 { return Err("Invalid photo decoder response".into()); }
     let project = ProjectLimits { asset_bytes: limits.source_bytes as u64 + layer_core::color::source::MAX_PROFILE_BYTES as u64 + layer_core::PhotoMetadata::MAX_BYTES as u64,
-        dimension: limits.dimension, ..Default::default() };
+        dimension: limits.dimension, ..ProjectLimits::for_import() };
     let backing = layer_core::package::transport::spool(&mut output, directory, project.asset_bytes + project.metadata_bytes, cancelled)?;
-    let layer_core::package::codec::OpenOutcome::Candidate { artwork, .. } = layer_core::package::codec::open(backing, project, cancelled)? else {
+    let layer_core::package::codec::OpenOutcome::Candidate { artwork, mut memory, .. } = layer_core::package::codec::open(backing, project, cancelled)? else {
         return Err("Invalid photo decoder package".into());
     };
     let mut sources = artwork.paint.iter().filter_map(|(_, _, paint)| paint.base.as_ref().map(|base| base.image.storage().clone()));
@@ -75,7 +75,7 @@ pub fn decode(mut input: impl Read, limits: DecodeLimits, cancelled: &AtomicBool
         return Err("Photo decoder image exceeds admission".into());
     }
     source.validate()?;
-    Ok(DecodedPhoto { source: Arc::unwrap_or_clone(source), metadata: (*artwork.metadata).clone(), first_frame: flags[0] & 1 != 0, primary_image: flags[0] & 2 != 0 })
+    Ok(DecodedPhoto { source: Arc::unwrap_or_clone(source), reservation: memory.take_reservation(), metadata: (*artwork.metadata).clone(), first_frame: flags[0] & 1 != 0, primary_image: flags[0] & 2 != 0 })
 }
 
 pub fn serve(input: File, output: &mut impl Write, limits: DecodeLimits) -> Result<(), String> {

@@ -137,7 +137,7 @@ impl SnapshotRenderer {
                 layer_color::photo::GainMapRender { extent, space: working, rendition, guide: &guide, matte, clip: true },
                 bounds,
                 format,
-                quality,
+                layer_color::photo::GainMapEncodeOptions::from_memory_budget(quality, layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes())),
                 control.cancellation_flag(),
                 read,
             )?;

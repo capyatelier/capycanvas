@@ -107,7 +107,8 @@ fn source(rgb: [f32;3], alpha: f32) -> EffectInstance {
 }
 fn frame_document(r: &mut WgpuRasterizer, document: &Document) -> [f32;4] {
     let document = Document::from_artwork(document.artwork.clone()).unwrap();
-    crate::test_support::submit_settled(r, packet(document.scene().with_owner(0,0),document.composition().size));
+    let revision = r.artwork_frame.as_ref().map_or(0, |frame| frame.scene.view().revision() + 1);
+    crate::test_support::submit_settled(r, packet(document.scene().with_owner(0,revision),document.composition().size));
     let bytes = crate::layer_tests::page_bytes(r,crate::test_support::document_texture(r));
     std::array::from_fn(|c| f32::from_le_bytes(bytes[c*4..c*4+4].try_into().unwrap()))
 }

@@ -115,7 +115,8 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportTask(
             clipboard: matches!(a.host.session.document_request(id as u32), Ok(DocumentRequest::Paste { .. })),
             control: crate::inspection::control(cancel)?,
             images: layer_ui::ImageImportBatch::new(a.host.session.state().settings.photo_open,
-                a.host.session.engine().document().composition().color.space, Default::default()),
+                a.host.session.engine().document().composition().color.space, layer_color::photo::DecodeLimits::from_memory_budget(
+                    layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes()))),
             clip, color: a.host.session.engine().document().composition().color,
             mode: match a.host.session.document_request(id as u32)? { DocumentRequest::Paste { mode } => Some(*mode), _ => None },
             open,
@@ -130,7 +131,7 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportPrepare(mut env: JN
     let mut b_owner = crate::inspection::borrow::<Batch>(handle)?;let b=&mut *b_owner;
     let result = (|| {
         if b.open.is_none() && b.mode != Some(layer_ui::PasteMode::Into) && let Some(clip) = &mut b.clip {
-            clip.convert_layers(b.color, layer_color::photo::PhotoMemoryBudget::current().encode_bytes, || b.control.is_cancelled())?;
+            clip.convert_layers(b.color, layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes()).encode_bytes, || b.control.is_cancelled())?;
         }
         let Some(open) = &mut b.open else { return Ok(()); };
         if b.control.is_cancelled() { return Err("Paste cancelled".into()); }

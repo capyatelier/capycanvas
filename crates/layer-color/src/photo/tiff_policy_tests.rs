@@ -45,7 +45,7 @@ fn classic_and_big_tiff_interleaved_strips_decode_all_lossless_codec_variants() 
                 Compression::Deflate(_) => "zip",
                 Compression::Packbits => "packbits",
             };
-            let source = read_photo(Cursor::new(file.into_inner()), Default::default())
+            let source = read_photo(Cursor::new(file.into_inner()), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30)))
                 .unwrap_or_else(|e| panic!("big={big} codec={name}: {e}"));
             assert_eq!(source.extent, [33, 17]);
             assert_eq!(source.interpretation.depth, SampleDepth::U16);
@@ -66,7 +66,7 @@ fn classic_and_big_tiff_interleaved_strips_decode_all_lossless_codec_variants() 
 #[test]
 fn jpeg_compressed_gray_alpha_is_refused_instead_of_misdecoded() {
     let bytes = include_bytes!("../../tests/fixtures/tiff/jpeg-gray-alpha.tif");
-    assert!(read_photo(Cursor::new(bytes.as_slice()), Default::default()).is_err());
+    assert!(read_photo(Cursor::new(bytes.as_slice()), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).is_err());
 }
 
 #[test]
@@ -100,7 +100,7 @@ fn unsupported_tiff_layouts_and_classic_output_overflow_fail_explicitly() {
     }
     planar.extend_from_slice(&[127; 12]);
     assert!(
-        read_photo(Cursor::new(planar), Default::default())
+        read_photo(Cursor::new(planar), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30)))
             .unwrap_err()
             .contains("Planar TIFF")
     );
@@ -113,7 +113,7 @@ fn unsupported_tiff_layouts_and_classic_output_overflow_fail_explicitly() {
             image.encoder().write_tag(tag, &[value as u16][..]).unwrap();
             image.write_data(&[127; 16]).unwrap();
         }
-        let error = read_photo(Cursor::new(file.into_inner()), Default::default()).unwrap_err();
+        let error = read_photo(Cursor::new(file.into_inner()), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap_err();
         assert!(error.contains(reason), "{reason}: {error}");
     }
     let mut file = Cursor::new(Vec::new());
@@ -126,7 +126,7 @@ fn unsupported_tiff_layouts_and_classic_output_overflow_fail_explicitly() {
         }
     }
     assert!(
-        read_photo(Cursor::new(file.into_inner()), Default::default())
+        read_photo(Cursor::new(file.into_inner()), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30)))
             .unwrap_err()
             .contains("Multi-page TIFF")
     );
@@ -136,7 +136,7 @@ fn unsupported_tiff_layouts_and_classic_output_overflow_fail_explicitly() {
         .write_image::<colortype::RGB32Float>(2, 2, &[2.; 12])
         .unwrap();
     assert!(
-        read_photo(Cursor::new(file.into_inner()), Default::default())
+        read_photo(Cursor::new(file.into_inner()), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30)))
             .unwrap_err()
             .contains("unsigned integer")
     );

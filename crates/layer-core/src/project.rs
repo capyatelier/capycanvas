@@ -72,12 +72,19 @@ impl Default for ProjectLimits {
     fn default() -> Self {
         Self {
             metadata_bytes: 64 * 1024 * 1024,
-            asset_bytes: 512 * 1024 * 1024,
-            raster_bytes: 1024 * 1024 * 1024,
+            asset_bytes: u64::MAX,
+            raster_bytes: u64::MAX,
             tiles: 16384,
             dimension: crate::MAX_EXTENT,
             layers: 4096,
         }
+    }
+}
+
+impl ProjectLimits {
+    pub fn for_import() -> Self {
+        let bytes = crate::MemoryBudget::process().import_headroom_bytes();
+        Self { asset_bytes: bytes, raster_bytes: bytes, ..Default::default() }
     }
 }
 
@@ -123,7 +130,7 @@ impl Document {
         for profile in roots.profiles {asset_bytes=asset_bytes.saturating_add(sources.charge_profile(profile) as u64);}
         for block in self.artwork.metadata.blocks().into_iter().flatten(){if byte_owners.insert(block.as_ptr() as usize){asset_bytes=asset_bytes.saturating_add(block.len() as u64);}}
         for program in roots.programs {for shader in std::iter::once(&program.wgsl).chain(program.lookups.iter().map(|lookup|&lookup.wgsl)) {if let Ok(sources)=shader.sources(){for source in sources{if byte_owners.insert(source.as_ptr() as usize){asset_bytes=asset_bytes.saturating_add(source.len() as u64);}}}}}
-        if asset_bytes>limits.asset_bytes{return Err("Artwork resources exceed the memory limit".into());}
+        if asset_bytes>limits.asset_bytes{return Err(crate::MEMORY_BUDGET_EXCEEDED.into());}
         let mut selection_bytes=0u64;
         for selection in roots.selections {
             if let SelectionShape::Pixels(p)=&selection.shape && p.extent().iter().any(|v|*v>limits.dimension) {
@@ -131,7 +138,7 @@ impl Document {
             }
             selection_bytes=selection_bytes.saturating_add(resources.charge_selection(selection) as u64);
         }
-        if selection_bytes>limits.raster_bytes{return Err("Selection coverage exceeds the artwork memory limit".into());}
+        if selection_bytes>limits.raster_bytes{return Err(crate::MEMORY_BUDGET_EXCEEDED.into());}
         let mut tiles=source_tiles;let mut raster_bytes=selection_bytes;
         for target in self.scene().targets(){
             if self.scene().target_extent(target).iter().any(|v|*v>limits.dimension){return Err("Target exceeds the dimension limit".into());}
@@ -144,7 +151,8 @@ impl Document {
                 Some(Err(error))=>return Err(error),None=>raster_bytes=raster_bytes.saturating_add(revision.pending_bytes() as u64),
             }
         }
-        if tiles>limits.tiles || raster_bytes>limits.raster_bytes{return Err("Artwork pixels exceed the memory limit".into());}
+        if tiles>limits.tiles{return Err("Artwork exceeds the tile count limit".into());}
+        if raster_bytes>limits.raster_bytes{return Err(crate::MEMORY_BUDGET_EXCEEDED.into());}
         crate::package::codec::admit_metadata(&self.artwork,limits)?;
         Ok(())
     }

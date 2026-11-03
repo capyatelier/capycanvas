@@ -158,6 +158,7 @@ pub(super) fn read(
     let interpretation = interpretation(channels, SampleDepth::U8, icc)?;
     let source = raster_io::source(&pixels, extent, interpretation, metadata, limits)?;
     Ok(DecodedPhoto {
+        reservation: None,
         source,
         metadata: photo,
         first_frame,

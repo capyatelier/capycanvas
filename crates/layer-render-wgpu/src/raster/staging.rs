@@ -166,7 +166,7 @@ impl RestorePreflight {
         }
         let projected=targets.iter().flatten().try_fold(0u64,|bytes,target|bytes.checked_add(target.projected_bytes(r)?).ok_or(GpuRasterError::SourceWorkingSetExceeded));
         match projected.and_then(|bytes|r.admit_preparation_bytes(bytes,r.bake_preflight.as_ref().map_or(0,|bake|bake.projected_bytes())).map(|()|bytes)) {
-            Ok(_)=>(),Err(error)=>failure=Some(error),
+            Ok(_)=>(),Err(error) if error.is_preparation_pending()=>(),Err(error)=>failure=Some(error),
         }
         Self {key,targets,failure,consumed:false}
     }
@@ -177,8 +177,9 @@ impl WgpuRasterizer {
         self.admit_preparation_with_transforms(restore,bake,self.transforms.as_ref())
     }
     pub(crate) fn admit_preparation_with_transforms(&self,restore:u64,bake:u64,transforms:Option<&paint_transform::PaintTransforms>)->Result<(),GpuRasterError> {
-        let Some(native)=&self.native_edit else {return Ok(());};
-        let limit=native.image_pixel_allowance().checked_add(native.color_cache_bytes).ok_or(GpuRasterError::SourceWorkingSetExceeded)?;
+        if self.native_edit.is_none() {return Ok(());}
+        let [scene, paint] = self.memory.preparation_limits();
+        let limit=scene.checked_add(paint).ok_or(GpuRasterError::SourceWorkingSetExceeded)?;
         let mut textures=RetainedTextures::default();
         let mut bytes=restore.checked_add(bake).ok_or(GpuRasterError::SourceWorkingSetExceeded)?;
         let published=self.paint_layers.iter().flat_map(|layer|layer.pages.iter().flat_map(|page|std::iter::once(&page.primary.texture).chain(page.secondary.iter().map(|surface|&surface.texture)).chain(page.stroke_start.iter().map(|(_,surface)|&surface.texture)))
@@ -188,7 +189,18 @@ impl WgpuRasterizer {
         bytes=bytes.checked_add(self.scale_display.as_ref().map_or(0,|cache|cache.resident_bytes()))
             .and_then(|bytes|bytes.checked_add(transforms.map_or(0,|transforms|transforms.preparation_bytes(&mut textures))))
             .ok_or(GpuRasterError::SourceWorkingSetExceeded)?;
-        if bytes>limit {Err(GpuRasterError::SourceWorkingSetExceeded)}else {Ok(())}
+        let retained = bytes.saturating_sub(restore).saturating_sub(bake);
+        if bytes>limit.max(retained) {
+            self.preparation_memory(bytes);
+            self.factory.memory_budget().flush_reports();
+            let [scene, raster] = self.preparation_memory_limits();
+            let fresh = scene.checked_add(raster).ok_or(GpuRasterError::SourceWorkingSetExceeded)?;
+            if bytes>fresh.max(retained) {
+                self.preparation_memory(0);
+                return Err(GpuRasterError::SourceWorkingSetExceeded);
+            }
+            Err(GpuRasterError::DeferredObjectWork)
+        } else {Ok(())}
     }
     pub(crate) fn projected_restore_bytes(&self)->u64 {self.restore_preflight.as_ref().map_or(0,|restore|restore.targets.iter().flatten().try_fold(0u64,|bytes,target|bytes.checked_add(target.projected_bytes(self)?).ok_or(GpuRasterError::SourceWorkingSetExceeded)).unwrap_or(u64::MAX))}
     pub(crate) fn staged_transform_source(&self,target:SourceTarget)->Option<(&Arc<RasterData>,&PreparedPages)> {
@@ -252,6 +264,12 @@ impl WgpuRasterizer {
     fn advance_restore(&mut self)->Result<bool,GpuRasterError> {
         if self.restore_preparation_pending() && !self.restore_pipelines_ready() {return Ok(false);}
         if self.restore_preflight.is_none() {return Ok(true);}
+        let projected = self.projected_restore_bytes();
+        if let Err(error) = self.admit_preparation_bytes(projected, self.bake_preflight.as_ref().map_or(0, |bake| bake.projected_bytes())) {
+            if error.is_preparation_pending() { return Ok(false); }
+            self.restore_preflight.as_mut().unwrap().failure = Some(error);
+            return Ok(true);
+        }
         let result=self.record_restore_uploads(|r,encoder| {
             r.drain_image_decodes(encoder)?;
             let mut restore=r.restore_preflight.take().unwrap();
@@ -259,7 +277,10 @@ impl WgpuRasterizer {
             r.restore_preflight=Some(restore);result
         });
         let restore=self.restore_preflight.as_mut().unwrap();
-        if let Err(error)=result {restore.failure=Some(error);}
+        if let Err(error)=result {
+            if error.is_preparation_pending() {return Ok(false);}
+            restore.failure=Some(error);
+        }
         Ok(restore.complete())
     }
     pub(crate) fn hold_restore_scalar(&mut self,prepared:object_image_mips::PreparedRasterTile) {

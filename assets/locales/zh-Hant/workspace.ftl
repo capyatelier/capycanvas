@@ -708,3 +708,13 @@ workspace-launch-window-size = 初始視窗大小
 workspace-phone-tool-limit = 手機工具列最多可容納十個工具。
 
 workspace-reset-phone-confirm = 恢復此工作區起始的手機工具列。可透過{ $menu } → { $undo }來復原此次恢復。
+
+diagnostics-budget-limit = 記憶體上限
+diagnostics-budget-physical = 已追蹤記憶體
+diagnostics-budget-pinned = 固定記憶體
+diagnostics-budget-debt = 記憶體超額
+diagnostics-budget-pair = RAM { $ram } MiB · GPU { $gpu } MiB
+diagnostics-budget-limit-description = 處理程序的 RAM 配額與各裝置配額總和。共用 GPU 記憶體可能與 RAM 重疊，請勿相加。
+diagnostics-budget-physical-description = 由大型擁有者回報的實體位元組數，不是作業系統或驅動程式的總用量。共用 GPU 記憶體可能與 RAM 重疊。
+diagnostics-budget-pinned-description = 無法釋放的位元組數，包括進行中的工作與匯入預留。共用 GPU 記憶體可能與 RAM 重疊。
+diagnostics-budget-debt-description = 超出 RAM 配額的固定位元組數，以及各裝置超額部分的總和。現有繪畫會保留。

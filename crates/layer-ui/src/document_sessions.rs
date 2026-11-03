@@ -2,7 +2,7 @@
 //! editor stays in the host's existing canvas slot; every parked owner lives
 //! here. Hosts supply completed capture inventories and schedule I/O/GPU work.
 use crate::{DocumentFileState, DocumentTabs, PixelClip, Localizer, MessageId, FluentArgs};
-use layer_core::{Document, raster_storage::RetainedTiles};
+use layer_core::{Document, MemoryBudget, MemoryOwner, MemoryOwnerKind, MemoryClass, MemoryReport, raster_storage::RetainedTiles};
 use serde::{Serialize, Deserialize};
 use std::{collections::BTreeMap, ops::Deref};
 
@@ -60,7 +60,7 @@ pub struct DocumentBudget {
 impl Default for DocumentBudget {
     fn default() -> Self {
         Self {
-            inactive_ram: 64 * 1024 * 1024,
+            inactive_ram: usize::MAX,
             metadata: 256 * 1024 * 1024,
         }
     }
@@ -87,6 +87,9 @@ pub struct DocumentSessions<T> {
     storage_error: Option<String>,
     pub clip: RetainedClipboard,
     trim: trim::Trim,
+    memory: MemoryBudget,
+    memory_owner: MemoryOwner,
+    reported: std::cell::Cell<usize>,
 }
 impl<T> Default for DocumentSessions<T> {
     fn default() -> Self { Self::localized(&Localizer::shared(crate::UiLanguage::English)) }
@@ -110,10 +113,15 @@ impl<T> DocumentSessions<T> {
         self.tabs.restore_order(order,selected)
     }
     pub fn localized(localization: &Localizer) -> Self {
+        Self::with_memory_budget(localization, MemoryBudget::process())
+    }
+    fn with_memory_budget(localization: &Localizer, memory: MemoryBudget) -> Self {
+        let memory_owner = memory.register_owner(MemoryOwnerKind::ParkedTabs, MemoryClass::Warm, None);
         Self {
             tabs: Default::default(), parked: Default::default(), clock: 0, language: localization.language(),
             untitled: DocumentTabLabel::untitled(1, localization),
             budget: Default::default(), storage_error: None, clip: RetainedClipboard, trim: Default::default(),
+            memory, memory_owner, reported: std::cell::Cell::new(0),
         }
     }
     pub fn request_trim(&mut self) -> Option<u64> { self.trim.request() }
@@ -121,6 +129,7 @@ impl<T> DocumentSessions<T> {
     pub fn trim_in_flight(&self) -> bool { self.trim.in_flight() }
     pub fn complete_trim(&mut self, token: u64, result: Result<(), String>) -> bool {
         if !self.trim.matches(token) { return false; }
+        self.refresh_memory(true);
         self.storage_completed(result.clone());
         self.trim.complete(token, result)
     }
@@ -153,6 +162,7 @@ impl<T> DocumentSessions<T> {
         self.parked.get_mut(&id).map(|p| &mut p.owner)
     }
     fn park(&mut self, id: u64, owner: T, tiles: RetainedTiles) {
+        tiles.set_parked(true);
         self.clock = self.clock.saturating_add(1);
         let old = self.parked.insert(
             id,
@@ -164,6 +174,7 @@ impl<T> DocumentSessions<T> {
             },
         );
         debug_assert!(old.is_none(), "an active drawing cannot already be parked");
+        self.refresh_memory(true);
     }
     /// Publish a prepared drawing only after its initiating request completes.
     /// The host installs the new active owner; this retains the outgoing one.
@@ -213,7 +224,7 @@ impl<T> DocumentSessions<T> {
         if self.order().len() != 1 || !self.parked.is_empty() {
             return Err(DocumentSessionError::DrawingsStillOpen);
         }
-        let mut next = Self::localized(localization);
+        let mut next = Self::with_memory_budget(localization, self.memory.clone());
         next.tabs = self.tabs.clone();
         next.tabs.close(self.selected());
         let id = next.tabs.add();
@@ -258,6 +269,7 @@ impl<T> DocumentSessions<T> {
         self.park(self.selected(), outgoing, tiles);
         self.tabs.select(id);
         self.untitled = next.untitled;
+        next.tiles.set_parked(false);
         Ok(next.owner)
     }
     /// Exchange a host's retained active slot without a placeholder editor.
@@ -275,6 +287,7 @@ impl<T> DocumentSessions<T> {
         let Some(mut incoming) = self.parked.remove(&id) else {
             return Err(DocumentSessionError::TabClosed);
         };
+        incoming.tiles.set_parked(false);
         swap(&mut incoming.owner);
         self.park(self.selected(), incoming.owner, tiles);
         self.tabs.select(id);
@@ -287,10 +300,13 @@ impl<T> DocumentSessions<T> {
     pub fn close_selected(&mut self) -> Option<T> {
         self.tabs.close(self.selected());
         self.untitled.clear();
-        self.parked.remove(&self.selected()).map(|next| {
+        let next = self.parked.remove(&self.selected()).map(|next| {
             self.untitled = next.untitled;
+            next.tiles.set_parked(false);
             next.owner
-        })
+        });
+        self.refresh_memory(true);
+        next
     }
     pub fn reorder(&mut self, id: u64, before: Option<u64>) -> bool {
         self.tabs.reorder(id, before)
@@ -304,10 +320,23 @@ impl<T> DocumentSessions<T> {
     pub fn resident_bytes(&self) -> usize {
         layer_core::raster_storage::resident_tile_bytes(self.parked.values().map(|p| &p.tiles))
     }
+    fn refresh_memory(&self, force: bool) {
+        let resident = self.resident_bytes();
+        let previous = self.reported.get();
+        if previous != resident && (force || previous.abs_diff(resident) >= 1024 * 1024) {
+            self.reported.set(resident);
+            self.memory_owner.report(MemoryReport { ram_bytes: resident as u64,
+                demand_ram_bytes: resident as u64, ..Default::default() });
+        }
+    }
+    pub fn inactive_ram_budget(&self) -> usize {
+        self.refresh_memory(false);
+        self.budget.inactive_ram.min(self.memory_owner.grant().ram_bytes.min(usize::MAX as u64) as usize)
+    }
     /// Oldest inactive resident payload first. Recount shared handles after each
     /// completion because spilling updates current/undo/redo owners together.
     pub fn spill_candidate(&self) -> Option<RetainedTiles> {
-        (self.resident_bytes() > self.budget.inactive_ram)
+        (self.resident_bytes() > self.inactive_ram_budget())
             .then(|| {
                 self.parked
                     .values()
@@ -512,8 +541,46 @@ impl DrawingSelector {
 mod tests {
     use super::*;
     fn english() -> std::sync::Arc<Localizer> { Localizer::shared(crate::UiLanguage::English) }
+    fn test_budget(limit: u64) -> MemoryBudget {
+        let budget = MemoryBudget::new();
+        budget.update_ram(layer_core::MemoryFacts { total_bytes: Some(16 << 30), available_bytes: Some(12 << 30), override_bytes: Some(limit), ..Default::default() }, 0);
+        budget
+    }
     fn inventory() -> RetainedTiles {
         RetainedTiles::default()
+    }
+    #[test]
+    fn parked_tiles_share_one_warm_owner_and_spill_only_above_its_grant() {
+        use layer_core::raster::{RasterData, RasterRevision, RasterTile, TileBlob, TileKey, RasterPlane, TILE_SIZE};
+        let budget = test_budget(16 * 1024 * 1024);
+        let mut tabs = DocumentSessions::with_memory_budget(&english(), budget.clone());
+        let mut document = Document::new(layer_core::PortableId::random(), 64, 64, layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+        let layer_core::SourceTarget::Paint(target) = document.working.target.unwrap() else { panic!() };
+        let descriptor = document.composition().color.paint_descriptor();
+        let pixels = [23, 47, 83, 255].repeat((TILE_SIZE * TILE_SIZE) as usize);
+        document.artwork.paint.get_mut(target).unwrap().raster = RasterRevision::backed(RasterData {
+            tiles: [(TileKey { plane: RasterPlane::Color, coordinate: [0; 2] }, RasterTile::backed(TileBlob::encode(descriptor, &pixels).unwrap()))].into(),
+            ..Default::default()
+        });
+        let tiles = layer_core::Editor::new(document).retained_tiles();
+        let bytes = tiles.resident_bytes();
+        assert!(bytes > 0);
+        tabs.append("first", tiles.clone(), &english());
+        tabs.append("second", tiles, &english());
+        assert_eq!(tabs.resident_bytes(), bytes);
+        assert!(tabs.spill_candidate().is_none());
+        let row = budget.snapshot().rows[MemoryOwnerKind::ParkedTabs as usize][MemoryClass::Warm as usize];
+        assert_eq!(row.owners, 1);
+        assert_eq!(row.ram_bytes, bytes as u64);
+        let visible = budget.register_owner(MemoryOwnerKind::DecodedSamples, MemoryClass::Visible, None);
+        visible.report(MemoryReport { demand_ram_bytes: budget.ram_limit_bytes(), ..Default::default() });
+        assert_eq!(tabs.inactive_ram_budget(), 0);
+        assert!(tabs.spill_candidate().is_some());
+        assert_eq!(tabs.order(), [1, 2, 3]);
+        drop(visible);
+        assert!(tabs.spill_candidate().is_none());
+        drop(tabs);
+        assert_eq!(budget.snapshot().ram_physical_bytes, 0);
     }
     #[cfg(not(target_arch = "wasm32"))]
     #[test]

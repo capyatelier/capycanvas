@@ -266,7 +266,7 @@ fn gaussian_all_sigmas_export_png_with_valid_opaque_and_partial_coverage() {
             let mut reader=capture(document.clone()).unwrap();let mut png=Vec::new();
             reader.write_png(&mut png,&target,Default::default(),None)
                 .unwrap_or_else(|error|panic!("depth={depth:?} sigma={sigma} original={c:?}: {error}"));
-            let decoded=layer_color::photo::read_photo(Cursor::new(png),Default::default()).unwrap();
+            let decoded=layer_color::photo::read_photo(Cursor::new(png),crate::test_support::photo_limits()).unwrap();
             assert_eq!(decoded.extent,extent);assert_eq!(decoded.interpretation.depth,SampleDepth::U16);
             let mut bytes=vec![0;decoded.row_bytes()];decoded.rows().read(0,&mut bytes).unwrap();
             let alpha=(c[3]*65535.).round() as u16;
@@ -331,7 +331,7 @@ fn animated_speed_edits_keep_canvas_exact_queries_and_export_in_phase() {
         let mut artwork = doc.artwork.clone();
         artwork.outputs.get_mut(artwork.default_output).unwrap().context = live.evaluation_context();
         let checkpoint = CaptureCheckpoint {document:artwork.id,owner:doc.owner,session_generation:0,artwork_generation:doc.revision,working_generation:0,edit_checkpoint:0};
-        let preview = live.snapshot_gpu().package_preview(&ArtworkCapture {artwork:Arc::new(artwork),checkpoint},&AtomicBool::new(false)).unwrap();
+        let preview = live.snapshot_gpu().package_preview(&ArtworkCapture::new(Arc::new(artwork),checkpoint),&AtomicBool::new(false)).unwrap();
         let expected = (RgbSpace::Srgb.encode(f64::from(phase/10.))*255.).round() as u8;
         assert!(preview.preview.pixels()[0].abs_diff(expected)<=1);
         before=Some((elapsed,pixels));
@@ -354,7 +354,7 @@ fn float32_exr_and_deliberate_pq_sdr_delivery_leave_master_unchanged() {
     let before = renderer.preview_linear_document([3, 1]).unwrap().pixels;
     let mut output = Cursor::new(Vec::new());
     renderer.write_exr(&mut output).unwrap();
-    let image = layer_color::photo::read_photo(Cursor::new(output.into_inner()), Default::default()).unwrap();
+    let image = layer_color::photo::read_photo(Cursor::new(output.into_inner()), crate::test_support::photo_limits()).unwrap();
     assert_eq!(image.interpretation, target);
     let mut bytes = vec![0; image.row_bytes()];
     image.rows().read(0, &mut bytes).unwrap();
@@ -365,10 +365,10 @@ fn float32_exr_and_deliberate_pq_sdr_delivery_leave_master_unchanged() {
     assert!(renderer.write_hdr_png(&mut pq, false).is_err());
     pq.clear();
     assert!(renderer.write_hdr_png(&mut pq, true).unwrap().clipped_channels > 0);
-    assert!(layer_color::photo::read_photo(Cursor::new(pq), Default::default()).unwrap().interpretation.depth.is_float());
+    assert!(layer_color::photo::read_photo(Cursor::new(pq), crate::test_support::photo_limits()).unwrap().interpretation.depth.is_float());
     let mut sdr = Vec::new();
     renderer.write_png(&mut sdr, &SourceInterpretation { depth: SampleDepth::U16, ..target }, Default::default(), None).unwrap();
-    assert_eq!(layer_color::photo::read_photo(Cursor::new(sdr), Default::default()).unwrap().interpretation.depth, SampleDepth::U16);
+    assert_eq!(layer_color::photo::read_photo(Cursor::new(sdr), crate::test_support::photo_limits()).unwrap().interpretation.depth, SampleDepth::U16);
     assert_eq!(renderer.preview_linear_document([3, 1]).unwrap().pixels, before);
 }
 
@@ -508,7 +508,7 @@ fn source_document(color: DocumentColor, extent: [u32; 2]) -> Document {
     document
 }
 fn decode(bytes: Vec<u8>) -> layer_core::color::source::SourceImage {
-    layer_color::photo::read_photo(Cursor::new(bytes), Default::default()).unwrap()
+    layer_color::photo::read_photo(Cursor::new(bytes), crate::test_support::photo_limits()).unwrap()
 }
 fn raw_rows(source: &layer_core::color::source::SourceImage) -> Vec<u8> {
     let mut reader = source.rows();
@@ -1570,7 +1570,7 @@ fn exported_green(document: &Document) -> Vec<i32> {
     let target = SourceInterpretation { channels: SourceChannels::Rgba, depth: SampleDepth::U8, profile: ColorProfile::Builtin(RgbSpace::Srgb), profile_assumed: false };
     let mut png = Vec::new();
     capture(roundtrip(document)).unwrap().write_png(&mut png, &target, Default::default(), None).unwrap();
-    raw_rows(&layer_color::photo::read_photo(Cursor::new(png), Default::default()).unwrap()).as_chunks::<4>().0.iter().map(|p| i32::from(p[1])).collect()
+    raw_rows(&layer_color::photo::read_photo(Cursor::new(png), crate::test_support::photo_limits()).unwrap()).as_chunks::<4>().0.iter().map(|p| i32::from(p[1])).collect()
 }
 fn presented_green(document: &Document) -> Vec<i32> {
     let document = &roundtrip(document);

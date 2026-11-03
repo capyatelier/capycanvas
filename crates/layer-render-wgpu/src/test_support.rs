@@ -1,6 +1,10 @@
 use super::*;
 use layer_render::{DabBatchKind, DabStyle, FramePacket, ViewState};
 
+pub(crate) fn photo_limits() -> layer_color::photo::DecodeLimits {
+    layer_color::photo::DecodeLimits::from_memory_budget(layer_color::photo::PhotoMemoryBudget::from_limit(2 << 30))
+}
+
 pub(crate) fn prepare_raster<T>(r:&mut WgpuRasterizer,mut operation:impl FnMut(&mut WgpuRasterizer)->Result<T,GpuRasterError>)->Result<T,GpuRasterError> {
     let retained=|r:&WgpuRasterizer|r.paint_layers.iter().flat_map(|layer|layer.pages.iter().map(|page|page.active().texture.clone())
         .chain(layer.watercolor_wetness_pages.iter().map(|page|page.active().texture.clone())))
@@ -157,6 +161,17 @@ pub(crate) fn complete(r: &WgpuRasterizer) {
         .unwrap();
 }
 
+pub(crate) fn color_sample(r: &mut WgpuRasterizer, request: layer_render::ColorSampleRequest) -> layer_render::ColorSample {
+    assert!(r.request_color_sample(request).unwrap());
+    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+    loop {
+        complete(r);
+        if let Some(sample) = r.take_color_sample() { return sample.unwrap(); }
+        assert!(std::time::Instant::now() < deadline, "color sample must complete");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
 /// Submit `frame` once its dependencies are ready, as the engine does.
 pub(crate) fn flush_engine(engine: &mut layer_engine::CanvasEngine<WgpuRasterizer>) {
     let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
@@ -200,7 +215,8 @@ pub(crate) fn submit_settled(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
     loop {
         r.poll_pending(frame.view).unwrap();
         let next = if first { frame } else { idle };
-        if r.can_submit() && r.raster_dependencies_ready(next, None) {
+        let preview = r.transform_preview.clone();
+        if r.can_submit() && r.raster_dependencies_ready(next, preview.as_ref()) {
             r.submit(next).unwrap();
             first = false;
         }

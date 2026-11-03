@@ -92,7 +92,7 @@ pub enum SceneScope {
     RawObjects(OccurrenceHandle),
     EffectInput(OccurrenceHandle),
 }
-#[derive(Clone,Debug,PartialEq)]
+#[derive(Clone,Debug)]
 pub struct SceneSnapshot {
     pub artwork:Artwork,
     pub index:Arc<SceneIndex>,
@@ -101,12 +101,16 @@ pub struct SceneSnapshot {
     pub context:EvaluationContext,
     pub scope:SceneScope,
     pub offset:[f64;2],
+    pub memory:Option<crate::DocumentMemory>,
+}
+impl PartialEq for SceneSnapshot {
+    fn eq(&self, other:&Self)->bool { self.artwork==other.artwork && self.index==other.index && self.owner==other.owner && self.revision==other.revision && self.context==other.context && self.scope==other.scope && self.offset==other.offset }
 }
 impl SceneSnapshot {
     pub fn new(artwork:Artwork,index:Arc<SceneIndex>,owner:u64,revision:u64,context:EvaluationContext)->Self {
-        Self {artwork,index,owner,revision,context,scope:SceneScope::All,offset:[0.;2]}
+        Self {artwork,index,owner,revision,context,scope:SceneScope::All,offset:[0.;2],memory:None}
     }
-    pub fn view(&self)->SceneView<'_>{SceneView::new(&self.artwork,&self.index).with_owner(self.owner,self.revision).with_scope(&self.scope).with_offset64(self.offset).with_context(&self.context)}
+    pub fn view(&self)->SceneView<'_>{SceneView::new(&self.artwork,&self.index).with_memory(self.memory.as_ref()).with_owner(self.owner,self.revision).with_scope(&self.scope).with_offset64(self.offset).with_context(&self.context)}
     pub fn with_scope(mut self,scope:SceneScope)->Self{self.scope=scope;self}
     pub fn scoped_transfer_artwork(&self,required:&[SourceTarget])->Artwork {
         let mut artwork=self.artwork.clone();
@@ -132,10 +136,13 @@ pub struct SceneView<'a> {
     revision:u64,
     offset:[f64;2],
     context:Option<&'a EvaluationContext>,
+    memory:Option<&'a crate::DocumentMemory>,
 }
 impl<'a> SceneView<'a> {
     #[inline]
-    pub fn new(artwork:&'a Artwork,index:&'a Arc<SceneIndex>)->Self{Self {artwork,index,scope:None,owner:0,revision:0,offset:[0.;2],context:None}}
+    pub fn new(artwork:&'a Artwork,index:&'a Arc<SceneIndex>)->Self{Self {artwork,index,scope:None,owner:0,revision:0,offset:[0.;2],context:None,memory:None}}
+    #[inline]
+    pub(crate) fn with_memory(mut self,memory:Option<&'a crate::DocumentMemory>)->Self{self.memory=memory;self}
     #[inline]
     pub fn with_context(mut self,context:&'a EvaluationContext)->Self{self.context=Some(context);self}
     #[inline]
@@ -147,7 +154,7 @@ impl<'a> SceneView<'a> {
     pub fn with_owner(mut self,owner:u64,revision:u64)->Self{self.owner=owner;self.revision=revision;self}
     #[inline]
     pub fn with_scope(mut self,scope:&'a SceneScope)->Self{self.scope=Some(scope);self}
-    pub fn snapshot(self)->SceneSnapshot{SceneSnapshot {artwork:self.artwork.clone(),index:self.index.clone(),owner:self.owner,revision:self.revision,context:self.context.cloned().unwrap_or_default(),scope:self.scope.cloned().unwrap_or_default(),offset:self.offset}}
+    pub fn snapshot(self)->SceneSnapshot{SceneSnapshot {artwork:self.artwork.clone(),index:self.index.clone(),owner:self.owner,revision:self.revision,context:self.context.cloned().unwrap_or_default(),scope:self.scope.cloned().unwrap_or_default(),offset:self.offset,memory:self.memory.map(crate::DocumentMemory::capture_current)}}
     #[inline]
     pub fn owner(self)->u64{self.owner}
     #[inline]

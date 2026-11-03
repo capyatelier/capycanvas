@@ -775,3 +775,32 @@ fn worker_color_roundtrip_interns_mixed_immutable_image_closure() {
     }
     }
 }
+
+#[test]
+fn existing_document_color_conversion_uses_structural_limits_when_memory_is_full() {
+    let budget=layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {
+        override_bytes:Some(384*1024*1024),host_default_bytes:Some(384*1024*1024),..Default::default()
+    });
+    let reservation=budget.admit_import(budget.ram_limit_bytes()).unwrap();
+    let mut document=fixture(DocumentColor::default());
+    let interpretation=SourceInterpretation {channels:SourceChannels::Rgba,depth:SampleDepth::U8,profile:Default::default(),profile_assumed:false};
+    let descriptor=interpretation.descriptor();
+    let mut bytes=vec![0;descriptor.byte_len([TILE_SIZE;2]).unwrap()];
+    let mut tiles=BTreeMap::new();let mut random=17u32;
+    for y in 0..40 {for x in 0..39 {
+        for byte in &mut bytes {random^=random<<13;random^=random>>17;random^=random<<5;*byte=random as u8;}
+        tiles.insert([x,y],Arc::new(TileBlob::encode(descriptor,&bytes).unwrap()));
+    }}
+    let source=Arc::new(SourceImage {extent:[39*TILE_SIZE,40*TILE_SIZE],resolution:None,interpretation,tiles});
+    assert!(source.resident_bytes() as u64>budget.ram_limit_bytes());
+    paint_mut(&mut document,0).domain=source.extent;
+    paint_mut(&mut document,0).base=Some(PaintBase::new(Image::new(source.clone())));
+    let editor=Editor::new(document.with_memory(layer_core::DocumentMemory::new(budget.clone(),None)));
+    assert_eq!(budget.import_headroom_bytes(),0);
+    assert_eq!(layer_core::ProjectLimits::default().asset_bytes,u64::MAX);
+    let prepared=prepare_document_color(editor.document(),DocumentColorChange::Depth {depth:SampleDepth::U16,dither:OutputDither::None},LIMIT,||false).unwrap();
+    assert_eq!(prepared.document.composition().color.depth,SampleDepth::U16);
+    assert_eq!(prepared.document.artwork.id,editor.document().artwork.id);
+    assert!(Arc::ptr_eq(paint(&prepared.document,0).base.as_ref().unwrap().image.storage(),&source));
+    drop(reservation);
+}

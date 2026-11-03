@@ -76,10 +76,8 @@ impl Scene {
         }
         self.placement_display = false;
         self.stop_before = None;
-        let budget = match &r.native_edit {
-            Some(native) => native.image_pixel_budget(r.scale_display.as_ref().map_or(0, |c| c.resident_bytes())).min(windows::DEFAULT_IMAGE_PIXEL_BYTES),
-            None => windows::DEFAULT_IMAGE_PIXEL_BYTES,
-        };
+        let budget = r.native_edit.as_ref().map_or(r.memory_limit(layer_core::MemoryOwnerKind::Scene),
+            |native| native.image_pixel_budget(r.scale_display.as_ref().map_or(0, |c| c.resident_bytes())));
         let plan = windows::Plan::new(scene, extent, budget, r.device.limits().max_texture_dimension_2d)?;
         let regions: Vec<_> = plan.map_or_else(|| vec![(damage, Self::capture_window(scene, damage, extent))], |plan| plan.regions(scene, damage).collect());
         let multiple = regions.len() > 1;

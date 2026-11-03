@@ -43,7 +43,7 @@ fn float32_exr_lossless_channels_primaries_white_alpha_and_subnormals() {
                 assert_eq!(u32::from_ne_bytes(*actual), pixel[channel].to_bits());
             }
         }
-        let image = read_photo(Cursor::new(bytes), Default::default()).unwrap();
+        let image = read_photo(Cursor::new(bytes), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
         assert_eq!(image.interpretation.depth, SampleDepth::F32);
         assert_eq!(image.resolution.unwrap().pixels_per_inch(), [300.; 2]);
         assert_eq!(image.interpretation.profile, ColorProfile::Builtin(space));
@@ -79,7 +79,7 @@ fn exr_limits_cancellation_truncation_and_invalid_pixels_fail() {
         assert!(
             read_exr(
                 Cursor::new(&bytes[..end]),
-                Default::default(),
+                crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30)),
                 &AtomicBool::new(false)
             )
             .is_err()
@@ -90,7 +90,7 @@ fn exr_limits_cancellation_truncation_and_invalid_pixels_fail() {
             Cursor::new(&bytes),
             DecodeLimits {
                 codec_bytes: 64,
-                ..Default::default()
+                ..crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))
             },
             &AtomicBool::new(false)
         )
@@ -101,7 +101,7 @@ fn exr_limits_cancellation_truncation_and_invalid_pixels_fail() {
             Cursor::new(&bytes),
             DecodeLimits {
                 source_bytes: 1,
-                ..Default::default()
+                ..crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))
             },
             &AtomicBool::new(false)
         )
@@ -110,7 +110,7 @@ fn exr_limits_cancellation_truncation_and_invalid_pixels_fail() {
     assert!(
         read_exr(
             Cursor::new(&bytes),
-            Default::default(),
+            crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30)),
             &AtomicBool::new(true)
         )
         .is_err()
@@ -201,7 +201,7 @@ fn exr_rgb_white_scaling_lossless_codecs_and_unsupported_metadata() {
         h = h.with_encoding(compression, BlockDescription::ScanLines, LineOrder::Increasing);
         h.own_attributes.white_luminance = Some(406.);
         let bytes = fixture(h, &[[100000.125, -0.25, 1e-30, 1.]; 2]);
-        let image = read_photo(Cursor::new(bytes), Default::default()).unwrap();
+        let image = read_photo(Cursor::new(bytes), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
         assert_eq!(image.interpretation.channels, SourceChannels::Rgb);
         assert!(image.interpretation.profile_assumed);
         let mut row = vec![0; image.row_bytes()];
@@ -214,7 +214,7 @@ fn exr_rgb_white_scaling_lossless_codecs_and_unsupported_metadata() {
     let mut h = header();
     h.own_attributes.adopted_neutral = Some(Vec2(0.3127, 0.329));
     assert!(
-        read_photo(Cursor::new(fixture(h, &[[0.; 4]; 2])), Default::default())
+        read_photo(Cursor::new(fixture(h, &[[0.; 4]; 2])), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30)))
             .unwrap_err()
             .contains("adopted-neutral")
     );
@@ -223,7 +223,7 @@ fn exr_rgb_white_scaling_lossless_codecs_and_unsupported_metadata() {
     primaries.red = Vec2(0.61, 0.33);
     h.shared_attributes.chromaticities = Some(primaries);
     assert!(
-        read_photo(Cursor::new(fixture(h, &[[0.; 4]; 2])), Default::default())
+        read_photo(Cursor::new(fixture(h, &[[0.; 4]; 2])), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30)))
             .unwrap_err()
             .contains("primaries")
     );
@@ -235,8 +235,7 @@ fn exr_rgb_white_scaling_lossless_codecs_and_unsupported_metadata() {
     assert!(
         read_photo(
             Cursor::new(fixture(h, &[[1., 0., 0., 0.]; 2])),
-            Default::default()
-        )
+            crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30)))
         .unwrap_err()
         .contains("zero-alpha")
     );
@@ -244,7 +243,7 @@ fn exr_rgb_white_scaling_lossless_codecs_and_unsupported_metadata() {
     malformed.extend_from_slice(b"oversized\0string\0");
     malformed.extend_from_slice(&u32::MAX.to_le_bytes());
     assert!(
-        read_photo(Cursor::new(malformed), Default::default())
+        read_photo(Cursor::new(malformed), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30)))
             .unwrap_err()
             .contains("budget")
     );

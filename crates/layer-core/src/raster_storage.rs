@@ -229,6 +229,11 @@ pub struct RetainedTiles {
     pub(crate) sources: Vec<Arc<TileBlob>>,
     pub(crate) backings: Vec<crate::package::ImmutableBacking>,
     pub metadata_bytes: usize,
+    pub(crate) owner: Option<std::sync::Weak<crate::document_memory::Owner>>,
+    pub(crate) authored_rasters: HashSet<u64>,
+    pub(crate) authored_sources: HashSet<u64>,
+    pub(crate) authored_backings: HashSet<u64>,
+    pub(crate) authored_metadata: usize,
 }
 impl Editor {
     pub fn retained_images(&self) -> Vec<crate::Image> {
@@ -245,10 +250,21 @@ impl Editor {
         for entry in self.undo.iter().chain(&self.redo) {entry.edit.roots(&mut roots);}
         for raster in roots.rasters { raster.drop_liquify(); }
     }
-    pub fn retained_tiles(&self) -> RetainedTiles {
+    pub fn retained_tiles(&self) -> RetainedTiles { self.retained_tiles_for(&self.document, false) }
+    pub(crate) fn retained_tiles_for(&self, document: &crate::Document, include_current: bool) -> RetainedTiles {
         let mut roots=crate::RootInventory::default();
-        roots.document(&self.document);
-        let mut metadata_bytes=crate::artwork_metadata(&self.document.artwork).saturating_add(self.document.working.selection_overlays.metadata_bytes());
+        roots.document(document);
+        if include_current { roots.document(&self.document); }
+        let mut metadata_bytes=crate::artwork_metadata(&document.artwork).saturating_add(document.working.selection_overlays.metadata_bytes());
+        if include_current { metadata_bytes=metadata_bytes.saturating_add(crate::artwork_metadata(&self.document.artwork)); }
+        let current_states: Vec<_> = roots.rasters.iter().filter_map(|r| r.liquify()).collect();
+        for state in &current_states { roots.paint(&state.original); }
+        let authored_rasters: HashSet<_> = roots.rasters.iter().map(|r| r.identity()).collect();
+        let authored_sources: HashSet<_> = roots.sources.iter().flat_map(|source|source.tiles.values().map(|tile|tile.owner_identity())).collect();
+        let authored_backings: HashSet<_> = roots.extensions.iter().flat_map(|extensions|extensions.resources.values().map(|resource|resource.backing.identity())).collect();
+        let source_count=roots.sources.len();let image_count=roots.images.len();let resource_count=roots.resources.len();
+        let selection_count=roots.selections.len();let mesh_count=roots.meshes.len();let profile_count=roots.profiles.len();let program_count=roots.programs.len();
+        let mut authored_metadata=metadata_bytes;
         for entry in self.undo.iter().chain(&self.redo) {entry.edit.roots(&mut roots);metadata_bytes=metadata_bytes.saturating_add(entry.metadata_bytes);}
         let states: Vec<_> = roots.rasters.iter().filter_map(|r| r.liquify()).collect();
         for state in &states { roots.paint(&state.original); }
@@ -256,19 +272,22 @@ impl Editor {
         let rasters:Vec<_>=roots.rasters.into_iter().filter(|r|seen.insert(r.identity())).cloned().collect();
         for raster in &rasters {
             let tiles=raster.try_data().and_then(Result::ok).map_or_else(||raster.pending_bytes()/crate::raster::MAX_TILE_BYTES,|data|data.tiles.len());
-            metadata_bytes=metadata_bytes.saturating_add(tiles.saturating_mul(192));
+            let bytes=tiles.saturating_mul(192);metadata_bytes=metadata_bytes.saturating_add(bytes);
+            if authored_rasters.contains(&raster.identity()) {authored_metadata=authored_metadata.saturating_add(bytes);}
         }
         seen.clear();
-        for image in roots.images {
-            if seen.insert(image.owner_identity() as u64) {metadata_bytes=metadata_bytes.saturating_add(image.owner_metadata_bytes());}
+        for (index,image) in roots.images.into_iter().enumerate() {
+            if seen.insert(image.owner_identity() as u64) {let bytes=image.owner_metadata_bytes();metadata_bytes=metadata_bytes.saturating_add(bytes);if index<image_count {authored_metadata=authored_metadata.saturating_add(bytes);}}
         }
         seen.clear();
         let mut profiles=HashSet::new();
-        for source in &roots.sources {
+        for (index,source) in roots.sources.iter().enumerate() {
             if seen.insert(Arc::as_ptr(source) as usize as u64) {
-                metadata_bytes=metadata_bytes.saturating_add(source.tiles.len().saturating_mul(192));
+                let bytes=source.tiles.len().saturating_mul(192);metadata_bytes=metadata_bytes.saturating_add(bytes);
+                if index<source_count {authored_metadata=authored_metadata.saturating_add(bytes);}
                 if let crate::color::ColorProfile::Icc(bytes)=&source.interpretation.profile && profiles.insert(bytes.as_ptr() as usize) {
                     metadata_bytes=metadata_bytes.saturating_add(bytes.len());
+                    if index<source_count {authored_metadata=authored_metadata.saturating_add(bytes.len());}
                 }
             }
         }
@@ -283,16 +302,19 @@ impl Editor {
                 if backing_ids.insert(resource.backing.identity()){backings.push(resource.backing.clone());}
             }
         }
-        for resource in roots.resources{metadata_bytes=metadata_bytes.saturating_add(accounting.charge_resource(resource));}
-        for selection in roots.selections{metadata_bytes=metadata_bytes.saturating_add(accounting.charge_selection(selection));}
-        for mesh in roots.meshes{metadata_bytes=metadata_bytes.saturating_add(accounting.charge_mesh(mesh));}
-        for profile in roots.profiles{if let crate::color::ColorProfile::Icc(bytes)=profile && profiles.insert(bytes.as_ptr() as usize){metadata_bytes=metadata_bytes.saturating_add(bytes.len());}}
-        for program in roots.programs{metadata_bytes=metadata_bytes.saturating_add(accounting.charge_program(program));}
-        for block in self.document.artwork.metadata.blocks().into_iter().flatten(){metadata_bytes=metadata_bytes.saturating_add(block.len());}
-        RetainedTiles{rasters,sources,backings,metadata_bytes}
+        for (index,resource) in roots.resources.into_iter().enumerate(){let bytes=accounting.charge_resource(resource);metadata_bytes=metadata_bytes.saturating_add(bytes);if index<resource_count {authored_metadata=authored_metadata.saturating_add(bytes);}}
+        for (index,selection) in roots.selections.into_iter().enumerate(){let bytes=accounting.charge_selection(selection);metadata_bytes=metadata_bytes.saturating_add(bytes);if index<selection_count {authored_metadata=authored_metadata.saturating_add(bytes);}}
+        for (index,mesh) in roots.meshes.into_iter().enumerate(){let bytes=accounting.charge_mesh(mesh);metadata_bytes=metadata_bytes.saturating_add(bytes);if index<mesh_count {authored_metadata=authored_metadata.saturating_add(bytes);}}
+        for (index,profile) in roots.profiles.into_iter().enumerate(){if let crate::color::ColorProfile::Icc(bytes)=profile && profiles.insert(bytes.as_ptr() as usize){metadata_bytes=metadata_bytes.saturating_add(bytes.len());if index<profile_count {authored_metadata=authored_metadata.saturating_add(bytes.len());}}}
+        for (index,program) in roots.programs.into_iter().enumerate(){let bytes=accounting.charge_program(program);metadata_bytes=metadata_bytes.saturating_add(bytes);if index<program_count {authored_metadata=authored_metadata.saturating_add(bytes);}}
+        for block in document.artwork.metadata.blocks().into_iter().flatten(){metadata_bytes=metadata_bytes.saturating_add(block.len());authored_metadata=authored_metadata.saturating_add(block.len());}
+        RetainedTiles{rasters,sources,backings,metadata_bytes,owner:Some(self.document.memory.weak()),authored_rasters,authored_sources,authored_backings,authored_metadata}
     }
 }
 impl RetainedTiles {
+    pub fn set_parked(&self, parked: bool) {
+        if let Some(owner) = self.owner.as_ref().and_then(std::sync::Weak::upgrade) { owner.parked(parked); }
+    }
     /// Poll every current/undo/redo root without blocking the host event loop.
     /// Hosts await completion before normal parking; pending readbacks may need
     /// that same event loop to publish their immutable backing.
@@ -328,53 +350,38 @@ impl RetainedTiles {
     }
     /// Conservative nonblocking accounting; pending captures reserve their limit.
     pub fn resident_bytes(&self) -> usize {
-        self.resident_bytes_with(&mut HashSet::new())
+        let mut owners=std::collections::HashMap::new();self.resident_owners(&mut owners);
+        owners.values().fold(0usize,|bytes,(size,_)|bytes.saturating_add(*size))
     }
-    fn resident_bytes_with(&self, seen: &mut HashSet<(u8,u64)>) -> usize {
-        let mut bytes = 0usize;
-        let mut charge = |blob: &Arc<TileBlob>| {
-            let (identity, size) = blob.compressed.resident_owner();
-            if seen.insert((0,identity as u64)) {
-                bytes = bytes.saturating_add(size);
-            }
+    pub(crate) fn resident_owners(&self, owners:&mut std::collections::HashMap<(u8,u64),(usize,bool)>) {
+        fn charge(owners:&mut std::collections::HashMap<(u8,u64),(usize,bool)>,key:(u8,u64),size:usize,current:bool) {
+            owners.entry(key).and_modify(|(bytes,authored)|{*bytes=(*bytes).max(size);*authored|=current;}).or_insert((size,current));
+        }
+        let blob=|owners:&mut std::collections::HashMap<(u8,u64),(usize,bool)>,blob:&Arc<TileBlob>,current|{
+            let (identity,size)=blob.compressed.resident_owner();charge(owners,(0,identity as u64),size,current);
         };
-        for blob in &self.sources {
-            charge(blob);
-        }
-        let mut pending = 0usize;
+        for source in &self.sources {blob(owners,source,self.authored_sources.contains(&source.owner_identity()));}
         for raster in &self.rasters {
+            let current=self.authored_rasters.contains(&raster.identity());
             match raster.try_data() {
-                Some(Ok(data)) => {
-                    for tile in data.tiles.values() {
-                        if let Some(Ok(blob)) = tile.try_backing() {
-                            charge(&blob);
-                        } else {
-                            pending =
-                                pending.saturating_add(crate::raster::MAX_COMPRESSED_TILE_BYTES);
-                        }
-                    }
-                }
-                None => pending = pending.saturating_add(raster.pending_bytes()),
-                Some(Err(_)) => (),
+                Some(Ok(data))=>{let mut pending=0usize;for tile in data.tiles.values() {
+                    if let Some(Ok(backing))=tile.try_backing() {blob(owners,&backing,current);}
+                    else {pending=pending.saturating_add(crate::raster::MAX_COMPRESSED_TILE_BYTES);}
+                }charge(owners,(3,raster.identity()),pending,current);},
+                None=>charge(owners,(4,raster.identity()),raster.pending_bytes(),current),Some(Err(_))=>(),
             }
+            if let Some(state)=raster.liquify() {state.field.resources(&mut |id,size|charge(owners,(2,id),size,current));}
         }
-        for state in self.rasters.iter().filter_map(RasterRevision::liquify) {
-            state.field.resources(&mut |id, size| { if seen.insert((2, id)) { bytes = bytes.saturating_add(size); } });
-        }
-        for backing in &self.backings {
-            if seen.insert((1,backing.identity())) {bytes=bytes.saturating_add(backing.resident_bytes());}
-        }
-        bytes.saturating_add(pending)
+        for backing in &self.backings {charge(owners,(1,backing.identity()),backing.resident_bytes(),self.authored_backings.contains(&backing.identity()));}
     }
 }
 
 /// Count each resident immutable allocation once across all inactive editors,
 /// including a shared external read chunk containing several tile descriptors.
 pub fn resident_tile_bytes<'a>(inventories: impl IntoIterator<Item = &'a RetainedTiles>) -> usize {
-    let mut seen = HashSet::new();
-    inventories.into_iter().fold(0usize, |n, tiles| {
-        n.saturating_add(tiles.resident_bytes_with(&mut seen))
-    })
+    let mut owners=std::collections::HashMap::new();
+    for tiles in inventories {tiles.resident_owners(&mut owners);}
+    owners.values().fold(0usize,|bytes,(size,_)|bytes.saturating_add(*size))
 }
 
 /// Shared chunk bound for native and browser backing. Chunk ownership follows

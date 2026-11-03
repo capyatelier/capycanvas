@@ -79,6 +79,34 @@ fn memory_rows(memory: Option<MemorySnapshot>, localization: &crate::Localizer) 
         row(gpu_label, gpu_value, &localization.text(gpu_scope), true),
     ]
 }
+fn budget_rows(budget: Option<&layer_render::MemoryBudgetSummary>, localization: &crate::Localizer) -> [StatRow; 4] {
+    let age = budget.map_or_else(|| localization.text(MessageId::DIAGNOSTICS_MEMORY_NO_SAMPLE).to_string(), |sample| {
+        let mut args = FluentArgs::new();
+        args.set("seconds", format!("{:.1}", sample.sampled_at.elapsed().as_secs_f64()));
+        localization.format(MessageId::DIAGNOSTICS_MEMORY_AGE, &args)
+    });
+    let pair = |ram: u64, gpu: u64| {
+        let mut args = FluentArgs::new();
+        args.set("ram", format!("{:.1}", ram as f64 / 1048576.));
+        args.set("gpu", format!("{:.1}", gpu as f64 / 1048576.));
+        localization.format(MessageId::DIAGNOSTICS_BUDGET_PAIR, &args)
+    };
+    let row = |label, scope, bytes: Option<(u64, u64)>| {
+        let mut args = FluentArgs::new();
+        let scope = localization.text(scope);
+        args.set("scope", scope.as_ref());
+        args.set("age", age.as_str());
+        StatRow { label: localization.text(label).to_string(),
+            value: bytes.map_or_else(|| localization.text(MessageId::DIAGNOSTICS_MEMORY_UNAVAILABLE).to_string(), |(ram, gpu)| pair(ram, gpu)),
+            description: localization.format(MessageId::DIAGNOSTICS_MEMORY_DESCRIPTION, &args) }
+    };
+    [
+        row(MessageId::DIAGNOSTICS_BUDGET_LIMIT, MessageId::DIAGNOSTICS_BUDGET_LIMIT_DESCRIPTION, budget.map(|b| (b.ram_limit_bytes, b.gpu_limit_bytes))),
+        row(MessageId::DIAGNOSTICS_BUDGET_PHYSICAL, MessageId::DIAGNOSTICS_BUDGET_PHYSICAL_DESCRIPTION, budget.map(|b| (b.ram_physical_bytes, b.gpu_physical_bytes))),
+        row(MessageId::DIAGNOSTICS_BUDGET_PINNED, MessageId::DIAGNOSTICS_BUDGET_PINNED_DESCRIPTION, budget.map(|b| (b.ram_pinned_bytes, b.gpu_pinned_bytes))),
+        row(MessageId::DIAGNOSTICS_BUDGET_DEBT, MessageId::DIAGNOSTICS_BUDGET_DEBT_DESCRIPTION, budget.map(|b| (b.ram_debt_bytes, b.gpu_debt_bytes))),
+    ]
+}
 pub(super) fn view(t: RendererTelemetry, localization: &crate::Localizer) -> StatsView {
     fn percentiles(values: Vec<f32>) -> String {
         if values.is_empty() {
@@ -138,6 +166,7 @@ pub(super) fn view(t: RendererTelemetry, localization: &crate::Localizer) -> Sta
         },
     ];
     rows.extend(memory_rows(t.memory, localization));
+    rows.extend(budget_rows(t.memory_budget.as_deref(), localization));
     StatsView {
         rows,
         samples,
@@ -172,7 +201,11 @@ mod tests {
                 "Pipelines",
                 "Process memory",
                 "Process peak",
-                "GPU memory"
+                "GPU memory",
+                "Memory limit",
+                "Tracked memory",
+                "Pinned memory",
+                "Memory debt"
             ]
         );
         assert_eq!(view.rows[view.chart_after_rows - 1].label, "GPU · ms");
@@ -213,12 +246,12 @@ mod tests {
     fn memory_unavailable_is_not_zero_and_old_samples_keep_their_age() {
         let localization = crate::Localizer::shared(crate::UiLanguage::English);
         let absent = view(RendererTelemetry::default(), &localization);
-        for row in &absent.rows[8..] {
+        for row in &absent.rows[8..11] {
             assert_eq!(row.value, "Unavailable");
             assert!(row.description.contains("No sample available"));
         }
         let old = memory_view(None, None, 42);
-        for row in &old.rows[8..] {
+        for row in &old.rows[8..11] {
             assert_eq!(row.value, "Unavailable");
             let age = row.description.split("Sample age: ").nth(1).unwrap().split_whitespace().next().unwrap().parse::<f64>().unwrap();
             assert!(age >= 42.);
@@ -266,6 +299,29 @@ mod tests {
         let partial = memory_view(None, Some(GpuMemory { kind: GpuMemoryKind::MetalAllocated, bytes: 1048576, budget: None }), 0);
         assert_eq!(partial.rows[10].value, "1.0 / — MiB");
         assert!(partial.rows[10].description.contains("— means unavailable"));
+    }
+
+    #[test]
+    fn budget_rows_use_the_copied_snapshot_and_preserve_per_device_debt() {
+        let budget = layer_core::MemoryBudget::new();
+        budget.update_ram(layer_core::MemoryFacts { total_bytes: Some(16 << 30), available_bytes: Some(12 << 30), override_bytes: Some(384 * 1048576), ..Default::default() }, 0);
+        let device = budget.register_device(layer_core::DeviceMemoryFacts { budget_bytes: Some(10 * 1048576), ..Default::default() });
+        let owner = budget.register_owner(layer_core::MemoryOwnerKind::Authored, layer_core::MemoryClass::Pinned, Some(device));
+        owner.report(layer_core::MemoryReport { ram_bytes: 385 * 1048576, pinned_ram_bytes: 385 * 1048576,
+            gpu_bytes: 9 * 1048576, pinned_gpu_bytes: 9 * 1048576, ..Default::default() });
+        budget.register_device(layer_core::DeviceMemoryFacts { budget_bytes: Some(100 * 1048576), ..Default::default() });
+        let mut summary = layer_render::MemoryBudgetSummary::new(&budget.snapshot());
+        summary.sampled_at -= std::time::Duration::from_secs(42);
+        owner.report(Default::default());
+        let localization = crate::Localizer::shared(crate::UiLanguage::English);
+        let view = view(RendererTelemetry { memory_budget: Some(std::sync::Arc::new(summary)), ..Default::default() }, &localization);
+        assert_eq!(view.rows.len(), 15);
+        assert_eq!(view.rows[11].value, "RAM 384.0 MiB · GPU 88.0 MiB");
+        assert_eq!(view.rows[12].value, "RAM 385.0 MiB · GPU 9.0 MiB");
+        assert_eq!(view.rows[13].value, view.rows[12].value);
+        assert_eq!(view.rows[14].value, "RAM 1.0 MiB · GPU 1.0 MiB");
+        for row in &view.rows[11..] { assert!(row.description.contains("Sample age: 42.")); }
+        assert!(view.rows[11].description.contains("do not add"));
     }
 
 }

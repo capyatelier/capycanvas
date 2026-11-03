@@ -1355,6 +1355,7 @@ impl CanvasRenderer for RenderWorker {
             .map(|t| t.clone())
             .unwrap_or_default();
         telemetry.memory = self.snapshot_gpu.as_ref().and_then(|gpu| gpu.memory_snapshot());
+        telemetry.memory_budget = self.snapshot_gpu.as_ref().and_then(|gpu| gpu.budget_snapshot());
         telemetry.frame_rate = self.clock.presented_fps(gtk::glib::monotonic_time().max(0) as u64 * 1000)
             .map(|fps| layer_render::FrameRate { fps, source: layer_render::FrameRateSource::Presented });
         telemetry
@@ -2652,6 +2653,7 @@ impl Worker {
         }
         self.pending_present = false;
         self.geometry_changed = false;
+        self.renderer.after_present();
         Ok(())
     }
     fn capture(&mut self, color: crate::display_color::ViewColor) -> Result<ReadbackImage, String> {

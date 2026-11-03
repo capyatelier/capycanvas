@@ -137,7 +137,7 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
             let result = if chooser.is_pending() { Err(SourceProfileHint::Reading) } else {
                 (chooser.selected_typed)().map_err(SourceProfileHint::Profile)
             }.and_then(|profile| {
-                let (corrected, _) = workflow.borrow().prepare(Some(profile.profile), layer_color::photo::PhotoMemoryBudget::current().encode_bytes, || false).map_err(SourceProfileHint::Diagnostic)?;
+                let (corrected, _) = workflow.borrow().prepare(Some(profile.profile), layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes()).encode_bytes, || false).map_err(SourceProfileHint::Diagnostic)?;
                 let gpu = w.gpu.borrow();
                 let session = &gpu.as_ref().ok_or_else(|| SourceProfileHint::Diagnostic("Canvas unavailable".into()))?.session;
                 let current = original_gpu.same_device(&session.engine().backend().snapshot_gpu().map_err(SourceProfileHint::Diagnostic)?);

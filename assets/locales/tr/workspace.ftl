@@ -682,3 +682,13 @@ workspace-launch-window-size = Başlangıç pencere boyutu
 workspace-phone-tool-limit = Telefon araç çubuğu en fazla on araç alabilir.
 
 workspace-reset-phone-confirm = Bu çalışma alanının başlangıçtaki telefon araç çubuğunu geri yükleyin. Geri yüklemeyi { $menu } → { $undo } ile geri alabilirsiniz.
+
+diagnostics-budget-limit = Bellek sınırı
+diagnostics-budget-physical = İzlenen bellek
+diagnostics-budget-pinned = Tutulan bellek
+diagnostics-budget-debt = Bellek aşımı
+diagnostics-budget-pair = RAM { $ram } MiB · GPU { $gpu } MiB
+diagnostics-budget-limit-description = İşlem RAM payı ve birleşik cihaz payları. Paylaşılan GPU belleği RAM ile örtüşebilir; değerleri toplamayın.
+diagnostics-budget-physical-description = Büyük sahiplerin bildirdiği fiziksel baytlar; toplam işletim sistemi veya sürücü kullanımı değildir. Paylaşılan GPU belleği RAM ile örtüşebilir.
+diagnostics-budget-pinned-description = Etkin çalışma ve içe aktarma rezervleri dahil, serbest bırakılamayan baytlar. Paylaşılan GPU belleği RAM ile örtüşebilir.
+diagnostics-budget-debt-description = RAM payını aşan tutulan baytlar ve her cihaz payının üzerindeki miktarların toplamı. Mevcut çizimler korunur.

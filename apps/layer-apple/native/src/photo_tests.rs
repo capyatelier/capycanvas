@@ -161,7 +161,7 @@ fn large_jpeg_gpen_preserves_photo_through_save_and_gpu_recovery() {
 
     let path = std::env::var("CAPY_APPLE_PHOTO_JPEG").expect("Supply the 61 MP JPEG fixture");
     let bytes = std::fs::read(&path).unwrap();
-    let decoded = layer_color::photo::read_photo(std::io::Cursor::new(&bytes), Default::default()).unwrap();
+    let decoded = layer_color::photo::read_photo(std::io::Cursor::new(&bytes), photo_limits()).unwrap();
     assert_eq!(decoded.extent, [9504, 6336]);
     assert_eq!(decoded.interpretation.channels, SourceChannels::Rgb);
     assert_eq!(decoded.interpretation.depth, SampleDepth::U8);
@@ -252,7 +252,7 @@ fn photo_open_and_place_retain_source_depth_profile_samples_and_save_safety() {
             layer_color::photo::write_tiff(&mut file, &original).unwrap();
             let bytes = file.into_inner();
             // The reader may replace a built-in tag with the exact embedded ICC.
-            let decoded = layer_color::photo::read_photo(std::io::Cursor::new(&bytes), Default::default()).unwrap();
+            let decoded = layer_color::photo::read_photo(std::io::Cursor::new(&bytes), photo_limits()).unwrap();
             let job = ProjectJob::new(&app, true);
             read_bytes(&job, "Photo.tiff", &bytes);
             adopt(&app, &job, true);
@@ -366,7 +366,7 @@ fn photo_batch_placement_is_provisional_atomic_and_keeps_original_samples() {
             let mut encoded = std::io::Cursor::new(Vec::new());
             layer_color::photo::write_tiff(&mut encoded, &source(space, depth)).unwrap();
             let bytes = encoded.into_inner();
-            let decoded = layer_color::photo::read_photo(std::io::Cursor::new(&bytes), Default::default()).unwrap();
+            let decoded = layer_color::photo::read_photo(std::io::Cursor::new(&bytes), photo_limits()).unwrap();
             (bytes, decoded)
         }).collect();
     for platform in [0, 1] {

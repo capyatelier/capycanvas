@@ -76,7 +76,8 @@ fn encoded_input(e:[f64;3],working:usize,selected:usize,alpha:f32)->[f32;4] {
     [(linear[0]*f64::from(alpha)) as f32,(linear[1]*f64::from(alpha)) as f32,(linear[2]*f64::from(alpha)) as f32,alpha]
 }
 fn residency(r:&WgpuRasterizer)->(u64,u64) {
-    let cache=r.device.effect_resources.lock().unwrap();(cache.uploads,cache.bytes())
+    let uploads=r.device.effect_resources.lock().unwrap().uploads;
+    (uploads,*r.device.analysis_memory.lock().unwrap())
 }
 
 #[test]
@@ -189,6 +190,7 @@ fn stacked_resources_masks_clipping_and_cropped_checkpoints_keep_distinct_inputs
 fn hundred_intensity_edits_aliases_and_resource_removal_keep_uploads_bounded() {
     let resource=table(17,[[0.;3],[1.;3]],false);let bytes=(96+resource.bytes() as u64).next_multiple_of(16);
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();let cache=r.device.effect_resources.clone();
+    let retained=r.device.analysis_memory.clone();
     let source=pattern(&[[0.24,0.41,0.69,0.37]]);let layer=lookup(resource.clone(),0,100.);
     let mut document=effect_document(&[layer,source],[256;2],r.document_color);
     let handles=document.scene().children(None).to_vec();let target=handles[0];let source=handles[1];let stack=document.composition().result;
@@ -210,7 +212,7 @@ fn hundred_intensity_edits_aliases_and_resource_removal_keep_uploads_bounded() {
     assert_eq!(document.scene().effect(target).unwrap().lut3d().unwrap().digest(),resource.digest());
     assert_eq!(document.scene().effect(duplicate).unwrap().lut3d().unwrap().digest(),resource.digest());
     for _ in 0..3{render_document(&mut r,&document);}assert_eq!(residency(&r),(initial.0,baseline.1));
-    drop(document);drop(resource);drop(r);assert_eq!(cache.lock().unwrap().bytes(),baseline.1);
+    drop(document);drop(resource);drop(r);assert_eq!(*retained.lock().unwrap(),baseline.1);drop(cache);
 }
 
 #[test]

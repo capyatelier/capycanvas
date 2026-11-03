@@ -480,6 +480,7 @@ impl WebApp {
 #[wasm_bindgen]
 impl WebGpu {
     pub async fn create(canvas: web_sys::HtmlCanvasElement, color: JsValue) -> Result<WebGpu, JsValue> {
+        artwork_transfer::seed_memory_budget();
         let color = serde_wasm_bindgen::from_value(color).map_err(js)?;
         let width = canvas.width().max(1);
         let height = canvas.height().max(1);
@@ -1265,6 +1266,7 @@ impl WebApp {
         surface.submitted_frames.observe(surface.submission_time_ns());
         surface.blank_presented = true;
         self.screen_presented_ms = now_ms;
+        self.session.renderer_mut().0.as_mut().unwrap().after_present();
         serialize(&change)
     }
 }

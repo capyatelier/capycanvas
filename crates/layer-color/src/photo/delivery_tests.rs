@@ -148,7 +148,7 @@ fn camera_jpeg() -> Vec<u8> {
         builder.push_row(&(0..18u8).map(|i| i.wrapping_mul(13).wrapping_add(y * 40)).collect::<Vec<u8>>()).unwrap();
     }
     let mut plain = Vec::new();
-    write_jpeg(&mut plain, &builder.finish().unwrap(), 95).unwrap();
+    write_jpeg(&mut plain, &builder.finish().unwrap(), crate::photo::JpegEncodeOptions::from_memory_budget(95, crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
     let iptc = [b"8BIM\x04\x04\0\0\0\0\0\x05".as_slice(), b"\x1c\x02\x05\0\0", b"\0"].concat();
     [
         &plain[..2],
@@ -161,7 +161,7 @@ fn camera_jpeg() -> Vec<u8> {
 }
 
 fn opened() -> DecodedPhoto {
-    read_photo_detailed(Cursor::new(camera_jpeg()), Default::default()).unwrap()
+    read_photo_detailed(Cursor::new(camera_jpeg()), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap()
 }
 
 fn text(directories: &Directories, tag: u16) -> Option<String> {
@@ -218,7 +218,7 @@ fn opening_a_photo_keeps_its_descriptive_directories_xmp_and_iptc() {
     metadata.validate().unwrap();
 
     let broken = [&camera_jpeg()[..2], &segment(0xe1, &[super::jpeg_markers::XMP, b"<x:xmpmeta><rdf:RDF>".as_slice()].concat()), &camera_jpeg()[2..]].concat();
-    let reopened = read_photo_detailed(Cursor::new(broken), Default::default()).unwrap();
+    let reopened = read_photo_detailed(Cursor::new(broken), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
     assert_eq!(reopened.metadata.xmp, None, "an unreadable packet is left out");
     assert!(reopened.metadata.exif.is_some());
 }
@@ -324,10 +324,10 @@ fn round_trips(delivery: &DeliveryMetadata) -> Vec<(&'static str, DecodedPhoto)>
     write_tiff_rows(&mut tiff, extent, &rgba, delivery, fill).unwrap();
     files.push(("TIFF", tiff.into_inner()));
     let mut jpeg = Vec::new();
-    write_jpeg_rows(&mut jpeg, extent, &rgb, delivery, JpegEncodeOptions::from_memory_budget(90, PhotoMemoryBudget::current()), fill).unwrap();
+    write_jpeg_rows(&mut jpeg, extent, &rgb, delivery, JpegEncodeOptions::from_memory_budget(90, PhotoMemoryBudget::from_limit(1 << 30)), fill).unwrap();
     files.push(("JPEG", jpeg));
     let mut webp = Vec::new();
-    write_webp_rows(&mut webp, extent, &rgba, delivery, PhotoMemoryBudget::current().encode_bytes, fill).unwrap();
+    write_webp_rows(&mut webp, extent, &rgba, delivery, PhotoMemoryBudget::from_limit(1 << 30).encode_bytes, fill).unwrap();
     files.push(("WebP", webp));
     let mut pq = Vec::new();
     write_hdr_png_rows(&mut pq, extent, RgbSpace::Srgb, delivery, true, hdr).unwrap();
@@ -339,7 +339,7 @@ fn round_trips(delivery: &DeliveryMetadata) -> Vec<(&'static str, DecodedPhoto)>
             &mut bytes,
             GainMapRender { extent, space: RgbSpace::Srgb, rendition: Default::default(), guide: &guide, matte: Some([1.; 3]), clip: true },
             format,
-            GainMapEncodeOptions::from_memory_budget(90, PhotoMemoryBudget::current()),
+            GainMapEncodeOptions::from_memory_budget(90, PhotoMemoryBudget::from_limit(1 << 30)),
             delivery,
             &Default::default(),
             hdr,
@@ -353,7 +353,7 @@ fn round_trips(delivery: &DeliveryMetadata) -> Vec<(&'static str, DecodedPhoto)>
     files
         .into_iter()
         .map(|(name, bytes)| {
-            let photo = read_photo_detailed(Cursor::new(bytes), Default::default())
+            let photo = read_photo_detailed(Cursor::new(bytes), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30)))
                 .unwrap_or_else(|e| panic!("{name}: {e}"));
             assert_eq!(photo.source.extent, extent, "{name}");
             (name, photo)
@@ -418,11 +418,11 @@ fn metadata_too_large_for_one_jpeg_segment_is_refused_with_a_way_out() {
     let delivery = DeliveryMetadata { photo, ..Default::default() };
     let rgb = SourceInterpretation { channels: SourceChannels::Rgb, ..rgba8() };
     let error = write_jpeg_rows(Vec::new(), [2, 2], &rgb, &delivery,
-        JpegEncodeOptions::from_memory_budget(90, PhotoMemoryBudget::current()), |_, row| { row.fill(9); Ok(()) }).unwrap_err();
+        JpegEncodeOptions::from_memory_budget(90, PhotoMemoryBudget::from_limit(1 << 30)), |_, row| { row.fill(9); Ok(()) }).unwrap_err();
     assert!(error.contains("Choose Copyright & Contact or None"), "{error}");
     let mut png = Vec::new();
     write_png_rows(&mut png, [2, 2], &rgba8(), &delivery, |_, row| { row.fill(9); Ok(()) }).unwrap();
-    let decoded = read_photo_detailed(Cursor::new(png), Default::default()).unwrap();
+    let decoded = read_photo_detailed(Cursor::new(png), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
     assert!(decoded.metadata.xmp.unwrap().len() > 70_000, "PNG has no segment limit");
 }
 

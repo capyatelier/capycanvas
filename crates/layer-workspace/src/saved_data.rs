@@ -127,7 +127,7 @@ fn sessions(root: &Path) -> std::result::Result<Vec<SavedSessionReport>, String>
         };
         for drawing in manifest.drawings {
             let result = SessionStore::open(&path.parent().unwrap().join(&drawing.key)).and_then(|mut store| {
-                let opened = store.load(layer_core::ProjectLimits::default(), &AtomicBool::new(false))?
+                let opened = store.load(layer_core::ProjectLimits::for_import(), &AtomicBool::new(false))?
                     .ok_or("Saved drawing has no generation")?;
                 layer_ui::session_recovery::SessionRestore::from_core(opened).map(|_| ())
             });

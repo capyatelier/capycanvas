@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "linear" => ImageInterpolation::Linear, "nearest" => ImageInterpolation::Nearest, _ => return Err("Use linear or nearest".into()),
     };
     if !(1..=32).contains(&count) { return Err("IMAGE_COUNT must be 1–32".into()); }
-    let decode = || layer_color::photo::read_photo(BufReader::new(File::open(input).map_err(|e|e.to_string())?), Default::default());
+    let decode = || layer_color::photo::read_photo(BufReader::new(File::open(input).map_err(|e|e.to_string())?), layer_color::photo::DecodeLimits::from_memory_budget(layer_color::photo::PhotoMemoryBudget::from_limit(1 << 30)));
     let source = decode()?;
     let extent = source.extent;
     let mut document = layer_color::photo_project(source, Default::default(),

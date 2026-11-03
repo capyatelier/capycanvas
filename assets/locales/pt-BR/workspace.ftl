@@ -688,3 +688,13 @@ workspace-launch-window-size = Tamanho inicial da janela
 workspace-phone-tool-limit = A barra de ferramentas do celular comporta até dez ferramentas.
 
 workspace-reset-phone-confirm = Restaurar a barra de ferramentas inicial do celular desta área de trabalho. Você pode desfazer a restauração em { $menu } → { $undo }.
+
+diagnostics-budget-limit = Limite de memória
+diagnostics-budget-physical = Memória registrada
+diagnostics-budget-pinned = Memória retida
+diagnostics-budget-debt = Excesso de memória
+diagnostics-budget-pair = RAM { $ram } MiB · GPU { $gpu } MiB
+diagnostics-budget-limit-description = Cota de RAM do processo e cotas combinadas dos dispositivos. A memória compartilhada da GPU pode se sobrepor à RAM; não some os valores.
+diagnostics-budget-physical-description = Bytes físicos informados pelos grandes proprietários, não o uso total do sistema ou driver. A memória compartilhada da GPU pode se sobrepor à RAM.
+diagnostics-budget-pinned-description = Bytes que não podem ser liberados, incluindo trabalho ativo e reservas de importação. A memória compartilhada da GPU pode se sobrepor à RAM.
+diagnostics-budget-debt-description = Bytes retidos acima da cota de RAM e soma dos excessos de cada dispositivo. Os desenhos existentes são preservados.

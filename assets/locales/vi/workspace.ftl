@@ -679,3 +679,13 @@ workspace-launch-window-size = Kích thước cửa sổ ban đầu
 workspace-phone-tool-limit = Thanh công cụ trên điện thoại chứa tối đa mười công cụ.
 
 workspace-reset-phone-confirm = Khôi phục thanh công cụ điện thoại ban đầu của không gian làm việc này. Bạn có thể hoàn tác khôi phục bằng { $menu } → { $undo }.
+
+diagnostics-budget-limit = Giới hạn bộ nhớ
+diagnostics-budget-physical = Bộ nhớ theo dõi
+diagnostics-budget-pinned = Bộ nhớ giữ lại
+diagnostics-budget-debt = Bộ nhớ vượt mức
+diagnostics-budget-pair = RAM { $ram } MiB · GPU { $gpu } MiB
+diagnostics-budget-limit-description = Hạn mức RAM của tiến trình và tổng hạn mức thiết bị. Bộ nhớ GPU dùng chung có thể trùng với RAM; không cộng chúng.
+diagnostics-budget-physical-description = Số byte vật lý do các chủ sở hữu lớn báo cáo, không phải tổng mức dùng của hệ điều hành hay trình điều khiển. Bộ nhớ GPU dùng chung có thể trùng với RAM.
+diagnostics-budget-pinned-description = Số byte không thể giải phóng, gồm công việc đang chạy và phần dự trữ nhập. Bộ nhớ GPU dùng chung có thể trùng với RAM.
+diagnostics-budget-debt-description = Số byte giữ lại vượt hạn mức RAM và tổng phần vượt hạn mức từng thiết bị. Các bản vẽ hiện có được giữ nguyên.

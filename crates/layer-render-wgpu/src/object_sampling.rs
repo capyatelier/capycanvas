@@ -237,7 +237,8 @@ pub(crate) fn preflight_object_affine(scene: layer_core::SceneView<'_>, object: 
 }
 
 impl ObjectAccumulator {
-    pub(crate) fn storage_bytes(&self)->u64 {self.buffer.size()+self.uniform.size()+self.coordinates.as_ref().map_or(0,wgpu::Buffer::size)+self.contribution.borrow().as_ref().map_or(0,|schedule|schedule.windows.capacity() as u64*std::mem::size_of::<ContributionWindow>() as u64)}
+    pub(crate) fn gpu_bytes(&self) -> u64 { self.buffer.size() + self.uniform.size() + self.coordinates.as_ref().map_or(0, wgpu::Buffer::size) }
+    pub(crate) fn cpu_bytes(&self) -> u64 { self.contribution.borrow().as_ref().map_or(0, |schedule| schedule.windows.capacity() as u64 * std::mem::size_of::<ContributionWindow>() as u64) }
     pub(crate) fn nearest_coordinates_ready(&self)->bool {!self.nearest || u64::from(self.coordinates_uploaded.get())==u64::from(self.size[0])*u64::from(self.size[1])}
 }
 fn source_bounds(inverse:[f64;6],size:[u32;2],nearest:bool,stretch:[f64;3],extent:[u32;2])->PixelRect {
@@ -254,11 +255,9 @@ fn source_bounds(inverse:[f64;6],size:[u32;2],nearest:bool,stretch:[f64;3],exten
             (high[1]+ry+0.5).ceil().max(0.).min(extent[1] as f64) as u32)
 }
 impl ObjectSampler {
-    pub(crate) fn working_bytes(inverse:[f64;6],size:[u32;2],nearest:bool)->Result<u64,GpuRasterError> {
-        let (stretch,bytes)=admission(inverse,size,nearest,u64::MAX)?;
-        let geometry=phase_geometry(size,stretch,nearest,1,[u32::MAX;2]);
-        let schedules=geometry.windows().checked_mul(std::mem::size_of::<ContributionWindow>() as u64).ok_or(GpuRasterError::SizeOverflow)?;
-        bytes.checked_add(if nearest {bytes/4} else {0}).and_then(|value|value.checked_add(112)).and_then(|value|value.checked_add(schedules)).ok_or(GpuRasterError::SizeOverflow)
+    pub(crate) fn gpu_working_bytes(inverse:[f64;6],size:[u32;2],nearest:bool)->Result<u64,GpuRasterError> {
+        let (_,bytes)=admission(inverse,size,nearest,u64::MAX)?;
+        bytes.checked_add(if nearest {bytes/4} else {0}).and_then(|value|value.checked_add(112)).ok_or(GpuRasterError::SizeOverflow)
     }
     pub(crate) fn preview(&self,device:&PipelineDevice,encoder:&mut crate::submission::CommandEncoder,uploads:&mut crate::Uploads,job:&CollectionPreview,empty:&wgpu::TextureView)->Result<(),GpuRasterError> {
         let passes=CollectionPreview::passes(&job.objects);
@@ -434,6 +433,13 @@ mod reference;
 
 #[cfg(test)]
 mod tests {
+    fn working_bytes(inverse:[f64;6],size:[u32;2],nearest:bool)->Result<u64,GpuRasterError> {
+        let (stretch,_)=admission(inverse,size,nearest,u64::MAX)?;
+        let geometry=phase_geometry(size,stretch,nearest,1,[u32::MAX;2]);
+        let schedules=geometry.windows().checked_mul(std::mem::size_of::<ContributionWindow>() as u64).ok_or(GpuRasterError::SizeOverflow)?;
+        ObjectSampler::gpu_working_bytes(inverse,size,nearest)?.checked_add(schedules).ok_or(GpuRasterError::SizeOverflow)
+    }
+
     use super::*;
     fn dispatches(inverse:[f64;6],size:[u32;2],nearest:bool,extent:[u32;2],limit:u64)->Result<u64,GpuRasterError> {
         let (stretch,_)=admission(inverse,size,nearest,u64::MAX)?;
@@ -468,7 +474,7 @@ mod tests {
             for inverse in [[1.,0.,0.,1.,0.,0.],[16.,0.,0.,16.,-0.25,0.75],[2047.,0.,0.,2047.,0.,0.],[57.06,28.98,-0.45,0.89,256.25,256.75]] {
                 for nearest in [false,true] {
                     let (stretch,bytes)=admission(inverse,size,nearest,u64::MAX).unwrap();
-                    let reserve=ObjectSampler::working_bytes(inverse,size,nearest).unwrap();
+                    let reserve=working_bytes(inverse,size,nearest).unwrap();
                     let fixed=bytes+112+if nearest {bytes/4} else {0};
                     for extent in [[1,1],[256,256],[8192,4096]] {
                         let geometry=phase_geometry(size,stretch,nearest,1,extent);
@@ -483,7 +489,7 @@ mod tests {
                 }
             }
         }
-        assert!(ObjectSampler::working_bytes([1.,0.,0.,1.,0.,0.],[u32::MAX;2],false).is_err());
+        assert!(working_bytes([1.,0.,0.,1.,0.,0.],[u32::MAX;2],false).is_err());
     }
     #[test]
     fn photo_size_sampling_culls_empty_work_and_reuses_one_parameter_allocation() {
@@ -535,9 +541,9 @@ mod tests {
         assert_eq!(encoded,exact);
         let border=phase_geometry(size,acc.stretch,false,0,extent);
         assert!(exact<=tiles+2*u64::from(border.columns+border.lines)+1,"one tent dispatch per source tile plus boundary denominators: {exact} for {tiles} tiles");
-        assert!(acc.storage_bytes()<3*1024*1024);
-        assert!(acc.storage_bytes()<=ObjectSampler::working_bytes(inverse,size,false).unwrap());
-        eprintln!("12MP sampling useful={exact}, cartesian={cartesian}, completed passes={encoded}, reported peak parameter allocations={peak_parameters:?}, retained bytes={}",acc.storage_bytes());
+        assert!((acc.gpu_bytes()+acc.cpu_bytes())<3*1024*1024);
+        assert!((acc.gpu_bytes()+acc.cpu_bytes())<=working_bytes(inverse,size,false).unwrap());
+        eprintln!("12MP sampling useful={exact}, cartesian={cartesian}, completed passes={encoded}, reported peak parameter allocations={peak_parameters:?}, retained bytes={}",(acc.gpu_bytes()+acc.cpu_bytes()));
     }
     #[test]
     fn unminified_full_tile_uses_three_bounded_passes_and_preserves_exact_samples() {

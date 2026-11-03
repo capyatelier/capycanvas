@@ -32,8 +32,8 @@ fn pattern(channels: SourceChannels, space: RgbSpace) -> SourceImage {
 fn camera_mpf_preview_does_not_replace_primary_pixels_or_profile() {
     let source = pattern(SourceChannels::Rgb, RgbSpace::DisplayP3);
     let mut jpeg = Vec::new();
-    write_jpeg(&mut jpeg, &source, 100).unwrap();
-    let expected = read_photo(Cursor::new(&jpeg), DecodeLimits::default()).unwrap();
+    write_jpeg(&mut jpeg, &source, crate::photo::JpegEncodeOptions::from_memory_budget(100, crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
+    let expected = read_photo(Cursor::new(&jpeg), DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
     for little in [false, true] {
         let directory = super::jpeg_mpf::tests::directory(little, 0x010002);
         let mut camera = jpeg[..2].to_vec();
@@ -42,8 +42,8 @@ fn camera_mpf_preview_does_not_replace_primary_pixels_or_profile() {
         camera.extend(directory);
         camera.extend_from_slice(&jpeg[2..]);
         let preview = pattern(SourceChannels::Gray, RgbSpace::Srgb);
-        write_jpeg(&mut camera, &preview, 90).unwrap();
-        let actual = read_photo(Cursor::new(camera), DecodeLimits::default()).unwrap();
+        write_jpeg(&mut camera, &preview, crate::photo::JpegEncodeOptions::from_memory_budget(90, crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
+        let actual = read_photo(Cursor::new(camera), DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
         assert_eq!(actual.extent, expected.extent);
         assert_eq!(actual.interpretation, expected.interpretation);
         assert_eq!(rows(&actual), rows(&expected));
@@ -57,8 +57,8 @@ fn profiled_rgb_gray_jpeg_rows_preserve_interpretation_and_archive_decoded_sampl
             let source = pattern(channels, space);
             for quality in [90, 100] {
                 let mut bytes = Vec::new();
-                write_jpeg(&mut bytes, &source, quality).unwrap();
-                let decoded = read_photo(Cursor::new(&bytes), DecodeLimits::default()).unwrap();
+                write_jpeg(&mut bytes, &source, crate::photo::JpegEncodeOptions::from_memory_budget(quality, crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
+                let decoded = read_photo(Cursor::new(&bytes), DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
                 assert_eq!(decoded.extent, source.extent);
                 assert_eq!(decoded.interpretation.channels, channels);
                 assert_eq!(decoded.interpretation.depth, SampleDepth::U8);
@@ -127,7 +127,7 @@ fn jpeg_validation_provider_failure_and_truncation_do_not_publish_fake_success()
                 source.extent,
                 &target,
                 &Default::default(),
-                JpegEncodeOptions::from_memory_budget(quality, PhotoMemoryBudget::current()),
+                JpegEncodeOptions::from_memory_budget(quality, PhotoMemoryBudget::from_limit(1 << 30)),
                 |_, _| panic!("invalid output requested pixels")
             )
             .is_err()
@@ -138,19 +138,19 @@ fn jpeg_validation_provider_failure_and_truncation_do_not_publish_fake_success()
     super::test_support::assert_provider_failure("cancelled row provider", |provider| {
         write_jpeg_rows(
             &mut bytes, source.extent, &source.interpretation, &Default::default(),
-            JpegEncodeOptions::from_memory_budget(90, PhotoMemoryBudget::current()), provider,
+            JpegEncodeOptions::from_memory_budget(90, PhotoMemoryBudget::from_limit(1 << 30)), provider,
         )
     });
-    assert!(read_photo(Cursor::new(bytes), DecodeLimits::default()).is_err());
+    assert!(read_photo(Cursor::new(bytes), DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30))).is_err());
     let mut bytes = Vec::new();
-    write_jpeg(&mut bytes, &source, 100).unwrap();
+    write_jpeg(&mut bytes, &source, crate::photo::JpegEncodeOptions::from_memory_budget(100, crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
     for length in [0, 1, 10, bytes.len() / 2, bytes.len() - 2] {
-        assert!(read_photo(Cursor::new(&bytes[..length]), DecodeLimits::default()).is_err());
+        assert!(read_photo(Cursor::new(&bytes[..length]), DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30))).is_err());
     }
     let mut prefixed = Cursor::new([b"prefix".as_slice(), &bytes].concat());
     prefixed.set_position(6);
     assert_eq!(
-        read_photo(prefixed, DecodeLimits::default()).unwrap().extent,
+        read_photo(prefixed, DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30))).unwrap().extent,
         source.extent
     );
 }
@@ -186,7 +186,7 @@ fn baseline_60mp_jpeg_checks_full_image_memory_before_decoding() {
         Cursor::new(&bytes),
         DecodeLimits {
             codec_bytes: 8 * 1024 * 1024,
-            ..Default::default()
+            ..crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))
         },
     )
     .unwrap_err();
@@ -223,7 +223,7 @@ fn external_cmyk_jpeg_variants_match_reference_ink_samples() {
         let expected = std::fs::read(dir.join(format!("{name}.raw"))).unwrap();
         let decoded = read_photo(
             std::io::BufReader::new(std::fs::File::open(dir.join(format!("{name}.jpg"))).unwrap()),
-            DecodeLimits::default(),
+            DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30)),
         )
         .unwrap();
         assert_eq!(decoded.interpretation.channels, SourceChannels::Cmyk);
@@ -237,9 +237,9 @@ fn external_cmyk_jpeg_variants_match_reference_ink_samples() {
             "{name}: ink values changed"
         );
         let mut output = Vec::new();
-        write_jpeg(&mut output, &decoded, 100).unwrap();
+        write_jpeg(&mut output, &decoded, crate::photo::JpegEncodeOptions::from_memory_budget(100, crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
         std::fs::write(dir.join(format!("capy-{name}.jpg")), &output).unwrap();
-        let restored = read_photo(Cursor::new(output), DecodeLimits::default()).unwrap();
+        let restored = read_photo(Cursor::new(output), DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
         assert_eq!(
             restored.interpretation.profile,
             decoded.interpretation.profile
@@ -260,7 +260,7 @@ fn external_progressive_and_oriented_jpeg_match_reference_samples_and_budget() {
         ("oriented", [259, 513], SourceChannels::Rgb, false),
     ] {
         let bytes = std::fs::read(dir.join(format!("{name}.jpg"))).unwrap();
-        let decoded = read_photo(Cursor::new(&bytes), DecodeLimits::default()).unwrap();
+        let decoded = read_photo(Cursor::new(&bytes), DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
         assert_eq!(decoded.extent, extent);
         assert_eq!(decoded.interpretation.channels, channels);
         assert_eq!(decoded.interpretation.profile_assumed, assumed);
@@ -278,7 +278,7 @@ fn external_progressive_and_oriented_jpeg_match_reference_samples_and_budget() {
             Cursor::new(&bytes),
             DecodeLimits {
                 codec_bytes: 1024,
-                ..Default::default()
+                ..crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))
             },
         )
         .unwrap_err();
@@ -290,7 +290,7 @@ fn external_progressive_and_oriented_jpeg_match_reference_samples_and_budget() {
         file(),
         DecodeLimits {
             codec_bytes: 512 * 1024 * 1024,
-            ..Default::default()
+            ..crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))
         },
     )
     .unwrap_err();
@@ -300,7 +300,7 @@ fn external_progressive_and_oriented_jpeg_match_reference_samples_and_budget() {
         DecodeLimits {
             source_bytes: 16 * 1024 * 1024,
             codec_bytes: 768 * 1024 * 1024,
-            ..Default::default()
+            ..crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))
         },
     )
     .unwrap();
@@ -321,7 +321,7 @@ fn external_progressive_and_oriented_jpeg_match_reference_samples_and_budget() {
 fn export_budget_rejects_before_requesting_rows_or_writing_output() {
     let source = pattern(SourceChannels::Rgb, RgbSpace::Srgb);
     let options =
-        JpegEncodeOptions::from_memory_budget(100, PhotoMemoryBudget::from_available_memory(1024));
+        JpegEncodeOptions::from_memory_budget(100, PhotoMemoryBudget::from_limit(1024));
     let mut output = Vec::new();
     let error = write_jpeg_rows(
         &mut output,

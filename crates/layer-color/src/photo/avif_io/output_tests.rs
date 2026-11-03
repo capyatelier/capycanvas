@@ -42,10 +42,10 @@ fn rust_avif_export_reconstructs_compressed_base_and_preserves_alpha() {
             )
             .unwrap();
             assert_eq!(stats.clipped_channels, 0);
-            let hdr = super::super::read(Cursor::new(&bytes), Default::default(), &cancel)
+            let hdr = super::super::read(Cursor::new(&bytes), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30)), &cancel)
                 .unwrap()
                 .source;
-            let base = read_rendition(Cursor::new(&bytes), Default::default(), &cancel, false)
+            let base = read_rendition(Cursor::new(&bytes), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30)), &cancel, false)
                 .unwrap()
                 .source;
             assert_eq!(hdr.extent, extent);
@@ -133,7 +133,7 @@ fn rust_avif_preview_preserves_hdr_when_the_authored_sdr_changes() {
                 ..Default::default()
             }, guide: &test_guide(extent, rows), matte: None, clip: true },
             [12, 12],
-            quality,
+            crate::photo::GainMapEncodeOptions::from_memory_budget(quality, crate::photo::PhotoMemoryBudget::from_limit(1 << 30)),
             &cancel,
             rows,
         )

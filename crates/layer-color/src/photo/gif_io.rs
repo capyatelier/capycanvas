@@ -57,6 +57,7 @@ pub(super) fn read(
     drop(decoder);
     let source = raster_io::source(&pixels, extent, interpretation, Default::default(), limits)?;
     Ok(DecodedPhoto {
+        reservation: None,
         source,
         metadata: Default::default(),
         first_frame,

@@ -190,15 +190,15 @@ pub(super) async fn run(w: &Rc<Workspace>, id: Option<u32>, mode: Option<layer_u
     }
     dialog.close();
     let sources = result?;
-    let mut interpreted = layer_ui::ImageImportBatch::new(policy, working, Default::default());
-    for (name, source) in sources {
-        let Some(source) = super::open::interpret(w, source, policy).await? else { return Ok(false); };
-        interpreted.append(name, source, false)?;
+    let mut interpreted = Vec::new();
+    for (name, source) in sources.iter() {
+        let Some(source) = super::open::interpret(w, source.clone(), policy).await? else { return Ok(false); };
+        interpreted.push((name.clone(), source));
     }
     let sources = {
         let gpu = w.gpu.borrow();
         let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
-        let sources = interpreted.take_sources(false)?;
+        let sources = sources.with_sources(interpreted, working)?;
         if mode == Some(layer_ui::PasteMode::NewImage) {
             session.validate_image_placement(&context)?;
         }
@@ -228,9 +228,9 @@ pub(super) async fn run(w: &Rc<Workspace>, id: Option<u32>, mode: Option<layer_u
 /// drops every prepared source before any provisional layer can be published.
 fn read_sources(
     paths: Vec<PathBuf>, paste: bool, cancelled: Arc<AtomicBool>,
-) -> Result<Vec<(String, layer_core::color::source::SourceImage)>, String> {
+) -> Result<layer_ui::PreparedImages, String> {
     if paths.is_empty() { return Err("No images to import".into()); }
-    let mut images = layer_ui::ImageImportBatch::new(Default::default(), layer_core::color::RgbSpace::ProPhoto, Default::default());
+    let mut images = layer_ui::ImageImportBatch::new(Default::default(), layer_core::color::RgbSpace::ProPhoto, layer_ui::photo_decode_limits());
     for path in paths {
         if cancelled.load(Ordering::Acquire) { return Err("Image import cancelled".into()); }
         let name = if paste { "Clipboard image".into() } else {

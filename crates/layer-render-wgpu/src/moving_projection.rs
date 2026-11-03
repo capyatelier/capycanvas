@@ -30,10 +30,10 @@ impl MovingProjection {
         (std::mem::size_of::<Self>() + self.identities.capacity()*std::mem::size_of::<(layer_core::authored::PortableId,std::sync::Weak<layer_core::color::source::SourceImage>)>()
             + self.requests.capacity()*std::mem::size_of::<object_image_mips::MovingRequest>()) as u64
     }
-    pub(crate) fn update(cache:&mut Option<Self>, scene:SceneView<'_>, mapping:[f32;6], space:layer_core::color::RgbSpace, available:bool, failed:&mut Vec<FailedImageTile>) -> Result<(),GpuRasterError> {
+    pub(crate) fn update(cache:&mut Option<Self>, scene:SceneView<'_>, mapping:[f32;6], space:layer_core::color::RgbSpace, available:bool, failed:&mut Vec<FailedImageTile>) -> Result<bool,GpuRasterError> {
         use layer_core::authored::{Affine64, ImageInterpolation};
         let linear = std::array::from_fn(|i|mapping[i].to_bits());
-        if cache.as_ref().is_some_and(|projection|projection.matches(scene,linear,space,available,failed.len())) { return Ok(()); }
+        if cache.as_ref().is_some_and(|projection|projection.matches(scene,linear,space,available,failed.len())) { return Ok(false); }
         let surface_to_document = Affine64(mapping.map(f64::from)).inverse().ok_or(GpuRasterError::InvalidExtent)?;
         let identities = if cache.as_ref().is_some_and(|projection|projection.artwork == scene.artwork().id && projection.objects.same_root(&scene.artwork().objects)) {
             std::mem::take(&mut cache.as_mut().unwrap().identities)
@@ -62,7 +62,7 @@ impl MovingProjection {
         *cache = Some(MovingProjection {artwork:artwork.id,root:artwork.root,objects:artwork.objects.clone(),
             occurrences:artwork.occurrences.clone(),stacks:artwork.stacks.clone(),compositions:artwork.compositions.clone(),scope:scene.scope().cloned().unwrap_or_default(),
             linear,space,available,failures:failed.len(),identities,requests:requests.into_values().collect()});
-        Ok(())
+        Ok(true)
     }
 }
 

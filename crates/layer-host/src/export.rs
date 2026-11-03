@@ -327,7 +327,7 @@ mod tests {
         assert_eq!(task.details().unwrap()["range_blocked"], false);
         let photo = layer_color::photo::read_photo(
             Cursor::new(written(&mut task).unwrap()),
-            Default::default(),
+            layer_ui::photo_decode_limits(),
         )
         .unwrap();
         assert_eq!(photo.extent, [8, 6]);
@@ -375,19 +375,19 @@ mod tests {
         assert_eq!(task.details().unwrap()["format_name"], "WebP · lossless");
         let bytes = written(&mut task).unwrap();
         assert_eq!(&bytes[8..12], b"WEBP");
-        let photo = layer_color::photo::read_photo(Cursor::new(&bytes), Default::default()).unwrap();
+        let photo = layer_color::photo::read_photo(Cursor::new(&bytes), layer_ui::photo_decode_limits()).unwrap();
         assert_eq!(photo.extent, [8, 6]);
         assert_eq!(photo.interpretation.channels, SourceChannels::Rgba);
         assert_eq!(photo.interpretation.depth, SampleDepth::U8);
         assert_eq!(photo.resolution, Some(layer_core::ImageResolution::ppi(240)));
-        let kept = layer_color::photo::read_photo_detailed(Cursor::new(&bytes), Default::default()).unwrap().metadata;
+        let kept = layer_color::photo::read_photo_detailed(Cursor::new(&bytes), layer_ui::photo_decode_limits()).unwrap().metadata;
         let exif = kept.exif.expect("the artist is kept");
         assert!(exif.windows(4).any(|w| w == b"Ada\0"));
         assert!(!exif.windows(2).any(|w| w == b"N\0"), "location is removed by default");
         let none = ExportRecipe { metadata: layer_ui::ExportMetadata { keep: layer_ui::MetadataKeep::None, remove_location: true }, ..webp.clone() };
         task.configure(none).unwrap();
         let stripped = written(&mut task).unwrap();
-        assert!(layer_color::photo::read_photo_detailed(Cursor::new(stripped), Default::default()).unwrap().metadata.is_empty());
+        assert!(layer_color::photo::read_photo_detailed(Cursor::new(stripped), layer_ui::photo_decode_limits()).unwrap().metadata.is_empty());
         task.configure(webp.clone()).unwrap();
         let mut rows = photo.rows();
         let mut row = vec![0; photo.row_bytes()];
@@ -433,7 +433,7 @@ mod tests {
         assert_eq!(details["range_blocked"], false);
         let photo = layer_color::photo::read_photo(
             Cursor::new(written(&mut task).unwrap()),
-            Default::default(),
+            layer_ui::photo_decode_limits(),
         )
         .unwrap();
         assert!(photo.interpretation.depth.is_float());

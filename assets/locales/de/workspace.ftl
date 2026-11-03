@@ -685,3 +685,13 @@ workspace-launch-window-size = Anfängliche Fenstergröße
 workspace-phone-tool-limit = Die Telefon-Werkzeugleiste bietet Platz für bis zu zehn Werkzeuge.
 
 workspace-reset-phone-confirm = Die ursprüngliche Telefon-Werkzeugleiste dieses Arbeitsbereichs wiederherstellen. Das lässt sich mit { $menu } → { $undo } wieder aufheben.
+
+diagnostics-budget-limit = Speicherlimit
+diagnostics-budget-physical = Erfasster Speicher
+diagnostics-budget-pinned = Gebundener Speicher
+diagnostics-budget-debt = Speicherüberhang
+diagnostics-budget-pair = RAM { $ram } MiB · GPU { $gpu } MiB
+diagnostics-budget-limit-description = RAM-Budget des Prozesses und gesamte Gerätebudgets. Gemeinsamer GPU-Speicher kann sich mit RAM überschneiden; nicht addieren.
+diagnostics-budget-physical-description = Von großen Besitzern gemeldete physische Bytes, nicht die gesamte Betriebssystem- oder Treibernutzung. Gemeinsamer GPU-Speicher kann sich mit RAM überschneiden.
+diagnostics-budget-pinned-description = Nicht freigebbare Bytes, einschließlich laufender Arbeit und Importreservierungen. Gemeinsamer GPU-Speicher kann sich mit RAM überschneiden.
+diagnostics-budget-debt-description = Gebundene Bytes über dem RAM-Budget und die Summe über jedem Gerätebudget. Vorhandene Zeichnungen bleiben erhalten.

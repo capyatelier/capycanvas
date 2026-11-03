@@ -582,8 +582,8 @@ fn native_level_retained_branches_batch_live_graph_pages_and_keep_islands_separa
         insert_occurrence(&mut doc, filter, 0);
         let photo = paint_occurrence(&mut doc, "photo", Some(rgba8_source(extent, |x, y| [(x * 29) as u8, (y * 31) as u8, 173, 255])));
         insert_occurrence(&mut doc, photo, 2);
-        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-        let frame = packet(doc.scene(), extent); submit_published(&mut r, frame); r.wait_idle().unwrap();
+        let mut r = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
+        let frame = packet(doc.scene(), extent); crate::memory::memory_tests::legacy_scene_frame(&mut r, frame); submit_published(&mut r, frame); r.wait_idle().unwrap();
         let reference = display_pixels(&r);
         let mut scene = r.scene.take().unwrap(); let mut cache = r.scale_display.take().unwrap();
         r.document_damage.clear(); r.transform_damage.clear();

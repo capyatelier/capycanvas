@@ -22,7 +22,7 @@ pub use cursor_icons::{TOOL_CURSOR_ICONS, TOOL_CURSOR_HOTSPOTS, tool_cursor_mark
 pub use selection::{SelectionGradient, SelectionOverlay, SelectionPaint, SelectionPaintMode, SelectionPaintResult};
 pub use outline::{TipOutline, mask_outline};
 pub use telemetry::{FrameRate, FrameRateSource, PresentationRate, RendererTelemetry, TimingSamples,
-    GpuMemory, GpuMemoryKind, MemoryPeak, MemorySnapshot, ProcessMemory, ProcessMemoryKind};
+    GpuMemory, GpuMemoryKind, MemoryPeak, MemorySnapshot, MemoryBudgetSummary, ProcessMemory, ProcessMemoryKind};
 
 #[derive(Clone, Debug)]
 #[expect(clippy::large_enum_variant, reason = "Snapshot handoffs move captured plans without per-request boxing")]

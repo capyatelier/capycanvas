@@ -24,6 +24,7 @@ impl Drop for CompileTrace<'_> {
 #[derive(Clone)]
 pub(crate) struct DeviceRecipes {
     pub transient_display: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    pub transient_memory: Option<layer_core::MemoryOwner>,
     pub bounds_pipeline: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::thumbnails::BoundsPipeline>>>,
     pub levels_pipeline:std::sync::Arc<std::sync::OnceLock<std::sync::Arc<crate::snapshot::levels::LevelsPipeline>>>,
     pub statistics_pipeline: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<crate::snapshot::statistics::StatisticsPipeline>>>,
@@ -35,6 +36,7 @@ impl From<&PipelineDevice> for DeviceRecipes {
     fn from(device: &PipelineDevice) -> Self {
         Self {
             transient_display: device.transient_display.clone(),
+            transient_memory: device.transient_memory.clone(),
             bounds_pipeline: device.bounds_pipeline.clone(),
             levels_pipeline: device.levels_pipeline.clone(),
             statistics_pipeline: device.statistics_pipeline.clone(),
@@ -47,10 +49,14 @@ impl From<&PipelineDevice> for DeviceRecipes {
 #[derive(Clone)]
 pub(crate) struct PipelineDevice {
     pub transient_display: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    pub transient_memory: Option<layer_core::MemoryOwner>,
     device: wgpu::Device,
     working_space: layer_core::color::RgbSpace,
     depth: layer_core::color::SampleDepth,
     pub source_samples: std::sync::Arc<layer_core::raster::DecodedTileCache>,
+    pub memory: Option<layer_core::MemoryOwner>,
+    pub sample_memory: Option<layer_core::MemoryOwner>,
+    pub resource_limit: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub blend_pipelines: std::sync::Arc<std::sync::Mutex<std::sync::Weak<super::portable_blend::Pipelines>>>,
     pub tone_pipelines: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::analysis_compute::Pipelines>>>,
     pub dehaze_pipelines: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::analysis_compute::Pipelines>>>,
@@ -68,6 +74,10 @@ impl From<wgpu::Device> for PipelineDevice {
         Self {
             device,
             transient_display: Default::default(),
+            transient_memory: None,
+            memory: None,
+            sample_memory: None,
+            resource_limit: Default::default(),
             tone_pipelines: Default::default(),
             dehaze_pipelines: Default::default(),
             bounds_pipeline: Default::default(),
@@ -82,7 +92,7 @@ impl From<wgpu::Device> for PipelineDevice {
             working_space: Default::default(),
             depth: Default::default(),
             source_samples: std::sync::Arc::new(layer_core::raster::DecodedTileCache::new(
-                512 * 1024 * 1024,
+                0,
             )),
         }
     }
@@ -96,6 +106,7 @@ impl std::ops::Deref for PipelineDevice {
 impl PipelineDevice {
     pub fn with_device_recipes(mut self, recipes: &DeviceRecipes) -> Self {
         self.transient_display = recipes.transient_display.clone();
+        self.transient_memory = recipes.transient_memory.clone();
         self.bounds_pipeline = recipes.bounds_pipeline.clone();
         self.levels_pipeline = recipes.levels_pipeline.clone();
         self.statistics_pipeline = recipes.statistics_pipeline.clone();
@@ -113,7 +124,7 @@ impl PipelineDevice {
         }
     }
     pub fn for_recipe(&self) -> Self {
-        Self { working_space: self.working_space, depth: self.depth, transient_display: self.transient_display.clone(), ..Self::from(self.device.clone()) }
+        Self { working_space: self.working_space, depth: self.depth, transient_display: self.transient_display.clone(), transient_memory: self.transient_memory.clone(), ..Self::from(self.device.clone()) }
     }
     /// A working attachment choice, independent of native integer backing and
     /// document primaries. All deferred recipes retain this same choice.

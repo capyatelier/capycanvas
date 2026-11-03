@@ -19,7 +19,7 @@ fn png_tiff_and_jpeg_keep_physical_density_without_changing_encoded_samples() {
             } else {
                 write_png(&mut bytes, &source).unwrap();
             }
-            let image = read_photo(Cursor::new(bytes.into_inner()), Default::default()).unwrap();
+            let image = read_photo(Cursor::new(bytes.into_inner()), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
             assert_eq!(image.extent, source.extent);
             let actual = image.resolution.unwrap();
             if tiff {
@@ -57,12 +57,12 @@ fn png_tiff_and_jpeg_keep_physical_density_without_changing_encoded_samples() {
     }
     let mut source = builder.finish().unwrap();
     let mut plain = Vec::new();
-    write_jpeg(&mut plain, &source, 93).unwrap();
+    write_jpeg(&mut plain, &source, crate::photo::JpegEncodeOptions::from_memory_budget(93, crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
     source.resolution = Some(density);
     let mut tagged = Vec::new();
-    write_jpeg(&mut tagged, &source, 93).unwrap();
-    let a = read_photo(Cursor::new(plain), Default::default()).unwrap();
-    let b = read_photo(Cursor::new(&tagged), Default::default()).unwrap();
+    write_jpeg(&mut tagged, &source, crate::photo::JpegEncodeOptions::from_memory_budget(93, crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
+    let a = read_photo(Cursor::new(plain), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
+    let b = read_photo(Cursor::new(&tagged), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
     assert!(a.resolution.is_none());
     assert_eq!(b.resolution, Some(density));
     assert_eq!(rows(&a), rows(&b));
@@ -96,7 +96,7 @@ fn png_density_precedes_exif_and_orientation_swaps_density_axes() {
         .unwrap()
         .write_image_data(&[100; 18])
         .unwrap();
-    let image = read_photo(Cursor::new(bytes), Default::default()).unwrap();
+    let image = read_photo(Cursor::new(bytes), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
     assert_eq!(image.extent, [2, 3]);
     assert_eq!(
         image.resolution,
@@ -136,8 +136,8 @@ fn gray_and_cmyk_jpeg_resolution_is_retained_with_the_delivery_profile() {
         let mut source = builder.finish().unwrap();
         source.resolution = Some(ImageResolution::ppi(300));
         let mut encoded = Vec::new();
-        write_jpeg(&mut encoded, &source, 95).unwrap();
-        let decoded = read_photo(Cursor::new(encoded), Default::default()).unwrap();
+        write_jpeg(&mut encoded, &source, crate::photo::JpegEncodeOptions::from_memory_budget(95, crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
+        let decoded = read_photo(Cursor::new(encoded), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
         assert_eq!(decoded.resolution, source.resolution);
         assert_eq!(decoded.interpretation, interpretation);
     }

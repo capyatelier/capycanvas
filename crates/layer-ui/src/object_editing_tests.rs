@@ -9,6 +9,28 @@ fn session() -> UiSession<Recorder> {
 }
 
 #[test]
+fn imported_placement_keeps_its_reservation_until_apply_or_cancel() {
+    for apply in [false,true] {
+        let budget=layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {
+            override_bytes:Some(2<<30),..Default::default()
+        });
+        let document=Document::new(PortableId::random(),1000,1000,DocumentNames {paint:"Ink".into(),paper:"Paper".into()})
+            .with_memory(layer_core::DocumentMemory::new(budget.clone(),None));
+        let mut s=UiSession::new(Recorder {tiled_sources:true,..Default::default()},document,[1000,1000],Platform::Gtk).unwrap();
+        let reservation=budget.admit_import(1024*1024).unwrap();
+        let source=std::sync::Arc::unwrap_or_clone(rgba8_source([32;2],|x,y|[x as u8,y as u8,7,255]));
+        let prepared=crate::PreparedImages::from_parts(vec![("Photo".into(),source)],Some(reservation.clone()),budget.clone());
+        s.place_image_objects(prepared,None,None,true,false).unwrap();
+        assert!(reservation.active());assert!(budget.snapshot().reserved_bytes>0);
+        invoke(&mut s,if apply {CommandId::ApplyTransform}else{CommandId::CancelTransform});
+        assert!(!s.objects.placing());
+        assert!(!reservation.active());assert_eq!(budget.snapshot().reserved_bytes,0);
+        assert_eq!(s.engine.document().artwork.objects.len(),usize::from(apply));
+        assert_eq!(s.engine.can_undo(),apply);
+    }
+}
+
+#[test]
 fn placement_apply_restores_the_tool_and_import_applies_an_open_placement() {
     for tool in [LayerCanvasTool::Paint, LayerCanvasTool::Move] {
         let mut s = session();
@@ -465,7 +487,7 @@ fn placement_picking_keeps_existing_images_out_of_the_provisional_edit() {
         let (mut s, _, [front, back]) = fixture();
         let original = s.engine.document().clone();
         let checkpoint = s.engine.checkpoint();
-        let sources = [([200, 100], "First"), ([100, 80], "Second")].into_iter()
+        let sources: Vec<(String, layer_core::color::source::SourceImage)> = [([200, 100], "First"), ([100, 80], "Second")].into_iter()
             .map(|(extent, name)| (name.into(), std::sync::Arc::unwrap_or_clone(rgba8_source(extent, |_, _| [255; 4])))).collect();
         s.place_layer_sources(sources, Some(Point { x: 600., y: 600. }), None).unwrap();
         let provisional = selected(&s);

@@ -20,9 +20,34 @@ pub(crate) struct BufferPool {
     pub bytes: AtomicU64,
     pub working: AtomicU64,
     pub transfer: AtomicU64,
+    retained_limit: AtomicU64,
     pub(super) priority: Arc<deferred::PresentationPriority>,
 }
 impl BufferPool {
+    pub fn set_retained_limit(&self, bytes: u64) { self.retained_limit.store(bytes.min(crate::memory::RASTER_BUFFER_BYTES), Ordering::Release); }
+    pub fn trim_unused(&self) -> u64 {
+        let limit = self.retained_limit.load(Ordering::Acquire);
+        let mut resources = self.resources.lock().unwrap();
+        let mut released = 0;
+        let mut retired = Vec::new();
+        for _ in 0..crate::native_tiles::MAX_BATCH_TILES {
+            if self.bytes.load(Ordering::Relaxed) <= limit { break; }
+            if resources.is_empty() { break; }
+            let resource = resources.remove(0);
+            let bytes = resource.bytes();
+            self.bytes.fetch_sub(bytes, Ordering::Relaxed);
+            released += bytes;
+            retired.push(resource);
+        }
+        drop(resources);
+        drop(retired);
+        released
+    }
+    pub fn memory_bytes(&self) -> [u64; 2] {
+        let metadata = self.resources.lock().unwrap().capacity() as u64 * std::mem::size_of::<Resource>() as u64;
+        [metadata.saturating_add(self.working.load(Ordering::Acquire)),
+            self.bytes.load(Ordering::Acquire).saturating_add(self.transfer.load(Ordering::Acquire))]
+    }
     fn take_matching(&self, matches: impl Fn(&Resource) -> bool) -> Option<Resource> {
         let mut resources = self.resources.lock().unwrap();
         let index = resources.iter().position(matches)?;
@@ -100,14 +125,13 @@ impl BufferPool {
     pub(super) fn put_resource(&self, resource: Resource) {
         let mut resources = self.resources.lock().unwrap();
         let size = resource.bytes();
-        while self.bytes.load(Ordering::Relaxed) + size > 64 * 1024 * 1024 {
-            if resources.is_empty() {
-                break;
-            }
-            let old = resources.remove(0);
-            self.bytes.fetch_sub(old.bytes(), Ordering::Relaxed);
+        let limit = self.retained_limit.load(Ordering::Acquire);
+        while self.bytes.load(Ordering::Relaxed).saturating_add(size) > limit {
+            if resources.is_empty() { break; }
+            let oldest = resources.remove(0);
+            self.bytes.fetch_sub(oldest.bytes(), Ordering::Relaxed);
         }
-        if self.bytes.load(Ordering::Relaxed) + size <= 64 * 1024 * 1024 {
+        if self.bytes.load(Ordering::Relaxed).saturating_add(size) <= limit {
             self.bytes.fetch_add(size, Ordering::Relaxed);
             resources.push(resource);
         }

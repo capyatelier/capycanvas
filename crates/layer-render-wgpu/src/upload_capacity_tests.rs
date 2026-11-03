@@ -153,3 +153,32 @@ fn invalid_reordered_indices_refuse_before_growth_or_prior_tile_rewrites() {
         assert!(pollster::block_on(scope.pop()).is_none());
     }
 }
+
+
+#[test]
+fn upload_memory_reuses_completed_chunks_and_releases_discarded_pins() {
+    let (r, _) = fixture();
+    let mut uploads = Uploads::new(&r.device, 4096);
+    let target = r.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("upload memory accounting"), size: 256,
+        usage: wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+    });
+    for _ in 0..4 {
+        let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
+        uploads.write(&mut encoder, &target, &[17; 256]).unwrap();
+        uploads.finish(&encoder);
+        assert_eq!(uploads.memory_bytes(), [4096, 4096]);
+        assert_eq!(uploads.trim_unused(0), 0);
+        encoder.submit(&r.queue);
+        crate::test_support::complete(&r);
+        assert_eq!(uploads.memory_bytes(), [4096, 0]);
+    }
+    let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
+    uploads.write(&mut encoder, &target, &[23; 256]).unwrap();
+    uploads.finish(&encoder);
+    assert_eq!(uploads.memory_bytes(), [4096, 4096]);
+    drop(encoder);
+    assert_eq!(uploads.memory_bytes(), [4096, 0]);
+    assert_eq!(uploads.trim_unused(0), 4096);
+    assert_eq!(uploads.memory_bytes(), [0, 0]);
+}

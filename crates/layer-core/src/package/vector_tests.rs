@@ -1001,8 +1001,8 @@ fn opening_charges_the_records_that_decoded_vector_bytes_become() {
     assert!(resident > decoded, "records hold more than their wire bytes: {resident} vs {decoded}");
     let outcome = |budget: u64| {
         let backing = super::ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(saved.clone()))).unwrap();
-        super::codec::open(backing, crate::ProjectLimits { raster_bytes: budget, asset_bytes: 0, ..Default::default() }, &std::sync::atomic::AtomicBool::new(false)).unwrap()
+        super::codec::open(backing, crate::ProjectLimits { raster_bytes: budget, asset_bytes: 0, ..Default::default() }, &std::sync::atomic::AtomicBool::new(false))
     };
-    assert!(matches!(outcome(decoded + resident / 2), super::codec::OpenOutcome::Preserved { .. }));
-    assert!(matches!(outcome(decoded + resident), super::codec::OpenOutcome::Candidate { .. }));
+    assert_eq!(outcome(decoded + resident / 2).unwrap_err(), crate::MEMORY_BUDGET_EXCEEDED);
+    assert!(matches!(outcome(decoded + resident).unwrap(), super::codec::OpenOutcome::Candidate { .. }));
 }

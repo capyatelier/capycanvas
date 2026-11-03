@@ -48,11 +48,12 @@ async fn choose_image(w: &Rc<Workspace>) -> Result<Option<PathBuf>, String> {
 fn import(directory: PathBuf, path: PathBuf) -> Result<(String, layer_core::color::source::SourceImage, Vec<layer_ui::paper_library::PaperEntry>), PaperLibraryError> {
     let cancelled = Arc::new(AtomicBool::new(false));
     let name = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
-    let mut images = layer_ui::ImageImportBatch::new(Default::default(), layer_core::color::RgbSpace::ProPhoto, Default::default());
+    let mut images = layer_ui::ImageImportBatch::new(Default::default(), layer_core::color::RgbSpace::ProPhoto, layer_ui::photo_decode_limits());
     let reader = cancellable_file(&path, cancelled.clone()).map_err(|e| e.to_string())?;
     images.read_with_decoder(reader,&name,&cancelled,crate::photo_reader::read).map_err(|e| format!("{name}: {e}"))?;
-    let (_, source) = images.take_sources(false)?.into_iter().next().ok_or_else(|| "No image to import".to_string())?;
-    layer_host::papers::import(&directory, &source, &name, &|| false)
+    let prepared = images.take_sources(false)?;
+    let (_, source) = prepared.first().ok_or_else(|| "No image to import".to_string())?;
+    layer_host::papers::import(&directory, source, &name, &|| false)
 }
 
 pub(crate) async fn run(w: &Rc<Workspace>, request: PaperRequest) -> Result<(), String> {

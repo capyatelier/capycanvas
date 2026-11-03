@@ -49,7 +49,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
     )));
     let control = CaptureControl::default();
     let worker_workflow = workflow.borrow().clone();
-    let memory_budget = layer_color::photo::PhotoMemoryBudget::current().source_bytes;
+    let source_limit = layer_color::photo::PhotoMemoryBudget::conversion_encode_limit();
     let clipped_state = Rc::new(std::cell::Cell::new(None::<bool>));
     let weak = dialog.downgrade(); let explanation_weak = explanation.downgrade(); let clipped = clipped_state.clone();
     w.on_localization(move |localization| {
@@ -72,7 +72,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
         #[strong] original_gpu,
         async move {
             let token = control.clone();
-            let result = gio::spawn_blocking(move || worker_workflow.prepare(None, memory_budget, || token.is_cancelled()))
+            let result = gio::spawn_blocking(move || worker_workflow.prepare(None, source_limit, || token.is_cancelled()))
                 .await.map_err(|_| "Rasterization worker failed".to_string()).and_then(|r| r);
             if control.is_cancelled() { return; }
             let result = result.and_then(|(image, clipped)| {

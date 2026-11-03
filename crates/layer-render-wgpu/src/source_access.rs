@@ -313,14 +313,7 @@ mod tests {
     }
     fn thumbnail(r:&mut WgpuRasterizer,target:SourceTarget)->Vec<u8>{crate::test_support::thumbnail(r,1,ThumbnailTarget::Source(target))}
     fn sample(r:&mut WgpuRasterizer,target:SourceTarget,position:[u32;2])->[f32;4]{
-        assert!(r.request_color_sample(ColorSampleRequest {request_id:1,source:ColorSampleSource::Source(target),position,area:ColorSampleArea::Average5}).unwrap());
-        let deadline=std::time::Instant::now()+READBACK_TIMEOUT;
-        loop {
-            crate::test_support::complete(r);
-            if let Some(sample)=r.take_color_sample() {return sample.unwrap().rgba;}
-            assert!(std::time::Instant::now()<deadline,"source sample must complete");
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
+        crate::test_support::color_sample(r, ColorSampleRequest {request_id:1,source:ColorSampleSource::Source(target),position,area:ColorSampleArea::Average5}).rgba
     }
     #[test]
     fn paint_base_offset_display_exact_reads_regions_thumbnails_and_material_match_authored_pixels() {

@@ -478,6 +478,7 @@ fn finite_radius_default_tablet_view_admits_reduced_composition_with_reserved_sc
     frame.view.width_px = 2200;
     frame.view.height_px = 1440;
     frame.view.document_to_surface = [0.5, 0., 0., 0.5, -341., -207.];
+    r.begin_frame_memory(frame);
     let request = request(&r, frame).unwrap();
     assert!(request.evaluation == Evaluation::Display);
     assert_eq!(request.plan.level, 1);
@@ -487,17 +488,61 @@ fn finite_radius_default_tablet_view_admits_reduced_composition_with_reserved_sc
 }
 
 #[test]
+fn global_filter_keeps_its_scale_cache_across_consecutive_frames() {
+    let extent=[6000,4000];
+    let mut doc=document_at(extent);
+    let mut adjustment=EffectInstance::new(crate::tests::fixture("exposure").program());
+    adjustment.set("exposure",EffectValue::Number(0.25)).unwrap();
+    let program=Arc::make_mut(&mut adjustment.program);
+    program.resolution=EffectResolution::Native;
+    program.passes=vec![layer_core::EffectPass {entry:program.entry.clone(),sampling:layer_core::EffectSampling::Document}].into();
+    let filter=effect_occurrence(&mut doc,adjustment,"global exposure");
+    insert_occurrence(&mut doc,filter,0);
+    assert!(hierarchy::eligible(doc.scene()));
+    assert!(scene::stack::support(doc.scene(),0).is_none());
+    assert!(Scene::capture_image_bound(doc.scene(),PixelRect::full(extent))>CACHE_BYTES);
+    let budget=layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {
+        host_default_bytes:Some(1<<40),override_bytes:Some(1<<40),..Default::default()
+    });
+    let mut r=crate::memory::memory_tests::renderer_in_budget(doc.composition().color,
+        layer_core::DeviceMemoryFacts {budget_bytes:Some(1<<40),..Default::default()},budget).unwrap();
+    let mut frame=packet(doc.scene(),extent);
+    frame.composite_all=false;
+    frame.view=crate::test_support::view([1500,1000]);
+    frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
+    crate::test_support::submit_settled(&mut r,frame);
+    let cache=r.scale_display.as_ref().unwrap();
+    let hierarchy=cache.hierarchy.as_ref().unwrap();
+    assert!(hierarchy.missing().is_none());
+    assert!(matches!(Scene::window_plan(doc.scene(),extent,
+        r.native_edit.as_ref().unwrap().image_pixel_budget(hierarchy.storage_bytes()),
+        r.device.limits().max_texture_dimension_2d,r.scene.as_deref()),Ok(None)));
+    let geometry=cache.geometry.clone();
+    let root=hierarchy.root().texture.clone();
+    for _ in 0..2 {
+        crate::test_support::submit_ready(&mut r,frame).unwrap();
+        let cache=r.scale_display.as_ref().unwrap();
+        assert_eq!(cache.geometry,geometry);
+        assert_eq!(cache.hierarchy.as_ref().unwrap().root().texture,root);
+        let display=display_pixels(&r);
+        assert!(!display.is_empty());
+        assert!(display.iter().any(|pixel|pixel[3]>0.99));
+    }
+}
+
+#[test]
 fn native_filters_beyond_the_display_budget_at_a_zoom_present_a_coarser_level() {
     let mut doc = document_at([9504, 6336]);
     let ink=paint_occurrence(&mut doc,"empty ink",None);insert_occurrence(&mut doc,ink,0);
     let blur = effect(&mut doc,"gaussian_blur");
     set_effect_value(&mut doc,blur,"sigma", EffectValue::Number(3.));
     insert_occurrence(&mut doc,blur,0);
-    let r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut r = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
     let mut frame = packet(doc.scene(), doc.composition().size);
     frame.view.width_px = 3840;
     frame.view.height_px = 2160;
     frame.view.document_to_surface = [0.54, 0., 0., 0.54, -400., -300.];
+    crate::memory::memory_tests::legacy_scene_frame(&mut r, frame);
     assert!(matches!(request_at(&r, frame, 0), Err(GpuRasterError::ExtentUnsupported)), "the native window at this zoom exceeds the display budget");
     let request = request(&r, frame).unwrap();
     assert!(request.plan.level >= 1, "a coarser level presents the view");
@@ -510,11 +555,12 @@ fn native_filters_beyond_the_display_budget_render_and_settle_at_a_coarser_level
     let blur = effect(&mut doc, "gaussian_blur");
     set_effect_value(&mut doc, blur, "sigma", EffectValue::Number(3.));
     insert_occurrence(&mut doc, blur, 0);
-    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut r = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
     let mut frame = packet(doc.scene(), extent);
     frame.view.width_px = 3840;
     frame.view.height_px = 2160;
     frame.view.document_to_surface = [0.54, 0., 0., 0.54, -400., -300.];
+    crate::memory::memory_tests::legacy_scene_frame(&mut r, frame);
     assert!(matches!(request_at(&r, frame, 0), Err(GpuRasterError::ExtentUnsupported)));
     let chosen = request(&r, frame).unwrap();
     assert!(chosen.plan.level >= 1);
@@ -563,6 +609,7 @@ fn finite_radius_effects_admit_large_reduced_windows_and_global_effects_keep_ful
         frame.view.document_to_surface = [0.5, 0., 0., 0.5, -1200., -800.];
         let plan = view_plan(frame, 1, Evaluation::Display).unwrap();
         assert!(plan.bounds.area() < PixelRect::full(extent).area() / 2);
+        r.begin_frame_memory(frame);
         let request = request(&r, frame).unwrap();
         assert_eq!(request.plan.level, 1);
         assert!(request.evaluation == Evaluation::Display, "{extent:?} finite-radius windows stay reduced");
@@ -1039,10 +1086,9 @@ fn decoded_gaussian_display_refinement_finishes_with_bounded_chunks() {
     set_effect_value(&mut doc,blur,"sigma",EffectValue::Number(85.));
     insert_occurrence(&mut doc,blur,0);
     for cap in [256u64<<20,96<<20] {
-    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    r.set_complete_display_allowance(1024<<20);
+    let mut r = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
     r.native_edit.as_mut().unwrap().image_pixel_bytes=Some(cap);
-    r.source_tiles.get_mut().admit(0);
+    r.source_tiles.get_mut().admit_limits(64 << 20, 16 << 20, 44 << 20);
     let mut frame=packet(doc.scene(),extent);frame.composite_all=false;
     frame.view.width_px=512;frame.view.height_px=320;
     frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
@@ -1398,12 +1444,14 @@ fn native_gaussian_windows_bound_decoded_sources_across_budget_and_support_chang
         let mut exact=WgpuRasterizer::new_native_headless(color).unwrap();exact.test.reference=true;
         let mut frame=packet(doc.scene(),extent);frame.view.width_px=extent[0];frame.view.height_px=extent[1];
         submit_published(&mut exact, frame);let reference=pixels(&exact,crate::test_support::document_texture(&exact));
-        let mut window=WgpuRasterizer::new_native_headless(color).unwrap();window.source_tiles.get_mut().admit(0);
+        let mut window=crate::memory::memory_tests::renderer_for_restore(&doc);
+        crate::memory::memory_tests::declare_source_budget(&mut window, frame, 64, 16 << 20, 44 << 20);
         let [resident,uploads]=window.source_tiles.borrow().admitted_bytes();
         assert!(u64::from(extent[0].div_ceil(PAGE_SIZE)*extent[1].div_ceil(PAGE_SIZE))*u64::from(PAGE_SIZE).pow(2)*16>resident);
         let tight=if sigma==21. {128u64<<20}else{160<<20};let mut allocated=0;
         for cap in [320u64<<20,tight] {
             window.native_edit.as_mut().unwrap().image_pixel_bytes=Some(cap);window.metrics.image_window_peak_bytes=0;
+            crate::memory::memory_tests::declare_source_budget(&mut window, frame, 64, 16 << 20, 44 << 20);
             let before=window.metrics().image_window_submissions;
             submit_published(&mut window, frame);
             let actual=display_pixels(&window);assert_eq!(actual.len(),reference.len());
@@ -1433,7 +1481,8 @@ fn native_gaussian_windows_bound_decoded_sources_across_budget_and_support_chang
     let mut frame=packet(doc.scene(),extent);frame.view.width_px=extent[0];frame.view.height_px=extent[1];
     let mut exact=WgpuRasterizer::new_native_headless(color).unwrap();exact.test.reference=true;submit_published(&mut exact, frame);
     let reference=pixels(&exact,crate::test_support::document_texture(&exact));
-    let mut window=WgpuRasterizer::new_native_headless(color).unwrap();window.source_tiles.get_mut().admit(0);
+    let mut window=crate::memory::memory_tests::renderer_for_restore(&doc);
+    crate::memory::memory_tests::declare_source_budget(&mut window, frame, 64, 16 << 20, 44 << 20);
     window.native_edit.as_mut().unwrap().image_pixel_bytes=Some(448<<20);submit_published(&mut window, frame);
     assert!(window.metrics().image_window_submissions>1,"the stacked filter input must use bounded windows");
     assert!(window.metrics().image_window_peak_bytes<=448<<20);

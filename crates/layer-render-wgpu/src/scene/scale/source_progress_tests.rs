@@ -93,12 +93,15 @@ fn deferred_fine_objects_keep_coarse_presentation_without_backup() {
     let doc=deferred_object_document();
     let coarse = ViewState { width_px: 256, height_px: 128, document_to_surface: [0.25, 0., 0., 0.25, 0., 0.] };
     let fine = ViewState { width_px: 640, height_px: 384, document_to_surface: [1., 0., 0., 1., -128., -64.] };
-    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    crate::test_support::submit_settled(&mut r, FramePacket { view: coarse, ..packet(doc.scene(), extent) });
+    let mut r = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
+    let coarse_frame=FramePacket {view:coarse,..packet(doc.scene(),extent)};
+    crate::memory::memory_tests::legacy_scene_frame(&mut r, coarse_frame);
+    crate::test_support::submit_settled(&mut r, coarse_frame);
     let mut presenter = crate::test_support::float_presenter(&r);
     let expected = present(&r, &mut presenter, fine);
     let geometry = r.display_geometry().unwrap().clone();
     let frame = FramePacket { view: fine, composite_all: false, ..packet(doc.scene(), extent) };
+    crate::memory::memory_tests::legacy_scene_frame(&mut r, frame);
     let request = request(&r, frame).unwrap();
     assert_eq!(request.plan.level, 0);
     let (cache, _) = Cache::select(r.scale_display.take(), &r, frame, request, true);
@@ -180,12 +183,13 @@ fn reduced_photo_larger_than_decoded_cache_publishes_only_after_prefixes_finish(
     let doc = photo(0);
     let mut previous = doc.clone();
     paint_mut(&mut previous, 0).base = Some(PaintBase::new(rgba8_source([2048; 2], |x, y| color(x, y, 27)).into()));
-    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut r = crate::memory::memory_tests::renderer_for_restore(&previous);
     assert_ne!(r.adapter.get_info().device_type, wgpu::DeviceType::Cpu);
-    r.source_tiles.get_mut().admit(0);
-    assert_eq!(r.source_tiles.borrow().admitted_bytes()[0], 64 * u64::from(PAGE_SIZE).pow(2) * 16);
     let view = ViewState { width_px: 320, height_px: 256, document_to_surface: [0.125, 0., 0., 0.125, 0., 0.] };
-    crate::test_support::submit_settled(&mut r, FramePacket { view, blend_space: layer_core::BlendSpace::Linear, ..packet(previous.scene(), EXTENT) });
+    let previous_frame = FramePacket { view, blend_space: layer_core::BlendSpace::Linear, ..packet(previous.scene(), EXTENT) };
+    crate::memory::memory_tests::declare_source_budget(&mut r, previous_frame, 64, 16 << 20, 44 << 20);
+    assert_eq!(r.source_tiles.borrow().admitted_bytes()[0], 64 * u64::from(PAGE_SIZE).pow(2) * 16);
+    crate::test_support::submit_settled(&mut r, previous_frame);
     let mut presenter = crate::test_support::float_presenter(&r);
     present(&r, &mut presenter, view);
     let published = present(&r, &mut presenter, view);
@@ -202,6 +206,7 @@ fn reduced_photo_larger_than_decoded_cache_publishes_only_after_prefixes_finish(
         assert!(std::time::Instant::now() < deadline, "photo progress timed out at {prefix}/80 pages");
         r.poll_pending(view).unwrap();
         let frame = FramePacket { view, composite_all: step == 0, blend_space: layer_core::BlendSpace::Linear, ..packet(doc.scene().with_owner(doc.owner, 1), EXTENT) };
+        crate::memory::memory_tests::declare_source_budget(&mut r, frame, 64, 16 << 20, 44 << 20);
         if r.can_submit() && r.raster_dependencies_ready(frame, None) { crate::test_support::submit_ready(&mut r, frame).unwrap(); }
         r.wait_idle().unwrap();
         if let Some(source) = r.scene.as_ref().and_then(|scene| scene.scale_sources.entries.get(&target)) {

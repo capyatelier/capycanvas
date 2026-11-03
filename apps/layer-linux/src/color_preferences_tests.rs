@@ -114,7 +114,7 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
     }
     let source = layer_color::photo::read_photo(
         std::io::BufReader::new(std::fs::File::open(&path).unwrap()),
-        Default::default(),
+        layer_ui::photo_decode_limits(),
     )
     .unwrap();
     assert!(source.interpretation.profile_assumed);
@@ -174,7 +174,7 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
     finish(&w);
     let delivery = layer_color::photo::read_photo(
         std::io::BufReader::new(std::fs::File::open(output.join("Library delivery.png")).unwrap()),
-        Default::default(),
+        layer_ui::photo_decode_limits(),
     )
     .unwrap();
     assert_eq!(

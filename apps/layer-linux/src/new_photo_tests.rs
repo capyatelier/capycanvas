@@ -528,7 +528,7 @@ fn native_new_presets_and_profiled_photo_master() {
     finish(&restored);
     let delivered = layer_color::photo::read_photo(
         std::io::BufReader::new(std::fs::File::open(delivery).unwrap()),
-        Default::default(),
+        layer_ui::photo_decode_limits(),
     )
     .unwrap();
     assert_eq!(delivered.interpretation.depth, SampleDepth::U16);

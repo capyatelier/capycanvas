@@ -66,10 +66,11 @@ impl Service {
             let name = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
             let cancelled = Arc::new(AtomicBool::new(false));
             let file = std::fs::File::open(&path).map_err(|error| error.to_string())?;
-            let mut batch = layer_ui::ImageImportBatch::new(Default::default(), layer_core::color::RgbSpace::ProPhoto, Default::default());
+            let mut batch = layer_ui::ImageImportBatch::new(Default::default(), layer_core::color::RgbSpace::ProPhoto, layer_color::photo::DecodeLimits::from_memory_budget(layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes())));
             batch.read_with_decoder(BufReader::new(file), &name, &cancelled, |mut input, limits, cancelled| crate::photo_reader::read(&mut input, limits, cancelled))?;
-            let (_, source) = batch.take_sources(false)?.into_iter().next().ok_or(PaperLibraryError::Unsupported)?;
-            let (id, image, entries) = layer_host::papers::import(&directory, &source, &name, &|| false)?;
+            let prepared = batch.take_sources(false)?;
+            let (_, source) = prepared.first().ok_or(PaperLibraryError::Unsupported)?;
+            let (id, image, entries) = layer_host::papers::import(&directory, source, &name, &|| false)?;
             Ok(Outcome::Imported(layer, id, image, entries))
         })?;
         host.invalidate_snapshot();

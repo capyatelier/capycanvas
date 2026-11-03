@@ -14,7 +14,7 @@ pub struct WebImageImport {
 #[wasm_bindgen]
 pub struct WebPreparedImages {
     pub(super) request: WebImageImport,
-    pub(super) sources: Vec<(String, layer_core::color::source::SourceImage)>,
+    pub(super) sources: layer_ui::PreparedImages,
     pub(super) clip: Option<layer_ui::PixelClip>,
     pub(super) control: layer_render_wgpu::snapshot::CaptureControl,
 }
@@ -144,7 +144,7 @@ impl WebApp {
                     clip.layers = Some(Arc::new(layers));
                 }
                 output::cancelled(&control)?;
-                return Ok(WebPreparedImages { request, sources: Vec::new(), clip: Some(clip), control }.into());
+                return Ok(WebPreparedImages { request, sources: Default::default(), clip: Some(clip), control }.into());
             }
             if files.length() == 0 {
                 return Err(js("Choose at least one image"));

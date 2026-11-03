@@ -351,6 +351,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
 
     pub fn release_idle_buffers(&mut self) {
         if !self.can_park() { return; }
+        self.editor.flush_memory();
         self.builder = StrokeBuilder::with_capacity(0);
         self.dabs = Vec::new();
         self.batches = Vec::new();
@@ -513,9 +514,23 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         Ok(())
     }
     pub fn preview_edit(&mut self, edit: Edit) -> Result<(), DocumentError> {
+        self.preview_edit_inner(edit, None)
+    }
+    pub fn preview_reserved_edit(&mut self, edit: Edit, reservation: layer_core::MemoryReservation) -> Result<(), DocumentError> {
+        self.preview_edit_inner(edit, Some(reservation))
+    }
+    pub fn cancel_preview_edit(&mut self, edit: Edit) -> Result<(), DocumentError> {
+        self.require_renderer_color(edit.resulting_color(self.document().composition().color))?;
+        let image=edit.changes_image(self.document());
+        self.editor.cancel_preview(edit)?;
+        self.composite_all|=image;
+        Ok(())
+    }
+    fn preview_edit_inner(&mut self, edit: Edit, reservation: Option<layer_core::MemoryReservation>) -> Result<(), DocumentError> {
         self.require_renderer_color(edit.resulting_color(self.document().composition().color))?;
         let image = edit.changes_image(self.editor.document());
-        self.editor.preview(edit)?;
+        if let Some(reservation) = reservation { self.editor.preview_reserved(edit, reservation)?; }
+        else { self.editor.preview(edit)?; }
         self.composite_all |= image;
         Ok(())
     }
@@ -577,11 +592,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         id: SourceTarget,
         operation: layer_core::RasterOperation,
     ) -> Result<(), DocumentError> {
-        self.append_operations(Vec::new(), vec![(id, operation)], None, false, None)
+        self.append_operations(Vec::new(), vec![(id, operation)], None, false, None, None)
     }
 
     pub fn amend_raster_operation(&mut self,target:SourceTarget,operation:layer_core::RasterOperation,checkpoint:u64)->Result<(),DocumentError> {
-        self.append_operations(Vec::new(),vec![(target,operation)],None,false,Some(checkpoint))
+        self.append_operations(Vec::new(),vec![(target,operation)],None,false,Some(checkpoint),None)
     }
 
     /// Apply `prefix` edits, such as inserting layers, and run pixel operations
@@ -594,7 +609,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         operations: Vec<(SourceTarget, layer_core::RasterOperation)>,
         selection_after: Option<Option<layer_core::Selection>>,
     ) -> Result<(), DocumentError> {
-        self.append_operations(prefix, operations, selection_after, false, None)
+        self.append_operations(prefix, operations, selection_after, false, None, None)
+    }
+    pub fn insert_with_operations_reserved(&mut self, prefix: Vec<Edit>, operations: Vec<(SourceTarget, layer_core::RasterOperation)>,
+        selection_after: Option<Option<layer_core::Selection>>, reservation: layer_core::MemoryReservation) -> Result<(), DocumentError> {
+        self.append_operations(prefix, operations, selection_after, false, None, Some(reservation))
     }
 
     /// Commit the displayed pixels and moved selection as one undoable edit.
@@ -651,7 +670,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 },
             ));
         }
-        self.append_operations(Vec::new(), operations, Some(selection), false, None)?;
+        self.append_operations(Vec::new(), operations, Some(selection), false, None, None)?;
         Ok(true)
     }
 
@@ -727,7 +746,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             coverage: layer_core::CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(), source.domain, [0; 2]),
             kind: layer_core::RasterOperationKind::ColorMode(mode),
         };
-        self.append_operations(Vec::new(), vec![(SourceTarget::Paint(*handle), operation)], None, false, None)
+        self.append_operations(Vec::new(), vec![(SourceTarget::Paint(*handle), operation)], None, false, None, None)
     }
 
     #[cfg_attr(target_arch="wasm32",expect(clippy::arc_with_non_send_sync,reason="Shared single-threaded Wasm ownership preserves the native Arc contract"))]
@@ -738,6 +757,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         selection_after: Option<Option<layer_core::Selection>>,
         reaches_locked_sources: bool,
         amend:Option<u64>,
+        reservation: Option<layer_core::MemoryReservation>,
     ) -> Result<(), DocumentError> {
         if amend.is_some_and(|checkpoint|checkpoint!=self.checkpoint()) {return Err(DocumentError::InvalidLayerOperation("The fill changed"));}
         self.flush_pending_edits()?;
@@ -822,7 +842,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             edits.push(Edit::Working(working));
         }
         let removes = edits.iter().any(|edit| matches!(edit, Edit::Stack(_) | Edit::Occurrence(_)));
-        if amend.is_some() {self.editor.amend(Edit::Batch(edits))?;}else{self.editor.perform(Edit::Batch(edits))?;}
+        if amend.is_some() {self.editor.amend(Edit::Batch(edits))?;}
+        else if let Some(reservation) = reservation { self.editor.perform_reserved(Edit::Batch(edits), reservation)?; }
+        else {self.editor.perform(Edit::Batch(edits))?;}
         self.transform_preview = None;
         self.composite_all |= removes;
         self.batches.extend(batches);
@@ -894,7 +916,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 operation.coverage.target = target;
                 operation.coverage.use_.source = target;
             }
-            self.append_operations(plan.edits, plan.operations, None, true, None)?;
+            self.append_operations(plan.edits, plan.operations, None, true, None, None)?;
             self.rebuild_all = true;
             self.composite_all = true;
         }
@@ -935,6 +957,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             || self.has_pending_document_edits()
             || self.editor.document().has_animated_effects()
             || self.backend.has_pending_work()
+            || (self.can_park() && self.editor.memory_report_pending())
     }
     pub fn has_pending_input(&self) -> bool {
         !self.input.is_empty()
@@ -1388,7 +1411,13 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         Ok(revision)
     }
 
-    pub fn apply_edit(&mut self, mut edit: Edit) -> Result<(), DocumentError> {
+    pub fn apply_edit(&mut self, edit: Edit) -> Result<(), DocumentError> {
+        self.apply_edit_inner(edit, None)
+    }
+    pub fn apply_reserved_edit(&mut self, edit: Edit, reservation: layer_core::MemoryReservation) -> Result<(), DocumentError> {
+        self.apply_edit_inner(edit, Some(reservation))
+    }
+    fn apply_edit_inner(&mut self, mut edit: Edit, reservation: Option<layer_core::MemoryReservation>) -> Result<(), DocumentError> {
         self.clear_liquify_preview();
         self.require_renderer_color(edit.resulting_color(self.document().composition().color))?;
         fn source_operations(edit: &mut Edit, document: &Document, batches: &mut Vec<DabBatch>, replacements: &mut Vec<SourceTarget>) {
@@ -1443,7 +1472,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         }
         let rebuild = rebuild_needed(self.document(), &edit);
         let changes_composite = edit.changes_image(self.editor.document());
-        self.editor.perform(edit)?;
+        if let Some(reservation) = reservation { self.editor.perform_reserved(edit, reservation)?; }
+        else { self.editor.perform(edit)?; }
         for (target, raster) in &mut self.restore_rasters {
             if replacements.contains(target)
                 && let Some(current) = self.editor.document().target_raster(*target)
@@ -1515,6 +1545,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.frame_clock_ns = timestamp_ns;
         let view = self.view();
         self.backend.poll_pending(view).map_err(EngineError::Backend)?;
+        if self.can_park() { self.editor.flush_memory(); }
         if !self.backend.can_submit() {
             return Ok(());
         }
@@ -2897,6 +2928,45 @@ mod tests {
     }
 
     #[test]
+    fn inventory_reports_wake_an_idle_frame_and_yield_to_active_input() {
+        let (mut input, mut engine) = engine("Inventory idle", 64, 64);
+        engine.render_frame().unwrap();
+        let rename = |engine: &mut CanvasEngine<RecordingRenderer>, name: &str| {
+            let handle = engine.document().working.occurrence.unwrap();
+            let mut occurrence = engine.document().artwork.occurrences.get(handle).unwrap().clone();
+            occurrence.name = name.into();
+            let edit = Edit::Occurrence(layer_core::RecordChange::replace(
+                &engine.document().artwork.occurrences, handle, Some(occurrence)).unwrap());
+            engine.editor.perform(edit).unwrap();
+        };
+        rename(&mut engine, "Idle rename");
+        assert!(engine.editor.memory_report_pending());
+        assert!(engine.can_park());
+        assert!(engine.wants_continuous_frames());
+        engine.render_frame().unwrap();
+        assert!(!engine.editor.memory_report_pending());
+        assert!(!engine.wants_continuous_frames());
+
+        input.push(event(1, PenPhase::Down, 16.)).unwrap();
+        engine.render_frame().unwrap();
+        assert!(engine.has_active_stroke());
+        rename(&mut engine, "Active rename");
+        assert!(engine.editor.memory_report_pending());
+        engine.release_idle_buffers();
+        assert!(engine.editor.memory_report_pending());
+        engine.render_frame().unwrap();
+        assert!(engine.has_active_stroke());
+        assert!(engine.editor.memory_report_pending());
+        input.push(event(2, PenPhase::Up, 16.)).unwrap();
+        engine.render_frame().unwrap();
+        engine.render_frame().unwrap();
+        assert!(!engine.editor.memory_report_pending());
+        rename(&mut engine, "Parking rename");
+        engine.release_idle_buffers();
+        assert!(!engine.editor.memory_report_pending());
+    }
+
+    #[test]
     fn liquify_zero_dab_preview_continues_only_after_persistent_work_starts() {
         let (mut input, mut engine) = engine("liquify zero dab preview", 256, 128);
         engine.set_brush(default_brush(DefaultBrushPreset::LiquifyPush)).unwrap();
@@ -3436,7 +3506,7 @@ mod tests {
         engine.render_frame().unwrap();
         assert!(engine.has_active_stroke());
         let retired = engine.backend().retired_sources;
-        assert!(engine.append_operations(Vec::new(), Vec::new(), None, false, None).is_err());
+        assert!(engine.append_operations(Vec::new(), Vec::new(), None, false, None, None).is_err());
         assert_eq!(engine.backend().retired_sources, retired, "a rejected operation cannot retire active originals");
         let mut occurrence = active_occurrence(engine.document()).clone();
         occurrence.opacity = 0.8;

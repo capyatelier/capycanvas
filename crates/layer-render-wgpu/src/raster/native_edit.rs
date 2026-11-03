@@ -34,10 +34,8 @@ impl Recipes {
 pub(crate) struct NativeEdit {
     pub(super) backing: BTreeMap<SourceTarget, Arc<RasterData>>,
     pub(crate) color_cache_bytes: u64,
-    /// Optional view/source caches keep the host's existing fast-residency policy.
+    pub(crate) color_cache_pinned_bytes: u64,
     pub(crate) display_complete_bytes: u64,
-    /// Shared allowance for retained filter images and display levels.
-    /// Zero uses the original bounded display + filter-window allocation.
     pub(crate) composition_bytes: u64,
     #[cfg(test)]
     pub image_pixel_bytes: Option<u64>,
@@ -50,19 +48,16 @@ pub(crate) struct NativeEdit {
     preview_scalars: Vec<wgpu::Buffer>,
 }
 impl NativeEdit {
-    fn color_cache_budget(display_allowance:u64,retained:Option<u64>)->u64 {
-        retained.unwrap_or_else(||display_allowance.max(256*1024*1024))
-    }
-    fn new(r: &WgpuRasterizer, transfer: NativeTransfer, admission:Option<&Self>) -> Self {
+    fn new(r: &WgpuRasterizer, transfer: NativeTransfer) -> Self {
         let in_place = !crate::native_tiles::native_in_place_features(&r.adapter).is_empty()
             && r.device
                 .features()
                 .contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
-        Self::with_admission(r,transfer,in_place,admission)
+        Self::with_admission(r,transfer,in_place)
     }
     #[cfg(test)]
-    fn with_mode(r: &WgpuRasterizer, transfer: NativeTransfer, in_place: bool) -> Self {Self::with_admission(r,transfer,in_place,None)}
-    fn with_admission(r:&WgpuRasterizer,transfer:NativeTransfer,in_place:bool,admission:Option<&Self>)->Self {
+    fn with_mode(r: &WgpuRasterizer, transfer: NativeTransfer, in_place: bool) -> Self {Self::with_admission(r,transfer,in_place)}
+    fn with_admission(r:&WgpuRasterizer,transfer:NativeTransfer,in_place:bool)->Self {
         let scratch_count = if in_place || r.snapshot_worker { 0 } else { MAX_BATCH_TILES };
         let colors = (0..scratch_count)
             .map(|_| Self::scratch_texture(&r.device, wgpu::TextureFormat::Rgba32Float))
@@ -70,21 +65,15 @@ impl NativeEdit {
         let scalars = (0..scratch_count)
             .map(|_| Self::scratch_texture(&r.device, wgpu::TextureFormat::R32Float))
             .collect();
-        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows", target_vendor = "apple"))]
-        let display_complete_bytes=admission.map_or_else(||crate::display_memory::complete_budget(&r.device,0),|source|source.display_complete_bytes);
-        #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows", target_vendor = "apple")))]
-        let display_complete_bytes=admission.map_or(0,|source|source.display_complete_bytes);
+        let display_complete_bytes = r.memory_limit(layer_core::MemoryOwnerKind::Scene);
         let recipes = Recipes::shared(&r.device, in_place);
         Self {
             backing: BTreeMap::new(),
-            color_cache_bytes: Self::color_cache_budget(display_complete_bytes,admission.map(|source|source.color_cache_bytes)),
+            color_cache_bytes: r.memory.color_limit(r.memory_limit(layer_core::MemoryOwnerKind::RasterPool),
+                r.raster_buffers.bytes.load(std::sync::atomic::Ordering::Acquire)),
+            color_cache_pinned_bytes: r.memory.color_pinned(),
             display_complete_bytes,
-            composition_bytes: {
-                #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows", target_vendor = "apple"))]
-                {admission.map_or_else(||crate::display_memory::composition_budget(&r.device,display_complete_bytes),|source|source.composition_bytes)}
-                #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows", target_vendor = "apple")))]
-                {admission.map_or(0,|source|source.composition_bytes)}
-            },
+            composition_bytes: display_complete_bytes,
             #[cfg(test)]
             image_pixel_bytes: None,
             transfer,
@@ -148,12 +137,12 @@ impl NativeEdit {
         // Transfer storage is owned/accounted by the shared scene decoder cache.
     }
     pub(crate) fn image_pixel_allowance(&self)->u64 {
-        self.composition_bytes.max(crate::scene::windows::DEFAULT_IMAGE_PIXEL_BYTES+crate::scene::scale::CACHE_BYTES)
+        self.composition_bytes
     }
     pub(crate) fn image_pixel_budget(&self, resident: u64) -> u64 {
         #[cfg(test)]
         if let Some(bytes) = self.image_pixel_bytes { return bytes; }
-        self.image_pixel_allowance().saturating_sub(crate::scene::scale::CACHE_BYTES.saturating_add(resident))
+        self.image_pixel_allowance().saturating_sub(resident)
     }
 
 }
@@ -243,26 +232,31 @@ impl WgpuRasterizer {
         [display, sources, uploads]
     }
 
-    /// Host allowance for completed display pixels. Together with the minimum
-    /// filter-window reserve, this bounds retained filters and display pixels.
-    /// Zero selects the fixed window/tile fallback. This is not a reservation.
-    pub fn set_complete_display_allowance(&mut self, bytes: u64) {
-        if let Some(native) = &mut self.native_edit
-            && (native.display_complete_bytes != bytes
-                || native.composition_bytes != bytes.saturating_add(crate::scene::windows::DEFAULT_IMAGE_PIXEL_BYTES))
-        {
-            native.display_complete_bytes = bytes;
-            native.color_cache_bytes = NativeEdit::color_cache_budget(bytes,None);
-            native.composition_bytes = bytes.saturating_add(crate::scene::windows::DEFAULT_IMAGE_PIXEL_BYTES);
-            self.scale_display = None;
-            self.admit_sources();
-        }
+    pub(crate) fn preparation_memory_limits(&self) -> [u64; 2] {
+        [self.memory_limit(layer_core::MemoryOwnerKind::Scene),
+            crate::memory::retained_limit(self.memory_limit(layer_core::MemoryOwnerKind::RasterPool), self.raster_buffers.memory_bytes()[1])]
     }
-    fn admit_sources(&mut self) {
-        let allowance = self.native_edit.as_ref().map_or(0, |native| native.display_complete_bytes);
-        #[cfg(not(target_arch = "wasm32"))]
-        let allowance = if self.snapshot_worker { 0 } else { allowance };
-        self.source_tiles.get_mut().admit(allowance);
+    pub(crate) fn refresh_memory_limits(&mut self) {
+        let [scene, raster] = self.preparation_memory_limits();
+        let other = self.memory_limit(layer_core::MemoryOwnerKind::Other);
+        let ram = self.ram_limit(layer_core::MemoryOwnerKind::DecodedSamples);
+        let decoded = self.memory_limit(layer_core::MemoryOwnerKind::DecodedSamples);
+        let uploads = self.memory_limit(layer_core::MemoryOwnerKind::Staging);
+        let mips = self.memory_limit(layer_core::MemoryOwnerKind::Mips);
+        let color = self.memory.color_limit(self.memory_limit(layer_core::MemoryOwnerKind::RasterPool),
+            self.raster_buffers.bytes.load(std::sync::atomic::Ordering::Acquire));
+        if let Some(native) = &mut self.native_edit {
+            native.color_cache_bytes = color;
+            native.color_cache_pinned_bytes = self.memory.color_pinned();
+        }
+        if !self.memory.apply_limits([scene, raster, other, ram, decoded, uploads, mips]) { return; }
+        if let Some(native) = &mut self.native_edit {
+            native.display_complete_bytes = scene;
+            native.composition_bytes = scene;
+        }
+        self.device.resource_limit.store(other, std::sync::atomic::Ordering::Release);
+        self.device.source_samples.set_limit(ram.min(usize::MAX as u64) as usize);
+        self.source_tiles.get_mut().admit_limits(decoded, uploads, mips);
     }
 
     /// A private candidate shares immutable source samples with the current
@@ -274,6 +268,7 @@ impl WgpuRasterizer {
     ) -> Result<Self, GpuRasterError> {
         let mut device = self.factory.pipeline_device(color);
         device.source_samples = self.device.source_samples.clone();
+        device.sample_memory = self.device.sample_memory.clone();
         Self::native_staged_on_factory(self.factory.clone(), device, color).map(|renderer| *renderer)
     }
 
@@ -347,6 +342,8 @@ impl WgpuRasterizer {
         renderer.initialize_native_from(self.document_color(),self.native_edit.as_ref())?;
         renderer.snapshot_worker=false;
         renderer.source_tiles=std::cell::RefCell::new(crate::scene::sources::DecodedTiles::new(self.document_color().space));
+        renderer.memory.invalidate_limits();
+        renderer.refresh_memory_limits();
         if let Some(native)=&mut renderer.native_edit {native.color_cache_bytes=0;}
         renderer.preparation_compiler=self.startup.as_ref().map(|startup|startup.compiler.clone())
             .or_else(||self.preparation_compiler.clone());
@@ -373,8 +370,9 @@ impl WgpuRasterizer {
         self.scene = None;
         self.source_tiles = std::cell::RefCell::new(crate::scene::sources::DecodedTiles::new(color.space));
         let transfer=if let Some(source)=source {source.transfer.clone()}else {self.prepare_native_transfer(color.space)?};
-        self.native_edit = Some(NativeEdit::new(self,transfer,source));
-        self.admit_sources();
+        self.native_edit = Some(NativeEdit::new(self,transfer));
+        self.memory.invalidate_limits();
+        self.refresh_memory_limits();
         Ok(())
     }
 

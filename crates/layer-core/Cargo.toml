@@ -25,3 +25,9 @@ flate2.workspace = true
 zip = { version = "=9.0.5", default-features = false, features = ["deflate-flate2"] }
 uuid = { version = "=1.26.1", features = ["v4", "js"] }
 png = "=0.18.1"
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(any(target_os = "linux", target_os = "android", target_os = "windows")), any(not(target_os = "ios"), target_env = "sim")))'.dependencies]
+sysinfo = { version = "=0.37.2", default-features = false, features = ["system", "apple-sandbox"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62.2", features = ["Win32_System_SystemInformation", "Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_System_JobObjects"] }

@@ -688,3 +688,13 @@ workspace-launch-window-size = Начальный размер окна
 workspace-phone-tool-limit = На панели телефона можно разместить до десяти инструментов.
 
 workspace-reset-phone-confirm = Восстановить исходную панель инструментов телефона для этого пространства. Восстановление можно отменить через { $menu } → { $undo }.
+
+diagnostics-budget-limit = Лимит памяти
+diagnostics-budget-physical = Учтённая память
+diagnostics-budget-pinned = Закреплённая память
+diagnostics-budget-debt = Превышение памяти
+diagnostics-budget-pair = RAM { $ram } MiB · GPU { $gpu } MiB
+diagnostics-budget-limit-description = Бюджет RAM процесса и сумма бюджетов устройств. Общая память GPU может пересекаться с RAM; не складывайте их.
+diagnostics-budget-physical-description = Физические байты, учтённые крупными владельцами, а не общее использование ОС или драйвера. Общая память GPU может пересекаться с RAM.
+diagnostics-budget-pinned-description = Байты, которые нельзя освободить, включая текущую работу и резервы импорта. Общая память GPU может пересекаться с RAM.
+diagnostics-budget-debt-description = Закреплённые байты сверх бюджета RAM и сумма превышений бюджета каждого устройства. Существующие рисунки сохраняются.

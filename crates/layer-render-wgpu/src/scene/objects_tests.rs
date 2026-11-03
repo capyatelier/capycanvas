@@ -61,6 +61,54 @@ fn canonical_request(r: &WgpuRasterizer, scene: &mut Scene, doc: &layer_core::Do
 }
 
 #[test]
+fn object_frame_work_uses_the_scene_grant_beyond_cache_retention() {
+    let extent = [4096, 3072];
+    let (doc, owner, _) = document(extent, vec![ImageObject::new(image(extent, [31, 73, 149, 255]))]);
+    let mut r = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
+    r.begin_frame_memory(packet(doc.scene(), extent));
+    let mut scene = Scene::new(&r).unwrap();
+    let request = canonical_request(&r, &mut scene, &doc, owner,
+        ObjectWindow {origin: [0.; 2], side: 1., size: [3000, 2000]});
+    assert!(u64::from(request.window.size[0]) * u64::from(request.window.size[1]) * 16
+        > (crate::memory::OBJECT_CACHE_BYTES / 2) + r.memory.working_limit());
+    scene.object_results.set_workspace(scene.object_workspace(&r, true));
+    assert!(matches!(scene.object_results.resolve_collection(&r, doc.scene(), &request), Ok(None)));
+    let mut cache = std::mem::take(&mut scene.object_results);
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    cache.advance(&mut r, &mut scene, &mut encoder, false).unwrap();
+    assert!(cache.required_bytes() > crate::memory::OBJECT_CACHE_BYTES / 2);
+    r.uploads.finish(&encoder);
+    encoder.submit(&r.queue);
+    r.wait_idle().unwrap();
+}
+
+#[test]
+fn a_downscaled_object_above_the_drained_window_workspace_is_refused() {
+    let mut object = ImageObject::new(image([2048; 2], [255, 0, 0, 255]));
+    object.affine = Affine64([0.5, 0., 0., 0.5, 0., 0.]);
+    let (doc, owner, _) = document([1024; 2], vec![object]);
+    let mut r = crate::memory::memory_tests::renderer(doc.composition().color,
+        layer_core::DeviceMemoryFacts {unified: true, ..Default::default()}).unwrap();
+    let budget = r.factory.memory_budget().clone();
+    budget.set_ram_override(Some(384 << 20));
+    r.memory_demand(packet(doc.scene(), [1024; 2]));
+    r.refresh_memory_limits();
+    let _import = budget.admit_import(budget.import_headroom_bytes()).unwrap();
+    assert_eq!(budget.import_headroom_bytes(), 0);
+    r.begin_frame_memory(packet(doc.scene(), [1024; 2]));
+    assert_eq!(r.memory_limit(layer_core::MemoryOwnerKind::Objects), 0);
+    let mut scene = Scene::new(&r).unwrap();
+    let request = canonical_request(&r, &mut scene, &doc, owner,
+        ObjectWindow {origin: [0.; 2], side: 1., size: [1024; 2]});
+    let workspace = scene.object_workspace(&r, false);
+    scene.exact_object_results.set_workspace(workspace);
+    for _ in 0..2 {
+        assert!(matches!(scene.exact_object_results.resolve_collection(&r, doc.scene(), &request),
+            Err(GpuRasterError::SourceWorkingSetExceeded)));
+    }
+}
+
+#[test]
 fn object_only_native_and_display_composite_ordered_siblings_and_raw_queries() {
     let mut front = ImageObject::new(image([8; 2], [0, 0, 255, 128]));
     front.affine = Affine64([1., 0., 0., 1., 4., 4.]);
@@ -574,7 +622,7 @@ fn cold_object_reads_advance_every_finished_tile_and_the_idle_budget_per_attempt
 }
 
 fn cold_query_renderer(doc: &layer_core::Document) -> WgpuRasterizer {
-    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut r = crate::memory::memory_tests::renderer_for_restore(doc);
     r.document_extent = doc.composition().size;
     r.artwork_frame = Some(Arc::new(crate::artwork::Frame::new(packet(doc.scene(), r.document_extent), Default::default())));
     r
@@ -679,6 +727,7 @@ fn overlapping_sibling_images_keep_bounded_residency_and_composite_order() {
     for blend in [layer_core::BlendSpace::Linear,layer_core::BlendSpace::Perceptual] {
         doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().blend=blend;
         let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();r.document_extent=[256;2];
+        r.prepare_capture_memory(doc.scene(), [256;2]);
         let (target,_) = create_color_target(&r.device,[256;2],"overlapping sibling images");
         let mut scene=Scene::new(&r).unwrap();let start=std::time::Instant::now();let mut peak=0;
         loop {
@@ -878,8 +927,10 @@ fn batch_motion_of_twenty_sibling_images_pauses_queued_canonical_work_and_resume
 fn moving_blurred_object_layer_publishes_every_pose_without_queueing_canonical_work() {
     for distinct in [false, true] {
         let (mut doc, owner, handles, view) = tablet_scene(distinct, 4, true);
-        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-        settle_live_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [4248, 2832]) }, 2000);
+        let mut r = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
+        let frame = FramePacket { view, ..packet(doc.scene(), [4248, 2832]) };
+        crate::memory::memory_tests::legacy_scene_frame(&mut r, frame);
+        settle_live_frames(&mut r, frame, 2000);
         assert_eq!(r.scale_display.as_ref().unwrap().cached_branches(), 5, "presentation copies leave the composition its budget for five branches (distinct={distinct})");
         layer_render::CanvasRenderer::prepare_moving_layer(&mut r, Some(owner));
         let original = doc.scene().object(handles[0]).unwrap().affine;
@@ -887,7 +938,9 @@ fn moving_blurred_object_layer_publishes_every_pose_without_queueing_canonical_w
             let mut affine = original; affine.0[4] += 200. * (f64::from(step) * 0.1).sin(); affine.0[5] += 150. * (f64::from(step) * 0.1).cos();
             doc.apply(doc.set_image_object_affine_edit(handles[0], affine).unwrap()).unwrap();
             let (revision, composited) = (r.composite_revision, r.metrics.composited_pixels);
-            r.submit(FramePacket { view, composite_all: true, time_seconds: f32::from(step as u8) / 60., ..packet(doc.scene(), [4248, 2832]) }).unwrap();
+            let frame = FramePacket { view, composite_all: true, time_seconds: f32::from(step as u8) / 60., ..packet(doc.scene(), [4248, 2832]) };
+            crate::memory::memory_tests::legacy_scene_frame(&mut r, frame);
+            r.submit(frame).unwrap();
             r.wait_idle().unwrap();
             assert!(r.composite_revision != revision && !r.object_deferred, "pose {step} publishes a fresh preview (distinct={distinct})");
             let full = r.scale_display.as_ref().unwrap().plan.size.into_iter().map(u64::from).product::<u64>();
@@ -895,7 +948,9 @@ fn moving_blurred_object_layer_publishes_every_pose_without_queueing_canonical_w
             assert!(!r.scene.as_ref().unwrap().object_results.pending(), "a moving layer never starts canonical work for a superseded pose");
         }
         layer_render::CanvasRenderer::prepare_moving_layer(&mut r, None);
-        settle_live_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [4248, 2832]) }, 2000);
+        let frame = FramePacket { view, ..packet(doc.scene(), [4248, 2832]) };
+        crate::memory::memory_tests::legacy_scene_frame(&mut r, frame);
+        settle_live_frames(&mut r, frame, 2000);
         let display = r.scale_display.as_ref().unwrap();
         assert!(display.plan.level > 0);
         let bytes = r.scene.as_ref().unwrap().object_results.bytes();
@@ -1041,9 +1096,10 @@ fn overlapping_canonical_windows_sample_only_their_uncovered_content() {
 fn eight_distinct_sources_settle_in_few_frames_with_a_tablet_sized_source_cache() {
     let (doc, _, _, mut view) = tablet_scene(true, 8, false);
     view.document_to_surface = [0.1597, 0., 0., 0.1597, 670.09, 445.26];
-    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    r.source_tiles.get_mut().admit(400 * 4 * (1 << 20));
-    let frames = settle_live_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [4248, 2832]) }, 4000);
+    let mut r = crate::memory::memory_tests::renderer_for_restore(&doc);
+    let frame = FramePacket { view, ..packet(doc.scene(), [4248, 2832]) };
+    crate::memory::memory_tests::declare_source_budget(&mut r, frame, 400, 64 << 20, 380 << 20);
+    let frames = settle_live_frames(&mut r, frame, 4000);
     assert!(frames < 400, "decoding stays ahead of eight sources' mip and canonical work: {frames} frames");
 }
 
@@ -1059,8 +1115,10 @@ fn photo_navigation_presents_current_camera_within_two_submissions() {
     }
     fn preview(r: &mut WgpuRasterizer, presenter: &mut crate::present::ViewportPresenter, target: &(wgpu::Texture, wgpu::TextureView), doc: &layer_core::Document, view: layer_render::ViewState, seed: u32) {
         for _ in 0..2 {
-            crate::test_support::submit_ready(r, FramePacket { view, composite_all: false,
-                blend_space: layer_core::BlendSpace::Linear, ..packet(doc.scene(), [1536; 2]) }).unwrap();
+            let frame = FramePacket { view, composite_all: false,
+                blend_space: layer_core::BlendSpace::Linear, ..packet(doc.scene(), [1536; 2]) };
+            crate::memory::memory_tests::declare_source_budget(r, frame, 64, 16 << 20, 44 << 20);
+            crate::test_support::submit_ready(r, frame).unwrap();
             r.wait_idle().unwrap();
             if !r.has_presentable_frame() || r.display_backup.is_some()
                 || r.evaluated_object_revision() != Some(doc.scene().revision())
@@ -1089,15 +1147,16 @@ fn photo_navigation_presents_current_camera_within_two_submissions() {
     let objects = (0..28).map(|seed| ImageObject::new(AuthoredImage::new(
         rgba8_source([1536; 2], |x, y| color(x, y, seed))))).collect();
     let (mut doc, owner, _) = document([1536; 2], objects);
-    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut r = crate::memory::memory_tests::renderer_for_restore(&doc);
     assert_ne!(r.adapter.get_info().device_type, wgpu::DeviceType::Cpu);
-    r.source_tiles.get_mut().admit(0);
-    assert_eq!(r.source_tiles.borrow().admitted_bytes()[0], 64 * (1 << 20));
     let fit = layer_render::ViewState { width_px: 384, height_px: 384,
         document_to_surface: [0.25, 0., 0., 0.25, 0., 0.] };
     layer_render::CanvasRenderer::prepare_moving_layer(&mut r, Some(owner));
-    settle_live_frames(&mut r, FramePacket { view: fit, blend_space: layer_core::BlendSpace::Linear,
-        ..packet(doc.scene(), [1536; 2]) }, 4000);
+    let frame = FramePacket { view: fit, blend_space: layer_core::BlendSpace::Linear,
+        ..packet(doc.scene(), [1536; 2]) };
+    crate::memory::memory_tests::declare_source_budget(&mut r, frame, 64, 16 << 20, 44 << 20);
+    assert_eq!(r.source_tiles.borrow().admitted_bytes()[0], 64 * (1 << 20));
+    settle_live_frames(&mut r, frame, 4000);
     assert_eq!(r.moving_images.completed_images, 28);
     layer_render::CanvasRenderer::prepare_moving_layer(&mut r, None);
     let mut presenter = crate::test_support::float_presenter(&r);
@@ -1121,4 +1180,35 @@ fn photo_navigation_presents_current_camera_within_two_submissions() {
     crate::test_support::submit_ready(&mut r, FramePacket { view: actual, composite_all: false,
         blend_space: layer_core::BlendSpace::Linear, ..packet(doc.scene(), [1536; 2]) }).unwrap();
     assert_eq!(r.canvas_preview_revision(), revision.wrapping_add(1));
+}
+
+#[test]
+fn a_placed_visible_object_settles_before_thumbnail_preparation() {
+    use layer_engine::{CanvasEngine, ViewTransform, input_queue};
+    let mut doc = layer_core::Document::new(PortableId::random(), 4096, 2048,
+        layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+    doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().blend = layer_core::BlendSpace::Linear;
+    for visible in [true, false] {
+        let source = layer_core::color::source::rgba8_source([1024, 512], |x, _| if x < 512 { [230, 20, 20, 255] } else { [20, 20, 230, 255] });
+        let mut object = ImageObject::new(source.into());
+        object.affine = Affine64([2., 0., 0., 2., 1024., 512.]);
+        let (layer, edit) = doc.create_object_layer_edit("Photo", object, None, 0).unwrap();
+        doc.apply(edit).unwrap();
+        doc.artwork.occurrences.get_mut(layer).unwrap().visible = visible;
+    }
+    let renderer = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let (_input, consumer) = input_queue(64);
+    let view = layer_render::ViewState { width_px: 1024, height_px: 768, document_to_surface: layer_core::Affine::IDENTITY.0 };
+    let mut engine = CanvasEngine::new(renderer, doc, consumer, view, ViewTransform::IDENTITY).unwrap();
+    engine.render_frame_at(0).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut clock = 1;
+    loop {
+        engine.render_frame_at(clock).unwrap();
+        engine.backend_mut().wait_idle().unwrap();
+        let r = engine.backend();
+        if !r.has_pending_work() { break; }
+        assert!(std::time::Instant::now() < deadline, "the placed visible layer settles");
+        clock += 8_000_000;
+    }
 }

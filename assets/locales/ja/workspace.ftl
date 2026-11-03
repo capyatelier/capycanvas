@@ -708,3 +708,13 @@ workspace-launch-window-size = 起動時のウィンドウサイズ
 workspace-phone-tool-limit = スマートフォンのツールバーには、最大10個のツールを配置できます。
 
 workspace-reset-phone-confirm = このワークスペースのスマートフォン用ツールバーを初期状態に戻します。「{ $menu }」→「{ $undo }」で取り消せます。
+
+diagnostics-budget-limit = メモリ上限
+diagnostics-budget-physical = 追跡メモリ
+diagnostics-budget-pinned = 保持メモリ
+diagnostics-budget-debt = メモリ超過
+diagnostics-budget-pair = RAM { $ram } MiB · GPU { $gpu } MiB
+diagnostics-budget-limit-description = プロセスのRAM割り当てと各デバイスの割り当ての合計。共有GPUメモリはRAMと重複する場合があるため、加算しないでください。
+diagnostics-budget-physical-description = 大きな所有単位が報告した物理バイト数です。OSやドライバーの総使用量ではありません。共有GPUメモリはRAMと重複する場合があります。
+diagnostics-budget-pinned-description = 処理中の作業や読み込み予約など、解放できないバイト数です。共有GPUメモリはRAMと重複する場合があります。
+diagnostics-budget-debt-description = RAM割り当てを超える保持バイト数と、各デバイスの割り当てを超える量の合計です。既存の描画は保持されます。

@@ -115,7 +115,7 @@ fn native_clipboard_copy_paste_round_trips() {
     let formats = clipboard_formats(&w);
     assert!(formats.iter().any(|m| m == "image/png") && formats.iter().any(|m| m == CLIP_MIME), "{formats:?}");
     let png = external_png();
-    let photo = layer_color::photo::read_photo(std::io::Cursor::new(&png), Default::default()).unwrap();
+    let photo = layer_color::photo::read_photo(std::io::Cursor::new(&png), layer_ui::photo_decode_limits()).unwrap();
     assert_eq!(photo.extent, clip.source.extent, "another application reads the copy as a PNG");
     w.window.present();
     pump(300);

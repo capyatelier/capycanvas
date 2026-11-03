@@ -230,7 +230,8 @@ pub unsafe extern "C" fn capy_apple_project_task(
                 .ok_or("Wait for the canvas to finish starting")?.device().clone();
             Payload::Placed {
                 images: layer_ui::ImageImportBatch::new(session.state().settings.photo_open,
-                    session.engine().document().composition().color.space, Default::default()),
+                    session.engine().document().composition().color.space, layer_color::photo::DecodeLimits::from_memory_budget(
+                        layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes()))),
                 context, request, device,
                 color: session.engine().document().composition().color,
                 mode: match session.document_request(request)? { DocumentRequest::Paste { mode } => Some(*mode), _ => None },
@@ -425,7 +426,7 @@ pub unsafe extern "C" fn capy_project_finish_images(task: u64) -> i32 {
         let Payload::Placed { images, environment, clip, color, mode, .. } = payload else { return Err("Not an image import".into()); };
         let Some(environment) = environment.take() else {
             if *mode != Some(layer_ui::PasteMode::Into) && let Some(clip) = clip {
-                clip.convert_layers(*color, layer_color::photo::PhotoMemoryBudget::current().encode_bytes, || task.control.is_cancelled())?;
+                clip.convert_layers(*color, layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes()).encode_bytes, || task.control.is_cancelled())?;
             }
             return Ok(());
         };

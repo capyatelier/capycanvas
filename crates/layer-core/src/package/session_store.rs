@@ -497,6 +497,7 @@ impl SessionStore {
             match self.load_generation(&generation, limits, cancelled) {
                 Ok(session) => { self.loaded = Some(generation); return Ok(Some(session)); }
                 Err(super::session::OpenFailure::Unsupported(message)) => return Err(message),
+                Err(super::session::OpenFailure::MemoryBudgetExceeded) => return Err(crate::MEMORY_BUDGET_EXCEEDED.into()),
                 Err(error) => { if failure.is_none() { failure = Some(error.message()); } }
             }
         }
@@ -1806,12 +1807,20 @@ mod tests {
             let mut value = base.clone();
             match corruption {
                 0 => value["resources"][0]["location"]["offset"] = "1".into(),
-                1 => value["resources"][0]["bytes"] = "18446744073709551615".into(),
+                1 => {
+                    value["resources"][0]["bytes"] = u64::MAX.to_string().into();
+                    let mut next=value["resources"][0].clone();
+                    next["id"]=PortableId::random().to_string().into();
+                    next["location"]["offset"]=u64::MAX.to_string().into();
+                    next["bytes"]="1".into();
+                    value["resources"].as_array_mut().unwrap().push(next);
+                },
                 2 => value["resources"][0]["id"] = "../elsewhere".into(),
                 3 => { let record = value["resources"][0].clone(); value["resources"].as_array_mut().unwrap().push(record); },
                 _ => value["resources"][0]["crc32"] = "FFFFFFFF".into(),
             }
-            assert!(resource_index(&serde_json::to_vec(&value).unwrap(), ProjectLimits::default()).is_err());
+            let error=resource_index(&serde_json::to_vec(&value).unwrap(), ProjectLimits::default()).err().expect("Malformed recovery range").message();
+            if corruption==1 {assert_eq!(error,"Recovery resource pack overflow");}
         }
     }
 

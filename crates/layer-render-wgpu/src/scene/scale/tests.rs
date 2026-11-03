@@ -6,6 +6,18 @@ use layer_core::{DefaultBrushPreset, Document, CoverageSnapshot};
 use layer_core::authored::*;
 use super::Image;
 
+fn working_scene_frame(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
+    r.begin_frame_memory(frame);
+    r.publish_memory(true);
+    let level=display_mips::view_level(frame.view.document_to_surface,4).unwrap();
+    let display=view_plan(frame,level,Evaluation::Display).map_or(0,|plan|
+        allocation_bound(r,plan,frame,None,false,None,Evaluation::Display,None).into_iter().fold(0,u64::saturating_add));
+    let native=view_plan(frame,level,Evaluation::Native).map_or(0,|plan|native_bytes(r,frame,plan));
+    let page=u64::from(PAGE_SIZE).pow(2)*16;
+    let bytes=display.max(native).max(r.memory.part_pins()[0]).saturating_add(4*page).next_multiple_of(page);
+    crate::memory::memory_tests::scene_frame_with_budget(r,frame,bytes);
+}
+
 #[test]
 fn identity_source_window_clips_signed_bounds_without_interpolation_padding() {
     let extent = [2048; 2];
@@ -262,8 +274,8 @@ fn blend_space_changes_refresh_branches_and_source_representations() {
     occurrence_mut(&mut doc,0).blend = layer_core::LayerBlend::SoftLight;
     let color = layer_core::color::RgbColor::from_linear(doc.composition().color.space, [0.17, 0.39, 0.81, 0.7]).unwrap();
     add_fill(&mut doc, color);
-    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    let mut fresh = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut r = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
+    let mut fresh = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
     let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
     for (step, (space, offset, level)) in [
@@ -281,6 +293,8 @@ fn blend_space_changes_refresh_branches_and_source_representations() {
         frame.composite_all = matches!(step, 3 | 4);
         let scale = 1. / (1 << level) as f32;
         frame.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
+        crate::memory::memory_tests::legacy_scene_frame(&mut r, frame);
+        crate::memory::memory_tests::legacy_scene_frame(&mut fresh, FramePacket {reset_layers:true,..frame});
         submit_published(&mut r, frame);
         submit_published(&mut fresh, FramePacket { reset_layers: true, ..frame });
         submit_published(&mut exact, FramePacket { composite_all: true, ..frame });
@@ -341,6 +355,7 @@ fn native_graph_admits_a_full_4k_view_with_bounded_scratch() {
         let mut frame = packet(doc.scene(), doc.composition().size);
         frame.view.width_px = doc.composition().size[0];
         frame.view.height_px = doc.composition().size[1];
+        r.begin_frame_memory(frame);
         assert_eq!(request(&r, frame).ok().map(|q| q.plan.level), Some(0));
         crate::test_support::submit_ready(&mut r, frame).unwrap();
         let cache = r.scale_display.as_ref().unwrap();
@@ -362,6 +377,7 @@ fn reduced_photo_stacks_use_bounded_working_tiles() {
     frame.view.width_px = 1500;
     frame.view.height_px = 1000;
     frame.view.document_to_surface = [0.1578, 0., 0., 0.1578, 0., 0.];
+    r.begin_frame_memory(frame);
     assert_eq!(request(&r, frame).ok().map(|q| q.plan.level), Some(2));
     submit_published(&mut r, frame);
     let cache = r.scale_display.as_ref().unwrap();
@@ -378,13 +394,14 @@ fn partial_reduced_views_admit_the_visible_window() {
     let mut doc = document_at([65, 33]);
     composition_mut(&mut doc).size[0] = 9504;
     composition_mut(&mut doc).size[1] = 6336;
-    let r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     for detail in [1, 2, 4] {
         let mut frame = packet(doc.scene(), doc.composition().size);
         frame.view.width_px = 960;
         frame.view.height_px = 640;
         let scale = 1. / (1 << detail) as f32;
         frame.view.document_to_surface = [scale, 0., 0., scale, -1600. * scale, -900. * scale];
+        r.begin_frame_memory(frame);
         assert_eq!(request(&r, frame).ok().map(|q| q.plan.level), Some(detail));
         let plan = view_plan(frame, detail, Evaluation::Display).unwrap();
         assert!(plan.bounds.area() < PixelRect::full(plan.extent).area());
@@ -403,6 +420,7 @@ fn rotated_reduced_stacks_admit_bounded_source_working_storage() {
     frame.view.document_to_surface = [scale * c, scale * s, -scale * s, scale * c,
         800. - scale * (c * doc.composition().size[0] as f32 - s * doc.composition().size[1] as f32) * 0.5,
         500. - scale * (s * doc.composition().size[0] as f32 + c * doc.composition().size[1] as f32) * 0.5];
+    r.begin_frame_memory(frame);
     assert_eq!(request(&r, frame).ok().map(|q| q.plan.level), Some(1));
     crate::test_support::submit_ready(&mut r, frame).unwrap();
     let cache = r.scale_display.as_ref().unwrap();
@@ -428,8 +446,8 @@ fn streamed_sources_match_cached_pixels_through_masks_paint_and_admission_change
         layer_core::Point { x: 280., y: 210. }, layer_core::Point { x: 1600., y: 260. },
         layer_core::Point { x: 1700., y: 1200. }, layer_core::Point { x: 330., y: 1100. },
     ]).unwrap()));
-    let mut streamed = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    let mut cached = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut streamed = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
+    let mut cached = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
     for state in 0..6 {
         for i in 0..doc.scene().order().len() { occurrence_mut(&mut doc,i).visible = state != 3 || i < 2; }
         occurrence_mut(&mut doc,0).mask.as_mut().unwrap().inverted = state == 2;
@@ -444,6 +462,7 @@ fn streamed_sources_match_cached_pixels_through_masks_paint_and_admission_change
             frame.dabs = std::slice::from_ref(&dab);
             frame.dab_batches = std::slice::from_ref(&batch);
         }
+        crate::memory::memory_tests::legacy_scene_frame(&mut streamed, frame);
         submit_published(&mut streamed, frame);
         let full = streamed.scale_display.as_ref().unwrap();
         assert_eq!(full.streamed_sources, state != 3, "state {state}");
@@ -452,6 +471,7 @@ fn streamed_sources_match_cached_pixels_through_masks_paint_and_admission_change
         frame.view.width_px = 192; frame.view.height_px = 128;
         let [x, y] = if state == 2 { [-910., -660.] } else { [-160., -110.] };
         frame.view.document_to_surface = [0.5, 0., 0., 0.5, x, y];
+        crate::memory::memory_tests::legacy_scene_frame(&mut cached, frame);
         submit_published(&mut cached, frame);
         let window = cached.scale_display.as_ref().unwrap();
         assert!(!window.streamed_sources, "cached oracle state {state}");
@@ -526,6 +546,7 @@ fn source_window_growth_remains_admitted_during_rotated_pans() {
         frame.view.width_px = 1600; frame.view.height_px = 1000;
         frame.view.document_to_surface = [0.5 * c, 0.5 * s, -0.5 * s, 0.5 * c,
             800. - 0.5 * (c * x - s * y), 500. - 0.5 * (s * x + c * y)];
+        r.begin_frame_memory(frame);
         assert_eq!(request(&r, frame).ok().map(|q| q.plan.level), Some(1), "step {step}");
         crate::test_support::submit_ready(&mut r, frame).unwrap();
         assert!(r.scale_display.is_some());
@@ -546,13 +567,14 @@ fn retained_windows_stream_sources_when_source_requirements_grow() {
         doc.artwork.occurrences.get_mut(layer).unwrap().visible = false;
         let position=doc.scene().order().len(); insert_occurrence(&mut doc, layer, position);
     }
-    let r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut r = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
     let mut full = packet(doc.scene(), doc.composition().size);
     full.view.width_px = doc.composition().size[0];
     full.view.height_px = doc.composition().size[1];
     full.view.document_to_surface = [0.5, 0., 0., 0.5, 0., 0.];
     let previous = view_plan(full, 1, Evaluation::Display).unwrap();
     assert_eq!(previous.bounds, PixelRect::full(previous.extent));
+    crate::memory::memory_tests::legacy_scene_frame(&mut r, full);
     assert_eq!(request(&r, full).ok().map(|q| q.plan.level), Some(1));
     let old = Cache::new(&r, Request { plan: previous, evaluation: Evaluation::Display }, doc.scene().order().len());
     for i in 0..doc.scene().order().len() { occurrence_mut(&mut doc,i).visible = true; }
@@ -560,6 +582,7 @@ fn retained_windows_stream_sources_when_source_requirements_grow() {
     frame.view.width_px = 192;
     frame.view.height_px = 128;
     frame.view.document_to_surface = [0.5, 0., 0., 0.5, 0., 0.];
+    crate::memory::memory_tests::legacy_scene_frame(&mut r, frame);
     assert_eq!(request(&r, frame).ok().map(|q| q.plan.level), Some(1));
     assert!(allocation(&r, previous, frame, None).into_iter().sum::<u64>() > crate::scene::scale::CACHE_BYTES);
     let (selected, _) = Cache::select(Some(old), &r, frame, request(&r, frame).unwrap(), false);
@@ -574,11 +597,10 @@ fn view_windows_reuse_overlap_and_preserve_global_sampling() {
     let extent = doc.composition().size;
     for detail in [0, 1, 2, 4] {
         let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-        let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let mut exact = crate::memory::memory_tests::renderer(doc.composition().color,
+            layer_core::DeviceMemoryFacts { budget_bytes: Some(256 << 20), ..Default::default() }).unwrap();
         let mut whole = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         exact.test.reference = true;
-
-        exact.set_complete_display_allowance(256 << 20);
         let mut frame = packet(doc.scene(), extent);
         submit_published(&mut exact, frame);
         let oracle = pixels(&exact, crate::test_support::document_texture(&exact));
@@ -717,7 +739,7 @@ fn source_windows_keep_overlap_and_sample_global_coordinates() {
     let mut doc = document_at(source_extent);
     let extent = [513, 257];
     composition_mut(&mut doc).size[0] = extent[0]; composition_mut(&mut doc).size[1] = extent[1];
-    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut r = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
     let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
     r.prepare_moving_layer(Some(doc.scene().order()[0]));
@@ -727,6 +749,7 @@ fn source_windows_keep_overlap_and_sample_global_coordinates() {
         occurrence_mut(&mut doc,0).offset = offset;
         let mut frame = packet(doc.scene(), extent);
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+        crate::memory::memory_tests::legacy_scene_frame(&mut r, frame);
         submit_published(&mut r, frame); submit_published(&mut exact, frame);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while r.object_deferred || r.moving_decode.as_ref().is_some_and(|(_, queue)| queue.pending()) {
@@ -2066,15 +2089,15 @@ fn fitted_projective_preview_reuses_coarse_pixels_and_bounds_fine_source_ownersh
     let mut doc=layer_core::Document::new(layer_core::PortableId::random(),extent[0],extent[1],layer_core::DocumentNames {paint:"bounded projective source".into(),paper:"Paper".into()});
     crate::layer_tests::placement::set_source(&mut doc,rgba8_source(extent,|_,_|[127,63,191,255]));
     let id=crate::layer_tests::placement::target(&doc);
-    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut r=crate::memory::memory_tests::legacy_scene_renderer(Default::default());
     let mut frame=packet(doc.scene(),extent);
     frame.view.width_px=1920;frame.view.height_px=1080;
     frame.view.document_to_surface=[0.27,0.,0.,0.27,0.,0.];
-    crate::test_support::submit_ready(&mut r, frame).unwrap();r.wait_idle().unwrap();
+    crate::memory::memory_tests::legacy_scene_frame(&mut r, frame);crate::test_support::submit_ready(&mut r, frame).unwrap();r.wait_idle().unwrap();
     frame.composite_all=false;
     let mut preview=layer_render::TransformPreview {transaction:1,moving:true,target:id,selection:None,
         transform:layer_core::ImageTransform::affine(layer_core::Affine([0.9,0.,0.,0.9,0.,0.]))};
-    r.set_transform_preview(Some(&preview)).unwrap();frame.time_seconds+=1./60.;crate::test_support::submit_ready(&mut r, frame).unwrap();r.wait_idle().unwrap();
+    r.set_transform_preview(Some(&preview)).unwrap();frame.time_seconds+=1./60.;crate::memory::memory_tests::legacy_scene_frame(&mut r, frame);crate::test_support::submit_ready(&mut r, frame).unwrap();r.wait_idle().unwrap();
     preview.transform.placement=layer_core::LayerPlacement::from_projective(layer_core::Projective::rect_to_quad(
         layer_core::Rect {min:Default::default(),max:layer_core::Point {x:6000.,y:4000.}},
         [[900.,150.],[5140.,100.],[5900.,3920.],[150.,3940.]].map(|[x,y]|layer_core::Point {x,y})).unwrap());
@@ -2086,7 +2109,7 @@ fn fitted_projective_preview_reuses_coarse_pixels_and_bounds_fine_source_ownersh
     };
     let mut preparation_trace=Vec::new();
     for _ in 0..65 {
-        r.set_transform_preview(Some(&preview)).unwrap();frame.time_seconds+=1./60.;crate::test_support::submit_ready(&mut r, frame).unwrap();
+        r.set_transform_preview(Some(&preview)).unwrap();frame.time_seconds+=1./60.;crate::memory::memory_tests::legacy_scene_frame(&mut r, frame);crate::test_support::submit_ready(&mut r, frame).unwrap();
         assert!(bounded_owned(&r)<=CACHE_BYTES,"pending composition/fine owners stay within608MiB: {}",bounded_owned(&r));
         r.wait_idle().unwrap();
         preparation_trace.push((r.scale_display.as_ref().and_then(|cache|cache.evaluation.fine_capacity()),r.object_deferred,
@@ -2097,7 +2120,7 @@ fn fitted_projective_preview_reuses_coarse_pixels_and_bounds_fine_source_ownersh
     for _ in 0..20 {
         preview.transform.placement=preview.transform.placement.post(layer_core::Projective::from_affine(layer_core::Affine([1.,0.,0.,1.,1.25,0.5]))).unwrap();
         let previous=r.composite_revision;
-        r.set_transform_preview(Some(&preview)).unwrap();frame.time_seconds+=1./60.;crate::test_support::submit_ready(&mut r, frame).unwrap();
+        r.set_transform_preview(Some(&preview)).unwrap();frame.time_seconds+=1./60.;crate::memory::memory_tests::legacy_scene_frame(&mut r, frame);crate::test_support::submit_ready(&mut r, frame).unwrap();
         assert!(bounded_owned(&r)<=CACHE_BYTES,"pending composition/fine owners stay within608MiB: {}",bounded_owned(&r));
         r.wait_idle().unwrap();
         assert!(!r.object_deferred && r.composite_revision!=previous,"each moving pose must publish fresh pixels instead of submitting its old display backup");
@@ -2114,17 +2137,17 @@ fn fitted_projective_preview_reuses_coarse_pixels_and_bounds_fine_source_ownersh
     preview.transform.placement=layer_core::LayerPlacement::from_projective(layer_core::Projective::rect_to_quad(
         layer_core::Rect {min:Default::default(),max:layer_core::Point {x:6000.,y:4000.}},
         [[2900.,100.],[3100.,100.],[5990.,3990.],[10.,3990.]].map(|[x,y]|layer_core::Point {x,y})).unwrap());
-    r.set_transform_preview(Some(&preview)).unwrap();frame.time_seconds+=1./60.;crate::test_support::submit_ready(&mut r, frame).unwrap();
+    r.set_transform_preview(Some(&preview)).unwrap();frame.time_seconds+=1./60.;crate::memory::memory_tests::legacy_scene_frame(&mut r, frame);crate::test_support::submit_ready(&mut r, frame).unwrap();
     assert!(r.object_deferred && r.transforms.as_ref().unwrap().fine_progress_bytes()>0,"deep projective planning retains a partial private output");
     assert_eq!(r.composite_revision,accepted,"partial output must not replace the accepted display");
     assert!(bounded_owned(&r)<=CACHE_BYTES);
-    r.set_transform_preview(None).unwrap();frame.time_seconds+=1./60.;crate::test_support::submit_ready(&mut r, frame).unwrap();r.wait_idle().unwrap();
+    r.set_transform_preview(None).unwrap();frame.time_seconds+=1./60.;crate::memory::memory_tests::legacy_scene_frame(&mut r, frame);crate::test_support::submit_ready(&mut r, frame).unwrap();r.wait_idle().unwrap();
     assert!(!r.transforms.as_ref().unwrap().has_preview());
     assert_eq!(r.transforms.as_ref().unwrap().fine_progress_bytes(),0);
     assert_eq!(r.retired_display_bytes.load(std::sync::atomic::Ordering::Acquire),0);
     preview.transaction+=1;
     for _ in 0..65 {
-        r.set_transform_preview(Some(&preview)).unwrap();frame.time_seconds+=1./60.;crate::test_support::submit_ready(&mut r, frame).unwrap();
+        r.set_transform_preview(Some(&preview)).unwrap();frame.time_seconds+=1./60.;crate::memory::memory_tests::legacy_scene_frame(&mut r, frame);crate::test_support::submit_ready(&mut r, frame).unwrap();
         assert!(bounded_owned(&r)<=CACHE_BYTES);r.wait_idle().unwrap();
         if !r.has_pending_work() {break;}
     }

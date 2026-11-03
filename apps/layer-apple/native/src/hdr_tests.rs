@@ -205,7 +205,7 @@ fn apple_hdr_edit_proof_export_and_analysis_reuse() {
             );
             output.rewind().unwrap();
             let image =
-                layer_color::photo::read_photo(std::io::BufReader::new(output), Default::default())
+                layer_color::photo::read_photo(std::io::BufReader::new(output), photo_limits())
                     .unwrap();
             assert_eq!(
                 image.interpretation.depth,

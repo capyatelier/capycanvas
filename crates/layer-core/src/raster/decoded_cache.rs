@@ -2,7 +2,7 @@
 //! authority; cache keys never keep document/history backing alive.
 use super::TileBlob;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     sync::{Arc, Mutex, Weak},
 };
 
@@ -11,6 +11,8 @@ pub struct DecodedTileCacheStats {
     /// Sample allocation capacities; map/Arc metadata and decode scratch are
     /// separate. A caller can briefly retain one evicted tile during upload.
     pub resident_bytes: usize,
+    pub physical_bytes: usize,
+    pub pinned_bytes: usize,
     pub peak_bytes: usize,
     pub limit_bytes: usize,
     pub entries: usize,
@@ -27,6 +29,8 @@ struct Entry {
 #[derive(Default)]
 struct State {
     entries: HashMap<u64, Entry>,
+    retired: VecDeque<(Weak<Vec<u8>>, usize)>,
+    retired_bytes: usize,
     clock: u64,
     stats: DecodedTileCacheStats,
 }
@@ -46,10 +50,33 @@ impl DecodedTileCache {
         }
     }
 
+    pub fn set_limit(&self, limit_bytes: usize) { self.state.lock().unwrap().stats.limit_bytes = limit_bytes; }
+    pub fn trim_unused(&self, max_entries: usize) -> usize {
+        let mut state = self.state.lock().unwrap();
+        let mut released = Vec::new();
+        state.reap(max_entries);
+        let held = state.retired_bytes;
+        for _ in 0..max_entries {
+            if state.stats.resident_bytes.saturating_add(held) <= state.stats.limit_bytes { break; }
+            let Some(key) = state.entries.iter().filter(|(_,entry)|Arc::strong_count(&entry.samples)==1)
+                .min_by_key(|(_,entry)|(entry.tile.strong_count()!=0,entry.used)).map(|(&key,_)|key) else { break; };
+            let entry = state.remove(key);
+            state.track(&entry.samples);
+            released.push(entry.samples);
+        }
+        drop(state);
+        released.into_iter().map(|samples| {
+            let bytes=samples.capacity();let weak=Arc::downgrade(&samples);drop(samples);
+            if weak.strong_count()==0 {bytes}else {0}
+        }).sum()
+    }
     pub fn stats(&self) -> DecodedTileCacheStats {
-        let state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
+        state.reap(64);
+        let held = state.retired_bytes;
         DecodedTileCacheStats {
-            entries: state.entries.len(),
+            entries: state.entries.len(), physical_bytes: state.stats.resident_bytes.saturating_add(held),
+            pinned_bytes: held.saturating_add(state.entries.values().filter(|entry|Arc::strong_count(&entry.samples)>1).map(|entry|entry.samples.capacity()).sum::<usize>()),
             ..state.stats
         }
     }
@@ -84,7 +111,9 @@ impl DecodedTileCache {
         if let Some(entry) = state.entries.get(&key) {
             return Ok(entry.samples.clone());
         }
+        state.reap(1);
         if bytes > state.stats.limit_bytes {
+            state.track(&samples);
             return Ok(samples);
         }
         while state.stats.resident_bytes > state.stats.limit_bytes - bytes {
@@ -96,9 +125,8 @@ impl DecodedTileCache {
                 .min_by_key(|(_, entry)| (entry.tile.strong_count() != 0, entry.used))
                 .unwrap()
                 .0;
-            let entry = state.entries.remove(&oldest).unwrap();
-            state.stats.resident_bytes -= entry.samples.capacity();
-            state.stats.evictions += 1;
+            let entry = state.remove(oldest);
+            state.track(&entry.samples);
         }
         state.clock = state.clock.saturating_add(1);
         let used = state.clock;
@@ -115,6 +143,22 @@ impl DecodedTileCache {
         Ok(samples)
     }
 }
+impl State {
+    fn track(&mut self, samples:&Arc<Vec<u8>>) {
+        self.retired_bytes+=samples.capacity();self.retired.push_back((Arc::downgrade(samples),samples.capacity()));
+    }
+    fn reap(&mut self, max_entries:usize) {
+        for _ in 0..max_entries.min(self.retired.len()) {
+            let (samples,bytes)=self.retired.pop_front().unwrap();
+            if samples.strong_count()==0 {self.retired_bytes-=bytes;} else {self.retired.push_back((samples,bytes));}
+        }
+    }
+    fn remove(&mut self, key:u64) -> Entry {
+        let entry=self.entries.remove(&key).unwrap();
+        self.stats.resident_bytes-=entry.samples.capacity();self.stats.evictions+=1;entry
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -147,6 +191,52 @@ mod tests {
         assert_eq!(cache.stats().resident_bytes, 2 * 65536);
         assert_eq!(cache.stats().peak_bytes, 2 * 65536);
         assert_eq!(cache.stats().entries, 2);
+    }
+
+    #[test]
+    fn shrinking_grants_trims_unused_lru_in_bounded_steps_and_preserves_readers() {
+        let cache=DecodedTileCache::new(3*65536);
+        let a=tile(11);let b=tile(22);let c=tile(33);
+        let held=cache.decode(&a).unwrap();cache.decode(&b).unwrap();cache.decode(&c).unwrap();
+        cache.set_limit(65536);
+        assert_eq!(cache.stats().resident_bytes,3*65536);
+        assert_eq!(cache.trim_unused(0),0);
+        assert_eq!(cache.trim_unused(1),65536);
+        assert!(!cache.state.lock().unwrap().entries.contains_key(&b.owner_identity()));
+        assert_eq!(cache.stats().resident_bytes,2*65536);
+        assert_eq!(cache.trim_unused(1),65536);
+        assert_eq!(cache.stats().physical_bytes,65536);assert_eq!(cache.stats().pinned_bytes,65536);
+        assert!(held.iter().all(|&byte|byte==11));
+        cache.set_limit(0);assert_eq!(cache.trim_unused(8),0);
+        drop(held);assert_eq!(cache.trim_unused(1),65536);assert_eq!(cache.stats().physical_bytes,0);
+        cache.set_limit(65536);assert!(cache.decode(&a).unwrap().iter().all(|&byte|byte==11));
+        assert_eq!(cache.stats().resident_bytes,65536);
+    }
+    #[test]
+    fn removed_and_uncached_samples_remain_physically_charged_until_readers_drop() {
+        let cache=DecodedTileCache::new(65536);
+        let a=tile(41);let b=tile(42);let held=cache.decode(&a).unwrap();cache.decode(&b).unwrap();
+        assert_eq!(cache.stats().resident_bytes,65536);assert_eq!(cache.stats().physical_bytes,2*65536);
+        assert_eq!(cache.stats().pinned_bytes,65536);
+        assert_eq!(cache.trim_unused(1),65536);assert!(held.iter().all(|&byte|byte==41));
+        assert_eq!(cache.stats().physical_bytes,65536);
+        drop(held);assert_eq!(cache.stats().physical_bytes,0);
+        cache.set_limit(0);let held=cache.decode(&b).unwrap();let clone=held.clone();
+        assert_eq!(cache.stats().resident_bytes,0);assert_eq!(cache.stats().physical_bytes,65536);
+        assert_eq!(cache.stats().pinned_bytes,65536);drop(held);assert_eq!(cache.stats().physical_bytes,65536);
+        drop(clone);assert_eq!(cache.stats().physical_bytes,0);assert_eq!(cache.stats().pinned_bytes,0);
+    }
+
+    #[test]
+    fn retired_weak_records_are_reaped_in_bounded_steps() {
+        let cache=DecodedTileCache::new(0);let source=tile(81);
+        let readers:Vec<_>=(0..8).map(|_|cache.decode(&source).unwrap()).collect();
+        assert_eq!(cache.state.lock().unwrap().retired.len(),8);drop(readers);
+        assert_eq!(cache.trim_unused(0),0);assert_eq!(cache.state.lock().unwrap().retired.len(),8);
+        cache.trim_unused(2);assert_eq!(cache.state.lock().unwrap().retired.len(),6);
+        cache.trim_unused(3);assert_eq!(cache.state.lock().unwrap().retired.len(),3);
+        cache.trim_unused(3);assert_eq!(cache.state.lock().unwrap().retired.len(),0);
+        assert_eq!(cache.stats().physical_bytes,0);
     }
 
     #[test]

@@ -553,6 +553,7 @@ fn read_rendition(
     source.resolution = resolution;
     check_cancel(cancel)?;
     Ok(DecodedPhoto {
+        reservation: None,
         source,
         metadata: super::metadata::collect(exif, xmp, None),
         first_frame: sequence.is_some(),

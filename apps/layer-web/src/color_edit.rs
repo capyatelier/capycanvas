@@ -173,6 +173,7 @@ pub async fn raster_worker_color(
     metadata: &str,
     buffers: js_sys::Array,
 ) -> Result<JsValue, JsValue> {
+    artwork_transfer::seed_memory_budget();
     #[derive(Deserialize)]
     struct Request {
         project: String,
@@ -181,7 +182,7 @@ pub async fn raster_worker_color(
     let request: Request = serde_json::from_str(metadata).map_err(js)?;
     let project = layer_core::Document::from_artwork(artwork_transfer::unpack(&request.project, buffers).await?).map_err(js)?;
     let converted =
-        layer_color::prepare_document_color(&project, request.change, artwork_transfer::photo_memory_budget().encode_bytes, || false)
+        layer_color::prepare_document_color(&project, request.change, layer_color::photo::PhotoMemoryBudget::conversion_encode_limit(), || false)
             .map_err(js)?;
     let wire = artwork_transfer::pack(converted.document.artwork).await?;
     js_sys::Reflect::set(

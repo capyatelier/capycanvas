@@ -326,9 +326,11 @@ impl WgpuRasterizer {
         })
     }
     pub fn shader_input(&self) {
+        self.memory.idle.store(false, std::sync::atomic::Ordering::Release);
         if let Some(startup) = &self.startup { startup.compiler.input(); }
     }
     pub fn shader_idle(&self, idle: bool, speculative_idle: bool) {
+        self.memory.idle.store(idle, std::sync::atomic::Ordering::Release);
         if let Some(startup) = &self.startup { startup.compiler.idle(idle, speculative_idle); }
     }
     pub fn shader_wait_ms(&self) -> f64 {

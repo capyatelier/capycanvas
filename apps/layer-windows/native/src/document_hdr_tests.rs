@@ -216,7 +216,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
             &directory.join(format!("{depth:?}.exr")),
         );
         let image =
-            layer_color::photo::read_photo(Cursor::new(exr.clone()), Default::default()).unwrap();
+            layer_color::photo::read_photo(Cursor::new(exr.clone()), layer_color::photo::DecodeLimits::from_memory_budget(layer_color::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
         assert_eq!(image.interpretation.depth, SampleDepth::F32);
         assert_eq!(
             image.interpretation.profile,
@@ -244,7 +244,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
             Default::default(),
             layer_ui::photo_document_names("PQ", &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)),
             Default::default(),
-            Default::default(),
+            layer_color::photo::DecodeLimits::from_memory_budget(layer_color::photo::PhotoMemoryBudget::from_limit(1 << 30)),
             &Default::default(),
         )
         .unwrap());
@@ -274,7 +274,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
                 Default::default(),
                 layer_ui::photo_document_names("gain-map photo", &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)),
                 Default::default(),
-                Default::default(),
+                layer_color::photo::DecodeLimits::from_memory_budget(layer_color::photo::PhotoMemoryBudget::from_limit(1 << 30)),
                 &Default::default(),
             )
             .unwrap());

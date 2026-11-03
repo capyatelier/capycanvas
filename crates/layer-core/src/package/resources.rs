@@ -266,6 +266,7 @@ pub fn parse_descriptor(value: &Value) -> DecodeResult<PixelDescriptor> {
 pub(crate) type SelectionKey = ([u32; 2], [u32; 4], bool, Vec<PortableId>);
 
 pub struct ResourceReader<'a> {
+    pub(crate) admission: Option<crate::MemoryReservation>,
     pub manifest: &'a Manifest, pub backing: &'a ImmutableBacking, pub cancelled: &'a AtomicBool,
     pub limits: crate::ProjectLimits,
     pub(crate) private: bool,
@@ -283,6 +284,7 @@ pub struct ResourceReader<'a> {
 }
 #[derive(Default)]
 pub(crate) struct ResourceCache {
+    pub(crate) admission: Option<crate::MemoryReservation>,
     bytes: BTreeMap<PortableId, Resource<[u8]>>, texts: BTreeMap<PortableId, Resource<str>>,
     tiles: BTreeMap<PortableId, Arc<TileBlob>>, luts: BTreeMap<PortableId, Arc<Lut3d>>, decoded: u64,
     aliases: BTreeMap<(usize,u64,u64), (PortableId,Value)>, rasters: BTreeMap<PortableId, crate::raster::RasterTile>,
@@ -293,14 +295,18 @@ pub(crate) struct ResourceCache {
 }
 impl<'a> ResourceReader<'a> {
     pub fn new(manifest: &'a Manifest, backing: &'a ImmutableBacking, cancelled: &'a AtomicBool, limits: crate::ProjectLimits) -> Self {
-        Self {manifest,backing,cancelled,limits,private:false,trusted_programs:Default::default(),bytes:BTreeMap::new(),texts:BTreeMap::new(),tiles:BTreeMap::new(),luts:BTreeMap::new(),decoded:0,verified:false,aliases:BTreeMap::new(),rasters:BTreeMap::new(),selections:BTreeMap::new(),images:BTreeMap::new(),programs:BTreeMap::new(),vectors:BTreeMap::new(),opaque:BTreeMap::new()}
+        Self::with_budget(manifest, backing, cancelled, limits, crate::MemoryBudget::process())
+    }
+    pub(crate) fn with_budget(manifest: &'a Manifest, backing: &'a ImmutableBacking, cancelled: &'a AtomicBool, limits: crate::ProjectLimits, budget: crate::MemoryBudget) -> Self {
+        Self {admission:budget.admit_import(0),manifest,backing,cancelled,limits,private:false,trusted_programs:Default::default(),bytes:BTreeMap::new(),texts:BTreeMap::new(),tiles:BTreeMap::new(),luts:BTreeMap::new(),decoded:0,verified:false,aliases:BTreeMap::new(),rasters:BTreeMap::new(),selections:BTreeMap::new(),images:BTreeMap::new(),programs:BTreeMap::new(),vectors:BTreeMap::new(),opaque:BTreeMap::new()}
     }
     pub(crate) fn install_cache(&mut self, cache: ResourceCache) {
+        self.admission=cache.admission.or_else(||self.admission.take());
         self.bytes=cache.bytes;self.texts=cache.texts;self.tiles=cache.tiles;self.luts=cache.luts;self.decoded=cache.decoded;
         self.aliases=cache.aliases;self.rasters=cache.rasters;self.selections=cache.selections;self.images=cache.images;self.programs=cache.programs;self.vectors=cache.vectors;self.opaque=cache.opaque;
     }
     pub(crate) fn into_cache(self)->ResourceCache {
-        ResourceCache {bytes:self.bytes,texts:self.texts,tiles:self.tiles,luts:self.luts,decoded:self.decoded,
+        ResourceCache {admission:self.admission,bytes:self.bytes,texts:self.texts,tiles:self.tiles,luts:self.luts,decoded:self.decoded,
             aliases:self.aliases,rasters:self.rasters,selections:self.selections,images:self.images,programs:self.programs,vectors:self.vectors,opaque:self.opaque}
     }
     pub(crate) fn require_verified(&mut self) { self.verified = true; }
@@ -323,7 +329,8 @@ impl<'a> ResourceReader<'a> {
     }
     fn charge(&self, bytes: u64) -> DecodeResult<()> {
         let decoded = self.decoded.checked_add(bytes).ok_or("Decoded resource size overflow")?;
-        if decoded > self.limits.raster_bytes.saturating_add(self.limits.asset_bytes) { return Err(DecodeError::Unsupported("Drawing exceeds resource admission budget".into())); }
+        if decoded > self.limits.raster_bytes.saturating_add(self.limits.asset_bytes) { return Err(DecodeError::MemoryBudgetExceeded); }
+        if self.admission.as_ref().is_some_and(|admission| !admission.resize(decoded.max(admission.reserved_bytes()))) { return Err(DecodeError::MemoryBudgetExceeded); }
         Ok(())
     }
     pub fn raster_tile(&mut self, reference:&Value) -> DecodeResult<crate::raster::RasterTile> {

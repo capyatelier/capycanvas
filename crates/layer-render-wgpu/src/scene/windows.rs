@@ -3,10 +3,6 @@
 //! staging before the next allocation; there is no reduced-precision edit cache.
 use super::*;
 
-// Minimum filter reserve in the shared composition allowance. Larger admitted
-// documents retain their inputs; windows are the fallback when they do not fit.
-pub(crate) const DEFAULT_IMAGE_PIXEL_BYTES: u64 = 256 * 1024 * 1024;
-
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Plan {
     side: u32,
@@ -77,6 +73,7 @@ impl Plan {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const IMAGE_BYTES: u64 = 256 * 1024 * 1024;
     use layer_core::{EffectInstance, EffectPass, EffectSampling};
 
     fn background(artwork: &mut layer_core::Artwork, extent: [u32; 2]) {
@@ -139,7 +136,7 @@ mod tests {
     fn eighty_image_planes_require_their_resident_allowance_even_with_shared_samples() {
         let document=image_layers(80,[256;2]);let full=PixelRect::full([256;2]);
         assert_eq!(Scene::capture_image_bound(document.scene(),full),80*256*256*16);
-        assert!(Plan::new(document.scene(),[256;2],DEFAULT_IMAGE_PIXEL_BYTES,16384).unwrap().is_none());
+        assert!(Plan::new(document.scene(),[256;2],IMAGE_BYTES,16384).unwrap().is_none());
         assert!(Plan::new(document.scene(),[256;2],64*1024*1024,16384).is_err(),"the smallest output page still needs eighty resident image planes");
         assert_eq!(document.artwork.images().unwrap().len(),1,"sample sharing does not collapse independent layer outputs");
     }
@@ -159,7 +156,7 @@ mod tests {
         let document = layer_core::Document::from_artwork(artwork).unwrap();
         let scene = document.scene();
         assert_eq!(Scene::capture_window(scene, PixelRect::full(extent), extent), DocRect::from(PixelRect::full(extent)));
-        assert!(Plan::new(scene, extent, DEFAULT_IMAGE_PIXEL_BYTES, 16384).unwrap().is_none());
+        assert!(Plan::new(scene, extent, IMAGE_BYTES, 16384).unwrap().is_none());
     }
 
     #[test]
@@ -167,8 +164,8 @@ mod tests {
         let extent = [32768, 1];
         let document = adjustments(EffectSampling::Neighborhood { radius: 19 }, 1, extent);
         let scene = document.scene();
-        assert!(Scene::capture_image_bound(scene, PixelRect::full(extent)) < DEFAULT_IMAGE_PIXEL_BYTES);
-        let plan = Plan::new(scene, extent, DEFAULT_IMAGE_PIXEL_BYTES, 16384).unwrap().unwrap();
+        assert!(Scene::capture_image_bound(scene, PixelRect::full(extent)) < IMAGE_BYTES);
+        let plan = Plan::new(scene, extent, IMAGE_BYTES, 16384).unwrap().unwrap();
         for (_, input) in plan.regions(scene, PixelRect::full(extent)) {
             assert!(input.size().unwrap().into_iter().all(|side| side <= 16384));
         }
@@ -179,7 +176,7 @@ mod tests {
         for extent in [[6000, 4000], [8256, 5504], [8192, 7324], [32768, 257]] {
             let document = adjustments(EffectSampling::Neighborhood { radius: 19 }, 5, extent);
             let layers = document.scene();
-            let plan = Plan::new(layers, extent, DEFAULT_IMAGE_PIXEL_BYTES, 16384)
+            let plan = Plan::new(layers, extent, IMAGE_BYTES, 16384)
                 .unwrap()
                 .unwrap();
             let mut covered = 0;
@@ -187,7 +184,7 @@ mod tests {
             for (output, window) in plan.regions(layers, PixelRect::full(extent)) {
                 covered += output.area();
                 assert_eq!(window, Scene::capture_window(layers, output, extent));
-                assert!(Scene::capture_image_bound(layers, output) <= DEFAULT_IMAGE_PIXEL_BYTES);
+                assert!(Scene::capture_image_bound(layers, output) <= IMAGE_BYTES);
                 assert_eq!(output.min_x() % PAGE_SIZE, 0);
                 assert_eq!(output.min_y() % PAGE_SIZE, 0);
                 if let Some(old) = previous {
@@ -277,11 +274,11 @@ mod tests {
         for extent in [[6000, 4000], [9504, 6336], [32768, 257]] { for corner in [false, true] { for style in 0..4 {
             let document=clamped_source_document(extent,corner,style);
             let scene = document.scene();
-            let plan = Plan::new(scene, extent, DEFAULT_IMAGE_PIXEL_BYTES, 16384).unwrap().unwrap();
+            let plan = Plan::new(scene, extent, IMAGE_BYTES, 16384).unwrap().unwrap();
             let regions: Vec<_> = plan.regions(scene, PixelRect::full(extent)).collect();
             assert_eq!(regions.iter().map(|(output, _)| output.area()).sum::<u64>(), u64::from(extent[0]) * u64::from(extent[1]));
             assert!(regions.iter().all(|(output, _)| images::image_sizes_fit(scene,(*output).into(),16384,None)
-                && Scene::capture_image_bound(scene,*output)<=DEFAULT_IMAGE_PIXEL_BYTES));
+                && Scene::capture_image_bound(scene,*output)<=IMAGE_BYTES));
             if extent[0]>16384 && style!=3 { assert!(regions.iter().any(|(_,window)|window.size().unwrap()[0]>16384)); }
         }}}
     }
@@ -308,7 +305,7 @@ mod tests {
             let planned=Scene::capture_image_bound(packet.scene,output);
             let actual=scene.image_cache_bytes();
             assert!(actual<=planned,"{extent:?} corner={corner} style={style} actual={actual} planned={planned}");
-            assert!(planned<=DEFAULT_IMAGE_PIXEL_BYTES);
+            assert!(planned<=IMAGE_BYTES);
             r.uploads.finish(&encoder);encoder.submit(&r.queue);
             let bytes=crate::layer_tests::page_bytes(&r,&texture);
             if style==3 {assert!(bytes.iter().all(|byte|*byte==0));}
@@ -328,7 +325,7 @@ mod tests {
         let extent = [8192, 7324];
         let mut global = adjustments(EffectSampling::Document, 1, extent);
         assert!(
-            Plan::new(global.scene(), extent, DEFAULT_IMAGE_PIXEL_BYTES, 16384)
+            Plan::new(global.scene(), extent, IMAGE_BYTES, 16384)
                 .unwrap_err()
                 .to_string()
                 .contains("Document-wide")
@@ -336,13 +333,13 @@ mod tests {
         let handle = global.scene().order()[0];
         global.artwork.occurrences.get_mut(handle).unwrap().visible = false;
         assert!(
-            Plan::new(global.scene(), extent, DEFAULT_IMAGE_PIXEL_BYTES, 16384)
+            Plan::new(global.scene(), extent, IMAGE_BYTES, 16384)
                 .unwrap()
                 .is_none()
         );
         let halo = adjustments(EffectSampling::Neighborhood { radius: 4096 }, 1, extent);
         assert!(
-            Plan::new(halo.scene(), extent, DEFAULT_IMAGE_PIXEL_BYTES, 16384)
+            Plan::new(halo.scene(), extent, IMAGE_BYTES, 16384)
                 .unwrap_err()
                 .to_string()
                 .contains("halos")
@@ -351,7 +348,7 @@ mod tests {
             Plan::new(
                 adjustments(EffectSampling::Document, 1, [256, 256]).scene(),
                 [256, 256],
-                DEFAULT_IMAGE_PIXEL_BYTES,
+                IMAGE_BYTES,
                 16384
             )
             .unwrap()

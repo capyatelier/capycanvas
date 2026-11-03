@@ -554,6 +554,7 @@ impl App {
                     return Ok(true);
                 }
                 self.frame_cost[3] = clock.map_or(0, |clock| clock.elapsed().as_nanos() as i64);
+                self.host.session.renderer_mut().0.as_mut().unwrap().after_present();
             }
         }
         if (!self.host.dirty && self.host.startup.complete) || self.surface.is_none() {
@@ -713,6 +714,7 @@ impl App {
         // frame/readback worker services completion; initial surface readiness
         // has its own poll while its first finished buffer is awaited.
         let pending = surface.pending_target.is_some();
+        if !pending { self.host.session.renderer_mut().0.as_mut().unwrap().after_present(); }
         self.check_gpu()?;
         Ok(self.host.dirty || pending)
     }

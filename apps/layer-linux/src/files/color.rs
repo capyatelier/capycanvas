@@ -68,7 +68,7 @@ impl Conversion {
                 let result = gio::spawn_blocking(move || {
                     match plan {
                         ColorPreparation::Flatten { color, options } => flatten::prepare(gpu, source, color, options, context, worker_control),
-                        ColorPreparation::Edit(change) => layer_color::prepare_document_color(&source, change, layer_color::photo::PhotoMemoryBudget::current().encode_bytes, || worker_control.is_cancelled()),
+                        ColorPreparation::Edit(change) => layer_color::prepare_document_color(&source, change, layer_color::photo::PhotoMemoryBudget::conversion_encode_limit(), || worker_control.is_cancelled()),
                         ColorPreparation::History => unreachable!(),
                     }
                 }).await.map_err(|_| "Color conversion worker failed".to_string()).and_then(|r| r);

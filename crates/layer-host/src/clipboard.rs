@@ -50,7 +50,7 @@ impl ClipTask {
 
     fn pixels(gpu: &SnapshotGpu, capture: &ClipboardCapture, control: CaptureControl)
         -> Result<(Arc<layer_core::color::source::SourceImage>, Vec<u8>), String> {
-        let limit = layer_color::photo::PhotoMemoryBudget::current().encode_bytes;
+        let limit = layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes()).encode_bytes;
         let color = capture.color();
         if let Some(original) = capture.original.clone().filter(|_| !color.depth.is_float()) {
             let png = layer_color::source_png(&original, color, limit, || control.is_cancelled())?;
@@ -150,7 +150,7 @@ mod tests {
         let photo = host.session.engine().document().artwork.paint.iter().find_map(|(_, _, source)| source.base.as_ref().map(|base|base.image.storage().clone())).unwrap();
         assert!(Arc::ptr_eq(&whole.source, &photo), "an untouched photo keeps its original samples");
         assert_eq!(whole.origin, [0, 0]);
-        let png = layer_color::photo::read_photo(std::io::Cursor::new(whole.png.to_vec()), Default::default()).unwrap();
+        let png = layer_color::photo::read_photo(std::io::Cursor::new(whole.png.to_vec()), layer_ui::photo_decode_limits()).unwrap();
         assert_eq!(png.extent, [64, 48]);
         let mut row = vec![0; png.row_bytes()];
         png.rows().read(8, &mut row).unwrap();
@@ -214,7 +214,7 @@ mod tests {
         assert!(clip.layers.is_some());
         assert!(clip.origin[0] <= 80 && clip.origin[1] <= -4);
         assert!(clip.origin[0] + i64::from(clip.source.extent[0]) >= 144);
-        let png = layer_color::photo::read_photo(std::io::Cursor::new(clip.png.to_vec()), Default::default()).unwrap();
+        let png = layer_color::photo::read_photo(std::io::Cursor::new(clip.png.to_vec()), layer_ui::photo_decode_limits()).unwrap();
         let [x, y] = [90 - clip.origin[0], 4 - clip.origin[1]].map(|v| v as usize);
         let png_rows = rows(&png);
         assert!(png_rows[y][x * 4..x * 4 + 4].iter().zip([40u8, 40, 200, 255]).all(|(a, b)| a.abs_diff(b) <= 1));

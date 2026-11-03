@@ -40,6 +40,7 @@ impl Entry {
     fn matches(&self,id:PortableId,source:&Arc<SourceImage>)->bool {self.id==id && self.source.ptr_eq(&Arc::downgrade(source))}
     fn tiles(&self)->u32 {self.image.plan.extent[0].div_ceil(PAGE_SIZE)*self.image.plan.extent[1].div_ceil(PAGE_SIZE)}
     fn storage_bytes(&self)->u64 {self.image.storage_bytes()+self.update_bytes}
+    fn requested(&self, requests: &[MovingRequest]) -> bool { requests.iter().any(|request| self.matches(request.id, &request.source)) }
 }
 struct Retired {entry:Entry,complete:Arc<AtomicBool>}
 struct RetirementCompletion(Arc<AtomicBool>);
@@ -65,7 +66,24 @@ fn update_bytes(device:&PipelineDevice,plan:display_mips::Plan,last:u32)->u64 {
 fn estimate(device:&PipelineDevice,plan:display_mips::Plan,last:u32)->u64 {
     plan.pixel_bytes_through(last)+u64::from(plan.level)*16+update_bytes(device,plan,last)
 }
+impl MovingRequest {
+    fn allocation(&self, device: &PipelineDevice) -> Result<Option<Planned>, GpuRasterError> {
+        let extent = padded_extent(self.source.extent);
+        let fits = (0..=display_mips::MAX_LEVEL).find(|&level| extent.iter().all(|n| n.div_ceil(1 << level) <= device.limits().max_texture_dimension_2d))
+            .ok_or(GpuRasterError::ExtentUnsupported)?;
+        if self.nearest && fits > 0 { return Ok(None); }
+        let level = if self.nearest { 0 } else { self.level.clamp(1, display_mips::MAX_LEVEL).max(fits) };
+        let plan = display_mips::Plan::at(extent, level);
+        let last = display_mips::MAX_LEVEL.min(level + plan.size.into_iter().max().unwrap().next_power_of_two().ilog2());
+        Ok(Some(Planned { request: self.clone(), plan, last }))
+    }
+}
 impl MovingImages {
+    pub(crate) fn demand(device: &PipelineDevice, requests: &[MovingRequest]) -> Result<u64, GpuRasterError> {
+        requests.iter().try_fold(0u64, |bytes, request| {
+            Ok(bytes.saturating_add(request.allocation(device)?.map_or(0, |target| estimate(device, target.plan, target.last))))
+        })
+    }
     pub(crate) fn pipelines(&mut self,device:&PipelineDevice)->[&crate::Deferred<wgpu::ComputePipeline>;2] {
         let pipelines=self.pipelines.get_or_insert_with(||display_mips::Pipelines::new(device));
         [&pipelines.reduce,&pipelines.fused_reduce]
@@ -78,6 +96,54 @@ impl MovingImages {
         minor.max(1.).log2().round().clamp(1.,f64::from(display_mips::MAX_LEVEL)) as u32
     }
     pub(crate) fn storage_bytes(&self)->u64 {self.entries.iter().map(Entry::storage_bytes).sum::<u64>()+self.retired.iter().map(|retired|retired.entry.storage_bytes()).sum::<u64>()}
+    pub(crate) fn cpu_bytes(&self) -> u64 {
+        self.entries.capacity() as u64 * std::mem::size_of::<Entry>() as u64
+            + self.retired.capacity() as u64 * std::mem::size_of::<Retired>() as u64
+            + self.entries.iter().chain(self.retired.iter().map(|retired| &retired.entry))
+                .map(|entry| entry.image.cpu_bytes() + entry.updates.as_ref().map_or(0, display_mips::CompleteUpdates::cpu_bytes)).sum::<u64>()
+    }
+    pub(crate) fn pinned_bytes(&self, requests: &[MovingRequest]) -> u64 {
+        let retired = self.retired.iter().filter(|retired| !retired.complete.load(Ordering::Acquire))
+            .map(|retired| retired.entry.storage_bytes()).sum::<u64>();
+        retired + self.entries.iter().map(|entry| {
+            if !entry.ready || !entry.valid.load(Ordering::Acquire) { return entry.storage_bytes(); }
+            if entry.requested(requests) { entry.image.storage_from(entry.image.last_level()) } else { 0 }
+        }).sum::<u64>()
+    }
+    pub(crate) fn trim_unused(&mut self, device: &PipelineDevice, limit: u64, requests: &[MovingRequest], encoder: &mut crate::submission::CommandEncoder) -> u64 {
+        self.retired.retain(|retired| !retired.complete.load(Ordering::Acquire));
+        let mut retained = self.entries.iter().map(Entry::storage_bytes).sum::<u64>();
+        let mut retired = 0;
+        for _ in 0..crate::SOURCE_SLOTS {
+            if retained <= limit { break; }
+            let Some(index) = self.entries.iter().enumerate().filter(|(_,entry)|entry.ready && entry.valid.load(Ordering::Acquire)
+                && (!entry.requested(requests) || entry.image.plan.level < entry.image.last_level()))
+                .max_by_key(|(_,entry)|(!entry.requested(requests),entry.storage_bytes())).map(|(index,_)|index) else { break; };
+            let entry = self.entries.swap_remove(index);
+            let bytes = entry.storage_bytes();
+            if entry.requested(requests) {
+                let level = entry.image.last_level();
+                let image = display_mips::Image::with_device(device, display_mips::Plan::at(entry.image.plan.extent, level), level);
+                encoder.copy_texture_to_texture(wgpu::TexelCopyTextureInfo {
+                    texture: &entry.image.texture, mip_level: level - entry.image.plan.level,
+                    origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
+                }, image.texture.as_image_copy(), image.texture.size());
+                let write = crate::submission::CacheWrite::new();
+                let valid = write.validity();write.track(encoder);
+                let root = Entry { id:entry.id, source:entry.source.clone(), image, cursor:entry.tiles(), coarse:0,
+                    updates:None, update_bytes:0, valid, ready:true };
+                retained = retained.saturating_sub(bytes).saturating_add(root.storage_bytes());
+                self.entries.push(root);
+            } else { retained = retained.saturating_sub(bytes); }
+            self.evictions += 1;
+            retired += bytes;
+            let complete = Arc::new(AtomicBool::new(false));
+            let callback = RetirementCompletion(complete.clone());
+            encoder.on_submitted_work_done(move || drop(callback));
+            self.retired.push(Retired { entry, complete });
+        }
+        retired
+    }
     pub(crate) fn pending(&self)->bool {self.allocation_waiting || !self.retired.is_empty() || self.entries.iter().any(|entry|!entry.ready || !entry.valid.load(Ordering::Acquire))}
     pub(crate) fn plan(&mut self,r:&WgpuRasterizer,requests:&[MovingRequest],budget:u64,encoder:&mut crate::submission::CommandEncoder)->Result<MipPlan,GpuRasterError> {
         self.retired.retain(|retired|!retired.complete.load(Ordering::Acquire));
@@ -101,13 +167,7 @@ impl MovingImages {
         for request in requests {
             if self.entries.iter().any(|entry|entry.matches(request.id,&request.source))
                 || targets.iter().any(|target|target.request.id==request.id && Arc::ptr_eq(&target.request.source,&request.source)) {continue;}
-            let extent=padded_extent(request.source.extent);
-            let fits=(0..=display_mips::MAX_LEVEL).find(|&level|extent.iter().all(|n|n.div_ceil(1<<level)<=r.device.limits().max_texture_dimension_2d)).ok_or(GpuRasterError::ExtentUnsupported)?;
-            if request.nearest && fits>0 {continue;}
-            let level=if request.nearest {0} else {request.level.clamp(1,display_mips::MAX_LEVEL).max(fits)};
-            let plan=display_mips::Plan::at(extent,level);
-            let last=display_mips::MAX_LEVEL.min(level+plan.size.into_iter().max().unwrap().next_power_of_two().ilog2());
-            targets.push(Planned {request:request.clone(),plan,last});
+            if let Some(target) = request.allocation(&r.device)? { targets.push(target); }
         }
         loop {
             let bytes=self.retired.iter().map(|retired|retired.entry.storage_bytes()).sum::<u64>()+self.entries.iter().map(|entry|estimate(&r.device,entry.image.plan,entry.image.last_level()).max(entry.storage_bytes())).sum::<u64>()+targets.iter().map(|target|estimate(&r.device,target.plan,target.last)).sum::<u64>();
@@ -820,6 +880,139 @@ mod tests {
         assert!(images.lookup(unadmitted.id,&unadmitted.source,1).is_none() && images.entries.is_empty());
         assert!(!images.pending());
         encoder.submit(&r.queue);
+    }
+    #[test]
+    fn mip_pins_follow_current_requests_and_pending_retirements() {
+        let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let source=layer_core::color::source::rgba8_source([1024;2],|_,_|[31,73,149,255]);
+        let image=display_mips::Image::with_device(&r.device,display_mips::Plan::at(source.extent,1),3);
+        let full=image.storage_bytes();
+        let root=image.storage_from(image.last_level());
+        let request=MovingRequest {id:PortableId::random(),source:source.clone(),level:2,nearest:false};
+        let requests=std::slice::from_ref(&request);
+        let valid=Arc::new(AtomicBool::new(true));
+        let mut images=MovingImages { entries:vec![Entry {
+            id:request.id,source:Arc::downgrade(&source),image,cursor:16,coarse:0,
+            updates:None,update_bytes:0,valid:valid.clone(),ready:true,
+        }],..Default::default() };
+        assert!(root<full);
+        assert_eq!(images.storage_bytes(),full);
+        assert_eq!(images.pinned_bytes(requests),root);
+        assert_eq!(images.pinned_bytes(&[]),0);
+        assert!(images.entries[0].source.upgrade().is_some());
+        images.entries[0].ready=false;
+        assert_eq!(images.pinned_bytes(&[]),full);
+        images.entries[0].ready=true;
+        valid.store(false,Ordering::Release);
+        assert_eq!(images.pinned_bytes(&[]),full);
+        valid.store(true,Ordering::Release);
+
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        assert_eq!(images.trim_unused(&r.device,root,requests,&mut encoder),full);
+        assert_eq!(images.entries.len(),1);
+        assert_eq!(images.entries[0].image.plan.level,3);
+        assert_eq!(images.entries[0].image.last_level(),3);
+        assert_eq!(images.entries[0].storage_bytes(),root);
+        assert_eq!(images.retired.len(),1);
+        assert_eq!(images.storage_bytes(),full+root);
+        assert_eq!(images.pinned_bytes(requests),full+root);
+        assert_eq!(images.pinned_bytes(&[]),full);
+        encoder.submit(&r.queue);
+        crate::test_support::complete(&r);
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        assert_eq!(images.trim_unused(&r.device,root,requests,&mut encoder),0);
+        assert!(images.retired.is_empty());
+        assert_eq!(images.storage_bytes(),root);
+        assert_eq!(images.pinned_bytes(requests),root);
+        drop(encoder);
+
+        assert!(images.entries[0].source.upgrade().is_some());
+        assert_eq!(images.pinned_bytes(&[]),0);
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        assert_eq!(images.trim_unused(&r.device,0,&[],&mut encoder),root);
+        assert!(images.entries.is_empty());
+        assert_eq!(images.storage_bytes(),root);
+        assert_eq!(images.pinned_bytes(&[]),root);
+        encoder.submit(&r.queue);
+        crate::test_support::complete(&r);
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        assert_eq!(images.trim_unused(&r.device,0,&[],&mut encoder),0);
+        assert_eq!(images.storage_bytes(),0);
+        assert_eq!(images.pinned_bytes(&[]),0);
+    }
+    #[test]
+    fn pressure_trim_releases_unrequested_mips_then_coarsens_requested_allocations() {
+        let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let requests:Vec<_>=[1024,512,256].into_iter().map(|size|MovingRequest {
+            id:PortableId::random(),source:layer_core::color::source::rgba8_source([size;2],|_,_|[31,73,149,255]),
+            level:1,nearest:false,
+        }).collect();
+        let entries:Vec<_>=requests.iter().map(|request|Entry {
+            id:request.id,source:Arc::downgrade(&request.source),
+            image:display_mips::Image::with_device(&r.device,display_mips::Plan::at(request.source.extent,1),3),
+            cursor:request.source.extent[0].div_ceil(PAGE_SIZE).pow(2),coarse:0,
+            updates:None,update_bytes:0,valid:Arc::new(AtomicBool::new(true)),ready:true,
+        }).collect();
+        let roots=entries[..2].iter().map(|entry|entry.image.storage_from(entry.image.last_level())).sum::<u64>();
+        let requested_bytes=entries[..2].iter().map(Entry::storage_bytes).sum::<u64>();
+        let unrequested_bytes=entries[2].storage_bytes();
+        let mut images=MovingImages {entries,..Default::default()};
+        assert!(roots<requested_bytes);
+        assert_eq!(images.pinned_bytes(&requests[..2]),roots);
+
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        assert_eq!(images.trim_unused(&r.device,requested_bytes,&requests[..2],&mut encoder),unrequested_bytes);
+        assert_eq!(images.entries.len(),2);
+        assert!(images.entries.iter().all(|entry|entry.image.plan.level==1));
+        assert_eq!(images.retired[0].entry.id,requests[2].id);
+        encoder.submit(&r.queue);
+        crate::test_support::complete(&r);
+
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        assert_eq!(images.trim_unused(&r.device,roots,&requests[..2],&mut encoder),requested_bytes);
+        assert_eq!(images.retired[0].entry.id,requests[0].id);
+        assert_eq!(images.retired[1].entry.id,requests[1].id);
+        assert!(images.entries.iter().all(|entry|entry.image.plan.level==entry.image.last_level()));
+        assert_eq!(images.storage_bytes(),requested_bytes+roots);
+        assert_eq!(images.pinned_bytes(&requests[..2]),requested_bytes+roots);
+        encoder.submit(&r.queue);
+        crate::test_support::complete(&r);
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        assert_eq!(images.trim_unused(&r.device,roots,&requests[..2],&mut encoder),0);
+        assert!(images.retired.is_empty());
+        assert_eq!(images.storage_bytes(),roots);
+        assert_eq!(images.pinned_bytes(&requests[..2]),roots);
+        assert!(requests.iter().all(|request|Arc::strong_count(&request.source)==1));
+        assert_eq!(images.pinned_bytes(&[]),0);
+    }
+    #[test]
+    fn pressure_trim_keeps_completed_coarse_pixels_and_charges_retirement_until_completion() {
+        let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let mut images=MovingImages::default();let request=moving_request();
+        let coarse_request=MovingRequest {level:display_mips::MAX_LEVEL,..request.clone()};
+        let requests=std::slice::from_ref(&coarse_request);
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        let plan=images.plan(&r,std::slice::from_ref(&request),u64::MAX,&mut encoder).unwrap();images.allocate(&r,plan);
+        let source=page_texture(&r,wgpu::TextureFormat::Rgba32Float);
+        let pixels:Vec<_>=(0..256).flat_map(|y|(0..256).flat_map(move|x|{let value=((x+y)%2) as f32;[value,value,value,1.]})).flat_map(f32::to_le_bytes).collect();
+        upload_page(&r,&source,&pixels);
+        images.write_tile(&r,&mut encoder,request.id,&request.source,[0;2],&source).unwrap();
+        while images.advance_coarse(&r,&mut encoder) {}
+        encoder.submit(&r.queue);
+        let before=images.storage_bytes();
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        assert!(images.trim_unused(&r.device,0,requests,&mut encoder)>0);
+        assert_eq!(images.entries[0].image.plan.level,display_mips::MAX_LEVEL);
+        assert!(images.lookup(request.id,&request.source,1).is_some());
+        assert!(!images.retired.is_empty());assert!(images.storage_bytes()>before);
+        let submission=encoder.submit(&r.queue);
+        r.device.poll(wgpu::PollType::Wait {submission_index:Some(submission),timeout:Some(std::time::Duration::from_secs(10))}).unwrap();
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        assert_eq!(images.trim_unused(&r.device,0,requests,&mut encoder),0);
+        assert!(images.retired.is_empty());assert!(images.storage_bytes()<before);
+        let bytes=crate::layer_tests::page_bytes(&r,&images.entries[0].image.texture);
+        let value:[f32;4]=std::array::from_fn(|channel|f32::from_le_bytes(bytes[channel*4..channel*4+4].try_into().unwrap()));
+        assert_eq!(value,[0.5,0.5,0.5,1.]);
     }
     #[test]
     fn canonical_sources_can_retire_the_last_overview_without_losing_its_charge() {

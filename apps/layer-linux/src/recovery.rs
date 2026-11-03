@@ -103,7 +103,7 @@ impl Recovery {
         let store=self.store.clone();
         gio::spawn_blocking(move || {
             let mut store=store.lock().map_err(|e|e.to_string())?;
-            let open=store.as_mut().ok_or("Drawing has not been checkpointed")?.load(ProjectLimits::default(),&AtomicBool::new(false))?.ok_or("No saved checkpoint")?;
+            let open=store.as_mut().ok_or("Drawing has not been checkpointed")?.load(ProjectLimits::for_import(),&AtomicBool::new(false))?.ok_or("No saved checkpoint")?;
             SessionRestore::from_core(open)
         }).await.map_err(|e|format!("Snapshot reader stopped: {e:?}"))?
     }
@@ -390,7 +390,7 @@ async fn restore_window(w:&Rc<Workspace>,claim:ClaimedWindow,startup:Option<laye
         let path=directory().join(&drawing.key);
         let result=gio::spawn_blocking(move || {
             let mut store=SessionStore::open(&path)?;
-            let opened=store.load(ProjectLimits::default(),&AtomicBool::new(false))?.ok_or("Saved drawing has no complete checkpoint")?;
+            let opened=store.load(ProjectLimits::for_import(),&AtomicBool::new(false))?.ok_or("Saved drawing has no complete checkpoint")?;
             let restored=SessionRestore::from_core(opened)?;
             let observed=observed_destination(&restored);
             Ok::<_,String>((store,restored,observed))
@@ -479,7 +479,7 @@ async fn failed_drawings(w:&Rc<Workspace>)->Result<(),String> {
             let path=directory().join(&drawing.key);
             let result=gio::spawn_blocking(move || {
                 let mut store=SessionStore::open(&path)?;
-                let opened=store.load(ProjectLimits::default(),&AtomicBool::new(false))?.ok_or("No complete drawing checkpoint")?;
+                let opened=store.load(ProjectLimits::for_import(),&AtomicBool::new(false))?.ok_or("No complete drawing checkpoint")?;
                 let restored=SessionRestore::from_core(opened)?;
                 let observed=observed_destination(&restored);
                 Ok::<_,String>((restored,store,observed))

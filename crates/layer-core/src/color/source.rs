@@ -20,8 +20,9 @@ impl SourceAccounting {
     pub(crate) fn charge_image(&mut self,image:&crate::Image)->usize {
         self.charge(image.storage()).saturating_add(if self.images.insert(image.owner_identity()) {image.owner_metadata_bytes()}else {0})
     }
-    pub(crate) fn charge(&mut self, source: &Arc<SourceImage>) -> usize {
-        if !self.sources.insert(Arc::as_ptr(source) as usize) {
+    pub(crate) fn charge(&mut self, source: &Arc<SourceImage>) -> usize { self.charge_ref(source) }
+    fn charge_ref(&mut self, source: &SourceImage) -> usize {
+        if !self.sources.insert(std::ptr::from_ref(source) as usize) {
             return 0;
         }
         let mut bytes = std::mem::size_of::<SourceImage>()
@@ -37,6 +38,11 @@ impl SourceAccounting {
     pub(crate) fn charge_profile(&mut self,profile:&ColorProfile)->usize {
         match profile {ColorProfile::Icc(bytes) if self.profiles.insert(bytes.as_ptr() as usize)=>bytes.len(),_=>0}
     }
+}
+
+pub fn retained_source_bytes<'a>(sources: impl IntoIterator<Item=&'a SourceImage>) -> usize {
+    let mut accounting=SourceAccounting::default();
+    sources.into_iter().fold(0usize,|bytes,source|bytes.saturating_add(accounting.charge_ref(source)))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

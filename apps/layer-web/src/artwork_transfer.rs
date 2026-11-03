@@ -4,7 +4,7 @@ use std::sync::atomic::AtomicBool;
 use wasm_bindgen_futures::JsFuture;
 
 const BLOCK:usize=4*1024*1024;
-pub(super) fn limits(dimension:u32)->ProjectLimits {ProjectLimits {dimension,asset_bytes:256*1024*1024,raster_bytes:512*1024*1024,tiles:8192,..Default::default()}}
+pub(super) fn limits(dimension:u32)->ProjectLimits {seed_memory_budget();ProjectLimits {dimension,tiles:8192,..ProjectLimits::for_import()}}
 
 #[derive(Serialize,Deserialize)]
 struct Envelope {transfer:TransferDescriptor,chunks:Vec<usize>}
@@ -57,17 +57,18 @@ async fn unpack_with_selection(metadata:&str,buffers:js_sys::Array)->Result<(Art
     let envelope:Envelope=serde_json::from_str(metadata).map_err(js)?;
     let count=envelope.chunks.iter().try_fold(0usize,|sum,n|sum.checked_add(*n)).ok_or_else(||js("Transfer chunk count overflow"))?;
     if count!=buffers.length() as usize{return Err(js("Incomplete artwork transfer"));}
-    let mut receiver=TransferReceiver::new(envelope.transfer,limits(ProjectLimits::default().dimension)).map_err(js)?;let mut index=0;let mut total=0usize;
+    let admitted_limits=ProjectLimits {tiles:8192,..Default::default()};
+    let mut receiver=TransferReceiver::new(envelope.transfer,admitted_limits).map_err(js)?;let mut index=0;let mut total=0usize;
     for (payload,count) in envelope.chunks.into_iter().enumerate() {
         for _ in 0..count {
             let buffer=buffers.get(index).dyn_into::<js_sys::Uint8Array>().map_err(|_|js("Missing artwork transfer chunk"))?;
             if buffer.length() as usize>MAX_RANGE_BYTES{return Err(js("Oversized artwork transfer chunk"));}
-            total=total.checked_add(buffer.length() as usize).filter(|n|*n<=1024*1024*1024).ok_or_else(||js("Artwork transfer exceeds budget"))?;
+            total=total.checked_add(buffer.length() as usize).filter(|n|*n as u64<=admitted_limits.raster_bytes.saturating_add(admitted_limits.asset_bytes)).ok_or_else(||js("Artwork transfer exceeds budget"))?;
             receiver.push_chunk(payload,&buffer.to_vec()).map_err(js)?;buffers.set(index,JsValue::UNDEFINED);index+=1;
             documents::yield_browser().await?;
         }
     }
-    receiver.finish().map_err(js)?.adopt_verified_with_selection(limits(ProjectLimits::default().dimension),&AtomicBool::new(false)).map_err(js)
+    receiver.finish().map_err(js)?.adopt_verified_with_selection(admitted_limits,&AtomicBool::new(false)).map_err(js)
 }
 fn parts(wire:&JsValue)->Result<(String,js_sys::Array),JsValue>{Ok((js_sys::Reflect::get(wire,&js("metadata"))?.as_string().ok_or_else(||js("Missing artwork transfer metadata"))?,js_sys::Reflect::get(wire,&js("buffers"))?.dyn_into()?))}
 pub(super) async fn convert_color(original: &layer_core::Document, change: layer_color::DocumentColorChange, control: &layer_render_wgpu::snapshot::CaptureControl) -> Result<(layer_core::Document, u64), JsValue> {
@@ -104,7 +105,7 @@ pub(super) async fn open(file:web_sys::Blob,options:OpenOptions,cancelled:Option
     }
     let(metadata,buffers)=parts(&wire)?;
     let source=serde_wasm_bindgen::from_value(js_sys::Reflect::get(&wire,&js("source"))?).map_err(js)?;
-    let document=layer_core::Document::from_artwork(unpack(&metadata,buffers).await?).map_err(js)?;
+    let document=unpack_capture(&metadata,buffers).await?.into_document().map_err(js)?;
     let fallback=js_sys::Reflect::get(&wire,&js("fallback"))?;
     let fallback=if fallback.is_undefined(){None}else{
         let presentation=serde_wasm_bindgen::from_value(fallback).map_err(js)?;
@@ -176,9 +177,25 @@ pub async fn raster_worker_write(metadata:String,buffers:js_sys::Array,write:js_
     serialize(&output.finish())
 }
 
+pub(super) fn seed_memory_budget() {
+    static SEEDED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    SEEDED.get_or_init(|| {
+        let capacity=js_sys::Reflect::get(&js_sys::global(),&js("navigator")).ok()
+            .and_then(|navigator|js_sys::Reflect::get(&navigator,&js("deviceMemory")).ok())
+            .and_then(|value|value.as_f64()).filter(|value|value.is_finite()&&*value>0.)
+            .map(|gib|(gib*(1024_u64.pow(3) as f64)).min(u64::MAX as f64) as u64);
+        let used=wasm_bindgen::memory().dyn_into::<js_sys::WebAssembly::Memory>().ok()
+            .map(|memory|js_sys::Uint8Array::new(&memory.buffer()).length() as u64);
+        let ceiling=isize::MAX as u64;
+        let headroom=ceiling.saturating_sub(used.unwrap_or(0));
+        let default=capacity.map_or(2*1024_u64.pow(3),|bytes|bytes/4).min(headroom);
+        layer_core::MemoryBudget::process().update_ram(layer_core::MemoryFacts {
+            host_default_bytes:Some(default),process_limit_bytes:Some(ceiling),process_used_bytes:used,
+            ..Default::default()
+        },layer_core::MemoryBudget::now_ms());
+    });
+}
 pub(super) fn photo_memory_budget()->layer_color::photo::PhotoMemoryBudget {
-    use layer_color::photo::PhotoMemoryBudget;
-    let capacity=js_sys::Reflect::get(&js_sys::global(),&js("navigator")).ok().and_then(|n|js_sys::Reflect::get(&n,&js("deviceMemory")).ok()).and_then(|v|v.as_f64()).filter(|v|v.is_finite()&&*v>0.);
-    let Some(gib)=capacity else{return PhotoMemoryBudget::current();};let capacity=(gib.min(8.)*(1024_u64.pow(3) as f64)) as u64;
-    PhotoMemoryBudget{source_bytes:(capacity/32) as usize,decode_bytes:(capacity/8) as usize,encode_bytes:(capacity/16*3) as usize}
+    seed_memory_budget();
+    layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes())
 }

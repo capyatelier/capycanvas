@@ -274,7 +274,7 @@ mod tests {
         let samples: Vec<u16> = row.as_chunks::<2>().0.iter().map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
         assert_eq!(&samples[..4], &[65535; 4], "straight white");
         assert_eq!(samples[7], 13107, "straight alpha 0.2");
-        let photo = crate::photo::read_photo(std::io::Cursor::new(png), Default::default()).unwrap();
+        let photo = crate::photo::read_photo(std::io::Cursor::new(png), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
         assert_eq!(photo.extent, [2, 2]);
         assert_eq!(photo.interpretation.depth, SampleDepth::U8);
         let mut row = vec![0; photo.row_bytes()];

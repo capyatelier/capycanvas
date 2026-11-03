@@ -59,7 +59,6 @@ pub(super) async fn call_cancellable(
 }
 
 pub(super) fn install(renderer: &mut WgpuRasterizer) {
-    renderer.set_complete_display_allowance(artwork_transfer::photo_memory_budget().encode_bytes as u64);
     renderer.set_analysis_backing_waiter(Rc::new(|scene, control| Box::pin(async move {
         if control.is_cancelled() { return Err("Analysis cancelled".into()); }
         artwork_transfer::wait_backing_cancellable(&layer_render_wgpu::snapshot::SnapshotGpu::scoped_transfer_artwork(&scene,&[]), Some(&control)).await.map_err(|e| format!("{e:?}"))?;

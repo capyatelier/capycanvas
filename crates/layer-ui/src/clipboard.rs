@@ -101,7 +101,8 @@ pub fn clipboard_color_changes(from: DocumentColor, to: DocumentColor) -> impl I
      depth.filter(|_| !promote)].into_iter().flatten()
 }
 
-pub fn clipboard_document(sources: Vec<(String, SourceImage)>, policy: PhotoOpenPolicy, localization: &Localizer) -> Result<layer_core::Document, String> {
+pub fn clipboard_document(sources: impl Into<crate::PreparedImages>, policy: PhotoOpenPolicy, localization: &Localizer) -> Result<layer_core::Document, String> {
+    let (sources, reservation, budget) = sources.into().into_parts();
     let (name, first) = sources.first().ok_or("Copy an image to paste")?;
     let extent = sources.iter().fold([0, 0], |extent, (_, source)| std::array::from_fn(|i| extent[i].max(source.extent[i])));
     let depth = sources.iter().map(|(_, source)| policy.editing_depth(source.interpretation.depth)).max_by_key(|depth| (depth.is_float(), depth.bits())).unwrap();
@@ -116,6 +117,8 @@ pub fn clipboard_document(sources: Vec<(String, SourceImage)>, policy: PhotoOpen
     }
     document.validate(Default::default())?;
     layer_color::validate_document_color(&document)?;
+    let mut document = document.with_memory(layer_core::DocumentMemory::new(budget, reservation));
+    document.reserve_import()?;
     Ok(document)
 }
 
@@ -745,7 +748,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         refused(self.paste_refusal())?;
         let position = self.clip_position(clip, mode);
         if matches!(self.engine.document().working.target, Some(SourceTarget::Coverage(_))) {
-            return self.paste_mask_sources(vec![(clip.source_for(self.engine.document().composition().color), position)]);
+            return self.paste_mask_sources(vec![(clip.source_for(self.engine.document().composition().color), position)], None);
         }
         if mode != PasteMode::Into && let Some(layers) = clip.layers.as_ref().filter(|layers| layers.paths)
             && let Some(target) = self.vector_paste_layer() {
@@ -764,7 +767,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Ok(());
         }
         if mode == PasteMode::Into {
-            return self.paste_objects(vec![placed(&clip.name, clip.source.clone().into(), [f64::from(position.x), f64::from(position.y)])], None, true);
+            return self.paste_objects(vec![placed(&clip.name, clip.source.clone().into(), [f64::from(position.x), f64::from(position.y)])], None, true, None);
         }
         let source = clip.source_for(self.engine.document().composition().color);
         self.insert_pasted(vec![(clip.name.clone(), source)], |_, _| position)
@@ -801,10 +804,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub fn paste_layer_sources(
         &mut self,
-        sources: Vec<(String, SourceImage)>,
+        sources: impl Into<crate::PreparedImages>,
         mode: PasteMode,
         context: &ImagePlacementContext,
     ) -> Result<(), String> {
+        let (sources, reservation, budget) = sources.into().into_parts();
         self.validate_image_placement(context)?;
         self.require_painting()?;
         refused(self.paste_refusal())?;
@@ -820,29 +824,29 @@ impl<R: CanvasRenderer> UiSession<R> {
                     };
                 (PaintBase::new(Arc::new(source).into()), position)
             }).collect();
-            return self.paste_mask_sources(sources);
+            return self.paste_mask_sources(sources, reservation);
         }
         match mode {
             PasteMode::NewImage => Err("Open the clipboard as a new drawing".into()),
             PasteMode::Paste | PasteMode::AtView | PasteMode::AtCursor => {
                 let [x, y] = self.pending_paste_center(mode).map(|v| v as f32);
-                self.place_image_objects(sources, Some(Point { x, y }), context.destination, mode == PasteMode::Paste, false)
+                self.place_image_objects(crate::PreparedImages::from_parts(sources, reservation, budget), Some(Point { x, y }), context.destination, mode == PasteMode::Paste, false)
             }
             PasteMode::InPlace => {
                 let objects = sources.into_iter().map(|(name, source)| placed(&name, Arc::new(source).into(), [0.; 2])).collect();
-                self.paste_objects(objects, context.destination, false)
+                self.paste_objects(objects, context.destination, false, reservation)
             }
             PasteMode::Into => {
                 let objects = sources.into_iter().map(|(name, source)| {
                     let at = self.view_centred(source.extent);
                     placed(&name, layer_core::Image::new(Arc::new(source)), [f64::from(at.x), f64::from(at.y)])
                 }).collect();
-                self.paste_objects(objects, context.destination, true)
+                self.paste_objects(objects, context.destination, true, reservation)
             }
         }
     }
 
-    fn paste_mask_sources(&mut self, sources: Vec<(PaintBase, Point)>) -> Result<(), String> {
+    fn paste_mask_sources(&mut self, sources: Vec<(PaintBase, Point)>, reservation: Option<layer_core::MemoryReservation>) -> Result<(), String> {
         self.require_document_idle()?;
         refused(self.paste_refusal())?;
         if sources.is_empty() { return Err("Copy an image to paste".into()); }
@@ -874,7 +878,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 kind: layer_core::RasterOperationKind::Bake { scene, scope: SceneScope::All,
                     offset: Point { x: position.x - origin.x, y: position.y - origin.y } } }));
         }
-        self.engine.insert_with_operations(Vec::new(), operations, None).map_err(error)?;
+        if let Some(reservation) = reservation { self.engine.insert_with_operations_reserved(Vec::new(), operations, None, reservation) }
+        else { self.engine.insert_with_operations(Vec::new(), operations, None) }.map_err(error)?;
         self.layer_interaction.changed = true;
         self.refresh_document(); self.refresh_commands();
         Ok(())
@@ -934,7 +939,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
 
-    fn paste_objects(&mut self, objects: Vec<(Arc<str>, layer_core::ImageObject)>, destination: Option<ImageLayerDestination>, masked: bool) -> Result<(), String> {
+    fn paste_objects(&mut self, objects: Vec<(Arc<str>, layer_core::ImageObject)>, destination: Option<ImageLayerDestination>, masked: bool, reservation: Option<layer_core::MemoryReservation>) -> Result<(), String> {
         self.require_document_idle()?;
         if masked { refused(self.paste_into_refusal())?; }
         if !self.engine.backend().supports_tiled_sources() {
@@ -943,7 +948,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let objects = if masked { self.centred_in_selection(objects)? } else { objects };
         let (edit, _, operations) = self.insert_objects_edit(objects, destination, masked)?;
         self.source_edit_candidates(&edit, Default::default())?;
-        self.layer_edit_with(edit, operations)?;
+        self.layer_edit_reserved(edit, operations, reservation)?;
         self.object_tool(LayerCanvasTool::Move)?;
         self.refresh_document();
         self.refresh_commands();

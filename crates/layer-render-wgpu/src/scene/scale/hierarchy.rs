@@ -1,5 +1,9 @@
 use super::*;
 
+pub(crate) fn eligible(scene: SceneView<'_>) -> bool {
+    !scene.order().iter().any(|handle| scene.object_layer(*handle).is_some())
+}
+
 #[expect(clippy::large_enum_variant, reason = "Window images remain inline while display caches change during motion")]
 pub(super) enum Pixels {
     Window { root: Option<Image>, next: Option<Image> },
@@ -101,19 +105,16 @@ pub(super) struct Hierarchy {
     bytes: u64,
 }
 impl Hierarchy {
-    fn budget(r: &WgpuRasterizer, _retained: u64) -> u64 {
+    pub(crate) fn budget(r: &WgpuRasterizer) -> u64 {
         let _trace = crate::performance_trace::Span::new(c"capy.hierarchy_budget");
-        let configured = r.native_edit.as_ref().map_or(0, |n| n.display_complete_bytes);
-        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows", target_vendor = "apple"))]
-        let configured = configured.min(crate::display_memory::complete_budget(&r.device, _retained));
-        configured.saturating_sub(CACHE_BYTES)
+        r.memory.scene_limit().saturating_sub(CACHE_BYTES)
     }
-    pub fn fits(&self, r: &WgpuRasterizer) -> bool { self.bytes <= Self::budget(r, self.bytes) }
+    pub fn fits(&self, r: &WgpuRasterizer) -> bool { self.bytes <= Self::budget(r) }
     fn new(r: &mut WgpuRasterizer, cache: &Cache, packet: FramePacket<'_>, encoder: &mut crate::submission::CommandEncoder) -> Option<Self> {
-        if packet.scene.order().iter().any(|h| packet.scene.object_layer(*h).is_some()) { return None; }
+        if !eligible(packet.scene) { return None; }
         #[cfg(not(target_arch = "wasm32"))]
         if r.snapshot_worker { return None; }
-        let budget = Self::budget(r, 0);
+        let budget = Self::budget(r);
         if budget == 0 { return None; }
         let extent = cache.plan.extent;
         let last = display_mips::Plan::new(extent).ok()?.level.max(5) + 1;
@@ -190,7 +191,7 @@ impl Cache {
         if self.half.as_ref().is_some_and(|half| half.presents(sources)) { return Ok(()); }
         let previous = self.half.take();
         let admitted = match &self.hierarchy {
-            Some(hierarchy) => hierarchy.bytes + half_bytes(sources) <= Hierarchy::budget(r, hierarchy.bytes),
+            Some(hierarchy) => hierarchy.bytes + half_bytes(sources) <= Hierarchy::budget(r),
             None => half_bytes(sources) <= self.auxiliary_budget(r, packet),
         };
         if !admitted { return Ok(()); }

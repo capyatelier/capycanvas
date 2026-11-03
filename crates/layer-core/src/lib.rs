@@ -11,6 +11,10 @@ pub use atomic_file::{atomic_write, atomic_write_checked};
 mod cancellable;
 pub use cancellable::Cancellable;
 pub mod temp_files;
+pub mod memory_budget;
+mod document_memory;
+pub use document_memory::DocumentMemory;
+pub use memory_budget::{MemoryBudget, MemoryFacts, DeviceMemoryFacts, MemoryDevice, MemoryOwner, MemoryReservation, MemoryOwnerKind, MemoryClass, MemoryReport, MemoryGrant, MemoryBudgetSnapshot, MemoryOwnerTotals, MemoryDeviceSnapshot};
 
 use std::collections::BTreeSet;
 pub mod color;
@@ -113,6 +117,7 @@ pub type Revision = u64;
 
 /// Largest canvas or layer extent, in pixels per side.
 pub const MAX_EXTENT: u32 = 32768;
+pub const MEMORY_BUDGET_EXCEEDED: &str = "The drawing exceeds the memory limit";
 
 #[derive(
     Clone,
@@ -1431,7 +1436,7 @@ pub use authored::{
     StackHandle, Store, VectorItemSelection, WorkingState,
 };
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Document {
     pub artwork: Artwork,
     pub working: WorkingState,
@@ -1439,6 +1444,14 @@ pub struct Document {
     pub owner: u64,
     pub(crate) scene_index: Arc<SceneIndex>,
     next_stroke_id: u64,
+    pub(crate) memory: DocumentMemory,
+}
+
+impl PartialEq for Document {
+    fn eq(&self, other: &Self) -> bool {
+        self.artwork == other.artwork && self.working == other.working && self.revision == other.revision
+            && self.owner == other.owner && self.scene_index == other.scene_index && self.next_stroke_id == other.next_stroke_id
+    }
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -1509,11 +1522,14 @@ impl Document {
             owner,
             scene_index,
             next_stroke_id: 1,
+            memory: DocumentMemory::default(),
         };
         document.validate_payloads()?;
         let mut roots=RootInventory::default();roots.document(&document);roots.validate_resources().map_err(DocumentError::InvalidArtwork)?;
         Ok(document)
     }
+    pub fn memory(&self) -> &DocumentMemory { &self.memory }
+    pub fn with_memory(mut self, memory: DocumentMemory) -> Self { self.memory = memory; self }
     pub fn composition(&self) -> &Composition {
         self.artwork
             .compositions
@@ -1527,21 +1543,22 @@ impl Document {
             .expect("published output")
     }
     pub fn scene(&self) -> SceneView<'_> {
-        SceneView::new(&self.artwork, &self.scene_index).with_owner(self.owner, self.revision)
+        SceneView::new(&self.artwork, &self.scene_index).with_memory(Some(&self.memory)).with_owner(self.owner, self.revision)
     }
     pub fn snapshot(&self) -> Arc<SceneSnapshot> {
         self.snapshot_with_context(self.output().context.clone())
     }
     pub fn snapshot_with_context(&self, context: EvaluationContext) -> Arc<SceneSnapshot> {
         #[cfg_attr(target_arch="wasm32",expect(clippy::arc_with_non_send_sync,reason="Shared scene ownership includes single-threaded Wasm Liquify fields"))]
-        let snapshot = Arc::new(SceneSnapshot::new(
+        let mut snapshot = SceneSnapshot::new(
             self.artwork.clone(),
             self.scene_index.clone(),
             self.owner,
             self.revision,
             context,
-        ));
-        snapshot
+        );
+        snapshot.memory = Some(self.memory.capture_current());
+        Arc::new(snapshot)
     }
     pub fn has_animated_effects(&self) -> bool {
         let scene = self.scene();
@@ -2070,7 +2087,7 @@ impl Edit {
         };
         let mut before=RootInventory::default();previous.roots(&mut before);
         let mut after=RootInventory::default();self.roots(&mut after);
-        before.ownership()!=after.ownership()
+        !before.same_ownership(&after)
     }
     pub(crate) fn roots<'a>(&'a self, out: &mut RootInventory<'a>) {
         match self {
@@ -2125,11 +2142,7 @@ impl Edit {
         self.roots(&mut roots);
         out.extend(roots.rasters);
     }
-    fn resource_roots<'a>(&'a self, out: &mut Vec<&'a Arc<Lut3d>>) {
-        let mut roots = RootInventory::default();
-        self.roots(&mut roots);
-        out.extend(roots.resources);
-    }
+
 
 }
 
@@ -2239,17 +2252,12 @@ impl<'a> RootInventory<'a> {
         Ok(())
     }
     fn ownership(&self)->std::collections::BTreeSet<(u8,u64)> {
-        let mut owners=std::collections::BTreeSet::new();
+        let mut owners=self.asset_ownership();
         owners.extend(self.rasters.iter().filter(|r|!r.is_empty()).map(|r|(0,r.identity())));
         owners.extend(self.extensions.iter().map(|e|(9,Arc::as_ptr(e) as usize as u64)));
         owners.extend(self.operations.iter().map(|ops|(8,Arc::as_ptr(ops) as usize as u64)));
-        owners.extend(self.sources.iter().map(|s|(1,Arc::as_ptr(s) as usize as u64)));
-        owners.extend(self.images.iter().map(|image|(10,image.owner_identity() as u64)));
         owners.extend(self.vectors.iter().flat_map(|o|o.chunks().iter().map(|c|(11,c.owner_identity() as u64))));
-        owners.extend(self.resources.iter().filter_map(|r|r.storage().map(|s|(2,s.as_ptr() as usize as u64))));
         owners.extend(self.meshes.iter().map(|m|(3,Arc::as_ptr(m) as usize as u64)));
-        owners.extend(self.programs.iter().map(|p|(4,Arc::as_ptr(p) as usize as u64)));
-        owners.extend(self.profiles.iter().filter_map(|p|if let color::ColorProfile::Icc(s)=p{Some((5,s.as_ptr() as usize as u64))}else{None}));
         for selection in &self.selections {
             match &selection.shape {
                 SelectionShape::Pixels(p)=>{owners.insert((6,p.words().as_ptr() as usize as u64));},
@@ -2257,6 +2265,37 @@ impl<'a> RootInventory<'a> {
             }
         }
         owners
+    }
+    fn asset_ownership(&self)->std::collections::BTreeSet<(u8,u64)> {
+        self.sources.iter().map(|s|(1,Arc::as_ptr(s) as usize as u64))
+            .chain(self.images.iter().map(|image|(10,image.owner_identity() as u64)))
+            .chain(self.resources.iter().filter_map(|r|r.storage().map(|s|(2,s.as_ptr() as usize as u64))))
+            .chain(self.programs.iter().map(|p|(4,Arc::as_ptr(p) as usize as u64)))
+            .chain(self.profiles.iter().filter_map(|p|if let color::ColorProfile::Icc(s)=p{Some((5,s.as_ptr() as usize as u64))}else{None})).collect()
+    }
+    fn retained_assets(&self, retained:&Self)->bool {
+        let mut owned=retained.asset_ownership();
+        for program in &self.programs {
+            if retained.programs.iter().any(|previous|Self::same_program_ownership(previous,program)) {owned.insert((4,Arc::as_ptr(program) as usize as u64));}
+        }
+        self.asset_ownership().is_subset(&owned)
+    }
+    fn same_program_ownership(a:&Arc<EffectProgram>,b:&Arc<EffectProgram>)->bool {
+        Arc::ptr_eq(a,b) || a==b && std::iter::once(&a.wgsl).chain(a.lookups.iter().map(|lookup|&lookup.wgsl))
+            .zip(std::iter::once(&b.wgsl).chain(b.lookups.iter().map(|lookup|&lookup.wgsl)))
+            .all(|(a,b)|match (a.sources(),b.sources()) {
+                (Ok(a),Ok(b))=>a.len()==b.len() && a.iter().zip(b).all(|(a,b)|a.id()==b.id() && a.same_owner(b)),
+                _=>false,
+            })
+    }
+    fn same_ownership(&self, other:&Self)->bool {
+        let mut a=self.ownership();let mut b=other.ownership();
+        for program in &self.programs {
+            if let Some(previous)=other.programs.iter().find(|previous|Self::same_program_ownership(previous,program)) {
+                a.remove(&(4,Arc::as_ptr(program) as usize as u64));b.remove(&(4,Arc::as_ptr(previous) as usize as u64));
+            }
+        }
+        a==b
     }
 
     pub fn document(&mut self, document: &'a Document) {
@@ -2350,6 +2389,7 @@ pub struct Editor {
     checkpoint: u64,
     next_checkpoint: u64,
     ledger: std::sync::Mutex<history_budget::VectorLedger>,
+    memory_dirty: bool,
 }
 pub(crate) fn json_len(value: &impl serde::Serialize) -> usize {
     struct Count(usize);
@@ -2423,14 +2463,30 @@ fn edit_metadata(edit: &Edit) -> usize {
 }
 impl Editor {
     pub fn new(document: Document) -> Self {
-        Self {
+        let mut editor = Self {
             document,
             undo: Vec::new(),
             redo: Vec::new(),
             checkpoint: 0,
             next_checkpoint: 1,
             ledger: Default::default(),
-        }
+            memory_dirty: false,
+        };
+        if !editor.document.memory.initialized() { editor.report_memory(true); }
+        editor
+    }
+    pub(crate) fn report_memory(&mut self, force: bool) {
+        let tiles = self.retained_tiles();
+        self.document.memory.report(tiles, force);
+        self.memory_dirty = false;
+    }
+    pub fn memory_report_pending(&self) -> bool { self.memory_dirty }
+    pub fn flush_memory(&mut self) {
+        if self.memory_dirty { self.report_memory(false); }
+    }
+    fn update_memory(&mut self) {
+        if self.document.memory.requires_inventory_commit() { self.report_memory(false); }
+        else { self.memory_dirty = true; }
     }
     pub fn document(&self) -> &Document {
         &self.document
@@ -2480,7 +2536,7 @@ impl Editor {
             .get_mut(artwork.default_output)
             .expect("published output")
             .context = context;
-        artwork
+        let mut capture = artwork
             .capture(CaptureCheckpoint {
                 document: artwork.id,
                 owner: self.document.owner,
@@ -2489,19 +2545,36 @@ impl Editor {
                 working_generation: self.document.working.generation,
                 edit_checkpoint: self.checkpoint,
             })
-            .map_err(DocumentError::InvalidLayerOperation)
+            .map_err(DocumentError::InvalidLayerOperation)?;
+        capture.memory = Some(self.document.memory.capture(&self.document));
+        Ok(capture)
     }
     pub fn perform(&mut self, edit: Edit) -> Result<(), DocumentError> {
         self.perform_with_history_budget(edit, history_budget::BYTE_BUDGET)
     }
+    pub fn perform_reserved(&mut self, edit: Edit, reservation: MemoryReservation) -> Result<(), DocumentError> {
+        if !reservation.active() { return self.perform(edit); }
+        self.document.memory.reservation = Some(reservation);
+        let result = self.perform(edit);
+        self.document.memory.reservation.take();
+        result
+    }
     pub fn validate_edit(&self, edit: &Edit) -> Result<(), DocumentError> {
-        self.prepare_history_edit(edit.clone(), history_budget::BYTE_BUDGET)
+        self.prepare_history_edit_with_admission(edit.clone(), history_budget::BYTE_BUDGET, false)
             .map(|_| ())
     }
     fn prepare_history_edit(
         &self,
         edit: Edit,
         budget: usize,
+    ) -> Result<(Document, HistoryEntry), DocumentError> {
+        self.prepare_history_edit_with_admission(edit, budget, true)
+    }
+    fn prepare_history_edit_with_admission(
+        &self,
+        edit: Edit,
+        budget: usize,
+        admission: bool,
     ) -> Result<(Document, HistoryEntry), DocumentError> {
         let mut incoming=RootInventory::default();edit.roots(&mut incoming);
         let resources=incoming.resource_ids();
@@ -2514,7 +2587,7 @@ impl Editor {
         }
         if !incoming.images.is_empty() {
             let mut images=BTreeMap::new();
-            for image in incoming.images {
+            for &image in &incoming.images {
                 if images.insert(image.id(),image).is_some_and(|previous|!previous.identity_matches(image)) {return Err(DocumentError::InvalidArtwork("Conflicting immutable image identity".into()));}
             }
             retained.document(&self.document);
@@ -2522,43 +2595,30 @@ impl Editor {
                 if images.get(&image.id()).is_some_and(|incoming|!incoming.identity_matches(image)) {return Err(DocumentError::InvalidArtwork("Immutable image identity conflicts with retained history".into()));}
             }
         }
-        retained.document(&self.document);edit.roots(&mut retained);
+        retained.document(&self.document);
+        let added_assets=!incoming.retained_assets(&retained);
+        edit.roots(&mut retained);
         retained.validate_resources().map_err(DocumentError::InvalidArtwork)?;
         let mut candidate = self.document.clone();
         let inverse = HistoryEntry::new(candidate.apply(edit)?, self.checkpoint);
         let mut restored = candidate.clone();
         let forward = HistoryEntry::new(restored.apply(inverse.edit.clone())?, self.checkpoint);
-        let mut current = RootInventory::default();
-        current.document(&self.document);
-        let mut resources = Vec::new();
-        forward.edit.resource_roots(&mut resources);
-        let mut accounting = history_budget::Accounting::default();
-        for r in current.resources {
-            accounting.charge_resource(r);
-        }
-        if resources
-            .into_iter()
-            .any(|r| accounting.charge_resource(r) != 0)
-        {
-            let mut roots = RootInventory::default();
-            roots.document(&candidate);
-            let mut accounting = history_budget::Accounting::default();
-            let bytes = roots
-                .resources
-                .into_iter()
-                .map(|r| accounting.charge_resource(r))
-                .fold(0usize, usize::saturating_add);
-            if bytes as u64 > ProjectLimits::default().asset_bytes {
-                return Err(DocumentError::InvalidLayerOperation(
-                    "Effect resources exceed the project memory limit",
-                ));
+        let inventory=if added_assets && admission {
+            let current = self.retained_tiles();
+            let prospective = self.retained_tiles_for(&candidate, true);
+            let bytes = prospective.resident_bytes().saturating_add(prospective.metadata_bytes)
+                .saturating_sub(current.resident_bytes().saturating_add(current.metadata_bytes));
+            if !candidate.memory.reserve(bytes as u64) {
+                return Err(DocumentError::MemoryBudgetExceeded);
             }
-        }
+            Some(prospective)
+        }else{None};
         if self.admission_charge(&self.document, &forward) > budget || self.admission_charge(&candidate, &inverse) > budget {
             return Err(DocumentError::InvalidLayerOperation(
                 "This edit exceeds the Undo/Redo memory limit",
             ));
         }
+        if let Some(inventory)=inventory {candidate.memory.cache_preview(inventory);}
         Ok((candidate, inverse))
     }
     fn perform_with_history_budget(
@@ -2598,6 +2658,7 @@ impl Editor {
             self.next_checkpoint = next;
         }
         self.trim_history(budget);
+        self.update_memory();
         Ok(())
     }
     fn admission_charge(&self, document: &Document, entry: &HistoryEntry) -> usize {
@@ -2658,6 +2719,7 @@ impl Editor {
         let entry = from.pop().unwrap();
         to.push(HistoryEntry::new(inverse, self.checkpoint).linked(&self.document));
         self.checkpoint = entry.checkpoint;
+        self.update_memory();
         Ok(true)
     }
     pub fn refine_selection(
@@ -2818,14 +2880,28 @@ impl Editor {
         self.next_checkpoint = next;
         Ok(())
     }
+    pub fn preview_reserved(&mut self, edit: Edit, reservation: MemoryReservation) -> Result<(), DocumentError> {
+        if !reservation.active() { return self.preview(edit); }
+        let previous=self.document.memory.reservation.replace(reservation);
+        let result = self.preview(edit);
+        if result.is_err() { self.document.memory.reservation=previous; }
+        result
+    }
     pub fn preview(&mut self, edit: Edit) -> Result<(), DocumentError> {
         if edit.requires_history_admission(&self.document) {
-            self.document=self.prepare_history_edit(edit,history_budget::BYTE_BUDGET)?.0;Ok(())
-        }else {self.document.apply(edit).map(|_| ())}
+            self.document=self.prepare_history_edit(edit,history_budget::BYTE_BUDGET)?.0;
+        } else { self.document.apply(edit)?; }
+        Ok(())
+    }
+    pub fn cancel_preview(&mut self, edit: Edit) -> Result<(), DocumentError> {
+        self.preview(edit)?;
+        self.update_memory();
+        Ok(())
     }
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DocumentError {
+    MemoryBudgetExceeded,
     InvalidRuler(&'static str),
     InvalidLayerOperation(&'static str),
     InvalidArtwork(String),
@@ -2840,6 +2916,7 @@ pub enum DocumentError {
 impl fmt::Display for DocumentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::MemoryBudgetExceeded => f.write_str(MEMORY_BUDGET_EXCEEDED),
             Self::InvalidRuler(m) | Self::InvalidLayerOperation(m) => f.write_str(m),
             Self::InvalidArtwork(m) => f.write_str(m),
             Self::MissingOccurrence(h) => write!(f, "occurrence {} does not exist", h.index()),

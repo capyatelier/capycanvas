@@ -72,7 +72,7 @@ fn native_local_tone_sustained_qualification() {
                 let copy = DocumentExport { capture: snapshot.capture.clone(), time: snapshot.time };
                 let clipped = crate::files::export::write_snapshot(gpu.clone(), copy, recipe, &destination, &Default::default()).unwrap();
                 let export_ms = started.elapsed().as_secs_f64() * 1000.;
-                let decoded = layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(&destination).unwrap()), Default::default()).unwrap();
+                let decoded = layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(&destination).unwrap()), layer_ui::photo_decode_limits()).unwrap();
                 assert_eq!(decoded.extent, extent);
                 assert_eq!(decoded.interpretation.depth, SampleDepth::F16);
                 let mut row = vec![0; decoded.row_bytes()];

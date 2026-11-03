@@ -177,10 +177,7 @@ pub(crate) struct Lease { counter: Arc<std::sync::Mutex<u64>>, bytes: u64 }
 impl Lease {
     pub fn reserve(device: &PipelineDevice, bytes: u64) -> Result<Self, String> {
         let mut retained = device.analysis_memory.lock().unwrap();
-        #[cfg(target_arch = "wasm32")]
-        let budget = 512 * 1024 * 1024;
-        #[cfg(not(target_arch = "wasm32"))]
-        let budget = crate::display_memory::resource_budget(device, *retained);
+        let budget = device.resource_limit.load(std::sync::atomic::Ordering::Acquire);
         if retained.saturating_add(bytes) > budget { return Err("Effect analysis exceeds available GPU memory".into()); }
         *retained += bytes;
         Ok(Self {counter: device.analysis_memory.clone(), bytes})

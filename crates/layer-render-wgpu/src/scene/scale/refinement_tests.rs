@@ -5,8 +5,7 @@ fn display_level_updates_and_dirty_regions_batch_compute_passes() {
     let mut doc = document_at([2048; 2]);
     occurrence_mut(&mut doc, 0).opacity = 0.5;
     add_fill(&mut doc, layer_core::color::RgbColor::WHITE);
-    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    r.set_complete_display_allowance(1024 << 20);
+    let mut r = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
     let mut frame = packet(doc.scene(), doc.composition().size);
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
     submit_published(&mut r, frame);
@@ -113,8 +112,8 @@ fn strokes_and_replays_repair_only_touched_pages() {
         let mut v = crate::test_support::view([256, 192]);
         v.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
         let (mut input, consumer) = input_queue(64);
-        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-        r.set_complete_display_allowance(1024 << 20);
+        let r = crate::memory::memory_tests::renderer(doc.composition().color,
+            layer_core::DeviceMemoryFacts { budget_bytes: Some(2 << 30), ..Default::default() }).unwrap();
         let mut engine = CanvasEngine::new(r, doc, consumer, v,
             ViewTransform { revision: 0, surface_to_document: [8., 0., 0., 8., 0., 0.] }).unwrap();
         engine.set_instant_feedback(InstantFeedbackConfig { enabled, prediction_horizon_micros: 16_000, ..Default::default() }).unwrap();
@@ -171,13 +170,17 @@ fn strokes_and_replays_repair_only_touched_pages() {
 fn idle_refinement_presents_completion_and_never_holds_new_input() {
     let doc = document_at([1537, 1025]);
     let extent = doc.composition().size;
-    for allowance in [0, 1024 << 20] {
-        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-        r.set_complete_display_allowance(allowance);
+    for admitted in [false,true] {
+        let mut r = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
         let mut frame = packet(doc.scene(), extent);
         frame.composite_all = false;
         frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
+        if admitted {crate::memory::memory_tests::legacy_scene_frame(&mut r, frame);}
+        else {working_scene_frame(&mut r, frame);}
         submit_published(&mut r, frame);
+        let cache=r.scale_display.as_ref().unwrap();
+        assert!(cache.evaluation==Evaluation::Display);
+        assert_eq!(cache.hierarchy.is_some(),admitted);
         crate::test_support::submit_ready(&mut r, frame).unwrap();
         let mut presenter = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba32Float,
             SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
@@ -285,8 +288,8 @@ fn idle_refinement_batches_pages_and_yields_to_new_artwork() {
 fn sparse_contacts_preserve_exact_pages_between_their_footprints() {
     let doc = document_at([769, 513]);
     let extent = doc.composition().size;
-    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    r.set_complete_display_allowance(1024 << 20);
+    let mut r = crate::memory::memory_tests::renderer(doc.composition().color,
+        layer_core::DeviceMemoryFacts { budget_bytes: Some(2 << 30), ..Default::default() }).unwrap();
     let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
     let mut frame = packet(doc.scene(), extent);
@@ -370,11 +373,131 @@ fn idle_spatial_refinement_bounds_pass_work_and_yields_between_distant_contacts(
 }
 
 #[test]
+fn cold_multilayer_idle_refinement_finishes_with_a_bounded_source_batch() {
+    use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey};
+    let extent = [PAGE_SIZE * 8, PAGE_SIZE * 2];
+    let mut doc = document_at(extent);
+    let paint = primary_paint(&doc);
+    doc.artwork.paint.get_mut(paint).unwrap().base = None;
+    for layer in 0..4 {
+        let occurrence = if layer == 0 { doc.scene().order()[0] } else {
+            let occurrence = paint_occurrence(&mut doc, "Ink", None);
+            insert_occurrence(&mut doc, occurrence, 0);
+            occurrence
+        };
+        doc.artwork.occurrences.get_mut(occurrence).unwrap().opacity = 0.72;
+        let OccurrenceContent::Paint(paint) = doc.scene().occurrence(occurrence).unwrap().content else { unreachable!() };
+        let mut data = RasterData::default();
+        for y in 0..2 {
+            for x in 0..8 {
+                let pixel = [31 + layer * 41, 17 + x as u8 * 23, 37 + y as u8 * 53, 255];
+                let blob = TileBlob::encode(doc.composition().color.paint_descriptor(),
+                    &pixel.repeat(PAGE_SIZE.pow(2) as usize)).unwrap();
+                data.tiles.insert(TileKey { plane: RasterPlane::Color, coordinate: [x, y] }, RasterTile::backed(blob));
+            }
+        }
+        doc.artwork.paint.get_mut(paint).unwrap().raster = RasterRevision::backed(data);
+    }
+    let authored = doc.artwork.clone();
+    let mut exact = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
+    crate::test_support::submit_settled(&mut exact, packet(doc.scene(), extent));
+    let expected = pixels(&exact, crate::test_support::document_texture(&exact));
+    let mut r = crate::memory::memory_tests::renderer(doc.composition().color,
+        layer_core::DeviceMemoryFacts { unified: true, ..Default::default() }).unwrap();
+    let mut frame = packet(doc.scene(), extent);
+    frame.composite_all = false;
+    frame.view = crate::test_support::view([extent[0] / 4, extent[1] / 4]);
+    frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+    submit_published(&mut r, frame);
+    assert!(r.has_pending_work(), "the Fit view still needs native refinement");
+    crate::test_support::complete(&r);
+    crate::memory::memory_tests::cold_color_pressure(&mut r);
+    for _ in 0..(page_coordinates(PixelRect::full(extent)).count() * 4).div_ceil(SOURCE_SLOTS) + 1 {
+        r.publish_memory(true);
+        r.factory.memory_budget().flush_reports();
+        r.refresh_memory_limits();
+        r.shader_idle(true, true);
+        r.after_present();
+        crate::test_support::complete(&r);
+    }
+    let capacity = (r.source_tiles.borrow().admitted_bytes()[0] / crate::scene::sources::FLOAT_TILE_BYTES) as usize;
+    assert!(capacity >= SOURCE_SLOTS + 4);
+    assert!(SOURCE_SLOTS * 4 > capacity, "one idle batch needs more cold sources than fit");
+    let pages = page_coordinates(PixelRect::full(extent)).count();
+    let mut completed_batches = Vec::new();
+    let mut frames = 0;
+    for _ in 0..pages * 4 + 8 {
+        if !r.has_pending_work() { break; }
+        crate::test_support::complete(&r);
+        crate::test_support::settle_decodes(&mut r);
+        let before = r.scale_display.as_ref().unwrap().refined.len();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
+        frames += 1;
+        let after = r.scale_display.as_ref().unwrap().refined.len();
+        if after > before { completed_batches.push(after - before); }
+    }
+    assert!(!r.has_pending_work(), "idle refinement must finish; frames={frames}, completed batches={completed_batches:?}");
+    assert!(!completed_batches.is_empty(), "idle frames complete at least one native page");
+    let cache = r.scale_display.as_ref().unwrap();
+    assert!(quality(&display_pixels(&r), &expected, cache.plan)[2] < 2e-5);
+    assert_eq!(doc.artwork, authored);
+}
+
+#[test]
+fn a_settled_photo_hierarchy_survives_unchanged_zoom_and_pan() {
+    use layer_core::color::{DocumentColor, RgbSpace};
+    let extent = [6000, 4000];
+    let mut doc = document_at(extent);
+    composition_mut(&mut doc).color = DocumentColor {
+        space: RgbSpace::ProPhoto, depth: SampleDepth::U16,
+    };
+    composition_mut(&mut doc).blend = layer_core::BlendSpace::Linear;
+    for _ in 0..31 {
+        let paint = paint_occurrence(&mut doc, "Empty", None);
+        insert_occurrence(&mut doc, paint, 1);
+    }
+    for (name, key, value) in [
+        ("exposure", "exposure", 0.25),
+        ("white_balance", "temperature", 4.),
+        ("levels", "gamma", 1.08),
+        ("hue_saturation", "saturation", 5.),
+        ("color_balance", "midtones_red", 2.),
+    ] {
+        let mut effect = layer_core::EffectInstance::new(
+            layer_core::bundled_effect_catalog().get(name).unwrap().program());
+        effect.set(key, layer_core::EffectValue::Number(value)).unwrap();
+        let occurrence = effect_occurrence(&mut doc, effect, name);
+        insert_occurrence(&mut doc, occurrence, 0);
+    }
+    let mut r = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
+    let mut frame = packet(doc.scene(), extent);
+    frame.composite_all = false;
+    frame.view = crate::test_support::view([1500, 1000]);
+    frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+    crate::test_support::submit_settled(&mut r, frame);
+    let fitted = display_pixels(&r);
+    assert!(fitted.iter().all(|pixel| pixel.iter().all(|value| value.is_finite())));
+    assert!(fitted.iter().any(|pixel| pixel[3] > 0.99));
+    assert_presentation_mip(&r);
+    assert!(r.scale_display.as_ref().unwrap().hierarchy.as_ref()
+        .is_some_and(|hierarchy| hierarchy.missing().is_none()),
+        "an ample ledger retains the complete settled photo hierarchy");
+    let work = r.metrics.composited_pixels;
+    for (zoom, x, y) in [(0.5, -700., -400.), (0.5, -760., -440.), (0.25, 0., 0.)] {
+        frame.view.document_to_surface = [zoom, 0., 0., zoom, x, y];
+        crate::test_support::submit_settled(&mut r, frame);
+        assert_eq!(r.metrics.composited_pixels, work,
+            "unchanged navigation samples already refined photo levels");
+        assert_presentation_mip(&r);
+    }
+    assert!(crate::test_support::max_error(&display_pixels(&r), &fitted) < 2e-5);
+}
+
+#[test]
 fn settled_composition_reuses_every_zoom_and_refines_only_changed_pages() {
     let mut doc = document_at([769, 513]);
     let extent = doc.composition().size;
-    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    r.set_complete_display_allowance(1024 << 20);
+    let mut r = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
     let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
     let mut frame = packet(doc.scene(), extent);
@@ -460,12 +583,11 @@ fn global_filters_evict_optional_levels_before_rejecting_the_document() {
     composition_mut(&mut doc).size=[2561;2];
     paint_mut(&mut doc,0).domain = [2561;2];
     let extent = doc.composition().size;
-    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    r.set_complete_display_allowance(1024 << 20);
-    r.native_edit.as_mut().unwrap().composition_bytes = 0;
+    let mut r = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
     let mut frame = packet(doc.scene(), extent);
     frame.composite_all = false;
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
+    r.begin_frame_memory(frame);
     submit_published(&mut r, frame);
     for _ in 0..=page_coordinates(PixelRect::full(extent)).count() {
         if !r.has_pending_work() { break; }
@@ -480,11 +602,13 @@ fn global_filters_evict_optional_levels_before_rejecting_the_document() {
     program.passes = vec![layer_core::EffectPass { entry: program.entry.clone(), sampling: layer_core::EffectSampling::Document }].into();
     let effect=effect_occurrence(&mut doc,EffectInstance::new(Arc::new(program)),"effect");
     insert_occurrence(&mut doc,effect,0);
-    let budget = r.native_edit.as_ref().unwrap();
-    assert!(windows::Plan::new(doc.scene(), extent, budget.image_pixel_budget(resident), r.device.limits().max_texture_dimension_2d).is_err());
-    assert!(windows::Plan::new(doc.scene(), extent, budget.image_pixel_budget(0), r.device.limits().max_texture_dimension_2d).is_ok());
     frame = packet(doc.scene(), extent);
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
+    crate::memory::memory_tests::scene_frame_with_budget(&mut r, frame, 256 << 20);
+    let budget = r.native_edit.as_ref().unwrap();
+    assert_eq!(budget.image_pixel_budget(0),256 << 20);
+    assert!(windows::Plan::new(doc.scene(), extent, budget.image_pixel_budget(resident), r.device.limits().max_texture_dimension_2d).is_err());
+    assert!(windows::Plan::new(doc.scene(), extent, budget.image_pixel_budget(0), r.device.limits().max_texture_dimension_2d).is_ok());
     crate::test_support::submit_ready(&mut r, frame).unwrap();
     assert_eq!(r.scale_display.as_ref().unwrap().resident_bytes(), 0);
     assert!(!r.scale_display.as_ref().unwrap().has_pending_work(&r));
@@ -629,8 +753,7 @@ fn idle_display_refines_paused_transform_windows_and_reuses_exact_overlap() {
         let extent = doc.composition().size;
         let preview = layer_render::TransformPreview { transaction: 1, target: source_at(&doc, 0), moving: false, selection: None,
             transform: layer_core::ImageTransform::affine(Affine::around(Point { x: 770., y: 385. }, [0.9, 0.8], 0.17, Point::default())) };
-        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-        r.set_complete_display_allowance(0);
+        let mut r = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
         let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         exact.test.reference = true;
         for renderer in [&mut r, &mut exact] { renderer.set_transform_preview(Some(&preview)).unwrap(); }
@@ -641,12 +764,14 @@ fn idle_display_refines_paused_transform_windows_and_reuses_exact_overlap() {
         frame.view.height_px = 64;
         for (x, y) in [(0., 0.), (-180., -60.), (-290., -120.), (0., 0.)] {
             frame.view.document_to_surface = [0.25, 0., 0., 0.25, x, y];
+            working_scene_frame(&mut r, frame);
             submit_published(&mut r, frame); crate::test_support::submit_settled(&mut exact, FramePacket { composite_all: true, ..frame });
             assert!(r.scale_display.as_ref().unwrap().overview.is_some());
             assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
         }
         frame.view.width_px = extent[0];
         frame.view.height_px = extent[1];
+        working_scene_frame(&mut r, frame);
         crate::test_support::submit_ready(&mut r, frame).unwrap();
         assert!(r.scale_display.as_ref().unwrap().placed.is_some());
         assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
@@ -742,8 +867,8 @@ fn published_clipped_paint_preserves_exact_pages_during_the_next_contact() {
     occurrence_mut(&mut doc, 0).opacity = 0.35;
     set_attachment_at(&mut doc, 0, true);
     let target = source_at(&doc, 0);
-    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    r.set_complete_display_allowance(1024 << 20);
+    let mut r = crate::memory::memory_tests::renderer(doc.composition().color,
+        layer_core::DeviceMemoryFacts { budget_bytes: Some(2 << 30), ..Default::default() }).unwrap();
     submit_published(&mut r, frame(&doc));
     settle(&mut r, &doc);
     let mut checkpoint = None;

@@ -1,5 +1,5 @@
 //! Reproduce large-photo interaction without host UI automation.
-//! Usage: photo_interaction INPUT.capy OUTPUT.csv [samples-per-frame] [cache-MiB] [stroke-frames] [brush-px] [circles|zigzag] [preset-id]
+//! Usage: photo_interaction INPUT.capy OUTPUT.csv [samples-per-frame] [stroke-frames] [brush-px] [circles|zigzag] [preset-id]
 //! Reads a copy of a project; never modifies its input. Timings include an
 //! offscreen managed presentation and queue completion, not display latency.
 use layer_core::*;
@@ -69,7 +69,6 @@ pub fn replay(mut args: impl Iterator<Item = String>) -> Result<()> {
     let input = args.next().ok_or("INPUT.capy is required")?;
     let output = args.next().ok_or("OUTPUT.csv is required")?;
     let samples: u64 = args.next().map(|v| v.parse()).transpose()?.unwrap_or(2);
-    let allowance: u64 = args.next().map(|v| v.parse()).transpose()?.unwrap_or(0);
     let frames: u64 = args.next().map(|v| v.parse()).transpose()?.unwrap_or(360);
     let diameter: f32 = args.next().map(|v| v.parse()).transpose()?.unwrap_or(570.7);
     let path = args.next().unwrap_or_else(|| "circles".into());
@@ -80,7 +79,7 @@ pub fn replay(mut args: impl Iterator<Item = String>) -> Result<()> {
     assert!(diameter.is_finite() && diameter > 0.);
     assert!(matches!(path.as_str(), "circles" | "zigzag"));
     let cancel = AtomicBool::new(false);
-    let limits = ProjectLimits::default();
+    let limits = ProjectLimits::for_import();
     let backing = package::transport::spool(&mut BufReader::new(std::fs::File::open(input)?),
         &std::env::temp_dir(), limits.metadata_bytes + limits.asset_bytes + limits.raster_bytes, &cancel)?;
     let package::codec::OpenOutcome::Candidate { artwork, .. } = package::codec::open(backing, limits, &cancel)?
@@ -93,8 +92,6 @@ pub fn replay(mut args: impl Iterator<Item = String>) -> Result<()> {
     let extent = document.composition().size;
     let mut gpu = WgpuRasterizer::new_native_headless(document.composition().color)?;
     println!("Adapter: {:?}", gpu.adapter().get_info());
-    // u64::MAX selects the host admission policy instead of a benchmark override.
-    if allowance != u64::MAX { gpu.set_complete_display_allowance(allowance * 1024 * 1024); }
     println!("Memory ceilings (display/source/upload bytes): {:?}", gpu.display_memory_limits());
     gpu.set_telemetry_enabled(true);
     let (mut input, consumer) = input_queue(samples as usize + 8);

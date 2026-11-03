@@ -18,13 +18,43 @@ pub struct SessionTransferDescriptor {
     next_checkpoint:u64,next_stroke_id:u64,metadata:Value,metadata_profiles:Vec<Value>,index_chunks:Vec<Vec<Value>>,extensions:BTreeMap<PortableId,Value>,extension_resources:Vec<PortableId>,
 }
 pub struct PreparedSessionTransfer {descriptor:SessionTransferDescriptor,artwork:PreparedTransfer}
+struct CachedSessionTransfer { prepared: PreparedSessionTransfer, tiles: crate::raster_storage::RetainedTiles }
+pub struct SessionTransferCache {
+    entries: BTreeMap<String,CachedSessionTransfer>,
+    owner: crate::MemoryOwner,
+}
+impl SessionTransferCache {
+    pub fn new(budget:crate::MemoryBudget)->Self {
+        Self {entries:BTreeMap::new(),owner:budget.register_owner(crate::MemoryOwnerKind::ParkedTabs,crate::MemoryClass::Warm,None)}
+    }
+    pub fn get(&self,key:&str)->Option<&PreparedSessionTransfer> {self.entries.get(key).map(|entry|&entry.prepared)}
+    fn resident_bytes(&self)->u64 {
+        crate::raster_storage::resident_tile_bytes(self.entries.values().map(|entry|&entry.tiles)) as u64
+    }
+    fn report(&self)->u64 {
+        let bytes=self.resident_bytes();
+        self.owner.report(crate::MemoryReport {ram_bytes:bytes,demand_ram_bytes:bytes,..Default::default()});
+        bytes
+    }
+    pub fn insert(&mut self,key:String,prepared:PreparedSessionTransfer) {
+        let tiles=prepared.artwork.cache_inventory();
+        self.entries.insert(key.clone(),CachedSessionTransfer {prepared,tiles});
+        while self.report()>self.owner.grant().ram_bytes {
+            let victim=self.entries.keys().find(|candidate|*candidate!=&key).cloned().or_else(||self.entries.keys().next().cloned());
+            let Some(victim)=victim else {break;};self.entries.remove(&victim);
+        }
+    }
+    pub fn retain(&mut self,mut keep:impl FnMut(&str)->bool) {
+        self.entries.retain(|key,_|keep(key));self.report();
+    }
+}
 pub struct SessionTransferReceiver {descriptor:SessionTransferDescriptor,artwork:TransferReceiver}
 fn active(cancel:&AtomicBool)->Result<(),String> {if cancel.load(Ordering::Relaxed){Err("Session transfer cancelled".into())}else{Ok(())}}
 
 impl EditorCapture {
     pub fn retained_tiles(&self)->crate::raster_storage::RetainedTiles {
         let editor=Editor {document:self.document.clone(),undo:self.undo.iter().map(|(edit,checkpoint)|HistoryEntry::new(edit.clone(),*checkpoint)).collect(),
-            redo:self.redo.iter().map(|(edit,checkpoint)|HistoryEntry::new(edit.clone(),*checkpoint)).collect(),checkpoint:self.artwork.checkpoint.edit_checkpoint,next_checkpoint:self.next_checkpoint,ledger:Default::default()};
+            redo:self.redo.iter().map(|(edit,checkpoint)|HistoryEntry::new(edit.clone(),*checkpoint)).collect(),checkpoint:self.artwork.checkpoint.edit_checkpoint,next_checkpoint:self.next_checkpoint,ledger:Default::default(),memory_dirty:false};
         editor.retained_tiles()
     }
 }
@@ -62,7 +92,7 @@ impl PreparedSessionTransfer {
         active(cancel)?;capture.validate_identity()?;
         let EditorCapture {artwork,document,undo,redo,next_checkpoint,captured_checkpoint}=capture;
         if *captured_checkpoint!=artwork.checkpoint {return Err("Session capture checkpoint changed".into());}
-        let Document {artwork:_,working:_,revision:_,owner:_,scene_index:_,next_stroke_id}=document;
+        let Document {artwork:_,working:_,revision:_,owner:_,scene_index:_,next_stroke_id,..}=document;
         let mut resources=ResourceInventory::for_transfer();
         let metadata=metadata.into();let metadata_profiles=metadata.encode_profiles(&mut resources)?;
         let working=WorkingRecord::capture(&document.working,&mut resources)?;let mut index_chunks=Vec::new();let mut chunk_versions=BTreeMap::new();
@@ -110,14 +140,16 @@ impl PreparedSessionTransfer {
         for id in &record.extension_resources {extensions.resources.insert(*id,self.artwork.private_resource(*id)?);}
         artwork.extensions=Arc::new(extensions);
         let mut document=Document::from_artwork(artwork).map_err(|e|e.to_string())?;
+        if let Some(memory)=capture.memory.clone() { document=document.with_memory(memory); }
         document.working=working;document.revision=capture.checkpoint.artwork_generation;document.next_stroke_id=record.next_stroke_id;
         let before=document.working.clone();document.repair_working().map_err(|e|e.to_string())?;
         if before!=document.working {return Err("Invalid session transfer editing target".into());}
         document.validate(limits)?;
-        let editor=Editor {document,undo,redo,checkpoint:capture.checkpoint.edit_checkpoint,next_checkpoint:record.next_checkpoint,ledger:Default::default()};
+        let mut editor=Editor {document,undo,redo,checkpoint:capture.checkpoint.edit_checkpoint,next_checkpoint:record.next_checkpoint,ledger:Default::default(),memory_dirty:false};
         let mut accounting=crate::history_budget::Accounting::new(editor.document());let mut bytes=0usize;
         for entry in editor.undo.iter().chain(&editor.redo) {bytes=bytes.saturating_add(accounting.charge(entry));}
         if bytes>crate::history_budget::BYTE_BUDGET {return Err("Session transfer history exceeds admission".into());}
+        editor.report_memory(true);
         active(cancel)?;Ok(OpenSession {editor,metadata:SessionMetadata {value:record.metadata.clone(),profiles}})
     }
 }
@@ -215,6 +247,38 @@ mod tests {
             receiver.push_chunk(i,&prepared.read_chunk(i,offset,size).unwrap()).unwrap();offset+=size as u64;
         }}
         receiver.finish().unwrap().adopt_with_programs(ProjectLimits::default(),&cancel,&prepared.artwork.trusted_programs).unwrap()
+    }
+    #[test]
+    fn recovery_transfer_cache_yields_its_warm_grant_without_dropping_active_capture() {
+        let budget=crate::MemoryBudget::with_facts(crate::MemoryFacts {override_bytes:Some(1024*1024),host_default_bytes:Some(1024*1024),..Default::default()});
+        let mut original=editor();
+        let SourceTarget::Paint(paint)=original.document.working.target.unwrap() else {panic!()};
+        original.document.artwork.paint.get_mut(paint).unwrap().base=Some(PaintBase::new(Image::new(crate::color::source::rgba8_source([19,11],|x,y|[x as u8,y as u8,80,255]))));
+        let outgoing=transfer(&original);
+        let mut receiver=SessionTransferReceiver::new(outgoing.descriptor().clone(),ProjectLimits::default()).unwrap();
+        for index in receiver.missing_payloads() {
+            let bytes=outgoing.read_chunk(index,0,outgoing.payload_len(index).unwrap() as usize).unwrap();
+            receiver.push_chunk(index,&bytes).unwrap();
+        }
+        let prepared=receiver.finish().unwrap();
+        let opened=prepared.adopt_verified(ProjectLimits::default(),&AtomicBool::new(false)).unwrap();
+        let capture=opened.editor.capture(1,Default::default()).unwrap();
+        let owner=Arc::downgrade(&opened.editor.document.memory.owner);
+        let mut cache=SessionTransferCache::new(budget.clone());
+        cache.insert("drawing".into(),prepared);
+        assert!(cache.get("drawing").is_some());
+        let bytes=cache.resident_bytes();assert!(bytes>0);
+        assert_eq!(budget.snapshot().ram_physical_bytes,bytes);
+        let reservation=budget.admit_import(budget.ram_limit_bytes()).unwrap();
+        let prepared=SessionTransferReceiver::new_reusing(outgoing.descriptor().clone(),ProjectLimits::default(),cache.get("drawing").unwrap()).unwrap().finish().unwrap();
+        let replacement=prepared.adopt_verified(ProjectLimits::default(),&AtomicBool::new(false)).unwrap();
+        cache.insert("replacement".into(),prepared);
+        assert!(cache.get("drawing").is_none());assert!(cache.get("replacement").is_none());
+        assert_eq!(budget.snapshot().ram_physical_bytes,0);
+        drop((opened,replacement));
+        assert!(owner.upgrade().is_some(),"active save capture remains pinned after cache eviction");
+        drop(capture);assert!(owner.upgrade().is_none());
+        drop(reservation);
     }
     #[test]
     fn undo_only_image_dependencies_and_occurrence_offsets_survive_incremental_transfer() {

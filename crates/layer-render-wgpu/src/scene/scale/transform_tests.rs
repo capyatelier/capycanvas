@@ -269,7 +269,7 @@ fn transform_queries_keep_only_the_native_tiles_the_requested_window_reads() {
     let doc = document_at([2053, 1541]);
     let extent = doc.composition().size;
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    r.source_tiles.get_mut().admit(0);
+    r.source_tiles.get_mut().admit_limits(64 << 20, 16 << 20, 44 << 20);
     let mut frame = packet(doc.scene(), extent);
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
     frame.composite_all = false;
@@ -418,16 +418,19 @@ fn whole_image_selections_reserve_one_transform_input_pyramid() {
     let mut preview = layer_render::TransformPreview { transaction: 1, target: source_at(&doc,0),
         moving: true, selection: None, transform: ImageTransform::affine(Affine([4.,0.,0.,4.,0.,0.])) };
     r.set_transform_preview(Some(&preview)).unwrap();
+    r.begin_frame_memory(frame);
     let no_selection = allocation(&r, plan, frame, None);
     assert_eq!(request(&r, frame).ok().map(|q| q.plan.level), Some(2));
     preview.selection = Some(Selection::polygon([[0.,0.],[4248.,0.],[4248.,2832.],[0.,2832.]]
         .map(|[x,y]| Point { x,y }).to_vec()).unwrap());
     r.set_transform_preview(Some(&preview)).unwrap();
+    r.begin_frame_memory(frame);
     assert_eq!(allocation(&r, plan, frame, None), no_selection);
     assert_eq!(request(&r, frame).ok().map(|q| q.plan.level), Some(2));
     preview.selection = Some(Selection::polygon([[0.,0.],[2124.,0.],[2124.,2832.],[0.,2832.]]
         .map(|[x,y]| Point { x,y }).to_vec()).unwrap());
     r.set_transform_preview(Some(&preview)).unwrap();
+    r.begin_frame_memory(frame);
     assert!(allocation(&r, plan, frame, None)[1] > no_selection[1]);
 }
 
@@ -625,14 +628,15 @@ fn native_previews_larger_than_the_decoded_floor_draw_from_resumed_original_capt
     let extent = doc.composition().size;
     let preview = layer_render::TransformPreview {transaction:1,target:source_at(&doc,0),moving:false,selection:None,
         transform:ImageTransform::affine(Affine::around(Point {x:2048.,y:1024.},[0.8,0.9],0.15,Point::default()))};
-    let [floor,reference] = [0u64,1 << 33].map(|allowance| {
-        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let [floor,reference] = [64,1024].map(|slots| {
+        let mut r = crate::memory::memory_tests::renderer_for_restore(&doc);
         r.test.reference = true;
-        r.source_tiles.get_mut().admit(allowance);
         let mut frame = packet(doc.scene(),extent);
+        crate::memory::memory_tests::declare_source_budget(&mut r, frame, slots, 16 << 20, 44 << 20);
         crate::test_support::submit_settled(&mut r,frame);
         frame.composite_all = false;
         r.set_transform_preview(Some(&preview)).unwrap();
+        crate::memory::memory_tests::declare_source_budget(&mut r, frame, slots, 16 << 20, 44 << 20);
         crate::test_support::submit_settled(&mut r,frame);
         r
     });

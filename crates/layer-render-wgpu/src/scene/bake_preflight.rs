@@ -48,7 +48,7 @@ impl BakePreflight {
             }
             let retained=self.projected_bytes.checked_add(parent.projected_restore_bytes()).and_then(|bytes|bytes.checked_add(parent.scale_display.as_ref().map_or(0,|cache|cache.resident_bytes())))
                 .ok_or(GpuRasterError::SourceWorkingSetExceeded)?;
-            let budget=parent.native_edit.as_ref().map_or(windows::DEFAULT_IMAGE_PIXEL_BYTES,|native|native.image_pixel_budget(retained)).min(windows::DEFAULT_IMAGE_PIXEL_BYTES);
+            let budget=parent.native_edit.as_ref().map_or(parent.memory_limit(layer_core::MemoryOwnerKind::Scene),|native|native.image_pixel_budget(retained));
             let plan=windows::Plan::new(scene,input.key.extent,budget,parent.device.limits().max_texture_dimension_2d)?;
             let damage=input.key.damage;
             let outputs:Vec<_>=plan.map_or_else(||vec![damage],|plan|plan.outputs(DocRect::from(damage).aligned(PAGE_SIZE).in_frame(input.key.extent)).map(|output|output.intersect(damage)).collect());

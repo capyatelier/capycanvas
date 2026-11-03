@@ -143,7 +143,7 @@ fn native_raster_open_import_and_paste(directory: &std::path::Path, cases: &[(&s
     for &(name, mime) in cases {
         let path = directory.join(name);
         let bytes = std::fs::read(&path).unwrap();
-        let photo = layer_color::photo::read_photo_detailed(std::io::Cursor::new(&bytes), Default::default()).unwrap();
+        let photo = layer_color::photo::read_photo_detailed(std::io::Cursor::new(&bytes), layer_ui::photo_decode_limits()).unwrap();
         invoke(&w, CommandId::ImportImage);
         let file = chooser();
         file.set_file(&gtk::gio::File::for_path(&path)).unwrap();
@@ -396,7 +396,7 @@ fn native_unsupported_hdr_and_multiple_picture_inputs_preserve_the_document() {
         builder.push_row(&[100; 9]).unwrap();
     }
     let mut jpeg = Vec::new();
-    layer_color::photo::write_jpeg(&mut jpeg, &builder.finish().unwrap(), 95).unwrap();
+    layer_color::photo::write_jpeg(&mut jpeg, &builder.finish().unwrap(), layer_color::photo::JpegEncodeOptions::from_memory_budget(95, layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes()))).unwrap();
     let directory = std::env::temp_dir().join(format!("capy-input-policy-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     for (command, marker, reason) in [

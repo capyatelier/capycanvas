@@ -210,14 +210,15 @@ fn native_stroke_publication_keeps_prepared_reference_pages_and_matches_fresh_ma
 }
 
 #[test]
-fn native_color_cache_budget_preserves_fallback_and_retained_admission() {
-    for (allowance,expected) in [(0,256),(128,256),(256,256),(768,768),(2048,2048)] {
-        assert_eq!(NativeEdit::color_cache_budget(allowance<<20,None),expected<<20);
-    }
-    for retained in [0,64<<20,256<<20,768<<20] {
-        for allowance in [0,128<<20,2048<<20] {
-            assert_eq!(NativeEdit::color_cache_budget(allowance,Some(retained)),retained);
-        }
+fn native_cache_limits_use_renderer_grants_without_a_synthetic_image_reserve() {
+    let document=paint_document([256;2],"Cache grants");
+    let mut r=crate::memory::memory_tests::legacy_scene_renderer(document.composition().color);
+    crate::test_support::submit_published(&mut r,crate::test_support::packet(document.scene(),[256;2]));
+    let native=r.native_edit.as_ref().unwrap();
+    assert!(native.color_cache_bytes>=256<<20);
+    assert_eq!(native.composition_bytes,r.memory_limit(layer_core::MemoryOwnerKind::Scene));
+    for resident in [0,native.composition_bytes/2,native.composition_bytes,native.composition_bytes.saturating_add(1)] {
+        assert_eq!(native.image_pixel_budget(resident),native.composition_bytes.saturating_sub(resident));
     }
 }
 
@@ -1284,7 +1285,7 @@ fn native_gradient_dither_changes_integer_code_boundaries_without_bias() {
             else {
                 let interpretation=layer_core::color::source::SourceInterpretation {channels:layer_core::color::source::SourceChannels::Rgba,depth,profile:layer_core::color::ColorProfile::Builtin(space),profile_assumed:false};
                 let mut png=Vec::new();capture.write_png(&mut png,&interpretation,Default::default(),None).unwrap();
-                let source=layer_color::photo::read_photo(std::io::Cursor::new(png),Default::default()).unwrap();
+                let source=layer_color::photo::read_photo(std::io::Cursor::new(png),crate::test_support::photo_limits()).unwrap();
                 let mut reader=source.rows();let mut row=vec![0;1024*depth.bytes()*4];let mut bytes=Vec::new();
                 for y in 0..128 {reader.read(y,&mut row).unwrap();bytes.extend_from_slice(&row);}
                 exported=Some(bytes);

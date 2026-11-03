@@ -11,6 +11,12 @@ use std::{
     sync::atomic::AtomicBool,
 };
 
+pub fn photo_decode_limits() -> layer_color::photo::DecodeLimits {
+    layer_color::photo::DecodeLimits::from_memory_budget(layer_color::photo::PhotoMemoryBudget::from_limit(
+        layer_core::MemoryBudget::process().import_headroom_bytes(),
+    ))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ImportIntent {
     Open,
@@ -243,7 +249,8 @@ fn read_import_input<R:Read+Seek>(
         ImportSource::Master => {
             let limit = source.input_bytes_limit(project_limits, photo_limits);
             let backing = match input.backing {Some(backing)=>backing,None=>package_backing(&mut reader,limit,cancelled)?};
-            let outcome = layer_core::package::codec::open(backing, project_limits, cancelled)?;
+            let admission=ProjectLimits::for_import();
+            let outcome = layer_core::package::codec::open(backing, ProjectLimits {asset_bytes:project_limits.asset_bytes.min(admission.asset_bytes),raster_bytes:project_limits.raster_bytes.min(admission.raster_bytes),..project_limits}, cancelled)?;
             match &outcome {
                 layer_core::package::codec::OpenOutcome::Preserved {reason,..}
                 | layer_core::package::codec::OpenOutcome::RecoveredView {reason,..}
@@ -251,8 +258,8 @@ fn read_import_input<R:Read+Seek>(
                 _ => {},
             }
             match outcome {
-                layer_core::package::codec::OpenOutcome::Candidate { artwork, source, preview } => {
-                    match Document::from_artwork(artwork).map_err(|e| e.to_string()).and_then(|document| { document.validate_integrity()?; Ok(document) }) {
+                layer_core::package::codec::OpenOutcome::Candidate { artwork, source, preview, memory } => {
+                    match Document::from_artwork(artwork).map(|document|document.with_memory(memory)).map_err(|e| e.to_string()).and_then(|document| { document.validate_integrity()?; Ok(document) }) {
                         Ok(document) => {
                             let outputs = document.artwork.outputs.iter().map(|(_, id, output)| layer_core::package::codec::OutputInfo { id, name: output.name.clone() }).collect();
                             native = Some(NativeOrigin { source, preview, outputs });
@@ -271,10 +278,14 @@ fn read_import_input<R:Read+Seek>(
             }
         },
         ImportSource::Photo => {
-            let photo=decode(reader,photo_limits,cancelled)?;
+            let mut photo=decode(reader,photo_limits,cancelled)?;
+            let reservation=photo.reservation.take();
             let stem = names.paint.rsplit_once('.').map_or(names.paint.as_ref(), |(stem, _)| stem);
             names.paint = photo.display_name(stem).into();
-            policy.photo_project(photo.source, photo.metadata, names)?
+            let mut document = policy.photo_project(photo.source, photo.metadata, names)?;
+            if reservation.is_some() { document=document.with_memory(layer_core::DocumentMemory::new(layer_core::MemoryBudget::process(),reservation)); }
+            document.reserve_import()?;
+            document
         }
     };
     if cancelled.load(std::sync::atomic::Ordering::Acquire) {
@@ -291,8 +302,45 @@ fn read_import_input<R:Read+Seek>(
     Ok(ImportOutcome::Editable(imported))
 }
 
-/// Bounded, all-or-nothing retained-image preparation. Worker adapters may
-/// decode locally or supply decoded sources from a browser worker.
+#[derive(Clone)]
+pub struct PreparedImages {
+    sources: Vec<(String, SourceImage)>,
+    reservation: Option<layer_core::MemoryReservation>,
+    budget: layer_core::MemoryBudget,
+}
+impl From<Vec<(String, SourceImage)>> for PreparedImages {
+    fn from(sources: Vec<(String, SourceImage)>) -> Self {
+        Self { sources, reservation: None, budget: layer_core::MemoryBudget::process() }
+    }
+}
+impl Default for PreparedImages {
+    fn default() -> Self { Vec::new().into() }
+}
+impl std::ops::Deref for PreparedImages {
+    type Target = [(String, SourceImage)];
+    fn deref(&self) -> &Self::Target { &self.sources }
+}
+impl PreparedImages {
+    pub(crate) fn from_parts(sources: Vec<(String, SourceImage)>, reservation: Option<layer_core::MemoryReservation>, budget: layer_core::MemoryBudget) -> Self {
+        Self { sources, reservation, budget }
+    }
+    pub fn with_sources(mut self, sources: Vec<(String, SourceImage)>, working: layer_core::color::RgbSpace) -> Result<Self, String> {
+        for (_, source) in &sources {
+            source.validate()?;
+            layer_color::WorkingDecoder::new(&source.interpretation, working, Default::default())?;
+        }
+        let bytes = layer_core::color::source::retained_source_bytes(sources.iter().map(|(_, source)| source)) as u64;
+        if self.reservation.as_ref().is_some_and(|reservation| !reservation.resize(bytes)) {
+            return Err(layer_core::MEMORY_BUDGET_EXCEEDED.into());
+        }
+        self.sources = sources;
+        Ok(self)
+    }
+    pub(crate) fn into_parts(self) -> (Vec<(String, SourceImage)>, Option<layer_core::MemoryReservation>, layer_core::MemoryBudget) {
+        (self.sources, self.reservation, self.budget)
+    }
+}
+
 #[derive(Clone)]
 pub struct ImageImportBatch {
     limits: layer_color::photo::DecodeLimits,
@@ -301,6 +349,8 @@ pub struct ImageImportBatch {
     sources: Vec<(String, SourceImage)>,
     pending: Option<(String, SourceImage)>,
     finished: bool,
+    budget: layer_core::MemoryBudget,
+    reservation: Option<layer_core::MemoryReservation>,
 }
 impl ImageImportBatch {
     pub fn new(
@@ -308,6 +358,11 @@ impl ImageImportBatch {
         working: layer_core::color::RgbSpace,
         limits: layer_color::photo::DecodeLimits,
     ) -> Self {
+        Self::with_budget(policy, working, limits, layer_core::MemoryBudget::process())
+    }
+    pub fn with_budget(policy: PhotoOpenPolicy, working: layer_core::color::RgbSpace,
+        limits: layer_color::photo::DecodeLimits, budget: layer_core::MemoryBudget) -> Self {
+        let reservation = budget.admit_import(0);
         Self {
             limits,
             policy,
@@ -315,6 +370,8 @@ impl ImageImportBatch {
             sources: Vec::new(),
             pending: None,
             finished: false,
+            budget,
+            reservation,
         }
     }
     pub fn limits(&self) -> layer_color::photo::DecodeLimits {
@@ -324,6 +381,7 @@ impl ImageImportBatch {
         self.finished = true;
         self.pending = None;
         self.sources.clear();
+        self.reservation = None;
     }
     pub fn pending_source(&self) -> Option<&SourceImage> {
         self.pending.as_ref().map(|(_, source)| source)
@@ -342,6 +400,7 @@ impl ImageImportBatch {
     fn push(&mut self, name: String, source: SourceImage) -> Result<(), String> {
         source.validate()?;
         layer_color::WorkingDecoder::new(&source.interpretation, self.working, Default::default())?;
+        self.reserve_source(&source)?;
         self.limits.source_bytes = self
             .limits
             .source_bytes
@@ -349,6 +408,12 @@ impl ImageImportBatch {
             .ok_or("The image batch exceeds the source memory budget. No images were imported.")?;
         self.sources.push((name, source));
         Ok(())
+    }
+    fn reserve_source(&self, source: &SourceImage) -> Result<(), String> {
+        let bytes = layer_core::color::source::retained_source_bytes(self.sources.iter().map(|(_, source)| source)
+            .chain(self.pending.iter().map(|(_, source)| source)).chain(std::iter::once(source))) as u64;
+        if self.reservation.as_ref().is_some_and(|reservation| reservation.resize(bytes)) { Ok(()) }
+        else { Err(layer_core::MEMORY_BUDGET_EXCEEDED.into()) }
     }
     pub fn append(
         &mut self,
@@ -358,6 +423,7 @@ impl ImageImportBatch {
     ) -> Result<(), String> {
         let result = self.check(cancelled).and_then(|_| {
             if self.policy.needs_interpretation(&source) {
+                self.reserve_source(&source)?;
                 self.pending = Some((name, source));
                 Ok(())
             } else {
@@ -393,10 +459,14 @@ impl ImageImportBatch {
     )->Result<(),String> {
         if cancelled.load(std::sync::atomic::Ordering::Acquire) { self.invalidate(); return Err("Image import cancelled".into()); }
         self.check(false)?;
-        let photo=decode(BufReader::new(input),self.limits,cancelled).inspect_err(|_| {
+        let mut photo=decode(BufReader::new(input),self.limits,cancelled).inspect_err(|_| {
             if cancelled.load(std::sync::atomic::Ordering::Acquire) { self.invalidate(); }
         })?;
-        self.append(photo.display_name(name), photo.source, cancelled.load(std::sync::atomic::Ordering::Acquire))
+        let name = photo.display_name(name);
+        if let Some(reservation) = photo.reservation.take() {
+            self.reservation.as_ref().ok_or("Image import is no longer prepared")?.merge(reservation)?;
+        }
+        self.append(name, photo.source, cancelled.load(std::sync::atomic::Ordering::Acquire))
     }
     pub fn interpret(&mut self, profile: ColorProfile, cancelled: bool) -> Result<(), String> {
         if cancelled {
@@ -420,12 +490,13 @@ impl ImageImportBatch {
         }
         result
     }
-    pub fn take_sources(&mut self, cancelled: bool) -> Result<Vec<(String, SourceImage)>, String> {
+    pub fn take_sources(&mut self, cancelled: bool) -> Result<PreparedImages, String> {
         let result = self.check(cancelled).and_then(|_| {
             if self.sources.is_empty() {
                 return Err("No images to import".into());
             }
-            Ok(std::mem::take(&mut self.sources))
+            Ok(PreparedImages { sources: std::mem::take(&mut self.sources),
+                reservation: self.reservation.take(), budget: self.budget.clone() })
         });
         self.invalidate();
         result
@@ -434,10 +505,13 @@ impl ImageImportBatch {
 
 #[cfg(test)]
 mod tests {
+    fn photo_limits() -> layer_color::photo::DecodeLimits {
+        layer_color::photo::DecodeLimits::from_memory_budget(layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes()))
+    }
     #[test]
     fn encoded_input_admission_uses_each_sources_budget_without_overflow() {
         let project = ProjectLimits { metadata_bytes: 7, asset_bytes: 11, raster_bytes: 13, ..Default::default() };
-        let photo = layer_color::photo::DecodeLimits { codec_bytes: 17, ..Default::default() };
+        let photo = layer_color::photo::DecodeLimits { codec_bytes: 17, ..photo_limits() };
         for (source, limit) in [(ImportSource::Master, 31), (ImportSource::Photo, 17)] {
             assert!(source.admit_input_bytes(limit, project, photo).is_ok());
             assert!(source.admit_input_bytes(limit + 1, project, photo).is_err());
@@ -446,6 +520,7 @@ mod tests {
         assert!(ImportSource::Master.admit_input_bytes(u64::MAX, project, photo).is_ok());
     }
     use super::*;
+
     use crate::session::test_support::{package_bytes, package_roundtrip};
     #[test]
     fn dropped_files_open_one_drawing_or_place_only_images() {
@@ -493,10 +568,67 @@ mod tests {
     fn open(bytes: &[u8], intent: ImportIntent, policy: PhotoOpenPolicy, name: &str) -> Result<ImportedDocument, String> {
         match read_import(std::io::Cursor::new(bytes), intent, policy,
             photo_document_names(name, &crate::Localizer::shared(crate::UiLanguage::English)),
-            Default::default(), Default::default(), &Default::default())? {
+            Default::default(), photo_limits(), &Default::default())? {
             ImportOutcome::Editable(document) => Ok(document),
             ImportOutcome::Package(outcome) => Err(format!("Expected editable artwork: {outcome:?}")),
         }
+    }
+
+    #[test]
+    fn prepared_images_retain_admission_until_the_last_envelope_drops() {
+        let budget = layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts { override_bytes: Some(1024 * 1024), ..Default::default() });
+        let limits = layer_color::photo::DecodeLimits::from_memory_budget(layer_color::photo::PhotoMemoryBudget::from_limit(8 * 1024 * 1024));
+        let mut batch = ImageImportBatch::with_budget(Default::default(), RgbSpace::ProPhoto, limits, budget.clone());
+        batch.append("Photo".into(), source(), false).unwrap();
+        let prepared = batch.take_sources(false).unwrap();
+        let reserved = budget.snapshot().reserved_bytes;
+        assert!(reserved > 0);
+        drop(batch);
+        assert_eq!(budget.snapshot().reserved_bytes, reserved);
+        let retained = prepared.clone();
+        drop(prepared);
+        assert_eq!(budget.snapshot().reserved_bytes, reserved);
+        drop(retained);
+        assert_eq!(budget.snapshot().reserved_bytes, 0);
+    }
+
+    #[test]
+    fn prepared_images_reinterpretation_and_clipboard_document_keep_one_reservation() {
+        let budget = layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts { override_bytes: Some(1024 * 1024), ..Default::default() });
+        let limits = layer_color::photo::DecodeLimits::from_memory_budget(layer_color::photo::PhotoMemoryBudget::from_limit(8 * 1024 * 1024));
+        let mut batch = ImageImportBatch::with_budget(Default::default(), RgbSpace::ProPhoto, limits, budget.clone());
+        batch.append("Photo".into(), source(), false).unwrap();
+        let prepared = batch.take_sources(false).unwrap();
+        let sources = prepared.iter().cloned().collect();
+        let prepared = prepared.with_sources(sources, RgbSpace::ProPhoto).unwrap();
+        assert!(budget.snapshot().reserved_bytes > 0);
+        let document = crate::clipboard_document(prepared, Default::default(), &crate::Localizer::shared(crate::UiLanguage::English)).unwrap();
+        assert!(budget.snapshot().reserved_bytes > 0);
+        drop(document);
+        assert_eq!(budget.snapshot().reserved_bytes, 0);
+    }
+
+    #[test]
+    fn concurrent_image_batches_refuse_without_releasing_an_accepted_batch() {
+        let image = source();
+        let bytes = layer_core::color::source::retained_source_bytes([&image]) as u64;
+        let budget = layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts { override_bytes: Some(bytes), ..Default::default() });
+        let pinned=budget.register_owner(layer_core::MemoryOwnerKind::Other,layer_core::MemoryClass::Pinned,None);
+        let occupied=budget.ram_limit_bytes().checked_sub(bytes).unwrap();
+        pinned.report(layer_core::MemoryReport {ram_bytes:occupied,pinned_ram_bytes:occupied,..Default::default()});
+        let limits = layer_color::photo::DecodeLimits::from_memory_budget(layer_color::photo::PhotoMemoryBudget::from_limit(8 * 1024 * 1024));
+        let mut first = ImageImportBatch::with_budget(Default::default(), RgbSpace::ProPhoto, limits, budget.clone());
+        first.append("First".into(), image.clone(), false).unwrap();
+        let prepared = first.take_sources(false).unwrap();
+        let replacement=vec![("One".into(),image.clone()),("Two".into(),source())];
+        assert_eq!(prepared.clone().with_sources(replacement,RgbSpace::ProPhoto).err().unwrap(),layer_core::MEMORY_BUDGET_EXCEEDED);
+        let mut second = ImageImportBatch::with_budget(Default::default(), RgbSpace::ProPhoto, limits, budget.clone());
+        assert_eq!(second.append("Second".into(), image, false).unwrap_err(),layer_core::MEMORY_BUDGET_EXCEEDED);
+        assert!(second.take_sources(false).is_err());
+        assert_eq!(prepared.len(), 1);
+        assert_eq!(budget.snapshot().reserved_bytes, bytes);
+        drop(prepared);
+        assert_eq!(budget.snapshot().reserved_bytes, 0);
     }
 
     #[test]
@@ -504,7 +636,7 @@ mod tests {
         let names=DocumentNames {paint:"Local".into(),paper:"Paper".into()};
         let document=PhotoOpenPolicy::default().photo_project(source(),Default::default(),names.clone()).unwrap();
         let result=read_import_with_decoder(std::io::Cursor::new(native_bytes(&document)),ImportIntent::Open,
-            Default::default(),names,Default::default(),Default::default(),&AtomicBool::new(false),
+            Default::default(),names,Default::default(),photo_limits(),&AtomicBool::new(false),
             |_,_,_|Err("A native package reached the photo decoder".into())).unwrap();
         let ImportOutcome::Editable(imported)=result else {panic!("Editable native package");};
         assert_eq!(imported.source,ImportSource::Master);
@@ -517,7 +649,7 @@ mod tests {
         let document=PhotoOpenPolicy::default().photo_project(source(),Default::default(),names.clone()).unwrap();
         let bytes:std::sync::Arc<[u8]>=native_bytes(&document).into();
         let backing=layer_core::package::ImmutableBacking::new(std::sync::Arc::new(bytes)).unwrap();
-        let imported=read_import_backing(backing.clone(),ImportIntent::Open,Default::default(),names,Default::default(),Default::default(),&Default::default()).unwrap();
+        let imported=read_import_backing(backing.clone(),ImportIntent::Open,Default::default(),names,Default::default(),photo_limits(),&Default::default()).unwrap();
         let ImportOutcome::Editable(imported)=imported else {panic!("Editable native package");};
         assert_eq!(imported.native.as_ref().unwrap().source.identity(),backing.identity());
         assert_eq!(imported.project.composition().color,document.composition().color);
@@ -539,9 +671,9 @@ mod tests {
         let calls=Arc::new(AtomicUsize::new(0));
         let names=photo_document_names("Immutable",&crate::Localizer::shared(crate::UiLanguage::English));
         let backing=ImmutableBacking::new(Arc::new(Source(calls.clone()))).unwrap();
-        let result=read_import_backing(backing.clone(),ImportIntent::Open,Default::default(),names.clone(),Default::default(),Default::default(),&AtomicBool::new(true));
+        let result=read_import_backing(backing.clone(),ImportIntent::Open,Default::default(),names.clone(),Default::default(),photo_limits(),&AtomicBool::new(true));
         assert!(result.is_err());assert_eq!(calls.load(Ordering::Relaxed),0);
-        let limits=layer_color::photo::DecodeLimits {codec_bytes:1000,..Default::default()};
+        let limits=layer_color::photo::DecodeLimits {codec_bytes:1000,..photo_limits()};
         let result=read_import_backing(backing,ImportIntent::Open,Default::default(),names,Default::default(),limits,&Default::default());
         assert!(result.err().unwrap().contains("encoded image exceeds"));
         assert_eq!(calls.load(Ordering::Relaxed),1);
@@ -563,7 +695,7 @@ mod tests {
         let limits = ProjectLimits { layers: 1, ..Default::default() };
         document.validate_integrity().unwrap();
         assert!(document.admit(limits).is_err());
-        let outcome = read_import(std::io::Cursor::new(&bytes), ImportIntent::Open, Default::default(), DocumentNames { paint: "".into(), paper: "".into() }, limits, Default::default(), &AtomicBool::new(false)).unwrap();
+        let outcome = read_import(std::io::Cursor::new(&bytes), ImportIntent::Open, Default::default(), DocumentNames { paint: "".into(), paper: "".into() }, limits, photo_limits(), &AtomicBool::new(false)).unwrap();
         let ImportOutcome::Package(OpenOutcome::Preserved { source, preview: representation, outputs, .. }) = outcome else { panic!("valid package over aggregate admission must remain preserved") };
         assert_eq!(representation.unwrap().encoded(), preview.encoded());
         assert_eq!(outputs[0].id, document.artwork.outputs.id(document.artwork.default_output).unwrap());
@@ -585,12 +717,12 @@ mod tests {
             InputMember { name: "preview.png", length: preview.encoded().len() as u64, crc32: checksum(preview.encoded()), input: &mut preview_reader },
         ];
         let mut corrupted = Vec::new(); write_archive(&mut corrupted, &mut members, ProjectLimits::default().metadata_bytes as usize).unwrap();
-        let outcome = read_import(std::io::Cursor::new(&corrupted), ImportIntent::Open, Default::default(), DocumentNames { paint: "".into(), paper: "".into() }, Default::default(), Default::default(), &AtomicBool::new(false)).unwrap();
+        let outcome = read_import(std::io::Cursor::new(&corrupted), ImportIntent::Open, Default::default(), DocumentNames { paint: "".into(), paper: "".into() }, Default::default(), photo_limits(), &AtomicBool::new(false)).unwrap();
         let ImportOutcome::Package(OpenOutcome::RecoveredView { source, preview: representation, .. }) = outcome else { panic!("invalid required payload must recover only its verified representation") };
         assert_eq!(representation.encoded(), preview.encoded());
         let mut copied = Vec::new(); layer_core::package::codec::copy_original(&source, &mut copied, &AtomicBool::new(false)).unwrap();
         assert_eq!(copied, corrupted);
-        assert!(read_import(std::io::Cursor::new(&corrupted), ImportIntent::Open, Default::default(), DocumentNames { paint: "".into(), paper: "".into() }, Default::default(), Default::default(), &AtomicBool::new(true)).is_err());
+        assert!(read_import(std::io::Cursor::new(&corrupted), ImportIntent::Open, Default::default(), DocumentNames { paint: "".into(), paper: "".into() }, Default::default(), photo_limits(), &AtomicBool::new(true)).is_err());
     }
     #[test]
     fn native_candidate_retains_original_bytes_until_execution_admission() {
@@ -623,14 +755,14 @@ mod tests {
         document.validate(Default::default()).unwrap();
         assert!(layer_color::validate_document_color(&document).is_err());
         let bytes = native_bytes(&document);
-        let outcome = read_import(std::io::Cursor::new(&bytes), ImportIntent::Open, policy, DocumentNames { paint: "".into(), paper: "".into() }, Default::default(), Default::default(), &AtomicBool::new(false)).unwrap();
+        let outcome = read_import(std::io::Cursor::new(&bytes), ImportIntent::Open, policy, DocumentNames { paint: "".into(), paper: "".into() }, Default::default(), photo_limits(), &AtomicBool::new(false)).unwrap();
         let ImportOutcome::Package(layer_core::package::codec::OpenOutcome::Preserved { source, preview, outputs, reason }) = outcome else { panic!("unsupported execution must preserve native artwork") };
         assert!(preview.is_none());
         assert!(!reason.is_empty());
         assert_eq!(outputs.len(), document.artwork.outputs.len());
         let mut copied = Vec::new(); layer_core::package::codec::copy_original(&source, &mut copied, &AtomicBool::new(false)).unwrap();
         assert_eq!(copied, bytes);
-        assert!(read_import(std::io::Cursor::new(&bytes), ImportIntent::Open, policy, DocumentNames { paint: "".into(), paper: "".into() }, Default::default(), Default::default(), &AtomicBool::new(true)).is_err());
+        assert!(read_import(std::io::Cursor::new(&bytes), ImportIntent::Open, policy, DocumentNames { paint: "".into(), paper: "".into() }, Default::default(), photo_limits(), &AtomicBool::new(true)).is_err());
     }
     #[test]
     fn photo_creation_and_reinterpretation_keep_supplied_names_and_source_pixels() {
@@ -741,7 +873,7 @@ mod tests {
         assert_eq!(photo.project.artwork.metadata, kept, "choosing an interpretation keeps the metadata");
         let native = native_bytes(&photo.project);
         assert_eq!(open(&native, ImportIntent::Open, policy, "drawing.capy").unwrap().project.artwork.metadata, kept);
-        let mut batch = ImageImportBatch::new(Default::default(), RgbSpace::Srgb, Default::default());
+        let mut batch = ImageImportBatch::new(Default::default(), RgbSpace::Srgb, photo_limits());
         batch.read(std::io::Cursor::new(&png), "placed", &Default::default()).unwrap();
         assert_eq!(batch.take_sources(false).unwrap().len(), 1, "imports carry only their pixels");
     }
@@ -751,7 +883,7 @@ mod tests {
         let mut png = Vec::new();
         layer_color::photo::write_png(&mut png, &original).unwrap();
         let cancelled = AtomicBool::new(false);
-        let mut clipboard = ImageImportBatch::new(Default::default(), RgbSpace::Srgb, Default::default());
+        let mut clipboard = ImageImportBatch::new(Default::default(), RgbSpace::Srgb, photo_limits());
         assert!(clipboard.read_candidate(std::io::Cursor::new(b"invalid image"), "Invalid", &cancelled).is_err());
         clipboard.read_candidate(std::io::Cursor::new(&png), "Fallback", &cancelled).unwrap();
         let accepted = clipboard.take_sources(false).unwrap();
@@ -765,13 +897,13 @@ mod tests {
         assert_eq!(after, before);
         assert!(clipboard.take_sources(false).is_err());
 
-        let mut files = ImageImportBatch::new(Default::default(), RgbSpace::Srgb, Default::default());
+        let mut files = ImageImportBatch::new(Default::default(), RgbSpace::Srgb, photo_limits());
         files.read(std::io::Cursor::new(&png), "First", &cancelled).unwrap();
         assert!(files.read(std::io::Cursor::new(b"invalid image"), "Invalid", &cancelled).is_err());
         assert!(files.read(std::io::Cursor::new(&png), "Later", &cancelled).is_err());
         assert!(files.take_sources(false).is_err());
 
-        let mut empty = ImageImportBatch::new(Default::default(), RgbSpace::Srgb, Default::default());
+        let mut empty = ImageImportBatch::new(Default::default(), RgbSpace::Srgb, photo_limits());
         for name in ["First", "Last"] {
             assert!(empty.read_candidate(std::io::Cursor::new(b"invalid image"), name, &cancelled).is_err());
         }
@@ -800,7 +932,7 @@ mod tests {
         layer_color::photo::write_png(&mut png, &source()).unwrap();
         for before_read in [false, true] {
             let cancelled = AtomicBool::new(false);
-            let mut batch = ImageImportBatch::new(Default::default(), RgbSpace::Srgb, Default::default());
+            let mut batch = ImageImportBatch::new(Default::default(), RgbSpace::Srgb, photo_limits());
             batch.read_candidate(std::io::Cursor::new(&png), "Accepted", &cancelled).unwrap();
             cancelled.store(before_read, std::sync::atomic::Ordering::Release);
             let candidate = CancellingReader { input: std::io::Cursor::new(png.as_slice()), cancelled: &cancelled };
@@ -817,7 +949,7 @@ mod tests {
             RgbSpace::Srgb,
             layer_color::photo::DecodeLimits {
                 source_bytes: source.resident_bytes() * 2 - 1,
-                ..Default::default()
+                ..photo_limits()
             },
         );
         batch.append("first".into(), source.clone(), false).unwrap();
@@ -831,7 +963,7 @@ mod tests {
             promote_to_16: false,
             missing_profile: MissingProfilePolicy::Ask,
         };
-        let mut batch = ImageImportBatch::new(policy, RgbSpace::DisplayP3, Default::default());
+        let mut batch = ImageImportBatch::new(policy, RgbSpace::DisplayP3, photo_limits());
         batch.append("first".into(), source.clone(), false).unwrap();
         assert!(batch.pending_source().is_some());
         assert!(batch.interpret(ColorProfile::Icc(Vec::new().into()), false).is_err());

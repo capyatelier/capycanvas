@@ -458,7 +458,7 @@ impl PreviewPipeline {
             self.reduced.push_back(layer);
             return Ok(ready);
         }
-        let write = crate::submission::CacheWrite::shared(layer.valid.clone());
+        let mut write = None;
         let stride = r.device.limits().min_uniform_buffer_offset_alignment.max(32);
         let records = r.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("thumbnail page reductions"),
@@ -470,35 +470,55 @@ impl PreviewPipeline {
             }).collect::<Vec<_>>(),
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        for (chunk, coordinates) in batch.chunks(SOURCE_SLOTS).enumerate() {
-            let views = coordinates.iter().map(|c| match current.get(c) {
-                Some(_) => Ok(r.raw_layer_tile(id, *c, encoder)?.ok_or(GpuRasterError::MissingPaintLayer(id))?.view),
-                None => Ok(r.empty_view.clone()),
-            }).collect::<Result<Vec<_>, GpuRasterError>>()?;
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("thumbnail page reduction"), timestamp_writes: None });
-            pass.set_pipeline(&self.reduce);
-            for (index, (c, view)) in coordinates.iter().zip(&views).enumerate() {
-                let binding = crate::bindings::group(&r.device, "thumbnail page", &self.reduce_layout, [
-                    wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &records, offset: 0, size: NonZeroU64::new(32) }),
-                    wgpu::BindingResource::TextureView(view),
-                    wgpu::BindingResource::TextureView(&layer.image[0].1),
-                    wgpu::BindingResource::TextureView(&layer.image[1].1),
-                ]);
-                pass.set_bind_group(0, &binding, &[((chunk * SOURCE_SLOTS + index) as u64 * u64::from(stride)) as u32]);
-                let valid = std::array::from_fn::<_, 2, _>(|i| (extent[i] - c[i] * PAGE_SIZE).min(PAGE_SIZE));
-                pass.dispatch_workgroups(valid[0].div_ceil(1 << level), valid[1].div_ceil(1 << level), 1);
+        let slots = r.source_tiles.borrow().free_slots().min(SOURCE_SLOTS);
+        let mut completed = 0;
+        for (chunk, coordinates) in batch.chunks(slots.max(1)).enumerate() {
+            if slots == 0 { break; }
+            let mut views = Vec::with_capacity(coordinates.len());
+            for c in coordinates {
+                let view = match current.get(c) {
+                    Some(_) => match r.raw_layer_tile(id, *c, encoder) {
+                        Ok(Some(tile)) => tile.view,
+                        Ok(None) => return Err(GpuRasterError::MissingPaintLayer(id)),
+                        Err(error) if error.is_preparation_pending() => break,
+                        Err(error) => return Err(error),
+                    },
+                    None => r.empty_view.clone(),
+                };
+                let lease = r.source_tiles.borrow().lease(&view);
+                views.push((view, lease));
             }
-        }
-        for c in batch {
-            match current.get(c) {
-                Some(key) => { layer.tiles.insert(*c, (*key, revision)); }
-                None => { layer.tiles.remove(c); }
+            if views.is_empty() { break; }
+            write.get_or_insert_with(|| crate::submission::CacheWrite::shared(layer.valid.clone()));
+            let coordinates = &coordinates[..views.len()];
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("thumbnail page reduction"), timestamp_writes: None });
+                pass.set_pipeline(&self.reduce);
+                for (index, (c, (view, _))) in coordinates.iter().zip(&views).enumerate() {
+                    let binding = crate::bindings::group(&r.device, "thumbnail page", &self.reduce_layout, [
+                        wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &records, offset: 0, size: NonZeroU64::new(32) }),
+                        wgpu::BindingResource::TextureView(view),
+                        wgpu::BindingResource::TextureView(&layer.image[0].1),
+                        wgpu::BindingResource::TextureView(&layer.image[1].1),
+                    ]);
+                    pass.set_bind_group(0, &binding, &[((chunk * slots + index) as u64 * u64::from(stride)) as u32]);
+                    let valid = std::array::from_fn::<_, 2, _>(|i| (extent[i] - c[i] * PAGE_SIZE).min(PAGE_SIZE));
+                    pass.dispatch_workgroups(valid[0].div_ceil(1 << level), valid[1].div_ceil(1 << level), 1);
+                }
             }
+            for c in coordinates {
+                match current.get(c) {
+                    Some(key) => { layer.tiles.insert(*c, (*key, revision)); }
+                    None => { layer.tiles.remove(c); }
+                }
+            }
+            completed += coordinates.len();
+            if coordinates.len() < slots { break; }
         }
-        *limit -= batch.len();
-        r.metrics.thumbnail_pages += batch.len() as u64;
-        write.track(encoder);
-        let ready = (batch.len() == stale.len()).then(|| layer.image.clone());
+        *limit -= completed;
+        r.metrics.thumbnail_pages += completed as u64;
+        if let Some(write) = write { write.track(encoder); }
+        let ready = (completed == stale.len()).then(|| layer.image.clone());
         self.reduced.push_back(layer);
         while self.reduced.len() > 8 { self.reduced.pop_front(); }
         Ok(ready)

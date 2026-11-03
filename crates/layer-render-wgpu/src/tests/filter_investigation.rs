@@ -316,7 +316,7 @@ fn photo_filter_frame_time() {
         native.image_pixel_bytes = Some(mib.parse::<u64>().unwrap() * 1024 * 1024);
     }
     if let Ok(mib) = std::env::var("CAPY_FILTER_SOURCE_MIB") {
-        r.source_tiles.get_mut().admit(mib.parse::<u64>().unwrap() * 4 * 1024 * 1024);
+        r.source_tiles.get_mut().admit_limits(mib.parse::<u64>().unwrap() << 20, 16 << 20, 0);
     }
     eprintln!(
         "adapter={:?} init_ms={:.3}",
@@ -340,7 +340,7 @@ fn photo_filter_frame_time() {
         let mut document=empty_document(extent,Default::default());insert_source(&mut document,"Water photo",Arc::new(builder.finish().unwrap()));document
     };
     if let Ok(path)=std::env::var("CAPY_FILTER_SOURCE_JPEG") {
-        let source=layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(path).unwrap()),Default::default()).unwrap();
+        let source=layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(path).unwrap()),crate::test_support::photo_limits()).unwrap();
         let imported=layer_color::photo_project(source,Default::default(),layer_core::DocumentNames {paint:"Water".into(),paper:"Paper".into()},SampleDepth::U8).unwrap();
         let h=imported.working.occurrence.unwrap();let paint=imported.scene().paint_source(h).unwrap();let original=paint.base.as_ref().unwrap().image.storage();
         eprintln!("decoded_source_channels={:?} embedded_icc={} offset={:?}",original.interpretation.channels,matches!(original.interpretation.profile,layer_core::color::ColorProfile::Icc(_)),imported.scene().occurrence(h).unwrap().offset);

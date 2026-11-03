@@ -333,6 +333,17 @@ impl Scene {
             + self.placement.iter().map(pixel_transform::PixelTransform::storage_bytes).sum::<u64>() + 32
             + self.images.storage_bytes() + self.scale_sources.storage_bytes() + self.object_results.bytes() + self.exact_object_results.bytes() + self.object_spatial.storage_bytes() + self.scale_commands.as_ref().map_or(0, scale::Commands::storage_bytes) + self.vectors.storage_bytes() - duplicate_metadata
     }
+    pub(crate) fn memory_bytes(&self) -> [u64; 2] {
+        let ram = self.object_results.memory_bytes()[0] + self.exact_object_results.memory_bytes()[0] + self.object_spatial.storage_bytes();
+        [ram, self.scratch_bytes().saturating_sub(ram)]
+    }
+    pub(crate) fn pinned_bytes(&self) -> u64 { self.object_results.pinned_gpu_bytes() + self.exact_object_results.pinned_gpu_bytes() }
+    pub(crate) fn trim_memory(&mut self, ram: u64, gpu: u64, encoder: &mut crate::submission::CommandEncoder) -> u64 {
+        let bytes = self.object_results.trim_unused(ram / 2, gpu / 2) + self.exact_object_results.trim_unused(ram / 2, gpu / 2);
+        self.object_results.flush_retired(encoder);
+        self.exact_object_results.flush_retired(encoder);
+        bytes
+    }
     pub(crate) fn required_object_sources(&self) -> Result<Vec<sources::RequiredSource>, GpuRasterError> {
         let mut tiles = Vec::new();
         self.object_results.required_sources(&mut tiles)?;
@@ -576,7 +587,7 @@ impl Scene {
     fn own(&mut self, id: usize) -> scratch::Lease { self.used[id].lease(id) }
     fn keep(&mut self, lease: scratch::Lease) -> usize { self.used[lease.index].keep(lease) }
     fn scratch_limit(&self, r: &WgpuRasterizer) -> u64 {
-        r.native_edit.as_ref().map_or(scale::CACHE_BYTES, |native| native.composition_bytes.max(scale::CACHE_BYTES))
+        r.memory.scene_limit()
             .saturating_sub(r.retired_display_bytes.load(std::sync::atomic::Ordering::Acquire))
     }
     pub(super) fn trim_scratch(&mut self, keep: usize) -> Vec<PageSurface> {

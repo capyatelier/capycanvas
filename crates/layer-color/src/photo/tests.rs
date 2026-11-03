@@ -20,7 +20,7 @@ fn gray_and_gray_alpha_delivery_preserve_samples_and_embed_matching_profiles() {
                     let mut file = std::io::Cursor::new(Vec::new());
                     if tiff { write_tiff(&mut file, &source).unwrap(); } else { write_png(&mut file, &source).unwrap(); }
                     file.set_position(0);
-                    let actual = read_photo(file, DecodeLimits::default()).unwrap();
+                    let actual = read_photo(file, DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
                     assert_eq!(actual.interpretation.channels, channels);
                     assert_eq!(actual.interpretation.depth, depth);
                     assert!(!actual.interpretation.profile_assumed);
@@ -100,7 +100,7 @@ fn profiled_png_tiff_roundtrip_every_source_code_including_transparency() {
                     write_png(&mut encoded, &source).unwrap();
                 }
                 encoded.set_position(0);
-                let after = read_photo(encoded, DecodeLimits::default()).unwrap();
+                let after = read_photo(encoded, DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
                 exact_pixels(&source, &after);
                 assert_eq!(after.interpretation.profile, profile);
                 assert!(!after.interpretation.profile_assumed);
@@ -144,7 +144,7 @@ fn png_color_precedence_and_explicit_unsupported_interpretation() {
     let mut info = png::Info::default();
     let source = read_photo(
         Cursor::new(tagged_png(info.clone())),
-        DecodeLimits::default(),
+        DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30)),
     )
     .unwrap();
     assert!(source.interpretation.profile_assumed);
@@ -157,7 +157,7 @@ fn png_color_precedence_and_explicit_unsupported_interpretation() {
     });
     let source = read_photo(
         Cursor::new(tagged_png(info.clone())),
-        DecodeLimits::default(),
+        DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30)),
     )
     .unwrap();
     assert_eq!(
@@ -170,7 +170,7 @@ fn png_color_precedence_and_explicit_unsupported_interpretation() {
         .unwrap()
         .transfer_function = 16;
     assert!(
-        read_photo(Cursor::new(tagged_png(info)), DecodeLimits::default())
+        read_photo(Cursor::new(tagged_png(info)), DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30)))
             .unwrap_err()
             .contains("HDR")
     );
@@ -181,7 +181,7 @@ fn gamma_only_png_retains_its_actual_interpretation() {
     let mut info = png::Info::default();
     info.gama_chunk = Some(png::ScaledFloat::from_scaled(100000));
     info.source_gamma = info.gama_chunk;
-    let source = read_photo(Cursor::new(tagged_png(info)), DecodeLimits::default()).unwrap();
+    let source = read_photo(Cursor::new(tagged_png(info)), DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30))).unwrap();
     assert!(!source.interpretation.profile_assumed);
     let interpretation = SourceInterpretation {
         channels: SourceChannels::Rgb,
@@ -209,7 +209,7 @@ fn malformed_png_profile_is_not_an_untagged_image() {
     writer.write_image_data(&[64, 128, 192]).unwrap();
     writer.finish().unwrap();
     assert!(
-        read_photo(Cursor::new(encoded), DecodeLimits::default())
+        read_photo(Cursor::new(encoded), DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30)))
             .unwrap_err()
             .contains("unreadable ICC")
     );
@@ -239,7 +239,7 @@ fn interrupted_output_and_tiny_source_budget_return_errors() {
             Cursor::new(encoded),
             DecodeLimits {
                 source_bytes: 1,
-                ..Default::default()
+                ..crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))
             }
         )
         .unwrap_err()

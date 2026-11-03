@@ -55,7 +55,7 @@ impl OpenEnvironment {
                 .limits()
                 .max_texture_dimension_2d
                 .min(ProjectLimits::default().dimension),
-            ..Default::default()
+            ..ProjectLimits::for_import()
         }
     }
 
@@ -77,7 +77,7 @@ impl OpenEnvironment {
             self.photo_policy,
             layer_ui::photo_document_names(name, &self.localization),
             self.limits(),
-            Default::default(),
+            layer_ui::photo_decode_limits(),
             cancel,
             |mut input, limits, cancelled| decode(&mut input, limits, cancelled),
         )
@@ -96,7 +96,7 @@ impl OpenEnvironment {
         project: Document,
         cancelled: impl Fn() -> bool,
     ) -> Result<Box<UiSession<Renderer>>, String> {
-        project.validate(self.limits())?;
+        project.validate(ProjectLimits { dimension: self.limits().dimension, ..Default::default() })?;
         self.admission.admit(&project).map_err(|reason| reason.message(&self.localization))?;
         let check = || {
             if cancelled() {

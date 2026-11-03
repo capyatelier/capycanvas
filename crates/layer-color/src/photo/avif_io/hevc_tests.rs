@@ -46,7 +46,7 @@ fn grid(rotation: u8, mirror: Option<u8>) -> Vec<u8> {
     )
 }
 fn read(bytes: &[u8]) -> Result<DecodedPhoto, String> {
-    read_photo_detailed(Cursor::new(bytes), Default::default())
+    read_photo_detailed(Cursor::new(bytes), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30)))
 }
 fn rgba8(source: &SourceImage, x: u32, y: u32) -> [u8; 4] {
     let mut row = vec![0; source.row_bytes()];
@@ -345,7 +345,7 @@ fn rust_heif_write_validation_fixtures() {
 #[test]
 fn rust_heif_decodes_independent_lossless_red() {
     let cancel = AtomicBool::new(false);
-    let source = super::read(Cursor::new(RED), Default::default(), &cancel)
+    let source = super::read(Cursor::new(RED), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30)), &cancel)
         .unwrap()
         .source;
     assert_eq!(source.extent, [64, 64]);
@@ -362,32 +362,32 @@ fn rust_heif_rejects_unadmitted_and_cancelled_input() {
     for limits in [
         DecodeLimits {
             codec_bytes: RED.len() - 1,
-            ..Default::default()
+            ..crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))
         },
         DecodeLimits {
             codec_bytes: 1024 * 1024,
-            ..Default::default()
+            ..crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))
         },
         DecodeLimits {
             dimension: 16,
-            ..Default::default()
+            ..crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))
         },
         DecodeLimits {
             source_bytes: 1,
-            ..Default::default()
+            ..crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30))
         },
     ] {
         assert!(super::read(Cursor::new(RED), limits, &cancel).is_err());
     }
     cancel.store(true, std::sync::atomic::Ordering::Release);
     assert!(
-        super::read(Cursor::new(RED), Default::default(), &cancel)
+        super::read(Cursor::new(RED), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30)), &cancel)
             .err()
             .unwrap()
             .contains("cancelled")
     );
     cancel.store(false, std::sync::atomic::Ordering::Release);
-    assert!(super::read(Cursor::new(RED), Default::default(), &cancel).is_ok());
+    assert!(super::read(Cursor::new(RED), crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30)), &cancel).is_ok());
 }
 
 #[test]
@@ -397,7 +397,7 @@ fn rust_heif_opens_external_photographic_still() {
     let bytes = std::fs::read(root.join("examples/example.heic")).unwrap();
     let photo = super::read(
         Cursor::new(bytes),
-        Default::default(),
+        crate::photo::DecodeLimits::from_memory_budget(crate::photo::PhotoMemoryBudget::from_limit(1 << 30)),
         &AtomicBool::new(false),
     )
     .unwrap();

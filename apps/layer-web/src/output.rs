@@ -319,6 +319,7 @@ pub async fn raster_worker_output(
     read: js_sys::Function,
     write: js_sys::Function,
 ) -> Result<JsValue, JsValue> {
+    artwork_transfer::seed_memory_budget();
     let metadata: OutputMetadata = serde_json::from_str(metadata).map_err(js)?;
     let guide = metadata.guide.as_ref().map(|wire| {
         let bytes = js_sys::Uint8Array::new(&buffers.get(wire.buffer));
@@ -501,7 +502,7 @@ pub async fn raster_worker_output(
                 color,
                 metadata.resolution,
                 target,
-                artwork_transfer::photo_memory_budget().encode_bytes,
+                layer_color::photo::PhotoMemoryBudget::conversion_encode_limit(),
                 rows,
             )?);
             return Ok(());
