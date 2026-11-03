@@ -542,12 +542,39 @@ pub fn toolbar_slider_scale(cross: f32) -> f32 {
     if cross.is_finite() && cross > 0. { cross / TILE_SIZE } else { 1. }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct ToolbarSliderPaint {
+    pub inset: f32,
+    pub cross: f32,
+    pub wide: f32,
+    pub narrow: f32,
+    pub tip: [f32; 2],
+    pub mark: [f32; 2],
+    pub thumb: [f32; 2],
+    pub radius: f32,
+}
+pub const TOOLBAR_SLIDER_PAINT: ToolbarSliderPaint = ToolbarSliderPaint {
+    inset: 2., cross: 18., wide: 8., narrow: 2.5, tip: [3., 1.], mark: [14., 2.], thumb: [12., 28.], radius: 4.,
+};
+
+#[derive(Clone, Copy, Debug, Deserialize)]
 pub struct ToolbarSliderStretch {
     pub track: [f32; 2],
     pub band: [f32; 2],
     pub extent: f32,
     pub transition: f32,
+}
+
+pub fn toolbar_slider_dragging(moved: bool, delta: [f32; 2]) -> bool {
+    moved || delta[0].hypot(delta[1]) >= 3.
+}
+
+#[test]
+fn slider_contacts_leave_a_tap_preview_open_and_retain_drag_admission() {
+    assert!(!toolbar_slider_dragging(false, [1., 2.]));
+    assert!(toolbar_slider_dragging(false, [0., 3.]));
+    assert!(toolbar_slider_dragging(false, [-3., 0.]));
+    assert!(toolbar_slider_dragging(true, [0., 0.]));
 }
 
 pub fn toolbar_slider_stretch(geometry: ToolbarSliderStretch, point: [f32; 2]) -> f32 {

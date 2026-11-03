@@ -12,7 +12,7 @@ import { workspaceStore, modulePromise, setWorkspaceWake } from "./workspace-pre
 import { createWorkspaceManager } from "./workspace-manager.js";
 import { createPreferences } from "./preferences.js";
 import {createPenResponse} from "./pen-response.js";
-import {observePenInput} from "./pen-input.js";
+import {observePenInput,paintToolKind,browserDeviceClass} from "./pen-input.js";
 import { createCommandBar } from "./command-bar.js";
 import { showGpuNotice } from "./gpu.js";
 import { createGpuDiagnostics, gpuErrorText, gpuReportDetails, suspendGpuForReport } from './gpu-diagnostics.js';
@@ -31,6 +31,7 @@ import { createBubbles } from "./bubbles.js";
 import { createDocuments } from "./documents.js";
 import { createSystemStatus } from "./system-status.js";
 import { createHeader } from "./header.js";
+import { createPhone } from "./phone.js";
 import { createNumberField } from "./numeric.js";
 import { captureTextComposition, composingKey, compositionBusy, latinKey } from "./text-input.js";
 import { createSelectionUi } from "./selection-masks.js";
@@ -81,7 +82,7 @@ let app,
   statusError = null,
   shownHostError = null;
 let penResponse, refreshPreferences, customization, layerPanel, effectPanels, palettes, editor, selectionUi, frequencySeparationUi, canvasSizeUi, imageSizeUi, workspaceChrome, panelVectors, glass, documents, systemStatus, header, canvasBar, notice, zoomReadout, screenStatus;
-let commandBar, paintPairView, fillGesture;
+let commandBar, paintPairView, fillGesture, phone;
 let bubbles;
 observeButtonFeedback(window);
 const compilerContacts = new Set();
@@ -272,7 +273,7 @@ workspace.append(dropIndicator);
 
 function dispatch(action) {
   try {
-    if(documents?.interactionBusy()&&!['pen_input','system_motion_changed','restore_saved_settings','complete_request','measure_panels','measure_canvas_bar','reveal_canvas_bar','measure_titlebar','measure_workspace_bottom','measure_column_drawers','measure_drawer_tiles','measure_column_scroll'].includes(action.type))return;
+    if(documents?.interactionBusy()&&!app.allowed_during_document_interaction(action))return;
     if (action.type === "measure_column_drawers" && workspaceGesture) workspaceGesture.hits = null;
     if (["move_panel", "move_group", "move_tile", "double_click_panel_handle", "reset_column_width"].includes(action.type))
       action = {
@@ -332,7 +333,7 @@ function applyChange(change) {
     commandBar?.refresh(state.command_search);
     if (change.regions === 512) { if (change.canvas_wake) wake(); return; }
   }
-  if(change.regions & 256) { fillGesture?.refresh(app.color_preview().fill_gesture); editor?.refreshColorPreview(); refreshColorEditors(); }
+  if(change.regions & 256) { fillGesture?.refresh(app.color_preview().fill_gesture); editor?.refreshColorPreview(); phone?.refresh(); refreshColorEditors(); }
   if(change.regions===256){bubbles?.refresh();if(change.canvas_wake)wake();return;}
   if (change.regions & (1 | 2 | 4 | 8 | 128)) workspaceManager?.observe();
   if (change.regions) {
@@ -566,6 +567,7 @@ function presentWorkspaceLayout(resolved,layoutOnly) {
   clearWorkspacePlacement();
   if (workspaceGesture) workspaceGesture.hits = null;
   layout=resolved;
+  phone?.layout(resolved);
   const tabBarHeight=`${layout.tab_bar_height}px`;
   if(workspace.style.getPropertyValue("--tab-bar-height")!==tabBarHeight)
     workspace.style.setProperty("--tab-bar-height",tabBarHeight);
@@ -921,6 +923,7 @@ function update(regions) {
     effectPanels.refresh();
   }
   if (regions & (1 | 2 | 4 | 8 | 16 | 128)) header?.refresh();
+  if (regions & (1 | 2 | 4 | 8 | 16 | 128 | 256)) phone?.refresh();
   if (regions & (4 | 8)) documents?.refresh();
   if (regions & (2 | 4 | 16)) palettes.refresh(regions);
   if (regions & 16) effectPanels.refresh();
@@ -1424,6 +1427,7 @@ function input(event) {
   if (!app) return {};
   try {
     const reply = app.input(event);
+    if (reply.cancel_paint && lastPenEvent) queuePen(lastPenEvent, 4);
     workspace.classList.toggle("zen-hidden", reply.chrome_hidden);
     header?.interaction(reply);
     const cursor = ({pan:"grab", zoom:"zoom-in", zoom_out:"zoom-out", rotate:"crosshair"})[reply.navigation_cursor] ?? "";
@@ -1581,7 +1585,7 @@ function queuePen(e, stage, predictionsOnly = false) {
       ((item.twist || 0) * Math.PI) / 180,
       item.timeStamp,
       predicted ? 3 : 2,
-      pen ? (item.buttons & 32 ? 2 : 0) : 1,
+      paintToolKind(item),
     );
   };
   if (!predictionsOnly) {
@@ -1857,8 +1861,6 @@ window.addEventListener("blur", () => {
   heldPointers.clear();
   const reply = input({ type: "blur" });
   edgeReply(reply);
-  if (reply.cancel_paint && lastPenEvent)
-    queuePen(lastPenEvent, 4);
 });
 function tabHits() {
   return [...groups.entries()].flatMap(([group, node]) =>
@@ -1925,6 +1927,7 @@ try {
   const mobileBrowser = navigator.userAgentData?.mobile || /Android|iPhone|iPad|iPod/.test(navigator.userAgent)
     || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   app = WebApp.create(canvas, savedPreferences, preferredLanguages, screenInfo(), mobileBrowser);
+  app.device_class(browserDeviceClass(matchMedia('(pointer: coarse)').matches,screen));
   bootstrap = liveCopy(app, "bootstrap_view");
   delivery = liveCopy(app, "document_delivery_copy");
   document.documentElement.lang = bootstrap.active_tag;
@@ -1995,10 +1998,11 @@ try {
   glass = createGlass({app,canvas,workspace,connections:()=>workspaceChrome.connections(),vectors:()=>panelVectors.glass(),bubbles:()=>bubbles.glass(),enabled:()=>state.palette?.glass.transparency!=="off",wake});
   documents = createDocuments({app,bootstrap,delivery,state:()=>state,canvas,canvasReady:()=>gpuReady,dispatch,applyChange,wake,element,button,icon,dropdown,numberField,message,gpuOperation,rasterWorker,resumeCanvas:resumeDocumentCanvas,contentChanged:panelContentChanged,refreshInputContext:()=>chromeInput({kind:"refresh"})});
   documents.mountProof(panels.get("proof"));
-  const capy = button("",()=>dispatch({type:"invoke",command:"zen_mode"}),"tile-button");
+  const capy = button("",()=>dispatch(app.capy_action()),"tile-button");
   capy.id = "zen-capy"; capy.hidden = true;
   customization.target(capy, {kind:"zen_mode"});workspace.append(capy);
   header = createHeader({app,state:()=>state,paintPair:()=>paintPairView,workspace,element,button,icon,place,dispatch,customization,systemStatus,updateZen,documents,capy});
+  phone = createPhone({app,state:()=>state,workspace,capy,header,element,button,icon,dropdown,place,dispatch,rasterWorker,customization,changed:()=>glass?.queue()});
   canvasBar = createCanvasBar({ app, workspace, element, button, icon, marker: customization.variationMarker, dispatch, glass, reappearMs: catalog.canvas_bar_reappear_ms, metrics: () => `${devicePixelRatio}:${panelFontGeneration}:${catalog.text_size_pt}`,
     openMenu: node => customization.openMenu(node), presented: () => { selectionUi.place(); frequencySeparationUi.place(); notice?.place(); } });
   notice = createNotice({ arrangement: request => app.toolbar_ui(request), workspace, element, button, glass, tiles: app.toolbar_ui({ type: "style", style: "small" }), answer: answerNotice, layout: () => layout, bar: () => selectionUi.bounds() ?? frequencySeparationUi.bounds() ?? canvasBar.bounds() });

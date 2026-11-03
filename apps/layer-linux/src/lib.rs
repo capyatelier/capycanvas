@@ -72,7 +72,8 @@ use gtk::glib;
 use std::{cell::RefCell, rc::Rc};
 
 fn stylesheet() -> String {
-    format!(
+    let paint = layer_ui::TOOLBAR_SLIDER_PAINT;
+    let mut css = format!(
         "window {{ --ui-text-size: {}pt; --command-inset: {}px; --command-gap: {}px; --command-radius: {}px; --panel-inset: {}px; --panel-control-spacing: {}px; --panel-group-spacing: {}px; --panel-compound-spacing: {}px; --panel-control-height: {}px; --panel-field-padding: {}px; --panel-control-radius: {}px; --tool-caption-opacity: {}; --layer-edge-inset: {}px; }}\n{}",
         layer_ui::UI_TEXT_PT,
         layer_ui::COMMAND_SEARCH_STYLE.inset,
@@ -88,7 +89,12 @@ fn stylesheet() -> String {
         layer_ui::TOOL_PREVIEW_METRICS.caption_opacity,
         layer_ui::LAYER_EDGE_INSET,
         include_str!("style.css")
-    )
+    );
+    for (name, value) in [("inset", paint.inset), ("cross", paint.cross), ("wide", paint.wide),
+        ("thumb-length", paint.thumb[0]), ("thumb-cross", paint.thumb[1]), ("radius", paint.radius)] {
+        css.push_str(&format!("window {{ --slider-{name}: {value}px; }}\n"));
+    }
+    css
 }
 
 fn stylesheet_provider() -> gtk::CssProvider {

@@ -9,17 +9,48 @@ import {latinKey} from './text-input.js';
 const source = readFileSync(new URL("app.js", import.meta.url), "utf8");
 test('document transitions retain canvas bar measurement and reveal reports',()=>{
   const actions=[],context={documents:{interactionBusy:()=>true},workspaceGesture:null,
-    app:{dispatch(action){actions.push(action);return{};}},applyChange(){},message:assert.fail};
+    app:{allowed_during_document_interaction:action=>action.type!=='invoke',dispatch(action){actions.push(action);return{};}},applyChange(){},message:assert.fail};
   runInNewContext(source.slice(source.indexOf('function dispatch(action)'),source.indexOf('let languageTimer')),context);
   for(const type of ['invoke','measure_canvas_bar','reveal_canvas_bar'])context.dispatch({type});
   assert.deepEqual(actions.map(action=>action.type),['measure_canvas_bar','reveal_canvas_bar']);
+});
+
+test('phone inset reports apply while busy and deduplicate against shared state',()=>{
+  const phoneSource=readFileSync(new URL('phone.js',import.meta.url),'utf8');
+  const state={workspace_ready:true,phone:{insets:[0,0,0,0]}};
+  let busy=true,observer,refuse=false;
+  const attempts=[],delivered=[];
+  const context={documents:{interactionBusy:()=>busy},workspaceGesture:null,
+    app:{allowed_during_document_interaction:action=>action.type==='phone'&&action.action.kind==='metrics',
+      dispatch(action){if(!refuse){delivered.push(action);state.phone.insets=[...action.action.insets];}return{};}},
+    applyChange(){},message:assert.fail,
+    ResizeObserver:class{constructor(callback){this.callback=callback;this.targets=[];observer=this;}observe(target){this.targets.push(target);}}};
+  runInNewContext(source.slice(source.indexOf('function dispatch(action)'),source.indexOf('let languageTimer')),context);
+  runInNewContext(phoneSource.replace(/^import .*;\n/gm,'').replace('export function createPhone','function createPhone'),context);
+  const element=()=>({style:{setProperty(){}},children:[],append(...nodes){this.children.push(...nodes);}});
+  const presenter=context.createPhone({app:context.app,state:()=>state,workspace:element(),capy:element(),header:{},element,button:element,
+    dispatch:action=>{attempts.push(action);context.dispatch(action);}});
+  const measure=insets=>observer.callback(observer.targets.map((target,index)=>({target,contentRect:{width:insets[index]}})));
+  measure([19,7,13,5]);
+  assert.deepEqual([...state.phone.insets],[19,7,13,5]);
+  assert.equal(delivered.length,1);assert.equal(attempts.length,1);
+  busy=false;context.app.allowed_during_document_interaction=assert.fail;presenter.refresh();
+  assert.equal(delivered.length,1);assert.equal(attempts.length,1,'Busy completion does not redispatch applied facts');
+  refuse=true;measure([20,7,13,5]);
+  assert.deepEqual([...state.phone.insets],[19,7,13,5]);
+  refuse=false;presenter.refresh();
+  assert.deepEqual([...state.phone.insets],[20,7,13,5]);
+  assert.equal(delivered.length,2);assert.equal(attempts.length,3,'Refused facts heal on the next refresh');
+  state.phone.insets=[0,0,0,0];presenter.refresh();
+  assert.deepEqual([...state.phone.insets],[20,7,13,5],'A stale shared publication heals without a new native measurement');
+  presenter.refresh();assert.equal(attempts.length,4);
 });
 
 test('retained workspace placement keeps bubble presentation without scheduling GPU work',()=>{
   let refreshes=0,wakes=0,model=1;
   const context={app:{language_pending:()=>false,workspace_update:()=>({model_revision:model,content_revision:1}),state_update:assert.fail},
     bubbles:{refresh(){refreshes++;wakes++;}},canvasBar:null,workspaceManager:{observe(){}},editor:{refreshColorPreview(){}},
-    fillGesture:null,workspaceModelRevision:1,workspaceContentRevision:1,workspaceGesture:{started:true},
+    fillGesture:null,phone:null,workspaceModelRevision:1,workspaceContentRevision:1,workspaceGesture:{started:true},
     queueWorkspacePresentation(){},queueWorkspaceLayout(){},refreshColorEditors(){},refreshTextureDialogs(){},wake(){wakes++;}};
   runInNewContext(source.slice(source.indexOf('function applyChange(change)'),source.indexOf('let canvasCursorActive')),context);
   for(const regions of [129,129|32768])context.applyChange({regions,canvas_wake:false});
@@ -34,7 +65,7 @@ test('retained workspace placement keeps bubble presentation without scheduling 
 test('fill gesture publishes through the color preview fast path without a workspace patch',()=>{
   const received=[],gesture={transaction:7,pill:{label:'Shared label',value:'Shared value'}};
   const context={app:{language_pending:()=>false,color_preview:()=>({fill_gesture:gesture}),state_update:assert.fail},
-    fillGesture:{refresh:value=>received.push(value)},editor:null,refreshColorEditors(){},bubbles:null,wake(){}};
+    fillGesture:{refresh:value=>received.push(value)},phone:null,editor:null,refreshColorEditors(){},bubbles:null,wake(){}};
   runInNewContext(source.slice(source.indexOf('function applyChange(change)'),source.indexOf('let canvasCursorActive')),context);
   context.applyChange({regions:256,canvas_wake:false});
   assert.equal(received[0],gesture);
@@ -80,7 +111,7 @@ test('compiler input hooks wait for app publication and retain contact and resum
 test('live preferences publish while document dialogs retain exclusive editing input', () => {
   let busy=true;
   const received=[],published=[],change={regions:128};
-  const context={documents:{interactionBusy:()=>busy},app:{dispatch(action){received.push(action);return change;}},
+  const context={documents:{interactionBusy:()=>busy},app:{allowed_during_document_interaction:action=>action.type!=='invoke',dispatch(action){received.push(action);return change;}},
     applyChange:value=>published.push(value),message:assert.fail};
   runInNewContext(source.slice(source.indexOf('function dispatch(action)'),source.indexOf('let languageTimer;')),context);
   const restore={type:'restore_saved_settings',saved:JSON.stringify({language:{Explicit:'ja'}})};
@@ -90,7 +121,7 @@ test('live preferences publish while document dialogs retain exclusive editing i
   const invoke={type:'invoke',command:'pen'};
   context.dispatch(invoke);
   assert.deepEqual(received,[restore,motion],'the open dialog keeps ownership of editing commands');
-  busy=false;context.dispatch(invoke);
+  busy=false;context.app.allowed_during_document_interaction=assert.fail;context.dispatch(invoke);
   assert.deepEqual(received,[restore,motion,invoke]);assert.deepEqual(published,[change,change,change]);
 });
 

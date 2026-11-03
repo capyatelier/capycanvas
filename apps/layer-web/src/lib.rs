@@ -648,6 +648,7 @@ impl WebApp {
             notice,
             camera,
             toolbar_context_generation,
+            phone,
             ..
         } = state;
         let result = js_sys::Object::new();
@@ -677,6 +678,7 @@ impl WebApp {
         field!(tool_settings);
         field!(tool_extra);
         field!(toolbar_context_generation);
+        field!(phone);
         field!(tool_actions);
         field!(tool_set);
         field!(tool_panels);
@@ -826,6 +828,15 @@ impl WebApp {
         let context = serde_wasm_bindgen::from_value(context).map_err(js)?;
         serialize(&self.session.toolbar_stamp(context, known_request).map_err(js)?)
     }
+    pub fn toolbar_component(&self, control: JsValue) -> Result<JsValue, JsValue> {
+        let control = serde_wasm_bindgen::from_value(control).map_err(js)?;
+        serialize(&self.session.state().toolbar_component(control))
+    }
+    pub fn phone_slider_stretch_distance(&self) -> Option<f32> { self.session.phone_layout().map(|p| p.slider_stretch_distance()) }
+    pub fn phone_tools(&self) -> Result<JsValue, JsValue> { serialize(&self.session.state().phone_tools()) }
+    pub fn phone_settings(&self) -> Result<JsValue, JsValue> { serialize(&self.session.state().phone_settings()) }
+    pub fn capy_action(&self) -> Result<JsValue, JsValue> { serialize(&self.session.capy_action()) }
+    pub fn capy_caption(&self, width: f32, height: f32) -> String { self.session.capy_caption([width, height]).to_string() }
     pub fn preferences(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.preferences())
     }
@@ -929,6 +940,10 @@ impl WebApp {
             standalone,
             style,
         ))
+    }
+    pub fn allowed_during_document_interaction(&self, action: JsValue) -> Result<bool, JsValue> {
+        let action: UiAction = serde_wasm_bindgen::from_value(action).map_err(js)?;
+        Ok(action.allowed_during_document_interaction())
     }
     pub fn dispatch(&mut self, action: JsValue) -> Result<JsValue, JsValue> {
         let action: UiAction = serde_wasm_bindgen::from_value(action).map_err(js)?;
@@ -1058,8 +1073,13 @@ impl WebApp {
         self.session.set_platform_prediction_available(available);
     }
 
+    pub fn device_class(&mut self, device: JsValue) -> Result<JsValue, JsValue> {
+        let device = serde_wasm_bindgen::from_value(device).map_err(js)?;
+        serialize(&self.session.set_device_class(device))
+    }
+
     /// Packed history records: id, phase, x, y, pressure, tilt x/y, twist,
-    /// timestamp milliseconds, flags, device kind (0 pen / 1 mouse / 2 eraser).
+    /// timestamp milliseconds, flags, device kind (0 pen / 1 mouse / 2 eraser / 3 finger).
     /// A contact that begins before painting is ready is held whole and
     /// delivered once it is.
     pub fn pen(&mut self, records: &[f64], view_revision: u64) -> Result<u32, JsValue> {
@@ -1092,6 +1112,7 @@ impl WebApp {
                 tool: match item[10] as u8 {
                     1 => ToolKind::Mouse,
                     2 => ToolKind::Eraser,
+                    3 => ToolKind::Finger,
                     _ => ToolKind::Pen,
                 },
             };

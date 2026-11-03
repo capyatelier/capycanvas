@@ -63,8 +63,9 @@ export async function checkTitleBar({call,evaluate,settle,reload}) {
       const controls=original.zones[2].map(e=>e.item.control);
       const at=controls.findIndex(c=>c?.slot==='fill');
       assert.equal(controls[at-1].command,'eraser');assert.equal(controls[at+1].panel,'layers');
-      for(const width of [360,640,1440]) {
+      for(const width of [480,640,1440]) {
         await call('Emulation.setDeviceMetricsOverride',{width,height:1000,deviceScaleFactor:1,mobile:false});await settle();
+        assert.equal(await evaluate('!!layerApp.app.layout(innerWidth,innerHeight).phone'),false,'The title-bar fixture stays in desktop presentation');
         await send({type:'invoke',command:'enclose_fill'});await send({type:'invoke',command:'hand'});
         assert.equal(await evaluate(`layerApp.app.header_view().items.find(i=>i.id===${fill.id}).resolved_control.command`),'enclose_fill');
         const activate=async()=>{
@@ -74,7 +75,8 @@ export async function checkTitleBar({call,evaluate,settle,reload}) {
         await activate();assert.ok(await evaluate('layerApp.state().commands.find(c=>c.id==="enclose_fill").selected'));
         await activate();assert.deepEqual(await evaluate('layerApp.state().customization.drawer.columns'),[['tools'],['tool_settings']]);
         await wait(`(()=>{const root=document.querySelector('.content-drawer[data-drawer="tool"]');if(!root)return false;const r=root.getBoundingClientRect(),columns=[...root.querySelectorAll(':scope > .drawer-column')];return columns.length===2&&columns.every(c=>{const b=c.getBoundingClientRect();return b.width>100&&b.left>=r.left-.5&&b.right<=r.right+.5})})()`);
-        assert.deepEqual(await evaluate("[...document.querySelectorAll('.content-drawer .tools-control .tool-groups .tool-choice-name')].map(n=>n.textContent)"),['Fill','Lasso fill','Enclose and Fill','Paint unfilled areas']);
+        assert.equal(await evaluate("document.querySelectorAll('.content-drawer .tools-control .tool-groups').length"),0,'Fill variants are leaf rows');
+        assert.deepEqual(await evaluate("[...document.querySelectorAll('.content-drawer .tools-control .tool-subtools .tool-choice-name')].map(n=>n.textContent)"),['Fill','Lasso fill','Enclose and Fill','Paint unfilled areas']);
         assert.ok(await evaluate(`!!document.querySelector('.content-drawer [data-tool-setting="tolerance"]')`));
         await shot(`sketch-fill-${width}-${theme}`);await key('Escape');
         for(const command of ['paint_unfilled','fill','lasso_fill','enclose_fill']) {

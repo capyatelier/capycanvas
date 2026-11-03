@@ -6,6 +6,68 @@ fn phone_session(viewport: [u32; 2]) -> UiSession<Recorder> {
 }
 
 #[test]
+fn phone_metrics_are_host_reports_while_rendering_is_suspended() {
+    for platform in [Platform::Gtk, Platform::Web] {
+        let mut s = session(platform);
+        s.set_viewport([412., 891.], [412, 891]).unwrap();
+        s.suspend_renderer().unwrap();
+        assert!(s.dispatch(UiAction::Phone { action: PhoneAction::SwapSides }).is_err());
+        let action = UiAction::Phone { action: PhoneAction::Metrics {
+            native: [32., 16.], native_counts: [1, 1], insets: [19., 7., 13., 5.], movable: true,
+        } };
+        assert!(action.is_host_report());
+        s.dispatch(action).unwrap();
+        assert_eq!(s.state.phone.insets, [19., 7., 13., 5.]);
+        assert_eq!(s.state.phone.native, [32., 16.]);
+        assert_eq!(s.state.phone.native_counts, [1, 1]);
+        assert!(s.state.phone.movable);
+        assert!(!s.state.phone.swapped);
+    }
+}
+
+#[test]
+fn document_interaction_admits_only_existing_reports_and_phone_metrics() {
+    let context = CanvasBarContext { generation: 1, kind: CanvasBarKind::Selection };
+    let allowed = [
+        UiAction::PenInput { device: PenDeviceInfo { id: 1, key: "pen".into(), label: "Pen".into(), native_to_surface: layer_core::TiltAxes::quarter_turns(0) }, sample: None },
+        UiAction::SystemMotionChanged { reduced: false },
+        UiAction::RestoreSavedSettings { saved: String::new() },
+        UiAction::CompleteRequest { id: 1, error: None },
+        UiAction::MeasurePanels { measurements: PanelMeasurementBatch { context: PanelMetricContext {
+            generation: 1, scale: 1., layout_grid: 1., text_scale: 1., style: "light".into(),
+        }, reports: Vec::new() } },
+        UiAction::MeasureCanvasBar { measure: CanvasBarMeasure { context, label: 0., items: Vec::new(), completion: Vec::new(), more: 0., height: 0., gap: 0., padding: 0. } },
+        UiAction::RevealCanvasBar { context, hold: 1 },
+        UiAction::MeasureTitlebar { insets: [0.; 3] },
+        UiAction::MeasureWorkspaceBottom { inset: 0. },
+        UiAction::MeasureColumnDrawers { measurements: Vec::new() },
+        UiAction::MeasureDrawerTiles { measurements: Vec::new() },
+        UiAction::MeasureColumnScroll { column: 1, offset: 0. },
+        UiAction::Phone { action: PhoneAction::Metrics { native: [0.; 2], native_counts: [0; 2], insets: [0.; 4], movable: false } },
+    ];
+    for action in allowed { assert!(action.allowed_during_document_interaction(), "{action:?}"); }
+    for action in [
+        PhoneAction::Capy, PhoneAction::CapyHold, PhoneAction::CapyDrop { position: [0.; 2] },
+        PhoneAction::Tool { tile: 1 }, PhoneAction::RemoveTool { tile: 1 },
+        PhoneAction::InsertTools { before: None }, PhoneAction::MoveTool { tile: 1, before: None },
+        PhoneAction::ToolSettings, PhoneAction::Panel { panel: Panel::Layers },
+        PhoneAction::Drawing { id: 1, close: false }, PhoneAction::SwapSides,
+        PhoneAction::Slider { control: ToolbarControl::BrushSizeSlider, phase: ContactPhase::Down },
+    ] {
+        let action = UiAction::Phone { action };
+        assert!(!action.is_host_report(), "{action:?}");
+        assert!(!action.allowed_during_document_interaction(), "{action:?}");
+    }
+    for action in [
+        UiAction::Invoke { command: CommandId::Undo },
+        UiAction::MeasureHeader { height: 0., items: Vec::new() },
+        UiAction::SystemThemeChanged { theme: Theme::Light, accent: None },
+        UiAction::WindowFullscreen { fullscreen: false },
+        UiAction::RestoreSettings { settings: Box::default() }, UiAction::CloseSettings,
+    ] { assert!(!action.allowed_during_document_interaction(), "{action:?}"); }
+}
+
+#[test]
 fn phone_movable_metrics_update_the_title_without_changing_saved_state() {
     let mut s = phone_session([891, 412]);
     let workspace = s.capture_workspace().unwrap();
@@ -689,15 +751,15 @@ fn phone_presentation_waits_for_each_hosts_capability() {
             s.set_viewport(viewport, viewport.map(|v| v as u32)).unwrap();
             let input = s.layout_resolve_input();
             let resolved = input.resolve(viewport);
-            assert_eq!(resolved.phone.is_some(), platform == Platform::Gtk);
-            assert_eq!(s.phone_layout().is_some(), platform == Platform::Gtk);
-            if platform != Platform::Gtk {
+            assert_eq!(resolved.phone.is_some(), matches!(platform, Platform::Gtk | Platform::Web));
+            assert_eq!(s.phone_layout().is_some(), matches!(platform, Platform::Gtk | Platform::Web));
+            if !matches!(platform, Platform::Gtk | Platform::Web) {
                 let desktop = s.state.workspace.layout.resolved(viewport);
                 assert_eq!(resolved.work_area, desktop.work_area);
                 assert_eq!(resolved.groups.len(), desktop.groups.len());
             }
             let rows = s.state.settings.pages(platform).into_iter().flat_map(|page| page.groups).flat_map(|group| group.rows);
-            assert_eq!(rows.into_iter().any(|row| row.id == PreferenceId::FingerDrawing), platform == Platform::Gtk);
+            assert_eq!(rows.into_iter().any(|row| row.id == PreferenceId::FingerDrawing), matches!(platform, Platform::Gtk | Platform::Web));
             assert!(s.state.workspace.layout.phone.is_some());
         }
     }

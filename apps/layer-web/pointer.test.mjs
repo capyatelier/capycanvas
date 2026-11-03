@@ -1,5 +1,5 @@
 import {nativeScreenEvents} from './native-input-fixture.mjs';
-import {observePenInput} from './pen-input.js';
+import {observePenInput,paintToolKind,browserDeviceClass} from './pen-input.js';
 import {observeButtonFeedback} from './button-feedback.js';
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -175,7 +175,7 @@ test("workspace dragging clears the canvas cursor without hit-testing moving pan
   assert.equal(hits, 2);
   assert.equal(samples.length, 2);
 });
-function harness({ raw = false, prediction = false, paint: allowPaint = true } = {}) {
+function harness({ raw = false, prediction = false, paint: allowPaint = true, paintTouch = false } = {}) {
   const listeners = new Map(), windowListeners = new Map(), records = [], phases = [], buttons = [], cursors = [], captures = [], timers = [], attributes = new Set();
   const listen = (target, name, fn) => target.set(name, [...target.get(name) ?? [], fn]);
   const emit = (target, type, event) => {
@@ -186,7 +186,7 @@ function harness({ raw = false, prediction = false, paint: allowPaint = true } =
   let contact = null;
   const context = {
     canvas: {
-      width: 800, height: 600,
+      width: 800, height: 600, style: {},
       getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
       focus() {}, setPointerCapture() {},
       addEventListener: (name, fn) => listen(listeners, name, fn),
@@ -199,7 +199,8 @@ function harness({ raw = false, prediction = false, paint: allowPaint = true } =
         return { paint: false, handled: true };
       }
       phases.push(event);
-      if (event.phase === "down" && contact === null && event.kind !== "touch")
+      if (context.cancelPaint) { contact = null; return { cancel_paint: true, paint: false, handled: true }; }
+      if (event.phase === "down" && contact === null && (event.kind !== "touch" || paintTouch))
         contact = { id: event.id, paint: allowPaint && event.button === "primary" };
       const paint = contact !== null && contact.id === event.id && contact.paint;
       const handled = contact?.id === event.id;
@@ -208,14 +209,17 @@ function harness({ raw = false, prediction = false, paint: allowPaint = true } =
     },
     cursorInput(event) { cursors.push(event?.type ?? null); }, edgeReply() {}, wake() {},
     heldPointers: new Map(), workspaceGesture: null,
-    workspace: {setPointerCapture: id => captures.push(id),classList:{contains:()=>false}},
+    workspace: {setPointerCapture: id => captures.push(id),classList:{contains:()=>false,toggle(){}}},
     document: {documentElement: {hasAttribute: name => attributes.has(name), toggleAttribute: (name, value) => value ? attributes.add(name) : attributes.delete(name)}, addEventListener() {}},
     chromeEvents:[],chromeInput: event => (context.chromeEvents.push(event),{handled: event.kind === 'contact' && !!context.consumeChrome}),
     zenUpdates:0,updateZen() {context.zenUpdates++;}, closeMenusOutside() {}, requestAnimationFrame() {}, endWorkspaceGesture() {}, queuePen() {},
     window: { addEventListener: (name, fn) => listen(windowListeners, name, fn) }, setTimeout: fn => timers.push(fn), clearTimeout() {},
+    header: null, paintToolKind, applyChange() {}, message: assert.fail,
   };
+  context.app.input = context.input;
   if (raw) context.onpointerrawupdate = null;
   runInNewContext([
+    source.slice(source.indexOf('function input(event)'), source.indexOf('function chromeInput(event)')),
     source.slice(source.indexOf('for (const type of ["pointerdown", "pointermove"])'), source.indexOf("for (const type of ['pointerdown','pointermove'")),
     source.slice(source.indexOf('function pointerStyle('), source.indexOf('canvas.addEventListener("contextmenu"')),
     source.slice(source.indexOf('window.addEventListener("blur", () => {\n  endWorkspaceGesture'), source.indexOf('function tabHits(')),
@@ -498,4 +502,36 @@ test('native browser fixtures map content contacts past browser chrome and prese
   assert.deepEqual(nativeScreenEvents(events,geometry),[{point:[1555.45,203],down:true},{touch:'move',point:[100,287]},{key:32,down:true},{down:false}]);
   assert.deepEqual(events[0].point,[1555.45,116],'native transport leaves DOM measurement unchanged');
   assert.deepEqual(nativeScreenEvents(events,{...geometry,innerHeight:1000}),events,'fullscreen content needs no offset');
+});
+
+test('finger paint batches preserve their kind and full pressure without predictions',()=>{
+  const h=harness({paintTouch:true,prediction:true});
+  h.send('pointerdown',{pointerType:'touch',pressure:.2});
+  h.send('pointermove',{pointerType:'touch',pressure:.4,getPredictedEvents:()=>[{pointerType:'touch',timeStamp:100}]});
+  h.send('pointerup',{pointerType:'touch',pressure:0});
+  assert.deepEqual(h.samples().map(sample=>[sample[1],sample[4],sample[9],sample[10]]),[[1,1,2,3],[2,1,2,3],[3,1,2,3]]);
+  for(const [event,kind] of [[{pointerType:'mouse'},1],[{pointerType:'pen',buttons:1},0],[{pointerType:'pen',buttons:32},2]])
+    assert.equal(paintToolKind(event),kind);
+});
+
+test('a shared cancellation reply retires the active paint once through the common path',()=>{
+  const h=harness({paintTouch:true});
+  h.send('pointerdown',{pointerType:'touch',pointerId:1});
+  h.send('pointermove',{pointerType:'touch',pointerId:1});
+  h.context.cancelPaint=true;
+  h.send('pointerdown',{pointerType:'touch',pointerId:2});
+  h.send('pointermove',{pointerType:'touch',pointerId:2});
+  h.chrome('blur');
+  assert.deepEqual(h.samples().map(sample=>[sample[0],sample[1],sample[10]]),[[1,1,3],[1,2,3],[1,4,3]]);
+  assert.equal(h.context.lastPenEvent,null);
+});
+
+test('physical browser device facts classify primary pointer and screen independently of viewport',()=>{
+  for(const viewport of [280,412,1600]){
+    assert.equal(browserDeviceClass(true,{width:412,height:891,viewport}),'phone');
+    assert.equal(browserDeviceClass(true,{width:891,height:412,viewport}),'phone');
+    assert.equal(browserDeviceClass(true,{width:1200,height:800,viewport}),'tablet');
+    assert.equal(browserDeviceClass(false,{width:1366,height:768,maxTouchPoints:10,viewport}),'desktop','touchscreen laptop with primary fine pointer');
+    assert.equal(browserDeviceClass(false,{width:1920,height:1080,viewport}),'desktop');
+  }
 });

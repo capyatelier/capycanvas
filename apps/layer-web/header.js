@@ -33,8 +33,8 @@ export function createHeader({app, state, paintPair, workspace, element, button,
   let menuModels, view, modelKey, geometry, metrics, insets = [0,0], size, editing = false, selected = null;
   let contact, ghost, frame = 0, measured = '', suppressed = null;
   let measurementTheme, refreshKey, allocatedWidth, allocatedModel, allocatedTheme;
-  let interaction={chrome_hidden:false,keep_zen_button:false};
-  const reconcileCapy=()=>presentCapy(capy,geometry,interaction.chrome_hidden,interaction.keep_zen_button,editing);
+  let interaction={chrome_hidden:false,keep_zen_button:false},phone=false;
+  const reconcileCapy=()=>{if(!phone)presentCapy(capy,geometry,interaction.chrome_hidden,interaction.keep_zen_button,editing);};
   const send = action => dispatch({type:'customize', action:{type:'header', action}});
   const entries = () => view.model.zones.flat();
   const bounds = node => {const r=node.getBoundingClientRect(), p=root.getBoundingClientRect(); return {x:r.x-p.x,y:r.y-p.y,width:r.width,height:r.height};};
@@ -201,6 +201,7 @@ export function createHeader({app, state, paintPair, workspace, element, button,
     options.append(choices,label,cancel,done); bank.append(options);
   }
   function refresh() {
+    if(phone)return;
     view=app.header_view();
     const nextKey=JSON.stringify([view,state().theme,state().commands,state().workspace.layout.canvas_info.visible]);
     if(nextKey===refreshKey)return;
@@ -347,7 +348,7 @@ export function createHeader({app, state, paintPair, workspace, element, button,
     focus?.focus({preventScroll:true});
   }
   function allocate() {
-    frame=0; if(!view)return;
+    frame=0; if(!view||phone)return;
     if(contact?.active)return;
     const width=root.clientWidth;
     if(geometry&&allocatedWidth===width&&allocatedModel===modelKey&&allocatedTheme===state().theme&&root.querySelector('details[open]'))return;
@@ -361,7 +362,7 @@ export function createHeader({app, state, paintPair, workspace, element, button,
     const height=size.height+(editing?bank.offsetHeight+12:0), key=JSON.stringify([height,items]);
     if(key!==measured){measured=key;dispatch({type:'measure_header',height,items});}
   }
-  function queue(){if(!frame)frame=requestAnimationFrame(allocate);}
+  function queue(){if(!phone&&!frame)frame=requestAnimationFrame(allocate);}
   function start(e) {
     if(!editing||e.button!==0||contact||e.target.closest('.workspace-switcher-options'))return;
     const overflowItem=e.target.closest('[data-header-overflow-item],[data-header-overflow-source]');
@@ -474,5 +475,8 @@ export function createHeader({app, state, paintPair, workspace, element, button,
   for(const node of [systemStatus.clock,systemStatus.battery])new MutationObserver(()=>{const r=[...records.values()].find(r=>r.status===node);if(r)r.placeholder.hidden=!editing||!node.hidden;queue();})
     .observe(node,{attributes:true,attributeFilter:['hidden'],childList:true,characterData:true,subtree:true});
   refresh();
-  return {refresh,queue,interaction:reply=>{interaction=reply;reconcileCapy();}};
+  return {refresh,queue,interaction:reply=>{interaction=reply;reconcileCapy();},phone:active=>{
+    if(phone===active)return;phone=active;root.hidden=active;bank.hidden=active||!editing;
+    if(!active){refreshKey=null;refresh();queue();}
+  }};
 }

@@ -41,7 +41,14 @@ pub enum ToolbarUiRequest {
         axis: Axis,
         style: TileStyle,
         slider_style: ToolbarSliderStyle,
+        #[serde(default = "slider_grip")]
+        grip: bool,
     },
+    SliderDragging { moved: bool, delta: [f32; 2] },
+    SliderPaint,
+    SliderScale { cross: f32 },
+    SliderStretch { geometry: ToolbarSliderStretch, point: [f32; 2] },
+    SliderPlacement { handle: Bounds, strip: Bounds, viewport: Bounds, axis: Axis, side: f32 },
     SliderReadout {
         style: TileStyle,
         axis: Axis,
@@ -76,6 +83,8 @@ pub enum ToolbarUiRequest {
         container: Bounds,
     },
 }
+
+fn slider_grip() -> bool { true }
 
 pub fn toolbar_number(request: NumericRequest, compact: bool, units: bool) -> Result<NumericValue, NumericError> {
     let control = &request.control;
@@ -137,9 +146,15 @@ pub fn toolbar_ui(request: ToolbarUiRequest, localizer: &Localizer) -> Result<se
             axis,
             style,
             slider_style,
+            grip,
         } => {
-            json!(toolbar_slider_styled_layout(width, height, axis, style, slider_style, true))
+            json!(toolbar_slider_styled_layout(width, height, axis, style, slider_style, grip))
         }
+        ToolbarUiRequest::SliderDragging { moved, delta } => json!(toolbar_slider_dragging(moved, delta)),
+        ToolbarUiRequest::SliderPaint => json!(TOOLBAR_SLIDER_PAINT),
+        ToolbarUiRequest::SliderScale { cross } => json!(toolbar_slider_scale(cross)),
+        ToolbarUiRequest::SliderStretch { geometry, point } => json!(toolbar_slider_stretch(geometry, point)),
+        ToolbarUiRequest::SliderPlacement { handle, strip, viewport, axis, side } => json!(toolbar_slider_preview_placement(handle, strip, viewport, axis, side)),
         ToolbarUiRequest::SliderReadout { style, axis, control, value } => {
             let text = control.compact_value(value);
             json!({"value":text, "unit":control.unit, "metrics":toolbar_slider_readout_metrics(style, axis, &text)})
@@ -191,8 +206,11 @@ fn slider_queries_publish_styled_geometry_and_unit_placement() {
                     && (style == TileStyle::Small || (style == TileStyle::Medium && value >= 100.)));
             }
             let slider_style = ToolbarSliderStyle { show_value: true, expand: true };
-            let bounds = toolbar_ui(ToolbarUiRequest::SliderLayout { width: 400., height: 400., axis, style, slider_style }, &localizer).unwrap();
+            let bounds = toolbar_ui(ToolbarUiRequest::SliderLayout { width: 400., height: 400., axis, style, slider_style, grip: true }, &localizer).unwrap();
             assert_eq!(bounds, serde_json::to_value(toolbar_slider_styled_layout(400., 400., axis, style, slider_style, true)).unwrap());
+            let fixed = toolbar_ui(ToolbarUiRequest::SliderLayout { width: 150., height: 36., axis, style, slider_style, grip: false }, &localizer).unwrap();
+            assert_eq!(fixed["show_value"], false);
+            assert_eq!(fixed["track"], serde_json::json!({"x":0.,"y":0.,"width":150.,"height":36.}));
         }
     }
 }

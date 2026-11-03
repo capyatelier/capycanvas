@@ -1852,10 +1852,29 @@ pub enum UiAction {
     CloseSettings,
 }
 impl UiAction {
+    pub fn allowed_during_document_interaction(&self) -> bool {
+        matches!(self,
+            Self::PenInput { .. }
+                | Self::SystemMotionChanged { .. }
+                | Self::RestoreSavedSettings { .. }
+                | Self::CompleteRequest { .. }
+                | Self::MeasurePanels { .. }
+                | Self::MeasureCanvasBar { .. }
+                | Self::RevealCanvasBar { .. }
+                | Self::MeasureTitlebar { .. }
+                | Self::MeasureWorkspaceBottom { .. }
+                | Self::MeasureColumnDrawers { .. }
+                | Self::MeasureDrawerTiles { .. }
+                | Self::MeasureColumnScroll { .. }
+                | Self::Phone { action: PhoneAction::Metrics { .. } }
+        )
+    }
+
     pub fn is_host_report(&self) -> bool {
         matches!(
             self,
             Self::PrepareExport { .. }
+                | Self::Phone { action: PhoneAction::Metrics { .. } }
                 | Self::PenInput { .. }
                 | Self::CompleteRequest { .. }
                 | Self::CompleteRequestFailure { .. }

@@ -36,12 +36,14 @@ export async function checkHeaderControls({call,evaluate,settle}) {
   for(const theme of ['light','dark']) {
     await evaluate(`layerApp.dispatch({type:'set_theme',theme:'${theme}'})`);await settle();
     for(const m of menus){await click(`[data-menu="${m.id}"] > summary`);assert.equal(await evaluate(`document.querySelector('[data-menu="${m.id}"]').open`),true);}
-    for(const [width,selector] of [[600,'.header-menu-labels-compact'],[240,'#header-overflow-0']]) {
+    for(const [width,selector] of [[600,'.header-menu-labels-compact'],[480,'#header-overflow-0']]) {
+      if(width===480)await evaluate(`(()=>{window.headerControlsOverflowWorkspace=layerApp.app.workspace_persistence();const menu=headerControlsOverflowWorkspace.layout.header.zones[0].find(e=>e.item.kind==='menu_labels');for(let i=0;i<6;i++)layerApp.dispatch({type:'customize',action:{type:'header',action:{type:'add',zone:'left',before:menu.id,item:{kind:'tool',control:{kind:'command',command:'pencil'}}}}});})()`);
       await resize(width);
+      assert.equal(await evaluate('!!layerApp.app.layout(innerWidth,innerHeight).phone'),false,'Header overflow is exercised in a desktop window');
       assert.equal(await evaluate("document.querySelectorAll('.header-item[hidden] details[open],.header-menu-labels[hidden] details[open]').length"),0,'Resizing closes hidden menus');
       assert.ok(await evaluate(`document.activeElement.closest('${selector}')!==null`),'Focus follows the visible menu');
       await click(`${selector} > summary`);
-      if(width===240)await select('Menu Labels',`${selector} .popover`);
+      if(width===480)await select('Menu Labels',`${selector} .popover`);
       assert.deepEqual(await evaluate(`[...document.querySelectorAll('${selector} .menu-label')].map(n=>n.textContent)`),await evaluate('layerApp.app.header_view().primary_menu.sections.flat().filter(item=>!item.is_heading).map(item=>item.label)'));
       for(const m of menus){await select(m.label,`${selector} .popover`);assert.deepEqual(await evaluate(`[...document.querySelectorAll('${selector} .menu-label')].map(n=>n.textContent)`),m.model.sections.flat().map(i=>i.label));await click(`${selector} .submenu-back`);}
       const zoom=await evaluate('layerApp.state().camera.zoom');await select('View',`${selector} .popover`);
@@ -53,6 +55,7 @@ export async function checkHeaderControls({call,evaluate,settle}) {
       await writeFile(`${dir}/header-focus-${theme}-${width}.local.json`,JSON.stringify({theme,width,restored},null,2));
       assert.ok(await evaluate(`document.activeElement.closest('${width===600?'.header-menu-labels':'.header-item:not([hidden])'}')!==null`),'Expansion restores a visible control');
       assert.ok(!restored.hidden&&!restored.disabled&&restored.bounds.width>0&&restored.bounds.height>0,`${theme}/${width}: restored focus is an enabled visible control: ${JSON.stringify(restored)}`);
+      if(width===480){await evaluate('layerApp.dispatch({type:"restore_workspace",workspace:headerControlsOverflowWorkspace});delete window.headerControlsOverflowWorkspace;null');await settle();}
     }
   }
   const tags=await evaluate('layerApp.app.bootstrap_view().shipped_tags'),expected={};

@@ -43,6 +43,11 @@ and the icon sprite, then serves `apps/layer-web` with Python.
 after Rust changes; the browser tests do not build.
 
 Rust owns editor behavior; JavaScript owns browser events, controls and services.
+The retained `phone.js` presenter consumes `ResolvedLayout.phone` through the
+existing workspace publication path and uses the existing toolbar controls.
+Safe insets are deduplicated browser measurements; native control metrics are
+zero. Primary coarse-pointer and physical screen facts choose the shared finger
+input device class independently of the browser window size.
 Where to look in [`apps/layer-web`](../../apps/layer-web):
 
 | File | Role |
@@ -202,6 +207,7 @@ Chrome tests can miss; it doesn't exercise pen pressure.
 | `--live-language-proof` | `LAYER_TEST_NAMELESS_PROOF=1` and `LAYER_NAMELESS_PROFILE_FILE` select an owned nameless ICC fixture. |
 | `--workspace-store` | Write the fixture from current Rust first: `CAPY_STORE_CONTRACT_FIXTURE="$PWD/artifacts/store-contract.json" cargo test --locked -p layer-workspace --features native browser_transactions_match_sqlite_contract`, then run the journey with the same `CAPY_STORE_CONTRACT_FIXTURE`. |
 | `--settings-audit` | Compares with GTK allocations. First run `bash tools/performance/workspace-motion.sh gtk --native-test=native_settings_typography --native-storage` from the same worktree; it writes reference JSON and captures for every settings page under `artifacts/ui/settings-audit`, and the Web audit writes its captures beside them. Regenerate them for the current GTK code. |
+| `--phone-frame` | Checks the shared frame allocations across the phone audit matrix, swapping and hidden/revealed bars, then decodes real Finger paint and withdrawal recordings through the existing `stroke-recording` example. Run headed with the Cargo target on scratch storage. |
 | `--phone-audit` | Collects phone-reference PNGs and actual DOM allocation JSON at five sizes in both themes, DPR1; 320×320 uses 16 pt text. Gated or unavailable views remain explicit failures of parity. Use `LAYER_TEST_ARTIFACTS` for output. Run headed through `workspace-motion.sh web` for canvas pixels; pair with the existing GTK `native_phone_navigation_headers` captures and the [phone comparator](../../tools/visual/README.md#comparing-images). |
 | `--palettes` | Imports its own exports unless `LAYER_PALETTE_SAMPLES` names a directory with `gpl`, `aco`, `ase`, `swatches` and `kpl` subdirectories of files from other applications. |
 | `--image-object-fixture` | Opens the packages in `apps/layer-web/fixtures/`, authored with the `layer-color` `object_fixture` example from generated sample patterns. `LAYER_OBJECT_FIXTURE_URLS` selects equivalent fixtures as a JSON URL array. |

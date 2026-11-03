@@ -27,7 +27,7 @@ plan.
 
 ## When it applies
 
-- GTK currently presents the phone layout. Each host enables its shared
+- GTK and Web present the phone layout. Each host enables its shared
   `Platform::presents_phone_layout` capability when its bars and finger input
   are wired; saved phone toolbars remain available on every host.
 - On enabled hosts, the phone layout replaces the arrangement whenever the window's

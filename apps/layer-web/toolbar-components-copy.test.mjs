@@ -26,29 +26,37 @@ class Element extends FakeElement {
   matches(selector){return selector===':popover-open'?!!this.open:selector.startsWith('.')?this.classList.contains(selector.slice(1)):this.tagName===selector;}
   querySelectorAll(selector){return this.children.flatMap(node=>node.tagName?[...(node.matches(selector)?[node]:[]),...node.querySelectorAll(selector)]:[]);}
   querySelector(selector){return this.querySelectorAll(selector)[0]??null;}
+  setPointerCapture(){}
   getBoundingClientRect(){return {x:10,y:10,right:110,bottom:110,width:100,height:100};}
   showPopover(){this.open=true;}
   getContext(){return {resetTransform(){},clearRect:()=>{this.drawnImage=undefined;},scale(){},save(){},beginPath(){},rect(){},clip(){},drawImage:image=>{this.drawnImage=image;this.drawCount=(this.drawCount??0)+1;},fillRect(){},restore(){},measureText:text=>({width:text.length*6})};}
 }
-function harness(t,standalone=false){
+function harness(t,standalone=false,fixed=false){
   const globals=['document','window','getComputedStyle','innerWidth','innerHeight','devicePixelRatio','requestAnimationFrame','cancelAnimationFrame'],original=Object.fromEntries(globals.map(key=>[key,globalThis[key]])),doc={createTextNode:nodeValue=>({nodeType:3,nodeValue:String(nodeValue)}),addEventListener(){},removeEventListener(){}};
   const frames=new Map();let frameId=0;
   doc.createElement=tag=>new Element(tag,doc);Object.assign(globalThis,{document:doc,window:{addEventListener(){},removeEventListener(){}},innerWidth:1000,innerHeight:800,devicePixelRatio:1,requestAnimationFrame:callback=>{frames.set(++frameId,callback);return frameId;},cancelAnimationFrame:id=>frames.delete(id),getComputedStyle:()=>({color:'#fff',backgroundColor:'#333',fontWeight:'400',fontSize:'12px',fontFamily:'sans'})});
   let root;t.after(()=>{root?.disposeComponent();for(const[key,value]of Object.entries(original))if(value===undefined)delete globalThis[key];else globalThis[key]=value;});
-  let language='en',stamps=0,layouts=0,expressions=0;const actions=[],stampQueries=[],workerRequests=[],numeric={kind:'slider',min:0,max:100,soft_min:0,soft_max:100,scale:1,step:1,digits:0};
+  let language='en',stamps=0,layouts=0,expressions=0,actionHandler;const actions=[],stampQueries=[],workerRequests=[],numeric={kind:'slider',min:0,max:100,soft_min:0,soft_max:100,scale:1,step:1,digits:0};
   let stampReply=(_,known)=>({request_id:1n,pending:false,size:1,alpha:new Uint8Array(known===1n?[]:[255]),extent:1});
   let workerReply=async request=>({alpha:request.buffers[0],closed:0,close(){this.closed++;}});
   const rasterWorker=request=>{assert.equal(request.operation,'alpha-image');assert.deepEqual(request.metadata,{size:1});assert.equal(request.buffers.length,1);assert.ok(request.buffers[0] instanceof Uint8Array);workerRequests.push(request);return workerReply(request);};
   const formatted=value=>({value,text:String(value),edit:String(value),fill:value/100});
-  const app={native_caption:request=>{assert.equal(request.type,'numeric_error');assert.equal(request.reason.reason,'invalid_expression');return`${language}:invalid`;},catalog:()=>({panel_metrics:{control_height:26},native_copy:{tool_controls:Object.fromEntries(['more_options','remove_bookmark','bookmark_value'].map(key=>[key,`${language}:${key}`]))}}),numeric_labels:label=>({edit:`${language}:edit:${label}`,decrease:'-',increase:'+'}),number_input:request=>formatted(request.value),toolbar_stamp:(context,known)=>{stampQueries.push({context,known});const next=stampReply(context,known);if(next?.alpha.length)stamps++;return next;},toolbar_ui:request=>{
+  const app={phone_slider_stretch_distance:()=>null,native_caption:request=>{assert.equal(request.type,'numeric_error');assert.equal(request.reason.reason,'invalid_expression');return`${language}:invalid`;},catalog:()=>({panel_metrics:{control_height:26},native_copy:{tool_controls:Object.fromEntries(['more_options','remove_bookmark','bookmark_value'].map(key=>[key,`${language}:${key}`]))}}),numeric_labels:label=>({edit:`${language}:edit:${label}`,decrease:'-',increase:'+'}),number_input:request=>formatted(request.value),toolbar_stamp:(context,known)=>{stampQueries.push({context,known});const next=stampReply(context,known);if(next?.alpha.length)stamps++;return next;},toolbar_ui:request=>{
     if(request.type==='slider_readout')return {value:'5',unit:'px',metrics:{inset:4,gap:2,units_below:false}};
+    if(request.type==='slider_scale')return request.cross/36;
+    if(request.type==='slider_layout')return {cap:{x:0,y:0,width:0,height:0},track:{x:0,y:0,width:request.width,height:request.height},show_value:false,stretch_distance:144};
+    if(request.type==='slider_stretch')return .5;
+    if(request.type==='slider_bookmark_value')return 5;
+    if(request.type==='slider_dragging')return true;
+    if(request.type==='slider_paint')return {inset:2,cross:18,wide:8,narrow:2.5,tip:[3,1],mark:[14,2],thumb:[12,28],radius:4};
+    if(request.type==='slider_placement')return ['bottom',{x:10,y:118,width:request.side,height:request.side}];
     if(request.type==='choice_style'){assert.equal(request.labeled,true);return{size:[36,36],icon:16};}if(request.type==='options_layout'){layouts++;return{more:{},fields:language==='en'?request.sizes.map(()=>({width:100,height:30})):request.sizes.map(()=>null)};}if(request.type==='style')return{size:[100,30],labeled:true,gap:4};if(request.type==='numeric_info')return{samples:['0','100'],icon:'size'};if(request.type==='number'){if(request.request.operation.type==='expression'){expressions++;throw{numeric_error:{reason:'invalid_expression'},message:`${language}:invalid`};};return formatted(request.request.value);}if(request.type==='slider_preview')return{side:100,radius:4,caption:{},bookmark:{},icon:16,text:'5 px',viewport:{x:0,y:0,width:100,height:100},opacity:1,stamp:{x:0,y:0,width:100,height:100}};
     throw Error(request.type);
   }};
   const element=(tag,cls,text)=>{const node=doc.createElement(tag);node.className=cls??'';if(text!=null)node.textContent=text;return node;},button=(text,action,cls)=>{const node=element('button',cls,text);node.addEventListener('click',action);return node;},icon=name=>element('svg',name);
   const tile=()=>({id:'test',slider_style:{show_value:false,expand:false},label:`${language}:slider`,control:{kind:standalone?'brush_size_slider':'tool_options'},component:{context:{type:'brush'},numeric:standalone?{id:'size',label:`${language}:size`,group:`${language}:group`,numeric,value:5}:null,bookmarks:[{value:5,fill:.05,selected:true}],options:standalone?[]:[{Numeric:{id:'size',label:`${language}:size`,group:`${language}:group`,numeric,value:5}},{Choice:{id:'mode',label:`${language}:mode`,items:[{label:`${language}:first`,icon:'a',selected:true,action:{type:'set_name',name:'literal label',label:'literal English user content'}},{label:`${language}:second`,icon:'b',selected:false,action:{type:'set_name',name:'literal second'}}]}},{Action:{checkable:false,state:{id:'run',icon:'run',label:`${language}:run`,tooltip:`${language}:help`,enabled:true,selected:false}}}]}});
-  root=createToolbarComponent({app,tile:tile(),view:{tile_style:'small'},element,button,icon,dispatch:action=>actions.push(action),draggable(){},target(){},place(){},panel:'tools',rasterWorker});
-  return {app,root,tile,doc,actions,stampQueries,workerRequests,expressions:()=>expressions,layouts:()=>layouts,stamps:()=>stamps,stampReply(fn){stampReply=fn;},workerReply(fn){workerReply=fn;},async flush(){for(let i=0;i<4;i++)await Promise.resolve();},pendingFrames:()=>frames.size,frame(){const callbacks=[...frames.values()];frames.clear();callbacks.forEach(callback=>callback());},switch(tag){language=tag;refreshCopy(app);root.updateComponent(tile());}};
+  root=createToolbarComponent({app,...(fixed?{control:tile().control,presentation:tile()}:{tile:tile()}),view:{tile_style:'small'},element,button,icon,dispatch:action=>{actions.push(action);actionHandler?.(action);},draggable(){assert.equal(fixed,false);},target(){assert.equal(fixed,false);},place(){},panel:'tools',rasterWorker});
+  return {app,root,tile,doc,actions,stampQueries,workerRequests,onAction:fn=>{actionHandler=fn;},expressions:()=>expressions,layouts:()=>layouts,stamps:()=>stamps,stampReply(fn){stampReply=fn;},workerReply(fn){workerReply=fn;},async flush(){for(let i=0;i<4;i++)await Promise.resolve();},pendingFrames:()=>frames.size,frame(){const callbacks=[...frames.values()];frames.clear();callbacks.forEach(callback=>callback());},switch(tag){language=tag;refreshCopy(app);root.updateComponent(tile());}};
 }
 
 test('toolbar caption publication retains dirty numeric editors, option popup rows and literal action payloads',t=>{
@@ -185,4 +193,50 @@ test('checklists retain independent marks and dispatch the supplied layer action
   value.component.options[0].Checklist.items=items.map(item=>({...item,selected:true}));h.root.updateComponent(value);
   assert.deepEqual(h.root.querySelectorAll('input'),controls);assert.deepEqual(controls.map(c=>c.checked),[true,true]);
   assert.equal(controls[0].getAttribute('aria-label'),'Ink {literal}');
+});
+
+
+test('fixed sliders need no tile identity and cancel a captured edit exactly once',t=>{
+  const h=harness(t,true,true);h.root.layoutComponent({width:147,height:48},'horizontal');
+  assert.equal(h.root.dataset.tile,undefined);
+  assert.equal(h.root.querySelector('.toolbar-slider-cap').hidden,true);
+  const slider=h.root.querySelector('.number-slider');
+  slider.dispatch('pointerdown',{pointerId:7,button:0,clientX:35,clientY:24});
+  slider.dispatch('pointercancel',{pointerId:7});slider.dispatch('lostpointercapture',{pointerId:7});
+  assert.deepEqual(h.actions.filter(a=>a.type==='phone').map(a=>a.action.phase),['down','cancel']);
+  assert.equal(h.root.querySelector('.toolbar-brush-preview'),null);
+  slider.dispatch('pointerdown',{pointerId:8,button:0,clientX:35,clientY:24});
+  slider.dispatch('pointerup',{pointerId:8});
+  assert.deepEqual(h.actions.filter(a=>a.type==='phone').map(a=>a.action.phase),['down','cancel','down','up']);
+  assert.ok(h.root.querySelector('.toolbar-brush-preview'),'tap leaves the preview open');
+  h.root.closeComponent();
+  assert.equal(h.root.querySelector('.toolbar-brush-preview'),null);
+  assert.deepEqual(h.actions.filter(a=>a.type==='phone').map(a=>a.action.phase),['down','cancel','down','up']);
+});
+
+
+test('replacing an active slider publishes its replacement before synchronous cancellation refresh',t=>{
+  const h=harness(t,true,true);h.root.layoutComponent({width:147,height:48},'horizontal');
+  const old=h.root.querySelector('.number-slider');old.dispatch('pointerdown',{pointerId:7,button:0,clientX:35,clientY:24});
+  const next=h.tile();next.component.context={type:'different'};
+  h.onAction(action=>{if(action.type==='phone'&&action.action.phase==='cancel')h.root.updateComponent(next);});
+  h.root.updateComponent(next);
+  const sliders=h.root.querySelectorAll('.number-slider');
+  assert.equal(sliders.length,1,'A synchronous cancellation publication cannot leave an unowned control');
+  assert.notEqual(sliders[0],old);assert.ok(!h.root.contains(old));
+  assert.deepEqual(h.actions.filter(a=>a.type==='phone').map(a=>a.action.phase),['down','cancel']);
+  sliders[0].dispatch('pointerdown',{pointerId:8,button:0,clientX:35,clientY:24});
+  sliders[0].dispatch('pointerup',{pointerId:8});
+  assert.deepEqual(h.actions.filter(a=>a.type==='phone').map(a=>a.action.phase),['down','cancel','down','up']);
+});
+
+test('scaled slider motion reports widget coordinates to the shared contact gate',t=>{
+  const h=harness(t,true,true);h.root.layoutComponent({width:147,height:48},'horizontal');
+  const original=h.app.toolbar_ui;let motion;
+  h.app.toolbar_ui=request=>{if(request.type==='slider_dragging')motion=request.delta;return original(request);};
+  const slider=h.root.querySelector('.number-slider');
+  slider.dispatch('pointerdown',{pointerId:7,button:0,clientX:35,clientY:24});
+  slider.dispatch('pointermove',{pointerId:7,clientX:39,clientY:24});
+  assert.deepEqual(motion,[3,0]);
+  slider.dispatch('pointerup',{pointerId:7});
 });

@@ -3,6 +3,7 @@ import { createRangeControl } from './range-control.js';
 import { bindCopy, liveCopy } from './localization.js';
 import {gradientButton} from './gradient.js';
 const key = value => JSON.stringify(value, (_, v) => typeof v === 'bigint' ? String(v) : v);
+const rectangle = ({x,y,width,height}) => ({x,y,width,height});
 const semantic = ({label, tooltip, disabled_reason, ...value}) => value;
 const fieldSemantic = ({group, numeric, ...value}) => {
   const {endpoint_labels, ...rules} = numeric;
@@ -101,24 +102,26 @@ export function choiceField({ app, element, button, icon, openPopup, closePopup 
 
 // Retained DOM controls. Rust owns the field schema, edit context, numeric math,
 // and fitting; this adapter reports native font/control measurements.
-export function createToolbarComponent({ app, tile, view, element, button, icon, dropdown, dispatch, draggable, target, place, panel, rasterWorker }) {
+export function createToolbarComponent({ app, tile, control = tile?.control, presentation = tile, view, element, button, icon, dropdown, dispatch, draggable, target, place, panel, rasterWorker }) {
   const root = element('div', 'tile-button tool-tile toolbar-component');
-  root.dataset.tile = tile.id; root.dataset.toolbarComponent = tile.control.kind;
-  const item = { kind: 'tile', panel, tile: tile.id };
-  target(root, item);
-  let model, schema = '', fields = [], vertical = false, extent = [0, 0], measured = '', selections = '', popup;
+  root.dataset.toolbarComponent = control.kind;
+  const item = tile && { kind: 'tile', panel, tile: tile.id };
+  if (item) { root.dataset.tile = tile.id; target(root, item); }
+  let model, schema = '', fields = [], vertical = false, extent = [0, 0], stretchDistance = 0, measured = '', selections = '', popup;
   let tileStyle = view.tile_style, style = app.toolbar_ui({ type: 'style', style: tileStyle });
   const controlHeight = liveCopy(app, 'catalog').panel_metrics.control_height;
   const clear = (app.toolbar_ui({ type: 'style', style: 'small' }).size[1] - controlHeight) / 2;
   root.style.setProperty('--field-clear', `${clear}px`);
-  const preferences = tile.control.style || { text: true, sliders: true };
-  let sliderPreferences = tile.slider_style;
-  const standalone = tile.control.kind !== 'tool_options';
+  const preferences = control.style || { text: true, sliders: true };
+  let sliderPreferences = presentation.slider_style;
+  const standalone = control.kind !== 'tool_options';
+  const paint = standalone ? app.toolbar_ui({type:'slider_paint'}) : null;
+  let paintScale = 1;
   const copy = liveCopy(app, 'catalog').native_copy.tool_controls;
   let copyKey = copy.more_options, copyChanged = false;
   const more = button('', () => dispatch({ type: 'activate_tile', panel, tile: tile.id }), 'toolbar-more');
   more.append(icon('more')); bindCopy(more, () => copy.more_options, 'title'); bindCopy(more, () => copy.more_options, 'ariaLabel');
-  target(more, item); draggable(more, item); root.append(more);
+  if (item) { target(more, item); draggable(more, item); } root.append(more);
   function send(context, action) { dispatch({ type: 'toolbar_edit', context, action }); }
   function closePopup() { if (popup) { popup.remove(); popup = null; } }
   function openPopup(anchor, content) {
@@ -134,7 +137,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     field = { ...field, numeric: { ...field.numeric, digits: Number(field.numeric.digits) } };
     const row = element('div', `toolbar-slider ${field.id !== 'size' ? 'opacity-track' : 'size-track'}`);
     const cap = button('', show, 'toolbar-slider-cap'); cap.title = field.label; cap.setAttribute('aria-label', field.label);
-    target(cap, item); draggable(cap, item);
+    if (item) { target(cap, item); draggable(cap, item); }
     const readout = element('span', 'toolbar-slider-readout'), title = element('span', 'toolbar-slider-title');
     const valueRow = element('span', 'toolbar-slider-value-row'), valueLabel = element('span', 'toolbar-slider-value'), unit = element('span', 'toolbar-slider-unit');
     valueRow.append(valueLabel, unit); readout.append(title, valueRow); cap.append(readout); readout.hidden = true;
@@ -146,12 +149,17 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     const format = () => app.number_input({ control: field.numeric, value: current, operation: { type: 'format' } });
     function change(value) { send(context, { type: 'set_tool_setting', id: field.id, value }); }
     function position(e) {
-      const b = slider.getBoundingClientRect(), travel = Math.max(1, (vertical ? b.height : b.width) - 12);
-      return Math.max(0, Math.min(1, vertical ? 1 - (e.clientY - b.y - 6) / travel : (e.clientX - b.x - 6) / travel));
+      const b = slider.getBoundingClientRect(), band = root.getBoundingClientRect();
+      return app.toolbar_ui({type:'slider_stretch', geometry:{
+        track:vertical?[b.bottom-paint.thumb[0]*paintScale/2,b.y+paint.thumb[0]*paintScale/2]:[b.x+paint.thumb[0]*paintScale/2,b.right-paint.thumb[0]*paintScale/2],
+        band:vertical?[band.x,band.right]:[band.y,band.bottom],
+        extent:vertical?innerHeight:innerWidth,
+        transition:app.phone_slider_stretch_distance()??stretchDistance,
+      },point:vertical?[e.clientY,e.clientX]:[e.clientX,e.clientY]});
     }
     function pick(e, snap) {
-      const positionValue = position(e);
-      change(snap ? app.toolbar_ui({ type: 'slider_bookmark_value', control: tile.control, values: model.bookmarks.map(m => m.value), position: positionValue, travel: Math.max(1, (vertical ? slider.clientHeight : slider.clientWidth) - 12) })
+      const positionValue = position(e),bounds=slider.getBoundingClientRect();
+      change(snap ? app.toolbar_ui({ type: 'slider_bookmark_value', control, values: model.bookmarks.map(m => m.value), position: positionValue, travel: Math.max(1, (vertical ? bounds.height : bounds.width) - paint.thumb[0]*paintScale) })
         : app.number_input({ control: field.numeric, value: current, operation: { type: 'position', position: positionValue } }).value);
     }
     function show() {
@@ -160,7 +168,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
         stamp?.image.close(); stamp = undefined;
         closePopup(); preview = popup = element('div', 'toolbar-brush-preview panel'); popup.popover = 'manual';
         caption = element('span', 'toolbar-preview-caption');
-        bookmark = button('', () => { send(context, { type: 'toggle_slider_bookmark', control: tile.control }); }, 'toolbar-preview-bookmark');
+        bookmark = button('', () => { send(context, { type: 'toggle_slider_bookmark', control }); }, 'toolbar-preview-bookmark');
         canvas = element('canvas', 'toolbar-preview-stamp'); popup.append(canvas, caption, bookmark); root.append(popup); popup.showPopover();
         const opened = popup;
         opened.addEventListener('toggle', e => {
@@ -197,15 +205,13 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     }
     function paintPreview() {
       if (!popup || popup !== preview) return;
-      const geometry = app.toolbar_ui({ type: 'slider_preview', control: tile.control, style: tileStyle, value: current, length: Math.max(...extent), extent: stamp?.extent || 1 });
+      const geometry = app.toolbar_ui({ type: 'slider_preview', control, style: tileStyle, value: current, length: Math.max(...extent), extent: stamp?.extent || 1 });
       popup.style.width = popup.style.height = `${geometry.side}px`; popup.style.setProperty('--tile-radius', `${geometry.radius}px`);
       for (const [node, b] of [[caption, geometry.caption], [bookmark, geometry.bookmark]]) Object.assign(node.style, { left: `${b.x}px`, top: `${b.y}px`, width: `${b.width}px`, height: `${b.height}px` });
       bookmark.style.setProperty('--preview-icon', `${geometry.icon}px`);
-      const a = root.getBoundingClientRect(), side = geometry.side;
-      const x = vertical ? (a.right + side + 8 <= innerWidth ? a.right + 8 : a.x - side - 8) : a.x;
-      const y = vertical ? a.y + (a.height - side) / 2 : (a.bottom + side + 8 <= innerHeight ? a.bottom + 8 : a.y - side - 8);
-      popup.style.left = `${Math.max(6, Math.min(x, innerWidth - side - 6))}px`;
-      popup.style.top = `${Math.max(6, Math.min(y, innerHeight - side - 6))}px`;
+      const a = root.getBoundingClientRect(), handle = thumb.getBoundingClientRect(), side=geometry.side;
+      const [,bounds] = app.toolbar_ui({type:'slider_placement',handle:rectangle(handle),strip:rectangle(a),viewport:{x:0,y:0,width:innerWidth,height:innerHeight},axis:vertical?'vertical':'horizontal',side:geometry.side});
+      popup.style.left = `${bounds.x}px`; popup.style.top = `${bounds.y}px`;
       caption.textContent = geometry.text;
       const selected = model.bookmarks.some(m => m.selected);
       if (bookmark.dataset.selected !== String(selected)) { bookmark.replaceChildren(icon(selected ? 'minus' : 'plus')); bookmark.dataset.selected = selected; }
@@ -235,37 +241,51 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
       }));
       track.style.setProperty('--position', fill); updateReadout(); paintPreview(); refreshPreview();
     }
+    function finish(cancelled) {
+      if(!contact)return;
+      const moved=contact.moved;contact=null;
+      dispatch({type:'phone',action:{kind:'slider',control,phase:cancelled?'cancel':'up'}});
+      if(cancelled||moved)closePopup();
+    }
     slider.addEventListener('pointerdown', e => {
       if (e.button || slider.disabled || contact) return;
       e.preventDefault(); e.stopPropagation();
       contact = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false };
-      slider.setPointerCapture(e.pointerId); pick(e, true); show();
+      slider.setPointerCapture(e.pointerId); dispatch({type:'phone',action:{kind:'slider',control,phase:'down'}}); pick(e, true); show();
     });
     slider.addEventListener('pointermove', e => {
       if (contact?.id !== e.pointerId) return;
-      if (!contact.moved && Math.hypot(e.clientX - contact.x, e.clientY - contact.y) < 3) return;
+      if (!app.toolbar_ui({type:'slider_dragging',moved:contact.moved,delta:[(e.clientX-contact.x)/paintScale,(e.clientY-contact.y)/paintScale]})) return;
       contact.moved = true; pick(e, false);
     });
-    slider.addEventListener('pointerup', e => { if (contact?.id === e.pointerId) { if (contact.moved) closePopup(); contact = null; } });
-    for (const type of ['pointercancel', 'lostpointercapture']) slider.addEventListener(type, () => { if (contact) closePopup(); contact = null; });
+    slider.addEventListener('pointerup', e => { if (contact?.id === e.pointerId) finish(false); });
+    for (const type of ['pointercancel', 'lostpointercapture']) slider.addEventListener(type, () => finish(true));
     // Chromium's native touch range edit runs after pointerdown and can replace
     // a snapped value. Pointer capture above owns touch; retain keyboard input.
     slider.addEventListener('touchstart', e => { if (e.cancelable) e.preventDefault(); }, { passive: false });
     slider.addEventListener('input', () => { change(app.number_input({ control: field.numeric, value: current, operation: { type: 'position', position: Number(slider.value) } }).value); show(); });
-    const outside = e => { if (popup && popup === preview && !row.contains(e.target) && !popup.contains(e.target)) closePopup(); };
-    const escape = e => { if (e.key === 'Escape') { closePopup(); contact = null; } };
+    const outside = e => { if (popup && popup === preview && !row.contains(e.target) && !popup.contains(e.target)) { finish(true); closePopup(); } };
+    const escape = e => { if (e.key === 'Escape') { finish(true); closePopup(); } };
     document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', escape);
-    const blur = () => { closePopup(); contact = null; }; window.addEventListener('blur', blur);
+    const blur = () => { finish(true); closePopup(); }; window.addEventListener('blur', blur);
     function orient() {
       slider.style.writingMode = vertical ? 'vertical-lr' : ''; slider.style.direction = vertical ? 'rtl' : '';
       slider.setAttribute('aria-orientation', vertical ? 'vertical' : 'horizontal');
-      const {cap:capBounds, track:trackBounds, show_value} = app.toolbar_ui({ type: 'slider_layout', width: extent[0], height: extent[1], axis: vertical ? 'vertical' : 'horizontal', style: tileStyle, slider_style: sliderPreferences });
-      readout.hidden = !show_value;
+      paintScale = tile ? 1 : app.toolbar_ui({type:'slider_scale',cross:vertical?extent[0]:extent[1]});
+      const {cap:capBounds, track:trackBounds, show_value, stretch_distance} = app.toolbar_ui({ type: 'slider_layout', width: extent[0]/paintScale, height: extent[1]/paintScale, axis: vertical ? 'vertical' : 'horizontal', style: tileStyle, slider_style: sliderPreferences, grip: !!tile });
+      stretchDistance = stretch_distance*paintScale; cap.hidden = !tile; readout.hidden = !show_value;
+      row.style.width=`${extent[0]/paintScale}px`;row.style.height=`${extent[1]/paintScale}px`;
+      row.style.transformOrigin='0 0';row.style.transform=`scale(${paintScale})`;
       place(cap, capBounds);
-      const along = Math.max(0, (vertical ? trackBounds.height : trackBounds.width) - 4);
-      place(track, vertical ? { ...trackBounds, x: (extent[0] - 28) / 2, y: trackBounds.y + 2, width: 28, height: along }
-        : { ...trackBounds, x: trackBounds.x + 2, y: (extent[1] - 28) / 2, width: along, height: 28 });
-      track.style.setProperty('--track-shape', trackShape(along - 12, field.id !== 'size' ? 8 : 2.5));
+      const inset=tile?paint.inset:0,cross=paint.cross,along=Math.max(0,(vertical?trackBounds.height:trackBounds.width)-2*inset);
+      place(track, vertical ? {x:(extent[0]/paintScale-cross)/2,y:trackBounds.y+inset,width:cross,height:along}
+        : {x:trackBounds.x+inset,y:(extent[1]/paintScale-cross)/2,width:along,height:cross});
+      const inputCross=(vertical?extent[0]:extent[1])/paintScale;
+      Object.assign(slider.style,vertical?{left:`${(cross-inputCross)/2}px`,top:'0',width:`${inputCross}px`,height:'100%'}
+        :{left:'0',top:`${(cross-inputCross)/2}px`,width:'100%',height:`${inputCross}px`});
+      for(const [name,value]of Object.entries({'thumb-length':paint.thumb[0],'thumb-cross':paint.thumb[1],'thumb-radius':paint.radius,'mark-length':paint.mark[0],'mark-thickness':paint.mark[1]}))
+        row.style.setProperty(`--slider-${name}`,`${value}px`);
+      track.style.setProperty('--track-shape', trackShape(along-paint.thumb[0], field.id!=='size'?paint.wide:paint.narrow));
       updateReadout();
     }
     function updateReadout() {
@@ -292,11 +312,12 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     }
     function trackShape(length, narrow) {
       if (length < 4) return 'none';
-      const point = (a, b) => vertical ? `${14 + b} ${length + 6 - a}` : `${6 + a} ${14 + b}`;
-      return `path('M ${point(0, -narrow)} L ${point(length - 3, -8)} C ${point(length + 1, -8)} ${point(length + 1, 8)} ${point(length - 3, 8)} `
-        + `L ${point(0, narrow)} C ${point(-3, narrow)} ${point(-3, -narrow)} ${point(0, -narrow)} Z')`;
+      const half=paint.thumb[0]/2,center=paint.cross/2,wide=paint.wide,[tip,bend]=paint.tip;
+      const point = (a, b) => vertical ? `${center + b} ${length + half - a}` : `${half + a} ${center + b}`;
+      return `path('M ${point(0, -narrow)} L ${point(length - tip, -wide)} C ${point(length + bend, -wide)} ${point(length + bend, wide)} ${point(length - tip, wide)} `
+        + `L ${point(0, narrow)} C ${point(-tip, narrow)} ${point(-tip, -narrow)} ${point(0, -narrow)} Z')`;
     }
-    update(); return { row, update, orient, dispose() { closePopup(); stamp?.image.close(); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', escape); window.removeEventListener('blur', blur); } };
+    update(); return { row, update, orient, cancel:()=>finish(true), dispose() { finish(true); closePopup(); stamp?.image.close(); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', escape); window.removeEventListener('blur', blur); } };
   }
   function numeric(field, context) {
     const row = element('div', 'toolbar-option toolbar-numeric');
@@ -417,14 +438,16 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     sliderPreferences = next.slider_style;
     copyChanged = copyKey !== copy.more_options; copyKey = copy.more_options;
     const nextSchema = key([sliderPreferences, value.context, value.numeric && { ...fieldSemantic(value.numeric), value: 0 }, value.options.map(o => o.Gradient ? {Gradient:o.Gradient.gradient.destination} : o.Range ? {Range:{...semantic(o.Range),bounds:o.Range.bounds.map(f=>({...fieldSemantic(f),value:0}))}} : o.Numeric ? { Numeric: { ...fieldSemantic(o.Numeric), value: 0 } } : o.Checklist ? {Checklist:{...semantic(o.Checklist),items:o.Checklist.items.map(i=>({...semantic(i),selected:false,enabled:true}))}} : o.Choice ? { Choice: { ...semantic(o.Choice), items: o.Choice.items.map(i => ({ ...semantic(i), selected: false })) } } : { Action: { ...o.Action, state: { ...semantic(o.Action.state), selected: false, enabled: true } } })]);
-    const sliderField = () => value.numeric || { id: tile.control.kind === 'brush_size_slider' ? 'size' : 'strength', label: next.label, numeric: app.toolbar_ui({ type: 'slider_spec', control: tile.control }), value: 0.5 };
+    const sliderField = () => value.numeric || { id: control.kind === 'brush_size_slider' ? 'size' : 'strength', label: next.label, numeric: app.toolbar_ui({ type: 'slider_spec', control }), value: 0.5 };
     model = value;
     if (nextSchema !== schema) {
-      closePopup(); fields.forEach(f => { f.dispose?.(); f.row.remove(); }); fields = []; schema = nextSchema;
+      closePopup(); const previous=fields; fields=[]; schema=nextSchema;
       if (standalone) {
         fields.push(brushSlider(sliderField(), value.context));
       } else fields = value.options.map(o => o.Gradient ? gradientButton({app,element,button,icon,dropdown,dispatch:action=>send(value.context,action)},o.Gradient,openPopup) : o.Range ? range(o.Range, value.context) : o.Numeric ? numeric(o.Numeric, value.context) : o.Checklist ? checklistField({element,button,icon},o.Checklist,action=>send(value.context,action)) : o.Choice ? choice(o.Choice, value.context) : action(o.Action, value.context));
       fields.forEach(f => root.append(f.row)); measured = '';
+      previous.forEach(f=>{f.row.remove();f.dispose?.();});
+      if(model!==value)return;
     }
     if (standalone) fields[0].update(sliderField());
     else fields.forEach((f, i) => f.update(value.options[i]));
@@ -436,9 +459,10 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     const next = key([bounds.width, bounds.height, axis, presented]);
     if (next === root.dataset.componentBounds) return;
     if (presented !== tileStyle) { tileStyle = presented; style = app.toolbar_ui({ type: 'style', style: tileStyle }); }
-    root.dataset.componentBounds = next; extent = [bounds.width, bounds.height]; vertical = axis === 'vertical'; closePopup(); layout();
+    fields.forEach(f=>f.cancel?.()); root.dataset.componentBounds = next; extent = [bounds.width, bounds.height]; vertical = axis === 'vertical'; closePopup(); layout();
   };
   root.disposeComponent = () => { closePopup(); fields.forEach(f => f.dispose?.()); };
-  root.updateComponent(tile);
+  root.closeComponent = () => { fields.forEach(f=>f.cancel?.()); closePopup(); };
+  root.updateComponent(presentation);
   return root;
 }

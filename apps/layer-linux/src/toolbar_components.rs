@@ -1217,7 +1217,7 @@ impl Component {
             #[strong]
             moved,
             move |_, x, y| {
-                if !moved.get() && x.hypot(y) < 3. {
+                if !toolbar_slider_dragging(moved.get(), [x as f32, y as f32]) {
                     return;
                 }
                 moved.set(true);
@@ -1570,20 +1570,23 @@ fn paint_track(
     cr.translate(b.x() as f64,b.y() as f64);
     let factor=root.imp().visual_scale.get() as f64;
     cr.scale(factor,factor);
+    let paint = TOOLBAR_SLIDER_PAINT;
+    let half = paint.thumb[0] as f64 / 2.;
     if vertical {
-        cr.translate(x + w * 0.5, y + h - 6.);
+        cr.translate(x + w * 0.5, y + h - half);
         cr.rotate(-std::f64::consts::FRAC_PI_2);
     } else {
-        cr.translate(x + 6., y + h * 0.5);
+        cr.translate(x + half, y + h * 0.5);
     }
-    let length = length - 12.;
-    let wide = 8.;
-    let narrow = if opacity { wide } else { 2.5 };
+    let length = length - paint.thumb[0] as f64;
+    let wide = paint.wide as f64;
+    let narrow = if opacity { wide } else { paint.narrow as f64 };
+    let [tip, bend] = paint.tip.map(f64::from);
     cr.move_to(0., -narrow);
-    cr.line_to(length - 3., -wide);
-    cr.curve_to(length + 1., -wide, length + 1., wide, length - 3., wide);
+    cr.line_to(length - tip, -wide);
+    cr.curve_to(length + bend, -wide, length + bend, wide, length - tip, wide);
     cr.line_to(0., narrow);
-    cr.curve_to(-3., narrow, -3., -narrow, 0., -narrow);
+    cr.curve_to(-tip, narrow, -tip, -narrow, 0., -narrow);
     cr.close_path();
     cr.clip();
     let ink = root.color();
@@ -1622,6 +1625,7 @@ fn paint_bookmarks(root: &ComponentBody, snapshot: &gtk::Snapshot, bookmarks: &[
         - half * 2.;
     let color = root.color();
     let factor = root.imp().visual_scale.get();
+    let [length, thickness] = TOOLBAR_SLIDER_PAINT.mark;
     for mark in bookmarks {
         // GTK rounds its thumb allocation. Use that actual center for a selected
         // mark so the line stays centered at every value and display scale.
@@ -1637,17 +1641,17 @@ fn paint_bookmarks(root: &ComponentBody, snapshot: &gtk::Snapshot, bookmarks: &[
         };
         let rect = if vertical {
             gtk::graphene::Rect::new(
-                b.x() + (range.x() as f32 + range.width() as f32 / 2. - 7.) * factor,
-                b.y() + (range.y() as f32 + position - 1.) * factor,
-                14. * factor,
-                2. * factor,
+                b.x() + (range.x() as f32 + range.width() as f32 / 2. - length / 2.) * factor,
+                b.y() + (range.y() as f32 + position - thickness / 2.) * factor,
+                length * factor,
+                thickness * factor,
             )
         } else {
             gtk::graphene::Rect::new(
-                b.x() + (range.x() as f32 + position - 1.) * factor,
-                b.y() + (range.y() as f32 + range.height() as f32 / 2. - 7.) * factor,
-                2. * factor,
-                14. * factor,
+                b.x() + (range.x() as f32 + position - thickness / 2.) * factor,
+                b.y() + (range.y() as f32 + range.height() as f32 / 2. - length / 2.) * factor,
+                thickness * factor,
+                length * factor,
             )
         };
         let [r, g, b] = root.imp().bookmark_selected.get();

@@ -3,6 +3,7 @@ import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {gzipSync} from 'node:zlib';
 
 export const phoneAuditMatrix = [
   {viewport:[412,891],text_pt:11},
@@ -82,7 +83,7 @@ const pages = [
   {id:'properties',action:{type:'invoke',command:'document_properties'},selector:'dialog.document-dialog[open]',header:'header'},
 ];
 
-export async function checkPhoneAudit({call,evaluate,settle}) {
+export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false}) {
   const {createDrawing}=await import('./new-drawing-fixture.mjs');
   const directory=process.env.LAYER_TEST_ARTIFACTS||'/mnt/localssd/capy9-phone-impl/web-phone-audit';
   await mkdir(directory,{recursive:true});
@@ -119,6 +120,7 @@ export async function checkPhoneAudit({call,evaluate,settle}) {
     assert.deepEqual(metadata.viewport,test.viewport,'Capture logical viewport');assert.equal(metadata.dpr,1,'Capture DPR');
     assert.equal(metadata.theme,test.theme,'Capture theme');
     metadata.phone_tiles=await evaluate('layerApp.state().workspace.layout.phone??[]');
+    if(frameOnly)metadata.presented_tools=await evaluate('layerApp.app.phone_tools()');
     const document=await evaluate(`(()=>{const s=layerApp.state(),tab=s.tabs.find(t=>t.active);return {extent:tab?[tab.width,tab.height]:null,color:layerApp.app.document_color(),count:layerApp.app.document_tabs(0).tabs.length,busy:s.document_file.busy,host_busy:layerApp.documents.busy()};})()`);
     assert.equal(document.count,1,'Captured drawing count');
     assert.deepEqual(document.extent,[1200,1600],'Captured active drawing extent');
@@ -144,6 +146,7 @@ export async function checkPhoneAudit({call,evaluate,settle}) {
     await writeFile(`${directory}/${stem}.allocations.json`,JSON.stringify(record,null,2)+'\n');
     report.cases.push({state,viewport:test.viewport,theme:test.theme,text_scale:test.text_scale,status:record.status,json:`${stem}.allocations.json`,png:`${stem}.png`});
     await writeFile(`${directory}/index.json`,JSON.stringify(report,null,2)+'\n');
+    return record;
   };
   await send({type:'invoke',command:'new_document'});
   const setup=await evaluate(createDrawing({width:1200,height:1600,resolution:300,space:'Srgb',depth:'U8',paper:'white',relief:0}));
@@ -170,6 +173,7 @@ export async function checkPhoneAudit({call,evaluate,settle}) {
   await wait(`JSON.parse(layerApp.app.workspace_view()).id==='builtin:workspace:painter'&&!JSON.parse(layerApp.app.workspace_view()).busy`);
   for(const test of phoneAuditMatrix){
     await close();
+    await wait('layerApp.state().workspace_ready&&!JSON.parse(layerApp.app.workspace_view()).busy');
     await call('Emulation.setDeviceMetricsOverride',{width:test.viewport[0],height:test.viewport[1],deviceScaleFactor:1,mobile:false});
     await send({type:'set_theme',theme:test.theme});
     await evaluate(`document.documentElement.style.setProperty('--ui-text-size',${JSON.stringify(`${test.text_pt}pt`)});null`);
@@ -181,6 +185,89 @@ export async function checkPhoneAudit({call,evaluate,settle}) {
       {id:'current.header',role:'context',selector:'#header'},
       {id:'current.canvas',role:'context',selector:'#canvas'},
       {id:'current.capy',role:'context',selector:'#zen-capy'}],active?'phone':'desktop fallback: Web phone presentation is not enabled');
+    if(frameOnly){
+      assert.equal(active,true,'Web phone capability is presented');
+      const check=async(name)=>{
+        const p=await evaluate('layerApp.app.layout(innerWidth,innerHeight).phone');
+        const record=await capture(test,name,phoneAuditFrameSpecifications(await evaluate('layerApp.state().workspace.layout.phone??[]')),'shared phone frame');
+        assert.deepEqual(record.missing,[],`${name}: every frame element is present`);
+        const expected=new Map([
+          ['bar.tools',p.bars[0]],['bar.capy',p.bars[1]],['chip.tools',p.chips[0]],['chip.capy',p.chips[1]],
+          ['capy',p.capy],['tile.settings',p.settings],['slider.size',p.size],['slider.strength',p.strength],
+          ...record.source.phone_tiles.filter(t=>t.control.kind!=='divider').map(t=>[`tile.${t.id}`,p.tools[record.source.phone_tiles.indexOf(t)]]),
+        ]);
+        for(const [id,bounds]of expected){
+          const actual=record.elements.find(e=>e.id===id);assert.ok(actual,id);
+          const visible=bounds.width>0&&bounds.height>0;assert.equal(actual.visible,visible,`${name}/${id}: visibility`);
+          if(visible)[bounds.x,bounds.y,bounds.width,bounds.height].forEach((v,i)=>assert.ok(Math.abs(actual.bounds[i]-v)<=1,`${name}/${id}: ${actual.bounds} vs ${JSON.stringify(bounds)}`));
+        }
+        for(const name of ['size','strength']){
+          const slider=record.elements.find(e=>e.id===`slider.${name}`),track=record.elements.find(e=>e.id===`slider.${name}.track`);
+          if(!slider.visible)continue;
+          const [x,y,w,h]=slider.bounds,[tx,ty,tw,th]=track.bounds;
+          if(p.edge==='top')assert.ok(Math.abs(tx-x)<=1&&Math.abs(tw-w)<=1&&Math.abs(ty+th/2-y-h/2)<=1,'The horizontal trough spans and centers on its slider allocation');
+          else assert.ok(Math.abs(ty-y)<=1&&Math.abs(th-h)<=1&&Math.abs(tx+tw/2-x-w/2)<=1,'The vertical trough spans and centers on its slider allocation');
+        }
+        assert.equal(await evaluate('document.querySelector("#header").getClientRects().length'),0,'Phone hides the desktop header');
+        const selected=await evaluate('[...document.querySelectorAll("#phone-frame .phone-tool[aria-pressed=true]")].filter(n=>n.checkVisibility()).map(n=>getComputedStyle(n).backgroundColor)');
+        assert.ok(selected.every(color=>color!=='rgba(0, 0, 0, 0)'),'Selected phone tools have a visible selection surface');
+        assert.deepEqual(await evaluate('[layerApp.state().phone.native,layerApp.state().phone.native_counts,layerApp.state().phone.movable]'),[[0,0],[0,0],false]);
+      };
+      await check('frame-rest');
+      await send({type:'phone',action:{kind:'swap_sides'}});await check('frame-swapped');
+      await send({type:'invoke',command:'zen_mode'});await check('frame-hidden');
+      await evaluate('document.querySelector("#zen-capy").click()');await settle();
+      assert.equal(await evaluate('layerApp.state().phone.hidden'),false,'The same Capy reveals the bars');
+      await check('frame-revealed');
+      await send({type:'phone',action:{kind:'swap_sides'}});
+      const transparency=['off','low','medium','high'].indexOf(await evaluate('layerApp.state().settings.transparency'));
+      for(const value of [0,3]){
+        await send({type:'preferences',action:{type:'edit',id:'transparency',value}});
+        await check(value===0?'frame-opaque':'frame-glass');
+      }
+      await send({type:'preferences',action:{type:'edit',id:'transparency',value:transparency}});
+      await evaluate('window.phoneFrameWorkspace=layerApp.state().workspace;null');
+      await send({type:'phone',action:{kind:'insert_tools',before:null}});
+      for(const command of ['drawing_brush','eraser'])await send({type:'customize',action:{type:'picker_select',control:{kind:'command',command},selected:true}});
+      await send({type:'customize',action:{type:'confirm_tools'}});
+      assert.equal(await evaluate('layerApp.state().workspace.layout.phone.length'),10);
+      await check('frame-ten-tools');
+      await evaluate('layerApp.dispatch({type:"restore_workspace",workspace:{...phoneFrameWorkspace,layout:{...phoneFrameWorkspace.layout,phone:[]}}});null');await settle();
+      await check('frame-empty');
+      await evaluate('layerApp.dispatch({type:"restore_workspace",workspace:phoneFrameWorkspace});delete window.phoneFrameWorkspace;null');await settle();
+      await call('Emulation.setSafeAreaInsetsOverride',{insets:{top:19,right:7,bottom:13,left:5}});
+      await wait('JSON.stringify(layerApp.state().phone.insets)===JSON.stringify([19,7,13,5])');
+      await check('frame-safe-insets');
+      await call('Emulation.setSafeAreaInsetsOverride',{insets:{top:13,right:5,bottom:19,left:7}});
+      await wait('JSON.stringify(layerApp.state().phone.insets)===JSON.stringify([13,5,19,7])');
+      await check('frame-safe-redistributed');
+      await call('Emulation.setSafeAreaInsetsOverride',{insets:{top:0,right:0,bottom:0,left:0}});
+      await wait('layerApp.state().phone.insets.every(v=>v===0)');
+      for(const name of ['size','strength']){
+        const selector=`#component-slider-${name} input.number-slider`;
+        const b=await evaluate(`document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect().toJSON()`);
+        const p=await evaluate('layerApp.app.layout(innerWidth,innerHeight).phone');
+        const vertical=p.edge!=='top',start={x:b.x+(vertical?2:b.width/2),y:b.y+(vertical?b.height/2:2)};
+        const allocation=p[name];
+        assert.ok(Math.abs((vertical?b.width:b.height)-(vertical?allocation.width:allocation.height))<=1,'Slider input covers the full bar thickness');
+        assert.equal(await evaluate(`document.elementFromPoint(${start.x},${start.y})?.matches('input.number-slider')`),true,'The bar-edge contact reaches the slider');
+        const mouse=(type,point)=>call('Input.dispatchMouseEvent',{type,...point,button:'left',buttons:type==='mouseReleased'?0:1,clickCount:1});
+        await mouse('mousePressed',start);await mouse('mouseReleased',start);await settle();
+        await wait('!!document.querySelector(".toolbar-brush-preview:popover-open")');
+        const preview={id:`slider.${name}.preview`,role:'preview',selector:'.toolbar-brush-preview:popover-open'};
+        await capture(test,`slider-${name}-tap`,[...phoneAuditFrameSpecifications(await evaluate('layerApp.state().workspace.layout.phone??[]')),preview],'existing shared slider preview');
+        const strip=await evaluate(`document.querySelector(${JSON.stringify(`#component-slider-${name}`)}).getBoundingClientRect().toJSON()`);
+        const end=vertical?{x:strip.right+2*p.tile,y:test.viewport[1]*.65}:{x:test.viewport[0]*.65,y:strip.y-2*p.tile};
+        await mouse('mousePressed',start);await mouse('mouseMoved',end);await settle();
+        const actual=await evaluate(`layerApp.app.toolbar_component({kind:${JSON.stringify(name==='size'?'brush_size_slider':'brush_strength_slider')}}).numeric`);
+        const expected=await evaluate(`layerApp.app.number_input({control:layerApp.app.toolbar_component({kind:${JSON.stringify(name==='size'?'brush_size_slider':'brush_strength_slider')}}).numeric.numeric,value:${actual.value},operation:{type:'position',position:${vertical ? .35 : .65}}}).value`);
+        assert.ok(Math.abs(actual.value-expected)<=Math.max(.001,Math.abs(expected)*.001),`${name}: far mapping uses the window extent, ${actual.value} vs ${expected}`);
+        await capture(test,`slider-${name}-away`,[...phoneAuditFrameSpecifications(await evaluate('layerApp.state().workspace.layout.phone??[]')),preview],'shared window-extent slider mapping');
+        await mouse('mouseReleased',end);await settle();
+        assert.equal(await evaluate('!!document.querySelector(".toolbar-brush-preview:popover-open")'),false,'A drag lift closes its preview');
+      }
+      continue;
+    }
     for(const page of pages){
       await send(page.action);
       await wait(`!!document.querySelector(${JSON.stringify(page.selector)})`);
@@ -202,10 +289,62 @@ export async function checkPhoneAudit({call,evaluate,settle}) {
     }
     await writeFile(`${directory}/index.json`,JSON.stringify(report,null,2)+'\n');
   }
+  if(frameOnly){
+    const settings=await evaluate('layerApp.state().settings');
+    await send({type:'restore_settings',settings:{...settings,finger_drawing:'on'}});
+    await send({type:'invoke',command:'brush'});
+    await wait('layerApp.app.brush_ready()');
+    const origin=await evaluate('(()=>{const p=layerApp.app.layout(innerWidth,innerHeight).phone.work_area;return{x:p.x+p.width*.4,y:p.y+p.height*.5};})()');
+    const touch=(type,touchPoints=[])=>call('Input.dispatchTouchEvent',{type,touchPoints});
+    for(const cancelled of [false,true]){
+      const history=await evaluate('layerApp.state().commands.filter(c=>c.id==="undo"||c.id==="redo").map(c=>[c.id,c.enabled])');
+      await evaluate('layerApp.app.start_stroke_recording();null');
+      await touch('touchStart',[{id:100,...origin}]);
+      for(let i=1;i<=4;i++)await touch('touchMove',[{id:100,x:origin.x+5*i,y:origin.y}]);
+      await wait('Number(layerApp.app.stroke_recording_status().raw_events)>=3');
+      if(cancelled)await touch('touchStart',[{id:100,x:origin.x+20,y:origin.y},{id:101,x:origin.x+60,y:origin.y}]);
+      await touch('touchEnd');
+      await wait('layerApp.app.document_park_ready()');
+      const data=await evaluate('(()=>{layerApp.app.stop_stroke_recording();return Array.from(layerApp.app.stroke_recording_data());})()');
+      const path=`${directory}/finger-${cancelled?'withdrawn':'paint'}.capystrokes`;
+      await writeFile(path,Buffer.concat([Buffer.from('CAPYPEN4'),gzipSync(Buffer.from(data))]));
+      const records=execFileSync('cargo',['run','--locked','-q','-p','layer-engine','--features','prediction-bench','--example','stroke-recording','--','dump',path],{cwd:root,encoding:'utf8'}).trim().split('\n').map(line=>JSON.parse(line));
+      const events=records.flatMap(record=>record.Raw?[record.Raw.event]:[]);
+      assert.ok(events.length>=3,'Native browser touch passes the packed Wasm paint ABI');
+      assert.ok(events.every(event=>event.tool==='Finger'&&event.pressure===1),'Every decoded browser paint sample is Finger at full pressure');
+      assert.equal(events.filter(event=>event.phase==='Cancel').length,cancelled?1:0,'Withdrawal cancels exactly once');
+      const ends=records.flatMap(record=>record.End?[record.End]:[]);
+      assert.equal(ends.length,1,'One engine stroke ends per native contact');
+      assert.equal(ends[0].cancelled,cancelled,'Withdrawal rolls back the provisional stroke');
+      assert.equal(ends[0].interrupted,false,'The recording includes the engine stroke end before it stops');
+      if(!cancelled)assert.equal(events.at(-1).phase,'Up');
+      await writeFile(`${path}.json`,JSON.stringify(records,null,2)+'\n');
+      await evaluate('layerApp.app.stroke_recording_saved();null');
+      if(!cancelled){
+        assert.equal(await evaluate('layerApp.state().commands.find(c=>c.id==="undo").enabled'),true,'The completed stroke is undoable');
+        await send({type:'invoke',command:'undo'});
+        await wait('layerApp.app.document_park_ready()');
+        assert.equal(await evaluate('layerApp.state().commands.find(c=>c.id==="redo").enabled'),true,'Undo completes before the next recorded contact');
+      }
+      else assert.deepEqual(await evaluate('layerApp.state().commands.filter(c=>c.id==="undo"||c.id==="redo").map(c=>[c.id,c.enabled])'),history,'Withdrawal preserves artwork history');
+    }
+    await send({type:'restore_settings',settings});
+    const durable=await evaluate('JSON.stringify(layerApp.app.workspace_persistence())');
+    await evaluate('window.phoneFrameCapy=document.querySelector("#zen-capy");phoneFrameCapy.focus();null');
+    await call('Emulation.setDeviceMetricsOverride',{width:600,height:700,deviceScaleFactor:1,mobile:false});await settle();
+    await wait('!layerApp.app.layout(innerWidth,innerHeight).phone&&document.querySelector("#header").getClientRects().length>0&&!document.querySelector("#phone-frame").getClientRects().length');
+    assert.equal(await evaluate('document.activeElement===phoneFrameCapy'),true,'Returning to desktop preserves Capy focus');
+    assert.equal(await evaluate('JSON.stringify(layerApp.app.workspace_persistence())'),durable,'Leaving phone mode preserves the authored workspace');
+    await call('Emulation.setDeviceMetricsOverride',{width:412,height:891,deviceScaleFactor:1,mobile:false});await settle();
+    await wait('!!layerApp.app.layout(innerWidth,innerHeight).phone&&document.querySelector("#phone-frame").getClientRects().length>0');
+    assert.equal(await evaluate('document.querySelector("#zen-capy")===phoneFrameCapy&&document.activeElement===phoneFrameCapy'),true,'The same focused Capy returns to phone mode');
+    assert.equal(await evaluate('JSON.stringify(layerApp.app.workspace_persistence())'),durable,'Entering phone mode preserves the authored workspace');
+    await evaluate('delete window.phoneFrameCapy;null');
+  }
   await close();
   await send({type:'workspace_manager',command:{type:'switch',id:original.workspace}});
   await evaluate(`document.documentElement.style.setProperty('--ui-text-size',${JSON.stringify(original.text)});null`);
   await send({type:'restore_saved_settings',saved:JSON.stringify(original.settings)});
   await call('Emulation.clearDeviceMetricsOverride');
-  console.log(`PHONE AUDIT: ${report.cases.length} captures; ${report.unreachable.length} unreachable states; ${directory}/index.json (not a parity pass)`);
+  console.log(`PHONE ${frameOnly?'FRAME':'AUDIT'}: ${report.cases.length} captures; ${report.unreachable.length} unreachable states; ${directory}/index.json ${frameOnly?'(shared allocation checks passed; cross-host pixels pending)':'(not a parity pass)'}`);
 }

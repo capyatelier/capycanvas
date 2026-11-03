@@ -1,3 +1,13 @@
+export function paintToolKind(event) {
+  if (event.pointerType === 'touch') return 3;
+  if (event.pointerType === 'pen') return event.buttons & 32 ? 2 : 0;
+  return 1;
+}
+
+export function browserDeviceClass(coarse, screen) {
+  return coarse ? Math.min(screen.width, screen.height) < 600 ? 'phone' : 'tablet' : 'desktop';
+}
+
 export function observePenInput({workspace,canvas,dispatch,position,owner=()=>undefined}) {
   let registered,registeredOwner;
   for(const [name,phase] of [['pointerdown',1],['pointermove',2],['pointerup',3],['pointercancel',4]]) {
