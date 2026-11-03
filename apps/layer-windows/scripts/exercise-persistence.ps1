@@ -67,8 +67,9 @@ try {
     $damaged=@(Get-ChildItem -LiteralPath (Split-Path -Parent $database) -Filter 'workspaces.damaged.*.sqlite3' -File)
     if($damaged.Count -ne 1 -or (Get-FileHash -LiteralPath $damaged[0].FullName -Algorithm SHA256).Hash -ne $unreadableHash){throw 'The damaged workspace database was not set aside byte for byte'}
     if(!(Test-Path -LiteralPath $database)){throw 'A fresh workspace database was not created'}
+    $freshSize=(Model).state.brush.diameter
     (Control 'tool-setting-size-slider' -Type ([System.Windows.Automation.ControlType]::Slider)).GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).SetValue(0.8)
-    Wait-Until {(Model).state.brush.diameter -ne $expectedSize} 'Editing was refused with unreadable storage'
+    Wait-Until {(Model).state.brush.diameter -ne $freshSize} 'Editing was refused with unreadable storage'
     $recoveredSize=(Model).state.brush.diameter;$recoveredBefore=Layout
     Invoke 'panel-tab-stats'
     Wait-Until {$null -ne (Find 'renderer-stat-6') -and (Layout) -ne $recoveredBefore} 'The fresh workspace layout did not change'
