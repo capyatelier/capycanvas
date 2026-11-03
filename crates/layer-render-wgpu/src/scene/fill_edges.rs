@@ -168,12 +168,28 @@ impl LineCapture<'_> {
 }
 
 impl Scene {
+    fn fill_target(&mut self,r:&mut WgpuRasterizer,target:SourceTarget,region:PixelRect,texture:&Texture,encoder:&mut submission::CommandEncoder)->Result<(),GpuRasterError> {
+        let mut tiles=Vec::new();let mut leases=Vec::new();
+        for coordinate in page_coordinates(region) {
+            let tile=r.raw_layer_tile(target,coordinate,encoder)?;
+            if let Some(tile)=&tile {leases.extend(r.source_tiles.borrow().lease(&tile.view));}
+            tiles.push((coordinate,tile));
+        }
+        if tiles.is_empty() || tiles.iter().any(|(_,tile)|tile.is_none()) {
+            self.jobs.push(Job::Clear(texture.1.clone(),wgpu::Color::TRANSPARENT));self.encode_jobs(r,encoder)?;
+        }
+        for (coordinate,tile) in tiles {
+            let Some(tile)=tile else {continue;};let overlap=page_rect(coordinate).intersect(region);
+            copy(encoder,&tile.texture,&texture.0,[overlap.min_x()-coordinate[0]*PAGE_SIZE,overlap.min_y()-coordinate[1]*PAGE_SIZE],
+                [overlap.min_x()-region.min_x(),overlap.min_y()-region.min_y()],[overlap.width(),overlap.height()]);
+        }
+        Ok(())
+    }
     pub(super) fn prepare_fill_edges(&mut self,r:&mut WgpuRasterizer,packet:FramePacket<'_>,target:SourceTarget,index:u32,edges:&layer_core::FillEdges,operation:&layer_core::RasterOperation,encoder:&mut submission::CommandEncoder)->Result<(),GpuRasterError> {
         let extent=packet.scene.target_extent(target);let offset=packet.scene.target_offset(target);
         let mut capture=self.fill_capture.take().unwrap_or_else(||Box::new(Capture::new(r,extent,edges.lines.len())));
         let prepared=r.fill_edges_preflight.as_ref().and_then(|state|state.input(target,index).map(|input|(state.line_seeds[input].clone(),state.inputs[input].external.clone())));
         capture.external=prepared.as_ref().map_or_else(||vec![false;edges.lines.len()],|(_,external)|external.clone());
-        let scope=SceneScope::Raw(target);let source=Capture::packet(&edges.snapshot,&scope,offset,extent,packet);
         let [x,y]=[edges.position.x,edges.position.y].map(|v|v.max(0.) as u32);
         let region=PixelRect::new(x,y,x+1,y+1).intersect(PixelRect::full(extent));
         let result=(|| {
@@ -185,7 +201,7 @@ impl Scene {
                     copy(encoder,&capture.seed.0,&capture.line_seeds,[0;2],[0,index as u32],[1;2]);
                 }
             }
-            capture.source.region_into(r,source,region,&capture.seed.0,encoder)?;
+            self.fill_target(r,target,region,&capture.seed,encoder)?;
             capture.mask=coverage(r,operation.coverage.selection.as_ref(),extent,encoder)?;
             capture.precision=Some(Precision::new(r,Some((edges,target))));
             Ok(())
@@ -200,8 +216,7 @@ impl Scene {
         let mut capture=self.fill_capture.take().unwrap();
         let crop=page_rect(coordinate).expand(HALO,extent);
         let result=(|| {
-            let scope=SceneScope::Raw(target);let source=Capture::packet(&edges.snapshot,&scope,offset,extent,packet);
-            capture.source.region_into(r,source,crop,&capture.color.0,encoder)?;
+            self.fill_target(r,target,crop,&capture.color,encoder)?;
             capture.preserve(coordinate,crop,extent,encoder);
             if !band_intersects(operation,coordinate,extent,0) {return Ok(None);}
             encoder.copy_texture_to_texture(capture.seed.0.as_image_copy(),wgpu::TexelCopyTextureInfo {texture:&capture.color.0,
