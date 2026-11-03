@@ -994,3 +994,96 @@ foreach($layerUnitDpi in 144,96,192){foreach($layerUnitCase in 'plain','native-s
     } $layerPlainAssignment[0].Extent.Text $layerUnitGuard[0].Extent.Text $layerUnitDpi $layerUnitCase
 }}
 Write-Output 'Actual Layers intrinsic reference uses its native row at 100/150/200 percent, preserves the unit assertion and rejects wrong native heights or units.'
+
+$placementAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-header-placement.ps1'),[ref]$tokens,[ref]$errors)
+if(@($errors).Count){throw 'Header placement fixture parse failed'}
+$menuTransition=@($placementAst.FindAll({param($n)$n -is [Management.Automation.Language.IfStatementAst] -and $n.Extent.Text.Contains("Check-Caption 'menus-compact'")},$true))
+if($menuTransition.Count -ne 1){throw 'Missing actual HeaderPlacement menu focus transition'}
+Add-Type -TypeDefinition @'
+using System;
+namespace CapyHeaderPlacementTest {
+ public struct Rect {
+  public int X,Y,Width,Height;public int left{get{return X;}}public int top{get{return Y;}}public int right{get{return X+Width;}}public int bottom{get{return Y+Height;}}public bool IsEmpty{get{return Width==0||Height==0;}}
+  public Rect(int x,int y,int width,int height){X=x;Y=y;Width=width;Height=height;}
+ }
+ public static class Driver {
+  public static int Moves;public static bool Fits,Arranged,Delayed,Inset;public static string Focus;
+  public static CapyHeaderPlacementTest.Rect Rectangle,Published,Desktop;
+  public static bool MoveWindow(IntPtr window,int x,int y,int width,int height,bool repaint){
+   Rectangle=new CapyHeaderPlacementTest.Rect(x,y,width,height);Moves++;if(!Delayed)Publish();return true;
+  }
+  public static bool GetWindowRect(IntPtr window,out Rect rectangle){rectangle=Rectangle;return true;}
+  public static void Publish(){
+   Published=Rectangle;
+   if(Focus=="application-menu-file"&&!Wide)Focus="application-menus";
+   else if(Focus=="application-menus"&&Wide)Focus="application-menu-file";
+  }
+  public static bool Wide{get{return Published.Width==Desktop.Width;}}
+ }
+ public class Screen {
+  public static Screen FromHandle(IntPtr window){return new Screen();}
+  public CapyHeaderPlacementTest.Rect WorkingArea{get{return Driver.Desktop;}}
+ }
+ public class Window {
+  public Window Current{get{return this;}}
+  public CapyHeaderPlacementTest.Rect BoundingRectangle{get{return Driver.Inset?new Rect(Driver.Published.X+7,Driver.Published.Y,Driver.Published.Width-14,Driver.Published.Height-7):Driver.Published;}}
+ }
+ public class Button {
+  string id;public Button(string value){id=value;}public Button Current{get{return this;}}
+  public bool HasKeyboardFocus{get{return Driver.Focus==id;}}
+  public CapyHeaderPlacementTest.Rect BoundingRectangle{get{return new CapyHeaderPlacementTest.Rect(0,0,Driver.Arranged?100:0,26);}}
+  public void SetFocus(){Driver.Focus=id;}
+ }
+}
+'@
+foreach($placementDpi in 96,144,192){foreach($placementCase in 'fits','delayed','does-not-fit','unarranged','frame-inset'){
+    & {
+        param($Text,$Dpi,$Case)
+        $Text=$Text.Replace('[CapyWindowExercise+Rect]::new()','[CapyHeaderPlacementTest.Rect]::new(0,0,0,0)').Replace('[CapyWindowExercise]','[CapyHeaderPlacementTest.Driver]').Replace('[Windows.Forms.Screen]','[CapyHeaderPlacementTest.Screen]')
+        $Text=$Text.Replace('Add-Type -AssemblyName System.Windows.Forms','$null')
+        [CapyHeaderPlacementTest.Driver]::Moves=0
+        [CapyHeaderPlacementTest.Driver]::Delayed=$Case -eq 'delayed';[CapyHeaderPlacementTest.Driver]::Inset=$Case -eq 'frame-inset'
+        [CapyHeaderPlacementTest.Driver]::Fits=$Case -ne 'does-not-fit';[CapyHeaderPlacementTest.Driver]::Arranged=$Case -ne 'unarranged'
+        [CapyHeaderPlacementTest.Driver]::Focus='';[CapyHeaderPlacementTest.Driver]::Desktop=[CapyHeaderPlacementTest.Rect]::new(-2560,30,2560,1410)
+        $original=[CapyHeaderPlacementTest.Rect]::new(40,40,[int](1200*$Dpi/96.),[int](700*$Dpi/96.))
+        [CapyHeaderPlacementTest.Driver]::Rectangle=$original;[CapyHeaderPlacementTest.Driver]::Published=$original
+        $root=[CapyHeaderPlacementTest.Window]::new();$drawingWindow=[IntPtr]1
+        $events=[Collections.Generic.List[string]]::new();$checks=[Collections.Generic.List[string]]::new();$gaps=[Collections.Generic.List[string]]::new()
+        function Entries{@{id=2;item=@{kind='menu_labels'}}}
+        function Model{@{application_menus=@(@{id='file'})}}
+        function Presentation{
+            $width=if([CapyHeaderPlacementTest.Driver]::Wide -and [CapyHeaderPlacementTest.Driver]::Fits){542.}else{36.}
+            @{metrics=@(@{id=2;width=542.});geometry=@{items=@(@{id=2;bounds=@{width=$width}})}}
+        }
+        function Find([string]$Id,[switch]$Visible){
+            if(($Id -eq 'application-menus' -and ![CapyHeaderPlacementTest.Driver]::Wide) -or ($Id -eq 'application-menu-file' -and [CapyHeaderPlacementTest.Driver]::Wide -and [CapyHeaderPlacementTest.Driver]::Fits)){[CapyHeaderPlacementTest.Button]::new($Id)}
+        }
+        function Control([string]$Id,[switch]$Arranged){
+            if($Id -eq 'application-menu-file' -and (![CapyHeaderPlacementTest.Driver]::Wide -or ![CapyHeaderPlacementTest.Driver]::Fits)){throw 'Missing control: application-menu-file'}
+            $events.Add($Id);[CapyHeaderPlacementTest.Button]::new($Id)
+        }
+        function Check($Condition,[string]$Name,$Data){$checks.Add($Name);if(!$Condition){throw $Name}}
+        function Check-Caption([string]$Phase){$events.Add($Phase)}
+        function Wait-Until([scriptblock]$Condition,[string]$Message){
+            foreach($sample in 0..2){if(& $Condition){return};[CapyHeaderPlacementTest.Driver]::Publish()}
+            throw $Message
+        }
+        function Resize-Header([int]$Width){
+            if($Width -ne 800){throw 'Changed original compact transition width'}
+            [CapyHeaderPlacementTest.Driver]::MoveWindow($drawingWindow,40,40,[int]($Width*$Dpi/96.),[int](700*$Dpi/96.),$true)|Out-Null
+            [CapyHeaderPlacementTest.Driver]::Publish()
+        }
+        $failure=$null
+        try{&([scriptblock]::Create($Text))}catch{$failure=$_}
+        $actual=[CapyHeaderPlacementTest.Driver]::Rectangle
+        if($actual.X -ne $original.X -or $actual.Y -ne $original.Y -or $actual.Width -ne $original.Width -or $actual.Height -ne $original.Height){throw 'Header menu transition did not restore its original owned rectangle'}
+        if($Case -in @('fits','delayed','frame-inset')){
+            if($failure){throw $failure}
+            if([CapyHeaderPlacementTest.Driver]::Moves -ne 4 -or [CapyHeaderPlacementTest.Driver]::Focus -ne 'application-menus' -or $gaps.Count -or $checks -notcontains 'Menu compact transition preserves keyboard focus' -or $checks -notcontains 'Menu expansion restores keyboard focus'){throw 'Header menu transition omitted a resize or focus assertion'}
+            if(($events|Where-Object {$_ -like 'menus-*'}) -join ',' -ne 'menus-wide,menus-compact,menus-expanded'){throw 'Header menu transition lost caption checks'}
+        }elseif(!$failure -or $failure.Exception.Message -ne 'Desktop width does not present expanded menu labels'){
+            if($failure){throw $failure};throw "Header menu transition accepted $Case"
+        }
+    } $menuTransition[0].Extent.Text $placementDpi $placementCase
+}}
+Write-Output 'Actual HeaderPlacement menu transition uses the available desktop at 100/150/200 percent, acknowledges delayed native geometry, retains focus/caption assertions, restores native outer bounds across frame insets and rejects unavailable expanded native geometry.'

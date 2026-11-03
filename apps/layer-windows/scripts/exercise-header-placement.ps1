@@ -133,13 +133,33 @@ try{
     if($workspaceCompact){Check ((Control 'workspace-switch-builtin:workspace:illustrator').Current.HasKeyboardFocus) 'Workspace expansion restores selected keyboard focus' $null}
     foreach($id in $retained.Keys){Check (((Control $id).GetRuntimeId()-join':')-ceq$retained[$id]) ('Width changes retain '+$id) $null}
     if(@(Entries|Where-Object {$_.item.kind-eq'menu_labels'}).Count){
+        Add-Type -AssemblyName System.Windows.Forms
         $menuId='application-menu-'+@((Model).application_menus)[0].id
-        (Control $menuId -Arranged).SetFocus();Resize-Header 800;Check-Caption 'menus-compact'
-        $menuCompact=[bool](Find 'application-menus' -Visible)
-        if($menuCompact){Check ((Control 'application-menus').Current.HasKeyboardFocus) 'Menu compact transition preserves keyboard focus' $null}
-        else{$gaps.Add('Fixture did not produce the compact menu-label fallback')}
-        Resize-Header 1200;Check-Caption 'menus-expanded'
-        if($menuCompact){Check ((Control $menuId).Current.HasKeyboardFocus) 'Menu expansion restores keyboard focus' $null}
+        $menuEntry=@(Entries|Where-Object {$_.item.kind-eq'menu_labels'})[0]
+        $beforeMenus=$root.Current.BoundingRectangle;$outer=[CapyWindowExercise+Rect]::new()
+        Check ([CapyWindowExercise]::GetWindowRect($drawingWindow,[ref]$outer)) 'Owned menu window bounds are unavailable' $null
+        $wide=[Windows.Forms.Screen]::FromHandle($drawingWindow).WorkingArea;$expanded=@{file=$null}
+        $expandedMenu={
+            $p=Presentation;$metric=@($p.metrics|Where-Object id -eq $menuEntry.id)[0];$placed=@($p.geometry.items|Where-Object id -eq $menuEntry.id)[0]
+            $expanded.file=Find $menuId -Visible;$fileBounds=if($expanded.file){$expanded.file.Current.BoundingRectangle}else{$null}
+            $metric-and$metric.width-gt0-and$placed-and$placed.bounds.width-gt0-and$fileBounds-and!$fileBounds.IsEmpty-and$fileBounds.Width-gt0-and$fileBounds.Height-gt0
+        }
+        try{
+            Check ([CapyWindowExercise]::MoveWindow($drawingWindow,$wide.X,$wide.Y,$wide.Width,$wide.Height,$true)) 'Owned menu window did not fill its available desktop' $wide
+            Wait-Until $expandedMenu 'Desktop width does not present expanded menu labels'
+            Check-Caption 'menus-wide'
+            $expanded.file.SetFocus();Resize-Header 800;Check-Caption 'menus-compact'
+            $menuCompact=[bool](Find 'application-menus' -Visible)
+            if($menuCompact){Check ((Control 'application-menus').Current.HasKeyboardFocus) 'Menu compact transition preserves keyboard focus' $null}
+            else{$gaps.Add('Fixture did not produce the compact menu-label fallback')}
+            Check ([CapyWindowExercise]::MoveWindow($drawingWindow,$wide.X,$wide.Y,$wide.Width,$wide.Height,$true)) 'Owned menu window did not restore its wide desktop rectangle' $wide
+            Wait-Until $expandedMenu 'Desktop width does not present expanded menu labels'
+            Check-Caption 'menus-expanded'
+            if($menuCompact){Check ((Control $menuId).Current.HasKeyboardFocus) 'Menu expansion restores keyboard focus' $null}
+        }finally{
+            Check ([CapyWindowExercise]::MoveWindow($drawingWindow,$outer.left,$outer.top,($outer.right-$outer.left),($outer.bottom-$outer.top),$true)) 'Owned menu window did not restore its original rectangle' $beforeMenus
+            Wait-Until {$actual=$root.Current.BoundingRectangle;$actual.X-eq$beforeMenus.X-and$actual.Y-eq$beforeMenus.Y-and$actual.Width-eq$beforeMenus.Width-and$actual.Height-eq$beforeMenus.Height} 'Owned menu window rectangle did not settle after restoration'
+        }
     }
     else{$gaps.Add('Default Paint has no menu-label item; compact menu-label focus remains unverified')}
     $originalSize=(Header).size
