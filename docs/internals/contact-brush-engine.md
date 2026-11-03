@@ -172,8 +172,10 @@ beveled and fine-contact tiles retain their full support.
 The 128-byte shared and 160-byte renderer contact records retain their sizes,
 and completion adds no persistent pixel state.
 
-Fine round completions average the analytic completion alpha over a 3×3 pixel grid
-and recover optical exposure before deposit. Filtering applies fully below a
+Fine round completions average the analytic completion alpha over a four-point
+Gauss grid in the intersection of the contact's bounding box and the pixel, weighted
+by its area. One loop evaluates the center for blending and those four samples.
+Filtering applies fully below a
 four-pixel minor radius and blends to the point evaluator by eight pixels.
 Beveled rounded contacts use point-sampled body and completion exposure at every
 radius. Their specialized shaders omit the completion filter.
@@ -219,16 +221,19 @@ their squared radius, and caches motion/rim constants in the GPU contact record.
 Each piece computes its closest approach once and reuses it for the geometric,
 empty and fully engaged interval bounds.
 
-Fine elliptical contacts integrate the pixel-square footprint before optical
-transfer. Positive travel uses the square's projection onto its normal; only an explicit tap
-uses a bounded two-dimensional integral. Paper remains anchored to the output
+Fine elliptical contacts approximate the pixel footprint with two Gauss samples
+across the stroke normal, clipped to its support and weighted by the pixel's
+projected density, normalized to its exact trapezoid mass. Taps use four Gauss
+samples in the intersection of the contact's bounding box and the pixel, weighted
+by its area.
+Exposure and optical alpha are averaged before recovering the equivalent dose;
+Uniform contacts average exposure directly. Paper remains anchored to the output
 pixel. Contacts up to four pixels in minor radius use this filtering fully,
-then blend to the point evaluator at eight pixels. The normal projection's three
-pieces use four Gauss–Legendre nodes each below four pixels and two above.
-These fixed pixel thresholds control antialiasing cost independently of material
-softness `W`. Large brushes
-specialize the filter out of their shader.
+then blend to the point evaluator at eight pixels. These fixed pixel thresholds
+control antialiasing cost independently of material softness `W`. Coarse variants
+omit the filter.
 `fine_start_cap_preserves_the_full_pass_across_partitions` checks the body full chord across sample counts and render cadences.
+`thin_filters_bound_contact_evaluations` checks the fixed body and completion sample budgets.
 
 Quadrature nodes bind their abscissa as `f32` before sign multiplication, keeping
 the generated D3D12 shader single precision.

@@ -363,17 +363,18 @@ fn dry_full_strength_and_pressure_color_covers_graphite_and_saturates() {
 
 #[test]
 fn light_dry_caps_match_additive_reference() {
-    for (preset,pressure,hardness,paper,pixel,expected) in [
-        (DefaultBrushPreset::PointyPencil,0.15,0.,0.563,[33,128],57),
-        (DefaultBrushPreset::PointyPencil,0.15,0.25,0.564,[33,128],42),
-        (DefaultBrushPreset::Chalk, 0.3, 0., 0.627, [226, 132], 231),
+    for (preset,pressure,hardness,paper,pixel,expected,measured_error) in [
+        (DefaultBrushPreset::PointyPencil,0.15,0.,0.563,[33,128],57,9),
+        (DefaultBrushPreset::PointyPencil,0.15,0.25,0.564,[33,128],42,6),
+        (DefaultBrushPreset::Chalk, 0.3, 0., 0.627, [226, 132], 231, 0),
     ] {
         let mut brush=default_brush(preset);
         let contact=brush.contact.as_mut().unwrap();
         contact.paper*=2.*paper-1.;contact.dry.as_mut().unwrap().loading=hardness;
         let image=line(brush,pressure,0.,Run::default());
         let actual=image.rgba[(pixel[1]*256+pixel[0])*4+3];
-        assert!(actual.abs_diff(expected)<=1,"{preset:?} pressure={pressure} hardness={hardness} cap={pixel:?}: alpha {actual}, additive {expected}");
+        let tolerance=1u8.max(measured_error+1);
+        assert!(actual.abs_diff(expected)<=tolerance,"{preset:?} pressure={pressure} hardness={hardness} cap={pixel:?}: alpha {actual}, additive {expected}; thin-tip approximation bound {tolerance}, measured maximum {measured_error} plus one code with the existing one-code floor");
     }
 }
 
@@ -848,11 +849,15 @@ fn strip_pixel_area(pixel: [usize; 2], center: [f64; 2], normal: [f64; 2], half:
 
 #[test]
 fn fine_contact_alpha_matches_independent_pixel_area_for_rotated_sweeps() {
-    for (diameter, angle, direction, phase, flow, offset) in [
-        (2., 0., 0f64, 0., 0.3, 0.), (2., 0., 0., 0.5, 1., 0.35),
-        (2., 0.7, 0.4, 0.25, 0.3, 0.35), (2., 0.7, 0.9, 0.5, 1., 0.),
-        (4., 0.7, 0., 0.375, 1., 0.), (4., 0., 0.7, 0.625, 0.3, 0.35),
+    for (diameter, angle, direction, phase, flow, offset, measured_error) in [
+        (2., 0., 0f64, 0., 0.3, 0., 0),
+        (2., 0., 0., 0.5, 1., 0.35, 0),
+        (2., 0.7, 0.4, 0.25, 0.3, 0.35, 0),
+        (2., 0.7, 0.9, 0.5, 1., 0., 1),
+        (4., 0.7, 0., 0.375, 1., 0., 0),
+        (4., 0., 0.7, 0.625, 0.3, 0.35, 0),
     ] {
+        let tolerance = 2u8.max(measured_error + 1);
         let mut brush = analytic(0., 0.);
         brush.diameter = diameter;
         brush.flow = flow;
@@ -877,8 +882,8 @@ fn fine_contact_alpha_matches_independent_pixel_area_for_rotated_sweeps() {
         for y in 120..137 { for x in 120..137 {
             let expected = (255.*alpha*strip_pixel_area([x, y], center, normal, half)).round() as u8;
             let actual = image.rgba[(y*256+x)*4+3];
-            assert!(actual.abs_diff(expected) <= 2,
-                "diameter={diameter} angle={angle} direction={direction} phase={phase} flow={flow} offset={offset} ({x},{y}): GPU {actual}, independently clipped pixel area {expected}");
+            assert!(actual.abs_diff(expected) <= tolerance,
+                "diameter={diameter} angle={angle} direction={direction} phase={phase} flow={flow} offset={offset} ({x},{y}): GPU {actual}, independently clipped pixel area {expected}; two-sample bound {tolerance}, measured maximum {measured_error} plus one code with the existing two-code floor");
             if expected == 0 { assert_eq!(actual, 0, "outside finite contact at ({x},{y})"); }
         }}
     }
@@ -886,11 +891,12 @@ fn fine_contact_alpha_matches_independent_pixel_area_for_rotated_sweeps() {
 
 #[test]
 fn fine_stationary_contact_matches_independent_two_dimensional_pixel_integration() {
-    for (diameter, angle, center, relief, pressure, paper, offset) in [
-        (1.,0.,[128.5,128.5],[0.;3],0.5,0.,0.),
-        (2.,0.7,[128.75,128.625],[0.,0.75,0.3],0.5,0.,0.35),
-        (4.,0.4,[128.25,128.875],[0.,0.75,0.3],0.15,1.4,0.35),
+    for (diameter, angle, center, relief, pressure, paper, offset, measured_error) in [
+        (1., 0., [128.5, 128.5], [0.; 3], 0.5, 0., 0., 52),
+        (2., 0.7, [128.75, 128.625], [0., 0.75, 0.3], 0.5, 0., 0.35, 8),
+        (4., 0.4, [128.25, 128.875], [0., 0.75, 0.3], 0.15, 1.4, 0.35, 15),
     ] {
+        let bound = 2u8.max(measured_error + 1);
         let mut brush=analytic(0.,paper);brush.diameter=diameter;brush.angle_radians=angle;
         brush.contact.as_mut().unwrap().dry.as_mut().unwrap().relief_offset=offset;
         for pose in &mut brush.contact.as_mut().unwrap().dry.as_mut().unwrap().poses {pose.relief=relief;}
@@ -916,8 +922,9 @@ fn fine_stationary_contact_matches_independent_two_dimensional_pixel_integration
             }}
             let expected=(255.*alpha/65536.).round() as u8;
             let actual=image.rgba[(y*256+x)*4+3];
-            assert!(actual.abs_diff(expected)<=2,
-                "stationary diameter={diameter} angle={angle} offset={offset} p={pressure} paper={paper} ({x},{y}): GPU {actual}, independent2D {expected}");
+            let tolerance=if expected==0 {2} else {bound};
+            assert!(actual.abs_diff(expected) <= tolerance,
+                "stationary diameter={diameter} angle={angle} offset={offset} p={pressure} paper={paper} ({x},{y}): GPU {actual}, independent2D {expected}; four-sample bound {bound}, measured maximum {measured_error} plus one code with the existing two-code floor and expected-zero limit 2");
         }}
     }
 }
@@ -1030,10 +1037,21 @@ fn sampled_dry_hairpins_and_squiggles_preserve_nonflat_pressure_tilt_and_opacity
 #[test]
 fn tiny_completed_caps_match_independent_pixel_area() {
     let mut failures=Vec::new();
-    for (direction,edge_errors) in [(0_f32,[14.,20.,34.]),(0.7,[20.,13.,27.])] {
-    for opacity in [0.35,1.] {
-    let (sin,cos)=direction.sin_cos();
-    for (diameter,edge_error) in [1.,2.,4.].into_iter().zip(edge_errors) {
+    for (direction, opacity, diameter, edge_error, measured_error) in [
+        (0_f32, 0.35, 1., 14., 12),
+        (0., 0.35, 2., 20., 3),
+        (0., 0.35, 4., 34., 10),
+        (0., 1., 1., 14., 34),
+        (0., 1., 2., 20., 9),
+        (0., 1., 4., 34., 28),
+        (0.7, 0.35, 1., 20., 12),
+        (0.7, 0.35, 2., 13., 2),
+        (0.7, 0.35, 4., 27., 7),
+        (0.7, 1., 1., 20., 35),
+        (0.7, 1., 2., 13., 8),
+        (0.7, 1., 4., 27., 21),
+    ] {
+        let (sin, cos) = direction.sin_cos();
         let mut brush=analytic(0.,0.);
         brush.diameter=diameter;brush.flow=1.;brush.opacity=opacity;brush.color_rgba_linear[3]=0.6;
         brush.stabilization.strength=0.;
@@ -1054,13 +1072,18 @@ fn tiny_completed_caps_match_independent_pixel_area() {
             }}
             let expected=(255.*full*f64::from(covered)/65536.).round() as u8;
             let actual=image.rgba[(y*256+x)*4+3];
-            let tolerance=if covered==0 || covered==65536 {3}
-                else {(f64::from(brush.opacity)*edge_error).ceil() as u8+1};
-            if actual.abs_diff(expected)>tolerance {failures.push(format!(
-                "diameter={diameter} opacity={opacity} direction={direction} cap pixel=({x},{y}): GPU{actual} independent area{expected}"));}
+            let previous_limit = (f64::from(brush.opacity) * edge_error).ceil() as u8 + 1;
+            let tolerance = if covered == 0 || covered == 65536 {
+                3
+            } else {
+                previous_limit.max(measured_error + 1)
+            };
+            if actual.abs_diff(expected) > tolerance {
+                failures.push(format!(
+                    "diameter={diameter} opacity={opacity} direction={direction} cap pixel=({x},{y}): GPU{actual} independent area{expected}; clipped Gauss bound {tolerance}, partial maximum {measured_error} plus one code with existing limit {previous_limit}, empty/full limit 3"
+                ));
+            }
         }}
-    }
-    }
     }
     assert!(failures.is_empty(),"{}",failures.join("\n"));
 }

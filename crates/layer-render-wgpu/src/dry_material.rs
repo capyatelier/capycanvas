@@ -1077,4 +1077,102 @@ mod tests {
             absent(&present, &formulas, "Multiply kernel");
         }
     }
+
+    #[test]
+    fn thin_filters_bound_contact_evaluations() {
+        fn visit(
+            block: &naga::Block,
+            callee: naga::Handle<naga::Function>,
+            in_loop: bool,
+            counts: &mut [usize; 3],
+            guards: &mut Vec<naga::Handle<naga::Expression>>,
+        ) {
+            for statement in block {
+                match statement {
+                    naga::Statement::Call { function, .. } if *function == callee => {
+                        counts[0] += 1;
+                        counts[2] += usize::from(in_loop);
+                    }
+                    naga::Statement::Block(body) => visit(body, callee, in_loop, counts, guards),
+                    naga::Statement::If {
+                        condition,
+                        accept,
+                        reject,
+                    } => {
+                        if in_loop && reject.iter().any(|s| matches!(s, naga::Statement::Break)) {
+                            guards.push(*condition);
+                        }
+                        visit(accept, callee, in_loop, counts, guards);
+                        visit(reject, callee, in_loop, counts, guards);
+                    }
+                    naga::Statement::Switch { cases, .. } => {
+                        for case in cases {
+                            visit(&case.body, callee, in_loop, counts, guards);
+                        }
+                    }
+                    naga::Statement::Loop {
+                        body, continuing, ..
+                    } => {
+                        counts[1] += 1;
+                        visit(body, callee, true, counts, guards);
+                        visit(continuing, callee, true, counts, guards);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let flags = contact_flags(
+            layer_core::default_brush(layer_core::DefaultBrushPreset::Pencil).contact,
+        ) | AGGREGATE
+            | FINE_TIP
+            | COMPLETION;
+        let source = material_source(
+            Default::default(),
+            crate::pipeline_device::float_sampling_wgsl(false),
+            Entries::Kernel(Start::Stored, 0),
+            flags,
+            MaterialOperation::Deposit,
+        );
+        let module = naga::front::wgsl::parse_str(&source).unwrap();
+        for (name, callee, expected) in [
+            ("relief_supersampled", "relief_evaluate", [2, 4]),
+            ("relief_contact", "completion_exposure", [1, 5]),
+        ] {
+            let (_, function) = module
+                .functions
+                .iter()
+                .find(|(_, f)| f.name.as_deref() == Some(name))
+                .expect(name);
+            let (callee, _) = module
+                .functions
+                .iter()
+                .find(|(_, f)| f.name.as_deref() == Some(callee))
+                .expect(callee);
+            let count = *function
+                .named_expressions
+                .iter()
+                .find(|(_, name)| name.as_str() == "count")
+                .expect("bounded sample count")
+                .0;
+            let naga::Expression::Select { accept, reject, .. } = function.expressions[count]
+            else {
+                panic!("{name}: sample count must have two fixed bounds");
+            };
+            let literal = |expression| match function.expressions[expression] {
+                naga::Expression::Literal(naga::Literal::U32(value)) => value,
+                _ => panic!("{name}: sample limit must be a literal"),
+            };
+            let mut limits = [literal(accept), literal(reject)];
+            limits.sort_unstable();
+            assert_eq!(limits, expected, "{name}: contact evaluation budget");
+            let mut counts = [0; 3];
+            let mut guards = Vec::new();
+            visit(&function.body, callee, false, &mut counts, &mut guards);
+            assert_eq!(counts, [1, 1, 1], "{name}: one call site inside one loop");
+            assert!(guards.iter().any(|&guard| matches!(function.expressions[guard],
+                naga::Expression::Binary { op: naga::BinaryOperator::Less, right, .. } if right == count)),
+                "{name}: the loop must use the bounded sample count");
+        }
+    }
 }
