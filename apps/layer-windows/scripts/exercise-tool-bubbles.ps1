@@ -1213,6 +1213,7 @@ function Controls([long]$Id){
     $start=& $value;$from=Ring-Point $Id $ring .2;$to=Ring-Point $Id $ring .8
     [CapyRowPointer]::Down($Device,$from.x,$from.y);[CapyRowPointer]::Move($to.x,$to.y)
     Wait-Until {$null -ne (View $Id).stamp -and (& $value) -ne $start} "Held $setting arc did not update value/dab"
+    Control ('bubble-stamp-'+$Id) -Arranged|Out-Null
     $stamp=(View $Id).stamp;$sample=Relative $Id @(($stamp.center[0]+$stamp.diameter*.3),$stamp.center[1])
     $held=Wait-StablePixels {Patch-Pixels $sample}
     Capture 'held-profile-dab' -Composed -WithModel

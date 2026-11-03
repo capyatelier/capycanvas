@@ -891,3 +891,69 @@ namespace CapyHeaderMenuTest {
     }
 }
 Write-Output 'Retained HeaderMenus covers inline and compact captions and geometry without dropping hidden inline identities after expansion.'
+
+
+$bubbleStampAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-tool-bubbles.ps1'),[ref]$tokens,[ref]$errors)
+if(@($errors).Count){throw ($errors|Out-String)}
+$bubbleControls=@($bubbleStampAst.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Controls'},$true))
+$stablePixels=@($ast.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Wait-StablePixels'},$true))
+if($bubbleControls.Count -ne 1 -or $stablePixels.Count -ne 1){throw 'Missing actual bubble dab journey or pixel stability helper'}
+$controlStatements=@($bubbleControls[0].Body.EndBlock.Statements)
+$commitIndex=@(0..($controlStatements.Count-1)|Where-Object {$controlStatements[$_].Extent.Text -eq 'Drag $from $to'})
+if($commitIndex.Count -ne 1){throw 'Missing actual bubble arc commit boundary'}
+$dabPrefix=[scriptblock]::Create(($controlStatements[0..($commitIndex[0]-1)].Extent.Text -join "`n").Replace('[CapyRowPointer]','[CapyStampReadinessTest.Driver]'))
+Add-Type -TypeDefinition @'
+namespace CapyStampReadinessTest {
+ public static class Driver {
+  public static int Moves;
+  public static void Down(string device,int x,int y){}
+  public static void Move(int x,int y){Moves++;}
+ }
+}
+'@
+& {
+    . ([scriptblock]::Create($stablePixels[0].Extent.Text))
+    $Device='mouse';$Theme='dark';$Id=23
+    $image=[CapyOwnedSearchTest.Node]::new('bubble-stamp-23',33,340,260)
+    $image.BoundingRectangle=[CapyOwnedSearchTest.Rect]::new(340,260,144,144)
+    $timing=@{now=0;publish=0;cancel=-1;canceled=$false;imageSeen=$false;stableReads=0;visibleLookups=0;halo=$false}
+    function Start-Sleep([int]$Milliseconds){$timing.now+=$Milliseconds}
+    function Wait-PresentedFrame{}
+    function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds){
+        foreach($sample in 1..20){if(& $Condition){return};Start-Sleep -Milliseconds 100}
+        throw $Message
+    }
+    function Find([string]$Value,[switch]$Name,$Within,$Type,[switch]$Visible,[switch]$NoPopups){
+        if($Value -ne 'bubble-stamp-23' -or !$Visible){throw 'Dab readiness did not request its actual visible Image'}
+        $timing.visibleLookups++
+        if($timing.now -ge $timing.publish){$timing.imageSeen=$true;$image}
+    }
+    function View([long]$Id){[pscustomobject]@{rings=@(@{enabled=$true;setting='hardness'});stamp=$(if([CapyStampReadinessTest.Driver]::Moves -and !$timing.canceled){@{center=@(-42.6666259765625,-32);diameter=96.052490234375}})}}
+    function Model{[pscustomobject]@{state=@{tool_settings=@(@{id='hardness';value=$(if([CapyStampReadinessTest.Driver]::Moves -and !$timing.canceled){.8}else{.2})})}}}
+    function Ring-Point([long]$Id,$Ring,[double]$Fraction){@{x=320;y=240}}
+    function Relative([long]$Id,$Point){
+        if($Point[0] -ne (-42.6666259765625+96.052490234375*.3) -or $Point[1] -ne -32){throw 'Dab journey changed its published sample'}
+        @{x=340;y=260}
+    }
+    function Patch-Pixels($Point){
+        $timing.stableReads++
+        if($timing.canceled){if($timing.halo){'halo-after-cancel'}else{'background'}}
+        elseif($timing.now -ge $timing.publish){'dab'}else{'background'}
+    }
+    function Capture([string]$Name,[switch]$Composed,[switch]$WithModel){if($Name -ne 'held-profile-dab' -or !$Composed -or !$WithModel){throw 'Dab journey changed its held capture'}}
+    function Cancel-Contact{$timing.cancel=$timing.now;$timing.canceled=$true}
+    $verdicts=@()
+    foreach($case in @(@{name='delayed';publish=600;halo=$false},@{name='immediate';publish=0;halo=$false},@{name='never';publish=[int]::MaxValue;halo=$false},@{name='halo-only';publish=[int]::MaxValue;halo=$true})){
+        $timing.now=0;$timing.publish=$case.publish;$timing.cancel=-1;$timing.canceled=$false;$timing.imageSeen=$false;$timing.stableReads=0;$timing.visibleLookups=0;$timing.halo=$case.halo
+        [CapyStampReadinessTest.Driver]::Moves=0;$failure=$null
+        try{& $dabPrefix}catch{$failure=$_}
+        $verdicts+=@{case=$case.name;failure=$(if($failure){$failure.Exception.Message}else{$null});cancel_ms=$timing.cancel;image_seen=$timing.imageSeen;visible_lookups=$timing.visibleLookups;pixel_reads=$timing.stableReads}
+    }
+    $verdicts|ConvertTo-Json -Compress|Write-Output
+    foreach($verdict in $verdicts){
+        if($verdict.case -in @('never','halo-only')){
+            if($verdict.failure -ne 'Missing control: bubble-stamp-23' -or $verdict.cancel_ms -ge 0 -or $verdict.pixel_reads){throw 'A never-visible dab reached cancellation or the halo-only pixel assertion'}
+        }elseif($verdict.failure -or !$verdict.image_seen -or !$verdict.visible_lookups -or ($verdict.case -eq 'delayed' -and $verdict.cancel_ms -lt 600)){throw 'Dab journey canceled before observing its delayed arranged Image'}
+    }
+}
+Write-Output 'Bubble dab journey waits for its arranged Image before stable pixels and rejects never-visible and halo-only previews.'
