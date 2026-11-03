@@ -79,7 +79,7 @@ namespace CapyOwnedSearchTest {
  public class Review{public int Id=33;public IntPtr MainWindowHandle=new IntPtr(132146);public bool HasExited=false;public int ExitCode=0;public void Refresh(){}public bool CloseMainWindow(){return Driver.PostMessage(MainWindowHandle,0x0010,UIntPtr.Zero,IntPtr.Zero);}}
 }
 '@
-foreach($name in @('Test-CapySearchItem','Find','Control','Wait-Until','Invoke')){
+foreach($name in @('Test-CapySearchItem','Find','Control','Wait-Scale','Wait-Until','Invoke')){
     $fn=@($ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name}.GetNewClosure(),$true))
     if($fn.Count -ne 1){throw 'Missing actual UIA helper'}
     . ([scriptblock]::Create($fn[0].Extent.Text.Replace('System.Windows.Automation.','CapyOwnedSearchTest.')))
