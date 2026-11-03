@@ -81,13 +81,18 @@ impl DecodedTileCache {
         }
     }
 
+    #[cfg(not(target_arch="wasm32"))]
     pub fn decode_on_worker(&self,tile:&Arc<TileBlob>)->Result<Arc<Vec<u8>>,String> {
         if let Some(samples)=self.cached(tile)? {return Ok(samples);}
         self.retain(tile,Arc::new(tile.decode_on_worker()?))
     }
+    pub fn decode_bytes_on_worker(&self,tile:&Arc<TileBlob>,compressed:&[u8])->Result<Arc<Vec<u8>>,String> {
+        if let Some(samples)=self.cached(tile)? {return Ok(samples);}
+        self.retain(tile,Arc::new(tile.decode_bytes_on_worker(compressed)?))
+    }
     pub fn poll_decode_on_worker(&self,tile:&Arc<TileBlob>)->Result<Option<Arc<Vec<u8>>>,String> {
         if let Some(samples)=self.cached(tile)? {return Ok(Some(samples));}
-        let crate::package::RangeState::Ready(bytes)=tile.compressed.poll_on_worker()? else {return Ok(None);};
+        let crate::package::RangeState::Ready(bytes)=tile.compressed.poll()? else {return Ok(None);};
         self.retain(tile,Arc::new(tile.decode_bytes_on_worker(&bytes)?)).map(Some)
     }
     fn cached(&self,tile:&Arc<TileBlob>)->Result<Option<Arc<Vec<u8>>>,String> {

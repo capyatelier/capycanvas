@@ -29,15 +29,17 @@ fn opaque(row: &[u8], interpretation: &SourceInterpretation) -> bool {
 }
 
 /// The same samples without their last, alpha, channel.
-fn without_alpha(image: SourceImage, channels: SourceChannels) -> Result<SourceImage, String> {
+async fn without_alpha(image: SourceImage, channels: SourceChannels) -> Result<SourceImage, String> {
     let from = image.interpretation.pixel_bytes();
     let interpretation = SourceInterpretation { channels, ..image.interpretation.clone() };
     let to = interpretation.pixel_bytes();
     let descriptor = interpretation.descriptor();
-    let tiles = image.tiles.iter().map(|(coordinate, tile)| {
-        let bytes: Vec<u8> = tile.decode_on_worker()?.chunks_exact(from).flat_map(|pixel| pixel[..to].to_vec()).collect();
-        Ok((*coordinate, Arc::new(TileBlob::encode(descriptor, &bytes)?)))
-    }).collect::<Result<_, String>>()?;
+    let mut tiles = std::collections::BTreeMap::new();
+    for (coordinate, tile) in &image.tiles {
+        let compressed = tile.read_compressed().await?;
+        let bytes: Vec<u8> = tile.decode_bytes_on_worker(&compressed)?.chunks_exact(from).flat_map(|pixel| pixel[..to].to_vec()).collect();
+        tiles.insert(*coordinate, Arc::new(TileBlob::encode(descriptor, &bytes)?));
+    }
     Ok(SourceImage { interpretation, tiles, ..image })
 }
 
@@ -106,7 +108,9 @@ impl SnapshotGpu {
                 #[cfg(target_arch = "wasm32")]
                 capture.finish_browser(self.encoder.as_ref().ok_or("Raster worker is unavailable")?).await?;
                 let (_, tile) = tiles.into_iter().find(|(plane, _)| *plane == RasterPlane::Color).ok_or("Missing resampled pixels")?;
-                let bytes = tile.try_backing().ok_or("Resampled pixels are not ready")??.decode_on_worker()?;
+                let blob = tile.try_backing().ok_or("Resampled pixels are not ready")??;
+                let compressed = blob.read_compressed().await?;
+                let bytes = blob.decode_bytes_on_worker(&compressed)?;
                 for y in 0..region.height() as usize {
                     for x in 0..region.width() as usize {
                         let at = (y * PAGE_SIZE as usize + x) * 16;
@@ -125,7 +129,7 @@ impl SnapshotGpu {
         let mut image = builder.finish()?;
         image.resolution = source.resolution;
         if covered && interpretation.channels != source.interpretation.channels {
-            image = without_alpha(image, source.interpretation.channels)?;
+            image = without_alpha(image, source.interpretation.channels).await?;
         }
         image.validate()?;
         Ok(image)

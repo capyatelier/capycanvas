@@ -209,9 +209,9 @@ become an invisible orphan between the drawing and window publications.
 closes a row, and explicit validated `remap` changes runtime identities while
 preserving durable keys when restoration races with new work.
 
-The native [`SessionStore`](../../crates/layer-core/src/package/session_store.rs)
+The shared [`SessionStore`](../../crates/layer-core/src/package/session_store.rs)
 appends compressed resources to packs of about 64 MiB, synchronizes each touched
-pack, then publishes generation metadata and an atomic head replacement. Oversized
+pack, then publishes generation metadata and a checksummed, sequenced head slot. Oversized
 resources have dedicated sealed packs. Generation metadata contains the unchanged
 private session plus resource locations and each pack's committed extent. Readers
 validate ranges and checksums and share immutable file handles; later appends never
@@ -243,9 +243,13 @@ that publication before reading membership again. If editing began during
 restoration, incoming drawings append with noncolliding runtime identities;
 already live drawings keep their durable keys.
 
-Web stores resources and checkpoint heads in IndexedDB transactions. Browser
-transaction failure leaves the previous committed state. Original project files
-are separate from private session storage and are never overwritten by recovery.
+Web uses the same store over one OPFS worker's sync access handles. Required reads
+precede writes, each bounded to 8 MiB. The main Wasm instance owns the coordinator
+and metadata; the worker verifies range checksums. Released IndexedDB recovery is
+read only: import copies resources and heads into OPFS, retaining source identities
+and verified generation baselines. Independent edits in both stores remain separate
+recovered drawings. Original project files remain separate and recovery never
+overwrites them.
 
 Cleanup retains current and previous generations plus resources pinned by readers
 and accepted work. Resource identity reuse requires matching descriptors and bytes.

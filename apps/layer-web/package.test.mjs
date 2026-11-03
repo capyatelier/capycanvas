@@ -185,6 +185,15 @@ test("every runtime filename hashes its final bytes and all dependency reference
   assert.deepEqual(fingerprintAssets(runtimeFixture(t)), names, "An identical rebuild keeps every URL stable");
 });
 
+test("the store worker fingerprints its read-only legacy reader and destination handle dependencies", t => {
+  const sources=Object.fromEntries(["store-worker-client.js","store-worker.js","legacy-restart-store.js","file-handles.js"]
+    .map(path=>[path,readFileSync(new URL(path,import.meta.url),"utf8")]));
+  const dir=runtimeFixture(t,{...sources,"app.js":'import {createStoreWorker} from "./store-worker-client.js"; const assetPaths = {};'});
+  const names=fingerprintAssets(dir);assertResolved(dir,names);
+  for(const path of Object.keys(sources))assert.ok(names[path],`${path} is a fingerprinted runtime dependency`);
+  assert.equal(Object.keys(names).some(path=>path.startsWith("fixtures/")||path==="restart-store.js"),false);
+});
+
 // Checks the packaged output independently of the packager's own reference scan.
 function assertResolved(dir, names) {
   const files = new Set(filesIn(dir));

@@ -66,6 +66,12 @@ impl OpaqueResource {
         check(cancelled)?;
         Ok(bytes)
     }
+    pub async fn read_chunk_async(&self,offset:u64,length:usize,cancelled:&AtomicBool)->DecodeResult<ByteRange> {
+        check(cancelled)?;
+        if offset.checked_add(length as u64).is_none_or(|end|end>self.length) {return Err("Opaque resource read exceeds range".into());}
+        let absolute=self.offset.checked_add(offset).ok_or("Opaque resource offset overflow")?;
+        let bytes=self.backing.wait(absolute,length).await.map_err(DecodeError::Io)?;check(cancelled)?;Ok(bytes)
+    }
     pub fn verify(&self, cancelled: &AtomicBool) -> DecodeResult<()> {
         check(cancelled)?;
         self.offset.checked_add(self.length).filter(|end| *end <= self.backing.byte_len()).ok_or("Opaque resource exceeds backing")?;

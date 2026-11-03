@@ -690,9 +690,10 @@ mod tests {
             if failed { parked.suspend_renderer().unwrap(); }
             else { assert!(parked.park_document().unwrap().try_blobs().unwrap().is_some()); }
             let stamp = parked.session_stamp();
-            let mut archive = Vec::new();
-            parked.capture_session().unwrap().prepare(&cancel).unwrap().write(&mut archive, &cancel).unwrap();
-            let restored = SessionRestore::open(backing(&archive), ProjectLimits::default(), &cancel).unwrap();
+            let path = std::env::temp_dir().join(format!("capy-ui-parked-{}", PortableId::random()));
+            let mut store = pollster::block_on(layer_core::package::session_store::SessionStore::open(&path)).unwrap();
+            pollster::block_on(parked.capture_session().unwrap().checkpoint(&mut store, &cancel)).unwrap();
+            let restored = SessionRestore::from_core(pollster::block_on(store.load(ProjectLimits::default(), &cancel)).unwrap().unwrap()).unwrap();
             check(restored.document(), &original);
             let mut recovered = UiSession::from_project(renderer(), restored.document().clone(), None, [500, 400], Platform::Gtk).unwrap();
             recovered.frame(0, 0).unwrap();
@@ -708,6 +709,8 @@ mod tests {
             check(parked.engine.document(), &changed);
             invoke(&mut parked, CommandId::Undo);
             check(parked.engine.document(), &original);
+            drop((recovered, parked, store));
+            std::fs::remove_dir_all(path).unwrap();
         }
     }
 

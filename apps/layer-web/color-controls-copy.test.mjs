@@ -158,10 +158,14 @@ test('known clipboard delivery guards and active-document transport refusals ret
 
 
 test('trusted storage status reader preserves original literal detail and reprojects without repeating transport work',async t=>{
-  const h=documentsHarness(t),error=new Error('Literal Éİı ไทย 雪 { $name }');let spills=0,results=0,formats=0;
-  h.app.spill_document_tiles=async()=>{spills++;throw error;};h.app.document_storage_result=detail=>{results++;assert.equal(detail,'Error: Literal Éİı ไทย 雪 { $name }');};
-  h.app.document_storage_retained=detail=>{formats++;return h.app.bootstrap_view().common.cancel.split(':')[0]+':Storage '+detail;};h.app.dispatch=()=>{throw new DOMException('Literal native cancellation','AbortError');};
-  await h.docs.openFiles([new File(['x'],'Literal Éİı 雪.capy')]);const reader=h.messages.find(message=>typeof message==='function');assert.ok(reader);error.message='Changed later';h.switch('fr');assert.equal(reader(),'fr:Storage Error: Literal Éİı ไทย 雪 { $name }');h.switch('vi');assert.equal(reader(),'vi:Storage Error: Literal Éİı ไทย 雪 { $name }');assert.equal(spills,1);assert.equal(results,1);assert.equal(formats,2);
+  const h=documentsHarness(t),error=new Error('Literal Éİı ไทย 雪 { $name }');let trims=0,formats=0;
+  h.app.await_document_trim=async()=>{trims++;throw error;};
+  h.app.document_storage_retained=detail=>{formats++;return h.app.bootstrap_view().common.cancel.split(':')[0]+':Storage '+detail;};
+  h.app.open_session_window=async()=>({key:'own',publish:async()=>{}});h.app.session_windows=async()=>[];h.app.session_stamp_for=()=>({});h.app.restore_session_order=()=>({});
+  h.app.import_legacy_sessions=async()=>[];
+  h.app.session_manifest_update=(_raw,event)=>({generation:1,drawings:event.drawings,active:event.active,clean_exit:false,restoring:[],blocked:[]});
+  h.app.gpu_ready=()=>true;h.app.document_park_ready=()=>true;h.doc.hidden=false;
+  await h.docs.startRecovery();h.app.gpu_ready=()=>false;const reader=h.messages.find(message=>typeof message==='function');assert.ok(reader);error.message='Changed later';h.switch('fr');assert.equal(reader(),'fr:Storage Error: Literal Éİı ไทย 雪 { $name }');h.switch('vi');assert.equal(reader(),'vi:Storage Error: Literal Éİı ไทย 雪 { $name }');assert.equal(trims,1);assert.equal(formats,2);
 });
 
 

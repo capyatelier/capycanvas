@@ -380,7 +380,7 @@ pub extern "system" fn Java_art_capycanvas_Native_sessionCollect(mut env: JNIEnv
     let result = (|| {
         let path = read(&mut env, &directory)?;
         let reachable = serde_json::from_str(&read(&mut env, &keys)?).map_err(error)?;
-        layer_core::package::session_store::collect_unreferenced_stores(Path::new(&path), &reachable, &AtomicBool::new(false))?;
+        pollster::block_on(layer_core::package::session_store::collect_unreferenced_stores(Path::new(&path), &reachable, &AtomicBool::new(false)))?;
         Ok(())
     })();
     fail(&mut env, result)

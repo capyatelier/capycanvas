@@ -1,6 +1,14 @@
 use super::*;
 use std::{collections::VecDeque, sync::atomic::{AtomicUsize, Ordering}};
 
+fn heads(path: &std::path::Path) -> [Option<Vec<u8>>; 2] {
+    ["head.0", "head.1"].map(|name| match std::fs::read(path.join(name)) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => panic!("{error}"),
+    })
+}
+
 struct Fixture {
     stores: SessionStores,
     queue: Arc<Mutex<VecDeque<StoreWork>>>,
@@ -65,24 +73,24 @@ fn failed_restore_copy_retires_through_its_writer_after_membership_is_removed() 
         let fixture=Fixture::new();let (saved,stamp,_,_)=capture();
         let good=fixture.stores.bind(1,Some("good")).unwrap();
         let reply=fixture.stores.checkpoint(1,saved,stamp,true).unwrap();fixture.run();assert!(reply.try_take().unwrap().is_ok());
-        let good_head=std::fs::read(good.path().join("head.json")).unwrap();
+        let good_head=heads(good.path());
         let (saved,stamp,_,_)=capture();let bad=fixture.stores.bind(2,Some("failed")).unwrap();
         let reply=fixture.stores.checkpoint(2,saved,stamp,true).unwrap();fixture.run();assert!(reply.try_take().unwrap().is_ok());
         for generation in std::fs::read_dir(bad.path().join("generations")).unwrap() {std::fs::write(generation.unwrap().path(),b"broken checkpoint").unwrap();}
         let restore=fixture.stores.restore(2,ProjectLimits::default()).unwrap();fixture.run();assert!(restore.try_take().unwrap().is_err());
         if registered {
-            assert!(layer_core::package::session_store::SessionStore::try_open(bad.path()).unwrap().is_none());
+            assert!(pollster::block_on(layer_core::package::session_store::SessionStore::try_open(bad.path())).unwrap().is_none());
         }else {let mut state=fixture.stores.0.state.lock().unwrap();state.aliases.remove(&2);state.drawings.remove(bad.key());}
         let (key,path)=(bad.key().to_owned(),bad.path().to_path_buf());drop(bad);
         let prepare=fixture.stores.prepare_retirement(&key).unwrap();fixture.run();
         assert!(matches!(prepare.try_take(),Some(Ok(StoreResult::RetirementPrepared))));
-        assert!(path.join("head.json").exists());
+        assert!(heads(&path).iter().any(Option::is_some));
         let manifest=layer_ui::SessionManifest::default().stage(vec![layer_ui::session_recovery::SessionDrawing {id:1,key:good.key().into()},layer_ui::session_recovery::SessionDrawing {id:2,key:key.clone()}],1).unwrap();
         manifest.remove(2).unwrap().publish(&fixture.root.join("session.json")).unwrap();
         let retire=fixture.stores.retire_copy(&key).unwrap();fixture.run();
         assert!(matches!(retire.try_take(),Some(Ok(StoreResult::Retired))));
-        assert!(!path.join("head.json").exists());
-        assert_eq!(std::fs::read(good.path().join("head.json")).unwrap(),good_head);
+        assert!(!heads(&path).iter().any(Option::is_some));
+        assert_eq!(heads(good.path()),good_head);
         let restored=fixture.stores.restore(1,ProjectLimits::default()).unwrap();fixture.run();assert!(restored.try_take().unwrap().is_ok());
     }
 }
@@ -93,27 +101,27 @@ fn explicit_discard_prepares_a_corrupt_head_without_decoding_or_changing_another
     let fixture=Fixture::new();let cancel=AtomicBool::new(false);
     let (saved,stamp,_,_)=capture();let good=fixture.stores.bind(2,Some("good")).unwrap();
     let reply=fixture.stores.checkpoint(2,saved,stamp,true).unwrap();fixture.run();assert!(reply.try_take().unwrap().is_ok());
-    let good_head=std::fs::read(good.path().join("head.json")).unwrap();
+    let good_head=heads(good.path());
     let (saved,stamp,_,_)=capture();let bad=fixture.stores.bind(1,Some("corrupt")).unwrap();
     let reply=fixture.stores.checkpoint(1,saved,stamp,true).unwrap();fixture.run();assert!(reply.try_take().unwrap().is_ok());
-    assert!(SessionStore::try_open(bad.path()).unwrap().is_none());
+    assert!(pollster::block_on(SessionStore::try_open(bad.path())).unwrap().is_none());
     let path=bad.path().to_path_buf();drop(bad);
     {let mut state=fixture.stores.0.state.lock().unwrap();state.aliases.remove(&1);state.drawings.remove("corrupt");}
-    std::fs::write(path.join("head.json"),b"invalid head").unwrap();
-    assert!(SessionStore::open(&path).is_err());
+    for name in ["head.0", "head.1"] {std::fs::write(path.join(name),b"invalid head").unwrap();}
+    assert!(pollster::block_on(SessionStore::open(&path)).is_err());
     let reply=fixture.stores.prepare_retirement("corrupt").unwrap();fixture.run();
     assert!(matches!(reply.try_take(),Some(Ok(StoreResult::RetirementPrepared))));
-    collect_unreferenced_stores(&fixture.root,&["corrupt".into()].into(),&cancel).unwrap();
-    assert_eq!(std::fs::read(path.join("head.json")).unwrap(),b"invalid head");
+    pollster::block_on(collect_unreferenced_stores(&fixture.root,&["corrupt".into()].into(),&cancel)).unwrap();
+    assert_eq!(heads(&path),[Some(b"invalid head".to_vec()),Some(b"invalid head".to_vec())]);
     assert_eq!(std::fs::read_dir(path.join("generations")).unwrap().count(),1);
     let manifest=layer_ui::SessionManifest::default().stage(vec![layer_ui::session_recovery::SessionDrawing {id:1,key:"corrupt".into()}],1).unwrap();
     manifest.remove(1).unwrap().publish(&fixture.root.join("session.json")).unwrap();
     let reply=fixture.stores.retire_copy("corrupt").unwrap();fixture.run();
     assert!(matches!(reply.try_take(),Some(Ok(StoreResult::Retired))));
-    assert!(!path.join("head.json").exists());assert!(path.join(".retired").is_file());
+    assert!(!heads(&path).iter().any(Option::is_some));assert!(path.join(".retired").is_file());
     for directory in ["resources","generations","packs"] {assert!(!path.join(directory).exists());}
-    assert!(SessionStore::open(&path).is_err());
-    assert_eq!(std::fs::read(good.path().join("head.json")).unwrap(),good_head);
+    assert!(pollster::block_on(SessionStore::open(&path)).is_err());
+    assert_eq!(heads(good.path()),good_head);
 }
 
 #[test]
@@ -133,7 +141,7 @@ fn retirement_preserves_missing_unrecognized_and_locked_paths() {
     assert!(matches!(retired.try_take(),Some(Err(error)) if error=="Invalid drawing session directory"));
     assert_eq!(std::fs::read_dir(&unknown).unwrap().count(),1);
     assert_eq!(std::fs::read(unknown.join("keep")).unwrap(),b"unrecognized bytes");
-    let locked=fixture.root.join("locked");let owner=SessionStore::open(&locked).unwrap();
+    let locked=fixture.root.join("locked");let owner=pollster::block_on(SessionStore::open(&locked)).unwrap();
     let prepared=fixture.stores.prepare_retirement("locked").unwrap();fixture.run();
     assert!(matches!(prepared.try_take(),Some(Err(error)) if error=="Recovery drawing is already open"));
     let retired=fixture.stores.retire_copy("locked").unwrap();fixture.run();
@@ -157,7 +165,7 @@ fn retirement_never_follows_root_or_nested_storage_symlinks() {
         let key=format!("linked-{index}");let path=fixture.root.join(&key);
         if name=="root" {std::fs::create_dir_all(&fixture.root).unwrap();symlink(&outside.root,&path).unwrap();}
         else {
-            drop(SessionStore::open(&path).unwrap());let link=path.join(name);
+            drop(pollster::block_on(SessionStore::open(&path)).unwrap());let link=path.join(name);
             if link.is_dir() {std::fs::remove_dir(&link).unwrap();}else if link.exists() {std::fs::remove_file(&link).unwrap();}
             let target=if ["resources","generations","packs"].contains(&name) {outside.root.clone()}else {outside.root.join("keep")};
             symlink(target,link).unwrap();
@@ -183,7 +191,7 @@ fn repeated_retirement_preserves_the_empty_terminal_marker() {
     for _ in 0..8 {
         let prepared=fixture.stores.prepare_retirement("closed").unwrap();fixture.run();assert!(prepared.try_take().unwrap().is_ok());
         let retired=fixture.stores.retire_copy("closed").unwrap();fixture.run();assert!(retired.try_take().unwrap().is_ok());
-        collect_unreferenced_stores(&fixture.root,&Default::default(),&AtomicBool::new(false)).unwrap();
+        pollster::block_on(collect_unreferenced_stores(&fixture.root,&Default::default(),&AtomicBool::new(false))).unwrap();
         let unchanged=std::fs::metadata(path.join(".retired")).unwrap();
         assert_eq!(marker.modified().unwrap(),unchanged.modified().unwrap());
         assert_eq!(directory.modified().unwrap(),std::fs::metadata(&path).unwrap().modified().unwrap());
@@ -212,7 +220,7 @@ fn retired_registry_entries_release_the_writer_but_live_tiles_keep_their_pack() 
     for path in &packs { assert!(path.exists()); }
     assert_eq!(tile.decode_on_worker().unwrap(), expected);
     drop((tile, retained, capture));
-    binding.on_worker(|store| store.collect_garbage()).unwrap();
+    pollster::block_on(binding.with_store(async |store| store.collect_garbage().await)).unwrap();
     for path in packs { assert!(!path.exists()); }
     assert_ne!(fixture.stores.bind(7, None).unwrap().key(), binding.key());
 }
@@ -280,8 +288,8 @@ fn restored_stamp_is_committed_at_ui_adoption() {
     for edit_after_restore in 0..4 {
         let fixture = Fixture::new(); let (capture, stamp, _, _) = capture();
         let binding = fixture.stores.bind(1, None).unwrap();
-        binding.on_worker(|store| capture.checkpoint(store, &AtomicBool::new(false))).unwrap();
-        let head = std::fs::read(binding.path().join("head.json")).unwrap();
+        pollster::block_on(binding.with_store(async |store| capture.checkpoint(store, &AtomicBool::new(false)).await)).unwrap();
+        let head = heads(binding.path());
         assert!(!fixture.stores.is_current(1, &stamp));
         let reply = fixture.stores.restore_bound(&binding, ProjectLimits::default()).unwrap(); fixture.run();
         let Some(Ok(StoreResult::Restored {session: Some(restore), recovered_previous: false})) = reply.try_take()
@@ -306,8 +314,8 @@ fn restored_stamp_is_committed_at_ui_adoption() {
         let adopted = session.session_stamp();
         assert_eq!(fixture.stores.is_current(1, &adopted), edit_after_restore==0);
         assert!(!fixture.stores.checkpoint_due(1, adopted.clone(), false).unwrap());
-        assert_eq!(fixture.stores.observe(1,adopted,SessionStores::now_ms()+SessionStores::checkpoint_interval_ms(),false).unwrap(),edit_after_restore!=0);
-        assert_eq!(std::fs::read(binding.path().join("head.json")).unwrap(), head);
+        assert_eq!(fixture.stores.observe(1,adopted,(fixture.stores.0.clock)()+SessionStores::checkpoint_interval_ms(),false).unwrap(),edit_after_restore!=0);
+        assert_eq!(heads(binding.path()), head);
         assert!(fixture.queue.lock().unwrap().is_empty());
     }
 }
@@ -332,8 +340,8 @@ fn optional_checkpoints_coalesce_to_the_latest_dirty_capture() {
     assert_eq!(older_generation, latest_generation);
     assert!(!fixture.stores.observe(1, latest_stamp, 10_000, false).unwrap());
     let binding = fixture.stores.bind(1, None).unwrap();
-    let name = binding.on_worker(|store| Ok(store.load(ProjectLimits::default(), &AtomicBool::new(false))
-        .unwrap().unwrap().metadata.value["unsaved_name"].as_str().unwrap().to_owned())).unwrap();
+    let name = pollster::block_on(binding.with_store(async |store| Ok(store.load(ProjectLimits::default(), &AtomicBool::new(false)).await
+        .unwrap().unwrap().metadata.value["unsaved_name"].as_str().unwrap().to_owned()))).unwrap();
     assert_eq!(name, "Latest");
 }
 
@@ -357,8 +365,8 @@ fn pressure_and_forced_checkpoint_waiters_follow_the_latest_durable_batch() {
     assert_eq!(second_generation, latest_generation);
     assert!(fixture.stores.is_current(1, &latest_stamp));
     let binding = fixture.stores.bind(1, None).unwrap();
-    let name = binding.on_worker(|store| Ok(store.load(ProjectLimits::default(), &AtomicBool::new(false))
-        .unwrap().unwrap().metadata.value["unsaved_name"].as_str().unwrap().to_owned())).unwrap();
+    let name = pollster::block_on(binding.with_store(async |store| Ok(store.load(ProjectLimits::default(), &AtomicBool::new(false)).await
+        .unwrap().unwrap().metadata.value["unsaved_name"].as_str().unwrap().to_owned()))).unwrap();
     assert_eq!(name, "C");
     assert!(fixture.queue.lock().unwrap().is_empty());
 }
@@ -421,7 +429,7 @@ fn an_edit_observed_during_a_held_batch_is_due_on_the_next_poll() {
     started.recv().unwrap();
     let (last_capture, last_stamp) = named(&capture, &stamp, "Last edit");
     assert!(!fixture.stores.observe(1, last_stamp.clone(), SessionStores::checkpoint_interval_ms(), false).unwrap());
-    fixture.stores.0.state.lock().unwrap().drawings.get_mut(binding.key()).unwrap().due = Some(SessionStores::now_ms());
+    fixture.stores.0.state.lock().unwrap().drawings.get_mut(binding.key()).unwrap().due = Some((fixture.stores.0.clock)());
     resume.send(()).unwrap(); worker.join().unwrap();
     assert!(matches!(reply.try_take(), Some(Ok(StoreResult::Checkpoint(_)))));
     assert!(fixture.stores.checkpoint_due(1, last_stamp.clone(), false).unwrap());
@@ -501,6 +509,26 @@ fn failed_subscription_finishes_trim_waiters_and_blocks_work_until_storage_is_cl
     documents.storage_completed(Ok(()));let retry=documents.trim_wait().unwrap();
     while !fixture.queue.lock().unwrap().is_empty() {fixture.run();}
     retry.wait_on_worker().unwrap();assert!(documents.storage_error().is_none());assert_eq!(tile.resident_bytes(),0);
+}
+
+#[test]
+fn a_committed_checkpoint_clears_storage_failure_and_finishes_parked_pressure() {
+    let fixture=Fixture::new();let localization=layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
+    let mut documents=layer_ui::DocumentSessions::<()>::default();documents.set_inactive_ram_budget(0);
+    let parked=documents.selected();fixture.stores.watch_pressure(documents.pressure_source());
+    let (capture,stamp,retained,tile)=capture();documents.append((),retained,&localization);
+    let failed=documents.trim_wait().unwrap();drop(fixture.pop());
+    assert_eq!(failed.wait_on_worker().unwrap_err(),"Drawing storage worker stopped");
+    assert!(documents.storage_error().is_some());assert!(tile.resident_bytes()>0);
+    assert!(fixture.queue.lock().unwrap().is_empty());
+    let checkpoint=fixture.stores.checkpoint(parked,capture,stamp,true).unwrap();fixture.run();
+    assert!(matches!(checkpoint.try_take(),Some(Ok(StoreResult::Checkpoint(_)))));
+    assert!(documents.storage_error().is_none());
+    let retry=documents.trim_wait().expect("successful durable work resumes pressure accounting");
+    while !fixture.queue.lock().unwrap().is_empty() {fixture.run();}
+    retry.wait_on_worker().unwrap();assert!(!documents.trim_in_flight());
+    assert_eq!(tile.resident_bytes(),0);assert_eq!(documents.resident_bytes(),0);
+    assert!(documents.storage_error().is_none());
 }
 
 #[test]

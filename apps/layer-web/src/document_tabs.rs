@@ -245,6 +245,7 @@ impl WebApp {
         self.startup = Default::default();
     }
     pub(super) fn document_changed(&self) -> Result<JsValue, JsValue> {
+        self.stores.watch_pressure(self.documents.pressure_source());
         serialize(&layer_ui::UiChange {
             revision: self.session.state().revision,
             regions: layer_ui::regions::ALL,

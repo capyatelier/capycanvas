@@ -193,7 +193,11 @@ impl SourceRows<'_> {
                 if tile.descriptor != self.source.interpretation.descriptor() {
                     return Err("Invalid source tile format".into());
                 }
-                self.tiles.push(tile.decode_on_worker()?);
+                #[cfg(not(target_arch="wasm32"))]
+                let decoded=tile.decode_on_worker()?;
+                #[cfg(target_arch="wasm32")]
+                let decoded=tile.decode_bytes_on_worker(&tile.memory_compressed()?.ok_or("Image input bytes were not supplied to the worker")?)?;
+                self.tiles.push(decoded);
             }
             self.band = band;
         }

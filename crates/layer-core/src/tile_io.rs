@@ -35,8 +35,7 @@ impl RangeReader for FileReader {
     }
 }
 
-#[cfg(not(target_arch="wasm32"))]
-pub(crate) fn verify_crc(bytes:&[u8],expected:Option<u32>)->Result<(),String> {
+pub fn verify_crc(bytes:&[u8],expected:Option<u32>)->Result<(),String> {
     if expected.is_some_and(|expected|crc32fast::hash(bytes)!=expected) {return Err("Recovery resource checksum failed".into());}
     Ok(())
 }
@@ -82,10 +81,8 @@ struct Source { id: u64, length: AtomicU64, reader: Arc<dyn RangeReader>, cache:
 impl Drop for Source { fn drop(&mut self) { self.cache.0.expired.store(true,Ordering::Release);self.cache.schedule(); } }
 #[derive(Clone)]
 pub struct ReadSource(Arc<Source>);
-#[cfg(not(target_arch="wasm32"))]
 #[derive(Default)]
 pub(crate) struct WeakReadSource(Weak<Source>);
-#[cfg(not(target_arch="wasm32"))]
 impl WeakReadSource {pub(crate) fn upgrade(&self)->Option<ReadSource> {self.0.upgrade().map(ReadSource)}}
 
 pub(crate) struct Lease { source: Arc<Source>, key: Key }
@@ -241,11 +238,8 @@ impl ReadSource {
         if length>MAX_RANGE_BYTES || offset.checked_add(length as u64).is_none_or(|end|end>self.0.length.load(Ordering::Acquire)) {return Err("Tile read exceeds backing".into());}
         Ok(Key(self.0.id,offset,length))
     }
-    #[cfg(not(target_arch="wasm32"))]
     pub(crate) fn extend_to(&self,length:u64) {self.0.length.fetch_max(length,Ordering::Release);}
-    #[cfg(not(target_arch="wasm32"))]
     pub(crate) fn byte_len(&self)->u64 {self.0.length.load(Ordering::Acquire)}
-    #[cfg(not(target_arch="wasm32"))]
     pub(crate) fn downgrade(&self)->WeakReadSource {WeakReadSource(Arc::downgrade(&self.0))}
     pub fn poll(&self,offset:u64,length:usize)->Result<RangeState,String> {self.poll_range(offset,length,None)}
     pub fn poll_checked(&self,offset:u64,length:usize,crc:u32)->Result<RangeState,String> {self.poll_range(offset,length,Some(crc))}
@@ -265,6 +259,7 @@ impl ReadSource {
         self.0.cache.publish(&state);
     }
     pub fn wait(&self,offset:u64,length:usize)->Result<ReadWait,String> {self.wait_range(offset,length,None)}
+    pub(crate) fn wait_checked(&self,offset:u64,length:usize,crc:u32)->Result<ReadWait,String> {self.wait_range(offset,length,Some(crc))}
     fn wait_range(&self,offset:u64,length:usize,crc:Option<u32>)->Result<ReadWait,String> {
         let key=self.key(offset,length)?;
         static NEXT:AtomicU64=AtomicU64::new(1);
@@ -298,12 +293,15 @@ impl ReadSource {
     }
 }
 
-#[cfg(not(target_arch="wasm32"))]
 impl crate::package::ByteSource for ReadSource {
     fn byte_len(&self)->u64 {self.byte_len()}
     fn resident_bytes(&self)->usize {0}
     fn poll(&self,offset:u64,length:usize)->Result<RangeState,String> {self.poll(offset,length)}
+    #[cfg(not(target_arch="wasm32"))]
     fn poll_on_worker(&self,offset:u64,length:usize)->Result<RangeState,String> {self.wait_on_worker(offset,length).map(RangeState::Ready)}
+    fn wait(&self,offset:u64,length:usize)->crate::package::store_io::FileFuture<'_,ByteRange> {
+        Box::pin(async move {ReadSource::wait(self,offset,length)?.await})
+    }
 }
 
 pub struct ReadWait { source: ReadSource, key: Key, id:u64, crc:Option<u32> }

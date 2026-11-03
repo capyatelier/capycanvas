@@ -1601,13 +1601,9 @@ fn native_fill_texture_matches_contact_and_flat_pixels_through_history() {
     let (_, mut reopened) = engine(read_document(bytes)); flush(&mut reopened);
     assert_eq!(backing(&paint(reopened.document()).raster), pixels);
     assert_eq!(reopened.backend_mut().readback_srgb_rgba8().unwrap(), composite);
-    let cancel = std::sync::atomic::AtomicBool::new(false);
-    let session = layer_core::package::session::PreparedSession::prepare(
-        &live.capture_session(0).unwrap(), layer_core::package::session::SessionMetadata {
-            value: Default::default(), profiles: Vec::new() }, &cancel).unwrap();
-    let mut bytes = Vec::new(); session.write(&mut bytes, &cancel).unwrap();
-    let source = layer_core::package::ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap();
-    let restored = layer_core::package::session::open(source, Default::default(), &cancel).unwrap();
+    let session=live.capture_session(0).unwrap();
+    let mut store=crate::test_support::StoredTiles::new(&session.retained_tiles(),crate::test_support::tile_read_cache());
+    let restored=store.restore_session(&session);
     let (_, mut recovered) = engine(restored.editor.document().clone()); flush(&mut recovered);
     recovered.restore_editor(restored.editor).unwrap();
     assert_eq!(backing(&paint(recovered.document()).raster), pixels);

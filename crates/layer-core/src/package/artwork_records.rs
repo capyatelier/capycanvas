@@ -591,7 +591,7 @@ mod tests {
     }
     #[test]
     fn fixed_shared_image_fixture_preserves_authored_bits_and_bindings_across_all_transports() {
-        use crate::package::{codec::OpenOutcome,session::PreparedSession,session_transfer::PreparedSessionTransfer};
+        use crate::package::{codec::OpenOutcome,session_store::tests::SavedSession};
         let bytes:Arc<[u8]>=Arc::from(include_bytes!("codec/fixtures/shared-image-objects.capy").as_slice());
         let backing=ImmutableBacking::new(Arc::new(bytes)).unwrap();let cancel=AtomicBool::new(false);let limits=crate::ProjectLimits::default();
         let OpenOutcome::Candidate {artwork,..}=crate::package::codec::open(backing,limits,&cancel).unwrap() else {panic!("Fixed object artwork must be editable")};
@@ -625,20 +625,11 @@ mod tests {
         let mut changed=editor.document().artwork.objects.get(object).unwrap().clone();changed.affine.0=expected[1].map(f64::from_bits);
         editor.perform(crate::Edit::ImageObject(crate::RecordChange::replace(&editor.document().artwork.objects,object,Some(changed)).unwrap())).unwrap();editor.undo().unwrap();
         let capture=editor.capture_session(editor.capture(1,Default::default()).unwrap()).unwrap();
-        let session=PreparedSession::prepare(&capture,json!({}),&cancel).unwrap();let mut pack=Vec::new();session.resources().reader(&cancel).read_to_end(&mut pack).unwrap();
-        let mut loaded=crate::package::session::open_parts(session.metadata(),ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(pack))).unwrap(),limits,&cancel).unwrap();verify(&loaded.editor.document().artwork);
+        let session=SavedSession::new(&capture,json!({}),&cancel).unwrap();
+        let mut loaded=session.load().unwrap();verify(&loaded.editor.document().artwork);
         loaded.editor.redo().unwrap();assert_eq!(loaded.editor.document().artwork.objects.get(object).unwrap().affine.0.map(f64::to_bits),expected[1]);
         loaded.editor.undo().unwrap();verify(&loaded.editor.document().artwork);
-        let transfer=PreparedSessionTransfer::capture(&capture,json!({}),&cancel).unwrap();
-        let descriptor=serde_json::from_slice(&serde_json::to_vec(transfer.descriptor()).unwrap()).unwrap();
-        let mut receiver=crate::package::session_transfer::SessionTransferReceiver::new(descriptor,limits).unwrap();
-        for index in receiver.missing_payloads() {let mut offset=0;let length=transfer.payload_len(index).unwrap();while offset<length {
-            let count=(length-offset).min(crate::package::MAX_RANGE_BYTES as u64) as usize;
-            receiver.push_chunk(index,&transfer.read_chunk(index,offset,count).unwrap()).unwrap();offset+=count as u64;
-        }}
-        let mut loaded=receiver.finish().unwrap().adopt_verified(limits,&cancel).unwrap();verify(&loaded.editor.document().artwork);
-        loaded.editor.redo().unwrap();assert_eq!(loaded.editor.document().artwork.objects.get(object).unwrap().affine.0.map(f64::to_bits),expected[1]);
-        loaded.editor.undo().unwrap();verify(&loaded.editor.document().artwork);
+
     }
     #[test]
     fn shared_images_objects_and_paint_bindings_preserve_identity_and_f64_geometry() {

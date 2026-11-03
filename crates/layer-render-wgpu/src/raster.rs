@@ -796,6 +796,7 @@ impl WgpuRasterizer {
     /// Batch only already-decoded color tiles. Cold decodes retain their early
     /// submission: delaying those uploads increases staging pressure and was
     /// slower on Adreno even when it reduced the number of command buffers.
+    #[cfg(not(target_arch="wasm32"))]
     fn restore_native_color_tile(
         &mut self,
         batch: &mut Vec<(Arc<TileBlob>, wgpu::Texture)>,
@@ -819,6 +820,7 @@ impl WgpuRasterizer {
 
     /// Submit cached copies into private candidates, without another heap
     /// allocation for the request metadata. Only the live prefix is encoded.
+    #[cfg(not(target_arch="wasm32"))]
     fn restore_native_raster_batch(
         &mut self,
         batch: &mut Vec<(Arc<TileBlob>, wgpu::Texture)>,
@@ -842,6 +844,10 @@ impl WgpuRasterizer {
         previous: &RasterData,
         data: &RasterData,
     ) -> Result<(), GpuRasterError> {
+        #[cfg(target_arch="wasm32")]
+        {self.restore_direct(target,previous,data)}
+        #[cfg(not(target_arch="wasm32"))]
+        {
         if !self.snapshot_worker {return self.restore_direct(target,previous,data);}
         let _trace = crate::performance_trace::Span::new(c"capy.restore");
         let index = self.paint_layers.iter().position(|l| l.id == target);
@@ -907,6 +913,7 @@ impl WgpuRasterizer {
         }
         self.restore_native_raster_batch(&mut native_batch)?;
         self.publish_restored_pages(target,data,staging::PreparedPages {colors,masks,wetness})
+        }
     }
 
     pub(super) fn publish_restored_pages(&mut self,target:SourceTarget,data:&RasterData,pages:staging::PreparedPages)->Result<(),GpuRasterError> {

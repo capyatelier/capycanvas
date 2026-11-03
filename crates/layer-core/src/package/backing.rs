@@ -14,6 +14,7 @@ impl ByteRange {
         Ok(Self {owner:self.owner.clone(),range:self.range.start+range.start..self.range.start+range.end,lease:self.lease.clone()})
     }
     pub(crate) fn leased(owner:Arc<[u8]>,lease:Arc<crate::tile_io::Lease>)->Self {let end=owner.len();Self {owner,range:0..end,lease:Some(lease)}}
+    #[cfg(not(target_arch="wasm32"))]
     pub(crate) fn into_arc(self)->Arc<[u8]> {if self.lease.is_none() && self.range==(0..self.owner.len()) {self.owner.clone()}else{Arc::from(&*self)}}
     pub fn retained_bytes(&self) -> usize { self.owner.len() }
 }
@@ -30,6 +31,9 @@ pub trait ByteSource: Send + Sync {
     fn resident_bytes(&self) -> usize { self.byte_len().min(usize::MAX as u64) as usize }
     fn poll(&self, offset: u64, len: usize) -> Result<RangeState, String>;
     fn poll_on_worker(&self, offset:u64, len:usize)->Result<RangeState,String> {self.poll(offset,len)}
+    fn wait(&self,offset:u64,len:usize)->super::store_io::FileFuture<'_,ByteRange> {
+        Box::pin(async move {match self.poll_on_worker(offset,len)? {RangeState::Ready(bytes)=>Ok(bytes),RangeState::Pending=>Err("Byte source has no read completion".into())}})
+    }
 }
 impl ByteSource for Arc<[u8]> {
     fn byte_len(&self) -> u64 { self.as_ref().len() as u64 }
@@ -67,12 +71,25 @@ impl ImmutableBacking {
         }
     }
     pub fn identity(&self) -> u64 { self.owner.identity }
+    pub(crate) fn weak_owner(&self)->std::sync::Weak<dyn Send+Sync> {Arc::downgrade(&(self.owner.clone() as Arc<dyn Send+Sync>))}
     pub fn byte_len(&self) -> u64 { self.owner.length }
     pub fn resident_bytes(&self) -> usize { self.owner.source.resident_bytes() }
     pub(crate) fn read_on_worker(&self, offset:u64, len:usize)->Result<ByteRange,String> {
         match self.checked(offset,len,true)? {RangeState::Ready(bytes)=>Ok(bytes),RangeState::Pending=>Err("Package bytes are pending".into())}
     }
     pub fn poll(&self, offset:u64, len:usize)->Result<RangeState,String> {self.checked(offset,len,false)}
+    pub async fn wait(&self,offset:u64,len:usize)->Result<ByteRange,String> {
+        if len>MAX_RANGE_BYTES || offset.checked_add(len as u64).is_none_or(|end|end>self.byte_len()) {return Err("Package read exceeds immutable range".into());}
+        if let Some(error)=self.owner.integrity_failure.lock().map_err(|_|"Package failure lock")?.clone() {return Err(error);}
+        if let Some(error)=self.owner.failure.lock().map_err(|_|"Package failure lock")?.clone() {return Err(error);}
+        let result=self.owner.source.wait(offset,len).await.and_then(|bytes| {
+            if bytes.len()!=len || bytes.retained_bytes()>MAX_RANGE_BYTES {Err("Incomplete or oversized package range".into())}else {Ok(bytes)}
+        });
+        if let Some(error)=self.owner.integrity_failure.lock().map_err(|_|"Package failure lock")?.clone() {return Err(error);}
+        let mut failure=self.owner.failure.lock().map_err(|_|"Package failure lock")?;
+        if failure.is_none() && let Err(error)=&result {*failure=Some(error.clone());}
+        if let Some(error)=&*failure {return Err(error.clone());}result
+    }
     fn checked(&self,offset:u64,len:usize,worker:bool)->Result<RangeState,String> {
         if let Some(failure) = self.owner.integrity_failure.lock().map_err(|_| "Package failure lock")?.as_ref() {
             return Err(failure.clone());

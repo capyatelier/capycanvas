@@ -191,7 +191,7 @@ fn assert_roundtrip(editor: &Editor, manifest: &[u8], identities: &[crate::Porta
 #[test]
 fn import_above_512_mib_saves_reopens_and_recovers_with_the_same_budget() {
     let files=Files(std::env::temp_dir().join(format!("capy-budget-roundtrip-{}",crate::PortableId::random())));
-    std::fs::create_dir_all(&files.0).unwrap();let package_path=files.0.join("large.capy");let recovery_path=files.0.join("recovery.capy");
+    std::fs::create_dir_all(&files.0).unwrap();let package_path=files.0.join("large.capy");let recovery_path=files.0.join("recovery");
     let cancelled=AtomicBool::new(false);let memory=budget();
     let reservation=memory.admit_import(600*1024*1024).unwrap();
     let source=source_grid(41,50);assert!(source.resident_bytes()>512*1024*1024);
@@ -207,11 +207,6 @@ fn import_above_512_mib_saves_reopens_and_recovers_with_the_same_budget() {
     assert_eq!(ProjectLimits::default().asset_bytes,u64::MAX);
     assert_eq!(ProjectLimits::default().raster_bytes,u64::MAX);
     let capture=editor.capture(1,Default::default()).unwrap();
-    let session=editor.capture_session(capture.clone()).unwrap();
-    let transfer=package::session_transfer::PreparedSessionTransfer::capture(&session,serde_json::Value::Null,&cancelled).unwrap();
-    let restored=transfer.adopt_verified(ProjectLimits::default(),&cancelled).unwrap();
-    assert_eq!(restored.editor.document().artwork,editor.document().artwork);
-    drop((restored,transfer,session));
     let original = {
         let prepared = package::codec::PreparedPackage::prepare(&capture, None, &cancelled).unwrap();
         let manifest = prepared.manifest().to_vec();
@@ -226,6 +221,11 @@ fn import_above_512_mib_saves_reopens_and_recovers_with_the_same_budget() {
     assert!(refused.perform(Edit::Paint(RecordChange::replace(&before.artwork.paint,target,Some(paint)).unwrap())).is_err());
     assert_eq!(refused.document(),&before);assert_eq!(refused.checkpoint(),checkpoint);assert!(!refused.can_undo());
     assert_eq!(constrained.snapshot().reserved_bytes,0);assert!(constrained.snapshot().refusals>0);
+    let session=editor.capture_session(capture.clone()).unwrap();
+    let saved=package::session_store::tests::SavedSession::new(&session,serde_json::Value::Null,&cancelled).unwrap();
+    let restored=saved.load().unwrap();
+    assert_eq!(restored.editor.document().artwork,editor.document().artwork);
+    drop((restored,saved,session));
     drop((editor,capture));
     let fresh=budget();
     let package::codec::OpenOutcome::Candidate {artwork,memory:admission,..}=package::codec::open_with_budget(backing(&package_path),limits(&fresh),&cancelled,fresh.clone()).unwrap() else {panic!("large artwork must reopen")};
@@ -233,15 +233,19 @@ fn import_above_512_mib_saves_reopens_and_recovers_with_the_same_budget() {
     assert_roundtrip(&reopened, &original, &source_ids, &source_digests);
     assert_eq!(fresh.snapshot().reserved_bytes,0);assert!(fresh.snapshot().ram_pinned_bytes>512*1024*1024);
     let capture=reopened.capture_session(reopened.capture(1,Default::default()).unwrap()).unwrap();
-    package::session::PreparedSession::prepare(&capture,serde_json::json!({}),&cancelled).unwrap().write(&mut File::create(&recovery_path).unwrap(),&cancelled).unwrap();
-    drop((reopened,capture));
-    let recovery_budget=budget();
-    let recovered=package::session::open_with_budget(backing(&recovery_path),limits(&recovery_budget),&cancelled,&Default::default(),recovery_budget.clone()).unwrap();
+    let mut store=pollster::block_on(package::session_store::SessionStore::open(&recovery_path)).unwrap();
+    pollster::block_on(store.checkpoint(&capture,serde_json::json!({}).into(),&cancelled)).unwrap();
+    drop((reopened,capture,store));
+    let recovery_budget=budget();let cache=crate::tile_io::ReadCache::new(recovery_budget.clone());
+    let mut store=pollster::block_on(package::session_store::SessionStore::open_with_cache(&recovery_path,cache)).unwrap();
+    let recovered=pollster::block_on(store.load_with_budget(limits(&recovery_budget),&cancelled,recovery_budget.clone())).unwrap().unwrap();
     assert_roundtrip(&recovered.editor, &original, &source_ids, &source_digests);
     let image=recovered.editor.document().artwork.images().unwrap();
     assert_eq!(image.values().next().unwrap().tiles.values().map(|tile|tile.resource_id()).collect::<Vec<_>>(),source_ids);
     assert_eq!(recovery_budget.snapshot().reserved_bytes,0);
-    assert!(recovery_budget.snapshot().ram_pinned_bytes>512*1024*1024);
+    let pinned=recovery_budget.snapshot().ram_pinned_bytes;
+    assert!(pinned>0);assert!(pinned<512*1024*1024);
+    assert_eq!(recovered.editor.retained_tiles().resident_bytes(),0);
 }
 
 #[test]
@@ -444,12 +448,12 @@ fn pressure_durability_releases_captured_tile_pins_before_a_store_read() {
     let expected = tile.decode_on_worker().unwrap();
     let path = Files(std::env::temp_dir().join(format!("capy-durable-accounting-{}", crate::PortableId::random())));
     let reads = crate::tile_io::ReadCache::new(memory.clone());
-    let mut store = package::session_store::SessionStore::open_with_cache(&path.0, reads).unwrap();
+    let mut store = pollster::block_on(package::session_store::SessionStore::open_with_cache(&path.0, reads)).unwrap();
     memory.flush_reports();
     let pressure = memory.admit_import(memory.import_headroom_bytes()).unwrap();
     assert_eq!(memory.import_headroom_bytes(), 0);
     let before = memory.snapshot().ram_pinned_bytes;
-    let released = store.make_durable(&retained, &AtomicBool::new(false)).unwrap() as u64;
+    let released = pollster::block_on(store.make_durable(&retained, &AtomicBool::new(false))).unwrap() as u64;
     assert!(released > 0);
     assert_eq!(retained.resident_bytes(), 0);
     memory.flush_reports();

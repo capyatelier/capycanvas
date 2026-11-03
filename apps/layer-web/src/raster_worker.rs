@@ -68,16 +68,12 @@ pub(super) fn install(renderer: &mut WgpuRasterizer) {
     renderer.set_browser_image_decoder(Rc::new(|source, coordinate, destination| Box::pin(async move {
         documents::yield_browser().await.map_err(|e|format!("{e:?}"))?;
         let tile=source.tiles.get(&coordinate).ok_or("Missing immutable image tile")?;
-        let start=js_sys::Date::now();
-        while !matches!(tile.poll_compressed()?, layer_core::package::RangeState::Ready(_)) {
-            if js_sys::Date::now()-start>30_000. {return Err("Image backing timed out".into());}
-            documents::yield_browser().await.map_err(|e|format!("{e:?}"))?;
-        }
+        let compressed=tile.read_compressed().await?;
         let mut profiles=Vec::new();
         let profile=layer_core::color::ProfileReference::detach(&source.interpretation.profile,&mut profiles);
         let interpretation=source.interpretation.clone().with_profile(profile);
         let buffers=js_sys::Array::new();
-        buffers.push(&js_sys::Uint8Array::from(tile.compressed_on_worker()?.as_ref()));
+        buffers.push(&js_sys::Uint8Array::from(compressed.as_ref()));drop(compressed);
         let mut chunks=Vec::new();
         for profile in profiles {
             let mut count=0;
@@ -100,13 +96,9 @@ pub(super) fn install(renderer: &mut WgpuRasterizer) {
     })));
     renderer.set_browser_raster_decoder(Rc::new(|blob,space,_destination| Box::pin(async move {
         documents::yield_browser().await.map_err(|e|format!("{e:?}"))?;
-        let start=js_sys::Date::now();
-        while !matches!(blob.poll_compressed()?, layer_core::package::RangeState::Ready(_)) {
-            if js_sys::Date::now()-start>30_000. {return Err("Image backing timed out".into());}
-            documents::yield_browser().await.map_err(|e|format!("{e:?}"))?;
-        }
+        let compressed=blob.read_compressed().await?;
         let buffers=js_sys::Array::new();
-        buffers.push(&js_sys::Uint8Array::from(blob.compressed_on_worker()?.as_ref()));
+        buffers.push(&js_sys::Uint8Array::from(compressed.as_ref()));
         let metadata=serde_json::to_string(&ImageDecode::Raster {descriptor:blob.descriptor,space}).map_err(|e|e.to_string())?;
         let result=JsFuture::from(call("image-decode",&metadata,&buffers).map_err(|e|format!("{e:?}"))?).await.map_err(|e|format!("{e:?}"))?;
         let bytes=result.dyn_into::<js_sys::Uint8Array>().map_err(|_|"Missing prepared image pixels")?.to_vec();
@@ -320,7 +312,7 @@ pub fn raster_worker_encode(metadata: &str, bytes: &[u8]) -> Result<Vec<u8>, JsV
     for tile in encode_tiles(bytes, descriptors).map_err(js)? {
         result.extend_from_slice(&(tile.compressed_len() as u32).to_le_bytes());
         result.extend_from_slice(&tile.encoded_fingerprint().ok_or_else(||js("Missing encoded raster fingerprint"))?);
-        result.extend_from_slice(&tile.compressed_on_worker().map_err(js)?);
+        result.extend_from_slice(&tile.memory_compressed().map_err(js)?.ok_or_else(||js("Encoded raster bytes are unavailable"))?);
     }
     Ok(result)
 }

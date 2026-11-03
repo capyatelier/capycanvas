@@ -687,6 +687,7 @@ impl Scene {
         }
         Ok(())
     }
+    #[cfg(not(target_arch="wasm32"))]
     pub fn restore_native_scalars(
         &mut self,
         r: &mut WgpuRasterizer,
@@ -2195,7 +2196,7 @@ impl Scene {
         encoder: &mut crate::submission::CommandEncoder,
         grid: Option<[u32;4]>,
     ) -> Result<(), GpuRasterError> {
-        if !r.snapshot_worker {
+        if !r.snapshot_worker || cfg!(target_arch="wasm32") {
             let mut pending=false;
             for job in &self.jobs {
                 if let Job::DecodedTile(source)=job && source.prepared().is_none() {source.prepare(r)?;pending=true;}

@@ -170,13 +170,13 @@ fn aliased_tiles_share_store_location_and_release_the_last_owner() {
     assert_eq!(retained.resident_bytes(),0);
     assert_eq!(first.decode_on_worker().unwrap(),second.decode_on_worker().unwrap());
     assert_eq!(retained.resident_bytes(),0);
-    assert_eq!(store.store.make_durable(&retained,&cancelled).unwrap(),0);
+    assert_eq!(pollster::block_on(store.store.make_durable(&retained,&cancelled)).unwrap(),0);
     let input=Store::range(&second);
     drop(retained);drop(first);
     assert!(weak_storage.upgrade().is_some());assert!(weak_location.upgrade().is_some());
     assert_eq!(second.decode_on_worker().unwrap(),vec![42;second.descriptor.byte_len([TILE_SIZE;2]).unwrap()]);
     drop(second);assert!(weak_storage.upgrade().is_none());
-    store.store.collect_garbage().unwrap();
+    pollster::block_on(store.store.collect_garbage()).unwrap();
     assert!(weak_location.upgrade().is_none());
     assert!(!input.is_empty());
 }

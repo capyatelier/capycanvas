@@ -1,3 +1,4 @@
+import {createFileHandleStore} from './file-handles.js';
 import { liveCopy, bindCopy } from './localization.js';
 import {createDrawingTabs} from './drawing-tabs.js';
 import {createDocumentRecovery} from './document-recovery.js';
@@ -373,15 +374,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
       wake();await new Promise(resolve=>setTimeout(resolve,8));
     }
   }
-  let spilling=null;
-  function trim(){
-    if(spilling)return spilling;
-    const run=async()=>{
-      try{while(await app.spill_document_tiles()){}app.document_storage_result();}
-      catch(error){const detail=String(error);app.document_storage_result(detail);message(()=>app.document_storage_retained(detail));}
-    };
-    spilling=run().finally(()=>spilling=null);return spilling;
-  }
+  const trim=()=>app.await_document_trim().catch(error=>{const detail=String(error);message(()=>app.document_storage_retained(detail));});
   async function transition(action){
     if(changing)throw transportFailure("change_in_progress");
     changing=true;tabs.cancel();
@@ -479,27 +472,32 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     if(active.size||batching||changing||closing||document.querySelector('dialog[open]'))throw transportFailure("open_drawings_operation");
     await openBatch(files.map(value=>value.file?value:{file:value}));
   }
-  async function restoreSession(checkpoint,buffers,recovered,initial,storedHandles,activate,identity) {
+  const handleStore=createFileHandleStore();
+  async function restoreSession(key,recovered,initial,activate,identity) {
     const observe=async location=>{
-      const handle=storedHandles.find(saved=>saved.uri===location?.uri)?.handle;
+      const handle=location?.uri?await handleStore.read(location.uri):null;
       if(!handle)return null;
       try {
         if(await handle.queryPermission({mode:'read'})!=='granted')return null;
         return await rasterWorker({operation:'fingerprint',file:await handle.getFile(),buffers:[]});
       } catch {return null;}
     };
-    let candidate=await app.prepare_session_restart(checkpoint,buffers,recovered,observe);
+    let candidate=await app.prepare_session_restart(key,recovered,observe);
+    if(!candidate)return null;
     try {
       while(closing||changing)await new Promise(resolve=>setTimeout(resolve,50));
       const replace=activate&&app.session_can_replace_startup(initial);
       let adopted;
       const publish=()=>{const prepared=candidate;candidate=null;adopted=app.adopt_session_restart(prepared,initial,BigInt(identity),activate);applyChange(adopted.change);};
       if(replace)await transition(publish);else publish();
-      for(const {uri,handle} of storedHandles){if(handle)handles.set(uri,handle);}
+      const state=app.session_stamp_for(BigInt(adopted.id)).state;
+      for(const uri of new Set([state.location?.uri,state.last_export?.location.uri])) {
+        if(uri){const handle=await handleStore.read(uri);if(handle)handles.set(uri,handle);}
+      }
       return adopted.id;
     } finally {candidate?.free();}
   }
-  const recovery=createDocumentRecovery({app,call:rasterWorker,message,restore:restoreSession,settled:trim,
+  const recovery=createDocumentRecovery({app,message,restore:restoreSession,remember:rows=>handleStore.remember(rows),settled:trim,
     reserve:ids=>app.reserve_session_ids(ids.map(BigInt)),failed:detail=>dialog(()=>bootstrap.recovery.attention,(form,finish)=>{form.append(element('p','',()=>bootstrap.recovery.explanation));if(detail)form.append(element('p','diagnostic-detail',detail));const footer=element('footer');footer.append(button(()=>bootstrap.recovery.later,()=>finish('later')),button(()=>bootstrap.recovery.discard,()=>finish('discard')),button(()=>bootstrap.recovery.retry,()=>finish('retry'),'suggested-action'));form.append(footer);}),
     handles:id=>{const state=app.session_stamp_for(BigInt(id)).state;return [...new Set([state.location?.uri,state.last_export?.location.uri])].flatMap(uri=>{const handle=handles.get(uri);return typeof FileSystemFileHandle!=='undefined'&&handle instanceof FileSystemFileHandle?[{uri,handle}]:[];});},order:order=>applyChange(app.restore_session_order(order)),
     canOffer:()=>canvasReady()&&!document.hidden&&!active.size&&!batching&&!changing&&!closing&&!document.querySelector('dialog[open]')&&app.document_park_ready()});

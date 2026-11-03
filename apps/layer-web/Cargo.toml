@@ -6,6 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+layer-host = { path = "../../crates/layer-host" }
 layer-core = { path = "../../crates/layer-core" }
 layer-color = { path = "../../crates/layer-color" }
 layer-engine = { path = "../../crates/layer-engine" }

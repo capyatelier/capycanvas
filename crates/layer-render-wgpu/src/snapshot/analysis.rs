@@ -111,9 +111,17 @@ impl SnapshotGpu {
                     control.check().map_err(|e| e.to_string())?;
                     let blob = tile.wait_backing_cancellable(control.cancellation_flag())?;
                     let page = crate::layer_masks::MaskPage::new(&r.device);
+                    #[cfg(not(target_arch="wasm32"))]
                     r.restore_native_scalars(&[crate::native_tiles::scalar::NativeScalarRestore {
                         blob: &blob, working: &page.texture,
                     }]).map_err(|e| e.to_string())?;
+                    #[cfg(target_arch="wasm32")]
+                    {
+                        let space = r.document_color().space;
+                        let pixels = r.browser_raster_decoder.as_ref().ok_or("Raster preparation worker unavailable")?(blob.clone(),space,space).await?;
+                        let scene::sources::PreparedSourcePixels::NativeSamples(samples) = pixels else {return Err("Coverage requires native samples".into());};
+                        r.submit_restore(|r,_,encoder| crate::native_tiles::scalar::upload_coverage(r,encoder,&page.texture,blob.descriptor.depth(),&samples,4)).map_err(|e|e.to_string())?;
+                    }
                     r.layer_masks.pages.insert((target, key.coordinate), page);
                 }
             }

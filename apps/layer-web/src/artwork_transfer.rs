@@ -11,20 +11,14 @@ struct Envelope {transfer:TransferDescriptor,chunks:Vec<usize>}
 
 pub(super) async fn wait_backing(artwork:&Artwork)->Result<(),JsValue>{wait_backing_cancellable(artwork,None).await}
 pub(super) async fn wait_backing_cancellable(artwork:&Artwork,control:Option<&layer_render_wgpu::snapshot::CaptureControl>)->Result<(),JsValue>{
-    let start=js_sys::Date::now();
-    loop {
-        if control.is_some_and(|c|c.is_cancelled()){return Err(js("Operation cancelled"));}
-        let mut ready=true;
-        for raster in artwork.paint.iter().map(|(_,_,p)|&p.raster).chain(artwork.coverage.iter().map(|(_,_,p)|&p.raster)) {
-            match raster.try_data(){None=>ready=false,Some(Err(e))=>return Err(js(e)),Some(Ok(data))=>{
-                for tile in data.tiles.values(){match tile.try_backing(){None=>ready=false,Some(Err(e))=>return Err(js(e)),Some(Ok(blob))=>ready &=matches!(blob.poll_compressed().map_err(js)?, layer_core::package::RangeState::Ready(_)),}}
-            }}
+    for raster in artwork.paint.iter().map(|(_,_,paint)|&paint.raster).chain(artwork.coverage.iter().map(|(_,_,coverage)|&coverage.raster)) {
+        if control.is_some_and(|control|control.is_cancelled()) {return Err(js("Operation cancelled"));}
+        let data=raster.await_data().await.map_err(js)?;
+        for tile in data.tiles.values() {
+            if control.is_some_and(|control|control.is_cancelled()) {return Err(js("Operation cancelled"));}
+            tile.await_backing().await.map_err(js)?;
         }
-        for image in artwork.images().map_err(js)?.values(){for tile in image.tiles.values(){ready &=matches!(tile.poll_compressed().map_err(js)?, layer_core::package::RangeState::Ready(_));}}
-        if ready{return Ok(());}
-        if js_sys::Date::now()-start>30_000.{return Err(js("Raster backing timed out"));}
-        documents::yield_browser().await?;
-    }
+    }Ok(())
 }
 
 pub(super) async fn pack(artwork:Artwork)->Result<JsValue,JsValue>{pack_scene(artwork,None).await}
@@ -40,7 +34,7 @@ async fn pack_with_selection(capture:ArtworkCapture,selection:Option<layer_core:
     for index in 0..transfer.payload_count(){
         let len=usize::try_from(transfer.payload_len(index).map_err(js)?).map_err(js)?;let mut count=0;
         for offset in (0..len).step_by(BLOCK){
-            let bytes=transfer.read_chunk(index,offset as u64,(len-offset).min(BLOCK)).map_err(js)?;
+            let bytes=transfer.read_chunk_async(index,offset as u64,(len-offset).min(BLOCK)).await.map_err(js)?;
             buffers.push(&js_sys::Uint8Array::from(bytes.as_slice()));count+=1;
             documents::yield_browser().await?;
         }

@@ -29,7 +29,7 @@ fn collect_stores()->Result<(),String> {
             reachable.extend(manifest.drawings.into_iter().map(|drawing|drawing.key));
         }
     }
-    layer_core::package::session_store::collect_unreferenced_stores(&root,&reachable,&AtomicBool::new(false))?;
+    pollster::block_on(layer_core::package::session_store::collect_unreferenced_stores(&root,&reachable,&AtomicBool::new(false)))?;
     Ok(())
 }
 

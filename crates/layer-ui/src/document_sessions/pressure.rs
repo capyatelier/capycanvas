@@ -1,13 +1,16 @@
 use super::*;
 use layer_core::MemoryReport;
 use std::sync::{Arc,Mutex};
-#[cfg(not(target_arch="wasm32"))]
 use std::sync::Weak;
 
+#[cfg(not(target_arch="wasm32"))]
+pub type PressureWake=Arc<dyn Fn()+Send+Sync>;
+#[cfg(target_arch="wasm32")]
+pub type PressureWake=Arc<dyn Fn()>;
 #[derive(Clone)]
 pub struct StoragePressure(Arc<Pressure>);
 struct Pressure {owner:MemoryOwner,memory:MemoryBudget,state:Mutex<PressureState>}
-struct PressureState {candidates:Vec<(u64,u64,RetainedTiles)>,resident:usize,limit:usize,revision:u64,generation:u64,running:bool,wait:Option<TrimWait>,error:Option<String>,wake:Option<Arc<dyn Fn()+Send+Sync>>}
+struct PressureState {candidates:Vec<(u64,u64,RetainedTiles)>,resident:usize,limit:usize,revision:u64,generation:u64,running:bool,wait:Option<TrimWait>,error:Option<String>,wake:Option<PressureWake>}
 impl Pressure {
     fn allowance(&self,state:&PressureState)->usize {state.limit.min(self.owner.grant().ram_bytes.min(usize::MAX as u64) as usize)}
     fn notify(&self) {
@@ -31,14 +34,24 @@ impl StoragePressure {
         let pressure=Self(Arc::new(Pressure {owner:owner.clone(),memory,state:Mutex::new(PressureState {candidates:Vec::new(),resident:0,limit:usize::MAX,revision:0,generation:0,running:false,wait:None,error:None,wake:None})}));
         #[cfg(not(target_arch="wasm32"))]
         {let weak=Arc::downgrade(&pressure.0);owner.set_wake(Arc::new(move ||Self::notify(&weak)));}
+        #[cfg(target_arch="wasm32")]
+        {
+            thread_local! {static SOURCES:std::cell::RefCell<std::collections::BTreeMap<u64,Weak<Pressure>>>=const {std::cell::RefCell::new(std::collections::BTreeMap::new())};}
+            static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);
+            let id=NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+            SOURCES.with_borrow_mut(|sources|{sources.retain(|_,source|source.strong_count()!=0);sources.insert(id,Arc::downgrade(&pressure.0));});
+            owner.set_wake(Arc::new(move || {
+                let source=SOURCES.with_borrow(|sources|sources.get(&id).cloned());
+                if let Some(source)=source {Self::notify(&source);}
+            }));
+        }
         pressure
     }
-    #[cfg(not(target_arch="wasm32"))]
     fn notify(weak:&Weak<Pressure>) {
         if let Some(source)=weak.upgrade() {source.notify();}
     }
     pub fn same_source(&self,other:&Self)->bool {Arc::ptr_eq(&self.0,&other.0)}
-    pub fn subscribe(&self,wake:Arc<dyn Fn()+Send+Sync>)->u64 {
+    pub fn subscribe(&self,wake:PressureWake)->u64 {
         let (generation,wait)={let mut state=self.0.state.lock().unwrap();state.generation=state.generation.wrapping_add(1);state.wake=Some(wake);state.running=false;(state.generation,state.wait.take())};
         if let Some(wait)=wait {wait.complete(Err("Drawing storage owner changed".into()));}generation
     }
@@ -63,8 +76,7 @@ impl StoragePressure {
     pub fn wait(&self)->Option<TrimWait> {self.0.state.lock().unwrap().wait.clone()}
     pub fn in_flight(&self)->bool {self.0.state.lock().unwrap().wait.is_some()}
     pub fn error(&self)->Option<String> {self.0.state.lock().unwrap().error.clone()}
-    #[cfg(not(target_arch="wasm32"))]
-    pub(super) fn storage_completed(&self,result:Result<(),String>) {
+    pub fn storage_completed(&self,result:Result<(),String>) {
         self.0.state.lock().unwrap().error=result.err();self.0.notify();
     }
     pub(super) fn update(&self,candidates:Vec<(u64,u64,RetainedTiles)>,resident:usize,limit:usize) {

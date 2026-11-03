@@ -229,7 +229,11 @@ impl WorkingDecoder {
         if tile.descriptor != self.source.descriptor() {
             return Err("Source tile has the wrong sample representation".into());
         }
-        self.decode_pixels(&cache.decode_on_worker(tile)?, output)?;
+        #[cfg(not(target_arch="wasm32"))]
+        let pixels=cache.decode_on_worker(tile)?;
+        #[cfg(target_arch="wasm32")]
+        let pixels=cache.decode_bytes_on_worker(tile,&tile.memory_compressed()?.ok_or("ICC input bytes were not supplied to the worker")?)?;
+        self.decode_pixels(&pixels, output)?;
         let origin =
             coordinate.map(|v| v.checked_mul(TILE_SIZE).ok_or("Invalid source coordinate"));
         let [x, y] = [origin[0]?, origin[1]?];

@@ -1050,7 +1050,7 @@ fn native_session_restart_saved_origins() {
     switch(&w,3);assert!(state(&w).document_file.modified);assert!(!state(&w).document_file.recovered);
     w.documents.select(&w,3,true);until(||w.window.visible_dialog().is_some(),"changed saved original close asks");
     new_photo::response(&w,"cancel");until(||!w.servicing.get(),"changed-origin cancel acknowledged");
-    assert_eq!(w.documents.len(),2);assert!(w.recovery().published_path().join("head.json").exists());
+    assert_eq!(w.documents.len(),2);assert!(["head.0", "head.1"].into_iter().any(|name| w.recovery().published_path().join(name).exists()));
     assert_eq!(std::fs::read(&paths[2]).unwrap(),external);
     w.documents.select(&w,3,true);until(||w.window.visible_dialog().is_some(),"changed saved original close asks again");
     new_photo::response(&w,"discard");until(||w.documents.len()==1&&!w.documents.changing.get(),"explicit discard retires changed-origin session");
@@ -1089,10 +1089,10 @@ fn native_document_tabs_blocked_writer_keeps_canvas_live() {
     let (locked_tx, locked_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let lock = std::thread::spawn(move || {
-        store.on_worker(|_| {
+        pollster::block_on(store.with_store(async |_| {
             locked_tx.send(()).unwrap();
             Ok(release_rx.recv_timeout(std::time::Duration::from_secs(30)).is_ok())
-        }).unwrap()
+        })).unwrap()
     });
     locked_rx.recv().unwrap();
     new_photo::invoke(&w, CommandId::AddLayer);

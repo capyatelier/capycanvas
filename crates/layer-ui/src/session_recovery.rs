@@ -1,5 +1,7 @@
 use super::*;
-use layer_core::{authored::ArtworkCapture, package::{ImmutableBacking, session::{EditorCapture, PreparedSession, OpenSession, SessionMetadata}}, PortableId, ProjectLimits};
+use layer_core::{authored::ArtworkCapture, package::{ImmutableBacking, session::{EditorCapture, OpenSession, SessionMetadata}}, PortableId, ProjectLimits};
+#[path="session_import.rs"]
+pub mod import;
 use std::{collections::BTreeSet, sync::atomic::AtomicBool};
 
 pub const CHECKPOINT_INTERVAL_MS: u64 = 2_000;
@@ -126,19 +128,19 @@ impl SessionCapture {
         if let Some(last)=&self.state.last_export {resolve_export(last,&self.profiles)?.recipe.validate().map_err(|_|"Invalid session export recipe")?;} else if !self.profiles.is_empty() {return Err("Unused session export profile".into());}
         Ok(SessionMetadata {value:serde_json::to_value(&self.state).map_err(|e|e.to_string())?,profiles:self.profiles.clone()})
     }
-    #[cfg(not(target_arch="wasm32"))]
-    pub fn checkpoint(&self,store:&mut layer_core::package::session_store::SessionStore,cancel:&AtomicBool)->Result<PortableId,String> {
-        store.checkpoint(&self.editor,self.metadata()?,cancel)
+    pub async fn checkpoint(&self,store:&mut layer_core::package::session_store::SessionStore,cancel:&AtomicBool)->Result<PortableId,String> {
+        store.checkpoint(&self.editor,self.metadata()?,cancel).await
     }
-    pub fn prepare(&self,cancel:&AtomicBool)->Result<PreparedSession,String> {
-        let metadata=self.metadata()?;
-        PreparedSession::prepare(&self.editor,metadata,cancel)
-    }
+
 }
 
 pub struct SessionRestore {pub editor:layer_core::Editor,pub state:SessionDocumentState,last_export:Option<ExportRepeat>,adoption:Option<StoreAdoption>}
+#[cfg(not(target_arch="wasm32"))]
+pub type StoreAdoptionNotify=Box<dyn FnOnce(SessionStamp)+Send>;
+#[cfg(target_arch="wasm32")]
+pub type StoreAdoptionNotify=Box<dyn FnOnce(SessionStamp)>;
 struct StoreAdoption {
-    artwork:PortableId,revision:u64,working:u64,checkpoint:u64,notify:Box<dyn FnOnce(SessionStamp)+Send>,
+    artwork:PortableId,revision:u64,working:u64,checkpoint:u64,notify:StoreAdoptionNotify,
 }
 impl StoreAdoption {
     fn apply(self,stamp:&SessionStamp) {
@@ -146,9 +148,9 @@ impl StoreAdoption {
     }
 }
 impl SessionRestore {
-    pub fn on_adopted(mut self,notify:impl FnOnce(SessionStamp)+Send+'static)->Self {
+    pub fn on_adopted(mut self,notify:StoreAdoptionNotify)->Self {
         let document=self.editor.document();
-        self.adoption=Some(StoreAdoption {artwork:document.artwork.id,revision:document.revision,working:document.working.generation,checkpoint:self.editor.checkpoint(),notify:Box::new(notify)});self
+        self.adoption=Some(StoreAdoption {artwork:document.artwork.id,revision:document.revision,working:document.working.generation,checkpoint:self.editor.checkpoint(),notify});self
     }
     fn decode_metadata(metadata:SessionMetadata)->Result<(SessionDocumentState,Option<ExportRepeat>),String> {
         let SessionMetadata {value,profiles}=metadata;
@@ -274,6 +276,17 @@ pub struct SessionManifest {
     pub blocked:Vec<u64>,
 }
 impl SessionManifest {
+    pub async fn read_index(store:&layer_core::package::session_store::MetadataStore)->Result<Option<Self>,String> {
+        store.read().await?.map(|bytes|Self::parse(&bytes)).transpose()
+    }
+    pub async fn publish_index(&self,store:&layer_core::package::session_store::MetadataStore)->Result<(),String> {
+        self.validate()?;
+        if let Some(previous)=Self::read_index(store).await? {
+            if previous==*self {return Ok(());}
+            if self.generation<=previous.generation {return Err("A newer session checkpoint is already stored".into());}
+        }
+        store.publish(&serde_json::to_vec(self).map_err(|error|error.to_string())?).await
+    }
     pub fn validate(&self)->Result<(),String> {
         let mut ids=BTreeSet::new();let mut keys=BTreeSet::new();
         if self.generation>MAX_SESSION_DRAWING_ID || self.drawings.len()>MAX_SESSION_DRAWINGS || self.drawings.iter().any(|drawing|drawing.id==0 || drawing.id>MAX_SESSION_DRAWING_ID
@@ -451,7 +464,7 @@ pub fn session_manifest_update(state:&str,event:SessionManifestEvent)->Result<Se
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::session::test_support::{session,layer,invoke,Recorder};
     use std::sync::Arc;
@@ -460,13 +473,26 @@ mod tests {
         SessionManifest::default().reconcile(vec![SessionDrawing{id:7,key:"drawing-a".into()},SessionDrawing{id:2,key:"drawing-b".into()}],2,false).unwrap()
     }
     fn attempt(manifest:&SessionManifest,id:u64)->SessionRestoreAttempt {*manifest.restoring.iter().find(|attempt|attempt.id==id).unwrap()}
-    fn encode(session:&UiSession<Recorder>)->Vec<u8> {
-        let cancel=AtomicBool::new(false);let mut bytes=Vec::new();
-        session.capture_session().unwrap().prepare(&cancel).unwrap().write(&mut bytes,&cancel).unwrap();bytes
+    pub(crate) struct StoredSession(std::path::PathBuf);
+    impl Drop for StoredSession {
+        fn drop(&mut self) {let _=std::fs::remove_dir_all(&self.0);}
     }
-    fn restore(bytes:&[u8],interrupted:bool)->UiSession<Recorder> {
-        let source=ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap();
-        let restored=SessionRestore::open(source,ProjectLimits::default(),&AtomicBool::new(false)).unwrap();
+    impl StoredSession {
+        fn capture(capture:&SessionCapture,cancel:&AtomicBool)->Result<Self,String> {
+            let saved=Self(std::env::temp_dir().join(format!("capy-ui-session-{}",PortableId::random())));
+            let mut store=pollster::block_on(layer_core::package::session_store::SessionStore::open(&saved.0))?;
+            pollster::block_on(capture.checkpoint(&mut store,cancel))?;Ok(saved)
+        }
+        pub(crate) fn load(&self)->SessionRestore {
+            let mut store=pollster::block_on(layer_core::package::session_store::SessionStore::open(&self.0)).unwrap();
+            SessionRestore::from_core(pollster::block_on(store.load(ProjectLimits::default(),&AtomicBool::new(false))).unwrap().unwrap()).unwrap()
+        }
+    }
+    pub(crate) fn checkpoint<R:CanvasRenderer>(session:&UiSession<R>)->StoredSession {
+        StoredSession::capture(&session.capture_session().unwrap(),&AtomicBool::new(false)).unwrap()
+    }
+    fn restore(saved:&StoredSession,interrupted:bool)->UiSession<Recorder> {
+        let restored=saved.load();
         let mut session=UiSession::from_project(Recorder::default(),restored.document().clone(),None,[500,400],Platform::Gtk).unwrap();
         session.frame(0,0).unwrap();let observed=restored.state.destination.clone();session.restore_session(restored,interrupted,observed).unwrap();session
     }
@@ -477,9 +503,8 @@ mod tests {
         session.complete_document_request(request,Ok(success)).unwrap();
         if success {let location=session.state.document_file.location.clone().unwrap();session.record_destination_fingerprint(&location,DestinationFingerprint::read(&b"saved master"[..]).unwrap()).unwrap();}
     }
-    fn restore_observed(bytes:&[u8],observed:Option<DestinationFingerprint>)->UiSession<Recorder> {
-        let source=ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap();
-        let restored=SessionRestore::open(source,ProjectLimits::default(),&AtomicBool::new(false)).unwrap();
+    fn restore_observed(saved:&StoredSession,observed:Option<DestinationFingerprint>)->UiSession<Recorder> {
+        let restored=saved.load();
         let mut session=UiSession::from_project(Recorder::default(),restored.document().clone(),None,[500,400],Platform::Gtk).unwrap();
         session.frame(0,0).unwrap();session.restore_session(restored,false,observed).unwrap();session
     }
@@ -487,12 +512,12 @@ mod tests {
     fn restored_saved_drawing_requires_matching_original_before_clean_close() {
         let mut source=session(Platform::Gtk);source.frame(0,0).unwrap();
         layer(&mut source,LayerAction::New{group:false,clipped:false});source.frame(1,1).unwrap();save(&mut source,true);
-        let saved=source.files.saved_checkpoint;let expected=source.files.destination.clone().unwrap();let bytes=encode(&source);
-        let mut intact=restore_observed(&bytes,Some(expected.clone()));assert!(!intact.state.document_file.modified);
+        let saved=source.files.saved_checkpoint;let expected=source.files.destination.clone().unwrap();let stored=checkpoint(&source);
+        let mut intact=restore_observed(&stored,Some(expected.clone()));assert!(!intact.state.document_file.modified);
         intact.request_document_close().unwrap();assert!(intact.state.document_file.close_ready);assert!(intact.state.requests.is_empty());
         let changed=DestinationFingerprint::read(&b"other master"[..]).unwrap();assert_eq!(changed.bytes,expected.bytes);
         for observed in [None,Some(changed)] {
-            let mut protected=restore_observed(&bytes,observed.clone());assert!(protected.state.document_file.modified);
+            let mut protected=restore_observed(&stored,observed.clone());assert!(protected.state.document_file.modified);
             assert_eq!(protected.files.saved_checkpoint,saved);assert_eq!(protected.files.destination,Some(expected.clone()));
             assert!(!protected.destination_matches(observed.as_ref()));
             protected.request_document_close().unwrap();let request=protected.state.requests.last().unwrap().id;
@@ -502,15 +527,15 @@ mod tests {
             save(&mut protected,false);assert!(protected.state.document_file.modified);
             save(&mut protected,true);assert!(!protected.state.document_file.modified);
         }
-        source.files.destination=None;let no_expected=restore_observed(&encode(&source),Some(expected));assert!(no_expected.state.document_file.modified);
-        let mut blank=session(Platform::Gtk);blank.frame(0,0).unwrap();assert!(!restore_observed(&encode(&blank),None).state.document_file.modified);
+        source.files.destination=None;let no_expected=restore_observed(&checkpoint(&source),Some(expected));assert!(no_expected.state.document_file.modified);
+        let mut blank=session(Platform::Gtk);blank.frame(0,0).unwrap();assert!(!restore_observed(&checkpoint(&blank),None).state.document_file.modified);
     }
     #[test]
     fn restored_export_again_retains_recipe_target_and_saved_checkpoint() {
         let mut source=session(Platform::Gtk);source.frame(0,0).unwrap();save(&mut source,true);
         let remembered=ExportRepeat {recipe:ExportRecipe::web_share(),location:DocumentLocation {uri:"private:export.png".into(),name:"Export.png".into()}};
         source.files.last_export=Some(remembered.clone());
-        let mut restored=restore(&encode(&source),false);let checkpoint=restored.engine.checkpoint();let saved=restored.files.saved_checkpoint;
+        let mut restored=restore(&checkpoint(&source),false);let checkpoint=restored.engine.checkpoint();let saved=restored.files.saved_checkpoint;
         assert!(!restored.state.document_file.modified);assert_eq!(restored.state.document_file.export_uri.as_deref(),Some("private:export.png"));
         for result in [Ok(false),Err("private export failed".into())] {
             invoke(&mut restored,CommandId::ExportAgain);let request=restored.state.requests.last().unwrap().id;
@@ -525,14 +550,14 @@ mod tests {
         #[cfg(not(target_arch="wasm32"))]
         {
             let path=std::env::temp_dir().join(format!("capy-invalid-export-{}",PortableId::random()));
-            let mut store=layer_core::package::session_store::SessionStore::open(&path).unwrap();
-            assert!(malformed.checkpoint(&mut store,&AtomicBool::new(false)).is_err());
+            let mut store=pollster::block_on(layer_core::package::session_store::SessionStore::open(&path)).unwrap();
+            assert!(pollster::block_on(malformed.checkpoint(&mut store,&AtomicBool::new(false))).is_err());
             assert!(store.generation().is_none());
             drop(store);std::fs::remove_dir_all(path).unwrap();
         }
         let mut metadata=capture.metadata().unwrap();metadata.value=serde_json::to_value(&malformed.state).unwrap();
         let opened=OpenSession {editor:layer_core::Editor::new(source.engine.document().clone()),metadata};
-        assert_eq!(SessionRestore::validate_core(&opened),Err("Invalid session export recipe".into()));assert!(malformed.prepare(&AtomicBool::new(false)).is_err());
+        assert_eq!(SessionRestore::validate_core(&opened),Err("Invalid session export recipe".into()));assert!(StoredSession::capture(&malformed,&AtomicBool::new(false)).is_err());
         for kind in 0..4 {
             let mut value=original.clone();match kind {
                 0=>{value.as_object_mut().unwrap().remove("last_export");},
@@ -554,12 +579,13 @@ mod tests {
         source.files.last_export=Some(ExportRepeat {recipe,location:DocumentLocation {uri:"private:export.png".into(),name:"Export.png".into()}});
         let capture=source.capture_session().unwrap();assert!(serde_json::to_vec(&source.session_stamp()).unwrap().len()<4096);
         assert!(serde_json::to_vec(&capture.metadata().unwrap().value).unwrap().len()<4096);
-        let prepared=capture.prepare(&cancel).unwrap();assert!(prepared.metadata().len()<8192);
-        let root=std::env::temp_dir().join(format!("capy-export-profile-{id}"));let mut store=layer_core::package::session_store::SessionStore::open(&root).unwrap();
-        capture.checkpoint(&mut store,&cancel).unwrap();let count=std::fs::read_dir(root.join("packs")).unwrap().count();assert_eq!(count,1);
-        source.state.camera.zoom_to(1.25).unwrap();source.capture_session().unwrap().checkpoint(&mut store,&cancel).unwrap();
+        let root=std::env::temp_dir().join(format!("capy-export-profile-{id}"));let mut store=pollster::block_on(layer_core::package::session_store::SessionStore::open(&root)).unwrap();
+        pollster::block_on(capture.checkpoint(&mut store,&cancel)).unwrap();
+        assert!(std::fs::metadata(root.join("generations").join(format!("{}.json",store.generation().unwrap()))).unwrap().len()<8192);
+        let count=std::fs::read_dir(root.join("packs")).unwrap().count();assert_eq!(count,1);
+        source.state.camera.zoom_to(1.25).unwrap();pollster::block_on(source.capture_session().unwrap().checkpoint(&mut store,&cancel)).unwrap();
         assert_eq!(std::fs::read_dir(root.join("packs")).unwrap().count(),count);
-        let restored=SessionRestore::from_core(store.load(ProjectLimits::default(),&cancel).unwrap().unwrap()).unwrap();
+        let restored=SessionRestore::from_core(pollster::block_on(store.load(ProjectLimits::default(),&cancel)).unwrap().unwrap()).unwrap();
         let ColorProfile::Icc(bytes)=&restored.last_export.as_ref().unwrap().recipe.profile.profile else {panic!("missing ICC")};assert_eq!(bytes.id(),id);assert_eq!(bytes.len(),layer_core::color::source::MAX_PROFILE_BYTES);
         drop(restored);drop(store);drop(source);std::fs::remove_dir_all(root).unwrap();
     }
@@ -574,11 +600,11 @@ mod tests {
         assert!(source.state.document_file.busy);assert!(!source.recovery_document().busy);
         let mut expected=source.capture_session().unwrap().artwork().artwork.as_ref().clone();
         expected.outputs.get_mut(expected.default_output).unwrap().context.elapsed=0.;
-        let mut restored=restore(&encode(&source),false);assert!(!restored.state.document_file.busy);
+        let mut restored=restore(&checkpoint(&source),false);assert!(!restored.state.document_file.busy);
         assert_eq!(restored.engine.document().artwork,expected);assert_eq!(restored.files.saved_checkpoint,saved);
         assert!(restored.state.document_file.modified);invoke(&mut restored,CommandId::Undo);restored.frame(3,3).unwrap();
         assert_eq!(restored.engine.checkpoint(),saved);assert!(!restored.state.document_file.modified);
-        let capture=source.capture_session().unwrap();assert!(capture.prepare(&AtomicBool::new(true)).is_err());
+        let capture=source.capture_session().unwrap();assert!(StoredSession::capture(&capture,&AtomicBool::new(true)).is_err());
         assert!(!source.recovery_document().busy);assert_eq!(source.files.saved_checkpoint,saved);
         source.sdr_gesture=Some(Default::default());assert!(source.recovery_document().busy);assert!(source.capture_session().is_err());source.sdr_gesture=None;
         source.complete_document_request(request,Err("private checkpoint failed".into())).unwrap();
@@ -602,16 +628,16 @@ mod tests {
         layer(&mut source,LayerAction::New{group:false,clipped:false});source.frame(1,1).unwrap();save(&mut source,true);
         let saved=source.engine.checkpoint();
         layer(&mut source,LayerAction::New{group:false,clipped:false});source.frame(2,2).unwrap();
-        let bytes=encode(&source);
-        let ordinary=restore(&bytes,false);assert!(!ordinary.state.document_file.recovered);assert!(ordinary.state.document_file.modified);
-        let mut recovered=restore(&bytes,true);assert!(recovered.state.document_file.recovered);assert_eq!(recovered.files.saved_checkpoint,saved);
+        let stored=checkpoint(&source);
+        let ordinary=restore(&stored,false);assert!(!ordinary.state.document_file.recovered);assert!(ordinary.state.document_file.modified);
+        let mut recovered=restore(&stored,true);assert!(recovered.state.document_file.recovered);assert_eq!(recovered.files.saved_checkpoint,saved);
         assert_eq!(recovered.state.document_file.location,source.state.document_file.location);
         assert_eq!(recovered.engine.document().working,source.engine.document().working);
         invoke(&mut recovered,CommandId::Undo);recovered.frame(3,3).unwrap();assert!(!recovered.state.document_file.modified);
         invoke(&mut recovered,CommandId::Redo);recovered.frame(4,4).unwrap();assert!(recovered.state.document_file.modified);
         save(&mut recovered,false);assert!(recovered.state.document_file.recovered);
         save(&mut recovered,true);assert!(!recovered.state.document_file.recovered);assert!(!recovered.state.document_file.modified);
-        let saved=encode(&recovered);
+        let saved=checkpoint(&recovered);
         let ordinary=restore(&saved,false);assert!(!ordinary.state.document_file.modified);assert!(!ordinary.state.document_file.recovered);
         let mut clean=restore(&saved,true);assert!(!clean.state.document_file.modified);assert!(clean.state.document_file.recovered);
         assert!(clean.state.commands.iter().any(|command|command.id==CommandId::SaveDocument && command.enabled));
@@ -642,7 +668,7 @@ mod tests {
             source.apply_canvas_geometry(&CanvasGeometry::crop(CanvasRect { origin, size }), Vec::new()).unwrap();
             source.frame(1, 1).unwrap();
             let shift = origin.map(i64::from);
-            for mut session in [Box::new(restore(&encode(&source), true)), Box::new(source)] {
+            for mut session in [Box::new(restore(&checkpoint(&source), true)), Box::new(source)] {
                 navigate_rebuilding(&mut session, [[1000; 2], size], shift);
             }
         }
@@ -656,7 +682,7 @@ mod tests {
         source.layer_edit(layer_core::Edit::Batch(edits)).unwrap(); source.frame(1, 1).unwrap();
         assert_ne!(source.engine.document().target_extent(target), [1000; 2], "the paint domain grows by whole tiles");
         assert_eq!(source.engine.document().working.view_origin, [0, 0]);
-        for mut session in [Box::new(restore(&encode(&source), true)), Box::new(source)] {
+        for mut session in [Box::new(restore(&checkpoint(&source), true)), Box::new(source)] {
             navigate_rebuilding(&mut session, [[1000; 2]; 2], [0, 0]);
         }
     }
@@ -665,7 +691,7 @@ mod tests {
         let mut source=session(Platform::Gtk);source.frame(0,0).unwrap();
         source.state.camera.zoom_to(2.).unwrap();source.state.camera.rotation=0.7;source.state.camera.flipped=[true,false];source.state.camera.center_on([122.,345.]);
         let expected=source.session_stamp().state.camera;
-        let restored=restore(&encode(&source),false);let actual=restored.session_stamp().state.camera;
+        let restored=restore(&checkpoint(&source),false);let actual=restored.session_stamp().state.camera;
         assert!((expected.center[0]-actual.center[0]).abs()<0.0001);assert!((expected.center[1]-actual.center[1]).abs()<0.0001);
         assert_eq!(expected.zoom,actual.zoom);assert_eq!(expected.rotation,actual.rotation);assert_eq!(expected.flipped,actual.flipped);
         let mut resized=restored;let mut expected_resize=resized.state.camera.clone();expected_resize.resize([1440,1080]);
@@ -677,7 +703,7 @@ mod tests {
         assert_eq!(serde_json::from_value::<SessionDocumentState>(state).unwrap(),source.session_document_state());
         let mut camera=expected;camera.center[0]=f32::MAX;assert!(camera.restore(&source.state.camera).is_err());
         let mut capture=source.capture_session().unwrap();capture.state.camera=camera;
-        assert!(capture.prepare(&AtomicBool::new(false)).is_err());
+        assert!(StoredSession::capture(&capture,&AtomicBool::new(false)).is_err());
     }
     #[test]
     fn quit_does_not_close_drawing_and_explicit_close_still_requires_decision() {
@@ -816,7 +842,7 @@ mod tests {
         let mut source=session(Platform::Gtk);source.set_viewport([1200.,900.],[2400,1800]).unwrap();source.frame(0,0).unwrap();
         source.state.camera.zoom_to(0.37).unwrap();source.state.camera.rotation=0.2;source.state.camera.center_on([123.,456.]);
         let expected=source.session_stamp().state.camera;
-        let mut restored=restore(&encode(&source),false);
+        let mut restored=restore(&checkpoint(&source),false);
         let mut window=session(Platform::Gtk);window.set_viewport([900.,700.],[1800,1400]).unwrap();window.frame(0,0).unwrap();
         window.finish_workspace_startup();
         window.dispatch(UiAction::SelectBrush {id:layer_core::DefaultBrushPreset::Eraser as u32}).unwrap();
@@ -843,12 +869,12 @@ mod tests {
         let cancel=AtomicBool::new(false);let path=root.join("session.json");
         let staged=SessionManifest::default().stage(vec![SessionDrawing{id:1,key:"drawing-a".into()}],1).unwrap();staged.publish(&path).unwrap();
         assert_eq!(SessionManifest::read(&path).unwrap().unwrap(),staged);
-        let mut store=SessionStore::open(&root.join("drawing-a")).unwrap();assert!(store.load(ProjectLimits::default(),&cancel).unwrap().is_none());
+        let mut store=pollster::block_on(SessionStore::open(&root.join("drawing-a"))).unwrap();assert!(pollster::block_on(store.load(ProjectLimits::default(),&cancel)).unwrap().is_none());
         let mut source=session(Platform::Gtk);source.frame(0,0).unwrap();layer(&mut source,LayerAction::New{group:false,clipped:false});source.frame(1,1).unwrap();
-        source.capture_session().unwrap().checkpoint(&mut store,&cancel).unwrap();drop(store);
+        pollster::block_on(source.capture_session().unwrap().checkpoint(&mut store,&cancel)).unwrap();drop(store);
         let surviving=SessionManifest::read(&path).unwrap().unwrap();let reachable=surviving.drawings.iter().map(|drawing|drawing.key.clone()).collect();
-        collect_unreferenced_stores(&root,&reachable,&cancel).unwrap();
-        let mut reopened=SessionStore::open(&root.join(&surviving.drawings[0].key)).unwrap();let copy=SessionRestore::from_core(reopened.load(ProjectLimits::default(),&cancel).unwrap().unwrap()).unwrap();
+        pollster::block_on(collect_unreferenced_stores(&root,&reachable,&cancel)).unwrap();
+        let mut reopened=pollster::block_on(SessionStore::open(&root.join(&surviving.drawings[0].key))).unwrap();let copy=SessionRestore::from_core(pollster::block_on(reopened.load(ProjectLimits::default(),&cancel)).unwrap().unwrap()).unwrap();
         assert_eq!(copy.document().artwork,source.engine.document().artwork);assert!(copy.editor.can_undo());drop(copy);drop(reopened);drop(source);
         std::fs::remove_dir_all(root).unwrap();
     }

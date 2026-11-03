@@ -31,12 +31,8 @@ impl SnapshotGpu {
             self.factory.clone(), self.device.clone(), document.composition().color,
         )?;
         #[cfg(target_arch = "wasm32")]
-        if let Some(encoder) = self.encoder.clone() {
-            renderer.set_browser_raster_encoder(encoder);
-        }
+        self.install_browser_workers(&mut renderer);
         renderer.seed_evaluation_context(context.clone());
-        #[cfg(target_arch = "wasm32")]
-        { renderer.analysis_backing_waiter = self.analysis_backing_waiter.clone(); }
         renderer.resize_surface(view.width_px, view.height_px)?;
         let mut programs = Vec::new();
         for (_, _, application) in document.artwork.effects.iter() {

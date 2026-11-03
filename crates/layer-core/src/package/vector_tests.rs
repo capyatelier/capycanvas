@@ -334,9 +334,8 @@ fn vector_layers_round_trip_through_packages_and_keep_unchanged_chunks() {
 
 #[test]
 fn vector_history_survives_sessions_and_worker_transfer() {
-    use super::{session::PreparedSession, session_transfer::{PreparedSessionTransfer, SessionTransferReceiver}};
+    use super::session_store::tests::SavedSession;
     let cancel = std::sync::atomic::AtomicBool::new(false);
-    let limits = crate::ProjectLimits::default();
     let (mut editor, layer) = document_with_paths(130);
     let first = editor.document().artwork.clone();
     let object = editor.document().scene().vector_layer(layer).unwrap().insert_front(vec![line(9000, &[[0., 0.], [50., 50.]], 4.)]);
@@ -344,30 +343,13 @@ fn vector_history_survives_sessions_and_worker_transfer() {
     let drawn = editor.document().artwork.clone();
     editor.undo().unwrap();
     let capture = editor.capture_session(editor.capture(1, Default::default()).unwrap()).unwrap();
-    let session = PreparedSession::prepare(&capture, serde_json::json!({}), &cancel).unwrap();
-    let mut pack = Vec::new();
-    std::io::Read::read_to_end(&mut session.resources().reader(&cancel), &mut pack).unwrap();
-    let mut loaded = super::session::open_parts(session.metadata(), super::ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(pack))).unwrap(), limits, &cancel).unwrap();
+    let session = SavedSession::new(&capture, serde_json::json!({}), &cancel).unwrap();
+    let mut loaded = session.load().unwrap();
     assert_eq!(vector(&loaded.editor.document().artwork), vector(&first));
     loaded.editor.redo().unwrap();
     assert_eq!(vector(&loaded.editor.document().artwork), vector(&drawn));
 
-    let transfer = PreparedSessionTransfer::capture(&capture, serde_json::json!({}), &cancel).unwrap();
-    let descriptor = serde_json::from_slice(&serde_json::to_vec(transfer.descriptor()).unwrap()).unwrap();
-    let mut receiver = SessionTransferReceiver::new(descriptor, limits).unwrap();
-    for index in receiver.missing_payloads() {
-        let length = transfer.payload_len(index).unwrap();
-        let mut offset = 0;
-        while offset < length {
-            let count = (length - offset).min(super::MAX_RANGE_BYTES as u64) as usize;
-            receiver.push_chunk(index, &transfer.read_chunk(index, offset, count).unwrap()).unwrap();
-            offset += count as u64;
-        }
-    }
-    let mut adopted = receiver.finish().unwrap().adopt_verified(limits, &cancel).unwrap();
-    assert_eq!(vector(&adopted.editor.document().artwork), vector(&first));
-    adopted.editor.redo().unwrap();
-    assert_eq!(vector(&adopted.editor.document().artwork), vector(&drawn));
+
 }
 
 #[test]
@@ -382,16 +364,14 @@ fn session_history_shares_unchanged_runs_of_vector_chunk_lists() {
     }
     let chunks = vector(&editor.document().artwork).chunks().len();
     let capture = editor.capture_session(editor.capture(1, Default::default()).unwrap()).unwrap();
-    let session = super::session::PreparedSession::prepare(&capture, serde_json::json!({}), &cancel).unwrap();
+    let session = super::session_store::tests::SavedSession::new(&capture, serde_json::json!({}), &cancel).unwrap();
     let metadata: serde_json::Value = serde_json::from_slice(session.metadata()).unwrap();
     let runs = metadata["index_chunks"].as_array().unwrap();
     let listed: usize = runs.iter().map(|run| run.as_array().unwrap().len()).sum();
     let max_run = runs.iter().map(|run| run.as_array().unwrap().len()).max().unwrap_or(0);
     assert!(max_run <= chunks / 2, "{max_run} references in one run for {chunks} chunks");
     assert!(listed <= strokes as usize * max_run + 2 * chunks, "{listed} chunk references for {chunks} chunks and {max_run}-reference runs");
-    let mut pack = Vec::new();
-    std::io::Read::read_to_end(&mut session.resources().reader(&cancel), &mut pack).unwrap();
-    let mut loaded = super::session::open_parts(session.metadata(), super::ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(pack))).unwrap(), crate::ProjectLimits::default(), &cancel).unwrap();
+    let mut loaded = session.load().unwrap();
     assert_eq!(vector(&loaded.editor.document().artwork), vector(&editor.document().artwork));
     for _ in 0..strokes { loaded.editor.undo().unwrap(); }
     assert_eq!(vector(&loaded.editor.document().artwork), vector(&first));
@@ -783,10 +763,8 @@ fn newer_vector_layers_open_from_their_fallback_locked_and_save_back_unchanged()
     let cancel = std::sync::atomic::AtomicBool::new(false);
     let editor = crate::Editor::new(crate::Document::from_artwork(open(saved)).unwrap());
     let capture = editor.capture_session(editor.capture(1, Default::default()).unwrap()).unwrap();
-    let session = super::session::PreparedSession::prepare(&capture, serde_json::json!({}), &cancel).unwrap();
-    let mut pack = Vec::new();
-    std::io::Read::read_to_end(&mut session.resources().reader(&cancel), &mut pack).unwrap();
-    let loaded = super::session::open_parts(session.metadata(), super::ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(pack))).unwrap(), crate::ProjectLimits::default(), &cancel).unwrap();
+    let session = super::session_store::tests::SavedSession::new(&capture, serde_json::json!({}), &cancel).unwrap();
+    let loaded = session.load().unwrap();
     let restored = loaded.editor.document().artwork.objects.iter().next().unwrap().2;
     assert_eq!(&**restored.vector.as_ref().unwrap().0[0].1.storage(), &unknown[..], "sessions keep the paths too");
 
@@ -932,10 +910,8 @@ fn future_slots_open_editable_or_from_their_fallback_and_save_back_byte_for_byte
 
     let cancel = std::sync::atomic::AtomicBool::new(false);
     let capture = editor.capture_session(editor.capture(1, Default::default()).unwrap()).unwrap();
-    let session = super::session::PreparedSession::prepare(&capture, serde_json::json!({}), &cancel).unwrap();
-    let mut pack = Vec::new();
-    std::io::Read::read_to_end(&mut session.resources().reader(&cancel), &mut pack).unwrap();
-    let loaded = super::session::open_parts(session.metadata(), super::ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(pack))).unwrap(), crate::ProjectLimits::default(), &cancel).unwrap();
+    let session = super::session_store::tests::SavedSession::new(&capture, serde_json::json!({}), &cancel).unwrap();
+    let loaded = session.load().unwrap();
     let restored = &loaded.editor.document().artwork;
     assert!(matches!(&vector(restored).slots()[..], [Slot::Image(_), Slot::Resource(r)] if r.kind.as_ref() == "example.font/1"));
     assert!(restored.extensions.resources.is_empty());
@@ -982,10 +958,8 @@ fn chunks_that_do_not_compress_are_stored_raw_and_reopen() {
     let again = crate::Editor::new(crate::Document::from_artwork(reopened).unwrap());
     let cancel = std::sync::atomic::AtomicBool::new(false);
     let capture = again.capture_session(again.capture(1, Default::default()).unwrap()).unwrap();
-    let session = super::session::PreparedSession::prepare(&capture, serde_json::json!({}), &cancel).unwrap();
-    let mut pack = Vec::new();
-    std::io::Read::read_to_end(&mut session.resources().reader(&cancel), &mut pack).unwrap();
-    let loaded = super::session::open_parts(session.metadata(), super::ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(pack))).unwrap(), crate::ProjectLimits::default(), &cancel).unwrap();
+    let session = super::session_store::tests::SavedSession::new(&capture, serde_json::json!({}), &cancel).unwrap();
+    let loaded = session.load().unwrap();
     assert_eq!(vector(&loaded.editor.document().artwork).paths().next().unwrap().1, &path);
 }
 

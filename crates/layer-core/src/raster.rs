@@ -51,6 +51,8 @@ struct Publication<T> {
     id: u64,
     value: Mutex<Option<Result<Arc<T>, String>>>,
     ready: Condvar,
+    #[cfg(target_arch="wasm32")]
+    wakers:Mutex<Vec<std::task::Waker>>,
 }
 impl<T> Default for Publication<T> {
     fn default() -> Self {
@@ -58,6 +60,8 @@ impl<T> Default for Publication<T> {
             id: NEXT_PUBLICATION.fetch_add(1, Ordering::Relaxed),
             value: Mutex::new(None),
             ready: Condvar::new(),
+            #[cfg(target_arch="wasm32")]
+            wakers:Mutex::new(Vec::new()),
         }
     }
 }
@@ -69,6 +73,11 @@ impl<T> Publication<T> {
         }
         *state = Some(value);
         self.ready.notify_all();
+        #[cfg(target_arch="wasm32")]
+        {
+            let wakers=std::mem::take(&mut *self.wakers.lock().unwrap());drop(state);
+            for waker in wakers {waker.wake();}
+        }
         Ok(())
     }
     fn get(&self) -> Option<Result<Arc<T>, String>> {
@@ -76,6 +85,23 @@ impl<T> Publication<T> {
     }
     fn wait(&self) -> Result<Arc<T>, String> {
         self.wait_cancellable(None)
+    }
+    #[cfg(target_arch="wasm32")]
+    async fn wait_async(&self)->Result<Arc<T>,String> {
+        std::future::poll_fn(|context| {
+            let state=self.value.lock().map_err(|_|"Raster publication failed");
+            match state {
+                Err(error)=>std::task::Poll::Ready(Err(error.into())),
+                Ok(state)=>match &*state {
+                    Some(value)=>std::task::Poll::Ready(value.clone()),
+                    None=>{
+                        let mut wakers=self.wakers.lock().unwrap();
+                        if !wakers.iter().any(|waker|waker.will_wake(context.waker())) {wakers.push(context.waker().clone());}
+                        std::task::Poll::Pending
+                    },
+                },
+            }
+        }).await
     }
     #[cfg(target_arch = "wasm32")]
     fn wait_cancellable(&self, cancelled: Option<&AtomicBool>) -> Result<Arc<T>, String> {
@@ -237,8 +263,11 @@ impl TileBlob {
         hash.finalize().into()
     }
     pub fn compressed_len(&self) -> usize { self.compressed.len() }
+    #[cfg(not(target_arch="wasm32"))]
     pub fn compressed_on_worker(&self)->Result<crate::package::ByteRange,String> {self.compressed.read_on_worker()}
+    pub fn memory_compressed(&self)->Result<Option<Arc<[u8]>>,String> {self.compressed.memory()}
     pub fn poll_compressed(&self)->Result<crate::package::RangeState,String> {self.compressed.poll()}
+    pub async fn read_compressed(&self)->Result<crate::package::ByteRange,String> {self.compressed.read().await}
     pub fn resident_bytes(&self) -> usize { self.compressed.resident_bytes() }
     fn decode_samples(descriptor: PixelDescriptor, compressed: &[u8]) -> Result<Vec<u8>, String> {
         let size = descriptor.byte_len([TILE_SIZE; 2]).ok_or("Unsupported raster pixels")?;
@@ -247,11 +276,12 @@ impl TileBlob {
         descriptor.validate_samples(&bytes)?;
         Ok(bytes)
     }
+    #[cfg(not(target_arch="wasm32"))]
     pub fn decode_on_worker(&self)->Result<Vec<u8>,String> {
         let compressed=self.compressed_on_worker()?;
         self.decode_bytes_on_worker(&compressed)
     }
-    pub(crate) fn decode_bytes_on_worker(&self,compressed:&[u8])->Result<Vec<u8>,String> {
+    pub fn decode_bytes_on_worker(&self,compressed:&[u8])->Result<Vec<u8>,String> {
         let bytes=Self::decode_samples(self.descriptor,compressed)?;
         if let Some(expected) = self.expected_digest {
             let actual = Self::descriptor_digest(self.descriptor, &bytes);
@@ -261,15 +291,20 @@ impl TileBlob {
         Ok(bytes)
     }
     /// Decodes and hashes exact samples on a worker; ordinary identity needs neither.
+    #[cfg(not(target_arch="wasm32"))]
     pub fn content_digest(&self) -> Result<[u8; 32], String> {
         if let Some(digest) = self.digest.get() { return Ok(*digest); }
-        let bytes = self.decode_on_worker()?;
+        let compressed = self.compressed_on_worker()?;
+        self.content_digest_bytes_on_worker(&compressed)
+    }
+    pub fn content_digest_bytes_on_worker(&self, compressed: &[u8]) -> Result<[u8; 32], String> {
+        if let Some(digest) = self.digest.get() { return Ok(*digest); }
+        let bytes = self.decode_bytes_on_worker(compressed)?;
         if let Some(digest) = self.digest.get() { return Ok(*digest); }
         let digest = Self::descriptor_digest(self.descriptor, &bytes);
         let _ = self.digest.set(digest);
         Ok(digest)
     }
-    #[cfg(not(target_arch="wasm32"))]
     pub(crate) fn from_store(resource_id:crate::PortableId,descriptor:PixelDescriptor,location:Arc<crate::package::session_store::StoreLocation>)->Result<Self,String> {
         if location.length==0 || location.length>MAX_COMPRESSED_TILE_BYTES as u64 || descriptor.byte_len([TILE_SIZE;2]).is_none() {return Err("Invalid stored raster tile".into());}
         Ok(Self {resource_id,owner_identity:next_tile_owner(),descriptor,encoded_fingerprint:None,digest:OnceLock::new(),expected_digest:None,
@@ -309,9 +344,9 @@ impl TileBlob {
             encoded_fingerprint: None,
             digest: OnceLock::new(),
             expected_digest: Some(digest),
-            compressed: Arc::new(bytes.into()),
+            compressed: Arc::new(bytes.clone().into()),
         };
-        result.decode_on_worker()?;
+        result.decode_bytes_on_worker(&bytes)?;
         Ok(result)
     }
 
@@ -386,6 +421,8 @@ impl RasterTile {
     pub fn wait_backing(&self) -> Result<Arc<TileBlob>, String> {
         self.0.data.wait()
     }
+    #[cfg(target_arch="wasm32")]
+    pub async fn await_backing(&self)->Result<Arc<TileBlob>,String> {self.0.data.wait_async().await}
     pub fn wait_backing_cancellable(&self, cancelled: &AtomicBool) -> Result<Arc<TileBlob>, String> {
         self.0.data.wait_cancellable(Some(cancelled))
     }
@@ -566,6 +603,8 @@ impl RasterRevision {
     pub fn wait_data(&self) -> Result<Arc<RasterData>, String> {
         self.0.data.wait()
     }
+    #[cfg(target_arch="wasm32")]
+    pub async fn await_data(&self)->Result<Arc<RasterData>,String> {self.0.data.wait_async().await}
     pub fn wait_data_cancellable(&self, cancelled: &AtomicBool) -> Result<Arc<RasterData>, String> {
         self.0.data.wait_cancellable(Some(cancelled))
     }

@@ -14,6 +14,7 @@ impl crate::WgpuRasterizer {
     /// Cold restore work shares the source/raster upload ceiling. Call outside
     /// input handling. No live page or revision is replaced here; discard all
     /// private candidates on error, including any earlier drained batches.
+    #[cfg(not(target_arch="wasm32"))]
     pub fn restore_native_scalars(
         &mut self,
         requests: &[NativeScalarRestore<'_>],

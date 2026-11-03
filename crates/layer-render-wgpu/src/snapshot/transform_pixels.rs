@@ -23,7 +23,8 @@ impl SnapshotGpu {
             if plane == RasterPlane::Mask && plan.coverage.and_then(|h| plan.scene.view().coverage(h)).map_or(0., |c| c.default_coverage) != 0. { continue; }
             let descriptor = plane.descriptor_for(snapshot.color(), plan.scene.view().color_mode(target));
             let tile = layer_core::raster::TileBlob::encode(descriptor, &vec![0; descriptor.byte_len([PAGE_SIZE; 2]).unwrap()])?;
-            empty.insert(plane, tile.content_digest()?);
+            let bytes = tile.read_compressed().await?;
+            empty.insert(plane, tile.content_digest_bytes_on_worker(&bytes)?);
         }
         for coordinate in snapshot.raw_coordinates().map_err(|e| e.to_string())? {
             control.check().map_err(|e| e.to_string())?;
@@ -42,7 +43,8 @@ impl SnapshotGpu {
             capture.finish_browser(self.encoder.as_ref().ok_or("Raster worker is unavailable")?).await?;
             for (plane, tile) in tiles {
                 let backing = tile.try_backing().ok_or("Transformed pixels are not ready")??;
-                if empty.get(&plane) == Some(&backing.content_digest()?) { continue; }
+                let bytes = backing.read_compressed().await?;
+                if empty.get(&plane) == Some(&backing.content_digest_bytes_on_worker(&bytes)?) { continue; }
                 let data = if plane == RasterPlane::Mask { &mut mask } else { &mut color };
                 data.tiles.insert(TileKey { plane, coordinate }, tile);
             }

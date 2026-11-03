@@ -16,25 +16,7 @@ pub(crate) struct Bytes {
 #[derive(Clone)]
 enum Value {
     Memory(Arc<[u8]>),
-    #[cfg(target_arch = "wasm32")]
-    External {
-        chunk: Arc<dyn TileChunk>,
-        offset: usize,
-        digest: [u8; 32],
-    },
-    #[cfg(not(target_arch = "wasm32"))]
     Store(Arc<crate::package::session_store::StoreLocation>),
-}
-/// Immutable host storage with an asynchronous read/cache boundary. Polling
-/// requests a read and returns None until it completes. The final Arc owns the
-/// chunk's file lifetime; no document or GPU identity is stored in the transport.
-#[cfg(target_arch = "wasm32")]
-pub trait TileChunk: Send + Sync {
-    fn len(&self) -> usize;
-    fn is_empty(&self) -> bool { self.len() == 0 }
-    fn poll(&self) -> Result<Option<Arc<[u8]>>, String>;
-    fn resident_bytes(&self) -> usize;
-    fn evict(&self);
 }
 impl From<Arc<[u8]>> for Bytes {
     fn from(bytes: Arc<[u8]>) -> Self {
@@ -46,17 +28,26 @@ impl From<Arc<[u8]>> for Bytes {
     }
 }
 impl Bytes {
-    #[cfg(not(target_arch="wasm32"))]
     pub(crate) fn stored(location:Arc<crate::package::session_store::StoreLocation>)->Self {
         let integrity=crate::authored::IntegrityCache::default();
         integrity.seed(crate::authored::EncodedIntegrity {bytes:location.length,crc32:location.crc}).unwrap();
         Self {len:location.length as usize,value:Mutex::new(Value::Store(location)),integrity}
     }
     pub(crate) fn integrity(&self, cancelled:&std::sync::atomic::AtomicBool) -> Result<crate::authored::EncodedIntegrity,String> {
-        self.integrity.get_or_compute(cancelled,||self.read_on_worker().map(crate::package::ByteRange::into_arc))
+        self.integrity.get_or_compute(cancelled,|| {
+            #[cfg(not(target_arch="wasm32"))]
+            {self.read_on_worker().map(crate::package::ByteRange::into_arc)}
+            #[cfg(target_arch="wasm32")]
+            {self.memory()?.ok_or_else(||"Tile integrity must be prepared before storage".into())}
+        })
     }
     pub(crate) fn digest(&self,cancelled:&std::sync::atomic::AtomicBool)->Result<[u8;32],String> {
-        self.integrity.digest(cancelled,||self.read_on_worker().map(crate::package::ByteRange::into_arc))
+        self.integrity.digest(cancelled,|| {
+            #[cfg(not(target_arch="wasm32"))]
+            {self.read_on_worker().map(crate::package::ByteRange::into_arc)}
+            #[cfg(target_arch="wasm32")]
+            {self.memory()?.ok_or_else(||"Tile bytes must be prepared before hashing".into())}
+        })
     }
     pub(crate) fn set_integrity(&self,value:crate::authored::EncodedIntegrity)->Result<(),String> {
         if value.bytes!=self.len as u64 {return Err("Immutable tile integrity length mismatch".into());}
@@ -68,9 +59,6 @@ impl Bytes {
     fn resident_owner(&self) -> (usize, usize) {
         match self.snapshot().unwrap() {
             Value::Memory(bytes) => (Arc::as_ptr(&bytes) as *const () as usize, bytes.len()),
-            #[cfg(target_arch = "wasm32")]
-            Value::External { chunk, .. } => (Arc::as_ptr(&chunk) as *const () as usize, chunk.resident_bytes()),
-            #[cfg(not(target_arch = "wasm32"))]
             Value::Store(_) => (0, 0),
         }
     }
@@ -78,21 +66,15 @@ impl Bytes {
     pub fn resident_bytes(&self) -> usize {
         match self.snapshot().unwrap() {
             Value::Memory(_) => self.len,
-            #[cfg(target_arch = "wasm32")]
-            Value::External { chunk, .. } => if chunk.resident_bytes()>0 {self.len} else {0},
-            #[cfg(not(target_arch = "wasm32"))]
             Value::Store(_) => 0,
         }
     }
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn memory(&self) -> Result<Option<Arc<[u8]>>,String> {
         Ok(match self.snapshot()? {Value::Memory(bytes)=>Some(bytes),_=>None})
     }
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn location(&self)->Result<Option<Arc<crate::package::session_store::StoreLocation>>,String> {
         Ok(match self.snapshot()? {Value::Store(location)=>Some(location),_=>None})
     }
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn bind(&self, bytes:&Arc<[u8]>, location:Arc<crate::package::session_store::StoreLocation>) -> Result<bool,String> {
         let mut value=self.value.lock().map_err(|_|"Tile storage lock failed")?;
         if !matches!(&*value,Value::Memory(current) if Arc::ptr_eq(bytes,current)) {return Ok(false);}
@@ -102,100 +84,24 @@ impl Bytes {
         use crate::package::{ByteRange,RangeState};
         match self.snapshot()? {
             Value::Memory(bytes)=>Ok(RangeState::Ready(ByteRange::new(bytes,0..self.len)?)),
-            #[cfg(not(target_arch = "wasm32"))]
             Value::Store(location)=>location.poll(),
-            #[cfg(target_arch = "wasm32")]
-            Value::External {chunk,offset,..}=>match chunk.poll()? {
-                None=>Ok(RangeState::Pending),
-                Some(bytes)=>Ok(RangeState::Ready(ByteRange::new(bytes,offset..offset.checked_add(self.len).ok_or("Drawing tile range overflow")?)?)),
-            },
+
         }
     }
-    pub(crate) fn poll_on_worker(&self)->Result<crate::package::RangeState,String> {
-        let state=self.poll()?;
-        #[cfg(target_arch = "wasm32")]
-        if let (crate::package::RangeState::Ready(bytes),Value::External {digest,..})=(&state,self.snapshot()?) {
-            use sha2::{Digest,Sha256};
-            if <[u8;32]>::from(Sha256::digest(&**bytes))!=digest {return Err("Parked drawing tile integrity check failed".into());}
+    pub(crate) async fn read(&self)->Result<crate::package::ByteRange,String> {
+        match self.snapshot()? {
+            Value::Memory(bytes)=>Ok(crate::package::ByteRange::new(bytes,0..self.len)?),
+            Value::Store(location)=>location.read().await,
         }
-        Ok(state)
     }
+    #[cfg(not(target_arch="wasm32"))]
     pub(crate) fn read_on_worker(&self)->Result<crate::package::ByteRange,String> {
-        #[cfg(not(target_arch = "wasm32"))]
-        return match self.snapshot()? {
+        match self.snapshot()? {
             Value::Memory(bytes)=>Ok(crate::package::ByteRange::new(bytes,0..self.len)?),
             Value::Store(location)=>location.read_on_worker(),
-        };
-        #[cfg(target_arch = "wasm32")]
-        match self.poll_on_worker()? {
-            crate::package::RangeState::Ready(bytes)=>Ok(bytes),
-            crate::package::RangeState::Pending=>Err("Drawing tile is still loading".into()),
         }
     }
 
-}
-
-/// One bounded, immutable write transaction. The original tile payloads remain
-/// resident until the host has committed every byte. Failed writes just drop
-/// this ticket; they cannot change document/history handles.
-#[cfg(target_arch = "wasm32")]
-#[derive(Default)]
-pub struct PreparedSpill {
-    pub bytes: Vec<u8>,
-    records: Vec<SpillRecord>,
-}
-#[cfg(target_arch = "wasm32")]
-struct SpillRecord {
-    blob: Arc<TileBlob>,
-    bytes: Arc<[u8]>,
-    offset: usize,
-    digest: [u8; 32],
-}
-#[cfg(target_arch = "wasm32")]
-impl PreparedSpill {
-    fn retain(&mut self, blob: Arc<TileBlob>, bytes: Arc<[u8]>) {
-        use sha2::{Digest, Sha256};
-        let offset = self.records.last().map_or(0, |r| r.offset + r.bytes.len());
-        let digest = Sha256::digest(&bytes).into();
-        self.records.push(SpillRecord { blob, bytes, offset, digest });
-    }
-    fn publish(self, backing: impl Fn(usize, [u8; 32]) -> Value) -> Result<(), String> {
-        for record in self.records {
-            let mut value = record.blob.compressed.value.lock().map_err(|_| "Tile storage lock failed")?;
-            if matches!(&*value, Value::Memory(bytes) if Arc::ptr_eq(bytes, &record.bytes)) {
-                *value = backing(record.offset, record.digest);
-            }
-        }
-        Ok(())
-    }
-    pub fn commit(self, chunk: Arc<dyn TileChunk>) -> Result<(), String> {
-        if chunk.len() != self.bytes.len() {
-            return Err("Incomplete parked drawing write".into());
-        }
-        self.publish(|offset, digest| Value::External { chunk: chunk.clone(), offset, digest })
-    }
-
-}
-
-/// Evict previous read caches, then prepare at most one chunk of remaining RAM
-/// payloads. The host repeats this while the shared inactive budget is exceeded.
-#[cfg(target_arch = "wasm32")]
-pub fn prepare_external_spill(tiles: &RetainedTiles) -> Result<Option<PreparedSpill>, String> {
-    let blobs = tiles.try_blobs()?.ok_or("Wait for drawing capture before parking")?;
-    let mut spill = PreparedSpill::default();
-    for blob in blobs {
-        match blob.compressed.snapshot()? {
-            Value::External { chunk, .. } => chunk.evict(),
-            Value::Memory(bytes) => {
-                if !spill.bytes.is_empty() && spill.bytes.len() + bytes.len() > SPILL_CHUNK_BYTES {
-                    continue;
-                }
-                spill.bytes.extend_from_slice(&bytes);
-                spill.retain(blob, bytes);
-            }
-        }
-    }
-    Ok((!spill.records.is_empty()).then_some(spill))
 }
 
 /// Tile roots include both undo directions. Cloning this inventory never copies
@@ -289,6 +195,18 @@ impl Editor {
     }
 }
 impl RetainedTiles {
+    pub async fn await_blobs(&self)->Result<Vec<Arc<TileBlob>>,String> {
+        #[cfg(not(target_arch="wasm32"))]
+        {self.blobs()}
+        #[cfg(target_arch="wasm32")]
+        {
+            let mut blobs=self.sources.clone();
+            for raster in &self.rasters {
+                for tile in raster.await_data().await?.tiles.values() {blobs.push(tile.await_backing().await?);}
+            }
+            let mut seen=HashSet::new();blobs.retain(|blob|seen.insert(blob.owner_identity()));Ok(blobs)
+        }
+    }
     pub fn set_parked(&self, parked: bool) {
         if let Some(owner) = self.owner.as_ref().and_then(std::sync::Weak::upgrade) { owner.parked(parked); }
     }
@@ -354,16 +272,12 @@ impl RetainedTiles {
 }
 
 /// Count each resident immutable allocation once across all inactive editors,
-/// including a shared external read chunk containing several tile descriptors.
+/// including locations shared by several tile descriptors.
 pub fn resident_tile_bytes<'a>(inventories: impl IntoIterator<Item = &'a RetainedTiles>) -> usize {
     let mut owners=std::collections::HashMap::new();
     for tiles in inventories {tiles.resident_owners(&mut owners);}
     owners.values().fold(0usize,|bytes,(size,_)|bytes.saturating_add(*size))
 }
-
-/// Shared chunk bound for native and browser backing. Chunk ownership follows
-/// the immutable tiles, including references held by undo, redo and file jobs.
-pub const SPILL_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 
 #[cfg(all(test, any(unix, windows)))]
 pub(crate) mod tests {
@@ -379,8 +293,8 @@ pub(crate) mod tests {
     impl Store {
         pub(crate) fn new(tiles: &RetainedTiles) -> Self {
             let path = std::env::temp_dir().join(format!("capy-tile-store-{}", crate::PortableId::random()));
-            let mut store = crate::package::session_store::SessionStore::open(&path).unwrap();
-            store.make_durable(tiles, &std::sync::atomic::AtomicBool::new(false)).unwrap();
+            let mut store = pollster::block_on(crate::package::session_store::SessionStore::open(&path)).unwrap();
+            pollster::block_on(store.make_durable(tiles, &std::sync::atomic::AtomicBool::new(false))).unwrap();
             Self { path, store }
         }
         pub(crate) fn range(blob: &TileBlob) -> crate::package::ByteRange {
@@ -464,7 +378,7 @@ pub(crate) mod tests {
         assert_eq!(first.decode_on_worker().unwrap(), vec![42; 256 * 256 * 4]);
         assert_eq!(retained.resident_bytes(), 0);
         drop(retained); drop(first);
-        store.store.collect_garbage().unwrap();
+        pollster::block_on(store.store.collect_garbage()).unwrap();
         assert!(location.upgrade().is_none());
         assert_eq!(&range[..], original.as_ref());
     }
@@ -536,7 +450,7 @@ pub(crate) mod tests {
         assert_eq!(blobs.len(), 2, "include redo and deduplicate shared roots");
         let expected = retained.resident_bytes();
         let mut store = Store::new(&retained);
-        assert_eq!(store.store.make_durable(&retained, &std::sync::atomic::AtomicBool::new(false)).unwrap(), 0);
+        assert_eq!(pollster::block_on(store.store.make_durable(&retained, &std::sync::atomic::AtomicBool::new(false))).unwrap(), 0);
         assert!(expected > 0);
         assert_eq!(retained.resident_bytes(), 0);
         assert_eq!(first.decode_on_worker().unwrap(), vec![30; 256 * 256 * 4]);
@@ -595,12 +509,12 @@ pub(crate) mod tests {
         let second = Arc::new(first.alias(crate::PortableId::random()));
         let mut store = Store::new(&RetainedTiles { sources: vec![first.clone(), second.clone()], ..Default::default() });
         let weak = Store::location(&first);
-        store.store.retire().unwrap();
+        pollster::block_on(store.store.retire()).unwrap();
         drop(first);
         assert!(weak.upgrade().is_some());
         assert_eq!(second.decode_on_worker().unwrap(), vec![12; 256 * 256 * 4]);
         drop(second);
-        store.store.collect_garbage().unwrap();
+        pollster::block_on(store.store.collect_garbage()).unwrap();
         assert!(weak.upgrade().is_none());
         drop(store);
     }

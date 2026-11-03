@@ -154,7 +154,10 @@ impl Converter<'_> {
         if let Some(blob) = self.blobs.get(&key) {
             return Ok(blob.clone());
         }
-        let decoded = original.decode_on_worker()?;
+        #[cfg(not(target_arch="wasm32"))]
+        let decoded=original.decode_on_worker()?;
+        #[cfg(target_arch="wasm32")]
+        let decoded=original.decode_bytes_on_worker(&original.memory_compressed()?.ok_or("Color input bytes were not supplied to the worker")?)?;
         let descriptor = if scalar {
             self.target.coverage_descriptor()
         } else {

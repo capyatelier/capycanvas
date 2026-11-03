@@ -1,41 +1,73 @@
 //! Shared transport facade for native hosts. No UI toolkit or surface ownership.
 //! Call from one engine/render owner; platform callbacks enqueue owned batches.
-pub mod bubbles;
-pub mod clipboard;
-pub mod export;
-pub mod gpu;
-pub mod handles;
-pub mod ffi;
-mod frame_rate;
-mod header;
-mod snapshot;
-mod model_update;
-pub use model_update::ModelUpdates;
-pub mod open;
-pub mod papers;
-pub mod photo_reader;
-pub mod preparation;
-pub use preparation::PreparationWake;
-pub mod scene;
 #[cfg(not(target_arch="wasm32"))]
+pub mod bubbles;
+#[cfg(not(target_arch="wasm32"))]
+pub mod clipboard;
+#[cfg(not(target_arch="wasm32"))]
+pub mod export;
+#[cfg(not(target_arch="wasm32"))]
+pub mod gpu;
+#[cfg(not(target_arch="wasm32"))]
+pub mod handles;
+#[cfg(not(target_arch="wasm32"))]
+pub mod ffi;
+#[cfg(not(target_arch="wasm32"))]
+mod frame_rate;
+#[cfg(not(target_arch="wasm32"))]
+mod header;
+#[cfg(not(target_arch="wasm32"))]
+mod snapshot;
+#[cfg(not(target_arch="wasm32"))]
+mod model_update;
+#[cfg(not(target_arch="wasm32"))]
+pub use model_update::ModelUpdates;
+#[cfg(not(target_arch="wasm32"))]
+pub mod open;
+#[cfg(not(target_arch="wasm32"))]
+pub mod papers;
+#[cfg(not(target_arch="wasm32"))]
+pub mod photo_reader;
+#[cfg(not(target_arch="wasm32"))]
+pub mod preparation;
+#[cfg(not(target_arch="wasm32"))]
+pub use preparation::PreparationWake;
+#[cfg(not(target_arch="wasm32"))]
+pub mod scene;
 pub mod session_stores;
+#[cfg(not(target_arch="wasm32"))]
 pub mod storage;
+#[cfg(not(target_arch="wasm32"))]
 pub mod tasks;
+#[cfg(not(target_arch="wasm32"))]
 pub mod tone;
+#[cfg(not(target_arch="wasm32"))]
 pub mod window;
+#[cfg(not(target_arch="wasm32"))]
 use layer_core::Point;
+#[cfg(not(target_arch="wasm32"))]
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
+#[cfg(not(target_arch="wasm32"))]
 use layer_render::CanvasRenderer;
+#[cfg(not(target_arch="wasm32"))]
 use layer_ui::{ContactPhase, PointerButton, PointerKind, UiAction, UiInput, UiSession};
+#[cfg(not(target_arch="wasm32"))]
 pub use gpu::{DeviceWatch, GpuContext, RendererOptions, UiColor, admit_adapter, request_device, unsupported_adapter};
+#[cfg(not(target_arch="wasm32"))]
 pub use storage::StorageRoots;
+#[cfg(not(target_arch="wasm32"))]
 pub use frame_rate::CanvasFrameRate;
+#[cfg(not(target_arch="wasm32"))]
 pub use layer_render_wgpu::AttachedRenderer as Renderer;
+#[cfg(not(target_arch="wasm32"))]
 pub use snapshot::{SnapshotFields, extend_update};
+#[cfg(not(target_arch="wasm32"))]
 use serde::Deserialize;
+#[cfg(not(target_arch="wasm32"))]
 use serde_json::{Value, json};
 
 #[derive(Clone, PartialEq)]
+#[cfg(not(target_arch="wasm32"))]
 struct SnapshotKey {
     revision: u64,
     canvas_bar: Option<layer_ui::CanvasBarPresentation>,
@@ -54,6 +86,7 @@ struct SnapshotKey {
 
 /// Owned by the caller for this call. The camera revision is captured with the
 /// samples, not looked up after they have waited in a platform work queue.
+#[cfg(not(target_arch="wasm32"))]
 pub struct PointerBatch<'a> {
     pub id: u64,
     pub tool: u8,
@@ -67,6 +100,7 @@ pub struct PointerBatch<'a> {
     pub device_flags: SampleFlags,
 }
 
+#[cfg(not(target_arch="wasm32"))]
 impl PointerBatch<'_> {
     pub fn validate(&self, updates: &[u64], correction: bool) -> Result<(), &'static str> {
         if self.device_flags.0 & !(SampleFlags::INDIRECT_POINTER.0 | SampleFlags::BARREL_TWIST.0) != 0
@@ -117,6 +151,7 @@ impl PointerBatch<'_> {
     }
 }
 
+#[cfg(not(target_arch="wasm32"))]
 pub struct NativeHost {
     pub canvas_frame_rate: std::sync::Arc<CanvasFrameRate>,
     pub session: Box<UiSession<Renderer>>,
@@ -156,6 +191,7 @@ pub struct NativeHost {
     thumbnails: layer_ui::ThumbnailRequests,
 }
 
+#[cfg(not(target_arch="wasm32"))]
 pub fn contain<O: AsMut<NativeHost>, T>(owner: &mut O, work: impl FnOnce(&mut O) -> Result<T, String>) -> Result<T, String> {
     if let Some(cause) = owner.as_mut().poisoned() {
         return Err(cause.to_owned());
@@ -164,13 +200,16 @@ pub fn contain<O: AsMut<NativeHost>, T>(owner: &mut O, work: impl FnOnce(&mut O)
         .unwrap_or_else(|payload| Err(owner.as_mut().poison(&*payload)))
 }
 
+#[cfg(not(target_arch="wasm32"))]
 pub fn panic_diagnostic(payload: &(dyn std::any::Any + Send)) -> String {
     format!("Native operation panicked: {}", layer_render_wgpu::panic_message(payload))
 }
 
+#[cfg(not(target_arch="wasm32"))]
 impl AsMut<NativeHost> for NativeHost {
     fn as_mut(&mut self) -> &mut NativeHost { self }
 }
+#[cfg(not(target_arch="wasm32"))]
 impl NativeHost {
     pub fn reset_canvas_frame_rate(&mut self) {
         self.canvas_frame_rate = std::sync::Arc::new(CanvasFrameRate::default());
@@ -1199,7 +1238,7 @@ impl NativeHost {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test,not(target_arch="wasm32")))]
 mod tests {
     use super::*;
 
@@ -1961,8 +2000,8 @@ mod tests {
         let image=layer_core::color::source::rgba8_source([32;2],|_,_|[0,0,255,255]);
         let (layer,edit)=document.create_object_layer_edit("Stored photo",layer_core::ImageObject::new(image.into()),None,0).unwrap();document.apply(edit).unwrap();
         let path=std::env::temp_dir().join(format!("capy-host-wake-{}",layer_core::PortableId::random()));
-        let mut store=layer_core::package::session_store::SessionStore::open_with_cache(&path,cache).unwrap();
-        store.make_durable(&layer_core::Editor::new(document.clone()).retained_tiles(),&AtomicBool::new(false)).unwrap();
+        let mut store=pollster::block_on(layer_core::package::session_store::SessionStore::open_with_cache(&path,cache)).unwrap();
+        pollster::block_on(store.make_durable(&layer_core::Editor::new(document.clone()).retained_tiles(),&AtomicBool::new(false))).unwrap();
         let (_reference,mut host)=gpu_document_host(layer_ui::Platform::Android,document);
         let (notify,woken)=mpsc::channel();host.set_wake(Arc::new(move ||{let _=notify.send(());}));
         let clock=std::cell::Cell::new(0);let deadline=std::time::Instant::now()+std::time::Duration::from_secs(60);
@@ -3295,7 +3334,7 @@ mod tests {
 
 }
 
-#[cfg(test)]
+#[cfg(all(test,not(target_arch="wasm32")))]
 mod test_support {
     use layer_core::{Document, SourceTarget, authored::{PaintSource, Composition}};
     pub fn active_source(document: &Document) -> &PaintSource {

@@ -20,9 +20,16 @@ struct Transfer {
     tiles: Vec<[u32; 2]>,
 }
 impl Transfer {
-    fn send(source: &SourceImage, buffers: &js_sys::Array) -> Result<Self, String> {
-        for tile in source.tiles.values() { buffers.push(&js_sys::Uint8Array::from(tile.compressed_on_worker()?.as_ref())); }
-        Ok(Self { extent: source.extent, resolution: source.resolution, interpretation: source.interpretation.clone(), tiles: source.tiles.keys().copied().collect() })
+    async fn send(source: &SourceImage, buffers: &js_sys::Array) -> Result<Self, String> {
+        for tile in source.tiles.values() { buffers.push(&js_sys::Uint8Array::from(tile.read_compressed().await?.as_ref())); }
+        Ok(Self::describe(source))
+    }
+    fn send_memory(source: &SourceImage, buffers: &js_sys::Array) -> Result<Self, String> {
+        for tile in source.tiles.values() { buffers.push(&js_sys::Uint8Array::from(tile.memory_compressed()?.ok_or("Paper worker input is not prepared")?.as_ref())); }
+        Ok(Self::describe(source))
+    }
+    fn describe(source: &SourceImage) -> Self {
+        Self { extent: source.extent, resolution: source.resolution, interpretation: source.interpretation.clone(), tiles: source.tiles.keys().copied().collect() }
     }
     fn receive(self, buffers: &js_sys::Array, first: u32) -> Result<SourceImage, String> {
         let descriptor = self.interpretation.descriptor();
@@ -75,7 +82,7 @@ pub fn raster_worker_paper(metadata: &str, buffers: js_sys::Array,file:Option<we
             let kept = retained.as_ref().map(|image| layer_core::Image::with_id(layer_ui::paper_library::paper_image_id(&id).unwrap_or_else(PortableId::random), Arc::new(image.clone())));
             let canonical = layer_ui::paper_library::canonical_source(&id, paper, kept.as_slice()).map_err(js)?;
             let out = js_sys::Array::new();
-            let paper = if kept.is_some() { None } else { Some(Transfer::send(&canonical, &out).map_err(js)?) };
+            let paper = if kept.is_some() { None } else { Some(Transfer::send_memory(&canonical, &out).map_err(js)?) };
             (serde_json::json!({"id": id, "retained": kept.is_some(), "paper": paper}), out)
         }
         WorkerPaper::Name { name } => (serde_json::json!({"name": layer_ui::paper_library::paper_name(&name).ok_or_else(|| js("Name the paper"))?}), js_sys::Array::new()),
@@ -96,7 +103,7 @@ fn prepared(paper: &SourceImage, name: &str, stored: &[PaperEntry]) -> Result<(s
         buffers.push(&js_sys::Uint8Array::from(stored.preview.as_slice()));
         Some(stored.name)
     };
-    let paper = Transfer::send(paper, &buffers).map_err(js)?;
+    let paper = Transfer::send_memory(paper, &buffers).map_err(js)?;
     Ok((serde_json::json!({"id": id, "exists": exists, "name": named, "paper": paper}), buffers))
 }
 
@@ -152,7 +159,7 @@ async fn load(id: &str, retained: &[layer_core::Image], localization: &layer_ui:
     let buffers = js_sys::Array::new();
     let parent = layer_ui::paper_library::paper_image_id(id).ok_or("Unknown paper")?;
     let retained = retained.iter().find(|image| image.id() == parent);
-    let transfer = retained.map(|image| Transfer::send(image.storage(), &buffers)).transpose()?;
+    let transfer = match retained {Some(image)=>Some(Transfer::send(image.storage(), &buffers).await?),None=>None};
     let reply = library(serde_json::json!({"operation": "load", "id": id, "retained": transfer}), buffers,None, localization).await?;
     let kept = js_sys::Reflect::get(&reply, &js("metadata")).ok().and_then(|m| js_sys::Reflect::get(&m, &js("retained")).ok()).and_then(|v| v.as_bool()).unwrap_or(false);
     match retained.filter(|_| kept) { Some(image) => Ok(image.storage().as_ref().clone()), None => paper(&reply) }
@@ -188,7 +195,7 @@ async fn run(capture: &PaperCapture, file: JsValue, localization: &layer_ui::Loc
         Some(PaperRequest::Add { name, .. }) => {
             let image = capture.image.as_ref().ok_or_else(|| PaperLibraryError::Unsupported.message(localization))?;
             let buffers = none();
-            let transfer = Transfer::send(image, &buffers)?;
+            let transfer = Transfer::send(image, &buffers).await?;
             PaperResult::Entries(entries(&library(serde_json::json!({"operation": "store", "name": name, "paper": transfer}), buffers,None, localization).await?)?)
         }
         Some(PaperRequest::Rename { id, name }) => PaperResult::Entries(entries(&library(serde_json::json!({"operation": "rename", "id": id, "name": name}), none(),None, localization).await?)?),

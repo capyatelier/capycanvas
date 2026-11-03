@@ -286,7 +286,10 @@ pub(crate) struct PreparedRasterTile {
 pub fn prepare_raster_tile(blob:&Arc<layer_core::raster::TileBlob>,space:RgbSpace,cache:&layer_core::raster::DecodedTileCache)->Result<crate::scene::sources::PreparedSourcePixels,String> {
     use layer_core::color::source::SourceChannels;
     crate::scene::sources::validate_raster(blob,space).map_err(|error|error.to_string())?;
+    #[cfg(not(target_arch="wasm32"))]
     let native=cache.decode_on_worker(blob)?;
+    #[cfg(target_arch="wasm32")]
+    let native=cache.decode_bytes_on_worker(blob,&blob.memory_compressed()?.ok_or("Raster worker input is not prepared")?)?;
     if blob.descriptor.channels==4 {return Ok(crate::scene::sources::PreparedSourcePixels::NativeSamples(native));}
     let channels=if blob.descriptor.channels==1 {SourceChannels::Gray} else {SourceChannels::GrayAlpha};
     let depth=blob.descriptor.depth();
@@ -320,7 +323,10 @@ pub fn prepare_image_tile(source:&SourceImage,coordinate:[u32;2],destination:Rgb
     use crate::scene::sources::PreparedSourcePixels;
     if matches!(source.interpretation.profile,layer_core::color::ColorProfile::Builtin(_)) && source.interpretation.channels!=layer_core::color::source::SourceChannels::Cmyk {
         let tile=source.tiles.get(&coordinate).ok_or("Missing immutable image tile")?;
+        #[cfg(not(target_arch="wasm32"))]
         let native=cache.decode_on_worker(tile)?;
+        #[cfg(target_arch="wasm32")]
+        let native=cache.decode_bytes_on_worker(tile,&tile.memory_compressed()?.ok_or("Image worker input is not prepared")?)?;
         if source.interpretation.channels==layer_core::color::source::SourceChannels::Rgba {return Ok(PreparedSourcePixels::NativeSamples(native));}
         let row=PAGE_SIZE as usize*4*source.interpretation.depth.bytes();
         let mut expanded=vec![0;row*PAGE_SIZE as usize];

@@ -31,7 +31,6 @@ pub mod codec;
 pub mod transfer;
 
 pub mod session;
-pub mod session_transfer;
+pub mod store_io;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub mod session_store;

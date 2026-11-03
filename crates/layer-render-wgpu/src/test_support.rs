@@ -54,9 +54,14 @@ impl StoredTiles {
         use std::sync::atomic::{AtomicU64,Ordering};
         static NEXT:AtomicU64=AtomicU64::new(0);
         let path=std::env::temp_dir().join(format!("capy-render-store-{}-{}",std::process::id(),NEXT.fetch_add(1,Ordering::Relaxed)));
-        let mut store=layer_core::package::session_store::SessionStore::open_with_cache(&path,cache).unwrap();
-        assert!(store.make_durable(tiles,&std::sync::atomic::AtomicBool::new(false)).unwrap()>0);
+        let mut store=pollster::block_on(layer_core::package::session_store::SessionStore::open_with_cache(&path,cache)).unwrap();
+        assert!(pollster::block_on(store.make_durable(tiles,&std::sync::atomic::AtomicBool::new(false))).unwrap()>0);
         Self {store:Some(store),path}
+    }
+    pub fn restore_session(&mut self,capture:&layer_core::package::session::EditorCapture)->layer_core::package::session::OpenSession {
+        let cancel=std::sync::atomic::AtomicBool::new(false);let store=self.store.as_mut().unwrap();
+        pollster::block_on(store.checkpoint(capture,layer_core::package::session::SessionMetadata {value:Default::default(),profiles:Vec::new()},&cancel)).unwrap();
+        pollster::block_on(store.load(Default::default(),&cancel)).unwrap().unwrap()
     }
     pub fn corrupt(&self) {
         use std::io::{Read,Seek,SeekFrom,Write};

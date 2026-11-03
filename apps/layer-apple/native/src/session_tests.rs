@@ -308,18 +308,21 @@ fn apple_unreadable_sessions_preserve_copies_and_allow_editing_checkpointing_and
             let index = path.join("window.json");
             let original = layer_ui::SessionManifest::read(&index).unwrap().unwrap();
             let drawing = &original.drawings[0];
-            let head_path = path.join(&drawing.key).join("head.json");
-            let original_head = std::fs::read(&head_path).unwrap();
-            let mut head: serde_json::Value = serde_json::from_slice(&original_head).unwrap();
-            let metadata_path = path.join(&drawing.key).join("generations").join(format!("{}.json", head["current"]["id"].as_str().unwrap()));
+            let drawing_path = path.join(&drawing.key);
+            let head_path = drawing_path.join("head.json");
+            let original_heads = ["head.0", "head.1"].map(|name| std::fs::read(drawing_path.join(name)).ok());
+            let store = pollster::block_on(layer_core::package::session_store::SessionStore::open(&drawing_path)).unwrap();
+            let generation = store.generation().unwrap();
+            drop(store);
+            let metadata_path = drawing_path.join("generations").join(format!("{generation}.json"));
             let original_metadata = std::fs::read(&metadata_path).unwrap();
             let mut metadata: serde_json::Value = serde_json::from_slice(&original_metadata).unwrap();
             metadata["session"]["current"]["working"].as_object_mut().unwrap().remove("view_origin").unwrap();
             let incompatible = serde_json::to_vec(&metadata).unwrap();
-            head["current"]["sha256"] = layer_ui::DestinationFingerprint::read(incompatible.as_slice()).unwrap().sha256.into();
-            head["previous"] = serde_json::Value::Null;
+            let head = serde_json::json!({"current": {"id": generation, "sha256": layer_ui::DestinationFingerprint::read(incompatible.as_slice()).unwrap().sha256}, "previous": null});
             let incompatible_head = serde_json::to_vec(&head).unwrap();
             std::fs::write(&metadata_path, &incompatible).unwrap();
+            for name in ["head.0", "head.1"] {let file = drawing_path.join(name);if file.exists() {std::fs::remove_file(file).unwrap();}}
             std::fs::write(&head_path, &incompatible_head).unwrap();
             let (app, initial_failure) = launch_report(platform, &path, None, false);
             assert!(initial_failure.as_ref().is_some_and(|error| error.contains("view_origin")));
@@ -348,7 +351,8 @@ fn apple_unreadable_sessions_preserve_copies_and_allow_editing_checkpointing_and
             checkpoint(&app, 0, false);
             drop(failed_retry);
             std::fs::write(&metadata_path, &original_metadata).unwrap();
-            std::fs::write(&head_path, &original_head).unwrap();
+            std::fs::remove_file(&head_path).unwrap();
+            for (name, bytes) in ["head.0", "head.1"].into_iter().zip(original_heads) {if let Some(bytes) = bytes {std::fs::write(drawing_path.join(name), bytes).unwrap();}}
             let repaired = retry(); repaired.run();
             assert_eq!(repaired.error(), None);
             assert_eq!(unsafe { capy_apple_session_adopt(app.0, repaired.0) }, 0, "{:?}", app.borrow().error);
@@ -673,7 +677,7 @@ fn apple_session_failed_peer_checkpoint_keeps_closing_drawing_indexed() {
         assert!(!unsafe { capy_session_committed(task.0) });
         let retained = layer_ui::SessionManifest::read(&path.join("window.json")).unwrap().unwrap();
         assert_eq!(retained.drawings, manifest.drawings);
-        assert!(path.join(&manifest.drawings[0].key).join("head.json").is_file());
+        assert!(["head.0", "head.1"].into_iter().any(|name| path.join(&manifest.drawings[0].key).join(name).is_file()));
         std::fs::remove_file(&generation).unwrap();
         std::fs::rename(&held, &generation).unwrap();
         checkpoint(&app, 0, true);

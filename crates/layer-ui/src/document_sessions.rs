@@ -88,11 +88,7 @@ pub struct DocumentSessions<T> {
     language: crate::UiLanguage,
     untitled: String,
     pub budget: DocumentBudget,
-    #[cfg(target_arch="wasm32")]
-    storage_error: Option<String>,
     pub clip: RetainedClipboard,
-    #[cfg(target_arch="wasm32")]
-    trim: trim::Trim,
     memory: MemoryBudget,
     memory_owner: MemoryOwner,
     reported: std::cell::Cell<usize>,
@@ -128,28 +124,11 @@ impl<T> DocumentSessions<T> {
             tabs: Default::default(), parked: Default::default(), clock: 0, language: localization.language(),
             untitled: DocumentTabLabel::untitled(1, localization),
             budget: Default::default(), clip: RetainedClipboard,
-            #[cfg(target_arch="wasm32")] storage_error:None,
-            #[cfg(target_arch="wasm32")] trim:Default::default(),
             pressure:StoragePressure::new(memory_owner.clone(),memory.clone()), memory, memory_owner, reported: std::cell::Cell::new(0),
         }
     }
-    #[cfg(target_arch="wasm32")]
-    pub fn request_trim(&mut self) -> Option<u64> { self.trim.request() }
-    pub fn trim_wait(&self)->Option<TrimWait> {
-        #[cfg(not(target_arch="wasm32"))] {self.pressure.wait()}
-        #[cfg(target_arch="wasm32")] {self.trim.wait()}
-    }
-    pub fn trim_in_flight(&self)->bool {
-        #[cfg(not(target_arch="wasm32"))] {self.pressure.in_flight()}
-        #[cfg(target_arch="wasm32")] {self.trim.in_flight()}
-    }
-    #[cfg(target_arch="wasm32")]
-    pub fn complete_trim(&mut self, token: u64, result: Result<(), String>) -> bool {
-        if !self.trim.matches(token) { return false; }
-        self.refresh_memory(true);
-        self.storage_completed(result.clone());
-        self.trim.complete(token, result)
-    }
+    pub fn trim_wait(&self)->Option<TrimWait> {self.pressure.wait()}
+    pub fn trim_in_flight(&self)->bool {self.pressure.in_flight()}
     pub fn set_localization(&mut self, localization: &Localizer) -> bool {
         if self.language == localization.language() { return false; }
         self.language = localization.language();
@@ -367,13 +346,9 @@ impl<T> DocumentSessions<T> {
             })
             .flatten()
     }
-    pub fn storage_error(&self)->Option<String> {
-        #[cfg(not(target_arch="wasm32"))] {self.pressure.error()}
-        #[cfg(target_arch="wasm32")] {self.storage_error.clone()}
-    }
+    pub fn storage_error(&self)->Option<String> {self.pressure.error()}
     pub fn storage_completed(&mut self, result: Result<(), String>) {
-        #[cfg(not(target_arch="wasm32"))] self.pressure.storage_completed(result);
-        #[cfg(target_arch="wasm32")] {self.storage_error=result.err();}
+        self.pressure.storage_completed(result);
     }
     pub fn admit(&self, active: &RetainedTiles, candidate: &Document) -> Result<(), DocumentSessionError> {
         self.admission(active).admit(candidate)

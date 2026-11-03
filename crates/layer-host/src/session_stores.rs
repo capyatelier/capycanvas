@@ -1,10 +1,21 @@
-use layer_core::{PortableId,ProjectLimits,package::session_store::DrawingStore,raster_storage::RetainedTiles};
+use layer_core::{PortableId,ProjectLimits,package::session_store::{DrawingStore,StoreOpener},raster_storage::RetainedTiles};
 use layer_ui::{SessionCapture,SessionStamp};
+#[cfg(not(target_arch="wasm32"))]
+use futures_util::FutureExt;
 use std::{collections::{BTreeMap,VecDeque},path::PathBuf,sync::{Arc,Mutex,atomic::AtomicBool},task::{Poll,Waker}};
 
-pub enum StoreResult {Checkpoint(PortableId),Durable(usize),Restored {session:Option<layer_ui::SessionRestore>,recovered_previous:bool},RetirementPrepared,Retired,Superseded}
+#[cfg(not(target_arch="wasm32"))]
+type StoreCompletion=Box<dyn FnOnce(Result<(),String>)+Send>;
+#[cfg(target_arch="wasm32")]
+type StoreCompletion=Box<dyn FnOnce(Result<(),String>)>;
+#[cfg(not(target_arch="wasm32"))]
+pub type StoreExecutor=Arc<dyn Fn(StoreWork)+Send+Sync>;
+#[cfg(target_arch="wasm32")]
+pub type StoreExecutor=Arc<dyn Fn(StoreWork)>;
+
+pub enum StoreResult {Checkpoint(PortableId),Imported(Result<PortableId,layer_core::package::session_store::ImportFailure>),Durable(usize),Restored {session:Option<layer_ui::SessionRestore>,recovered_previous:bool},RetirementPrepared,Retired,Superseded}
 #[derive(Default)]
-struct ReplyState {result:Option<Result<StoreResult,String>>,waker:Option<Waker>,completion:Option<Box<dyn FnOnce(Result<(),String>)+Send>>}
+struct ReplyState {result:Option<Result<StoreResult,String>>,waker:Option<Waker>,completion:Option<StoreCompletion>}
 #[derive(Clone,Default)]
 pub struct StoreReply(Arc<(Mutex<ReplyState>,std::sync::Condvar)>);
 impl StoreReply {
@@ -13,12 +24,13 @@ impl StoreReply {
         let status=state.result.as_ref().unwrap().as_ref().map(|_|()).map_err(Clone::clone);self.0.1.notify_all();drop(state);
         if let Some(wake)=wake {wake.wake();}if let Some(completion)=completion {completion(status);}
     }
-    fn on_finished(&self,completion:impl FnOnce(Result<(),String>)+Send+'static) {
+    fn on_finished(&self,completion:StoreCompletion) {
         let mut state=self.0.0.lock().unwrap();
         if let Some(result)=&state.result {let result=result.as_ref().map(|_|()).map_err(Clone::clone);drop(state);completion(result);}
-        else {state.completion=Some(Box::new(completion));}
+        else {state.completion=Some(completion);}
     }
     pub fn try_take(&self)->Option<Result<StoreResult,String>> {self.0.0.lock().unwrap().result.take()}
+    #[cfg(not(target_arch="wasm32"))]
     pub fn wait_on_worker(self)->Result<StoreResult,String> {
         let mut state=self.0.0.lock().unwrap();
         loop {if let Some(result)=state.result.take() {return result;}state=self.0.1.wait(state).map_err(|_|"Storage completion failed")?;}
@@ -32,14 +44,14 @@ impl std::future::Future for StoreReply {
     }
 }
 pub type CapturePreparation=Box<dyn FnOnce(&mut SessionCapture)->Result<(),String>+Send>;
-enum Work {Checkpoint {capture:SessionCapture,stamp:SessionStamp,forced:bool,prepare:Option<CapturePreparation>},Pressure(Vec<RetainedTiles>),Restore(ProjectLimits),PrepareRetirement,Retire}
+enum Work {Checkpoint {capture:SessionCapture,stamp:SessionStamp,forced:bool,prepare:Option<CapturePreparation>},Pressure(Vec<RetainedTiles>),Import {expected:Option<PortableId>,metadata:Arc<[u8]>,resources:BTreeMap<PortableId,layer_core::package::ImmutableBacking>},Restore(ProjectLimits),PrepareRetirement,Retire}
 struct Request {work:Work,replies:Vec<StoreReply>}
 impl Request {
     fn finish(self,result:Result<StoreResult,String>) {
         let mut result=Some(result);let count=self.replies.len();
         for (index,reply) in self.replies.into_iter().enumerate() {
             let value=if index+1==count {result.take().unwrap()}else {match result.as_ref().unwrap() {
-                Ok(StoreResult::Checkpoint(id))=>Ok(StoreResult::Checkpoint(*id)),Ok(StoreResult::Durable(bytes))=>Ok(StoreResult::Durable(*bytes)),
+                Ok(StoreResult::Imported(result))=>Ok(StoreResult::Imported(result.clone())),Ok(StoreResult::Checkpoint(id))=>Ok(StoreResult::Checkpoint(*id)),Ok(StoreResult::Durable(bytes))=>Ok(StoreResult::Durable(*bytes)),
                 Ok(StoreResult::RetirementPrepared)=>Ok(StoreResult::RetirementPrepared),Ok(StoreResult::Retired)=>Ok(StoreResult::Retired),Ok(StoreResult::Superseded)=>Ok(StoreResult::Superseded),Err(error)=>Err(error.clone()),
                 Ok(StoreResult::Restored {..})=>unreachable!(),
             }};reply.finish(value);
@@ -67,7 +79,7 @@ impl Pending {
                 }
                 self.pressure=Some(request);
             },
-            Work::Restore(_)=>self.restores.push_back(request),
+            Work::Restore(_)|Work::Import {..}=>self.restores.push_back(request),
             Work::PrepareRetirement=>self.preparations.push_back(request),
             Work::Retire=>{
                 if let Some(previous)=self.retire.take() {request.replies.extend(previous.replies);}
@@ -83,14 +95,19 @@ struct Drawing {
 }
 struct State {drawings:BTreeMap<String,Drawing>,aliases:BTreeMap<u64,String>}
 struct Inner {
-    root:PathBuf,state:Mutex<State>,execute:Arc<dyn Fn(StoreWork)+Send+Sync>,wake:Mutex<Arc<dyn Fn()+Send+Sync>>,pressure:Mutex<Option<(layer_ui::StoragePressure,u64)>>,trims:Mutex<TrimRequests>,
+    root:PathBuf,opener:Arc<dyn StoreOpener>,clock:fn()->u64,state:Mutex<State>,execute:StoreExecutor,wake:Mutex<Arc<dyn Fn()+Send+Sync>>,pressure:Mutex<Option<(layer_ui::StoragePressure,u64)>>,trims:Mutex<TrimRequests>,
 }
 #[derive(Clone)]
 pub struct SessionStores(Arc<Inner>);
 impl SessionStores {
+    #[cfg(not(target_arch="wasm32"))]
     pub fn native(root:PathBuf,wake:Arc<dyn Fn()+Send+Sync>)->Self {Self::new(root,Arc::new(native_worker),wake)}
-    pub fn new(root:PathBuf,execute:Arc<dyn Fn(StoreWork)+Send+Sync>,wake:Arc<dyn Fn()+Send+Sync>)->Self {
-        Self(Arc::new(Inner {root,state:Mutex::new(State {drawings:BTreeMap::new(),aliases:BTreeMap::new()}),execute,wake:Mutex::new(wake),pressure:Mutex::new(None),trims:Mutex::new(TrimRequests::default())}))
+    #[cfg(not(target_arch="wasm32"))]
+    pub fn new(root:PathBuf,execute:StoreExecutor,wake:Arc<dyn Fn()+Send+Sync>)->Self {
+        Self::with_opener(root,Arc::new(layer_core::package::session_store::NativeStoreOpener),execute,wake,native_now_ms)
+    }
+    pub fn with_opener(root:PathBuf,opener:Arc<dyn StoreOpener>,execute:StoreExecutor,wake:Arc<dyn Fn()+Send+Sync>,clock:fn()->u64)->Self {
+        Self(Arc::new(Inner {root,opener,clock,state:Mutex::new(State {drawings:BTreeMap::new(),aliases:BTreeMap::new()}),execute,wake:Mutex::new(wake),pressure:Mutex::new(None),trims:Mutex::new(TrimRequests::default())}))
     }
     pub fn set_wake(&self,wake:Arc<dyn Fn()+Send+Sync>) {*self.0.wake.lock().unwrap()=wake;}
     fn wake(&self) {let wake=self.0.wake.lock().unwrap().clone();wake();}
@@ -100,7 +117,7 @@ impl SessionStores {
             if key.is_some_and(|key|key!=current) {return Err("Drawing storage identity changed".into());}
             return Ok(state.drawings[current].binding.clone());
         }
-        let binding=DrawingStore::new(&self.0.root,key)?;
+        let binding=DrawingStore::with_opener(&self.0.root,key,self.0.opener.clone())?;
         let key=binding.key().to_owned();
         if state.drawings.len()>=layer_ui::session_recovery::MAX_SESSION_DRAWINGS && !state.drawings.contains_key(&key) {return Err("Too many session drawings".into());}
         state.drawings.entry(key.clone()).or_insert_with(||Drawing::new(binding));
@@ -111,8 +128,13 @@ impl SessionStores {
         let mapped=mapping.iter().filter_map(|&(old,new)|state.aliases.remove(&old).map(|key|(new,key))).collect::<Vec<_>>();
         state.aliases.extend(mapped);
     }
+    pub fn release_binding(&self,id:u64) {
+        let mut state=self.0.state.lock().unwrap();
+        if let Some(key)=state.aliases.remove(&id) && !state.aliases.values().any(|current|current==&key)
+            && state.drawings.get(&key).is_some_and(|drawing|!drawing.running) {state.drawings.remove(&key);}
+    }
     pub fn adopt(&self,id:u64,key:&str)->Result<DrawingStore,String> {
-        let binding=DrawingStore::new(&self.0.root,Some(key))?;
+        let binding=DrawingStore::with_opener(&self.0.root,Some(key),self.0.opener.clone())?;
         self.adopt_binding(id,binding)?;
         self.bind(id,Some(key))
     }
@@ -127,16 +149,12 @@ impl SessionStores {
         Ok(!drawing.running && now_ms>=due)
     }
     pub const fn checkpoint_interval_ms()->u64 {layer_ui::session_recovery::CHECKPOINT_INTERVAL_MS}
-    fn now_ms()->u64 {
-        static START:std::sync::OnceLock<std::time::Instant>=std::sync::OnceLock::new();
-        START.get_or_init(std::time::Instant::now).elapsed().as_millis().min(u64::MAX as u128) as u64
-    }
     pub fn checkpoint_due(&self,id:u64,stamp:SessionStamp,force:bool)->Result<bool,String> {
         self.bind(id,None)?;
         let (current,first)={let state=self.0.state.lock().unwrap();let drawing=&state.drawings[&state.aliases[&id]];(drawing.current(&stamp),drawing.committed.is_none())};
-        if current {self.observe(id,stamp,Self::now_ms(),false)?;return Ok(false);}
+        if current {self.observe(id,stamp,(self.0.clock)(),false)?;return Ok(false);}
         let urgent=force || first;
-        let ready=self.observe(id,stamp,Self::now_ms(),urgent)?;
+        let ready=self.observe(id,stamp,(self.0.clock)(),urgent)?;
         Ok(urgent || ready)
     }
     pub fn is_current(&self,id:u64,stamp:&SessionStamp)->bool {
@@ -168,8 +186,11 @@ impl SessionStores {
     pub fn prepare_retirement(&self,key:&str)->Result<StoreReply,String> {self.request_copy(key,Work::PrepareRetirement)}
     pub fn retire_copy(&self,key:&str)->Result<StoreReply,String> {self.request_copy(key,Work::Retire)}
     fn request_copy(&self,key:&str,work:Work)->Result<StoreReply,String> {
-        let binding=DrawingStore::new(&self.0.root,Some(key))?;
+        let binding=DrawingStore::with_opener(&self.0.root,Some(key),self.0.opener.clone())?;
         self.request_binding(key,Some(binding),work)
+    }
+    pub fn import_legacy(&self,key:&str,expected:Option<PortableId>,metadata:Arc<[u8]>,resources:BTreeMap<PortableId,layer_core::package::ImmutableBacking>)->Result<StoreReply,String> {
+        self.request_copy(key,Work::Import {expected,metadata,resources})
     }
     pub fn bindings(&self)->Vec<(u64,DrawingStore)> {
         {let state=self.0.state.lock().unwrap();state.aliases.iter().map(|(&id,key)|(id,state.drawings[key].binding.clone())).collect()}
@@ -208,12 +229,12 @@ impl SessionStores {
             if let Some(inner)=weak.upgrade() {
                 let stores=SessionStores(inner);let watched=stores.0.pressure.lock().unwrap().clone();
                 if let Some((source,generation))=watched && let Some((candidates,budget))=source.request(generation) {
-                    stores.trim(candidates,budget).on_finished(move |result|source.completed(generation,result));
+                    stores.trim(candidates,budget).on_finished(Box::new(move |result|source.completed(generation,result)));
                 }
             }
         }));
         *watched=Some((source.clone(),generation));drop(watched);
-        if let Some((candidates,budget))=source.request(generation) {self.trim(candidates,budget).on_finished(move |result|source.completed(generation,result));}
+        if let Some((candidates,budget))=source.request(generation) {self.trim(candidates,budget).on_finished(Box::new(move |result|source.completed(generation,result)));}
     }
     fn trim(&self,candidates:Vec<(u64,u64,RetainedTiles)>,budget:usize)->StoreReply {
         let reply=StoreReply::default();let batch=TrimBatch {candidates,budget,replies:vec![reply.clone()]};
@@ -226,16 +247,23 @@ impl SessionStores {
     }
     fn start_trim(&self,batch:TrimBatch) {
         let reply=StoreReply::default();let stores=self.clone();
-        reply.on_finished(move |result| {
+        reply.on_finished(Box::new(move |result| {
             let mut trims=stores.0.trims.lock().unwrap();let next=trims.pending.take();trims.active=next.is_some();drop(trims);
             for reply in batch.replies {reply.finish(result.clone().map(|_|StoreResult::Durable(0)));}
             if let Some(next)=next {stores.start_trim(next);}stores.wake();
-        });
+        }));
         let trim=PressureTrim {stores:self.clone(),candidates:batch.candidates,budget:batch.budget,next:0,reply};
         (self.0.execute)(StoreWork(Some(StoreTask::Trim(trim))));
     }
 
 }
+#[cfg(not(target_arch="wasm32"))]
+fn native_now_ms()->u64 {
+        static START:std::sync::OnceLock<std::time::Instant>=std::sync::OnceLock::new();
+        START.get_or_init(std::time::Instant::now).elapsed().as_millis().min(u64::MAX as u128) as u64
+    }
+
+#[cfg(not(target_arch="wasm32"))]
 fn native_worker(work:StoreWork) {
     static WORKER:std::sync::OnceLock<Result<std::sync::mpsc::Sender<StoreWork>,String>>=std::sync::OnceLock::new();
     let worker=WORKER.get_or_init(|| {
@@ -264,11 +292,20 @@ impl Drawing {
 }
 pub struct StoreWork(Option<StoreTask>);
 enum StoreTask {Drawing(DrawingWork),Trim(PressureTrim)}
-impl StoreWork {pub fn run(mut self) {match self.0.take().unwrap() {StoreTask::Drawing(work)=>work.run(),StoreTask::Trim(trim)=>{let reply=trim.reply.clone();if std::panic::catch_unwind(std::panic::AssertUnwindSafe(||trim.run())).is_err() {reply.finish(Err("Drawing storage worker failed".into()));}}}}}
+impl StoreWork {
+    #[cfg(not(target_arch="wasm32"))]
+    pub fn run(self) {pollster::block_on(self.run_async());}
+    pub async fn run_async(mut self) {
+        match self.0.take().unwrap() {
+            StoreTask::Drawing(work)=>work.run().await,
+            StoreTask::Trim(trim)=>{let reply=trim.reply.clone();if std::panic::catch_unwind(std::panic::AssertUnwindSafe(||trim.run())).is_err() {reply.finish(Err("Drawing storage worker failed".into()));}}
+        }
+    }
+}
 impl Drop for StoreWork {fn drop(&mut self) {if let Some(StoreTask::Trim(trim))=self.0.take() {trim.reply.finish(Err("Drawing storage worker stopped".into()));}}}
 struct DrawingWork {stores:SessionStores,key:String,sequence:u64,binding:DrawingStore,request:Option<Request>}
 impl DrawingWork {
-    pub fn run(mut self) {
+    pub async fn run(mut self) {
         let mut request=self.request.take().unwrap();
         let current=match &request.work {
             Work::Checkpoint {stamp,forced:false,..}=>self.stores.0.state.lock().unwrap().drawings.get(&self.key)
@@ -276,30 +313,45 @@ impl DrawingWork {
             _=>true,
         };
         let cancelled=AtomicBool::new(false);
-        let result=if !current {Ok(StoreResult::Superseded)}else {std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let work=async {
             if let Work::Checkpoint {capture,prepare,..}=&mut request.work && let Some(prepare)=prepare.take() {prepare(capture)?;}
-            let operation=|store:&mut layer_core::package::session_store::SessionStore|match &request.work {
-            Work::Checkpoint {capture,..}=>capture.checkpoint(store,&cancelled).map(StoreResult::Checkpoint),
-            Work::Pressure(tiles)=>tiles.iter().try_fold(0usize,|bytes,tiles|store.make_durable(tiles,&cancelled).map(|released|bytes.saturating_add(released))).map(StoreResult::Durable),
-            Work::Restore(limits)=>{
-                let weak=Arc::downgrade(&self.stores.0);let key=self.key.clone();
-                let session=store.load(*limits,&cancelled)?.map(layer_ui::SessionRestore::from_core).transpose()?.map(|restore|restore.on_adopted(move |stamp| {
-                    if let Some(inner)=weak.upgrade() && let Some(drawing)=inner.state.lock().unwrap().drawings.get_mut(&key) {
-                        drawing.observed=Some(stamp.clone());drawing.committed=Some(stamp);drawing.committed_at=Some(SessionStores::now_ms());drawing.due=None;
-                    }
-                }));
-                Ok(StoreResult::Restored {session,recovered_previous:store.recovered_previous()})
-            },
-            Work::PrepareRetirement=>store.prepare_retirement().map(|()|StoreResult::RetirementPrepared),
-            Work::Retire=>store.retire().map(|()|StoreResult::Retired),
+            let operation=async |store:&mut layer_core::package::session_store::SessionStore|match &request.work {
+                Work::Checkpoint {capture,..}=>capture.checkpoint(store,&cancelled).await.map(StoreResult::Checkpoint),
+                Work::Pressure(tiles)=>{
+                    let mut bytes=0usize;
+                    for tiles in tiles {bytes=bytes.saturating_add(store.make_durable(tiles,&cancelled).await?);}
+                    Ok(StoreResult::Durable(bytes))
+                },
+                Work::Import {expected,metadata,resources}=>Ok(StoreResult::Imported(store.import_generation(*expected,metadata,resources.clone(),&cancelled).await)),
+                Work::Restore(limits)=>{
+                    let weak=Arc::downgrade(&self.stores.0);let key=self.key.clone();
+                    let session=store.load(*limits,&cancelled).await?.map(layer_ui::SessionRestore::from_core).transpose()?.map(|restore|restore.on_adopted(Box::new(move |stamp:SessionStamp| {
+                        if let Some(inner)=weak.upgrade() && let Some(drawing)=inner.state.lock().unwrap().drawings.get_mut(&key) {
+                            drawing.observed=Some(stamp.clone());drawing.committed=Some(stamp);drawing.committed_at=Some((inner.clock)());drawing.due=None;
+                        }
+                    })));
+                    Ok(StoreResult::Restored {session,recovered_previous:store.recovered_previous()})
+                },
+                Work::PrepareRetirement=>store.prepare_retirement().await.map(|()|StoreResult::RetirementPrepared),
+                Work::Retire=>store.retire().await.map(|()|StoreResult::Retired),
             };
             if matches!(request.work,Work::PrepareRetirement|Work::Retire) {
                 let missing=if matches!(request.work,Work::PrepareRetirement) {StoreResult::RetirementPrepared}else {StoreResult::Retired};
-                Ok(self.binding.on_retirement_worker(operation)?.unwrap_or(missing))
-            }else {self.binding.on_worker(operation)}
-        })).unwrap_or_else(|_|Err("Drawing storage worker failed".into()))};
+                Ok(self.binding.with_retirement_store(operation).await?.unwrap_or(missing))
+            }else {self.binding.with_store(operation).await}
+        };
+        #[cfg(not(target_arch="wasm32"))]
+        let result=if !current {drop(work);Ok(StoreResult::Superseded)}else {std::panic::AssertUnwindSafe(work).catch_unwind().await.unwrap_or_else(|_|Err("Drawing storage worker failed".into()))};
+        #[cfg(target_arch="wasm32")]
+        let result=if !current {drop(work);Ok(StoreResult::Superseded)}else {work.await};
         let committed=match (&request.work,&result) {(Work::Checkpoint {stamp,..},Ok(StoreResult::Checkpoint(_)))=>Some(stamp.clone()),_=>None};
-        self.complete(committed,matches!(result,Ok(StoreResult::Retired)));request.finish(result);self.stores.wake();
+        let written=committed.is_some();
+        self.complete(committed,matches!(result,Ok(StoreResult::Retired)));
+        if written {
+            let watched=self.stores.0.pressure.lock().unwrap().clone();
+            if let Some((source,generation))=watched && source.is_current(generation) && source.error().is_some() {source.storage_completed(Ok(()));}
+        }
+        request.finish(result);self.stores.wake();
     }
     fn complete(&self,committed:Option<SessionStamp>,retired:bool) {
         let mut state=self.stores.0.state.lock().unwrap();
@@ -309,7 +361,7 @@ impl DrawingWork {
         let next=state.drawings.get_mut(&self.key).and_then(|drawing| {
             if drawing.sequence!=self.sequence {return None;}
             drawing.running=false;drawing.inflight=None;drawing.retiring=false;
-            if let Some(stamp)=committed {drawing.committed=Some(stamp);drawing.committed_at=Some(SessionStores::now_ms());if drawing.observed.as_ref().zip(drawing.committed.as_ref()).is_some_and(|(a,b)|same_checkpoint(a,b)) {drawing.due=None;}}
+            if let Some(stamp)=committed {drawing.committed=Some(stamp);drawing.committed_at=Some((self.stores.0.clock)());if drawing.observed.as_ref().zip(drawing.committed.as_ref()).is_some_and(|(a,b)|same_checkpoint(a,b)) {drawing.due=None;}}
             drawing.pending.take().map(|request|self.stores.start(drawing,request))
         });
         if next.is_none() && !state.aliases.values().any(|key|key==&self.key) {state.drawings.remove(&self.key);}
@@ -337,10 +389,10 @@ impl PressureTrim {
         let Some((id,_,tiles))=self.candidates.get(next) else {self.reply.finish(Err("Inactive drawing bytes remain above their allowance".into()));return;};
         let result=self.stores.pressure(*id,tiles.clone());
         match result {
-            Ok(reply)=>reply.on_finished(move |result|match result {
+            Ok(reply)=>reply.on_finished(Box::new(move |result|match result {
                 Ok(())=>{let stores=self.stores.clone();(stores.0.execute)(StoreWork(Some(StoreTask::Trim(self))));},
                 Err(error)=>self.reply.finish(Err(error)),
-            }),
+            })),
             Err(error)=>self.reply.finish(Err(error)),
         }
     }

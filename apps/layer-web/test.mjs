@@ -40,6 +40,7 @@ import {checkStrokeRecording} from './stroke-recording.test.mjs';
 import {checkContactBrushes} from "./contact-brushes.test.mjs";
 import {checkUiUpdates,checkSettingsUpdates} from "./ui-updates.test.mjs";
 import {checkDrawingTabs,checkDrawingTabRecovery} from "./drawing-tabs.test.mjs";
+import {checkLegacySessionImport} from "./legacy-session-import.test.mjs";
 import {measureHdr} from "./hdr-performance.test.mjs";
 import {checkPortablePhoto} from "./portable-photo.test.mjs";
 import {checkExportMetadata} from "./export-metadata-journey.test.mjs";
@@ -274,7 +275,8 @@ try {
       await checkSettingsUpdates({evaluate,settle});
     }, checkErrors],
     [process.argv.includes("--drawing-tabs-recovery"), () => checkDrawingTabRecovery({cdp,call,evaluate,settle}), checkRasterErrors],
-    [process.argv.includes("--session-restart-performance"), () => measureSessionRestart({call,evaluate,settle}), checkRasterErrors],
+    [process.argv.includes("--legacy-session-import"), () => checkLegacySessionImport({evaluate,settle}), checkRasterErrors],
+    [process.argv.includes("--session-restart-performance"), () => measureSessionRestart({call,evaluate,settle,once:cdp.once}), checkRasterErrors],
     [process.argv.includes("--drawing-tabs"), () => checkDrawingTabs({call,evaluate,settle}), checkRasterErrors],
     [process.argv.includes("--portable-photo"), () => checkPortablePhoto({call,evaluate,settle}), checkRasterErrors],
     [process.argv.includes("--package-view"), () => checkPackageView({evaluate,settle}), checkRasterErrors],

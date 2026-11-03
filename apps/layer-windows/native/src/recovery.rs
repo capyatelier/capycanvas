@@ -93,7 +93,7 @@ impl Storage {
         for (_,directory) in &candidates {
             let Some(_lease)=OwnerLock::claim(&directory.join("owner.lock"))? else{continue};
             if matches!(SessionManifest::read(&directory.join("session.json")),Ok(Some(manifest)) if manifest.drawings.is_empty())
-                && let Err(error)=collect_unreferenced_stores(directory,&Default::default(),&AtomicBool::new(false)){warnings.push(error);}
+                && let Err(error)=pollster::block_on(collect_unreferenced_stores(directory,&Default::default(),&AtomicBool::new(false))){warnings.push(error);}
         }
         let mut claimed = None;
         let mut others = 0;
@@ -145,7 +145,7 @@ impl Storage {
     fn collect(&mut self,cancel:&AtomicBool)->Result<(),String>{
         let result=(||{
             let reachable=self.manifest.drawings.iter().map(|drawing|drawing.key.clone()).chain(self.stores.bindings().into_iter().map(|(_,store)|store.key().to_owned())).collect::<std::collections::BTreeSet<_>>();
-            collect_unreferenced_stores(&self.directory,&reachable,cancel)?;Ok(())
+            pollster::block_on(collect_unreferenced_stores(&self.directory,&reachable,cancel))?;Ok(())
         })();
         match result {Err(error) if !cancel.load(Ordering::Acquire)=>{self.warnings.push(error);Ok(())},result=>result}
     }
@@ -729,6 +729,13 @@ mod tests {
     use crate::test_support::TempDir;
     use layer_core::package::session_store::SessionStore;
     use layer_ui::{Platform, UiAction};
+    fn heads(path: &std::path::Path) -> [Option<Vec<u8>>; 2] {
+        ["head.0", "head.1"].map(|name| match std::fs::read(path.join(name)) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => panic!("{error}"),
+        })
+    }
     #[test]
     fn pressure_storage_keeps_one_writer_through_the_first_checkpoint() {
         let root=TempDir::new();let cancel=AtomicBool::new(false);
@@ -739,12 +746,12 @@ mod tests {
         storage.collect(&cancel).unwrap();
         assert_eq!(storage.stores.bindings().len(),1);
         assert!(!binding.path().join(".retired").exists());
-        assert!(SessionStore::open(binding.path()).is_err());
+        assert!(pollster::block_on(SessionStore::open(binding.path())).is_err());
         let manifest=SessionManifest {drawings:vec![SessionDrawing{id:1,key:binding.key().into()}],active:1,..storage.manifest.clone()};
         storage.capture(manifest,vec![(1,session.capture_session().unwrap(),session.session_stamp())],&cancel).unwrap();
         assert_eq!(storage.stores.bindings().len(),1);
         assert_eq!(storage.stores.bind(1,None).unwrap().path(),binding.path());
-        assert!(SessionStore::open(binding.path()).is_err());
+        assert!(pollster::block_on(SessionStore::open(binding.path())).is_err());
     }
 
     #[test]
@@ -863,15 +870,15 @@ mod tests {
         let root=TempDir::new();let cancel=AtomicBool::new(false);
         let mut original=Storage::create(&root.path).unwrap();
         let captured=capture();
-        original.store(4,"drawing-four").unwrap().on_worker(|store|captured.checkpoint(store,&cancel)).unwrap();
-        original.store(7,"drawing-seven").unwrap().on_worker(|store|captured.checkpoint(store,&cancel)).unwrap();
+        pollster::block_on(original.store(4,"drawing-four").unwrap().with_store(async |store|captured.checkpoint(store,&cancel).await)).unwrap();
+        pollster::block_on(original.store(7,"drawing-seven").unwrap().with_store(async |store|captured.checkpoint(store,&cancel).await)).unwrap();
         let manifest=SessionManifest::default().reconcile(vec![SessionDrawing{id:7,key:"drawing-seven".into()},SessionDrawing{id:4,key:"drawing-four".into()}],4,false).unwrap();
         original.publish(manifest,&cancel).unwrap();
         let concurrent=Storage::open(&root.path).unwrap().0;assert_ne!(concurrent.directory,original.directory);assert!(concurrent.manifest.drawings.is_empty());
         drop(concurrent);
         let directory=original.directory.clone();drop(original);
         let mut restored=Storage::open(&root.path).unwrap().0;assert_eq!(restored.directory,directory);assert_eq!(restored.manifest.drawings.iter().map(|drawing|drawing.id).collect::<Vec<_>>(),[7,4]);assert_eq!(restored.manifest.active,4);
-        let closed=restored.manifest.remove(4).unwrap();restored.publish(closed,&cancel).unwrap();restored.store(4,"drawing-four").unwrap().on_worker(|store|store.retire()).unwrap();drop(restored);
+        let closed=restored.manifest.remove(4).unwrap();restored.publish(closed,&cancel).unwrap();pollster::block_on(restored.store(4,"drawing-four").unwrap().with_store(async |store|store.retire().await)).unwrap();drop(restored);
         let reopened=Storage::open(&root.path).unwrap().0;assert_eq!(reopened.manifest.drawings.iter().map(|drawing|drawing.id).collect::<Vec<_>>(),[7]);assert_eq!(reopened.manifest.active,7);
     }
     #[test]
@@ -885,9 +892,9 @@ mod tests {
         let root=TempDir::new();let cancel=AtomicBool::new(false);let mut storage=Storage::create(&root.path).unwrap();
         let staged=storage.manifest.stage(vec![SessionDrawing{id:9,key:"first-drawing".into()}],9).unwrap();storage.publish(staged,&cancel).unwrap();let directory=storage.directory.clone();drop(storage);
         let reopened=Storage::open(&root.path).unwrap().0;assert_eq!(reopened.directory,directory);assert_eq!(reopened.manifest.drawings[0].id,9);assert!(!reopened.manifest.clean_exit);
-        assert!(reopened.store(9,"first-drawing").unwrap().on_worker(|store|store.load(Default::default(),&cancel)).unwrap().is_none());
-        let captured=capture();reopened.store(9,"first-drawing").unwrap().on_worker(|store|captured.checkpoint(store,&cancel)).unwrap();drop(reopened);
-        let completed=Storage::open(&root.path).unwrap().0;assert_eq!(completed.manifest.drawings[0].key,"first-drawing");assert!(completed.store(9,"first-drawing").unwrap().on_worker(|store|store.load(Default::default(),&cancel)).unwrap().is_some());
+        assert!(pollster::block_on(reopened.store(9,"first-drawing").unwrap().with_store(async |store|store.load(Default::default(),&cancel).await)).unwrap().is_none());
+        let captured=capture();pollster::block_on(reopened.store(9,"first-drawing").unwrap().with_store(async |store|captured.checkpoint(store,&cancel).await)).unwrap();drop(reopened);
+        let completed=Storage::open(&root.path).unwrap().0;assert_eq!(completed.manifest.drawings[0].key,"first-drawing");assert!(pollster::block_on(completed.store(9,"first-drawing").unwrap().with_store(async |store|store.load(Default::default(),&cancel).await)).unwrap().is_some());
     }
     #[test]
     fn interrupted_restore_is_blocked_and_corrupt_membership_is_preserved() {
@@ -900,7 +907,7 @@ mod tests {
     #[test]
     fn an_unreadable_drawing_waits_for_a_choice_while_the_others_reopen() {
         let root=TempDir::new();let cancel=AtomicBool::new(false);let mut storage=Storage::create(&root.path).unwrap();
-        let captured=capture();storage.store(2,"readable").unwrap().on_worker(|store|captured.checkpoint(store,&cancel)).unwrap();
+        let captured=capture();pollster::block_on(storage.store(2,"readable").unwrap().with_store(async |store|captured.checkpoint(store,&cancel).await)).unwrap();
         let manifest=SessionManifest::default().reconcile(vec![SessionDrawing{id:5,key:"unreadable".into()},SessionDrawing{id:2,key:"readable".into()}],5,false).unwrap();storage.publish(manifest,&cancel).unwrap();
         let decoded=storage.decode(Default::default(),|_|Ok(()),&cancel).unwrap();
         assert_eq!(decoded.drawings.iter().map(|(id,..)|*id).collect::<Vec<_>>(),[2]);assert_eq!(decoded.failed,["unreadable"]);assert_eq!(decoded.errors.len(),1);
@@ -923,7 +930,7 @@ mod tests {
     #[test]
     fn unrelated_retirement_damage_does_not_block_restore() {
         let root=TempDir::new();let cancel=AtomicBool::new(false);let mut storage=Storage::create(&root.path).unwrap();
-        let captured=capture();storage.store(1,"drawing").unwrap().on_worker(|store|captured.checkpoint(store,&cancel)).unwrap();
+        let captured=capture();pollster::block_on(storage.store(1,"drawing").unwrap().with_store(async |store|captured.checkpoint(store,&cancel).await)).unwrap();
         let manifest=SessionManifest::default().reconcile(vec![SessionDrawing{id:1,key:"drawing".into()}],1,false).unwrap();storage.publish(manifest,&cancel).unwrap();
         let orphan=damaged_orphan(&storage);let directory=storage.directory.clone();drop(storage);
         let mut restored=Storage::open(&root.path).unwrap().0;assert_eq!(restored.directory,directory);
@@ -940,11 +947,11 @@ mod tests {
         storage.capture(manifest,vec![(1,session.capture_session().unwrap(),session.session_stamp())],&cancel).unwrap();let orphan=damaged_orphan(&storage);
         for opacity in [0.4,0.8] {
             session.dispatch(UiAction::SetLayerOpacity{id:None,opacity}).unwrap();
-            let previous=fs::read(storage.directory.join("drawing/head.json")).unwrap();
+            let previous=heads(&storage.directory.join("drawing"));
             storage.capture(storage.manifest.clone(),vec![(1,session.capture_session().unwrap(),session.session_stamp())],&cancel).unwrap();
-            assert_ne!(fs::read(storage.directory.join("drawing/head.json")).unwrap(),previous);
+            assert_ne!(heads(&storage.directory.join("drawing")),previous);
             assert!(storage.warnings.pop().unwrap().contains("Invalid drawing retirement intent"));
-            let restored=storage.store(1,"drawing").unwrap().on_worker(|store|store.load(Default::default(),&cancel)).unwrap().unwrap();
+            let restored=pollster::block_on(storage.store(1,"drawing").unwrap().with_store(async |store|store.load(Default::default(),&cancel).await)).unwrap().unwrap();
             assert_eq!(restored.editor.checkpoint(),session.engine().checkpoint());assert!(restored.editor.can_undo());
             assert_eq!(fs::read(orphan.join(".retiring")).unwrap(),b"invalid");
         }
@@ -953,19 +960,19 @@ mod tests {
     fn unrelated_retirement_damage_does_not_reject_published_discard() {
         let root=TempDir::new();let cancel=AtomicBool::new(false);let mut storage=Storage::create(&root.path).unwrap();
         let captured=capture();
-        for (id,key) in [(1,"closed"),(2,"retained")] {storage.store(id,key).unwrap().on_worker(|store|captured.checkpoint(store,&cancel)).unwrap();}
+        for (id,key) in [(1,"closed"),(2,"retained")] {pollster::block_on(storage.store(id,key).unwrap().with_store(async |store|captured.checkpoint(store,&cancel).await)).unwrap();}
         let manifest=SessionManifest::default().reconcile(vec![SessionDrawing{id:1,key:"closed".into()},SessionDrawing{id:2,key:"retained".into()}],2,false).unwrap();storage.publish(manifest,&cancel).unwrap();
         let orphan=damaged_orphan(&storage);storage.discard(1,&cancel).unwrap();
         assert!(storage.warnings.iter().any(|error|error.contains("Invalid drawing retirement intent")));
         assert_eq!(storage.manifest.drawings,[SessionDrawing{id:2,key:"retained".into()}]);
-        assert!(storage.store(2,"retained").unwrap().on_worker(|store|store.load(Default::default(),&cancel)).unwrap().is_some());
+        assert!(pollster::block_on(storage.store(2,"retained").unwrap().with_store(async |store|store.load(Default::default(),&cancel).await)).unwrap().is_some());
         assert_eq!(fs::read(orphan.join(".retiring")).unwrap(),b"invalid");
     }
     #[test]
     fn restore_causes_follow_durable_keys_and_clear_only_after_acknowledgment() {
         let root=TempDir::new();let cancel=AtomicBool::new(false);let mut storage=Storage::create(&root.path).unwrap();
         let captured=capture();
-        for (id,key) in [(1,"first"),(2,"second")] {storage.store(id,key).unwrap().on_worker(|store|captured.checkpoint(store,&cancel)).unwrap();}
+        for (id,key) in [(1,"first"),(2,"second")] {pollster::block_on(storage.store(id,key).unwrap().with_store(async |store|captured.checkpoint(store,&cancel).await)).unwrap();}
         let manifest=SessionManifest::default().reconcile(vec![SessionDrawing{id:1,key:"first".into()},SessionDrawing{id:2,key:"second".into()}],1,false).unwrap();storage.publish(manifest,&cancel).unwrap();
         let first=storage.begin_restore(1,false,&cancel).unwrap();let second=storage.begin_restore(2,false,&cancel).unwrap();
         storage.complete_restores(&[(first,Err("first restore cause".into())),(second,Err("second restore cause".into()))],&[],&cancel).unwrap();
@@ -990,7 +997,7 @@ mod tests {
     fn rejected_restore_completion_preserves_membership_and_saved_causes() {
         let root=TempDir::new();let cancel=AtomicBool::new(false);let mut storage=Storage::create(&root.path).unwrap();
         let captured=capture();
-        for (id,key) in [(1,"first"),(2,"second")] {storage.store(id,key).unwrap().on_worker(|store|captured.checkpoint(store,&cancel)).unwrap();set_restore_error(&storage.directory.join(key),Some(key)).unwrap();}
+        for (id,key) in [(1,"first"),(2,"second")] {pollster::block_on(storage.store(id,key).unwrap().with_store(async |store|captured.checkpoint(store,&cancel).await)).unwrap();set_restore_error(&storage.directory.join(key),Some(key)).unwrap();}
         let manifest=SessionManifest::default().reconcile(vec![SessionDrawing{id:1,key:"first".into()},SessionDrawing{id:2,key:"second".into()}],1,false).unwrap();storage.publish(manifest,&cancel).unwrap();
         let first=storage.begin_restore(1,false,&cancel).unwrap();let second=storage.begin_restore(2,false,&cancel).unwrap();
         let manifest=storage.manifest.clone();let membership=fs::read(storage.directory.join("session.json")).unwrap();
@@ -1007,8 +1014,8 @@ mod tests {
         let root=TempDir::new();let cancel=AtomicBool::new(false);let storage=Storage::create(&root.path).unwrap();
         let mut session=UiSession::from_project(Renderer(None),layer_ui::new_drawing(32,24,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),None,[32,24],Platform::Windows).unwrap();
         session.dispatch(UiAction::SetLayerOpacity{id:None,opacity:0.4}).unwrap();
-        let expected=session.engine().checkpoint();let first=session.capture_session().unwrap();storage.store(1,"drawing").unwrap().on_worker(|store|first.checkpoint(store,&cancel)).unwrap();
-        session.dispatch(UiAction::SetLayerOpacity{id:None,opacity:0.8}).unwrap();let next=session.capture_session().unwrap();cancel.store(true,Ordering::Release);assert!(storage.store(1,"drawing").unwrap().on_worker(|store|next.checkpoint(store,&cancel)).is_err());cancel.store(false,Ordering::Release);
-        let restored=storage.store(1,"drawing").unwrap().on_worker(|store|store.load(Default::default(),&cancel)).unwrap().unwrap();assert_eq!(restored.editor.checkpoint(),expected);assert!(restored.editor.can_undo());
+        let expected=session.engine().checkpoint();let first=session.capture_session().unwrap();pollster::block_on(storage.store(1,"drawing").unwrap().with_store(async |store|first.checkpoint(store,&cancel).await)).unwrap();
+        session.dispatch(UiAction::SetLayerOpacity{id:None,opacity:0.8}).unwrap();let next=session.capture_session().unwrap();cancel.store(true,Ordering::Release);assert!(pollster::block_on(storage.store(1,"drawing").unwrap().with_store(async |store|next.checkpoint(store,&cancel).await)).is_err());cancel.store(false,Ordering::Release);
+        let restored=pollster::block_on(storage.store(1,"drawing").unwrap().with_store(async |store|store.load(Default::default(),&cancel).await)).unwrap().unwrap();assert_eq!(restored.editor.checkpoint(),expected);assert!(restored.editor.can_undo());
     }
 }

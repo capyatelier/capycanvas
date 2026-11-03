@@ -1,4 +1,4 @@
-use crate::package::{session::{PreparedSession, open_with_programs}, session_transfer::{PreparedSessionTransfer, SessionTransferReceiver}, ImmutableBacking, MAX_RANGE_BYTES};
+use crate::package::session_store::tests::SavedSession;
 use crate::{authored::*, color::{ColorProfile, RgbColor, RgbSpace, ProofRecipe, hdr::SdrRendition},
     raster::{RasterData, RasterPlane, RasterRevision, RasterTile, RasterWatercolor, TileBlob, TileKey, TILE_SIZE},
     BlendSpace, Document, DocumentNames, Edit, Editor, EffectInstance, EffectValue, ImageResolution,
@@ -159,30 +159,15 @@ fn assert_editor(expected:&Editor,actual:&Editor) {
     }
     assert_eq!(a,b);
 }
-fn transfer(editor:&Editor)->Editor {
-    let cancel=AtomicBool::new(false);let metadata=json!({"tab":"Drawing 色"});
-    let capture=editor.capture_session(editor.capture(11,editor.document().output().context.clone()).unwrap()).unwrap();
-    let transfer=PreparedSessionTransfer::capture(&capture,metadata.clone(),&cancel).unwrap();
-    let descriptor=serde_json::from_slice(&serde_json::to_vec(transfer.descriptor()).unwrap()).unwrap();
-    let mut receiver=SessionTransferReceiver::new(descriptor,ProjectLimits::default()).unwrap();
-    for index in 0..transfer.payload_count() {let length=transfer.payload_len(index).unwrap();let mut offset=0;
-        while offset<length {let count=(length-offset).min(MAX_RANGE_BYTES as u64) as usize;
-            receiver.push_chunk(index,&transfer.read_chunk(index,offset,count).unwrap()).unwrap();offset+=count as u64;}}
-    let restored=receiver.finish().unwrap().adopt_with_programs(ProjectLimits::default(),&cancel,&capture.trusted_programs().unwrap()).unwrap();
-    assert_eq!(restored.metadata.value,metadata);assert_eq!(restored.editor.document().working.generation,editor.document().working.generation);
-    assert_editor(editor,&restored.editor);restored.editor
-}
 fn reopen(editor:&Editor)->Editor {
-    let transferred=transfer(editor);let editor=&transferred;
     let cancel=AtomicBool::new(false);
     let capture=editor.capture_session(editor.capture(11,editor.document().output().context.clone()).unwrap()).unwrap();
     let metadata=json!({"destination":"file:///private/色.capy","saved_checkpoint":3,"camera":{"zoom":1.75,"rotation":0.25}});
-    let prepared=PreparedSession::prepare(&capture,metadata.clone(),&cancel).unwrap();
-    let mut bytes=Vec::new();prepared.write(&mut bytes,&cancel).unwrap();
-    let loaded=open_with_programs(ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap(),ProjectLimits::default(),&cancel,prepared.trusted_programs()).unwrap();
+    let saved=SavedSession::new(&capture,metadata.clone(),&cancel).unwrap();let loaded=saved.load().unwrap();
     assert_eq!(loaded.metadata.value,metadata);assert_eq!(loaded.editor.document().working.generation,editor.document().working.generation);
-    assert_editor(editor,&loaded.editor);transfer(&loaded.editor)
+    assert_editor(editor,&loaded.editor);loaded.editor
 }
+
 #[test]
 fn saved_selection_overlay_visibility_is_private_and_survives_recovery() {
     let mut original=fixture();let artwork=original.document().artwork.clone();let checkpoint=original.checkpoint();
@@ -349,10 +334,9 @@ fn captured_output_phases_remain_reversible_across_session_history() {
     let authored=original.document().output().context.clone();let checkpoint=original.checkpoint();let cancel=AtomicBool::new(false);
     let mut capture=original.capture_session(original.capture(11,if deferred {authored.clone()}else{context.clone()}).unwrap()).unwrap();
     let artwork=Arc::make_mut(&mut capture.artwork_mut().artwork);artwork.outputs.get_mut(artwork.default_output).unwrap().context=context.clone();
-    let archive=PreparedSession::prepare(&capture,json!({}),&cancel).unwrap();let mut bytes=Vec::new();archive.write(&mut bytes,&cancel).unwrap();
-    let archived=open_with_programs(ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap(),ProjectLimits::default(),&cancel,archive.trusted_programs()).unwrap().editor;
-    let transferred=PreparedSessionTransfer::capture(&capture,json!({}),&cancel).unwrap().adopt_verified(ProjectLimits::default(),&cancel).unwrap().editor;
-    for mut restored in [archived,transferred] {
+    let saved=SavedSession::new(&capture,json!({}),&cancel).unwrap();
+    let mut restored=saved.load().unwrap().editor;
+    {
         assert_eq!(restored.checkpoint(),checkpoint);assert_eq!(restored.document().output().context,context);
         assert!(restored.redo().unwrap());assert_eq!(&restored.document().output().context,if navigation{&context}else{&authored});
         assert!(restored.undo().unwrap());assert_eq!(restored.document().output().context,context);

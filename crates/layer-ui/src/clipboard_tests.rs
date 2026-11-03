@@ -1425,8 +1425,6 @@ mod clipboard_checks {
 
     #[test]
     fn mask_clipboard_edits_reopen_with_exact_tiles_and_session_history() {
-        use layer_core::package::{ImmutableBacking, session::{PreparedSession, open}};
-        use std::sync::atomic::AtomicBool;
         let signature = |document: &Document| {
             let (_, _, source) = document.artwork.coverage.iter().next().unwrap();
             assert!(source.operations.is_empty());
@@ -1465,12 +1463,8 @@ mod clipboard_checks {
         assert_eq!(signature(&reopened), cut);
         let mask = reopened.artwork.occurrences.iter().find_map(|(_, _, layer)| layer.mask.as_ref()).unwrap();
         assert_eq!((mask.offset, mask.linked, mask.inverted, mask.enabled), ([7, -2], false, true, false));
-        let cancel = AtomicBool::new(false);
-        let capture = s.engine.capture_session(0).unwrap();
-        let prepared = PreparedSession::prepare(&capture, serde_json::json!({}), &cancel).unwrap();
-        let mut bytes = Vec::new(); prepared.write(&mut bytes, &cancel).unwrap();
-        let backing = ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap();
-        let mut restored = open(backing, Default::default(), &cancel).unwrap().editor;
+        let saved = crate::session_recovery::tests::checkpoint(&s);
+        let mut restored = saved.load().editor;
         assert_eq!(restored.document().working, s.engine.document().working);
         assert_eq!(restored.document().working.target, Some(target));
         assert_eq!(signature(restored.document()), cut);

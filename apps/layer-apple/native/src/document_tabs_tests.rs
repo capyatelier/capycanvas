@@ -1,7 +1,5 @@
 use super::*;
-use super::fixtures::tempfile;
 use layer_core::color::{RgbSpace, SampleDepth};
-use std::io::{Read, Seek};
 fn new_drawing(app: &App, depth: SampleDepth) {
     let job = ProjectJob::create_with(app, [96, 64], &[json!({"op": "space", "space": RgbSpace::DisplayP3}), json!({"op": "depth", "depth": depth})]);
     assert_eq!(
@@ -137,16 +135,11 @@ fn apple_tabs_preserve_history_pixels_and_disk_parking() {
         assert_eq!(app.document().working, first.working);
         let cancel = std::sync::atomic::AtomicBool::new(false);
         let capture = app.with(|native|native.window.session(&native.host, 2).unwrap().capture_session().unwrap());
-        let prepared = capture.prepare(&cancel).unwrap();
-        let mut file = tempfile();
-        prepared.write(&mut file, &cancel).unwrap();
-        file.rewind().unwrap();
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes).unwrap();
-        let bytes: std::sync::Arc<[u8]> = bytes.into();
-        let backing = layer_core::package::ImmutableBacking::new(std::sync::Arc::new(bytes)).unwrap();
-        let restored = layer_core::package::session::open(backing, Default::default(), &cancel).unwrap();
+        let mut store=pollster::block_on(layer_core::package::session_store::SessionStore::open(&root.join("captured-second"))).unwrap();
+        pollster::block_on(capture.checkpoint(&mut store,&cancel)).unwrap();
+        let restored=pollster::block_on(store.load(Default::default(),&cancel)).unwrap().unwrap();
         assert_project_document(restored.editor.document(), &second);
+        drop((restored,store));
         app.request(
             2,
             json!({"type":"document_tabs","op":"reorder","id":2,"before":1}),

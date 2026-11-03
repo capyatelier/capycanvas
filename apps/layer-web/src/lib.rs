@@ -4,7 +4,10 @@ mod clipboard;
 mod documents;
 mod document_tabs;
 mod document_storage;
+mod store_transport;
 mod session_restart;
+mod session_files;
+mod legacy_import;
 mod image_import;
 mod color_edit;
 mod source_edit;
@@ -48,6 +51,7 @@ pub struct WebApp {
     mobile_browser: bool,
     session: UiSession<AttachedRenderer>,
     documents: layer_ui::DocumentSessions<UiSession<AttachedRenderer>>,
+    stores:layer_host::session_stores::SessionStores,
     document_gpu: Option<document_tabs::DocumentGpu>,
     surface: Option<WebSurface>,
     canvas: web_sys::HtmlCanvasElement,
@@ -340,6 +344,7 @@ impl WebApp {
         }
         session.set_document_replacement(false);
         let documents = layer_ui::DocumentSessions::localized(session.localization());
+        let stores=store_transport::coordinator();stores.watch_pressure(documents.pressure_source());
         Ok(Self {
             language_transition: layer_ui::LanguageTransition::new(session.localization().clone()),
             language_preparation: None,
@@ -349,6 +354,7 @@ impl WebApp {
             tone: Default::default(),
             session,
             documents,
+            stores,
             document_gpu: None,
             surface: None,
             workspaces: None,

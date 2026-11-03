@@ -271,7 +271,7 @@ impl SessionJob {
         let cleanup = (|| -> Result<(), String> {
             let removed=disk.stores.bindings().into_iter().filter(|(id,_)|!manifest.drawings.iter().any(|drawing|drawing.id==*id)).map(|(_,binding)|binding.key().to_owned()).collect::<Vec<_>>();
             for key in removed {disk.stores.retire_copy(&key)?.wait_on_worker()?;}
-            collect_unreferenced_stores(&disk.path, &manifest.drawings.iter().map(|drawing| drawing.key.clone()).collect(), &cancel)?;
+            pollster::block_on(collect_unreferenced_stores(&disk.path, &manifest.drawings.iter().map(|drawing| drawing.key.clone()).collect(), &cancel))?;
             Ok(())
         })();
         if let Err(error) = cleanup {

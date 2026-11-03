@@ -88,6 +88,8 @@ pub struct SnapshotGpu {
     #[cfg(target_arch = "wasm32")]
     image_decoder: Option<crate::BrowserImageDecoder>,
     #[cfg(target_arch = "wasm32")]
+    raster_decoder: Option<crate::BrowserRasterDecoder>,
+    #[cfg(target_arch = "wasm32")]
     nearest_coordinate_decoder: Option<crate::BrowserNearestCoordinateDecoder>,
     analyses: Vec<Arc<crate::effect_analysis::Prepared>>,
     #[cfg(target_arch = "wasm32")]
@@ -95,6 +97,16 @@ pub struct SnapshotGpu {
     factory: RendererFactory,
     device: PipelineDevice,
     queue: wgpu::Queue,
+}
+#[cfg(target_arch="wasm32")]
+impl SnapshotGpu {
+    fn install_browser_workers(&self,renderer:&mut WgpuRasterizer) {
+        if let Some(encoder)=self.encoder.clone() {renderer.set_browser_raster_encoder(encoder);}
+        if let Some(decoder)=self.image_decoder.clone() {renderer.set_browser_image_decoder(decoder);}
+        if let Some(decoder)=self.raster_decoder.clone() {renderer.set_browser_raster_decoder(decoder);}
+        if let Some(decoder)=self.nearest_coordinate_decoder.clone() {renderer.set_browser_nearest_coordinate_decoder(decoder);}
+        renderer.analysis_backing_waiter=self.analysis_backing_waiter.clone();
+    }
 }
 impl WgpuRasterizer {
     /// CPU exact source samples shared with this canvas's snapshot workers.
@@ -112,6 +124,8 @@ impl WgpuRasterizer {
             encoder: self.browser_raster_encoder(),
             #[cfg(target_arch = "wasm32")]
             image_decoder: self.browser_image_decoder.clone(),
+            #[cfg(target_arch = "wasm32")]
+            raster_decoder: self.browser_raster_decoder.clone(),
             #[cfg(target_arch = "wasm32")]
             nearest_coordinate_decoder: self.browser_nearest_coordinate_decoder.clone(),
             device: self.device.clone(),
@@ -328,11 +342,7 @@ impl SnapshotRenderer {
         renderer.prepare_capture_memory(view, extent);
         if let Some(native) = renderer.native_edit.as_mut() { native.color_cache_bytes = 0; }
         #[cfg(target_arch = "wasm32")]
-        if let Some(encoder) = gpu.encoder.clone() { renderer.set_browser_raster_encoder(encoder); }
-        #[cfg(target_arch = "wasm32")]
-        if let Some(decoder) = gpu.image_decoder.clone() { renderer.set_browser_image_decoder(decoder); }
-        #[cfg(target_arch = "wasm32")]
-        if let Some(decoder) = gpu.nearest_coordinate_decoder.clone() { renderer.set_browser_nearest_coordinate_decoder(decoder); }
+        gpu.install_browser_workers(&mut renderer);
 
         for &handle in view.order() {
             let Some(effect) = view.effect(handle) else { continue; };

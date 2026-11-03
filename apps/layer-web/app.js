@@ -2,12 +2,12 @@ import { addScrollbar } from "./scrollbars.js";
 import { observeButtonFeedback } from "./button-feedback.js";
 import { edgeContactClass, edgeResetClass } from "./edge-reach.js";
 import { brushSizeGrid } from "./brush-sizes.js";
-import init, { WebApp, WebGpu, configure_raster_worker, configure_gpu_diagnostics } from "./pkg/layer_web.js";
+import init, { WebApp, WebGpu, configure_raster_worker, configure_store_transport, configure_gpu_diagnostics } from "./pkg/layer_web.js";
+import {createStoreWorker} from './store-worker-client.js';
 import { createRasterWorker } from "./raster-worker-client.js";
 import { createPaintPairIcon } from './color-controls.js';
 import { chooseColor, configureColorEditor, refreshColorEditors } from './color-editor.js';
 import { refreshTextureDialogs } from './paper-picker.js';
-import { createDocumentStorage } from "./document-storage.js";
 import { workspaceStore, modulePromise, setWorkspaceWake } from "./workspace-preload.js";
 import { createWorkspaceManager } from "./workspace-manager.js";
 import { createPreferences } from "./preferences.js";
@@ -1908,12 +1908,13 @@ try {
   performance.mark("capy.startup.wasm");
   // Let the browser start the worker while the main thread builds controls.
   await new Promise(resolve => setTimeout(resolve, 0));
-  const fileWorker = createRasterWorker(wasmModule,event=>gpuDiagnostics.record(event)),documentStorage=createDocumentStorage();
+  const fileWorker = createRasterWorker(wasmModule,event=>gpuDiagnostics.record(event));
   const rasterWorker = async request=>{
-    try{return await(request.operation.startsWith('tab-')?documentStorage(request):fileWorker(request));}
+    try{return await fileWorker(request);}
     finally{if(request.operation==='image-decode'||request.operation==='nearest-coordinates')wake();}
   };
   configure_raster_worker(rasterWorker);
+  configure_store_transport(createStoreWorker(wake),wake);
   canvas.width = 800;
   canvas.height = 600;
   let savedPreferences, restoreError;

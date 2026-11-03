@@ -30,7 +30,7 @@ export function createRasterWorker(module,reportGpu=()=>{}) {
       else if (data.error) job.reject(new Error(data.error)); else job.resolve(data.result);
       // Wasm heaps cannot shrink. Release an oversized idle file arena after
       // its transferred result is owned by the editor and no OPFS job is live.
-      if((kind==="files"||kind==="checkpoint") && data.retire && !pending.size)state.park();
+      if(kind==="files" && data.retire && !pending.size)state.park();
     };
     worker.onerror = event => { event.preventDefault(); fail(new Error(event.message || "Raster worker stopped")); };
     worker.onmessageerror = () => fail(new Error("Invalid raster worker response"));
@@ -58,13 +58,12 @@ export function createRasterWorker(module,reportGpu=()=>{}) {
       try{const output=await send(state,request,cancelled);outputs.set(output.token,state);return output;}
       catch(error){state.fail(error);throw error;}
     }
-    if(['restart-begin','restart-write','restart-retain'].includes(op))return send(owner('checkpoint'),request,cancelled);
     if((op==='read'||request.file!==undefined)&&!(request.file instanceof Blob))throw Error('Invalid file read input');
     if(op==='paper-library'&&request.file!==undefined){
       const state=owner(`paper-read:${++next}`);
       try{return await send(state,request,cancelled);}finally{state.fail(new DOMException('Reading finished','AbortError'));}
     }
-    if(op==='read'||op==='restart-open'){
+    if(op==='read'){
       const state=owner(`read:${++next}`);reads.add(state);
       try{return await send(state,request,cancelled);}finally{reads.delete(state);state.fail(new DOMException('Reading finished','AbortError'));}
     }

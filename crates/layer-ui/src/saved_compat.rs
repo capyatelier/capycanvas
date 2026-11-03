@@ -45,8 +45,8 @@ fn generate(directory:&Path)->SessionDocumentState {
         capture.state.camera.center=[12.,34.];capture.state.camera.rotation=0.25;capture.state.camera.flipped=[true,true];
         capture.state.camera.zoom_locked=true;capture.state.camera.rotation_locked=true;
         capture.state.unsaved_name=Some("Coverage drawing".into());capture.state.unpublished=true;capture.state.recovered=true;
-        let mut store=layer_core::package::session_store::SessionStore::open(&directory.join(key)).unwrap();
-        capture.checkpoint(&mut store,&AtomicBool::new(false)).unwrap();
+        let mut store=pollster::block_on(layer_core::package::session_store::SessionStore::open(&directory.join(key))).unwrap();
+        pollster::block_on(capture.checkpoint(&mut store,&AtomicBool::new(false))).unwrap();
         drop(store);std::fs::remove_file(directory.join(key).join(".lock")).unwrap();
         capture.state
     };
@@ -129,8 +129,8 @@ fn check_inputs(directory:&Path,check:impl Fn(&str,Value)) {
         check(if name=="session.json" {"membership.json"}else{"membership-icc.json"},serde_json::to_value(&manifest).unwrap());
         let temporary=std::env::temp_dir().join(format!("capy-release-ui-{}",PortableId::random()));
         copy_tree(&directory.join(&manifest.drawings[0].key),&temporary);
-        let cancel=AtomicBool::new(false);let mut store=layer_core::package::session_store::SessionStore::open(&temporary).unwrap();
-        let restored=SessionRestore::from_core(store.load(ProjectLimits::default(),&cancel).unwrap().unwrap()).unwrap();
+        let cancel=AtomicBool::new(false);let mut store=pollster::block_on(layer_core::package::session_store::SessionStore::open(&temporary)).unwrap();
+        let restored=SessionRestore::from_core(pollster::block_on(store.load(ProjectLimits::default(),&cancel)).unwrap().unwrap()).unwrap();
         let profile=restored.last_export.as_ref().and_then(|last|match &last.recipe.profile.profile {
             layer_core::color::ColorProfile::Icc(bytes)=>Some(crate::profile_library::profile_identity(bytes)),_=>None,
         });
@@ -275,8 +275,8 @@ fn generated_saved_documents_set_every_field() {
     let mut baseline=session(Platform::Gtk);baseline.frame(0,0).unwrap();
     let default=serde_json::to_value(baseline.capture_session().unwrap().state).unwrap();
     {
-        let mut store=layer_core::package::session_store::SessionStore::open(&directory.join("drawing-a")).unwrap();
-        let opened=store.load(ProjectLimits::default(),&AtomicBool::new(false)).unwrap().unwrap();
+        let mut store=pollster::block_on(layer_core::package::session_store::SessionStore::open(&directory.join("drawing-a"))).unwrap();
+        let opened=pollster::block_on(store.load(ProjectLimits::default(),&AtomicBool::new(false))).unwrap().unwrap();
         let restored=SessionRestore::from_core(opened).unwrap();
         assert_eq!(serde_json::to_value(restored.state).unwrap(),serde_json::to_value(&authored).unwrap());
     }

@@ -829,18 +829,20 @@ fn crowded_vector_layer_session_costs() {
         let idle = start.elapsed().as_secs_f64() * 1e3;
         eprintln!("document apply {apply:.2} ms, engine apply {engine_apply:.2} ms, next frame {frame:.2} ms, idle frame {idle:.2} ms");
         let cancel = std::sync::atomic::AtomicBool::new(false);
+        let path = std::env::temp_dir().join(format!("capy-ui-vector-session-{}", layer_core::PortableId::random()));
+        let mut store = pollster::block_on(layer_core::package::session_store::SessionStore::open(&path)).unwrap();
         let start = std::time::Instant::now();
-        let capture = s.engine.capture_session(0).unwrap();
-        let prepared = layer_core::package::session::PreparedSession::prepare(&capture, serde_json::json!({}), &cancel).unwrap();
+        let capture = s.capture_session().unwrap();
+        pollster::block_on(capture.checkpoint(&mut store, &cancel)).unwrap();
         let autosave = start.elapsed().as_secs_f64() * 1e3;
         let start = std::time::Instant::now();
-        let capture = s.engine.capture_session(0).unwrap();
-        layer_core::package::session::PreparedSession::prepare(&capture, serde_json::json!({}), &cancel).unwrap();
+        let capture = s.capture_session().unwrap();
+        pollster::block_on(capture.checkpoint(&mut store, &cancel)).unwrap();
         let again = start.elapsed().as_secs_f64() * 1e3;
         let start = std::time::Instant::now();
         s.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
         let undo = start.elapsed().as_secs_f64() * 1e3;
-        drop(prepared);
+        drop(store);std::fs::remove_dir_all(path).unwrap();
         eprintln!("{count} paths: populate {populate:.1} ms; pen-up commit p50 {:.2} max {:.2} ms; autosave {autosave:.1} ms, repeated {again:.1} ms; undo {undo:.2} ms",
             commits[commits.len() / 2], commits[commits.len() - 1]);
     }

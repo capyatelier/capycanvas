@@ -1,7 +1,5 @@
 import init, * as wasm from "./pkg/layer_web.js";
-import {createRestartStore,verifyRestartCheckpoint} from "./restart-store.js";
 import {panelVectorPaths} from './panel-vector-paths.js';
-const restart=createRestartStore();
 let ready,module,panelVectors;
 let pending = Promise.resolve();
 self.onmessage = ({data}) => { if(data.module)module=data.module;pending = pending.then(() => execute(data)); };
@@ -19,9 +17,6 @@ async function execute({id,request}) {
       const result=await createImageBitmap(pixels);
       self.postMessage({id,result},[result]); return;
     }
-    // These operations only touch IndexedDB. Recovery discovery must not
-    // download/instantiate the image codec before listing a few keys.
-    if (!request.operation.startsWith('restart-store-'))
       instance=await (ready ??= init({module_or_path:module}).then(instance=>{
         wasm.configure_gpu_diagnostics(event=>self.postMessage({gpu_event:{...event,wasm_bytes:instance.memory.buffer.byteLength}}));
         return instance;
@@ -37,27 +32,6 @@ async function execute({id,request}) {
         const fingerprint=new wasm.WebFileFingerprint(),reader=request.file.stream().getReader();
         try {for(;;){const {done,value}=await reader.read();if(done)break;fingerprint.update(value);}result=fingerprint.finish();}
         finally {fingerprint.free();reader.releaseLock();}
-        break;
-      }
-      case "restart-store-list": result=await restart.windows();break;
-      case "restart-store-manifest": result=await restart.manifest(request.metadata);break;
-      case "restart-store-publish-manifest": {const {key,manifest,closed}=JSON.parse(request.metadata);result=await restart.publishManifest(key,manifest,closed);break;}
-      case "restart-store-transfer-manifest": {const {source,sourceManifest,destination,destinationManifest,key,sourceGeneration,destinationGeneration}=JSON.parse(request.metadata);result=await restart.transferManifest(source,sourceManifest,destination,destinationManifest,key,sourceGeneration,destinationGeneration);break;}
-      case "restart-store-remove-manifest": result=await restart.removeManifest(request.metadata);break;
-      case "restart-store-read": result=await restart.read(request.metadata);break;
-      case "restart-store-resources": {const {key,ids}=JSON.parse(request.metadata);result={buffers:await restart.resources(key,ids)};break;}
-      case "restart-store-publish": {const {key,checkpoint,ids,base_generation}=JSON.parse(request.metadata);result=await restart.publish(key,checkpoint,ids.map((id,index)=>({id,bytes:request.buffers[index]})),request.handles,base_generation);break;}
-      case "restart-store-remove": result=await restart.remove(request.metadata);break;
-      case "restart-begin": result=wasm.raster_worker_restart_begin(request.metadata);break;
-      case "restart-retain": wasm.raster_worker_restart_retain(request.metadata);result=true;break;
-      case "restart-open": {
-        await verifyRestartCheckpoint(JSON.parse(request.metadata));
-        result=await wasm.raster_worker_restart_open(request.metadata,request.buffers);break;
-      }
-      case "restart-write": {
-        const prepared=await wasm.raster_worker_restart_write(request.metadata,request.buffers);
-        const {key,checkpoint,ids,base_generation}=JSON.parse(prepared.metadata);
-        result=await restart.publish(key,checkpoint,ids.map((id,index)=>({id,bytes:prepared.buffers[index]})),request.handles,base_generation);
         break;
       }
       case "color-field": result = wasm.raster_worker_color_field(request.metadata); break;

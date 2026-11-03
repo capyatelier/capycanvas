@@ -48,7 +48,7 @@ test('each worker receives the shared compiled module once, including idle repla
     const repeated=f.run(request());assert.equal(f.workers[0].messages[1].module,undefined);f.workers[0].reply('repeat');await repeated;
     await f.advance(5000);
     const next=f.run(request());assert.equal(f.workers[1].messages[0].module,module);f.workers[1].reply('next');await next;
-    const storage=f.run(request('restart-store-list'));assert.equal(f.workers[2].messages[0].module,module);f.workers[2].reply([]);await storage;
+    const file=f.run(request('fingerprint'));assert.equal(f.workers[2].messages[0].module,module);f.workers[2].reply('fingerprint');assert.equal(await file,'fingerprint');
   }finally{f.close();}
 });
 
@@ -165,11 +165,11 @@ test('separate save outputs retain independent owners',()=>withFixture(async f=>
   const closeSecond=f.run(request('output-close',{metadata:'second'}));b.reply(true);await closeSecond;assert.equal(b.terminated,true);
 }));
 
-test('failed saves release archive workers and checkpoints reuse their cache owner',()=>withFixture(async f=>{
+test('failed saves release archive workers and file operations reuse their owner',()=>withFixture(async f=>{
   const pending=f.run(request('write'));const rejected=assert.rejects(pending,/Publication failed/);
   f.workers[0].reply(undefined,{error:'Publication failed'});await rejected;assert.equal(f.workers[0].terminated,true);
-  const recovery=f.run(request('restart-write'));f.workers[1].reply(true);assert.equal(await recovery,true);assert.equal(f.workers[1].terminated,false);
-  const begin=f.run(request('restart-begin'));f.workers[1].reply([]);assert.deepEqual(await begin,[]);assert.equal(f.workers.length,2);
+  const fingerprint=f.run(request('fingerprint'));f.workers[1].reply('digest');assert.equal(await fingerprint,'digest');assert.equal(f.workers[1].terminated,false);
+  const properties=f.run(request('properties'));f.workers[1].reply({width:32});assert.deepEqual(await properties,{width:32});assert.equal(f.workers.length,2);
 }));
 
 for(const operation of ['image-decode','nearest-coordinates','alpha-image'])test(`${operation} failure leaves file and compression workers usable`,()=>withFixture(async f=>{

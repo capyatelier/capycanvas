@@ -7,6 +7,25 @@ use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::{Arc, atomic::{AtomicBool, Ordering}}};
 
 pub(crate) const WRAPPERS: [&str; 2] = ["capy.lz4-bytes/1", "capy.deflate-bytes/1"];
+pub(crate) fn stored_decode_bound(record:&Value)->DecodeResult<Option<usize>> {
+    if !super::manifest::resource_supported(record)? {return Ok(None);}
+    let limit=match record["type"].as_str() {
+        Some("capy.icc/1")=>crate::color::source::MAX_PROFILE_BYTES,
+        Some("capy.wgsl/1")=>4*1024*1024,
+        Some("capy.lut3d/1")=>(Lut3d::MAX_SIZE as usize).pow(3)*12,
+        Some("capy.vector-items/1")=>super::vector_records::MAX_CHUNK_BYTES,
+        Some("capy.photo-metadata/1")=>crate::PhotoMetadata::MAX_BYTES,
+        Some("capy.selection-coverage/1")=>65536,
+        Some("capy.raster-tile/1")=>parse_descriptor(&record["data"])?.byte_len([TILE_SIZE;2]).ok_or("Invalid tile descriptor")?,
+        _=>return Ok(None),
+    };
+    let encoded=decimal_u64(&record["bytes"])?;
+    let decoded=if WRAPPERS.contains(&record["encoding"].as_str().unwrap()) {decimal_u64(&record["data"]["decoded_bytes"])?}else {encoded};
+    let tile_or_coverage=matches!(record["type"].as_str(),Some("capy.raster-tile/1"|"capy.selection-coverage/1"));
+    if !tile_or_coverage && decoded>limit as u64 {return Err(DecodeError::Unsupported("Resource exceeds decoded size admission".into()));}
+    if encoded>lz4_flex::block::get_maximum_output_size(limit) as u64 {return Err(DecodeError::Unsupported("Resource exceeds encoded size bound".into()));}
+    Ok(Some(limit))
+}
 pub fn reference(id: PortableId) -> Value { json!({"ref":id}) }
 pub fn reference_id(value: &Value) -> DecodeResult<PortableId> {
     values::string(values::required(values::object(value, &["ref"])?, "ref")?)?.parse().map_err(DecodeError::from)
@@ -28,7 +47,6 @@ impl Payload {
         (Self::Tile(a),Self::Tile(b)) => Arc::ptr_eq(&a.compressed,&b.compressed), (Self::Bytes(a),Self::Bytes(b)) | (Self::Encoded(a),Self::Encoded(b)) => a.same_owner(b),
         (Self::Code(a),Self::Code(b)) => a.same_owner(b), (Self::Vector(a),Self::Vector(b)) => a.same_owner(b), (Self::Opaque(a),Self::Opaque(b)) => Arc::ptr_eq(a,b), _ => false,
     } }
-    #[cfg(not(target_arch="wasm32"))]
     pub(crate) fn weak_owner(&self)->std::sync::Weak<dyn Send+Sync> {
         match self {
             Self::Tile(tile)=>{let owner:Arc<dyn Send+Sync>=tile.compressed.clone();Arc::downgrade(&owner)},
@@ -66,7 +84,13 @@ impl Payload {
     }
     pub fn encoded(&self) -> Result<EncodedBytes, String> { Ok(match self {
         Self::Opaque(_) => return Err("Range resources use bounded reads".into()),
-        Self::Tile(tile) => EncodedBytes { encoding:ResourceEncoding::Raw, bytes:tile.compressed_on_worker()?.into_arc() },
+        Self::Tile(tile) => {
+            #[cfg(not(target_arch="wasm32"))]
+            let bytes=tile.compressed_on_worker()?.into_arc();
+            #[cfg(target_arch="wasm32")]
+            let bytes=tile.memory_compressed()?.ok_or("Package input bytes were not supplied to the worker")?;
+            EncodedBytes {encoding:ResourceEncoding::Raw,bytes}
+        },
         Self::Encoded(bytes) => EncodedBytes { encoding:ResourceEncoding::Raw, bytes:bytes.storage().clone() },
         Self::Bytes(bytes) => bytes.encoded(|data| compress(data, || bytes.storage().clone())).clone(),
         Self::Code(code) => code.encoded(|data| compress(data.as_bytes(), || Arc::from(data.as_bytes()))).clone(),
@@ -76,7 +100,6 @@ impl Payload {
 #[derive(Clone, Debug)]
 pub struct ResourceEntry { pub kind: &'static str, pub data: Value, pub raw_encoding: &'static str, pub payload: Payload }
 impl ResourceEntry {
-    #[cfg(not(target_arch="wasm32"))]
     pub(crate) fn store_record(&self,cancelled:&AtomicBool)->Result<(Value,EncodedIntegrity),String> {
         let (encoded,integrity)=self.payload.prepared(cancelled)?;
         let mut data=self.data.clone();
@@ -303,7 +326,6 @@ pub struct ResourceReader<'a> {
     pub manifest: &'a Manifest, pub backing: &'a ImmutableBacking, pub cancelled: &'a AtomicBool,
     pub limits: crate::ProjectLimits,
     pub(crate) private: bool,
-    #[cfg(not(target_arch="wasm32"))]
     pub(crate) store:Option<&'a super::session_store::StoreResources>,
     pub(crate) trusted_programs: super::TrustedPrograms,
     pub(crate) bytes: BTreeMap<PortableId, Resource<[u8]>>, pub(crate) texts: BTreeMap<PortableId, Resource<str>>,
@@ -334,7 +356,7 @@ impl<'a> ResourceReader<'a> {
     }
     pub(crate) fn with_budget(manifest: &'a Manifest, backing: &'a ImmutableBacking, cancelled: &'a AtomicBool, limits: crate::ProjectLimits, budget: crate::MemoryBudget) -> Self {
         Self {admission:budget.admit_import(0),manifest,backing,cancelled,limits,private:false,
-            #[cfg(not(target_arch="wasm32"))] store:None,trusted_programs:Default::default(),bytes:BTreeMap::new(),texts:BTreeMap::new(),tiles:BTreeMap::new(),luts:BTreeMap::new(),decoded:0,verified:false,aliases:BTreeMap::new(),rasters:BTreeMap::new(),selections:BTreeMap::new(),images:BTreeMap::new(),programs:BTreeMap::new(),vectors:BTreeMap::new(),opaque:BTreeMap::new()}
+            store:None,trusted_programs:Default::default(),bytes:BTreeMap::new(),texts:BTreeMap::new(),tiles:BTreeMap::new(),luts:BTreeMap::new(),decoded:0,verified:false,aliases:BTreeMap::new(),rasters:BTreeMap::new(),selections:BTreeMap::new(),images:BTreeMap::new(),programs:BTreeMap::new(),vectors:BTreeMap::new(),opaque:BTreeMap::new()}
     }
     pub(crate) fn install_cache(&mut self, cache: ResourceCache) {
         self.admission=cache.admission.or_else(||self.admission.take());
@@ -391,10 +413,8 @@ impl<'a> ResourceReader<'a> {
         let range = record.range.ok_or_else(|| DecodeError::Unsupported("Unknown resource location".into()))?;
         if record.bytes > limit as u64 { return Err(DecodeError::Unsupported("Resource exceeds encoded size bound".into())); }
         if range.length != record.bytes {return Err("Resource range length disagrees with descriptor".into());}
-        #[cfg(not(target_arch="wasm32"))]
-        if let Some(store)=self.store {
-            let location=store.locations.get(&id).ok_or("Missing stored resource location")?;
-            let bytes=location.read_all_on_worker()?;
+            if let Some(store)=self.store {
+            let bytes=store.loaded.get(&id).ok_or("Stored resource bytes are not prepared")?.clone();
             return Ok((bytes,EncodedIntegrity {bytes:record.bytes,crc32:record.crc32}));
         }
         let mut bytes = Vec::new(); bytes.try_reserve_exact(record.bytes as usize).map_err(|_| DecodeError::Unsupported("Resource allocation failed".into()))?;
@@ -450,8 +470,7 @@ impl<'a> ResourceReader<'a> {
         }).collect()
     }
     pub(crate) fn resource_backing(&self,_id:PortableId,offset:u64)->DecodeResult<(ImmutableBacking,u64)> {
-        #[cfg(not(target_arch="wasm32"))]
-        if let Some(store)=self.store {return Ok((store.locations.get(&_id).ok_or("Missing stored resource location")?.backing()?,0));}
+            if let Some(store)=self.store {return Ok((store.locations.get(&_id).ok_or("Missing stored resource location")?.backing()?,0));}
         Ok((self.backing.clone(),offset))
     }
     fn opaque_resource(&mut self, id: PortableId) -> DecodeResult<Arc<OpaqueResource>> {
@@ -464,7 +483,7 @@ impl<'a> ResourceReader<'a> {
         let (backing,offset)=self.resource_backing(id,range.offset)?;
         let resource = Arc::new(OpaqueResource::from_record(id, &record.value, backing, offset, record.bytes, record.crc32).map_err(DecodeError::from)?);
         self.charge(record.bytes)?;
-        resource.verify(self.cancelled)?;
+        if let Some(store)=self.store {store.verify_opaque(id);}else {resource.verify(self.cancelled)?;}
         self.decoded += record.bytes;
         self.opaque.insert(id, resource.clone());
         Ok(resource)
@@ -526,8 +545,7 @@ impl<'a> ResourceReader<'a> {
         }
         let descriptor=parse_descriptor(&record["data"])?;
         let size=descriptor.byte_len([TILE_SIZE;2]).ok_or("Invalid tile descriptor")?;
-        #[cfg(not(target_arch="wasm32"))]
-        if let Some(store)=self.store && !filtered {
+            if let Some(store)=self.store && !filtered {
             let location=store.locations.get(&id).ok_or("Missing stored tile location")?.clone();
             let tile=Arc::new(TileBlob::from_store(id,descriptor,location)?);
             self.remember_alias(id);self.tiles.insert(id,tile.clone());return Ok(tile);

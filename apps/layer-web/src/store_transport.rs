@@ -1,0 +1,178 @@
+use super::*;
+use layer_core::package::{store_io::{self,DirectoryEntry,FileAccess,FileFuture,FileTransport,StoreFile},session_store::{SessionStore,StoreOpener}};
+use layer_core::tile_io::{ReadCache,RangeReader,ReadCompletion};
+use std::{cell::RefCell,collections::BTreeMap,path::Path,sync::{Arc,Weak}};
+use wasm_bindgen_futures::{JsFuture,spawn_local};
+
+struct TransferBuffers {owner:layer_core::MemoryOwner,bytes:std::sync::Mutex<(u64,u64)>}
+struct BufferUse {buffers:Arc<TransferBuffers>,bytes:u64}
+impl TransferBuffers {
+    fn update(&self,change:impl FnOnce(u64)->u64) {
+        let mut bytes=self.bytes.lock().unwrap();bytes.0=change(bytes.0);
+        if bytes.0.abs_diff(bytes.1)>=1024*1024 || bytes.0==0&&bytes.1!=0 {
+            self.owner.publish(layer_core::MemoryReport {ram_bytes:bytes.0,pinned_ram_bytes:bytes.0,demand_ram_bytes:bytes.0,..Default::default()});bytes.1=bytes.0;
+        }
+    }
+}
+impl BufferUse {
+    fn new(bytes:u64)->Option<Self> {
+        if bytes==0 {return None;}
+        static BUFFERS:std::sync::OnceLock<Arc<TransferBuffers>>=std::sync::OnceLock::new();
+        let buffers=BUFFERS.get_or_init(||Arc::new(TransferBuffers {owner:layer_core::MemoryBudget::process().register_owner(layer_core::MemoryOwnerKind::Staging,layer_core::MemoryClass::Visible,None),bytes:Default::default()})).clone();
+        buffers.update(|current|current+bytes);Some(Self {buffers,bytes})
+    }
+}
+impl Drop for BufferUse {fn drop(&mut self) {self.buffers.update(|current|current-self.bytes);}}
+
+thread_local! {
+    static TRANSPORT:RefCell<Option<js_sys::Function>>=const {RefCell::new(None)};
+    static WAKE:RefCell<Option<js_sys::Function>>=const {RefCell::new(None)};
+    static LEASES:RefCell<BTreeMap<String,Weak<Lease>>>=const {RefCell::new(BTreeMap::new())};
+}
+
+#[wasm_bindgen]
+pub fn configure_store_transport(transport:js_sys::Function,wake:js_sys::Function) {
+    WAKE.with_borrow_mut(|slot|*slot=Some(wake));
+    TRANSPORT.with_borrow_mut(|slot|*slot=Some(transport));
+    ReadCache::process().set_scheduler(Arc::new(|cache|spawn_local(async move {cache.drive();})));
+}
+fn error(value:JsValue)->String {value.as_string().unwrap_or_else(||format!("{value:?}"))}
+fn begin_call(operation:&str,metadata:serde_json::Value,bytes:Option<&[u8]>)->Result<js_sys::Promise,String> {
+    let request=js_sys::Object::new();let buffers=js_sys::Array::new();
+    if let Some(bytes)=bytes {buffers.push(&js_sys::Uint8Array::from(bytes));}
+    js_sys::Reflect::set(&request,&js("operation"),&js(operation)).map_err(error)?;
+    let metadata=metadata.serialize(&serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true)).map_err(|error|error.to_string())?;
+    js_sys::Reflect::set(&request,&js("metadata"),&metadata).map_err(error)?;
+    js_sys::Reflect::set(&request,&js("buffers"),&buffers).map_err(error)?;
+    let transport=TRANSPORT.with_borrow(Clone::clone).ok_or("Drawing storage unavailable")?;
+    transport.call1(&JsValue::NULL,&request).map_err(error)?.dyn_into::<js_sys::Promise>().map_err(error)
+}
+pub(super) async fn call(operation:&str,metadata:serde_json::Value,bytes:Option<&[u8]>)->Result<JsValue,String> {
+    let transfer_bytes=bytes.map_or_else(||if matches!(operation,"read_at"|"legacy-range") {metadata["length"].as_u64().unwrap_or(0)}else {0},|bytes|bytes.len() as u64);
+    let _transfer=BufferUse::new(transfer_bytes);
+    JsFuture::from(begin_call(operation,metadata,bytes)?).await.map_err(error)
+}
+pub(super) async fn remember_handles(handles:JsValue)->Result<(),String> {
+    if handles.is_undefined() || handles.is_null() {return Ok(());}
+    let request=js_sys::Object::new();
+    js_sys::Reflect::set(&request,&js("operation"),&js("remember-handles")).map_err(error)?;
+    js_sys::Reflect::set(&request,&js("handles"),&handles).map_err(error)?;
+    let transport=TRANSPORT.with_borrow(Clone::clone).ok_or("Drawing storage unavailable")?;
+    let promise=transport.call1(&JsValue::NULL,&request).map_err(error)?.dyn_into::<js_sys::Promise>().map_err(error)?;
+    JsFuture::from(promise).await.map_err(error)?;Ok(())
+}
+struct Lease {name:String,legacy:Option<&'static str>}
+impl Drop for Lease {
+    fn drop(&mut self) {
+        if let Ok(promise)=begin_call("release",serde_json::json!({"name":self.name,"legacy":self.legacy}),None) {
+            spawn_local(async move {let _=JsFuture::from(promise).await;});
+        }
+    }
+}
+fn wake() {if let Some(wake)=WAKE.with_borrow(Clone::clone) {let _=wake.call0(&JsValue::NULL);}}
+pub(super) fn coordinator()->layer_host::session_stores::SessionStores {
+    layer_host::session_stores::SessionStores::with_opener("drawings".into(),Arc::new(BrowserStoreOpener),
+        Arc::new(|work|spawn_local(work.run_async())),Arc::new(wake),||js_sys::Date::now() as u64)
+}
+async fn lease(name:&str,legacy:Option<&'static str>)->Result<Option<Arc<Lease>>,String> {
+    store_io::check_member(name)?;
+    let identity=legacy.map_or_else(||name.to_owned(),|kind|format!("{kind}:{name}"));
+    if let Some(lease)=LEASES.with_borrow(|leases|leases.get(&identity).and_then(Weak::upgrade)) {return Ok(Some(lease));}
+    let claimed=call("claim",serde_json::json!({"name":name,"legacy":legacy}),None).await?;
+    if claimed.is_null() {return Ok(None);}
+    if claimed.as_string().as_deref()!=Some(name) {return Err("Invalid drawing store ownership reply".into());}
+    let lease=Arc::new(Lease {name:name.into(),legacy});
+    LEASES.with_borrow_mut(|leases|{leases.retain(|_,lease|lease.strong_count()!=0);leases.insert(identity,Arc::downgrade(&lease));});
+    Ok(Some(lease))
+}
+pub(super) async fn legacy_lock(kind:&'static str,name:&str)->Result<Option<Arc<dyn Send+Sync>>,String> {
+    Ok(lease(name,Some(kind)).await?.map(|lease|lease as Arc<dyn Send+Sync>))
+}
+pub(super) async fn transport(name:&str)->Result<Option<Arc<dyn FileTransport>>,String> {
+    Ok(lease(name,None).await?.map(|lease|Arc::new(BrowserTransport {lease}) as Arc<dyn FileTransport>))
+}
+pub(super) async fn collect_unreferenced(name:&str)->Result<(),String> {
+    let Some(lease)=lease(name,None).await? else {return Ok(());};
+    SessionStore::collect_unreferenced_transport(name.into(),Arc::new(BrowserTransport {lease:lease.clone()}),lease).await?;Ok(())
+}
+#[derive(Deserialize)]struct Entry {name:String,directory:bool}
+fn entries(value:JsValue)->Result<Vec<DirectoryEntry>,String> {
+    let entries:Vec<Entry>=serde_wasm_bindgen::from_value(value).map_err(|error|error.to_string())?;
+    entries.into_iter().map(|entry|{store_io::check_member(&entry.name)?;if entry.name.contains('/') {return Err("Invalid drawing store entry".into());}Ok(DirectoryEntry {name:entry.name,directory:entry.directory})}).collect()
+}
+pub(super) async fn directories(name:&str)->Result<Vec<String>,String> {
+    store_io::check_member(name)?;
+    Ok(entries(call("list",serde_json::json!({"name":name}),None).await?)?.into_iter().filter(|entry|entry.directory).map(|entry|entry.name).collect())
+}
+struct BrowserStoreOpener;
+impl StoreOpener for BrowserStoreOpener {
+    fn open<'a>(&'a self,path:&'a Path,retirement:bool)->FileFuture<'a,Option<SessionStore>> {
+        Box::pin(async move {
+            let name=path.to_str().ok_or("Invalid drawing store path")?;
+            let lease=lease(name,None).await?.ok_or("Recovery drawing is already open")?;
+            let transport=Arc::new(BrowserTransport {lease:lease.clone()});
+            if retirement {
+                if transport.list("").await?.is_empty() {return Ok(None);}
+                SessionStore::retirement_transport(path.into(),transport,lease).await
+            }else {SessionStore::open_transport(path.into(),transport,lease,ReadCache::process()).await.map(Some)}
+        })
+    }
+}
+struct BrowserTransport {lease:Arc<Lease>}
+impl BrowserTransport {
+    fn name(&self,member:&str)->Result<String,String> {store_io::check_member(member)?;Ok(format!("{}/{member}",self.lease.name))}
+}
+impl FileTransport for BrowserTransport {
+    fn open<'a>(&'a self,name:&'a str,access:FileAccess)->FileFuture<'a,Arc<dyn StoreFile>> {
+        Box::pin(async move {
+            let name=self.name(name)?;
+            let value=match access {FileAccess::Read=>"read",FileAccess::Write=>"write",FileAccess::Create=>"create"};
+            call("open",serde_json::json!({"name":name,"access":value}),None).await?;
+            Ok(Arc::new(BrowserFile {name,_lease:self.lease.clone(),writable:access!=FileAccess::Read}) as Arc<dyn StoreFile>)
+        })
+    }
+    fn list<'a>(&'a self,directory:&'a str)->FileFuture<'a,Vec<DirectoryEntry>> {
+        Box::pin(async move {
+            let name=if directory.is_empty() {self.lease.name.clone()}else {self.name(directory)?};
+            entries(call("list",serde_json::json!({"name":name}),None).await?)
+        })
+    }
+    fn remove<'a>(&'a self,name:&'a str)->FileFuture<'a,()> {
+        Box::pin(async move {call("remove",serde_json::json!({"name":self.name(name)?}),None).await?;Ok(())})
+    }
+}
+#[derive(Clone)]
+struct BrowserFile {name:String,_lease:Arc<Lease>,writable:bool}
+impl BrowserFile {
+    async fn range(&self,offset:u64,length:usize,crc:Option<u32>)->Result<Arc<[u8]>,String> {
+        store_io::check_range(offset,length)?;
+        let response=call("read_at",serde_json::json!({"name":self.name,"offset":offset,"length":length,"crc":crc}),None).await?;
+        let buffers=js_sys::Reflect::get(&response,&js("buffers")).map_err(error)?.dyn_into::<js_sys::Array>().map_err(error)?;
+        let bytes=buffers.get(0).dyn_into::<js_sys::Uint8Array>().map_err(error)?;
+        if buffers.length()!=1 || bytes.length() as usize!=length {return Err("Incomplete drawing store range".into());}
+        Ok(bytes.to_vec().into())
+    }
+}
+impl RangeReader for BrowserFile {
+    fn read(&self,offset:u64,length:usize,crc:Option<u32>,completion:ReadCompletion) {
+        let file=self.clone();spawn_local(async move {completion.complete(file.range(offset,length,crc).await);});
+    }
+}
+impl StoreFile for BrowserFile {
+    fn len(&self)->FileFuture<'_,u64> {
+        Box::pin(async move {
+            let length=call("len",serde_json::json!({"name":self.name}),None).await?.as_f64().ok_or("Invalid drawing store length")?;
+            if length<0. || length.fract()!=0. || length>9_007_199_254_740_991. {return Err("Invalid drawing store length".into());}Ok(length as u64)
+        })
+    }
+    fn read_at(&self,offset:u64,length:usize)->FileFuture<'_,Arc<[u8]>> {Box::pin(self.range(offset,length,None))}
+    fn write_at<'a>(&'a self,offset:u64,bytes:&'a [u8])->FileFuture<'a,()> {
+        Box::pin(async move {
+            if !self.writable {return Err("Drawing store file is read only".into());}store_io::check_range(offset,bytes.len())?;
+            call("write_at",serde_json::json!({"name":self.name,"offset":offset}),Some(bytes)).await?;Ok(())
+        })
+    }
+    fn flush(&self)->FileFuture<'_,()> {
+        Box::pin(async move {call("flush",serde_json::json!({"name":self.name}),None).await?;Ok(())})
+    }
+}

@@ -510,15 +510,13 @@ fn late_remembered_library_loading_preserves_the_existing_startup_stroke() {
 #[test]
 fn recovery_keeps_its_authored_paper_when_the_initial_default_was_prepared_from_another_image() {
     use crate::paper_library::{PaperEntry,paper_identity,paper_image_id};
-    use layer_core::package::ImmutableBacking;
-    use std::sync::{Arc,atomic::AtomicBool};
+    use std::sync::Arc;
     let mut source=session(Platform::Mac);let source_layer=paper_layer(&source);
     let authored=gray_paper(90);let authored_id=paper_identity(&authored).unwrap();
     source.paper_imported(Some(source_layer),vec![],&authored_id,authored.clone()).unwrap();
     source.frame(1,1).unwrap();
     let expected=source.engine.document().clone();let mark=source.engine.checkpoint();
-    let cancelled=AtomicBool::new(false);let mut bytes=Vec::new();
-    source.capture_session().unwrap().prepare(&cancelled).unwrap().write(&mut bytes,&cancelled).unwrap();
+    let saved=crate::session_recovery::tests::checkpoint(&source);
     let remembered=gray_paper(10);let id=paper_identity(&remembered).unwrap();
     let texture=layer_core::TextureSource::Image(layer_core::authored::Image::with_id(paper_image_id(&id).unwrap(),Arc::new(remembered.clone())));
     let mut settings=Settings::default();settings.new_document.paper=Some(id.clone());
@@ -526,8 +524,7 @@ fn recovery_keeps_its_authored_paper_when_the_initial_default_was_prepared_from_
     initial.initialize_paper(Some(id.clone()),texture.clone(),None);initial.frame(0,0).unwrap();
     assert_eq!(initial.new_drawing_paper(),texture);
     assert!(!initial.engine.can_undo());assert!(!initial.engine.can_redo());assert!(!initial.state.document_file.modified);
-    let backing=ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap();
-    let recovery=crate::session_recovery::SessionRestore::open(backing,layer_core::ProjectLimits::default(),&cancelled).unwrap();
+    let recovery=saved.load();
     let mut restored=UiSession::from_project_localized(Recorder::default(),recovery.document().clone(),None,[1000,1000],Platform::Mac,source.localization().clone()).unwrap();
     restored.frame(0,0).unwrap();restored.restore_session(recovery,false,None).unwrap();
     restored.inherit_window_state(&initial).unwrap();
@@ -615,8 +612,7 @@ fn evicted_library_paper_reuses_retained_history_source_after_reload() {
 #[test]
 fn opened_and_recovered_paper_uses_destination_owners_before_inherited_cache() {
     use crate::paper_library::{PaperEntry,paper_identity,paper_image_id};
-    use layer_core::package::ImmutableBacking;
-    use std::sync::{Arc,atomic::AtomicBool};
+    use std::sync::Arc;
     let portable=|document:&layer_core::Document| {
         package_bytes(&layer_core::Editor::new(document.clone()).capture(0,document.output().context.clone()).unwrap())
     };
@@ -631,13 +627,11 @@ fn opened_and_recovered_paper_uses_destination_owners_before_inherited_cache() {
             if mode==2 {authored.dispatch(UiAction::Effect {action:EffectAction::Reset {layer,key:"texture".into()}}).unwrap();}
             authored.frame(1,1).unwrap();
             let expected=authored.engine.document().clone();
+            let saved=(mode!=0).then(||crate::session_recovery::tests::checkpoint(&authored));
             let mut opened=if mode==0 {
                 UiSession::from_project(Recorder::default(),package_roundtrip(&expected),None,[1000,1000],platform).unwrap()
             } else {
-                let cancel=AtomicBool::new(false);let mut bytes=Vec::new();
-                authored.capture_session().unwrap().prepare(&cancel).unwrap().write(&mut bytes,&cancel).unwrap();
-                let backing=ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap();
-                let recovery=crate::session_recovery::SessionRestore::open(backing,layer_core::ProjectLimits::default(),&cancel).unwrap();
+                let recovery=saved.as_ref().unwrap().load();
                 let mut recovered=UiSession::from_project_localized(Recorder::default(),recovery.document().clone(),None,[1000,1000],platform,authored.localization().clone()).unwrap();
                 recovered.frame(0,0).unwrap();recovered.restore_session(recovery,false,None).unwrap();recovered
             };

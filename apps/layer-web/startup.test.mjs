@@ -1,4 +1,4 @@
-import {restartStoreUrl} from './package-fixture.test.mjs';
+import {installSessionStoreFixture,sessionStoreFixtureSource} from './session-store-fixture.mjs';
 import assert from "node:assert/strict";
 import {createDrawing} from './new-drawing-fixture.mjs';
 
@@ -432,27 +432,24 @@ async function checkRecoveryGpuLoss({call,evaluate,waitFor,settle}, suspensionTh
   assert.ok(expectedPixels.every((value,index)=>index%4!==0||expectedPixels[index+2]>expectedPixels[index+1]&&expectedPixels[index+1]>value&&expectedPixels[index+2]-value>100),'The drawing interior is blue before checkpointing');
   const expectedLayers = await evaluate("layerApp.state().layers.map(({label})=>label)");
   await checkpointBeforeReload(evaluate);
-  const storeUrl = await restartStoreUrl(evaluate);
+  await installSessionStoreFixture(evaluate);
   const seed = await evaluate(`(async()=>{
-    const store=(await import(${JSON.stringify(storeUrl)})).createRestartStore();
     const prior=[];
-    for(const origin of await store.windows()) {
-      const manifest=await store.manifest(origin),failed=new Set([...manifest.blocked,...manifest.restoring.map(ticket=>ticket.id)].map(String));
+    for(const {manifest} of await sessionStoreFixture.windows()) {
+      if(!manifest)continue;
+      const failed=new Set([...manifest.blocked,...manifest.restoring.map(ticket=>ticket.id)].map(String));
       for(const drawing of manifest.drawings.filter(drawing=>failed.has(String(drawing.id)))) {
-        const record=await store.read(drawing.key),ids=[...new Set([...(record?.current?.resources??[]),...(record?.previous?.resources??[])])];
-        prior.push({key:drawing.key,record:record??null,ids,bytes:(await store.resources(drawing.key,ids)).map(value=>Array.from(value))});
+        prior.push({key:drawing.key,record:await sessionStoreFixture.snapshot(drawing.key),files:await sessionStoreFixture.files(drawing.key)});
       }
     }
     const key='capy-test-gpu-loss-'+crypto.randomUUID(),origin='zz-capy-test-gpu-loss-'+crypto.randomUUID();
     const tabs=layerApp.app.document_tabs(0),identity=Math.max(...tabs.tabs.map(tab=>Number(tab.id)))+1024;
-    const capture=layerApp.app.capture_tab_session(tabs.selected),generation=${suspensionThrows ? 2000003 : 1000003};
-    try{await capture.write(key,BigInt(generation),0n,[],[]);}finally{capture.free();}
-    await store.publishManifest(origin,{generation:1,drawings:[{id:identity,key}],active:identity,clean_exit:false,restoring:[],blocked:[]});
-    const record=await store.read(key),ids=[...new Set([...(record.current?.resources??[]),...(record.previous?.resources??[])])];
-    const bytes=(await store.resources(key,ids)).map(value=>Array.from(value));
-    return{key,origin,identity,generation,record,ids,bytes,prior};
+    await sessionStoreFixture.copy(layerApp.app.session_binding(tabs.selected,null),key);
+    const store=await layerApp.app.open_session_window(origin);if(!store)throw Error('Private fixture window is busy');
+    try{await store.publish({generation:1,drawings:[{id:identity,key}],active:identity,clean_exit:false,restoring:[],blocked:[]});}finally{store.free();}
+    return {key,origin,identity,record:await sessionStoreFixture.snapshot(key),files:await sessionStoreFixture.files(key),resources:await sessionStoreFixture.files(key,true),prior};
   })()`);
-  const {identifier} = await call('Page.addScriptToEvaluateOnNewDocument',{source:`(()=>{
+  const {identifier} = await call('Page.addScriptToEvaluateOnNewDocument',{source:`${sessionStoreFixtureSource};(()=>{
     let current;
     const requestAdapter=navigator.gpu.requestAdapter.bind(navigator.gpu);let requests=0;
     navigator.gpu.requestAdapter=(...args)=>{requests++;return requestAdapter(...args)};
@@ -461,7 +458,7 @@ async function checkRecoveryGpuLoss({call,evaluate,waitFor,settle}, suspensionTh
       const app=value.app,prepare=app.prepare_session_restart.bind(app),failure=app.gpu_failure.bind(app),suspend=app.suspend_gpu.bind(app);
       const state=window.recoveryGpuLoss={attempts:0,adapterRequests:()=>requests,restore(){app.prepare_session_restart=prepare;app.gpu_failure=failure;app.suspend_gpu=suspend;navigator.gpu.requestAdapter=requestAdapter;},resumeFailure(){app.gpu_failure=failure;app.suspend_gpu=suspend;}};
       app.prepare_session_restart=(...args)=>{
-        if(Number(args[0]?.generation)===${seed.generation}){
+        if(args[0]===${JSON.stringify(seed.key)}){
           state.attempts++;
           if(state.attempts===1)return Promise.reject(Error('capy-test: transient recovery open failure'));
         }
@@ -500,8 +497,8 @@ async function checkRecoveryGpuLoss({call,evaluate,waitFor,settle}, suspensionTh
       assert.equal(await evaluate('recoveryGpuLoss.attempts'),1,'Retry waits for GPU readiness before reopening');
       assert.equal(await evaluate("!!document.querySelector('dialog[open]')"),false,'A second recovery modal must not obscure Restart');
     }
-    const saved = await evaluate(`(async()=>{const store=(await import(${JSON.stringify(storeUrl)})).createRestartStore();return{record:await store.read(${JSON.stringify(seed.key)}),bytes:(await store.resources(${JSON.stringify(seed.key)},${JSON.stringify(seed.ids)})).map(value=>Array.from(value))};})()`);
-    assert.deepEqual(saved,{record:seed.record,bytes:seed.bytes},'GPU loss and Retry preserve the original failed copy exactly');
+    const saved = await evaluate(`(async()=>({record:await sessionStoreFixture.snapshot(${JSON.stringify(seed.key)}),files:await sessionStoreFixture.files(${JSON.stringify(seed.key)})}))()`);
+    assert.deepEqual(saved,{record:seed.record,files:seed.files},'GPU loss and Retry preserve the original failed copy exactly');
     if(suspensionThrows) {
       const requests=await evaluate('recoveryGpuLoss.adapterRequests()');
       await click("[...document.querySelectorAll('#gpu-notice button')].find(button=>button.textContent==='Restart canvas')");
@@ -520,12 +517,15 @@ async function checkRecoveryGpuLoss({call,evaluate,waitFor,settle}, suspensionTh
     await settle();
     assert.deepEqual(await evaluate("layerApp.state().layers.map(({label})=>label)"),expectedLayers,'Successful Retry adopts the actual saved layer stack');
     assert.deepEqual(await presentedPixels(),expectedPixels,'Successful Retry presents the original filled drawing pixels exactly');
-    const transferred = await evaluate(`(async()=>{const store=(await import(${JSON.stringify(storeUrl)})).createRestartStore();return{manifest:await store.manifest(${JSON.stringify(seed.origin)})??null,bytes:(await store.resources(${JSON.stringify(seed.key)},${JSON.stringify(seed.ids)})).map(value=>Array.from(value))};})()`);
-    assert.equal(transferred.manifest,null,'Successful adoption transfers sole manifest ownership');
-    assert.deepEqual(transferred.bytes,seed.bytes,'Adoption retains the immutable authored resources');
+    const transferred = await evaluate(`(async()=>{
+      const origin=(await sessionStoreFixture.windows()).find(window=>window.key===${JSON.stringify(seed.origin)});
+      return {drawings:origin?.manifest?.drawings??[],resources:await sessionStoreFixture.files(${JSON.stringify(seed.key)},true)};
+    })()`);
+    assert.deepEqual(transferred.drawings,[],'Successful adoption transfers sole manifest ownership');
+    assert.deepEqual(transferred.resources,seed.resources,'Adoption retains the immutable authored resources');
     for(const prior of seed.prior) {
-      const retained=await evaluate(`(async()=>{const store=(await import(${JSON.stringify(storeUrl)})).createRestartStore();return{record:await store.read(${JSON.stringify(prior.key)})??null,bytes:(await store.resources(${JSON.stringify(prior.key)},${JSON.stringify(prior.ids)})).map(value=>Array.from(value))};})()`);
-      assert.deepEqual(retained,{record:prior.record,bytes:prior.bytes},'Later keeps known interrupted fixture copies unchanged');
+      const retained=await evaluate(`(async()=>({record:await sessionStoreFixture.snapshot(${JSON.stringify(prior.key)}),files:await sessionStoreFixture.files(${JSON.stringify(prior.key)})}))()`);
+      assert.deepEqual(retained,{record:prior.record,files:prior.files},'Later keeps known interrupted fixture copies unchanged');
     }
     console.log('Staged startup: recovery Retry exits modal during GPU loss, preserves bytes and restores after Restart', {suspensionThrows});
   } finally {
@@ -535,7 +535,9 @@ async function checkRecoveryGpuLoss({call,evaluate,waitFor,settle}, suspensionTh
 }
 
 async function checkpointBeforeReload(evaluate) {
-  await evaluate('layerApp.documents.startRecovery().then(()=>layerApp.documents.autosave())');
+  await evaluate('layerApp.documents.startRecovery()');
+  await installSessionStoreFixture(evaluate);
+  await evaluate('sessionStoreFixture.checkpoint()');
 }
 
 async function activateForReload(call) {

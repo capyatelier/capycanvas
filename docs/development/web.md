@@ -59,7 +59,8 @@ Where to look in [`apps/layer-web`](../../apps/layer-web):
 | `raster-worker.js` | Workers created by `raster-worker-client.js`, one per kind of job: file decoding, encoding and color work, cold object tiles, placement coordinates and panel outline geometry. |
 | `panel-vectors.js`, `panel-vector-queue.js` | Publish each panel outline projection with its matching DOM bounds, and coalesce motion. |
 | `workspace-store.js`, `workspace-worker.js` | Workspaces in IndexedDB. |
-| `restart-store.js` | Restart snapshots in IndexedDB. |
+| `store-worker.js`, `store-worker-client.js` | Bounded OPFS transport for the shared Rust session store; required reads precede writes. |
+| `legacy-restart-store.js` | Read-only import of released IndexedDB recovery. |
 | `src/` | The `layer-web` crate that the JavaScript calls. |
 
 ### Changing the host
@@ -94,10 +95,11 @@ Where to look in [`apps/layer-web`](../../apps/layer-web):
 
 ### Browser storage
 
-Restart snapshots use the shared session codec. `restart-store.js` publishes
-resources and drawing heads in IndexedDB transactions and holds Web Locks while
-restoring; [session recovery](../internals/session-recovery.md) describes the
-contract. Browsers may clear site storage under storage pressure, and Safari
+Live tiles and recovery share the Rust session store. One storage worker owns
+OPFS sync access handles; shared Rust publishes pack locations through checksummed
+head slots. Web Locks protect drawings and window membership. Released IndexedDB
+copies remain unchanged after import; [session recovery](../internals/session-recovery.md)
+describes the contract. Browsers may clear site storage under storage pressure, and Safari
 after seven days without a visit unless the app is installed. The first
 checkpoint of a changed drawing that was never saved to a file therefore asks
 the browser to keep the site's storage (`navigator.storage.persist()`), once per
@@ -111,7 +113,7 @@ Pure unit tests need no browser or GPU:
 
 ```bash
 node --test apps/layer-web/{run,package,frame,bubbles,glass,pointer,color-touch,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog,text-input,localization,dropdown}.test.mjs
-node --test apps/layer-web/{numeric,histogram,gpu-diagnostics,raster-worker-client,pipeline-wait,panel-vector-paths,panel-vector-queue,editor-panels,workspace-manager-copy,toolbar-components-copy,color-controls-copy,document-color-copy,document-recovery,image-import,workflow-stack,color-button-lifecycle}.test.mjs
+node --test apps/layer-web/{numeric,histogram,gpu-diagnostics,raster-worker-client,store-worker-client,pipeline-wait,panel-vector-paths,panel-vector-queue,editor-panels,workspace-manager-copy,toolbar-components-copy,color-controls-copy,document-color-copy,document-recovery,image-import,workflow-stack,color-button-lifecycle}.test.mjs
 ```
 
 The launcher fixture uses Bash; `LAYER_TEST_BASH` selects its executable
@@ -121,13 +123,14 @@ The launcher fixture uses Bash; `LAYER_TEST_BASH` selects its executable
 export LAYER_TEST_BASH='C:/Program Files/Git/bin/bash.exe'
 ```
 
-Two more checks launch their own temporary Chrome profile; `CHROME` may name
-its executable. The first covers the IndexedDB restart store with a local server;
-the second covers module-worker preparation and CDP teardown without the app,
+Three more checks launch their own temporary Chrome profile; `CHROME` may name
+its executable. They cover the released IndexedDB reader, OPFS worker scheduling
+and checksums, and module-worker preparation with CDP teardown, without the app,
 Wasm or WebGPU:
 
 ```bash
 node apps/layer-web/restart-store.test.mjs
+node apps/layer-web/store-worker.test.mjs
 node --test tools/cdp.test.mjs
 ```
 
@@ -217,6 +220,7 @@ Chrome tests can miss; it doesn't exercise pen pressure.
 | `--tool-bubbles`, `--hdr-bubbles` | `LAYER_BUBBLE_THEMES` and `LAYER_BUBBLE_DEVICES` take comma-separated focused cases. With `--tool-bubbles`, `LAYER_BUBBLE_INPUT_TRACE=1` records native event cancellation on failure. |
 | `--workspace-constraints` | `LAYER_CONSTRAINT_AXES=1` selects the focused 1257 × 691 case with German labels at device pixel ratios 1, 1.25 and 1.5. |
 | `--session-restart-performance` | Writes its records under `artifacts/seamless-restart/web` unless `LAYER_TEST_ARTIFACTS` is set. |
+| `--legacy-session-import` | Seeds the released paint-session fixture with the frozen 1.0.15 writer and checks upgrade, downgrade edits, and separate recovered branches. |
 
 ### Writing a journey
 

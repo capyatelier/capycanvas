@@ -26,5 +26,6 @@ web-time = "1.1.0"
 fluent-syntax = "0.12"
 
 [dev-dependencies]
+pollster = "0.4"
 fluent-syntax = "0.12"
 layer-core = { path = "../layer-core", features = ["test-support"] }

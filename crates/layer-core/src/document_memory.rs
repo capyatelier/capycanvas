@@ -44,11 +44,6 @@ impl DocumentMemory {
             history: budget.register_owner(MemoryOwnerKind::History, MemoryClass::Pinned, None), budget,
             resident: AtomicU64::new(0), history_resident: AtomicU64::new(0), metadata: AtomicU64::new(0), history_metadata: AtomicU64::new(0), parked: AtomicBool::new(false), initialized: AtomicBool::new(false) }), reservation, preview_inventory: None }
     }
-    pub(crate) fn cache_inventory(&self) -> crate::raster_storage::RetainedTiles {
-        let inventory=self.owner.inventories.lock().unwrap().current.clone();
-        self.owner.parked(true);
-        (*inventory).clone()
-    }
     pub(crate) fn requires_inventory_commit(&self) -> bool {
         self.preview_inventory.is_some() || self.reservation.as_ref().is_some_and(MemoryReservation::active)
     }
