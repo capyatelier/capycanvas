@@ -244,6 +244,9 @@ try {
   );
   await settle();
   await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy)resolve();else if(performance.now()>deadline)reject(Error('Workspace startup: '+JSON.stringify(v)));else setTimeout(check,100);}check();})`);
+  const startupBudget = await evaluate('layerApp.app.renderer_stats().rows.slice(-4)');
+  assert.ok(startupBudget.length === 4 && startupBudget.every(row => /RAM.*[0-9].*MiB.*GPU.*[0-9].*MiB/.test(row.value) && /[0-9]+\.[0-9]+/.test(row.description) && !/NaN|Infinity/.test(row.description)),
+    `Startup samples the shared memory budget and its finite age: ${JSON.stringify(startupBudget)}`);
   if (process.env.LAYER_TEST_THEME) {
     assert.ok(['light','dark'].includes(process.env.LAYER_TEST_THEME));
     await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(process.env.LAYER_TEST_THEME)}})`);

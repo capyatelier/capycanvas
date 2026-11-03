@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 layer-core = { path = "../layer-core" }
+web-time = "1.1.0"
 
 [lib]
 path = "src/lib.rs"

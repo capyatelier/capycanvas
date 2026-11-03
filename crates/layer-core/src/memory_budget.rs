@@ -1,7 +1,8 @@
 mod system;
 pub use system::system_facts;
 
-use std::{collections::{BTreeMap, BTreeSet}, sync::{Arc, Mutex, OnceLock, atomic::{AtomicBool, AtomicU64, Ordering}}, time::Instant};
+use std::{collections::{BTreeMap, BTreeSet}, sync::{Arc, Mutex, OnceLock, atomic::{AtomicBool, AtomicU64, Ordering}}};
+use web_time::Instant;
 
 const MIB: u64 = 1024 * 1024;
 pub const MEMORY_OWNER_KINDS: usize = 10;

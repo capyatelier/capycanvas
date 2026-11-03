@@ -97,7 +97,7 @@ pub struct RendererTelemetry {
 
 #[derive(Clone, Copy, Debug)]
 pub struct MemoryBudgetSummary {
-    pub sampled_at: std::time::Instant,
+    pub sampled_at: web_time::Instant,
     pub ram_limit_bytes: u64,
     pub ram_physical_bytes: u64,
     pub ram_pinned_bytes: u64,
@@ -110,7 +110,7 @@ pub struct MemoryBudgetSummary {
 impl MemoryBudgetSummary {
     pub fn new(snapshot: &layer_core::MemoryBudgetSnapshot) -> Self {
         Self {
-            sampled_at: std::time::Instant::now(), ram_limit_bytes: snapshot.ram_limit_bytes,
+            sampled_at: web_time::Instant::now(), ram_limit_bytes: snapshot.ram_limit_bytes,
             ram_physical_bytes: snapshot.ram_physical_bytes,
             ram_pinned_bytes: snapshot.ram_pinned_bytes,
             ram_debt_bytes: snapshot.ram_pinned_bytes.saturating_sub(snapshot.ram_limit_bytes),
@@ -147,7 +147,7 @@ pub struct GpuMemory {
 
 #[derive(Clone, Copy, Debug)]
 pub struct MemorySnapshot {
-    pub sampled_at: std::time::Instant,
+    pub sampled_at: web_time::Instant,
     pub process: Option<ProcessMemory>,
     pub gpu: Option<GpuMemory>,
 }

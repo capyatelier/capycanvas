@@ -1,7 +1,8 @@
 use layer_render::{MemoryBudgetSummary, MemoryPeak, MemorySnapshot, ProcessMemory, ProcessMemoryKind};
 use layer_core::{MemoryBudget, MemoryDevice, MemoryFacts, DeviceMemoryFacts};
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 pub(super) struct MemorySampler {
     snapshot: Arc<Mutex<Option<Sample>>>,
