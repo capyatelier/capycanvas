@@ -347,7 +347,7 @@ impl Phone {
         }
         self.settings.borrow().as_ref().unwrap().refresh(w, &settings, None);
         if state.phone.menu {
-            if structural { self.menu.refresh(w, state); }
+            if structural { self.menu.refresh(w, state); self.menu_key.set(None); }
         } else {
             self.menu.clear();
             self.menu_key.set(None);

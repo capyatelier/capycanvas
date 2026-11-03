@@ -1216,6 +1216,33 @@ fn native_phone_menu_strip() {
 }
 
 #[test]
+#[ignore = "private compositor: --native-test=native_phone_menu_live_measurement --native-storage; landscape phone viewport/theme external"]
+fn native_phone_menu_live_measurement() {
+    let mut d = setup("art.capycanvas.PhoneMenuLiveMeasurement");
+    assert!(d.w.surface.width() > d.w.surface.height());
+    ui_session_mut(&d.w).name_new_drawing("Small");
+    d.w.refresh(regions::DOCUMENT);
+    menu(&mut d);
+    for (tag, title) in [("long", "A drawing with a long name that needs more room in the open menu"), ("short", "Small")] {
+        ui_session_mut(&d.w).name_new_drawing(title);
+        d.w.refresh(regions::DOCUMENT);
+        until(|| d.named("phone-drawing").property::<String>("text") == drawing_selector(&d).label,
+            "the open menu publishes the new drawing label");
+        drop(idle_paint(&d.w.window));
+        let live = d.w.phone.placement.borrow().as_ref().unwrap().bounds;
+        capture(&mut d, &format!("menu-live-{tag}"));
+        d.input.key(0xff1b);
+        until(|| !state(&d.w).phone.menu, "the menu closes before measuring a fresh opening");
+        menu(&mut d);
+        let fresh = d.w.phone.placement.borrow().as_ref().unwrap().bounds;
+        capture(&mut d, &format!("menu-fresh-{tag}"));
+        assert!((live.width - fresh.width).abs() <= 1. && (live.height - fresh.height).abs() <= 1.,
+            "{tag}: an open menu remeasures its content like a fresh menu: {live:?} vs {fresh:?}");
+    }
+    d.finish();
+}
+
+#[test]
 #[ignore = "private compositor: --native-test=native_phone_menu_feedback --native-storage; 412x891 or891x412 light"]
 fn native_phone_menu_feedback() {
     let mut d = setup("art.capycanvas.PhoneMenuFeedback");
