@@ -281,11 +281,10 @@ fn native_enclose_fill_pointer_workflow() {
         let fill = command(&w, CommandId::Fill);
         input.click(screen_point(fill.upcast_ref(), &w.window, [0.5, 0.5]));
         let tools = w.panel_widget(Panel::Brushes);
-        let groups = widgets(&tools).find(|widget| widget.has_css_class("tool-groups")).unwrap();
-        assert_eq!(state(&w).tool_set.groups.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>(),
+        assert_eq!(state(&w).tool_set.subtools.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>(),
             ["Fill", "Lasso fill", "Enclose and Fill", "Paint unfilled areas"]);
         for label in ["Lasso fill", "Enclose and Fill", "Fill", "Enclose and Fill"] {
-            input.click(screen_point(&mapped_label(&groups, label).unwrap(), &w.window, [0.5, 0.5]));
+            input.click(screen_point(&mapped_label(&tools, label).unwrap(), &w.window, [0.5, 0.5]));
         }
         assert!(ui_session(&w).command(CommandId::EncloseFill).selected);
         for (index, source) in [CommandId::SelectionReference, CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference].into_iter().enumerate() {
@@ -391,7 +390,7 @@ fn native_enclose_fill_pointer_workflow() {
         assert_eq!(pixels(&raster(&w)), filled, "cancel preserves the redo entry");
         assert_eq!(reference_now(), reference_pixels);
         invoke(&w, CommandId::Undo); ready(&w);
-        input.click(screen_point(&mapped_label(&groups, "Fill").unwrap(), &w.window, [0.5, 0.5]));
+        input.click(screen_point(&mapped_label(&tools, "Fill").unwrap(), &w.window, [0.5, 0.5]));
         let lines = named::<gtk::ToggleButton>(&w.panel_widget(Panel::ToolSettings), "tool-choice-selection-source-0");
         histogram::scroll_to(lines.upcast_ref());
         input.click(screen_point(lines.upcast_ref(), &w.window, [0.5, 0.5]));
