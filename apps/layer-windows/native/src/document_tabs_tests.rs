@@ -1,11 +1,15 @@
+#[cfg(target_os = "windows")]
 use crate::test_support::*;
 use super::*;
+#[cfg(target_os = "windows")]
 use layer_core::ProjectLimits;
 use layer_ui::{CommandId, Platform, UiAction};
+#[cfg(target_os = "windows")]
 use std::time::{Duration, Instant};
 fn command(host: &mut NativeHost, command: CommandId) {
     host.dispatch(UiAction::Invoke { command }).unwrap();
 }
+#[cfg(target_os = "windows")]
 fn request(host: &NativeHost) -> (u32, u64, u64) {
     let file = &host.session.state().document_file;
     (
@@ -20,6 +24,7 @@ fn request(host: &NativeHost) -> (u32, u64, u64) {
         file.revision,
     )
 }
+#[cfg(target_os = "windows")]
 fn settle(service: &mut DocumentService, host: &mut NativeHost) {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
@@ -52,6 +57,7 @@ fn settle(service: &mut DocumentService, host: &mut NativeHost) {
         std::thread::sleep(Duration::from_millis(2));
     }
 }
+#[cfg(target_os = "windows")]
 fn save(service: &mut DocumentService, host: &mut NativeHost, path: &std::path::Path) {
     command(host, CommandId::SaveDocumentAs);
     let (id, _, _) = request(host);
@@ -66,6 +72,29 @@ fn save(service: &mut DocumentService, host: &mut NativeHost, path: &std::path::
         .unwrap();
     settle(service, host);
 }
+#[test]
+fn window_close_waits_for_the_pending_canvas_operation() {
+    let mut host = NativeHost::new(Platform::Windows).unwrap();
+    let mut service = DocumentService::open(|| {}).unwrap();
+    command(&mut host, CommandId::TonalSelect);
+    host.dispatch(UiAction::Tonal { action: layer_ui::TonalAction::Preset { index: 4 } }).unwrap();
+    assert!(service.idle());
+    assert!(!host.session.can_park_document());
+    assert!(host.session.request_session_close().is_err());
+    service.dispatch(&mut host, DocumentAction::Close).unwrap();
+    let polled = service.poll(&mut host);
+    assert!(service.close_window);
+    assert!(service.quit_pending);
+    assert!(!host.session.state().document_file.close_ready);
+    polled.unwrap();
+    host.session.suspend_renderer().unwrap();
+    assert!(host.session.can_park_document());
+    service.poll(&mut host).unwrap();
+    assert!(host.session.state().document_file.close_ready);
+    assert!(!service.quit_pending);
+    service.stop_worker().unwrap();
+}
+
 #[test]
 fn adjacent_drawing_requests_retire_before_noop_and_service_refusal() {
     let mut host = NativeHost::new(Platform::Windows).unwrap();
@@ -90,6 +119,7 @@ fn adjacent_drawing_requests_retire_before_noop_and_service_refusal() {
     service.stop_worker().unwrap();
 }
 
+#[cfg(target_os = "windows")]
 #[test]
 #[ignore = "Requires hardware D3D12 and an isolated CAPY_STORAGE_DIR"]
 fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {

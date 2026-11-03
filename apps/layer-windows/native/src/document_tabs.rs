@@ -370,9 +370,9 @@ impl DocumentService {
                 command: layer_ui::CommandId::CloseDocument,
             })?;
         }
-        if self.close_window && !self.window.documents.trim_in_flight() && self.idle() && !host.session.state().document_file.busy && !host.session.state().document_file.close_ready {
+        if self.close_window && !self.window.documents.trim_in_flight() && self.idle() && host.session.can_park_document() && !host.session.state().document_file.busy && !host.session.state().document_file.close_ready {
             if self.quit_pending {
-                self.quit_pending=false;let previous=host.session.state().revision;let change=host.session.request_session_close()?;host.apply_change(previous,change);
+                let previous=host.session.state().revision;let change=host.session.request_session_close()?;self.quit_pending=false;host.apply_change(previous,change);
             }else{self.close_window=false;}
         }
         if !self.close_window && host.session.state().document_file.close_ready
@@ -400,6 +400,6 @@ impl DocumentService {
     }
 }
 
-#[cfg(all(test, target_os = "windows"))]
+#[cfg(test)]
 #[path = "document_tabs_tests.rs"]
 mod tests;

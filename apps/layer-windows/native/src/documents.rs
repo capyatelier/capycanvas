@@ -1303,7 +1303,7 @@ mod tests {
     fn window_quit_waits_for_an_accepted_save_and_preserves_later_edits() {
         let mut f=Fixture::new();f.host.dispatch(UiAction::SetLayerOpacity{id:None,opacity:0.4}).unwrap();f.invoke(CommandId::SaveDocumentAs);let path=f.path("accepted-save.capy");f.act(DocumentAction::Save{id:f.request(),path:path.clone()});
         f.host.dispatch(UiAction::SetLayerOpacity{id:None,opacity:0.8}).unwrap();let checkpoint=f.host.session.engine().checkpoint();f.act(DocumentAction::Close);
-        assert!(f.service.quit_pending);assert!(!f.host.session.state().document_file.close_ready);f.finish();f.service.poll(&mut f.host).unwrap();
+        assert!(f.service.quit_pending);assert!(!f.host.session.state().document_file.close_ready);f.finish();f.host.suspend_renderer().unwrap();f.service.poll(&mut f.host).unwrap();
         assert!(std::path::Path::new(&path).is_file());assert!(f.host.session.state().document_file.close_ready);assert!(f.host.session.state().document_file.modified);assert_eq!(f.host.session.engine().checkpoint(),checkpoint);
     }
     #[test]
