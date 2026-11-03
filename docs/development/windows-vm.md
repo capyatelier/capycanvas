@@ -352,6 +352,8 @@ Each run writes its expected variants to `plan.json`. Empty selections, missing
 results, a stopped desktop task and startup or fixture deadlines fail the run.
 The shared fixture reader uses bounded retries for brief trace-file I/O locks;
 malformed snapshots still fail immediately.
+Restore changed Windows user settings from the runner, with forced-termination
+coverage in `test-fixture-routing.ps1`.
 
 Follow the [Windows validation scope](testing.md#windows-validation-scope).
 The `smoke` alias selects 40 fixed variants; add affected families in the same

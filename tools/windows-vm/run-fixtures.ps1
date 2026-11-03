@@ -31,17 +31,47 @@ function Get-FixtureTextScale{
     $path='HKCU:\Software\Microsoft\Accessibility'
     $key=if(Test-Path -LiteralPath $path){Get-Item -LiteralPath $path}
     $exists=$key -and 'TextScaleFactor' -in $key.GetValueNames()
-    [pscustomobject]@{exists=[bool]$exists;kind=$(if($exists){$key.GetValueKind('TextScaleFactor').ToString()});value=$(if($exists){$key.GetValue('TextScaleFactor',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)})}
+    $kind=$null;$value=$null
+    if($exists){$kind=$key.GetValueKind('TextScaleFactor').ToString();$value=$key.GetValue('TextScaleFactor',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)}
+    [pscustomobject]@{exists=[bool]$exists;kind=$kind;value=$value}
+}
+function Read-FixtureTextScale([int]$Milliseconds){
+    $expression='[Windows.UI.ViewManagement.UISettings,Windows.UI.ViewManagement,ContentType=WindowsRuntime]::new().TextScaleFactor'
+    $stdout=[IO.Path]::GetTempFileName();$stderr=[IO.Path]::GetTempFileName();$reader=$null
+    try{
+        $reader=Start-Process powershell.exe -ArgumentList @('-NoProfile','-NonInteractive','-Command',$expression) -NoNewWindow -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        $null=$reader.Handle
+        if(!$reader.WaitForExit($Milliseconds)){& taskkill.exe /T /F /PID $reader.Id|Out-Null;throw 'UISettings text-scale reader exceeded its acknowledgement deadline'}
+        if($reader.ExitCode -ne 0){throw ('UISettings text-scale reader failed: '+(Get-Content -LiteralPath $stderr -Raw))}
+        [double](Get-Content -LiteralPath $stdout -Raw)
+    }finally{
+        if($reader){$reader.Dispose()}
+        Remove-Item -LiteralPath $stdout,$stderr
+    }
+}
+function Wait-FixtureTextScale($Saved,[string]$Phase){
+    $expected=if($Saved.exists){[double]$Saved.value/100.0}else{1.0}
+    $budget=15000*$(if($env:CAPY_WAIT_SCALE){[double]$env:CAPY_WAIT_SCALE}else{1})
+    $watch=[Diagnostics.Stopwatch]::StartNew()
+    do{
+        try{$actual=Read-FixtureTextScale ([int][Math]::Max(1,$budget-$watch.Elapsed.TotalMilliseconds))}
+        catch{throw "Fixture $Phase did not acknowledge saved Windows text scale ${expected}: $($_.Exception.Message)"}
+        if($actual -eq $expected){return}
+        Start-Sleep -Milliseconds 50
+    }while($watch.Elapsed.TotalMilliseconds -lt $budget)
+    throw "Fixture $Phase did not acknowledge saved Windows text scale $expected (UISettings.TextScaleFactor=$actual)"
 }
 function Restore-FixtureTextScale($Saved){
-    if(((Get-FixtureTextScale)|ConvertTo-Json -Compress) -ceq ($Saved|ConvertTo-Json -Compress)){return}
-    $path='HKCU:\Software\Microsoft\Accessibility'
-    if($Saved.exists){
-        if(!(Test-Path -LiteralPath $path)){New-Item -Path $path|Out-Null}
-        Set-ItemProperty -LiteralPath $path -Name TextScaleFactor -Type $Saved.kind -Value $Saved.value
-    }else{Remove-ItemProperty -LiteralPath $path -Name TextScaleFactor}
-    if(((Get-FixtureTextScale)|ConvertTo-Json -Compress) -cne ($Saved|ConvertTo-Json -Compress)){throw 'Windows text scale did not restore its original registry value'}
-    [CapyVm.Native]::NotifyTextSize()
+    if(((Get-FixtureTextScale)|ConvertTo-Json -Compress) -cne ($Saved|ConvertTo-Json -Compress)){
+        $path='HKCU:\Software\Microsoft\Accessibility'
+        if($Saved.exists){
+            if(!(Test-Path -LiteralPath $path)){New-Item -Path $path|Out-Null}
+            Set-ItemProperty -LiteralPath $path -Name TextScaleFactor -Type $Saved.kind -Value $Saved.value
+        }else{Remove-ItemProperty -LiteralPath $path -Name TextScaleFactor}
+        if(((Get-FixtureTextScale)|ConvertTo-Json -Compress) -cne ($Saved|ConvertTo-Json -Compress)){throw 'Windows text scale did not restore its original registry value'}
+        [CapyVm.Native]::NotifyTextSize()
+    }
+    Wait-FixtureTextScale $Saved 'restoration'
 }
 $runnerStarted = Get-Date
 $Executable = if($List){[IO.Path]::GetFullPath($Executable)}else{(Resolve-Path -LiteralPath $Executable).Path}
@@ -279,6 +309,9 @@ $env:NO_COLOR = '1'
 Write-FixturePlan (Join-Path $Output 'plan.json') @(if(!$QueueConfig){$planned})
 $queue=if($QueueConfig){Get-Content -LiteralPath $QueueConfig -Raw|ConvertFrom-Json}else{$null}
 if($QueueConfig -and (!$queue.url -or !$queue.token)){throw 'The fixture queue configuration is incomplete.'}
+$env:CAPY_WAIT_SCALE = if($HardwareGpu){$null}else{'3'}
+$textScale=[pscustomobject]@{exists=$false;kind=$null;value=$null}
+Restore-FixtureTextScale $textScale
 $claimed=[Collections.Generic.List[string]]::new()
 $results = Join-Path $Output 'results.jsonl'
 while($null -ne ($name=Get-NextFixture $planned $queue $claimed)){
@@ -289,10 +322,10 @@ while($null -ne ($name=Get-NextFixture $planned $queue $claimed)){
     $log = Join-Path $Output ($run.Key -replace ':', '-')
     $env:CAPY_FIXTURE_CONTEXT = "$log-context.json"
     $started = Get-Date
-    $textScale=$null;$cleanupError=$null
+    $cleanupError=$null
     try {
       try {
-        $textScale=Get-FixtureTextScale
+        Wait-FixtureTextScale $textScale 'setup'
         $controlFixture=Control-Fixture $fixture $run.Value
         $Executable=$editorExecutable
         if($controlFixture){
@@ -303,7 +336,6 @@ while($null -ne ($name=Get-NextFixture $planned $queue $claimed)){
         $arguments += @(Get-FixtureCompanionArguments $fixture $run.Value ${function:Build-ControlFixture})
         if ($DebuggerPath) { $arguments += @('-DebuggerPath', $DebuggerPath) }
         $arguments=@(Get-FixtureProcessArguments $fixture $arguments)
-        $env:CAPY_WAIT_SCALE = if($HardwareGpu){$null}else{'3'}
         $process = Start-Process (Get-Process -Id $PID).Path -ArgumentList (ConvertTo-FixtureCommandLine (@('-NoProfile', '-Sta') + $arguments)) -NoNewWindow -PassThru -RedirectStandardOutput "$log.log" -RedirectStandardError "$log.err"
         $null = $process.Handle
         $process.PriorityClass='High'

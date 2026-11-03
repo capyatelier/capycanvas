@@ -270,13 +270,15 @@ try{
     }finally{$process.PriorityClass=$previous}
 }finally{Remove-Item -LiteralPath $cacheRun -Recurse -Force}
 & {
-    foreach($name in 'Get-FixtureTextScale','Restore-FixtureTextScale'){
+    foreach($name in 'Get-FixtureTextScale','Restore-FixtureTextScale','Wait-FixtureTextScale'){
         $definition=$ast.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$false)
         if($definition){. ([scriptblock]::Create($definition.Extent.Text))}
     }
     Add-Type -TypeDefinition 'namespace CapyVm { public static class Native { public static int Notifications; public static void NotifyTextSize(){Notifications++;} } }'
     $loop=$ast.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.WhileStatementAst] -and $_.Extent.Text.Contains('Get-NextFixture')}
-    $execute=[scriptblock]::Create($loop.Extent.Text)
+    $baseline=$ast.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.AssignmentStatementAst] -and $_.Left.Extent.Text -eq '$textScale'}
+    $startup=@($baseline)+@($ast.EndBlock.Statements|Where-Object {$_.Extent.Text -eq 'Restore-FixtureTextScale $textScale'})
+    $execute=[scriptblock]::Create(($startup.Extent.Text -join "`n")+"`n"+$loop.Extent.Text)
     $registry=[pscustomobject]@{}
     $registry|Add-Member ScriptMethod GetValueNames {if($script:scale.exists){'TextScaleFactor'}}
     $registry|Add-Member ScriptMethod GetValueKind {param($name)$script:scale.kind}
@@ -292,7 +294,7 @@ try{
     function Remove-ItemProperty($LiteralPath,$Name){
         $script:events.Add('restore')
         if($script:restoreFails){throw 'Registry restore refused'}
-        $script:scale=[pscustomobject]@{exists=$false;kind=$null;value=$null}
+        $script:scale=[pscustomobject]@{exists=$false;kind=$null;value=$null};$script:pendingReads=1
     }
     function Get-NextFixture($Planned,$Queue,$Claimed){
         $script:events.Add('claim');$script:claims++
@@ -304,51 +306,104 @@ try{
     function Get-Process{[pscustomobject]@{Path='powershell.exe'}}
     function Start-Process{
         $script:events.Add('child')
-        if($script:mode -ne 'unchanged'){$script:scale=[pscustomobject]@{exists=$true;kind='DWord';value=150}}
+        if($script:scale.exists -or $script:runtimeScale -ne 1.0){throw 'A child launched before default Windows text scale was acknowledged'}
+        if($script:mode -ne 'unchanged'){$script:scale=[pscustomobject]@{exists=$true;kind='DWord';value=150};$script:runtimeScale=1.5}
         if($script:mode -eq 'error'){throw 'Child launch failed'}
         $child=[pscustomobject]@{Id=123;Handle=1;PriorityClass='Normal';ExitCode=$(if($script:mode -eq 'failure'){7}else{0})}
         $child|Add-Member ScriptMethod WaitForExit {param($timeout)$script:mode -notin @('timeout','screen-error')}
         $child
     }
-    function taskkill.exe{$script:events.Add('kill')}
+    function taskkill.exe{$script:events.Add('kill');$script:readerKilled=$true}
     function Save-Screen{if($script:mode -eq 'screen-error'){throw 'Capture failed'}}
+    function Read-FixtureTextScale([int]$Milliseconds){
+        $script:reads++;$script:events.Add('read')
+        if($script:readFails){
+            if($script:readFails -eq 'startup' -and $script:reads -eq 1){return 1.5}
+            if($script:readFails -eq 'setup' -and $script:reads -le 2){if($script:reads -eq 1){return 1.0}else{return 1.5}}
+            if($script:readFails -eq 'restoration' -and $script:reads -le 2){return 1.0}
+            throw 'UISettings reader timed out'
+        }
+        if($script:pendingReads -gt 0){$script:pendingReads--;return $script:runtimeScale}
+        $script:runtimeScale=if($script:scale.exists){[double]$script:scale.value/100.0}else{1.0}
+        $script:runtimeScale
+    }
+    function Start-Sleep{}
     function Save-Evidence{$script:events.Add('evidence')}
     function Get-Content{if($script:mode -eq 'failure'){'Fixture failed'}}
     function Write-FixtureResult($Path,$Json){$script:events.Add('result');$script:result=$Json|ConvertFrom-Json}
     $Output='C:\owned';$scripts='C:\owned';$editorExecutable='C:\owned\CapyCanvas.exe'
     $runs=@{fixture=@()};$queue=$null;$DebuggerPath=$null;$TimeoutMinutes=20
-    foreach($original in @(
-        [pscustomobject]@{exists=$false;kind=$null;value=$null},
-        [pscustomobject]@{exists=$true;kind='DWord';value=130},
-        [pscustomobject]@{exists=$true;kind='QWord';value=[long]150}
-    )){
-        foreach($mode in 'timeout','screen-error','failure','error','success','unchanged'){
-            foreach($restoreFails in @($false,$true)){
-                if($restoreFails -and $mode -notin @('timeout','success','failure')){continue}
-                $script:scale=$original;$script:mode=$mode;$script:restoreFails=$restoreFails
-                $script:events=[Collections.Generic.List[string]]::new();$script:claims=0;$script:result=$null
-                $notifications=[CapyVm.Native]::Notifications;$failure=$null
-                try{& $execute}catch{$failure=$_.Exception.Message}
-                $childExit=switch($mode){'timeout'{'timeout'} 'failure'{7} {$_ -in @('error','screen-error')}{'runner'} default{0}}
-                $expectedExit=if($restoreFails){'cleanup'}else{$childExit}
-                if(!$script:result -or $script:result.exit -cne $expectedExit){throw 'Text-scale cleanup replaced the original fixture exit'}
-                $expectedMessage=switch($mode){'failure'{'Fixture failed'} 'error'{'Child launch failed'} 'screen-error'{'Capture failed'} default{''}}
-                if($restoreFails){$expectedMessage=(@($expectedMessage,"Text-scale cleanup failed (fixture exit ${childExit}): Registry restore refused")|Where-Object {$_}) -join ' '}
-                if($script:result.message -cne $expectedMessage){throw 'Text-scale cleanup replaced the original fixture message'}
-                if($restoreFails){
-                    if(!$failure -or $script:claims -ne 1){throw 'Failed text-scale cleanup claimed another fixture or lost its result'}
-                    if($script:events[-1] -ne 'result'){throw 'Failed text-scale cleanup did not write its fixture result before stopping'}
-                    continue
-                }
-                if($failure){throw $failure}
-                if(($script:scale|ConvertTo-Json -Compress) -cne ($original|ConvertTo-Json -Compress)){throw 'Forced fixture termination leaked Windows text scale into the next fixture'}
-                $changed=$mode -ne 'unchanged' -and !($original.exists -and $original.kind -eq 'DWord' -and $original.value -eq 150)
-                if([CapyVm.Native]::Notifications -ne $notifications+[int]$changed){throw 'Text-scale notification did not match an actual restoration'}
-                $restore=$script:events.IndexOf('restore');$result=$script:events.IndexOf('result')
-                if($changed -and ($restore -le $script:events.IndexOf('evidence') -or $restore -ge $result)){throw 'Text scale must restore after evidence and before the fixture result'}
-                if($mode -in @('timeout','screen-error') -and ($script:events.IndexOf('kill') -lt 0 -or $script:events.IndexOf('kill') -ge $restore)){throw 'Text scale restored before forced child termination'}
-                if($script:claims -ne 2 -or $script:events[-1] -ne 'claim'){throw 'The next fixture was claimed before its predecessor completed cleanup'}
+    foreach($leaked in 150,130){
+        $script:scale=[pscustomobject]@{exists=$true;kind='DWord';value=$leaked};$script:runtimeScale=$leaked/100.0
+        $script:mode='unchanged';$script:restoreFails=$false;$script:readFails=$false;$script:pendingReads=0
+        $script:events=[Collections.Generic.List[string]]::new();$script:claims=0;$script:reads=0;$script:result=$null
+        $failure=$null;try{& $execute}catch{$failure=$_.Exception.Message}
+        if($failure -or !$script:result -or $script:result.exit -ne 0 -or $script:scale.exists -or $script:runtimeScale -ne 1.0){throw 'Runner did not restore default Windows text scale before its first child'}
+        if($script:events.IndexOf('restore') -ge $script:events.IndexOf('claim') -or $script:events.IndexOf('read') -ge $script:events.IndexOf('claim')){throw 'Runner default text-scale setup occurred after its first queue claim'}
+    }
+    foreach($mode in 'timeout','screen-error','failure','error','success','unchanged'){
+        foreach($restoreFails in @($false,$true)){
+            if($restoreFails -and $mode -notin @('timeout','success','failure')){continue}
+            $script:scale=[pscustomobject]@{exists=$false;kind=$null;value=$null};$script:runtimeScale=1.0
+            $script:mode=$mode;$script:restoreFails=$restoreFails;$script:pendingReads=0
+            $script:events=[Collections.Generic.List[string]]::new();$script:claims=0;$script:result=$null
+            $notifications=[CapyVm.Native]::Notifications;$failure=$null;$script:reads=0;$script:readFails=$false
+            try{& $execute}catch{$failure=$_.Exception.Message}
+            $childExit=switch($mode){'timeout'{'timeout'} 'failure'{7} {$_ -in @('error','screen-error')}{'runner'} default{0}}
+            $expectedExit=if($restoreFails){'cleanup'}else{$childExit}
+            if(!$script:result -or $script:result.exit -cne $expectedExit){throw 'Text-scale cleanup replaced the original fixture exit'}
+            $expectedMessage=switch($mode){'failure'{'Fixture failed'} 'error'{'Child launch failed'} 'screen-error'{'Capture failed'} default{''}}
+            if($restoreFails){$expectedMessage=(@($expectedMessage,"Text-scale cleanup failed (fixture exit ${childExit}): Registry restore refused")|Where-Object {$_}) -join ' '}
+            if($script:result.message -cne $expectedMessage){throw 'Text-scale cleanup replaced the original fixture message'}
+            if($restoreFails){
+                if(!$failure -or $script:claims -ne 1){throw 'Failed text-scale cleanup claimed another fixture or lost its result'}
+                if($script:events[-1] -ne 'result'){throw 'Failed text-scale cleanup did not write its fixture result before stopping'}
+                continue
             }
+            if($failure){throw $failure}
+            $changed=$mode -ne 'unchanged'
+            if($script:reads -ne $(if($changed){4}else{3})){throw 'The next fixture started before default UISettings text scale was acknowledged'}
+            if($script:scale.exists -or $script:runtimeScale -ne 1.0){throw 'Forced fixture termination leaked Windows text scale into the next fixture'}
+            if([CapyVm.Native]::Notifications -ne $notifications+[int]$changed){throw 'Text-scale notification did not match an actual restoration'}
+            $restore=$script:events.IndexOf('restore');$result=$script:events.IndexOf('result')
+            if($changed -and ($restore -le $script:events.IndexOf('evidence') -or $restore -ge $result)){throw 'Text scale must restore after evidence and before the fixture result'}
+            if($mode -in @('timeout','screen-error') -and ($script:events.IndexOf('kill') -lt 0 -or $script:events.IndexOf('kill') -ge $restore)){throw 'Text scale restored before forced child termination'}
+            if($script:claims -ne 2 -or $script:events[-1] -ne 'claim'){throw 'The next fixture was claimed before its predecessor completed cleanup'}
+        }
+    }
+    if(@($baseline).Count -ne 1 -or $startup.Count -ne 2){throw 'Runner default text-scale setup was not performed once outside the child loop'}
+    foreach($phase in 'startup','setup','restoration'){
+        $script:scale=[pscustomobject]@{exists=$false;kind=$null;value=$null};$script:runtimeScale=1.0
+        $script:mode='success';$script:restoreFails=$false;$script:pendingReads=0;$script:readFails=$phase
+        $script:events=[Collections.Generic.List[string]]::new();$script:claims=0;$script:reads=0;$script:result=$null
+        $failure=$null;try{& $execute}catch{$failure=$_.Exception.Message}
+        if($phase -eq 'startup'){
+            if(!$failure -or $script:claims -ne 0 -or $script:events.Contains('child')){throw 'Unacknowledged default text scale claimed or launched the first fixture'}
+        }elseif($phase -eq 'setup'){
+            if($script:events.Contains('child') -or !$script:result -or $script:result.exit -eq 0 -or $script:result.message -notlike 'Fixture setup did not acknowledge saved Windows text scale*'){throw 'An unacknowledged startup text scale launched a fixture or lost its named setup failure'}
+        }elseif(!$failure -or $script:result.exit -ne 'cleanup' -or $script:claims -ne 1 -or $script:result.message -notlike '*Fixture restoration did not acknowledge saved Windows text scale*'){throw 'An unacknowledged runtime restoration passed or claimed another fixture'}
+    }
+    & {
+        $definition=$ast.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Read-FixtureTextScale'},$false)
+        if(!$definition){throw 'The parent text-scale reader is not bounded'}
+        $read=[scriptblock]::Create($definition.Body.Extent.Text.Trim().Substring(1,$definition.Body.Extent.Text.Trim().Length-2))
+        function Start-Process{
+            $reader=[pscustomobject]@{Id=124}
+            $reader|Add-Member ScriptProperty Handle {$script:readerHandle=$true;[IntPtr]1}
+            $reader|Add-Member ScriptProperty ExitCode {if($script:readerWaitHadHandle){0}}
+            $reader|Add-Member ScriptMethod WaitForExit {param($milliseconds)$script:readerBound=$milliseconds;$script:readerWaitHadHandle=$script:readerHandle;$script:readerCompletes}
+            $reader|Add-Member ScriptMethod Dispose {$script:readerDisposed=$true}
+            $reader
+        }
+        function Get-Content{'1.3'}
+        foreach($completes in @($true,$false)){
+            $script:readerCompletes=$completes;$script:readerKilled=$false;$script:readerDisposed=$false;$script:readerBound=0;$script:readerHandle=$false;$script:readerWaitHadHandle=$false
+            $Milliseconds=23;$failure=$null;$value=$null
+            try{$value=& $read}catch{$failure=$_.Exception.Message}
+            if($script:readerBound -ne 23 -or !$script:readerDisposed){throw 'UISettings readback escaped its remaining deadline or leaked its process handle'}
+            if(!$script:readerWaitHadHandle){throw 'Quick-exit UISettings reader lost its retained process handle'}
+            if($completes){if($failure -or $value -ne 1.3 -or $script:readerKilled){throw 'Completed UISettings readback lost its exact double'}}
+            elseif(!$script:readerKilled -or $failure -ne 'UISettings text-scale reader exceeded its acknowledgement deadline'){throw 'A blocked UISettings reader was not terminated with a named deadline failure'}
         }
     }
 }
