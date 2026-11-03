@@ -85,19 +85,33 @@ Straight steady runs advance at half the reference diameter, at least 4 px. Pen-
 flushes the endpoint. Segmentation follows input, and prediction clones the same
 state; rendering cadence does not decide where contacts are retained.
 
-Dry media retain their opening contact and swept prefix without depositing an
-imprint. Until real movement exceeds one captured screen pixel from touchdown,
-the live preview shows only a conservative sweep from the opening contact to
-the latest endpoint. Preview clones share the pending history, then exclude it
-from their evaluation. Crossing the tolerance commits the exact retained prefix
-and includes the drag's start completion. Pen-up inside the tolerance
-discards the prefix and deposits one imprint at the strongest real pressure's
-pose. Prediction cannot commit either choice; real-input preview remains
-available with prediction off. Wet stamps, bristle contact and time-based
-spraying keep their own contact behavior.
+Flow dry media start frozen at their first modeled sample. Pen-down pressure
+raises greater than 0.05 update the tap pose without changing its tilt or twist.
+The preview shows that imprint. Movement of three captured screen pixels
+unfreezes the stroke, replaces the opening contact and first completion vertex
+with that raised pose, then continues to the accepted modeled sample. Ignored
+opening samples still update input dynamics; their geometry is not replayed. Mid-stroke
+rest freezes the whole pose when at least 60 ms of history exists and the last
+100 ms stays within three screen pixels of the current modeled sample. A preview
+also freezes after 100 ms without modeled input, using the frame's current time.
+Rest only controls sample acceptance; freezing does not land or flush the
+committed path. Accepted samples continue from its last contact without rewinding.
+A pen-up at least 100 ms after the last modeled sample ends at the held anchor
+without feeding its pose. Transient stroke data retains whether its final accepted
+point is pen-up; live drawing and replay share the same gap decision. The held
+pose belongs to the current completion anchor. Anchors retain modeled poses,
+their variation identity and the immutable settling curve for that endpoint;
+contacts evaluate lazily for the lift.
+Anchor steps use size-only evaluation when the quarter-minor-radius bound matters.
+Samples held during mid-stroke
+rest are discarded. Wet stamps, bristle contact and time-based spraying retain
+their own contact behavior.
+
+Uniform dry media hold the opening contact and prefix within one captured
+screen pixel. Release resolves that tap at the strongest held pose.
 
 Selection-mask painting flushes swept endpoints after each real sample and
-resolves taps only on pen-up, using the same captured screen tolerance. Its
+resolves taps only on pen-up, using the brush's captured screen tolerance. Its
 completed replay makes the same distinction. Endpoint flushing does not end a
 stroke or turn pending contact into an imprint.
 
@@ -112,27 +126,66 @@ Douglas–Peucker subdivision at 2.5% of its anchor's minor radius, at least 0.0
 document pixels. Pending history is bounded to 256 vertices. Ordinary retained
 segments remain intact. Modeled input advances the outgoing window; full-weight
 turns resolve after a quarter radius, and other turns wait for a full radius.
-Pen-up resolves pending turns and the terminal cap. No moving-head cap is deposited.
+Completion paths receive every retained body dab. Pen-up resolves pending turns
+and flushes the last body contact. A moving smoothed stroke completes its
+settling curve before finalization. Preview end-cap anchors follow the settled
+pen-up endpoint, stepping by the smaller of 1.5 captured screen pixels and a
+quarter of the current anchor’s minor radius. Every accepted modeled sample
+updates the anchor, advancing it when committed geometry passes it. Both sampled
+rest and a sample gap freeze the same lift at that anchor. A frozen pen-up
+commits that lift, including its settling curve, to the held endpoint.
+A later body vertex already emitted for a pose change remains painted.
+
+Dry Flow preview shares matching real bodies with a frozen lift at anchor S.
+Unmatched landing bodies are LiftOnly on the end’s owned contact; the ordinary
+MainOnly continuation draws on unowned pixels. Bodies and completions keep the
+lift's original order, with the end last, followed by unmatched MainOnly dabs.
+The real modeled endpoint
+flushes at its full radius before prediction begins, so the real span never tapers.
+Each Preview batch identifies its end contact. Completion kernels compute its
+geometric q≤1 ownership before the dab loop, including beveled rounded tips.
+Planning omits LiftOnly bodies whose bounds miss the end contact. Pages outside
+that contact omit LiftOnly and ignore preview tags when selecting their kernels.
+Their original dab lists and tags stay intact; only real completions select the
+completion kernel. The original end stays available across page
+compaction.
+Other specialized kernels compose constant preview helpers. Frozen preview
+adds no prediction. Every completion uses committed filtering code 2 and the normal
+grip law; routing does not change that law or enter authored stroke data.
+`dry_sample_gap_freezes_preview_and_ignores_the_late_up_pose` checks sampleless rest and replay.
+`frozen_dry_preview_matches_canonical_stored_paint` checks exact native stored paint at pen-up.
+`preview_landing_bodies_plan_only_the_pages_that_can_be_owned` checks landing culls and page ranges.
+The normal engine rest tests bound slow-stroke travel and check continuous contacts.
 
 Completion uses the same relief, loading, and optical transfer as segments.
 Its contact window leaves weakly engaged grains softer than fully engaged paper.
-Same-pigment batches containing completion use a completion-capable shader
-variant in the existing paint pass. Other batches keep their segment variant.
+Each planned page selects its body, completion and fine-tip kernel from the
+contacts that page evaluates, within the existing pipeline set and paint pass.
 The completion helpers are absent from ordinary specialized shaders. Broad
 completion variants also omit fine-contact filtering. Centered elliptical
 contacts share their symmetric full-chord integral and reject the inner half of
 a turn, where its incident half-lines already supply the target exposure.
 The tile planner omits wholly interior turn tiles with a conservative pixel
-margin; endpoint, shifted-relief, beveled, and fine-contact tiles retain their
-full support.
+margin. Endpoint zero planes are tangent to the contact support; completion
+exposure remains nonzero on both sides of the endpoint's center. Shifted-relief,
+beveled and fine-contact tiles retain their full support.
 The 128-byte shared and 160-byte renderer contact records retain their sizes,
 and completion adds no persistent pixel state.
 
-Fine completions average the analytic completion alpha over a 3×3 pixel grid
+Fine round completions average the analytic completion alpha over a 3×3 pixel grid
 and recover optical exposure before deposit. Filtering applies fully below a
 four-pixel minor radius and blends to the point evaluator by eight pixels.
-The segment filter is unchanged. Small beveled contacts retain point-sampled
-body exposure and use the same completion filter.
+Beveled rounded contacts use point-sampled body and completion exposure at every
+radius. Their specialized shaders omit the completion filter.
+
+Repeated dry Flow preview contacts reuse their retained pages while the view, styles,
+source artwork and display resources remain unchanged. Persistent input, changed
+contacts or a discarded submission retire that reuse. No dry evaluation, gather
+or copy dispatch runs for an unchanged preview. Pointwise painting uses one accumulator and a per-pixel end-contact ownership
+flag within each preview job.
+`unchanged_dry_preview_keeps_pages_and_encodes_no_gpu_work` checks retained pages and invalidation.
+`completion_preview_routes_select_the_committed_filter` checks per-page contact flags.
+`dry_preview_completions_use_the_ready_committed_kernel` checks preview completion readiness.
 
 For each pixel, the dry evaluator integrates `contact*loading` over the current
 segment and divides by the full geometric contact chord. Subdividing a fixed-pose
@@ -311,6 +364,7 @@ The renderer's `dry_media` integration suite compares elliptical and beveled-blo
 sweeps with independent f64 numerical integration. It checks pressure recruitment,
 empty contacts, paper stationarity, tilt continuity, segmentation, prediction and
 zoom. Contact preview fixtures compare live and committed color and coverage.
+`dry_press_then_draw_preserves_the_raised_start_imprint` checks alpha through unfreeze.
 The `project` suite checks every contact preset through save/reopen and exact
 Undo/Redo. GTK and Web journeys exercise catalog selection, sensor input and
 history in both themes. Native sensor fixtures do not establish physical pen-driver

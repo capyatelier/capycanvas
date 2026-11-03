@@ -3064,3 +3064,57 @@ is in `artifacts/column-bridge-web-shipping-final/`. Cleanup verification is in
 `artifacts/column-bridge-web-rollback-final/`, with pristine comparison evidence
 in `artifacts/column-bridge-web-pristine-baseline/`. Drag-rate root-cause work is
 deferred.
+
+## Dry cap preview and rest
+
+Final local comparison, 2026-11-03: matched main `367d075b7` → `1d888d6ac`,
+with the same benchmark APK host. TCL 12 MP (4248 × 2832) at Fit, factory
+density 320, font scale 1 and thermal status 0. ABBA uses two fresh launches
+per arm, each with three five-second primes and three ten-second measurements.
+Pressure is 1 and tilt is 0.785398 radians. This 45° profile does not qualify
+the guaranteed 40° writing pose. Costs below are dry GPU work, not total frame
+time; committed cost uses unique producer dabs.
+
+| Brush | Resolved contact, document px | Preview GPU ms/update, before → after | Change | Live committed GPU ms/dab, before → after | Committed gate |
+| --- | --- | --- | --- | --- | --- |
+| Pencil 9 | 14.344 × 6.623 | 6.168737 → 7.019716 | +13.795% | 0.713746 → 0.747188 | Isolated nonregression |
+| Pencil 36 | 57.375 × 26.494 | 1.168556 → 1.282774 | +9.774% | 0.141786 → 0.139123 | Live nonregression |
+| Pencil 100 | 159.375 × 73.594 | 1.941416 → 2.128711 | +9.647% | 0.480594 → 0.476492 | Live nonregression |
+| Chalk default | 21.733 × 16.051 | 1.369430 → 1.556338 | +13.649% | 0.123262 → 0.123957 | Isolated nonregression |
+| Pastel 64 | 86.000 × 40.600 | 1.995799 → 2.420116 | +21.260% | 0.351450 → 0.340524 | Live nonregression |
+| Pencil 1024 | 1631.998 × 753.600 | 17.919318 → 30.329430 | +69.255% | 22.824513 → 24.319721 | Isolated inconclusive |
+
+The following ranges span the six measured contacts per arm. Fresh-input
+updates require new consumed paint input; actual presents are separately
+attributed canvas presentations. A high presentation rate alone does not prove
+fresh ink throughput.
+
+| Brush | Actual presents/s, before → after | Completed updates/s, before → after | Fresh-input updates/s, before → after | Worst contact fresh-input p99 gap, ms, before → after |
+| --- | --- | --- | --- | --- |
+| Pencil 9 | 59.92–60.02 → 60.02–60.02 | 78.69–80.94 → 74.05–75.74 | 78.69–80.94 → 73.95–75.74 | 22.83 → 23.00 |
+| Pencil 36 | 60.02–60.02 → 59.92–60.02 | 84.66–88.98 → 83.57–87.38 | 84.56–88.98 → 83.57–87.28 | 19.27 → 19.25 |
+| Pencil 100 | 60.02–60.02 → 59.92–60.02 | 82.21–84.48 → 81.86–84.68 | 82.21–84.48 → 81.86–84.68 | 21.69 → 20.69 |
+| Chalk default | 59.92–60.02 → 59.92–60.02 | 85.59–90.95 → 87.35–89.05 | 85.49–90.85 → 87.35–88.95 | 19.79 → 19.21 |
+| Pastel 64 | 59.92–60.02 → 59.92–60.02 | 86.33–88.45 → 84.07–85.60 | 86.23–88.45 → 84.07–85.50 | 21.40 → 20.36 |
+| Pencil 1024 | 0.95–1.40 → 0.75–1.27 | 0.80–0.90 → 0.70–0.80 | 0.80–0.90 → 0.70–0.80 | 4262.37 → 4943.89 |
+
+At this measured pose, the five ordinary-size rows exceed 60 completed/fresh
+updates/s and stay below a 33.3 ms worst-contact p99 gap. Oversized Pencil 1024
+misses both arms. TCL Pencil 36 and Chalk satisfy their +20% preview limits;
+Pastel and large Pencil retain the increases above. Identical-packet committed
+replays give Pencil 9 **2.067406 → 2.070201 ms/dab**, Chalk
+**0.334592595 → 0.334591338**, and Pencil 1024 **20.723988 → 21.327976**.
+The first two pass MAIN-only noise gates. Pencil 1024 is inconclusive:
++2.914% [0.658%, 5.202%] overlaps the +3.660% noise boundary.
+
+The S7 24 MP diagnostics exceed the +20% preview limit at Pencil 36/100, Chalk
+and Pastel (+40%, +57%, +46%, +66%; +0.14–0.38 ms per update). On 2026-11-03
+the user accepted these increases for stationary-pen stability and
+darkening-free corners. Completed update rates remain about 53–55/s for these
+rows; S7 actual presentation correspondence remains unproven. Pencil
+1024 already misses its target on main. Huion and S7 do not qualify the
+reference mid/top tiers. The final report at
+`artifacts/leading-edge-caps/revision-11-report.local.md` records all 18 Android
+rows, intervals, class/page attribution, desktop and startup/Windows results,
+pixel exceptions and cleanup. All tablets are released; TCL's prior density
+override 272 is restored.

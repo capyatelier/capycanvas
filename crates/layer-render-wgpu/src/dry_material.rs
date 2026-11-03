@@ -9,6 +9,7 @@ pub(super) struct Job {
     pub coordinate: [u32; 2],
     pub coverage: bool,
     pub record_offset: u32,
+    pub dabs: std::ops::Range<u32>,
     pub dirty: PixelRect,
 }
 
@@ -140,8 +141,15 @@ pub(super) fn material_source(space:layer_core::color::RgbSpace,float_sampling:&
     let start=if let Entries::Kernel(start,_)=entries {start} else {Start::Sampled};
     let leaf=if flags==u32::MAX || flags&(64|512)==512 {include_str!("material_contact.wgsl")} else {include_str!("dry_material_contact.wgsl")};
     let clone=if operation==M::Clone {compose_wgsl(&[include_str!("retouch_sample.wgsl"),include_str!("material_clone.wgsl")])} else {include_str!("clone_absent.wgsl").into()};
+    let preview = if flags == u32::MAX || flags & COMPLETION != 0 {
+        include_str!("preview.wgsl")
+    } else {
+        include_str!("preview_absent.wgsl")
+    };
     let operation_source:Cow<'static,str>=match operation {
-        M::Deposit|M::Coverage|M::Clone => compose_wgsl(&[include_str!("material_pointwise.wgsl"),
+        M::Deposit | M::Coverage | M::Clone => compose_wgsl(&[
+            include_str!("material_pointwise.wgsl"),
+            preview,
             "fn material_result(p:vec4<f32>)->MaterialOutput {return pointwise_material_result(p);}"]),
         _ => {
             let name=match operation {M::Liquify=>unreachable!("liquify reconstructs its original source"),M::Smudge=>"smudge",M::Wet=>"wet",_=>"watercolor"};
@@ -577,13 +585,24 @@ impl WgpuRasterizer {
         let marker=batch_index*self.style_stride as usize+mem::offset_of!(StyleGpu,material_a)+12;
         let aggregate=f32::from_ne_bytes(self.style_upload[marker..marker+4].try_into().unwrap())>0.5
             && aggregate_kernel(&batch.style);
-        let completion=dry_flow(&batch.style)
-            && self.dab_upload[batch.first_dab as usize..(batch.first_dab+batch.dab_count) as usize].iter().any(|d|d.dab.is_completion());
-        let fine=(fine_tip_capable(&batch.style) || completion)
-            && self.dab_upload[batch.first_dab as usize..(batch.first_dab+batch.dab_count) as usize]
-                .iter().any(|d|(0..2).any(|i|0.5*(d.dab.radii[i]+d.dab.previous[i])<FINE_TIP_RADIUS));
-        let extra=if aggregate {AGGREGATE} else {0} | if fine {FINE_TIP} else {0} | if completion {COMPLETION} else {0};
+        let owner = if batch.kind == DabBatchKind::Preview && dry_flow(&batch.style) {
+            batch
+                .preview_end
+                .and_then(|i| self.dab_upload.get((batch.first_dab + i) as usize))
+                .map(|d| d.dab.bounds())
+        } else {
+            None
+        };
         for job in jobs {
+            if job.dabs.is_empty() {
+                continue;
+            }
+            let dabs = &self.dab_upload[job.dabs.start as usize..job.dabs.end as usize];
+            let owns = owner.is_some_and(|end| {
+                !crate::brush_tiles::plain_preview_page(Some(end), job.coordinate)
+            });
+            let extra = if aggregate { AGGREGATE } else { 0 }
+                | batch_contact_flags(&batch.style, dabs, owns);
             pass.set_bind_group(0, &job.output, &[style_offset]);
             pass.set_bind_group(
                 1,
@@ -610,6 +629,18 @@ pub(super) fn single_pigment_marked(style: &layer_render::DabStyle) -> bool {
 
 pub(super) fn dry_flow(style: &layer_render::DabStyle) -> bool {
     style.contact.is_some_and(|c| c.dry.is_some()) && style.rendering.accumulation == BrushAccumulation::Flow
+}
+
+fn batch_contact_flags(style: &layer_render::DabStyle, dabs: &[DabGpu], owns: bool) -> u32 {
+    let completion = dry_flow(style)
+        && dabs
+            .iter()
+            .any(|d| d.dab.is_completion() || (owns && matches!(d.dab.texture_sign[0], -2. | -3.)));
+    let fine = (fine_tip_capable(style) || completion)
+        && dabs
+            .iter()
+            .any(|d| (0..2).any(|i| 0.5 * (d.dab.radii[i] + d.dab.previous[i]) < FINE_TIP_RADIUS));
+    (if fine { FINE_TIP } else { 0 }) | if completion { COMPLETION } else { 0 }
 }
 
 fn aggregate_kernel(style: &layer_render::DabStyle) -> bool {
@@ -682,6 +713,65 @@ pub(super) fn reduced_preview_eligible(style: &layer_render::DabStyle) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completion_preview_routes_select_the_committed_filter() {
+        let body = Dab {
+            center: layer_core::Point::default(),
+            radii: [4.; 2],
+            rotation: [1., 0.],
+            motion: [1., 0.],
+            color_rgba_linear: [1.; 4],
+            flow: 1.,
+            hardness: 1.,
+            texture_sign: [1.; 2],
+            material: [0.; 4],
+            previous: [4., 4., 1., 0.],
+            contact: [0.5, 0., 0.7, 0.],
+            previous_contact: [0.5, 0., 0.7, 0.],
+        };
+        let completion = body.completion([-1., 0.], [0.; 2], 1.);
+        let style = |preset| {
+            layer_render::DabStyle::for_brush(
+                &layer_core::default_brush(preset),
+                layer_core::StrokeTool::Brush,
+            )
+        };
+        let pastel = style(layer_core::DefaultBrushPreset::PastelBlock);
+        assert_eq!(
+            batch_contact_flags(&pastel, &[body.into(), completion.into()], false),
+            FINE_TIP | COMPLETION
+        );
+        let pencil = style(layer_core::DefaultBrushPreset::Pencil);
+        assert_eq!(
+            batch_contact_flags(&pencil, &[body.into(), completion.into()], false),
+            FINE_TIP | COMPLETION
+        );
+        for tag in [
+            layer_render::DabPreview::LiftOnly,
+            layer_render::DabPreview::MainOnly,
+        ] {
+            let tagged = [body.with_preview_tag(tag).into()];
+            assert_eq!(batch_contact_flags(&pencil, &tagged, false), FINE_TIP);
+            assert_eq!(
+                batch_contact_flags(&pencil, &tagged, true),
+                FINE_TIP | COMPLETION
+            );
+        }
+        for preset in [
+            layer_core::DefaultBrushPreset::PastelBlock,
+            layer_core::DefaultBrushPreset::Pencil,
+        ] {
+            let brush = layer_core::default_brush(preset);
+            let style = layer_render::DabStyle::for_brush(&brush, layer_core::StrokeTool::Brush);
+            let flags = batch_contact_flags(&style, &[body.into(), completion.into()], false);
+            assert!(
+                Reach::of(&brush)
+                    .batch_variants(&style)
+                    .any(|prepared| prepared & !AGGREGATE == flags)
+            );
+        }
+    }
 
     #[cfg(target_os = "windows")]
     #[test]

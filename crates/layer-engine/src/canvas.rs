@@ -806,6 +806,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             history.push(operation);
             reservations.entry(target).and_modify(|r| *r = r.union(damage)).or_insert(damage);
             batches.push(DabBatch {
+                preview_end: None,
                 material_update: 0, stroke_id: StrokeId(0), target,
                 kind: DabBatchKind::RasterOperation(index), stroke_start: false, stroke_end: false,
                 first_dab: 0, dab_count: 0,
@@ -1365,7 +1366,12 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let mut style = DabStyle::for_brush(&brush, StrokeTool::Brush);
         style.alpha_locked = alpha_locked;
         style.liquify = Some(Arc::new(context));
-        Ok(DabBatch { material_update: 0, stroke_id: self.editor.allocate_stroke_id(), target, kind,
+        Ok(DabBatch {
+            preview_end: None,
+            material_update: 0,
+            stroke_id: self.editor.allocate_stroke_id(),
+            target,
+            kind,
             stroke_start: true, stroke_end: kind == DabBatchKind::Persistent, first_dab: 0, dab_count: 0, style, damage })
     }
 
@@ -1445,6 +1451,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 *raster = layer_core::raster::RasterRevision::pending();
                 for (index, operation) in operations.iter().enumerate() {
                     batches.push(DabBatch {
+                        preview_end: None,
                         material_update: 0, stroke_id: StrokeId(0), target,
                         kind: DabBatchKind::RasterOperation(index as u32),
                         stroke_start: false, stroke_end: false, first_dab: 0, dab_count: 0,
@@ -1543,6 +1550,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         timestamp_ns: Option<u64>,
         presentation_timestamp_ns: Option<u64>,
     ) -> Result<(), EngineError<B::Error>> {
+        if let Some(active) = &mut self.active_stroke {
+            active.tip.frame_lift = None;
+        }
         self.frame_clock_ns = timestamp_ns;
         let view = self.view();
         self.backend.poll_pending(view).map_err(EngineError::Backend)?;
@@ -2108,9 +2118,33 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     self.track_estimate(event, transform);
                     let active = self.active_stroke.as_ref().unwrap();
                     if self.frame_clock_ns.is_some() && pen_up_settlement_micros(&active.brush.stabilization) > 0 && active.tip.curve_preview.is_present() {
-                        let now = self.builder.elapsed_micros_at(self.frame_clock_ns.unwrap_or(event.timestamp_ns)).unwrap();
-                        self.pending_up = Some((event, now));
-                        return Ok(());
+                        let frozen = if crate::brush::has_completions(&active.brush) {
+                            let real = self.builder.real_points();
+                            let lift = self.dab_generator.prepare_lift(
+                                &active.brush,
+                                &real[self.finalized_real_points.min(real.len() - 1)
+                                    ..real.len() - 1],
+                                false,
+                                real.last().unwrap().elapsed_micros,
+                            );
+                            let frozen = lift.frozen();
+                            if !frozen {
+                                self.active_stroke.as_mut().unwrap().tip.frame_lift = Some(lift);
+                            }
+                            frozen
+                        } else {
+                            self.dab_generator.frozen()
+                        };
+                        if !frozen {
+                            let now = self
+                                .builder
+                                .elapsed_micros_at(
+                                    self.frame_clock_ns.unwrap_or(event.timestamp_ns),
+                                )
+                                .unwrap();
+                            self.pending_up = Some((event, now));
+                            return Ok(());
+                        }
                     }
                 }
                 if !momentum && !event.flags.contains(SampleFlags::PREDICTED) {
@@ -2141,6 +2175,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 self.replay_retouch_misses().map_err(EngineError::Document)?;
                 let active = self.active_stroke.take().expect("checked above");
                 self.recording.end(false);
+                let pen_up = self.builder.ending();
                 let points = self.builder.finish().unwrap_or_default();
                 if self.clone_stroke.take().is_some()
                     && let Some(last) = points.last()
@@ -2163,6 +2198,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     points,
                 )
                 .map_err(EngineError::Document)?;
+                stroke.pen_up = pen_up;
                 stroke.alpha_locked = alpha_locked;
                 stroke.blend_space = active.style.blend_space;
                 stroke.barrel_twist = active.barrel_twist;
@@ -2230,9 +2266,13 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             .partition_point(|end| *end as usize <= point_index)
             as u32;
         let start = self.dabs.len();
-        let mut damage = self
-            .dab_generator
-            .append(point, &active.brush, &mut self.dabs);
+        let mut damage = if terminal && self.builder.ending() {
+            self.dab_generator
+                .append_end(point, &active.brush, &mut self.dabs)
+        } else {
+            self.dab_generator
+                .append(point, &active.brush, &mut self.dabs)
+        };
         if terminal {
             damage = damage.union(self.dab_generator.finish(&active.brush, &mut self.dabs));
         }
@@ -2245,6 +2285,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 &mut self.batches,
                 &self.dabs,
                 DabBatch {
+                    preview_end: None,
                     material_update,
                     stroke_id,
                     target,
@@ -2310,6 +2351,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 &mut self.batches,
                 &self.dabs,
                 DabBatch {
+                    preview_end: None,
                     material_update: 0,
                     stroke_id,
                     target,
@@ -2347,6 +2389,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         // Preserve pen-up even when spacing emitted no contact in this frame.
         // Stateful renderers still need to finalize accumulated stroke state.
         self.batches.push(DabBatch {
+            preview_end: None,
             material_update: 0,
             stroke_id: active.id,
             target: active.target,
@@ -2377,15 +2420,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             self.push_active_preview(start);
             return;
         }
-        if !active.feedback.enabled {
-            // Only the current pending contact is provisional; pressure
-            // limiting needs no retained input window or endpoint prediction.
-            self.dab_generator
-                .preview()
-                .flush_contact(&active.brush, &mut self.dabs);
-            self.push_active_preview(start);
-            return;
-        }
         let latest = match self.builder.real_points().last().copied() {
             Some(point) => point,
             None => {
@@ -2395,16 +2429,23 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         };
         let (now_elapsed, requested_elapsed) = tip_times(active.feedback, latest,
             |timestamp| self.builder.elapsed_micros_at(timestamp).unwrap_or(latest.elapsed_micros), timestamp_ns, presentation_timestamp_ns);
-        self.recording.query(
-            crate::recording::Policy {
-                config: active.feedback,
-                transform: self.view.document_to_surface,
-            },
-            now_elapsed,
-            requested_elapsed,
-        );
+        if active.feedback.enabled {
+            self.recording.query(
+                crate::recording::Policy {
+                    config: active.feedback,
+                    transform: self.view.document_to_surface,
+                },
+                now_elapsed,
+                requested_elapsed,
+            );
+        }
         let input = TipInput {
-            real: self.builder.real_points(), pending: &self.builder.real_points()[self.finalized_real_points..],
+            real: self.builder.real_points(),
+            pending: if active.feedback.enabled {
+                &self.builder.real_points()[self.finalized_real_points..]
+            } else {
+                &[]
+            },
             platform: self.builder.predicted_points(), brush: &active.brush, feedback: active.feedback,
             transform: self.view.document_to_surface, now: now_elapsed, requested: requested_elapsed,
             ending: self.pending_up.map(|(_, ready)| ready),
@@ -2419,8 +2460,13 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     fn push_active_preview(&mut self, start: usize) {
-        if self.active_stroke.as_ref().is_some_and(|active| active.brush.contact.is_some_and(|c| c.dry.is_some())) {
-            self.dabs.extract_if(start.., |dab| dab.motion == [0.;2]).for_each(drop);
+        if self.active_stroke.as_ref().is_some_and(|active| {
+            active.brush.contact.is_some_and(|c| c.dry.is_some())
+                && active.brush.rendering.accumulation != layer_core::BrushAccumulation::Flow
+        }) {
+            self.dabs
+                .extract_if(start.., |dab| dab.motion == [0.; 2] && !dab.is_completion())
+                .for_each(drop);
         }
         let active = self.active_stroke.as_ref().expect("stroke is active");
         if self.dabs.len() == start && !(active.persistent_started && active.style.execution == BrushExecution::Liquify) {
@@ -2431,6 +2477,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             &mut self.batches,
             &self.dabs,
             DabBatch {
+                preview_end: self.dabs[start..]
+                    .iter()
+                    .rposition(|dab| dab.is_completion() && dab.previous_contact[2..] == [0.; 2])
+                    .map(|index| index as u32),
                 material_update: 0,
                 stroke_id: active.id,
                 target: active.target,
@@ -2479,7 +2529,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             let liquify = stroke.brush.execution == BrushExecution::Liquify;
             for (point_index, point) in stroke.points.iter().copied().enumerate() {
                 let start = if liquify { 0 } else { self.dabs.len() };
-                let mut damage = generator.append(point, &stroke.brush, &mut self.dabs);
+                let mut damage = if stroke.pen_up && point_index + 1 == stroke.points.len() {
+                    generator.append_end(point, &stroke.brush, &mut self.dabs)
+                } else {
+                    generator.append(point, &stroke.brush, &mut self.dabs)
+                };
                 if point_index + 1 == stroke.points.len() {
                     damage = damage.union(generator.finish(&stroke.brush, &mut self.dabs));
                 }
@@ -2494,6 +2548,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     &mut self.batches,
                     &self.dabs,
                     DabBatch {
+                        preview_end: None,
                         material_update: stroke
                             .material_updates
                             .partition_point(|end| *end as usize <= point_index)
@@ -2548,6 +2603,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                         &mut self.batches,
                         &self.dabs,
                         DabBatch {
+                            preview_end: None,
                             material_update: 0,
                             stroke_id: active.id,
                             target: active.target,
@@ -2578,6 +2634,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     &mut self.batches,
                     &self.dabs,
                     DabBatch {
+                        preview_end: None,
                         material_update: active
                             .material_updates
                             .partition_point(|end| *end as usize <= point_index)
@@ -2965,6 +3022,47 @@ mod tests {
         rename(&mut engine, "Parking rename");
         engine.release_idle_buffers();
         assert!(!engine.editor.memory_report_pending());
+    }
+
+    #[test]
+    fn non_flow_and_bristle_previews_keep_contact_headings() {
+        for preset in [
+            DefaultBrushPreset::BristlePaintbrush,
+            DefaultBrushPreset::Pencil,
+        ] {
+            let (mut input, mut engine) = engine("preview contact headings", 512, 256);
+            let mut brush = default_brush(preset);
+            brush.stabilization.strength = 0.;
+            if preset == DefaultBrushPreset::Pencil {
+                brush.rendering.accumulation = layer_core::BrushAccumulation::Uniform;
+            }
+            engine.set_brush(brush).unwrap();
+            for i in 0..32 {
+                let mut pen = event(
+                    i + 1,
+                    if i == 0 {
+                        PenPhase::Down
+                    } else {
+                        PenPhase::Move
+                    },
+                    100. + i as f32 * 3.,
+                );
+                pen.timestamp_ns = 1_000_000_000 + i * 4_000_000;
+                pen.tilt_radians = [0.7, 0.5];
+                input.push(pen).unwrap();
+                engine
+                    .render_frame_for(pen.timestamp_ns, pen.timestamp_ns + 8_000_000)
+                    .unwrap();
+                assert!(
+                    engine
+                        .backend
+                        .preview
+                        .iter()
+                        .all(|dab| !dab.is_completion()),
+                    "{preset:?}, sample {i}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -7047,6 +7145,7 @@ mod tests {
             let mut style = DabStyle::for_brush(&BrushSnapshot::default(), StrokeTool::Brush);
             style.execution = execution;
             DabBatch {
+                preview_end: None,
                 material_update: 0,
                 stroke_id: StrokeId(7),
                 target: SourceTarget::Paint(layer_core::authored::PaintHandle::from_index(3)),

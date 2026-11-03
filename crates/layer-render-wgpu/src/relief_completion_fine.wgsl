@@ -2,7 +2,7 @@ fn relief_contact(dab:Dab,world:vec2<f32>,paper:f32,held:f32,required:bool)->vec
     if dab.texture_sign.x!=2.0 {return relief_segment_contact(dab,world,paper,held,required);}
     let point=completion_exposure(dab,world,paper);
     let radius=min(dab.radii.x,dab.radii.y);
-    if radius>=8.0 {return point;}
+    if contact_feature(4096u,style.material_a.x>0.0) || radius>=8.0 {return point;}
     let dose=6.0*dab.flow*dab.color.a;
     if dose<=0.0 {return vec2<f32>(0.0);}
     var alpha=vec2<f32>(0.0);

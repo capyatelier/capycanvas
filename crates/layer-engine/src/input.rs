@@ -375,6 +375,11 @@ impl StrokeBuilder {
 
     pub(crate) fn last_event(&self) -> Option<PenEvent> { self.last_event }
 
+    pub(crate) fn ending(&self) -> bool {
+        self.last_event
+            .is_some_and(|event| event.phase == PenPhase::Up)
+    }
+
     pub fn predicted_points(&self) -> &[StrokePoint] {
         &self.predicted
     }

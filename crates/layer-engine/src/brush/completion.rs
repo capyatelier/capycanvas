@@ -18,6 +18,13 @@ fn unit(v: [f32; 2]) -> [f32; 2] { let n=length(v).max(1e-12); v.map(|x|x/n) }
 fn smooth(x: f32) -> f32 { let t=x.clamp(0.,1.); t*t*(3.-2.*t) }
 
 impl Path {
+    pub(super) fn replace_opening(&mut self, dab: Dab) {
+        if let Some(vertex) = Arc::make_mut(&mut self.vertices).front_mut() {
+            vertex.dab = dab;
+            vertex.anchor = dab.center;
+        }
+    }
+
     pub fn append(&mut self, dab: Dab) -> Vec<Dab> {
         let mut output=Vec::new();
         if self.vertices.is_empty() {
@@ -136,10 +143,17 @@ impl Path {
     }
 
     pub fn finish(&mut self) -> Vec<Dab> {
+        let Some(end) = self.vertices.back().map(|vertex| vertex.dab) else {
+            *self = Self::default();
+            return Vec::new();
+        };
+        self.finish_with(end)
+    }
+
+    pub fn finish_with(&mut self, end: Dab) -> Vec<Dab> {
         let mut output=Vec::new();
         if self.started && self.vertices.len()>1 {
             self.resolve(true,&mut output);
-            let end=self.vertices.back().unwrap().dab;
             let previous=self.vertices[self.next.saturating_sub(1).min(self.vertices.len()-2)].dab;
             output.push(end.completion(unit(vector(end.center,previous.center)),[0.;2],1.));
         }
@@ -179,6 +193,28 @@ mod tests {
         for i in 2..=240 {
             let start=output.len();
             let damage=generator.append(sample(corner.x,i as f32*step,(120+i)*5_000),&brush,&mut output);
+            let provisional = super::super::rest_tests::lift_now(&generator, &brush, Vec::new());
+            if i == 2 {
+                assert!(
+                    !output
+                        .iter()
+                        .any(|dab| dab.is_completion() && dab.center == corner)
+                );
+                assert!(
+                    provisional.iter().any(|dab| dab.is_completion()
+                        && dab.center == corner
+                        && dab.preview_tag() == layer_render::DabPreview::Shared),
+                    "pending corner is shared before commitment"
+                );
+            }
+            if first.is_some() {
+                assert!(
+                    !provisional
+                        .iter()
+                        .any(|dab| dab.is_completion() && dab.center == corner),
+                    "committed corner is not repeated in preview"
+                );
+            }
             if let Some(dab)=output[start..].iter().find(|dab|dab.is_completion() && dab.center==corner) {
                 assert_eq!(damage.union(dab.bounds()),damage);
                 assert!(first.replace((i as f32*step,*dab)).is_none());
@@ -221,7 +257,45 @@ mod tests {
         generator.append(point(0.,0.,1.,0),&brush,&mut Vec::new());
         let mut preview=generator.preview();let mut output=Vec::new();
         for i in 1..=6 {preview.append(point(i as f32*100.,0.,1.,i*5_000),&brush,&mut output);}
-        assert!(output.len()>1 && output.iter().all(|dab|!dab.is_completion()));
+        assert!(output.iter().all(|dab| !dab.is_completion()));
+        let pending: Vec<_> = (1..=6)
+            .map(|i| point(i as f32 * 100., 0., 1., i * 5_000))
+            .collect();
+        let real: Vec<_> = std::iter::once(point(0., 0., 1., 0))
+            .chain(pending.iter().copied())
+            .collect();
+        output.clear();
+        crate::feedback::PreviewTip::default().build(
+            &generator,
+            crate::feedback::TipInput {
+                real: &real,
+                pending: &pending,
+                platform: &[],
+                brush: &brush,
+                feedback: crate::InstantFeedbackConfig::default(),
+                transform: [1., 0., 0., 1., 0., 0.],
+                now: 30_000,
+                requested: 46_000,
+                ending: None,
+            },
+            0,
+            &mut output,
+        );
+        assert!(output.len() > 1);
+        assert_eq!(
+            output
+                .iter()
+                .filter(|dab| dab.is_completion() && dab.previous_contact[..2] == [0.; 2])
+                .count(),
+            1
+        );
+        assert_eq!(generator.dry_completion.as_ref().unwrap().vertices.len(), 1);
+        assert!(!generator.dry_completion.as_ref().unwrap().started);
+    }
+    #[test]
+    fn advancing_the_completion_window_keeps_only_real_vertices() {
+        let mut generator = DabGenerator::default();
+        generator.append(point(0., 0., 1., 0), &charcoal(), &mut Vec::new());
         let dab=Dab {radii:[10.;2],..generator.last_contact.unwrap()};
         let mut path=Path::default();
         assert!(path.advance(Point::default()).is_empty());

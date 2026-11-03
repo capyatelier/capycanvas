@@ -48,8 +48,58 @@ impl Frame {
         self.same_evaluation(packet)
             && self.previews.is_empty() && packet.dab_batches.is_empty()
             && old.same_artwork(packet.scene)
-            && packet.scene.evaluation_context().is_none_or(|_|packet.scene.order().iter().filter(|h|packet.scene.effect(**h).is_some()).all(|h|
-                effects::effective_phase(old,*h,self.time).to_bits()==effects::effective_phase(packet.scene,*h,packet.time_seconds).to_bits()))
+            && self.same_phases(packet)
+    }
+
+    fn same_phases(&self, packet: FramePacket<'_>) -> bool {
+        let old = self.scene.view();
+        packet.scene.evaluation_context().is_none_or(|_| {
+            packet
+                .scene
+                .order()
+                .iter()
+                .filter(|h| packet.scene.effect(**h).is_some())
+                .all(|h| {
+                    effects::effective_phase(old, *h, self.time).to_bits()
+                        == effects::effective_phase(packet.scene, *h, packet.time_seconds).to_bits()
+                })
+        })
+    }
+
+    pub fn same_preview(&self, packet: FramePacket<'_>) -> bool {
+        if self.previews.is_empty()
+            || self.previews.len() != packet.dab_batches.len()
+            || self.view != packet.view
+            || self.scope != packet.scene.scope().cloned().unwrap_or_default()
+        {
+            return false;
+        }
+        self.previews
+            .iter()
+            .zip(packet.dab_batches)
+            .all(|(old, batch)| {
+                let normalized = DabBatch {
+                    first_dab: old.first_dab,
+                    ..batch.clone()
+                };
+                *old == normalized
+                    && batch.kind == DabBatchKind::Preview
+                    && dry_material::dry_flow(&batch.style)
+                    && pointwise(&batch.style)
+                    && packet
+                        .dabs
+                        .get(batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize)
+                        == self
+                            .preview_dabs
+                            .get(old.first_dab as usize..(old.first_dab + old.dab_count) as usize)
+            })
+            && self.same_evaluation(packet)
+            && self
+                .scene
+                .view()
+                .with_scope(&self.scope)
+                .same_artwork(packet.scene)
+            && self.same_phases(packet)
     }
 
     pub fn new(packet: FramePacket<'_>, context: EvaluationContext) -> Self {

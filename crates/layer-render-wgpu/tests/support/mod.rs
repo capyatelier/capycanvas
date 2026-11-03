@@ -5,12 +5,11 @@ use layer_core::*;
 use layer_core::authored::{self, Affine64, ImageInterpolation, ImageObject};
 use layer_render::CanvasRenderer;
 use std::sync::{Arc, atomic::AtomicBool};
-use layer_engine::{
-    CanvasEngine, InputProducer, PenEvent, PenPhase, SampleFlags, ToolKind, ViewTransform,
-    input_queue,
-};
+use layer_engine::{CanvasEngine, InputProducer, PenEvent, ViewTransform, input_queue};
 use layer_render::ViewState;
 use layer_render_wgpu::WgpuRasterizer;
+
+pub(crate) mod dry_fixture;
 
 pub type Engine = CanvasEngine<WgpuRasterizer>;
 pub const SIZE: [u32; 2] = [384, 256];
@@ -123,28 +122,7 @@ pub fn draw_with_brush(engine: &mut Engine, input: &mut InputProducer<PenEvent>,
     settle(engine, start + 9 * 8_000_000);
 }
 
-pub fn pen_sample(index: u64, last: u64, timestamp_ns: u64, surface_position: Point) -> PenEvent {
-    PenEvent {
-        device_id: 1,
-        sequence: index,
-        timestamp_ns,
-        view_revision: 0,
-        surface_position,
-        pressure: 0.8,
-        tilt_radians: [0., 0.],
-        twist_radians: 0.,
-        distance: 0.,
-        phase: if index == 0 {
-            PenPhase::Down
-        } else if index == last {
-            PenPhase::Up
-        } else {
-            PenPhase::Move
-        },
-        tool: ToolKind::Pen,
-        flags: SampleFlags::PRIMARY,
-    }
-}
+pub use dry_fixture::pen_sample;
 
 pub fn drain_input(engine: &mut Engine, timestamp_ns: u64, wait_idle: bool) {
     engine.render_frame_at(timestamp_ns).unwrap();

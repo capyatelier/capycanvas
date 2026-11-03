@@ -47,8 +47,10 @@ fn pointwise_paint_fragment(fragment_position:vec4<f32>)->MaterialOutput {
     let tooth = contact_paper(world);
     let field = contact_field_with_paper(world, tooth);
     let selected = brush_selection_at(world);
+    let skip_tag=preview_skip_tag(world);
     for (var offset = 0u; offset < range.y; offset += 1u) {
         let dab = dabs[range.x + offset];
+        if preview_skips(dab.texture_sign.x,skip_tag) {continue;}
         let contact=material_contact(dab,world,field,stroke_coverage,selected,dose);
         if (contact.flags & MATERIAL_HELD) != 0u {
             stroke_coverage=max(stroke_coverage,contact.coverage);

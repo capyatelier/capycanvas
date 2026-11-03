@@ -161,6 +161,7 @@ impl WgpuRasterizer {
                 coordinate: job.coordinate,
                 coverage: coverage_surface.is_some(),
                 record_offset: self.material_records.offset(first_record + record_index),
+                dabs: job.dabs.clone(),
                 dirty: job.local,
             });
             destination.preview.set(None);

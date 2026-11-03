@@ -69,12 +69,16 @@ impl SelectionStroke {
             self.replay_points.push(point);
         }
         self.real_points += 1;
-        self.generator.append(point, &self.brush, dabs);
         // Masks accumulate real contacts without artwork's disposable tail
         // preview. Publish the swept endpoint on every sample so large nibs
         // do not wait half a diameter before their coverage refreshes.
-        if event.phase == PenPhase::Up { self.generator.finish(&self.brush, dabs); }
-        else { self.generator.flush_contact(&self.brush, dabs); }
+        if event.phase == PenPhase::Up {
+            self.generator.append_end(point, &self.brush, dabs);
+            self.generator.finish(&self.brush, dabs);
+        } else {
+            self.generator.append(point, &self.brush, dabs);
+            self.generator.flush_contact(&self.brush, dabs);
+        }
         self.loops
             .as_mut()
             .map_or_else(Vec::new, |loops| loops.push(point.position))
@@ -97,9 +101,13 @@ impl SelectionStroke {
         let mut generator = DabGenerator::new(layer_core::color::RgbSpace::Srgb);
         generator.reset_for_replay(&stroke);
         for (index, point) in stroke.points.iter().copied().enumerate() {
-            generator.append(point, &stroke.brush, &mut dabs);
-            if index + 1 == stroke.points.len() { generator.finish(&stroke.brush, &mut dabs); }
-            else { generator.flush_contact(&stroke.brush, &mut dabs); }
+            if index + 1 == stroke.points.len() {
+                generator.append_end(point, &stroke.brush, &mut dabs);
+                generator.finish(&stroke.brush, &mut dabs);
+            } else {
+                generator.append(point, &stroke.brush, &mut dabs);
+                generator.flush_contact(&stroke.brush, &mut dabs);
+            }
         }
         Some(dabs)
     }

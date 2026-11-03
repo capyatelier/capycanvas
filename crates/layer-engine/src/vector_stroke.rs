@@ -53,7 +53,13 @@ impl VectorStroke {
     fn finalize(&mut self) {
         let real = self.builder.real_points();
         let count = if self.feedback.enabled { finalized_count(real, self.finalized) } else { real.len() };
-        for point in &real[self.finalized..count] { self.generator.append(*point, &self.brush, &mut self.dabs); }
+        let ending = count == real.len() && self.builder.ending();
+        self.generator.append_points(
+            &real[self.finalized..count],
+            &self.brush,
+            ending,
+            &mut self.dabs,
+        );
         self.finalized = count;
     }
     fn correct(&mut self, event: PenEvent) -> bool {
@@ -79,17 +85,36 @@ impl VectorStroke {
     }
     pub fn preview(&mut self, timestamp_ns: Option<u64>, presentation_timestamp_ns: Option<u64>) -> Vec<Sample> {
         let mut tail = Vec::new();
-        match self.builder.real_points().last().copied().filter(|_| self.feedback.enabled) {
-            Some(latest) => {
-                let builder = &self.builder;
-                let (now, requested) = tip_times(self.feedback, latest, |timestamp| builder.elapsed_micros_at(timestamp).unwrap_or(latest.elapsed_micros),
-                    timestamp_ns, presentation_timestamp_ns);
-                let real = builder.real_points();
-                let input = TipInput { real, pending: &real[self.finalized..], platform: builder.predicted_points(), brush: &self.brush, feedback: self.feedback,
-                    transform: self.surface, now, requested, ending: None };
-                self.tip.build(&self.generator, input, 0, &mut tail);
-            }
-            None => { self.generator.preview().flush_contact(&self.brush, &mut tail); }
+        if let Some(latest) = self.builder.real_points().last().copied() {
+            let builder = &self.builder;
+            let (now, requested) = tip_times(
+                self.feedback,
+                latest,
+                |timestamp| {
+                    builder
+                        .elapsed_micros_at(timestamp)
+                        .unwrap_or(latest.elapsed_micros)
+                },
+                timestamp_ns,
+                presentation_timestamp_ns,
+            );
+            let real = builder.real_points();
+            self.tip.build(
+                &self.generator,
+                TipInput {
+                    real,
+                    pending: &real[self.finalized..],
+                    platform: builder.predicted_points(),
+                    brush: &self.brush,
+                    feedback: self.feedback,
+                    transform: self.surface,
+                    now,
+                    requested,
+                    ending: builder.ending().then_some(latest.elapsed_micros),
+                },
+                0,
+                &mut tail,
+            );
         }
         let mut shown = samples(self.dabs.iter());
         self.fit.advance(&shown, FRAME_WORK);
@@ -99,15 +124,23 @@ impl VectorStroke {
     pub fn fitted(&self) -> Option<(PathGeometry, Option<WidthProfile>, f64)> { self.fit.fitted(&self.samples()) }
     pub fn samples(&self) -> Vec<Sample> {
         if self.brush.taper.end_distance_diameters > 0. && !self.builder.real_points().is_empty()
-            && let Ok(stroke) = layer_core::Stroke::new(StrokeId(self.id), layer_core::SourceTarget::Paint(layer_core::authored::PaintHandle::from_index(0)),
+            && let Ok(mut stroke) = layer_core::Stroke::new(
+                StrokeId(self.id),
+                layer_core::SourceTarget::Paint(layer_core::authored::PaintHandle::from_index(0)),
                 layer_core::StrokeTool::Brush, self.brush.clone(), self.builder.real_points().to_vec()) {
             let mut dabs = Vec::new();
+            stroke.pen_up = self.builder.ending();
             DabGenerator::generate(&stroke, layer_core::color::RgbSpace::Srgb, &mut dabs);
             return samples(dabs.iter());
         }
         let mut tail = Vec::new();
         let mut generator = self.generator.clone();
-        for point in &self.builder.real_points()[self.finalized..] { generator.append(*point, &self.brush, &mut tail); }
+        generator.append_points(
+            &self.builder.real_points()[self.finalized..],
+            &self.brush,
+            self.builder.ending(),
+            &mut tail,
+        );
         generator.finish(&self.brush, &mut tail);
         samples(self.dabs.iter().chain(&tail))
     }
@@ -721,6 +754,56 @@ fn fewest_knots(values: &[[f64; 2]], tolerance: f64) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dry_vector_preview_freezes_without_samples_and_keeps_a_later_real_move() {
+        for feedback in [false, true] {
+            let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::Pencil);
+            brush.diameter = 36.;
+            brush.stabilization.strength = 0.;
+            let mut stroke = VectorStroke::new(
+                1,
+                brush,
+                PressureCurve::default(),
+                [0.; 2],
+                InstantFeedbackConfig {
+                    enabled: feedback,
+                    use_platform_prediction: false,
+                    ..Default::default()
+                },
+                [1., 0., 0., 1., 0., 0.],
+                0.5,
+            );
+            for i in 0..=13 {
+                let mut pen = crate::test_support::event(
+                    i + 1,
+                    if i == 0 {
+                        PenPhase::Down
+                    } else {
+                        PenPhase::Move
+                    },
+                    if i == 13 { 80.4 } else { 20. + i as f32 * 5. },
+                );
+                pen.timestamp_ns = 1_000_000_000 + i * 4_000_000;
+                pen.pressure = 0.6;
+                stroke.push(pen, ViewTransform::IDENTITY);
+            }
+            let frozen = stroke.preview(Some(1_152_000_000), Some(1_168_000_000));
+            assert_eq!(frozen.last().unwrap().0[0], 80.);
+            assert_eq!(
+                stroke.preview(Some(3_000_000_000), Some(3_016_000_000)),
+                frozen
+            );
+            stroke.brush.taper.end_distance_diameters = 2.;
+            stroke.brush.taper.end_size = 0.;
+            let mut pen = crate::test_support::event(15, PenPhase::Move, 240.);
+            pen.timestamp_ns = 4_000_000_000;
+            pen.pressure = 0.6;
+            stroke.push(pen, ViewTransform::IDENTITY);
+            assert!(stroke.samples().iter().any(|sample| sample.0[0] > 200.));
+        }
+    }
+
     fn fit_line(samples: &[Sample], tolerance: f64) -> Option<(PathGeometry, Option<WidthProfile>, f64)> {
         let half = samples.iter().map(|s| s.1).fold(0., f64::max);
         LineFit::new(tolerance, (tolerance * 8.).max(half)).fitted(samples)

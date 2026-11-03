@@ -5,6 +5,17 @@ pub(super) fn plan_packet(packet:FramePacket<'_>,extent:impl Fn(SourceTarget)->[
     packet.dab_batches.iter().map(|batch| {
         let start=batch.first_dab as usize;let end=start.checked_add(batch.dab_count as usize).ok_or(GpuRasterError::InvalidDabRange)?;
         let dabs=packet.dabs.get(start..end).ok_or(GpuRasterError::InvalidDabRange)?;
+            if let Some(index) = batch.preview_end {
+                let dab = dabs
+                    .get(index as usize)
+                    .ok_or(GpuRasterError::InvalidDabRange)?;
+                if batch.kind != DabBatchKind::Preview
+                    || !dab.is_completion()
+                    || dab.previous_contact[2..] != [0.; 2]
+                {
+                    return Err(GpuRasterError::InvalidDabRange);
+                }
+            }
         Ok(plan(batch,dabs,extent(batch.target)))
     }).collect()
 }
@@ -16,6 +27,20 @@ pub(super) struct BrushTile {
     pub dabs: std::ops::Range<u32>,
     // Empty for a contiguous range; otherwise only intersecting contacts.
     pub indices: Vec<u32>,
+}
+
+pub(super) fn preview_end_bounds(batch: &DabBatch, dabs: &[Dab]) -> Option<layer_core::Rect> {
+    if batch.kind != DabBatchKind::Preview || !dry_material::dry_flow(&batch.style) {
+        return None;
+    }
+    batch
+        .preview_end
+        .and_then(|i| dabs.get(i as usize))
+        .map(|d| d.bounds())
+}
+
+pub(super) fn plain_preview_page(end: Option<layer_core::Rect>, coordinate: [u32; 2]) -> bool {
+    end.is_some_and(|end| end.intersect(page_rect(coordinate).to_rect()).is_empty())
 }
 
 fn contact_radius(dab: Dab, contact: &layer_core::BrushContact) -> f32 {
@@ -39,20 +64,42 @@ fn contact_radius(dab: Dab, contact: &layer_core::BrushContact) -> f32 {
     maximum * expansion + 1.0
 }
 
-fn completion_plane(dab:Dab,contact:Option<&layer_core::BrushContact>)->Option<[f32;2]> {
+
+fn completion_plane(
+    dab: Dab,
+    contact: Option<&layer_core::BrushContact>,
+) -> Option<([f32; 2], f32)> {
     let dry=contact?.dry?;
     if !dab.is_completion() || dry.corner!=0. || dry.relief_offset!=0.
-        || dab.radii[0].min(dab.radii[1])<8.
-        || dab.previous_contact[..2]==[0.;2] || dab.previous_contact[2..]==[0.;2] {return None;}
+        || dab.radii[0].min(dab.radii[1]) < 8.
+    {
+        return None;
+    }
+    let directions = dab
+        .previous_contact
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .filter(|v| **v != [0.; 2]);
+    let count = directions.clone().count();
+    if count == 0 {
+        return None;
+    }
     let [c,s]=dab.rotation;
     let m=[c/dab.radii[0],s/dab.radii[0],-s/dab.radii[1],c/dab.radii[1]];
     let mut normal=[0.;2];
-    for direction in dab.previous_contact.as_chunks::<2>().0 {
+    for direction in directions {
         let v=[-(m[0]*direction[0]+m[1]*direction[1]),-(m[2]*direction[0]+m[3]*direction[1])];
         let length=v[0].hypot(v[1]).max(1e-12);
         normal[0]+=v[0]/length;normal[1]+=v[1]/length;
     }
-    Some([m[0]*normal[0]+m[2]*normal[1],m[1]*normal[0]+m[3]*normal[1]])
+    Some((
+        [
+            m[0] * normal[0] + m[2] * normal[1],
+            m[1] * normal[0] + m[3] * normal[1],
+        ],
+        if count == 1 { -1. } else { 0. },
+    ))
 }
 
 /// Everything a fan span paints lies in the convex hull of its contact
@@ -388,8 +435,13 @@ pub(super) fn plan(batch: &DabBatch, dabs: &[Dab], extent: [u32; 2]) -> Vec<Brus
     }
     let contact = batch.style.contact.as_ref();
     let fan = contact.is_some_and(|c| c.bristles.is_some());
+    let end = preview_end_bounds(batch, dabs);
     let mut tiles = std::collections::BTreeMap::<_, BrushTile>::new();
     for (index, original) in dabs.iter().enumerate() {
+        let lift = end.is_some() && original.preview_tag() == layer_render::DabPreview::LiftOnly;
+        if lift && end.is_some_and(|end| original.bounds().intersect(end).is_empty()) {
+            continue;
+        }
         let shape=if pointwise(&batch.style) && batch.style.rendering.accumulation==BrushAccumulation::Flow
             && contact.is_some_and(|c|c.dry.is_some_and(|d|d.corner==0.)) {midpoint_contact(*original)} else {*original};
         let dab=&shape;
@@ -411,12 +463,20 @@ pub(super) fn plan(batch: &DabBatch, dabs: &[Dab], extent: [u32; 2]) -> Vec<Brus
         }
         let index = batch.first_dab + index as u32;
         for coordinate in page_coordinates(bounds) {
-            if let Some(normal)=plane {
+            if lift && plain_preview_page(end, coordinate) {
+                continue;
+            }
+            if let Some((normal, limit)) = plane {
                 let tile=page_rect(coordinate).intersect(bounds);
                 let far=[if normal[0]>0. {tile.max_x()} else {tile.min_x()},
                     if normal[1]>0. {tile.max_y()} else {tile.min_y()}];
                 if normal[0]*(far[0] as f32-dab.center.x)+normal[1]*(far[1] as f32-dab.center.y)
-                    +normal[0].abs()+normal[1].abs()<=0. {continue;}
+                    + normal[0].abs()
+                    + normal[1].abs()
+                    <= limit
+                {
+                    continue;
+                }
             }
             let mut clipped = bounds;
             if let Some(region) = &region {
@@ -504,6 +564,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn preview_landing_bodies_plan_only_the_pages_that_can_be_owned() {
+        use layer_render::DabPreview;
+        let style = crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::Pencil);
+        let body = Dab {
+            center: layer_core::Point { x: 380., y: 128. },
+            radii: [20.; 2],
+            previous: [20., 20., 1., 0.],
+            motion: [8., 0.],
+            ..crate::layer_tests::dab([1.; 4])
+        };
+        let mut landing = body;
+        landing.motion = [300., 0.];
+        let far = Dab {
+            center: layer_core::Point { x: 64., y: 128. },
+            ..body
+        };
+        let end = body.completion([-1., 0.], [0.; 2], 1.);
+        let main = Dab {
+            center: layer_core::Point { x: 650., y: 128. },
+            motion: [270., 0.],
+            ..body
+        };
+        let dabs = [
+            body,
+            landing.with_preview_tag(DabPreview::LiftOnly),
+            far.with_preview_tag(DabPreview::LiftOnly),
+            end,
+            main.with_preview_tag(DabPreview::MainOnly),
+        ];
+        let mut batch = crate::test_support::dab_batch(
+            SourceTarget::Paint(layer_core::PaintHandle::from_index(1)),
+            style,
+            layer_core::Rect::from_extent([1024, 256]),
+        );
+        batch.kind = DabBatchKind::Preview;
+        batch.first_dab = 7;
+        batch.dab_count = dabs.len() as u32;
+        batch.preview_end = Some(3);
+        let tiles = plan(&batch, &dabs, [1024, 256]);
+        assert_eq!(
+            tiles.iter().map(|tile| tile.coordinate).collect::<Vec<_>>(),
+            [[1, 0], [2, 0]]
+        );
+        assert_eq!(tiles[0].indices, [7, 8, 10, 11]);
+        assert_eq!(tiles[1].dabs, 11..12);
+        assert!(tiles[1].indices.is_empty());
+    }
+
+    #[test]
     fn completion_tiles_omit_the_inner_turn_without_clipping_the_outer_contact() {
         let mut style=crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::Pencil);
         style.contact.as_mut().unwrap().dry.as_mut().unwrap().relief_offset=0.;
@@ -526,6 +635,123 @@ mod tests {
         }}
         let cap=ordinary.completion([-1.,0.],[0.;2],1.);
         assert_eq!(plan(&batch,&[cap],[1024;2]).len(),full.len());
+    }
+
+    #[test]
+    fn end_and_start_cap_zero_planes_preserve_both_halves_of_the_pass() {
+        let mut style = crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::Pencil);
+        style
+            .contact
+            .as_mut()
+            .unwrap()
+            .dry
+            .as_mut()
+            .unwrap()
+            .relief_offset = 0.;
+        for angle in [0f32, 0.4, 1.1] {
+            for radii in [[60f32, 18.], [400., 150.]] {
+                let (s, c) = angle.sin_cos();
+                let ordinary = Dab {
+                    center: layer_core::Point { x: 1024., y: 1024. },
+                    radii,
+                    rotation: [c, s],
+                    previous: [radii[0], radii[1], c, s],
+                    ..crate::layer_tests::dab([1.; 4])
+                };
+                for direction in [[1f32, 0.], [-1., 0.], [0.3, 0.7]] {
+                    for start in [false, true] {
+                        let cap = if start {
+                            ordinary.completion([0.; 2], direction, 1.)
+                        } else {
+                            ordinary.completion(direction, [0.; 2], 1.)
+                        };
+                        let (normal, limit) =
+                            completion_plane(cap, style.contact.as_ref()).unwrap();
+                        let metric = [c / radii[0], s / radii[0], -s / radii[1], c / radii[1]];
+                        let v = [
+                            -metric[0] * direction[0] - metric[1] * direction[1],
+                            -metric[2] * direction[0] - metric[3] * direction[1],
+                        ];
+                        let n = v[0].hypot(v[1]);
+                        let v = v.map(|x| x / n);
+                        let exposure = |point: [f32; 2]| {
+                            let delta = [point[0] - cap.center.x, point[1] - cap.center.y];
+                            let o = [
+                                metric[0] * delta[0] + metric[1] * delta[1],
+                                metric[2] * delta[0] + metric[3] * delta[1],
+                            ];
+                            if o[0] * o[0] + o[1] * o[1] > 1. {
+                                return 0.;
+                            }
+                            let along = o[0] * v[0] + o[1] * v[1];
+                            let across = o[0] * v[1] - o[1] * v[0];
+                            let reach = (1. - across * across).max(0.).sqrt();
+                            if reach == 0. {
+                                0.
+                            } else {
+                                (0.5 + along / (2. * reach)).clamp(0., 1.)
+                            }
+                        };
+                        for offset in [-0.5, 0.5] {
+                            let o = v.map(|x| x * offset);
+                            let point = [
+                                cap.center.x + c * radii[0] * o[0] - s * radii[1] * o[1],
+                                cap.center.y + s * radii[0] * o[0] + c * radii[1] * o[1],
+                            ];
+                            assert!(
+                                exposure(point) > 0.2,
+                                "endpoint completion is nonzero on both sides of its center"
+                            );
+                            assert!(
+                                normal[0] * (point[0] - cap.center.x)
+                                    + normal[1] * (point[1] - cap.center.y)
+                                    > limit
+                            );
+                        }
+                        let mut culled = 0;
+                        for coordinate in page_coordinates(PixelRect::full([2048; 2])) {
+                            let tile = page_rect(coordinate);
+                            let far = [
+                                if normal[0] > 0. {
+                                    tile.max_x()
+                                } else {
+                                    tile.min_x()
+                                },
+                                if normal[1] > 0. {
+                                    tile.max_y()
+                                } else {
+                                    tile.min_y()
+                                },
+                            ];
+                            if normal[0] * (far[0] as f32 - cap.center.x)
+                                + normal[1] * (far[1] as f32 - cap.center.y)
+                                + normal[0].abs()
+                                + normal[1].abs()
+                                > limit
+                            {
+                                continue;
+                            }
+                            culled += 1;
+                            for y in [tile.min_y(), tile.max_y()] {
+                                for x in [tile.min_x(), tile.max_x()] {
+                                    let delta = [x as f32 - cap.center.x, y as f32 - cap.center.y];
+                                    let o = [
+                                        metric[0] * delta[0] + metric[1] * delta[1],
+                                        metric[2] * delta[0] + metric[3] * delta[1],
+                                    ];
+                                    assert!(
+                                        o[0] * v[0] + o[1] * v[1] <= -1.,
+                                        "all tile corners lie beyond the unit contact's tangent"
+                                    );
+                                    assert_eq!(exposure([x as f32, y as f32]), 0.);
+                                }
+                            }
+                        }
+                        assert!(culled > 0);
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -604,6 +830,7 @@ mod tests {
                 previous_contact: [1., 0., if case % 4 == 0 { 0. } else { 1. }, 7.],
             };
             let batch = DabBatch {
+                preview_end: None,
                 material_update: 0,
                 stroke_id: StrokeId(1),
                 target: SourceTarget::Paint(layer_core::PaintHandle::from_index(1)),

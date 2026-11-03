@@ -1354,6 +1354,7 @@ pub struct Stroke {
     pub tool: StrokeTool,
     pub brush: BrushSnapshot,
     pub points: Arc<[StrokePoint]>,
+    pub pen_up: bool,
     /// Exclusive point ends of material updates. Watercolor transports pigment
     /// after each update, so replay must preserve these boundaries, not merge
     /// an entire stroke into one transport step. Empty means one update.
@@ -1414,6 +1415,7 @@ impl Stroke {
             tool,
             brush,
             points,
+            pen_up: true,
             material_updates: Arc::default(),
             bounds,
             alpha_locked: false,

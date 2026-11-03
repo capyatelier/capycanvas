@@ -488,7 +488,12 @@ fn cropped_dry_dispatch_preserves_every_untouched_hdr_pixel() {
             let sources=create_material_bind_group(&r.device,&r.material_layout,&[source;9],&r.dab_buffer,
                 &r.empty_scalar_view,&r.empty_view,wgpu::BindingResource::Buffer(r.material_records.binding()));
             let job=crate::dry_material::Job {output:r.pipelines.dry_material.output(r,&output,None,None),source:sources,display:None,
-                coordinate:[0;2],coverage:false,record_offset:0,dirty};
+                coordinate: [0; 2],
+                coverage: false,
+                record_offset: 0,
+                dabs: 0..batch.dab_count,
+                dirty,
+            };
             let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
             r.encode_dry_material_jobs(&mut encoder,0,&batch,&[job]);
             encoder.submit(&r.queue);
@@ -551,7 +556,12 @@ fn cropped_display_restores_hdr_blocks_at_partial_document_edges() {
         let display=crate::test_support::dry_display(r,&batch,[&base.view;9],&output);
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
         r.encode_dry_material_jobs(&mut encoder,0,&batch,&[crate::dry_material::Job {output:output_binding,source:sources,display,coordinate:[0;2],
-            coverage:false,record_offset:0,dirty}]);
+                coverage: false,
+                record_offset: 0,
+                dabs: 0..batch.dab_count,
+                dirty,
+            }],
+        );
         encoder.submit(&r.queue);
         let actual=crate::test_support::float_pixels(r,&output.texture);
         for y in 0..size[1] {for x in 0..size[0] {
@@ -1235,7 +1245,13 @@ fn partial_analytic_display_averages_current_and_stroke_start_over_the_same_foot
                 let display=crate::test_support::dry_display(r,&batch,[&current.view;9],&output);
                 let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
                 r.encode_dry_material_jobs(&mut encoder,0,&batch,&[crate::dry_material::Job {output:binding,source:sources,display,coordinate:[0;2],
-                    coverage:false,record_offset:0,dirty:PixelRect::full(extent)}]);encoder.submit(&r.queue);
+                        coverage: false,
+                        record_offset: 0,
+                        dabs: 0..batch.dab_count,
+                        dirty: PixelRect::full(extent),
+                    }],
+                );
+                encoder.submit(&r.queue);
                 let actual=crate::test_support::float_pixels(r,&output.texture);
                 for y in 0..size[1] {for x in 0..size[0] {
                     let start=[x*block,y*block];let end=[(start[0]+block).min(extent[0]),(start[1]+block).min(extent[1])];

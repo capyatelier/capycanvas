@@ -9,11 +9,16 @@ use layer_core::{
     BrushCombine, BrushMapping, BrushSensor, BrushSnapshot, BrushTarget, MAX_BRUSH_DIAMETER,
     MAX_BRUSH_MAPPINGS, MAX_BRUSH_SCATTER_DIAMETERS, Point, Rect, Stroke, StrokeId, StrokePoint,
 };
-use layer_render::Dab;
-use std::sync::{Arc, LazyLock};
+use layer_render::{Dab, DabPreview};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, LazyLock},
+};
 
 mod smoothing;
 mod completion;
+#[cfg(test)]
+mod rest_tests;
 pub(crate) use smoothing::{CurveModel, PositionField, CurvePreview, pen_up_settlement_micros};
 
 const SPEED_FILTER_SECONDS: f32 = 0.015;
@@ -21,6 +26,8 @@ const PRESSURE_FALL_RESPONSE_SECONDS: f32 = 0.004;
 const BARREL_TWIST_RESPONSE_SECONDS: f32 = 0.025;
 const MIN_DAB_DISTANCE: f32 = 0.25;
 const TAP_DISTANCE_PX: f32 = 1.;
+const REST_WINDOW_MICROS: u32 = 100_000;
+const REST_PRESSURE_STEP: f32 = 0.05;
 const MAX_DABS_PER_SEGMENT: usize = 65_536;
 /// Power applied to the smooth endpoint-correction envelope.
 const CORRECTION_EASING: f32 = 1.5;
@@ -29,6 +36,18 @@ const FAN_TURN_RADIANS: f64 = 0.05;
 const FAN_LIFT: f32 = 2.;
 const MAX_FAN_PENDING: usize = 512;
 static EMPTY_CONTACTS: LazyLock<Arc<Vec<Dab>>> = LazyLock::new(Default::default);
+
+#[derive(Clone, Copy, Debug)]
+struct Rest {
+    pose: DynamicPoint,
+}
+
+#[derive(Clone, Debug)]
+struct Anchor {
+    pose: DynamicPoint,
+    variant: u32,
+    landing: Option<Arc<CurveModel>>,
+}
 
 #[derive(Clone, Copy, Debug)]
 struct DynamicPoint {
@@ -82,6 +101,7 @@ pub struct DabGenerator {
     fan_slide: f32,
     edge_normal: [f32; 2],
     touchdown: Point,
+    tap_peak: Option<DynamicPoint>,
     fan_roll: f32,
     fan_axis: [f32; 2],
     fan_heading: [f32; 2],
@@ -90,7 +110,9 @@ pub struct DabGenerator {
     fan_pressed: f32,
     pending_contacts: Arc<Vec<Dab>>,
     dry_completion: Option<completion::Path>,
-    tap_peak: Option<DynamicPoint>,
+    rest: Option<Rest>,
+    anchor: Option<Anchor>,
+    rest_history: Arc<VecDeque<StrokePoint>>,
     distance_until_next: f32,
     filtered_speed: f32,
     rng: u32,
@@ -100,6 +122,29 @@ pub struct DabGenerator {
     last_contact: Option<Dab>,
     total_distance: Option<f32>,
     continuous_fraction: f32,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct LiftPreview {
+    generator: DabGenerator,
+    dabs: Vec<Dab>,
+    accepted: usize,
+}
+
+impl LiftPreview {
+    pub(crate) fn frozen(&self) -> bool {
+        self.generator.frozen()
+    }
+}
+
+pub(crate) fn has_completions(brush: &BrushSnapshot) -> bool {
+    brush.contact.is_some_and(|c| c.dry.is_some())
+        && brush.rendering.accumulation == layer_core::BrushAccumulation::Flow
+}
+
+fn freezes_end(previous: Option<u32>, now: u32, brush: &BrushSnapshot) -> bool {
+    has_completions(brush)
+        && previous.is_some_and(|previous| now.saturating_sub(previous) >= REST_WINDOW_MICROS)
 }
 
 impl Default for DabGenerator {
@@ -115,6 +160,7 @@ impl Default for DabGenerator {
             fan_slide: 0.,
             edge_normal: [0.; 2],
             touchdown: Point { x: 0., y: 0. },
+            tap_peak: None,
             fan_roll: 0.,
             fan_axis: [0.; 2],
             fan_heading: [0.; 2],
@@ -123,7 +169,9 @@ impl Default for DabGenerator {
             fan_pressed: 0.,
             pending_contacts: EMPTY_CONTACTS.clone(),
             dry_completion: Some(Default::default()),
-            tap_peak: None,
+            rest: None,
+            anchor: None,
+            rest_history: Arc::default(),
             distance_until_next: 0.0,
             filtered_speed: 0.0,
             rng: 1,
@@ -162,8 +210,11 @@ impl DabGenerator {
         let evaluated = preview.evaluate(current, brush);
         let mut output = Vec::new();
         let mut damage = Rect::EMPTY;
-        if brush.execution == layer_core::BrushExecution::Liquify { output.push(evaluated.dab); }
-        else { preview.emit_contacts(evaluated, brush, &mut output, &mut damage); }
+        if brush.execution == layer_core::BrushExecution::Liquify || has_completions(brush) {
+            output.push(evaluated.dab);
+        } else {
+            preview.emit_contacts(evaluated, brush, &mut output, &mut damage);
+        }
         if brush.contact.is_some_and(|c| c.bristles.is_some()) {
             output = output.last().or(preview.pending_contacts.last()).copied().into_iter().collect();
             for fan in &mut output {
@@ -195,6 +246,149 @@ impl DabGenerator {
         preview
     }
 
+    pub(crate) fn frozen(&self) -> bool {
+        self.anchor.is_some() && self.rest.is_some()
+    }
+
+    fn opening(&self) -> bool {
+        self.last.is_some_and(|last| last.stroke_distance == 0.)
+    }
+
+    pub(crate) fn freeze_at(&mut self, now: u32, brush: &BrushSnapshot) -> bool {
+        if self.anchor.is_none()
+            || !freezes_end(
+                self.stabilized_input.map(|point| point.elapsed_micros),
+                now,
+                brush,
+            )
+        {
+            return false;
+        }
+        if self.rest.is_some() {
+            return true;
+        }
+        self.rest = self.last.map(|pose| Rest { pose });
+        true
+    }
+
+    pub(crate) fn append_end(
+        &mut self,
+        point: StrokePoint,
+        brush: &BrushSnapshot,
+        output: &mut Vec<Dab>,
+    ) -> Rect {
+        if self.freeze_at(point.elapsed_micros, brush) {
+            Rect::EMPTY
+        } else {
+            self.append(point, brush, output)
+        }
+    }
+
+    pub(crate) fn append_points(
+        &mut self,
+        points: &[StrokePoint],
+        brush: &BrushSnapshot,
+        ending: bool,
+        output: &mut Vec<Dab>,
+    ) -> Rect {
+        let mut damage = Rect::EMPTY;
+        for (index, &point) in points.iter().enumerate() {
+            damage = damage.union(if ending && index + 1 == points.len() {
+                self.append_end(point, brush, output)
+            } else {
+                self.append(point, brush, output)
+            });
+        }
+        damage
+    }
+
+    pub(crate) fn prepare_lift(
+        &self,
+        brush: &BrushSnapshot,
+        pending: &[StrokePoint],
+        ending: bool,
+        now: u32,
+    ) -> LiftPreview {
+        let mut generator = self.clone();
+        let mut dabs = Vec::new();
+        generator.append_points(pending, brush, ending, &mut dabs);
+        generator.freeze_at(now, brush);
+        LiftPreview {
+            generator,
+            dabs,
+            accepted: pending.len(),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn preview_lift<R: Default>(
+        &self,
+        brush: &BrushSnapshot,
+        pending: &[StrokePoint],
+        ending: bool,
+        now: u32,
+        prepared: Option<LiftPreview>,
+        start: usize,
+        output: &mut Vec<Dab>,
+        main: impl FnOnce(&mut Self, &mut Vec<Dab>) -> R,
+    ) -> R {
+        if !has_completions(brush) {
+            return main(&mut self.preview(), output);
+        }
+        let LiftPreview {
+            generator: mut tip,
+            dabs: mut lift,
+            accepted,
+        } = prepared.unwrap_or_else(|| self.prepare_lift(brush, pending, ending, now));
+        if accepted < pending.len() {
+            tip.append_points(&pending[accepted..], brush, ending, &mut lift);
+            tip.freeze_at(now, brush);
+        }
+        let frozen = tip.frozen();
+        tip.finish_lift(brush, &mut lift);
+        if frozen {
+            output.truncate(start);
+            output.extend(lift);
+            return R::default();
+        }
+        let mut main_tip = self.preview();
+        if self.opening()
+            && let Some(rest) = self.rest
+        {
+            main_tip.last_contact = Some(main_tip.imprint(rest.pose, brush));
+            main_tip.last_evaluated = Some(rest.pose);
+        }
+        let source = main(&mut main_tip, output);
+        Self::compose_preview(lift, output, start);
+        source
+    }
+
+    fn compose_preview(dabs: Vec<Dab>, main: &mut Vec<Dab>, start: usize) {
+        let drawn: Vec<_> = main.drain(start..).collect();
+        let mut matched = vec![false; drawn.len()];
+        for dab in dabs {
+            if dab.is_completion() {
+                main.push(dab);
+            } else if let Some(index) = drawn
+                .iter()
+                .enumerate()
+                .position(|(index, main)| !matched[index] && *main == dab)
+            {
+                matched[index] = true;
+                main.push(dab);
+            } else {
+                main.push(dab.with_preview_tag(DabPreview::LiftOnly));
+            }
+        }
+        main.extend(
+            drawn
+                .into_iter()
+                .enumerate()
+                .filter(|(index, _)| !matched[*index])
+                .map(|(_, dab)| dab.with_preview_tag(DabPreview::MainOnly)),
+        );
+    }
+
     /// Whether this stroke's twist is a measured barrel angle rather than a
     /// constant from a pen without a rotation sensor.
     pub fn set_barrel_twist(&mut self, measured: bool) {
@@ -204,9 +398,20 @@ impl DabGenerator {
     pub fn reset_for_replay(&mut self, stroke: &Stroke) {
         self.reset_for_stroke(stroke.id, &stroke.brush);
         self.barrel_twist = stroke.barrel_twist;
+        let points = if stroke.pen_up
+            && stroke.points.windows(2).last().is_some_and(|pair| {
+                freezes_end(
+                    Some(pair[0].elapsed_micros),
+                    pair[1].elapsed_micros,
+                    &stroke.brush,
+                )
+            }) {
+            &stroke.points[..stroke.points.len() - 1]
+        } else {
+            &stroke.points
+        };
         self.total_distance = Some(
-            stroke
-                .points
+            points
                 .windows(2)
                 .map(|pair| {
                     let dx = pair[1].position.x - pair[0].position.x;
@@ -252,47 +457,255 @@ impl DabGenerator {
             let begin = f64::from(previous.elapsed_micros) * 1e-6;
             let end = f64::from(point.elapsed_micros) * 1e-6;
             let tolerance = 0.05 / f64::from(brush.stabilization.input_scale).max(1e-6);
-            damage = damage.union(self.append_curve_interval(previous, stabilized, begin, end, field, tolerance, brush, output));
+            damage = damage.union(self.append_curve_interval(
+                previous,
+                stabilized,
+                begin,
+                end,
+                field,
+                tolerance,
+                brush,
+                output,
+                Self::append_modeled,
+            ));
         }
         damage = damage.union(self.append_modeled(stabilized, brush, output));
         self.position_smoother.retain_from(point.elapsed_micros);
         damage
     }
 
+    pub(crate) fn preview_previous(&self) -> Option<StrokePoint> {
+        self.position_smoother.previous()
+    }
+
+    pub(crate) fn append_preview(
+        &mut self,
+        point: StrokePoint,
+        brush: &BrushSnapshot,
+        field: Option<&dyn PositionField>,
+        previous_raw: &mut Option<StrokePoint>,
+        output: &mut Vec<Dab>,
+    ) -> Rect {
+        if !has_completions(brush) {
+            return self.append_with_field(point, brush, field, output);
+        }
+        if brush.flow <= 0. || brush.opacity <= 0. {
+            return Rect::EMPTY;
+        }
+        let previous = self.stabilized_input;
+        let distance = previous_raw.map_or(0., |last| {
+            (point.position.x - last.position.x).hypot(point.position.y - last.position.y)
+        });
+        *previous_raw = Some(point);
+        let position = field.map_or(point.position, |field| {
+            field.position(f64::from(point.elapsed_micros) * 1e-6)
+        });
+        let current = self.stabilize_pose(point, brush, position, distance);
+        let mut damage = Rect::EMPTY;
+        if let Some(previous) =
+            previous.filter(|previous| previous.elapsed_micros < point.elapsed_micros)
+            && let Some(field) = field
+        {
+            let tolerance = 0.05 / f64::from(brush.stabilization.input_scale).max(1e-6);
+            damage = self.append_curve_interval(
+                previous,
+                current,
+                f64::from(previous.elapsed_micros) * 1e-6,
+                f64::from(point.elapsed_micros) * 1e-6,
+                Some(field),
+                tolerance,
+                brush,
+                output,
+                Self::feed_point,
+            );
+        }
+        damage.union(self.feed_point(current, brush, output))
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn append_curve_interval(&mut self, previous: StrokePoint, current: StrokePoint, begin: f64, end: f64,
-        field: Option<&dyn PositionField>, tolerance: f64, brush: &BrushSnapshot, output: &mut Vec<Dab>) -> Rect {
+        field: Option<&dyn PositionField>,
+        tolerance: f64,
+        brush: &BrushSnapshot,
+        output: &mut Vec<Dab>,
+        feed: fn(&mut Self, StrokePoint, &BrushSnapshot, &mut Vec<Dab>) -> Rect,
+    ) -> Rect {
         let bound = field.map_or_else(|| self.position_smoother.acceleration_bound(begin, end),
             |field| field.acceleration_bound(begin, end));
         if (end - begin) <= 1e-6 || bound * (end - begin).powi(2) <= 8. * tolerance { return Rect::EMPTY; }
         let middle = (begin + end) * 0.5;
-        let mut damage = self.append_curve_interval(previous, current, begin, middle, field, tolerance, brush, output);
+        let mut damage = self.append_curve_interval(
+            previous, current, begin, middle, field, tolerance, brush, output, feed,
+        );
         let duration = current.elapsed_micros.saturating_sub(previous.elapsed_micros);
         let fraction = if duration == 0 { 0. } else { ((middle * 1e6 - f64::from(previous.elapsed_micros)) / f64::from(duration)) as f32 };
         let mut sample = interpolate_point(previous, current, fraction);
         sample.position = field.map_or_else(|| self.position_smoother.curve_position(middle).unwrap(), |field| field.position(middle));
-        damage = damage.union(self.append_modeled(sample, brush, output));
-        damage.union(self.append_curve_interval(previous, current, middle, end, field, tolerance, brush, output))
+        damage = damage.union(feed(self, sample, brush, output));
+        damage.union(self.append_curve_interval(
+            previous, current, middle, end, field, tolerance, brush, output, feed,
+        ))
     }
 
     pub(crate) fn append_continuation(&mut self, endpoint: StrokePoint, brush: &BrushSnapshot, field: &dyn PositionField, output: &mut Vec<Dab>) -> Rect {
-        let Some(previous) = self.stabilized_input else { return Rect::EMPTY; };
+        let previous = if has_completions(brush) {
+            self.last.map(|last| last.point)
+        } else {
+            self.stabilized_input
+        };
+        let Some(previous) = previous else {
+            return Rect::EMPTY;
+        };
         let begin = f64::from(previous.elapsed_micros) * 1e-6;
         let end = f64::from(endpoint.elapsed_micros) * 1e-6;
         if end <= begin { return Rect::EMPTY; }
         let endpoint = StrokePoint { position: endpoint.position, ..previous };
         let tolerance = 0.05 / f64::from(brush.stabilization.input_scale).max(1e-6);
-        let damage = self.append_curve_interval(previous, endpoint, begin, end, Some(field), tolerance, brush, output);
+        let damage = self.append_curve_interval(
+            previous,
+            endpoint,
+            begin,
+            end,
+            Some(field),
+            tolerance,
+            brush,
+            output,
+            if has_completions(brush) {
+                Self::feed_point
+            } else {
+                Self::append_modeled
+            },
+        );
         self.stabilized_input = Some(endpoint);
-        damage.union(self.append_modeled(endpoint, brush, output))
+        damage.union(if has_completions(brush) {
+            self.feed_point(endpoint, brush, output)
+        } else {
+            self.append_modeled(endpoint, brush, output)
+        })
     }
 
     fn append_modeled(&mut self, point: StrokePoint, brush: &BrushSnapshot, output: &mut Vec<Dab>) -> Rect {
+        if !has_completions(brush) {
+            return self.feed_point(point, brush, output);
+        }
+        let epsilon = 3. / brush.stabilization.input_scale;
+        let history = Arc::make_mut(&mut self.rest_history);
+        history.push_back(point);
+        while history.len() > 1
+            && history[1].elapsed_micros <= point.elapsed_micros.saturating_sub(REST_WINDOW_MICROS)
+        {
+            history.pop_front();
+        }
+        if let Some(mut rest) = self.rest {
+            let center = rest.pose.position();
+            if (point.position.x - center.x).hypot(point.position.y - center.y) < epsilon {
+                if self.opening() && point.pressure - rest.pose.point.pressure > REST_PRESSURE_STEP
+                {
+                    rest.pose.point.pressure = point.pressure;
+                    self.rest = Some(rest);
+                }
+                return Rect::EMPTY;
+            }
+            self.rest = None;
+            if self.opening() {
+                let opening = self.imprint(rest.pose, brush);
+                self.last_contact = Some(opening);
+                self.last_evaluated = Some(rest.pose);
+                if let Some(path) = &mut self.dry_completion {
+                    path.replace_opening(opening);
+                }
+            }
+        } else if self.last.is_none() {
+            let damage = self.feed_modeled(point, brush, output);
+            self.rest = self.last.map(|pose| Rest { pose });
+            return damage;
+        }
+        let damage = self.feed_modeled(point, brush, output);
+        if self.rest_history.front().is_some_and(|first| {
+            point.elapsed_micros.saturating_sub(first.elapsed_micros) >= REST_WINDOW_MICROS * 3 / 5
+        }) && self
+            .rest_history
+            .iter()
+            .filter(|sample| {
+                sample.elapsed_micros > point.elapsed_micros.saturating_sub(REST_WINDOW_MICROS)
+            })
+            .all(|sample| {
+                (sample.position.x - point.position.x).hypot(sample.position.y - point.position.y)
+                    < epsilon
+            })
+        {
+            self.rest = self.last.map(|pose| Rest { pose });
+        }
+        damage
+    }
+
+    fn feed_modeled(
+        &mut self,
+        point: StrokePoint,
+        brush: &BrushSnapshot,
+        output: &mut Vec<Dab>,
+    ) -> Rect {
+        let damage = self.feed_point(point, brush, output);
+        self.update_anchor(brush);
+        damage
+    }
+
+    fn update_anchor(&mut self, brush: &BrushSnapshot) {
+        if !has_completions(brush) {
+            return;
+        }
+        let Some(mut pose) = self.last else {
+            return;
+        };
+        if let Some(emitted) = self.last_evaluated
+            && self
+                .anchor
+                .as_ref()
+                .is_none_or(|anchor| emitted.stroke_distance > anchor.pose.stroke_distance)
+        {
+            self.anchor = Some(Anchor {
+                pose: emitted,
+                variant: self.rng,
+                landing: None,
+            });
+        }
+        pose.point.position = self
+            .position_smoother
+            .settled_position()
+            .unwrap_or(pose.position());
+        if self.anchor.as_ref().is_none_or(|anchor| {
+            let distance = (pose.position().x - anchor.pose.position().x)
+                .hypot(pose.position().y - anchor.pose.position().y);
+            distance >= 1.5 / brush.stabilization.input_scale
+                || distance >= 0.25 * self.anchor_radius(anchor, brush)
+        }) {
+            let variant = if self
+                .last_contact
+                .is_some_and(|dab| dab.center == pose.position())
+            {
+                self.rng
+            } else {
+                random_variant(self.rng)
+            };
+            self.anchor = Some(Anchor {
+                pose,
+                variant,
+                landing: self.position_smoother.completion_model().map(Arc::new),
+            });
+        }
+    }
+
+    fn feed_point(
+        &mut self,
+        point: StrokePoint,
+        brush: &BrushSnapshot,
+        output: &mut Vec<Dab>,
+    ) -> Rect {
         let current = self.characterize(point);
 
         let mut damage = Rect::EMPTY;
         let Some(last) = self.last else {
-            if brush.contact.is_some_and(|c| c.dry.is_some()) {
+            if brush.contact.is_some_and(|c| c.dry.is_some()) && !has_completions(brush) {
                 self.touchdown = current.position();
                 self.tap_peak = Some(current);
             }
@@ -428,13 +841,12 @@ impl DabGenerator {
         {
             let evaluated = self.evaluate(current, brush);
             self.emit_contacts(evaluated, brush, output, damage);
-        } else if brush.contact.is_some_and(|c| c.dry.is_some())
-            && brush.rendering.accumulation == layer_core::BrushAccumulation::Flow
-            && let Some(completion) = &mut self.dry_completion
+        } else if has_completions(brush)
+            && let Some(path) = &mut self.dry_completion
         {
-            for dab in completion.advance(current.position()) {
-                if self.tap_peak.is_some() { Arc::make_mut(&mut self.pending_contacts).push(dab); }
-                else { include_dab(damage, dab); output.push(dab); }
+            for dab in path.advance(current.position()) {
+                include_dab(damage, dab);
+                output.push(dab);
             }
         }
     }
@@ -442,10 +854,7 @@ impl DabGenerator {
     pub fn generate(stroke: &Stroke, space: RgbSpace, output: &mut Vec<Dab>) -> Rect {
         let mut generator = Self::new(space);
         generator.reset_for_replay(stroke);
-        let mut damage = Rect::EMPTY;
-        for point in stroke.points.iter().copied() {
-            damage = damage.union(generator.append(point, &stroke.brush, output));
-        }
+        let damage = generator.append_points(&stroke.points, &stroke.brush, stroke.pen_up, output);
         damage.union(generator.finish(&stroke.brush, output))
     }
 
@@ -486,6 +895,24 @@ impl DabGenerator {
 
     pub(crate) fn finish_contact(&mut self, brush: &BrushSnapshot, output: &mut Vec<Dab>) -> Rect {
         let mut damage = Rect::EMPTY;
+        if has_completions(brush) {
+            if self.rest.is_some() {
+                return self.finish_lift(brush, output);
+            }
+            if let Some(model) = self.position_smoother.take_completion_model() {
+                damage =
+                    damage.union(self.append_continuation(model.endpoint(), brush, &model, output));
+            }
+            damage = damage.union(self.flush_contact(brush, output));
+            if let Some(path) = &mut self.dry_completion {
+                for dab in path.finish() {
+                    include_dab(&mut damage, dab);
+                    output.push(dab);
+                }
+            }
+            return damage;
+        }
+
         if let Some(model) = self.position_smoother.take_completion_model() {
             damage = damage.union(self.append_continuation(model.endpoint(), brush, &model, output));
         }
@@ -498,11 +925,6 @@ impl DabGenerator {
             return damage;
         }
         damage = damage.union(self.flush_contact(brush, output));
-        if brush.contact.is_some_and(|c| c.dry.is_some()) && brush.rendering.accumulation == layer_core::BrushAccumulation::Flow
-            && let Some(completion) = &mut self.dry_completion
-        {
-            for dab in completion.finish() { include_dab(&mut damage, dab); output.push(dab); }
-        }
         damage
     }
 
@@ -593,6 +1015,16 @@ impl DabGenerator {
             self.position_smoother.observe(point);
             position
         } else { self.position_smoother.append(point, &brush.stabilization) };
+        self.stabilize_pose(point, brush, position, raw_distance)
+    }
+
+    fn stabilize_pose(
+        &mut self,
+        point: StrokePoint,
+        brush: &BrushSnapshot,
+        position: Point,
+        raw_distance: f32,
+    ) -> StrokePoint {
         let Some(last) = self.stabilized_input else {
             let point = StrokePoint { position, ..point };
             self.stabilized_input = Some(point);
@@ -660,6 +1092,10 @@ impl DabGenerator {
         let variant = self.next_random();
         let dab_index = self.dab_index;
         self.dab_index = self.dab_index.wrapping_add(1);
+        self.evaluate_variant(point, brush, variant, dab_index)
+    }
+
+    fn mapped_values(&self, point: DynamicPoint, brush: &BrushSnapshot, variant: u32) -> Registers {
         let mut values = Registers {
             diameter: brush.diameter,
             opacity: 1.,
@@ -689,21 +1125,18 @@ impl DabGenerator {
             );
         }
 
-        let mut diameter = finite_or(values.diameter, brush.diameter)
-            .clamp(brush.bounds.minimum_size, brush.bounds.maximum_size);
-        let taper_reference = if brush.contact.is_some() {
-            brush.reference_diameter()
-        } else {
-            diameter
-        };
-        let (taper_size, taper_opacity) = taper_factors(
-            point.stroke_distance,
-            self.total_distance,
-            taper_reference,
-            brush,
-        );
-        diameter = (diameter * taper_size).clamp(0.01, MAX_BRUSH_DIAMETER);
-        let aspect = finite_or(values.aspect, brush.aspect).clamp(0.02, 50.0);
+        values
+    }
+
+    fn evaluate_variant(
+        &mut self,
+        point: DynamicPoint,
+        brush: &BrushSnapshot,
+        variant: u32,
+        dab_index: u32,
+    ) -> EvaluatedDab {
+        let mut values = self.mapped_values(point, brush, variant);
+        let (diameter, aspect, taper_opacity) = tip_size(point, brush, values, self.total_distance);
         let direction = point.direction_turns * std::f32::consts::TAU;
         let along = finite_or(values.scatter_along, 0.0)
             .clamp(-MAX_BRUSH_SCATTER_DIAMETERS, MAX_BRUSH_SCATTER_DIAMETERS)
@@ -733,8 +1166,7 @@ impl DabGenerator {
             } else if let Some(dry) = contact.dry {
                 contact_tilt = (point.point.tilt[0].hypot(point.point.tilt[1]) / std::f32::consts::FRAC_PI_2).clamp(0., 1.);
                 let pose = dry.pose(point.point.tilt[0].hypot(point.point.tilt[1]));
-                radii[0] *= pose.radii[0];
-                radii[1] *= pose.radii[1];
+                radii = dry_radii(radii, pose);
                 dry_relief = Some(pose.relief);
                 if contact_tilt > 0.02 {
                     rotation += tilt_direction * (1.-brush.shape.follow_tilt);
@@ -877,21 +1309,7 @@ impl DabGenerator {
             return;
         }
         if brush.contact.is_some_and(|c| c.dry.is_some()) {
-            let mut dab = evaluated.dab;
-            let opening = self.last_contact.is_none();
-            self.connect_contact(&mut dab);
-            self.last_contact = Some(dab);
-            if opening || dab.motion != [0.;2] {
-                let completion = if brush.rendering.accumulation == layer_core::BrushAccumulation::Flow {
-                    self.dry_completion.as_mut().map_or_else(Vec::new, |path| path.append(dab))
-                } else { Vec::new() };
-                if self.tap_peak.is_some() { Arc::make_mut(&mut self.pending_contacts).push(dab); }
-                else { include_dab(damage,dab); output.push(dab); }
-                for added in completion {
-                    if self.tap_peak.is_some() { Arc::make_mut(&mut self.pending_contacts).push(added); }
-                    else { include_dab(damage, added); output.push(added); }
-                }
-            }
+            self.emit_dry(evaluated.dab, has_completions(brush), output, damage);
             return;
         }
         let maximum = brush.shape.count.max(1);
@@ -956,6 +1374,120 @@ impl DabGenerator {
             self.last_contact = Some(dab);
             output.push(dab);
         }
+    }
+
+    fn emit_dry(
+        &mut self,
+        mut dab: Dab,
+        completions: bool,
+        output: &mut Vec<Dab>,
+        damage: &mut Rect,
+    ) {
+        let opening = self.last_contact.is_none();
+        self.connect_contact(&mut dab);
+        self.last_contact = Some(dab);
+        if dab.motion != [0.; 2] || opening {
+            let ending = if completions {
+                self.dry_completion
+                    .as_mut()
+                    .map(|path| path.append(dab))
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            if !opening || !completions {
+                if self.tap_peak.is_some() {
+                    Arc::make_mut(&mut self.pending_contacts).push(dab);
+                } else {
+                    include_dab(damage, dab);
+                    output.push(dab);
+                }
+            }
+            for dab in ending {
+                include_dab(damage, dab);
+                output.push(dab);
+            }
+        }
+    }
+
+    fn anchor_radius(&self, anchor: &Anchor, brush: &BrushSnapshot) -> f32 {
+        let values = self.mapped_values(anchor.pose, brush, anchor.variant);
+        let (diameter, aspect, _) = tip_size(anchor.pose, brush, values, self.total_distance);
+        let pose = brush
+            .contact
+            .unwrap()
+            .dry
+            .unwrap()
+            .pose(anchor.pose.point.tilt[0].hypot(anchor.pose.point.tilt[1]));
+        let radii = dry_radii([diameter * 0.5, diameter * 0.5 / aspect], pose);
+        radii[0].min(radii[1])
+    }
+
+    fn anchor_contact(&mut self, anchor: &Anchor, brush: &BrushSnapshot) -> Dab {
+        let state = (self.last_evaluated, self.edge_normal, self.bristle_azimuth);
+        let dab = self
+            .evaluate_variant(anchor.pose, brush, anchor.variant, self.dab_index)
+            .dab;
+        (self.last_evaluated, self.edge_normal, self.bristle_azimuth) = state;
+        dab
+    }
+
+    fn imprint(&mut self, pose: DynamicPoint, brush: &BrushSnapshot) -> Dab {
+        let mut dab = self.anchor_contact(
+            &Anchor {
+                pose,
+                variant: random_variant(self.rng),
+                landing: None,
+            },
+            brush,
+        );
+        dab.motion = [0.; 2];
+        dab.previous = [dab.radii[0], dab.radii[1], dab.rotation[0], dab.rotation[1]];
+        dab.previous_contact = dab.contact;
+        dab
+    }
+
+    pub(crate) fn finish_lift(&mut self, brush: &BrushSnapshot, output: &mut Vec<Dab>) -> Rect {
+        let mut damage = Rect::EMPTY;
+        let rest = self.rest.take();
+        if self.opening() {
+            if let Some(rest) = rest {
+                let dab = self.imprint(rest.pose, brush);
+                include_dab(&mut damage, dab);
+                output.push(dab);
+            }
+            self.dry_completion = Some(Default::default());
+            return damage;
+        }
+        let Some(mut anchor) = self.anchor.clone() else {
+            return damage;
+        };
+        if let Some(model) = &anchor.landing {
+            damage = damage.union(self.append_continuation(
+                model.endpoint(),
+                brush,
+                model.as_ref(),
+                output,
+            ));
+            if let Some(last) = self.last {
+                anchor.pose = DynamicPoint {
+                    point: StrokePoint {
+                        elapsed_micros: last.point.elapsed_micros,
+                        ..anchor.pose.point
+                    },
+                    ..last
+                };
+            }
+        }
+        let end = self.anchor_contact(&anchor, brush);
+        self.emit_dry(end, true, output, &mut damage);
+        if let Some(path) = &mut self.dry_completion {
+            for dab in path.finish_with(end) {
+                include_dab(&mut damage, dab);
+                output.push(dab);
+            }
+        }
+        damage
     }
 
     fn connect_contact(&self, dab: &mut Dab) {
@@ -1099,13 +1631,44 @@ impl DabGenerator {
     }
 
     fn next_random(&mut self) -> u32 {
-        let mut value = self.rng;
-        value ^= value << 13;
-        value ^= value >> 17;
-        value ^= value << 5;
-        self.rng = value;
-        value
+        self.rng = random_variant(self.rng);
+        self.rng
     }
+}
+
+fn random_variant(mut value: u32) -> u32 {
+    value ^= value << 13;
+    value ^= value >> 17;
+    value ^= value << 5;
+    value
+}
+
+fn tip_size(
+    point: DynamicPoint,
+    brush: &BrushSnapshot,
+    values: Registers,
+    total_distance: Option<f32>,
+) -> (f32, f32, f32) {
+    let mut diameter = finite_or(values.diameter, brush.diameter)
+        .clamp(brush.bounds.minimum_size, brush.bounds.maximum_size);
+    let taper_reference = if brush.contact.is_some() {
+        brush.reference_diameter()
+    } else {
+        diameter
+    };
+    let (taper_size, taper_opacity) = taper_factors(
+        point.stroke_distance,
+        total_distance,
+        taper_reference,
+        brush,
+    );
+    diameter = (diameter * taper_size).clamp(0.01, MAX_BRUSH_DIAMETER);
+    let aspect = finite_or(values.aspect, brush.aspect).clamp(0.02, 50.0);
+    (diameter, aspect, taper_opacity)
+}
+
+fn dry_radii(radii: [f32; 2], pose: layer_core::BrushDryPose) -> [f32; 2] {
+    [radii[0] * pose.radii[0], radii[1] * pose.radii[1]]
 }
 
 /// Smoothly distributes an endpoint correction over a replaceable contact
@@ -1136,7 +1699,9 @@ pub(crate) fn lock_dab_tail(dabs: &mut [Dab], modeled_endpoint: Point, target: P
 
 pub(crate) fn taper_prediction(dabs: &mut [Dab], origin: Point, amount: f32) {
     if amount <= 0. { return; }
-    let Some(first) = dabs.first() else { return };
+    let Some(first) = dabs.iter().find(|dab| dab.motion != [0.; 2]) else {
+        return;
+    };
     let length: f32 = dabs.iter().map(|d| d.motion[0].hypot(d.motion[1])).sum();
     let first_length = first.motion[0].hypot(first.motion[1]);
     let start = ((origin.x-first.center.x+first.motion[0])*first.motion[0]
@@ -1674,7 +2239,39 @@ mod tests {
         assert!(completions>2 && completions<=24,
             "{completions} corrections for {} ordinary segments",strokes[0].len());
         let ordinary:Vec<_>=strokes[1].iter().copied().filter(|d|!d.is_completion()).collect();
-        assert_eq!(ordinary,strokes[0]);
+        assert!(ordinary.len() <= strokes[0].len());
+        assert_eq!(
+            ordinary.last().unwrap().center,
+            strokes[0].last().unwrap().center
+        );
+    }
+
+    #[test]
+    fn prediction_taper_ignores_zero_motion_completion_prefix() {
+        let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::Pencil);
+        let mut generator = DabGenerator::default();
+        let mut output = Vec::new();
+        generator.append(point(0., 1., 0), &brush, &mut output);
+        generator.append(point(20., 1., 4_000), &brush, &mut output);
+        generator.finish(&brush, &mut output);
+        let dab = Dab {
+            center: Point { x: 20., y: 0. },
+            motion: [20., 0.],
+            ..output[0]
+        };
+        let mut ordinary = vec![
+            dab,
+            Dab {
+                center: Point { x: 40., y: 0. },
+                ..dab
+            },
+        ];
+        let mut prefixed = vec![dab.completion([0.; 2], [1., 0.], 1.)];
+        prefixed.extend_from_slice(&ordinary);
+        let origin = Point { x: 10., y: 0. };
+        taper_prediction(&mut ordinary, origin, 1.);
+        taper_prediction(&mut prefixed, origin, 1.);
+        assert_eq!(&prefixed[1..], ordinary);
     }
 
     #[test]
@@ -1707,6 +2304,41 @@ mod tests {
         }
         assert!(dabs.first().unwrap().radii[0] > dabs.last().unwrap().radii[0]);
         for pair in dabs.windows(2) { assert_eq!(pair[0].radii, [pair[1].previous[0], pair[1].previous[1]]); }
+    }
+
+    #[test]
+    fn dry_hover_outlines_the_evaluated_contact_without_advancing_paint() {
+        for preset in [
+            layer_core::DefaultBrushPreset::Pencil,
+            layer_core::DefaultBrushPreset::Charcoal,
+        ] {
+            let brush = layer_core::default_brush(preset);
+            let mut generator = DabGenerator::default();
+            generator.reset_for_stroke(StrokeId(29), &brush);
+            let control = generator.clone();
+            let mut hover = point(20., 1., 0);
+            hover.tilt = [0.7, 0.7];
+            let mut expected = generator.clone();
+            let current = expected.characterize(hover);
+            let dab = expected.evaluate(current, &brush).dab;
+            assert!(dab.radii.iter().all(|r| *r > 0.));
+            assert_eq!(
+                generator.cursor_contacts(hover, &brush),
+                vec![dab],
+                "{preset:?}"
+            );
+            assert_eq!(
+                generator.cursor_contacts(hover, &brush),
+                vec![dab],
+                "{preset:?}"
+            );
+            assert_eq!(generator.rng, control.rng, "{preset:?}");
+            assert_eq!(generator.last_contact, control.last_contact, "{preset:?}");
+            assert_eq!(
+                generator.pending_contacts, control.pending_contacts,
+                "{preset:?}"
+            );
+        }
     }
 
     #[test]

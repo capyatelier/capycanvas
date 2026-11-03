@@ -136,7 +136,11 @@ fn compact_contribution_omits_unused_paint_and_matches_bound_source() {
         r.preview_contribution=true;
         let display=display.map(|inputs|crate::dry_material::DisplayJob {gather:r.dry_display_inputs[0].gather(&r,&reference),inputs});
         r.encode_dry_material_jobs(&mut encoder,0,&preview,&[crate::dry_material::Job {output,source,display,coordinate:[0,0],coverage:false,
-            record_offset:0,dirty:PixelRect::full([PAGE_SIZE;2])}]);
+                record_offset: 0,
+                dabs: 0..preview.dab_count,
+                dirty: PixelRect::full([PAGE_SIZE; 2]),
+            }],
+        );
         r.uploads.finish(&encoder);encoder.submit(&r.queue);r.wait_idle().unwrap();
         assert_eq!(actual,crate::layer_tests::page_bytes(&r,&reference.texture),"{name} {blend:?}: omitted original must preserve every prediction bit");
         if preset==DefaultBrushPreset::GPen {for (level,contribution,preset) in [(1,false,DefaultBrushPreset::GPen),(0,true,DefaultBrushPreset::GPen),(1,true,DefaultBrushPreset::CloneStamp)] {

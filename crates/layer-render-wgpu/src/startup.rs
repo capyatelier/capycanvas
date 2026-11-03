@@ -1291,6 +1291,72 @@ mod gpu_tests {
     }
 
     #[test]
+    fn dry_preview_completions_use_the_ready_committed_kernel() {
+        use dry_material::{AGGREGATE, COMPLETION, FINE_TIP};
+        let color = Default::default();
+        let reference = WgpuRasterizer::new_native_headless(color).unwrap();
+        let mut r = crate::test_support::staged_renderer(&reference, color);
+        let doc = Document::new(
+            layer_core::PortableId::random(),
+            128,
+            128,
+            layer_core::DocumentNames {
+                paint: "Ink".into(),
+                paper: "Paper".into(),
+            },
+        );
+        let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::Pencil);
+        let style = brush_style(&doc, &brush, StrokeTool::Brush);
+        let completion = r
+            .pipelines
+            .dry_material
+            .selected_kernel(
+                &style,
+                MaterialOperation::Deposit,
+                false,
+                AGGREGATE | FINE_TIP | COMPLETION,
+            )
+            .clone();
+        r.shader_idle(false, false);
+        r.prepare_startup(&doc, &brush, false).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        crate::test_support::wait_startup(
+            &mut r,
+            deadline,
+            |p| p.brush_ready,
+            format_args!("Pencil dependencies"),
+        );
+        assert!(completion.ready());
+        let body = Dab {
+            radii: [3.; 2],
+            previous: [3., 3., 1., 0.],
+            motion: [4., 0.],
+            contact: [0.7, 0., 0., 0.],
+            previous_contact: [0.7, 0., 0., 0.],
+            ..crate::layer_tests::dab([0.1, 0.1, 0.1, 1.])
+        };
+        let end = body.completion([-1., 0.], [0.; 2], 1.);
+        let mut batch = crate::test_support::dab_batch(
+            doc.working.target.unwrap(),
+            style,
+            layer_core::Rect::from_extent([128; 2]),
+        );
+        batch.kind = DabBatchKind::Preview;
+        batch.dab_count = 2;
+        let dabs = [body, end];
+        r.submit(FramePacket {
+            dabs: &dabs,
+            dab_batches: &[batch],
+            ..crate::test_support::packet(doc.scene(), [128; 2])
+        })
+        .unwrap();
+        assert_eq!(
+            r.artwork_frame.as_ref().unwrap().packet([128; 2]).dabs,
+            dabs
+        );
+    }
+
+    #[test]
     fn dry_brushes_prepare_only_the_variants_their_strokes_can_select() {
         use dry_material::{AGGREGATE, FINE_TIP};
         let color = layer_core::color::DocumentColor::default();

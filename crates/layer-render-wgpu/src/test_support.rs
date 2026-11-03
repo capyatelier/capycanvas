@@ -198,6 +198,7 @@ pub(crate) fn packet(scene: SceneView<'_>, extent: [u32; 2]) -> FramePacket<'_> 
 
 pub(crate) fn dab_batch(target: SourceTarget, style: DabStyle, damage: layer_core::Rect) -> DabBatch {
     DabBatch {
+        preview_end: None,
         material_update: 0,
         stroke_id: layer_core::StrokeId(1),
         target,

@@ -16,6 +16,9 @@ pub(super) struct PositionSmoother {
 }
 impl PositionSmoother {
     pub(super) fn previous(&self) -> Option<StrokePoint> { self.previous }
+    pub(super) fn settled_position(&self) -> Option<Point> {
+        self.curve.as_ref().map(|curve| curve.latest().position)
+    }
     pub(super) fn observe(&mut self, point: StrokePoint) { self.previous = Some(point); }
     pub(super) fn preview_model(&self, settings: &BrushStabilization, real: &[StrokePoint]) -> Option<CurveModel> {
         CurveModel::from_smoother(self.clone(), settings, real)
@@ -45,6 +48,13 @@ impl PositionSmoother {
         };
         self.position = Some(next);
         next
+    }
+    pub(super) fn completion_model(&self) -> Option<CurveModel> {
+        self.curve
+            .as_ref()
+            .filter(|curve| curve.latest().elapsed_micros > 0)
+            .cloned()
+            .map(CurveModel::completion)
     }
     pub(super) fn take_completion_model(&mut self) -> Option<CurveModel> {
         self.curve.take().filter(|curve| curve.latest().elapsed_micros > 0).map(CurveModel::completion)

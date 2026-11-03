@@ -1,5 +1,8 @@
 use super::{InstantFeedbackConfig, PredictionState, TipSource};
-use crate::brush::{CurvePreview, DabGenerator, PositionField, lock_dab_tail, taper_prediction};
+use crate::brush::{
+    CurvePreview, DabGenerator, LiftPreview, PositionField, has_completions, lock_dab_tail,
+    taper_prediction,
+};
 use layer_core::{BrushSnapshot, StrokePoint};
 use layer_render::Dab;
 
@@ -8,6 +11,7 @@ pub(crate) struct PreviewTip {
     pub prediction: PredictionState,
     pub curve_preview: CurvePreview,
     pub preview_taper: bool,
+    pub frame_lift: Option<LiftPreview>,
 }
 
 pub(crate) struct TipInput<'a> {
@@ -32,6 +36,36 @@ pub(crate) fn tip_times(feedback: InstantFeedbackConfig, latest: StrokePoint, el
 
 impl PreviewTip {
     pub fn build(&mut self, generator: &DabGenerator, input: TipInput<'_>, start: usize, output: &mut Vec<Dab>) -> Option<TipSource> {
+        let now = if input.ending.is_some() {
+            input.real.last()?.elapsed_micros
+        } else {
+            input.now
+        };
+        let lift = self.frame_lift.take();
+        generator.preview_lift(
+            input.brush,
+            input.pending,
+            input.ending.is_some(),
+            now,
+            lift,
+            start,
+            output,
+            |tip, output| self.build_main(generator, tip, &input, start, output),
+        )
+    }
+
+    fn build_main(
+        &mut self,
+        generator: &DabGenerator,
+        tip: &mut DabGenerator,
+        input: &TipInput<'_>,
+        start: usize,
+        output: &mut Vec<Dab>,
+    ) -> Option<TipSource> {
+        if !input.feedback.enabled {
+            tip.flush_contact(input.brush, output);
+            return None;
+        }
         let latest = *input.real.last()?;
         let estimate = if input.ending.is_none() {
             self.prediction.estimate_for(input.real, input.platform, input.requested, input.now, input.transform, input.feedback)
@@ -53,19 +87,22 @@ impl PreviewTip {
         } else { false };
         let field = has_field.then_some(&self.curve_preview as &dyn PositionField);
         let prediction_start = output.len();
-        let mut generator = generator.preview();
+        let mut previous = generator.preview_previous();
         for point in input.pending.iter().copied() {
-            generator.append_with_field(point, input.brush, field, output);
+            tip.append_preview(point, input.brush, field, &mut previous, output);
+        }
+        if has_completions(input.brush) {
+            tip.flush_contact(input.brush, output);
         }
         if has_field {
             let extra_start = output.len();
-            let taper_start = generator.modeled_position().unwrap_or(latest.position);
+            let taper_start = tip.modeled_position().unwrap_or(latest.position);
             if let Some(point) = self.curve_preview.endpoint(latest) {
-                generator.append_continuation(point, input.brush, &self.curve_preview, output);
+                tip.append_continuation(point, input.brush, &self.curve_preview, output);
             }
-            generator.flush_contact(input.brush, output);
-            if let Some(endpoint) = generator.modeled_position() {
-                generator.reach_endpoint(endpoint, start, self.preview_taper, input.brush, output);
+            tip.flush_contact(input.brush, output);
+            if let Some(endpoint) = tip.modeled_position() {
+                tip.reach_endpoint(endpoint, start, self.preview_taper, input.brush, output);
             }
             if self.preview_taper {
                 taper_prediction(&mut output[extra_start..], taper_start, self.curve_preview.taper_amount());
@@ -73,23 +110,23 @@ impl PreviewTip {
             return estimate.filter(|_| input.ending.is_none()).map(|estimate| estimate.source);
         }
         let Some(estimate) = estimate.filter(|_| input.feedback.enabled) else {
-            generator.flush_contact(input.brush, output);
+            tip.flush_contact(input.brush, output);
             return None;
         };
         let predicted_dab_start = output.len();
-        let taper_start = generator.modeled_position().unwrap_or(latest.position);
+        let taper_start = tip.modeled_position().unwrap_or(latest.position);
         let taper = estimate.source == TipSource::Engine;
         for point in predicted {
-            generator.append_with_field(point, input.brush, field, output);
+            tip.append_preview(point, input.brush, field, &mut previous, output);
         }
         // Flush the actual swept endpoint just as finalization does. Coverage
         // by an earlier, wider contact is not the final pressure/pose.
-        generator.flush_contact(input.brush, output);
-        let modeled_endpoint = generator.modeled_position().unwrap_or(latest.position);
+        tip.flush_contact(input.brush, output);
+        let modeled_endpoint = tip.modeled_position().unwrap_or(latest.position);
         let endpoint = estimate.point.position;
         if input.brush.stabilization.strength == 0. {
             lock_dab_tail(&mut output[prediction_start..], modeled_endpoint, endpoint);
-            generator.reach_endpoint(endpoint, start, taper, input.brush, output);
+            tip.reach_endpoint(endpoint, start, taper, input.brush, output);
         }
         if taper {
             taper_prediction(&mut output[predicted_dab_start..], taper_start, 1.);

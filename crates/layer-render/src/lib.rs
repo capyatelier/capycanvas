@@ -116,7 +116,8 @@ pub struct Dab {
     /// Pre-resolved horizontal and vertical tip flips, each `-1` or `1`. A
     /// bristle fan carries its recent travel direction at the start and end
     /// poses instead, as angles from the fan's normal. Dry completion contacts
-    /// carry `[2, weight]` and two outward directions in `previous_contact`.
+    /// carry code 2 and two outward directions in `previous_contact`. Weight
+    /// sets completion exposure. Dry body codes -2 and -3 select LiftOnly and MainOnly.
     pub texture_sign: [f32; 2],
     /// Resolved grain depth, pull, deposit, and deformation strength. A bristle
     /// fan sets grain depth to 2 for the lift that ends its stroke, and pull and
@@ -134,7 +135,33 @@ pub struct Dab {
     pub previous_contact: [f32; 4],
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DabPreview {
+    Shared,
+    LiftOnly,
+    MainOnly,
+}
+
 impl Dab {
+    pub fn preview_tag(self) -> DabPreview {
+        match self.texture_sign[0] {
+            -2. => DabPreview::LiftOnly,
+            -3. => DabPreview::MainOnly,
+            _ => DabPreview::Shared,
+        }
+    }
+
+    pub fn with_preview_tag(mut self, tag: DabPreview) -> Self {
+        if !self.is_completion() {
+            self.texture_sign[0] = match tag {
+                DabPreview::Shared => 1.,
+                DabPreview::LiftOnly => -2.,
+                DabPreview::MainOnly => -3.,
+            };
+        }
+        self
+    }
+
     pub fn is_completion(self) -> bool { self.texture_sign[0] == 2. }
 
     pub fn completion(mut self, incoming: [f32; 2], outgoing: [f32; 2], weight: f32) -> Self {
@@ -286,6 +313,8 @@ pub struct DabBatch {
     /// Material-update identity within a stroke. Replay can contain several
     /// updates in one packet; live rendering need not submit extra GPU work.
     pub material_update: u32,
+    /// Relative index of the end completion that owns this preview contact.
+    pub preview_end: Option<u32>,
     /// Stable stroke identity. Stateful GPU resources use this to distinguish
     /// adjacent strokes that happen to share the same brush style.
     pub stroke_id: StrokeId,

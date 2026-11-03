@@ -33,7 +33,12 @@ fn preview(r:&mut WgpuRasterizer,id:u64,request:&BrushStampRequest)->Vec<u8> {
     }
 }
 fn reference(r:&mut WgpuRasterizer,doc:&Document,id:u64,style:DabStyle,dabs:&[layer_render::Dab])->Vec<u8> {
-    let batch=DabBatch {material_update:0,stroke_id:StrokeId(id),target:doc.working.target.unwrap(),kind:DabBatchKind::Persistent,
+    let batch = DabBatch {
+        preview_end: None,
+        material_update: 0,
+        stroke_id: StrokeId(id),
+        target: doc.working.target.unwrap(),
+        kind: DabBatchKind::Persistent,
         stroke_start:true,stroke_end:true,first_dab:0,dab_count:dabs.len() as u32,style,damage:Rect::from_extent(SIZE)};
     support::submit_settled(r,FramePacket {reset_layers:true,dabs,dab_batches:std::slice::from_ref(&batch),..packet(doc)});
     r.readback_srgb_rgba8().unwrap()

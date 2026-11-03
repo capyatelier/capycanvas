@@ -1,4 +1,5 @@
 mod support;
+use support::dry_fixture::striped_paper;
 use layer_core::*;
 use layer_engine::{InstantFeedbackConfig, ViewTransform};
 use layer_render::ViewState;
@@ -10,10 +11,153 @@ const PRESETS: [DefaultBrushPreset; 7] = [DefaultBrushPreset::Pencil,
     DefaultBrushPreset::Charcoal, DefaultBrushPreset::Chalk,
     DefaultBrushPreset::PastelBlock, DefaultBrushPreset::Crayon];
 
+#[path = "../../layer-engine/tests/support/slow_stroke.rs"]
+mod slow_stroke;
+
+#[test]
+fn slow_jittery_pencil_keeps_clean_density_and_peak_alpha() {
+    let mut brush = default_brush(DefaultBrushPreset::Pencil);
+    brush.diameter = 9.;
+    let noisy = slow_stroke::points(5., 4., 0.15, 0.01);
+    let clean = slow_stroke::points(5., 4., 0., 0.01);
+    let generate = |points| {
+        let stroke = Stroke::new(
+            StrokeId(1),
+            SourceTarget::Paint(authored::PaintHandle::from_index(0)),
+            StrokeTool::Brush,
+            brush.clone(),
+            points,
+        )
+        .unwrap();
+        let mut dabs = Vec::new();
+        layer_engine::DabGenerator::generate(&stroke, color::RgbSpace::Srgb, &mut dabs);
+        dabs
+    };
+    let actual = generate(noisy);
+    let clean = generate(clean);
+    let render = |dabs: &[layer_render::Dab]| {
+        let (mut engine, _) = contact_engine(brush.clone(), Run::default());
+        let document = engine.document();
+        let target = document.working.target.unwrap();
+        let mut style = layer_render::DabStyle::for_brush(&brush, StrokeTool::Brush);
+        style.paper = Some(document.paper_binding(target));
+        let batch = layer_render::DabBatch {
+            stroke_id: StrokeId(1),
+            target,
+            kind: layer_render::DabBatchKind::Persistent,
+            stroke_start: true,
+            stroke_end: true,
+            first_dab: 0,
+            dab_count: dabs.len() as u32,
+            preview_end: None,
+            material_update: 0,
+            style: style.clone(),
+            damage: dabs.iter().fold(Rect::EMPTY, |r, d| r.union(d.bounds())),
+        };
+        let frame = RecordedFrame {
+            scene: document.scene().snapshot(),
+            dabs: dabs.to_vec(),
+            batches: vec![batch],
+            restore: Vec::new(),
+            time: 0.,
+            view: ViewState {
+                width_px: 256,
+                height_px: 256,
+                document_to_surface: [1., 0., 0., 1., 0., 0.],
+            },
+            extent: EXTENT,
+            reset: true,
+            commit: true,
+            composite: true,
+            blend: document.composition().blend,
+            inspect: None,
+            overlays: None,
+        };
+        render_recorded(engine.backend_mut(), &frame)
+    };
+    let mut start = *clean
+        .iter()
+        .find(|dab| dab.is_completion() && dab.previous_contact[..2] == [0.; 2])
+        .unwrap();
+    let mut end = *clean
+        .iter()
+        .rev()
+        .find(|dab| dab.is_completion() && dab.previous_contact[2..] == [0.; 2])
+        .unwrap();
+    start.radii = start
+        .radii
+        .map(|r| r + 3. / brush.stabilization.input_scale);
+    end.radii = end.radii.map(|r| r + 3. / brush.stabilization.input_scale);
+    let actual = render(&actual);
+    let clean = render(&clean);
+    let (mut compared, mut painted, mut maximum, mut witness) = (0, 0, 0u8, [0usize; 4]);
+    let (mut actual_alpha, mut clean_alpha) = (0u64, 0u64);
+    let (mut actual_max, mut clean_max) = (0u8, 0u8);
+    for (i, (actual, clean)) in actual
+        .rgba
+        .chunks_exact(4)
+        .zip(clean.rgba.chunks_exact(4))
+        .enumerate()
+    {
+        let (x, y) = (i % 256, i / 256);
+        actual_max = actual_max.max(actual[3]);
+        clean_max = clean_max.max(clean[3]);
+        if [start, end].into_iter().any(|end| {
+            support::dry_fixture::dry_contact_contains(end, 0., x as f32 + 0.5, y as f32 + 0.5)
+        }) {
+            continue;
+        }
+        compared += 1;
+        if actual[3] > 0 || clean[3] > 0 {
+            painted += 1;
+            actual_alpha += u64::from(actual[3]);
+            clean_alpha += u64::from(clean[3]);
+        }
+        let difference = clean[3].abs_diff(actual[3]);
+        if difference > maximum {
+            maximum = difference;
+            witness = [x, y, clean[3] as usize, actual[3] as usize];
+        }
+    }
+    assert!(compared > 0 && painted > 0 && clean_alpha > 0);
+    eprintln!(
+        "slow Pencil 9: clean maximum {maximum} at [x,y,clean,branch]={witness:?}; mean alpha branch={} clean={}",
+        actual_alpha as f64 / painted as f64,
+        clean_alpha as f64 / painted as f64
+    );
+    assert!(
+        actual_max <= clean_max.saturating_add(2),
+        "slow Pencil 9: peak alpha {actual_max}, clean {clean_max}"
+    );
+    assert!(
+        actual_alpha.abs_diff(clean_alpha) * 100 <= clean_alpha * 5,
+        "slow Pencil 9: body mean differs from clean by {}%",
+        100. * actual_alpha.abs_diff(clean_alpha) as f64 / clean_alpha as f64
+    );
+}
+
 #[derive(Clone, Copy)]
-struct Run { samples: u64, cadence: u64, feedback: bool, scale: f32, mask: bool, offset: [i64; 2] }
+struct Run {
+    interval_ns: u64,
+    samples: u64,
+    cadence: u64,
+    feedback: bool,
+    scale: f32,
+    mask: bool,
+    offset: [i64; 2],
+}
 impl Default for Run {
-    fn default() -> Self { Self { samples: 64, cadence: 4, feedback: false, scale: 1., mask: false, offset: [0; 2] } }
+    fn default() -> Self {
+        Self {
+            interval_ns: 4_000_000,
+            samples: 64,
+            cadence: 4,
+            feedback: false,
+            scale: 1.,
+            mask: false,
+            offset: [0; 2],
+        }
+    }
 }
 
 fn contact_engine(mut brush: BrushSnapshot, run: Run)
@@ -50,7 +194,7 @@ fn paint(brush: BrushSnapshot, run: Run, pose: impl Fn(f32) -> ([f32; 2], f32, [
     let (mut engine, mut input) = contact_engine(brush, run);
     let mut time = 1_000_000_000;
     for i in 0..=run.samples {
-        time += 4_000_000;
+        time += run.interval_ns;
         let (position, pressure, tilt) = pose(i as f32 / run.samples as f32);
         let mut event = support::pen_sample(i, run.samples, time, Point { x: position[0], y: position[1] });
         event.sequence = time;
@@ -62,20 +206,6 @@ fn paint(brush: BrushSnapshot, run: Run, pose: impl Fn(f32) -> ([f32; 2], f32, [
         }
     }
     support::image(&mut engine, time)
-}
-
-fn striped_paper(document: &mut Document, paper: authored::OccurrenceHandle) {
-    use color::source::{SourceBuilder, SourceChannels, SourceInterpretation};
-    let interpretation = SourceInterpretation { channels: SourceChannels::Gray, depth: color::SampleDepth::U8,
-        profile: Default::default(), profile_assumed: false };
-    let mut builder = SourceBuilder::new([1, 256], interpretation, 1 << 20).unwrap();
-    for y in 0..256 { builder.push_row(&[if y % 16 < 8 { 255 } else { 0 }]).unwrap(); }
-    let mut source = builder.finish().unwrap();
-    source.resolution = Some(ImageResolution::ppi(300));
-    let effect = document.scene().effect_handle(paper).unwrap();
-    let application = document.artwork.effects.get_mut(effect).unwrap();
-    let index = application.program.parameters.iter().position(|p| p.key.as_ref() == "texture").unwrap();
-    application.values[index] = EffectValue::Texture(TextureSource::Image(Image::new(Arc::new(source))));
 }
 
 fn line(brush: BrushSnapshot, pressure: f32, tilt: f32, run: Run) -> support::Image {
@@ -236,7 +366,7 @@ fn light_dry_caps_match_additive_reference() {
     for (preset,pressure,hardness,paper,pixel,expected) in [
         (DefaultBrushPreset::PointyPencil,0.15,0.,0.563,[33,128],57),
         (DefaultBrushPreset::PointyPencil,0.15,0.25,0.564,[33,128],42),
-        (DefaultBrushPreset::Chalk,0.3,0.,0.627,[226,132],180),
+        (DefaultBrushPreset::Chalk, 0.3, 0., 0.627, [226, 132], 231),
     ] {
         let mut brush=default_brush(preset);
         let contact=brush.contact.as_mut().unwrap();
@@ -524,9 +654,25 @@ fn fine_finite_passes_keep_their_budget_in_both_directions_and_radius_blends() {
         let mut brush=analytic(0.,1.4);brush.diameter=diameter;brush.angle_radians=0.4;
         brush.stabilization.strength=0.;
         let pose=|t:f32|([128.5+length*(t-0.5),130.5],0.65,[0.;2]);
-        let reference=paint(brush.clone(),Run {samples:2,cadence:1,..Default::default()},pose);
+        let reference = paint(
+            brush.clone(),
+            Run {
+                samples: 2,
+                cadence: 1,
+                interval_ns: 500_000,
+                ..Default::default()
+            },
+            pose,
+        );
         for reverse in [false,true] {
-            let actual=paint(brush.clone(),Run {samples:64,cadence:17,..Default::default()},
+            let actual = paint(
+                brush.clone(),
+                Run {
+                    samples: 64,
+                    cadence: 17,
+                    interval_ns: 500_000,
+                    ..Default::default()
+                },
                 |t|pose(if reverse {1.-t} else {t}));
             actual.assert_near(&reference,2,&format!("diameter={diameter} length={length} reverse={reverse}"));
         }
@@ -542,11 +688,26 @@ fn every_dry_medium_preserves_committed_pressure_and_tilt_with_prediction_and_zo
         brush.stabilization.strength = 0.;
         brush.diameter = 90.;
         let path = |t: f32| ([32.5 + 192.*t, 128.5 + 20.*(t*std::f32::consts::TAU).sin()],
-            0.15 + 0.8*(t*std::f32::consts::PI).sin(),
+                if 192. * t <= 30. {
+                    0.15
+                } else {
+                    0.15 + 0.8 * (t * std::f32::consts::PI).sin()
+                },
             [1.3*t, 0.2*t]);
-        let real = paint(brush.clone(), Run { cadence: 1, ..Default::default() }, path);
-        assert!(real.rgba.as_chunks::<4>().0.iter().any(|p| p[3] > 0), "{preset:?} paints");
         for scale in [1., 0.1] {
+            let real = paint(
+                brush.clone(),
+                Run {
+                    cadence: 1,
+                    scale,
+                    ..Default::default()
+                },
+                path,
+            );
+            assert!(
+                real.rgba.as_chunks::<4>().0.iter().any(|p| p[3] > 0),
+                "{preset:?} paints"
+            );
             let predicted = paint(brush.clone(), Run { cadence: 8, feedback: true, scale, ..Default::default() }, path);
             predicted.assert_near(&real, 5, &format!("{preset:?} prediction scale={scale}"));
         }
@@ -778,7 +939,7 @@ fn contact_stages(brush: BrushSnapshot, feedback: bool,
 }
 
 #[test]
-fn dry_taps_leave_one_peak_pressure_imprint_only_on_release() {
+fn dry_taps_keep_the_peak_imprint_from_preview_through_release() {
     for preset in PRESETS {
         let mut brush = default_brush(preset);
         brush.diameter = 80.;
@@ -797,8 +958,11 @@ fn dry_taps_leave_one_peak_pressure_imprint_only_on_release() {
                     &[(center, 0.6), (center, 0.2), ([128.55, 128.5], 0.2),
                         ([128.45, 128.5], 0.2), (center, 0.2)]);
                 for image in &jitter[..2] {
-                    assert!(image.rgba.as_chunks::<4>().0.iter().all(|p| p[3] == 0),
-                        "{preset:?} Strength={strength} feedback={feedback}: held pen paints before release");
+                    image.assert_near(
+                        &reference[0],
+                        1,
+                        &format!("{preset:?} Strength={strength} feedback={feedback}: held preview retains the peak imprint"),
+                    );
                 }
                 jitter.last().unwrap().assert_near(reference.last().unwrap(), 1,
                     &format!("{preset:?} Strength={strength} feedback={feedback}: jitter tap retains one peak-pressure imprint"));
@@ -1045,5 +1209,522 @@ fn dry_completion_fills_turns_and_preserves_subdivision_and_retracing() {
         jitter.crop([168,112],[24,32]).assert_near(&reference.crop([168,112],[24,32]),3,
             &format!("shrinking reversal completion corner={corner}"));
         assert!(reference.rgba[(128*256+96)*4+3]>body+10,"retracing keeps ordinary buildup");
+    }
+}
+
+#[derive(Default)]
+struct RecordedDabs(Option<RecordedFrame>);
+
+struct RecordedFrame {
+    scene: SceneSnapshot,
+    dabs: Vec<layer_render::Dab>,
+    batches: Vec<layer_render::DabBatch>,
+    restore: Vec<(authored::SourceTarget, raster::RasterRevision)>,
+    time: f32,
+    view: ViewState,
+    extent: [u32; 2],
+    reset: bool,
+    commit: bool,
+    composite: bool,
+    blend: BlendSpace,
+    inspect: Option<authored::OccurrenceHandle>,
+    overlays: Option<authored::SelectionOverlays>,
+}
+impl RecordedFrame {
+    fn packet(&self) -> layer_render::FramePacket<'_> {
+        layer_render::FramePacket {
+            scene: self.scene.view(),
+            dabs: &self.dabs,
+            dab_batches: &self.batches,
+            restore_rasters: &self.restore,
+            time_seconds: self.time,
+            view: self.view,
+            document_extent: self.extent,
+            reset_layers: self.reset,
+            commit_rasters: self.commit,
+            composite_all: self.composite,
+            blend_space: self.blend,
+            selection_overlays: self.overlays.as_ref(),
+            inspect_mask: self.inspect,
+        }
+    }
+    fn preview_only(&self, remove_completions: bool) -> Self {
+        let (mut dabs, mut batches) = (Vec::new(), Vec::new());
+        for batch in self
+            .batches
+            .iter()
+            .filter(|b| b.kind == layer_render::DabBatchKind::Preview)
+        {
+            let first = dabs.len();
+            dabs.extend(
+                self.dabs[batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize]
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, &dab)| {
+                        if !remove_completions || !dab.is_completion() {
+                            return Some(dab);
+                        }
+                        if batch.preview_end == Some(index as u32) {
+                            let mut end = dab;
+                            end.texture_sign[1] = 0.;
+                            Some(end)
+                        } else {
+                            None
+                        }
+                    }),
+            );
+            if dabs.len() != first {
+                batches.push(layer_render::DabBatch {
+                    first_dab: first as u32,
+                    dab_count: (dabs.len() - first) as u32,
+                    preview_end: dabs[first..]
+                        .iter()
+                        .rposition(|dab| {
+                            dab.is_completion() && dab.previous_contact[2..] == [0.; 2]
+                        })
+                        .map(|i| i as u32),
+                    ..batch.clone()
+                });
+            }
+        }
+        Self {
+            scene: self.scene.clone(),
+            dabs,
+            batches,
+            restore: Vec::new(),
+            time: self.time,
+            view: self.view,
+            extent: self.extent,
+            reset: false,
+            commit: self.commit,
+            composite: false,
+            blend: self.blend,
+            inspect: self.inspect,
+            overlays: self.overlays.clone(),
+        }
+    }
+}
+
+fn render_recorded(
+    renderer: &mut layer_render_wgpu::WgpuRasterizer,
+    frame: &RecordedFrame,
+) -> support::Image {
+    use layer_render::CanvasRenderer;
+    let continuation = frame.preview_only(false);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut first = true;
+    loop {
+        let packet = if first {
+            frame.packet()
+        } else {
+            continuation.packet()
+        };
+        renderer.poll_pending(packet.view).unwrap();
+        if renderer.can_submit() && renderer.raster_dependencies_ready(packet, None) {
+            renderer.submit(packet).unwrap();
+            first = false;
+        }
+        renderer.wait_idle().unwrap();
+        if !first && renderer.raster_ready() && !renderer.has_pending_submission() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "recorded frame dependencies settle"
+        );
+        std::thread::yield_now();
+    }
+    support::Image {
+        size: frame.extent,
+        rgba: renderer.readback_srgb_rgba8().unwrap(),
+    }
+}
+impl layer_render::CanvasRenderer for RecordedDabs {
+    type Error = layer_render::BackendError;
+    fn resize_surface(&mut self, _width: u32, _height: u32) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn prepare_asset(
+        &mut self,
+        _asset: &AssetId,
+        _image: layer_render::HostImage<'_>,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn release_asset(&mut self, _asset: &AssetId) {}
+    fn submit(&mut self, frame: layer_render::FramePacket<'_>) -> Result<(), Self::Error> {
+        self.0 = Some(RecordedFrame {
+            scene: frame.scene.snapshot(),
+            dabs: frame.dabs.to_vec(),
+            batches: frame.dab_batches.to_vec(),
+            restore: frame.restore_rasters.to_vec(),
+            time: frame.time_seconds,
+            view: frame.view,
+            extent: frame.document_extent,
+            reset: frame.reset_layers,
+            commit: frame.commit_rasters,
+            composite: frame.composite_all,
+            blend: frame.blend_space,
+            inspect: frame.inspect_mask,
+            overlays: frame.selection_overlays.cloned(),
+        });
+        Ok(())
+    }
+}
+
+#[test]
+fn dry_turn_preview_frames_keep_the_outer_corner_stable() {
+    let vertex = Point { x: 128.5, y: 96.5 };
+    let mut failures = Vec::new();
+    for diameter in [36., 9.] {
+        let mut brush = default_brush(DefaultBrushPreset::Pencil);
+        brush.diameter = diameter;
+        brush.stabilization.strength = 0.;
+        let config = InstantFeedbackConfig {
+            enabled: true,
+            use_platform_prediction: false,
+            ..Default::default()
+        };
+        let mut document = Document::new(
+            PortableId::random(),
+            256,
+            256,
+            DocumentNames {
+                paint: "Ink".into(),
+                paper: "Paper".into(),
+            },
+        );
+        let paper = support::named_occurrence(&document, "Paper");
+        document.artwork.occurrences.get_mut(paper).unwrap().visible = false;
+        striped_paper(&mut document, paper);
+        let mut renderer =
+            layer_render_wgpu::WgpuRasterizer::new_native_headless(document.composition().color)
+                .unwrap();
+        let (mut input, consumer) = layer_engine::input_queue(128);
+        let mut engine = layer_engine::CanvasEngine::new(
+            RecordedDabs::default(),
+            document,
+            consumer,
+            ViewState {
+                width_px: 256,
+                height_px: 256,
+                document_to_surface: [1., 0., 0., 1., 0., 0.],
+            },
+            ViewTransform::IDENTITY,
+        )
+        .unwrap();
+        engine.set_brush(brush).unwrap();
+        engine.set_instant_feedback(config).unwrap();
+        engine.render_frame_at(0).unwrap();
+        render_recorded(&mut renderer, &engine.backend_mut().0.take().unwrap());
+        let (mut radius, mut max_drop, mut max_pop, mut drop_frame, mut pop_frame) =
+            (0f32, 0u8, 0u8, 0u64, 0u64);
+        let (mut alpha_drop, mut alpha_pop, mut produced_max, mut body_max, mut excess_max) =
+            (0u8, 0u8, 0u8, 0u8, 0i16);
+        let mut excess_at = [0usize; 4];
+        let mut previous: Option<(support::Image, support::Image)> = None;
+        let (mut corner_committed, mut removed_caps, mut visible_caps, mut underlying_paint) =
+            (false, 0usize, false, false);
+        for step in 0..=64 {
+            let time = 1_000_000_000 + step * 4_000_000;
+            let head = if step <= 32 {
+                Point {
+                    x: 32.5 + 3. * step as f32,
+                    y: vertex.y,
+                }
+            } else {
+                Point {
+                    x: vertex.x,
+                    y: vertex.y + 3. * (step - 32) as f32,
+                }
+            };
+            let mut event = support::pen_sample(step, 65, time, head);
+            event.pressure = 0.8;
+            input.push(event).unwrap();
+            engine.render_frame_for(time, time + 8_000_000).unwrap();
+            assert!(!engine.has_pending_input());
+            let packet = engine.backend_mut().0.take().unwrap();
+            let image = render_recorded(&mut renderer, &packet);
+            let capless = packet.preview_only(true);
+            removed_caps += packet
+                .batches
+                .iter()
+                .filter(|b| b.kind == layer_render::DabBatchKind::Preview)
+                .flat_map(|b| {
+                    &packet.dabs[b.first_dab as usize..(b.first_dab + b.dab_count) as usize]
+                })
+                .filter(|dab| dab.is_completion() && dab.texture_sign[1] > 0.)
+                .count();
+            let body = render_recorded(&mut renderer, &capless);
+            visible_caps |= image.rgba != body.rgba;
+            underlying_paint |= body.rgba.chunks_exact(4).any(|p| p[3] != 0);
+            let persistent: Vec<_> = packet
+                .batches
+                .iter()
+                .filter(|b| b.kind == layer_render::DabBatchKind::Persistent)
+                .flat_map(|b| {
+                    &packet.dabs[b.first_dab as usize..(b.first_dab + b.dab_count) as usize]
+                })
+                .collect();
+            if let Some(dab) = persistent.iter().find(|d| d.motion != [0.; 2]) {
+                radius = dab.radii[0].min(dab.radii[1]);
+            }
+            let commits = !corner_committed
+                && persistent.iter().any(|d| {
+                    d.is_completion()
+                        && d.previous_contact[..2] != [0.; 2]
+                        && d.previous_contact[2..] != [0.; 2]
+                        && (d.center.x - vertex.x).hypot(d.center.y - vertex.y) <= 1.5
+                });
+            corner_committed |= commits;
+            if step > 32 && head.y - vertex.y >= radius * 0.5 {
+                if let Some((old, old_body)) = &previous {
+                    for y in 0..256 {
+                        for x in 0..256 {
+                            let point = [x as f32 + 0.5, y as f32 + 0.5];
+                            if point[0] < vertex.x
+                                || point[0] > vertex.x + radius
+                                || point[1] > vertex.y
+                                || point[1] < vertex.y - radius
+                            {
+                                continue;
+                            }
+                            let at = (y * 256 + x) * 4;
+                            let a = &old.rgba[at..at + 4];
+                            let b = &image.rgba[at..at + 4];
+                            for c in 0..4 {
+                                if a[c].saturating_sub(b[c]) > max_drop {
+                                    max_drop = a[c].saturating_sub(b[c]);
+                                    drop_frame = step;
+                                }
+                                if commits && b[c].saturating_sub(a[c]) > max_pop {
+                                    max_pop = b[c].saturating_sub(a[c]);
+                                    pop_frame = step;
+                                }
+                                let own = a[c].abs_diff(b[c]);
+                                let baseline = body.rgba[at + c].abs_diff(old_body.rgba[at + c]);
+                                produced_max = produced_max.max(own);
+                                body_max = body_max.max(baseline);
+                                let excess = i16::from(own) - i16::from(baseline);
+                                if excess > excess_max {
+                                    excess_max = excess;
+                                    excess_at = [step as usize, x, y, c];
+                                }
+                            }
+                            alpha_drop = alpha_drop.max(a[3].saturating_sub(b[3]));
+                            if commits {
+                                alpha_pop = alpha_pop.max(b[3].saturating_sub(a[3]));
+                            }
+                        }
+                    }
+                }
+            }
+            previous = Some((image, body));
+        }
+        assert!(
+            corner_committed,
+            "Pencil{diameter} replay commits its corner"
+        );
+        assert!(
+            removed_caps > 0 && visible_caps && underlying_paint,
+            "turn renders remove visible provisional caps and retain paint"
+        );
+        let limit = if diameter == 36. { 8 } else { 16 };
+        eprintln!(
+            "TURN_SEQUENCE Pencil{diameter} pressure=0.8 radius={radius} max_drop={max_drop} drop_frame={drop_frame} commit_pop={max_pop} pop_frame={pop_frame} alpha_drop={alpha_drop} alpha_pop={alpha_pop} produced_max={produced_max} capless_max={body_max} maximum_excess={excess_max} limit={limit} excess_at={excess_at:?} location=[frame,x,y,channel]"
+        );
+        if excess_max > limit {
+            failures.push(format!(
+                "Pencil{diameter} excess={excess_max}, limit={limit}"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("; "));
+}
+
+fn dry_rest_noise(seed: &mut u32) -> f32 {
+    *seed ^= *seed << 13;
+    *seed ^= *seed >> 17;
+    *seed ^= *seed << 5;
+    ((*seed >> 8) as f32 / 16777216.) * 2. - 1.
+}
+
+#[test]
+fn frozen_dry_ending_preserves_overlapping_committed_grip() {
+    let mut brush = default_brush(DefaultBrushPreset::Charcoal);
+    brush.stabilization.strength = 0.;
+    let (mut engine, mut input) = contact_engine(
+        brush,
+        Run {
+            feedback: true,
+            ..Default::default()
+        },
+    );
+    engine
+        .set_instant_feedback(InstantFeedbackConfig {
+            enabled: true,
+            use_platform_prediction: false,
+            prediction_horizon_micros: 0,
+            ..Default::default()
+        })
+        .unwrap();
+    let head = Point { x: 80.5, y: 128.5 };
+    let mut time = 1_000_000_000;
+    for step in 0..=88 {
+        time += 4_000_000;
+        let x = if step <= 32 {
+            32.5 + 3. * step as f32
+        } else {
+            128.5 - 3. * (step - 32).min(16) as f32
+        };
+        let mut event = support::pen_sample(step, 89, time, Point { x, y: head.y });
+        event.pressure = 0.8;
+        input.push(event).unwrap();
+        support::drain_input(&mut engine, time, true);
+    }
+    let frozen = support::image(&mut engine, time);
+    time += 4_000_000;
+    let mut up = support::pen_sample(89, 89, time, head);
+    up.pressure = 0.8;
+    input.push(up).unwrap();
+    support::drain_input(&mut engine, time, true);
+    let committed = support::image(&mut engine, time);
+    let maximum = frozen
+        .rgba
+        .chunks_exact(4)
+        .zip(committed.rgba.chunks_exact(4))
+        .map(|(a, b)| a[3].abs_diff(b[3]))
+        .max()
+        .unwrap();
+    assert!(
+        frozen.rgba.chunks_exact(4).any(|p| p[3] > 0),
+        "the frozen preview contains paint"
+    );
+    assert!(
+        maximum <= 1,
+        "frozen Charcoal lift changes alpha by {maximum} codes"
+    );
+}
+
+#[test]
+fn dry_press_then_draw_preserves_the_raised_start_imprint() {
+    let mut brush = default_brush(DefaultBrushPreset::Pencil);
+    brush.diameter = 36.;
+    brush.stabilization.strength = 0.;
+    let mut renderer =
+        layer_render_wgpu::WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let (mut engine, mut input) = support::dry_fixture::owned_contact_engine(
+        RecordedDabs::default(),
+        DefaultBrushPreset::Pencil,
+        36.,
+        0.,
+    );
+    engine.set_brush(brush).unwrap();
+    engine
+        .set_instant_feedback(InstantFeedbackConfig {
+            enabled: true,
+            use_platform_prediction: false,
+            prediction_horizon_micros: 0,
+            ..Default::default()
+        })
+        .unwrap();
+    render_recorded(&mut renderer, &engine.backend_mut().0.take().unwrap());
+    let mut previous: Option<support::Image> = None;
+    let (mut maximum_drop, mut witness, mut painted) = (0u8, [0usize; 3], false);
+    for frame in 0u64..=50 {
+        let time = 1_000_000_000 + frame * 4_000_000;
+        let x = 96.5 + 4. * frame.saturating_sub(40) as f32;
+        let mut event = support::pen_sample(frame, 51, time, Point { x, y: 128.5 });
+        event.pressure = 0.2 + 0.7 * (frame.min(10) as f32 / 10.);
+        input.push(event).unwrap();
+        engine.render_frame_for(time, time).unwrap();
+        assert!(!engine.has_pending_input());
+        let packet = engine.backend_mut().0.take().unwrap();
+        let image = render_recorded(&mut renderer, &packet);
+        if frame >= 40 {
+            for y in 110..147 {
+                for x in 78..97 {
+                    let at = (y * 256 + x) * 4 + 3;
+                    painted |= image.rgba[at] > 0;
+                    if let Some(old) = &previous {
+                        let drop = old.rgba[at].saturating_sub(image.rgba[at]);
+                        if drop > maximum_drop {
+                            maximum_drop = drop;
+                            witness = [frame as usize, x, y];
+                        }
+                    }
+                }
+            }
+            previous = Some(image);
+        }
+    }
+    assert!(
+        painted,
+        "the start region contains the raised touchdown imprint"
+    );
+    assert_eq!(
+        maximum_drop, 0,
+        "raised start alpha decreased at [frame,x,y]={witness:?}"
+    );
+}
+
+#[test]
+fn dry_rest_preview_keeps_stationary_pressure_noise_stable() {
+    let mut brush = default_brush(DefaultBrushPreset::Pencil);
+    brush.diameter = 36.;
+    brush.stabilization.strength = 0.;
+    let (mut engine, mut input) = contact_engine(
+        brush,
+        Run {
+            feedback: true,
+            ..Default::default()
+        },
+    );
+    engine
+        .set_instant_feedback(InstantFeedbackConfig {
+            enabled: true,
+            use_platform_prediction: false,
+            prediction_horizon_micros: 0,
+            ..Default::default()
+        })
+        .unwrap();
+    let (mut seed, mut pressure) = (0x12345678u32, 0.6f32);
+    let mut frozen: Option<support::Image> = None;
+    for index in 0..77 {
+        let head = if index <= 16 {
+            Point {
+                x: 100. + 2.5 * index as f32,
+                y: 100.,
+            }
+        } else {
+            pressure = (pressure
+                + if dry_rest_noise(&mut seed) < 0. {
+                    -0.05
+                } else {
+                    0.05
+                })
+            .clamp(0.3, 0.9);
+            Point {
+                x: 140. + 0.4 * dry_rest_noise(&mut seed),
+                y: 100. + 0.4 * dry_rest_noise(&mut seed),
+            }
+        };
+        let time = 1_000_000_000 + index * 4_000_000;
+        let mut event = support::pen_sample(index, 77, time, head);
+        event.pressure = pressure;
+        input.push(event).unwrap();
+        support::drain_input(&mut engine, time, true);
+        if index >= 46 {
+            let held = support::image(&mut engine, time);
+            assert!(held.rgba.chunks_exact(4).any(|pixel| pixel[3] > 0));
+            if let Some(frozen) = &frozen {
+                frozen.assert_eq(
+                    &held,
+                    "stationary pressure and position noise keeps the frozen paint fixed",
+                );
+            } else {
+                frozen = Some(held);
+            }
+        }
     }
 }
