@@ -249,7 +249,7 @@ public static class CapyLocaleLayout {
         $scroll=Scroll-Pattern (Control 'layer-list');$scroll.SetScrollPercent(-1,0)
         Wait-Until {$row=Find "layer-row-$top" -Visible;$row -and $row.Current.BoundingRectangle.Height -gt 0} 'Plain top row did not realize at large text'
         $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
-        $plain=(Control "layer-row-$top" -Arranged).Current.BoundingRectangle
+        $plain=Native-Bounds "layer-row-$top" $scale
         if(@((Model).state.layers|Where-Object id -eq $top)[0].description){throw 'Intrinsic unit reference must be a real plain row'}
         $listWidth=(Control 'layer-list' -Arranged).Current.BoundingRectangle.Width
         $realized=@($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)|Where-Object {$_.Current.AutomationId -match '^layer-row-[0-9]+$'}|ForEach-Object {[long]($_.Current.AutomationId.Substring(10))})

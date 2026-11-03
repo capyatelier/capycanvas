@@ -957,3 +957,40 @@ namespace CapyStampReadinessTest {
     }
 }
 Write-Output 'Bubble dab journey waits for its arranged Image before stable pixels and rejects never-visible and halo-only previews.'
+
+$layerUnitTokens=$null;$layerUnitErrors=$null
+$layerUnitAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/layer-relationships.ps1'),[ref]$layerUnitTokens,[ref]$layerUnitErrors)
+if(@($layerUnitErrors).Count){throw 'Layers unit fixture parse failed'}
+$layerUnitFunction=@($layerUnitAst.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Test-LayerUnit'},$true))
+if($layerUnitFunction.Count -ne 1){throw 'Missing actual Layers intrinsic unit test'}
+$layerPlainAssignment=@($layerUnitFunction[0].FindAll({param($n)$n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$plain'},$true))
+$layerUnitGuard=@($layerUnitFunction[0].FindAll({param($n)$n -is [Management.Automation.Language.IfStatementAst] -and $n.Extent.Text.Contains('Layers unit follows realized content:')},$true))
+if($layerPlainAssignment.Count -ne 1 -or $layerUnitGuard.Count -ne 1){throw 'Missing actual Layers reference assignment or unit assertion'}
+foreach($layerUnitDpi in 144,96,192){foreach($layerUnitCase in 'plain','native-short','native-tall','wrong-unit'){
+    & {
+        param($Assignment,$Guard,$Dpi,$Case)
+        $top=72;$scale=$Dpi/96.;$percent=0;$m=@{state=@{theme='light'}}
+        $state=@{nativeHeight=40.;nativeCalls=0}
+        if($Case -eq 'native-short'){$state.nativeHeight=39.}
+        if($Case -eq 'native-tall'){$state.nativeHeight=41.}
+        $measurement=@{scroll=@{unit_height=$(if($Case -eq 'wrong-unit'){41.}else{40.})}}
+        function Control([string]$Id,[switch]$Arranged){
+            if($Id -ne 'layer-row-72' -or !$Arranged){throw 'Layers reference lost its arranged row identity'}
+            [pscustomobject]@{Current=[pscustomobject]@{BoundingRectangle=[pscustomobject]@{Height=40*$scale-1}}}
+        }
+        function Native-Bounds([string]$Id,[double]$Scale){
+            if($Id -ne 'layer-row-72' -or $Scale -ne $Dpi/96.){throw 'Layers native reference lost its row identity or DPI'}
+            $state.nativeCalls++;[pscustomobject]@{Height=$state.nativeHeight*$Scale}
+        }
+        $failure=$null
+        if($Dpi -eq 144 -and $Case -eq 'plain'){[Console]::WriteLine('Layers reference operands: native_unit=40 DIP, UIA=59 px, native_arranged=60 px, DPI=144')}
+        try{. ([scriptblock]::Create($Assignment));. ([scriptblock]::Create($Guard))}catch{$failure=$_}
+        if($Case -eq 'plain'){
+            if($failure){throw $failure}
+            if($state.nativeCalls -ne 1 -or $plain.Height -ne 40*$scale){throw 'Layers unit did not use its actual native row extent'}
+        }elseif(!$failure -or !$failure.Exception.Message.StartsWith('Layers unit follows realized content:')){
+            if($failure){throw $failure};throw "Layers unit accepted $Case at $Dpi DPI"
+        }
+    } $layerPlainAssignment[0].Extent.Text $layerUnitGuard[0].Extent.Text $layerUnitDpi $layerUnitCase
+}}
+Write-Output 'Actual Layers intrinsic reference uses its native row at 100/150/200 percent, preserves the unit assertion and rejects wrong native heights or units.'
