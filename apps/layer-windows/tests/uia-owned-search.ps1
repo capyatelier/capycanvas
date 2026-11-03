@@ -745,3 +745,48 @@ if($idleFps.Count -ne 1){throw 'Missing actual idle Diagnostics assertion'}
     }
 }
 Write-Output 'Idle Diagnostics preserves stable, moving-frame and active-FPS verdicts and reports its single before/after frame and FPS samples.'
+
+$runtimeAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-runtime-filters.ps1'),[ref]$tokens,[ref]$errors)
+if(@($errors).Count){throw ($errors|Out-String)}
+$runtimePreview=@($runtimeAst.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Preview-Hash'},$true))
+if($runtimePreview.Count -ne 1){throw 'Missing actual runtime filter preview capture'}
+Add-Type -AssemblyName System.Drawing,WindowsBase
+Add-Type -TypeDefinition @'
+using System;
+namespace CapyRuntimePreviewTest {
+ public static class Capture {
+  public struct Rect {public int left,top,right,bottom;}
+  public static int Captures;
+  public static bool GetWindowRect(IntPtr window,out Rect rect){rect=new Rect{right=64,bottom=64};return true;}
+  public static bool PrintWindow(IntPtr window,IntPtr dc,uint flags){Captures++;return true;}
+ }
+}
+'@
+& {
+    . ([scriptblock]::Create($runtimePreview[0].Extent.Text.Replace('[CapyRuntimeFilterCapture','[CapyRuntimePreviewTest.Capture')))
+    $registeredWindow=[pscustomobject]@{Handle=[IntPtr]::Zero}
+    $geometry=@{finds=0;arranged=0;boundsReads=0;sleeps=0;pending=$true;emptyPending=$true;invalid=$false}
+    function Start-Sleep([int]$Milliseconds){
+        $geometry.sleeps++
+        if($geometry.emptyPending){throw 'Missing control: filter-preview-example:tent_blur'}
+        Microsoft.PowerShell.Utility\Start-Sleep -Milliseconds $Milliseconds
+    }
+    function Find([string]$Value,[switch]$Name,$Within,$Type,[switch]$Visible,[switch]$NoPopups){
+        if($Value -cne 'filter-preview-example:tent_blur'){throw 'Unexpected runtime preview target'}
+        $geometry.finds++;if($Visible){$geometry.arranged++}
+        $geometry.bounds=if($geometry.emptyPending -or $geometry.finds -lt 3){[Windows.Rect]::Empty}elseif($geometry.invalid){[Windows.Rect]::new([double]::PositiveInfinity,8,32,32)}else{[Windows.Rect]::new(8,8,32,32)}
+        $current=[pscustomobject]@{ItemStatus=$(if($geometry.pending){'Pending'}else{'Ready'});IsOffscreen=$false}
+        $current|Add-Member -MemberType ScriptProperty -Name BoundingRectangle -Value {$geometry.boundsReads++;$geometry.bounds}
+        [pscustomobject]@{Current=$current}
+    }
+    if((Preview-Hash 'example:tent_blur') -ne '' -or $geometry.finds -ne 1 -or $geometry.arranged -or $geometry.boundsReads -or $geometry.sleeps -or [CapyRuntimePreviewTest.Capture]::Captures){throw 'Pending empty runtime preview entered geometry lookup, waiting or capture'}
+    $geometry.pending=$false;$geometry.emptyPending=$false;$geometry.finds=0
+    $hash=Preview-Hash 'example:tent_blur'
+    if($geometry.finds -lt 3 -or [Convert]::FromBase64String($hash).Length -ne 32 -or [CapyRuntimePreviewTest.Capture]::Captures -ne 1){throw 'Runtime preview did not wait for arranged geometry before hashing its actual crop'}
+    $geometry.pending=$true
+    if((Preview-Hash 'example:tent_blur') -ne '' -or [CapyRuntimePreviewTest.Capture]::Captures -ne 1){throw 'Pending runtime preview attempted a pixel capture'}
+    $geometry.pending=$false;$geometry.invalid=$true;$failure=$null
+    try{Preview-Hash 'example:tent_blur'|Out-Null}catch{$failure=$_}
+    if(!$failure -or $failure.FullyQualifiedErrorId -ne 'InvalidCastIConvertible'){throw 'Runtime preview suppressed invalid geometry instead of retaining its conversion failure'}
+}
+Write-Output 'Runtime preview returns pending empty controls without geometry reads or waits, arranges ready controls and retains invalid crop failures.'

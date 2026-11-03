@@ -73,6 +73,7 @@ function Has-Tint($Image){
 function Preview-Hash([string]$Id,[switch]$Tinted){
     $image=Control ('filter-preview-'+$Id)
     if($image.Current.ItemStatus -ne 'Ready'){return ''}
+    $image=Control ('filter-preview-'+$Id) -Arranged
     $r=$image.Current.BoundingRectangle
     $window=[CapyRuntimeFilterCapture+Rect]::new()
     if(![CapyRuntimeFilterCapture]::GetWindowRect($registeredWindow.Handle,[ref]$window)){throw 'Window bounds unavailable'}
