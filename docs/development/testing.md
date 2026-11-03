@@ -45,6 +45,7 @@ crates that a given machine may not be able to run.
 Select fixtures by the behavior and consumers a change affects, including callers
 outside the edited feature. Run every affected variant, with both themes and
 each affected input device. A single passing variant does not cover its family.
+Brush, blender and frame-path shader changes must complete a fine default Pencil stroke on a WARP CPU runner before pushing; use `layers:default` and its painted-thumbnail check.
 
 | Change | Windows fixtures before pushing |
 | --- | --- |

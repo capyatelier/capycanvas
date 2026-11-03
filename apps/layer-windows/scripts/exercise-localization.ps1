@@ -635,7 +635,7 @@ try{
   'layer-alpha_lock'=@('resources-layer-menu-alpha-lock','resources');'layer-lock'=@('resources-layer-menu-lock-editing','resources')
  }
  foreach($panel in (Fresh-Model).panels){foreach($tile in $panel.tiles|Where-Object {$_.control.kind -eq 'divider'}){$workspaceCopies[('tile-'+$panel.id+'-'+$tile.id)]=@('workspace-tool-divider','workspace')}}
- Layers-Footer
+ Layers-Footer -Prepare
  $workspaceIdentities=Native-Identities (@($workspaceCopies.Keys)+@('layer-opacity','layer-attachment',('layer-row-'+$layer),('layer-'+$layer+'-name'),('layer-'+$layer+'-selection'),('layer-'+$layer+'-drag'),('layer-'+$layer+'-thumbnail'),('layer-'+$layer+'-mask'),('layer-'+$layer+'-mask-thumbnail')))
  Workspace-Grips
  $groups=@(((Fresh-Model).application_menus|Where-Object id -eq 'window').model.sections|ForEach-Object {$_})

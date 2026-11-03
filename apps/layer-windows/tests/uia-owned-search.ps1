@@ -603,3 +603,59 @@ $rowGeometry=[scriptblock]::Create("param(`$tiles,`$viewport)`n"+($statements[$s
     }
 }
 Write-Output 'Texture rows classify unclipped square previews at their natural inset, retaining heterogeneous, aligned, bottom-edge and partial cases without input.'
+
+$footerAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/LocalizationProperties.ps1'),[ref]$tokens,[ref]$errors)
+if(@($errors).Count){throw ($errors|Out-String)}
+$footer=@($footerAst.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Layers-Footer'},$true))
+$localizationAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-localization.ps1'),[ref]$tokens,[ref]$errors)
+if(@($errors).Count){throw ($errors|Out-String)}
+$footerCalls=@($localizationAst.FindAll({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Layers-Footer'},$true))
+if($footer.Count -ne 1 -or $footerCalls.Count -ne 2){throw 'Missing actual retained footer setup and locale checks'}
+Add-Type -TypeDefinition @'
+using System;
+namespace CapyFooterTest {
+ public static class Driver {
+  public static int Dpi=96,Contacts,Moves,Origin,Delta;public static bool Modal;public static string Order;
+  public static int GetDpiForWindow(IntPtr window){return Dpi;}
+  public static void Initialize(uint process){Order="initialize";}
+  public static void Down(string device,int x,int y){if(Modal)throw new InvalidOperationException("Footer injected beneath the retained modal");Order+=",down";Contacts++;Origin=x;}
+  public static void Move(int x,int y){Order+=",move";Moves++;Delta=Origin-x;}
+  public static void Up(){Order+=",up";}public static void Dispose(){Order+=",dispose";}
+ }
+}
+'@
+& {
+    . ([scriptblock]::Create($footer[0].Extent.Text.Replace('[CapyRowPointer]','[CapyFooterTest.Driver]')))
+    $prepareFooter=[scriptblock]::Create($footerCalls[0].Extent.Text);$checkFooter=[scriptblock]::Create($footerCalls[1].Extent.Text)
+    $review=[pscustomobject]@{Id=33};$script:current=[pscustomobject]@{hwnd=1}
+    $footerState=@{width=296;extent=0;ackWidth=$true;ackExtent=$true;arranged=0}
+    function Model{
+        $width=$footerState.width;if($footerState.ackWidth){$width+=[CapyFooterTest.Driver]::Delta/$scale}
+        $extent=$footerState.extent;if([CapyFooterTest.Driver]::Moves -and $footerState.ackExtent){$extent=$width+6}
+        @{layout=@{groups=@(@{id=16;active='layers';bounds=@{x=700;y=400;width=$width;height=270}});dividers=@(@{id=11;axis='horizontal';fixed=$false;bounds=@{x=694;y=90;width=6;height=560}})};state=@{workspace=@{layout=@{bands=@(@{id=11;extent=$extent})}};layer_tools=@{footer=@(@{button='new_selection_layer';min_width=262})}}}|ConvertTo-Json -Depth 10|ConvertFrom-Json
+    }
+    function Fresh-Model{Model}
+    function Control([string]$Id,[switch]$Arranged){
+        if($Id -eq 'layer-new-selection'){$footerState.arranged++;return 'selection button'}
+        if($Id -ne 'divider-11' -or !$Arranged){throw 'Unexpected footer geometry lookup'}
+        [pscustomobject]@{Current=@{BoundingRectangle=[CapyOwnedSearchTest.Rect]::new(100,200,(6*$scale),(560*$scale))}}
+    }
+    function Wait-Until($Predicate,[string]$Message){if(!(& $Predicate)){throw $Message}}
+    foreach($scale in @(1,1.5,2)){
+        [CapyFooterTest.Driver]::Dpi=96*$scale;[CapyFooterTest.Driver]::Modal=$false
+        [CapyFooterTest.Driver]::Contacts=0;[CapyFooterTest.Driver]::Moves=0;[CapyFooterTest.Driver]::Delta=0
+        $footerState.width=296;$footerState.extent=0;$footerState.ackWidth=$true;$footerState.ackExtent=$true;$footerState.arranged=0
+        & $prepareFooter
+        if([CapyFooterTest.Driver]::Contacts -ne 1 -or [CapyFooterTest.Driver]::Moves -ne 1 -or [CapyFooterTest.Driver]::Delta -ne 12*$scale -or [CapyFooterTest.Driver]::Order -ne 'initialize,down,move,up,dispose' -or (Model).state.workspace.layout.bands[0].extent -le 0){throw 'English-wide automatic footer column was not explicitly prepared before the retained modal'}
+        [CapyFooterTest.Driver]::Modal=$true;& $checkFooter
+        if([CapyFooterTest.Driver]::Contacts -ne 1 -or $footerState.arranged -ne 2){throw 'Retained modal footer check injected input or omitted its arranged control assertion'}
+        $footerState.ackWidth=$false;$footerState.width=242;$rejected=$false
+        try{& $checkFooter}catch{if(!$_.Exception.Message.StartsWith('Layers did not expose its complete footer:')){throw};$rejected=$true}
+        if(!$rejected -or [CapyFooterTest.Driver]::Contacts -ne 1){throw 'Narrow retained footer did not fail without background input'}
+        [CapyFooterTest.Driver]::Modal=$false;[CapyFooterTest.Driver]::Moves=0;[CapyFooterTest.Driver]::Delta=0
+        $footerState.width=296;$footerState.ackWidth=$true;$footerState.ackExtent=$false;$rejected=$false
+        try{& $prepareFooter}catch{if(!$_.Exception.Message.StartsWith('Layers did not expose its complete footer:')){throw};$rejected=$true}
+        if(!$rejected){throw 'Footer setup accepted width without acknowledging the authored band extent'}
+    }
+}
+Write-Output 'Retained footer setup authors its sufficient column width before the modal; locale checks preserve the width bound without background input.'

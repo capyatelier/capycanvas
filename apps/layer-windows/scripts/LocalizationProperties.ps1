@@ -228,22 +228,27 @@ function Blend-CaptionSurface{
 
 
 function Shown-Value($Control){$name=$Control.Current.Name;$name.Substring($name.LastIndexOf(" ")+1)}
-function Layers-Footer{
+function Layers-Footer([switch]$Prepare){
  $view=Fresh-Model;$group=@($view.layout.groups|Where-Object active -eq 'layers')[0]
  if(!$group){throw 'Layers footer requires its active docked panel'}
  $minimum=($view.state.layer_tools.footer|Measure-Object min_width -Maximum).Maximum
- if($group.bounds.width -ge $minimum){return}
  $edges=@($group.bounds.x,($group.bounds.x+$group.bounds.width))
  $distance={param($d)($edges|ForEach-Object {[Math]::Abs($d.bounds.x+$d.bounds.width*.5-$_)}|Measure-Object -Minimum).Minimum}
  $divider=@($view.layout.dividers|Where-Object {$_.axis -eq 'horizontal' -and !$_.fixed}|Sort-Object {& $distance $_})[0]
  if(!$divider -or (& $distance $divider) -gt 8){throw 'Layers has no column resize divider'}
- $bounds=(Control ('divider-'+$divider.id) -Arranged).Current.BoundingRectangle
- $x=[int]($bounds.X+$bounds.Width/2);$y=[int]($bounds.Y+$bounds.Height/2)
- $direction=if([Math]::Abs($divider.bounds.x-$edges[0]) -lt [Math]::Abs($divider.bounds.x-$edges[1])){-1}else{1}
- $delta=[int][Math]::Ceiling(($minimum-$group.bounds.width+2*$divider.bounds.width)*[CapyRowPointer]::GetDpiForWindow([IntPtr]$script:current.hwnd)/96.)
- [CapyRowPointer]::Initialize([uint32]$review.Id)
- try{[CapyRowPointer]::Down('mouse',$x,$y);[CapyRowPointer]::Move($x+$direction*$delta,$y)}finally{try{[CapyRowPointer]::Up()}finally{[CapyRowPointer]::Dispose()}}
- Wait-Until {$view=Model;@($view.layout.groups|Where-Object id -eq $group.id)[0].bounds.width -ge $minimum} 'Layers did not expose its complete footer'
+ if($Prepare){
+  $bounds=(Control ('divider-'+$divider.id) -Arranged).Current.BoundingRectangle
+  $x=[int]($bounds.X+$bounds.Width/2);$y=[int]($bounds.Y+$bounds.Height/2)
+  $direction=if([Math]::Abs($divider.bounds.x-$edges[0]) -lt [Math]::Abs($divider.bounds.x-$edges[1])){-1}else{1}
+  $delta=[int][Math]::Ceiling(([Math]::Max(0,$minimum-$group.bounds.width)+2*$divider.bounds.width)*[CapyRowPointer]::GetDpiForWindow([IntPtr]$script:current.hwnd)/96.)
+  [CapyRowPointer]::Initialize([uint32]$review.Id)
+  try{[CapyRowPointer]::Down('mouse',$x,$y);[CapyRowPointer]::Move($x+$direction*$delta,$y)}finally{try{[CapyRowPointer]::Up()}finally{[CapyRowPointer]::Dispose()}}
+ }
+ $measurement=@{minimum_width=$minimum;width=$null;band_extent=$null}
+ try{Wait-Until {$view=Model;$measurement.width=@($view.layout.groups|Where-Object id -eq $group.id)[0].bounds.width;$measurement.band_extent=@($view.state.workspace.layout.bands|Where-Object id -eq $divider.id)[0].extent;$measurement.width -ge $minimum -and (!$Prepare -or $measurement.band_extent -gt 0)} 'Layers did not expose its complete footer'}catch{
+  if($_.Exception.Message -ne 'Layers did not expose its complete footer'){throw}
+  throw ('Layers did not expose its complete footer: '+($measurement|ConvertTo-Json -Compress))
+ }
  Control 'layer-new-selection' -Arranged|Out-Null
 }
 function Workspace-Grips{
